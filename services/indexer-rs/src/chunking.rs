@@ -2,14 +2,64 @@
 //! Unicode code points, as the Python indexer did, so stored chunks keep their shape.
 
 pub const PLAIN_EXTS: &[&str] = &[
-    ".txt", ".md", ".markdown", ".csv", ".tsv", ".json", ".yaml", ".yml", ".xml", ".log", ".ini", ".cfg", ".conf",
-    ".toml", ".tex", ".rst", ".org", ".srt", ".vtt", ".sh", ".zsh", ".bash", ".py", ".rb", ".php", ".pl", ".js",
-    ".mjs", ".ts", ".tsx", ".jsx", ".java", ".kt", ".swift", ".m", ".mm", ".c", ".h", ".cpp", ".hpp", ".cc", ".cs",
-    ".go", ".rs", ".sql", ".html", ".htm", ".css", ".scss", ".less", ".vue", ".svelte", ".env.example",
+    ".txt",
+    ".md",
+    ".markdown",
+    ".csv",
+    ".tsv",
+    ".json",
+    ".yaml",
+    ".yml",
+    ".xml",
+    ".log",
+    ".ini",
+    ".cfg",
+    ".conf",
+    ".toml",
+    ".tex",
+    ".rst",
+    ".org",
+    ".srt",
+    ".vtt",
+    ".sh",
+    ".zsh",
+    ".bash",
+    ".py",
+    ".rb",
+    ".php",
+    ".pl",
+    ".js",
+    ".mjs",
+    ".ts",
+    ".tsx",
+    ".jsx",
+    ".java",
+    ".kt",
+    ".swift",
+    ".m",
+    ".mm",
+    ".c",
+    ".h",
+    ".cpp",
+    ".hpp",
+    ".cc",
+    ".cs",
+    ".go",
+    ".rs",
+    ".sql",
+    ".html",
+    ".htm",
+    ".css",
+    ".scss",
+    ".less",
+    ".vue",
+    ".svelte",
+    ".env.example",
 ];
 pub const PDF_EXTS: &[&str] = &[".pdf"];
-pub const IMAGE_EXTS: &[&str] =
-    &[".avif", ".jpg", ".jpeg", ".png", ".tif", ".tiff", ".bmp", ".webp", ".gif", ".heic", ".heif"];
+pub const IMAGE_EXTS: &[&str] = &[
+    ".avif", ".jpg", ".jpeg", ".png", ".tif", ".tiff", ".bmp", ".webp", ".gif", ".heic", ".heif",
+];
 /// Office and other documents the `ml` server's extraction unit reads.
 pub const DOCUMENT_EXTS: &[&str] = &[
     ".doc", ".docx", ".dot", ".dotx", ".xls", ".xlsx", ".xlsm", ".ppt", ".pptx", ".odt", ".ods", ".odp", ".rtf",
@@ -19,8 +69,9 @@ pub const SPREADSHEET_EXTS: &[&str] = &[".xlsx", ".xlsm", ".xls", ".numbers", ".
 pub const VIDEO_EXTS: &[&str] = &[".mp4", ".mov", ".m4v", ".webm", ".mkv", ".avi"];
 /// Camera raw formats. They get image thumbnails from the embedded preview but never
 /// enter text extraction or OCR.
-pub const RAW_EXTS: &[&str] =
-    &[".arw", ".sr2", ".srf", ".cr2", ".cr3", ".crw", ".nef", ".nrw", ".dng", ".raf", ".orf", ".rw2", ".pef"];
+pub const RAW_EXTS: &[&str] = &[
+    ".arw", ".sr2", ".srf", ".cr2", ".cr3", ".crw", ".nef", ".nrw", ".dng", ".raf", ".orf", ".rw2", ".pef",
+];
 
 pub fn is_plain(ext: &str) -> bool {
     PLAIN_EXTS.contains(&ext)
@@ -88,12 +139,20 @@ pub fn normalize(text: &str) -> String {
 
 /// Spreadsheets dump thousands of numbers; a few dozen chunks capture their labels.
 pub fn max_chunks_for(ext: &str, default_max: usize) -> usize {
-    if SPREADSHEET_EXTS.contains(&ext) { default_max.min(40) } else { default_max }
+    if SPREADSHEET_EXTS.contains(&ext) {
+        default_max.min(40)
+    } else {
+        default_max
+    }
 }
 
 /// Position of the last `needle` in `chars[from..to]`, as Python's `str.rfind(needle, from, to)`.
 fn rfind(chars: &[char], needle: char, from: usize, to: usize) -> Option<usize> {
-    chars.get(from..to)?.iter().rposition(|c| *c == needle).map(|i| from + i)
+    chars
+        .get(from..to)?
+        .iter()
+        .rposition(|c| *c == needle)
+        .map(|i| from + i)
 }
 
 /// Sliding window over normalised text, breaking at whitespace where possible.
@@ -101,7 +160,11 @@ pub fn chunk(text: &str, size: usize, overlap: usize, max_chunks: usize) -> Vec<
     let chars: Vec<char> = text.chars().collect();
     let n = chars.len();
     if n <= size {
-        return if text.is_empty() { Vec::new() } else { vec![text.to_owned()] };
+        return if text.is_empty() {
+            Vec::new()
+        } else {
+            vec![text.to_owned()]
+        };
     }
     let mut out = Vec::new();
     let mut start = 0;
@@ -166,11 +229,18 @@ mod tests {
         let pieces = chunk(&text, 1200, 200, 400);
         assert_eq!(pieces[0], "a".repeat(1000));
         let early = format!("{} {}", "a".repeat(700), "b".repeat(800));
-        assert_eq!(chunk(&early, 1200, 200, 400)[0].chars().count(), 1200, "a cut before the last 300 is ignored");
+        assert_eq!(
+            chunk(&early, 1200, 200, 400)[0].chars().count(),
+            1200,
+            "a cut before the last 300 is ignored"
+        );
         assert!(pieces[1].starts_with('a') && pieces[1].ends_with('b'));
         let hard = "x".repeat(2500);
         let pieces = chunk(&hard, 1200, 200, 400);
-        assert_eq!(pieces.iter().map(|p| p.chars().count()).collect::<Vec<_>>(), vec![1200, 1200, 500]);
+        assert_eq!(
+            pieces.iter().map(|p| p.chars().count()).collect::<Vec<_>>(),
+            vec![1200, 1200, 500]
+        );
     }
 
     #[test]

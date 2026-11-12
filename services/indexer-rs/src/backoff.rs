@@ -20,7 +20,11 @@ impl Default for Backoff {
 
 impl Backoff {
     pub fn new(pause: Duration, clock: Box<dyn Fn() -> Instant + Send + Sync>) -> Self {
-        Self { pause, clock, resume_at: Mutex::new(None) }
+        Self {
+            pause,
+            clock,
+            resume_at: Mutex::new(None),
+        }
     }
 
     fn state(&self) -> std::sync::MutexGuard<'_, Option<Instant>> {
@@ -55,7 +59,9 @@ impl Backoff {
 /// Whether an HTTP failure means the backend is absent rather than rejecting one payload.
 pub fn is_outage(error: &anyhow::Error) -> bool {
     error.chain().any(|cause| {
-        cause.downcast_ref::<reqwest::Error>().is_some_and(|e| e.is_connect() || e.is_timeout() || e.is_request())
+        cause
+            .downcast_ref::<reqwest::Error>()
+            .is_some_and(|e| e.is_connect() || e.is_timeout() || e.is_request())
     })
 }
 
@@ -71,8 +77,10 @@ mod tests {
         let base = Instant::now();
         let offset = Arc::new(AtomicU64::new(0));
         let clock = Arc::clone(&offset);
-        let backoff =
-            Backoff::new(Duration::from_secs(60), Box::new(move || base + Duration::from_secs(clock.load(Ordering::SeqCst))));
+        let backoff = Backoff::new(
+            Duration::from_secs(60),
+            Box::new(move || base + Duration::from_secs(clock.load(Ordering::SeqCst))),
+        );
         assert!(!backoff.paused() && !backoff.waiting());
         assert!(backoff.note_failure());
         assert!(!backoff.note_failure());
@@ -91,7 +99,10 @@ mod tests {
 
     #[test]
     fn transport_errors_are_outages() {
-        let refused = reqwest::blocking::Client::new().get("http://127.0.0.1:1/").send().unwrap_err();
+        let refused = reqwest::blocking::Client::new()
+            .get("http://127.0.0.1:1/")
+            .send()
+            .unwrap_err();
         assert!(is_outage(&anyhow::Error::new(refused)));
         assert!(!is_outage(&anyhow::anyhow!("413 payload too large")));
     }

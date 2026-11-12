@@ -59,12 +59,20 @@ impl Promise {
             if let Some(value) = state.value {
                 return value;
             }
-            state = self.inner.1.wait(state).unwrap_or_else(std::sync::PoisonError::into_inner);
+            state = self
+                .inner
+                .1
+                .wait(state)
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
         }
     }
 
     pub fn get(&self) -> Option<Outcome> {
-        self.inner.0.lock().unwrap_or_else(std::sync::PoisonError::into_inner).value
+        self.inner
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .value
     }
 }
 

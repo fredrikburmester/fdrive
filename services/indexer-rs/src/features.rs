@@ -6,7 +6,14 @@ use serde_json::Value;
 use crate::settings::{RawSettings, decode};
 
 pub const FEATURES_KEY: &str = "features.configuration";
-pub const FEATURE_NAMES: [&str; 6] = ["thumbnails", "textSearch", "searchOcr", "semanticSearch", "imageSearch", "pdfOcr"];
+pub const FEATURE_NAMES: [&str; 6] = [
+    "thumbnails",
+    "textSearch",
+    "searchOcr",
+    "semanticSearch",
+    "imageSearch",
+    "pdfOcr",
+];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct FeatureValues {

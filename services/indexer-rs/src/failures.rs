@@ -48,7 +48,11 @@ pub fn attempt<R>(operation_ids: HashMap<String, String>, work: impl FnOnce() ->
         if current.is_some() {
             return false;
         }
-        *current = Some(Attempt { id: uuid::Uuid::new_v4().to_string(), operation_ids, ..Attempt::default() });
+        *current = Some(Attempt {
+            id: uuid::Uuid::new_v4().to_string(),
+            operation_ids,
+            ..Attempt::default()
+        });
         true
     });
     let reset = Reset(opened);
@@ -59,7 +63,11 @@ pub fn attempt<R>(operation_ids: HashMap<String, String>, work: impl FnOnce() ->
 }
 
 pub fn current_operation_id(feature: &str) -> Option<String> {
-    CURRENT.with(|c| c.borrow().as_ref().map(|a| a.operation_ids.get(feature).cloned().unwrap_or_else(|| a.id.clone())))
+    CURRENT.with(|c| {
+        c.borrow()
+            .as_ref()
+            .map(|a| a.operation_ids.get(feature).cloned().unwrap_or_else(|| a.id.clone()))
+    })
 }
 
 pub fn in_attempt() -> bool {
@@ -92,22 +100,35 @@ pub fn ok() -> Report<'static> {
 }
 
 pub fn failed(error: &str) -> Report<'_> {
-    Report { error: Some(error), ..Report::default() }
+    Report {
+        error: Some(error),
+        ..Report::default()
+    }
 }
 
 pub fn skipped() -> Report<'static> {
-    Report { skipped: true, ..Report::default() }
+    Report {
+        skipped: true,
+        ..Report::default()
+    }
 }
 
 pub fn resolving_skip() -> Report<'static> {
-    Report { skipped: true, resolves: true, ..Report::default() }
+    Report {
+        skipped: true,
+        resolves: true,
+        ..Report::default()
+    }
 }
 
 pub fn report(db: &Db, root_id: i64, path: &str, feature: &str, report: Report<'_>) {
     let operation_id = CURRENT.with(|c| {
         let mut current = c.borrow_mut();
         current.as_mut().map(|a| {
-            a.outcomes.insert(feature.to_owned(), (report.skipped || report.error.is_none(), report.skipped));
+            a.outcomes.insert(
+                feature.to_owned(),
+                (report.skipped || report.error.is_none(), report.skipped),
+            );
             a.operation_ids.get(feature).cloned().unwrap_or_else(|| a.id.clone())
         })
     });
@@ -178,7 +199,11 @@ pub struct FileResult {
 
 impl FileResult {
     pub fn plain(status: &str) -> Self {
-        Self { status: status.to_owned(), outcomes: None, deferred: HashMap::new() }
+        Self {
+            status: status.to_owned(),
+            outcomes: None,
+            deferred: HashMap::new(),
+        }
     }
 }
 
@@ -190,7 +215,10 @@ mod tests {
     fn nested_attempts_share_one_record() {
         assert!(!in_attempt());
         let ids: HashMap<String, String> = [("thumbnails".to_owned(), "op-1".to_owned())].into_iter().collect();
-        let db = Db { url: "postgres://invalid@127.0.0.1:1/x".into(), retries: 1 };
+        let db = Db {
+            url: "postgres://invalid@127.0.0.1:1/x".into(),
+            retries: 1,
+        };
         let (_, observed) = attempt(ids, || {
             assert_eq!(current_operation_id("thumbnails").as_deref(), Some("op-1"));
             let (_, inner) = attempt(HashMap::new(), || {

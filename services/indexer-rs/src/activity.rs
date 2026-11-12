@@ -80,7 +80,11 @@ impl Operation {
 
     pub fn finish(&self, state: &str) {
         let mut s = self.lock();
-        s.state = if state == "completed" && s.errors > 0 { "failed".to_owned() } else { state.to_owned() };
+        s.state = if state == "completed" && s.errors > 0 {
+            "failed".to_owned()
+        } else {
+            state.to_owned()
+        };
         s.finished_at = Some(iso_now());
     }
 
@@ -140,8 +144,14 @@ impl RootActivity {
     pub fn start_scan(&self, features: &[String], revision: i64) -> HashMap<String, Op> {
         let mut s = self.lock();
         s.queued = None;
-        s.scan = features.iter().map(|f| Operation::new("scan", vec![f.clone()], revision, "discovering")).collect();
-        s.scan.iter().map(|op| (op.feature().to_owned(), Arc::clone(op))).collect()
+        s.scan = features
+            .iter()
+            .map(|f| Operation::new("scan", vec![f.clone()], revision, "discovering"))
+            .collect();
+        s.scan
+            .iter()
+            .map(|op| (op.feature().to_owned(), Arc::clone(op)))
+            .collect()
     }
 
     pub fn start_watch(&self, features: &[String], revision: i64) -> Vec<Op> {
@@ -168,8 +178,9 @@ impl RootActivity {
     pub fn finish_watch(&self, operations: &[Op], ok: bool, outcomes: Option<&HashMap<String, (bool, bool)>>) {
         let _guard = self.lock();
         for op in operations {
-            let (result, skipped) =
-                outcomes.and_then(|o| o.get(op.feature()).copied()).unwrap_or((ok, outcomes.is_some()));
+            let (result, skipped) = outcomes
+                .and_then(|o| o.get(op.feature()).copied())
+                .unwrap_or((ok, outcomes.is_some()));
             op.advance(result, skipped);
             let (_, processed, scheduled) = op.counts();
             if processed == scheduled {
@@ -180,7 +191,12 @@ impl RootActivity {
 
     pub fn snapshot(&self) -> Vec<Value> {
         let s = self.lock();
-        s.scan.iter().chain(s.watch.values()).chain(s.queued.iter()).map(|op| op.snapshot()).collect()
+        s.scan
+            .iter()
+            .chain(s.watch.values())
+            .chain(s.queued.iter())
+            .map(|op| op.snapshot())
+            .collect()
     }
 }
 
@@ -206,7 +222,10 @@ mod tests {
         text.advance(true, false);
         text.finish("completed");
         let snap = text.snapshot();
-        assert_eq!((snap["total"].as_u64(), snap["state"].as_str()), (Some(1), Some("completed")));
+        assert_eq!(
+            (snap["total"].as_u64(), snap["state"].as_str()),
+            (Some(1), Some("completed"))
+        );
         assert_eq!(snap["phase"], "processing");
         ops["thumbnails"].advance(false, false);
         ops["thumbnails"].finish("completed");
@@ -238,7 +257,9 @@ mod tests {
     #[test]
     fn concurrent_finishes_lose_nothing() {
         let activity = Arc::new(RootActivity::default());
-        let ops: Vec<Vec<Op>> = (0..100).map(|_| activity.start_watch(&features(&["textSearch"]), 1)).collect();
+        let ops: Vec<Vec<Op>> = (0..100)
+            .map(|_| activity.start_watch(&features(&["textSearch"]), 1))
+            .collect();
         let handles: Vec<_> = ops
             .chunks(13)
             .map(|chunk| {
@@ -249,6 +270,9 @@ mod tests {
             .collect();
         handles.into_iter().for_each(|h| h.join().unwrap());
         let snap = ops[0][0].snapshot();
-        assert_eq!((snap["processed"].as_u64(), snap["state"].as_str()), (Some(100), Some("completed")));
+        assert_eq!(
+            (snap["processed"].as_u64(), snap["state"].as_str()),
+            (Some(100), Some("completed"))
+        );
     }
 }

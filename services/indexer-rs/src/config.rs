@@ -7,7 +7,14 @@ use crate::rules::split_prefixes;
 use crate::settings::Settings;
 
 pub const SKIP_NAMES: &[&str] = &[".DS_Store", "Thumbs.db", "desktop.ini", ".localized"];
-pub const SKIP_DIRS: &[&str] = &[".fdrive-backups", "@eaDir", ".Trash", ".Trashes", "node_modules", ".git"];
+pub const SKIP_DIRS: &[&str] = &[
+    ".fdrive-backups",
+    "@eaDir",
+    ".Trash",
+    ".Trashes",
+    "node_modules",
+    ".git",
+];
 
 #[derive(Debug, Clone)]
 pub struct Config {
@@ -59,12 +66,17 @@ impl Config {
         let text = |name: &str, default: &str| var(name).unwrap_or_else(|| default.to_owned());
         let number = |name: &str, default: u64| -> Result<u64, String> {
             match var(name) {
-                Some(value) => value.trim().parse().map_err(|_| format!("{name} must be a whole number, not '{value}'")),
+                Some(value) => value
+                    .trim()
+                    .parse()
+                    .map_err(|_| format!("{name} must be a whole number, not '{value}'")),
                 None => Ok(default),
             }
         };
         let flag = |name: &str, default: bool| {
-            var(name).map_or(default, |v| matches!(v.trim().to_lowercase().as_str(), "1" | "true" | "yes" | "on"))
+            var(name).map_or(default, |v| {
+                matches!(v.trim().to_lowercase().as_str(), "1" | "true" | "yes" | "on")
+            })
         };
         let mb = |name: &str, default: u64| number(name, default).map(|v| v * 1024 * 1024);
         let image_batch = match var("IMAGE_EMBED_REQUEST_BATCH_SIZE") {
@@ -72,8 +84,10 @@ impl Config {
             None => number("IMAGE_EMBED_BATCH_SIZE", 8)?,
         };
         let debounce = text("WATCH_DEBOUNCE_SECONDS", "2");
-        let debounce: f64 =
-            debounce.trim().parse().map_err(|_| format!("WATCH_DEBOUNCE_SECONDS must be a number, not '{debounce}'"))?;
+        let debounce: f64 = debounce
+            .trim()
+            .parse()
+            .map_err(|_| format!("WATCH_DEBOUNCE_SECONDS must be a number, not '{debounce}'"))?;
         Ok(Self {
             database_url: text("DATABASE_URL", "postgres://fdrive:fdrive@db:5432/fdrive"),
             roots: parse_roots(&text("INDEX_ROOTS", "")),
@@ -131,7 +145,10 @@ mod tests {
     fn roots_skip_malformed_pairs() {
         assert_eq!(
             parse_roots("a=/x,,broken,=novalue,noeq=, b = /y "),
-            vec![("a".to_owned(), PathBuf::from("/x")), ("b".to_owned(), PathBuf::from("/y"))]
+            vec![
+                ("a".to_owned(), PathBuf::from("/x")),
+                ("b".to_owned(), PathBuf::from("/y"))
+            ]
         );
     }
 
@@ -160,6 +177,9 @@ mod tests {
         assert_eq!(c.image_embed_batch_size, 2);
         assert!(config(&[("INDEX_WORKERS", "many")]).is_err());
         assert!(config(&[("WATCH_DEBOUNCE_SECONDS", "soon")]).is_err());
-        assert_eq!(config(&[("SETTINGS_REFRESH_SECONDS", "0")]).unwrap().settings_refresh, Duration::from_secs(1));
+        assert_eq!(
+            config(&[("SETTINGS_REFRESH_SECONDS", "0")]).unwrap().settings_refresh,
+            Duration::from_secs(1)
+        );
     }
 }

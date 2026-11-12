@@ -73,6 +73,9 @@ mod tests {
         assert_eq!(basename("a/b/c.txt"), "c.txt");
         assert_eq!(basename("c.txt"), "c.txt");
         assert_eq!(reindex_scope(None), None);
-        assert_eq!(reindex_scope(Some("/a/b/")), Some(("a/b".to_owned(), "a/b/".to_owned())));
+        assert_eq!(
+            reindex_scope(Some("/a/b/")),
+            Some(("a/b".to_owned(), "a/b/".to_owned()))
+        );
     }
 }

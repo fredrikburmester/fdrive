@@ -1,0 +1,58 @@
+# Rust checks for the indexer, path-filtered. CI (full) also calls this workflow.
+name: Indexer
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - 'services/indexer/**'
+      - 'packages/db/drizzle/**'
+      - '.github/workflows/indexer.yml'
+  workflow_call:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: indexer-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  rust:
+    name: Indexer (Rust)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: services/indexer
+    env:
+      CARGO_TERM_COLOR: always
+      CARGO_LLVM_COV_VERSION: 0.9.1
+      # The tests apply the repository's own migrations to a throwaway Postgres.
+      FDRIVE_DB_MIGRATIONS_DIR: ${{ github.workspace }}/packages/db/drizzle
+    steps:
+      - uses: actions/checkout@v4
+      # The native libraries the crate links, and the programs it runs.
+      - run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends cmake clang libclang-dev pkg-config \
+            libheif-dev libheif-plugin-libde265 libheif-plugin-x265 libheif-plugin-dav1d libheif-plugin-aomenc \
+            libdav1d-dev ffmpeg tesseract-ocr tesseract-ocr-eng tesseract-ocr-swe
+      # rustup reads services/indexer/rust-toolchain.toml.
+      - run: rustup show active-toolchain
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            ~/.cargo/bin/cargo-llvm-cov
+            services/indexer/target
+          key: indexer-${{ runner.os }}-${{ hashFiles('services/indexer/rust-toolchain.toml', 'services/indexer/Cargo.lock') }}
+          restore-keys: indexer-${{ runner.os }}-
+      - run: command -v cargo-llvm-cov || cargo install cargo-llvm-cov --locked --version "$CARGO_LLVM_COV_VERSION"
+      - run: cargo fmt --all --check
+      - run: cargo clippy --all-targets --locked -- -D warnings
+      - run: cargo llvm-cov --locked --fail-under-lines 95 --ignore-filename-regex 'src/main\.rs'
+      - name: Image builds
+        run: docker build -t fdrive-indexer:ci .

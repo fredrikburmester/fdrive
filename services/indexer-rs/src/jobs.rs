@@ -30,7 +30,10 @@ pub struct Job {
 
 impl Job {
     pub fn new(admission: Arc<AtomicBool>) -> Arc<Self> {
-        Arc::new(Self { state: Mutex::default(), admission })
+        Arc::new(Self {
+            state: Mutex::default(),
+            admission,
+        })
     }
 
     fn lock(&self) -> MutexGuard<'_, JobState> {
@@ -39,7 +42,11 @@ impl Job {
 
     /// Claim the shared admission and reset for a new run; false when anything is running.
     pub fn try_start(&self, revision: i64) -> bool {
-        if self.admission.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst).is_err() {
+        if self
+            .admission
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .is_err()
+        {
             return false;
         }
         *self.lock() = JobState {
@@ -157,7 +164,10 @@ mod tests {
         a.discovered();
         a.advance(true, true);
         let snap = a.activity_snapshot("indexClear", &["textSearch"]).unwrap();
-        assert_eq!((snap["unit"].as_str(), snap["total"].as_u64(), snap["state"].as_str()), (Some("entries"), Some(2), Some("running")));
+        assert_eq!(
+            (snap["unit"].as_str(), snap["total"].as_u64(), snap["state"].as_str()),
+            (Some("entries"), Some(2), Some("running"))
+        );
         a.finish();
         assert_eq!(a.snapshot()["outcome"], "stopped");
         a.finish();

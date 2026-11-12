@@ -77,7 +77,13 @@ mod tests {
         let event = build(EventKind::Created, "r", "a", None);
         assert!(to_json(&event).starts_with(r#"{"kind":"created","root":"r","path":"a","target_path":null,"at":""#));
         assert_eq!(
-            [EventKind::Created, EventKind::Changed, EventKind::Deleted, EventKind::Moved].map(EventKind::as_str),
+            [
+                EventKind::Created,
+                EventKind::Changed,
+                EventKind::Deleted,
+                EventKind::Moved
+            ]
+            .map(EventKind::as_str),
             ["created", "changed", "deleted", "moved"]
         );
     }

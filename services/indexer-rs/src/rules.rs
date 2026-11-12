@@ -26,13 +26,19 @@ impl Globs {
     pub fn new(patterns: &[String]) -> Self {
         let mut builder = GlobSetBuilder::new();
         for pattern in patterns {
-            let glob = GlobBuilder::new(pattern).literal_separator(false).backslash_escape(false).build();
+            let glob = GlobBuilder::new(pattern)
+                .literal_separator(false)
+                .backslash_escape(false)
+                .build();
             if let Ok(glob) = glob {
                 builder.add(glob);
             }
         }
         let set = builder.build().unwrap_or_else(|_| GlobSet::empty());
-        Self { patterns: patterns.to_vec(), set }
+        Self {
+            patterns: patterns.to_vec(),
+            set,
+        }
     }
 
     pub fn patterns(&self) -> &[String] {
@@ -75,7 +81,10 @@ mod tests {
     #[test]
     fn globs_follow_fnmatch() {
         assert!(globs(&["**"]).matches("r", "a/b/c.jpg"));
-        assert!(globs(&["r/*"]).matches("r", "a/b/c.jpg"), "a star crosses slashes like fnmatch");
+        assert!(
+            globs(&["r/*"]).matches("r", "a/b/c.jpg"),
+            "a star crosses slashes like fnmatch"
+        );
         assert!(globs(&["r/Photos/*"]).matches("r", "Photos/2024/x.png"));
         assert!(!globs(&["r/Photos/*"]).matches("r", "PhotosArchive/x.png"));
         assert!(!globs(&["r/photos/*"]).matches("r", "Photos/x.png"), "case-sensitive");

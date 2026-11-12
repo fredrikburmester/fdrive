@@ -28,7 +28,10 @@ pub fn connect(url: &str, retries: u32, sleep: impl Fn(Duration)) -> Result<Clie
             sleep(Duration::from_secs(2));
         }
     }
-    anyhow::bail!("could not connect to postgres: {}", last.map(|e| e.to_string()).unwrap_or_default())
+    anyhow::bail!(
+        "could not connect to postgres: {}",
+        last.map(|e| e.to_string()).unwrap_or_default()
+    )
 }
 
 thread_local! {
@@ -44,7 +47,10 @@ pub struct Db {
 
 impl Db {
     pub fn new(url: &str) -> Self {
-        Self { url: url.to_owned(), retries: 30 }
+        Self {
+            url: url.to_owned(),
+            retries: 30,
+        }
     }
 
     pub fn with<R>(&self, work: impl FnOnce(&mut Client) -> Result<R>) -> Result<R> {
@@ -62,7 +68,10 @@ impl Db {
 }
 
 pub fn read_schema_version(client: &mut Client) -> Result<Option<i64>> {
-    let row = client.query_opt(r#"SELECT version::bigint FROM "idx"."schema_version" ORDER BY version DESC LIMIT 1"#, &[]);
+    let row = client.query_opt(
+        r#"SELECT version::bigint FROM "idx"."schema_version" ORDER BY version DESC LIMIT 1"#,
+        &[],
+    );
     match row {
         Ok(row) => Ok(row.map(|r| r.get(0))),
         Err(error) if error.is_closed() || error.as_db_error().is_none() => Err(error.into()),
@@ -82,8 +91,9 @@ pub fn wait_for_schema_version(
     loop {
         let (version, ready) = db.with(|c| {
             let version = read_schema_version(c)?;
-            let table: Option<String> =
-                c.query_one("SELECT to_regclass('idx.processing_failures')::text", &[])?.get(0);
+            let table: Option<String> = c
+                .query_one("SELECT to_regclass('idx.processing_failures')::text", &[])?
+                .get(0);
             Ok((version, table.is_some()))
         })?;
         if version == Some(expected) && ready {
@@ -96,7 +106,9 @@ pub fn wait_for_schema_version(
             ));
             return Ok(None);
         }
-        log(&format!("waiting for idx.schema_version = {expected} and processing_failures migration (last seen: {seen})"));
+        log(&format!(
+            "waiting for idx.schema_version = {expected} and processing_failures migration (last seen: {seen})"
+        ));
         sleep(Duration::from_secs(5));
     }
 }
@@ -137,15 +149,18 @@ pub fn scan_manifest(c: &mut Client, root_id: i64) -> Result<HashMap<String, Man
     Ok(rows
         .into_iter()
         .map(|r| {
-            (r.get(0), ManifestRow {
-                size: r.get(1),
-                mtime_ns: r.get(2),
-                status: r.get(3),
-                deleted: r.get(4),
-                sha256: r.get(5),
-                image_embedded: r.get(6),
-                thumbnail_failed: r.get(7),
-            })
+            (
+                r.get(0),
+                ManifestRow {
+                    size: r.get(1),
+                    mtime_ns: r.get(2),
+                    status: r.get(3),
+                    deleted: r.get(4),
+                    sha256: r.get(5),
+                    image_embedded: r.get(6),
+                    thumbnail_failed: r.get(7),
+                },
+            )
         })
         .collect())
 }
@@ -219,7 +234,16 @@ pub fn upsert_file(c: &mut Client, file: &NewFile<'_>) -> Result<i64> {
                  sha256 = EXCLUDED.sha256, mime = EXCLUDED.mime, text_status = 'pending',
                  last_seen = now(), deleted_at = NULL, error = NULL
                RETURNING id::bigint"#,
-            &[&file.root_id, &file.path, &file.name, &file.ext, &file.size, &file.mtime_ns, &file.sha256, &file.mime],
+            &[
+                &file.root_id,
+                &file.path,
+                &file.name,
+                &file.ext,
+                &file.size,
+                &file.mtime_ns,
+                &file.sha256,
+                &file.mime,
+            ],
         )?
         .get(0);
     c.execute(r#"DELETE FROM "idx"."chunks" WHERE file_id = $1::bigint"#, &[&id])?;
@@ -230,7 +254,9 @@ pub fn insert_chunks(c: &mut Client, file_id: i64, pieces: &[String], vectors: &
     if pieces.is_empty() {
         return Ok(());
     }
-    let statement = c.prepare(r#"INSERT INTO "idx"."chunks" (file_id, idx, text, embedding) VALUES ($1::bigint, $2::int, $3, $4)"#)?;
+    let statement = c.prepare(
+        r#"INSERT INTO "idx"."chunks" (file_id, idx, text, embedding) VALUES ($1::bigint, $2::int, $3, $4)"#,
+    )?;
     let mut tx = c.transaction()?;
     for (i, (piece, vector)) in pieces.iter().zip(vectors).enumerate() {
         let vector = vector.clone().map(Vector::from);
@@ -299,7 +325,10 @@ pub fn mark_deleted(c: &mut Client, root_id: i64, path: &str, is_dir: bool) -> R
         .map(|r| r.get(0))
         .collect();
     if !ids.is_empty() {
-        tx.execute(r#"DELETE FROM "idx"."chunks" WHERE file_id = ANY($1::bigint[])"#, &[&ids])?;
+        tx.execute(
+            r#"DELETE FROM "idx"."chunks" WHERE file_id = ANY($1::bigint[])"#,
+            &[&ids],
+        )?;
     }
     tx.commit()?;
     Ok(ids)
@@ -425,7 +454,11 @@ pub fn count(c: &mut Client, table: &str) -> Result<i64> {
 }
 
 pub fn image_embedding_model(c: &mut Client, key: &str) -> Result<Option<String>> {
-    Ok(c.query_opt(r#"SELECT model FROM "app"."image_embeddings" WHERE content_key = $1"#, &[&key])?.map(|r| r.get(0)))
+    Ok(c.query_opt(
+        r#"SELECT model FROM "app"."image_embeddings" WHERE content_key = $1"#,
+        &[&key],
+    )?
+    .map(|r| r.get(0)))
 }
 
 pub fn file_content_key(c: &mut Client, root_id: i64, path: &str) -> Result<Option<String>> {
