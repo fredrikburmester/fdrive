@@ -54,6 +54,8 @@ impl Db {
     }
 
     pub fn with<R>(&self, work: impl FnOnce(&mut Client) -> Result<R>) -> Result<R> {
+        // Registers tokio's thread-local before ours, so it is destroyed after the pooled client.
+        let _ = tokio::runtime::Handle::try_current();
         let mut client = CONNECTIONS.with(|c| c.borrow_mut().remove(&self.url));
         if client.as_ref().is_none_or(Client::is_closed) {
             client = Some(connect(&self.url, self.retries, std::thread::sleep)?);

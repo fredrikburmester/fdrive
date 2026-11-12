@@ -72,6 +72,12 @@ fn embedded_preview(decoder: &dyn Decoder, source: &RawSource, params: &RawDecod
 /// decoder found for it. rawler has no half-size development, so this is full size.
 fn develop(decoder: &dyn Decoder, source: &RawSource, params: &RawDecodeParams) -> Result<(DynamicImage, u16)> {
     let raw = decoder.raw_image(source, params, false).map_err(raw_error)?;
+    // Developing allocates three floats per pixel; refuse what Pillow's limit would refuse.
+    crate::images::check_pixels(
+        u32::try_from(raw.width).unwrap_or(u32::MAX),
+        u32::try_from(raw.height).unwrap_or(u32::MAX),
+        crate::images::MAX_IMAGE_PIXELS,
+    )?;
     let developed = RawDevelop::default().develop_intermediate(&raw).map_err(raw_error)?;
     let picture = developed
         .to_dynamic_image()

@@ -54,7 +54,17 @@ pub fn rebuild_thumbnails(ctx: &RootContext, rows: &[MediaRow], force: bool, job
             job.advance(true, true);
             continue;
         }
-        let abs = ctx.abs_path.join(rel);
+        let opened = match crate::indexer::open_source(ctx, rel) {
+            Ok(opened) => opened,
+            Err(e) => {
+                let reason = describe(&e);
+                log(&format!("thumb rebuild: cannot open {rel}: {reason}"));
+                failures::report(&ctx.db, ctx.root_id, rel, "thumbnails", failures::failed(&reason));
+                job.advance(false, false);
+                continue;
+            }
+        };
+        let abs = opened.path();
         let generation = thumbs_io::generate(
             &abs,
             ext,
@@ -497,6 +507,8 @@ pub fn retry_file(ctx: &Arc<RootContext>, path: &str, feature: &str) -> (bool, b
         let source = opened.path();
         let metadata = std::fs::metadata(&source)?;
         let sha = fsx::sha256_of_file(&mut opened.file)?;
+        // `/dev/fd/N` (macOS) shares this descriptor's offset; readers of `source` start at 0.
+        std::io::Seek::rewind(&mut opened.file)?;
         let stat = crate::indexer::FileStat::of(&metadata);
         match feature {
             "semanticSearch" => {

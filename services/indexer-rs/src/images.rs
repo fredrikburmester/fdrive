@@ -77,7 +77,7 @@ fn is_bomb(error: &anyhow::Error) -> bool {
     error.to_string().starts_with("DecompressionBombError")
 }
 
-fn check_pixels(width: u32, height: u32, max_pixels: u64) -> Result<()> {
+pub(crate) fn check_pixels(width: u32, height: u32, max_pixels: u64) -> Result<()> {
     let pixels = u64::from(width) * u64::from(height);
     if pixels > max_pixels.saturating_mul(2) {
         Err(bomb(pixels, max_pixels))

@@ -54,7 +54,8 @@ pub fn refresh_settings(ctx: &RootContext) -> Result<bool> {
     Ok(!changed.is_empty() || features_changed)
 }
 
-struct Handler(Arc<RootContext>);
+/// The watcher's callbacks into the indexer, reporting live activity per feature.
+pub struct Handler(pub Arc<RootContext>);
 
 impl WatchHandler for Handler {
     fn index_file(&self, abs: &Path, rel: &str, metadata: &std::fs::Metadata) -> FileResult {
@@ -131,29 +132,44 @@ pub fn start_watcher(ctx: &Arc<RootContext>) -> Option<Watcher> {
     }
 }
 
-/// One root's loop; never returns.
-pub fn run_root(ctx: &Arc<RootContext>, watchers: &Mutex<HashMap<String, bool>>, wake: &Wake) {
-    let mut watcher: Option<Watcher> = None;
-    let mut next_scan = Instant::now();
-    loop {
+/// One root's loop state: the watcher it keeps in step with the features, and when the
+/// next scan is due.
+pub struct RootLoop {
+    watcher: Option<Watcher>,
+    next_scan: Instant,
+}
+
+impl Default for RootLoop {
+    fn default() -> Self {
+        Self {
+            watcher: None,
+            next_scan: Instant::now(),
+        }
+    }
+}
+
+impl RootLoop {
+    /// Refresh settings, keep the watcher in step with the features, and scan when due.
+    /// Returns how long to wait before the next step.
+    pub fn step(&mut self, ctx: &Arc<RootContext>, watchers: &Mutex<HashMap<String, bool>>) -> Duration {
         let step = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| -> Result<()> {
             if refresh_settings(ctx)? {
-                next_scan = Instant::now();
+                self.next_scan = Instant::now();
             }
             let enabled = ctx.values().indexer_enabled();
-            if enabled && watcher.is_none() {
-                watcher = start_watcher(ctx);
-            } else if !enabled && let Some(stopped) = watcher.take() {
+            if enabled && self.watcher.is_none() {
+                self.watcher = start_watcher(ctx);
+            } else if !enabled && let Some(stopped) = self.watcher.take() {
                 stopped.stop();
             }
             watchers
                 .lock()
                 .unwrap_or_else(PoisonError::into_inner)
-                .insert(ctx.name.clone(), watcher.is_some());
-            let overflowed = watcher.as_ref().is_some_and(Watcher::take_overflow);
-            if Instant::now() >= next_scan || overflowed {
+                .insert(ctx.name.clone(), self.watcher.is_some());
+            let overflowed = self.watcher.as_ref().is_some_and(Watcher::take_overflow);
+            if Instant::now() >= self.next_scan || overflowed {
                 scan_once(ctx);
-                next_scan = Instant::now() + Duration::from_secs(ctx.settings().scan_interval_seconds);
+                self.next_scan = Instant::now() + Duration::from_secs(ctx.settings().scan_interval_seconds);
             }
             Ok(())
         }));
@@ -163,14 +179,31 @@ pub fn run_root(ctx: &Arc<RootContext>, watchers: &Mutex<HashMap<String, bool>>,
                 _ => "panic".to_owned(),
             };
             log(&format!("[{}] scan crashed: {reason}", ctx.name));
-            next_scan = Instant::now() + ctx.cfg.settings_refresh;
+            self.next_scan = Instant::now() + ctx.cfg.settings_refresh;
         }
         // Feature selection is polled quickly even with a long scan interval.
-        let timeout = next_scan
+        self.next_scan
             .saturating_duration_since(Instant::now())
-            .min(ctx.cfg.settings_refresh);
+            .min(ctx.cfg.settings_refresh)
+    }
+
+    /// Scan at the next step.
+    pub fn wake(&mut self) {
+        self.next_scan = Instant::now();
+    }
+
+    pub fn has_watcher(&self) -> bool {
+        self.watcher.is_some()
+    }
+}
+
+/// One root's loop; never returns.
+pub fn run_root(ctx: &Arc<RootContext>, watchers: &Mutex<HashMap<String, bool>>, wake: &Wake) {
+    let mut root = RootLoop::default();
+    loop {
+        let timeout = root.step(ctx, watchers);
         if wake.wait(timeout) {
-            next_scan = Instant::now();
+            root.wake();
         }
     }
 }

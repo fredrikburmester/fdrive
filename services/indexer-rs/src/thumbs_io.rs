@@ -216,7 +216,7 @@ fn decode_source(request: &Request<'_>, kind: Kind, largest: u32, tools: &Tools)
         Kind::Image if is_raw(request.ext) => open_raw(request.abs_path, Some(largest)),
         Kind::Image => open_image_limited(request.abs_path, Some(largest), tools.max_pixels),
         Kind::Pdf => render_pdf_page(request.abs_path, 0, 72.0),
-        Kind::Video => extract_video_frame(request.abs_path, tools),
+        Kind::Video => extract_video_frame(request.abs_path, request.ext, tools),
     }
 }
 
@@ -274,7 +274,8 @@ pub fn render_pdf_page(path: &Path, page: i32, dpi: f32) -> Result<DynamicImage>
     }
     let mupdf_error = |e: mupdf::Error| anyhow!("RuntimeError: {e}");
     let loaded = document.load_page(page).map_err(mupdf_error)?;
-    let scale = dpi / 72.0;
+    let bounds = loaded.bounds().map_err(mupdf_error)?;
+    let scale = capped_scale(bounds.x1 - bounds.x0, bounds.y1 - bounds.y0, dpi);
     let pixmap = loaded
         .to_pixmap(&Matrix::new_scale(scale, scale), &Colorspace::device_rgb(), false, true)
         .map_err(mupdf_error)?;
@@ -296,22 +297,45 @@ pub fn render_pdf_page(path: &Path, page: i32, dpi: f32) -> Result<DynamicImage>
     Ok(DynamicImage::ImageRgb8(buffer))
 }
 
+/// The render scale for a page of `width` x `height` points at `dpi`, lowered so the page
+/// never renders to more than `MAX_IMAGE_PIXELS`: a hostile page box can be enormous.
+pub fn capped_scale(width: f32, height: f32, dpi: f32) -> f32 {
+    let scale = dpi / 72.0;
+    let pixels = f64::from(width.abs() * scale) * f64::from(height.abs() * scale);
+    let limit = crate::images::MAX_IMAGE_PIXELS as f64;
+    if pixels > limit {
+        scale * (limit / pixels).sqrt() as f32
+    } else {
+        scale
+    }
+}
+
+/// The demuxer for a video extension. Pinning it, and allowing only plain file input, keeps
+/// ffmpeg from reading a crafted file as a playlist or concat list naming other files.
+fn demuxer(ext: &str) -> &'static str {
+    match ext {
+        ".webm" | ".mkv" => "matroska",
+        ".avi" => "avi",
+        _ => "mov",
+    }
+}
+
 fn video_frame_filter() -> String {
     let largest = SIZES.iter().copied().max().unwrap_or(1024);
     format!("thumbnail,scale=w='min(iw,{largest})':h='min(ih,{largest})':force_original_aspect_ratio=decrease")
 }
 
-fn extract_video_frame(abs_path: &Path, tools: &Tools) -> Result<DynamicImage> {
+fn extract_video_frame(abs_path: &Path, ext: &str, tools: &Tools) -> Result<DynamicImage> {
     let frame = tempfile::Builder::new()
         .prefix("fdrive-frame-")
         .suffix(".png")
         .tempfile()
         .map_err(|e| anyhow!("OSError: {e}"))?;
     let written = || std::fs::metadata(frame.path()).map(|m| m.len()).unwrap_or(0);
-    write_video_frame(abs_path, frame.path(), "1.0", tools)?;
+    write_video_frame(abs_path, ext, frame.path(), "1.0", tools)?;
     if written() == 0 {
         // ffmpeg exits successfully without writing a frame when a clip ends before the seek point.
-        write_video_frame(abs_path, frame.path(), "0.0", tools)?;
+        write_video_frame(abs_path, ext, frame.path(), "0.0", tools)?;
     }
     if written() == 0 {
         bail!("ValueError: ffmpeg wrote no video frame");
@@ -324,12 +348,24 @@ fn extract_video_frame(abs_path: &Path, tools: &Tools) -> Result<DynamicImage> {
     Ok(DynamicImage::ImageRgb8(picture.to_rgb8()))
 }
 
-fn write_video_frame(abs_path: &Path, dest: &Path, at_seconds: &str, tools: &Tools) -> Result<()> {
+fn write_video_frame(abs_path: &Path, ext: &str, dest: &Path, at_seconds: &str, tools: &Tools) -> Result<()> {
     let filter = video_frame_filter();
     // Pick the frame first, then shrink it so a 4K frame is never encoded and decoded again
     // as a full-size PNG.
     let args = |input: OsString| -> Vec<OsString> {
-        let mut args: Vec<OsString> = ["-nostdin", "-y", "-ss", at_seconds, "-i"].map(OsString::from).to_vec();
+        let mut args: Vec<OsString> = [
+            "-nostdin",
+            "-y",
+            "-protocol_whitelist",
+            "file,pipe",
+            "-f",
+            demuxer(ext),
+            "-ss",
+            at_seconds,
+            "-i",
+        ]
+        .map(OsString::from)
+        .to_vec();
         args.push(input);
         args.extend(["-frames:v", "1", "-vf", filter.as_str()].map(OsString::from));
         args.push(dest.as_os_str().to_owned());
@@ -338,7 +374,7 @@ fn write_video_frame(abs_path: &Path, dest: &Path, at_seconds: &str, tools: &Too
     match run_media_tool(&tools.ffmpeg, abs_path, args, tools.timeout) {
         Ok(_) => Ok(()),
         Err(ToolError::Failed { status, stderr }) => {
-            if has_video_stream(abs_path, tools) == Some(false) {
+            if has_video_stream(abs_path, ext, tools) == Some(false) {
                 return Err(NoThumbnail("no video stream").into());
             }
             let stderr = String::from_utf8_lossy(&stderr);
@@ -354,11 +390,15 @@ fn write_video_frame(abs_path: &Path, dest: &Path, at_seconds: &str, tools: &Too
 }
 
 /// Whether ffprobe finds a video stream; None when it cannot read the container either.
-fn has_video_stream(abs_path: &Path, tools: &Tools) -> Option<bool> {
+fn has_video_stream(abs_path: &Path, ext: &str, tools: &Tools) -> Option<bool> {
     let args = |input: OsString| -> Vec<OsString> {
         let mut args: Vec<OsString> = [
             "-v",
             "error",
+            "-protocol_whitelist",
+            "file,pipe",
+            "-f",
+            demuxer(ext),
             "-select_streams",
             "v",
             "-show_entries",
@@ -1183,5 +1223,24 @@ mod tests {
         let result = run(&dng, ".dng", "dngsha", &thumbs, false, &Tools::default());
         assert_eq!(dims(&result.generation), [(256, 256, 171), (1024, 1024, 683)]);
         assert_webp_files(&thumbs, &result.generation);
+    }
+
+    #[test]
+    fn hostile_page_boxes_render_within_the_pixel_limit() {
+        assert!((capped_scale(612.0, 792.0, 72.0) - 1.0).abs() < f32::EPSILON);
+        let scale = capped_scale(14_400.0, 14_400.0, 200.0);
+        let pixels = f64::from(14_400.0 * scale).powi(2);
+        assert!(pixels <= crate::images::MAX_IMAGE_PIXELS as f64 * 1.001, "{pixels}");
+        assert!(scale < 200.0 / 72.0);
+    }
+
+    #[test]
+    fn video_demuxers_are_pinned_by_extension() {
+        assert_eq!(demuxer(".mp4"), "mov");
+        assert_eq!(demuxer(".mov"), "mov");
+        assert_eq!(demuxer(".m4v"), "mov");
+        assert_eq!(demuxer(".mkv"), "matroska");
+        assert_eq!(demuxer(".webm"), "matroska");
+        assert_eq!(demuxer(".avi"), "avi");
     }
 }

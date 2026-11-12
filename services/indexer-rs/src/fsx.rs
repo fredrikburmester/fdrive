@@ -54,12 +54,20 @@ pub fn open_dir(root: &Path, parts: &[String]) -> io::Result<OwnedFd> {
 pub struct OpenedFile {
     pub file: File,
     pub size: u64,
+    /// The plain path, for systems without `/proc/self/fd`.
+    fallback: PathBuf,
 }
 
 impl OpenedFile {
-    /// A path that reopens this exact descriptor, for tools that need a path.
+    /// A path that reopens this exact inode, for tools that need a path. On Linux it is
+    /// `/proc/self/fd/N`, which opens the file afresh. macOS has only `/dev/fd/N`, which shares
+    /// this descriptor's read position, so development builds there get the plain path.
     pub fn path(&self) -> PathBuf {
-        descriptor_path(&self.file)
+        if Path::new("/proc/self/fd").is_dir() {
+            descriptor_path(&self.file)
+        } else {
+            self.fallback.clone()
+        }
     }
 }
 
@@ -79,10 +87,10 @@ pub fn open_file(root: &Path, parts: &[String]) -> io::Result<OpenedFile> {
         .ok_or_else(|| io::Error::from(io::ErrorKind::InvalidInput))?;
     let dir = open_dir(root, dirs)?;
     let fd = openat(&dir, name.as_str(), FILE, Mode::empty())?;
-    regular(fd)
+    regular(fd, parts.iter().fold(root.to_path_buf(), |path, part| path.join(part)))
 }
 
-fn regular(fd: OwnedFd) -> io::Result<OpenedFile> {
+fn regular(fd: OwnedFd, fallback: PathBuf) -> io::Result<OpenedFile> {
     let stat = rustix::fs::fstat(&fd)?;
     if FileType::from_raw_mode(stat.st_mode) != FileType::RegularFile {
         return Err(io::Error::new(io::ErrorKind::NotFound, "not a regular file"));
@@ -90,6 +98,7 @@ fn regular(fd: OwnedFd) -> io::Result<OpenedFile> {
     Ok(OpenedFile {
         file: File::from(fd),
         size: stat.st_size as u64,
+        fallback,
     })
 }
 
@@ -97,7 +106,8 @@ fn regular(fd: OwnedFd) -> io::Result<OpenedFile> {
 /// without blocking on them.
 pub fn open_regular(path: &Path) -> io::Result<OpenedFile> {
     let fd = rustix::fs::open(path, FILE, Mode::empty())?;
-    regular(fd).map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, format!("not a regular file: {e}")))
+    regular(fd, path.to_path_buf())
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, format!("not a regular file: {e}")))
 }
 
 pub fn sha256_of_file(file: &mut File) -> io::Result<String> {
@@ -201,7 +211,8 @@ mod tests {
         symlink(dir.path().join("docs/a.txt"), dir.path().join("docs/b.txt")).unwrap();
         let mut opened = open_file(dir.path(), &parts("/docs/a.txt")).unwrap();
         assert_eq!(opened.size, 5);
-        assert!(opened.path().to_string_lossy().contains("/fd/"));
+        assert!(descriptor_path(&opened.file).to_string_lossy().contains("/fd/"));
+        assert!(opened.path().ends_with("docs/a.txt") || opened.path().starts_with("/proc/self/fd"));
         assert_eq!(
             sha256_of_file(&mut opened.file).unwrap(),
             "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"

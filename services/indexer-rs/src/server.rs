@@ -402,9 +402,10 @@ async fn extract_content(State(state): State<Shared>, Query(query): Query<NameQu
             Ok(Err(_)) => return error(StatusCode::PAYLOAD_TOO_LARGE, "content too large"),
             Ok(Ok(content)) => content,
         };
-    let search_ocr = state.features().values.search_ocr;
     let result = blocking(move || {
         let _permit = permit;
+        // Without roots this reads the database, which must not happen on the async thread.
+        let search_ocr = state.features().values.search_ocr;
         extractor.extract(&content, &name, search_ocr)
     })
     .await;

@@ -356,11 +356,20 @@ fn note_embed_recovery(ctx: &RootContext) {
     }
 }
 
+/// Open `rel_path` below the root descriptor by descriptor, never following a symlink, so
+/// a directory swapped for a link after the walk cannot redirect the read elsewhere.
+pub fn open_source(ctx: &RootContext, rel_path: &str) -> Result<crate::fsx::OpenedFile> {
+    let parts =
+        crate::fsx::path_parts(&format!("/{}", rel_path.trim_start_matches('/'))).map_err(anyhow::Error::msg)?;
+    Ok(crate::fsx::open_file(&ctx.abs_path, &parts)?)
+}
+
 /// Hash, extract, chunk, embed and store one file, then build its media derivatives.
+/// The file is reopened from the root rather than through `_abs_path`.
 /// `only_feature = Some("textSearch")` re-reads text without media or embeddings.
 pub fn process_inner(
     ctx: &Arc<RootContext>,
-    abs_path: &Path,
+    _abs_path: &Path,
     rel_path: &str,
     stat: FileStat,
     known_sha: Option<String>,
@@ -369,10 +378,13 @@ pub fn process_inner(
     let name = basename(rel_path);
     let ext = ext_of(name);
     let mime = guess_mime(name);
+    let mut source = open_source(ctx, rel_path)?;
     let sha = match known_sha {
         Some(sha) => sha,
-        None => crate::fsx::sha256_of(abs_path)?,
+        None => crate::fsx::sha256_of_file(&mut source.file)?,
     };
+    let source_path = source.path();
+    let abs_path = source_path.as_path();
     let file_id = ctx.db.with(|c| {
         db::upsert_file(
             c,
@@ -791,7 +803,7 @@ impl ImageStage {
 
 /// Fill in derivatives a newly enabled feature needs, without touching indexed text.
 /// False keeps the root's backfill pending.
-pub fn backfill_media(ctx: &Arc<RootContext>, abs_path: &Path, rel_path: &str, stat: FileStat) -> Result<bool> {
+pub fn backfill_media(ctx: &Arc<RootContext>, _abs_path: &Path, rel_path: &str, stat: FileStat) -> Result<bool> {
     let features = ctx.values();
     if !features.internal_thumbnails() {
         return Ok(true);
@@ -800,7 +812,8 @@ pub fn backfill_media(ctx: &Arc<RootContext>, abs_path: &Path, rel_path: &str, s
     let Some(sha) = ctx.db.with(|c| db::file_content_key(c, ctx.root_id, rel_path))? else {
         return Ok(false);
     };
-    let (mut ok, skipped) = process_thumbnails(ctx, abs_path, rel_path, &ext, &sha, stat.size, false);
+    let source = open_source(ctx, rel_path)?.path();
+    let (mut ok, skipped) = process_thumbnails(ctx, &source, rel_path, &ext, &sha, stat.size, false);
     if features.image_search && image_embed::is_candidate(&ext) && !skipped {
         ok = process_image_embedding(ctx, rel_path, &sha) && ok;
     }

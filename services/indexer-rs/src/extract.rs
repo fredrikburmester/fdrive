@@ -57,7 +57,8 @@ pub fn extract_pdf(path: &Path, max_pages: usize) -> Result<Extracted> {
 
 /// Render a PDF page to RGB at `dpi`.
 pub fn render_page(page: &mupdf::Page, dpi: f32) -> Result<DynamicImage> {
-    let scale = dpi / 72.0;
+    let bounds = page.bounds()?;
+    let scale = crate::thumbs_io::capped_scale(bounds.x1 - bounds.x0, bounds.y1 - bounds.y0, dpi);
     let pixmap = page.to_pixmap(
         &mupdf::Matrix::new_scale(scale, scale),
         &mupdf::Colorspace::device_rgb(),
