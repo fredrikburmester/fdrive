@@ -15,17 +15,18 @@ const NON_ALNUM_PATTERN = /[^\p{L}\p{N}]+/gu;
  * on whitespace, each token has every non-alphanumeric character stripped,
  * tokens shorter than two characters are dropped, at most the first twelve
  * survive, and each becomes a `<token>:*` prefix match joined with `|` (an
- * OR). Returns "" when no token survives, which callers should treat as "no
- * full-text query to run".
+ * OR), or with `&` when `match` is "all". Returns "" when no token survives,
+ * which callers should treat as "no full-text query to run".
  */
-export function toPrefixTsQuery(query: string): string {
+export function toPrefixTsQuery(query: string, match: "any" | "all" = "any"): string {
   const tokens = query
+    .normalize("NFC")
     .split(/\s+/)
     .map((token) => token.replaceAll(NON_ALNUM_PATTERN, ""))
     .filter((token) => token.length >= MIN_TSQUERY_TOKEN_LENGTH)
     .slice(0, MAX_TSQUERY_TOKENS);
 
-  return tokens.map((token) => `${token}:*`).join("|");
+  return tokens.map((token) => `${token}:*`).join(match === "all" ? "&" : "|");
 }
 
 /**
@@ -34,6 +35,6 @@ export function toPrefixTsQuery(query: string): string {
  * characters, at least three characters long, at most the first eight.
  */
 export function queryWords(query: string): string[] {
-  const matches = query.toLowerCase().match(WORD_PATTERN) ?? [];
+  const matches = query.normalize("NFC").toLowerCase().match(WORD_PATTERN) ?? [];
   return matches.filter((word) => word.length >= MIN_WORD_LENGTH).slice(0, MAX_QUERY_WORDS);
 }
