@@ -942,3 +942,42 @@ fn ppt_whose_slides_all_claim_one_stretch_scans_it_a_bounded_number_of_times() {
     let copies = extracted.lines().filter(|line| line.len() == 100_000).count();
     assert!((1..=40).contains(&copies), "{copies} copies");
 }
+
+#[test]
+fn ppt_whose_edits_all_name_one_directory_reads_it_once() {
+    let document = container(0x03E8, 0, &[container(0x0FF0, 0, &[persist(2), chars("Only slide")])]);
+    let slide = page(0x03EE, &[chars("Box on the slide")]);
+    let mut stream = document.clone();
+    let slide_at = stream.len() as u32;
+    stream.extend_from_slice(&slide);
+    // A directory with a million entries: the document, the slide, then filler ids.
+    let mut directory = ((2u32 << 20) | 1).to_le_bytes().to_vec();
+    directory.extend_from_slice(&0u32.to_le_bytes());
+    directory.extend_from_slice(&slide_at.to_le_bytes());
+    for run in 0..250u32 {
+        directory.extend_from_slice(&((4000u32 << 20) | (10 + run * 4000)).to_le_bytes());
+        directory.extend_from_slice(&vec![0xFF; 4 * 4000]);
+    }
+    let directory_at = stream.len() as u32;
+    stream.extend_from_slice(&atom(0x1772, 0, &directory));
+    // 4,000 edits, each pointing back at the one before and at that same directory.
+    let mut previous = 0u32;
+    for _ in 0..4000 {
+        let mut edit = vec![0u8; 28];
+        edit[8..12].copy_from_slice(&previous.to_le_bytes());
+        edit[12..16].copy_from_slice(&directory_at.to_le_bytes());
+        edit[16..20].copy_from_slice(&1u32.to_le_bytes());
+        previous = stream.len() as u32;
+        stream.extend_from_slice(&atom(0x0FF5, 0, &edit));
+    }
+    let mut user = 0x14u32.to_le_bytes().to_vec();
+    user.extend_from_slice(&PLAIN_TOKEN.to_le_bytes());
+    user.extend_from_slice(&previous.to_le_bytes());
+    user.extend_from_slice(&[0; 8]);
+
+    let extracted = text(&ole(&[
+        ("/PowerPoint Document", &stream),
+        ("/Current User", &atom(0x0FF6, 0, &user)),
+    ]));
+    assert_eq!(extracted, "Only slide\nBox on the slide");
+}

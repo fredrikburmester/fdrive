@@ -64,6 +64,10 @@ fn persist_directory(stream: &[u8], newest: usize) -> Result<Option<Directory>, 
     let mut offsets = HashMap::new();
     let mut document = None;
     let mut edit = newest;
+    // Every edit has a directory of its own, so together they are no larger
+    // than the stream. Without this bound a chain of edits that all name one
+    // large directory has it read once per edit.
+    let mut allowance = stream.len();
     // Each edit points at an earlier one; a cycle would otherwise never end.
     for _ in 0..4096 {
         let Some(record) = Record::at(stream, edit).filter(|record| record.kind == USER_EDIT) else {
@@ -88,8 +92,12 @@ fn persist_directory(stream: &[u8], newest: usize) -> Result<Option<Directory>, 
         else {
             return Ok(None);
         };
+        if entries.len() > allowance {
+            break;
+        }
+        allowance -= entries.len();
         let mut at = 0;
-        while let Some(header) = u32le(entries, at) {
+        while let Some(header) = u32le(entries, at).filter(|_| offsets.len() < MAX_PERSISTED) {
             let first = header & 0x000F_FFFF;
             let count = header >> 20;
             at += 4;
