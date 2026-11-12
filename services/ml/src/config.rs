@@ -25,6 +25,8 @@ pub enum GateConfig {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Config {
+    /// The release this image was built as, such as `0.7.0` or `main`.
+    pub version: String,
     pub port: u16,
     pub models_dir: PathBuf,
     pub hub_endpoint: String,
@@ -93,6 +95,7 @@ impl Config {
         };
 
         Ok(Self {
+            version: get("FDRIVE_BUILD_VERSION").unwrap_or_else(|| "dev".into()),
             port,
             models_dir: get("FDRIVE_ML_MODELS_DIR").unwrap_or_else(|| "/models".into()).into(),
             hub_endpoint: get("HF_ENDPOINT")
@@ -120,6 +123,7 @@ mod tests {
     #[test]
     fn defaults_follow_the_feature_document() {
         let parsed = config(&[]).unwrap();
+        assert_eq!(parsed.version, "dev");
         assert_eq!(parsed.port, 8080);
         assert_eq!(parsed.models_dir, PathBuf::from("/models"));
         assert_eq!(parsed.hub_endpoint, "https://huggingface.co");
@@ -140,6 +144,7 @@ mod tests {
     #[test]
     fn reads_overrides_and_treats_blank_as_unset() {
         let parsed = config(&[
+            ("FDRIVE_BUILD_VERSION", "0.7.0"),
             ("FDRIVE_ML_PORT", "9000"),
             ("FDRIVE_ML_MODELS_DIR", "/data/models"),
             ("HF_ENDPOINT", "https://mirror.example/"),
@@ -152,6 +157,7 @@ mod tests {
             ("FDRIVE_RUNTIME_UNREACHABLE_SECONDS", "5"),
         ])
         .unwrap();
+        assert_eq!(parsed.version, "0.7.0");
         assert_eq!(parsed.port, 9000);
         assert_eq!(parsed.models_dir, PathBuf::from("/data/models"));
         assert_eq!(parsed.hub_endpoint, "https://mirror.example");

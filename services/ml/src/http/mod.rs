@@ -23,6 +23,8 @@ use crate::lifecycle::{UnitKind, Units};
 
 #[derive(Clone)]
 pub struct AppState {
+    /// The release this server was built as, reported by `/extract/version`.
+    pub version: Arc<str>,
     pub units: Arc<Units>,
     pub extract_limits: Arc<Limits>,
     /// Bounds how many documents are parsed at once.
@@ -31,8 +33,9 @@ pub struct AppState {
 }
 
 impl AppState {
-    pub fn new(units: Arc<Units>, threads: usize, max_document_bytes: usize) -> Self {
+    pub fn new(version: &str, units: Arc<Units>, threads: usize, max_document_bytes: usize) -> Self {
         Self {
+            version: version.into(),
             units,
             extract_limits: Arc::new(Limits::default()),
             extract_permits: Arc::new(Semaphore::new(threads.max(1))),
@@ -175,7 +178,10 @@ pub mod test_support {
         for kind in enabled {
             units.enable(*kind, Some(1), Instant::now());
         }
-        (router(AppState::new(Arc::clone(&units), 2, 1024 * 1024)), units)
+        (
+            router(AppState::new("1.2.3", Arc::clone(&units), 2, 1024 * 1024)),
+            units,
+        )
     }
 
     pub async fn send(app: &Router, request: Request<Body>) -> (StatusCode, Vec<u8>) {

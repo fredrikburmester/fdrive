@@ -163,7 +163,7 @@ jobs:
           platforms: linux/${{ matrix.platform }}
           build-args: |
             ${{ matrix.image == 'api' && format('FDRIVE_BUILD_REVISION={0}', github.sha) || '' }}
-            ${{ matrix.image == 'api' && format('FDRIVE_BUILD_VERSION={0}', needs.plan.outputs.version) || '' }}
+            ${{ (matrix.image == 'api' || matrix.image == 'ml') && format('FDRIVE_BUILD_VERSION={0}', needs.plan.outputs.version) || '' }}
           labels: |
             org.opencontainers.image.title=fdrive-${{ matrix.image }}
             org.opencontainers.image.description=${{ matrix.description }}

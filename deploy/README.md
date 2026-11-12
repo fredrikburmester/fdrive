@@ -187,7 +187,13 @@ docker compose pull && docker compose up -d --remove-orphans
   are `FDRIVE_ML_THREADS`, `FDRIVE_ML_CPUS` and `FDRIVE_ML_MEMORY`
   ([resource limits](REFERENCE.md#processing-worker-resource-limits)).
 - Once the features show as ready, the old model files can go: the `models` folder in the data
-  directory, and `docker volume rm fdrive_fdrive-image-embed-models`.
+  directory, and `docker volume rm fdrive_fdrive-image-embed-models`. So can the three old
+  images, about 2.4 GB for each release still on disk:
+
+  ```sh
+  docker image ls --format '{{.Repository}}:{{.Tag}}' \
+    | grep -E 'fdrive-(tika|embed|image-embed):' | xargs -r docker image rm
+  ```
 
 **Installed from a git checkout?** Releases from 0.3.0 have no `update.sh`. Update from the
 checkout's `deploy` folder like any other installation, and move extra Compose files from

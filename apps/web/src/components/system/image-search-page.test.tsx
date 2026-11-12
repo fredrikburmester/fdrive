@@ -135,7 +135,7 @@ describe("ImageSearchPage", () => {
     });
     render(<ImageSearchPage />);
     expect(screen.getByText("Unreachable")).toBeTruthy();
-    expect(screen.getByText("The image-embedding sidecar is unreachable.")).toBeTruthy();
+    expect(screen.getByText("The image search model is unreachable.")).toBeTruthy();
   });
 
   it("renders Reachable with the model and dimension when healthy", () => {

@@ -223,7 +223,7 @@ mod tests {
             ),
             extract: Unit::new(UnitKind::Extract, Arc::new(|| Ok(())), inline_spawner()),
         });
-        let app = router(AppState::new(Arc::clone(&units), 1, 1024));
+        let app = router(AppState::new("dev", Arc::clone(&units), 1, 1024));
         units.enable(UnitKind::Image, Some(1), Instant::now());
 
         let (status, body) = get(&app, "/image/health").await;

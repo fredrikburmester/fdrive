@@ -56,13 +56,18 @@ async fn main() -> Result<(), String> {
         }
     }
 
-    let state = AppState::new(units, config.threads, config.max_document_bytes);
+    let state = AppState::new(&config.version, units, config.threads, config.max_document_bytes);
     // Compose network only; nothing here is authenticated.
     let address = SocketAddr::from((Ipv4Addr::UNSPECIFIED, config.port));
     let listener = tokio::net::TcpListener::bind(address)
         .await
         .map_err(|error| error.to_string())?;
-    tracing::info!(port = config.port, threads = config.threads, "fdrive-ml up");
+    tracing::info!(
+        version = config.version,
+        port = config.port,
+        threads = config.threads,
+        "fdrive-ml up"
+    );
     axum::serve(listener, router(state))
         .with_graceful_shutdown(shutdown())
         .await

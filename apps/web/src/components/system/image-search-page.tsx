@@ -125,7 +125,7 @@ export function ImageSearchPage() {
                 : status === "ok"
                   ? `Reachable. Model ${data.model ?? "unknown"}, dimension ${data.dim ?? "unknown"}.`
                   : status === "unreachable"
-                    ? "The image-embedding sidecar is unreachable."
+                    ? "The image search model is unreachable."
                     : "Not configured: set FDRIVE_IMAGE_EMBED_URL."
             }
           >
