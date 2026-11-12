@@ -170,6 +170,25 @@ overlays, data folders, the database and your files, and don't delete volumes or
 fix an error. After changing `.env`, run `docker compose up -d`; `docker restart` doesn't
 apply it.
 
+**Updating from 0.4 or earlier?** Document text extraction and both embedding models now run
+in one `ml` container, where there used to be `tika`, `embed` and `image-embed`. Download
+`compose.yaml` again, then update with one extra flag, which removes the three old
+containers:
+
+```sh
+docker compose pull && docker compose up -d --remove-orphans
+```
+
+- Nothing is indexed again. The `ml` container downloads its models once more when a feature
+  first needs them (about 3.1 GB with every search feature on), so search and image search
+  take a few minutes to be ready after this update.
+- In `.env`, `FDRIVE_EMBED_THREADS`, `FDRIVE_IMAGE_EMBED_THREADS` and the `FDRIVE_EMBED_*`,
+  `FDRIVE_IMAGE_EMBED_*` and `FDRIVE_TIKA_*` limits no longer do anything. Their replacements
+  are `FDRIVE_ML_THREADS`, `FDRIVE_ML_CPUS` and `FDRIVE_ML_MEMORY`
+  ([resource limits](REFERENCE.md#processing-worker-resource-limits)).
+- Once the features show as ready, the old model files can go: the `models` folder in the data
+  directory, and `docker volume rm fdrive_fdrive-image-embed-models`.
+
 **Installed from a git checkout?** Releases from 0.3.0 have no `update.sh`. Update from the
 checkout's `deploy` folder like any other installation, and move extra Compose files from
 `FDRIVE_COMPOSE_FILES` to `COMPOSE_FILE` in `.env`, the list Compose itself reads.

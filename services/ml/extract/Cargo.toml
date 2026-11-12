@@ -1,0 +1,21 @@
+[package]
+name = "fdrive-ml-extract"
+version = "0.0.0"
+edition = "2024"
+license = "AGPL-3.0-only"
+publish = false
+description = "Plain text from office documents, the part of fdrive-ml that replaces Apache Tika"
+
+[lints]
+workspace = true
+
+[dependencies]
+encoding_rs = "0.8"
+mail-parser = { version = "1", features = ["full_encoding"] }
+quick-xml = { version = "0.42", features = ["encoding", "escape-html"] }
+thiserror = "2"
+zip = { version = "9", default-features = false, features = ["deflate-flate2-zlib-rs"] }
+
+[dev-dependencies]
+cfb = "0.16"
+zip = { version = "9", default-features = false, features = ["deflate-flate2-zlib-rs"] }

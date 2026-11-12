@@ -22,10 +22,10 @@ fdrive is a Turborepo monorepo with `pnpm` workspaces:
   - `packages/sftpgo`: SFTPGo REST client and in-memory test fake.
   - `packages/db`: Drizzle schemas, migrations, and database repositories.
   - `packages/config`: Shared Vitest and TypeScript configurations.
-- **`services/`**: Python companion services:
-  - `services/indexer`: Inotify watcher, text chunking, and thumbnail generator.
-  - `services/image-embed`: Fast Starlette sidecar for SigLIP image embeddings.
-  - `services/ocr`: Nightly OCRmyPDF background runner.
+- **`services/`**: Companion services:
+  - `services/indexer` (Python): Inotify watcher, text chunking, and thumbnail generator.
+  - `services/ml` (Rust): Text embeddings, image embeddings and document text extraction.
+  - `services/ocr` (Python): Nightly OCRmyPDF background runner.
 - **`deploy/`**: Docker Compose configurations, Caddy proxy files, and deployment scripts.
 
 ---

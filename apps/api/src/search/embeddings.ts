@@ -11,7 +11,7 @@ export interface EmbedClient {
 }
 
 export interface CreateEmbedClientOptions {
-  /** The TEI base URL, e.g. `http://embed:80`. `/embed` is appended. */
+  /** The base URL of a server speaking TEI's contract, e.g. `http://ml:8080/text`. `/embed` is appended. */
   readonly baseUrl: string;
   readonly fetchImpl?: typeof globalThis.fetch;
   readonly timeoutMs?: number;

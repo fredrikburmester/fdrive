@@ -15,6 +15,7 @@ Only unfinished work lives here. Reviewed against source and delivery history on
 | [AI chat](AI-CHAT.md) | A docked, persistent chat panel that files are dropped into, with approval-gated tools, building on AI organize |
 | [Personal activity](RECENT-ACTIVITY.md) | A durable personal history answering where an upload went and what has happened to a file since, with [events](RECENT-ACTIVITY-EVENTS.md), [schema](RECENT-ACTIVITY-SCHEMA.md) and [coverage](RECENT-ACTIVITY-COVERAGE.md) |
 | [Owned shares](OWNED-SHARES.md) | Proposed fdrive-served share links for S3 and WebDAV behind a per-module share strategy |
+| [ML server follow-ups](ML-SERVER.md) | What is left after moving embeddings and document extraction into one Rust server: amd64 measurements, memory, extraction gaps |
 
 These are a backlog, not a claim that an agent is working on every item.
 

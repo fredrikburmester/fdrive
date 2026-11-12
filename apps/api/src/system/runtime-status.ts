@@ -1,13 +1,13 @@
 /**
- * Reads a bundled optional-worker controller's `GET /runtime` document (the
- * embed, image-embed, Tika and Office containers each run one on their own
- * status port). The controller is a tiny process that stays up even while the
- * worker it manages is off or could not start, so it is the only place that
- * can tell "the model server is down because the network is broken" apart
- * from "the controller gave up starting it". Its `error` field is always one
- * of the controller's own fixed literals (for example "worker exceeded
- * bounded startup retries"), never an upstream message, which is why it is
- * safe to surface on the public health endpoint and in feature details.
+ * Reads an optional worker's `GET /runtime` document. The ml service serves
+ * one per unit under that unit's path prefix; the Office container runs a
+ * small controller that serves one on its own status port. Either stays up
+ * while the worker it speaks for is off or could not start, so it is the only
+ * place that can tell "the model server is down because the network is
+ * broken" apart from "it gave up starting". Its `error` field is always one
+ * of a fixed set of literals (for example "worker exceeded bounded startup
+ * retries"), never an upstream message, which is why it is safe to surface on
+ * the public health endpoint and in feature details.
  */
 
 /** The bounded set of shapes a controller's status document can take. */
@@ -26,7 +26,13 @@ export function runtimeError(body: unknown): string | null {
   return error.slice(0, MAX_ERROR_LENGTH);
 }
 
-/** A controller's status document, or `null` when it cannot be reached or does not answer with one. */
+/**
+ * A status document, or `null` when it cannot be reached or does not answer
+ * with one. With a `port`, the document is the one a controller serves at the
+ * root of that port on `baseUrl`'s host. Without one, `baseUrl` is a runtime
+ * URL and `/runtime` is added below its path, so the units of one server keep
+ * their own documents.
+ */
 export async function fetchRuntimeStatus(
   baseUrl: string,
   port: string | null,
@@ -35,8 +41,12 @@ export async function fetchRuntimeStatus(
 ): Promise<RuntimeStatus | null> {
   try {
     const url = new URL(baseUrl);
-    if (port !== null) url.port = port;
-    url.pathname = "/runtime";
+    if (port === null) {
+      url.pathname = `${url.pathname.replace(/\/$/, "")}/runtime`;
+    } else {
+      url.port = port;
+      url.pathname = "/runtime";
+    }
     url.search = "";
     url.hash = "";
     const response = await fetchImpl(url, {

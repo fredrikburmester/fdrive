@@ -56,7 +56,6 @@ the first run that publishes an image, which is the first merge to `main` for al
 open each package from the [package list](https://github.com/fredrikburmester?tab=packages)
 and set **Package settings > Change visibility** to public. Until then installations cannot
 pull it, and each run warns about every image an anonymous client cannot pull.
-`fdrive-tei-arm64` is only the build base of `fdrive-embed` and can stay private.
 
 ## Pull requests
 

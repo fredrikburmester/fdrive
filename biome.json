@@ -21,6 +21,7 @@
       "!apps/web-e2e-shadow-*",
       "!**/.fdrive-workflow",
       "!**/.venv",
+      "!services/ml/target",
       "!**/playwright-report",
       "!**/test-results",
       "!**/tools/perf/results"

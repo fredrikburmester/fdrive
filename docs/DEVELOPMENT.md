@@ -88,8 +88,7 @@ Under **System > Storage**, add an `S3` provider at `http://localhost:59000/fdri
 | MinIO S3 API | `59000` | Local S3 bucket `fdrive` (when `s3` profile is up) |
 | MinIO console | `59001` | MinIO web console (`minio-root` / `minio-root-password`) |
 | Indexer HTTP | `58010` | Python indexer (when `index` profile is up) |
-| Embedding Server | `58081` | TEI text embedding model |
-| Image Embedding | `58012` | SigLIP image embedding model |
+| ML server | `58012` | Text embeddings (`/text`), image embeddings (`/image`) and document extraction (`/extract`), when `index` profile is up |
 
 ---
 
@@ -134,14 +133,14 @@ pnpm --filter @fdrive/web test:e2e
 ## Development ports and worker probes
 
 Set `FDRIVE_DEV_API_PORT`, `FDRIVE_DEV_DB_PORT`, `FDRIVE_DEV_SFTPGO_HTTP_PORT`,
-`FDRIVE_DEV_INDEXER_HTTP_PORT`, `FDRIVE_DEV_OCR_HTTP_PORT`, `FDRIVE_DEV_EMBED_PORT`,
-`FDRIVE_DEV_IMAGE_EMBED_PORT` and `FDRIVE_DEV_TIKA_PORT` before generating a fresh
-environment. `pnpm dev:env` uses those same overrides for the API/web URLs and
+`FDRIVE_DEV_INDEXER_HTTP_PORT`, `FDRIVE_DEV_OCR_HTTP_PORT` and `FDRIVE_DEV_ML_PORT` before
+generating a fresh environment. `pnpm dev:env` uses those same overrides for the API/web URLs and
 compose publishes. Existing environment assignments are preserved; update them
 when changing ports in an already configured checkout.
 
-The dev stack serves workers directly. `FDRIVE_TIKA_URL` points to its published
-Tika port. Production compose supplies `FDRIVE_EMBED_RUNTIME_URL`,
-`FDRIVE_IMAGE_EMBED_RUNTIME_URL` and `FDRIVE_TIKA_RUNTIME_URL` for controller status.
-These URLs are explicit: a published worker port does not imply a controller port.
-Unmanaged workers have no configuration revision; managed workers must acknowledge it.
+The dev stack keeps every unit of the ml service on (`FDRIVE_ML_STATIC_UNITS`), and
+`FDRIVE_EMBED_URL`, `FDRIVE_IMAGE_EMBED_URL` and `FDRIVE_TIKA_URL` point at its `/text`,
+`/image` and `/extract` prefixes on the published port. Production compose also supplies
+`FDRIVE_EMBED_RUNTIME_URL`, `FDRIVE_IMAGE_EMBED_RUNTIME_URL` and `FDRIVE_TIKA_RUNTIME_URL`,
+where the server follows the owner's feature settings and must acknowledge their revision.
+Units that are always on have no configuration revision.

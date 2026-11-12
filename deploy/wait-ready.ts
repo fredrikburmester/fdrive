@@ -78,10 +78,10 @@ export async function checkReadiness(
       );
     }
   }
-  // Text extraction has a managed worker but no entry in the public health map.
+  // Text extraction is a unit of the ml service with no entry in the public health map.
   if (values.textSearch || values.searchOcr || values.semanticSearch) {
     try {
-      const endpoint = new URL(env.FDRIVE_TIKA_RUNTIME_URL || "http://tika:9997");
+      const endpoint = new URL(env.FDRIVE_TIKA_RUNTIME_URL || "http://ml:8080/extract");
       endpoint.pathname = `${endpoint.pathname.replace(/\/$/, "")}/runtime`;
       const tika = await json<{ status: string; revision: number }>(endpoint.toString());
       if (tika?.status !== "ready") {

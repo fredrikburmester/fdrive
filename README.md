@@ -197,8 +197,8 @@ fdrive is designed to be lightweight by default. You only pay for what you use:
 | **+ Office Editing** | **~2 GB** | Collaborative Word, Excel, and PowerPoint editing in the browser via ONLYOFFICE. |
 
 Search & AI is CPU-hungry as well as memory-hungry, and on a shared host that matters more
-than the RAM: the indexer, OCR, Tika and the embedding sidecars each ship with bounded
-concurrency and optional hard caps. See
+than the RAM: the indexer, OCR and the ml service (document extraction and embeddings) each
+ship with bounded concurrency and optional hard caps. See
 [processing worker resource limits](deploy/REFERENCE.md#processing-worker-resource-limits).
 
 ---

@@ -13,7 +13,7 @@ export const MAX_IMAGE_EMBED_QUERY_LENGTH = 512;
 
 /**
  * The image-embed sidecar's own reported health, mirrored from its `GET
- * /health` (`services/image-embed/README.md`). `dim` is `null` while
+ * /health` (`services/ml/README.md`). `dim` is `null` while
  * `status` is `"loading"`; the sidecar never answers 503 for `/health`
  * itself, only for embed requests made before the model is resident.
  */
@@ -53,7 +53,7 @@ export interface ImageEmbedClientDeps extends SidecarRequestDeps {
 
 /**
  * A typed client for the image-embed sidecar's internal HTTP API
- * (`services/image-embed`). `embedText` never throws: a network failure,
+ * (the image unit of `services/ml`). `embedText` never throws: a network failure,
  * timeout, non-2xx response, or a response with zero embeddings all resolve
  * `null`, so image-content search degrades to "no image hits" rather than
  * failing the whole search request.
