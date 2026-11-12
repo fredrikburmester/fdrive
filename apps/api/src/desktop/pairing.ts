@@ -9,6 +9,7 @@ import { addressBlock } from "../auth/address-block.js";
 import type { Principal } from "../auth/principal.js";
 import type { IdentityStorageFactory } from "../auth/storage-factory.js";
 import { ApiHttpError } from "../errors.js";
+import { hostLabel } from "../providers/service.js";
 import { createResolveTokenPrincipal } from "../tokens/principal.js";
 import { createTokenService } from "../tokens/service.js";
 import { hashApiToken } from "../tokens/token-format.js";
@@ -125,7 +126,8 @@ export function createDesktopPairing(deps: DesktopDeps) {
       accountId: principal.accountId,
       identityId: identity.id,
       providerId: provider.id,
-      displayName: provider.label || new URL(provider.baseUrl).host,
+      // The local folder's row has no URL (`local`), which `new URL` would refuse.
+      displayName: provider.label || hostLabel(provider.baseUrl),
       username: identity.externalUsername,
       paths: principal.tokenAccess?.paths ?? [],
     };
