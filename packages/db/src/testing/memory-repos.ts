@@ -183,7 +183,10 @@ function createMemoryLocalUserRepo(): LocalUserRepo {
   };
 }
 
-function createMemoryLocalGrantRepo(ids: () => string): LocalGrantRepo {
+function createMemoryLocalGrantRepo(
+  ids: () => string,
+  users: Pick<LocalUserRepo, "get">,
+): LocalGrantRepo {
   const rows: LocalGrant[] = [];
   const atOrUnder = (path: string, prefix: string) =>
     path === prefix || path.startsWith(prefix === "/" ? "/" : `${prefix}/`);
@@ -193,7 +196,12 @@ function createMemoryLocalGrantRepo(ids: () => string): LocalGrantRepo {
       return rows.find((row) => row.id === id) ?? null;
     },
     async listReceived(grantee) {
-      return rows.filter((row) => row.granteeUsername === grantee);
+      const received: LocalGrant[] = [];
+      for (const row of rows) {
+        if (row.granteeUsername !== grantee) continue;
+        if ((await users.get(row.ownerUsername))?.disabled === false) received.push(row);
+      }
+      return received;
     },
     async listOwned(owner, path) {
       return rows.filter(
@@ -1203,13 +1211,14 @@ export function createMemoryRepos(opts: CreateMemoryReposOptions = {}): Repos {
   const folderViews = createMemoryFolderViewRepo();
   const identities = createMemoryIdentityRepo(ids);
   const recents = createMemoryRecentRepo();
+  const localUsers = createMemoryLocalUserRepo();
 
   return {
     providers: createMemoryProviderRepo(ids, (providerId) =>
       identities.countByProviderSync(providerId),
     ),
-    localUsers: createMemoryLocalUserRepo(),
-    localGrants: createMemoryLocalGrantRepo(ids),
+    localUsers,
+    localGrants: createMemoryLocalGrantRepo(ids, localUsers),
     accounts: createMemoryAccountRepo(ids),
     identities,
     credentials: createMemoryCredentialRepo(),

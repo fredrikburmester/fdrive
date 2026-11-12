@@ -574,6 +574,8 @@ export async function composeApp(
         return false;
       if (deps.officeCanEdit !== undefined && !(await deps.officeCanEdit(actor, path)))
         return false;
+      // A folder shared to view only opens for viewing, never for an edit that cannot save.
+      if (await localGrants.isReadOnly(actor.identity, path)) return false;
       const rules = config.fdriveOfficeEditRules ?? [];
       return rules.length === 0 || allowsOfficeEdit(rules, actor.identity, path);
     },

@@ -85,7 +85,11 @@ export interface LocalGrant {
 
 export interface LocalGrantRepo {
   get(id: string): Promise<LocalGrant | null>;
-  /** What others share with `grantee`, oldest first. */
+  /**
+   * What others share with `grantee`, oldest first. A share whose owner an
+   * administrator disabled is left out: disabling someone ends what they share
+   * as well as their own sign-in.
+   */
   listReceived(grantee: string): Promise<LocalGrant[]>;
   /** What `owner` shares, only the folder `path` when given, oldest first. */
   listOwned(owner: string, path?: string): Promise<LocalGrant[]>;

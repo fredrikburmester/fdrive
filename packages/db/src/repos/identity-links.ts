@@ -76,29 +76,6 @@ async function lockOwnedIdentity(
   if (identity.accountId !== accountId) throw new IdentityLinksError("forbidden");
   return identity;
 }
-/** Holds the same ownership locks as transfer/unlink for a short identity-bound update. */
-export function createIdentityOwnershipGuard(db: Db) {
-  return async (
-    accountId: string,
-    identityId: string,
-    write: (settings: Pick<SettingsRepo, "set">) => Promise<void>,
-  ): Promise<void> => {
-    await db.transaction(async (tx) => {
-      await lockOwnedIdentity(tx, accountId, identityId);
-      await write({
-        async set(key, value) {
-          await tx
-            .insert(settings)
-            .values({ key, value })
-            .onConflictDoUpdate({
-              target: settings.key,
-              set: { value, updatedAt: new Date() },
-            });
-        },
-      });
-    });
-  };
-}
 
 async function transferMetadata(
   tx: Transaction,

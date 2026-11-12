@@ -1080,11 +1080,12 @@ function createLocalGrantRepo(db: Db): LocalGrantRepo {
     },
     async listReceived(grantee) {
       const rows = await db
-        .select()
+        .select({ grant: localGrants })
         .from(localGrants)
-        .where(eq(localGrants.granteeUsername, grantee))
+        .innerJoin(localUsers, eq(localUsers.username, localGrants.ownerUsername))
+        .where(and(eq(localGrants.granteeUsername, grantee), eq(localUsers.disabled, false)))
         .orderBy(asc(localGrants.createdAt), asc(localGrants.id));
-      return rows.map(toLocalGrant);
+      return rows.map((row) => toLocalGrant(row.grant));
     },
     async listOwned(owner, path) {
       const rows = await db

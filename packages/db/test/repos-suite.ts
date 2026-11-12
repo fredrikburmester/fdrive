@@ -255,6 +255,12 @@ export function defineReposSuite(name: string, setup: () => Promise<Repos> | Rep
         expect(await repos.localGrants.listOwned("alice", "/Projects")).toHaveLength(1);
         expect(await repos.localGrants.listOwned("alice", "/Other")).toEqual([]);
 
+        await repos.localUsers.update("carol", { disabled: true });
+        expect((await repos.localGrants.listReceived("bob")).map((grant) => grant.id)).toEqual([
+          first.id,
+        ]);
+        await repos.localUsers.update("carol", { disabled: false });
+
         await repos.localGrants.delete(first.id);
         await repos.localGrants.delete(first.id);
         expect(await repos.localGrants.listReceived("bob")).toHaveLength(1);

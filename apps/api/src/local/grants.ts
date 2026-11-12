@@ -29,6 +29,11 @@ export interface LocalGrantService {
   remove(identityId: string, id: string): Promise<void>;
   /** What is shared with a local login, for search and thumbnails; empty for any other login. */
   received(identity: Pick<Identity, "providerId" | "externalUsername">): Promise<ReceivedFolder[]>;
+  /** True when `path` (the login's own path) is inside a folder shared with it to view only. */
+  isReadOnly(
+    identity: Pick<Identity, "providerId" | "externalUsername">,
+    path: string,
+  ): Promise<boolean>;
   /** The owner moved a folder in fdrive: its shares follow. */
   onMoved(identityId: string, from: string, to: string, isDir: boolean): Promise<void>;
   /** The owner deleted a folder for good: its shares end. */
@@ -113,6 +118,14 @@ export function createLocalGrantService(deps: LocalGrantServiceDeps): LocalGrant
       path: grant.path,
       writable: grant.writable,
     }));
+  }
+
+  async function receivedFor(
+    identity: Pick<Identity, "providerId" | "externalUsername">,
+  ): Promise<ReceivedFolder[]> {
+    const providerId = await deps.providerId();
+    if (providerId === null || identity.providerId !== providerId) return [];
+    return received(identity.externalUsername);
   }
 
   return {
@@ -220,10 +233,14 @@ export function createLocalGrantService(deps: LocalGrantServiceDeps): LocalGrant
       await repos.localGrants.delete(grant.id);
     },
 
-    async received(identity) {
-      const providerId = await deps.providerId();
-      if (providerId === null || identity.providerId !== providerId) return [];
-      return received(identity.externalUsername);
+    received: receivedFor,
+
+    async isReadOnly(identity, path) {
+      const target = normalizePath(path);
+      const folders = await receivedFor(identity);
+      return folders.some(
+        (folder) => !folder.writable && under(target, `${SHELF_PATH}/${folder.name}`),
+      );
     },
 
     async onMoved(identityId, from, to, isDir) {

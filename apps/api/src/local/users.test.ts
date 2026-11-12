@@ -53,6 +53,16 @@ describe("createLocalUserStore: status and shared", () => {
 
   it("lists what others share with a user, oldest first, with whether they may change it", async () => {
     const { repos, store } = await fixture();
+    await seedLocalUsers(repos, [
+      { username: "carol", password: "carol-pass" },
+      { username: "dave", password: "dave-pass" },
+    ]);
+    await repos.localGrants.put({
+      ownerUsername: "dave",
+      path: "/Music",
+      granteeUsername: "Alice",
+      access: "write",
+    });
     await repos.localGrants.put({
       ownerUsername: "bob",
       path: "/Projects",
@@ -65,8 +75,9 @@ describe("createLocalUserStore: status and shared", () => {
       granteeUsername: "Alice",
       access: "read",
     });
+    // bob is disabled, so what he shares is gone with his sign-in.
     expect(await store.shared("Alice")).toEqual([
-      { owner: "bob", path: "/Projects", writable: true },
+      { owner: "dave", path: "/Music", writable: true },
       { owner: "carol", path: "/Photos/2026", writable: false },
     ]);
     expect(await store.shared("bob")).toEqual([]);

@@ -126,6 +126,22 @@ describe("createLocalGrantService: sharing a folder", () => {
     ]);
   });
 
+  it("tells which paths are inside a folder shared to view only", async () => {
+    const h = await fixture();
+    await h.service.create(h.alice.id, { path: "/Projects", username: "bob", access: "read" });
+    await h.service.create(h.carol.id, { path: "/Projects", username: "bob", access: "write" });
+    expect(await h.service.isReadOnly(h.bob, "/Shared with me/Projects (alice)/a.docx")).toBe(true);
+    expect(await h.service.isReadOnly(h.bob, "/Shared with me/Projects (alice)")).toBe(true);
+    expect(await h.service.isReadOnly(h.bob, "/Shared with me/Projects (carol)/a.docx")).toBe(
+      false,
+    );
+    expect(await h.service.isReadOnly(h.bob, "/Shared with me/Projects (alice)x/a.docx")).toBe(
+      false,
+    );
+    expect(await h.service.isReadOnly(h.bob, "/Projects/a.docx")).toBe(false);
+    expect(await h.service.isReadOnly(h.aliceOnDav, "/Shared with me/x")).toBe(false);
+  });
+
   it.each([
     ["all of your files", "/", "bad_request", "share a folder, not all of your files"],
     [
