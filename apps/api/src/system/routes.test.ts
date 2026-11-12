@@ -69,7 +69,6 @@ function fakeThumbnailsRepo(count = 0): ThumbnailsRepo {
 
 function fakeIndexerClient(overrides: Partial<IndexerClient> = {}): IndexerClient {
   return {
-    directory: async () => ({ ok: false, reason: "unreachable", detail: "not stubbed" }),
     health: async () => ({ ok: false, reason: "unreachable", detail: "not stubbed" }),
     stats: async () => ({ ok: false, reason: "unreachable", detail: "not stubbed" }),
     reindex: async () => ({ ok: false, reason: "unreachable", detail: "not stubbed" }),

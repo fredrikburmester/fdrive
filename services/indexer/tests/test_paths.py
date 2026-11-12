@@ -1,3 +1,5 @@
+import pytest
+
 from fdrive_indexer.paths import (
     ext_of,
     is_junk_name,
@@ -6,6 +8,7 @@ from fdrive_indexer.paths import (
     is_under,
     parent_dir,
     reindex_scope,
+    request_path_parts,
     root_relative_key,
 )
 
@@ -86,3 +89,16 @@ def test_reindex_scope_none() -> None:
 
 def test_reindex_scope_with_slashes() -> None:
     assert reindex_scope("/a/b/") == ("a/b", "a/b/")
+
+
+@pytest.mark.parametrize(
+    "path", ["", "relative", "//", "/a/", "/a//b", "/.", "/a/../b", "/a\\b", "/\x00", "/\x7f", "/" + "a" * 4096]
+)
+def test_request_path_parts_refuses_non_canonical_paths(path: str) -> None:
+    with pytest.raises(ValueError):
+        request_path_parts(path)
+
+
+def test_request_path_parts_splits_without_decoding_again() -> None:
+    assert request_path_parts("/") == []
+    assert request_path_parts("/文 space/literal%20/%2F/%2e%2e") == ["文 space", "literal%20", "%2F", "%2e%2e"]

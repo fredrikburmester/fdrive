@@ -6,7 +6,7 @@ import type {
   IndexerThumbnailRebuildJob,
   IndexerThumbnailsRebuildResponse,
 } from "@fdrive/contracts";
-import { IndexerClearResponse, IndexerDirectoryResponse } from "@fdrive/contracts";
+import { IndexerClearResponse } from "@fdrive/contracts";
 import { z } from "zod";
 import { callSidecar, type SidecarRequestDeps, type SidecarResult } from "./sidecar-client.js";
 
@@ -179,7 +179,6 @@ export interface ThumbnailsRebuildOptions {
 
 /** A typed client for the indexer's internal HTTP API. See `docs/INDEXER.md`. */
 export interface IndexerClient {
-  directory(root: string, path: string): Promise<SidecarResult<IndexerDirectoryResponse>>;
   clearIndex(options?: {
     root?: string | undefined;
     path?: string | undefined;
@@ -207,10 +206,6 @@ export interface IndexerClient {
 /** Builds an `IndexerClient` calling `deps.baseUrl` with `deps.fetch`. */
 export function createIndexerClient(deps: IndexerClientDeps): IndexerClient {
   return {
-    async directory(root, path) {
-      const query = new URLSearchParams({ root, path });
-      return callSidecar(deps.baseUrl, `/directory?${query}`, IndexerDirectoryResponse, {}, deps);
-    },
     async clearIndex(options) {
       return callSidecar(
         deps.baseUrl,

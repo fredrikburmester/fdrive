@@ -6,10 +6,27 @@ from __future__ import annotations
 
 import posixpath
 import re
+import unicodedata
 
 # fdrive's local storage streams each upload into a file named like this beside its
 # target and publishes it under the real name only once complete (packages/local).
 _PARTIAL_UPLOAD = re.compile(r"\.fdrive-partial-[0-9a-f]{16}")
+
+
+def request_path_parts(path: str) -> list[str]:
+    """Split a canonical root-relative request path, already decoded once by HTTP.
+
+    Raises `ValueError` for anything that is not one: relative, empty segments,
+    `.`/`..`, backslashes, control characters, or longer than 4096 characters.
+    """
+    if not path.startswith("/") or len(path) > 4096 or "\\" in path or any(unicodedata.category(char) == "Cc" for char in path):
+        raise ValueError("invalid path")
+    if path == "/":
+        return []
+    parts = path[1:].split("/")
+    if any(part in ("", ".", "..") for part in parts):
+        raise ValueError("invalid path")
+    return parts
 
 
 def ext_of(name: str) -> str:

@@ -592,56 +592,6 @@ def test_image_embeddings_rebuild_runs_end_to_end(postgres_dsn: str, monkeypatch
     assert db.image_embedding_model(ctx.conn(), "sha1") == "model-a"
 
 
-def test_directory_endpoint(postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    ctx = _make_ctx(postgres_dsn, monkeypatch, "files", str(tmp_path))
-    client = _make_client(ctx)
-    target = tmp_path / "文 space%20"
-    target.mkdir()
-    (target / "a.txt").touch()
-    response = client.get("/directory", params={"root": "files", "path": "/文 space%20"})
-    assert response.status_code == 200
-    assert response.json() == {"items": [{"name": "a.txt", "kind": "file"}], "overflow": False}
-    for query in [
-        "",
-        "root=files",
-        "root=files&path=/&extra=a",
-        "root=files&path=/&path=/",
-        "root=files&root=files&path=/",
-        "root=files&path=%2F..%2F",
-        "root=files&path=%2F%2e%2e",
-        "root=files&path=%2Fa%2F%2Fb",
-        "root=files&path=%2Fa%5Cb",
-        "root=files&path=%2F%00",
-    ]:
-        assert client.get("/directory?" + query).status_code == 400
-    assert client.get("/directory?root=missing&path=/").status_code == 404
-    assert client.get("/directory?root=files&path=/missing").status_code == 404
-    assert client.get("/directory", params={"root": "files", "path": "/文 space%20/a.txt"}).status_code == 400
-    (tmp_path / "link").symlink_to(target)
-    assert client.get("/directory?root=files&path=/link").status_code == 400
-    literal = tmp_path / "%2e%2e"
-    literal.mkdir()
-    assert client.get("/directory?root=files&path=/%252e%252e").status_code == 200
-
-
-def test_directory_offloads_and_sanitizes_errors(postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    import errno
-
-    ctx = _make_ctx(postgres_dsn, monkeypatch, "files", str(tmp_path))
-    client = _make_client(ctx)
-    for code, expected in [(errno.EACCES, 403), (errno.EPERM, 403), (errno.ELOOP, 400), (errno.EIO, 503)]:
-
-        def fail(root: str, path: str, error_code: int = code) -> None:
-            # AnyIO's worker name proves blocking I/O ran outside the async portal thread.
-            assert "worker" in threading.current_thread().name.lower()
-            raise OSError(error_code, str(tmp_path / "private"))
-
-        monkeypatch.setattr(server, "list_directory", fail)
-        response = client.get("/directory?root=files&path=/")
-        assert response.status_code == expected
-        assert response.json() == {"error": "directory unavailable"}
-
-
 def test_activity_reports_rebuild_without_reading_storage() -> None:
     def forbidden() -> None:
         raise AssertionError("Activity must not query the database or walk files")

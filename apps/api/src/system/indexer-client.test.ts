@@ -408,35 +408,6 @@ describe("createIndexerClient: clear", () => {
   });
 });
 
-it("lists bounded directory metadata with exact query encoding and strict response validation", async () => {
-  const body = { items: [{ name: "文 space%20", kind: "file" }], overflow: false };
-  const fetchStub = vi.fn<typeof fetch>().mockResolvedValue(jsonResponse(200, body));
-  const client = createIndexerClient({ baseUrl: "http://indexer:8010/", fetch: fetchStub });
-  expect(await client.directory("my root", "/文 space%20/%2F")).toEqual({ ok: true, data: body });
-  const url = new URL(String(fetchStub.mock.calls[0]?.[0]));
-  expect(url.pathname).toBe("/directory");
-  expect([...url.searchParams]).toEqual([
-    ["root", "my root"],
-    ["path", "/文 space%20/%2F"],
-  ]);
-  for (const invalid of [
-    { items: [], overflow: false, secret: "bad" },
-    { items: [{ name: "/absolute", kind: "file" }], overflow: false },
-    { items: [], overflow: "no" },
-  ]) {
-    fetchStub.mockResolvedValueOnce(jsonResponse(200, invalid));
-    expect(await client.directory("r", "/")).toMatchObject({ ok: false, reason: "invalid" });
-  }
-  fetchStub.mockResolvedValueOnce(jsonResponse(404, {}));
-  expect(await client.directory("r", "/")).toMatchObject({
-    ok: false,
-    reason: "unreachable",
-    status: 404,
-  });
-  fetchStub.mockRejectedValueOnce(new Error("offline"));
-  expect(await client.directory("r", "/")).toMatchObject({ ok: false, reason: "unreachable" });
-});
-
 it("retains image embedding counts and accepts asynchronous rebuild discovery", async () => {
   const fetch = vi
     .fn()

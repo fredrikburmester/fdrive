@@ -247,7 +247,6 @@ export {
   IndexerClearJob,
   IndexerClearRequest,
   IndexerClearResponse,
-  IndexerDirectoryResponse,
   IndexerErrorSample,
   IndexerHealth,
   IndexerLastScan,

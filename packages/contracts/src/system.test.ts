@@ -758,37 +758,6 @@ describe("clear contracts", () => {
   });
 });
 
-it("bounds internal directory metadata and rejects malformed or extra fields", async () => {
-  const { IndexerDirectoryResponse } = await import("./index.ts");
-  const entry = { name: "文 space%20", kind: "file" };
-  expect(IndexerDirectoryResponse.parse({ items: [entry], overflow: false })).toEqual({
-    items: [entry],
-    overflow: false,
-  });
-  expect(
-    IndexerDirectoryResponse.safeParse({
-      items: Array.from({ length: 10000 }, () => entry),
-      overflow: true,
-    }).success,
-  ).toBe(true);
-  for (const value of [
-    { items: Array.from({ length: 10001 }, () => entry), overflow: true },
-    { items: [], overflow: false, extra: true },
-    { items: [] },
-    ...["", "x".repeat(256), "/root", "a\0b"].map((name) => ({
-      items: [{ name, kind: "file" }],
-      overflow: false,
-    })),
-    { items: [{ name: "a", kind: "unknown" }], overflow: false },
-    { items: [{ ...entry, size: 1 }], overflow: false },
-  ])
-    expect(IndexerDirectoryResponse.safeParse(value).success).toBe(false);
-  for (const kind of ["file", "dir", "symlink", "other"])
-    expect(
-      IndexerDirectoryResponse.safeParse({ items: [{ name: "a", kind }], overflow: false }).success,
-    ).toBe(true);
-});
-
 describe("SystemLogsQuery", () => {
   it("defaults to 200 info-level entries and no cursor", async () => {
     const { SystemLogsQuery } = await import("./index.ts");
