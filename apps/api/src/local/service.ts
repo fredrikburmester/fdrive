@@ -28,7 +28,12 @@ export interface LocalUserService {
   list(viewer: UserViewer): Promise<AdminUsersResponse>;
   create(input: AdminUserCreateRequest, viewer: UserViewer): Promise<AdminUser>;
   update(username: string, patch: AdminUserUpdateRequest, viewer: UserViewer): Promise<AdminUser>;
-  /** Removes the user: they can no longer sign in. Their files and fdrive data stay. */
+  /**
+   * Removes the user: they can no longer sign in, their sessions and API
+   * tokens end and their account is no longer an administrator. Their files
+   * and fdrive data stay with the name, so adding the same name again gives
+   * them back, without any of the access that was revoked.
+   */
   remove(username: string, viewer: UserViewer): Promise<void>;
   /**
    * Setup's first user. Creates the user, or accepts one that already exists
@@ -43,7 +48,7 @@ export interface LocalUserService {
 export interface LocalUserServiceDeps {
   readonly repos: Pick<
     Repos,
-    "localUsers" | "identities" | "accounts" | "sessions" | "credentials"
+    "localUsers" | "identities" | "accounts" | "sessions" | "credentials" | "apiTokens"
   >;
   readonly store: LocalUsers;
   readonly passwords: SharePasswords;
@@ -175,7 +180,13 @@ export function createLocalUserService(deps: LocalUserServiceDeps): LocalUserSer
         throw new ApiHttpError("forbidden", "you cannot remove yourself");
       }
       await repos.localUsers.delete(current.username);
-      if (identity !== null) await endSessions(identity.accountId, viewer);
+      if (identity !== null) {
+        await endSessions(identity.accountId, viewer);
+        await repos.accounts.setAdmin(identity.accountId, false);
+        for (const token of await repos.apiTokens.listByAccount(identity.accountId)) {
+          await repos.apiTokens.delete(token.id, identity.accountId);
+        }
+      }
       eventLog.record("general", "info", `User removed: ${current.username}`);
     },
 

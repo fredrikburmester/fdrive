@@ -8,14 +8,19 @@ CREATE TABLE "app"."local_users" (
 --> statement-breakpoint
 CREATE UNIQUE INDEX "local_users_username_lower_unique" ON "app"."local_users" USING btree (lower("username"));--> statement-breakpoint
 -- SFTPGo is gone: its users' homes were <data>/<username>, the layout the local
--- provider serves. Turn the SFTPGo row the deployment pinned (else the oldest)
--- into the local provider in place, so every login and everything keyed by it
+-- provider serves. Turn the SFTPGo row the deployment pinned (else the one the
+-- setup owner signed in to, else the oldest) into the local provider in place, so every login and everything keyed by it
 -- (tags, favorites, shares, activity, Office files) carries over. Passwords are
 -- carried over from the sealed credentials when the API starts.
 UPDATE "app"."providers" SET "type" = 'local', "base_url" = 'local', "config" = '{}'::jsonb
 WHERE "id" = (
 	SELECT "id" FROM "app"."providers" WHERE "type" = 'sftpgo'
-	ORDER BY "managed_by_env" DESC, "created_at" ASC LIMIT 1
+	ORDER BY "managed_by_env" DESC,
+		"base_url" IS NOT DISTINCT FROM (
+			SELECT "value"->>'baseUrl' FROM "app"."settings" WHERE "key" = 'setup.owner.v1'
+		) DESC,
+		"created_at" ASC
+	LIMIT 1
 ) AND NOT EXISTS (SELECT 1 FROM "app"."providers" WHERE "type" = 'local');--> statement-breakpoint
 UPDATE "app"."providers" SET "enabled" = false, "managed_by_env" = false WHERE "type" = 'sftpgo';--> statement-breakpoint
 -- The index root SFTPGo's data folder was read under becomes the local

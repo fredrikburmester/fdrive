@@ -261,8 +261,11 @@ export async function composeApp(
     const local = await localProvider();
     if (local !== null) {
       const adopted = await adoptSealedPasswords({ repos, master, passwords }, local.id);
-      if (adopted.length > 0) {
-        logger.info({ users: adopted.length }, "local users created from existing logins");
+      if (adopted.enabled.length + adopted.disabled.length > 0) {
+        logger.info(
+          { enabled: adopted.enabled.length, disabled: adopted.disabled.length },
+          "local users created from existing logins; enable the others under System > Users",
+        );
       }
     }
   }

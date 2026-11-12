@@ -8,9 +8,19 @@ import type { SharePasswords } from "../shares/passwords.js";
 export const LOCAL_ADOPTION_KEY = "local.adopted.v1";
 
 export interface AdoptSealedPasswordsDeps {
-  readonly repos: Pick<Repos, "identities" | "credentials" | "localUsers" | "settings">;
+  readonly repos: Pick<
+    Repos,
+    "identities" | "credentials" | "localUsers" | "settings" | "accounts"
+  >;
   readonly master: Uint8Array;
   readonly passwords: SharePasswords;
+}
+
+export interface AdoptedUsers {
+  /** Administrators, who can sign in right away. */
+  readonly enabled: readonly string[];
+  /** Everyone else, added disabled until an administrator enables them. */
+  readonly disabled: readonly string[];
 }
 
 /**
@@ -18,16 +28,21 @@ export interface AdoptSealedPasswordsDeps {
  * login on the local provider `providerId` that has no local user a user of
  * its own, with the password fdrive sealed the last time it signed in. An
  * installation that moved from SFTPGo, whose provider row the migration
- * turned into the local one, keeps every user's password this way. A login
- * whose credential cannot be read (another master key) is skipped; an
- * administrator gives it a password. Returns the usernames adopted.
+ * turned into the local one, keeps every user's password this way.
+ *
+ * Only administrators come back able to sign in. fdrive cannot tell whether
+ * SFTPGo had disabled or removed anyone else since they last signed in, so
+ * the rest are added disabled: one click under System > Users lets each one
+ * in again. A login whose credential cannot be read (another master key) is
+ * skipped; an administrator gives it a password.
  */
 export async function adoptSealedPasswords(
   deps: AdoptSealedPasswordsDeps,
   providerId: string,
-): Promise<string[]> {
-  if ((await deps.repos.settings.get(LOCAL_ADOPTION_KEY)) === true) return [];
-  const adopted: string[] = [];
+): Promise<AdoptedUsers> {
+  const enabled: string[] = [];
+  const disabled: string[] = [];
+  if ((await deps.repos.settings.get(LOCAL_ADOPTION_KEY)) === true) return { enabled, disabled };
   for (const identity of await deps.repos.identities.listAll()) {
     if (identity.providerId !== providerId) continue;
     const username = identity.externalUsername;
@@ -43,17 +58,24 @@ export async function adoptSealedPasswords(
       continue;
     }
     if (password === undefined || password.length === 0) continue;
+    const admin = (await deps.repos.accounts.get(identity.accountId))?.isAdmin === true;
     try {
       await deps.repos.localUsers.create({
         username,
         passwordHash: await deps.passwords.hash(password),
       });
-      adopted.push(username);
     } catch (error) {
       // Two logins differing only in case: the first keeps the name.
       if (!(error instanceof ConflictError)) throw error;
+      continue;
+    }
+    if (admin) {
+      enabled.push(username);
+    } else {
+      await deps.repos.localUsers.update(username, { disabled: true });
+      disabled.push(username);
     }
   }
   await deps.repos.settings.set(LOCAL_ADOPTION_KEY, true);
-  return adopted;
+  return { enabled, disabled };
 }
