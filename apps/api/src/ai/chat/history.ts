@@ -43,7 +43,9 @@ function actionLine(part: ChatPart & { kind: "action" }): string {
       ? `move ${part.proposal.suggestions.length} items`
       : part.proposal.kind === "trash"
         ? `move ${part.proposal.items.length} items to Trash`
-        : `${part.proposal.mode === "create" ? "create" : "replace"} ${part.proposal.path}`;
+        : part.proposal.kind === "rename"
+          ? `rename ${part.proposal.items.length} items`
+          : `${part.proposal.mode === "create" ? "create" : "replace"} ${part.proposal.path}`;
   const state =
     part.state === "pending"
       ? "still waiting for the person"

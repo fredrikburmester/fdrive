@@ -277,6 +277,7 @@ describe("chat service", () => {
       "read_file",
       "file_info",
       "move_items",
+      "rename_items",
       "write_text_file",
     ]);
   });
@@ -480,6 +481,50 @@ describe("chat service", () => {
     expect((await s.service.get(s.principal, chat.id)).references).toEqual([
       { path: "/Archive/2024/a.txt", missing: false },
     ]);
+  });
+
+  it("applies a rename card with the person's own name, after a restart too", async () => {
+    s.script.queue.push(
+      call("c1", "rename_items", {
+        summary: "A clearer name.",
+        renames: [{ path: "/Inbox/a.txt", name: "greeting.txt", reason: "It says hello." }],
+      }),
+      text("Renamed."),
+    );
+    const chat = await chatWith(s, "Give it a better name", ["/Inbox/a.txt"]);
+    await s.service.settled(chat.id);
+    const waiting = await s.service.get(s.principal, chat.id);
+    expect(waiting.state).toBe("awaiting_approval");
+    const card = lastParts(waiting)[0];
+    if (card?.kind !== "action") throw new Error("expected a card");
+    expect(card.proposal).toEqual({
+      kind: "rename",
+      summary: "A clearer name.",
+      items: [
+        {
+          path: "/Inbox/a.txt",
+          kind: "file",
+          name: "greeting.txt",
+          reason: "It says hello.",
+          conflict: false,
+        },
+      ],
+    });
+
+    // A process without the live conversation still finds the tool for the stored card.
+    const applied = await s.restart().act(s.principal, chat.id, card.id, {
+      decision: "apply",
+      edits: { renames: [{ path: "/Inbox/a.txt", name: "hello.txt" }] },
+    });
+    expect(lastParts(applied)[0]).toMatchObject({
+      state: "applied",
+      outcome: "Renamed 1 item.",
+      results: [{ path: "/Inbox/a.txt", ok: true, target: "/Inbox/hello.txt" }],
+    });
+    await expect(s.storage.stat("/Inbox/hello.txt")).resolves.toBeDefined();
+    await expect(s.storage.stat("/Inbox/a.txt")).rejects.toMatchObject({ kind: "not_found" });
+    // The reference followed the rename.
+    expect(applied.references).toEqual([{ path: "/Inbox/hello.txt", missing: false }]);
   });
 
   it("declines pending cards when a new message arrives and sends both in one turn", async () => {

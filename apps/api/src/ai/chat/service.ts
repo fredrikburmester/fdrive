@@ -25,7 +25,7 @@ import type { AiInput, AiModel, AiToolResult } from "../model.ts";
 import type { AiSettingsService, ResolvedAiConfig } from "../settings.ts";
 import { createDriveTools, type ToolFocus } from "../tools/drive-tools.ts";
 import { type AiTool, formatSize } from "../tools/tool.ts";
-import { createChatActionTools } from "./action-tools.ts";
+import { ACTION_TOOL_NAMES, createChatActionTools } from "./action-tools.ts";
 import type { ActionTool } from "./actions.ts";
 import { CHAT_SYSTEM_PROMPT, ChatTurnError, MAX_CHAT_TURNS, runChatTurn } from "./agent.ts";
 import { buildHistory, formatUserMessage, type ReferenceLine } from "./history.ts";
@@ -77,7 +77,7 @@ export interface ChatServiceDeps {
   readonly chats: AiChatRepo;
   /** The MCP read handlers the tools reuse. */
   readonly mcp: McpToolDeps;
-  /** What applying a move or trash card needs: events and metadata hooks. */
+  /** What applying a move, rename or trash card needs: events and metadata hooks. */
   readonly fs: Pick<
     FsRoutesDeps,
     "bus" | "clock" | "metadata" | "activity" | "trashPathForStorage"
@@ -535,15 +535,7 @@ export function createChatService(deps: ChatServiceDeps): ChatService {
           throw new ApiHttpError("unauthorized", (error as Error).message);
         });
         const actions = target?.actions ?? (await buildTools(principal, chat)).actions;
-        const tool = [...actions.values()].find(
-          (candidate) =>
-            candidate.spec.name ===
-            (card.proposal.kind === "move"
-              ? "move_items"
-              : card.proposal.kind === "trash"
-                ? "trash_items"
-                : "write_text_file"),
-        );
+        const tool = actions.get(ACTION_TOOL_NAMES[card.proposal.kind]);
         if (tool === undefined)
           throw new ApiHttpError("conflict", "That action is no longer available for this login.");
         const outcome = await tool.apply(

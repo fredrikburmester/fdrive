@@ -36,6 +36,7 @@ export {
   ChatMoveProposal,
   ChatPart,
   ChatReference,
+  ChatRenameProposal,
   ChatRenameRequest,
   ChatState,
   ChatSummary,

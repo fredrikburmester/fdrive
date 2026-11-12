@@ -154,6 +154,24 @@ describe("knownPaths", () => {
                   expectedSha256: null,
                 },
               },
+              {
+                kind: "action",
+                id: "d",
+                state: "pending",
+                proposal: {
+                  kind: "rename",
+                  summary: "",
+                  items: [
+                    {
+                      path: "/Inbox/scan.pdf",
+                      kind: "file",
+                      name: "2024 scan.pdf",
+                      reason: "",
+                      conflict: false,
+                    },
+                  ],
+                },
+              },
             ],
             references: [],
             location: null,
@@ -167,9 +185,11 @@ describe("knownPaths", () => {
       "/Docs",
       "/Docs/a.txt",
       "/Inbox",
+      "/Inbox/2024 scan.pdf",
       "/Inbox/a.txt",
       "/Inbox/b.txt",
       "/Inbox/new.md",
+      "/Inbox/scan.pdf",
     ]);
     expect(proposalPaths(move)).toEqual(["/Inbox/a.txt", "/Docs", "/Docs/a.txt"]);
   });
@@ -183,6 +203,7 @@ describe("labels and states", () => {
     expect(chatStatusLabel("idle")).toBeNull();
     expect(applyLabel(move, 2)).toBe("Move 2 items");
     expect(applyLabel({ kind: "trash", summary: "", items: [] }, 1)).toBe("Trash 1 item");
+    expect(applyLabel({ kind: "rename", summary: "", items: [] }, 3)).toBe("Rename 3 items");
     expect(
       applyLabel(
         {
