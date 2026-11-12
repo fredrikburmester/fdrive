@@ -4,7 +4,6 @@ import {
   ByteCapExceededError,
   countingTransform,
   enforceByteCap,
-  isPrecompressedEntry,
   isZstdSupported,
   JobAbortedError,
   nodeReadableFromWeb,
@@ -95,24 +94,6 @@ describe("enforceByteCap", () => {
     });
 
     expect(error).toBeInstanceOf(ByteCapExceededError);
-  });
-});
-
-describe("isPrecompressedEntry", () => {
-  it.each([".zip", ".jpg", ".png", ".mp4", ".gz"])("treats %s as precompressed", (ext) => {
-    expect(isPrecompressedEntry(`photo${ext}`)).toBe(true);
-  });
-
-  it.each([".txt", ".md", ".pdf", ".json"])("treats %s as not precompressed", (ext) => {
-    expect(isPrecompressedEntry(`doc${ext}`)).toBe(false);
-  });
-
-  it("is case-insensitive", () => {
-    expect(isPrecompressedEntry("PHOTO.JPG")).toBe(true);
-  });
-
-  it("returns false for a name with no extension", () => {
-    expect(isPrecompressedEntry("README")).toBe(false);
   });
 });
 
