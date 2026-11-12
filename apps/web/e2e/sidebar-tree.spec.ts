@@ -39,6 +39,16 @@ test("the sidebar tree shows seeded folders, navigates on click, and highlights 
   await expect(docsLink).toHaveAttribute("data-active", "");
 });
 
+test("the fdrive wordmark returns to the root of Files from a nested folder", async ({ page }) => {
+  await page.goto("/files/docs");
+  await expect(listing(page).getByText("readme.md", { exact: true })).toBeVisible();
+
+  await sidebar(page).getByRole("link", { name: "fdrive", exact: true }).click();
+
+  await expect(page).toHaveURL(/\/files$/);
+  await expect(listing(page).getByText("docs", { exact: true })).toBeVisible();
+});
+
 test("creating a folder in the listing makes it appear in the sidebar tree", async ({ page }) => {
   const name = uniqueName("tree-sync");
   await page.goto("/files");

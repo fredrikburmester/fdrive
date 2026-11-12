@@ -84,6 +84,9 @@ export function isTrashRoute(pathname: string | null): boolean {
   return pathname === "/trash";
 }
 
+// `/files` is served by an optional catch-all route, which Next's typed
+// routes only model as `/files/${string}`, not the bare path.
+const FILES_ROUTE = "/files" as unknown as Route;
 const TRASH_ROUTE = "/trash" as Route;
 const ACCOUNT_ROUTE = "/account" as Route;
 
@@ -101,7 +104,13 @@ export function AppSidebar() {
     <Sidebar className="border-r border-sidebar-border backdrop-blur-xl">
       <SidebarHeader>
         <div className="flex items-center gap-2 px-2 py-1.5">
-          <span className="text-base font-semibold tracking-tight">fdrive</span>
+          {/* The wordmark returns to the root of Files, like a site logo. */}
+          <Link
+            href={FILES_ROUTE}
+            className="rounded-sm text-base font-semibold tracking-tight outline-none focus-visible:ring-2 focus-visible:ring-sidebar-ring"
+          >
+            fdrive
+          </Link>
         </div>
       </SidebarHeader>
       <SidebarContent className="gap-0 [&_[data-sidebar=group]]:py-1 [&_[data-sidebar=group-label]]:h-7 [&_[data-sidebar=menu]]:gap-0">
