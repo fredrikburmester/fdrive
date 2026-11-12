@@ -93,6 +93,29 @@ test("the view menu switches to grid and back, and persists across reload", asyn
   await expect(page.locator('[data-slot="file-list"]')).toBeVisible();
 });
 
+test("the grid's icon size resizes tiles and persists across reload", async ({ page }) => {
+  const path = await createViewFolder(page, true);
+  await page.getByRole("button", { name: "View", exact: true }).click();
+  await page.getByRole("menuitemradio", { name: "Grid" }).click();
+
+  // A tile's first child is its square preview slot, a thumbnail or an icon.
+  const preview = page.locator(`[data-path="${path}/docs"] > :first-child`);
+  const previewWidth = async () => (await preview.boundingBox())?.width;
+  await expect.poll(previewWidth).toBe(88);
+
+  await page.getByRole("button", { name: "View", exact: true }).click();
+  await expect(page.getByRole("menuitemradio", { name: "Medium" })).toBeChecked();
+  await page.getByRole("menuitemradio", { name: "Large" }).click();
+  await expect.poll(previewWidth).toBe(144);
+
+  await page.reload();
+  await expect.poll(previewWidth).toBe(144);
+
+  await page.getByRole("button", { name: "View", exact: true }).click();
+  await page.getByRole("menuitemradio", { name: "Small" }).click();
+  await expect.poll(previewWidth).toBe(56);
+});
+
 test("sorting by size flips the order of docs' contents", async ({ page }) => {
   await page.goto("/files/docs");
   await expect(listing(page).getByText("report.pdf", { exact: true })).toBeVisible();

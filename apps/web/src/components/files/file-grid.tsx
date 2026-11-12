@@ -3,7 +3,7 @@
 import type { FsEntry, OfficeStatusResponse, ProviderCapabilities, Tag } from "@fdrive/contracts";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import type { DragEvent, MouseEvent as ReactMouseEvent } from "react";
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { TagDots } from "@/components/metadata/tag-dots";
 import { Checkbox } from "@/components/ui/checkbox";
 import { apiClient } from "@/lib/api/client";
@@ -12,6 +12,7 @@ import { isBackgroundClick } from "@/lib/files/background-click";
 import { INTERNAL_DND_TYPE, readDraggedPaths, writeDraggedPaths } from "@/lib/files/deps";
 import { dropTargetState, effectFor } from "@/lib/files/dnd-targets";
 import { computeGridLayout, readGridWidth, writeGridWidth } from "@/lib/files/grid-layout";
+import { DEFAULT_GRID_SIZE, type GridSize } from "@/lib/files/grid-size";
 import { findRevealIndex, gridRowForIndex, type ScrollRequest } from "@/lib/files/reveal";
 import { contextEntries } from "@/lib/files/selection";
 import { wantsGridThumbnail } from "@/lib/files/thumbnail";
@@ -24,15 +25,26 @@ import { FileIcon } from "./file-icon";
 import type { ClickModifierKeys } from "./file-list";
 import { ListingSkeleton } from "./listing-skeleton";
 
-/** A grid tile's fixed footprint, in pixels: used to compute how many
- * columns fit and, in `ListingSkeleton`, to size its placeholder tiles. */
-export const GRID_TILE_WIDTH = 112;
-export const GRID_TILE_HEIGHT = 128;
+/** A grid tile at one `GridSize`: its fixed footprint in pixels, used to
+ * compute how many columns fit and, in `ListingSkeleton`, to size its
+ * placeholder tiles; and the classes for its square preview slot and the
+ * file icon centred inside it. Each height fits the slot, two lines of name
+ * and the tag dots. */
+export interface GridTile {
+  readonly width: number;
+  readonly height: number;
+  readonly preview: string;
+  readonly icon: string;
+}
+
+export const GRID_TILES: Record<GridSize, GridTile> = {
+  small: { width: 112, height: 128, preview: "size-14", icon: "size-8" },
+  medium: { width: 144, height: 160, preview: "size-22", icon: "size-12" },
+  large: { width: 192, height: 216, preview: "size-36", icon: "size-20" },
+};
 /** The gap between tiles, in pixels: matches the `gap-1` utility (0.25rem)
  * on each virtualized row, so the column math lines up with the CSS. */
 export const GRID_GAP = 4;
-const TILE_WIDTH = GRID_TILE_WIDTH;
-const TILE_HEIGHT = GRID_TILE_HEIGHT;
 
 /**
  * `useLayoutEffect` measures the container synchronously after it commits
@@ -88,6 +100,8 @@ export interface FileGridProps {
   onScrollConsumed?: (token: number) => void;
   /** Whether tiles may show image thumbnails at all; false for a login whose provider is not indexed. Defaults to true. */
   thumbnails?: boolean;
+  /** How large tiles, icons and thumbnails are. Defaults to `DEFAULT_GRID_SIZE`. */
+  size?: GridSize;
 }
 
 const EMPTY_TAGS: readonly Tag[] = [];
@@ -116,15 +130,23 @@ const GRID_THUMBNAIL_SIZE = 256;
  * by `entry.path` via `key` on the caller, so navigating to a different entry
  * at the same tile position starts from the thumbnail again.
  */
-function GridTileIcon({ entry, thumbnails }: { entry: FsEntry; thumbnails: boolean }) {
+function GridTileIcon({
+  entry,
+  thumbnails,
+  tile,
+}: {
+  entry: FsEntry;
+  thumbnails: boolean;
+  tile: GridTile;
+}) {
   const [errored, setErrored] = useState(false);
 
-  // The slot is a fixed 56px square so tiles with an icon and tiles with a
-  // picture line up; the icon keeps its 32px size centred inside it.
+  // The slot is a fixed square so tiles with an icon and tiles with a
+  // picture line up; the icon keeps its smaller size centred inside it.
   if (errored || !thumbnails || !wantsGridThumbnail(entry)) {
     return (
-      <span className="flex size-14 shrink-0 items-center justify-center">
-        <FileIcon kind={entry.kind} ext={entry.ext} mime={entry.mime} className="size-8" />
+      <span className={cn("flex shrink-0 items-center justify-center", tile.preview)}>
+        <FileIcon kind={entry.kind} ext={entry.ext} mime={entry.mime} className={tile.icon} />
       </span>
     );
   }
@@ -136,7 +158,7 @@ function GridTileIcon({ entry, thumbnails }: { entry: FsEntry; thumbnails: boole
       alt=""
       loading="lazy"
       decoding="async"
-      className="size-14 shrink-0 rounded-md object-cover ring-1 ring-border"
+      className={cn("shrink-0 rounded-md object-cover ring-1 ring-border", tile.preview)}
       onError={() => setErrored(true)}
     />
   );
@@ -168,7 +190,9 @@ export function FileGrid({
   scrollRequest = null,
   onScrollConsumed,
   thumbnails = true,
+  size = DEFAULT_GRID_SIZE,
 }: FileGridProps) {
+  const tile = GRID_TILES[size];
   const parentRef = useRef<HTMLDivElement>(null);
   const lastConsumedTokenRef = useRef<number | null>(null);
   // Seeded from the last container width this grid measured, persisted
@@ -215,12 +239,17 @@ export function FileGrid({
     return () => observer.disconnect();
   }, []);
 
-  const { columns } = computeGridLayout(containerWidth, TILE_WIDTH, GRID_GAP);
+  const { columns } = computeGridLayout(containerWidth, tile.width, GRID_GAP);
   const rowCount = Math.ceil(entries.length / columns);
+  // The virtualizer only recomputes row sizes when the row count or the key
+  // function changes, so keying rows by size makes a size change resize
+  // every row even when the column count stays the same.
+  const getRowKey = useCallback((index: number) => `${size}:${index}`, [size]);
   const virtualizer = useVirtualizer({
     count: rowCount,
     getScrollElement: () => parentRef.current,
-    estimateSize: () => TILE_HEIGHT,
+    estimateSize: () => tile.height,
+    getItemKey: getRowKey,
     overscan: 4,
   });
 
@@ -339,7 +368,7 @@ export function FileGrid({
       </div>
       <div ref={parentRef} className="relative min-h-0 flex-1 overflow-auto p-2">
         {!hasMeasured ? (
-          <ListingSkeleton variant="grid" />
+          <ListingSkeleton variant="grid" gridSize={size} />
         ) : (
           <div style={{ height: virtualizer.getTotalSize(), position: "relative" }}>
             {virtualizer.getVirtualItems().map((virtualRow) => {
@@ -409,7 +438,12 @@ export function FileGrid({
                             "data-[selected=true]:bg-primary/10",
                           )}
                         >
-                          <GridTileIcon key={entry.path} entry={entry} thumbnails={thumbnails} />
+                          <GridTileIcon
+                            key={entry.path}
+                            entry={entry}
+                            thumbnails={thumbnails}
+                            tile={tile}
+                          />
                           <span className="line-clamp-2 w-full break-words text-xs">
                             {entry.name}
                           </span>

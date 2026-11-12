@@ -61,6 +61,7 @@ import type { NewFileKind } from "@/lib/editor/new-file";
 import { breadcrumbLayout } from "@/lib/files/breadcrumb-layout";
 import { LIST_DENSITIES, type ListDensity } from "@/lib/files/density";
 import { dropTargetState, effectFor } from "@/lib/files/dnd-targets";
+import { GRID_SIZES, type GridSize } from "@/lib/files/grid-size";
 import { type BreadcrumbEntry, buildBreadcrumbs } from "@/lib/files/path-url";
 import type { SortSpec } from "@/lib/files/sorting";
 import { toolbarVisibility } from "@/lib/files/toolbar-visibility";
@@ -253,6 +254,9 @@ export interface FilesToolbarActionsProps {
   /** How tall list and tree rows are. */
   density: ListDensity;
   onDensityChange: (density: ListDensity) => void;
+  /** How large grid tiles are. */
+  gridSize: GridSize;
+  onGridSizeChange: (size: GridSize) => void;
   onNewFolder: () => void;
   onNewFile: (kind: NewFileKind) => void;
   onUploadFiles: () => void;
@@ -296,6 +300,8 @@ interface ViewSortMenuItemsProps {
   folderSort?: FolderViewActions | undefined;
   density: ListDensity;
   onDensityChange: (density: ListDensity) => void;
+  gridSize: GridSize;
+  onGridSizeChange: (size: GridSize) => void;
   showThumbnails: boolean;
   onShowThumbnailsChange: (show: boolean) => void;
 }
@@ -305,9 +311,16 @@ const DENSITY_LABELS: Record<ListDensity, string> = {
   compact: "Compact",
 };
 
+const GRID_SIZE_LABELS: Record<GridSize, string> = {
+  small: "Small",
+  medium: "Medium",
+  large: "Large",
+};
+
 /** The view mode, sort key, and sort direction radio groups: the "View"
  * dropdown's content on desktop, and the "View" submenu's content inside
- * the mobile "More" overflow menu. */
+ * the mobile "More" overflow menu. The grid offers an icon size where the
+ * list and tree offer a row density. */
 function ViewSortMenuItems({
   thumbnailsAvailable,
   viewMode,
@@ -318,6 +331,8 @@ function ViewSortMenuItems({
   folderSort,
   density,
   onDensityChange,
+  gridSize,
+  onGridSizeChange,
   showThumbnails,
   onShowThumbnailsChange,
 }: ViewSortMenuItemsProps) {
@@ -402,19 +417,35 @@ function ViewSortMenuItems({
         </>
       )}
       <DropdownMenuSeparator />
-      <DropdownMenuGroup>
-        <DropdownMenuLabel>Density</DropdownMenuLabel>
-        <DropdownMenuRadioGroup
-          value={density}
-          onValueChange={(next) => onDensityChange(next as ListDensity)}
-        >
-          {LIST_DENSITIES.map((value) => (
-            <DropdownMenuRadioItem key={value} value={value} className="whitespace-nowrap">
-              {DENSITY_LABELS[value]}
-            </DropdownMenuRadioItem>
-          ))}
-        </DropdownMenuRadioGroup>
-      </DropdownMenuGroup>
+      {viewMode === "grid" ? (
+        <DropdownMenuGroup>
+          <DropdownMenuLabel>Icon size</DropdownMenuLabel>
+          <DropdownMenuRadioGroup
+            value={gridSize}
+            onValueChange={(next) => onGridSizeChange(next as GridSize)}
+          >
+            {GRID_SIZES.map((value) => (
+              <DropdownMenuRadioItem key={value} value={value} className="whitespace-nowrap">
+                {GRID_SIZE_LABELS[value]}
+              </DropdownMenuRadioItem>
+            ))}
+          </DropdownMenuRadioGroup>
+        </DropdownMenuGroup>
+      ) : (
+        <DropdownMenuGroup>
+          <DropdownMenuLabel>Density</DropdownMenuLabel>
+          <DropdownMenuRadioGroup
+            value={density}
+            onValueChange={(next) => onDensityChange(next as ListDensity)}
+          >
+            {LIST_DENSITIES.map((value) => (
+              <DropdownMenuRadioItem key={value} value={value} className="whitespace-nowrap">
+                {DENSITY_LABELS[value]}
+              </DropdownMenuRadioItem>
+            ))}
+          </DropdownMenuRadioGroup>
+        </DropdownMenuGroup>
+      )}
       <DropdownMenuSeparator />
       <DropdownMenuGroup>
         <DropdownMenuLabel>
@@ -519,6 +550,8 @@ export function FilesToolbarActions({
   folderSort,
   density,
   onDensityChange,
+  gridSize,
+  onGridSizeChange,
   onNewFolder,
   onNewFile,
   onNewOfficeDocument,
@@ -566,6 +599,8 @@ export function FilesToolbarActions({
               folderSort={folderSort}
               density={density}
               onDensityChange={onDensityChange}
+              gridSize={gridSize}
+              onGridSizeChange={onGridSizeChange}
               showThumbnails={showThumbnails}
               onShowThumbnailsChange={onShowThumbnailsChange}
             />
@@ -778,6 +813,8 @@ export function FilesToolbarActions({
                   folderSort={folderSort}
                   density={density}
                   onDensityChange={onDensityChange}
+                  gridSize={gridSize}
+                  onGridSizeChange={onGridSizeChange}
                   showThumbnails={showThumbnails}
                   onShowThumbnailsChange={onShowThumbnailsChange}
                 />
