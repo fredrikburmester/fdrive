@@ -123,12 +123,25 @@ fn live_text(stream: &[u8], directory: &Directory, sink: &mut Sink) -> bool {
     let Some((start, end)) = container(directory.document, Some(DOCUMENT)) else {
         return false;
     };
+    // Each slide and notes page owns its own stretch of the stream. A
+    // directory that points many of them at one stretch would have every one
+    // scan it again, so the total scanned is held to a few times the stream.
+    let mut allowance = stream.len().saturating_mul(4);
+    let mut scan = |start: usize, end: usize| {
+        let wanted = end.saturating_sub(start);
+        if wanted > allowance {
+            allowance = 0;
+            return Vec::new();
+        }
+        allowance -= wanted;
+        texts(stream, start, end, false)
+    };
     // Slide lists come as instance 0 (slides), 1 (masters) and 2 (notes).
     // Each slide's placeholder text sits in the list, after its persist entry.
     let mut slides: Vec<(u32, Vec<String>)> = Vec::new();
     let mut notes = Vec::new();
     let mut loose = Vec::new();
-    for text in texts(stream, start, end, false) {
+    for text in scan(start, end) {
         match (text.list, text.slide) {
             (Some(0), Some(id)) if text.starts_slide => slides.push((id, Vec::new())),
             (Some(0), _) => {
@@ -145,13 +158,16 @@ fn live_text(stream: &[u8], directory: &Directory, sink: &mut Sink) -> bool {
         return false;
     }
     for (id, outline) in &slides {
+        if sink.is_full() {
+            break;
+        }
         for text in outline {
             line(sink, text);
         }
         // The slide's own shapes hold the text boxes that are not placeholders.
         if let Some((start, end)) = container(*id, None) {
             let known: HashSet<&str> = outline.iter().map(String::as_str).collect();
-            for text in texts(stream, start, end, false) {
+            for text in scan(start, end) {
                 if !known.contains(text.text.as_str()) {
                     line(sink, &text.text);
                 }
@@ -159,8 +175,11 @@ fn live_text(stream: &[u8], directory: &Directory, sink: &mut Sink) -> bool {
         }
     }
     for id in notes {
+        if sink.is_full() {
+            break;
+        }
         if let Some((start, end)) = container(id, None) {
-            for text in texts(stream, start, end, false) {
+            for text in scan(start, end) {
                 line(sink, &text.text);
             }
         }

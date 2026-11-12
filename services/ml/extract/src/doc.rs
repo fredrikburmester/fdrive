@@ -51,11 +51,16 @@ pub(crate) fn doc(ole: &mut Ole<'_>, budget: &mut Budget, sink: &mut Sink) -> Re
     let clx = span(&table, clx_at, clx_len)
         .ok_or_else(|| ExtractError::Malformed("Word piece table is out of range".into()))?;
     let pieces = piece_table(clx).ok_or_else(|| ExtractError::Malformed("no Word piece table".into()))?;
+    // The pieces of a real document do not overlap, so together they hold no
+    // more characters than the stream has bytes. Without this bound a table
+    // whose pieces all claim the whole stream has it decoded once per piece.
+    let mut unread = main.len();
     for piece in pieces {
-        if text.sink.is_full() {
+        if text.sink.is_full() || unread == 0 {
             break;
         }
-        let chars = piece.chars as usize;
+        let chars = (piece.chars as usize).min(unread);
+        unread -= chars;
         if piece.position & 0x4000_0000 != 0 {
             // Compressed: one Windows-1252 byte per character at half the offset.
             let at = ((piece.position & 0x3FFF_FFFF) / 2) as usize;
@@ -145,8 +150,15 @@ fn legacy(main: &[u8], flags: u16, kind: LegacyText, text: &mut WordText<'_>) ->
         .flatten();
     match pieces {
         Some(pieces) => {
+            // Bounded like the pieces of a newer file, for the same reason.
+            let mut unread = main.len();
             for piece in pieces {
-                text.push_str(&kind.decode(main, piece.position as usize, piece.chars as usize));
+                if text.sink.is_full() || unread == 0 {
+                    break;
+                }
+                let chars = (piece.chars as usize).min(unread);
+                unread -= chars;
+                text.push_str(&kind.decode(main, piece.position as usize, chars));
             }
         }
         None => {

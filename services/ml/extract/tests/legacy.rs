@@ -865,3 +865,80 @@ fn damaged_record_streams_never_panic() {
         let _ = fdrive_ml_extract::extract(&ole(&[("/Workbook", &damaged_book)]), &limits);
     }
 }
+
+// ---------------------------------------------------------------- hostile layouts
+
+/// These would run for minutes if every piece or slide rescanned the stretch
+/// it points at; they pass by finishing at all.
+#[test]
+fn doc_whose_pieces_all_claim_one_stretch_decodes_it_once() {
+    let mut main = vec![0u8; 0x200];
+    main[..2].copy_from_slice(&0xA5ECu16.to_le_bytes());
+    main[2..4].copy_from_slice(&0x00C1u16.to_le_bytes());
+    let kept_at = main.len() as u32;
+    main.extend_from_slice(b"kept");
+    // A field that never leaves its instruction part: none of it reaches the
+    // text, so the output limit never ends the loop.
+    let field_at = main.len() as u32;
+    let field_chars = 200_000u32;
+    main.resize(main.len() + field_chars as usize, 0x13);
+
+    let pieces = 20_000u32;
+    let mut plc = Vec::new();
+    for position in std::iter::once(0).chain((0..=pieces).map(|n| 4 + n * field_chars)) {
+        plc.extend_from_slice(&position.to_le_bytes());
+    }
+    for at in std::iter::once(kept_at).chain((0..pieces).map(|_| field_at)) {
+        plc.extend_from_slice(&[0, 0]);
+        plc.extend_from_slice(&((at * 2) | 0x4000_0000).to_le_bytes());
+        plc.extend_from_slice(&[0, 0]);
+    }
+    let mut table = vec![0x02];
+    table.extend_from_slice(&(plc.len() as u32).to_le_bytes());
+    table.extend_from_slice(&plc);
+    main[0x1A2..0x1A6].copy_from_slice(&0u32.to_le_bytes());
+    main[0x1A6..0x1AA].copy_from_slice(&(table.len() as u32).to_le_bytes());
+
+    assert_eq!(text(&ole(&[("/WordDocument", &main), ("/0Table", &table)])), "kept");
+}
+
+#[test]
+fn ppt_whose_slides_all_claim_one_stretch_scans_it_a_bounded_number_of_times() {
+    let slides = 40_000u32;
+    let entries: Vec<Vec<u8>> = (0..slides).map(|n| persist(2 + n)).collect();
+    let document = container(0x03E8, 0, &[container(0x0FF0, 0, &entries)]);
+    let shared = page(0x03EE, &[bytes(&"x".repeat(100_000))]);
+
+    let mut stream = document.clone();
+    let shared_at = stream.len() as u32;
+    stream.extend_from_slice(&shared);
+    // Persist id 1 is the document; every slide id leads to the same page.
+    let mut directory = ((1u32 << 20) | 1).to_le_bytes().to_vec();
+    directory.extend_from_slice(&0u32.to_le_bytes());
+    for first in (2..2 + slides).step_by(4000) {
+        let count = 4000.min(2 + slides - first);
+        directory.extend_from_slice(&((count << 20) | first).to_le_bytes());
+        for _ in 0..count {
+            directory.extend_from_slice(&shared_at.to_le_bytes());
+        }
+    }
+    let directory_at = stream.len() as u32;
+    stream.extend_from_slice(&atom(0x1772, 0, &directory));
+    let mut edit = vec![0u8; 28];
+    edit[12..16].copy_from_slice(&directory_at.to_le_bytes());
+    edit[16..20].copy_from_slice(&1u32.to_le_bytes());
+    let edit_at = stream.len() as u32;
+    stream.extend_from_slice(&atom(0x0FF5, 0, &edit));
+    let mut user = 0x14u32.to_le_bytes().to_vec();
+    user.extend_from_slice(&PLAIN_TOKEN.to_le_bytes());
+    user.extend_from_slice(&edit_at.to_le_bytes());
+    user.extend_from_slice(&[0; 8]);
+
+    let extracted = text(&ole(&[
+        ("/PowerPoint Document", &stream),
+        ("/Current User", &atom(0x0FF6, 0, &user)),
+    ]));
+    // The page is read for the first few slides, then the scan allowance is spent.
+    let copies = extracted.lines().filter(|line| line.len() == 100_000).count();
+    assert!((1..=40).contains(&copies), "{copies} copies");
+}

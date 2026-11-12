@@ -36,11 +36,17 @@ async fn tika(State(state): State<AppState>, body: Bytes) -> Response {
     if state.units.extract.resource().is_none() {
         return not_loaded(NOT_ENABLED);
     }
-    let Ok(_permit) = state.extract_permits.acquire().await else {
+    let Ok(permit) = std::sync::Arc::clone(&state.extract_permits).acquire_owned().await else {
         return not_loaded(NOT_ENABLED);
     };
     let limits = std::sync::Arc::clone(&state.extract_limits);
-    match tokio::task::spawn_blocking(move || extract(&body, &limits)).await {
+    // The permit travels with the work: a caller that disconnects ends this
+    // handler but not the parse, which must keep counting against the bound.
+    let parse = move || {
+        let _permit = permit;
+        extract(&body, &limits)
+    };
+    match tokio::task::spawn_blocking(parse).await {
         Ok(Ok(extracted)) => text(StatusCode::OK, extracted.text),
         Ok(Err(unreadable)) => text(StatusCode::UNPROCESSABLE_ENTITY, unreadable.to_string()),
         Err(_) => {
