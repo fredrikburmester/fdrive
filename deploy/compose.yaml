@@ -200,38 +200,21 @@ services:
   # No Docker socket or compose profile is needed to enable a feature later.
   # Models download on first activation and remain cached for reuse. Host mounts remain a deployment concern.
   #
-  # `fdrive-thumbs` (below) is a named volume, not a host bind mount: Docker
-  # always creates a bind-mounted host directory owned by root, which the
-  # indexer's non-root uid (FDRIVE_INDEX_UID, default 1000 to match SFTPGo so
-  # 700 folders stay readable) could not then write into. `thumbs-init` chowns
-  # the named volume to that uid once,
-  # before the indexer starts, the same one-shot pattern
-  # deploy/compose.dev.yaml's `sftpgo-seed` uses for SFTPGo's own data
-  # volume. Thumbnails are never operator-facing (only the api and indexer
-  # ever read or write them), so a named volume loses nothing an operator
-  # would otherwise want from a host-visible directory.
-  thumbs-init:
-    image: alpine:3.20
-    volumes:
-      - fdrive-thumbs:/thumbs
-    command: ["chown", "-R", "${FDRIVE_INDEX_UID:-1000}:${FDRIVE_INDEX_UID:-1000}", "/thumbs"]
-    logging: *default-logging
-
-  indexer-logs-init:
-    image: alpine:3.21
-    user: "0:0"
-    volumes:
-      - fdrive-indexer-logs:/logs
-    command: ["chown", "-R", "${FDRIVE_INDEX_UID:-1000}:${FDRIVE_INDEX_UID:-1000}", "/logs"]
-    logging: *default-logging
-
+  # `fdrive-thumbs` (below) is a named volume, not a host bind mount.
+  # Thumbnails are never operator-facing (only the api and indexer ever read
+  # or write them), so a named volume loses nothing an operator would
+  # otherwise want from a host-visible directory.
   indexer:
     image: ghcr.io/fredrikburmester/fdrive-indexer:${FDRIVE_VERSION:-latest}
-    # The same uid/gid as SFTPGo, so folders kept at mode 700 stay readable. Set
-    # at runtime, so the published image serves any uid; the image's own user is
-    # 1000, the uid of SFTPGo's official image.
-    user: "${FDRIVE_INDEX_UID:-1000}:${FDRIVE_INDEX_UID:-1000}"
+    # Starts as root for one step: a new volume belongs to root, so the image's
+    # entrypoint hands the thumbnail and log volumes to FDRIVE_RUN_AS_UID and
+    # then drops to that uid for good, before any indexer code runs. The three
+    # capabilities below are what that step needs and all the container gets.
+    user: "0:0"
     environment:
+      # The same uid/gid as SFTPGo, so folders kept at mode 700 stay readable.
+      # 1000 is the uid of SFTPGo's official image.
+      FDRIVE_RUN_AS_UID: ${FDRIVE_INDEX_UID:-1000}
       DATABASE_URL: postgres://fdrive:${POSTGRES_PASSWORD}@db:5432/fdrive
       # The one indexed root, mounted below. Nothing is scanned until a feature
       # is selected, and the fallback mount keeps an install without storage
@@ -260,27 +243,15 @@ services:
       - fdrive-thumbs:/thumbs
       - fdrive-indexer-logs:/logs
     depends_on:
-      indexer-logs-init:
-        condition: service_completed_successfully
       db:
         condition: service_healthy
-      thumbs-init:
-        condition: service_completed_successfully
     mem_limit: ${FDRIVE_INDEXER_MEMORY:-0}
     cpus: ${FDRIVE_INDEXER_CPUS:-0}
     restart: unless-stopped
     security_opt: ["no-new-privileges:true"]
     cap_drop: [ALL]
+    cap_add: [CHOWN, SETUID, SETGID]
     pids_limit: 512
-    logging: *default-logging
-
-  # Initialize the backup directory's ownership before the non-root OCR worker
-  # needs to retain an original. Never change ownership of the source files.
-  ocr-state-init:
-    image: alpine:3.20
-    volumes:
-      - ${FDRIVE_DATA_DIR:-./data}/ocr:/state
-    command: ["chown", "1000:1000", "/state"]
     logging: *default-logging
 
   # PDF-rewriting OCR is independently controlled by its explicit pdfOcr
@@ -290,7 +261,13 @@ services:
   # kept originals; the API's System page talks to it over `FDRIVE_OCR_URL`.
   ocr:
     image: ghcr.io/fredrikburmester/fdrive-ocr:${FDRIVE_VERSION:-latest}
+    # Starts as root for one step, like the indexer: Docker creates a missing
+    # host directory as root, so the entrypoint hands the state directory
+    # itself (never the originals kept in it) to FDRIVE_RUN_AS_UID and then
+    # drops to that uid for good, before any worker code runs.
+    user: "0:0"
     environment:
+      FDRIVE_RUN_AS_UID: "1000"
       DATABASE_URL: postgres://fdrive:${POSTGRES_PASSWORD}@db:5432/fdrive
       INDEX_ROOTS: sftpgo=/roots/sftpgo
       OCR_PORT: "8011"
@@ -307,13 +284,12 @@ services:
     depends_on:
       db:
         condition: service_healthy
-      ocr-state-init:
-        condition: service_completed_successfully
     mem_limit: ${FDRIVE_OCR_MEMORY:-0}
     cpus: ${FDRIVE_OCR_CPUS:-0}
     restart: unless-stopped
     security_opt: ["no-new-privileges:true"]
     cap_drop: [ALL]
+    cap_add: [CHOWN, SETUID, SETGID]
     pids_limit: 512
     logging: *default-logging
 

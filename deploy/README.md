@@ -172,8 +172,8 @@ apply it.
 
 **Updating from 0.6 or earlier?** Document text extraction and both embedding models now run
 in one `ml` container, where there used to be `tika`, `embed` and `image-embed`. Download
-`compose.yaml` again, then update with one extra flag, which removes the three old
-containers:
+`compose.yaml` again, then update with one extra flag, which removes the containers that no
+longer exist (those three and three one-time helpers):
 
 ```sh
 docker compose pull && docker compose up -d --remove-orphans

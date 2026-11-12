@@ -37,7 +37,13 @@ EXPOSE 8011
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
   CMD curl -fs http://localhost:8011/health || exit 1
 
+COPY docker-entrypoint.sh /usr/local/bin/fdrive-entrypoint
+
+# deploy/compose.yaml starts the container as root with FDRIVE_RUN_AS_UID
+# set, and the entrypoint gives the state directory to that uid and drops to
+# it before the worker starts. Any other start runs as this user throughout.
 USER app
 
-ENTRYPOINT []
+# Replaces the base image's `ocrmypdf` entrypoint.
+ENTRYPOINT ["fdrive-entrypoint"]
 CMD ["python3", "-m", "fdrive_ocr.main"]

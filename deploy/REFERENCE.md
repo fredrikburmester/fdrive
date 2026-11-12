@@ -156,7 +156,7 @@ fdrive actively monitors its internal subsystems on startup and exposes diagnost
   attempts, and retries unresolved files. Details remain readable with the indexer stopped.
   Unresolved records are retained; resolved history is limited to 30 days / 10,000 records.
 - **Indexer diagnostic retention**: `fdrive-indexer-logs` is a persistent Compose volume
-  mounted at `/logs`, initialized for `FDRIVE_INDEX_UID`. `indexer.log` plus four rotated
+  mounted at `/logs`, handed to `FDRIVE_INDEX_UID` when the indexer starts. `indexer.log` plus four rotated
   files retain up to 50 MiB through restarts and container replacement. Read the current
   file with `docker compose exec indexer tail -n 200 /logs/indexer.log`. Normal updates
   preserve the volume; explicitly removing volumes removes this raw log history. Older
@@ -237,9 +237,14 @@ Setting only the former never attaches SFTPGo storage.
 Check permissions using the actual worker identities:
 
 ```sh
-docker compose exec -T indexer id
-docker compose exec -T ocr id
+docker compose exec -T indexer stat -c %u:%g /proc/1
+docker compose exec -T ocr stat -c %u:%g /proc/1
 ```
+
+Both containers start as root for one step, in which they give their own writable
+directories to the UID they will run as, and then drop to that UID for good. That is why the
+commands above ask for the owner of the service process, where `id` would answer for the
+container's starting user.
 
 `FDRIVE_INDEX_UID` sets the UID and GID the indexer runs as, and owns its thumbnail and
 log volumes; its default is 1000, the UID of SFTPGo's official image. It does not configure
