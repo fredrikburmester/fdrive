@@ -27,7 +27,7 @@ reach anyone's storage.
 | `POST /image/embed/text` | `{ inputs }` (at most 64 texts of 512 characters) to the same shape. |
 | `GET /image/health` | `{ status: "ok" \| "loading", model, dim, device }`; 503 while the unit is off. |
 | `PUT /extract/tika` | Raw document bytes to `text/plain`. 422 for a document it cannot read, which the indexer records as unsupported. |
-| `GET /extract/version` | 200 while extraction is on. |
+| `GET /extract/version` | 200 with `fdrive-ml <release>` while extraction is on. |
 
 A unit that is off, loading or failed answers its work endpoints with 503.
 

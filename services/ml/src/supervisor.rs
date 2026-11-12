@@ -8,21 +8,36 @@ use tokio::time::Instant;
 use crate::features::{FeatureSource, FetchError, Gate, Verdict};
 use crate::lifecycle::{UnitKind, Units};
 
+/// How long a server that has never seen the document stays quiet about it.
+/// The api usually comes up a little after this server does.
+const STARTUP_GRACE: Duration = Duration::from_secs(30);
+
 /// Polls the feature document forever and reconciles the units against it.
 pub async fn follow<S: FeatureSource>(source: S, units: Arc<Units>, poll: Duration, mut gate: Gate) {
+    let started = Instant::now();
+    let mut seen_document = false;
     // Logged on change only: a poll every few seconds would otherwise bury
     // everything else an outage writes.
-    let mut last_error: Option<FetchError> = None;
+    let mut reported: Option<FetchError> = None;
     loop {
         let result = source.fetch().await;
-        let error = result.as_ref().err().cloned();
-        if error != last_error {
-            match &error {
-                Some(FetchError::Unreachable(detail)) => tracing::warn!("feature endpoint unreachable: {detail}"),
-                Some(FetchError::Invalid(detail)) => tracing::warn!("feature document rejected: {detail}"),
-                None => tracing::info!("feature document is available again"),
+        match &result {
+            Ok(_) => {
+                if reported.take().is_some() {
+                    tracing::info!("feature document is available again");
+                }
+                seen_document = true;
             }
-            last_error = error;
+            // The units are failed closed either way; only the warning waits.
+            Err(_) if !seen_document && started.elapsed() < STARTUP_GRACE => {}
+            Err(error) if reported.as_ref() != Some(error) => {
+                match error {
+                    FetchError::Unreachable(detail) => tracing::warn!("feature endpoint unreachable: {detail}"),
+                    FetchError::Invalid(detail) => tracing::warn!("feature document rejected: {detail}"),
+                }
+                reported = Some(error.clone());
+            }
+            Err(_) => {}
         }
         // Tokio's clock, so the grace windows are testable with paused time.
         let now = Instant::now().into_std();
@@ -128,6 +143,28 @@ mod tests {
         tokio::time::sleep(Duration::from_secs(33)).await;
         let extract = units.status(UnitKind::Extract);
         assert_eq!((extract.status, extract.error), (Status::Failed, Some(UNREACHABLE)));
+        task.abort();
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn an_api_that_is_down_at_startup_fails_closed_at_once_and_recovers() {
+        let units = units();
+        let mut script: Vec<Result<FeatureSnapshot, FetchError>> = (0..15)
+            .map(|_| Err(FetchError::Unreachable("connection failed".into())))
+            .collect();
+        script.push(Err(FetchError::Invalid("feature endpoint returned 503".into())));
+        script.push(Ok(FeatureSnapshot::for_test(1, &["textSearch"])));
+        let task = tokio::spawn(follow(Scripted::new(script), Arc::clone(&units), POLL, gate()));
+
+        // Closed from the first poll, through the quiet start and past it.
+        tokio::task::yield_now().await;
+        assert_eq!(units.status(UnitKind::Extract).error, Some(UNREACHABLE));
+        tokio::time::sleep(Duration::from_secs(40)).await;
+        assert_eq!(units.status(UnitKind::Extract).status, Status::Failed);
+
+        tokio::time::sleep(Duration::from_secs(12)).await;
+        let extract = units.status(UnitKind::Extract);
+        assert_eq!((extract.status, extract.error), (Status::Ready, None));
         task.abort();
     }
 

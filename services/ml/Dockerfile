@@ -31,6 +31,11 @@ RUN groupadd --system fdrive && useradd --system --gid fdrive --no-create-home f
 
 COPY --from=build /src/target/release/fdrive-ml /usr/local/bin/fdrive-ml
 
+# The release it was built as (0.7.0 or main), which `/extract/version` and the
+# first log line report; empty for any other build, which reports `dev`.
+ARG FDRIVE_BUILD_VERSION=
+ENV FDRIVE_BUILD_VERSION=$FDRIVE_BUILD_VERSION
+
 USER fdrive
 ENV FDRIVE_ML_MODELS_DIR=/models
 EXPOSE 8080

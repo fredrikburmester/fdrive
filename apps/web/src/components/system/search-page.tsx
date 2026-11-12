@@ -74,7 +74,7 @@ export function SearchPage() {
             title="Semantic search"
             description={
               data.semantic.configured
-                ? "The embedding server (TEI) fdrive queries at search time."
+                ? "The text embedding model fdrive queries at search time."
                 : "Not configured: set FDRIVE_EMBED_URL."
             }
           >

@@ -25,7 +25,7 @@ fn text(status: StatusCode, body: String) -> Response {
 /// A bare 200 is how the API probes this unit when it has no runtime URL.
 async fn version(State(state): State<AppState>) -> Response {
     match state.units.extract.resource() {
-        Some(()) => text(StatusCode::OK, concat!("fdrive-ml ", env!("CARGO_PKG_VERSION")).into()),
+        Some(()) => text(StatusCode::OK, format!("fdrive-ml {}", state.version)),
         None => not_loaded(NOT_ENABLED),
     }
 }
@@ -85,7 +85,7 @@ mod tests {
         let (app, _) = app(&[UnitKind::Extract]);
         let (status, body) = get(&app, "/extract/version").await;
         assert_eq!(status, StatusCode::OK);
-        assert!(String::from_utf8(body).unwrap().starts_with("fdrive-ml "));
+        assert_eq!(String::from_utf8(body).unwrap(), "fdrive-ml 1.2.3");
     }
 
     #[tokio::test]
