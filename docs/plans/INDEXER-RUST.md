@@ -5,12 +5,21 @@ program that keeps its HTTP API, database writes, events and thumbnails, so the 
 can leave the stack. Existing index rows, thumbnails and vectors stay valid: nothing is
 re-indexed or re-embedded.
 
+## Decided
+
+- **Two binaries, two processes** (2026-11-12). The indexer ships as its own Rust binary,
+  `fdrive-indexer`, next to `fdrive-ml`. The two never run in one process, so `ml` keeps having
+  no database access and no mounts. Combining them into one binary with roles was rejected:
+  the size it saves is small, because the large parts (ONNX Runtime, MuPDF) are not shared.
+  Separate binaries keep the builds independent, so indexer changes never rebuild ONNX
+  Runtime.
+
 ## Conclusions
 
 - **Python does not leave the download.** OCR (`services/ocr`, on the `ocrmypdf` image) and the
   ONLYOFFICE controller (`deploy/office/Dockerfile.onlyoffice:3-9`, `services/runtime`) are
-  Python and stay. The rewrite removes Python from the indexer image and from a future
-  single executable that leaves OCR and Office out. If a Python-free download is the goal,
+  Python and stay. The rewrite removes Python from the indexer image, and from the download
+  only if OCR and Office are left out. If a Python-free download is the goal,
   `ocrmypdf` is the larger obstacle, not the indexer.
 - **It is not expected to be faster overall.** The heavy work runs in native code: MuPDF,
   Pillow's C decoders, libwebp, tesseract and ffmpeg (the last two as child processes,
@@ -26,9 +35,9 @@ re-indexed or re-embedded.
 - **Memory and image size should drop.** This is the main measurable gain besides packaging.
   Section 7 says how to measure it.
 - **Native libraries remain.** MuPDF, libwebp, libjpeg-turbo, libheif with libde265, and dav1d
-  for AVIF can all be compiled into the binary statically. tesseract and ffmpeg stay separate
+  for AVIF can all be compiled into the indexer binary statically. tesseract and ffmpeg stay separate
   programs for now, and tesseract always needs its language data files next to the binary.
-- **Recommendation:** go ahead only if the single executable is a concrete next step. Build the
+- **Recommendation:** go ahead only if a Python-free indexer is a concrete next step for packaging. Build the
   Rust indexer behind a parity harness, run it in shadow against a copy of the owner's database,
   then switch the image. Do not run both indexers against the production database.
 - **Size:** about 7,000 to 9,000 lines of Rust plus a similar amount of tests, in nine slices.
@@ -204,7 +213,7 @@ Versions as on crates.io on 2026-11-12. Where `ml` already uses a crate, use the
 | Text decoding | Python codecs | `encoding_rs` 0.8.44, plus a strict cp1252 check for the five undefined bytes | None | |
 | MIME guess | `mimetypes` | `mime_guess` 2.0.5, plus the three Apple types `indexer.py:50-52` adds | None | `idx.files.mime` reaches search and MCP results (`packages/db/src/repos/index-queries.ts:102`). The parity harness lists the differences; pin a table if any matter. |
 | PDF text and first page | PyMuPDF | `mupdf` 0.8.0 | MuPDF compiled from source by `mupdf-sys` and linked statically. AGPL, like fdrive. | `pdfium-render`: another engine gives different text, so different chunks, and it loads libpdfium dynamically by default. `hayro` 0.9: a pure-Rust renderer worth trying later for thumbnails, but no text extraction. `pdf-extract`/`lopdf`: weaker text. |
-| OCR | pytesseract (runs the `tesseract` program) | Run the `tesseract` program with `tokio::process`, a 180 s timeout and `OMP_THREAD_LIMIT=1`, as today | Debian's tesseract, a separate process | `tesseract` 0.15 / `tesseract-rs` 0.4 in-process bindings: no timeout we control, and a crash on a hostile image would take the indexer down. Revisit for the single executable. |
+| OCR | pytesseract (runs the `tesseract` program) | Run the `tesseract` program with `tokio::process`, a 180 s timeout and `OMP_THREAD_LIMIT=1`, as today | Debian's tesseract, a separate process | `tesseract` 0.15 / `tesseract-rs` 0.4 in-process bindings: no timeout we control, and a crash on a hostile image would take the indexer down. Revisit if tesseract should ship inside the binary. |
 | Image decoding | Pillow | `image` 0.25.10 (PNG, WebP, GIF, BMP, TIFF; EXIF orientation via `ImageDecoder::orientation`) | AVIF needs the `avif-native` feature, which builds dav1d statically | |
 | JPEG decoding | Pillow (libjpeg-turbo) | `turbojpeg` 1.5.1 for JPEG sources, decoding at reduced scale like Pillow's draft mode | libjpeg-turbo built with CMake, linked statically | `zune-jpeg` (`image`'s decoder) alone has no scaled decode. Measure first: drop turbojpeg if a full decode stays within budget. |
 | Resizing | Pillow bicubic with `reducing_gap=3` | `fast_image_resize` 6.1 (SIMD, Catmull-Rom is Pillow's bicubic kernel) | None | `image::imageops::resize`: several times slower. |
@@ -215,7 +224,7 @@ Versions as on crates.io on 2026-11-12. Where `ml` already uses a crate, use the
 | Logging | `print` and `RotatingFileHandler` | `tracing` 0.1.44 and `tracing-subscriber` 0.3.23, with `file-rotate` 0.8 for 10 MiB × 5 files | None | `tracing-appender` rotates only by time. |
 | Tests | pytest, testcontainers | `testcontainers` 0.28 with the `pgvector/pgvector:pg17` image, `tempfile`, axum fakes for `ml` | | |
 
-What this means for a single executable:
+What this means for shipping the `fdrive-indexer` binary:
 - **In the binary:** MuPDF, libwebp, libjpeg-turbo, libheif, libde265 and dav1d.
 - **Next to it, for now:** tesseract plus its language data (eng and swe, a few MB each) and
   ffmpeg.
@@ -230,14 +239,14 @@ What this means for a single executable:
 
 ## 4. Where it lives, how it is built and shipped
 
-- **Location.** A new crate `fdrive-indexer` in `services/indexer-rs/` with its own Cargo
-  workspace. It copies `ml`'s toolchain pin, edition 2024, lints (`unsafe_code = "forbid"`,
-  clippy `all = deny`) and `rustfmt.toml`. When Python is removed, `git mv` it to
-  `services/indexer`.
-- **Later merge.** Merge it with `services/ml` into one workspace when the single binary is
-  built, as one `fdrive` binary with roles (`fdrive ml`, `fdrive indexer`). Merging now would
-  change `ml`'s Docker context, CI cache and paths for no benefit yet. Until then, keep shared
-  crates (tokio, axum, reqwest, image) at `ml`'s versions.
+- **Location.** A new crate `fdrive-indexer` in `services/indexer-rs/`, building the
+  `fdrive-indexer` binary. When Python is removed, `git mv` it to `services/indexer`.
+- **Workspace (proposed).** One Cargo workspace for both binaries from slice 1, rooted at
+  `services/Cargo.toml` with one `Cargo.lock`, one toolchain pin, and the lints and
+  `rustfmt.toml` `ml` uses today (`unsafe_code = "forbid"`, clippy `all = deny`). Shared crates
+  (tokio, axum, reqwest, image) then stay at one version. It costs one change to `ml`'s Docker
+  build context and CI cache key. The alternative is a separate workspace that copies `ml`'s
+  settings by hand.
 - **Module layout.** It mirrors today's split:
   - pure modules: `chunking`, `rules`, `paths`, `settings`, `features`, `events`,
     `thumbs::plan`, `image_embed::decide`, `backoff`, `activity`
@@ -331,7 +340,7 @@ Every slice lands on `main` and leaves production on the Python indexer until sl
 | # | Slice | Done when | Size |
 | --- | --- | --- | --- |
 | 0 | Baseline | Section 7's numbers recorded for Python on the fixture corpus and the owner's library | S |
-| 1 | Skeleton | Crate, CI workflow, Dockerfile, config, logging, database connection with the schema wait, settings and features parsing, `/health`, `/stats`, empty `/activity`. Parity harness compares those three. | M |
+| 1 | Skeleton | Shared workspace with `ml`, crate, CI workflow, Dockerfile, config, logging, database connection with the schema wait, settings and features parsing, `/health`, `/stats`, empty `/activity`. Parity harness compares those three. | M |
 | 2 | Text scan | Walk, hash, manifest, upsert, plain text, chunking, text embeddings with backoff, events, sweep, scan rows, failure records, path locks. Parity on text-only trees. | L |
 | 3 | Documents and OCR | `ml` extraction, MuPDF text, PDF and image OCR, `/extract`, `/extract-content`, `/directory`. | M |
 | 4 | Thumbnails and image search | All decoders, WebP output, image-embedding stage, health cache, media backfill on feature changes. | L |
@@ -382,7 +391,7 @@ PDFs, office documents, videos), mounted read-only. `tools/perf` stays for end-t
 - **Opportunity cost.** The benefit is mostly packaging; the roadmap waits meanwhile.
 
 **Open questions**
-- Is the single executable without OCR and Office worth it, given that Python stays in those
+- Is a Python-free indexer worth it, given that Python stays in those
   two images?
 - Should decoding of untrusted files move into `ml` later (no database, no mounts)? It would
   make the indexer pure Rust apart from tesseract and ffmpeg, at the cost of sending file bytes
