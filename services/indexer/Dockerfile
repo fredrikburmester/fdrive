@@ -15,12 +15,12 @@ COPY pyproject.toml ./
 COPY src ./src
 RUN pip install --no-cache-dir -e ".[dev]"
 
-# Runs as a non-root user in production (see deploy/compose.yaml's `index`
-# profile: the indexer only needs read access to the bind-mounted SFTPGo
-# root and read-write access to the named `fdrive-thumbs` volume, which a
-# one-shot `thumbs-init` service chowns to this uid before the indexer
-# starts, the same pattern deploy/compose.dev.yaml's `sftpgo-seed` uses for
-# SFTPGo's own data volume). `scripts/test-in-docker.sh` mounts the host's
+# Runs as a non-root user. The indexer only needs read access to the
+# bind-mounted SFTPGo root and read-write access to its thumbnail and log
+# volumes. deploy/compose.yaml starts the container as root with
+# FDRIVE_RUN_AS_UID set, and docker-entrypoint.sh gives those volumes to that
+# uid and drops to it before the indexer starts; any other start runs as the
+# user below from the first instruction. `scripts/test-in-docker.sh` mounts the host's
 # Docker socket for testcontainers; on a host where that socket is not
 # world-writable, run that script with `docker run --user root` to keep
 # using it, since this uid otherwise cannot reach the socket.
@@ -40,6 +40,9 @@ EXPOSE 8010
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
   CMD curl -fs http://localhost:8010/health || exit 1
 
+COPY docker-entrypoint.sh /usr/local/bin/fdrive-entrypoint
+
 USER indexer
 
+ENTRYPOINT ["fdrive-entrypoint"]
 CMD ["python", "-m", "fdrive_indexer.main"]
