@@ -44,6 +44,7 @@ webp = { version = "0.3.1", default-features = false }
 inotify = { version = "0.11.5", default-features = false }
 
 [dev-dependencies]
+testcontainers = { version = "0.28.0", features = ["blocking"] }
 http-body-util = "0.1.5"
 tower = { version = "0.5.3", features = ["util"] }
 

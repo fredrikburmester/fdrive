@@ -210,7 +210,12 @@ fn decode_scaled(data: &[u8], longest_side: Option<u32>, max_pixels: u64) -> Res
             DynamicImage::ImageLuma8(image::GrayImage::from_raw(width, height, pixels).ok_or_else(wrong)?)
         }
         PixelFormat::L16 => {
-            let wide = pixels.as_chunks::<2>().0.iter().map(|b| u16::from_be_bytes(*b)).collect();
+            let wide = pixels
+                .as_chunks::<2>()
+                .0
+                .iter()
+                .map(|b| u16::from_be_bytes(*b))
+                .collect();
             DynamicImage::ImageLuma16(image::ImageBuffer::from_raw(width, height, wide).ok_or_else(wrong)?)
         }
         PixelFormat::CMYK32 => unreachable!("refused above"),
