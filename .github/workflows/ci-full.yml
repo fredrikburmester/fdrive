@@ -126,3 +126,8 @@ jobs:
     name: Python services
     if: github.event_name == 'workflow_dispatch' || contains(github.event.pull_request.labels.*.name, 'ci:full')
     uses: ./.github/workflows/services.yml
+
+  ml:
+    name: ML server
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.pull_request.labels.*.name, 'ci:full')
+    uses: ./.github/workflows/ml.yml

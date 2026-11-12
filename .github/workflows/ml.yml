@@ -1,0 +1,52 @@
+# Rust checks for the ML server, path-filtered. CI (full) also calls this workflow.
+name: ML server
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - 'services/ml/**'
+      - '.github/workflows/ml.yml'
+  workflow_call:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ml-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  rust:
+    name: ML server (Rust)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: services/ml
+    env:
+      CARGO_TERM_COLOR: always
+      CARGO_LLVM_COV_VERSION: 0.9.1
+    steps:
+      - uses: actions/checkout@v4
+      # rustup reads services/ml/rust-toolchain.toml and installs that toolchain
+      # with rustfmt, clippy and the coverage tools.
+      - run: rustup show active-toolchain
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            ~/.cargo/bin/cargo-llvm-cov
+            services/ml/target
+          key: ml-${{ runner.os }}-${{ hashFiles('services/ml/rust-toolchain.toml', 'services/ml/Cargo.lock') }}
+          restore-keys: ml-${{ runner.os }}-
+      - run: command -v cargo-llvm-cov || cargo install cargo-llvm-cov --locked --version "$CARGO_LLVM_COV_VERSION"
+      - run: cargo fmt --all --check
+      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      # The model backends and the entrypoint need real weights to run; the
+      # README says how they are probed instead.
+      - run: cargo llvm-cov --workspace --locked --fail-under-lines 95 --ignore-filename-regex '(src/onnx/|src/main\.rs)'
+      - name: Image builds
+        run: docker build -t fdrive-ml:ci .
