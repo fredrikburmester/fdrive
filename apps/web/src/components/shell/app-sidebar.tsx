@@ -22,6 +22,7 @@ import { FavoritesSection } from "@/components/shell/favorites-section";
 import { FolderTree } from "@/components/shell/folder-tree";
 import { useShellMe } from "@/components/shell/page-header";
 import { RecentsSection } from "@/components/shell/recents-section";
+import { SidebarResizeHandle } from "@/components/shell/resizable-sidebar";
 import { SystemNav } from "@/components/shell/system-nav";
 import { TagsSection } from "@/components/shell/tags-section";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
@@ -268,6 +269,7 @@ export function AppSidebar() {
           </DropdownMenuContent>
         </DropdownMenu>
       </SidebarFooter>
+      <SidebarResizeHandle />
     </Sidebar>
   );
 }

@@ -2,8 +2,9 @@ import type { ReactNode } from "react";
 import { ChatPanel } from "@/components/ai/chat/chat-panel";
 import { AppSidebar } from "@/components/shell/app-sidebar";
 import { MeHydration } from "@/components/shell/me-hydration";
+import { ResizableSidebarProvider } from "@/components/shell/resizable-sidebar";
 import { ShellRuntime } from "@/components/shell/shell-runtime";
-import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar";
+import { SidebarInset } from "@/components/ui/sidebar";
 import { loadMe } from "./load-me";
 
 export default async function ShellLayout({ children }: { children: ReactNode }) {
@@ -12,7 +13,7 @@ export default async function ShellLayout({ children }: { children: ReactNode })
   return (
     <MeHydration me={me}>
       <ShellRuntime>
-        <SidebarProvider className="h-svh min-h-0 overflow-hidden">
+        <ResizableSidebarProvider className="h-svh min-h-0 overflow-hidden">
           <AppSidebar />
           {/* Constrain the flex height so file virtualization measures the viewport.
               The inset retains vertical scrolling for longer settings pages. */}
@@ -21,7 +22,7 @@ export default async function ShellLayout({ children }: { children: ReactNode })
           </SidebarInset>
           {/* Docked beside the page, not inside it, so it follows the person between folders and pages. */}
           <ChatPanel />
-        </SidebarProvider>
+        </ResizableSidebarProvider>
       </ShellRuntime>
     </MeHydration>
   );

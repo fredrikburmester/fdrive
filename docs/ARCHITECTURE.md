@@ -101,6 +101,8 @@ and provider-specific limits are described in [Trash](TRASH.md) and the provider
   density (`fdrive.list.density`), size units (`fdrive.format.sizes`), date style
   (`fdrive.format.dates`) and clock (`fdrive.format.clock`). Components render sizes and dates
   through `useFormatters`, never the bare formatters, so a preference applies everywhere.
+  The desktop sidebar's width (`fdrive.sidebar.width`) is one of them, set by dragging the
+  sidebar's edge.
 - The AI chat panel is mounted in the shell layout beside the page, not inside the file
   browser, so it follows the person between folders and pages; below the tablet breakpoint it
   is a sheet. Its open state, width and current chat are `fdrive.chat.open`, `fdrive.chat.width`
