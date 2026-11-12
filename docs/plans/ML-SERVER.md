@@ -50,4 +50,5 @@ the benchmark's test set does not measure.
 - OCR stays as it is. It rewrites people's PDFs through `ocrmypdf`; this server never writes to
   storage.
 - The indexer stays a separate Python service. It needs the database and the file mounts that
-  this server deliberately does not have. Porting it is a separate decision.
+  this server deliberately does not have. Porting it is a separate decision; see
+  [indexer in Rust](INDEXER-RUST.md).
