@@ -68,8 +68,7 @@ export function createSetupService(deps: CreateSetupServiceDeps): SetupService {
 
   /**
    * Installations from before the owner record are complete when someone can
-   * already sign in: a local user exists (SFTPGo-era logins become local
-   * users when the API starts).
+   * already sign in: a local user exists.
    */
   async function alreadyInUse(): Promise<boolean> {
     return deps.local !== undefined && (await deps.local.userCount()) > 0;

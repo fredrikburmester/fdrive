@@ -235,11 +235,6 @@ A local login changes its own password with `POST /api/v1/auth/password`
 (Account > Password): the current password is checked, the hash and the
 sealed credential are replaced, and the account's other sessions end.
 
-Coming from SFTPGo, the first start carries passwords over from fdrive's
-sealed credentials: administrators can sign in at once, everyone else is
-added disabled until an administrator enables them, and users who never
-signed in to fdrive get a password from an administrator.
-
 ## MCP token grants
 
 New personal tokens persist nullable `app.api_tokens.access` JSON with `mode` and normalized

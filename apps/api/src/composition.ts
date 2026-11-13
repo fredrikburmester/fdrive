@@ -73,7 +73,6 @@ import { registerFeatureRoutes } from "./features/routes.js";
 import { createFeatureService } from "./features/service.js";
 import { publishFsEvent, registerFsRoutes } from "./fs/routes.js";
 import { createJobRunner } from "./jobs/runner.js";
-import { adoptSealedPasswords } from "./local/adopt.js";
 import { registerGrantRoutes } from "./local/grant-routes.js";
 import { createLocalGrantService } from "./local/grants.js";
 import { deploymentModules } from "./local/modules.js";
@@ -254,16 +253,6 @@ export async function composeApp(
         ) ?? null);
   if (!(await repos.settings.get("backup.recovery.v1"))) {
     await providerService.seedFromEnvironment();
-    const local = await localProvider();
-    if (local !== null) {
-      const adopted = await adoptSealedPasswords({ repos, master, passwords }, local.id);
-      if (adopted.enabled.length + adopted.disabled.length > 0) {
-        logger.info(
-          { enabled: adopted.enabled.length, disabled: adopted.disabled.length },
-          "local users created from existing logins; enable the others under System > Users",
-        );
-      }
-    }
   }
   const localUserStore = createLocalUserStore({
     repo: repos.localUsers,
