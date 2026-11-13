@@ -11,6 +11,7 @@ import {
   createDesktopRepo,
   createIdentityLinksRepo,
   createIndexQueries,
+  createIndexWorkWriter,
   createOfficeFileRepo,
   createOfficeWriteScope,
   createPool,
@@ -76,6 +77,7 @@ import { createJobRunner } from "./jobs/runner.js";
 import { adoptSealedPasswords } from "./local/adopt.js";
 import { registerGrantRoutes } from "./local/grant-routes.js";
 import { createLocalGrantService } from "./local/grants.js";
+import { createIndexWorkQueue } from "./local/index-work.js";
 import { deploymentModules } from "./local/modules.js";
 import { registerLocalUserRoutes } from "./local/routes.js";
 import { createLocalUserService } from "./local/service.js";
@@ -194,7 +196,16 @@ export async function composeApp(
   const restored = await repos.settings.get("backup.restore.v1");
   if (config.fdriveRestoreMode || restored) return createRecoveryApp(config, pool, !!restored);
   const passwords = createScryptSharePasswords();
-  const modules = deps.modules ?? deploymentModules(config, repos, passwords);
+  // Changes fdrive makes reach the indexer at once instead of at its next scan.
+  const indexWork = createIndexWorkQueue({
+    write: createIndexWorkWriter(db),
+    onError: (error) =>
+      logger.warn(
+        { err: error },
+        "index work not queued; the indexer's watcher or scan will find it",
+      ),
+  });
+  const modules = deps.modules ?? deploymentModules(config, repos, passwords, indexWork);
   const backups = createBackupModule(config, modules);
   await backups.start();
 
@@ -1117,6 +1128,7 @@ export async function composeApp(
   return {
     app,
     close: async () => {
+      await indexWork.flush();
       await backups.close();
       await activityMaintenance.stop();
       await desktopRetention.stop();

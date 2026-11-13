@@ -1,5 +1,5 @@
 import { constants } from "node:fs";
-import { access, stat } from "node:fs/promises";
+import { access, realpath, stat } from "node:fs/promises";
 import { join } from "node:path";
 import {
   isStorageError,
@@ -10,6 +10,7 @@ import {
   StorageError,
   splitSegments,
 } from "@fdrive/core";
+import { type DiskChangeListener, type IndexChange, underRoot } from "./changes.js";
 import { isLocalUsername } from "./names.js";
 import { createUserStorage, namedSharedGrants, type SharedGrant } from "./shared.js";
 
@@ -52,6 +53,14 @@ export interface CreateLocalModuleOptions {
    * when this deployment does not index it.
    */
   readonly indexRoot?: string | null;
+  /**
+   * Hears every change fdrive makes under `root`, by the path the indexer
+   * reads it under `indexRoot`, so it can index the change at once. Only
+   * set it when the indexer reads `root` itself (not a folder above or
+   * below it), or the paths will not match. Never called without
+   * `indexRoot`.
+   */
+  readonly onIndexChange?: (root: string, change: IndexChange) => void;
 }
 
 export const LOCAL_CREDENTIAL_FIELDS: readonly ProviderField[] = [
@@ -78,11 +87,51 @@ export async function probeRoot(root: string): Promise<ProbeResult> {
 }
 
 /**
+ * Turns the absolute paths storage reports into ones under the index root
+ * `name`. Paths are real (links resolved), so they are compared with the
+ * root's real path, resolved once it is first needed. A change outside the
+ * root, or one made while the root cannot be resolved, is left to the
+ * indexer's own watcher and scans.
+ */
+export function createIndexListener(
+  root: string,
+  name: string,
+  hear: (root: string, change: IndexChange) => void,
+  resolve: (path: string) => Promise<string> = realpath,
+): DiskChangeListener {
+  let real: Promise<string> | undefined;
+  function resolved(): Promise<string> {
+    if (real === undefined) {
+      real = resolve(root);
+      // A failure is not kept: the next change tries again.
+      real.catch(() => {
+        real = undefined;
+      });
+    }
+    return real;
+  }
+  return (change) => {
+    // Every change waits on the same promise, so they reach `hear` in order.
+    void resolved()
+      .then((at) => {
+        const mapped = underRoot(at, change);
+        if (mapped !== null) hear(name, mapped);
+      })
+      .catch(() => undefined);
+  };
+}
+
+/**
  * Files in a folder on fdrive's own disk, with users fdrive keeps. Every
  * file operation is one filesystem call or an atomic publish, so moves are
  * atomic, uploads keep their modification time, and zips stream.
  */
 export function createLocalModule(options: CreateLocalModuleOptions): ProviderModule {
+  const { indexRoot, onIndexChange } = options;
+  const onChange =
+    indexRoot === undefined || indexRoot === null || onIndexChange === undefined
+      ? undefined
+      : createIndexListener(options.root, indexRoot, onIndexChange);
   return {
     type: "local",
     label: "Local folder",
@@ -150,6 +199,7 @@ export function createLocalModule(options: CreateLocalModuleOptions): ProviderMo
       }
       const username = session.externalUsername;
       return createUserStorage({
+        ...(onChange === undefined ? {} : { onChange }),
         home: join(options.root, username),
         shared: async () =>
           namedSharedGrants(username, await options.users.shared(username)).map(

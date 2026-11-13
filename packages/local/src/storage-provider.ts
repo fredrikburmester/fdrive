@@ -1,4 +1,4 @@
-import { randomBytes } from "node:crypto";
+import { createHash, type Hash, randomBytes } from "node:crypto";
 import type { Stats } from "node:fs";
 import { constants } from "node:fs";
 import {
@@ -19,7 +19,7 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { basename, dirname, join, sep } from "node:path";
-import { addAbortSignal, Readable } from "node:stream";
+import { addAbortSignal, Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import type { ReadableStream as NodeReadableStream } from "node:stream/web";
 import {
@@ -34,6 +34,7 @@ import {
   splitSegments,
 } from "@fdrive/core";
 import { ZipFile } from "yazl";
+import { type DiskChangeListener, type DiskContent, notify } from "./changes.js";
 import { codeOf, mapped } from "./errors.js";
 import { createHome, type Home } from "./home.js";
 
@@ -47,6 +48,8 @@ export interface LocalStorageOptions {
   readonly create?: boolean;
   /** A folder `home` must really be inside; see `CreateHomeOptions.within`. */
   readonly within?: string;
+  /** Hears every change this storage makes on disk, once it is done. */
+  readonly onChange?: DiskChangeListener;
 }
 
 /** Storage over one folder, with the folder itself for callers that combine several. */
@@ -93,6 +96,32 @@ async function lstatOrNull(path: string): Promise<Stats | null> {
   }
 }
 
+/**
+ * An upload's content as published at `target`: `written` plus the change
+ * time the publish left, or nothing when `target` is no longer the inode that
+ * was written (another writer replaced it meanwhile). A rename, a link and
+ * unlinking the temporary name each change the change time, so it is read
+ * once the publish is complete.
+ */
+export async function published(
+  target: string,
+  written: Omit<DiskContent, "ctimeNs">,
+): Promise<{ readonly content?: DiskContent }> {
+  const info = await lstat(target, { bigint: true }).catch(() => null);
+  if (info === null || info.ino !== written.ino) return {};
+  return { content: { ...written, ctimeNs: info.ctimeNs } };
+}
+
+/** Passes bytes through unchanged, adding each chunk to `hash` on the way. */
+function hashing(hash: Hash): Transform {
+  return new Transform({
+    transform(chunk: Buffer, _encoding, callback) {
+      hash.update(chunk);
+      callback(null, chunk);
+    },
+  });
+}
+
 function webStream(stream: Readable): ReadableStream<Uint8Array> {
   return Readable.toWeb(stream) as unknown as ReadableStream<Uint8Array>;
 }
@@ -120,6 +149,7 @@ export function createLocalStorage(options: LocalStorageOptions): LocalStorage {
     create: options.create ?? true,
     ...(options.within === undefined ? {} : { within: options.within }),
   });
+  const listener = options.onChange;
 
   async function isHome(at: string): Promise<boolean> {
     return at === (await home.real());
@@ -259,29 +289,56 @@ export function createLocalStorage(options: LocalStorageOptions): LocalStorage {
           throw new StorageError("conflict", `target exists: ${path}`);
         }
         const partial = partialIn(dir);
+        // Only a listener needs the digest, so nobody else pays for it.
+        const hash = listener === undefined ? undefined : createHash("sha256");
+        let written: Omit<DiskContent, "ctimeNs"> | undefined;
         try {
           if (body instanceof Uint8Array) {
             await writeFile(partial, body, { flag: "wx", ...(signal ? { signal } : {}) });
+            hash?.update(body);
           } else {
             const sink = (await open(partial, "wx")).createWriteStream();
             // Converted only now and piped at once: a body that fails while
             // the file opens would otherwise emit an error nobody listens to.
             const source = Readable.fromWeb(body as unknown as NodeReadableStream<Uint8Array>);
-            await (signal ? pipeline(source, sink, { signal }) : pipeline(source, sink));
+            if (hash === undefined) {
+              await (signal ? pipeline(source, sink, { signal }) : pipeline(source, sink));
+            } else {
+              const tap = hashing(hash);
+              await (signal
+                ? pipeline(source, tap, sink, { signal })
+                : pipeline(source, tap, sink));
+            }
           }
-          const written = (await stat(partial)).size;
-          if (opts?.contentLength !== undefined && written !== opts.contentLength) {
+          const size = (await stat(partial)).size;
+          if (opts?.contentLength !== undefined && size !== opts.contentLength) {
             throw new StorageError(
               "bad_request",
-              `upload ended after ${written} of ${opts.contentLength} bytes: ${path}`,
+              `upload ended after ${size} of ${opts.contentLength} bytes: ${path}`,
             );
           }
           if (opts?.modifiedAt !== undefined) await utimes(partial, new Date(), opts.modifiedAt);
+          if (hash !== undefined) {
+            // Taken before publishing: whatever is at the name later may be
+            // another writer's file.
+            const info = await stat(partial, { bigint: true });
+            written = {
+              sha256: hash.digest("hex"),
+              size: Number(info.size),
+              mtimeNs: info.mtimeNs,
+              ino: info.ino,
+            };
+          }
           if (opts?.overwrite === false) await publishNew(partial, target, path);
           else await rename(partial, target);
         } finally {
           await rm(partial, { force: true });
         }
+        notify(listener, {
+          kind: "changed",
+          path: target,
+          ...(written === undefined ? {} : await published(target, written)),
+        });
       }),
 
     mkdir: (path, opts) =>
@@ -294,7 +351,9 @@ export function createLocalStorage(options: LocalStorageOptions): LocalStorage {
       mapped(path, async () => {
         const from = await home.entry(path);
         if (await isHome(from)) throw new StorageError("not_found", `not found: ${path}`);
-        await moveEntry(from, await home.entry(target), { path, target }, opts);
+        const to = await home.entry(target);
+        await moveEntry(from, to, { path, target }, opts);
+        notify(listener, { kind: "moved", path: from, target: to });
       }),
 
     copy: (path, target, opts) =>
@@ -302,7 +361,9 @@ export function createLocalStorage(options: LocalStorageOptions): LocalStorage {
         if (splitSegments(normalizePath(path)).length === 0) {
           throw new StorageError("not_found", `not found: ${path}`);
         }
-        await copyEntry(await home.target(path), await home.entry(target), { path, target }, opts);
+        const to = await home.entry(target);
+        await copyEntry(await home.target(path), to, { path, target }, opts);
+        notify(listener, { kind: "changed", path: to });
       }),
 
     deleteFile: (path) =>
@@ -312,6 +373,7 @@ export function createLocalStorage(options: LocalStorageOptions): LocalStorage {
           throw new StorageError("bad_request", `is a directory: ${path}`);
         }
         await unlink(at);
+        notify(listener, { kind: "changed", path: at });
       }),
 
     deleteDir: (path) =>
@@ -323,12 +385,14 @@ export function createLocalStorage(options: LocalStorageOptions): LocalStorage {
         // The home itself stays: deleting "/" empties it.
         if (await isHome(at)) await clearChildren(at);
         else await rm(at, { recursive: true });
+        notify(listener, { kind: "changed", path: at });
       }),
 
     setModifiedAt: (path, modifiedAt) =>
       mapped(path, async () => {
         const at = await home.target(path);
         await utimes(at, (await stat(at)).atime, modifiedAt);
+        notify(listener, { kind: "changed", path: at });
       }),
 
     zip: (paths, opts) =>

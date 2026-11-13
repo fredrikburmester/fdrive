@@ -8,6 +8,7 @@ import {
   type StorageProvider,
   splitSegments,
 } from "@fdrive/core";
+import { type DiskChangeListener, notify } from "./changes.js";
 import { mapped } from "./errors.js";
 import { isLocalUsername } from "./names.js";
 import {
@@ -86,6 +87,8 @@ export interface UserStorageOptions {
   readonly home: string;
   /** What other users share with this one; asked once, when first needed. */
   readonly shared: () => Promise<readonly SharedFolder[]>;
+  /** Hears every change made on disk, in the user's own files and in shared folders. */
+  readonly onChange?: DiskChangeListener;
 }
 
 /** Where a caller's path leads. */
@@ -123,7 +126,9 @@ const SHELF_PATH = `/${SHARED_WITH_ME}`;
  * shared folders sees an ordinary folder of that name, should they have one.
  */
 export function createUserStorage(options: UserStorageOptions): UserStorage {
-  const own = createLocalStorage({ home: options.home });
+  const listener = options.onChange;
+  const heard = listener === undefined ? {} : { onChange: listener };
+  const own = createLocalStorage({ home: options.home, ...heard });
   const mounts = new Map<string, LocalStorage>();
   let loaded: Promise<readonly SharedFolder[]> | undefined;
 
@@ -135,7 +140,12 @@ export function createUserStorage(options: UserStorageOptions): UserStorage {
   function mountStorage(folder: SharedFolder): LocalStorage {
     let storage = mounts.get(folder.name);
     if (storage === undefined) {
-      storage = createLocalStorage({ home: folder.dir, create: false, within: folder.ownerHome });
+      storage = createLocalStorage({
+        home: folder.dir,
+        create: false,
+        within: folder.ownerHome,
+        ...heard,
+      });
       mounts.set(folder.name, storage);
     }
     return storage;
@@ -299,15 +309,9 @@ export function createUserStorage(options: UserStorageOptions): UserStorage {
         if (entry === (await source.storage.home.real())) {
           throw new StorageError("not_found", `not found: ${path}`);
         }
-        await moveEntry(
-          entry,
-          await destination.storage.home.entry(destination.rel),
-          {
-            path,
-            target,
-          },
-          opts,
-        );
+        const to = await destination.storage.home.entry(destination.rel);
+        await moveEntry(entry, to, { path, target }, opts);
+        notify(listener, { kind: "moved", path: entry, target: to });
       });
     },
 
@@ -323,12 +327,9 @@ export function createUserStorage(options: UserStorageOptions): UserStorage {
         if (from.kind === "own" && from.rel === "/") {
           throw new StorageError("not_found", `not found: ${path}`);
         }
-        await copyEntry(
-          await from.storage.home.target(from.rel),
-          await destination.storage.home.entry(destination.rel),
-          { path, target },
-          opts,
-        );
+        const to = await destination.storage.home.entry(destination.rel);
+        await copyEntry(await from.storage.home.target(from.rel), to, { path, target }, opts);
+        notify(listener, { kind: "changed", path: to });
       });
     },
 

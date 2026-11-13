@@ -1,3 +1,4 @@
+export type { DiskChange, DiskChangeListener, DiskContent, IndexChange } from "./changes.js";
 export { codeOf, toStorageError } from "./errors.js";
 export type { Home } from "./home.js";
 export { createHome } from "./home.js";
