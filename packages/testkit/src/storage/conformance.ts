@@ -250,5 +250,15 @@ export function describeStorageProvider(
       await expect(storage.probeDirectoryRead(`${root}/p`)).resolves.toBeUndefined();
       expect(await kindOf(storage.probeDirectoryRead(`${root}/nope`))).toBe("not_found");
     });
+
+    it("probes a file for read access as download would when the method is present", async () => {
+      if (storage.probeFileRead === undefined) {
+        return;
+      }
+      const file = await seed("f/a.txt", "f");
+      await expect(storage.probeFileRead(file)).resolves.toBeUndefined();
+      expect(await kindOf(storage.probeFileRead(`${root}/f/nope.txt`))).toBe("not_found");
+      expect(await kindOf(storage.probeFileRead(`${root}/f`))).toBe("bad_request");
+    });
   });
 }

@@ -119,8 +119,18 @@ export interface RecencyDecay {
   readonly floor: number;
 }
 
+/** Options every search query takes. */
+export interface SearchQueryOptions {
+  /**
+   * Subtrees to leave out, shaped like the scope: a row at or under any of
+   * them is dropped before the limit, so it never takes a place a match the
+   * caller can use would have had. Search passes the Trash folder here.
+   */
+  readonly exclude?: readonly ScopePrefix[];
+}
+
 /** Options for `IndexQueries.fulltext`. */
-export interface FulltextOptions {
+export interface FulltextOptions extends SearchQueryOptions {
   /** Weights each chunk's rank by its file's age; by rank alone when absent. */
   readonly recency?: RecencyDecay;
   /** A stricter `to_tsquery('simple', ...)` expression; chunks matching it sort ahead of the rest. */
@@ -128,7 +138,7 @@ export interface FulltextOptions {
 }
 
 /** Options for `IndexQueries.filename`. */
-export interface FilenameOptions {
+export interface FilenameOptions extends SearchQueryOptions {
   /** Weights each name's similarity by its file's age; by similarity alone when absent. */
   readonly recency?: RecencyDecay;
 }
@@ -238,6 +248,7 @@ export interface IndexQueries {
     scopePrefixes: readonly ScopePrefix[],
     embedding: readonly number[],
     limit: number,
+    options?: SearchQueryOptions,
   ): Promise<ContentHit[]>;
   /** Chunks matching `tsquery` (a `to_tsquery('simple', ...)` expression), best rank first. */
   fulltext(
@@ -353,6 +364,7 @@ export interface IndexQueries {
     vector: readonly number[],
     model: string,
     limit: number,
+    options?: SearchQueryOptions,
   ): Promise<ImageSearchHit[]>;
   /** Total embedded rows and the model that wrote the most of them, for the System page. */
   imageEmbeddingStats(): Promise<ImageEmbeddingStats>;
@@ -377,13 +389,7 @@ function scopeCondition(prefixes: readonly ScopePrefix[]) {
     return sql`false`;
   }
 
-  const parts = clauses.map((clause) => {
-    if (clause.relativePrefix === "") {
-      return sql`(${files.rootId} = ${clause.rootId})`;
-    }
-    const likePattern = `${escapeLikePattern(clause.relativePrefix)}/%`;
-    return sql`(${files.rootId} = ${clause.rootId} AND (${files.path} = ${clause.relativePrefix} OR ${files.path} LIKE ${likePattern} ESCAPE '\\'))`;
-  });
+  const parts = clauses.map(underClause);
 
   // Wrapped in its own parens: this is handed to `and()` alongside other
   // conditions, which joins arguments with a plain " and " and only wraps
@@ -391,6 +397,27 @@ function scopeCondition(prefixes: readonly ScopePrefix[]) {
   // unparenthesized top-level OR here would bind more loosely than the
   // ANDs around it and leak rows outside every scope.
   return sql`(${sql.join(parts, sql` OR `)})`;
+}
+
+/** Matches the `idx.files` rows at or under one root-relative scope clause. */
+function underClause(clause: ScopeClause) {
+  if (clause.relativePrefix === "") {
+    return sql`(${files.rootId} = ${clause.rootId})`;
+  }
+  const likePattern = `${escapeLikePattern(clause.relativePrefix)}/%`;
+  return sql`(${files.rootId} = ${clause.rootId} AND (${files.path} = ${clause.relativePrefix} OR ${files.path} LIKE ${likePattern} ESCAPE '\\'))`;
+}
+
+/**
+ * Leaves out the `idx.files` rows at or under any of `prefixes`, the inverse
+ * of `scopeCondition`; `undefined`, which `and()` skips, when there are none.
+ */
+function exclusionCondition(prefixes: readonly ScopePrefix[] = []) {
+  const clauses = toScopeClauses(prefixes);
+  if (clauses.length === 0) {
+    return undefined;
+  }
+  return and(...clauses.map((clause) => sql`NOT ${underClause(clause)}`));
 }
 
 /** Restricts one `idx.moves` path to the caller's root-relative scope. */
@@ -443,7 +470,7 @@ const FILE_TEXT_PREFIX_CHUNKS = 8;
 /** Builds every `IndexQueries` method as Drizzle queries against `db`. */
 export function createIndexQueries(db: Db): IndexQueries {
   return {
-    async semantic(scopePrefixes, embedding, limit) {
+    async semantic(scopePrefixes, embedding, limit, options = {}) {
       const vectorLiteral = formatVectorLiteral(embedding);
       const rows = await db
         .select({
@@ -453,7 +480,12 @@ export function createIndexQueries(db: Db): IndexQueries {
         .from(chunks)
         .innerJoin(files, eq(files.id, chunks.fileId))
         .where(
-          and(scopeCondition(scopePrefixes), isNull(files.deletedAt), isNotNull(chunks.embedding)),
+          and(
+            scopeCondition(scopePrefixes),
+            exclusionCondition(options.exclude),
+            isNull(files.deletedAt),
+            isNotNull(chunks.embedding),
+          ),
         )
         .orderBy(sql`${chunks.embedding} <=> ${vectorLiteral}::vector`)
         .limit(limit);
@@ -479,6 +511,7 @@ export function createIndexQueries(db: Db): IndexQueries {
         .where(
           and(
             scopeCondition(scopePrefixes),
+            exclusionCondition(options.exclude),
             isNull(files.deletedAt),
             sql`${chunks.tsv} @@ to_tsquery('simple', ${tsquery})`,
           ),
@@ -530,7 +563,14 @@ export function createIndexQueries(db: Db): IndexQueries {
           similarity: similarity.as("similarity"),
         })
         .from(files)
-        .where(and(scopeCondition(scopePrefixes), isNull(files.deletedAt), matchCondition))
+        .where(
+          and(
+            scopeCondition(scopePrefixes),
+            exclusionCondition(options.exclude),
+            isNull(files.deletedAt),
+            matchCondition,
+          ),
+        )
         // A word in the name says more than the same word in a folder above
         // it, which every file in that folder shares.
         .orderBy(
@@ -826,7 +866,7 @@ export function createIndexQueries(db: Db): IndexQueries {
       return row ?? null;
     },
 
-    async searchImages(scopePrefixes, vector, model, limit) {
+    async searchImages(scopePrefixes, vector, model, limit, options = {}) {
       const vectorLiteral = formatVectorLiteral(vector);
       const distance = sql<number>`${imageEmbeddings.embedding} <=> ${vectorLiteral}::vector`;
       const rows = await db
@@ -842,6 +882,7 @@ export function createIndexQueries(db: Db): IndexQueries {
         .where(
           and(
             scopeCondition(scopePrefixes),
+            exclusionCondition(options.exclude),
             isNull(files.deletedAt),
             eq(imageEmbeddings.model, model),
           ),

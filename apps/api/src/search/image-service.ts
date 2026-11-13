@@ -1,10 +1,11 @@
 import type { ImageSearchHit, ImageSearchResponse } from "@fdrive/contracts";
-import { baseName, extensionOf, isUnderPath, mimeFromExtension, type Scope } from "@fdrive/core";
+import { baseName, extensionOf, mimeFromExtension, type Scope } from "@fdrive/core";
 import type { ImageSearchHit as DbImageSearchHit, IndexQueries, ScopePrefix } from "@fdrive/db";
 import type { ReadAuthorizer } from "../scoping/read-authorizer.ts";
 import { roundTripVirtualPath } from "../scoping/round-trip.ts";
 import type { SidecarResult } from "../system/sidecar-client.js";
 import type { ImageEmbedClient, ImageEmbedHealthInfo } from "./image-embed-client.js";
+import { trashExclusion } from "./scopes.js";
 
 /**
  * Rows fanned out from `IndexQueries.searchImages` before ranking. Matches
@@ -63,8 +64,11 @@ export interface ImageSearchServiceDeps {
    * is itself `null`.
    */
   readonly resolveHealth: () => Promise<SidecarResult<ImageEmbedHealthInfo> | null>;
-  /** Same trash-exclusion rule as `SearchServiceDeps.trashPath`. */
-  /** Optional test/default value; production passes a request snapshot. */
+  /**
+   * Same Trash rule as `SearchServiceDeps.trashPath`: the query leaves the
+   * folder out before its limit. A test/default value; production passes a
+   * request snapshot.
+   */
   readonly trashPath?: string | null;
   readonly clock: () => Date;
 }
@@ -159,6 +163,7 @@ export function createImageSearchService(deps: ImageSearchServiceDeps): ImageSea
         embedded.vector,
         health.data.model,
         IMAGE_SEARCH_FANOUT_LIMIT,
+        { exclude: trashExclusion(input.scopes, trashPath, rootIds) },
       );
       const fanoutCut = rows.length >= IMAGE_SEARCH_FANOUT_LIMIT;
       const ranked = selectImageHits(rows, input.limit);
@@ -168,17 +173,7 @@ export function createImageSearchService(deps: ImageSearchServiceDeps): ImageSea
         if (rootName === undefined) {
           return null;
         }
-        const virtualPath = roundTripVirtualPath(input.scopes, rootName, row.path);
-        if (virtualPath === null) {
-          return null;
-        }
-        if (
-          trashPath !== null &&
-          (virtualPath === trashPath || isUnderPath(trashPath, virtualPath))
-        ) {
-          return null;
-        }
-        return virtualPath;
+        return roundTripVirtualPath(input.scopes, rootName, row.path);
       }
 
       let authUnavailable = false;

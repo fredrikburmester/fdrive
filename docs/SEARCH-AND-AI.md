@@ -39,7 +39,9 @@ old file still surfaces when it matches clearly better. The constants live in
 [ranking.ts](../packages/core/src/search/ranking.ts).
 
 Index-backed results cover the files folder, including folders other users share with you,
-and require live read permission. For account-wide queries, text may span linked identities while visual results
+and require live read permission. The login's Trash folder is left out by every search query,
+mapped through its index scopes, before the query's row limit, so trashed files never crowd out
+live ones. For account-wide queries, text may span linked identities while visual results
 remain scoped to the active identity.
 
 PDF conversion rewrites the file in place, so System > Searchable PDFs keeps the file each
