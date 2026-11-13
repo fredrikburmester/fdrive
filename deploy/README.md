@@ -167,7 +167,9 @@ docker compose pull && docker compose up -d --remove-orphans
 
 **Installed from a git checkout?** Releases from 0.3.0 have no `update.sh`. Update from the
 checkout's `deploy` folder like any other installation, and move extra Compose files from
-`FDRIVE_COMPOSE_FILES` to `COMPOSE_FILE` in `.env`, the list Compose itself reads.
+`FDRIVE_COMPOSE_FILES` to `COMPOSE_FILE` in `.env`, the list Compose itself reads. The
+checkout's `compose.yaml` runs the newest release, so to try a pre-release from a checkout,
+set `FDRIVE_VERSION` to it in `.env` as well.
 
 **Used WebDAV or S3 storage?** The files folder is now fdrive's only storage. The update
 disables WebDAV and S3 storage and their logins disappear, so copy anything you need from them
@@ -195,10 +197,11 @@ On the first start:
   keeps their password, but only administrators (the setup owner and anyone marked admin) can
   sign in right away. Everyone else is added disabled, because fdrive can't tell whether
   SFTPGo disabled or removed them since they last signed in: an administrator enables each one
-  under **System > Users**. Users who never signed in to fdrive get a password from an
-  administrator there.
+  under **System > Users**. Users who never signed in to fdrive aren't listed at all: an
+  administrator adds them there with the same username, and their folder is theirs again.
 - The search index carries over.
-- SFTPGo share links keep working. Password-protected ones need a new password.
+- Share links made in fdrive keep working. Password-protected ones need a new password.
+  Links made in SFTPGo's own web client go away with SFTPGo.
 - fdrive's Trash lives in `.trash/.fdrive-move-v1` in each user's folder. Items SFTPGo's
   recycle rule moved to `.trash` stay on disk but aren't listed.
 - SFTPGo virtual folders aren't part of anyone's files: theirs stay where SFTPGo kept them.

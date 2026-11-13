@@ -380,7 +380,7 @@ jobs:
           # --notes goes above the generated list: how to take this release, and
           # whether it needs a new Compose file, which a pull does not replace.
           if [[ $PRERELEASE == true ]]; then
-            notes="To try this pre-release, download its \`compose.yaml\`, which names this version, then run \`docker compose pull && docker compose up -d\`."
+            notes="To try this pre-release, download its \`compose.yaml\`, which names this version, then run \`docker compose pull && docker compose up -d\`. Installed from a git checkout? Its \`compose.yaml\` runs the newest release: set \`FDRIVE_VERSION=$VERSION\` in \`.env\` instead."
           else
             notes="Update with \`docker compose pull && docker compose up -d\`. New installation: see the [quickstart]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY#quickstart-home-server--lan)."
           fi

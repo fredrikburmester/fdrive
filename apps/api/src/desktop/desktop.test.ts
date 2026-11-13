@@ -520,6 +520,35 @@ it("revokes only the supplied desktop credential without resolving disabled stor
   ).toBe(200);
 });
 
+it("asks to sign in again when a location's storage is gone, instead of a server error", async () => {
+  const f = await fixture();
+  const pair = f.pairing.create("Mac", "owner");
+  await f.pairing.approve(pair.id, f.account.id, [f.identity.id]);
+  const result = await f.pairing.poll(pair.id, pair.secret);
+  if (result.status !== "connected") throw new Error("Expected credentials");
+  const credential = result.credentials[0];
+  if (!credential) throw new Error("Expected a location");
+  await f.repos.providers.update(f.provider.id, { enabled: false });
+  f.deps.storageFactory.mockRejectedValue(
+    new ApiHttpError("upstream_unavailable", "storage provider unavailable"),
+  );
+  const response = await f.request("/location", undefined, {
+    authorization: `Bearer ${credential.token}`,
+  });
+  expect(response.status).toBe(401);
+  expect(await response.json()).toMatchObject({
+    error: { kind: "unauthorized", message: "Storage login is no longer available" },
+  });
+  // Any other failure to build storage is still the error it was.
+  f.deps.storageFactory.mockRejectedValue(
+    new ApiHttpError("forbidden", "this user may not sign in"),
+  );
+  expect(
+    (await f.request("/location", undefined, { authorization: `Bearer ${credential.token}` }))
+      .status,
+  ).toBe(403);
+});
+
 it("bounds one IPv6 subscriber to eight pairing slots and preserves admission for others", async () => {
   const f = await fixture();
   let admitted = 0;
