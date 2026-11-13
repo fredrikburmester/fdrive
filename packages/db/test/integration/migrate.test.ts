@@ -232,6 +232,61 @@ describe("migrate", () => {
 });
 
 describe("migration 0019", () => {
+  it("keeps the old index when an indexer created the files root before the API migrated", async () => {
+    await db.execute(sql.raw("create database fdrive_root_race"));
+    const url = new URL(container.getConnectionUri());
+    url.pathname = "/fdrive_root_race";
+    const older = createDb(url.toString());
+    const folder = await migrationsUpTo("0016_personal_activity");
+    try {
+      // A 0.6 install: the folder is indexed under `sftpgo`, with an Office document.
+      await runMigrations(older.db, { migrationsFolder: folder });
+      await older.db.execute(sql`
+        insert into app.providers (id, type, base_url, enabled, managed_by_env)
+        values ('00000000-0000-4000-8000-0000000000a1', 'sftpgo', 'http://sftpgo:8080', true, true)`);
+      await older.db.execute(sql`insert into idx.roots (name) values ('sftpgo')`);
+      await older.db.execute(sql`
+        insert into idx.files (root_id, path, name, ext, size, mtime_ns, text_status)
+        select id, 'alice/report.docx', 'report.docx', '.docx', 10, 1, 'done'
+        from idx.roots where name = 'sftpgo'`);
+      await older.db.execute(sql`
+        insert into app.office_files (provider_id, root_name, path)
+        values ('00000000-0000-4000-8000-0000000000a1', 'sftpgo', 'alice/report.docx')`);
+      // The new indexer starts first and creates `files`, then indexes again under it.
+      await older.db.execute(sql`insert into idx.roots (name) values ('files')`);
+      await older.db.execute(sql`
+        insert into idx.files (root_id, path, name, ext, size, mtime_ns, text_status)
+        select id, 'alice/report.docx', 'report.docx', '.docx', 10, 1, 'pending'
+        from idx.roots where name = 'files'`);
+      await older.db.execute(sql`
+        insert into app.office_files (provider_id, root_name, path)
+        values ('00000000-0000-4000-8000-0000000000a1', 'files', 'alice/report.docx')`);
+
+      await migrate(older.db);
+
+      const roots = await older.db.execute<{ id: number; name: string }>(
+        sql`select id, name from idx.roots order by id`,
+      );
+      expect(roots.rows).toEqual([{ id: 1, name: "files" }]);
+      const files = await older.db.execute<{ root_id: number; status: string }>(
+        sql`select root_id, text_status as status from idx.files`,
+      );
+      expect(files.rows).toEqual([{ root_id: 1, status: "done" }]);
+      const office = await older.db.execute<{ root_name: string }>(
+        sql`select root_name from app.office_files`,
+      );
+      expect(office.rows).toEqual([{ root_name: "files" }]);
+      // The indexer and OCR wait for this before touching roots.
+      const version = await older.db.execute<{ version: number }>(
+        sql`select max(version) as version from idx.schema_version`,
+      );
+      expect(version.rows[0]?.version).toBe(2);
+    } finally {
+      await older.close();
+      await rm(folder, { recursive: true, force: true });
+    }
+  });
+
   it("switches off WebDAV and S3 rows and keeps them for the logins that reference them", async () => {
     await db.execute(sql.raw("create database fdrive_storage_types"));
     const url = new URL(container.getConnectionUri());

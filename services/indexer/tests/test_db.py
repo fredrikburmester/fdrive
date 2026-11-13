@@ -16,7 +16,7 @@ from fdrive_indexer.events import build_event
 def test_connect_success(postgres_dsn: str) -> None:
     conn = db.connect(postgres_dsn)
     try:
-        assert db.read_schema_version(conn) == 1
+        assert db.read_schema_version(conn) == 2
     finally:
         conn.close()
 
@@ -41,7 +41,7 @@ def test_upsert_root_distinct_names(db_conn: psycopg.Connection) -> None:
 
 
 def test_read_schema_version_matches_migration(db_conn: psycopg.Connection) -> None:
-    assert db.read_schema_version(db_conn) == 1
+    assert db.read_schema_version(db_conn) == 2
 
 
 class _BrokenCursor:
@@ -71,8 +71,8 @@ def test_read_schema_version_returns_none_on_db_error() -> None:
 
 def test_wait_for_schema_version_success_first_try(db_conn: psycopg.Connection) -> None:
     logs: list[str] = []
-    result = db.wait_for_schema_version(db_conn, expected=1, timeout_seconds=10, log=logs.append, sleep=lambda _s: None)
-    assert result == 1
+    result = db.wait_for_schema_version(db_conn, expected=2, timeout_seconds=10, log=logs.append, sleep=lambda _s: None)
+    assert result == 2
     assert logs == []
 
 
@@ -97,6 +97,22 @@ def test_wait_for_schema_version_times_out() -> None:
     )
     assert result is None
     assert any("giving up" in line for line in logs)
+
+
+def test_wait_for_schema_version_waits_until_the_api_has_migrated(db_conn: psycopg.Connection) -> None:
+    # An install from before the files folder is at version 1: the indexer must
+    # not touch roots until the API's migrations raise it to 2.
+    db_conn.execute('DELETE FROM "idx"."schema_version" WHERE version = 2')
+    try:
+        logs: list[str] = []
+        clock = iter([0.0, 0.0, 100.0])
+        result = db.wait_for_schema_version(
+            db_conn, expected=2, timeout_seconds=1, log=logs.append, sleep=lambda _s: None, now=lambda: next(clock)
+        )
+        assert result is None
+        assert any("last seen: 1" in line for line in logs)
+    finally:
+        db_conn.execute('INSERT INTO "idx"."schema_version" (version) VALUES (2) ON CONFLICT DO NOTHING')
 
 
 def test_upsert_file_and_get_manifest(db_conn: psycopg.Connection) -> None:

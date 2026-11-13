@@ -23,7 +23,7 @@ from .indexer import RootContext, log, scan_once, start_watcher
 from .server import ServerState, create_app
 from .settings import diff_changed, resolve_settings
 
-EXPECTED_SCHEMA_VERSION = 1
+EXPECTED_SCHEMA_VERSION = 2
 
 
 def build_context(cfg: Config, conn_dsn: str, name: str, abs_path: str) -> RootContext:

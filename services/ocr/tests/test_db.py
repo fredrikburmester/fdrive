@@ -32,7 +32,7 @@ def test_connect_retries_then_raises(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_read_schema_version_present(postgres_dsn: str) -> None:
     conn = db.connect(postgres_dsn)
     try:
-        assert db.read_schema_version(conn) == 1
+        assert db.read_schema_version(conn) == 2
     finally:
         conn.close()
 
@@ -46,7 +46,7 @@ def test_read_schema_version_handles_db_error(postgres_dsn: str) -> None:
     finally:
         with conn.cursor() as cur:
             cur.execute('CREATE TABLE "idx"."schema_version" (version integer PRIMARY KEY)')
-            cur.execute('INSERT INTO "idx"."schema_version" (version) VALUES (1)')
+            cur.execute('INSERT INTO "idx"."schema_version" (version) VALUES (1), (2)')
         conn.close()
 
 
@@ -54,8 +54,8 @@ def test_wait_for_schema_version_immediate_match(postgres_dsn: str) -> None:
     conn = db.connect(postgres_dsn)
     try:
         logs: list[str] = []
-        version = db.wait_for_schema_version(conn, 1, timeout_seconds=5, log=logs.append)
-        assert version == 1
+        version = db.wait_for_schema_version(conn, 2, timeout_seconds=5, log=logs.append)
+        assert version == 2
         assert logs == []
     finally:
         conn.close()

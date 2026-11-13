@@ -141,6 +141,13 @@
       "when": 1794557034179,
       "tag": "0019_remove_webdav_and_s3",
       "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "7",
+      "when": 1794573378809,
+      "tag": "0020_index_root_upgrade",
+      "breakpoints": true
     }
   ]
 }

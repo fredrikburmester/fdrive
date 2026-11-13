@@ -23,7 +23,7 @@ from .schedule import next_run_at, resolve_timezone, seconds_until
 from .server import RunLock, ServerState, create_app
 from .settings import Settings, resolve_settings
 
-EXPECTED_SCHEMA_VERSION = 1
+EXPECTED_SCHEMA_VERSION = 2
 
 
 def log(msg: str) -> None:
