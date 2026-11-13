@@ -111,12 +111,16 @@ export class LocalIndexerStack {
       "POSTGRES_PASSWORD=disposable-test-password",
       "pgvector/pgvector:pg17",
     ]);
+    // Over TCP: the image's first-start server listens only on its socket
+    // and is restarted after init, so a socket check passes too early.
     await vi.waitFor(
       async () => {
         await this.docker([
           "exec",
           `${this.prefix}-db`,
           "pg_isready",
+          "-h",
+          "127.0.0.1",
           "-U",
           "fdrive",
           "-d",

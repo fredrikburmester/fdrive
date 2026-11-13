@@ -9,6 +9,7 @@ const ME: AdminUser = {
   disabled: false,
   isAdmin: true,
   isYou: true,
+  adminByDeployment: false,
   createdAt: "2026-01-01T00:00:00.000Z",
   lastLoginAt: "2026-11-10T09:00:00.000Z",
 };
@@ -17,6 +18,7 @@ const GRACE: AdminUser = {
   disabled: false,
   isAdmin: false,
   isYou: false,
+  adminByDeployment: false,
   createdAt: "2026-02-03T00:00:00.000Z",
   lastLoginAt: null,
 };
@@ -328,6 +330,16 @@ describe("row actions", () => {
       expect.anything(),
     );
     expect(mocks.success).toHaveBeenLastCalledWith("grace is no longer an administrator.");
+  });
+
+  it("leaves the administrator a deployment names as one", async () => {
+    renderPage([ME, { ...GRACE, isAdmin: true, adminByDeployment: true }]);
+    expect(
+      screen.getByTitle("An administrator through FDRIVE_ADMIN_USERS in the deployment."),
+    ).toBeTruthy();
+    await openRowMenu("grace");
+    const item = await screen.findByRole("menuitem", { name: "Remove administrator" });
+    expect(item.getAttribute("aria-disabled") ?? item.getAttribute("data-disabled")).not.toBeNull();
   });
 
   it("reports a refused change", async () => {

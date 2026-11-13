@@ -258,7 +258,18 @@ function UserRow({ user, onResetPassword, onRemove }: UserRowProps) {
         <div className="flex flex-wrap items-center gap-1.5">
           <span className="font-medium">{user.username}</span>
           {user.isYou ? <Badge variant="outline">You</Badge> : null}
-          {user.isAdmin ? <Badge variant="secondary">Admin</Badge> : null}
+          {user.isAdmin ? (
+            <Badge
+              variant="secondary"
+              title={
+                user.adminByDeployment
+                  ? "An administrator through FDRIVE_ADMIN_USERS in the deployment."
+                  : undefined
+              }
+            >
+              Admin
+            </Badge>
+          ) : null}
           {user.disabled ? <Badge variant="destructive">Disabled</Badge> : null}
         </div>
       </TableCell>
@@ -299,6 +310,7 @@ function UserRow({ user, onResetPassword, onRemove }: UserRowProps) {
                 {user.disabled ? "Enable" : "Disable"}
               </DropdownMenuItem>
               <DropdownMenuItem
+                disabled={user.adminByDeployment}
                 onClick={() =>
                   change(
                     { isAdmin: !user.isAdmin },

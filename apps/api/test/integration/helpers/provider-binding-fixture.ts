@@ -108,7 +108,6 @@ export async function composedProviderFixture(connectionString: string) {
         { name: "files", storagePath: "/srv/files", indexerPath: "/data" },
       ]),
       FDRIVE_MASTER_KEY: h.master.toString("base64"),
-      FDRIVE_ADMIN_USERS: USERNAME,
       FDRIVE_MCP_WRITES: "true",
     });
     // No fetch injection: composition and every bound client use the real network transport.

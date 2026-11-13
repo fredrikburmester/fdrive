@@ -26,8 +26,10 @@ export const LocalPassword = z
 export const AdminUser = z.object({
   username: z.string(),
   disabled: z.boolean(),
-  /** The account's administrator flag. */
+  /** Whether the user is an administrator, by account or by `FDRIVE_ADMIN_USERS`. */
   isAdmin: z.boolean(),
+  /** `FDRIVE_ADMIN_USERS` names this user: an administrator whatever the account says. */
+  adminByDeployment: z.boolean(),
   /** True for the signed-in administrator's own user, which they cannot disable or remove. */
   isYou: z.boolean(),
   createdAt: z.iso.datetime(),

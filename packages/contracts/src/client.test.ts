@@ -891,6 +891,7 @@ describe("createApiClient: local users", () => {
     disabled: false,
     isAdmin: false,
     isYou: false,
+    adminByDeployment: false,
     createdAt: AT,
     lastLoginAt: null,
   };

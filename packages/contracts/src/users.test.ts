@@ -53,6 +53,7 @@ describe("admin user contracts", () => {
     disabled: false,
     isAdmin: true,
     isYou: true,
+    adminByDeployment: false,
     createdAt: AT,
     lastLoginAt: null,
   };

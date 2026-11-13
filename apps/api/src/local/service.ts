@@ -55,6 +55,8 @@ export interface LocalUserServiceDeps {
   readonly master: Uint8Array;
   /** The local provider's row id, or `null` when the deployment serves no folder. */
   readonly providerId: () => Promise<string | null>;
+  /** `FDRIVE_ADMIN_USERS`: usernames on the pinned local folder that are always administrators. */
+  readonly environmentAdmins?: readonly string[];
   readonly eventLog?: SystemEventLog;
 }
 
@@ -62,6 +64,8 @@ export interface LocalUserServiceDeps {
 export function createLocalUserService(deps: LocalUserServiceDeps): LocalUserService {
   const { repos } = deps;
   const eventLog = deps.eventLog ?? noopSystemEventLog;
+
+  const isDeploymentAdmin = (username: string) => (deps.environmentAdmins ?? []).includes(username);
 
   async function requireProvider(): Promise<string> {
     const id = await deps.providerId();
@@ -92,10 +96,12 @@ export function createLocalUserService(deps: LocalUserServiceDeps): LocalUserSer
   async function view(providerId: string, user: LocalUser, viewer: UserViewer): Promise<AdminUser> {
     const identity = await repos.identities.findByProviderUsername(providerId, user.username);
     const account = identity === null ? null : await repos.accounts.get(identity.accountId);
+    const byDeployment = isDeploymentAdmin(user.username);
     return {
       username: user.username,
       disabled: user.disabled,
-      isAdmin: account?.isAdmin ?? false,
+      isAdmin: byDeployment || (account?.isAdmin ?? false),
+      adminByDeployment: byDeployment,
       isYou: account !== null && account.id === viewer.accountId,
       createdAt: user.createdAt.toISOString(),
       lastLoginAt: identity?.lastLoginAt?.toISOString() ?? null,
@@ -150,6 +156,12 @@ export function createLocalUserService(deps: LocalUserServiceDeps): LocalUserSer
       const self = identity.accountId === viewer.accountId;
       if (self && (patch.disabled === true || patch.isAdmin === false)) {
         throw new ApiHttpError("forbidden", "you cannot disable yourself or remove your own admin");
+      }
+      if (patch.isAdmin === false && isDeploymentAdmin(current.username)) {
+        throw new ApiHttpError(
+          "forbidden",
+          "FDRIVE_ADMIN_USERS makes this user an administrator; change it in the deployment",
+        );
       }
       const updated =
         (await repos.localUsers.update(current.username, {

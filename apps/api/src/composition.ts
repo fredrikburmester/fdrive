@@ -277,6 +277,7 @@ export async function composeApp(
     passwords,
     master,
     providerId: async () => (await localProvider())?.id ?? null,
+    environmentAdmins: config.fdriveAdminUsers,
     eventLog,
   });
 

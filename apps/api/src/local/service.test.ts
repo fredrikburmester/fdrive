@@ -11,7 +11,7 @@ import { createLocalUserStore } from "./users.js";
 
 const MASTER = new Uint8Array(Buffer.alloc(32, 31));
 
-async function fixture(options: { provider?: boolean } = {}) {
+async function fixture(options: { provider?: boolean; environmentAdmins?: string[] } = {}) {
   const repos = createMemoryRepos();
   const row = await seedLocalProvider(repos);
   const store = createLocalUserStore({
@@ -26,6 +26,9 @@ async function fixture(options: { provider?: boolean } = {}) {
     passwords: FAST_PASSWORDS,
     master: MASTER,
     providerId: async () => (options.provider === false ? null : row.id),
+    ...(options.environmentAdmins === undefined
+      ? {}
+      : { environmentAdmins: options.environmentAdmins }),
     eventLog: { record: (_subsystem, _level, message) => events.push(message) },
   };
   const service = createLocalUserService(deps);
@@ -74,6 +77,7 @@ describe("createLocalUserService: list", () => {
         disabled: false,
         isAdmin: true,
         isYou: true,
+        adminByDeployment: false,
         createdAt: expect.any(String),
         lastLoginAt: "2026-09-01T10:00:00.000Z",
       },
@@ -83,6 +87,7 @@ describe("createLocalUserService: list", () => {
         disabled: false,
         isAdmin: false,
         isYou: false,
+        adminByDeployment: false,
         createdAt: expect.any(String),
         lastLoginAt: null,
       },
@@ -95,6 +100,23 @@ describe("createLocalUserService: list", () => {
     await expect(
       h.service.create({ username: "carol", password: "carol-pass" }, h.viewer),
     ).rejects.toMatchObject({ kind: "unsupported" });
+  });
+});
+
+describe("createLocalUserService: administrators named by the deployment", () => {
+  it("lists them as administrators and refuses to remove that", async () => {
+    const h = await fixture({ environmentAdmins: ["bob"] });
+    await h.loginOf("bob");
+    const bob = (await h.service.list(h.viewer)).users.find((user) => user.username === "bob");
+    expect(bob).toMatchObject({ isAdmin: true, adminByDeployment: true });
+    await expect(h.service.update("bob", { isAdmin: false }, h.viewer)).rejects.toMatchObject({
+      kind: "forbidden",
+    });
+    // Anything else about them can still change.
+    expect(await h.service.update("bob", { disabled: true }, h.viewer)).toMatchObject({
+      disabled: true,
+      isAdmin: true,
+    });
   });
 });
 

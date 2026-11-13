@@ -214,6 +214,9 @@ describe("composed native identity and API-token provider binding", () => {
     const cookie = login.headers.get("set-cookie")?.split(";")[0];
     if (!cookie) throw new Error("login did not create a session cookie");
     const me = MeResponse.parse(await login.json());
+    // FDRIVE_ADMIN_USERS names usernames on the deployment's pinned storage
+    // only, and neither provider here is pinned: grant the account itself.
+    await h.repos.accounts.setAdmin(me.account.id, true);
     // The token explicitly allows organization so mutation tests reach storage.
     const response = await h.app.request("/api/v1/account/tokens", {
       method: "POST",
