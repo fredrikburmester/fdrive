@@ -10,6 +10,7 @@ use fdrive_indexer::extract::ContentExtractor;
 use fdrive_indexer::log::log;
 use fdrive_indexer::runner::{EXPECTED_SCHEMA_VERSION, build_context, refresh_settings, run_root};
 use fdrive_indexer::server::{AppState, Jobs, Wake, router};
+use fdrive_indexer::work::run_work;
 
 fn main() -> Result<(), String> {
     let cfg = Arc::new(Config::from_env()?);
@@ -35,6 +36,12 @@ fn main() -> Result<(), String> {
         }
         let wake = Arc::new(Wake::default());
         wakes.insert(ctx.name.clone(), Arc::clone(&wake));
+        // Changes the API queues are applied beside the scan loop, never behind a scan.
+        let queued = Arc::clone(ctx);
+        std::thread::Builder::new()
+            .name(format!("work-{}", queued.name))
+            .spawn(move || run_work(queued))
+            .map_err(|e| e.to_string())?;
         let (ctx, watchers) = (Arc::clone(ctx), Arc::clone(&watchers));
         std::thread::Builder::new()
             .name(format!("root-{}", ctx.name))

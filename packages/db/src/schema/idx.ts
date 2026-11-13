@@ -134,6 +134,43 @@ export const events = idxSchema.table(
   (table) => [index("events_at_idx").on(table.at)],
 );
 
+/**
+ * Changes fdrive's API made to an indexed root, for the indexer to apply
+ * right away instead of waiting for its file watcher or next scan. A row
+ * without `target_path` says "look at `path` again" (a file, a folder, or
+ * nothing any more); one with it says `path` moved there. `sha256` is an
+ * upload's digest, and `size`, `mtime_ns`, `inode` and `ctime_ns` describe
+ * the file it was published as, so the indexer need not read it again to
+ * hash it while the file still matches all four. A client chooses an
+ * upload's modification time but never its inode or change time, so a
+ * different file cannot pass for it. `inode` holds the unsigned inode
+ * number's 64 bits as a signed bigint. Rows are
+ * hints the indexer deletes once applied; a scan covers anything lost.
+ * The API sends `NOTIFY idx_work` with the root's name after adding rows.
+ */
+export const work = idxSchema.table(
+  "work",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    rootId: smallint("root_id")
+      .notNull()
+      .references(() => roots.id, { onDelete: "cascade" }),
+    path: text("path").notNull(),
+    targetPath: text("target_path"),
+    sha256: text("sha256"),
+    size: bigint("size", { mode: "number" }),
+    mtimeNs: bigint("mtime_ns", { mode: "bigint" }),
+    inode: bigint("inode", { mode: "bigint" }),
+    ctimeNs: bigint("ctime_ns", { mode: "bigint" }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  // The indexer reads a root's rows oldest first; writers prune by age.
+  (table) => [
+    index("work_root_id_id_idx").on(table.rootId, table.id),
+    index("work_created_at_idx").on(table.createdAt),
+  ],
+);
+
 export const schemaVersion = idxSchema.table("schema_version", {
   version: integer("version").primaryKey(),
 });

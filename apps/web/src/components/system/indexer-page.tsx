@@ -337,7 +337,7 @@ export function IndexerPage() {
                 }
               />
               <FieldDescription>
-                Time between scheduled scans of every configured root.
+                Time between full scans. Changes made in fdrive are indexed right away.
               </FieldDescription>
             </Field>
             <Field>

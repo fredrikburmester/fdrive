@@ -81,7 +81,8 @@ pub fn read_schema_version(client: &mut Client) -> Result<Option<i64>> {
     }
 }
 
-/// Wait for the compatible schema and the failure-history table before any processing.
+/// Wait for the compatible schema and the failure-history and work-queue tables before
+/// any processing. Both tables came without a version bump, which OCR waits for too.
 pub fn wait_for_schema_version(
     db: &Db,
     expected: i64,
@@ -93,10 +94,12 @@ pub fn wait_for_schema_version(
     loop {
         let (version, ready) = db.with(|c| {
             let version = read_schema_version(c)?;
-            let table: Option<String> = c
-                .query_one("SELECT to_regclass('idx.processing_failures')::text", &[])?
-                .get(0);
-            Ok((version, table.is_some()))
+            let row = c.query_one(
+                "SELECT to_regclass('idx.processing_failures')::text, to_regclass('idx.work')::text",
+                &[],
+            )?;
+            let (failures, work): (Option<String>, Option<String>) = (row.get(0), row.get(1));
+            Ok((version, failures.is_some() && work.is_some()))
         })?;
         if version == Some(expected) && ready {
             return Ok(version);
@@ -104,12 +107,12 @@ pub fn wait_for_schema_version(
         let seen = version.map_or("None".to_owned(), |v| v.to_string());
         if Instant::now() >= deadline {
             log(&format!(
-                "schema not ready (expected {expected}, last seen: {seen}, requires processing_failures); giving up"
+                "schema not ready (expected {expected}, last seen: {seen}, requires processing_failures and work); giving up"
             ));
             return Ok(None);
         }
         log(&format!(
-            "waiting for idx.schema_version = {expected} and processing_failures migration (last seen: {seen})"
+            "waiting for idx.schema_version = {expected} and the processing_failures and work migrations (last seen: {seen})"
         ));
         sleep(Duration::from_secs(5));
     }
@@ -551,4 +554,80 @@ pub fn mark_pending(c: &mut Client, root_id: i64, scope: Option<(&str, &str)>) -
             &[&root_id, &exact, &prefix],
         )?,
     })
+}
+
+/// One change the API queued in `idx.work`, exactly as stored; `work` checks it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorkRow {
+    pub id: i64,
+    pub path: String,
+    pub target_path: Option<String>,
+    pub sha256: Option<String>,
+    pub size: Option<i64>,
+    pub mtime_ns: Option<i64>,
+    /// The unsigned inode number's 64 bits, stored signed.
+    pub inode: Option<i64>,
+    pub ctime_ns: Option<i64>,
+}
+
+/// A root's oldest queued changes, at most `limit`.
+pub fn work_batch(c: &mut Client, root_id: i64, limit: i64) -> Result<Vec<WorkRow>> {
+    Ok(c.query(
+        r#"SELECT id::bigint, path, target_path, sha256, size::bigint, mtime_ns::bigint, inode::bigint,
+           ctime_ns::bigint FROM "idx"."work"
+           WHERE root_id = $1::bigint ORDER BY id LIMIT $2::bigint"#,
+        &[&root_id, &limit],
+    )?
+    .into_iter()
+    .map(|r| WorkRow {
+        id: r.get(0),
+        path: r.get(1),
+        target_path: r.get(2),
+        sha256: r.get(3),
+        size: r.get(4),
+        mtime_ns: r.get(5),
+        inode: r.get(6),
+        ctime_ns: r.get(7),
+    })
+    .collect())
+}
+
+/// Remove applied (or discarded) queue rows.
+pub fn delete_work(c: &mut Client, ids: &[i64]) -> Result<u64> {
+    if ids.is_empty() {
+        return Ok(0);
+    }
+    Ok(c.execute(r#"DELETE FROM "idx"."work" WHERE id = ANY($1::bigint[])"#, &[&ids])?)
+}
+
+/// Live rows at or below `path`, for comparing one folder against the disk.
+pub fn subtree_manifest(c: &mut Client, root_id: i64, path: &str) -> Result<HashMap<String, ManifestRow>> {
+    let prefix = format!("{path}/");
+    let rows = c.query(
+        r#"SELECT path, size::bigint, mtime_ns::bigint, text_status, sha256 FROM "idx"."files"
+           WHERE root_id = $1::bigint AND deleted_at IS NULL AND (path = $2 OR starts_with(path, $3))"#,
+        &[&root_id, &path, &prefix],
+    )?;
+    Ok(rows
+        .into_iter()
+        .map(|r| {
+            (
+                r.get(0),
+                ManifestRow {
+                    size: r.get(1),
+                    mtime_ns: r.get(2),
+                    status: r.get(3),
+                    deleted: false,
+                    sha256: r.get(4),
+                    image_embedded: false,
+                    thumbnail_failed: false,
+                },
+            )
+        })
+        .collect())
+}
+
+/// The database's clock, which `last_seen` is written with.
+pub fn now(c: &mut Client) -> Result<DateTime<Utc>> {
+    Ok(c.query_one("SELECT now()", &[])?.get(0))
 }

@@ -200,7 +200,7 @@ describe("GET /system/indexer", () => {
     expect(body.reachable).toBe(false);
     expect(body.health).toBeUndefined();
     expect(body.stats).toBeUndefined();
-    expect(body.settings.values.scanIntervalSeconds).toBe(900);
+    expect(body.settings.values.scanIntervalSeconds).toBe(3600);
   });
 
   it("reports configured and reachable with health and stats when both succeed", async () => {

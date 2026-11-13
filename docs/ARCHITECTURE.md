@@ -12,7 +12,9 @@ Current implementation reference. Unfinished work belongs in [plans](plans/READM
 - `packages/db` owns Drizzle migrations for PostgreSQL's `app` metadata and `idx` index
   schemas. The indexer and OCR consume those schemas; they do not independently migrate them.
 - The indexer scans mounted roots, extracts content and builds thumbnails/embeddings.
-  OCR may write to mounted originals. Browser file operations go through the API, which reads
+  The API queues each change it makes in `idx.work`, which the indexer applies at once;
+  its file watcher and periodic scan cover changes made outside fdrive. See
+  [how changes arrive](INDEXER.md#how-changes-arrive). OCR may write to mounted originals. Browser file operations go through the API, which reads
   and writes the files folder on its own disk. See [indexer](INDEXER.md), [OCR](OCR.md) and
   [search](SEARCH-AND-AI.md).
 - Model inference and office-document text extraction run in the Rust

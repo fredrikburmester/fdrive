@@ -96,7 +96,7 @@ impl Config {
             embed_batch: number("EMBED_BATCH", 16)?.max(1) as usize,
             image_embed_url: text("IMAGE_EMBED_URL", "").trim_end_matches('/').to_owned(),
             image_embed_batch_size: image_batch as usize,
-            scan_interval: number("SCAN_INTERVAL_SECONDS", 900)?,
+            scan_interval: number("SCAN_INTERVAL_SECONDS", 3600)?,
             text_max_bytes: mb("TEXT_MAX_MB", 64)?,
             image_max_bytes: mb("IMAGE_MAX_MB", 25)?,
             plain_text_cap: number("PLAIN_TEXT_CAP", 300_000)? as usize,

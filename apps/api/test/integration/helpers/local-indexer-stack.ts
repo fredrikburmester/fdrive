@@ -132,7 +132,12 @@ export class LocalIndexerStack {
     this.connectionString = `postgres://fdrive:disposable-test-password@127.0.0.1:${await this.port("db", 5432)}/fdrive`;
   }
 
-  async startIndexer(): Promise<void> {
+  /**
+   * Starts the indexer and waits for its first scan. Without `watch`, only
+   * the API's queue (and scans) can tell it about a change.
+   */
+  async startIndexer(options: { readonly watch?: boolean } = {}): Promise<void> {
+    const watch = options.watch ?? true;
     // A first build compiles MuPDF from source, which takes several minutes.
     await this.docker(["build", "-t", this.prefix, join(repoRoot, "services/indexer")], 1_800_000);
     this.imageCreated = true;
@@ -156,13 +161,13 @@ export class LocalIndexerStack {
       "-e",
       "SCAN_INTERVAL_SECONDS=3600",
       "-e",
-      "WATCH=true",
+      `WATCH=${watch}`,
       this.prefix,
     ]);
     await vi.waitFor(
       async () => {
         const logs = await this.logs();
-        expect(logs).toContain("watching");
+        if (watch) expect(logs).toContain("watching");
         expect(logs).toContain("scan done: 4 files, 4 (re)indexed, 0 deleted, 0 errors");
       },
       { timeout: 60_000, interval: 100 },

@@ -57,7 +57,7 @@ file attempts, not newly stored thumbnails or embeddings. Each feature counts it
 stage outcome: an image embedding failure does not increment thumbnail errors. Skipped
 formats and backend backoff do not count as failures. These are scan indicators, not proof
 that each feature is producing output at that moment. Failed or missing derivatives can
-be retried on later scans; the normal interval defaults to 15 minutes after completion.
+be retried on later scans; the normal interval defaults to an hour after completion.
 
 ## Persistent failure details
 
@@ -92,8 +92,9 @@ Maintenance `/stats` records now include `outcome` (`completed`, `failed`, `stop
 An interrupted finite rebuild is never labelled completed in its settings summary.
 
 Scan totals remain unknown during traversal, then freeze at the scheduled count while
-remaining workers finish. Watcher arrivals belong to a separate open-ended operation;
-their image embeddings also run on a thread of their own, so Image search can trail.
+remaining workers finish. Watcher arrivals and changes the API queued belong to a separate open-ended operation;
+their text and image embeddings run on threads of their own, so Semantic search and Image
+search can trail.
 Compatible simultaneous operations are weighted by their counts. Mixed kinds/units, zero
 or unknown totals omit the percentage. Features overview always omits an aggregate ratio.
 

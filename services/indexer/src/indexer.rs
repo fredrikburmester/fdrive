@@ -5,8 +5,9 @@ use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, RwLock};
+use std::thread::LocalKey;
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
@@ -48,6 +49,63 @@ impl FileStat {
     }
 }
 
+/// What fdrive's API knew about an upload when it published it: the bytes' digest and the
+/// file they became. The file need not be read again to hash it while it is still that file.
+/// A client chooses an upload's modification time, so a hint also names the inode and its
+/// change time, which no client can set: another file with the same size and time never
+/// passes for it, and its digest never keys thumbnails or embeddings made from other bytes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ContentHint {
+    pub sha256: String,
+    pub size: u64,
+    pub mtime_ns: i64,
+    pub inode: u64,
+    pub ctime_ns: i64,
+}
+
+impl ContentHint {
+    /// A hint with a well-formed digest (64 lowercase hex digits), or none: thumbnails are
+    /// stored under the digest, so anything else must never be used as one. `inode` is the
+    /// unsigned inode number's 64 bits, as stored.
+    pub fn new(sha256: &str, size: i64, mtime_ns: i64, inode: i64, ctime_ns: i64) -> Option<Self> {
+        let well_formed =
+            sha256.len() == 64 && sha256.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b));
+        (well_formed && size >= 0).then(|| Self {
+            sha256: sha256.to_owned(),
+            size: size as u64,
+            mtime_ns,
+            inode: inode as u64,
+            ctime_ns,
+        })
+    }
+
+    /// The digest, when the opened file is still the one the hint describes.
+    fn digest_for(&self, file: &std::fs::File) -> Option<String> {
+        let metadata = file.metadata().ok()?;
+        let same = FileStat::of(&metadata)
+            == FileStat {
+                size: self.size,
+                mtime_ns: self.mtime_ns,
+            }
+            && metadata.ino() == self.inode
+            && metadata.ctime() * 1_000_000_000 + metadata.ctime_nsec() == self.ctime_ns;
+        same.then(|| self.sha256.clone())
+    }
+}
+
+/// Counts foreground work (watcher changes and the API's queue) while it is pending, so
+/// scan workers wait for it; dropping the guard ends it.
+pub struct Foreground(Arc<AtomicUsize>);
+
+impl Drop for Foreground {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
+/// The longest a scan worker waits for foreground work before taking one more file anyway.
+pub const FOREGROUND_WAIT_LIMIT: Duration = Duration::from_secs(60);
+
 struct FeatureState {
     configuration: FeatureConfiguration,
     backfill_media: bool,
@@ -72,6 +130,8 @@ pub struct RootContext {
     pub image_health_ttl: Duration,
     image_health: Mutex<Option<(Instant, Health)>>,
     watch_stage: Mutex<Option<Arc<ImageStage>>>,
+    text_stage: Mutex<Option<Arc<Stage>>>,
+    foreground: Arc<AtomicUsize>,
     pub activity: RootActivity,
 }
 
@@ -114,6 +174,8 @@ impl RootContext {
             image_health_ttl: Duration::from_secs(30),
             image_health: Mutex::new(None),
             watch_stage: Mutex::new(None),
+            text_stage: Mutex::new(None),
+            foreground: Arc::new(AtomicUsize::new(0)),
             activity: RootActivity::default(),
             cfg,
         }
@@ -213,6 +275,31 @@ impl RootContext {
         )
     }
 
+    /// The thread embedding text for watcher and queued changes, started on first use.
+    pub fn watch_text_stage(self: &Arc<Self>) -> Arc<Stage> {
+        let mut stage = lock(&self.text_stage);
+        Arc::clone(stage.get_or_insert_with(|| Stage::text(Arc::clone(self), &format!("text-embed-{}", self.name))))
+    }
+
+    /// Mark foreground work as pending until the returned guard drops.
+    pub fn foreground(&self) -> Foreground {
+        self.foreground.fetch_add(1, Ordering::SeqCst);
+        Foreground(Arc::clone(&self.foreground))
+    }
+
+    pub fn foreground_pending(&self) -> usize {
+        self.foreground.load(Ordering::SeqCst)
+    }
+
+    /// Hold a scan worker back while foreground work is pending, up to `limit`, so a
+    /// change someone just made is not queued behind a library-wide scan.
+    pub fn yield_to_foreground(&self, limit: Duration) {
+        let deadline = Instant::now() + limit;
+        while self.foreground_pending() > 0 && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+
     fn report(&self, path: &str, feature: &str, result: Report<'_>) {
         report(&self.db, self.root_id, path, feature, result);
     }
@@ -284,6 +371,18 @@ pub fn emit_event(ctx: &RootContext, kind: EventKind, rel_path: &str, target: Op
 /// Index one file. False when this exact version is already indexed: a scan and the
 /// watcher raced, and the second one sees the first one's row.
 pub fn process_file(ctx: &Arc<RootContext>, abs_path: &Path, rel_path: &str, stat: FileStat) -> Result<bool> {
+    process_file_with(ctx, abs_path, rel_path, stat, None)
+}
+
+/// `process_file` for a file the API described: `hint` spares hashing it again. The file
+/// is reopened from the root rather than through `_abs_path`.
+pub fn process_file_with(
+    ctx: &Arc<RootContext>,
+    _abs_path: &Path,
+    rel_path: &str,
+    stat: FileStat,
+    hint: Option<&ContentHint>,
+) -> Result<bool> {
     let _guard = ctx.path_locks.get(rel_path);
     ctx.maybe_refresh_features();
     if !ctx.values().indexer_enabled() {
@@ -319,20 +418,24 @@ pub fn process_file(ctx: &Arc<RootContext>, abs_path: &Path, rel_path: &str, sta
         .is_some_and(|r| r.size == stat.size as i64 && r.mtime_ns == stat.mtime_ns && !r.deleted);
     // A feature transition may re-extract an unchanged file; its digest is still valid.
     let known_sha = if unchanged { row.and_then(|r| r.sha256) } else { None };
-    process_inner(ctx, abs_path, rel_path, stat, known_sha, None)?;
-    // Listeners check access for every event; re-deriving the same version changes nothing.
-    if !same_version {
-        emit_event(
-            ctx,
-            if was_new {
-                EventKind::Created
-            } else {
-                EventKind::Changed
-            },
-            rel_path,
-            None,
-        );
-    }
+    // Listeners hear about the file once it has a row and a preview, not after its text:
+    // they check access and refresh listings for every event, and need nothing more.
+    // Re-deriving the same version changes nothing they show.
+    let visible = || {
+        if !same_version {
+            emit_event(
+                ctx,
+                if was_new {
+                    EventKind::Created
+                } else {
+                    EventKind::Changed
+                },
+                rel_path,
+                None,
+            );
+        }
+    };
+    process_stages(ctx, rel_path, stat, known_sha, hint, None, visible)?;
     Ok(true)
 }
 
@@ -365,9 +468,9 @@ pub fn open_source(ctx: &RootContext, rel_path: &str) -> Result<crate::fsx::Open
     Ok(crate::fsx::open_file(&ctx.abs_path, &parts)?)
 }
 
-/// Hash, extract, chunk, embed and store one file, then build its media derivatives.
-/// The file is reopened from the root rather than through `_abs_path`.
-/// `only_feature = Some("textSearch")` re-reads text without media or embeddings.
+/// Hash, store, preview, extract, chunk and embed one file. The file is reopened from the
+/// root rather than through `_abs_path`. `only_feature = Some("textSearch")` re-reads text
+/// without media or embeddings.
 pub fn process_inner(
     ctx: &Arc<RootContext>,
     _abs_path: &Path,
@@ -376,11 +479,29 @@ pub fn process_inner(
     known_sha: Option<String>,
     only_feature: Option<&str>,
 ) -> Result<()> {
+    process_stages(ctx, rel_path, stat, known_sha, None, only_feature, || {})
+}
+
+/// One file in the order a person notices it: its row (a name search finds it), its
+/// thumbnails, then `visible`, then its text and last its embeddings. With a text stage on
+/// this thread (watcher and queued changes), the embeddings go to that stage: the chunks are
+/// searchable by text at once and the worker moves on instead of waiting for the model.
+/// The file is reopened from the root by descriptor; `hint` stands in for hashing it while
+/// the opened file still matches it.
+pub fn process_stages(
+    ctx: &Arc<RootContext>,
+    rel_path: &str,
+    stat: FileStat,
+    known_sha: Option<String>,
+    hint: Option<&ContentHint>,
+    only_feature: Option<&str>,
+    visible: impl FnOnce(),
+) -> Result<()> {
     let name = basename(rel_path);
     let ext = ext_of(name);
     let mime = guess_mime(name);
     let mut source = open_source(ctx, rel_path)?;
-    let sha = match known_sha {
+    let sha = match known_sha.or_else(|| hint.and_then(|h| h.digest_for(&source.file))) {
         Some(sha) => sha,
         None => crate::fsx::sha256_of_file(&mut source.file)?,
     };
@@ -408,6 +529,17 @@ pub fn process_inner(
         features.thumbnails = false;
         features.image_search = false;
     }
+    if features.internal_thumbnails() {
+        process_thumbnails(ctx, abs_path, rel_path, &ext, &sha, stat.size, false);
+    }
+    if features.image_search
+        && image_embed::is_candidate(&ext)
+        && skip_reason(stat.size, ctx.cfg.thumb_max_bytes).is_none()
+    {
+        process_image_embedding(ctx, rel_path, &sha);
+    }
+    visible();
+
     let settings = ctx.settings();
     let mut awaits_ocr = false;
     let (text, mut status) = if !features.text_search {
@@ -435,6 +567,7 @@ pub fn process_inner(
     let mut error: Option<String> = None;
     let mut semantic_error: Option<String> = None;
     let mut semantic_waiting = false;
+    let mut staged: Option<Arc<Stage>> = None;
     if let (Some(text), "indexed") = (&text, status.as_str()) {
         chars = text.chars().count() as i64;
         let pieces = chunk(
@@ -449,6 +582,11 @@ pub fn process_inner(
             error = Some("embed:unavailable".to_owned());
             status = "partial".to_owned();
             semantic_waiting = true;
+            empty()
+        } else if let Some(stage) = current_text_stage().filter(|_| features.semantic_search) {
+            // Searchable by text now; the stage fills the vectors and marks the row indexed.
+            staged = Some(stage);
+            status = "partial".to_owned();
             empty()
         } else if features.semantic_search {
             match embed_passages(&pieces, &ctx.cfg.embed_url, ctx.cfg.embed_batch) {
@@ -499,32 +637,41 @@ pub fn process_inner(
             },
         );
     }
-    if features.semantic_search {
-        let failure = if status == "partial" && error.as_deref() != Some("embed:unavailable") {
-            semantic_error.as_deref()
-        } else {
-            None
-        };
-        ctx.report(
-            rel_path,
-            "semanticSearch",
-            Report {
-                error: failure,
-                skipped: semantic_waiting || text.is_none(),
-                resolves: false,
-            },
-        );
-    }
-    if features.internal_thumbnails() {
-        process_thumbnails(ctx, abs_path, rel_path, &ext, &sha, stat.size, false);
-    }
-    if features.image_search
-        && image_embed::is_candidate(&ext)
-        && skip_reason(stat.size, ctx.cfg.thumb_max_bytes).is_none()
-    {
-        process_image_embedding(ctx, rel_path, &sha);
+    match staged {
+        Some(stage) => submit_text(ctx, &stage, rel_path, &sha),
+        None if features.semantic_search => {
+            let failure = if status == "partial" && error.as_deref() != Some("embed:unavailable") {
+                semantic_error.as_deref()
+            } else {
+                None
+            };
+            ctx.report(
+                rel_path,
+                "semanticSearch",
+                Report {
+                    error: failure,
+                    skipped: semantic_waiting || text.is_none(),
+                    resolves: false,
+                },
+            );
+        }
+        None => {}
     }
     Ok(())
+}
+
+/// Hand a file's stored chunks to the text stage, or embed them here when its queue is
+/// full: waiting for room while holding the file's lock could wait on the stage itself.
+fn submit_text(ctx: &RootContext, stage: &Stage, rel_path: &str, sha: &str) {
+    let operation = failures::current_operation_id("semanticSearch").unwrap_or_default();
+    match stage.try_submit(rel_path, sha, &operation) {
+        Some(promise) => failures::defer("semanticSearch", promise),
+        None => {
+            if let Err(e) = embed_chunks(ctx, rel_path, Some(sha)) {
+                log(&format!("embed failed for {rel_path}: {}", describe(&e)));
+            }
+        }
+    }
 }
 
 /// A short name for an error, like the exception type the Python indexer recorded.
@@ -617,22 +764,41 @@ pub fn process_thumbnails(
     (error.is_none(), false)
 }
 
+type StageSlot = RefCell<Option<Arc<Stage>>>;
+
 thread_local! {
-    static STAGE: RefCell<Option<Arc<ImageStage>>> = const { RefCell::new(None) };
+    static STAGE: StageSlot = const { RefCell::new(None) };
+    static TEXT_STAGE: StageSlot = const { RefCell::new(None) };
+}
+
+fn scoped<R>(slot: &'static LocalKey<StageSlot>, stage: Option<Arc<Stage>>, work: impl FnOnce() -> R) -> R {
+    let previous = slot.with(|s| s.replace(stage));
+    struct Restore(&'static LocalKey<StageSlot>, Option<Option<Arc<Stage>>>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            let previous = self.1.take().flatten();
+            self.0.with(|s| *s.borrow_mut() = previous);
+        }
+    }
+    let _restore = Restore(slot, Some(previous));
+    work()
 }
 
 /// Run `work` with image embeddings handed to `stage` instead of running inline.
 pub fn with_stage<R>(stage: Option<Arc<ImageStage>>, work: impl FnOnce() -> R) -> R {
-    let previous = STAGE.with(|s| s.replace(stage));
-    struct Restore(Option<Option<Arc<ImageStage>>>);
-    impl Drop for Restore {
-        fn drop(&mut self) {
-            let previous = self.0.take().flatten();
-            STAGE.with(|s| *s.borrow_mut() = previous);
-        }
-    }
-    let _restore = Restore(Some(previous));
-    work()
+    scoped(&STAGE, stage, work)
+}
+
+/// Run `work` with text embeddings handed to `stage` instead of running inline.
+pub fn with_text_stage<R>(stage: Option<Arc<Stage>>, work: impl FnOnce() -> R) -> R {
+    scoped(&TEXT_STAGE, stage, work)
+}
+
+/// The text stage, when one is set and an attempt can carry its deferred outcome.
+fn current_text_stage() -> Option<Arc<Stage>> {
+    TEXT_STAGE
+        .with(|s| s.borrow().clone())
+        .filter(|_| failures::in_attempt())
 }
 
 /// Embed a file's thumbnail, on the current stage when there is one. True when it is done
@@ -730,16 +896,33 @@ pub fn embed_thumbnail(ctx: &RootContext, sha: &str, errors: &mut Vec<String>) -
 
 type StageItem = (String, String, String, Promise);
 
-/// Embeds thumbnails on one thread of its own, so workers never wait for the model.
-/// Each scan owns one; watcher changes share one per root for the life of the process.
-pub struct ImageStage {
+/// One file's step on a stage: `(ctx, path, content key, operation id)` to its outcome.
+type StageWork = fn(&Arc<RootContext>, &str, &str, &str) -> Outcome;
+
+/// Runs one model-bound step for files on a thread of its own, so workers never wait for
+/// the model. Each scan owns an image stage; watcher and queued changes share one image
+/// stage and one text stage per root for the life of the process.
+pub struct Stage {
     sender: Mutex<Option<crossbeam_channel::Sender<StageItem>>>,
     abandoned: Arc<AtomicBool>,
     thread: Mutex<Option<std::thread::JoinHandle<()>>>,
 }
 
-impl ImageStage {
+/// The stage that embeds thumbnails.
+pub type ImageStage = Stage;
+
+impl Stage {
+    /// Embeds thumbnails.
     pub fn start(ctx: Arc<RootContext>, name: &str) -> Arc<Self> {
+        Self::spawn(ctx, name, "image embed", embed_image_staged)
+    }
+
+    /// Embeds the chunks a worker stored without vectors, then marks the row indexed.
+    pub fn text(ctx: Arc<RootContext>, name: &str) -> Arc<Self> {
+        Self::spawn(ctx, name, "text embed", embed_text_staged)
+    }
+
+    fn spawn(ctx: Arc<RootContext>, name: &str, label: &'static str, work: StageWork) -> Arc<Self> {
         let (sender, receiver) = crossbeam_channel::bounded::<StageItem>(SCAN_BACKLOG_LIMIT);
         let abandoned = Arc::new(AtomicBool::new(false));
         let thread_abandoned = Arc::clone(&abandoned);
@@ -748,20 +931,14 @@ impl ImageStage {
             .spawn(move || {
                 for (rel_path, sha, operation, promise) in receiver {
                     let mut outcome = (true, true);
-                    if !thread_abandoned.load(Ordering::SeqCst) && ctx.values().image_search {
-                        let ids = [("imageSearch".to_owned(), operation)].into_iter().collect();
+                    if !thread_abandoned.load(Ordering::SeqCst) {
                         let run = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                            attempt(ids, || {
-                                with_stage(None, || process_image_embedding(&ctx, &rel_path, &sha))
-                            })
+                            work(&ctx, &rel_path, &sha, &operation)
                         }));
-                        outcome = match run {
-                            Ok((_, observed)) => observed.outcomes.get("imageSearch").copied().unwrap_or((true, true)),
-                            Err(_) => {
-                                log(&format!("image embed: unexpected failure for {rel_path}"));
-                                (false, false)
-                            }
-                        };
+                        outcome = run.unwrap_or_else(|_| {
+                            log(&format!("{label}: unexpected failure for {rel_path}"));
+                            (false, false)
+                        });
                     }
                     promise.resolve(outcome);
                 }
@@ -774,21 +951,33 @@ impl ImageStage {
         })
     }
 
+    fn item(rel_path: &str, sha: &str, operation: &str, promise: &Promise) -> StageItem {
+        (
+            rel_path.to_owned(),
+            sha.to_owned(),
+            operation.to_owned(),
+            promise.clone(),
+        )
+    }
+
     pub fn submit(&self, rel_path: &str, sha: &str, operation: &str) -> Promise {
         let promise = Promise::new();
-        let sent = lock(&self.sender).as_ref().map(|s| {
-            s.send((
-                rel_path.to_owned(),
-                sha.to_owned(),
-                operation.to_owned(),
-                promise.clone(),
-            ))
-            .is_ok()
-        });
+        let sent = lock(&self.sender)
+            .as_ref()
+            .map(|s| s.send(Self::item(rel_path, sha, operation, &promise)).is_ok());
         if sent != Some(true) {
             promise.resolve((true, true));
         }
         promise
+    }
+
+    /// `submit` without waiting: `None` when the stage is full or closed.
+    pub fn try_submit(&self, rel_path: &str, sha: &str, operation: &str) -> Option<Promise> {
+        let promise = Promise::new();
+        let sent = lock(&self.sender)
+            .as_ref()
+            .is_some_and(|s| s.try_send(Self::item(rel_path, sha, operation, &promise)).is_ok());
+        sent.then_some(promise)
     }
 
     /// Drain and stop. After a failed scan, `abandon` drops queued work; the next scan
@@ -798,6 +987,39 @@ impl ImageStage {
         lock(&self.sender).take();
         if let Some(thread) = lock(&self.thread).take() {
             let _ = thread.join();
+        }
+    }
+}
+
+fn embed_image_staged(ctx: &Arc<RootContext>, rel_path: &str, sha: &str, operation: &str) -> Outcome {
+    if !ctx.values().image_search {
+        return (true, true);
+    }
+    let ids = [("imageSearch".to_owned(), operation.to_owned())].into_iter().collect();
+    let (_, observed) = attempt(ids, || with_stage(None, || process_image_embedding(ctx, rel_path, sha)));
+    observed.outcomes.get("imageSearch").copied().unwrap_or((true, true))
+}
+
+/// Embed a file's stored chunks under its lock, unless a newer version replaced them: that
+/// version's own stage item embeds it, so this one is a skip rather than a failure.
+fn embed_text_staged(ctx: &Arc<RootContext>, rel_path: &str, sha: &str, operation: &str) -> Outcome {
+    if !ctx.values().semantic_search {
+        return (true, true);
+    }
+    let ids = [("semanticSearch".to_owned(), operation.to_owned())]
+        .into_iter()
+        .collect();
+    let (result, observed) = attempt(ids, || {
+        let _guard = ctx.path_locks.get(rel_path);
+        embed_chunks(ctx, rel_path, Some(sha))
+    });
+    let reported = observed.outcomes.get("semanticSearch").copied();
+    match result {
+        Ok(Embedded::Done) => reported.unwrap_or((true, false)),
+        Ok(_) => (true, true),
+        Err(e) => {
+            log(&format!("embed failed for {rel_path}: {}", describe(&e)));
+            reported.unwrap_or((false, false))
         }
     }
 }
@@ -853,16 +1075,39 @@ pub fn media_derivatives_missing(
     features.image_search && image_embed::is_candidate(&ext) && !row.image_embedded && paths[0].exists()
 }
 
+/// What embedding a file's stored chunks came to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Embedded {
+    Done,
+    /// Semantic search is off.
+    Off,
+    /// The backend is down: the row stays `partial` for a later scan.
+    Waiting,
+    /// The row no longer holds the expected content.
+    Superseded,
+}
+
 /// Fill embeddings for a file whose text is already chunked (`partial`). False when the
 /// backend is down: not an error, the row stays `partial` for a later scan.
 pub fn embed_missing(ctx: &RootContext, rel_path: &str, expected_sha: Option<&str>) -> Result<bool> {
     let _guard = ctx.path_locks.get(rel_path);
+    match embed_chunks(ctx, rel_path, expected_sha)? {
+        Embedded::Done | Embedded::Off => Ok(true),
+        Embedded::Waiting => Ok(false),
+        Embedded::Superseded => anyhow::bail!(
+            "ValueError: Source changed or is no longer indexed. Reindex its text before retrying semantic search."
+        ),
+    }
+}
+
+/// `embed_missing` for a caller that holds the file's path lock.
+pub fn embed_chunks(ctx: &RootContext, rel_path: &str, expected_sha: Option<&str>) -> Result<Embedded> {
     ctx.maybe_refresh_features();
     if !ctx.values().semantic_search {
-        return Ok(true);
+        return Ok(Embedded::Off);
     }
     if ctx.embed_backoff.paused() {
-        return Ok(false);
+        return Ok(Embedded::Waiting);
     }
     if let Some(expected) = expected_sha
         && ctx
@@ -871,9 +1116,7 @@ pub fn embed_missing(ctx: &RootContext, rel_path: &str, expected_sha: Option<&st
             .as_deref()
             != Some(expected)
     {
-        anyhow::bail!(
-            "ValueError: Source changed or is no longer indexed. Reindex its text before retrying semantic search."
-        );
+        return Ok(Embedded::Superseded);
     }
     let rows = ctx
         .db
@@ -884,7 +1127,7 @@ pub fn embed_missing(ctx: &RootContext, rel_path: &str, expected_sha: Option<&st
             Ok(vectors) => vectors,
             Err(e) if is_outage(&e) => {
                 note_embed_outage(ctx, &e);
-                return Ok(false);
+                return Ok(Embedded::Waiting);
             }
             Err(e) => {
                 ctx.report(rel_path, "semanticSearch", failures::failed(&describe(&e)));
@@ -897,12 +1140,23 @@ pub fn embed_missing(ctx: &RootContext, rel_path: &str, expected_sha: Option<&st
     }
     ctx.db.with(|c| db::mark_file_indexed(c, ctx.root_id, rel_path))?;
     ctx.report(rel_path, "semanticSearch", failures::ok());
-    Ok(true)
+    Ok(Embedded::Done)
 }
 
 /// `process_file`, recording any failure on the row: "indexed", "unchanged" or "error".
 pub fn safe_process(ctx: &Arc<RootContext>, abs_path: &Path, rel_path: &str, stat: FileStat) -> &'static str {
-    match process_file(ctx, abs_path, rel_path, stat) {
+    safe_process_with(ctx, abs_path, rel_path, stat, None)
+}
+
+/// `safe_process` with the API's description of the file.
+pub fn safe_process_with(
+    ctx: &Arc<RootContext>,
+    abs_path: &Path,
+    rel_path: &str,
+    stat: FileStat,
+    hint: Option<&ContentHint>,
+) -> &'static str {
+    match process_file_with(ctx, abs_path, rel_path, stat, hint) {
         Ok(true) => "indexed",
         Ok(false) => "unchanged",
         Err(e) => {
@@ -1065,6 +1319,7 @@ fn scan_inner(ctx: &Arc<RootContext>, operations: &HashMap<String, Op>) -> ScanR
                 .name(format!("scan-{}-{i}", ctx.name))
                 .spawn(move || {
                     for job in receiver {
+                        ctx.yield_to_foreground(FOREGROUND_WAIT_LIMIT);
                         tracked_job(&ctx, job, &counters, stage.as_ref(), image_op.as_ref());
                     }
                 })
@@ -1293,15 +1548,31 @@ fn tracked_job(
 
 /// Watcher entry point for one changed file.
 pub fn watch_index(ctx: &Arc<RootContext>, abs_path: &Path, rel_path: &str, stat: FileStat) -> FileResult {
+    watch_index_with(ctx, abs_path, rel_path, stat, None)
+}
+
+/// Entry point for one file someone just changed, seen by the watcher or queued by the API:
+/// foreground work that scans wait for, with both embeddings handed to the root's stages.
+pub fn watch_index_with(
+    ctx: &Arc<RootContext>,
+    abs_path: &Path,
+    rel_path: &str,
+    stat: FileStat,
+    hint: Option<&ContentHint>,
+) -> FileResult {
     ctx.maybe_refresh_features();
     let features = ctx.values();
     if !features.indexer_enabled() {
         return FileResult::plain("disabled");
     }
+    let _foreground = ctx.foreground();
     // Inline embedding paced every watcher worker at the model's speed.
     let stage = (features.image_search && !ctx.cfg.image_embed_url.is_empty()).then(|| ctx.watch_image_stage());
+    let text = features.semantic_search.then(|| ctx.watch_text_stage());
     let (status, observed) = attempt(HashMap::new(), || {
-        with_stage(stage, || safe_process(ctx, abs_path, rel_path, stat))
+        with_stage(stage, || {
+            with_text_stage(text, || safe_process_with(ctx, abs_path, rel_path, stat, hint))
+        })
     });
     FileResult {
         status: status.to_owned(),

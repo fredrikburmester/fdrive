@@ -100,6 +100,16 @@ How the files folder implements it:
   are `trash.configuration.<providerId>` in `app.settings`, disabled at `/.trash` by default,
   read and written through `/api/v1/system/trash?providerId=` ([Trash](TRASH.md)).
 - **Ownership.** The API writes as `FDRIVE_RUN_AS_UID`, the uid the indexer and OCR use.
+- **Changes for the indexer.** Storage reports each change once it succeeds (`onChange`, a
+  `DiskChange` by absolute path; [changes.ts](../packages/local/src/changes.ts)): an upload,
+  copy, delete or new modification time is `changed`, a move is `moved`, and `mkdir` reports
+  nothing. An upload's change carries the sha256 of the bytes written, the size,
+  `mtimeNs` and inode of the file before it is published, and the change time once it is;
+  when the published name no longer holds that inode, the change carries no content.
+  Hashing runs only while something listens. The module turns these into paths under the index root (`onIndexChange`), and the
+  API queues them in `idx.work` (`createIndexWorkQueue`) only when a configured root's
+  `storagePath` is the files folder itself (`indexWorkRoot`). A failed write is logged, never
+  failing the request; see [how changes arrive](INDEXER.md#how-changes-arrive).
 
 ## Tests
 

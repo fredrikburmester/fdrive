@@ -1,6 +1,9 @@
+import type { StorageSession } from "@fdrive/core";
+import type { IndexWorkInput } from "@fdrive/db";
 import { createMemoryRepos } from "@fdrive/db/testing";
-import { describe, expect, it } from "vitest";
-import { deploymentModules, LOCAL_INDEX_ROOT, localIndexRoot } from "./modules.js";
+import { describe, expect, it, vi } from "vitest";
+import { createIndexWorkQueue } from "./index-work.js";
+import { deploymentModules, indexWorkRoot, LOCAL_INDEX_ROOT, localIndexRoot } from "./modules.js";
 import { FAST_PASSWORDS, seedLocalUsers, temporaryStorageRoot } from "./test-fixtures/index.ts";
 
 const root = (name: string, storagePath: string) => ({
@@ -25,6 +28,16 @@ describe("localIndexRoot", () => {
     expect(LOCAL_INDEX_ROOT).toBe("files");
     expect(localIndexRoot(null, "/data")).toBe(LOCAL_INDEX_ROOT);
     expect(localIndexRoot([root("a", "/a"), root("b", "/b")], "/data")).toBe(LOCAL_INDEX_ROOT);
+  });
+});
+
+describe("indexWorkRoot", () => {
+  it("is only a root that names the folder itself", () => {
+    expect(indexWorkRoot([root("photos", "/media"), root("files", "/data/")], "/srv/../data")).toBe(
+      "files",
+    );
+    expect(indexWorkRoot([root("files", "/elsewhere")], "/data")).toBeNull();
+    expect(indexWorkRoot(null, "/data")).toBeNull();
   });
 });
 
@@ -68,5 +81,63 @@ describe("deploymentModules", () => {
       modules.local?.authenticate(instance, { username: "nobody", password: "x" }, { fetch }),
     ).rejects.toMatchObject({ kind: "unauthorized" });
     expect(modules.local?.indexRootName?.(instance)).toBe(LOCAL_INDEX_ROOT);
+  });
+
+  describe("with an index work queue", () => {
+    const instance = { id: "row", baseUrl: "local", config: {} };
+    const session: StorageSession = {
+      externalUsername: "alice",
+    };
+
+    function queue() {
+      const writes: [string, IndexWorkInput[]][] = [];
+      const indexWork = createIndexWorkQueue({
+        write: async (name, items) => {
+          writes.push([name, [...items]]);
+        },
+        onError: vi.fn(),
+      });
+      return { writes, indexWork };
+    }
+
+    it("queues the changes fdrive makes in an indexed files folder", async () => {
+      const storageRoot = temporaryStorageRoot();
+      const { writes, indexWork } = queue();
+      const modules = deploymentModules(
+        { fdriveStorageRoot: storageRoot, fdriveIndexRoots: [root("files", storageRoot)] },
+        createMemoryRepos(),
+        FAST_PASSWORDS,
+        indexWork,
+      );
+      const storage = modules.local?.createStorage(instance, session, { fetch });
+      await storage?.upload("/a.txt", new TextEncoder().encode("a"));
+      await storage?.move("/a.txt", "/b.txt");
+      await vi.waitFor(async () => {
+        await indexWork.flush();
+        expect(writes.flatMap(([, items]) => items)).toHaveLength(2);
+      });
+      expect(new Set(writes.map(([name]) => name))).toEqual(new Set(["files"]));
+      expect(writes.flatMap(([, items]) => items)).toEqual([
+        { path: "alice/a.txt", content: expect.objectContaining({ size: 1 }) },
+        { path: "alice/a.txt", targetPath: "alice/b.txt" },
+      ]);
+    });
+
+    it("queues nothing when no root is the files folder itself", async () => {
+      const storageRoot = temporaryStorageRoot();
+      const { writes, indexWork } = queue();
+      const modules = deploymentModules(
+        { fdriveStorageRoot: storageRoot, fdriveIndexRoots: [root("files", "/elsewhere")] },
+        createMemoryRepos(),
+        FAST_PASSWORDS,
+        indexWork,
+      );
+      expect(modules.local?.indexRootName?.(instance)).toBe("files");
+      const storage = modules.local?.createStorage(instance, session, { fetch });
+      await storage?.upload("/a.txt", new TextEncoder().encode("a"));
+      await new Promise((resolve) => setImmediate(resolve));
+      await indexWork.flush();
+      expect(writes).toEqual([]);
+    });
   });
 });
