@@ -169,7 +169,7 @@ describe("compressToTemp", () => {
     expect(destStorage.dump()).toMatchObject({ "/out/docs/a.txt": "alpha" });
   });
 
-  it("never calls list on a top-level file selection (real SFTPGo, unlike the fake, drops the connection instead of returning bad_request for that call)", async () => {
+  it("never calls list on a top-level file selection", async () => {
     const storage = createMemoryStorage({ "/report.txt": "just one file" });
     const listSpy = vi.fn(storage.list.bind(storage));
     const spiedOnList: StorageProvider = { ...storage, list: listSpy };
@@ -291,13 +291,9 @@ describe("compressToTemp", () => {
     const storage = createMemoryStorage();
     const failing: StorageProvider = {
       ...storage,
-      // `path` resolves as a directory (a clean `bad_request` from
-      // `statFile`, exactly as a real directory would), so `collectPath`
-      // falls through to `list`, whose own failure below is asserted to
-      // propagate unchanged.
-      statFile: async () => {
-        throw new StorageError("bad_request", "is a directory");
-      },
+      // `path` stats as a directory, so `collectPath` lists it, and that
+      // listing's own failure below is asserted to propagate unchanged.
+      stat: async () => ({ kind: "dir", size: 0, modifiedAt: null, contentType: null }),
       list: async () => {
         throw new StorageError("forbidden", "no access");
       },
@@ -320,7 +316,7 @@ describe("compressToTemp", () => {
     const storage = createMemoryStorage({ "/report.txt": "content" });
     const withNullModifiedAt: StorageProvider = {
       ...storage,
-      statFile: async () => ({ size: 7, modifiedAt: null, contentType: null }),
+      stat: async () => ({ kind: "file", size: 7, modifiedAt: null, contentType: null }),
     };
     const tmpDir = await tmpDirFor("null-modified-at");
 

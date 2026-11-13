@@ -155,9 +155,9 @@ export interface IdentityRepo {
 }
 
 /**
- * The envelope-encrypted SFTPGo password for one identity, plus the
- * currently cached (also sealed) SFTPGo JWT and its expiry, when one has
- * been minted.
+ * The envelope-encrypted credential an identity last signed in with. The
+ * cached token columns held a sealed upstream token for storage that minted
+ * one; no storage does any more, so they stay empty.
  */
 export interface Credential {
   readonly identityId: string;

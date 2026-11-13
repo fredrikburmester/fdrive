@@ -89,52 +89,27 @@ function sameParent(paths: readonly string[]): boolean {
 /**
  * Confirms `path` names an existing directory, or throws the matching
  * `ApiHttpError`: `not_found` when it does not exist, `bad_request` when it
- * is a file.
- *
- * Tries `statFile` (a `HEAD`) first, not `list` (a `GET` to SFTPGo's
- * `dirs` endpoint): `statFile` is safe for every outcome here, a clean
- * stat when `path` is a file, or a clean `bad_request` when it is a
- * directory. Calling `list` directly on a path that turns out to be a
- * plain file would do the same job against the in-memory fake server this
- * is tested against, but a real SFTPGo server (verified against v2.7.5)
- * drops the connection outright in that case instead of responding with a
- * clean error (see `collectPath` in `../archive/compress.js` for the full
- * story), which fdrive cannot tell apart from an actual network failure.
- * `list` below only ever runs once `statFile` has ruled out `path` being a
- * file.
+ * is anything else.
  */
 async function assertIsDirectory(
   storage: Principal["storage"],
   path: string,
   label: string,
 ): Promise<void> {
-  try {
-    await storage.statFile(path);
-  } catch (error) {
-    if (isStorageError(error) && error.kind === "bad_request") {
-      await runStorageCall(() => storage.list(path));
-      return;
-    }
-    if (isStorageError(error)) {
-      throw toApiHttpError(error);
-    }
-    throw error;
+  const stat = await runStorageCall(() => storage.stat(path));
+  if (stat.kind !== "dir") {
+    throw new ApiHttpError("bad_request", `${label} is not a folder: ${path}`);
   }
-  throw new ApiHttpError("bad_request", `${label} is not a folder: ${path}`);
 }
 
 /** True when `path` already exists (as a file or a directory). */
 async function pathExists(storage: Principal["storage"], path: string): Promise<boolean> {
   try {
-    await storage.statFile(path);
+    await storage.stat(path);
     return true;
   } catch (error) {
     if (isStorageError(error) && error.kind === "not_found") {
       return false;
-    }
-    if (isStorageError(error) && error.kind === "bad_request") {
-      // statFile reports "bad_request" for a directory: it exists.
-      return true;
     }
     if (isStorageError(error)) {
       throw toApiHttpError(error);

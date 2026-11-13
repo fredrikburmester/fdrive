@@ -104,10 +104,8 @@ export function buildDevSampleFiles(): Record<string, string> {
 /**
  * Merges the shared testkit seed users/files with the dev-only user and its
  * sample files. Only a user's username and password are kept, and only
- * files owned by a user: SFTPGo-era fixtures such as the "@shared" virtual
- * folder have no place in the local folder. Pure: takes the shared seed
- * data as arguments so it can be tested without importing the real
- * testkit module.
+ * files owned by a user. Pure: takes the shared seed data as arguments so
+ * it can be tested without importing the real testkit module.
  */
 export function buildDevSeed(
   sharedUsers: readonly DevUser[],

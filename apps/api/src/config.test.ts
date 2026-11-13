@@ -69,18 +69,7 @@ describe("parseIndexRoots", () => {
     expect(parseIndexRoots(raw)).toHaveLength(2);
   });
 
-  it("reads sftpgoPath, the key's name before the local folder, as storagePath", () => {
-    const raw = JSON.stringify([
-      { name: "files", sftpgoPath: "/srv/sftpgo/data", indexerPath: "/roots/files" },
-      { name: "both", storagePath: "/new", sftpgoPath: "/old", indexerPath: "/roots/both" },
-    ]);
-    expect(parseIndexRoots(raw)).toEqual([
-      { name: "files", storagePath: "/srv/sftpgo/data", indexerPath: "/roots/files" },
-      { name: "both", storagePath: "/new", indexerPath: "/roots/both" },
-    ]);
-  });
-
-  it("throws when a root names neither storagePath nor sftpgoPath", () => {
+  it("throws when a root names no storagePath", () => {
     expect(() =>
       parseIndexRoots(JSON.stringify([{ name: "files", indexerPath: "/roots/files" }])),
     ).toThrow(/storagePath/);
@@ -205,16 +194,6 @@ describe("loadConfig", () => {
     expect(() => loadConfig({ ...REQUIRED_ENV, FDRIVE_STORAGE_ROOT: "data" })).toThrow(
       /FDRIVE_STORAGE_ROOT.*absolute path/,
     );
-  });
-
-  it("ignores the retired SFTPGO_URL and FDRIVE_HOME_TEMPLATE", () => {
-    const config = loadConfig({
-      ...REQUIRED_ENV,
-      SFTPGO_URL: "not a url",
-      FDRIVE_HOME_TEMPLATE: "no-colon",
-    });
-    expect(config).not.toHaveProperty("sftpgoUrl");
-    expect(config).not.toHaveProperty("fdriveHomeTemplate");
   });
 
   it("parses every variable when all are set validly", () => {

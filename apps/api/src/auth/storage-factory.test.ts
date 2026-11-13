@@ -21,7 +21,6 @@ import {
   withIdempotentMkdir,
   withRecycleFolderTrash,
 } from "./storage-factory.ts";
-import type { TokenSource } from "./token-source.js";
 
 function notImplemented(): never {
   throw new Error("not implemented in this stub");
@@ -68,52 +67,37 @@ function providerRow(id: string, baseUrl: string): Provider {
 }
 
 /**
- * Storage that signs every request with the session's upstream token, the
- * way a token-minting backend does: `list` and `deleteFile` each send one
- * request to the instance's address.
+ * Storage that sends every call to the instance's address: `list` and
+ * `deleteFile` each send one request there, naming the session's user.
  */
-const tokenModule: ProviderModule = fakeProviderModule({
+const addressedModule: ProviderModule = fakeProviderModule({
   trash: "move",
   createStorage: (instance, session, ctx) =>
     makeStubStorage({
       async list(path) {
-        const token = await session.getToken();
         await ctx.fetch(`${instance.baseUrl}/list?path=${encodeURIComponent(path)}`, {
-          headers: { authorization: `Bearer ${token}` },
+          headers: { "x-user": session.externalUsername },
         });
         return [];
       },
       async deleteFile(path) {
-        const token = await session.getToken();
         await ctx.fetch(`${instance.baseUrl}/files?path=${encodeURIComponent(path)}`, {
           method: "DELETE",
-          headers: { authorization: `Bearer ${token}` },
+          headers: { "x-user": session.externalUsername },
         });
       },
     }),
 });
 
-function resolvedFor(provider: Provider, module: ProviderModule = tokenModule): IdentityProvider {
+function resolvedFor(
+  provider: Provider,
+  module: ProviderModule = addressedModule,
+): IdentityProvider {
   return {
     identity: { ...IDENTITY, providerId: provider.id },
     provider,
     module,
     instance: { id: provider.id, baseUrl: provider.baseUrl, config: provider.config },
-  };
-}
-
-function tokenSourceStub(
-  token: string | null = "a-token",
-): Pick<TokenSource, "sessionFor" | "get" | "credential"> {
-  return {
-    sessionFor: (_identityId, externalUsername) => ({
-      externalUsername,
-      getCredential: async () => ({ password: "pw" }),
-      getToken: async () => token,
-      invalidateToken: async () => {},
-    }),
-    get: async () => token,
-    credential: async () => ({ password: "pw" }),
   };
 }
 
@@ -128,37 +112,19 @@ const TRASH_SETTINGS: TrashSettings = {
 };
 
 it("captures the identity's provider for delayed reads/writes without retargeting", async () => {
-  const requests: { host: string; authorization: string | null; method: string }[] = [];
+  const requests: { host: string; user: string | null }[] = [];
   const fetchImpl: typeof globalThis.fetch = async (url, init) => {
     requests.push({
       host: new URL(String(url)).host,
-      authorization: new Headers(init?.headers).get("authorization"),
-      method: init?.method ?? "GET",
+      user: new Headers(init?.headers).get("x-user"),
     });
     return Response.json(init?.method === "DELETE" ? { message: "ok" } : []);
   };
   const forIdentity = vi
     .fn()
     .mockResolvedValue(resolvedFor(providerRow("provider-a", "http://a.test")));
-  let token: string | null = "a-token";
-  const tokenSource: Pick<TokenSource, "sessionFor" | "get" | "credential"> = {
-    sessionFor: (_id, externalUsername) => ({
-      externalUsername,
-      getCredential: async () => ({}),
-      getToken: async () => {
-        if (token === null) {
-          throw new ApiHttpError("upstream_unavailable", "identity provider unavailable");
-        }
-        return token;
-      },
-      invalidateToken: async () => {},
-    }),
-    get: async () => token,
-    credential: async () => ({}),
-  };
   const factory = createIdentityStorageFactory({
     providers: { forIdentity },
-    tokenSource,
     fetch: fetchImpl,
     clock: () => new Date(0),
   });
@@ -166,17 +132,11 @@ it("captures the identity's provider for delayed reads/writes without retargetin
   forIdentity.mockResolvedValue(resolvedFor(providerRow("provider-b", "http://b.test")));
   await storage.list("/");
   await storage.deleteFile("/same.txt");
-  expect(requests.map((request) => request.host)).toEqual(["a.test", "a.test"]);
-  expect(requests.map((request) => request.authorization)).toEqual([
-    "Bearer a-token",
-    "Bearer a-token",
+  expect(requests).toEqual([
+    { host: "a.test", user: "alice" },
+    { host: "a.test", user: "alice" },
   ]);
   expect(forIdentity).toHaveBeenCalledOnce();
-  token = null;
-  await expect(storage.deleteFile("/later.txt")).rejects.toMatchObject({
-    kind: "upstream_unavailable",
-  });
-  expect(requests).toHaveLength(2);
 });
 
 it("awaits binding and refuses an unresolved provider", async () => {
@@ -186,7 +146,6 @@ it("awaits binding and refuses an unresolved provider", async () => {
         throw new ApiHttpError("upstream_unavailable", "Unavailable");
       },
     },
-    tokenSource: tokenSourceStub(),
     fetch: vi.fn(),
     clock: () => new Date(0),
   });
@@ -196,7 +155,6 @@ it("awaits binding and refuses an unresolved provider", async () => {
 it("leaves storage.trash undefined when no trash settings are configured", async () => {
   const factory = createIdentityStorageFactory({
     providers: { forIdentity: async () => resolvedFor(providerRow("provider-a", "http://a.test")) },
-    tokenSource: tokenSourceStub(),
     fetch: async () => Response.json([]),
     clock: () => new Date(0),
   });
@@ -214,7 +172,6 @@ it("extends native-trash storage with a recycle-folder view when trash is enable
     providers: {
       forIdentity: async () => resolvedFor(providerRow("provider-a", "http://a.test"), module),
     },
-    tokenSource: tokenSourceStub(),
     fetch: vi.fn(),
     clock: () => new Date(0),
     resolveTrashSettings: async () => TRASH_SETTINGS,
@@ -237,7 +194,6 @@ it("moves deletes into the recycle folder for a module whose trash strategy is m
     providers: {
       forIdentity: async () => resolvedFor(providerRow("provider-a", "http://a.test"), module),
     },
-    tokenSource: tokenSourceStub(),
     fetch: vi.fn(),
     clock: () => at,
     resolveTrashSettings: async () => TRASH_SETTINGS,
@@ -257,7 +213,6 @@ it("adds no trash for a module without one even when settings enable it", async 
     providers: {
       forIdentity: async () => resolvedFor(providerRow("provider-a", "http://a.test"), module),
     },
-    tokenSource: tokenSourceStub(),
     fetch: vi.fn(),
     clock: () => new Date(0),
     resolveTrashSettings: async () => TRASH_SETTINGS,
@@ -271,7 +226,6 @@ it("keeps a coherent Trash revision per storage while new requests see updates",
   let settings = TRASH_SETTINGS;
   const factory = createIdentityStorageFactory({
     providers: { forIdentity: async () => resolvedFor(providerRow("provider-a", "http://a.test")) },
-    tokenSource: tokenSourceStub(),
     fetch: async () => Response.json([]),
     clock: () => new Date(0),
     resolveTrashSettings: async () => settings,
@@ -287,50 +241,19 @@ it("keeps a coherent Trash revision per storage while new requests see updates",
   expect(second.trash).toBeDefined();
 });
 
-it("pins storage to a token fetched once and refuses a foreign provider", async () => {
-  const get = vi.fn(async () => "pinned-token");
+it("pins storage to the identity's provider and refuses a foreign provider", async () => {
   const requests: string[] = [];
   const factory = createPinnedStorageFactory({
     providers: { forIdentity: async () => resolvedFor(providerRow("provider-a", "http://a.test")) },
-    tokenSource: { ...tokenSourceStub(), get },
-    fetch: async (_url, init) => {
-      requests.push(new Headers(init?.headers).get("authorization") ?? "");
+    fetch: async (url, init) => {
+      requests.push(`${new URL(String(url)).host} ${new Headers(init?.headers).get("x-user")}`);
       return Response.json([]);
     },
   });
   const storage = await factory("identity-a", "provider-a");
-  expect(get).toHaveBeenCalledOnce();
   await storage.list("/");
-  await storage.list("/");
-  expect(requests).toEqual(["Bearer pinned-token", "Bearer pinned-token"]);
-  expect(get).toHaveBeenCalledOnce();
+  expect(requests).toEqual(["a.test alice"]);
   await expect(factory("identity-a", "provider-b")).rejects.toThrow(/not bound/);
-});
-
-it("gives pinned storage the stored credential and a token it never forgets", async () => {
-  const credential = vi.fn(async () => ({ username: "alice", password: "pw" }));
-  const seen: unknown[] = [];
-  const module = fakeProviderModule({
-    createStorage: (_instance, session) =>
-      makeStubStorage({
-        async list() {
-          seen.push(await session.getCredential());
-          await session.invalidateToken();
-          seen.push(await session.getToken());
-          return [];
-        },
-      }),
-  });
-  const factory = createPinnedStorageFactory({
-    providers: {
-      forIdentity: async () => resolvedFor(providerRow("provider-a", "http://a.test"), module),
-    },
-    tokenSource: { ...tokenSourceStub("pinned"), credential },
-    fetch: vi.fn(),
-  });
-  await (await factory("identity-a", "provider-a")).list("/");
-  expect(seen).toEqual([{ username: "alice", password: "pw" }, "pinned"]);
-  expect(credential).toHaveBeenCalledWith("identity-a");
 });
 
 it("withRecycleFolderTrash spreads the original provider and adds trash without mutating it", () => {
@@ -418,7 +341,6 @@ it("asks the module to admit the login before building any storage", async () =>
   const localRow: Provider = { ...providerRow("provider-local", "local"), type: "local" };
   const deps = {
     providers: { forIdentity: async () => resolvedFor(localRow, local.module) },
-    tokenSource: tokenSourceStub(null),
     fetch: vi.fn(),
     clock: () => new Date(0),
   };
@@ -454,7 +376,6 @@ it("passes a failure that is not a storage error out of admission unchanged", as
     providers: {
       forIdentity: async () => resolvedFor(providerRow("provider-a", "http://a"), module),
     },
-    tokenSource: tokenSourceStub(),
     fetch: vi.fn(),
     clock: () => new Date(0),
   });

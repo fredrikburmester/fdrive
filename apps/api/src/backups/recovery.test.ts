@@ -659,19 +659,14 @@ it("provides an explicit host-only ownership repair and rejects accidental live 
   );
 });
 
-it("refreshes only the pinned storage identity and supports providers without bearer tokens", async () => {
+it("builds storage for the verified identity only", async () => {
   const real = fileserver;
   let session!: StorageSession;
   const storage = createMemoryStorage();
-  const authenticate = vi.fn(async () => ({
-    externalUsername: "alice",
-    token: { token: "initial", expiresAt: new Date(Date.now() + 60_000) },
-  }));
-  const mint = vi.fn(async () => ({ token: "renewed", expiresAt: new Date(Date.now() + 60_000) }));
+  const authenticate = vi.fn(async () => ({ externalUsername: "alice" }));
   const providerModule = {
     ...real,
     authenticate,
-    mint,
     createStorage: (_instance: unknown, value: StorageSession) => {
       session = value;
       return storage;
@@ -680,24 +675,15 @@ it("refreshes only the pinned storage identity and supports providers without be
   const instance = { id: provider, baseUrl: SOURCE_URL, config: {} };
   const credential = { password: "secret" };
   expect(await rawBackupStorage(providerModule, instance, credential, "alice")).toBe(storage);
-  expect(await session.getCredential()).toEqual(credential);
-  expect(await session.getToken()).toBe("initial");
-  expect(mint).not.toHaveBeenCalled();
-  await session.invalidateToken();
-  expect(await session.getToken()).toBe("renewed");
+  expect(session).toEqual({ externalUsername: "alice" });
+  expect(authenticate).toHaveBeenCalledWith(
+    instance,
+    credential,
+    expect.objectContaining({ expectedUsername: "alice" }),
+  );
   await expect(rawBackupStorage(providerModule, instance, credential, "bob")).rejects.toThrow(
     "identity changed",
   );
-  const { mint: _mint, ...withoutMint } = providerModule;
-  await rawBackupStorage(withoutMint, instance, credential);
-  await session.invalidateToken();
-  expect(await session.getToken()).toBeNull();
-  authenticate.mockResolvedValue({
-    externalUsername: "alice",
-    token: { token: "expired", expiresAt: new Date(0) },
-  });
-  await rawBackupStorage(providerModule, instance, credential);
-  expect(await session.getToken()).toBe("renewed");
 });
 
 it("discovers and fetches a completed bucket copy with no database or application key", async () => {

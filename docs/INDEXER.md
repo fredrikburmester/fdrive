@@ -245,10 +245,9 @@ Environment (see `deploy/.env.example`):
 - `FDRIVE_FILES_DIR`: the host folder fdrive serves, one subfolder per user.
   It is mounted at `/data` read-write into the api (`FDRIVE_STORAGE_ROOT`) and
   OCR, and read-only into the indexer, which indexes it as the root `files`
-  (`INDEX_ROOTS=files=/data`). `FDRIVE_INDEX_SFTPGO_DIR`, its older name,
-  still works.
+  (`INDEX_ROOTS=files=/data`).
 - The api's `FDRIVE_INDEX_ROOTS` names each indexed root with where the api
-  sees it (`storagePath`; `sftpgoPath` is still read) and where the indexer
+  sees it (`storagePath`) and where the indexer
   sees it (`indexerPath`), for example
   `[{"name":"files","storagePath":"/data","indexerPath":"/data"}]`. The root
   whose `storagePath` is `FDRIVE_STORAGE_ROOT` (or the only root) is the one

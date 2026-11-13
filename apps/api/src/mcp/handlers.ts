@@ -384,8 +384,8 @@ export interface ListDirectoryArgs {
 }
 
 /**
- * Lists a folder directly through `principal.storage`, authorized natively
- * by the storage provider itself (SFTPGo permissions), independent of index
+ * Lists a folder directly through `principal.storage`, authorized by the
+ * storage itself (the login's own and shared folders), independent of index
  * availability: this tool never consults `ScopeResolver` or `IndexQueries`.
  * A configured recycle folder is the one provider-backed location withheld
  * from ordinary browsing; direct requests into it fail before storage is

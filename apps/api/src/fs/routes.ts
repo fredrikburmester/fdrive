@@ -200,13 +200,12 @@ export async function runStorageCall<T>(fn: () => Promise<T>): Promise<T> {
 
 /**
  * Ensures nothing already exists at `target` before move, copy, or rename
- * ask the storage provider to relocate something there. Not every
- * provider's move and copy report a conflict for an occupied target
- * themselves: some backends (SFTPGo, which fdrive once used) silently
- * replace an existing file instead of failing. A route that let that happen
- * would silently destroy whatever used to be at `target`, so it checks
- * first with `statFile` instead, mirroring the same check
- * `@fdrive/core`'s trash restore relies on (see
+ * ask the storage provider to relocate something there. The storage port
+ * lets move and copy replace an occupied target unless told not to (the
+ * local folder's copy does), and a route that let that happen would
+ * silently destroy whatever used to be at `target`, so it checks first with
+ * `statFile` instead, mirroring the same check `@fdrive/core`'s trash
+ * restore relies on (see
  * `packages/core/src/trash/recycle-folder-trash.ts`).
  *
  * `statFile` succeeding means a file is already there: conflict. A

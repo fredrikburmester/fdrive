@@ -13,9 +13,8 @@ login's files. Mapping is segment-aware and must round-trip.
 Every login's home is `<root>/<username>`, shown at `/`: the scope
 `{rootName: root, fsPrefix: "/<username>", virtualPrefix: "/"}`. The root is the index root
 its provider names (`ProviderModule.indexRootName`). The local folder names the configured
-root whose `storagePath` is `FDRIVE_STORAGE_ROOT`, or the only root there is. Nothing is configured per
-login: home templates, per-login overrides and folder mappings went with SFTPGo, and
-migration 0017 deletes their stored settings.
+root whose `storagePath` is `FDRIVE_STORAGE_ROOT`, or the only root there is. Nothing is
+configured per login.
 
 ## Configured and indexed scopes
 
@@ -65,7 +64,7 @@ Regression coverage includes the [resolver](../apps/api/src/scoping/resolver.tes
 [round trip](../apps/api/src/scoping/round-trip.test.ts),
 [local folder scoping](../apps/api/test/integration/scopes-local.test.ts) (two logins with
 the same virtual names, a shared folder over a shadowed physical one, a file gone from disk,
-and the MCP tools) and [provider binding](../apps/api/test/integration/provider-binding.test.ts).
+and the MCP tools).
 
 ## MCP folder grants
 

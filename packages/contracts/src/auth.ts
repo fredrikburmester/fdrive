@@ -4,8 +4,8 @@ import { ProviderCapabilities, ProviderFieldValues, ProviderType } from "./provi
 
 /**
  * Body for `POST /api/v1/auth/login`. `credential` holds the values of the
- * provider's `credentialFields` (for SFTPGo: `username`, `password` and an
- * optional `otp`), validated by the provider module on the server.
+ * provider's `credentialFields` (for the files folder: `username` and
+ * `password`), validated by the provider module on the server.
  * `providerId` may be omitted when exactly one provider is enabled.
  */
 export const LoginRequest = z.strictObject({

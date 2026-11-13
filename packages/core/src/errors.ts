@@ -38,9 +38,8 @@ export function isCoreError(e: unknown): e is CoreError {
 
 /**
  * The kinds of failure a `StorageProvider` can raise, shared by every
- * provider implementation (SFTPGo today, others later) so callers such as
- * `apps/api` can map them to HTTP responses without knowing which provider
- * backs a given identity.
+ * provider implementation so callers such as `apps/api` can map them to
+ * HTTP responses without knowing which provider backs a given identity.
  */
 export type StorageErrorKind =
   | "not_found"

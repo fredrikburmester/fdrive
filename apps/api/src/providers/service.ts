@@ -73,10 +73,9 @@ export interface ProviderService {
   /**
    * Runs once at startup: creates and pins the row of every module the
    * deployment manages (the local folder, when `FDRIVE_STORAGE_ROOT` is
-   * set), and unpins and disables any other pinned row, such as an SFTPGo
-   * row from before the local folder replaced it or a local row whose folder
-   * is no longer configured. The pinned row is always enabled: nothing but
-   * the deployment turns it on or off. Idempotent.
+   * set), and unpins and disables any other pinned row, such as a local row
+   * whose folder is no longer configured. The pinned row is always enabled:
+   * nothing but the deployment turns it on or off. Idempotent.
    */
   seedFromEnvironment(): Promise<void>;
 }
@@ -235,9 +234,9 @@ export function createProviderService(deps: ProviderServiceDeps): ProviderServic
       const rows = await repo.list();
       for (const row of rows) {
         if (!row.managedByEnv || managed.some((module) => module.type === row.type)) continue;
-        // The deployment no longer configures this row (an SFTPGo row from
-        // before the local folder, or a local row whose folder was removed):
-        // its logins stop until the deployment configures it again.
+        // The deployment no longer configures this row (a local row whose
+        // folder was removed): its logins stop until the deployment
+        // configures it again.
         await repo.update(row.id, { managedByEnv: false, enabled: false });
         eventLog.record(
           "general",
