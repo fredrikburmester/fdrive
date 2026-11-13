@@ -325,9 +325,9 @@ def test_startup_waits_for_failure_history_migration(context):
     conn.execute('ALTER TABLE idx.processing_failures RENAME TO migration_pending')
     try:
         assert db.wait_for_schema_version(
-            conn, 1, 10, logs.append,
+            conn, 2, 10, logs.append,
             sleep=lambda _: conn.execute('ALTER TABLE idx.migration_pending RENAME TO processing_failures'),
-        ) == 1
+        ) == 2
         assert any("processing_failures migration" in message for message in logs)
     finally:
         if conn.execute("SELECT to_regclass('idx.migration_pending')").fetchone()[0] is not None:
