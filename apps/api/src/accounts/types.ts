@@ -3,7 +3,6 @@ import type { Identity, IdentityLinksRepo, Repos } from "@fdrive/db";
 import type { LoginLimiter } from "../auth/login-limiter.js";
 import type { Principal } from "../auth/principal.js";
 import type { AuthService } from "../auth/service.js";
-import type { TokenSource } from "../auth/token-source.js";
 import type { ProviderService } from "../providers/service.js";
 
 export type AccountIdentityOperations = IdentityLinksRepo;
@@ -20,7 +19,6 @@ export interface AccountRequestContext {
 export interface AccountsDeps extends VerifiedCredentialDeps {
   readonly links: AccountIdentityOperations;
   readonly auth: AuthService;
-  readonly tokenSource: Pick<TokenSource, "invalidate" | "prime">;
   readonly master: Uint8Array;
   readonly clock: () => Date;
   readonly storageForIdentity: (identity: Identity) => StorageProvider | Promise<StorageProvider>;

@@ -46,7 +46,6 @@ removed on 2026-11-13.
 | `probe` | The root is a folder the API can read, write and enter |
 | `authenticate` | Checks the password against `app.local_users`: `unauthorized` when wrong, `forbidden` when disabled, and a credential naming another user than `ctx.expectedUsername` is refused |
 | `admit` | Refuses a disabled or removed user on every request, not only at sign-in |
-| `mint` | Absent, so `StorageSession.getToken()` returns `null`; the token cache in [token-source.ts](../apps/api/src/auth/token-source.ts) stays for a module that mints |
 | `createStorage` | The home at `<root>/<username>`, plus `/Shared with me` from `app.local_grants` |
 
 ## Capabilities

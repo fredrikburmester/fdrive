@@ -20,7 +20,7 @@ import type { LoginLimiter } from "./login-limiter.js";
 import type { Principal } from "./principal.js";
 import { COOKIE_NAME, generateSessionId, hashSessionId } from "./sessions.js";
 import { type IdentityStorageFactory, unavailableStorage } from "./storage-factory.ts";
-import { parseStoredCredential, type TokenSource } from "./token-source.js";
+import { parseStoredCredential } from "./stored-credential.ts";
 
 /** How stale a session's `lastSeenAt` must be before `resolvePrincipal` slides its expiry. */
 const SLIDING_TOUCH_THRESHOLD_MS = 5 * 60 * 1000;
@@ -65,7 +65,6 @@ export interface CreateAuthServiceDeps {
   readonly clock: () => Date;
   readonly config: AppConfig;
   readonly limiter: LoginLimiter;
-  readonly tokenSource: Pick<TokenSource, "prime">;
   readonly storageFactory: IdentityStorageFactory;
   /** Usernames always treated as admins, in addition to `accounts.is_admin`. */
   readonly adminUsernames: readonly string[];
@@ -85,7 +84,7 @@ export function createAuthService(deps: CreateAuthServiceDeps): AuthService {
     return resolved?.provider.managedByEnv === true;
   }
 
-  /** The login as `/auth/me` shows it; `null` when its storage type is gone (an old SFTPGo login). */
+  /** The login as `/auth/me` shows it; `null` when this deployment has no module for its storage. */
   async function summarize(identity: {
     id: string;
     providerId: string;
@@ -205,14 +204,6 @@ export function createAuthService(deps: CreateAuthServiceDeps): AuthService {
         },
       }),
     );
-    try {
-      if (verified.token !== undefined) {
-        await deps.tokenSource.prime(result.identity.id, verified.token);
-      }
-    } catch (error) {
-      await deps.repos.sessions.delete(idHash);
-      throw error;
-    }
     const identity = await deps.repos.identities.get(result.identity.id);
     const session = await deps.repos.sessions.getByIdHash(idHash, deps.clock());
     if (

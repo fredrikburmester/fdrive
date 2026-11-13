@@ -19,7 +19,6 @@ it("scopes env administrators to the storage the deployment pins", async () => {
   const auth = createAuthModule({
     ...h.deps,
     providers: h.providers,
-    tokenSource: h.tokenSource,
     identityLinks: h.links,
     config: h.config,
     storageFactory: h.storageFactory,

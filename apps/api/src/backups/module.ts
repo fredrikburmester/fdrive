@@ -46,27 +46,7 @@ export async function rawBackupStorage(
   const verified = await module.authenticate(instance, credential, context);
   if (expectedUsername && verified.externalUsername !== expectedUsername)
     throw Error("Backup credential identity changed");
-  let token = verified.token;
-  return module.createStorage(
-    instance,
-    {
-      externalUsername: verified.externalUsername,
-      getCredential: async () => credential,
-      async getToken() {
-        if (!token || token.expiresAt.getTime() < Date.now() + 10_000)
-          token = await module.mint?.(
-            instance,
-            { externalUsername: verified.externalUsername, credential },
-            context,
-          );
-        return token?.token ?? null;
-      },
-      async invalidateToken() {
-        token = undefined;
-      },
-    },
-    context,
-  );
+  return module.createStorage(instance, { externalUsername: verified.externalUsername }, context);
 }
 export function createBackupModule(config: AppConfig, modules: ProviderModules) {
   const pool = new Pool({ connectionString: config.databaseUrl, max: 6 });

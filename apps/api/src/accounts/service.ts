@@ -115,10 +115,6 @@ export function createAccountsService(deps: AccountsDeps) {
           }),
         }),
       );
-      await deps.tokenSource.invalidate(identity.id);
-      if (verified.token !== undefined) {
-        await deps.tokenSource.prime(identity.id, verified.token);
-      }
       return rotate(session, identity.id);
     },
     async unlink(
@@ -137,7 +133,6 @@ export function createAccountsService(deps: AccountsDeps) {
           at: deps.clock(),
         }),
       );
-      await deps.tokenSource.invalidate(identityId);
       return rotate(
         session,
         session.activeIdentityId === identityId

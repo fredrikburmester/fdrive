@@ -9,7 +9,7 @@ import type { Logger } from "pino";
 import { onTestFinished, vi } from "vitest";
 import { activityFixture } from "../../../test/activity-fixture.js";
 import { createApp } from "../../app.ts";
-import { createAuthModule, createLoginLimiter, createTokenSource } from "../../auth/index.ts";
+import { createAuthModule, createLoginLimiter } from "../../auth/index.ts";
 import { createIdentityStorageFactory } from "../../auth/storage-factory.ts";
 import { memoryIdentityOperations } from "../../auth/test-fixtures/index.ts";
 import { type AppConfig, loadConfig } from "../../config.ts";
@@ -133,10 +133,8 @@ export function sharesHarness(options: SharesHarnessOptions = {}) {
     const row = await repos.providers.ensure({ type: "local", baseUrl: "local" });
     return repos.providers.update(row.id, { enabled: true, managedByEnv: true });
   })();
-  const tokenSource = createTokenSource({ repos, providers, master, clock, fetch: fetchImpl });
   const storageFactory = createIdentityStorageFactory({
     providers,
-    tokenSource,
     fetch: fetchImpl,
     clock,
   });
@@ -149,7 +147,6 @@ export function sharesHarness(options: SharesHarnessOptions = {}) {
     clock,
     config,
     limiter: createLoginLimiter({ clock }),
-    tokenSource,
     storageFactory,
   });
   const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() } as unknown as Logger;

@@ -41,14 +41,7 @@ import { registerAiRoutes } from "./ai/routes.ts";
 import { createAiSettingsService, type ResolvedAiConfig } from "./ai/settings.ts";
 import type { AppHono } from "./app.js";
 import { createApp } from "./app.js";
-import {
-  createAuthModule,
-  createLoginLimiter,
-  createTokenSource,
-  open,
-  parseMasterKey,
-  seal,
-} from "./auth/index.js";
+import { createAuthModule, createLoginLimiter, open, parseMasterKey, seal } from "./auth/index.js";
 import {
   createIdentityStorageFactory,
   createPinnedStorageFactory,
@@ -281,13 +274,6 @@ export async function composeApp(
   const bus = createEventBus();
   const jobRunner = createJobRunner({ clock, bus });
   const limiter = createLoginLimiter({ clock });
-  const tokenSource = createTokenSource({
-    repos,
-    providers: providerService,
-    master,
-    clock,
-    fetch: fetchImpl,
-  });
   // The address everyone opens fdrive at, chosen in onboarding. Deployments
   // from before it was a setting of its own stored it as Office's `appUrl`;
   // that value stays in force until the owner saves the address here.
@@ -301,7 +287,6 @@ export async function composeApp(
 
   const storageFactory = createIdentityStorageFactory({
     providers: providerService,
-    tokenSource,
     fetch: fetchImpl,
     clock,
     resolveTrashSettings: (identityId) => trashSettings.forIdentity(identityId),
@@ -317,7 +302,6 @@ export async function composeApp(
   });
   const pinnedStorageFactory = createPinnedStorageFactory({
     providers: providerService,
-    tokenSource,
     fetch: fetchImpl,
   });
   const identityLinks = createIdentityLinksRepo(db);
@@ -330,7 +314,6 @@ export async function composeApp(
     clock,
     config,
     limiter,
-    tokenSource,
     storageFactory,
   });
 
@@ -420,7 +403,6 @@ export async function composeApp(
     repos,
     links: identityLinks,
     auth: auth.service,
-    tokenSource,
     providers: providerService,
     fetch: fetchImpl,
     limiter,

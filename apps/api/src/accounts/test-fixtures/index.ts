@@ -4,7 +4,7 @@ import { createMemoryRepos } from "@fdrive/db/testing";
 import type { Logger } from "pino";
 import { vi } from "vitest";
 import { createApp } from "../../app.js";
-import { createAuthModule, createLoginLimiter, createTokenSource } from "../../auth/index.js";
+import { createAuthModule, createLoginLimiter } from "../../auth/index.js";
 import type { PrincipalResolver } from "../../auth/principal.js";
 import { createIdentityStorageFactory } from "../../auth/storage-factory.ts";
 import { memoryIdentityOperations } from "../../auth/test-fixtures/index.ts";
@@ -86,11 +86,9 @@ export function accountsHarness(
     if (row === undefined) throw new Error("the local folder was not seeded");
     return row;
   })();
-  const tokenSource = createTokenSource({ repos, providers, master, clock, fetch: fetchImpl });
   const limiter = createLoginLimiter({ clock });
   const storageFactory = createIdentityStorageFactory({
     providers,
-    tokenSource,
     fetch: fetchImpl,
     clock,
   });
@@ -103,14 +101,12 @@ export function accountsHarness(
     clock,
     config,
     limiter,
-    tokenSource,
     storageFactory,
   });
   const deps: AccountsDeps = {
     repos,
     links,
     auth: auth.service,
-    tokenSource,
     providers,
     fetch: fetchImpl,
     limiter,
@@ -180,7 +176,6 @@ export function accountsHarness(
     providers,
     /** Resolves to the local folder's row once it and the users exist; `call` and `login` await it. */
     seeded,
-    tokenSource,
     limiter,
     auth,
     deps,
