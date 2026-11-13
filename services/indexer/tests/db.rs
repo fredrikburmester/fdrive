@@ -180,7 +180,31 @@ fn schema_wait_waits_for_the_failure_history_migration() {
     assert_eq!(*sleeps.borrow(), vec![Duration::from_secs(5)]);
     let logs = logs.borrow();
     assert_eq!(logs.len(), 1);
-    assert!(logs[0].contains("processing_failures migration") && logs[0].contains("last seen: 2"));
+    assert!(logs[0].contains("processing_failures and work migrations") && logs[0].contains("last seen: 2"));
+}
+
+#[test]
+fn schema_wait_waits_for_the_work_queue_migration() {
+    let (url, mut c) = setup();
+    c.batch_execute(r#"ALTER TABLE "idx"."work" RENAME TO work_pending"#)
+        .unwrap();
+    let client = RefCell::new(c);
+    let logs = RefCell::new(Vec::<String>::new());
+    let version = db::wait_for_schema_version(
+        &Db::new(&url),
+        2,
+        Duration::from_secs(60),
+        &|m| logs.borrow_mut().push(m.to_owned()),
+        &|_| {
+            client
+                .borrow_mut()
+                .batch_execute(r#"ALTER TABLE "idx"."work_pending" RENAME TO work"#)
+                .unwrap();
+        },
+    )
+    .unwrap();
+    assert_eq!(version, Some(2));
+    assert_eq!(logs.borrow().len(), 1);
 }
 
 #[test]

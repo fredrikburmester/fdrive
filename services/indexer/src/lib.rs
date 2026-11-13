@@ -30,3 +30,4 @@ pub mod settings;
 pub mod thumbs;
 pub mod thumbs_io;
 pub mod watcher;
+pub mod work;
