@@ -4,7 +4,7 @@ fdrive runs with Docker Compose v2 on any amd64 or arm64 host, such as a Linux s
 or Unraid (see [resource requirements](../README.md#resource-requirements)). It serves one
 folder on that host: each user's files are plain files in a folder named after them, so the
 host's own backups, rsync, SMB or Syncthing keep working. fdrive keeps its users in its own
-database. Coming from SFTPGo? See [upgrading from SFTPGo](#upgrading-from-sftpgo).
+database.
 
 Paths and addresses below are examples.
 
@@ -140,31 +140,6 @@ overlays, data folders, the database and your files, and don't delete volumes or
 fix an error. After changing `.env`, run `docker compose up -d`; `docker restart` doesn't
 apply it.
 
-**Updating from 0.6 or earlier?** Document text extraction and both embedding models now run
-in one `ml` container, where there used to be `tika`, `embed` and `image-embed`. Download
-`compose.yaml` again, then update with one extra flag, which removes the containers that no
-longer exist (those three and three one-time helpers):
-
-```sh
-docker compose pull && docker compose up -d --remove-orphans
-```
-
-- Nothing is indexed again. The `ml` container downloads its models once more when a feature
-  first needs them (about 3.1 GB with every search feature on), so search and image search
-  take a few minutes to be ready after this update.
-- In `.env`, `FDRIVE_EMBED_THREADS`, `FDRIVE_IMAGE_EMBED_THREADS` and the `FDRIVE_EMBED_*`,
-  `FDRIVE_IMAGE_EMBED_*` and `FDRIVE_TIKA_*` limits no longer do anything. Their replacements
-  are `FDRIVE_ML_THREADS`, `FDRIVE_ML_CPUS` and `FDRIVE_ML_MEMORY`
-  ([resource limits](REFERENCE.md#processing-worker-resource-limits)).
-- Once the features show as ready, the old model files can go: the `models` folder in the data
-  directory, and `docker volume rm fdrive_fdrive-image-embed-models`. So can the three old
-  images, about 2.4 GB for each release still on disk:
-
-  ```sh
-  docker image ls --format '{{.Repository}}:{{.Tag}}' \
-    | grep -E 'fdrive-(tika|embed|image-embed):' | xargs -r docker image rm
-  ```
-
 **Installed from a git checkout?** Releases from 0.3.0 have no `update.sh`. Update from the
 checkout's `deploy` folder like any other installation, and move extra Compose files from
 `FDRIVE_COMPOSE_FILES` to `COMPOSE_FILE` in `.env`, the list Compose itself reads. The
@@ -174,43 +149,6 @@ set `FDRIVE_VERSION` to it in `.env` as well.
 **Used WebDAV or S3 storage?** The files folder is now fdrive's only storage. The update
 disables WebDAV and S3 storage and their logins disappear, so copy anything you need from them
 into the files folder first. Backups to an S3 bucket keep working.
-
-## Upgrading from SFTPGo
-
-Earlier releases browsed files through SFTPGo. fdrive now serves SFTPGo's data folder itself,
-in place, with the same layout, so nothing is copied.
-
-1. Stop SFTPGo, so fdrive is the only one writing the folder.
-2. Download `compose.yaml` again. In `.env`, set `FDRIVE_FILES_DIR` to SFTPGo's data folder on
-   the host, the one with one folder per user (with the bundled SFTPGo, the `sftpgo/data`
-   folder inside `FDRIVE_DATA_DIR`). If `.env` already sets `FDRIVE_INDEX_SFTPGO_DIR`, that
-   folder is used and nothing needs to change. Keep `.env`, `FDRIVE_DATA_DIR` and the database as
-   they are.
-3. If the files aren't owned by user ID 1000, set `FDRIVE_RUN_AS_UID` to their owner
-   (`FDRIVE_INDEX_UID` still works). Remove `compose.sftpgo.yaml` and
-   `compose.sftpgo-network.yaml` from `COMPOSE_FILE` in `.env`.
-4. Run `docker compose pull && docker compose up -d --remove-orphans`.
-
-On the first start:
-
-- The SFTPGo storage becomes the local folder. Every user who has signed in to fdrive before
-  keeps their password, but only administrators (the setup owner and anyone marked admin) can
-  sign in right away. Everyone else is added disabled, because fdrive can't tell whether
-  SFTPGo disabled or removed them since they last signed in: an administrator enables each one
-  under **System > Users**. Users who never signed in to fdrive aren't listed at all: an
-  administrator adds them there with the same username, and their folder is theirs again.
-- The search index carries over.
-- Share links made in fdrive keep working. Password-protected ones need a new password.
-  Links made in SFTPGo's own web client go away with SFTPGo.
-- fdrive's Trash lives in `.trash/.fdrive-move-v1` in each user's folder. Items SFTPGo's
-  recycle rule moved to `.trash` stay on disk but aren't listed.
-- SFTPGo virtual folders aren't part of anyone's files: theirs stay where SFTPGo kept them.
-  Move them into a user's folder to keep them in fdrive.
-- `SFTPGO_URL`, `FDRIVE_INDEX_SFTPGO_PATH` and the `SFTPGO_ADMIN_*` settings no longer do
-  anything.
-
-Once everyone can sign in, SFTPGo's container and configuration can go. Keep its data folder:
-it is fdrive's files folder now.
 
 ## Troubleshooting
 

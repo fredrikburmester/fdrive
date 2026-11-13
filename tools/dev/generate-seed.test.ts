@@ -91,7 +91,7 @@ describe("buildDevSeed", () => {
     ]);
   });
 
-  it("drops files that belong to no user, such as the SFTPGo virtual folder", () => {
+  it("drops files that belong to no user", () => {
     expect(Object.keys(seed.files).sort()).toEqual(["alice", "dev"]);
   });
 });

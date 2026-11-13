@@ -13,9 +13,8 @@ login's files. Mapping is segment-aware and must round-trip.
 Every login's home is `<root>/<username>`, shown at `/`: the scope
 `{rootName: root, fsPrefix: "/<username>", virtualPrefix: "/"}`. The root is the index root
 its provider names (`ProviderModule.indexRootName`). The local folder names the configured
-root whose `storagePath` is `FDRIVE_STORAGE_ROOT`, or the only root there is. Nothing is configured per
-login: home templates, per-login overrides and folder mappings went with SFTPGo, and
-migration 0017 deletes their stored settings.
+root whose `storagePath` is `FDRIVE_STORAGE_ROOT`, or the only root there is. Nothing is
+configured per login.
 
 ## Configured and indexed scopes
 

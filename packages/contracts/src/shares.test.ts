@@ -45,10 +45,9 @@ describe("share contracts", () => {
     expect(publicShareRoute("a/b")).toContain("a%2Fb");
     expect(shareRoute("a/b")).toContain("a%2Fb");
   });
-  it("bounds requested download limits to the SFTPGo counter column but not stored ones", () => {
-    // SFTPGo persists the limit as `max_tokens`, a column its PostgreSQL and MySQL
-    // data providers declare `integer`, so a request past signed 32-bit could never
-    // be stored there and is refused before it reaches the provider.
+  it("bounds requested download limits to the stored column but not read ones", () => {
+    // `app.shares.max_downloads` is a PostgreSQL `integer`, so a request past
+    // signed 32-bit could never be stored and is refused before it gets there.
     const input = { name: "Doc", paths: ["/a"], scope: "read" };
     for (const maxDownloads of [0, 1, 2_147_483_647]) {
       expect(CreateShareRequest.safeParse({ ...input, maxDownloads }).success).toBe(true);
@@ -58,7 +57,7 @@ describe("share contracts", () => {
       expect(CreateShareRequest.safeParse({ ...input, maxDownloads }).success).toBe(false);
       expect(UpdateShareRequest.safeParse({ maxDownloads }).success).toBe(false);
     }
-    // Shares stored before the bound existed, or by another SFTPGo client, still read back.
+    // Responses read back whatever limit a share carries.
     expect(
       ManagedShare.parse({
         id,

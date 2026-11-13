@@ -22,12 +22,9 @@ export const ShareScope = z.enum(["read", "write"]);
 export const SharePresentation = z.enum(["auto", "list", "gallery", "download"]);
 export type SharePresentation = z.infer<typeof SharePresentation>;
 /**
- * The largest download limit a share can carry, whatever stores it. A native
- * share's limit travels to SFTPGo as `max_tokens`, a column its PostgreSQL
- * and MySQL data providers declare `integer`, and `app.shares.max_downloads`
- * is the same width, so one bound serves both and a request fails here
- * instead of inside a backend. Responses stay unbounded: they must keep
- * reading whatever limit a share already carries.
+ * The largest download limit a share can carry: `app.shares.max_downloads`
+ * is a PostgreSQL `integer`, so a request past it fails here instead of in
+ * the database. Responses stay unbounded.
  */
 export const MAX_SHARE_DOWNLOADS = 2_147_483_647;
 export const CreateShareRequest = z.strictObject({
