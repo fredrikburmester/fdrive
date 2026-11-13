@@ -1,12 +1,10 @@
 import { z } from "zod";
-import { HttpUrl } from "./http-url.ts";
 
 /**
- * Every storage backend fdrive can talk to. The API's provider registry
- * must have a module for each value; adding a provider adds one here and
- * one there.
+ * Every storage backend fdrive can talk to: the files folder fdrive serves
+ * itself. The API's provider registry has a module for each value.
  */
-export const ProviderType = z.enum(["local", "webdav", "s3"]);
+export const ProviderType = z.enum(["local"]);
 export type ProviderType = z.infer<typeof ProviderType>;
 
 /**
@@ -79,23 +77,13 @@ export const ProvidersResponse = z.object({
 });
 export type ProvidersResponse = z.infer<typeof ProvidersResponse>;
 
-/** A provider type an administrator can add, with the form it needs. */
-export const AdminProviderType = z.object({
-  type: ProviderType,
-  label: z.string(),
-  configFields: z.array(ProviderField),
-  credentialFields: z.array(ProviderField),
-  capabilities: ProviderCapabilities,
-});
-export type AdminProviderType = z.infer<typeof AdminProviderType>;
-
 /** One configured provider as `GET /api/v1/admin/providers` lists it. */
 export const AdminProvider = z.object({
   id: z.uuid(),
   type: ProviderType,
   label: z.string(),
   /** The endpoint; empty for the local folder, which has none. */
-  baseUrl: z.union([HttpUrl, z.literal("")]),
+  baseUrl: z.literal(""),
   config: ProviderFieldValues,
   enabled: z.boolean(),
   /** True when the deployment pins this row (`FDRIVE_STORAGE_ROOT`) and it cannot change here. */
@@ -113,7 +101,6 @@ export type AdminProvider = z.infer<typeof AdminProvider>;
 
 export const AdminProvidersResponse = z.object({
   providers: z.array(AdminProvider),
-  types: z.array(AdminProviderType),
 });
 export type AdminProvidersResponse = z.infer<typeof AdminProvidersResponse>;
 
@@ -124,24 +111,8 @@ export const ProviderName = z
   .min(1, "Enter a name for this storage.")
   .max(120, "Use 120 characters or fewer for the storage name.");
 
-export const AdminProviderCreateRequest = z.strictObject({
-  type: ProviderType,
+/** `PATCH /api/v1/admin/providers/:id`: the storage's display name, shown on the login page. */
+export const AdminProviderUpdateRequest = z.strictObject({
   label: ProviderName,
-  baseUrl: HttpUrl,
-  config: ProviderFieldValues.optional(),
 });
-export type AdminProviderCreateRequest = z.infer<typeof AdminProviderCreateRequest>;
-
-/** Partial update; `baseUrl` is refused with `forbidden` for an env-managed provider. */
-export const AdminProviderUpdateRequest = AdminProviderCreateRequest.omit({ type: true })
-  .partial()
-  .extend({ enabled: z.boolean().optional() });
 export type AdminProviderUpdateRequest = z.infer<typeof AdminProviderUpdateRequest>;
-
-/**
- * Body for `POST /api/v1/admin/providers/test`: probe an unsaved candidate.
- * Probing a saved provider uses `POST /api/v1/admin/providers/:id/test`
- * with no body.
- */
-export const AdminProviderTestRequest = AdminProviderCreateRequest.omit({ label: true });
-export type AdminProviderTestRequest = z.infer<typeof AdminProviderTestRequest>;

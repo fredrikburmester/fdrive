@@ -152,16 +152,12 @@ export const ROUTES = {
   setup: {
     /** GET, public: whether setup is required -> `SetupStatusResponse`. */
     status: "/api/v1/setup/status",
-    /** POST, setup token required: probe a candidate storage -> `ConnectionTestResponse`. */
-    test: "/api/v1/setup/test",
-    /** POST, setup token required: store the connection, create the admin account -> `MeResponse`. */
+    /** POST, setup token required: create the owner account -> `MeResponse`. */
     complete: "/api/v1/setup/complete",
   },
   admin: {
-    /** GET, admin only: every configured provider -> `AdminProvidersResponse`; POST: add one -> `AdminProvider`. */
+    /** GET, admin only: the storage (the files folder) -> `AdminProvidersResponse`. */
     providers: "/api/v1/admin/providers",
-    /** POST, admin only: probe an unsaved candidate -> `ConnectionTestResponse`. */
-    providersTest: "/api/v1/admin/providers/test",
     /** GET, admin only: the local users -> `AdminUsersResponse`; POST: add one -> `AdminUser`. */
     users: "/api/v1/admin/users",
   },
@@ -256,11 +252,6 @@ export function adminUserRoute(username: string): string {
 /** `PATCH`/`DELETE`, admin only: one configured provider. */
 export function adminProviderRoute(id: string): string {
   return `${ROUTES.admin.providers}/${encodeURIComponent(id)}`;
-}
-
-/** `POST`, admin only: probe one configured provider -> `ConnectionTestResponse`. */
-export function adminProviderTestRoute(id: string): string {
-  return `${adminProviderRoute(id)}/test`;
 }
 
 /** GET: one job -> `JobStatus`. 404 for a job that belongs to another identity. */
