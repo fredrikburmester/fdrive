@@ -59,6 +59,7 @@ export const OMITTED_TABLES = {
   "app.activity_exports": "transient",
   "app.activity_export_reads": "transient",
   "app.wopi_locks": "transient",
+  "idx.work": "transient",
   "idx.schema_version": "migration",
 } as const;
 export type DurableTable = (typeof DURABLE_TABLES)[number];

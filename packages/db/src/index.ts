@@ -95,6 +95,14 @@ export {
   escapeLikePattern,
   toScopeClauses,
 } from "./repos/index-queries.js";
+export {
+  createIndexWorkWriter,
+  INDEX_WORK_CHANNEL,
+  INDEX_WORK_RETENTION,
+  type IndexWorkContent,
+  type IndexWorkInput,
+  type IndexWorkWriter,
+} from "./repos/index-work.js";
 export { createOfficeFileRepo } from "./repos/office-files.js";
 export type {
   MemoryOfficeFileOptions,
