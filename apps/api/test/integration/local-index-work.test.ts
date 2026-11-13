@@ -16,9 +16,6 @@ const users: LocalUsers = {
 function session(externalUsername: string): StorageSession {
   return {
     externalUsername,
-    getCredential: async () => ({}),
-    getToken: async () => null,
-    invalidateToken: async () => undefined,
   };
 }
 

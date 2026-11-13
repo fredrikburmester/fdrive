@@ -284,9 +284,6 @@ describe("local module index changes", () => {
   };
   const session = (externalUsername: string): StorageSession => ({
     externalUsername,
-    getCredential: async () => ({}),
-    getToken: async () => null,
-    invalidateToken: async () => undefined,
   });
 
   it("reports changes under the index root by the indexer's paths, in order", async () => {

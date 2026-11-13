@@ -87,9 +87,6 @@ describe("deploymentModules", () => {
     const instance = { id: "row", baseUrl: "local", config: {} };
     const session: StorageSession = {
       externalUsername: "alice",
-      getCredential: async () => ({}),
-      getToken: async () => null,
-      invalidateToken: async () => undefined,
     };
 
     function queue() {
