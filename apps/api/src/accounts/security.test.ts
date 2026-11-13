@@ -6,11 +6,16 @@ import { expect, it, vi } from "vitest";
 import { createLoginLimiter } from "../auth/login-limiter.js";
 import { hashSessionId } from "../auth/sessions.js";
 import { ApiHttpError } from "../errors.js";
-import { fakeProviderModule, seedWebdavProvider } from "../providers/test-fixtures/index.ts";
+import { fakeProviderModule, seedProviderRow } from "../providers/test-fixtures/index.ts";
 import { verifyCredentials } from "./credentials.ts";
 import { accountRepositoryCall } from "./errors.ts";
 import { liveAccountSession } from "./service.ts";
 import { accountsHarness } from "./test-fixtures/index.ts";
+
+/** The harness's files folder, signing in through a fake module shaped by `overrides`. */
+function folderSigningInWith(overrides: Parameters<typeof fakeProviderModule>[0]) {
+  return { local: fakeProviderModule({ deploymentManaged: true, ...overrides }) };
+}
 
 async function context(h: ReturnType<typeof accountsHarness>) {
   const a = await h.login();
@@ -128,27 +133,26 @@ it("rejects login sessions raced by identity transfer, revocation, or final me l
 it("labels each actual provider and validates final identity ownership before returning me", async () => {
   const h = accountsHarness();
   const input = await context(h);
-  const provider = await h.repos.providers.ensure({
-    type: "webdav",
-    baseUrl: "https://other.test:8443",
-  });
+  const provider = await seedProviderRow(h.repos, "https://other.test:8443", { label: "Other" });
   await h.repos.identities.create({
     accountId: input.principal.accountId,
     providerId: provider.id,
     externalUsername: "other",
   });
-  // A login on a storage type this build no longer has (an SFTPGo row from
-  // before the local folder) is left out rather than failing the others.
-  const retired = await h.repos.providers.ensure({ type: "sftpgo", baseUrl: "http://old.test" });
-  await h.repos.identities.create({
-    accountId: input.principal.accountId,
-    providerId: retired.id,
-    externalUsername: "alice",
-  });
+  // A login on a storage type this build no longer has (an SFTPGo or WebDAV
+  // row from before the files folder) is left out rather than failing the others.
+  for (const type of ["sftpgo", "webdav"]) {
+    const retired = await h.repos.providers.ensure({ type, baseUrl: `http://${type}.test` });
+    await h.repos.identities.create({
+      accountId: input.principal.accountId,
+      providerId: retired.id,
+      externalUsername: "alice",
+    });
+  }
   const me = await h.auth.service.me(input.principal.accountId, input.principal.identityId);
   expect(me.identities.map((identity) => identity.providerLabel).sort()).toEqual([
     "Local folder",
-    "other.test:8443",
+    "Other",
   ]);
   vi.spyOn(h.repos.identities, "get").mockResolvedValueOnce(null);
   await expect(
@@ -215,7 +219,7 @@ it("fails closed on provider changes and maps verification errors without databa
 it("requires a provider id once several providers are enabled", async () => {
   const h = accountsHarness();
   await h.seeded;
-  await h.repos.providers.ensure({ type: "webdav", baseUrl: "http://second.test" });
+  await seedProviderRow(h.repos, "http://second.test");
   await expect(
     verifyCredentials(h.deps, {
       credential: { username: "alice", password: "alice-pass" },
@@ -235,17 +239,14 @@ it("requires a provider id once several providers are enabled", async () => {
 it("drops the new session when priming the upstream token fails after login", async () => {
   // Storage that mints a token while it signs in, which login primes.
   const h = accountsHarness({
-    modules: {
-      webdav: fakeProviderModule({
-        authenticate: async () => ({
-          externalUsername: "alice",
-          token: { token: "minted", expiresAt: new Date("2026-09-08T00:00:00Z") },
-        }),
+    modules: folderSigningInWith({
+      authenticate: async () => ({
+        externalUsername: "alice",
+        token: { token: "minted", expiresAt: new Date("2026-09-08T00:00:00Z") },
       }),
-    },
+    }),
   });
-  await h.seeded;
-  const row = await seedWebdavProvider(h.repos, "http://dav.test");
+  const row = await h.seeded;
   vi.spyOn(h.tokenSource, "prime").mockRejectedValueOnce(new Error("token store down"));
   const remove = vi.spyOn(h.repos.sessions, "delete");
   const res = await h.call(ROUTES.auth.login, {
@@ -334,20 +335,18 @@ it("bounds one address block's share of limiter capacity so another address stil
 
 it("primes the token storage minted while verifying a linked login", async () => {
   const h = accountsHarness({
-    modules: {
-      webdav: fakeProviderModule({
-        authenticate: async (_instance, credential) => ({
-          externalUsername: credential.username ?? "",
-          token: { token: "from-link", expiresAt: new Date("2026-09-08T00:00:00Z") },
-        }),
-        mint: vi.fn(async () => {
-          throw new Error("must not mint");
-        }),
+    modules: folderSigningInWith({
+      authenticate: async (_instance, credential) => ({
+        externalUsername: credential.username ?? "",
+        token: { token: "from-link", expiresAt: new Date("2026-09-08T00:00:00Z") },
       }),
-    },
+      mint: vi.fn(async () => {
+        throw new Error("must not mint");
+      }),
+    }),
   });
   const alice = await h.login();
-  const row = await seedWebdavProvider(h.repos, "http://dav.test");
+  const row = await seedProviderRow(h.repos, "http://second.test");
   const linked = await h.call(ROUTES.account.identities, {
     method: "POST",
     cookie: alice.cookie,
@@ -368,16 +367,13 @@ it("passes the storage's own reason for refusing a user, and hides any other fai
     details: { detail: "account locked by the server" },
   });
   const h = accountsHarness({
-    modules: {
-      webdav: fakeProviderModule({
-        authenticate: async () => {
-          throw failure;
-        },
-      }),
-    },
+    modules: folderSigningInWith({
+      authenticate: async () => {
+        throw failure;
+      },
+    }),
   });
-  await h.seeded;
-  const row = await seedWebdavProvider(h.repos, "http://dav.test");
+  const row = await h.seeded;
   const input = {
     providerId: row.id,
     credential: { username: "alice", password: "alice-pass" },

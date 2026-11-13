@@ -3,18 +3,19 @@ import { chmod, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Readable } from "node:stream";
-import { captureSnapshot, inspectArchive, readBounded } from "@fdrive/backup";
+import * as backupPackage from "@fdrive/backup";
+import { captureSnapshot, inspectArchive, providerDestination, readBounded } from "@fdrive/backup";
 import { type ProviderModule, StorageError, type StorageSession } from "@fdrive/core";
-import { createMemoryStorage } from "@fdrive/core/testing";
+import { createMemoryStorage, type MemoryStorage } from "@fdrive/core/testing";
 import { createDb, migrate } from "@fdrive/db";
 import { SEED_USERS, startPostgres } from "@fdrive/testkit";
-import { createFakeWebdavServer, webdavModule } from "@fdrive/webdav";
 import { Decrypter, generateIdentity, identityToRecipient } from "age-encryption";
 import { Pool } from "pg";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { open, seal } from "../auth/crypto.js";
 import { type AppConfig, loadConfig } from "../config.js";
 import * as registry from "../providers/registry.js";
+import { fakeProviderModule } from "../providers/test-fixtures/index.ts";
 import { createScryptSharePasswords } from "../shares/passwords.js";
 import { environmentFingerprint, resumeRecovery, runBackupCommand } from "./command.js";
 import { createBackupModule, rawBackupStorage } from "./module.js";
@@ -38,24 +39,40 @@ const databases: ReturnType<typeof createDb>[] = [];
 const closers: (() => Promise<void>)[] = [];
 let count = 0;
 let owner: string, identity: string, provider: string;
+/** The stored address of the source installation's storage row. */
 const SOURCE_URL = "http://source.invalid";
+/** What the source's storage holds: one server every seed user signs in to. */
+let served: MemoryStorage;
 /**
- * The real WebDAV module with a one-time code field, as a storage whose
- * sign-in takes one declares it: backups must never keep such a code.
+ * The source installation's storage: a fileserver the seed users sign in to
+ * with their passwords, whose sign-in also takes a one-time code, as a
+ * storage whose sign-in takes one declares it: backups must never keep it.
  */
-const webdavWithOtp: ProviderModule = {
-  ...webdavModule,
+const fileserver: ProviderModule = fakeProviderModule({
   credentialFields: [
-    ...webdavModule.credentialFields,
+    { name: "username", label: "Username", kind: "text", required: true, maxLength: 255 },
+    { name: "password", label: "Password", kind: "password", required: true },
     { name: "otp", label: "One-time code", kind: "otp", required: false, transient: true },
   ],
-};
-/** The modules a deployment without a local folder has, as the API and worker build them. */
+  async authenticate(_instance, credential) {
+    const user = SEED_USERS.find((candidate) => candidate.username === credential.username);
+    if (user === undefined || user.password !== credential.password) {
+      throw new StorageError("unauthorized", "invalid username or password");
+    }
+    return { externalUsername: user.username };
+  },
+  createStorage: () => served,
+});
+/**
+ * What a restored deployment builds for the source's storage row. These
+ * installations configure no files folder, so the fileserver stands in for
+ * the module unless a test sets this to `null` or configures a folder.
+ */
+let restoredStorage: ProviderModule | null = fileserver;
+const realModuleFor = registry.moduleFor;
+/** The modules the API and worker build for the source installation. */
 function backupModule(settings: AppConfig) {
-  return createBackupModule(settings, {
-    ...registry.createProviderModules(),
-    webdav: webdavWithOtp,
-  });
+  return createBackupModule(settings, { local: fileserver });
 }
 async function fresh() {
   const name = `backup_api_${count++}`;
@@ -89,7 +106,7 @@ beforeEach(async () => {
   identity = randomUUID();
   provider = randomUUID();
   await source.pool.query(
-    "insert into app.providers(id,type,label,base_url,config) values($1,'webdav','Files',$2,'{}')",
+    "insert into app.providers(id,type,label,base_url,config) values($1,'local','Files',$2,'{}')",
     [provider, SOURCE_URL],
   );
   await source.pool.query("insert into app.accounts(id) values($1)", [owner]);
@@ -113,12 +130,11 @@ beforeEach(async () => {
   await source.pool.query("insert into app.settings(key,value) values('setup.owner.v1',$1)", [
     JSON.stringify({ state: "complete", accountId: owner }),
   ]);
-  const fake = createFakeWebdavServer({
-    origin: SOURCE_URL,
-    users: SEED_USERS.map(({ username, password }) => ({ username, password })),
-    files: { "/docs/readme": "source document" },
-  });
-  vi.stubGlobal("fetch", fake.fetch);
+  served = createMemoryStorage({ "/docs/readme": "source document" });
+  restoredStorage = fileserver;
+  vi.spyOn(registry, "moduleFor").mockImplementation(
+    (type, modules) => realModuleFor(type, modules) ?? (type === "local" ? restoredStorage : null),
+  );
 });
 afterEach(async () => {
   vi.useRealTimers();
@@ -522,29 +538,6 @@ it("pins provider backup credentials and keeps reserved ciphertext independently
     ),
   ).toEqual({ username: "alice", password: "alice-password" });
   await module.engine.testDestination(record);
-  // The offline CLI reaches the same directory with a provider destination file and no database.
-  const listed: string[] = [];
-  await runBackupCommand(
-    config,
-    [
-      "list",
-      "--destination-file",
-      await secretFile(
-        "provider-destination.json",
-        JSON.stringify({
-          type: "webdav",
-          id: provider,
-          baseUrl: SOURCE_URL,
-          config: {},
-          username: "alice",
-          prefix: record.config.prefix,
-          credential: { username: "alice", password: "alice-password" },
-        }),
-      ),
-    ],
-    (value) => listed.push(value),
-  );
-  expect(JSON.parse(listed.join(""))).toEqual([]);
   const transport = await module.destination({ ...record, enabled: true });
   const file = await secretFile("payload", "encrypted bytes");
   await transport.put("copy.age", file);
@@ -667,8 +660,7 @@ it("provides an explicit host-only ownership repair and rejects accidental live 
 });
 
 it("refreshes only the pinned storage identity and supports providers without bearer tokens", async () => {
-  const real = registry.moduleFor("webdav");
-  if (!real) throw Error("Provider missing");
+  const real = fileserver;
   let session!: StorageSession;
   const storage = createMemoryStorage();
   const authenticate = vi.fn(async () => ({
@@ -708,7 +700,7 @@ it("refreshes only the pinned storage identity and supports providers without be
   expect(await session.getToken()).toBe("renewed");
 });
 
-it("discovers and fetches a completed fileserver copy with no database or application key", async () => {
+it("discovers and fetches a completed bucket copy with no database or application key", async () => {
   const { file, inspection } = await snapshot();
   const record = await module.destinationRecord({
     type: "provider",
@@ -736,35 +728,37 @@ it("discovers and fetches a completed fileserver copy with no database or applic
     }),
   );
   await destination.put(`${id}.complete.json`, marker);
-  const location = await secretFile(
-    "destination.json",
-    JSON.stringify({
-      type: "webdav",
-      id: provider,
-      baseUrl: SOURCE_URL,
-      config: {},
-      username: "alice",
-      prefix: record.config.prefix,
-      credential: { username: "alice", password: "alice-password" },
-    }),
-  );
+  const bucket = {
+    type: "s3",
+    endpoint: "https://s3.example.invalid",
+    region: "test",
+    bucket: "private",
+    prefix: "backups/",
+    pathStyle: true,
+    accessKeyId: "test",
+    secretAccessKey: "secret",
+  };
+  const location = await secretFile("destination.json", JSON.stringify(bucket));
+  // The bucket's own client is the backup package's; here the bucket holds what the copy above put.
+  const bucketDestination = vi
+    .spyOn(backupPackage, "s3Destination")
+    .mockReturnValue(providerDestination(served, String(record.config.prefix)));
   const unavailable = () => {
     throw Error("No application environment");
   };
   const output: string[] = [];
   await expect(runBackupCommand(unavailable, ["list"])).rejects.toThrow("destination JSON");
-  // Offline there are no local users to sign in with: a copy in the local folder is read from disk.
-  const localLocation = await secretFile(
-    "local-destination.json",
-    JSON.stringify({
-      ...JSON.parse(await readFile(location, "utf8")),
-      type: "local",
-      baseUrl: "http://local.invalid",
-    }),
-  );
-  await expect(
-    runBackupCommand(unavailable, ["list", "--destination-file", localLocation]),
-  ).rejects.toThrow("Unsupported destination provider");
+  // Offline there are no users to sign in with: a copy in the files folder is read from disk,
+  // so a destination file names a bucket and nothing else.
+  for (const other of [
+    { ...bucket, type: "local" },
+    { type: "webdav", id: provider, baseUrl: SOURCE_URL, config: {}, prefix: "/", credential: {} },
+  ]) {
+    const file = await secretFile("other-destination.json", JSON.stringify(other));
+    await expect(
+      runBackupCommand(unavailable, ["list", "--destination-file", file]),
+    ).rejects.toThrow();
+  }
   await runBackupCommand(unavailable, ["list", "--destination-file", location], (value) =>
     output.push(value),
   );
@@ -779,6 +773,7 @@ it("discovers and fetches a completed fileserver copy with no database or applic
     (value) => output.push(value),
   );
   expect(await readFile(downloaded)).toEqual(bytes);
+  expect(bucketDestination).toHaveBeenCalledWith(bucket);
   const target = await fresh();
   const restoredConfig = {
     ...config,
@@ -823,9 +818,7 @@ it("captures native recovery bytes, preserves quarantined provenance, and report
   const storage = createMemoryStorage({
     [`/.fdrive-desktop/${identity}/trash/original`]: "recover me",
   });
-  const real = registry.moduleFor("webdav");
-  if (!real) throw Error("Provider missing");
-  vi.spyOn(registry, "moduleFor").mockReturnValue({ ...real, createStorage: () => storage });
+  vi.spyOn(registry, "moduleFor").mockReturnValue({ ...fileserver, createStorage: () => storage });
   await source.pool.query(
     "insert into app.desktop_operations(id,identity_id,account_id,request_hash,request,state,result) values($1,$2,$3,'hash','{}','uncertain',$4)",
     [randomUUID(), identity, owner, JSON.stringify({ remoteAttempt: "accepted" })],
@@ -926,8 +919,7 @@ it("keeps the worker dormant during restore and releases process listeners on sh
 });
 
 it("refuses changed namespaces, recursive source mounts, and unavailable retained ZIPs", async () => {
-  const real = registry.moduleFor("webdav");
-  if (!real) throw Error("Provider missing");
+  const real = fileserver;
   const storage = createMemoryStorage({ "/file": "ordinary" });
   const moduleFor = vi
     .spyOn(registry, "moduleFor")
@@ -1051,8 +1043,7 @@ it("rejects unreviewed ownership and checks every saved identity before resuming
       ),
     ],
   );
-  const real = registry.moduleFor("webdav");
-  if (!real) throw Error("Provider missing");
+  const real = fileserver;
   const lookup = vi.spyOn(registry, "moduleFor").mockReturnValue(null);
   await expect(resumeRecovery(restoredConfig, review)).rejects.toThrow(
     "Unsupported restored provider",
@@ -1113,6 +1104,8 @@ it("rejects unreviewed ownership and checks every saved identity before resuming
 });
 
 it("resumes a local-folder installation by checking the owner against its restored users", async () => {
+  // The restored deployment's own folder decides, with nothing standing in for it.
+  restoredStorage = null;
   const root = join(directory, "storage");
   await mkdir(join(root, "alice"), { recursive: true });
   const local = randomUUID();

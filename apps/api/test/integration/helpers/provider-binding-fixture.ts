@@ -9,9 +9,9 @@ import { loadConfig } from "../../../src/config.js";
 import { createProviderService } from "../../../src/providers/service.js";
 import { providerFixtureModule, startProviderServer, USERNAME } from "./provider-binding-server.ts";
 
-/** The fixture module in the registry's WebDAV slot; see `providerFixtureModule`. */
-const MODULES = { webdav: providerFixtureModule() };
-const TYPE = "webdav";
+/** The fixture module in the registry's only slot; see `providerFixtureModule`. */
+const MODULES = { local: providerFixtureModule() };
+const TYPE = "local";
 
 /**
  * Two isolated upstream servers, A and B, with an identity bound to A. A
@@ -110,6 +110,8 @@ export async function composedProviderFixture(connectionString: string) {
       FDRIVE_MASTER_KEY: h.master.toString("base64"),
       FDRIVE_MCP_WRITES: "true",
     });
+    // Setup finished long ago: the app serves requests instead of asking for an owner.
+    await h.repos.settings.set("setup.initialized.v1", true);
     // No fetch injection: composition and every bound client use the real network transport.
     const composed = await composeApp(config, pino({ level: "silent" }), h.clock, {
       modules: MODULES,

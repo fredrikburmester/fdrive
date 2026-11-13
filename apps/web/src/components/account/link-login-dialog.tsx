@@ -3,8 +3,6 @@
 import { LinkIdentityRequest } from "@fdrive/contracts";
 import { useState } from "react";
 import { ProviderFieldInputs } from "@/components/identity/provider-fields";
-import { ProviderPicker } from "@/components/identity/provider-picker";
-import { StorageNote } from "@/components/identity/storage-note";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -23,16 +21,15 @@ import {
   confirmationFieldsFor,
   credentialComplete,
   credentialFieldsFor,
-  selectProvider,
 } from "@/lib/auth/login-model";
 
 const EMPTY_VALUES: Readonly<Record<string, string>> = {};
 
 /**
- * Adds another login to the account. The new login's fields come from the
- * chosen provider (a picker appears when more than one is enabled); the
- * confirmation fields come from the provider of the login the person is
- * signed in with, since that is the login being vouched for.
+ * Adds another login to the account: another fdrive user's username and
+ * password, from the storage's own field list, confirmed with the secret of
+ * the login the person is signed in with, since that is the login being
+ * vouched for.
  */
 export function LinkLoginDialog({
   open,
@@ -44,12 +41,11 @@ export function LinkLoginDialog({
   const { data: me } = useMe();
   const { data: providerList } = useProviders();
   const providers = providerList?.providers ?? [];
-  const [providerId, setProviderId] = useState<string | null>(null);
   const [values, setValues] = useState(EMPTY_VALUES);
   const [current, setCurrent] = useState(EMPTY_VALUES);
   const actions = useIdentityActions();
 
-  const provider = selectProvider(providers, providerId);
+  const [provider] = providers;
   const fields = credentialFieldsFor(provider);
   const activeIdentity = me?.identities.find((identity) => identity.id === me.activeIdentityId);
   const activeProvider = providers.find((candidate) => candidate.id === activeIdentity?.providerId);
@@ -75,7 +71,6 @@ export function LinkLoginDialog({
   function close(next: boolean) {
     if (actions.pending) return;
     clear();
-    setProviderId(null);
     actions.resetError();
     onOpenChange(next);
   }
@@ -103,21 +98,7 @@ export function LinkLoginDialog({
             </DialogDescription>
           </DialogHeader>
           <FieldGroup className="py-4">
-            {providers.length > 1 && provider !== undefined && (
-              <ProviderPicker
-                id="link-provider"
-                providers={providers}
-                value={provider.id}
-                onChange={(id) => {
-                  setProviderId(id);
-                  setValues(EMPTY_VALUES);
-                }}
-                disabled={actions.pending}
-              />
-            )}
-            {providers.length > 1 ? null : <StorageNote capabilities={provider?.capabilities} />}
             <ProviderFieldInputs
-              key={provider?.id ?? "default"}
               fields={fields}
               values={values}
               onChange={(name, value) => setValues((prev) => ({ ...prev, [name]: value }))}

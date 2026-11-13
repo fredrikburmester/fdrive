@@ -36,7 +36,7 @@ it("keeps personal journeys stable, immutable and private across pools and ident
     const alice = await repos.accounts.create({ displayName: "Alice" });
     const bob = await repos.accounts.create({ displayName: "Bob" });
     const provider = await repos.providers.ensure({
-      type: "webdav",
+      type: "local",
       baseUrl: "http://activity.test",
     });
     const identity = await repos.identities.create({
@@ -1275,7 +1275,7 @@ it("preserves folder journeys, fences descendant observations, leases queued wor
     const repos = createRepos(main.db);
     const account = await repos.accounts.create({ displayName: "Activity regressions" });
     const provider = await repos.providers.ensure({
-      type: "webdav",
+      type: "local",
       baseUrl: "http://regressions.test",
     });
     const identity = await repos.identities.create({

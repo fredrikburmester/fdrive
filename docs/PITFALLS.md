@@ -27,9 +27,9 @@ Reference for affected code; shared rules live in [AGENTS.md](../AGENTS.md).
 
 - System never follows the login being browsed. Filtering the sidebar activity by the active
   login while the pages stayed installation-wide made the two disagree, and resolving Trash
-  settings from the active login hid a per-server setting behind a login switch. Per-server
-  settings name their provider explicitly and sit on that server's row under Storage; every
-  other page is installation-wide, and each page header says which.
+  settings from the active login hid them behind a login switch. Every System page is
+  installation-wide, Trash settings still name their provider row explicitly, and each page
+  header says so.
 - Worker state that tracks feature transitions must start from the persisted selection. A
   disabled placeholder made every indexer restart look like enabling thumbnails and image
   search, re-running the media backfill over the whole library.
@@ -98,13 +98,11 @@ Reference for affected code; shared rules live in [AGENTS.md](../AGENTS.md).
 
 ## Product scope
 
-- A new storage backend brings file operations, not features. Search, thumbnails, embeddings,
+- A storage backend brings file operations, not features. Search, thumbnails, embeddings,
   folder sizes, shares and Office are built on files sitting on a disk the indexer reads, so
-  the WebDAV and S3 adapters arrived with none of them and read as a lesser product until the
-  copy said why (2026-09). Say so plainly, keep every feature behind a capability flag rather
-  than a type name, derive the limit copy from the flags, and add a feature to another backend
-  one flag at a time once fdrive can provide it without a local disk. Do not add a backend
-  expecting the features to come with it.
+  the WebDAV and S3 adapters (2026-09) arrived with none of them and read as a lesser product.
+  They were removed on 2026-11-13 rather than carried. Do not add a backend expecting the
+  features to come with it.
 - Storage fdrive does not own caps what fdrive can promise. On SFTPGo it could not share
   between users or create a file only when the name was free, and every deployment ran a
   second server with its own users. Owning the folder and the users (2026-11) made both

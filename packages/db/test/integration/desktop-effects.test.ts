@@ -31,7 +31,7 @@ async function fixture() {
   const repos = createRepos(first.db);
   const account = await repos.accounts.create({ displayName: "Recovery" });
   const provider = await repos.providers.ensure({
-    type: "webdav",
+    type: "local",
     baseUrl: `http://${randomUUID()}.test`,
   });
   const identity = await repos.identities.create({

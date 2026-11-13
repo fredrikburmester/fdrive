@@ -214,9 +214,6 @@ describe("composed native identity and API-token provider binding", () => {
     const cookie = login.headers.get("set-cookie")?.split(";")[0];
     if (!cookie) throw new Error("login did not create a session cookie");
     const me = MeResponse.parse(await login.json());
-    // FDRIVE_ADMIN_USERS names usernames on the deployment's pinned storage
-    // only, and neither provider here is pinned: grant the account itself.
-    await h.repos.accounts.setAdmin(me.account.id, true);
     // The token explicitly allows organization so mutation tests reach storage.
     const response = await h.app.request("/api/v1/account/tokens", {
       method: "POST",
@@ -247,14 +244,9 @@ describe("composed native identity and API-token provider binding", () => {
       at: h.clock(),
     });
     async function switchToB() {
-      // Disabling A through the admin API is the runtime configuration
-      // change; B already exists as its own enabled provider row.
-      const result = await h.app.request(`/api/v1/admin/providers/${h.providerA.id}`, {
-        method: "PATCH",
-        headers: { ...jsonHeaders, cookie, [IDENTITY_HEADER]: me.activeIdentityId },
-        body: JSON.stringify({ enabled: false }),
-      });
-      expect(result.status).toBe(200);
+      // Disabling A while the app runs is the configuration change (the
+      // deployment stops serving it); B already exists as its own enabled row.
+      await h.repos.providers.update(h.providerA.id, { enabled: false });
     }
     async function request(mode: "native" | "api-token", mutate = false) {
       if (mode === "native") {
@@ -315,7 +307,7 @@ describe("composed native identity and API-token provider binding", () => {
 
   for (const mode of ["native", "api-token"] as const) {
     for (const phase of ["cached", "mint", "retry", "mutation"] as const) {
-      it(`${mode}: isolates ${phase} across a live admin connection switch`, async () => {
+      it(`${mode}: isolates ${phase} across a live connection switch`, async () => {
         const h = await composedFixture();
         const initial = await expectSuccess(await h.request(mode), mode);
         expect(JSON.stringify(initial)).toContain("same.txt");

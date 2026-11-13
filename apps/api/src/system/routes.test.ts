@@ -169,7 +169,7 @@ function buildApp(opts: { isAdmin?: boolean; deps?: Partial<SystemRoutesDeps> })
     startedAt: new Date(0),
     connectionStatus: async () => ({
       required: false,
-      providers: [{ type: "webdav", host: "dav:8080" }],
+      providers: [{ type: "local", host: "Local folder" }],
     }),
     principalResolver: async () => principal,
     registerRoutes: (groups) => {

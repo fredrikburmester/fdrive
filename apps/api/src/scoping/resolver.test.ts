@@ -1,7 +1,7 @@
 import type { ProviderModule, Scope } from "@fdrive/core";
 import { createLocalModule, type LocalUsers } from "@fdrive/local";
-import { webdavModule } from "@fdrive/webdav";
 import { describe, expect, it, vi } from "vitest";
+import { fakeProviderModule } from "../providers/test-fixtures/index.ts";
 import { createScopeResolver } from "./resolver.ts";
 import { buildIdentity, buildProvider, fakeProviders } from "./test-fixtures/index.ts";
 
@@ -61,7 +61,8 @@ describe("configuredMappings", () => {
   });
 
   it("reports no_roots for storage outside every index root", async () => {
-    for (const module of [local(null), webdavModule]) {
+    // The folder read under no root, and storage that names none at all.
+    for (const module of [local(null), fakeProviderModule()]) {
       const resolver = createScopeResolver({
         providers: fakeProviders([buildProvider()], () => module),
         indexRootNames: ["files"],

@@ -1,8 +1,8 @@
 # Local storage
 
 Decided 2026-11-12. fdrive serves files from a folder on its own disk and keeps its own users.
-SFTPGo is removed. Builds on [provider development](../STORAGE-PROVIDERS.md) and
-[Owned shares](OWNED-SHARES.md).
+SFTPGo is removed, and WebDAV and S3 storage followed on 2026-11-13. Builds on the
+[storage port](../STORAGE-PROVIDERS.md) and [Owned shares](OWNED-SHARES.md).
 
 ## Outcome
 
@@ -10,7 +10,7 @@ A self-hoster runs fdrive with one mounted data folder. Each user's files are pl
 `<root>/<username>`, the layout SFTPGo used, so backups, rsync, SMB and Syncthing keep working on
 the host and an SFTPGo data folder is adopted in place. A local login gets search, thumbnails,
 Office, share links, Trash, zip, kept modification times, atomic moves and safe Mac writes, and
-users can share folders with each other. WebDAV and S3 stay as storage an administrator adds.
+users can share folders with each other. The files folder is fdrive's only storage.
 
 ## Why
 
@@ -23,7 +23,7 @@ admin UI and upgrades.
 - **Inside the API, in TypeScript.** Every byte already streams through the API; a second
   process would add a hop and a credential and run no faster. Never in `fdrive-ml`, which has no
   storage mounts on purpose.
-- **A provider module like any other.** `@fdrive/local` implements `StorageProvider` and
+- **A provider module behind the storage port.** `@fdrive/local` implements `StorageProvider` and
   `ProviderModule`. The seam grew where local needed it, not with type checks:
   `deploymentManaged` (rows come from the deployment, never a form), `admit` (a disabled user is
   stopped at once) and `indexRootName`.
@@ -32,6 +32,13 @@ admin UI and upgrades.
 - **fdrive owns local users.** `app.local_users`: username (unique in any case, since homes may
   sit on a case-insensitive disk), scrypt hash, disabled flag. The first user comes from setup,
   the rest from System > Users. Administrator rights stay on the account.
+- **WebDAV and S3 storage are removed (2026-11-13).** They never gained search, thumbnails,
+  shares or Office. `packages/webdav` and `packages/s3` are deleted and `ProviderType` is
+  `"local"`. The storage port stays as a cheap internal boundary, not a plugin system.
+  Migration 0019 disables leftover `webdav` and `s3` rows (`enabled = false`,
+  `managed_by_env = false`) and keeps them, since logins reference them; those logins
+  disappear with their modules. Without `FDRIVE_STORAGE_ROOT` setup refuses to complete.
+  Backups to an S3 bucket stay.
 - **SFTPGo is removed, its data is kept.** Migration 0017 turns the SFTPGo row the deployment
   pinned (else the setup owner's, else the oldest) into the local row in place, so logins and
   everything keyed by them carry over; renames the index root to `files`; turns SFTPGo share

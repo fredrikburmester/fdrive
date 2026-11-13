@@ -323,9 +323,9 @@ function createFixtureStorage(
 
 /**
  * The module for `startProviderServer`'s protocol: password login, minted
- * tokens and storage over them. It fills the WebDAV slot of the provider
- * registry, since provider types are a closed list, and stands in for any
- * remote backend that mints tokens.
+ * tokens and storage over them. It fills the provider registry's only slot
+ * (`local`), since provider types are a closed list, and stands in for a
+ * backend that mints tokens, which the provider port still supports.
  */
 export function providerFixtureModule(): ProviderModule {
   async function login(
@@ -350,7 +350,7 @@ export function providerFixtureModule(): ProviderModule {
     return { token: value.token, expiresAt: new Date(value.expiresAt) };
   }
   return {
-    type: "webdav",
+    type: "local",
     label: "Token fixture",
     configFields: [],
     credentialFields: [

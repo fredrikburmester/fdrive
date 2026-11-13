@@ -1,94 +1,23 @@
-import type { ProviderField, SetupMode } from "@fdrive/contracts";
-import { normalizeProviderConfig, providerFormError, providerReachError } from "./connection";
-
-export type SetupStep = "token" | "connection" | "account";
+export type SetupStep = "token" | "account";
 
 /**
- * The setup wizard's steps per mode, in order. A deployment with a local
- * folder only needs the owner's account; without one, the owner first
- * connects the storage they will sign in to.
+ * The setup wizard's steps, in order: claim the installation with its
+ * token, then create the owner's account on the deployment's files folder.
  */
-export const SETUP_STEPS: Readonly<Record<SetupMode, readonly SetupStep[]>> = {
-  local: ["token", "account"],
-  provider: ["token", "connection", "account"],
-};
+export const SETUP_STEPS: readonly SetupStep[] = ["token", "account"];
 
-/** The step after `step` in `mode`, or null when `step` is the last one. */
-export function nextSetupStep(mode: SetupMode, step: SetupStep): SetupStep | null {
-  const steps = SETUP_STEPS[mode];
-  return steps[steps.indexOf(step) + 1] ?? null;
+/** The step after `step`, or null when `step` is the last one. */
+export function nextSetupStep(step: SetupStep): SetupStep | null {
+  return SETUP_STEPS[SETUP_STEPS.indexOf(step) + 1] ?? null;
 }
 
-/** The step before `step` in `mode`, or null when `step` is the first one. */
-export function previousSetupStep(mode: SetupMode, step: SetupStep): SetupStep | null {
-  const steps = SETUP_STEPS[mode];
-  const index = steps.indexOf(step);
-  return index > 0 ? (steps[index - 1] as SetupStep) : null;
-}
-
-export interface ConnectionTestState {
-  readonly ok: boolean;
-  readonly detail: string;
+/** The step before `step`, or null when `step` is the first one. */
+export function previousSetupStep(step: SetupStep): SetupStep | null {
+  const index = SETUP_STEPS.indexOf(step);
+  return index > 0 ? (SETUP_STEPS[index - 1] as SetupStep) : null;
 }
 
 /** True once the setup token step has something to submit. */
 export function canLeaveTokenStep(token: string): boolean {
   return token.trim().length > 0;
-}
-
-/** The storage the provider-mode connection step describes, as typed. */
-export interface SetupConnectionDraft {
-  readonly type: string;
-  readonly label: string;
-  readonly baseUrl: string;
-  readonly config: Readonly<Record<string, string>>;
-}
-
-/**
- * What a connection test proved reachable: the type, address and
- * configuration as they would be submitted. The name is left out, so
- * renaming the storage keeps a passing test.
- */
-export function connectionTestKey(draft: SetupConnectionDraft): string {
-  return JSON.stringify([draft.type, draft.baseUrl.trim(), normalizeProviderConfig(draft.config)]);
-}
-
-/** The first reason the connection step's form is incomplete, or null when it can be tested. */
-export function connectionStepError(
-  fields: readonly ProviderField[],
-  draft: SetupConnectionDraft,
-): string | null {
-  if (draft.type.length === 0) return "Choose a storage type.";
-  return providerFormError(fields, draft);
-}
-
-/**
- * The first reason the connection cannot be tested yet, or null when it
- * can: the type, address and required configuration. The name is not part
- * of a test, so the storage can be tested before it is named.
- */
-export function connectionTestError(
-  fields: readonly ProviderField[],
-  draft: SetupConnectionDraft,
-): string | null {
-  if (draft.type.length === 0) return "Choose a storage type.";
-  return providerReachError(fields, draft);
-}
-
-/**
- * True once the connection step's form is complete and a passing test
- * result belongs to exactly what is typed now: a pass for an address or
- * configuration edited since does not count.
- */
-export function canLeaveConnectionStep(
-  fields: readonly ProviderField[],
-  draft: SetupConnectionDraft,
-  testResult: ConnectionTestState | null,
-  testedKey: string | null,
-): boolean {
-  return (
-    connectionStepError(fields, draft) === null &&
-    testResult?.ok === true &&
-    testedKey === connectionTestKey(draft)
-  );
 }

@@ -12,7 +12,7 @@ export function activityTrashLeaf(root: string, leaf: string) {
 }
 
 const receipts = new AsyncLocalStorage<{ path: string; leaf?: string }>();
-/** The WebDAV move wrapper supplies its actual destination through the active operation. */
+/** The move-to-trash wrapper supplies its actual destination through the active operation. */
 export function captureRecycleReceipt(path: string, leaf: string) {
   const receipt = receipts.getStore();
   if (receipt?.path === path) receipt.leaf = leaf;

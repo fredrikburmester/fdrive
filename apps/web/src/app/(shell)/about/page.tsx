@@ -21,7 +21,6 @@ const guides = [
   ["Office editing", "docs/OFFICE.md"],
   ["Trash & recovery", "docs/TRASH.md"],
   ["Accounts & sign-in", "docs/AUTH.md"],
-  ["WebDAV storage", "docs/WEBDAV.md"],
   ["MCP integration", "docs/MCP.md"],
 ] as const;
 

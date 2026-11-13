@@ -1,11 +1,13 @@
 # Native writes on stock storage
 
 **Superseded 2026-11-12.** SFTPGo is removed, so nothing here is backlog. The publish lock,
-the in-section content proof and the narrowed critical section below are the default Mac
-write contract for every storage, described in
+the in-section content proof and the narrowed critical section below are the Mac write
+contract for the files folder, described in
 [macOS behavior](../MACOS.md#write-configuration-and-recovery); open Mac write work is in
 [macOS writes](MACOS-WRITES.md). This page stays as the design record that comments in
 `apps/api/src/desktop/writes.ts` and `packages/db/src/repos/desktop-publish-lock.ts` point to.
+WebDAV (with `apache-webdav-exclusive`) and S3 storage were removed on 2026-11-13; their
+mentions below are history.
 
 Updated 2026-09-16. Outcome: Finder create/update/move/trash/restore works against
 **unmodified** SFTPGo. The forked image and its `fdrive-local-v1` mode were removed on
@@ -15,7 +17,7 @@ is the default contract for every storage (`publishesSafely` in
 the `verified-optimistic` selector was removed, S3 publishes the same way, and a stale value in a
 stored row is ignored. Related:
 [macOS writes](MACOS-WRITES.md), [macOS behavior](../MACOS.md#write-configuration-and-recovery),
-[provider development](../STORAGE-PROVIDERS.md).
+[storage port](../STORAGE-PROVIDERS.md).
 
 ## Accepted decision
 

@@ -24,7 +24,7 @@ describe("openOrReauth: non-CryptoError rethrow", () => {
   it("propagates an error from `open` that is not a CryptoError, unwrapped", async () => {
     const repos: Repos = createMemoryRepos();
     const provider = await repos.providers.ensure({
-      type: "webdav",
+      type: "local",
       baseUrl: "http://tokens.test",
     });
     const account = await repos.accounts.create({ displayName: "alice" });

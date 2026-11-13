@@ -27,9 +27,9 @@ export function localIndexRoot(
 }
 
 /**
- * Every provider module this deployment has: the local folder over
- * `app.local_users` when `FDRIVE_STORAGE_ROOT` is set, plus WebDAV and S3.
- * The API and the backup worker build theirs the same way.
+ * Every provider module this deployment has: the files folder over
+ * `app.local_users` when `FDRIVE_STORAGE_ROOT` is set, else none. The API
+ * and the backup worker build theirs the same way.
  */
 export function deploymentModules(
   config: Pick<AppConfig, "fdriveStorageRoot" | "fdriveIndexRoots">,

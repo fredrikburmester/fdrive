@@ -10,17 +10,10 @@ const mocks = vi.hoisted(() => ({
   mutate: vi.fn(),
   reset: vi.fn(),
   replace: vi.fn(),
-  setupMode: undefined as "local" | "provider" | undefined,
 }));
 vi.mock("@/lib/api/system-queries", () => ({
   useSystemFeatures: () => mocks.query(),
   useUpdateFeatures: () => mocks.update(),
-  useSetupStatus: () => ({
-    data:
-      mocks.setupMode === undefined
-        ? undefined
-        : { required: false, mode: mocks.setupMode, types: [] },
-  }),
 }));
 vi.mock("./office-feature-card", () => ({
   OfficeFeatureCard: () => <p>Office feature card</p>,
@@ -45,12 +38,15 @@ vi.mock("./trash-settings-card", () => ({
   TrashSettingsCard: ({
     onContinue,
     provider,
+    description,
   }: {
     onContinue?: () => void;
     provider: { label: string };
+    description?: string;
   }) => (
     <>
       <span>Trash for {provider.label}</span>
+      <span>{description}</span>
       <button type="button" onClick={onContinue}>
         Trash settings
       </button>
@@ -113,7 +109,6 @@ function mount(
 afterEach(() => {
   cleanup();
   vi.clearAllMocks();
-  mocks.setupMode = undefined;
 });
 describe("feature walkthrough", () => {
   it("includes separate search OCR and PDF conversion steps", () => {
@@ -203,6 +198,7 @@ describe("feature walkthrough", () => {
     mount(6);
     expect(screen.getByText("Step 9 of 12 · Trash")).toBeTruthy();
     expect(screen.getByText("Trash for Primary")).toBeTruthy();
+    expect(screen.getByText("You can change this later under System > General.")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Trash settings" }));
     expect(mocks.mutate).toHaveBeenCalledWith(
       expect.objectContaining({ walkthroughStep: 7, values: off }),
@@ -228,16 +224,11 @@ describe("feature walkthrough", () => {
       expect.anything(),
     );
   });
-  it("counts the storage step when setup connected storage instead of a local folder", () => {
-    mocks.setupMode = "provider";
-    mount(8);
-    expect(screen.getByText("Step 12 of 13 · Office")).toBeTruthy();
-  });
   it("reviews the address alongside the other choices", () => {
-    mocks.setupMode = "local";
     mount(9);
     expect(screen.getByText("Step 12 of 12 · Review")).toBeTruthy();
     expect(screen.getByText("Address review")).toBeTruthy();
+    expect(screen.getByText(/later under System: Features and General\./)).toBeTruthy();
   });
   it("starts with features and hides storage work when everything is off", () => {
     mount(0);

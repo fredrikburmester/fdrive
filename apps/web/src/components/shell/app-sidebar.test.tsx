@@ -129,26 +129,6 @@ it("shows Shares and Trash when any linked login has them, and names each login'
   expect(screen.getByRole("img", { name: "fdrive" })).toBeTruthy();
 });
 
-it("leads a key login with its storage name and keeps the access key beneath", async () => {
-  renderSidebar({
-    ...me,
-    identities: [
-      makeIdentity({
-        id: "b2",
-        providerType: "s3",
-        username: "0041234abcdef",
-        providerLabel: "Backblaze",
-      }),
-    ],
-    activeIdentityId: "b2",
-  });
-  await screen.findByRole("link", { name: "Files" });
-  const trigger = screen.getByRole("button", { name: /Backblaze[\s\S]*0041234abcdef/ });
-  expect(isBefore(screen.getByText("Backblaze"), screen.getByText("0041234abcdef"))).toBe(true);
-  expect(trigger.textContent?.startsWith("BA")).toBe(true);
-  expect(screen.getByRole("img", { name: "S3" })).toBeTruthy();
-});
-
 it("applies tighter vertical nav item spacing via scoped descendant styles on SidebarContent", () => {
   const { container } = renderSidebar();
   const content = container.querySelector('[data-slot="sidebar-content"]');
@@ -163,7 +143,6 @@ it("nests feature pages beneath Features and keeps other System pages separate",
 
   const expected = [
     ["General", "/system/general"],
-    ["Storage", "/system/storage"],
     ["Users", "/system/users"],
     ["Features", "/system/features"],
     ["Thumbnails", "/system/thumbnails"],
@@ -177,17 +156,18 @@ it("nests feature pages beneath Features and keeps other System pages separate",
   const links = await Promise.all(
     expected.map(([label]) => screen.findByRole("link", { name: label })),
   );
-  const featuresItem = links[3]?.closest("li");
+  const featuresItem = links[2]?.closest("li");
   for (const [index, link] of links.entries()) {
     expect(link.getAttribute("href")).toBe(expected[index]?.[1]);
     expect(link.closest("li")).not.toBeNull();
-    expect(featuresItem?.contains(link)).toBe(index >= 3);
+    expect(featuresItem?.contains(link)).toBe(index >= 2);
     if (index > 0) {
       const previous = links[index - 1];
       expect(previous !== undefined && isBefore(previous, link)).toBe(true);
     }
   }
   expect(screen.queryByRole("link", { name: "Connection" })).toBeNull();
+  expect(screen.queryByRole("link", { name: "Storage" })).toBeNull();
   expect(screen.getByText("Admins only")).toBeTruthy();
 });
 

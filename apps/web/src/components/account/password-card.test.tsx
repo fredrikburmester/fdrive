@@ -33,23 +33,23 @@ afterEach(() => {
 });
 
 describe("PasswordCard", () => {
-  it("stays hidden while the account loads and for a login on other storage", () => {
+  it("stays hidden while the account loads, or when the active login is unknown", () => {
     const { container, rerender } = render(<PasswordCard />);
     expect(container.textContent).toBe("");
 
-    mocks.me = makeMe({ identities: [makeIdentity({ providerType: "webdav" })] });
+    mocks.me = makeMe({ activeIdentityId: "gone" });
     rerender(<PasswordCard />);
     expect(container.textContent).toBe("");
   });
 
-  it("follows the active login, not just any local one", () => {
+  it("follows the active login, not just the first one", () => {
     mocks.me = makeMe({
-      identities: [makeIdentity({ id: "dav", providerType: "webdav" }), makeIdentity()],
-      activeIdentityId: "dav",
+      identities: [makeIdentity(), makeIdentity({ id: "two", username: "bob" })],
+      activeIdentityId: "two",
     });
-    const { container } = render(<PasswordCard />);
+    render(<PasswordCard />);
 
-    expect(container.textContent).toBe("");
+    expect(screen.getByText(/The password bob signs in with/)).toBeTruthy();
   });
 
   it("changes the local login's password, then clears the form", () => {

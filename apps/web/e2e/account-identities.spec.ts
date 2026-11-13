@@ -6,7 +6,9 @@ import { listing } from "./support/regions.js";
 
 test.use({ storageState: { cookies: [], origins: [] } });
 
-test("links, switches, finds both owners of one path, and unlinks a login", async ({ page }) => {
+test("links, switches, finds both owners of one path, searches only the active login, and unlinks a login", async ({
+  page,
+}) => {
   await loginAs(page, "account_left", "account-left-test-password");
   await page.goto("/account");
   await expect(page.getByRole("button", { name: "Remove account_left" })).toBeDisabled();
@@ -45,18 +47,30 @@ test("links, switches, finds both owners of one path, and unlinks a login", asyn
   await page.getByRole("menuitemradio", { name: /account_left/ }).click();
   await expect(page.getByText("left-only.txt", { exact: true })).toBeVisible();
   await expect(page.getByText("right-only.txt", { exact: true })).toHaveCount(0);
-  await page.getByRole("button", { name: "Search", exact: true }).click();
+  // Search covers the active login only: no cross-login scope, and only
+  // account_left's file answers a query both logins' names would match.
   const search = page.getByRole("dialog", { name: "Search", exact: true });
-  await search.getByRole("button", { name: "All linked logins" }).click();
-  await search.getByPlaceholder("Search files, content, and images...").fill("same");
-  const rows = search.getByRole("option").filter({ hasText: "same.txt" });
-  await expect(rows).toHaveCount(2);
-  await expect(search.locator("img")).toHaveCount(0);
-  await rows
-    .filter({ hasText: "account_right" })
-    .getByRole("button", { name: "Reveal in folder" })
-    .click();
+  const query = search.getByPlaceholder("Search files, content, and images...");
+  await page.getByRole("button", { name: "Search", exact: true }).click();
+  await expect(search.getByRole("button", { name: "All linked logins" })).toHaveCount(0);
+  await query.fill("only");
+  await expect(search.getByRole("option").filter({ hasText: "left-only.txt" })).not.toHaveCount(0);
+  await expect(search.getByRole("option").filter({ hasText: "right-only.txt" })).toHaveCount(0);
+  await page.keyboard.press("Escape");
+  await expect(search).toBeHidden();
+  // Switching login is the way to search the other one.
+  await page.getByRole("button", { name: /account_left/ }).click();
+  await page.getByRole("menuitemradio", { name: /account_right/ }).click();
   await expect(page.getByText("right-only.txt", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Search", exact: true }).click();
+  await query.fill("same");
+  const rows = search.getByRole("option").filter({ hasText: "same.txt" });
+  await expect(rows).toHaveCount(1);
+  await expect(search.locator("img")).toHaveCount(0);
+  await rows.getByRole("button", { name: "Reveal in folder" }).click();
+  await expect(page).toHaveURL(/\/files(?:\?select=same.txt)?$/);
+  await expect(page.getByText("right-only.txt", { exact: true })).toBeVisible();
+  await expect(page.getByText("left-only.txt", { exact: true })).toHaveCount(0);
   // A second tab changes the cookie default; this tab must keep its own login.
   const secondTab = await page.context().newPage();
   await secondTab.goto("/files");

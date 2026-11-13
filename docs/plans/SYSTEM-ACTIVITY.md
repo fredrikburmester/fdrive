@@ -55,7 +55,7 @@ or the fraction of the entire library successfully indexed.
 - Clear the spinner when work ends. Failures/unavailable status use a small static warning
   with a tooltip; existing System pages keep detailed results. A failed feature must not
   suppress a different feature that is still processing.
-- General/Storage/Shared-folder request indicators reflect this browser's pending actions.
+- General/Shared-folder request indicators reflect this browser's pending actions.
   Service job indicators reflect server activity, including scheduled work and other admins.
 
 ## Data and implementation design

@@ -28,21 +28,21 @@ beforeEach(() => {
 it("renders the page for an administrator", async () => {
   mocks.isAdmin = true;
   const html = renderToStaticMarkup(
-    await SystemLayout({ children: <section>Storage servers</section> }),
+    await SystemLayout({ children: <section>General settings</section> }),
   );
-  expect(html).toContain("Storage servers");
+  expect(html).toContain("General settings");
 });
 
 it("sends a signed-in non-administrator to /files instead of rendering the page", async () => {
   mocks.isAdmin = false;
-  await expect(SystemLayout({ children: <section>Storage servers</section> })).rejects.toThrow(
+  await expect(SystemLayout({ children: <section>General settings</section> })).rejects.toThrow(
     "redirect:/files",
   );
 });
 
 it("sends a visitor without a session to /login", async () => {
   mocks.me.mockRejectedValue(new Error("unauthorized"));
-  await expect(SystemLayout({ children: <section>Storage servers</section> })).rejects.toThrow(
+  await expect(SystemLayout({ children: <section>General settings</section> })).rejects.toThrow(
     "redirect:/login",
   );
 });

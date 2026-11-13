@@ -31,7 +31,7 @@ describe("AboutResponse", () => {
   });
 
   it("parses a payload where setup is complete but the caller is anonymous (null label)", () => {
-    const payload = { ...valid, providers: [{ type: "webdav" as const, label: null }] };
+    const payload = { ...valid, providers: [{ type: "local" as const, label: null }] };
     expect(AboutResponse.parse(payload)).toEqual(payload);
   });
 

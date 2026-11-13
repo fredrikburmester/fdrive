@@ -17,7 +17,7 @@ async function fixture() {
   const repos = createMemoryRepos();
   const master = Buffer.alloc(32, 2);
   const clock = () => new Date("2026-01-01T00:00:00Z");
-  const provider = await repos.providers.ensure({ type: "webdav", baseUrl: "http://a.test" });
+  const provider = await repos.providers.ensure({ type: "local", baseUrl: "http://a.test" });
   const account = await repos.accounts.create({ displayName: "Alice" });
   const identity = await repos.identities.create({
     accountId: account.id,
@@ -52,7 +52,7 @@ async function fixture() {
   const providers = memoryProviderService(repos, {
     fetch: fetchImpl,
     clock,
-    modules: { webdav: MODULE },
+    modules: { local: MODULE },
   });
   const deps = { repos, providers, master, clock, fetch: fetchImpl };
   return {
@@ -64,7 +64,7 @@ async function fixture() {
     source: createTokenSource(deps),
     async switchToB() {
       await repos.providers.update(provider.id, { enabled: false });
-      await repos.providers.ensure({ type: "webdav", baseUrl: "http://b.test" });
+      await repos.providers.ensure({ type: "local", baseUrl: "http://b.test" });
     },
     intercept(fn: () => Promise<void>) {
       beforeRequest = fn;

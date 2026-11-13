@@ -24,7 +24,7 @@ const FAKE_STORAGE: StorageProvider = {
 };
 
 async function seedAccountWithIdentity(repos: ReturnType<typeof createMemoryRepos>) {
-  const provider = await repos.providers.ensure({ type: "webdav", baseUrl: "http://dav.test" });
+  const provider = await repos.providers.ensure({ type: "local", baseUrl: "http://dav.test" });
   const account = await repos.accounts.create({ displayName: "Alice" });
   const identity = await repos.identities.create({
     accountId: account.id,

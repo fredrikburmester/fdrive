@@ -30,7 +30,7 @@ test("setup on a fresh local folder creates the owner's account, which becomes t
   const anonymous = await browser.newContext({ storageState: { cookies: [], origins: [] } });
   try {
     const status = await (await page.request.get(url("/api/v1/setup/status"))).json();
-    expect(status).toMatchObject({ required: true, mode: "local", types: [] });
+    expect(status).toEqual({ required: true, storageConfigured: true });
 
     await page.goto(url("/login"));
     await expect(page).toHaveURL(/\/setup$/);
@@ -38,7 +38,7 @@ test("setup on a fresh local folder creates the owner's account, which becomes t
     await page.getByLabel("Setup token").fill(TOKEN);
     await page.getByRole("button", { name: "Continue", exact: true }).click();
 
-    // No storage to connect: the folder is the deployment's. Only the account.
+    // No storage to choose: the folder is the deployment's. Only the account.
     await expect(page.getByText("Create your account")).toBeVisible();
     await expect(page.getByText("Step 2 of 12")).toBeVisible();
     await expect(page.getByLabel("Storage type")).toHaveCount(0);
@@ -113,6 +113,38 @@ test("setup on a fresh local folder creates the owner's account, which becomes t
     await login.getByRole("button", { name: "New" }).waitFor();
   } finally {
     await anonymous.close();
+    await env.stop();
+  }
+});
+
+test("without FDRIVE_STORAGE_ROOT, setup says to set it instead of offering the form", async ({
+  page,
+}) => {
+  test.setTimeout(300_000);
+  const env = await startEnvironment({
+    apiPort: await getFreePort(E2E_HOST),
+    webPort: await getFreePort(E2E_HOST),
+    skipStatePersist: true,
+    storage: false,
+    extraApiEnv: { FDRIVE_ADMIN_USERS: "", FDRIVE_SETUP_TOKEN: TOKEN },
+  });
+  const url = (path: string) => env.webBaseUrl + path;
+  try {
+    const status = await (await page.request.get(url("/api/v1/setup/status"))).json();
+    expect(status).toEqual({ required: true, storageConfigured: false });
+
+    await page.goto(url("/setup"));
+    await expect(page.getByText("Choose where fdrive keeps files")).toBeVisible();
+    await expect(page.getByText("FDRIVE_STORAGE_ROOT", { exact: true })).toBeVisible();
+    await expect(page.getByLabel("Setup token")).toHaveCount(0);
+    await expect(page.getByText(/^Step \d+ of/)).toHaveCount(0);
+    const recheck = page.waitForResponse(
+      (response) => response.url().endsWith("/api/v1/setup/status") && response.ok(),
+    );
+    await page.getByRole("button", { name: "Try again" }).click();
+    await recheck;
+    await expect(page.getByText("Choose where fdrive keeps files")).toBeVisible();
+  } finally {
     await env.stop();
   }
 });

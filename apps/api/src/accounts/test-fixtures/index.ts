@@ -1,8 +1,6 @@
 import { MeResponse } from "@fdrive/contracts";
 import type { ProviderModule } from "@fdrive/core";
 import { createMemoryRepos } from "@fdrive/db/testing";
-import { s3Module } from "@fdrive/s3";
-import { webdavModule } from "@fdrive/webdav";
 import type { Logger } from "pino";
 import { vi } from "vitest";
 import { createApp } from "../../app.js";
@@ -43,7 +41,11 @@ export function accountsHarness(
   options: {
     principalResolver?: PrincipalResolver;
     wrapFetch?: (fetch: typeof globalThis.fetch) => typeof globalThis.fetch;
-    /** Modules registered beside the local folder and the stock WebDAV and S3, by provider type. */
+    /**
+     * Modules by provider type, replacing the local folder's own: a fake
+     * `local` module keeps the seeded row and the users' passwords
+     * (`<username>-pass`) but changes how sign-in or storage behaves.
+     */
     modules?: Readonly<Record<string, ProviderModule>>;
   } = {},
 ) {
@@ -72,7 +74,7 @@ export function accountsHarness(
   const providers = memoryProviderService(repos, {
     fetch: fetchImpl,
     clock,
-    modules: { local: local.module, webdav: webdavModule, s3: s3Module, ...options.modules },
+    modules: { local: local.module, ...options.modules },
   });
   const seeded = (async () => {
     await seedLocalUsers(

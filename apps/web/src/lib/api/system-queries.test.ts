@@ -11,13 +11,9 @@ import { makeIdentity, makeMe } from "@/test-fixtures/identity";
 const setupStatusMock = vi.fn();
 const systemFeaturesMock = vi.fn();
 const systemUpdateFeaturesMock = vi.fn();
-const setupTestMock = vi.fn();
 const setupCompleteMock = vi.fn();
 const adminProvidersMock = vi.fn();
-const adminCreateProviderMock = vi.fn();
 const adminUpdateProviderMock = vi.fn();
-const adminDeleteProviderMock = vi.fn();
-const adminTestProviderMock = vi.fn();
 const adminUsersMock = vi.fn();
 const adminCreateUserMock = vi.fn();
 const adminUpdateUserMock = vi.fn();
@@ -47,13 +43,9 @@ vi.mock("./client.js", () => ({
     systemFeatures: (...args: unknown[]) => systemFeaturesMock(...args),
     systemUpdateFeatures: (...args: unknown[]) => systemUpdateFeaturesMock(...args),
     setupStatus: (...args: unknown[]) => setupStatusMock(...args),
-    setupTest: (...args: unknown[]) => setupTestMock(...args),
     setupComplete: (...args: unknown[]) => setupCompleteMock(...args),
     adminProviders: (...args: unknown[]) => adminProvidersMock(...args),
-    adminCreateProvider: (...args: unknown[]) => adminCreateProviderMock(...args),
     adminUpdateProvider: (...args: unknown[]) => adminUpdateProviderMock(...args),
-    adminDeleteProvider: (...args: unknown[]) => adminDeleteProviderMock(...args),
-    adminTestProvider: (...args: unknown[]) => adminTestProviderMock(...args),
     adminUsers: (...args: unknown[]) => adminUsersMock(...args),
     adminCreateUser: (...args: unknown[]) => adminCreateUserMock(...args),
     adminUpdateUser: (...args: unknown[]) => adminUpdateUserMock(...args),
@@ -127,19 +119,19 @@ describe("feature queries", () => {
 
 const PROVIDER = {
   id: "00000000-0000-4000-8000-000000000009",
-  type: "webdav" as const,
-  label: "dav.example.com",
-  baseUrl: "https://dav.example.com/",
-  config: { prefix: "/files" },
+  type: "local" as const,
+  label: "Local folder",
+  baseUrl: "" as const,
+  config: {},
   enabled: true,
   managedByEnv: true,
   identityCount: 1,
   reachable: true,
   checkedAt: "2026-01-01T00:00:00.000Z",
   createdAt: "2026-01-01T00:00:00.000Z",
-  capabilities: allCapabilities(false),
+  capabilities: allCapabilities(true),
 };
-const PROVIDERS_RESPONSE: AdminProvidersResponse = { providers: [PROVIDER], types: [] };
+const PROVIDERS_RESPONSE: AdminProvidersResponse = { providers: [PROVIDER] };
 
 function createWrapper(queryClient: QueryClient) {
   return function Wrapper({ children }: { children: ReactNode }) {
@@ -149,13 +141,9 @@ function createWrapper(queryClient: QueryClient) {
 
 beforeEach(() => {
   setupStatusMock.mockReset();
-  setupTestMock.mockReset();
   setupCompleteMock.mockReset();
   adminProvidersMock.mockReset();
-  adminCreateProviderMock.mockReset();
   adminUpdateProviderMock.mockReset();
-  adminDeleteProviderMock.mockReset();
-  adminTestProviderMock.mockReset();
   adminUsersMock.mockReset();
   adminCreateUserMock.mockReset();
   adminUpdateUserMock.mockReset();
@@ -180,30 +168,15 @@ beforeEach(() => {
 
 describe("useSetupStatus", () => {
   it("fetches the setup status", async () => {
-    setupStatusMock.mockResolvedValue({ required: true, mode: "local", types: [] });
+    setupStatusMock.mockResolvedValue({ required: true, storageConfigured: true });
     const { useSetupStatus } = await import("./system-queries.js");
     const queryClient = new QueryClient();
 
     const { result } = renderHook(() => useSetupStatus(), { wrapper: createWrapper(queryClient) });
 
     await waitFor(() =>
-      expect(result.current.data).toEqual({ required: true, mode: "local", types: [] }),
+      expect(result.current.data).toEqual({ required: true, storageConfigured: true }),
     );
-  });
-});
-
-describe("useSetupTest", () => {
-  it("probes a candidate storage with the setup token", async () => {
-    setupTestMock.mockResolvedValue({ ok: true, detail: "reachable" });
-    const { useSetupTest } = await import("./system-queries.js");
-    const queryClient = new QueryClient();
-    const request = { type: "webdav" as const, baseUrl: "https://dav.example.com/", config: {} };
-
-    const { result } = renderHook(() => useSetupTest(), { wrapper: createWrapper(queryClient) });
-    result.current.mutate({ token: "tok-1", request });
-
-    await waitFor(() => expect(result.current.isSuccess).toBe(true));
-    expect(setupTestMock).toHaveBeenCalledWith("tok-1", request);
   });
 });
 
@@ -218,7 +191,7 @@ describe("useSetupComplete", () => {
     });
     result.current.mutate({
       token: "tok-1",
-      request: { kind: "local", username: "ada", password: "hunter22" },
+      request: { username: "ada", password: "hunter22" },
     });
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
@@ -240,53 +213,11 @@ describe("useAdminProviders", () => {
   });
 });
 
-describe("useAdminCreateProvider", () => {
-  it("adds a provider and invalidates the cached list", async () => {
-    adminCreateProviderMock.mockResolvedValue(PROVIDER);
-    adminProvidersMock.mockResolvedValue(PROVIDERS_RESPONSE);
-    const { useAdminCreateProvider } = await import("./system-queries.js");
-    const queryClient = new QueryClient();
-    queryClient.setQueryData(["admin", "providers"], PROVIDERS_RESPONSE);
-
-    const { result } = renderHook(() => useAdminCreateProvider(), {
-      wrapper: createWrapper(queryClient),
-    });
-    result.current.mutate({ type: "webdav", label: "Second", baseUrl: "https://other.example/" });
-
-    await waitFor(() => expect(result.current.isSuccess).toBe(true));
-    expect(adminCreateProviderMock).toHaveBeenCalledWith({
-      type: "webdav",
-      label: "Second",
-      baseUrl: "https://other.example/",
-    });
-    expect(queryClient.getQueryState(["admin", "providers"])?.isInvalidated).toBe(true);
-  });
-});
-
-describe("useAdminDeleteProvider", () => {
-  it("removes a provider and invalidates the cached list", async () => {
-    adminDeleteProviderMock.mockResolvedValue({ ok: true });
-    adminProvidersMock.mockResolvedValue({ providers: [], types: [] });
-    const { useAdminDeleteProvider } = await import("./system-queries.js");
-    const queryClient = new QueryClient();
-    queryClient.setQueryData(["admin", "providers"], PROVIDERS_RESPONSE);
-
-    const { result } = renderHook(() => useAdminDeleteProvider(), {
-      wrapper: createWrapper(queryClient),
-    });
-    result.current.mutate(PROVIDER.id);
-
-    await waitFor(() => expect(result.current.isSuccess).toBe(true));
-    expect(adminDeleteProviderMock).toHaveBeenCalledWith(PROVIDER.id);
-    expect(queryClient.getQueryState(["admin", "providers"])?.isInvalidated).toBe(true);
-  });
-});
-
 describe("useAdminUpdateProvider", () => {
-  it("updates a provider and invalidates the cached list", async () => {
-    const updated = { ...PROVIDER, config: { prefix: "/new" } };
+  it("renames the storage and invalidates the cached list", async () => {
+    const updated = { ...PROVIDER, label: "Home storage" };
     adminUpdateProviderMock.mockResolvedValue(updated);
-    adminProvidersMock.mockResolvedValue({ providers: [updated], types: [] });
+    adminProvidersMock.mockResolvedValue({ providers: [updated] });
     const { useAdminUpdateProvider } = await import("./system-queries.js");
     const queryClient = new QueryClient();
     queryClient.setQueryData(["admin", "providers"], PROVIDERS_RESPONSE);
@@ -294,12 +225,10 @@ describe("useAdminUpdateProvider", () => {
     const { result } = renderHook(() => useAdminUpdateProvider(), {
       wrapper: createWrapper(queryClient),
     });
-    result.current.mutate({ id: PROVIDER.id, patch: { config: { prefix: "/new" } } });
+    result.current.mutate({ id: PROVIDER.id, patch: { label: "Home storage" } });
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
-    expect(adminUpdateProviderMock).toHaveBeenCalledWith(PROVIDER.id, {
-      config: { prefix: "/new" },
-    });
+    expect(adminUpdateProviderMock).toHaveBeenCalledWith(PROVIDER.id, { label: "Home storage" });
     expect(queryClient.getQueryState(["admin", "providers"])?.isInvalidated).toBe(true);
   });
 });
@@ -316,39 +245,6 @@ it("invalidates cached login names and public choices after a rename, keeping id
   expect(client.getQueryState(["providers"])?.isInvalidated).toBe(true);
   expect(client.getQueryState(["auth", "me"])?.isInvalidated).toBe(true);
   expect(client.getQueryData(["auth", "me"])).toEqual(ME_RESPONSE);
-});
-
-describe("useAdminTestProvider", () => {
-  it("probes a saved provider by id", async () => {
-    adminTestProviderMock.mockResolvedValue({ ok: true, detail: "reachable" });
-    const { useAdminTestProvider } = await import("./system-queries.js");
-    const queryClient = new QueryClient();
-
-    const { result } = renderHook(() => useAdminTestProvider(), {
-      wrapper: createWrapper(queryClient),
-    });
-    result.current.mutate(PROVIDER.id);
-
-    await waitFor(() => expect(result.current.isSuccess).toBe(true));
-    expect(adminTestProviderMock).toHaveBeenCalledWith(PROVIDER.id);
-  });
-
-  it("probes an unsaved candidate", async () => {
-    adminTestProviderMock.mockResolvedValue({ ok: false, detail: "unreachable" });
-    const { useAdminTestProvider } = await import("./system-queries.js");
-    const queryClient = new QueryClient();
-
-    const { result } = renderHook(() => useAdminTestProvider(), {
-      wrapper: createWrapper(queryClient),
-    });
-    result.current.mutate({ type: "s3", baseUrl: "https://s3.example.com/media" });
-
-    await waitFor(() => expect(result.current.isSuccess).toBe(true));
-    expect(adminTestProviderMock).toHaveBeenCalledWith({
-      type: "s3",
-      baseUrl: "https://s3.example.com/media",
-    });
-  });
 });
 
 const USER = {

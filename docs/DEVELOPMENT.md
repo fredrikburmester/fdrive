@@ -4,8 +4,7 @@ Current design: [Architecture](ARCHITECTURE.md). Unfinished work: [Plans](plans/
 
 This guide covers running fdrive locally for development with hot reloading, seeded test accounts, and integration test environments.
 
-For backend extensions, see [Adding a storage provider](STORAGE-PROVIDERS.md): package setup,
-module contracts, registration, capability limits and verification.
+The API reaches the files folder through an internal [storage port](STORAGE-PROVIDERS.md).
 
 ---
 
@@ -71,31 +70,6 @@ Restart the API server (`pnpm --filter @fdrive/api dev`) so it connects to the l
 
 ---
 
-## Trying the WebDAV Provider Locally (Optional)
-
-A local Apache `mod_dav` server, the one the WebDAV provider's integration tests use:
-
-```bash
-docker compose -f deploy/compose.dev.yaml --profile webdav up -d
-```
-
-Under **System > Storage**, add a `WebDAV` provider at `http://localhost:58082/dav/` and sign in
-as `dev` with the password `dev-webdav-password`. See [WebDAV](WEBDAV.md).
-
----
-
-## Trying the S3 Provider Locally (Optional)
-
-A local MinIO with one bucket and one read-write key:
-
-```bash
-docker compose -f deploy/compose.dev.yaml --profile s3 up -d
-```
-
-Under **System > Storage**, add an `S3` provider at `http://localhost:59000/fdrive` and sign in with the access key `fdrive-dev` and secret `fdrive-dev-password`. The MinIO console is on port `59001` (`minio-root` / `minio-root-password`). See [S3](S3.md).
-
----
-
 ## Local Ports
 
 | Service | Port | Description |
@@ -103,9 +77,6 @@ Under **System > Storage**, add an `S3` provider at `http://localhost:59000/fdri
 | Web UI | `3000` | Next.js frontend |
 | API | `3001` | Hono API server |
 | Postgres | `55432` | Local development database |
-| WebDAV | `58082` | Apache `mod_dav` at `/dav/` (when `webdav` profile is up) |
-| MinIO S3 API | `59000` | Local S3 bucket `fdrive` (when `s3` profile is up) |
-| MinIO console | `59001` | MinIO web console (`minio-root` / `minio-root-password`) |
 | Indexer HTTP | `58010` | Python indexer (when `index` profile is up) |
 | ML server | `58012` | Text embeddings (`/text`), image embeddings (`/image`) and document extraction (`/extract`), when `index` profile is up |
 
@@ -153,8 +124,8 @@ pnpm --filter @fdrive/web test:e2e
 ## Development ports and worker probes
 
 Set `FDRIVE_DEV_API_PORT`, `FDRIVE_DEV_DB_PORT`, `FDRIVE_DEV_INDEXER_HTTP_PORT`,
-`FDRIVE_DEV_OCR_HTTP_PORT` and `FDRIVE_DEV_ML_PORT` before generating a fresh environment
-(`FDRIVE_DEV_WEBDAV_PORT` and `FDRIVE_DEV_MINIO_PORT` move the optional profiles). `pnpm dev:env` uses those same overrides for the API/web URLs and
+`FDRIVE_DEV_OCR_HTTP_PORT` and `FDRIVE_DEV_ML_PORT` before generating a fresh environment.
+`pnpm dev:env` uses those same overrides for the API/web URLs and
 compose publishes. Existing environment assignments are preserved; update them
 when changing ports in an already configured checkout.
 

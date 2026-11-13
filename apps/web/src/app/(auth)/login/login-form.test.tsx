@@ -2,10 +2,7 @@
 import type { PublicProvider } from "@fdrive/contracts";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
-import { allCapabilities, storageNote } from "@/lib/identity/capabilities";
-
-/** The note for storage with none of search, shares and Office. */
-const FILES_ONLY_NOTE = storageNote({ ...allCapabilities(false), trash: true }) as string;
+import { allCapabilities } from "@/lib/identity/capabilities";
 
 const login = vi.hoisted(() => ({
   mutate: vi.fn(),
@@ -28,23 +25,13 @@ const local: PublicProvider = {
   ],
   capabilities: allCapabilities(true),
 };
-const other: PublicProvider = {
-  id: "00000000-0000-4000-8000-000000000002",
-  type: "local",
-  label: "archive.example.org",
-  credentialFields: [
-    { name: "username", label: "Archive user", kind: "text", required: true },
-    { name: "password", label: "Archive password", kind: "password", required: true },
-  ],
-  capabilities: allCapabilities(true),
-};
 
 afterEach(() => {
   cleanup();
   vi.clearAllMocks();
 });
 
-it("renders one provider's fields, names it, and submits its id with the credential", () => {
+it("renders the storage's fields, names it, and submits its id with the credential", () => {
   render(<LoginForm providers={[local]} />);
 
   expect(screen.getByText("Sign in with your fdrive account on files.example.org")).toBeTruthy();
@@ -80,7 +67,7 @@ it("reveals the one-time code on request and sends it when filled", () => {
 it("falls back to the default fields and no provider id when the list is empty", () => {
   render(<LoginForm providers={[]} />);
 
-  expect(screen.getByText("Sign in with your account")).toBeTruthy();
+  expect(screen.getByText("Sign in with your fdrive account")).toBeTruthy();
   fireEvent.change(screen.getByLabelText("Username"), { target: { value: "alice" } });
   fireEvent.change(screen.getByLabelText("Password"), { target: { value: "pw" } });
   fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
@@ -88,13 +75,13 @@ it("falls back to the default fields and no provider id when the list is empty",
   expect(login.mutate).toHaveBeenCalledWith({ credential: { username: "alice", password: "pw" } });
 });
 
-it("shows a picker for several providers and renders the chosen one's fields", () => {
-  render(<LoginForm providers={[local, other]} />);
+it("names the product alone for unnamed storage, with no picker and no storage note", () => {
+  render(<LoginForm providers={[{ ...local, label: "" }]} />);
 
-  expect(screen.getByText("Choose a server and sign in")).toBeTruthy();
-  expect(screen.getByLabelText("Server")).toBeTruthy();
-  expect(screen.getByLabelText("Username")).toBeTruthy();
-  expect(screen.queryByLabelText("Archive user")).toBeNull();
+  expect(screen.getByText("Sign in with your fdrive account")).toBeTruthy();
+  expect(screen.queryByLabelText("Server")).toBeNull();
+  expect(screen.queryByRole("combobox")).toBeNull();
+  expect(screen.queryByText(/available on this storage/)).toBeNull();
 });
 
 it("does not submit while a required field is blank", () => {
@@ -104,19 +91,4 @@ it("does not submit while a required field is blank", () => {
   fireEvent.submit(screen.getByRole("button", { name: "Sign in" }).closest("form") as Element);
 
   expect(login.mutate).not.toHaveBeenCalled();
-});
-
-it("says a files-only storage is files only, and says nothing for full storage", () => {
-  const bucket: PublicProvider = {
-    ...other,
-    type: "s3",
-    label: "Media bucket",
-    capabilities: { ...allCapabilities(false), trash: true },
-  };
-  const { unmount } = render(<LoginForm providers={[bucket]} />);
-  expect(screen.getByText(FILES_ONLY_NOTE)).toBeTruthy();
-  unmount();
-
-  render(<LoginForm providers={[local]} />);
-  expect(screen.queryByText(FILES_ONLY_NOTE)).toBeNull();
 });

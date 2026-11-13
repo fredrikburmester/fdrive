@@ -23,10 +23,10 @@ function killPidIfAlive(pid: number | undefined): void {
  * Reads the JSON state `global-setup.ts` persisted and kills any process
  * ids it recorded. Only reached when `registry.current` is unset, i.e. this
  * teardown is running in a different process than the setup that started
- * the environment; the Postgres and WebDAV containers are not stoppable
- * from here (no container id was persisted), so they are left for
- * Testcontainers' own Ryuk reaper to clean up once the setup process that
- * started them exits, and the local folder stays in the OS temp directory.
+ * the environment; the Postgres container is not stoppable from here (no
+ * container id was persisted), so it is left for Testcontainers' own Ryuk
+ * reaper to clean up once the setup process that started it exits, and the
+ * local folder stays in the OS temp directory.
  */
 async function stopFromPersistedState(): Promise<void> {
   let raw: string;

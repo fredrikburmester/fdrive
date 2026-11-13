@@ -1,8 +1,6 @@
 "use client";
 
 import type {
-  AdminProviderCreateRequest,
-  AdminProviderTestRequest,
   AdminProviderUpdateRequest,
   AdminUserCreateRequest,
   AdminUserUpdateRequest,
@@ -15,7 +13,6 @@ import type {
   OcrOriginalRestoreRequest,
   OcrSettingsUpdateRequest,
   SetupCompleteRequest,
-  SetupTestRequest,
   SystemActivityId,
 } from "@fdrive/contracts";
 import {
@@ -54,9 +51,8 @@ export function useUpdateFeatures() {
 }
 
 /**
- * Whether setup is required, whether it creates an account on the local
- * folder or connects storage, and the storage types it can connect.
- * Powers `/setup` and the walkthrough's step count.
+ * Whether setup is required, and whether the deployment serves the files
+ * folder (`FDRIVE_STORAGE_ROOT`) setup needs. Powers `/setup`.
  */
 export function useSetupStatus() {
   return useQuery({
@@ -65,16 +61,8 @@ export function useSetupStatus() {
   });
 }
 
-/** Probes a candidate storage during setup, using the one-time setup token. */
-export function useSetupTest() {
-  return useMutation({
-    mutationFn: ({ token, request }: { token: string; request: SetupTestRequest }) =>
-      apiClient.setupTest(token, request),
-  });
-}
-
 /**
- * Completes setup: stores the connection, logs the admin account in, and
+ * Completes setup: creates the owner's account, logs it in, and
  * seeds the `auth.me` cache so protected feature selection can continue
  * inside the setup screen without entering the application shell.
  */
@@ -91,7 +79,7 @@ export function useSetupComplete() {
   });
 }
 
-/** Every configured storage provider plus the types an admin can add, for System > Storage. */
+/** The files folder's storage row (name, reachability, Trash) for System > General. */
 export function useAdminProviders() {
   return useQuery({
     queryKey: queryKeys.admin.providers(),
@@ -120,20 +108,13 @@ function useInvalidatingMutation<TInput, TOutput>(
   });
 }
 
-/** Adds a provider (the API stores it without probing) and refreshes the cached list. */
-export const useAdminCreateProvider = () =>
-  useInvalidatingMutation(
-    "storage",
-    false,
-    (input: AdminProviderCreateRequest) => apiClient.adminCreateProvider(input),
-    queryKeys.admin.providers(),
-    queryKeys.providers.list(),
-  );
-
-/** Updates one provider (label, address, configuration, enabled) and refreshes the cached list. */
+/**
+ * Renames the storage and refreshes everywhere the name shows: the admin
+ * view, the login page's list and the signed-in account's logins.
+ */
 export const useAdminUpdateProvider = () =>
   useInvalidatingMutation(
-    "storage",
+    "general",
     false,
     ({ id, patch }: { id: string; patch: AdminProviderUpdateRequest }) =>
       apiClient.adminUpdateProvider(id, patch),
@@ -142,17 +123,7 @@ export const useAdminUpdateProvider = () =>
     queryKeys.auth.me(),
   );
 
-/** Removes a provider and refreshes the cached list. Refused while logins still use it. */
-export const useAdminDeleteProvider = () =>
-  useInvalidatingMutation(
-    "storage",
-    false,
-    (id: string) => apiClient.adminDeleteProvider(id),
-    queryKeys.admin.providers(),
-    queryKeys.providers.list(),
-  );
-
-/** The local folder's users for System > Users; `available` is false without a local folder. */
+/** The files folder's users for System > Users; `available` is false without a folder. */
 export function useAdminUsers() {
   return useQuery({
     queryKey: queryKeys.admin.users(),
@@ -191,14 +162,6 @@ export const useAdminDeleteUser = () =>
     queryKeys.admin.users(),
     queryKeys.admin.providers(),
   );
-
-/** Probes a saved provider (by id) or an unsaved candidate, without saving anything. */
-export function useAdminTestProvider() {
-  return useMutation({
-    meta: { systemActivity: ["storage"], systemActivityBackground: false },
-    mutationFn: (target: string | AdminProviderTestRequest) => apiClient.adminTestProvider(target),
-  });
-}
 
 /** Indexer health, stats, and settings for `System > Indexer`. Polls every 5s while mounted. */
 export function useSystemIndexer() {

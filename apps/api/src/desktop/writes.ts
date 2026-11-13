@@ -52,8 +52,8 @@ const gib = (bytes: number) => `${Number((bytes / 1024 ** 3).toFixed(1))} GiB`;
 /**
  * The largest file this storage can take: fdrive's own ceiling, or the
  * backend's publication limit where that is lower. A staged write is only
- * worth accepting if it can be published, and S3 takes a multipart upload far
- * larger than the copy that publishes it — so the bound belongs before the
+ * worth accepting if it can be published, and a backend may take an upload
+ * far larger than the copy that publishes it — so the bound belongs before the
  * transfer and in what the Mac app is told, not at the rename, where the whole
  * transfer is already spent and the commit lands uncertain.
  */
@@ -174,10 +174,10 @@ export function createDesktopWrites(deps: DesktopWriteDeps) {
    * Runs a write under whichever mutual exclusion the storage qualifies for, and
    * hands the body a `serialize` to wrap the publication step in.
    *
-   * A lease covers the whole action by contract — WebDAV's is a `Depth: infinity`
-   * lock on the endpoint root, renewed for as long as the body runs — so it
-   * already fences every fdrive writer and the publish lock would only add a
-   * database connection held across the transfer.
+   * A lease covers the whole action by contract — a lock on the storage root,
+   * renewed for as long as the body runs — so it already fences every fdrive
+   * writer and the publish lock would only add a database connection held
+   * across the transfer.
    * Without a lease, fdrive's own lock is what makes publication safe, and
    * `authority()` has already refused the write unless one is configured; the
    * fallback below is unreachable rather than permissive.

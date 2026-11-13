@@ -53,6 +53,46 @@ describe("setup owner on a local folder", () => {
     await postgres?.stop();
   }, 180_000);
 
+  it("refuses to finish setup on a deployment without a files folder, naming the variable", async () => {
+    if (postgres === undefined) throw new Error("test fixtures did not start");
+    const admin = createDb(postgres.connectionString);
+    await admin.db.execute(sql.raw("create database setup_without_folder"));
+    await admin.close();
+    const url = new URL(postgres.connectionString);
+    url.pathname = "/setup_without_folder";
+    const { logger, messages } = capturingLogger();
+    const config = loadConfig({
+      DATABASE_URL: url.toString(),
+      FDRIVE_MASTER_KEY: Buffer.alloc(32, 92).toString("base64"),
+    });
+    const composed = await composeApp(config, logger, () => new Date());
+    const inspection = createDb(url.toString());
+    try {
+      const status = await composed.app.request("/api/v1/setup/status");
+      expect(await status.json()).toEqual({ required: true, storageConfigured: false });
+      const tokenLine = messages.find((message) => message.startsWith("setup token: "));
+      if (tokenLine === undefined) throw new Error("expected setup token");
+      const refused = await composed.app.request("/api/v1/setup/complete", {
+        method: "POST",
+        headers: setupHeaders(tokenLine.slice("setup token: ".length)),
+        body: JSON.stringify({ username: "alice", password: "alice-password" }),
+      });
+      expect(refused.status).toBe(400);
+      expect(await refused.json()).toMatchObject({
+        error: { kind: "bad_request", message: expect.stringContaining("FDRIVE_STORAGE_ROOT") },
+      });
+      const counts = await inspection.db.execute(sql`
+        select (select count(*)::int from app.accounts) as accounts,
+          (select count(*)::int from app.providers) as providers,
+          (select count(*)::int from app.local_users) as users
+      `);
+      expect(counts.rows[0]).toEqual({ accounts: 0, providers: 0, users: 0 });
+    } finally {
+      await composed.close();
+      await inspection.close();
+    }
+  });
+
   it("keeps a refused owner setup resumable and lets exactly one owner claim the folder", async () => {
     if (postgres === undefined || storage === undefined)
       throw new Error("test fixtures did not start");
@@ -79,22 +119,13 @@ describe("setup owner on a local folder", () => {
       // Without the logged token, and with a name or password the folder
       // cannot take, nothing is created and setup stays open.
       expect(
-        (
-          await complete("not-the-token", {
-            kind: "local",
-            username: "alice",
-            password: "pw-long-enough",
-          })
-        ).status,
+        (await complete("not-the-token", { username: "alice", password: "pw-long-enough" })).status,
       ).toBe(401);
       expect(
-        (await complete(token, { kind: "local", username: "../alice", password: "pw-long-enough" }))
-          .status,
+        (await complete(token, { username: "../alice", password: "pw-long-enough" })).status,
       ).toBe(400);
-      expect(
-        (await complete(token, { kind: "local", username: "alice", password: "short" })).status,
-      ).toBe(400);
-      // A deployment with a local folder sets up that folder, not other storage.
+      expect((await complete(token, { username: "alice", password: "short" })).status).toBe(400);
+      // Setup connects no other storage.
       expect(
         (
           await complete(token, {
@@ -106,7 +137,7 @@ describe("setup owner on a local folder", () => {
         ).status,
       ).toBe(400);
       const status = await composed.app.request("/api/v1/setup/status");
-      expect(await status.json()).toEqual({ required: true, mode: "local", types: [] });
+      expect(await status.json()).toEqual({ required: true, storageConfigured: true });
       const untouched = await inspection.db.execute(
         sql`select count(*)::int as users from app.local_users`,
       );
@@ -116,7 +147,7 @@ describe("setup owner on a local folder", () => {
         [
           { username: "alice", password: "alice-password" },
           { username: "bob", password: "bob-password" },
-        ].map((owner) => complete(token, { kind: "local", ...owner })),
+        ].map((owner) => complete(token, owner)),
       );
       expect(results.map((result) => result.status).sort()).toEqual([200, 409]);
       const claimed = results.find((result) => result.status === 200);
@@ -152,8 +183,7 @@ describe("setup owner on a local folder", () => {
 
       // Setup is over: the token is spent and the owner signs in with the password they chose.
       expect(
-        (await complete(token, { kind: "local", username: "carol", password: "carol-password" }))
-          .status,
+        (await complete(token, { username: "carol", password: "carol-password" })).status,
       ).toBe(404);
       const login = await composed.app.request("/api/v1/auth/login", {
         method: "POST",

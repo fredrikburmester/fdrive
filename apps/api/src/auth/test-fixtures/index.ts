@@ -302,7 +302,7 @@ export function createFakeTokenServer(options: {
 
 /**
  * Storage that signs requests with a token minted from the stored password
- * at `<baseUrl>/token` (see `createFakeTokenServer`), registered as `webdav`
+ * at `<baseUrl>/token` (see `createFakeTokenServer`), registered as `local`
  * so the registry accepts its rows. Its `list` sends one authorized request
  * to `<baseUrl>/files` and, on a 401, forgets the token and tries once more
  * with a fresh one, as token-based backends do.

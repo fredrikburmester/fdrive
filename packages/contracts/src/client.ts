@@ -79,9 +79,7 @@ import {
 } from "./processing-failures.ts";
 import {
   AdminProvider,
-  type AdminProviderCreateRequest,
   AdminProvidersResponse,
-  type AdminProviderTestRequest,
   type AdminProviderUpdateRequest,
   ProvidersResponse,
 } from "./providers.ts";
@@ -89,7 +87,6 @@ import { PublicUrlSettings, type PublicUrlUpdateRequest } from "./public-url.ts"
 import {
   accountTokenRoute,
   adminProviderRoute,
-  adminProviderTestRoute,
   adminUserRoute,
   chatActionRoute,
   chatCancelRoute,
@@ -111,13 +108,7 @@ import {
   tagRoute,
 } from "./routes.ts";
 import { ImageSearchResponse, SearchResponse, SearchStatusResponse } from "./search.ts";
-import {
-  ConnectionTestResponse,
-  SETUP_TOKEN_HEADER,
-  type SetupCompleteRequest,
-  SetupStatusResponse,
-  type SetupTestRequest,
-} from "./setup.ts";
+import { SETUP_TOKEN_HEADER, type SetupCompleteRequest, SetupStatusResponse } from "./setup.ts";
 import {
   type CreateShareRequest,
   ManagedShare,
@@ -333,16 +324,11 @@ export interface ApiClient {
   searchImages(query: string, opts?: ApiClientImageSearchOptions): Promise<ImageSearchResponse>;
   thumbUrl(path: string, size: ThumbSize): string;
   setupStatus(): Promise<SetupStatusResponse>;
-  setupTest(setupToken: string, req: SetupTestRequest): Promise<ConnectionTestResponse>;
   setupComplete(setupToken: string, req: SetupCompleteRequest): Promise<MeResponse>;
   /** Public: the enabled providers with their credential forms, for the login page. */
   providers(): Promise<ProvidersResponse>;
   adminProviders(): Promise<AdminProvidersResponse>;
-  adminCreateProvider(req: AdminProviderCreateRequest): Promise<AdminProvider>;
   adminUpdateProvider(id: string, patch: AdminProviderUpdateRequest): Promise<AdminProvider>;
-  adminDeleteProvider(id: string): Promise<OkResponse>;
-  /** Probes a saved provider (`id`) or an unsaved candidate (`req`). */
-  adminTestProvider(target: string | AdminProviderTestRequest): Promise<ConnectionTestResponse>;
   adminUsers(): Promise<AdminUsersResponse>;
   adminCreateUser(req: AdminUserCreateRequest): Promise<AdminUser>;
   adminUpdateUser(username: string, patch: AdminUserUpdateRequest): Promise<AdminUser>;
@@ -834,13 +820,6 @@ export function createApiClient(options: ApiClientOptions = {}): ApiClient {
       return get(ROUTES.setup.status, SetupStatusResponse);
     },
 
-    setupTest(setupToken: string, req: SetupTestRequest): Promise<ConnectionTestResponse> {
-      return post(ROUTES.setup.test, ConnectionTestResponse, {
-        jsonBody: req,
-        extraHeaders: { [SETUP_TOKEN_HEADER]: setupToken },
-      });
-    },
-
     setupComplete(setupToken: string, req: SetupCompleteRequest): Promise<MeResponse> {
       return post(ROUTES.setup.complete, MeResponse, {
         jsonBody: req,
@@ -850,11 +829,8 @@ export function createApiClient(options: ApiClientOptions = {}): ApiClient {
 
     providers: () => get(ROUTES.providers, ProvidersResponse),
     adminProviders: () => get(ROUTES.admin.providers, AdminProvidersResponse),
-    adminCreateProvider: (req: AdminProviderCreateRequest) =>
-      post(ROUTES.admin.providers, AdminProvider, { jsonBody: req }),
     adminUpdateProvider: (id: string, input: AdminProviderUpdateRequest) =>
       patch(adminProviderRoute(id), AdminProvider, { jsonBody: input }),
-    adminDeleteProvider: (id: string) => del(adminProviderRoute(id), OkResponse),
     adminUsers: () => get(ROUTES.admin.users, AdminUsersResponse),
     adminCreateUser: (req: AdminUserCreateRequest) =>
       post(ROUTES.admin.users, AdminUser, { jsonBody: req }),
@@ -868,14 +844,6 @@ export function createApiClient(options: ApiClientOptions = {}): ApiClient {
       patch(grantRoute(id), OwnedGrant, { jsonBody: req }),
     deleteGrant: (id: string) => del(grantRoute(id), OkResponse),
     grantPeople: () => get(ROUTES.grants.people, GrantPeopleResponse),
-    adminTestProvider: (target: string | AdminProviderTestRequest) =>
-      requestJson(
-        ctx,
-        typeof target === "string"
-          ? { method: "POST", path: adminProviderTestRoute(target) }
-          : { method: "POST", path: ROUTES.admin.providersTest, jsonBody: target },
-        ConnectionTestResponse,
-      ),
 
     systemFeatures(): Promise<SystemFeaturesResponse> {
       return get(ROUTES.system.features, SystemFeaturesResponse);

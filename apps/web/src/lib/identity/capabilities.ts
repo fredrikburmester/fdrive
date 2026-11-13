@@ -2,71 +2,19 @@ import type { FsEntry, MeResponse, ProviderCapabilities } from "@fdrive/contract
 
 export type CapabilityKey = keyof ProviderCapabilities;
 
-/** Short user-facing names, for the capability chips on System > Storage. */
-export const CAPABILITY_LABELS: Readonly<Record<CapabilityKey, string>> = {
-  zip: "Zip download",
-  setModifiedAt: "Keeps modification times",
-  atomicMove: "Atomic move",
-  trash: "Trash",
-  shares: "Shares",
-  shareWithPeople: "Share with people",
-  office: "Office",
-  index: "Search and thumbnails",
+/** Every capability flag, so helpers that build a full set cannot miss one. */
+const CAPABILITY_FLAGS: Readonly<Record<CapabilityKey, true>> = {
+  zip: true,
+  setModifiedAt: true,
+  atomicMove: true,
+  trash: true,
+  shares: true,
+  shareWithPeople: true,
+  office: true,
+  index: true,
 };
 
-export const CAPABILITY_KEYS = Object.keys(CAPABILITY_LABELS) as readonly CapabilityKey[];
-
-/**
- * The features fdrive builds on storage it can index and serve itself:
- * search, share links, sharing with people and Office. The local folder
- * has all of them; other
- * storage (WebDAV, S3) gets ordinary file management plus whatever fdrive
- * can add for it (Trash today), one capability flag at a time. Nothing
- * here keys on a provider type, so a feature added to another backend
- * needs only its flag flipped.
- */
-export const FULL_STORAGE_FEATURE_KEYS = [
-  "index",
-  "shares",
-  "shareWithPeople",
-  "office",
-] as const satisfies readonly CapabilityKey[];
-export type FullStorageFeatureKey = (typeof FULL_STORAGE_FEATURE_KEYS)[number];
-
-/** How the storage note names each feature, and whether the phrase takes a plural verb. */
-const FULL_STORAGE_FEATURE_PHRASES: Readonly<
-  Record<FullStorageFeatureKey, { readonly phrase: string; readonly plural: boolean }>
-> = {
-  index: { phrase: "search and thumbnails", plural: true },
-  shares: { phrase: "share links", plural: true },
-  shareWithPeople: { phrase: "sharing with people", plural: false },
-  office: { phrase: "Office", plural: false },
-};
-
-/** True for storage that only moves files: none of search, sharing and Office. */
-export function isFilesOnly(capabilities: ProviderCapabilities): boolean {
-  return FULL_STORAGE_FEATURE_KEYS.every((key) => !capabilities[key]);
-}
-
-/**
- * One line said wherever someone picks or adds storage that lacks search,
- * sharing or Office, before they miss it. Derived from the flags, so it
- * names only what this storage lacks and disappears once it lacks nothing.
- * "Files only." leads when it lacks all of them.
- */
-export function storageNote(capabilities: ProviderCapabilities): string | null {
-  const missing = FULL_STORAGE_FEATURE_KEYS.filter((key) => !capabilities[key]);
-  const first = missing[0];
-  if (first === undefined) return null;
-  const phrases = missing.map((key) => FULL_STORAGE_FEATURE_PHRASES[key].phrase);
-  const list =
-    phrases.length === 1 ? phrases[0] : `${phrases.slice(0, -1).join(", ")} and ${phrases.at(-1)}`;
-  const verb =
-    missing.length > 1 || FULL_STORAGE_FEATURE_PHRASES[first].plural ? "aren't" : "isn't";
-  const lead = missing.length === FULL_STORAGE_FEATURE_KEYS.length ? "Files only. " : "";
-  const sentence = `${list} ${verb} available on this storage.`;
-  return `${lead}${sentence.charAt(0).toUpperCase()}${sentence.slice(1)}`;
-}
+export const CAPABILITY_KEYS = Object.keys(CAPABILITY_FLAGS) as readonly CapabilityKey[];
 
 /** Every capability set to `value`; for tests and for "this provider type can do nothing here". */
 export const allCapabilities = (value: boolean): ProviderCapabilities =>

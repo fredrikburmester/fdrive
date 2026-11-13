@@ -9,11 +9,9 @@ import {
   extractAttachment,
   fetchBackup,
   inspectArchive,
-  providerDestination,
   restoreArchive,
   s3Destination,
 } from "@fdrive/backup";
-import { ProviderType } from "@fdrive/contracts";
 import { stripTransientFields } from "@fdrive/core";
 import { createDb, createRepos, migrate } from "@fdrive/db";
 import { z } from "zod";
@@ -21,7 +19,7 @@ import { open, parseMasterKey, seal } from "../auth/crypto.js";
 import type { AppConfig } from "../config.js";
 import { deploymentModules } from "../local/modules.js";
 import { moduleFor } from "../providers/registry.js";
-import { createBackupModule, masterSecrets, rawBackupStorage } from "./module.js";
+import { createBackupModule, masterSecrets } from "./module.js";
 import { recoveryIdentity, recoveryPreview, restoreOptions } from "./recovery.js";
 
 async function privateText(path: string): Promise<string> {
@@ -224,49 +222,23 @@ export async function runBackupCommand(
   if (command === "list" || command === "fetch") {
     if (!values["destination-file"])
       throw Error("Supply a private destination JSON file; no application database is required");
-    const raw = JSON.parse(await privateText(values["destination-file"]));
-    const s3 = z
-      .object({
-        type: z.literal("s3"),
-        endpoint: z.url(),
-        region: z.string(),
-        bucket: z.string(),
-        prefix: z.string(),
-        pathStyle: z.boolean(),
-        accessKeyId: z.string(),
-        secretAccessKey: z.string(),
-      })
-      .strict();
-    const provider = z
-      .object({
-        type: ProviderType,
-        id: z.uuid(),
-        baseUrl: z.url(),
-        config: z.record(z.string(), z.unknown()),
-        username: z.string(),
-        prefix: z.string(),
-        credential: z.record(z.string(), z.string()),
-      })
-      .strict();
-    // A bucket destination and a provider-row destination of the S3 type both say
-    // `type: "s3"`; only the row carries an `id`, so the shape decides.
-    const input =
-      typeof raw === "object" && raw !== null && "id" in raw ? provider.parse(raw) : s3.parse(raw);
-    // Without a database there are no local users to check against: a backup
-    // in the local folder is read from the folder itself.
-    const providerModule = "id" in input ? moduleFor(input.type) : null;
-    if ("id" in input && !providerModule) throw Error("Unsupported destination provider");
-    const destination = !("id" in input)
-      ? s3Destination(input)
-      : providerDestination(
-          await rawBackupStorage(
-            providerModule as NonNullable<typeof providerModule>,
-            { id: input.id, baseUrl: input.baseUrl, config: input.config },
-            input.credential,
-            input.username,
-          ),
-          input.prefix,
-        );
+    // Only a bucket needs a destination file: a backup in the files folder
+    // is a plain file there (`<username>/<prefix>/<snapshot>.fdrive.age`).
+    const destination = s3Destination(
+      z
+        .object({
+          type: z.literal("s3"),
+          endpoint: z.url(),
+          region: z.string(),
+          bucket: z.string(),
+          prefix: z.string(),
+          pathStyle: z.boolean(),
+          accessKeyId: z.string(),
+          secretAccessKey: z.string(),
+        })
+        .strict()
+        .parse(JSON.parse(await privateText(values["destination-file"]))),
+    );
     if (command === "list") output(JSON.stringify(await discoverBackups(destination), null, 2));
     else {
       if (!values.snapshot || !values.output)

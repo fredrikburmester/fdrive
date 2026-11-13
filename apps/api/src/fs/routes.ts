@@ -202,9 +202,8 @@ export async function runStorageCall<T>(fn: () => Promise<T>): Promise<T> {
  * Ensures nothing already exists at `target` before move, copy, or rename
  * ask the storage provider to relocate something there. Not every
  * provider's move and copy report a conflict for an occupied target
- * themselves: some backends (SFTPGo, which fdrive once used, and WebDAV
- * servers asked to overwrite) silently replace an existing file instead of
- * failing. A route that let that happen
+ * themselves: some backends (SFTPGo, which fdrive once used) silently
+ * replace an existing file instead of failing. A route that let that happen
  * would silently destroy whatever used to be at `target`, so it checks
  * first with `statFile` instead, mirroring the same check
  * `@fdrive/core`'s trash restore relies on (see
@@ -645,8 +644,9 @@ export function registerFsRoutes(
     const query = parseQuery(PathQuery, c.req.query());
     const path = normalizeOrThrow(query.path);
     const entries = await runStorageCall(() => principal.storage.list(path));
-    // A complete authorized listing is the only refresh input WebDAV and S3
-    // have. It suggests differences; only a live check can establish one.
+    // A complete authorized listing is a refresh input for changes made
+    // outside fdrive. It suggests differences; only a live check can
+    // establish one.
     // Comparison runs beside the response: it probes the provider, and a
     // listing is not worth slowing down to notice an outside change sooner.
     void deps.activityObservations?.refresh(principal, path, entries);

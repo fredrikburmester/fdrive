@@ -4,15 +4,12 @@ import {
   allCapabilities,
   anyLoginCan,
   CAPABILITY_KEYS,
-  CAPABILITY_LABELS,
   canDownload,
   capabilitiesFor,
   DEFAULT_CAPABILITIES,
   downloadNeedsZip,
-  isFilesOnly,
   NO_SELECTION,
   selectionOf,
-  storageNote,
 } from "./capabilities";
 
 const me: MeResponse = {
@@ -97,53 +94,7 @@ describe("selectionOf and downloads", () => {
   });
 });
 
-it("labels every capability", () => {
-  for (const key of CAPABILITY_KEYS) {
-    expect(CAPABILITY_LABELS[key].length).toBeGreaterThan(0);
-  }
-  expect(new Set(CAPABILITY_KEYS).size).toBe(Object.keys(DEFAULT_CAPABILITIES).length);
-});
-
-describe("isFilesOnly", () => {
-  it("is true only when search, shares and Office are all missing", () => {
-    expect(isFilesOnly({ ...allCapabilities(false), trash: true, atomicMove: true })).toBe(true);
-    expect(isFilesOnly(allCapabilities(true))).toBe(false);
-    // Storage without an index root can still share and open Office files.
-    expect(isFilesOnly({ ...allCapabilities(true), index: false })).toBe(false);
-  });
-});
-
-describe("storageNote", () => {
-  it("leads with files only and names search, shares and Office when the storage has none", () => {
-    expect(storageNote({ ...allCapabilities(false), trash: true })).toBe(
-      "Files only. Search and thumbnails, share links, sharing with people and Office aren't available on this storage.",
-    );
-  });
-
-  it("names only what the storage lacks once a feature is added to it", () => {
-    // A backend that gained shares: the note shrinks by itself, and no longer says files only.
-    expect(storageNote({ ...allCapabilities(false), trash: true, shares: true })).toBe(
-      "Search and thumbnails, sharing with people and Office aren't available on this storage.",
-    );
-    expect(storageNote({ ...allCapabilities(true), shareWithPeople: false })).toBe(
-      "Sharing with people isn't available on this storage.",
-    );
-    expect(storageNote({ ...allCapabilities(true), office: false })).toBe(
-      "Office isn't available on this storage.",
-    );
-    expect(storageNote({ ...allCapabilities(true), shares: false })).toBe(
-      "Share links aren't available on this storage.",
-    );
-    expect(storageNote({ ...allCapabilities(true), index: false })).toBe(
-      "Search and thumbnails aren't available on this storage.",
-    );
-    expect(storageNote({ ...allCapabilities(true), index: false, shares: false })).toBe(
-      "Search and thumbnails and share links aren't available on this storage.",
-    );
-  });
-
-  it("says nothing for storage with search, shares and Office, whatever else it lacks", () => {
-    expect(storageNote(allCapabilities(true))).toBeNull();
-    expect(storageNote({ ...allCapabilities(true), zip: false, trash: false })).toBeNull();
-  });
+it("lists every capability once", () => {
+  expect(new Set(CAPABILITY_KEYS).size).toBe(CAPABILITY_KEYS.length);
+  expect([...CAPABILITY_KEYS].sort()).toEqual(Object.keys(DEFAULT_CAPABILITIES).sort());
 });

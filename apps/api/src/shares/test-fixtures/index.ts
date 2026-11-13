@@ -45,10 +45,6 @@ export const SHARE_USERS = ["alice", "bob", "carol"] as const;
 
 export interface SharesHarnessOptions {
   readonly limiterCapacity?: number;
-  /** Modules beside the local folder, by provider type. */
-  readonly modules?: Readonly<Record<string, ProviderModule>>;
-  /** Wraps the fetch every module is given; the local folder never calls it. */
-  readonly wrapFetch?: (fetch: typeof globalThis.fetch) => typeof globalThis.fetch;
   /** Reshapes the local folder's module, say to take its shares or its zip away. */
   readonly local?: (module: ProviderModule) => ProviderModule;
   /** The owner's Trash folder, which shares must keep out of. */
@@ -122,16 +118,16 @@ export function sharesHarness(options: SharesHarnessOptions = {}) {
     },
   };
   const localModule = createLocalModule({ root, users });
-  const offline: typeof globalThis.fetch = async () => {
+  // The local folder never calls the network.
+  const fetchImpl: typeof globalThis.fetch = async () => {
     throw new Error("the shares harness has no network");
   };
-  const fetchImpl = options.wrapFetch?.(offline) ?? offline;
   const providers = createProviderService({
     repos,
     fetch: fetchImpl,
     clock,
     environment: { indexRootNames: [] },
-    modules: { local: options.local?.(localModule) ?? localModule, ...options.modules },
+    modules: { local: options.local?.(localModule) ?? localModule },
   });
   const seeded = (async () => {
     const row = await repos.providers.ensure({ type: "local", baseUrl: "local" });

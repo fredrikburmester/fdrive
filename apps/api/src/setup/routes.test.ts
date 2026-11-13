@@ -39,8 +39,7 @@ const ME: MeResponse = {
 
 function buildService(overrides: Partial<SetupService> = {}): SetupService {
   return {
-    status: vi.fn().mockResolvedValue({ required: true, mode: "provider", types: [] }),
-    test: vi.fn().mockResolvedValue({ ok: true, detail: "WebDAV is reachable" }),
+    status: vi.fn().mockResolvedValue({ required: true, storageConfigured: true }),
     complete: vi.fn().mockResolvedValue({ sessionId: "session-1", me: ME }),
     ...overrides,
   };
@@ -76,20 +75,20 @@ function buildApp(
 }
 
 /**
- * A tokenless `POST /setup/test` from `ip`, which the token guard rejects
+ * A tokenless `POST /setup/complete` from `ip`, which the token guard rejects
  * (401) and the limiter records as a failure. `x-forwarded-for` carries the
  * address because the default one trusted proxy hop reads the client from
  * it, and the unit test harness has no socket for `getConnInfo` to report.
  */
 function attemptFrom(app: ReturnType<typeof buildApp>["app"], ip: string) {
-  return app.request("/api/v1/setup/test", {
+  return app.request("/api/v1/setup/complete", {
     method: "POST",
     headers: {
       "content-type": "application/json",
       "x-requested-with": "fdrive",
       "x-forwarded-for": ip,
     },
-    body: JSON.stringify({ type: "webdav", baseUrl: "http://dav:8080" }),
+    body: JSON.stringify({ username: "alice", password: "correct horse" }),
   });
 }
 
@@ -100,93 +99,11 @@ describe("setup routes: GET /setup/status", () => {
     const res = await app.request("/api/v1/setup/status");
 
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ required: true, mode: "provider", types: [] });
+    expect(await res.json()).toEqual({ required: true, storageConfigured: true });
   });
 });
 
-describe("setup routes: POST /setup/test", () => {
-  it("returns 404 once setup is no longer required", async () => {
-    const { app } = buildApp({
-      service: buildService({
-        status: vi.fn().mockResolvedValue({ required: false, mode: "provider", types: [] }),
-      }),
-    });
-
-    const res = await app.request("/api/v1/setup/test", {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        "x-requested-with": "fdrive",
-        "x-setup-token": "correct-token",
-      },
-      body: JSON.stringify({ type: "webdav", baseUrl: "http://dav:8080" }),
-    });
-
-    expect(res.status).toBe(404);
-  });
-
-  it("rejects a missing or wrong setup token", async () => {
-    const { app } = buildApp();
-
-    const res = await app.request("/api/v1/setup/test", {
-      method: "POST",
-      headers: { "content-type": "application/json", "x-requested-with": "fdrive" },
-      body: JSON.stringify({ type: "webdav", baseUrl: "http://dav:8080" }),
-    });
-
-    expect(res.status).toBe(401);
-  });
-
-  it("rejects an invalid body", async () => {
-    const { app } = buildApp();
-
-    const res = await app.request("/api/v1/setup/test", {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        "x-requested-with": "fdrive",
-        "x-setup-token": "correct-token",
-      },
-      body: JSON.stringify({ type: "webdav", baseUrl: "not-a-url" }),
-    });
-
-    expect(res.status).toBe(400);
-  });
-
-  it("rejects malformed JSON", async () => {
-    const { app } = buildApp();
-
-    const res = await app.request("/api/v1/setup/test", {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        "x-requested-with": "fdrive",
-        "x-setup-token": "correct-token",
-      },
-      body: "not json",
-    });
-
-    expect(res.status).toBe(400);
-  });
-
-  it("succeeds with a correct token and valid body", async () => {
-    const { app, service } = buildApp();
-
-    const res = await app.request("/api/v1/setup/test", {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        "x-requested-with": "fdrive",
-        "x-setup-token": "correct-token",
-      },
-      body: JSON.stringify({ type: "webdav", baseUrl: "http://dav:8080" }),
-    });
-
-    expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ ok: true, detail: "WebDAV is reachable" });
-    expect(service.test).toHaveBeenCalledWith({ type: "webdav", baseUrl: "http://dav:8080" });
-  });
-
+describe("setup routes: rate limiting", () => {
   it("rate limits repeated failures from the same ip", async () => {
     const limiter = createLoginLimiter({
       clock: () => new Date(),
@@ -196,10 +113,10 @@ describe("setup routes: POST /setup/test", () => {
     });
     const { app } = buildApp({ limiter });
     const attempt = () =>
-      app.request("/api/v1/setup/test", {
+      app.request("/api/v1/setup/complete", {
         method: "POST",
         headers: { "content-type": "application/json", "x-requested-with": "fdrive" },
-        body: JSON.stringify({ type: "webdav", baseUrl: "http://dav:8080" }),
+        body: JSON.stringify({ username: "alice", password: "correct horse" }),
       });
 
     await attempt();
@@ -213,10 +130,10 @@ describe("setup routes: POST /setup/test", () => {
     const limiter = createLoginLimiter({ clock: () => new Date() });
     vi.spyOn(limiter, "check").mockReturnValue({ allowed: false });
     const { app } = buildApp({ limiter });
-    const res = await app.request("/api/v1/setup/test", {
+    const res = await app.request("/api/v1/setup/complete", {
       method: "POST",
       headers: { "content-type": "application/json", "x-requested-with": "fdrive" },
-      body: JSON.stringify({ type: "webdav", baseUrl: "http://dav:8080" }),
+      body: JSON.stringify({ username: "alice", password: "correct horse" }),
     });
     expect(res.status).toBe(429);
     expect(await res.json()).toMatchObject({
@@ -274,12 +191,7 @@ describe("setup routes: POST /setup/test", () => {
 });
 
 describe("setup routes: POST /setup/complete", () => {
-  const validBody = {
-    kind: "provider",
-    type: "webdav",
-    baseUrl: "http://dav:8080",
-    credential: { username: "alice", password: "hunter2" },
-  };
+  const validBody = { username: "alice", password: "correct horse" };
 
   function postComplete(
     app: ReturnType<typeof buildApp>["app"],
@@ -300,7 +212,7 @@ describe("setup routes: POST /setup/complete", () => {
   it("returns 404 once setup is no longer required", async () => {
     const { app } = buildApp({
       service: buildService({
-        status: vi.fn().mockResolvedValue({ required: false, mode: "provider", types: [] }),
+        status: vi.fn().mockResolvedValue({ required: false, storageConfigured: true }),
       }),
     });
 
@@ -313,37 +225,28 @@ describe("setup routes: POST /setup/complete", () => {
     expect((await postComplete(app, validBody, "wrong")).status).toBe(401);
   });
 
-  it("forwards a trimmed provider name to setup", async () => {
+  it("rejects an invalid body, including the removed provider setup", async () => {
     const { app, service } = buildApp();
-    expect((await postComplete(app, { ...validBody, label: "  Home storage  " })).status).toBe(200);
-    expect(service.complete).toHaveBeenCalledWith(
-      expect.objectContaining({ label: "Home storage" }),
-    );
+    for (const body of [
+      { username: "", password: "correct horse" },
+      { username: "alice", password: "x" },
+      { ...validBody, kind: "local" },
+      {
+        kind: "provider",
+        type: "webdav",
+        baseUrl: "http://dav:8080",
+        credential: { username: "alice", password: "hunter2" },
+      },
+    ]) {
+      expect((await postComplete(app, body)).status).toBe(400);
+    }
+    expect(service.complete).not.toHaveBeenCalled();
   });
 
-  it.each(["", "   ", "x".repeat(121)])(
-    "rejects an invalid storage name before setup: %j",
-    async (label) => {
-      const { app, service } = buildApp();
-      expect((await postComplete(app, { ...validBody, label })).status).toBe(400);
-      expect(service.complete).not.toHaveBeenCalled();
-    },
-  );
-
-  it("rejects an invalid body", async () => {
-    const { app } = buildApp();
-
-    expect((await postComplete(app, { ...validBody, type: "sftpgo" })).status).toBe(400);
-    expect((await postComplete(app, { kind: "local", username: "", password: "x" })).status).toBe(
-      400,
-    );
-  });
-
-  it("forwards the first local user to setup", async () => {
+  it("forwards the first user to setup", async () => {
     const { app, service } = buildApp();
-    const body = { kind: "local", username: "alice", password: "correct horse" };
-    expect((await postComplete(app, body)).status).toBe(200);
-    expect(service.complete).toHaveBeenCalledWith(expect.objectContaining(body));
+    expect((await postComplete(app, validBody)).status).toBe(200);
+    expect(service.complete).toHaveBeenCalledWith(expect.objectContaining(validBody));
   });
 
   it("rejects malformed JSON", async () => {

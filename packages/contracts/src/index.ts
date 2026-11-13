@@ -170,10 +170,7 @@ export * from "./personal-activity.ts";
 export * from "./processing-failures.ts";
 export {
   AdminProvider,
-  AdminProviderCreateRequest,
   AdminProvidersResponse,
-  AdminProviderTestRequest,
-  AdminProviderType,
   AdminProviderUpdateRequest,
   ProviderCapabilities,
   ProviderField,
@@ -194,7 +191,6 @@ export type { Routes } from "./routes.ts";
 export {
   accountTokenRoute,
   adminProviderRoute,
-  adminProviderTestRoute,
   adminUserRoute,
   chatActionRoute,
   chatCancelRoute,
@@ -229,14 +225,9 @@ export {
   SearchStatusResponse,
 } from "./search.ts";
 export {
-  ConnectionTestResponse,
   SETUP_TOKEN_HEADER,
-  SetupCompleteLocalRequest,
-  SetupCompleteProviderRequest,
   SetupCompleteRequest,
-  SetupMode,
   SetupStatusResponse,
-  SetupTestRequest,
 } from "./setup.ts";
 export * from "./shares.ts";
 export {

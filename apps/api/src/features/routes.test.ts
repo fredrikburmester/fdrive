@@ -50,7 +50,7 @@ function fixture({
     principalResolver: async () => principal,
     connectionStatus: async () => ({
       required: setupRequired,
-      providers: setupRequired ? [] : [{ type: "webdav", host: "dav.test" }],
+      providers: setupRequired ? [] : [{ type: "local", host: "Local folder" }],
     }),
     registerRoutes(groups) {
       registerFeatureAdmission(groups.authed, service);

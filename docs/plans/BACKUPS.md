@@ -6,8 +6,9 @@ The original design and acceptance criteria this work is checked against are rec
 that document's sections and in the archived plan in the main checkout's history.
 
 Implemented and locally qualified: durable registry, encrypted snapshots and opaque ZIP
-attachments, local downloads, S3/B2-compatible and pinned-fileserver destinations (MinIO,
-Apache WebDAV and SFTPGo, including large streamed transfers and fileserver-only recovery),
+attachments, local downloads, S3/B2-compatible destinations (MinIO) and pinned-fileserver
+destinations (Apache WebDAV and SFTPGo, including large streamed transfers and fileserver-only
+recovery; since 2026-11-13 the files folder is the only fileserver destination),
 schedules, retention and pins, worker heartbeat, size estimates, metadata-only fallback,
 retention-kept probes, spool sweeps, isolated rehearsal, CLI cutover and rollback rehearsal,
 and the browser owner flow including the health panel.

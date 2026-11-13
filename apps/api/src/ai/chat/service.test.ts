@@ -88,7 +88,7 @@ async function setup(
 ): Promise<Setup> {
   const repos = createMemoryRepos();
   const account = await repos.accounts.create({ displayName: null });
-  const provider = await repos.providers.ensure({ type: "webdav", baseUrl: "http://a" });
+  const provider = await repos.providers.ensure({ type: "local", baseUrl: "http://a" });
   const identity = await repos.identities.create({
     accountId: account.id,
     providerId: provider.id,

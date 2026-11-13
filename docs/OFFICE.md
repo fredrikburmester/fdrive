@@ -18,8 +18,7 @@ activation environment variable, or processing storage mount is needed.
 
 Open a Word, Excel, PowerPoint, or OpenDocument file from fdrive, including one in a folder
 shared with you. Files remain plain files in the files folder; fdrive transfers document
-contents through WOPI. Office is not available on WebDAV or S3 storage. Search and OCR are
-independent.
+contents through WOPI. Search and OCR are independent.
 
 The container keeps a small controller running when disabled. The document engine
 starts only when enabled and uses additional memory. Secrets are generated automatically;

@@ -56,7 +56,7 @@ beforeAll(async () => {
   await migrate(first.db);
   await first.db
     .insert(providers)
-    .values({ id: providerId, type: "webdav", baseUrl: "http://provider" });
+    .values({ id: providerId, type: "local", baseUrl: "http://provider" });
   a = createIdentityLinksRepo(first.db);
   b = createIdentityLinksRepo(second.db);
 });
@@ -510,7 +510,7 @@ describe("provider endpoint binding", () => {
     async (operation) => {
       const repos = createRepos(first.db);
       const row = await repos.providers.ensure({
-        type: "webdav",
+        type: "local",
         baseUrl: `http://stale-${operation}`,
       });
       const input = {
@@ -536,7 +536,7 @@ describe("provider endpoint binding", () => {
     async (operation) => {
       const repos = createRepos(second.db);
       const row = await repos.providers.ensure({
-        type: "webdav",
+        type: "local",
         baseUrl: `http://race-${operation}`,
       });
       const input = {

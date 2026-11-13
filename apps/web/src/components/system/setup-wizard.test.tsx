@@ -1,38 +1,10 @@
 // @vitest-environment jsdom
-import {
-  type AdminProviderType,
-  ApiClientError,
-  type SetupStatusResponse,
-} from "@fdrive/contracts";
+import { ApiClientError, type SetupStatusResponse } from "@fdrive/contracts";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { allCapabilities } from "@/lib/identity/capabilities";
-
-const WEBDAV: AdminProviderType = {
-  type: "webdav",
-  label: "WebDAV",
-  configFields: [],
-  credentialFields: [
-    { name: "username", label: "Username", kind: "text", required: true },
-    { name: "password", label: "Password", kind: "password", required: true },
-  ],
-  capabilities: { ...allCapabilities(false), trash: true, zip: true },
-};
-const S3: AdminProviderType = {
-  type: "s3",
-  label: "S3",
-  configFields: [{ name: "region", label: "Region", kind: "text", required: true }],
-  credentialFields: [
-    { name: "accessKeyId", label: "Access key ID", kind: "text", required: true },
-    { name: "secretAccessKey", label: "Secret access key", kind: "password", required: true },
-  ],
-  capabilities: { ...allCapabilities(false), trash: true },
-};
 
 type Mutation = {
   mutate: ReturnType<typeof vi.fn>;
-  reset?: ReturnType<typeof vi.fn>;
-  data?: { ok: boolean; detail: string };
   isPending?: boolean;
   isError?: boolean;
   error?: unknown;
@@ -45,12 +17,10 @@ const mocks = vi.hoisted(() => ({
     error: null as unknown,
     refetch: vi.fn(),
   },
-  test: { mutate: vi.fn(), reset: vi.fn() } as Mutation,
   complete: { mutate: vi.fn() } as Mutation,
 }));
 vi.mock("@/lib/api/system-queries", () => ({
   useSetupStatus: () => mocks.status,
-  useSetupTest: () => mocks.test,
   useSetupComplete: () => mocks.complete,
 }));
 vi.mock("./features-page", () => ({ SetupFeatures: () => <main>Optional feature choices</main> }));
@@ -75,7 +45,6 @@ afterEach(() => {
   cleanup();
   vi.clearAllMocks();
   mocks.status = { data: undefined, isError: false, error: null, refetch: vi.fn() };
-  mocks.test = { mutate: vi.fn(), reset: vi.fn() };
   mocks.complete = { mutate: vi.fn() };
 });
 
@@ -97,8 +66,22 @@ describe("before the setup status answers", () => {
   });
 });
 
-describe("with a local folder", () => {
-  const LOCAL: SetupStatusResponse = { required: true, mode: "local", types: [] };
+describe("without the files folder", () => {
+  it("asks for FDRIVE_STORAGE_ROOT instead of the form, and checks again", () => {
+    renderWizard({ required: true, storageConfigured: false });
+
+    expect(screen.getByText("Choose where fdrive keeps files")).toBeTruthy();
+    expect(screen.getByText("FDRIVE_STORAGE_ROOT")).toBeTruthy();
+    expect(screen.getByText(/restart fdrive, then check again\./)).toBeTruthy();
+    expect(screen.queryByLabelText("Setup token")).toBeNull();
+    expect(screen.queryByText(/^Step /)).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+    expect(mocks.status.refetch).toHaveBeenCalled();
+  });
+});
+
+describe("with the files folder", () => {
+  const LOCAL: SetupStatusResponse = { required: true, storageConfigured: true };
 
   it("claims with the token, creates the owner's account and continues to features", () => {
     mocks.complete.mutate.mockImplementation((_input, options) => options.onSuccess());
@@ -118,7 +101,7 @@ describe("with a local folder", () => {
     expect(mocks.complete.mutate).toHaveBeenCalledWith(
       {
         token: "claim-token",
-        request: { kind: "local", username: "ada", password: "analytical-engine" },
+        request: { username: "ada", password: "analytical-engine" },
       },
       expect.anything(),
     );
@@ -148,6 +131,30 @@ describe("with a local folder", () => {
     expect(screen.getByLabelText("Setup token")).toBeTruthy();
   });
 
+  it("shows the account being created", () => {
+    mocks.complete.isPending = true;
+    renderWizard(LOCAL);
+    claim();
+
+    expect((screen.getByRole("button", { name: "Creating…" }) as HTMLButtonElement).disabled).toBe(
+      true,
+    );
+  });
+
+  it("explains any other refusal", () => {
+    mocks.complete.isError = true;
+    mocks.complete.error = new ApiClientError("conflict", "setup already done", 409);
+    renderWizard(LOCAL);
+    claim();
+
+    expect(
+      screen.queryByText("The setup token was not accepted. Go back and check it."),
+    ).toBeNull();
+    expect(
+      screen.getByText("That change conflicts with the current state. Refresh and try again."),
+    ).toBeTruthy();
+  });
+
   it("points at the token when the API refuses it", () => {
     mocks.complete.isError = true;
     mocks.complete.error = new ApiClientError(
@@ -160,174 +167,6 @@ describe("with a local folder", () => {
 
     expect(
       screen.getByText("The setup token was not accepted. Go back and check it."),
-    ).toBeTruthy();
-  });
-});
-
-describe("without a local folder", () => {
-  const PROVIDER: SetupStatusResponse = { required: true, mode: "provider", types: [WEBDAV, S3] };
-
-  it("connects WebDAV, tests it, signs in and continues to features", () => {
-    mocks.test.mutate.mockImplementation((_input, options) => options.onSuccess());
-    mocks.test.data = { ok: true, detail: "Reachable" };
-    mocks.complete.mutate.mockImplementation((_input, options) => options.onSuccess());
-    renderWizard(PROVIDER);
-
-    expect(screen.getByText("Step 1 of 13")).toBeTruthy();
-    claim();
-    expect(screen.getByText("Connect the storage people sign in to")).toBeTruthy();
-    expect(screen.getByText(/Files only\./)).toBeTruthy();
-    type("Storage name", "  Home storage  ");
-    type("Address", " https://dav.example.com/ ");
-    fireEvent.click(screen.getByRole("button", { name: "Test connection" }));
-    expect(mocks.test.mutate).toHaveBeenCalledWith(
-      {
-        token: "claim-token",
-        request: { type: "webdav", baseUrl: "https://dav.example.com/", config: {} },
-      },
-      expect.anything(),
-    );
-    expect(screen.getByText("Reachable")).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
-
-    expect(screen.getByText("Sign in to your storage")).toBeTruthy();
-    expect(screen.getByText(/Sign in with your account on Home storage/)).toBeTruthy();
-    type("Username", "ada");
-    type("Password", "secret");
-    fireEvent.click(screen.getByRole("button", { name: "Continue setup" }));
-
-    expect(mocks.complete.mutate).toHaveBeenCalledWith(
-      {
-        token: "claim-token",
-        request: {
-          kind: "provider",
-          type: "webdav",
-          baseUrl: "https://dav.example.com/",
-          label: "Home storage",
-          credential: { username: "ada", password: "secret" },
-        },
-      },
-      expect.anything(),
-    );
-    expect(screen.getByText("Optional feature choices")).toBeTruthy();
-  });
-
-  it("asks the chosen type for its own configuration and sign-in fields", async () => {
-    mocks.test.mutate.mockImplementation((_input, options) => options.onSuccess());
-    mocks.test.data = { ok: true, detail: "Reachable" };
-    renderWizard(PROVIDER);
-    claim();
-
-    fireEvent.click(screen.getByRole("combobox", { name: "Storage type" }));
-    fireEvent.keyDown(await screen.findByRole("option", { name: "S3" }), { key: "Enter" });
-    expect(mocks.test.reset).toHaveBeenCalled();
-    type("Storage name", "Media");
-    type("Address", "https://s3.example.com/media");
-    const test = screen.getByRole("button", { name: "Test connection" }) as HTMLButtonElement;
-    expect(test.disabled).toBe(true);
-    expect(screen.getByText("Enter region.")).toBeTruthy();
-    type("Region", "eu-west-1");
-    fireEvent.click(test);
-    expect(mocks.test.mutate).toHaveBeenCalledWith(
-      {
-        token: "claim-token",
-        request: {
-          type: "s3",
-          baseUrl: "https://s3.example.com/media",
-          config: { region: "eu-west-1" },
-        },
-      },
-      expect.anything(),
-    );
-    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
-    expect(screen.getByLabelText("Access key ID")).toBeTruthy();
-    expect(screen.getByLabelText("Secret access key")).toBeTruthy();
-  });
-
-  it("tests the address before the storage is named, then asks for the name", () => {
-    mocks.test.mutate.mockImplementation((_input, options) => options.onSuccess());
-    mocks.test.data = { ok: true, detail: "Reachable" };
-    renderWizard(PROVIDER);
-    claim();
-    type("Address", "https://dav.example.com/");
-    expect(screen.getByText("Enter a name for this storage.")).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "Test connection" }));
-
-    expect(mocks.test.mutate).toHaveBeenCalledTimes(1);
-    expect(screen.getByText("Reachable")).toBeTruthy();
-    const next = screen.getByRole("button", { name: "Continue" }) as HTMLButtonElement;
-    expect(next.disabled).toBe(true);
-    type("Storage name", "Home storage");
-    expect(next.disabled).toBe(false);
-  });
-
-  it("requires a valid name without invalidating a successful connection test", () => {
-    mocks.test.mutate.mockImplementation((_input, options) => options.onSuccess());
-    mocks.test.data = { ok: true, detail: "Reachable" };
-    renderWizard(PROVIDER);
-    claim();
-    type("Address", "https://dav.example.com/");
-    type("Storage name", "Home storage");
-    fireEvent.click(screen.getByRole("button", { name: "Test connection" }));
-    const next = screen.getByRole("button", { name: "Continue" }) as HTMLButtonElement;
-    expect(next.disabled).toBe(false);
-
-    type("Storage name", "   ");
-    expect(screen.getByText("Enter a name for this storage.")).toBeTruthy();
-    expect(next.disabled).toBe(true);
-    type("Storage name", "x".repeat(121));
-    expect(screen.getByText("Use 120 characters or fewer for the storage name.")).toBeTruthy();
-    expect(next.disabled).toBe(true);
-    type("Storage name", "Renamed");
-    expect(next.disabled).toBe(false);
-    expect(mocks.test.mutate).toHaveBeenCalledTimes(1);
-  });
-
-  it("drops a passing test once the address changes", () => {
-    mocks.test.mutate.mockImplementation((_input, options) => options.onSuccess());
-    mocks.test.data = { ok: true, detail: "Reachable" };
-    renderWizard(PROVIDER);
-    claim();
-    type("Storage name", "Home storage");
-    type("Address", "https://dav.example.com/");
-    fireEvent.click(screen.getByRole("button", { name: "Test connection" }));
-    type("Address", "https://other.example.com/");
-
-    expect(screen.queryByText("Reachable")).toBeNull();
-    expect((screen.getByRole("button", { name: "Continue" }) as HTMLButtonElement).disabled).toBe(
-      true,
-    );
-  });
-
-  it("shows why a probe failed", () => {
-    mocks.test.mutate.mockImplementation((_input, options) => options.onSuccess());
-    mocks.test.data = { ok: false, detail: "connect ECONNREFUSED" };
-    renderWizard(PROVIDER);
-    claim();
-    type("Storage name", "Home storage");
-    type("Address", "https://dav.example.com/");
-    fireEvent.click(screen.getByRole("button", { name: "Test connection" }));
-
-    expect(screen.getByText("connect ECONNREFUSED")).toBeTruthy();
-    expect((screen.getByRole("button", { name: "Continue" }) as HTMLButtonElement).disabled).toBe(
-      true,
-    );
-  });
-
-  it("explains a refused sign-in", () => {
-    mocks.test.mutate.mockImplementation((_input, options) => options.onSuccess());
-    mocks.test.data = { ok: true, detail: "Reachable" };
-    mocks.complete.isError = true;
-    mocks.complete.error = new ApiClientError("unauthorized", "invalid credentials", 401);
-    renderWizard(PROVIDER);
-    claim();
-    type("Storage name", "Home storage");
-    type("Address", "https://dav.example.com/");
-    fireEvent.click(screen.getByRole("button", { name: "Test connection" }));
-    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
-
-    expect(
-      screen.getByText("Sign-in failed. Check the setup token and your sign-in details."),
     ).toBeTruthy();
   });
 });

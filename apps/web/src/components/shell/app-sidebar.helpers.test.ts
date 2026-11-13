@@ -35,7 +35,7 @@ describe("isSystemRoute", () => {
   });
 
   it("is true for a path within System", () => {
-    expect(isSystemRoute("/system/storage")).toBe(true);
+    expect(isSystemRoute("/system/general")).toBe(true);
   });
 
   it("is false for another route", () => {

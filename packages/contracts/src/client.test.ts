@@ -763,7 +763,7 @@ describe("createApiClient: thumbUrl", () => {
 
 describe("createApiClient: setup", () => {
   it("gets setup/status", async () => {
-    const status = { required: true, mode: "local", types: [] };
+    const status = { required: true, storageConfigured: true };
     const { fetchStub, calls } = createStubFetch([jsonResponse(200, status)]);
     const client = createApiClient({ fetch: fetchStub });
 
@@ -771,22 +771,10 @@ describe("createApiClient: setup", () => {
     expect(calls[0]?.url).toBe("/api/v1/setup/status");
   });
 
-  it("posts setup/test with the setup token header and the candidate as the body", async () => {
-    const result = { ok: true, detail: "reachable" };
-    const { fetchStub, calls } = createStubFetch([jsonResponse(200, result)]);
-    const client = createApiClient({ fetch: fetchStub });
-    const candidate = { type: "webdav" as const, baseUrl: "http://dav.test:8080" };
-
-    expect(await client.setupTest("tok-1", candidate)).toEqual(result);
-    expect(calls[0]?.url).toBe("/api/v1/setup/test");
-    expect(headerValue(calls[0]?.init ?? {}, "x-setup-token")).toBe("tok-1");
-    expect(JSON.parse(String(calls[0]?.init.body))).toEqual(candidate);
-  });
-
   it("posts setup/complete with the setup token header and returns MeResponse", async () => {
     const { fetchStub, calls } = createStubFetch([jsonResponse(200, VALID_ME)]);
     const client = createApiClient({ fetch: fetchStub });
-    const req = { kind: "local" as const, username: "alice", password: "correct-horse" };
+    const req = { username: "alice", password: "correct-horse" };
 
     expect(await client.setupComplete("tok-1", req)).toEqual(VALID_ME);
     expect(calls[0]?.url).toBe("/api/v1/setup/complete");
@@ -809,12 +797,12 @@ describe("createApiClient: providers", () => {
   };
   const PROVIDER = {
     id: VALID_UUID,
-    type: "webdav",
+    type: "local",
     label: "Home",
-    baseUrl: "http://dav.test:8080",
+    baseUrl: "",
     config: {},
     enabled: true,
-    managedByEnv: false,
+    managedByEnv: true,
     capabilities: CAPABILITIES,
     identityCount: 1,
     reachable: true,
@@ -827,7 +815,7 @@ describe("createApiClient: providers", () => {
       providers: [
         {
           id: VALID_UUID,
-          type: "webdav",
+          type: "local",
           label: "Home",
           credentialFields: [FIELD],
           capabilities: CAPABILITIES,
@@ -840,48 +828,20 @@ describe("createApiClient: providers", () => {
     expect(calls[0]?.url).toBe("/api/v1/providers");
   });
 
-  it("gets, creates, updates and deletes admin providers", async () => {
-    const list = { providers: [PROVIDER], types: [] };
+  it("gets and renames admin providers", async () => {
+    const list = { providers: [PROVIDER] };
     const { fetchStub, calls } = createStubFetch([
       jsonResponse(200, list),
       jsonResponse(200, PROVIDER),
-      jsonResponse(200, PROVIDER),
-      jsonResponse(200, { ok: true }),
     ]);
     const client = createApiClient({ fetch: fetchStub });
     expect(await client.adminProviders()).toEqual(list);
-    expect(
-      await client.adminCreateProvider({ type: "webdav", label: "Home", baseUrl: "http://a" }),
-    ).toEqual(PROVIDER);
-    expect(await client.adminUpdateProvider(VALID_UUID, { enabled: false })).toEqual(PROVIDER);
-    expect(await client.adminDeleteProvider(VALID_UUID)).toEqual({ ok: true });
+    expect(await client.adminUpdateProvider(VALID_UUID, { label: "Home" })).toEqual(PROVIDER);
     expect(calls.map((call) => `${call.init.method ?? "GET"} ${call.url}`)).toEqual([
       "GET /api/v1/admin/providers",
-      "POST /api/v1/admin/providers",
       `PATCH /api/v1/admin/providers/${VALID_UUID}`,
-      `DELETE /api/v1/admin/providers/${VALID_UUID}`,
     ]);
-    expect(JSON.parse(String(calls[2]?.init.body))).toEqual({ enabled: false });
-  });
-
-  it("probes a saved provider by id and an unsaved candidate by body", async () => {
-    const result = { ok: true, detail: "reachable" };
-    const { fetchStub, calls } = createStubFetch([
-      jsonResponse(200, result),
-      jsonResponse(200, result),
-    ]);
-    const client = createApiClient({ fetch: fetchStub });
-    expect(await client.adminTestProvider(VALID_UUID)).toEqual(result);
-    expect(
-      await client.adminTestProvider({ type: "webdav", baseUrl: "http://other:8080" }),
-    ).toEqual(result);
-    expect(calls[0]?.url).toBe(`/api/v1/admin/providers/${VALID_UUID}/test`);
-    expect(calls[0]?.init.body).toBeUndefined();
-    expect(calls[1]?.url).toBe("/api/v1/admin/providers/test");
-    expect(JSON.parse(String(calls[1]?.init.body))).toEqual({
-      type: "webdav",
-      baseUrl: "http://other:8080",
-    });
+    expect(JSON.parse(String(calls[1]?.init.body))).toEqual({ label: "Home" });
   });
 });
 

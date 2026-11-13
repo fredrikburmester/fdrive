@@ -1,13 +1,5 @@
-export type { MinioContainer, MinioKey, StartMinioOptions } from "./containers/minio.js";
-export { startMinio } from "./containers/minio.js";
 export type { PostgresContainer, StartPostgresOptions } from "./containers/postgres.js";
 export { startPostgres } from "./containers/postgres.js";
-export type {
-  ApacheWebdavContainer,
-  ApacheWebdavUser,
-  StartApacheWebdavOptions,
-} from "./containers/webdav.js";
-export { startApacheWebdav } from "./containers/webdav.js";
 export type { SeededFile, SeedFileLayoutOptions } from "./file-layout.js";
 export { seedFileLayout } from "./file-layout.js";
 export type {

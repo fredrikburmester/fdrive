@@ -234,8 +234,7 @@ All services are hardened following security best practices:
 
 Users live in fdrive's database, with scrypt password hashes, and are added, reset and
 disabled under **System > Users**. `FDRIVE_ADMIN_USERS` lists usernames that are always
-administrators. WebDAV or S3 storage added under **System > Storage** signs in with its own
-accounts, beside the files folder.
+administrators.
 
 The four containers start as root for one step: each gives its own state directories to
 `FDRIVE_RUN_AS_UID` (default 1000; `FDRIVE_INDEX_UID` is its older name) and then drops to

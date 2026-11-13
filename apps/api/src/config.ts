@@ -43,9 +43,9 @@ export interface AppConfig {
   readonly logLevel: LogLevel;
   readonly databaseUrl: string;
   /**
-   * The folder the built-in local storage serves, one home per user as
-   * `<root>/<username>`. Undefined means the deployment has no local folder
-   * and storage is WebDAV or S3 added by an administrator.
+   * The folder fdrive serves as its storage, one home per user as
+   * `<root>/<username>`. Undefined means the deployment has no storage, and
+   * setup cannot finish until it is set.
    */
   readonly fdriveStorageRoot: string | undefined;
   readonly fdriveMasterKey: string;

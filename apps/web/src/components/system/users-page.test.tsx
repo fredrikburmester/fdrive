@@ -145,11 +145,12 @@ describe("the list", () => {
     expect(screen.queryByText(/You can't disable/)).toBeNull();
   });
 
-  it("explains a deployment without a local folder instead of an empty list", () => {
+  it("explains a deployment without a files folder instead of an empty list", () => {
     renderPage([], false);
 
-    expect(screen.getByText("No local folder")).toBeTruthy();
-    expect(screen.getByText(/Set FDRIVE_STORAGE_ROOT to serve a folder/)).toBeTruthy();
+    expect(screen.getByText("No files folder")).toBeTruthy();
+    expect(screen.getByText(/Set FDRIVE_STORAGE_ROOT and restart fdrive\./)).toBeTruthy();
+    expect(screen.queryByText(/System > Storage/)).toBeNull();
     expect(screen.queryByRole("table")).toBeNull();
     expect((screen.getByRole("button", { name: "Add user" }) as HTMLButtonElement).disabled).toBe(
       true,
@@ -162,7 +163,7 @@ describe("the list", () => {
     render(<UsersPage />);
 
     expect(screen.getByText("Administrators only")).toBeTruthy();
-    expect(screen.queryByText("No local folder")).toBeNull();
+    expect(screen.queryByText("No files folder")).toBeNull();
     expect(screen.queryByRole("alert")).toBeNull();
   });
 

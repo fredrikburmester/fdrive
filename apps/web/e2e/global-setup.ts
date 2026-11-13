@@ -158,9 +158,8 @@ async function resolveRunEnvironment(): Promise<{
  * starts the fake indexer sidecar `system.spec.ts` exercises; boots
  * Postgres, the local folder with every seed user's files, the API (with
  * the folder as the `files` index root so search is available and
- * `FDRIVE_INDEXER_URL` pointed at the fake indexer), alice's WebDAV server
- * for the specs that add WebDAV storage, and the web app once for the whole
- * run (see `support/environment.ts`); seeds the search index for
+ * `FDRIVE_INDEXER_URL` pointed at the fake indexer), and the web app once
+ * for the whole run (see `support/environment.ts`); seeds the search index for
  * `search.spec.ts`; and stashes the environment handle for
  * `global-teardown.ts`. Never used to seed *file* data through the UI;
  * each spec creates the folders and files it needs under unique names, so
@@ -176,7 +175,6 @@ export default async function globalSetup(): Promise<void> {
 
   const environment = await startEnvironment({
     indexRoot: true,
-    webdav: true,
     prepareStorage: async (storage) => {
       fakeIndexer.attachStorage({ root: storage.root });
     },

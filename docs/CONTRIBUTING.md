@@ -4,8 +4,7 @@ Current design: [Architecture](ARCHITECTURE.md). Unfinished work: [Plans](plans/
 
 Thank you for helping improve fdrive!
 
-For backend extensions, see [Adding a storage provider](STORAGE-PROVIDERS.md): package setup,
-module contracts, registration, capability limits and verification.
+The API reaches the files folder through an internal [storage port](STORAGE-PROVIDERS.md).
 
 ---
 
@@ -19,8 +18,9 @@ fdrive is a Turborepo monorepo with `pnpm` workspaces:
 - **`packages/`**: Shared TypeScript packages:
   - `packages/core`: Pure domain logic and ports (zero I/O, 100% testable).
   - `packages/contracts`: Zod schemas and typed API client.
-  - `packages/local`, `packages/webdav`, `packages/s3`: Storage providers (the local files
-    folder, WebDAV and S3), with in-memory protocol fakes for the remote ones.
+  - `packages/local`: The files folder, fdrive's only storage, behind the core storage port.
+  - `packages/backup`: Installation backups, including their S3 bucket destination.
+  - `packages/testkit`: Shared test helpers and containers.
   - `packages/db`: Drizzle schemas, migrations, and database repositories.
   - `packages/config`: Shared Vitest and TypeScript configurations.
 - **`services/`**: Companion services:

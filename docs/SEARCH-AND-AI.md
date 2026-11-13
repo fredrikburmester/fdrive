@@ -38,9 +38,8 @@ of 180 days. A recent file therefore beats an older one that matched about as we
 old file still surfaces when it matches clearly better. The constants live in
 [ranking.ts](../packages/core/src/search/ranking.ts).
 
-Index-backed results cover the local files folder, including folders other users share with
-you, and require live read permission. WebDAV and S3 storage can still be browsed, but does
-not gain search or thumbnails. For account-wide queries, text may span linked identities while visual results
+Index-backed results cover the files folder, including folders other users share with you,
+and require live read permission. For account-wide queries, text may span linked identities while visual results
 remain scoped to the active identity.
 
 PDF conversion rewrites the file in place, so System > Searchable PDFs keeps the file each

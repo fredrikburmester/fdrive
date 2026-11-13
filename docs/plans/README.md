@@ -13,8 +13,8 @@ Only unfinished work lives here. Reviewed against source and delivery history on
 | [macOS beta qualification](MACOS-APP.md) | Signing, lifecycle and scale qualification for the native Finder app |
 | [AI chat](AI-CHAT.md) | A docked, persistent chat panel that files are dropped into, with approval-gated tools, building on AI organize |
 | [Personal activity](RECENT-ACTIVITY.md) | A durable personal history answering where an upload went and what has happened to a file since, with [events](RECENT-ACTIVITY-EVENTS.md), [schema](RECENT-ACTIVITY-SCHEMA.md) and [coverage](RECENT-ACTIVITY-COVERAGE.md) |
-| [Owned shares](OWNED-SHARES.md) | fdrive-served share links: done for the local folder; S3, WebDAV and gallery gating remain |
-| [Local storage](LOCAL-STORAGE.md) | fdrive serves a folder on its own disk with its own users, replacing SFTPGo: decisions and what comes later |
+| [Owned shares](OWNED-SHARES.md) | fdrive-served share links: done; server-side gallery gating for unindexed logins remains |
+| [Local storage](LOCAL-STORAGE.md) | fdrive serves a folder on its own disk with its own users, its only storage since SFTPGo, WebDAV and S3 went: decisions and what comes later |
 | [ML server follow-ups](ML-SERVER.md) | What is left after moving embeddings and document extraction into one Rust server: amd64 measurements, memory, extraction gaps |
 
 These are a backlog, not a claim that an agent is working on every item.
@@ -30,8 +30,7 @@ These are a backlog, not a claim that an agent is working on every item.
 - Superseded designs are not backlog. Git history retains removed plans; do not maintain a
   second archive of obsolete implementation instructions.
 
-Current behavior: [architecture](../ARCHITECTURE.md), [provider development](../STORAGE-PROVIDERS.md),
-[WebDAV](../WEBDAV.md), [S3](../S3.md),
+Current behavior: [architecture](../ARCHITECTURE.md), [storage port](../STORAGE-PROVIDERS.md),
 [scoping](../SCOPING.md), [authentication](../AUTH.md), [Office](../OFFICE-DEVELOPMENT.md)
 and [System activity](../SYSTEM-ACTIVITY.md).
 Workflow: [AGENTS](../../AGENTS.md).

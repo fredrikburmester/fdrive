@@ -21,7 +21,7 @@ function leafNameFor(at: Date): string {
  * recycle folder at `trashPath` using the versioned generic move layout from
  * `moveTrashLeafPath`, exactly what `createRecycleFolderTrash` reads in
  * `layout: "move"` mode. For providers that have no server-side trash rule of
- * their own (WebDAV, S3). Deleting something already inside the recycle folder
+ * their own, such as the files folder. Deleting something already inside the recycle folder
  * deletes it for real, so purge and empty keep working through the same wrapper.
  */
 export function withMoveToTrash(options: MoveToTrashOptions): StorageProvider {

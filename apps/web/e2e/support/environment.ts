@@ -6,13 +6,10 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   type LocalStorageFixture,
-  type MinioKey,
   type SeedFiles,
   type SeedGrant,
   type SeedUser,
-  startApacheWebdav,
   startLocalStorage,
-  startMinio,
   startPostgres,
 } from "@fdrive/testkit";
 import { E2E_FILES, E2E_GRANTS, E2E_USERS } from "./e2e-seed.js";
@@ -46,14 +43,6 @@ export interface LocalStorageSeed {
   readonly grants?: readonly SeedGrant[];
 }
 
-/** A WebDAV server's one login and its home, for specs that add WebDAV storage. */
-export interface E2eWebdav {
-  /** The login's home, e.g. `http://127.0.0.1:32771/dav/alice/`. */
-  readonly url: string;
-  readonly username: string;
-  readonly password: string;
-}
-
 export interface RunningEnvironment {
   /** The seeded Postgres container's connection string, for tests that seed extra rows directly. */
   readonly databaseUrl: string;
@@ -63,10 +52,6 @@ export interface RunningEnvironment {
    * `false`. Specs read and change files here directly, as the host would.
    */
   readonly storageRoot: string | undefined;
-  /** An Apache WebDAV server with alice's login, when `options.webdav` asked for one. */
-  readonly webdav?: E2eWebdav;
-  /** A MinIO bucket (`url` is `http://host:port/bucket`) and a read-write key, when `options.s3` asked for one. */
-  readonly s3?: { readonly url: string; readonly key: MinioKey };
   /** This run's actual API and web base URLs: equal to `getApiBaseUrl()`/
    * `getWebBaseUrl()` for the default, shared environment, but reflect
    * `options.apiPort`/`options.webPort` for a second, independent
@@ -82,7 +67,7 @@ export interface StartEnvironmentOptions {
   /**
    * The local folder's users, files and grants. Defaults to the whole e2e
    * seed (`support/e2e-seed.ts`). `false` serves no local folder, so setup
-   * connects WebDAV or S3 instead.
+   * asks the operator to set `FDRIVE_STORAGE_ROOT` instead.
    */
   readonly storage?: LocalStorageSeed | false;
   /**
@@ -91,10 +76,6 @@ export interface StartEnvironmentOptions {
    * folder with no users, so `/setup` creates the first. Defaults to `true`.
    */
   readonly createUsers?: boolean;
-  /** Also start an Apache WebDAV server with alice's login, for specs that add WebDAV storage. */
-  readonly webdav?: boolean;
-  /** Also start a MinIO bucket, for a spec that adds an S3 provider. Off by default: most specs never need it. */
-  readonly s3?: boolean;
   /** Configures `FDRIVE_INDEX_ROOTS` with the local folder as the `files` root, so search is available. */
   readonly indexRoot?: boolean;
   /** Fixture-only preparation of the local folder before the API starts. */
@@ -131,9 +112,8 @@ export interface StartEnvironmentOptions {
    * above): its pids are not written to the shared `environment-state.json`
    * (see `persistState` below), which `global-teardown.ts` falls back to
    * reading only when its in-process environment handle is unavailable, and
-   * its folder and WebDAV addresses are not exported as `E2E_STORAGE_ROOT`
-   * and `E2E_WEBDAV_URL`, which name the shared run's. Defaults to `false`
-   * (the shared environment).
+   * its folder is not exported as `E2E_STORAGE_ROOT`, which names the shared
+   * run's. Defaults to `false` (the shared environment).
    */
   readonly skipStatePersist?: boolean;
 }
@@ -144,9 +124,6 @@ export const E2E_STORAGE_SEED: LocalStorageSeed = {
   files: E2E_FILES,
   grants: E2E_GRANTS,
 };
-
-/** alice's WebDAV login: the same name and password as on the local folder. */
-const WEBDAV_LOGIN = { username: "alice", password: "alice-password" } as const;
 
 interface EnvironmentState {
   readonly apiPid: number | undefined;
@@ -291,23 +268,6 @@ export async function startEnvironment(
       // Workers inherit the setup process's env: specs change files on disk here.
       process.env.E2E_STORAGE_ROOT = storage.root;
     }
-
-    let webdav: E2eWebdav | undefined;
-    if (options.webdav === true) {
-      const server = await startApacheWebdav({ users: [WEBDAV_LOGIN] });
-      stopFns.push(() => server.stop());
-      const home = server.users[0];
-      if (home === undefined) throw new Error("fdrive e2e: the WebDAV server has no login");
-      // Spelled with the IPv4 loopback address: `localhost` can resolve to
-      // `::1` first where Docker publishes ports on IPv4 only.
-      const url = new URL(home.baseUrl);
-      url.hostname = E2E_HOST;
-      webdav = { url: url.href, username: home.username, password: home.password };
-      if (shared) process.env.E2E_WEBDAV_URL = webdav.url;
-    }
-    // A MinIO bucket only when asked: `s3-provider.spec.ts` starts its own.
-    const minio = options.s3 === true ? await startMinio() : undefined;
-    if (minio !== undefined) stopFns.push(() => minio.stop());
 
     const masterKey = randomBytes(32).toString("base64");
 
@@ -483,8 +443,6 @@ export async function startEnvironment(
     return {
       databaseUrl: postgres.connectionString,
       storageRoot: storage?.root,
-      ...(webdav === undefined ? {} : { webdav }),
-      ...(minio === undefined ? {} : { s3: { url: minio.baseUrl, key: minio.writer } }),
       apiBaseUrl,
       webBaseUrl,
       stop: stopAll,

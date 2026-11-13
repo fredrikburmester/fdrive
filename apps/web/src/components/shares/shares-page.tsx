@@ -40,12 +40,12 @@ import { shareAccessLabel, shareItemLabel, shareUsage } from "@/lib/shares/statu
 import { ShareDialog } from "./share-dialog";
 
 /**
- * Said when the active login's storage cannot share while another linked
- * login can (the sidebar shows Shares for the union), or when someone
- * opens the page by address with a files-only login.
+ * Said when the active login cannot share while another linked login can
+ * (the sidebar shows Shares for the union), or when someone opens the page
+ * by address with such a login.
  */
 export function unavailableNote(login: string): string {
-  return `${login} is on storage that can't create share links. Switch to a login on local storage to see its links.`;
+  return `${login} can't create share links. Switch to another login to see its links.`;
 }
 
 export function SharesPage() {

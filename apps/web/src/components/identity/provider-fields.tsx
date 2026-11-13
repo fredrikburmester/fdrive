@@ -46,10 +46,8 @@ export function inputTypeFor(fieldOrKind: ProviderField | string): string {
 }
 
 /**
- * Renders a provider's credential (or configuration) fields exactly as the
- * API describes them: the same list drives the login page, the Add and
- * Remove login dialogs and System > Storage, so a new provider type needs
- * no form of its own.
+ * Renders a provider's credential fields exactly as the API describes them:
+ * the same list drives the login page and the Add and Remove login dialogs.
  */
 export function ProviderFieldInputs({
   fields,
