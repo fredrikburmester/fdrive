@@ -1,12 +1,10 @@
 import type { ProviderField, ProviderFieldValues, PublicProvider } from "@fdrive/contracts";
-import { providerTypeLabel } from "@/lib/identity/provider-type";
 
 /**
  * The credential form shown when the provider list is unavailable (the API
  * is unreachable, or the account page's dialogs open before the list has
- * loaded): a username, a password and an optional one-time code, which
- * covers every username-and-password storage. The server validates against
- * the real field list anyway.
+ * loaded): a username, a password and an optional one-time code. The server
+ * validates against the real field list anyway.
  */
 export const DEFAULT_CREDENTIAL_FIELDS: readonly ProviderField[] = [
   { name: "username", label: "Username", kind: "text", required: true, maxLength: 255 },
@@ -30,8 +28,8 @@ export function credentialFieldsFor(
 
 /**
  * The fields a person re-enters to confirm they hold the login they are
- * signed in with: the secret ones (a password, a one-time code), never a
- * username or access key id the server already knows. The password field
+ * signed in with: the secret ones (a password, a one-time code), never the
+ * username the server already knows. The password field
  * stays required; a code stays optional. Labels and help are rewritten to
  * say whose credential this is, so "Password" does not read as the new
  * login's password next to it in the Add login dialog.
@@ -55,27 +53,13 @@ export function confirmationFieldsFor(fields: readonly ProviderField[]): readonl
 }
 
 /**
- * What to call a provider in front of someone who is not signed in: the
- * name an admin gave it, else the product name. The public list never
- * carries the host, so there is nothing else to fall back to.
+ * The subtitle under "Sign in" on the login page: the storage's admin-set
+ * name when it has one. Everyone signs in with an fdrive account.
  */
-export function providerDisplayName(provider: Pick<PublicProvider, "type" | "label">): string {
-  return provider.label.length > 0 ? provider.label : providerTypeLabel(provider.type);
-}
-
-/** The subtitle under "Sign in" on the login page. */
-export function loginSubtitle(providers: readonly PublicProvider[]): string {
-  const [only] = providers;
-  if (providers.length === 1 && only !== undefined) {
-    const product = providerTypeLabel(only.type);
-    return only.label.length > 0
-      ? `Sign in with your ${product} account on ${only.label}`
-      : `Sign in with your ${product} account`;
-  }
-  if (providers.length > 1) {
-    return "Choose a server and sign in";
-  }
-  return "Sign in with your account";
+export function loginSubtitle(provider: Pick<PublicProvider, "label"> | undefined): string {
+  return provider !== undefined && provider.label.length > 0
+    ? `Sign in with your fdrive account on ${provider.label}`
+    : "Sign in with your fdrive account";
 }
 
 /** The submitted values for `fields`: every filled field, with blank optional ones left out. */
@@ -97,12 +81,4 @@ export function credentialComplete(
   values: Readonly<Record<string, string>>,
 ): boolean {
   return fields.every((field) => !field.required || (values[field.name] ?? "").length > 0);
-}
-
-/** Picks the provider `id` names, else the first one; `undefined` when there is none. */
-export function selectProvider(
-  providers: readonly PublicProvider[],
-  id: string | null,
-): PublicProvider | undefined {
-  return providers.find((provider) => provider.id === id) ?? providers[0];
 }

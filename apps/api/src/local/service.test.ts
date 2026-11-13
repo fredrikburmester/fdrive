@@ -4,7 +4,7 @@ import { createMemoryRepos } from "@fdrive/db/testing";
 import { describe, expect, it, vi } from "vitest";
 import { open } from "../auth/crypto.js";
 import { parseStoredCredential } from "../auth/token-source.js";
-import { seedLocalProvider, seedWebdavProvider } from "../providers/test-fixtures/index.ts";
+import { seedLocalProvider } from "../providers/test-fixtures/index.ts";
 import { createLocalUserService, type LocalUserServiceDeps, type UserViewer } from "./service.js";
 import { FAST_PASSWORDS, seedLocalUsers } from "./test-fixtures/index.ts";
 import { createLocalUserStore } from "./users.js";
@@ -351,13 +351,14 @@ describe("createLocalUserService: changeOwnPassword", () => {
       h.service.changeOwnPassword({ ...input, currentPassword: "alice-pass" }),
     ).rejects.toMatchObject({ kind: "forbidden" });
 
-    const dav = await seedWebdavProvider(h.repos, "http://dav.test");
-    const davLogin = await h.repos.identities.create({
+    // A login on a WebDAV row left from before the files folder was the only storage.
+    const retired = await h.repos.providers.ensure({ type: "webdav", baseUrl: "http://dav.test" });
+    const retiredLogin = await h.repos.identities.create({
       accountId: h.alice.accountId,
-      providerId: dav.id,
+      providerId: retired.id,
       externalUsername: "alice",
     });
-    for (const identityId of [davLogin.id, randomUUID()]) {
+    for (const identityId of [retiredLogin.id, randomUUID()]) {
       await expect(
         h.service.changeOwnPassword({ ...input, identityId, currentPassword: "alice-pass" }),
       ).rejects.toMatchObject({ kind: "unsupported" });

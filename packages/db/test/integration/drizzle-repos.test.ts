@@ -128,7 +128,7 @@ describe("metadata prefix operations", () => {
   async function createIdentity(label: string) {
     const repos = createRepos(db);
     const provider = await repos.providers.ensure({
-      type: "webdav",
+      type: "local",
       baseUrl: `http://prefix-${label}`,
     });
     const account = await repos.accounts.create({ displayName: label });
@@ -505,7 +505,7 @@ it("cascades office_files when their provider is deleted", async () => {
   await db.execute(sql`truncate table app.office_files, app.providers cascade`);
   const repos = createRepos(db);
   const officeFiles = createOfficeFileRepo(db);
-  const provider = await repos.providers.ensure({ type: "webdav", baseUrl: "http://office" });
+  const provider = await repos.providers.ensure({ type: "local", baseUrl: "http://office" });
   const file = await officeFiles.ensure({
     providerId: provider.id,
     rootName: "sftpgo",
@@ -518,7 +518,7 @@ it("cascades office_files when their provider is deleted", async () => {
 });
 
 // A directory listing is unbounded, and `decorate` binds one parameter per
-// entry, so a folder filled outside fdrive over raw SFTP or WebDAV can push
+// entry, so a folder filled outside fdrive (rsync, SMB) can push
 // these lookups past what one statement may carry. The listing below exceeds
 // the protocol's 65535-parameter cap, so it only reaches PostgreSQL as valid
 // messages at all because the repository splits it into bounded chunks.
@@ -544,7 +544,7 @@ describe("metadata lookups for oversized directory listings", () => {
   async function seedListing() {
     const repos = createRepos(db);
     const provider = await repos.providers.ensure({
-      type: "webdav",
+      type: "local",
       baseUrl: "http://oversized",
     });
     const account = await repos.accounts.create({ displayName: "oversized" });

@@ -34,7 +34,7 @@ test("sidebar activity survives navigation and reload, supports keyboard details
   await collapse.click();
   await expect(thumbnails).toHaveCount(0);
   await expect(page.getByRole("link", { name: "Office", exact: true })).toHaveCount(0);
-  for (const name of ["General", "Storage"]) {
+  for (const name of ["General", "Users"]) {
     await expect(page.getByRole("link", { name, exact: true })).toBeVisible();
   }
   await expect(

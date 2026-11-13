@@ -12,8 +12,7 @@ main. What remains open is listed under [what is not covered](#what-is-not-cover
 - No retention cutoff is enabled and no archive or purge administration exists. The plan's
   slice 4 scale qualification (a million events across accounts, measured latency budgets)
   has a PostgreSQL fixture but no production hardware promise.
-- Cached and offline native opens stay unobservable, and WebDAV and S3 have no watcher: their
-  Unknown events come only from refresh comparison, which the feed's coverage block states.
+- Cached and offline native opens stay unobservable.
 - Conversion and any other command that does not exist yet gets its taxonomy and inventory
   row when it ships, not before.
 
@@ -74,8 +73,8 @@ accepted binding was the full original virtual path plus the observed provider-g
 timestamp, captured from a bounded before/after listing and never fabricated from the API
 clock. Bindings recorded that way are kept as recorded.
 
-**Since 26bc01e** the WebDAV-specific destination is a shared layout, and every storage now
-uses it.
+**Since 26bc01e** the destination first built for WebDAV is a shared layout, and every storage
+now uses it.
 [withMoveToTrash](../../packages/core/src/trash/move-to-trash.ts) builds the leaf itself from
 [moveTrashLeafPath](../../packages/core/src/trash/recycle-folder.ts), read back by
 [createRecycleFolderTrash](../../packages/core/src/trash/recycle-folder-trash.ts) in
@@ -84,7 +83,7 @@ every provider that has no server-side rule of its own, which is all of them. fd
 knows the exact leaf before the move, so the strong binding covers every storage: carry that known
 virtual leaf out through an internal result/hook, leaving public delete compatibility unchanged.
 Restore preserves the original file ID when that accepted binding and the actual returned target
-agree. Trash is per storage server, so bindings, restore and purge stay scoped to their storage identity.
+agree. Bindings, restore and purge stay scoped to their storage identity.
 
 ## Provider-specific Unknown-event reconciliation
 
@@ -101,9 +100,9 @@ do not consume only the generic SSE delete after it has lost the original move e
 | Local folder watcher, `deleted` or `changed` | For an already tracked personal file, record confirmed disappearance or unexpected revision evidence after excluding known operations. An unpaired deletion cannot establish where a file went. Created events can resolve a tracked gap; they do not add everyone else's new files to My activity. |
 | Local folder listener, SHA-256 relink | Existing behavior relinks tags/favorites for exactly one same-root/scope candidate; destination announcement requires live read. Reuse this as labelled `sha256_relink` evidence. It is a candidate for history continuity, not proof of actor or globally unique file identity. Preserve ambiguous history separately; do not weaken existing metadata behavior. Include history-tracked files when selecting candidates, not only tagged/favorited files. |
 | Local folder not indexed, watcher disabled or disconnected | Fall back to authorized refresh comparison; display any observation gap. LISTEN/NOTIFY is not a durable replay log. Normal API operation history works with indexing disabled. |
-| WebDAV and S3, web/native refresh comparison, **Since 26bc01e** | Neither has a watcher input. Compare complete authorized listings/stats and known registry state. Confirmed absence yields `observation.location_missing`; changed reliable version yields `observation.content_changed`. Do not claim external move/left-scope from absence alone. A verified provider ID may prove a relocation if available; path/size/hash similarity alone does not. |
-| Either provider, timeout/partial scan/403 | Check/access failure only; preserve last-known state. Do not emit a move/delete observation from a failed or incomplete observation. |
-| Either provider, same-path rediscovery | Append `observation.resolved` linked to the prior gap. This resolves location availability only: assign a new file UUID and target subject, keep the earlier journey unknown, and never infer identity continuity from path/size/hash. Proven watcher moves and accepted Trash receipts have their separate continuity rules. |
+| Web/native refresh comparison, **Since 26bc01e** | The fallback without a watcher input. Compare complete authorized listings/stats and known registry state. Confirmed absence yields `observation.location_missing`; changed reliable version yields `observation.content_changed`. Do not claim external move/left-scope from absence alone. A verified provider ID may prove a relocation if available; path/size/hash similarity alone does not. |
+| Watcher or refresh, timeout/partial scan/403 | Check/access failure only; preserve last-known state. Do not emit a move/delete observation from a failed or incomplete observation. |
+| Watcher or refresh, same-path rediscovery | Append `observation.resolved` linked to the prior gap. This resolves location availability only: assign a new file UUID and target subject, keep the earlier journey unknown, and never infer identity continuity from path/size/hash. Proven watcher moves and accepted Trash receipts have their separate continuity rules. |
 
 Unknown-event UI shows last-known location, last-confirmed time, detection time and evidence.
 Example: “File no longer found at /Documents/invoice.pdf. It may have moved or been removed

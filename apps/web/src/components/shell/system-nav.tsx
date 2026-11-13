@@ -7,7 +7,6 @@ import {
   CircleAlert,
   Database,
   FileText,
-  HardDrive,
   Image,
   Images,
   LoaderCircle,
@@ -45,7 +44,6 @@ const FEATURES_ITEM = {
 const SYSTEM_ITEMS = [
   { id: "backups", href: "/system/backups", label: "Backups", Icon: Archive },
   { id: "general", href: "/system/general", label: "General", Icon: Settings2 },
-  { id: "storage", href: "/system/storage", label: "Storage", Icon: HardDrive },
   { id: "users", ...USERS_PAGE, Icon: Users },
 ] as const;
 const FEATURE_ITEMS = [
@@ -160,7 +158,7 @@ export function SystemNav() {
           (item.id === "features" &&
             FEATURE_ITEMS.some(({ id }) => id !== "ai" && query.pending.has(id)))
         }
-        stale={query.isError && !["general", "storage", "users", "backups", "ai"].includes(item.id)}
+        stale={query.isError && !["general", "users", "backups", "ai"].includes(item.id)}
       />
     );
   }

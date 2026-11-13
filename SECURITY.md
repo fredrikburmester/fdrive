@@ -31,7 +31,7 @@ In scope: everything in this repository, including the Docker Compose deployment
 
 Out of scope:
 
-- ONLYOFFICE, Collabora, Caddy, WebDAV and S3 servers and other upstream software. Report
+- ONLYOFFICE, Collabora, Caddy, S3 backup buckets and other upstream software. Report
   those to their own projects. A way fdrive misuses them is in scope.
 - Findings that need an already compromised server, administrator login or setup token.
 - Deployments that ignore the documented setup, such as serving fdrive to the internet over
@@ -40,8 +40,8 @@ Out of scope:
 - Denial of service by volume, and reports from automated scanners without a demonstrated
   impact.
 
-Two behaviors are deliberate. The administrator connection probe for WebDAV or S3 storage may
-reach private network addresses, because home storage normally lives on one. Session cookies
+Two behaviors are deliberate. The administrator's test of an S3 backup destination may reach
+private network addresses, because home storage normally lives on one. Session cookies
 are not marked `Secure` on a plain HTTP LAN deployment, and are once fdrive runs behind HTTPS.
 
 ## Testing

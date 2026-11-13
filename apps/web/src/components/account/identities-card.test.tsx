@@ -5,12 +5,8 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import { afterEach, expect, it, vi } from "vitest";
 import { accountTransition } from "@/lib/account/transition";
 import { apiClient } from "@/lib/api/client";
-import { allCapabilities, storageNote } from "@/lib/identity/capabilities";
 import { makeIdentity, makeMe } from "@/test-fixtures/identity";
 import { IdentitiesCard } from "./identities-card";
-
-/** The note for storage with none of search, shares and Office. */
-const FILES_ONLY_NOTE = storageNote({ ...allCapabilities(false), trash: true }) as string;
 
 vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn() }) }));
 const me = makeMe({
@@ -54,17 +50,15 @@ it("confirms the exact login, explains retained files, and reports unlink confli
   expect(screen.getByRole("dialog", { name: "Add login" })).toBeDefined();
 });
 
-it("names a key login by its storage and confirms removal with the key beneath", () => {
+it("adds no storage note, even for a login whose storage lacks features", () => {
   const client = new QueryClient({ defaultOptions: { queries: { staleTime: Infinity } } });
   client.setQueryData(["auth", "me"], {
     ...me,
     identities: [
       makeIdentity(),
       makeIdentity({
-        id: "b2",
-        providerType: "s3",
-        username: "0041234abcdef",
-        providerLabel: "Backblaze",
+        id: "two",
+        username: "bob",
         capabilities: { index: false, shares: false, office: false },
       }),
     ],
@@ -74,12 +68,8 @@ it("names a key login by its storage and confirms removal with the key beneath",
       <IdentitiesCard />
     </QueryClientProvider>,
   );
-  expect(screen.getByRole("img", { name: "S3" })).toBeDefined();
-  // Only the S3 login is files only; the local one carries no note.
-  expect(screen.getAllByText(FILES_ONLY_NOTE)).toHaveLength(1);
-  fireEvent.click(screen.getByRole("button", { name: "Remove Backblaze" }));
-  expect(screen.getByRole("dialog", { name: "Remove Backblaze?" })).toBeDefined();
-  expect(screen.getByText(/0041234abcdef. Files remain on the server/)).toBeDefined();
+  expect(screen.getByText("bob")).toBeDefined();
+  expect(screen.queryByText(/available on this storage|Files only/)).toBeNull();
 });
 
 it("lists every login with its storage and no per-login mapping controls", () => {

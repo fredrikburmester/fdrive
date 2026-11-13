@@ -8,14 +8,9 @@ import {
 import type { Identity, Provider } from "@fdrive/db";
 import { createMemoryRepos } from "@fdrive/db/testing";
 import { createMemoryStorage } from "@fdrive/testkit";
-import { createFakeWebdavServer, webdavModule } from "@fdrive/webdav";
 import { expect, it, vi } from "vitest";
 import { ApiHttpError } from "../errors.js";
-import {
-  localModuleFixture,
-  seedLocalUsers,
-  writeHomeFiles,
-} from "../local/test-fixtures/index.ts";
+import { localModuleFixture, seedLocalUsers } from "../local/test-fixtures/index.ts";
 import type { IdentityProvider } from "../providers/service.js";
 import { fakeProviderModule } from "../providers/test-fixtures/index.ts";
 import {
@@ -62,7 +57,7 @@ const IDENTITY: Identity = {
 function providerRow(id: string, baseUrl: string): Provider {
   return {
     id,
-    type: "webdav",
+    type: "local",
     baseUrl,
     label: "",
     config: {},
@@ -413,71 +408,6 @@ it("unavailableStorage rejects every call with the given error and has no trash"
   await expect(storage.deleteFile("/a")).rejects.toBe(error);
   await expect(storage.deleteDir("/a")).rejects.toBe(error);
   expect(trashSettingsForStorage(storage)).toBeNull();
-});
-
-it("keeps a WebDAV identity and a local identity on the same path apart", async () => {
-  const requests: { host: string; authorization: string | null }[] = [];
-  const repos = createMemoryRepos();
-  const local = localModuleFixture(repos);
-  await seedLocalUsers(repos, [{ username: "alice", password: "pw" }]);
-  writeHomeFiles(local.root, "alice", { "/shared/a.txt": "from the local folder" });
-  const davUser = { username: "alice", password: "teacup" };
-  const dav = createFakeWebdavServer({
-    users: [davUser],
-    origin: "http://dav.test",
-    files: { "/shared/a.txt": "from webdav" },
-  });
-  const fetchImpl: typeof globalThis.fetch = async (url, init) => {
-    const host = new URL(String(url)).host;
-    requests.push({ host, authorization: new Headers(init?.headers).get("authorization") });
-    return dav.fetch(url, init);
-  };
-  const localRow: Provider = { ...providerRow("provider-local", "local"), type: "local" };
-  const davRow: Provider = providerRow("provider-dav", "http://dav.test");
-  const forIdentity = vi.fn(
-    async (identityId: string): Promise<IdentityProvider> =>
-      identityId === "identity-dav"
-        ? {
-            ...resolvedFor(davRow, webdavModule),
-            identity: { ...IDENTITY, id: "identity-dav", providerId: davRow.id },
-          }
-        : resolvedFor(localRow, local.module),
-  );
-  const tokenSource: Pick<TokenSource, "sessionFor" | "get" | "credential"> = {
-    sessionFor: (identityId, externalUsername) => ({
-      externalUsername,
-      getCredential: async () => ({
-        username: externalUsername,
-        password: identityId === "identity-dav" ? davUser.password : "pw",
-      }),
-      getToken: async () => null,
-      invalidateToken: async () => {},
-    }),
-    get: async () => null,
-    credential: async () => ({ password: "pw" }),
-  };
-  const factory = createIdentityStorageFactory({
-    providers: { forIdentity },
-    tokenSource,
-    fetch: fetchImpl,
-    clock: () => new Date(0),
-  });
-  const davStorage = await factory("identity-dav");
-  const localStorage = await factory("identity-a");
-  const text = async (storage: StorageProvider) =>
-    new Response((await storage.download("/shared/a.txt")).body).text();
-
-  expect(await text(davStorage)).toBe("from webdav");
-  expect(await text(localStorage)).toBe("from the local folder");
-  await davStorage.upload("/shared/only-dav.txt", new TextEncoder().encode("x"));
-  await expect(localStorage.stat("/shared/only-dav.txt")).rejects.toMatchObject({
-    kind: "not_found",
-  });
-
-  const basic = `Basic ${Buffer.from(`${davUser.username}:${davUser.password}`).toString("base64")}`;
-  expect(requests.length).toBeGreaterThan(0);
-  expect(requests.every((request) => request.host === "dav.test")).toBe(true);
-  expect(requests.every((request) => request.authorization === basic)).toBe(true);
 });
 
 it("asks the module to admit the login before building any storage", async () => {

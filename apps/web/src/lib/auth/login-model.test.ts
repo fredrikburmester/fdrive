@@ -8,8 +8,6 @@ import {
   credentialFieldsFor,
   DEFAULT_CREDENTIAL_FIELDS,
   loginSubtitle,
-  providerDisplayName,
-  selectProvider,
 } from "./login-model";
 
 const local: PublicProvider = {
@@ -23,7 +21,6 @@ const local: PublicProvider = {
   ],
   capabilities: allCapabilities(true),
 };
-const second: PublicProvider = { ...local, id: "00000000-0000-4000-8000-000000000002" };
 
 describe("credentialFieldsFor", () => {
   it("uses the provider's fields, else the defaults", () => {
@@ -45,18 +42,13 @@ describe("confirmationFieldsFor", () => {
 });
 
 describe("loginSubtitle", () => {
-  it("names the one provider, asks to choose among several, and stays generic without any", () => {
-    expect(loginSubtitle([local])).toBe("Sign in with your fdrive account on files.example.org");
-    expect(loginSubtitle([{ ...local, label: "" }])).toBe("Sign in with your fdrive account");
-    expect(loginSubtitle([local, second])).toBe("Choose a server and sign in");
-    expect(loginSubtitle([])).toBe("Sign in with your account");
+  it("names the storage when an administrator named it", () => {
+    expect(loginSubtitle(local)).toBe("Sign in with your fdrive account on files.example.org");
   });
-});
 
-describe("providerDisplayName", () => {
-  it("uses the admin's label and falls back to the product name", () => {
-    expect(providerDisplayName(local)).toBe("files.example.org");
-    expect(providerDisplayName({ type: "local", label: "" })).toBe("fdrive");
+  it("names the product alone without a name or without the list", () => {
+    expect(loginSubtitle({ label: "" })).toBe("Sign in with your fdrive account");
+    expect(loginSubtitle(undefined)).toBe("Sign in with your fdrive account");
   });
 });
 
@@ -83,14 +75,5 @@ describe("buildCredential and credentialComplete", () => {
     expect(credentialComplete(fields, { username: "ada" })).toBe(false);
     expect(credentialComplete(fields, { username: "ada", password: "pw" })).toBe(true);
     expect(credentialComplete([], {})).toBe(true);
-  });
-});
-
-describe("selectProvider", () => {
-  it("finds the named provider, else the first, else nothing", () => {
-    expect(selectProvider([local, second], second.id)).toBe(second);
-    expect(selectProvider([local, second], "missing")).toBe(local);
-    expect(selectProvider([local, second], null)).toBe(local);
-    expect(selectProvider([], null)).toBeUndefined();
   });
 });

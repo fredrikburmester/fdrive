@@ -41,7 +41,7 @@ export const queryKeys = {
     publicUrl: () => ["system", "public-url"] as const,
     office: () => ["system", "office"] as const,
     ai: () => ["system", "ai"] as const,
-    /** One entry per storage server; the bare prefix matches every server's settings. */
+    /** Keyed by the storage row the settings belong to. */
     trash: (providerId: string) => ["system", "trash", providerId] as const,
     features: () => ["system", "features"] as const,
     indexer: () => ["system", "indexer"] as const,

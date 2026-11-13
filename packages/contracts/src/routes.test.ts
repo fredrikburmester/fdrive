@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import {
   accountTokenRoute,
   adminProviderRoute,
-  adminProviderTestRoute,
   adminUserRoute,
   chatActionRoute,
   chatCancelRoute,
@@ -120,7 +119,6 @@ describe("ROUTES", () => {
   it("defines every setup route under /api/v1/setup", () => {
     expect(ROUTES.setup).toEqual({
       status: "/api/v1/setup/status",
-      test: "/api/v1/setup/test",
       complete: "/api/v1/setup/complete",
     });
   });
@@ -128,12 +126,10 @@ describe("ROUTES", () => {
   it("defines every admin route under /api/v1/admin", () => {
     expect(ROUTES.admin).toEqual({
       providers: "/api/v1/admin/providers",
-      providersTest: "/api/v1/admin/providers/test",
       users: "/api/v1/admin/users",
     });
     expect(ROUTES.providers).toBe("/api/v1/providers");
     expect(adminProviderRoute("a b")).toBe("/api/v1/admin/providers/a%20b");
-    expect(adminProviderTestRoute("p1")).toBe("/api/v1/admin/providers/p1/test");
     expect(adminUserRoute("al ice")).toBe("/api/v1/admin/users/al%20ice");
   });
 

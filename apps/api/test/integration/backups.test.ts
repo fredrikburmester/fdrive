@@ -22,13 +22,7 @@ import {
   verifyDelivery,
 } from "@fdrive/backup";
 import { createDb, createRepos, migrate } from "@fdrive/db";
-import {
-  insertLocalUsers,
-  startApacheWebdav,
-  startLocalStorage,
-  startPostgres,
-} from "@fdrive/testkit";
-import { webdavModule } from "@fdrive/webdav";
+import { insertLocalUsers, startLocalStorage, startPostgres } from "@fdrive/testkit";
 import { generateIdentity, identityToRecipient } from "age-encryption";
 import { afterAll, beforeAll, expect, it } from "vitest";
 import { open, seal } from "../../src/auth/crypto.js";
@@ -68,7 +62,7 @@ it("recovers durable metadata, exact bigint history, credentials, ZIPs and bytes
     account = randomUUID(),
     user = randomUUID();
   await source.pool.query(
-    "insert into app.providers(id,type,label,base_url,config) values($1,'webdav','Test','http://test.invalid','{}')",
+    "insert into app.providers(id,type,label,base_url,config) values($1,'local','Test','local','{}')",
     [provider],
   );
   await source.pool.query("insert into app.accounts(id) values($1)", [account]);
@@ -181,8 +175,7 @@ it("recovers durable metadata, exact bigint history, credentials, ZIPs and bytes
   ).rejects.toThrow("not empty");
 }, 180_000);
 
-it("delivers a large streamed snapshot to Apache WebDAV and local folder destinations that restore without the source", async () => {
-  const dav = await startApacheWebdav();
+it("delivers a large streamed snapshot to a local folder destination that restores without the source", async () => {
   const folder = await startLocalStorage({
     users: [{ username: "alice", password: "alice-password" }],
     files: {},
@@ -232,12 +225,6 @@ it("delivers a large streamed snapshot to Apache WebDAV and local folder destina
     expect(Number(result.bytes)).toBeGreaterThan(64 * 1024 * 1024);
     const local = await digest(fileStream(file));
     const targets = [
-      {
-        label: "apache-webdav",
-        module: webdavModule,
-        instance: { id: randomUUID(), baseUrl: dav.baseUrl, config: {} },
-        credential: dav.credential,
-      },
       {
         label: "local",
         module: localModule,
@@ -337,7 +324,6 @@ it("delivers a large streamed snapshot to Apache WebDAV and local folder destina
       await readdir(folder.path("alice", `/backups/.fdrive-backups/${config.installation_id}`)),
     ).toContain(`${id}.fdrive.age`);
   } finally {
-    await dav.stop();
     await folder.stop();
   }
 }, 600_000);

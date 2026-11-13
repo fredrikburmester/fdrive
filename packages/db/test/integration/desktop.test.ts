@@ -15,7 +15,7 @@ it("coordinates desktop identities and operation receipts across independent Pos
     const repos = createRepos(first.db);
     const account = await repos.accounts.create({ displayName: "Desktop" });
     const provider = await repos.providers.ensure({
-      type: "webdav",
+      type: "local",
       baseUrl: "http://desktop.test/dav",
     });
     const identity = await repos.identities.create({
@@ -166,7 +166,7 @@ it("registers many desktop paths at once, parents first, without the lock when a
     const repos = createRepos(first.db);
     const account = await repos.accounts.create({ displayName: "Desktop" });
     const provider = await repos.providers.ensure({
-      type: "webdav",
+      type: "local",
       baseUrl: "http://desktop.test/dav",
     });
     const identity = await repos.identities.create({

@@ -46,12 +46,11 @@ const share: ManagedShare = {
   presentation: "auto",
 };
 const local = makeIdentity({ id: "local", username: "ada", providerLabel: "Main" });
-const s3 = makeIdentity({
-  id: "s3",
-  username: "0047483a71e6fd50000000001",
-  providerType: "s3",
-  providerLabel: "B2",
-  capabilities: { shares: false, office: false, index: false },
+const noShares = makeIdentity({
+  id: "no-shares",
+  username: "bob",
+  providerLabel: "Main",
+  capabilities: { shares: false },
 });
 
 beforeEach(() => {
@@ -63,21 +62,23 @@ afterEach(() => {
 });
 
 it("lists the active login's links when its storage can share", () => {
-  mocks.me = makeMe({ identities: [local, s3], activeIdentityId: "local" });
+  mocks.me = makeMe({ identities: [local, noShares], activeIdentityId: "local" });
   render(<SharesPage />);
   expect(mocks.management).toHaveBeenCalledWith({ list: true });
   expect(screen.getByText("Quarterly report")).toBeTruthy();
   expect(screen.queryByText(/isn't|aren't/)).toBeNull();
 });
 
-it("states the limit for a files-only login instead of asking for a refusal", () => {
-  mocks.me = makeMe({ identities: [local, s3], activeIdentityId: "s3" });
+it("states the limit for a login that cannot share instead of asking for a refusal", () => {
+  mocks.me = makeMe({ identities: [local, noShares], activeIdentityId: "no-shares" });
   mocks.query = { isPending: true, isError: false, error: null, data: undefined };
   render(<SharesPage />);
   expect(mocks.management).toHaveBeenCalledWith({ list: false });
   expect(screen.getByText("Shares aren't available for this login")).toBeTruthy();
-  // A key login leads with its storage name, never the opaque access key.
-  expect(screen.getByText(unavailableNote("B2"))).toBeTruthy();
+  expect(screen.getByText(unavailableNote("bob"))).toBeTruthy();
+  expect(unavailableNote("bob")).toBe(
+    "bob can't create share links. Switch to another login to see its links.",
+  );
   expect(screen.queryByRole("status")).toBeNull();
   expect(screen.queryByRole("columnheader", { name: "Name" })).toBeNull();
   expect(screen.queryByText("Could not load share links")).toBeNull();
@@ -116,7 +117,7 @@ it("lists folders shared with people when the login's storage shares between its
   const view = render(<SharesPage />);
   expect(screen.getByRole("region", { name: "Shared with people" })).toBeTruthy();
 
-  mocks.me = makeMe({ identities: [local, s3], activeIdentityId: "s3" });
+  mocks.me = makeMe({ identities: [local, noShares], activeIdentityId: "no-shares" });
   view.rerender(<SharesPage />);
   expect(screen.queryByRole("region", { name: "Shared with people" })).toBeNull();
 });

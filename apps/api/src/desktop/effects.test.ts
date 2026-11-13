@@ -97,7 +97,7 @@ it("drains older saves before a new publication and blocks while recovery is pen
 it("captures trusted Office locations once, handling unmapped paths and ownership safely", async () => {
   const repos = createMemoryRepos();
   const account = await repos.accounts.create({ displayName: "A" });
-  const provider = await repos.providers.ensure({ type: "webdav", baseUrl: "http://test" });
+  const provider = await repos.providers.ensure({ type: "local", baseUrl: "http://test" });
   const identity = await repos.identities.create({
     accountId: account.id,
     providerId: provider.id,

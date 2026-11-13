@@ -95,17 +95,9 @@ describe("SystemPage feature admission", () => {
     expect(screen.queryByText("General is off")).toBeNull();
     expect(
       screen.getByText(
-        "Installation-wide. Applies to every storage server and login, not just the one you are browsing.",
+        "Installation-wide. Applies to every user and login, not just the one you are browsing.",
       ),
     ).toBeTruthy();
-  });
-
-  it("states per-server scope for a page that edits one server at a time", () => {
-    useSystemFeatures.mockReturnValue({ data: features("settings") });
-    mount({ title: "Storage", scope: "storage" });
-
-    expect(screen.getByText(/^Per storage server\./)).toBeTruthy();
-    expect(screen.queryByText(/^Installation-wide\./)).toBeNull();
   });
 
   it("turns a page off through `enabled` for a subsystem that is not a feature", () => {

@@ -403,7 +403,7 @@ public actor Catalog {
                                      contentVersion: pending.request.sha256 ?? previous?.contentVersion ?? version.content,
                                      metadataVersion: version.metadata, materialized: pending.route == "uploads" || previous?.materialized == true)
             // Preserve the editor's timestamp on our own save. Replacing it with
-            // WebDAV's second-resolution timestamp makes TextEdit report its own
+            // the server's second-resolution timestamp makes TextEdit report its own
             // synchronized save as an edit by another application.
             result.localModificationDate = pending.localModificationDate ?? previous?.localModificationDate
             try save(result)

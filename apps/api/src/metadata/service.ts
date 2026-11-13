@@ -85,7 +85,7 @@ function toMetadataTag(tag: DbTag): MetadataTag {
  * The metadata use cases shared by the tags, favorites, and recents routes,
  * plus the hooks `fs/routes.ts` calls after a move or delete so tag and
  * favorite and folder-view metadata survives renames made through fdrive itself. Renames and
- * deletes seen via the indexer (SFTP, WebDAV, other clients) reach the same
+ * deletes seen via the indexer (rsync, SMB, other writers) reach the same
  * hooks through `events/indexer-listener.ts`.
  */
 export interface MetadataService {

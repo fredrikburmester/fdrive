@@ -18,7 +18,7 @@ import { Field, FieldDescription, FieldLabel } from "@/components/ui/field";
 import { Switch } from "@/components/ui/switch";
 import { useMe } from "@/lib/api/auth-queries";
 import { describeApiError } from "@/lib/api/errors";
-import { useSetupStatus, useSystemFeatures, useUpdateFeatures } from "@/lib/api/system-queries";
+import { useSystemFeatures, useUpdateFeatures } from "@/lib/api/system-queries";
 import { changeFeature, FEATURE_DESCRIPTIONS } from "@/lib/system/features";
 import { FEATURE_PAGES } from "@/lib/system/pages";
 import { WALKTHROUGH_STEPS, walkthroughLabel } from "@/lib/system/walkthrough";
@@ -86,25 +86,11 @@ function FeatureCard({
   );
 }
 
-/**
- * "Step 5 of 12 · Search OCR": counted after the setup wizard's own steps,
- * which depend on whether the installation has a local folder. Counts as
- * the local folder's shorter setup until the status answers.
- */
-function WalkthroughCaption({ step }: { step: number }) {
-  const status = useSetupStatus();
-  return (
-    <p className="text-sm text-muted-foreground">
-      {walkthroughLabel(step, status.data?.mode ?? "local")}
-    </p>
-  );
-}
-
 function FeatureEditor({ data }: { data: SystemFeaturesResponse }) {
   const router = useRouter();
   const update = useUpdateFeatures();
-  // Trash is a per-server setting; the walkthrough configures it for the
-  // server being set up, which is the one the administrator signed in to.
+  // Trash belongs to the files folder's storage row; the walkthrough reaches
+  // it through the login the administrator signed in with.
   const me = useMe();
   const login = me.data?.identities.find((identity) => identity.id === me.data?.activeIdentityId);
   const setupProvider = login ? { id: login.providerId, label: login.providerLabel } : null;
@@ -150,7 +136,7 @@ function FeatureEditor({ data }: { data: SystemFeaturesResponse }) {
       {walkthrough ? (
         <div>
           <h2 className="font-medium">fdrive setup walkthrough</h2>
-          <WalkthroughCaption step={step} />
+          <p className="text-sm text-muted-foreground">{walkthroughLabel(step)}</p>
           <p className="mt-1 text-sm text-muted-foreground">
             Choose each optional feature. Your progress is saved when you continue.
           </p>
@@ -177,6 +163,7 @@ function FeatureEditor({ data }: { data: SystemFeaturesResponse }) {
         setupProvider ? (
           <TrashSettingsCard
             provider={setupProvider}
+            description="You can change this later under System > General."
             disabled={update.isPending}
             onContinue={() => save({ walkthroughStep: 7 })}
           />
@@ -208,7 +195,7 @@ function FeatureEditor({ data }: { data: SystemFeaturesResponse }) {
             <CardTitle>Ready to use fdrive</CardTitle>
             <CardDescription>
               You can finish while optional features prepare. You can change your choices later
-              under System: Features, General and, for each storage server's Trash, Storage.
+              under System: Features and General.
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-3">

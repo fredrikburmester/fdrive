@@ -33,15 +33,3 @@ the admin inventory; a future proposal must settle authorization before the UI.
 Native mobile apps, OIDC, comments and collaboration outside Office remain outside the
 current product scope. Old alternative folder-view designs and the
 application-owned Trash proposal were superseded, not deferred.
-
-## Features on storage beside the local folder
-
-WebDAV and S3 get ordinary file management and fdrive-performed Trash; search, thumbnails,
-embeddings, folder sizes, share links, sharing with people and Office stay on the local
-folder because the indexer reads a mounted disk and only there does fdrive keep both the users
-and the files. Nothing blocks adding most of them later: each is a capability flag the UI and API already honour, and the
-storage note derives from the flags. The pieces, when wanted, are a remote index walker that
-reads through the storage port instead of a disk root, with change detection by etag, size
-and mtime plus periodic rescans; fdrive-served share links ([Owned shares](OWNED-SHARES.md));
-Office admission for provider-bound locations; and server-side zip. Each lands per backend,
-one flag at a time, after its full API and UI path works. Not scheduled.

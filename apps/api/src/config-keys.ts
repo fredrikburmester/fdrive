@@ -169,7 +169,7 @@ export const CONFIG_KEYS: readonly ConfigKeyDef[] = [
   {
     key: "FDRIVE_STORAGE_ROOT",
     description:
-      "Folder fdrive serves as its built-in storage, one home per user at <root>/<username>; fdrive keeps the users. Unset means storage is WebDAV or S3 added in System > Storage.",
+      "Folder fdrive serves as its built-in storage, one home per user at <root>/<username>; fdrive keeps the users. Required: without it there is no storage and setup cannot finish.",
     default: null,
     example: "/data",
     secret: false,

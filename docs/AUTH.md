@@ -1,23 +1,17 @@
 # Authentication
 
-fdrive authenticates in credential mode: a user signs in with the credential
-their provider's module asks for, sent as `{ providerId?, credential }` (for the
-local folder and WebDAV: `{ username, password }`; for S3: an access key and
-secret), and the module verifies it. For the local folder fdrive is the
-authority: the user is a row of `app.local_users` (see
-[Local users](#local-users)). For WebDAV and S3 the server is, and fdrive keeps
-the credential so it can act on the user's behalf for every subsequent storage
-call without asking them to log in again. Providers are rows in
-`app.providers`; an identity is bound to one row and a stored credential is
-only ever sent to that row's endpoint (see
-[Adding a storage provider](STORAGE-PROVIDERS.md#isolation-and-lifecycle-requirements)).
+fdrive authenticates in credential mode: a user signs in with
+`{ providerId?, credential }`, where the credential is `{ username, password }`,
+and the local module checks it. fdrive is the authority: the user is a row of
+`app.local_users` (see [Local users](#local-users)). The files folder is one row
+in `app.providers`, created from `FDRIVE_STORAGE_ROOT`, and every identity is
+bound to it (see [storage port](STORAGE-PROVIDERS.md)).
 This document describes that design as implemented in `apps/api/src/auth/`,
 `apps/api/src/local/` and `apps/api/src/providers/`.
 
 `FDRIVE_ADMIN_USERS` names local usernames: it applies only to logins on the row
-the deployment pins (the local folder). The same username on storage an
-administrator added later is another person and gains no administrator access.
-Persisted `accounts.is_admin` grants remain account-wide.
+the deployment pins (the files folder). Persisted `accounts.is_admin` grants
+remain account-wide.
 
 ## What is stored, and how it is encrypted
 
@@ -52,18 +46,19 @@ Encryption (`apps/api/src/auth/crypto.ts`) is an envelope scheme:
 This means rotating `FDRIVE_MASTER_KEY` invalidates every previously sealed
 secret at once: any attempt to unseal one afterwards fails GCM
 authentication. fdrive treats that failure as `reauth_required` (see below)
-rather than a crash, so the practical effect of a key rotation is that WebDAV
-and S3 users are asked to log in again on their next storage request, when
-their credential is unsealed. Local storage reads no stored credential per
-request.
+rather than a crash. Local storage reads no stored credential per request, so
+a rotation interrupts no one; each user's next sign-in replaces the
+undecryptable copy and ends the account's other sessions (see
+[Re-authentication](#re-authentication-and-session-revocation)).
 
 ## Setup ownership
 
 Setup claims ownership in the same database transaction that persists the candidate login.
 A losing claimant rolls back newly created auth records and preserves pre-existing ones;
-the setup service then removes its unused candidate provider. The pending owner can resume
-after a failure. Enabling the provider and granting administrator status still precede
-finalizing setup, so a partial failure does not leave a completed installation without an owner.
+the setup service then removes the local user it created. The pending owner can resume
+after a failure. Granting administrator status still precedes finalizing setup, so a partial
+failure does not leave a completed installation without an owner. Without
+`FDRIVE_STORAGE_ROOT` setup refuses to complete (`bad_request`).
 
 ## Session cookie
 
@@ -119,9 +114,8 @@ fdrive never asks the browser for storage credentials outside of `/auth/login`
 and identity link/unlink confirmation. Every storage call instead goes through
 a `TokenSource` (`apps/api/src/auth/token-source.ts`), whose
 `sessionFor(identityId, username)` hands the provider module a
-`StorageSession` with `getCredential`, `getToken` and `invalidateToken`.
-WebDAV and S3 sign every request from the unsealed credential; the local
-folder needs none. Before storage is built for a request, the module's `admit`
+`StorageSession` with `getCredential`, `getToken` and `invalidateToken`; the
+local folder calls none of them. Before storage is built for a request, the module's `admit`
 runs where it exists: the local folder refuses a disabled or removed user
 there, so disabling someone stops them at once rather than at their next
 sign-in.
@@ -142,9 +136,7 @@ Three situations end a storage or token operation with the API error kind
 client can tell "you were never signed in" apart from "you were signed in,
 but fdrive can no longer act on your behalf"):
 
-- WebDAV or S3 rejects the stored credential (the password or key was
-  changed or revoked outside of fdrive); storage routes map the provider's
-  `unauthorized` to `reauth_required`.
+- Storage answers `unauthorized`; storage routes map it to `reauth_required`.
 - A sealed credential or cached token fails to decrypt (`CryptoError` from
   `open`), most commonly because `FDRIVE_MASTER_KEY` was rotated after the
   secret was sealed under the previous key.
@@ -210,10 +202,8 @@ These events revoke sessions server-side:
 - A login whose password differs from the credential fdrive has stored for
   that identity (or whose stored credential is missing or undecryptable)
   deletes every other session of the account inside the same transaction
-  that stores the new credential. For WebDAV or S3, changing the password or
-  key on the server and signing in again is how a user locks a stolen session
-  out. Logging in again with the unchanged password leaves other devices
-  signed in.
+  that stores the new credential. Logging in again with the unchanged
+  password leaves other devices signed in.
   Credential comparison happens under the identity/account persistence locks. A different
   credential committed since upstream authentication began rejects the delayed login;
   concurrent logins presenting the same new credential keep both sessions.

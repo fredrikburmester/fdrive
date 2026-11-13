@@ -1,7 +1,6 @@
 import { createRecycleFolderTrash, withMoveToTrash } from "@fdrive/core";
 import { createLocalStorage } from "@fdrive/local";
-import { startApacheWebdav, startLocalStorage } from "@fdrive/testkit";
-import { createWebdavClient, createWebdavStorageProvider } from "@fdrive/webdav";
+import { startLocalStorage } from "@fdrive/testkit";
 import { type ServerType, serve } from "@hono/node-server";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
@@ -16,7 +15,6 @@ import { buildIdentity } from "../../src/scoping/test-fixtures/index.ts";
 import { generateApiToken } from "../../src/tokens/token-format.ts";
 
 let storage: Awaited<ReturnType<typeof startLocalStorage>>;
-let dav: Awaited<ReturnType<typeof startApacheWebdav>>;
 let server: ServerType;
 let client: Client;
 let principal: Principal;
@@ -24,13 +22,16 @@ let revoked = false;
 let indexAvailable = true;
 
 beforeAll(async () => {
-  [storage, dav] = await Promise.all([
-    startLocalStorage({
-      users: [{ username: "alice", password: "mcp-fixture-only" }],
-      files: { alice: { "/source.txt": "source", "/destination.txt": "keep destination" } },
-    }),
-    startApacheWebdav(),
-  ]);
+  storage = await startLocalStorage({
+    users: [
+      { username: "alice", password: "mcp-fixture-only" },
+      { username: "bob", password: "mcp-fixture-only" },
+    ],
+    files: {
+      alice: { "/source.txt": "source", "/destination.txt": "keep destination" },
+      bob: { "/destination.txt": "keep destination" },
+    },
+  });
   principal = {
     accountId: "account-1",
     identityId: "identity-1",
@@ -85,7 +86,7 @@ afterAll(async () => {
     await new Promise<void>((resolve, reject) =>
       server.close((error) => (error ? reject(error) : resolve())),
     );
-  await Promise.all([storage?.stop(), dav?.stop()]);
+  await storage?.stop();
 });
 
 it("preserves occupied targets, reports completed writes truthfully, and rejects a revoked token", async () => {
@@ -114,14 +115,11 @@ it("preserves occupied targets, reports completed writes truthfully, and rejects
   await expect(client.callTool({ name: "list_directory", arguments: {} })).rejects.toThrow();
 });
 
-it("runs full file management over real WebDAV without indexed roots and enforces folder grants", async () => {
+it("runs full file management without indexed roots and enforces folder grants", async () => {
   revoked = false;
   indexAvailable = false;
-  const base = createWebdavStorageProvider({
-    client: createWebdavClient({ baseUrl: dav.baseUrl }),
-    credential: async () => dav.credential,
-  });
-  await base.upload("/destination.txt", new TextEncoder().encode("keep destination"));
+  // Trash by moving into the recycle folder, the way the files folder keeps it.
+  const base = createLocalStorage({ home: storage.path("bob") });
   principal = {
     ...principal,
     tokenAccess: { mode: "full", paths: ["/mcp"] },

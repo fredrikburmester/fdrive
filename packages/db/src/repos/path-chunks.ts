@@ -2,9 +2,9 @@
  * Chunking for metadata lookups that bind one parameter per path.
  *
  * A directory listing is unbounded: `StorageProvider.list` takes no limit, the
- * SFTPGo provider returns every entry, and `fs.list` hands all of them to the
- * metadata service. Files can also arrive outside fdrive over raw SFTP or
- * WebDAV, so a directory can hold more entries than one statement may bind.
+ * files folder returns every entry, and `fs.list` hands all of them to the
+ * metadata service. Files can also arrive outside fdrive (rsync, SMB), so a
+ * directory can hold more entries than one statement may bind.
  * Lookups keyed by that path list go through `selectPathChunks` so no single
  * statement can exceed the protocol's parameter limit.
  */

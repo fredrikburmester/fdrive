@@ -184,11 +184,11 @@ async function fixture(writable = false, recovery?: Pick<DesktopEffectsRepo, "st
   const activity = activityFixture(clock);
   const account = await repos.accounts.create({ displayName: "Alice" });
   const provider = await repos.providers.ensure({
-    type: "webdav",
+    type: "local",
     baseUrl: "https://files.invalid",
   });
   const secondProvider = await repos.providers.ensure({
-    type: "webdav",
+    type: "local",
     baseUrl: "https://dav.invalid",
   });
   const identity = await repos.identities.create({
@@ -239,7 +239,7 @@ async function fixture(writable = false, recovery?: Pick<DesktopEffectsRepo, "st
     startedAt: new Date(0),
     connectionStatus: async () => ({
       required: false,
-      providers: [{ type: "webdav", host: "files.invalid" }],
+      providers: [{ type: "local", host: "files.invalid" }],
     }),
     principalResolver: async (c) => (c.req.header("cookie") ? principal : null),
     registerRoutes: (groups) =>
@@ -1021,7 +1021,7 @@ it("advertises the smaller of fdrive's upload ceiling and what the storage can p
     return location && "maxUploadBytes" in location ? location.maxUploadBytes : undefined;
   }
   expect(await advertised()).toBe(16 * 1024 ** 3);
-  // S3's copy ceiling. Telling the Mac app 16 GiB would spend a whole transfer
+  // A backend's copy ceiling. Telling the Mac app 16 GiB would spend a whole transfer
   // before publication refused it and left the commit needing an administrator.
   expect(await advertised(5 * 1024 ** 3)).toBe(5 * 1024 ** 3);
 });

@@ -2,8 +2,6 @@ import { type ApiError, MeResponse, ROUTES } from "@fdrive/contracts";
 import type { StorageProvider } from "@fdrive/core";
 import type { Repos } from "@fdrive/db";
 import { createMemoryRepos } from "@fdrive/db/testing";
-import { createFakeS3Server, s3Module } from "@fdrive/s3";
-import { createFakeWebdavServer, webdavModule } from "@fdrive/webdav";
 import type { Logger } from "pino";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createApp } from "../app";
@@ -13,8 +11,7 @@ import {
   fakeProviderModule,
   memoryProviderService,
   seedLocalProvider,
-  seedS3Provider,
-  seedWebdavProvider,
+  seedProviderRow,
 } from "../providers/test-fixtures/index.ts";
 import { parseMasterKey } from "./crypto";
 import { createAuthModule } from "./index";
@@ -193,24 +190,28 @@ describe("auth routes: POST /auth/login", () => {
   });
 
   it("binds a setup candidate login to its own provider row even while that row is disabled", async () => {
-    const dav = createFakeWebdavServer({
-      users: [{ username: "alice", password: "wonderland" }],
-      origin: "http://candidate.test",
-    });
     const repos = createMemoryRepos();
     const config = loadConfig(REQUIRED_ENV);
+    // Which row's address each sign-in is checked against.
     const requests: string[] = [];
-    const fetchImpl: typeof globalThis.fetch = async (url, init) => {
-      requests.push(new URL(String(url)).host);
-      return dav.fetch(url, init);
-    };
-    const active = await seedWebdavProvider(repos, "http://active.test", { managedByEnv: true });
-    const candidate = await seedWebdavProvider(repos, "http://candidate.test", { enabled: false });
+    const module = fakeProviderModule({
+      async authenticate(instance, credential) {
+        requests.push(instance.baseUrl);
+        if (credential.password !== "wonderland") throw new Error("wrong password");
+        return { externalUsername: credential.username ?? "" };
+      },
+    });
+    const active = await seedProviderRow(repos, "http://active.test", { managedByEnv: true });
+    const candidate = await seedProviderRow(repos, "http://candidate.test", { enabled: false });
     const auth = createAuthModule({
       identityLinks: memoryIdentityOperations(repos),
       repos,
-      providers: memoryProviderService(repos, { fetch: fetchImpl, clock: clockCtl.clock }),
-      fetch: fetchImpl,
+      providers: memoryProviderService(repos, {
+        fetch: offline,
+        clock: clockCtl.clock,
+        modules: { local: module },
+      }),
+      fetch: offline,
       master: parseMasterKey(config.fdriveMasterKey),
       clock: clockCtl.clock,
       config,
@@ -228,8 +229,7 @@ describe("auth routes: POST /auth/login", () => {
     const identity = await repos.identities.get(result.me.activeIdentityId);
     if (identity === null) throw new Error("expected candidate identity");
 
-    expect(requests.length).toBeGreaterThan(0);
-    expect(requests.every((host) => host === "candidate.test")).toBe(true);
+    expect(requests).toEqual(["http://candidate.test"]);
     expect(identity.providerId).toBe(candidate.id);
     expect((await repos.providers.get(active.id))?.enabled).toBe(true);
     expect((await repos.providers.get(candidate.id))?.enabled).toBe(false);
@@ -893,172 +893,6 @@ describe("native safe-request identity selection", () => {
   });
 });
 
-describe("auth routes: POST /auth/login through a WebDAV provider", () => {
-  it("binds the login to the WebDAV row, reports its capabilities and touches nothing else", async () => {
-    const clockCtl = createClock(Date.now());
-    const davUser = { username: "alice", password: "looking-glass" };
-    const dav = createFakeWebdavServer({
-      users: [davUser],
-      origin: "http://dav.test",
-      prefix: "/dav",
-    });
-    const hosts: string[] = [];
-    const fetchImpl: typeof globalThis.fetch = async (url, init) => {
-      const host = new URL(String(url)).host;
-      hosts.push(host);
-      return dav.fetch(url, init);
-    };
-    const repos = createMemoryRepos();
-    const config = loadConfig(REQUIRED_ENV);
-    const local = localModuleFixture(repos);
-    await seedLocalUsers(repos, USERS);
-    await seedLocalProvider(repos);
-    const row = await seedWebdavProvider(repos, "http://dav.test/dav", { label: "Team drive" });
-    const authModule = createAuthModule({
-      identityLinks: memoryIdentityOperations(repos),
-      repos,
-      providers: memoryProviderService(repos, {
-        fetch: fetchImpl,
-        clock: clockCtl.clock,
-        modules: { local: local.module, webdav: webdavModule, s3: s3Module },
-      }),
-      fetch: fetchImpl,
-      master: parseMasterKey(config.fdriveMasterKey),
-      clock: clockCtl.clock,
-      config,
-      storageFactory: async () => FAKE_STORAGE,
-    });
-    const app = createApp({
-      config,
-      logger: createTestLogger(),
-      version: "1.0.0",
-      startedAt: new Date(0),
-      clock: clockCtl.clock,
-      principalResolver: authModule.principalResolver,
-      connectionStatus: READY,
-      registerRoutes: authModule.registerRoutes,
-    });
-
-    const res = await login(app, {
-      providerId: row.id,
-      credential: { ...davUser },
-    });
-    expect(res.status).toBe(200);
-    const me = MeResponse.parse(await readJson(res));
-    expect(me.identities).toHaveLength(1);
-    expect(me.identities[0]).toMatchObject({
-      username: "alice",
-      providerId: row.id,
-      providerType: "webdav",
-      providerLabel: "Team drive",
-      capabilities: {
-        zip: false,
-        setModifiedAt: false,
-        atomicMove: true,
-        trash: false,
-        shares: false,
-        office: false,
-        index: false,
-      },
-    });
-    expect(hosts.every((host) => host === "dav.test")).toBe(true);
-    expect(dav.requests.at(-1)).toMatchObject({
-      method: "PROPFIND",
-      url: "http://dav.test/dav/",
-      headers: {
-        authorization: `Basic ${Buffer.from(`${davUser.username}:${davUser.password}`).toString("base64")}`,
-      },
-    });
-
-    const denied = await login(app, {
-      providerId: row.id,
-      credential: { username: "alice", password: "nope" },
-    });
-    expect(denied.status).toBe(401);
-  });
-});
-
-describe("auth routes: POST /auth/login through an S3 provider", () => {
-  it("binds the login to the S3 row, reports its capabilities and touches nothing else", async () => {
-    const clockCtl = createClock(Date.now());
-    const key = { accessKeyId: "alice-key", secretAccessKey: "alice-secret" };
-    const s3 = createFakeS3Server({ keys: [key], buckets: ["media"] });
-    const hosts: string[] = [];
-    const fetchImpl: typeof globalThis.fetch = async (url, init) => {
-      const host = new URL(url instanceof Request ? url.url : String(url)).host;
-      hosts.push(host);
-      return s3.fetch(url, init);
-    };
-    const repos = createMemoryRepos();
-    const config = loadConfig(REQUIRED_ENV);
-    const local = localModuleFixture(repos);
-    await seedLocalUsers(repos, USERS);
-    await seedLocalProvider(repos);
-    const row = await seedS3Provider(repos, "http://s3.test/media/team", {
-      label: "Photos",
-      region: "eu-west-1",
-    });
-    const authModule = createAuthModule({
-      identityLinks: memoryIdentityOperations(repos),
-      repos,
-      providers: memoryProviderService(repos, {
-        fetch: fetchImpl,
-        clock: clockCtl.clock,
-        modules: { local: local.module, webdav: webdavModule, s3: s3Module },
-      }),
-      fetch: fetchImpl,
-      master: parseMasterKey(config.fdriveMasterKey),
-      clock: clockCtl.clock,
-      config,
-      storageFactory: async () => FAKE_STORAGE,
-    });
-    const app = createApp({
-      config,
-      logger: createTestLogger(),
-      version: "1.0.0",
-      startedAt: new Date(0),
-      clock: clockCtl.clock,
-      principalResolver: authModule.principalResolver,
-      connectionStatus: READY,
-      registerRoutes: authModule.registerRoutes,
-    });
-
-    const res = await login(app, {
-      providerId: row.id,
-      credential: { username: key.accessKeyId, password: key.secretAccessKey },
-    });
-    expect(res.status).toBe(200);
-    const me = MeResponse.parse(await readJson(res));
-    expect(me.identities).toHaveLength(1);
-    expect(me.identities[0]).toMatchObject({
-      username: key.accessKeyId,
-      providerId: row.id,
-      providerType: "s3",
-      providerLabel: "Photos",
-      capabilities: {
-        zip: false,
-        setModifiedAt: false,
-        atomicMove: false,
-        trash: false,
-        shares: false,
-        office: false,
-        index: false,
-      },
-    });
-    expect(hosts.every((host) => host === "s3.test")).toBe(true);
-    const verified = s3.requests.at(-1);
-    expect(verified?.url).toBe("http://s3.test/media/?list-type=2&max-keys=1&prefix=team%2F");
-    expect(verified?.headers.authorization).toContain("Credential=alice-key/");
-    expect(verified?.headers.authorization).toContain("/eu-west-1/s3/aws4_request");
-
-    const denied = await login(app, {
-      providerId: row.id,
-      credential: { username: key.accessKeyId, password: "nope" },
-    });
-    expect(denied.status).toBe(401);
-  });
-});
-
 describe("auth: FDRIVE_ADMIN_USERS", () => {
   it("makes a listed user an administrator on the storage the deployment pins", async () => {
     const { app } = await buildTestApp({
@@ -1077,21 +911,21 @@ describe("auth: FDRIVE_ADMIN_USERS", () => {
     expect(bob.isAdmin).toBe(false);
   });
 
-  it("never names an administrator on storage an administrator added", async () => {
-    // The same username on WebDAV someone added later is another person.
-    const dav = createFakeWebdavServer({
-      users: [{ username: "alice", password: "looking-glass" }],
-      origin: "http://dav.test",
-    });
+  it("never names an administrator on storage the deployment does not pin", async () => {
+    // The same username on another row is another person.
     const repos = createMemoryRepos();
     const config = loadConfig({ ...REQUIRED_ENV, FDRIVE_ADMIN_USERS: "alice" });
-    const row = await seedWebdavProvider(repos, "http://dav.test");
+    const row = await seedProviderRow(repos, "http://other.test");
     const clockCtl = createClock(Date.now());
     const authModule = createAuthModule({
       identityLinks: memoryIdentityOperations(repos),
       repos,
-      providers: memoryProviderService(repos, { fetch: dav.fetch, clock: clockCtl.clock }),
-      fetch: dav.fetch,
+      providers: memoryProviderService(repos, {
+        fetch: offline,
+        clock: clockCtl.clock,
+        modules: { local: fakeProviderModule() },
+      }),
+      fetch: offline,
       master: parseMasterKey(config.fdriveMasterKey),
       clock: clockCtl.clock,
       config,
@@ -1100,7 +934,7 @@ describe("auth: FDRIVE_ADMIN_USERS", () => {
 
     const result = await authModule.service.login({
       providerId: row.id,
-      credential: { username: "alice", password: "looking-glass" },
+      credential: { username: "alice", password: "alice-pass" },
       userAgent: null,
       ip: "127.0.0.1",
     });
@@ -1122,14 +956,14 @@ describe("auth: storage that mints a token while it signs in", () => {
     });
     const repos = createMemoryRepos();
     const config = loadConfig(REQUIRED_ENV);
-    const row = await seedWebdavProvider(repos, "http://dav.test");
+    const row = await seedProviderRow(repos, "http://minting.test");
     const authModule = createAuthModule({
       identityLinks: memoryIdentityOperations(repos),
       repos,
       providers: memoryProviderService(repos, {
         fetch: offline,
         clock: clockCtl.clock,
-        modules: { webdav: module },
+        modules: { local: module },
       }),
       fetch: offline,
       master: parseMasterKey(config.fdriveMasterKey),

@@ -84,7 +84,8 @@ it("composes persisted editor admission, advanced policy and explicit server inj
           const repos = createRepos(db);
           const account = await repos.identities.findByProviderUsername(provider.id, "alice");
           if (!account) throw new Error("Missing fixture identity");
-          // A login on storage an administrator has since switched off.
+          // A login on storage that is gone: a WebDAV row from before the files
+          // folder was the only storage, switched off by migration 0019.
           const staleProvider = await repos.providers.ensure({
             type: "webdav",
             baseUrl: "http://previous-storage",

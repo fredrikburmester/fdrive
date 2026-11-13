@@ -1,7 +1,7 @@
 # FDrive for Mac
 
 The native companion provides Finder locations on macOS 26+ (Apple silicon), with optional
-writes on every storage type (see [write configuration](#write-configuration-and-recovery)).
+writes (see [write configuration](#write-configuration-and-recovery)).
 It is a development preview. [Remaining beta qualification](plans/MACOS-APP.md) includes
 the first hosted release, Homebrew installation and tests on another Mac.
 
@@ -28,8 +28,7 @@ It waits while FDrive is the active app or a pairing, license change or disconne
 way. If the new copy cannot be launched, the app asks you to quit and reopen FDrive.
 
 Each selected server/account/identity gets its own domain, token and metadata database.
-The storage adapters (the local folder, WebDAV, S3) run on the fdrive server; the Mac talks
-only to the fdrive API. Switching the web app's active login cannot retarget a native location.
+The fdrive server reads and writes the files folder; the Mac talks only to the fdrive API. Switching the web app's active login cannot retarget a native location.
 
 Browsing retrieves directory metadata without fetching original file contents to the Mac.
 Opening, Quick Look, copying out and other applications' reads fetch contents on demand.
@@ -126,18 +125,16 @@ stops its server refresh while paused.
 Writes need an explicit **Read and write** pairing grant and persistent server recovery storage
 (`FDRIVE_DESKTOP_STATE_DIR`). The deployment Compose file mounts the `fdrive-desktop` volume at
 `/var/lib/fdrive/desktop`. Multiple API processes must share this filesystem and the same
-PostgreSQL database. Nothing is set per storage server: every storage type, including the
-local folder and S3, accepts Mac writes under the default contract below.
+PostgreSQL database. Nothing is set per storage: the files folder accepts Mac writes under
+the contract below.
 
-**Default contract, every storage.** fdrive serializes Mac writes against each other through a
+**Write contract.** fdrive serializes Mac writes against each other through a
 per-identity PostgreSQL lock and, holding it, snapshots the destination, digests that snapshot
 against the version the Mac edited, and only then replaces the file. A change made at any
 earlier point is refused as a conflict with the pending copy preserved, and the replaced version
-is kept as a backup under `/.fdrive-desktop`. Only Apache WebDAV's locks (below) can fence a
-concurrent writer at the storage: anything on the host (rsync, SMB, Syncthing, the OCR service)
-can write the local folder, and S3 has no rename at all, so on S3 the publishing step is a
-server-side copy that replaces the target object atomically before the staged copy is
-removed.
+is kept as a backup under `/.fdrive-desktop`. Nothing fences a concurrent writer at the
+storage: anything on the host (rsync, SMB, Syncthing, the OCR service) can write the files
+folder. Moves, folders included, are one rename.
 
 That lock covers Mac writes only. The web app, Collabora and the OCR service write the volume
 directly and do not take it: for each of them publication *is* the transfer, and holding an
@@ -147,48 +144,7 @@ write of theirs landing between that proof and the replacement is silently lost,
 backup holding the pre-fdrive content rather than the lost version. OCR's own size and mtime
 checks mean a collision there is refused on both sides rather than silently applied.
 
-**Upload size is bounded by publication.** fdrive accepts 16 GiB, or less where the storage
-cannot publish that much. S3 publishes with `CopyObject`, which refuses above 5 GiB however the
-bytes arrived, so an S3 location advertises 5 GiB and refuses a larger file before any of it is
-transferred rather than at the rename, where the transfer would already be spent.
-
-**Folders on storage without a rename.** S3 moves a folder by copying every object under it,
-which is proportional to the tree rather than constant. That copy runs *outside* the publication
-lock: the lock is per identity and its waiters give up after 30 seconds, so holding it for a
-large folder would refuse every other Mac write for as long as the copy ran. The lock still
-covers the decision — the destination is free, the source is what was observed, the destination
-is reserved under the operation — and the copy then proceeds the way any other client of that
-storage performs the same move, with the destination filling as it goes. Every object is copied
-before any is removed, so an interruption leaves the source whole; the same operation id resumes
-and skips what the previous attempt already copied, rather than starting again or stranding the
-work where only an administrator could clear it.
-
-Finder shows a real proportion for that copy rather than an indeterminate bar. The server
-settles the total size before the first object moves and records how far it has got as it runs,
-at most once a second whatever the tree's size; the Mac app follows that while the commit is in
-flight. It is advisory — a move that finishes before the first poll never asks, and a poll that
-fails leaves the bar where it was rather than disturbing the write. The commit request stays
-open and silent for the whole copy, so it is exempt from the idle timeout that governs metadata
-calls: minutes without a byte there is the copy working, not a server that has stopped
-answering. The session's 24-hour resource limit still bounds it, and the poll and Finder's
-cancel are what end it early. File Provider has its own patience and reissues a modification
-it decides has taken too long; that retry finds the operation still publishing and waits for it,
-following the same progress, rather than reporting a save that is still running as one the
-server could not confirm. Only a genuinely unknown outcome waits for an administrator.
-
-Stopping that move in Finder stops it on the server too, and takes back what it had copied.
-Dropping the request would only end the Mac's side of it, so the app asks the server, and the
-copy reads that ask on its next tick — which is why it works from any API process, not only the
-one doing the copying. The destination is removed and the source left where it was. That is safe
-only while copying, because copying takes nothing from the source until every object is across:
-once removal starts the move has effectively happened, the cancellation is ignored, and it
-finishes. The server proves the source is still there before removing anything, so a cancellation
-that loses its race with the last object can never delete the only copy.
-
-**Apache mod_dav locks, optional.** A WebDAV row whose **Write locking** field is
-`apache-webdav-exclusive` publishes under storage-enforced DAV locks instead, which fence every
-writer that uses that same endpoint. Enable it only when **every writer uses the same
-lock-enforcing DAV endpoint**; direct filesystem or SFTP access to the same files voids it.
+**Upload size.** fdrive accepts files up to 16 GiB.
 
 Publication is refused, and every location stays read-only, only when the server has no recovery
 storage or no publish lock; the Mac app shows that reason on each card. A publication the
@@ -203,8 +159,7 @@ operation ledger. UUID handles and operation IDs never replace current account/p
 
 The server hashes and fsyncs the incoming body before commit. It checks the source base and
 destination, stages and validates new bytes, backs up an existing file, then publishes with an
-atomic MOVE — fenced by the storage lease under `apache-webdav-exclusive`, and otherwise by the
-per-identity lock plus the pre-publication recheck. Original backups remain under the reserved
+atomic rename, fenced by the per-identity lock plus the pre-publication recheck. Original backups remain under the reserved
 `/.fdrive-desktop` namespace, hidden from native ordinary reads and from the web file tree.
 Failed staging reuses its recorded directory. A commit whose publication cannot be confirmed stays
 uncertain and cannot automatically replay as a new write. The completed receipt and a metadata
@@ -421,9 +376,8 @@ Live metadata remains proportional to the number of items in browsed folders.
 First download computes SHA-256 locally in 1 MiB chunks and validates transfer length. Later
 refresh hashes only materialized files on the server, one batch at a time per identity. This
 detects different bytes even when size/mtime are unchanged. It **rereads those files from the
-storage provider each refresh**, which can be expensive for large media or metered storage.
-No originals are sent to the Mac by validation, but upstream bandwidth remains a beta tuning
-gate. The storage port supplies no common strong validator.
+files folder each refresh**, which can be expensive for large media.
+No originals are sent to the Mac by validation, but that cost remains a beta tuning gate. The storage port supplies no common strong validator.
 
 Downloads use URLSession temporary files, then the manager-provided transfer directory.
 A free-space preflight (file size plus 512 MiB headroom) refuses downloads and saves that
@@ -444,4 +398,4 @@ launch. Local metadata-only callbacks return canonical attributes; rejected remo
 writes use File Provider's persistent `cannotSynchronize` error, avoiding transient retry loops.
 A 401 means the credential expired or was revoked (reconnect); a 403 on reads is a denied
 path or unsupported entry and is not reported as an expired login. Unclassified 409s on
-writes, including WebDAV lock refusals, surface as conflicts rather than stale listings.
+writes surface as conflicts rather than stale listings.

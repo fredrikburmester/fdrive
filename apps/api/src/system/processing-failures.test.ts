@@ -30,7 +30,7 @@ function fixture(admin = true, indexerUrl: string | undefined = "http://indexer"
       }) as Principal,
     connectionStatus: async () => ({
       required: false,
-      providers: [{ type: "webdav", host: "dav.test" }],
+      providers: [{ type: "local", host: "Local folder" }],
     }),
     registerRoutes: (groups) =>
       registerProcessingFailureRoutes(groups, { read, fetch, indexerUrl }),

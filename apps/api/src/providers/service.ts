@@ -1,19 +1,14 @@
 import type {
   AdminProvider,
-  AdminProviderCreateRequest,
-  AdminProviderTestRequest,
-  AdminProviderType,
   AdminProviderUpdateRequest,
   ProviderCapabilities,
   PublicProvider,
 } from "@fdrive/contracts";
-import type { ProbeResult, ProviderInstance, ProviderModule } from "@fdrive/core";
-import { validateFields } from "@fdrive/core";
+import type { ProviderInstance, ProviderModule } from "@fdrive/core";
 import type { Identity, Provider, ProviderRepo, Repos } from "@fdrive/db";
-import { ConflictError } from "@fdrive/db";
 import { ApiHttpError } from "../errors.js";
 import { noopSystemEventLog, type SystemEventLog } from "../system/event-log.js";
-import { isProviderType, PROVIDER_MODULES } from "./registry.js";
+import { moduleFor, type ProviderModules } from "./registry.js";
 
 /** A provider row with the module that implements it and the instance the module sees. */
 export interface ResolvedProvider {
@@ -39,10 +34,9 @@ export interface ProviderServiceDeps {
   readonly trashEnabled?: (providerId: string) => Promise<boolean>;
   /**
    * The modules this deployment has, by type (`createProviderModules`): the
-   * local folder joins them when `FDRIVE_STORAGE_ROOT` is set. Defaults to
-   * the modules every deployment has.
+   * files folder when `FDRIVE_STORAGE_ROOT` is set, else none.
    */
-  readonly modules?: Readonly<Record<string, ProviderModule>>;
+  readonly modules: ProviderModules;
 }
 
 export interface ProviderService {
@@ -61,19 +55,12 @@ export interface ProviderService {
   resolve(id: string, opts?: { allowDisabled?: boolean }): Promise<ResolvedProvider>;
   /** The identity and its provider; `reauth_required` when the identity is gone. */
   forIdentity(identityId: string): Promise<IdentityProvider>;
-  /** Validates and stores a new provider. Does not probe it. */
-  create(
-    input: AdminProviderCreateRequest,
-    opts?: { enabled?: boolean; managedByEnv?: boolean },
-  ): Promise<Provider>;
+  /** Renames a provider: the label the login page and the admin view show. */
   update(id: string, patch: AdminProviderUpdateRequest): Promise<Provider>;
-  remove(id: string): Promise<void>;
-  /** Probes a saved provider by id or an unsaved candidate. */
-  probe(target: string | AdminProviderTestRequest): Promise<ProbeResult>;
   capabilitiesFor(resolved: ResolvedProvider): Promise<ProviderCapabilities>;
   /**
-   * The admin-set label, else the endpoint host, or the module's own name for
-   * a row with no endpoint: for callers that already know the row.
+   * The admin-set label, else the module's own name; a row whose module this
+   * deployment no longer has falls back to its stored endpoint host.
    */
   labelFor(provider: Provider): string;
   /**
@@ -81,21 +68,20 @@ export interface ProviderService {
    * empty, never the host: this is served to anonymous callers.
    */
   publicView(provider: Provider): PublicProvider | null;
-  /** The admin view of a row, including a fresh reachability probe unless provided. */
-  adminView(provider: Provider, probeResult?: { ok: boolean }): Promise<AdminProvider | null>;
-  types(): AdminProviderType[];
+  /** The admin view of a row, including a fresh reachability probe. */
+  adminView(provider: Provider): Promise<AdminProvider | null>;
   /**
    * Runs once at startup: creates and pins the row of every module the
    * deployment manages (the local folder, when `FDRIVE_STORAGE_ROOT` is
    * set), and unpins and disables any other pinned row, such as an SFTPGo
    * row from before the local folder replaced it or a local row whose folder
-   * is no longer configured. A row that already exists keeps whatever
-   * enabled state an admin gave it. Idempotent.
+   * is no longer configured. The pinned row is always enabled: nothing but
+   * the deployment turns it on or off. Idempotent.
    */
   seedFromEnvironment(): Promise<void>;
 }
 
-/** The host of a provider's endpoint, the label shown when an admin has set none. */
+/** The host of a stored endpoint; the label of a row whose module is gone. */
 export function hostLabel(baseUrl: string): string {
   try {
     return new URL(baseUrl).host;
@@ -106,16 +92,6 @@ export function hostLabel(baseUrl: string): string {
 
 function instanceOf(provider: Provider): ProviderInstance {
   return { id: provider.id, baseUrl: provider.baseUrl, config: provider.config };
-}
-
-function assertValidConfig(module: ProviderModule, config: unknown): Record<string, string> {
-  const result = validateFields(module.configFields, config ?? {});
-  if (!result.ok) {
-    throw new ApiHttpError("bad_request", "invalid provider configuration", {
-      issues: result.issues,
-    });
-  }
-  return result.value;
 }
 
 /**
@@ -130,17 +106,8 @@ function managedBaseUrl(module: ProviderModule): string {
 export function createProviderService(deps: ProviderServiceDeps): ProviderService {
   const eventLog = deps.eventLog ?? noopSystemEventLog;
   const repo: ProviderRepo = deps.repos.providers;
-  const modules: Readonly<Record<string, ProviderModule>> = deps.modules ?? PROVIDER_MODULES;
-  const moduleForType = (type: string): ProviderModule | null =>
-    isProviderType(type) ? (modules[type] ?? null) : null;
-
-  function requireModule(type: string): ProviderModule {
-    const module = moduleForType(type);
-    if (module === null) {
-      throw new ApiHttpError("bad_request", `unknown provider type: ${type}`);
-    }
-    return module;
-  }
+  const modules = deps.modules;
+  const moduleForType = (type: string): ProviderModule | null => moduleFor(type, modules);
 
   function resolved(provider: Provider): ResolvedProvider | null {
     const module = moduleForType(provider.type);
@@ -163,18 +130,9 @@ export function createProviderService(deps: ProviderServiceDeps): ProviderServic
     return found;
   }
 
-  async function requireProvider(id: string): Promise<Provider> {
-    const provider = await repo.get(id);
-    if (provider === null) {
-      throw new ApiHttpError("not_found", "storage provider not found");
-    }
-    return provider;
-  }
-
   const labelFor = (provider: Provider): string => {
     if (provider.label.length > 0) return provider.label;
-    const module = moduleForType(provider.type);
-    return module?.deploymentManaged === true ? module.label : hostLabel(provider.baseUrl);
+    return moduleForType(provider.type)?.label ?? hostLabel(provider.baseUrl);
   };
 
   async function capabilitiesFor(target: ResolvedProvider): Promise<ProviderCapabilities> {
@@ -197,10 +155,6 @@ export function createProviderService(deps: ProviderServiceDeps): ProviderServic
       shareWithPeople: flags.shareWithPeople,
       index: flags.index && hasRoots,
     };
-  }
-
-  async function probeInstance(module: ProviderModule, instance: ProviderInstance) {
-    return module.probe(instance, { fetch: deps.fetch });
   }
 
   return {
@@ -226,118 +180,15 @@ export function createProviderService(deps: ProviderServiceDeps): ProviderServic
       const target = await resolve(identity.providerId);
       return { ...target, identity };
     },
-    async create(input, opts) {
-      const module = requireModule(input.type);
-      if (module.deploymentManaged === true) {
-        throw new ApiHttpError("bad_request", `${module.label} is set up by the deployment`);
-      }
-      const config = assertValidConfig(module, input.config);
-      const provider = await repo
-        .create({
-          type: input.type,
-          baseUrl: input.baseUrl,
-          label: input.label,
-          config,
-          enabled: opts?.enabled ?? true,
-          managedByEnv: opts?.managedByEnv ?? false,
-        })
-        .catch((error: unknown) => {
-          if (error instanceof ConflictError)
-            throw new ApiHttpError("conflict", "a provider with this endpoint already exists");
-          throw error;
-        });
-      eventLog.record("general", "info", `Storage provider added: ${labelFor(provider)}`, {
-        providerId: provider.id,
-        type: provider.type,
-      });
-      return provider;
-    },
     async update(id, patch) {
-      const current = await requireProvider(id);
-      const module = requireModule(current.type);
-      if (patch.baseUrl !== undefined && patch.baseUrl !== current.baseUrl) {
-        if (current.managedByEnv) {
-          throw new ApiHttpError(
-            "forbidden",
-            "this provider's address is set by the deployment and cannot be changed here",
-          );
-        }
-        // A stored credential must never follow a configuration change to a
-        // different server: identities stay bound to the endpoint they were
-        // verified against. Add a new provider instead.
-        if ((await deps.repos.identities.countByProvider(id)) > 0) {
-          throw new ApiHttpError(
-            "conflict",
-            "logins already use this provider; add a new provider for another address",
-          );
-        }
-        const taken = (await repo.list()).some(
-          (provider) =>
-            provider.id !== id &&
-            provider.type === current.type &&
-            provider.baseUrl === patch.baseUrl,
-        );
-        if (taken) {
-          throw new ApiHttpError("conflict", "a provider with this endpoint already exists");
-        }
-      }
-      const config =
-        patch.config === undefined ? undefined : assertValidConfig(module, patch.config);
-      const updated = await repo
-        .update(id, {
-          ...(patch.label !== undefined ? { label: patch.label } : {}),
-          ...(patch.baseUrl !== undefined ? { baseUrl: patch.baseUrl } : {}),
-          ...(config !== undefined ? { config } : {}),
-          ...(patch.enabled !== undefined ? { enabled: patch.enabled } : {}),
-        })
-        .catch((error: unknown) => {
-          if (error instanceof ConflictError)
-            throw new ApiHttpError(
-              "conflict",
-              "provider update conflicts with an existing endpoint or login",
-            );
-          throw error;
-        });
+      const updated = await repo.update(id, { label: patch.label });
       if (updated === null) {
         throw new ApiHttpError("not_found", "storage provider not found");
       }
-      eventLog.record("general", "info", `Storage provider updated: ${labelFor(updated)}`, {
+      eventLog.record("general", "info", `Storage provider renamed: ${labelFor(updated)}`, {
         providerId: updated.id,
-        changed: Object.keys(patch),
       });
       return updated;
-    },
-    async remove(id) {
-      const current = await requireProvider(id);
-      if (current.managedByEnv) {
-        throw new ApiHttpError(
-          "forbidden",
-          "this provider is set by the deployment; remove FDRIVE_STORAGE_ROOT to manage it here",
-        );
-      }
-      try {
-        await repo.delete(id);
-      } catch (error) {
-        if (error instanceof ConflictError) {
-          throw new ApiHttpError("conflict", "logins still use this provider");
-        }
-        throw error;
-      }
-      eventLog.record("general", "info", `Storage provider removed: ${labelFor(current)}`, {
-        providerId: current.id,
-      });
-    },
-    async probe(target) {
-      if (typeof target === "string") {
-        const found = await get(target);
-        if (found === null) {
-          throw new ApiHttpError("not_found", "storage provider not found");
-        }
-        return probeInstance(found.module, found.instance);
-      }
-      const module = requireModule(target.type);
-      const config = assertValidConfig(module, target.config);
-      return probeInstance(module, { id: "", baseUrl: target.baseUrl, config });
     },
     capabilitiesFor,
     labelFor,
@@ -354,7 +205,7 @@ export function createProviderService(deps: ProviderServiceDeps): ProviderServic
         capabilities: module.capabilities,
       };
     },
-    async adminView(provider, probeResult) {
+    async adminView(provider) {
       const module = moduleForType(provider.type);
       if (module === null) {
         return null;
@@ -362,12 +213,13 @@ export function createProviderService(deps: ProviderServiceDeps): ProviderServic
       const config = Object.fromEntries(
         Object.entries(provider.config).filter(([_, v]) => typeof v === "string"),
       ) as Record<string, string>;
-      const probe = probeResult ?? (await probeInstance(module, instanceOf(provider)));
+      const probe = await module.probe(instanceOf(provider), { fetch: deps.fetch });
       return {
         id: provider.id,
         type: module.type as AdminProvider["type"],
         label: labelFor(provider),
-        baseUrl: module.deploymentManaged === true ? "" : provider.baseUrl,
+        // The files folder has no endpoint; its row's address is a fixed key.
+        baseUrl: "",
         config,
         enabled: provider.enabled,
         managedByEnv: provider.managedByEnv,
@@ -378,17 +230,6 @@ export function createProviderService(deps: ProviderServiceDeps): ProviderServic
         createdAt: provider.createdAt.toISOString(),
       };
     },
-    types() {
-      return Object.values(modules)
-        .filter((module) => module.deploymentManaged !== true)
-        .map((module) => ({
-          type: module.type as AdminProviderType["type"],
-          label: module.label,
-          configFields: [...module.configFields],
-          credentialFields: [...module.credentialFields],
-          capabilities: module.capabilities,
-        }));
-    },
     async seedFromEnvironment() {
       const managed = Object.values(modules).filter((module) => module.deploymentManaged === true);
       const rows = await repo.list();
@@ -396,7 +237,7 @@ export function createProviderService(deps: ProviderServiceDeps): ProviderServic
         if (!row.managedByEnv || managed.some((module) => module.type === row.type)) continue;
         // The deployment no longer configures this row (an SFTPGo row from
         // before the local folder, or a local row whose folder was removed):
-        // its logins stop, and an administrator decides what happens next.
+        // its logins stop until the deployment configures it again.
         await repo.update(row.id, { managedByEnv: false, enabled: false });
         eventLog.record(
           "general",
@@ -406,15 +247,13 @@ export function createProviderService(deps: ProviderServiceDeps): ProviderServic
         );
       }
       for (const module of managed) {
-        const existing = rows.find((row) => row.type === module.type);
+        const key = { type: module.type, baseUrl: managedBaseUrl(module) };
         const row =
-          existing ?? (await repo.ensure({ type: module.type, baseUrl: managedBaseUrl(module) }));
-        // Only a row this seed creates starts enabled; one an admin disabled
-        // stays that way across restarts.
-        await repo.update(row.id, {
-          managedByEnv: true,
-          ...(existing === undefined ? { enabled: true } : {}),
-        });
+          rows.find((row) => row.type === key.type && row.baseUrl === key.baseUrl) ??
+          (await repo.ensure(key));
+        // The deployment decides: a folder it configures again after a start
+        // without one serves its logins again.
+        await repo.update(row.id, { managedByEnv: true, enabled: true });
       }
     },
   };

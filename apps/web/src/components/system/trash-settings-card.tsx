@@ -33,23 +33,23 @@ const MOVE_COPY: TrashCopy = {
     "Disabling this makes deletes permanent again; it does not delete items already in Trash.",
 };
 
-/** A provider without any Trash, which the switch cannot turn on. */
+/** A storage row without any Trash, which the switch cannot turn on. */
 const NONE_COPY: TrashCopy = {
-  description: "This storage server has no Trash.",
-  requirement: "Deleting a file on this server removes it permanently.",
+  description: "This storage has no Trash.",
+  requirement: "Deleting a file removes it permanently.",
   folder: "",
   disabling: "",
 };
 
 /**
- * The card's copy for a provider's Trash strategy: `none` has no Trash,
+ * The card's copy for the storage's Trash strategy: `none` has no Trash,
  * and every other strategy has fdrive keep the recycle folder itself.
  */
 function copyFor(strategy: TrashStrategy | undefined): TrashCopy {
   return strategy === "none" ? NONE_COPY : MOVE_COPY;
 }
 
-/** The storage server a Trash form edits. */
+/** The storage row a Trash form edits. */
 export interface TrashProviderRef {
   readonly id: string;
   readonly label: string;
@@ -63,10 +63,9 @@ export interface TrashSettingsFormProps {
 }
 
 /**
- * The Trash controls of one storage server: the settings live per provider
- * row, so the form is rendered once per server on System > Storage and once
- * for the login being set up in the walkthrough. Field ids carry the
- * provider id so several forms can share a page.
+ * The Trash controls of the files folder: the settings live on its storage
+ * row, so the form edits that row, on System > General and in the
+ * walkthrough. Field ids carry the row's id so they stay unique on a page.
  */
 export function TrashSettingsForm({
   provider,
@@ -208,12 +207,17 @@ export function TrashSettingsForm({
   );
 }
 
-/** The walkthrough's Trash step: one server's form inside a titled card. */
-export function TrashSettingsCard(props: TrashSettingsFormProps) {
+export interface TrashSettingsCardProps extends TrashSettingsFormProps {
+  /** One line under the title, such as where to change this later. */
+  description?: string;
+}
+
+/** The Trash form inside a titled card, on System > General and in the walkthrough. */
+export function TrashSettingsCard({ description, ...props }: TrashSettingsCardProps) {
   return (
     <SystemSection
       title="Trash"
-      description={`For ${props.provider.label}. Every storage server keeps its own Trash settings under System > Storage.`}
+      {...(description === undefined ? {} : { description })}
       contentClassName="gap-4"
     >
       <TrashSettingsForm {...props} />

@@ -15,7 +15,7 @@ const FILES_ROUTE = "/files" as unknown as Route;
  * non-administrators; this layout is what actually refuses them. The API
  * already answers 403 on the admin routes, so nothing is exposed either
  * way, but the page shell must not render for an account the section is
- * not meant for: a signed-in non-admin who types `/system/storage` is sent
+ * not meant for: a signed-in non-admin who types `/system/general` is sent
  * to `/files`. A missing or expired session is handled by `loadMe` itself.
  */
 export default async function SystemLayout({ children }: { children: ReactNode }) {

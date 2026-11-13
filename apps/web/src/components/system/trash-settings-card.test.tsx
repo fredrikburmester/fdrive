@@ -137,10 +137,10 @@ describe("Trash settings", () => {
     expect(screen.getByText(/fdrive creates it on the first delete/)).toBeTruthy();
     expect(screen.getByText(/fdrive does not delete old items automatically/)).toBeTruthy();
   });
-  it("cannot enable Trash for a provider without one", () => {
+  it("cannot enable Trash for storage without one", () => {
     mocks.query.mockReturnValue({ data: { ...saved, strategy: "none" }, refetch: mocks.refetch });
     render(<TrashSettingsCard provider={PROVIDER} />);
-    expect(screen.getByText("This storage server has no Trash.")).toBeTruthy();
+    expect(screen.getByText("This storage has no Trash.")).toBeTruthy();
     expect(screen.getByText(/removes it permanently/)).toBeTruthy();
     const toggle = screen.getByRole("switch", { name: "Enable Trash" });
     expect(toggle.hasAttribute("disabled") || toggle.getAttribute("aria-disabled") === "true").toBe(
@@ -148,6 +148,19 @@ describe("Trash settings", () => {
     );
     fireEvent.click(toggle);
     expect(screen.queryByLabelText("Trash folder")).toBeNull();
+  });
+  it("titles the card and adds a description only when given one", () => {
+    const { unmount } = render(<TrashSettingsCard provider={PROVIDER} />);
+    expect(screen.getByText("Trash")).toBeTruthy();
+    expect(screen.queryByText(/System > General/)).toBeNull();
+    unmount();
+    render(
+      <TrashSettingsCard
+        provider={PROVIDER}
+        description="You can change this later under System > General."
+      />,
+    );
+    expect(screen.getByText("You can change this later under System > General.")).toBeTruthy();
   });
   it("offers a settings save outside onboarding and reviews persisted state", () => {
     render(
@@ -162,7 +175,7 @@ describe("Trash settings", () => {
   });
 });
 
-it("keeps two servers' forms on one page apart by their control ids", () => {
+it("keeps two forms on one page apart by their control ids", () => {
   const other = { ...saved, providerId: "00000000-0000-4000-8000-000000000002" };
   mocks.query.mockImplementation(() => ({ data: saved, refetch: mocks.refetch }));
   render(

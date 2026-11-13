@@ -29,15 +29,15 @@ describe("localIndexRoot", () => {
 });
 
 describe("deploymentModules", () => {
-  it("has WebDAV and S3 only without a local folder", () => {
+  it("has no storage without a files folder", () => {
     const modules = deploymentModules(
       { fdriveStorageRoot: undefined, fdriveIndexRoots: null },
       createMemoryRepos(),
     );
-    expect(Object.keys(modules).sort()).toEqual(["s3", "webdav"]);
+    expect(modules).toEqual({});
   });
 
-  it("adds the local folder over the configured root and the stored users", async () => {
+  it("serves the files folder over the configured root and the stored users", async () => {
     const repos = createMemoryRepos();
     await seedLocalUsers(repos, [{ username: "alice", password: "alice-pass" }]);
     const storageRoot = temporaryStorageRoot();
@@ -46,7 +46,7 @@ describe("deploymentModules", () => {
       repos,
       FAST_PASSWORDS,
     );
-    expect(Object.keys(modules).sort()).toEqual(["local", "s3", "webdav"]);
+    expect(Object.keys(modules)).toEqual(["local"]);
     const local = modules.local;
     if (local === undefined) throw new Error("no local module");
     const instance = { id: "row", baseUrl: "local", config: {} };

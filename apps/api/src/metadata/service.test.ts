@@ -404,7 +404,7 @@ describe("createMetadataService: AI chat references", () => {
     const repos = createMemoryRepos();
     const service = createMetadataService(repos);
     const account = await repos.accounts.create({ displayName: "Alice" });
-    const provider = await repos.providers.ensure({ type: "webdav", baseUrl: "http://a" });
+    const provider = await repos.providers.ensure({ type: "local", baseUrl: "http://a" });
     const identity = await repos.identities.create({
       accountId: account.id,
       providerId: provider.id,

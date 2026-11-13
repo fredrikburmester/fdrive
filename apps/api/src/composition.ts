@@ -103,7 +103,7 @@ import { createOfficeStorageFactory } from "./office/storage.ts";
 import { createOfficeTokenCodec } from "./office/tokens.ts";
 import type { OfficeDeps } from "./office/types.ts";
 import { registerProviderRoutes } from "./providers/routes.js";
-import { createProviderService, hostLabel } from "./providers/service.js";
+import { createProviderService } from "./providers/service.js";
 import { createScopeResolver } from "./scoping/resolver.ts";
 import { createEmbedClient } from "./search/embeddings.js";
 import { createImageEmbedClient } from "./search/image-embed-client.js";
@@ -642,7 +642,6 @@ export async function composeApp(
   const setupToken = config.fdriveSetupToken ?? generateSetupToken();
   const setupTokenGuard = createSetupTokenGuard(setupToken);
   const setupService = createSetupService({
-    providers: providerService,
     authService: auth.service,
     accounts: repos.accounts,
     settings: repos.settings,
@@ -867,16 +866,11 @@ export async function composeApp(
       if (setup.required) return { required: true, providers: [] };
       return {
         required: false,
-        providers: await Promise.all(
-          (await providerService.enabled()).map(async (provider) => ({
-            type: provider.type,
-            // The local folder has no host; it is named by its storage type.
-            host:
-              (await providerService.get(provider.id))?.module.deploymentManaged === true
-                ? providerService.labelFor(provider)
-                : hostLabel(provider.baseUrl),
-          })),
-        ),
+        providers: (await providerService.enabled()).map((provider) => ({
+          type: provider.type,
+          // The files folder has no host; it is named by its label.
+          host: providerService.labelFor(provider),
+        })),
       };
     },
     registerRoutes: (groups) => {

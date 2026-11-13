@@ -30,10 +30,10 @@ const REQUIRED_ENV = {
   FDRIVE_MASTER_KEY: Buffer.alloc(32, 7).toString("base64"),
 };
 
-/** Setup is done and one WebDAV server is enabled, as `composeApp` would report it. */
+/** Setup is done and the files folder is enabled, as `composeApp` would report it. */
 const SET_UP = async () => ({
   required: false,
-  providers: [{ type: "webdav", host: "dav.internal:9443" }],
+  providers: [{ type: "local", host: "Family files" }],
 });
 
 function createTestLogger(): Logger {
@@ -244,7 +244,7 @@ describe("createApp about route", () => {
     expect(body).toEqual({
       version: "1.2.3",
       uptimeSeconds: 5,
-      providers: [{ type: "webdav", label: null }],
+      providers: [{ type: "local", label: null }],
       setupRequired: false,
     });
   });
@@ -283,7 +283,7 @@ describe("createApp about route", () => {
     const res = await app.request("/api/v1/about");
     const body = await res.json();
 
-    expect(body).toMatchObject({ providers: [{ type: "webdav", label: "dav.internal:9443" }] });
+    expect(body).toMatchObject({ providers: [{ type: "local", label: "Family files" }] });
   });
 
   it("reports setupRequired and a null provider when connectionStatus says so", async () => {
@@ -359,7 +359,7 @@ describe("createApp setup gate", () => {
     const { app } = buildApp({
       connectionStatus: async () => ({
         required: false,
-        providers: [{ type: "webdav", host: "dav:8080" }],
+        providers: [{ type: "local", host: "Family files" }],
       }),
       registerRoutes: ({ public: pub }) => {
         pub.get("/ping", (c) => c.json({ ok: true }));

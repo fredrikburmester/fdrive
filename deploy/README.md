@@ -169,6 +169,10 @@ docker compose pull && docker compose up -d --remove-orphans
 checkout's `deploy` folder like any other installation, and move extra Compose files from
 `FDRIVE_COMPOSE_FILES` to `COMPOSE_FILE` in `.env`, the list Compose itself reads.
 
+**Used WebDAV or S3 storage?** The files folder is now fdrive's only storage. The update
+disables WebDAV and S3 storage and their logins disappear, so copy anything you need from them
+into the files folder first. Backups to an S3 bucket keep working.
+
 ## Upgrading from SFTPGo
 
 Earlier releases browsed files through SFTPGo. fdrive now serves SFTPGo's data folder itself,

@@ -1,7 +1,6 @@
 import { type ProviderModule, StorageError } from "@fdrive/core";
 import { createMemoryStorage } from "@fdrive/core/testing";
 import type { Provider, Repos } from "@fdrive/db";
-import { vi } from "vitest";
 import type { SystemEventLog } from "../../system/event-log.js";
 import { createProviderService, type ProviderService } from "../service.js";
 
@@ -11,6 +10,7 @@ export interface MemoryProviderServiceOptions {
   readonly clock?: () => Date;
   readonly indexRootNames?: readonly string[];
   readonly trashEnabled?: (providerId: string) => Promise<boolean>;
+  /** The deployment's modules by type; none unless given. */
   readonly modules?: Readonly<Record<string, ProviderModule>>;
 }
 
@@ -26,7 +26,7 @@ export function memoryProviderService(
     environment: { indexRootNames: options.indexRootNames ?? [] },
     ...(options.trashEnabled === undefined ? {} : { trashEnabled: options.trashEnabled }),
     ...(options.eventLog === undefined ? {} : { eventLog: options.eventLog }),
-    ...(options.modules === undefined ? {} : { modules: options.modules }),
+    modules: options.modules ?? {},
   });
 }
 
@@ -49,13 +49,18 @@ export async function seedLocalProvider(
   return updated;
 }
 
-/** Ensures an enabled WebDAV provider row at `baseUrl`; the type has no configuration. */
-export async function seedWebdavProvider(
+/**
+ * Ensures another enabled, unpinned row of the files folder's type at
+ * `baseUrl`, for tests of behaviour across rows: logins, tokens and storage
+ * stay bound to the row they were verified against. The registry resolves
+ * it through whatever module the test registers under `local`.
+ */
+export async function seedProviderRow(
   repos: Pick<Repos, "providers">,
   baseUrl: string,
   options: { label?: string; enabled?: boolean; managedByEnv?: boolean } = {},
 ): Promise<Provider> {
-  const row = await repos.providers.ensure({ type: "webdav", baseUrl });
+  const row = await repos.providers.ensure({ type: "local", baseUrl });
   const updated = await repos.providers.update(row.id, {
     enabled: options.enabled ?? true,
     managedByEnv: options.managedByEnv ?? false,
@@ -65,41 +70,15 @@ export async function seedWebdavProvider(
   return updated;
 }
 
-/** A fetch double that answers WebDAV's unauthenticated `OPTIONS` probe. */
-export function probeFetch(reachable = true): typeof globalThis.fetch {
-  return vi.fn(async () =>
-    reachable
-      ? new Response(null, { status: 200, headers: { dav: "1, 2" } })
-      : new Response("boom", { status: 500 }),
-  ) as unknown as typeof globalThis.fetch;
-}
-
-/** Ensures an enabled S3 provider row at `baseUrl` (bucket in the path), with an optional region. */
-export async function seedS3Provider(
-  repos: Pick<Repos, "providers">,
-  baseUrl: string,
-  options: { label?: string; region?: string; enabled?: boolean } = {},
-): Promise<Provider> {
-  const row = await repos.providers.ensure({ type: "s3", baseUrl });
-  const updated = await repos.providers.update(row.id, {
-    enabled: options.enabled ?? true,
-    managedByEnv: false,
-    ...(options.label === undefined ? {} : { label: options.label }),
-    ...(options.region === undefined ? {} : { config: { ...row.config, region: options.region } }),
-  });
-  if (updated === null) throw new Error("provider vanished");
-  return updated;
-}
-
 /**
- * A provider module for tests of generic behaviour, registered under a real
- * type (`webdav` unless overridden) so the registry accepts its rows. Its
- * users sign in with `<username>-pass`, its storage is in memory, and every
- * part can be overridden.
+ * A provider module for tests of generic behaviour, registered under the
+ * only type there is (`local`) so the registry accepts its rows. Its users
+ * sign in with `<username>-pass`, its storage is in memory, and every part
+ * can be overridden.
  */
 export function fakeProviderModule(overrides: Partial<ProviderModule> = {}): ProviderModule {
   return {
-    type: "webdav",
+    type: "local",
     label: "Fake storage",
     configFields: [],
     credentialFields: [

@@ -15,60 +15,23 @@ async function clickSave(page: Page): Promise<void> {
   await page.getByRole("button", { name: "Save", exact: true }).dispatchEvent("click");
 }
 
-test("alice (admin) sees the deployment's local folder on System > Storage and can only rename it", async ({
+test("alice (admin) finds the files folder under System > General, where the retired Storage page now leads", async ({
   page,
 }) => {
   await page.goto("/files");
 
-  await expect(page.getByRole("link", { name: "Storage" })).toBeVisible();
-  await page.getByRole("link", { name: "Storage" }).click();
-  await expect(page).toHaveURL(/\/system\/storage$/);
+  // The files folder is the only storage, so System has no Storage page.
+  await expect(page.getByRole("link", { name: "General" })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Storage", exact: true })).toHaveCount(0);
+  await page.getByRole("link", { name: "General" }).click();
+  await expect(page).toHaveURL(/\/system\/general$/);
+  await expect(page.getByText("Folder on this server, set by FDRIVE_STORAGE_ROOT.")).toBeVisible();
 
-  // The local folder is pinned by FDRIVE_STORAGE_ROOT, so it reports the
-  // deployment as its source, names the folder instead of an address, and
-  // refuses removal.
-  const card = page
-    .getByRole("main")
-    .locator('[data-slot="card"]')
-    .filter({ hasText: "Deployment (locked)" });
-  await expect(card.getByText("Reachable", { exact: true })).toBeVisible();
-  await expect(card.getByText("Deployment (locked)", { exact: true })).toBeVisible();
-  await expect(
-    card.getByText("Folder on this server, set by FDRIVE_STORAGE_ROOT.").first(),
-  ).toBeVisible();
-  await expect(card.getByRole("button", { name: /^Remove / })).toBeDisabled();
-
-  await card.getByRole("button", { name: /^Edit / }).click();
-  let dialog = page.getByRole("dialog");
-  // Only the name changes here: no type, no address.
-  await expect(dialog.getByLabel("Address")).toHaveCount(0);
-  await expect(dialog.getByLabel("Type")).toHaveCount(0);
-  const originalName = await dialog.getByLabel("Name").inputValue();
-  await dialog.getByLabel("Name").fill("Home server");
-  await dialog.getByRole("button", { name: "Save", exact: true }).click();
-  await expect(dialog).toBeHidden();
-
-  await page.reload();
-  const renamed = page
-    .getByRole("main")
-    .locator('[data-slot="card"]')
-    .filter({ hasText: "Deployment (locked)" });
-  await expect(renamed.getByRole("button", { name: "Edit Home server" })).toBeVisible();
-  await renamed.getByRole("button", { name: "Edit Home server" }).click();
-  dialog = page.getByRole("dialog");
-  await expect(dialog.getByLabel("Name")).toHaveValue("Home server");
-
-  // Restore the original name so this test stays idempotent across
-  // repeated local runs against the same environment.
-  await dialog.getByLabel("Name").fill(originalName);
-  await dialog.getByRole("button", { name: "Save", exact: true }).click();
-  await expect(dialog).toBeHidden();
-
-  // The connection card moved off General with the rest of the storage
-  // settings; only a pointer to this page is left there.
-  await page.goto("/system/general");
+  // Bookmarks of the old page land on General.
+  await page.goto("/system/storage");
+  await expect(page).toHaveURL(/\/system\/general$/);
   await expect(page.getByRole("heading", { name: "General" })).toBeVisible();
-  await expect(page.getByRole("link", { name: "Storage" }).first()).toBeVisible();
+  await expect(page.getByText("Folder on this server, set by FDRIVE_STORAGE_ROOT.")).toBeVisible();
 });
 
 test("the retired /system/connection route redirects to General", async ({ page }) => {
@@ -296,8 +259,7 @@ test.describe("bob (not admin)", () => {
     ]) {
       await page.goto(path);
       await expect(page).toHaveURL(/\/files$/);
-      await expect(page.getByRole("heading", { name: "Storage" })).toHaveCount(0);
-      await expect(page.getByText("No storage servers")).toHaveCount(0);
+      await expect(page.getByRole("heading", { name: "General" })).toHaveCount(0);
       await expect(page.getByText("Administrators only")).toHaveCount(0);
     }
   });

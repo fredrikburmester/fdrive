@@ -151,8 +151,8 @@ async function statLeaf(
 /**
  * Ensures nothing already exists at `target` before `restoreLeaf` moves a
  * trash leaf there. Not every backend's move raises a conflict for an
- * occupied target: WebDAV servers and SFTPGo (which fdrive once used) let a
- * move silently overwrite an existing file. `restore` must not silently destroy
+ * occupied target: SFTPGo (which fdrive once used) let a move silently
+ * overwrite an existing file. `restore` must not silently destroy
  * whatever is already at `target`, so it checks first with `statFile`
  * instead of relying on `move` to report the conflict.
  *

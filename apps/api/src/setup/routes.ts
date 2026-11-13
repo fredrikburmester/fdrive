@@ -1,10 +1,8 @@
 import {
-  ConnectionTestResponse,
   ROUTES,
   SETUP_TOKEN_HEADER,
   SetupCompleteRequest,
   SetupStatusResponse,
-  SetupTestRequest,
 } from "@fdrive/contracts";
 import type { Context } from "hono";
 import type { AppHono, AuthedHono } from "../app.js";
@@ -60,10 +58,10 @@ async function assertSetupAllowed(c: Context, deps: RegisterSetupRoutesDeps): Pr
 }
 
 /**
- * Registers the public `/setup/status`, `/setup/test`, and `/setup/complete`
- * routes. `test` and `complete` require the `x-setup-token` header to match
- * the active `SetupTokenGuard`, are rate limited by ip, and 404 once setup
- * is no longer required.
+ * Registers the public `/setup/status` and `/setup/complete` routes.
+ * `complete` requires the `x-setup-token` header to match the active
+ * `SetupTokenGuard`, is rate limited by ip, and 404s once setup is no longer
+ * required.
  */
 export function registerSetupRoutes(
   groups: { public: AppHono; authed: AuthedHono },
@@ -72,20 +70,6 @@ export function registerSetupRoutes(
   groups.public.get(withoutApiV1Prefix(ROUTES.setup.status), async (c) => {
     const status = await deps.service.status();
     return c.json(SetupStatusResponse.parse(status));
-  });
-
-  groups.public.post(withoutApiV1Prefix(ROUTES.setup.test), async (c) => {
-    const ip = await assertSetupAllowed(c, deps);
-    const parsed = SetupTestRequest.safeParse(await c.req.json().catch(() => undefined));
-    if (!parsed.success) {
-      throw new ApiHttpError("bad_request", "invalid setup test request", {
-        issues: parsed.error.issues,
-      });
-    }
-
-    const result = await deps.service.test(parsed.data);
-    deps.limiter.recordSuccess(limiterKeyFor(ip));
-    return c.json(ConnectionTestResponse.parse(result));
   });
 
   groups.public.post(withoutApiV1Prefix(ROUTES.setup.complete), async (c) => {

@@ -153,7 +153,7 @@ describe("search startup retry decisions", () => {
     expect(isSearchUnsupported(status)).toBe(true);
     expect(isSearchStarting(status)).toBe(false);
     expect(searchUnavailableMessage(status)).toBe(
-      "Search is not available for this login. It needs indexed local storage.",
+      "Search is not available for this login. Its folder is not indexed.",
     );
     expect(searchUnavailableHint(status)).toBe("Search is not available for this login");
     expect(searchUnavailableHint({ available: false, semantic: false, reason: "mismatch" })).toBe(

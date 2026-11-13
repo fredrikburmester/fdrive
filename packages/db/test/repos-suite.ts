@@ -21,7 +21,7 @@ export function defineReposSuite(name: string, setup: () => Promise<Repos> | Rep
         const results = await Promise.allSettled(
           ["first", "second"].map((label) =>
             repos.providers.create({
-              type: "webdav",
+              type: "local",
               baseUrl: "http://race",
               label,
               enabled: false,
@@ -44,7 +44,7 @@ export function defineReposSuite(name: string, setup: () => Promise<Repos> | Rep
       it("reports racing readdresses as conflicts and preserves the losing row", async () => {
         const rows = await Promise.all(
           ["a", "b"].map((host) =>
-            repos.providers.ensure({ type: "webdav", baseUrl: `http://${host}` }),
+            repos.providers.ensure({ type: "local", baseUrl: `http://${host}` }),
           ),
         );
         const results = await Promise.allSettled(
@@ -61,7 +61,7 @@ export function defineReposSuite(name: string, setup: () => Promise<Repos> | Rep
 
       it("looks up a provider by canonical UUID and rejects invalid IDs", async () => {
         const provider = await repos.providers.ensure({
-          type: "webdav",
+          type: "local",
           baseUrl: "http://provider",
         });
         expect(await repos.providers.get(provider.id)).toEqual(provider);
@@ -70,11 +70,11 @@ export function defineReposSuite(name: string, setup: () => Promise<Repos> | Rep
       });
       it("creates a provider on first ensure", async () => {
         const provider = await repos.providers.ensure({
-          type: "webdav",
+          type: "local",
           baseUrl: "http://dav.test:8080",
         });
 
-        expect(provider.type).toBe("webdav");
+        expect(provider.type).toBe("local");
         expect(provider.baseUrl).toBe("http://dav.test:8080");
         expect(provider.id).toEqual(expect.any(String));
         expect(provider.createdAt).toBeInstanceOf(Date);
@@ -82,11 +82,11 @@ export function defineReposSuite(name: string, setup: () => Promise<Repos> | Rep
 
       it("is idempotent for the same (type, baseUrl)", async () => {
         const first = await repos.providers.ensure({
-          type: "webdav",
+          type: "local",
           baseUrl: "http://dav.test:8080",
         });
         const second = await repos.providers.ensure({
-          type: "webdav",
+          type: "local",
           baseUrl: "http://dav.test:8080",
         });
 
@@ -96,11 +96,11 @@ export function defineReposSuite(name: string, setup: () => Promise<Repos> | Rep
 
       it("creates a distinct provider for a different baseUrl", async () => {
         const first = await repos.providers.ensure({
-          type: "webdav",
+          type: "local",
           baseUrl: "http://dav-a:8080",
         });
         const second = await repos.providers.ensure({
-          type: "webdav",
+          type: "local",
           baseUrl: "http://dav-b:8080",
         });
 
@@ -109,7 +109,7 @@ export function defineReposSuite(name: string, setup: () => Promise<Repos> | Rep
 
       it("creates a distinct provider for a different type", async () => {
         const first = await repos.providers.ensure({
-          type: "webdav",
+          type: "local",
           baseUrl: "http://same:8080",
         });
         const second = await repos.providers.ensure({
@@ -121,14 +121,14 @@ export function defineReposSuite(name: string, setup: () => Promise<Repos> | Rep
       });
 
       it("defaults label, config, enabled and managedByEnv, and lists oldest first", async () => {
-        const first = await repos.providers.ensure({ type: "webdav", baseUrl: "http://a" });
-        const second = await repos.providers.ensure({ type: "webdav", baseUrl: "http://b" });
+        const first = await repos.providers.ensure({ type: "local", baseUrl: "http://a" });
+        const second = await repos.providers.ensure({ type: "local", baseUrl: "http://b" });
         expect(first).toMatchObject({ label: "", config: {}, enabled: true, managedByEnv: false });
         expect((await repos.providers.list()).map((row) => row.id)).toEqual([first.id, second.id]);
       });
 
       it("updates fields without touching the rest and keeps ensure from resetting them", async () => {
-        const provider = await repos.providers.ensure({ type: "webdav", baseUrl: "http://a" });
+        const provider = await repos.providers.ensure({ type: "local", baseUrl: "http://a" });
         const updated = await repos.providers.update(provider.id, {
           label: "Home",
           config: { region: "eu-north-1" },
@@ -147,21 +147,19 @@ export function defineReposSuite(name: string, setup: () => Promise<Repos> | Rep
           baseUrl: "http://c",
           label: "Home",
         });
-        expect(await repos.providers.ensure({ type: "webdav", baseUrl: "http://c" })).toMatchObject(
-          {
-            id: provider.id,
-            label: "Home",
-            enabled: false,
-          },
-        );
+        expect(await repos.providers.ensure({ type: "local", baseUrl: "http://c" })).toMatchObject({
+          id: provider.id,
+          label: "Home",
+          enabled: false,
+        });
         expect(
           await repos.providers.update("00000000-0000-0000-0000-000000000099", { label: "x" }),
         ).toBeNull();
       });
 
       it("deletes an unused provider and refuses one that identities use", async () => {
-        const unused = await repos.providers.ensure({ type: "webdav", baseUrl: "http://unused" });
-        const used = await repos.providers.ensure({ type: "webdav", baseUrl: "http://used" });
+        const unused = await repos.providers.ensure({ type: "local", baseUrl: "http://unused" });
+        const used = await repos.providers.ensure({ type: "local", baseUrl: "http://used" });
         const account = await repos.accounts.create({ displayName: null });
         await repos.identities.create({
           accountId: account.id,
@@ -340,7 +338,7 @@ export function defineReposSuite(name: string, setup: () => Promise<Repos> | Rep
     describe("identities", () => {
       async function seedProviderAndAccount() {
         const provider = await repos.providers.ensure({
-          type: "webdav",
+          type: "local",
           baseUrl: "http://dav.test:8080",
         });
         const account = await repos.accounts.create({ displayName: "Carol" });
@@ -415,7 +413,7 @@ export function defineReposSuite(name: string, setup: () => Promise<Repos> | Rep
       it("lists every identity for an account, empty for an account with none", async () => {
         const { provider, account } = await seedProviderAndAccount();
         const otherProvider = await repos.providers.ensure({
-          type: "webdav",
+          type: "local",
           baseUrl: "http://other:8080",
         });
         const first = await repos.identities.create({
@@ -481,7 +479,7 @@ export function defineReposSuite(name: string, setup: () => Promise<Repos> | Rep
     describe("credentials", () => {
       async function seedIdentity() {
         const provider = await repos.providers.ensure({
-          type: "webdav",
+          type: "local",
           baseUrl: "http://dav.test:8080",
         });
         const account = await repos.accounts.create({ displayName: "Erin" });
@@ -775,7 +773,7 @@ export function defineReposSuite(name: string, setup: () => Promise<Repos> | Rep
 
       async function seedIdentity() {
         const provider = await repos.providers.ensure({
-          type: "webdav",
+          type: "local",
           baseUrl: "http://dav.test:8080",
         });
         const account = await repos.accounts.create({ displayName: "Heidi" });
@@ -1107,7 +1105,7 @@ export function defineReposSuite(name: string, setup: () => Promise<Repos> | Rep
     describe("fileTags", () => {
       async function seedIdentityAndTags() {
         const provider = await repos.providers.ensure({
-          type: "webdav",
+          type: "local",
           baseUrl: "http://dav.test:8080",
         });
         const account = await repos.accounts.create({ displayName: "Liam" });
@@ -1274,7 +1272,7 @@ export function defineReposSuite(name: string, setup: () => Promise<Repos> | Rep
     describe("favorites", () => {
       async function seedIdentity() {
         const provider = await repos.providers.ensure({
-          type: "webdav",
+          type: "local",
           baseUrl: "http://dav.test:8080",
         });
         const account = await repos.accounts.create({ displayName: "Mona" });
@@ -1408,7 +1406,7 @@ export function defineReposSuite(name: string, setup: () => Promise<Repos> | Rep
     describe("folderViews", () => {
       async function seedIdentity(username = "nora") {
         const provider = await repos.providers.ensure({
-          type: "webdav",
+          type: "local",
           baseUrl: "http://dav.test:8080",
         });
         const account = await repos.accounts.create({ displayName: "Nora" });
@@ -1532,7 +1530,7 @@ export function defineReposSuite(name: string, setup: () => Promise<Repos> | Rep
     describe("recents", () => {
       async function seedIdentity() {
         const provider = await repos.providers.ensure({
-          type: "webdav",
+          type: "local",
           baseUrl: "http://dav.test:8080",
         });
         const account = await repos.accounts.create({ displayName: "Nora" });
@@ -1739,7 +1737,7 @@ export function defineReposSuite(name: string, setup: () => Promise<Repos> | Rep
 
       beforeEach(async () => {
         const account = await repos.accounts.create({ displayName: null });
-        const provider = await repos.providers.ensure({ type: "webdav", baseUrl: "http://a" });
+        const provider = await repos.providers.ensure({ type: "local", baseUrl: "http://a" });
         identity = (
           await repos.identities.create({
             accountId: account.id,

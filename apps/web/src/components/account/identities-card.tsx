@@ -9,7 +9,6 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Skeleton } from "@/components/ui/skeleton";
 import type { AccountIdentity } from "@/lib/account/identities";
 import { useAccountTransition } from "@/lib/account/transition";
-import { storageNote } from "@/lib/identity/capabilities";
 import { loginDisplay } from "@/lib/identity/login-display";
 import { LinkLoginDialog } from "./link-login-dialog";
 import { UnlinkLoginDialog } from "./unlink-login-dialog";
@@ -33,7 +32,6 @@ export function IdentitiesCard() {
         ) : (
           me.identities.map((identity) => {
             const display = loginDisplay(identity);
-            const note = storageNote(identity.capabilities);
             return (
               <div
                 key={identity.id}
@@ -62,7 +60,6 @@ export function IdentitiesCard() {
                     </Button>
                   </div>
                 </div>
-                {note !== null && <p className="text-xs text-muted-foreground">{note}</p>}
               </div>
             );
           })

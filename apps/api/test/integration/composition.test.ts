@@ -270,7 +270,7 @@ describe("composeApp", () => {
       expect(await blockedRes.json()).toMatchObject({ error: { kind: "setup_required" } });
 
       const statusRes = await composed.app.request("/api/v1/setup/status");
-      expect(await statusRes.json()).toEqual({ required: true, mode: "local", types: [] });
+      expect(await statusRes.json()).toEqual({ required: true, storageConfigured: true });
 
       const tokenLine = messages.find((message) => message.startsWith("setup token: "));
       if (tokenLine === undefined) {
@@ -285,7 +285,7 @@ describe("composeApp", () => {
           "x-requested-with": "fdrive",
           "x-setup-token": setupToken,
         },
-        body: JSON.stringify({ kind: "local", username: "alice", password: "alice-password" }),
+        body: JSON.stringify({ username: "alice", password: "alice-password" }),
       });
       expect(completeRes.status).toBe(200);
       const completeBody = await completeRes.json();
@@ -303,7 +303,7 @@ describe("composeApp", () => {
           "x-requested-with": "fdrive",
           "x-setup-token": setupToken,
         },
-        body: JSON.stringify({ kind: "local", username: "mallory", password: "mallory-password" }),
+        body: JSON.stringify({ username: "mallory", password: "mallory-password" }),
       });
       expect(reuseRes.status).toBe(404);
 

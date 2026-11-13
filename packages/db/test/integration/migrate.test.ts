@@ -1,7 +1,31 @@
+import { copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { PostgreSqlContainer, type StartedPostgreSqlContainer } from "@testcontainers/postgresql";
 import { sql } from "drizzle-orm";
+import { migrate as runMigrations } from "drizzle-orm/node-postgres/migrator";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createDb, type Db, migrate, schema } from "../../src/index.js";
+
+const MIGRATIONS = fileURLToPath(new URL("../../drizzle/", import.meta.url));
+
+/** A copy of the migrations folder that ends at `last`, to leave a database as an older fdrive did. */
+async function migrationsUpTo(last: string): Promise<string> {
+  const journal = JSON.parse(await readFile(join(MIGRATIONS, "meta", "_journal.json"), "utf8")) as {
+    entries: { tag: string }[];
+  };
+  const end = journal.entries.findIndex((entry) => entry.tag === last);
+  if (end < 0) throw new Error(`no migration ${last}`);
+  const entries = journal.entries.slice(0, end + 1);
+  const folder = await mkdtemp(join(tmpdir(), "fdrive-migrations-"));
+  await mkdir(join(folder, "meta"));
+  await writeFile(join(folder, "meta", "_journal.json"), JSON.stringify({ ...journal, entries }));
+  for (const entry of entries) {
+    await copyFile(join(MIGRATIONS, `${entry.tag}.sql`), join(folder, `${entry.tag}.sql`));
+  }
+  return folder;
+}
 
 let container: StartedPostgreSqlContainer;
 let db: Db;
@@ -204,5 +228,47 @@ describe("migrate", () => {
         mtimeNs: 2n,
       }),
     ).rejects.toThrow();
+  });
+});
+
+describe("migration 0019", () => {
+  it("switches off WebDAV and S3 rows and keeps them for the logins that reference them", async () => {
+    await db.execute(sql.raw("create database fdrive_storage_types"));
+    const url = new URL(container.getConnectionUri());
+    url.pathname = "/fdrive_storage_types";
+    const older = createDb(url.toString());
+    const folder = await migrationsUpTo("0018_local_grants");
+    try {
+      await runMigrations(older.db, { migrationsFolder: folder });
+      await older.db.execute(sql`
+        insert into app.providers (type, base_url, enabled, managed_by_env) values
+          ('local', 'local', true, true),
+          ('webdav', 'http://dav.test/', true, true),
+          ('s3', 'http://s3.test/bucket', true, false)`);
+      await older.db.execute(sql`
+        insert into app.accounts (id) values ('00000000-0000-4000-8000-000000000001')`);
+      await older.db.execute(sql`
+        insert into app.identities (account_id, provider_id, external_username)
+        select '00000000-0000-4000-8000-000000000001', id, 'alice'
+        from app.providers where type = 'webdav'`);
+
+      await migrate(older.db);
+
+      const rows = await older.db.execute<{
+        type: string;
+        enabled: boolean;
+        managed_by_env: boolean;
+      }>(sql`select type, enabled, managed_by_env from app.providers order by type`);
+      expect(rows.rows).toEqual([
+        { type: "local", enabled: true, managed_by_env: true },
+        { type: "s3", enabled: false, managed_by_env: false },
+        { type: "webdav", enabled: false, managed_by_env: false },
+      ]);
+      const logins = await older.db.execute(sql`select 1 from app.identities`);
+      expect(logins.rows).toHaveLength(1);
+    } finally {
+      await older.close();
+      await rm(folder, { recursive: true, force: true });
+    }
   });
 });

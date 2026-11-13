@@ -2,18 +2,17 @@
 
 Updated 2026-11-12. Apache DAV native writes merged in PR #21. The pinned SFTPGo
 integration merged in PR #22 and was later removed together with its `fdrive-local-v1` mode,
-and SFTPGo itself has since been replaced by fdrive's local folder: the local folder, WebDAV
-and S3 write under fdrive's default optimistic contract, with Apache DAV locks as an opt-in.
+and SFTPGo itself has since been replaced by fdrive's local folder, which writes under fdrive's
+optimistic contract. WebDAV, its Apache DAV locks and S3 were removed on 2026-11-13.
 Full beta qualification remains open.
 Current behavior: [macOS](../MACOS.md#write-configuration-and-recovery).
 Search remains excluded.
 
 ## Safety boundary
 
-The user chose **storage-side enforcement** for the leased Apache DAV mode, and later accepted
-the weaker optimistic contract, since 2026-09-18 the default for every storage; see
-[STOCK-SFTPGO-WRITES.md](STOCK-SFTPGO-WRITES.md) for the design record. Qualified Apache DAV
-requires every writer to obey its exclusive locks.
+The user first chose **storage-side enforcement** (the leased Apache DAV mode, gone with
+WebDAV), and later accepted the weaker optimistic contract, the default since 2026-09-18 and
+now the only one; see [STOCK-SFTPGO-WRITES.md](STOCK-SFTPGO-WRITES.md) for the design record.
 
 Keep explicit v2 write grants, staged uploads, retained originals, durable server receipts
 and native pending copies. Publication followed by a crash before the receipt remains
@@ -57,7 +56,7 @@ Do not promise support for arbitrary package documents or live databases.
 
 ## Acceptance and verification
 
-- Through real Finder and a disposable local folder and WebDAV: create empty/nonempty files,
+- Through real Finder and a disposable local folder: create empty/nonempty files,
   drag a nested folder, save repeatedly in TextEdit and a safe-save editor, rename while
   saving, move a folder with downloaded children, conflict on destination, and restore from
   Trash.

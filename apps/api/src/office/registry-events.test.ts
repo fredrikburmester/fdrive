@@ -202,8 +202,8 @@ it("tombstones the source when the move target becomes unmapped", async () => {
 
 it("routes a root event to its provider, independently of the default provider", async () => {
   const repos = createMemoryRepos();
-  const first = await repos.providers.ensure({ type: "webdav", baseUrl: "http://first" });
-  const second = await repos.providers.ensure({ type: "webdav", baseUrl: "http://second" });
+  const first = await repos.providers.ensure({ type: "local", baseUrl: "http://first" });
+  const second = await repos.providers.ensure({ type: "local", baseUrl: "http://second" });
   const files = createMemoryOfficeFileRepo();
   const firstFile = await files.ensure({
     providerId: first.id,

@@ -32,21 +32,14 @@ export const OFFICE_PAGE: SystemPageLink = { href: "/system/office" as Route, la
 /** AI keeps its own settings record too, and lives in the same group. */
 export const AI_PAGE: SystemPageLink = { href: "/system/ai" as Route, label: "AI" };
 
-/** The local folder's users; an installation-wide page beside Storage. */
+/** The files folder's users; an installation-wide page beside General. */
 export const USERS_PAGE: SystemPageLink = { href: "/system/users" as Route, label: "Users" };
 
 /**
- * What a System page's settings apply to. Everything under System is
- * installation-wide except the per-server settings on Storage (the servers
- * themselves and their Trash). Each page header states its scope with these
- * words, and the sidebar caption says the section is for administrators, so
- * the label being browsed never suggests a page follows the active login.
+ * What every System page's settings apply to: the whole installation, never
+ * just the login being browsed. Each page header says so, and the sidebar
+ * caption says the section is for administrators.
  */
-export type SystemScope = "server" | "storage";
 export const SYSTEM_SCOPE_CAPTION = "Admins only";
-export const SYSTEM_SCOPE_NOTES: Record<SystemScope, string> = {
-  server:
-    "Installation-wide. Applies to every storage server and login, not just the one you are browsing.",
-  storage:
-    "Per storage server. Each server keeps its own settings, including Trash, whichever login you are browsing as.",
-};
+export const SYSTEM_SCOPE_NOTE =
+  "Installation-wide. Applies to every user and login, not just the one you are browsing.";

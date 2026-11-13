@@ -1,4 +1,4 @@
-/** A storage backend instance: the local folder, one WebDAV endpoint, one bucket. */
+/** A storage backend instance: the files folder. */
 export interface Provider {
   readonly id: string;
   readonly type: string;

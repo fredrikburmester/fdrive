@@ -1627,7 +1627,7 @@ it("reports every precondition a full grant is missing, and none for a read gran
 
 it("refuses a file the storage could never publish, before any of it is transferred", async () => {
   const f = await fixture();
-  // S3 publishes with a copy it refuses above 5 GiB, however the bytes arrived.
+  // A backend that publishes with a copy may refuse a size, however the bytes arrived.
   const bounded: Principal = { ...f.principal, storage: { ...f.storage, maxPublishBytes: 8 } };
   const upload = vi.spyOn(f.raw, "upload");
   const request = {
@@ -1685,7 +1685,7 @@ it("leaves a publication the storage refused discardable rather than uncertain",
   expect((await f.service.cancel(f.principal, request.operationId)).state).toBe("cancelled");
 });
 
-/** A storage with no rename, like S3: moving a folder copies every object. */
+/** A storage with no rename, like an object store: moving a folder copies every object. */
 function copyingStorage(seed: Record<string, string>) {
   const raw = createMemoryStorage(seed);
   const moves: { path: string; resume: boolean | undefined; overwrite: boolean | undefined }[] = [];

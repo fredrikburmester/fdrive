@@ -53,7 +53,7 @@ beforeAll(async () => {
   await migrate(first.db);
   await first.db
     .insert(providers)
-    .values({ id: providerId, type: "webdav", baseUrl: "http://provider" });
+    .values({ id: providerId, type: "local", baseUrl: "http://provider" });
   a = createIdentityLinksRepo(first.db);
   b = createIdentityLinksRepo(second.db);
 });
@@ -504,7 +504,7 @@ it("compares credentials under the login lock so equal replacements retain both 
 
 it("serializes provider deletion with first login without raw database failures", async () => {
   const repos = createRepos(second.db);
-  const row = await repos.providers.create({ type: "webdav", baseUrl: "http://delete-race" });
+  const row = await repos.providers.create({ type: "local", baseUrl: "http://delete-race" });
   const [login, removal] = await Promise.allSettled([
     a.loginVerified({ ...loginInput("d"), providerId: row.id }),
     repos.providers.delete(row.id),
@@ -521,7 +521,7 @@ it("serializes provider deletion with first login without raw database failures"
 
 it("rolls back every new auth record for a losing setup claimant", async () => {
   const repos = createRepos(second.db);
-  const other = await repos.providers.create({ type: "webdav", baseUrl: "http://other-setup" });
+  const other = await repos.providers.create({ type: "local", baseUrl: "http://other-setup" });
   const key = "test.setup.race";
   const existingAccounts = await first.db.select().from(accounts);
   const results = await Promise.allSettled([

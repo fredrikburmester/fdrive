@@ -2,7 +2,7 @@
 
 **fdrive** is a clean web interface for your home server files. It keeps your files in a plain folder on your server, one folder per user, so you can browse, upload, preview, search, and share them from any browser without moving your data into a database or giving up control. The host's own backups, rsync, SMB or Syncthing keep working on the same folder.
 
-fdrive also offers a native macOS app that puts your files (and other storage providers) directly into Finder.
+fdrive also offers a native macOS app that puts your files directly into Finder.
 
 ![fdrive file browser in dark mode, with folders, favorites, tags, and file details](docs/screenshots/files-list-only-overview.png)
 
@@ -13,7 +13,6 @@ fdrive also offers a native macOS app that puts your files (and other storage pr
 ## Highlights
 
 - **Your files stay yours**: Files remain plain files on your disk, in a folder named after each user. fdrive keeps its own users and adds everything else on top.
-- **Other storage beside it**: Search, thumbnails, shares and Office are built on that folder. You can add a WebDAV server or an S3 bucket (MinIO, Garage, Backblaze B2, Cloudflare R2) beside it for browsing and uploads, without those features.
 - **Lightning fast & clean**: Minimalist, distraction-free interface with dark mode, keyboard navigation, and mobile support.
 - **Instant previews**: Photos, videos, music, PDFs, markdown, and code files open right in your browser.
 - **Smart tags & favorites**: Star items and add custom color tags. They survive renames and moves, even if you rename a file directly on disk.
@@ -159,7 +158,7 @@ for pinning versions and troubleshooting.
 
 **FDrive for Mac** puts your fdrive storage in Finder. Folders appear right away and files
 download when you open them, so your Mac does not need a full copy of your drive. Locations you
-allow as read and write accept saves on every storage type; see
+allow as read and write accept saves; see
 [how writes are kept safe](docs/MACOS.md#write-configuration-and-recovery).
 It is an early release and needs macOS 26 or later on Apple silicon and an fdrive server
 reachable over HTTPS. Mac builds are published under
@@ -213,8 +212,7 @@ ship with bounded concurrency and optional hard caps. See
 - 🔒 **[Advanced Deployment Reference](deploy/REFERENCE.md)**: Custom domain setup, reverse proxies (Caddy / NPM), and security hardening.
 - 💻 **[Development Guide](docs/DEVELOPMENT.md)**: Run the dev stack locally and run tests.
 - 🏷️ **[Releases](docs/RELEASES.md)**: How server releases and their Docker images are published.
-- **[WebDAV](docs/WEBDAV.md) and [S3](docs/S3.md)**: What each storage beside the files folder supports today, and what it does not yet.
-- **[Adding a Storage Provider](docs/STORAGE-PROVIDERS.md)**: Implement, register and test a backend.
+- **[Storage port](docs/STORAGE-PROVIDERS.md)**: The internal boundary between the API and the files folder.
 
 ---
 
@@ -226,8 +224,6 @@ fdrive sits right in the sweet spot:
 1. **Your files stay plain files**: one folder per user on your own disk, readable by every other tool on the host. Nothing is moved into a database.
 2. **fdrive handles the modern web experience**: A polished, responsive browser UI, fast search, document editing, sharing, and mobile-friendly links.
 
-The full experience lives on that folder. Other storage is welcome beside it for plain file management, and features fdrive can provide without its own disk reach that storage one at a time; Trash already has.
-
 ---
 
 ## License
@@ -236,4 +232,4 @@ The fdrive server, web interface, native macOS app, and other first-party code i
 repository are licensed under the [GNU Affero General Public License, version 3 only](LICENSE)
 (`AGPL-3.0-only`), unless otherwise noted.
 
-Third-party dependencies and storage providers retain their own licenses.
+Third-party dependencies retain their own licenses.

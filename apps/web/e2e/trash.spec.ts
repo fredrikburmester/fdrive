@@ -1,8 +1,7 @@
 import { readdir } from "node:fs/promises";
 import { join } from "node:path";
-import { SEED_FILES, SEED_USERS, startMinio } from "@fdrive/testkit";
+import { SEED_FILES, SEED_USERS } from "@fdrive/testkit";
 import { expect, type Locator, type Page, test } from "@playwright/test";
-import { Client } from "pg";
 import { type RunningEnvironment, startEnvironment } from "./support/environment.js";
 import { E2E_HOST } from "./support/paths.js";
 import { getFreePort } from "./support/ports.js";
@@ -17,9 +16,12 @@ function trashRow(page: Page, name: string): Locator {
   return page.locator("table tbody tr").filter({ hasText: name });
 }
 
-/** The Trash settings block of one storage server's row on System > Storage. */
-function trashSettings(page: Page, providerType: "local" | "webdav" | "s3"): Locator {
-  return page.locator(`[data-testid="provider-trash"][data-provider-type="${providerType}"]`);
+/** The Trash card on System > General. */
+function trashSettings(page: Page): Locator {
+  return page
+    .getByRole("main")
+    .locator('[data-slot="card"]')
+    .filter({ has: page.getByRole("switch", { name: "Enable Trash" }) });
 }
 
 async function loginAsAlice(page: Page, webBaseUrl: string): Promise<void> {
@@ -123,8 +125,6 @@ test.describe("trash available", () => {
 
   let environment: RunningEnvironment | undefined;
   let webBaseUrl = "";
-  /** Containers a scenario started for itself, stopped with the environment. */
-  const scenarioStops: Array<() => Promise<void>> = [];
 
   test.beforeAll(async () => {
     // `describe.configure({ timeout })` covers tests, not this hook, which
@@ -132,20 +132,16 @@ test.describe("trash available", () => {
     test.setTimeout(300_000);
     const apiPort = await getFreePort(E2E_HOST);
     const webPort = await getFreePort(E2E_HOST);
-    // No S3 bucket here: the S3 scenario starts its own, so a missing MinIO
-    // image fails that scenario alone.
     environment = await startEnvironment({
       apiPort,
       webPort,
       skipStatePersist: true,
-      webdav: true,
       storage: { users: SEED_USERS, files: SEED_FILES },
     });
     webBaseUrl = environment.webBaseUrl;
   });
 
   test.afterAll(async () => {
-    for (const stop of scenarioStops) await stop().catch(() => undefined);
     await environment?.stop();
   });
 
@@ -281,9 +277,9 @@ test.describe("trash available", () => {
     await expect(secondRow).toBeHidden();
 
     // Settings apply live: disabling removes Trash without restarting the API.
-    // Each storage server's Trash lives on its own row under System > Storage.
-    await page.goto(`${webBaseUrl}/system/storage`);
-    const localTrash = trashSettings(page, "local");
+    // The files folder's Trash lives on System > General, beside its name.
+    await page.goto(`${webBaseUrl}/system/general`);
+    const localTrash = trashSettings(page);
     await localTrash.getByRole("switch", { name: "Enable Trash" }).click();
     await localTrash.getByRole("button", { name: "Save Trash settings" }).click();
     await expect(
@@ -291,211 +287,6 @@ test.describe("trash available", () => {
     ).toBeHidden();
     await page.reload();
     await expect(localTrash.getByRole("switch", { name: "Enable Trash" })).not.toBeChecked();
-  });
-
-  test("a WebDAV login gets a Trash that fdrive fills itself: enable, move, restore", async ({
-    page,
-  }) => {
-    // An environment admin (`FDRIVE_ADMIN_USERS`) is one only on the local
-    // login, and the Trash settings belong to the active login's row. Give
-    // alice's account the owner-wide grant the setup claim would have made,
-    // so she stays admin after switching to the WebDAV login.
-    await page.goto(`${webBaseUrl}/login`);
-    await page.getByLabel("Username").fill("alice");
-    await page.getByLabel("Password").fill("alice-password");
-    await page.getByRole("button", { name: "Sign in" }).click();
-    await page.waitForURL("**/files");
-
-    const headers = { "x-requested-with": "fdrive" };
-    const meBefore = (await (await page.request.get(`${webBaseUrl}/api/v1/auth/me`)).json()) as {
-      account: { id: string };
-    };
-    const db = new Client({ connectionString: environment?.databaseUrl });
-    await db.connect();
-    try {
-      await db.query("update app.accounts set is_admin = true where id = $1", [
-        meBefore.account.id,
-      ]);
-    } finally {
-      await db.end();
-    }
-    if (environment?.webdav === undefined) throw new Error("environment missing its WebDAV server");
-    const created = await page.request.post(`${webBaseUrl}/api/v1/admin/providers`, {
-      headers,
-      data: { type: "webdav", label: "webdav-trash", baseUrl: environment.webdav.url },
-    });
-    expect(created.ok(), await created.text()).toBe(true);
-    const row = (await created.json()) as { id: string };
-    const linked = await page.request.post(`${webBaseUrl}/api/v1/account/identities`, {
-      headers,
-      data: {
-        providerId: row.id,
-        credential: { username: "alice", password: "alice-password" },
-        currentCredential: { password: "alice-password" },
-      },
-    });
-    expect(linked.ok(), await linked.text()).toBe(true);
-    const me = (await linked.json()) as { identities: { id: string; providerType: string }[] };
-    const webdav = me.identities.find((identity) => identity.providerType === "webdav");
-    if (!webdav) throw new Error("WebDAV identity missing after linking");
-    const switched = await page.request.post(`${webBaseUrl}/api/v1/account/active-identity`, {
-      headers,
-      data: { identityId: webdav.id },
-    });
-    expect(switched.ok(), await switched.text()).toBe(true);
-
-    // The form knows this provider moves deleted files itself: no server rule to confirm.
-    // It sits on the WebDAV server's own row, whichever login the tab browses as.
-    await page.goto(`${webBaseUrl}/system/storage`);
-    const davTrash = trashSettings(page, "webdav");
-    await expect(
-      davTrash.getByText("Restore deleted files that fdrive moved into a recycle folder."),
-    ).toBeVisible();
-    await davTrash.getByRole("switch", { name: "Enable Trash" }).click();
-    await expect(davTrash.getByRole("checkbox", { name: /I configured and tested/ })).toHaveCount(
-      0,
-    );
-    await davTrash.getByLabel("Trash folder").fill("/.trash-webdav");
-    await davTrash.getByRole("button", { name: "Save Trash settings" }).click();
-    await expect(
-      page.locator('[data-slot="sidebar"]').getByRole("link", { name: "Trash", exact: true }),
-    ).toBeVisible();
-
-    const fileName = `${uniqueName("dav-trash-me")}.txt`;
-    await page.goto(`${webBaseUrl}/files`);
-    await uploadFiles(page, [{ name: fileName, mimeType: "text/plain", contents: "over dav" }]);
-    await expect(listing(page).getByText(fileName, { exact: true })).toBeVisible({
-      timeout: 15_000,
-    });
-    await moveToTrash(page, fileName);
-    await expect(listing(page).getByText(fileName, { exact: true })).toBeHidden();
-    // The login hides its own Trash folder from the listing.
-    await expect(listing(page).getByText(".trash-webdav", { exact: true })).toHaveCount(0);
-
-    await page.goto(`${webBaseUrl}/trash`);
-    const row2 = trashRow(page, fileName);
-    await expect(row2).toBeVisible({ timeout: 15_000 });
-    await expect(row2).toContainText("Home");
-    await row2.getByRole("checkbox", { name: `Select ${fileName}` }).check();
-    await page.getByRole("button", { name: "Restore", exact: true }).click();
-    await expect(page.getByText("Restored 1 item.")).toBeVisible();
-    await expect(row2).toBeHidden();
-
-    await page.goto(`${webBaseUrl}/files`);
-    await expect(listing(page).getByText(fileName, { exact: true })).toBeVisible({
-      timeout: 15_000,
-    });
-    const restored = await page.request.get(
-      `${webBaseUrl}/api/v1/fs/download?path=${encodeURIComponent(`/${fileName}`)}`,
-    );
-    expect(await restored.text()).toBe("over dav");
-  });
-
-  test("an S3 login gets a Trash that fdrive fills itself: enable, move, restore", async ({
-    page,
-  }) => {
-    // Same owner-wide grant as the WebDAV scenario: alice stays admin after
-    // switching to the S3 login.
-    await page.goto(`${webBaseUrl}/login`);
-    await page.getByLabel("Username").fill("alice");
-    await page.getByLabel("Password").fill("alice-password");
-    await page.getByRole("button", { name: "Sign in" }).click();
-    await page.waitForURL("**/files");
-
-    const headers = { "x-requested-with": "fdrive" };
-    const meBefore = (await (await page.request.get(`${webBaseUrl}/api/v1/auth/me`)).json()) as {
-      account: { id: string };
-    };
-    const db = new Client({ connectionString: environment?.databaseUrl });
-    await db.connect();
-    try {
-      await db.query("update app.accounts set is_admin = true where id = $1", [
-        meBefore.account.id,
-      ]);
-    } finally {
-      await db.end();
-    }
-    // Its own bucket, started here so a missing MinIO image fails this scenario alone.
-    const minio = await startMinio();
-    scenarioStops.push(() => minio.stop());
-    const url = new URL(minio.baseUrl);
-    url.hostname = E2E_HOST;
-    const created = await page.request.post(`${webBaseUrl}/api/v1/admin/providers`, {
-      headers,
-      data: { type: "s3", label: "s3-trash", baseUrl: `${url.origin}${url.pathname}` },
-    });
-    expect(created.ok(), await created.text()).toBe(true);
-    const row = (await created.json()) as { id: string };
-    const linked = await page.request.post(`${webBaseUrl}/api/v1/account/identities`, {
-      headers,
-      data: {
-        providerId: row.id,
-        credential: {
-          username: minio.writer.accessKeyId,
-          password: minio.writer.secretAccessKey,
-        },
-        currentCredential: { password: "alice-password" },
-      },
-    });
-    expect(linked.ok(), await linked.text()).toBe(true);
-    const me = (await linked.json()) as { identities: { id: string; providerType: string }[] };
-    const s3 = me.identities.find((identity) => identity.providerType === "s3");
-    if (!s3) throw new Error("S3 identity missing after linking");
-    const switched = await page.request.post(`${webBaseUrl}/api/v1/account/active-identity`, {
-      headers,
-      data: { identityId: s3.id },
-    });
-    expect(switched.ok(), await switched.text()).toBe(true);
-
-    await page.goto(`${webBaseUrl}/system/storage`);
-    const s3Trash = trashSettings(page, "s3");
-    await expect(
-      s3Trash.getByText("Restore deleted files that fdrive moved into a recycle folder."),
-    ).toBeVisible();
-    await s3Trash.getByRole("switch", { name: "Enable Trash" }).click();
-    await expect(s3Trash.getByRole("checkbox", { name: /I configured and tested/ })).toHaveCount(0);
-    await s3Trash.getByLabel("Trash folder").fill("/.trash-s3");
-    await s3Trash.getByRole("button", { name: "Save Trash settings" }).click();
-    await expect(
-      page.locator('[data-slot="sidebar"]').getByRole("link", { name: "Trash", exact: true }),
-    ).toBeVisible();
-
-    // Shares stays in the sidebar for alice's local login; with the S3
-    // login active the page states the limit instead of failing to load.
-    await page.locator('[data-slot="sidebar"]').getByRole("link", { name: "Shares" }).click();
-    await expect(page.getByText("Shares aren't available for this login")).toBeVisible();
-    await expect(
-      page.getByText(
-        "s3-trash is on storage that can't create share links. Switch to a login on local storage to see its links.",
-      ),
-    ).toBeVisible();
-
-    const fileName = `${uniqueName("s3-trash-me")}.txt`;
-    await page.goto(`${webBaseUrl}/files`);
-    await uploadFiles(page, [{ name: fileName, mimeType: "text/plain", contents: "over s3" }]);
-    await expect(listing(page).getByText(fileName, { exact: true })).toBeVisible({
-      timeout: 15_000,
-    });
-    await moveToTrash(page, fileName);
-    await expect(listing(page).getByText(fileName, { exact: true })).toBeHidden();
-    await expect(listing(page).getByText(".trash-s3", { exact: true })).toHaveCount(0);
-
-    await page.goto(`${webBaseUrl}/trash`);
-    const row2 = trashRow(page, fileName);
-    await expect(row2).toBeVisible({ timeout: 15_000 });
-    await row2.getByRole("checkbox", { name: `Select ${fileName}` }).check();
-    await page.getByRole("button", { name: "Restore", exact: true }).click();
-    await expect(page.getByText("Restored 1 item.")).toBeVisible();
-    await expect(row2).toBeHidden();
-
-    await page.goto(`${webBaseUrl}/files`);
-    await expect(listing(page).getByText(fileName, { exact: true })).toBeVisible({
-      timeout: 15_000,
-    });
-    const restored = await page.request.get(
-      `${webBaseUrl}/api/v1/fs/download?path=${encodeURIComponent(`/${fileName}`)}`,
-    );
-    expect(await restored.text()).toBe("over s3");
   });
 });
 

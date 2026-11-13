@@ -388,8 +388,8 @@ export function UsersPage() {
       ) : null}
       {data !== undefined && !available ? (
         <SystemSection
-          title="No local folder"
-          description="This installation serves no local folder, so it has no users of its own. People sign in with their accounts on the storage under System > Storage. Set FDRIVE_STORAGE_ROOT to serve a folder from this server."
+          title="No files folder"
+          description="This installation serves no files folder, so it has no users yet. Set FDRIVE_STORAGE_ROOT and restart fdrive."
         />
       ) : null}
       {available ? (

@@ -23,7 +23,7 @@ function createClock(startMs: number) {
 }
 
 async function seedIdentity(repos: Repos, master = MASTER): Promise<string> {
-  const provider = await repos.providers.ensure({ type: "webdav", baseUrl: BASE_URL });
+  const provider = await repos.providers.ensure({ type: "local", baseUrl: BASE_URL });
   const account = await repos.accounts.create({ displayName: USERNAME });
   const identity = await repos.identities.create({
     accountId: account.id,
@@ -39,7 +39,7 @@ async function seedIdentity(repos: Repos, master = MASTER): Promise<string> {
   return identity.id;
 }
 
-const MODULES = { webdav: tokenMintingModule() };
+const MODULES = { local: tokenMintingModule() };
 
 function buildFakeServer(tokenTtlMs: number, now: () => Date) {
   return createFakeTokenServer({
@@ -220,7 +220,7 @@ describe("createTokenSource", () => {
       fetch: server.fetch,
       modules: MODULES,
     }).forIdentity(identityId);
-    const { mint: _mint, ...tokenless } = MODULES.webdav;
+    const { mint: _mint, ...tokenless } = MODULES.local;
     const tokenSource = createTokenSource({
       repos,
       providers: { forIdentity: async () => ({ ...resolved, module: tokenless }) },
@@ -252,7 +252,7 @@ describe("createTokenSource", () => {
   });
 
   it("throws reauth_required when there is no stored credential", async () => {
-    const provider = await repos.providers.ensure({ type: "webdav", baseUrl: BASE_URL });
+    const provider = await repos.providers.ensure({ type: "local", baseUrl: BASE_URL });
     const account = await repos.accounts.create({ displayName: "bob" });
     const bob = await repos.identities.create({
       accountId: account.id,
@@ -267,7 +267,7 @@ describe("createTokenSource", () => {
   });
 
   it("throws upstream_unavailable when the identity's provider is disabled", async () => {
-    const provider = await repos.providers.ensure({ type: "webdav", baseUrl: BASE_URL });
+    const provider = await repos.providers.ensure({ type: "local", baseUrl: BASE_URL });
     await repos.providers.update(provider.id, { enabled: false });
     const tokenSource = build();
     await expect(tokenSource.get(identityId)).rejects.toMatchObject({
