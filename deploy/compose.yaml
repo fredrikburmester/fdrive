@@ -19,7 +19,6 @@ x-logging: &default-logging
 
 # The files folder is mounted at /data in api, backup, indexer and ocr, and
 # every one of them runs as FDRIVE_RUN_AS_UID, which must own the files.
-# FDRIVE_INDEX_SFTPGO_DIR and FDRIVE_INDEX_UID, their older names, still work.
 
 services:
   proxy:
@@ -88,7 +87,7 @@ services:
       DATABASE_URL: postgres://fdrive:${POSTGRES_PASSWORD}@db:5432/fdrive
       # The files folder, mounted below, and the uid that owns its files.
       FDRIVE_STORAGE_ROOT: /data
-      FDRIVE_RUN_AS_UID: ${FDRIVE_RUN_AS_UID:-${FDRIVE_INDEX_UID:-1000}}
+      FDRIVE_RUN_AS_UID: ${FDRIVE_RUN_AS_UID:-1000}
       FDRIVE_MASTER_KEY: ${FDRIVE_MASTER_KEY:?set FDRIVE_MASTER_KEY in .env next to compose.yaml, see the fdrive README}
       FDRIVE_SETUP_TOKEN: ${FDRIVE_SETUP_TOKEN:-}
       # Reuse the database secret only inside the private compose network as
@@ -142,7 +141,7 @@ services:
       db:
         condition: service_healthy
     volumes:
-      - ${FDRIVE_FILES_DIR:-${FDRIVE_INDEX_SFTPGO_DIR:-${FDRIVE_DATA_DIR:-./data}/files}}:/data
+      - ${FDRIVE_FILES_DIR:-${FDRIVE_DATA_DIR:-./data}/files}:/data
       - fdrive-thumbs:/thumbs:ro
       - fdrive-desktop:/var/lib/fdrive/desktop
       - fdrive-backups:/var/lib/fdrive/backups
@@ -175,7 +174,7 @@ services:
     tmpfs: ["/tmp"]
     volumes:
       # A backup destination may be a folder in a user's home.
-      - ${FDRIVE_FILES_DIR:-${FDRIVE_INDEX_SFTPGO_DIR:-${FDRIVE_DATA_DIR:-./data}/files}}:/data
+      - ${FDRIVE_FILES_DIR:-${FDRIVE_DATA_DIR:-./data}/files}:/data
       - fdrive-backups:/var/lib/fdrive/backups
       - fdrive-desktop:/var/lib/fdrive/desktop:ro
       - ${FDRIVE_DATA_DIR:-./data}/ocr:/backup-sources/ocr:ro
@@ -236,7 +235,7 @@ services:
     user: "0:0"
     environment:
       # The uid the api writes as, so folders kept at mode 700 stay readable.
-      FDRIVE_RUN_AS_UID: ${FDRIVE_RUN_AS_UID:-${FDRIVE_INDEX_UID:-1000}}
+      FDRIVE_RUN_AS_UID: ${FDRIVE_RUN_AS_UID:-1000}
       DATABASE_URL: postgres://fdrive:${POSTGRES_PASSWORD}@db:5432/fdrive
       # The one indexed root, the files folder mounted below. Nothing is
       # scanned until a feature is selected.
@@ -260,7 +259,7 @@ services:
       # simply moves up a level.
       OMP_THREAD_LIMIT: "1"
     volumes:
-      - ${FDRIVE_FILES_DIR:-${FDRIVE_INDEX_SFTPGO_DIR:-${FDRIVE_DATA_DIR:-./data}/files}}:/data:ro
+      - ${FDRIVE_FILES_DIR:-${FDRIVE_DATA_DIR:-./data}/files}:/data:ro
       - fdrive-thumbs:/thumbs
       - fdrive-indexer-logs:/logs
     depends_on:
@@ -288,7 +287,7 @@ services:
     # drops to that uid for good, before any worker code runs.
     user: "0:0"
     environment:
-      FDRIVE_RUN_AS_UID: ${FDRIVE_RUN_AS_UID:-${FDRIVE_INDEX_UID:-1000}}
+      FDRIVE_RUN_AS_UID: ${FDRIVE_RUN_AS_UID:-1000}
       DATABASE_URL: postgres://fdrive:${POSTGRES_PASSWORD}@db:5432/fdrive
       INDEX_ROOTS: files=/data
       OCR_PORT: "8011"
@@ -300,7 +299,7 @@ services:
       # still applies on top. Empty (the default) means no restriction.
       OCR_INCLUDE_GLOBS: ${OCR_INCLUDE_GLOBS:-}
     volumes:
-      - ${FDRIVE_FILES_DIR:-${FDRIVE_INDEX_SFTPGO_DIR:-${FDRIVE_DATA_DIR:-./data}/files}}:/data
+      - ${FDRIVE_FILES_DIR:-${FDRIVE_DATA_DIR:-./data}/files}:/data
       - ${FDRIVE_DATA_DIR:-./data}/ocr:/state
     depends_on:
       db:
