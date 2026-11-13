@@ -17,7 +17,6 @@ use fdrive_indexer::db::{self, Db, NewFile};
 use fdrive_indexer::extract::{ContentExtractor, MAX_CONTENT_BYTES};
 use fdrive_indexer::failures;
 use fdrive_indexer::features::FeatureValues;
-use fdrive_indexer::fsx;
 use fdrive_indexer::indexer::RootContext;
 use fdrive_indexer::jobs::Job;
 use fdrive_indexer::paths::{basename, ext_of};
@@ -570,6 +569,9 @@ fn extract_reads_pdfs_and_office_documents_through_the_descriptor() {
     assert_eq!(seen.last().unwrap().body, b"office descriptor bytes");
 }
 
+// Only Linux has `/proc/self/fd`, which reopens the opened inode; macOS development builds
+// reopen the plain path (see `fsx::OpenedFile::path`).
+#[cfg(target_os = "linux")]
 #[test]
 fn an_open_file_stays_bound_after_its_entry_is_replaced() {
     let dir = tempfile::tempdir().unwrap();
@@ -578,7 +580,7 @@ fn an_open_file_stays_bound_after_its_entry_is_replaced() {
     let requested = base.join("root/readme.txt");
     std::fs::write(&requested, "inside data").unwrap();
     std::fs::write(base.join("outside.txt"), "outside secret").unwrap();
-    let opened = fsx::open_file(&base.join("root"), &["readme.txt".to_owned()]).unwrap();
+    let opened = fdrive_indexer::fsx::open_file(&base.join("root"), &["readme.txt".to_owned()]).unwrap();
     std::fs::remove_file(&requested).unwrap();
     symlink(base.join("outside.txt"), &requested).unwrap();
     assert_eq!(std::fs::read(opened.path()).unwrap(), b"inside data");
