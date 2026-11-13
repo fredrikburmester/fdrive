@@ -1,5 +1,5 @@
 import { NAME_MATCH_BOOST, recencyWeight, type Scope } from "@fdrive/core";
-import type { ContentHit, FilenameHit, IndexedFile, IndexQueries } from "@fdrive/db";
+import type { ContentHit, FilenameHit, FolderHit, IndexedFile, IndexQueries } from "@fdrive/db";
 import { describe, expect, it, vi } from "vitest";
 import type {
   ReadAuthorizeReason,
@@ -23,6 +23,7 @@ function fakeIndexQueries(overrides: Partial<IndexQueries> = {}): IndexQueries {
     semantic: overrides.semantic ?? (async () => fail("semantic")),
     fulltext: overrides.fulltext ?? (async () => fail("fulltext")),
     filename: overrides.filename ?? (async () => fail("filename")),
+    folders: overrides.folders ?? (async () => []),
     filesByIds: overrides.filesByIds ?? (async () => fail("filesByIds")),
     fileByPath: overrides.fileByPath ?? (async () => fail("fileByPath")),
     listFiles: overrides.listFiles ?? (async () => fail("listFiles")),
@@ -62,6 +63,30 @@ function makeFile(overrides: Partial<IndexedFile> & { id: number }): IndexedFile
     deletedAt: null,
     ...overrides,
   };
+}
+
+const DAY_NS = 86_400_000_000_000n;
+const NOW_NS = BigInt(NOW.getTime()) * 1_000_000n;
+
+function makeFolder(path: string, ageDays = 0, rootId = 1): FolderHit {
+  return {
+    rootId,
+    path,
+    name: path.slice(path.lastIndexOf("/") + 1),
+    mtimeNs: NOW_NS - BigInt(ageDays) * DAY_NS,
+  };
+}
+
+/** Index queries where nothing but `folders` finds anything. */
+function folderOnlyQueries(rows: readonly FolderHit[], overrides: Partial<IndexQueries> = {}) {
+  return fakeIndexQueries({
+    rootIdsByName: async () => ({ files: 1 }),
+    semantic: async () => [],
+    fulltext: async () => [],
+    filename: async () => [],
+    folders: async () => [...rows],
+    ...overrides,
+  });
 }
 
 /** An authorizer that allows every target unless `denied`/`unavailable` says otherwise. */
@@ -685,36 +710,119 @@ describe("createSearchService: search - hits", () => {
     expect(thumbnail).not.toHaveBeenCalled();
   });
 
-  it("derives up to five authorized folders from the filename query's parent paths", async () => {
-    const files = Array.from({ length: 7 }, (_, i) =>
-      makeFile({ id: i + 1, path: `alice/folder${i}/report.pdf`, name: "report.pdf" }),
+  it("finds a folder by its own name, empty or not, when no file matches", async () => {
+    const folders = vi.fn(async () => [makeFolder("alice/Microlärande", 2)]);
+    const service = createSearchService(
+      buildDeps({ indexQueries: folderOnlyQueries([], { folders }) }),
     );
-    const filenameHits: FilenameHit[] = files.map((f) => ({
-      fileId: f.id,
-      hits: 1,
-      similarity: 0.5,
-    }));
-    const indexQueries = fakeIndexQueries({
-      rootIdsByName: async () => ({ files: 1 }),
-      semantic: async () => [],
-      fulltext: async () => [],
-      filename: async () => filenameHits,
-      filesByIds: async () => files,
+
+    const result = await service.search(baseInput({ query: "Microlä" }));
+
+    expect(result.sections).toEqual({
+      folders: [
+        {
+          name: "Microlärande",
+          path: "/Microlärande",
+          kind: "dir",
+          size: 0,
+          modifiedAt: "2026-02-27T00:00:00.000Z",
+          ext: "",
+          mime: null,
+        },
+      ],
+      files: [],
+      content: [],
     });
-    const service = createSearchService(buildDeps({ indexQueries }));
+    expect(result.partial).toBeUndefined();
+    expect(folders).toHaveBeenCalledWith(
+      [{ rootId: 1, fsPrefix: "/alice" }],
+      ["microlä"],
+      "Microlä",
+      50,
+      { recency: { now: NOW, halfLifeDays: 180, floor: 0.4 }, exclude: [] },
+    );
+  });
 
-    const result = await service.search(baseInput({ limit: 100 }));
+  it("ranks folders by how their name matches, then by age", async () => {
+    const rows = [
+      makeFolder("alice/a/Old plan", 400),
+      makeFolder("alice/b/Airplanes", 0),
+      makeFolder("alice/c/Plan", 30),
+      makeFolder("alice/d/New plan", 0),
+      makeFolder("alice/e/plan", 30),
+    ];
+    const service = createSearchService(buildDeps({ indexQueries: folderOnlyQueries(rows) }));
 
-    expect(result.sections.folders).toHaveLength(5);
-    expect(result.sections.folders[0]).toMatchObject({ kind: "dir", size: 0, ext: "", mime: null });
+    const result = await service.search(baseInput({ query: "plan" }));
+
+    // Equal matches and ages fall back to the path, so the order never flickers.
+    expect(result.sections.folders.map((folder) => folder.path)).toEqual([
+      "/c/Plan",
+      "/e/plan",
+      "/d/New plan",
+      "/a/Old plan",
+      "/b/Airplanes",
+    ]);
+  });
+
+  it("shows at most five folders, skipping ones the authorizer denies", async () => {
+    const rows = Array.from({ length: 8 }, (_, i) => makeFolder(`alice/plan ${i}`, i));
+    const service = createSearchService(buildDeps({ indexQueries: folderOnlyQueries(rows) }));
+    const authorizer = fakeAuthorizer({ denied: new Set(["dir:/plan 0", "dir:/plan 2"]) });
+
+    const result = await service.search(baseInput({ query: "plan", authorizer }));
+
+    expect(result.sections.folders.map((folder) => folder.name)).toEqual([
+      "plan 1",
+      "plan 3",
+      "plan 4",
+      "plan 5",
+      "plan 6",
+    ]);
+    expect(result.partial).toBeUndefined();
+  });
+
+  it("leaves out the caller's home, other users' folders and the folder a folder filter starts in", async () => {
+    const rows = [
+      makeFolder("alice"),
+      makeFolder("bob/plan"),
+      makeFolder("alice/plan"),
+      makeFolder("alice/plan/plan b"),
+      makeFolder("alice/other/plan c"),
+      makeFolder("alice/plan", 0, 99),
+    ];
+    const service = createSearchService(buildDeps({ indexQueries: folderOnlyQueries(rows) }));
+
+    const all = await service.search(baseInput({ query: "plan" }));
+    const within = await service.search(
+      baseInput({ query: "plan", filters: { ...NO_FILTERS, folder: "/plan" } }),
+    );
+
+    expect(all.sections.folders.map((folder) => folder.path)).toEqual([
+      "/plan",
+      "/other/plan c",
+      "/plan/plan b",
+    ]);
+    expect(within.sections.folders.map((folder) => folder.path)).toEqual(["/plan/plan b"]);
+  });
+
+  it("applies the date filters to a folder's modification time", async () => {
+    const rows = [makeFolder("alice/plan new", 1), makeFolder("alice/plan old", 100)];
+    const service = createSearchService(buildDeps({ indexQueries: folderOnlyQueries(rows) }));
+
+    const result = await service.search(
+      baseInput({
+        query: "plan",
+        filters: { ...NO_FILTERS, after: new Date("2026-02-01T00:00:00.000Z") },
+      }),
+    );
+
+    expect(result.sections.folders.map((folder) => folder.name)).toEqual(["plan new"]);
   });
 
   it("starts folder authorization before file probes and waits for both", async () => {
     const file = makeFile({ id: 78, path: "alice/folder/report.pdf", name: "report.pdf" });
-    const indexQueries = fakeIndexQueries({
-      rootIdsByName: async () => ({ files: 1 }),
-      semantic: async () => [],
-      fulltext: async () => [],
+    const indexQueries = folderOnlyQueries([makeFolder("alice/report folder")], {
       filename: async () => [{ fileId: 78, hits: 1, similarity: 0.5 }],
       filesByIds: async () => [file],
     });
@@ -736,10 +844,10 @@ describe("createSearchService: search - hits", () => {
     };
     const service = createSearchService(buildDeps({ indexQueries }));
 
-    const pending = service.search(baseInput({ authorizer }));
+    const pending = service.search(baseInput({ query: "report", authorizer }));
     await vi.waitFor(() => expect(calls).toHaveLength(2));
     expect(calls).toEqual([
-      { path: "/folder", kind: "dir" },
+      { path: "/report folder", kind: "dir" },
       { path: "/folder/report.pdf", kind: "file" },
     ]);
 
@@ -757,72 +865,37 @@ describe("createSearchService: search - hits", () => {
     expect(result.sections.files).toHaveLength(1);
   });
 
-  it("suppresses the Folders section entirely when a type filter is active, even though matching parent folders exist", async () => {
-    const files = Array.from({ length: 3 }, (_, i) =>
-      makeFile({ id: i + 1, path: `alice/folder${i}/report.pdf`, name: "report.pdf", ext: ".pdf" }),
-    );
-    const filenameHits: FilenameHit[] = files.map((f) => ({
-      fileId: f.id,
-      hits: 1,
-      similarity: 0.5,
-    }));
-    const indexQueries = fakeIndexQueries({
-      rootIdsByName: async () => ({ files: 1 }),
-      semantic: async () => [],
-      fulltext: async () => [],
-      filename: async () => filenameHits,
-      filesByIds: async () => files,
-    });
-    const service = createSearchService(buildDeps({ indexQueries }));
-
-    const result = await service.search(
-      baseInput({
-        query: "report",
-        limit: 100,
-        filters: { exts: [".pdf"], folder: null, after: null, before: null },
-      }),
-    );
-
-    expect(result.sections.folders).toEqual([]);
-    // The type filter is files-only: it does not suppress the Files
-    // section, only the Folders derivation.
-    expect(result.sections.files.length).toBeGreaterThan(0);
-  });
-
-  it("never calls the authorizer for a folder while a type filter is active", async () => {
-    const file = makeFile({ id: 80, path: "alice/private/x.pdf", name: "x.pdf", ext: ".pdf" });
-    const indexQueries = fakeIndexQueries({
-      rootIdsByName: async () => ({ files: 1 }),
-      semantic: async () => [],
-      fulltext: async () => [],
+  it("neither queries nor authorizes folders while a type filter is active", async () => {
+    const file = makeFile({ id: 80, path: "alice/report/x.pdf", name: "report.pdf", ext: ".pdf" });
+    const folders = vi.fn(async () => [makeFolder("alice/report")]);
+    const indexQueries = folderOnlyQueries([], {
+      folders,
       filename: async () => [{ fileId: 80, hits: 1, similarity: 0.5 }],
       filesByIds: async () => [file],
     });
     const service = createSearchService(buildDeps({ indexQueries }));
     const calls: ReadAuthorizeTarget[] = [];
-    const authorizer = fakeAuthorizer({ calls });
 
-    await service.search(
+    const result = await service.search(
       baseInput({
-        authorizer,
-        filters: { exts: [".pdf"], folder: null, after: null, before: null },
+        query: "report",
+        authorizer: fakeAuthorizer({ calls }),
+        filters: { ...NO_FILTERS, exts: [".pdf"] },
       }),
     );
 
+    expect(folders).not.toHaveBeenCalled();
     expect(calls.some((call) => call.kind === "dir")).toBe(false);
+    expect(result.sections.folders).toEqual([]);
+    // The type filter is files-only: the Files section still lists the match.
+    expect(result.sections.files).toHaveLength(1);
   });
 
   it("marks the response partial when a folder's live-read check reports unavailable", async () => {
-    const file = makeFile({ id: 65, path: "alice/flaky/report.pdf", ext: ".pdf" });
-    const indexQueries = fakeIndexQueries({
-      rootIdsByName: async () => ({ files: 1 }),
-      semantic: async () => [],
-      fulltext: async () => [],
-      filename: async () => [{ fileId: 65, hits: 1, similarity: 0.5 }],
-      filesByIds: async () => [file],
-    });
-    const service = createSearchService(buildDeps({ indexQueries }));
-    const authorizer = fakeAuthorizer({ unavailable: new Set(["dir:/flaky"]) });
+    const service = createSearchService(
+      buildDeps({ indexQueries: folderOnlyQueries([makeFolder("alice/flaky readme")]) }),
+    );
+    const authorizer = fakeAuthorizer({ unavailable: new Set(["dir:/flaky readme"]) });
 
     const result = await service.search(baseInput({ authorizer }));
 
@@ -830,49 +903,35 @@ describe("createSearchService: search - hits", () => {
     expect(result.partial).toBe(true);
   });
 
-  it("drops a folder the authorizer denies list access to", async () => {
-    const file = makeFile({ id: 63, path: "alice/private/x.txt" });
-    const indexQueries = fakeIndexQueries({
-      rootIdsByName: async () => ({ files: 1 }),
-      semantic: async () => [],
-      fulltext: async () => [],
-      filename: async () => [{ fileId: 63, hits: 1, similarity: 0.5 }],
-      filesByIds: async () => [file],
-    });
-    const service = createSearchService(buildDeps({ indexQueries }));
-    const authorizer = fakeAuthorizer({ denied: new Set(["dir:/private"]) });
+  it("marks the response partial when the folder fanout was cut", async () => {
+    const rows = Array.from({ length: 50 }, (_, i) => makeFolder(`alice/readme ${i}`));
+    const service = createSearchService(buildDeps({ indexQueries: folderOnlyQueries(rows) }));
 
-    const result = await service.search(baseInput({ authorizer }));
+    const result = await service.search(baseInput());
 
-    expect(result.sections.folders).toEqual([]);
+    expect(result.sections.folders).toHaveLength(5);
+    expect(result.partial).toBe(true);
   });
 
   it("checks folder access with kind dir, distinct from file checks on the same path", async () => {
-    const file = makeFile({ id: 64, path: "alice/private/x.txt" });
-    const indexQueries = fakeIndexQueries({
-      rootIdsByName: async () => ({ files: 1 }),
-      semantic: async () => [],
-      fulltext: async () => [],
+    const file = makeFile({ id: 64, path: "alice/readme/readme.txt", name: "readme.txt" });
+    const indexQueries = folderOnlyQueries([makeFolder("alice/readme")], {
       filename: async () => [{ fileId: 64, hits: 1, similarity: 0.5 }],
       filesByIds: async () => [file],
     });
     const service = createSearchService(buildDeps({ indexQueries }));
     const calls: ReadAuthorizeTarget[] = [];
-    const authorizer = fakeAuthorizer({ calls });
 
-    await service.search(baseInput({ authorizer }));
+    await service.search(baseInput({ authorizer: fakeAuthorizer({ calls }) }));
 
-    expect(calls).toContainEqual({ path: "/private/x.txt", kind: "file" });
-    expect(calls).toContainEqual({ path: "/private", kind: "dir" });
+    expect(calls).toContainEqual({ path: "/readme/readme.txt", kind: "file" });
+    expect(calls).toContainEqual({ path: "/readme", kind: "dir" });
   });
 
-  it("skips a folder whose file's root cannot be mapped back to a virtual path", async () => {
-    const file = makeFile({ id: 70, rootId: 99 });
-    const indexQueries = fakeIndexQueries({
-      rootIdsByName: async () => ({ files: 1 }),
-      semantic: async () => [],
-      fulltext: async () => [],
-      filename: async () => [{ fileId: 70, hits: 1, similarity: 0.5 }],
+  it("no longer lists the folder a matching file is in", async () => {
+    const file = makeFile({ id: 63, path: "alice/microtest/readme.txt", name: "readme.txt" });
+    const indexQueries = folderOnlyQueries([], {
+      filename: async () => [{ fileId: 63, hits: 1, similarity: 0.5 }],
       filesByIds: async () => [file],
     });
     const service = createSearchService(buildDeps({ indexQueries }));
@@ -880,17 +939,20 @@ describe("createSearchService: search - hits", () => {
     const result = await service.search(baseInput());
 
     expect(result.sections.folders).toEqual([]);
+    expect(result.sections.files.map((hit) => hit.path)).toEqual(["/microtest/readme.txt"]);
   });
 
   it("asks every query to leave out the Trash, mapped through the scopes, before its limit", async () => {
     const semantic = vi.fn(async () => []);
     const fulltext = vi.fn(async () => []);
     const filename = vi.fn(async () => []);
+    const folders = vi.fn(async () => []);
     const indexQueries = fakeIndexQueries({
       rootIdsByName: async () => ({ files: 1 }),
       semantic,
       fulltext,
       filename,
+      folders,
     });
     const embedClient: EmbedClient = { embed: async () => [0.1] };
     const service = createSearchService(
@@ -912,6 +974,13 @@ describe("createSearchService: search - hits", () => {
       ["readme"],
       "readme",
       25,
+      expect.objectContaining({ exclude }),
+    );
+    expect(folders).toHaveBeenCalledWith(
+      expect.anything(),
+      ["readme"],
+      "readme",
+      50,
       expect.objectContaining({ exclude }),
     );
   });

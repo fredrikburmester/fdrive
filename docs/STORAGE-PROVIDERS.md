@@ -102,8 +102,9 @@ How the files folder implements it:
 - **Ownership.** The API writes as `FDRIVE_RUN_AS_UID`, the uid the indexer and OCR use.
 - **Changes for the indexer.** Storage reports each change once it succeeds (`onChange`, a
   `DiskChange` by absolute path; [changes.ts](../packages/local/src/changes.ts)): an upload,
-  copy, delete or new modification time is `changed`, a move is `moved`, and `mkdir` reports
-  nothing. An upload's change carries the sha256 of the bytes written, the size,
+  copy, delete, new modification time or new folder is `changed` (for `mkdir` with `parents`,
+  the first folder it made, and nothing when every folder existed), and a move is `moved`.
+  An upload's change carries the sha256 of the bytes written, the size,
   `mtimeNs` and inode of the file before it is published, and the change time once it is;
   when the published name no longer holds that inode, the change carries no content.
   Hashing runs only while something listens. The module turns these into paths under the index root (`onIndexChange`), and the

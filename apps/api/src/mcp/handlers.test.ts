@@ -69,6 +69,7 @@ function stubIndexQueries(overrides: Partial<IndexQueries> = {}): IndexQueries {
     semantic: overrides.semantic ?? (async () => fail("semantic")),
     fulltext: overrides.fulltext ?? (async () => fail("fulltext")),
     filename: overrides.filename ?? (async () => fail("filename")),
+    folders: overrides.folders ?? (async () => fail("folders")),
     filesByIds: overrides.filesByIds ?? (async () => fail("filesByIds")),
     fileByPath: overrides.fileByPath ?? (async () => fail("fileByPath")),
     listFiles: overrides.listFiles ?? (async () => fail("listFiles")),

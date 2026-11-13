@@ -1,6 +1,12 @@
 import { createHash } from "node:crypto";
 import type { StorageProvider, StorageSession } from "@fdrive/core";
-import { createDb, createIndexWorkWriter, createRepos, migrate } from "@fdrive/db";
+import {
+  createDb,
+  createIndexQueries,
+  createIndexWorkWriter,
+  createRepos,
+  migrate,
+} from "@fdrive/db";
 import { createLocalModule, type LocalUsers } from "@fdrive/local";
 import { sql } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -125,6 +131,35 @@ describe("changes fdrive makes, through the real indexer with its watcher off", 
     );
     expect(events.rows.map((row) => row.kind)).toEqual(["created", "moved", "deleted"]);
     await expect.poll(() => count("idx.work"), { timeout: 15_000, interval: 100 }).toBe(0);
+    expect(await count("idx.scans")).toBe(scans);
+    expect(failures).toEqual([]);
+  });
+
+  it("records a new folder, empty or not, so search finds it by name within seconds", async () => {
+    const scans = await count("idx.scans");
+    const queries = createIndexQueries(connection.db);
+    const roots = await queries.rootIdsByName();
+    const scope = [{ rootId: roots.files ?? -1, fsPrefix: "/alice" }];
+    const found = async () =>
+      (await queries.folders(scope, ["microlä"], "Microlä", 10)).map((row) =>
+        row.path.normalize("NFC"),
+      );
+
+    await storage.mkdir("/Kurser/Microlärande", { parents: true });
+    await queue.flush();
+    await expect
+      .poll(found, { timeout: 15_000, interval: 100 })
+      .toEqual(["alice/Kurser/Microlärande"]);
+
+    await storage.move("/Kurser/Microlärande", "/Microlärande 2026");
+    await queue.flush();
+    await expect
+      .poll(found, { timeout: 15_000, interval: 100 })
+      .toEqual(["alice/Microlärande 2026"]);
+
+    await storage.deleteDir("/Microlärande 2026");
+    await queue.flush();
+    await expect.poll(found, { timeout: 15_000, interval: 100 }).toEqual([]);
     expect(await count("idx.scans")).toBe(scans);
     expect(failures).toEqual([]);
   });

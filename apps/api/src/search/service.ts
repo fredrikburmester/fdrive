@@ -18,7 +18,14 @@ import {
   type SearchFilters,
   toPrefixTsQuery,
 } from "@fdrive/core";
-import type { ContentHit, FilenameHit, IndexedFile, IndexQueries, ScopePrefix } from "@fdrive/db";
+import type {
+  ContentHit,
+  FilenameHit,
+  FolderHit,
+  IndexedFile,
+  IndexQueries,
+  ScopePrefix,
+} from "@fdrive/db";
 import type {
   ReadAuthorizeResult,
   ReadAuthorizer,
@@ -32,7 +39,9 @@ import { dateFromMtimeNs, trashExclusion } from "./scopes.js";
 const CONTENT_FANOUT_LIMIT = 60;
 /** filesai's filename query caps at `LIMIT 25`. */
 const FILENAME_FANOUT_LIMIT = 25;
-/** At most this many derived folders are shown. */
+/** Folders whose name matched, read before ranking and authorization. */
+const FOLDER_FANOUT_LIMIT = 50;
+/** At most this many folders are shown. */
 const MAX_FOLDERS = 5;
 /** At most this many hits are shown in the "content matches" section. */
 const MAX_CONTENT_HITS = 10;
@@ -103,64 +112,70 @@ function emptyResponse(
   };
 }
 
-interface DeriveFoldersInput {
-  readonly filenameRows: readonly FilenameHit[];
-  readonly fileById: ReadonlyMap<number, IndexedFile>;
-  /** Resolves an indexed file to its caller-visible virtual path, `null` when it is out of scope. */
-  readonly virtualPathFor: (file: IndexedFile) => string | null;
+interface RankFoldersInput {
+  readonly rows: readonly FolderHit[];
+  readonly query: string;
+  readonly filters: SearchFilters;
+  readonly now: Date;
+  /** Resolves an indexed path to its caller-visible virtual path, `null` when it is out of scope. */
+  readonly virtualPathFor: (rootId: number, path: string) => string | null;
   readonly authorizer: Pick<ReadAuthorizer, "authorize">;
   /** Called once per candidate folder whose live-read check itself failed (not merely "denied"). */
   readonly onAuthUnavailable: () => void;
 }
 
+interface FolderCandidate {
+  readonly path: string;
+  readonly modifiedAt: Date;
+  readonly score: number;
+}
+
 /**
- * Derives the Folders section: the most recently modified parent directory
- * of each filename-matched file, live-read checked and capped at
- * `MAX_FOLDERS`. Never called while a type filter (`SearchFilters.exts`) is
- * active, since a type filter is a files-only filter and the candidate
- * folders below are not themselves filtered by extension (see the `search`
- * handler's call site).
+ * The Folders section: folders whose own name answers the query, empty ones
+ * included, ranked like files by how the name matches (`nameMatch`) and then
+ * by age (`recencyWeight`), live-read checked and capped at `MAX_FOLDERS`.
+ * The caller's own home (`/`) and the folder a folder filter starts at are
+ * left out. Never called while a type filter (`SearchFilters.exts`) is
+ * active: a type filter is a files-only filter.
  */
-async function deriveFolders(input: DeriveFoldersInput): Promise<FsEntry[]> {
-  const folderCandidates = new Map<string, Date>();
-  for (const row of input.filenameRows) {
-    const file = input.fileById.get(row.fileId);
-    if (file === undefined) {
+async function rankFolders(input: RankFoldersInput): Promise<FsEntry[]> {
+  const candidates = new Map<string, FolderCandidate>();
+  for (const row of input.rows) {
+    const path = input.virtualPathFor(row.rootId, row.path);
+    if (path === null || path === "/" || path === input.filters.folder || candidates.has(path)) {
       continue;
     }
-    const virtualPath = input.virtualPathFor(file);
-    if (virtualPath === null) {
+    const modifiedAt = dateFromMtimeNs(row.mtimeNs);
+    if (!matchesSearchFilters({ path, ext: "", modifiedAt }, input.filters)) {
       continue;
     }
-    const folder = parentPath(virtualPath);
-    const modifiedAt = dateFromMtimeNs(file.mtimeNs);
-    const existing = folderCandidates.get(folder);
-    if (existing === undefined || modifiedAt.getTime() > existing.getTime()) {
-      folderCandidates.set(folder, modifiedAt);
-    }
+    const match = nameMatch(input.query, { name: baseName(path), folder: parentPath(path) });
+    const score = (1 + NAME_MATCH_BOOST[match]) * recencyWeight(modifiedAt, input.now);
+    candidates.set(path, { path, modifiedAt, score });
   }
 
+  const ranked = Array.from(candidates.values()).sort(
+    (a, b) => b.score - a.score || a.path.localeCompare(b.path),
+  );
   const resolvedFolders = await Promise.all(
-    Array.from(folderCandidates.entries()).map(
-      async ([path, modifiedAt]): Promise<FsEntry | null> => {
-        const authResult = await input.authorizer.authorize({ path, kind: "dir" });
-        if (!authResult.allowed) {
-          if (authResult.reason === "unavailable") {
-            input.onAuthUnavailable();
-          }
-          return null;
+    ranked.map(async ({ path, modifiedAt }): Promise<FsEntry | null> => {
+      const authResult = await input.authorizer.authorize({ path, kind: "dir" });
+      if (!authResult.allowed) {
+        if (authResult.reason === "unavailable") {
+          input.onAuthUnavailable();
         }
-        return {
-          name: baseName(path),
-          path,
-          kind: "dir",
-          size: 0,
-          modifiedAt: modifiedAt.toISOString(),
-          ext: "",
-          mime: null,
-        };
-      },
-    ),
+        return null;
+      }
+      return {
+        name: baseName(path),
+        path,
+        kind: "dir",
+        size: 0,
+        modifiedAt: modifiedAt.toISOString(),
+        ext: "",
+        mime: null,
+      };
+    }),
   );
   return resolvedFolders.filter((entry): entry is FsEntry => entry !== null).slice(0, MAX_FOLDERS);
 }
@@ -219,12 +234,16 @@ export function createSearchService(deps: SearchServiceDeps): SearchService {
         return promise;
       }
 
-      function virtualPathFor(file: IndexedFile): string | null {
-        const rootName = rootNameById.get(file.rootId);
+      function pathFor(rootId: number, path: string): string | null {
+        const rootName = rootNameById.get(rootId);
         if (rootName === undefined) {
           return null;
         }
-        return roundTripVirtualPath(input.scopes, rootName, file.path);
+        return roundTripVirtualPath(input.scopes, rootName, path);
+      }
+
+      function virtualPathFor(file: IndexedFile): string | null {
+        return pathFor(file.rootId, file.path);
       }
 
       let authUnavailable = false;
@@ -291,6 +310,28 @@ export function createSearchService(deps: SearchServiceDeps): SearchService {
               exclude,
             })
           : Promise.resolve<FilenameHit[]>([]);
+      const folderRowsPromise =
+        input.filters.exts === null && words.length > 0
+          ? deps.indexQueries.folders(prefixes, words, input.query, FOLDER_FANOUT_LIMIT, {
+              recency,
+              exclude,
+            })
+          : Promise.resolve<FolderHit[]>([]);
+      // Folder probes start before any file probe, so the request-local
+      // authorization semaphore does not queue them behind every ranked file.
+      const foldersPromise = folderRowsPromise.then((rows) =>
+        rankFolders({
+          rows,
+          query: input.query,
+          filters: input.filters,
+          now: startedAt,
+          virtualPathFor: pathFor,
+          authorizer: { authorize: authorizeMemo },
+          onAuthUnavailable: () => {
+            authUnavailable = true;
+          },
+        }),
+      );
       const embeddingPromise =
         deps.embedClient !== null && features?.semanticSearch !== false
           ? deps.embedClient.embed(input.query)
@@ -303,11 +344,12 @@ export function createSearchService(deps: SearchServiceDeps): SearchService {
         ),
       );
 
-      const [embedding, semanticRows, fulltextRows, filenameRows] = await Promise.all([
+      const [embedding, semanticRows, fulltextRows, filenameRows, folderRows] = await Promise.all([
         embeddingPromise,
         semanticPipeline,
         fulltextPipeline,
         filenamePromise,
+        folderRowsPromise,
       ]);
       const degraded = features?.semanticSearch !== false && embedding === null;
 
@@ -317,7 +359,8 @@ export function createSearchService(deps: SearchServiceDeps): SearchService {
       const fanoutCut =
         semanticRows.length >= CONTENT_FANOUT_LIMIT ||
         fulltextRows.length >= CONTENT_FANOUT_LIMIT ||
-        filenameRows.length >= FILENAME_FANOUT_LIMIT;
+        filenameRows.length >= FILENAME_FANOUT_LIMIT ||
+        folderRows.length >= FOLDER_FANOUT_LIMIT;
 
       const textFused = fuseRankings<number>([
         semanticRows.map((row) => ({ id: row.fileId, snippet: row.snippet })),
@@ -337,11 +380,15 @@ export function createSearchService(deps: SearchServiceDeps): SearchService {
       });
 
       if (scoreById.size === 0) {
-        return emptyResponse(input.query, tookMs(), {
-          degraded,
-          unavailable: false,
-          partial: fanoutCut,
-        });
+        const folders = await foldersPromise;
+        return {
+          ...emptyResponse(input.query, tookMs(), {
+            degraded,
+            unavailable: false,
+            partial: fanoutCut || authUnavailable,
+          }),
+          sections: { folders, files: [], content: [] },
+        };
       }
 
       const loadedFiles = await deps.indexQueries.filesByIds(Array.from(scoreById.keys()));
@@ -364,21 +411,6 @@ export function createSearchService(deps: SearchServiceDeps): SearchService {
           return [id, (boost + fused) * recencyWeight(dateFromMtimeNs(file.mtimeNs), startedAt)];
         })
         .sort((a, b) => b[1] - a[1]);
-
-      // Start folder probes first so the request-local authorization
-      // semaphore does not queue them behind every ranked file probe.
-      const foldersPromise: Promise<FsEntry[]> =
-        input.filters.exts === null
-          ? deriveFolders({
-              filenameRows,
-              fileById,
-              virtualPathFor,
-              authorizer: { authorize: authorizeMemo },
-              onAuthUnavailable: () => {
-                authUnavailable = true;
-              },
-            })
-          : Promise.resolve([]);
 
       // Every ranked candidate (bounded by the fanout above, not by
       // `input.limit`) is round-tripped and live-read checked; the limit is

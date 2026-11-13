@@ -46,6 +46,7 @@ function stubIndexQueries(): IndexQueries {
     semantic: async () => fail("semantic"),
     fulltext: async () => fail("fulltext"),
     filename: async () => fail("filename"),
+    folders: async () => fail("folders"),
     filesByIds: async () => fail("filesByIds"),
     fileByPath: async () => null,
     listFiles: async () => ({ total: 0, files: [] }),
