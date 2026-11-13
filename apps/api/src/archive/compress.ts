@@ -10,7 +10,6 @@ import {
   archiveExtensionFor,
   baseName,
   isPrecompressedEntry,
-  isStorageError,
   type StorageProvider,
 } from "@fdrive/core";
 import * as tar from "tar-stream";
@@ -80,18 +79,6 @@ async function collectFiles(
 /**
  * Resolves a top-level compress selection, whose kind (file or directory)
  * fdrive does not already know, and adds it (or its contents) to `out`.
- *
- * Tries `statFile` (a `HEAD`) first, not `list` (a `GET` to SFTPGo's `dirs`
- * endpoint): `statFile` is safe for every outcome here, since it returns
- * the file's stat directly on success or a clean `bad_request` when `path`
- * is actually a directory. Calling `list` directly on a path that turns
- * out to be a plain file would do the same job against the in-memory fake
- * server this is tested against, but a real SFTPGo server (verified
- * against v2.7.5) drops the connection outright in that case instead of
- * responding with a clean error, which surfaces to callers as an
- * indistinguishable-from-a-real-outage "fetch failed", failing the whole
- * compress job. Only once `statFile` has ruled out `path` being a file
- * does this fall through to `collectDirectory`, which lists it.
  */
 async function collectPath(
   storage: StorageProvider,
@@ -102,23 +89,19 @@ async function collectPath(
 ): Promise<void> {
   throwIfAborted(signal);
 
-  try {
-    const stat = await storage.statFile(path);
+  const stat = await storage.stat(path);
+  if (stat.kind === "file") {
     out.push({ path, entryName, size: stat.size, modifiedAt: stat.modifiedAt ?? new Date(0) });
     return;
-  } catch (error) {
-    if (!isStorageError(error) || error.kind !== "bad_request") {
-      throw error;
-    }
   }
 
   await collectDirectory(storage, path, entryName, out, signal);
 }
 
 /**
- * Lists `path` (already known to be a directory, either because
- * `collectPath` ruled out it being a file, or because a parent `list` call
- * already reported it as a `dir` entry) and recurses into every child.
+ * Lists `path` (already known not to be a file, either because
+ * `collectPath` stat'd it, or because a parent `list` call reported it as a
+ * `dir` entry) and recurses into every child.
  */
 async function collectDirectory(
   storage: StorageProvider,
@@ -146,9 +129,8 @@ async function collectDirectory(
         modifiedAt: child.modifiedAt,
       });
     }
-    // Symlinks and other kinds are not archived: SFTPGo's own zip endpoint
-    // has the same restriction and there is no safe, provider-neutral way
-    // to resolve them here.
+    // Symlinks and other kinds are not archived: there is no safe,
+    // provider-neutral way to resolve them here.
   }
 }
 

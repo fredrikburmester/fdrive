@@ -3,9 +3,8 @@ import { ApiError } from "./error.ts";
 import { ArchiveFormat } from "./jobs.ts";
 
 /**
- * The kind of filesystem entry, mirroring `@fdrive/core`'s `EntryKind` and
- * SFTPGo's own mode bits (`dir`, `symlink`, `file`, `other` for anything
- * that is none of those).
+ * The kind of filesystem entry, mirroring `@fdrive/core`'s `EntryKind`
+ * (`other` for anything that is not a file, folder or symlink).
  */
 export const EntryKind = z.enum(["file", "dir", "symlink", "other"]);
 

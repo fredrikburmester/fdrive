@@ -1233,6 +1233,113 @@ describe("index-queries", () => {
     });
   });
 
+  describe("leaving out excluded subtrees before the limit", () => {
+    const model = "google/siglip2-large-patch16-256";
+    const trash = (rootId: number) => [{ rootId, fsPrefix: "/alice/.trash" }];
+
+    it("semantic: a closer trashed chunk never takes the only place", async () => {
+      const rootId = await insertRoot("primary");
+      const trashed = await insertFile(rootId, "alice/.trash/.fdrive-move-v1/1/f/a.md");
+      const live = await insertFile(rootId, "alice/docs/a.md");
+      await insertChunk(trashed.id, 0, "trashed", rampVector(0));
+      await insertChunk(live.id, 0, "live", rampVector(5));
+      const scope = [{ rootId, fsPrefix: "/alice" }];
+
+      expect((await queries.semantic(scope, rampVector(0), 1)).map((r) => r.fileId)).toEqual([
+        trashed.id,
+      ]);
+      const results = await queries.semantic(scope, rampVector(0), 1, { exclude: trash(rootId) });
+      expect(results.map((r) => r.fileId)).toEqual([live.id]);
+    });
+
+    it("fulltext: a better-ranked trashed chunk never takes the only place", async () => {
+      const rootId = await insertRoot("primary");
+      const trashed = await insertFile(rootId, "alice/.trash/old.md");
+      const live = await insertFile(rootId, "alice/live.md");
+      await insertChunk(trashed.id, 0, "quarterly quarterly quarterly report");
+      await insertChunk(live.id, 0, "a passing mention of quarterly");
+      const scope = [{ rootId, fsPrefix: "/alice" }];
+
+      expect((await queries.fulltext(scope, "quarterly:*", 1)).map((r) => r.fileId)).toEqual([
+        trashed.id,
+      ]);
+      const results = await queries.fulltext(scope, "quarterly:*", 1, {
+        recency: RECENCY,
+        exclude: trash(rootId),
+      });
+      expect(results.map((r) => r.fileId)).toEqual([live.id]);
+    });
+
+    it("filename: a better-named trashed file never takes the only place", async () => {
+      const rootId = await insertRoot("primary");
+      const trashed = await insertFile(rootId, "alice/.trash/budget.xlsx");
+      const live = await insertFile(rootId, "alice/budget/notes.md");
+      const scope = [{ rootId, fsPrefix: "/alice" }];
+
+      expect((await queries.filename(scope, ["budget"], "budget", 1)).map((r) => r.fileId)).toEqual(
+        [trashed.id],
+      );
+      const results = await queries.filename(scope, ["budget"], "budget", 1, {
+        exclude: trash(rootId),
+      });
+      expect(results.map((r) => r.fileId)).toEqual([live.id]);
+    });
+
+    it("searchImages: a closer trashed image never takes the only place", async () => {
+      const rootId = await insertRoot("primary");
+      await insertFile(rootId, "alice/.trash/cat.jpg", { sha256: "sha-trashed" });
+      const live = await insertFile(rootId, "alice/photos/cat.jpg", { sha256: "sha-live" });
+      await insertImageEmbedding("sha-trashed", model, rampVector1024(0));
+      await insertImageEmbedding("sha-live", model, rampVector1024(5));
+      const scope = [{ rootId, fsPrefix: "/alice" }];
+
+      const results = await queries.searchImages(scope, rampVector1024(0), model, 1, {
+        exclude: trash(rootId),
+      });
+      expect(results.map((r) => r.path)).toEqual([live.path]);
+    });
+
+    it("leaves out the folder itself and what is under it, never a sibling sharing its name", async () => {
+      const rootId = await insertRoot("primary");
+      const otherRoot = await insertRoot("other");
+      await insertFile(rootId, "alice/.trash");
+      await insertFile(rootId, "alice/.trash/notes.md");
+      await insertFile(rootId, "alice/a_b/notes.md");
+      const kept = [
+        await insertFile(rootId, "alice/.trashcan/notes.md"),
+        await insertFile(rootId, "alice/axb/notes.md"),
+        await insertFile(otherRoot, "alice/.trash/notes.md"),
+      ];
+      const scope = [
+        { rootId, fsPrefix: "/alice" },
+        { rootId: otherRoot, fsPrefix: "/alice" },
+      ];
+
+      const results = await queries.filename(scope, ["notes", "trash"], "notes", 10, {
+        exclude: [...trash(rootId), { rootId, fsPrefix: "/alice/a_b" }],
+      });
+      expect(results.map((r) => r.fileId).sort()).toEqual(kept.map((file) => file.id).sort());
+    });
+
+    it("leaves out a whole root, and nothing at all when the list is empty", async () => {
+      const rootId = await insertRoot("primary");
+      const otherRoot = await insertRoot("other");
+      const gone = await insertFile(rootId, "alice/notes.md");
+      const kept = await insertFile(otherRoot, "alice/notes.md");
+      const scope = [
+        { rootId, fsPrefix: "/" },
+        { rootId: otherRoot, fsPrefix: "/" },
+      ];
+
+      const without = await queries.filename(scope, ["notes"], "notes", 10, {
+        exclude: [{ rootId, fsPrefix: "/" }],
+      });
+      expect(without.map((r) => r.fileId)).toEqual([kept.id]);
+      const all = await queries.filename(scope, ["notes"], "notes", 10, { exclude: [] });
+      expect(all.map((r) => r.fileId).sort()).toEqual([gone.id, kept.id].sort());
+    });
+  });
+
   describe("imageEmbeddingStats", () => {
     it("reports zero and a null model when the table is empty", async () => {
       expect(await queries.imageEmbeddingStats()).toEqual({ total: 0, model: null });

@@ -418,8 +418,9 @@ describe("createSearchService: search - ranking", () => {
     expect(fulltext.mock.calls[0]?.[3]).toEqual({
       recency,
       preferTsquery: "annual:*&report:*",
+      exclude: [],
     });
-    expect(filename.mock.calls[0]?.[4]).toEqual({ recency });
+    expect(filename.mock.calls[0]?.[4]).toEqual({ recency, exclude: [] });
   });
 });
 
@@ -881,53 +882,58 @@ describe("createSearchService: search - hits", () => {
     expect(result.sections.folders).toEqual([]);
   });
 
-  it("excludes a file whose virtual path is inside the trash from search hits", async () => {
-    const file = makeFile({ id: 71, path: "alice/.trash/removed.txt", name: "removed.txt" });
+  it("asks every query to leave out the Trash, mapped through the scopes, before its limit", async () => {
+    const semantic = vi.fn(async () => []);
+    const fulltext = vi.fn(async () => []);
+    const filename = vi.fn(async () => []);
     const indexQueries = fakeIndexQueries({
       rootIdsByName: async () => ({ files: 1 }),
-      semantic: async () => [],
-      fulltext: async () => [{ fileId: 71, snippet: "hit" }],
-      filename: async () => [],
-      filesByIds: async () => [file],
+      semantic,
+      fulltext,
+      filename,
     });
-    const service = createSearchService(buildDeps({ indexQueries, trashPath: "/.trash" }));
+    const embedClient: EmbedClient = { embed: async () => [0.1] };
+    const service = createSearchService(
+      buildDeps({ indexQueries, embedClient, trashPath: "/.trash" }),
+    );
 
-    const result = await service.search(baseInput());
+    await service.search(baseInput());
 
-    expect(result.sections.files).toEqual([]);
-    expect(result.sections.content).toEqual([]);
+    const exclude = [{ rootId: 1, fsPrefix: "/alice/.trash" }];
+    expect(semantic).toHaveBeenCalledWith(expect.anything(), [0.1], 60, { exclude });
+    expect(fulltext).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.any(String),
+      60,
+      expect.objectContaining({ exclude }),
+    );
+    expect(filename).toHaveBeenCalledWith(
+      expect.anything(),
+      ["readme"],
+      "readme",
+      25,
+      expect.objectContaining({ exclude }),
+    );
   });
 
-  it("excludes a file whose virtual path equals the trash folder itself", async () => {
-    const file = makeFile({ id: 73, path: "alice/.trash", name: ".trash" });
-    const indexQueries = fakeIndexQueries({
-      rootIdsByName: async () => ({ files: 1 }),
-      semantic: async () => [],
-      fulltext: async () => [{ fileId: 73, snippet: "hit" }],
-      filename: async () => [],
-      filesByIds: async () => [file],
-    });
-    const service = createSearchService(buildDeps({ indexQueries, trashPath: "/.trash" }));
-
-    const result = await service.search(baseInput());
-
-    expect(result.sections.files).toEqual([]);
-  });
-
-  it("excludes the trash folder itself from derived folder groupings", async () => {
-    const file = makeFile({ id: 72, path: "alice/.trash/leaf.txt", name: "leaf.txt" });
+  it("uses the request's Trash over the default, and leaves nothing out without one", async () => {
+    const filename = vi.fn(async () => []);
     const indexQueries = fakeIndexQueries({
       rootIdsByName: async () => ({ files: 1 }),
       semantic: async () => [],
       fulltext: async () => [],
-      filename: async () => [{ fileId: 72, hits: 1, similarity: 0.5 }],
-      filesByIds: async () => [file],
+      filename,
     });
-    const service = createSearchService(buildDeps({ indexQueries, trashPath: "/.trash" }));
 
-    const result = await service.search(baseInput());
+    await createSearchService(buildDeps({ indexQueries, trashPath: "/.trash" })).search(
+      baseInput({ trashPath: "/Bin" }),
+    );
+    await createSearchService(buildDeps({ indexQueries })).search(baseInput());
 
-    expect(result.sections.folders).toEqual([]);
+    expect(filename.mock.calls.map((call) => (call as unknown[])[4])).toEqual([
+      expect.objectContaining({ exclude: [{ rootId: 1, fsPrefix: "/alice/Bin" }] }),
+      expect.objectContaining({ exclude: [] }),
+    ]);
   });
 
   it("skips a filename hit whose file id is not returned by filesByIds", async () => {

@@ -197,8 +197,7 @@ export function createOwnedShares(deps: OwnedSharesDeps) {
      * The one place the password is checked: wrong is refused now, right
      * earns a marker for the current password that every later request
      * compares at the cost of one row read, never a hash. A hash this
-     * scheme cannot read, such as the one a link carried over from SFTPGo
-     * holds, matches no password until the owner sets a new one.
+     * scheme cannot read matches no password until the owner sets a new one.
      */
     async credential(row: ShareRecord, password: string): Promise<ShareCredential> {
       const hash = row.hasPassword ? await deps.shares.passwordHash(row.id) : null;

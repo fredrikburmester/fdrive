@@ -178,22 +178,11 @@ export function undefinedWhenEmpty(value: unknown): string | undefined {
   return typeof value === "string" && value.length > 0 ? value : undefined;
 }
 
-// `sftpgoPath` is the key's name from before the local folder replaced SFTPGo.
-const indexRootConfigSchema = z
-  .object({
-    name: z.string().min(1),
-    storagePath: z.string().min(1).optional(),
-    sftpgoPath: z.string().min(1).optional(),
-    indexerPath: z.string().min(1),
-  })
-  .transform(({ name, storagePath, sftpgoPath, indexerPath }, ctx) => {
-    const path = storagePath ?? sftpgoPath;
-    if (path === undefined) {
-      ctx.addIssue({ code: "custom", message: "storagePath is required" });
-      return z.NEVER;
-    }
-    return { name, storagePath: path, indexerPath };
-  });
+const indexRootConfigSchema = z.object({
+  name: z.string().min(1),
+  storagePath: z.string().min(1),
+  indexerPath: z.string().min(1),
+});
 
 /**
  * Parses `FDRIVE_INDEX_ROOTS`'s JSON array of `{ name, storagePath,

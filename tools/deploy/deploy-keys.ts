@@ -49,24 +49,8 @@ export const DEPLOY_EXTRA_KEYS: readonly ConfigKeyDef[] = [
   {
     key: "FDRIVE_RUN_AS_UID",
     description:
-      "Host uid/gid the api, backup worker, indexer and OCR run as, which must own the files folder; 1000 matches SFTPGo's official image.",
+      "Host uid/gid the api, backup worker, indexer and OCR run as, which must own the files folder.",
     default: "1000",
-    example: "1000",
-    secret: false,
-    subsystem: "core",
-  },
-  {
-    key: "FDRIVE_INDEX_SFTPGO_DIR",
-    description: "Older name of FDRIVE_FILES_DIR, used when that is unset.",
-    default: null,
-    example: "/srv/sftpgo/data",
-    secret: false,
-    subsystem: "core",
-  },
-  {
-    key: "FDRIVE_INDEX_UID",
-    description: "Older name of FDRIVE_RUN_AS_UID, used when that is unset.",
-    default: null,
     example: "1000",
     secret: false,
     subsystem: "core",

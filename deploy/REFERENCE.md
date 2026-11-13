@@ -237,10 +237,9 @@ disabled under **System > Users**. `FDRIVE_ADMIN_USERS` lists usernames that are
 administrators.
 
 The four containers start as root for one step: each gives its own state directories to
-`FDRIVE_RUN_AS_UID` (default 1000; `FDRIVE_INDEX_UID` is its older name) and then drops to
-that user for good. The API also gives a new, empty files folder to that user, but never
-changes the owner of files already there, and logs `cannot write /data` when that user
-can't write it. The backup worker keeps one capability after the drop, reading any file,
+`FDRIVE_RUN_AS_UID` (default 1000) and then drops to that user for good. The API also gives
+a new, empty files folder to that user, but never changes the owner of files already there,
+and logs `cannot write /data` when that user can't write it. The backup worker keeps one capability after the drop, reading any file,
 because the state it backs up belongs to other services; it writes as the same user, so a
 backup in someone's folder belongs to them. Check the user each process runs as:
 

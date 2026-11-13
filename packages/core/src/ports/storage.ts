@@ -157,6 +157,15 @@ export interface StorageProvider {
    */
   probeDirectoryRead?(path: string): Promise<void>;
 
+  /**
+   * Live read proof for the file at `path` that reads none of its content:
+   * whether `download` could open it now. Fails as `download` does:
+   * `not_found` when nothing is there, `bad_request` for anything that is not
+   * a file, `forbidden` when the file may not be read. Absent where only a
+   * download proves it; callers then open `download` and cancel the body.
+   */
+  probeFileRead?(path: string): Promise<void>;
+
   statFile(path: string): Promise<{
     size: number;
     modifiedAt: Date | null;

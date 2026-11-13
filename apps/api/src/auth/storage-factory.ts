@@ -11,14 +11,13 @@ import { captureRecycleReceipt } from "../activity/trash.js";
 import { withoutBackupPaths } from "../backups/reserved-storage.js";
 import { ApiHttpError } from "../errors.js";
 import type { ProviderService } from "../providers/service.js";
-import type { TokenSource } from "./token-source.js";
 
 export type IdentityStorageFactory = (identityId: string) => Promise<StorageProvider>;
 
 /**
- * Storage for `identityId` bound to `providerId`, with its upstream token
- * resolved up front and never refreshed: for callers that must not touch
- * the database again while they hold a write transaction (Office).
+ * Storage for `identityId` bound to `providerId`, resolved up front: for
+ * callers that must not touch the database again while they hold a write
+ * transaction (Office).
  */
 export type PinnedStorageFactory = (
   identityId: string,
@@ -113,7 +112,6 @@ async function admit(
 
 export interface CreateStorageFactoryDeps {
   readonly providers: Pick<ProviderService, "forIdentity">;
-  readonly tokenSource: Pick<TokenSource, "sessionFor" | "get" | "credential">;
   readonly fetch: typeof globalThis.fetch;
   readonly clock: () => Date;
   readonly resolveTrashSettings?: (identityId: string) => Promise<TrashSettings>;
@@ -138,7 +136,7 @@ export function createIdentityStorageFactory(
     const storage = withoutBackupPaths(
       module.createStorage(
         instance,
-        deps.tokenSource.sessionFor(identityId, identity.externalUsername),
+        { externalUsername: identity.externalUsername },
         { fetch: deps.fetch },
       ),
     );
@@ -159,9 +157,8 @@ export function createIdentityStorageFactory(
 }
 
 /**
- * Builds storage whose upstream token is fetched now and pinned for the
- * storage's lifetime. Throws `upstream_unavailable` when the identity is
- * not bound to `providerId`.
+ * Builds storage for an identity bound to `providerId`. Throws when the
+ * identity is not bound to it.
  */
 export function createPinnedStorageFactory(
   deps: Omit<CreateStorageFactoryDeps, "resolveTrashSettings" | "clock">,
@@ -172,16 +169,10 @@ export function createPinnedStorageFactory(
       throw new Error("identity is not bound to the requested provider");
     }
     await admit(module, instance, identity.externalUsername);
-    const token = await deps.tokenSource.get(identityId);
     return withoutBackupPaths(
       module.createStorage(
         instance,
-        {
-          externalUsername: identity.externalUsername,
-          getCredential: () => deps.tokenSource.credential(identityId),
-          getToken: async () => token,
-          invalidateToken: async () => {},
-        },
+        { externalUsername: identity.externalUsername },
         { fetch: deps.fetch },
       ),
     );

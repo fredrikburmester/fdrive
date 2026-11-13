@@ -12,7 +12,6 @@ import {
 } from "@fdrive/local";
 import { startPostgres } from "@fdrive/testkit";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { createTokenSource } from "../../src/auth/index.js";
 import type { Principal } from "../../src/auth/principal.ts";
 import { createIdentityStorageFactory } from "../../src/auth/storage-factory.ts";
 import {
@@ -99,16 +98,8 @@ describe("index scopes over a local folder and Postgres", () => {
     const [alice, bob] = identities;
     if (alice === undefined || bob === undefined) throw new Error("expected two identities");
 
-    const tokenSource = createTokenSource({
-      repos,
-      providers,
-      master: Buffer.alloc(32, 3),
-      clock,
-      fetch: globalThis.fetch,
-    });
     const storageFactory = createIdentityStorageFactory({
       providers,
-      tokenSource,
       fetch: globalThis.fetch,
       clock,
     });

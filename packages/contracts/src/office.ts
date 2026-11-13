@@ -65,7 +65,7 @@ function withOfficeRules<T extends z.ZodType<z.infer<z.ZodObject<typeof officeSe
         !value.editingEnabled ||
         (value.editingProviderId !== null && value.editorUsernames.length > 0),
       {
-        message: "editing requires a provider and at least one SFTPGo username",
+        message: "editing requires a provider and at least one username",
         path: ["editorUsernames"],
       },
     )

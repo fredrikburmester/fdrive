@@ -9,10 +9,10 @@ export default definePackageConfig({
         "src/**/*.d.ts",
         "src/**/index.ts",
         "src/main.ts",
-        // Only exercised by test/integration/composition.test.ts (a real
-        // Postgres testcontainer plus a fake SFTPGo server), which is not
-        // part of the unit coverage gate; see the api's test:integration
-        // script and vitest.integration.config.ts.
+        // Only exercised by the integration suites (a real Postgres
+        // testcontainer and a local files folder), which are not part of
+        // the unit coverage gate; see the api's test:integration script and
+        // vitest.integration.config.ts.
         "src/composition.ts",
       ],
     },

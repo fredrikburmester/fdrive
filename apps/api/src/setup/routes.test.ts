@@ -1,10 +1,11 @@
 import type { MeResponse } from "@fdrive/contracts";
+import { createMemoryRepos } from "@fdrive/db/testing";
 import { describe, expect, it, vi } from "vitest";
 import { createApp } from "../app.js";
 import { createLoginLimiter, type LoginLimiter } from "../auth/login-limiter.js";
 import { loadConfig } from "../config.js";
 import { registerSetupRoutes } from "./routes.js";
-import type { SetupService } from "./service.js";
+import { createSetupService, type SetupService } from "./service.js";
 import { createSetupTokenGuard, type SetupTokenGuard } from "./token.js";
 
 const REQUIRED_ENV = {
@@ -217,6 +218,35 @@ describe("setup routes: POST /setup/complete", () => {
     });
 
     expect((await postComplete(app)).status).toBe(404);
+  });
+
+  it("refuses an installation people signed in to before, though it has no local user", async () => {
+    const repos = createMemoryRepos();
+    const row = await repos.providers.ensure({ type: "local", baseUrl: "local" });
+    const account = await repos.accounts.create({ displayName: "owner" });
+    await repos.identities.create({
+      accountId: account.id,
+      providerId: row.id,
+      externalUsername: "owner",
+    });
+    const createOwner = vi.fn();
+    const loginCandidate = vi.fn();
+    const service = createSetupService({
+      authService: { loginCandidate, me: vi.fn(), logout: vi.fn() },
+      accounts: { setAdmin: vi.fn() },
+      identities: repos.identities,
+      settings: repos.settings,
+      local: {
+        provider: async () => row,
+        userCount: () => repos.localUsers.count(),
+        users: { createOwner },
+      },
+    });
+    const { app } = buildApp({ service });
+
+    expect((await postComplete(app)).status).toBe(404);
+    expect(createOwner).not.toHaveBeenCalled();
+    expect(loginCandidate).not.toHaveBeenCalled();
   });
 
   it("rejects a missing or wrong setup token", async () => {

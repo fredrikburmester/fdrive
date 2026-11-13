@@ -228,32 +228,6 @@ describe("createProviderService: seedFromEnvironment", () => {
     expect(await h.service.list()).toHaveLength(1);
   });
 
-  it("disables and unpins the SFTPGo row the folder replaced, keeping its logins", async () => {
-    const h = harness();
-    const stale = await h.repos.providers.ensure({ type: "sftpgo", baseUrl: "http://old:8080" });
-    await h.repos.providers.update(stale.id, { managedByEnv: true, enabled: true });
-    const account = await h.repos.accounts.create({ displayName: "Alice" });
-    const identity = await h.repos.identities.create({
-      accountId: account.id,
-      providerId: stale.id,
-      externalUsername: "alice",
-    });
-    // A row nobody pinned is not the deployment's to touch.
-    const unpinned = await seedProviderRow(h.repos, "http://unpinned");
-    await h.service.seedFromEnvironment();
-    expect(await h.repos.providers.get(stale.id)).toMatchObject({
-      managedByEnv: false,
-      enabled: false,
-    });
-    expect(await h.repos.providers.get(unpinned.id)).toMatchObject({ enabled: true });
-    expect((await h.repos.identities.get(identity.id))?.providerId).toBe(stale.id);
-    const local = (await h.service.list()).find((row) => row.baseUrl === "local");
-    expect((await h.service.defaultProvider())?.id).toBe(local?.id);
-    expect(h.events).toContain(
-      "general:info:Storage provider disabled: old:8080 (the deployment no longer configures it)",
-    );
-  });
-
   it("disables the folder's row while the deployment serves none, and enables it again", async () => {
     const without = harness({ local: false });
     const row = await without.repos.providers.ensure({ type: "local", baseUrl: "local" });

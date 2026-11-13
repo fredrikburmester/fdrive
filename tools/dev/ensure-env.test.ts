@@ -210,30 +210,6 @@ describe("planApiEnvDev", () => {
     expect(plan.removedKeys).toEqual([]);
     expect(plan.contents).toBe(existing);
   });
-
-  it("moves a file an SFTPGo-era version wrote onto the local folder", () => {
-    const existing = [
-      "PORT=3001",
-      "SFTPGO_URL=http://127.0.0.1:58080",
-      "FDRIVE_MASTER_KEY=kept",
-      "FDRIVE_HOME_TEMPLATE=sftpgo:/{username}",
-      `FDRIVE_INDEX_ROOTS='[{"name":"sftpgo","sftpgoPath":"/srv/sftpgo/data","indexerPath":"/roots/sftpgo"}]'`,
-      "FDRIVE_ADMIN_USERS=dev",
-      "",
-    ].join("\n");
-    const additions = buildDevSearchEnv("/repo");
-    const plan = planApiEnvDev(existing, additions, "unused-key");
-    expect(plan.removedKeys).toEqual(["SFTPGO_URL", "FDRIVE_HOME_TEMPLATE"]);
-    expect(plan.addedKeys).toContain("FDRIVE_INDEX_ROOTS");
-    expect(plan.addedKeys).toContain("FDRIVE_STORAGE_ROOT");
-    expect(plan.addedKeys).not.toContain("FDRIVE_ADMIN_USERS");
-    expect(plan.contents).toContain("FDRIVE_MASTER_KEY=kept");
-    expect(plan.contents).not.toContain("sftpgo");
-    expect(plan.contents).not.toContain("SFTPGO");
-    expect(plan.contents).toContain(
-      `FDRIVE_INDEX_ROOTS=${quoteEnvValue(additions.FDRIVE_INDEX_ROOTS ?? "")}`,
-    );
-  });
 });
 
 describe("planApiEnvDev with the seed folder", () => {
@@ -327,13 +303,11 @@ describe("ensureDevFiles", () => {
 });
 
 describe("isObsoleteApiEnvLine", () => {
-  it("matches the removed keys and only the old sftpgo index root", () => {
-    expect(isObsoleteApiEnvLine("SFTPGO_URL=http://x")).toBe(true);
-    expect(isObsoleteApiEnvLine("FDRIVE_HOME_TEMPLATE=sftpgo:/{username}")).toBe(true);
-    expect(isObsoleteApiEnvLine(`FDRIVE_INDEX_ROOTS='[{"name": "sftpgo"}]'`)).toBe(true);
+  it("matches nothing without the seed folder", () => {
+    expect(isObsoleteApiEnvLine("FDRIVE_STORAGE_ROOT=/repo/deploy/dev/files")).toBe(false);
     expect(isObsoleteApiEnvLine(`FDRIVE_INDEX_ROOTS='[{"name":"mine"}]'`)).toBe(false);
-    expect(isObsoleteApiEnvLine("# SFTPGO_URL=commented")).toBe(false);
-    expect(isObsoleteApiEnvLine("")).toBe(false);
+    expect(isObsoleteApiEnvLine("# FDRIVE_STORAGE_ROOT=commented", "/x")).toBe(false);
+    expect(isObsoleteApiEnvLine("", "/x")).toBe(false);
   });
 
   it("given the seed folder, matches only values that serve it", () => {

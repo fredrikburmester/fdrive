@@ -2,6 +2,7 @@ import { randomBytes } from "node:crypto";
 import type { Stats } from "node:fs";
 import { constants } from "node:fs";
 import {
+  access,
   copyFile,
   cp,
   link,
@@ -191,6 +192,17 @@ export function createLocalStorage(options: LocalStorageOptions): LocalStorage {
         } finally {
           await handle.close();
         }
+      }),
+
+    // The checks `download` makes, in its order, without opening the file:
+    // `access` asks the permission question `open` would. Only metadata is
+    // looked up, which the kernel usually has cached; no content is read.
+    probeFileRead: (path) =>
+      mapped(path, async () => {
+        const at = await home.target(path);
+        await access(at, constants.R_OK);
+        const info = await stat(at);
+        if (!info.isFile()) throw new StorageError("bad_request", `not a file: ${path}`);
       }),
 
     async statFile(path) {
