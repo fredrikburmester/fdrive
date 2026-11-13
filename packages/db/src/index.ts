@@ -78,6 +78,8 @@ export type {
   FilenameHit,
   FilenameOptions,
   FileOrder,
+  FolderHit,
+  FolderOptions,
   FulltextOptions,
   ImageEmbeddingStats,
   ImageSearchHit,

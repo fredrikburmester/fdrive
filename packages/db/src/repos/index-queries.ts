@@ -1,7 +1,7 @@
 import { and, asc, count, desc, eq, inArray, isNotNull, isNull, ne, sql } from "drizzle-orm";
 import type { Db } from "../index.js";
 import { imageEmbeddings, thumbnails } from "../schema/app.js";
-import { chunks, files, moves, roots } from "../schema/idx.js";
+import { chunks, files, folders, moves, roots } from "../schema/idx.js";
 import { formatVectorLiteral } from "../vector.js";
 
 /**
@@ -137,6 +137,21 @@ export interface FulltextOptions extends SearchQueryOptions {
   readonly preferTsquery?: string;
 }
 
+/** One folder whose own name matched `IndexQueries.folders`. */
+export interface FolderHit {
+  readonly rootId: number;
+  /** Root-relative, like `idx.files.path`. */
+  readonly path: string;
+  readonly name: string;
+  readonly mtimeNs: bigint;
+}
+
+/** Options for `IndexQueries.folders`. */
+export interface FolderOptions extends SearchQueryOptions {
+  /** Weights each name's similarity by the folder's age; by similarity alone when absent. */
+  readonly recency?: RecencyDecay;
+}
+
 /** Options for `IndexQueries.filename`. */
 export interface FilenameOptions extends SearchQueryOptions {
   /** Weights each name's similarity by its file's age; by similarity alone when absent. */
@@ -270,6 +285,18 @@ export interface IndexQueries {
     limit: number,
     options?: FilenameOptions,
   ): Promise<FilenameHit[]>;
+  /**
+   * Folders, empty ones included, whose own name contains every one of
+   * `words`, ignoring case and how accents are encoded: most similar to
+   * `query` first, weighted by age when `recency` is given.
+   */
+  folders(
+    scopePrefixes: readonly ScopePrefix[],
+    words: readonly string[],
+    query: string,
+    limit: number,
+    options?: FolderOptions,
+  ): Promise<FolderHit[]>;
   /** Loads files by id, in no particular order; missing ids are skipped. */
   filesByIds(ids: readonly number[]): Promise<IndexedFile[]>;
   /** The (non-deleted) file at exactly `path` in `rootId`, `null` when absent. */
@@ -383,13 +410,13 @@ export interface IndexQueries {
  * of `prefixes`. `false` (matches nothing) for an empty scope, so a caller
  * with no configured scope never sees rows by accident.
  */
-function scopeCondition(prefixes: readonly ScopePrefix[]) {
+function scopeCondition(prefixes: readonly ScopePrefix[], columns: PathColumns = FILE_COLUMNS) {
   const clauses = toScopeClauses(prefixes);
   if (clauses.length === 0) {
     return sql`false`;
   }
 
-  const parts = clauses.map(underClause);
+  const parts = clauses.map((clause) => underClause(clause, columns));
 
   // Wrapped in its own parens: this is handed to `and()` alongside other
   // conditions, which joins arguments with a plain " and " and only wraps
@@ -399,25 +426,34 @@ function scopeCondition(prefixes: readonly ScopePrefix[]) {
   return sql`(${sql.join(parts, sql` OR `)})`;
 }
 
-/** Matches the `idx.files` rows at or under one root-relative scope clause. */
-function underClause(clause: ScopeClause) {
+/** The root and path columns of a table whose rows `ScopePrefix`es select. */
+interface PathColumns {
+  readonly rootId: typeof files.rootId | typeof folders.rootId;
+  readonly path: typeof files.path | typeof folders.path;
+}
+
+const FILE_COLUMNS: PathColumns = { rootId: files.rootId, path: files.path };
+const FOLDER_COLUMNS: PathColumns = { rootId: folders.rootId, path: folders.path };
+
+/** Matches the rows at or under one root-relative scope clause, `idx.files` by default. */
+function underClause(clause: ScopeClause, columns: PathColumns = FILE_COLUMNS) {
   if (clause.relativePrefix === "") {
-    return sql`(${files.rootId} = ${clause.rootId})`;
+    return sql`(${columns.rootId} = ${clause.rootId})`;
   }
   const likePattern = `${escapeLikePattern(clause.relativePrefix)}/%`;
-  return sql`(${files.rootId} = ${clause.rootId} AND (${files.path} = ${clause.relativePrefix} OR ${files.path} LIKE ${likePattern} ESCAPE '\\'))`;
+  return sql`(${columns.rootId} = ${clause.rootId} AND (${columns.path} = ${clause.relativePrefix} OR ${columns.path} LIKE ${likePattern} ESCAPE '\\'))`;
 }
 
 /**
- * Leaves out the `idx.files` rows at or under any of `prefixes`, the inverse
- * of `scopeCondition`; `undefined`, which `and()` skips, when there are none.
+ * Leaves out the rows at or under any of `prefixes`, the inverse of
+ * `scopeCondition`; `undefined`, which `and()` skips, when there are none.
  */
-function exclusionCondition(prefixes: readonly ScopePrefix[] = []) {
+function exclusionCondition(prefixes: readonly ScopePrefix[] = [], columns = FILE_COLUMNS) {
   const clauses = toScopeClauses(prefixes);
   if (clauses.length === 0) {
     return undefined;
   }
-  return and(...clauses.map((clause) => sql`NOT ${underClause(clause)}`));
+  return and(...clauses.map((clause) => sql`NOT ${underClause(clause, columns)}`));
 }
 
 /** Restricts one `idx.moves` path to the caller's root-relative scope. */
@@ -443,13 +479,16 @@ function movePathScopeCondition(
 
 const NS_PER_DAY = 86_400_000_000_000;
 
-/** `RecencyDecay` as a SQL factor over `idx.files.mtime_ns`; `1` when no decay is asked for. */
-function recencyFactor(recency: RecencyDecay | undefined) {
+/** `RecencyDecay` as a SQL factor over a `mtime_ns` column; `1` when no decay is asked for. */
+function recencyFactor(
+  recency: RecencyDecay | undefined,
+  mtimeNs: typeof files.mtimeNs | typeof folders.mtimeNs = files.mtimeNs,
+) {
   if (recency === undefined) {
     return sql`1`;
   }
   const nowNs = BigInt(recency.now.getTime()) * 1_000_000n;
-  const ageDays = sql`greatest(${nowNs}::bigint - ${files.mtimeNs}, 0)::double precision / ${NS_PER_DAY}::double precision`;
+  const ageDays = sql`greatest(${nowNs}::bigint - ${mtimeNs}, 0)::double precision / ${NS_PER_DAY}::double precision`;
   return sql`(${recency.floor}::double precision + ${1 - recency.floor}::double precision * power(0.5::double precision, ${ageDays} / ${recency.halfLifeDays}::double precision))`;
 }
 
@@ -585,6 +624,44 @@ export function createIndexQueries(db: Db): IndexQueries {
         hits: Number(row.hits),
         similarity: Number(row.similarity),
       }));
+    },
+
+    async folders(scopePrefixes, words, query, limit, options = {}) {
+      if (words.length === 0) {
+        return [];
+      }
+      const nameHas = (word: string) =>
+        sql`(${sql.join(
+          accentForms(word).map(
+            (form) => sql`${folders.name} ILIKE ${`%${escapeLikePattern(form)}%`} ESCAPE '\\'`,
+          ),
+          sql` OR `,
+        )})`;
+      const similarity = sql`greatest(${sql.join(
+        accentForms(query).map((form) => sql`similarity(${folders.name}, ${form})`),
+        sql`, `,
+      )})`;
+      const rows = await db
+        .select({
+          rootId: folders.rootId,
+          path: folders.path,
+          name: folders.name,
+          mtimeNs: folders.mtimeNs,
+        })
+        .from(folders)
+        .where(
+          and(
+            scopeCondition(scopePrefixes, FOLDER_COLUMNS),
+            exclusionCondition(options.exclude, FOLDER_COLUMNS),
+            ...words.map(nameHas),
+          ),
+        )
+        .orderBy(
+          desc(sql`${similarity} * ${recencyFactor(options.recency, folders.mtimeNs)}`),
+          asc(folders.path),
+        )
+        .limit(limit);
+      return rows;
     },
 
     async filesByIds(ids) {

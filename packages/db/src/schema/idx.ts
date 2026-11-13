@@ -63,6 +63,32 @@ export const files = idxSchema.table(
   ],
 );
 
+/**
+ * Every folder the indexer walks, empty ones included, so search can find a
+ * folder by its own name. The indexer owns the rows: a scan writes what it
+ * walked and drops what it no longer found, and fdrive's own changes and the
+ * watcher keep them current between scans. `seen_at` changes whenever the
+ * indexer writes a row; a completed walk drops only rows written before it
+ * started that it did not see. Rebuilt by the next scan, so never backed up.
+ */
+export const folders = idxSchema.table(
+  "folders",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    rootId: smallint("root_id")
+      .notNull()
+      .references(() => roots.id, { onDelete: "cascade" }),
+    path: text("path").notNull(),
+    name: text("name").notNull(),
+    mtimeNs: bigint("mtime_ns", { mode: "bigint" }).notNull(),
+    seenAt: timestamp("seen_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    unique("folders_root_id_path_unique").on(table.rootId, table.path),
+    index("folders_name_trgm_idx").using("gin", table.name.op("gin_trgm_ops")),
+  ],
+);
+
 export const chunks = idxSchema.table(
   "chunks",
   {

@@ -55,6 +55,7 @@ const EXPECTED_TABLES: ReadonlyArray<{ readonly schema: string; readonly table: 
   { schema: "idx", table: "moves" },
   { schema: "idx", table: "events" },
   { schema: "idx", table: "work" },
+  { schema: "idx", table: "folders" },
   { schema: "idx", table: "schema_version" },
 ];
 
