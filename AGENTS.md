@@ -26,11 +26,11 @@ First install: `pnpm bootstrap` (frozen install plus the `@fdrive/db` build that
 | API/schema/storage | Also `pnpm test:integration` (Docker) |
 | Visible UI/flows | Also affected `pnpm test:e2e <spec>` and a real dev app check |
 | Python service | `ruff`, `mypy` and `pytest --cov` in `services/<name>`, as in `.github/workflows/services.yml` |
-| Rust service | `cargo fmt`, `cargo clippy` and `cargo llvm-cov` in `services/ml`, as in `.github/workflows/ml.yml` |
+| Rust service | `cargo fmt`, `cargo clippy` and `cargo llvm-cov` in `services/ml` or `services/indexer`, as in `.github/workflows/ml.yml` and `indexer.yml` |
 
 Run one heavy Docker suite at a time. A skipped, interrupted or failed check is not a pass.
 
 Hosted CI stays lean for fast feedback: pull requests run `CI` (lint, typecheck, coverage), plus
-`Python services`, `ML server` and `Images` when their paths change. The `ci:full` label or
+`Python services`, `Indexer`, `ML server` and `Images` when their paths change. The `ci:full` label or
 `gh workflow run "CI (full)" --ref <ref>` runs everything. On `main` only `Images` runs,
 publishing the edge images; a `vX.Y.Z` tag publishes a release ([releases](docs/RELEASES.md)).

@@ -77,7 +77,7 @@ Restart the API server (`pnpm --filter @fdrive/api dev`) so it connects to the l
 | Web UI | `3000` | Next.js frontend |
 | API | `3001` | Hono API server |
 | Postgres | `55432` | Local development database |
-| Indexer HTTP | `58010` | Python indexer (when `index` profile is up) |
+| Indexer HTTP | `58010` | Indexer (when `index` profile is up) |
 | ML server | `58012` | Text embeddings (`/text`), image embeddings (`/image`) and document extraction (`/extract`), when `index` profile is up |
 
 ---

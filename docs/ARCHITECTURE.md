@@ -10,8 +10,8 @@ Current implementation reference. Unfinished work belongs in [plans](plans/READM
   `packages/local` performs the file I/O; `apps/api` constructs it and handles authentication,
   authorization, HTTP, events and jobs. The UI uses the typed contracts client.
 - `packages/db` owns Drizzle migrations for PostgreSQL's `app` metadata and `idx` index
-  schemas. Python services consume those schemas; they do not independently migrate them.
-- The Python indexer scans mounted roots, extracts content and builds thumbnails/embeddings.
+  schemas. The indexer and OCR consume those schemas; they do not independently migrate them.
+- The indexer scans mounted roots, extracts content and builds thumbnails/embeddings.
   OCR may write to mounted originals. Browser file operations go through the API, which reads
   and writes the files folder on its own disk. See [indexer](INDEXER.md), [OCR](OCR.md) and
   [search](SEARCH-AND-AI.md).
@@ -135,8 +135,8 @@ Trash is a storage capability, not application-owned snapshot history; see [Tras
   exists (`heic-to/csp`, a wasm2js build that needs no CSP `eval` allowance), refusing files
   over 50 MiB before they are downloaded. A failed decode keeps the thumbnail on screen.
 - Camera raw files (Sony ARW, Canon CR2/CR3, Nikon NEF, DNG and other LibRaw formats) are
-  thumbnail-only. The indexer reads the JPEG preview the camera embeds through `rawpy`
-  (LibRaw), developing the sensor data at half size only when no preview covers 1024px, and
+  thumbnail-only. The indexer reads the JPEG preview the camera embeds through `rawler`,
+  developing the sensor data only when no preview covers 1024px, and
   writes the usual WebP sizes. Raw extensions are `RAW_EXTS` in the indexer and
   `RAW_IMAGE_EXTENSIONS` in `@fdrive/contracts`; they never enter text extraction or OCR. No
   browser decodes raw, so grids, the inspector, the viewer and public galleries show the

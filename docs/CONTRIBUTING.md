@@ -24,7 +24,7 @@ fdrive is a Turborepo monorepo with `pnpm` workspaces:
   - `packages/db`: Drizzle schemas, migrations, and database repositories.
   - `packages/config`: Shared Vitest and TypeScript configurations.
 - **`services/`**: Companion services:
-  - `services/indexer` (Python): Inotify watcher, text chunking, and thumbnail generator.
+  - `services/indexer` (Rust): Inotify watcher, text extraction and chunking, and thumbnail generator.
   - `services/ml` (Rust): Text embeddings, image embeddings and document text extraction.
   - `services/ocr` (Python): Nightly OCRmyPDF background runner.
 - **`deploy/`**: Docker Compose configurations, Caddy proxy files, and deployment scripts.

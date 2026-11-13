@@ -8,7 +8,7 @@ import type {
 
 /**
  * The `app.settings` keys the indexer reads at the start of every scan
- * cycle, matching `docs/INDEXER.md` and `services/indexer/src/fdrive_indexer/settings.py`.
+ * cycle, matching `docs/INDEXER.md` and `services/indexer/src/settings.rs`.
  */
 export const INDEXER_SETTINGS_KEYS = {
   scanIntervalSeconds: "indexer.scan_interval_seconds",
@@ -20,7 +20,7 @@ export const INDEXER_SETTINGS_KEYS = {
 
 /**
  * The env-derived defaults the indexer itself falls back to
- * (`services/indexer/src/fdrive_indexer/config.py`), used here so the
+ * (`services/indexer/src/config.rs`), used here so the
  * System > Indexer page can show a value even before an admin has ever
  * saved an override.
  */

@@ -19,8 +19,8 @@ export const DEFAULT_SCOPE_CACHE_TTL_MS = 60_000;
 const IndexerEventKind = z.enum(["created", "changed", "deleted", "moved"]);
 
 /**
- * The NOTIFY payload the Python indexer publishes on `idx_events`
- * (`services/indexer/src/fdrive_indexer/events.py`): `root` is the
+ * The NOTIFY payload the indexer publishes on `idx_events`
+ * (`services/indexer/src/events.rs`): `root` is the
  * configured root's name, `path`/`target_path` are root-relative without a
  * leading slash.
  */

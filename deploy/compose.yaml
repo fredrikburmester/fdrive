@@ -251,7 +251,7 @@ services:
       THUMBS_DIR: /thumbs
       INDEXER_PORT: "8010"
       INDEXER_LOG_DIR: /logs
-      # pytesseract spawns the tesseract binary, which parallelises over every
+      # The indexer runs the tesseract binary, which parallelises over every
       # core through OpenMP. INDEX_WORKERS already runs several extractions at
       # once, so without this each of them multiplies again: two OCR files were
       # observed at 240% and 215% CPU, and the indexer as a whole at 581% on a

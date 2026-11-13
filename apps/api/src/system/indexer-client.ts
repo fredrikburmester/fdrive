@@ -12,8 +12,7 @@ import { callSidecar, type SidecarRequestDeps, type SidecarResult } from "./side
 
 /**
  * Raw shapes returned by the indexer's own internal HTTP API
- * (`services/indexer/src/fdrive_indexer/server.py`, `stats.py`), snake_case
- * as Python emits it. `z.object` tolerates extra fields by default, so a
+ * (`services/indexer/src/server.rs`), snake_case as the indexer emits it. `z.object` tolerates extra fields by default, so a
  * newer indexer adding fields never breaks this client.
  */
 const IndexerHealthRaw = z.object({
