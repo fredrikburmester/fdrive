@@ -4,10 +4,10 @@ import type {
   PersonalActivityAction,
   PersonalActivitySource,
 } from "@fdrive/contracts";
-import { type StorageProvider, trashLeafPath } from "@fdrive/core";
+import { parseMoveTrashLeaf, type StorageProvider, trashLeafPath } from "@fdrive/core";
 import type { Principal } from "../auth/principal.js";
 import { activityStat, type PersonalActivityService } from "./service.js";
-import { activityTrashLeaf, deleteWithActivityReceipt } from "./trash.js";
+import { deleteWithActivityReceipt } from "./trash.js";
 
 export interface ActivityStorageContext {
   source: PersonalActivitySource;
@@ -91,7 +91,7 @@ export function activityStorage(
         run(
           "file.trash",
           { path, kind: "file" },
-          () => deleteWithActivityReceipt(storage, path, "file", trashRoot),
+          () => deleteWithActivityReceipt(storage, path, "file"),
           (facts) => facts,
         ),
       );
@@ -103,7 +103,7 @@ export function activityStorage(
         run(
           "file.trash",
           { path, kind: "dir" },
-          () => deleteWithActivityReceipt(storage, path, "dir", trashRoot),
+          () => deleteWithActivityReceipt(storage, path, "dir"),
           (facts) => facts,
         ),
       );
@@ -115,7 +115,7 @@ export function activityStorage(
       ...trash,
       async restore(id, options) {
         const leaf = trashLeafPath(trashRoot, id);
-        const original = activityTrashLeaf(trashRoot, leaf)?.originalPath;
+        const original = parseMoveTrashLeaf(trashRoot, leaf)?.originalPath;
         return run(
           "file.restore",
           {

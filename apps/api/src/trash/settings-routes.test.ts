@@ -78,7 +78,7 @@ describe("admin Trash settings routes", () => {
     const response = await app.request(ROUTES.system.trash, {
       method: "PUT",
       headers: { "content-type": "application/json", "x-requested-with": "fdrive" },
-      body: JSON.stringify({ ...initial, enabled: true, rulesConfirmed: true }),
+      body: JSON.stringify({ ...initial, enabled: true }),
     });
     expect(response.status).toBe(200);
     expect(TrashSettings.parse(await response.json())).toMatchObject({
@@ -102,7 +102,6 @@ describe("admin Trash settings routes", () => {
         enabled: false,
         path: "/.trash",
         retentionHours: null,
-        rulesConfirmed: false,
         strategy: "move",
       }),
     });

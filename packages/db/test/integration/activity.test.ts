@@ -161,8 +161,7 @@ it("keeps personal journeys stable, immutable and private across pools and ident
       { path: "/b.txt", kind: "file" },
       {
         path: "/b.txt",
-        trashLeaf: "/.trash/b.txt/1234567890000000000",
-        trashStrategy: "sftpgo_rule",
+        trashLeaf: "/.trash/.fdrive-move-v1/file/p/b.txt/v/1234567890000000000",
       },
     );
     expect(trash.fileId).toBe(saved.fileId);
@@ -170,7 +169,7 @@ it("keeps personal journeys stable, immutable and private across pools and ident
       "file.restore",
       {
         path: "/b.txt",
-        trashLeaf: "/.trash/b.txt/1234567890000000000",
+        trashLeaf: "/.trash/.fdrive-move-v1/file/p/b.txt/v/1234567890000000000",
         targetPath: "/restored.txt",
       },
       { path: "/restored.txt", kind: "file" },
@@ -485,11 +484,11 @@ it("keeps personal journeys stable, immutable and private across pools and ident
     );
     // Restoring a trashed folder by its leaf carries the tracked descendants to the new path,
     // so a child keeps one journey across the folder's trip through the trash.
-    const folderLeaf = "/.trash/moved/1234567890000000002";
+    const folderLeaf = "/.trash/.fdrive-move-v1/dir/p/moved/v/1234567890000000002";
     const folderTrash = await run(
       "file.trash",
       { path: "/moved", kind: "dir" },
-      { path: "/moved", trashLeaf: folderLeaf, trashStrategy: "sftpgo_rule" },
+      { path: "/moved", trashLeaf: folderLeaf },
     );
     const folderRestored = await run(
       "file.restore",

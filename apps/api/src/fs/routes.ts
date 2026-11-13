@@ -561,13 +561,7 @@ async function removeOne(
         },
         before: { path: item.path, kind: item.kind },
       },
-      () =>
-        deleteWithActivityReceipt(
-          principal.storage,
-          item.path,
-          item.kind,
-          deps.activity !== undefined && trashing ? trashRoot : null,
-        ),
+      () => deleteWithActivityReceipt(principal.storage, item.path, item.kind),
       (facts) => facts,
     );
   if (!deps.activity) {

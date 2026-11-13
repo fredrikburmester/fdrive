@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { withMoveToTrash } from "@fdrive/core";
+import { moveTrashLeafPath, withMoveToTrash } from "@fdrive/core";
 import { createMemoryStorage } from "@fdrive/core/testing";
 import { describe, expect, it, vi } from "vitest";
 import type { Principal } from "../auth/principal.js";
@@ -7,7 +7,7 @@ import { withRecycleFolderTrash } from "../auth/storage-factory.js";
 import type { ActivityRunInput, PersonalActivityService } from "./service.js";
 import { activityStorage } from "./storage.js";
 import { activityStream } from "./streams.js";
-import { captureRecycleReceipt, deleteWithActivityReceipt } from "./trash.js";
+import { captureRecycleReceipt } from "./trash.js";
 
 function fixture() {
   const inputs: ActivityRunInput[] = [];
@@ -46,7 +46,7 @@ describe("explicit command storage adapters", () => {
       clock: () => new Date("2026-09-14"),
       onRecycled: captureRecycleReceipt,
     });
-    const provider = withRecycleFolderTrash(moved, "/.trash", "move");
+    const provider = withRecycleFolderTrash(moved, "/.trash");
     const storage = activityStorage(
       { ...principal, storage: provider },
       activity,
@@ -59,7 +59,7 @@ describe("explicit command storage adapters", () => {
     expect(inputs.at(-1)?.action).toBe("file.trash");
     expect(finish).toHaveBeenLastCalledWith(
       "file.trash",
-      expect.objectContaining({ kind: "dir", trashStrategy: "fdrive_move" }),
+      expect.objectContaining({ kind: "dir", trashLeaf: expect.stringContaining("/.trash/") }),
     );
     const listing = await storage.trash?.list();
     const item = listing?.entries[0];
@@ -126,7 +126,7 @@ describe("explicit command storage adapters", () => {
       expect.objectContaining({ path: "/folder/a.txt", size: 2 }),
     );
   });
-  it("uses the exact move receipt and accepted provider-rule path/timestamp evidence", async () => {
+  it("records the exact leaf the move to Trash reported", async () => {
     const { principal, activity, inputs, finish } = fixture();
     const moved = withMoveToTrash({
       storage: principal.storage,
@@ -143,69 +143,11 @@ describe("explicit command storage adapters", () => {
     await storage.upload("/a.txt", new Uint8Array([1]));
     await storage.deleteFile("/a.txt");
     expect(inputs.at(-1)?.action).toBe("file.trash");
-    expect(finish).toHaveBeenLastCalledWith(
-      "file.trash",
-      expect.objectContaining({
-        path: "/a.txt",
-        trashStrategy: "fdrive_move",
-        trashLeaf: expect.stringContaining("/.trash/"),
-      }),
-    );
-    const base = createMemoryStorage();
-    await base.upload("/b.txt", new Uint8Array([1]));
-    const ruled = {
-      ...base,
-      deleteFile: async (path: string) => {
-        await base.mkdir(`/.trash${path}`, { parents: true });
-        await base.move(path, `/.trash${path}/1234567890000000000`);
-      },
-    };
-    expect(await deleteWithActivityReceipt(ruled, "/b.txt", "file", "/.trash")).toMatchObject({
-      trashLeaf: "/.trash/b.txt/1234567890000000000",
-      trashStrategy: "sftpgo_rule",
+    expect(finish).toHaveBeenLastCalledWith("file.trash", {
+      path: "/a.txt",
+      kind: "file",
+      trashLeaf: moveTrashLeafPath("/.trash", "/a.txt", "file", "1789344000000000000"),
     });
-  });
-  it("keeps receipt binding unresolved on ambiguous, oversized or unreadable listings", async () => {
-    const { principal } = fixture();
-    const base = principal.storage;
-    const entry = {
-      name: "a",
-      path: "/.trash/a/1234567890000000000",
-      kind: "file" as const,
-      size: 1,
-      ext: "",
-      modifiedAt: new Date(),
-    };
-    let calls = 0;
-    for (const entries of [
-      [entry, { ...entry, path: "/.trash/a/1234567890000000001" }],
-      Array.from({ length: 1001 }, () => entry),
-    ]) {
-      calls = 0;
-      const storage = {
-        ...base,
-        list: async () => (calls++ === 0 ? [] : entries),
-        deleteFile: async () => {},
-      };
-      expect(await deleteWithActivityReceipt(storage, "/a", "file", "/.trash")).toEqual({
-        path: "/a",
-        kind: "file",
-      });
-    }
-    expect(
-      await deleteWithActivityReceipt(
-        {
-          ...base,
-          list: async () => {
-            throw Error("offline");
-          },
-          deleteFile: async () => {},
-        },
-        "/a",
-        "file",
-        "/.trash",
-      ),
-    ).toEqual({ path: "/a", kind: "file" });
     captureRecycleReceipt("/not-active", "/never-used");
   });
 });

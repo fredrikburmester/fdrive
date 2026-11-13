@@ -79,6 +79,13 @@ describe("createMemoryStorage extras", () => {
     expect(past.status).toBe(200);
     await expect(storage.deleteDir("/nope")).rejects.toMatchObject({ kind: "not_found" });
   });
+
+  it("refuses statFile on a directory and empties a root that never had children", async () => {
+    const storage = createMemoryStorage();
+    await expect(storage.statFile("/")).rejects.toMatchObject({ kind: "bad_request" });
+    await storage.deleteDir("/");
+    expect(storage.dirs()).toEqual(["/"]);
+  });
 });
 
 it("preserves read, probe, range and timestamp semantics", async () => {
