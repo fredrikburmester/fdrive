@@ -21,7 +21,7 @@ function harness() {
     },
   };
   let providerId = PROVIDER_A;
-  let strategy: TrashStrategy = "native";
+  let strategy: TrashStrategy = "move";
   const identity = (): Identity => ({
     id: "323e4567-e89b-42d3-a456-426614174000",
     accountId: "423e4567-e89b-42d3-a456-426614174000",
@@ -53,15 +53,13 @@ describe("Trash settings service", () => {
       enabled: false,
       path: "/.trash",
       retentionHours: null,
-      rulesConfirmed: false,
-      strategy: "native",
+      strategy: "move",
     });
     expect(await service.pathForIdentity("identity-a")).toBeNull();
 
     const enabled = await service.update(PROVIDER_A, {
       ...initial,
       enabled: true,
-      rulesConfirmed: true,
       retentionHours: 72,
     });
     expect(enabled.revision).toBe(1);
@@ -74,14 +72,13 @@ describe("Trash settings service", () => {
   it("isolates settings by immutable provider and rejects a stale provider update", async () => {
     const { service, switchProvider } = harness();
     const initial = await service.configuration(PROVIDER_A);
-    await service.update(PROVIDER_A, { ...initial, enabled: true, rulesConfirmed: true });
+    await service.update(PROVIDER_A, { ...initial, enabled: true });
 
     switchProvider();
     expect(await service.forIdentity("identity-a")).toMatchObject({
       providerId: PROVIDER_B,
       revision: 0,
       enabled: false,
-      rulesConfirmed: false,
     });
     await expect(service.update(PROVIDER_B, { ...initial, revision: 0 })).rejects.toMatchObject({
       kind: "conflict",
@@ -99,37 +96,32 @@ describe("Trash settings service", () => {
 
   it("stores the configuration without the strategy and reports the module's current one", async () => {
     const { service, values, setStrategy } = harness();
-    setStrategy("move");
     const initial = await service.configuration(PROVIDER_A);
     expect(initial.strategy).toBe("move");
-    // A provider that moves deletes itself needs no rule confirmation.
     const enabled = await service.update(PROVIDER_A, { ...initial, enabled: true });
-    expect(enabled).toMatchObject({ enabled: true, rulesConfirmed: false, strategy: "move" });
+    expect(enabled).toMatchObject({ enabled: true, strategy: "move" });
     expect(values.get(`trash.configuration.${PROVIDER_A}`)).toEqual({
       providerId: PROVIDER_A,
       revision: 1,
       enabled: true,
       path: "/.trash",
       retentionHours: null,
-      rulesConfirmed: false,
     });
     expect(await service.pathForIdentity("identity-a")).toBe("/.trash");
 
     // The strategy the client saw must still be the module's.
-    await expect(
-      service.update(PROVIDER_A, { ...enabled, strategy: "native", rulesConfirmed: true }),
-    ).rejects.toMatchObject({ kind: "conflict" });
+    setStrategy("none");
+    await expect(service.update(PROVIDER_A, { ...enabled })).rejects.toMatchObject({
+      kind: "conflict",
+    });
 
-    // Native again: the stored row is enabled without confirmed rules, so it reads as off.
-    setStrategy("native");
+    // A module without Trash: the stored row is enabled, but it reads as off.
     expect(await service.configuration(PROVIDER_A)).toMatchObject({
       enabled: false,
-      rulesConfirmed: false,
-      strategy: "native",
+      strategy: "none",
       revision: 1,
     });
     expect(await service.pathForIdentity("identity-a")).toBeNull();
-    setStrategy("none");
     await expect(
       service.update(PROVIDER_A, { ...enabled, revision: 1, strategy: "none" }),
     ).rejects.toMatchObject({ kind: "bad_request" });
@@ -144,7 +136,7 @@ describe("Trash settings service", () => {
     const raced = createTrashSettingsService({
       settings: { get: async () => null, compareAndSet: async () => false },
       identities: { get: async () => null },
-      strategyFor: async () => "native",
+      strategyFor: async () => "move",
     });
     const initial = await raced.configuration(PROVIDER_A);
     await expect(raced.update(PROVIDER_A, { ...initial, path: "/raced" })).rejects.toMatchObject({
@@ -160,7 +152,6 @@ it("disables a legacy overlong Trash path and permits repairing the stored row",
   values.set(`trash.configuration.${PROVIDER_A}`, {
     ...stored,
     enabled: true,
-    rulesConfirmed: true,
     path: `/${"é".repeat(128)}`,
     revision: 3,
   });
@@ -170,4 +161,37 @@ it("disables a legacy overlong Trash path and permits repairing the stored row",
   await expect(
     service.update(PROVIDER_A, { ...recovered, path: "/recovered" }),
   ).resolves.toMatchObject({ revision: 4, path: "/recovered" });
+});
+
+it("reads a row an older version saved with keys it no longer stores, and saves it without them", async () => {
+  const { service, values } = harness();
+  const key = `trash.configuration.${PROVIDER_A}`;
+  values.set(key, {
+    providerId: PROVIDER_A,
+    revision: 2,
+    enabled: true,
+    path: "/.trash",
+    retentionHours: null,
+    rulesConfirmed: false,
+  });
+
+  const current = await service.configuration(PROVIDER_A);
+  expect(current).toEqual({
+    providerId: PROVIDER_A,
+    revision: 2,
+    enabled: true,
+    path: "/.trash",
+    retentionHours: null,
+    strategy: "move",
+  });
+  expect(await service.pathForIdentity("identity-a")).toBe("/.trash");
+
+  await service.update(PROVIDER_A, { ...current, retentionHours: 24 });
+  expect(values.get(key)).toEqual({
+    providerId: PROVIDER_A,
+    revision: 3,
+    enabled: true,
+    path: "/.trash",
+    retentionHours: 24,
+  });
 });

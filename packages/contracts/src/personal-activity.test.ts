@@ -38,6 +38,13 @@ describe("personal activity contracts", () => {
       }).path,
     ).toBe("/a");
   });
+  it("still reads a Trash event recorded with the strategy earlier versions stored", () => {
+    for (const trashStrategy of ["sftpgo_rule", "fdrive_move"])
+      expect(
+        ActivityFacts.safeParse({ path: "/a", trashLeaf: "/.trash/a/1", trashStrategy }).success,
+      ).toBe(true);
+    expect(ActivityFacts.safeParse({ path: "/a", trashStrategy: "native" }).success).toBe(false);
+  });
   it("admits only reported gestures, never caller-supplied authorship or mutation outcomes", () => {
     const input = {
       identityId: id,

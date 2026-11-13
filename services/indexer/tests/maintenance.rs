@@ -3,7 +3,7 @@
 
 mod common;
 
-use std::os::unix::fs::{MetadataExt, PermissionsExt, symlink};
+use std::os::unix::fs::{PermissionsExt, symlink};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
@@ -740,16 +740,18 @@ fn thumbnail_rebuild_follows_its_scope_and_force() {
     );
     assert_eq!(env.thumbnails(), 2);
 
+    // A marker in place of the preview shows whether a pass rewrote it. Inode numbers
+    // cannot: the filesystem may give a rewritten file the inode it just freed.
     let preview = env.thumbs.join(storage_path("sha-keep", 256));
-    let inode = std::fs::metadata(&preview).unwrap().ino();
+    std::fs::write(&preview, b"marker").unwrap();
     rebuild(&env, Some("keep"), false);
     assert_eq!(
-        std::fs::metadata(&preview).unwrap().ino(),
-        inode,
+        std::fs::read(&preview).unwrap(),
+        b"marker",
         "existing previews are kept"
     );
     rebuild(&env, Some("keep"), true);
-    assert_ne!(std::fs::metadata(&preview).unwrap().ino(), inode, "force rewrites them");
+    assert_ne!(std::fs::read(&preview).unwrap(), b"marker", "force rewrites them");
     assert_eq!(env.thumbnails(), 2);
 }
 

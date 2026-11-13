@@ -18,10 +18,9 @@ it("loads settings and refreshes affected views after a live change", async () =
     enabled: false,
     path: "/.trash",
     retentionHours: null,
-    rulesConfirmed: false,
-    strategy: "native" as const,
+    strategy: "move" as const,
   };
-  const updated = { ...data, revision: 1, enabled: true, rulesConfirmed: true };
+  const updated = { ...data, revision: 1, enabled: true };
   mocks.get.mockResolvedValue(data);
   mocks.put.mockResolvedValue(updated);
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });

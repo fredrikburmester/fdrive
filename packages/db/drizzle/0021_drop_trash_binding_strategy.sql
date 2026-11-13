@@ -1,0 +1,1 @@
+ALTER TABLE "app"."activity_trash_bindings" DROP COLUMN "strategy";

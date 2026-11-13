@@ -20,7 +20,6 @@ const saved = {
   enabled: false,
   path: "/.trash",
   retentionHours: null,
-  rulesConfirmed: false,
   strategy: "move",
 } as const;
 const PROVIDER = { id: saved.providerId, label: "Primary" };
@@ -125,12 +124,14 @@ describe("Trash settings", () => {
     expect(next).toHaveBeenCalledOnce();
     expect(mocks.mutate).not.toHaveBeenCalled();
   });
-  it("explains that fdrive moves deletes itself, with no server rules to confirm", () => {
+  it("explains that fdrive moves deletes into Trash, with nothing to confirm first", () => {
     render(<TrashSettingsCard provider={PROVIDER} onContinue={vi.fn()} />);
     expect(
       screen.getByText("Restore deleted files that fdrive moved into a recycle folder."),
     ).toBeTruthy();
-    expect(screen.getByText(/No server rules, processing worker or storage mount/)).toBeTruthy();
+    expect(
+      screen.getByText("Deleting a file moves it into the Trash folder instead of removing it."),
+    ).toBeTruthy();
     enable();
     expect(screen.queryByRole("checkbox")).toBeNull();
     expect(screen.queryByRole("link")).toBeNull();

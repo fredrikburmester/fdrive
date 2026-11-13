@@ -93,6 +93,11 @@ export const ActivityFacts = z
     version: z.string().max(256).optional(),
     variant: z.enum(["duplicate", "save_as", "stored", "stream", "all", "single"]).optional(),
     trashLeaf: virtualPath.optional(),
+    /**
+     * How the item reached Trash, on events recorded before fdrive's own move
+     * was the only way (`sftpgo_rule` was SFTPGo's recycle rule). Accepted
+     * so those events still read; nothing records it now.
+     */
     trashStrategy: z.enum(["sftpgo_rule", "fdrive_move"]).optional(),
     favorite: z.boolean().optional(),
     tags: z

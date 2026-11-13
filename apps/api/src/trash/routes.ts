@@ -13,6 +13,7 @@ import {
 } from "@fdrive/contracts";
 import {
   isStorageError,
+  parseMoveTrashLeaf,
   type StorageProvider,
   type TrashEntry,
   type TrashProvider,
@@ -21,7 +22,6 @@ import {
 } from "@fdrive/core";
 import { activityRequestContext, recordFsAction } from "../activity/fs-context.js";
 import { activityFailure, type PersonalActivityService } from "../activity/service.js";
-import { activityTrashLeaf } from "../activity/trash.js";
 import type { AppHono, AuthedHono } from "../app.js";
 import { ApiHttpError } from "../errors.js";
 import type { EventBus } from "../events/bus.js";
@@ -88,7 +88,7 @@ function requireTrash(
  */
 function validateTrashId(trashPath: string, id: string): string {
   const leafPath = trashLeafPath(trashPath, id);
-  const parsed = activityTrashLeaf(trashPath, leafPath);
+  const parsed = parseMoveTrashLeaf(trashPath, leafPath);
   if (parsed === null) {
     throw new ApiHttpError("bad_request", `invalid trash id: ${id}`, { id });
   }
@@ -186,7 +186,7 @@ export function registerTrashRoutes(
       for (const id of validated) {
         const trashVirtualPath = trashLeafPath(trashPath, id);
         const originalPath =
-          activityTrashLeaf(trashPath, trashVirtualPath)?.originalPath ?? trashVirtualPath;
+          parseMoveTrashLeaf(trashPath, trashVirtualPath)?.originalPath ?? trashVirtualPath;
         const entry = await recordFsAction(
           deps.activity,
           c,
@@ -241,7 +241,7 @@ export function registerTrashRoutes(
     const batchId = context.batchId ?? randomUUID();
     for (const [index, id] of ids.entries()) {
       const leaf = trashLeafPath(trashPath, id);
-      const path = activityTrashLeaf(trashPath, leaf)?.originalPath ?? leaf;
+      const path = parseMoveTrashLeaf(trashPath, leaf)?.originalPath ?? leaf;
       await recordFsAction(
         deps.activity,
         c,

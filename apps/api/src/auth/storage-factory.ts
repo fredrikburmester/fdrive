@@ -4,7 +4,6 @@ import {
   isStorageError,
   type ProviderInstance,
   type ProviderModule,
-  type RecycleFolderLayout,
   type StorageProvider,
   withMoveToTrash,
 } from "@fdrive/core";
@@ -34,13 +33,9 @@ export function trashSettingsForStorage(storage: StorageProvider): TrashSettings
 
 /**
  * Wraps `storage.mkdir` so creating a directory that already exists
- * succeeds instead of throwing. Real SFTPGo 2.7.5 reports "already exists"
- * as an unhandled 500 even with `mkdir_parents: true`, which would
- * otherwise break every trash restore whose target's parent folder already
- * exists (`createRecycleFolderTrash`'s `restore` always calls
- * `mkdir(parent, { parents: true })` first). Only used to build the
- * storage `createRecycleFolderTrash` itself calls `mkdir` on; every other
- * route keeps `storage`'s own `mkdir` semantics unchanged.
+ * succeeds instead of throwing, for callers that may race another request
+ * to the same folder. Every other error, and an existing file at the path,
+ * still throws.
  */
 export function withIdempotentMkdir(storage: StorageProvider): StorageProvider {
   return {
@@ -63,19 +58,15 @@ export function withIdempotentMkdir(storage: StorageProvider): StorageProvider {
 
 /**
  * Extends `storage` with a `trash` provider built on top of its own
- * list/stat/move/mkdir/deleteFile/deleteDir, using the recycle-folder layout at
- * `trashPath`. Spreads `storage` into a new object so the original
- * provider is left untouched.
+ * list/stat/move/mkdir/deleteFile/deleteDir, reading the leaves
+ * `withMoveToTrash` writes under `trashPath`. Spreads `storage` into a new
+ * object so the original provider is left untouched.
  */
 export function withRecycleFolderTrash(
   storage: StorageProvider,
   trashPath: string,
-  layout: RecycleFolderLayout = "native",
 ): StorageProvider {
-  return {
-    ...storage,
-    trash: createRecycleFolderTrash({ storage: withIdempotentMkdir(storage), trashPath, layout }),
-  };
+  return { ...storage, trash: createRecycleFolderTrash({ storage, trashPath }) };
 }
 
 /**
@@ -132,9 +123,9 @@ export interface CreateStorageFactoryDeps {
  * deny execution but never retarget it, because the module only ever sees
  * the provider row the identity is bound to. Trash settings are resolved
  * once while constructing each request's provider snapshot, so runtime
- * changes apply without restart: a provider whose module moves deleted
- * files itself (`trash: "move"`) gets that wrapper underneath the recycle
- * folder view; a native one (SFTPGo's event rule) gets only the view.
+ * changes apply without restart: with Trash on, a module with Trash
+ * (`trash: "move"`) gets the move-to-trash wrapper underneath the recycle
+ * folder view.
  */
 export function createIdentityStorageFactory(
   deps: CreateStorageFactoryDeps,
@@ -151,17 +142,14 @@ export function createIdentityStorageFactory(
     );
     const settings = await deps.resolveTrashSettings?.(identityId);
     let result = storage;
-    if (settings?.enabled === true && module.trash !== "none") {
-      const base =
-        module.trash === "move"
-          ? withMoveToTrash({
-              storage,
-              trashPath: settings.path,
-              clock: deps.clock,
-              onRecycled: captureRecycleReceipt,
-            })
-          : storage;
-      result = withRecycleFolderTrash(base, settings.path, module.trash);
+    if (settings?.enabled === true && module.trash === "move") {
+      const moving = withMoveToTrash({
+        storage,
+        trashPath: settings.path,
+        clock: deps.clock,
+        onRecycled: captureRecycleReceipt,
+      });
+      result = withRecycleFolderTrash(moving, settings.path);
     }
     if (settings !== undefined) trashSettingsByStorage.set(result, settings);
     return result;

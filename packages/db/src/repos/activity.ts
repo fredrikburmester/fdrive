@@ -190,7 +190,6 @@ export async function appendActivityOutcome(
       eventId: event.id,
       fileId: registry.file.id,
       identityId: operation.identityId,
-      strategy: result.after?.trashStrategy ?? "sftpgo_rule",
       originalPath: operation.requested.path ?? registry.file.path,
       trashLeaf: result.after?.trashLeaf ?? null,
       state: result.after?.trashLeaf ? "bound" : "unresolved",

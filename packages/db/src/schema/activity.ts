@@ -313,7 +313,6 @@ export const activityTrashBindings = appSchema.table(
     identityId: uuid("identity_id").notNull(),
     ownerAccountId: owner(),
     eventId: uuid("event_id").notNull(),
-    strategy: text("strategy").$type<"sftpgo_rule" | "fdrive_move">().notNull(),
     originalPath: text("original_virtual_path").notNull(),
     trashLeaf: text("trash_virtual_leaf"),
     state: text("state").$type<"bound" | "unresolved" | "restored" | "purged">().notNull(),

@@ -148,6 +148,13 @@
       "when": 1794573378809,
       "tag": "0020_index_root_upgrade",
       "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "7",
+      "when": 1794596387342,
+      "tag": "0021_drop_trash_binding_strategy",
+      "breakpoints": true
     }
   ]
 }

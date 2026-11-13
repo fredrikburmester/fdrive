@@ -229,7 +229,7 @@ export async function appendNativeActivity(
     ...(binding?.trashLeaf ? { trashLeaf: binding.trashLeaf } : {}),
   };
   const after: ActivityFacts = effects.trash
-    ? { ...before, trashLeaf: effects.to, trashStrategy: "fdrive_move" }
+    ? { ...before, trashLeaf: effects.to }
     : {
         path: effects.to,
         kind: effects.directory ? "dir" : "file",

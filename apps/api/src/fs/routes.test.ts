@@ -1564,7 +1564,6 @@ describe("POST /fs/delete", () => {
         onRecycled: captureRecycleReceipt,
       }),
       "/.trash",
-      "move",
     );
     const metadata = createMetadataService(createMemoryRepos());
     const onTrashedSpy = vi.spyOn(metadata, "onTrashed");
@@ -2012,7 +2011,6 @@ describe("personal activity for fs commands", () => {
         onRecycled: captureRecycleReceipt,
       }),
       "/.trash",
-      "move",
     );
     const { app, activity } = await buildHarnessWithStorage(storage, { trashPath: "/.trash" });
 
@@ -2023,9 +2021,9 @@ describe("personal activity for fs commands", () => {
 
     expect(res.status).toBe(200);
     expect(activity.operations.at(-1)?.action).toBe("file.trash");
-    expect(activity.outcomes.at(-1)?.after).toMatchObject({
+    expect(activity.outcomes.at(-1)?.after).toEqual({
       path: "/hello.txt",
-      trashStrategy: "fdrive_move",
+      kind: "file",
       trashLeaf: expect.stringContaining("/.trash/"),
     });
   });

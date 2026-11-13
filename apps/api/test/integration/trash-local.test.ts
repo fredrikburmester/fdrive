@@ -59,7 +59,6 @@ describe("trash against real PostgreSQL and a local folder", () => {
       enabled: true,
       path: TRASH_PATH,
       retentionHours: 72,
-      rulesConfirmed: false,
     });
   }, 180000);
 

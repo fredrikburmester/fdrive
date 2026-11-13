@@ -125,7 +125,7 @@ it("runs full file management without indexed roots and enforces folder grants",
     tokenAccess: { mode: "full", paths: ["/mcp"] },
     storage: {
       ...withMoveToTrash({ storage: base, trashPath: "/.trash", clock: () => new Date() }),
-      trash: createRecycleFolderTrash({ storage: base, trashPath: "/.trash", layout: "move" }),
+      trash: createRecycleFolderTrash({ storage: base, trashPath: "/.trash" }),
     },
   };
   const call = async (name: string, args: Record<string, unknown>) => {

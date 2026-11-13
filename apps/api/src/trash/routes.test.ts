@@ -36,6 +36,8 @@ const ACCOUNT_ID = "00000000-0000-4000-8000-000000000001";
 const CLOCK_ISO = "2024-06-01T00:00:00.000Z";
 const TRASH_PATH = "/.trash";
 const PROVIDER_ID = "123e4567-e89b-42d3-a456-426614174000";
+/** A well-formed leaf id of fdrive's Trash layout, for routes that never reach storage. */
+const LEAF_ID = ".fdrive-move-v1/file/p/hello.txt/v/168176641123456789";
 
 function trashSettings(path: string | null, retentionHours: number | null = null) {
   return {
@@ -44,7 +46,6 @@ function trashSettings(path: string | null, retentionHours: number | null = null
     enabled: path !== null,
     path: path ?? TRASH_PATH,
     retentionHours,
-    rulesConfirmed: path !== null,
     strategy: "move",
   } as const;
 }
@@ -121,7 +122,6 @@ async function buildHarness(
     ? withRecycleFolderTrash(
         withMoveToTrash({ storage: baseStorage, trashPath: TRASH_PATH, clock }),
         TRASH_PATH,
-        "move",
       )
     : baseStorage;
 
@@ -461,13 +461,27 @@ describe("POST /trash/restore", () => {
     expect(res.status).toBe(400);
   });
 
+  it("returns bad_request for an item outside fdrive's Trash layout", async () => {
+    const { app } = await buildHarness();
+
+    const res = await app.request(
+      ROUTES.trash.restore,
+      requestedWith({
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ ids: ["hello.txt/168176641123456789"] }),
+      }),
+    );
+
+    expect(res.status).toBe(400);
+  });
+
   it("propagates a non-StorageError from trash.restore as an internal error", async () => {
     const boom = new Error("boom");
     const storage: StorageProvider = {
       list: () => Promise.reject(new Error("not implemented")),
-      // The route has no pre-restore check of its own (that lives in
-      // `@fdrive/core`'s `createRecycleFolderTrash`, exercised separately
-      // over a folder on disk below); statFile here is never actually called.
+      // The route has no pre-restore check of its own: it goes straight to
+      // `trash.restore` below, so statFile here is never actually called.
       statFile: () => Promise.reject(new StorageError("not_found", "not found")),
       stat: () => Promise.reject(new StorageError("not_found", "not found")),
       download: () => Promise.reject(new Error("not implemented")),
@@ -515,7 +529,7 @@ describe("POST /trash/restore", () => {
       requestedWith({
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ ids: ["hello.txt/168176641123456789"] }),
+        body: JSON.stringify({ ids: [LEAF_ID] }),
       }),
     );
 
@@ -525,9 +539,8 @@ describe("POST /trash/restore", () => {
   it("attaches failedId even when the underlying StorageError carries no details", async () => {
     const storage: StorageProvider = {
       list: () => Promise.reject(new Error("not implemented")),
-      // The route has no pre-restore check of its own (that lives in
-      // `@fdrive/core`'s `createRecycleFolderTrash`, exercised separately
-      // over a folder on disk below); statFile here is never actually called.
+      // The route has no pre-restore check of its own: it goes straight to
+      // `trash.restore` below, so statFile here is never actually called.
       statFile: () => Promise.reject(new StorageError("not_found", "not found")),
       stat: () => Promise.reject(new StorageError("not_found", "not found")),
       download: () => Promise.reject(new Error("not implemented")),
@@ -575,13 +588,13 @@ describe("POST /trash/restore", () => {
       requestedWith({
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ ids: ["hello.txt/168176641123456789"] }),
+        body: JSON.stringify({ ids: [LEAF_ID] }),
       }),
     );
 
     expect(res.status).toBe(409);
     const body = await readJson<ErrorJson>(res);
-    expect(body.error.details).toEqual({ failedId: "hello.txt/168176641123456789" });
+    expect(body.error.details).toEqual({ failedId: LEAF_ID });
   });
 
   it("succeeds without calling any metadata hook when no metadata service is configured", async () => {
@@ -637,7 +650,7 @@ describe("POST /trash/restore", () => {
       requestedWith({
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ ids: ["a.txt/168176641123456789"] }),
+        body: JSON.stringify({ ids: [LEAF_ID] }),
       }),
     );
 
@@ -700,7 +713,7 @@ describe("POST /trash/purge", () => {
       requestedWith({
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ ids: ["a.txt/168176641123456789"] }),
+        body: JSON.stringify({ ids: [LEAF_ID] }),
       }),
     );
 
