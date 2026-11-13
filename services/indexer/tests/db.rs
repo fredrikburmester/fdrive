@@ -180,7 +180,7 @@ fn schema_wait_waits_for_the_failure_history_migration() {
     assert_eq!(*sleeps.borrow(), vec![Duration::from_secs(5)]);
     let logs = logs.borrow();
     assert_eq!(logs.len(), 1);
-    assert!(logs[0].contains("processing_failures and work migrations") && logs[0].contains("last seen: 2"));
+    assert!(logs[0].contains("processing_failures, work and folders migrations") && logs[0].contains("last seen: 2"));
 }
 
 #[test]
@@ -205,6 +205,127 @@ fn schema_wait_waits_for_the_work_queue_migration() {
     .unwrap();
     assert_eq!(version, Some(2));
     assert_eq!(logs.borrow().len(), 1);
+}
+
+#[test]
+fn schema_wait_waits_for_the_folders_migration() {
+    let (url, mut c) = setup();
+    c.batch_execute(r#"ALTER TABLE "idx"."folders" RENAME TO folders_pending"#)
+        .unwrap();
+    let client = RefCell::new(c);
+    let logs = RefCell::new(Vec::<String>::new());
+    let version = db::wait_for_schema_version(
+        &Db::new(&url),
+        2,
+        Duration::from_secs(60),
+        &|m| logs.borrow_mut().push(m.to_owned()),
+        &|_| {
+            client
+                .borrow_mut()
+                .batch_execute(r#"ALTER TABLE "idx"."folders_pending" RENAME TO folders"#)
+                .unwrap();
+        },
+    )
+    .unwrap();
+    assert_eq!(version, Some(2));
+    assert_eq!(logs.borrow().len(), 1);
+}
+
+/// The root's folder rows, sorted by path byte by byte.
+fn folder_rows(c: &mut Client, root_id: i64) -> Vec<(String, String, i64)> {
+    let mut rows: Vec<(String, String, i64)> = c
+        .query(
+            r#"SELECT path, name, mtime_ns FROM "idx"."folders" WHERE root_id = $1::bigint"#,
+            &[&root_id],
+        )
+        .unwrap()
+        .iter()
+        .map(|r| (r.get(0), r.get(1), r.get(2)))
+        .collect();
+    rows.sort();
+    rows
+}
+
+fn folders(paths: &[&str]) -> Vec<db::FolderRow> {
+    paths
+        .iter()
+        .map(|p| db::FolderRow {
+            path: (*p).to_owned(),
+            mtime_ns: 7,
+        })
+        .collect()
+}
+
+#[test]
+fn folder_rows_are_written_updated_and_swept_under_a_folder() {
+    let (_, mut c) = setup();
+    let root = db::upsert_root(&mut c, "r").unwrap();
+    // A path found twice is written once.
+    db::sync_folders(&mut c, root, &folders(&["a", "a/b", "a/b/c", "ab", "z", "a"]), None).unwrap();
+    assert_eq!(folder_rows(&mut c, root).len(), 5);
+    let started = db::now(&mut c).unwrap();
+    // A walk of `a` that found only `a/b` with a new time drops `a/b/c`, never `a` itself or
+    // `ab`, which only shares its first letter.
+    let found = [db::FolderRow {
+        path: "a/b".to_owned(),
+        mtime_ns: 9,
+    }];
+    assert_eq!(db::sync_folders(&mut c, root, &found, Some(("a", started))).unwrap(), 1);
+    assert_eq!(
+        folder_rows(&mut c, root),
+        [
+            ("a".to_owned(), "a".to_owned(), 7),
+            ("a/b".to_owned(), "b".to_owned(), 9),
+            ("ab".to_owned(), "ab".to_owned(), 7),
+            ("z".to_owned(), "z".to_owned(), 7)
+        ]
+    );
+    // A walk of the whole root drops whatever it did not write.
+    let started = db::now(&mut c).unwrap();
+    assert_eq!(
+        db::sync_folders(&mut c, root, &folders(&["a"]), Some(("", started))).unwrap(),
+        3
+    );
+    assert_eq!(folder_rows(&mut c, root), [("a".to_owned(), "a".to_owned(), 7)]);
+    // Another root's rows are never touched.
+    let other = db::upsert_root(&mut c, "other").unwrap();
+    db::sync_folders(&mut c, other, &folders(&["a"]), None).unwrap();
+    let started = db::now(&mut c).unwrap();
+    db::sync_folders(&mut c, root, &[], Some(("", started))).unwrap();
+    assert!(folder_rows(&mut c, root).is_empty());
+    assert_eq!(folder_rows(&mut c, other).len(), 1);
+}
+
+#[test]
+fn folder_rows_follow_deletes_and_renames() {
+    let (_, mut c) = setup();
+    let root = db::upsert_root(&mut c, "r").unwrap();
+    db::sync_folders(&mut c, root, &folders(&["a", "a/b", "a/b/c", "ab", "x", "x/b"]), None).unwrap();
+    // A file's delete drops a folder row only at that exact path.
+    db::mark_deleted(&mut c, root, "a/b", false).unwrap();
+    let paths = |c: &mut Client| folder_rows(c, root).into_iter().map(|r| r.0).collect::<Vec<_>>();
+    assert_eq!(paths(&mut c), ["a", "a/b/c", "ab", "x", "x/b"]);
+    db::sync_folders(&mut c, root, &folders(&["a/b"]), None).unwrap();
+    // A folder moved over `x` replaces the rows already there and keeps its own names.
+    db::rename_paths(&mut c, root, "a", "x", true).unwrap();
+    assert_eq!(
+        folder_rows(&mut c, root)
+            .into_iter()
+            .map(|(p, n, _)| (p, n))
+            .collect::<Vec<_>>(),
+        [
+            ("ab".to_owned(), "ab".to_owned()),
+            ("x".to_owned(), "x".to_owned()),
+            ("x/b".to_owned(), "b".to_owned()),
+            ("x/b/c".to_owned(), "c".to_owned())
+        ]
+    );
+    // A file's rename leaves folder rows alone.
+    db::rename_paths(&mut c, root, "ab", "ac", false).unwrap();
+    assert_eq!(paths(&mut c), ["ab", "x", "x/b", "x/b/c"]);
+    // A folder's delete drops it and everything below it.
+    db::mark_deleted(&mut c, root, "x", true).unwrap();
+    assert_eq!(paths(&mut c), ["ab"]);
 }
 
 #[test]

@@ -11,7 +11,9 @@ use anyhow::Result;
 use crate::config::Config;
 use crate::db::{self, Db};
 use crate::failures::FileResult;
-use crate::indexer::{FileStat, RootContext, scan_once, watch_index, watch_mark_deleted, watch_rename, work_features};
+use crate::indexer::{
+    FileStat, RootContext, scan_once, watch_folder, watch_index, watch_mark_deleted, watch_rename, work_features,
+};
 use crate::log::log;
 use crate::paths::ext_of;
 use crate::server::Wake;
@@ -68,6 +70,10 @@ impl WatchHandler for Handler {
 
     fn rename(&self, old_rel: &str, new_rel: &str, is_dir: bool) -> usize {
         watch_rename(&self.0, old_rel, new_rel, is_dir)
+    }
+
+    fn folder_changed(&self, rel: &str) {
+        watch_folder(&self.0, rel);
     }
 
     fn on_queue(&self, abs: &Path) -> Box<dyn FnOnce(&FileResult) + Send> {

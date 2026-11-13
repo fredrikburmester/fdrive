@@ -356,7 +356,12 @@ export function createLocalStorage(options: LocalStorageOptions): LocalStorage {
     mkdir: (path, opts) =>
       mapped(path, async () => {
         const at = await home.entry(path);
-        await mkdir(at, { recursive: opts?.parents === true });
+        const parents = opts?.parents === true;
+        // With `parents`, the first folder it made, if any; without, it made `at` or threw.
+        const created = parents ? await mkdir(at, { recursive: true }) : await mkdir(at);
+        const first = parents ? created : at;
+        // Search finds folders by name, so a new one is reported even while empty.
+        if (first !== undefined) notify(listener, { kind: "changed", path: first });
       }),
 
     move: (path, target, opts) =>

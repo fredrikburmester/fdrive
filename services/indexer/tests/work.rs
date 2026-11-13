@@ -374,6 +374,105 @@ fn a_folder_is_compared_with_its_rows() {
     assert_eq!(live_paths(&env, &ctx), ["d/b.txt", "d/c.txt"]);
 }
 
+fn folder_paths(env: &Env, ctx: &RootContext) -> Vec<String> {
+    env.folders(ctx).into_iter().map(|(path, _)| path).collect()
+}
+
+#[test]
+fn a_new_folder_is_recorded_with_the_folders_above_and_in_it() {
+    let env = Env::new();
+    let ctx = env.ctx(text_on());
+    std::fs::create_dir_all(env.path("alice/Microlärande")).unwrap();
+    queue(&env, &ctx, "alice/Microlärande", None, None);
+    drain(&ctx);
+    assert_eq!(
+        env.folders(&ctx),
+        [
+            ("alice".to_owned(), "alice".to_owned()),
+            ("alice/Microlärande".to_owned(), "Microlärande".to_owned())
+        ]
+    );
+    env.write("alice/d/s/a.txt", b"one");
+    std::fs::create_dir_all(env.path("alice/d/.git/objects")).unwrap();
+    queue(&env, &ctx, "alice/d", None, None);
+    drain(&ctx);
+    assert_eq!(
+        folder_paths(&env, &ctx),
+        ["alice", "alice/Microlärande", "alice/d", "alice/d/s"]
+    );
+}
+
+#[test]
+fn an_upload_records_the_folders_it_landed_in() {
+    let env = Env::new();
+    let ctx = env.ctx(text_on());
+    env.write("alice/new/deeper/a.txt", b"one");
+    queue(&env, &ctx, "alice/new/deeper/a.txt", None, None);
+    drain(&ctx);
+    assert_eq!(folder_paths(&env, &ctx), ["alice", "alice/new", "alice/new/deeper"]);
+    // A top-level file has no folder above it.
+    env.write("top.txt", b"two");
+    queue(&env, &ctx, "top.txt", None, None);
+    drain(&ctx);
+    assert_eq!(folder_paths(&env, &ctx), ["alice", "alice/new", "alice/new/deeper"]);
+}
+
+#[test]
+fn folders_that_are_gone_lose_their_rows() {
+    let env = Env::new();
+    let ctx = env.ctx(text_on());
+    std::fs::create_dir_all(env.path("d/s/t")).unwrap();
+    std::fs::create_dir_all(env.path("d/u")).unwrap();
+    queue(&env, &ctx, "d", None, None);
+    drain(&ctx);
+    assert_eq!(folder_paths(&env, &ctx), ["d", "d/s", "d/s/t", "d/u"]);
+    // Comparing a folder with the disk drops what is gone below it.
+    std::fs::remove_dir_all(env.path("d/s")).unwrap();
+    queue(&env, &ctx, "d", None, None);
+    drain(&ctx);
+    assert_eq!(folder_paths(&env, &ctx), ["d", "d/u"]);
+    // A deleted folder takes its rows and those below it.
+    std::fs::remove_dir_all(env.path("d")).unwrap();
+    queue(&env, &ctx, "d", None, None);
+    drain(&ctx);
+    assert!(folder_paths(&env, &ctx).is_empty());
+}
+
+#[test]
+fn a_moved_folder_takes_its_folder_rows_along() {
+    let env = Env::new();
+    let ctx = env.ctx(text_on());
+    std::fs::create_dir_all(env.path("old/empty")).unwrap();
+    env.write("old/s/a.txt", b"one");
+    std::fs::create_dir_all(env.path("new/s")).unwrap();
+    queue(&env, &ctx, "old", None, None);
+    queue(&env, &ctx, "new", None, None);
+    drain(&ctx);
+    std::fs::remove_dir_all(env.path("new")).unwrap();
+    std::fs::rename(env.path("old"), env.path("new")).unwrap();
+    queue(&env, &ctx, "old", Some("new"), None);
+    drain(&ctx);
+    assert_eq!(
+        env.folders(&ctx),
+        [
+            ("new".to_owned(), "new".to_owned()),
+            ("new/empty".to_owned(), "empty".to_owned()),
+            ("new/s".to_owned(), "s".to_owned())
+        ]
+    );
+    assert_eq!(live_paths(&env, &ctx), ["new/s/a.txt"]);
+}
+
+#[test]
+fn while_indexing_is_off_no_folder_is_recorded() {
+    let env = Env::new();
+    let ctx = env.ctx(OFF);
+    std::fs::create_dir_all(env.path("d")).unwrap();
+    fdrive_indexer::indexer::watch_folder(&ctx, "d");
+    fdrive_indexer::indexer::record_folders(&ctx, &fdrive_indexer::indexer::folder_chain(&env.path(""), "d"), None);
+    assert!(env.folders(&ctx).is_empty());
+}
+
 #[test]
 fn a_file_replaced_by_a_folder_loses_its_row() {
     let env = Env::new();

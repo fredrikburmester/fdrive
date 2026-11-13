@@ -17,7 +17,8 @@ use crate::config::{SKIP_DIRS, SKIP_NAMES};
 use crate::db::{self, WorkRow};
 use crate::failures::describe;
 use crate::indexer::{
-    ContentHint, FileStat, RootContext, unchanged_in_db, walk, watch_index_with, watch_mark_deleted, watch_rename,
+    ContentHint, FileStat, RootContext, folder_chain, record_folders, unchanged_in_db, walk_tree, watch_index_with,
+    watch_mark_deleted, watch_rename,
 };
 use crate::log::log;
 use crate::rules::{should_index_name, should_walk_dir};
@@ -244,7 +245,12 @@ impl Applier {
 
     fn look_again(&self, path: &str, hint: Option<ContentHint>) {
         match entry(&self.ctx.abs_path, path) {
-            Entry::File(_) => self.index(path.to_owned(), hint),
+            Entry::File(_) => {
+                // A new file can come with new folders above it, and changes its folder.
+                let parent = path.rsplit_once('/').map_or("", |(parent, _)| parent);
+                record_folders(&self.ctx, &folder_chain(&self.ctx.abs_path, parent), None);
+                self.index(path.to_owned(), hint);
+            }
             Entry::Dir => self.reconcile(path),
             Entry::Gone => {
                 self.pool.wait_idle();
@@ -295,7 +301,8 @@ impl Applier {
     }
 
     /// Compare one folder with its rows, like a scan of just that folder: index what is new
-    /// or changed, and drop the rows of what is gone once the whole folder was read.
+    /// or changed, record the folder, those above it and those in it, and drop the rows of
+    /// what is gone once the whole folder was read.
     fn reconcile(&self, path: &str) {
         let ctx = &self.ctx;
         let found = ctx
@@ -314,9 +321,14 @@ impl Applier {
         };
         let mut unseen: HashSet<String> = manifest.keys().cloned().collect();
         let mut complete = true;
-        walk(
+        let mut folders = folder_chain(&ctx.abs_path, path);
+        walk_tree(
             &ctx.abs_path.join(path),
             || complete = false,
+            |mut folder| {
+                folder.path = format!("{path}/{}", folder.path);
+                folders.push(folder);
+            },
             |_, rel, stat| {
                 let rel = format!("{path}/{rel}");
                 unseen.remove(&rel);
@@ -326,6 +338,7 @@ impl Applier {
                 true
             },
         );
+        record_folders(ctx, &folders, complete.then_some((path, started_at)));
         if complete && !unseen.is_empty() {
             let unseen: Vec<String> = unseen.into_iter().collect();
             if let Err(e) = ctx.db.with(|c| db::sweep_vanished(c, ctx.root_id, &unseen, started_at)) {

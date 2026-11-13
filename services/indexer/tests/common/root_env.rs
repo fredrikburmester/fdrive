@@ -270,6 +270,22 @@ impl Env {
             .map(|r| r.get(0))
     }
 
+    /// The root's folder rows as `(path, name)`, sorted by path byte by byte.
+    pub fn folders(&self, ctx: &RootContext) -> Vec<(String, String)> {
+        let mut rows: Vec<(String, String)> = self
+            .client()
+            .query(
+                r#"SELECT path, name FROM "idx"."folders" WHERE root_id = $1::bigint"#,
+                &[&ctx.root_id],
+            )
+            .unwrap()
+            .iter()
+            .map(|r| (r.get(0), r.get(1)))
+            .collect();
+        rows.sort();
+        rows
+    }
+
     pub fn count(&self, table: &str) -> i64 {
         db::count(&mut self.client(), table).unwrap()
     }
