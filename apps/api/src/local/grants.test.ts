@@ -3,7 +3,6 @@ import { StorageError, type StorageProvider } from "@fdrive/core";
 import { createMemoryRepos } from "@fdrive/db/testing";
 import { describe, expect, it, vi } from "vitest";
 import { createIdentityStorageFactory } from "../auth/storage-factory.js";
-import { createTokenSource } from "../auth/token-source.js";
 import { memoryProviderService, seedLocalProvider } from "../providers/test-fixtures/index.ts";
 import { createLocalGrantService, type LocalGrantServiceDeps } from "./grants.js";
 import { localModuleFixture, seedLocalUsers, writeHomeFiles } from "./test-fixtures/index.ts";
@@ -32,17 +31,8 @@ async function fixture(options: Partial<LocalGrantServiceDeps> = {}) {
   const row = await seedLocalProvider(repos);
   const retired = await repos.providers.ensure({ type: "webdav", baseUrl: "http://dav.test" });
   const providers = memoryProviderService(repos, { modules: { local: local.module } });
-  const master = Buffer.alloc(32, 41);
-  const tokenSource = createTokenSource({
-    repos,
-    providers,
-    master,
-    clock: () => new Date(),
-    fetch,
-  });
   const storageFor = createIdentityStorageFactory({
     providers,
-    tokenSource,
     fetch,
     clock: () => new Date(),
   });

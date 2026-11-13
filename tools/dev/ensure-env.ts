@@ -11,9 +11,9 @@
  * `FDRIVE_ADMIN_USERS`) into `apps/api/.env.dev`, whether that file is
  * freshly created or already existed, without touching any key already
  * present. This lets `pnpm dev:env` grow the file's contents across
- * versions of this script instead of only ever writing it once. Values an
- * earlier version wrote are replaced (`isObsoleteApiEnvLine`): SFTPGo's keys
- * and root, and a storage root that served the committed seed itself.
+ * versions of this script instead of only ever writing it once. A storage
+ * root an earlier version pointed at the committed seed itself is replaced
+ * (`isObsoleteApiEnvLine`).
  *
  * Finally it copies the committed dev homes (`deploy/dev/files`) into the
  * gitignored folder the api serves (`deploy/dev/.data/files`) when that is
@@ -180,9 +180,6 @@ function envLineKey(line: string): string | undefined {
   return /^([A-Za-z_][A-Za-z0-9_]*)=/.exec(line)?.[1];
 }
 
-/** Keys earlier versions of this script wrote for SFTPGo, which the api no longer reads. */
-export const OBSOLETE_API_ENV_KEYS: readonly string[] = ["SFTPGO_URL", "FDRIVE_HOME_TEMPLATE"];
-
 /** A `KEY=value` line's value, without the quotes `quoteEnvValue` may have added. */
 function envLineValue(line: string): string {
   const value = line.slice(line.indexOf("=") + 1);
@@ -208,21 +205,16 @@ function indexRootStoragePaths(value: string): unknown[] {
 
 /**
  * True for a line an earlier version of this script wrote that must go:
- * an obsolete key, an `FDRIVE_INDEX_ROOTS` that still names the `sftpgo`
- * root, or, given `seedDir`, an `FDRIVE_STORAGE_ROOT` or index root that
- * serves the committed seed instead of its gitignored copy. A developer's
- * own values are left alone.
+ * given `seedDir`, an `FDRIVE_STORAGE_ROOT` or index root that serves the
+ * committed seed instead of its gitignored copy. A developer's own values
+ * are left alone.
  */
 export function isObsoleteApiEnvLine(line: string, seedDir?: string): boolean {
   const key = envLineKey(line);
-  if (key === undefined) return false;
-  if (OBSOLETE_API_ENV_KEYS.includes(key)) return true;
-  if (key === "FDRIVE_STORAGE_ROOT") {
-    return seedDir !== undefined && envLineValue(line) === seedDir;
-  }
+  if (key === undefined || seedDir === undefined) return false;
+  if (key === "FDRIVE_STORAGE_ROOT") return envLineValue(line) === seedDir;
   if (key !== "FDRIVE_INDEX_ROOTS") return false;
-  if (/"name"\s*:\s*"sftpgo"/.test(line)) return true;
-  return seedDir !== undefined && indexRootStoragePaths(envLineValue(line)).includes(seedDir);
+  return indexRootStoragePaths(envLineValue(line)).includes(seedDir);
 }
 
 /**

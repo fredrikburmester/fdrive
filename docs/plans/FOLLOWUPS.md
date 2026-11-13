@@ -11,8 +11,7 @@ completed work or claims of newly reproduced runtime failures.
 | Office reported ready before its document service has settled | On an installation updated on 2026-11-12, the bundled ONLYOFFICE restarted its document service once about three minutes after starting, two minutes after `deploy/wait-ready.ts` had reported Office ready. This is the stock image's behaviour | Decide whether readiness should wait for that restart (the controller's ready check, or `wait-ready.ts`), so a document opened right after an update does not drop once; verify on a fresh start of the bundled Office |
 | System settings live dev verification | Historical P9 handoff records automated checks but no real dev-stack pass | Exercise General, Users, feature settings, Office and event log against the running dev stack; record actual evidence |
 
-The provider-binding integration gap and Phase 5 strict performance gap are closed. Provider binding uses two HTTP servers
-backed by a small token-minting fake; do not describe that as two containerized upstream implementations.
+The Phase 5 strict performance gap is closed.
 No new benchmark or browser run was performed during this documentation audit.
 
 Security reports follow [SECURITY.md](../../SECURITY.md); do not track them here.

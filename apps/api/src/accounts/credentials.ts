@@ -1,4 +1,4 @@
-import type { ProviderCredential, ProviderToken } from "@fdrive/core";
+import type { ProviderCredential } from "@fdrive/core";
 import { isStorageError, stripTransientFields, validateFields } from "@fdrive/core";
 import { addressBlock } from "../auth/address-block.js";
 import { ApiHttpError } from "../errors.js";
@@ -23,7 +23,6 @@ export interface VerifiedCredential extends ResolvedProvider {
   readonly externalUsername: string;
   /** The credential as it is stored: validated, transient fields removed. */
   readonly stored: ProviderCredential;
-  readonly token: ProviderToken | undefined;
 }
 
 /**
@@ -151,6 +150,5 @@ export async function verifyCredentials(
     ...target,
     externalUsername: result.externalUsername,
     stored: stripTransientFields(fields, validated.value),
-    token: result.token,
   };
 }

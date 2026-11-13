@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { MeResponse, ROUTES } from "@fdrive/contracts";
+import { ROUTES } from "@fdrive/contracts";
 import { StorageError } from "@fdrive/core";
 import { createMemoryStorage } from "@fdrive/testkit";
 import { expect, it, vi } from "vitest";
@@ -236,27 +236,6 @@ it("requires a provider id once several providers are enabled", async () => {
   ).toBe(400);
 });
 
-it("drops the new session when priming the upstream token fails after login", async () => {
-  // Storage that mints a token while it signs in, which login primes.
-  const h = accountsHarness({
-    modules: folderSigningInWith({
-      authenticate: async () => ({
-        externalUsername: "alice",
-        token: { token: "minted", expiresAt: new Date("2026-09-08T00:00:00Z") },
-      }),
-    }),
-  });
-  const row = await h.seeded;
-  vi.spyOn(h.tokenSource, "prime").mockRejectedValueOnce(new Error("token store down"));
-  const remove = vi.spyOn(h.repos.sessions, "delete");
-  const res = await h.call(ROUTES.auth.login, {
-    method: "POST",
-    body: { providerId: row.id, credential: { username: "alice", password: "alice-pass" } },
-  });
-  expect(res.status).toBe(500);
-  expect(remove).toHaveBeenCalledTimes(1);
-});
-
 it("holds the per-address spray bound across a whole IPv6 /64, not per address", async () => {
   const h = accountsHarness();
   await h.seeded;
@@ -331,35 +310,6 @@ it("bounds one address block's share of limiter capacity so another address stil
       ip: "203.0.113.51",
     }),
   ).rejects.toMatchObject({ kind: "rate_limited" });
-});
-
-it("primes the token storage minted while verifying a linked login", async () => {
-  const h = accountsHarness({
-    modules: folderSigningInWith({
-      authenticate: async (_instance, credential) => ({
-        externalUsername: credential.username ?? "",
-        token: { token: "from-link", expiresAt: new Date("2026-09-08T00:00:00Z") },
-      }),
-      mint: vi.fn(async () => {
-        throw new Error("must not mint");
-      }),
-    }),
-  });
-  const alice = await h.login();
-  const row = await seedProviderRow(h.repos, "http://second.test");
-  const linked = await h.call(ROUTES.account.identities, {
-    method: "POST",
-    cookie: alice.cookie,
-    body: {
-      providerId: row.id,
-      credential: { username: "alice", password: "alice-pass" },
-      currentCredential: { password: "alice-pass" },
-    },
-  });
-  expect(linked.status).toBe(200);
-  const me = MeResponse.parse(await linked.json());
-  expect(me.activeIdentityId).not.toBe(alice.me.activeIdentityId);
-  expect(await h.tokenSource.get(me.activeIdentityId)).toBe("from-link");
 });
 
 it("passes the storage's own reason for refusing a user, and hides any other failure", async () => {

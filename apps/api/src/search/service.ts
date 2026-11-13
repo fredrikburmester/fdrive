@@ -5,7 +5,6 @@ import {
   filenameScore,
   fuseRankings,
   highlightRanges,
-  isUnderPath,
   matchesSearchFilters,
   mimeFromExtension,
   NAME_MATCH_BOOST,
@@ -27,7 +26,7 @@ import type {
 } from "../scoping/read-authorizer.ts";
 import { roundTripVirtualPath } from "../scoping/round-trip.ts";
 import type { EmbedClient } from "./embeddings.js";
-import { dateFromMtimeNs } from "./scopes.js";
+import { dateFromMtimeNs, trashExclusion } from "./scopes.js";
 
 /** How many rows each of the three underlying signals fans out to, matching filesai's `LIMIT 60`. */
 const CONTENT_FANOUT_LIMIT = 60;
@@ -50,12 +49,12 @@ export interface SearchServiceDeps {
   /** Whether `FDRIVE_THUMBS_DIR` is configured; when false, every hit reports `hasThumbnail: false`. */
   readonly thumbsEnabled: boolean;
   /**
-   * The storage provider's recycle folder virtual path, when configured.
-   * A result whose virtual path is this path or nested under it is treated
-   * as unmapped (as if it were out of scope), so trashed files never
-   * appear in search hits, folder grouping, or counts.
+   * The login's Trash folder virtual path, when Trash is on. Every query
+   * leaves out the folder and everything under it before its limit, so
+   * trashed files never appear in search hits, folder grouping, or counts,
+   * and never take a place in the fanout. A test/default value; production
+   * passes a request snapshot in `SearchServiceInput`.
    */
-  /** Optional test/default value; production passes a request snapshot in SearchServiceInput. */
   readonly trashPath?: string | null;
   readonly clock: () => Date;
 }
@@ -206,6 +205,7 @@ export function createSearchService(deps: SearchServiceDeps): SearchService {
       if (prefixes.length === 0) {
         return emptyResponse(input.query, tookMs(), { degraded: false, unavailable: true });
       }
+      const exclude = trashExclusion(input.scopes, trashPath, rootIds);
 
       const authMemo = new Map<string, Promise<ReadAuthorizeResult>>();
 
@@ -224,17 +224,7 @@ export function createSearchService(deps: SearchServiceDeps): SearchService {
         if (rootName === undefined) {
           return null;
         }
-        const virtualPath = roundTripVirtualPath(input.scopes, rootName, file.path);
-        if (virtualPath === null) {
-          return null;
-        }
-        if (
-          trashPath !== null &&
-          (virtualPath === trashPath || isUnderPath(trashPath, virtualPath))
-        ) {
-          return null;
-        }
-        return virtualPath;
+        return roundTripVirtualPath(input.scopes, rootName, file.path);
       }
 
       let authUnavailable = false;
@@ -290,6 +280,7 @@ export function createSearchService(deps: SearchServiceDeps): SearchService {
           ? deps.indexQueries.fulltext(prefixes, tsquery, CONTENT_FANOUT_LIMIT, {
               recency,
               preferTsquery: toPrefixTsQuery(input.query, "all"),
+              exclude,
             })
           : Promise.resolve<ContentHit[]>([]),
       );
@@ -297,6 +288,7 @@ export function createSearchService(deps: SearchServiceDeps): SearchService {
         words.length > 0
           ? deps.indexQueries.filename(prefixes, words, input.query, FILENAME_FANOUT_LIMIT, {
               recency,
+              exclude,
             })
           : Promise.resolve<FilenameHit[]>([]);
       const embeddingPromise =
@@ -306,7 +298,7 @@ export function createSearchService(deps: SearchServiceDeps): SearchService {
       const semanticPipeline = primeFanout(
         embeddingPromise.then((embedding) =>
           embedding !== null
-            ? deps.indexQueries.semantic(prefixes, embedding, CONTENT_FANOUT_LIMIT)
+            ? deps.indexQueries.semantic(prefixes, embedding, CONTENT_FANOUT_LIMIT, { exclude })
             : Promise.resolve<ContentHit[]>([]),
         ),
       );

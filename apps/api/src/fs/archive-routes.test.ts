@@ -1096,12 +1096,11 @@ describe("GET /fs/jobs, GET /fs/jobs/:id, POST /fs/jobs/:id/cancel", () => {
 });
 
 describe("unmapped storage errors pass through unchanged", () => {
-  it("maps a non-bad_request, non-not_found StorageError from the destination check", async () => {
-    // `assertIsDirectory` (the destination check) tries `statFile` first;
-    // this fails there directly, before it would ever fall through to
-    // `list`.
+  const dirStat = { kind: "dir", size: 0, modifiedAt: null, contentType: null } as const;
+
+  it("maps a non-not_found StorageError from the destination check", async () => {
     const storage = makeStubStorage({
-      statFile: async () => {
+      stat: async () => {
         throw new StorageError("forbidden", "no access");
       },
     });
@@ -1117,7 +1116,7 @@ describe("unmapped storage errors pass through unchanged", () => {
 
   it("rethrows a non-StorageError from the destination check as an internal error", async () => {
     const storage = makeStubStorage({
-      statFile: async () => {
+      stat: async () => {
         throw new Error("boom");
       },
     });
@@ -1131,18 +1130,12 @@ describe("unmapped storage errors pass through unchanged", () => {
     expect(res.status).toBe(500);
   });
 
-  it("maps a non-bad_request, non-not_found StorageError from the target existence check", async () => {
-    // `statFile("/somewhere")` (the destination check) reports `bad_request`
-    // (as SFTPGo does for a real directory), so `assertIsDirectory` falls
-    // through to `list`, which resolves it as a directory; the failure
-    // this asserts on comes from the *next* `statFile` call, checking
-    // whether the target archive path already exists.
+  it("maps a non-not_found StorageError from the target existence check", async () => {
+    // The destination stats as a folder; the failure this asserts on comes
+    // from the next `stat`, checking whether the archive's path is taken.
     const storage = makeStubStorage({
-      list: async () => [],
-      statFile: async (path: string) => {
-        if (path === "/somewhere") {
-          throw new StorageError("bad_request", "is a directory");
-        }
+      stat: async (path: string) => {
+        if (path === "/somewhere") return dirStat;
         throw new StorageError("forbidden", "no access");
       },
     });
@@ -1158,11 +1151,8 @@ describe("unmapped storage errors pass through unchanged", () => {
 
   it("rethrows a non-StorageError from the target existence check as an internal error", async () => {
     const storage = makeStubStorage({
-      list: async () => [],
-      statFile: async (path: string) => {
-        if (path === "/somewhere") {
-          throw new StorageError("bad_request", "is a directory");
-        }
+      stat: async (path: string) => {
+        if (path === "/somewhere") return dirStat;
         throw new Error("boom");
       },
     });

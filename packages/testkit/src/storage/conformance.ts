@@ -3,8 +3,8 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 export interface StorageConformanceOptions {
   /**
-   * Whether the provider's `move` and `copy` overwrite an existing target
-   * by default (SFTPGo does) rather than refusing it with `conflict`.
+   * Whether the provider's `move` overwrites an existing target by default
+   * rather than refusing it with `conflict`.
    */
   readonly overwritesOnMove?: boolean;
   /**
@@ -106,10 +106,7 @@ export function describeStorageProvider(
 
     it("fails to list a file and reports a missing path as not_found", async () => {
       const file = await seed("f.txt", "x");
-      // Listing a file is always an error, but a real SFTPGo 2.7.5 drops the
-      // connection instead of answering, which surfaces as
-      // `upstream_unavailable`; fakes and other providers say `bad_request`.
-      expect(["bad_request", "upstream_unavailable"]).toContain(await kindOf(storage.list(file)));
+      expect(await kindOf(storage.list(file))).toBe("bad_request");
       expect(await kindOf(storage.list(`${root}/missing`))).toBe("not_found");
     });
 
@@ -249,6 +246,16 @@ export function describeStorageProvider(
       await seed("p/a.txt", "p");
       await expect(storage.probeDirectoryRead(`${root}/p`)).resolves.toBeUndefined();
       expect(await kindOf(storage.probeDirectoryRead(`${root}/nope`))).toBe("not_found");
+    });
+
+    it("probes a file for read access as download would when the method is present", async () => {
+      if (storage.probeFileRead === undefined) {
+        return;
+      }
+      const file = await seed("f/a.txt", "f");
+      await expect(storage.probeFileRead(file)).resolves.toBeUndefined();
+      expect(await kindOf(storage.probeFileRead(`${root}/f/nope.txt`))).toBe("not_found");
+      expect(await kindOf(storage.probeFileRead(`${root}/f`))).toBe("bad_request");
     });
   });
 }

@@ -21,10 +21,10 @@ On a successful login (`POST /api/v1/auth/login`, `apps/api/src/auth/service.ts`
   the username the module returned (one account can hold several identities,
   one per login it is linked to).
 - The credential is sealed and written to the `credentials` table as
-  `{ identityId, ciphertext, keyId, cachedToken, cachedTokenExpiresAt }`. It is
-  never stored in plaintext and never logged. For a local login the password
-  itself is checked against the scrypt hash in `app.local_users`; the sealed
-  copy lets a later login tell whether the password changed (below).
+  `{ identityId, ciphertext, keyId }`. It is never stored in plaintext and
+  never logged. For a local login the password itself is checked against the
+  scrypt hash in `app.local_users`; the sealed copy lets a later login tell
+  whether the password changed (below).
 - A session row is created (`sessions` table) holding only a SHA-256 hash of
   a randomly generated session id; the raw id is set as an HttpOnly cookie
   and never persisted itself.
@@ -33,8 +33,8 @@ Encryption (`apps/api/src/auth/crypto.ts`) is an envelope scheme:
 
 - `FDRIVE_MASTER_KEY` is a 32-byte AES-256 key, base64-encoded in the
   environment.
-- Each secret (a password or a token) is encrypted under its own fresh
-  random 32-byte data key with AES-256-GCM.
+- Each secret is encrypted under its own fresh random 32-byte data key with
+  AES-256-GCM.
 - That data key is itself wrapped (encrypted) with AES-256-GCM under the
   master key.
 - Both encryption layers use the identity id as additional authenticated
@@ -108,39 +108,26 @@ whose `createdAt` is older than that and treats the request as anonymous, so
 a stolen session id cannot be kept valid indefinitely by periodic use.
 Session rotation on link and unlink preserves `createdAt`.
 
-## Storage sessions and tokens
+## Storage sessions
 
 fdrive never asks the browser for storage credentials outside of `/auth/login`
-and identity link/unlink confirmation. Every storage call instead goes through
-a `TokenSource` (`apps/api/src/auth/token-source.ts`), whose
-`sessionFor(identityId, username)` hands the provider module a
-`StorageSession` with `getCredential`, `getToken` and `invalidateToken`; the
-local folder calls none of them. Before storage is built for a request, the module's `admit`
-runs where it exists: the local folder refuses a disabled or removed user
-there, so disabling someone stops them at once rather than at their next
+and identity link/unlink confirmation. Storage for a request is built by the
+identity storage factory (`apps/api/src/auth/storage-factory.ts`), which hands
+the provider module a `StorageSession` naming only the login's username; no
+stored credential is read per request. Before storage is built, the module's
+`admit` runs where it exists: the local folder refuses a disabled or removed
+user there, so disabling someone stops them at once rather than at their next
 sign-in.
-
-No shipped module has `mint`, so `getToken` returns `null`. The token cache
-remains for a module that mints short-lived tokens: `get(identityId)` checks
-its in-process cache, then the sealed cached token, and mints from the stored
-credential only as a last resort, treating a token as due once fewer than 2
-minutes remain. Concurrent misses for one identity share one mint;
-invalidation and `prime` (store a token the login already returned) supersede
-pending work, and per-identity database writes are ordered so an older mint
-cannot restore a token after a clear or prime.
 
 ## The `reauth_required` flow
 
-Three situations end a storage or token operation with the API error kind
+Two situations end a storage operation with the API error kind
 `reauth_required` (HTTP 401, distinct from a plain `unauthorized`, so a
 client can tell "you were never signed in" apart from "you were signed in,
 but fdrive can no longer act on your behalf"):
 
 - Storage answers `unauthorized`; storage routes map it to `reauth_required`.
-- A sealed credential or cached token fails to decrypt (`CryptoError` from
-  `open`), most commonly because `FDRIVE_MASTER_KEY` was rotated after the
-  secret was sealed under the previous key.
-- The identity or its stored credential row no longer exists.
+- The identity no longer exists.
 
 In every case the fdrive session itself may still be valid; the user simply
 has to sign in again (`POST /api/v1/auth/login`) to re-establish a usable
@@ -234,11 +221,6 @@ Administration is `apps/api/src/local/service.ts` behind
 A local login changes its own password with `POST /api/v1/auth/password`
 (Account > Password): the current password is checked, the hash and the
 sealed credential are replaced, and the account's other sessions end.
-
-Coming from SFTPGo, the first start carries passwords over from fdrive's
-sealed credentials: administrators can sign in at once, everyone else is
-added disabled until an administrator enables them, and users who never
-signed in to fdrive get a password from an administrator.
 
 ## MCP token grants
 

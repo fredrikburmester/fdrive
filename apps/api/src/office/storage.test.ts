@@ -5,7 +5,6 @@ import { createMemoryRepos } from "@fdrive/db/testing";
 import { createLocalModule, type LocalUserStatus } from "@fdrive/local";
 import { afterEach, expect, it, vi } from "vitest";
 import { createPinnedStorageFactory } from "../auth/storage-factory.ts";
-import { createTokenSource } from "../auth/token-source.js";
 import { memoryProviderService } from "../providers/test-fixtures/index.ts";
 import { createOfficeStorageFactory } from "./storage.ts";
 
@@ -39,22 +38,14 @@ async function fixture() {
     externalUsername: "alice",
   });
   const providers = memoryProviderService(repos, { modules: { local: module } });
-  const tokens = createTokenSource({
-    repos,
-    providers,
-    master: Buffer.alloc(32, 5),
-    clock: () => new Date(),
-    fetch: globalThis.fetch,
-  });
   const factory = createOfficeStorageFactory({
-    pinned: createPinnedStorageFactory({ providers, tokenSource: tokens, fetch: globalThis.fetch }),
+    pinned: createPinnedStorageFactory({ providers, fetch: globalThis.fetch }),
   });
   return {
     repos,
     provider,
     identity,
     providers,
-    tokens,
     factory,
     disable: () => {
       status = "disabled";
@@ -64,16 +55,13 @@ async function fixture() {
 
 it("resolves the identity once and performs storage calls without database callbacks", async () => {
   const h = await fixture();
-  const get = vi.spyOn(h.tokens, "get");
   const forIdentity = vi.spyOn(h.providers, "forIdentity");
   const storage = await h.factory(h.identity.id, h.provider.id);
-  expect(get).toHaveBeenCalledExactlyOnceWith(h.identity.id);
-  get.mockClear();
+  expect(forIdentity).toHaveBeenCalledExactlyOnceWith(h.identity.id);
   forIdentity.mockClear();
   expect((await storage.statFile("/a.docx")).size).toBe(5);
   await storage.upload("/a.docx", new TextEncoder().encode("saved"));
   expect(await new Response((await storage.download("/a.docx")).body).text()).toBe("saved");
-  expect(get).not.toHaveBeenCalled();
   expect(forIdentity).not.toHaveBeenCalled();
 });
 

@@ -43,8 +43,9 @@ admin UI and upgrades.
   pinned (else the setup owner's, else the oldest) into the local row in place, so logins and
   everything keyed by them carry over; renames the index root to `files`; turns SFTPGo share
   links into links fdrive serves (protected ones stay locked until their owner sets a password);
-  and drops the virtual-folder settings. On first start the API carries passwords over from the
-  sealed credentials: administrators can sign in at once, everyone else is added disabled.
+  and drops the virtual-folder settings. The one-time password carry-over, the `sftpgoPath`,
+  `FDRIVE_INDEX_SFTPGO_DIR` and `FDRIVE_INDEX_UID` aliases and the token-minting path of the
+  provider port were removed afterwards: nothing upgrades from SFTPGo any more.
 - **Plain files stay authoritative.** No database of file contents; writers outside fdrive
   (OCR, rsync) remain allowed.
 - **Sharing between users is a grant plus a path.** `app.local_grants` (owner, folder, grantee,
@@ -69,5 +70,5 @@ admin UI and upgrades.
 ## Later
 
 Feed indexer change events from the local provider's own writes, offer `withWriteLease` for Mac
-writes, share single files with people, and drop the token-minting path of the provider port if
-no backend needs it again.
+writes, share single files with people, and drop the sealed credentials (`app.credentials`),
+which only a later login's change check and backup restore still read.

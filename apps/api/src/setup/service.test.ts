@@ -66,6 +66,7 @@ async function harness(options: { pinned?: boolean; local?: boolean } = {}) {
   const deps = {
     authService,
     accounts: { setAdmin },
+    identities: repos.identities,
     settings: repos.settings,
     ...(options.local === false
       ? {}
@@ -97,6 +98,25 @@ describe("createSetupService: status", () => {
     // Remembered: removing that user later does not reopen setup.
     await h.repos.localUsers.delete("bob");
     expect((await h.service.status()).required).toBe(false);
+  });
+
+  it("stays closed when people signed in before but no local user exists", async () => {
+    // An installation from before the owner record whose logins never became
+    // local users: nobody may claim it as its first user.
+    for (const local of [true, false]) {
+      const h = await harness({ local });
+      const old = await h.repos.providers.ensure({ type: "sftpgo", baseUrl: "http://old" });
+      const account = await h.repos.accounts.create({ displayName: "alice" });
+      await h.repos.identities.create({
+        accountId: account.id,
+        providerId: old.id,
+        externalUsername: "alice",
+      });
+      expect(await h.repos.localUsers.count()).toBe(0);
+      expect((await h.service.status()).required).toBe(false);
+      // Remembered, like a user: the login going away does not reopen setup.
+      expect(await h.repos.settings.get("setup.initialized.v1")).toBe(true);
+    }
   });
 
   it("says when the deployment has no files folder", async () => {

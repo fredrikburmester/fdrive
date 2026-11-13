@@ -3,7 +3,7 @@ import { ConflictError, type Repos } from "@fdrive/db";
 import { createMemoryRepos } from "@fdrive/db/testing";
 import { describe, expect, it, vi } from "vitest";
 import { open } from "../auth/crypto.js";
-import { parseStoredCredential } from "../auth/token-source.js";
+import { parseStoredCredential } from "../auth/stored-credential.ts";
 import { seedLocalProvider } from "../providers/test-fixtures/index.ts";
 import { createLocalUserService, type LocalUserServiceDeps, type UserViewer } from "./service.js";
 import { FAST_PASSWORDS, seedLocalUsers } from "./test-fixtures/index.ts";

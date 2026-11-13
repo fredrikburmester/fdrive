@@ -103,8 +103,7 @@ fdrive also offers a native macOS app that puts your files directly into Finder.
 
 You need a Linux server or NAS with Docker (Compose v2). fdrive's images are published for
 amd64 and 64-bit ARM, so a Raspberry Pi 4 or 5 on a 64-bit OS, an ARM NAS or an Apple silicon
-Mac works as well as a PC. Coming from SFTPGo? See
-[upgrading from SFTPGo](deploy/README.md#upgrading-from-sftpgo).
+Mac works as well as a PC.
 
 ### 1. Download fdrive and create its secrets
 

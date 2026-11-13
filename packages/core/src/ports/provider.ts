@@ -81,12 +81,6 @@ export interface ProviderInstance {
 /** A user's credential for one provider, keyed by `credentialFields[].name`. */
 export type ProviderCredential = Readonly<Record<string, string>>;
 
-/** A short-lived upstream token minted from a stored credential. */
-export interface ProviderToken {
-  readonly token: string;
-  readonly expiresAt: Date;
-}
-
 export interface ProbeResult {
   readonly ok: boolean;
   readonly detail: string;
@@ -109,22 +103,11 @@ export interface AuthenticateContext extends ProviderContext {
 export interface AuthenticateResult {
   /** The name stored on the identity; unique per provider. */
   readonly externalUsername: string;
-  /** A token the authentication already produced, so the API need not mint again. */
-  readonly token?: ProviderToken;
 }
 
-/**
- * Everything a storage instance needs about the identity it acts for. The
- * API owns unsealing and token caching; the module only asks.
- */
+/** Everything a storage instance needs about the identity it acts for. */
 export interface StorageSession {
   readonly externalUsername: string;
-  /** Unseals the stored credential; only providers that sign requests themselves need it. */
-  getCredential(): Promise<ProviderCredential>;
-  /** The current upstream token, minting one if needed; `null` when the module has no `mint`. */
-  getToken(): Promise<string | null>;
-  /** Forgets the cached token so the next `getToken` mints again. */
-  invalidateToken(): Promise<void>;
 }
 
 /**
@@ -169,15 +152,6 @@ export interface ProviderModule {
     credential: ProviderCredential,
     ctx: AuthenticateContext,
   ): Promise<AuthenticateResult>;
-  /**
-   * Mints a short-lived token from a stored credential. Absent for providers
-   * whose storage signs every request from the credential itself.
-   */
-  mint?(
-    instance: ProviderInstance,
-    session: { readonly externalUsername: string; readonly credential: ProviderCredential },
-    ctx: ProviderContext,
-  ): Promise<ProviderToken>;
   /**
    * Throws `StorageError` of kind `forbidden` when the backend no longer
    * lets `externalUsername` in, so a login that was disabled after it signed

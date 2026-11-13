@@ -161,7 +161,6 @@ export async function officeHarness(
   const app = createApp({
     config: loadConfig({
       DATABASE_URL: "postgres://unused",
-      SFTPGO_URL: "http://sftpgo",
       FDRIVE_MASTER_KEY: Buffer.alloc(32, 7).toString("base64"),
     }),
     logger,

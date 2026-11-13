@@ -4,8 +4,8 @@ const NS_PER_MS = 1_000_000n;
 
 /**
  * Best-effort guess at whether a move destination is a file or a folder,
- * from its path alone (SFTPGo's move response and `idx.moves` rows carry no
- * entry kind): extensionless is treated as a folder, matching how fdrive's
+ * from its path alone (a storage move and `idx.moves` rows report no entry
+ * kind): extensionless is treated as a folder, matching how fdrive's
  * own folder names are chosen in practice. Used to pick which live-read
  * check (`kind: "file"` vs `"dir"`) authorizes a move's destination.
  */

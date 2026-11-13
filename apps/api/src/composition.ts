@@ -42,14 +42,7 @@ import { registerAiRoutes } from "./ai/routes.ts";
 import { createAiSettingsService, type ResolvedAiConfig } from "./ai/settings.ts";
 import type { AppHono } from "./app.js";
 import { createApp } from "./app.js";
-import {
-  createAuthModule,
-  createLoginLimiter,
-  createTokenSource,
-  open,
-  parseMasterKey,
-  seal,
-} from "./auth/index.js";
+import { createAuthModule, createLoginLimiter, open, parseMasterKey, seal } from "./auth/index.js";
 import {
   createIdentityStorageFactory,
   createPinnedStorageFactory,
@@ -74,7 +67,6 @@ import { registerFeatureRoutes } from "./features/routes.js";
 import { createFeatureService } from "./features/service.js";
 import { publishFsEvent, registerFsRoutes } from "./fs/routes.js";
 import { createJobRunner } from "./jobs/runner.js";
-import { adoptSealedPasswords } from "./local/adopt.js";
 import { registerGrantRoutes } from "./local/grant-routes.js";
 import { createLocalGrantService } from "./local/grants.js";
 import { createIndexWorkQueue } from "./local/index-work.js";
@@ -265,16 +257,6 @@ export async function composeApp(
         ) ?? null);
   if (!(await repos.settings.get("backup.recovery.v1"))) {
     await providerService.seedFromEnvironment();
-    const local = await localProvider();
-    if (local !== null) {
-      const adopted = await adoptSealedPasswords({ repos, master, passwords }, local.id);
-      if (adopted.enabled.length + adopted.disabled.length > 0) {
-        logger.info(
-          { enabled: adopted.enabled.length, disabled: adopted.disabled.length },
-          "local users created from existing logins; enable the others under System > Users",
-        );
-      }
-    }
   }
   const localUserStore = createLocalUserStore({
     repo: repos.localUsers,
@@ -303,13 +285,6 @@ export async function composeApp(
   const bus = createEventBus();
   const jobRunner = createJobRunner({ clock, bus });
   const limiter = createLoginLimiter({ clock });
-  const tokenSource = createTokenSource({
-    repos,
-    providers: providerService,
-    master,
-    clock,
-    fetch: fetchImpl,
-  });
   // The address everyone opens fdrive at, chosen in onboarding. Deployments
   // from before it was a setting of its own stored it as Office's `appUrl`;
   // that value stays in force until the owner saves the address here.
@@ -323,7 +298,6 @@ export async function composeApp(
 
   const storageFactory = createIdentityStorageFactory({
     providers: providerService,
-    tokenSource,
     fetch: fetchImpl,
     clock,
     resolveTrashSettings: (identityId) => trashSettings.forIdentity(identityId),
@@ -339,7 +313,6 @@ export async function composeApp(
   });
   const pinnedStorageFactory = createPinnedStorageFactory({
     providers: providerService,
-    tokenSource,
     fetch: fetchImpl,
   });
   const identityLinks = createIdentityLinksRepo(db);
@@ -352,7 +325,6 @@ export async function composeApp(
     clock,
     config,
     limiter,
-    tokenSource,
     storageFactory,
   });
 
@@ -442,7 +414,6 @@ export async function composeApp(
     repos,
     links: identityLinks,
     auth: auth.service,
-    tokenSource,
     providers: providerService,
     fetch: fetchImpl,
     limiter,
@@ -655,6 +626,7 @@ export async function composeApp(
   const setupService = createSetupService({
     authService: auth.service,
     accounts: repos.accounts,
+    identities: repos.identities,
     settings: repos.settings,
     ...(modules.local === undefined
       ? {}

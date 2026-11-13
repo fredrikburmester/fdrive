@@ -1,6 +1,6 @@
 import type { Scope } from "@fdrive/core";
 import type { ImageSearchHit as DbImageSearchHit, IndexQueries } from "@fdrive/db";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type {
   ReadAuthorizeReason,
   ReadAuthorizer,
@@ -259,15 +259,23 @@ describe("createImageSearchService", () => {
     expect(result.hits).toEqual([]);
   });
 
-  it("excludes a row under the trash path", async () => {
-    const indexQueries = fakeIndexQueries({
-      searchImages: async () => [makeRow({ path: "alice/.trash/cat.jpg" })],
-    });
-    const service = createImageSearchService(buildDeps({ indexQueries, trashPath: "/.trash" }));
+  it("asks the query to leave out the Trash, mapped through the scopes, before its limit", async () => {
+    const searchImages = vi.fn(async () => [makeRow({ path: "alice/cat.jpg" })]);
+    const indexQueries = fakeIndexQueries({ searchImages });
 
-    const result = await service.search(buildInput());
+    await createImageSearchService(buildDeps({ indexQueries, trashPath: "/.trash" })).search(
+      buildInput(),
+    );
+    await createImageSearchService(buildDeps({ indexQueries, trashPath: "/.trash" })).search(
+      buildInput({ trashPath: "/Bin" }),
+    );
+    await createImageSearchService(buildDeps({ indexQueries })).search(buildInput());
 
-    expect(result.hits).toEqual([]);
+    expect(searchImages.mock.calls.map((call) => (call as unknown[])[4])).toEqual([
+      { exclude: [{ rootId: 1, fsPrefix: "/alice/.trash" }] },
+      { exclude: [{ rootId: 1, fsPrefix: "/alice/Bin" }] },
+      { exclude: [] },
+    ]);
   });
 
   it("excludes a row the authorizer denies, without marking partial", async () => {
