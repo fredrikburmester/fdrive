@@ -39,7 +39,7 @@ removed on 2026-11-13.
 | `type`, `label` | `"local"`, "Local folder" until the row is renamed |
 | `configFields`, `credentialFields` | None; `username` and `password`. Fields drive the login form and the API's validation (`validateFields` in [provider-fields.ts](../packages/core/src/provider-fields.ts)) |
 | `capabilities` | All eight flags true (below) |
-| `trash` | `"move"`: fdrive moves deletes into the Trash folder. `"native"` has no module |
+| `trash` | `"move"`: fdrive moves deletes into the Trash folder (`"none"` would mean no Trash) |
 | `shares` | `"owned"`: fdrive keeps links in `app.shares` and serves them through this storage ([owned.ts](../apps/api/src/shares/owned.ts)) |
 | `deploymentManaged` | True: the row comes from `FDRIVE_STORAGE_ROOT`; the API cannot create, re-address or remove it |
 | `indexRootName` | The index root the folder is read under (`localIndexRoot`) |
