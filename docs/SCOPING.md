@@ -61,7 +61,7 @@ Regression coverage includes the [resolver](../apps/api/src/scoping/resolver.tes
 [round trip](../apps/api/src/scoping/round-trip.test.ts),
 [local folder scoping](../apps/api/test/integration/scopes-local.test.ts) (two logins with
 the same virtual names, a shared folder over a shadowed physical one, a file gone from disk,
-and the MCP tools) and [provider binding](../apps/api/test/integration/provider-binding.test.ts).
+and the MCP tools).
 
 ## MCP folder grants
 
