@@ -88,6 +88,7 @@ export type {
   RecencyDecay,
   ScopeClause,
   ScopePrefix,
+  SearchQueryOptions,
   SimilarFile,
 } from "./repos/index-queries.js";
 export {
