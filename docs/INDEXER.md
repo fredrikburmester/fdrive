@@ -3,8 +3,8 @@
 Per-file failures for thumbnails, text extraction and embeddings are persisted in
 PostgreSQL, with recovery and retry controls in System. See
 [persistent failure details](SYSTEM-ACTIVITY.md#persistent-failure-details).
-Startup waits for the failure-history migration before processing files, including when
-the schema's compatibility version is unchanged during an upgrade.
+Startup waits for the failure-history and work-queue migrations before processing files,
+including when the schema's compatibility version is unchanged during an upgrade.
 `INDEXER_LOG_DIR` optionally retains timestamped diagnostic output as `indexer.log` and
 four rotated files, 10 MiB each, alongside stdout. Deployment mounts a persistent named
 volume there; standalone workers must configure a writable directory to retain these logs.
@@ -107,8 +107,8 @@ service.
 
 The pass follows thumbnail generation (`indexer.rs`'s `embed_thumbnail`,
 called once a thumbnail is written). Retries embed inline. A scan hands
-embeddings to a thread of its own, and watcher changes share one long-lived
-thread per root, because the model runs one inference at a time and waiting
+embeddings to a thread of its own, and watcher and queued changes share one
+long-lived thread per root, because the model runs one inference at a time and waiting
 inline would pace every worker, and every later change, at the model's speed. Before writing anything, it checks the unit's `GET /health`
 against the column's fixed dimension (1024) and an `"ok"` status, reusing a
 passing answer for 30 seconds; on a
@@ -135,7 +135,7 @@ admission lock (only one heavy background pass runs at a time).
 | --- | --- |
 | `pending` | Row exists, not yet processed by this cycle. |
 | `indexed` | Text extracted, chunked, and (if the embedding service was reachable) embedded. |
-| `partial` | Text extracted and chunked, but embedding failed; retried on the next scan. |
+| `partial` | Text extracted and chunked, and searchable by full text, but not embedded yet: the embeddings are on their way (watcher and queued changes) or failed and are retried on the next scan. |
 | `no_text` | Extraction, including OCR for images and PDFs, found too little text to be useful. Not retried until the file changes. |
 | `disabled` | Skipped while a feature was off: `disabled:text` (`textSearch`), `disabled:search_ocr` (`searchOcr`, for images and PDFs without a text layer). Turning the feature on processes each row once. |
 | `empty` | The file itself is empty. |
@@ -145,6 +145,57 @@ admission lock (only one heavy background pass runs at a time).
 
 The admin **Logs** sheet on System > Indexer lists these `error` rows together with
 `idx.scans` history and API-side events (settings saves, reindex and clear requests).
+
+## How changes arrive
+
+Three paths lead to the same per-file processing, fastest first.
+
+1. **The API's queue.** fdrive's API writes the files folder, apart from OCR and the
+   host's own tools. After each change it makes (an upload, a move or rename, a copy, a
+   delete, Trash and restore, an Office save, a new modification time) it adds a row to
+   `idx.work` and sends `NOTIFY idx_work` with the root's name (`createIndexWorkWriter` in
+   `packages/db`, fed by local storage's change listener). A row without `target_path`
+   says "look at `path` again"; with it, `path` moved there. An upload's row carries the
+   sha256 the API computed while writing it and the size, `mtime_ns`, `inode` and
+   `ctime_ns` of the file it published, so the indexer does not read the file again to hash
+   it while it is still that file. A client chooses an upload's modification time, but no
+   client sets an inode or a change time, so a different file with the same size and time
+   is always hashed: its bytes never key thumbnails or embeddings under another file's
+   digest. Where the API and the indexer see different inode numbers, the hint simply never
+   matches. A `work-<root>`
+   thread listens on the channel, looks every 30 seconds without it, and applies rows
+   oldest first, deleting each batch once its files are done:
+   - a file is indexed on one of `indexer.workers` workers;
+   - a folder is compared with its rows, like a scan of just that folder: new and changed
+     files are indexed, and rows of files no longer there are dropped;
+   - a missing path, or one a walk skips (a link, a skipped folder or name), has its rows
+     and those below it marked deleted;
+   - a move renames rows in place (a changed extension is a delete and a new file), then
+     compares the destination with the disk, which covers a restore from somewhere the
+     index never looked.
+
+   What is on disk when a row is applied decides, as for the watcher, and moves and
+   deletes wait for the files queued before them. Rows are hints: while indexing is off
+   they are dropped (turning it on starts a scan), and the API drops rows older than a
+   day, which only build up when no indexer drains them.
+2. **The watcher** (inotify, Linux only) sees changes made on the disk directly, for
+   example over SMB, after a 2-second debounce. It sees fdrive's own changes too; whichever
+   comes second finds the row current and does nothing.
+3. **The scan** walks the whole root every `indexer.scan_interval_seconds` (an hour by
+   default), at startup, when settings or features change and after a watcher overflow,
+   and catches anything the other two missed.
+
+Watcher and queued files are foreground work: while any is pending, scan workers wait
+before starting their next file, for at most a minute at a time, so a change someone just
+made is not queued behind a library-wide scan.
+
+A file is processed in the order a person notices it: its row (a name search finds it),
+its thumbnails, its event, its text and last its embeddings. For watcher and queued
+changes, text embeddings go to a `text-embed-<root>` thread, as image embeddings do: the
+chunks are stored without vectors as `partial`, searchable by full text at once, and the
+worker moves on instead of waiting for the model. The thread fills in the vectors and marks
+the row `indexed`, skipping a row a newer version has replaced; when its queue is full, the
+worker embeds inline. Scans embed inline.
 
 ## Multiple roots
 
@@ -163,7 +214,7 @@ inotify watcher and its own periodic scan, running independently.
 
 | Key | Type | Falls back to |
 | --- | --- | --- |
-| `indexer.scan_interval_seconds` | integer | `SCAN_INTERVAL_SECONDS` env (default 900) |
+| `indexer.scan_interval_seconds` | integer | `SCAN_INTERVAL_SECONDS` env (default 3600) |
 | `indexer.workers` | integer | `INDEX_WORKERS` env (default 4) |
 | `indexer.text_exclude_globs` | list of strings, matched with `fnmatch` against `<root>/<rel path>` | `TEXT_EXCLUDE_GLOBS` env |
 | `indexer.ocr_image_globs` | list of strings, same matching | `["**"]`; applies only when search OCR is enabled |
@@ -175,7 +226,9 @@ the next cycle.
 
 ## Change events
 
-After every applied change (create, change, delete, move), the indexer:
+After every applied change (create, change, delete, move), the indexer emits an event.
+A new or changed file's event follows its row and thumbnails, before its text, since
+listeners only check access and refresh listings. For each event, the indexer:
 
 1. `INSERT`s a row into `idx.events` (`root_id`, `kind`, `path`, `target_path`).
 2. `NOTIFY idx_events, '<json>'` with the same payload:
