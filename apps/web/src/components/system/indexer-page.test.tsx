@@ -217,7 +217,7 @@ describe("IndexerPage", () => {
     render(<IndexerPage />);
     openSettings();
     const workers = await screen.findByLabelText("Workers");
-    expect(screen.getByText(/Time between scheduled scans/)).toBeTruthy();
+    expect(screen.getByText(/Time between full scans/)).toBeTruthy();
     expect(screen.getByText(/Number of files extracted concurrently/)).toBeTruthy();
     fireEvent.change(workers, { target: { value: "7" } });
     fireEvent.click(screen.getByRole("button", { name: "Reset" }));

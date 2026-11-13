@@ -169,13 +169,13 @@ fn the_loop_scans_on_start_then_waits_for_its_interval_or_a_wake() {
     assert_eq!(scans(&env), 2);
 
     // A settings change scans at once.
-    save_setting(&env, "indexer.scan_interval_seconds", serde_json::json!(3600));
+    save_setting(&env, "indexer.scan_interval_seconds", serde_json::json!(7200));
     root.step(&ctx, &watchers);
     assert_eq!(scans(&env), 3);
-    assert_eq!(ctx.settings().scan_interval_seconds, 3600);
+    assert_eq!(ctx.settings().scan_interval_seconds, 7200);
     assert_eq!(
         root.step(&ctx, &watchers),
-        ctx.cfg.settings_refresh.min(Duration::from_secs(3600))
+        ctx.cfg.settings_refresh.min(Duration::from_secs(7200))
     );
 }
 

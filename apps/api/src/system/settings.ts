@@ -25,7 +25,7 @@ export const INDEXER_SETTINGS_KEYS = {
  * saved an override.
  */
 export const INDEXER_SETTINGS_DEFAULTS = {
-  scanIntervalSeconds: 900,
+  scanIntervalSeconds: 3600,
   workers: 4,
   textExcludeGlobs: [] as readonly string[],
   ocrImageGlobs: ["**"] as readonly string[],
