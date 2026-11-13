@@ -1,7 +1,8 @@
 import { Skeleton } from "@/components/ui/skeleton";
 import { DEFAULT_LIST_DENSITY, type ListDensity, ROW_HEIGHTS } from "@/lib/files/density";
+import { DEFAULT_GRID_SIZE, type GridSize } from "@/lib/files/grid-size";
 import { cn } from "@/lib/utils";
-import { GRID_TILE_HEIGHT, GRID_TILE_WIDTH } from "./file-grid";
+import { GRID_TILES } from "./file-grid";
 
 const ROW_COUNT = 10;
 const ROW_KEYS = Array.from({ length: ROW_COUNT }, (_, index) => `skeleton-row-${index}`);
@@ -23,19 +24,23 @@ export interface ListingSkeletonProps {
   variant?: ListingSkeletonVariant;
   /** Row height preset for the list layout, matching the real list. Defaults to "comfortable". */
   density?: ListDensity;
+  /** Tile size preset for the grid layout, matching the real grid. Defaults to "medium". */
+  gridSize?: GridSize;
 }
 
 /**
  * Placeholder shown while a folder's listing is loading. Mirrors the real
  * list's row layout and height (`ROW_HEIGHTS[density]`) or, in `"grid"`, the
- * grid's tile size, so the loading state fills the listing area exactly
- * like real content instead of a narrower, fixed-width block.
+ * grid's tile size (`GRID_TILES[gridSize]`), so the loading state fills the
+ * listing area exactly like real content instead of a narrower, fixed-width
+ * block.
  */
 export function ListingSkeleton({
   variant = "list",
   density = DEFAULT_LIST_DENSITY,
+  gridSize = DEFAULT_GRID_SIZE,
 }: ListingSkeletonProps) {
-  return variant === "grid" ? <GridSkeleton /> : <ListSkeleton density={density} />;
+  return variant === "grid" ? <GridSkeleton size={gridSize} /> : <ListSkeleton density={density} />;
 }
 
 function ListSkeleton({ density }: { density: ListDensity }) {
@@ -65,7 +70,8 @@ function ListSkeleton({ density }: { density: ListDensity }) {
   );
 }
 
-function GridSkeleton() {
+function GridSkeleton({ size }: { size: GridSize }) {
+  const tile = GRID_TILES[size];
   return (
     <div data-slot="listing-skeleton-grid" aria-hidden="true" className="flex flex-wrap gap-1 p-2">
       {TILE_KEYS.map((key) => (
@@ -73,9 +79,9 @@ function GridSkeleton() {
           key={key}
           data-slot="skeleton-tile"
           className="flex flex-col items-center gap-1.5 rounded-lg p-2"
-          style={{ width: GRID_TILE_WIDTH, height: GRID_TILE_HEIGHT }}
+          style={{ width: tile.width, height: tile.height }}
         >
-          <Skeleton className="size-8 rounded-sm" />
+          <Skeleton className={cn("rounded-sm", tile.icon)} />
           <Skeleton className="h-3 w-4/5" />
           <Skeleton className="h-3 w-1/2" />
         </div>

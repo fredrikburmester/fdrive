@@ -26,6 +26,7 @@ import {
 } from "@/lib/files/tree";
 import { flattenTree } from "@/lib/files/tree-rows";
 import { useDefaultView } from "@/lib/files/use-default-view";
+import { useGridSize } from "@/lib/files/use-grid-size";
 import { useListDensity } from "@/lib/files/use-list-density";
 import { useRowClickAction } from "@/lib/files/use-row-click";
 import { DEFAULT_CAPABILITIES } from "@/lib/identity/capabilities";
@@ -81,6 +82,7 @@ export function VirtualFileListing({
   const [viewMode] = useDefaultView();
   const [rowClickAction] = useRowClickAction();
   const [density] = useListDensity();
+  const [gridSize] = useGridSize();
   const [treeState, setTreeState] = useState<TreeState>(EMPTY_TREE_STATE);
 
   useEffect(() => {
@@ -194,7 +196,7 @@ export function VirtualFileListing({
   };
 
   if (viewMode === "grid") {
-    return <FileGrid {...commonProps} />;
+    return <FileGrid {...commonProps} size={gridSize} />;
   }
 
   return (

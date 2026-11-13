@@ -1,5 +1,5 @@
 import { withBackupWriter } from "@fdrive/backup";
-import { type ProviderModule, parseSearchFilters, type StorageProvider } from "@fdrive/core";
+import type { ProviderModule, StorageProvider } from "@fdrive/core";
 import {
   createActivityExportsRepo,
   createActivityObservationsRepo,
@@ -104,12 +104,11 @@ import { createOfficeTokenCodec } from "./office/tokens.ts";
 import type { OfficeDeps } from "./office/types.ts";
 import { registerProviderRoutes } from "./providers/routes.js";
 import { createProviderService, hostLabel } from "./providers/service.js";
-import { createReadAuthorizer } from "./scoping/read-authorizer.ts";
 import { createScopeResolver } from "./scoping/resolver.ts";
 import { createEmbedClient } from "./search/embeddings.js";
 import { createImageEmbedClient } from "./search/image-embed-client.js";
 import { createImageSearchService } from "./search/image-service.js";
-import { parseSearchLimit, registerSearchRoutes } from "./search/routes.js";
+import { registerSearchRoutes } from "./search/routes.js";
 import { createSearchService } from "./search/service.js";
 import { registerSetupRoutes } from "./setup/routes.js";
 import { createSetupService } from "./setup/service.js";
@@ -439,21 +438,6 @@ export async function composeApp(
     master,
     clock,
     storageForIdentity: identityStorageForAccount,
-    searchForIdentity: async (identity, query) => {
-      const current = await repos.identities.get(identity.id);
-      if (current?.accountId !== identity.accountId)
-        throw new ApiHttpError("forbidden", "identity ownership changed");
-      const verified = await scopeResolver.verifiedIndexScopes(identity);
-      const storage = await identityStorageForAccount(identity);
-      return searchService.search({
-        trashPath: await trashSettings.pathForIdentity(identity.id),
-        scopes: verified.available ? verified.scopes : [],
-        authorizer: createReadAuthorizer({ storage }),
-        query: query.q,
-        filters: parseSearchFilters(query),
-        limit: parseSearchLimit(query.limit),
-      });
-    },
   };
   const accountsService = createAccountsService(accountDeps);
   const accountViews = createAccountViews(accountDeps);

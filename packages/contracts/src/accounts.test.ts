@@ -2,7 +2,6 @@ import { expect, it } from "vitest";
 import {
   AccountFavoritesResponse,
   AccountIdentityId,
-  AccountSearchResponse,
   LinkIdentityRequest,
   SwitchIdentityRequest,
 } from "./accounts.ts";
@@ -54,15 +53,4 @@ it("requires identity provenance and exposes partial-result failures", () => {
       unavailableIdentityIds: [],
     }).success,
   ).toBe(false);
-  expect(
-    AccountSearchResponse.parse({
-      query: "a",
-      sections: { folders: [], files: [], content: [] },
-      degraded: false,
-      unavailable: true,
-      partial: true,
-      tookMs: 0,
-      unavailableIdentityIds: [identityId],
-    }),
-  ).toMatchObject({ unavailableIdentityIds: [identityId], partial: true });
 });

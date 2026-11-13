@@ -113,6 +113,7 @@ import {
   type TypeAheadBuffer,
   typeAheadMatch,
 } from "@/lib/files/type-ahead";
+import { useGridSize } from "@/lib/files/use-grid-size";
 import { useListDensity } from "@/lib/files/use-list-density";
 import { useRowClickAction } from "@/lib/files/use-row-click";
 import {
@@ -218,6 +219,7 @@ export function FileBrowser({
   const folderView = useFolderView(path, me?.activeIdentityId);
   const [rowClickAction] = useRowClickAction();
   const [density, setDensity] = useListDensity();
+  const [gridSize, setGridSize] = useGridSize();
   const viewMode = folderView.mode;
   const setViewMode = folderView.setMode;
   const sortSpec = folderView.sort;
@@ -942,6 +944,8 @@ export function FileBrowser({
             folderSort={folderSort}
             density={density}
             onDensityChange={setDensity}
+            gridSize={gridSize}
+            onGridSizeChange={setGridSize}
             onNewFolder={() => setNewFolderOpen(true)}
             onNewFile={setNewFileKind}
             onNewOfficeDocument={
@@ -1010,7 +1014,11 @@ export function FileBrowser({
             className="h-full outline-none"
           >
             {isLoading || folderView.loading ? (
-              <ListingSkeleton variant={viewMode === "grid" ? "grid" : "list"} density={density} />
+              <ListingSkeleton
+                variant={viewMode === "grid" ? "grid" : "list"}
+                density={density}
+                gridSize={gridSize}
+              />
             ) : isError ? (
               <ErrorState
                 message={describeFsError(error, "Something went wrong.")}
@@ -1076,6 +1084,7 @@ export function FileBrowser({
                 scrollRequest={scrollRequest}
                 onScrollConsumed={handleScrollConsumed}
                 thumbnails={capabilities.index}
+                size={gridSize}
               />
             ) : (
               <FileList

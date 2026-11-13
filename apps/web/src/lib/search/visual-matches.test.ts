@@ -4,7 +4,6 @@ import {
   filterVisualHits,
   isVisualFilteredLocally,
   shouldQueryVisualMatches,
-  visualMatchesHeading,
 } from "./visual-matches";
 
 const sampleHits: readonly ImageSearchHit[] = [
@@ -72,24 +71,12 @@ describe("isVisualFilteredLocally", () => {
   });
 });
 
-describe("visualMatchesHeading", () => {
-  it("returns standard heading when allLogins is false", () => {
-    expect(visualMatchesHeading(false, "ada · Main")).toBe("Visual matches");
-    expect(visualMatchesHeading(false)).toBe("Visual matches");
-  });
-
-  it("truthfully labels active identity scope when allLogins is true", () => {
-    expect(visualMatchesHeading(true, "ada · Main")).toBe("Visual matches (ada · Main only)");
-    expect(visualMatchesHeading(true)).toBe("Visual matches (current login only)");
-  });
-});
-
 describe("filterVisualHits", () => {
   it("returns empty array if chips type is non-image", () => {
     const result = filterVisualHits(sampleHits, {
       chips: { type: "documents", folderOnly: false },
       currentFolder: "/",
-      shownItems: [],
+      shownPaths: [],
     });
     expect(result).toHaveLength(0);
   });
@@ -98,7 +85,7 @@ describe("filterVisualHits", () => {
     const result = filterVisualHits(sampleHits, {
       chips: { type: "any", folderOnly: false },
       currentFolder: "/",
-      shownItems: [],
+      shownPaths: [],
     });
     expect(result).toHaveLength(4);
   });
@@ -107,7 +94,7 @@ describe("filterVisualHits", () => {
     const result = filterVisualHits(sampleHits, {
       chips: { type: "images", folderOnly: false },
       currentFolder: "/",
-      shownItems: [],
+      shownPaths: [],
     });
     expect(result.map((h) => h.name)).toEqual(["sunset.jpg", "nested.png", "outside.webp"]);
   });
@@ -116,7 +103,7 @@ describe("filterVisualHits", () => {
     const result = filterVisualHits(sampleHits, {
       chips: { type: "any", folderOnly: true },
       currentFolder: "/photos",
-      shownItems: [],
+      shownPaths: [],
     });
     expect(result.map((h) => h.name)).toEqual(["sunset.jpg", "nested.png", "document.pdf"]);
   });
@@ -146,42 +133,25 @@ describe("filterVisualHits", () => {
     const result = filterVisualHits(hitsWithPrefixMismatch, {
       chips: { type: "any", folderOnly: true },
       currentFolder: "/photos",
-      shownItems: [],
+      shownPaths: [],
     });
     expect(result.map((h) => h.name)).toEqual(["in-folder.jpg"]);
   });
 
-  it("deduplicates hits already shown in text results for the same identity", () => {
+  it("deduplicates hits already shown in text results", () => {
     const result = filterVisualHits(sampleHits, {
       chips: { type: "any", folderOnly: false },
       currentFolder: "/",
-      shownItems: [{ path: "/photos/sunset.jpg", identityId: "user-1" }],
-      activeIdentityId: "user-1",
+      shownPaths: ["/photos/sunset.jpg"],
     });
     expect(result.map((h) => h.name)).toEqual(["nested.png", "outside.webp", "document.pdf"]);
-  });
-
-  it("does not deduplicate hits when identity differs", () => {
-    const result = filterVisualHits(sampleHits, {
-      chips: { type: "any", folderOnly: false },
-      currentFolder: "/",
-      shownItems: [{ path: "/photos/sunset.jpg", identityId: "other-user" }],
-      activeIdentityId: "user-1",
-    });
-    expect(result.map((h) => h.name)).toEqual([
-      "sunset.jpg",
-      "nested.png",
-      "outside.webp",
-      "document.pdf",
-    ]);
   });
 
   it("handles normalized paths when comparing shown items", () => {
     const result = filterVisualHits(sampleHits, {
       chips: { type: "any", folderOnly: false },
       currentFolder: "/",
-      shownItems: [{ path: "photos/sunset.jpg", identityId: "user-1" }],
-      activeIdentityId: "user-1",
+      shownPaths: ["photos/sunset.jpg"],
     });
     expect(result.map((h) => h.name)).toEqual(["nested.png", "outside.webp", "document.pdf"]);
   });

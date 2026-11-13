@@ -1,23 +1,17 @@
 // @vitest-environment jsdom
-import type {
-  AccountSearchResponse,
-  SearchResponse,
-  SearchStatusResponse,
-} from "@fdrive/contracts";
+import type { SearchResponse, SearchStatusResponse } from "@fdrive/contracts";
 import { focusManager, QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, renderHook, waitFor } from "@testing-library/react";
 import { createElement, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_SEARCH_CHIPS } from "./filters";
 
-const accountSearchMock = vi.fn();
 const searchMock = vi.fn();
 const searchStatusMock = vi.fn();
 const searchImagesMock = vi.fn();
 
 vi.mock("./deps.js", () => ({
   apiClient: {
-    accountSearch: (...args: unknown[]) => accountSearchMock(...args),
     search: (...args: unknown[]) => searchMock(...args),
     searchStatus: (...args: unknown[]) => searchStatusMock(...args),
     searchImages: (...args: unknown[]) => searchImagesMock(...args),
@@ -39,7 +33,6 @@ function createWrapper(queryClient: QueryClient) {
 }
 
 beforeEach(() => {
-  accountSearchMock.mockReset();
   searchMock.mockReset();
   searchStatusMock.mockReset();
   searchImagesMock.mockReset();
@@ -162,8 +155,6 @@ describe("search startup retry decisions", () => {
     expect(searchUnavailableMessage(status)).toBe(
       "Search is not available for this login. It needs indexed local storage.",
     );
-    // Across all linked logins the panel names each one itself, so no "this login" here.
-    expect(searchUnavailableMessage(status, true)).toBe("Search is not available.");
     expect(searchUnavailableHint(status)).toBe("Search is not available for this login");
     expect(searchUnavailableHint({ available: false, semantic: false, reason: "mismatch" })).toBe(
       "Search index is unavailable",
@@ -187,17 +178,6 @@ describe("search startup retry decisions", () => {
       }),
     ).toBe(false);
     expect(shouldRetryUnavailableResult({ unavailable: false }, undefined)).toBe(false);
-  });
-
-  it("retries an account-wide response with unavailable identities", async () => {
-    const { shouldRetryUnavailableResult } = await import("./queries.js");
-
-    expect(
-      shouldRetryUnavailableResult(
-        { unavailable: false, unavailableIdentityIds: ["identity-2"] },
-        undefined,
-      ),
-    ).toBe(true);
   });
 });
 
@@ -380,49 +360,15 @@ describe("useImageSearchResults", () => {
   });
 });
 
-it("uses account search only for all-logins scope and isolates its cache", async () => {
-  accountSearchMock.mockResolvedValue({ ...EMPTY_RESPONSE, unavailableIdentityIds: ["other"] });
+it("keys results by the active login so a switch never reuses another login's results", async () => {
+  searchMock.mockResolvedValue(EMPTY_RESPONSE);
   const { useSearchResults } = await import("./queries");
   const client = new QueryClient();
-  const scope = { accountId: "a", identityId: "i", all: true };
   const { result } = renderHook(
-    () => useSearchResults("readme", DEFAULT_SEARCH_CHIPS, "/", { scope }),
+    () => useSearchResults("readme", DEFAULT_SEARCH_CHIPS, "/", { identityId: "i" }),
     { wrapper: createWrapper(client) },
   );
-  await waitFor(() =>
-    expect(result.current.data).toHaveProperty("unavailableIdentityIds", ["other"]),
-  );
-  expect(accountSearchMock).toHaveBeenCalledWith("readme", { limit: 20 });
-  expect(searchMock).not.toHaveBeenCalled();
-  expect(client.getQueryCache().getAll()[0]?.queryKey).toContainEqual(scope);
+  await waitFor(() => expect(result.current.data).toEqual(EMPTY_RESPONSE));
+  expect(searchMock).toHaveBeenCalledWith("readme", { limit: 20 });
+  expect(client.getQueryCache().getAll()[0]?.queryKey).toContain("i");
 });
-
-it("retries all-logins partial results despite the active identity's permanent status", async () => {
-  focusManager.setFocused(true);
-  const partial: AccountSearchResponse = {
-    ...EMPTY_RESPONSE,
-    sections: { folders: [], files: [], content: [] },
-    unavailableIdentityIds: ["other"],
-  };
-  const healthy: AccountSearchResponse = {
-    ...EMPTY_RESPONSE,
-    sections: { folders: [], files: [], content: [] },
-    unavailableIdentityIds: [],
-  };
-  accountSearchMock.mockResolvedValueOnce(partial).mockResolvedValue(healthy);
-  const { useSearchResults } = await import("./queries");
-  const client = new QueryClient();
-  const { result } = renderHook(
-    () =>
-      useSearchResults("readme", DEFAULT_SEARCH_CHIPS, "/", {
-        retryUnavailable: true,
-        status: { available: false, semantic: false, reason: "no_roots" },
-        scope: { accountId: "a", identityId: "i", all: true },
-      }),
-    { wrapper: createWrapper(client) },
-  );
-
-  await waitFor(() => expect(result.current.data).toEqual(partial));
-  await waitFor(() => expect(result.current.data).toEqual(healthy), { timeout: 7_000 });
-  expect(accountSearchMock).toHaveBeenCalledTimes(2);
-}, 8_000);

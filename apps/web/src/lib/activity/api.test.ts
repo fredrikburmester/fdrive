@@ -1,6 +1,13 @@
 import type { PersonalActivityEvent } from "@fdrive/contracts";
 import { afterEach, expect, it, vi } from "vitest";
-import { activityFeed, activityFile, activityLocations, activityRequest } from "./api";
+import {
+  ActivityRequestError,
+  activityFeed,
+  activityFile,
+  activityLocations,
+  activityRequest,
+  resolveActivityFile,
+} from "./api";
 import { activityLabels, activityPath, collapseActivity } from "./history";
 
 const id = "00000000-0000-4000-8000-000000000001";
@@ -58,6 +65,27 @@ it("sends private uncached requests, encodes filters and validates API shapes", 
   expect(await activityLocations()).toEqual([{ identityId: id, label: "Previous drive" }]);
   fetcher.mockResolvedValueOnce(Response.json({ global: "invalid" }));
   await expect(activityFeed({})).rejects.toThrow();
+});
+it("resolves a path to its history ID and reads an unrecorded path as no history", async () => {
+  const fetcher = vi.fn(async (_url: string, _init: RequestInit) => Response.json({ id }));
+  vi.stubGlobal("fetch", fetcher);
+  expect(await resolveActivityFile(id, "/a b.txt")).toBe(id);
+  expect(fetcher.mock.calls.at(-1)?.[0]).toBe(
+    `/api/v1/activity/files/resolve?identityId=${id}&path=%2Fa+b.txt`,
+  );
+  fetcher.mockResolvedValueOnce(
+    Response.json(
+      { error: { kind: "not_found", message: "No recorded history for this file yet" } },
+      { status: 404 },
+    ),
+  );
+  expect(await resolveActivityFile(id, "/new.txt")).toBeNull();
+  fetcher.mockResolvedValueOnce(Response.json({}, { status: 500 }));
+  const failure = resolveActivityFile(id, "/a");
+  await expect(failure).rejects.toBeInstanceOf(ActivityRequestError);
+  await expect(failure).rejects.toMatchObject({ status: 500 });
+  fetcher.mockResolvedValueOnce(Response.json({ id: "not-an-id" }));
+  await expect(resolveActivityFile(id, "/a")).rejects.toThrow();
 });
 
 function event(patch: Partial<PersonalActivityEvent>): PersonalActivityEvent {

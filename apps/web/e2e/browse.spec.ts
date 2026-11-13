@@ -1,5 +1,5 @@
 import { expect, type Page, test } from "@playwright/test";
-import { listing } from "./support/regions.js";
+import { breadcrumb, listing } from "./support/regions.js";
 import { uniqueName } from "./support/unique.js";
 import { createViewFolder } from "./support/view-folder.js";
 
@@ -70,6 +70,32 @@ test("clicking the Home breadcrumb returns to root", async ({ page }) => {
   await expect(listing(page).getByText("photo.jpg", { exact: true })).toBeVisible();
 });
 
+test("a deep breadcrumb trail stays whole while it fits and hides its shallowest folders when it does not", async ({
+  page,
+}) => {
+  const root = uniqueName("crumbs");
+  const names = [root, "alpha", "bravo", "charlie", "delta"];
+  const headers = { "x-requested-with": "fdrive" };
+  for (let depth = 1; depth <= names.length; depth += 1) {
+    const path = `/${names.slice(0, depth).join("/")}`;
+    expect((await page.request.post("/api/v1/fs/mkdir", { headers, data: { path } })).ok()).toBe(
+      true,
+    );
+  }
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto(`/files/${names.join("/")}`);
+
+  const nav = breadcrumb(page);
+  for (const name of ["Home", ...names]) {
+    await expect(nav.getByRole("link", { name, exact: true })).toBeVisible();
+  }
+
+  await page.setViewportSize({ width: 820, height: 900 });
+  await expect(nav.getByRole("link", { name: root, exact: true })).toHaveCount(0);
+  await expect(nav.getByRole("link", { name: "Home", exact: true })).toBeVisible();
+  await expect(nav.getByRole("link", { name: "delta", exact: true })).toBeVisible();
+});
+
 test("the view menu switches to grid and back, and persists across reload", async ({ page }) => {
   const path = await createViewFolder(page, true);
   await expect(listing(page).getByText("photo.jpg", { exact: true })).toBeVisible();
@@ -91,6 +117,29 @@ test("the view menu switches to grid and back, and persists across reload", asyn
   await page.getByRole("button", { name: "View", exact: true }).click();
   await page.getByRole("menuitemradio", { name: "List" }).click();
   await expect(page.locator('[data-slot="file-list"]')).toBeVisible();
+});
+
+test("the grid's icon size resizes tiles and persists across reload", async ({ page }) => {
+  const path = await createViewFolder(page, true);
+  await page.getByRole("button", { name: "View", exact: true }).click();
+  await page.getByRole("menuitemradio", { name: "Grid" }).click();
+
+  // A tile's first child is its square preview slot, a thumbnail or an icon.
+  const preview = page.locator(`[data-path="${path}/docs"] > :first-child`);
+  const previewWidth = async () => (await preview.boundingBox())?.width;
+  await expect.poll(previewWidth).toBe(88);
+
+  await page.getByRole("button", { name: "View", exact: true }).click();
+  await expect(page.getByRole("menuitemradio", { name: "Medium" })).toBeChecked();
+  await page.getByRole("menuitemradio", { name: "Large" }).click();
+  await expect.poll(previewWidth).toBe(144);
+
+  await page.reload();
+  await expect.poll(previewWidth).toBe(144);
+
+  await page.getByRole("button", { name: "View", exact: true }).click();
+  await page.getByRole("menuitemradio", { name: "Small" }).click();
+  await expect.poll(previewWidth).toBe(56);
 });
 
 test("sorting by size flips the order of docs' contents", async ({ page }) => {

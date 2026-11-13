@@ -6,10 +6,12 @@
 export const queryKeys = {
   activity: {
     all: (accountId: string) => ["personal-activity", accountId] as const,
-    feed: (accountId: string, filters: unknown, scope: string) =>
+    feed: (accountId: string, filters: unknown, scope: string | null) =>
       ["personal-activity", accountId, "feed", scope, filters] as const,
     file: (accountId: string, fileId: string) =>
       ["personal-activity", accountId, "file", fileId] as const,
+    resolve: (accountId: string, identityId: string, path: string) =>
+      ["personal-activity", accountId, "resolve", identityId, path] as const,
   },
   auth: {
     me: () => ["auth", "me"] as const,

@@ -19,7 +19,7 @@ function message(
 }
 
 describe("formatUserMessage", () => {
-  it("lists what was attached and where the person is before their words", () => {
+  it("lists what was attached and the open folder before their words", () => {
     expect(
       formatUserMessage(
         "What are these?",
@@ -32,7 +32,7 @@ describe("formatUserMessage", () => {
         "- /Inbox/a.pdf (file, 1.0 KB)",
         "- /Docs",
         "",
-        "The person is looking at /Inbox.",
+        "The person has the folder /Inbox open. It and everything inside it count as referenced for this message.",
         "",
         "What are these?",
       ].join("\n"),
@@ -59,7 +59,7 @@ describe("buildHistory", () => {
     expect(history).toEqual([
       {
         role: "user",
-        text: "Attached to this message:\n- /a.pdf\n\nThe person is looking at /.\n\nWhat is this?",
+        text: "Attached to this message:\n- /a.pdf\n\nThe person has the folder / open. It and everything inside it count as referenced for this message.\n\nWhat is this?",
       },
       { role: "assistant", text: "An invoice." },
     ]);

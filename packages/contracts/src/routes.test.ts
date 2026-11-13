@@ -183,7 +183,6 @@ describe("ROUTES", () => {
       identities: "/api/v1/account/identities",
       activeIdentity: "/api/v1/account/active-identity",
       favorites: "/api/v1/account/favorites",
-      search: "/api/v1/account/search",
     });
   });
 });

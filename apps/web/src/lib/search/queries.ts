@@ -1,11 +1,6 @@
 "use client";
 
-import type {
-  AccountSearchResponse,
-  ImageSearchResponse,
-  SearchResponse,
-  SearchStatusResponse,
-} from "@fdrive/contracts";
+import type { ImageSearchResponse, SearchResponse, SearchStatusResponse } from "@fdrive/contracts";
 import { useQuery } from "@tanstack/react-query";
 import { apiClient } from "./deps";
 import { chipsToQueryParams, type SearchChipState } from "./filters";
@@ -48,18 +43,10 @@ export function searchUnavailableHint(status: SearchStatusResponse | undefined):
     : "Search index is unavailable";
 }
 
-/**
- * User-facing wording for unavailable text or visual search. `status` is the
- * active login's, so the sentence about "this login" only fits a search of
- * that login; across all linked logins the panel already names each
- * unavailable one above the results.
- */
-export function searchUnavailableMessage(
-  status: SearchStatusResponse | undefined,
-  allLogins = false,
-): string {
+/** User-facing wording for unavailable text or visual search of the active login. */
+export function searchUnavailableMessage(status: SearchStatusResponse | undefined): string {
   if (isSearchStarting(status)) return "Search is starting… Retrying automatically.";
-  if (isSearchUnsupported(status) && !allLogins) {
+  if (isSearchUnsupported(status)) {
     return "Search is not available for this login. It needs indexed local storage.";
   }
   return "Search is not available.";
@@ -71,20 +58,10 @@ export function searchUnavailableMessage(
  * registration, so an unavailable result remains retryable in that case.
  */
 export function shouldRetryUnavailableResult(
-  response:
-    | Pick<SearchResponse, "unavailable">
-    | Pick<AccountSearchResponse, "unavailable" | "unavailableIdentityIds">
-    | Pick<ImageSearchResponse, "unavailable">
-    | undefined,
+  response: Pick<SearchResponse | ImageSearchResponse, "unavailable"> | undefined,
   status: SearchStatusResponse | undefined,
 ): boolean {
-  const accountScopeUnavailable =
-    response !== undefined &&
-    "unavailableIdentityIds" in response &&
-    response.unavailableIdentityIds.length > 0;
-  return (
-    (response?.unavailable === true || accountScopeUnavailable) && !isPermanentSearchStatus(status)
-  );
+  return response?.unavailable === true && !isPermanentSearchStatus(status);
 }
 
 /** TanStack Query key for `useSearchResults`, stable across chip/folder combinations. */
@@ -110,11 +87,8 @@ export interface UseSearchResultsOptions {
   readonly retryUnavailable?: boolean;
   /** Current scope status, used to stop retries for permanent failures. */
   readonly status?: SearchStatusResponse | undefined;
-  readonly scope?: {
-    readonly accountId: string;
-    readonly identityId: string;
-    readonly all: boolean;
-  };
+  /** The active login, so a switch never shows another login's cached results. */
+  readonly identityId?: string | undefined;
 }
 
 /**
@@ -131,21 +105,17 @@ export function useSearchResults(
   const params = chipsToQueryParams(chips, currentFolder);
   const trimmed = query.trim();
 
-  return useQuery<SearchResponse | AccountSearchResponse>({
-    queryKey: [...searchQueryKey(query, chips, currentFolder), options.scope ?? null],
+  return useQuery<SearchResponse>({
+    queryKey: [...searchQueryKey(query, chips, currentFolder), options.identityId ?? null],
     queryFn: () =>
-      (options.scope?.all ? apiClient.accountSearch : apiClient.search)(query, {
+      apiClient.search(query, {
         limit: 20,
         ...(params.ext !== undefined ? { ext: params.ext } : {}),
         ...(params.folder !== undefined ? { folder: params.folder } : {}),
       }),
     enabled: (options.enabled ?? true) && trimmed.length > 0,
     refetchInterval: (query) =>
-      options.retryUnavailable &&
-      shouldRetryUnavailableResult(
-        query.state.data,
-        options.scope?.all === true ? undefined : options.status,
-      )
+      options.retryUnavailable && shouldRetryUnavailableResult(query.state.data, options.status)
         ? SEARCH_STARTUP_RETRY_MS
         : false,
   });

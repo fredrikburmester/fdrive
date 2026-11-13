@@ -5,7 +5,6 @@ import { SearchPanel } from "@/components/search/search-panel";
 import { Button } from "@/components/ui/button";
 import { Kbd, KbdGroup } from "@/components/ui/kbd";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { useMe } from "@/lib/api/auth-queries";
 import {
   isPermanentSearchStatus,
   searchUnavailableHint,
@@ -33,8 +32,7 @@ import { useSearchShortcut } from "@/lib/search/shortcut";
 export function SearchButton() {
   const { open, setOpen } = useSearchShortcut();
   const { data: status } = useSearchStatus();
-  const { data: me } = useMe();
-  const indexUnavailable = isPermanentSearchStatus(status) && (me?.identities.length ?? 0) < 2;
+  const indexUnavailable = isPermanentSearchStatus(status);
 
   const button = (
     <Button variant="outline" size="sm" aria-label="Search" onClick={() => setOpen(true)}>

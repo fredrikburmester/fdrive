@@ -5,7 +5,12 @@ import { createElement, type ReactNode } from "react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { queryKeys } from "@/lib/api/keys";
 import { activityGesture, useActivityGesture } from "./gestures";
-import { useActivityFile, useActivityHistory, useActivityLocations } from "./queries";
+import {
+  useActivityFile,
+  useActivityFileAt,
+  useActivityHistory,
+  useActivityLocations,
+} from "./queries";
 
 const mocks = vi.hoisted(() => ({
   me: undefined as { account: { id: string } } | undefined,
@@ -13,6 +18,7 @@ const mocks = vi.hoisted(() => ({
   feed: vi.fn(),
   file: vi.fn(),
   locations: vi.fn(),
+  resolve: vi.fn(),
   request: vi.fn(),
 }));
 vi.mock("@/lib/api/auth-queries", () => ({ useMe: () => ({ data: mocks.me }) }));
@@ -22,6 +28,7 @@ vi.mock("./api", () => ({
   activityFile: mocks.file,
   activityLocations: mocks.locations,
   activityRequest: mocks.request,
+  resolveActivityFile: mocks.resolve,
 }));
 const streams: FakeStream[] = [];
 class FakeStream extends EventTarget {
@@ -153,6 +160,39 @@ it("loads journey locations only when signed in and uses the same owner namespac
   expect(mocks.file).toHaveBeenCalledWith("file");
   expect(mocks.locations).toHaveBeenCalled();
   expect(client.getQueryData(queryKeys.activity.file("alice", "file"))).toEqual({ id: "file" });
+  hook.unmount();
+  client.clear();
+});
+
+it("resolves a path only for a signed-in login and refreshes it when new activity lands", async () => {
+  const { wrapper, client } = setup();
+  mocks.resolve.mockResolvedValueOnce(null).mockResolvedValue("file");
+  const hook = renderHook(
+    ({ identity }) => {
+      const file = useActivityFileAt(identity, "/a.txt");
+      return {
+        file,
+        feed: useActivityHistory({}, file.data ? `/files/${file.data}/events` : null),
+      };
+    },
+    { wrapper, initialProps: { identity: undefined as string | undefined } },
+  );
+  mocks.me = { account: { id: "alice" } };
+  hook.rerender({ identity: undefined });
+  expect(hook.result.current.file.fetchStatus).toBe("idle");
+  hook.rerender({ identity: "drive" });
+  await waitFor(() => expect(hook.result.current.file.isSuccess).toBe(true));
+  expect(hook.result.current.file.data).toBeNull();
+  expect(mocks.resolve).toHaveBeenLastCalledWith("drive", "/a.txt");
+  // Nothing recorded yet: no feed request, but the live stream is already open.
+  expect(hook.result.current.feed.fetchStatus).toBe("idle");
+  expect(mocks.feed).not.toHaveBeenCalled();
+  mocks.feed.mockResolvedValue({ items: [], nextCursor: null });
+  streams.at(-1)?.dispatchEvent(new Event("activity"));
+  await waitFor(() => expect(hook.result.current.file.data).toBe("file"));
+  await waitFor(() => expect(hook.result.current.feed.isSuccess).toBe(true));
+  expect(mocks.feed).toHaveBeenLastCalledWith({}, "/files/file/events");
+  expect(client.getQueryData(queryKeys.activity.resolve("alice", "drive", "/a.txt"))).toBe("file");
   hook.unmount();
   client.clear();
 });

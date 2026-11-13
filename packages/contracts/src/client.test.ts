@@ -1734,21 +1734,11 @@ it("includes scoped identity in native download links without losing inline/path
 
 it("calls account identity and cross-identity view routes with typed responses", async () => {
   const favorites = { items: [], unavailableIdentityIds: [] };
-  const search = {
-    query: "a",
-    sections: { folders: [], files: [], content: [] },
-    degraded: false,
-    unavailable: false,
-    tookMs: 0,
-    unavailableIdentityIds: [],
-  };
   const { fetchStub, calls } = createStubFetch([
     jsonResponse(200, VALID_ME),
     jsonResponse(200, VALID_ME),
     jsonResponse(200, VALID_ME),
     jsonResponse(200, favorites),
-    jsonResponse(200, search),
-    jsonResponse(200, search),
   ]);
   const client = createApiClient({ fetch: fetchStub });
   expect(
@@ -1762,22 +1752,11 @@ it("calls account identity and cross-identity view routes with typed responses",
   ).toEqual(VALID_ME);
   expect(await client.switchIdentity(VALID_UUID)).toEqual(VALID_ME);
   expect(await client.accountFavorites()).toEqual(favorites);
-  expect(await client.accountSearch("a")).toEqual(search);
-  expect(
-    await client.accountSearch("a", {
-      limit: 5,
-      ext: "txt",
-      folder: "/docs",
-      after: "2026-01-01",
-      before: "2026-09-01",
-    }),
-  ).toEqual(search);
-  expect(calls.slice(0, 5).map((call) => call.url)).toEqual([
+  expect(calls.map((call) => call.url)).toEqual([
     "/api/v1/account/identities",
     `/api/v1/account/identities/${VALID_UUID}`,
     "/api/v1/account/active-identity",
     "/api/v1/account/favorites",
-    "/api/v1/account/search?q=a",
   ]);
   expect(calls[0]?.init.body).toBe(
     JSON.stringify({
@@ -1788,7 +1767,6 @@ it("calls account identity and cross-identity view routes with typed responses",
   expect(calls[1]?.init.method).toBe("DELETE");
   expect(calls[2]?.init.body).toBe(JSON.stringify({ identityId: VALID_UUID }));
   expect(headerValue(calls[0]?.init ?? {}, "x-requested-with")).toBe("fdrive");
-  expect(calls[5]?.url).toContain("limit=5");
 });
 
 describe("system logs client", () => {

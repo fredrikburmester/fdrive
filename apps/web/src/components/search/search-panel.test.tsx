@@ -100,30 +100,15 @@ function renderPanel(client: QueryClient) {
   );
 }
 
-it("defaults to current login, labels account duplicates and omissions without hiding results", async () => {
+it("searches only the active login when several logins are linked", async () => {
   stubMatchMedia(false);
-  vi.spyOn(apiClient, "search").mockResolvedValue({
+  const search = vi.spyOn(apiClient, "search").mockResolvedValue({
     query: "same",
     sections: { folders: [], files: [hit], content: [] },
     degraded: false,
     unavailable: false,
-    tookMs: 1,
-  });
-  const all = vi.spyOn(apiClient, "accountSearch").mockResolvedValue({
-    query: "same",
-    sections: {
-      folders: [],
-      files: [
-        { ...hit, identityId: "one" },
-        { ...hit, identityId: "two" },
-      ],
-      content: [],
-    },
-    degraded: false,
-    unavailable: false,
     partial: true,
     tookMs: 1,
-    unavailableIdentityIds: ["two"],
   });
   const client = new QueryClient({ defaultOptions: { queries: { staleTime: Infinity } } });
   client.setQueryData(["auth", "me"], me);
@@ -132,14 +117,10 @@ it("defaults to current login, labels account duplicates and omissions without h
     target: { value: "same" },
   });
   await waitFor(() => expect(screen.getAllByText("same.txt")).toHaveLength(1));
-  expect(all).not.toHaveBeenCalled();
-  fireEvent.click(screen.getByRole("button", { name: "All linked logins" }));
-  await waitFor(() => expect(screen.getAllByText("same.txt")).toHaveLength(2));
-  expect(screen.getByText("ada · Main")).toBeDefined();
-  expect(screen.getByText("bob · Other")).toBeDefined();
-  expect(screen.getByText(/Search unavailable for bob · Other/)).toBeDefined();
+  expect(search).toHaveBeenCalledWith("same", { limit: 20 });
+  expect(screen.queryByRole("button", { name: "All linked logins" })).toBeNull();
+  expect(screen.queryByText("ada · Main")).toBeNull();
   expect(screen.getByText("Some text results omitted.")).toBeDefined();
-  expect(document.querySelector("img")).toBeNull();
 });
 
 it("uses the global grid default while preserving reveal actions", async () => {
@@ -369,7 +350,7 @@ it("renders text results without waiting for images and leaves text usable on im
   expect(screen.queryByText("Visual matches")).toBeNull();
 });
 
-it("deduplicates visual hits matching path and active identity already shown in Files", async () => {
+it("deduplicates visual hits whose path is already shown in Files", async () => {
   stubMatchMedia(false);
   vi.spyOn(apiClient, "searchStatus").mockResolvedValue({
     available: true,
@@ -411,40 +392,6 @@ it("deduplicates visual hits matching path and active identity already shown in 
 
   await waitFor(() => expect(screen.getByText("beach.jpg")).toBeDefined());
   expect(screen.getAllByText("sunset.jpg")).toHaveLength(1);
-});
-
-it("truthfully labels visual matches scope when all linked logins is selected", async () => {
-  stubMatchMedia(false);
-  vi.spyOn(apiClient, "searchStatus").mockResolvedValue({
-    available: true,
-    semantic: true,
-    images: true,
-  });
-  vi.spyOn(apiClient, "accountSearch").mockResolvedValue({
-    query: "sunset",
-    sections: { folders: [], files: [{ ...hit, identityId: "two" }], content: [] },
-    degraded: false,
-    unavailable: false,
-    tookMs: 1,
-    unavailableIdentityIds: [],
-  });
-  vi.spyOn(apiClient, "searchImages").mockResolvedValue({
-    query: "sunset",
-    hits: [imageHit],
-    unavailable: false,
-    tookMs: 1,
-  });
-
-  const client = new QueryClient({ defaultOptions: { queries: { staleTime: Infinity } } });
-  client.setQueryData(["auth", "me"], me);
-  renderPanel(client);
-
-  fireEvent.click(screen.getByRole("button", { name: "All linked logins" }));
-  fireEvent.change(screen.getByPlaceholderText("Search files, content, and images..."), {
-    target: { value: "sunset" },
-  });
-
-  await waitFor(() => expect(screen.getByText("Visual matches (ada · Main only)")).toBeDefined());
 });
 
 it("applies boundary-aware folder filtering and acknowledges limited candidates", async () => {

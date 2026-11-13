@@ -30,7 +30,7 @@ async function send(page: Page, text: string): Promise<void> {
   await box.press("Enter");
 }
 
-test("chat follows the person between folders, takes dropped files, reads them, moves, rewrites and renames them through cards", async ({
+test("chat follows the person between folders, hides elsewhere, takes dropped files, reads them, moves, rewrites and renames them through cards, and sorts the open folder", async ({
   page,
 }) => {
   test.setTimeout(150_000);
@@ -81,8 +81,15 @@ test("chat follows the person between folders, takes dropped files, reads them, 
     const title = panel(page).getByRole("button", { name: "Chats" });
     await expect(title).toContainText("What are these files about?");
 
-    // The panel stays with the person on other pages, and a reload brings the same chat back.
+    // Chat works from the folder in view, so other pages do not offer it; the next folder
+    // brings the panel back with the same chat, and so does a reload.
+    const chatButton = page.getByRole("button", { name: "Chat", exact: true });
+    await expect(chatButton).toBeVisible();
     await page.goto("/favorites");
+    await expect(page.getByRole("button", { name: "Search", exact: true })).toBeVisible();
+    await expect(panel(page)).toBeHidden();
+    await expect(chatButton).toBeHidden();
+    await page.goto(`/files/${sandbox}`);
     await expect(panel(page).getByText("is a shopping list", { exact: false })).toBeVisible();
     await page.reload();
     await expect(panel(page).getByText("is a shopping list", { exact: false })).toBeVisible();
@@ -157,6 +164,19 @@ test("chat follows the person between folders, takes dropped files, reads them, 
     await expect(listing(page).getByText("grocery-list.txt", { exact: true })).toBeVisible();
     await expect(listing(page).getByText("shopping.txt", { exact: true })).toBeHidden();
 
+    // With nothing attached, the open folder is what the assistant works on.
+    await expect(attached).toHaveText(sandbox);
+    await send(page, "Sort the files in this folder");
+    const sortCard = panel(page).getByRole("region", { name: "Lists go into a Lists folder." });
+    await expect(sortCard.getByText("grocery-list.txt")).toBeVisible();
+    await sortCard.getByRole("button", { name: "Move 2 items" }).click();
+    await expect(sortCard.getByText("Applied")).toBeVisible();
+    await expect(listing(page).getByText("Lists", { exact: true })).toBeVisible();
+    await expect(listing(page).getByText("grocery-list.txt", { exact: true })).toBeHidden();
+    await expect(
+      listing(page).getByText("shopping-professional.txt", { exact: true }),
+    ).toBeHidden();
+
     // The assistant was offered chat's tools, not Organize's.
     const offered = fakeAi.requests[0]?.tools?.map((tool) => tool.function.name) ?? [];
     expect(offered).toContain("read_file");
@@ -166,6 +186,10 @@ test("chat follows the person between folders, takes dropped files, reads them, 
 
     await panel(page).getByRole("button", { name: "Close chat" }).click();
     await expect(panel(page)).toBeHidden();
+
+    // The bubble in the corner opens it again.
+    await chatButton.click();
+    await expect(panel(page).getByText("Moved them into Notes.").last()).toBeVisible();
   } finally {
     const current = (await (await page.request.get(AI_URL)).json()) as SystemAiResponse;
     const { hasApiKey: _hasApiKey, ...restore } = original.configuration;

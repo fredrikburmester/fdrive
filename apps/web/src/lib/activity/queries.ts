@@ -5,9 +5,17 @@ import { useInfiniteQuery, useQuery, useQueryClient } from "@tanstack/react-quer
 import { useEffect } from "react";
 import { useMe } from "@/lib/api/auth-queries";
 import { queryKeys } from "@/lib/api/keys";
-import { activityFeed, activityFile, activityLocations } from "./api";
+import { activityFeed, activityFile, activityLocations, resolveActivityFile } from "./api";
 
-export function useActivityHistory(filters: Partial<PersonalActivityFilters>, scope = "") {
+/**
+ * One feed of the caller's history, refreshed whenever the server records a
+ * new event. A `null` scope loads nothing yet but still listens, so a file
+ * whose history is being recorded right now resolves once it lands.
+ */
+export function useActivityHistory(
+  filters: Partial<PersonalActivityFilters>,
+  scope: string | null = "",
+) {
   const { data: me } = useMe();
   const accountId = me?.account.id ?? "";
   const client = useQueryClient();
@@ -29,11 +37,11 @@ export function useActivityHistory(filters: Partial<PersonalActivityFilters>, sc
   }, [accountId, client]);
   return useInfiniteQuery({
     queryKey: queryKeys.activity.feed(accountId, filters, scope),
-    enabled: !!accountId,
+    enabled: !!accountId && scope !== null,
     refetchInterval: 10_000,
     initialPageParam: undefined as string | undefined,
     queryFn: ({ pageParam }) =>
-      activityFeed({ ...filters, ...(pageParam ? { cursor: pageParam } : {}) }, scope),
+      activityFeed({ ...filters, ...(pageParam ? { cursor: pageParam } : {}) }, scope ?? ""),
     getNextPageParam: (page) => page.nextCursor ?? undefined,
   });
 }
@@ -43,6 +51,15 @@ export function useActivityFile(id: string) {
     queryKey: queryKeys.activity.file(me?.account.id ?? "", id),
     enabled: !!me,
     queryFn: () => activityFile(id),
+  });
+}
+/** The history ID at a path of the tab's login; `null` until something there is recorded. */
+export function useActivityFileAt(identityId: string | undefined, path: string) {
+  const { data: me } = useMe();
+  return useQuery({
+    queryKey: queryKeys.activity.resolve(me?.account.id ?? "", identityId ?? "", path),
+    enabled: !!me && !!identityId,
+    queryFn: () => resolveActivityFile(identityId ?? "", path),
   });
 }
 export function useActivityLocations() {

@@ -59,7 +59,14 @@ test("upload completion leads to a durable journey, copies branch and exports ke
     await (await page.request.get(`/api/v1/activity/files/${id}`)).json(),
   );
   expect(current.currentPath).toBe(target);
-  await page.goto(`/activity/files/${id}`);
+  await page.goto(`/view/${folder}/renamed.txt`);
+  await page.getByRole("button", { name: "Info" }).click();
+  const activity = page.getByRole("region", { name: "Activity" });
+  await expect(activity.getByText("Renamed", { exact: true })).toBeVisible();
+  await expect(activity.getByText(`From ${name}`, { exact: true })).toBeVisible();
+  await expect(activity.getByText("Uploaded", { exact: true })).toBeVisible();
+  await activity.getByRole("button", { name: "See all" }).click();
+  await expect(page).toHaveURL(new RegExp(`/activity/files/${id}$`));
   const history = page.locator('[data-slot="personal-activity"]');
   await expect(history.getByText("Renamed", { exact: true })).toBeVisible();
   await expect(history.getByText("Uploaded", { exact: true })).toBeVisible();

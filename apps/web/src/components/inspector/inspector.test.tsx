@@ -5,7 +5,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Inspector } from "./inspector";
 
 const useFolderSizeMock = vi.fn();
-vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn() }) }));
+
+vi.mock("@/components/activity/file-activity-section", () => ({
+  FileActivitySection: ({ path }: { path: string }) => (
+    <section aria-label="Activity" data-path={path} />
+  ),
+}));
 
 vi.mock("@/lib/inspector/queries", () => ({
   useFolderSize: (...args: unknown[]) => useFolderSizeMock(...args),
@@ -141,5 +146,23 @@ describe("Inspector: image preview", () => {
     fireEvent.error(screen.getByRole("img", { name: "photo.heic" }));
 
     expect(screen.queryByRole("img", { name: "photo.heic" })).toBeNull();
+  });
+});
+
+describe("Inspector: activity", () => {
+  it("shows a single entry's activity inline, and none for a multi-selection", () => {
+    useFolderSizeMock.mockReturnValue({ isPending: true, isError: false, data: undefined });
+    const fileEntry: FsEntry = { ...DIR_ENTRY, name: "a.txt", path: "/a.txt", kind: "file" };
+
+    const { rerender } = render(<Inspector entries={[fileEntry]} onClose={() => {}} />);
+
+    expect(screen.getByRole("region", { name: "Activity" }).getAttribute("data-path")).toBe(
+      "/a.txt",
+    );
+    expect(screen.queryByRole("button", { name: "File journey" })).toBeNull();
+
+    rerender(<Inspector entries={[fileEntry, DIR_ENTRY]} onClose={() => {}} />);
+
+    expect(screen.queryByRole("region", { name: "Activity" })).toBeNull();
   });
 });

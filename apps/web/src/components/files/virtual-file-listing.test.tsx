@@ -83,6 +83,13 @@ it("uses the global grid default with the same virtual-list restrictions", () =>
   );
 });
 
+it("gives the grid this browser's stored grid size", () => {
+  fixtures.view = "grid";
+  window.localStorage.setItem("fdrive.grid.size", '"large"');
+  renderListing();
+  expect(fixtures.fileGrid).toHaveBeenCalledWith(expect.objectContaining({ size: "large" }));
+});
+
 it("renders flat virtual entries as expandable tree roots", () => {
   fixtures.view = "tree";
   renderListing();

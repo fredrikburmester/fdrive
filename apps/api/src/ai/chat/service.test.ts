@@ -264,7 +264,7 @@ describe("chat service", () => {
         "- /Inbox/a.txt (file, 5 B, modified 1970-01-01)",
         "- /Inbox/b.txt (file, 5 B, modified 1970-01-01)",
         "",
-        "The person is looking at /Inbox.",
+        "The person has the folder /Inbox open. It and everything inside it count as referenced for this message.",
         "",
         "What are these?",
       ].join("\n"),
@@ -312,7 +312,7 @@ describe("chat service", () => {
   it("lets the model read a referenced file and refuses one that is not referenced", async () => {
     s.script.queue.push(
       call("c1", "read_file", { path: "/Inbox/a.txt" }),
-      call("c2", "read_file", { path: "/Inbox/b.txt" }),
+      call("c2", "read_file", { path: "/Docs/readme.md" }),
       text("It says hello."),
     );
 
@@ -332,9 +332,85 @@ describe("chat service", () => {
     expect(parts[1]).toMatchObject({
       kind: "tool",
       state: "failed",
-      output: expect.stringContaining("/Inbox/b.txt is not referenced"),
+      output: expect.stringContaining("/Docs/readme.md is not referenced"),
     });
     expect(parts[2]).toEqual({ kind: "text", text: "It says hello." });
+  });
+
+  it("lets the model use the open folder, the folder itself included, for that message only", async () => {
+    s.script.queue.push(
+      call("c1", "read_file", { path: "/Inbox/b.txt" }),
+      call("c2", "rename_items", {
+        summary: "A clearer name.",
+        renames: [{ path: "/Inbox", name: "Incoming", reason: "Clearer." }],
+      }),
+    );
+    const chat = await s.service.create(s.principal, {});
+    await s.service.send(s.principal, chat.id, { text: "Tidy this folder", location: "/Inbox" });
+    await s.service.settled(chat.id);
+    const first = lastParts(await s.service.get(s.principal, chat.id));
+    expect(first[0]).toMatchObject({ kind: "tool", name: "read_file", state: "done" });
+    expect(first[1]).toMatchObject({
+      kind: "action",
+      state: "pending",
+      proposal: { kind: "rename", items: [{ path: "/Inbox", kind: "dir", name: "Incoming" }] },
+    });
+    expect(s.script.inputs[0]).toEqual({
+      kind: "user",
+      text: `The person has the folder /Inbox open. It and everything inside it count as referenced for this message.\n\nTidy this folder`,
+    });
+
+    // In another folder, the one before is out of reach again.
+    s.script.queue.push(
+      call("c3", "read_file", { path: "/Inbox/a.txt" }),
+      call("c4", "read_file", { path: "/Docs/readme.md" }),
+      text("Read it."),
+    );
+    await s.service.send(s.principal, chat.id, { text: "And these?", location: "/Docs" });
+    await s.service.settled(chat.id);
+    const done = await s.service.get(s.principal, chat.id);
+    const second = lastParts(done);
+    expect(second[0]).toMatchObject({
+      state: "failed",
+      output: expect.stringContaining("/Inbox/a.txt is not referenced"),
+    });
+    expect(second[1]).toMatchObject({ name: "read_file", state: "done" });
+    // The open folder is not kept as a reference.
+    expect(done.references).toEqual([]);
+  });
+
+  it("gives the model no open folder that is missing, a file or in Trash, and stores its spelling", async () => {
+    const t = await setup({
+      trash: true,
+      files: { "/A\u030Arsbesked/x.txt": "x", "/.Trash/old/y.txt": "y", "/z.txt": "z" },
+    });
+    const chat = await t.service.create(t.principal, {});
+    for (const location of ["/Nope", "/z.txt", "/.Trash/old"]) {
+      t.script.queue.push(text("ok"));
+      await t.service.send(t.principal, chat.id, { text: "Hi", location });
+      await t.service.settled(chat.id);
+    }
+    t.script.queue.push(text("ok"));
+    await t.service.send(t.principal, chat.id, { text: "Hi", location: "/\u00C5rsbesked" });
+    await t.service.settled(chat.id);
+
+    const users = (await t.service.get(t.principal, chat.id)).messages.filter(
+      (message) => message.role === "user",
+    );
+    expect(users.map((message) => message.location)).toEqual([
+      null,
+      null,
+      null,
+      "/A\u030Arsbesked",
+    ]);
+    expect(t.script.inputs.slice(0, 3)).toEqual([
+      { kind: "user", text: "Hi" },
+      { kind: "user", text: "Hi" },
+      { kind: "user", text: "Hi" },
+    ]);
+    await expect(
+      t.service.send(t.principal, chat.id, { text: "Hi", location: "/bad\0" }),
+    ).rejects.toMatchObject({ kind: "bad_request" });
   });
 
   it("holds a trash card for the person, applies it with their edits and then lets the model continue", async () => {
@@ -592,7 +668,10 @@ describe("chat service", () => {
     expect(s.unexpected).toHaveBeenCalledWith(new Error("boom"));
     expect(s.script.starts).toHaveLength(2);
     expect(s.script.starts[1]?.history).toEqual([
-      { role: "user", text: "The person is looking at /Inbox.\n\nThink hard" },
+      {
+        role: "user",
+        text: "The person has the folder /Inbox open. It and everything inside it count as referenced for this message.\n\nThink hard",
+      },
       { role: "assistant", text: "[The reply stopped: Stopped.]" },
     ]);
   });
@@ -658,7 +737,7 @@ describe("chat service", () => {
     expect(t.script.starts[1]?.history).toEqual([
       {
         role: "user",
-        text: "Attached to this message:\n- /Inbox/a.txt\n\nThe person is looking at /Inbox.\n\nRemove it",
+        text: "Attached to this message:\n- /Inbox/a.txt\n\nThe person has the folder /Inbox open. It and everything inside it count as referenced for this message.\n\nRemove it",
       },
       {
         role: "assistant",

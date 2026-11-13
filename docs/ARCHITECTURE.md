@@ -125,12 +125,15 @@ and provider-specific limits are described in [Trash](TRASH.md) and the provider
   through `useFormatters`, never the bare formatters, so a preference applies everywhere.
   The desktop sidebar's width (`fdrive.sidebar.width`) is one of them, set by dragging the
   sidebar's edge.
-- The AI chat panel is mounted in the shell layout beside the page, not inside the file
-  browser, so it follows the person between folders and pages; below the tablet breakpoint it
-  is a sheet. Its open state, width and current chat are `fdrive.chat.open`, `fdrive.chat.width`
-  and `fdrive.chat.current`, read through the same `useSyncExternalStore` pattern as the other
-  browser preferences. Files and folders reach it by drag (the listings' internal
-  `application/x-fdrive-paths` drag) or **Add to chat** from a selection or row. Its transcript
+- The AI chat is a bubble in the live activity dock's corner that opens a floating panel above
+  it, below the activity panel; on narrow screens the panel is a sheet. It is mounted in the
+  shell layout, not inside the file browser, so it stays open between folders, and it renders
+  only on folder pages, since the folder in view is what the assistant works on (sent as each
+  message's `location`). Its open state, width and current chat are `fdrive.chat.open`,
+  `fdrive.chat.width` and `fdrive.chat.current`, read through the same `useSyncExternalStore`
+  pattern as the other browser preferences. Files and folders reach it by drag onto the panel
+  or bubble (the listings' internal `application/x-fdrive-paths` drag) or **Add to chat** from
+  a selection or row. Its transcript
   and composer are the trimmed AI Elements components under `components/ai-elements/`; the
   action cards and reference chips are fdrive's own.
 - Use the existing UI tokens and components. Action labels omit ellipses; progress labels

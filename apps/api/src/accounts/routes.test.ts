@@ -262,17 +262,9 @@ describe("identity account routes", () => {
         })
       ).status,
     ).toBe(400);
-    expect((await h.call(ROUTES.account.search, { cookie: a.cookie })).status).toBe(400);
     expect(
       (
         await h.call(`${ROUTES.account.favorites}?identity=${a.me.activeIdentityId}`, {
-          cookie: a.cookie,
-        })
-      ).status,
-    ).toBe(400);
-    expect(
-      (
-        await h.call(`${ROUTES.account.search}?q=a&identity=${a.me.activeIdentityId}`, {
           cookie: a.cookie,
         })
       ).status,
