@@ -49,6 +49,7 @@ it("keeps env setup complete and sessions usable after disabling its last provid
   const setup = createSetupService({
     authService: h.auth.service,
     accounts: h.repos.accounts,
+    identities: h.repos.identities,
     settings: h.repos.settings,
     local: {
       provider: async () => row,

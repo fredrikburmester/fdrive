@@ -1,5 +1,5 @@
 import type { SetupCompleteRequest, SetupStatusResponse } from "@fdrive/contracts";
-import type { AccountRepo, Provider, SettingsRepo } from "@fdrive/db";
+import type { AccountRepo, IdentityRepo, Provider, SettingsRepo } from "@fdrive/db";
 import type { AuthService, LoginInput, LoginResult } from "../auth/service.js";
 import { ApiHttpError } from "../errors.js";
 import type { LocalUserService } from "../local/service.js";
@@ -17,6 +17,8 @@ export interface SetupService {
 export interface CreateSetupServiceDeps {
   readonly authService: Pick<AuthService, "loginCandidate" | "me" | "logout">;
   readonly accounts: Pick<AccountRepo, "setAdmin">;
+  /** Every login fdrive knows, on any storage: one at all means someone signed in before. */
+  readonly identities: Pick<IdentityRepo, "listAll">;
   readonly settings: SettingsRepo;
   /**
    * The deployment's files folder: its pinned provider row and how to count
@@ -67,11 +69,14 @@ export function createSetupService(deps: CreateSetupServiceDeps): SetupService {
   const wasInitialized = async () => (await settings.get<boolean>(SETUP_INIT_KEY)) === true;
 
   /**
-   * Installations from before the owner record are complete when someone can
-   * already sign in: a local user exists.
+   * Installations from before the owner record are complete once someone has
+   * used them: a local user exists, or anyone has signed in, even on storage
+   * this deployment no longer has. A login that setup itself creates always
+   * comes with a claim, so it never reaches this check.
    */
   async function alreadyInUse(): Promise<boolean> {
-    return deps.local !== undefined && (await deps.local.userCount()) > 0;
+    if (deps.local !== undefined && (await deps.local.userCount()) > 0) return true;
+    return (await deps.identities.listAll()).length > 0;
   }
 
   return {

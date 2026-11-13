@@ -615,6 +615,7 @@ export async function composeApp(
   const setupService = createSetupService({
     authService: auth.service,
     accounts: repos.accounts,
+    identities: repos.identities,
     settings: repos.settings,
     ...(modules.local === undefined
       ? {}
