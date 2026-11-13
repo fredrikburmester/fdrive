@@ -54,6 +54,13 @@ export interface EntryStat {
   readonly size: number;
   readonly modifiedAt: Date | null;
   readonly contentType: string | null;
+  /**
+   * The path as storage spells it, when that differs from the path asked
+   * for: a disk that ignores case or how accents are encoded (macOS) finds
+   * "Årsbesked" written with one character or with a combining ring. Absent
+   * when the path asked for is the stored spelling.
+   */
+  readonly path?: string;
 }
 
 /**

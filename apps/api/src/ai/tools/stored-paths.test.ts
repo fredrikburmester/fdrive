@@ -55,6 +55,27 @@ describe("createPathLocator", () => {
     });
   });
 
+  it("takes the stored spelling from a disk that finds the written one too", async () => {
+    // macOS finds a name whatever its accent encoding and says which one it stores.
+    const memory = drive();
+    const storage: StorageProvider = {
+      ...memory,
+      stat: async (path) => {
+        const stored = mac(path);
+        const found = await memory.stat(stored);
+        return stored === path ? found : { ...found, path: stored };
+      },
+    };
+    const list = vi.spyOn(storage, "list");
+    const { locate } = createPathLocator(storage);
+
+    expect(await locate(typed("/Work/Husarö/Kårstämma 2021.pdf"))).toEqual({
+      path: mac("/Work/Husarö/Kårstämma 2021.pdf"),
+      occupancy: "file",
+    });
+    expect(list).not.toHaveBeenCalled();
+  });
+
   it("keeps a missing name as written under its folder's stored spelling", async () => {
     const storage = drive();
     const list = vi.spyOn(storage, "list");

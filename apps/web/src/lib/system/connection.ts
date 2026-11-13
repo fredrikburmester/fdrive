@@ -78,8 +78,18 @@ export function providerFormError(
   draft: ProviderDraft,
   addressRequired = true,
 ): string | null {
-  const nameError = providerNameError(draft.label);
-  if (nameError !== null) return nameError;
+  return providerNameError(draft.label) ?? providerReachError(fields, draft, addressRequired);
+}
+
+/**
+ * Like `providerFormError`, but only what reaching the storage needs: the
+ * address and the required configuration. A connection test sends no name.
+ */
+export function providerReachError(
+  fields: readonly ProviderField[],
+  draft: Pick<ProviderDraft, "baseUrl" | "config">,
+  addressRequired = true,
+): string | null {
   if (addressRequired && !isHttpUrl(draft.baseUrl.trim())) {
     return "Enter the address as an http(s) URL.";
   }

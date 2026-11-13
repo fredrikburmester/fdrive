@@ -234,16 +234,17 @@ export function serializeEntry(entry: FileEntry): FsEntry {
 }
 
 /**
- * Stats `path` via `storage.statFile`. When that fails because `path` is a
- * directory (a provider reports this as `bad_request`), falls back to
- * listing the parent directory and finding the matching entry there.
+ * The entry at `path`, whatever its kind, named and pathed the way storage
+ * spells it: a disk that ignores case or accent encoding (macOS) also finds
+ * other spellings, and listings show the stored one.
  */
 export async function statEntry(storage: StorageProvider, path: string): Promise<FileEntry> {
   const stat = await runStorageCall(() => storage.stat(path));
-  const name = baseName(path);
+  const stored = stat.path ?? path;
+  const name = baseName(stored);
   return {
     name,
-    path,
+    path: stored,
     kind: stat.kind,
     size: stat.size,
     modifiedAt: stat.modifiedAt ?? new Date(0),

@@ -1,5 +1,5 @@
 import { lstat, mkdir, realpath } from "node:fs/promises";
-import { join, sep } from "node:path";
+import { basename, join, sep } from "node:path";
 import { normalizePath, StorageError, splitSegments } from "@fdrive/core";
 import { codeOf } from "./errors.js";
 
@@ -31,6 +31,14 @@ export interface Home {
    * on content: read, list, stat, copy from.
    */
   target(path: string): Promise<string>;
+  /**
+   * How the disk spells `path`, an entry that exists. A disk that ignores
+   * case or how accents are encoded (macOS) finds "Årsbesked" written with
+   * one character or with a combining ring, but stores one of them, and
+   * that is the one every listing shows. A symlink keeps the name it was
+   * asked by: the disk only reports the stored names of what links lead to.
+   */
+  spelled(path: string): Promise<string>;
   /** True when `realPath` is the home or inside it. */
   contains(realPath: string): Promise<boolean>;
 }
@@ -126,6 +134,25 @@ export function createHome(dir: string, options: CreateHomeOptions = {}): Home {
       const resolved = await realpath(at);
       if (!inside(await real(), resolved)) throw outside(path);
       return resolved;
+    },
+
+    async spelled(path) {
+      const normalized = normalizePath(path);
+      const segments = splitSegments(normalized);
+      const home = await real();
+      const asked = join(home, ...segments);
+      // The real path names every folder as stored, so one that matches
+      // what was asked means no link and no other spelling on the way.
+      if ((await realpath(asked)) === asked) return normalized;
+      const names: string[] = [];
+      let dir = home;
+      for (const segment of segments) {
+        const at = join(dir, segment);
+        const link = (await lstat(at)).isSymbolicLink();
+        dir = await realpath(at);
+        names.push(link ? segment : basename(dir));
+      }
+      return `/${names.join("/")}`;
     },
 
     async contains(realPath) {

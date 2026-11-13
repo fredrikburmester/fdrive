@@ -1738,6 +1738,30 @@ describe("unmapped errors pass through unchanged", () => {
     expect(await readJson<FsEntryJson>(res)).toMatchObject({ kind: "dir", ext: "" });
   });
 
+  it("names the entry the way storage stores it when it found another spelling", async () => {
+    const stored = "/Årsbesked/Plan.TXT";
+    const storage = makeStubStorage({
+      stat: async () => ({
+        kind: "file",
+        size: 5,
+        modifiedAt: null,
+        contentType: null,
+        path: stored,
+      }),
+    });
+    const { app } = await buildHarnessWithStorage(storage);
+
+    const res = await app.request(
+      `/api/v1/fs/stat?path=${encodeURIComponent("/Årsbesked/plan.txt")}`,
+    );
+    expect(res.status).toBe(200);
+    expect(await readJson<FsEntryJson>(res)).toMatchObject({
+      name: "Plan.TXT",
+      path: stored,
+      ext: ".txt",
+    });
+  });
+
   it("maps a StorageError of kind unauthorized to reauth_required", async () => {
     const storage = makeStubStorage({
       list: async () => {

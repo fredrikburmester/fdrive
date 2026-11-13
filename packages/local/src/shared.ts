@@ -245,7 +245,10 @@ export function createUserStorage(options: UserStorageOptions): UserStorage {
           contentType: null,
         };
       }
-      return at.storage.stat(at.rel);
+      const info = await at.storage.stat(at.rel);
+      if (at.kind === "own" || info.path === undefined) return info;
+      // The folder's own spelling within it, under the name the user sees it by.
+      return { ...info, path: `${at.prefix}${info.path}` };
     },
 
     async statFile(path) {

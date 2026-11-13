@@ -118,6 +118,10 @@ describe("symlinks", () => {
     expect(await read(f.storage, "/alias/a.txt")).toBe("a");
     expect(await read(f.storage, "/a-link.txt")).toBe("a");
     expect(await f.storage.list("/alias")).toMatchObject([{ path: "/alias/a.txt" }]);
+    // A path through links is spelled as asked: the link's own name, not its target's.
+    expect(await f.storage.stat("/alias/a.txt")).not.toHaveProperty("path");
+    expect(await f.storage.stat("/a-link.txt")).not.toHaveProperty("path");
+    expect(await f.storage.stat("/real/a.txt")).not.toHaveProperty("path");
   });
 
   it("lists a dangling link as a symlink and reports it missing", async () => {

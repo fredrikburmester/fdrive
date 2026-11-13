@@ -59,9 +59,10 @@ test("an owner shares a folder to view, then to edit, and the person it is share
     await page.getByRole("menuitem", { name: "Share with people" }).click();
     const dialog = page.getByRole("dialog", { name: `Share ${PEOPLE_FOLDER}` });
     await expect(dialog.getByText("Not shared with anyone yet.")).toBeVisible();
-    await dialog.getByRole("combobox", { name: "Person" }).click();
+    await dialog.getByRole("combobox", { name: "Person", exact: true }).click();
     await page.getByRole("option", { name: PEOPLE_GUEST.username, exact: true }).click();
-    await expect(dialog.getByRole("combobox", { name: "Access for the new person" })).toHaveText(
+    // The trigger's text also holds its chevron icon's fallback glyph.
+    await expect(dialog.getByRole("combobox", { name: "Access for the new person" })).toContainText(
       "Can view",
     );
     await dialog.getByRole("button", { name: "Share", exact: true }).click();
@@ -72,7 +73,7 @@ test("an owner shares a folder to view, then to edit, and the person it is share
     await expect(people.getByText(PEOPLE_GUEST.username, { exact: true })).toBeVisible();
     await expect(
       people.getByRole("combobox", { name: `Access for ${PEOPLE_GUEST.username}` }),
-    ).toHaveText("Can view");
+    ).toContainText("Can view");
     await dialog.getByRole("button", { name: "Done" }).click();
     await expect(dialog).toBeHidden();
 

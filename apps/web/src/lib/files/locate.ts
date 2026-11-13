@@ -14,8 +14,10 @@ function nameKey(name: string): string {
 
 /**
  * Finds the stored spelling of a path someone wrote, such as a path in an
- * assistant's reply. Tries the exact path first and lists the parent folder
- * only when that misses, so accents encoded differently still find the item.
+ * assistant's reply. Tries the exact path first, which the API answers with
+ * the stored spelling even where the disk finds another one (macOS), and
+ * lists the parent folder only when that misses, so accents encoded
+ * differently still find the item.
  * Returns `null` when nothing is there.
  */
 export async function locatePath(

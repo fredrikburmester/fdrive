@@ -35,6 +35,7 @@ import {
   canLeaveConnectionStep,
   canLeaveTokenStep,
   connectionStepError,
+  connectionTestError,
   connectionTestKey,
   nextSetupStep,
   previousSetupStep,
@@ -124,6 +125,7 @@ function SetupSteps({ status, onClaimed }: { status: SetupStatusResponse; onClai
   const draft = { type, label, baseUrl, config };
   const draftKey = connectionTestKey(draft);
   const formError = connectionStepError(configFields, draft);
+  const testError = connectionTestError(configFields, draft);
   const testResult = setupTest.data ?? null;
   const testIsCurrent = testedKey === draftKey;
   const canLeaveConnection = canLeaveConnectionStep(configFields, draft, testResult, testedKey);
@@ -314,7 +316,7 @@ function SetupSteps({ status, onClaimed }: { status: SetupStatusResponse; onClai
               <Button
                 type="button"
                 variant="outline"
-                disabled={formError !== null || setupTest.isPending}
+                disabled={testError !== null || setupTest.isPending}
                 onClick={handleTest}
               >
                 {setupTest.isPending ? "Testing…" : "Test connection"}

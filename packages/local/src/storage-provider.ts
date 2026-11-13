@@ -169,11 +169,13 @@ export function createLocalStorage(options: LocalStorageOptions): LocalStorage {
       mapped(path, async (): Promise<EntryStat> => {
         const info = await stat(await home.target(path));
         const kind = kindOf(info);
+        const spelled = await home.spelled(path);
         return {
           kind,
           size: kind === "file" ? info.size : 0,
           modifiedAt: info.mtime,
           contentType: null,
+          ...(spelled === normalizePath(path) ? {} : { path: spelled }),
         };
       }),
 

@@ -111,7 +111,10 @@ test("chat follows the person between folders, takes dropped files, reads them, 
       listing(page).getByRole("checkbox", { name: "Select shopping.txt" }),
     ).toBeChecked();
 
-    // Dropping a file from the listing attaches it.
+    // Dropping a file from the listing attaches it. The account's finished
+    // jobs from earlier specs reopen the Activity panel on every page load,
+    // over the middle of the chat panel where the drops below land.
+    await dismissActivityPanel(page);
     await listing(page).getByText("shopping.txt", { exact: true }).dragTo(panel(page));
     await expect(attached.getByText("shopping.txt")).toBeVisible();
     await send(page, "Is this a duplicate of another file?");

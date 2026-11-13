@@ -1,5 +1,5 @@
 import type { ProviderField, SetupMode } from "@fdrive/contracts";
-import { normalizeProviderConfig, providerFormError } from "./connection";
+import { normalizeProviderConfig, providerFormError, providerReachError } from "./connection";
 
 export type SetupStep = "token" | "connection" | "account";
 
@@ -60,6 +60,19 @@ export function connectionStepError(
 ): string | null {
   if (draft.type.length === 0) return "Choose a storage type.";
   return providerFormError(fields, draft);
+}
+
+/**
+ * The first reason the connection cannot be tested yet, or null when it
+ * can: the type, address and required configuration. The name is not part
+ * of a test, so the storage can be tested before it is named.
+ */
+export function connectionTestError(
+  fields: readonly ProviderField[],
+  draft: SetupConnectionDraft,
+): string | null {
+  if (draft.type.length === 0) return "Choose a storage type.";
+  return providerReachError(fields, draft);
 }
 
 /**

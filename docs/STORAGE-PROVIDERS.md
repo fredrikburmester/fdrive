@@ -209,7 +209,10 @@ The optional methods are `probeDirectoryRead`, `setModifiedAt`, `zip`, and the `
   treating a literal `%41` filename as `A`. Confine protocol responses/redirects to the configured
   endpoint and path prefix; never forward credentials to an unrelated server.
 - `list` returns core `FileEntry` values. `stat` handles files and directories; `statFile` must
-  throw `bad_request` for a directory and `not_found` for a missing path.
+  throw `bad_request` for a directory and `not_found` for a missing path. A backend that also
+  finds other spellings of a name (the local folder on a macOS disk ignores case and accent
+  encoding) reports the stored one as `stat`'s `path`, so links and lookups land on the path
+  listings show.
 - `download` returns a Web `ReadableStream<Uint8Array>` with status 200/206 and response metadata.
   Honour `range`, `ifRange`, and cancellation. Pass upload cancellation through too; stream large
   bodies instead of buffering them in memory.

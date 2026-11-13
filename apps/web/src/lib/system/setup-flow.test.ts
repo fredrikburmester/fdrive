@@ -4,6 +4,7 @@ import {
   canLeaveConnectionStep,
   canLeaveTokenStep,
   connectionStepError,
+  connectionTestError,
   connectionTestKey,
   nextSetupStep,
   previousSetupStep,
@@ -104,6 +105,20 @@ describe("connectionStepError", () => {
 
   it("is null for a complete form", () => {
     expect(connectionStepError([REGION], DRAFT)).toBeNull();
+  });
+});
+
+describe("connectionTestError", () => {
+  it("lets an unnamed storage be tested", () => {
+    expect(connectionTestError([REGION], { ...DRAFT, label: "" })).toBeNull();
+  });
+
+  it("names the first missing piece the test needs", () => {
+    expect(connectionTestError([], { ...DRAFT, type: "" })).toBe("Choose a storage type.");
+    expect(connectionTestError([], { ...DRAFT, baseUrl: "s3.example.com" })).toBe(
+      "Enter the address as an http(s) URL.",
+    );
+    expect(connectionTestError([REGION], { ...DRAFT, config: {} })).toBe("Enter region.");
   });
 });
 

@@ -12,6 +12,7 @@ import {
   providerAddressLock,
   providerConfigDraft,
   providerFormError,
+  providerReachError,
   providerRemoveBlock,
   providerUpdatePatch,
 } from "./connection";
@@ -138,6 +139,20 @@ describe("providerFormError", () => {
     expect(
       providerFormError([TOKEN_FIELD, PREFIX_FIELD], { ...draft, config: { token: "t" } }),
     ).toBe(null);
+  });
+});
+
+describe("providerReachError", () => {
+  const draft = { baseUrl: "https://dav.example.com/", config: {} };
+
+  it("needs no name, only what reaching the storage takes", () => {
+    expect(providerReachError([], draft)).toBeNull();
+    expect(providerReachError([], { ...draft, baseUrl: "dav.example.com" })).toBe(
+      "Enter the address as an http(s) URL.",
+    );
+    expect(providerReachError([], { ...draft, baseUrl: "" }, false)).toBeNull();
+    expect(providerReachError([TOKEN_FIELD], draft)).toBe("Enter api token.");
+    expect(providerReachError([TOKEN_FIELD], { ...draft, config: { token: "t" } })).toBeNull();
   });
 });
 

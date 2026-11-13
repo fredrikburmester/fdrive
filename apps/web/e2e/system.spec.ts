@@ -25,14 +25,14 @@ test("alice (admin) sees the deployment's local folder on System > Storage and c
   await expect(page).toHaveURL(/\/system\/storage$/);
 
   // The local folder is pinned by FDRIVE_STORAGE_ROOT, so it reports the
-  // environment as its source, names the folder instead of an address, and
+  // deployment as its source, names the folder instead of an address, and
   // refuses removal.
   const card = page
     .getByRole("main")
     .locator('[data-slot="card"]')
-    .filter({ hasText: "Environment (locked)" });
+    .filter({ hasText: "Deployment (locked)" });
   await expect(card.getByText("Reachable", { exact: true })).toBeVisible();
-  await expect(card.getByText("Environment (locked)", { exact: true })).toBeVisible();
+  await expect(card.getByText("Deployment (locked)", { exact: true })).toBeVisible();
   await expect(
     card.getByText("Folder on this server, set by FDRIVE_STORAGE_ROOT.").first(),
   ).toBeVisible();
@@ -52,7 +52,7 @@ test("alice (admin) sees the deployment's local folder on System > Storage and c
   const renamed = page
     .getByRole("main")
     .locator('[data-slot="card"]')
-    .filter({ hasText: "Environment (locked)" });
+    .filter({ hasText: "Deployment (locked)" });
   await expect(renamed.getByRole("button", { name: "Edit Home server" })).toBeVisible();
   await renamed.getByRole("button", { name: "Edit Home server" }).click();
   dialog = page.getByRole("dialog");

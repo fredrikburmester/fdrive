@@ -244,6 +244,23 @@ describe("without a local folder", () => {
     expect(screen.getByLabelText("Secret access key")).toBeTruthy();
   });
 
+  it("tests the address before the storage is named, then asks for the name", () => {
+    mocks.test.mutate.mockImplementation((_input, options) => options.onSuccess());
+    mocks.test.data = { ok: true, detail: "Reachable" };
+    renderWizard(PROVIDER);
+    claim();
+    type("Address", "https://dav.example.com/");
+    expect(screen.getByText("Enter a name for this storage.")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Test connection" }));
+
+    expect(mocks.test.mutate).toHaveBeenCalledTimes(1);
+    expect(screen.getByText("Reachable")).toBeTruthy();
+    const next = screen.getByRole("button", { name: "Continue" }) as HTMLButtonElement;
+    expect(next.disabled).toBe(true);
+    type("Storage name", "Home storage");
+    expect(next.disabled).toBe(false);
+  });
+
   it("requires a valid name without invalidating a successful connection test", () => {
     mocks.test.mutate.mockImplementation((_input, options) => options.onSuccess());
     mocks.test.data = { ok: true, detail: "Reachable" };
