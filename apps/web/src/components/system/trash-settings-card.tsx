@@ -22,11 +22,10 @@ interface TrashCopy {
   readonly disabling: string;
 }
 
-/** fdrive moves deleted files into a recycle folder on the storage itself. */
+/** fdrive moves deleted files into a recycle folder in each user's files. */
 const MOVE_COPY: TrashCopy = {
   description: "Restore deleted files that fdrive moved into a recycle folder.",
-  requirement:
-    "fdrive moves deleted files into this folder on the storage itself. No server rules, processing worker or storage mount is needed.",
+  requirement: "Deleting a file moves it into the Trash folder instead of removing it.",
   folder:
     "The folder within each user's home on this server; fdrive creates it on the first delete.",
   disabling:
@@ -43,7 +42,7 @@ const NONE_COPY: TrashCopy = {
 
 /**
  * The card's copy for the storage's Trash strategy: `none` has no Trash,
- * and every other strategy has fdrive keep the recycle folder itself.
+ * and `move` has fdrive keep the recycle folder.
  */
 function copyFor(strategy: TrashStrategy | undefined): TrashCopy {
   return strategy === "none" ? NONE_COPY : MOVE_COPY;

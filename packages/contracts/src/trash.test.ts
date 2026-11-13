@@ -22,45 +22,26 @@ describe("Trash settings", () => {
     enabled: false,
     path: "/.trash",
     retentionHours: null,
-    rulesConfirmed: false,
-    strategy: "native",
+    strategy: "move",
   };
 
-  it("accepts disabled defaults and confirmed enabled settings", () => {
+  it("accepts disabled defaults and enabled settings", () => {
     expect(TrashSettings.safeParse(disabled).success).toBe(true);
     expect(
-      TrashSettingsUpdateRequest.safeParse({
-        ...disabled,
-        enabled: true,
-        retentionHours: 720,
-        rulesConfirmed: true,
-      }).success,
-    ).toBe(true);
-  });
-
-  it("rejects enabling before rules are confirmed", () => {
-    expect(TrashSettingsUpdateRequest.safeParse({ ...disabled, enabled: true }).success).toBe(
-      false,
-    );
-  });
-
-  it("enables a provider that moves deleted files itself without rule confirmation", () => {
-    expect(
-      TrashSettingsUpdateRequest.safeParse({ ...disabled, strategy: "move", enabled: true })
+      TrashSettingsUpdateRequest.safeParse({ ...disabled, enabled: true, retentionHours: 720 })
         .success,
     ).toBe(true);
   });
 
   it("never enables Trash for a provider without one", () => {
     expect(TrashSettings.safeParse({ ...disabled, strategy: "none" }).success).toBe(true);
-    expect(
-      TrashSettings.safeParse({
-        ...disabled,
-        strategy: "none",
-        enabled: true,
-        rulesConfirmed: true,
-      }).success,
-    ).toBe(false);
+    expect(TrashSettings.safeParse({ ...disabled, strategy: "none", enabled: true }).success).toBe(
+      false,
+    );
+  });
+
+  it("knows no strategy other than fdrive moving deletes into Trash, or none", () => {
+    expect(TrashSettings.safeParse({ ...disabled, strategy: "native" }).success).toBe(false);
   });
 
   it("stores the configuration without the module's strategy", () => {

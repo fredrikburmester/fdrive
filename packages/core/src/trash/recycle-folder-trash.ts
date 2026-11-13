@@ -13,10 +13,7 @@ import type {
 import {
   isUnderPath,
   moveTrashRootPath,
-  type ParsedTrashLeaf,
   parseMoveTrashLeaf,
-  parseTrashLeaf,
-  type RecycleFolderLayout,
   trashLeafPath,
 } from "./recycle-folder.ts";
 
@@ -28,8 +25,6 @@ export interface CreateRecycleFolderTrashOptions {
   readonly storage: StorageProvider;
   readonly trashPath: string;
   readonly limit?: number;
-  /** Native providers use file leaves; the move wrapper uses its versioned namespace. */
-  readonly layout?: RecycleFolderLayout;
 }
 
 function checkAborted(signal: AbortSignal | undefined): void {
@@ -43,32 +38,16 @@ function compareEntries(a: TrashEntry, b: TrashEntry): number {
   return byDate !== 0 ? byDate : a.id.localeCompare(b.id);
 }
 
-type ParsedLeaf = ParsedTrashLeaf & { readonly kind: "file" | "dir" };
-
-function parseLeaf(
-  trashRoot: string,
-  leafPath: string,
-  layout: RecycleFolderLayout,
-): ParsedLeaf | null {
-  if (layout === "move") {
-    return parseMoveTrashLeaf(trashRoot, leafPath);
-  }
-  const parsed = parseTrashLeaf(trashRoot, leafPath);
-  return parsed === null ? null : { ...parsed, kind: "file" };
-}
-
 async function walk(
   storage: StorageProvider,
   trashRoot: string,
-  layout: RecycleFolderLayout,
   limit: number,
   signal: AbortSignal | undefined,
 ): Promise<TrashListing> {
   const entries: TrashEntry[] = [];
   let truncated = false;
   let dirVisits = 0;
-  const moveRoot = moveTrashRootPath(trashRoot);
-  const walkRoot = layout === "move" ? moveRoot : trashRoot;
+  const walkRoot = moveTrashRootPath(trashRoot);
   const queue: string[] = [walkRoot];
 
   for (const dir of queue) {
@@ -85,18 +64,14 @@ async function walk(
     try {
       children = await storage.list(dir);
     } catch (error) {
-      if (
-        layout === "move" &&
-        dir === walkRoot &&
-        isStorageError(error) &&
-        error.kind === "not_found"
-      ) {
+      // Nothing has been deleted yet: the namespace is created on the first delete.
+      if (dir === walkRoot && isStorageError(error) && error.kind === "not_found") {
         return { entries: [], truncated: false };
       }
       throw error;
     }
     for (const child of children) {
-      const parsed = parseLeaf(trashRoot, child.path, layout);
+      const parsed = parseMoveTrashLeaf(trashRoot, child.path);
       if (parsed === null) {
         if (child.kind === "dir") {
           queue.push(child.path);
@@ -104,9 +79,6 @@ async function walk(
         continue;
       }
       if (child.kind !== parsed.kind) {
-        if (layout === "native" && child.kind === "dir") {
-          queue.push(child.path);
-        }
         continue;
       }
       if (entries.length >= limit) {
@@ -149,50 +121,18 @@ async function statLeaf(
 }
 
 /**
- * Ensures nothing already exists at `target` before `restoreLeaf` moves a
- * trash leaf there. Not every backend's move raises a conflict for an
- * occupied target: SFTPGo (which fdrive once used) let a move silently
- * overwrite an existing file. `restore` must not silently destroy
- * whatever is already at `target`, so it checks first with `statFile`
- * instead of relying on `move` to report the conflict.
- *
- * `statFile` succeeding means a file is already there: conflict. A
- * directory is reported as `StorageError("bad_request")`, by convention
- * across every `StorageProvider` implementation (see
- * `packages/testkit/src/storage/memory-storage.ts`): also a conflict. `"not_found"` means
- * the target is free. Any other error (a permissions failure, an upstream
- * outage) is not this function's to interpret, so it propagates unchanged.
+ * Moves a leaf back to `target` (default: its original path), creating
+ * missing parents. The move refuses an occupied target (`overwrite: false`),
+ * so a restore never replaces what is there now: it fails with `conflict`.
  */
-async function requireTargetFree(
-  storage: StorageProvider,
-  id: string,
-  target: string,
-): Promise<void> {
-  try {
-    await storage.statFile(target);
-  } catch (error) {
-    if (isStorageError(error) && error.kind === "not_found") {
-      return;
-    }
-    if (!isStorageError(error) || error.kind !== "bad_request") {
-      throw error;
-    }
-    // A directory sits at target; falls through to the conflict below.
-  }
-  throw new StorageError("conflict", `something already exists at ${target}`, {
-    details: { id, target },
-  });
-}
-
 async function restoreLeaf(
   storage: StorageProvider,
   trashRoot: string,
-  layout: RecycleFolderLayout,
   id: string,
   target: string | undefined,
 ): Promise<TrashRestoreResult> {
   const leafPath = trashLeafPath(trashRoot, id);
-  const parsed = parseLeaf(trashRoot, leafPath, layout);
+  const parsed = parseMoveTrashLeaf(trashRoot, leafPath);
   if (parsed === null) {
     throw new StorageError("bad_request", `invalid trash id: ${id}`, { details: { id } });
   }
@@ -204,10 +144,8 @@ async function restoreLeaf(
     });
   }
 
-  await requireTargetFree(storage, id, resolvedTarget);
-
   await storage.mkdir(parentPath(resolvedTarget), { parents: true });
-  await storage.move(leafPath, resolvedTarget);
+  await storage.move(leafPath, resolvedTarget, { overwrite: false });
 
   return {
     ...makeEntry(parentPath(resolvedTarget), {
@@ -223,13 +161,12 @@ async function restoreLeaf(
 async function purgeLeaves(
   storage: StorageProvider,
   trashRoot: string,
-  layout: RecycleFolderLayout,
   ids: readonly string[],
 ): Promise<void> {
   for (const id of ids) {
     const leafPath = trashLeafPath(trashRoot, id);
     try {
-      const parsed = parseLeaf(trashRoot, leafPath, layout);
+      const parsed = parseMoveTrashLeaf(trashRoot, leafPath);
       if (parsed === null) {
         throw new StorageError("bad_request", `invalid trash id: ${id}`, { details: { id } });
       }
@@ -261,22 +198,22 @@ async function emptyTrash(storage: StorageProvider, trashRoot: string): Promise<
 
 /**
  * Builds a `TrashProvider` purely on top of a `StorageProvider`'s own
- * `list`, `stat`, `move`, `mkdir`, `deleteFile`, and `deleteDir`, using the recycle
- * folder layout described in `./recycle-folder.ts`.
+ * `list`, `stat`, `move`, `mkdir`, `deleteFile`, and `deleteDir`, reading
+ * the leaves `withMoveToTrash` writes (layout in `./recycle-folder.ts`).
  */
 export function createRecycleFolderTrash(options: CreateRecycleFolderTrashOptions): TrashProvider {
-  const { storage, limit = DEFAULT_LIMIT, layout = "native" } = options;
+  const { storage, limit = DEFAULT_LIMIT } = options;
   const trashRoot = normalizePath(options.trashPath);
 
   return {
     list(listOptions) {
-      return walk(storage, trashRoot, layout, listOptions?.limit ?? limit, listOptions?.signal);
+      return walk(storage, trashRoot, listOptions?.limit ?? limit, listOptions?.signal);
     },
     restore(id, restoreOptions) {
-      return restoreLeaf(storage, trashRoot, layout, id, restoreOptions?.target);
+      return restoreLeaf(storage, trashRoot, id, restoreOptions?.target);
     },
     purge(ids) {
-      return purgeLeaves(storage, trashRoot, layout, ids);
+      return purgeLeaves(storage, trashRoot, ids);
     },
     empty() {
       return emptyTrash(storage, trashRoot);

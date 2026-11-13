@@ -67,21 +67,15 @@ it does not depend on a journal query or stable file registry.
 
 ### Accepted Trash binding
 
-SFTPGo's recycle rule, removed with SFTPGo, renamed deletes to
-`/.trash/{original directory}/{name}/{provider timestamp}` and returned no receipt, so its
-accepted binding was the full original virtual path plus the observed provider-generated
-timestamp, captured from a bounded before/after listing and never fabricated from the API
-clock. Bindings recorded that way are kept as recorded.
-
-**Since 26bc01e** the destination first built for WebDAV is a shared layout, and every storage
-now uses it.
+fdrive's own move is the only Trash.
 [withMoveToTrash](../../packages/core/src/trash/move-to-trash.ts) builds the leaf itself from
 [moveTrashLeafPath](../../packages/core/src/trash/recycle-folder.ts), read back by
-[createRecycleFolderTrash](../../packages/core/src/trash/recycle-folder-trash.ts) in
-`layout: "move"` mode, and [storage-factory](../../apps/api/src/auth/storage-factory.ts) wraps
-every provider that has no server-side rule of its own, which is all of them. fdrive therefore
-knows the exact leaf before the move, so the strong binding covers every storage: carry that known
-virtual leaf out through an internal result/hook, leaving public delete compatibility unchanged.
+[createRecycleFolderTrash](../../packages/core/src/trash/recycle-folder-trash.ts), and
+[storage-factory](../../apps/api/src/auth/storage-factory.ts) wraps the storage with both when
+Trash is on. fdrive therefore knows the exact leaf before the move, so the strong binding
+covers every delete: the wrapper reports that known virtual leaf through an internal hook,
+leaving public delete compatibility unchanged. Events recorded while SFTPGo's recycle rule
+did the moving keep the `trashStrategy` fact they were stored with; nothing records it now.
 Restore preserves the original file ID when that accepted binding and the actual returned target
 agree. Bindings, restore and purge stay scoped to their storage identity.
 

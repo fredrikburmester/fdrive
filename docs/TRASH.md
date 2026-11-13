@@ -2,7 +2,7 @@
 
 Trash is the seventh optional choice in fdrive onboarding, after the six processing
 features. It applies to every user of the files folder and stays editable under
-**System > General**. No environment variables, worker, server rule or restart are required.
+**System > General**. No environment variables, worker or restart are required.
 
 fdrive moves each deleted file or folder into the Trash folder in that user's own files
 (`/.trash` by default) and lists, restores and purges it from there. fdrive does not intercept
@@ -26,10 +26,12 @@ does not remove items already in the folder.
 Deleted items live under `<folder>/.fdrive-move-v1/…` in each user's files, a layout that
 keeps long, Unicode and literal-percent names reversible. On the host that is
 `<files folder>/<username>/.trash/.fdrive-move-v1`. Deleting inside the Trash
-folder is permanent, which is how **Delete permanently** and **Empty Trash** work.
+folder is permanent, which is how **Delete permanently** and **Empty Trash** work. Trash
+lists, restores and empties only what fdrive put there; other files in the Trash folder are
+left alone.
 
-Coming from SFTPGo, items its recycle rule moved to `.trash` stay on disk but are not listed
-in Trash. Remove them with the host's own tools once you no longer need them.
+A restore never replaces anything: when a file or folder already sits at the original path,
+the restore fails with a conflict, and **Restore to** can pick another place.
 
 Reaching System takes an administrator: the setup owner, a user made administrator under
 **System > Users**, or a username in `FDRIVE_ADMIN_USERS`.

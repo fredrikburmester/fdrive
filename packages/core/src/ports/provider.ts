@@ -57,11 +57,10 @@ export interface ProviderCapabilities {
 }
 
 /**
- * How deleted files reach the recycle folder: the provider does it itself
- * (`native`, a server-side rule), fdrive moves them on delete (`move`), or
- * there is no trash for this provider (`none`).
+ * Whether deletes can go to Trash: fdrive moves them into the recycle
+ * folder (`move`), or there is no trash for this provider (`none`).
  */
-export type TrashStrategy = "native" | "move" | "none";
+export type TrashStrategy = "move" | "none";
 
 /**
  * How public share links exist for a provider: fdrive keeps the share and

@@ -24,12 +24,11 @@ const TrashPath = z.string().refine((value) => value !== "/" && isValidPath(valu
 });
 
 /**
- * How deleted files reach a provider's recycle folder: the backend's own
- * rule (`native`, SFTPGo's Event Manager), fdrive moving them itself
- * (`move`), or no Trash at all (`none`). Mirrors core's `TrashStrategy`;
- * it is the active provider module's, never stored.
+ * Whether the active provider module has Trash: fdrive moves deleted files
+ * into the recycle folder (`move`), or there is none (`none`). Mirrors
+ * core's `TrashStrategy`; it is the module's, never stored.
  */
-export const TrashStrategy = z.enum(["native", "move", "none"]);
+export const TrashStrategy = z.enum(["move", "none"]);
 export type TrashStrategy = z.infer<typeof TrashStrategy>;
 
 const TrashSettingsFields = z.object({
@@ -38,8 +37,6 @@ const TrashSettingsFields = z.object({
   enabled: z.boolean(),
   path: TrashPath,
   retentionHours: z.number().int().positive().nullable(),
-  /** Only meaningful for `native`: the operator tested the backend's recycle rule. */
-  rulesConfirmed: z.boolean(),
 });
 
 /** The provider-bound Trash configuration as stored, without the module's strategy. */
@@ -52,10 +49,6 @@ export const TrashSettings = TrashSettingsFields.extend({ strategy: TrashStrateg
   .refine((value) => !value.enabled || value.strategy !== "none", {
     message: "this storage provider has no Trash",
     path: ["enabled"],
-  })
-  .refine((value) => !value.enabled || value.strategy !== "native" || value.rulesConfirmed, {
-    message: "SFTPGo trash rules must be confirmed before Trash can be enabled",
-    path: ["rulesConfirmed"],
   });
 export type TrashSettings = z.infer<typeof TrashSettings>;
 

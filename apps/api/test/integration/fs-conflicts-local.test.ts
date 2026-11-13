@@ -19,9 +19,9 @@ const TRASH_PATH = "/.trash";
 const cookieFrom = (response: Response) => response.headers.get("set-cookie")?.split(";")[0] ?? "";
 
 /**
- * Exercises the fs and trash routes' conflict guard (`requireTargetFree`
- * in `fs/routes.ts`, and the same check inside `@fdrive/core`'s
- * `createRecycleFolderTrash.restore`) against a real local folder, where a
+ * Exercises the fs and trash routes' conflict guards (`requireTargetFree`
+ * in `fs/routes.ts`, and `@fdrive/core`'s `createRecycleFolderTrash.restore`,
+ * which moves with `overwrite: false`) against a real local folder, where a
  * plain `rename` would silently replace whatever already sits at the
  * target: the routes must reject these with 409 and leave the target as it
  * was. Follows `trash-local.test.ts`'s composition pattern: one Postgres,
@@ -55,7 +55,6 @@ describe("fs and trash conflict guards against a local folder", () => {
       enabled: true,
       path: TRASH_PATH,
       retentionHours: 72,
-      rulesConfirmed: false,
     });
   }, 180000);
 

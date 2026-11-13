@@ -17,11 +17,7 @@ describe("withMoveToTrash", () => {
     await wrapped.deleteFile("/docs/a.txt");
     expect(storage.dump()).toEqual({ [FILE_LEAF]: "hello" });
 
-    const trash = createRecycleFolderTrash({
-      storage: wrapped,
-      trashPath: "/.trash",
-      layout: "move",
-    });
+    const trash = createRecycleFolderTrash({ storage: wrapped, trashPath: "/.trash" });
     const listing = await trash.list();
     expect(listing.entries.map((entry) => entry.originalPath)).toEqual(["/docs/a.txt"]);
     await trash.restore(idFor(FILE_LEAF));
@@ -32,11 +28,7 @@ describe("withMoveToTrash", () => {
     const originalPath = `/2026/Å %20/${"x".repeat(255)}`;
     const storage = createMemoryStorage({ [originalPath]: "hello" });
     const wrapped = withMoveToTrash({ storage, trashPath: "/.trash", clock: () => AT });
-    const trash = createRecycleFolderTrash({
-      storage: wrapped,
-      trashPath: "/.trash",
-      layout: "move",
-    });
+    const trash = createRecycleFolderTrash({ storage: wrapped, trashPath: "/.trash" });
 
     await wrapped.deleteFile(originalPath);
     const [entry] = (await trash.list()).entries;
@@ -57,11 +49,7 @@ describe("withMoveToTrash", () => {
       [topLeaf]: "t",
     });
 
-    const trash = createRecycleFolderTrash({
-      storage: wrapped,
-      trashPath: "/.trash",
-      layout: "move",
-    });
+    const trash = createRecycleFolderTrash({ storage: wrapped, trashPath: "/.trash" });
     expect((await trash.list()).entries.map((entry) => entry.originalPath).sort()).toEqual([
       "/docs/2026",
       "/top.txt",
@@ -81,11 +69,7 @@ describe("withMoveToTrash", () => {
     const wrapped = withMoveToTrash({ storage, trashPath: "/.trash", clock: () => AT });
 
     await wrapped.deleteDir("/empty");
-    const trash = createRecycleFolderTrash({
-      storage: wrapped,
-      trashPath: "/.trash",
-      layout: "move",
-    });
+    const trash = createRecycleFolderTrash({ storage: wrapped, trashPath: "/.trash" });
     expect((await trash.list()).entries.map((entry) => entry.originalPath)).toEqual(["/empty"]);
 
     const emptyLeaf = moveTrashLeafPath("/.trash", "/empty", "dir", LEAF);
@@ -115,19 +99,19 @@ describe("withMoveToTrash", () => {
     expect(storage.dump()).toMatchObject({ "/docs/2026/keep.txt": "keep" });
   });
 
-  it("propagates a leaf preflight failure without moving the source", async () => {
-    const storage = createMemoryStorage({ "/docs/a.txt": "keep" });
-    const originalStat = storage.stat.bind(storage);
-    storage.stat = async (path: string) => {
-      if (path === FILE_LEAF) {
-        throw new Error("stat failed");
-      }
-      return originalStat(path);
+  it("asks storage to refuse a taken leaf rather than replace it", async () => {
+    const storage = createMemoryStorage({ "/docs/a.txt": "hello" });
+    const moves: unknown[] = [];
+    const originalMove = storage.move.bind(storage);
+    storage.move = async (path, target, opts) => {
+      moves.push(opts);
+      return originalMove(path, target, opts);
     };
     const wrapped = withMoveToTrash({ storage, trashPath: "/.trash", clock: () => AT });
 
-    await expect(wrapped.deleteFile("/docs/a.txt")).rejects.toThrow("stat failed");
-    expect(storage.dump()).toEqual({ "/docs/a.txt": "keep" });
+    await wrapped.deleteFile("/docs/a.txt");
+
+    expect(moves).toEqual([{ overwrite: false }]);
   });
 
   it("does not recycle a directory containing the configured trash folder", async () => {

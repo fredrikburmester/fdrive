@@ -1,4 +1,4 @@
-import { isStorageError, StorageError } from "../errors.ts";
+import { StorageError } from "../errors.ts";
 import { normalizePath, parentPath } from "../paths.ts";
 import type { StorageProvider } from "../ports/storage.ts";
 import { isUnderPath, type MoveTrashLeafKind, moveTrashLeafPath } from "./recycle-folder.ts";
@@ -18,32 +18,19 @@ function leafNameFor(at: Date): string {
 
 /**
  * Wraps `storage` so `deleteFile` and `deleteDir` move the entry into the
- * recycle folder at `trashPath` using the versioned generic move layout from
- * `moveTrashLeafPath`, exactly what `createRecycleFolderTrash` reads in
- * `layout: "move"` mode. For providers that have no server-side trash rule of
- * their own, such as the files folder. Deleting something already inside the recycle folder
- * deletes it for real, so purge and empty keep working through the same wrapper.
+ * recycle folder at `trashPath`, at the leaf `moveTrashLeafPath` builds and
+ * `createRecycleFolderTrash` reads back. The move refuses a taken leaf
+ * (`overwrite: false`), so a delete never replaces an earlier trashed item.
+ * Deleting something already inside the recycle folder deletes it for real,
+ * so purge and empty keep working through the same wrapper.
  */
 export function withMoveToTrash(options: MoveToTrashOptions): StorageProvider {
   const { storage, clock } = options;
   const trashRoot = normalizePath(options.trashPath);
 
-  async function requireLeafFree(leafPath: string): Promise<void> {
-    try {
-      await storage.stat(leafPath);
-    } catch (error) {
-      if (isStorageError(error) && error.kind === "not_found") {
-        return;
-      }
-      throw error;
-    }
-    throw new StorageError("conflict", `trash leaf already exists: ${leafPath}`);
-  }
-
   async function moveIntoTrash(path: string, kind: MoveTrashLeafKind): Promise<void> {
     const normalized = normalizePath(path);
     const leafPath = moveTrashLeafPath(trashRoot, normalized, kind, leafNameFor(clock()));
-    await requireLeafFree(leafPath);
     await storage.mkdir(parentPath(leafPath), { parents: true });
     await storage.move(normalized, leafPath, { overwrite: false });
     options.onRecycled?.(normalized, leafPath);

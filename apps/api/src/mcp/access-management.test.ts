@@ -59,7 +59,7 @@ async function fixture(mode: "read" | "organize" | "full" = "full", paths = ["/a
   const clock = () => new Date("2026-09-12T10:00:00Z");
   const storage = {
     ...withMoveToTrash({ storage: base, trashPath: "/.trash", clock }),
-    trash: createRecycleFolderTrash({ storage: base, trashPath: "/.trash", layout: "move" }),
+    trash: createRecycleFolderTrash({ storage: base, trashPath: "/.trash" }),
   };
   const repos = createMemoryRepos();
   const account = await repos.accounts.create({ displayName: "Alice" });

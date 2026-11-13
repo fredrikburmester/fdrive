@@ -107,8 +107,7 @@ const TRASH_SETTINGS: TrashSettings = {
   enabled: true,
   path: "/.trash",
   retentionHours: null,
-  rulesConfirmed: true,
-  strategy: "native",
+  strategy: "move",
 };
 
 it("captures the identity's provider for delayed reads/writes without retargeting", async () => {
@@ -163,29 +162,6 @@ it("leaves storage.trash undefined when no trash settings are configured", async
   expect(trashSettingsForStorage(storage)).toBeNull();
 });
 
-it("extends native-trash storage with a recycle-folder view when trash is enabled", async () => {
-  // A backend that recycles deletes itself: no production module does this
-  // any more, but the port still allows it.
-  const memory = createMemoryStorage({ "/.trash/docs/a.txt/1700000000000000000": "x" });
-  const module = fakeProviderModule({ trash: "native", createStorage: () => memory });
-  const factory = createIdentityStorageFactory({
-    providers: {
-      forIdentity: async () => resolvedFor(providerRow("provider-a", "http://a.test"), module),
-    },
-    fetch: vi.fn(),
-    clock: () => new Date(0),
-    resolveTrashSettings: async () => TRASH_SETTINGS,
-  });
-  const storage = await factory("identity-a");
-  expect(storage.trash).toBeDefined();
-  expect((await storage.trash?.list())?.entries.map((entry) => entry.originalPath)).toEqual([
-    "/docs/a.txt",
-  ]);
-  // Native trash: fdrive never moves files itself, a delete is a delete.
-  await storage.deleteFile("/.trash/docs/a.txt/1700000000000000000");
-  expect(memory.dump()).toEqual({});
-});
-
 it("moves deletes into the recycle folder for a module whose trash strategy is move", async () => {
   const memory = createMemoryStorage({ "/docs/a.txt": "x" });
   const module = fakeProviderModule({ trash: "move", createStorage: () => memory });
@@ -205,6 +181,9 @@ it("moves deletes into the recycle folder for a module whose trash strategy is m
     [moveTrashLeafPath("/.trash", "/docs/a.txt", "file", leaf)]: "x",
   });
   expect((await storage.trash?.list())?.entries).toMatchObject([{ originalPath: "/docs/a.txt" }]);
+  // Inside the Trash folder a delete is permanent: that is how purge works.
+  await storage.deleteFile(moveTrashLeafPath("/.trash", "/docs/a.txt", "file", leaf));
+  expect(memory.dump()).toEqual({});
 });
 
 it("adds no trash for a module without one even when settings enable it", async () => {

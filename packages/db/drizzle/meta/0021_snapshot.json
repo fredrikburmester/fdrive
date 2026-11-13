@@ -1,5 +1,5 @@
 {
-  "id": "e22bd5ab-776e-4f0c-a4b1-2ba01826beb7",
+  "id": "beccfb49-4bb1-4bfd-a1f6-118edc2b25f3",
   "prevId": "8650c840-75e5-45b9-a4a6-ca1c09491c35",
   "version": "7",
   "dialect": "postgresql",
@@ -3658,128 +3658,6 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
-    "idx.work": {
-      "name": "work",
-      "schema": "idx",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "bigserial",
-          "primaryKey": true,
-          "notNull": true
-        },
-        "root_id": {
-          "name": "root_id",
-          "type": "smallint",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "path": {
-          "name": "path",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "target_path": {
-          "name": "target_path",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "sha256": {
-          "name": "sha256",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "size": {
-          "name": "size",
-          "type": "bigint",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "mtime_ns": {
-          "name": "mtime_ns",
-          "type": "bigint",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "inode": {
-          "name": "inode",
-          "type": "bigint",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "ctime_ns": {
-          "name": "ctime_ns",
-          "type": "bigint",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "created_at": {
-          "name": "created_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        }
-      },
-      "indexes": {
-        "work_root_id_id_idx": {
-          "name": "work_root_id_id_idx",
-          "columns": [
-            {
-              "expression": "root_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "work_created_at_idx": {
-          "name": "work_created_at_idx",
-          "columns": [
-            {
-              "expression": "created_at",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
-      "foreignKeys": {
-        "work_root_id_roots_id_fk": {
-          "name": "work_root_id_roots_id_fk",
-          "tableFrom": "work",
-          "tableTo": "roots",
-          "schemaTo": "idx",
-          "columnsFrom": ["root_id"],
-          "columnsTo": ["id"],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "policies": {},
-      "checkConstraints": {},
-      "isRLSEnabled": false
-    },
     "app.activity_event_subjects": {
       "name": "activity_event_subjects",
       "schema": "app",
@@ -6163,12 +6041,6 @@
         "event_id": {
           "name": "event_id",
           "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "strategy": {
-          "name": "strategy",
-          "type": "text",
           "primaryKey": false,
           "notNull": true
         },

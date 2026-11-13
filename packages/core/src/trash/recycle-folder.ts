@@ -16,57 +16,13 @@ export function isUnderPath(prefix: string, path: string): boolean {
   return normalizedPath.startsWith(`${normalizedPrefix}/`);
 }
 
-export interface ParsedTrashLeaf {
-  readonly originalPath: string;
-  readonly name: string;
-  readonly deletedAt: Date;
-}
-
-export type RecycleFolderLayout = "native" | "move";
 export type MoveTrashLeafKind = "file" | "dir";
 
 const MOVE_LAYOUT_NAMESPACE = ".fdrive-move-v1";
 
+/** The versioned namespace under the trash folder that every leaf lives in. */
 export function moveTrashRootPath(trashPath: string): string {
   return normalizePath(`${normalizePath(trashPath)}/${MOVE_LAYOUT_NAMESPACE}`);
-}
-
-/**
- * Parses a full storage path to a trash leaf (the recycle folder's layout is
- * `<trashPath>/<original dir>/<original name>/<nanosecond timestamp>`).
- * Returns `null` for anything that is not a well-formed leaf under
- * `trashPath`: the leaf name must be 1 to 20 ASCII digits, and there must be
- * at least one more segment above it (the original item's name).
- */
-export function parseTrashLeaf(trashPath: string, leafPath: string): ParsedTrashLeaf | null {
-  const trashRoot = normalizePath(trashPath);
-  const leaf = normalizePath(leafPath);
-  if (!isUnderPath(trashRoot, leaf)) {
-    return null;
-  }
-  // isUnderPath just confirmed leaf is nested under trashRoot, so
-  // relativeTo always succeeds here; the cast works around
-  // noUncheckedIndexedAccess not knowing that.
-  const relative = relativeTo(trashRoot, leaf) as string;
-  const segments = relative.split("/");
-  if (segments.length < 2) {
-    return null;
-  }
-  // Neither segment came from an empty split chunk (normalizePath never
-  // produces one), and segments.length >= 2 was just checked, so both
-  // indexed reads below are always defined; the casts work around
-  // noUncheckedIndexedAccess not knowing that.
-  const timestamp = segments[segments.length - 1] as string;
-  if (!LEAF_NAME_PATTERN.test(timestamp)) {
-    return null;
-  }
-  const originalSegments = segments.slice(0, -1);
-  const name = originalSegments[originalSegments.length - 1] as string;
-  return {
-    originalPath: `/${originalSegments.join("/")}`,
-    name,
-    deletedAt: new Date(Number(BigInt(timestamp) / BigInt(1_000_000))),
-  };
 }
 
 /**
@@ -79,9 +35,10 @@ export function trashLeafPath(trashPath: string, id: string): string {
 }
 
 /**
- * Builds a generic move-wrapper leaf in a versioned namespace. Alternating
- * `p/<raw segment>` pairs distinguish original path data from layout markers
- * without encoding or reserving any user filename.
+ * Builds the leaf a deleted item is moved to:
+ * `<trashPath>/.fdrive-move-v1/<kind>/p/<segment>/…/v/<nanosecond timestamp>`.
+ * Alternating `p/<raw segment>` pairs distinguish original path data from
+ * layout markers without encoding or reserving any user filename.
  */
 export function moveTrashLeafPath(
   trashPath: string,
@@ -100,11 +57,18 @@ export function moveTrashLeafPath(
   );
 }
 
-export interface ParsedMoveTrashLeaf extends ParsedTrashLeaf {
+export interface ParsedMoveTrashLeaf {
   readonly kind: MoveTrashLeafKind;
+  readonly originalPath: string;
+  readonly name: string;
+  readonly deletedAt: Date;
 }
 
-/** Parses only the versioned, structurally unambiguous generic move layout. */
+/**
+ * Parses a full storage path back into the leaf `moveTrashLeafPath` built.
+ * Returns `null` for anything else: a path outside the namespace, a
+ * malformed structure, or a leaf name that is not 1 to 20 ASCII digits.
+ */
 export function parseMoveTrashLeaf(
   trashPath: string,
   leafPath: string,

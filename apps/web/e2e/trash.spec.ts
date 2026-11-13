@@ -41,13 +41,10 @@ async function loginAsAlice(page: Page, webBaseUrl: string): Promise<void> {
     await expect(page.getByRole("switch", { name: label })).toBeVisible();
     await page.getByRole("button", { name: "Skip this feature" }).click();
   }
-  // fdrive moves deleted files into a folder of the home itself: no server
-  // rule to configure and confirm first.
   await expect(
     page.getByText("Restore deleted files that fdrive moved into a recycle folder."),
   ).toBeVisible();
   await page.getByRole("switch", { name: "Enable Trash" }).click();
-  await expect(page.getByRole("checkbox", { name: /I configured and tested/ })).toHaveCount(0);
   await expect(page.getByLabel("Trash folder")).not.toHaveValue("");
   await page.getByRole("button", { name: "Save and continue" }).click();
   await expect(page.getByLabel("Server address")).not.toHaveValue("");
