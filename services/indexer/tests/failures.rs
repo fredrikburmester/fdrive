@@ -296,7 +296,7 @@ fn a_text_retry_repairs_chunks_without_running_other_features() {
 fn a_missing_root_fails_its_scan() {
     let env = Env::new();
     let ctx = env.ctx(fv(true, false, false, false, false));
-    std::fs::remove_dir(&env.root).unwrap();
+    std::fs::remove_dir_all(&env.root).unwrap();
     assert_eq!(scan_once(&ctx).errors, 1);
     let snapshot = ctx.activity.snapshot();
     assert_eq!(snapshot.len(), 1);

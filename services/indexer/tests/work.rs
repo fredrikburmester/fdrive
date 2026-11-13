@@ -419,6 +419,29 @@ fn many_uploads_are_indexed_in_parallel_and_drained_in_batches() {
 }
 
 #[test]
+fn queued_changes_wait_while_the_folder_has_no_marker() {
+    let env = Env::new();
+    let ctx = env.ctx_with(text_on(), |ctx| ctx.files_folder_recheck = Duration::ZERO);
+    env.write("a.txt", b"one");
+    queue(&env, &ctx, "a.txt", None, None);
+    drain(&ctx);
+    assert_eq!(live_paths(&env, &ctx), ["a.txt"]);
+
+    let marker = env.path(fdrive_indexer::files_marker::FILES_MARKER);
+    let id = std::fs::read_to_string(&marker).unwrap();
+    std::fs::remove_file(&marker).unwrap();
+    std::fs::remove_file(env.path("a.txt")).unwrap();
+    queue(&env, &ctx, "a.txt", None, None);
+    assert_eq!(drain(&ctx), 0);
+    assert_eq!(queued(&env), 1);
+    assert_eq!(live_paths(&env, &ctx), ["a.txt"]);
+
+    std::fs::write(&marker, id).unwrap();
+    assert_eq!(drain(&ctx), 1);
+    assert!(live_paths(&env, &ctx).is_empty());
+}
+
+#[test]
 fn while_indexing_is_off_the_queue_is_dropped() {
     let env = Env::new();
     let ctx = env.ctx(OFF);

@@ -133,7 +133,14 @@ pub struct RootContext {
     text_stage: Mutex<Option<Arc<Stage>>>,
     foreground: Arc<AtomicUsize>,
     pub activity: RootActivity,
+    /// The last verdict on the root's `.fdrive-files` marker and when it was reached.
+    files_folder: Mutex<Option<(Instant, Result<(), &'static str>)>>,
+    /// How long that verdict is reused before the marker is read again.
+    pub files_folder_recheck: Duration,
 }
+
+/// How long a verdict on the files folder's marker is reused by default.
+pub const FILES_FOLDER_RECHECK: Duration = Duration::from_secs(2);
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
@@ -177,8 +184,44 @@ impl RootContext {
             text_stage: Mutex::new(None),
             foreground: Arc::new(AtomicUsize::new(0)),
             activity: RootActivity::default(),
+            files_folder: Mutex::new(None),
+            files_folder_recheck: FILES_FOLDER_RECHECK,
             cfg,
         }
+    }
+
+    /// Whether the root holds this installation's `.fdrive-files` marker, checked again once
+    /// the last verdict is `files_folder_recheck` old. Nothing that deletes or moves rows runs
+    /// while it does not: scans, the watcher and queued changes wait. A change of verdict is
+    /// logged once; a database error keeps the last verdict.
+    pub fn files_folder_verified(&self) -> bool {
+        let mut last = lock(&self.files_folder);
+        if let Some((at, verdict)) = *last
+            && at.elapsed() < self.files_folder_recheck
+        {
+            return verdict.is_ok();
+        }
+        let verdict = match self.db.with(db::installation_id) {
+            Ok(id) => crate::files_marker::check(&self.abs_path, id.as_deref()),
+            Err(e) => match *last {
+                Some((_, previous)) => previous,
+                None => {
+                    log(&format!("[{}] files folder unchecked: {}", self.name, describe(&e)));
+                    Err(crate::files_marker::NO_INSTALLATION)
+                }
+            },
+        };
+        if last.map(|(_, previous)| previous) != Some(verdict) {
+            match verdict {
+                Ok(()) => log(&format!("[{}] files folder verified", self.name)),
+                Err(reason) => log(&format!(
+                    "[{}] FILES FOLDER REFUSED: {reason}. Nothing is scanned, watched or deleted from the index until it is fixed.",
+                    self.name
+                )),
+            }
+        }
+        *last = Some((Instant::now(), verdict));
+        verdict.is_ok()
     }
 
     pub fn settings(&self) -> Settings {
@@ -1267,6 +1310,13 @@ fn scan_inner(ctx: &Arc<RootContext>, operations: &HashMap<String, Op>) -> ScanR
     ctx.maybe_refresh_features();
     if !ctx.values().indexer_enabled() {
         return ScanResult::default();
+    }
+    // A wrong or empty mount must never be read as every file deleted.
+    if !ctx.files_folder_verified() {
+        return ScanResult {
+            errors: 1,
+            ..ScanResult::default()
+        };
     }
     if let Err(e) = std::fs::read_dir(&ctx.abs_path) {
         log(&format!("[{}] scan skipped: root unavailable: {e}", ctx.name));

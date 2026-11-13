@@ -15,6 +15,7 @@ use fdrive_indexer::backoff::Backoff;
 use fdrive_indexer::db::{self, ManifestRow};
 use fdrive_indexer::events::EventKind;
 use fdrive_indexer::features::FeatureConfiguration;
+use fdrive_indexer::files_marker::FILES_MARKER;
 use fdrive_indexer::indexer::{
     self, FileStat, ImageStage, backfill_media, embed_missing, embed_thumbnail, emit_event, error_kind,
     exclusion_still_applies, guess_mime, process_file, process_thumbnails, safe_process, scan_once,
@@ -498,6 +499,78 @@ fn image_search_alone_still_builds_internal_thumbnails() {
     assert_eq!(
         db::image_embedding_model(&mut env.client(), &sha).unwrap().as_deref(),
         Some("model-a")
+    );
+}
+
+#[test]
+fn a_scan_deletes_nothing_from_a_folder_without_this_installations_marker() {
+    let env = Env::new();
+    let ctx = env.ctx_with(fv(false, true, false, false, false), |ctx| {
+        ctx.files_folder_recheck = Duration::ZERO;
+    });
+    env.write("alice/a.txt", b"one");
+    env.write("alice/b.txt", b"two");
+    assert_eq!(scan_once(&ctx).changed, 2);
+    let mut indexed: Vec<String> = env.statuses(&ctx).into_keys().collect();
+    indexed.sort();
+    assert_eq!(
+        indexed,
+        ["alice/a.txt", "alice/b.txt"],
+        "the marker itself is never indexed"
+    );
+    let live = || env.count("idx.files WHERE deleted_at IS NULL");
+
+    // An empty folder mounted in its place, as Compose does when FDRIVE_FILES_DIR is unset.
+    std::fs::remove_dir_all(env.path("alice")).unwrap();
+    let marker = env.path(FILES_MARKER);
+    let id = std::fs::read_to_string(&marker).unwrap();
+    std::fs::remove_file(&marker).unwrap();
+    assert_eq!(
+        scan_once(&ctx),
+        indexer::ScanResult {
+            errors: 1,
+            ..Default::default()
+        }
+    );
+    assert_eq!(live(), 2);
+    for refused in ["\n", "0b8f4f0e-6a4c-4f6e-8d33-7f1e2a9c4b21\n"] {
+        std::fs::write(&marker, refused).unwrap();
+        assert_eq!(scan_once(&ctx).deleted, 0, "{refused:?}");
+        assert_eq!(live(), 2);
+    }
+
+    // This installation's folder again: the files really are gone.
+    std::fs::write(&marker, id).unwrap();
+    assert_eq!(scan_once(&ctx).deleted, 2);
+    assert_eq!(live(), 0);
+}
+
+#[test]
+fn the_marker_verdict_is_reused_and_survives_a_database_outage() {
+    let env = Env::new();
+    let cfg = Arc::new(env.config());
+    let root_id = db::upsert_root(&mut env.client(), "r").unwrap();
+    let mut ctx = indexer::RootContext::new("r", root_id, env.root.clone(), Arc::clone(&cfg), common::features(OFF));
+    ctx.files_folder_recheck = Duration::from_secs(3600);
+    assert!(!ctx.files_folder_verified(), "no installation id recorded yet");
+    common::mark_files_folder(&env.url, &env.root);
+    assert!(!ctx.files_folder_verified(), "the last verdict is reused for a moment");
+    ctx.files_folder_recheck = Duration::ZERO;
+    assert!(ctx.files_folder_verified());
+    ctx.db = db::Db {
+        url: "postgres://nobody@127.0.0.1:1/nope".to_owned(),
+        retries: 1,
+    };
+    assert!(ctx.files_folder_verified(), "an outage keeps the last verdict");
+
+    let mut offline = indexer::RootContext::new("r", root_id, env.root.clone(), cfg, common::features(OFF));
+    offline.db = db::Db {
+        url: "postgres://nobody@127.0.0.1:1/nope".to_owned(),
+        retries: 1,
+    };
+    assert!(
+        !offline.files_folder_verified(),
+        "nothing to keep without a first verdict"
     );
 }
 
@@ -1331,7 +1404,7 @@ fn a_scan_skips_already_indexed_files() {
 fn a_scan_of_a_root_that_vanished_fails() {
     let env = Env::new();
     let ctx = env.ctx(fv(false, true, false, false, false));
-    std::fs::remove_dir(&env.root).unwrap();
+    std::fs::remove_dir_all(&env.root).unwrap();
     assert_eq!(scan_once(&ctx).errors, 1);
     assert_eq!(Env::snapshot(&ctx, "textSearch")["state"], "failed");
     assert_eq!(env.count("idx.scans"), 0);

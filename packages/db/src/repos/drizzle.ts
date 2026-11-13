@@ -3,6 +3,7 @@ import type { Db } from "../index.js";
 import {
   accounts,
   apiTokens,
+  backupConfiguration,
   credentials,
   favorites,
   fileTags,
@@ -16,6 +17,7 @@ import {
   settings,
   tags,
 } from "../schema/app.js";
+import { files } from "../schema/idx.js";
 import { createAiChatRepo } from "./ai-chats.js";
 import { supersedeDesktopEffects } from "./desktop-effects.js";
 import { validateIdentityLinkId } from "./identity-links-types.js";
@@ -1130,6 +1132,36 @@ function createLocalGrantRepo(db: Db): LocalGrantRepo {
 }
 
 /** Builds every `Repos` interface as Drizzle queries against `db`. */
+/**
+ * What the database says about the files folder: the installation's id,
+ * which the folder's `.fdrive-files` marker holds (the same id backups
+ * carry, so a restore keeps the folder's marker valid), and whether fdrive
+ * already has users or indexed files, which an empty folder cannot hold.
+ */
+export function createFilesFolderFacts(db: Db) {
+  return {
+    async installationId(): Promise<string> {
+      await db.insert(backupConfiguration).values({ id: 1 }).onConflictDoNothing();
+      const [row] = await db
+        .select({ id: backupConfiguration.installationId })
+        .from(backupConfiguration)
+        .where(eq(backupConfiguration.id, 1));
+      if (row === undefined) throw new Error("installation id unavailable");
+      return row.id;
+    },
+    async holdsFiles(): Promise<boolean> {
+      const [file] = await db
+        .select({ id: files.id })
+        .from(files)
+        .where(isNull(files.deletedAt))
+        .limit(1);
+      if (file !== undefined) return true;
+      const [user] = await db.select({ username: localUsers.username }).from(localUsers).limit(1);
+      return user !== undefined;
+    },
+  };
+}
+
 export function createRepos(db: Db): Repos {
   return {
     providers: createProviderRepo(db),

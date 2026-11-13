@@ -1,6 +1,7 @@
 import type { StorageSession } from "@fdrive/core";
 import type { IndexWorkInput } from "@fdrive/db";
 import { createMemoryRepos } from "@fdrive/db/testing";
+import { createFilesFolderGuard, FILES_FOLDER_REASONS } from "@fdrive/local";
 import { describe, expect, it, vi } from "vitest";
 import { createIndexWorkQueue } from "./index-work.js";
 import { deploymentModules, indexWorkRoot, LOCAL_INDEX_ROOT, localIndexRoot } from "./modules.js";
@@ -81,6 +82,29 @@ describe("deploymentModules", () => {
       modules.local?.authenticate(instance, { username: "nobody", password: "x" }, { fetch }),
     ).rejects.toMatchObject({ kind: "unauthorized" });
     expect(modules.local?.indexRootName?.(instance)).toBe(LOCAL_INDEX_ROOT);
+  });
+
+  it("refuses storage in a folder its guard refuses", async () => {
+    const storageRoot = temporaryStorageRoot();
+    const guard = createFilesFolderGuard({
+      root: storageRoot,
+      facts: { installationId: async () => "id", holdsFiles: async () => true },
+    });
+    const modules = deploymentModules(
+      { fdriveStorageRoot: storageRoot, fdriveIndexRoots: null },
+      createMemoryRepos(),
+      FAST_PASSWORDS,
+      undefined,
+      guard,
+    );
+    const instance = { id: "row", baseUrl: "local", config: {} };
+    await expect(modules.local?.admit?.(instance, "alice")).rejects.toMatchObject({
+      kind: "upstream_unavailable",
+      message: FILES_FOLDER_REASONS.empty,
+    });
+    expect(() =>
+      modules.local?.createStorage(instance, { externalUsername: "alice" }, { fetch }),
+    ).toThrow(FILES_FOLDER_REASONS.empty);
   });
 
   describe("with an index work queue", () => {

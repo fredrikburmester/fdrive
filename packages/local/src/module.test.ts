@@ -1,9 +1,10 @@
-import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { StorageError, type StorageSession } from "@fdrive/core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { bytes, kindOf } from "../test/helpers.js";
+import { createFilesFolderGuard, FILES_FOLDER_REASONS } from "./files-marker.js";
 import {
   createLocalModule,
   isLocalUsername,
@@ -220,5 +221,43 @@ describe("createLocalModule", () => {
   it("refuses to build storage for a name that cannot be a home", () => {
     const module = createLocalModule({ root, users: users("ok") });
     expect(() => module.createStorage(instance, session(".."), ctx)).toThrow(StorageError);
+  });
+
+  describe("with a files folder guard", () => {
+    const facts = (holds: boolean) => ({
+      installationId: async () => "5b0e8b9e-1f3c-4a7d-b2e6-9d4c8a1f0e23",
+      holdsFiles: async () => holds,
+    });
+    const build = (module: ReturnType<typeof createLocalModule>) =>
+      Promise.resolve().then(() => module.createStorage(instance, session("alice"), ctx));
+
+    it("serves a folder only once it has adopted it", async () => {
+      await mkdir(join(root, "alice"));
+      const guard = createFilesFolderGuard({ root, facts: facts(true) });
+      const module = createLocalModule({ root, users: users("ok"), guard });
+      expect(await kindOf(build(module))).toBe("upstream_unavailable");
+      await module.admit?.(instance, "alice");
+      expect(await module.probe(instance, ctx)).toEqual({ ok: true, detail: expect.any(String) });
+      expect(await (await build(module)).list("/")).toEqual([]);
+    });
+
+    it("refuses a wrong, empty folder but still lets users sign in", async () => {
+      const guard = createFilesFolderGuard({ root, facts: facts(true) });
+      const module = createLocalModule({ root, users: users("ok"), guard });
+      await expect(
+        module.authenticate(instance, { username: "alice", password: "pw" }, ctx),
+      ).resolves.toEqual({ externalUsername: "alice" });
+      expect(() => module.createStorage(instance, session("alice"), ctx)).toThrow(
+        FILES_FOLDER_REASONS.empty,
+      );
+      expect(await kindOf(module.admit?.(instance, "alice") ?? Promise.resolve())).toBe(
+        "upstream_unavailable",
+      );
+      expect(await module.probe(instance, ctx)).toEqual({
+        ok: false,
+        detail: FILES_FOLDER_REASONS.empty,
+      });
+      expect(await readdir(root)).toEqual([]);
+    });
   });
 });

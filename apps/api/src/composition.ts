@@ -9,6 +9,7 @@ import {
   createDesktopEffectsRepo,
   createDesktopPublishLock,
   createDesktopRepo,
+  createFilesFolderFacts,
   createIdentityLinksRepo,
   createIndexQueries,
   createIndexWorkWriter,
@@ -67,6 +68,7 @@ import { registerFeatureRoutes } from "./features/routes.js";
 import { createFeatureService } from "./features/service.js";
 import { publishFsEvent, registerFsRoutes } from "./fs/routes.js";
 import { createJobRunner } from "./jobs/runner.js";
+import { createDeploymentFilesFolderGuard, filesFolderHealth } from "./local/files-folder.js";
 import { registerGrantRoutes } from "./local/grant-routes.js";
 import { createLocalGrantService } from "./local/grants.js";
 import { createIndexWorkQueue } from "./local/index-work.js";
@@ -197,7 +199,18 @@ export async function composeApp(
         "index work not queued; the indexer's watcher or scan will find it",
       ),
   });
-  const modules = deps.modules ?? deploymentModules(config, repos, passwords, indexWork);
+  // A wrong or empty files folder is refused, not served or read as every
+  // file deleted; the verdict is logged once and checked again as it ages.
+  const filesFolder =
+    config.fdriveStorageRoot === undefined
+      ? undefined
+      : createDeploymentFilesFolderGuard(config.fdriveStorageRoot, createFilesFolderFacts(db), {
+          info: (message) => logger.info(message),
+          error: (message) => logger.error(message),
+        });
+  await filesFolder?.verify();
+  const modules =
+    deps.modules ?? deploymentModules(config, repos, passwords, indexWork, filesFolder);
   const backups = createBackupModule(config, modules);
   await backups.start();
 
@@ -724,6 +737,7 @@ export async function composeApp(
           ),
     ]);
     return {
+      ...(filesFolder === undefined ? {} : { core: await filesFolderHealth(filesFolder) }),
       ...(indexResult === null ? {} : { index: indexResult.ok }),
       ...(search === null ? {} : { search }),
       ...(imageSearch === null ? {} : { imageSearch }),

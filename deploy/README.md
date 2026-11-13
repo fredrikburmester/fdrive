@@ -60,6 +60,9 @@ FDRIVE_FILES_DIR=/srv/files
   handed to that user on the first start.
 - It must be a folder on this host, such as a local disk or a share the host has mounted.
   Use a path, not a Docker named volume.
+- fdrive writes a small `.fdrive-files` file at the top of the folder with this
+  installation's ID. Leave it there: without it, an empty folder is treated as a wrong mount,
+  not as every file deleted.
 
 ## 3. Start fdrive
 
@@ -156,6 +159,13 @@ into the files folder first. Backups to an S3 bucket keep working.
   `FDRIVE_HTTP_BIND=127.0.0.1`, only the host itself can connect.
 - **A user's files are missing**: their folder must be `<files folder>/<username>`, with the
   same spelling. Compare `docker compose exec api ls /data` with the folder on the host.
+- **Files unavailable, api logs `files folder /data refused`**: `/data` isn't this
+  installation's files folder, usually because `FDRIVE_FILES_DIR` is unset or wrong and Compose
+  mounted an empty folder. fdrive then serves nothing and indexes nothing instead of dropping
+  every file from search. Fix `FDRIVE_FILES_DIR` and run `docker compose up -d`. If the folder
+  really is right (you emptied it on purpose), create an empty `.fdrive-files` in it. If the
+  log says the folder belongs to another installation and you mean to take it over, delete
+  its `.fdrive-files`.
 - **Uploads or new folders fail**: the files must belong to `FDRIVE_RUN_AS_UID`. At start the
   api logs `cannot write /data` when that user can't write the folder.
 - **Indexer times out, refuses connections or returns 5xx**: check its startup, logs, network

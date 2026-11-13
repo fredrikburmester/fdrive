@@ -202,12 +202,15 @@ impl Applier {
     }
 
     /// Apply every queued change of the root, oldest first, removing each batch once its
-    /// files are done. Returns how many rows were handled.
+    /// files are done, unless the files folder is not verified. Returns how many rows were
+    /// handled.
     pub fn drain(&self) -> Result<usize> {
         let mut handled = 0;
         loop {
             let rows = self.ctx.db.with(|c| db::work_batch(c, self.ctx.root_id, BATCH))?;
-            if rows.is_empty() {
+            // Rows wait while the folder is not this installation's: applying them there would
+            // read the files they name as deleted. The API prunes rows a day old.
+            if rows.is_empty() || !self.ctx.files_folder_verified() {
                 return Ok(handled);
             }
             self.ctx.maybe_refresh_features();

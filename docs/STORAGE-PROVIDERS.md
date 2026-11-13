@@ -100,6 +100,15 @@ How the files folder implements it:
   are `trash.configuration.<providerId>` in `app.settings`, disabled at `/.trash` by default,
   read and written through `/api/v1/system/trash?providerId=` ([Trash](TRASH.md)).
 - **Ownership.** The API writes as `FDRIVE_RUN_AS_UID`, the uid the indexer and OCR use.
+- **The folder's marker.** With a `guard` ([files-marker.ts](../packages/local/src/files-marker.ts)),
+  the module serves the folder only while its `.fdrive-files` names this installation
+  (`app.backup_configuration.installation_id`). The API and the backup worker build one
+  (`createDeploymentFilesFolderGuard`); the API checks it at startup. A missing marker is
+  written into a folder with entries, or any folder while the database has no live
+  `idx.files` rows and no local users, and an empty marker is filled in. Otherwise
+  `createStorage` and `admit` throw `upstream_unavailable` with the reason, `probe` reports
+  it, and `core` health fails; `authenticate` still works, so administrators can sign in. The
+  verdict is reused for ten seconds, and a database outage keeps a verified folder.
 - **Changes for the indexer.** Storage reports each change once it succeeds (`onChange`, a
   `DiskChange` by absolute path; [changes.ts](../packages/local/src/changes.ts)): an upload,
   copy, delete or new modification time is `changed`, a move is `moved`, and `mkdir` reports
