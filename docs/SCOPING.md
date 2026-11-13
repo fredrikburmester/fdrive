@@ -44,7 +44,10 @@ shadowed physical folder never surfaces under the mount.
 ## Live reads
 
 Index-derived content must also pass live storage read authorization. Stat/list metadata
-alone does not prove file download access. Directory probes may stop after one complete
+alone does not prove file download access. A file is proved by the storage's `probeFileRead`
+where it has one: the files folder asks the kernel whether the API may read the file
+(`access(R_OK)`, the check `open` makes) and reads none of it. A storage without it is asked
+for a download whose body is cancelled unread. Directory probes may stop after one complete
 listing entry or a confirmed empty listing; HTTP success headers alone are insufficient.
 Providers without that optimization use a full list. Probe concurrency is bounded; positive
 read proofs are reused only within the request. Final candidate metadata/path mapping is

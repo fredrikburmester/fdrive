@@ -103,6 +103,58 @@ describe("createReadAuthorizer: files", () => {
   });
 });
 
+describe("createReadAuthorizer: files with probeFileRead", () => {
+  it("proves a file with probeFileRead and never opens a download", async () => {
+    const probeFileRead = vi.fn(async () => undefined);
+    const download = vi.fn();
+    const list = vi.fn();
+    const authorizer = createReadAuthorizer({ storage: { probeFileRead, download, list } });
+
+    expect(await authorizer.authorize({ kind: "file", path: "/a.txt" })).toEqual({
+      allowed: true,
+    });
+    expect(probeFileRead).toHaveBeenCalledWith("/a.txt");
+    expect(download).not.toHaveBeenCalled();
+    expect(list).not.toHaveBeenCalled();
+  });
+
+  it("maps a probeFileRead failure as it maps a download failure, without falling back", async () => {
+    const cases = [
+      ["not_found", "missing"],
+      ["forbidden", "denied"],
+      ["unauthorized", "denied"],
+      ["bad_request", "unavailable"],
+    ] as const;
+    for (const [kind, reason] of cases) {
+      const probeFileRead = vi.fn(async () => {
+        throw new StorageError(kind, "no");
+      });
+      const download = vi.fn();
+      const authorizer = createReadAuthorizer({
+        storage: { probeFileRead, download, list: vi.fn() },
+      });
+      expect(await authorizer.authorize({ kind: "file", path: "/x" })).toEqual({
+        allowed: false,
+        reason,
+      });
+      expect(download).not.toHaveBeenCalled();
+    }
+  });
+
+  it("reuses one probe for duplicate files within the same authorizer", async () => {
+    const probeFileRead = vi.fn(async () => undefined);
+    const authorizer = createReadAuthorizer({
+      storage: { probeFileRead, download: vi.fn(), list: vi.fn() },
+    });
+
+    await Promise.all([
+      authorizer.authorize({ kind: "file", path: "/a.txt" }),
+      authorizer.authorize({ kind: "file", path: "/a.txt" }),
+    ]);
+    expect(probeFileRead).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("createReadAuthorizer: directories", () => {
   it("prefers probeDirectoryRead over list when available", async () => {
     const probeDirectoryRead = vi.fn(async () => undefined);

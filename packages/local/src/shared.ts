@@ -63,7 +63,7 @@ export function sharedFolderNames(grants: readonly SharedGrant[]): string[] {
 
 /** A user's storage: every optional `StorageProvider` operation is there. */
 export type UserStorage = StorageProvider &
-  Required<Pick<StorageProvider, "zip" | "setModifiedAt" | "probeDirectoryRead">>;
+  Required<Pick<StorageProvider, "zip" | "setModifiedAt" | "probeDirectoryRead" | "probeFileRead">>;
 
 /**
  * The grants `username` sees, each with its name under `Shared with me`.
@@ -262,6 +262,12 @@ export function createUserStorage(options: UserStorageOptions): UserStorage {
       if (at.kind === "shelf") return;
       // Local storage always has the probe.
       await (at.storage.probeDirectoryRead as (path: string) => Promise<void>)(at.rel);
+    },
+
+    async probeFileRead(path) {
+      const at = await readable(path);
+      if (at.kind === "shelf") throw new StorageError("bad_request", `not a file: ${path}`);
+      await (at.storage.probeFileRead as (path: string) => Promise<void>)(at.rel);
     },
 
     async download(path, opts) {

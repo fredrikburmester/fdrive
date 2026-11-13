@@ -72,10 +72,10 @@ and the API refuses what a login lacks even when a stale client asks.
 
 Required: `list`, `stat`, `statFile`, `download`, `upload`, `mkdir`, `move`, `copy`,
 `deleteFile`, `deleteDir`. Optional members are absent, never throwing, and agree with the
-flags: `probeDirectoryRead` (a live read proof), `setModifiedAt`, `zip` and `trash`. Three more,
-`withWriteLease`, `maxPublishBytes` and `movesDirectoriesByCopy`, describe backends that need a
-write lease, cap publication or move folders by copying; the files folder sets none of them, and
-the Mac write path still honours them.
+flags: `probeDirectoryRead` and `probeFileRead` (live read proofs), `setModifiedAt`, `zip` and
+`trash`. Three more, `withWriteLease`, `maxPublishBytes` and `movesDirectoriesByCopy`, describe
+backends that need a write lease, cap publication or move folders by copying; the files folder
+sets none of them, and the Mac write path still honours them.
 
 Paths are the storage's own, already resolved from a scope. `statFile` throws `bad_request` on a
 directory and `not_found` on a missing path. `move`, `copy` and `upload` overwrite unless
@@ -93,6 +93,8 @@ How the files folder implements it:
   spelling as `path`, so links and lookups land on the name listings show.
 - **Downloads** send `Last-Modified` and no ETag; `ifRange` applies when it names the file's
   current second.
+- **Read proofs** open nothing: `probeFileRead` asks `access(R_OK)` and then checks for a
+  regular file, the checks `download` makes, and fails with the kinds `download` would.
 - **Zip** streams with `yazl`.
 - **Trash.** The storage factory wraps the storage with core's `withMoveToTrash` and
   `createRecycleFolderTrash`; deleted items live in `<trash folder>/.fdrive-move-v1`. Settings
