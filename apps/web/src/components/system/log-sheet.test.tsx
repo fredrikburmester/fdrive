@@ -25,14 +25,14 @@ const ENTRIES: SystemLogEntry[] = [
     at: "2026-09-09T10:20:30.000Z",
     level: "error",
     message: "Reindex failed: unreachable",
-    data: { root: "sftpgo" },
+    data: { root: "files" },
     source: "api",
   },
   {
     id: "scan:1",
     at: "2026-09-09T10:00:00.000Z",
     level: "info",
-    message: "Scan of sftpgo finished",
+    message: "Scan of files finished",
     source: "indexer",
   },
 ];
@@ -77,7 +77,7 @@ describe("LogSheet", () => {
     expect(useSystemLogsMock).toHaveBeenCalledWith("indexer", { level: "info", enabled: true });
     const rows = screen.getAllByRole("listitem");
     expect(rows[0]?.textContent).toContain("error");
-    expect(rows[1]?.textContent).toContain("Scan of sftpgo finished");
+    expect(rows[1]?.textContent).toContain("Scan of files finished");
     expect(screen.getByText("2 entries")).toBeTruthy();
   });
 
@@ -100,13 +100,13 @@ describe("LogSheet", () => {
     useSystemLogsMock.mockReturnValue(loaded(ENTRIES));
     render(<LogSheet subsystem="indexer" />);
     fireEvent.click(screen.getByRole("button", { name: "Logs" }));
-    await screen.findByText("Scan of sftpgo finished");
+    await screen.findByText("Scan of files finished");
 
     fireEvent.click(screen.getByRole("button", { name: "Copy" }));
 
     await waitFor(() => expect(toastSuccess).toHaveBeenCalledWith("Copied 2 log lines"));
     expect(writeText.mock.calls[0]?.[0]).toContain(
-      '2026-09-09T10:20:30.000Z  ERROR  Reindex failed: unreachable  {"root":"sftpgo"}',
+      '2026-09-09T10:20:30.000Z  ERROR  Reindex failed: unreachable  {"root":"files"}',
     );
   });
 
@@ -118,7 +118,7 @@ describe("LogSheet", () => {
     useSystemLogsMock.mockReturnValue(loaded(ENTRIES));
     render(<LogSheet subsystem="indexer" />);
     fireEvent.click(screen.getByRole("button", { name: "Logs" }));
-    await screen.findByText("Scan of sftpgo finished");
+    await screen.findByText("Scan of files finished");
 
     fireEvent.click(screen.getByRole("button", { name: "Copy" }));
 
@@ -149,7 +149,7 @@ describe("LogSheet", () => {
     useSystemLogsMock.mockReturnValue(loaded(ENTRIES));
     render(<LogSheet subsystem="thumbnails" />);
     fireEvent.click(screen.getByRole("button", { name: "Logs" }));
-    await screen.findByText("Scan of sftpgo finished");
+    await screen.findByText("Scan of files finished");
 
     fireEvent.click(screen.getByRole("button", { name: "Download .txt" }));
     fireEvent.click(screen.getByRole("button", { name: "Download .ndjson" }));
@@ -211,6 +211,6 @@ describe("LogSheet", () => {
     render(<LogSheet subsystem="indexer" />);
     fireEvent.click(screen.getByRole("button", { name: "Logs" }));
     fireEvent.click(await screen.findByText("Reindex failed: unreachable"));
-    expect(await screen.findByText(/"root": "sftpgo"/)).toBeTruthy();
+    expect(await screen.findByText(/"root": "files"/)).toBeTruthy();
   });
 });

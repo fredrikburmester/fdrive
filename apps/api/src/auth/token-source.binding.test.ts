@@ -1,13 +1,15 @@
 import { createMemoryRepos } from "@fdrive/db/testing";
-import { createFakeSftpgoServer, sftpgoModule } from "@fdrive/sftpgo";
 import { describe, expect, it, vi } from "vitest";
 import { memoryProviderService } from "../providers/test-fixtures/index.ts";
 import { seal } from "./crypto.js";
+import { createFakeTokenServer, tokenMintingModule } from "./test-fixtures/index.ts";
 import { createTokenSource } from "./token-source.js";
+
+const MODULE = tokenMintingModule();
 
 /**
  * Server A holds the identity's real account; server B is a different
- * SFTPGo the deployment later points at. "Switching" disables A and adds
+ * server of the same kind an administrator later adds. "Switching" disables A and adds
  * B: the stored credential is bound to A's row and must never be sent to
  * B, and once A is disabled nothing is sent anywhere.
  */
@@ -15,7 +17,7 @@ async function fixture() {
   const repos = createMemoryRepos();
   const master = Buffer.alloc(32, 2);
   const clock = () => new Date("2026-01-01T00:00:00Z");
-  const provider = await repos.providers.ensure({ type: "sftpgo", baseUrl: "http://a.test" });
+  const provider = await repos.providers.ensure({ type: "local", baseUrl: "http://a.test" });
   const account = await repos.accounts.create({ displayName: "Alice" });
   const identity = await repos.identities.create({
     accountId: account.id,
@@ -31,12 +33,12 @@ async function fixture() {
       identity.id,
     ),
   });
-  const a = createFakeSftpgoServer({
-    users: [{ username: "alice", password: "a-password", permissions: { "/": ["*"] } }],
+  const a = createFakeTokenServer({
+    users: [{ username: "alice", password: "a-password" }],
     now: clock,
   });
-  const b = createFakeSftpgoServer({
-    users: [{ username: "alice", password: "b-password", permissions: { "/": ["*"] } }],
+  const b = createFakeTokenServer({
+    users: [{ username: "alice", password: "b-password" }],
     now: clock,
   });
   const requests: { host: string; authenticated: boolean }[] = [];
@@ -47,7 +49,11 @@ async function fixture() {
     await beforeRequest?.();
     return (host === "a.test" ? a : b).fetch(url, init);
   };
-  const providers = memoryProviderService(repos, { fetch: fetchImpl, clock });
+  const providers = memoryProviderService(repos, {
+    fetch: fetchImpl,
+    clock,
+    modules: { local: MODULE },
+  });
   const deps = { repos, providers, master, clock, fetch: fetchImpl };
   return {
     ...deps,
@@ -58,7 +64,7 @@ async function fixture() {
     source: createTokenSource(deps),
     async switchToB() {
       await repos.providers.update(provider.id, { enabled: false });
-      await repos.providers.ensure({ type: "sftpgo", baseUrl: "http://b.test" });
+      await repos.providers.ensure({ type: "local", baseUrl: "http://b.test" });
     },
     intercept(fn: () => Promise<void>) {
       beforeRequest = fn;
@@ -113,7 +119,7 @@ describe("cached token provider binding", () => {
       expiresAt: new Date(h.clock().getTime() + 600000),
     });
     const session = h.source.sessionFor(h.identity.id, "alice");
-    const storage = sftpgoModule.createStorage(
+    const storage = MODULE.createStorage(
       { id: h.provider.id, baseUrl: h.provider.baseUrl, config: {} },
       session,
       {

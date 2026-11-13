@@ -95,7 +95,10 @@ mod linux {
     }
 
     fn is_junk(name: &OsStr) -> bool {
-        name.as_encoded_bytes().starts_with(b"._") || SKIP_NAMES.iter().any(|skip| name == OsStr::new(skip))
+        name.to_str()
+            .map_or(name.as_encoded_bytes().starts_with(b"._"), |name| {
+                crate::paths::is_junk_name(name, SKIP_NAMES)
+            })
     }
 
     fn is_skipped_dir(name: &OsStr) -> bool {

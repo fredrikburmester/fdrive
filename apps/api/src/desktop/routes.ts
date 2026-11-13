@@ -98,13 +98,29 @@ export function registerDesktopRoutes(
   }
   /** The caller's own ID for one hydration, distinct from a write's operation ID. */
   const hydrationId = (c: Context) => activityOperationId(c.req.header("x-fdrive-operation-id"));
+  /**
+   * The token's principal. A location whose storage is gone (its provider
+   * disabled or of a type this release no longer has) cannot build storage;
+   * it answers like `location()` does for it, so the Mac app asks to sign in
+   * again instead of reporting a server error.
+   */
+  async function resolveLocation(bearer: string) {
+    try {
+      return await pairing.resolve(bearer);
+    } catch (error) {
+      if (error instanceof ApiHttpError && error.kind === "upstream_unavailable") {
+        throw new ApiHttpError("unauthorized", "Storage login is no longer available");
+      }
+      throw error;
+    }
+  }
   async function principal(
     c: Context,
     writeProtocol = false,
   ): Promise<{ bearer: string; principal: Principal }> {
     c.header("Cache-Control", "no-store");
     const bearer = c.req.header("authorization")?.replace(/^Bearer /, "") ?? "";
-    const resolved = await pairing.resolve(bearer);
+    const resolved = await resolveLocation(bearer);
     if (
       !resolved ||
       (resolved.tokenAccess?.mode !== "read" &&

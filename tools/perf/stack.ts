@@ -1,33 +1,35 @@
 /** Disposable real services. Data and embeddings are seeded, authorization is never injected. */
 import { randomBytes } from "node:crypto";
-import { createWriteStream } from "node:fs";
+import { createReadStream, createWriteStream } from "node:fs";
 import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { createServer, type Server } from "node:http";
+import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { composeApp } from "@fdrive/api/composition";
 import { loadConfig } from "@fdrive/api/config";
-import { createDb, migrate } from "@fdrive/db";
-import { createSftpgoClient } from "@fdrive/sftpgo";
-import { buildSftpgoDump, startPostgres } from "@fdrive/testkit";
+import { createDb, createRepos, migrate } from "@fdrive/db";
+import { startPostgres } from "@fdrive/testkit";
 import { serve } from "@hono/node-server";
 import pino from "pino";
+import { seedLocalUsers } from "../dev/local-users.ts";
 import { createDeterministicByteStream } from "./byte-generator.js";
 import { mapWithConcurrency } from "./concurrency.js";
 import { extractCookiePair } from "./cookie.js";
 import { createCleanup } from "./lifecycle.js";
 import { command, container, ready } from "./runtime.js";
 import { SEARCH_FILE_COUNT, searchDocument, TOPICS, validateVector } from "./search-fixture.js";
-import { PERF_USER } from "./seed-plan.js";
+import { FORBIDDEN_USER, PERF_USER } from "./seed-plan.js";
 import { buildStackEnv } from "./stack-env.js";
 import { ensureTeiImage, selectTeiRuntime, type TeiRuntimeConfig } from "./tei-runtime.js";
 export const BIG_FILE_BYTES = 512 * 1024 * 1024;
 export interface PerfStack {
   readonly apiBaseUrl: string;
-  readonly sftpgoBaseUrl: string;
+  /** Plain HTTP over the same file, the baseline the API download is measured against. */
+  readonly directBaseUrl: string;
   readonly cookie: string;
-  readonly sftpgoToken: string;
   readonly forbiddenCookie: string;
   readonly embedUrl: string;
   readonly teiRuntime: TeiRuntimeConfig;
@@ -51,12 +53,41 @@ export async function loginToApi(
   if (!cookie) throw Error("Fixture session missing");
   return cookie;
 }
+/**
+ * The direct download baseline: a bare Node HTTP server streaming one file
+ * from disk, with no authentication, storage layer or framework, so the API
+ * route is measured against the same transport.
+ */
+async function serveDirect(file: string, cleanup: ReturnType<typeof createCleanup>) {
+  const server: Server = createServer((request, response) => {
+    if (request.url !== "/big/large.bin") {
+      response.writeHead(404).end();
+      return;
+    }
+    response.writeHead(200, {
+      "content-type": "application/octet-stream",
+      "content-length": BIG_FILE_BYTES,
+    });
+    pipeline(createReadStream(file), response).catch(() => response.destroy());
+  });
+  await new Promise<void>((done) => server.listen(0, "127.0.0.1", done));
+  cleanup.add(
+    () =>
+      new Promise<void>((done, reject) => {
+        server.close((error) => (error ? reject(error) : done()));
+        server.closeAllConnections();
+      }),
+  );
+  return `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+}
 export async function startPerfStack(): Promise<PerfStack> {
   const cleanup = createCleanup();
   const rootDir = resolve(import.meta.dirname, "../..");
   try {
     const temp = await mkdtemp(join(tmpdir(), "fdrive-perf-"));
     cleanup.add(() => rm(temp, { recursive: true, force: true }));
+    // The api serves this folder itself as its local storage, one home per
+    // user, and the indexer reads it through a read-only bind mount.
     const dataDir = join(temp, "data");
     await mkdir(dataDir);
     await chmod(dataDir, 0o755);
@@ -68,13 +99,11 @@ export async function startPerfStack(): Promise<PerfStack> {
       "burst",
       ...Array.from({ length: 20 }, (_, i) => `cold-${i}`),
     ];
-    for (const user of ["perf", "forbidden"]) {
-      await mkdir(join(dataDir, user), { mode: 0o777 });
-      await chmod(join(dataDir, user), 0o777);
+    for (const user of [PERF_USER.username, FORBIDDEN_USER.username]) {
+      await mkdir(join(dataDir, user));
     }
     for (const folder of folderNames) {
-      await mkdir(join(dataDir, "perf", folder), { mode: 0o777 });
-      await chmod(join(dataDir, "perf", folder), 0o777);
+      await mkdir(join(dataDir, "perf", folder));
     }
     await mkdir(join(dataDir, "forbidden", "search"));
     console.log("[perf] seeding deterministic real filesystem fixtures");
@@ -112,60 +141,8 @@ export async function startPerfStack(): Promise<PerfStack> {
       Readable.fromWeb(createDeterministicByteStream(BIG_FILE_BYTES, 4 * 1024 * 1024, 1)),
       createWriteStream(join(dataDir, "perf", "big", "large.bin")),
     );
-    const dump = buildSftpgoDump(
-      [
-        PERF_USER,
-        { username: "forbidden", password: "forbidden-perf-password", permissions: { "/": ["*"] } },
-      ],
-      [],
-      { dataDir: "/srv/sftpgo/data" },
-    );
-    const dumpPath = join(temp, "seed.json");
-    await writeFile(dumpPath, JSON.stringify(dump));
-    console.log("[perf] starting real SFTPGo, Postgres and multilingual-e5-small TEI CPU");
-    const dataVolume = `fdrive-perf-${process.pid}-${randomBytes(8).toString("hex")}`;
-    await command("docker", ["volume", "create", dataVolume]);
-    cleanup.add(async () => {
-      await command("docker", ["volume", "rm", dataVolume]);
-    });
-    let sftpgoContainerId = "";
-    const sftpgoBaseUrl = await container(
-      cleanup,
-      [
-        "--mount",
-        `type=volume,source=${dataVolume},target=/srv/sftpgo/data`,
-        "--mount",
-        `type=bind,source=${dumpPath},target=/tmp/seed.json,readonly`,
-        "--env",
-        "SFTPGO_LOADDATA_FROM=/tmp/seed.json",
-        "drakkan/sftpgo:v2.7.5",
-      ],
-      8080,
-      command,
-      async (id) => {
-        sftpgoContainerId = id;
-        await command("docker", ["cp", `${dataDir}/.`, `${id}:/srv/sftpgo/data`]);
-      },
-    );
-    await ready(`${sftpgoBaseUrl}/healthz`);
-    const volumeModes = await command("docker", [
-      "exec",
-      sftpgoContainerId,
-      "stat",
-      "-c",
-      "%a:%u:%g",
-      "/srv/sftpgo/data/perf",
-      "/srv/sftpgo/data/perf/burst",
-      "/srv/sftpgo/data/perf/flat-10k/00000.bin",
-    ]);
-    console.log(`[perf] volume directory/file mode:uid:gid ${volumeModes.replaceAll("\n", " ")}`);
-    if (
-      volumeModes
-        .split("\n")
-        .map((line) => line.split(":")[0])
-        .join(",") !== "777,777,644"
-    )
-      throw Error(`Fixture volume permissions differ: ${volumeModes.replaceAll("\n", " ")}`);
+    const directBaseUrl = await serveDirect(join(dataDir, "perf", "big", "large.bin"), cleanup);
+    console.log("[perf] starting real Postgres and multilingual-e5-small TEI CPU");
     const postgres = await startPostgres();
     cleanup.add(() => postgres.stop());
     const db = createDb(postgres.connectionString);
@@ -178,6 +155,7 @@ export async function startPerfStack(): Promise<PerfStack> {
       await Promise.all(ended);
     });
     await migrate(db.db);
+    await seedLocalUsers(createRepos(db.db).localUsers, [PERF_USER, FORBIDDEN_USER]);
     const teiRuntime = selectTeiRuntime();
     await ensureTeiImage(teiRuntime, command);
     const embedUrl = await container(
@@ -212,7 +190,7 @@ export async function startPerfStack(): Promise<PerfStack> {
       embeddings.push(validateVector(raw[0]));
     }
     const root = await db.pool.query<{ id: number }>(
-      "insert into idx.roots(name) values ('sftpgo') returning id",
+      "insert into idx.roots(name) values ('files') returning id",
     );
     const rootId = root.rows[0]?.id;
     if (!rootId) throw Error("Fixture root missing");
@@ -248,13 +226,13 @@ export async function startPerfStack(): Promise<PerfStack> {
       cleanup,
       [
         "--mount",
-        `type=volume,source=${dataVolume},target=/roots/sftpgo,readonly`,
+        `type=bind,source=${dataDir},target=/data,readonly`,
         "--mount",
         `type=bind,source=${join(rootDir, "tools/perf/directory_server.py")},target=/fixture.py,readonly`,
         "--env",
         `DATABASE_URL=${pgUrl}`,
         "--env",
-        "INDEX_ROOTS=sftpgo=/roots/sftpgo",
+        "INDEX_ROOTS=files=/data",
         "--env",
         `EMBED_URL=${embedUrl.replace("127.0.0.1", "host.docker.internal")}`,
         "--entrypoint",
@@ -264,18 +242,15 @@ export async function startPerfStack(): Promise<PerfStack> {
       ],
       8010,
     );
-    await ready(`${indexerUrl}/directory?root=sftpgo&path=/perf`);
-    const sftpgoClient = createSftpgoClient({ baseUrl: sftpgoBaseUrl });
-    const token = await sftpgoClient.login(PERF_USER);
+    await ready(`${indexerUrl}/directory?root=files&path=/perf`);
     const config = loadConfig({
       ...buildStackEnv({
         databaseUrl: postgres.connectionString,
-        sftpgoUrl: sftpgoBaseUrl,
+        storageRoot: dataDir,
         masterKeyBase64: randomBytes(32).toString("base64"),
       }),
-      FDRIVE_HOME_TEMPLATE: "sftpgo:/{username}",
       FDRIVE_INDEX_ROOTS: JSON.stringify([
-        { name: "sftpgo", sftpgoPath: "/srv/sftpgo/data", indexerPath: "/roots/sftpgo" },
+        { name: "files", storagePath: dataDir, indexerPath: "/data" },
       ]),
       FDRIVE_EMBED_URL: embedUrl,
       FDRIVE_INDEXER_URL: indexerUrl,
@@ -302,13 +277,16 @@ export async function startPerfStack(): Promise<PerfStack> {
     );
     const apiBaseUrl = `http://127.0.0.1:${port}`;
     const cookie = await loginToApi(apiBaseUrl);
-    const forbiddenCookie = await loginToApi(apiBaseUrl, "forbidden", "forbidden-perf-password");
+    const forbiddenCookie = await loginToApi(
+      apiBaseUrl,
+      FORBIDDEN_USER.username,
+      FORBIDDEN_USER.password,
+    );
     return {
       apiBaseUrl,
-      sftpgoBaseUrl,
+      directBaseUrl,
       cookie,
       forbiddenCookie,
-      sftpgoToken: token.accessToken,
       embedUrl,
       teiRuntime,
       dataDir,

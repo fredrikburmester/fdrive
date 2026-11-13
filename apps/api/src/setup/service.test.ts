@@ -1,24 +1,23 @@
 import type { MeResponse } from "@fdrive/contracts";
+import type { Provider } from "@fdrive/db";
 import { createMemoryRepos } from "@fdrive/db/testing";
 import { describe, expect, it, vi } from "vitest";
 import type { AuthService, LoginResult } from "../auth/service.js";
 import { ApiHttpError } from "../errors.js";
-import {
-  memoryProviderService,
-  probeFetch,
-  seedSftpgoProvider,
-} from "../providers/test-fixtures/index.ts";
-import { createSetupService } from "./service.js";
+import { createLocalUserService } from "../local/service.js";
+import { FAST_PASSWORDS, localModuleFixture } from "../local/test-fixtures/index.ts";
+import { seedLocalProvider } from "../providers/test-fixtures/index.ts";
+import { createSetupService, type SetupCompleteInput } from "./service.js";
 
 const CAPABILITIES = {
-  zip: true,
-  setModifiedAt: true,
+  zip: false,
+  setModifiedAt: false,
   atomicMove: true,
   trash: false,
-  shares: true,
-  office: true,
+  shares: false,
+  office: false,
   index: false,
-  scopeMapping: false,
+  shareWithPeople: false,
 };
 const PROVIDER_ID = "123e4567-e89b-42d3-a456-426614174000";
 const ME: MeResponse = {
@@ -28,7 +27,7 @@ const ME: MeResponse = {
       id: "identity-1",
       username: "alice",
       providerId: PROVIDER_ID,
-      providerType: "sftpgo",
+      providerType: "local",
       providerLabel: "x",
       capabilities: CAPABILITIES,
     },
@@ -47,258 +46,180 @@ function buildAuthService(
   };
 }
 
-function harness(options: { fetch?: typeof globalThis.fetch; hasEnvUrl?: boolean } = {}) {
+/**
+ * Setup on a deployment with a files folder: the owner becomes its first
+ * user. Without `local` the deployment sets no `FDRIVE_STORAGE_ROOT`.
+ */
+async function harness(options: { pinned?: boolean; local?: boolean } = {}) {
   const repos = createMemoryRepos();
-  const fetchImpl = options.fetch ?? probeFetch();
-  const providers = memoryProviderService(repos, { fetch: fetchImpl });
+  const local = localModuleFixture(repos);
+  const row: Provider | null = options.pinned === false ? null : await seedLocalProvider(repos);
+  const users = createLocalUserService({
+    repos,
+    store: local.users,
+    passwords: FAST_PASSWORDS,
+    master: Buffer.alloc(32, 5),
+    providerId: async () => row?.id ?? null,
+  });
   const authService = buildAuthService({ sessionId: "session-1", me: ME });
   const setAdmin = vi.fn();
-  const service = createSetupService({
-    providers,
+  const deps = {
     authService,
     accounts: { setAdmin },
     settings: repos.settings,
-    hasEnvUrl: options.hasEnvUrl ?? false,
-  });
-  return { repos, providers, authService, setAdmin, service, fetch: fetchImpl };
+    ...(options.local === false
+      ? {}
+      : {
+          local: {
+            provider: async () => row,
+            userCount: () => repos.localUsers.count(),
+            users,
+          },
+        }),
+  };
+  const service = createSetupService(deps);
+  return { repos, row, users, store: local.users, authService, setAdmin, service, deps };
 }
 
-const COMPLETE_INPUT = {
-  baseUrl: "http://sftpgo:8080",
-  homeTemplate: "sftpgo:/{username}",
+const INPUT: SetupCompleteInput = {
   username: "alice",
-  password: "hunter2",
+  password: "correct horse",
   userAgent: "vitest",
   ip: "127.0.0.1",
 };
 
 describe("createSetupService: status", () => {
-  it("reports required true when no provider is configured", async () => {
-    const h = harness();
-    expect(await h.service.status()).toEqual({ required: true, hasEnvUrl: false });
+  it("asks for the first user while the folder has none", async () => {
+    const h = await harness();
+    expect(await h.service.status()).toEqual({ required: true, storageConfigured: true });
+    await h.repos.localUsers.create({ username: "bob", passwordHash: "x" });
+    expect(await h.service.status()).toEqual({ required: false, storageConfigured: true });
+    // Remembered: removing that user later does not reopen setup.
+    await h.repos.localUsers.delete("bob");
+    expect((await h.service.status()).required).toBe(false);
   });
 
-  it("reports required false and hasEnvUrl when an enabled provider exists", async () => {
-    const h = harness({ hasEnvUrl: true });
-    await seedSftpgoProvider(h.repos, "http://sftpgo:8080", { managedByEnv: true });
-    expect(await h.service.status()).toEqual({ required: false, hasEnvUrl: true });
+  it("says when the deployment has no files folder", async () => {
+    const h = await harness({ local: false });
+    expect(await h.service.status()).toEqual({ required: true, storageConfigured: false });
   });
 
-  it("keeps setup required while a provider exists but is disabled", async () => {
-    const h = harness();
-    await seedSftpgoProvider(h.repos, "http://sftpgo:8080", { enabled: false });
-    expect(await h.service.status()).toEqual({ required: true, hasEnvUrl: false });
+  it("ignores an owner record it cannot read", async () => {
+    for (const record of [
+      { version: 1, state: "abandoned", accountId: "account-1", baseUrl: "local" },
+      { version: 2, state: "complete", accountId: "account-1", baseUrl: "local" },
+      { version: 1, state: "complete", accountId: 7, baseUrl: "local" },
+      { version: 1, state: "complete", accountId: "account-1" },
+      "complete",
+    ]) {
+      const h = await harness();
+      await h.repos.settings.set("setup.owner.v1", record);
+      expect((await h.service.status()).required).toBe(true);
+    }
   });
-});
 
-describe("createSetupService: test", () => {
-  it("probes the candidate as an SFTPGo provider", async () => {
-    const h = harness();
-    const result = await h.service.test("http://sftpgo:8080");
-    expect(result).toEqual({ ok: true, detail: "SFTPGo is reachable" });
-    expect(h.fetch).toHaveBeenCalledWith(
-      "http://sftpgo:8080/healthz",
-      expect.objectContaining({ redirect: "error" }),
-    );
+  it("is complete once an owner record says so, users or not", async () => {
+    const h = await harness({ local: false });
+    await h.repos.settings.set("setup.owner.v1", {
+      version: 1,
+      state: "complete",
+      accountId: "account-1",
+      baseUrl: "http://dav:8080",
+    });
+    expect(await h.service.status()).toEqual({ required: false, storageConfigured: false });
   });
 });
 
 describe("createSetupService: complete", () => {
-  it("creates the provider disabled, logs in against it, then enables it and marks the account admin", async () => {
-    const h = harness();
-    let enabledDuringLogin: boolean | undefined;
-    vi.mocked(h.authService.loginCandidate).mockImplementation(async (_input, providerId) => {
-      enabledDuringLogin = (await h.repos.providers.get(providerId))?.enabled;
-      return { sessionId: "session-1", me: ME };
-    });
+  it("makes the owner the folder's first user and signs them in on its row", async () => {
+    const h = await harness();
+    const result = await h.service.complete(INPUT);
 
-    const result = await h.service.complete(COMPLETE_INPUT);
-
-    const [provider] = await h.repos.providers.list();
-    expect(provider).toMatchObject({
-      type: "sftpgo",
-      baseUrl: "http://sftpgo:8080",
-      label: "",
-      enabled: true,
-      config: { homeTemplate: "sftpgo:/{username}" },
+    expect(await h.store.verify("alice", "correct horse")).toEqual({
+      result: "ok",
+      username: "alice",
     });
-    expect(enabledDuringLogin).toBe(false);
     expect(h.authService.loginCandidate).toHaveBeenCalledWith(
       {
-        providerId: provider?.id,
-        credential: { username: "alice", password: "hunter2" },
+        providerId: h.row?.id,
+        credential: { username: "alice", password: "correct horse" },
         userAgent: "vitest",
         ip: "127.0.0.1",
       },
-      provider?.id,
+      h.row?.id,
       "setup.owner.v1",
     );
     expect(h.setAdmin).toHaveBeenCalledWith("account-1", true);
     expect(result.sessionId).toBe("session-1");
     expect(result.me.isAdmin).toBe(true);
-    expect(await h.service.status()).toEqual({ required: false, hasEnvUrl: false });
+    // The pinned row was enabled already and stays as it was.
+    expect(await h.repos.providers.list()).toEqual([h.row]);
+    expect((await h.service.status()).required).toBe(false);
   });
 
-  it("reuses the environment-pinned provider and sets its home template only after the login", async () => {
-    const h = harness({ hasEnvUrl: true });
-    const pinned = await seedSftpgoProvider(h.repos, "http://env:8080", {
-      managedByEnv: true,
-      enabled: false,
-      homeTemplate: "old:/{username}",
-    });
-    let templateDuringLogin: unknown;
-    vi.mocked(h.authService.loginCandidate).mockImplementation(async (_input, providerId) => {
-      templateDuringLogin = (await h.repos.providers.get(providerId))?.config.homeTemplate;
-      return { sessionId: "session-1", me: ME };
-    });
-    await h.service.complete({ ...COMPLETE_INPUT, baseUrl: "http://ignored:1" });
-    expect(templateDuringLogin).toBe("old:/{username}");
-    expect(await h.repos.providers.list()).toHaveLength(1);
-    expect(await h.repos.providers.get(pinned.id)).toMatchObject({
-      baseUrl: "http://env:8080",
-      enabled: true,
-      config: { homeTemplate: "sftpgo:/{username}" },
-    });
-    expect(h.authService.loginCandidate).toHaveBeenCalledWith(
-      expect.objectContaining({ providerId: pinned.id }),
-      pinned.id,
-      "setup.owner.v1",
-    );
-  });
-
-  it("leaves an existing row's configuration untouched when the candidate login fails", async () => {
-    const h = harness({ hasEnvUrl: true });
-    const pinned = await seedSftpgoProvider(h.repos, "http://env:8080", {
-      managedByEnv: true,
-      enabled: false,
-      homeTemplate: "old:/{username}",
-    });
-    vi.mocked(h.authService.loginCandidate).mockRejectedValueOnce(
-      new ApiHttpError("unauthorized", "invalid username or password"),
-    );
-    await expect(
-      h.service.complete({ ...COMPLETE_INPUT, homeTemplate: "bogus:/x" }),
-    ).rejects.toMatchObject({ kind: "unauthorized" });
-    expect(await h.repos.providers.get(pinned.id)).toMatchObject({
-      enabled: false,
-      config: { homeTemplate: "old:/{username}" },
-    });
-  });
-
-  it("names a new provider during setup", async () => {
-    const h = harness();
-    await h.service.complete({ ...COMPLETE_INPUT, label: "  Home storage  " });
-    expect(await h.repos.providers.list()).toEqual([
-      expect.objectContaining({ label: "Home storage", baseUrl: COMPLETE_INPUT.baseUrl }),
-    ]);
-  });
-
-  it("names an existing provider only after verified ownership and preserves names for older clients", async () => {
-    const h = harness({ hasEnvUrl: true });
-    const pinned = await seedSftpgoProvider(h.repos, "http://env:8080", {
-      managedByEnv: true,
-      enabled: false,
-    });
-    await h.repos.providers.update(pinned.id, { label: "Existing" });
-    vi.mocked(h.authService.loginCandidate).mockRejectedValueOnce(
-      new ApiHttpError("unauthorized", "bad credentials"),
-    );
-    await expect(
-      h.service.complete({ ...COMPLETE_INPUT, label: "Home storage" }),
-    ).rejects.toMatchObject({ kind: "unauthorized" });
-    expect((await h.repos.providers.get(pinned.id))?.label).toBe("Existing");
-    await h.service.complete({ ...COMPLETE_INPUT, label: "Home storage" });
-    expect(await h.repos.providers.get(pinned.id)).toMatchObject({
-      label: "Home storage",
-      baseUrl: "http://env:8080",
-      managedByEnv: true,
-    });
-    const legacy = harness();
-    const legacyRow = await seedSftpgoProvider(legacy.repos, COMPLETE_INPUT.baseUrl, {
-      enabled: false,
-    });
-    await legacy.repos.providers.update(legacyRow.id, { label: "Preserved" });
-    await legacy.service.complete(COMPLETE_INPUT);
-    expect((await legacy.repos.providers.list())[0]?.label).toBe("Preserved");
-  });
-
-  it("passes otp through to the login flow when given", async () => {
-    const h = harness();
-    await h.service.complete({ ...COMPLETE_INPUT, otp: "123456" });
-    expect(h.authService.loginCandidate).toHaveBeenCalledWith(
-      expect.objectContaining({
-        credential: { username: "alice", password: "hunter2", otp: "123456" },
-      }),
-      expect.any(String),
-      "setup.owner.v1",
-    );
-  });
-
-  it("rejects an invalid home template before probing", async () => {
-    const h = harness();
-    await expect(
-      h.service.complete({ ...COMPLETE_INPUT, homeTemplate: "no-colon" }),
-    ).rejects.toMatchObject({ kind: "bad_request" });
-    expect(h.fetch).not.toHaveBeenCalled();
-    expect(await h.repos.providers.list()).toEqual([]);
-  });
-
-  it("rejects when the candidate SFTPGo does not probe ok, creating nothing", async () => {
-    const h = harness({
-      fetch: probeFetch(false),
-    });
-    await expect(h.service.complete(COMPLETE_INPUT)).rejects.toMatchObject({
+  it("refuses on a deployment without a files folder, naming the variable", async () => {
+    const h = await harness({ local: false });
+    await expect(h.service.complete(INPUT)).rejects.toMatchObject({
       kind: "bad_request",
+      message: expect.stringContaining("FDRIVE_STORAGE_ROOT"),
     });
     expect(h.authService.loginCandidate).not.toHaveBeenCalled();
-    expect(await h.repos.providers.list()).toEqual([]);
+    expect(await h.repos.localUsers.list()).toEqual([]);
+  });
+
+  it("refuses while the folder's row is missing", async () => {
+    const h = await harness({ pinned: false });
+    await expect(h.service.complete(INPUT)).rejects.toMatchObject({
+      kind: "bad_request",
+      message: expect.stringContaining("FDRIVE_STORAGE_ROOT"),
+    });
+    expect(await h.repos.localUsers.list()).toEqual([]);
   });
 
   it.each(["unauthorized", "conflict"] as const)(
-    "cleans a newly created candidate after %s",
+    "removes the user it created after %s, so setup can run again",
     async (kind) => {
-      const h = harness();
+      const h = await harness();
       vi.mocked(h.authService.loginCandidate).mockRejectedValueOnce(
         new ApiHttpError(kind, "candidate rejected"),
       );
-      await expect(h.service.complete(COMPLETE_INPUT)).rejects.toMatchObject({
-        kind,
-      });
-      expect(await h.repos.providers.list()).toEqual([]);
-      expect(await h.service.status()).toEqual({ required: true, hasEnvUrl: false });
+      await expect(h.service.complete(INPUT)).rejects.toMatchObject({ kind });
+      expect(await h.repos.localUsers.list()).toEqual([]);
+      expect((await h.service.status()).required).toBe(true);
       expect(h.setAdmin).not.toHaveBeenCalled();
-      await h.service.complete(COMPLETE_INPUT);
-      expect(await h.service.status()).toEqual({ required: false, hasEnvUrl: false });
+      await h.service.complete({ ...INPUT, password: "another one" });
+      expect(await h.store.verify("alice", "another one")).toMatchObject({ result: "ok" });
+      expect((await h.service.status()).required).toBe(false);
     },
   );
 
-  it("resumes the verified owner's pending claim after restart", async () => {
-    const h = harness();
+  it("resumes with the same password after an interruption, and refuses another", async () => {
+    const h = await harness();
     h.setAdmin.mockRejectedValueOnce(new Error("interrupted"));
-    await expect(h.service.complete(COMPLETE_INPUT)).rejects.toThrow("interrupted");
+    await expect(h.service.complete(INPUT)).rejects.toThrow("interrupted");
     expect(h.authService.logout).toHaveBeenCalledWith("session-1");
-    const restarted = createSetupService({
-      providers: h.providers,
-      authService: h.authService,
-      accounts: { setAdmin: h.setAdmin },
-      settings: h.repos.settings,
-      hasEnvUrl: false,
+    // The user stays: the claim is pending and the same owner can finish it.
+    expect((await h.repos.localUsers.list()).map((user) => user.username)).toEqual(["alice"]);
+    await expect(h.service.complete({ ...INPUT, password: "not the same" })).rejects.toMatchObject({
+      kind: "conflict",
     });
+    const restarted = createSetupService(h.deps);
     expect((await restarted.status()).required).toBe(true);
-    await restarted.complete(COMPLETE_INPUT);
+    await restarted.complete(INPUT);
     expect((await restarted.status()).required).toBe(false);
   });
 
   it("reports a conflict when the claim cannot be finalized by the same owner", async () => {
-    const h = harness();
+    const h = await harness();
     vi.spyOn(h.repos.settings, "compareAndSet")
       .mockResolvedValueOnce(true)
       .mockResolvedValueOnce(false);
-    await expect(h.service.complete(COMPLETE_INPUT)).rejects.toMatchObject({ kind: "conflict" });
+    await expect(h.service.complete(INPUT)).rejects.toMatchObject({ kind: "conflict" });
+    expect(h.authService.logout).toHaveBeenCalledWith("session-1");
   });
 
   it("allows only one owner when two verified users race to claim setup", async () => {
-    const h = harness();
+    const h = await harness();
     const bob: MeResponse = {
       ...ME,
       account: { id: "account-2", displayName: "bob" },
@@ -312,10 +233,9 @@ describe("createSetupService: complete", () => {
     vi.mocked(h.authService.loginCandidate)
       .mockResolvedValueOnce({ sessionId: "session-1", me: ME })
       .mockResolvedValueOnce({ sessionId: "session-2", me: bob });
-    await seedSftpgoProvider(h.repos, COMPLETE_INPUT.baseUrl, { enabled: false });
     const results = await Promise.allSettled([
-      h.service.complete(COMPLETE_INPUT),
-      h.service.complete({ ...COMPLETE_INPUT, username: "bob", password: "builder" }),
+      h.service.complete(INPUT),
+      h.service.complete({ ...INPUT, username: "bob", password: "bob's password" }),
     ]);
     expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
     expect(results.find((result) => result.status === "rejected")).toMatchObject({
@@ -324,13 +244,13 @@ describe("createSetupService: complete", () => {
     expect(h.setAdmin).toHaveBeenCalledTimes(1);
     expect(h.setAdmin).toHaveBeenCalledWith("account-1", true);
   });
-});
 
-it("preserves the setup error and resumable claim when session cleanup also fails", async () => {
-  const h = harness();
-  h.setAdmin.mockRejectedValueOnce(new Error("interrupted"));
-  vi.mocked(h.authService.logout).mockRejectedValueOnce(new Error("database unavailable"));
-  await expect(h.service.complete(COMPLETE_INPUT)).rejects.toThrow("interrupted");
-  expect(h.authService.logout).toHaveBeenCalledWith("session-1");
-  expect((await h.service.status()).required).toBe(true);
+  it("preserves the setup error and resumable claim when session cleanup also fails", async () => {
+    const h = await harness();
+    h.setAdmin.mockRejectedValueOnce(new Error("interrupted"));
+    vi.mocked(h.authService.logout).mockRejectedValueOnce(new Error("database unavailable"));
+    await expect(h.service.complete(INPUT)).rejects.toThrow("interrupted");
+    expect(h.authService.logout).toHaveBeenCalledWith("session-1");
+    expect((await h.service.status()).required).toBe(true);
+  });
 });

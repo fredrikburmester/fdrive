@@ -1,5 +1,7 @@
 import { dirname, resolve } from "node:path";
 export type OfficeProduct = "onlyoffice" | "collabora";
+/** alice's folder the fixture shares with bob (to edit) and reader (to view). */
+export const OFFICE_TEAM_FOLDER = "Team";
 export function parseProduct(value: string | undefined): OfficeProduct {
   if (value === undefined || value === "onlyoffice") return "onlyoffice";
   if (value === "collabora") return value;

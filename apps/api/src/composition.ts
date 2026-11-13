@@ -10,7 +10,6 @@ import {
   createDesktopPublishLock,
   createDesktopRepo,
   createIdentityLinksRepo,
-  createIdentityOwnershipGuard,
   createIndexQueries,
   createOfficeFileRepo,
   createOfficeWriteScope,
@@ -21,7 +20,7 @@ import {
   createWopiLockRepo,
   migrate,
 } from "@fdrive/db";
-import { createSftpgoClient } from "@fdrive/sftpgo";
+import { SHARED_WITH_ME } from "@fdrive/local";
 import type { Logger } from "pino";
 import { verifyCredentials } from "./accounts/credentials.js";
 import { registerAccountsRoutes } from "./accounts/routes.ts";
@@ -74,6 +73,13 @@ import { registerFeatureRoutes } from "./features/routes.js";
 import { createFeatureService } from "./features/service.js";
 import { publishFsEvent, registerFsRoutes } from "./fs/routes.js";
 import { createJobRunner } from "./jobs/runner.js";
+import { adoptSealedPasswords } from "./local/adopt.js";
+import { registerGrantRoutes } from "./local/grant-routes.js";
+import { createLocalGrantService } from "./local/grants.js";
+import { deploymentModules } from "./local/modules.js";
+import { registerLocalUserRoutes } from "./local/routes.js";
+import { createLocalUserService } from "./local/service.js";
+import { createLocalUserStore } from "./local/users.js";
 import type { McpToolDeps } from "./mcp/handlers.js";
 import { createIndexerExtractClient } from "./mcp/indexer-client.js";
 import { registerMcpRoutes } from "./mcp/routes.js";
@@ -97,12 +103,8 @@ import { createOfficeStorageFactory } from "./office/storage.ts";
 import { createOfficeTokenCodec } from "./office/tokens.ts";
 import type { OfficeDeps } from "./office/types.ts";
 import { registerProviderRoutes } from "./providers/routes.js";
-import { createProviderService, hostLabel } from "./providers/service.js";
-import { createSettingsMountMappingStore } from "./scoping/mount-mapping-store.ts";
-import { createSettingsScopeOverrideStore } from "./scoping/override-store.ts";
+import { createProviderService } from "./providers/service.js";
 import { createScopeResolver } from "./scoping/resolver.ts";
-import { registerScopeRoutes } from "./scoping/routes.ts";
-import { createScopeSuggester } from "./scoping/suggest.ts";
 import { createEmbedClient } from "./search/embeddings.js";
 import { createImageEmbedClient } from "./search/image-embed-client.js";
 import { createImageSearchService } from "./search/image-service.js";
@@ -113,13 +115,14 @@ import { createSetupService } from "./setup/service.js";
 import { createSetupTokenGuard, generateSetupToken } from "./setup/token.js";
 import { createShareCredentialCodec } from "./shares/credentials.ts";
 import { createShareLimiter } from "./shares/limiter.ts";
+import { createScryptSharePasswords } from "./shares/passwords.js";
 import { registerSharesRoutes } from "./shares/routes.ts";
 import { createSharesService } from "./shares/service.ts";
 import { registerActivityRoutes } from "./system/activity.js";
 import { createCachedProbe } from "./system/cached-probe.js";
 import { fetchEmbedStatus } from "./system/embed-status.js";
 import { createSystemEventLog } from "./system/event-log.js";
-import { createIndexerClient, type IndexerClient } from "./system/indexer-client.js";
+import { createIndexerClient } from "./system/indexer-client.js";
 import { createOcrClient } from "./system/ocr-client.js";
 import { registerProcessingFailureRoutes } from "./system/processing-failures.js";
 import { createPublicUrlService } from "./system/public-url.js";
@@ -139,9 +142,12 @@ import { readBuild } from "./version.js";
 export interface ComposeAppDeps {
   /** Explicit server-side admission override for isolated integration fixtures. */
   readonly officeCanEdit?: OfficeDeps["canEdit"];
-  /** Overrides the `fetch` implementation the SFTPGo client uses; tests point this at a fake server. */
+  /** Overrides the `fetch` implementation provider modules use; tests point this at fakes. */
   readonly fetch?: typeof globalThis.fetch;
-  /** Replaces the registry's provider modules by type, for fixtures that flip a module's strategies. */
+  /**
+   * Replaces this deployment's provider modules by type, for fixtures that
+   * flip a module's strategies. Defaults to `deploymentModules(config)`.
+   */
   readonly modules?: Readonly<Record<string, ProviderModule>>;
 }
 
@@ -156,8 +162,8 @@ const HEALTH_PROBE_TTL_MS = 15_000;
 /**
  * Wires every fdrive API dependency together: the Postgres pool and repos
  * (running migrations first when `config.fdriveAutoMigrate` is set), the
- * provider service (rows in `app.providers`, seeded from `SFTPGO_URL`, see
- * `src/providers/service.ts`), the event bus, the login rate limiter, the
+ * provider service (rows in `app.providers`; the local folder is pinned from
+ * `FDRIVE_STORAGE_ROOT`, see `src/providers/service.ts`), the event bus, the login rate limiter, the
  * auth module, the setup module (logging the one-time setup token while
  * setup is required), the admin provider routes, and the fs and events
  * route groups. Returns the resulting `Hono` app plus a `close` that ends
@@ -187,7 +193,9 @@ export async function composeApp(
   const repos = createRepos(db);
   const restored = await repos.settings.get("backup.restore.v1");
   if (config.fdriveRestoreMode || restored) return createRecoveryApp(config, pool, !!restored);
-  const backups = createBackupModule(config);
+  const passwords = createScryptSharePasswords();
+  const modules = deps.modules ?? deploymentModules(config, repos, passwords);
+  const backups = createBackupModule(config, modules);
   await backups.start();
 
   const activityPathLocks = createDb(config.databaseUrl, {
@@ -222,8 +230,8 @@ export async function composeApp(
     strategyFor: async (providerId) =>
       (await providerService.get(providerId))?.module.trash ?? "none",
   });
-  // Storage providers are rows: the SFTPGo named by `SFTPGO_URL` is seeded
-  // and pinned at startup. Every credential-bearing call resolves an
+  // Storage providers are rows: the local folder (`FDRIVE_STORAGE_ROOT`) is
+  // seeded and pinned at startup. Every credential-bearing call resolves an
   // identity's own row first, so nothing ever follows a configuration
   // change to another server.
   const providerService = createProviderService({
@@ -232,15 +240,45 @@ export async function composeApp(
     clock,
     eventLog,
     environment: {
-      sftpgoUrl: config.sftpgoUrl,
-      homeTemplate: config.fdriveHomeTemplate,
       indexRootNames: (config.fdriveIndexRoots ?? []).map((root) => root.name),
     },
     trashEnabled: async (providerId) => (await trashSettings.configuration(providerId)).enabled,
-    ...(deps.modules === undefined ? {} : { modules: deps.modules }),
+    modules,
   });
-  if (!(await repos.settings.get("backup.recovery.v1")))
+  /** The local folder's pinned row, or `null` when the deployment serves none. */
+  const localProvider = async () =>
+    modules.local === undefined
+      ? null
+      : ((await providerService.list()).find(
+          (provider) => provider.type === modules.local?.type && provider.managedByEnv,
+        ) ?? null);
+  if (!(await repos.settings.get("backup.recovery.v1"))) {
     await providerService.seedFromEnvironment();
+    const local = await localProvider();
+    if (local !== null) {
+      const adopted = await adoptSealedPasswords({ repos, master, passwords }, local.id);
+      if (adopted.enabled.length + adopted.disabled.length > 0) {
+        logger.info(
+          { enabled: adopted.enabled.length, disabled: adopted.disabled.length },
+          "local users created from existing logins; enable the others under System > Users",
+        );
+      }
+    }
+  }
+  const localUserStore = createLocalUserStore({
+    repo: repos.localUsers,
+    grants: repos.localGrants,
+    passwords,
+  });
+  const localUsers = createLocalUserService({
+    repos,
+    store: localUserStore,
+    passwords,
+    master,
+    providerId: async () => (await localProvider())?.id ?? null,
+    environmentAdmins: config.fdriveAdminUsers,
+    eventLog,
+  });
 
   const featureService = createFeatureService({
     probeCacheMs: 2000,
@@ -307,38 +345,34 @@ export async function composeApp(
     storageFactory,
   });
 
-  // System pages (phase 2) and the scope engine both need the indexer's
-  // internal HTTP client; built once here so `scopeResolver` below can use
-  // it too. `null` when `FDRIVE_INDEXER_URL` is not configured, in which
-  // case the scope resolver treats every directory-verification probe as
-  // unreachable rather than failing to construct.
+  // The System pages' client for the indexer's internal HTTP API; `null`
+  // when `FDRIVE_INDEXER_URL` is not configured.
   const indexerClient =
     config.fdriveIndexerUrl === undefined
       ? null
       : createIndexerClient({ baseUrl: config.fdriveIndexerUrl, fetch: fetchImpl });
-  const scopeIndexerDirectory: Pick<IndexerClient, "directory"> =
-    indexerClient ??
-    ({
-      directory: async () => ({
-        ok: false,
-        reason: "unreachable",
-        detail: "indexer not configured",
-      }),
-    } satisfies Pick<IndexerClient, "directory">);
 
-  // The single source of truth for what every identity may read: trusted
-  // configured mappings (home template + per-identity overrides, available
-  // even when the indexer is down) plus index-verified scopes (restricted
-  // further by a live SFTP-vs-indexer directory check). See
-  // `docs/SCOPING.md`.
+  // The single source of truth for what every identity may read from the
+  // index: each login's home is `<root>/<username>` on its provider's index
+  // root, and index-backed features get it only when that root is indexed.
+  // See `docs/SCOPING.md`.
+  const localGrants = createLocalGrantService({
+    repos,
+    providerId: async () => (await localProvider())?.id ?? null,
+    storageFor: storageFactory,
+    trashPathFor: (identityId) => trashSettings.pathForIdentity(identityId),
+  });
   const scopeResolver = createScopeResolver({
-    providers: repos.providers,
-    overrides: createSettingsScopeOverrideStore(repos.settings, createIdentityOwnershipGuard(db)),
-    mountMappings: createSettingsMountMappingStore(repos.settings),
-    indexRoots: config.fdriveIndexRoots,
-    indexer: scopeIndexerDirectory,
-    storageForIdentity: (identity) => storageFactory(identity.id),
-    clock,
+    providers: providerService,
+    indexRootNames: (config.fdriveIndexRoots ?? []).map((root) => root.name),
+    // Folders others share with a local login are indexed where their owner
+    // keeps them; the login sees them under `Shared with me`.
+    extraScopes: async (identity, home) =>
+      (await localGrants.received(identity)).map((folder) => ({
+        rootName: home.rootName,
+        fsPrefix: `/${folder.owner}${folder.path === "/" ? "" : folder.path}`,
+        virtualPrefix: `/${SHARED_WITH_ME}/${folder.name}`,
+      })),
   });
 
   // Search: available only once at least one index root is configured
@@ -352,15 +386,6 @@ export async function composeApp(
     storageFactory,
     resolver: scopeResolver,
     onError: (error) => logger.warn({ err: error }, "personal activity refresh deferred"),
-  });
-  // Proposes physical locations for unmapped virtual folders from index rows
-  // (`docs/SCOPING.md`); administrators confirm them.
-  const scopeSuggester = createScopeSuggester({
-    resolver: scopeResolver,
-    storageForIdentity: (identity) => storageFactory(identity.id),
-    indexer: scopeIndexerDirectory,
-    indexQueries,
-    indexRoots: config.fdriveIndexRoots,
   });
   const embedClient =
     config.fdriveEmbedUrl === undefined
@@ -421,7 +446,7 @@ export async function composeApp(
   // called both from the fs routes below (moves and deletes made through
   // fdrive) and from the indexer listener (changes seen over SFTP or any
   // other client), so metadata survives renames from either source.
-  const metadataService = createMetadataService(repos);
+  const metadataService = createMetadataService({ ...repos, followers: [localGrants] });
   const desktopRepo = createDesktopRepo(db);
   // Serializes Mac desktop commits per identity; no other fdrive writer takes
   // it. Storage without its own lease is read-only unless this is configured.
@@ -534,6 +559,8 @@ export async function composeApp(
         return false;
       if (deps.officeCanEdit !== undefined && !(await deps.officeCanEdit(actor, path)))
         return false;
+      // A folder shared to view only opens for viewing, never for an edit that cannot save.
+      if (await localGrants.isReadOnly(actor.identity, path)) return false;
       const rules = config.fdriveOfficeEditRules ?? [];
       return rules.length === 0 || allowsOfficeEdit(rules, actor.identity, path);
     },
@@ -615,11 +642,18 @@ export async function composeApp(
   const setupToken = config.fdriveSetupToken ?? generateSetupToken();
   const setupTokenGuard = createSetupTokenGuard(setupToken);
   const setupService = createSetupService({
-    providers: providerService,
     authService: auth.service,
     accounts: repos.accounts,
     settings: repos.settings,
-    hasEnvUrl: config.sftpgoUrl !== undefined,
+    ...(modules.local === undefined
+      ? {}
+      : {
+          local: {
+            provider: localProvider,
+            userCount: () => repos.localUsers.count(),
+            users: localUsers,
+          },
+        }),
   });
 
   if ((await setupService.status()).required) {
@@ -834,7 +868,8 @@ export async function composeApp(
         required: false,
         providers: (await providerService.enabled()).map((provider) => ({
           type: provider.type,
-          host: hostLabel(provider.baseUrl),
+          // The files folder has no host; it is named by its label.
+          host: providerService.labelFor(provider),
         })),
       };
     },
@@ -903,13 +938,12 @@ export async function composeApp(
         service: createSharesService({
           repos,
           shares: createShareRepo(db),
-          clientFor: (baseUrl) => createSftpgoClient({ baseUrl, fetch: fetchImpl }),
-          tokenSource,
           providers: providerService,
           storageFor: storageFactory,
           trashPathFor: (identityId) => trashSettings.pathForIdentity(identityId),
+          passwords,
+          zipLimits: { maxBytes: config.fdriveJobMaxBytes },
           clock,
-          logger,
         }),
         codec: createShareCredentialCodec(master, clock),
         limiter: createShareLimiter(clock),
@@ -925,11 +959,6 @@ export async function composeApp(
         config,
         clock,
       });
-      registerScopeRoutes(groups, {
-        resolver: scopeResolver,
-        identities: repos.identities,
-        suggester: scopeSuggester,
-      });
       registerSetupRoutes(groups, {
         service: setupService,
         tokenGuard: setupTokenGuard,
@@ -937,6 +966,8 @@ export async function composeApp(
         config,
       });
       registerProviderRoutes(groups, { service: providerService });
+      registerLocalUserRoutes(groups, { service: localUsers });
+      registerGrantRoutes(groups, { service: localGrants });
       // Built as a local variable (not a fresh object literal at the call
       // site below) so `archivePeekMaxBytes` (not part of `FsRoutesDeps`
       // itself; see `fs/archive-routes.ts`'s `ArchiveRoutesDeps`) reaches

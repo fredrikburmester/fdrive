@@ -32,7 +32,7 @@ export interface OfficeSettingsDraft {
   dirty: boolean;
   /** No server address is set, so the API would refuse to enable Office. */
   addressMissing: boolean;
-  /** The saved editor grants belong to a different SFTPGo provider. */
+  /** The saved editor grants belong to a different storage provider. */
   providerChanged: boolean;
   editingMatchesProvider: boolean;
   editorsText: string | null;
@@ -48,7 +48,7 @@ export interface OfficeSettingsDraft {
  * The Office settings draft shared by the wizard's card, the Features
  * page's Office card, and the Office page's settings sheet: one place that
  * knows how a draft merges with the polled record, when saved editor grants
- * stop applying because the SFTPGo provider changed, and what a save sends.
+ * stop applying because the storage provider changed, and what a save sends.
  */
 export function useOfficeSettingsDraft(): OfficeSettingsDraft {
   const query = useSystemOffice();
@@ -147,8 +147,8 @@ export function OfficeSettingsFields({
         />
       </Field>
       <FieldDescription>
-        Documents stay in SFTPGo. No processing storage mount is needed. The bundled editor uses
-        additional memory while enabled.
+        Documents stay in your storage. No processing storage mount is needed. The bundled editor
+        uses additional memory while enabled.
       </FieldDescription>
       {values.enabled ? (
         <>
@@ -164,7 +164,7 @@ export function OfficeSettingsFields({
           ) : null}
           {providerChanged ? (
             <p role="status" className="text-sm text-muted-foreground">
-              The SFTPGo provider changed. Choose editors again to enable editing for this server.
+              The storage changed. Choose editors again to enable editing for this server.
             </p>
           ) : null}
           <Field orientation="horizontal">
@@ -186,9 +186,6 @@ export function OfficeSettingsFields({
           <FieldDescription>
             When off, all documents open for viewing. When on, only the users you list below can
             edit.
-            {draft.query.data?.activeProviderLabel
-              ? ` Editing is granted on ${draft.query.data.activeProviderLabel} only; other storage servers stay view-only.`
-              : ""}
           </FieldDescription>
           {values.editingEnabled && draft.editingMatchesProvider ? (
             <Field>
@@ -203,9 +200,9 @@ export function OfficeSettingsFields({
                 }}
               />
               <FieldDescription>
-                One SFTPGo username per line. These users can open documents for editing; everyone
-                else gets view-only. Being listed here grants no file access — SFTPGo permissions
-                still apply to saves.
+                One username per line. These users can open documents for editing; everyone else
+                gets view-only. Being listed here grants no file access — storage permissions still
+                apply to saves.
               </FieldDescription>
             </Field>
           ) : null}

@@ -9,7 +9,7 @@ describe("createMemoryRepos ids option", () => {
     let counter = 0;
     const repos = createMemoryRepos({ ids: () => `id-${++counter}` });
 
-    const provider = await repos.providers.ensure({ type: "sftpgo", baseUrl: "http://x" });
+    const provider = await repos.providers.ensure({ type: "local", baseUrl: "http://x" });
     const account = await repos.accounts.create({ displayName: null });
 
     expect(provider.id).toBe("id-1");

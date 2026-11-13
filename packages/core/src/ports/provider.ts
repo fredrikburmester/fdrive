@@ -46,28 +46,30 @@ export interface ProviderCapabilities {
   readonly shares: boolean;
   /** Office viewing and editing can be offered for this provider. */
   readonly office: boolean;
+  /**
+   * Folders can be shared with other users of the same storage, who see them
+   * under `Shared with me`: only where fdrive keeps both the users and the
+   * files (the local folder).
+   */
+  readonly shareWithPeople: boolean;
   /** Index-backed features (search, thumbnails, folder size) can apply. */
   readonly index: boolean;
-  /** Virtual folder mapping between provider paths and index roots applies. */
-  readonly scopeMapping: boolean;
 }
 
 /**
  * How deleted files reach the recycle folder: the provider does it itself
- * (`native`, SFTPGo's event rule), fdrive moves them on delete (`move`), or
+ * (`native`, a server-side rule), fdrive moves them on delete (`move`), or
  * there is no trash for this provider (`none`).
  */
 export type TrashStrategy = "native" | "move" | "none";
 
 /**
- * How public share links exist for a provider: the backend keeps its own
- * share objects and public API, which fdrive manages with the owner's token
- * and proxies to visitors (`native`, SFTPGo); fdrive keeps the share and
- * serves it through the module's storage (`owned`); or there are no shares
+ * How public share links exist for a provider: fdrive keeps the share and
+ * serves it through the module's storage (`owned`), or there are no shares
  * (`none`). `capabilities.shares` is the type-level summary and is true
  * exactly when this is not `none`.
  */
-export type ShareStrategy = "native" | "owned" | "none";
+export type ShareStrategy = "owned" | "none";
 
 /** One configured provider: a row of `app.providers` as the module sees it. */
 export interface ProviderInstance {
@@ -141,11 +143,18 @@ export interface ProviderModule {
   readonly trash: TrashStrategy;
   readonly shares: ShareStrategy;
   /**
+   * True when rows of this type exist only because the deployment
+   * configures them (the local folder, from `FDRIVE_STORAGE_ROOT`):
+   * administrators can neither add one nor change its address.
+   */
+  readonly deploymentManaged?: boolean;
+  /**
    * The name of the index root `instance`'s files live under, when the
    * deployment's indexer can read them at all; `null` when the instance
    * names no root or an unparsable one. Absent for providers the indexer
-   * never reads. `index` and `scopeMapping` hold for an instance only when
-   * this names a configured root.
+   * never reads. `index` holds for an instance only when this names a
+   * configured root, and the API maps each login to `<root>/<username>`
+   * under it.
    */
   indexRootName?(instance: ProviderInstance): string | null;
   /** Checks that `instance` is reachable and looks like this kind of server. */
@@ -169,6 +178,13 @@ export interface ProviderModule {
     session: { readonly externalUsername: string; readonly credential: ProviderCredential },
     ctx: ProviderContext,
   ): Promise<ProviderToken>;
+  /**
+   * Throws `StorageError` of kind `forbidden` when the backend no longer
+   * lets `externalUsername` in, so a login that was disabled after it signed
+   * in stops working at once. Absent for backends that refuse such a user on
+   * every request by themselves.
+   */
+  admit?(instance: ProviderInstance, externalUsername: string): Promise<void>;
   createStorage(
     instance: ProviderInstance,
     session: StorageSession,

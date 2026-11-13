@@ -64,7 +64,7 @@ async function fixture(mode: "read" | "organize" | "full" = "full", paths = ["/a
   const repos = createMemoryRepos();
   const account = await repos.accounts.create({ displayName: "Alice" });
   const provider = await repos.providers.ensure({
-    type: "webdav",
+    type: "local",
     baseUrl: "https://storage.invalid",
   });
   const identity = await repos.identities.create({

@@ -5,11 +5,8 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-libra
 import { afterEach, expect, it, vi } from "vitest";
 import { accountTransition } from "@/lib/account/transition";
 import { apiClient } from "@/lib/api/client";
-import { allCapabilities, storageNote } from "@/lib/identity/capabilities";
+import { allCapabilities } from "@/lib/identity/capabilities";
 import { LinkLoginDialog } from "./link-login-dialog";
-
-/** The note for storage with none of the features fdrive builds on SFTPGo. */
-const FILES_ONLY_NOTE = storageNote({ ...allCapabilities(false), trash: true }) as string;
 
 vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn() }) }));
 afterEach(() => {
@@ -93,27 +90,38 @@ it("disables repeated submission while pending and closes on success", async () 
   expect(onOpenChange).toHaveBeenCalledWith(false);
 });
 
-it("says a files-only storage is files only before the login is added", async () => {
-  vi.spyOn(apiClient, "providers").mockResolvedValue({
-    providers: [
-      {
-        id: "00000000-0000-4000-8000-000000000003",
-        type: "s3",
-        label: "Media bucket",
-        credentialFields: [
-          { name: "username", label: "Access key ID", kind: "text", required: true },
-          { name: "password", label: "Secret key", kind: "password", required: true },
-        ],
-        capabilities: { ...allCapabilities(false), trash: true },
-      },
+it("adds a login on the storage with its own fields and id, without a picker or storage note", async () => {
+  const storage = {
+    id: "00000000-0000-4000-8000-000000000003",
+    type: "local" as const,
+    label: "Home storage",
+    credentialFields: [
+      { name: "username", label: "Username", kind: "text" as const, required: true },
+      { name: "password", label: "Password", kind: "password" as const, required: true },
     ],
-  });
+    capabilities: allCapabilities(true),
+  };
+  vi.spyOn(apiClient, "providers").mockResolvedValue({ providers: [storage] });
+  const link = vi.spyOn(apiClient, "linkIdentity").mockRejectedValue(new Error("Invalid login"));
   render(
     <QueryClientProvider client={new QueryClient()}>
       <LinkLoginDialog open onOpenChange={vi.fn()} />
     </QueryClientProvider>,
   );
 
-  expect(await screen.findByLabelText("Access key ID")).toBeDefined();
-  expect(screen.getByText(FILES_ONLY_NOTE)).toBeDefined();
+  // The storage's own fields replace the defaults: no one-time code.
+  await waitFor(() => expect(screen.queryByLabelText("One-time code")).toBeNull());
+  expect(screen.queryByLabelText("Server")).toBeNull();
+  expect(screen.queryByText(/available on this storage/)).toBeNull();
+  fireEvent.change(screen.getByLabelText("Username"), { target: { value: "bob" } });
+  fireEvent.change(screen.getByLabelText("Password"), { target: { value: "bob-password" } });
+  fireEvent.change(screen.getByLabelText("Your current password"), { target: { value: "mine" } });
+  fireEvent.click(screen.getByRole("button", { name: "Add login" }));
+
+  await waitFor(() => expect(link).toHaveBeenCalledTimes(1));
+  expect(link).toHaveBeenCalledWith({
+    providerId: storage.id,
+    credential: { username: "bob", password: "bob-password" },
+    currentCredential: { password: "mine" },
+  });
 });

@@ -323,7 +323,7 @@ fn index_clear_scope_is_literal_and_keeps_everything_else() {
     env.client()
         .batch_execute(
             "WITH a AS (INSERT INTO app.accounts DEFAULT VALUES RETURNING id), \
-             p AS (INSERT INTO app.providers(type, base_url) VALUES ('sftpgo', 'http://clear.test') RETURNING id), \
+             p AS (INSERT INTO app.providers(type, base_url) VALUES ('local', 'http://clear.test') RETURNING id), \
              i AS (INSERT INTO app.identities(account_id, provider_id, external_username) \
                    SELECT a.id, p.id, 'one' FROM a, p RETURNING id), \
              t AS (INSERT INTO app.tags(account_id, name, color) SELECT id, 'Keep', 'blue' FROM a RETURNING id), \

@@ -23,7 +23,7 @@ vi.mock("../../mcp/handlers.js", async (importOriginal) => ({
 }));
 
 const HOME_SCOPES: readonly Scope[] = [
-  { rootName: "sftpgo", fsPrefix: "/alice", virtualPrefix: "/" },
+  { rootName: "files", fsPrefix: "/alice", virtualPrefix: "/" },
 ];
 
 function principalWith(storage: StorageProvider): Principal {
@@ -38,7 +38,7 @@ function principalWith(storage: StorageProvider): Principal {
 
 function mcpDeps(overrides: Partial<McpToolDeps> = {}): McpToolDeps {
   return {
-    indexQueries: { rootIdsByName: async () => ({ sftpgo: 1 }) } as unknown as IndexQueries,
+    indexQueries: { rootIdsByName: async () => ({ files: 1 }) } as unknown as IndexQueries,
     searchService: { search: async () => Promise.reject(new Error("unexpected search")) },
     scopeResolver: {
       verifiedIndexScopes: async () => ({ available: true, scopes: HOME_SCOPES }),
@@ -548,7 +548,7 @@ describe("list_folder", () => {
 describe("read_excerpts", () => {
   /** "/Inbox" maps onto alice's indexed home; "/Archive" onto a root the index has not seen. */
   const EXCERPT_SCOPES: readonly Scope[] = [
-    { rootName: "sftpgo", fsPrefix: "/alice", virtualPrefix: "/Inbox" },
+    { rootName: "files", fsPrefix: "/alice", virtualPrefix: "/Inbox" },
     { rootName: "archive", fsPrefix: "/", virtualPrefix: "/Archive" },
   ];
 
@@ -627,7 +627,7 @@ describe("read_excerpts", () => {
       selected: SELECTED,
       mcp: {
         indexQueries: {
-          rootIdsByName: async () => ({ sftpgo: 1 }),
+          rootIdsByName: async () => ({ files: 1 }),
           fileByPath,
           fileTextPrefix,
         } as unknown as IndexQueries,
@@ -680,7 +680,7 @@ describe("read_excerpts", () => {
       selected: [stored],
       mcp: {
         indexQueries: {
-          rootIdsByName: async () => ({ sftpgo: 1 }),
+          rootIdsByName: async () => ({ files: 1 }),
           fileByPath,
           fileTextPrefix: async () => "Protokoll",
         } as unknown as IndexQueries,

@@ -1,7 +1,7 @@
 import { FEATURE_IDS } from "@fdrive/contracts";
 import { describe, expect, it } from "vitest";
 import {
-  WALKTHROUGH_STEP_OFFSET,
+  WALKTHROUGH_OFFSET,
   WALKTHROUGH_STEPS,
   WALKTHROUGH_TOTAL,
   walkthroughLabel,
@@ -25,21 +25,20 @@ describe("walkthrough steps", () => {
     );
   });
 
-  it("counts the wizard's own steps in the total", () => {
-    expect(WALKTHROUGH_STEP_OFFSET).toBe(3);
-    expect(WALKTHROUGH_TOTAL).toBe(13);
+  it("counts the wizard's own two steps in the total", () => {
+    expect(WALKTHROUGH_OFFSET).toBe(2);
+    expect(WALKTHROUGH_TOTAL).toBe(12);
   });
 
-  it("captions a step with its one-based position and label", () => {
-    expect(walkthroughLabel(0)).toBe("Step 4 of 13 · Thumbnails");
-    expect(walkthroughLabel(2)).toBe("Step 6 of 13 · Search OCR");
-    expect(walkthroughLabel(6)).toBe("Step 10 of 13 · Trash");
-    expect(walkthroughLabel(7)).toBe("Step 11 of 13 · Server address");
-    expect(walkthroughLabel(8)).toBe("Step 12 of 13 · Office");
-    expect(walkthroughLabel(9)).toBe("Step 13 of 13 · Review");
+  it("captions a step with its one-based position and label after the wizard", () => {
+    expect(walkthroughLabel(0)).toBe("Step 3 of 12 · Thumbnails");
+    expect(walkthroughLabel(2)).toBe("Step 5 of 12 · Search OCR");
+    expect(walkthroughLabel(6)).toBe("Step 9 of 12 · Trash");
+    expect(walkthroughLabel(7)).toBe("Step 10 of 12 · Server address");
+    expect(walkthroughLabel(9)).toBe("Step 12 of 12 · Review");
   });
 
   it("falls back to the section name for a step outside the table", () => {
-    expect(walkthroughLabel(10)).toBe("Step 14 of 13 · Features");
+    expect(walkthroughLabel(10)).toBe("Step 13 of 12 · Features");
   });
 });

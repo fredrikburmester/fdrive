@@ -24,6 +24,7 @@ on:
       - '.github/workflows/images.yml'
       - '.dockerignore'
       - 'apps/api/Dockerfile'
+      - 'apps/api/docker-entrypoint.sh'
       - 'apps/web/Dockerfile'
       - 'deploy/Caddyfile'
       - 'deploy/Dockerfile.proxy'
@@ -367,7 +368,7 @@ jobs:
           # pre-release's copy names its own version.
           assets="$RUNNER_TEMP/assets"
           mkdir -p "$assets"
-          cp deploy/compose.yaml deploy/compose.sftpgo.yaml "$assets/"
+          cp deploy/compose.yaml "$assets/"
           if [[ $PRERELEASE == true ]]; then
             sed -i "s/FDRIVE_VERSION:-latest}/FDRIVE_VERSION:-$VERSION}/g" "$assets/compose.yaml"
           fi
@@ -377,14 +378,14 @@ jobs:
             | sort -uV | grep -B1 -Fx "$tag" | grep -vFx "$tag" || true)
           if [[ -n $previous ]]; then args+=(--notes-start-tag "$previous"); fi
           # --notes goes above the generated list: how to take this release, and
-          # whether it needs new Compose files, which a pull does not replace.
+          # whether it needs a new Compose file, which a pull does not replace.
           if [[ $PRERELEASE == true ]]; then
-            notes="To try this pre-release, download its \`compose.yaml\`, which names this version, then run \`docker compose pull && docker compose up -d\`."
+            notes="To try this pre-release, download its \`compose.yaml\`, which names this version, then run \`docker compose pull && docker compose up -d\`. Installed from a git checkout? Its \`compose.yaml\` runs the newest release: set \`FDRIVE_VERSION=$VERSION\` in \`.env\` instead."
           else
             notes="Update with \`docker compose pull && docker compose up -d\`. New installation: see the [quickstart]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY#quickstart-home-server--lan)."
           fi
-          if [[ -n $previous ]] && ! git diff --quiet "$previous" "$tag" -- deploy/compose.yaml deploy/compose.sftpgo.yaml; then
-            notes="**This release changes the Compose files.** Download \`compose.yaml\` (and \`compose.sftpgo.yaml\` if you use it) from this release before you pull and restart."$'\n\n'"$notes"
+          if [[ -n $previous ]] && ! git diff --quiet "$previous" "$tag" -- deploy/compose.yaml; then
+            notes="**This release changes the Compose file.** Download \`compose.yaml\` from this release before you pull and restart."$'\n\n'"$notes"
           fi
           args+=(--notes "$notes")
           if [[ $PRERELEASE == true ]]; then

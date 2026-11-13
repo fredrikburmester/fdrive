@@ -1,12 +1,10 @@
 import type { ProviderType } from "@fdrive/contracts";
-import { Database, Globe, HardDrive, type LucideIcon, Server } from "lucide-react";
+import { HardDrive, type LucideIcon, Server } from "lucide-react";
 import { providerTypeLabel } from "@/lib/identity/provider-type";
 import { cn } from "@/lib/utils";
 
 const ICONS: Readonly<Record<ProviderType, LucideIcon>> = {
-  sftpgo: Server,
-  webdav: Globe,
-  s3: Database,
+  local: HardDrive,
 };
 
 export interface ProviderIconProps {
@@ -17,10 +15,10 @@ export interface ProviderIconProps {
 /**
  * The icon for a provider type, next to a login's provider label in the
  * Logins card and the sidebar switcher. Labelled with the type's product
- * name so screen readers hear "SFTPGo" where sighted users see the glyph.
+ * name so screen readers hear "fdrive" where sighted users see the glyph.
  */
 export function ProviderIcon({ type, className }: ProviderIconProps) {
-  const Icon = ICONS[type] ?? HardDrive;
+  const Icon = ICONS[type] ?? Server;
   return (
     <Icon
       role="img"

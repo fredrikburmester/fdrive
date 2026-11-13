@@ -2,7 +2,7 @@
 
 System → Backups protects one installation, including every account. Only the setup owner,
 using a browser session and fresh storage authentication, can manage or download backups.
-Provider administrator access and MCP/desktop bearer tokens do not grant backup access.
+Other administrators and MCP/desktop bearer tokens do not grant backup access.
 
 ## Configure
 
@@ -22,11 +22,12 @@ source directories. Missing or unreadable recovery sources appear as coverage ga
 1. Open System → Backups and authenticate again.
 2. Create and download a recovery key. Paste the saved key to prove it can decrypt a challenge.
    The private key is generated in the browser; scheduled backups use only its public recipient.
-3. Optionally add S3/B2 or a connected fileserver destination. Adding it tests create, read and
-   delete permissions using a uniquely named probe. Use a private bucket or directory and
-   dedicated credentials. Keep those credentials outside fdrive too. A fileserver destination
-   needs a password that signs in unattended: one-time codes are dropped before the credential
-   is verified and saved, so an account that requires them cannot be used for scheduled copies.
+3. Optionally add an S3/B2 destination or a folder in the files folder. Adding it tests
+   create, read and delete permissions using a uniquely named probe. Use a private bucket or
+   directory and dedicated credentials, and keep those credentials outside fdrive too. A files
+   folder destination signs in as one of fdrive's users and is checked like a sign-in, so a
+   disabled or removed user, or a changed password, stops its copies. It sits on the same host
+   as the installation, so copy it off the host with the rest of the files folder.
    A bucket with default Object Lock retention keeps the probe object; fdrive never asks for a
    retention bypass. The destination is saved and the kept object's name and deadline are shown
    on its card and recorded in the event log.
@@ -40,14 +41,12 @@ source directories. Missing or unreadable recovery sources appear as coverage ga
 
 S3 supports a custom endpoint, region, bucket, prefix and path-style addressing, including
 Backblaze B2's S3-compatible endpoints. Enter the endpoint and region belonging to your bucket;
-the B2 preset is an editable example. A fileserver destination is bound to its provider ID,
-type, endpoint, provider configuration and authenticated username, independent of the current
-browsing identity. Its objects live beneath `<private directory>/.fdrive-backups/<installation ID>`.
-The normal fdrive storage API hides that namespace and rejects ancestor archive/mutation
-operations that would include it. Server ACLs remain the boundary against other clients and
-aliases; ciphertext encryption protects its contents. The fileserver's own rules still apply
-to that directory: an SFTPGo Trash rule, for example, keeps deleted probes and pruned archives
-under its `.trash` folder until its own retention removes them.
+the B2 preset is an editable example. A files folder destination is bound to the storage row
+and the user that signed it in, independent of the current browsing identity. Its archives
+live beneath `<chosen folder>/.fdrive-backups/<installation ID>` in that user's files. fdrive's
+file API hides that namespace and rejects ancestor archive/mutation operations that would
+include it. Host permissions remain the boundary against other tools on the host; encryption
+protects the contents.
 
 Copies use one encrypted archive per snapshot. Each transfer is read back in full and checked
 with SHA-256 before a completion marker is published. Multipart failures are aborted; retries
@@ -89,10 +88,10 @@ newest configuration and history are still protected while coverage stays report
 The explicit table registry is in `packages/backup/src/registry.ts`. A capture fails on an
 unclassified application/index table, including tables introduced by a future migration.
 
-- Accounts, identities, providers, credentials, settings, tags, favorites, folder views,
-  recents, AI chats (transcripts and references), share metadata (an owned share's password
-  hash included, so it restores fully; a native row only names the share SFTPGo keeps),
-  activity, stable Office/native file IDs and native recovery receipts.
+- Accounts, identities, providers, local users (password hashes included) and the folders
+  they share with each other, credentials, settings, tags, favorites, folder views, recents,
+  AI chats (transcripts and references), share metadata (password hashes included, so links
+  restore fully), activity, stable Office/native file IDs and native recovery receipts.
 - Retained index scan/move/event history, OCR rewrite history and processing failures.
 - Exact active configuration ZIP versions, pre-OCR originals and original-file mappings,
   native local/remote recovery material, retained logs and configured external source mounts.
@@ -101,8 +100,8 @@ unclassified application/index table, including tables introduced by a future mi
   credential envelopes can be resealed on a replacement installation.
 
 Indexes, extracted chunks, thumbnails, embeddings, sessions, provider token caches and WOPI
-locks are omitted. Original user files, fileserver permissions/users/Trash/shares, unsaved
-external editor state and device-only edits require their own backups. A configuration ZIP
+locks are omitted. Original user files (the files folder, Trash included), unsaved external
+editor state and device-only edits require their own backups. A configuration ZIP
 protects only the version uploaded.
 
 Database rows are captured in a repeatable-read transaction, using PostgreSQL text values to
@@ -134,8 +133,9 @@ Existing output files are never overwritten.
 
 An offline S3 destination file contains `type: "s3"`, `endpoint`, `region`, `bucket`, `prefix`,
 `pathStyle`, `accessKeyId` and `secretAccessKey`. Use the **full installation-specific prefix**
-shown in System → Backups. A fileserver file contains `type: "sftpgo"` or `"webdav"`, original
-provider `id`, `baseUrl`, `config`, authenticated `username`, full `prefix` and `credential`.
+shown in System → Backups. A files folder destination needs no destination file: its archives are plain files under
+`<files folder>/<username>/<prefix>/`, named `<snapshot ID>.fdrive.age`. Copy one from there
+and pass it to `inspect` or `restore` directly.
 
 ```sh
 node dist/main.js backup list --destination-file destination.json
@@ -162,13 +162,13 @@ Restoring into a nonempty durable database is refused. A failed import rolls bac
 removes only its own staging directory.
 
 Run `backup environment` on the destination to obtain its environment fingerprint. Review
-mounts, root names, Office/public URLs and each fileserver endpoint. Create a private review file:
+mounts, root names and Office/public URLs. Create a private review file:
 
 ```json
 {
   "snapshotId": "SNAPSHOT_UUID",
   "environmentFingerprint": "SHA256_FROM_BACKUP_ENVIRONMENT",
-  "providers": [{ "id": "ORIGINAL_PROVIDER_UUID", "baseUrl": "https://files.example.com" }],
+  "providers": [{ "id": "ORIGINAL_PROVIDER_UUID", "baseUrl": "local" }],
   "ownerIdentityId": "ORIGINAL_OWNER_IDENTITY_UUID",
   "credential": { "username": "owner", "password": "CURRENT_STORAGE_PASSWORD" },
   "oldDeploymentStopped": true,
@@ -182,7 +182,7 @@ Resume refuses a review file without both flags set to `true`.
 ### Annotation review before resume
 
 Tags, favourites, folder views and recents are bound to an identity and a path. A snapshot
-cannot prove that a path still names the same file: a fileserver that kept running may have
+cannot prove that a path still names the same file: a files folder that kept changing may have
 deleted, replaced or reused it. While the restore is paused every provider is disabled, so
 restored annotations are inactive. Before setting `pathBindingsReviewed`:
 
@@ -198,7 +198,7 @@ restored annotations are inactive. Before setting `pathBindingsReviewed`:
    ```
 
 2. Compare the annotated paths (`select path from app.file_tags where identity_id = ...`, and
-   the same for the other three tables) with the current fileserver using its own tools. The
+   the same for the other three tables) with the current files folder on the host. The
    restored `idx.events` and `idx.moves` history shows what fdrive last observed at each path;
    it is evidence, not proof of continuity, and a freshly rebuilt index must not be used to
    infer it either.
@@ -237,17 +237,15 @@ private recovery key.
 
 ### Measured costs
 
-Local observations from `packages/backup/test/integration/benchmark.test.ts` and the WebDAV and
-SFTPGo destination test on a developer Mac with loopback containers; not performance promises.
+Local observations from `packages/backup/test/integration/benchmark.test.ts` on a developer Mac
+with loopback containers; not performance promises.
 
 | Fixture | Encrypted archive | Capture | Writer pause | Peak RSS (capture / restore) | Fresh restore |
 | --- | --- | --- | --- | --- | --- |
 | Empty installation | 3 KiB | 0.06 s | 0.002 s | 209 / 207 MiB | 0.05 s |
 | 60,000 history rows + 64 MiB recovery file | 65 MiB | 3.3 s | 3.2 s | 347 / 471 MiB | 16.8 s |
 
-Transferring that 64 MiB archive to Apache WebDAV or SFTPGo with full readback took about
-0.7 s, fetching it back with fileserver access only about 0.2 s, and restoring the fetched copy
-about 1.0 s. Index regeneration after restore is separate and depends on file volume.
+Index regeneration after restore is separate and depends on file volume.
 
 Limitations these numbers expose:
 
@@ -272,6 +270,6 @@ in System; confirm a recovery key before scheduling again. Reconnect native/MCP 
 Native/OCR/Office recovery bytes remain in the private `restore-UUID` quarantine. Its
 `recovery-manifest.json` maps `blobs-N` files to original kinds, paths, source mount IDs and
 remote identity IDs; the database's `backup.recovery.v1` setting retains the source environment.
-Reconcile those bytes against the current fileserver before applying them. Subsequent backups
+Reconcile those bytes against the current files folder before applying them. Subsequent backups
 also preserve this quarantine. External configuration ZIPs are restored with their external
 system's own tools. fdrive never replays old remote writes automatically.

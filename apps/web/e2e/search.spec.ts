@@ -1,6 +1,5 @@
 import { expect, type Page, test } from "@playwright/test";
 import { loginAs } from "./support/login.js";
-import { listing } from "./support/regions.js";
 import { uniqueName } from "./support/unique.js";
 
 const SEARCH_INPUT_PLACEHOLDER = "Search files, content, and images...";
@@ -252,11 +251,14 @@ test("a long folder name and file path in a result row never spill past the sear
   expect(overflow).toBeGreaterThan(0);
 
   await page.keyboard.press("Escape");
-  await listing(page).getByText(folderName, { exact: true }).click({ button: "right" });
-  await page.getByRole("menuitem", { name: "Delete" }).click();
-  const confirmDialog = page.getByRole("alertdialog");
-  await confirmDialog.getByRole("button", { name: "Delete" }).click();
-  await expect(confirmDialog).toBeHidden();
+  // Cleanup, not under test: the root listing is virtualized, and earlier
+  // specs leave it long and sorted their own way, so the folder can be out
+  // of view.
+  const removed = await page.request.post("/api/v1/fs/delete", {
+    headers: { "x-requested-with": "fdrive" },
+    data: { items: [{ path: `/${folderName}`, kind: "dir" }] },
+  });
+  expect(removed.ok(), await removed.text()).toBe(true);
 });
 
 test("search dialog on desktop is roughly 800px wide and bounded in viewport height", async ({

@@ -46,7 +46,7 @@ pub struct Config {
     pub settings_refresh: Duration,
 }
 
-/// `"sftpgo=/roots/sftpgo,photos=/roots/photos"`, skipping malformed pairs.
+/// `"files=/data,photos=/roots/photos"`, skipping malformed pairs.
 pub fn parse_roots(raw: &str) -> Vec<(String, PathBuf)> {
     raw.split(',')
         .filter_map(|pair| {

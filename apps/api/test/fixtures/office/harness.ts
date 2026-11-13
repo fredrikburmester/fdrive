@@ -1,5 +1,5 @@
 import { generateKeyPairSync, sign } from "node:crypto";
-import { parseHomeTemplate, type StorageProvider, scopesFor } from "@fdrive/core";
+import type { StorageProvider } from "@fdrive/core";
 import { createMemoryOfficeFileRepo, createMemoryWopiLockRepo } from "@fdrive/db";
 import { createMemoryRepos } from "@fdrive/db/testing";
 import { createMemoryStorage } from "@fdrive/testkit";
@@ -36,7 +36,7 @@ export async function officeHarness(
   const repos = createMemoryRepos();
   const now = { value: new Date("2026-09-06T00:00:00Z") };
   const clock = () => now.value;
-  const provider = await repos.providers.ensure({ type: "sftpgo", baseUrl: "http://sftpgo" });
+  const provider = await repos.providers.ensure({ type: "local", baseUrl: "local" });
   const storage =
     options.storage ??
     createMemoryStorage({
@@ -142,12 +142,10 @@ export async function officeHarness(
     files,
     locks,
     clock,
-    location: async (identity) => ({
+    location: async () => ({
       providerId: provider.id,
-      scopes: scopesFor({
-        template: parseHomeTemplate("sftpgo:/shared"),
-        username: identity.externalUsername,
-      }),
+      // Every user shares one folder, so cross-user cases need no copies.
+      scopes: [{ rootName: "files", fsPrefix: "/shared", virtualPrefix: "/" }],
     }),
     storageFactory: (id) =>
       options.storageForUser?.(
@@ -172,6 +170,7 @@ export async function officeHarness(
     startedAt: clock(),
     principalResolver: async (c) =>
       users.find((u) => u.sessionId === getCookie(c, COOKIE_NAME))?.principal ?? alice.principal,
+    connectionStatus: async () => ({ required: false, providers: [] }),
     registerRoutes: (groups) => registerOfficeRoutes(groups, { service }),
   });
   registerWopiRoutes(app, { service });

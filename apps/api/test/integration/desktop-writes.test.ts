@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -9,20 +9,27 @@ import {
   MeResponse,
 } from "@fdrive/contracts";
 import { createDb, createDesktopEffectsRepo, createRepos } from "@fdrive/db";
-import { startApacheWebdav, startPostgres, startSftpgo } from "@fdrive/testkit";
+import { startLocalStorage, startPostgres } from "@fdrive/testkit";
 import pino from "pino";
 import { expect, it, vi } from "vitest";
 import { composeApp } from "../../src/composition.js";
 import { loadConfig } from "../../src/config.js";
+import { seedLocalUsers } from "./helpers/local-storage.ts";
 
-it("publishes complete files under a real WebDAV lease with durable replay and conflict protection", async () => {
+/**
+ * The Mac app's write path on the files folder, under fdrive's per-identity
+ * publish lock: durable replay, conflict protection, Trash and restore, and
+ * metadata effects that survive a database outage and a restart. Another
+ * writer is a program changing alice's folder on disk.
+ */
+it("publishes complete files with durable replay and conflict protection", async () => {
   const postgres = await startPostgres();
-  const sftpgo = await startSftpgo();
-  const dav = await startApacheWebdav();
+  const storage = await startLocalStorage({ files: {} });
+  await seedLocalUsers(postgres.connectionString, storage);
   const stateDir = await mkdtemp(join(tmpdir(), "fdrive-desktop-test-"));
   const config = loadConfig({
     DATABASE_URL: postgres.connectionString,
-    SFTPGO_URL: sftpgo.baseUrl,
+    FDRIVE_STORAGE_ROOT: storage.root,
     FDRIVE_MASTER_KEY: Buffer.alloc(32, 7).toString("base64"),
     FDRIVE_ADMIN_USERS: "alice",
     FDRIVE_DESKTOP_STATE_DIR: stateDir,
@@ -49,29 +56,16 @@ it("publishes complete files under a real WebDAV lease with durable replay and c
   };
   const base = "/api/v2/desktop";
   const sha = (value: string) => createHash("sha256").update(value).digest("hex");
-  const upstreamHeaders = {
-    authorization: `Basic ${Buffer.from(`${dav.credential.username}:${dav.credential.password}`).toString("base64")}`,
-  };
+  /** Alice's copy of `path` on disk, read and written outside fdrive. */
+  const onDisk = (path: string) => storage.path("alice", path);
+  const readDisk = (path: string) => readFile(onDisk(path), "utf8");
   try {
     const login = await call("/api/v1/auth/login", {
       credential: { username: "alice", password: "alice-password" },
     });
     expect(login.status).toBe(200);
     cookie = login.headers.get("set-cookie")?.split(";")[0] ?? "";
-    const provider = (await json("/api/v1/admin/providers", {
-      type: "webdav",
-      label: "Qualified native storage",
-      baseUrl: dav.baseUrl,
-      config: { desktopWriteMode: "apache-webdav-exclusive" },
-    })) as { id: string };
-    const linked = await call("/api/v1/account/identities", {
-      providerId: provider.id,
-      credential: dav.credential,
-      currentCredential: { password: "alice-password" },
-    });
-    expect(linked.status, await linked.clone().text()).toBe(200);
-    cookie = linked.headers.get("set-cookie")?.split(";")[0] ?? cookie;
-    const me = MeResponse.parse(await linked.json());
+    const me = MeResponse.parse(await login.json());
     const pairResponse = await call(`${base}/pairings`, { deviceName: "Write test" });
     expect(pairResponse.status).toBe(201);
     const pairing = DesktopPairing.parse(await pairResponse.json());
@@ -83,12 +77,11 @@ it("publishes complete files under a real WebDAV lease with durable replay and c
       await json(`${base}/pairings/${pairing.id}/poll`, { secret: pairing.secret }),
     );
     if (pair.status !== "connected") throw Error("Expected connected credentials");
-    const writable = pair.credentials.find((c) => c.location.providerId === provider.id);
+    const [writable] = pair.credentials;
     if (!writable) throw Error("Missing write credential");
+    // The folder writes with nothing configured on its row.
     expect(writable.location.capabilities.create).toBe(true);
-    // The deployment's stock SFTPGo login in the same pairing writes too, under the
-    // default contract, with nothing configured on its row.
-    expect(pair.credentials.find((c) => c !== writable)?.location.readOnly).toBe(false);
+    expect(writable.location.readOnly).toBe(false);
     cookie = "";
     bearer = `Bearer ${writable.token}`;
     const upload = async (
@@ -120,14 +113,10 @@ it("publishes complete files under a real WebDAV lease with durable replay and c
     };
     const id = await upload("save.txt", "first");
     // Incoming content is invisible until the explicit commit.
-    expect(
-      (await fetch(new URL("save.txt", dav.baseUrl), { headers: upstreamHeaders })).status,
-    ).toBe(404);
+    await expect(readDisk("/save.txt")).rejects.toMatchObject({ code: "ENOENT" });
     const result = (await json(`${base}/operations/${id}/commit`, {})) as { item: unknown };
     const original = DesktopWriteEntry.parse(result.item);
-    expect(
-      await (await fetch(new URL("save.txt", dav.baseUrl), { headers: upstreamHeaders })).text(),
-    ).toBe("first");
+    expect(await readDisk("/save.txt")).toBe("first");
     expect(await json(`${base}/operations/${id}/commit`, {})).toEqual(result);
     const next = await upload("save.txt", "second", original);
     const saved = (await json(`${base}/operations/${next}/commit`, {})) as {
@@ -136,9 +125,7 @@ it("publishes complete files under a real WebDAV lease with durable replay and c
     };
     expect(DesktopWriteEntry.parse(saved.item).id).toBe(original.id);
     expect(saved.recoveryId).toBe(next);
-    expect(
-      await (await fetch(new URL("save.txt", dav.baseUrl), { headers: upstreamHeaders })).text(),
-    ).toBe("second");
+    expect(await readDisk("/save.txt")).toBe("second");
     await json(`${base}/operations/${next}/acknowledge`, {});
     expect(await json(`${base}/operations/${next}`)).toEqual(saved);
     // A stale base may not overwrite a later edit, including identical-length edits.
@@ -148,9 +135,7 @@ it("publishes complete files under a real WebDAV lease with durable replay and c
     expect(await rejected.json()).toMatchObject({
       error: { details: { code: "version_conflict" } },
     });
-    expect(
-      await (await fetch(new URL("save.txt", dav.baseUrl), { headers: upstreamHeaders })).text(),
-    ).toBe("second");
+    expect(await readDisk("/save.txt")).toBe("second");
     const listing = (await json(`${base}/entries?path=/`)) as {
       entries: Array<{ path: string }>;
     };
@@ -165,14 +150,11 @@ it("publishes complete files under a real WebDAV lease with durable replay and c
     const { token: rootToken } = (await json(`${base}/entries?path=/`)) as { token: string };
     expect(await check("/", rootToken)).toBe("unchanged");
     expect(await check("/gone", rootToken)).toBe("missing");
-    const outside = new URL("outside.txt", dav.baseUrl);
-    expect((await fetch(outside, { method: "PUT", headers: upstreamHeaders, body: "x" })).ok).toBe(
-      true,
-    );
+    await writeFile(onDisk("/outside.txt"), "x");
     expect(await check("/", rootToken)).toBe("changed");
-    expect((await fetch(outside, { method: "DELETE", headers: upstreamHeaders })).ok).toBe(true);
+    await rm(onDisk("/outside.txt"));
     expect((await call(`${base}/entry?path=/.fdrive-desktop`)).status).toBe(403);
-    // Case folding is enforced even when the upstream filesystem is case sensitive.
+    // Case folding is enforced whether or not the disk is case sensitive.
     const collision = await upload("SAVE.txt", "collision");
     expect((await call(`${base}/operations/${collision}/commit`, {})).status).toBe(409);
 
@@ -207,21 +189,11 @@ it("publishes complete files under a real WebDAV lease with durable replay and c
       await (await call(`${base}/content?path=${encodeURIComponent(trashedFile.path)}`)).text(),
     ).toBe("second");
     // A separate writer can recreate the original name; restore must preserve both copies.
-    expect(
-      (
-        await fetch(new URL("save.txt", dav.baseUrl), {
-          method: "PUT",
-          headers: upstreamHeaders,
-          body: "peer",
-        })
-      ).status,
-    ).toBe(201);
+    await writeFile(onDisk("/save.txt"), "peer");
     const blockedRestore = await move(trashedFile, "root");
     const restoreCollision = await call(`${base}/operations/${blockedRestore}/commit`, {});
     expect(restoreCollision.status, await restoreCollision.text()).toBe(409);
-    expect(
-      await (await fetch(new URL("save.txt", dav.baseUrl), { headers: upstreamHeaders })).text(),
-    ).toBe("peer");
+    expect(await readDisk("/save.txt")).toBe("peer");
     expect(
       await (await call(`${base}/content?path=${encodeURIComponent(trashedFile.path)}`)).text(),
     ).toBe("second");
@@ -231,34 +203,13 @@ it("publishes complete files under a real WebDAV lease with durable replay and c
     expect(await commit(trashOperation)).toEqual(trashedFile);
     expect((await stat("/restored.txt")).id).toBe(current.id);
 
-    for (const path of ["Tree", "Tree/empty", "Tree/nested"]) {
-      expect(
-        (await fetch(new URL(path, dav.baseUrl), { method: "MKCOL", headers: upstreamHeaders }))
-          .status,
-      ).toBe(201);
-    }
-    expect(
-      (
-        await fetch(new URL("Tree/nested/child.txt", dav.baseUrl), {
-          method: "PUT",
-          headers: upstreamHeaders,
-          body: "child",
-        })
-      ).status,
-    ).toBe(201);
+    for (const path of ["/Tree", "/Tree/empty", "/Tree/nested"]) await mkdir(onDisk(path));
+    await writeFile(onDisk("/Tree/nested/child.txt"), "child");
     const tree = await stat("/Tree"),
       child = await stat("/Tree/nested/child.txt");
     const trashTree = await move(tree, "trash");
-    // A new deep descendant after prepare is retained by the whole-directory MOVE.
-    expect(
-      (
-        await fetch(new URL("Tree/nested/new.txt", dav.baseUrl), {
-          method: "PUT",
-          headers: upstreamHeaders,
-          body: "new",
-        })
-      ).status,
-    ).toBe(201);
+    // A new deep descendant after prepare is retained by the whole-directory move.
+    await writeFile(onDisk("/Tree/nested/new.txt"), "new");
     const trashedTree = await commit(trashTree);
     expect((await stat(`${trashedTree.path}/nested/child.txt`)).id).toBe(child.id);
     expect((await stat(`${trashedTree.path}/empty`)).kind).toBe("dir");
@@ -286,11 +237,7 @@ it("publishes complete files under a real WebDAV lease with durable replay and c
     expect((await commit(await move(trashedTree, "root"))).path).toBe("/Tree");
     expect((await stat("/Tree/nested/child.txt")).id).toBe(child.id);
     expect((await stat("/Tree/empty")).kind).toBe("dir");
-    expect(
-      await (
-        await fetch(new URL("Tree/nested/new.txt", dav.baseUrl), { headers: upstreamHeaders })
-      ).text(),
-    ).toBe("new");
+    expect(await readDisk("/Tree/nested/new.txt")).toBe("new");
 
     // A successful publication remains completed even when PostgreSQL refuses
     // its metadata effects. A fresh API process drains the durable work.
@@ -321,15 +268,7 @@ it("publishes complete files under a real WebDAV lease with durable replay and c
       );
       expect(await json(`${base}/operations/${rename}/commit`, {})).toEqual(receipt);
       // Preserve an independently recreated source even after recovery/replay.
-      expect(
-        (
-          await fetch(new URL("restored.txt", dav.baseUrl), {
-            method: "PUT",
-            headers: upstreamHeaders,
-            body: "peer after rename",
-          })
-        ).status,
-      ).toBe(201);
+      await writeFile(onDisk("/restored.txt"), "peer after rename");
       await composed.close();
       await database.pool.query("DROP TRIGGER reject_native_metadata ON app.favorites");
       await database.pool.query(
@@ -346,16 +285,8 @@ it("publishes complete files under a real WebDAV lease with durable replay and c
         "/recovered.txt",
       );
       expect(await json(`${base}/operations/${rename}/commit`, {})).toEqual(receipt);
-      expect(
-        await (
-          await fetch(new URL("recovered.txt", dav.baseUrl), { headers: upstreamHeaders })
-        ).text(),
-      ).toBe("second");
-      expect(
-        await (
-          await fetch(new URL("restored.txt", dav.baseUrl), { headers: upstreamHeaders })
-        ).text(),
-      ).toBe("peer after rename");
+      expect(await readDisk("/recovered.txt")).toBe("second");
+      expect(await readDisk("/restored.txt")).toBe("peer after rename");
       // Another process, or this one restarted, derives the same token.
       const { token } = (await json(`${base}/entries?path=/`)) as { token: string };
       await composed.close();
@@ -366,8 +297,7 @@ it("publishes complete files under a real WebDAV lease with durable replay and c
     }
   } finally {
     await composed.close();
-    await dav.stop();
-    await sftpgo.stop();
+    await storage.stop();
     await postgres.stop();
     await rm(stateDir, { recursive: true, force: true });
   }

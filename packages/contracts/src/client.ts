@@ -37,6 +37,13 @@ import {
   MoveManyResponse,
   OkResponse,
 } from "./fs.ts";
+import {
+  type CreateGrantRequest,
+  GrantPeopleResponse,
+  GrantsResponse,
+  OwnedGrant,
+  type UpdateGrantRequest,
+} from "./grants.ts";
 import { HealthResponse } from "./health.ts";
 import { JobAccepted, JobStatus, JobsResponse } from "./jobs.ts";
 import {
@@ -72,9 +79,7 @@ import {
 } from "./processing-failures.ts";
 import {
   AdminProvider,
-  type AdminProviderCreateRequest,
   AdminProvidersResponse,
-  type AdminProviderTestRequest,
   type AdminProviderUpdateRequest,
   ProvidersResponse,
 } from "./providers.ts";
@@ -82,15 +87,14 @@ import { PublicUrlSettings, type PublicUrlUpdateRequest } from "./public-url.ts"
 import {
   accountTokenRoute,
   adminProviderRoute,
-  adminProviderTestRoute,
+  adminUserRoute,
   chatActionRoute,
   chatCancelRoute,
   chatMessagesRoute,
   chatRoute,
+  grantRoute,
   IDENTITY_HEADER,
   IDENTITY_QUERY_PARAM,
-  identityScopeRoute,
-  identityScopeSuggestionsRoute,
   jobCancelRoute,
   jobRoute,
   MODIFIED_AT_HEADER,
@@ -103,20 +107,8 @@ import {
   tagFilesRoute,
   tagRoute,
 } from "./routes.ts";
-import {
-  IdentityScopeResponse,
-  IdentityScopeSuggestionsResponse,
-  MountMappingsResponse,
-  type SetIdentityScopeRequestInput,
-  type SetMountMappingsRequest,
-} from "./scopes.ts";
 import { ImageSearchResponse, SearchResponse, SearchStatusResponse } from "./search.ts";
-import {
-  ConnectionTestResponse,
-  SETUP_TOKEN_HEADER,
-  type SetupCompleteRequest,
-  SetupStatusResponse,
-} from "./setup.ts";
+import { SETUP_TOKEN_HEADER, type SetupCompleteRequest, SetupStatusResponse } from "./setup.ts";
 import {
   type CreateShareRequest,
   ManagedShare,
@@ -163,6 +155,13 @@ import {
   type TrashSettingsUpdateRequest,
   TrashStatusResponse,
 } from "./trash.ts";
+import {
+  AdminUser,
+  type AdminUserCreateRequest,
+  AdminUsersResponse,
+  type AdminUserUpdateRequest,
+  type ChangePasswordRequest,
+} from "./users.ts";
 
 export type { IdentitySummary };
 
@@ -290,21 +289,13 @@ export interface ApiClient {
   officeCreateDocument(req: OfficeCreateDocumentRequest): Promise<OfficeCreateDocumentResponse>;
   login(req: LoginRequest): Promise<MeResponse>;
   logout(): Promise<OkResponse>;
+  /** The active local login changes its own password; other sessions of the account end. */
+  changePassword(req: ChangePasswordRequest): Promise<OkResponse>;
   me(): Promise<MeResponse>;
   linkIdentity(input: LinkIdentityRequest): Promise<MeResponse>;
   unlinkIdentity(id: string, input: UnlinkIdentityRequest): Promise<MeResponse>;
   switchIdentity(id: string): Promise<MeResponse>;
   accountFavorites(): Promise<AccountFavoritesResponse>;
-  /** The identity's scope mapping and index-availability status; 404 for an unknown or unowned id. */
-  identityScope(id: string): Promise<IdentityScopeResponse>;
-  /** Admin + CSRF only: replaces the identity's scope override. `{ scopes: [] }` resets it to the template-derived home scope. */
-  setIdentityScope(id: string, body: SetIdentityScopeRequestInput): Promise<IdentityScopeResponse>;
-  /** Admin only: confirmed candidate locations for each of the identity's unmapped mounts. */
-  identityScopeSuggestions(id: string): Promise<IdentityScopeSuggestionsResponse>;
-  /** Admin only: the folder-level virtual folder mappings. */
-  mountMappings(): Promise<MountMappingsResponse>;
-  /** Admin + CSRF only: replaces the folder-level mappings. */
-  setMountMappings(body: SetMountMappingsRequest): Promise<MountMappingsResponse>;
   list(path: string): Promise<ListResponse>;
   stat(path: string, signal?: AbortSignal): Promise<FsEntry>;
   mkdir(path: string): Promise<FsEntry>;
@@ -333,16 +324,24 @@ export interface ApiClient {
   searchImages(query: string, opts?: ApiClientImageSearchOptions): Promise<ImageSearchResponse>;
   thumbUrl(path: string, size: ThumbSize): string;
   setupStatus(): Promise<SetupStatusResponse>;
-  setupTest(setupToken: string, baseUrl: string): Promise<ConnectionTestResponse>;
   setupComplete(setupToken: string, req: SetupCompleteRequest): Promise<MeResponse>;
   /** Public: the enabled providers with their credential forms, for the login page. */
   providers(): Promise<ProvidersResponse>;
   adminProviders(): Promise<AdminProvidersResponse>;
-  adminCreateProvider(req: AdminProviderCreateRequest): Promise<AdminProvider>;
   adminUpdateProvider(id: string, patch: AdminProviderUpdateRequest): Promise<AdminProvider>;
-  adminDeleteProvider(id: string): Promise<OkResponse>;
-  /** Probes a saved provider (`id`) or an unsaved candidate (`req`). */
-  adminTestProvider(target: string | AdminProviderTestRequest): Promise<ConnectionTestResponse>;
+  adminUsers(): Promise<AdminUsersResponse>;
+  adminCreateUser(req: AdminUserCreateRequest): Promise<AdminUser>;
+  adminUpdateUser(username: string, patch: AdminUserUpdateRequest): Promise<AdminUser>;
+  /** Removes the user and their login; their files stay in the storage folder. */
+  adminDeleteUser(username: string): Promise<OkResponse>;
+  /** Folders the active login shares with people, and those shared with it. */
+  grants(): Promise<GrantsResponse>;
+  /** Shares a folder with a person, or changes their access when it already is. */
+  createGrant(req: CreateGrantRequest): Promise<OwnedGrant>;
+  updateGrant(id: string, req: UpdateGrantRequest): Promise<OwnedGrant>;
+  /** The owner stops sharing, or the person it is shared with leaves it. */
+  deleteGrant(id: string): Promise<OkResponse>;
+  grantPeople(): Promise<GrantPeopleResponse>;
   systemClearIndex(req?: IndexerClearRequest): Promise<IndexerClearResponse>;
   systemClearThumbnails(): Promise<IndexerClearResponse>;
   systemActivity(): Promise<SystemActivityResponse>;
@@ -654,6 +653,10 @@ export function createApiClient(options: ApiClientOptions = {}): ApiClient {
       return post(ROUTES.auth.logout, OkResponse);
     },
 
+    changePassword(req: ChangePasswordRequest): Promise<OkResponse> {
+      return post(ROUTES.auth.password, OkResponse, { jsonBody: req });
+    },
+
     linkIdentity(input) {
       return post(ROUTES.account.identities, MeResponse, { jsonBody: input });
     },
@@ -667,21 +670,6 @@ export function createApiClient(options: ApiClientOptions = {}): ApiClient {
     },
     accountFavorites() {
       return get(ROUTES.account.favorites, AccountFavoritesResponse);
-    },
-    identityScope(id) {
-      return get(identityScopeRoute(id), IdentityScopeResponse);
-    },
-    setIdentityScope(id, body) {
-      return put(identityScopeRoute(id), IdentityScopeResponse, { jsonBody: body });
-    },
-    identityScopeSuggestions(id) {
-      return get(identityScopeSuggestionsRoute(id), IdentityScopeSuggestionsResponse);
-    },
-    mountMappings() {
-      return get(ROUTES.system.mountMappings, MountMappingsResponse);
-    },
-    setMountMappings(body) {
-      return put(ROUTES.system.mountMappings, MountMappingsResponse, { jsonBody: body });
     },
 
     me(): Promise<MeResponse> {
@@ -832,13 +820,6 @@ export function createApiClient(options: ApiClientOptions = {}): ApiClient {
       return get(ROUTES.setup.status, SetupStatusResponse);
     },
 
-    setupTest(setupToken: string, baseUrl: string): Promise<ConnectionTestResponse> {
-      return post(ROUTES.setup.test, ConnectionTestResponse, {
-        jsonBody: { baseUrl },
-        extraHeaders: { [SETUP_TOKEN_HEADER]: setupToken },
-      });
-    },
-
     setupComplete(setupToken: string, req: SetupCompleteRequest): Promise<MeResponse> {
       return post(ROUTES.setup.complete, MeResponse, {
         jsonBody: req,
@@ -848,19 +829,21 @@ export function createApiClient(options: ApiClientOptions = {}): ApiClient {
 
     providers: () => get(ROUTES.providers, ProvidersResponse),
     adminProviders: () => get(ROUTES.admin.providers, AdminProvidersResponse),
-    adminCreateProvider: (req: AdminProviderCreateRequest) =>
-      post(ROUTES.admin.providers, AdminProvider, { jsonBody: req }),
     adminUpdateProvider: (id: string, input: AdminProviderUpdateRequest) =>
       patch(adminProviderRoute(id), AdminProvider, { jsonBody: input }),
-    adminDeleteProvider: (id: string) => del(adminProviderRoute(id), OkResponse),
-    adminTestProvider: (target: string | AdminProviderTestRequest) =>
-      requestJson(
-        ctx,
-        typeof target === "string"
-          ? { method: "POST", path: adminProviderTestRoute(target) }
-          : { method: "POST", path: ROUTES.admin.providersTest, jsonBody: target },
-        ConnectionTestResponse,
-      ),
+    adminUsers: () => get(ROUTES.admin.users, AdminUsersResponse),
+    adminCreateUser: (req: AdminUserCreateRequest) =>
+      post(ROUTES.admin.users, AdminUser, { jsonBody: req }),
+    adminUpdateUser: (username: string, input: AdminUserUpdateRequest) =>
+      patch(adminUserRoute(username), AdminUser, { jsonBody: input }),
+    adminDeleteUser: (username: string) => del(adminUserRoute(username), OkResponse),
+    grants: () => get(ROUTES.grants.list, GrantsResponse),
+    createGrant: (req: CreateGrantRequest) =>
+      post(ROUTES.grants.list, OwnedGrant, { jsonBody: req }),
+    updateGrant: (id: string, req: UpdateGrantRequest) =>
+      patch(grantRoute(id), OwnedGrant, { jsonBody: req }),
+    deleteGrant: (id: string) => del(grantRoute(id), OkResponse),
+    grantPeople: () => get(ROUTES.grants.people, GrantPeopleResponse),
 
     systemFeatures(): Promise<SystemFeaturesResponse> {
       return get(ROUTES.system.features, SystemFeaturesResponse);

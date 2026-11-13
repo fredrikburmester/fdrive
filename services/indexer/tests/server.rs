@@ -4,7 +4,7 @@
 mod common;
 
 use std::collections::BTreeSet;
-use std::os::unix::fs::{PermissionsExt, symlink};
+use std::os::unix::fs::symlink;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
@@ -296,7 +296,7 @@ fn health_reports_schema_roots_watchers_embeddings_and_storage() {
     assert_eq!(body["roots"], json!(["r"]));
     assert_eq!(body["watcher"], json!({"r": true}));
     assert_eq!(body["embed_ok"], true);
-    assert_eq!(body["schema_version"], 1);
+    assert_eq!(body["schema_version"], 2);
     assert_eq!(body["features"], env.ctx.features().as_json());
     assert_eq!(body["storage"], json!({"r": {"readable": true, "writable": true}}));
     assert_eq!(env.ml.count(fake_ml::TEXT_HEALTH), 1);
@@ -930,103 +930,6 @@ fn rebuilds_acknowledge_before_discovery() {
         tx.commit().unwrap();
         assert_eq!(wait(job)["outcome"], "completed");
     }
-}
-
-// ---------------------------------------------------------------------------------------
-// /directory
-// ---------------------------------------------------------------------------------------
-
-fn directory(env: &Env, path: &str) -> (u16, Value) {
-    get(&env.state, &format!("/directory?root=r&path={}", encode(path)))
-}
-
-#[test]
-fn directory_lists_and_validates() {
-    let env = setup(common::all_features());
-    let target = env.root.join("文 space%20");
-    std::fs::create_dir(&target).unwrap();
-    std::fs::write(target.join("a.txt"), "").unwrap();
-    assert_eq!(
-        directory(&env, "/文 space%20"),
-        (
-            200,
-            json!({"items": [{"name": "a.txt", "kind": "file"}], "overflow": false})
-        )
-    );
-    for query in [
-        "",
-        "?",
-        "?root=r",
-        "?root=r&path=/&extra=a",
-        "?root=r&path=/&path=/",
-        "?root=r&root=r&path=/",
-        "?root=&path=/",
-        "?root=r%0A&path=/",
-        "?root=r&path=%2F..%2F",
-        "?root=r&path=%2F%2e%2e",
-        "?root=r&path=%2Fa%2F%2Fb",
-        "?root=r&path=%2Fa%5Cb",
-        "?root=r&path=%2F%00",
-        "?root=r&path=relative",
-    ] {
-        assert_eq!(
-            get(&env.state, &format!("/directory{query}")),
-            (400, json!({"error": "invalid directory query"})),
-            "{query}"
-        );
-    }
-    assert_eq!(
-        get(&env.state, "/directory?root=missing&path=/"),
-        (404, json!({"error": "unknown root"}))
-    );
-    assert_eq!(
-        directory(&env, "/missing"),
-        (404, json!({"error": "directory unavailable"}))
-    );
-    assert_eq!(
-        directory(&env, "/文 space%20/a.txt").0,
-        400,
-        "a file is not a directory"
-    );
-    symlink(&target, env.root.join("link")).unwrap();
-    assert_eq!(
-        directory(&env, "/link"),
-        (400, json!({"error": "directory unavailable"}))
-    );
-    std::fs::create_dir(env.root.join("%2e%2e")).unwrap();
-    assert_eq!(
-        get(&env.state, "/directory?root=r&path=/%252e%252e"),
-        (200, json!({"items": [], "overflow": false})),
-        "a double-encoded dot-dot is a literal name"
-    );
-    let (status, body) = directory(&env, "/");
-    assert_eq!(status, 200);
-    let kinds: Vec<(&str, &str)> = body["items"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|e| (e["name"].as_str().unwrap(), e["kind"].as_str().unwrap()))
-        .collect();
-    assert_eq!(
-        kinds,
-        vec![("%2e%2e", "dir"), ("link", "symlink"), ("文 space%20", "dir")]
-    );
-}
-
-#[test]
-fn directory_permission_denied_is_403() {
-    let env = setup(common::all_features());
-    let locked = env.root.join("locked");
-    std::fs::create_dir(&locked).unwrap();
-    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
-    let readable = std::fs::read_dir(&locked).is_ok();
-    let response = directory(&env, "/locked");
-    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
-    if readable {
-        eprintln!("skipped: running as root bypasses directory permissions");
-        return;
-    }
-    assert_eq!(response, (403, json!({"error": "directory unavailable"})));
 }
 
 // ---------------------------------------------------------------------------------------

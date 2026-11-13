@@ -54,11 +54,18 @@ export interface EntryStat {
   readonly size: number;
   readonly modifiedAt: Date | null;
   readonly contentType: string | null;
+  /**
+   * The path as storage spells it, when that differs from the path asked
+   * for: a disk that ignores case or how accents are encoded (macOS) finds
+   * "Årsbesked" written with one character or with a combining ring. Absent
+   * when the path asked for is the stored spelling.
+   */
+  readonly path?: string;
 }
 
 /**
- * Provider-neutral storage port. Each provider package implements it over
- * its own client (SFTPGo's REST API, WebDAV, S3). All paths are the
+ * Provider-neutral storage port. `@fdrive/local` implements it over a folder
+ * on the API's disk. All paths are the
  * provider's own paths, already resolved from a scope by the caller: this
  * interface does no scoping of its own.
  *
@@ -117,8 +124,8 @@ export interface StorageProvider {
 
   /**
    * The largest file this backend can publish, when it bounds it at all.
-   * Publication copies or renames a staged file into place, and S3's
-   * `CopyObject` refuses above 5 GiB however the bytes arrived, so a backend
+   * Publication copies or renames a staged file into place, and a backend
+   * whose copy has a size limit (an object store's server-side copy, say)
    * can accept an upload it could never publish. Callers that stage before
    * publishing must apply this before accepting the transfer: discovering it
    * at publication spends the whole transfer first and leaves a commit that
@@ -130,7 +137,8 @@ export interface StorageProvider {
   /**
    * Set when moving a directory copies every object under it instead of
    * renaming it in one step, so the work is proportional to the tree rather
-   * than constant. S3 has no rename, so it is the only such backend today.
+   * than constant, as on an object store without rename. No backend does
+   * today.
    * Callers that serialize publication must keep a move like this outside that
    * serialization: holding a lock for a copy of unbounded length would refuse
    * every other writer for as long as it runs.

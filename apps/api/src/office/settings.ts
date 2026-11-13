@@ -101,7 +101,7 @@ export function createOfficeSettingsService(deps: {
       if (input.enabled && input.editingEnabled && input.editingProviderId !== activeProviderId)
         throw new ApiHttpError(
           "conflict",
-          "The active SFTPGo provider changed. Reload Office settings and try again.",
+          "The storage Office edits changed. Reload Office settings and try again.",
         );
       const current = await read();
       if (input.revision !== current.value.revision)

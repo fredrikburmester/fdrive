@@ -1183,7 +1183,7 @@ it("reseals stored credentials and destination secrets while discarding credenti
     identity = randomUUID(),
     destination = randomUUID();
   await db.pool.query(
-    "insert into app.providers(id,type,label,base_url) values($1,'sftpgo','Storage','http://fixture.invalid')",
+    "insert into app.providers(id,type,label,base_url) values($1,'webdav','Storage','http://fixture.invalid')",
     [provider],
   );
   await db.pool.query("insert into app.accounts(id) values($1)", [account]);

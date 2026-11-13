@@ -9,18 +9,17 @@ import {
   extractAttachment,
   fetchBackup,
   inspectArchive,
-  providerDestination,
   restoreArchive,
   s3Destination,
 } from "@fdrive/backup";
-import { ProviderType } from "@fdrive/contracts";
 import { stripTransientFields } from "@fdrive/core";
-import { createDb, migrate } from "@fdrive/db";
+import { createDb, createRepos, migrate } from "@fdrive/db";
 import { z } from "zod";
 import { open, parseMasterKey, seal } from "../auth/crypto.js";
 import type { AppConfig } from "../config.js";
+import { deploymentModules } from "../local/modules.js";
 import { moduleFor } from "../providers/registry.js";
-import { createBackupModule, masterSecrets, rawBackupStorage } from "./module.js";
+import { createBackupModule, masterSecrets } from "./module.js";
 import { recoveryIdentity, recoveryPreview, restoreOptions } from "./recovery.js";
 
 async function privateText(path: string): Promise<string> {
@@ -50,7 +49,8 @@ const Review = z
   .object({
     snapshotId: z.uuid(),
     environmentFingerprint: z.string().length(64),
-    providers: z.array(z.object({ id: z.uuid(), baseUrl: z.url() }).strict()).min(1),
+    // The local folder's row has no URL; it is stored as its type name.
+    providers: z.array(z.object({ id: z.uuid(), baseUrl: z.string().min(1) }).strict()).min(1),
     ownerIdentityId: z.uuid(),
     credential: z.record(z.string(), z.string()),
     oldDeploymentStopped: z.literal(true),
@@ -62,6 +62,7 @@ export async function resumeRecovery(config: AppConfig, review: unknown): Promis
   if (input.environmentFingerprint !== environmentFingerprint(config))
     throw Error("Destination environment changed since review");
   const database = createDb(config.databaseUrl);
+  const modules = deploymentModules(config, createRepos(database.db));
   try {
     const store = new BackupStore(database.pool);
     const saved = (
@@ -97,7 +98,7 @@ export async function resumeRecovery(config: AppConfig, review: unknown): Promis
       ).rows[0];
       if (!provider || provider.base_url !== expected.baseUrl)
         throw Error("Provider binding changed; review source and destination before resuming");
-      const module = moduleFor(provider.type);
+      const module = moduleFor(provider.type, modules);
       if (!module) throw Error("Unsupported restored provider");
       if (provider.id === owner.provider_id) {
         const verified = await module.authenticate(
@@ -162,7 +163,7 @@ export async function resumeRecovery(config: AppConfig, review: unknown): Promis
           owner.provider_id,
         ])
       ).rows[0];
-      const ownerModule = ownerProvider && moduleFor(ownerProvider.type);
+      const ownerModule = ownerProvider && moduleFor(ownerProvider.type, modules);
       if (!ownerModule) throw Error("Restored owner provider is unavailable");
       const ownerSecret = seal(
         master,
@@ -221,47 +222,23 @@ export async function runBackupCommand(
   if (command === "list" || command === "fetch") {
     if (!values["destination-file"])
       throw Error("Supply a private destination JSON file; no application database is required");
-    const raw = JSON.parse(await privateText(values["destination-file"]));
-    const s3 = z
-      .object({
-        type: z.literal("s3"),
-        endpoint: z.url(),
-        region: z.string(),
-        bucket: z.string(),
-        prefix: z.string(),
-        pathStyle: z.boolean(),
-        accessKeyId: z.string(),
-        secretAccessKey: z.string(),
-      })
-      .strict();
-    const provider = z
-      .object({
-        type: ProviderType,
-        id: z.uuid(),
-        baseUrl: z.url(),
-        config: z.record(z.string(), z.unknown()),
-        username: z.string(),
-        prefix: z.string(),
-        credential: z.record(z.string(), z.string()),
-      })
-      .strict();
-    // A bucket destination and a provider-row destination of the S3 type both say
-    // `type: "s3"`; only the row carries an `id`, so the shape decides.
-    const input =
-      typeof raw === "object" && raw !== null && "id" in raw ? provider.parse(raw) : s3.parse(raw);
-    const providerModule = "id" in input ? moduleFor(input.type) : null;
-    if ("id" in input && !providerModule) throw Error("Unsupported destination provider");
-    const destination = !("id" in input)
-      ? s3Destination(input)
-      : providerDestination(
-          await rawBackupStorage(
-            providerModule as NonNullable<typeof providerModule>,
-            { id: input.id, baseUrl: input.baseUrl, config: input.config },
-            input.credential,
-            input.username,
-          ),
-          input.prefix,
-        );
+    // Only a bucket needs a destination file: a backup in the files folder
+    // is a plain file there (`<username>/<prefix>/<snapshot>.fdrive.age`).
+    const destination = s3Destination(
+      z
+        .object({
+          type: z.literal("s3"),
+          endpoint: z.url(),
+          region: z.string(),
+          bucket: z.string(),
+          prefix: z.string(),
+          pathStyle: z.boolean(),
+          accessKeyId: z.string(),
+          secretAccessKey: z.string(),
+        })
+        .strict()
+        .parse(JSON.parse(await privateText(values["destination-file"]))),
+    );
     if (command === "list") output(JSON.stringify(await discoverBackups(destination), null, 2));
     else {
       if (!values.snapshot || !values.output)
@@ -366,7 +343,13 @@ export async function runBackupCommand(
       await waitForStop();
       return;
     }
-    const module = createBackupModule({ ...config, fdriveBackupWorker: false });
+    // Local users live in the database, so a destination in the local folder
+    // is checked against them like a sign-in.
+    const users = createDb(config.databaseUrl, { max: 2 });
+    const module = createBackupModule(
+      { ...config, fdriveBackupWorker: false },
+      deploymentModules(config, createRepos(users.db)),
+    );
     try {
       await module.start();
       if (!module.enabled) throw Error("FDRIVE_BACKUP_STATE_DIR is required");
@@ -374,6 +357,7 @@ export async function runBackupCommand(
       await waitForStop();
     } finally {
       await module.close();
+      await users.close();
     }
     return;
   }

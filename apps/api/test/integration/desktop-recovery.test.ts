@@ -40,7 +40,7 @@ async function fixture() {
   const repos = createRepos(database.db);
   const account = await repos.accounts.create({ displayName: "Recovery regression" });
   const provider = await repos.providers.ensure({
-    type: "webdav",
+    type: "local",
     baseUrl: `http://${randomUUID()}.test`,
   });
   const identity = await repos.identities.create({
@@ -72,7 +72,6 @@ async function fixture() {
   const mapping = async (): Promise<ConfiguredMappingsResult> => ({
     available: true,
     providerId: provider.id,
-    homeTemplateRaw: "root:/alice",
     scopes: [{ rootName: "root", virtualPrefix: "/", fsPrefix: "/alice" }],
   });
   // Leaving the worker stopped models restart/outage after a durable receipt.

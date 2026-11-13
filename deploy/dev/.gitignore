@@ -1,3 +1,4 @@
-# Generated at runtime by the indexer (thumbnails); never committed. See
-# compose.dev.yaml's `indexer` service and docs/DEVELOPMENT.md.
+# Runtime dev data, never committed: the indexer's thumbnails and the copy of
+# files/ the api dev server serves (tools/dev/ensure-env.ts). See
+# compose.dev.yaml and docs/DEVELOPMENT.md.
 .data/

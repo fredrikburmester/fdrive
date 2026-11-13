@@ -112,7 +112,7 @@ test("rename carries subtree pins, and account reset removes them", async ({ pag
   await page.goto("/account");
   await page.getByRole("button", { name: "Reset all folder views", exact: true }).click();
   await expect(
-    page.getByText("All folders now use the default view.", { exact: true }),
+    page.getByText("All folders now use the default view and sort.", { exact: true }),
   ).toBeVisible();
   await page.goto(`/files${renamed}/child`);
   await expectMode(page, "List");

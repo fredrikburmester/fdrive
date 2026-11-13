@@ -89,8 +89,8 @@ function FeatureCard({
 function FeatureEditor({ data }: { data: SystemFeaturesResponse }) {
   const router = useRouter();
   const update = useUpdateFeatures();
-  // Trash is a per-server setting; the walkthrough configures it for the
-  // server being set up, which is the one the administrator signed in to.
+  // Trash belongs to the files folder's storage row; the walkthrough reaches
+  // it through the login the administrator signed in with.
   const me = useMe();
   const login = me.data?.identities.find((identity) => identity.id === me.data?.activeIdentityId);
   const setupProvider = login ? { id: login.providerId, label: login.providerLabel } : null;
@@ -163,6 +163,7 @@ function FeatureEditor({ data }: { data: SystemFeaturesResponse }) {
         setupProvider ? (
           <TrashSettingsCard
             provider={setupProvider}
+            description="You can change this later under System > General."
             disabled={update.isPending}
             onContinue={() => save({ walkthroughStep: 7 })}
           />
@@ -194,7 +195,7 @@ function FeatureEditor({ data }: { data: SystemFeaturesResponse }) {
             <CardTitle>Ready to use fdrive</CardTitle>
             <CardDescription>
               You can finish while optional features prepare. You can change your choices later
-              under System: Features, General and, for each storage server's Trash, Storage.
+              under System: Features and General.
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-3">

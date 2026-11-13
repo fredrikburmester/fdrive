@@ -1,5 +1,6 @@
 import { FEATURE_IDS, type FeatureId } from "@fdrive/contracts";
 import { FEATURE_DESCRIPTIONS } from "./features";
+import { SETUP_STEPS } from "./setup-flow";
 
 export type WalkthroughStep =
   | { readonly kind: "feature"; readonly id: FeatureId; readonly label: string }
@@ -25,17 +26,14 @@ export const WALKTHROUGH_STEPS: readonly WalkthroughStep[] = [
   { kind: "review", label: "Review" },
 ];
 
-/**
- * How many wizard steps come before the walkthrough (claim, SFTPGo,
- * administrator), so walkthrough step 0 is presented as "Step 4".
- */
-export const WALKTHROUGH_STEP_OFFSET = 3;
+/** How many wizard steps come before the walkthrough: claiming the installation and the account. */
+export const WALKTHROUGH_OFFSET = SETUP_STEPS.length;
 
 /** Total number of steps a fresh install walks through, wizard included. */
-export const WALKTHROUGH_TOTAL = WALKTHROUGH_STEP_OFFSET + WALKTHROUGH_STEPS.length;
+export const WALKTHROUGH_TOTAL = WALKTHROUGH_OFFSET + WALKTHROUGH_STEPS.length;
 
-/** The "Step 6 of 13 · Search OCR" caption for a walkthrough step index. */
+/** The "Step 5 of 12 · Search OCR" caption for a walkthrough step index. */
 export function walkthroughLabel(step: number): string {
   const label = WALKTHROUGH_STEPS[step]?.label ?? "Features";
-  return `Step ${step + WALKTHROUGH_STEP_OFFSET + 1} of ${WALKTHROUGH_TOTAL} · ${label}`;
+  return `Step ${step + WALKTHROUGH_OFFSET + 1} of ${WALKTHROUGH_TOTAL} · ${label}`;
 }

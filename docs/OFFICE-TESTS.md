@@ -1,11 +1,11 @@
 # Real Office acceptance
 
 The opt-in Playwright fixture runs the pinned deployment images against a fresh
-Postgres, SFTPGo, API and web app. Alice and Bob are writers; Reader has only list
-and download permission. All three use the same physical SFTP home and canonical
-home mapping, so coediting must use one durable file UUID.
+Postgres, an API serving a temporary files folder, and the web app. Alice and Bob are
+writers; Reader may only view. All three reach the same document, so coediting must use
+one durable file UUID.
 
-Use Node 24, pnpm 10.11, Docker Desktop, Python 3, OpenSSH `sftp` and `ssh-keygen`.
+Use Node 24, pnpm 10.11, Docker Desktop and Python 3.
 Install dependencies in this checkout first. Run each product serially:
 
 ```sh
@@ -31,11 +31,9 @@ Development ports 3001, 3002, 58090 and 58091 are rejected. Tests never reuse de
 containers or office volumes.
 
 Each run generates a random temporary Compose project, Office JWT, persisted
-proof-key volume and isolated SSH key. SFTP uploads tunnel to port 2022 inside the
-owned fixture container using OpenSSH ProxyCommand. This exercises real SFTP
-without exposing another host port. The known-hosts file belongs to the temporary
-fixture. Cleanup stops API/web, removes fixture containers and volumes, and deletes
-temporary credentials and state, including after failures.
+proof-key volume and files folder. Cleanup stops API/web, removes fixture containers
+and volumes, and deletes the files folder, temporary credentials and state, including
+after failures.
 
 Browser traces, videos and screenshots are disabled because editor URLs can carry
 short-lived credentials. Do not enable or publish them without token redaction.
@@ -43,7 +41,7 @@ The test logs contain operation results, never tokens or editor frame URLs.
 `OFFICE_E2E_DIAGNOSTICS=1` retains a failed writer fixture for 60 seconds before
 normal cleanup. Failure output includes saved-marker booleans, editor control
 state, allowlisted exception identifiers and bounded numeric engine error codes. ZIP
-assertions parse saved OOXML and ODF text through SFTPGo. XML text parsing preserves
+assertions parse saved OOXML and ODF text read back from storage. XML text parsing preserves
 markers split across legitimate formatting or coauthor runs. Editor toasts alone
 do not establish persistence.
 
@@ -58,10 +56,10 @@ do not establish persistence.
   caret after the other writer updates that same shape.
 - Reader explicitly requests edit mode while a writer is active. Reader edits
   must never be included in the writer's persisted coediting changes.
-- Editor rename and Save Copy As persist in SFTPGo; host rename follows trusted
+- Editor rename and Save Copy As persist in storage; host rename follows trusted
   postMessage notifications without replacing the active editor.
-- Equal-size ZIP edits preserve second-resolution mtime over actual SFTP, then a
-  fresh editor must show the new content.
+- An equal-size ZIP edit written outside fdrive with its second-resolution mtime
+  preserved, then a fresh editor must show the new content.
 - Collabora opens, edits, saves and reopens a real OpenDocument fixture. Reopened
   rendered word count confirms the saved text is loaded.
 - Recents and Favorites open the preview and its View in office action preserves
@@ -76,13 +74,13 @@ and no Reader marker. A direct Reader upload denial alone is insufficient.
 Fixture admission derives from the known seeded users and permissions in the
 shared test fixture. Production defaults to view-only and needs explicit operator
 edit grants. The fixture does not infer writable capability from successful reads
-or claim an SFTPGo permission-introspection API. See [Office deployment](OFFICE.md).
+or claim a storage permission-introspection API. See [Office deployment](OFFICE.md).
 
 The suite exposed three other production defects: a zero-slide PPTX template,
 ONLYOFFICE's timestamp-based view cache key, and Collabora's missing UTF-8 locale.
 The authored PPTX now includes one editable slide with a complete master, layout,
 theme and relationships. ONLYOFFICE receives the strong content Version without
-optional LastModifiedTime; equal-size, equal-mtime SFTP changes therefore select a
+optional LastModifiedTime; equal-size, equal-mtime external changes therefore select a
 fresh view. Collabora uses the pinned 26.04.3.2.1 locale fix. Image digests come from
 `deploy/office/compose.services.yaml`.
 

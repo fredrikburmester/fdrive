@@ -1,9 +1,13 @@
 import { describe, expect, it } from "vitest";
 import {
   buildDevSampleFiles,
+  buildDevSeed,
   buildGradientPngMarker,
   buildSamplePdfMarker,
   buildSamplePngMarker,
+  DEV_USER,
+  devFileLayout,
+  devUsers,
 } from "./generate-seed.js";
 
 const BASE64_PREFIX = "BASE64:";
@@ -68,5 +72,42 @@ describe("buildDevSampleFiles", () => {
 
   it("adds a sample PDF under docs/", () => {
     expect(files["/docs/sample.pdf"]).toBe(buildSamplePdfMarker());
+  });
+});
+
+describe("buildDevSeed", () => {
+  const shared = { username: "alice", password: "alice-password", permissions: { "/": ["*"] } };
+  const seed = buildDevSeed(
+    [shared],
+    { alice: { "/a.txt": "a" }, "@shared": { "/team.txt": "t" } },
+    DEV_USER,
+    { "/README.md": "hi" },
+  );
+
+  it("keeps each user's name and password only, and adds the dev user", () => {
+    expect(seed.users).toEqual([
+      { username: "alice", password: "alice-password" },
+      { username: "dev", password: "dev" },
+    ]);
+  });
+
+  it("drops files that belong to no user, such as the SFTPGo virtual folder", () => {
+    expect(Object.keys(seed.files).sort()).toEqual(["alice", "dev"]);
+  });
+});
+
+describe("devFileLayout", () => {
+  it("puts each owner's files in a folder named after them", () => {
+    expect(devFileLayout({ bob: { "/inbox/.keep": "", "/public/notes.txt": "n" } })).toEqual([
+      { path: "bob/inbox/.keep", content: "" },
+      { path: "bob/public/notes.txt", content: "n" },
+    ]);
+  });
+});
+
+describe("devUsers", () => {
+  it("lists the testkit users and dev with their known passwords", () => {
+    expect(devUsers().map((user) => user.username)).toEqual(["alice", "bob", "carol", "dev"]);
+    expect(devUsers().find((user) => user.username === "dev")?.password).toBe("dev");
   });
 });

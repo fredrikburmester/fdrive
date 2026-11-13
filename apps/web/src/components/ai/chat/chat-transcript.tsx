@@ -94,13 +94,13 @@ export function ChatTranscript({
       <ConversationEmptyState
         icon={<MessageSquareIcon className="size-6" />}
         title="Ask about your files"
-        description="Drop files or folders here, or add them from a selection, then ask away."
+        description="Ask about the folder you have open, or drop files and folders here."
       >
         <MessageSquareIcon className="size-6 text-muted-foreground" />
         <div className="space-y-1">
           <h3 className="font-medium text-sm">Ask about your files</h3>
           <p className="text-muted-foreground text-sm">
-            Drop files or folders here, or add them from a selection, then ask away.
+            Ask about the folder you have open, or drop files and folders here.
           </p>
         </div>
         {/* Wrap rather than the registry's scrolling row: the panel is too narrow for one line. */}

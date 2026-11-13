@@ -121,7 +121,7 @@ describe("createOcrClient: run", () => {
 describe("createOcrClient: originals", () => {
   const rawOriginal = {
     id: "0123456789abcdef_scan.pdf",
-    root: "sftpgo",
+    root: "files",
     path: "docs/scan.pdf",
     size: 1024,
     kept_at: 1_757_000_000,
@@ -146,7 +146,7 @@ describe("createOcrClient: originals", () => {
         items: [
           {
             id: "0123456789abcdef_scan.pdf",
-            root: "sftpgo",
+            root: "files",
             path: "docs/scan.pdf",
             size: 1024,
             keptAt: new Date(1_757_000_000_000).toISOString(),
@@ -208,7 +208,7 @@ describe("createOcrClient: restoreOriginal", () => {
     const fetchStub = vi.fn().mockResolvedValue(
       jsonResponse(200, {
         restored: true,
-        root: "sftpgo",
+        root: "files",
         path: "docs/scan.pdf",
         previous_state: "ocred",
       }),
@@ -219,7 +219,7 @@ describe("createOcrClient: restoreOriginal", () => {
 
     expect(result).toEqual({
       ok: true,
-      data: { restored: true, root: "sftpgo", path: "docs/scan.pdf", previousState: "ocred" },
+      data: { restored: true, root: "files", path: "docs/scan.pdf", previousState: "ocred" },
     });
     const [, init] = fetchStub.mock.calls[0] as [string, RequestInit];
     expect(JSON.parse(String(init.body))).toEqual({
@@ -234,7 +234,7 @@ describe("createOcrClient: restoreOriginal", () => {
       jsonResponse(409, {
         error: "target_changed",
         state: "changed",
-        root: "sftpgo",
+        root: "files",
         path: "docs/scan.pdf",
       }),
     );
@@ -246,7 +246,7 @@ describe("createOcrClient: restoreOriginal", () => {
     expect(ocrRefusal(result)).toEqual({
       reason: "target_changed",
       state: "changed",
-      root: "sftpgo",
+      root: "files",
       path: "docs/scan.pdf",
       status: 409,
     });

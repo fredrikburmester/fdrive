@@ -26,8 +26,9 @@ See [architecture](ARCHITECTURE.md) for the service boundaries.
 
 Every regular file under a configured root, except:
 
-- Names in `SKIP_NAMES` (`.DS_Store`, `Thumbs.db`, `desktop.ini`, `.localized`)
-  and AppleDouble sidecars (`._*`).
+- Names in `SKIP_NAMES` (`.DS_Store`, `Thumbs.db`, `desktop.ini`, `.localized`),
+  AppleDouble sidecars (`._*`) and uploads local storage is still writing
+  (`.fdrive-partial-<16 hex>`, renamed to the real name once complete).
 - Directories in `SKIP_DIRS` (`@eaDir`, `.Trash`, `.Trashes`, `node_modules`,
   `.git`).
 
@@ -65,12 +66,11 @@ on again; System can retry it sooner.
 The api serves this same cache twice: `GET /api/v1/thumb` for the logged-in
 file browser, and `GET /api/v1/public/shares/:id/thumb` for a public share's
 gallery tiles. Both read straight from `FDRIVE_THUMBS_DIR`; neither ever goes
-through SFTPGo's own file download, so loading a gallery of thumbnails never
-consumes a share's download limit the way opening or downloading a full-size
-image does. The public route also verifies a password-protected share's
-password itself (one upstream share-root listing per password, cached for 60
-seconds) before it will serve a thumbnail, since SFTPGo only checks a share's
-password when it is actually asked to serve file bytes.
+through the storage's own file download, so loading a gallery of thumbnails
+never consumes a share's download limit the way opening or downloading a
+full-size image does. The public route checks a password-protected share's
+password before it serves a thumbnail. Both map index paths to a login's paths
+through [scopes](SCOPING.md) and check each file with a live read first.
 
 `POST /thumbnails/rebuild` (`maintenance.rs`) is a separate, thumbnail-only
 pass for when the WebP files themselves need regenerating, for example after
@@ -151,7 +151,7 @@ The admin **Logs** sheet on System > Indexer lists these `error` rows together w
 `INDEX_ROOTS` is a comma-separated `name=path` list, for example:
 
 ```
-INDEX_ROOTS=sftpgo=/roots/sftpgo,photos=/roots/photos
+INDEX_ROOTS=files=/data,photos=/roots/photos
 ```
 
 Each name becomes a row in `idx.roots` (upserted by name on start, so restarts
@@ -242,20 +242,25 @@ docker compose up -d
 
 Environment (see `deploy/.env.example`):
 
-- `FDRIVE_INDEX_SFTPGO_DIR`: host directory bind-mounted read-only into the
-  indexer at `/roots/sftpgo`. This must be the same directory SFTPGo itself
-  serves for that root, so indexed paths line up with what users browse.
-- Additional roots: copy the `indexer` service's volume line
-  (`<host path>:/roots/<name>:ro`) and extend `INDEX_ROOTS` with
-  `,<name>=/roots/<name>` for each one.
-- SFTPGo virtual folders are only searchable when their `mapped_path` is
-  under one of these roots and an administrator has mapped them per account;
-  see [SFTPGo virtual folders](../deploy/REFERENCE.md#sftpgo-virtual-folders).
+- `FDRIVE_FILES_DIR`: the host folder fdrive serves, one subfolder per user.
+  It is mounted at `/data` read-write into the api (`FDRIVE_STORAGE_ROOT`) and
+  OCR, and read-only into the indexer, which indexes it as the root `files`
+  (`INDEX_ROOTS=files=/data`). `FDRIVE_INDEX_SFTPGO_DIR`, its older name,
+  still works.
+- The api's `FDRIVE_INDEX_ROOTS` names each indexed root with where the api
+  sees it (`storagePath`; `sftpgoPath` is still read) and where the indexer
+  sees it (`indexerPath`), for example
+  `[{"name":"files","storagePath":"/data","indexerPath":"/data"}]`. The root
+  whose `storagePath` is `FDRIVE_STORAGE_ROOT` (or the only root) is the one
+  every login's home `<root>/<username>` is mapped under; see
+  [scoping](SCOPING.md).
+- Additional roots: add a volume line (`<host path>:/roots/<name>:ro`) and
+  extend `INDEX_ROOTS` with `,<name>=/roots/<name>`. They are indexed, but no
+  login maps to them.
 
-Only `deploy/compose.dev.yaml` uses `--profile index`; it mounts the dev
-environment's seeded SFTPGo data (the `fdrive-dev-sftpgo-data` named volume,
-read-only) so the indexer sees exactly what the `dev` user's SFTPGo account
-sees. Two things differ from the production-shaped compose file because the
+Only `deploy/compose.dev.yaml` uses `--profile index`; it mounts the folder
+the dev api serves (`deploy/dev/files`, read-only) at the same `/data` root
+production uses, so the indexer sees exactly what the dev users see. Two things differ from the production-shaped compose file because the
 api there runs on the host with `tsx watch` instead of in the compose
 network: `ml` publishes its port on the host (58012 by default, override
 with `FDRIVE_DEV_ML_PORT`) so `FDRIVE_EMBED_URL`, `FDRIVE_IMAGE_EMBED_URL`
@@ -302,7 +307,7 @@ tests where `ffmpeg` is not.
 ## Clearing derived data
 
 Internal `POST /index/clear` accepts an empty body or `{}` for every configured
-root, or `{ "root": "sftpgo", "path": "/documents" }` for one file or directory
+root, or `{ "root": "files", "path": "/documents" }` for one file or directory
 subtree. `path` requires `root`; `/` selects the entire root. Empty names,
 traversal, malformed bodies, and unknown roots are rejected. Directory matching
 uses a literal boundary, so `%` and `_` in names are never wildcards.

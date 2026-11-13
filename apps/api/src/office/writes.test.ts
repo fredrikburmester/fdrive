@@ -449,6 +449,46 @@ describe("save-copy collision races", () => {
     if (suggested)
       expect((await response.json()) as unknown).toMatchObject({ Name: "race (1).docx" });
   });
+  it.each([true, false])(
+    "refuses a name taken after the recheck, suggested=%s, without overwriting it",
+    async (suggested) => {
+      const h = await officeHarness();
+      const opened = await h.open();
+      const upload = vi.spyOn(h.storage, "upload");
+      upload.mockRejectedValueOnce(new StorageError("conflict", "exists"));
+      const response = await h.callback(opened, {
+        method: "POST",
+        headers: {
+          "X-WOPI-Override": "PUT_RELATIVE",
+          [suggested ? "X-WOPI-SuggestedTarget" : "X-WOPI-RelativeTarget"]: "late.docx",
+        },
+        body: "new",
+      });
+      expect(response.status).toBe(409);
+      expect(response.headers.get("X-WOPI-Lock")).toBe("");
+      expect(upload).toHaveBeenCalledWith(
+        "/late.docx",
+        expect.anything(),
+        expect.objectContaining({ overwrite: false }),
+      );
+    },
+  );
+  it("publishes an overwriting relative target without refusing the name", async () => {
+    const h = await officeHarness();
+    const opened = await h.open();
+    const upload = vi.spyOn(h.storage, "upload");
+    const response = await h.callback(opened, {
+      method: "POST",
+      headers: {
+        "X-WOPI-Override": "PUT_RELATIVE",
+        "X-WOPI-RelativeTarget": "a.docx",
+        "X-WOPI-OverwriteRelativeTarget": "true",
+      },
+      body: "new",
+    });
+    expect(response.status).toBe(200);
+    expect(upload.mock.calls.at(-1)?.[2]).not.toHaveProperty("overwrite");
+  });
   it("bounds repeated suggested-name collisions", async () => {
     const h = await officeHarness();
     const opened = await h.open();
@@ -629,7 +669,7 @@ it("denies a PUT queued behind deletion without recreating its old path", async 
     await h.storage.deleteFile("/a.docx");
     await scope.files.deletePrefix({
       providerId: h.provider.id,
-      rootName: "sftpgo",
+      rootName: "files",
       path: "shared/a.docx",
       at: h.clock(),
     });
@@ -670,7 +710,7 @@ it.each(["RENAME_FILE", "PUT_RELATIVE"])(
         await h.storage.move("/a.docx", "/folder/current.DOCX");
         await scope.files.movePrefix({
           providerId: h.provider.id,
-          rootName: "sftpgo",
+          rootName: "files",
           from: "shared/a.docx",
           to: "shared/folder/current.DOCX",
           at: h.clock(),

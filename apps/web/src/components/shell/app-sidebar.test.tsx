@@ -126,27 +126,7 @@ it("shows Shares and Trash when any linked login has them, and names each login'
   });
   await screen.findByRole("link", { name: "Shares" });
   expect(screen.getByRole("link", { name: "Trash" })).toBeTruthy();
-  expect(screen.getByRole("img", { name: "SFTPGo" })).toBeTruthy();
-});
-
-it("leads a key login with its storage name and keeps the access key beneath", async () => {
-  renderSidebar({
-    ...me,
-    identities: [
-      makeIdentity({
-        id: "b2",
-        providerType: "s3",
-        username: "0041234abcdef",
-        providerLabel: "Backblaze",
-      }),
-    ],
-    activeIdentityId: "b2",
-  });
-  await screen.findByRole("link", { name: "Files" });
-  const trigger = screen.getByRole("button", { name: /Backblaze[\s\S]*0041234abcdef/ });
-  expect(isBefore(screen.getByText("Backblaze"), screen.getByText("0041234abcdef"))).toBe(true);
-  expect(trigger.textContent?.startsWith("BA")).toBe(true);
-  expect(screen.getByRole("img", { name: "S3" })).toBeTruthy();
+  expect(screen.getByRole("img", { name: "fdrive" })).toBeTruthy();
 });
 
 it("applies tighter vertical nav item spacing via scoped descendant styles on SidebarContent", () => {
@@ -163,9 +143,8 @@ it("nests feature pages beneath Features and keeps other System pages separate",
 
   const expected = [
     ["General", "/system/general"],
-    ["Storage", "/system/storage"],
+    ["Users", "/system/users"],
     ["Features", "/system/features"],
-    ["Shared folders", "/system/shared-folders"],
     ["Thumbnails", "/system/thumbnails"],
     ["Full-text search", "/system/indexer"],
     ["Semantic search", "/system/search"],
@@ -188,6 +167,7 @@ it("nests feature pages beneath Features and keeps other System pages separate",
     }
   }
   expect(screen.queryByRole("link", { name: "Connection" })).toBeNull();
+  expect(screen.queryByRole("link", { name: "Storage" })).toBeNull();
   expect(screen.getByText("Admins only")).toBeTruthy();
 });
 

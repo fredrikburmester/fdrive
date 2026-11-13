@@ -1,23 +1,27 @@
 import { PUBLIC_URL_SETTINGS_KEY } from "@fdrive/contracts";
 import { createDb, createRepos, migrate } from "@fdrive/db";
-import { createFakeSftpgoServer } from "@fdrive/sftpgo";
-import { startPostgres } from "@fdrive/testkit";
+import { startLocalStorage, startPostgres } from "@fdrive/testkit";
 import pino from "pino";
 import { expect, it } from "vitest";
 import { composeApp } from "../../src/composition.ts";
 import { loadConfig } from "../../src/config.ts";
 import { OFFICE_SETTINGS_KEY } from "../../src/office/settings.ts";
 import { officeFixtureUsers } from "../fixtures/office/seeded-users.ts";
+import { seedLocalUsers } from "./helpers/local-storage.ts";
 
 it("composes persisted editor admission, advanced policy and explicit server injection", async () => {
   const postgres = await startPostgres();
+  const storage = await startLocalStorage({
+    users: officeFixtureUsers.map(({ username, password }) => ({ username, password })),
+    files: { alice: {} },
+  });
   const { db, close } = createDb(postgres.connectionString);
   try {
     await migrate(db);
-    const provider = await createRepos(db).providers.ensure({
-      type: "sftpgo",
-      baseUrl: "http://fixture-storage",
-    });
+    await seedLocalUsers(postgres.connectionString, storage);
+    // The row startup pins for `FDRIVE_STORAGE_ROOT`, created first so the
+    // Office settings below can name it.
+    const provider = await createRepos(db).providers.ensure({ type: "local", baseUrl: "local" });
     const rules = [
       { providerId: provider.id, username: "alice", path: "/", recursive: true, allow: true },
     ];
@@ -27,14 +31,9 @@ it("composes persisted editor admission, advanced policy and explicit server inj
       "injected-deny",
       "injected-allow-configured-deny",
     ] as const) {
-      const storage = createFakeSftpgoServer({
-        users: [...officeFixtureUsers],
-        folders: [],
-        files: { alice: {} },
-      });
       const config = loadConfig({
         DATABASE_URL: postgres.connectionString,
-        SFTPGO_URL: "http://fixture-storage",
+        FDRIVE_STORAGE_ROOT: storage.root,
         FDRIVE_MASTER_KEY: Buffer.alloc(32, 7).toString("base64"),
         FDRIVE_OFFICE_PRODUCT: "onlyoffice",
         FDRIVE_OFFICE_URL: "http://fixture-editor",
@@ -62,7 +61,6 @@ it("composes persisted editor admission, advanced policy and explicit server inj
         editorUsernames: ["alice"],
       });
       const composed = await composeApp(config, pino({ enabled: false }), () => new Date(), {
-        fetch: storage.fetch,
         ...(scenario === "injected-deny"
           ? { officeCanEdit: async () => false }
           : scenario === "injected-allow-configured-deny"
@@ -86,10 +84,13 @@ it("composes persisted editor admission, advanced policy and explicit server inj
           const repos = createRepos(db);
           const account = await repos.identities.findByProviderUsername(provider.id, "alice");
           if (!account) throw new Error("Missing fixture identity");
+          // A login on storage that is gone: a WebDAV row from before the files
+          // folder was the only storage, switched off by migration 0019.
           const staleProvider = await repos.providers.ensure({
-            type: "sftpgo",
+            type: "webdav",
             baseUrl: "http://previous-storage",
           });
+          await repos.providers.update(staleProvider.id, { enabled: false });
           const staleIdentity = await repos.identities.create({
             accountId: account.accountId,
             providerId: staleProvider.id,
@@ -107,7 +108,8 @@ it("composes persisted editor admission, advanced policy and explicit server inj
         const created = await composed.app.request("/api/v1/office/documents", {
           method: "POST",
           headers: { ...headers, cookie },
-          body: JSON.stringify({ parent: "/", name: "new.docx" }),
+          // One folder serves every scenario, so each creates its own document.
+          body: JSON.stringify({ parent: "/", name: `${scenario}.docx` }),
         });
         expect(created.status, scenario).toBe(
           scenario === "injected-deny" || scenario === "injected-allow-configured-deny" ? 403 : 201,
@@ -119,5 +121,6 @@ it("composes persisted editor admission, advanced policy and explicit server inj
   } finally {
     await close();
     await postgres.stop();
+    await storage.stop();
   }
 });

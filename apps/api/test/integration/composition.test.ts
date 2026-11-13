@@ -1,12 +1,13 @@
+import { readFile } from "node:fs/promises";
 import { createDb, createRepos } from "@fdrive/db";
-import { createFakeSftpgoServer } from "@fdrive/sftpgo";
-import { SEED_FILES, SEED_FOLDERS, SEED_USERS, startPostgres } from "@fdrive/testkit";
+import { startLocalStorage, startPostgres } from "@fdrive/testkit";
 import { sql } from "drizzle-orm";
 import type { Logger } from "pino";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { composeApp } from "../../src/composition.js";
 import { loadConfig } from "../../src/config.js";
 import { generateApiToken, hashApiToken } from "../../src/tokens/token-format.js";
+import { seedLocalUsers } from "./helpers/local-storage.ts";
 
 function createTestLogger(): Logger {
   const noop = () => undefined;
@@ -39,21 +40,6 @@ function createCapturingLogger(): { logger: Logger; messages: string[] } {
   return { logger, messages };
 }
 
-/**
- * Wraps a fetch implementation (typically a fake SFTPGo server's `fetch`)
- * with a `/healthz` handler returning `200 "ok"`, since the fake does not
- * implement it and `probeConnection` requires it.
- */
-function withHealthz(fetchImpl: typeof globalThis.fetch): typeof globalThis.fetch {
-  return (async (input: Parameters<typeof globalThis.fetch>[0], init?: RequestInit) => {
-    const url = input instanceof Request ? input.url : String(input);
-    if (url.endsWith("/healthz")) {
-      return new Response("ok", { status: 200 });
-    }
-    return fetchImpl(input, init);
-  }) as typeof globalThis.fetch;
-}
-
 function extractCookie(res: Response): string {
   const setCookie = res.headers.get("set-cookie");
   if (setCookie === null) {
@@ -82,32 +68,27 @@ async function readFirstSseChunk(body: ReadableStream<Uint8Array>): Promise<stri
 
 describe("composeApp", () => {
   let postgres: Awaited<ReturnType<typeof startPostgres>>;
+  let storage: Awaited<ReturnType<typeof startLocalStorage>>;
 
   beforeAll(async () => {
-    postgres = await startPostgres();
+    [postgres, storage] = await Promise.all([startPostgres(), startLocalStorage()]);
+    await seedLocalUsers(postgres.connectionString, storage);
   }, 180_000);
 
   afterAll(async () => {
-    await postgres.stop();
+    await postgres?.stop();
+    await storage?.stop();
   }, 180_000);
 
   it("migrates, logs in, records MCP activity, preserves folder journeys and streams a ping", async () => {
-    const server = createFakeSftpgoServer({
-      users: [...SEED_USERS],
-      folders: [...SEED_FOLDERS],
-      files: { ...SEED_FILES },
-    });
-
     const config = loadConfig({
       DATABASE_URL: postgres.connectionString,
-      SFTPGO_URL: "http://sftpgo.internal:8080",
+      FDRIVE_STORAGE_ROOT: storage.root,
       FDRIVE_MASTER_KEY: Buffer.alloc(32, 5).toString("base64"),
       FDRIVE_MCP_WRITES: "true",
     });
 
-    const composed = await composeApp(config, createTestLogger(), () => new Date(), {
-      fetch: server.fetch,
-    });
+    const composed = await composeApp(config, createTestLogger(), () => new Date());
 
     try {
       // Migrations ran: the app schema's `providers` table exists.
@@ -266,24 +247,18 @@ describe("composeApp", () => {
   });
 
   it("boots in setup mode, walks the setup flow, then serves normal routes with the completing account as admin", async () => {
-    const server = createFakeSftpgoServer({
-      users: [...SEED_USERS],
-      folders: [...SEED_FOLDERS],
-      files: { ...SEED_FILES },
-    });
-    const fetchImpl = withHealthz(server.fetch);
-
-    // No SFTPGO_URL and a database no earlier test seeded a provider into:
-    // the provider must come from `/setup`. Providers are rows now, so the
-    // env-seeded row of the previous test would otherwise count as set up.
+    // A fresh database and an empty folder: no local user exists yet, so
+    // the first one must come from `/setup`.
     const ownPostgres = await startPostgres();
+    const ownStorage = await startLocalStorage({ users: [], files: {} });
     const config = loadConfig({
       DATABASE_URL: ownPostgres.connectionString,
+      FDRIVE_STORAGE_ROOT: ownStorage.root,
       FDRIVE_MASTER_KEY: Buffer.alloc(32, 6).toString("base64"),
     });
 
     const { logger, messages } = createCapturingLogger();
-    const composed = await composeApp(config, logger, () => new Date(), { fetch: fetchImpl });
+    const composed = await composeApp(config, logger, () => new Date());
 
     try {
       const aboutRes = await composed.app.request("/api/v1/about");
@@ -295,25 +270,13 @@ describe("composeApp", () => {
       expect(await blockedRes.json()).toMatchObject({ error: { kind: "setup_required" } });
 
       const statusRes = await composed.app.request("/api/v1/setup/status");
-      expect(await statusRes.json()).toEqual({ required: true, hasEnvUrl: false });
+      expect(await statusRes.json()).toEqual({ required: true, storageConfigured: true });
 
       const tokenLine = messages.find((message) => message.startsWith("setup token: "));
       if (tokenLine === undefined) {
         throw new Error("expected the setup token to be logged");
       }
       const setupToken = tokenLine.slice("setup token: ".length);
-
-      const testRes = await composed.app.request("/api/v1/setup/test", {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          "x-requested-with": "fdrive",
-          "x-setup-token": setupToken,
-        },
-        body: JSON.stringify({ baseUrl: "http://sftpgo.internal:8080" }),
-      });
-      expect(testRes.status).toBe(200);
-      expect(await testRes.json()).toMatchObject({ ok: true });
 
       const completeRes = await composed.app.request("/api/v1/setup/complete", {
         method: "POST",
@@ -322,12 +285,7 @@ describe("composeApp", () => {
           "x-requested-with": "fdrive",
           "x-setup-token": setupToken,
         },
-        body: JSON.stringify({
-          baseUrl: "http://sftpgo.internal:8080",
-          homeTemplate: "sftpgo:/{username}",
-          username: "alice",
-          password: "alice-password",
-        }),
+        body: JSON.stringify({ username: "alice", password: "alice-password" }),
       });
       expect(completeRes.status).toBe(200);
       const completeBody = await completeRes.json();
@@ -338,27 +296,39 @@ describe("composeApp", () => {
       const cookie = extractCookie(completeRes);
 
       // The setup token cannot be replayed: setup is no longer required.
-      const reuseRes = await composed.app.request("/api/v1/setup/test", {
+      const reuseRes = await composed.app.request("/api/v1/setup/complete", {
         method: "POST",
         headers: {
           "content-type": "application/json",
           "x-requested-with": "fdrive",
           "x-setup-token": setupToken,
         },
-        body: JSON.stringify({ baseUrl: "http://sftpgo.internal:8080" }),
+        body: JSON.stringify({ username: "mallory", password: "mallory-password" }),
       });
       expect(reuseRes.status).toBe(404);
 
       const aboutAfterRes = await composed.app.request("/api/v1/about");
       expect(await aboutAfterRes.json()).toMatchObject({
         setupRequired: false,
-        providers: [{ type: "sftpgo" }],
+        providers: [{ type: "local" }],
       });
 
+      // The owner's home is created on first use, under the deployment's folder.
+      const uploadRes = await composed.app.request("/api/v1/fs/upload?path=/first.txt", {
+        method: "PUT",
+        headers: { cookie, "x-requested-with": "fdrive" },
+        body: "the owner's first file",
+      });
+      expect(uploadRes.status).toBe(201);
       const listRes = await composed.app.request("/api/v1/fs/list?path=/", {
         headers: { cookie },
       });
       expect(listRes.status).toBe(200);
+      const listed = (await listRes.json()) as { entries: { name: string }[] };
+      expect(listed.entries.map((entry) => entry.name)).toEqual(["first.txt"]);
+      expect(await readFile(ownStorage.path("alice", "/first.txt"), "utf8")).toBe(
+        "the owner's first file",
+      );
 
       const meRes = await composed.app.request("/api/v1/auth/me", { headers: { cookie } });
       expect(meRes.status).toBe(200);
@@ -366,25 +336,20 @@ describe("composeApp", () => {
     } finally {
       await composed.close();
       await ownPostgres.stop();
+      await ownStorage.stop();
     }
   });
 
   it("logs a startup summary line per subsystem and serves GET /api/v1/health with a matching subsystems field", async () => {
-    const server = createFakeSftpgoServer({
-      users: [...SEED_USERS],
-      folders: [...SEED_FOLDERS],
-      files: { ...SEED_FILES },
-    });
-
     const config = loadConfig({
       DATABASE_URL: postgres.connectionString,
-      SFTPGO_URL: "http://sftpgo.internal:8080",
+      FDRIVE_STORAGE_ROOT: storage.root,
       FDRIVE_MASTER_KEY: Buffer.alloc(32, 9).toString("base64"),
       // Left unconfigured: index, search, ocr, thumbnails, office, trash.
     });
 
     const { logger, messages } = createCapturingLogger();
-    const composed = await composeApp(config, logger, () => new Date(), { fetch: server.fetch });
+    const composed = await composeApp(config, logger, () => new Date());
 
     try {
       expect(messages).toContain("subsystem=core status=configured");

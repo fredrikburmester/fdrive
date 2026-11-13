@@ -1,4 +1,4 @@
-/** A storage backend instance: one SFTPGo server, one WebDAV endpoint, one bucket. */
+/** A storage backend instance: the files folder. */
 export interface Provider {
   readonly id: string;
   readonly type: string;
@@ -40,6 +40,72 @@ export interface ProviderRepo {
    * reference it; a no-op when it does not exist.
    */
   delete(id: string): Promise<void>;
+}
+
+/** A user of the built-in local storage, which fdrive owns. */
+export interface LocalUser {
+  readonly username: string;
+  readonly passwordHash: string;
+  readonly disabled: boolean;
+  readonly createdAt: Date;
+  readonly updatedAt: Date;
+}
+
+export interface LocalUserPatch {
+  readonly passwordHash?: string;
+  readonly disabled?: boolean;
+}
+
+export interface LocalUserRepo {
+  /** The user named `username`, matched without regard to case. */
+  get(username: string): Promise<LocalUser | null>;
+  /** Every user, by name. */
+  list(): Promise<LocalUser[]>;
+  count(): Promise<number>;
+  /** Throws `ConflictError` when the name is taken in any case. */
+  create(input: { username: string; passwordHash: string }): Promise<LocalUser>;
+  /** Applies `patch`; `null` when no such user exists. */
+  update(username: string, patch: LocalUserPatch): Promise<LocalUser | null>;
+  /** A no-op when the user does not exist. */
+  delete(username: string): Promise<void>;
+}
+
+export type LocalGrantAccess = "read" | "write";
+
+/** A folder one local user shares with another. */
+export interface LocalGrant {
+  readonly id: string;
+  readonly ownerUsername: string;
+  /** The folder in the owner's files, a canonical virtual path. */
+  readonly path: string;
+  readonly granteeUsername: string;
+  readonly access: LocalGrantAccess;
+  readonly createdAt: Date;
+}
+
+export interface LocalGrantRepo {
+  get(id: string): Promise<LocalGrant | null>;
+  /**
+   * What others share with `grantee`, oldest first. A share whose owner an
+   * administrator disabled is left out: disabling someone ends what they share
+   * as well as their own sign-in.
+   */
+  listReceived(grantee: string): Promise<LocalGrant[]>;
+  /** What `owner` shares, only the folder `path` when given, oldest first. */
+  listOwned(owner: string, path?: string): Promise<LocalGrant[]>;
+  /** Shares `path` with `grantee`, or changes the access of an existing share. */
+  put(input: {
+    ownerUsername: string;
+    path: string;
+    granteeUsername: string;
+    access: LocalGrantAccess;
+  }): Promise<LocalGrant>;
+  /** A no-op when the grant does not exist. */
+  delete(id: string): Promise<void>;
+  /** Follows the owner's move of `from` (and everything under it) to `to`. */
+  movePrefix(owner: string, from: string, to: string): Promise<void>;
+  /** Drops the grants of `path` and everything under it, after the owner deleted it. */
+  deletePrefix(owner: string, path: string): Promise<void>;
 }
 
 /** An fdrive user, created on first successful login. */
@@ -138,6 +204,8 @@ export interface SessionRepo {
   delete(idHash: string): Promise<void>;
   /** Deletes every session whose expiry is at or before `now`. Returns the number deleted. */
   deleteExpired(now: Date): Promise<number>;
+  /** Ends every session of `accountId` except `exceptIdHash`; returns how many ended. */
+  deleteByAccount(accountId: string, exceptIdHash?: string): Promise<number>;
 }
 
 /**
@@ -482,6 +550,8 @@ export interface SystemEventRepo {
 /** The full set of app-schema repositories, bundled for convenient wiring. */
 export interface Repos {
   readonly providers: ProviderRepo;
+  readonly localUsers: LocalUserRepo;
+  readonly localGrants: LocalGrantRepo;
   readonly accounts: AccountRepo;
   readonly identities: IdentityRepo;
   readonly credentials: CredentialRepo;

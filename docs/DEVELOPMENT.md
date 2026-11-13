@@ -4,8 +4,7 @@ Current design: [Architecture](ARCHITECTURE.md). Unfinished work: [Plans](plans/
 
 This guide covers running fdrive locally for development with hot reloading, seeded test accounts, and integration test environments.
 
-For backend extensions, see [Adding a storage provider](STORAGE-PROVIDERS.md): package setup,
-module contracts, registration, capability limits and verification.
+The API reaches the files folder through an internal [storage port](STORAGE-PROVIDERS.md).
 
 ---
 
@@ -27,7 +26,11 @@ pnpm install
 pnpm dev:env
 ```
 
-`pnpm dev:env` starts a local Postgres database and a pre-seeded SFTPGo container with test users, sample documents, and folders. It also automatically generates your local development `.env` files.
+`pnpm dev:env` generates your local development `.env` files, starts a local Postgres database,
+copies the committed dev files (`deploy/dev/files`, one folder per user) into the gitignored
+`deploy/dev/.data/files` that the API serves as its local folder (`FDRIVE_STORAGE_ROOT`), and
+creates the dev users in `app.local_users` (`pnpm dev:users`). Files you change in the dev app
+never touch the committed seed. Once a user exists, the setup wizard is skipped.
 
 ### 2. Start the dev servers
 Open two terminal windows (or use background tasks):
@@ -45,10 +48,13 @@ Visit **`http://localhost:3000`** and log in with any of the seeded development 
 
 | Username | Password | Role / Setup |
 | :--- | :--- | :--- |
-| **`dev`** | `dev` | **Admin user**, sample photos, documents, and spreadsheets. |
-| **`alice`** | `alice-password` | Standard user with documents and photos. |
-| **`bob`** | `bob-password` | Restricted permissions (read-only root, upload to `/inbox`). |
-| **`carol`** | `carol-password` | User with a virtual folder mapping. |
+| **`dev`** | `dev` | **Administrator** (`FDRIVE_ADMIN_USERS`), sample photos, documents, and spreadsheets. |
+| **`alice`** | `alice-password` | Standard user with documents and a photo. |
+| **`bob`** | `bob-password` | Standard user with `inbox` and `public` folders. |
+| **`carol`** | `carol-password` | Standard user with one file; share a folder with her to try **Shared with me**. |
+
+These are the fixtures the automated tests use (`@fdrive/testkit`), plus `dev`. Add more under
+**System > Users**.
 
 ---
 
@@ -64,18 +70,6 @@ Restart the API server (`pnpm --filter @fdrive/api dev`) so it connects to the l
 
 ---
 
-## Trying the S3 Provider Locally (Optional)
-
-A local MinIO with one bucket and one read-write key:
-
-```bash
-docker compose -f deploy/compose.dev.yaml --profile s3 up -d
-```
-
-Under **System > Storage**, add an `S3` provider at `http://localhost:59000/fdrive` and sign in with the access key `fdrive-dev` and secret `fdrive-dev-password`. The MinIO console is on port `59001` (`minio-root` / `minio-root-password`). See [S3](S3.md).
-
----
-
 ## Local Ports
 
 | Service | Port | Description |
@@ -83,10 +77,6 @@ Under **System > Storage**, add an `S3` provider at `http://localhost:59000/fdri
 | Web UI | `3000` | Next.js frontend |
 | API | `3001` | Hono API server |
 | Postgres | `55432` | Local development database |
-| SFTPGo WebAdmin | `58080` | SFTPGo admin interface (`admin` / `admin-dev-password`) |
-| SFTPGo SFTP | `52022` | SFTP service for external client testing |
-| MinIO S3 API | `59000` | Local S3 bucket `fdrive` (when `s3` profile is up) |
-| MinIO console | `59001` | MinIO web console (`minio-root` / `minio-root-password`) |
 | Indexer HTTP | `58010` | Indexer (when `index` profile is up) |
 | ML server | `58012` | Text embeddings (`/text`), image embeddings (`/image`) and document extraction (`/extract`), when `index` profile is up |
 
@@ -125,16 +115,17 @@ pnpm --filter @fdrive/web test:e2e
   ```bash
   pnpm dev:env:down
   ```
-- **Wipe all development data and re-seed from scratch**:
+- **Wipe all development data and re-seed from scratch** (a fresh database, a fresh copy of
+  the dev files and the dev users again):
   ```bash
   pnpm dev:env:reset
   ```
 
 ## Development ports and worker probes
 
-Set `FDRIVE_DEV_API_PORT`, `FDRIVE_DEV_DB_PORT`, `FDRIVE_DEV_SFTPGO_HTTP_PORT`,
-`FDRIVE_DEV_INDEXER_HTTP_PORT`, `FDRIVE_DEV_OCR_HTTP_PORT` and `FDRIVE_DEV_ML_PORT` before
-generating a fresh environment. `pnpm dev:env` uses those same overrides for the API/web URLs and
+Set `FDRIVE_DEV_API_PORT`, `FDRIVE_DEV_DB_PORT`, `FDRIVE_DEV_INDEXER_HTTP_PORT`,
+`FDRIVE_DEV_OCR_HTTP_PORT` and `FDRIVE_DEV_ML_PORT` before generating a fresh environment.
+`pnpm dev:env` uses those same overrides for the API/web URLs and
 compose publishes. Existing environment assignments are preserved; update them
 when changing ports in an already configured checkout.
 

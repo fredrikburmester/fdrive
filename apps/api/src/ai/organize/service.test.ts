@@ -347,7 +347,7 @@ describe("createOrganizeService", () => {
           scopeResolver: {
             verifiedIndexScopes: async () => ({
               available: true,
-              scopes: [{ rootName: "sftpgo", fsPrefix: "/alice", virtualPrefix: "/" }],
+              scopes: [{ rootName: "files", fsPrefix: "/alice", virtualPrefix: "/" }],
             }),
           },
         },
@@ -391,7 +391,7 @@ describe("createOrganizeService", () => {
           scopeResolver: {
             verifiedIndexScopes: async () => ({
               available: true,
-              scopes: [{ rootName: "sftpgo", fsPrefix: "/alice", virtualPrefix: "/" }],
+              scopes: [{ rootName: "files", fsPrefix: "/alice", virtualPrefix: "/" }],
             }),
           },
         },
@@ -516,7 +516,7 @@ describe("createOrganizeService", () => {
 
     it("fails generically when storage fails for another reason", async () => {
       const memory = drive();
-      const failure = new StorageError("upstream_unavailable", "sftpgo is down at 10.0.0.5");
+      const failure = new StorageError("upstream_unavailable", "files is down at 10.0.0.5");
       const storage: StorageProvider = {
         ...memory,
         stat: async () => {

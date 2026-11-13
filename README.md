@@ -1,8 +1,8 @@
 # fdrive
 
-**fdrive** is a clean web interface for your home server files, built for [SFTPGo](https://github.com/drakkan/sftpgo) first. It connects to your existing SFTPGo storage so you can browse, upload, preview, search, and share your files from any browser, without moving your data into a database or giving up control. fdrive is only a layer on top. 
+**fdrive** is a clean web interface for your home server files. It keeps your files in a plain folder on your server, one folder per user, so you can browse, upload, preview, search, and share them from any browser without moving your data into a database or giving up control. The host's own backups, rsync, SMB or Syncthing keep working on the same folder.
 
-fdrive also offers a native MacOS app, connecting your SFTPGo files (and other storage providers) directly into Finder.
+fdrive also offers a native macOS app that puts your files directly into Finder.
 
 ![fdrive file browser in dark mode, with folders, favorites, tags, and file details](docs/screenshots/files-list-only-overview.png)
 
@@ -12,13 +12,12 @@ fdrive also offers a native MacOS app, connecting your SFTPGo files (and other s
 
 ## Highlights
 
-- **Your files stay yours**: Files remain plain files on your disk, managed by SFTPGo. fdrive is just a layer on top, adding more functionality.
-- **SFTPGo first, other storage beside it**: Search, thumbnails, shares and Office are built on SFTPGo storage. You can add a WebDAV server or an S3 bucket (MinIO, Garage, Backblaze B2, Cloudflare R2) beside it for browsing and uploads (but these storage providers do not support the features SFTPGo supports).
+- **Your files stay yours**: Files remain plain files on your disk, in a folder named after each user. fdrive keeps its own users and adds everything else on top.
 - **Lightning fast & clean**: Minimalist, distraction-free interface with dark mode, keyboard navigation, and mobile support.
 - **Instant previews**: Photos, videos, music, PDFs, markdown, and code files open right in your browser.
-- **Smart tags & favorites**: Star items and add custom color tags. They survive renames and moves, even if you rename a file over SFTP or directly on disk.
-- **Share with family & friends**: Create password-protected links with expiration dates, download limits, and photo galleries.
-- **Trash support build on SFTPGo**: Safely restore accidentally deleted files (if set up)
+- **Smart tags & favorites**: Star items and add custom color tags. They survive renames and moves, even if you rename a file directly on disk.
+- **Share with family & friends**: Create password-protected links with expiration dates, download limits, and photo galleries, or share a folder with another fdrive user.
+- **Trash**: Safely restore accidentally deleted files (if turned on).
 - **Modular power-ups**: Keep it featherlight (< 300 MB RAM) for basic browsing, or switch on full-text search, AI image search, OCR, and browser office editing whenever you want.
 
 ---
@@ -90,7 +89,7 @@ fdrive also offers a native MacOS app, connecting your SFTPGo files (and other s
 
 **Sign in**
 
-![SFTPGo sign-in form with username, password, and one-time code option](docs/screenshots/login.png)
+![Sign-in form with username and password](docs/screenshots/login.png)
 
 **Image search administration**
 
@@ -102,10 +101,10 @@ fdrive also offers a native MacOS app, connecting your SFTPGo files (and other s
 
 ## Quickstart (Home Server / LAN)
 
-You need a Linux server or NAS with Docker (Compose v2) and an SFTPGo server it can reach.
-No SFTPGo yet? [Add the bundled one](deploy/REFERENCE.md#bundled-sftpgo). fdrive's images
-are published for amd64 and 64-bit ARM, so a Raspberry Pi 4 or 5 on a 64-bit OS, an ARM NAS
-or an Apple silicon Mac works as well as a PC.
+You need a Linux server or NAS with Docker (Compose v2). fdrive's images are published for
+amd64 and 64-bit ARM, so a Raspberry Pi 4 or 5 on a 64-bit OS, an ARM NAS or an Apple silicon
+Mac works as well as a PC. Coming from SFTPGo? See
+[upgrading from SFTPGo](deploy/README.md#upgrading-from-sftpgo).
 
 ### 1. Download fdrive and create its secrets
 
@@ -121,11 +120,11 @@ up: the master key encrypts stored credentials, and a lost key cannot be recover
 Portainer, Dockge or a NAS app, paste `compose.yaml` as a new stack and add the same two
 variables instead.
 
-### 2. Point fdrive at your files and start
+### 2. Choose the files folder and start
 
-For thumbnails, search and OCR, first tell the workers where SFTPGo keeps its files, as in
-[installation step 2](deploy/README.md#2-mount-sftpgos-files-optional).
-Browsing alone needs no mount; the default `./data/roots/sftpgo` is not connected to SFTPGo.
+Everyone's files live in one folder, `./data/files` by default, with one folder per user
+inside. To use a folder you already have, set `FDRIVE_FILES_DIR` in `.env` first, as in
+[installation step 2](deploy/README.md#2-choose-the-files-folder).
 
 ```sh
 docker compose up -d
@@ -136,11 +135,11 @@ until you turn their features on. Nothing is compiled on your server.
 
 ### 3. Complete the setup walkthrough
 
-From your Mac, phone, or another device on the same network, open **`http://<server-ip>:8090`**. No port-binding or cookie settings are needed. Use the claim token printed in the API log (`docker compose logs api`), test your SFTPGo connection, and verify a normal SFTPGo WebClient account. That account becomes the fdrive administrator; its SFTPGo permissions stay unchanged. Choose optional features in the same setup screen, then finish into your files. Storage checks run automatically for enabled features.
+From your Mac, phone, or another device on the same network, open **`http://<server-ip>:8090`**. No port-binding or cookie settings are needed. Use the claim token printed in the API log (`docker compose logs api`), then choose your username and password. That account is the first user and fdrive's administrator; its files are `<files folder>/<username>`, so use an existing folder's name to keep it. Add everyone else under **System > Users**.
 
-Choose thumbnails, full-text search, search OCR, semantic search, image search, and searchable PDF conversion step by step. Trash follows as a separate optional choice; [configure its SFTPGo recycle-bin rule](docs/TRASH.md) before enabling it. ONLYOFFICE follows as another optional choice, with browser viewing and an explicit editor-user list; see [Office setup](docs/OFFICE.md). Both OCR choices appear in onboarding; PDF conversion has its own toggle because it modifies PDFs. All choices remain editable in **System > Features**. Models and processing stay inactive until enabled.
+Choose thumbnails, full-text search, search OCR, semantic search, image search, and searchable PDF conversion step by step. [Trash](docs/TRASH.md) follows as a separate optional choice, then ONLYOFFICE, with browser viewing and an explicit editor list; see [Office setup](docs/OFFICE.md). PDF conversion has its own toggle because it modifies PDFs. All choices remain editable in **System > Features**. Models and processing stay inactive until enabled.
 
-Browsing needs only a reachable SFTPGo server. Processing also needs its files mounted into the workers during deployment. See the [deployment guide](deploy/README.md) for startup and the [advanced reference](deploy/REFERENCE.md) for host mounts and remote access.
+See the [deployment guide](deploy/README.md) for startup and the [advanced reference](deploy/REFERENCE.md) for file permissions and remote access.
 
 ### Updating
 
@@ -159,7 +158,7 @@ for pinning versions and troubleshooting.
 
 **FDrive for Mac** puts your fdrive storage in Finder. Folders appear right away and files
 download when you open them, so your Mac does not need a full copy of your drive. Locations you
-allow as read and write accept saves on every storage type; see
+allow as read and write accept saves; see
 [how writes are kept safe](docs/MACOS.md#write-configuration-and-recovery).
 It is an early release and needs macOS 26 or later on Apple silicon and an fdrive server
 reachable over HTTPS. Mac builds are published under
@@ -213,8 +212,7 @@ ship with bounded concurrency and optional hard caps. See
 - 🔒 **[Advanced Deployment Reference](deploy/REFERENCE.md)**: Custom domain setup, reverse proxies (Caddy / NPM), and security hardening.
 - 💻 **[Development Guide](docs/DEVELOPMENT.md)**: Run the dev stack locally and run tests.
 - 🏷️ **[Releases](docs/RELEASES.md)**: How server releases and their Docker images are published.
-- **[WebDAV](docs/WEBDAV.md) and [S3](docs/S3.md)**: What each storage beside SFTPGo supports today, and what it does not yet.
-- **[Adding a Storage Provider](docs/STORAGE-PROVIDERS.md)**: Implement, register and test a backend.
+- **[Storage port](docs/STORAGE-PROVIDERS.md)**: The internal boundary between the API and the files folder.
 
 ---
 
@@ -223,10 +221,8 @@ ship with bounded concurrency and optional hard caps. See
 Most self-hosted drives either try to replace your filesystem with their own database (like Nextcloud), or they're too barebones to replace Google Drive or iCloud Drive.
 
 fdrive sits right in the sweet spot:
-1. **SFTPGo handles storage & protocols**: SFTP, user management, and permissions are handled by SFTPGo, a rock-solid, battle-tested Go server.
-2. **fdrive handles the modern web experience**: A polished, responsive browser UI, fast search, document editing, and mobile-friendly links.
-
-That pairing is the product: fdrive is an SFTPGo client first, and the full experience lives there. Other storage is welcome beside it for plain file management. Features that fdrive can provide on its own, without SFTPGo's disk or its share links, reach that storage one at a time; Trash already has.
+1. **Your files stay plain files**: one folder per user on your own disk, readable by every other tool on the host. Nothing is moved into a database.
+2. **fdrive handles the modern web experience**: A polished, responsive browser UI, fast search, document editing, sharing, and mobile-friendly links.
 
 ---
 
@@ -236,5 +232,4 @@ The fdrive server, web interface, native macOS app, and other first-party code i
 repository are licensed under the [GNU Affero General Public License, version 3 only](LICENSE)
 (`AGPL-3.0-only`), unless otherwise noted.
 
-Third-party dependencies and storage providers retain their own licenses. Stock
-[SFTPGo](https://github.com/drakkan/sftpgo) runs as an external service and is not modified.
+Third-party dependencies retain their own licenses.

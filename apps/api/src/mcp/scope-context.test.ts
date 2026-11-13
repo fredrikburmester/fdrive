@@ -10,13 +10,13 @@ function stubIndexQueries(
 }
 
 const ALICE_HOME_SCOPES: readonly Scope[] = [
-  { rootName: "sftpgo", fsPrefix: "/alice", virtualPrefix: "/" },
+  { rootName: "files", fsPrefix: "/alice", virtualPrefix: "/" },
 ];
 
 describe("resolveScopeContext", () => {
   it("returns null for an empty scope list", async () => {
     const ctx = await resolveScopeContext(
-      stubIndexQueries(async () => ({ sftpgo: 1 })),
+      stubIndexQueries(async () => ({ files: 1 })),
       [],
       null,
     );
@@ -34,7 +34,7 @@ describe("resolveScopeContext", () => {
 
   it("resolves the scope context for a verified scope with a matching indexed root", async () => {
     const ctx = await resolveScopeContext(
-      stubIndexQueries(async () => ({ sftpgo: 1 })),
+      stubIndexQueries(async () => ({ files: 1 })),
       ALICE_HOME_SCOPES,
       null,
     );
@@ -45,11 +45,11 @@ describe("resolveScopeContext", () => {
 
   it("drops a scope whose root has no id in the index yet, keeping the rest", async () => {
     const scopes: readonly Scope[] = [
-      { rootName: "sftpgo", fsPrefix: "/alice", virtualPrefix: "/" },
+      { rootName: "files", fsPrefix: "/alice", virtualPrefix: "/" },
       { rootName: "photos", fsPrefix: "/alice", virtualPrefix: "/photos" },
     ];
     const ctx = await resolveScopeContext(
-      stubIndexQueries(async () => ({ sftpgo: 1 })),
+      stubIndexQueries(async () => ({ files: 1 })),
       scopes,
       null,
     );
@@ -61,7 +61,7 @@ describe("resolveScopeContext", () => {
 describe("virtualPathFor", () => {
   it("maps a file's (rootId, fsPath) back to the caller's virtual path", async () => {
     const ctx = await resolveScopeContext(
-      stubIndexQueries(async () => ({ sftpgo: 1 })),
+      stubIndexQueries(async () => ({ files: 1 })),
       ALICE_HOME_SCOPES,
       null,
     );
@@ -74,7 +74,7 @@ describe("virtualPathFor", () => {
 
   it("returns null for a root id not present in the context", async () => {
     const ctx = await resolveScopeContext(
-      stubIndexQueries(async () => ({ sftpgo: 1 })),
+      stubIndexQueries(async () => ({ files: 1 })),
       ALICE_HOME_SCOPES,
       null,
     );
@@ -87,7 +87,7 @@ describe("virtualPathFor", () => {
 
   it("returns null for a path outside every scope", async () => {
     const ctx = await resolveScopeContext(
-      stubIndexQueries(async () => ({ sftpgo: 1 })),
+      stubIndexQueries(async () => ({ files: 1 })),
       ALICE_HOME_SCOPES,
       null,
     );
@@ -100,11 +100,11 @@ describe("virtualPathFor", () => {
 
   it("returns null for a path a more specific override shadows (round trip fails)", async () => {
     const scopes: readonly Scope[] = [
-      { rootName: "sftpgo", fsPrefix: "/alice", virtualPrefix: "/" },
-      { rootName: "sftpgo", fsPrefix: "/shared", virtualPrefix: "/vshared" },
+      { rootName: "files", fsPrefix: "/alice", virtualPrefix: "/" },
+      { rootName: "files", fsPrefix: "/shared", virtualPrefix: "/vshared" },
     ];
     const ctx = await resolveScopeContext(
-      stubIndexQueries(async () => ({ sftpgo: 1 })),
+      stubIndexQueries(async () => ({ files: 1 })),
       scopes,
       null,
     );
@@ -121,7 +121,7 @@ describe("virtualPathFor", () => {
 
   it("returns null for a path nested under the configured trash path", async () => {
     const ctx = await resolveScopeContext(
-      stubIndexQueries(async () => ({ sftpgo: 1 })),
+      stubIndexQueries(async () => ({ files: 1 })),
       ALICE_HOME_SCOPES,
       "/.trash",
     );
@@ -134,7 +134,7 @@ describe("virtualPathFor", () => {
 
   it("returns null for a path equal to the configured trash path itself", async () => {
     const ctx = await resolveScopeContext(
-      stubIndexQueries(async () => ({ sftpgo: 1 })),
+      stubIndexQueries(async () => ({ files: 1 })),
       ALICE_HOME_SCOPES,
       "/.trash",
     );
@@ -147,7 +147,7 @@ describe("virtualPathFor", () => {
 
   it("still maps a path outside the trash when a trashPath is configured", async () => {
     const ctx = await resolveScopeContext(
-      stubIndexQueries(async () => ({ sftpgo: 1 })),
+      stubIndexQueries(async () => ({ files: 1 })),
       ALICE_HOME_SCOPES,
       "/.trash",
     );
@@ -162,7 +162,7 @@ describe("virtualPathFor", () => {
 describe("narrowScopePrefixes", () => {
   async function buildContext() {
     const ctx = await resolveScopeContext(
-      stubIndexQueries(async () => ({ sftpgo: 1 })),
+      stubIndexQueries(async () => ({ files: 1 })),
       ALICE_HOME_SCOPES,
       null,
     );
@@ -184,10 +184,10 @@ describe("narrowScopePrefixes", () => {
 
   it("returns null for a prefix outside every scope", async () => {
     const narrowScope = {
-      scopes: [{ rootName: "sftpgo", fsPrefix: "/alice", virtualPrefix: "/only" }],
+      scopes: [{ rootName: "files", fsPrefix: "/alice", virtualPrefix: "/only" }],
       scopePrefixes: [{ rootId: 1, fsPrefix: "/alice" }],
-      rootNameById: new Map([[1, "sftpgo"]]),
-      rootIdByName: new Map([["sftpgo", 1]]),
+      rootNameById: new Map([[1, "files"]]),
+      rootIdByName: new Map([["files", 1]]),
       trashPath: null,
     };
 

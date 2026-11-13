@@ -1,20 +1,17 @@
+import { rmSync } from "node:fs";
 import { AdminProvider, AdminProvidersResponse, ProvidersResponse } from "@fdrive/contracts";
 import { createMemoryRepos } from "@fdrive/db/testing";
-import { createFakeS3Server } from "@fdrive/s3";
-import { createFakeWebdavServer } from "@fdrive/webdav";
 import { describe, expect, it, vi } from "vitest";
 import { createApp } from "../app.js";
 import type { Principal } from "../auth/principal.js";
 import { loadConfig } from "../config.js";
+import { localModuleFixture } from "../local/test-fixtures/index.ts";
 import { fakeStorageProvider } from "../scoping/test-fixtures/index.ts";
 import { registerProviderRoutes } from "./routes.js";
-import type { ProviderService } from "./service.js";
 import {
   memoryProviderService,
-  probeFetch,
-  seedS3Provider,
-  seedSftpgoProvider,
-  seedWebdavProvider,
+  seedLocalProvider,
+  seedProviderRow,
 } from "./test-fixtures/index.ts";
 
 const REQUIRED_ENV = {
@@ -24,15 +21,15 @@ const REQUIRED_ENV = {
 
 const FAKE_STORAGE = fakeStorageProvider();
 
-function buildApp(opts: { isAdmin: boolean; reachable?: boolean; service?: ProviderService }) {
+function buildApp(opts: { isAdmin: boolean }) {
   const config = loadConfig(REQUIRED_ENV);
   const repos = createMemoryRepos();
-  const service =
-    opts.service ??
-    memoryProviderService(repos, {
-      fetch: probeFetch(opts.reachable ?? true),
-      clock: () => new Date("2026-09-10T00:00:00Z"),
-    });
+  // A deployment with a files folder, so its pinned row resolves.
+  const local = localModuleFixture(repos);
+  const service = memoryProviderService(repos, {
+    clock: () => new Date("2026-09-10T00:00:00Z"),
+    modules: { local: local.module },
+  });
   const principal: Principal = {
     accountId: "account-1",
     identityId: "identity-1",
@@ -65,24 +62,26 @@ function buildApp(opts: { isAdmin: boolean; reachable?: boolean; service?: Provi
       },
       ...(init.body === undefined ? {} : { body: JSON.stringify(init.body) }),
     });
-  return { app, repos, service, call };
+  return { app, repos, service, call, local };
 }
 
 describe("GET /providers", () => {
   it("lists enabled providers with their credential forms and nothing else", async () => {
     const h = buildApp({ isAdmin: false });
-    await seedSftpgoProvider(h.repos, "http://a:8080");
-    await seedSftpgoProvider(h.repos, "http://b:8080", { enabled: false });
+    const local = await seedLocalProvider(h.repos);
+    await seedProviderRow(h.repos, "http://off:8080", { enabled: false });
+    // A WebDAV row from before the files folder was the only storage.
+    const retired = await h.repos.providers.ensure({ type: "webdav", baseUrl: "http://a:8080" });
+    expect(retired.enabled).toBe(true);
     const res = await h.call("/api/v1/providers");
     expect(res.status).toBe(200);
     const body = ProvidersResponse.parse(await res.json());
-    expect(body.providers).toHaveLength(1);
+    expect(body.providers.map((provider) => provider.id)).toEqual([local.id]);
     // No admin-set label and no host: the page names the product instead.
-    expect(body.providers[0]).toMatchObject({ type: "sftpgo", label: "" });
+    expect(body.providers[0]).toMatchObject({ type: "local", label: "" });
     expect(body.providers[0]?.credentialFields.map((field) => field.name)).toEqual([
       "username",
       "password",
-      "otp",
     ]);
     expect(body.providers[0]?.capabilities).toMatchObject({ index: true, shares: true });
     expect(JSON.stringify(body)).not.toContain("a:8080");
@@ -92,12 +91,13 @@ describe("GET /providers", () => {
 describe("/admin/providers", () => {
   it("requires an admin", async () => {
     const h = buildApp({ isAdmin: false });
+    const row = await seedLocalProvider(h.repos);
     expect((await h.call("/api/v1/admin/providers")).status).toBe(403);
     expect(
       (
-        await h.call("/api/v1/admin/providers", {
-          method: "POST",
-          body: { type: "sftpgo", label: "x", baseUrl: "http://a" },
+        await h.call(`/api/v1/admin/providers/${row.id}`, {
+          method: "PATCH",
+          body: { label: "x" },
         })
       ).status,
     ).toBe(403);
@@ -105,7 +105,7 @@ describe("/admin/providers", () => {
 
   it("refuses renames by ordinary users and rejects blank or overlong names", async () => {
     const ordinary = buildApp({ isAdmin: false });
-    const row = await seedSftpgoProvider(ordinary.repos, "http://env:8080", { managedByEnv: true });
+    const row = await seedLocalProvider(ordinary.repos);
     expect(
       (
         await ordinary.call(`/api/v1/admin/providers/${row.id}`, {
@@ -116,10 +116,8 @@ describe("/admin/providers", () => {
     ).toBe(403);
     expect((await ordinary.repos.providers.get(row.id))?.label).toBe("");
     const admin = buildApp({ isAdmin: true });
-    const pinned = await seedSftpgoProvider(admin.repos, "http://env:8080", { managedByEnv: true });
-    const other = await admin.service.create({
-      type: "sftpgo",
-      baseUrl: "http://other:8080",
+    const pinned = await seedLocalProvider(admin.repos);
+    const other = await seedProviderRow(admin.repos, "http://other:8080", {
       label: "Home storage",
     });
     for (const label of ["", "   ", "x".repeat(121)]) {
@@ -152,330 +150,94 @@ describe("/admin/providers", () => {
     ]);
   });
 
-  it("lists rows and types, creates after a probe, updates, tests and deletes", async () => {
+  it("lists the storage with a fresh probe and renames it", async () => {
     const h = buildApp({ isAdmin: true });
-    const created = await h.call("/api/v1/admin/providers", {
-      method: "POST",
-      body: {
-        type: "sftpgo",
-        label: "Home",
-        baseUrl: "http://a:8080",
-        config: { homeTemplate: "sftpgo:/{username}" },
-      },
-    });
-    expect(created.status).toBe(200);
-    const row = AdminProvider.parse(await created.json());
-    expect(row).toMatchObject({ label: "Home", baseUrl: "http://a:8080", enabled: true });
-
+    const row = await seedLocalProvider(h.repos);
+    await h.repos.providers.ensure({ type: "webdav", baseUrl: "http://a:8080" });
     const list = await h.call("/api/v1/admin/providers");
+    expect(list.status).toBe(200);
     const body = AdminProvidersResponse.parse(await list.json());
-    expect(body.providers.map((provider) => provider.id)).toEqual([row.id]);
-    expect(body.types.map((type) => type.type)).toEqual(["sftpgo", "webdav", "s3"]);
+    // Rows of a type the build no longer has are not storage.
+    expect(body).toEqual({
+      providers: [
+        expect.objectContaining({
+          id: row.id,
+          type: "local",
+          label: "Local folder",
+          baseUrl: "",
+          managedByEnv: true,
+          reachable: true,
+          checkedAt: "2026-09-10T00:00:00.000Z",
+        }),
+      ],
+    });
 
-    const updated = await h.call(`/api/v1/admin/providers/${row.id}`, {
+    const renamed = await h.call(`/api/v1/admin/providers/${row.id}`, {
       method: "PATCH",
-      body: { label: "Renamed", enabled: false, config: { homeTemplate: "data:/{username}" } },
+      body: { label: "Family files" },
     });
-    expect(updated.status).toBe(200);
-    expect(AdminProvider.parse(await updated.json())).toMatchObject({
-      label: "Renamed",
-      enabled: false,
-      config: { homeTemplate: "data:/{username}" },
+    expect(renamed.status).toBe(200);
+    expect(AdminProvider.parse(await renamed.json())).toMatchObject({
+      id: row.id,
+      label: "Family files",
+      reachable: true,
     });
 
-    const moved = await h.call(`/api/v1/admin/providers/${row.id}`, {
-      method: "PATCH",
-      body: { baseUrl: "http://b:8080" },
-    });
-    expect(moved.status).toBe(200);
-    expect(AdminProvider.parse(await moved.json()).baseUrl).toBe("http://b:8080");
-
-    expect(
-      (await h.call(`/api/v1/admin/providers/${row.id}/test`, { method: "POST" })).status,
-    ).toBe(200);
-    const candidate = await h.call("/api/v1/admin/providers/test", {
-      method: "POST",
-      body: { type: "sftpgo", baseUrl: "http://c:8080" },
-    });
-    expect(await candidate.json()).toEqual({ ok: true, detail: "SFTPGo is reachable" });
-
-    const deleted = await h.call(`/api/v1/admin/providers/${row.id}`, { method: "DELETE" });
-    expect(deleted.status).toBe(200);
-    expect(await deleted.json()).toEqual({ ok: true });
-    expect(await h.repos.providers.get(row.id)).toBeNull();
+    rmSync(h.local.root, { recursive: true, force: true });
+    const gone = AdminProvidersResponse.parse(
+      await (await h.call("/api/v1/admin/providers")).json(),
+    );
+    expect(gone.providers[0]?.reachable).toBe(false);
   });
 
-  it.each([
-    ["incomplete create", "POST", "", { type: "sftpgo" }, 400],
-    [
-      "invalid create template",
-      "POST",
-      "",
-      {
-        type: "sftpgo",
-        label: "x",
-        baseUrl: "http://a",
-        config: { homeTemplate: "no-colon" },
-      },
-      400,
-    ],
-    ["incomplete probe", "POST", "/test", { type: "sftpgo" }, 400],
-    ["invalid probe id", "POST", "/nope/test", undefined, 400],
-    ["invalid update id", "PATCH", "/nope", { label: "x" }, 400],
-    ["unknown provider", "PATCH", "/00000000-0000-4000-8000-000000000000", { label: "x" }, 404],
-    ["unknown patch field", "PATCH", "/00000000-0000-4000-8000-000000000000", { nope: "x" }, 400],
-    [
-      "invalid update template",
-      "PATCH",
-      "/:id",
-      { config: { homeTemplate: "still-no-colon" } },
-      400,
-    ],
-  ] as const)("rejects %s", async (_name, method, path, body, status) => {
+  it("has no routes to add, remove or probe storage", async () => {
     const h = buildApp({ isAdmin: true });
-    const row = await seedSftpgoProvider(h.repos, "http://a:8080");
-    const response = await h.call(`/api/v1/admin/providers${path.replace(":id", row.id)}`, {
-      method,
-      body,
-    });
-    expect(response.status).toBe(status);
+    const row = await seedLocalProvider(h.repos);
+    for (const [method, path] of [
+      ["POST", "/api/v1/admin/providers"],
+      ["POST", "/api/v1/admin/providers/test"],
+      ["POST", `/api/v1/admin/providers/${row.id}/test`],
+      ["DELETE", `/api/v1/admin/providers/${row.id}`],
+    ] as const) {
+      const response = await h.call(path, {
+        method,
+        body: { type: "webdav", label: "x", baseUrl: "http://a" },
+      });
+      expect(response.status, `${method} ${path}`).toBe(404);
+    }
     expect(await h.repos.providers.list()).toEqual([row]);
   });
 
-  it("treats an unparsable JSON body as a bad request on every writing route", async () => {
+  it.each([
+    ["invalid update id", "/nope", { label: "x" }, 400],
+    ["unknown provider", "/00000000-0000-4000-8000-000000000000", { label: "x" }, 404],
+    ["retired provider", "/:retired", { label: "x" }, 404],
+    ["unknown patch field", "/:id", { label: "x", nope: "x" }, 400],
+    ["an address", "/:id", { label: "x", baseUrl: "http://b" }, 400],
+    ["enabling or disabling", "/:id", { label: "x", enabled: false }, 400],
+    ["configuration", "/:id", { label: "x", config: {} }, 400],
+    ["no label", "/:id", {}, 400],
+  ] as const)("rejects %s", async (_name, path, body, status) => {
     const h = buildApp({ isAdmin: true });
-    const row = await seedSftpgoProvider(h.repos, "http://a:8080");
-    for (const [path, method] of [
-      ["/api/v1/admin/providers", "POST"],
-      ["/api/v1/admin/providers/test", "POST"],
-      [`/api/v1/admin/providers/${row.id}`, "PATCH"],
-    ] as const) {
-      const res = await h.app.request(path, {
-        method,
-        headers: { "x-requested-with": "fdrive", "content-type": "application/json" },
-        body: "{not json",
-      });
-      expect(res.status).toBe(400);
-    }
+    const row = await seedLocalProvider(h.repos);
+    const retired = await h.repos.providers.ensure({ type: "s3", baseUrl: "http://s3/bucket" });
+    const before = await h.repos.providers.list();
+    const response = await h.call(
+      `/api/v1/admin/providers${path.replace(":id", row.id).replace(":retired", retired.id)}`,
+      { method: "PATCH", body },
+    );
+    expect(response.status).toBe(status);
+    expect(await h.repos.providers.list()).toEqual(before);
   });
 
-  it("refuses to create or re-address an unreachable provider", async () => {
-    const h = buildApp({ isAdmin: true, reachable: false });
-    const created = await h.call("/api/v1/admin/providers", {
-      method: "POST",
-      body: { type: "sftpgo", label: "x", baseUrl: "http://a:8080" },
-    });
-    expect(created.status).toBe(400);
-    expect(await created.json()).toMatchObject({
-      error: { kind: "bad_request", message: expect.stringContaining("not reachable") },
-    });
-    expect(await h.repos.providers.list()).toEqual([]);
-    const row = await seedSftpgoProvider(h.repos, "http://a:8080");
-    const moved = await h.call(`/api/v1/admin/providers/${row.id}`, {
+  it("treats an unparsable JSON body as a bad request", async () => {
+    const h = buildApp({ isAdmin: true });
+    const row = await seedLocalProvider(h.repos);
+    const res = await h.app.request(`/api/v1/admin/providers/${row.id}`, {
       method: "PATCH",
-      body: { baseUrl: "http://b:8080" },
+      headers: { "x-requested-with": "fdrive", "content-type": "application/json" },
+      body: "{not json",
     });
-    expect(moved.status).toBe(400);
-    expect((await h.repos.providers.get(row.id))?.baseUrl).toBe("http://a:8080");
-  });
-});
-
-describe("/admin/providers with a WebDAV type", () => {
-  function davHarness(isAdmin: boolean) {
-    const dav = createFakeWebdavServer({ users: [], origin: "http://dav.test", prefix: "/dav" });
-    const repos = createMemoryRepos();
-    const service = memoryProviderService(repos, {
-      fetch: dav.fetch,
-      clock: () => new Date("2026-09-10T00:00:00Z"),
-    });
-    const built = buildApp({ isAdmin, service });
-    return { dav, repos, app: built.app, call: built.call };
-  }
-
-  it("probes with OPTIONS, creates the row and advertises its form and capabilities", async () => {
-    const h = davHarness(true);
-    const created = await h.call("/api/v1/admin/providers", {
-      method: "POST",
-      body: { type: "webdav", label: "Nextcloud", baseUrl: "http://dav.test/dav" },
-    });
-    expect(created.status).toBe(200);
-    expect(AdminProvider.parse(await created.json())).toMatchObject({
-      type: "webdav",
-      label: "Nextcloud",
-      config: {},
-      enabled: true,
-      managedByEnv: false,
-    });
-    expect(h.dav.requests[0]).toMatchObject({ method: "OPTIONS", url: "http://dav.test/dav/" });
-
-    const list = AdminProvidersResponse.parse(
-      await (await h.call("/api/v1/admin/providers")).json(),
-    );
-    expect(list.providers[0]).toMatchObject({ type: "webdav", reachable: true });
-    const type = list.types.find((entry) => entry.type === "webdav");
-    expect(type).toMatchObject({
-      label: "WebDAV",
-      configFields: [{ name: "desktopWriteMode", required: false }],
-      capabilities: {
-        zip: false,
-        setModifiedAt: false,
-        atomicMove: true,
-        trash: true,
-        shares: false,
-        office: false,
-        index: false,
-        scopeMapping: false,
-      },
-    });
-    expect(type?.credentialFields.map((field) => field.name)).toEqual(["username", "password"]);
-
-    const candidate = await h.call("/api/v1/admin/providers/test", {
-      method: "POST",
-      body: { type: "webdav", baseUrl: "http://dav.test/dav" },
-    });
-    expect(await candidate.json()).toEqual({
-      ok: true,
-      detail: "WebDAV is reachable (class 1, 2)",
-    });
-    const unreachable = await h.call("/api/v1/admin/providers/test", {
-      method: "POST",
-      body: { type: "webdav", baseUrl: "http://elsewhere.test/" },
-    });
-    expect(((await unreachable.json()) as { ok: boolean }).ok).toBe(false);
-  });
-
-  it("refuses configuration the type does not declare", async () => {
-    const h = davHarness(true);
-    const created = await h.call("/api/v1/admin/providers", {
-      method: "POST",
-      body: {
-        type: "webdav",
-        label: "x",
-        baseUrl: "http://dav.test/dav",
-        config: { homeTemplate: "sftpgo:/{username}" },
-      },
-    });
-    expect(created.status).toBe(400);
-  });
-
-  it("lists a WebDAV row publicly with only its credential form", async () => {
-    const h = davHarness(false);
-    await seedWebdavProvider(h.repos, "http://dav.test/dav", { label: "Team drive" });
-    const res = await h.call("/api/v1/providers");
-    const body = ProvidersResponse.parse(await res.json());
-    expect(body.providers).toHaveLength(1);
-    expect(body.providers[0]).toMatchObject({ type: "webdav", label: "Team drive" });
-    expect(body.providers[0]?.credentialFields.map((field) => field.name)).toEqual([
-      "username",
-      "password",
-    ]);
-    expect(JSON.stringify(body)).not.toContain("dav.test");
-  });
-});
-
-describe("/admin/providers with an S3 type", () => {
-  const KEY = { accessKeyId: "alice-key", secretAccessKey: "alice-secret" };
-
-  function s3Harness(isAdmin: boolean) {
-    const s3 = createFakeS3Server({ keys: [KEY], buckets: ["media"] });
-    const repos = createMemoryRepos();
-    const service = memoryProviderService(repos, {
-      fetch: s3.fetch,
-      clock: () => new Date("2026-09-16T00:00:00Z"),
-    });
-    const built = buildApp({ isAdmin, service });
-    return { s3, repos, app: built.app, call: built.call };
-  }
-
-  it("probes the bucket unsigned, creates the row and advertises its form and capabilities", async () => {
-    const h = s3Harness(true);
-    const created = await h.call("/api/v1/admin/providers", {
-      method: "POST",
-      body: {
-        type: "s3",
-        label: "MinIO",
-        baseUrl: "http://s3.test/media/team",
-        config: { region: "garage" },
-      },
-    });
-    expect(created.status).toBe(200);
-    expect(AdminProvider.parse(await created.json())).toMatchObject({
-      type: "s3",
-      label: "MinIO",
-      config: { region: "garage" },
-      enabled: true,
-    });
-    expect(h.s3.requests[0]).toMatchObject({ method: "GET", url: "http://s3.test/media/" });
-    expect(h.s3.requests[0]?.headers.authorization).toBeUndefined();
-
-    const list = AdminProvidersResponse.parse(
-      await (await h.call("/api/v1/admin/providers")).json(),
-    );
-    expect(list.providers[0]).toMatchObject({ type: "s3", reachable: true });
-    const type = list.types.find((entry) => entry.type === "s3");
-    expect(type).toMatchObject({
-      label: "S3",
-      configFields: [{ name: "region", required: false }],
-      capabilities: {
-        zip: false,
-        setModifiedAt: false,
-        atomicMove: false,
-        trash: true,
-        shares: false,
-        office: false,
-        index: false,
-        scopeMapping: false,
-      },
-    });
-    expect(type?.credentialFields.map((field) => field.label)).toEqual([
-      "Access key ID",
-      "Secret key",
-    ]);
-
-    const missingBucket = await h.call("/api/v1/admin/providers/test", {
-      method: "POST",
-      body: { type: "s3", baseUrl: "http://s3.test/other" },
-    });
-    expect(await missingBucket.json()).toEqual({
-      ok: false,
-      detail: "bucket other was not found on this endpoint",
-    });
-    const noBucket = await h.call("/api/v1/admin/providers/test", {
-      method: "POST",
-      body: { type: "s3", baseUrl: "http://s3.test/" },
-    });
-    expect(((await noBucket.json()) as { detail: string }).detail).toContain(
-      "must name the bucket",
-    );
-  });
-
-  it("refuses configuration the type does not declare", async () => {
-    const h = s3Harness(true);
-    const created = await h.call("/api/v1/admin/providers", {
-      method: "POST",
-      body: {
-        type: "s3",
-        label: "x",
-        baseUrl: "http://s3.test/media",
-        config: { bucket: "media" },
-      },
-    });
-    expect(created.status).toBe(400);
-  });
-
-  it("lists an S3 row publicly without its endpoint or bucket", async () => {
-    const h = s3Harness(false);
-    await seedS3Provider(h.repos, "http://s3.test/media/team", { label: "Photos" });
-    const res = await h.call("/api/v1/providers");
-    const body = ProvidersResponse.parse(await res.json());
-    expect(body.providers).toHaveLength(1);
-    expect(body.providers[0]).toMatchObject({ type: "s3", label: "Photos" });
-    expect(body.providers[0]?.credentialFields.map((field) => field.name)).toEqual([
-      "username",
-      "password",
-    ]);
-    const text = JSON.stringify(body);
-    expect(text).not.toContain("s3.test");
-    expect(text).not.toContain("media");
+    expect(res.status).toBe(400);
   });
 });

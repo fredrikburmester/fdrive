@@ -1,161 +1,72 @@
 import { expect, type Page, test } from "@playwright/test";
 import { dismissActivityPanel } from "./support/activity.js";
 
-/** The labels this spec creates; anything left over from an aborted run is removed first. */
-const SPARE_LABELS = ["Second", "Second renamed"];
-
-interface ProviderRow {
-  readonly id: string;
-  readonly label: string;
-  readonly baseUrl: string;
-  readonly managedByEnv: boolean;
+/** The files folder's card on System > General. */
+function storageCard(page: Page) {
+  return page
+    .getByRole("main")
+    .locator('[data-slot="card"]')
+    .filter({ hasText: "Folder on this server, set by FDRIVE_STORAGE_ROOT." });
 }
 
-async function listProviders(page: Page): Promise<ProviderRow[]> {
-  const response = await page.request.get("/api/v1/admin/providers");
-  expect(response.ok()).toBe(true);
-  const body = (await response.json()) as { providers: ProviderRow[] };
-  return body.providers;
-}
-
-/** Removes the rows this spec owns, so a run aborted midway does not poison the next one. */
-async function removeSpareProviders(page: Page): Promise<void> {
-  for (const provider of await listProviders(page)) {
-    if (SPARE_LABELS.includes(provider.label)) {
-      const response = await page.request.delete(`/api/v1/admin/providers/${provider.id}`, {
-        headers: { "x-requested-with": "fdrive" },
-      });
-      expect(response.ok(), `remove spare provider ${provider.label}`).toBeTruthy();
-    }
-  }
-}
-
-/**
- * The same SFTPGo server spelled with the other loopback name, so the new
- * row's `(type, baseUrl)` pair does not collide with the seeded one while
- * still pointing at a server the probe can actually reach.
- */
-function otherSpelling(baseUrl: string): string {
-  const url = new URL(baseUrl);
-  if (url.hostname === "127.0.0.1") {
-    url.hostname = "localhost";
-  } else if (url.hostname === "localhost") {
-    url.hostname = "127.0.0.1";
-  } else {
-    throw new Error(`unexpected e2e SFTPGo host: ${url.hostname}`);
-  }
-  return url.origin;
-}
-
-test("cleanup removes a spare provider left by an interrupted run", async ({ page }) => {
-  await removeSpareProviders(page);
-  const seeded = (await listProviders(page)).find((provider) => provider.managedByEnv);
-  if (seeded === undefined) throw new Error("missing environment provider");
-  try {
-    const response = await page.request.post("/api/v1/admin/providers", {
-      headers: { "x-requested-with": "fdrive" },
-      data: { type: "sftpgo", label: "Second", baseUrl: otherSpelling(seeded.baseUrl) },
-    });
-    expect(response.ok()).toBe(true);
-    expect((await listProviders(page)).some((provider) => provider.label === "Second")).toBe(true);
-    await removeSpareProviders(page);
-    expect(
-      (await listProviders(page)).some((provider) => SPARE_LABELS.includes(provider.label)),
-    ).toBe(false);
-  } finally {
-    await removeSpareProviders(page);
-  }
-});
-
-test("alice (admin) can add, test, rename, disable and remove a storage provider", async ({
+test("alice (admin) finds the files folder and its Trash on System > General, with nothing to add or remove", async ({
   page,
 }) => {
-  await removeSpareProviders(page);
-  const seeded = (await listProviders(page)).find((provider) => provider.managedByEnv);
-  expect(seeded, "the e2e stack seeds an SFTPGO_URL-managed provider").toBeDefined();
-  const address = otherSpelling((seeded as ProviderRow).baseUrl);
-  const cards = page.getByRole("main").locator('[data-slot="card"]');
+  await page.goto("/system/general");
+  await dismissActivityPanel(page);
+  const card = storageCard(page);
 
-  try {
-    await page.goto("/system/storage");
-    await dismissActivityPanel(page);
-    // Other specs may leave a disabled WebDAV row behind (a login binds it,
-    // so it cannot be removed); count relative to what is already there.
-    await expect(cards.first()).toBeVisible();
-    const initial = await cards.count();
-
-    await page.getByRole("button", { name: "Add provider" }).click();
-    const dialog = page.getByRole("dialog");
-    // The closed Type trigger shows the type's label, not its raw value.
-    await expect(dialog.getByLabel("Type")).toHaveText(/SFTPGo/);
-    await expect(dialog.getByLabel("Type")).not.toContainText("sftpgo");
-    await expect(dialog.getByLabel("Home template")).toHaveValue("");
-    await expect(dialog.getByText(/replaced by each person/)).toBeVisible();
-    await dialog.getByLabel("Name").fill("Second");
-    await dialog.getByLabel("Address").fill(address);
-    await dialog.getByRole("button", { name: "Add", exact: true }).click();
-    await expect(dialog).toBeHidden();
-    await expect(cards).toHaveCount(initial + 1);
-
-    // The row's own probe, against the freshly stored address.
-    const second = cards.filter({ hasText: "Second" });
-    await expect(second.getByText(address)).toBeVisible();
-    await expect(second.getByText("Settings", { exact: true })).toBeVisible();
-    await dismissActivityPanel(page);
-    await second.getByRole("button", { name: "Test Second" }).dispatchEvent("click");
-    await expect(second.getByText("Reachable", { exact: true })).toBeVisible();
-
-    await second.getByRole("button", { name: "Edit Second" }).click();
-    await expect(dialog.getByLabel("Home template")).toHaveValue("");
-    await dialog.getByLabel("Name").fill("Second renamed");
-    await dialog.getByRole("button", { name: "Save", exact: true }).click();
-    await expect(dialog).toBeHidden();
-    const renamed = cards.filter({ hasText: "Second renamed" });
-    await expect(renamed).toHaveCount(1);
-
-    // Another provider stays enabled, so turning this one off needs no
-    // confirmation: nobody loses the ability to sign in.
-    const toggle = renamed.getByRole("switch", { name: "Enable Second renamed" });
-    await toggle.click();
-    await expect(toggle).not.toBeChecked();
-    await toggle.click();
-    await expect(toggle).toBeChecked();
-
-    // No login uses this provider, so it can be removed after confirming.
-    await renamed.getByRole("button", { name: "Remove Second renamed" }).click();
-    await page.getByRole("alertdialog").getByRole("button", { name: "Remove" }).click();
-    await expect(cards).toHaveCount(initial);
-    await expect(page.getByText("Second")).toHaveCount(0);
-  } finally {
-    await removeSpareProviders(page);
+  await expect(card.getByText("Storage", { exact: true })).toBeVisible();
+  await expect(card.getByLabel("Name", { exact: true })).toBeVisible();
+  // The e2e folder is reachable, so no reachability line competes for attention.
+  await expect(card.getByText("Unreachable")).toHaveCount(0);
+  await expect(page.getByRole("switch", { name: "Enable Trash" })).toBeVisible();
+  for (const name of [/^Add provider/, /^Remove /, /^Test /, /^Edit /]) {
+    await expect(page.getByRole("button", { name })).toHaveCount(0);
   }
+  // Only the name changes: no type, no address.
+  await expect(card.getByLabel("Address")).toHaveCount(0);
+  await expect(card.getByLabel("Type")).toHaveCount(0);
 });
 
-test("an admin can disable the last provider, reload, and enable it again", async ({ page }) => {
-  await removeSpareProviders(page);
-  const seeded = (await listProviders(page)).find((provider) => provider.managedByEnv);
-  if (seeded === undefined) throw new Error("missing environment provider");
+test("alice (admin) renames the files folder on System > General and the name sticks", async ({
+  page,
+}) => {
+  await page.goto("/system/general");
+  await dismissActivityPanel(page);
+  const card = storageCard(page);
+  const name = card.getByLabel("Name", { exact: true });
+  const save = card.getByRole("button", { name: "Save name" });
+  await expect(name).not.toHaveValue("");
+  const originalName = await name.inputValue();
+
   try {
-    await page.goto("/system/storage");
-    await dismissActivityPanel(page);
-    const toggle = page.getByRole("switch", { name: `Enable ${seeded.label}`, exact: true });
-    await toggle.click();
-    await page
-      .getByRole("alertdialog")
-      .getByRole("button", { name: "Disable", exact: true })
-      .click();
-    await expect(toggle).not.toBeChecked();
+    await name.fill("   ");
+    await expect(card.getByText("Enter a name for this storage.")).toBeVisible();
+    await expect(save).toBeDisabled();
+
+    await name.fill("  Home server  ");
+    // Dispatched: the Activity panel, fixed bottom-right, can reappear over
+    // the card's bottom-right button after earlier specs left jobs in it.
+    await save.dispatchEvent("click");
+    await expect(name).toHaveValue("Home server");
+    await expect(save).toBeDisabled();
+
     await page.reload();
-    await expect(toggle).toBeVisible();
-    await expect(toggle).not.toBeChecked();
-    expect((await page.request.get("/api/v1/auth/me")).ok()).toBe(true);
-    await toggle.click();
-    await expect(toggle).toBeChecked();
+    await expect(storageCard(page).getByLabel("Name", { exact: true })).toHaveValue("Home server");
+    await page.goto("/account");
+    await expect(page.getByRole("main").getByText("Home server", { exact: true })).toBeVisible();
   } finally {
-    const restored = await page.request.patch(`/api/v1/admin/providers/${seeded.id}`, {
-      headers: { "x-requested-with": "fdrive" },
-      data: { enabled: true },
-    });
-    expect(restored.ok()).toBe(true);
+    // Restore the original name so this test stays idempotent across
+    // repeated local runs against the same environment.
+    await page.goto("/system/general");
+    await dismissActivityPanel(page);
+    const restore = storageCard(page).getByLabel("Name", { exact: true });
+    await expect(restore).not.toHaveValue("");
+    if ((await restore.inputValue()) !== originalName) {
+      await restore.fill(originalName);
+      await storageCard(page).getByRole("button", { name: "Save name" }).dispatchEvent("click");
+      await expect(restore).toHaveValue(originalName);
+    }
   }
 });

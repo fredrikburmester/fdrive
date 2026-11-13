@@ -20,9 +20,16 @@ pub fn basename(rel_path: &str) -> &str {
     rel_path.rsplit('/').next().unwrap_or(rel_path)
 }
 
-/// AppleDouble sidecars and OS junk files that are never worth indexing.
+/// An upload fdrive's local storage is still writing: it streams into
+/// `.fdrive-partial-<16 hex digits>` beside its target and takes the real name once complete.
+pub fn is_partial_upload(name: &str) -> bool {
+    name.strip_prefix(".fdrive-partial-")
+        .is_some_and(|id| id.len() == 16 && id.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)))
+}
+
+/// AppleDouble sidecars, OS junk files and unfinished uploads: never worth indexing.
 pub fn is_junk_name(name: &str, skip_names: &[&str]) -> bool {
-    name.starts_with("._") || skip_names.contains(&name)
+    name.starts_with("._") || skip_names.contains(&name) || is_partial_upload(name)
 }
 
 /// The `<root>/<rel>` key that settings-based glob rules match against.
@@ -65,7 +72,12 @@ mod tests {
         assert!(is_junk_name("._photo.jpg", &[".DS_Store"]));
         assert!(is_junk_name(".DS_Store", &[".DS_Store"]));
         assert!(!is_junk_name("photo.jpg", &[".DS_Store"]));
-        assert_eq!(root_relative_key("sftpgo", "a/b"), "sftpgo/a/b");
+        assert_eq!(root_relative_key("files", "a/b"), "files/a/b");
+        assert!(is_junk_name(".fdrive-partial-0123456789abcdef", &[]));
+        assert!(!is_partial_upload(".fdrive-partial-0123456789ABCDEF"));
+        assert!(!is_partial_upload(".fdrive-partial-0123456789abcde"));
+        assert!(!is_partial_upload(".fdrive-partial-0123456789abcdef0"));
+        assert!(!is_partial_upload("x.fdrive-partial-0123456789abcdef"));
         assert!(is_under("a/b/c", "a/b"));
         assert!(is_under("a/b", "a/b"));
         assert!(!is_under("a/bc", "a/b"));

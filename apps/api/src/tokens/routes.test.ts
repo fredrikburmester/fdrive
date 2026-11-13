@@ -33,7 +33,7 @@ const FAKE_STORAGE: StorageProvider = {
 
 async function buildApp(clock: () => Date = () => new Date("2026-01-01T00:00:00.000Z")) {
   const repos = createMemoryRepos();
-  const provider = await repos.providers.ensure({ type: "sftpgo", baseUrl: "http://sftpgo:8080" });
+  const provider = await repos.providers.ensure({ type: "local", baseUrl: "http://dav.test" });
   const account = await repos.accounts.create({ displayName: "Alice" });
   const identity = await repos.identities.create({
     accountId: account.id,
@@ -70,7 +70,7 @@ async function buildApp(clock: () => Date = () => new Date("2026-01-01T00:00:00.
     startedAt: new Date(0),
     connectionStatus: async () => ({
       required: false,
-      providers: [{ type: "sftpgo", host: "sftpgo:8080" }],
+      providers: [{ type: "local", host: "Local folder" }],
     }),
     principalResolver: async () => principal,
     registerRoutes: (groups) => {
@@ -223,7 +223,7 @@ describe("token routes: DELETE /account/tokens/:id", () => {
 it("defaults new tokens to the active login and persists normalized per-token permissions", async () => {
   const { app, account, repos, principal } = await buildApp();
   const provider = await repos.providers.ensure({
-    type: "webdav",
+    type: "local",
     baseUrl: "https://other.invalid",
   });
   const second = await repos.identities.create({

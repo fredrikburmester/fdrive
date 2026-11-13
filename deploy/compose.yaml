@@ -1,8 +1,8 @@
 name: fdrive
 
-# Core stack: proxy, web, api, db. SFTPGo is expected to already exist
-# somewhere reachable from `api`. Only people who have no SFTPGo yet should add
-# compose.sftpgo.yaml on top of this file. Install guide:
+# Core stack: proxy, web, api, db, plus the optional workers. fdrive serves
+# one folder on this host, FDRIVE_FILES_DIR, with one folder per user inside
+# it, and keeps the users in its own database. Install guide:
 # https://github.com/fredrikburmester/fdrive/blob/main/deploy/README.md
 #
 # fdrive's own images are published for amd64 and arm64. FDRIVE_VERSION picks
@@ -16,6 +16,10 @@ x-logging: &default-logging
   options:
     max-size: "10m"
     max-file: "3"
+
+# The files folder is mounted at /data in api, backup, indexer and ocr, and
+# every one of them runs as FDRIVE_RUN_AS_UID, which must own the files.
+# FDRIVE_INDEX_SFTPGO_DIR and FDRIVE_INDEX_UID, their older names, still work.
 
 services:
   proxy:
@@ -63,6 +67,12 @@ services:
 
   api:
     image: ghcr.io/fredrikburmester/fdrive-api:${FDRIVE_VERSION:-latest}
+    # Starts as root for one step, like the indexer: the image's entrypoint
+    # hands the state volumes (and a new, empty files folder) to
+    # FDRIVE_RUN_AS_UID and then drops to that uid for good, before any API
+    # code runs. The capabilities below are what that step needs; the API
+    # process itself keeps none of them.
+    user: "0:0"
     environment: &api-environment
       # Fixed by this compose topology, not operator-configurable through
       # .env: secrets, and sidecar addresses only reachable inside the
@@ -76,7 +86,9 @@ services:
       FDRIVE_BACKUP_WORKER: "false"
       FDRIVE_BACKUP_SOURCES: '[{"kind":"ocr","path":"/backup-sources/ocr"},{"kind":"logs","path":"/backup-sources/logs"},{"kind":"office","path":"/backup-sources/office"}]'
       DATABASE_URL: postgres://fdrive:${POSTGRES_PASSWORD}@db:5432/fdrive
-      SFTPGO_URL: ${SFTPGO_URL:-}
+      # The files folder, mounted below, and the uid that owns its files.
+      FDRIVE_STORAGE_ROOT: /data
+      FDRIVE_RUN_AS_UID: ${FDRIVE_RUN_AS_UID:-${FDRIVE_INDEX_UID:-1000}}
       FDRIVE_MASTER_KEY: ${FDRIVE_MASTER_KEY:?set FDRIVE_MASTER_KEY in .env next to compose.yaml, see the fdrive README}
       FDRIVE_SETUP_TOKEN: ${FDRIVE_SETUP_TOKEN:-}
       # Reuse the database secret only inside the private compose network as
@@ -101,14 +113,14 @@ services:
       FDRIVE_OFFICE_PRODUCT: ${FDRIVE_OFFICE_PRODUCT:-onlyoffice}
       FDRIVE_OFFICE_URL: ${FDRIVE_OFFICE_URL:-http://onlyoffice}
       FDRIVE_WOPI_URL: ${FDRIVE_WOPI_URL:-http://api:3001/wopi}
-      # The conventional shipped mount remains fixed. The walkthrough may
-      # choose scopes below it, but cannot add arbitrary host mounts at runtime.
-      FDRIVE_INDEX_ROOTS: '[{"name":"sftpgo","sftpgoPath":"${FDRIVE_INDEX_SFTPGO_PATH:-/srv/sftpgo/data}","indexerPath":"/roots/sftpgo"}]'
+      # The files folder is the one indexed root, at /data in the api and the
+      # indexer alike. The walkthrough may choose scopes below it, but cannot
+      # add host mounts at runtime.
+      FDRIVE_INDEX_ROOTS: '[{"name":"files","storagePath":"/data","indexerPath":"/data"}]'
       # BEGIN GENERATED CONFIG KEYS (tools/deploy/generate-env-example.ts)
       FDRIVE_RESTORE_MODE: ${FDRIVE_RESTORE_MODE:-}
       HOST: ${HOST:-}
       LOG_LEVEL: ${LOG_LEVEL:-}
-      FDRIVE_HOME_TEMPLATE: ${FDRIVE_HOME_TEMPLATE:-}
       FDRIVE_SESSION_TTL_DAYS: ${FDRIVE_SESSION_TTL_DAYS:-}
       FDRIVE_SESSION_MAX_AGE_DAYS: ${FDRIVE_SESSION_MAX_AGE_DAYS:-}
       FDRIVE_COOKIE_SECURE: ${FDRIVE_COOKIE_SECURE:-}
@@ -130,12 +142,17 @@ services:
       db:
         condition: service_healthy
     volumes:
+      - ${FDRIVE_FILES_DIR:-${FDRIVE_INDEX_SFTPGO_DIR:-${FDRIVE_DATA_DIR:-./data}/files}}:/data
       - fdrive-thumbs:/thumbs:ro
       - fdrive-desktop:/var/lib/fdrive/desktop
       - fdrive-backups:/var/lib/fdrive/backups
     restart: unless-stopped
     security_opt: ["no-new-privileges:true"]
+    # CHOWN and DAC_READ_SEARCH let the entrypoint give state an earlier
+    # release wrote as the image's own user (kept at mode 700) to the uid;
+    # SETUID and SETGID drop to it.
     cap_drop: [ALL]
+    cap_add: [CHOWN, DAC_READ_SEARCH, SETUID, SETGID]
     pids_limit: 512
     logging: *default-logging
 
@@ -144,15 +161,21 @@ services:
     command: ["node", "dist/main.js", "backup", "worker"]
     environment:
       <<: *api-environment
-    # Source state has different owners and may be mode 0600. The worker can
-    # read it, but source mounts are read-only. No Docker socket or host root.
+      # Source state has different owners and may be mode 0600. The worker
+      # runs as FDRIVE_RUN_AS_UID like the api, so a backup it writes to a
+      # folder in someone's home belongs to them, and keeps only the
+      # capability to read any file. Source mounts are read-only. No Docker
+      # socket or host root.
+      FDRIVE_RUN_AS_CAPS: dac_read_search
     user: "0:0"
     cap_drop: [ALL]
-    cap_add: [DAC_OVERRIDE, CHOWN]
+    cap_add: [CHOWN, DAC_READ_SEARCH, SETUID, SETGID]
     security_opt: ["no-new-privileges:true"]
     read_only: true
     tmpfs: ["/tmp"]
     volumes:
+      # A backup destination may be a folder in a user's home.
+      - ${FDRIVE_FILES_DIR:-${FDRIVE_INDEX_SFTPGO_DIR:-${FDRIVE_DATA_DIR:-./data}/files}}:/data
       - fdrive-backups:/var/lib/fdrive/backups
       - fdrive-desktop:/var/lib/fdrive/desktop:ro
       - ${FDRIVE_DATA_DIR:-./data}/ocr:/backup-sources/ocr:ro
@@ -212,14 +235,12 @@ services:
     # capabilities below are what that step needs and all the container gets.
     user: "0:0"
     environment:
-      # The same uid/gid as SFTPGo, so folders kept at mode 700 stay readable.
-      # 1000 is the uid of SFTPGo's official image.
-      FDRIVE_RUN_AS_UID: ${FDRIVE_INDEX_UID:-1000}
+      # The uid the api writes as, so folders kept at mode 700 stay readable.
+      FDRIVE_RUN_AS_UID: ${FDRIVE_RUN_AS_UID:-${FDRIVE_INDEX_UID:-1000}}
       DATABASE_URL: postgres://fdrive:${POSTGRES_PASSWORD}@db:5432/fdrive
-      # The one indexed root, mounted below. Nothing is scanned until a feature
-      # is selected, and the fallback mount keeps an install without storage
-      # safe.
-      INDEX_ROOTS: sftpgo=/roots/sftpgo
+      # The one indexed root, the files folder mounted below. Nothing is
+      # scanned until a feature is selected.
+      INDEX_ROOTS: files=/data
       # Document extraction, text embeddings and image embeddings are the
       # three units of the ml service.
       TIKA_URL: http://ml:8080/extract
@@ -239,7 +260,7 @@ services:
       # simply moves up a level.
       OMP_THREAD_LIMIT: "1"
     volumes:
-      - ${FDRIVE_INDEX_SFTPGO_DIR:-./data/roots/sftpgo}:/roots/sftpgo:ro
+      - ${FDRIVE_FILES_DIR:-${FDRIVE_INDEX_SFTPGO_DIR:-${FDRIVE_DATA_DIR:-./data}/files}}:/data:ro
       - fdrive-thumbs:/thumbs
       - fdrive-indexer-logs:/logs
     depends_on:
@@ -254,11 +275,11 @@ services:
     pids_limit: 512
     logging: *default-logging
 
-  # PDF-rewriting OCR is independently controlled by its explicit pdfOcr
-  # setting. It stays alive for diagnostics while disabled.
-  # layers for scanned PDFs (see docs/OCR.md). Needs read-write access to the
-  # roots (the indexer only needs read-only) and its own state directory for
-  # kept originals; the API's System page talks to it over `FDRIVE_OCR_URL`.
+  # Adds text layers to scanned PDFs (see docs/OCR.md), controlled by its own
+  # pdfOcr setting; it stays alive for diagnostics while disabled. Needs
+  # read-write access to the files folder (the indexer only reads it) and its
+  # own state directory for kept originals; the API's System page talks to it
+  # over `FDRIVE_OCR_URL`.
   ocr:
     image: ghcr.io/fredrikburmester/fdrive-ocr:${FDRIVE_VERSION:-latest}
     # Starts as root for one step, like the indexer: Docker creates a missing
@@ -267,9 +288,9 @@ services:
     # drops to that uid for good, before any worker code runs.
     user: "0:0"
     environment:
-      FDRIVE_RUN_AS_UID: "1000"
+      FDRIVE_RUN_AS_UID: ${FDRIVE_RUN_AS_UID:-${FDRIVE_INDEX_UID:-1000}}
       DATABASE_URL: postgres://fdrive:${POSTGRES_PASSWORD}@db:5432/fdrive
-      INDEX_ROOTS: sftpgo=/roots/sftpgo
+      INDEX_ROOTS: files=/data
       OCR_PORT: "8011"
       STATE_DIR: /state
       TZ: ${TZ:-UTC}
@@ -279,7 +300,7 @@ services:
       # still applies on top. Empty (the default) means no restriction.
       OCR_INCLUDE_GLOBS: ${OCR_INCLUDE_GLOBS:-}
     volumes:
-      - ${FDRIVE_INDEX_SFTPGO_DIR:-./data/roots/sftpgo}:/roots/sftpgo
+      - ${FDRIVE_FILES_DIR:-${FDRIVE_INDEX_SFTPGO_DIR:-${FDRIVE_DATA_DIR:-./data}/files}}:/data
       - ${FDRIVE_DATA_DIR:-./data}/ocr:/state
     depends_on:
       db:

@@ -1,6 +1,6 @@
 import { randomBytes, randomUUID } from "node:crypto";
 import { createWriteStream } from "node:fs";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Readable } from "node:stream";
@@ -21,16 +21,16 @@ import {
   restoreArchive,
   verifyDelivery,
 } from "@fdrive/backup";
-import { createDb, migrate } from "@fdrive/db";
-import { sftpgoModule } from "@fdrive/sftpgo";
-import { startApacheWebdav, startPostgres, startSftpgo } from "@fdrive/testkit";
-import { webdavModule } from "@fdrive/webdav";
+import { createDb, createRepos, migrate } from "@fdrive/db";
+import { insertLocalUsers, startLocalStorage, startPostgres } from "@fdrive/testkit";
 import { generateIdentity, identityToRecipient } from "age-encryption";
 import { afterAll, beforeAll, expect, it } from "vitest";
 import { open, seal } from "../../src/auth/crypto.js";
 import { rawBackupStorage } from "../../src/backups/module.js";
 import { restoreOptions } from "../../src/backups/recovery.js";
 import { loadConfig } from "../../src/config.js";
+import { deploymentModules } from "../../src/local/modules.js";
+import { createScryptSharePasswords } from "../../src/shares/passwords.js";
 
 let source: ReturnType<typeof createDb>;
 let target: ReturnType<typeof createDb>;
@@ -62,7 +62,7 @@ it("recovers durable metadata, exact bigint history, credentials, ZIPs and bytes
     account = randomUUID(),
     user = randomUUID();
   await source.pool.query(
-    "insert into app.providers(id,type,label,base_url,config) values($1,'sftpgo','Test','http://test.invalid','{}')",
+    "insert into app.providers(id,type,label,base_url,config) values($1,'local','Test','local','{}')",
     [provider],
   );
   await source.pool.query("insert into app.accounts(id) values($1)", [account]);
@@ -175,11 +175,22 @@ it("recovers durable metadata, exact bigint history, credentials, ZIPs and bytes
   ).rejects.toThrow("not empty");
 }, 180_000);
 
-it("delivers a large streamed snapshot to Apache WebDAV and SFTPGo destinations that restore without the source", async () => {
-  const dav = await startApacheWebdav();
-  const sftpgo = await startSftpgo();
+it("delivers a large streamed snapshot to a local folder destination that restores without the source", async () => {
+  const folder = await startLocalStorage({
+    users: [{ username: "alice", password: "alice-password" }],
+    files: {},
+  });
   const timings: Record<string, Record<string, number>> = {};
   try {
+    // A local user's own folder as the destination, wired the way the API
+    // builds the local module from FDRIVE_STORAGE_ROOT.
+    const repos = createRepos(source.db);
+    await insertLocalUsers(repos, folder, createScryptSharePasswords());
+    const localModule = deploymentModules(
+      { fdriveStorageRoot: folder.root, fdriveIndexRoots: null },
+      repos,
+    ).local;
+    if (localModule === undefined) throw new Error("expected the local module");
     // 64 MiB of incompressible recovery bytes, streamed from disk rather than held in memory.
     const recovery = join(directory, "large-recovery");
     await mkdir(recovery, { recursive: true });
@@ -215,15 +226,9 @@ it("delivers a large streamed snapshot to Apache WebDAV and SFTPGo destinations 
     const local = await digest(fileStream(file));
     const targets = [
       {
-        label: "apache-webdav",
-        module: webdavModule,
-        instance: { id: randomUUID(), baseUrl: dav.baseUrl, config: {} },
-        credential: dav.credential,
-      },
-      {
-        label: "sftpgo",
-        module: sftpgoModule,
-        instance: { id: randomUUID(), baseUrl: sftpgo.baseUrl, config: {} },
+        label: "local",
+        module: localModule,
+        instance: { id: randomUUID(), baseUrl: "local", config: {} },
         credential: { username: "alice", password: "alice-password" },
       },
     ];
@@ -314,8 +319,11 @@ it("delivers a large streamed snapshot to Apache WebDAV and SFTPGo destinations 
       join(evaluation, "backup-destinations.json"),
       JSON.stringify({ measuredAt: new Date().toISOString(), ...timings }, null, 2),
     );
+    // The archive is a plain file in alice's home on disk.
+    expect(
+      await readdir(folder.path("alice", `/backups/.fdrive-backups/${config.installation_id}`)),
+    ).toContain(`${id}.fdrive.age`);
   } finally {
-    await dav.stop();
-    await sftpgo.stop();
+    await folder.stop();
   }
 }, 600_000);

@@ -105,6 +105,8 @@ function toolbarProps(overrides: Partial<FilesToolbarActionsProps> = {}): FilesT
     onViewModeChange: vi.fn(),
     density: "comfortable",
     onDensityChange: vi.fn(),
+    gridSize: "medium",
+    onGridSizeChange: vi.fn(),
     sortSpec: { key: "name", direction: "asc" },
     onSortSpecChange: vi.fn(),
     onNewFolder: vi.fn(),
@@ -165,6 +167,25 @@ it("toolbar hides Show thumbnails without index", async () => {
   render(<FilesToolbarActions {...toolbarProps({ capabilities: everything })} />);
   fireEvent.click(screen.getByTitle("View"));
   expect(await screen.findByText("Show thumbnails")).toBeTruthy();
+});
+
+it("toolbar offers icon size in grid view and density in list view", async () => {
+  const onGridSizeChange = vi.fn();
+  render(<FilesToolbarActions {...toolbarProps({ viewMode: "grid", onGridSizeChange })} />);
+  fireEvent.click(screen.getByTitle("View"));
+  expect(await screen.findByText("Icon size")).toBeTruthy();
+  expect(screen.queryByText("Density")).toBeNull();
+  expect(screen.getByRole("menuitemradio", { name: "Medium" }).getAttribute("aria-checked")).toBe(
+    "true",
+  );
+  fireEvent.click(screen.getByRole("menuitemradio", { name: "Large" }));
+  expect(onGridSizeChange).toHaveBeenCalledWith("large");
+  cleanup();
+
+  render(<FilesToolbarActions {...toolbarProps({ viewMode: "list" })} />);
+  fireEvent.click(screen.getByTitle("View"));
+  expect(await screen.findByText("Density")).toBeTruthy();
+  expect(screen.queryByText("Icon size")).toBeNull();
 });
 
 it("offers Organize in the menu and selection bar only when AI is set up", async () => {

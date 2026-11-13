@@ -15,52 +15,23 @@ async function clickSave(page: Page): Promise<void> {
   await page.getByRole("button", { name: "Save", exact: true }).dispatchEvent("click");
 }
 
-test("alice (admin) sees the env-managed provider on System > Storage and can change its home template", async ({
+test("alice (admin) finds the files folder under System > General, where the retired Storage page now leads", async ({
   page,
 }) => {
   await page.goto("/files");
 
-  await expect(page.getByRole("link", { name: "Storage" })).toBeVisible();
-  await page.getByRole("link", { name: "Storage" }).click();
-  await expect(page).toHaveURL(/\/system\/storage$/);
+  // The files folder is the only storage, so System has no Storage page.
+  await expect(page.getByRole("link", { name: "General" })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Storage", exact: true })).toHaveCount(0);
+  await page.getByRole("link", { name: "General" }).click();
+  await expect(page).toHaveURL(/\/system\/general$/);
+  await expect(page.getByText("Folder on this server, set by FDRIVE_STORAGE_ROOT.")).toBeVisible();
 
-  // The seeded provider is pinned by SFTPGO_URL, so it reports the
-  // environment as its source and refuses both address edits and removal.
-  const card = page
-    .getByRole("main")
-    .locator('[data-slot="card"]')
-    .filter({ hasText: "Environment (locked)" });
-  await expect(card.getByText("Reachable", { exact: true })).toBeVisible();
-  await expect(card.getByText("Environment (locked)", { exact: true })).toBeVisible();
-  await expect(card.getByRole("button", { name: /^Remove / })).toBeDisabled();
-
-  await card.getByRole("button", { name: /^Edit / }).click();
-  let dialog = page.getByRole("dialog");
-  await expect(dialog.getByLabel("Address")).toBeDisabled();
-
-  const originalTemplate = await dialog.getByLabel("Home template").inputValue();
-  const updatedTemplate = "sftpgo:/updated/{username}";
-  await dialog.getByLabel("Home template").fill(updatedTemplate);
-  await dialog.getByRole("button", { name: "Save", exact: true }).click();
-  await expect(dialog).toBeHidden();
-
-  await page.reload();
-  await page.getByRole("button", { name: /^Edit / }).click();
-  dialog = page.getByRole("dialog");
-  await expect(dialog.getByLabel("Home template")).toHaveValue(updatedTemplate);
-
-  // Restore the original template so this test stays idempotent across
-  // repeated local runs against the same environment.
-  await dialog.getByLabel("Home template").fill(originalTemplate);
-  await dialog.getByRole("button", { name: "Save", exact: true }).click();
-  await expect(dialog).toBeHidden();
-
-  // The connection card moved off General with the rest of the storage
-  // settings; only a pointer to this page is left there.
-  await page.goto("/system/general");
+  // Bookmarks of the old page land on General.
+  await page.goto("/system/storage");
+  await expect(page).toHaveURL(/\/system\/general$/);
   await expect(page.getByRole("heading", { name: "General" })).toBeVisible();
-  await expect(page.getByText("SFTPGo connection")).toHaveCount(0);
-  await expect(page.getByRole("link", { name: "Storage" }).first()).toBeVisible();
+  await expect(page.getByText("Folder on this server, set by FDRIVE_STORAGE_ROOT.")).toBeVisible();
 });
 
 test("the retired /system/connection route redirects to General", async ({ page }) => {
@@ -102,7 +73,7 @@ test("alice (admin) sees the Indexer page render the fake indexer's root, counts
 
   // Counts by status: one row per (root, status) pair from the fake's
   // `GET /stats`, including the "indexed" row this bug's symptom curl showed.
-  const indexedRow = page.getByRole("row", { name: /sftpgo/ }).filter({ hasText: "indexed" });
+  const indexedRow = page.getByRole("row", { name: /files/ }).filter({ hasText: "indexed" });
   await expect(indexedRow).toBeVisible();
   await expect(indexedRow.getByText("10", { exact: true })).toBeVisible();
 
@@ -118,7 +89,7 @@ test("alice (admin) sees the Indexer page render the fake indexer's root, counts
   await expect(page.getByRole("heading", { name: "indexer log" })).toBeVisible();
 });
 
-test("alice (admin) can reindex the sftpgo root and sees a toast reporting how many files were marked", async ({
+test("alice (admin) can reindex the files root and sees a toast reporting how many files were marked", async ({
   page,
 }) => {
   await page.goto("/system/indexer");
@@ -129,7 +100,7 @@ test("alice (admin) can reindex the sftpgo root and sees a toast reporting how m
   await expect(dialog.getByText(/Re-extracts text and re-embeds/)).toBeVisible();
 
   await dialog.getByLabel("Root").click();
-  await page.getByRole("option", { name: "sftpgo" }).click();
+  await page.getByRole("option", { name: "files" }).click();
   await expect(dialog.getByRole("checkbox")).toHaveCount(0);
 
   await dialog.getByRole("button", { name: "Reindex", exact: true }).click();
@@ -155,7 +126,7 @@ test("alice (admin) can rebuild scoped thumbnails from the Thumbnails page with 
   // Root defaults to "All roots"; scope to the fake's one root and turn on
   // force to exercise every field this dialog now sends.
   await dialog.getByLabel("Root").click();
-  await page.getByRole("option", { name: "sftpgo" }).click();
+  await page.getByRole("option", { name: "files" }).click();
   await dialog.getByLabel("Path (optional)").fill(" alice/docs ");
   await dialog.getByRole("switch", { name: "Regenerate existing thumbnails" }).click();
 
@@ -171,7 +142,7 @@ test("alice (admin) can rebuild scoped thumbnails from the Thumbnails page with 
   );
   await dialog.getByRole("button", { name: "Rebuild", exact: true }).click();
   expect((await request).postDataJSON()).toEqual({
-    root: "sftpgo",
+    root: "files",
     path: "alice/docs",
     force: true,
   });
@@ -260,8 +231,11 @@ test.describe("bob (not admin)", () => {
     await expect(page.getByRole("link", { name: "OCR" })).toBeHidden();
     await expect(page.getByRole("link", { name: "Thumbnails" })).toBeHidden();
 
+    await expect(page.getByRole("link", { name: "Users" })).toBeHidden();
+
     const connectionRes = await page.request.get("/api/v1/admin/providers");
     expect(connectionRes.status()).toBe(403);
+    expect((await page.request.get("/api/v1/admin/users")).status()).toBe(403);
 
     for (const path of [
       "/api/v1/system/indexer",
@@ -277,11 +251,15 @@ test.describe("bob (not admin)", () => {
   test("is sent back to /files when typing a System page's address directly", async ({ page }) => {
     await loginAs(page, "bob", "bob-password");
 
-    for (const path of ["/system/storage", "/system/general", "/system/features"]) {
+    for (const path of [
+      "/system/storage",
+      "/system/general",
+      "/system/features",
+      "/system/users",
+    ]) {
       await page.goto(path);
       await expect(page).toHaveURL(/\/files$/);
-      await expect(page.getByRole("heading", { name: "Storage" })).toHaveCount(0);
-      await expect(page.getByText("No storage servers")).toHaveCount(0);
+      await expect(page.getByRole("heading", { name: "General" })).toHaveCount(0);
       await expect(page.getByText("Administrators only")).toHaveCount(0);
     }
   });
@@ -337,12 +315,12 @@ for (const scope of ["index", "thumbnails"] as const) {
     if (isIndex) {
       await expect(dialog.getByLabel("Path (optional)")).toBeDisabled();
       await dialog.getByLabel("Root", { exact: true }).click();
-      await page.getByRole("option", { name: "sftpgo" }).click();
+      await page.getByRole("option", { name: "files" }).click();
       await dialog.getByLabel("Path (optional)").fill(" alice/docs ");
     }
     await dialog.getByRole("button", { name: action, exact: true }).click();
     await expect(dialog).toBeHidden();
-    expect(requests).toEqual([isIndex ? { root: "sftpgo", path: "alice/docs" } : {}]);
+    expect(requests).toEqual([isIndex ? { root: "files", path: "alice/docs" } : {}]);
     await expect(page.getByText("Running · 2 of 4 processed · 0 errors")).toBeVisible();
     await expect(
       page.getByRole("main").getByRole("button", { name: trigger, exact: true }),

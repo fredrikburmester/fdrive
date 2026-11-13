@@ -25,9 +25,9 @@ import { useSearchShortcut } from "@/lib/search/shortcut";
  * opens the panel, which already shows "Search is not available" once a
  * query against an unavailable index comes back empty. The tooltip only
  * appears for a known permanent scope failure, so a startup outage does not
- * look like an unconfigured server, and it names the login when its storage
- * is simply not indexed (files-only storage such as S3). Below `md` the button keeps its regular
- * size on every viewport.
+ * look like an unconfigured server, and it names the login when its folder
+ * is simply not indexed. Below `md` the button keeps its regular size on
+ * every viewport.
  */
 export function SearchButton() {
   const { open, setOpen } = useSearchShortcut();

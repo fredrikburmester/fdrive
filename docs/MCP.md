@@ -1,8 +1,9 @@
 # Connecting assistants to fdrive
 
 The built-in MCP server works over HTTP at `/mcp`. Each API token belongs to one linked
-storage login and has its own permissions and allowed folders. SFTPGo and WebDAV use the
-same tools; indexed features additionally require a verified index mapping.
+login and has its own permissions and allowed folders. Indexed features (search and
+analysis) cover that login's files, including folders shared with it, once its root is
+indexed.
 
 ## Create a token
 
@@ -70,8 +71,8 @@ containing Trash is refused. Restore checks both the original and requested dest
 There are no permanent-delete or public-sharing tools.
 
 Index-derived data intersects grants with verified index mappings and live provider read
-proofs. An unindexed WebDAV login can still browse/read/organize/manage files; it does not gain
-access to index rows by guessing a mapping. Search and bounded aggregates report partial,
+proofs. A login whose root is not indexed can still browse/read/organize/manage files; it does
+not gain access to index rows by guessing a mapping. Search and bounded aggregates report partial,
 degraded or unavailable results. Follow `next_offset` for listings; concurrent directory
 changes can shift pages. Trash listing scans at most 10,000 provider entries and reports
 `partial` if that bound is reached.

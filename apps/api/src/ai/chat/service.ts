@@ -24,6 +24,7 @@ import type { McpToolDeps } from "../../mcp/handlers.js";
 import type { AiInput, AiModel, AiToolResult } from "../model.ts";
 import type { AiSettingsService, ResolvedAiConfig } from "../settings.ts";
 import { createDriveTools, type ToolFocus } from "../tools/drive-tools.ts";
+import { createPathLocator } from "../tools/stored-paths.ts";
 import { type AiTool, formatSize } from "../tools/tool.ts";
 import { ACTION_TOOL_NAMES, createChatActionTools } from "./action-tools.ts";
 import type { ActionTool } from "./actions.ts";
@@ -209,10 +210,33 @@ export function createChatService(deps: ChatServiceDeps): ChatService {
     return config;
   }
 
-  async function buildTools(principal: Principal, chat: AiChat) {
+  /** The folder the person has open, as storage spells it, when the tools may use it; else `null`. */
+  async function openFolder(
+    principal: Principal,
+    raw: string | null | undefined,
+  ): Promise<string | null> {
+    if (raw === null || raw === undefined) return null;
+    let path: string;
+    try {
+      path = normalizePath(raw);
+    } catch {
+      throw new ApiHttpError("bad_request", `"${raw}" is not a valid path.`);
+    }
+    const located = await createPathLocator(principal.storage).locate(path);
+    if (located.occupancy !== "dir") return null;
+    const trashPath = trashPathOf(principal);
+    if (trashPath !== null && (located.path === trashPath || isUnderPath(trashPath, located.path)))
+      return null;
+    return located.path;
+  }
+
+  /** The tools for one message: they may use the chat's references and the folder the person has open. */
+  async function buildTools(principal: Principal, chat: AiChat, location: string | null) {
     const references = await deps.chats.references(chat.id);
+    const paths = new Set(references.filter((reference) => !reference.missing).map((r) => r.path));
+    if (location !== null) paths.add(location);
     const focus: ToolFocus = {
-      paths: new Set(references.filter((reference) => !reference.missing).map((r) => r.path)),
+      paths,
       adjective: "referenced",
       group: "the references",
       openFolders: true,
@@ -245,8 +269,9 @@ export function createChatService(deps: ChatServiceDeps): ChatService {
     chat: AiChat,
     config: ResolvedAiConfig,
     history: readonly AiChatMessage[],
+    location: string | null,
   ): Promise<LiveChat> {
-    const built = await buildTools(principal, chat);
+    const built = await buildTools(principal, chat, location);
     const existing = live.get(chat.id);
     if (existing !== undefined) {
       existing.tools = built.tools;
@@ -464,6 +489,7 @@ export function createChatService(deps: ChatServiceDeps): ChatService {
         );
       const attached = [...new Set((request.references ?? []).map((raw) => normalizePath(raw)))];
       const lines = await describeReferences(principal, attached);
+      const location = await openFolder(principal, request.location);
       await deps.chats.addReferences(chat.id, added);
 
       const running = live.running(principal.identityId);
@@ -473,7 +499,6 @@ export function createChatService(deps: ChatServiceDeps): ChatService {
 
       if (before.length === 0)
         await deps.chats.rename(principal.identityId, chat.id, titleFrom(request.text));
-      const location = request.location ?? null;
       await deps.chats.appendMessage(chat.id, {
         role: "user",
         parts: [{ kind: "text", text: request.text }],
@@ -487,7 +512,7 @@ export function createChatService(deps: ChatServiceDeps): ChatService {
         location: null,
       });
       const text = formatUserMessage(request.text, lines, location);
-      const conversation = await ensureLive(principal, chat, config, before);
+      const conversation = await ensureLive(principal, chat, config, before, location);
       conversation.parts = [];
       startTurn(
         principal,
@@ -534,7 +559,8 @@ export function createChatService(deps: ChatServiceDeps): ChatService {
         await checkAuthority(principal).catch((error) => {
           throw new ApiHttpError("unauthorized", (error as Error).message);
         });
-        const actions = target?.actions ?? (await buildTools(principal, chat)).actions;
+        const location = stored.findLast((message) => message.role === "user")?.location ?? null;
+        const actions = target?.actions ?? (await buildTools(principal, chat, location)).actions;
         const tool = actions.get(ACTION_TOOL_NAMES[card.proposal.kind]);
         if (tool === undefined)
           throw new ApiHttpError("conflict", "That action is no longer available for this login.");

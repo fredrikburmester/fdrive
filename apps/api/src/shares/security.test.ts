@@ -9,21 +9,18 @@ it("purpose-separates, bounds, authenticates and expires credential envelopes", 
   const master = Buffer.alloc(32, 1);
   let now = new Date(1000000);
   const codec = createShareCredentialCodec(master, () => now);
-  const value = codec.encode(id, { password: "secret" });
-  expect(value).not.toContain("secret");
-  expect(codec.decode(id, value)).toEqual({ password: "secret" });
-  expect(codec.decode(id, codec.encode(id, { password: "" }))).toEqual({ password: "" });
-  // The other form: a marker for a password fdrive already checked.
-  expect(codec.decode(id, codec.encode(id, { verified: "v1" }))).toEqual({ verified: "v1" });
+  const value = codec.encode(id, { verified: "v1-marker" });
+  expect(value).not.toContain("v1-marker");
+  expect(codec.decode(id, value)).toEqual({ verified: "v1-marker" });
   expect(() => codec.encode(id, { verified: "" })).toThrow();
+  expect(() => codec.encode(id, { verified: "x".repeat(65) })).toThrow();
+  expect(() => codec.encode("bad", { verified: "v1" })).toThrow();
   for (const bad of [undefined, "", `${value}=`, "a".repeat(3801), "A", `${value.slice(0, -3)}zzz`])
     expect(codec.decode(id, bad)).toBeUndefined();
   expect(codec.decode("00000000-0000-4000-8000-000000000002", value)).toBeUndefined();
   expect(
     createShareCredentialCodec(Buffer.alloc(32, 2), () => now).decode(id, value),
   ).toBeUndefined();
-  expect(() => codec.encode(id, { password: "\0".repeat(1024) })).toThrow("too large");
-  expect(() => codec.encode("bad", { password: "secret" })).toThrow();
   now = new Date(5000000);
   expect(codec.decode(id, value)).toBeUndefined();
   now = new Date(0);
@@ -32,8 +29,10 @@ it("purpose-separates, bounds, authenticates and expires credential envelopes", 
     hkdfSync("sha256", master, new Uint8Array(), "fdrive-public-share-credentials-v1", 32),
   );
   for (const payload of [
-    { id: "00000000-0000-4000-8000-000000000002", password: "p", expires: 1000 },
-    { id, password: 5, expires: 1000 },
+    { id: "00000000-0000-4000-8000-000000000002", verified: "v", expires: 1000 },
+    { id, verified: 5, expires: 1000 },
+    // The password form SFTPGo links needed is no credential any more.
+    { id, password: "p", expires: 1000 },
     { id, password: "p", verified: "v", expires: 1000 },
     { id, expires: 1000 },
   ])

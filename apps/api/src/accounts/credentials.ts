@@ -118,9 +118,8 @@ export async function verifyCredentials(
       if (error.kind === "unauthorized") {
         deps.limiter.recordFailure(key, block);
         deps.limiter.recordFailure(ipKey);
-        // Named by the provider's own credential labels: "invalid username
-        // or password" for SFTPGo and WebDAV, "invalid access key ID or
-        // secret key" for S3, so the form can show what was refused.
+        // Named by the provider's own credential labels ("invalid username
+        // or password"), so the form can show what was refused.
         const labels = fields
           .filter((field) => field.required)
           .map((field) => field.label.toLowerCase().replace(/ id$/, " ID"));

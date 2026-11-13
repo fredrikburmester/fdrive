@@ -170,7 +170,7 @@ it("requires explicit editors and preserves multiline input while typing", () =>
   expect(mocks.mutate.mock.calls[0]?.[0].editorUsernames).toEqual(["alice", "bob"]);
 });
 
-it("does not copy editor grants from a different SFTPGo provider", () => {
+it("does not copy editor grants from a different storage provider", () => {
   mocks.query.mockReturnValue({
     data: {
       configuration: {

@@ -1,11 +1,9 @@
+import { mkdtemp, realpath, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { ActivityReadInput, ActivityReadsRepo, IndexQueries } from "@fdrive/db";
 import { createMemoryRepos } from "@fdrive/db/testing";
-import {
-  createFakeSftpgoServer,
-  createSftpgoClient,
-  createSftpgoStorageProvider,
-  type FakeSeed,
-} from "@fdrive/sftpgo";
+import { createLocalStorage } from "@fdrive/local";
 import type { ServerType } from "@hono/node-server";
 import { serve } from "@hono/node-server";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -16,6 +14,7 @@ import { activityFixture } from "../../test/activity-fixture.js";
 import { createApp } from "../app.js";
 import { createLoginLimiter, DEFAULT_MAX_FAILURES } from "../auth/login-limiter.js";
 import { loadConfig } from "../config.js";
+import { writeHomeFiles } from "../local/test-fixtures/index.ts";
 import { extractClientIp } from "../net.js";
 import type { SearchService } from "../search/service.js";
 import { createResolveTokenPrincipal } from "../tokens/principal.js";
@@ -26,21 +25,16 @@ import { registerMcpRoutes } from "./routes.js";
 
 const REQUIRED_ENV = {
   DATABASE_URL: "postgres://localhost/fdrive",
-  SFTPGO_URL: "http://localhost:8080",
   FDRIVE_MASTER_KEY: Buffer.alloc(32, 7).toString("base64"),
 };
 
 /** The single ephemeral-port `@hono/node-server` instance for the harness in the currently running test. */
 let currentServer: ServerType | null = null;
 
-const SEED: FakeSeed = {
-  users: [{ username: "alice", password: "secret", permissions: { "/": ["*"] } }],
-  files: {
-    alice: {
-      "/hello.txt": "hello world",
-      "/dir/nested.txt": "nested contents",
-    },
-  },
+/** Alice's files in her home on the local folder. */
+const SEED = {
+  "/hello.txt": "hello world",
+  "/dir/nested.txt": "nested contents",
 };
 
 function fail(name: string): never {
@@ -56,8 +50,7 @@ function stubIndexQueries(): IndexQueries {
     fileByPath: async () => null,
     listFiles: async () => ({ total: 0, files: [] }),
     filesBySha256: async () => fail("filesBySha256"),
-    rootIdsByName: async () => ({ sftpgo: 1 }),
-    directoriesWithFiles: async () => [],
+    rootIdsByName: async () => ({ files: 1 }),
     stats: async () => ({ filesTracked: 0, byTextStatus: [], chunks: 0, chunksEmbedded: 0 }),
     statsForFileIds: async () => ({ chunks: 0, chunksEmbedded: 0 }),
     fileTextPrefix: async () => "",
@@ -120,19 +113,12 @@ interface Harness {
 
 async function startHarness(writesEnabled: boolean): Promise<Harness> {
   const config = loadConfig(REQUIRED_ENV);
-  const fakeSftpgo = createFakeSftpgoServer(SEED);
-  const sftpgoClient = createSftpgoClient({
-    baseUrl: "http://sftpgo.test",
-    fetch: fakeSftpgo.fetch,
-  });
-  const aliceToken = await sftpgoClient.login({ username: "alice", password: "secret" });
-  const storage = createSftpgoStorageProvider({
-    client: sftpgoClient,
-    withToken: async (fn) => fn(aliceToken.accessToken),
-  });
+  const root = await realpath(await mkdtemp(join(tmpdir(), "fdrive-mcp-")));
+  writeHomeFiles(root, "alice", SEED);
+  const storage = createLocalStorage({ home: join(root, "alice") });
 
   const repos = createMemoryRepos();
-  const provider = await repos.providers.ensure({ type: "sftpgo", baseUrl: "http://sftpgo.test" });
+  const provider = await repos.providers.ensure({ type: "local", baseUrl: "local" });
   const account = await repos.accounts.create({ displayName: "Alice" });
   const identity = await repos.identities.create({
     accountId: account.id,
@@ -184,7 +170,7 @@ async function startHarness(writesEnabled: boolean): Promise<Harness> {
     scopeResolver: {
       verifiedIndexScopes: async () => ({
         available: true,
-        scopes: [{ rootName: "sftpgo", fsPrefix: "/alice", virtualPrefix: "/" }],
+        scopes: [{ rootName: "files", fsPrefix: "/alice", virtualPrefix: "/" }],
       }),
     },
     identities: repos.identities,
@@ -212,7 +198,7 @@ async function startHarness(writesEnabled: boolean): Promise<Harness> {
     startedAt: new Date(0),
     connectionStatus: async () => ({
       required: false,
-      providers: [{ type: "sftpgo", host: "sftpgo:8080" }],
+      providers: [{ type: "local", host: "local" }],
     }),
   });
   registerMcpRoutes(app, {
@@ -239,6 +225,7 @@ async function startHarness(writesEnabled: boolean): Promise<Harness> {
     async close() {
       const server = currentServer;
       currentServer = null;
+      await rm(root, { recursive: true, force: true });
       if (server === null) {
         return;
       }
@@ -350,7 +337,7 @@ describe("MCP server end to end", () => {
     await client.close();
   });
 
-  it("calls list_directory against the fake SFTPGo server", async () => {
+  it("calls list_directory against the user's storage", async () => {
     const client = await connectBearerClient(harness.port, harness.token);
 
     const result = await client.callTool({ name: "list_directory", arguments: { path: "/" } });
@@ -600,7 +587,7 @@ describe("MCP server end to end: writes enabled", () => {
     await harness.close();
   });
 
-  it("creates a folder through the fake SFTPGo server when writes are enabled", async () => {
+  it("creates a folder in the user's storage when writes are enabled", async () => {
     const client = await connectBearerClient(harness.port, harness.token);
 
     const result = await client.callTool({ name: "create_folder", arguments: { path: "/new" } });
@@ -618,7 +605,7 @@ describe("MCP server end to end: writes enabled", () => {
     await client.close();
   });
 
-  it("moves a file through the fake SFTPGo server when writes are enabled", async () => {
+  it("moves a file in the user's storage when writes are enabled", async () => {
     const client = await connectBearerClient(harness.port, harness.token);
 
     const result = await client.callTool({

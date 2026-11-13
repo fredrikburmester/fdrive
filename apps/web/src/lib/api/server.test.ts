@@ -56,7 +56,7 @@ describe("serverApiClient", () => {
     headersMock.mockReturnValue({ get: () => "session=abc" });
     const body = {
       version: "1.0.0",
-      providers: [{ type: "sftpgo", label: "localhost:8080" }],
+      providers: [{ type: "local", label: "Local folder" }],
       setupRequired: false,
     };
     const fetchImpl = vi

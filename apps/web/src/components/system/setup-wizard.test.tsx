@@ -1,77 +1,172 @@
 // @vitest-environment jsdom
+import { ApiClientError, type SetupStatusResponse } from "@fdrive/contracts";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
-const mocks = vi.hoisted(() => ({ complete: vi.fn(), test: vi.fn() }));
+type Mutation = {
+  mutate: ReturnType<typeof vi.fn>;
+  isPending?: boolean;
+  isError?: boolean;
+  error?: unknown;
+};
+
+const mocks = vi.hoisted(() => ({
+  status: {
+    data: undefined as SetupStatusResponse | undefined,
+    isError: false,
+    error: null as unknown,
+    refetch: vi.fn(),
+  },
+  complete: { mutate: vi.fn() } as Mutation,
+}));
 vi.mock("@/lib/api/system-queries", () => ({
-  useSetupTest: () => ({ mutate: mocks.test, data: { ok: true, detail: "Reachable" } }),
-  useSetupComplete: () => ({ mutate: mocks.complete }),
+  useSetupStatus: () => mocks.status,
+  useSetupComplete: () => mocks.complete,
 }));
 vi.mock("./features-page", () => ({ SetupFeatures: () => <main>Optional feature choices</main> }));
 
 import { SetupWizard } from "./setup-wizard";
 
+function renderWizard(status: SetupStatusResponse) {
+  mocks.status.data = status;
+  return render(<SetupWizard />);
+}
+
+function claim() {
+  fireEvent.change(screen.getByLabelText("Setup token"), { target: { value: "claim-token" } });
+  fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+}
+
+function type(label: string, value: string) {
+  fireEvent.change(screen.getByLabelText(label), { target: { value } });
+}
+
 afterEach(() => {
   cleanup();
   vi.clearAllMocks();
+  mocks.status = { data: undefined, isError: false, error: null, refetch: vi.fn() };
+  mocks.complete = { mutate: vi.fn() };
 });
 
-it("continues from a file-user account straight into feature selection without navigation", () => {
-  mocks.test.mockImplementation((_input, options) => options.onSuccess());
-  mocks.complete.mockImplementation((_input, options) => options.onSuccess());
-  render(<SetupWizard />);
-  fireEvent.change(screen.getByLabelText("Setup token"), { target: { value: "claim-token" } });
-  fireEvent.click(screen.getByRole("button", { name: "Continue" }));
-  fireEvent.change(screen.getByLabelText("SFTPGo URL"), {
-    target: { value: "http://sftpgo:8080" },
+describe("before the setup status answers", () => {
+  it("waits for the status", () => {
+    render(<SetupWizard />);
+    expect(screen.getByRole("status").textContent).toBe("Loading…");
+    expect(screen.queryByLabelText("Setup token")).toBeNull();
   });
-  fireEvent.change(screen.getByLabelText("Storage name"), {
-    target: { value: "  Home storage  " },
+
+  it("says why it cannot start and retries", () => {
+    mocks.status.isError = true;
+    mocks.status.error = new ApiClientError("upstream_unavailable", "down", 502);
+    render(<SetupWizard />);
+
+    expect(screen.getByText(/fdrive can't reach the server/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+    expect(mocks.status.refetch).toHaveBeenCalled();
   });
-  fireEvent.click(screen.getByRole("button", { name: "Test connection" }));
-  fireEvent.click(screen.getByRole("button", { name: "Continue" }));
-  expect(screen.getByText(/not a SFTPGo WebAdmin account/)).toBeTruthy();
-  expect(screen.getByText(/Its SFTPGo permissions stay unchanged/)).toBeTruthy();
-  expect(screen.queryByText("Home template")).toBeNull();
-  fireEvent.change(screen.getByLabelText("SFTPGo file-user username"), {
-    target: { value: "alice" },
+});
+
+describe("without the files folder", () => {
+  it("asks for FDRIVE_STORAGE_ROOT instead of the form, and checks again", () => {
+    renderWizard({ required: true, storageConfigured: false });
+
+    expect(screen.getByText("Choose where fdrive keeps files")).toBeTruthy();
+    expect(screen.getByText("FDRIVE_STORAGE_ROOT")).toBeTruthy();
+    expect(screen.getByText(/restart fdrive, then check again\./)).toBeTruthy();
+    expect(screen.queryByLabelText("Setup token")).toBeNull();
+    expect(screen.queryByText(/^Step /)).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+    expect(mocks.status.refetch).toHaveBeenCalled();
   });
-  fireEvent.change(screen.getByLabelText("Password"), { target: { value: "alice-password" } });
-  fireEvent.click(screen.getByRole("button", { name: "Continue setup" }));
-  expect(mocks.complete).toHaveBeenCalledWith(
-    expect.objectContaining({
-      request: {
-        baseUrl: "http://sftpgo:8080",
-        label: "Home storage",
-        homeTemplate: "sftpgo:/{username}",
-        username: "alice",
-        password: "alice-password",
+});
+
+describe("with the files folder", () => {
+  const LOCAL: SetupStatusResponse = { required: true, storageConfigured: true };
+
+  it("claims with the token, creates the owner's account and continues to features", () => {
+    mocks.complete.mutate.mockImplementation((_input, options) => options.onSuccess());
+    renderWizard(LOCAL);
+
+    expect(screen.getByText("Step 1 of 12")).toBeTruthy();
+    expect(screen.queryByRole("tab", { name: "Storage" })).toBeNull();
+    claim();
+    expect(screen.getByText("Create your account")).toBeTruthy();
+    expect(screen.getByText("Step 2 of 12")).toBeTruthy();
+
+    type("Username", "  ada  ");
+    type("Password", "analytical-engine");
+    type("Confirm password", "analytical-engine");
+    fireEvent.click(screen.getByRole("button", { name: "Create account" }));
+
+    expect(mocks.complete.mutate).toHaveBeenCalledWith(
+      {
+        token: "claim-token",
+        request: { username: "ada", password: "analytical-engine" },
       },
-    }),
-    expect.anything(),
-  );
-  expect(screen.getByText("Optional feature choices")).toBeTruthy();
-});
-
-it("requires a valid name without invalidating a successful connection test", () => {
-  mocks.test.mockImplementation((_input, options) => options.onSuccess());
-  render(<SetupWizard />);
-  fireEvent.change(screen.getByLabelText("Setup token"), { target: { value: "claim-token" } });
-  fireEvent.click(screen.getByRole("button", { name: "Continue" }));
-  fireEvent.change(screen.getByLabelText("SFTPGo URL"), {
-    target: { value: "http://sftpgo:8080" },
+      expect.anything(),
+    );
+    expect(screen.getByText("Optional feature choices")).toBeTruthy();
   });
-  fireEvent.click(screen.getByRole("button", { name: "Test connection" }));
-  const next = screen.getByRole("button", { name: "Continue" }) as HTMLButtonElement;
-  expect(next.disabled).toBe(true);
-  const name = screen.getByLabelText("Storage name");
-  fireEvent.change(name, { target: { value: "   " } });
-  expect(screen.getByText("Enter a name for this storage.")).toBeTruthy();
-  expect(next.disabled).toBe(true);
-  fireEvent.change(name, { target: { value: "x".repeat(121) } });
-  expect(screen.getByText("Use 120 characters or fewer for the storage name.")).toBeTruthy();
-  expect(next.disabled).toBe(true);
-  fireEvent.change(name, { target: { value: "Home storage" } });
-  expect(next.disabled).toBe(false);
-  expect(mocks.test).toHaveBeenCalledTimes(1);
+
+  it("keeps the account button off until the name, password and repeat are valid", () => {
+    renderWizard(LOCAL);
+    claim();
+    const create = screen.getByRole("button", { name: "Create account" }) as HTMLButtonElement;
+    expect(create.disabled).toBe(true);
+    expect(screen.queryByRole("alert")).toBeNull();
+
+    type("Username", "../root");
+    expect(screen.getByText(/starting with a letter or digit/)).toBeTruthy();
+    type("Username", "ada");
+    type("Password", "short");
+    expect(screen.getByText("Use at least 8 characters.")).toBeTruthy();
+    type("Password", "long enough");
+    type("Confirm password", "long enuogh");
+    expect(screen.getByText("The passwords don't match.")).toBeTruthy();
+    expect(create.disabled).toBe(true);
+
+    type("Confirm password", "long enough");
+    expect(create.disabled).toBe(false);
+    fireEvent.click(screen.getByRole("button", { name: "Back" }));
+    expect(screen.getByLabelText("Setup token")).toBeTruthy();
+  });
+
+  it("shows the account being created", () => {
+    mocks.complete.isPending = true;
+    renderWizard(LOCAL);
+    claim();
+
+    expect((screen.getByRole("button", { name: "Creating…" }) as HTMLButtonElement).disabled).toBe(
+      true,
+    );
+  });
+
+  it("explains any other refusal", () => {
+    mocks.complete.isError = true;
+    mocks.complete.error = new ApiClientError("conflict", "setup already done", 409);
+    renderWizard(LOCAL);
+    claim();
+
+    expect(
+      screen.queryByText("The setup token was not accepted. Go back and check it."),
+    ).toBeNull();
+    expect(
+      screen.getByText("That change conflicts with the current state. Refresh and try again."),
+    ).toBeTruthy();
+  });
+
+  it("points at the token when the API refuses it", () => {
+    mocks.complete.isError = true;
+    mocks.complete.error = new ApiClientError(
+      "unauthorized",
+      "invalid or missing setup token",
+      401,
+    );
+    renderWizard(LOCAL);
+    claim();
+
+    expect(
+      screen.getByText("The setup token was not accepted. Go back and check it."),
+    ).toBeTruthy();
+  });
 });

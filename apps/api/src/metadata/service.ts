@@ -40,7 +40,15 @@ export interface MetadataFolderView {
   readonly sort: FolderViewSort | null;
 }
 
+/** Something else keyed by a login's paths that follows its moves and deletes. */
+export interface PathFollower {
+  onMoved(identityId: string, oldPath: string, newPath: string, isDir: boolean): Promise<void>;
+  onDeleted(identityId: string, path: string, isDir: boolean): Promise<void>;
+}
+
 export interface MetadataServiceDeps {
+  /** Folders shared with people follow their owner's moves and deletes. */
+  readonly followers?: readonly PathFollower[];
   /** AI chat references follow the same moves and deletes; optional for tests that have no chats. */
   readonly aiChats?: Pick<AiChatRepo, "moveReferences" | "markReferencesMissing"> | undefined;
   readonly tags: TagRepo;
@@ -77,7 +85,7 @@ function toMetadataTag(tag: DbTag): MetadataTag {
  * The metadata use cases shared by the tags, favorites, and recents routes,
  * plus the hooks `fs/routes.ts` calls after a move or delete so tag and
  * favorite and folder-view metadata survives renames made through fdrive itself. Renames and
- * deletes seen via the indexer (SFTP, WebDAV, other clients) reach the same
+ * deletes seen via the indexer (rsync, SMB, other writers) reach the same
  * hooks through `events/indexer-listener.ts`.
  */
 export interface MetadataService {
@@ -261,11 +269,17 @@ export function createMetadataService(deps: MetadataServiceDeps): MetadataServic
     async onMoved(identityId, oldPath, newPath, isDir) {
       await deps.metadataPaths.movePrefix(identityId, oldPath, newPath, isDir);
       await deps.aiChats?.moveReferences(identityId, oldPath, newPath, isDir);
+      for (const follower of deps.followers ?? []) {
+        await follower.onMoved(identityId, oldPath, newPath, isDir);
+      }
     },
 
     async onDeleted(identityId, path, isDir) {
       await deps.metadataPaths.deletePrefix(identityId, path, isDir);
       await deps.aiChats?.markReferencesMissing(identityId, path, isDir);
+      for (const follower of deps.followers ?? []) {
+        await follower.onDeleted(identityId, path, isDir);
+      }
     },
 
     async onTrashed(identityId, path, isDir) {

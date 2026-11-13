@@ -283,7 +283,7 @@ export const ChatMessage = z.object({
   parts: z.array(ChatPart),
   /** Paths attached to this message when it was sent. */
   references: z.array(z.string()),
-  /** The folder open in the browser when it was sent. */
+  /** The folder open in the browser when it was sent, as storage spells it; `null` when there was none the assistant could use. */
   location: z.string().nullable(),
   createdAt: z.iso.datetime(),
 });
@@ -338,7 +338,7 @@ export const ChatMessageRequest = z.strictObject({
   text: z.string().trim().min(1).max(8000),
   /** Files and folders attached to this message; they stay referenced for the rest of the chat. */
   references: z.array(chatPath).max(MAX_CHAT_REFERENCES).optional(),
-  /** The folder open in the browser, so "this folder" means something. */
+  /** The folder open in the browser: for this message, the assistant may use it and everything inside it. */
   location: chatPath.nullable().optional(),
 });
 

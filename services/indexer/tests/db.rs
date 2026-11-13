@@ -60,7 +60,7 @@ fn row(size: i64, mtime_ns: i64, sha: &str, embedded: bool, failed: bool) -> Man
 fn connect_reads_the_schema_version() {
     let (url, _) = setup();
     let mut client = db::connect(&url, 1, |_| panic!("no retry needed")).unwrap();
-    assert_eq!(db::read_schema_version(&mut client).unwrap(), Some(1));
+    assert_eq!(db::read_schema_version(&mut client).unwrap(), Some(2));
 }
 
 #[test]
@@ -109,8 +109,8 @@ fn a_thread_connection_is_reopened_after_postgres_drops_it() {
 #[test]
 fn upsert_root_is_idempotent_per_name() {
     let (_, mut c) = setup();
-    let a = db::upsert_root(&mut c, "sftpgo").unwrap();
-    assert_eq!(db::upsert_root(&mut c, "sftpgo").unwrap(), a);
+    let a = db::upsert_root(&mut c, "files").unwrap();
+    assert_eq!(db::upsert_root(&mut c, "files").unwrap(), a);
     assert_ne!(db::upsert_root(&mut c, "photos").unwrap(), a);
 }
 
@@ -120,13 +120,13 @@ fn schema_wait_succeeds_at_once_when_ready() {
     let logs = RefCell::new(Vec::<String>::new());
     let version = db::wait_for_schema_version(
         &Db::new(&url),
-        1,
+        2,
         Duration::from_secs(10),
         &|m| logs.borrow_mut().push(m.to_owned()),
         &|_| panic!("no wait needed"),
     )
     .unwrap();
-    assert_eq!(version, Some(1));
+    assert_eq!(version, Some(2));
     assert!(logs.borrow().is_empty());
 }
 
@@ -142,7 +142,7 @@ fn schema_wait_gives_up_after_the_timeout() {
     let logs = RefCell::new(Vec::<String>::new());
     let version = db::wait_for_schema_version(
         &Db::new(&url),
-        1,
+        2,
         Duration::ZERO,
         &|m| logs.borrow_mut().push(m.to_owned()),
         &|_| {},
@@ -164,7 +164,7 @@ fn schema_wait_waits_for_the_failure_history_migration() {
     let sleeps = RefCell::new(Vec::new());
     let version = db::wait_for_schema_version(
         &Db::new(&url),
-        1,
+        2,
         Duration::from_secs(60),
         &|m| logs.borrow_mut().push(m.to_owned()),
         &|d| {
@@ -176,11 +176,35 @@ fn schema_wait_waits_for_the_failure_history_migration() {
         },
     )
     .unwrap();
-    assert_eq!(version, Some(1));
+    assert_eq!(version, Some(2));
     assert_eq!(*sleeps.borrow(), vec![Duration::from_secs(5)]);
     let logs = logs.borrow();
     assert_eq!(logs.len(), 1);
-    assert!(logs[0].contains("processing_failures migration") && logs[0].contains("last seen: 1"));
+    assert!(logs[0].contains("processing_failures migration") && logs[0].contains("last seen: 2"));
+}
+
+#[test]
+fn schema_wait_waits_until_the_api_has_migrated() {
+    let (url, mut c) = setup();
+    c.batch_execute(r#"DELETE FROM "idx"."schema_version" WHERE version = 2"#)
+        .unwrap();
+    let client = RefCell::new(c);
+    let logs = RefCell::new(Vec::<String>::new());
+    let version = db::wait_for_schema_version(
+        &Db::new(&url),
+        2,
+        Duration::from_secs(60),
+        &|m| logs.borrow_mut().push(m.to_owned()),
+        &|_| {
+            client
+                .borrow_mut()
+                .batch_execute(r#"INSERT INTO "idx"."schema_version" (version) VALUES (2)"#)
+                .unwrap();
+        },
+    )
+    .unwrap();
+    assert_eq!(version, Some(2));
+    assert!(logs.borrow()[0].contains("last seen: 1"));
 }
 
 #[test]
@@ -195,7 +219,7 @@ fn schema_wait_reports_a_missing_database() {
 #[test]
 fn scan_manifest_shares_embeddings_by_content_key() {
     let (_, mut c) = setup();
-    let root = db::upsert_root(&mut c, "sftpgo").unwrap();
+    let root = db::upsert_root(&mut c, "files").unwrap();
     let other = db::upsert_root(&mut c, "photos").unwrap();
     add(&mut c, root, "embedded.jpg", ".jpg", 10, 1, "sha-embedded");
     add(&mut c, root, "copy.jpg", ".jpg", 10, 2, "sha-embedded");
@@ -216,7 +240,7 @@ fn scan_manifest_shares_embeddings_by_content_key() {
 #[test]
 fn scan_manifest_flags_only_unresolved_thumbnail_failures_of_its_root() {
     let (_, mut c) = setup();
-    let root = db::upsert_root(&mut c, "sftpgo").unwrap();
+    let root = db::upsert_root(&mut c, "files").unwrap();
     let other = db::upsert_root(&mut c, "photos").unwrap();
     for path in ["failed.jpg", "resolved.jpg", "embedding.jpg", "elsewhere.jpg"] {
         add(&mut c, root, path, ".jpg", 1, 1, &format!("sha-{path}"));
@@ -248,7 +272,7 @@ fn scan_manifest_flags_only_unresolved_thumbnail_failures_of_its_root() {
 #[test]
 fn text_less_pdfs_move_to_ocr_only_when_live() {
     let (_, mut c) = setup();
-    let root = db::upsert_root(&mut c, "sftpgo").unwrap();
+    let root = db::upsert_root(&mut c, "files").unwrap();
     let other = db::upsert_root(&mut c, "photos").unwrap();
     for (r, path, ext, status) in [
         (root, "scan.pdf", ".pdf", "no_text"),
@@ -277,7 +301,7 @@ fn text_less_pdfs_move_to_ocr_only_when_live() {
 #[test]
 fn upsert_resets_to_pending_and_drops_chunks() {
     let (_, mut c) = setup();
-    let root = db::upsert_root(&mut c, "sftpgo").unwrap();
+    let root = db::upsert_root(&mut c, "files").unwrap();
     let id = add(&mut c, root, "a.txt", ".txt", 10, 1, "sha1");
     db::insert_chunks(&mut c, id, &["hello".to_owned()], &[None]).unwrap();
     db::update_file_status(&mut c, id, "indexed", 5, Some("old")).unwrap();
@@ -302,7 +326,7 @@ fn upsert_resets_to_pending_and_drops_chunks() {
 #[test]
 fn chunks_and_embeddings() {
     let (_, mut c) = setup();
-    let root = db::upsert_root(&mut c, "sftpgo").unwrap();
+    let root = db::upsert_root(&mut c, "files").unwrap();
     let id = add(&mut c, root, "a.txt", ".txt", 10, 1, "sha1");
     db::insert_chunks(&mut c, id, &[], &[]).unwrap();
     db::insert_chunks(
@@ -326,7 +350,7 @@ fn chunks_and_embeddings() {
 #[test]
 fn indexed_and_error_marks() {
     let (_, mut c) = setup();
-    let root = db::upsert_root(&mut c, "sftpgo").unwrap();
+    let root = db::upsert_root(&mut c, "files").unwrap();
     let id = add(&mut c, root, "a.txt", ".txt", 10, 1, "sha1");
     db::update_file_status(&mut c, id, "partial", 5, Some("embed:X")).unwrap();
     db::mark_file_indexed(&mut c, root, "a.txt").unwrap();
@@ -340,7 +364,7 @@ fn indexed_and_error_marks() {
 #[test]
 fn mark_deleted_files_and_subtrees() {
     let (_, mut c) = setup();
-    let root = db::upsert_root(&mut c, "sftpgo").unwrap();
+    let root = db::upsert_root(&mut c, "files").unwrap();
     assert!(db::mark_deleted(&mut c, root, "never.txt", false).unwrap().is_empty());
     let a = add(&mut c, root, "dir/a.txt", ".txt", 1, 1, "s1");
     add(&mut c, root, "dir/b.txt", ".txt", 1, 1, "s2");
@@ -362,7 +386,7 @@ fn mark_deleted_files_and_subtrees() {
 #[test]
 fn rename_a_file_over_a_stale_destination() {
     let (_, mut c) = setup();
-    let root = db::upsert_root(&mut c, "sftpgo").unwrap();
+    let root = db::upsert_root(&mut c, "files").unwrap();
     add(&mut c, root, "old.txt", ".txt", 1, 1, "sha1");
     add(&mut c, root, "new.txt", ".txt", 1, 1, "sha2");
     db::mark_deleted(&mut c, root, "new.txt", false).unwrap();
@@ -387,7 +411,7 @@ fn rename_a_file_over_a_stale_destination() {
 #[test]
 fn rename_a_directory_rekeys_its_subtree() {
     let (_, mut c) = setup();
-    let root = db::upsert_root(&mut c, "sftpgo").unwrap();
+    let root = db::upsert_root(&mut c, "files").unwrap();
     add(&mut c, root, "dir/a.txt", ".txt", 1, 1, "s1");
     add(&mut c, root, "dir/sub/b.txt", ".txt", 1, 1, "s2");
     add(&mut c, root, "dirx/c.txt", ".txt", 1, 1, "s3");
@@ -409,7 +433,7 @@ fn rename_a_directory_rekeys_its_subtree() {
 #[test]
 fn moves_are_recorded() {
     let (_, mut c) = setup();
-    let root = db::upsert_root(&mut c, "sftpgo").unwrap();
+    let root = db::upsert_root(&mut c, "files").unwrap();
     db::insert_move(&mut c, root, "old.txt", "new.txt", "watcher").unwrap();
     let rows: Vec<(String, String, String)> = c
         .query(r#"SELECT src, dst, actor FROM "idx"."moves""#, &[])
@@ -423,12 +447,12 @@ fn moves_are_recorded() {
 #[test]
 fn events_are_stored_and_notified_with_the_same_payload() {
     let (url, mut c) = setup();
-    let root = db::upsert_root(&mut c, "sftpgo").unwrap();
+    let root = db::upsert_root(&mut c, "files").unwrap();
     let mut listener = common::connect(&url);
     listener.batch_execute("LISTEN idx_events").unwrap();
-    let event = build(EventKind::Moved, "sftpgo", "a.txt", Some("b.txt"));
+    let event = build(EventKind::Moved, "files", "a.txt", Some("b.txt"));
     db::record_event(&mut c, root, &event).unwrap();
-    db::record_event(&mut c, root, &build(EventKind::Created, "sftpgo", "c.txt", None)).unwrap();
+    db::record_event(&mut c, root, &build(EventKind::Created, "files", "c.txt", None)).unwrap();
     let rows: Vec<(String, String, Option<String>)> = c
         .query(r#"SELECT kind, path, target_path FROM "idx"."events" ORDER BY id"#, &[])
         .unwrap()
@@ -448,7 +472,7 @@ fn events_are_stored_and_notified_with_the_same_payload() {
     assert_eq!(first.channel(), "idx_events");
     let payload: serde_json::Value = serde_json::from_str(first.payload()).unwrap();
     assert_eq!(payload["kind"], "moved");
-    assert_eq!(payload["root"], "sftpgo");
+    assert_eq!(payload["root"], "files");
     assert_eq!(payload["path"], "a.txt");
     assert_eq!(payload["target_path"], "b.txt");
     assert_eq!(payload["at"], event.at);
@@ -462,14 +486,14 @@ fn events_are_stored_and_notified_with_the_same_payload() {
 #[test]
 fn prune_events_drops_only_old_rows() {
     let (_, mut c) = setup();
-    let root = db::upsert_root(&mut c, "sftpgo").unwrap();
+    let root = db::upsert_root(&mut c, "files").unwrap();
     let old = Utc::now() - chrono::Duration::days(30);
     c.execute(
         &format!(r#"INSERT INTO "idx"."events" (at, root_id, kind, path) VALUES ($1, {root}, 'created', 'old.txt')"#),
         &[&old],
     )
     .unwrap();
-    db::record_event(&mut c, root, &build(EventKind::Created, "sftpgo", "new.txt", None)).unwrap();
+    db::record_event(&mut c, root, &build(EventKind::Created, "files", "new.txt", None)).unwrap();
     assert_eq!(db::prune_events(&mut c, 7).unwrap(), 1);
     let paths: Vec<String> = c
         .query(r#"SELECT path FROM "idx"."events""#, &[])
@@ -483,11 +507,11 @@ fn prune_events_drops_only_old_rows() {
 #[test]
 fn scan_lifecycle_and_stats() {
     let (_, mut c) = setup();
-    let root = db::upsert_root(&mut c, "sftpgo").unwrap();
-    let empty = db::root_stats(&mut c, "sftpgo", root).unwrap();
+    let root = db::upsert_root(&mut c, "files").unwrap();
+    let empty = db::root_stats(&mut c, "files", root).unwrap();
     assert_eq!(
         empty,
-        serde_json::json!({"root": "sftpgo", "counts_by_status": {}, "chunks": 0, "chunks_embedded": 0, "last_scan": null})
+        serde_json::json!({"root": "files", "counts_by_status": {}, "chunks": 0, "chunks_embedded": 0, "last_scan": null})
     );
     let f1 = add(&mut c, root, "a.txt", ".txt", 1, 1, "sha1");
     db::update_file_status(&mut c, f1, "indexed", 10, None).unwrap();
@@ -500,10 +524,10 @@ fn scan_lifecycle_and_stats() {
     add(&mut c, root, "d.txt", ".txt", 1, 1, "sha4");
     let (scan_id, started_at) = db::start_scan(&mut c, root).unwrap();
     assert!(scan_id > 0 && started_at <= Utc::now());
-    let unfinished = db::root_stats(&mut c, "sftpgo", root).unwrap();
+    let unfinished = db::root_stats(&mut c, "files", root).unwrap();
     assert!(unfinished["last_scan"]["finished_at"].is_null());
     db::finish_scan(&mut c, scan_id, 5, 2, 1, 0).unwrap();
-    let stats = db::root_stats(&mut c, "sftpgo", root).unwrap();
+    let stats = db::root_stats(&mut c, "files", root).unwrap();
     assert_eq!(
         stats["counts_by_status"],
         serde_json::json!({"indexed": 1, "error": 1, "pending": 1})
@@ -535,7 +559,7 @@ fn scan_lifecycle_and_stats() {
 #[test]
 fn sweep_spares_rows_written_after_the_scan_started() {
     let (_, mut c) = setup();
-    let root = db::upsert_root(&mut c, "sftpgo").unwrap();
+    let root = db::upsert_root(&mut c, "files").unwrap();
     add(&mut c, root, "kept.txt", ".txt", 1, 1, "s1");
     let gone = add(&mut c, root, "vanished.txt", ".txt", 1, 1, "s2");
     db::insert_chunks(&mut c, gone, &["gone text".into()], &[None]).unwrap();
@@ -561,7 +585,7 @@ fn sweep_spares_rows_written_after_the_scan_started() {
 #[test]
 fn sweep_counts_each_row_once_across_batches() {
     let (_, mut c) = setup();
-    let root = db::upsert_root(&mut c, "sftpgo").unwrap();
+    let root = db::upsert_root(&mut c, "files").unwrap();
     let total = db::SWEEP_BATCH + 2;
     c.execute(
         &format!(
@@ -621,7 +645,7 @@ fn thumbnails_upsert_by_key_and_size() {
 #[test]
 fn media_files_skip_deleted_and_unhashed_rows() {
     let (_, mut c) = setup();
-    let root = db::upsert_root(&mut c, "sftpgo").unwrap();
+    let root = db::upsert_root(&mut c, "files").unwrap();
     assert!(db::media_files(&mut c, root).unwrap().is_empty());
     add(&mut c, root, "a.png", ".png", 100, 1, "sha1");
     add(&mut c, root, "b.pdf", ".pdf", 200, 1, "sha2");
@@ -661,7 +685,7 @@ fn image_embeddings_upsert_replaces_model() {
 #[test]
 fn mark_pending_whole_root_and_subtree() {
     let (_, mut c) = setup();
-    let root = db::upsert_root(&mut c, "sftpgo").unwrap();
+    let root = db::upsert_root(&mut c, "files").unwrap();
     for path in ["dir/a.txt", "dir", "other.txt", "gone.txt"] {
         let id = add(&mut c, root, path, ".txt", 1, 1, "sha");
         db::update_file_status(&mut c, id, "indexed", 1, None).unwrap();
@@ -682,7 +706,7 @@ fn mark_pending_treats_the_prefix_literally() {
         ("slash\\", "slash\\/child.txt", "slash/child.txt"),
     ] {
         let (_, mut c) = setup();
-        let root = db::upsert_root(&mut c, "sftpgo").unwrap();
+        let root = db::upsert_root(&mut c, "files").unwrap();
         let other = db::upsert_root(&mut c, "photos").unwrap();
         for (r, path) in [(root, selected), (root, sibling), (other, selected)] {
             let id = add(&mut c, r, path, ".txt", 1, 1, "sha");

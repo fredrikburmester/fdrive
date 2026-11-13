@@ -412,10 +412,9 @@ export function PublicSharePage({ id, path }: { id: string; path: string }) {
       const client = publicShareClient(controller.signal);
       await client.setSharePassword(id, value);
       latest = await client.publicShare(id);
-      // A viewable share reports whether the stored password verified; an
-      // upload share cannot be checked until something is uploaded.
-      if (latest.hasPassword && latest.scope === "read" && !latest.credentialPresent)
-        setError("Share password incorrect.");
+      // The server refuses a wrong password as it is submitted; this covers a
+      // password the owner changed between that check and the refreshed details.
+      if (latest.hasPassword && !latest.credentialPresent) setError("Share password incorrect.");
     } catch (cause) {
       if (!controller.signal.aborted)
         setError(cause instanceof Error ? cause.message : "Could not use this password.");
@@ -508,8 +507,8 @@ export function PublicSharePage({ id, path }: { id: string; path: string }) {
                     </div>
                     <FieldDescription>
                       {metadata.data.credentialPresent
-                        ? "Replace the password here if access is denied."
-                        : "Enter the password supplied with this link. Access is checked when you browse, download, or upload."}
+                        ? "Password accepted. Enter another to replace it."
+                        : "Enter the password supplied with this link."}
                     </FieldDescription>
                   </Field>
                 </form>

@@ -120,6 +120,20 @@ describe("describeFsError", () => {
   it("uses the fallback for a non-ApiClientError", () => {
     expect(describeFsError(new Error("boom"), "fallback")).toBe("fallback");
   });
+
+  it("says plainly what a folder shared to view refuses", () => {
+    const error = new ApiClientError(
+      "forbidden",
+      "this folder is shared read-only: /Shared with me/Photos/a.jpg",
+      403,
+    );
+    expect(describeFsError(error, "fallback")).toBe("This folder is shared with you to view only.");
+  });
+
+  it("keeps any other refusal's own words", () => {
+    const error = new ApiClientError("forbidden", "outside the home folder: /x", 403);
+    expect(describeFsError(error, "fallback")).toBe("outside the home folder: /x");
+  });
 });
 
 function createWrapper(options?: { staleTime?: number; onMutate?: () => Promise<void> }) {

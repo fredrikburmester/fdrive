@@ -3,7 +3,7 @@ import type { FsEntry } from "@fdrive/contracts";
 import { act, cleanup, fireEvent, render } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { GRID_WIDTH_STORAGE_KEY } from "@/lib/files/grid-layout";
-import { FileGrid } from "./file-grid";
+import { FileGrid, GRID_TILES } from "./file-grid";
 
 const mockScrollToIndex = vi.fn();
 
@@ -133,6 +133,25 @@ describe("FileGrid", () => {
     expect(container.querySelector('[data-slot="listing-skeleton-grid"]')).not.toBeNull();
   });
 
+  it("says who shares a folder in Shared with me under its name", () => {
+    window.localStorage.setItem(GRID_WIDTH_STORAGE_KEY, JSON.stringify(700));
+    const entries = [makeEntry("Trip", { path: "/Shared with me/Trip", kind: "dir" })];
+    const received = [
+      {
+        id: "00000000-0000-4000-8000-0000000000b1",
+        owner: "bob",
+        name: "Trip",
+        path: "/Shared with me/Trip",
+        access: "write" as const,
+        createdAt: "2026-01-01T00:00:00.000Z",
+      },
+    ];
+
+    const { getByText } = renderGrid({ entries, received });
+
+    expect(getByText("bob · Can edit")).toBeTruthy();
+  });
+
   it("selects nothing when a pointer drags across several tiles", () => {
     window.localStorage.setItem(GRID_WIDTH_STORAGE_KEY, JSON.stringify(700));
     const onEntryClick = vi.fn();
@@ -239,6 +258,60 @@ describe("FileGrid", () => {
 
     expect(container.querySelector("img")).toBeNull();
     expect(container.querySelector("svg")).not.toBeNull();
+  });
+
+  it("fits fewer, larger tiles as the grid size grows", () => {
+    window.localStorage.setItem(GRID_WIDTH_STORAGE_KEY, JSON.stringify(700));
+
+    const columns = (["small", "medium", "large"] as const).map((size) => {
+      const { container } = renderGrid({ size });
+      const count = renderedColumns(container);
+      cleanup();
+      return count;
+    });
+
+    expect(columns).toEqual([6, 4, 3]);
+  });
+
+  it("defaults to medium tiles with a larger icon slot", () => {
+    window.localStorage.setItem(GRID_WIDTH_STORAGE_KEY, JSON.stringify(700));
+    const entries = [makeEntry("photo.png", { ext: ".png" })];
+
+    const { container } = renderGrid({ entries });
+
+    expect(renderedColumns(container)).toBe(4);
+    expect(container.querySelector("img")?.getAttribute("class")).toContain("size-22");
+  });
+
+  it("resizes rows when the grid size changes without changing the column count", () => {
+    window.localStorage.setItem(GRID_WIDTH_STORAGE_KEY, JSON.stringify(100));
+    const { container, rerender } = renderGrid({ size: "small" });
+    const rowHeight = () =>
+      container.querySelector<HTMLElement>('[style*="grid-template-columns"]')?.style.height;
+    expect(renderedColumns(container)).toBe(1);
+    expect(rowHeight()).toBe(`${GRID_TILES.small.height}px`);
+
+    rerender(
+      <FileGrid
+        entries={ENTRIES}
+        selected={new Set()}
+        focusedPath={null}
+        onEntryClick={noop}
+        onEntryDoubleClick={noop}
+        onContextAction={noop}
+        getDragPaths={() => []}
+        onInternalDrop={noop}
+        onToggleSelectAll={noop}
+        onClearSelection={noop}
+        size="large"
+      />,
+    );
+
+    expect(renderedColumns(container)).toBe(1);
+    expect(rowHeight()).toBe(`${GRID_TILES.large.height}px`);
+    expect(
+      container.querySelector('[data-path="/file-0.txt"] svg')?.getAttribute("class"),
+    ).toContain(GRID_TILES.large.icon);
   });
 
   it("scrolls to requested entry row and calls onScrollConsumed", () => {

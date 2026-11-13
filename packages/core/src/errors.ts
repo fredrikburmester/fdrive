@@ -2,11 +2,7 @@
  * The kinds of error every `@fdrive/core` function can raise. Kept as a
  * closed union so callers can switch on it exhaustively.
  */
-export type CoreErrorKind =
-  | "invalid_path"
-  | "out_of_scope"
-  | "invalid_template"
-  | "invalid_argument";
+export type CoreErrorKind = "invalid_path" | "out_of_scope" | "invalid_argument";
 
 /**
  * The single error type thrown by this package. Every throw site picks one

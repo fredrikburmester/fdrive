@@ -67,7 +67,7 @@ it("runs the complete v2 routes with explicit grants, streamed content, receipts
   });
   expect((await f.request("/location", undefined, headers)).status).toBe(401);
   expect((await call("/operations/invalid")).status).toBe(400);
-  expect((await call("/operations/" + randomUUID())).status).toBe(404);
+  expect((await call(`/operations/${randomUUID()}`)).status).toBe(404);
   expect((await call("/entries?path=/")).status).toBe(200);
   // Folder checks: advertised, answered from a listing's token, and strictly bounded.
   expect(await (await call("/location")).json()).toMatchObject({ listingChecks: true });
@@ -184,11 +184,11 @@ async function fixture(writable = false, recovery?: Pick<DesktopEffectsRepo, "st
   const activity = activityFixture(clock);
   const account = await repos.accounts.create({ displayName: "Alice" });
   const provider = await repos.providers.ensure({
-    type: "sftpgo",
-    baseUrl: "https://sftpgo.invalid",
+    type: "local",
+    baseUrl: "https://files.invalid",
   });
   const secondProvider = await repos.providers.ensure({
-    type: "webdav",
+    type: "local",
     baseUrl: "https://dav.invalid",
   });
   const identity = await repos.identities.create({
@@ -239,7 +239,7 @@ async function fixture(writable = false, recovery?: Pick<DesktopEffectsRepo, "st
     startedAt: new Date(0),
     connectionStatus: async () => ({
       required: false,
-      providers: [{ type: "sftpgo", host: "sftpgo.invalid" }],
+      providers: [{ type: "local", host: "files.invalid" }],
     }),
     principalResolver: async (c) => (c.req.header("cookie") ? principal : null),
     registerRoutes: (groups) =>
@@ -518,6 +518,35 @@ it("revokes only the supplied desktop credential without resolving disabled stor
   expect(
     (await f.request("/disconnect", {}, { authorization: `Bearer ${other.token}` })).status,
   ).toBe(200);
+});
+
+it("asks to sign in again when a location's storage is gone, instead of a server error", async () => {
+  const f = await fixture();
+  const pair = f.pairing.create("Mac", "owner");
+  await f.pairing.approve(pair.id, f.account.id, [f.identity.id]);
+  const result = await f.pairing.poll(pair.id, pair.secret);
+  if (result.status !== "connected") throw new Error("Expected credentials");
+  const credential = result.credentials[0];
+  if (!credential) throw new Error("Expected a location");
+  await f.repos.providers.update(f.provider.id, { enabled: false });
+  f.deps.storageFactory.mockRejectedValue(
+    new ApiHttpError("upstream_unavailable", "storage provider unavailable"),
+  );
+  const response = await f.request("/location", undefined, {
+    authorization: `Bearer ${credential.token}`,
+  });
+  expect(response.status).toBe(401);
+  expect(await response.json()).toMatchObject({
+    error: { kind: "unauthorized", message: "Storage login is no longer available" },
+  });
+  // Any other failure to build storage is still the error it was.
+  f.deps.storageFactory.mockRejectedValue(
+    new ApiHttpError("forbidden", "this user may not sign in"),
+  );
+  expect(
+    (await f.request("/location", undefined, { authorization: `Bearer ${credential.token}` }))
+      .status,
+  ).toBe(403);
 });
 
 it("bounds one IPv6 subscriber to eight pairing slots and preserves admission for others", async () => {
@@ -1021,7 +1050,7 @@ it("advertises the smaller of fdrive's upload ceiling and what the storage can p
     return location && "maxUploadBytes" in location ? location.maxUploadBytes : undefined;
   }
   expect(await advertised()).toBe(16 * 1024 ** 3);
-  // S3's copy ceiling. Telling the Mac app 16 GiB would spend a whole transfer
+  // A backend's copy ceiling. Telling the Mac app 16 GiB would spend a whole transfer
   // before publication refused it and left the commit needing an administrator.
   expect(await advertised(5 * 1024 ** 3)).toBe(5 * 1024 ** 3);
 });

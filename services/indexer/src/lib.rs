@@ -7,7 +7,6 @@ pub mod backoff;
 pub mod chunking;
 pub mod config;
 pub mod db;
-pub mod directory_listing;
 pub mod events;
 pub mod extract;
 pub mod failures;

@@ -44,7 +44,6 @@ async function fixture() {
     configuredMappings: vi.fn(async () => ({
       available: true as const,
       providerId: randomUUID(),
-      homeTemplateRaw: "data:/physical/{username}",
       scopes: [{ virtualPrefix: "/", rootName: "data", fsPrefix: "/physical/alice" }],
     })),
   };

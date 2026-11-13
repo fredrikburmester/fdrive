@@ -63,7 +63,7 @@ export const SystemFeaturesResponse = z.object({
   roots: z.array(
     z.object({
       name: z.string(),
-      sftpgoPath: z.string(),
+      storagePath: z.string(),
       indexerPath: z.string(),
       processing: z
         .object({

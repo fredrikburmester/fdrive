@@ -22,6 +22,8 @@ export const ROUTES = {
     logout: "/api/v1/auth/logout",
     /** GET: the signed-in account and its identities -> `MeResponse`. */
     me: "/api/v1/auth/me",
+    /** POST: the active local login changes its password -> `OkResponse`. */
+    password: "/api/v1/auth/password",
   },
   fs: {
     /** GET: list a directory -> `ListResponse`. */
@@ -150,16 +152,20 @@ export const ROUTES = {
   setup: {
     /** GET, public: whether setup is required -> `SetupStatusResponse`. */
     status: "/api/v1/setup/status",
-    /** POST, setup token required: probe a candidate SFTPGo -> `ConnectionTestResponse`. */
-    test: "/api/v1/setup/test",
-    /** POST, setup token required: store the connection, create the admin account -> `MeResponse`. */
+    /** POST, setup token required: create the owner account -> `MeResponse`. */
     complete: "/api/v1/setup/complete",
   },
   admin: {
-    /** GET, admin only: every configured provider -> `AdminProvidersResponse`; POST: add one -> `AdminProvider`. */
+    /** GET, admin only: the storage (the files folder) -> `AdminProvidersResponse`. */
     providers: "/api/v1/admin/providers",
-    /** POST, admin only: probe an unsaved candidate -> `ConnectionTestResponse`. */
-    providersTest: "/api/v1/admin/providers/test",
+    /** GET, admin only: the local users -> `AdminUsersResponse`; POST: add one -> `AdminUser`. */
+    users: "/api/v1/admin/users",
+  },
+  grants: {
+    /** GET: folders shared with people, both ways -> `GrantsResponse`; POST: share one -> `OwnedGrant`. */
+    list: "/api/v1/grants",
+    /** GET: who a folder can be shared with -> `GrantPeopleResponse`. */
+    people: "/api/v1/grants/people",
   },
   system: {
     activity: "/api/v1/system/activity",
@@ -174,8 +180,6 @@ export const ROUTES = {
     aiTest: "/api/v1/system/ai/test",
     /** GET/PUT, admin only: provider-bound Trash configuration. */
     trash: "/api/v1/system/trash",
-    /** GET/PUT, admin only: folder-level virtual folder mappings -> `MountMappingsResponse`. */
-    mountMappings: "/api/v1/system/mount-mappings",
     /** GET, admin only: indexer health, stats, and settings -> `SystemIndexerResponse`. */
     indexer: "/api/v1/system/indexer",
     /** PUT, admin only: update the indexer's settings -> `IndexerSettingsResponse`. */
@@ -232,14 +236,22 @@ export const ROUTES = {
 
 export type Routes = typeof ROUTES;
 
+/**
+ * `PATCH` (owner: change access) -> `OwnedGrant`; `DELETE` (owner, or the
+ * person it is shared with to leave it) -> `OkResponse`.
+ */
+export function grantRoute(id: string): string {
+  return `${ROUTES.grants.list}/${encodeURIComponent(id)}`;
+}
+
+/** `PATCH`/`DELETE`, admin only: one local user -> `AdminUser` / `OkResponse`. */
+export function adminUserRoute(username: string): string {
+  return `${ROUTES.admin.users}/${encodeURIComponent(username)}`;
+}
+
 /** `PATCH`/`DELETE`, admin only: one configured provider. */
 export function adminProviderRoute(id: string): string {
   return `${ROUTES.admin.providers}/${encodeURIComponent(id)}`;
-}
-
-/** `POST`, admin only: probe one configured provider -> `ConnectionTestResponse`. */
-export function adminProviderTestRoute(id: string): string {
-  return `${adminProviderRoute(id)}/test`;
 }
 
 /** GET: one job -> `JobStatus`. 404 for a job that belongs to another identity. */
@@ -331,21 +343,6 @@ export function publicShareRoute(
   action: keyof typeof PUBLIC_SHARE_SUFFIXES = "metadata",
 ): string {
   return `${ROUTES.publicShares}/${encodeURIComponent(id)}${PUBLIC_SHARE_SUFFIXES[action]}`;
-}
-
-/**
- * GET: an identity's scope mapping and index-availability status ->
- * `IdentityScopeResponse`. PUT (admin + CSRF, owned identity): replace the
- * identity's scope override -> `IdentityScopeResponse`; `{ scopes: [] }`
- * resets it to the template-derived home scope.
- */
-export function identityScopeRoute(id: string): string {
-  return `${ROUTES.account.identities}/${encodeURIComponent(id)}/scope`;
-}
-
-/** GET, admin only: candidate physical locations for the identity's unmapped mounts -> `IdentityScopeSuggestionsResponse`. */
-export function identityScopeSuggestionsRoute(id: string): string {
-  return `${identityScopeRoute(id)}/suggestions`;
 }
 
 /** GET/HEAD identity selection for URLs that cannot send headers (images/downloads).

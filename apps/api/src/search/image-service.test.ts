@@ -19,7 +19,7 @@ import {
 } from "./image-service.js";
 
 const HOME_SCOPES: readonly Scope[] = [
-  { rootName: "sftpgo", fsPrefix: "/alice", virtualPrefix: "/" },
+  { rootName: "files", fsPrefix: "/alice", virtualPrefix: "/" },
 ];
 const NOW = new Date("2026-03-01T00:00:00.000Z");
 
@@ -42,7 +42,7 @@ function fakeIndexQueries(
   overrides: Partial<Pick<IndexQueries, "searchImages" | "rootIdsByName">> = {},
 ): Pick<IndexQueries, "searchImages" | "rootIdsByName"> {
   return {
-    rootIdsByName: overrides.rootIdsByName ?? (async () => ({ sftpgo: 1 })),
+    rootIdsByName: overrides.rootIdsByName ?? (async () => ({ files: 1 })),
     searchImages: overrides.searchImages ?? (async () => fail("searchImages")),
   };
 }

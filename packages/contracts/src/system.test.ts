@@ -48,8 +48,8 @@ describe("SettingSource", () => {
 describe("IndexerHealth", () => {
   const valid = {
     ok: true,
-    roots: ["sftpgo"],
-    watcher: { sftpgo: true },
+    roots: ["files"],
+    watcher: { files: true },
     embedOk: true,
     schemaVersion: 3,
   };
@@ -103,7 +103,7 @@ describe("IndexerLastScan", () => {
 describe("IndexerRootStats", () => {
   it("parses a valid payload with a null lastScan", () => {
     const valid = {
-      root: "sftpgo",
+      root: "files",
       countsByStatus: { indexed: 5, pending: 1 },
       chunks: 20,
       chunksEmbedded: 18,
@@ -254,8 +254,8 @@ describe("SystemIndexerResponse", () => {
       reachable: true,
       health: {
         ok: true,
-        roots: ["sftpgo"],
-        watcher: { sftpgo: true },
+        roots: ["files"],
+        watcher: { files: true },
         embedOk: true,
         schemaVersion: 1,
       },
@@ -314,15 +314,15 @@ describe("IndexerSettingsUpdateRequest", () => {
 
 describe("IndexerReindexRequest", () => {
   it("accepts a root with no path", () => {
-    expect(IndexerReindexRequest.safeParse({ root: "sftpgo" }).success).toBe(true);
+    expect(IndexerReindexRequest.safeParse({ root: "files" }).success).toBe(true);
   });
 
   it("accepts a root with a path", () => {
-    expect(IndexerReindexRequest.safeParse({ root: "sftpgo", path: "folder" }).success).toBe(true);
+    expect(IndexerReindexRequest.safeParse({ root: "files", path: "folder" }).success).toBe(true);
   });
 
   it("accepts a thumbnails flag", () => {
-    const result = IndexerReindexRequest.safeParse({ root: "sftpgo", thumbnails: true });
+    const result = IndexerReindexRequest.safeParse({ root: "files", thumbnails: true });
     expect(result.success).toBe(true);
   });
 
@@ -337,12 +337,12 @@ describe("IndexerThumbnailsRebuildRequest", () => {
   });
 
   it("accepts a root", () => {
-    expect(IndexerThumbnailsRebuildRequest.safeParse({ root: "sftpgo" }).success).toBe(true);
+    expect(IndexerThumbnailsRebuildRequest.safeParse({ root: "files" }).success).toBe(true);
   });
 
   it("accepts a path and force", () => {
     const result = IndexerThumbnailsRebuildRequest.safeParse({
-      root: "sftpgo",
+      root: "files",
       path: "folder",
       force: true,
     });
@@ -404,7 +404,7 @@ describe("SystemSearchResponse", () => {
     const valid = {
       configured: true,
       semantic: { configured: true, healthy: true },
-      roots: ["sftpgo"],
+      roots: ["files"],
       index: { files: 1, withText: 1, chunks: 1, embedded: 1 },
     };
     expect(SystemSearchResponse.parse(valid)).toEqual(valid);
@@ -413,9 +413,9 @@ describe("SystemSearchResponse", () => {
 
 describe("SystemReembedResponse", () => {
   it("parses a valid payload", () => {
-    expect(SystemReembedResponse.parse({ marked: 5, roots: ["sftpgo"] })).toEqual({
+    expect(SystemReembedResponse.parse({ marked: 5, roots: ["files"] })).toEqual({
       marked: 5,
-      roots: ["sftpgo"],
+      roots: ["files"],
     });
   });
 });
@@ -637,7 +637,7 @@ describe("OcrSettingsUpdateRequest", () => {
 describe("OcrOriginal", () => {
   const valid = {
     id: "0123456789abcdef_scan.pdf",
-    root: "sftpgo",
+    root: "files",
     path: "fredrik/docs/scan.pdf",
     size: 1024,
     keptAt: "2026-09-07T03:00:00+00:00",
@@ -705,10 +705,10 @@ describe("SystemThumbnailsResponse", () => {
 describe("clear contracts", () => {
   it.each([
     {},
-    { root: "sftpgo" },
-    { root: "sftpgo", path: "/" },
-    { root: "sftpgo", path: "/a/b.pdf" },
-    { root: "sftpgo", path: "a_%/file.pdf" },
+    { root: "files" },
+    { root: "files", path: "/" },
+    { root: "files", path: "/a/b.pdf" },
+    { root: "files", path: "a_%/file.pdf" },
   ])("accepts scope %j", (scope) => {
     expect(IndexerClearRequest.parse(scope)).toEqual(scope);
   });
@@ -758,37 +758,6 @@ describe("clear contracts", () => {
   });
 });
 
-it("bounds internal directory metadata and rejects malformed or extra fields", async () => {
-  const { IndexerDirectoryResponse } = await import("./index.ts");
-  const entry = { name: "文 space%20", kind: "file" };
-  expect(IndexerDirectoryResponse.parse({ items: [entry], overflow: false })).toEqual({
-    items: [entry],
-    overflow: false,
-  });
-  expect(
-    IndexerDirectoryResponse.safeParse({
-      items: Array.from({ length: 10000 }, () => entry),
-      overflow: true,
-    }).success,
-  ).toBe(true);
-  for (const value of [
-    { items: Array.from({ length: 10001 }, () => entry), overflow: true },
-    { items: [], overflow: false, extra: true },
-    { items: [] },
-    ...["", "x".repeat(256), "/root", "a\0b"].map((name) => ({
-      items: [{ name, kind: "file" }],
-      overflow: false,
-    })),
-    { items: [{ name: "a", kind: "unknown" }], overflow: false },
-    { items: [{ ...entry, size: 1 }], overflow: false },
-  ])
-    expect(IndexerDirectoryResponse.safeParse(value).success).toBe(false);
-  for (const kind of ["file", "dir", "symlink", "other"])
-    expect(
-      IndexerDirectoryResponse.safeParse({ items: [{ name: "a", kind }], overflow: false }).success,
-    ).toBe(true);
-});
-
 describe("SystemLogsQuery", () => {
   it("defaults to 200 info-level entries and no cursor", async () => {
     const { SystemLogsQuery } = await import("./index.ts");
@@ -833,14 +802,14 @@ describe("SystemLogsResponse", () => {
           at: "2026-01-01T12:00:00Z",
           level: "warn",
           message: "Index clear requested",
-          data: { root: "sftpgo" },
+          data: { root: "files" },
           source: "api",
         },
         {
           id: "scan:2",
           at: "2026-01-01T11:00:00Z",
           level: "info",
-          message: "Scan of sftpgo finished: 1 seen, 0 changed, 0 deleted",
+          message: "Scan of files finished: 1 seen, 0 changed, 0 deleted",
           source: "indexer",
         },
       ],

@@ -12,7 +12,7 @@ export interface ReferenceLine {
   readonly detail?: string | undefined;
 }
 
-/** The text the model gets for one person message: what was attached, where they are, then their words. */
+/** The text the model gets for one person message: what was attached, the folder they have open, then their words. */
 export function formatUserMessage(
   text: string,
   references: readonly ReferenceLine[],
@@ -30,7 +30,9 @@ export function formatUserMessage(
     lines.push("");
   }
   if (location !== null) {
-    lines.push(`The person is looking at ${location}.`);
+    lines.push(
+      `The person has the folder ${location} open. It and everything inside it count as referenced for this message.`,
+    );
     lines.push("");
   }
   lines.push(text);

@@ -9,7 +9,7 @@ let usernameCounter = 0;
 
 async function seedAccountWithIdentity(repos: ReturnType<typeof createMemoryRepos>) {
   const username = `alice-${++usernameCounter}`;
-  const provider = await repos.providers.ensure({ type: "sftpgo", baseUrl: "http://sftpgo:8080" });
+  const provider = await repos.providers.ensure({ type: "local", baseUrl: "http://dav.test" });
   const account = await repos.accounts.create({ displayName: "Alice" });
   const identity = await repos.identities.create({
     accountId: account.id,

@@ -21,7 +21,7 @@ from fdrive_ocr.originals import (
 )
 
 MAPPING = Mapping(
-    root="sftpgo",
+    root="files",
     path="fredrik/docs/scan.pdf",
     size=1024,
     mtime_ns=1_700_000_000_123_456_789,
@@ -199,7 +199,7 @@ def test_an_empty_query_matches_everything() -> None:
 
 def test_query_matches_the_source_path_case_insensitively() -> None:
     assert matches_query(MAPPING, MAPPING.original, "DOCS/scan") is True
-    assert matches_query(MAPPING, MAPPING.original, "sftpgo/fredrik") is True
+    assert matches_query(MAPPING, MAPPING.original, "files/fredrik") is True
     assert matches_query(MAPPING, MAPPING.original, "invoices") is False
 
 

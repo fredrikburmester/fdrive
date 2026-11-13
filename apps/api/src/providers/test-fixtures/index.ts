@@ -1,6 +1,6 @@
-import type { ProviderModule } from "@fdrive/core";
+import { type ProviderModule, StorageError } from "@fdrive/core";
+import { createMemoryStorage } from "@fdrive/core/testing";
 import type { Provider, Repos } from "@fdrive/db";
-import { vi } from "vitest";
 import type { SystemEventLog } from "../../system/event-log.js";
 import { createProviderService, type ProviderService } from "../service.js";
 
@@ -8,10 +8,9 @@ export interface MemoryProviderServiceOptions {
   readonly eventLog?: SystemEventLog;
   readonly fetch?: typeof globalThis.fetch;
   readonly clock?: () => Date;
-  readonly sftpgoUrl?: string | undefined;
-  readonly homeTemplate?: string;
   readonly indexRootNames?: readonly string[];
   readonly trashEnabled?: (providerId: string) => Promise<boolean>;
+  /** The deployment's modules by type; none unless given. */
   readonly modules?: Readonly<Record<string, ProviderModule>>;
 }
 
@@ -24,72 +23,89 @@ export function memoryProviderService(
     repos,
     fetch: options.fetch ?? globalThis.fetch,
     clock: options.clock ?? (() => new Date()),
-    environment: {
-      sftpgoUrl: options.sftpgoUrl,
-      homeTemplate: options.homeTemplate ?? "sftpgo:/{username}",
-      indexRootNames: options.indexRootNames ?? [],
-    },
+    environment: { indexRootNames: options.indexRootNames ?? [] },
     ...(options.trashEnabled === undefined ? {} : { trashEnabled: options.trashEnabled }),
     ...(options.eventLog === undefined ? {} : { eventLog: options.eventLog }),
-    ...(options.modules === undefined ? {} : { modules: options.modules }),
+    modules: options.modules ?? {},
   });
 }
 
-/** Ensures an enabled SFTPGo provider row at `baseUrl`, with an optional home template. */
-export async function seedSftpgoProvider(
+/**
+ * Ensures the local folder's row as `seedFromEnvironment` leaves it: type
+ * `local`, stored under the address `local`, pinned and enabled unless told
+ * otherwise.
+ */
+export async function seedLocalProvider(
+  repos: Pick<Repos, "providers">,
+  options: { label?: string; enabled?: boolean; managedByEnv?: boolean } = {},
+): Promise<Provider> {
+  const row = await repos.providers.ensure({ type: "local", baseUrl: "local" });
+  const updated = await repos.providers.update(row.id, {
+    enabled: options.enabled ?? true,
+    managedByEnv: options.managedByEnv ?? true,
+    ...(options.label === undefined ? {} : { label: options.label }),
+  });
+  if (updated === null) throw new Error("provider vanished");
+  return updated;
+}
+
+/**
+ * Ensures another enabled, unpinned row of the files folder's type at
+ * `baseUrl`, for tests of behaviour across rows: logins, tokens and storage
+ * stay bound to the row they were verified against. The registry resolves
+ * it through whatever module the test registers under `local`.
+ */
+export async function seedProviderRow(
   repos: Pick<Repos, "providers">,
   baseUrl: string,
-  options: { homeTemplate?: string; enabled?: boolean; managedByEnv?: boolean } = {},
+  options: { label?: string; enabled?: boolean; managedByEnv?: boolean } = {},
 ): Promise<Provider> {
-  const row = await repos.providers.ensure({ type: "sftpgo", baseUrl });
+  const row = await repos.providers.ensure({ type: "local", baseUrl });
   const updated = await repos.providers.update(row.id, {
     enabled: options.enabled ?? true,
     managedByEnv: options.managedByEnv ?? false,
-    config: { ...row.config, homeTemplate: options.homeTemplate ?? "sftpgo:/{username}" },
-  });
-  if (updated === null) throw new Error("provider vanished");
-  return updated;
-}
-
-/** Ensures an enabled WebDAV provider row at `baseUrl`; the type has no configuration. */
-export async function seedWebdavProvider(
-  repos: Pick<Repos, "providers">,
-  baseUrl: string,
-  options: { label?: string; enabled?: boolean } = {},
-): Promise<Provider> {
-  const row = await repos.providers.ensure({ type: "webdav", baseUrl });
-  const updated = await repos.providers.update(row.id, {
-    enabled: options.enabled ?? true,
-    managedByEnv: false,
     ...(options.label === undefined ? {} : { label: options.label }),
   });
   if (updated === null) throw new Error("provider vanished");
   return updated;
 }
 
-/** A fetch double that answers SFTPGo's health and token probes. */
-export function probeFetch(reachable = true): typeof globalThis.fetch {
-  return vi.fn(async (url: unknown) => {
-    if (!reachable) return new Response("boom", { status: 500 });
-    return String(url).endsWith("/healthz")
-      ? new Response("ok", { status: 200 })
-      : new Response("unauthorized", { status: 401 });
-  }) as unknown as typeof globalThis.fetch;
-}
-
-/** Ensures an enabled S3 provider row at `baseUrl` (bucket in the path), with an optional region. */
-export async function seedS3Provider(
-  repos: Pick<Repos, "providers">,
-  baseUrl: string,
-  options: { label?: string; region?: string; enabled?: boolean } = {},
-): Promise<Provider> {
-  const row = await repos.providers.ensure({ type: "s3", baseUrl });
-  const updated = await repos.providers.update(row.id, {
-    enabled: options.enabled ?? true,
-    managedByEnv: false,
-    ...(options.label === undefined ? {} : { label: options.label }),
-    ...(options.region === undefined ? {} : { config: { ...row.config, region: options.region } }),
-  });
-  if (updated === null) throw new Error("provider vanished");
-  return updated;
+/**
+ * A provider module for tests of generic behaviour, registered under the
+ * only type there is (`local`) so the registry accepts its rows. Its users
+ * sign in with `<username>-pass`, its storage is in memory, and every part
+ * can be overridden.
+ */
+export function fakeProviderModule(overrides: Partial<ProviderModule> = {}): ProviderModule {
+  return {
+    type: "local",
+    label: "Fake storage",
+    configFields: [],
+    credentialFields: [
+      { name: "username", label: "Username", kind: "text", required: true, maxLength: 255 },
+      { name: "password", label: "Password", kind: "password", required: true },
+    ],
+    capabilities: {
+      zip: false,
+      setModifiedAt: false,
+      atomicMove: true,
+      trash: false,
+      shares: false,
+      office: false,
+      index: false,
+      shareWithPeople: false,
+    },
+    trash: "none",
+    shares: "none",
+    probe: async () => ({ ok: true, detail: "reachable" }),
+    async authenticate(_instance, credential, ctx) {
+      const username = credential.username ?? ctx.expectedUsername ?? "";
+      if (username.length === 0 || credential.password !== `${username}-pass`) {
+        throw new StorageError("unauthorized", "invalid username or password");
+      }
+      return { externalUsername: username };
+    },
+    createStorage: () => createMemoryStorage(),
+    ...overrides,
+  };
 }

@@ -1,27 +1,15 @@
-import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { promisify } from "node:util";
 import { SEED_FILES } from "@fdrive/testkit";
 import { Client } from "pg";
 import { ACCOUNT_FILES } from "./support/account-fixture.js";
-import { startEnvironment } from "./support/environment.js";
+import { INDEX_ROOT_NAME, startEnvironment } from "./support/environment.js";
 import { startFakeIndexer } from "./support/fake-indexer.js";
-import { SCOPE_FILES, SHARED_FOLDER_INDEX_PREFIX } from "./support/scope-fixture.js";
-
-const execFileAsync = promisify(execFile);
-
 import { E2E_HOST, writeStateDirPointer } from "./support/paths.js";
 import { resolvePort } from "./support/ports.js";
 import { registry } from "./support/registry.js";
-
-/**
- * Matches `FDRIVE_HOME_TEMPLATE`'s default (`sftpgo:/{username}`): the one
- * index root every seeded identity's home lives under.
- */
-const INDEX_ROOT_NAME = "sftpgo";
 
 function sha256Hex(content: string): string {
   return createHash("sha256").update(content, "utf-8").digest("hex");
@@ -80,11 +68,9 @@ async function seedSearchIndex(databaseUrl: string): Promise<void> {
       throw new Error("fdrive e2e: failed to seed idx.roots");
     }
 
-    const indexedFiles: Record<string, Record<string, string>> = {
+    const indexedFiles: Record<string, Readonly<Record<string, string>>> = {
       alice: SEED_FILES.alice ?? {},
       ...ACCOUNT_FILES,
-      ...SCOPE_FILES,
-      [SHARED_FOLDER_INDEX_PREFIX]: SEED_FILES["@shared"] ?? {},
     };
     const mtimeNs = (BigInt(Date.now()) * BigInt(1_000_000)).toString();
     let readmeFileId: number | undefined;
@@ -95,7 +81,6 @@ async function seedSearchIndex(databaseUrl: string): Promise<void> {
         // testkit's SEED_FILES paths are home-relative ("/docs/readme.md");
         // the index stores root-relative paths with no leading slash
         // ("alice/docs/readme.md"), matching the indexer's own convention.
-        // The shared folder's prefix is its physical location instead.
         const relativePath = `${prefix}${virtualPath}`;
         const name = virtualPath.split("/").at(-1) ?? virtualPath;
         const ext = extensionOf(name);
@@ -171,50 +156,29 @@ async function resolveRunEnvironment(): Promise<{
  * Playwright's global setup: resolves this run's ports and state directory
  * (see `resolveRunEnvironment` above) so concurrent suites never collide;
  * starts the fake indexer sidecar `system.spec.ts` exercises; boots
- * Postgres, SFTPGo, the API (with `FDRIVE_INDEX_ROOTS` set so search is
- * available and `FDRIVE_INDEXER_URL` pointed at the fake indexer), and the
- * web app once for the whole run (see `support/environment.ts`); seeds the
- * search index for `search.spec.ts`; and stashes the environment handle for
- * `global-teardown.ts`. Never used to seed *file* data through the UI or
- * SFTPGo directly; each spec creates the folders and files it needs under
- * unique names, so tests stay independent of each other. The search index
- * rows are the one exception, since they must exist before any spec runs and
- * are keyed to the fixed, shared testkit seed data rather than anything a
- * spec creates itself.
+ * Postgres, the local folder with every seed user's files, the API (with
+ * the folder as the `files` index root so search is available and
+ * `FDRIVE_INDEXER_URL` pointed at the fake indexer), and the web app once
+ * for the whole run (see `support/environment.ts`); seeds the search index for
+ * `search.spec.ts`; and stashes the environment handle for
+ * `global-teardown.ts`. Never used to seed *file* data through the UI;
+ * each spec creates the folders and files it needs under unique names, so
+ * tests stay independent of each other. The search index rows are the one
+ * exception, since they must exist before any spec runs and are keyed to
+ * the fixed, shared testkit seed data rather than anything a spec creates
+ * itself.
  */
-/** The disposable SFTPGo container, found by the host port testcontainers published. */
-async function findSftpgoContainer(baseUrl: string): Promise<string> {
-  const { stdout } = await execFileAsync("docker", [
-    "ps",
-    "--filter",
-    `publish=${new URL(baseUrl).port}`,
-    "--format",
-    "{{.ID}}",
-  ]);
-  const id = stdout.trim();
-  if (!/^[a-f0-9]{12,64}$/.test(id)) {
-    throw new Error("fdrive e2e: could not identify the SFTPGo container for the fake indexer");
-  }
-  return id;
-}
-
 export default async function globalSetup(): Promise<void> {
   await resolveRunEnvironment();
-
-  const indexRoots = JSON.stringify([
-    { name: INDEX_ROOT_NAME, sftpgoPath: "/srv/sftpgo/data", indexerPath: "/roots/sftpgo" },
-  ]);
 
   const fakeIndexer = await startFakeIndexer();
 
   const environment = await startEnvironment({
-    prepareSftpgo: async (baseUrl) => {
-      fakeIndexer.attachStorage({
-        containerId: await findSftpgoContainer(baseUrl),
-        dataDir: "/srv/sftpgo/data",
-      });
+    indexRoot: true,
+    prepareStorage: async (storage) => {
+      fakeIndexer.attachStorage({ root: storage.root });
     },
-    extraApiEnv: { FDRIVE_INDEX_ROOTS: indexRoots, FDRIVE_INDEXER_URL: fakeIndexer.baseUrl },
+    extraApiEnv: { FDRIVE_INDEXER_URL: fakeIndexer.baseUrl },
     extraStopFns: [() => fakeIndexer.stop()],
   });
   registry.current = environment;

@@ -5,7 +5,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiClient } from "./client";
 import { queryKeys } from "./keys";
 
-/** The Trash settings of one storage server. */
+/** The Trash settings of the files folder's storage row. */
 export function useSystemTrash(providerId: string, enabled = true) {
   return useQuery({
     queryKey: queryKeys.system.trash(providerId),
@@ -17,7 +17,7 @@ export function useSystemTrash(providerId: string, enabled = true) {
 export function useUpdateTrashSettings() {
   const client = useQueryClient();
   return useMutation({
-    meta: { systemActivity: ["storage"], systemActivityBackground: false },
+    meta: { systemActivity: ["general"], systemActivityBackground: false },
     mutationFn: (input: TrashSettingsUpdateRequest) => apiClient.systemUpdateTrash(input),
     onSuccess: async (data) => {
       client.setQueryData(queryKeys.system.trash(data.providerId), data);

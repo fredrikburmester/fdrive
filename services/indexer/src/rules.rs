@@ -61,7 +61,7 @@ pub fn should_walk_dir(name: &str, skip_dirs: &[&str]) -> bool {
 }
 
 pub fn should_index_name(name: &str, skip_names: &[&str]) -> bool {
-    !(name.starts_with("._") || skip_names.contains(&name))
+    !crate::paths::is_junk_name(name, skip_names)
 }
 
 #[cfg(test)]
@@ -102,6 +102,15 @@ mod tests {
         assert!(!should_index_name("._x", &[]));
         assert!(!should_index_name("Thumbs.db", &["Thumbs.db"]));
         assert!(should_index_name("x", &["Thumbs.db"]));
+        assert!(!should_index_name(".fdrive-partial-0123456789abcdef", &[]));
+        for resembling in [
+            ".fdrive-partial-0123456789abcde",
+            ".fdrive-partial-0123456789ABCDEF",
+            ".fdrive-partial-0123456789abcdef.docx",
+            "fdrive-partial-0123456789abcdef",
+        ] {
+            assert!(should_index_name(resembling, &[]), "{resembling}");
+        }
         assert!(!should_walk_dir(".git", &[".git"]));
         assert!(should_walk_dir("src", &[".git"]));
     }

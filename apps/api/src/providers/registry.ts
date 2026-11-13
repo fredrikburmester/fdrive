@@ -1,27 +1,29 @@
 import { ProviderType } from "@fdrive/contracts";
 import type { ProviderModule } from "@fdrive/core";
-import { s3Module } from "@fdrive/s3";
-import { sftpgoModule } from "@fdrive/sftpgo";
-import { webdavModule } from "@fdrive/webdav";
+import { type CreateLocalModuleOptions, createLocalModule } from "@fdrive/local";
+
+/** The provider modules one deployment has, by type. */
+export type ProviderModules = Readonly<Record<string, ProviderModule>>;
 
 /**
- * Every storage backend this API can talk to, by type. Adding a provider is
- * one package exporting a `ProviderModule`, one value in the contracts'
- * `ProviderType` enum, and one line here; routes, the web app, the database
- * schema and the indexer never know which module backs an identity.
+ * The storage this deployment serves, by type: the files folder, when the
+ * deployment configures one (`FDRIVE_STORAGE_ROOT`), since it needs the
+ * folder and fdrive's own users. Without it there is no storage. Routes, the
+ * web app, the database schema and the indexer reach storage only through
+ * the `ProviderModule` port, never the module itself.
  */
-export const PROVIDER_MODULES: Readonly<Record<ProviderType, ProviderModule>> = {
-  sftpgo: sftpgoModule,
-  webdav: webdavModule,
-  s3: s3Module,
-};
+export function createProviderModules(
+  options: { readonly local?: CreateLocalModuleOptions } = {},
+): ProviderModules {
+  return options.local === undefined ? {} : { local: createLocalModule(options.local) };
+}
 
-/** True when `type` names a registered provider module. */
+/** True when `type` names a provider type this build knows. */
 export function isProviderType(type: string): type is ProviderType {
   return ProviderType.safeParse(type).success;
 }
 
-/** The module for `type`, or `null` for a type this build does not know. */
-export function moduleFor(type: string): ProviderModule | null {
-  return isProviderType(type) ? PROVIDER_MODULES[type] : null;
+/** The module for `type` in `modules`, or `null` for a type the deployment does not have. */
+export function moduleFor(type: string, modules: ProviderModules): ProviderModule | null {
+  return isProviderType(type) ? (modules[type] ?? null) : null;
 }

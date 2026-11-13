@@ -28,10 +28,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       ca-certificates curl \
     && rm -rf /var/lib/apt/lists/*
 
-# The indexer must read every file SFTPGo serves, including folders kept at mode 700, so
-# it runs as SFTPGo's uid/gid (1000 in the official image). deploy/compose.yaml starts
-# the container as root with FDRIVE_RUN_AS_UID set; docker-entrypoint.sh hands the
-# thumbnail and log volumes to that uid and drops to it before the indexer starts.
+# The indexer must read every file in the files folder, including folders kept at mode
+# 700, so it runs as the uid/gid that owns them: FDRIVE_RUN_AS_UID in deploy/compose.yaml,
+# the same uid the API and OCR write as (1000 by default). The container starts as root;
+# docker-entrypoint.sh hands the thumbnail and log volumes to that uid and drops to it
+# before the indexer starts.
 ARG INDEXER_UID=1000
 ARG INDEXER_GID=1000
 RUN groupadd --gid "${INDEXER_GID}" indexer \

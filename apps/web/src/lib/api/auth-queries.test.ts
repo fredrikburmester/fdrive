@@ -28,7 +28,7 @@ vi.mock("./client.js", () => ({
 const ME_RESPONSE = makeMe({
   account: { id: "00000000-0000-0000-0000-000000000000", displayName: "Ada" },
   identities: [
-    makeIdentity({ id: "00000000-0000-0000-0000-000000000001", providerLabel: "SFTPGo" }),
+    makeIdentity({ id: "00000000-0000-0000-0000-000000000001", providerLabel: "Local folder" }),
   ],
   activeIdentityId: "00000000-0000-0000-0000-000000000001",
 });

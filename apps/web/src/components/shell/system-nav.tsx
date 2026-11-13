@@ -7,8 +7,6 @@ import {
   CircleAlert,
   Database,
   FileText,
-  FolderSymlink,
-  HardDrive,
   Image,
   Images,
   LoaderCircle,
@@ -17,6 +15,7 @@ import {
   Settings2,
   Sparkles,
   ToggleRight,
+  Users,
 } from "lucide-react";
 import type { Route } from "next";
 import Link from "next/link";
@@ -33,7 +32,7 @@ import {
 } from "@/components/ui/sidebar";
 import { useSystemActivity } from "@/lib/api/activity-queries";
 import { readSidebarSectionOpen, writeSidebarSectionOpen } from "@/lib/metadata/sidebar-sections";
-import { AI_PAGE, FEATURE_PAGES, OFFICE_PAGE } from "@/lib/system/pages";
+import { AI_PAGE, FEATURE_PAGES, OFFICE_PAGE, USERS_PAGE } from "@/lib/system/pages";
 import { cn } from "@/lib/utils";
 
 const FEATURES_ITEM = {
@@ -45,15 +44,9 @@ const FEATURES_ITEM = {
 const SYSTEM_ITEMS = [
   { id: "backups", href: "/system/backups", label: "Backups", Icon: Archive },
   { id: "general", href: "/system/general", label: "General", Icon: Settings2 },
-  { id: "storage", href: "/system/storage", label: "Storage", Icon: HardDrive },
+  { id: "users", ...USERS_PAGE, Icon: Users },
 ] as const;
 const FEATURE_ITEMS = [
-  {
-    id: "sharedFolders",
-    href: "/system/shared-folders",
-    label: "Shared folders",
-    Icon: FolderSymlink,
-  },
   { id: "thumbnails", ...FEATURE_PAGES.thumbnails, Icon: Image },
   { id: "textSearch", ...FEATURE_PAGES.textSearch, Icon: Database },
   { id: "semanticSearch", ...FEATURE_PAGES.semanticSearch, Icon: Search },
@@ -165,10 +158,7 @@ export function SystemNav() {
           (item.id === "features" &&
             FEATURE_ITEMS.some(({ id }) => id !== "ai" && query.pending.has(id)))
         }
-        stale={
-          query.isError &&
-          !["general", "storage", "sharedFolders", "backups", "ai"].includes(item.id)
-        }
+        stale={query.isError && !["general", "users", "backups", "ai"].includes(item.id)}
       />
     );
   }

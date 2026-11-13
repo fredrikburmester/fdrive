@@ -18,8 +18,8 @@ export async function currentWriteFile(
     throw new WopiError(404);
   // Round trip under the actor's current configured mappings: the registry
   // row's (rootName, path) must still resolve to the same physical location
-  // once mapped back from the virtual path, so a mapping change that now
-  // shadows this file (or moves it out of scope) is never silently reused.
+  // once mapped back from the virtual path, so a scope that now shadows
+  // this file (or a file now out of scope) is never silently reused.
   const path = roundTripVirtualPath(opened.actor.scopes, file.rootName, `/${file.path}`);
   if (path === null) throw new WopiError(404);
   await requireOfficeEdit(deps, opened.actor, path);

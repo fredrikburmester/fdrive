@@ -1,51 +1,23 @@
 import { z } from "zod";
-import { HttpUrl } from "./http-url.ts";
-import { ProviderName } from "./providers.ts";
+import { LocalPassword, LocalUsername } from "./users.ts";
 
 /**
  * Shape returned by `GET /api/v1/setup/status`. `required` mirrors
- * `AboutResponse.setupRequired`; `hasEnvUrl` tells the setup page whether
- * `SFTPGO_URL` is already set by environment, in which case the setup flow
- * should skip asking for a base URL and jump straight to the home template
- * and admin account steps.
+ * `AboutResponse.setupRequired`. `storageConfigured` is false when the
+ * deployment sets no files folder (`FDRIVE_STORAGE_ROOT`): setup cannot
+ * finish until it does.
  */
 export const SetupStatusResponse = z.object({
   required: z.boolean(),
-  hasEnvUrl: z.boolean(),
+  storageConfigured: z.boolean(),
 });
 
 export type SetupStatusResponse = z.infer<typeof SetupStatusResponse>;
 
-/** Body for `POST /api/v1/setup/test`: the candidate SFTPGo base URL to probe. */
-export const SetupTestRequest = z.object({
-  baseUrl: HttpUrl,
-});
-
-export type SetupTestRequest = z.infer<typeof SetupTestRequest>;
-
-/**
- * Result of probing a candidate SFTPGo base URL, shared by
- * `POST /api/v1/setup/test` and the admin provider probe routes.
- */
-export const ConnectionTestResponse = z.object({
-  ok: z.boolean(),
-  detail: z.string(),
-});
-
-export type ConnectionTestResponse = z.infer<typeof ConnectionTestResponse>;
-
-/**
- * Body for `POST /api/v1/setup/complete`: the connection to store plus the
- * SFTPGo credentials for the account that becomes the administrator.
- */
-export const SetupCompleteRequest = z.object({
-  baseUrl: HttpUrl,
-  /** Optional for older setup clients; new clients collect a storage name. */
-  label: ProviderName.optional(),
-  homeTemplate: z.string().min(1),
-  username: z.string().min(1).max(255),
-  password: z.string().min(1),
-  otp: z.string().optional(),
+/** Body for `POST /api/v1/setup/complete`: the owner's username and password. */
+export const SetupCompleteRequest = z.strictObject({
+  username: LocalUsername,
+  password: LocalPassword,
 });
 
 export type SetupCompleteRequest = z.infer<typeof SetupCompleteRequest>;

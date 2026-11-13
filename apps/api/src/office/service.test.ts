@@ -1,5 +1,5 @@
 import { generateKeyPairSync, randomUUID } from "node:crypto";
-import { parseHomeTemplate, StorageError, scopesFor } from "@fdrive/core";
+import { StorageError } from "@fdrive/core";
 import { describe, expect, it, vi } from "vitest";
 import { officeHarness, proofKey } from "../../test/fixtures/office/harness.ts";
 import { createOfficeService, fileExists } from "./service.ts";
@@ -108,7 +108,7 @@ describe("office opening and creation", () => {
       expect(h.events.at(-1)?.type).toBe("fs");
     },
   );
-  it("serializes concurrent creates and catches a collision on the final check", async () => {
+  it("serializes concurrent creates and publishes without overwriting a name taken meanwhile", async () => {
     const h = await officeHarness();
     const input = { principal: h.alice.principal, sessionId: h.alice.sessionId };
     const result = await Promise.allSettled([
@@ -116,13 +116,26 @@ describe("office opening and creation", () => {
       h.service.create(input, { parent: "/", name: "New.docx" }),
     ]);
     expect(result.filter((r) => r.status === "fulfilled")).toHaveLength(1);
+    const upload = vi.spyOn(h.storage, "upload");
+    await h.service.create(input, { parent: "/", name: "Fresh.docx" });
+    expect(upload).toHaveBeenCalledWith(
+      "/Fresh.docx",
+      expect.anything(),
+      expect.objectContaining({ overwrite: false }),
+    );
+    // A writer outside fdrive takes the name between the check and the
+    // publish: the storage refuses it, and nothing is overwritten.
+    upload.mockRejectedValueOnce(new StorageError("conflict", "exists"));
+    await expect(h.service.create(input, { parent: "/", name: "Race.docx" })).rejects.toMatchObject(
+      { kind: "conflict" },
+    );
+    await expect(h.storage.statFile("/Race.docx")).rejects.toMatchObject({ kind: "not_found" });
     const stat = vi
       .spyOn(h.storage, "statFile")
-      .mockRejectedValueOnce(new StorageError("not_found", "missing"))
       .mockResolvedValueOnce({ size: 1, modifiedAt: null, contentType: null });
-    await expect(h.service.create(input, { parent: "/", name: "Race.docx" })).rejects.toMatchObject(
-      { status: 409 },
-    );
+    await expect(
+      h.service.create(input, { parent: "/", name: "Taken.docx" }),
+    ).rejects.toMatchObject({ status: 409 });
     stat.mockRestore();
   });
   it("preserves storage denial and directory collisions", async () => {
@@ -134,10 +147,7 @@ describe("office opening and creation", () => {
           identity: h.alice.identity,
           session: h.alice.session,
           storage: h.storage,
-          scopes: scopesFor({
-            template: parseHomeTemplate("sftpgo:/shared"),
-            username: h.alice.identity.externalUsername,
-          }),
+          scopes: [{ rootName: "files", fsPrefix: "/shared", virtualPrefix: "/" }],
         },
         "/directory.docx",
       ),

@@ -21,6 +21,10 @@ import type {
   FolderViewRepo,
   Identity,
   IdentityRepo,
+  LocalGrant,
+  LocalGrantRepo,
+  LocalUser,
+  LocalUserRepo,
   MetadataPathRepo,
   Provider,
   ProviderRepo,
@@ -133,6 +137,110 @@ function createMemoryProviderRepo(
         throw new ConflictError("provider is still used by identities");
       }
       byId.delete(id);
+    },
+  };
+}
+
+function createMemoryLocalUserRepo(): LocalUserRepo {
+  const byName = new Map<string, LocalUser>();
+  const key = (username: string) => username.toLowerCase();
+
+  return {
+    async get(username) {
+      return byName.get(key(username)) ?? null;
+    },
+    async list() {
+      return [...byName.values()].sort((a, b) =>
+        a.username < b.username ? -1 : a.username > b.username ? 1 : 0,
+      );
+    },
+    async count() {
+      return byName.size;
+    },
+    async create(input) {
+      if (byName.has(key(input.username))) throw new ConflictError("username already exists");
+      const now = new Date();
+      const user: LocalUser = {
+        username: input.username,
+        passwordHash: input.passwordHash,
+        disabled: false,
+        createdAt: now,
+        updatedAt: now,
+      };
+      byName.set(key(input.username), user);
+      return user;
+    },
+    async update(username, patch) {
+      const existing = byName.get(key(username));
+      if (existing === undefined) return null;
+      const updated: LocalUser = { ...existing, ...patch, updatedAt: new Date() };
+      byName.set(key(username), updated);
+      return updated;
+    },
+    async delete(username) {
+      byName.delete(key(username));
+    },
+  };
+}
+
+function createMemoryLocalGrantRepo(
+  ids: () => string,
+  users: Pick<LocalUserRepo, "get">,
+): LocalGrantRepo {
+  const rows: LocalGrant[] = [];
+  const atOrUnder = (path: string, prefix: string) =>
+    path === prefix || path.startsWith(prefix === "/" ? "/" : `${prefix}/`);
+
+  return {
+    async get(id) {
+      return rows.find((row) => row.id === id) ?? null;
+    },
+    async listReceived(grantee) {
+      const received: LocalGrant[] = [];
+      for (const row of rows) {
+        if (row.granteeUsername !== grantee) continue;
+        if ((await users.get(row.ownerUsername))?.disabled === false) received.push(row);
+      }
+      return received;
+    },
+    async listOwned(owner, path) {
+      return rows.filter(
+        (row) => row.ownerUsername === owner && (path === undefined || row.path === path),
+      );
+    },
+    async put(input) {
+      const at = rows.findIndex(
+        (row) =>
+          row.ownerUsername === input.ownerUsername &&
+          row.path === input.path &&
+          row.granteeUsername === input.granteeUsername,
+      );
+      const existing = rows[at];
+      if (existing !== undefined) {
+        const updated = { ...existing, access: input.access };
+        rows[at] = updated;
+        return updated;
+      }
+      const created: LocalGrant = { id: ids(), ...input, createdAt: new Date() };
+      rows.push(created);
+      return created;
+    },
+    async delete(id) {
+      const at = rows.findIndex((row) => row.id === id);
+      if (at >= 0) rows.splice(at, 1);
+    },
+    async movePrefix(owner, from, to) {
+      for (const [at, row] of rows.entries()) {
+        if (row.ownerUsername === owner && atOrUnder(row.path, from)) {
+          rows[at] = { ...row, path: `${to}${row.path.slice(from.length)}` };
+        }
+      }
+    },
+    async deletePrefix(owner, path) {
+      for (let at = rows.length - 1; at >= 0; at -= 1) {
+        const row = rows[at] as LocalGrant;
+        if (row.ownerUsername === owner && atOrUnder(row.path, path)) rows.splice(at, 1);
+      }
     },
   };
 }
@@ -310,6 +418,16 @@ function createMemorySessionRepo(): SessionRepo {
       let count = 0;
       for (const [idHash, session] of byIdHash.entries()) {
         if (session.expiresAt.getTime() <= now.getTime()) {
+          byIdHash.delete(idHash);
+          count += 1;
+        }
+      }
+      return count;
+    },
+    async deleteByAccount(accountId, exceptIdHash) {
+      let count = 0;
+      for (const [idHash, session] of byIdHash.entries()) {
+        if (session.accountId === accountId && idHash !== exceptIdHash) {
           byIdHash.delete(idHash);
           count += 1;
         }
@@ -1093,11 +1211,14 @@ export function createMemoryRepos(opts: CreateMemoryReposOptions = {}): Repos {
   const folderViews = createMemoryFolderViewRepo();
   const identities = createMemoryIdentityRepo(ids);
   const recents = createMemoryRecentRepo();
+  const localUsers = createMemoryLocalUserRepo();
 
   return {
     providers: createMemoryProviderRepo(ids, (providerId) =>
       identities.countByProviderSync(providerId),
     ),
+    localUsers,
+    localGrants: createMemoryLocalGrantRepo(ids, localUsers),
     accounts: createMemoryAccountRepo(ids),
     identities,
     credentials: createMemoryCredentialRepo(),

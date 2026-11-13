@@ -175,7 +175,7 @@ function fixture(admin = true) {
       }) as Principal,
     connectionStatus: async () => ({
       required: false,
-      providers: [{ type: "sftpgo", host: "sftpgo" }],
+      providers: [{ type: "local", host: "Local folder" }],
     }),
     registerRoutes(groups) {
       registerActivityRoutes(groups, {

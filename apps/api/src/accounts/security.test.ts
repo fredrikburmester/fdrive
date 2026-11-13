@@ -1,15 +1,21 @@
 import { randomUUID } from "node:crypto";
-import { ROUTES } from "@fdrive/contracts";
-import { SftpgoError } from "@fdrive/sftpgo";
+import { MeResponse, ROUTES } from "@fdrive/contracts";
+import { StorageError } from "@fdrive/core";
 import { createMemoryStorage } from "@fdrive/testkit";
 import { expect, it, vi } from "vitest";
 import { createLoginLimiter } from "../auth/login-limiter.js";
 import { hashSessionId } from "../auth/sessions.js";
 import { ApiHttpError } from "../errors.js";
+import { fakeProviderModule, seedProviderRow } from "../providers/test-fixtures/index.ts";
 import { verifyCredentials } from "./credentials.ts";
 import { accountRepositoryCall } from "./errors.ts";
 import { liveAccountSession } from "./service.ts";
-import { accountsHarness, HARNESS_BASE_URL } from "./test-fixtures/index.ts";
+import { accountsHarness } from "./test-fixtures/index.ts";
+
+/** The harness's files folder, signing in through a fake module shaped by `overrides`. */
+function folderSigningInWith(overrides: Parameters<typeof fakeProviderModule>[0]) {
+  return { local: fakeProviderModule({ deploymentManaged: true, ...overrides }) };
+}
 
 async function context(h: ReturnType<typeof accountsHarness>) {
   const a = await h.login();
@@ -66,9 +72,9 @@ it("refuses cookie-free and cookie-account mismatches even when another resolver
 it("rechecks session after upstream verification and revokes rotated sessions if final ownership validation fails", async () => {
   const h = accountsHarness();
   const input = await context(h);
-  const login = h.client.login.bind(h.client);
-  vi.spyOn(h.client, "login").mockImplementation(async (credentials) => {
-    const result = await login(credentials);
+  const verify = h.users.verify.bind(h.users);
+  vi.spyOn(h.users, "verify").mockImplementation(async (username, password) => {
+    const result = await verify(username, password);
     await h.repos.sessions.delete(hashSessionId(input.sessionId));
     return result;
   });
@@ -127,19 +133,26 @@ it("rejects login sessions raced by identity transfer, revocation, or final me l
 it("labels each actual provider and validates final identity ownership before returning me", async () => {
   const h = accountsHarness();
   const input = await context(h);
-  const provider = await h.repos.providers.ensure({
-    type: "sftpgo",
-    baseUrl: "https://other.test:8443",
-  });
+  const provider = await seedProviderRow(h.repos, "https://other.test:8443", { label: "Other" });
   await h.repos.identities.create({
     accountId: input.principal.accountId,
     providerId: provider.id,
     externalUsername: "other",
   });
+  // A login on a storage type this build no longer has (an SFTPGo or WebDAV
+  // row from before the files folder) is left out rather than failing the others.
+  for (const type of ["sftpgo", "webdav"]) {
+    const retired = await h.repos.providers.ensure({ type, baseUrl: `http://${type}.test` });
+    await h.repos.identities.create({
+      accountId: input.principal.accountId,
+      providerId: retired.id,
+      externalUsername: "alice",
+    });
+  }
   const me = await h.auth.service.me(input.principal.accountId, input.principal.identityId);
   expect(me.identities.map((identity) => identity.providerLabel).sort()).toEqual([
-    "other.test:8443",
-    "storage.test",
+    "Local folder",
+    "Other",
   ]);
   vi.spyOn(h.repos.identities, "get").mockResolvedValueOnce(null);
   await expect(
@@ -170,30 +183,28 @@ it("fails closed on provider changes and maps verification errors without databa
   // A row re-addressed while the upstream login was in flight is a change
   // too: the password was verified by the old server, not the new one.
   const seededRow = await h.seeded;
-  const realLogin = h.client.login.bind(h.client);
-  vi.spyOn(h.client, "login").mockImplementationOnce(async (body) => {
+  const realVerify = h.users.verify.bind(h.users);
+  vi.spyOn(h.users, "verify").mockImplementationOnce(async (username, password) => {
     await h.repos.providers.update(seededRow.id, { baseUrl: "http://moved.test" });
-    return realLogin(body);
+    return realVerify(username, password);
   });
   await expect(verifyCredentials(h.deps, input)).rejects.toMatchObject({
     kind: "unauthorized",
     message: "storage provider changed; sign in again",
   });
   expect(await h.repos.identities.listAll()).toEqual([]);
-  await h.repos.providers.update(seededRow.id, { baseUrl: HARNESS_BASE_URL });
+  await h.repos.providers.update(seededRow.id, { baseUrl: seededRow.baseUrl });
   vi.spyOn(h.limiter, "check").mockReturnValueOnce({ allowed: false });
   await expect(verifyCredentials(h.deps, input)).rejects.toMatchObject({
     kind: "rate_limited",
     details: { retryAfterMs: 0 },
   });
-  vi.spyOn(h.client, "login").mockRejectedValueOnce(
-    new SftpgoError("secret", "forbidden", 403, null),
-  );
+  vi.spyOn(h.users, "verify").mockResolvedValueOnce({ result: "disabled" });
   await expect(verifyCredentials(h.deps, input)).rejects.toMatchObject({
     kind: "forbidden",
     message: "forbidden",
   });
-  vi.spyOn(h.client, "login").mockRejectedValueOnce(new Error("private upstream"));
+  vi.spyOn(h.users, "verify").mockRejectedValueOnce(new Error("private upstream"));
   await expect(verifyCredentials(h.deps, input)).rejects.toMatchObject({
     kind: "upstream_unavailable",
   });
@@ -208,7 +219,7 @@ it("fails closed on provider changes and maps verification errors without databa
 it("requires a provider id once several providers are enabled", async () => {
   const h = accountsHarness();
   await h.seeded;
-  await h.repos.providers.ensure({ type: "sftpgo", baseUrl: "http://second.test" });
+  await seedProviderRow(h.repos, "http://second.test");
   await expect(
     verifyCredentials(h.deps, {
       credential: { username: "alice", password: "alice-pass" },
@@ -226,13 +237,21 @@ it("requires a provider id once several providers are enabled", async () => {
 });
 
 it("drops the new session when priming the upstream token fails after login", async () => {
-  const h = accountsHarness();
-  await h.seeded;
+  // Storage that mints a token while it signs in, which login primes.
+  const h = accountsHarness({
+    modules: folderSigningInWith({
+      authenticate: async () => ({
+        externalUsername: "alice",
+        token: { token: "minted", expiresAt: new Date("2026-09-08T00:00:00Z") },
+      }),
+    }),
+  });
+  const row = await h.seeded;
   vi.spyOn(h.tokenSource, "prime").mockRejectedValueOnce(new Error("token store down"));
   const remove = vi.spyOn(h.repos.sessions, "delete");
   const res = await h.call(ROUTES.auth.login, {
     method: "POST",
-    body: { credential: { username: "alice", password: "alice-pass" } },
+    body: { providerId: row.id, credential: { username: "alice", password: "alice-pass" } },
   });
   expect(res.status).toBe(500);
   expect(remove).toHaveBeenCalledTimes(1);
@@ -312,4 +331,62 @@ it("bounds one address block's share of limiter capacity so another address stil
       ip: "203.0.113.51",
     }),
   ).rejects.toMatchObject({ kind: "rate_limited" });
+});
+
+it("primes the token storage minted while verifying a linked login", async () => {
+  const h = accountsHarness({
+    modules: folderSigningInWith({
+      authenticate: async (_instance, credential) => ({
+        externalUsername: credential.username ?? "",
+        token: { token: "from-link", expiresAt: new Date("2026-09-08T00:00:00Z") },
+      }),
+      mint: vi.fn(async () => {
+        throw new Error("must not mint");
+      }),
+    }),
+  });
+  const alice = await h.login();
+  const row = await seedProviderRow(h.repos, "http://second.test");
+  const linked = await h.call(ROUTES.account.identities, {
+    method: "POST",
+    cookie: alice.cookie,
+    body: {
+      providerId: row.id,
+      credential: { username: "alice", password: "alice-pass" },
+      currentCredential: { password: "alice-pass" },
+    },
+  });
+  expect(linked.status).toBe(200);
+  const me = MeResponse.parse(await linked.json());
+  expect(me.activeIdentityId).not.toBe(alice.me.activeIdentityId);
+  expect(await h.tokenSource.get(me.activeIdentityId)).toBe("from-link");
+});
+
+it("passes the storage's own reason for refusing a user, and hides any other failure", async () => {
+  let failure: unknown = new StorageError("forbidden", "refused", {
+    details: { detail: "account locked by the server" },
+  });
+  const h = accountsHarness({
+    modules: folderSigningInWith({
+      authenticate: async () => {
+        throw failure;
+      },
+    }),
+  });
+  const row = await h.seeded;
+  const input = {
+    providerId: row.id,
+    credential: { username: "alice", password: "alice-pass" },
+    ip: "test",
+  };
+  await expect(verifyCredentials(h.deps, input)).rejects.toMatchObject({
+    kind: "forbidden",
+    message: "account locked by the server",
+  });
+  failure = new Error("socket hang up at 10.0.0.5");
+  await expect(verifyCredentials(h.deps, input)).rejects.toMatchObject({
+    kind: "upstream_unavailable",
+    message: "storage provider is unavailable",
+  });
+  expect(await h.repos.identities.listAll()).toEqual([]);
 });

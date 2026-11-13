@@ -9,7 +9,7 @@ const sealCredential = () => ({ ciphertext: new Uint8Array([1, 2]), keyId: "test
 async function setup() {
   const repos = createMemoryRepos();
   const links = memoryIdentityOperations(repos);
-  const provider = await repos.providers.ensure({ type: "sftpgo", baseUrl: "http://storage.test" });
+  const provider = await repos.providers.ensure({ type: "local", baseUrl: "http://storage.test" });
   const input = {
     providerId: provider.id,
     username: "alice",

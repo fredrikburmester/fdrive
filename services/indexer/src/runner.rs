@@ -18,7 +18,7 @@ use crate::server::Wake;
 use crate::settings;
 use crate::watcher::{WatchHandler, Watcher};
 
-pub const EXPECTED_SCHEMA_VERSION: i64 = 1;
+pub const EXPECTED_SCHEMA_VERSION: i64 = 2;
 
 pub fn build_context(cfg: &Arc<Config>, name: &str, path: &Path) -> Result<Arc<RootContext>> {
     let db = Db::new(&cfg.database_url);

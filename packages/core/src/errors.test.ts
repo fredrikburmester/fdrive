@@ -23,7 +23,7 @@ describe("CoreError", () => {
   });
 
   it("is an instance of Error and of CoreError", () => {
-    const error = new CoreError("invalid_template", "bad template");
+    const error = new CoreError("invalid_argument", "bad argument");
 
     expect(error).toBeInstanceOf(Error);
     expect(error).toBeInstanceOf(CoreError);

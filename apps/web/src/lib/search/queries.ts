@@ -28,9 +28,9 @@ export function isSearchStarting(status: SearchStatusResponse | undefined): bool
 }
 
 /**
- * True when the active login's storage is not indexed at all: files-only
- * storage (S3, WebDAV), or SFTPGo without an index root. No waiting or
- * remapping changes that, so the copy says what search needs instead.
+ * True when the active login's storage is not indexed at all: the files
+ * folder has no index root. No waiting or remapping changes that, so the
+ * copy says what search needs instead.
  */
 export function isSearchUnsupported(status: SearchStatusResponse | undefined): boolean {
   return status?.available === false && status.reason === "no_roots";
@@ -47,7 +47,7 @@ export function searchUnavailableHint(status: SearchStatusResponse | undefined):
 export function searchUnavailableMessage(status: SearchStatusResponse | undefined): string {
   if (isSearchStarting(status)) return "Search is starting… Retrying automatically.";
   if (isSearchUnsupported(status)) {
-    return "Search is not available for this login. It needs indexed SFTPGo storage.";
+    return "Search is not available for this login. Its folder is not indexed.";
   }
   return "Search is not available.";
 }

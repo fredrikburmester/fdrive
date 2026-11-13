@@ -27,8 +27,7 @@ test("an owner resumes and finishes setup without entering the application shell
   expect(started.ok()).toBe(true);
   try {
     await page.goto("/setup");
-    await expect(page.getByText("Step 4 of 13 · Thumbnails")).toBeVisible();
-    await expect(page.getByText("Inspect SFTPGo users")).toHaveCount(0);
+    await expect(page.getByText("Step 3 of 12 · Thumbnails")).toBeVisible();
     await expect(page.getByText("Check your storage")).toHaveCount(0);
     await expect(page.getByText("Advanced storage settings")).toHaveCount(0);
     await expect(page.getByRole("button", { name: "Toggle Sidebar" })).toHaveCount(0);
@@ -51,14 +50,14 @@ test("an owner resumes and finishes setup without entering the application shell
       }
     }
 
-    await expect(page.getByText("Step 10 of 13 · Trash")).toBeVisible();
+    await expect(page.getByText("Step 9 of 12 · Trash")).toBeVisible();
     await page.reload();
     await expect(page.getByRole("switch", { name: "Enable Trash" })).toBeVisible();
     await page.getByRole("button", { name: "Skip Trash" }).click();
-    await expect(page.getByText("Step 11 of 13 · Server address")).toBeVisible();
+    await expect(page.getByText("Step 10 of 12 · Server address")).toBeVisible();
     await expect(page.getByLabel("Server address")).not.toHaveValue("");
     await page.getByRole("button", { name: "Save and continue" }).click();
-    await expect(page.getByText("Step 12 of 13 · Office")).toBeVisible();
+    await expect(page.getByText("Step 11 of 12 · Office")).toBeVisible();
     await page.getByRole("button", { name: "Skip ONLYOFFICE" }).click();
     await expect(page.getByText("Ready to use fdrive", { exact: true })).toBeVisible();
     await page.getByRole("button", { name: "Finish setup" }).click();

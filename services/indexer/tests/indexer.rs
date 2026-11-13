@@ -82,6 +82,9 @@ fn walk_skips_junk_and_sorts_directories() {
         ("sub/c.txt", "c"),
         ("sub/deeper/d.txt", "d"),
         ("Zed/e.txt", "e"),
+        // An upload fdrive's own storage is still writing, and names that only resemble one.
+        ("sub/.fdrive-partial-0123456789abcdef", "unfinished"),
+        ("sub/.fdrive-partial-0123456789abcdef.docx", "kept"),
     ] {
         let path = root.join(rel);
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -99,7 +102,14 @@ fn walk_skips_junk_and_sorts_directories() {
     let (seen, errors) = walked(root);
     assert_eq!(
         seen,
-        vec!["A.txt", "b.txt", "sub/c.txt", "sub/deeper/d.txt", "Zed/e.txt"]
+        vec![
+            "A.txt",
+            "b.txt",
+            "sub/.fdrive-partial-0123456789abcdef.docx",
+            "sub/c.txt",
+            "sub/deeper/d.txt",
+            "Zed/e.txt"
+        ]
     );
     assert_eq!(errors, 0);
 

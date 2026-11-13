@@ -18,7 +18,6 @@ const MASTER_KEY_32_BYTES = Buffer.alloc(32, 7).toString("base64");
 
 const REQUIRED_ENV = {
   DATABASE_URL: "postgres://localhost/fdrive",
-  SFTPGO_URL: "http://localhost:8080",
   FDRIVE_MASTER_KEY: MASTER_KEY_32_BYTES,
 };
 
@@ -56,20 +55,35 @@ describe("parseIndexRoots", () => {
   });
 
   it("parses a valid single-root JSON array", () => {
-    const raw = JSON.stringify([
-      { name: "sftpgo", sftpgoPath: "/srv/sftpgo/data", indexerPath: "/roots/sftpgo" },
-    ]);
+    const raw = JSON.stringify([{ name: "files", storagePath: "/data", indexerPath: "/data" }]);
     expect(parseIndexRoots(raw)).toEqual([
-      { name: "sftpgo", sftpgoPath: "/srv/sftpgo/data", indexerPath: "/roots/sftpgo" },
+      { name: "files", storagePath: "/data", indexerPath: "/data" },
     ]);
   });
 
   it("parses multiple roots", () => {
     const raw = JSON.stringify([
-      { name: "sftpgo", sftpgoPath: "/a", indexerPath: "/roots/a" },
-      { name: "photos", sftpgoPath: "/b", indexerPath: "/roots/b" },
+      { name: "files", storagePath: "/a", indexerPath: "/roots/a" },
+      { name: "photos", storagePath: "/b", indexerPath: "/roots/b" },
     ]);
     expect(parseIndexRoots(raw)).toHaveLength(2);
+  });
+
+  it("reads sftpgoPath, the key's name before the local folder, as storagePath", () => {
+    const raw = JSON.stringify([
+      { name: "files", sftpgoPath: "/srv/sftpgo/data", indexerPath: "/roots/files" },
+      { name: "both", storagePath: "/new", sftpgoPath: "/old", indexerPath: "/roots/both" },
+    ]);
+    expect(parseIndexRoots(raw)).toEqual([
+      { name: "files", storagePath: "/srv/sftpgo/data", indexerPath: "/roots/files" },
+      { name: "both", storagePath: "/new", indexerPath: "/roots/both" },
+    ]);
+  });
+
+  it("throws when a root names neither storagePath nor sftpgoPath", () => {
+    expect(() =>
+      parseIndexRoots(JSON.stringify([{ name: "files", indexerPath: "/roots/files" }])),
+    ).toThrow(/storagePath/);
   });
 
   it("throws for invalid JSON", () => {
@@ -81,11 +95,11 @@ describe("parseIndexRoots", () => {
   });
 
   it("throws when a root is missing a required field", () => {
-    expect(() => parseIndexRoots(JSON.stringify([{ name: "sftpgo" }]))).toThrow();
+    expect(() => parseIndexRoots(JSON.stringify([{ name: "files" }]))).toThrow();
   });
 
   it("throws when the value is not an array", () => {
-    expect(() => parseIndexRoots(JSON.stringify({ name: "sftpgo" }))).toThrow();
+    expect(() => parseIndexRoots(JSON.stringify({ name: "files" }))).toThrow();
   });
 });
 
@@ -145,9 +159,8 @@ describe("loadConfig", () => {
       host: "0.0.0.0",
       logLevel: "info",
       databaseUrl: "postgres://localhost/fdrive",
-      sftpgoUrl: "http://localhost:8080",
+      fdriveStorageRoot: undefined,
       fdriveMasterKey: MASTER_KEY_32_BYTES,
-      fdriveHomeTemplate: "sftpgo:/{username}",
       fdriveSessionTtlDays: 30,
       fdriveSessionMaxAgeDays: 90,
       fdriveCookieSecure: "auto",
@@ -175,17 +188,33 @@ describe("loadConfig", () => {
     expect(() => loadConfig({})).toThrowError(/DATABASE_URL.*\n.*FDRIVE_MASTER_KEY/s);
   });
 
-  it("leaves sftpgoUrl undefined when SFTPGO_URL is not set", () => {
-    const { SFTPGO_URL: _drop, ...rest } = REQUIRED_ENV;
-    expect(loadConfig(rest).sftpgoUrl).toBeUndefined();
+  it("leaves fdriveStorageRoot undefined when FDRIVE_STORAGE_ROOT is unset or empty", () => {
+    expect(loadConfig(REQUIRED_ENV).fdriveStorageRoot).toBeUndefined();
+    expect(
+      loadConfig({ ...REQUIRED_ENV, FDRIVE_STORAGE_ROOT: "" }).fdriveStorageRoot,
+    ).toBeUndefined();
   });
 
-  it("leaves sftpgoUrl undefined when SFTPGO_URL is an empty string", () => {
-    expect(loadConfig({ ...REQUIRED_ENV, SFTPGO_URL: "" }).sftpgoUrl).toBeUndefined();
+  it("reads FDRIVE_STORAGE_ROOT as the local folder", () => {
+    expect(loadConfig({ ...REQUIRED_ENV, FDRIVE_STORAGE_ROOT: "/data" }).fdriveStorageRoot).toBe(
+      "/data",
+    );
   });
 
-  it("rejects a non-empty, non-http(s) SFTPGO_URL", () => {
-    expect(() => loadConfig({ ...REQUIRED_ENV, SFTPGO_URL: "not a url" })).toThrow(/SFTPGO_URL/);
+  it("rejects a relative FDRIVE_STORAGE_ROOT", () => {
+    expect(() => loadConfig({ ...REQUIRED_ENV, FDRIVE_STORAGE_ROOT: "data" })).toThrow(
+      /FDRIVE_STORAGE_ROOT.*absolute path/,
+    );
+  });
+
+  it("ignores the retired SFTPGO_URL and FDRIVE_HOME_TEMPLATE", () => {
+    const config = loadConfig({
+      ...REQUIRED_ENV,
+      SFTPGO_URL: "not a url",
+      FDRIVE_HOME_TEMPLATE: "no-colon",
+    });
+    expect(config).not.toHaveProperty("sftpgoUrl");
+    expect(config).not.toHaveProperty("fdriveHomeTemplate");
   });
 
   it("parses every variable when all are set validly", () => {
@@ -194,7 +223,7 @@ describe("loadConfig", () => {
       PORT: "8080",
       HOST: "127.0.0.1",
       LOG_LEVEL: "debug",
-      FDRIVE_HOME_TEMPLATE: "sftpgo:/home/{username}",
+      FDRIVE_STORAGE_ROOT: "/data",
       FDRIVE_SESSION_TTL_DAYS: "7",
       FDRIVE_SESSION_MAX_AGE_DAYS: "45",
       FDRIVE_COOKIE_SECURE: "true",
@@ -207,7 +236,7 @@ describe("loadConfig", () => {
       FDRIVE_JSON_MAX_BYTES: "2000",
       FDRIVE_SHARE_UPLOAD_MAX_BYTES: "3000",
       FDRIVE_INDEX_ROOTS: JSON.stringify([
-        { name: "sftpgo", sftpgoPath: "/srv/sftpgo/data", indexerPath: "/roots/sftpgo" },
+        { name: "files", storagePath: "/data", indexerPath: "/roots/files" },
       ]),
       FDRIVE_EMBED_URL: "http://embed:8081",
       FDRIVE_THUMBS_DIR: "/data/thumbs",
@@ -238,9 +267,8 @@ describe("loadConfig", () => {
       host: "127.0.0.1",
       logLevel: "debug",
       databaseUrl: "postgres://localhost/fdrive",
-      sftpgoUrl: "http://localhost:8080",
+      fdriveStorageRoot: "/data",
       fdriveMasterKey: MASTER_KEY_32_BYTES,
-      fdriveHomeTemplate: "sftpgo:/home/{username}",
       fdriveSessionTtlDays: 7,
       fdriveSessionMaxAgeDays: 45,
       fdriveCookieSecure: "true",
@@ -253,9 +281,7 @@ describe("loadConfig", () => {
       fdriveArchivePeekMaxBytes: 1500,
       fdriveJsonMaxBytes: 2000,
       fdriveShareUploadMaxBytes: 3000,
-      fdriveIndexRoots: [
-        { name: "sftpgo", sftpgoPath: "/srv/sftpgo/data", indexerPath: "/roots/sftpgo" },
-      ],
+      fdriveIndexRoots: [{ name: "files", storagePath: "/data", indexerPath: "/roots/files" }],
       fdriveEmbedUrl: "http://embed:8081",
       fdriveThumbsDir: "/data/thumbs",
       fdriveAdminUsers: ["alice", "bob"],
@@ -340,11 +366,13 @@ describe("loadConfig", () => {
         ...REQUIRED_ENV,
         PORT: "not-a-number",
         LOG_LEVEL: "verbose",
-        SFTPGO_URL: "not a url",
+        FDRIVE_STORAGE_ROOT: "relative/path",
         FDRIVE_MASTER_KEY: "short",
         NODE_ENV: "staging",
       }),
-    ).toThrowError(/PORT.*\n.*LOG_LEVEL.*\n.*SFTPGO_URL.*\n.*FDRIVE_MASTER_KEY.*\n.*NODE_ENV/s);
+    ).toThrowError(
+      /PORT.*\n.*LOG_LEVEL.*\n.*FDRIVE_STORAGE_ROOT.*\n.*FDRIVE_MASTER_KEY.*\n.*NODE_ENV/s,
+    );
   });
 
   it("rejects a port outside the valid range", () => {

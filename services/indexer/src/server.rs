@@ -16,7 +16,6 @@ use axum::{Json, Router};
 use serde_json::{Value, json};
 
 use crate::db::{self, Db};
-use crate::directory_listing;
 use crate::events::iso_now;
 use crate::extract::{ContentExtractor, MAX_CONTENT_BYTES, embed_health};
 use crate::failures::FEATURES;
@@ -204,26 +203,6 @@ async fn health(State(state): State<Shared>) -> Response {
     match result {
         Ok(Ok(body)) => Json(body).into_response(),
         Ok(Err(_)) | Err(_) => error(StatusCode::INTERNAL_SERVER_ERROR, "database unavailable"),
-    }
-}
-
-async fn directory(
-    State(state): State<Shared>,
-    query: Result<Query<Vec<(String, String)>>, axum::extract::rejection::QueryRejection>,
-) -> Response {
-    let Ok(Query(fields)) = query else {
-        return error(StatusCode::BAD_REQUEST, "invalid directory query");
-    };
-    let Ok((root, path)) = directory_listing::query(&fields) else {
-        return error(StatusCode::BAD_REQUEST, "invalid directory query");
-    };
-    let Some(ctx) = state.context(&root).cloned() else {
-        return error(StatusCode::NOT_FOUND, "unknown root");
-    };
-    match blocking(move || directory_listing::list(&ctx.abs_path, &path)).await {
-        Ok(Ok(listing)) => Json(listing).into_response(),
-        Ok(Err(e)) => error(io_status(&e), "directory unavailable"),
-        Err(response) => response.into_response(),
     }
 }
 
@@ -638,7 +617,6 @@ pub fn router(state: Shared) -> Router {
     Router::new()
         .route("/failures/retry", post(retry_failures))
         .route("/health", get(health))
-        .route("/directory", get(directory))
         .route("/stats", get(stats))
         .route("/activity", get(activity))
         .route("/extract", post(extract_text))

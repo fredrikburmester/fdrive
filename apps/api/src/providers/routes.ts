@@ -1,10 +1,7 @@
 import {
   AdminProvider,
-  AdminProviderCreateRequest,
   AdminProvidersResponse,
-  AdminProviderTestRequest,
   AdminProviderUpdateRequest,
-  ConnectionTestResponse,
   ProvidersResponse,
   ROUTES,
 } from "@fdrive/contracts";
@@ -19,19 +16,11 @@ export interface RegisterProviderRoutesDeps {
   readonly service: ProviderService;
 }
 
-async function parseBody<T>(schema: z.ZodType<T>, raw: unknown, what: string): Promise<T> {
-  const parsed = schema.safeParse(raw);
-  if (!parsed.success) {
-    throw new ApiHttpError("bad_request", `invalid ${what}`, { issues: parsed.error.issues });
-  }
-  return parsed.data;
-}
-
 /**
  * Registers the public `GET /providers` (what the login page renders) and
- * the admin `/admin/providers` routes: list, create, update, delete and
- * probe. Creating or re-addressing a provider probes it first and refuses
- * an unreachable endpoint.
+ * the admin `/admin/providers` routes: list the storage with a fresh
+ * reachability probe, and rename it. The storage itself comes from the
+ * deployment (`FDRIVE_STORAGE_ROOT`), so there is nothing to add or remove.
  */
 export function registerProviderRoutes(
   groups: { public: AppHono; authed: AuthedHono },
@@ -58,84 +47,29 @@ export function registerProviderRoutes(
       (await deps.service.list()).map((provider) => deps.service.adminView(provider)),
     );
     return c.json(
-      AdminProvidersResponse.parse({
-        providers: views.filter((view) => view !== null),
-        types: deps.service.types(),
-      }),
+      AdminProvidersResponse.parse({ providers: views.filter((view) => view !== null) }),
     );
   });
-
-  groups.authed.post(withoutApiV1Prefix(ROUTES.admin.providers), requireAdmin, async (c) => {
-    const body = await parseBody(
-      AdminProviderCreateRequest,
-      await c.req.json().catch(() => undefined),
-      "provider",
-    );
-    const probe = await deps.service.probe({
-      type: body.type,
-      baseUrl: body.baseUrl,
-      ...(body.config === undefined ? {} : { config: body.config }),
-    });
-    if (!probe.ok) {
-      throw new ApiHttpError("bad_request", `provider is not reachable: ${probe.detail}`);
-    }
-    const created = await deps.service.create(body);
-    return c.json(AdminProvider.parse(await deps.service.adminView(created, probe)));
-  });
-
-  groups.authed.post(withoutApiV1Prefix(ROUTES.admin.providersTest), requireAdmin, async (c) => {
-    const body = await parseBody(
-      AdminProviderTestRequest,
-      await c.req.json().catch(() => undefined),
-      "provider test request",
-    );
-    return c.json(ConnectionTestResponse.parse(await deps.service.probe(body)));
-  });
-
-  groups.authed.post(
-    `${withoutApiV1Prefix(ROUTES.admin.providers)}/:id/test`,
-    requireAdmin,
-    async (c) => {
-      const result = await deps.service.probe(providerId(c.req.param("id")));
-      return c.json(ConnectionTestResponse.parse(result));
-    },
-  );
 
   groups.authed.patch(
     `${withoutApiV1Prefix(ROUTES.admin.providers)}/:id`,
     requireAdmin,
     async (c) => {
       const id = providerId(c.req.param("id"));
-      const body = await parseBody(
-        AdminProviderUpdateRequest,
+      const parsed = AdminProviderUpdateRequest.safeParse(
         await c.req.json().catch(() => undefined),
-        "provider update",
       );
-      const current = await deps.service.get(id);
-      if (current === null) {
+      if (!parsed.success) {
+        throw new ApiHttpError("bad_request", "invalid provider update", {
+          issues: parsed.error.issues,
+        });
+      }
+      // A row whose module this deployment no longer has is not storage.
+      if ((await deps.service.get(id)) === null) {
         throw new ApiHttpError("not_found", "storage provider not found");
       }
-      let probe: ConnectionTestResponse | undefined;
-      if (body.baseUrl !== undefined && body.baseUrl !== current.provider.baseUrl) {
-        probe = await deps.service.probe({
-          type: current.module.type as AdminProviderTestRequest["type"],
-          baseUrl: body.baseUrl,
-        });
-        if (!probe.ok) {
-          throw new ApiHttpError("bad_request", `provider is not reachable: ${probe.detail}`);
-        }
-      }
-      const updated = await deps.service.update(id, body);
-      return c.json(AdminProvider.parse(await deps.service.adminView(updated, probe)));
-    },
-  );
-
-  groups.authed.delete(
-    `${withoutApiV1Prefix(ROUTES.admin.providers)}/:id`,
-    requireAdmin,
-    async (c) => {
-      await deps.service.remove(providerId(c.req.param("id")));
-      return c.json({ ok: true });
+      const updated = await deps.service.update(id, parsed.data);
+      return c.json(AdminProvider.parse(await deps.service.adminView(updated)));
     },
   );
 }

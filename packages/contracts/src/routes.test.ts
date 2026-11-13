@@ -2,13 +2,13 @@ import { describe, expect, it } from "vitest";
 import {
   accountTokenRoute,
   adminProviderRoute,
-  adminProviderTestRoute,
+  adminUserRoute,
   chatActionRoute,
   chatCancelRoute,
   chatMessagesRoute,
   chatRoute,
+  grantRoute,
   IDENTITY_HEADER,
-  identityScopeRoute,
   jobCancelRoute,
   jobRoute,
   MODIFIED_AT_HEADER,
@@ -26,6 +26,7 @@ describe("ROUTES", () => {
       login: "/api/v1/auth/login",
       logout: "/api/v1/auth/logout",
       me: "/api/v1/auth/me",
+      password: "/api/v1/auth/password",
     });
   });
 
@@ -118,7 +119,6 @@ describe("ROUTES", () => {
   it("defines every setup route under /api/v1/setup", () => {
     expect(ROUTES.setup).toEqual({
       status: "/api/v1/setup/status",
-      test: "/api/v1/setup/test",
       complete: "/api/v1/setup/complete",
     });
   });
@@ -126,11 +126,19 @@ describe("ROUTES", () => {
   it("defines every admin route under /api/v1/admin", () => {
     expect(ROUTES.admin).toEqual({
       providers: "/api/v1/admin/providers",
-      providersTest: "/api/v1/admin/providers/test",
+      users: "/api/v1/admin/users",
     });
     expect(ROUTES.providers).toBe("/api/v1/providers");
     expect(adminProviderRoute("a b")).toBe("/api/v1/admin/providers/a%20b");
-    expect(adminProviderTestRoute("p1")).toBe("/api/v1/admin/providers/p1/test");
+    expect(adminUserRoute("al ice")).toBe("/api/v1/admin/users/al%20ice");
+  });
+
+  it("defines the folder share routes under /api/v1/grants", () => {
+    expect(ROUTES.grants).toEqual({
+      list: "/api/v1/grants",
+      people: "/api/v1/grants/people",
+    });
+    expect(grantRoute("g/1")).toBe("/api/v1/grants/g%2F1");
   });
 
   it("defines every system route under /api/v1/system", () => {
@@ -142,7 +150,6 @@ describe("ROUTES", () => {
       ai: "/api/v1/system/ai",
       aiTest: "/api/v1/system/ai/test",
       trash: "/api/v1/system/trash",
-      mountMappings: "/api/v1/system/mount-mappings",
       indexer: "/api/v1/system/indexer",
       indexerSettings: "/api/v1/system/indexer/settings",
       indexerReindex: "/api/v1/system/indexer/reindex",
@@ -234,16 +241,6 @@ describe("tagRoute", () => {
 describe("tagFilesRoute", () => {
   it("builds the files path for a single tag", () => {
     expect(tagFilesRoute("tag-1")).toBe("/api/v1/tags/tag-1/files");
-  });
-});
-
-describe("identityScopeRoute", () => {
-  it("builds the scope path for a single identity", () => {
-    expect(identityScopeRoute("identity-1")).toBe("/api/v1/account/identities/identity-1/scope");
-  });
-
-  it("url-encodes the id", () => {
-    expect(identityScopeRoute("a/b")).toBe("/api/v1/account/identities/a%2Fb/scope");
   });
 });
 

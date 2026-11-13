@@ -1,6 +1,12 @@
 "use client";
 
-import type { FsEntry, OfficeStatusResponse, ProviderCapabilities, Tag } from "@fdrive/contracts";
+import type {
+  FsEntry,
+  OfficeStatusResponse,
+  ProviderCapabilities,
+  ReceivedGrant,
+  Tag,
+} from "@fdrive/contracts";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { ChevronRightIcon } from "lucide-react";
 import type { DragEvent, MouseEvent as ReactMouseEvent } from "react";
@@ -20,6 +26,7 @@ import { dropTargetState, effectFor } from "@/lib/files/dnd-targets";
 import { findRevealIndex, type ScrollRequest } from "@/lib/files/reveal";
 import { contextEntries } from "@/lib/files/selection";
 import { wantsThumbnail } from "@/lib/files/thumbnail";
+import { sharedFolderCaption } from "@/lib/grants/format";
 import { DEFAULT_CAPABILITIES, selectionOf } from "@/lib/identity/capabilities";
 import { tagCheckState as computeTagCheckState } from "@/lib/metadata/tag-set";
 import { useFormatters } from "@/lib/use-format-preferences";
@@ -129,6 +136,9 @@ export interface FileListProps {
   /** What the active login's storage can do, for every row's context menu
    * (see `FileContextMenu`). Defaults to `DEFAULT_CAPABILITIES`. */
   capabilities?: ProviderCapabilities;
+  /** The folders others share with the active login: captions in `Shared with me`, and
+   * what each context menu offers (see `FileContextMenu`). Defaults to none. */
+  received?: readonly ReceivedGrant[];
   /** A request to scroll a specific entry into view, identified by unique token. */
   scrollRequest?: ScrollRequest | null;
   /** Callback fired after the virtualizer has scrolled to the requested entry. */
@@ -140,6 +150,7 @@ export interface FileListProps {
 }
 
 const EMPTY_TAGS: readonly Tag[] = [];
+const EMPTY_RECEIVED: readonly ReceivedGrant[] = [];
 const NO_OP_TOGGLE_TAG = () => {};
 const NO_OP_OPEN_TAGS_EDITOR = () => {};
 const NO_OP_TOGGLE_FAVORITE = () => {};
@@ -182,6 +193,7 @@ export function FileList({
   showOrganize = false,
   showChat = false,
   capabilities = DEFAULT_CAPABILITIES,
+  received = EMPTY_RECEIVED,
   scrollRequest = null,
   onScrollConsumed,
   showThumbnails = false,
@@ -333,6 +345,7 @@ export function FileList({
           const isExpandedFolder = entry.kind === "dir" && (treeExpanded?.has(entry.path) ?? false);
           const group = contextEntries(entry, entries, selected);
           const groupPaths = group.map((candidate) => candidate.path);
+          const sharedBy = sharedFolderCaption(entry.path, received);
 
           return (
             <FileContextMenu
@@ -358,6 +371,7 @@ export function FileList({
               favorite={groupFavorite(group)}
               onToggleFavorite={(next) => onToggleFavorite(groupPaths, next)}
               capabilities={capabilities}
+              received={received}
             >
               {/** biome-ignore lint/a11y/noStaticElementInteractions: this row supports drag-and-drop and click selection; keyboard activation is handled by the listing container's roving onKeyDown */}
               {/** biome-ignore lint/a11y/useKeyWithClickEvents: same as above */}
@@ -426,6 +440,9 @@ export function FileList({
                   />
                   <ListRowIcon key={entry.path} entry={entry} showThumbnail={showThumbnails} />
                   <span className="min-w-0 flex-1 truncate">{entry.name}</span>
+                  {sharedBy !== null && (
+                    <span className="shrink-0 text-muted-foreground text-xs">{sharedBy}</span>
+                  )}
                   <TagDots tags={tags} tagIds={entry.meta?.tagIds ?? []} />
                   <span className="w-20 shrink-0 text-right text-muted-foreground text-xs">
                     {entry.kind === "dir" ? "--" : formatBytes(entry.size)}

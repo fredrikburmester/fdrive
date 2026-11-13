@@ -10,7 +10,7 @@ import {
 
 const ORIGINAL: OcrOriginal = {
   id: "0123456789abcdef_scan.pdf",
-  root: "sftpgo",
+  root: "files",
   path: "fredrik/docs/scan.pdf",
   size: 1024,
   keptAt: "2026-09-07T03:00:00+00:00",

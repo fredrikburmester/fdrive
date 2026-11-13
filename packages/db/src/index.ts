@@ -45,7 +45,7 @@ export {
   type DesktopPublishLockOptions,
 } from "./repos/desktop-publish-lock.js";
 export { createRepos } from "./repos/drizzle.js";
-export { createIdentityLinksRepo, createIdentityOwnershipGuard } from "./repos/identity-links.js";
+export { createIdentityLinksRepo } from "./repos/identity-links.js";
 export type {
   IdentityLinksErrorCode,
   IdentityLinksRepo,
@@ -117,7 +117,6 @@ export type {
   ShareRecord,
   ShareRepo,
   ShareScope,
-  ShareUpsertInput,
 } from "./repos/shares-state.js";
 export {
   createMemoryShareRepo,
@@ -130,7 +129,6 @@ export {
   validateShareOwnedUpdate,
   validateShareOwnership,
   validateSharePath,
-  validateShareUpsert,
 } from "./repos/shares-state.js";
 export { createSystemEventRepo } from "./repos/system-events.js";
 export type {
@@ -159,6 +157,12 @@ export type {
   FolderViewSortKey,
   Identity,
   IdentityRepo,
+  LocalGrant,
+  LocalGrantAccess,
+  LocalGrantRepo,
+  LocalUser,
+  LocalUserPatch,
+  LocalUserRepo,
   MetadataPathRepo,
   Provider,
   ProviderRepo,

@@ -36,11 +36,10 @@ git push origin v0.2.0
 The workflow refuses a tag that is not on `main` or not shaped like `v1.2.3` or `v1.2.3-rc.1`.
 It builds every image for amd64 and arm64, tags them, and creates the GitHub release with
 notes generated from the merged pull requests since the previous release. The release
-carries `compose.yaml` and `compose.sftpgo.yaml`, which installations download from
-`releases/latest/download/`. `compose.yaml` follows `latest`, so an installation updates
-with a pull. Above the generated list, the notes say how to update, or how to try a
-pre-release, and when a release changes either file they tell operators to download them
-again. A pre-release's `compose.yaml` names its own version, because `latest` never moves
+carries `compose.yaml`, which installations download from `releases/latest/download/`.
+`compose.yaml` follows `latest`, so an installation updates with a pull. Above the generated
+list, the notes say how to update, or how to try a pre-release, and when a release changes
+`compose.yaml` they tell operators to download it again. A pre-release's `compose.yaml` names its own version, because `latest` never moves
 to one. Edit the notes afterwards to call out anything else operators must do.
 
 Every installation on the default channel moves to the new release on its next pull, so tag

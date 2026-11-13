@@ -101,9 +101,11 @@ test("single-file password is checked on explicit download; edit preserves, chan
     });
     await applyPassword(visitor, "wrong-password");
     expect(downloads).toBe(0);
-    // A wrong password is reported by the server-side check and unlocks nothing:
-    // no file name, no download control, no download request.
-    await expect(visitor.getByText("Share password incorrect.", { exact: true })).toBeVisible();
+    // A wrong password is refused by the server as it is entered and unlocks
+    // nothing: no file name, no download control, no download request.
+    await expect(
+      visitor.getByText("Share password required or incorrect", { exact: true }),
+    ).toBeVisible();
     await expect(visitor.getByRole("link", { name: "Download", exact: true })).toHaveCount(0);
     await expect(visitor.getByText("hello.txt", { exact: true })).toHaveCount(0);
     expect(downloads).toBe(0);
@@ -278,14 +280,31 @@ test("upload-only retries password failures, forbids reads, and reports expired 
     await visitor.goto(url);
     await expect(visitor.getByRole("table")).toHaveCount(0);
     await expect(visitor.getByRole("link", { name: /Download/ })).toHaveCount(0);
+    // A wrong password is refused as it is entered, so nothing can be chosen yet.
     await applyPassword(visitor, "wrong");
+    await expect(
+      visitor.getByText("Share password required or incorrect", { exact: true }),
+    ).toBeVisible();
+    await expect(visitor.getByRole("button", { name: "Choose files", exact: true })).toBeDisabled();
+    await applyPassword(visitor, "upload-password");
+    await expect(visitor.getByRole("button", { name: "Choose files", exact: true })).toBeEnabled();
+    // The owner changes the password after the visitor's was accepted: the
+    // upload fails on it, and a retry with the new password goes through.
+    const changed = await page.request.patch(`/api/v1/shares/${id}`, {
+      headers: { "x-requested-with": "fdrive" },
+      data: { password: "changed-password" },
+    });
+    expect(changed.ok(), await changed.text()).toBe(true);
     await visitor.getByLabel("Choose files to upload").setInputFiles({
       name: "public-upload.txt",
       mimeType: "text/plain",
       buffer: Buffer.from("Public upload contents"),
     });
     await expect(visitor.getByRole("button", { name: "Retry", exact: true })).toBeVisible();
-    await applyPassword(visitor, "upload-password");
+    await expect(
+      visitor.getByText("Share password required or incorrect", { exact: true }),
+    ).toBeVisible();
+    await applyPassword(visitor, "changed-password");
     await visitor.getByRole("button", { name: "Retry", exact: true }).click();
     await expect(visitor.getByText("Uploaded", { exact: true })).toBeVisible();
     for (const route of ["entries", "download", "archive"]) {

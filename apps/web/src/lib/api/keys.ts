@@ -34,13 +34,14 @@ export const queryKeys = {
   },
   admin: {
     providers: () => ["admin", "providers"] as const,
+    users: () => ["admin", "users"] as const,
   },
   system: {
     activity: () => ["system", "activity"] as const,
     publicUrl: () => ["system", "public-url"] as const,
     office: () => ["system", "office"] as const,
     ai: () => ["system", "ai"] as const,
-    /** One entry per storage server; the bare prefix matches every server's settings. */
+    /** Keyed by the storage row the settings belong to. */
     trash: (providerId: string) => ["system", "trash", providerId] as const,
     features: () => ["system", "features"] as const,
     indexer: () => ["system", "indexer"] as const,
@@ -50,14 +51,10 @@ export const queryKeys = {
       ["system", "ocr", "originals", query, offset] as const,
     thumbnails: () => ["system", "thumbnails"] as const,
     imageSearch: () => ["system", "image-search"] as const,
-    mountMappings: () => ["system", "mount-mappings"] as const,
     logs: (subsystem: string, level: string) => ["system", "logs", subsystem, level] as const,
   },
   account: {
     tokens: () => ["account", "tokens"] as const,
-    identityScope: (identityId: string) => ["account", "identity-scope", identityId] as const,
-    identityScopeSuggestions: (identityId: string) =>
-      ["account", "identity-scope-suggestions", identityId] as const,
     favorites: (accountId: string) => ["account", accountId, "favorites"] as const,
   },
   tags: {
@@ -76,6 +73,14 @@ export const queryKeys = {
     chats: () => ["ai", "chats"] as const,
     /** Not under `chats`: refreshing the list must not refetch a chat and overwrite a fresher transcript. */
     chat: (id: string) => ["ai", "chat", id] as const,
+  },
+  grants: {
+    /** Every grant query; the bare prefix refreshes all of them. */
+    all: () => ["grants"] as const,
+    /** The active login's shared folders: what it shares and what others share with it. */
+    list: () => ["grants", "list"] as const,
+    /** The other users a folder can be shared with. */
+    people: () => ["grants", "people"] as const,
   },
   trash: {
     status: () => ["trash", "status"] as const,

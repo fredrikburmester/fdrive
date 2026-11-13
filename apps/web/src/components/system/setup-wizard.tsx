@@ -1,18 +1,15 @@
 "use client";
 
-import { ApiClientError } from "@fdrive/contracts";
-import { type FormEvent, useState } from "react";
-import { Badge } from "@/components/ui/badge";
+import { ApiClientError, LOCAL_PASSWORD_MIN_LENGTH } from "@fdrive/contracts";
+import { type FormEvent, type ReactNode, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Field, FieldDescription, FieldError, FieldGroup, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { describeApiError } from "@/lib/api/errors";
-import { useSetupComplete, useSetupTest } from "@/lib/api/system-queries";
-import { providerNameError } from "@/lib/system/connection";
+import { useSetupComplete, useSetupStatus } from "@/lib/api/system-queries";
+import { localUsernameError, newPasswordErrors } from "@/lib/auth/local-account";
 import {
-  canCompleteAccountStep,
-  canLeaveConnectionStep,
   canLeaveTokenStep,
   nextSetupStep,
   previousSetupStep,
@@ -25,88 +22,117 @@ import { SetupFrame } from "./setup-frame";
 
 const STEP_LABELS: Record<SetupStep, string> = {
   token: "Claim",
-  connection: "SFTPGo",
-  account: "Administrator",
+  account: "Account",
 };
 
-const DEFAULT_HOME_TEMPLATE = "sftpgo:/{username}";
+const STEP_DESCRIPTIONS: Record<SetupStep, string> = {
+  token: "Claim this installation with its setup token",
+  account: "Create your account",
+};
 
+/**
+ * `/setup` before the installation is claimed: the setup token, then the
+ * owner's account on the deployment's files folder (`FDRIVE_STORAGE_ROOT`).
+ * The account becomes the administrator and the walkthrough continues on
+ * the same screen. A deployment without the folder cannot be set up, so
+ * the page says what to configure instead of showing the form.
+ */
 export function SetupWizard() {
+  const status = useSetupStatus();
   const [claimed, setClaimed] = useState(false);
+
+  if (claimed) return <SetupFeatures />;
+  if (status.data === undefined) {
+    return (
+      <SetupFrame description="Preparing setup">
+        {status.isError ? (
+          <SetupRetry onRetry={() => void status.refetch()}>
+            <FieldError className="[overflow-wrap:anywhere]">
+              {describeApiError(status.error)}
+            </FieldError>
+          </SetupRetry>
+        ) : (
+          <p role="status" className="text-sm text-muted-foreground">
+            Loading…
+          </p>
+        )}
+      </SetupFrame>
+    );
+  }
+  if (!status.data.storageConfigured) {
+    return (
+      <SetupFrame description="Choose where fdrive keeps files">
+        <SetupRetry onRetry={() => void status.refetch()}>
+          <p className="text-sm text-muted-foreground">
+            fdrive keeps everyone's files in a folder on this server. Set{" "}
+            <code className="font-mono text-foreground">FDRIVE_STORAGE_ROOT</code> to that folder in
+            the deployment, restart fdrive, then check again.
+          </p>
+        </SetupRetry>
+      </SetupFrame>
+    );
+  }
+  return <SetupSteps onClaimed={() => setClaimed(true)} />;
+}
+
+/** A message with a button that asks for the setup status again. */
+function SetupRetry({ children, onRetry }: { children: ReactNode; onRetry: () => void }) {
+  return (
+    <div className="flex flex-col items-start gap-3">
+      {children}
+      <Button type="button" variant="outline" onClick={onRetry}>
+        Try again
+      </Button>
+    </div>
+  );
+}
+
+function SetupSteps({ onClaimed }: { onClaimed: () => void }) {
   const [step, setStep] = useState<SetupStep>("token");
   const [token, setToken] = useState("");
-  const [baseUrl, setBaseUrl] = useState("");
-  const [label, setLabel] = useState("");
-  const [nameTouched, setNameTouched] = useState(false);
-  const [testedBaseUrl, setTestedBaseUrl] = useState<string | null>(null);
-
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
-  const [otp, setOtp] = useState("");
-  const [showOtp, setShowOtp] = useState(false);
-
-  const setupTest = useSetupTest();
+  const [confirm, setConfirm] = useState("");
   const setupComplete = useSetupComplete();
+
+  const usernameError = localUsernameError(username);
+  const passwordErrors = newPasswordErrors({ password, confirm });
+  const canComplete = usernameError === null && passwordErrors.valid;
 
   function goNext(): void {
     const next = nextSetupStep(step);
-    if (next !== null) {
-      setStep(next);
-    }
+    if (next !== null) setStep(next);
   }
 
   function goBack(): void {
     const previous = previousSetupStep(step);
-    if (previous !== null) {
-      setStep(previous);
-    }
-  }
-
-  function handleTest(): void {
-    setupTest.mutate({ token, baseUrl }, { onSuccess: () => setTestedBaseUrl(baseUrl) });
+    if (previous !== null) setStep(previous);
   }
 
   function handleComplete(event: FormEvent<HTMLFormElement>): void {
     event.preventDefault();
-    if (providerNameError(label) !== null) return;
+    if (!canComplete) return;
     setupComplete.mutate(
-      {
-        token,
-        request: {
-          baseUrl,
-          label: label.trim(),
-          homeTemplate: DEFAULT_HOME_TEMPLATE,
-          username,
-          password,
-          ...(showOtp && otp.length > 0 ? { otp } : {}),
-        },
-      },
+      { token, request: { username: username.trim(), password } },
       {
         onSuccess: () => {
           setPassword("");
-          setOtp("");
+          setConfirm("");
           setToken("");
-          setClaimed(true);
+          onClaimed();
         },
       },
     );
   }
 
-  const testResult = setupTest.data ?? null;
-  const nameError = providerNameError(label);
-  const canLeaveConnection =
-    nameError === null && canLeaveConnectionStep(baseUrl, testResult, testedBaseUrl);
-
-  if (claimed) return <SetupFeatures />;
+  const completeError = setupComplete.isError
+    ? setupComplete.error instanceof ApiClientError && setupComplete.error.kind === "unauthorized"
+      ? "The setup token was not accepted. Go back and check it."
+      : describeApiError(setupComplete.error)
+    : null;
 
   return (
-    <SetupFrame
-      description={
-        step === "account"
-          ? "Choose your fdrive administrator"
-          : "Connect fdrive to your SFTPGo server"
-      }
-    >
+    <SetupFrame description={STEP_DESCRIPTIONS[step]}>
       <div className="flex flex-col gap-4">
         <p className="text-sm text-muted-foreground">
           Step {SETUP_STEPS.indexOf(step) + 1} of {WALKTHROUGH_TOTAL}
@@ -144,140 +170,68 @@ export function SetupWizard() {
           </FieldGroup>
         ) : null}
 
-        {step === "connection" ? (
-          <FieldGroup>
-            <Field>
-              <FieldLabel htmlFor="setup-provider-name">Storage name</FieldLabel>
-              <Input
-                id="setup-provider-name"
-                placeholder="Home storage"
-                value={label}
-                maxLength={120}
-                required
-                aria-describedby="setup-provider-name-help"
-                aria-invalid={nameTouched && nameError !== null}
-                onChange={(event) => {
-                  setLabel(event.target.value);
-                  setNameTouched(true);
-                }}
-              />
-              <FieldDescription id="setup-provider-name-help">
-                Shown when choosing storage and in Finder.
-              </FieldDescription>
-              {nameTouched && nameError !== null ? <FieldError>{nameError}</FieldError> : null}
-            </Field>
-            <Field>
-              <FieldLabel htmlFor="setup-base-url">SFTPGo URL</FieldLabel>
-              <Input
-                id="setup-base-url"
-                placeholder="http://sftpgo:8080"
-                value={baseUrl}
-                onChange={(event) => {
-                  setBaseUrl(event.target.value);
-                  setTestedBaseUrl(null);
-                }}
-              />
-            </Field>
-            <div className="flex flex-wrap items-center gap-2">
-              <Button
-                type="button"
-                variant="outline"
-                disabled={baseUrl.trim().length === 0 || setupTest.isPending}
-                onClick={handleTest}
-              >
-                {setupTest.isPending ? "Testing…" : "Test connection"}
-              </Button>
-              {testResult?.ok && testedBaseUrl === baseUrl ? <Badge>Reachable</Badge> : null}
-            </div>
-            {testResult && !testResult.ok && testedBaseUrl === baseUrl ? (
-              <FieldError className="min-w-0 [overflow-wrap:anywhere]">
-                {testResult.detail}
-              </FieldError>
-            ) : null}
-            {setupTest.isError ? (
-              <FieldError className="min-w-0 [overflow-wrap:anywhere]">
-                {describeApiError(setupTest.error)}
-              </FieldError>
-            ) : null}
-            <div className="flex justify-between">
-              <Button type="button" variant="ghost" onClick={goBack}>
-                Back
-              </Button>
-              <Button type="button" disabled={!canLeaveConnection} onClick={goNext}>
-                Continue
-              </Button>
-            </div>
-          </FieldGroup>
-        ) : null}
-
         {step === "account" ? (
           <form onSubmit={handleComplete}>
             <FieldGroup>
+              <FieldDescription>
+                This account manages fdrive. Add everyone else under System &gt; Users.
+              </FieldDescription>
               <Field>
-                <FieldLabel htmlFor="setup-username">SFTPGo file-user username</FieldLabel>
-                <FieldDescription>
-                  Use the account you use in SFTPGo WebClient to browse files, not a SFTPGo WebAdmin
-                  account.
-                </FieldDescription>
-                <FieldDescription>
-                  This account will manage settings in fdrive. Its SFTPGo permissions stay
-                  unchanged; other users sign in with their own file accounts.
-                </FieldDescription>
+                <FieldLabel htmlFor="setup-username">Username</FieldLabel>
                 <Input
                   id="setup-username"
                   autoComplete="username"
+                  autoFocus
+                  maxLength={255}
                   value={username}
+                  aria-invalid={username.length > 0 && usernameError !== null}
                   onChange={(event) => setUsername(event.target.value)}
                 />
+                <FieldDescription>Also the name of your folder on this server.</FieldDescription>
+                {username.length > 0 && usernameError !== null ? (
+                  <FieldError>{usernameError}</FieldError>
+                ) : null}
               </Field>
               <Field>
                 <FieldLabel htmlFor="setup-password">Password</FieldLabel>
                 <Input
                   id="setup-password"
                   type="password"
-                  autoComplete="current-password"
+                  autoComplete="new-password"
+                  maxLength={1024}
                   value={password}
+                  aria-invalid={passwordErrors.password !== null}
                   onChange={(event) => setPassword(event.target.value)}
                 />
+                <FieldDescription>
+                  At least {LOCAL_PASSWORD_MIN_LENGTH} characters.
+                </FieldDescription>
+                {passwordErrors.password !== null ? (
+                  <FieldError>{passwordErrors.password}</FieldError>
+                ) : null}
               </Field>
-              {showOtp ? (
-                <Field>
-                  <FieldLabel htmlFor="setup-otp">One-time code</FieldLabel>
-                  <Input
-                    id="setup-otp"
-                    inputMode="numeric"
-                    autoComplete="one-time-code"
-                    value={otp}
-                    onChange={(event) => setOtp(event.target.value)}
-                  />
-                </Field>
-              ) : (
-                <Button
-                  type="button"
-                  variant="link"
-                  className="h-auto w-fit justify-start p-0 text-muted-foreground"
-                  onClick={() => setShowOtp(true)}
-                >
-                  Use a one-time code
-                </Button>
-              )}
-              {setupComplete.isError ? (
-                <FieldError>
-                  {setupComplete.error instanceof ApiClientError &&
-                  setupComplete.error.kind === "unauthorized"
-                    ? "Sign-in failed. Check the setup token, file-user credentials, and any one-time code."
-                    : describeApiError(setupComplete.error)}
-                </FieldError>
-              ) : null}
+              <Field>
+                <FieldLabel htmlFor="setup-confirm">Confirm password</FieldLabel>
+                <Input
+                  id="setup-confirm"
+                  type="password"
+                  autoComplete="new-password"
+                  maxLength={1024}
+                  value={confirm}
+                  aria-invalid={passwordErrors.confirm !== null}
+                  onChange={(event) => setConfirm(event.target.value)}
+                />
+                {passwordErrors.confirm !== null ? (
+                  <FieldError>{passwordErrors.confirm}</FieldError>
+                ) : null}
+              </Field>
+              {completeError !== null ? <FieldError>{completeError}</FieldError> : null}
               <div className="flex justify-between">
                 <Button type="button" variant="ghost" onClick={goBack}>
                   Back
                 </Button>
-                <Button
-                  type="submit"
-                  disabled={!canCompleteAccountStep(username, password) || setupComplete.isPending}
-                >
-                  {setupComplete.isPending ? "Verifying…" : "Continue setup"}
+                <Button type="submit" disabled={!canComplete || setupComplete.isPending}>
+                  {setupComplete.isPending ? "Creating…" : "Create account"}
                 </Button>
               </div>
             </FieldGroup>

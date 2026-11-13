@@ -58,10 +58,10 @@ export interface OfficeDeps {
   ) => Promise<T>;
   readonly clock: () => Date;
   /**
-   * Resolves `identity`'s trusted, administrator-controlled scope mapping
-   * (`ScopeResolver.configuredMappings`, not `verifiedIndexScopes`: office
-   * must keep working when the indexer is down), or `null` when the
-   * identity's provider does not match the currently configured connection.
+   * Resolves `identity`'s trusted scopes (`ScopeResolver.configuredMappings`,
+   * not `verifiedIndexScopes`: Office works whether or not the root is
+   * indexed), or `null` when its storage has no index root or its provider
+   * is gone or disabled.
    */
   readonly location: (
     identity: Identity,

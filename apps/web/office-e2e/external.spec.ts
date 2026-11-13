@@ -5,9 +5,9 @@ import { loginAs } from "../e2e/support/login";
 import { rewriteArchive } from "./archive";
 import { createDocument, documentLoaded } from "./editor-ui";
 import { fixtureState } from "./state";
-import { putOverSftp, storedBytes, storedMetadata, storedXml } from "./storage";
+import { putExternally, storedBytes, storedMetadata, storedXml } from "./storage";
 
-test("same-size same-second SFTP edit invalidates editor content", async ({ page }) => {
+test("a same-size same-second edit outside fdrive invalidates editor content", async ({ page }) => {
   const state = await fixtureState();
   const filename = "External Å %20.docx";
   const path = `/${filename}`;
@@ -28,10 +28,11 @@ test("same-size same-second SFTP edit invalidates editor content", async ({ page
     "CACHE_BEFORE",
     modifiedSeconds,
   );
-  await putOverSftp(state, normalized, path);
+  // Written straight into alice's home on disk, as the host or rsync would.
+  await putExternally(state, normalized, path);
   const first = await storedBytes(state, path);
   const firstMetadata = await storedMetadata(state, path);
-  expect(Date.parse(firstMetadata.modified) / 1000).toBe(modifiedSeconds);
+  expect(firstMetadata.modifiedSeconds).toBe(modifiedSeconds);
   expect(first).toEqual(new Uint8Array(await readFile(normalized)));
   await page.goto(`/office/${identity}/${encodeURIComponent(filename)}?mode=view`);
   await documentLoaded(page);
@@ -54,7 +55,7 @@ test("same-size same-second SFTP edit invalidates editor content", async ({ page
     "CACHE_AFTER!",
     modifiedSeconds,
   );
-  await putOverSftp(state, edited, path);
+  await putExternally(state, edited, path);
   const second = await storedBytes(state, path);
   expect(await storedMetadata(state, path)).toEqual(firstMetadata);
   expect(second.byteLength).toBe(first.byteLength);

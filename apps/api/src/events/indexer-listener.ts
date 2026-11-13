@@ -124,12 +124,10 @@ export interface IndexerListenerDeps {
   readonly metadata: MetadataService;
   readonly bus: EventBus;
   /**
-   * Resolves an identity's trusted, administrator-controlled scope mapping
-   * (`ScopeResolver.configuredMappings`), the same mapping Office and
-   * metadata-event routing use. Never `verifiedIndexScopes`: this listener
-   * is itself downstream of the indexer, so re-verifying against it would
-   * be circular, and event routing must keep working when the indexer's own
-   * directory-verification path is degraded.
+   * Resolves an identity's trusted scopes (`ScopeResolver.configuredMappings`),
+   * the same mapping Office and metadata-event routing use. This listener
+   * keeps only those on `indexRootNames` itself, and every destination
+   * still passes a live read check before it is published.
    */
   readonly configuredMappingsFor: (identity: Identity) => Promise<ConfiguredMappingsResult>;
   /** Builds the identity-bound storage a live-read check runs against. */
@@ -208,8 +206,8 @@ type LiveCheckDeps = Pick<IndexerListenerDeps, "storageForIdentity" | "createAut
 /**
  * Determines whether `path` is currently a file or a directory, or `null`
  * when that cannot be told safely (missing, denied, or any other error).
- * Never calls `storage.list` on a path of unknown kind: real SFTPGo drops
- * the connection for `list` against a path that is actually a file, so
+ * Never calls `storage.list` on a path of unknown kind: some storage
+ * servers fail `list` against a path that is actually a file, so
  * `statFile` must run first and `bad_request` is the only signal this
  * codebase treats as "it's a directory" (see `auth/storage-factory.ts`'s
  * `isExistingDirectory`). The indexer's `moved` event payload never says
@@ -263,8 +261,8 @@ async function isLiveReadable(
  * Handles a `created`/`changed` event for one identity: publishes an
  * `FsEvent` when the path round-trips within that identity's scope and a
  * live read check confirms the identity can read it right now, so SSE
- * clients refresh listings for changes made over SFTP or any other client
- * without ever being told about a path a mapping change or permission
+ * clients refresh listings for changes made on the host or by any other
+ * writer without ever being told about a path a scope change or permission
  * change has since made unreadable.
  */
 async function handleCreatedOrChanged(

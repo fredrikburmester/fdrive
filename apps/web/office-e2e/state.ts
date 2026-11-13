@@ -7,8 +7,8 @@ export interface OfficeFixtureState {
   apiUrl: string;
   officeUrl: string;
   officeContainer: string;
-  sftpgoUrl: string;
-  sftpgoContainer: string;
+  /** The local folder the fixture API serves (`FDRIVE_STORAGE_ROOT`), one home per user. */
+  storageRoot: string;
   directory: string;
 }
 export async function fixtureState(

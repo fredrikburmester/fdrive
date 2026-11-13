@@ -1,17 +1,11 @@
 import { randomBytes } from "node:crypto";
-import { mkdir, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { gzipSync } from "node:zlib";
 import type { ArchiveEntriesResponse, FsEvent, JobStatus } from "@fdrive/contracts";
 import { StorageError, type StorageProvider } from "@fdrive/core";
-import {
-  createFakeSftpgoServer,
-  createSftpgoClient,
-  createSftpgoStorageProvider,
-  type FakeSeed,
-  type WithToken,
-} from "@fdrive/sftpgo";
+import { createLocalStorage } from "@fdrive/local";
 import type { Logger } from "pino";
 import * as tar from "tar-stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -80,14 +74,12 @@ vi.mock("../archive/stream-utils.js", async (importOriginal) => {
   return { ...actual, isZstdSupported: vi.fn(actual.isZstdSupported) };
 });
 
-const FULL_PERMS = ["*"];
 const ALICE_IDENTITY_ID = "00000000-0000-4000-8000-0000000000a1";
 const BOB_IDENTITY_ID = "00000000-0000-4000-8000-0000000000b1";
 const ACCOUNT_ID = "00000000-0000-4000-8000-000000000001";
 
 const REQUIRED_ENV = {
   DATABASE_URL: "postgres://localhost/fdrive",
-  SFTPGO_URL: "http://localhost:8080",
   FDRIVE_MASTER_KEY: Buffer.alloc(32, 7).toString("base64"),
 };
 
@@ -103,31 +95,19 @@ function createTestLogger(): Logger {
   return logger as unknown as Logger;
 }
 
-const SEED: FakeSeed = {
-  users: [
-    { username: "alice", password: "secret", permissions: { "/": FULL_PERMS } },
-    { username: "bob", password: "secret2", permissions: { "/": FULL_PERMS } },
-  ],
-  files: {
-    alice: {
-      "/hello.txt": "hello world",
-      "/dir/a.txt": "alpha",
-      "/dir/nested/b.txt": "bravo",
-    },
-    bob: {
-      "/note.txt": "bob's note",
-    },
+/** Each user's files, by path. */
+type Seed = Readonly<Record<string, Readonly<Record<string, string>>>>;
+
+const SEED: Seed = {
+  alice: {
+    "/hello.txt": "hello world",
+    "/dir/a.txt": "alpha",
+    "/dir/nested/b.txt": "bravo",
+  },
+  bob: {
+    "/note.txt": "bob's note",
   },
 };
-
-async function withTokenFor(
-  client: ReturnType<typeof createSftpgoClient>,
-  username: string,
-  password: string,
-): Promise<WithToken> {
-  const token = await client.login({ username, password });
-  return async (fn) => fn(token.accessToken);
-}
 
 interface Harness {
   readonly app: ReturnType<typeof createApp>;
@@ -141,16 +121,22 @@ interface Harness {
 
 const tempDirs: string[] = [];
 
-async function buildHarness(
-  seed: FakeSeed = SEED,
-  username = "alice",
-  password = "secret",
-  jobMaxBytes = 10 * 1024 * 1024,
-) {
-  const server = createFakeSftpgoServer(seed);
-  const client = createSftpgoClient({ baseUrl: "http://sftpgo.test", fetch: server.fetch });
-  const withToken = await withTokenFor(client, username, password);
-  const storage = createSftpgoStorageProvider({ client, withToken });
+/** Local storage over a fresh folder holding `files`; removed after each test. */
+async function seededStorage(
+  files: Readonly<Record<string, string>> | undefined,
+): Promise<StorageProvider> {
+  const home = await realpath(await mkdtemp(join(tmpdir(), "fdrive-archive-routes-home-")));
+  tempDirs.push(home);
+  for (const [path, content] of Object.entries(files ?? {})) {
+    const target = join(home, path);
+    await mkdir(dirname(target), { recursive: true });
+    await writeFile(target, content);
+  }
+  return createLocalStorage({ home });
+}
+
+async function buildHarness(seed: Seed = SEED, username = "alice", jobMaxBytes = 10 * 1024 * 1024) {
+  const storage = await seededStorage(seed[username]);
 
   const identityId = username === "alice" ? ALICE_IDENTITY_ID : BOB_IDENTITY_ID;
   const principal: Principal = {
@@ -185,6 +171,7 @@ async function buildHarness(
     startedAt: new Date(),
     clock,
     principalResolver: async () => principal,
+    connectionStatus: async () => ({ required: false, providers: [] }),
     registerRoutes: (groups) => {
       registerFsRoutes(groups, {
         activity: activity.service,
@@ -211,10 +198,7 @@ async function buildHarness(
  * itself does not declare never trips TypeScript's excess-property check.
  */
 async function buildHarnessWithArchivePeekMaxBytes(archivePeekMaxBytes: number): Promise<Harness> {
-  const server = createFakeSftpgoServer(SEED);
-  const client = createSftpgoClient({ baseUrl: "http://sftpgo.test", fetch: server.fetch });
-  const withToken = await withTokenFor(client, "alice", "secret");
-  const storage = createSftpgoStorageProvider({ client, withToken });
+  const storage = await seededStorage(SEED.alice);
 
   const principal: Principal = {
     accountId: ACCOUNT_ID,
@@ -257,6 +241,7 @@ async function buildHarnessWithArchivePeekMaxBytes(archivePeekMaxBytes: number):
     startedAt: new Date(),
     clock,
     principalResolver: async () => principal,
+    connectionStatus: async () => ({ required: false, providers: [] }),
     registerRoutes: (groups) => registerFsRoutes(groups, fsRoutesDeps),
   });
 
@@ -296,6 +281,7 @@ async function buildHarnessWithStorage(storage: StorageProvider): Promise<Harnes
     startedAt: new Date(),
     clock,
     principalResolver: async () => principal,
+    connectionStatus: async () => ({ required: false, providers: [] }),
     registerRoutes: (groups) =>
       registerFsRoutes(groups, {
         activity: activity.service,
@@ -809,10 +795,7 @@ describe("POST /fs/compress and the resulting job", () => {
 
   it("maps a full job queue to rate_limited", async () => {
     const bus = createEventBus();
-    const server = createFakeSftpgoServer(SEED);
-    const client = createSftpgoClient({ baseUrl: "http://sftpgo.test", fetch: server.fetch });
-    const withToken = await withTokenFor(client, "alice", "secret");
-    const storage = createSftpgoStorageProvider({ client, withToken });
+    const storage = await seededStorage(SEED.alice);
     const principal: Principal = {
       accountId: ACCOUNT_ID,
       identityId: ALICE_IDENTITY_ID,
@@ -833,6 +816,7 @@ describe("POST /fs/compress and the resulting job", () => {
       startedAt: new Date(),
       clock: () => new Date(),
       principalResolver: async () => principal,
+      connectionStatus: async () => ({ required: false, providers: [] }),
       registerRoutes: (groups) =>
         registerFsRoutes(groups, {
           activity: activity.service,
@@ -909,7 +893,7 @@ describe("POST /fs/extract and the resulting job", () => {
   });
 
   it("fails the job when a compressed archive expands beyond jobMaxBytes", async () => {
-    const { app, fsEvents } = await buildHarness(SEED, "alice", "secret", 1000);
+    const { app, fsEvents } = await buildHarness(SEED, "alice", 1000);
     const zipBytes = await buildZipBuffer((zipfile) => {
       zipfile.addBuffer(Buffer.from("x".repeat(20_000)), "large.txt");
     });
@@ -1061,7 +1045,7 @@ describe("GET /fs/archive-entries", () => {
 describe("GET /fs/jobs, GET /fs/jobs/:id, POST /fs/jobs/:id/cancel", () => {
   it("lists only the caller's jobs", async () => {
     const { app } = await buildHarness();
-    const other = await buildHarness(SEED, "bob", "secret2");
+    const other = await buildHarness(SEED, "bob");
 
     await app.request("/api/v1/fs/compress", jsonPost({ paths: ["/dir"], format: "zip" }));
     await other.app.request(

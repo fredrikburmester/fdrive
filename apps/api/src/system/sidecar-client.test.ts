@@ -51,13 +51,13 @@ describe("callSidecar", () => {
       "http://indexer:8010",
       "/reindex",
       SCHEMA,
-      { method: "POST", jsonBody: { root: "sftpgo" } },
+      { method: "POST", jsonBody: { root: "files" } },
       { fetch: fetchStub },
     );
 
     const [, init] = fetchStub.mock.calls[0] as [string, RequestInit];
     expect(init.method).toBe("POST");
-    expect(init.body).toBe(JSON.stringify({ root: "sftpgo" }));
+    expect(init.body).toBe(JSON.stringify({ root: "files" }));
     expect((init.headers as Record<string, string>)["content-type"]).toBe("application/json");
   });
 

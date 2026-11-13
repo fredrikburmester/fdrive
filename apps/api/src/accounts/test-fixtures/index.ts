@@ -1,7 +1,6 @@
 import { MeResponse } from "@fdrive/contracts";
 import type { ProviderModule } from "@fdrive/core";
 import { createMemoryRepos } from "@fdrive/db/testing";
-import { createFakeSftpgoServer, createSftpgoClient, createSftpgoModule } from "@fdrive/sftpgo";
 import type { Logger } from "pino";
 import { vi } from "vitest";
 import { createApp } from "../../app.js";
@@ -10,19 +9,43 @@ import type { PrincipalResolver } from "../../auth/principal.js";
 import { createIdentityStorageFactory } from "../../auth/storage-factory.ts";
 import { memoryIdentityOperations } from "../../auth/test-fixtures/index.ts";
 import { loadConfig } from "../../config.js";
-import { memoryProviderService, seedSftpgoProvider } from "../../providers/test-fixtures/index.ts";
+import {
+  FAST_PASSWORDS,
+  localModuleFixture,
+  seedLocalUsers,
+  writeHomeFiles,
+} from "../../local/test-fixtures/index.ts";
+import { memoryProviderService } from "../../providers/test-fixtures/index.ts";
 import { registerAccountsRoutes } from "../routes.ts";
 import { createAccountsService } from "../service.ts";
 import type { AccountsDeps } from "../types.ts";
 import { createAccountViews } from "../views.ts";
 
-export const HARNESS_BASE_URL = "http://storage.test";
+/** The users every harness has, each signing in with `<username>-pass`. */
+export const HARNESS_USERS = ["alice", "bob", "carol", "dave", "eve", "frank"] as const;
 
+/**
+ * A network that is never there: the local folder makes no requests, so
+ * only modules a test adds (through `modules` and `wrapFetch`) reach one.
+ */
+const offline: typeof globalThis.fetch = async (input) => {
+  throw new TypeError(`fetch failed: no network in tests (${String(input)})`);
+};
+
+/**
+ * The API's auth and account routes over the deployment's local folder, as
+ * production pins it: a temporary storage root with a home per user holding
+ * `/a.docx` and `/report.txt`, and the users in the in-memory repos.
+ */
 export function accountsHarness(
   options: {
     principalResolver?: PrincipalResolver;
     wrapFetch?: (fetch: typeof globalThis.fetch) => typeof globalThis.fetch;
-    /** Modules registered beside the fake-backed SFTPGo one, by provider type. */
+    /**
+     * Modules by provider type, replacing the local folder's own: a fake
+     * `local` module keeps the seeded row and the users' passwords
+     * (`<username>-pass`) but changes how sign-in or storage behaves.
+     */
     modules?: Readonly<Record<string, ProviderModule>>;
   } = {},
 ) {
@@ -31,38 +54,38 @@ export function accountsHarness(
   const repos = createMemoryRepos();
   const links = memoryIdentityOperations(repos);
   const master = Buffer.alloc(32, 13);
+  const local = localModuleFixture(repos);
   const config = loadConfig({
     DATABASE_URL: "postgres://test/fdrive",
-    SFTPGO_URL: HARNESS_BASE_URL,
+    FDRIVE_STORAGE_ROOT: local.root,
     FDRIVE_MASTER_KEY: master.toString("base64"),
     FDRIVE_COOKIE_SECURE: "auto",
   });
-  const server = createFakeSftpgoServer({
-    users: ["alice", "bob", "carol", "dave", "eve", "frank"].map((username) => ({
-      username,
-      password: `${username}-pass`,
-      permissions: { "/": ["*"] },
-    })),
-    files: Object.fromEntries(
-      ["alice", "bob", "carol", "dave", "eve", "frank"].map((username) => [
-        username,
-        { "/a.docx": `${username} data`, "/report.txt": `${username} report` },
-      ]),
-    ),
-    now: clock,
-  });
-  const fetchImpl = options.wrapFetch?.(server.fetch) ?? server.fetch;
-  const client = createSftpgoClient({ baseUrl: HARNESS_BASE_URL, fetch: fetchImpl });
-  // The module authenticates and reads storage through this one client, so
-  // a test can spy on `client.login` or `client.user` to shape upstream
-  // behaviour exactly as production would see it.
+  for (const username of HARNESS_USERS) {
+    writeHomeFiles(local.root, username, {
+      "/a.docx": `${username} data`,
+      "/report.txt": `${username} report`,
+    });
+  }
+  const fetchImpl = options.wrapFetch?.(offline) ?? offline;
+  // The module asks `local.users` whether a password is right and whether a
+  // user is still active, so a test can spy on `users.verify` or
+  // `users.status` to shape what it sees exactly as production would.
   const providers = memoryProviderService(repos, {
     fetch: fetchImpl,
     clock,
-    sftpgoUrl: HARNESS_BASE_URL,
-    modules: { sftpgo: createSftpgoModule({ clientFor: () => client }), ...options.modules },
+    modules: { local: local.module, ...options.modules },
   });
-  const seeded = seedSftpgoProvider(repos, HARNESS_BASE_URL, { managedByEnv: true });
+  const seeded = (async () => {
+    await seedLocalUsers(
+      repos,
+      HARNESS_USERS.map((username) => ({ username, password: `${username}-pass` })),
+    );
+    await providers.seedFromEnvironment();
+    const [row] = await repos.providers.list();
+    if (row === undefined) throw new Error("the local folder was not seeded");
+    return row;
+  })();
   const tokenSource = createTokenSource({ repos, providers, master, clock, fetch: fetchImpl });
   const limiter = createLoginLimiter({ clock });
   const storageFactory = createIdentityStorageFactory({
@@ -105,6 +128,7 @@ export function accountsHarness(
     version: "test",
     startedAt: clock(),
     principalResolver: options.principalResolver ?? auth.principalResolver,
+    connectionStatus: async () => ({ required: false, providers: [] }),
     registerRoutes: (groups) => {
       auth.registerRoutes(groups);
       registerAccountsRoutes(groups, { service, views, config, clock });
@@ -148,10 +172,13 @@ export function accountsHarness(
     links,
     master,
     config,
-    server,
-    client,
+    /** The storage root: each user's files are under `<root>/<username>`. */
+    root: local.root,
+    /** What the local module asks about users; spy on it to shape sign-ins. */
+    users: local.users,
+    passwords: FAST_PASSWORDS,
     providers,
-    /** Resolves once the SFTPGo provider row exists; `call` and `login` await it themselves. */
+    /** Resolves to the local folder's row once it and the users exist; `call` and `login` await it. */
     seeded,
     tokenSource,
     limiter,

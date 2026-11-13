@@ -65,8 +65,8 @@ under a root literally named `Photos`. filesai's original defaults
 `/data` root; carried over verbatim here for continuity, they only do
 something useful again once you either name a root that way, or replace them
 with root-qualified patterns for a per-user layout, e.g.
-`"sftpgo/*/Photos/**"` to exclude every user's `Photos` folder under a root
-named `sftpgo`.
+`"files/*/Photos/**"` to exclude every user's `Photos` folder under the root
+`files`.
 
 A value change is logged (`settings changed: ...`) the same way the indexer
 logs its own settings changes.
@@ -76,7 +76,7 @@ logs its own settings changes.
 `INDEX_ROOTS` is the same comma-separated `name=path` format the indexer uses:
 
 ```
-INDEX_ROOTS=sftpgo=/roots/sftpgo,photos=/roots/photos
+INDEX_ROOTS=files=/data,photos=/roots/photos
 ```
 
 Each name is upserted into the shared `idx.roots` table (same rows the indexer
@@ -120,7 +120,7 @@ it at `<state_dir>/original-mappings/<that name>.json`, fsynced before the
 source file can be overwritten:
 
 ```json
-{"version":1,"root":"sftpgo","path":"fredrik/docs/scan.pdf","size":184320,
+{"version":1,"root":"files","path":"fredrik/docs/scan.pdf","size":184320,
  "mtime_ns":"1757000000123456789","original":"0123456789abcdef_scan.pdf",
  "sha256":"...","kept_at_ns":"1757200000000000000"}
 ```
@@ -210,16 +210,17 @@ Searchable PDFs through onboarding or System > Features to allow processing:
 docker compose up -d
 ```
 
-`ocr` mounts the same `FDRIVE_INDEX_SFTPGO_DIR` host directory as the indexer,
-but **read-write** (the indexer only needs read-only), plus its own state
-directory at `${FDRIVE_DATA_DIR}/ocr` for kept originals. The api's
+`ocr` mounts the files folder (`FDRIVE_FILES_DIR`) at `/data` as the root `files`,
+like the indexer, but **read-write** (the indexer only needs read-only), and writes as
+`FDRIVE_RUN_AS_UID`, the user that owns the files. Its own state directory at
+`${FDRIVE_DATA_DIR}/ocr` holds kept originals. The api's
 `FDRIVE_OCR_URL` (`http://ocr:8011`) is internal to the production network; the worker remains
 reachable while disabled. A connection failure reports unknown OCR status.
 
-Only the dev compose file uses `--profile index`. In `deploy/compose.dev.yaml`, `ocr` mounts the dev stack's seeded SFTPGo data
-volume read-write and starts with `OCR_RUN_ON_START=false` so bringing the
-profile up does not immediately rewrite dev fixtures; trigger a pass
-explicitly with `POST /run` when you want to exercise it.
+Only the dev compose file uses `--profile index`. In `deploy/compose.dev.yaml`, `ocr`
+mounts the dev files folder (`deploy/dev/.data/files`) read-write and starts with
+`OCR_RUN_ON_START=false` so bringing the profile up does not immediately rewrite dev
+fixtures; trigger a pass explicitly with `POST /run` when you want to exercise it.
 
 ## Migrating from filesai
 
@@ -228,7 +229,7 @@ TAB status`). `scripts/import-done-tsv.py` imports it into `idx.ocr_log` so
 the first pass here does not re-OCR everything filesai had already handled:
 
 ```sh
-python scripts/import-done-tsv.py done.tsv --root sftpgo \
+python scripts/import-done-tsv.py done.tsv --root files \
   --database-url "$DATABASE_URL"
 ```
 

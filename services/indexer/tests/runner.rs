@@ -47,7 +47,7 @@ fn save_setting(env: &Env, key: &str, value: serde_json::Value) {
 fn build_context_registers_the_root_with_the_persisted_features() {
     let env = Env::new();
     let ctx = build(env.config());
-    assert_eq!(EXPECTED_SCHEMA_VERSION, 1);
+    assert_eq!(EXPECTED_SCHEMA_VERSION, 2);
     assert_eq!(ctx.name, "r");
     assert!(ctx.root_id > 0);
     assert_eq!(ctx.abs_path, env.root);

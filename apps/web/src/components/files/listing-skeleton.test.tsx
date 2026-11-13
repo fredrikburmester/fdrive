@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { cleanup, render } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
+import { GRID_TILES } from "./file-grid";
 import { ListingSkeleton } from "./listing-skeleton";
 
 afterEach(cleanup);
@@ -44,5 +45,14 @@ describe("ListingSkeleton", () => {
       expect(tile.style.width).not.toBe("");
       expect(tile.style.height).not.toBe("");
     }
+  });
+
+  it("sizes grid placeholder tiles like the chosen grid size", () => {
+    const { container, rerender } = render(<ListingSkeleton variant="grid" />);
+    const firstTile = () =>
+      container.querySelector<HTMLElement>('[data-slot="skeleton-tile"]')?.style.width;
+    expect(firstTile()).toBe(`${GRID_TILES.medium.width}px`);
+    rerender(<ListingSkeleton variant="grid" gridSize="large" />);
+    expect(firstTile()).toBe(`${GRID_TILES.large.width}px`);
   });
 });

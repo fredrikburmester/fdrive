@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildFlatSeedPlan, PERF_USER, paddingWidth } from "./seed-plan.js";
+import { buildFlatSeedPlan, FORBIDDEN_USER, PERF_USER, paddingWidth } from "./seed-plan.js";
 
 describe("paddingWidth", () => {
   it("is 1 for a count of 0 or 1", () => {
@@ -57,10 +57,10 @@ describe("buildFlatSeedPlan", () => {
   });
 });
 
-describe("PERF_USER", () => {
-  it("has full permissions on its home directory", () => {
-    expect(PERF_USER.username).toBe("perf");
-    expect(PERF_USER.password).toBe("perf-password");
-    expect(PERF_USER.permissions["/"]).toEqual(["*"]);
+describe("PERF_USER and FORBIDDEN_USER", () => {
+  it("are two distinct local users with known passwords", () => {
+    expect(PERF_USER).toEqual({ username: "perf", password: "perf-password" });
+    expect(FORBIDDEN_USER.username).toBe("forbidden");
+    expect(FORBIDDEN_USER.password).not.toBe(PERF_USER.password);
   });
 });

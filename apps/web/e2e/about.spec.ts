@@ -1,44 +1,11 @@
 import { expect, test } from "@playwright/test";
 
-test("/about credits no storage backend", async ({ page }) => {
+test("/about credits no storage backend and drops the retired SFTPGo guides", async ({ page }) => {
   await page.goto("/about");
 
   await expect(page.getByText("Built on")).toHaveCount(0);
   await expect(page.getByRole("link", { name: "SFTPGo" })).toHaveCount(0);
-});
-
-test("/about drops the connected-provider line once every provider is disabled", async ({
-  page,
-}) => {
-  const response = await page.request.get("/api/v1/admin/providers");
-  expect(response.ok()).toBe(true);
-  const { providers } = (await response.json()) as {
-    providers: { id: string; enabled: boolean }[];
-  };
-  const enabled = providers.filter((provider) => provider.enabled);
-  expect(enabled.length).toBeGreaterThan(0);
-  await page.goto("/about");
-  await expect(page.getByText("Connected to")).toBeVisible();
-  try {
-    for (const provider of enabled) {
-      const disabled = await page.request.patch(`/api/v1/admin/providers/${provider.id}`, {
-        headers: { "x-requested-with": "fdrive" },
-        data: { enabled: false },
-      });
-      expect(disabled.ok()).toBe(true);
-    }
-    await page.goto("/about");
-    await expect(page.getByRole("region", { name: "About fdrive" })).toBeVisible();
-    await expect(page.getByText("Connected to")).toHaveCount(0);
-  } finally {
-    for (const provider of enabled) {
-      const restored = await page.request.patch(`/api/v1/admin/providers/${provider.id}`, {
-        headers: { "x-requested-with": "fdrive" },
-        data: { enabled: true },
-      });
-      expect(restored.ok()).toBe(true);
-    }
-  }
+  await expect(page.getByRole("link", { name: "Shared folders" })).toHaveCount(0);
 });
 
 test("/about identifies the running API and links to the project and feature guides", async ({
@@ -87,7 +54,7 @@ test("/about identifies the running API and links to the project and feature gui
     );
   }
   const guides = info.locator('a[href*="/blob/main/"]');
-  await expect(guides).toHaveCount(11);
+  await expect(guides).toHaveCount(9);
   for (const link of await info.locator('a[target="_blank"]').all()) {
     await expect(link).toHaveAttribute("rel", "noopener noreferrer");
   }

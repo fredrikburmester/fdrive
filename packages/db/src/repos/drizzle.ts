@@ -1,4 +1,4 @@
-import { and, eq, inArray, isNull, lte, sql } from "drizzle-orm";
+import { and, asc, count, eq, inArray, isNull, lte, ne, or, sql } from "drizzle-orm";
 import type { Db } from "../index.js";
 import {
   accounts,
@@ -8,6 +8,8 @@ import {
   fileTags,
   folderViews,
   identities,
+  localGrants,
+  localUsers,
   providers,
   recents,
   sessions,
@@ -37,6 +39,10 @@ import type {
   FolderViewSort,
   Identity,
   IdentityRepo,
+  LocalGrant,
+  LocalGrantRepo,
+  LocalUser,
+  LocalUserRepo,
   MetadataPathRepo,
   Provider,
   ProviderRepo,
@@ -388,6 +394,18 @@ function createSessionRepo(db: Db): SessionRepo {
     },
     async deleteExpired(now) {
       const deleted = await db.delete(sessions).where(lte(sessions.expiresAt, now)).returning();
+      return deleted.length;
+    },
+    async deleteByAccount(accountId, exceptIdHash) {
+      const deleted = await db
+        .delete(sessions)
+        .where(
+          and(
+            eq(sessions.accountId, accountId),
+            exceptIdHash === undefined ? undefined : ne(sessions.idHash, exceptIdHash),
+          ),
+        )
+        .returning({ idHash: sessions.idHash });
       return deleted.length;
     },
   };
@@ -977,10 +995,146 @@ function createMetadataPathRepo(db: Db): MetadataPathRepo {
   };
 }
 
+function toLocalUser(row: typeof localUsers.$inferSelect): LocalUser {
+  return {
+    username: row.username,
+    passwordHash: row.passwordHash,
+    disabled: row.disabled,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+  };
+}
+
+const sameName = (username: string) =>
+  eq(sql`lower(${localUsers.username})`, username.toLowerCase());
+
+export function createLocalUserRepo(db: Db): LocalUserRepo {
+  return {
+    async get(username) {
+      const [row] = await db.select().from(localUsers).where(sameName(username));
+      return row === undefined ? null : toLocalUser(row);
+    },
+    async list() {
+      const rows = await db.select().from(localUsers).orderBy(asc(localUsers.username));
+      return rows.map(toLocalUser);
+    },
+    async count() {
+      const [row] = await db.select({ value: count() }).from(localUsers);
+      return row?.value ?? 0;
+    },
+    async create(input) {
+      try {
+        const [row] = await db
+          .insert(localUsers)
+          .values({ username: input.username, passwordHash: input.passwordHash })
+          .returning();
+        if (row === undefined) throw new Error("local user insert returned no row");
+        return toLocalUser(row);
+      } catch (error) {
+        if (isUniqueViolation(error)) throw new ConflictError("username already exists");
+        throw error;
+      }
+    },
+    async update(username, patch) {
+      const [row] = await db
+        .update(localUsers)
+        .set({
+          ...(patch.passwordHash !== undefined ? { passwordHash: patch.passwordHash } : {}),
+          ...(patch.disabled !== undefined ? { disabled: patch.disabled } : {}),
+          updatedAt: sql`now()`,
+        })
+        .where(sameName(username))
+        .returning();
+      return row === undefined ? null : toLocalUser(row);
+    },
+    async delete(username) {
+      await db.delete(localUsers).where(sameName(username));
+    },
+  };
+}
+
+function toLocalGrant(row: typeof localGrants.$inferSelect): LocalGrant {
+  return {
+    id: row.id,
+    ownerUsername: row.ownerUsername,
+    path: row.path,
+    granteeUsername: row.granteeUsername,
+    access: row.access === "write" ? "write" : "read",
+    createdAt: row.createdAt,
+  };
+}
+
+/** `path` itself and everything under it. */
+function atOrUnder(path: string) {
+  return or(
+    eq(localGrants.path, path),
+    sql`starts_with(${localGrants.path}, ${path === "/" ? "/" : `${path}/`})`,
+  );
+}
+
+function createLocalGrantRepo(db: Db): LocalGrantRepo {
+  return {
+    async get(id) {
+      const [row] = await db.select().from(localGrants).where(eq(localGrants.id, id));
+      return row === undefined ? null : toLocalGrant(row);
+    },
+    async listReceived(grantee) {
+      const rows = await db
+        .select({ grant: localGrants })
+        .from(localGrants)
+        .innerJoin(localUsers, eq(localUsers.username, localGrants.ownerUsername))
+        .where(and(eq(localGrants.granteeUsername, grantee), eq(localUsers.disabled, false)))
+        .orderBy(asc(localGrants.createdAt), asc(localGrants.id));
+      return rows.map((row) => toLocalGrant(row.grant));
+    },
+    async listOwned(owner, path) {
+      const rows = await db
+        .select()
+        .from(localGrants)
+        .where(
+          and(
+            eq(localGrants.ownerUsername, owner),
+            path === undefined ? undefined : eq(localGrants.path, path),
+          ),
+        )
+        .orderBy(asc(localGrants.createdAt), asc(localGrants.id));
+      return rows.map(toLocalGrant);
+    },
+    async put(input) {
+      const [row] = await db
+        .insert(localGrants)
+        .values(input)
+        .onConflictDoUpdate({
+          target: [localGrants.ownerUsername, localGrants.path, localGrants.granteeUsername],
+          set: { access: input.access },
+        })
+        .returning();
+      if (row === undefined) throw new Error("local grant insert returned no row");
+      return toLocalGrant(row);
+    },
+    async delete(id) {
+      await db.delete(localGrants).where(eq(localGrants.id, id));
+    },
+    async movePrefix(owner, from, to) {
+      await db
+        .update(localGrants)
+        .set({ path: sql`${to} || substr(${localGrants.path}, ${from.length + 1})` })
+        .where(and(eq(localGrants.ownerUsername, owner), atOrUnder(from)));
+    },
+    async deletePrefix(owner, path) {
+      await db
+        .delete(localGrants)
+        .where(and(eq(localGrants.ownerUsername, owner), atOrUnder(path)));
+    },
+  };
+}
+
 /** Builds every `Repos` interface as Drizzle queries against `db`. */
 export function createRepos(db: Db): Repos {
   return {
     providers: createProviderRepo(db),
+    localUsers: createLocalUserRepo(db),
+    localGrants: createLocalGrantRepo(db),
     accounts: createAccountRepo(db),
     identities: createIdentityRepo(db),
     credentials: createCredentialRepo(db),

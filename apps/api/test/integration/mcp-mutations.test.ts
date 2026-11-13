@@ -1,7 +1,6 @@
 import { createRecycleFolderTrash, withMoveToTrash } from "@fdrive/core";
-import { createSftpgoClient, createSftpgoStorageProvider } from "@fdrive/sftpgo";
-import { startSftpgo } from "@fdrive/testkit";
-import { createWebdavClient, createWebdavStorageProvider } from "@fdrive/webdav";
+import { createLocalStorage } from "@fdrive/local";
+import { startLocalStorage } from "@fdrive/testkit";
 import { type ServerType, serve } from "@hono/node-server";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
@@ -15,7 +14,7 @@ import { registerMcpRoutes } from "../../src/mcp/routes.ts";
 import { buildIdentity } from "../../src/scoping/test-fixtures/index.ts";
 import { generateApiToken } from "../../src/tokens/token-format.ts";
 
-let sftp: Awaited<ReturnType<typeof startSftpgo>>;
+let storage: Awaited<ReturnType<typeof startLocalStorage>>;
 let server: ServerType;
 let client: Client;
 let principal: Principal;
@@ -23,22 +22,22 @@ let revoked = false;
 let indexAvailable = true;
 
 beforeAll(async () => {
-  sftp = await startSftpgo({
-    users: [{ username: "alice", password: "mcp-fixture-only", permissions: { "/": ["*"] } }],
-    folders: [],
-    files: { alice: { "/source.txt": "source", "/destination.txt": "keep destination" } },
+  storage = await startLocalStorage({
+    users: [
+      { username: "alice", password: "mcp-fixture-only" },
+      { username: "bob", password: "mcp-fixture-only" },
+    ],
+    files: {
+      alice: { "/source.txt": "source", "/destination.txt": "keep destination" },
+      bob: { "/destination.txt": "keep destination" },
+    },
   });
-  const upstream = createSftpgoClient({ baseUrl: sftp.baseUrl });
-  const upstreamToken = await upstream.login({ username: "alice", password: "mcp-fixture-only" });
   principal = {
     accountId: "account-1",
     identityId: "identity-1",
     username: "alice",
     isAdmin: false,
-    storage: createSftpgoStorageProvider({
-      client: upstream,
-      withToken: (fn) => fn(upstreamToken.accessToken),
-    }),
+    storage: createLocalStorage({ home: storage.path("alice") }),
   };
   const token = generateApiToken();
   const app = new Hono() as AppHono;
@@ -53,12 +52,12 @@ beforeAll(async () => {
           indexAvailable
             ? {
                 available: true,
-                scopes: [{ rootName: "sftpgo", fsPrefix: "/alice", virtualPrefix: "/" }],
+                scopes: [{ rootName: "files", fsPrefix: "/alice", virtualPrefix: "/" }],
               }
             : { available: false, reason: "provider_mismatch" },
       },
       indexQueries: {
-        rootIdsByName: async () => ({ sftpgo: 1 }),
+        rootIdsByName: async () => ({ files: 1 }),
         recordMove: async () => {
           throw new Error("injected audit failure");
         },
@@ -87,7 +86,7 @@ afterAll(async () => {
     await new Promise<void>((resolve, reject) =>
       server.close((error) => (error ? reject(error) : resolve())),
     );
-  await sftp?.stop();
+  await storage?.stop();
 });
 
 it("preserves occupied targets, reports completed writes truthfully, and rejects a revoked token", async () => {
@@ -116,13 +115,11 @@ it("preserves occupied targets, reports completed writes truthfully, and rejects
   await expect(client.callTool({ name: "list_directory", arguments: {} })).rejects.toThrow();
 });
 
-it("runs full file management over real WebDAV without indexed roots and enforces folder grants", async () => {
+it("runs full file management without indexed roots and enforces folder grants", async () => {
   revoked = false;
   indexAvailable = false;
-  const base = createWebdavStorageProvider({
-    client: createWebdavClient({ baseUrl: sftp.webdavUrl }),
-    credential: async () => ({ username: "alice", password: "mcp-fixture-only" }),
-  });
+  // Trash by moving into the recycle folder, the way the files folder keeps it.
+  const base = createLocalStorage({ home: storage.path("bob") });
   principal = {
     ...principal,
     tokenAccess: { mode: "full", paths: ["/mcp"] },

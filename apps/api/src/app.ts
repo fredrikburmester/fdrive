@@ -68,10 +68,9 @@ export interface AppDeps {
   readonly principalResolver?: PrincipalResolver;
   /**
    * Reports whether fdrive setup is required and the enabled providers to
-   * show on `/about`. Defaults to deriving this from `config.sftpgoUrl`
-   * alone (required when unset), which is enough for tests that do not
-   * exercise provider rows; `composeApp` wires the real
-   * `ProviderService`-backed version.
+   * show on `/about`. Defaults to "set up, no providers", which is enough
+   * for tests that do not exercise provider rows; `composeApp` wires the
+   * real `ProviderService`-backed version.
    */
   readonly connectionStatus?: () => Promise<ConnectionStatus>;
   /**
@@ -125,16 +124,6 @@ export function redactMcpTokenPath(path: string): string {
 }
 
 /**
- * Extracts the host (hostname and, when non-default for the scheme, port)
- * from a configured SFTPGo URL, for display on the public `/about` route.
- * Never returns anything beyond the host: no scheme, no path, no
- * credentials, even if `sftpgoUrl` contains them.
- */
-export function sftpgoHostLabel(sftpgoUrl: string): string {
-  return new URL(sftpgoUrl).host;
-}
-
-/**
  * Builds the fdrive API Hono application: request id handling, structured
  * request logging, security headers, a CSRF guard over every `/api/v1`
  * route, the public and authed `/api/v1` route groups, and the
@@ -145,14 +134,7 @@ export function createApp(deps: AppDeps): AppHono {
   const clock = deps.clock ?? (() => new Date());
   const principalResolver: PrincipalResolver = deps.principalResolver ?? (async () => null);
   const connectionStatus: () => Promise<ConnectionStatus> =
-    deps.connectionStatus ??
-    (async () =>
-      deps.config.sftpgoUrl === undefined
-        ? { required: true, providers: [] }
-        : {
-            required: false,
-            providers: [{ type: "sftpgo", host: sftpgoHostLabel(deps.config.sftpgoUrl) }],
-          });
+    deps.connectionStatus ?? (async () => ({ required: false, providers: [] }));
   const app: AppHono = new Hono();
 
   app.use("*", requestIdMiddleware({ headerName: REQUEST_ID_HEADER }));

@@ -1,11 +1,10 @@
 # Install fdrive
 
 fdrive runs with Docker Compose v2 on any amd64 or arm64 host, such as a Linux server, a NAS
-or Unraid (see [resource requirements](../README.md#resource-requirements)). It needs an
-SFTPGo server: people sign in with their SFTPGo accounts, and fdrive browses files through
-SFTPGo's API. Use your existing SFTPGo as it is. Installing fdrive never needs a second
-instance or changes to its users, files or configuration. No SFTPGo yet? Add the
-[bundled one](REFERENCE.md#bundled-sftpgo).
+or Unraid (see [resource requirements](../README.md#resource-requirements)). It serves one
+folder on that host: each user's files are plain files in a folder named after them, so the
+host's own backups, rsync, SMB or Syncthing keep working. fdrive keeps its users in its own
+database. Coming from SFTPGo? See [upgrading from SFTPGo](#upgrading-from-sftpgo).
 
 Paths and addresses below are examples.
 
@@ -32,52 +31,35 @@ its folder, `.env` and data.
 **Portainer, Dockge, Unraid's Compose Manager or a NAS app:** create a stack from
 `compose.yaml` and set `FDRIVE_MASTER_KEY` (`openssl rand -base64 32`) and
 `POSTGRES_PASSWORD` (`openssl rand -hex 32`) in its environment. Also set `FDRIVE_DATA_DIR`
-to an absolute path you back up, since the stack's own folder may not be one.
+and `FDRIVE_FILES_DIR` to absolute paths you back up, since the stack's own folder may not be
+one.
 
 Optional `.env` settings:
 
 - `FDRIVE_DATA_DIR`: where fdrive keeps its database and other state (default `./data`). Set
-  it before the first start and keep it on updates. It doesn't point at SFTPGo's files; that's
-  step 2.
-- `SFTPGO_URL`: leave unset and enter the address during setup. When set, fdrive adds that
-  SFTPGo server at startup, and its address can then only change through this variable.
+  it before the first start and keep it on updates.
+- `FDRIVE_FILES_DIR`: the folder with everyone's files (default `files` inside
+  `FDRIVE_DATA_DIR`). See step 2.
+- `FDRIVE_RUN_AS_UID`: the user ID that owns the files (default `1000`). See step 2.
 
-## 2. Mount SFTPGo's files (optional)
+## 2. Choose the files folder
 
-Browsing works without this step. Thumbnails, full-text search, both OCR modes, semantic
-search and image search read files from disk, so fdrive's workers need SFTPGo's data folder
-on this host. Only this step can provide it; the browser setup can't mount folders. Mounting
-enables nothing and downloads nothing: you pick features during setup.
-
-Find SFTPGo's volume for user files, not its config or database. In Unraid, that's the Host
-Path and Container Path of its data mapping. Otherwise:
-
-```sh
-docker inspect <sftpgo-container> --format '{{range .Mounts}}{{.Source}} -> {{.Destination}}{{println}}{{end}}'
-```
-
-For `/srv/files -> /srv/sftpgo/data`, set the host path and SFTPGo's container path in
-`.env`:
+The files folder holds one folder per user: `alice`'s files are in `<folder>/alice`. fdrive
+creates a user's folder when it first needs it, and a folder that already exists becomes the
+files of the user with that name. To keep files somewhere other than the data folder, set it
+in `.env` before the first start:
 
 ```dotenv
-FDRIVE_INDEX_SFTPGO_DIR=/srv/files
-FDRIVE_INDEX_SFTPGO_PATH=/srv/sftpgo/data
+FDRIVE_FILES_DIR=/srv/files
 ```
 
-- The host path must directly contain one folder per user: `alice` is read from
-  `/srv/files/alice`. Check with `ls` before starting, and don't create an empty folder to
-  match a guess.
-- SFTPGo's image keeps users in `/srv/sftpgo/data`. If the volume is mounted at
-  `/srv/sftpgo`, use its `data` subfolder as the host path.
-- `/srv/sftpgo/data` is already the default container path. The workers see the folder at
-  `/roots/sftpgo`; never put that path in either setting.
-- Without `FDRIVE_INDEX_SFTPGO_DIR`, the workers get an empty `./data/roots/sftpgo`. It isn't
-  connected to SFTPGo, even if it reports readable.
-- The indexer mounts the folder read-only. The OCR worker mounts it read-write for searchable
-  PDF conversion, which stays off until you turn it on.
-
-Other file owners, Docker named volumes or home folders not named after users: see
-[permissions and other storage layouts](REFERENCE.md#processing-storage-and-permissions).
+- The api, backup worker and OCR worker mount it read-write and write as `FDRIVE_RUN_AS_UID`;
+  the indexer mounts it read-only and reads as the same user. All of them see it at `/data`.
+- Existing files must belong to that user. Check with `ls -ln /srv/files` and set
+  `FDRIVE_RUN_AS_UID` to the owner's ID rather than changing ownership. A new, empty folder is
+  handed to that user on the first start.
+- It must be a folder on this host, such as a local disk or a share the host has mounted.
+  Use a path, not a Docker named volume.
 
 ## 3. Start fdrive
 
@@ -98,42 +80,30 @@ To check the stack:
 - `docker compose ps` shows everything running, with `proxy`, `web`, `api` and `db` healthy.
 - `curl -f http://localhost:8090/api/v1/health` returns `"status":"ok"`, and the setup page
   opens from another device. The local check alone doesn't prove LAN access.
-- If you did step 2, the indexer's `/roots/sftpgo` must come from your folder with
-  `writable=false`. A healthy container doesn't prove it:
-
-  ```sh
-  docker inspect "$(docker compose ps -q indexer)" --format '{{range .Mounts}}{{.Source}} -> {{.Destination}} (writable={{.RW}}){{println}}{{end}}'
-  ```
+- `docker compose exec api ls /data` lists the folders in your files folder. An empty list for
+  a folder that has files means `FDRIVE_FILES_DIR` points somewhere else.
 
 ## 4. Set up fdrive in the browser
-
-fdrive asks for SFTPGo's HTTP address, which the API container must reach: the host's IP and
-SFTPGo's HTTP port, such as `http://192.168.1.20:8080`. A container name like
-`http://sftpgo:8080` works only when fdrive's API shares SFTPGo's Docker network (see
-[existing Docker networks](REFERENCE.md#existing-sftpgo-docker-network)). `localhost` is the
-fdrive container itself, and 2022 is SFTPGo's usual SFTP port, not HTTP. Check the real HTTP
-port rather than guessing.
 
 The walkthrough:
 
 1. **Claim**: enter the one-time token from `docker compose logs api`.
-2. **Connection**: enter SFTPGo's address and pass **Test connection**.
-3. **Administrator**: sign in as a normal SFTPGo file user, with its one-time code if it has
-   one, not as a WebAdmin. That account gets access to fdrive's settings; its SFTPGo
-   permissions stay the same.
-4. **Features**: turn each of the six on or skip it. Search OCR doesn't change files.
+2. **Account**: choose your username and password. That account is the first user and
+   fdrive's administrator. Its files are `<folder>/<username>`, so to keep an existing folder,
+   use its name.
+3. **Features**: turn each of the six on or skip it. Search OCR doesn't change files.
    Searchable PDF conversion rewrites PDFs and keeps the originals as its retention settings
    say.
-5. **Trash**: SFTPGo recycle-bin support. Set up and test [its SFTPGo rule](../docs/TRASH.md)
-   first.
-6. **ONLYOFFICE**: view and edit documents in the browser. Confirm fdrive's address; editing
-   needs a list of SFTPGo usernames. The bundled editor starts on its own. See
-   [Office setup](../docs/OFFICE.md).
-7. **Finish**: until then, fdrive stays on `/setup`, and a reload keeps your choices.
+4. **Trash**: deleted items wait in each user's Trash before they are removed. See
+   [Trash](../docs/TRASH.md).
+5. **Server address** and **Office**: the address everyone opens fdrive at, and viewing and
+   editing documents in the browser; editing needs a list of usernames. The bundled editor
+   starts on its own. See [Office setup](../docs/OFFICE.md).
+6. **Review**: until you finish, fdrive stays on `/setup`, and a reload keeps your choices.
 
-Trash and ONLYOFFICE don't need step 2. Other people just sign in with their own SFTPGo
-accounts. Everything stays editable in **System > Features**. Features start off and download
-models only when needed, and browsing keeps working if one is unavailable.
+Add everyone else under **System > Users**. Everything stays editable in
+**System > Features**. Features start off and download models only when needed, and
+browsing keeps working if one is unavailable.
 
 Afterwards, wait until each enabled feature shows as ready in **System > Features**, or run
 `docker compose exec api node wait-ready.ts`, which returns once they all are. Then look for a
@@ -141,8 +111,8 @@ real thumbnail or search result: healthy containers don't prove a feature works 
 user.
 
 Installing for someone else? Leave the feature choices, including PDF conversion, to them.
-Report the address, the version on the **About** page, whether step 2 was done and any failed
-check, without secrets.
+Report the address, the version on the **About** page, the files folder and any failed check,
+without secrets.
 
 ## Updates and versions
 
@@ -197,25 +167,63 @@ docker compose pull && docker compose up -d --remove-orphans
 
 **Installed from a git checkout?** Releases from 0.3.0 have no `update.sh`. Update from the
 checkout's `deploy` folder like any other installation, and move extra Compose files from
-`FDRIVE_COMPOSE_FILES` to `COMPOSE_FILE` in `.env`, the list Compose itself reads.
+`FDRIVE_COMPOSE_FILES` to `COMPOSE_FILE` in `.env`, the list Compose itself reads. The
+checkout's `compose.yaml` runs the newest release, so to try a pre-release from a checkout,
+set `FDRIVE_VERSION` to it in `.env` as well.
+
+**Used WebDAV or S3 storage?** The files folder is now fdrive's only storage. The update
+disables WebDAV and S3 storage and their logins disappear, so copy anything you need from them
+into the files folder first. Backups to an S3 bucket keep working.
+
+## Upgrading from SFTPGo
+
+Earlier releases browsed files through SFTPGo. fdrive now serves SFTPGo's data folder itself,
+in place, with the same layout, so nothing is copied.
+
+1. Stop SFTPGo, so fdrive is the only one writing the folder.
+2. Download `compose.yaml` again. In `.env`, set `FDRIVE_FILES_DIR` to SFTPGo's data folder on
+   the host, the one with one folder per user (with the bundled SFTPGo, the `sftpgo/data`
+   folder inside `FDRIVE_DATA_DIR`). If `.env` already sets `FDRIVE_INDEX_SFTPGO_DIR`, that
+   folder is used and nothing needs to change. Keep `.env`, `FDRIVE_DATA_DIR` and the database as
+   they are.
+3. If the files aren't owned by user ID 1000, set `FDRIVE_RUN_AS_UID` to their owner
+   (`FDRIVE_INDEX_UID` still works). Remove `compose.sftpgo.yaml` and
+   `compose.sftpgo-network.yaml` from `COMPOSE_FILE` in `.env`.
+4. Run `docker compose pull && docker compose up -d --remove-orphans`.
+
+On the first start:
+
+- The SFTPGo storage becomes the local folder. Every user who has signed in to fdrive before
+  keeps their password, but only administrators (the setup owner and anyone marked admin) can
+  sign in right away. Everyone else is added disabled, because fdrive can't tell whether
+  SFTPGo disabled or removed them since they last signed in: an administrator enables each one
+  under **System > Users**. Users who never signed in to fdrive aren't listed at all: an
+  administrator adds them there with the same username, and their folder is theirs again.
+- The search index carries over.
+- Share links made in fdrive keep working. Password-protected ones need a new password.
+  Links made in SFTPGo's own web client go away with SFTPGo.
+- fdrive's Trash lives in `.trash/.fdrive-move-v1` in each user's folder. Items SFTPGo's
+  recycle rule moved to `.trash` stay on disk but aren't listed.
+- SFTPGo virtual folders aren't part of anyone's files: theirs stay where SFTPGo kept them.
+  Move them into a user's folder to keep them in fdrive.
+- `SFTPGO_URL`, `FDRIVE_INDEX_SFTPGO_PATH` and the `SFTPGO_ADMIN_*` settings no longer do
+  anything.
+
+Once everyone can sign in, SFTPGo's container and configuration can go. Keep its data folder:
+it is fdrive's files folder now.
 
 ## Troubleshooting
 
 - **Can't open fdrive**: check the containers, port, host address and firewall. With
   `FDRIVE_HTTP_BIND=127.0.0.1`, only the host itself can connect.
-- **Test connection fails**: check SFTPGo's HTTP port and that the API container can reach it.
-  The SFTP port won't work.
-- **Indexer healthy, but a user's folder fails**: compare the indexer's mount (step 3) with
-  SFTPGo's volume (step 2). A readable root doesn't prove the user's folder is there.
-- **Folder check returns 400, 403 or 404**: check the folder, permissions and mapping; the
-  indexer isn't down. If it has the empty fallback folder, fix step 2 first.
+- **A user's files are missing**: their folder must be `<files folder>/<username>`, with the
+  same spelling. Compare `docker compose exec api ls /data` with the folder on the host.
+- **Uploads or new folders fail**: the files must belong to `FDRIVE_RUN_AS_UID`. At start the
+  api logs `cannot write /data` when that user can't write the folder.
 - **Indexer times out, refuses connections or returns 5xx**: check its startup, logs, network
   and health. A folder mapping can't fix an outage.
-- **Browsing works, search or thumbnails don't**: check that the feature is on, its worker is
-  ready and the user's verified folder. Per-user exceptions go in **Account**, not setup.
-- **A folder "is not indexed"**: it's an SFTPGo virtual folder without a mapping. Map it, or
-  mark it not indexed, in **Account**; its `mapped_path` must be inside an indexed root. See
-  [SFTPGo virtual folders](REFERENCE.md#sftpgo-virtual-folders).
+- **Browsing works, search or thumbnails don't**: check that the feature is on and its worker
+  is ready.
 - **PDF conversion blocked**: its worker needs read-write access. Search only needs read.
 - **Feature "failed" while containers look healthy**: its controller gave up starting it. The
   reason is on **System > Features** and in `detail` of `GET /api/v1/health`. It retries after
@@ -225,14 +233,14 @@ checkout's `deploy` folder like any other installation, and move extra Compose f
 - **Indexer unhealthy after the database was recreated**: expected while Postgres starts; it
   reconnects on its own. If it stays unhealthy, Postgres isn't up.
 
-For more, see `docker compose logs --tail=100 indexer`, **System** in fdrive and the
+For more, see `docker compose logs --tail=100 api`, **System** in fdrive and the
 [advanced reference](REFERENCE.md).
 
 ## Installation backups
 
 The stack includes a backup worker with encrypted storage. In **System → Backups**, set the
-recovery key, schedules and optional S3/B2 or fileserver destinations. Upload exported
-external configuration ZIPs there to include their saved versions. Keep the recovery key and
-destination credentials outside fdrive. User files aren't included, so back them up on the
-fileserver. See [backups and recovery](../docs/BACKUPS.md), including recovery into a new,
-empty database.
+recovery key, schedules and optional S3/B2 or folder destinations. Upload exported external
+configuration ZIPs there to include their saved versions. Keep the recovery key and
+destination credentials outside fdrive. User files aren't included, so back up the files
+folder with the host's own tools. See [backups and recovery](../docs/BACKUPS.md), including
+recovery into a new, empty database.

@@ -1,6 +1,6 @@
 "use client";
 
-import type { FsEntry } from "@fdrive/contracts";
+import type { FsEntry, ReceivedGrant } from "@fdrive/contracts";
 import { baseName, parentPath } from "@fdrive/core";
 import { XIcon } from "lucide-react";
 import type { Route } from "next";
@@ -8,6 +8,8 @@ import { useRouter } from "next/navigation";
 import { useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { VirtualFileListing } from "@/components/files/virtual-file-listing";
+import { LeaveSharedFolderDialog } from "@/components/grants/leave-shared-folder-dialog";
+import { ShareWithPeopleDialog } from "@/components/grants/share-with-people-dialog";
 import { ShareDialog } from "@/components/shares/share-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -22,6 +24,8 @@ import {
   planDownload,
 } from "@/lib/files/download";
 import { buildDownloadDeps } from "@/lib/files/download-deps";
+import { entryRestrictions } from "@/lib/grants/paths";
+import { useReceivedGrants } from "@/lib/grants/queries";
 import {
   apiClient,
   capabilitiesFor,
@@ -84,6 +88,7 @@ export function VirtualListing({ title, paths, onRemoveMissing }: VirtualListing
   const { data: trashStatus } = useTrashStatus();
   const { data: me } = useMe();
   const capabilities = capabilitiesFor(me);
+  const received = useReceivedGrants(capabilities.shareWithPeople);
 
   const liveEntries = useMemo(
     () => resolved.flatMap((item) => (item.entry !== null ? [item.entry] : [])),
@@ -92,6 +97,8 @@ export function VirtualListing({ title, paths, onRemoveMissing }: VirtualListing
   const missing = useMemo(() => resolved.filter((item) => item.entry === null), [resolved]);
   const anchorRef = useRef<AnchorDownloader | null>(null);
   const [sharing, setSharing] = useState<FsEntry[] | null>(null);
+  const [sharingWithPeople, setSharingWithPeople] = useState<FsEntry | null>(null);
+  const [leaving, setLeaving] = useState<ReceivedGrant | null>(null);
   const [renameTarget, setRenameTarget] = useState<FsEntry | null>(null);
   const [deleteTargets, setDeleteTargets] = useState<FsEntry[]>([]);
 
@@ -144,6 +151,12 @@ export function VirtualListing({ title, paths, onRemoveMissing }: VirtualListing
     switch (action) {
       case "share":
         setSharing([...context]);
+        break;
+      case "shareWithPeople":
+        setSharingWithPeople(entry);
+        break;
+      case "leave":
+        setLeaving(entryRestrictions(entry, capabilities, received).leave);
         break;
       case "open":
         handleOpen(entry);
@@ -242,6 +255,7 @@ export function VirtualListing({ title, paths, onRemoveMissing }: VirtualListing
                   hideArchive
                   showReveal
                   capabilities={capabilities}
+                  received={received}
                 />
               </div>
             )}
@@ -270,6 +284,13 @@ export function VirtualListing({ title, paths, onRemoveMissing }: VirtualListing
         )}
       </div>
       {sharing !== null && <ShareDialog entries={sharing} onClose={() => setSharing(null)} />}
+      {sharingWithPeople !== null && (
+        <ShareWithPeopleDialog
+          folder={sharingWithPeople}
+          onClose={() => setSharingWithPeople(null)}
+        />
+      )}
+      <LeaveSharedFolderDialog grant={leaving} onClose={() => setLeaving(null)} />
       <RenameDialog
         entry={renameTarget}
         onOpenChange={(open) => {

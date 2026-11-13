@@ -6,8 +6,8 @@ from fdrive_ocr.config import DEFAULT_EXCLUDE_GLOBS, Config, parse_glob_list, pa
 
 
 def test_parse_roots_multiple() -> None:
-    assert parse_roots("sftpgo=/roots/sftpgo,photos=/roots/photos") == {
-        "sftpgo": "/roots/sftpgo",
+    assert parse_roots("files=/roots/files,photos=/roots/photos") == {
+        "files": "/roots/files",
         "photos": "/roots/photos",
     }
 
@@ -17,7 +17,7 @@ def test_parse_roots_empty_string() -> None:
 
 
 def test_parse_roots_skips_malformed_pairs() -> None:
-    assert parse_roots("sftpgo=/roots/sftpgo,,broken,=novalue,noeq=") == {"sftpgo": "/roots/sftpgo"}
+    assert parse_roots("files=/roots/files,,broken,=novalue,noeq=") == {"files": "/roots/files"}
 
 
 def test_parse_glob_list_trims_and_drops_empty_entries() -> None:
@@ -57,7 +57,7 @@ def test_config_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_config_reads_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("INDEX_ROOTS", "sftpgo=/roots/sftpgo")
+    monkeypatch.setenv("INDEX_ROOTS", "files=/roots/files")
     monkeypatch.setenv("OCR_PORT", "9000")
     monkeypatch.setenv("OCR_RUN_ON_START", "false")
     monkeypatch.setenv("OCR_TIMEOUT_SECONDS", "60")
@@ -68,7 +68,7 @@ def test_config_reads_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("OCR_INCLUDE_GLOBS", "fredrik/**, alice/**")
     monkeypatch.setenv("OCR_MAX_MB", "50")
     cfg = Config()
-    assert cfg.roots == {"sftpgo": "/roots/sftpgo"}
+    assert cfg.roots == {"files": "/roots/files"}
     assert cfg.ocr_port == 9000
     assert cfg.run_on_start is False
     assert cfg.timeout_seconds == 60

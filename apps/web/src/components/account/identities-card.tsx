@@ -9,13 +9,11 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Skeleton } from "@/components/ui/skeleton";
 import type { AccountIdentity } from "@/lib/account/identities";
 import { useAccountTransition } from "@/lib/account/transition";
-import { storageNote } from "@/lib/identity/capabilities";
 import { loginDisplay } from "@/lib/identity/login-display";
-import { IdentityScope } from "./identity-scope";
 import { LinkLoginDialog } from "./link-login-dialog";
 import { UnlinkLoginDialog } from "./unlink-login-dialog";
 
-/** Account page card: every login linked to the signed-in account, each with its index status where its provider is indexed. */
+/** Account page card: every login linked to the signed-in account. */
 export function IdentitiesCard() {
   const { data: me, isLoading } = useShellMe();
   const [linkOpen, setLinkOpen] = useState(false);
@@ -34,7 +32,6 @@ export function IdentitiesCard() {
         ) : (
           me.identities.map((identity) => {
             const display = loginDisplay(identity);
-            const note = storageNote(identity.capabilities);
             return (
               <div
                 key={identity.id}
@@ -63,10 +60,6 @@ export function IdentitiesCard() {
                     </Button>
                   </div>
                 </div>
-                {note !== null && <p className="text-xs text-muted-foreground">{note}</p>}
-                {identity.capabilities.scopeMapping && (
-                  <IdentityScope identityId={identity.id} username={identity.username} />
-                )}
               </div>
             );
           })

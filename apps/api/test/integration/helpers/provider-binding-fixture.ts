@@ -7,7 +7,11 @@ import { createTokenSource } from "../../../src/auth/token-source.js";
 import { composeApp } from "../../../src/composition.js";
 import { loadConfig } from "../../../src/config.js";
 import { createProviderService } from "../../../src/providers/service.js";
-import { startProviderServer, USERNAME } from "./provider-binding-server.ts";
+import { providerFixtureModule, startProviderServer, USERNAME } from "./provider-binding-server.ts";
+
+/** The fixture module in the registry's only slot; see `providerFixtureModule`. */
+const MODULES = { local: providerFixtureModule() };
+const TYPE = "local";
 
 /**
  * Two isolated upstream servers, A and B, with an identity bound to A. A
@@ -32,9 +36,10 @@ export async function providerFixture(repos: Repos = createMemoryRepos()) {
       repos,
       fetch: globalThis.fetch,
       clock,
-      environment: { sftpgoUrl: undefined, homeTemplate: "sftpgo:/{username}", indexRootNames: [] },
+      environment: { indexRootNames: [] },
+      modules: MODULES,
     });
-    const providerA = await repos.providers.ensure({ type: "sftpgo", baseUrl: a.baseUrl });
+    const providerA = await repos.providers.ensure({ type: TYPE, baseUrl: a.baseUrl });
     const tokenDeps = { repos, providers, master, clock, fetch: globalThis.fetch };
     const tokens = createTokenSource(tokenDeps);
     const storageFactory = createIdentityStorageFactory({
@@ -78,7 +83,7 @@ export async function providerFixture(repos: Repos = createMemoryRepos()) {
       /** Disables A and enables B as a separate provider: a stored credential must not follow. */
       async switchToB() {
         await repos.providers.update(providerA.id, { enabled: false });
-        return repos.providers.ensure({ type: "sftpgo", baseUrl: b.baseUrl });
+        return repos.providers.ensure({ type: TYPE, baseUrl: b.baseUrl });
       },
       async close() {
         await Promise.all([a.close(), b.close()]);
@@ -99,17 +104,18 @@ export async function composedProviderFixture(connectionString: string) {
   try {
     const config = loadConfig({
       DATABASE_URL: connectionString,
-      SFTPGO_URL: h.a.baseUrl,
       FDRIVE_INDEX_ROOTS: JSON.stringify([
-        { name: "sftpgo", sftpgoPath: "/srv/users", indexerPath: "/data" },
+        { name: "files", storagePath: "/srv/files", indexerPath: "/data" },
       ]),
-      FDRIVE_INDEXER_URL: h.a.baseUrl,
       FDRIVE_MASTER_KEY: h.master.toString("base64"),
-      FDRIVE_ADMIN_USERS: USERNAME,
       FDRIVE_MCP_WRITES: "true",
     });
+    // Setup finished long ago: the app serves requests instead of asking for an owner.
+    await h.repos.settings.set("setup.initialized.v1", true);
     // No fetch injection: composition and every bound client use the real network transport.
-    const composed = await composeApp(config, pino({ level: "silent" }), h.clock);
+    const composed = await composeApp(config, pino({ level: "silent" }), h.clock, {
+      modules: MODULES,
+    });
     return {
       ...h,
       app: composed.app,

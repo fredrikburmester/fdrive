@@ -126,7 +126,7 @@ describe("explicit command storage adapters", () => {
       expect.objectContaining({ path: "/folder/a.txt", size: 2 }),
     );
   });
-  it("uses the exact WebDAV receipt and accepted SFTPGo path/timestamp evidence", async () => {
+  it("uses the exact move receipt and accepted provider-rule path/timestamp evidence", async () => {
     const { principal, activity, inputs, finish } = fixture();
     const moved = withMoveToTrash({
       storage: principal.storage,
@@ -153,14 +153,14 @@ describe("explicit command storage adapters", () => {
     );
     const base = createMemoryStorage();
     await base.upload("/b.txt", new Uint8Array([1]));
-    const sftp = {
+    const ruled = {
       ...base,
       deleteFile: async (path: string) => {
         await base.mkdir(`/.trash${path}`, { parents: true });
         await base.move(path, `/.trash${path}/1234567890000000000`);
       },
     };
-    expect(await deleteWithActivityReceipt(sftp, "/b.txt", "file", "/.trash")).toMatchObject({
+    expect(await deleteWithActivityReceipt(ruled, "/b.txt", "file", "/.trash")).toMatchObject({
       trashLeaf: "/.trash/b.txt/1234567890000000000",
       trashStrategy: "sftpgo_rule",
     });

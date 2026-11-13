@@ -1,6 +1,12 @@
 "use client";
 
-import type { FsEntry, OfficeStatusResponse, ProviderCapabilities, Tag } from "@fdrive/contracts";
+import type {
+  FsEntry,
+  OfficeStatusResponse,
+  ProviderCapabilities,
+  ReceivedGrant,
+  Tag,
+} from "@fdrive/contracts";
 import { useEffect, useMemo, useReducer, useState } from "react";
 import { useTreeChildren } from "@/lib/files/queries";
 import { resolveRowClick } from "@/lib/files/row-click";
@@ -20,6 +26,7 @@ import {
 } from "@/lib/files/tree";
 import { flattenTree } from "@/lib/files/tree-rows";
 import { useDefaultView } from "@/lib/files/use-default-view";
+import { useGridSize } from "@/lib/files/use-grid-size";
 import { useListDensity } from "@/lib/files/use-list-density";
 import { useRowClickAction } from "@/lib/files/use-row-click";
 import { DEFAULT_CAPABILITIES } from "@/lib/identity/capabilities";
@@ -29,6 +36,7 @@ import { type ClickModifierKeys, FileList } from "./file-list";
 
 const EMPTY_EXPANDED: ReadonlySet<string> = new Set();
 const EMPTY_TAGS: readonly Tag[] = [];
+const EMPTY_RECEIVED: readonly ReceivedGrant[] = [];
 
 export interface VirtualFileListingProps {
   readonly entries: readonly FsEntry[];
@@ -47,6 +55,8 @@ export interface VirtualFileListingProps {
   readonly showReveal?: boolean | undefined;
   /** What the active login's storage can do, for every row's context menu. */
   readonly capabilities?: ProviderCapabilities | undefined;
+  /** The folders others share with the active login, for every row's context menu. */
+  readonly received?: readonly ReceivedGrant[] | undefined;
 }
 
 /**
@@ -67,10 +77,12 @@ export function VirtualFileListing({
   hideArchive = false,
   showReveal = false,
   capabilities = DEFAULT_CAPABILITIES,
+  received = EMPTY_RECEIVED,
 }: VirtualFileListingProps) {
   const [viewMode] = useDefaultView();
   const [rowClickAction] = useRowClickAction();
   const [density] = useListDensity();
+  const [gridSize] = useGridSize();
   const [treeState, setTreeState] = useState<TreeState>(EMPTY_TREE_STATE);
 
   useEffect(() => {
@@ -180,10 +192,11 @@ export function VirtualFileListing({
     hideArchive,
     showReveal,
     capabilities,
+    received,
   };
 
   if (viewMode === "grid") {
-    return <FileGrid {...commonProps} />;
+    return <FileGrid {...commonProps} size={gridSize} />;
   }
 
   return (

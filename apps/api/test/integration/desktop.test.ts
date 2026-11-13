@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { writeFile } from "node:fs/promises";
 import {
   AdminProvidersResponse,
   DESKTOP_API,
@@ -7,26 +8,31 @@ import {
   MeResponse,
   ProvidersResponse,
 } from "@fdrive/contracts";
-import { startApacheWebdav, startPostgres, startSftpgo } from "@fdrive/testkit";
+import { createDb } from "@fdrive/db";
+import { startLocalStorage, startPostgres } from "@fdrive/testkit";
 import pino from "pino";
 import { expect, it } from "vitest";
 import { composeApp } from "../../src/composition.js";
 import { loadConfig } from "../../src/config.js";
+import { seedLocalUsers } from "./helpers/local-storage.ts";
 
-it("pairs real SFTPGo and Apache WebDAV with isolated streaming reads, validators and revocation", async () => {
+it("pairs two linked logins with isolated streaming reads, validators and revocation", async () => {
   const postgres = await startPostgres();
-  const sftpgo = await startSftpgo({ files: { alice: { "/same.txt": "alpha" } } });
-  const dav = await startApacheWebdav();
+  const storage = await startLocalStorage({
+    users: [
+      { username: "alice", password: "alice-password" },
+      { username: "bob", password: "bob-password" },
+    ],
+    files: { alice: { "/same.txt": "alpha" }, bob: { "/same.txt": "bravo" } },
+  });
+  await seedLocalUsers(postgres.connectionString, storage);
   const config = loadConfig({
     DATABASE_URL: postgres.connectionString,
-    SFTPGO_URL: sftpgo.baseUrl,
+    FDRIVE_STORAGE_ROOT: storage.root,
     FDRIVE_MASTER_KEY: Buffer.alloc(32, 7).toString("base64"),
     FDRIVE_ADMIN_USERS: "alice",
   });
   const composed = await composeApp(config, pino({ level: "silent" }), () => new Date());
-  const davHeaders = {
-    authorization: `Basic ${Buffer.from(`${dav.credential.username}:${dav.credential.password}`).toString("base64")}`,
-  };
   let cookie = "";
   const request = (route: string, body?: unknown, headers: Record<string, string> = {}) =>
     composed.app.request(route, {
@@ -40,31 +46,17 @@ it("pairs real SFTPGo and Apache WebDAV with isolated streaming reads, validator
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     });
   try {
-    expect(
-      (
-        await fetch(new URL("same.txt", dav.baseUrl), {
-          method: "PUT",
-          headers: davHeaders,
-          body: "bravo",
-        })
-      ).ok,
-    ).toBe(true);
     const login = await request("/api/v1/auth/login", {
       credential: { username: "alice", password: "alice-password" },
     });
     expect(login.status).toBe(200);
     cookie = login.headers.get("set-cookie")?.split(";")[0] ?? "";
     const firstMe = MeResponse.parse(await login.json());
-    const providerResponse = await request("/api/v1/admin/providers", {
-      type: "webdav",
-      label: "Desktop DAV",
-      baseUrl: dav.baseUrl,
-    });
-    expect(providerResponse.status).toBe(200);
-    const provider = (await providerResponse.json()) as { id: string };
+    const providerId = firstMe.identities[0]?.providerId ?? "";
+    // Bob's login on the same folder, linked to alice's account.
     const linked = await request("/api/v1/account/identities", {
-      providerId: provider.id,
-      credential: dav.credential,
+      providerId,
+      credential: { username: "bob", password: "bob-password" },
       currentCredential: { password: "alice-password" },
     });
     expect(linked.status).toBe(200);
@@ -90,10 +82,10 @@ it("pairs real SFTPGo and Apache WebDAV with isolated streaming reads, validator
       (credential) => credential.location.identityId === firstMe.activeIdentityId,
     );
     const b = result.credentials.find(
-      (credential) => credential.location.providerId === provider.id,
+      (credential) => credential.location.identityId !== firstMe.activeIdentityId,
     );
     if (!a || !b) throw new Error("Expected two isolated locations");
-    // A label-only admin patch propagates to linked logins, existing credentials and new pairings.
+    // A label-only admin patch propagates to both logins, existing credentials and new pairings.
     expect(
       (await request("/api/v1/account/active-identity", { identityId: firstMe.activeIdentityId }))
         .status,
@@ -149,7 +141,7 @@ it("pairs real SFTPGo and Apache WebDAV with isolated streaming reads, validator
           cookie: "",
         })
       ).json(),
-    ).toEqual(b.location);
+    ).toEqual({ ...b.location, displayName: "Home storage" });
     const freshPair = DesktopPairing.parse(
       await (await request(`${DESKTOP_API}/pairings`, { deviceName: "New Mac" })).json(),
     );
@@ -198,16 +190,8 @@ it("pairs real SFTPGo and Apache WebDAV with isolated streaming reads, validator
         ],
       });
     }
-    // Replace bytes externally, with the same size and within the provider's timestamp precision.
-    expect(
-      (
-        await fetch(new URL("same.txt", dav.baseUrl), {
-          method: "PUT",
-          headers: davHeaders,
-          body: "delta",
-        })
-      ).ok,
-    ).toBe(true);
+    // Replace bytes outside fdrive, with the same size.
+    await writeFile(storage.path("bob", "/same.txt"), "delta");
     expect(
       await (
         await request(
@@ -242,25 +226,24 @@ it("pairs real SFTPGo and Apache WebDAV with isolated streaming reads, validator
         })
       ).text(),
     ).toBe("delta");
-    // Environment admin rights belong to the original SFTPGo login, not the linked DAV login.
+    // Environment admin rights belong to alice's login, not the linked one.
     expect(
       (await request("/api/v1/account/active-identity", { identityId: firstMe.activeIdentityId }))
         .status,
     ).toBe(200);
-    const disabled = await composed.app.request(`/api/v1/admin/providers/${provider.id}`, {
-      method: "PATCH",
-      headers: { cookie, "x-requested-with": "fdrive", "content-type": "application/json" },
-      body: JSON.stringify({ enabled: false }),
-    });
-    expect(disabled.status).toBe(200);
+    // System > Users will not disable a login of the administrator's own
+    // account, so another administrator's change is made in the database.
+    const database = createDb(postgres.connectionString);
+    await database.pool.query("update app.local_users set disabled = true where username = 'bob'");
+    await database.close();
+    // A credential whose login the folder no longer admits can still disconnect.
     const desktopHeaders = { authorization: `Bearer ${b.token}`, cookie: "" };
-    expect((await request(`${DESKTOP_API}/location`, undefined, desktopHeaders)).status).toBe(502);
+    expect((await request(`${DESKTOP_API}/location`, undefined, desktopHeaders)).status).toBe(403);
     expect((await request(`${DESKTOP_API}/disconnect`, {}, desktopHeaders)).status).toBe(200);
     expect((await request(`${DESKTOP_API}/disconnect`, {}, desktopHeaders)).status).toBe(401);
   } finally {
     await composed.close();
-    await dav.stop();
-    await sftpgo.stop();
+    await storage.stop();
     await postgres.stop();
   }
 });
