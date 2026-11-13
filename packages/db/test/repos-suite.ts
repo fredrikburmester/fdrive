@@ -219,70 +219,73 @@ export function defineReposSuite(name: string, setup: () => Promise<Repos> | Rep
 
     describe("localGrants", () => {
       beforeEach(async () => {
-        for (const username of ["alice", "bob", "carol"]) {
-          await repos.localUsers.create({ username, passwordHash: "h" });
+        // The database suite keeps rows between tests; the memory one starts empty.
+        for (const username of ["gina", "hank", "ivy"]) {
+          if ((await repos.localUsers.get(username)) === null) {
+            await repos.localUsers.create({ username, passwordHash: "h" });
+          }
         }
       });
 
       it("shares a folder, changes its access and lists both sides oldest first", async () => {
         const first = await repos.localGrants.put({
-          ownerUsername: "alice",
+          ownerUsername: "gina",
           path: "/Projects",
-          granteeUsername: "bob",
+          granteeUsername: "hank",
           access: "read",
         });
         const second = await repos.localGrants.put({
-          ownerUsername: "carol",
+          ownerUsername: "ivy",
           path: "/Photos",
-          granteeUsername: "bob",
+          granteeUsername: "hank",
           access: "write",
         });
         const changed = await repos.localGrants.put({
-          ownerUsername: "alice",
+          ownerUsername: "gina",
           path: "/Projects",
-          granteeUsername: "bob",
+          granteeUsername: "hank",
           access: "write",
         });
 
         expect(changed).toMatchObject({ id: first.id, access: "write" });
         expect(await repos.localGrants.get(first.id)).toMatchObject({ access: "write" });
         expect(await repos.localGrants.get("00000000-0000-0000-0000-000000000000")).toBeNull();
-        expect((await repos.localGrants.listReceived("bob")).map((grant) => grant.id)).toEqual([
+        expect((await repos.localGrants.listReceived("hank")).map((grant) => grant.id)).toEqual([
           first.id,
           second.id,
         ]);
-        expect(await repos.localGrants.listOwned("alice")).toHaveLength(1);
-        expect(await repos.localGrants.listOwned("alice", "/Projects")).toHaveLength(1);
-        expect(await repos.localGrants.listOwned("alice", "/Other")).toEqual([]);
+        expect(await repos.localGrants.listOwned("gina")).toHaveLength(1);
+        expect(await repos.localGrants.listOwned("gina", "/Projects")).toHaveLength(1);
+        expect(await repos.localGrants.listOwned("gina", "/Other")).toEqual([]);
 
-        await repos.localUsers.update("carol", { disabled: true });
-        expect((await repos.localGrants.listReceived("bob")).map((grant) => grant.id)).toEqual([
+        await repos.localUsers.update("ivy", { disabled: true });
+        expect((await repos.localGrants.listReceived("hank")).map((grant) => grant.id)).toEqual([
           first.id,
         ]);
-        await repos.localUsers.update("carol", { disabled: false });
+        await repos.localUsers.update("ivy", { disabled: false });
 
         await repos.localGrants.delete(first.id);
         await repos.localGrants.delete(first.id);
-        expect(await repos.localGrants.listReceived("bob")).toHaveLength(1);
+        expect(await repos.localGrants.listReceived("hank")).toHaveLength(1);
       });
 
       it("follows the owner's moves and deletes of a folder and what is under it", async () => {
         for (const path of ["/A", "/A/inner", "/AB", "/B"]) {
           await repos.localGrants.put({
-            ownerUsername: "alice",
+            ownerUsername: "gina",
             path,
-            granteeUsername: "bob",
+            granteeUsername: "hank",
             access: "read",
           });
         }
-        await repos.localGrants.movePrefix("alice", "/A", "/Moved/A");
+        await repos.localGrants.movePrefix("gina", "/A", "/Moved/A");
         expect(
-          (await repos.localGrants.listOwned("alice")).map((grant) => grant.path).sort(),
+          (await repos.localGrants.listOwned("gina")).map((grant) => grant.path).sort(),
         ).toEqual(["/AB", "/B", "/Moved/A", "/Moved/A/inner"]);
-        await repos.localGrants.deletePrefix("alice", "/Moved");
-        await repos.localGrants.deletePrefix("carol", "/B");
+        await repos.localGrants.deletePrefix("gina", "/Moved");
+        await repos.localGrants.deletePrefix("ivy", "/B");
         expect(
-          (await repos.localGrants.listOwned("alice")).map((grant) => grant.path).sort(),
+          (await repos.localGrants.listOwned("gina")).map((grant) => grant.path).sort(),
         ).toEqual(["/AB", "/B"]);
       });
     });
