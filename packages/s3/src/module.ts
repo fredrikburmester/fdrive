@@ -112,8 +112,8 @@ export function createS3Module(options: CreateS3ModuleOptions = {}): ProviderMod
       trash: true,
       shares: false,
       office: false,
+      shareWithPeople: false,
       index: false,
-      scopeMapping: false,
     },
     // No recycle bin in S3: the API storage factory moves deleted objects
     // into the configured folder itself (`withMoveToTrash`).

@@ -20,7 +20,7 @@ import {
   validateSwitchActiveIdentity,
   validateUnlinkIdentity,
 } from "./identity-links-types.js";
-import type { Identity, Session, SettingsRepo } from "./types.js";
+import type { Identity, Session } from "./types.js";
 
 type Transaction = Parameters<Parameters<Db["transaction"]>[0]>[0];
 
@@ -75,29 +75,6 @@ async function lockOwnedIdentity(
   const identity = await findIdentity(tx, identityId);
   if (identity.accountId !== accountId) throw new IdentityLinksError("forbidden");
   return identity;
-}
-/** Holds the same ownership locks as transfer/unlink for a short identity-bound update. */
-export function createIdentityOwnershipGuard(db: Db) {
-  return async (
-    accountId: string,
-    identityId: string,
-    write: (settings: Pick<SettingsRepo, "set">) => Promise<void>,
-  ): Promise<void> => {
-    await db.transaction(async (tx) => {
-      await lockOwnedIdentity(tx, accountId, identityId);
-      await write({
-        async set(key, value) {
-          await tx
-            .insert(settings)
-            .values({ key, value })
-            .onConflictDoUpdate({
-              target: settings.key,
-              set: { value, updatedAt: new Date() },
-            });
-        },
-      });
-    });
-  };
 }
 
 async function transferMetadata(

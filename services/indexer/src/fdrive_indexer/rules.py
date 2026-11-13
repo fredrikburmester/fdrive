@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from fnmatch import fnmatch
 
-from .paths import root_relative_key
+from .paths import is_junk_name, root_relative_key
 
 
 def split_prefixes(raw: str) -> list[str]:
@@ -37,4 +37,4 @@ def should_walk_dir(name: str, skip_dirs: frozenset[str]) -> bool:
 
 
 def should_index_name(name: str, skip_names: frozenset[str]) -> bool:
-    return not (name.startswith("._") or name in skip_names)
+    return not is_junk_name(name, skip_names)

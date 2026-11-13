@@ -522,24 +522,6 @@ export const SystemThumbnailsResponse = z.object({
 
 export type SystemThumbnailsResponse = z.infer<typeof SystemThumbnailsResponse>;
 
-/** Internal indexer directory metadata. Overflow makes scope verification inconclusive. */
-export const IndexerDirectoryResponse = z.strictObject({
-  items: z
-    .array(
-      z.strictObject({
-        name: z
-          .string()
-          .min(1)
-          .max(255)
-          .regex(/^[^/\0]+$/u),
-        kind: z.enum(["file", "dir", "symlink", "other"]),
-      }),
-    )
-    .max(10000),
-  overflow: z.boolean(),
-});
-export type IndexerDirectoryResponse = z.infer<typeof IndexerDirectoryResponse>;
-
 // ---------------------------------------------------------------------------
 // Event log
 // ---------------------------------------------------------------------------

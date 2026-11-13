@@ -1,8 +1,9 @@
 # Connecting assistants to fdrive
 
 The built-in MCP server works over HTTP at `/mcp`. Each API token belongs to one linked
-storage login and has its own permissions and allowed folders. SFTPGo and WebDAV use the
-same tools; indexed features additionally require a verified index mapping.
+storage login and has its own permissions and allowed folders. Every storage type uses the
+same tools; indexed features (search and analysis) need storage the indexer reads, which is
+the local files folder, including folders shared with that login.
 
 ## Create a token
 

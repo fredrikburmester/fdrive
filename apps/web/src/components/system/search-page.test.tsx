@@ -42,7 +42,7 @@ const CONFIGURED_FIXTURE: SystemSearchResponse = {
     model: "intfloat/multilingual-e5-small",
     maxInputLength: 512,
   },
-  roots: ["sftpgo"],
+  roots: ["files"],
   index: { files: 16, withText: 10, chunks: 10, embedded: 10 },
 };
 
@@ -110,7 +110,7 @@ describe("SearchPage", () => {
     render(<SearchPage />);
 
     expect(await screen.findByText("Roots")).toBeTruthy();
-    expect(screen.getByText("sftpgo")).toBeTruthy();
+    expect(screen.getByText("files")).toBeTruthy();
   });
 
   it("shows Loading while the query has not resolved yet", () => {

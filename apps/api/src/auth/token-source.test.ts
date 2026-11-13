@@ -1,16 +1,16 @@
 import type { Repos } from "@fdrive/db";
 import { createMemoryRepos } from "@fdrive/db/testing";
-import { createFakeSftpgoServer, sftpgoModule } from "@fdrive/sftpgo";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ApiHttpError } from "../errors";
 import { memoryProviderService } from "../providers/test-fixtures/index.ts";
 import { parseMasterKey, seal } from "./crypto";
+import { createFakeTokenServer, tokenMintingModule } from "./test-fixtures/index.ts";
 import { createTokenSource, parseStoredCredential } from "./token-source";
 
 const MASTER = parseMasterKey(Buffer.alloc(32, 3).toString("base64"));
 const USERNAME = "alice";
 const PASSWORD = "correct-horse";
-const BASE_URL = "http://sftpgo.fake";
+const BASE_URL = "http://tokens.test";
 
 function createClock(startMs: number) {
   let now = startMs;
@@ -23,7 +23,7 @@ function createClock(startMs: number) {
 }
 
 async function seedIdentity(repos: Repos, master = MASTER): Promise<string> {
-  const provider = await repos.providers.ensure({ type: "sftpgo", baseUrl: BASE_URL });
+  const provider = await repos.providers.ensure({ type: "webdav", baseUrl: BASE_URL });
   const account = await repos.accounts.create({ displayName: USERNAME });
   const identity = await repos.identities.create({
     accountId: account.id,
@@ -39,9 +39,11 @@ async function seedIdentity(repos: Repos, master = MASTER): Promise<string> {
   return identity.id;
 }
 
+const MODULES = { webdav: tokenMintingModule() };
+
 function buildFakeServer(tokenTtlMs: number, now: () => Date) {
-  return createFakeSftpgoServer({
-    users: [{ username: USERNAME, password: PASSWORD, permissions: { "/": ["*"] } }],
+  return createFakeTokenServer({
+    users: [{ username: USERNAME, password: PASSWORD }],
     tokenTtlMs,
     now,
   });
@@ -54,7 +56,11 @@ describe("createTokenSource", () => {
   let identityId: string;
 
   function build(fetchImpl: typeof globalThis.fetch = server.fetch, master = MASTER) {
-    const providers = memoryProviderService(repos, { fetch: fetchImpl, clock: clockCtl.clock });
+    const providers = memoryProviderService(repos, {
+      fetch: fetchImpl,
+      clock: clockCtl.clock,
+      modules: MODULES,
+    });
     return createTokenSource({ repos, providers, master, clock: clockCtl.clock, fetch: fetchImpl });
   }
 
@@ -210,10 +216,11 @@ describe("createTokenSource", () => {
   });
 
   it("returns null tokens for a provider module that does not mint", async () => {
-    const resolved = await memoryProviderService(repos, { fetch: server.fetch }).forIdentity(
-      identityId,
-    );
-    const { mint: _mint, ...tokenless } = sftpgoModule;
+    const resolved = await memoryProviderService(repos, {
+      fetch: server.fetch,
+      modules: MODULES,
+    }).forIdentity(identityId);
+    const { mint: _mint, ...tokenless } = MODULES.webdav;
     const tokenSource = createTokenSource({
       repos,
       providers: { forIdentity: async () => ({ ...resolved, module: tokenless }) },
@@ -226,7 +233,7 @@ describe("createTokenSource", () => {
     expect(server.state.tokens.size).toBe(0);
   });
 
-  it("throws reauth_required when the stored password is rejected by SFTPGo", async () => {
+  it("throws reauth_required when the storage rejects the stored password", async () => {
     const ciphertext = seal(
       MASTER,
       new TextEncoder().encode(JSON.stringify({ password: "wrong" })),
@@ -245,7 +252,7 @@ describe("createTokenSource", () => {
   });
 
   it("throws reauth_required when there is no stored credential", async () => {
-    const provider = await repos.providers.ensure({ type: "sftpgo", baseUrl: BASE_URL });
+    const provider = await repos.providers.ensure({ type: "webdav", baseUrl: BASE_URL });
     const account = await repos.accounts.create({ displayName: "bob" });
     const bob = await repos.identities.create({
       accountId: account.id,
@@ -260,11 +267,20 @@ describe("createTokenSource", () => {
   });
 
   it("throws upstream_unavailable when the identity's provider is disabled", async () => {
-    const provider = await repos.providers.ensure({ type: "sftpgo", baseUrl: BASE_URL });
+    const provider = await repos.providers.ensure({ type: "webdav", baseUrl: BASE_URL });
     await repos.providers.update(provider.id, { enabled: false });
     const tokenSource = build();
     await expect(tokenSource.get(identityId)).rejects.toMatchObject({
       kind: "upstream_unavailable",
+    });
+  });
+
+  it("throws reauth_required when the storage refuses the user", async () => {
+    const disabled = createFakeTokenServer({
+      users: [{ username: USERNAME, password: PASSWORD, disabled: true }],
+    });
+    await expect(build(disabled.fetch).get(identityId)).rejects.toMatchObject({
+      kind: "reauth_required",
     });
   });
 
@@ -322,6 +338,64 @@ describe("createTokenSource", () => {
     const credential = await repos.credentials.get(identityId);
     expect(credential?.cachedToken).toEqual(expect.any(String));
     expect(credential?.cachedTokenExpiresAt?.getTime()).toBe(expiresAt.getTime());
+  });
+
+  it("retries a mint that failed after an invalidation superseded it", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let entered!: () => void;
+    const started = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    let calls = 0;
+    const source = build(async (input, init) => {
+      if (++calls === 1) {
+        entered();
+        await gate;
+        throw new TypeError("connection reset");
+      }
+      return server.fetch(input, init);
+    });
+    const superseded = source.get(identityId);
+    await started;
+    await source.invalidate(identityId);
+    release();
+    expect(await superseded).toEqual(expect.any(String));
+    expect(calls).toBe(2);
+  });
+
+  it("waits for every write queued while it waited before reading the cache", async () => {
+    const original = repos.credentials.setCachedToken.bind(repos.credentials);
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    vi.spyOn(repos.credentials, "setCachedToken").mockImplementationOnce(async (...args) => {
+      await gate;
+      await original(...args);
+    });
+    const source = build();
+    const expiresAt = new Date(clockCtl.clock().getTime() + 10 * 60 * 1000);
+    const primed = source.prime(identityId, { token: "primed", expiresAt });
+    const reading = source.get(identityId);
+    // Let the read reach its wait on the pending write, then queue another.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const invalidated = source.invalidate(identityId);
+    release();
+    await Promise.all([primed, invalidated]);
+    // The invalidation came last, so the read mints rather than using the primed token.
+    expect(await reading).not.toBe("primed");
+    expect(server.state.tokens.size).toBe(1);
+  });
+
+  it("fails only the request whose cache write failed; the next one mints again", async () => {
+    vi.spyOn(repos.credentials, "setCachedToken").mockRejectedValueOnce(new Error("disk full"));
+    const source = build();
+    await expect(source.get(identityId)).rejects.toThrow("disk full");
+    expect(await source.get(identityId)).toEqual(expect.any(String));
+    expect(server.state.tokens.size).toBe(2);
   });
 
   it("parseStoredCredential tolerates malformed stored blobs", () => {

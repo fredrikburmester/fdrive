@@ -83,7 +83,7 @@ export function registerSetupRoutes(
       });
     }
 
-    const result = await deps.service.test(parsed.data.baseUrl);
+    const result = await deps.service.test(parsed.data);
     deps.limiter.recordSuccess(limiterKeyFor(ip));
     return c.json(ConnectionTestResponse.parse(result));
   });
@@ -101,16 +101,7 @@ export function registerSetupRoutes(
 
     let result: Awaited<ReturnType<SetupService["complete"]>>;
     try {
-      result = await deps.service.complete({
-        baseUrl: parsed.data.baseUrl,
-        ...(parsed.data.label !== undefined ? { label: parsed.data.label } : {}),
-        homeTemplate: parsed.data.homeTemplate,
-        username: parsed.data.username,
-        password: parsed.data.password,
-        ...(parsed.data.otp !== undefined ? { otp: parsed.data.otp } : {}),
-        userAgent,
-        ip,
-      });
+      result = await deps.service.complete({ ...parsed.data, userAgent, ip });
     } catch (err) {
       deps.limiter.recordFailure(limiterKeyFor(ip));
       throw err;

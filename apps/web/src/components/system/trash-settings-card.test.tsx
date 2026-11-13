@@ -21,7 +21,7 @@ const saved = {
   path: "/.trash",
   retentionHours: null,
   rulesConfirmed: false,
-  strategy: "native",
+  strategy: "move",
 } as const;
 const PROVIDER = { id: saved.providerId, label: "Primary" };
 beforeEach(() => {
@@ -40,42 +40,35 @@ afterEach(() => {
 function enable() {
   fireEvent.click(screen.getByRole("switch", { name: "Enable Trash" }));
 }
-function confirmRules() {
-  fireEvent.click(screen.getByRole("checkbox", { name: /I configured and tested/ }));
-}
 function saveButton() {
   return screen.getByRole("button", { name: "Save and continue" }) as HTMLButtonElement;
 }
 describe("Trash settings", () => {
-  it("requires rule confirmation and saves the provider-bound revision before continuing", () => {
+  it("saves the provider-bound revision before continuing", () => {
     const next = vi.fn();
     render(<TrashSettingsCard provider={PROVIDER} onContinue={next} />);
     enable();
-    expect(saveButton().disabled).toBe(true);
-    confirmRules();
     expect(saveButton().disabled).toBe(false);
     fireEvent.click(saveButton());
-    expect(mocks.mutate).toHaveBeenCalledWith(
-      { ...saved, enabled: true, rulesConfirmed: true },
-      expect.anything(),
-    );
+    expect(mocks.mutate).toHaveBeenCalledWith({ ...saved, enabled: true }, expect.anything());
     expect(next).not.toHaveBeenCalled();
     act(() => mocks.mutate.mock.calls[0]?.[1].onSuccess());
     expect(next).toHaveBeenCalledOnce();
   });
-  it("requires new confirmation when changing the folder", () => {
+  it("saves an edited folder", () => {
     render(<TrashSettingsCard provider={PROVIDER} onContinue={vi.fn()} />);
     enable();
-    confirmRules();
     fireEvent.change(screen.getByLabelText("Trash folder"), { target: { value: "/recycle" } });
-    expect(saveButton().disabled).toBe(true);
-    expect(screen.getByRole("checkbox").getAttribute("aria-checked")).toBe("false");
+    fireEvent.click(saveButton());
+    expect(mocks.mutate).toHaveBeenCalledWith(
+      { ...saved, enabled: true, path: "/recycle" },
+      expect.anything(),
+    );
   });
   it("discards invalid unsaved inputs when skipping", () => {
     const next = vi.fn();
     render(<TrashSettingsCard provider={PROVIDER} onContinue={next} />);
     enable();
-    confirmRules();
     fireEvent.change(screen.getByLabelText("Trash folder"), { target: { value: "/" } });
     fireEvent.change(screen.getByLabelText("Retention in hours (optional)"), {
       target: { value: "-1" },
@@ -86,17 +79,14 @@ describe("Trash settings", () => {
     expect(next).toHaveBeenCalledOnce();
   });
   it("disables previously enabled integration when skipping without saving invalid draft", () => {
-    mocks.query.mockReturnValue({ data: { ...saved, enabled: true, rulesConfirmed: true } });
+    mocks.query.mockReturnValue({ data: { ...saved, enabled: true } });
     render(<TrashSettingsCard provider={PROVIDER} onContinue={vi.fn()} />);
     fireEvent.change(screen.getByLabelText("Trash folder"), { target: { value: "/" } });
     fireEvent.click(screen.getByRole("button", { name: "Skip Trash" }));
-    expect(mocks.mutate).toHaveBeenCalledWith(
-      { ...saved, rulesConfirmed: true },
-      expect.anything(),
-    );
+    expect(mocks.mutate).toHaveBeenCalledWith(saved, expect.anything());
   });
   it("can disable Trash despite invalid unsaved fields", () => {
-    mocks.query.mockReturnValue({ data: { ...saved, enabled: true, rulesConfirmed: true } });
+    mocks.query.mockReturnValue({ data: { ...saved, enabled: true } });
     render(<TrashSettingsCard provider={PROVIDER} />);
     fireEvent.change(screen.getByLabelText("Trash folder"), { target: { value: "/" } });
     fireEvent.change(screen.getByLabelText("Retention in hours (optional)"), {
@@ -106,10 +96,7 @@ describe("Trash settings", () => {
     const save = screen.getByRole("button", { name: "Save Trash settings" }) as HTMLButtonElement;
     expect(save.disabled).toBe(false);
     fireEvent.click(save);
-    expect(mocks.mutate).toHaveBeenCalledWith(
-      { ...saved, rulesConfirmed: true },
-      expect.anything(),
-    );
+    expect(mocks.mutate).toHaveBeenCalledWith(saved, expect.anything());
   });
   it("reports errors and reloads saved settings without advancing", () => {
     const next = vi.fn();
@@ -138,24 +125,17 @@ describe("Trash settings", () => {
     expect(next).toHaveBeenCalledOnce();
     expect(mocks.mutate).not.toHaveBeenCalled();
   });
-  it("enables a provider that moves deletes itself without SFTPGo rules", () => {
-    const next = vi.fn();
-    mocks.query.mockReturnValue({ data: { ...saved, strategy: "move" }, refetch: mocks.refetch });
-    render(<TrashSettingsCard provider={PROVIDER} onContinue={next} />);
+  it("explains that fdrive moves deletes itself, with no server rules to confirm", () => {
+    render(<TrashSettingsCard provider={PROVIDER} onContinue={vi.fn()} />);
     expect(
       screen.getByText("Restore deleted files that fdrive moved into a recycle folder."),
     ).toBeTruthy();
-    expect(screen.queryByText(/SFTPGo/)).toBeNull();
+    expect(screen.getByText(/No server rules, processing worker or storage mount/)).toBeTruthy();
     enable();
     expect(screen.queryByRole("checkbox")).toBeNull();
-    expect(screen.queryByRole("link", { name: "Trash setup instructions" })).toBeNull();
+    expect(screen.queryByRole("link")).toBeNull();
     expect(screen.getByText(/fdrive creates it on the first delete/)).toBeTruthy();
-    expect(saveButton().disabled).toBe(false);
-    fireEvent.click(saveButton());
-    expect(mocks.mutate).toHaveBeenCalledWith(
-      { ...saved, strategy: "move", enabled: true },
-      expect.anything(),
-    );
+    expect(screen.getByText(/fdrive does not delete old items automatically/)).toBeTruthy();
   });
   it("cannot enable Trash for a provider without one", () => {
     mocks.query.mockReturnValue({ data: { ...saved, strategy: "none" }, refetch: mocks.refetch });

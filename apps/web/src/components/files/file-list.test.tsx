@@ -263,6 +263,27 @@ describe("FileList", () => {
     expect(iconContainer?.querySelector("svg")).not.toBeNull();
   });
 
+  it("says who shares each folder in Shared with me and what this login may do there", () => {
+    const entries = [
+      makeEntry("Trip", { path: "/Shared with me/Trip", kind: "dir" }),
+      makeEntry("Notes", { path: "/Shared with me/Notes", kind: "dir" }),
+    ];
+    const received = [
+      {
+        id: "00000000-0000-4000-8000-0000000000b1",
+        owner: "alice",
+        name: "Trip",
+        path: "/Shared with me/Trip",
+        access: "read" as const,
+        createdAt: "2026-01-01T00:00:00.000Z",
+      },
+    ];
+    const { getByText, queryByText } = renderList({ entries, received });
+
+    expect(getByText("alice · Can view")).toBeTruthy();
+    expect(queryByText(/Can edit/)).toBeNull();
+  });
+
   it("renders standard FileIcon directly when showThumbnails is false", () => {
     const entries = [makeEntry("pic.png", { ext: ".png", mime: "image/png" })];
     const { container } = renderList({ entries, showThumbnails: false });

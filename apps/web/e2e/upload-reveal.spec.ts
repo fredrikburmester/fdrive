@@ -1,7 +1,7 @@
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { expect, type Page, test } from "@playwright/test";
+import { expect, type Locator, type Page, test } from "@playwright/test";
 import { listing } from "./support/regions.js";
 import { uniqueName } from "./support/unique.js";
 import { uploadFiles } from "./support/upload.js";
@@ -38,6 +38,18 @@ async function dropFiles(page: Page, names: string[]): Promise<void> {
   }, names);
   await listing(page).dispatchEvent("drop", { dataTransfer });
   await dataTransfer.dispose();
+}
+
+/**
+ * The Activity dock's summary for this page's uploads. The account's
+ * finished jobs (archives earlier specs made) count there too, as "N
+ * finished", so only that part may vary.
+ */
+function uploadSummary(page: Page, uploaded: number, failed = 0): Locator {
+  const failures = failed > 0 ? `, ${failed} failed` : "";
+  return page.getByRole("button", {
+    name: new RegExp(`^${uploaded} uploaded(, \\d+ finished)?${failures}$`),
+  });
 }
 
 async function scrollToTop(page: Page): Promise<void> {
@@ -132,7 +144,7 @@ test("replacement waits for refreshed size sort before revealing the file", asyn
       { name: "item-00.txt", mimeType: "text/plain", contents: "replacement".repeat(1000) },
     ]);
     await page.getByRole("dialog").getByRole("button", { name: "Replace", exact: true }).click();
-    await expect(page.getByRole("button", { name: "1 uploaded", exact: true })).toBeVisible();
+    await expect(uploadSummary(page, 1)).toBeVisible();
     await expect.poll(() => blocked).toBe(true);
     await expect(target).toHaveAttribute("data-selected", "false");
     gate.resolve();
@@ -159,7 +171,7 @@ test("a successful retry selects and reveals the uploaded file", async ({ page }
     },
   );
   await dropFiles(page, ["z-retry.txt"]);
-  await page.getByRole("button", { name: "0 uploaded, 1 failed", exact: true }).click();
+  await uploadSummary(page, 0, 1).click();
   await page.getByRole("button", { name: "Retry upload", exact: true }).click();
   const target = listing(page).locator(`[data-path="${path}/z-retry.txt"]`);
   await expect(target).toBeInViewport();

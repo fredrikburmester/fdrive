@@ -4,8 +4,9 @@ import { providerTypeLabel } from "@/lib/identity/provider-type";
 /**
  * The credential form shown when the provider list is unavailable (the API
  * is unreachable, or the account page's dialogs open before the list has
- * loaded): SFTPGo's fields, which are also what every provider so far
- * asks for. The server validates against the real field list anyway.
+ * loaded): a username, a password and an optional one-time code, which
+ * covers every username-and-password storage. The server validates against
+ * the real field list anyway.
  */
 export const DEFAULT_CREDENTIAL_FIELDS: readonly ProviderField[] = [
   { name: "username", label: "Username", kind: "text", required: true, maxLength: 255 },

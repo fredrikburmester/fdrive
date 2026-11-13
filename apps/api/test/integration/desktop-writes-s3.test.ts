@@ -9,11 +9,12 @@ import {
   MeResponse,
 } from "@fdrive/contracts";
 import { s3Module } from "@fdrive/s3";
-import { startMinio, startPostgres, startSftpgo } from "@fdrive/testkit";
+import { startLocalStorage, startMinio, startPostgres } from "@fdrive/testkit";
 import pino from "pino";
 import { expect, it } from "vitest";
 import { composeApp } from "../../src/composition.js";
 import { loadConfig } from "../../src/config.js";
+import { seedLocalUsers } from "./helpers/local-storage.ts";
 
 /**
  * S3 has no rename and no locks, so it can only ever publish under the default
@@ -27,12 +28,22 @@ it("publishes on S3 with no configuration and refuses an out-of-band change", {
   timeout: 300_000,
 }, async () => {
   const postgres = await startPostgres();
-  const sftpgo = await startSftpgo({ files: { alice: {} } });
-  const minio = await startMinio();
+  const storage = await startLocalStorage({ files: {} });
+  // Started before the try below: stop what is up if the bucket never comes.
+  const minio = await (async () => {
+    try {
+      await seedLocalUsers(postgres.connectionString, storage);
+      return await startMinio();
+    } catch (error) {
+      await storage.stop();
+      await postgres.stop();
+      throw error;
+    }
+  })();
   const stateDir = await mkdtemp(join(tmpdir(), "fdrive-s3-writes-"));
   const config = loadConfig({
     DATABASE_URL: postgres.connectionString,
-    SFTPGO_URL: sftpgo.baseUrl,
+    FDRIVE_STORAGE_ROOT: storage.root,
     FDRIVE_MASTER_KEY: Buffer.alloc(32, 7).toString("base64"),
     FDRIVE_ADMIN_USERS: "alice",
     FDRIVE_DESKTOP_STATE_DIR: stateDir,
@@ -196,7 +207,7 @@ it("publishes on S3 with no configuration and refuses an out-of-band change", {
     await composed.close?.();
     await rm(stateDir, { recursive: true, force: true });
     await minio.stop();
-    await sftpgo.stop();
+    await storage.stop();
     await postgres.stop();
   }
 });

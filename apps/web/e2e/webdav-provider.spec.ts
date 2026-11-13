@@ -1,40 +1,29 @@
 import { type APIRequestContext, expect, test } from "@playwright/test";
 import { dismissActivityPanel } from "./support/activity.js";
+import { webdavUrl } from "./support/local-folder.js";
 import { getAliceStorageStatePath, getWebBaseUrl } from "./support/paths.js";
 import { uploadFiles } from "./support/upload.js";
 
 /**
- * SFTPGo's own WebDAV binding, started by `global-setup.ts` next to its
- * REST API, is the real class 1 server these specs add as a second
- * provider type. The same seeded users and files answer over both.
+ * The Apache WebDAV server `global-setup.ts` starts next to the local
+ * folder is the real class 1 server these specs add as a second provider
+ * type: alice signs in there with the same name and password, to a home
+ * of her own on that server. A trailing slash is optional in a WebDAV
+ * address, so the two spellings below are two rows to fdrive and one
+ * folder to the server.
  */
-function webdavUrl(): string {
-  const url = process.env.E2E_SFTPGO_WEBDAV_URL;
-  if (url === undefined || url === "") {
-    throw new Error("fdrive e2e: E2E_SFTPGO_WEBDAV_URL is not set; global-setup exports it");
-  }
-  return url;
-}
-
-/**
- * The endpoint spelled with the IPv4 loopback address. `localhost` can
- * resolve to `::1` first on a CI runner where Docker publishes ports on
- * IPv4 only, and the API probes a candidate before adding it.
- */
-function loopbackOrigin(baseUrl: string): string {
-  const url = new URL(baseUrl);
-  url.hostname = "127.0.0.1";
-  return url.origin;
+function homeWithoutSlash(): string {
+  return webdavUrl().replace(/\/+$/, "");
 }
 
 /** The row added through the UI; the trailing slash keeps its `(type, baseUrl)` apart from the login row's. */
 function uiAddress(): string {
-  return `${loopbackOrigin(webdavUrl())}/`;
+  return `${homeWithoutSlash()}/`;
 }
 
 /** The row a login binds; it persists (disabled) across runs, so it never shares the UI row's address. */
 function loginAddress(): string {
-  return loopbackOrigin(webdavUrl());
+  return homeWithoutSlash();
 }
 
 interface ProviderRow {
@@ -76,7 +65,7 @@ async function setEnabled(admin: APIRequestContext, id: string, enabled: boolean
   expect(response.ok()).toBe(true);
 }
 
-test("alice (admin) adds SFTPGo's WebDAV binding as a provider, tests it and removes it", async ({
+test("alice (admin) adds a WebDAV server as a provider, tests it and removes it", async ({
   page,
 }) => {
   await removeByLabel(page.request, UI_LABEL);
@@ -167,8 +156,8 @@ test.describe("signing in through WebDAV", () => {
         capabilities: { zip: false, atomicMove: true },
       });
 
-      // alice's home is shared with every other spec's leftovers, so work
-      // inside a fresh folder where the upload is the only entry.
+      // alice's WebDAV home is shared with the other WebDAV specs' leftovers,
+      // so work inside a fresh folder where the upload is the only entry.
       const folder = `/webdav-e2e-${Date.now().toString(36)}`;
       const made = await page.request.post("/api/v1/fs/mkdir", {
         headers: MUTATION_HEADERS,
@@ -201,7 +190,7 @@ test.describe("signing in through WebDAV", () => {
     } finally {
       // The login above binds an identity to the row, so it cannot be
       // removed; disabling it keeps the public provider list to the seeded
-      // SFTPGo row for the other specs.
+      // local folder for the other specs.
       if (row !== undefined) await setEnabled(admin, row.id, false);
       await admin.dispose();
     }

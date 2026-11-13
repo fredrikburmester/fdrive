@@ -61,9 +61,9 @@ const UI_LABEL = "e2e-s3-ui";
 /** Bound by a login, so it cannot be removed; it is disabled again after the spec. */
 const LOGIN_LABEL = "e2e-s3-login";
 const MUTATION_HEADERS = { "x-requested-with": "fdrive" };
-/** The one line fdrive shows wherever storage without any SFTPGo-built feature is added or picked. */
+/** The one line fdrive shows wherever storage without any of the local folder's features is added or picked. */
 const FILES_ONLY_NOTE =
-  "Files only. Search and thumbnails, shares and Office work with SFTPGo storage, not here.";
+  "Files only. Search and thumbnails, share links, sharing with people and Office aren't available on this storage.";
 
 async function listProviders(admin: APIRequestContext): Promise<ProviderRow[]> {
   const response = await admin.get("/api/v1/admin/providers");
@@ -224,12 +224,12 @@ test.describe("signing in through S3", () => {
       await page.getByRole("button", { name: "Search", exact: true }).click();
       await page.getByPlaceholder("Search files, content, and images...").fill("hello");
       await expect(
-        page.getByText("Search is not available for this login. It needs indexed SFTPGo storage."),
+        page.getByText("Search is not available for this login. It needs indexed local storage."),
       ).toBeVisible();
     } finally {
       // The login above binds an identity to the row, so it cannot be
       // removed; disabling it keeps the public provider list to the seeded
-      // SFTPGo row for the other specs.
+      // local folder for the other specs.
       if (row !== undefined) await setEnabled(admin, row.id, false);
       await admin.dispose();
     }

@@ -119,6 +119,7 @@ export {
   UploadQuery,
   ZipRequest,
 } from "./fs.ts";
+export * from "./grants.ts";
 export { HealthResponse } from "./health.ts";
 export { HttpUrl, isHttpUrl } from "./http-url.ts";
 export {
@@ -194,14 +195,14 @@ export {
   accountTokenRoute,
   adminProviderRoute,
   adminProviderTestRoute,
+  adminUserRoute,
   chatActionRoute,
   chatCancelRoute,
   chatMessagesRoute,
   chatRoute,
+  grantRoute,
   IDENTITY_HEADER,
   IDENTITY_QUERY_PARAM,
-  identityScopeRoute,
-  identityScopeSuggestionsRoute,
   jobCancelRoute,
   jobRoute,
   MODIFIED_AT_HEADER,
@@ -214,26 +215,7 @@ export {
   tagFilesRoute,
   tagRoute,
 } from "./routes.ts";
-export {
-  IdentityScopeReason,
-  IdentityScopeResponse,
-  IdentityScopeSuggestionsResponse,
-  isCanonicalScopePath,
-  MAX_MOUNT_MAPPINGS,
-  MAX_SCOPE_MAPPINGS,
-  MAX_SCOPE_SUGGESTIONS,
-  MAX_UNMAPPED_MOUNTS,
-  MountMapping,
-  MountMappingsResponse,
-  ScopeCanonicalPath,
-  ScopeMapping,
-  ScopeMappingSuggestion,
-  ScopeRootName,
-  SetIdentityScopeRequest,
-  type SetIdentityScopeRequestInput,
-  SetMountMappingsRequest,
-  UnmappedMount,
-} from "./scopes.ts";
+export { IdentityScopeReason } from "./scopes.ts";
 export {
   ImageSearchHit,
   ImageSearchQuery,
@@ -249,7 +231,10 @@ export {
 export {
   ConnectionTestResponse,
   SETUP_TOKEN_HEADER,
+  SetupCompleteLocalRequest,
+  SetupCompleteProviderRequest,
   SetupCompleteRequest,
+  SetupMode,
   SetupStatusResponse,
   SetupTestRequest,
 } from "./setup.ts";
@@ -261,7 +246,6 @@ export {
   IndexerClearJob,
   IndexerClearRequest,
   IndexerClearResponse,
-  IndexerDirectoryResponse,
   IndexerErrorSample,
   IndexerHealth,
   IndexerLastScan,
@@ -331,3 +315,4 @@ export {
   TrashStatusResponse,
   TrashStrategy,
 } from "./trash.ts";
+export * from "./users.ts";

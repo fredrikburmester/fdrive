@@ -1,8 +1,6 @@
-import type { IndexerDirectoryResponse } from "@fdrive/contracts";
-import { type FileEntry, makeEntry, type StorageProvider } from "@fdrive/core";
-import type { Identity, Provider, ProviderRepo } from "@fdrive/db";
-import type { IndexerClient } from "../../system/indexer-client.ts";
-import type { SidecarResult } from "../../system/sidecar-client.ts";
+import { type FileEntry, makeEntry, type ProviderModule, type StorageProvider } from "@fdrive/core";
+import type { Identity, Provider } from "@fdrive/db";
+import type { ProviderService, ResolvedProvider } from "../../providers/service.ts";
 
 /** Test double only, for `apps/api/src/scoping/**` unit tests. */
 export function buildIdentity(overrides: Partial<Identity> = {}): Identity {
@@ -17,47 +15,39 @@ export function buildIdentity(overrides: Partial<Identity> = {}): Identity {
   };
 }
 
-/** Builds an SFTPGo provider row, enabled by default, with `homeTemplate` in its config. */
-export function buildProvider(
-  overrides: Partial<Provider> & { homeTemplate?: string } = {},
-): Provider {
-  const { homeTemplate, ...rest } = overrides;
+/** Builds a local-folder provider row, enabled by default. */
+export function buildProvider(overrides: Partial<Provider> = {}): Provider {
   return {
     id: "provider-1",
-    type: "sftpgo",
-    baseUrl: "http://sftpgo.test",
+    type: "local",
+    baseUrl: "local",
     label: "",
-    config: { homeTemplate: homeTemplate ?? "sftpgo:/{username}" },
+    config: {},
     enabled: true,
-    managedByEnv: false,
+    managedByEnv: true,
     createdAt: new Date("2024-01-01T00:00:00Z"),
-    ...rest,
-  };
-}
-
-/** A `ProviderRepo` slice over a fixed list of rows. */
-export function fakeProviderRepo(rows: readonly Provider[]): Pick<ProviderRepo, "get" | "list"> {
-  return {
-    get: async (id) => rows.find((row) => row.id === id) ?? null,
-    list: async () => [...rows],
+    ...overrides,
   };
 }
 
 /**
- * A `Pick<IndexerClient, "directory">` whose responses are looked up by
- * `"<root>:<path>"`. An entry missing from `fixtures` reports unreachable,
- * so a test only has to describe the roots/paths it cares about.
+ * A `ProviderService.get` over fixed rows, each resolved with `moduleFor`
+ * its row (one module for every row by default).
  */
-export function fakeIndexerDirectory(
-  fixtures: ReadonlyMap<string, IndexerDirectoryResponse>,
-): Pick<IndexerClient, "directory"> {
+export function fakeProviders(
+  rows: readonly Provider[],
+  moduleFor: (row: Provider) => ProviderModule,
+): Pick<ProviderService, "get"> {
   return {
-    async directory(root, path): Promise<SidecarResult<IndexerDirectoryResponse>> {
-      const fixture = fixtures.get(`${root}:${path}`);
-      if (fixture === undefined) {
-        return { ok: false, reason: "unreachable", detail: `no fixture for ${root}:${path}` };
-      }
-      return { ok: true, data: fixture };
+    async get(id): Promise<ResolvedProvider | null> {
+      const provider = rows.find((row) => row.id === id);
+      return provider === undefined
+        ? null
+        : {
+            provider,
+            module: moduleFor(provider),
+            instance: { id: provider.id, baseUrl: provider.baseUrl, config: provider.config },
+          };
     },
   };
 }

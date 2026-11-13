@@ -41,7 +41,7 @@ class _SyncThread:
 
 def _make_config(monkeypatch: pytest.MonkeyPatch, database_url: str, thumbs_dir: str) -> Config:
     monkeypatch.setenv("DATABASE_URL", database_url)
-    monkeypatch.setenv("INDEX_ROOTS", "sftpgo=/unused")
+    monkeypatch.setenv("INDEX_ROOTS", "files=/unused")
     monkeypatch.setenv("EMBED_URL", "http://embed.invalid")
     monkeypatch.setenv("THUMBS_DIR", thumbs_dir)
     return Config()
@@ -140,7 +140,7 @@ def test_job_can_be_started_again_after_finish() -> None:
 
 def test_rebuild_thumbnails_writes_missing_sizes(postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     cfg = _make_config(monkeypatch, postgres_dsn, str(tmp_path / "thumbs"))
-    ctx = _make_context(cfg, "sftpgo", str(tmp_path))
+    ctx = _make_context(cfg, "files", str(tmp_path))
     png = tmp_path / "a.png"
     _write_png(png)
     _upsert_media_file(ctx, "a.png", ".png", png, "sha-a")
@@ -152,7 +152,7 @@ def test_rebuild_thumbnails_writes_missing_sizes(postgres_dsn: str, monkeypatch:
 
 def test_rebuild_thumbnails_pdf_first_page(postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     cfg = _make_config(monkeypatch, postgres_dsn, str(tmp_path / "thumbs"))
-    ctx = _make_context(cfg, "sftpgo", str(tmp_path))
+    ctx = _make_context(cfg, "files", str(tmp_path))
     pdf = tmp_path / "doc.pdf"
     _write_pdf(pdf)
     _upsert_media_file(ctx, "doc.pdf", ".pdf", pdf, "sha-pdf")
@@ -166,7 +166,7 @@ def test_rebuild_thumbnails_skips_non_media_and_leaves_text_status(
     postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     cfg = _make_config(monkeypatch, postgres_dsn, str(tmp_path / "thumbs"))
-    ctx = _make_context(cfg, "sftpgo", str(tmp_path))
+    ctx = _make_context(cfg, "files", str(tmp_path))
     txt = tmp_path / "notes.txt"
     txt.write_text("hello")
     file_id = _upsert_media_file(ctx, "notes.txt", ".txt", txt, "sha-t")
@@ -181,7 +181,7 @@ def test_rebuild_thumbnails_skips_non_media_and_leaves_text_status(
 
 def test_rebuild_thumbnails_scoped_to_path(postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     cfg = _make_config(monkeypatch, postgres_dsn, str(tmp_path / "thumbs"))
-    ctx = _make_context(cfg, "sftpgo", str(tmp_path))
+    ctx = _make_context(cfg, "files", str(tmp_path))
     (tmp_path / "keep").mkdir()
     (tmp_path / "skip").mkdir()
     keep_png = tmp_path / "keep" / "a.png"
@@ -200,7 +200,7 @@ def test_rebuild_thumbnails_force_regenerates_existing(
     postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     cfg = _make_config(monkeypatch, postgres_dsn, str(tmp_path / "thumbs"))
-    ctx = _make_context(cfg, "sftpgo", str(tmp_path))
+    ctx = _make_context(cfg, "files", str(tmp_path))
     pdf = tmp_path / "doc.pdf"
     _write_pdf(pdf)
     _upsert_media_file(ctx, "doc.pdf", ".pdf", pdf, "sha-pdf")
@@ -217,7 +217,7 @@ def test_rebuild_thumbnails_reports_progress_via_callback(
     postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     cfg = _make_config(monkeypatch, postgres_dsn, str(tmp_path / "thumbs"))
-    ctx = _make_context(cfg, "sftpgo", str(tmp_path))
+    ctx = _make_context(cfg, "files", str(tmp_path))
     png = tmp_path / "a.png"
     _write_png(png)
     _upsert_media_file(ctx, "a.png", ".png", png, "sha-a")
@@ -234,7 +234,7 @@ def test_rebuild_counts_generation_failures_and_continues(
     from fdrive_indexer import thumbs_io
 
     cfg = _make_config(monkeypatch, postgres_dsn, str(tmp_path / "thumbs"))
-    ctx = _make_context(cfg, "sftpgo", str(tmp_path))
+    ctx = _make_context(cfg, "files", str(tmp_path))
     bad = tmp_path / "bad.png"
     good = tmp_path / "good.png"
     for path in (bad, good):
@@ -267,7 +267,7 @@ def test_rebuild_counts_policy_skips_separately(
     empty: bool, postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     cfg = _make_config(monkeypatch, postgres_dsn, str(tmp_path / "thumbs"))
-    ctx = _make_context(cfg, "sftpgo", str(tmp_path))
+    ctx = _make_context(cfg, "files", str(tmp_path))
     size = 0 if empty else cfg.thumb_max_bytes + 1
     db.upsert_file(ctx.conn(), ctx.root_id, "skip.png", "skip.png", ".png", size, 0, "skip", None)
     monkeypatch.setattr(thumb_rebuild.threading, "Thread", _SyncThread)
@@ -285,7 +285,7 @@ def test_rebuild_stops_admitting_files_when_thumbnails_are_disabled(
     postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     cfg = _make_config(monkeypatch, postgres_dsn, str(tmp_path / "thumbs"))
-    ctx = _make_context(cfg, "sftpgo", str(tmp_path))
+    ctx = _make_context(cfg, "files", str(tmp_path))
     for name, sha in (("a.png", "sha-a"), ("b.png", "sha-b")):
         path = tmp_path / name
         _write_png(path)
@@ -306,7 +306,7 @@ def test_rebuild_thumbnails_db_failure_reports_via_callback(
     postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     cfg = _make_config(monkeypatch, postgres_dsn, str(tmp_path / "thumbs"))
-    ctx = _make_context(cfg, "sftpgo", str(tmp_path))
+    ctx = _make_context(cfg, "files", str(tmp_path))
     png = tmp_path / "a.png"
     _write_png(png)
     _upsert_media_file(ctx, "a.png", ".png", png, "sha-a")
@@ -325,7 +325,7 @@ def test_rebuild_thumbnails_no_candidates_returns_zero(
     postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     cfg = _make_config(monkeypatch, postgres_dsn, str(tmp_path / "thumbs"))
-    ctx = _make_context(cfg, "sftpgo", str(tmp_path))
+    ctx = _make_context(cfg, "files", str(tmp_path))
     assert thumb_rebuild.rebuild_thumbnails(ctx) == 0
 
 
@@ -351,7 +351,7 @@ def test_count_candidates_sums_across_contexts(postgres_dsn: str, monkeypatch: p
 def test_start_rebuild_runs_and_updates_job(postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setattr(thumb_rebuild.threading, "Thread", _SyncThread)
     cfg = _make_config(monkeypatch, postgres_dsn, str(tmp_path / "thumbs"))
-    ctx = _make_context(cfg, "sftpgo", str(tmp_path))
+    ctx = _make_context(cfg, "files", str(tmp_path))
     png = tmp_path / "a.png"
     _write_png(png)
     _upsert_media_file(ctx, "a.png", ".png", png, "sha-a")
@@ -373,7 +373,7 @@ def test_start_rebuild_returns_false_when_already_running(
     postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     cfg = _make_config(monkeypatch, postgres_dsn, str(tmp_path / "thumbs"))
-    ctx = _make_context(cfg, "sftpgo", str(tmp_path))
+    ctx = _make_context(cfg, "files", str(tmp_path))
     job = thumb_rebuild.ThumbnailRebuildJob()
     assert job.try_start(5) is True
     result = thumb_rebuild.start_rebuild(job, [ctx], None, False)
@@ -383,7 +383,7 @@ def test_start_rebuild_returns_false_when_already_running(
 def test_start_rebuild_job_crash_still_releases_job(postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setattr(thumb_rebuild.threading, "Thread", _SyncThread)
     cfg = _make_config(monkeypatch, postgres_dsn, str(tmp_path / "thumbs"))
-    ctx = _make_context(cfg, "sftpgo", str(tmp_path))
+    ctx = _make_context(cfg, "files", str(tmp_path))
 
     def boom(*args: object, **kwargs: object) -> int:
         raise RuntimeError("boom")
@@ -401,7 +401,7 @@ def test_start_rebuild_thread_uses_own_connection(postgres_dsn: str, monkeypatch
     """Not synchronous this time: exercises the real `threading.Thread` path, so
     the background thread must open its own connection via `ctx.conn()`."""
     cfg = _make_config(monkeypatch, postgres_dsn, str(tmp_path / "thumbs"))
-    ctx = _make_context(cfg, "sftpgo", str(tmp_path))
+    ctx = _make_context(cfg, "files", str(tmp_path))
     png = tmp_path / "a.png"
     _write_png(png)
     _upsert_media_file(ctx, "a.png", ".png", png, "sha-a")
@@ -427,7 +427,7 @@ def test_start_rebuild_thread_uses_own_connection(postgres_dsn: str, monkeypatch
 def test_rebuild_uses_one_candidate_inventory(postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setattr(thumb_rebuild.threading, "Thread", _SyncThread)
     cfg = _make_config(monkeypatch, postgres_dsn, str(tmp_path / "thumbs"))
-    ctx = _make_context(cfg, "sftpgo", str(tmp_path))
+    ctx = _make_context(cfg, "files", str(tmp_path))
     png = tmp_path / "a.png"
     _write_png(png)
     _upsert_media_file(ctx, "a.png", ".png", png, "sha-a")
@@ -453,7 +453,7 @@ def test_avif_is_indexed_and_generates_thumbnails(
     from fdrive_indexer.chunking import is_image
 
     cfg = _make_config(monkeypatch, postgres_dsn, str(tmp_path / "thumbs"))
-    ctx = _make_context(cfg, "sftpgo", str(tmp_path))
+    ctx = _make_context(cfg, "files", str(tmp_path))
     avif = tmp_path / "photo.avif"
     Image.new("RGB", (32, 24), (100, 120, 140)).save(avif, format="AVIF")
     _upsert_media_file(ctx, "photo.avif", ".avif", avif, "avif-sha")

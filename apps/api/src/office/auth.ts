@@ -47,7 +47,7 @@ export async function callbackFile(
   const actor = await officeActor(deps, claims.sessionHash, claims.identityId);
   const file = await deps.files.get(fileId);
   if (file === null || file.providerId !== actor.identity.providerId) throw new WopiError(404);
-  // Round trip, not a plain `toVirtualPath`: a virtual override that shadows
+  // Round trip, not a plain `toVirtualPath`: a nested scope that shadows
   // the file's physical location must hide it from this callback too, the
   // same as any other index/event-derived filesystem reference.
   const path = roundTripVirtualPath(actor.scopes, file.rootName, `/${file.path}`);

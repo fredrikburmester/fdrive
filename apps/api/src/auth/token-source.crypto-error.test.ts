@@ -1,7 +1,7 @@
 import type { Repos } from "@fdrive/db";
 import { createMemoryRepos } from "@fdrive/db/testing";
-import { sftpgoModule } from "@fdrive/sftpgo";
 import { describe, expect, it, vi } from "vitest";
+import { tokenMintingModule } from "./test-fixtures/index.ts";
 
 const NON_CRYPTO_ERROR = new Error("boom, not a CryptoError");
 
@@ -24,8 +24,8 @@ describe("openOrReauth: non-CryptoError rethrow", () => {
   it("propagates an error from `open` that is not a CryptoError, unwrapped", async () => {
     const repos: Repos = createMemoryRepos();
     const provider = await repos.providers.ensure({
-      type: "sftpgo",
-      baseUrl: "http://sftpgo.fake",
+      type: "webdav",
+      baseUrl: "http://tokens.test",
     });
     const account = await repos.accounts.create({ displayName: "alice" });
     const identity = await repos.identities.create({
@@ -46,7 +46,7 @@ describe("openOrReauth: non-CryptoError rethrow", () => {
         forIdentity: async () => ({
           identity,
           provider,
-          module: sftpgoModule,
+          module: tokenMintingModule(),
           instance: { id: provider.id, baseUrl: provider.baseUrl, config: {} },
         }),
       },

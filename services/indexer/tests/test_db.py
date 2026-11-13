@@ -29,13 +29,13 @@ def test_connect_retries_then_raises() -> None:
 
 
 def test_upsert_root_idempotent(db_conn: psycopg.Connection) -> None:
-    first = db.upsert_root(db_conn, "sftpgo")
-    second = db.upsert_root(db_conn, "sftpgo")
+    first = db.upsert_root(db_conn, "files")
+    second = db.upsert_root(db_conn, "files")
     assert first == second
 
 
 def test_upsert_root_distinct_names(db_conn: psycopg.Connection) -> None:
-    a = db.upsert_root(db_conn, "sftpgo")
+    a = db.upsert_root(db_conn, "files")
     b = db.upsert_root(db_conn, "photos")
     assert a != b
 
@@ -100,7 +100,7 @@ def test_wait_for_schema_version_times_out() -> None:
 
 
 def test_upsert_file_and_get_manifest(db_conn: psycopg.Connection) -> None:
-    root_id = db.upsert_root(db_conn, "sftpgo")
+    root_id = db.upsert_root(db_conn, "files")
     file_id = db.upsert_file(db_conn, root_id, "a/b.txt", "b.txt", ".txt", 10, 123, "sha1", "text/plain")
     assert file_id > 0
     manifest = db.get_manifest(db_conn, root_id)
@@ -108,7 +108,7 @@ def test_upsert_file_and_get_manifest(db_conn: psycopg.Connection) -> None:
 
 
 def test_scan_manifest_includes_content_key_and_image_embedding_presence(db_conn: psycopg.Connection) -> None:
-    root_id = db.upsert_root(db_conn, "sftpgo")
+    root_id = db.upsert_root(db_conn, "files")
     other_root = db.upsert_root(db_conn, "photos")
     db.upsert_file(db_conn, root_id, "embedded.jpg", "embedded.jpg", ".jpg", 10, 1, "sha-embedded", None)
     db.upsert_file(db_conn, root_id, "copy.jpg", "copy.jpg", ".jpg", 10, 2, "sha-embedded", None)
@@ -127,7 +127,7 @@ def test_scan_manifest_includes_content_key_and_image_embedding_presence(db_conn
 
 
 def test_scan_manifest_flags_only_unresolved_thumbnail_failures(db_conn: psycopg.Connection) -> None:
-    root_id = db.upsert_root(db_conn, "sftpgo")
+    root_id = db.upsert_root(db_conn, "files")
     other_root = db.upsert_root(db_conn, "photos")
     for path in ("failed.jpg", "resolved.jpg", "embedding.jpg", "elsewhere.jpg"):
         db.upsert_file(db_conn, root_id, path, path, ".jpg", 1, 1, f"sha-{path}", None)
@@ -146,7 +146,7 @@ def test_scan_manifest_flags_only_unresolved_thumbnail_failures(db_conn: psycopg
 
 
 def test_mark_pdfs_skipped_by_ocr_moves_only_live_text_less_pdfs(db_conn: psycopg.Connection) -> None:
-    root_id = db.upsert_root(db_conn, "sftpgo")
+    root_id = db.upsert_root(db_conn, "files")
     other_root = db.upsert_root(db_conn, "photos")
     rows = {
         (root_id, "scan.pdf", ".pdf", "no_text"),
@@ -169,7 +169,7 @@ def test_mark_pdfs_skipped_by_ocr_moves_only_live_text_less_pdfs(db_conn: psycop
 
 
 def test_upsert_file_conflict_updates_row(db_conn: psycopg.Connection) -> None:
-    root_id = db.upsert_root(db_conn, "sftpgo")
+    root_id = db.upsert_root(db_conn, "files")
     db.upsert_file(db_conn, root_id, "a.txt", "a.txt", ".txt", 10, 1, "sha1", "text/plain")
     existing_id = db.upsert_file(db_conn, root_id, "a.txt", "a.txt", ".txt", 10, 1, "sha1", "text/plain")
     db.update_file_status(db_conn, existing_id, "indexed", 5, None)
@@ -182,7 +182,7 @@ def test_upsert_file_conflict_updates_row(db_conn: psycopg.Connection) -> None:
 
 
 def test_insert_chunks_and_missing_embeddings(db_conn: psycopg.Connection) -> None:
-    root_id = db.upsert_root(db_conn, "sftpgo")
+    root_id = db.upsert_root(db_conn, "files")
     file_id = db.upsert_file(db_conn, root_id, "a.txt", "a.txt", ".txt", 10, 1, "sha1", "text/plain")
     db.insert_chunks(db_conn, file_id, ["hello", "world"], [None, None])
     missing = db.chunks_missing_embeddings(db_conn, root_id, "a.txt")
@@ -192,7 +192,7 @@ def test_insert_chunks_and_missing_embeddings(db_conn: psycopg.Connection) -> No
 
 
 def test_insert_chunks_empty_is_noop(db_conn: psycopg.Connection) -> None:
-    root_id = db.upsert_root(db_conn, "sftpgo")
+    root_id = db.upsert_root(db_conn, "files")
     file_id = db.upsert_file(db_conn, root_id, "a.txt", "a.txt", ".txt", 10, 1, "sha1", "text/plain")
     db.insert_chunks(db_conn, file_id, [], [])  # should not raise
 
@@ -202,7 +202,7 @@ def test_set_chunk_embeddings_empty_is_noop(db_conn: psycopg.Connection) -> None
 
 
 def test_mark_file_indexed_and_error(db_conn: psycopg.Connection) -> None:
-    root_id = db.upsert_root(db_conn, "sftpgo")
+    root_id = db.upsert_root(db_conn, "files")
     db.upsert_file(db_conn, root_id, "a.txt", "a.txt", ".txt", 10, 1, "sha1", "text/plain")
     db.mark_file_indexed(db_conn, root_id, "a.txt")
     assert db.get_manifest(db_conn, root_id)["a.txt"][2] == "indexed"
@@ -211,7 +211,7 @@ def test_mark_file_indexed_and_error(db_conn: psycopg.Connection) -> None:
 
 
 def test_mark_deleted_single_file(db_conn: psycopg.Connection) -> None:
-    root_id = db.upsert_root(db_conn, "sftpgo")
+    root_id = db.upsert_root(db_conn, "files")
     db.upsert_file(db_conn, root_id, "a.txt", "a.txt", ".txt", 10, 1, "sha1", "text/plain")
     ids = db.mark_deleted(db_conn, root_id, "a.txt", is_dir=False)
     assert len(ids) == 1
@@ -221,13 +221,13 @@ def test_mark_deleted_single_file(db_conn: psycopg.Connection) -> None:
 
 
 def test_mark_deleted_no_matching_rows_is_noop(db_conn: psycopg.Connection) -> None:
-    root_id = db.upsert_root(db_conn, "sftpgo")
+    root_id = db.upsert_root(db_conn, "files")
     ids = db.mark_deleted(db_conn, root_id, "never-existed.txt", is_dir=False)
     assert ids == []
 
 
 def test_mark_deleted_subtree(db_conn: psycopg.Connection) -> None:
-    root_id = db.upsert_root(db_conn, "sftpgo")
+    root_id = db.upsert_root(db_conn, "files")
     db.upsert_file(db_conn, root_id, "dir/a.txt", "a.txt", ".txt", 1, 1, "sha1", None)
     db.upsert_file(db_conn, root_id, "dir/b.txt", "b.txt", ".txt", 1, 1, "sha2", None)
     db.upsert_file(db_conn, root_id, "other.txt", "other.txt", ".txt", 1, 1, "sha3", None)
@@ -240,7 +240,7 @@ def test_mark_deleted_subtree(db_conn: psycopg.Connection) -> None:
 
 
 def test_rename_file(db_conn: psycopg.Connection) -> None:
-    root_id = db.upsert_root(db_conn, "sftpgo")
+    root_id = db.upsert_root(db_conn, "files")
     db.upsert_file(db_conn, root_id, "old.txt", "old.txt", ".txt", 1, 1, "sha1", None)
     moved = db.rename_paths(db_conn, root_id, "old.txt", "new.txt", is_dir=False)
     assert moved == 1
@@ -248,7 +248,7 @@ def test_rename_file(db_conn: psycopg.Connection) -> None:
 
 
 def test_rename_file_overwrites_stale_destination(db_conn: psycopg.Connection) -> None:
-    root_id = db.upsert_root(db_conn, "sftpgo")
+    root_id = db.upsert_root(db_conn, "files")
     db.upsert_file(db_conn, root_id, "old.txt", "old.txt", ".txt", 1, 1, "sha1", None)
     dst_id = db.upsert_file(db_conn, root_id, "new.txt", "new.txt", ".txt", 1, 1, "sha2", None)
     db.mark_deleted(db_conn, root_id, "new.txt", is_dir=False)
@@ -264,7 +264,7 @@ def test_rename_file_overwrites_stale_destination(db_conn: psycopg.Connection) -
 
 
 def test_rename_dir(db_conn: psycopg.Connection) -> None:
-    root_id = db.upsert_root(db_conn, "sftpgo")
+    root_id = db.upsert_root(db_conn, "files")
     db.upsert_file(db_conn, root_id, "dir/a.txt", "a.txt", ".txt", 1, 1, "sha1", None)
     db.upsert_file(db_conn, root_id, "dir/sub/b.txt", "b.txt", ".txt", 1, 1, "sha2", None)
     moved = db.rename_paths(db_conn, root_id, "dir", "moved", is_dir=True)
@@ -273,7 +273,7 @@ def test_rename_dir(db_conn: psycopg.Connection) -> None:
 
 
 def test_insert_moves(db_conn: psycopg.Connection) -> None:
-    root_id = db.upsert_root(db_conn, "sftpgo")
+    root_id = db.upsert_root(db_conn, "files")
     db.insert_moves(db_conn, root_id, "old.txt", "new.txt", "watcher")
     with db_conn.cursor() as cur:
         cur.execute('SELECT src, dst, actor FROM "idx"."moves" WHERE root_id = %s', (root_id,))
@@ -281,8 +281,8 @@ def test_insert_moves(db_conn: psycopg.Connection) -> None:
 
 
 def test_record_event_inserts_row(db_conn: psycopg.Connection) -> None:
-    root_id = db.upsert_root(db_conn, "sftpgo")
-    event = build_event("created", "sftpgo", "a.txt")
+    root_id = db.upsert_root(db_conn, "files")
+    event = build_event("created", "files", "a.txt")
     db.record_event(db_conn, root_id, event)
     with db_conn.cursor() as cur:
         cur.execute('SELECT kind, path, target_path FROM "idx"."events" WHERE root_id = %s', (root_id,))
@@ -290,14 +290,14 @@ def test_record_event_inserts_row(db_conn: psycopg.Connection) -> None:
 
 
 def test_prune_events_removes_old_rows(db_conn: psycopg.Connection) -> None:
-    root_id = db.upsert_root(db_conn, "sftpgo")
+    root_id = db.upsert_root(db_conn, "files")
     old = datetime.now(UTC) - timedelta(days=30)
     with db_conn.cursor() as cur:
         cur.execute(
             'INSERT INTO "idx"."events" (at, root_id, kind, path) VALUES (%s, %s, %s, %s)',
             (old, root_id, "created", "old.txt"),
         )
-    db.record_event(db_conn, root_id, build_event("created", "sftpgo", "new.txt"))
+    db.record_event(db_conn, root_id, build_event("created", "files", "new.txt"))
     removed = db.prune_events(db_conn, older_than_days=7)
     assert removed == 1
     with db_conn.cursor() as cur:
@@ -306,18 +306,18 @@ def test_prune_events_removes_old_rows(db_conn: psycopg.Connection) -> None:
 
 
 def test_scan_lifecycle(db_conn: psycopg.Connection) -> None:
-    root_id = db.upsert_root(db_conn, "sftpgo")
+    root_id = db.upsert_root(db_conn, "files")
     scan_id, started_at = db.start_scan(db_conn, root_id)
     assert scan_id > 0
     assert started_at is not None
     db.finish_scan(db_conn, scan_id, seen=5, changed=2, deleted=1, errors=0)
-    stats = db.root_stats(db_conn, "sftpgo", root_id)
+    stats = db.root_stats(db_conn, "files", root_id)
     assert stats.last_scan is not None
     assert stats.last_scan["files_seen"] == 5
 
 
 def test_sweep_vanished_marks_untouched_rows_deleted(db_conn: psycopg.Connection) -> None:
-    root_id = db.upsert_root(db_conn, "sftpgo")
+    root_id = db.upsert_root(db_conn, "files")
     db.upsert_file(db_conn, root_id, "kept.txt", "kept.txt", ".txt", 1, 1, "sha1", None)
     vanished_id = db.upsert_file(db_conn, root_id, "vanished.txt", "vanished.txt", ".txt", 1, 1, "sha2", None)
     db.insert_chunks(db_conn, vanished_id, ["gone text"], [None])
@@ -331,7 +331,7 @@ def test_sweep_vanished_marks_untouched_rows_deleted(db_conn: psycopg.Connection
 
 
 def test_sweep_vanished_spares_rows_written_after_the_scan_started(db_conn: psycopg.Connection) -> None:
-    root_id = db.upsert_root(db_conn, "sftpgo")
+    root_id = db.upsert_root(db_conn, "files")
     db.upsert_file(db_conn, root_id, "old.txt", "old.txt", ".txt", 1, 1, "sha1", None)
     _scan_id, started_at = db.start_scan(db_conn, root_id)
     # The watcher recreated it after the walk passed its directory.
@@ -345,7 +345,7 @@ def test_sweep_vanished_spares_rows_written_after_the_scan_started(db_conn: psyc
 def test_sweep_vanished_counts_each_row_once_across_batches(
     db_conn: psycopg.Connection, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    root_id = db.upsert_root(db_conn, "sftpgo")
+    root_id = db.upsert_root(db_conn, "files")
     for name in ("a.txt", "b.txt", "c.txt"):
         db.upsert_file(db_conn, root_id, name, name, ".txt", 1, 1, name, None)
     db.mark_deleted(db_conn, root_id, "c.txt", False)
@@ -376,7 +376,7 @@ def test_upsert_thumbnail_and_count(db_conn: psycopg.Connection) -> None:
 
 
 def test_media_files_excludes_deleted(db_conn: psycopg.Connection) -> None:
-    root_id = db.upsert_root(db_conn, "sftpgo")
+    root_id = db.upsert_root(db_conn, "files")
     db.upsert_file(db_conn, root_id, "a.png", "a.png", ".png", 100, 1, "sha1", "image/png")
     db.upsert_file(db_conn, root_id, "b.pdf", "b.pdf", ".pdf", 200, 1, "sha2", "application/pdf")
     db.mark_deleted(db_conn, root_id, "b.pdf", False)
@@ -385,7 +385,7 @@ def test_media_files_excludes_deleted(db_conn: psycopg.Connection) -> None:
 
 
 def test_media_files_empty_root(db_conn: psycopg.Connection) -> None:
-    root_id = db.upsert_root(db_conn, "sftpgo")
+    root_id = db.upsert_root(db_conn, "files")
     assert db.media_files(db_conn, root_id) == []
 
 
@@ -433,13 +433,13 @@ def test_delete_image_embedding(db_conn: psycopg.Connection) -> None:
 
 
 def test_root_stats_counts_and_chunks(db_conn: psycopg.Connection) -> None:
-    root_id = db.upsert_root(db_conn, "sftpgo")
+    root_id = db.upsert_root(db_conn, "files")
     f1 = db.upsert_file(db_conn, root_id, "a.txt", "a.txt", ".txt", 1, 1, "sha1", None)
     db.update_file_status(db_conn, f1, "indexed", 10, None)
     db.insert_chunks(db_conn, f1, ["hello"], [[0.1] * 384])
     f2 = db.upsert_file(db_conn, root_id, "b.txt", "b.txt", ".txt", 1, 1, "sha2", None)
     db.update_file_status(db_conn, f2, "error", 0, "boom")
-    stats = db.root_stats(db_conn, "sftpgo", root_id)
+    stats = db.root_stats(db_conn, "files", root_id)
     assert stats.counts_by_status == {"indexed": 1, "error": 1}
     assert stats.chunks == 1
     assert stats.chunks_embedded == 1
@@ -447,7 +447,7 @@ def test_root_stats_counts_and_chunks(db_conn: psycopg.Connection) -> None:
 
 
 def test_errors_sample(db_conn: psycopg.Connection) -> None:
-    root_id = db.upsert_root(db_conn, "sftpgo")
+    root_id = db.upsert_root(db_conn, "files")
     f1 = db.upsert_file(db_conn, root_id, "a.txt", "a.txt", ".txt", 1, 1, "sha1", None)
     db.update_file_status(db_conn, f1, "error", 0, "boom")
     sample = db.errors_sample(db_conn, root_id)
@@ -455,7 +455,7 @@ def test_errors_sample(db_conn: psycopg.Connection) -> None:
 
 
 def test_mark_pending_whole_root(db_conn: psycopg.Connection) -> None:
-    root_id = db.upsert_root(db_conn, "sftpgo")
+    root_id = db.upsert_root(db_conn, "files")
     f1 = db.upsert_file(db_conn, root_id, "a.txt", "a.txt", ".txt", 1, 1, "sha1", None)
     db.update_file_status(db_conn, f1, "indexed", 10, None)
     count = db.mark_pending(db_conn, root_id, None, None)
@@ -464,7 +464,7 @@ def test_mark_pending_whole_root(db_conn: psycopg.Connection) -> None:
 
 
 def test_mark_pending_subtree(db_conn: psycopg.Connection) -> None:
-    root_id = db.upsert_root(db_conn, "sftpgo")
+    root_id = db.upsert_root(db_conn, "files")
     f1 = db.upsert_file(db_conn, root_id, "dir/a.txt", "a.txt", ".txt", 1, 1, "sha1", None)
     f2 = db.upsert_file(db_conn, root_id, "other.txt", "other.txt", ".txt", 1, 1, "sha2", None)
     db.update_file_status(db_conn, f1, "indexed", 1, None)
@@ -491,7 +491,7 @@ def test_mark_pending_subtree_treats_prefix_as_literal(
     selected_path: str,
     sibling_path: str,
 ) -> None:
-    root_id = db.upsert_root(db_conn, "sftpgo")
+    root_id = db.upsert_root(db_conn, "files")
     other_root_id = db.upsert_root(db_conn, "photos")
     for file_root_id, path, sha256 in [
         (root_id, selected_path, "selected"),
@@ -513,7 +513,7 @@ def test_mark_pending_subtree_treats_prefix_as_literal(
 
 
 def test_unhashed_imports_have_no_derivative_key(db_conn: psycopg.Connection) -> None:
-    root_id = db.upsert_root(db_conn, "sftpgo")
+    root_id = db.upsert_root(db_conn, "files")
     db.upsert_file(db_conn, root_id, "import.png", "import.png", ".png", 100, 1, None, "image/png")
     assert db.file_content_key(db_conn, root_id, "import.png") is None
     assert db.media_files(db_conn, root_id) == []

@@ -23,7 +23,7 @@ const CONFIG: ResolvedAiConfig = {
   chat: true,
 };
 const HOME_SCOPES: readonly Scope[] = [
-  { rootName: "sftpgo", fsPrefix: "/alice", virtualPrefix: "/" },
+  { rootName: "files", fsPrefix: "/alice", virtualPrefix: "/" },
 ];
 
 /** A model whose replies come from a queue; a hanging reply waits for its signal. */
@@ -88,7 +88,7 @@ async function setup(
 ): Promise<Setup> {
   const repos = createMemoryRepos();
   const account = await repos.accounts.create({ displayName: null });
-  const provider = await repos.providers.ensure({ type: "sftpgo", baseUrl: "http://a" });
+  const provider = await repos.providers.ensure({ type: "webdav", baseUrl: "http://a" });
   const identity = await repos.identities.create({
     accountId: account.id,
     providerId: provider.id,

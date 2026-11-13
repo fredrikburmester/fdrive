@@ -1,109 +1,18 @@
-import { CoreError } from "./errors.ts";
-import { isSafeSegment, isWithin, joinPath, normalizePath } from "./paths.ts";
+import { isWithin, joinPath, normalizePath } from "./paths.ts";
 
 /**
  * A mapping between a slice of one storage root's filesystem tree and a
  * slice of the user's virtual filesystem. `fsPrefix` is a normalized path
  * relative to the root's mount ("/alice" means the directory "alice"
  * directly under the root). `virtualPrefix` is the virtual path the user
- * sees for that slice ("/" for their home).
+ * sees for that slice ("/" for their home). An identity may carry several
+ * scopes, nested ones included: the longest matching prefix wins in both
+ * directions.
  */
 export interface Scope {
   readonly rootName: string;
   readonly fsPrefix: string;
   readonly virtualPrefix: string;
-}
-
-/** A parsed `FDRIVE_HOME_TEMPLATE`, see `parseHomeTemplate`. */
-export interface HomeTemplate {
-  readonly rootName: string;
-  readonly pathTemplate: string;
-}
-
-const ROOT_NAME_PATTERN = /^[a-z0-9][a-z0-9_-]*$/;
-const USERNAME_PLACEHOLDER = "{username}";
-
-/**
- * Parses a home template of the form `<rootName>:<path with {username}>`,
- * for example the default `"sftpgo:/{username}"`.
- *
- * `rootName` must match `/^[a-z0-9][a-z0-9_-]*$/`. The path part may
- * contain `{username}` at most once, and must normalize cleanly once the
- * placeholder is substituted. Throws `CoreError("invalid_template")`
- * otherwise.
- */
-export function parseHomeTemplate(template: string): HomeTemplate {
-  const separatorIndex = template.indexOf(":");
-  if (separatorIndex <= 0) {
-    throw new CoreError("invalid_template", 'template must be "<rootName>:<path>"', { template });
-  }
-
-  const rootName = template.slice(0, separatorIndex);
-  const pathTemplate = template.slice(separatorIndex + 1);
-
-  if (!ROOT_NAME_PATTERN.test(rootName)) {
-    throw new CoreError("invalid_template", "invalid root name", { rootName });
-  }
-
-  const placeholderCount = pathTemplate.split(USERNAME_PLACEHOLDER).length - 1;
-  if (placeholderCount > 1) {
-    throw new CoreError("invalid_template", "{username} may appear at most once", { template });
-  }
-
-  try {
-    normalizePath(pathTemplate.replaceAll(USERNAME_PLACEHOLDER, "probe"));
-  } catch {
-    throw new CoreError("invalid_template", "template path does not normalize cleanly", {
-      template,
-    });
-  }
-
-  return { rootName, pathTemplate };
-}
-
-/** The default home template used when no `FDRIVE_HOME_TEMPLATE` is set. */
-export const DEFAULT_HOME_TEMPLATE: HomeTemplate = parseHomeTemplate("sftpgo:/{username}");
-
-/**
- * Builds the list of scopes for one identity: the home scope derived from
- * `template` and `username` first, followed by any `overrides`. Overrides
- * are normalized; an override whose `virtualPrefix` matches the home scope
- * replaces it rather than duplicating it, and duplicate `virtualPrefix`
- * values among the overrides keep the last one given.
- *
- * Throws `CoreError("invalid_argument")` when `username` is not a safe
- * path segment.
- */
-export function scopesFor(input: {
-  readonly template: HomeTemplate;
-  readonly username: string;
-  readonly overrides?: readonly Scope[];
-}): Scope[] {
-  const { template, username, overrides = [] } = input;
-
-  if (!isSafeSegment(username)) {
-    throw new CoreError("invalid_argument", "username is not a safe path segment", { username });
-  }
-
-  const homeScope: Scope = {
-    rootName: template.rootName,
-    fsPrefix: normalizePath(template.pathTemplate.replaceAll(USERNAME_PLACEHOLDER, username)),
-    virtualPrefix: "/",
-  };
-
-  const byVirtualPrefix = new Map<string, Scope>();
-  byVirtualPrefix.set(homeScope.virtualPrefix, homeScope);
-
-  for (const override of overrides) {
-    const normalized: Scope = {
-      rootName: override.rootName,
-      fsPrefix: normalizePath(override.fsPrefix),
-      virtualPrefix: normalizePath(override.virtualPrefix),
-    };
-    byVirtualPrefix.set(normalized.virtualPrefix, normalized);
-  }
-
-  return Array.from(byVirtualPrefix.values());
 }
 
 /**

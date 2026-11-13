@@ -1,9 +1,10 @@
 # macOS write beta: remaining work
 
-Updated 2026-09-16. Apache DAV native writes merged in PR #21. The pinned SFTPGo
-integration merged in PR #22 and was later removed together with its `fdrive-local-v1` mode:
-stock SFTPGo, WebDAV and S3 write under fdrive's default optimistic contract, with Apache DAV
-locks as an opt-in. Full beta qualification remains open.
+Updated 2026-11-12. Apache DAV native writes merged in PR #21. The pinned SFTPGo
+integration merged in PR #22 and was later removed together with its `fdrive-local-v1` mode,
+and SFTPGo itself has since been replaced by fdrive's local folder: the local folder, WebDAV
+and S3 write under fdrive's default optimistic contract, with Apache DAV locks as an opt-in.
+Full beta qualification remains open.
 Current behavior: [macOS](../MACOS.md#write-configuration-and-recovery).
 Search remains excluded.
 
@@ -11,9 +12,8 @@ Search remains excluded.
 
 The user chose **storage-side enforcement** for the leased Apache DAV mode, and later accepted
 the weaker optimistic contract, since 2026-09-18 the default for every storage; see
-[STOCK-SFTPGO-WRITES.md](STOCK-SFTPGO-WRITES.md). Qualified Apache DAV requires every writer
-to obey its exclusive locks. Native virtual-folder identities and non-local SFTPGo storage
-remain unsupported.
+[STOCK-SFTPGO-WRITES.md](STOCK-SFTPGO-WRITES.md) for the design record. Qualified Apache DAV
+requires every writer to obey its exclusive locks.
 
 Keep explicit v2 write grants, staged uploads, retained originals, durable server receipts
 and native pending copies. Publication followed by a crash before the receipt remains
@@ -57,9 +57,10 @@ Do not promise support for arbitrary package documents or live databases.
 
 ## Acceptance and verification
 
-- Through real Finder and disposable SFTPGo/WebDAV: create empty/nonempty files, drag a nested
-  folder, save repeatedly in TextEdit and a safe-save editor, rename while saving, move a
-  folder with downloaded children, conflict on destination, and restore from Trash.
+- Through real Finder and a disposable local folder and WebDAV: create empty/nonempty files,
+  drag a nested folder, save repeatedly in TextEdit and a safe-save editor, rename while
+  saving, move a folder with downloaded children, conflict on destination, and restore from
+  Trash.
 - Use two independent clients plus the web app and an external storage writer: concurrent
   saves; same-size/same-mtime replacement; content edit versus rename/delete; changed parent;
   directory deletion versus new descendants. Preserve every unacknowledged local edit.

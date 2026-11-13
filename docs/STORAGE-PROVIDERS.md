@@ -1,23 +1,27 @@
 # Adding a storage provider
 
-This guide describes the implemented provider extension points. fdrive is an SFTPGo client
-first: SFTPGo, WebDAV and S3 are the registered backends, and the features fdrive builds on
-SFTPGo reach another backend one capability flag at a time. fdrive-owned shares are not
-implemented. Start with a provider that supports ordinary file operations; enable additional
-features only after their complete API and UI paths work. WebDAV is the reference for a Basic-auth backend with basic file operations and
+This guide describes the implemented provider extension points. The registered backends are
+the local folder, WebDAV and S3. The local folder is fdrive's own storage, a folder on the
+API's disk with fdrive's users, and has every feature; the features built on it reach another
+backend one capability flag at a time. Start with a provider that supports ordinary file
+operations; enable additional features only after their complete API and UI paths work.
+WebDAV is the reference for a Basic-auth backend with basic file operations and
 fdrive-performed Trash: see [`packages/webdav`](../packages/webdav/src/module.ts) and
 [WEBDAV.md](WEBDAV.md) for its decisions and protocol mapping. S3 is the reference for a
 request-signing backend over an SDK and for directories emulated on a flat key space: see
-[`packages/s3`](../packages/s3/src/module.ts) and [S3.md](S3.md).
+[`packages/s3`](../packages/s3/src/module.ts) and [S3.md](S3.md). The local folder is the
+reference for a module the deployment configures, that admits users on every request and
+that names an index root: see [`packages/local`](../packages/local/src/module.ts).
 
 For environment setup, see [Development](DEVELOPMENT.md). Follow [AGENTS.md](../AGENTS.md)
 for repository workflow and the required checks.
 
 ## Architecture and reference code
 
-A **provider type** is a module supplied by a package. A **provider instance** is an
-administrator-configured row in `app.providers`: an id, type, endpoint, label, string-valued
-configuration, enabled state and environment-management flag. Several instances can use the
+A **provider type** is a module supplied by a package. A **provider instance** is a row in
+`app.providers`, configured by an administrator or, for a `deploymentManaged` module, by the
+deployment: an id, type, endpoint, label, string-valued configuration, enabled state and
+environment-management flag. Several instances can use the
 same type; rows are unique by `(type, baseUrl)`, not arbitrary config such as a bucket name.
 An **identity** belongs to an instance and an external username; accounts link
 identities rather than giving a credential access to every instance of a type.
@@ -33,8 +37,8 @@ The request path is:
 | --- | --- |
 | Module, field metadata, instance and session types | [core provider port](../packages/core/src/ports/provider.ts) |
 | File operations, streams and optional methods | [core storage port](../packages/core/src/ports/storage.ts) |
-| Working module and injectable client factory | [SFTPGo module](../packages/sftpgo/src/module.ts), [WebDAV module](../packages/webdav/src/module.ts), [S3 module](../packages/s3/src/module.ts) |
-| Adapter and error translation | [SFTPGo storage adapter](../packages/sftpgo/src/storage-provider.ts), [WebDAV storage adapter](../packages/webdav/src/storage-provider.ts), [S3 storage adapter](../packages/s3/src/storage-provider.ts) |
+| Working module and injectable client factory | [local module](../packages/local/src/module.ts), [WebDAV module](../packages/webdav/src/module.ts), [S3 module](../packages/s3/src/module.ts) |
+| Adapter and error translation | [local storage adapter](../packages/local/src/storage-provider.ts), [WebDAV storage adapter](../packages/webdav/src/storage-provider.ts), [S3 storage adapter](../packages/s3/src/storage-provider.ts) |
 | Instance resolution, config validation and capabilities | [provider service](../apps/api/src/providers/service.ts) |
 | Per-request storage and Trash composition | [storage factory](../apps/api/src/auth/storage-factory.ts) |
 | Credential validation and post-login binding checks | [credential verification](../apps/api/src/accounts/credentials.ts) |
@@ -42,7 +46,8 @@ The request path is:
 
 ### Display names
 
-Initial setup collects **Storage name**. Administrators can rename an existing instance at
+Setup collects **Storage name** when it connects WebDAV or S3; the local folder's row shows
+its module's label until renamed. Administrators can rename an existing instance at
 **System → Storage → Edit → Name**, including environment-managed instances whose address is
 deployment-controlled. The existing `label` is shared by all logins on that provider. Names
 are trimmed and must contain 1–120 characters; labels render as plain text. Equal names never
@@ -69,7 +74,7 @@ the technical address belongs in administrator connection settings.
 
 Use `packages/provider-example` with package name `@fdrive/provider-example`, replacing
 `example` with the backend name. Copy the build and test configuration pattern from
-[packages/sftpgo](../packages/sftpgo/package.json), including its TypeScript configs and Vitest
+[packages/webdav](../packages/webdav/package.json), including its TypeScript configs and Vitest
 unit/integration configs. Keep protocol-specific client code, adapters and fakes in this package.
 
 Expose the module from `src/index.ts`. Match the existing conditional exports: `types` and
@@ -93,7 +98,7 @@ verify that the new dependency builds and is included in the deployed API depend
 
 Export a module with `type`, `label`, `configFields`, `credentialFields`, all eight capability
 flags, a Trash strategy, a share strategy, `probe`, `authenticate` and `createStorage`.
-Optional members are `indexRootName` and `mint`. There is no `attribution`, `configSchema`, `credentialSchema` or
+Optional members are `deploymentManaged`, `indexRootName`, `admit` and `mint`. There is no `attribution`, `configSchema`, `credentialSchema` or
 `createShares` member: `/about` names the connected provider, not its upstream project.
 
 This compilable wiring skeleton uses injected protocol implementations. It does not implement
@@ -123,8 +128,8 @@ export function createExampleModule(driver: ExampleDriver): ProviderModule {
       trash: false,
       shares: false,
       office: false,
+      shareWithPeople: false,
       index: false,
-      scopeMapping: false,
     },
     trash: "none",
     shares: "none",
@@ -154,9 +159,9 @@ kind controls rendering; it does not implement protocol-specific validation, num
 URL validation for arbitrary config fields.
 
 Parse provider-specific settings at the module/client boundary and test malformed values.
-There is no generic custom-config-validation callback; SFTPGo's home-template validation has an
-explicit check in the provider service. If a new setting needs validation before saving, extend
-that boundary deliberately rather than assuming the module can provide a schema hook.
+There is no generic custom-config-validation callback. If a new setting needs validation before
+saving, extend the provider service deliberately rather than assuming the module can provide a
+schema hook.
 
 Config is stored in provider JSON and returned to administrators, not envelope-encrypted like
 credentials. Put login secrets in `credentialFields`; a password-shaped config input does not
@@ -166,7 +171,7 @@ are not trimmed. Mark one-time codes `transient: true` so the API removes them b
 ### Authentication and refresh
 
 - `probe(instance, ctx)` checks reachability and backend identity without a user's credential;
-  return `{ ok, detail }`. Bound response sizes, network time and parsing work. The SFTPGo probe
+  return `{ ok, detail }`. Bound response sizes, network time and parsing work. The WebDAV probe
   is a reference for bounded requests and response handling.
 - `authenticate(instance, credential, ctx)` must verify credentials upstream and return a stable
   `externalUsername`, optionally with `{ token, expiresAt: Date }` for the token cache.
@@ -180,8 +185,12 @@ are not trimmed. Mark one-time codes `transient: true` so the API removes them b
   making authenticated requests. `session.getToken()` returns `null` without `mint`.
 - For expiring tokens, implement `mint(instance, { externalUsername, credential }, ctx)` and use
   `session.getToken()`. The API caches tokens, but storage retry is the adapter's responsibility:
-  SFTPGo invalidates and retries once on unauthorized. Avoid unlimited retries and unsafe replay
-  of consumed upload streams. Refresh must work without a stored transient one-time code.
+  invalidate and retry once on unauthorized. Avoid unlimited retries and unsafe replay of consumed
+  upload streams. Refresh must work without a stored transient one-time code. No shipped module
+  mints.
+- Implement `admit(instance, externalUsername)` when the backend would otherwise keep serving a
+  user it has since disabled, as the local folder would: throw `forbidden` and the API refuses
+  the request before building storage.
 
 Translate protocol errors to `StorageError` from core. Authentication uses `unauthorized` for
 wrong credentials, `forbidden` for refused access and `upstream_unavailable` for backend/network
@@ -200,14 +209,18 @@ The optional methods are `probeDirectoryRead`, `setModifiedAt`, `zip`, and the `
   treating a literal `%41` filename as `A`. Confine protocol responses/redirects to the configured
   endpoint and path prefix; never forward credentials to an unrelated server.
 - `list` returns core `FileEntry` values. `stat` handles files and directories; `statFile` must
-  throw `bad_request` for a directory and `not_found` for a missing path.
+  throw `bad_request` for a directory and `not_found` for a missing path. A backend that also
+  finds other spellings of a name (the local folder on a macOS disk ignores case and accent
+  encoding) reports the stored one as `stat`'s `path`, so links and lookups land on the path
+  listings show.
 - `download` returns a Web `ReadableStream<Uint8Array>` with status 200/206 and response metadata.
   Honour `range`, `ifRange`, and cancellation. Pass upload cancellation through too; stream large
   bodies instead of buffering them in memory.
 - Support recursive directory copy/move/delete and requested parent creation. Document actual
-  overwrite behaviour. SFTPGo overwrites by default; some backends can reject an existing target
-  with `conflict`. Honour `overwrite: false` where supported. API pre-checks do not make a
-  backend's non-atomic operation atomic.
+  overwrite behaviour: some backends overwrite by default, others reject an existing target
+  with `conflict`. Honour `overwrite: false` where supported; the local folder publishes it with
+  `link`, a real create-if-absent. API pre-checks do not make a backend's non-atomic operation
+  atomic.
 - Omit unsupported optional methods rather than exposing methods that always throw. Keep their
   presence consistent with capabilities. `probeDirectoryRead`, if supplied, proves live read
   access rather than returning cached permissions or a stat result.
@@ -218,9 +231,11 @@ The current integration checklist has more than one registry edit:
 
 1. Add the type string to `ProviderType` in
    [contracts/providers.ts](../packages/contracts/src/providers.ts).
-2. Import the exported module and add it to `PROVIDER_MODULES` in the
+2. Import the exported module and add it to `createProviderModules` in the
    [API registry](../apps/api/src/providers/registry.ts). The API package dependency from step 1
-   must exist for this import to work.
+   must exist for this import to work. A module that needs deployment options, like the local
+   folder, joins from `deploymentModules` in
+   [local/modules.ts](../apps/api/src/local/modules.ts).
 3. Add a product label to
    [PROVIDER_TYPE_LABELS](../apps/web/src/lib/identity/provider-type.ts) and an icon to
    [ProviderIcon's ICONS map](../apps/web/src/components/identity/provider-icon.tsx).
@@ -229,8 +244,9 @@ The current integration checklist has more than one registry edit:
    generic login, account and System > Storage forms using the new module's metadata.
 
 For basic storage there should be no need for a new database schema or provider-specific file
-routes. Configured instances are added through **System > Storage**. The current setup wizard
-and `SFTPGO_URL` bootstrap remain SFTPGo-specific; registering another module does not change them.
+routes. Configured instances are added through **System > Storage**. Setup offers every module
+that is not `deploymentManaged` when the deployment serves no local folder; with
+`FDRIVE_STORAGE_ROOT` it creates the owner's local account instead.
 
 ## 5. Enable only supported features
 
@@ -244,26 +260,26 @@ permission checks; the capability is not proof that an Office server is configur
 | `zip` | Requires `storage.zip`. Without it, multi-download downloads individual files and skips directories; folder-only selections cannot download. |
 | `setModifiedAt` | Requires support for supplied mtimes and the optional setter. The Inspector shows an upload-time note when false. |
 | `atomicMove` | Describes the backend operation. False adds caution copy for folder moves/renames; it does not create a progress job. |
+| `trash` | Also requires `trash !== "none"` and enabled per-provider Trash settings. See below. |
+| `shares` | Must equal `shares !== "none"`; a registry test checks every module. `"owned"` links serve through the module's storage; folder archives need `zip`. See below. |
+| `office` | Keep false until storage admission, provider-bound locations and the full Office flow work for the new backend. |
+| `shareWithPeople` | Folders shared between users of the same storage, under `Shared with me`. Only where fdrive keeps both the users and the files (the local folder). |
+| `index` | Also requires `indexRootName(instance)` to name a configured root. The scope resolver then maps each login to `<root>/<username>` under it ([scoping](SCOPING.md)), so the backend's files must sit there on a disk the indexer reads. |
 
 A backend whose move is not one operation also declares it on the storage port, where the write
 paths can see it: `movesDirectoriesByCopy` keeps a folder move out of any publication lock, and
 `maxPublishBytes` caps what a caller may stage when publication is a copy the backend bounds.
 Both are absent for a backend that renames.
-| `trash` | Also requires `trash !== "none"` and enabled per-provider Trash settings. See below. |
-| `shares` | Must equal `shares !== "none"`; a registry test checks every module. Keep `"none"` for a new backend: only `"native"` is served today. See below. |
-| `office` | Keep false until storage admission, provider-bound locations and the full Office flow work for the new backend. |
-| `index` | Also requires `indexRootName(instance)` to name a configured root. The scope resolver currently admits SFTPGo only, so a new remote backend needs more than this callback. |
-| `scopeMapping` | Same root restriction; keep false until the scope resolver can safely map that backend. |
 
-### Storage beside SFTPGo
+### Storage beside the local folder
 
-fdrive is an SFTPGo client first. Search and thumbnails (`index`), `shares` and `office` are
-the features fdrive builds on SFTPGo (`SFTPGO_FEATURE_KEYS` in
+Search and thumbnails (`index`), `shares`, `shareWithPeople` and `office` are the features
+fdrive builds on the local folder (`FULL_STORAGE_FEATURE_KEYS` in
 [capabilities.ts](../apps/web/src/lib/identity/capabilities.ts)). A type with none of them is
 **files only** (`isFilesOnly`), which today is WebDAV and S3. Hidden controls are not enough:
 people must read the limit before they miss a feature. `storageNote` derives one line from
 the flags that names only the features the type lacks, leads with "Files only." when it
-lacks all three, and is null when it lacks none, so a feature added to a backend drops out
+lacks all four, and is null when it lacks none, so a feature added to a backend drops out
 of the note by flipping its flag, with no copy to chase. That line (`StorageNote`) appears
 on the login form and the Add login dialog once such a storage is chosen, under its login on
 the Account page, in the Add provider dialog, and on its System > Storage row, where a
@@ -286,57 +302,53 @@ Test server-side refusals as well as hidden controls; a stale client can still m
 
 ### Trash
 
-`trash: "native"` means the backend moves deletes into the supported recycle-folder layout;
-`"move"` asks the API storage factory to apply core's `withMoveToTrash`; `"none"` disables it.
-The factory then attaches `createRecycleFolderTrash` for listing, restore, purge and empty.
-Do not apply these wrappers a second time in the module.
+`trash: "move"`, every shipped module's strategy, asks the API storage factory to apply core's
+`withMoveToTrash`; `"none"` disables it. `"native"`, for a backend that moves deletes into the
+recycle folder itself, has no module. The factory then attaches `createRecycleFolderTrash` for
+listing, restore, purge and empty. Do not apply these wrappers a second time in the module.
 
-Native SFTPGo directory deletes create one ordinary timestamp file leaf for each nested file.
-Generic `"move"` providers use a separate `.fdrive-move-v1` namespace. Alternating structural
-markers and raw path segments keep long, numeric, Unicode and literal-percent names reversible
-without expanding a provider filename. File and directory leaves also occupy separate branches,
-so a whole-directory move cannot merge with ordinary file-leaf scaffolding. Legacy generic
-entries outside this namespace are not inferred automatically; in particular, an unmarked
-timestamp directory is never treated as a deleted directory. Restores and purges may leave empty
-path containers under the recycle root; Trash listing ignores them and **Empty Trash** removes
-them. This preserves empty directories without an unsafe list-then-recursive-delete cleanup.
-A recycle root belongs to one configured provider strategy; do not share it between native
-and generic move layouts. Native providers reserve no original filename for the generic layout.
+Deleted items live in a `.fdrive-move-v1` namespace inside the Trash folder. Alternating
+structural markers and raw path segments keep long, numeric, Unicode and literal-percent names
+reversible without expanding a provider filename. File and directory leaves also occupy
+separate branches, so a whole-directory move cannot merge with ordinary file-leaf scaffolding.
+Entries outside this namespace, such as those an SFTPGo recycle rule left in `.trash`, are not
+listed; in particular, an unmarked timestamp directory is never treated as a deleted directory.
+Restores and purges may leave empty path containers under the recycle root; Trash listing
+ignores them and **Empty Trash** removes them. This preserves empty directories without an
+unsafe list-then-recursive-delete cleanup.
 
-### Shares
-
-`shares: "native"` means the backend keeps its own public share objects and API: the share
-service creates and edits them with the owner's token and proxies the public share API to
-visitors (SFTPGo). `"none"` means no share links: the management routes refuse with
-`unsupported` and `capability: "shares"`, and the web states the limit. `"owned"` means fdrive
-keeps the share in `app.shares` (a row without an upstream id) and serves the link through
-the module's `StorageProvider`, checking the password, expiry and download limit itself
-([owned.ts](../apps/api/src/shares/owned.ts)); no module declares it yet, see
-[Owned shares](plans/OWNED-SHARES.md). The share code reads the strategy, never the provider
-type: the public routes are handed a `PublicShareAccess` (`list`, `download`, `zip`, `upload`
-and a neutral view of the share, in [access.ts](../apps/api/src/shares/access.ts)) whose
-implementation maps its backend's failures to API errors. The native adapter wraps SFTPGo's
-public share API; the owned one wraps the owner's storage confined to the shared path, and
-turns every storage failure into "unavailable" so a visitor never sees the owner's key
-refused as a wrong password.
-
-Settings live under `trash.configuration.<providerId>` in `app.settings`, not in
-`provider.config.trash`. They default to disabled with path `/.trash`. The native layout is
-`<trashPath>/<original directory>/<original filename>/<nanosecond timestamp>`; deleting inside
-the trash permanently deletes so purge/empty work. The native option is not an arbitrary
-upstream recycle-bin API hook.
+Trash settings live under `trash.configuration.<providerId>` in `app.settings`, not in
+`provider.config.trash`. They default to disabled with path `/.trash`. Deleting inside the
+trash permanently deletes so purge/empty work.
 
 `GET /api/v1/system/trash?providerId=` and the PUT body name the row explicitly; the routes
 never follow the caller's login. The response (`TrashSettings` in contracts) carries that
 provider module's strategy next to the stored configuration, and the
 [Trash settings form](../apps/web/src/components/system/trash-settings-card.tsx), rendered on
-each server's row under System > Storage, keys its copy on it: `native` asks operators to configure and confirm the SFTPGo rule, `move` explains that
-fdrive performs the move and needs no confirmation, `none` cannot be enabled. The strategy is
-never stored; the service reads it from the module on every request, refuses an update whose
-strategy no longer matches, and reads a stored row as disabled when the module's current
-strategy would not allow it. A new `"move"` backend needs a real round-trip test on its server
-(see the WebDAV container suite). The old proposal for automatic trash-folder ownership
-validation is not an implemented guarantee.
+each server's row under System > Storage, keys its copy on it: `move` explains that fdrive
+performs the move, `none` cannot be enabled. The strategy is never stored; the service reads
+it from the module on every request, refuses an update whose strategy no longer matches, and
+reads a stored row as disabled when the module's current strategy would not allow it. A new
+`"move"` backend needs a real round-trip test on its server (see the WebDAV container suite).
+The old proposal for automatic trash-folder ownership validation is not an implemented
+guarantee.
+
+### Shares
+
+`shares: "owned"` means fdrive keeps the share in `app.shares` and serves the link through
+the module's `StorageProvider`, checking the password, expiry and download limit itself
+([owned.ts](../apps/api/src/shares/owned.ts)); the local folder declares it. `"none"` means no
+share links: the management routes refuse with `unsupported` and `capability: "shares"`, and
+the web states the limit. The share code reads the strategy, never the provider type: the
+public routes are handed a `PublicShareAccess` (`list`, `download`, `zip`, `upload` and a
+neutral view of the share, in [access.ts](../apps/api/src/shares/access.ts)), which wraps the
+owner's storage confined to the shared path and turns every storage failure into
+"unavailable", so a visitor never sees the owner's credential refused as a wrong password.
+Folder archives use the storage's own `zip`, held to two at a time per link, an hour and
+`FDRIVE_JOB_MAX_BYTES` ([zip-limits.ts](../apps/api/src/shares/zip-limits.ts)); without `zip`
+a link serves everything but archives. Trash, backup folders and `/Shared with me` are never
+reachable through a link. What is left for WebDAV and S3 is in
+[Owned shares](plans/OWNED-SHARES.md).
 
 ## Isolation and lifecycle requirements
 
@@ -350,12 +362,14 @@ Preserve these behaviours when integrating a provider:
   Do not add mutable config that silently sends stored credentials to a different server.
   Create another instance for another server. Deletion is refused while identities reference
   the row; labels/configuration/enabled state have their own update paths.
-- Environment administrator names apply only to the configured SFTPGo endpoint, not matching
-  usernames on another provider. Other providers use persisted account administrator status.
-  Environment endpoint matching ignores trailing slashes; seeding reuses the pinned row and
-  preserves its stored address, identity bindings and an administrator's disabled state.
-- Missing/blank SFTPGo home templates mean no index mapping. Only setup/environment seeding
-  supply their default; a remote row must never inherit access to a local index root.
+- A `deploymentManaged` module's rows cannot be created, re-addressed or removed through the
+  API. Startup seeding creates and pins one row per such module, keeps an existing row's
+  enabled state, and unpins and disables any other pinned row (an SFTPGo row from before the
+  local folder, or a local row whose folder is no longer configured).
+- `FDRIVE_ADMIN_USERS` applies only to logins on the pinned row, not matching usernames on
+  another provider. Other providers use persisted account administrator status.
+- A module names an index root only for files on a disk the indexer reads; a remote row must
+  never inherit access to a local index root.
 - Disabling a provider blocks its storage operations without invalidating the whole session:
   account/admin routes, logout and identity switching remain available. `setup.initialized.v1`
   records initialization independently of provider availability; pending owner claims retain
@@ -370,9 +384,10 @@ as references for concurrent login/update, linked-account and cross-provider bou
 ## 6. Test the fake, backend and full application
 
 Run `describeStorageProvider(name, factory, options)` from `@fdrive/testkit` against both a
-protocol fake and a disposable real backend. See the
-[fake suite](../packages/sftpgo/src/conformance.test.ts) and
-[container suite](../packages/sftpgo/test/integration/container.contract.test.ts).
+protocol fake and a disposable real backend. See the WebDAV
+[fake suite](../packages/webdav/src/conformance.test.ts) and
+[container suite](../packages/webdav/test/integration/apache.contract.test.ts), or the
+[local folder's suite](../packages/local/src/conformance.test.ts) over a temporary directory.
 The factory returns `{ storage, cleanup? }` for each test. Options are `overwritesOnMove`
 (default false), `workspace` (otherwise a unique directory), and `probe` (false skips the
 optional live-read probe). There is no capabilities option; optional methods are detected on
@@ -390,7 +405,7 @@ For API tests, reuse [provider fixtures](../apps/api/src/providers/test-fixtures
 `ProviderServiceDeps.modules` injection. A new type must still be present in the contracts enum.
 
 Run one full path early: register the type, add an instance, log in, browse, upload, rename and
-delete against the real fixture server. Also link it beside SFTPGo, put the same path on both,
+delete against the real fixture server. Also link it beside a local login, put the same path on both,
 and prove reads/writes, API tokens and queued operations cannot cross identities. Exercise
 invalid credentials, revocation, disabled-provider recovery and unsupported controls/API calls.
 
@@ -411,7 +426,7 @@ running at a time. Report fake versus real-backend checks separately.
 ## Current limits
 
 A new module does not implement a remote index walker, provider-neutral Office admission,
-fdrive-owned shares, an OAuth login flow, a non-atomic move job, or an arbitrary native Trash
-API. Extend those application boundaries explicitly when needed; keep corresponding flags
-false until that work is complete. The index-root configuration still uses `sftpgoPath`.
+an OAuth login flow, a non-atomic move job, or an arbitrary native Trash API. Extend those
+application boundaries explicitly when needed; keep corresponding flags false until that work
+is complete.
 Provider changes emit `general` system events, but there is no dedicated UI page for that log.

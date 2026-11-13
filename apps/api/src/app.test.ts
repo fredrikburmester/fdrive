@@ -2,7 +2,7 @@ import { AboutResponse, HealthResponse } from "@fdrive/contracts";
 import { CoreError, type StorageProvider } from "@fdrive/core";
 import type { Logger } from "pino";
 import { describe, expect, it, vi } from "vitest";
-import { createApp, isSetupExempt, redactMcpTokenPath, sftpgoHostLabel } from "./app";
+import { createApp, isSetupExempt, redactMcpTokenPath } from "./app";
 import { loadConfig } from "./config";
 import { ApiHttpError } from "./errors";
 
@@ -27,9 +27,14 @@ const FAKE_STORAGE: StorageProvider = {
 
 const REQUIRED_ENV = {
   DATABASE_URL: "postgres://localhost/fdrive",
-  SFTPGO_URL: "http://localhost:8080",
   FDRIVE_MASTER_KEY: Buffer.alloc(32, 7).toString("base64"),
 };
+
+/** Setup is done and one WebDAV server is enabled, as `composeApp` would report it. */
+const SET_UP = async () => ({
+  required: false,
+  providers: [{ type: "webdav", host: "dav.internal:9443" }],
+});
 
 function createTestLogger(): Logger {
   const logger = {
@@ -55,6 +60,7 @@ function buildApp(overrides: Partial<Parameters<typeof createApp>[0]> = {}) {
     version: "1.2.3",
     startedAt: START,
     clock: () => LATER,
+    connectionStatus: SET_UP,
     ...overrides,
   });
   return { app, logger };
@@ -207,22 +213,6 @@ describe("createApp request logging redacts the MCP token path", () => {
   });
 });
 
-describe("sftpgoHostLabel", () => {
-  it("returns host and port for a URL with a non-default port", () => {
-    expect(sftpgoHostLabel("http://127.0.0.1:58080")).toBe("127.0.0.1:58080");
-  });
-
-  it("drops the scheme, path, and credentials", () => {
-    expect(sftpgoHostLabel("https://admin:secret@sftpgo.internal:9443/base")).toBe(
-      "sftpgo.internal:9443",
-    );
-  });
-
-  it("omits the port when it is the default for the scheme", () => {
-    expect(sftpgoHostLabel("https://sftpgo.example.com")).toBe("sftpgo.example.com");
-  });
-});
-
 describe("createApp about route", () => {
   it("samples API uptime on each request and clamps a backwards clock", async () => {
     const clock = vi.fn().mockReturnValue(LATER);
@@ -254,7 +244,7 @@ describe("createApp about route", () => {
     expect(body).toEqual({
       version: "1.2.3",
       uptimeSeconds: 5,
-      providers: [{ type: "sftpgo", label: null }],
+      providers: [{ type: "webdav", label: null }],
       setupRequired: false,
     });
   });
@@ -279,7 +269,7 @@ describe("createApp about route", () => {
     expect(body).not.toHaveProperty("revision");
   });
 
-  it("reveals the SFTPGo host's label once the caller has a resolvable session", async () => {
+  it("reveals the provider's host once the caller has a resolvable session", async () => {
     const { app } = buildApp({
       principalResolver: async () => ({
         accountId: "account-1",
@@ -293,38 +283,7 @@ describe("createApp about route", () => {
     const res = await app.request("/api/v1/about");
     const body = await res.json();
 
-    expect(body).toMatchObject({ providers: [{ type: "sftpgo", label: "localhost:8080" }] });
-  });
-
-  it("derives the provider label from the SFTPGo URL's host, dropping scheme and path, for an authenticated caller", async () => {
-    const { app } = buildApp({
-      config: loadConfig({ ...REQUIRED_ENV, SFTPGO_URL: "https://sftpgo.internal:9443/base" }),
-      principalResolver: async () => ({
-        accountId: "account-1",
-        identityId: "identity-1",
-        username: "alice",
-        storage: FAKE_STORAGE,
-        isAdmin: false,
-      }),
-    });
-
-    const res = await app.request("/api/v1/about");
-    const body = await res.json();
-
-    expect(body).toMatchObject({
-      providers: [{ type: "sftpgo", label: "sftpgo.internal:9443" }],
-    });
-  });
-
-  it("keeps the label redacted for an anonymous caller even with a custom SFTPGo host", async () => {
-    const { app } = buildApp({
-      config: loadConfig({ ...REQUIRED_ENV, SFTPGO_URL: "https://sftpgo.internal:9443/base" }),
-    });
-
-    const res = await app.request("/api/v1/about");
-    const body = await res.json();
-
-    expect(body).toMatchObject({ providers: [{ type: "sftpgo", label: null }] });
+    expect(body).toMatchObject({ providers: [{ type: "webdav", label: "dav.internal:9443" }] });
   });
 
   it("reports setupRequired and a null provider when connectionStatus says so", async () => {
@@ -339,14 +298,22 @@ describe("createApp about route", () => {
     expect(body).toMatchObject({ providers: [], setupRequired: true });
   });
 
-  it("defaults to setupRequired when config.sftpgoUrl is undefined and no connectionStatus is given", async () => {
-    const { SFTPGO_URL: _drop, ...envWithoutSftpgo } = REQUIRED_ENV;
-    const { app } = buildApp({ config: loadConfig(envWithoutSftpgo) });
+  it("defaults to set up with no providers when no connectionStatus is given", async () => {
+    const app = createApp({
+      config: loadConfig(REQUIRED_ENV),
+      logger: createTestLogger(),
+      version: "1.2.3",
+      startedAt: START,
+      registerRoutes: ({ public: pub }) => {
+        pub.get("/ping", (c) => c.json({ ok: true }));
+      },
+    });
+    expect((await app.request("/api/v1/ping")).status).toBe(200);
 
     const res = await app.request("/api/v1/about");
     const body = await res.json();
 
-    expect(body).toMatchObject({ providers: [], setupRequired: true });
+    expect(body).toMatchObject({ providers: [], setupRequired: false });
   });
 });
 
@@ -392,7 +359,7 @@ describe("createApp setup gate", () => {
     const { app } = buildApp({
       connectionStatus: async () => ({
         required: false,
-        providers: [{ type: "sftpgo", host: "sftpgo:8080" }],
+        providers: [{ type: "webdav", host: "dav:8080" }],
       }),
       registerRoutes: ({ public: pub }) => {
         pub.get("/ping", (c) => c.json({ ok: true }));

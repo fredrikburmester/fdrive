@@ -58,7 +58,7 @@ FK/index definitions. Private ownership is account-based; storage identity accom
 | `activity_event_subjects` | owner/event/identity/file IDs, role, subject_ordinal, virtual_path_snapshot, revision_id. PK event/identity/role/ordinal. The writer assigns globally increasing ordinals within each event so cursor pages include every role. Bulk membership is paginated, not packed into event JSON. |
 | `activity_revisions` | id, file/identity/owner/event, provider_version, sha256, size, previous_revision_id. Evidence only; no original bytes, diffs or rollback. Unknown measurements remain null. |
 | `activity_lineage` | id, owner/event, source_file_id/source_identity_id, target_file_id/target_identity_id, kind/evidence. Copy, Save As, archive member and derived edges. |
-| `activity_trash_bindings` | file/identity/owner/event, strategy, original_virtual_path, trash_virtual_leaf, state. Full SFTPGo path plus provider timestamp leaf is accepted; ambiguous binding remains unresolved. WebDAV and S3 both record the leaf fdrive constructed through the shared move layout. |
+| `activity_trash_bindings` | file/identity/owner/event, strategy, original_virtual_path, trash_virtual_leaf, state. Every storage records the leaf fdrive constructed through the shared move layout; rows from SFTPGo's former recycle rule keep its full path plus provider timestamp leaf. An ambiguous binding remains unresolved. |
 | `activity_observation_state` | owner/identity/file, prior_generation, discrepancy, evidence_fingerprint, event_id/resolved_event_id, last_check_at/last_confirmed_at/detected_at/check_error. Persistent dedupe and resolution links. |
 | `activity_read_windows` | id, owner/identity/file, action/source/context_hash/evidence, file_generation/bucket_start, virtual_path, first_at/last_at/attempted_count/outcome_counts/sealed_at. Mutable until sealed; ID becomes the event ID. |
 | `activity_read_receipts` | PK owner/identity/context_hash/request_id, window_id, outcome, expires_at. Logical retry receipts expire after 24 hours. |
@@ -119,7 +119,7 @@ removal preserves durable identity snapshots and disables current file actions.
   boundaries. `retained_from` currently remains null. This feature adds no automatic archive,
   file-byte deletion, or administrator purge API.
 - Observer refresh uses at most 100 tracked candidates and eight fresh live checks per call.
-  SFTPGo watcher subtree evidence pages 100 known files at a time. There is no recursive
+  Watcher subtree evidence pages 100 known files at a time. There is no recursive
   scan/hash discovery launched from the timeline. Full bulk registry updates still grow with
   tracked membership; they are database work, not an unbounded provider stat fan-out.
 

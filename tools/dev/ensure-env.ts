@@ -5,15 +5,32 @@
  * files are gitignored (see the root and apps/web .gitignore, which ignore
  * `.env*` except `.env.example`).
  *
- * It also upserts the keys search, OCR, and thumbnails need
- * (`FDRIVE_INDEX_ROOTS`, `FDRIVE_EMBED_URL`, `FDRIVE_THUMBS_DIR`,
- * `FDRIVE_INDEXER_URL`, `FDRIVE_OCR_URL`, `FDRIVE_ADMIN_USERS`) into `apps/api/.env.dev`, whether that file
- * is freshly created or already existed, without touching any key already
+ * It also upserts the keys the local folder, search, OCR, and thumbnails
+ * need (`FDRIVE_STORAGE_ROOT`, `FDRIVE_INDEX_ROOTS`, `FDRIVE_EMBED_URL`,
+ * `FDRIVE_THUMBS_DIR`, `FDRIVE_INDEXER_URL`, `FDRIVE_OCR_URL`,
+ * `FDRIVE_ADMIN_USERS`) into `apps/api/.env.dev`, whether that file is
+ * freshly created or already existed, without touching any key already
  * present. This lets `pnpm dev:env` grow the file's contents across
- * versions of this script instead of only ever writing it once.
+ * versions of this script instead of only ever writing it once. Values an
+ * earlier version wrote are replaced (`isObsoleteApiEnvLine`): SFTPGo's keys
+ * and root, and a storage root that served the committed seed itself.
+ *
+ * Finally it copies the committed dev homes (`deploy/dev/files`) into the
+ * gitignored folder the api serves (`deploy/dev/.data/files`) when that is
+ * missing or empty; `--reset`, which `pnpm dev:env:reset` passes, replaces
+ * it with a fresh copy.
  */
 import { randomBytes } from "node:crypto";
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  cpSync,
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -53,9 +70,7 @@ export function buildApiEnvDev(masterKey: string, env: DevEnv = {}): string {
     "LOG_LEVEL=debug",
     "NODE_ENV=development",
     `DATABASE_URL=postgres://fdrive:fdrive-dev@127.0.0.1:${devPort(env, "FDRIVE_DEV_DB_PORT", 55432)}/fdrive`,
-    `SFTPGO_URL=http://127.0.0.1:${devPort(env, "FDRIVE_DEV_SFTPGO_HTTP_PORT", 58080)}`,
     `FDRIVE_MASTER_KEY=${masterKey}`,
-    "FDRIVE_HOME_TEMPLATE=sftpgo:/{username}",
     "FDRIVE_COOKIE_SECURE=false",
     "",
   ].join("\n");
@@ -69,21 +84,55 @@ export function buildWebEnvLocal(env: DevEnv = {}): string {
   ].join("\n");
 }
 
+/** The committed dev homes `pnpm dev:seed` writes: the seed, never served itself. */
+export function devSeedDir(repoRoot: string): string {
+  return join(repoRoot, "deploy", "dev", "files");
+}
+
 /**
- * The dev environment's search, OCR, and thumbnails config, keyed by the
- * `FDRIVE_*` variable name (see `apps/api/src/config.ts`). Matches
- * `deploy/compose.dev.yaml`'s `ml`, `indexer`, and `ocr` published ports
- * and bind-mounted thumbnails directory: 127.0.0.1:58012 (one prefix per
- * unit of the ml service), 127.0.0.1:58010, 127.0.0.1:58011, and
- * `deploy/dev/.data/thumbs` under `repoRoot` respectively. `dev` is granted admin in the dev environment so the System
- * pages are reachable without extra setup. Trash is enabled through onboarding;
- * `tools/dev/generate-seed.ts` seeds its prerequisite SFTPGo recycle rule.
+ * The folder the api dev server serves and the dev indexer and OCR mount: a
+ * gitignored copy of the seed, so files changed in the dev app never show up
+ * in git.
+ */
+export function devStorageRoot(repoRoot: string): string {
+  return join(repoRoot, "deploy", "dev", ".data", "files");
+}
+
+/**
+ * Copies the seed into the served folder when that folder is missing or
+ * empty (Docker creates an empty one when the dev stack starts first). With
+ * `reset`, what dev use left there is removed first, so it starts from a
+ * fresh copy. Returns whether it copied.
+ */
+export function ensureDevFiles(seedDir: string, filesDir: string, reset = false): boolean {
+  if (reset) {
+    rmSync(filesDir, { recursive: true, force: true });
+  } else if (existsSync(filesDir) && readdirSync(filesDir).length > 0) {
+    return false;
+  }
+  mkdirSync(filesDir, { recursive: true });
+  cpSync(seedDir, filesDir, { recursive: true });
+  return true;
+}
+
+/**
+ * The dev environment's local folder, search, OCR, and thumbnails config,
+ * keyed by the `FDRIVE_*` variable name (see `apps/api/src/config.ts`).
+ * Matches `deploy/compose.dev.yaml`: the api on the host serves
+ * `deploy/dev/.data/files` (`devStorageRoot`), which the indexer and OCR
+ * containers mount at `/data` as the root `files`; the `ml`, `indexer`, and `ocr` published ports are
+ * 127.0.0.1:58012 (one prefix per unit of the ml service), 127.0.0.1:58010,
+ * and 127.0.0.1:58011; thumbnails land in `deploy/dev/.data/thumbs` under
+ * `repoRoot`. `dev` is granted admin in the dev environment so the System
+ * pages are reachable without extra setup.
  */
 export function buildDevSearchEnv(repoRoot: string, env: DevEnv = {}): Record<string, string> {
   const ml = `http://127.0.0.1:${devPort(env, "FDRIVE_DEV_ML_PORT", 58012)}`;
+  const storageRoot = devStorageRoot(repoRoot);
   return {
+    FDRIVE_STORAGE_ROOT: storageRoot,
     FDRIVE_INDEX_ROOTS: JSON.stringify([
-      { name: "sftpgo", sftpgoPath: "/srv/sftpgo/data", indexerPath: "/roots/sftpgo" },
+      { name: "files", storagePath: storageRoot, indexerPath: "/data" },
     ]),
     FDRIVE_EMBED_URL: `${ml}/text`,
     FDRIVE_THUMBS_DIR: join(repoRoot, "deploy", "dev", ".data", "thumbs"),
@@ -131,6 +180,51 @@ function envLineKey(line: string): string | undefined {
   return /^([A-Za-z_][A-Za-z0-9_]*)=/.exec(line)?.[1];
 }
 
+/** Keys earlier versions of this script wrote for SFTPGo, which the api no longer reads. */
+export const OBSOLETE_API_ENV_KEYS: readonly string[] = ["SFTPGO_URL", "FDRIVE_HOME_TEMPLATE"];
+
+/** A `KEY=value` line's value, without the quotes `quoteEnvValue` may have added. */
+function envLineValue(line: string): string {
+  const value = line.slice(line.indexOf("=") + 1);
+  const quoted = /^(['"])(.*)\1$/.exec(value);
+  return quoted?.[2] ?? value;
+}
+
+/** The `storagePath` of each root in an `FDRIVE_INDEX_ROOTS` value; none when it is not JSON. */
+function indexRootStoragePaths(value: string): unknown[] {
+  try {
+    const roots: unknown = JSON.parse(value);
+    return Array.isArray(roots)
+      ? roots.map((root: unknown) =>
+          typeof root === "object" && root !== null && "storagePath" in root
+            ? root.storagePath
+            : undefined,
+        )
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * True for a line an earlier version of this script wrote that must go:
+ * an obsolete key, an `FDRIVE_INDEX_ROOTS` that still names the `sftpgo`
+ * root, or, given `seedDir`, an `FDRIVE_STORAGE_ROOT` or index root that
+ * serves the committed seed instead of its gitignored copy. A developer's
+ * own values are left alone.
+ */
+export function isObsoleteApiEnvLine(line: string, seedDir?: string): boolean {
+  const key = envLineKey(line);
+  if (key === undefined) return false;
+  if (OBSOLETE_API_ENV_KEYS.includes(key)) return true;
+  if (key === "FDRIVE_STORAGE_ROOT") {
+    return seedDir !== undefined && envLineValue(line) === seedDir;
+  }
+  if (key !== "FDRIVE_INDEX_ROOTS") return false;
+  if (/"name"\s*:\s*"sftpgo"/.test(line)) return true;
+  return seedDir !== undefined && indexRootStoragePaths(envLineValue(line)).includes(seedDir);
+}
+
 /**
  * Appends whichever of `additions` are not already assigned in `existing`,
  * leaving every present key's line untouched. Pure string manipulation, so
@@ -161,22 +255,30 @@ export interface ApiEnvDevPlan {
   readonly contents: string;
   /** Keys from `additions` that were not already present before this run. */
   readonly addedKeys: readonly string[];
+  /** Keys whose obsolete lines were removed (`isObsoleteApiEnvLine`). */
+  readonly removedKeys: readonly string[];
 }
 
 /**
  * Works out the next contents of `apps/api/.env.dev` given its current
  * contents (`undefined` when the file does not exist yet, in which case a
  * fresh file is generated from `masterKey`) and the keys `additions` should
- * contribute. Pure, so the "create" and "upsert into an existing file"
- * paths share one tested code path.
+ * contribute. Obsolete lines (`isObsoleteApiEnvLine`, with `seedDir`) are
+ * dropped first, so a replaced key comes back from `additions`. Pure, so
+ * the "create" and "upsert into an existing file" paths share one tested
+ * code path.
  */
 export function planApiEnvDev(
   existing: string | undefined,
   additions: Record<string, string>,
   masterKey: string,
   env: DevEnv = {},
+  seedDir?: string,
 ): ApiEnvDevPlan {
-  const before = existing ?? buildApiEnvDev(masterKey, env);
+  const lines = (existing ?? buildApiEnvDev(masterKey, env)).split("\n");
+  const obsolete = (line: string) => isObsoleteApiEnvLine(line, seedDir);
+  const removed = lines.filter(obsolete);
+  const before = lines.filter((line) => !obsolete(line)).join("\n");
   const beforeKeys = new Set(
     before
       .split("\n")
@@ -184,7 +286,10 @@ export function planApiEnvDev(
       .filter((key): key is string => key !== undefined),
   );
   const addedKeys = Object.keys(additions).filter((key) => !beforeKeys.has(key));
-  return { contents: upsertEnv(before, additions), addedKeys };
+  const removedKeys = removed
+    .map(envLineKey)
+    .filter((key): key is string => key !== undefined && !addedKeys.includes(key));
+  return { contents: upsertEnv(before, additions), addedKeys, removedKeys };
 }
 
 /**
@@ -238,21 +343,30 @@ function main(): void {
     buildDevSearchEnv(repoRoot, process.env),
     generateMasterKey(),
     process.env,
+    devSeedDir(repoRoot),
   );
 
   if (!apiEnvExisted) {
     mkdirSync(dirname(apiEnvPath), { recursive: true });
     writeEnvFile(apiEnvPath, plan.contents);
     console.log(`Created ${apiEnvPath}`);
-  } else if (plan.addedKeys.length > 0) {
+  } else if (plan.addedKeys.length > 0 || plan.removedKeys.length > 0) {
     writeEnvFile(apiEnvPath, plan.contents);
-    console.log(`Updated ${apiEnvPath} (added ${plan.addedKeys.join(", ")})`);
+    const changes = [
+      plan.addedKeys.length > 0 ? `added ${plan.addedKeys.join(", ")}` : "",
+      plan.removedKeys.length > 0 ? `removed ${plan.removedKeys.join(", ")}` : "",
+    ].filter((change) => change !== "");
+    console.log(`Updated ${apiEnvPath} (${changes.join("; ")})`);
   } else {
     console.log(`Skipped ${apiEnvPath} (already exists)`);
   }
 
   const wroteWeb = ensureEnvFile({ path: webEnvPath, contents: buildWebEnvLocal(process.env) });
   console.log(wroteWeb ? `Created ${webEnvPath}` : `Skipped ${webEnvPath} (already exists)`);
+
+  const filesDir = devStorageRoot(repoRoot);
+  const copied = ensureDevFiles(devSeedDir(repoRoot), filesDir, process.argv.includes("--reset"));
+  console.log(copied ? `Copied the dev files to ${filesDir}` : `Kept ${filesDir}`);
 }
 
 const isMainModule =

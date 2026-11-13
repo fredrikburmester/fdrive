@@ -21,6 +21,7 @@ export interface PublicThumbTarget {
   readonly identityId: string;
   readonly scope: "read" | "write";
   readonly paths: readonly string[];
-  readonly hasPassword: boolean;
   readonly unavailableReason: ReturnType<typeof unavailableReason>;
+  /** False when the share has a password the visitor's credential does not open. */
+  readonly unlocked: boolean;
 }

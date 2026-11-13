@@ -2,28 +2,26 @@ import { hkdfSync } from "node:crypto";
 import { ShareId } from "@fdrive/contracts";
 import { z } from "zod";
 import { open, seal } from "../auth/crypto.ts";
-import { ApiHttpError } from "../errors.ts";
 
 export const SHARE_CREDENTIAL_COOKIE = "fdrive-share-credential";
 export const SHARE_CREDENTIAL_SECONDS = 3600;
 
 /**
- * What a visitor's credential cookie carries for one share: the password
- * itself, for a backend that checks it on every operation (SFTPGo), or a
- * verified marker, the password version fdrive itself checked the password
- * against once, for a share fdrive serves. Either way the cookie is sealed
- * and bound to the share id; only the service decides which form to issue.
+ * What a visitor's credential cookie carries for one share: the version of
+ * the password fdrive checked once when the cookie was issued (`open` for a
+ * share without one). The cookie is sealed and bound to the share id, so it
+ * proves the check without holding the password; a new password changes the
+ * version and so retires every cookie issued for the old one.
  */
-export type ShareCredential = { readonly password: string } | { readonly verified: string };
+export interface ShareCredential {
+  readonly verified: string;
+}
 
-const Payload = z
-  .strictObject({
-    id: ShareId,
-    expires: z.number().int().positive(),
-    password: z.string().max(1024).optional(),
-    verified: z.string().min(1).max(64).optional(),
-  })
-  .refine((payload) => (payload.password === undefined) !== (payload.verified === undefined));
+const Payload = z.strictObject({
+  id: ShareId,
+  expires: z.number().int().positive(),
+  verified: z.string().min(1).max(64),
+});
 
 export function createShareCredentialCodec(master: Uint8Array, clock: () => Date) {
   const key = new Uint8Array(
@@ -33,18 +31,10 @@ export function createShareCredentialCodec(master: Uint8Array, clock: () => Date
     encode(id: string, credential: ShareCredential): string {
       const payload = Payload.parse({
         id,
-        ...credential,
+        verified: credential.verified,
         expires: clock().getTime() + SHARE_CREDENTIAL_SECONDS * 1000,
       });
-      const value = Buffer.from(seal(key, Buffer.from(JSON.stringify(payload)), id)).toString(
-        "base64url",
-      );
-      if (value.length > 3800)
-        throw new ApiHttpError(
-          "bad_request",
-          "Password is too large to store securely in this browser. Use a shorter password.",
-        );
-      return value;
+      return Buffer.from(seal(key, Buffer.from(JSON.stringify(payload)), id)).toString("base64url");
     },
     decode(id: string, value: string | undefined): ShareCredential | undefined {
       if (value === undefined || value.length > 3800 || !/^[A-Za-z0-9_-]+$/.test(value))
@@ -62,9 +52,7 @@ export function createShareCredentialCodec(master: Uint8Array, clock: () => Date
           payload.expires > now + SHARE_CREDENTIAL_SECONDS * 1000
         )
           return undefined;
-        return payload.password !== undefined
-          ? { password: payload.password }
-          : { verified: payload.verified ?? "" };
+        return { verified: payload.verified };
       } catch {
         return undefined;
       }

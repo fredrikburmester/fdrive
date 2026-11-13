@@ -16,7 +16,7 @@ def _bool(name: str, default: bool) -> bool:
 
 
 def parse_roots(raw: str) -> dict[str, str]:
-    """`"sftpgo=/roots/sftpgo,photos=/roots/photos"` -> `{"sftpgo": "/roots/sftpgo", ...}`."""
+    """`"files=/roots/files,photos=/roots/photos"` -> `{"files": "/roots/files", ...}`."""
     roots: dict[str, str] = {}
     for pair in raw.split(","):
         pair = pair.strip()

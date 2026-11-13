@@ -6,14 +6,16 @@ import { describe, expect, it, vi } from "vitest";
 import { createApp } from "../app.js";
 import type { Principal } from "../auth/principal.js";
 import { loadConfig } from "../config.js";
+import { localModuleFixture } from "../local/test-fixtures/index.ts";
 import { fakeStorageProvider } from "../scoping/test-fixtures/index.ts";
+import { createProviderModules } from "./registry.js";
 import { registerProviderRoutes } from "./routes.js";
 import type { ProviderService } from "./service.js";
 import {
   memoryProviderService,
   probeFetch,
+  seedLocalProvider,
   seedS3Provider,
-  seedSftpgoProvider,
   seedWebdavProvider,
 } from "./test-fixtures/index.ts";
 
@@ -32,6 +34,8 @@ function buildApp(opts: { isAdmin: boolean; reachable?: boolean; service?: Provi
     memoryProviderService(repos, {
       fetch: probeFetch(opts.reachable ?? true),
       clock: () => new Date("2026-09-10T00:00:00Z"),
+      // A deployment with a local folder, so its pinned row resolves.
+      modules: { ...createProviderModules(), local: localModuleFixture(repos).module },
     });
   const principal: Principal = {
     accountId: "account-1",
@@ -71,20 +75,21 @@ function buildApp(opts: { isAdmin: boolean; reachable?: boolean; service?: Provi
 describe("GET /providers", () => {
   it("lists enabled providers with their credential forms and nothing else", async () => {
     const h = buildApp({ isAdmin: false });
-    await seedSftpgoProvider(h.repos, "http://a:8080");
-    await seedSftpgoProvider(h.repos, "http://b:8080", { enabled: false });
+    await seedLocalProvider(h.repos);
+    await seedWebdavProvider(h.repos, "http://a:8080");
+    await seedWebdavProvider(h.repos, "http://b:8080", { enabled: false });
     const res = await h.call("/api/v1/providers");
     expect(res.status).toBe(200);
     const body = ProvidersResponse.parse(await res.json());
-    expect(body.providers).toHaveLength(1);
+    expect(body.providers.map((provider) => provider.type)).toEqual(["local", "webdav"]);
     // No admin-set label and no host: the page names the product instead.
-    expect(body.providers[0]).toMatchObject({ type: "sftpgo", label: "" });
+    expect(body.providers[0]).toMatchObject({ type: "local", label: "" });
     expect(body.providers[0]?.credentialFields.map((field) => field.name)).toEqual([
       "username",
       "password",
-      "otp",
     ]);
     expect(body.providers[0]?.capabilities).toMatchObject({ index: true, shares: true });
+    expect(body.providers[1]).toMatchObject({ type: "webdav", label: "" });
     expect(JSON.stringify(body)).not.toContain("a:8080");
   });
 });
@@ -97,7 +102,7 @@ describe("/admin/providers", () => {
       (
         await h.call("/api/v1/admin/providers", {
           method: "POST",
-          body: { type: "sftpgo", label: "x", baseUrl: "http://a" },
+          body: { type: "webdav", label: "x", baseUrl: "http://a" },
         })
       ).status,
     ).toBe(403);
@@ -105,7 +110,7 @@ describe("/admin/providers", () => {
 
   it("refuses renames by ordinary users and rejects blank or overlong names", async () => {
     const ordinary = buildApp({ isAdmin: false });
-    const row = await seedSftpgoProvider(ordinary.repos, "http://env:8080", { managedByEnv: true });
+    const row = await seedLocalProvider(ordinary.repos);
     expect(
       (
         await ordinary.call(`/api/v1/admin/providers/${row.id}`, {
@@ -116,9 +121,9 @@ describe("/admin/providers", () => {
     ).toBe(403);
     expect((await ordinary.repos.providers.get(row.id))?.label).toBe("");
     const admin = buildApp({ isAdmin: true });
-    const pinned = await seedSftpgoProvider(admin.repos, "http://env:8080", { managedByEnv: true });
+    const pinned = await seedLocalProvider(admin.repos);
     const other = await admin.service.create({
-      type: "sftpgo",
+      type: "webdav",
       baseUrl: "http://other:8080",
       label: "Home storage",
     });
@@ -157,10 +162,10 @@ describe("/admin/providers", () => {
     const created = await h.call("/api/v1/admin/providers", {
       method: "POST",
       body: {
-        type: "sftpgo",
+        type: "webdav",
         label: "Home",
         baseUrl: "http://a:8080",
-        config: { homeTemplate: "sftpgo:/{username}" },
+        config: { desktopWriteMode: "apache-webdav-exclusive" },
       },
     });
     expect(created.status).toBe(200);
@@ -170,17 +175,18 @@ describe("/admin/providers", () => {
     const list = await h.call("/api/v1/admin/providers");
     const body = AdminProvidersResponse.parse(await list.json());
     expect(body.providers.map((provider) => provider.id)).toEqual([row.id]);
-    expect(body.types.map((type) => type.type)).toEqual(["sftpgo", "webdav", "s3"]);
+    // The local folder is the deployment's: no form adds one.
+    expect(body.types.map((type) => type.type)).toEqual(["webdav", "s3"]);
 
     const updated = await h.call(`/api/v1/admin/providers/${row.id}`, {
       method: "PATCH",
-      body: { label: "Renamed", enabled: false, config: { homeTemplate: "data:/{username}" } },
+      body: { label: "Renamed", enabled: false, config: {} },
     });
     expect(updated.status).toBe(200);
     expect(AdminProvider.parse(await updated.json())).toMatchObject({
       label: "Renamed",
       enabled: false,
-      config: { homeTemplate: "data:/{username}" },
+      config: {},
     });
 
     const moved = await h.call(`/api/v1/admin/providers/${row.id}`, {
@@ -195,9 +201,12 @@ describe("/admin/providers", () => {
     ).toBe(200);
     const candidate = await h.call("/api/v1/admin/providers/test", {
       method: "POST",
-      body: { type: "sftpgo", baseUrl: "http://c:8080" },
+      body: { type: "webdav", baseUrl: "http://c:8080" },
     });
-    expect(await candidate.json()).toEqual({ ok: true, detail: "SFTPGo is reachable" });
+    expect(await candidate.json()).toEqual({
+      ok: true,
+      detail: "WebDAV is reachable (class 1, 2)",
+    });
 
     const deleted = await h.call(`/api/v1/admin/providers/${row.id}`, { method: "DELETE" });
     expect(deleted.status).toBe(200);
@@ -206,34 +215,41 @@ describe("/admin/providers", () => {
   });
 
   it.each([
-    ["incomplete create", "POST", "", { type: "sftpgo" }, 400],
+    ["incomplete create", "POST", "", { type: "webdav" }, 400],
     [
-      "invalid create template",
+      "invalid create config",
       "POST",
       "",
       {
-        type: "sftpgo",
+        type: "webdav",
         label: "x",
         baseUrl: "http://a",
-        config: { homeTemplate: "no-colon" },
+        config: { desktopWriteMode: "x".repeat(33) },
       },
       400,
     ],
-    ["incomplete probe", "POST", "/test", { type: "sftpgo" }, 400],
+    [
+      "a local folder from a form",
+      "POST",
+      "",
+      { type: "local", label: "x", baseUrl: "http://a" },
+      400,
+    ],
+    ["incomplete probe", "POST", "/test", { type: "webdav" }, 400],
     ["invalid probe id", "POST", "/nope/test", undefined, 400],
     ["invalid update id", "PATCH", "/nope", { label: "x" }, 400],
     ["unknown provider", "PATCH", "/00000000-0000-4000-8000-000000000000", { label: "x" }, 404],
     ["unknown patch field", "PATCH", "/00000000-0000-4000-8000-000000000000", { nope: "x" }, 400],
     [
-      "invalid update template",
+      "invalid update config",
       "PATCH",
       "/:id",
-      { config: { homeTemplate: "still-no-colon" } },
+      { config: { desktopWriteMode: "x".repeat(33) } },
       400,
     ],
   ] as const)("rejects %s", async (_name, method, path, body, status) => {
     const h = buildApp({ isAdmin: true });
-    const row = await seedSftpgoProvider(h.repos, "http://a:8080");
+    const row = await seedWebdavProvider(h.repos, "http://a:8080");
     const response = await h.call(`/api/v1/admin/providers${path.replace(":id", row.id)}`, {
       method,
       body,
@@ -244,7 +260,7 @@ describe("/admin/providers", () => {
 
   it("treats an unparsable JSON body as a bad request on every writing route", async () => {
     const h = buildApp({ isAdmin: true });
-    const row = await seedSftpgoProvider(h.repos, "http://a:8080");
+    const row = await seedWebdavProvider(h.repos, "http://a:8080");
     for (const [path, method] of [
       ["/api/v1/admin/providers", "POST"],
       ["/api/v1/admin/providers/test", "POST"],
@@ -263,14 +279,14 @@ describe("/admin/providers", () => {
     const h = buildApp({ isAdmin: true, reachable: false });
     const created = await h.call("/api/v1/admin/providers", {
       method: "POST",
-      body: { type: "sftpgo", label: "x", baseUrl: "http://a:8080" },
+      body: { type: "webdav", label: "x", baseUrl: "http://a:8080" },
     });
     expect(created.status).toBe(400);
     expect(await created.json()).toMatchObject({
       error: { kind: "bad_request", message: expect.stringContaining("not reachable") },
     });
     expect(await h.repos.providers.list()).toEqual([]);
-    const row = await seedSftpgoProvider(h.repos, "http://a:8080");
+    const row = await seedWebdavProvider(h.repos, "http://a:8080");
     const moved = await h.call(`/api/v1/admin/providers/${row.id}`, {
       method: "PATCH",
       body: { baseUrl: "http://b:8080" },
@@ -324,7 +340,6 @@ describe("/admin/providers with a WebDAV type", () => {
         shares: false,
         office: false,
         index: false,
-        scopeMapping: false,
       },
     });
     expect(type?.credentialFields.map((field) => field.name)).toEqual(["username", "password"]);
@@ -352,7 +367,7 @@ describe("/admin/providers with a WebDAV type", () => {
         type: "webdav",
         label: "x",
         baseUrl: "http://dav.test/dav",
-        config: { homeTemplate: "sftpgo:/{username}" },
+        config: { homeTemplate: "files:/{username}" },
       },
     });
     expect(created.status).toBe(400);
@@ -424,7 +439,6 @@ describe("/admin/providers with an S3 type", () => {
         shares: false,
         office: false,
         index: false,
-        scopeMapping: false,
       },
     });
     expect(type?.credentialFields.map((field) => field.label)).toEqual([

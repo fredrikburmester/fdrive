@@ -8,7 +8,7 @@ Usage:
     python scripts/import-filesai.py \\
         --source "host=old-db port=5432 dbname=filesai user=filesai password=..." \\
         --target "$DATABASE_URL" \\
-        --root sftpgo
+        --root files
 
 Idempotent: rows are upserted on (root_id, path), so running it twice against
 the same source and target the second time updates nothing new.
@@ -146,7 +146,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--source", required=True, help="psycopg DSN for the old filesai database")
     parser.add_argument("--target", required=True, help="psycopg DSN for the fdrive database")
-    parser.add_argument("--root", required=True, help="root name to import under, e.g. sftpgo")
+    parser.add_argument("--root", required=True, help="root name to import under, e.g. files")
     args = parser.parse_args(argv)
 
     import psycopg

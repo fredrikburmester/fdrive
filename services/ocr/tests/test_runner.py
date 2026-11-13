@@ -61,15 +61,15 @@ def test_iter_candidate_pdfs_skips_configured_dirs(tmp_path: Path) -> None:
 
 
 def test_originals_dest_is_stable_for_same_key(tmp_path: Path) -> None:
-    a = runner.originals_dest(str(tmp_path), "sftpgo", "docs/a.pdf", 100, 111)
-    b = runner.originals_dest(str(tmp_path), "sftpgo", "docs/a.pdf", 100, 111)
+    a = runner.originals_dest(str(tmp_path), "files", "docs/a.pdf", 100, 111)
+    b = runner.originals_dest(str(tmp_path), "files", "docs/a.pdf", 100, 111)
     assert a == b
     assert a.endswith("_a.pdf")
 
 
 def test_originals_dest_differs_for_different_keys(tmp_path: Path) -> None:
-    a = runner.originals_dest(str(tmp_path), "sftpgo", "docs/a.pdf", 100, 111)
-    b = runner.originals_dest(str(tmp_path), "sftpgo", "docs/a.pdf", 100, 222)
+    a = runner.originals_dest(str(tmp_path), "files", "docs/a.pdf", 100, 111)
+    b = runner.originals_dest(str(tmp_path), "files", "docs/a.pdf", 100, 222)
     assert a != b
 
 
@@ -227,7 +227,7 @@ def test_apply_rewrite_preserves_mode_and_mtime_and_keeps_original(tmp_path: Pat
     tmp_out.write_bytes(b"rewritten bytes")
 
     runner.apply_rewrite(
-        str(src), str(tmp_out), str(state_dir), "sftpgo", "a.pdf", st_before.st_size, st_before.st_mtime_ns, True
+        str(src), str(tmp_out), str(state_dir), "files", "a.pdf", st_before.st_size, st_before.st_mtime_ns, True
     )
 
     assert src.read_bytes() == b"rewritten bytes"
@@ -250,7 +250,7 @@ def test_apply_rewrite_without_keep_originals_does_not_copy(tmp_path: Path) -> N
     tmp_out.write_bytes(b"rewritten bytes")
 
     runner.apply_rewrite(
-        str(src), str(tmp_out), str(state_dir), "sftpgo", "a.pdf", st_before.st_size, st_before.st_mtime_ns, False
+        str(src), str(tmp_out), str(state_dir), "files", "a.pdf", st_before.st_size, st_before.st_mtime_ns, False
     )
 
     assert not (state_dir / "originals").exists()
@@ -263,14 +263,14 @@ def test_apply_rewrite_does_not_recopy_existing_original(tmp_path: Path) -> None
     src = root_dir / "a.pdf"
     src.write_bytes(b"v1")
     st_before = os.stat(src)
-    dest = runner.originals_dest(str(state_dir), "sftpgo", "a.pdf", st_before.st_size, st_before.st_mtime_ns)
+    dest = runner.originals_dest(str(state_dir), "files", "a.pdf", st_before.st_size, st_before.st_mtime_ns)
     os.makedirs(os.path.dirname(dest), exist_ok=True)
     Path(dest).write_bytes(b"already-there")
 
     tmp_out = tmp_path / "tmp_out.pdf"
     tmp_out.write_bytes(b"rewritten")
     runner.apply_rewrite(
-        str(src), str(tmp_out), str(state_dir), "sftpgo", "a.pdf", st_before.st_size, st_before.st_mtime_ns, True
+        str(src), str(tmp_out), str(state_dir), "files", "a.pdf", st_before.st_size, st_before.st_mtime_ns, True
     )
 
     assert Path(dest).read_bytes() == b"already-there"
@@ -290,7 +290,7 @@ def test_apply_rewrite_tolerates_chown_failure(tmp_path: Path, monkeypatch: pyte
 
     monkeypatch.setattr(os, "chown", fake_chown)
     runner.apply_rewrite(
-        str(src), str(tmp_out), str(tmp_path / "state"), "sftpgo", "a.pdf", st_before.st_size, st_before.st_mtime_ns, False
+        str(src), str(tmp_out), str(tmp_path / "state"), "files", "a.pdf", st_before.st_size, st_before.st_mtime_ns, False
     )
     assert src.read_bytes() == b"v2"
 
@@ -303,7 +303,7 @@ def test_process_file_uses_same_directory_for_atomic_replace(tmp_path: Path, mon
     root.mkdir()
     src = root / "a.pdf"
     _write_pdf(src, "OK")
-    target = runner.RootTarget(name="sftpgo", root_id=1, abs_path=str(root))
+    target = runner.RootTarget(name="files", root_id=1, abs_path=str(root))
     settings = Settings(hour=3, langs="eng", exclude_globs=(), max_mb=200, keep_originals=False, originals_retention_days=0)
     real_replace = os.replace
 
@@ -346,8 +346,8 @@ def test_process_file_uses_same_directory_for_atomic_replace(tmp_path: Path, mon
 def test_process_file_skips_already_done(postgres_dsn: str, tmp_path: Path) -> None:
     conn = db.connect(postgres_dsn)
     try:
-        root_id = db.upsert_root(conn, "sftpgo")
-        target = runner.RootTarget(name="sftpgo", root_id=root_id, abs_path=str(tmp_path))
+        root_id = db.upsert_root(conn, "files")
+        target = runner.RootTarget(name="files", root_id=root_id, abs_path=str(tmp_path))
         f = tmp_path / "a.pdf"
         _write_pdf(f, "OK")
         st = os.stat(f)
@@ -365,15 +365,15 @@ def test_process_file_skips_already_done(postgres_dsn: str, tmp_path: Path) -> N
 def test_process_file_excluded(postgres_dsn: str, tmp_path: Path) -> None:
     conn = db.connect(postgres_dsn)
     try:
-        root_id = db.upsert_root(conn, "sftpgo")
-        target = runner.RootTarget(name="sftpgo", root_id=root_id, abs_path=str(tmp_path))
+        root_id = db.upsert_root(conn, "files")
+        target = runner.RootTarget(name="files", root_id=root_id, abs_path=str(tmp_path))
         (tmp_path / "Photos").mkdir()
         f = tmp_path / "Photos" / "a.pdf"
         _write_pdf(f, "OK")
         settings = Settings(
             hour=3,
             langs="eng",
-            exclude_globs=("sftpgo/Photos/**",),
+            exclude_globs=("files/Photos/**",),
             max_mb=200,
             keep_originals=True,
             originals_retention_days=0,
@@ -393,8 +393,8 @@ def test_process_file_excluded(postgres_dsn: str, tmp_path: Path) -> None:
 def test_process_file_too_big(postgres_dsn: str, tmp_path: Path) -> None:
     conn = db.connect(postgres_dsn)
     try:
-        root_id = db.upsert_root(conn, "sftpgo")
-        target = runner.RootTarget(name="sftpgo", root_id=root_id, abs_path=str(tmp_path))
+        root_id = db.upsert_root(conn, "files")
+        target = runner.RootTarget(name="files", root_id=root_id, abs_path=str(tmp_path))
         f = tmp_path / "a.pdf"
         f.write_bytes(b"x" * 10)
         settings = Settings(hour=3, langs="eng", exclude_globs=(), max_mb=0, keep_originals=True, originals_retention_days=0)
@@ -411,8 +411,8 @@ def test_process_file_too_big(postgres_dsn: str, tmp_path: Path) -> None:
 def test_process_file_ocred_rewrites_and_logs(postgres_dsn: str, tmp_path: Path) -> None:
     conn = db.connect(postgres_dsn)
     try:
-        root_id = db.upsert_root(conn, "sftpgo")
-        target = runner.RootTarget(name="sftpgo", root_id=root_id, abs_path=str(tmp_path))
+        root_id = db.upsert_root(conn, "files")
+        target = runner.RootTarget(name="files", root_id=root_id, abs_path=str(tmp_path))
         f = tmp_path / "a.pdf"
         _write_pdf(f, "OK")
         logs: list[str] = []
@@ -432,8 +432,8 @@ def test_process_file_ocred_rewrites_and_logs(postgres_dsn: str, tmp_path: Path)
 def test_process_file_has_text_leaves_file_untouched(postgres_dsn: str, tmp_path: Path) -> None:
     conn = db.connect(postgres_dsn)
     try:
-        root_id = db.upsert_root(conn, "sftpgo")
-        target = runner.RootTarget(name="sftpgo", root_id=root_id, abs_path=str(tmp_path))
+        root_id = db.upsert_root(conn, "files")
+        target = runner.RootTarget(name="files", root_id=root_id, abs_path=str(tmp_path))
         f = tmp_path / "a.pdf"
         _write_pdf(f, "HASTEXT")
         original_bytes = f.read_bytes()
@@ -450,8 +450,8 @@ def test_process_file_has_text_leaves_file_untouched(postgres_dsn: str, tmp_path
 def test_process_file_signed_and_encrypted(postgres_dsn: str, tmp_path: Path) -> None:
     conn = db.connect(postgres_dsn)
     try:
-        root_id = db.upsert_root(conn, "sftpgo")
-        target = runner.RootTarget(name="sftpgo", root_id=root_id, abs_path=str(tmp_path))
+        root_id = db.upsert_root(conn, "files")
+        target = runner.RootTarget(name="files", root_id=root_id, abs_path=str(tmp_path))
         signed = tmp_path / "signed.pdf"
         _write_pdf(signed, "SIGNED")
         encrypted = tmp_path / "encrypted.pdf"
@@ -472,8 +472,8 @@ def test_process_file_signed_and_encrypted(postgres_dsn: str, tmp_path: Path) ->
 def test_process_file_failed_logs_detail(postgres_dsn: str, tmp_path: Path) -> None:
     conn = db.connect(postgres_dsn)
     try:
-        root_id = db.upsert_root(conn, "sftpgo")
-        target = runner.RootTarget(name="sftpgo", root_id=root_id, abs_path=str(tmp_path))
+        root_id = db.upsert_root(conn, "files")
+        target = runner.RootTarget(name="files", root_id=root_id, abs_path=str(tmp_path))
         f = tmp_path / "a.pdf"
         _write_pdf(f, "FAIL")
         logs: list[str] = []
@@ -490,8 +490,8 @@ def test_process_file_failed_logs_detail(postgres_dsn: str, tmp_path: Path) -> N
 def test_process_file_timeout(postgres_dsn: str, tmp_path: Path) -> None:
     conn = db.connect(postgres_dsn)
     try:
-        root_id = db.upsert_root(conn, "sftpgo")
-        target = runner.RootTarget(name="sftpgo", root_id=root_id, abs_path=str(tmp_path))
+        root_id = db.upsert_root(conn, "files")
+        target = runner.RootTarget(name="files", root_id=root_id, abs_path=str(tmp_path))
         f = tmp_path / "a.pdf"
         _write_pdf(f, "HANG")
         logs: list[str] = []
@@ -546,7 +546,7 @@ def test_run_pass_second_run_skips_already_done_files(postgres_dsn: str, tmp_pat
         root = tmp_path / "root"
         root.mkdir()
         _write_pdf(root / "has_text.pdf", "HASTEXT")
-        target = runner.RootTarget(name="sftpgo", root_id=db.upsert_root(conn, "sftpgo"), abs_path=str(root))
+        target = runner.RootTarget(name="files", root_id=db.upsert_root(conn, "files"), abs_path=str(root))
 
         first = runner.run_pass(conn, [target], DEFAULT_SETTINGS, str(tmp_path / "state"), 30, 2, lambda _m: None)
         assert first.seen == 1
@@ -567,7 +567,7 @@ def test_run_pass_finishes_run_row_even_on_crash(postgres_dsn: str, tmp_path: Pa
         root = tmp_path / "root"
         root.mkdir()
         _write_pdf(root / "ok.pdf", "OK")
-        target = runner.RootTarget(name="sftpgo", root_id=db.upsert_root(conn, "sftpgo"), abs_path=str(root))
+        target = runner.RootTarget(name="files", root_id=db.upsert_root(conn, "files"), abs_path=str(root))
 
         def boom(*args: object, **kwargs: object) -> None:
             raise RuntimeError("kaboom")

@@ -30,19 +30,19 @@ def test_under_prefix_false() -> None:
 
 
 def test_matches_any_glob_true() -> None:
-    assert matches_any_glob("sftpgo/Photos/a.jpg", ["sftpgo/Photos/*"]) is True
+    assert matches_any_glob("files/Photos/a.jpg", ["files/Photos/*"]) is True
 
 
 def test_matches_any_glob_false() -> None:
-    assert matches_any_glob("sftpgo/Docs/a.jpg", ["sftpgo/Photos/*"]) is False
+    assert matches_any_glob("files/Docs/a.jpg", ["files/Photos/*"]) is False
 
 
 def test_is_text_excluded() -> None:
-    assert is_text_excluded("sftpgo", "Videos/a.mp4", ["sftpgo/Videos/*"]) is True
+    assert is_text_excluded("files", "Videos/a.mp4", ["files/Videos/*"]) is True
 
 
 def test_is_ocr_image_dir() -> None:
-    assert is_ocr_image_dir("sftpgo", "Documents/scan.png", ["sftpgo/Documents/*"]) is True
+    assert is_ocr_image_dir("files", "Documents/scan.png", ["files/Documents/*"]) is True
 
 
 def test_should_walk_dir_true() -> None:
@@ -63,3 +63,17 @@ def test_should_index_name_apple_double() -> None:
 
 def test_should_index_name_skip_listed() -> None:
     assert should_index_name(".DS_Store", frozenset({".DS_Store"})) is False
+
+
+def test_should_index_name_skips_an_unfinished_local_upload() -> None:
+    assert should_index_name(".fdrive-partial-0123456789abcdef", frozenset()) is False
+
+
+def test_should_index_name_keeps_names_that_only_resemble_an_upload() -> None:
+    for name in (
+        ".fdrive-partial-0123456789abcde",
+        ".fdrive-partial-0123456789ABCDEF",
+        ".fdrive-partial-0123456789abcdef.docx",
+        "fdrive-partial-0123456789abcdef",
+    ):
+        assert should_index_name(name, frozenset()) is True

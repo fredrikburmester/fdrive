@@ -5,7 +5,6 @@ import {
   type CreateDbResult,
   createDb,
   createIdentityLinksRepo,
-  createIdentityOwnershipGuard,
   createRepos,
   IdentityLinksError,
   type IdentityLinksRepo,
@@ -57,7 +56,7 @@ beforeAll(async () => {
   await migrate(first.db);
   await first.db
     .insert(providers)
-    .values({ id: providerId, type: "sftpgo", baseUrl: "http://provider" });
+    .values({ id: providerId, type: "webdav", baseUrl: "http://provider" });
   a = createIdentityLinksRepo(first.db);
   b = createIdentityLinksRepo(second.db);
 });
@@ -125,7 +124,6 @@ async function fixture() {
   await first.db.insert(recents).values({ identityId: alice.id, path: "/file", openedAt: at });
   await first.db.insert(shares).values({
     identityId: alice.id,
-    sftpgoShareId: "share",
     name: "Example",
     scope: "read",
     paths: ["/file"],
@@ -512,7 +510,7 @@ describe("provider endpoint binding", () => {
     async (operation) => {
       const repos = createRepos(first.db);
       const row = await repos.providers.ensure({
-        type: "sftpgo",
+        type: "webdav",
         baseUrl: `http://stale-${operation}`,
       });
       const input = {
@@ -538,7 +536,7 @@ describe("provider endpoint binding", () => {
     async (operation) => {
       const repos = createRepos(second.db);
       const row = await repos.providers.ensure({
-        type: "sftpgo",
+        type: "webdav",
         baseUrl: `http://race-${operation}`,
       });
       const input = {
@@ -567,53 +565,4 @@ describe("provider endpoint binding", () => {
       }
     },
   );
-});
-
-it("holds ownership through scope writes and rejects the old owner after a transfer", async () => {
-  const identity = await a.linkVerified(base);
-  const guard = createIdentityOwnershipGuard(first.db);
-  let release!: () => void;
-  let entered!: () => void;
-  const blocked = new Promise<void>((resolve) => {
-    release = resolve;
-  });
-  const started = new Promise<void>((resolve) => {
-    entered = resolve;
-  });
-  const key = `identity_scope:${identity.id}`;
-  const writing = guard(accountA, identity.id, async (settings) => {
-    entered();
-    await blocked;
-    await settings.set(key, { version: 2, scopes: [], unindexedPrefixes: [] });
-  });
-  await started;
-  const transfer = b.linkVerified({ ...base, accountId: accountB });
-  try {
-    await expect
-      .poll(async () => {
-        const result = await first.pool.query(
-          "select count(*)::int as count from pg_stat_activity where wait_event = 'advisory'",
-        );
-        return result.rows[0]?.count;
-      })
-      .toBeGreaterThan(0);
-  } finally {
-    release();
-  }
-  await writing;
-  expect(await createRepos(first.db).settings.get(key)).toMatchObject({ version: 2 });
-  await transfer;
-  let called = false;
-  await expect(
-    guard(accountA, identity.id, async () => {
-      called = true;
-    }),
-  ).rejects.toMatchObject({ code: "forbidden" });
-  expect(called).toBe(false);
-  await expect(
-    guard(accountB, identity.id, async () => {
-      called = true;
-    }),
-  ).resolves.toBeUndefined();
-  expect(called).toBe(true);
 });

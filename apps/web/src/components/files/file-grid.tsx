@@ -1,6 +1,12 @@
 "use client";
 
-import type { FsEntry, OfficeStatusResponse, ProviderCapabilities, Tag } from "@fdrive/contracts";
+import type {
+  FsEntry,
+  OfficeStatusResponse,
+  ProviderCapabilities,
+  ReceivedGrant,
+  Tag,
+} from "@fdrive/contracts";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import type { DragEvent, MouseEvent as ReactMouseEvent } from "react";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
@@ -16,6 +22,7 @@ import { DEFAULT_GRID_SIZE, type GridSize } from "@/lib/files/grid-size";
 import { findRevealIndex, gridRowForIndex, type ScrollRequest } from "@/lib/files/reveal";
 import { contextEntries } from "@/lib/files/selection";
 import { wantsGridThumbnail } from "@/lib/files/thumbnail";
+import { sharedFolderCaption } from "@/lib/grants/format";
 import { DEFAULT_CAPABILITIES, selectionOf } from "@/lib/identity/capabilities";
 import { tagCheckState as computeTagCheckState } from "@/lib/metadata/tag-set";
 import { cn } from "@/lib/utils";
@@ -94,6 +101,9 @@ export interface FileGridProps {
   /** What the active login's storage can do, for every tile's context menu
    * (see `FileContextMenu`). Defaults to `DEFAULT_CAPABILITIES`. */
   capabilities?: ProviderCapabilities;
+  /** The folders others share with the active login: captions in `Shared with me`, and
+   * what each context menu offers (see `FileContextMenu`). Defaults to none. */
+  received?: readonly ReceivedGrant[];
   /** A request to scroll a specific entry into view, identified by unique token. */
   scrollRequest?: ScrollRequest | null;
   /** Callback fired after the virtualizer has scrolled to the requested entry. */
@@ -105,6 +115,7 @@ export interface FileGridProps {
 }
 
 const EMPTY_TAGS: readonly Tag[] = [];
+const EMPTY_RECEIVED: readonly ReceivedGrant[] = [];
 const NO_OP_TOGGLE_TAG = () => {};
 const NO_OP_OPEN_TAGS_EDITOR = () => {};
 const NO_OP_TOGGLE_FAVORITE = () => {};
@@ -187,6 +198,7 @@ export function FileGrid({
   showOrganize = false,
   showChat = false,
   capabilities = DEFAULT_CAPABILITIES,
+  received = EMPTY_RECEIVED,
   scrollRequest = null,
   onScrollConsumed,
   thumbnails = true,
@@ -390,6 +402,7 @@ export function FileGrid({
                     const isFocused = focusedPath === entry.path;
                     const group = contextEntries(entry, entries, selected);
                     const groupPaths = group.map((candidate) => candidate.path);
+                    const sharedBy = sharedFolderCaption(entry.path, received);
 
                     return (
                       <FileContextMenu
@@ -415,6 +428,7 @@ export function FileGrid({
                         favorite={groupFavorite(group)}
                         onToggleFavorite={(next) => onToggleFavorite(groupPaths, next)}
                         capabilities={capabilities}
+                        received={received}
                       >
                         {/** biome-ignore lint/a11y/noStaticElementInteractions: this tile supports drag-and-drop and click selection; keyboard activation is handled by the grid container's roving onKeyDown */}
                         {/** biome-ignore lint/a11y/useKeyWithClickEvents: same as above */}
@@ -447,6 +461,11 @@ export function FileGrid({
                           <span className="line-clamp-2 w-full break-words text-xs">
                             {entry.name}
                           </span>
+                          {sharedBy !== null && (
+                            <span className="w-full truncate text-[11px] text-muted-foreground">
+                              {sharedBy}
+                            </span>
+                          )}
                           <TagDots tags={tags} tagIds={entry.meta?.tagIds ?? []} />
                         </div>
                       </FileContextMenu>

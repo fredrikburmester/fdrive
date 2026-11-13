@@ -9,6 +9,7 @@ const accountFavoritesMock = vi.fn();
 const listApiTokensMock = vi.fn();
 const createApiTokenMock = vi.fn();
 const revokeApiTokenMock = vi.fn();
+const changePasswordMock = vi.fn();
 
 vi.mock("@/lib/api/client", () => ({
   apiClient: {
@@ -16,6 +17,7 @@ vi.mock("@/lib/api/client", () => ({
     listApiTokens: (...args: unknown[]) => listApiTokensMock(...args),
     createApiToken: (...args: unknown[]) => createApiTokenMock(...args),
     revokeApiToken: (...args: unknown[]) => revokeApiTokenMock(...args),
+    changePassword: (...args: unknown[]) => changePasswordMock(...args),
   },
 }));
 
@@ -112,5 +114,19 @@ it("loads favorites only for a known account and keys the results by account", a
   expect(client.getQueryData(["account", "account", "favorites"])).toEqual({
     items: [],
     unavailableIdentityIds: ["other"],
+  });
+});
+
+it("changes the active login's own password", async () => {
+  changePasswordMock.mockResolvedValue({ ok: true });
+  const { useChangePassword } = await import("./queries");
+  const client = new QueryClient();
+  const { result } = renderHook(() => useChangePassword(), { wrapper: createWrapper(client) });
+
+  await result.current.mutateAsync({ currentPassword: "old-secret", newPassword: "new-secret" });
+
+  expect(changePasswordMock).toHaveBeenCalledWith({
+    currentPassword: "old-secret",
+    newPassword: "new-secret",
   });
 });

@@ -1,4 +1,5 @@
 import { type APIRequestContext, expect, test } from "@playwright/test";
+import { otherLoopback, webdavUrl } from "./support/local-folder.js";
 import { loginAs } from "./support/login.js";
 import { getAliceStorageStatePath, getWebBaseUrl } from "./support/paths.js";
 
@@ -49,23 +50,20 @@ test("the login page shows no server picker with one provider and a picker with 
     await page.goto("/login");
     await expect(page.getByLabel("Username")).toBeVisible();
     await expect(page.getByLabel("Server")).toHaveCount(0);
-    // The seeded provider has no admin-set name, and the public list never
-    // carries the host, so the page names the product only.
-    await expect(page.getByText("Sign in with your SFTPGo account", { exact: true })).toBeVisible();
+    // A local login has a username and a password, nothing more.
+    await expect(page.getByLabel(/one-time code/i)).toHaveCount(0);
+    // The local folder has no admin-set name, and its accounts are fdrive's
+    // own, so the page names the product only.
+    await expect(page.getByText("Sign in with your fdrive account", { exact: true })).toBeVisible();
 
-    // The same SFTPGo server through another host spelling is a new
-    // (type, baseUrl) pair, so it becomes a second enabled provider.
+    // alice's WebDAV server becomes a second enabled provider, spelled with
+    // the other loopback name so it never collides with the rows the WebDAV
+    // specs add.
     const [seeded] = await listProviders(admin);
     if (seeded === undefined) throw new Error("no seeded provider");
     const created = await admin.post("/api/v1/admin/providers", {
       headers: MUTATION_HEADERS,
-      data: {
-        type: "sftpgo",
-        label: SECOND_LABEL,
-        baseUrl: seeded.baseUrl.includes("localhost")
-          ? seeded.baseUrl.replace("localhost", "127.0.0.1")
-          : seeded.baseUrl.replace("127.0.0.1", "localhost"),
-      },
+      data: { type: "webdav", label: SECOND_LABEL, baseUrl: otherLoopback(webdavUrl()) },
     });
     expect(created.ok(), await created.text()).toBe(true);
 
@@ -76,11 +74,11 @@ test("the login page shows no server picker with one provider and a picker with 
     await picker.click();
     await expect(page.getByRole("option", { name: new RegExp(SECOND_LABEL) })).toBeVisible();
     // Signing in through the first (seeded) provider still works with the
-    // picker present and sends that provider's id. It is listed by product
-    // name alone: the admin view's host label is not public.
-    await page.getByRole("option", { name: "SFTPGo", exact: true }).click();
+    // picker present and sends that provider's id. The local folder is
+    // listed by product name alone: the admin view's label is not public.
+    await page.getByRole("option", { name: "fdrive", exact: true }).click();
     // The closed picker names the chosen server, never its provider id.
-    await expect(picker).toHaveText(/SFTPGo/);
+    await expect(picker).toHaveText(/fdrive/);
     await expect(picker).not.toContainText(seeded.id);
     const loginRequest = page.waitForRequest(
       (request) => request.url().endsWith("/api/v1/auth/login") && request.method() === "POST",

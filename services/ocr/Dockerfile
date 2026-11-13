@@ -1,6 +1,6 @@
 # Base image ships ocrmypdf itself in an isolated venv at /app/.venv (built with
-# uv, no pip inside it) and runs as a non-root "app" user (uid 1000, the same uid
-# the dev stack's SFTPGo runs as, so bind-mounted roots stay writable). We add
+# uv, no pip inside it) and runs as a non-root "app" user (uid 1000, the default
+# owner of the files folder, so bind-mounted roots stay writable). We add
 # Swedish and English tesseract data, then install this package into its own
 # venv rather than trying to inject pip into the base image's venv.
 #

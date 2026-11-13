@@ -23,7 +23,7 @@ def parse_glob_list(raw: str) -> tuple[str, ...]:
 
 
 def parse_roots(raw: str) -> dict[str, str]:
-    """`"sftpgo=/roots/sftpgo,photos=/roots/photos"` -> `{"sftpgo": "/roots/sftpgo", ...}`.
+    """`"files=/roots/files,photos=/roots/photos"` -> `{"files": "/roots/files", ...}`.
     Same format as the indexer's `INDEX_ROOTS`."""
     roots: dict[str, str] = {}
     for pair in raw.split(","):

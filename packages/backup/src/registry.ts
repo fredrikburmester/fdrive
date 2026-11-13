@@ -1,6 +1,8 @@
 /** Explicit coverage: adding a table without a policy prevents a successful backup. */
 export const DURABLE_TABLES = [
   "app.providers",
+  "app.local_users",
+  "app.local_grants",
   "app.accounts",
   "app.identities",
   "app.credentials",

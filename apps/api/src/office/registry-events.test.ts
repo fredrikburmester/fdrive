@@ -1,12 +1,9 @@
-import { createMemoryOfficeFileRepo } from "@fdrive/db";
+import { createMemoryOfficeFileRepo, type Provider } from "@fdrive/db";
 import { createMemoryRepos } from "@fdrive/db/testing";
+import { createLocalModule } from "@fdrive/local";
 import { expect, it, vi } from "vitest";
 import { createMetadataService } from "../metadata/service.js";
-import { seedSftpgoProvider } from "../providers/test-fixtures/index.ts";
-import { createInMemoryMountMappingStore } from "../scoping/mount-mapping-store.ts";
-import { createInMemoryScopeOverrideStore } from "../scoping/override-store.ts";
 import { createScopeResolver } from "../scoping/resolver.ts";
-import { fakeIndexerDirectory, fakeStorageProvider } from "../scoping/test-fixtures/index.ts";
 import {
   applyOfficeRootEvent,
   applyOfficeStorageEvent,
@@ -15,26 +12,59 @@ import {
 
 const now = new Date("2026-09-06T00:00:00Z");
 
-/** Builds a real `ScopeResolver.configuredMappings` (no overrides, no index roots) over the repos' provider rows. */
-function configuredMappingsFrom(repos: ReturnType<typeof createMemoryRepos>) {
+/** The local folder's module, read under the index root `rootName`. */
+function localModule(rootName: string) {
+  return createLocalModule({
+    root: "/srv/files",
+    indexRoot: rootName,
+    users: {
+      verify: async () => ({ result: "invalid" }),
+      status: async () => "active",
+      shared: async () => [],
+    },
+  });
+}
+
+/** An enabled local-folder row, as the deployment seeds it. */
+async function seedLocalProvider(repos: ReturnType<typeof createMemoryRepos>): Promise<Provider> {
+  const row = await repos.providers.ensure({ type: "local", baseUrl: "local" });
+  const updated = await repos.providers.update(row.id, { enabled: true, managedByEnv: true });
+  if (updated === null) throw new Error("provider vanished");
+  return updated;
+}
+
+/**
+ * A real `ScopeResolver.configuredMappings` over the repos' provider rows,
+ * each read under the root `rootName()` names at that moment.
+ */
+function configuredMappingsFrom(
+  repos: ReturnType<typeof createMemoryRepos>,
+  rootName: () => string = () => "files",
+) {
   return createScopeResolver({
-    providers: repos.providers,
-    overrides: createInMemoryScopeOverrideStore(),
-    mountMappings: createInMemoryMountMappingStore(),
-    indexRoots: [],
-    indexer: fakeIndexerDirectory(new Map()),
-    storageForIdentity: async () => fakeStorageProvider(),
-    clock: () => now,
+    providers: {
+      async get(id) {
+        const provider = await repos.providers.get(id);
+        return provider === null
+          ? null
+          : {
+              provider,
+              module: localModule(rootName()),
+              instance: { id: provider.id, baseUrl: provider.baseUrl, config: provider.config },
+            };
+      },
+    },
+    indexRootNames: [],
   }).configuredMappings;
 }
 
 it("maps external move/delete once and ignores content events", async () => {
   const files = createMemoryOfficeFileRepo();
   const providerId = "123e4567-e89b-42d3-a456-426614174000";
-  const file = await files.ensure({ providerId, rootName: "sftpgo", path: "alice/a.docx" });
+  const file = await files.ensure({ providerId, rootName: "files", path: "alice/a.docx" });
   const event = {
     kind: "moved" as const,
-    root: "sftpgo",
+    root: "files",
     path: "alice/a.docx",
     target_path: "alice/b.docx",
     at: now.toISOString(),
@@ -54,7 +84,7 @@ it("wraps fs metadata hooks without duplicate indexer mapping", async () => {
   const repos = createMemoryRepos();
   const files = createMemoryOfficeFileRepo();
   const metadata = createMetadataService(repos);
-  const provider = await seedSftpgoProvider(repos, "http://sftpgo");
+  const provider = await seedLocalProvider(repos);
   const account = await repos.accounts.create({ displayName: null });
   const identity = await repos.identities.create({
     accountId: account.id,
@@ -70,7 +100,7 @@ it("wraps fs metadata hooks without duplicate indexer mapping", async () => {
   );
   const file = await files.ensure({
     providerId: provider.id,
-    rootName: "sftpgo",
+    rootName: "files",
     path: "alice/a.docx",
   });
   await wrapped.onMoved(identity.id, "/a.docx", "/b.docx", false);
@@ -86,7 +116,7 @@ it("passes onTrashed through unchanged: office registrations are untouched, rece
   const repos = createMemoryRepos();
   const files = createMemoryOfficeFileRepo();
   const metadata = createMetadataService(repos);
-  const provider = await seedSftpgoProvider(repos, "http://sftpgo");
+  const provider = await seedLocalProvider(repos);
   const account = await repos.accounts.create({ displayName: null });
   const identity = await repos.identities.create({
     accountId: account.id,
@@ -103,7 +133,7 @@ it("passes onTrashed through unchanged: office registrations are untouched, rece
   expect(wrapped.onTrashed).toBe(metadata.onTrashed);
   const file = await files.ensure({
     providerId: provider.id,
-    rootName: "sftpgo",
+    rootName: "files",
     path: "alice/a.docx",
   });
   await repos.recents.touch(identity.id, "/a.docx");
@@ -115,7 +145,7 @@ it("passes onTrashed through unchanged: office registrations are untouched, rece
 it("tombstones an old mapping if the configured root changes during move resolution", async () => {
   const repos = createMemoryRepos();
   const files = createMemoryOfficeFileRepo();
-  const provider = await seedSftpgoProvider(repos, "http://sftpgo");
+  const provider = await seedLocalProvider(repos);
   const account = await repos.accounts.create({ displayName: null });
   const identity = await repos.identities.create({
     accountId: account.id,
@@ -124,25 +154,15 @@ it("tombstones an old mapping if the configured root changes during move resolut
   });
   const file = await files.ensure({
     providerId: provider.id,
-    rootName: "sftpgo",
+    rootName: "files",
     path: "alice/a.docx",
   });
   let calls = 0;
-  const get = repos.providers.get.bind(repos.providers);
-  vi.spyOn(repos.providers, "get").mockImplementation(async (id) => {
-    const row = await get(id);
-    return row === null
-      ? null
-      : {
-          ...row,
-          config: { homeTemplate: ++calls === 1 ? "sftpgo:/{username}" : "other:/{username}" },
-        };
-  });
   await withOfficeMetadata(
     createMetadataService(repos),
     files,
     repos.identities,
-    configuredMappingsFrom(repos),
+    configuredMappingsFrom(repos, () => (++calls === 1 ? "files" : "other")),
     () => now,
   ).onMoved(identity.id, "/a.docx", "/b.docx", false);
   expect(await files.get(file.id)).toBeNull();
@@ -151,7 +171,7 @@ it("tombstones an old mapping if the configured root changes during move resolut
 it("tombstones the source when the move target becomes unmapped", async () => {
   const repos = createMemoryRepos();
   const files = createMemoryOfficeFileRepo();
-  const provider = await seedSftpgoProvider(repos, "http://sftpgo");
+  const provider = await seedLocalProvider(repos);
   const account = await repos.accounts.create({ displayName: null });
   const identity = await repos.identities.create({
     accountId: account.id,
@@ -160,7 +180,7 @@ it("tombstones the source when the move target becomes unmapped", async () => {
   });
   const file = await files.ensure({
     providerId: provider.id,
-    rootName: "sftpgo",
+    rootName: "files",
     path: "alice/a.docx",
   });
   const get = repos.providers.get.bind(repos.providers);
@@ -182,8 +202,8 @@ it("tombstones the source when the move target becomes unmapped", async () => {
 
 it("routes a root event to its provider, independently of the default provider", async () => {
   const repos = createMemoryRepos();
-  const first = await seedSftpgoProvider(repos, "http://first");
-  const second = await seedSftpgoProvider(repos, "http://second");
+  const first = await repos.providers.ensure({ type: "webdav", baseUrl: "http://first" });
+  const second = await repos.providers.ensure({ type: "webdav", baseUrl: "http://second" });
   const files = createMemoryOfficeFileRepo();
   const firstFile = await files.ensure({
     providerId: first.id,

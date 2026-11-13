@@ -5,18 +5,19 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+  type LocalStorageFixture,
   type MinioKey,
-  SEED_FILES,
-  SEED_USERS,
-  type StartSftpgoOptions,
+  type SeedFiles,
+  type SeedGrant,
+  type SeedUser,
+  startApacheWebdav,
+  startLocalStorage,
   startMinio,
   startPostgres,
-  startSftpgo,
 } from "@fdrive/testkit";
-import { ACCOUNT_FILES, ACCOUNT_USERS } from "./account-fixture.js";
+import { E2E_FILES, E2E_GRANTS, E2E_USERS } from "./e2e-seed.js";
+import { createE2eLocalUsers } from "./local-users.js";
 import { E2E_HOST, getApiPort, getEnvStatePath, getStateDirectory, getWebPort } from "./paths.js";
-import { SCOPE_FILES, SCOPE_USERS } from "./scope-fixture.js";
-import { SHARE_FILES, SHARE_USERS } from "./share-fixture.js";
 import { waitForHttpOk } from "./wait.js";
 
 const supportDir = dirname(fileURLToPath(import.meta.url));
@@ -27,17 +28,43 @@ const repoRoot = resolve(webDir, "..", "..");
 
 const SERVER_READY_TIMEOUT_MS = 90_000;
 
+/**
+ * The index root the local folder is read under (`FDRIVE_INDEX_ROOTS`):
+ * `<root>/<username>` homes are indexed as `<username>/...` paths below it.
+ */
+export const INDEX_ROOT_NAME = "files";
+
 /** Whether to run the web app via `next dev` instead of a production build, for faster local iteration. */
 function isDevServerMode(): boolean {
   return process.env.E2E_DEV === "1";
 }
 
+/** The users, files and folder grants a local folder starts with. */
+export interface LocalStorageSeed {
+  readonly users: readonly SeedUser[];
+  readonly files: SeedFiles;
+  readonly grants?: readonly SeedGrant[];
+}
+
+/** A WebDAV server's one login and its home, for specs that add WebDAV storage. */
+export interface E2eWebdav {
+  /** The login's home, e.g. `http://127.0.0.1:32771/dav/alice/`. */
+  readonly url: string;
+  readonly username: string;
+  readonly password: string;
+}
+
 export interface RunningEnvironment {
   /** The seeded Postgres container's connection string, for tests that seed extra rows directly. */
   readonly databaseUrl: string;
-  readonly sftpgoUrl: string;
-  /** The same SFTPGo's WebDAV binding, for specs that add it as a second provider type. */
-  readonly sftpgoWebdavUrl: string;
+  /**
+   * The local folder the API serves (`FDRIVE_STORAGE_ROOT`), one home per
+   * user at `<root>/<username>`; `undefined` when `options.storage` is
+   * `false`. Specs read and change files here directly, as the host would.
+   */
+  readonly storageRoot: string | undefined;
+  /** An Apache WebDAV server with alice's login, when `options.webdav` asked for one. */
+  readonly webdav?: E2eWebdav;
   /** A MinIO bucket (`url` is `http://host:port/bucket`) and a read-write key, when `options.s3` asked for one. */
   readonly s3?: { readonly url: string; readonly key: MinioKey };
   /** This run's actual API and web base URLs: equal to `getApiBaseUrl()`/
@@ -52,24 +79,39 @@ export interface RunningEnvironment {
 export interface StartEnvironmentOptions {
   /** Dedicated test composition entrypoint. Defaults to the production entrypoint. */
   readonly apiEntrypoint?: string;
-  readonly sftpgoOptions?: StartSftpgoOptions;
+  /**
+   * The local folder's users, files and grants. Defaults to the whole e2e
+   * seed (`support/e2e-seed.ts`). `false` serves no local folder, so setup
+   * connects WebDAV or S3 instead.
+   */
+  readonly storage?: LocalStorageSeed | false;
+  /**
+   * Creates the folder's users and grants in the database once the API has
+   * migrated it, as setup and System > Users would. `false` leaves the
+   * folder with no users, so `/setup` creates the first. Defaults to `true`.
+   */
+  readonly createUsers?: boolean;
+  /** Also start an Apache WebDAV server with alice's login, for specs that add WebDAV storage. */
+  readonly webdav?: boolean;
   /** Also start a MinIO bucket, for a spec that adds an S3 provider. Off by default: most specs never need it. */
   readonly s3?: boolean;
-  /** Fixture-only configuration before API startup, using this disposable server. */
-  readonly prepareSftpgo?: (baseUrl: string) => Promise<void>;
+  /** Configures `FDRIVE_INDEX_ROOTS` with the local folder as the `files` root, so search is available. */
+  readonly indexRoot?: boolean;
+  /** Fixture-only preparation of the local folder before the API starts. */
+  readonly prepareStorage?: (storage: LocalStorageFixture) => Promise<void>;
   /**
    * Extra environment variables merged into the spawned API process's env,
-   * on top of the fixed set below (e.g. `FDRIVE_INDEX_ROOTS` for the search
-   * e2e suite, `FDRIVE_INDEXER_URL` for the fake indexer `system.spec.ts`
-   * uses). Empty by default so existing callers are unaffected.
+   * on top of the fixed set below (e.g. `FDRIVE_INDEXER_URL` for the fake
+   * indexer `system.spec.ts` uses). Empty by default so existing callers
+   * are unaffected.
    */
   readonly extraApiEnv?: Record<string, string>;
   /**
-   * Extra teardown steps run alongside Postgres, SFTPGo, and the API/web
-   * processes, in the same best-effort, keep-going-on-error fashion (see
-   * `stopAll` below). Used by `global-setup.ts` to stop the fake indexer
-   * server it starts to back `extraApiEnv.FDRIVE_INDEXER_URL`, so that
-   * server's lifecycle rides along with the rest of this environment's
+   * Extra teardown steps run alongside Postgres, the local folder and the
+   * API/web processes, in the same best-effort, keep-going-on-error fashion
+   * (see `stopAll` below). Used by `global-setup.ts` to stop the fake
+   * indexer server it starts to back `extraApiEnv.FDRIVE_INDEXER_URL`, so
+   * that server's lifecycle rides along with the rest of this environment's
    * `stop()` rather than needing its own teardown wiring.
    */
   readonly extraStopFns?: ReadonlyArray<() => Promise<void>>;
@@ -77,22 +119,34 @@ export interface StartEnvironmentOptions {
    * Overrides the API/web ports this run binds, instead of the shared
    * run's `getApiPort()`/`getWebPort()`. For a spec that needs a second,
    * independently configured stack alongside the shared one started by
-   * `global-setup.ts` (see `trash.spec.ts`, which needs SFTPGo recycle-bin
-   * rules seeded before enabling Trash through onboarding). Pass two ports from `support/ports.ts#getFreePort` so the
-   * second stack never collides with the shared run's own ports.
+   * `global-setup.ts` (see `trash.spec.ts`, which enables Trash through
+   * onboarding on a fresh installation). Pass two ports from
+   * `support/ports.ts#getFreePort` so the second stack never collides with
+   * the shared run's own ports.
    */
   readonly apiPort?: number;
   readonly webPort?: number;
   /**
-   * Skips writing this run's pids to the shared `environment-state.json`
+   * Marks a second, spec-owned environment (see `apiPort`/`webPort`
+   * above): its pids are not written to the shared `environment-state.json`
    * (see `persistState` below), which `global-teardown.ts` falls back to
-   * reading only when its in-process environment handle is unavailable.
-   * A second, spec-owned environment (see `apiPort`/`webPort` above) stops
-   * itself directly and must never overwrite that shared file with its own
-   * pids. Defaults to `false` (persist), matching every existing caller.
+   * reading only when its in-process environment handle is unavailable, and
+   * its folder and WebDAV addresses are not exported as `E2E_STORAGE_ROOT`
+   * and `E2E_WEBDAV_URL`, which name the shared run's. Defaults to `false`
+   * (the shared environment).
    */
   readonly skipStatePersist?: boolean;
 }
+
+/** Every user, file and grant of the shared e2e folder. */
+export const E2E_STORAGE_SEED: LocalStorageSeed = {
+  users: E2E_USERS,
+  files: E2E_FILES,
+  grants: E2E_GRANTS,
+};
+
+/** alice's WebDAV login: the same name and password as on the local folder. */
+const WEBDAV_LOGIN = { username: "alice", password: "alice-password" } as const;
 
 interface EnvironmentState {
   readonly apiPid: number | undefined;
@@ -182,17 +236,19 @@ function killProcess(child: ChildProcess): Promise<void> {
 }
 
 /**
- * Boots the whole e2e stack: a seeded Postgres and SFTPGo (via
- * `@fdrive/testkit`), the fdrive API as a child `tsx` process (imported
- * with the `development` condition so it runs straight from source, no
- * build step required), and the web app either as a production build +
- * `next start` (the default, matching how it actually ships) or `next dev`
- * when `E2E_DEV=1` (faster to iterate on locally).
+ * Boots the whole e2e stack: a seeded Postgres (via `@fdrive/testkit`), a
+ * fresh local folder with every seed user's home and files
+ * (`FDRIVE_STORAGE_ROOT`), the fdrive API as a child `tsx` process
+ * (imported with the `development` condition so it runs straight from
+ * source, no build step required), the folder's users in the database, and
+ * the web app either as a production build + `next start` (the default,
+ * matching how it actually ships) or `next dev` when `E2E_DEV=1` (faster to
+ * iterate on locally).
  *
  * Returns a `stop()` that tears everything down in reverse order. On any
  * failure during startup, already-started pieces are stopped before the
- * error is rethrown, so a failed `globalSetup` never leaks a container or
- * process.
+ * error is rethrown, so a failed `globalSetup` never leaks a container,
+ * folder or process.
  */
 export async function startEnvironment(
   options: StartEnvironmentOptions = {},
@@ -217,27 +273,38 @@ export async function startEnvironment(
     const postgres = await startPostgres();
     stopFns.push(() => postgres.stop());
 
-    const sftpgo = await startSftpgo(
-      options.sftpgoOptions ?? {
-        users: [
-          ...SEED_USERS,
-          ...ACCOUNT_USERS,
-          ...SHARE_USERS,
-          ...SCOPE_USERS,
-          {
-            username: "folder_views",
-            password: "folder-views-test-password",
-            permissions: { "/": ["*"] },
-          },
-        ],
-        files: { ...SEED_FILES, ...ACCOUNT_FILES, ...SHARE_FILES, ...SCOPE_FILES },
-      },
-    );
-    stopFns.push(() => sftpgo.stop());
-    await options.prepareSftpgo?.(sftpgo.baseUrl);
-    // The same container's WebDAV binding, for specs that add it as a
-    // second provider type; workers inherit the setup process's env.
-    process.env.E2E_SFTPGO_WEBDAV_URL = sftpgo.webdavUrl;
+    const seed = options.storage === undefined ? E2E_STORAGE_SEED : options.storage;
+    const storage =
+      seed === false
+        ? undefined
+        : await startLocalStorage({
+            users: seed.users,
+            files: seed.files,
+            grants: seed.grants ?? [],
+          });
+    if (storage !== undefined) {
+      stopFns.push(() => storage.stop());
+      await options.prepareStorage?.(storage);
+    }
+    const shared = options.skipStatePersist !== true;
+    if (shared && storage !== undefined) {
+      // Workers inherit the setup process's env: specs change files on disk here.
+      process.env.E2E_STORAGE_ROOT = storage.root;
+    }
+
+    let webdav: E2eWebdav | undefined;
+    if (options.webdav === true) {
+      const server = await startApacheWebdav({ users: [WEBDAV_LOGIN] });
+      stopFns.push(() => server.stop());
+      const home = server.users[0];
+      if (home === undefined) throw new Error("fdrive e2e: the WebDAV server has no login");
+      // Spelled with the IPv4 loopback address: `localhost` can resolve to
+      // `::1` first where Docker publishes ports on IPv4 only.
+      const url = new URL(home.baseUrl);
+      url.hostname = E2E_HOST;
+      webdav = { url: url.href, username: home.username, password: home.password };
+      if (shared) process.env.E2E_WEBDAV_URL = webdav.url;
+    }
     // A MinIO bucket only when asked: `s3-provider.spec.ts` starts its own.
     const minio = options.s3 === true ? await startMinio() : undefined;
     if (minio !== undefined) stopFns.push(() => minio.stop());
@@ -256,15 +323,26 @@ export async function startEnvironment(
           LOG_LEVEL: "warn",
           NODE_ENV: "test",
           DATABASE_URL: postgres.connectionString,
-          SFTPGO_URL: sftpgo.baseUrl,
+          // Empty (no local folder) reads as unset, whatever the parent env holds.
+          FDRIVE_STORAGE_ROOT: storage?.root ?? "",
+          ...(options.indexRoot === true && storage !== undefined
+            ? {
+                FDRIVE_INDEX_ROOTS: JSON.stringify([
+                  {
+                    name: INDEX_ROOT_NAME,
+                    storagePath: storage.root,
+                    indexerPath: `/roots/${INDEX_ROOT_NAME}`,
+                  },
+                ]),
+              }
+            : {}),
           FDRIVE_MASTER_KEY: masterKey,
           FDRIVE_COOKIE_SECURE: "false",
           FDRIVE_AUTO_MIGRATE: "true",
           // alice is the e2e suite's always-admin user (system.spec.ts),
           // so the System sidebar section and its admin-only routes have
           // someone to exercise them without a `/setup` run in every spec.
-          // scope_admin maps its own virtual folder in `account-scope.spec.ts`.
-          FDRIVE_ADMIN_USERS: "alice,scope_admin",
+          FDRIVE_ADMIN_USERS: "alice",
           // Makes `System > Thumbnails` render as configured (see
           // `system.spec.ts`): no spec relies on real thumbnail files
           // existing under it, so the OS temp directory is enough. Never
@@ -286,6 +364,13 @@ export async function startEnvironment(
       throw new Error(
         `fdrive e2e: API never became healthy.\n${apiOutput.dump()}\n${String(error)}`,
       );
+    }
+    // The API has migrated the database by now, so its users can be created.
+    if (storage !== undefined && options.createUsers !== false) {
+      await createE2eLocalUsers(postgres.connectionString, {
+        users: storage.users,
+        grants: storage.grants,
+      });
     }
 
     const nodeEnv: "development" | "production" = isDevServerMode() ? "development" : "production";
@@ -386,7 +471,7 @@ export async function startEnvironment(
       );
     }
 
-    if (options.skipStatePersist !== true) {
+    if (shared) {
       await persistState({
         apiPid: apiChild.pid,
         webPid: webChild.pid,
@@ -397,8 +482,8 @@ export async function startEnvironment(
 
     return {
       databaseUrl: postgres.connectionString,
-      sftpgoUrl: sftpgo.baseUrl,
-      sftpgoWebdavUrl: sftpgo.webdavUrl,
+      storageRoot: storage?.root,
+      ...(webdav === undefined ? {} : { webdav }),
       ...(minio === undefined ? {} : { s3: { url: minio.baseUrl, key: minio.writer } }),
       apiBaseUrl,
       webBaseUrl,

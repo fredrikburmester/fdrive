@@ -47,7 +47,7 @@ const OCR_STATUS: SystemOcrResponse = {
 const ORIGINALS: OcrOriginal[] = [
   {
     id: "0123456789abcdef_invoice.pdf",
-    root: "sftpgo",
+    root: "files",
     path: "alice/docs/invoice.pdf",
     size: 2048,
     keptAt: new Date(Date.now() - 3_600_000).toISOString(),
@@ -57,7 +57,7 @@ const ORIGINALS: OcrOriginal[] = [
   },
   {
     id: "fedcba9876543210_receipt.pdf",
-    root: "sftpgo",
+    root: "files",
     path: "alice/docs/receipt.pdf",
     size: 2048,
     keptAt: new Date(Date.now() - 7_200_000).toISOString(),
@@ -83,7 +83,7 @@ async function stubOcr(page: Page, onRestore: (body: unknown) => void): Promise<
     return route.fulfill({
       json: {
         restored: true,
-        root: "sftpgo",
+        root: "files",
         path: "alice/docs/receipt.pdf",
         previousState: "changed",
       },

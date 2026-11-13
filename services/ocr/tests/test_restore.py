@@ -39,7 +39,7 @@ def state_dir(tmp_path: Path) -> str:
 
 @pytest.fixture
 def target(db_conn: psycopg.Connection, root_dir: Path) -> RootTarget:
-    return RootTarget(name="sftpgo", root_id=db.upsert_root(db_conn, "sftpgo"), abs_path=str(root_dir))
+    return RootTarget(name="files", root_id=db.upsert_root(db_conn, "files"), abs_path=str(root_dir))
 
 
 def _run_pass(conn: psycopg.Connection, target: RootTarget, state_dir: str, settings: Settings = SETTINGS) -> runner.RunTotals:
@@ -75,12 +75,12 @@ def test_restores_an_ocred_file_and_the_next_pass_leaves_it_alone(
     index = restore.OriginalsIndex()
     listed, total = restore.list_originals(db_conn, state_dir, [target], index)
     assert total == 1
-    assert (listed[0].root, listed[0].path, listed[0].state) == ("sftpgo", "docs/scan.pdf", "ocred")
+    assert (listed[0].root, listed[0].path, listed[0].state) == ("files", "docs/scan.pdf", "ocred")
 
     outcome = restore.restore_original(
         db_conn, state_dir, [target], index, listed[0].id, False, False, lambda _msg: None
     )
-    assert outcome == restore.RestoreOutcome(True, None, "ocred", "sftpgo", "docs/scan.pdf")
+    assert outcome == restore.RestoreOutcome(True, None, "ocred", "files", "docs/scan.pdf")
     after = scan.stat()
     assert scan.read_bytes() == ORIGINAL_BODY
     assert after.st_mtime_ns == before.st_mtime_ns
@@ -123,8 +123,8 @@ def _keep(state_dir: str, root_dir: Path, rel_path: str, body: bytes = ORIGINAL_
     info = source.stat()
     rewritten = root_dir.parent / "rewritten.pdf"
     rewritten.write_bytes(OCRED_BODY)
-    runner.apply_rewrite(str(source), str(rewritten), state_dir, "sftpgo", rel_path, info.st_size, info.st_mtime_ns, True)
-    return os.path.basename(runner.originals_dest(state_dir, "sftpgo", rel_path, info.st_size, info.st_mtime_ns))
+    runner.apply_rewrite(str(source), str(rewritten), state_dir, "files", rel_path, info.st_size, info.st_mtime_ns, True)
+    return os.path.basename(runner.originals_dest(state_dir, "files", rel_path, info.st_size, info.st_mtime_ns))
 
 
 def test_refuses_to_overwrite_a_file_changed_since_ocr_unless_asked(
@@ -220,7 +220,7 @@ def test_refuses_an_original_kept_for_a_root_this_service_no_longer_has(
     outcome = restore.restore_original(
         db_conn, state_dir, [], restore.OriginalsIndex(), original_id, True, True, lambda _m: None
     )
-    assert (outcome.ok, outcome.reason, outcome.root) == (False, "unknown_root", "sftpgo")
+    assert (outcome.ok, outcome.reason, outcome.root) == (False, "unknown_root", "files")
 
 
 def test_refuses_a_kept_path_that_is_not_a_regular_file(
@@ -270,7 +270,7 @@ def test_resolves_a_legacy_original_from_the_done_log_and_backfills_its_sidecar(
 
     index = restore.OriginalsIndex()
     listed, _total = restore.list_originals(db_conn, state_dir, [target], index)
-    assert (listed[0].root, listed[0].path, listed[0].legacy) == ("sftpgo", "docs/scan.pdf", True)
+    assert (listed[0].root, listed[0].path, listed[0].legacy) == ("files", "docs/scan.pdf", True)
 
     backfilled = json.loads(Path(restore.mappings_dir(state_dir), f"{original_id}.json").read_text())
     assert backfilled["legacy"] is True
@@ -376,7 +376,7 @@ def test_reports_no_state_for_an_original_whose_root_is_not_configured(
 ) -> None:
     _keep(state_dir, root_dir, "docs/scan.pdf")
     listed, _total = restore.list_originals(db_conn, state_dir, [], restore.OriginalsIndex())
-    assert (listed[0].root, listed[0].path, listed[0].state) == ("sftpgo", "docs/scan.pdf", None)
+    assert (listed[0].root, listed[0].path, listed[0].state) == ("files", "docs/scan.pdf", None)
 
 
 def test_an_unreadable_sidecar_reads_as_unresolved(state_dir: str, root_dir: Path) -> None:
@@ -400,7 +400,7 @@ def test_kept_at_ignores_the_source_mtime_the_copy_inherited(
     rewritten.write_bytes(OCRED_BODY)
     info = source.stat()
     runner.apply_rewrite(
-        str(source), str(rewritten), state_dir, "sftpgo", "docs/old.pdf", info.st_size, info.st_mtime_ns, True
+        str(source), str(rewritten), state_dir, "files", "docs/old.pdf", info.st_size, info.st_mtime_ns, True
     )
 
     entry = _sole_original(state_dir)
@@ -502,7 +502,7 @@ def test_a_pass_prunes_aged_originals(
 
 def test_write_mapping_can_date_a_backfilled_sidecar(state_dir: str) -> None:
     mapping = Mapping(
-        root="sftpgo", path="docs/a.pdf", size=3, mtime_ns=7, original="abc_a.pdf", sha256=None,
+        root="files", path="docs/a.pdf", size=3, mtime_ns=7, original="abc_a.pdf", sha256=None,
         legacy=True, kept_at_ns=None,
     )
     stamp = time.time() - 7200

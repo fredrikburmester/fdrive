@@ -1,36 +1,27 @@
 /**
- * Generates the dev-only SFTPGo seed data: `deploy/dev/sftpgo-seed.json`
- * (loaded by SFTPGo via SFTPGO_LOADDATA_FROM) and the files under
- * `deploy/dev/files/**` (copied into the SFTPGo data volume by the
- * `sftpgo-seed` one-shot compose service). Run with `pnpm dev:seed`; the
- * output is committed so a fresh clone has dev fixtures without needing to
- * run this script first.
+ * Generates the dev-only files under `deploy/dev/files/**`, one folder per
+ * user: the seed `pnpm dev:env` copies into the gitignored
+ * `deploy/dev/.data/files` the api dev server serves (`FDRIVE_STORAGE_ROOT`
+ * in apps/api/.env.dev). Run with `pnpm dev:seed`; the output is committed so
+ * a fresh clone has dev fixtures without needing to run this script first.
+ * `pnpm dev:users` creates the matching users.
  *
- * Reuses @fdrive/testkit's SEED_USERS/SEED_FOLDERS/SEED_FILES so the dev
- * environment has the same alice, bob, and carol fixtures the automated
- * tests use, plus a fourth "dev" user with full permissions and a few
- * sample files meant to look nice in a browser.
+ * Reuses @fdrive/testkit's SEED_USERS/SEED_FILES so the dev environment has
+ * the same alice, bob, and carol fixtures the automated tests use, plus a
+ * fourth "dev" user with a few sample files meant to look nice in a browser.
  */
-import { execFileSync } from "node:child_process";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import {
-  buildSftpgoDump,
-  SEED_FILES,
-  SEED_FOLDERS,
-  SEED_USERS,
-  type SeedUser,
-  seedFileLayout,
-} from "@fdrive/testkit";
+import { SEED_FILES, SEED_USERS } from "@fdrive/testkit";
 import { encodeMinimalPdf } from "./pdf.js";
 import { encodePng } from "./png.js";
 
-/** Matches SFTPGO_DATA_DIR used by the testkit and by compose.dev.yaml's sftpgo volume. */
-export const DEV_DATA_DIR = "/srv/sftpgo/data";
-
-/** Seeded recycle rule path. Enable the matching Trash integration in fdrive's UI. */
-export const DEV_TRASH_PATH = "/.trash";
+/** A dev user: a home folder under `deploy/dev/files` and a known password. */
+export interface DevUser {
+  readonly username: string;
+  readonly password: string;
+}
 
 const BASE64_PREFIX = "BASE64:";
 
@@ -78,12 +69,8 @@ export function buildSamplePdfMarker(): string {
   return toBase64Marker(encodeMinimalPdf("Hello, fdrive sample PDF"));
 }
 
-/** The dev-only user: full permissions, meant for exploring the app in a browser. */
-export const DEV_USER: SeedUser = {
-  username: "dev",
-  password: "dev",
-  permissions: { "/": ["*"] },
-};
+/** The dev-only user, meant for exploring the app in a browser. */
+export const DEV_USER: DevUser = { username: "dev", password: "dev" };
 
 /**
  * Builds the dev user's sample files, keyed the same way SEED_FILES is
@@ -116,36 +103,47 @@ export function buildDevSampleFiles(): Record<string, string> {
 
 /**
  * Merges the shared testkit seed users/files with the dev-only user and its
- * sample files. Pure: takes the shared seed data as arguments so it can be
- * tested without importing the real testkit module.
+ * sample files. Only a user's username and password are kept, and only
+ * files owned by a user: SFTPGo-era fixtures such as the "@shared" virtual
+ * folder have no place in the local folder. Pure: takes the shared seed
+ * data as arguments so it can be tested without importing the real
+ * testkit module.
  */
 export function buildDevSeed(
-  sharedUsers: readonly SeedUser[],
+  sharedUsers: readonly DevUser[],
   sharedFiles: Readonly<Record<string, Record<string, string>>>,
-  devUser: SeedUser,
+  devUser: DevUser,
   devFiles: Readonly<Record<string, string>>,
 ): {
-  users: readonly SeedUser[];
+  users: readonly DevUser[];
   files: Record<string, Record<string, string>>;
 } {
-  return {
-    users: [...sharedUsers, devUser],
-    files: { ...sharedFiles, [devUser.username]: { ...devFiles } },
-  };
+  const users = [...sharedUsers, devUser].map(({ username, password }) => ({ username, password }));
+  const names = new Set(users.map((user) => user.username));
+  const files = Object.fromEntries(
+    Object.entries(sharedFiles).filter(([owner]) => names.has(owner)),
+  );
+  return { users, files: { ...files, [devUser.username]: { ...devFiles } } };
+}
+
+/** Every dev user with its password, for `pnpm dev:users`. */
+export function devUsers(): readonly DevUser[] {
+  return buildDevSeed(SEED_USERS, SEED_FILES, DEV_USER, {}).users;
 }
 
 /**
- * Strips a seeded file's absolute container path down to a path relative to
- * `dataDir`, suitable for use under `deploy/dev/files/`. Throws if
- * `containerPath` is not actually under `dataDir`, which would indicate a
- * bug in the seed data rather than bad input.
+ * Lays the seed files out under the files folder: each owner's virtual paths
+ * below a folder named after them, as `<owner>/<path>`.
  */
-export function relativizeContainerPath(containerPath: string, dataDir: string): string {
-  const prefix = `${dataDir}/`;
-  if (!containerPath.startsWith(prefix)) {
-    throw new Error(`expected "${containerPath}" to start with "${prefix}"`);
-  }
-  return containerPath.slice(prefix.length);
+export function devFileLayout(
+  files: Readonly<Record<string, Record<string, string>>>,
+): Array<{ path: string; content: string }> {
+  return Object.entries(files).flatMap(([owner, byPath]) =>
+    Object.entries(byPath).map(([path, content]) => ({
+      path: `${owner}/${path.replace(/^\/+/, "")}`,
+      content,
+    })),
+  );
 }
 
 /**
@@ -166,36 +164,16 @@ export function writeSeedFile(absoluteOutputPath: string, content: string): void
 
 function main(): void {
   const scriptDir = dirname(fileURLToPath(import.meta.url));
-  const repoRoot = join(scriptDir, "..", "..");
-  const devDir = join(repoRoot, "deploy", "dev");
-  const filesDir = join(devDir, "files");
-  const seedJsonPath = join(devDir, "sftpgo-seed.json");
+  const filesDir = join(scriptDir, "..", "..", "deploy", "dev", "files");
 
   const { users, files } = buildDevSeed(SEED_USERS, SEED_FILES, DEV_USER, buildDevSampleFiles());
-
-  const dump = buildSftpgoDump(users, SEED_FOLDERS, {
-    dataDir: DEV_DATA_DIR,
-    trash: { path: DEV_TRASH_PATH },
-  });
-  mkdirSync(devDir, { recursive: true });
-  writeFileSync(seedJsonPath, `${JSON.stringify(dump, null, 2)}\n`, "utf-8");
-
-  const seededFiles = seedFileLayout(files, { dataDir: DEV_DATA_DIR });
-  for (const { containerPath, content } of seededFiles) {
-    const relativePath = relativizeContainerPath(containerPath, DEV_DATA_DIR);
-    writeSeedFile(join(filesDir, relativePath), content);
+  const seededFiles = devFileLayout(files);
+  for (const { path, content } of seededFiles) {
+    writeSeedFile(join(filesDir, path), content);
   }
 
-  // Re-format the generated JSON with biome so committed output always
-  // matches the repository's formatting rules, regardless of how
-  // JSON.stringify chose to lay it out.
-  execFileSync("pnpm", ["exec", "biome", "check", "--write", seedJsonPath], {
-    cwd: repoRoot,
-    stdio: "ignore",
-  });
-
   console.log(
-    `Wrote ${seedJsonPath} and ${seededFiles.length} file(s) under ${filesDir} for users: ${users.map((u) => u.username).join(", ")}`,
+    `Wrote ${seededFiles.length} file(s) under ${filesDir} for users: ${users.map((u) => u.username).join(", ")}`,
   );
 }
 

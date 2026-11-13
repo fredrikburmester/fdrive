@@ -19,7 +19,7 @@ const ME: MeResponse = {
       id: "identity-1",
       username: "alice",
       providerId: "123e4567-e89b-42d3-a456-426614174000",
-      providerType: "sftpgo",
+      providerType: "local",
       providerLabel: "x",
       capabilities: {
         zip: true,
@@ -29,7 +29,7 @@ const ME: MeResponse = {
         shares: true,
         office: true,
         index: false,
-        scopeMapping: false,
+        shareWithPeople: true,
       },
     },
   ],
@@ -39,8 +39,8 @@ const ME: MeResponse = {
 
 function buildService(overrides: Partial<SetupService> = {}): SetupService {
   return {
-    status: vi.fn().mockResolvedValue({ required: true, hasEnvUrl: false }),
-    test: vi.fn().mockResolvedValue({ ok: true, detail: "SFTPGo is reachable" }),
+    status: vi.fn().mockResolvedValue({ required: true, mode: "provider", types: [] }),
+    test: vi.fn().mockResolvedValue({ ok: true, detail: "WebDAV is reachable" }),
     complete: vi.fn().mockResolvedValue({ sessionId: "session-1", me: ME }),
     ...overrides,
   };
@@ -89,7 +89,7 @@ function attemptFrom(app: ReturnType<typeof buildApp>["app"], ip: string) {
       "x-requested-with": "fdrive",
       "x-forwarded-for": ip,
     },
-    body: JSON.stringify({ baseUrl: "http://sftpgo:8080" }),
+    body: JSON.stringify({ type: "webdav", baseUrl: "http://dav:8080" }),
   });
 }
 
@@ -100,7 +100,7 @@ describe("setup routes: GET /setup/status", () => {
     const res = await app.request("/api/v1/setup/status");
 
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ required: true, hasEnvUrl: false });
+    expect(await res.json()).toEqual({ required: true, mode: "provider", types: [] });
   });
 });
 
@@ -108,7 +108,7 @@ describe("setup routes: POST /setup/test", () => {
   it("returns 404 once setup is no longer required", async () => {
     const { app } = buildApp({
       service: buildService({
-        status: vi.fn().mockResolvedValue({ required: false, hasEnvUrl: false }),
+        status: vi.fn().mockResolvedValue({ required: false, mode: "provider", types: [] }),
       }),
     });
 
@@ -119,7 +119,7 @@ describe("setup routes: POST /setup/test", () => {
         "x-requested-with": "fdrive",
         "x-setup-token": "correct-token",
       },
-      body: JSON.stringify({ baseUrl: "http://sftpgo:8080" }),
+      body: JSON.stringify({ type: "webdav", baseUrl: "http://dav:8080" }),
     });
 
     expect(res.status).toBe(404);
@@ -131,7 +131,7 @@ describe("setup routes: POST /setup/test", () => {
     const res = await app.request("/api/v1/setup/test", {
       method: "POST",
       headers: { "content-type": "application/json", "x-requested-with": "fdrive" },
-      body: JSON.stringify({ baseUrl: "http://sftpgo:8080" }),
+      body: JSON.stringify({ type: "webdav", baseUrl: "http://dav:8080" }),
     });
 
     expect(res.status).toBe(401);
@@ -147,7 +147,7 @@ describe("setup routes: POST /setup/test", () => {
         "x-requested-with": "fdrive",
         "x-setup-token": "correct-token",
       },
-      body: JSON.stringify({ baseUrl: "not-a-url" }),
+      body: JSON.stringify({ type: "webdav", baseUrl: "not-a-url" }),
     });
 
     expect(res.status).toBe(400);
@@ -179,12 +179,12 @@ describe("setup routes: POST /setup/test", () => {
         "x-requested-with": "fdrive",
         "x-setup-token": "correct-token",
       },
-      body: JSON.stringify({ baseUrl: "http://sftpgo:8080" }),
+      body: JSON.stringify({ type: "webdav", baseUrl: "http://dav:8080" }),
     });
 
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ ok: true, detail: "SFTPGo is reachable" });
-    expect(service.test).toHaveBeenCalledWith("http://sftpgo:8080");
+    expect(await res.json()).toEqual({ ok: true, detail: "WebDAV is reachable" });
+    expect(service.test).toHaveBeenCalledWith({ type: "webdav", baseUrl: "http://dav:8080" });
   });
 
   it("rate limits repeated failures from the same ip", async () => {
@@ -199,7 +199,7 @@ describe("setup routes: POST /setup/test", () => {
       app.request("/api/v1/setup/test", {
         method: "POST",
         headers: { "content-type": "application/json", "x-requested-with": "fdrive" },
-        body: JSON.stringify({ baseUrl: "http://sftpgo:8080" }),
+        body: JSON.stringify({ type: "webdav", baseUrl: "http://dav:8080" }),
       });
 
     await attempt();
@@ -207,6 +207,21 @@ describe("setup routes: POST /setup/test", () => {
     const third = await attempt();
 
     expect(third.status).toBe(429);
+  });
+
+  it("answers a blocked address without a retry hint as retry now", async () => {
+    const limiter = createLoginLimiter({ clock: () => new Date() });
+    vi.spyOn(limiter, "check").mockReturnValue({ allowed: false });
+    const { app } = buildApp({ limiter });
+    const res = await app.request("/api/v1/setup/test", {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-requested-with": "fdrive" },
+      body: JSON.stringify({ type: "webdav", baseUrl: "http://dav:8080" }),
+    });
+    expect(res.status).toBe(429);
+    expect(await res.json()).toMatchObject({
+      error: { kind: "rate_limited", details: { retryAfterMs: 0 } },
+    });
   });
 
   it("spends one allowance across every address in an IPv6 /64", async () => {
@@ -260,10 +275,10 @@ describe("setup routes: POST /setup/test", () => {
 
 describe("setup routes: POST /setup/complete", () => {
   const validBody = {
-    baseUrl: "http://sftpgo:8080",
-    homeTemplate: "sftpgo:/{username}",
-    username: "alice",
-    password: "hunter2",
+    kind: "provider",
+    type: "webdav",
+    baseUrl: "http://dav:8080",
+    credential: { username: "alice", password: "hunter2" },
   };
 
   function postComplete(
@@ -285,7 +300,7 @@ describe("setup routes: POST /setup/complete", () => {
   it("returns 404 once setup is no longer required", async () => {
     const { app } = buildApp({
       service: buildService({
-        status: vi.fn().mockResolvedValue({ required: false, hasEnvUrl: false }),
+        status: vi.fn().mockResolvedValue({ required: false, mode: "provider", types: [] }),
       }),
     });
 
@@ -318,7 +333,17 @@ describe("setup routes: POST /setup/complete", () => {
   it("rejects an invalid body", async () => {
     const { app } = buildApp();
 
-    expect((await postComplete(app, { ...validBody, username: "" })).status).toBe(400);
+    expect((await postComplete(app, { ...validBody, type: "sftpgo" })).status).toBe(400);
+    expect((await postComplete(app, { kind: "local", username: "", password: "x" })).status).toBe(
+      400,
+    );
+  });
+
+  it("forwards the first local user to setup", async () => {
+    const { app, service } = buildApp();
+    const body = { kind: "local", username: "alice", password: "correct horse" };
+    expect((await postComplete(app, body)).status).toBe(200);
+    expect(service.complete).toHaveBeenCalledWith(expect.objectContaining(body));
   });
 
   it("rejects malformed JSON", async () => {

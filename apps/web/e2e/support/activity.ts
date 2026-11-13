@@ -7,7 +7,8 @@ import type { Page } from "@playwright/test";
  * so a real click would land on the panel instead of the button.
  */
 export async function dismissActivityPanel(page: Page): Promise<void> {
-  const clear = page.getByRole("button", { name: "Clear" });
+  // Exact: a files page with a selection also has "Clear selection".
+  const clear = page.getByRole("button", { name: "Clear", exact: true });
   if (await clear.isVisible()) {
     await clear.click();
     return;

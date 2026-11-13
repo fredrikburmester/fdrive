@@ -13,7 +13,7 @@ describe("createIndexerExtractClient", () => {
     const fetchStub = vi.fn().mockResolvedValue(jsonResponse(200, { text: "hello", status: "ok" }));
     const client = createIndexerExtractClient({ baseUrl: "http://indexer:8090", fetch: fetchStub });
 
-    const result = await client.extract({ root: "sftpgo", path: "alice/a.txt" });
+    const result = await client.extract({ root: "files", path: "alice/a.txt" });
 
     expect(result).toEqual({ text: "hello", status: "ok" });
     expect(fetchStub).toHaveBeenCalledWith(
@@ -21,7 +21,7 @@ describe("createIndexerExtractClient", () => {
       expect.objectContaining({
         method: "POST",
         signal: expect.any(AbortSignal),
-        body: JSON.stringify({ root: "sftpgo", path: "alice/a.txt" }),
+        body: JSON.stringify({ root: "files", path: "alice/a.txt" }),
       }),
     );
   });
@@ -30,35 +30,35 @@ describe("createIndexerExtractClient", () => {
     const fetchStub = vi.fn().mockResolvedValue(jsonResponse(404, { error: "not found" }));
     const client = createIndexerExtractClient({ baseUrl: "http://indexer:8090", fetch: fetchStub });
 
-    expect(await client.extract({ root: "sftpgo", path: "missing.txt" })).toBeNull();
+    expect(await client.extract({ root: "files", path: "missing.txt" })).toBeNull();
   });
 
   it("returns null when fetch itself rejects", async () => {
     const fetchStub = vi.fn().mockRejectedValue(new Error("network down"));
     const client = createIndexerExtractClient({ baseUrl: "http://indexer:8090", fetch: fetchStub });
 
-    expect(await client.extract({ root: "sftpgo", path: "a.txt" })).toBeNull();
+    expect(await client.extract({ root: "files", path: "a.txt" })).toBeNull();
   });
 
   it("returns null when the response body is not valid JSON", async () => {
     const fetchStub = vi.fn().mockResolvedValue(new Response("not json", { status: 200 }));
     const client = createIndexerExtractClient({ baseUrl: "http://indexer:8090", fetch: fetchStub });
 
-    expect(await client.extract({ root: "sftpgo", path: "a.txt" })).toBeNull();
+    expect(await client.extract({ root: "files", path: "a.txt" })).toBeNull();
   });
 
   it("returns null when the response body is not an object", async () => {
     const fetchStub = vi.fn().mockResolvedValue(jsonResponse(200, "just a string"));
     const client = createIndexerExtractClient({ baseUrl: "http://indexer:8090", fetch: fetchStub });
 
-    expect(await client.extract({ root: "sftpgo", path: "a.txt" })).toBeNull();
+    expect(await client.extract({ root: "files", path: "a.txt" })).toBeNull();
   });
 
   it("defaults missing text and status fields", async () => {
     const fetchStub = vi.fn().mockResolvedValue(jsonResponse(200, {}));
     const client = createIndexerExtractClient({ baseUrl: "http://indexer:8090", fetch: fetchStub });
 
-    expect(await client.extract({ root: "sftpgo", path: "a.txt" })).toEqual({
+    expect(await client.extract({ root: "files", path: "a.txt" })).toEqual({
       text: "",
       status: "unknown",
     });
@@ -93,7 +93,7 @@ it("cancels HTTP error bodies even when cancellation itself fails", async () => 
     baseUrl: "http://indexer",
     fetch: async () => new Response(new ReadableStream({ cancel }), { status: 503 }),
   });
-  expect(await client.extract({ root: "sftpgo", path: "a.txt" })).toBeNull();
+  expect(await client.extract({ root: "files", path: "a.txt" })).toBeNull();
   expect(cancel).toHaveBeenCalledOnce();
   expect(await client.extractContent?.({ name: "a.txt", bytes: new Uint8Array() })).toBeNull();
   expect(cancel).toHaveBeenCalledTimes(2);

@@ -77,27 +77,22 @@ export function createAuthService(deps: CreateAuthServiceDeps): AuthService {
     providerId: string;
     externalUsername: string;
   }): Promise<boolean> {
-    if (
-      !deps.adminUsernames.includes(identity.externalUsername) ||
-      deps.config.sftpgoUrl === undefined
-    )
-      return false;
+    // Only the storage the deployment pins (the local folder) can name an
+    // administrator: the same username on storage an administrator added
+    // later is another person.
+    if (!deps.adminUsernames.includes(identity.externalUsername)) return false;
     const resolved = await deps.providers.get(identity.providerId);
-    return (
-      resolved?.provider.type === "sftpgo" &&
-      resolved.provider.baseUrl.replace(/\/+$/, "") === deps.config.sftpgoUrl.replace(/\/+$/, "")
-    );
+    return resolved?.provider.managedByEnv === true;
   }
 
+  /** The login as `/auth/me` shows it; `null` when its storage type is gone (an old SFTPGo login). */
   async function summarize(identity: {
     id: string;
     providerId: string;
     externalUsername: string;
-  }): Promise<IdentitySummary> {
+  }): Promise<IdentitySummary | null> {
     const resolved = await deps.providers.get(identity.providerId);
-    if (resolved === null) {
-      throw new ApiHttpError("unauthorized", "storage provider no longer exists");
-    }
+    if (resolved === null) return null;
     return {
       id: identity.id,
       username: identity.externalUsername,
@@ -117,7 +112,12 @@ export function createAuthService(deps: CreateAuthServiceDeps): AuthService {
     const activeIdentity = identities.find((identity) => identity.id === activeIdentityId);
     if (activeIdentity === undefined)
       throw new ApiHttpError("unauthorized", "identity ownership changed; sign in again");
-    const summaries = await Promise.all(identities.map(summarize));
+    const summaries = (await Promise.all(identities.map(summarize))).filter(
+      (summary): summary is IdentitySummary => summary !== null,
+    );
+    if (!summaries.some((summary) => summary.id === activeIdentityId)) {
+      throw new ApiHttpError("unauthorized", "storage provider no longer exists");
+    }
     const isAdmin = account.isAdmin || (await isEnvironmentAdmin(activeIdentity));
 
     if ((await deps.repos.identities.get(activeIdentityId))?.accountId !== accountId)

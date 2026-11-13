@@ -3,15 +3,15 @@ import { HttpUrl, isHttpUrl } from "./http-url";
 
 describe("isHttpUrl", () => {
   it("accepts an http URL", () => {
-    expect(isHttpUrl("http://sftpgo:8080")).toBe(true);
+    expect(isHttpUrl("http://dav.test:8080")).toBe(true);
   });
 
   it("accepts an https URL", () => {
-    expect(isHttpUrl("https://sftpgo.example.com")).toBe(true);
+    expect(isHttpUrl("https://dav.example.com")).toBe(true);
   });
 
   it("rejects a non-http(s) protocol", () => {
-    expect(isHttpUrl("ftp://sftpgo:21")).toBe(false);
+    expect(isHttpUrl("ftp://dav.test:21")).toBe(false);
   });
 
   it("rejects an unparsable string", () => {
@@ -21,7 +21,7 @@ describe("isHttpUrl", () => {
 
 describe("HttpUrl", () => {
   it("parses a valid http(s) URL", () => {
-    expect(HttpUrl.safeParse("http://sftpgo:8080").success).toBe(true);
+    expect(HttpUrl.safeParse("http://dav.test:8080").success).toBe(true);
   });
 
   it("rejects an empty string", () => {
@@ -29,6 +29,6 @@ describe("HttpUrl", () => {
   });
 
   it("rejects a non-http(s) URL", () => {
-    expect(HttpUrl.safeParse("ftp://sftpgo").success).toBe(false);
+    expect(HttpUrl.safeParse("ftp://dav.test").success).toBe(false);
   });
 });

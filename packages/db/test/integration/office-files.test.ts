@@ -31,8 +31,8 @@ beforeAll(async () => {
   second = createDb(container.getConnectionUri());
   await migrate(first.db);
   await first.db.insert(providers).values([
-    { id: providerId, type: "sftpgo", baseUrl: "http://first" },
-    { id: otherProvider, type: "sftpgo", baseUrl: "http://second" },
+    { id: providerId, type: "webdav", baseUrl: "http://first" },
+    { id: otherProvider, type: "webdav", baseUrl: "http://second" },
   ]);
   a = createOfficeFileRepo(first.db);
   b = createOfficeFileRepo(second.db);

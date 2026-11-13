@@ -25,5 +25,5 @@ it("falls back to the provider type's product name when the storage has no label
   expect(
     loginDisplay(makeIdentity({ providerType: "s3", username: "key", providerLabel: "" })),
   ).toEqual({ title: "S3", detail: "key" });
-  expect(loginDisplay(makeIdentity({ username: "ada", providerLabel: "" })).detail).toBe("SFTPGo");
+  expect(loginDisplay(makeIdentity({ username: "ada", providerLabel: "" })).detail).toBe("fdrive");
 });

@@ -33,7 +33,7 @@ and in the browser, and is tested with fakes rather than mocks.
 
 - `errors.ts` - the shared `CoreError` type.
 - `paths.ts` - virtual path parsing, normalization, and manipulation.
-- `scope.ts` - home templates and the scope model that maps virtual paths to storage paths.
+- `scope.ts` - the scope model that maps virtual paths to storage paths.
 - `entries.ts` - `FileEntry` and natural-order sorting.
 - `ports/` - interfaces (`StorageProvider`, `Clock`, `IdGenerator`) that adapters implement later.
   No implementations live here.

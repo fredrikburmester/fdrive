@@ -140,12 +140,12 @@ function build() {
   const app = createApp({
     config: loadConfig({
       DATABASE_URL: "postgres://unused/test",
-      SFTPGO_URL: "http://unused.invalid",
       FDRIVE_MASTER_KEY: Buffer.alloc(32, 1).toString("base64"),
     }),
     logger,
     version: "test",
     startedAt: new Date(),
+    connectionStatus: async () => ({ required: false, providers: [] }),
     principalResolver: async () => ({
       accountId: account,
       identityId: identity,

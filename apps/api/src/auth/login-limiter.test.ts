@@ -266,7 +266,7 @@ describe("createLoginLimiter capacity", () => {
 describe("createLoginLimiter per-group fan-out", () => {
   const GROUP = "203.0.113.9";
   const OTHER_GROUP = "198.51.100.7";
-  const invented = (index: number) => `${GROUP}|sftpgo|ghost-${index}`;
+  const invented = (index: number) => `${GROUP}|webdav|ghost-${index}`;
 
   it("keeps one group's invented keys from filling the map, so another group is still tracked", () => {
     const { clock } = createClock(0);
@@ -285,7 +285,7 @@ describe("createLoginLimiter per-group fan-out", () => {
       limiter.recordFailure(invented(i), GROUP);
     }
 
-    const victim = `${OTHER_GROUP}|sftpgo|alice`;
+    const victim = `${OTHER_GROUP}|webdav|alice`;
     expect(limiter.check(victim, OTHER_GROUP)).toEqual({ allowed: true });
     // ...and it is a real slot, not an unthrottled pass: it still blocks.
     for (let i = 0; i < 5; i += 1) {

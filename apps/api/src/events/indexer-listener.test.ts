@@ -1,10 +1,4 @@
-import {
-  type HomeTemplate,
-  parseHomeTemplate,
-  type Scope,
-  StorageError,
-  scopesFor,
-} from "@fdrive/core";
+import { isSafeSegment, type Scope, StorageError } from "@fdrive/core";
 import type { FavoriteRepo, FileTagRepo, Identity, IndexedFile, IndexQueries } from "@fdrive/db";
 import { createMemoryRepos } from "@fdrive/db/testing";
 import { describe, expect, it, vi } from "vitest";
@@ -30,9 +24,8 @@ import {
   type PgClientLike,
 } from "./indexer-listener.js";
 
-const HOME_TEMPLATE = parseHomeTemplate("sftpgo:/{username}");
-const ROOT_NAMES = new Set(["sftpgo"]);
-const SCOPES = [{ rootName: "sftpgo", fsPrefix: "/alice", virtualPrefix: "/" }];
+const ROOT_NAMES = new Set(["files"]);
+const SCOPES = [{ rootName: "files", fsPrefix: "/alice", virtualPrefix: "/" }];
 const AT = "2026-01-01T00:00:00.000Z";
 
 function fail(name: string): never {
@@ -47,23 +40,18 @@ function makeLogger(): { logger: IndexerListenerLogger; warnings: unknown[][] } 
   };
 }
 
-/** Resolves every identity's configured mapping from `homeTemplate` and its own username, matching `ScopeResolver.configuredMappings` without overrides. */
-function configuredMappingsFor(
-  homeTemplate: HomeTemplate,
-): (identity: Identity) => Promise<ConfiguredMappingsResult> {
-  return async (identity) => {
-    try {
-      const scopes = scopesFor({ template: homeTemplate, username: identity.externalUsername });
-      return {
-        available: true,
-        providerId: identity.providerId,
-        homeTemplateRaw: "sftpgo:/{username}",
-        scopes,
-      };
-    } catch {
-      return { available: false, reason: "invalid_configuration" };
-    }
-  };
+/** Resolves every identity's home on the "files" root, as `ScopeResolver.configuredMappings` does. */
+function configuredMappingsFor(): (identity: Identity) => Promise<ConfiguredMappingsResult> {
+  return async (identity) =>
+    isSafeSegment(identity.externalUsername)
+      ? {
+          available: true,
+          providerId: identity.providerId,
+          scopes: [
+            { rootName: "files", fsPrefix: `/${identity.externalUsername}`, virtualPrefix: "/" },
+          ],
+        }
+      : { available: false, reason: "invalid_configuration" };
 }
 
 /** An authorizer that allows every target, unless `deniedPaths` says otherwise. */
@@ -134,8 +122,7 @@ function fakeIndexQueries(overrides: Partial<IndexQueries> = {}): IndexQueries {
     fileByPath: overrides.fileByPath ?? (async () => fail("fileByPath")),
     listFiles: overrides.listFiles ?? (async () => fail("listFiles")),
     filesBySha256: overrides.filesBySha256 ?? (async () => fail("filesBySha256")),
-    rootIdsByName: overrides.rootIdsByName ?? (async () => ({ sftpgo: 1 })),
-    directoriesWithFiles: overrides.directoriesWithFiles ?? (async () => []),
+    rootIdsByName: overrides.rootIdsByName ?? (async () => ({ files: 1 })),
     stats: overrides.stats ?? (async () => fail("stats")),
     statsForFileIds: overrides.statsForFileIds ?? (async () => fail("statsForFileIds")),
     fileTextPrefix: overrides.fileTextPrefix ?? (async () => fail("fileTextPrefix")),
@@ -175,7 +162,7 @@ function fileAt(path: string): IndexedFile {
 function makeEvent(overrides: Partial<IndexerEventPayload> = {}): IndexerEventPayload {
   return {
     kind: "created",
-    root: "sftpgo",
+    root: "files",
     path: "alice/a.txt",
     target_path: null,
     at: AT,
@@ -184,7 +171,7 @@ function makeEvent(overrides: Partial<IndexerEventPayload> = {}): IndexerEventPa
 }
 
 const IDENTITY_ID = "identity-1";
-const ROOT_ID_BY_NAME = new Map([["sftpgo", 1]]);
+const ROOT_ID_BY_NAME = new Map([["files", 1]]);
 
 describe("handleEventForIdentity: created/changed", () => {
   it("publishes create for a path in scope and live-readable", async () => {
@@ -298,8 +285,8 @@ describe("handleEventForIdentity: created/changed", () => {
     // reporting a change under that physical path must never surface via the
     // home scope once the more specific override exists.
     const scopes: readonly Scope[] = [
-      { rootName: "sftpgo", fsPrefix: "/alice", virtualPrefix: "/" },
-      { rootName: "sftpgo", fsPrefix: "/team", virtualPrefix: "/shared" },
+      { rootName: "files", fsPrefix: "/alice", virtualPrefix: "/" },
+      { rootName: "files", fsPrefix: "/team", virtualPrefix: "/shared" },
     ];
     const bus = createEventBus();
     const received: BusEvent[] = [];
@@ -331,7 +318,7 @@ describe("handleEventForIdentity: live-read kind detection", () => {
     // The indexer's `moved` payload never says whether the move was of a
     // file or a directory; `statFile` reporting `bad_request` is the only
     // safe signal that a path is a directory (never call `list` on a path
-    // of unknown kind against real SFTPGo).
+    // of unknown kind).
     const bus = createEventBus();
     const received: BusEvent[] = [];
     bus.subscribe({ identityId: IDENTITY_ID }, (e) => received.push(e));
@@ -871,7 +858,7 @@ function fakeClock(startIso: string) {
 }
 
 async function seedIdentity(repos: ReturnType<typeof createMemoryRepos>) {
-  const provider = await repos.providers.ensure({ type: "sftpgo", baseUrl: "http://x" });
+  const provider = await repos.providers.ensure({ type: "local", baseUrl: "local" });
   const account = await repos.accounts.create({ displayName: "Alice" });
   return repos.identities.create({
     accountId: account.id,
@@ -892,12 +879,12 @@ describe("createIndexerListener", () => {
     const listener = createIndexerListener({
       createClient: () => fake.client,
       identities: repos.identities,
-      indexQueries: fakeIndexQueries({ rootIdsByName: async () => ({ sftpgo: 1 }) }),
+      indexQueries: fakeIndexQueries({ rootIdsByName: async () => ({ files: 1 }) }),
       fileTags: repos.fileTags,
       favorites: repos.favorites,
       metadata,
       bus,
-      configuredMappingsFor: configuredMappingsFor(HOME_TEMPLATE),
+      configuredMappingsFor: configuredMappingsFor(),
       indexRootNames: ROOT_NAMES,
       clock: clock.now,
       logger: makeLogger().logger,
@@ -926,12 +913,12 @@ describe("createIndexerListener", () => {
     const listener = createIndexerListener({
       createClient: () => fake.client,
       identities: repos.identities,
-      indexQueries: fakeIndexQueries({ rootIdsByName: async () => ({ sftpgo: 1 }) }),
+      indexQueries: fakeIndexQueries({ rootIdsByName: async () => ({ files: 1 }) }),
       fileTags: repos.fileTags,
       favorites: repos.favorites,
       metadata,
       bus,
-      configuredMappingsFor: configuredMappingsFor(HOME_TEMPLATE),
+      configuredMappingsFor: configuredMappingsFor(),
       indexRootNames: ROOT_NAMES,
       clock: clock.now,
       logger: makeLogger().logger,
@@ -951,7 +938,7 @@ describe("createIndexerListener", () => {
     fake.notify(
       JSON.stringify({
         kind: "created",
-        root: "sftpgo",
+        root: "files",
         path: "alice/a.txt",
         target_path: null,
         at: AT,
@@ -976,12 +963,12 @@ describe("createIndexerListener", () => {
     const listener = createIndexerListener({
       createClient: () => fake.client,
       identities: repos.identities,
-      indexQueries: fakeIndexQueries({ rootIdsByName: async () => ({ sftpgo: 1 }) }),
+      indexQueries: fakeIndexQueries({ rootIdsByName: async () => ({ files: 1 }) }),
       fileTags: repos.fileTags,
       favorites: repos.favorites,
       metadata,
       bus,
-      // A root named "sftpgo" exists in the event, but this identity's
+      // A root named "files" exists in the event, but this identity's
       // provider mapping never resolves: the same root name on a
       // different provider must never be treated as this identity's data.
       configuredMappingsFor: async () => ({ available: false, reason: "provider_mismatch" }),
@@ -1018,12 +1005,12 @@ describe("createIndexerListener", () => {
     const listener = createIndexerListener({
       createClient: () => fake.client,
       identities: repos.identities,
-      indexQueries: fakeIndexQueries({ rootIdsByName: async () => ({ sftpgo: 1 }) }),
+      indexQueries: fakeIndexQueries({ rootIdsByName: async () => ({ files: 1 }) }),
       fileTags: repos.fileTags,
       favorites: repos.favorites,
       metadata,
       bus: createEventBus(),
-      configuredMappingsFor: configuredMappingsFor(HOME_TEMPLATE),
+      configuredMappingsFor: configuredMappingsFor(),
       indexRootNames: ROOT_NAMES,
       clock: clock.now,
       logger,
@@ -1049,12 +1036,12 @@ describe("createIndexerListener", () => {
     const listener = createIndexerListener({
       createClient: () => fake.client,
       identities: repos.identities,
-      indexQueries: fakeIndexQueries({ rootIdsByName: async () => ({ sftpgo: 1 }) }),
+      indexQueries: fakeIndexQueries({ rootIdsByName: async () => ({ files: 1 }) }),
       fileTags: repos.fileTags,
       favorites: repos.favorites,
       metadata,
       bus: createEventBus(),
-      configuredMappingsFor: configuredMappingsFor(HOME_TEMPLATE),
+      configuredMappingsFor: configuredMappingsFor(),
       indexRootNames: ROOT_NAMES,
       clock: clock.now,
       logger,
@@ -1088,12 +1075,12 @@ describe("createIndexerListener", () => {
     const listener = createIndexerListener({
       createClient: () => fake.client,
       identities: countingIdentities,
-      indexQueries: fakeIndexQueries({ rootIdsByName: async () => ({ sftpgo: 1 }) }),
+      indexQueries: fakeIndexQueries({ rootIdsByName: async () => ({ files: 1 }) }),
       fileTags: repos.fileTags,
       favorites: repos.favorites,
       metadata,
       bus: createEventBus(),
-      configuredMappingsFor: configuredMappingsFor(HOME_TEMPLATE),
+      configuredMappingsFor: configuredMappingsFor(),
       indexRootNames: ROOT_NAMES,
       clock: clock.now,
       logger: makeLogger().logger,
@@ -1103,7 +1090,7 @@ describe("createIndexerListener", () => {
 
     const payload = JSON.stringify({
       kind: "created",
-      root: "sftpgo",
+      root: "files",
       path: "alice/a.txt",
       target_path: null,
       at: AT,
@@ -1138,7 +1125,7 @@ describe("createIndexerListener", () => {
       favorites: repos.favorites,
       metadata,
       bus: createEventBus(),
-      configuredMappingsFor: configuredMappingsFor(HOME_TEMPLATE),
+      configuredMappingsFor: configuredMappingsFor(),
       indexRootNames: ROOT_NAMES,
       clock: () => new Date(AT),
       logger: makeLogger().logger,
@@ -1178,7 +1165,7 @@ describe("createIndexerListener", () => {
       favorites: repos.favorites,
       metadata,
       bus: createEventBus(),
-      configuredMappingsFor: configuredMappingsFor(HOME_TEMPLATE),
+      configuredMappingsFor: configuredMappingsFor(),
       indexRootNames: ROOT_NAMES,
       clock: () => new Date(AT),
       logger: makeLogger().logger,
@@ -1205,7 +1192,7 @@ describe("createIndexerListener", () => {
       favorites: repos.favorites,
       metadata,
       bus: createEventBus(),
-      configuredMappingsFor: configuredMappingsFor(HOME_TEMPLATE),
+      configuredMappingsFor: configuredMappingsFor(),
       indexRootNames: ROOT_NAMES,
       clock: () => new Date(AT),
       logger: makeLogger().logger,
@@ -1242,7 +1229,7 @@ describe("createIndexerListener: stop()", () => {
       favorites: repos.favorites,
       metadata,
       bus: createEventBus(),
-      configuredMappingsFor: configuredMappingsFor(HOME_TEMPLATE),
+      configuredMappingsFor: configuredMappingsFor(),
       indexRootNames: ROOT_NAMES,
       clock: () => new Date(AT),
       logger: makeLogger().logger,
@@ -1265,7 +1252,7 @@ describe("createIndexerListener: stop()", () => {
       favorites: repos.favorites,
       metadata,
       bus: createEventBus(),
-      configuredMappingsFor: configuredMappingsFor(HOME_TEMPLATE),
+      configuredMappingsFor: configuredMappingsFor(),
       indexRootNames: ROOT_NAMES,
       clock: () => new Date(AT),
       logger: makeLogger().logger,
@@ -1411,7 +1398,7 @@ describe("global storage registry hook", () => {
       favorites: repos.favorites,
       metadata,
       bus,
-      configuredMappingsFor: configuredMappingsFor(HOME_TEMPLATE),
+      configuredMappingsFor: configuredMappingsFor(),
       indexRootNames: ROOT_NAMES,
       clock: () => new Date(AT),
       logger,
@@ -1446,12 +1433,12 @@ describe("createIndexerListener: storageForIdentity failure", () => {
     const listener = createIndexerListener({
       createClient: () => fake.client,
       identities: repos.identities,
-      indexQueries: fakeIndexQueries({ rootIdsByName: async () => ({ sftpgo: 1 }) }),
+      indexQueries: fakeIndexQueries({ rootIdsByName: async () => ({ files: 1 }) }),
       fileTags: repos.fileTags,
       favorites: repos.favorites,
       metadata,
       bus,
-      configuredMappingsFor: configuredMappingsFor(HOME_TEMPLATE),
+      configuredMappingsFor: configuredMappingsFor(),
       indexRootNames: ROOT_NAMES,
       clock: clock.now,
       logger: makeLogger().logger,
@@ -1486,12 +1473,12 @@ it("processes notifications in order and continues after a failed payload", asyn
   const listener = createIndexerListener({
     createClient: () => fake.client,
     identities: repos.identities,
-    indexQueries: fakeIndexQueries({ rootIdsByName: async () => ({ sftpgo: 1 }) }),
+    indexQueries: fakeIndexQueries({ rootIdsByName: async () => ({ files: 1 }) }),
     fileTags: repos.fileTags,
     favorites: repos.favorites,
     metadata,
     bus: createEventBus(),
-    configuredMappingsFor: configuredMappingsFor(HOME_TEMPLATE),
+    configuredMappingsFor: configuredMappingsFor(),
     indexRootNames: ROOT_NAMES,
     clock: () => new Date(AT),
     logger: makeLogger().logger,
@@ -1530,7 +1517,7 @@ it("coalesces repeated errors, closes the old client and ignores stale callbacks
     favorites: repos.favorites,
     metadata,
     bus: createEventBus(),
-    configuredMappingsFor: configuredMappingsFor(HOME_TEMPLATE),
+    configuredMappingsFor: configuredMappingsFor(),
     indexRootNames: ROOT_NAMES,
     clock: () => new Date(AT),
     logger: makeLogger().logger,
@@ -1573,7 +1560,7 @@ it("cancels real reconnect timers and recovers when closing the old client fails
     favorites: repos.favorites,
     metadata,
     bus: createEventBus(),
-    configuredMappingsFor: configuredMappingsFor(HOME_TEMPLATE),
+    configuredMappingsFor: configuredMappingsFor(),
     indexRootNames: ROOT_NAMES,
     clock: () => new Date(AT),
     logger: makeLogger().logger,
@@ -1616,7 +1603,7 @@ it("stops a slow connection without LISTEN even if closing it fails", async () =
     favorites: repos.favorites,
     metadata,
     bus: createEventBus(),
-    configuredMappingsFor: configuredMappingsFor(HOME_TEMPLATE),
+    configuredMappingsFor: configuredMappingsFor(),
     indexRootNames: ROOT_NAMES,
     clock: () => new Date(AT),
     logger: makeLogger().logger,

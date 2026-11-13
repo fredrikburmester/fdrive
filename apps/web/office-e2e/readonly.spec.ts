@@ -1,6 +1,7 @@
 import { expect, test } from "@playwright/test";
 import { loginAs } from "../e2e/support/login";
-import { createDocument, documentLoaded, observeOfficeReady } from "./editor-ui";
+import { createDocument, documentLoaded, observeOfficeReady, sharedOfficeHref } from "./editor-ui";
+import { OFFICE_TEAM_FOLDER } from "./fixture-config";
 import { fixtureState } from "./state";
 import { storedText } from "./storage";
 
@@ -9,18 +10,19 @@ test("readonly identity cannot inject edits through a concurrent writer", async 
   browser,
 }) => {
   const state = await fixtureState();
+  const filename = "Office Å %20.docx";
+  // alice's team folder, which reader may only view under Shared with me.
+  const stored = `/${OFFICE_TEAM_FOLDER}/${filename}`;
   await loginAs(page, "alice", "alice-password");
-  const editor = await createDocument(page, "Document", "Office Å %20.docx");
+  const editor = await createDocument(page, "Document", filename, "ooxml", OFFICE_TEAM_FOLDER);
   const input = editor.locator("#area_id");
   await input.waitFor({ state: "attached", timeout: 120_000 });
   await input.pressSequentially("Alice writes the document.");
   await editor.locator("#id-toolbar-btn-save").click();
   await expect
-    .poll(
-      async () =>
-        (await storedText(state, "/Office Å %20.docx")).includes("Alice writes the document."),
-      { timeout: 90_000 },
-    )
+    .poll(async () => (await storedText(state, stored)).includes("Alice writes the document."), {
+      timeout: 90_000,
+    })
     .toBe(true);
   console.log("ONLYOFFICE saved DOCX bytes verified");
   const readerContext = await browser.newContext({ baseURL: state.webUrl });
@@ -34,17 +36,13 @@ test("readonly identity cannot inject edits through a concurrent writer", async 
     const descriptorResponse = reader.waitForResponse(
       (response) => new URL(response.url()).pathname === "/api/v1/office/open",
     );
-    await reader.goto(
-      `/office/${me.activeIdentityId}/${encodeURIComponent("Office Å %20.docx")}?mode=edit`,
-    );
+    await reader.goto(sharedOfficeHref(me.activeIdentityId, OFFICE_TEAM_FOLDER, filename, "edit"));
     expect((await descriptorResponse).status()).toBe(403);
     await expect(reader.getByTitle("Office document")).toHaveCount(0);
     const viewResponse = reader.waitForResponse(
       (response) => new URL(response.url()).pathname === "/api/v1/office/open",
     );
-    await reader.goto(
-      `/office/${me.activeIdentityId}/${encodeURIComponent("Office Å %20.docx")}?mode=view`,
-    );
+    await reader.goto(sharedOfficeHref(me.activeIdentityId, OFFICE_TEAM_FOLDER, filename, "view"));
     expect((await viewResponse).status()).toBe(200);
     await documentLoaded(reader);
     const readerEditor = reader
@@ -60,12 +58,11 @@ test("readonly identity cannot inject edits through a concurrent writer", async 
     await input.pressSequentially("ALICE_AFTER_READER");
     await editor.locator("#id-toolbar-btn-save").click();
     await expect
-      .poll(
-        async () => (await storedText(state, "/Office Å %20.docx")).includes("ALICE_AFTER_READER"),
-        { timeout: 90_000 },
-      )
+      .poll(async () => (await storedText(state, stored)).includes("ALICE_AFTER_READER"), {
+        timeout: 90_000,
+      })
       .toBe(true);
-    const saved = await storedText(state, "/Office Å %20.docx");
+    const saved = await storedText(state, stored);
     console.log("Reader mutation persisted", saved.includes("READER_MUST_NOT_PERSIST"));
     expect(saved.includes("READER_MUST_NOT_PERSIST")).toBe(false);
   } finally {

@@ -200,12 +200,11 @@ export async function runStorageCall<T>(fn: () => Promise<T>): Promise<T> {
 
 /**
  * Ensures nothing already exists at `target` before move, copy, or rename
- * ask the storage provider to relocate something there. The real
- * SFTPGo-backed provider's move and copy do not reliably report a conflict
- * for an occupied target themselves: verified against the real
- * drakkan/sftpgo:v2.7.5 container, moving or copying a file onto an
- * existing file silently overwrites it instead of failing (see
- * `packages/sftpgo`'s fake, fixed to match). A route that let that happen
+ * ask the storage provider to relocate something there. Not every
+ * provider's move and copy report a conflict for an occupied target
+ * themselves: some backends (SFTPGo, which fdrive once used, and WebDAV
+ * servers asked to overwrite) silently replace an existing file instead of
+ * failing. A route that let that happen
  * would silently destroy whatever used to be at `target`, so it checks
  * first with `statFile` instead, mirroring the same check
  * `@fdrive/core`'s trash restore relies on (see
@@ -235,16 +234,17 @@ export function serializeEntry(entry: FileEntry): FsEntry {
 }
 
 /**
- * Stats `path` via `storage.statFile`. When that fails because `path` is a
- * directory (a provider reports this as `bad_request`), falls back to
- * listing the parent directory and finding the matching entry there.
+ * The entry at `path`, whatever its kind, named and pathed the way storage
+ * spells it: a disk that ignores case or accent encoding (macOS) also finds
+ * other spellings, and listings show the stored one.
  */
 export async function statEntry(storage: StorageProvider, path: string): Promise<FileEntry> {
   const stat = await runStorageCall(() => storage.stat(path));
-  const name = baseName(path);
+  const stored = stat.path ?? path;
+  const name = baseName(stored);
   return {
     name,
-    path,
+    path: stored,
     kind: stat.kind,
     size: stat.size,
     modifiedAt: stat.modifiedAt ?? new Date(0),

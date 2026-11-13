@@ -4,7 +4,7 @@ import { AboutResponse } from "./about";
 describe("AboutResponse", () => {
   const valid = {
     version: "1.0.0",
-    providers: [{ type: "sftpgo", label: "localhost:8080" }],
+    providers: [{ type: "local", label: "Local folder" }],
     setupRequired: false,
   };
 
@@ -31,7 +31,7 @@ describe("AboutResponse", () => {
   });
 
   it("parses a payload where setup is complete but the caller is anonymous (null label)", () => {
-    const payload = { ...valid, providers: [{ type: "sftpgo" as const, label: null }] };
+    const payload = { ...valid, providers: [{ type: "webdav" as const, label: null }] };
     expect(AboutResponse.parse(payload)).toEqual(payload);
   });
 

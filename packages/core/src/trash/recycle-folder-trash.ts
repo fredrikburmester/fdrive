@@ -150,11 +150,9 @@ async function statLeaf(
 
 /**
  * Ensures nothing already exists at `target` before `restoreLeaf` moves a
- * trash leaf there. The real drakkan/sftpgo:v2.7.5 container's move does
- * not raise a conflict for an occupied target: moving onto an existing file
- * silently overwrites it, and moving onto an existing directory fails with
- * a different error entirely (see `packages/sftpgo`'s fake, fixed to match
- * the verified container behaviour). `restore` must not silently destroy
+ * trash leaf there. Not every backend's move raises a conflict for an
+ * occupied target: WebDAV servers and SFTPGo (which fdrive once used) let a
+ * move silently overwrite an existing file. `restore` must not silently destroy
  * whatever is already at `target`, so it checks first with `statFile`
  * instead of relying on `move` to report the conflict.
  *

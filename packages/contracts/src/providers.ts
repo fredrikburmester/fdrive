@@ -6,7 +6,7 @@ import { HttpUrl } from "./http-url.ts";
  * must have a module for each value; adding a provider adds one here and
  * one there.
  */
-export const ProviderType = z.enum(["sftpgo", "webdav", "s3"]);
+export const ProviderType = z.enum(["local", "webdav", "s3"]);
 export type ProviderType = z.infer<typeof ProviderType>;
 
 /**
@@ -27,10 +27,10 @@ export const ProviderCapabilities = z.object({
   shares: z.boolean(),
   /** Office viewing and editing can apply to this login's files. */
   office: z.boolean(),
+  /** Folders can be shared with other users of this storage ("Share with people"). */
+  shareWithPeople: z.boolean(),
   /** Search, thumbnails and folder size can apply to this login. */
   index: z.boolean(),
-  /** Virtual folder mapping (the identity scope card) applies to this login. */
-  scopeMapping: z.boolean(),
 });
 export type ProviderCapabilities = z.infer<typeof ProviderCapabilities>;
 
@@ -66,7 +66,7 @@ export const PublicProvider = z.object({
   credentialFields: z.array(ProviderField),
   /**
    * What the provider's type can do at best, so the form can say before
-   * sign-in which SFTPGo-built features a storage lacks. A constant of the
+   * sign-in which features a storage lacks. A constant of the
    * type, never of this row: what a login really gets is
    * `IdentitySummary.capabilities`.
    */
@@ -94,11 +94,14 @@ export const AdminProvider = z.object({
   id: z.uuid(),
   type: ProviderType,
   label: z.string(),
-  baseUrl: HttpUrl,
+  /** The endpoint; empty for the local folder, which has none. */
+  baseUrl: z.union([HttpUrl, z.literal("")]),
   config: ProviderFieldValues,
   enabled: z.boolean(),
-  /** True when the endpoint is pinned by environment (`SFTPGO_URL`) and cannot change here. */
+  /** True when the deployment pins this row (`FDRIVE_STORAGE_ROOT`) and it cannot change here. */
   managedByEnv: z.boolean(),
+  /** What this provider's type can do at best; a login's own flags are `IdentitySummary.capabilities`. */
+  capabilities: ProviderCapabilities,
   /** How many logins across every account use this provider. */
   identityCount: z.number().int().min(0),
   /** Result of probing the endpoint when this view was built. */

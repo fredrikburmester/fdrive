@@ -9,6 +9,7 @@ import {
   type ArchiveFormat,
   archiveExtensionFor,
   baseName,
+  isPrecompressedEntry,
   isStorageError,
   type StorageProvider,
 } from "@fdrive/core";
@@ -17,7 +18,6 @@ import { ZipFile } from "yazl";
 import type { ReportProgress } from "../jobs/types.js";
 import {
   countingTransform,
-  isPrecompressedEntry,
   isZstdSupported,
   nodeReadableFromWeb,
   throwIfAborted,

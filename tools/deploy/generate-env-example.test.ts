@@ -85,12 +85,22 @@ describe("renderEnvExample", () => {
     expect(rendered).not.toContain("FDRIVE_TEST_KEY");
   });
 
-  it("keeps quick-start to secrets and an optional connection", () => {
+  it("keeps quick-start to the two secrets", () => {
     const rendered = renderQuickstartEnvExample();
     expect(rendered).toContain("FDRIVE_MASTER_KEY");
     expect(rendered).toContain("POSTGRES_PASSWORD");
-    expect(rendered).toContain("SFTPGO_URL");
+    expect(rendered).not.toContain("SFTPGO");
     expect(rendered).not.toContain("FDRIVE_DATA_DIR");
+    expect(rendered).not.toContain("FDRIVE_FILES_DIR");
+  });
+
+  it("documents the files folder and uid, not the compose-fixed storage root", () => {
+    const rendered = renderEnvExample();
+    expect(rendered).toContain("#FDRIVE_FILES_DIR=./data/files");
+    expect(rendered).toContain("#FDRIVE_RUN_AS_UID=1000");
+    expect(rendered).not.toContain("FDRIVE_STORAGE_ROOT");
+    expect(rendered).not.toContain("SFTPGO_URL");
+    expect(rendered).not.toContain("SFTPGO_ADMIN");
   });
 
   it("points the quick-start reader at the resource limits it deliberately omits", () => {
@@ -231,7 +241,7 @@ describe("compose interpolation", () => {
   // in COMPOSE_FILE, so a `${FDRIVE_*}` reference in one of them is a key an
   // operator is meant to set there and must be documented. compose.dev.yaml is
   // left out: `pnpm dev:env` drives it, not an installation's .env.
-  const composeFiles = ["compose.yaml", "compose.sftpgo.yaml", "compose.office.collabora.yaml"];
+  const composeFiles = ["compose.yaml", "compose.office.collabora.yaml"];
 
   it.each(composeFiles)("every FDRIVE_* key %s interpolates is a documented key", (file) => {
     const source = readFileSync(join(deployDir, file), "utf-8");
@@ -262,4 +272,5 @@ it("keeps the complete API env reference generated from the config catalog", () 
   const compose = readFileSync(join(deployDir, "compose.yaml"), "utf8");
   expect(compose).toContain("FDRIVE_SETUP_TOKEN: ${FDRIVE_SETUP_TOKEN:-}");
   expect(compose).toContain("FDRIVE_OFFICE_PUBLIC_URL: ${FDRIVE_OFFICE_PUBLIC_URL:-}");
+  expect(compose).not.toContain("SFTPGO_URL");
 });

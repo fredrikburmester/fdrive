@@ -25,14 +25,14 @@ def _wait_until(predicate: object, timeout: float = 5.0, interval: float = 0.02)
 def test_build_context_upserts_root_and_wires_extractor(
     postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    monkeypatch.setenv("INDEX_ROOTS", f"sftpgo={tmp_path}")
+    monkeypatch.setenv("INDEX_ROOTS", f"files={tmp_path}")
     monkeypatch.setenv("EMBED_URL", "http://embed.invalid")
     cfg = Config()
-    ctx = main.build_context(cfg, postgres_dsn, "sftpgo", str(tmp_path))
-    assert ctx.name == "sftpgo"
+    ctx = main.build_context(cfg, postgres_dsn, "files", str(tmp_path))
+    assert ctx.name == "files"
     assert ctx.root_id > 0
     assert ctx.abs_path == str(tmp_path)
-    assert ctx.extractor.root == "sftpgo"
+    assert ctx.extractor.root == "files"
     assert ctx.feature_configuration().values.indexer_enabled is False
 
 
@@ -40,7 +40,7 @@ def test_build_context_upserts_root_and_wires_extractor(
 def test_build_context_marks_old_text_less_pdfs_for_ocr_only_while_it_is_off(
     postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, search_ocr: bool
 ) -> None:
-    monkeypatch.setenv("INDEX_ROOTS", f"sftpgo={tmp_path}")
+    monkeypatch.setenv("INDEX_ROOTS", f"files={tmp_path}")
     cfg = Config()
     values = {
         "thumbnails": False,
@@ -55,10 +55,10 @@ def test_build_context_marks_old_text_less_pdfs_for_ocr_only_while_it_is_off(
             'INSERT INTO "app"."settings" (key, value) VALUES (%s, %s)',
             (FEATURES_KEY, Json({"version": 1, "revision": 4, "values": values})),
         )
-        file_id = db.upsert_file(conn, db.upsert_root(conn, "sftpgo"), "scan.pdf", "scan.pdf", ".pdf", 1, 1, "sha", None)
+        file_id = db.upsert_file(conn, db.upsert_root(conn, "files"), "scan.pdf", "scan.pdf", ".pdf", 1, 1, "sha", None)
         db.update_file_status(conn, file_id, "no_text", 0, None)
 
-    ctx = main.build_context(cfg, postgres_dsn, "sftpgo", str(tmp_path))
+    ctx = main.build_context(cfg, postgres_dsn, "files", str(tmp_path))
 
     # With OCR on, the old retry rule already OCR'd every no_text PDF.
     expected = "no_text" if search_ocr else "disabled:search_ocr"
@@ -68,9 +68,9 @@ def test_build_context_marks_old_text_less_pdfs_for_ocr_only_while_it_is_off(
 def test_refresh_features_requires_explicit_persisted_selection(
     postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    monkeypatch.setenv("INDEX_ROOTS", f"sftpgo={tmp_path}")
+    monkeypatch.setenv("INDEX_ROOTS", f"files={tmp_path}")
     cfg = Config()
-    ctx = main.build_context(cfg, postgres_dsn, "sftpgo", str(tmp_path))
+    ctx = main.build_context(cfg, postgres_dsn, "files", str(tmp_path))
     values = {
         "thumbnails": False,
         "textSearch": True,
@@ -93,7 +93,7 @@ def test_refresh_features_requires_explicit_persisted_selection(
 def test_restart_with_persisted_features_is_not_a_media_backfill_transition(
     postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    monkeypatch.setenv("INDEX_ROOTS", f"sftpgo={tmp_path}")
+    monkeypatch.setenv("INDEX_ROOTS", f"files={tmp_path}")
     cfg = Config()
     values = {
         "thumbnails": True,
@@ -109,7 +109,7 @@ def test_restart_with_persisted_features_is_not_a_media_backfill_transition(
             (FEATURES_KEY, Json({"version": 1, "revision": 4, "values": values})),
         )
 
-    ctx = main.build_context(cfg, postgres_dsn, "sftpgo", str(tmp_path))
+    ctx = main.build_context(cfg, postgres_dsn, "files", str(tmp_path))
     main.refresh_settings(ctx)
 
     assert ctx.feature_configuration().values.image_search is True
@@ -121,10 +121,10 @@ def test_restart_with_persisted_features_is_not_a_media_backfill_transition(
 def test_refresh_settings_updates_ctx_and_logs_changes(
     postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    monkeypatch.setenv("INDEX_ROOTS", f"sftpgo={tmp_path}")
+    monkeypatch.setenv("INDEX_ROOTS", f"files={tmp_path}")
     monkeypatch.setenv("EMBED_URL", "http://embed.invalid")
     cfg = Config()
-    ctx = main.build_context(cfg, postgres_dsn, "sftpgo", str(tmp_path))
+    ctx = main.build_context(cfg, postgres_dsn, "files", str(tmp_path))
     import psycopg.types.json
 
     with ctx.conn().cursor() as cur:
@@ -140,10 +140,10 @@ def test_refresh_settings_updates_ctx_and_logs_changes(
 
 
 def test_refresh_settings_no_change_does_not_log(postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    monkeypatch.setenv("INDEX_ROOTS", f"sftpgo={tmp_path}")
+    monkeypatch.setenv("INDEX_ROOTS", f"files={tmp_path}")
     monkeypatch.setenv("EMBED_URL", "http://embed.invalid")
     cfg = Config()
-    ctx = main.build_context(cfg, postgres_dsn, "sftpgo", str(tmp_path))
+    ctx = main.build_context(cfg, postgres_dsn, "files", str(tmp_path))
     logs: list[str] = []
     monkeypatch.setattr(main, "log", logs.append)
     main.refresh_settings(ctx)
@@ -151,10 +151,10 @@ def test_refresh_settings_no_change_does_not_log(postgres_dsn: str, monkeypatch:
 
 
 def test_run_root_loops_scanning_until_woken(postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    monkeypatch.setenv("INDEX_ROOTS", f"sftpgo={tmp_path}")
+    monkeypatch.setenv("INDEX_ROOTS", f"files={tmp_path}")
     monkeypatch.setenv("EMBED_URL", "http://embed.invalid")
     cfg = Config()
-    ctx = main.build_context(cfg, postgres_dsn, "sftpgo", str(tmp_path))
+    ctx = main.build_context(cfg, postgres_dsn, "files", str(tmp_path))
     ctx.settings = Settings(
         scan_interval_seconds=1,
         workers=ctx.settings.workers,
@@ -176,19 +176,19 @@ def test_run_root_loops_scanning_until_woken(postgres_dsn: str, monkeypatch: pyt
     wake_events: dict[str, threading.Event] = {}
     thread = threading.Thread(target=main.run_root, args=(ctx, watchers, wake_events), daemon=True)
     thread.start()
-    assert _wait_until(lambda: "sftpgo" in wake_events)
+    assert _wait_until(lambda: "files" in wake_events)
     assert _wait_until(lambda: calls["n"] >= 1)
-    wake_events["sftpgo"].set()
+    wake_events["files"].set()
     assert _wait_until(lambda: calls["n"] >= 2)
 
 
 def test_run_root_does_not_rescan_at_feature_refresh_cadence(
     postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    monkeypatch.setenv("INDEX_ROOTS", f"sftpgo={tmp_path}")
+    monkeypatch.setenv("INDEX_ROOTS", f"files={tmp_path}")
     monkeypatch.setenv("EMBED_URL", "http://embed.invalid")
     cfg = Config()
-    ctx = main.build_context(cfg, postgres_dsn, "sftpgo", str(tmp_path))
+    ctx = main.build_context(cfg, postgres_dsn, "files", str(tmp_path))
     ctx.settings = Settings(60, ctx.settings.workers, (), (), "eng")
     calls = {"n": 0}
     monkeypatch.setattr(main, "scan_once", lambda _ctx: calls.__setitem__("n", calls["n"] + 1) or {})
@@ -204,10 +204,10 @@ def test_run_root_does_not_rescan_at_feature_refresh_cadence(
 
 
 def test_run_root_survives_scan_crash(postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    monkeypatch.setenv("INDEX_ROOTS", f"sftpgo={tmp_path}")
+    monkeypatch.setenv("INDEX_ROOTS", f"files={tmp_path}")
     monkeypatch.setenv("EMBED_URL", "http://embed.invalid")
     cfg = Config()
-    ctx = main.build_context(cfg, postgres_dsn, "sftpgo", str(tmp_path))
+    ctx = main.build_context(cfg, postgres_dsn, "files", str(tmp_path))
     ctx.settings = Settings(1, ctx.settings.workers, (), (), "eng")
 
     calls = {"n": 0}
@@ -230,10 +230,10 @@ def test_run_root_survives_scan_crash(postgres_dsn: str, monkeypatch: pytest.Mon
 
 
 def test_run_root_wakes_on_watcher_overflow(postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    monkeypatch.setenv("INDEX_ROOTS", f"sftpgo={tmp_path}")
+    monkeypatch.setenv("INDEX_ROOTS", f"files={tmp_path}")
     monkeypatch.setenv("EMBED_URL", "http://embed.invalid")
     cfg = Config()
-    ctx = main.build_context(cfg, postgres_dsn, "sftpgo", str(tmp_path))
+    ctx = main.build_context(cfg, postgres_dsn, "files", str(tmp_path))
     # scan_interval_seconds=0 makes the loop spin fast (nothing ever sets the
     # per-root wake event), so a short real-time sleep is enough to exercise the
     # watcher-overflow branch both set and cleared many times deterministically.
@@ -274,7 +274,7 @@ def test_main_stays_live_when_no_roots_configured(postgres_dsn: str, monkeypatch
 
 def test_main_exits_when_schema_never_ready(postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setenv("DATABASE_URL", postgres_dsn)
-    monkeypatch.setenv("INDEX_ROOTS", f"sftpgo={tmp_path}")
+    monkeypatch.setenv("INDEX_ROOTS", f"files={tmp_path}")
     monkeypatch.setattr(db, "wait_for_schema_version", lambda *a, **k: None)
     with pytest.raises(SystemExit) as exc_info:
         main.main()
@@ -283,7 +283,7 @@ def test_main_exits_when_schema_never_ready(postgres_dsn: str, monkeypatch: pyte
 
 def test_main_wires_everything_and_serves(postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setenv("DATABASE_URL", postgres_dsn)
-    monkeypatch.setenv("INDEX_ROOTS", f"sftpgo={tmp_path}")
+    monkeypatch.setenv("INDEX_ROOTS", f"files={tmp_path}")
     monkeypatch.setenv("EMBED_URL", "http://embed.invalid")
     monkeypatch.setenv("INDEXER_PORT", "0")
 

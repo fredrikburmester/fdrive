@@ -36,21 +36,29 @@ function once<T>(cache: Map<string, Promise<T>>, key: string, load: () => Promis
 
 /**
  * Finds the stored spelling of paths a model wrote. Each lookup tries the
- * exact path first and lists the parent folder only when that misses, so a
- * name written with differently encoded accents still finds its file or
- * folder. Answers are cached: use one locator per moment in time.
+ * exact path first, taking the spelling storage reports for it, and lists the
+ * parent folder only when that misses, so a name written with differently
+ * encoded accents still finds its file or folder. Answers are cached: use one
+ * locator per moment in time.
  */
 export function createPathLocator(storage: StorageProvider) {
-  const stats = new Map<string, Promise<Occupancy>>();
+  const stats = new Map<string, Promise<LocatedPath>>();
   const listings = new Map<string, Promise<readonly FileEntry[] | null>>();
   const located = new Map<string, Promise<LocatedPath>>();
 
+  // A disk that ignores case or accent encoding (macOS) finds other
+  // spellings too, and says which one it stores.
   const statOf = (path: string) =>
     once(stats, path, () =>
       storage.stat(path).then(
-        (stat): Occupancy => (stat.kind === "dir" ? "dir" : "file"),
-        (error: unknown): Occupancy => {
-          if (isStorageError(error)) return error.kind === "not_found" ? "free" : "unknown";
+        (stat): LocatedPath => ({
+          path: stat.path ?? path,
+          occupancy: stat.kind === "dir" ? "dir" : "file",
+        }),
+        (error: unknown): LocatedPath => {
+          if (isStorageError(error)) {
+            return { path, occupancy: error.kind === "not_found" ? "free" : "unknown" };
+          }
           throw error;
         },
       ),
@@ -68,7 +76,7 @@ export function createPathLocator(storage: StorageProvider) {
     return once(located, path, async () => {
       if (path === "/") return { path, occupancy: "dir" };
       const exact = await statOf(path);
-      if (exact !== "free") return { path, occupancy: exact };
+      if (exact.occupancy !== "free") return exact;
       const parent = await locate(parentPath(path));
       const name = baseName(path);
       if (parent.occupancy !== "dir")

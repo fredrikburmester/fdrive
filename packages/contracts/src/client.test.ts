@@ -124,7 +124,7 @@ const VALID_ME = {
       id: VALID_UUID,
       username: "alice",
       providerId: VALID_UUID,
-      providerType: "sftpgo",
+      providerType: "local",
       providerLabel: "Home",
       capabilities: {
         zip: true,
@@ -134,7 +134,7 @@ const VALID_ME = {
         shares: true,
         office: true,
         index: true,
-        scopeMapping: true,
+        shareWithPeople: false,
       },
     },
   ],
@@ -155,7 +155,7 @@ const VALID_ENTRY = {
 const VALID_LIST = { path: "/photos", entries: [VALID_ENTRY] };
 const VALID_ABOUT = {
   version: "1.0.0",
-  providers: [{ type: "sftpgo", label: "localhost:8080" }],
+  providers: [{ type: "local", label: "Local folder" }],
   setupRequired: false,
 };
 
@@ -763,7 +763,7 @@ describe("createApiClient: thumbUrl", () => {
 
 describe("createApiClient: setup", () => {
   it("gets setup/status", async () => {
-    const status = { required: true, hasEnvUrl: false };
+    const status = { required: true, mode: "local", types: [] };
     const { fetchStub, calls } = createStubFetch([jsonResponse(200, status)]);
     const client = createApiClient({ fetch: fetchStub });
 
@@ -771,30 +771,27 @@ describe("createApiClient: setup", () => {
     expect(calls[0]?.url).toBe("/api/v1/setup/status");
   });
 
-  it("posts setup/test with the setup token header and baseUrl body", async () => {
+  it("posts setup/test with the setup token header and the candidate as the body", async () => {
     const result = { ok: true, detail: "reachable" };
     const { fetchStub, calls } = createStubFetch([jsonResponse(200, result)]);
     const client = createApiClient({ fetch: fetchStub });
+    const candidate = { type: "webdav" as const, baseUrl: "http://dav.test:8080" };
 
-    expect(await client.setupTest("tok-1", "http://sftpgo:8080")).toEqual(result);
+    expect(await client.setupTest("tok-1", candidate)).toEqual(result);
     expect(calls[0]?.url).toBe("/api/v1/setup/test");
     expect(headerValue(calls[0]?.init ?? {}, "x-setup-token")).toBe("tok-1");
-    expect(JSON.parse(String(calls[0]?.init.body))).toEqual({ baseUrl: "http://sftpgo:8080" });
+    expect(JSON.parse(String(calls[0]?.init.body))).toEqual(candidate);
   });
 
   it("posts setup/complete with the setup token header and returns MeResponse", async () => {
     const { fetchStub, calls } = createStubFetch([jsonResponse(200, VALID_ME)]);
     const client = createApiClient({ fetch: fetchStub });
-    const req = {
-      baseUrl: "http://sftpgo:8080",
-      homeTemplate: "sftpgo:/{username}",
-      username: "alice",
-      password: "hunter2",
-    };
+    const req = { kind: "local" as const, username: "alice", password: "correct-horse" };
 
     expect(await client.setupComplete("tok-1", req)).toEqual(VALID_ME);
     expect(calls[0]?.url).toBe("/api/v1/setup/complete");
     expect(headerValue(calls[0]?.init ?? {}, "x-setup-token")).toBe("tok-1");
+    expect(JSON.parse(String(calls[0]?.init.body))).toEqual(req);
   });
 });
 
@@ -808,16 +805,17 @@ describe("createApiClient: providers", () => {
     shares: true,
     office: true,
     index: true,
-    scopeMapping: true,
+    shareWithPeople: false,
   };
   const PROVIDER = {
     id: VALID_UUID,
-    type: "sftpgo",
+    type: "webdav",
     label: "Home",
-    baseUrl: "http://sftpgo:8080",
-    config: { homeTemplate: "sftpgo:/{username}" },
+    baseUrl: "http://dav.test:8080",
+    config: {},
     enabled: true,
     managedByEnv: false,
+    capabilities: CAPABILITIES,
     identityCount: 1,
     reachable: true,
     checkedAt: AT,
@@ -829,7 +827,7 @@ describe("createApiClient: providers", () => {
       providers: [
         {
           id: VALID_UUID,
-          type: "sftpgo",
+          type: "webdav",
           label: "Home",
           credentialFields: [FIELD],
           capabilities: CAPABILITIES,
@@ -853,7 +851,7 @@ describe("createApiClient: providers", () => {
     const client = createApiClient({ fetch: fetchStub });
     expect(await client.adminProviders()).toEqual(list);
     expect(
-      await client.adminCreateProvider({ type: "sftpgo", label: "Home", baseUrl: "http://a" }),
+      await client.adminCreateProvider({ type: "webdav", label: "Home", baseUrl: "http://a" }),
     ).toEqual(PROVIDER);
     expect(await client.adminUpdateProvider(VALID_UUID, { enabled: false })).toEqual(PROVIDER);
     expect(await client.adminDeleteProvider(VALID_UUID)).toEqual({ ok: true });
@@ -875,15 +873,138 @@ describe("createApiClient: providers", () => {
     const client = createApiClient({ fetch: fetchStub });
     expect(await client.adminTestProvider(VALID_UUID)).toEqual(result);
     expect(
-      await client.adminTestProvider({ type: "sftpgo", baseUrl: "http://other:8080" }),
+      await client.adminTestProvider({ type: "webdav", baseUrl: "http://other:8080" }),
     ).toEqual(result);
     expect(calls[0]?.url).toBe(`/api/v1/admin/providers/${VALID_UUID}/test`);
     expect(calls[0]?.init.body).toBeUndefined();
     expect(calls[1]?.url).toBe("/api/v1/admin/providers/test");
     expect(JSON.parse(String(calls[1]?.init.body))).toEqual({
-      type: "sftpgo",
+      type: "webdav",
       baseUrl: "http://other:8080",
     });
+  });
+});
+
+describe("createApiClient: local users", () => {
+  const USER = {
+    username: "bob",
+    disabled: false,
+    isAdmin: false,
+    isYou: false,
+    adminByDeployment: false,
+    createdAt: AT,
+    lastLoginAt: null,
+  };
+
+  it("lists, adds, updates and removes users", async () => {
+    const list = { available: true, users: [USER] };
+    const { fetchStub, calls } = createStubFetch([
+      jsonResponse(200, list),
+      jsonResponse(201, USER),
+      jsonResponse(200, { ...USER, disabled: true }),
+      jsonResponse(200, { ok: true }),
+    ]);
+    const client = createApiClient({ fetch: fetchStub });
+    expect(await client.adminUsers()).toEqual(list);
+    expect(await client.adminCreateUser({ username: "bob", password: "correct-horse" })).toEqual(
+      USER,
+    );
+    expect(await client.adminUpdateUser("bob smith", { disabled: true })).toEqual({
+      ...USER,
+      disabled: true,
+    });
+    expect(await client.adminDeleteUser("bob")).toEqual({ ok: true });
+    expect(calls.map((call) => `${call.init.method ?? "GET"} ${call.url}`)).toEqual([
+      "GET /api/v1/admin/users",
+      "POST /api/v1/admin/users",
+      "PATCH /api/v1/admin/users/bob%20smith",
+      "DELETE /api/v1/admin/users/bob",
+    ]);
+    expect(JSON.parse(String(calls[1]?.init.body))).toEqual({
+      username: "bob",
+      password: "correct-horse",
+    });
+    expect(JSON.parse(String(calls[2]?.init.body))).toEqual({ disabled: true });
+  });
+
+  it("rejects a user list that breaks the contract", async () => {
+    const { fetchStub } = createStubFetch([
+      jsonResponse(200, { available: true, users: [{ ...USER, createdAt: "yesterday" }] }),
+    ]);
+    const client = createApiClient({ fetch: fetchStub });
+    await expect(client.adminUsers()).rejects.toBeInstanceOf(ApiClientError);
+  });
+
+  it("changes the signed-in user's own password", async () => {
+    const { fetchStub, calls } = createStubFetch([jsonResponse(200, { ok: true })]);
+    const client = createApiClient({ fetch: fetchStub });
+    const body = { currentPassword: "old-password", newPassword: "new-password" };
+    expect(await client.changePassword(body)).toEqual({ ok: true });
+    expect(calls[0]?.url).toBe("/api/v1/auth/password");
+    expect(calls[0]?.init.method).toBe("POST");
+    expect(JSON.parse(String(calls[0]?.init.body))).toEqual(body);
+  });
+});
+
+describe("createApiClient: folder shares between users", () => {
+  const OWNED = {
+    id: VALID_UUID,
+    path: "/Projects",
+    username: "bob",
+    access: "read",
+    createdAt: AT,
+  };
+  const RECEIVED = {
+    id: VALID_UUID,
+    owner: "carol",
+    name: "Photos",
+    path: "/Shared with me/Photos",
+    access: "write",
+    createdAt: AT,
+  };
+
+  it("lists, creates, updates and removes shares and lists people", async () => {
+    const grants = { available: true, owned: [OWNED], received: [RECEIVED] };
+    const people = { usernames: ["bob", "carol"] };
+    const { fetchStub, calls } = createStubFetch([
+      jsonResponse(200, grants),
+      jsonResponse(201, OWNED),
+      jsonResponse(200, { ...OWNED, access: "write" }),
+      jsonResponse(200, { ok: true }),
+      jsonResponse(200, people),
+    ]);
+    const client = createApiClient({ fetch: fetchStub });
+    expect(await client.grants()).toEqual(grants);
+    expect(
+      await client.createGrant({ path: "/Projects", username: "bob", access: "read" }),
+    ).toEqual(OWNED);
+    expect(await client.updateGrant(VALID_UUID, { access: "write" })).toEqual({
+      ...OWNED,
+      access: "write",
+    });
+    expect(await client.deleteGrant(VALID_UUID)).toEqual({ ok: true });
+    expect(await client.grantPeople()).toEqual(people);
+    expect(calls.map((call) => `${call.init.method ?? "GET"} ${call.url}`)).toEqual([
+      "GET /api/v1/grants",
+      "POST /api/v1/grants",
+      `PATCH /api/v1/grants/${VALID_UUID}`,
+      `DELETE /api/v1/grants/${VALID_UUID}`,
+      "GET /api/v1/grants/people",
+    ]);
+    expect(JSON.parse(String(calls[1]?.init.body))).toEqual({
+      path: "/Projects",
+      username: "bob",
+      access: "read",
+    });
+    expect(JSON.parse(String(calls[2]?.init.body))).toEqual({ access: "write" });
+  });
+
+  it("rejects a share with an unknown access level", async () => {
+    const { fetchStub } = createStubFetch([jsonResponse(201, { ...OWNED, access: "admin" })]);
+    const client = createApiClient({ fetch: fetchStub });
+    await expect(
+      client.createGrant({ path: "/Projects", username: "bob", access: "read" }),
+    ).rejects.toBeInstanceOf(ApiClientError);
   });
 });
 
@@ -910,8 +1031,8 @@ describe("createApiClient: system", () => {
     reachable: true,
     health: {
       ok: true,
-      roots: ["sftpgo"],
-      watcher: { sftpgo: true },
+      roots: ["files"],
+      watcher: { files: true },
       embedOk: true,
       schemaVersion: 1,
     },
@@ -977,17 +1098,17 @@ describe("createApiClient: system", () => {
     const { fetchStub, calls } = createStubFetch([jsonResponse(200, { marked: 3 })]);
     const client = createApiClient({ fetch: fetchStub });
 
-    expect(await client.systemReindex({ root: "sftpgo", path: "folder" })).toEqual({ marked: 3 });
+    expect(await client.systemReindex({ root: "files", path: "folder" })).toEqual({ marked: 3 });
     expect(calls[0]?.url).toBe("/api/v1/system/indexer/reindex");
-    expect(JSON.parse(String(calls[0]?.init.body))).toEqual({ root: "sftpgo", path: "folder" });
+    expect(JSON.parse(String(calls[0]?.init.body))).toEqual({ root: "files", path: "folder" });
   });
 
   it("posts system/indexer/reindex with thumbnails: true", async () => {
     const { fetchStub, calls } = createStubFetch([jsonResponse(200, { marked: 3 })]);
     const client = createApiClient({ fetch: fetchStub });
 
-    await client.systemReindex({ root: "sftpgo", thumbnails: true });
-    expect(JSON.parse(String(calls[0]?.init.body))).toEqual({ root: "sftpgo", thumbnails: true });
+    await client.systemReindex({ root: "files", thumbnails: true });
+    expect(JSON.parse(String(calls[0]?.init.body))).toEqual({ root: "files", thumbnails: true });
   });
 
   it("posts system/indexer/thumbnails/rebuild with an empty body by default", async () => {
@@ -1003,10 +1124,10 @@ describe("createApiClient: system", () => {
     const client = createApiClient({ fetch: fetchStub });
 
     expect(
-      await client.systemRebuildIndexerThumbnails({ root: "sftpgo", path: "folder", force: true }),
+      await client.systemRebuildIndexerThumbnails({ root: "files", path: "folder", force: true }),
     ).toEqual({ started: true, total: 4 });
     expect(JSON.parse(String(calls[0]?.init.body))).toEqual({
-      root: "sftpgo",
+      root: "files",
       path: "folder",
       force: true,
     });
@@ -1016,7 +1137,7 @@ describe("createApiClient: system", () => {
     const result = {
       configured: true,
       semantic: { configured: true, healthy: true },
-      roots: ["sftpgo"],
+      roots: ["files"],
       index: { files: 1, withText: 1, chunks: 1, embedded: 1 },
     };
     const { fetchStub, calls } = createStubFetch([jsonResponse(200, result)]);
@@ -1027,7 +1148,7 @@ describe("createApiClient: system", () => {
   });
 
   it("posts system/search/reembed", async () => {
-    const result = { marked: 7, roots: ["sftpgo"] };
+    const result = { marked: 7, roots: ["files"] };
     const { fetchStub, calls } = createStubFetch([jsonResponse(200, result)]);
     const client = createApiClient({ fetch: fetchStub });
 
@@ -1114,7 +1235,7 @@ describe("createApiClient: system", () => {
   });
 
   it("posts a kept OCR original restore", async () => {
-    const body = { restored: true, root: "sftpgo", path: "docs/scan.pdf", previousState: "ocred" };
+    const body = { restored: true, root: "files", path: "docs/scan.pdf", previousState: "ocred" };
     const { fetchStub, calls } = createStubFetch([jsonResponse(200, body)]);
     const client = createApiClient({ fetch: fetchStub });
 
@@ -1316,70 +1437,6 @@ describe("createApiClient: folder views", () => {
       ["/api/v1/folder-views", "DELETE", JSON.stringify({ path: "/photos" })],
       ["/api/v1/folder-views/all", "DELETE", undefined],
     ]);
-  });
-});
-
-describe("createApiClient: identityScope", () => {
-  const NONADMIN_STATUS = {
-    status: "available",
-    reason: "ok",
-    usesOverride: false,
-    virtualPrefixes: ["/"],
-    unmappedMounts: [{ virtualPath: "/shared", kind: "dir" }],
-    unverifiedPrefixes: [],
-    unindexedPrefixes: ["/archive"],
-    warning: "warning text",
-    isAdmin: false,
-  };
-
-  it("gets an identity's scope status", async () => {
-    const { fetchStub, calls } = createStubFetch([jsonResponse(200, NONADMIN_STATUS)]);
-    const client = createApiClient({ fetch: fetchStub });
-
-    expect(await client.identityScope(VALID_UUID)).toEqual(NONADMIN_STATUS);
-    expect(calls[0]?.url).toBe(`/api/v1/account/identities/${VALID_UUID}/scope`);
-    expect(calls[0]?.init.method).toBe("GET");
-  });
-
-  it("puts a scope override with the scopes body", async () => {
-    const { fetchStub, calls } = createStubFetch([jsonResponse(200, NONADMIN_STATUS)]);
-    const client = createApiClient({ fetch: fetchStub });
-    const body = {
-      scopes: [{ rootName: "sftpgo", fsPrefix: "/pool/team", virtualPrefix: "/shared" }],
-      unindexedPrefixes: ["/archive"],
-    };
-
-    expect(await client.setIdentityScope(VALID_UUID, body)).toEqual(NONADMIN_STATUS);
-    expect(calls[0]?.url).toBe(`/api/v1/account/identities/${VALID_UUID}/scope`);
-    expect(calls[0]?.init.method).toBe("PUT");
-    expect(calls[0]?.init.body).toBe(JSON.stringify(body));
-  });
-});
-
-describe("createApiClient: folder mappings and suggestions", () => {
-  const MAPPINGS = {
-    mappings: [{ virtualPath: "/shared", rootName: "sftpgo", fsPrefix: "/_folders/shared" }],
-  };
-
-  it("gets and puts the folder-level mappings", async () => {
-    const { fetchStub, calls } = createStubFetch([
-      jsonResponse(200, MAPPINGS),
-      jsonResponse(200, MAPPINGS),
-    ]);
-    const client = createApiClient({ fetch: fetchStub });
-    expect(await client.mountMappings()).toEqual(MAPPINGS);
-    expect(calls[0]?.url).toBe("/api/v1/system/mount-mappings");
-    expect(await client.setMountMappings(MAPPINGS)).toEqual(MAPPINGS);
-    expect(calls[1]?.init.method).toBe("PUT");
-    expect(calls[1]?.init.body).toBe(JSON.stringify(MAPPINGS));
-  });
-
-  it("gets an identity's mapping suggestions", async () => {
-    const body = { mounts: [{ virtualPath: "/shared", suggestions: [] }] };
-    const { fetchStub, calls } = createStubFetch([jsonResponse(200, body)]);
-    const client = createApiClient({ fetch: fetchStub });
-    expect(await client.identityScopeSuggestions(VALID_UUID)).toEqual(body);
-    expect(calls[0]?.url).toBe(`/api/v1/account/identities/${VALID_UUID}/scope/suggestions`);
   });
 });
 
@@ -1594,7 +1651,7 @@ describe("createApiClient: fetch `this`-binding regression", () => {
 });
 
 describe("createApiClient: clear jobs", () => {
-  it.each([undefined, { root: "sftpgo" }, { root: "sftpgo", path: "/a_%/file.pdf" }])(
+  it.each([undefined, { root: "files" }, { root: "files", path: "/a_%/file.pdf" }])(
     "posts index clear scope %j",
     async (scope) => {
       const { fetchStub, calls } = createStubFetch([jsonResponse(202, { started: true })]);

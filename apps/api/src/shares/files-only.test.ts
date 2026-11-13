@@ -1,6 +1,5 @@
 import { ApiError } from "@fdrive/contracts";
 import { createFakeS3Server, s3Module } from "@fdrive/s3";
-import { createSftpgoModule } from "@fdrive/sftpgo";
 import { createFakeWebdavServer, webdavModule } from "@fdrive/webdav";
 import { describe, expect, it } from "vitest";
 import { seedS3Provider, seedWebdavProvider } from "../providers/test-fixtures/index.ts";
@@ -84,21 +83,16 @@ describe("share management for a files-only login", () => {
     await expectRefusal(h, cookie, s3.requests);
   });
 
-  it("keeps the same routes open for an SFTPGo login", async () => {
+  it("keeps the same routes open for a local folder login", async () => {
     const h = sharesHarness();
     const cookie = await h.login();
     expect((await h.request("/api/v1/shares", { cookie })).status).toBe(200);
   });
 
   it("decides by the module's share strategy, never by its type", async () => {
-    // The harness's own SFTPGo module, declared without shares: the type is
-    // still "sftpgo", so a type check would let it through.
-    let h = sharesHarness();
-    h = sharesHarness({
-      modules: {
-        sftpgo: { ...createSftpgoModule({ clientFor: () => h.client }), shares: "none" },
-      },
-    });
+    // The local folder, declared without shares: the type is still "local",
+    // so a type check would let it through.
+    const h = sharesHarness({ local: (module) => ({ ...module, shares: "none" }) });
     const cookie = await h.login();
     await expectRefusal(h, cookie, { length: 0 });
   });

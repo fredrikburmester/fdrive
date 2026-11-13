@@ -67,7 +67,7 @@ function mockConfigured() {
 
 beforeEach(() => {
   useSystemIndexerMock.mockReturnValue({
-    data: { configured: true, reachable: true, health: { roots: ["sftpgo"] } },
+    data: { configured: true, reachable: true, health: { roots: ["files"] } },
     error: null,
     refetch: vi.fn(),
   });

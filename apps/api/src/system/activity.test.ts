@@ -175,7 +175,7 @@ function fixture(admin = true) {
       }) as Principal,
     connectionStatus: async () => ({
       required: false,
-      providers: [{ type: "sftpgo", host: "sftpgo" }],
+      providers: [{ type: "webdav", host: "dav.test" }],
     }),
     registerRoutes(groups) {
       registerActivityRoutes(groups, {

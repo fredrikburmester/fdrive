@@ -7,7 +7,6 @@ import {
 } from "@fdrive/contracts";
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
-import { Checkbox } from "@/components/ui/checkbox";
 import { Field, FieldDescription, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
@@ -16,40 +15,39 @@ import { useSystemTrash, useUpdateTrashSettings } from "@/lib/api/trash-settings
 import { SystemErrorState } from "./system-error-state";
 import { SystemSection } from "./system-section";
 
-/**
- * The card's copy per Trash strategy. `native` connects fdrive to a recycle
- * bin the backend (SFTPGo's Event Manager rule) fills itself; `move` has
- * fdrive move deleted files into the folder on the server; `none` is a
- * provider without any Trash, which the switch cannot turn on.
- */
-const COPY: Record<
-  TrashStrategy,
-  { description: string; requirement: string; folder: string; disabling: string }
-> = {
-  native: {
-    description: "Restore deleted files from your SFTPGo recycle bin.",
-    requirement:
-      "Requires SFTPGo recycle-bin rules. No processing worker or local storage mount is needed.",
-    folder: "The folder within each user's SFTPGo home; it must match the recycle-bin rule.",
-    disabling:
-      "Disabling this integration does not change SFTPGo rules or delete items already in Trash.",
-  },
-  move: {
-    description: "Restore deleted files that fdrive moved into a recycle folder.",
-    requirement:
-      "fdrive moves deleted files into this folder on the storage server itself. No server rules, processing worker or local storage mount is needed.",
-    folder:
-      "The folder within each user's home on this server; fdrive creates it on the first delete.",
-    disabling:
-      "Disabling this makes deletes permanent again; it does not delete items already in Trash.",
-  },
-  none: {
-    description: "This storage server has no Trash.",
-    requirement: "Deleting a file on this server removes it permanently.",
-    folder: "",
-    disabling: "",
-  },
+interface TrashCopy {
+  readonly description: string;
+  readonly requirement: string;
+  readonly folder: string;
+  readonly disabling: string;
+}
+
+/** fdrive moves deleted files into a recycle folder on the storage itself. */
+const MOVE_COPY: TrashCopy = {
+  description: "Restore deleted files that fdrive moved into a recycle folder.",
+  requirement:
+    "fdrive moves deleted files into this folder on the storage itself. No server rules, processing worker or storage mount is needed.",
+  folder:
+    "The folder within each user's home on this server; fdrive creates it on the first delete.",
+  disabling:
+    "Disabling this makes deletes permanent again; it does not delete items already in Trash.",
 };
+
+/** A provider without any Trash, which the switch cannot turn on. */
+const NONE_COPY: TrashCopy = {
+  description: "This storage server has no Trash.",
+  requirement: "Deleting a file on this server removes it permanently.",
+  folder: "",
+  disabling: "",
+};
+
+/**
+ * The card's copy for a provider's Trash strategy: `none` has no Trash,
+ * and every other strategy has fdrive keep the recycle folder itself.
+ */
+function copyFor(strategy: TrashStrategy | undefined): TrashCopy {
+  return strategy === "none" ? NONE_COPY : MOVE_COPY;
+}
 
 /** The storage server a Trash form edits. */
 export interface TrashProviderRef {
@@ -86,7 +84,7 @@ export function TrashSettingsForm({
     ? { ...values, retentionHours: retentionInput.trim() === "" ? null : Number(retentionInput) }
     : null;
   const valid = TrashSettingsUpdateRequest.safeParse(input).success;
-  const copy = COPY[values?.strategy ?? "native"];
+  const copy = copyFor(values?.strategy);
   const change = (patch: Partial<TrashSettings>) => {
     if (values) setDraft({ ...values, ...patch });
   };
@@ -140,29 +138,13 @@ export function TrashSettingsForm({
           <FieldDescription>{copy.requirement}</FieldDescription>
           {values.enabled ? (
             <>
-              {values.strategy === "native" ? (
-                <>
-                  <p className="text-sm text-muted-foreground">
-                    Configure and test SFTPGo's pre-delete rule first. Turning this on only connects
-                    fdrive to that recycle bin; it does not create the rule.
-                  </p>
-                  <a
-                    className="text-sm underline"
-                    href="https://github.com/fredrikburmester/fdrive/blob/main/docs/TRASH.md"
-                    target="_blank"
-                    rel="noreferrer"
-                  >
-                    Trash setup instructions
-                  </a>
-                </>
-              ) : null}
               <Field>
                 <FieldLabel htmlFor={field("trash-path")}>Trash folder</FieldLabel>
                 <Input
                   id={field("trash-path")}
                   value={values.path}
                   disabled={busy}
-                  onChange={(event) => change({ path: event.target.value, rulesConfirmed: false })}
+                  onChange={(event) => change({ path: event.target.value })}
                 />
                 <FieldDescription>{copy.folder}</FieldDescription>
               </Field>
@@ -180,23 +162,9 @@ export function TrashSettingsForm({
                   onChange={(event) => setRetention(event.target.value)}
                 />
                 <FieldDescription>
-                  {values.strategy === "native" ? "Match your SFTPGo cleanup schedule. " : ""}
                   This value is informational; fdrive does not delete old items automatically.
                 </FieldDescription>
               </Field>
-              {values.strategy === "native" ? (
-                <Field orientation="horizontal">
-                  <Checkbox
-                    id={field("trash-rules")}
-                    checked={values.rulesConfirmed}
-                    disabled={busy}
-                    onCheckedChange={(rulesConfirmed) => change({ rulesConfirmed })}
-                  />
-                  <FieldLabel htmlFor={field("trash-rules")}>
-                    I configured and tested SFTPGo's recycle-bin rule for this folder.
-                  </FieldLabel>
-                </Field>
-              ) : null}
             </>
           ) : null}
           {copy.disabling ? (

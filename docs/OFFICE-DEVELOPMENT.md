@@ -27,9 +27,11 @@ second connection: a small pool can deadlock when another writer waits on the pr
 Metadata notifications run after commit. Scope handles cannot escape their callback lifetime.
 
 Re-resolve current registry paths inside writes so a queued save cannot resurrect a renamed
-path. Check edit admission and destination conflicts under the relevant locks. SFTPGo lacks
-an atomic conditional-create upload; an external writer can still race an absence check.
-Do not claim cross-client atomic no-overwrite semantics.
+path. Check edit admission and destination conflicts under the relevant locks. The locks
+serialize fdrive's own writers; create and non-overwriting saves (`PutRelativeFile` without
+overwrite) also pass `overwrite: false`, which the local folder publishes as a real
+create-if-absent, so a writer outside fdrive that takes the name after the absence check gets
+a 409 instead of being replaced. Storage that cannot honour `overwrite: false` keeps that race.
 
 ## Callback proof and cache versions
 

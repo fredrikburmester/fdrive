@@ -3,9 +3,9 @@ import { describe, expect, it, vi } from "vitest";
 import { allCapabilities } from "@/lib/identity/capabilities";
 import { resolveLoginProviders, shouldRedirectToSetup } from "./page";
 
-const sftpgo: PublicProvider = {
+const local: PublicProvider = {
   id: "00000000-0000-4000-8000-000000000001",
-  type: "sftpgo",
+  type: "local",
   label: "127.0.0.1:58080",
   credentialFields: [
     { name: "username", label: "Username", kind: "text", required: true },
@@ -17,10 +17,10 @@ const sftpgo: PublicProvider = {
 describe("resolveLoginProviders", () => {
   it("returns the enabled providers from the public endpoint", async () => {
     const client = {
-      providers: vi.fn().mockResolvedValue({ providers: [sftpgo] }),
+      providers: vi.fn().mockResolvedValue({ providers: [local] }),
     } as unknown as ApiClient;
 
-    expect(await resolveLoginProviders(async () => client)).toEqual([sftpgo]);
+    expect(await resolveLoginProviders(async () => client)).toEqual([local]);
   });
 
   it("returns no providers when the API is unreachable", async () => {
@@ -57,7 +57,7 @@ describe("shouldRedirectToSetup", () => {
     const client = {
       about: vi.fn().mockResolvedValue({
         version: "1.0.0",
-        providers: [{ type: "sftpgo", label: null }],
+        providers: [{ type: "local", label: null }],
         setupRequired: false,
       }),
     } as unknown as ApiClient;

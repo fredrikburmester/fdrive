@@ -9,13 +9,11 @@ This document provides architectural and operational details for advanced deploy
 | File | Purpose |
 | :--- | :--- |
 | `compose.yaml` | **The fdrive stack**: proxy, web, API, database and idle optional-worker controllers, from the [published images](#published-images). Models and processing stay off until selected in the UI. |
-| `compose.sftpgo.yaml` | **Optional SFTPGo**: runs an SFTPGo container alongside fdrive for people who don't have one yet. See [bundled SFTPGo](#bundled-sftpgo). |
 
-Each release attaches both files. Add an overlay by saving it next to `compose.yaml` and
-listing both in Compose's own `COMPOSE_FILE` in `.env`, for example
-`COMPOSE_FILE=compose.yaml:compose.sftpgo.yaml`; every `docker compose` command then includes
-it. The [SFTPGo network](#existing-sftpgo-docker-network) and
-[named volume](#processing-storage-and-permissions) overlays below work the same way.
+Each release attaches it. Add an overlay by saving it next to `compose.yaml` and listing both
+in Compose's own `COMPOSE_FILE` in `.env`, for example
+`COMPOSE_FILE=compose.yaml:compose.office.collabora.yaml`; every `docker compose` command then
+includes it.
 
 ---
 
@@ -57,7 +55,7 @@ releases are cut: [releases](../docs/RELEASES.md).
     │      ▼
     │  ┌──────────┐
     │  │ Hono API │ ────► [Postgres DB (Port 5432)]
-    │  └────┬─────┘ ────► [SFTPGo API (Port 8080)]
+    │  └────┬─────┘ ────► [Files folder (/data)]
     │       │       ────► [Workers: Indexer, ML, OCR]
     │       ▼ (internal network only)
     │   [WOPI / Office Server]
@@ -70,7 +68,7 @@ releases are cut: [releases](../docs/RELEASES.md).
 
 - **Single Origin**: All traffic enters through Caddy on port `8090`. Caddy routes `/api/*` and `/mcp*` to the API container, and all page routes to Next.js.
 - **Internal WOPI Communication**: Document server callbacks (`/wopi/*`) are routed entirely inside the private Docker bridge network (`http://api:3001/wopi`) and are never exposed publicly.
-- **Direct Storage Proxy**: All user file interactions (downloads, streaming, uploads) are authenticated by fdrive and proxied directly through SFTPGo's user REST API.
+- **Files**: The API reads and writes the files folder itself, so every download, stream and upload is authenticated by fdrive and served from disk. The indexer reads the same folder; nothing else is in the path.
 
 ---
 
@@ -156,7 +154,7 @@ fdrive actively monitors its internal subsystems on startup and exposes diagnost
   attempts, and retries unresolved files. Details remain readable with the indexer stopped.
   Unresolved records are retained; resolved history is limited to 30 days / 10,000 records.
 - **Indexer diagnostic retention**: `fdrive-indexer-logs` is a persistent Compose volume
-  mounted at `/logs`, handed to `FDRIVE_INDEX_UID` when the indexer starts. `indexer.log` plus four rotated
+  mounted at `/logs`, handed to `FDRIVE_RUN_AS_UID` when the indexer starts. `indexer.log` plus four rotated
   files retain up to 50 MiB through restarts and container replacement. Read the current
   file with `docker compose exec indexer tail -n 200 /logs/indexer.log`. Normal updates
   preserve the volume; explicitly removing volumes removes this raw log history. Older
@@ -227,149 +225,39 @@ All services are hardened following security best practices:
 - **Pinned Image Digests**: All base images and third-party containers are pinned with exact `@sha256:` immutable digests in compose files to ensure reproducible builds.
 - **Versioned fdrive Images**: fdrive's own images are built in CI from the tagged commit and referenced by release version; `compose.yaml` runs the newest release unless `FDRIVE_VERSION` pins one.
 
-## Processing storage and permissions
+## Files folder and permissions
 
-Follow [installation step 2](README.md#2-mount-sftpgos-files-optional)
-for the standard bind mount. `FDRIVE_DATA_DIR` stores fdrive state;
-`FDRIVE_INDEX_SFTPGO_DIR` supplies existing user files. They are different settings.
-Setting only the former never attaches SFTPGo storage.
+`FDRIVE_FILES_DIR` on the host (default `files` inside `FDRIVE_DATA_DIR`) is mounted at
+`/data` read-write in the `api`, `backup` and `ocr` containers and read-only in the
+`indexer`. Compose fixes the rest: `FDRIVE_STORAGE_ROOT=/data`, and one indexed root named
+`files` at `/data` in both the API and the indexer. Each user's files are `/data/<username>`.
 
-Check permissions using the actual worker identities:
+Users live in fdrive's database, with scrypt password hashes, and are added, reset and
+disabled under **System > Users**. `FDRIVE_ADMIN_USERS` lists usernames that are always
+administrators. WebDAV or S3 storage added under **System > Storage** signs in with its own
+accounts, beside the files folder.
+
+The four containers start as root for one step: each gives its own state directories to
+`FDRIVE_RUN_AS_UID` (default 1000; `FDRIVE_INDEX_UID` is its older name) and then drops to
+that user for good. The API also gives a new, empty files folder to that user, but never
+changes the owner of files already there, and logs `cannot write /data` when that user
+can't write it. The backup worker keeps one capability after the drop, reading any file,
+because the state it backs up belongs to other services; it writes as the same user, so a
+backup in someone's folder belongs to them. Check the user each process runs as:
 
 ```sh
+docker compose exec -T api stat -c %u:%g /proc/1
 docker compose exec -T indexer stat -c %u:%g /proc/1
-docker compose exec -T ocr stat -c %u:%g /proc/1
 ```
 
-Both containers start as root for one step, in which they give their own writable
-directories to the UID they will run as, and then drop to that UID for good. That is why the
-commands above ask for the owner of the service process, where `id` would answer for the
-container's starting user.
+These ask for the owner of the service process, because `id` would answer for the
+container's starting user. Run `docker compose up -d` after changing `FDRIVE_RUN_AS_UID`.
 
-`FDRIVE_INDEX_UID` sets the UID and GID the indexer runs as, and owns its thumbnail and
-log volumes; its default is 1000, the UID of SFTPGo's official image. It does not configure
-the OCR worker, which runs as UID 1000. Verify both rather than assuming they run as
-SFTPGo's user. Give the indexer read/traverse access and, if PDF conversion will be used,
-give the OCR worker read/write/traverse access through the host's existing permission
-model. Do not recursively change ownership of the SFTPGo library to make an installation
-succeed. Run `docker compose up -d` after changing `FDRIVE_INDEX_UID` to recreate the
-indexer.
-
-For an account whose home is not named after its username, an administrator can set a
-per-account mapping in **Account** after setup. **System > Connection** also contains
-the common home template. Correct the underlying worker mount first: an account override
-cannot expose a host directory that is absent from the container. Existing SFTPGo virtual
-folders need their own mapping (next section); do not assume one user's successful check
-proves every account and virtual folder is configured.
-
-### SFTPGo virtual folders
-
-A virtual folder is not a directory inside the user's home on disk: SFTPGo mounts a
-separate `mapped_path` at a virtual path (for example `/shared`). The indexer only sees
-what is under a configured root, so search, thumbnails, duplicates, folder sizes, and MCP
-work for a virtual folder only when **both** of these hold:
-
-1. The folder's SFTPGo `mapped_path` sits inside a configured `FDRIVE_INDEX_ROOTS` root,
-   or it has a root of its own plus a matching indexer bind mount
-   (`<host path>:/roots/<name>:ro`, see [multiple roots](../docs/INDEXER.md#multiple-roots)).
-2. An administrator maps it once, in **Account**, under any login's index status that names
-   the folder: choose the root and enter the physical prefix, the folder's path inside that
-   root. By default the mapping is saved as a **shared folder mapping** and every login that
-   mounts the same virtual path adopts it automatically, but only while SFTPGo actually
-   shows that folder in the login's files and the index lacks it there. A real directory of
-   the same name in someone's home is never affected. The same physical folder is indexed
-   once, and each user's SFTPGo permissions still apply to results. Untick "Apply to every
-   login" to store the mapping for one login only. Shared folder mappings are listed and
-   removed under **System > Connection**.
-
-fdrive cannot read a folder's `mapped_path`: that is only available through SFTPGo's admin
-API, which fdrive never uses. The physical prefix is therefore always confirmed by a human.
-fdrive does propose it: it lists the folder over SFTP and offers indexed directories whose
-files match, confirmed against the indexer's own listing. A folder with no files at its top
-level gets no suggestion. Until a mapping exists, the account's status names the mount
-(`/shared is not indexed`) and the home scope keeps its index-backed features; the unmapped
-folder alone stays out of search. If the folder deliberately lives outside every indexed
-root, mark it **Not indexed** on the same page so it stops being reported.
-
-The dev stack satisfies constraint 1 by placing folders under `_folders/` inside
-`/srv/sftpgo/data`, the one seeded root, so the mapping for `carol`'s `/shared` is root
-`sftpgo`, physical prefix `/_folders/shared`. A production deployment gets none of this for
-free: a folder mapped elsewhere on the host needs its own root and mount before any
-account mapping can verify.
-
-For SFTPGo backed by a Docker named volume, explicitly share that existing volume through
-an overlay instead of depending on Docker's internal volume directory. Example
-`compose.storage.yaml` next to `compose.yaml`:
-
-```yaml
-services:
-  indexer:
-    volumes:
-      - existing-files:/roots/sftpgo:ro
-  ocr:
-    volumes:
-      - existing-files:/roots/sftpgo
-volumes:
-  existing-files:
-    external: true
-    name: replace-with-existing-volume-name
-```
-
-The volume must already hold SFTPGo's user files. Set `FDRIVE_INDEX_SFTPGO_PATH` to their
-location inside SFTPGo. Add `compose.storage.yaml` to `COMPOSE_FILE` in `.env`, keeping any
-other overlays, and check both mounts in `docker compose config` before starting.
-A remote host path or S3 bucket is not a local Docker volume: browsing can work without
-local processing, but this stack does not automatically mirror remote files.
-
-## Existing SFTPGo Docker network
-
-To reach SFTPGo by container name instead of a published HTTP port, attach fdrive's API to
-SFTPGo's Docker network. Save this as `compose.sftpgo-network.yaml` next to `compose.yaml`,
-with that network's name:
-
-```yaml
-services:
-  api:
-    networks:
-      - default
-      - sftpgo
-networks:
-  sftpgo:
-    external: true
-    name: replace-with-sftpgo-network
-```
-
-Add it to `COMPOSE_FILE` in `.env`, for example
-`COMPOSE_FILE=compose.yaml:compose.sftpgo-network.yaml`, keeping any other overlays. Run
-`docker compose up -d`, then enter SFTPGo's container name and internal HTTP port, such as
-`http://sftpgo:8080`, during setup.
-
-This only connects fdrive's API to SFTPGo; it doesn't mount SFTPGo's files, which is the
-separate storage step above. SFTPGo's own configuration doesn't change.
-
-## Bundled SFTPGo
-
-Use this only when the operator has no existing SFTPGo service. Download
-`compose.sftpgo.yaml` from the same release next to `compose.yaml`, then in `.env` configure:
-
-```dotenv
-COMPOSE_FILE=compose.yaml:compose.sftpgo.yaml
-FDRIVE_DATA_DIR=/srv/fdrive-state
-FDRIVE_INDEX_SFTPGO_DIR=/srv/fdrive-state/sftpgo/data
-SFTPGO_ADMIN_USERNAME=admin
-SFTPGO_ADMIN_PASSWORD=replace-with-a-strong-unique-password
-```
-
-These paths are examples. The processing source must match the bundled SFTPGo data
-mount, which is `FDRIVE_DATA_DIR/sftpgo/data`. Create that directory as part of this **new**
-SFTPGo deployment, with appropriate service permissions. Keep any other overlays in
-`COMPOSE_FILE`. Leave `SFTPGO_URL` unset so fdrive uses web onboarding.
-
-Run `docker compose up -d`. The bundled WebAdmin defaults to the host's loopback port 8091;
-access it through the operator's chosen tunnel/proxy or deliberately configure its bind
-address. Create a normal file user in SFTPGo with a home such as `/srv/sftpgo/data/alice`. Then open
-fdrive, connect to `http://sftpgo:8080`, and verify that file user as fdrive's administrator.
-The SFTPGo WebAdmin account and fdrive's chosen file-user account are separate.
+Set `FDRIVE_RUN_AS_UID` to the owner of the existing files rather than changing ownership.
+Anything else writing the folder, such as rsync, SMB or Syncthing, should write as that user
+too, or leave group or other permissions that let it read and write; otherwise fdrive shows
+those files but can't change them. A share the host mounts (NFS, SMB) works when its user
+mapping gives `FDRIVE_RUN_AS_UID` that access.
 
 ## Native ARM64 embeddings
 

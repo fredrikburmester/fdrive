@@ -13,11 +13,10 @@ const cookieFrom = (r: Response) => r.headers.get("set-cookie")?.split(";")[0] ?
 const text = (body: ReadableStream<Uint8Array>) => new Response(body).text();
 
 /**
- * Owned shares against a real MinIO and PostgreSQL through the composed app.
- * S3 itself still declares `shares: "none"`; the module is injected with
- * `owned` here so the whole path can be proven before that flip. The fetch
- * spy shows every upstream byte going to MinIO and nothing to an SFTPGo
- * endpoint, since there is none.
+ * Public shares against a real MinIO and PostgreSQL through the composed
+ * app. S3 itself still declares `shares: "none"`; the module is injected
+ * with `owned` here so the whole path is proven before that flip. The fetch
+ * spy shows every upstream byte going to MinIO through the owner's key.
  */
 describe("owned shares over S3 storage", () => {
   let postgres: Awaited<ReturnType<typeof startPostgres>>;
@@ -33,8 +32,6 @@ describe("owned shares over S3 storage", () => {
     app = await composeApp(
       loadConfig({
         DATABASE_URL: postgres.connectionString,
-        // No SFTPGo in this suite: the row is seeded, never reached.
-        SFTPGO_URL: "http://sftpgo.invalid:8080",
         FDRIVE_MASTER_KEY: Buffer.alloc(32, 11).toString("base64"),
       }),
       logger,
@@ -140,9 +137,6 @@ describe("owned shares over S3 storage", () => {
   it("serves a password-protected file: eager password check, ranges, HEAD and the limit", async () => {
     const owner = await login();
     const share = await create(owner, { password: "secret", maxDownloads: 2 });
-    expect((await db.db.execute(`select sftpgo_share_id from app.shares`)).rows[0]).toEqual({
-      sftpgo_share_id: null,
-    });
     const path = pub(share.id);
     expect(await metadata(share.id)).toMatchObject({ name: "", hasPassword: true });
     expect(
@@ -218,10 +212,19 @@ describe("owned shares over S3 storage", () => {
     expect((await metadata(inbox.id)).usedDownloads).toBe(1);
   });
 
-  it("reached only MinIO, through the owner's key, and never an SFTPGo endpoint", () => {
+  it("has no archive download on storage without a zip", async () => {
+    const owner = await login();
+    const folder = await create(owner, { name: "Folder", paths: ["/folder"] });
+    const refused = await call(`${pub(folder.id)}/archive`);
+    expect(refused.status).toBe(400);
+    expect(await refused.json()).toMatchObject({
+      error: { kind: "unsupported", details: { capability: "zip" } },
+    });
+  });
+
+  it("reached only MinIO, through the owner's key", () => {
     const hosts = new Set(upstream.map((request) => request.host));
     expect(hosts).toEqual(new Set([new URL(minio.endpoint).host]));
-    expect(upstream.some((request) => request.path.startsWith("/api/v2/"))).toBe(false);
     expect(upstream.length).toBeGreaterThan(5);
   });
 });

@@ -4,7 +4,7 @@ import { providerTypeLabel } from "@/lib/identity/provider-type";
 import { cn } from "@/lib/utils";
 
 const ICONS: Readonly<Record<ProviderType, LucideIcon>> = {
-  sftpgo: Server,
+  local: HardDrive,
   webdav: Globe,
   s3: Database,
 };
@@ -17,10 +17,10 @@ export interface ProviderIconProps {
 /**
  * The icon for a provider type, next to a login's provider label in the
  * Logins card and the sidebar switcher. Labelled with the type's product
- * name so screen readers hear "SFTPGo" where sighted users see the glyph.
+ * name so screen readers hear "WebDAV" where sighted users see the glyph.
  */
 export function ProviderIcon({ type, className }: ProviderIconProps) {
-  const Icon = ICONS[type] ?? HardDrive;
+  const Icon = ICONS[type] ?? Server;
   return (
     <Icon
       role="img"

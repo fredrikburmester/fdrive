@@ -1,7 +1,6 @@
 import { expect, it } from "vitest";
 import { fixtureCompose, parsePort, parseProduct } from "./fixture-config";
-import type { OfficeFixtureState } from "./state";
-import { sftpArgs, sftpQuote } from "./storage";
+import { storedPath } from "./storage";
 
 it("uses supported products only", () => {
   expect(parseProduct(undefined)).toBe("onlyoffice");
@@ -52,17 +51,21 @@ it("extends pinned deployment with isolated port and callback settings", () => {
     extends: { service: "collabora-keys" },
   });
 });
-it("escapes SFTP batch filenames and rejects control characters", () => {
-  expect(sftpQuote('a"b\\c Å %20')).toBe('"a\\"b\\\\c Å %20"');
-  for (const value of ["a\nb", "a\rb", "a\0b"]) expect(() => sftpQuote(value)).toThrow();
-});
-it("scopes the SSH proxy to a validated owned container and temporary key store", () => {
-  const state = {
-    sftpgoContainer: "123456abcdef",
-    directory: "/tmp/fixture",
-  } as OfficeFixtureState;
-  expect(sftpArgs(state)).toContain("IdentityFile=/tmp/fixture/sftp-key");
-  expect(sftpArgs(state)).toContain("UserKnownHostsFile=/tmp/fixture/known_hosts");
-  expect(sftpArgs(state).at(-1)).toBe("alice@fixture-123456abcdef");
-  expect(() => sftpArgs({ ...state, sftpgoContainer: "; bad" })).toThrow();
+it("confines fixture paths to alice's home in the local folder", () => {
+  const state = { storageRoot: "/tmp/fixture-root" };
+  expect(storedPath(state, "/Å %20.docx")).toBe("/tmp/fixture-root/alice/Å %20.docx");
+  expect(storedPath(state, "/nested/a b.xlsx")).toBe("/tmp/fixture-root/alice/nested/a b.xlsx");
+  for (const value of [
+    "",
+    "relative.docx",
+    "/",
+    "/a//b",
+    "/../bob/x",
+    "/a/./b",
+    "/a\\b",
+    "/a\nb",
+    "/a\rb",
+    "/a\0b",
+  ])
+    expect(() => storedPath(state, value)).toThrow("Invalid fixture path");
 });

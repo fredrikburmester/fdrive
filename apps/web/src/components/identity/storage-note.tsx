@@ -3,8 +3,8 @@ import { FieldDescription } from "@/components/ui/field";
 import { storageNote } from "@/lib/identity/capabilities";
 
 /**
- * One line under a storage choice naming the features it lacks compared to
- * SFTPGo storage, so nobody learns it from a missing button. Renders nothing
+ * One line under a storage choice naming which of search, shares and Office
+ * it lacks, so nobody learns it from a missing button. Renders nothing
  * for storage that lacks none, or while the choice is still unknown.
  */
 export function StorageNote({

@@ -2,11 +2,11 @@ from fdrive_indexer.stats import RootStats, shape_health, shape_stats
 
 
 def test_shape_health_ok() -> None:
-    result = shape_health(["sftpgo"], {"sftpgo": True}, embed_ok=True, schema_version=1)
+    result = shape_health(["files"], {"files": True}, embed_ok=True, schema_version=1)
     assert result == {
         "ok": True,
-        "roots": ["sftpgo"],
-        "watcher": {"sftpgo": True},
+        "roots": ["files"],
+        "watcher": {"files": True},
         "embed_ok": True,
         "schema_version": 1,
     }
@@ -18,12 +18,12 @@ def test_shape_health_not_ok_when_schema_unknown() -> None:
 
 
 def test_shape_stats_default_errors_sample() -> None:
-    root = RootStats(root="sftpgo", counts_by_status={"indexed": 3}, chunks=10, chunks_embedded=8)
+    root = RootStats(root="files", counts_by_status={"indexed": 3}, chunks=10, chunks_embedded=8)
     result = shape_stats([root], thumbnails_count=2, queue_depth=0)
     assert result == {
         "roots": [
             {
-                "root": "sftpgo",
+                "root": "files",
                 "counts_by_status": {"indexed": 3},
                 "chunks": 10,
                 "chunks_embedded": 8,
@@ -40,14 +40,14 @@ def test_shape_stats_default_errors_sample() -> None:
 
 
 def test_shape_stats_with_thumbnail_rebuild() -> None:
-    root = RootStats(root="sftpgo", counts_by_status={"indexed": 1}, chunks=1, chunks_embedded=1)
+    root = RootStats(root="files", counts_by_status={"indexed": 1}, chunks=1, chunks_embedded=1)
     job = {"running": True, "processed": 2, "total": 5, "started_at": "2026-01-01T00:00:00Z", "finished_at": None, "errors": 0}
     result = shape_stats([root], thumbnails_count=0, queue_depth=0, thumbnail_rebuild=job)
     assert result["thumbnail_rebuild"] == job
 
 
 def test_shape_stats_with_image_embeddings() -> None:
-    root = RootStats(root="sftpgo", counts_by_status={"indexed": 1}, chunks=1, chunks_embedded=1)
+    root = RootStats(root="files", counts_by_status={"indexed": 1}, chunks=1, chunks_embedded=1)
     job = {"running": False, "processed": 4, "total": 4, "started_at": None, "finished_at": None, "errors": 0}
     result = shape_stats(
         [root], thumbnails_count=0, queue_depth=0, image_embeddings_count=4, image_embedding_rebuild=job

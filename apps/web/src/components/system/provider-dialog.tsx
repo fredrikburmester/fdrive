@@ -37,7 +37,8 @@ import {
   useAdminUpdateProvider,
 } from "@/lib/api/system-queries";
 import {
-  homeTemplatePreview,
+  hasAddress,
+  LOCAL_FOLDER_NOTE,
   normalizeProviderConfig,
   providerAddressHint,
   providerAddressLock,
@@ -59,7 +60,8 @@ export interface ProviderDialogProps {
  * same fields, generated from the selected type's `configFields`, so a
  * provider type that grows a setting needs no change here. The address is
  * read-only for a row the deployment pins or whose logins are already bound
- * to it, and saving an edit sends only the fields that changed.
+ * to it, and absent for the deployment's own folder, which only takes a
+ * new name. Saving an edit sends only the fields that changed.
  */
 export function ProviderDialog({ provider, types, onClose }: ProviderDialogProps) {
   const editing = provider !== null;
@@ -80,8 +82,10 @@ export function ProviderDialog({ provider, types, onClose }: ProviderDialogProps
   const test = useAdminTestProvider();
 
   const addressLock = provider === null ? null : providerAddressLock(provider);
+  // The local folder has no address and no type anyone can add.
+  const folder = provider !== null && !hasAddress(provider);
   const draft = { label, baseUrl, config };
-  const formError = providerFormError(fields, draft);
+  const formError = providerFormError(fields, draft, !folder);
   const pending = create.isPending || update.isPending;
   const saveError = create.isError
     ? describeApiError(create.error)
@@ -126,38 +130,47 @@ export function ProviderDialog({ provider, types, onClose }: ProviderDialogProps
         <DialogHeader>
           <DialogTitle>{editing ? `Edit ${provider.label}` : "Add provider"}</DialogTitle>
           <DialogDescription>
-            {editing
-              ? "Rename this server or change how it is configured."
-              : "A storage server people can sign in to. Nothing is created on the server itself."}
+            {folder
+              ? `${LOCAL_FOLDER_NOTE} Only its name can change here.`
+              : editing
+                ? "Rename this server or change how it is configured."
+                : "A storage server people can sign in to. Nothing is created on the server itself."}
           </DialogDescription>
         </DialogHeader>
         <div className="flex flex-col gap-4 py-2">
-          <Field>
-            <FieldLabel htmlFor="provider-type">Type</FieldLabel>
-            <Select
-              items={types.map((candidate) => ({ value: candidate.type, label: candidate.label }))}
-              value={type}
-              onValueChange={(value) => changeType(value ?? type)}
-              disabled={editing}
-            >
-              <SelectTrigger id="provider-type">
-                <SelectValue placeholder="Select a type" />
-              </SelectTrigger>
-              <SelectContent>
-                {types.map((candidate) => (
-                  <SelectItem key={candidate.type} value={candidate.type}>
-                    {candidate.label}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            {editing ? (
-              <FieldDescription>
-                A provider's type cannot change after it is added.
-              </FieldDescription>
-            ) : null}
-            <StorageNote capabilities={types.find((entry) => entry.type === type)?.capabilities} />
-          </Field>
+          {folder ? null : (
+            <Field>
+              <FieldLabel htmlFor="provider-type">Type</FieldLabel>
+              <Select
+                items={types.map((candidate) => ({
+                  value: candidate.type,
+                  label: candidate.label,
+                }))}
+                value={type}
+                onValueChange={(value) => changeType(value ?? type)}
+                disabled={editing}
+              >
+                <SelectTrigger id="provider-type">
+                  <SelectValue placeholder="Select a type" />
+                </SelectTrigger>
+                <SelectContent>
+                  {types.map((candidate) => (
+                    <SelectItem key={candidate.type} value={candidate.type}>
+                      {candidate.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              {editing ? (
+                <FieldDescription>
+                  A provider's type cannot change after it is added.
+                </FieldDescription>
+              ) : null}
+              <StorageNote
+                capabilities={types.find((entry) => entry.type === type)?.capabilities}
+              />
+            </Field>
+          )}
           <Field>
             <FieldLabel htmlFor="provider-label">Name</FieldLabel>
             <Input
@@ -172,23 +185,25 @@ export function ProviderDialog({ provider, types, onClose }: ProviderDialogProps
             />
             <FieldDescription>Shown when choosing storage and in Finder.</FieldDescription>
           </Field>
-          <Field>
-            <FieldLabel htmlFor="provider-address">Address</FieldLabel>
-            <Input
-              id="provider-address"
-              value={baseUrl}
-              required
-              readOnly={addressLock !== null}
-              disabled={addressLock !== null}
-              placeholder={addressHint.example}
-              onChange={(event) => {
-                setBaseUrl(event.target.value);
-                setTouched(true);
-                test.reset();
-              }}
-            />
-            <FieldDescription>{addressLock ?? addressHint.description}</FieldDescription>
-          </Field>
+          {folder ? null : (
+            <Field>
+              <FieldLabel htmlFor="provider-address">Address</FieldLabel>
+              <Input
+                id="provider-address"
+                value={baseUrl}
+                required
+                readOnly={addressLock !== null}
+                disabled={addressLock !== null}
+                placeholder={addressHint.example}
+                onChange={(event) => {
+                  setBaseUrl(event.target.value);
+                  setTouched(true);
+                  test.reset();
+                }}
+              />
+              <FieldDescription>{addressLock ?? addressHint.description}</FieldDescription>
+            </Field>
+          )}
           <ProviderFieldInputs
             fields={fields}
             values={config}
@@ -198,9 +213,6 @@ export function ProviderDialog({ provider, types, onClose }: ProviderDialogProps
               setTouched(true);
             }}
           />
-          {fields.some((field) => field.name === "homeTemplate") && config.homeTemplate ? (
-            <FieldDescription>{homeTemplatePreview(config.homeTemplate, "")}</FieldDescription>
-          ) : null}
           {editing ? null : (
             <div className="flex flex-wrap items-center gap-2">
               <Button

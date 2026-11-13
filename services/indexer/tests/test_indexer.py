@@ -48,7 +48,7 @@ def _make_config(
     image_embed_url: str = "",
 ) -> Config:
     monkeypatch.setenv("DATABASE_URL", database_url)
-    monkeypatch.setenv("INDEX_ROOTS", "sftpgo=/unused")
+    monkeypatch.setenv("INDEX_ROOTS", "files=/unused")
     monkeypatch.setenv("EMBED_URL", embed_url)
     monkeypatch.setenv("INDEX_WORKERS", "2")
     if image_embed_url:
@@ -266,7 +266,7 @@ def test_path_locks_keep_waiters_on_same_lock_until_all_finish() -> None:
 
 def test_process_file_indexes_new_text_file(postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     cfg = _make_config(monkeypatch, postgres_dsn)
-    ctx = _make_context(cfg, "sftpgo", str(tmp_path))
+    ctx = _make_context(cfg, "files", str(tmp_path))
     monkeypatch.setattr(indexer, "generate_thumbnails", lambda *a, **k: [])
     monkeypatch.setattr(indexer, "embed_passages", lambda pieces, url, batch: [[0.1] * 384 for _ in pieces])
 
@@ -295,7 +295,7 @@ def test_process_file_rehashes_changed_and_pending_rows(
     metadata_changed: bool,
 ) -> None:
     cfg = _make_config(monkeypatch, postgres_dsn)
-    ctx = _make_context(cfg, "sftpgo", str(tmp_path))
+    ctx = _make_context(cfg, "files", str(tmp_path))
     path = tmp_path / "a.txt"
     path.write_text("hello")
     st = os.stat(path)
@@ -315,7 +315,7 @@ def test_process_file_rehashes_changed_and_pending_rows(
 
 def test_process_file_unchanged_returns_false(postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     cfg = _make_config(monkeypatch, postgres_dsn)
-    ctx = _make_context(cfg, "sftpgo", str(tmp_path))
+    ctx = _make_context(cfg, "files", str(tmp_path))
     monkeypatch.setattr(indexer, "generate_thumbnails", lambda *a, **k: [])
     monkeypatch.setattr(indexer, "embed_passages", lambda pieces, url, batch: [[0.1] * 384 for _ in pieces])
 
@@ -328,7 +328,7 @@ def test_process_file_unchanged_returns_false(postgres_dsn: str, monkeypatch: py
 
 def test_process_file_embed_failure_marks_partial(postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     cfg = _make_config(monkeypatch, postgres_dsn)
-    ctx = _make_context(cfg, "sftpgo", str(tmp_path))
+    ctx = _make_context(cfg, "files", str(tmp_path))
     monkeypatch.setattr(indexer, "generate_thumbnails", lambda *a, **k: [])
 
     def boom(pieces: list[str], url: str, batch: int) -> list[list[float]]:
@@ -348,7 +348,7 @@ def test_process_file_stops_probing_an_unreachable_embed_backend(
     """A missing backend is a service condition: the first file reports it, the
     rest keep their FTS chunks without opening another socket."""
     cfg = _make_config(monkeypatch, postgres_dsn)
-    ctx = _make_context(cfg, "sftpgo", str(tmp_path))
+    ctx = _make_context(cfg, "files", str(tmp_path))
     monkeypatch.setattr(indexer, "generate_thumbnails", lambda *a, **k: [])
     calls: list[str] = []
     logs: list[str] = []
@@ -375,7 +375,7 @@ def test_process_file_resumes_embedding_once_the_pause_expires(
 ) -> None:
     now = 0.0
     cfg = _make_config(monkeypatch, postgres_dsn)
-    ctx = _make_context(cfg, "sftpgo", str(tmp_path))
+    ctx = _make_context(cfg, "files", str(tmp_path))
     ctx.embed_backoff = EmbedBackoff(pause_seconds=60, clock=lambda: now)
     monkeypatch.setattr(indexer, "generate_thumbnails", lambda *a, **k: [])
     logs: list[str] = []
@@ -408,7 +408,7 @@ def test_process_file_keeps_reporting_per_file_when_the_backend_answers(
 ) -> None:
     """A backend that rejects one payload is not an outage; every file is tried."""
     cfg = _make_config(monkeypatch, postgres_dsn)
-    ctx = _make_context(cfg, "sftpgo", str(tmp_path))
+    ctx = _make_context(cfg, "files", str(tmp_path))
     monkeypatch.setattr(indexer, "generate_thumbnails", lambda *a, **k: [])
     calls: list[str] = []
     monkeypatch.setattr(indexer, "log", lambda _m: None)
@@ -432,7 +432,7 @@ def test_embed_missing_leaves_the_row_alone_while_the_backend_is_down(
     postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     cfg = _make_config(monkeypatch, postgres_dsn)
-    ctx = _make_context(cfg, "sftpgo", str(tmp_path))
+    ctx = _make_context(cfg, "files", str(tmp_path))
     path = tmp_path / "a.txt"
     path.write_text("hello")
     st = os.stat(path)
@@ -455,7 +455,7 @@ def test_embed_missing_leaves_the_row_alone_while_the_backend_is_down(
 
 def test_process_file_error_status(postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     cfg = _make_config(monkeypatch, postgres_dsn)
-    ctx = _make_context(cfg, "sftpgo", str(tmp_path))
+    ctx = _make_context(cfg, "files", str(tmp_path))
     monkeypatch.setattr(indexer, "generate_thumbnails", lambda *a, **k: [])
     p = tmp_path / "a.pdf"
     p.write_text("hello")
@@ -466,11 +466,11 @@ def test_process_file_error_status(postgres_dsn: str, monkeypatch: pytest.Monkey
 
 def test_process_file_excluded_by_glob(postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     cfg = _make_config(monkeypatch, postgres_dsn)
-    ctx = _make_context(cfg, "sftpgo", str(tmp_path))
+    ctx = _make_context(cfg, "files", str(tmp_path))
     ctx.settings = Settings(
         scan_interval_seconds=900,
         workers=2,
-        text_exclude_globs=("sftpgo/a.txt",),
+        text_exclude_globs=("files/a.txt",),
         ocr_image_globs=(),
         tesseract_langs="eng",
     )
@@ -484,7 +484,7 @@ def test_process_file_excluded_by_glob(postgres_dsn: str, monkeypatch: pytest.Mo
 
 def test_process_file_non_textual_extension(postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     cfg = _make_config(monkeypatch, postgres_dsn)
-    ctx = _make_context(cfg, "sftpgo", str(tmp_path))
+    ctx = _make_context(cfg, "files", str(tmp_path))
     monkeypatch.setattr(indexer, "generate_thumbnails", lambda *a, **k: [])
     p = tmp_path / "a.zip"
     p.write_bytes(b"PK")
@@ -495,7 +495,7 @@ def test_process_file_non_textual_extension(postgres_dsn: str, monkeypatch: pyte
 
 def test_process_file_generates_thumbnails(postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     cfg = _make_config(monkeypatch, postgres_dsn)
-    ctx = _make_context(cfg, "sftpgo", str(tmp_path))
+    ctx = _make_context(cfg, "files", str(tmp_path))
     monkeypatch.setattr(indexer, "generate_thumbnails", lambda *a, **k: [
         (size, f"ab/abc.{size}.webp", size, size // 2) for size in (256, 1024)
     ])
@@ -509,7 +509,7 @@ def test_semantic_disabled_indexes_text_without_calling_embed(
     postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     cfg = _make_config(monkeypatch, postgres_dsn)
-    ctx = _make_context(cfg, "sftpgo", str(tmp_path))
+    ctx = _make_context(cfg, "files", str(tmp_path))
     ctx.features = FeatureConfiguration(3, FeatureValues(False, True, False, False, False, False))
     monkeypatch.setattr(indexer, "generate_thumbnails", lambda *a, **k: [])
     monkeypatch.setattr(indexer, "embed_passages", lambda *_a, **_k: pytest.fail("embed must be disabled"))
@@ -523,7 +523,7 @@ def test_image_search_generates_internal_thumbnails_when_presentation_is_off(
     postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     cfg = _make_config(monkeypatch, postgres_dsn)
-    ctx = _make_context(cfg, "sftpgo", str(tmp_path))
+    ctx = _make_context(cfg, "files", str(tmp_path))
     ctx.features = FeatureConfiguration(3, FeatureValues(False, False, False, False, True, False))
     generated: list[str] = []
     monkeypatch.setattr(indexer, "generate_thumbnails", lambda *a, **k: generated.append("yes") or [])
@@ -537,7 +537,7 @@ def test_all_features_disabled_does_not_admit_file_processing(
     postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     cfg = _make_config(monkeypatch, postgres_dsn)
-    ctx = _make_context(cfg, "sftpgo", str(tmp_path))
+    ctx = _make_context(cfg, "files", str(tmp_path))
     ctx.features = FeatureConfiguration(3, FeatureValues(False, False, False, False, False, False))
     path = tmp_path / "a.txt"
     path.write_text("untouched")
@@ -547,7 +547,7 @@ def test_all_features_disabled_does_not_admit_file_processing(
 
 def test_cancelled_scan_never_sweeps_unseen_paths(postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     cfg = _make_config(monkeypatch, postgres_dsn)
-    ctx = _make_context(cfg, "sftpgo", str(tmp_path))
+    ctx = _make_context(cfg, "files", str(tmp_path))
     ctx.features = FeatureConfiguration(3, FeatureValues(False, True, False, False, False, False))
     first = tmp_path / "first.txt"
     second = tmp_path / "second.txt"
@@ -574,7 +574,7 @@ def test_enabling_thumbnails_backfills_unchanged_files_without_reextracting(
     postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     cfg = _make_config(monkeypatch, postgres_dsn)
-    ctx = _make_context(cfg, "sftpgo", str(tmp_path))
+    ctx = _make_context(cfg, "files", str(tmp_path))
     path = tmp_path / "a.jpg"
     path.write_bytes(b"image")
     st = os.stat(path)
@@ -594,7 +594,7 @@ def test_enabling_thumbnails_ignores_unchanged_non_media(
     postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     cfg = _make_config(monkeypatch, postgres_dsn)
-    ctx = _make_context(cfg, "sftpgo", str(tmp_path))
+    ctx = _make_context(cfg, "files", str(tmp_path))
     path = tmp_path / "archive.bin"
     path.write_bytes(b"binary")
     st = os.stat(path)
@@ -617,7 +617,7 @@ def test_failed_media_backfill_remains_pending_for_unchanged_file(
     postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     cfg = _make_config(monkeypatch, postgres_dsn)
-    ctx = _make_context(cfg, "sftpgo", str(tmp_path))
+    ctx = _make_context(cfg, "files", str(tmp_path))
     path = tmp_path / "a.jpg"
     path.write_bytes(b"image")
     st = os.stat(path)
@@ -645,7 +645,7 @@ def test_enabling_text_reprocesses_unchanged_disabled_row(
     postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     cfg = _make_config(monkeypatch, postgres_dsn)
-    ctx = _make_context(cfg, "sftpgo", str(tmp_path))
+    ctx = _make_context(cfg, "files", str(tmp_path))
     path = tmp_path / "a.txt"
     path.write_text("same bytes")
     st = os.stat(path)
@@ -666,7 +666,7 @@ def test_partial_row_retries_embeddings_without_reextracting(
     postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     cfg = _make_config(monkeypatch, postgres_dsn)
-    ctx = _make_context(cfg, "sftpgo", str(tmp_path))
+    ctx = _make_context(cfg, "files", str(tmp_path))
     path = tmp_path / "a.txt"
     path.write_text("already indexed")
     st = os.stat(path)
@@ -687,7 +687,7 @@ def test_search_ocr_reprocesses_unchanged_image_dir_exclusion(
     postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     cfg = _make_config(monkeypatch, postgres_dsn)
-    ctx = _make_context(cfg, "sftpgo", str(tmp_path))
+    ctx = _make_context(cfg, "files", str(tmp_path))
     path = tmp_path / "a.png"
     path.write_bytes(b"image")
     st = os.stat(path)
@@ -706,7 +706,7 @@ def test_media_derivative_backfill_survives_restart_without_transition(
     postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     cfg = _make_config(monkeypatch, postgres_dsn)
-    ctx = _make_context(cfg, "sftpgo", str(tmp_path))
+    ctx = _make_context(cfg, "files", str(tmp_path))
     path = tmp_path / "a.jpg"
     path.write_bytes(b"image")
     st = os.stat(path)
@@ -728,7 +728,7 @@ def test_over_budget_media_without_thumbnail_is_not_retried(
 ) -> None:
     cfg = _make_config(monkeypatch, postgres_dsn)
     cfg.thumb_max_bytes = 1
-    ctx = _make_context(cfg, "sftpgo", str(tmp_path))
+    ctx = _make_context(cfg, "files", str(tmp_path))
     path = tmp_path / "large.jpg"
     path.write_bytes(b"image")
     st = os.stat(path)
@@ -747,7 +747,7 @@ def test_process_file_thumbnail_failure_does_not_break_indexing(
     postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     cfg = _make_config(monkeypatch, postgres_dsn)
-    ctx = _make_context(cfg, "sftpgo", str(tmp_path))
+    ctx = _make_context(cfg, "files", str(tmp_path))
 
     def boom(*a: object, **k: object) -> list[object]:
         raise RuntimeError("thumbnail generator exploded")
@@ -768,7 +768,7 @@ _HEALTHY = ImageEmbedHealth(status="ok", model="model-a", dim=1024, device="cpu"
 
 def test_embed_thumbnail_noop_when_not_configured(postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     cfg = _make_config(monkeypatch, postgres_dsn)
-    ctx = _make_context(cfg, "sftpgo", str(tmp_path))
+    ctx = _make_context(cfg, "files", str(tmp_path))
     assert ctx.cfg.image_embed_url == ""
 
     def boom(*a: object, **k: object) -> object:
@@ -783,7 +783,7 @@ def test_embed_thumbnail_skips_when_dimension_guard_fails(
     postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     cfg = _make_config(monkeypatch, postgres_dsn, image_embed_url="http://image-embed.invalid")
-    ctx = _make_context(cfg, "sftpgo", str(tmp_path))
+    ctx = _make_context(cfg, "files", str(tmp_path))
     monkeypatch.setattr(indexer, "image_embed_health", lambda url: None)
 
     def boom(*a: object, **k: object) -> object:
@@ -796,7 +796,7 @@ def test_embed_thumbnail_skips_when_dimension_guard_fails(
 
 def test_embed_thumbnail_missing_file_is_noop(postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     cfg = _make_config(monkeypatch, postgres_dsn, image_embed_url="http://image-embed.invalid")
-    ctx = _make_context(cfg, "sftpgo", str(tmp_path))
+    ctx = _make_context(cfg, "files", str(tmp_path))
     monkeypatch.setattr(indexer, "image_embed_health", lambda url: _HEALTHY)
     logged: list[str] = []
     monkeypatch.setattr(indexer, "log", logged.append)
@@ -816,7 +816,7 @@ def _write_thumbnail(cfg: Config, sha256: str) -> None:
 def test_embed_thumbnail_embeds_and_upserts(postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setenv("THUMBS_DIR", str(tmp_path / "thumbs"))
     cfg = _make_config(monkeypatch, postgres_dsn, image_embed_url="http://image-embed.invalid")
-    ctx = _make_context(cfg, "sftpgo", str(tmp_path))
+    ctx = _make_context(cfg, "files", str(tmp_path))
     _write_thumbnail(cfg, "sha-a")
     monkeypatch.setattr(indexer, "image_embed_health", lambda url: _HEALTHY)
 
@@ -838,7 +838,7 @@ def test_embed_thumbnail_no_embeddings_returned_is_noop(
 ) -> None:
     monkeypatch.setenv("THUMBS_DIR", str(tmp_path / "thumbs"))
     cfg = _make_config(monkeypatch, postgres_dsn, image_embed_url="http://image-embed.invalid")
-    ctx = _make_context(cfg, "sftpgo", str(tmp_path))
+    ctx = _make_context(cfg, "files", str(tmp_path))
     _write_thumbnail(cfg, "sha-a")
     monkeypatch.setattr(indexer, "image_embed_health", lambda url: _HEALTHY)
     monkeypatch.setattr(indexer, "embed_images", lambda images, url, batch: ([], "model-a"))
@@ -851,7 +851,7 @@ def test_embed_thumbnail_skips_when_current_model_already_present(
 ) -> None:
     monkeypatch.setenv("THUMBS_DIR", str(tmp_path / "thumbs"))
     cfg = _make_config(monkeypatch, postgres_dsn, image_embed_url="http://image-embed.invalid")
-    ctx = _make_context(cfg, "sftpgo", str(tmp_path))
+    ctx = _make_context(cfg, "files", str(tmp_path))
     _write_thumbnail(cfg, "sha-a")
     db.upsert_image_embedding(ctx.conn(), "sha-a", "model-a", [0.5] * 1024)
     monkeypatch.setattr(indexer, "image_embed_health", lambda url: _HEALTHY)
@@ -866,7 +866,7 @@ def test_embed_thumbnail_skips_when_current_model_already_present(
 def test_embed_thumbnail_reembeds_stale_model(postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setenv("THUMBS_DIR", str(tmp_path / "thumbs"))
     cfg = _make_config(monkeypatch, postgres_dsn, image_embed_url="http://image-embed.invalid")
-    ctx = _make_context(cfg, "sftpgo", str(tmp_path))
+    ctx = _make_context(cfg, "files", str(tmp_path))
     _write_thumbnail(cfg, "sha-a")
     db.upsert_image_embedding(ctx.conn(), "sha-a", "model-old", [0.5] * 1024)
     monkeypatch.setattr(indexer, "image_embed_health", lambda url: _HEALTHY)
@@ -878,7 +878,7 @@ def test_embed_thumbnail_reembeds_stale_model(postgres_dsn: str, monkeypatch: py
 def test_process_file_embeds_image_thumbnail(postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setenv("THUMBS_DIR", str(tmp_path / "thumbs"))
     cfg = _make_config(monkeypatch, postgres_dsn, image_embed_url="http://image-embed.invalid")
-    ctx = _make_context(cfg, "sftpgo", str(tmp_path))
+    ctx = _make_context(cfg, "files", str(tmp_path))
     monkeypatch.setattr(indexer, "generate_thumbnails", lambda *a, **k: [])
     monkeypatch.setattr(indexer, "image_embed_health", lambda url: _HEALTHY)
     monkeypatch.setattr(indexer, "embed_images", lambda images, url, batch: ([[0.1] * 1024], "model-a"))
@@ -896,7 +896,7 @@ def test_process_file_non_image_never_calls_image_embed_health(
     postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     cfg = _make_config(monkeypatch, postgres_dsn, image_embed_url="http://image-embed.invalid")
-    ctx = _make_context(cfg, "sftpgo", str(tmp_path))
+    ctx = _make_context(cfg, "files", str(tmp_path))
     monkeypatch.setattr(indexer, "generate_thumbnails", lambda *a, **k: [])
     monkeypatch.setattr(indexer, "embed_passages", lambda pieces, url, batch: [[0.1] * 384 for _ in pieces])
 
@@ -913,7 +913,7 @@ def test_process_file_image_embed_failure_does_not_break_indexing(
     postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     cfg = _make_config(monkeypatch, postgres_dsn, image_embed_url="http://image-embed.invalid")
-    ctx = _make_context(cfg, "sftpgo", str(tmp_path))
+    ctx = _make_context(cfg, "files", str(tmp_path))
     monkeypatch.setattr(indexer, "generate_thumbnails", lambda *a, **k: [])
 
     def boom(ctx: indexer.RootContext, sha256: str) -> None:
@@ -930,7 +930,7 @@ def test_embed_missing_no_missing_chunks_still_marks_indexed(
     postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     cfg = _make_config(monkeypatch, postgres_dsn)
-    ctx = _make_context(cfg, "sftpgo", str(tmp_path))
+    ctx = _make_context(cfg, "files", str(tmp_path))
     db.upsert_file(ctx.conn(), ctx.root_id, "a.txt", "a.txt", ".txt", 1, 1, "sha1", None)
     called = False
 
@@ -947,7 +947,7 @@ def test_embed_missing_no_missing_chunks_still_marks_indexed(
 
 def test_watch_index_delegates_to_safe_process(postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     cfg = _make_config(monkeypatch, postgres_dsn)
-    ctx = _make_context(cfg, "sftpgo", str(tmp_path))
+    ctx = _make_context(cfg, "files", str(tmp_path))
     monkeypatch.setattr(indexer, "generate_thumbnails", lambda *a, **k: [])
     monkeypatch.setattr(indexer, "embed_passages", lambda pieces, url, batch: [[0.1] * 384 for _ in pieces])
     p = tmp_path / "a.txt"
@@ -959,7 +959,7 @@ def test_safe_process_error_when_mark_file_error_also_fails(
     postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     cfg = _make_config(monkeypatch, postgres_dsn)
-    ctx = _make_context(cfg, "sftpgo", str(tmp_path))
+    ctx = _make_context(cfg, "files", str(tmp_path))
 
     def boom(ctx_: object, abs_path: str, rel_path: str, st: object) -> bool:
         raise RuntimeError("kaboom")
@@ -980,7 +980,7 @@ def test_start_watcher_success_path(postgres_dsn: str, monkeypatch: pytest.Monke
     import types
 
     cfg = _make_config(monkeypatch, postgres_dsn)
-    ctx = _make_context(cfg, "sftpgo", str(tmp_path))
+    ctx = _make_context(cfg, "files", str(tmp_path))
 
     class FakeWatcher:
         def __init__(
@@ -1005,7 +1005,7 @@ def test_scan_once_detects_race_with_watcher_as_unchanged(
     postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     cfg = _make_config(monkeypatch, postgres_dsn)
-    ctx = _make_context(cfg, "sftpgo", str(tmp_path))
+    ctx = _make_context(cfg, "files", str(tmp_path))
     monkeypatch.setattr(indexer, "generate_thumbnails", lambda *a, **k: [])
 
     p = tmp_path / "a.txt"
@@ -1028,7 +1028,7 @@ def test_scan_once_detects_race_with_watcher_as_unchanged(
 
 def test_scan_once_flushes_pending_queue_when_full(postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     cfg = _make_config(monkeypatch, postgres_dsn)
-    ctx = _make_context(cfg, "sftpgo", str(tmp_path))  # INDEX_WORKERS=2 -> flush threshold is 16
+    ctx = _make_context(cfg, "files", str(tmp_path))  # INDEX_WORKERS=2 -> flush threshold is 16
     monkeypatch.setattr(indexer, "generate_thumbnails", lambda *a, **k: [])
     monkeypatch.setattr(indexer, "embed_passages", lambda pieces, url, batch: [[0.1] * 384 for _ in pieces])
     for i in range(20):
@@ -1041,7 +1041,7 @@ def test_scan_once_flushes_pending_queue_when_full(postgres_dsn: str, monkeypatc
 def test_scan_keeps_other_workers_busy_behind_a_slow_file(
     postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    ctx = _make_context(_make_config(monkeypatch, postgres_dsn), "sftpgo", str(tmp_path))  # 2 workers, 16 queued jobs
+    ctx = _make_context(_make_config(monkeypatch, postgres_dsn), "files", str(tmp_path))  # 2 workers, 16 queued jobs
     for i in range(20):
         (tmp_path / f"f{i:02d}.txt").write_text("hello")
     others_done = threading.Event()
@@ -1069,7 +1069,7 @@ def test_scan_keeps_other_workers_busy_behind_a_slow_file(
 def test_scan_reports_its_total_while_every_worker_is_busy(
     postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    ctx = _make_context(_make_config(monkeypatch, postgres_dsn), "sftpgo", str(tmp_path))  # 2 workers
+    ctx = _make_context(_make_config(monkeypatch, postgres_dsn), "files", str(tmp_path))  # 2 workers
     for i in range(40):
         (tmp_path / f"f{i:02d}.txt").write_text("hello")
 
@@ -1094,7 +1094,7 @@ def test_scan_reports_its_total_while_every_worker_is_busy(
 def test_scan_waits_for_workers_when_its_backlog_is_full(
     postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    ctx = _make_context(_make_config(monkeypatch, postgres_dsn), "sftpgo", str(tmp_path))
+    ctx = _make_context(_make_config(monkeypatch, postgres_dsn), "files", str(tmp_path))
     monkeypatch.setattr(indexer, "SCAN_BACKLOG_LIMIT", 2)
     for i in range(40):
         (tmp_path / f"f{i:02d}.txt").write_text("hello")
@@ -1107,7 +1107,7 @@ def test_scan_waits_for_workers_when_its_backlog_is_full(
 def test_rescan_leaves_unchanged_disabled_rows_alone_until_their_feature_is_enabled(
     postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, status: str
 ) -> None:
-    ctx = _make_context(_make_config(monkeypatch, postgres_dsn), "sftpgo", str(tmp_path))
+    ctx = _make_context(_make_config(monkeypatch, postgres_dsn), "files", str(tmp_path))
     path = tmp_path / "photo.jpg"
     path.write_bytes(b"image")
     st = path.stat()
@@ -1142,7 +1142,7 @@ class _TextLessExtractor:
 def _text_less_scan_context(
     postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, search_ocr: bool
 ) -> tuple[indexer.RootContext, _TextLessExtractor]:
-    ctx = _make_context(_make_config(monkeypatch, postgres_dsn), "sftpgo", str(tmp_path))
+    ctx = _make_context(_make_config(monkeypatch, postgres_dsn), "files", str(tmp_path))
     extractor = _TextLessExtractor(ctx.name)
     ctx.extractor = extractor  # type: ignore[assignment]
     ctx.features = FeatureConfiguration(7, FeatureValues(False, True, search_ocr, False, False, False))
@@ -1203,7 +1203,7 @@ def test_scan_classifies_unchanged_media_from_the_manifest(
     cfg = _make_config(monkeypatch, postgres_dsn, image_embed_url="http://image-embed.invalid")
     root = tmp_path / "root"
     root.mkdir()
-    ctx = _make_context(cfg, "sftpgo", str(root))
+    ctx = _make_context(cfg, "files", str(root))
     for name, sha in (("embedded.jpg", "sha-embedded"), ("pending.jpg", "sha-pending")):
         path = root / name
         path.write_bytes(name.encode())
@@ -1236,7 +1236,7 @@ def _image_scan_context(
     root.mkdir()
     for name in names:
         (root / name).write_bytes(name.encode())
-    ctx = _make_context(cfg, "sftpgo", str(root))
+    ctx = _make_context(cfg, "files", str(root))
     ctx.features = FeatureConfiguration(7, FeatureValues(True, False, False, False, True, False))
     monkeypatch.setattr(indexer, "image_embed_health", lambda _url: _HEALTHY)
     return ctx
@@ -1382,7 +1382,7 @@ def test_pending_row_is_reprocessed_even_while_its_thumbnail_fails(
 def test_image_embedding_stage_survives_errors_and_drops_queued_work_when_abandoned(
     postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    ctx = _make_context(_make_config(monkeypatch, postgres_dsn), "sftpgo", str(tmp_path))
+    ctx = _make_context(_make_config(monkeypatch, postgres_dsn), "files", str(tmp_path))
     release = threading.Event()
     embedded: list[str] = []
 
@@ -1470,7 +1470,7 @@ def test_image_embed_health_is_reused_across_images_until_it_expires(
 ) -> None:
     monkeypatch.setenv("THUMBS_DIR", str(tmp_path / "thumbs"))
     cfg = _make_config(monkeypatch, postgres_dsn, image_embed_url="http://image-embed.invalid")
-    ctx = _make_context(cfg, "sftpgo", str(tmp_path))
+    ctx = _make_context(cfg, "files", str(tmp_path))
     probes: list[str] = []
     monkeypatch.setattr(indexer, "image_embed_health", lambda url: probes.append(url) or _HEALTHY)
     monkeypatch.setattr(indexer, "embed_images", lambda *_a: ([[0.1] * 1024], "model-a"))
@@ -1488,7 +1488,7 @@ def test_image_embed_health_is_reused_across_images_until_it_expires(
 def test_unanswered_health_probe_keeps_a_healthy_answer_but_reported_problems_win(
     postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    ctx = _make_context(_make_config(monkeypatch, postgres_dsn, image_embed_url="http://image-embed.invalid"), "sftpgo",
+    ctx = _make_context(_make_config(monkeypatch, postgres_dsn, image_embed_url="http://image-embed.invalid"), "files",
                         str(tmp_path))
     ctx.image_embed_health_seconds = 0
     loading = ImageEmbedHealth(status="loading", model="model-a", dim=None, device="cpu")
@@ -1504,7 +1504,7 @@ def test_busy_sidecar_probe_does_not_pause_image_embedding(
 ) -> None:
     monkeypatch.setenv("THUMBS_DIR", str(tmp_path / "thumbs"))
     cfg = _make_config(monkeypatch, postgres_dsn, image_embed_url="http://image-embed.invalid")
-    ctx = _make_context(cfg, "sftpgo", str(tmp_path))
+    ctx = _make_context(cfg, "files", str(tmp_path))
     ctx.image_embed_health_seconds = 0
     answers = iter([_HEALTHY, None])
     monkeypatch.setattr(indexer, "image_embed_health", lambda _url: next(answers))
@@ -1517,7 +1517,7 @@ def test_busy_sidecar_probe_does_not_pause_image_embedding(
 
 def test_embed_missing_fills_partial_chunks(postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     cfg = _make_config(monkeypatch, postgres_dsn)
-    ctx = _make_context(cfg, "sftpgo", str(tmp_path))
+    ctx = _make_context(cfg, "files", str(tmp_path))
     file_id = db.upsert_file(ctx.conn(), ctx.root_id, "a.txt", "a.txt", ".txt", 1, 1, "sha1", None)
     db.insert_chunks(ctx.conn(), file_id, ["hello"], [None])
     db.update_file_status(ctx.conn(), file_id, "partial", 5, "embed:RuntimeError")
@@ -1530,7 +1530,7 @@ def test_embed_missing_fills_partial_chunks(postgres_dsn: str, monkeypatch: pyte
 
 def test_safe_process_indexed(postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     cfg = _make_config(monkeypatch, postgres_dsn)
-    ctx = _make_context(cfg, "sftpgo", str(tmp_path))
+    ctx = _make_context(cfg, "files", str(tmp_path))
     monkeypatch.setattr(indexer, "generate_thumbnails", lambda *a, **k: [])
     monkeypatch.setattr(indexer, "embed_passages", lambda pieces, url, batch: [[0.1] * 384 for _ in pieces])
     p = tmp_path / "a.txt"
@@ -1543,7 +1543,7 @@ def test_safe_process_catches_exception_and_marks_error(
     postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     cfg = _make_config(monkeypatch, postgres_dsn)
-    ctx = _make_context(cfg, "sftpgo", str(tmp_path))
+    ctx = _make_context(cfg, "files", str(tmp_path))
 
     db.upsert_file(ctx.conn(), ctx.root_id, "a.txt", "a.txt", ".txt", 1, 1, "sha1", None)
 
@@ -1561,7 +1561,7 @@ def test_safe_process_catches_exception_and_marks_error(
 
 def test_emit_event_failure_is_swallowed(postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     cfg = _make_config(monkeypatch, postgres_dsn)
-    ctx = _make_context(cfg, "sftpgo", str(tmp_path))
+    ctx = _make_context(cfg, "files", str(tmp_path))
 
     def boom(conn: object, root_id: int, event: object) -> None:
         raise RuntimeError("notify failed")
@@ -1574,7 +1574,7 @@ def test_only_a_new_or_changed_version_emits_an_event(
     postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     cfg = _make_config(monkeypatch, postgres_dsn)
-    ctx = _make_context(cfg, "sftpgo", str(tmp_path))
+    ctx = _make_context(cfg, "files", str(tmp_path))
     ctx.features = FeatureConfiguration(3, FeatureValues(False, True, False, False, False, False))
     path = tmp_path / "a.txt"
     path.write_text("first")
@@ -1605,7 +1605,7 @@ def test_watch_mark_deleted_emits_event_only_when_rows_affected(
     postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     cfg = _make_config(monkeypatch, postgres_dsn)
-    ctx = _make_context(cfg, "sftpgo", str(tmp_path))
+    ctx = _make_context(cfg, "files", str(tmp_path))
     assert indexer.watch_mark_deleted(ctx, "missing.txt", False) == 0
     db.upsert_file(ctx.conn(), ctx.root_id, "a.txt", "a.txt", ".txt", 1, 1, "sha1", None)
     assert indexer.watch_mark_deleted(ctx, "a.txt", False) == 1
@@ -1613,7 +1613,7 @@ def test_watch_mark_deleted_emits_event_only_when_rows_affected(
 
 def test_watch_rename_extension_change_marks_deleted(postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     cfg = _make_config(monkeypatch, postgres_dsn)
-    ctx = _make_context(cfg, "sftpgo", str(tmp_path))
+    ctx = _make_context(cfg, "files", str(tmp_path))
     db.upsert_file(ctx.conn(), ctx.root_id, "a.txt", "a.txt", ".txt", 1, 1, "sha1", None)
     moved = indexer.watch_rename(ctx, "a.txt", "a.pdf", False)
     assert moved == 0
@@ -1623,7 +1623,7 @@ def test_watch_rename_extension_change_marks_deleted(postgres_dsn: str, monkeypa
 
 def test_watch_rename_same_extension_moves_row(postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     cfg = _make_config(monkeypatch, postgres_dsn)
-    ctx = _make_context(cfg, "sftpgo", str(tmp_path))
+    ctx = _make_context(cfg, "files", str(tmp_path))
     db.upsert_file(ctx.conn(), ctx.root_id, "a.txt", "a.txt", ".txt", 1, 1, "sha1", None)
     moved = indexer.watch_rename(ctx, "a.txt", "b.txt", False)
     assert moved == 1
@@ -1634,14 +1634,14 @@ def test_watch_rename_same_extension_moves_row(postgres_dsn: str, monkeypatch: p
 
 def test_watch_rename_no_existing_row_returns_zero(postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     cfg = _make_config(monkeypatch, postgres_dsn)
-    ctx = _make_context(cfg, "sftpgo", str(tmp_path))
+    ctx = _make_context(cfg, "files", str(tmp_path))
     assert indexer.watch_rename(ctx, "missing.txt", "new.txt", False) == 0
 
 
 def test_start_watcher_disabled_returns_none(postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     cfg = _make_config(monkeypatch, postgres_dsn)
     cfg.watch = False
-    ctx = _make_context(cfg, "sftpgo", str(tmp_path))
+    ctx = _make_context(cfg, "files", str(tmp_path))
     assert indexer.start_watcher(ctx, workers=1, debounce=0.1) is None
 
 
@@ -1650,7 +1650,7 @@ def test_start_watcher_import_failure_returns_none(postgres_dsn: str, monkeypatc
     import types
 
     cfg = _make_config(monkeypatch, postgres_dsn)
-    ctx = _make_context(cfg, "sftpgo", str(tmp_path))
+    ctx = _make_context(cfg, "files", str(tmp_path))
     # On a non-Linux machine, importing the real watcher module raises at import
     # time (no libc.so.6). To make this deterministic on any platform (including
     # the Linux CI runner and the in-Docker test run, where inotify is really
@@ -1665,7 +1665,7 @@ def test_start_watcher_import_failure_returns_none(postgres_dsn: str, monkeypatc
 
 def test_scan_once_indexes_new_and_sweeps_vanished(postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     cfg = _make_config(monkeypatch, postgres_dsn)
-    ctx = _make_context(cfg, "sftpgo", str(tmp_path))
+    ctx = _make_context(cfg, "files", str(tmp_path))
     monkeypatch.setattr(indexer, "generate_thumbnails", lambda *a, **k: [])
     monkeypatch.setattr(indexer, "embed_passages", lambda pieces, url, batch: [[0.1] * 384 for _ in pieces])
 
@@ -1689,7 +1689,7 @@ def test_scan_sweeps_only_live_rows_its_walk_did_not_find(
     postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     cfg = _make_config(monkeypatch, postgres_dsn)
-    ctx = _make_context(cfg, "sftpgo", str(tmp_path))
+    ctx = _make_context(cfg, "files", str(tmp_path))
     monkeypatch.setattr(indexer, "generate_thumbnails", lambda *a, **k: [])
     kept = tmp_path / "kept.txt"
     kept.write_text("still here")
@@ -1717,7 +1717,7 @@ def test_scan_once_skips_already_indexed_unchanged_file(
     postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     cfg = _make_config(monkeypatch, postgres_dsn)
-    ctx = _make_context(cfg, "sftpgo", str(tmp_path))
+    ctx = _make_context(cfg, "files", str(tmp_path))
     monkeypatch.setattr(indexer, "generate_thumbnails", lambda *a, **k: [])
 
     p = tmp_path / "a.txt"
@@ -1734,7 +1734,7 @@ def test_scan_once_skips_already_indexed_unchanged_file(
 
 def test_scan_once_retries_partial_embeddings(postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     cfg = _make_config(monkeypatch, postgres_dsn)
-    ctx = _make_context(cfg, "sftpgo", str(tmp_path))
+    ctx = _make_context(cfg, "files", str(tmp_path))
     monkeypatch.setattr(indexer, "generate_thumbnails", lambda *a, **k: [])
 
     p = tmp_path / "a.txt"
@@ -1753,7 +1753,7 @@ def test_scan_once_retries_partial_embeddings(postgres_dsn: str, monkeypatch: py
 
 def test_scan_once_counts_errors(postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     cfg = _make_config(monkeypatch, postgres_dsn)
-    ctx = _make_context(cfg, "sftpgo", str(tmp_path))
+    ctx = _make_context(cfg, "files", str(tmp_path))
     monkeypatch.setattr(indexer, "generate_thumbnails", lambda *a, **k: [])
     (tmp_path / "a.pdf").write_text("hello")
     result = indexer.scan_once(ctx)
@@ -1764,7 +1764,7 @@ def test_scan_once_counts_errors(postgres_dsn: str, monkeypatch: pytest.MonkeyPa
 
 def test_scan_once_embed_retry_failure_is_logged(postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     cfg = _make_config(monkeypatch, postgres_dsn)
-    ctx = _make_context(cfg, "sftpgo", str(tmp_path))
+    ctx = _make_context(cfg, "files", str(tmp_path))
     monkeypatch.setattr(indexer, "generate_thumbnails", lambda *a, **k: [])
 
     p = tmp_path / "a.txt"
@@ -1809,7 +1809,7 @@ def test_image_backend_outage_is_probed_once_per_backoff_window(
     postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     cfg = _make_config(monkeypatch, postgres_dsn, image_embed_url="http://image-embed.invalid")
-    ctx = _make_context(cfg, "sftpgo", str(tmp_path))
+    ctx = _make_context(cfg, "files", str(tmp_path))
     clock = [0.0]
     ctx.image_embed_backoff = EmbedBackoff(pause_seconds=60, clock=lambda: clock[0])
     calls: list[str] = []
@@ -1828,8 +1828,8 @@ def test_unchanged_exclusion_stays_quiet_and_removed_rule_reindexes(
     from dataclasses import replace
 
     cfg = _make_config(monkeypatch, postgres_dsn)
-    ctx = _make_context(cfg, "sftpgo", str(tmp_path))
-    ctx.settings = replace(ctx.settings, text_exclude_globs=("sftpgo/*.txt",))
+    ctx = _make_context(cfg, "files", str(tmp_path))
+    ctx.settings = replace(ctx.settings, text_exclude_globs=("files/*.txt",))
     path = tmp_path / "a.txt"
     path.write_text("excluded")
     monkeypatch.setattr(indexer, "generate_thumbnails", lambda *_a, **_k: [])
@@ -1849,7 +1849,7 @@ def test_unchanged_exclusion_stays_quiet_and_removed_rule_reindexes(
 def test_watcher_parent_mutation_waits_for_inflight_child(
     postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, rename: bool
 ) -> None:
-    ctx = _make_context(_make_config(monkeypatch, postgres_dsn), "sftpgo", str(tmp_path))
+    ctx = _make_context(_make_config(monkeypatch, postgres_dsn), "files", str(tmp_path))
     called = threading.Event()
     monkeypatch.setattr(db, "mark_deleted", lambda *_a: called.set() or [])
     monkeypatch.setattr(db, "rename_paths", lambda *_a: called.set() or 0)
@@ -1878,7 +1878,7 @@ def test_image_embedding_transport_outage_recovers_after_backoff(
 ) -> None:
     monkeypatch.setenv("THUMBS_DIR", str(tmp_path / "thumbs"))
     cfg = _make_config(monkeypatch, postgres_dsn, image_embed_url="http://image-embed.invalid")
-    ctx = _make_context(cfg, "sftpgo", str(tmp_path))
+    ctx = _make_context(cfg, "files", str(tmp_path))
     clock = [0.0]
     ctx.image_embed_backoff = EmbedBackoff(pause_seconds=60, clock=lambda: clock[0])
     _write_thumbnail(cfg, "recover")
@@ -1907,7 +1907,7 @@ def test_excluded_oversized_inputs_only_retry_after_their_limit_changes(
     postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, extension: str
 ) -> None:
     cfg = _make_config(monkeypatch, postgres_dsn)
-    ctx = _make_context(cfg, "sftpgo", str(tmp_path))
+    ctx = _make_context(cfg, "files", str(tmp_path))
     path = "large" + extension
     assert indexer.exclusion_still_applies(ctx, path, max(cfg.image_max_bytes, cfg.text_max_bytes) + 1)
     assert not indexer.exclusion_still_applies(ctx, path, 1)

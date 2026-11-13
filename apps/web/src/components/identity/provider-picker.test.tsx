@@ -5,7 +5,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { allCapabilities, storageNote } from "@/lib/identity/capabilities";
 import { ProviderPicker } from "./provider-picker";
 
-/** The note for storage with none of the features fdrive builds on SFTPGo. */
+/** The note for storage with none of search, shares and Office. */
 const FILES_ONLY_NOTE = storageNote({ ...allCapabilities(false), trash: true }) as string;
 
 afterEach(cleanup);
@@ -20,14 +20,14 @@ function triggerText(name: string): string | null {
 
 const SEEDED: PublicProvider = {
   id: "b9c9c18d-0000-4000-8000-000000000001",
-  type: "sftpgo",
+  type: "local",
   label: "",
   credentialFields: [],
   capabilities: allCapabilities(true),
 };
 const SECOND: PublicProvider = {
   id: "b9c9c18d-0000-4000-8000-000000000002",
-  type: "sftpgo",
+  type: "local",
   label: "Archive server",
   credentialFields: [],
   capabilities: allCapabilities(true),
@@ -42,7 +42,7 @@ it("shows the selected provider's name in the closed trigger, not its id", () =>
       onChange={vi.fn()}
     />,
   );
-  expect(triggerText("Server")).toBe("SFTPGo");
+  expect(triggerText("Server")).toBe("fdrive");
   expect(triggerText("Server")).not.toContain(SEEDED.id);
 
   rerender(

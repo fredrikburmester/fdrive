@@ -4,8 +4,8 @@ import type { ConfigKeyDef } from "../../apps/api/src/config-keys.ts";
  * Environment variables the `deploy/` compose files read that are not part
  * of `apps/api`'s own `envSchema` (`apps/api/src/config-keys.ts`'s
  * `CONFIG_KEYS`): Postgres credentials, the proxy's published port and bind
- * address, host paths bind-mounted into containers, and the OCR service's
- * own include/exclude globs. Kept separate from `CONFIG_KEYS` so that
+ * address, host paths bind-mounted into containers, the uid the file
+ * workers run as, and the OCR service's own include/exclude globs. Kept separate from `CONFIG_KEYS` so that
  * table's round-trip test against `apps/api/src/config.ts` stays exact;
  * `generate-env-example.ts` merges both tables when rendering
  * `deploy/.env.example`.
@@ -30,9 +30,44 @@ export const DEPLOY_EXTRA_KEYS: readonly ConfigKeyDef[] = [
   },
   {
     key: "FDRIVE_DATA_DIR",
-    description: "Host directory holding Postgres data and OCR state.",
+    description:
+      "Host directory holding Postgres data, OCR state and, unless FDRIVE_FILES_DIR names another folder, the files.",
     default: "./data",
-    example: "./data",
+    example: "/srv/fdrive",
+    secret: false,
+    subsystem: "core",
+  },
+  {
+    key: "FDRIVE_FILES_DIR",
+    description:
+      "Host folder with every user's files, one folder per username, by default the files folder in FDRIVE_DATA_DIR. Mounted read-write into the api, backup worker and OCR and read-only into the indexer.",
+    default: "./data/files",
+    example: "/srv/files",
+    secret: false,
+    subsystem: "core",
+  },
+  {
+    key: "FDRIVE_RUN_AS_UID",
+    description:
+      "Host uid/gid the api, backup worker, indexer and OCR run as, which must own the files folder; 1000 matches SFTPGo's official image.",
+    default: "1000",
+    example: "1000",
+    secret: false,
+    subsystem: "core",
+  },
+  {
+    key: "FDRIVE_INDEX_SFTPGO_DIR",
+    description: "Older name of FDRIVE_FILES_DIR, used when that is unset.",
+    default: null,
+    example: "/srv/sftpgo/data",
+    secret: false,
+    subsystem: "core",
+  },
+  {
+    key: "FDRIVE_INDEX_UID",
+    description: "Older name of FDRIVE_RUN_AS_UID, used when that is unset.",
+    default: null,
+    example: "1000",
     secret: false,
     subsystem: "core",
   },
@@ -52,33 +87,6 @@ export const DEPLOY_EXTRA_KEYS: readonly ConfigKeyDef[] = [
     example: "8090",
     secret: false,
     subsystem: "network",
-  },
-  {
-    key: "FDRIVE_INDEX_SFTPGO_DIR",
-    description:
-      "Host directory SFTPGo itself serves, bind-mounted read-only into the indexer and read-write into OCR. Required to use the index profile.",
-    default: null,
-    example: "/srv/sftpgo/data",
-    secret: false,
-    subsystem: "index",
-  },
-  {
-    key: "FDRIVE_INDEX_SFTPGO_PATH",
-    description:
-      "The path at which SFTPGo itself sees FDRIVE_INDEX_SFTPGO_DIR; feeds the api's FDRIVE_INDEX_ROOTS default sftpgoPath.",
-    default: "/srv/sftpgo/data",
-    example: "/srv/sftpgo/data",
-    secret: false,
-    subsystem: "index",
-  },
-  {
-    key: "FDRIVE_INDEX_UID",
-    description:
-      "Host uid/gid the indexer runs as, matching SFTPGo's so 700 folders stay readable; its thumbnail and log volumes are owned by it too.",
-    default: "1000",
-    example: "1000",
-    secret: false,
-    subsystem: "index",
   },
   {
     key: "TZ",
@@ -105,42 +113,6 @@ export const DEPLOY_EXTRA_KEYS: readonly ConfigKeyDef[] = [
     example: "fredrik/**",
     secret: false,
     subsystem: "ocr",
-  },
-  {
-    key: "SFTPGO_ADMIN_USERNAME",
-    description:
-      "Admin username the bundled SFTPGo (compose.sftpgo.yaml) creates on first boot. Ignored unless that overlay is in use.",
-    default: "admin",
-    example: "admin",
-    secret: false,
-    subsystem: "core",
-  },
-  {
-    key: "SFTPGO_ADMIN_PASSWORD",
-    description:
-      "Admin password for the bundled SFTPGo (compose.sftpgo.yaml). Treat as a secret. Required when that overlay is in use, ignored otherwise.",
-    default: null,
-    example: "a-strong-password",
-    secret: false,
-    subsystem: "core",
-  },
-  {
-    key: "SFTPGO_ADMIN_PORT",
-    description:
-      "Loopback host port the bundled SFTPGo's admin UI and API are published on (compose.sftpgo.yaml). Reach it through an SSH tunnel; never expose it.",
-    default: "8091",
-    example: "8091",
-    secret: false,
-    subsystem: "network",
-  },
-  {
-    key: "SFTPGO_ADMIN_BIND",
-    description:
-      "Host address the bundled SFTPGo's admin port binds to (compose.sftpgo.yaml). Default reaches it only from the server itself; set 0.0.0.0 to open it to your LAN, and keep it firewalled from the internet.",
-    default: "127.0.0.1",
-    example: "0.0.0.0",
-    secret: false,
-    subsystem: "network",
   },
   {
     key: "FDRIVE_COLLABORA_APP_URL",

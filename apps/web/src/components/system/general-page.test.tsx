@@ -37,7 +37,6 @@ it("keeps only installation-wide settings: the server address", () => {
 it("no longer administers per-server settings here", () => {
   render(<GeneralPage />);
 
-  expect(screen.queryByText("SFTPGo connection")).toBeNull();
   expect(screen.queryByText("Home template")).toBeNull();
   expect(screen.queryByRole("switch", { name: "Enable Trash" })).toBeNull();
 });

@@ -43,7 +43,7 @@ def _make_config(
     monkeypatch: pytest.MonkeyPatch, database_url: str, thumbs_dir: str, image_embed_url: str = "http://image-embed.invalid"
 ) -> Config:
     monkeypatch.setenv("DATABASE_URL", database_url)
-    monkeypatch.setenv("INDEX_ROOTS", "sftpgo=/unused")
+    monkeypatch.setenv("INDEX_ROOTS", "files=/unused")
     monkeypatch.setenv("EMBED_URL", "http://embed.invalid")
     monkeypatch.setenv("THUMBS_DIR", thumbs_dir)
     if image_embed_url:
@@ -85,7 +85,7 @@ def _write_thumb(cfg: Config, sha256: str) -> None:
 
 def test_rebuild_not_configured_is_noop(postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     cfg = _make_config(monkeypatch, postgres_dsn, str(tmp_path / "thumbs"), image_embed_url="")
-    ctx = _make_context(cfg, "sftpgo", str(tmp_path))
+    ctx = _make_context(cfg, "files", str(tmp_path))
     processed = image_embed_rebuild.rebuild_image_embeddings(ctx)
     assert processed == 0
 
@@ -94,7 +94,7 @@ def test_rebuild_skips_when_dimension_guard_fails(
     postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     cfg = _make_config(monkeypatch, postgres_dsn, str(tmp_path / "thumbs"))
-    ctx = _make_context(cfg, "sftpgo", str(tmp_path))
+    ctx = _make_context(cfg, "files", str(tmp_path))
     _upsert_image_file(ctx, "a.png", "sha-a")
     monkeypatch.setattr(image_embed_rebuild, "image_embed_health", lambda url: None)
     processed = image_embed_rebuild.rebuild_image_embeddings(ctx)
@@ -104,7 +104,7 @@ def test_rebuild_skips_when_dimension_guard_fails(
 
 def test_rebuild_embeds_missing_candidates(postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     cfg = _make_config(monkeypatch, postgres_dsn, str(tmp_path / "thumbs"))
-    ctx = _make_context(cfg, "sftpgo", str(tmp_path))
+    ctx = _make_context(cfg, "files", str(tmp_path))
     _upsert_image_file(ctx, "a.png", "sha-a")
     _write_thumb(cfg, "sha-a")
     monkeypatch.setattr(image_embed_rebuild, "image_embed_health", lambda url: _HEALTHY)
@@ -121,7 +121,7 @@ def test_rebuild_skips_non_image_and_leaves_manifest(
     postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     cfg = _make_config(monkeypatch, postgres_dsn, str(tmp_path / "thumbs"))
-    ctx = _make_context(cfg, "sftpgo", str(tmp_path))
+    ctx = _make_context(cfg, "files", str(tmp_path))
     db.upsert_file(ctx.conn(), ctx.root_id, "notes.txt", "notes.txt", ".txt", 5, 1, "sha-t", None)
     monkeypatch.setattr(image_embed_rebuild, "image_embed_health", lambda url: _HEALTHY)
     processed = image_embed_rebuild.rebuild_image_embeddings(ctx)
@@ -131,7 +131,7 @@ def test_rebuild_skips_non_image_and_leaves_manifest(
 
 def test_rebuild_scoped_to_path(postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     cfg = _make_config(monkeypatch, postgres_dsn, str(tmp_path / "thumbs"))
-    ctx = _make_context(cfg, "sftpgo", str(tmp_path))
+    ctx = _make_context(cfg, "files", str(tmp_path))
     _upsert_image_file(ctx, "keep/a.png", "sha-keep")
     _upsert_image_file(ctx, "skip/b.png", "sha-skip")
     _write_thumb(cfg, "sha-keep")
@@ -151,7 +151,7 @@ def test_rebuild_default_leaves_stale_model_rows_alone(
     postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     cfg = _make_config(monkeypatch, postgres_dsn, str(tmp_path / "thumbs"))
-    ctx = _make_context(cfg, "sftpgo", str(tmp_path))
+    ctx = _make_context(cfg, "files", str(tmp_path))
     _upsert_image_file(ctx, "a.png", "sha-a")
     _write_thumb(cfg, "sha-a")
     db.upsert_image_embedding(ctx.conn(), "sha-a", "model-old", [0.2] * 1024)
@@ -170,7 +170,7 @@ def test_rebuild_force_replaces_stale_model_rows(
     postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     cfg = _make_config(monkeypatch, postgres_dsn, str(tmp_path / "thumbs"))
-    ctx = _make_context(cfg, "sftpgo", str(tmp_path))
+    ctx = _make_context(cfg, "files", str(tmp_path))
     _upsert_image_file(ctx, "a.png", "sha-a")
     _write_thumb(cfg, "sha-a")
     db.upsert_image_embedding(ctx.conn(), "sha-a", "model-old", [0.2] * 1024)
@@ -188,7 +188,7 @@ def test_rebuild_never_recomputes_matching_model_even_with_force(
     postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     cfg = _make_config(monkeypatch, postgres_dsn, str(tmp_path / "thumbs"))
-    ctx = _make_context(cfg, "sftpgo", str(tmp_path))
+    ctx = _make_context(cfg, "files", str(tmp_path))
     _upsert_image_file(ctx, "a.png", "sha-a")
     _write_thumb(cfg, "sha-a")
     db.upsert_image_embedding(ctx.conn(), "sha-a", "model-a", [0.2] * 1024)
@@ -205,7 +205,7 @@ def test_rebuild_never_recomputes_matching_model_even_with_force(
 def test_rebuild_batches_requests(postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setenv("IMAGE_EMBED_BATCH_SIZE", "2")
     cfg = _make_config(monkeypatch, postgres_dsn, str(tmp_path / "thumbs"))
-    ctx = _make_context(cfg, "sftpgo", str(tmp_path))
+    ctx = _make_context(cfg, "files", str(tmp_path))
     for i in range(3):
         _upsert_image_file(ctx, f"{i}.png", f"sha-{i}")
         _write_thumb(cfg, f"sha-{i}")
@@ -227,7 +227,7 @@ def test_rebuild_batch_read_failure_reports_via_callback(
     postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     cfg = _make_config(monkeypatch, postgres_dsn, str(tmp_path / "thumbs"))
-    ctx = _make_context(cfg, "sftpgo", str(tmp_path))
+    ctx = _make_context(cfg, "files", str(tmp_path))
     _upsert_image_file(ctx, "a.png", "sha-a")
     # No thumbnail file written: open() fails inside the batch flush.
     monkeypatch.setattr(image_embed_rebuild, "image_embed_health", lambda url: _HEALTHY)
@@ -246,7 +246,7 @@ def test_rebuild_batch_embed_failure_reports_via_callback(
     postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     cfg = _make_config(monkeypatch, postgres_dsn, str(tmp_path / "thumbs"))
-    ctx = _make_context(cfg, "sftpgo", str(tmp_path))
+    ctx = _make_context(cfg, "files", str(tmp_path))
     _upsert_image_file(ctx, "a.png", "sha-a")
     _write_thumb(cfg, "sha-a")
     monkeypatch.setattr(image_embed_rebuild, "image_embed_health", lambda url: _HEALTHY)
@@ -264,7 +264,7 @@ def test_rebuild_batch_embed_failure_reports_via_callback(
 
 def test_rebuild_no_candidates_returns_zero(postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     cfg = _make_config(monkeypatch, postgres_dsn, str(tmp_path / "thumbs"))
-    ctx = _make_context(cfg, "sftpgo", str(tmp_path))
+    ctx = _make_context(cfg, "files", str(tmp_path))
     monkeypatch.setattr(image_embed_rebuild, "image_embed_health", lambda url: _HEALTHY)
     assert image_embed_rebuild.rebuild_image_embeddings(ctx) == 0
 
@@ -284,7 +284,7 @@ def test_count_candidates_sums_across_contexts(postgres_dsn: str, monkeypatch: p
 def test_start_rebuild_runs_and_updates_job(postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setattr(image_embed_rebuild.threading, "Thread", _SyncThread)
     cfg = _make_config(monkeypatch, postgres_dsn, str(tmp_path / "thumbs"))
-    ctx = _make_context(cfg, "sftpgo", str(tmp_path))
+    ctx = _make_context(cfg, "files", str(tmp_path))
     _upsert_image_file(ctx, "a.png", "sha-a")
     _write_thumb(cfg, "sha-a")
     monkeypatch.setattr(image_embed_rebuild, "image_embed_health", lambda url: _HEALTHY)
@@ -309,7 +309,7 @@ def test_start_rebuild_not_configured_reports_zero_total_without_thread_work(
 ) -> None:
     monkeypatch.setattr(image_embed_rebuild.threading, "Thread", _SyncThread)
     cfg = _make_config(monkeypatch, postgres_dsn, str(tmp_path / "thumbs"), image_embed_url="")
-    ctx = _make_context(cfg, "sftpgo", str(tmp_path))
+    ctx = _make_context(cfg, "files", str(tmp_path))
     _upsert_image_file(ctx, "a.png", "sha-a")
 
     def boom(*a: object, **k: object) -> object:
@@ -330,7 +330,7 @@ def test_start_rebuild_returns_false_when_already_running(
     postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     cfg = _make_config(monkeypatch, postgres_dsn, str(tmp_path / "thumbs"))
-    ctx = _make_context(cfg, "sftpgo", str(tmp_path))
+    ctx = _make_context(cfg, "files", str(tmp_path))
     from fdrive_indexer.thumb_rebuild import ThumbnailRebuildJob
 
     job = ThumbnailRebuildJob()
@@ -344,7 +344,7 @@ def test_start_rebuild_job_crash_still_releases_job(
 ) -> None:
     monkeypatch.setattr(image_embed_rebuild.threading, "Thread", _SyncThread)
     cfg = _make_config(monkeypatch, postgres_dsn, str(tmp_path / "thumbs"))
-    ctx = _make_context(cfg, "sftpgo", str(tmp_path))
+    ctx = _make_context(cfg, "files", str(tmp_path))
 
     def boom(*a: object, **k: object) -> int:
         raise RuntimeError("boom")
@@ -365,7 +365,7 @@ def test_start_rebuild_discovery_failure_releases_job(
 ) -> None:
     monkeypatch.setattr(image_embed_rebuild.threading, "Thread", _SyncThread)
     cfg = _make_config(monkeypatch, postgres_dsn, str(tmp_path / "thumbs"))
-    ctx = _make_context(cfg, "sftpgo", str(tmp_path))
+    ctx = _make_context(cfg, "files", str(tmp_path))
 
     def boom(*a: object, **k: object) -> int:
         raise RuntimeError("cannot count")
@@ -383,7 +383,7 @@ def test_start_rebuild_thread_start_failure_releases_job(
     postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     cfg = _make_config(monkeypatch, postgres_dsn, str(tmp_path / "thumbs"))
-    ctx = _make_context(cfg, "sftpgo", str(tmp_path))
+    ctx = _make_context(cfg, "files", str(tmp_path))
 
     def boom(*a: object, **k: object) -> None:
         raise RuntimeError("cannot start thread")
@@ -405,7 +405,7 @@ def test_rebuild_counts_already_embedded_candidates_as_resolved(
     from fdrive_indexer.thumb_rebuild import ThumbnailRebuildJob
     monkeypatch.setattr(image_embed_rebuild.threading, "Thread", _SyncThread)
     cfg = _make_config(monkeypatch, postgres_dsn, str(tmp_path / "thumbs"))
-    ctx = _make_context(cfg, "sftpgo", str(tmp_path))
+    ctx = _make_context(cfg, "files", str(tmp_path))
     _upsert_image_file(ctx, "a.png", "same-content")
     _upsert_image_file(ctx, "copy.png", "same-content")
     db.upsert_image_embedding(ctx.conn(), "same-content", "model-a", [0.1] * 1024)

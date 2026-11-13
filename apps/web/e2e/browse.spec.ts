@@ -152,8 +152,13 @@ test("sorting by size flips the order of docs' contents", async ({ page }) => {
   await page.getByRole("button", { name: "View", exact: true }).click();
   await page.getByRole("menuitemradio", { name: "Size" }).click();
 
-  const bySize = await visibleRowPaths(page);
-  expect(bySize.indexOf("/docs/report.pdf")).toBeLessThan(bySize.indexOf("/docs/readme.md"));
+  // The new sort lands after the click resolves: read the rows until it has.
+  await expect
+    .poll(async () => {
+      const bySize = await visibleRowPaths(page);
+      return bySize.indexOf("/docs/report.pdf") < bySize.indexOf("/docs/readme.md");
+    })
+    .toBe(true);
 });
 
 test("a very long folder name never widens the page past the viewport", async ({ page }) => {

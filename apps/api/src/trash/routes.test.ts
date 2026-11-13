@@ -1,3 +1,6 @@
+import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
 import {
   OkResponse,
   ROUTES,
@@ -7,15 +10,9 @@ import {
 } from "@fdrive/contracts";
 import { normalizePath, StorageError, type StorageProvider, withMoveToTrash } from "@fdrive/core";
 import { createMemoryRepos } from "@fdrive/db/testing";
-import {
-  createFakeSftpgoServer,
-  createSftpgoClient,
-  createSftpgoStorageProvider,
-  type FakeSeed,
-  type WithToken,
-} from "@fdrive/sftpgo";
+import { createLocalStorage } from "@fdrive/local";
 import type { Logger } from "pino";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { activityFixture } from "../../test/activity-fixture.js";
 import { createApp } from "../app.js";
 import type { Principal } from "../auth/principal.js";
@@ -27,9 +24,11 @@ import { registerTrashRoutes, type TrashRoutesDeps } from "./routes.js";
 
 const REQUIRED_ENV = {
   DATABASE_URL: "postgres://localhost/fdrive",
-  SFTPGO_URL: "http://localhost:8080",
   FDRIVE_MASTER_KEY: Buffer.alloc(32, 7).toString("base64"),
 };
+
+/** Setup is complete, so the setup gate lets every route through. */
+const READY = async () => ({ required: false, providers: [] });
 
 const ALICE_IDENTITY_ID = "00000000-0000-4000-8000-0000000000a1";
 const BOB_IDENTITY_ID = "00000000-0000-4000-8000-0000000000b1";
@@ -46,7 +45,7 @@ function trashSettings(path: string | null, retentionHours: number | null = null
     path: path ?? TRASH_PATH,
     retentionHours,
     rulesConfirmed: path !== null,
-    strategy: "native",
+    strategy: "move",
   } as const;
 }
 
@@ -62,30 +61,36 @@ function createTestLogger(): Logger {
   return logger as unknown as Logger;
 }
 
-const SEED: FakeSeed = {
-  users: [
-    { username: "alice", password: "secret", permissions: { "/": ["*"] } },
-    { username: "bob", password: "secret2", permissions: { "/": ["*"] } },
-  ],
-  files: {
-    alice: {
-      "/hello.txt": "hello world",
-      "/dir/nested.txt": "nested contents",
-    },
-    bob: {
-      "/bob.txt": "bob's file",
-    },
+const FILES: Readonly<Record<string, Readonly<Record<string, string>>>> = {
+  alice: {
+    "/hello.txt": "hello world",
+    "/dir/nested.txt": "nested contents",
   },
-  trash: { path: TRASH_PATH },
+  bob: {
+    "/bob.txt": "bob's file",
+  },
 };
 
-async function withTokenFor(
-  client: ReturnType<typeof createSftpgoClient>,
-  username: string,
-  password: string,
-): Promise<WithToken> {
-  const token = await client.login({ username, password });
-  return async (fn) => fn(token.accessToken);
+const folders: string[] = [];
+
+afterEach(async () => {
+  await Promise.all(
+    folders.splice(0).map((folder) => rm(folder, { recursive: true, force: true })),
+  );
+});
+
+/** A user's files in a fresh home folder on disk, the way the local folder serves them. */
+async function homeWith(files: Readonly<Record<string, string>>): Promise<StorageProvider> {
+  const root = await realpath(await mkdtemp(join(tmpdir(), "fdrive-trash-routes-")));
+  folders.push(root);
+  const home = join(root, "home");
+  await mkdir(home, { recursive: true });
+  for (const [path, contents] of Object.entries(files)) {
+    const target = join(home, path);
+    await mkdir(dirname(target), { recursive: true });
+    await writeFile(target, contents);
+  }
+  return createLocalStorage({ home });
 }
 
 interface Harness {
@@ -99,33 +104,25 @@ interface Harness {
 
 async function buildHarness(
   opts: {
-    seed?: FakeSeed;
     username?: string;
-    password?: string;
     withTrash?: boolean;
     trashPathOverride?: string | null;
     retentionHours?: number | null;
     identityId?: string;
-    trashLayout?: "native" | "move";
   } = {},
 ): Promise<Harness> {
-  const seed = opts.seed ?? SEED;
   const username = opts.username ?? "alice";
-  const password = opts.password ?? "secret";
   const withTrash = opts.withTrash ?? true;
-  const server = createFakeSftpgoServer(seed);
-  const client = createSftpgoClient({ baseUrl: "http://sftpgo.test", fetch: server.fetch });
-  const withToken = await withTokenFor(client, username, password);
-  const baseStorage = createSftpgoStorageProvider({ client, withToken });
+  const baseStorage = await homeWith(FILES[username] ?? {});
   const clock = () => new Date(CLOCK_ISO);
   const activity = activityFixture(clock);
-  const trashLayout = opts.trashLayout ?? "native";
-  const trashStorage =
-    trashLayout === "move"
-      ? withMoveToTrash({ storage: baseStorage, trashPath: TRASH_PATH, clock })
-      : baseStorage;
+  // The local folder moves deleted files into Trash itself (`trash: "move"`).
   const storage = withTrash
-    ? withRecycleFolderTrash(trashStorage, TRASH_PATH, trashLayout)
+    ? withRecycleFolderTrash(
+        withMoveToTrash({ storage: baseStorage, trashPath: TRASH_PATH, clock }),
+        TRASH_PATH,
+        "move",
+      )
     : baseStorage;
 
   const identityId =
@@ -168,6 +165,7 @@ async function buildHarness(
     startedAt: new Date(CLOCK_ISO),
     clock,
     principalResolver: async () => principal,
+    connectionStatus: READY,
     registerRoutes: (groups) => registerTrashRoutes(groups, deps),
   });
 
@@ -223,7 +221,7 @@ describe("GET /trash", () => {
     expect(res.status).toBe(404);
   });
 
-  it("lists a deleted file and a deleted directory's files, with parsed originalPath, name, and deletedAt", async () => {
+  it("lists a deleted file and a deleted directory, with parsed originalPath, name, and deletedAt", async () => {
     const { app, storage } = await buildHarness();
     await storage.deleteFile("/hello.txt");
     await storage.deleteDir("/dir");
@@ -236,18 +234,18 @@ describe("GET /trash", () => {
     expect(byName.get("hello.txt")).toMatchObject({
       originalPath: "/hello.txt",
       name: "hello.txt",
+      size: 11,
     });
-    expect(byName.get("nested.txt")).toMatchObject({
-      originalPath: "/dir/nested.txt",
-      name: "nested.txt",
-    });
-    expect(new Date(byName.get("hello.txt")?.deletedAt ?? "").toString()).not.toBe("Invalid Date");
+    // A deleted folder is one entry, its files still inside it.
+    expect(byName.get("dir")).toMatchObject({ originalPath: "/dir", name: "dir" });
+    expect(body.entries).toHaveLength(2);
+    expect(byName.get("hello.txt")?.deletedAt).toBe(CLOCK_ISO);
   });
 
   it("keeps a second user's trash isolated from the first", async () => {
     const alice = await buildHarness();
     await alice.storage.deleteFile("/hello.txt");
-    const bob = await buildHarness({ username: "bob", password: "secret2" });
+    const bob = await buildHarness({ username: "bob" });
     await bob.storage.deleteFile("/bob.txt");
 
     const aliceList = TrashListResponse.parse(
@@ -386,38 +384,8 @@ describe("POST /trash/restore", () => {
     expect(await storage.statFile("/recovered.txt")).toMatchObject({ size: 11 });
   });
 
-  it("uses the native provider's original path even when it resembles the move layout", async () => {
-    const originalPath = "/.fdrive-move-v1/dir/p/native/v";
-    const { app, storage, metadata } = await buildHarness({
-      seed: {
-        ...SEED,
-        files: { ...SEED.files, alice: { [originalPath]: "native content" } },
-      },
-    });
-    await metadata.addFavorite(ALICE_IDENTITY_ID, originalPath, "file");
-    await metadata.onTrashed(ALICE_IDENTITY_ID, originalPath, false);
-    await storage.deleteFile(originalPath);
-    const listed = TrashListResponse.parse(await readJson(await app.request(ROUTES.trash.list)));
-    const id = listed.entries[0]?.id;
-    if (id === undefined) throw new Error("expected a trash entry");
-
-    const res = await app.request(
-      ROUTES.trash.restore,
-      requestedWith({
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ ids: [id], target: "/restored-native" }),
-      }),
-    );
-
-    expect(res.status).toBe(200);
-    expect((await metadata.listFavorites(ALICE_IDENTITY_ID)).map((entry) => entry.path)).toEqual([
-      "/restored-native",
-    ]);
-  });
-
   it("moves a restored directory's retained metadata subtree", async () => {
-    const { app, storage, metadata } = await buildHarness({ trashLayout: "move" });
+    const { app, storage, metadata } = await buildHarness();
     await metadata.addFavorite(ALICE_IDENTITY_ID, "/dir/nested.txt", "file");
     await metadata.setFolderView(ALICE_IDENTITY_ID, "/dir", { mode: "grid" });
     await metadata.onTrashed(ALICE_IDENTITY_ID, "/dir", true);
@@ -447,7 +415,7 @@ describe("POST /trash/restore", () => {
     );
   });
 
-  it("returns 409 with details.failedId when the restore target already exists, via the real core-provided trash against the fake (not a mocked provider)", async () => {
+  it("returns 409 with details.failedId when the restore target already exists, via the real core-provided trash over a folder on disk (not a mocked provider)", async () => {
     const { app, storage } = await buildHarness();
     await storage.deleteFile("/hello.txt");
     await storage.upload("/hello.txt", new TextEncoder().encode("new content"));
@@ -499,7 +467,7 @@ describe("POST /trash/restore", () => {
       list: () => Promise.reject(new Error("not implemented")),
       // The route has no pre-restore check of its own (that lives in
       // `@fdrive/core`'s `createRecycleFolderTrash`, exercised separately
-      // against the fake below); statFile here is never actually called.
+      // over a folder on disk below); statFile here is never actually called.
       statFile: () => Promise.reject(new StorageError("not_found", "not found")),
       stat: () => Promise.reject(new StorageError("not_found", "not found")),
       download: () => Promise.reject(new Error("not implemented")),
@@ -538,6 +506,7 @@ describe("POST /trash/restore", () => {
       startedAt: new Date(CLOCK_ISO),
       clock,
       principalResolver: async () => principal,
+      connectionStatus: READY,
       registerRoutes: (groups) => registerTrashRoutes(groups, deps),
     });
 
@@ -558,7 +527,7 @@ describe("POST /trash/restore", () => {
       list: () => Promise.reject(new Error("not implemented")),
       // The route has no pre-restore check of its own (that lives in
       // `@fdrive/core`'s `createRecycleFolderTrash`, exercised separately
-      // against the fake below); statFile here is never actually called.
+      // over a folder on disk below); statFile here is never actually called.
       statFile: () => Promise.reject(new StorageError("not_found", "not found")),
       stat: () => Promise.reject(new StorageError("not_found", "not found")),
       download: () => Promise.reject(new Error("not implemented")),
@@ -597,6 +566,7 @@ describe("POST /trash/restore", () => {
       startedAt: new Date(CLOCK_ISO),
       clock,
       principalResolver: async () => principal,
+      connectionStatus: READY,
       registerRoutes: (groups) => registerTrashRoutes(groups, deps),
     });
 
@@ -641,6 +611,7 @@ describe("POST /trash/restore", () => {
       startedAt: new Date(CLOCK_ISO),
       clock,
       principalResolver: async () => principal,
+      connectionStatus: READY,
       registerRoutes: (groups) => registerTrashRoutes(groups, deps),
     });
 
@@ -748,7 +719,7 @@ describe("personal activity for trash commands", () => {
   }
 
   it("records a restore against the trash leaf and the target it actually reached", async () => {
-    const h = await buildHarness({ trashLayout: "move" });
+    const h = await buildHarness();
     const id = await trashed(h, "/hello.txt");
 
     const res = await h.app.request(
@@ -780,7 +751,7 @@ describe("personal activity for trash commands", () => {
   });
 
   it("keeps a failed restore out of history as a conflict, not a success", async () => {
-    const h = await buildHarness({ trashLayout: "move" });
+    const h = await buildHarness();
     const id = await trashed(h, "/hello.txt");
     await h.storage.upload("/hello.txt", new TextEncoder().encode("occupied"));
 
@@ -800,7 +771,7 @@ describe("personal activity for trash commands", () => {
   });
 
   it("records one delete per purged id, keyed to the path the file came from", async () => {
-    const h = await buildHarness({ trashLayout: "move" });
+    const h = await buildHarness();
     const first = await trashed(h, "/hello.txt");
     const second = await trashed(h, "/dir", "dir");
 
@@ -824,7 +795,7 @@ describe("personal activity for trash commands", () => {
   });
 
   it("records each emptied leaf and one enclosing trash.empty", async () => {
-    const h = await buildHarness({ trashLayout: "move" });
+    const h = await buildHarness();
     await trashed(h, "/hello.txt");
     await trashed(h, "/dir", "dir");
 
@@ -896,7 +867,7 @@ describe("personal activity for trash commands", () => {
   });
 
   it("rejects a malformed correlation header before touching Trash", async () => {
-    const h = await buildHarness({ trashLayout: "move" });
+    const h = await buildHarness();
     const id = await trashed(h, "/hello.txt");
 
     const res = await h.app.request(
@@ -935,6 +906,58 @@ describe("POST /trash/empty", () => {
     ]);
     const after = TrashListResponse.parse(await readJson(await app.request(ROUTES.trash.list)));
     expect(after.entries).toEqual([]);
+  });
+
+  it("empties Trash with the provider's one bulk call when no activity journal is wired", async () => {
+    const { storage } = await buildHarness();
+    await storage.deleteFile("/hello.txt");
+    await storage.deleteDir("/dir");
+    const trash = storage.trash;
+    if (!trash) throw Error("Expected Trash");
+    const empty = vi.spyOn(trash, "empty");
+    const purge = vi.spyOn(trash, "purge");
+    const bus = createEventBus();
+    const events: BusEvent[] = [];
+    bus.subscribe({ identityId: ALICE_IDENTITY_ID }, (event) => events.push(event));
+    const principal: Principal = {
+      accountId: ACCOUNT_ID,
+      identityId: ALICE_IDENTITY_ID,
+      username: "alice",
+      storage,
+      isAdmin: false,
+    };
+    const clock = () => new Date(CLOCK_ISO);
+    const app = createApp({
+      config: loadConfig(REQUIRED_ENV),
+      logger: createTestLogger(),
+      version: "1.0.0",
+      startedAt: new Date(CLOCK_ISO),
+      clock,
+      principalResolver: async () => principal,
+      connectionStatus: READY,
+      registerRoutes: (groups) =>
+        registerTrashRoutes(groups, {
+          bus,
+          clock,
+          settingsForStorage: () => trashSettings(TRASH_PATH),
+        }),
+    });
+
+    const res = await app.request(ROUTES.trash.empty, requestedWith({ method: "POST" }));
+
+    expect(res.status).toBe(200);
+    expect(empty).toHaveBeenCalledTimes(1);
+    expect(purge).not.toHaveBeenCalled();
+    expect((await trash.list()).entries).toEqual([]);
+    expect(events).toEqual([
+      {
+        type: "fs",
+        op: "delete",
+        identityId: ALICE_IDENTITY_ID,
+        paths: [TRASH_PATH],
+        at: CLOCK_ISO,
+      },
+    ]);
   });
 
   it("returns not_found when the identity's storage has no trash", async () => {

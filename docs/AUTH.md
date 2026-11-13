@@ -1,34 +1,36 @@
 # Authentication
 
-fdrive authenticates against the storage provider in credential mode: a user
-signs in with the credential their provider's module asks for (for SFTPGo:
-username, password and an optional one-time code, sent as
-`{ providerId?, credential: { username, password, otp? } }`), and fdrive keeps
-that credential (and, for SFTPGo, the short-lived JWT it issues) so it can act
-on the user's behalf for every subsequent storage call, without asking them
-to log in again on every request. Providers are rows in `app.providers`; an
-identity is bound to one row and a stored credential is only ever sent to
-that row's endpoint (see
-[Adding a storage provider](STORAGE-PROVIDERS.md#isolation-and-lifecycle-requirements)). This document describes that design as implemented in `apps/api/src/auth/` and
-`apps/api/src/providers/`.
+fdrive authenticates in credential mode: a user signs in with the credential
+their provider's module asks for, sent as `{ providerId?, credential }` (for the
+local folder and WebDAV: `{ username, password }`; for S3: an access key and
+secret), and the module verifies it. For the local folder fdrive is the
+authority: the user is a row of `app.local_users` (see
+[Local users](#local-users)). For WebDAV and S3 the server is, and fdrive keeps
+the credential so it can act on the user's behalf for every subsequent storage
+call without asking them to log in again. Providers are rows in
+`app.providers`; an identity is bound to one row and a stored credential is
+only ever sent to that row's endpoint (see
+[Adding a storage provider](STORAGE-PROVIDERS.md#isolation-and-lifecycle-requirements)).
+This document describes that design as implemented in `apps/api/src/auth/`,
+`apps/api/src/local/` and `apps/api/src/providers/`.
 
-`FDRIVE_ADMIN_USERS` grants apply only to usernames on the SFTPGo endpoint named
-by `SFTPGO_URL`. The same username on another provider gains no administrator
-access. Persisted `accounts.is_admin` grants remain account-wide.
+`FDRIVE_ADMIN_USERS` names local usernames: it applies only to logins on the row
+the deployment pins (the local folder). The same username on storage an
+administrator added later is another person and gains no administrator access.
+Persisted `accounts.is_admin` grants remain account-wide.
 
 ## What is stored, and how it is encrypted
 
 On a successful login (`POST /api/v1/auth/login`, `apps/api/src/auth/service.ts`):
 
 - fdrive finds or creates an `account` and a `provider`-scoped `identity` for
-  the SFTPGo username (one account can hold several identities, one per
-  SFTPGo user it is linked to).
-- The plaintext password is sealed and written to the `credentials` table as
-  `{ identityId, ciphertext, keyId, cachedToken, cachedTokenExpiresAt }`. It is never stored in plaintext and
-  never logged.
-- The SFTPGo JWT that `sftpgo.login` already returned for this same call is
-  sealed and cached on the same row (`prime`, see below), rather than being
-  re-minted.
+  the username the module returned (one account can hold several identities,
+  one per login it is linked to).
+- The credential is sealed and written to the `credentials` table as
+  `{ identityId, ciphertext, keyId, cachedToken, cachedTokenExpiresAt }`. It is
+  never stored in plaintext and never logged. For a local login the password
+  itself is checked against the scrypt hash in `app.local_users`; the sealed
+  copy lets a later login tell whether the password changed (below).
 - A session row is created (`sessions` table) holding only a SHA-256 hash of
   a randomly generated session id; the raw id is set as an HttpOnly cookie
   and never persisted itself.
@@ -50,9 +52,10 @@ Encryption (`apps/api/src/auth/crypto.ts`) is an envelope scheme:
 This means rotating `FDRIVE_MASTER_KEY` invalidates every previously sealed
 secret at once: any attempt to unseal one afterwards fails GCM
 authentication. fdrive treats that failure as `reauth_required` (see below)
-rather than a crash, so the practical effect of a key rotation is that every
-signed-in user is asked to log in again the next time their cached token
-needs to be read or re-minted.
+rather than a crash, so the practical effect of a key rotation is that WebDAV
+and S3 users are asked to log in again on their next storage request, when
+their credential is unsealed. Local storage reads no stored credential per
+request.
 
 ## Setup ownership
 
@@ -110,38 +113,27 @@ whose `createdAt` is older than that and treats the request as anonymous, so
 a stolen session id cannot be kept valid indefinitely by periodic use.
 Session rotation on link and unlink preserves `createdAt`.
 
-## Token minting and re-minting
+## Storage sessions and tokens
 
-fdrive never asks the browser for SFTPGo credentials outside of `/auth/login` and identity link/unlink confirmation.
-Every storage call instead goes through a `TokenSource`
-(`apps/api/src/auth/token-source.ts`), which is responsible for producing a
-currently-valid SFTPGo JWT for an identity:
+fdrive never asks the browser for storage credentials outside of `/auth/login`
+and identity link/unlink confirmation. Every storage call instead goes through
+a `TokenSource` (`apps/api/src/auth/token-source.ts`), whose
+`sessionFor(identityId, username)` hands the provider module a
+`StorageSession` with `getCredential`, `getToken` and `invalidateToken`.
+WebDAV and S3 sign every request from the unsealed credential; the local
+folder needs none. Before storage is built for a request, the module's `admit`
+runs where it exists: the local folder refuses a disabled or removed user
+there, so disabling someone stops them at once rather than at their next
+sign-in.
 
-1. `get(identityId)` first checks its in-process cache, then the database's
-   cached (sealed) token, and only mints a fresh one from the stored,
-   unsealed password as a last resort. A token is treated as due for
-   re-minting once fewer than 2 minutes remain before it expires, not only
-   once it has actually expired, so a request in flight does not race an
-   expiry.
-   Concurrent misses for one identity share one mint within the API process.
-   Invalidation and priming supersede pending work; per-identity database writes
-   are ordered so an older mint cannot restore a token after a clear or prime.
-2. `sessionFor(identityId, username)` hands the provider module a
-   `StorageSession` with `getToken`, `invalidateToken` and `getCredential`.
-   The SFTPGo module's storage runs each call with the current token and,
-   on a `401` from SFTPGo, invalidates the cached token, mints a fresh one,
-   and retries exactly once (`packages/sftpgo/src/module.ts`). This is what
-   lets fdrive recover transparently from SFTPGo revoking a token early (for
-   example, an admin forcing a logout) without surfacing an error to the
-   user. Minting itself is the module's `mint`; a provider module without
-   one (a backend that signs every request from the credential) gets `null`
-   tokens and never touches this cache.
-3. `prime(identityId, token)` seals and stores a token the caller already
-   has, without minting a new one. `authService.login` calls `prime` with
-   the token its own `sftpgo.login` call just returned, so a fresh fdrive
-   login mints exactly one SFTPGo token, not two: one from the login itself,
-   plus a would-be second one if the token cache were instead filled by
-   calling `get` right after.
+No shipped module has `mint`, so `getToken` returns `null`. The token cache
+remains for a module that mints short-lived tokens: `get(identityId)` checks
+its in-process cache, then the sealed cached token, and mints from the stored
+credential only as a last resort, treating a token as due once fewer than 2
+minutes remain. Concurrent misses for one identity share one mint;
+invalidation and `prime` (store a token the login already returned) supersede
+pending work, and per-identity database writes are ordered so an older mint
+cannot restore a token after a clear or prime.
 
 ## The `reauth_required` flow
 
@@ -150,9 +142,9 @@ Three situations end a storage or token operation with the API error kind
 client can tell "you were never signed in" apart from "you were signed in,
 but fdrive can no longer act on your behalf"):
 
-- The stored password is rejected by SFTPGo when fdrive tries to mint a
-  token with it (the user changed their SFTPGo password outside of fdrive,
-  or an admin disabled/removed the account).
+- WebDAV or S3 rejects the stored credential (the password or key was
+  changed or revoked outside of fdrive); storage routes map the provider's
+  `unauthorized` to `reauth_required`.
 - A sealed credential or cached token fails to decrypt (`CryptoError` from
   `open`), most commonly because `FDRIVE_MASTER_KEY` was rotated after the
   secret was sealed under the previous key.
@@ -160,8 +152,9 @@ but fdrive can no longer act on your behalf"):
 
 In every case the fdrive session itself may still be valid; the user simply
 has to sign in again (`POST /api/v1/auth/login`) to re-establish a usable
-SFTPGo credential. fdrive does not attempt to distinguish these cases in the
-response beyond the error kind and message, since the remedy is the same.
+credential. fdrive does not attempt to distinguish these cases in the
+response beyond the error kind and message, since the remedy is the same. A
+disabled local user gets `forbidden` instead: signing in again would not help.
 
 ## Login rate limiting
 
@@ -202,22 +195,25 @@ for fdrive's current single-instance deployment shape.
 
 ## Re-authentication and session revocation
 
-Linking another SFTPGo login (`POST /api/v1/account/identities`) requires
-the signed-in login's own credential (`currentCredential: { password, otp? }`,
-with `otp` when SFTPGo enforces TOTP) in addition to the new login's
-credentials, and unlinking one (`DELETE /api/v1/account/identities/:id`)
-requires `{ currentCredential: { password, otp? } }` as its JSON body. A stolen
-cookie is therefore not enough to plant a durable login path on the account, nor to detach and sign
-out the owner's other logins.
+Linking another login (`POST /api/v1/account/identities`) requires the
+signed-in login's own secret (`currentCredential: { password }`) in addition
+to the new login's credentials, and unlinking one
+(`DELETE /api/v1/account/identities/:id`) requires
+`{ currentCredential: { password } }` as its JSON body. A stolen cookie is
+therefore not enough to plant a durable login path on the account, nor to
+detach and sign out the owner's other logins.
 
-Two events revoke sessions server-side:
+These events revoke sessions server-side:
 
+- A local user changing their own password, or an administrator resetting it,
+  disabling the user or removing them (see [Local users](#local-users)).
 - A login whose password differs from the credential fdrive has stored for
   that identity (or whose stored credential is missing or undecryptable)
   deletes every other session of the account inside the same transaction
-  that stores the new credential. Changing the SFTPGo password and signing
-  in again is how a user locks a stolen session out. Logging in again with
-  the unchanged password leaves other devices signed in.
+  that stores the new credential. For WebDAV or S3, changing the password or
+  key on the server and signing in again is how a user locks a stolen session
+  out. Logging in again with the unchanged password leaves other devices
+  signed in.
   Credential comparison happens under the identity/account persistence locks. A different
   credential committed since upstream authentication began rejects the delayed login;
   concurrent logins presenting the same new credential keep both sessions.
@@ -225,21 +221,34 @@ Two events revoke sessions server-side:
   identity, except the requesting session, which moves to a remaining login
   and is rotated as before.
 
-## Known limitation: SFTPGo TOTP enforced for HTTP
+## Local users
 
-SFTPGo can require a one-time password (`otp`) on `GET /api/v2/user/token`
-per user. fdrive's login endpoint accepts and forwards an `otp` for the
-initial login, so signing in works normally for such a user. However,
-`TokenSource`'s re-minting path (used whenever a cached token expires or is
-revoked) calls the same SFTPGo login endpoint again using only the stored
-password, with no way to supply a fresh one-time code. For a user with TOTP
-enforced for HTTP, re-minting therefore fails with `reauth_required` as soon
-as their cached token expires (by default, roughly every 20 minutes, per
-SFTPGo's own token TTL), even though their fdrive session cookie is still
-valid. In practice this means such a user is asked to sign back in to fdrive
-periodically, more often than a user without TOTP enforced. There is no
-current workaround beyond disabling TOTP enforcement for HTTP on the SFTPGo
-side, or accepting the more frequent re-authentication.
+`app.local_users` holds one row per local user: a username, unique in any case
+because homes may sit on a case-insensitive disk, a scrypt hash and a
+disabled flag. Each user's files are `<FDRIVE_STORAGE_ROOT>/<username>`.
+Administration is `apps/api/src/local/service.ts` behind
+`/api/v1/admin/users` (administrators only, System > Users):
+
+- **Setup** creates the first user from the username and password the owner
+  chooses; an interrupted setup resumes with the same password.
+- **Add** creates the user and their login at once, so they can be made an
+  administrator before they first sign in.
+- **Reset password** and **disable** end every session of that user, except
+  the administrator's own when they act on themselves. Nobody can disable
+  themselves or remove their own administrator rights.
+- **Remove** stops the user signing in, ends their sessions, deletes their API
+  tokens and removes administrator rights. Their files and fdrive data (tags,
+  favorites, shares, activity) stay with the name, so adding the same name
+  again gives them back, without the access that was revoked.
+
+A local login changes its own password with `POST /api/v1/auth/password`
+(Account > Password): the current password is checked, the hash and the
+sealed credential are replaced, and the account's other sessions end.
+
+Coming from SFTPGo, the first start carries passwords over from fdrive's
+sealed credentials: administrators can sign in at once, everyone else is
+added disabled until an administrator enables them, and users who never
+signed in to fdrive get a password from an administrator.
 
 ## MCP token grants
 

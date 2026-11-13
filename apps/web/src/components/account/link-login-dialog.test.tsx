@@ -8,7 +8,7 @@ import { apiClient } from "@/lib/api/client";
 import { allCapabilities, storageNote } from "@/lib/identity/capabilities";
 import { LinkLoginDialog } from "./link-login-dialog";
 
-/** The note for storage with none of the features fdrive builds on SFTPGo. */
+/** The note for storage with none of search, shares and Office. */
 const FILES_ONLY_NOTE = storageNote({ ...allCapabilities(false), trash: true }) as string;
 
 vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn() }) }));

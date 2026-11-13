@@ -1,6 +1,12 @@
 "use client";
 
-import type { FsEntry, OfficeStatusResponse, ProviderCapabilities, Tag } from "@fdrive/contracts";
+import type {
+  FsEntry,
+  OfficeStatusResponse,
+  ProviderCapabilities,
+  ReceivedGrant,
+  Tag,
+} from "@fdrive/contracts";
 import { detectArchiveKind } from "@fdrive/core";
 import {
   CopyIcon,
@@ -11,6 +17,7 @@ import {
   FolderInputIcon,
   FolderSearchIcon,
   Link2Icon,
+  LogOutIcon,
   MessageSquarePlusIcon,
   PackageOpenIcon,
   PencilIcon,
@@ -19,6 +26,7 @@ import {
   StarOffIcon,
   TagIcon,
   Trash2Icon,
+  UsersIcon,
 } from "lucide-react";
 import type { ReactNode } from "react";
 import {
@@ -32,6 +40,7 @@ import {
   ContextMenuSubTrigger,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
+import { entryRestrictions } from "@/lib/grants/paths";
 import {
   type BrowserSelection,
   canDownload,
@@ -48,6 +57,8 @@ export type RowContextAction =
   | "office:edit"
   | "office:convert"
   | "share"
+  | "shareWithPeople"
+  | "leave"
   | "open"
   | "revealInFolder"
   | "download"
@@ -84,6 +95,14 @@ export interface FileContextMenuProps {
    * `DEFAULT_CAPABILITIES`.
    */
   capabilities?: ProviderCapabilities;
+  /**
+   * The folders others share with the active login. With them the menu
+   * offers "Leave" on such a folder, hides rename, move, duplicate and
+   * delete where only the owner may do them, keeps public links out of
+   * `Shared with me`, and offers "Share with people" on the login's own
+   * folders (with `capabilities.shareWithPeople`). Defaults to none.
+   */
+  received?: readonly ReceivedGrant[];
   /**
    * Hides "Move to" and "Copy to", for a read-only "virtual listing"
    * (favorites, recents, a tag's files) where the entries do not live in
@@ -123,6 +142,7 @@ export interface FileContextMenuProps {
 }
 
 const DEFAULT_TAGS: readonly Tag[] = [];
+const DEFAULT_RECEIVED: readonly ReceivedGrant[] = [];
 const DEFAULT_TAG_CHECK_STATE = (): TagCheckState => "unchecked";
 const DEFAULT_NO_OP = () => {};
 
@@ -134,6 +154,7 @@ export function FileContextMenu({
   onAction,
   selection,
   capabilities = DEFAULT_CAPABILITIES,
+  received = DEFAULT_RECEIVED,
   hideMoveCopy = false,
   showOrganize = false,
   showChat = false,
@@ -153,15 +174,23 @@ export function FileContextMenu({
   const isMultiSelection = selectionCount > 1;
   const archiveKind = entry.kind !== "dir" ? detectArchiveKind(entry.name) : null;
   const canExtract = !isMultiSelection && archiveKind !== null;
+  const restrictions = entryRestrictions(entry, capabilities, received);
+  const locked = restrictions.locked !== null;
 
   return (
     <ContextMenu>
       <ContextMenuTrigger>{children}</ContextMenuTrigger>
       <ContextMenuContent>
-        {capabilities.shares && (
+        {capabilities.shares && restrictions.publicLink && (
           <ContextMenuItem onClick={() => onAction("share", entry)}>
             <Link2Icon />
             Share
+          </ContextMenuItem>
+        )}
+        {restrictions.shareWithPeople && !isMultiSelection && (
+          <ContextMenuItem onClick={() => onAction("shareWithPeople", entry)}>
+            <UsersIcon />
+            Share with people
           </ContextMenuItem>
         )}
         <ContextMenuItem onClick={() => onAction("open", entry)}>
@@ -182,20 +211,29 @@ export function FileContextMenu({
           </ContextMenuItem>
         )}
         <ContextMenuSeparator />
-        <ContextMenuItem disabled={isMultiSelection} onClick={() => onAction("duplicate", entry)}>
-          <CopyIcon />
-          Duplicate
-        </ContextMenuItem>
-        <ContextMenuItem onClick={() => onAction("rename", entry)}>
-          <PencilIcon />
-          Rename
-        </ContextMenuItem>
+        {!locked && (
+          <>
+            <ContextMenuItem
+              disabled={isMultiSelection}
+              onClick={() => onAction("duplicate", entry)}
+            >
+              <CopyIcon />
+              Duplicate
+            </ContextMenuItem>
+            <ContextMenuItem onClick={() => onAction("rename", entry)}>
+              <PencilIcon />
+              Rename
+            </ContextMenuItem>
+          </>
+        )}
         {!hideMoveCopy && (
           <>
-            <ContextMenuItem onClick={() => onAction("moveTo", entry)}>
-              <FolderInputIcon />
-              Move to
-            </ContextMenuItem>
+            {!locked && (
+              <ContextMenuItem onClick={() => onAction("moveTo", entry)}>
+                <FolderInputIcon />
+                Move to
+              </ContextMenuItem>
+            )}
             <ContextMenuItem onClick={() => onAction("copyTo", entry)}>
               <FilesIcon />
               Copy to
@@ -263,10 +301,12 @@ export function FileContextMenu({
             </ContextMenuItem>
             {canExtract && (
               <>
-                <ContextMenuItem onClick={() => onAction("extractHere", entry)}>
-                  <PackageOpenIcon />
-                  Extract here
-                </ContextMenuItem>
+                {!locked && (
+                  <ContextMenuItem onClick={() => onAction("extractHere", entry)}>
+                    <PackageOpenIcon />
+                    Extract here
+                  </ContextMenuItem>
+                )}
                 <ContextMenuItem onClick={() => onAction("extractTo", entry)}>
                   <PackageOpenIcon />
                   Extract to
@@ -284,14 +324,27 @@ export function FileContextMenu({
             </ContextMenuItem>
           </>
         )}
-        <ContextMenuSeparator />
-        <ContextMenuItem
-          variant={trashAvailable ? "default" : "destructive"}
-          onClick={() => onAction("delete", entry)}
-        >
-          <Trash2Icon />
-          {trashAvailable ? "Move to Trash" : "Delete"}
-        </ContextMenuItem>
+        {restrictions.leave !== null && !isMultiSelection && (
+          <>
+            <ContextMenuSeparator />
+            <ContextMenuItem onClick={() => onAction("leave", entry)}>
+              <LogOutIcon />
+              Leave
+            </ContextMenuItem>
+          </>
+        )}
+        {!locked && (
+          <>
+            <ContextMenuSeparator />
+            <ContextMenuItem
+              variant={trashAvailable ? "default" : "destructive"}
+              onClick={() => onAction("delete", entry)}
+            >
+              <Trash2Icon />
+              {trashAvailable ? "Move to Trash" : "Delete"}
+            </ContextMenuItem>
+          </>
+        )}
       </ContextMenuContent>
     </ContextMenu>
   );

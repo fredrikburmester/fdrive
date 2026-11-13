@@ -8,7 +8,7 @@ export function makeIdentity(overrides: IdentityOverrides = {}): IdentitySummary
   return {
     id: "one",
     username: "ada",
-    providerType: "sftpgo",
+    providerType: "local",
     providerLabel: "Main",
     providerId: "00000000-0000-4000-8000-000000000009",
     ...overrides,
@@ -18,9 +18,9 @@ export function makeIdentity(overrides: IdentityOverrides = {}): IdentitySummary
       atomicMove: true,
       trash: false,
       shares: true,
+      shareWithPeople: false,
       office: true,
       index: true,
-      scopeMapping: true,
       ...overrides.capabilities,
     },
   };

@@ -1,5 +1,14 @@
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -7,9 +16,13 @@ import {
   buildApiEnvDev,
   buildDevSearchEnv,
   buildWebEnvLocal,
+  devSeedDir,
+  devStorageRoot,
   ENV_FILE_MODE,
+  ensureDevFiles,
   ensureEnvFile,
   generateMasterKey,
+  isObsoleteApiEnvLine,
   planApiEnvDev,
   quoteEnvValue,
   upsertEnv,
@@ -33,6 +46,12 @@ describe("buildApiEnvDev", () => {
     expect(contents).toContain("FDRIVE_MASTER_KEY=the-key");
     expect(contents.endsWith("\n")).toBe(true);
   });
+
+  it("names no SFTPGo server or home template", () => {
+    const contents = buildApiEnvDev("the-key");
+    expect(contents).not.toContain("SFTPGO_URL");
+    expect(contents).not.toContain("FDRIVE_HOME_TEMPLATE");
+  });
 });
 
 describe("buildWebEnvLocal", () => {
@@ -51,9 +70,22 @@ describe("buildDevSearchEnv", () => {
     expect(additions.FDRIVE_TIKA_URL).toBe("http://127.0.0.1:58012/extract");
     expect(additions.FDRIVE_ADMIN_USERS).toBe("dev");
     expect(additions.FDRIVE_THUMBS_DIR).toBe(join("/repo", "deploy", "dev", ".data", "thumbs"));
+    expect(additions.FDRIVE_STORAGE_ROOT).toBe(join("/repo", "deploy", "dev", ".data", "files"));
     expect(JSON.parse(additions.FDRIVE_INDEX_ROOTS ?? "")).toEqual([
-      { name: "sftpgo", sftpgoPath: "/srv/sftpgo/data", indexerPath: "/roots/sftpgo" },
+      {
+        name: "files",
+        storagePath: join("/repo", "deploy", "dev", ".data", "files"),
+        indexerPath: "/data",
+      },
     ]);
+  });
+
+  it("indexes the served folder under the root the dev indexer mounts", () => {
+    const additions = buildDevSearchEnv("/repo");
+    const [root] = JSON.parse(additions.FDRIVE_INDEX_ROOTS ?? "[]");
+    expect(root.storagePath).toBe(additions.FDRIVE_STORAGE_ROOT);
+    expect(devStorageRoot("/repo")).toBe(additions.FDRIVE_STORAGE_ROOT);
+    expect(devSeedDir("/repo")).toBe(join("/repo", "deploy", "dev", "files"));
   });
 
   it("returns every documented processing key", () => {
@@ -65,6 +97,7 @@ describe("buildDevSearchEnv", () => {
         "FDRIVE_INDEX_ROOTS",
         "FDRIVE_OCR_URL",
         "FDRIVE_IMAGE_EMBED_URL",
+        "FDRIVE_STORAGE_ROOT",
         "FDRIVE_THUMBS_DIR",
         "FDRIVE_TIKA_URL",
       ].sort(),
@@ -137,7 +170,11 @@ describe("upsertEnv", () => {
         { encoding: "utf-8" },
       );
       expect(JSON.parse(JSON.parse(output))).toEqual([
-        { name: "sftpgo", sftpgoPath: "/srv/sftpgo/data", indexerPath: "/roots/sftpgo" },
+        {
+          name: "files",
+          storagePath: join("/repo", "deploy", "dev", ".data", "files"),
+          indexerPath: "/data",
+        },
       ]);
     } finally {
       rmSync(dir, { recursive: true, force: true });
@@ -170,7 +207,153 @@ describe("planApiEnvDev", () => {
     const existing = "A=1\nB=2\n";
     const plan = planApiEnvDev(existing, { A: "ignored", B: "ignored" }, "unused-key");
     expect(plan.addedKeys).toEqual([]);
+    expect(plan.removedKeys).toEqual([]);
     expect(plan.contents).toBe(existing);
+  });
+
+  it("moves a file an SFTPGo-era version wrote onto the local folder", () => {
+    const existing = [
+      "PORT=3001",
+      "SFTPGO_URL=http://127.0.0.1:58080",
+      "FDRIVE_MASTER_KEY=kept",
+      "FDRIVE_HOME_TEMPLATE=sftpgo:/{username}",
+      `FDRIVE_INDEX_ROOTS='[{"name":"sftpgo","sftpgoPath":"/srv/sftpgo/data","indexerPath":"/roots/sftpgo"}]'`,
+      "FDRIVE_ADMIN_USERS=dev",
+      "",
+    ].join("\n");
+    const additions = buildDevSearchEnv("/repo");
+    const plan = planApiEnvDev(existing, additions, "unused-key");
+    expect(plan.removedKeys).toEqual(["SFTPGO_URL", "FDRIVE_HOME_TEMPLATE"]);
+    expect(plan.addedKeys).toContain("FDRIVE_INDEX_ROOTS");
+    expect(plan.addedKeys).toContain("FDRIVE_STORAGE_ROOT");
+    expect(plan.addedKeys).not.toContain("FDRIVE_ADMIN_USERS");
+    expect(plan.contents).toContain("FDRIVE_MASTER_KEY=kept");
+    expect(plan.contents).not.toContain("sftpgo");
+    expect(plan.contents).not.toContain("SFTPGO");
+    expect(plan.contents).toContain(
+      `FDRIVE_INDEX_ROOTS=${quoteEnvValue(additions.FDRIVE_INDEX_ROOTS ?? "")}`,
+    );
+  });
+});
+
+describe("planApiEnvDev with the seed folder", () => {
+  it("moves a storage root that served the committed seed onto its copy", () => {
+    const seed = devSeedDir("/repo");
+    const roots = JSON.stringify([{ name: "files", storagePath: seed, indexerPath: "/data" }]);
+    const existing = [
+      "FDRIVE_MASTER_KEY=kept",
+      `FDRIVE_STORAGE_ROOT=${seed}`,
+      `FDRIVE_INDEX_ROOTS=${quoteEnvValue(roots)}`,
+      "",
+    ].join("\n");
+    const additions = buildDevSearchEnv("/repo");
+    const plan = planApiEnvDev(existing, additions, "unused-key", {}, seed);
+    expect(plan.addedKeys).toEqual(
+      expect.arrayContaining(["FDRIVE_STORAGE_ROOT", "FDRIVE_INDEX_ROOTS"]),
+    );
+    expect(plan.removedKeys).toEqual([]);
+    expect(plan.contents).toContain(`FDRIVE_STORAGE_ROOT=${devStorageRoot("/repo")}\n`);
+    expect(plan.contents).not.toContain(`${seed}"`);
+    expect(plan.contents).not.toContain(`=${seed}\n`);
+    expect(plan.contents).toContain("FDRIVE_MASTER_KEY=kept");
+  });
+
+  it("keeps a storage root the developer chose", () => {
+    const existing = "FDRIVE_STORAGE_ROOT=/elsewhere\n";
+    const plan = planApiEnvDev(existing, buildDevSearchEnv("/repo"), "k", {}, devSeedDir("/repo"));
+    expect(plan.contents).toContain("FDRIVE_STORAGE_ROOT=/elsewhere\n");
+    expect(plan.addedKeys).not.toContain("FDRIVE_STORAGE_ROOT");
+  });
+});
+
+describe("ensureDevFiles", () => {
+  function fixture() {
+    const dir = mkdtempSync(join(tmpdir(), "ensure-dev-files-"));
+    const seed = join(dir, "seed");
+    mkdirSync(join(seed, "dev", "notes"), { recursive: true });
+    writeFileSync(join(seed, "dev", "notes", "todo.md"), "seed");
+    return { dir, seed, files: join(dir, ".data", "files") };
+  }
+
+  it("copies the seed when the served folder is missing", () => {
+    const f = fixture();
+    try {
+      expect(ensureDevFiles(f.seed, f.files)).toBe(true);
+      expect(readFileSync(join(f.files, "dev", "notes", "todo.md"), "utf-8")).toBe("seed");
+    } finally {
+      rmSync(f.dir, { recursive: true, force: true });
+    }
+  });
+
+  it("copies into an empty folder, like one Docker created first", () => {
+    const f = fixture();
+    try {
+      mkdirSync(f.files, { recursive: true });
+      expect(ensureDevFiles(f.seed, f.files)).toBe(true);
+      expect(readdirSync(f.files)).toEqual(["dev"]);
+    } finally {
+      rmSync(f.dir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps what dev use changed, and never writes to the seed", () => {
+    const f = fixture();
+    try {
+      ensureDevFiles(f.seed, f.files);
+      writeFileSync(join(f.files, "dev", "notes", "todo.md"), "edited");
+      writeFileSync(join(f.files, "dev", "upload.txt"), "new");
+      expect(ensureDevFiles(f.seed, f.files)).toBe(false);
+      expect(readFileSync(join(f.files, "dev", "notes", "todo.md"), "utf-8")).toBe("edited");
+      expect(readFileSync(join(f.seed, "dev", "notes", "todo.md"), "utf-8")).toBe("seed");
+      expect(existsSync(join(f.seed, "dev", "upload.txt"))).toBe(false);
+    } finally {
+      rmSync(f.dir, { recursive: true, force: true });
+    }
+  });
+
+  it("starts from a fresh copy on reset", () => {
+    const f = fixture();
+    try {
+      ensureDevFiles(f.seed, f.files);
+      writeFileSync(join(f.files, "dev", "notes", "todo.md"), "edited");
+      writeFileSync(join(f.files, "dev", "upload.txt"), "new");
+      expect(ensureDevFiles(f.seed, f.files, true)).toBe(true);
+      expect(readFileSync(join(f.files, "dev", "notes", "todo.md"), "utf-8")).toBe("seed");
+      expect(existsSync(join(f.files, "dev", "upload.txt"))).toBe(false);
+    } finally {
+      rmSync(f.dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("isObsoleteApiEnvLine", () => {
+  it("matches the removed keys and only the old sftpgo index root", () => {
+    expect(isObsoleteApiEnvLine("SFTPGO_URL=http://x")).toBe(true);
+    expect(isObsoleteApiEnvLine("FDRIVE_HOME_TEMPLATE=sftpgo:/{username}")).toBe(true);
+    expect(isObsoleteApiEnvLine(`FDRIVE_INDEX_ROOTS='[{"name": "sftpgo"}]'`)).toBe(true);
+    expect(isObsoleteApiEnvLine(`FDRIVE_INDEX_ROOTS='[{"name":"mine"}]'`)).toBe(false);
+    expect(isObsoleteApiEnvLine("# SFTPGO_URL=commented")).toBe(false);
+    expect(isObsoleteApiEnvLine("")).toBe(false);
+  });
+
+  it("given the seed folder, matches only values that serve it", () => {
+    const seed = "/repo/deploy/dev/files";
+    const roots = (path: string) =>
+      `FDRIVE_INDEX_ROOTS=${quoteEnvValue(JSON.stringify([{ name: "files", storagePath: path, indexerPath: "/data" }]))}`;
+    expect(isObsoleteApiEnvLine(`FDRIVE_STORAGE_ROOT=${seed}`, seed)).toBe(true);
+    expect(isObsoleteApiEnvLine(`FDRIVE_STORAGE_ROOT="${seed}"`, seed)).toBe(true);
+    expect(isObsoleteApiEnvLine(`FDRIVE_STORAGE_ROOT=${seed}`)).toBe(false);
+    expect(isObsoleteApiEnvLine("FDRIVE_STORAGE_ROOT=/repo/deploy/dev/.data/files", seed)).toBe(
+      false,
+    );
+    expect(isObsoleteApiEnvLine(roots(seed), seed)).toBe(true);
+    expect(isObsoleteApiEnvLine(roots("/mine"), seed)).toBe(false);
+    expect(isObsoleteApiEnvLine("FDRIVE_INDEX_ROOTS=not-json", seed)).toBe(false);
+    expect(isObsoleteApiEnvLine(`FDRIVE_INDEX_ROOTS='{"storagePath":"${seed}"}'`, seed)).toBe(
+      false,
+    );
+    expect(isObsoleteApiEnvLine(`FDRIVE_INDEX_ROOTS='[1,null]'`, seed)).toBe(false);
+    expect(isObsoleteApiEnvLine("FDRIVE_THUMBS_DIR=/x", seed)).toBe(false);
   });
 });
 
@@ -239,7 +422,6 @@ it("derives URLs from the same port overrides as dev compose", () => {
   const env = {
     FDRIVE_DEV_API_PORT: "3301",
     FDRIVE_DEV_DB_PORT: "55433",
-    FDRIVE_DEV_SFTPGO_HTTP_PORT: "58083",
     FDRIVE_DEV_ML_PORT: "59081",
     FDRIVE_DEV_INDEXER_HTTP_PORT: "59010",
     FDRIVE_DEV_OCR_HTTP_PORT: "59011",
@@ -247,7 +429,6 @@ it("derives URLs from the same port overrides as dev compose", () => {
   const api = buildApiEnvDev("key", env);
   expect(api).toContain("PORT=3301");
   expect(api).toContain("127.0.0.1:55433/fdrive");
-  expect(api).toContain("SFTPGO_URL=http://127.0.0.1:58083");
   expect(buildWebEnvLocal(env)).toContain("127.0.0.1:3301");
   expect(buildDevSearchEnv("/repo", env)).toMatchObject({
     FDRIVE_EMBED_URL: "http://127.0.0.1:59081/text",

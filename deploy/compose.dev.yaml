@@ -1,10 +1,12 @@
 name: fdrive-dev
 
 # Standalone local development environment. Not layered on top of
-# compose.yaml: it runs only the two backing services a developer needs to
-# run the api and web dev servers with hot reload on the host (Postgres and
-# a seeded SFTPGo), pre-populated with the same alice/bob/carol fixtures the
-# testkit uses plus a friendlier "dev" user with sample files.
+# compose.yaml: it runs only what a developer needs beside the api and web dev
+# servers running with hot reload on the host. The api serves dev/.data/files
+# itself (FDRIVE_STORAGE_ROOT in apps/api/.env.dev): a gitignored copy of the
+# committed dev/files seed, with the alice/bob/carol homes the testkit uses
+# plus a friendlier "dev" home with sample files. `pnpm dev:env` makes the copy
+# and `pnpm dev:users` creates those users with known passwords.
 #
 # Usage: see docs/DEVELOPMENT.md, or the root `dev:env` / `dev:env:down` /
 # `dev:env:reset` scripts.
@@ -26,61 +28,12 @@ services:
       timeout: 5s
       retries: 10
 
-  # SFTPGo copies seed files in as root, which leaves them unwritable by the
-  # uid 1000 the sftpgo process runs as (see packages/testkit's
-  # startSftpgo). This one-shot service copies the generated seed files into
-  # the named data volume and fixes ownership before sftpgo ever starts.
-  sftpgo-seed:
-    image: alpine:3.20
-    volumes:
-      - ./dev/files:/seed-files:ro
-      - fdrive-dev-sftpgo-data:/srv/sftpgo/data
-    command:
-      - sh
-      - -c
-      - |
-        set -e
-        mkdir -p /srv/sftpgo/data
-        cp -a /seed-files/. /srv/sftpgo/data/
-        chown -R 1000:1000 /srv/sftpgo/data
-
-  sftpgo:
-    image: drakkan/sftpgo:v2.7.5
-    ports:
-      - "${FDRIVE_DEV_SFTPGO_HTTP_PORT:-58080}:8080"
-      - "${FDRIVE_DEV_SFTPGO_SFTP_PORT:-52022}:2022"
-      # SFTPGo's own WebDAV binding: the dev target for the WebDAV provider.
-      - "${FDRIVE_DEV_SFTPGO_WEBDAV_PORT:-58082}:8081"
-    environment:
-      SFTPGO_HTTPD__BINDINGS__0__PORT: "8080"
-      SFTPGO_HTTPD__BINDINGS__0__ADDRESS: ""
-      SFTPGO_WEBDAVD__BINDINGS__0__PORT: "8081"
-      SFTPGO_WEBDAVD__BINDINGS__0__ADDRESS: ""
-      SFTPGO_LOADDATA_FROM: /seed/sftpgo-seed.json
-      SFTPGO_LOADDATA_MODE: "0"
-      SFTPGO_DATA_PROVIDER__CREATE_DEFAULT_ADMIN: "true"
-      SFTPGO_DEFAULT_ADMIN_USERNAME: admin
-      SFTPGO_DEFAULT_ADMIN_PASSWORD: admin-dev-password
-    volumes:
-      - ./dev/sftpgo-seed.json:/seed/sftpgo-seed.json:ro
-      - fdrive-dev-sftpgo-data:/srv/sftpgo/data
-    depends_on:
-      sftpgo-seed:
-        condition: service_completed_successfully
-    healthcheck:
-      # The image ships neither curl nor wget; sftpgo's own "ping"
-      # subcommand exists specifically for environments like this one.
-      test: ["CMD", "sftpgo", "ping"]
-      interval: 5s
-      timeout: 5s
-      retries: 10
-
   # Index profile: indexer, ml, ocr. Opt in with `--profile index` so a
-  # plain `docker compose -f compose.dev.yaml up -d` stays fast. Mounts the same
-  # named volume sftpgo writes its seed files into (read-only), so the indexer
-  # sees exactly what the dev SFTPGo user sees. Thumbnails are bind-mounted to
-  # a host directory (not a named volume) so the api dev server on the host
-  # can read the generated WebP files directly.
+  # plain `docker compose -f compose.dev.yaml up -d` stays fast. Mounts the
+  # folder the api dev server serves (read-only) at /data under the root name
+  # production uses, so the indexer sees exactly what the dev users see.
+  # Thumbnails are bind-mounted to a host directory (not a named volume) so the
+  # api dev server on the host can read the generated WebP files directly.
   indexer:
     build:
       context: ../services/indexer
@@ -88,7 +41,7 @@ services:
     profiles: [index]
     environment:
       DATABASE_URL: postgres://fdrive:fdrive-dev@db:5432/fdrive
-      INDEX_ROOTS: sftpgo=/roots/sftpgo
+      INDEX_ROOTS: files=/data
       # The three units of the ml service below.
       TIKA_URL: http://ml:8080/extract
       EMBED_URL: http://ml:8080/text
@@ -103,12 +56,10 @@ services:
     ports:
       - "${FDRIVE_DEV_INDEXER_HTTP_PORT:-58010}:8010"
     volumes:
-      - fdrive-dev-sftpgo-data:/roots/sftpgo:ro
+      - ./dev/.data/files:/data:ro
       - ${FDRIVE_DEV_THUMBS_DIR:-./dev/.data/thumbs}:/thumbs
     depends_on:
       db:
-        condition: service_healthy
-      sftpgo:
         condition: service_healthy
 
   # One server for document text extraction, text embeddings and image
@@ -135,10 +86,10 @@ services:
     mem_limit: 6g
     restart: unless-stopped
 
-  # Nightly OCR pass, same `index` profile as the indexer. Mounts the dev
-  # SFTPGo data volume read-write (the indexer mounts it read-only), so a
-  # manually triggered `POST /run` can actually rewrite a scanned PDF. The
-  # seed's `dev/docs/sample.pdf` already has a text layer, so a run reports it
+  # Nightly OCR pass, same `index` profile as the indexer. Mounts the served
+  # dev files folder read-write (the indexer mounts it read-only), so a manually
+  # triggered `POST /run` can actually rewrite a scanned PDF. The seed's
+  # `dev/docs/sample.pdf` already has a text layer, so a run reports it
   # skipped rather than OCR'd.
   ocr:
     build:
@@ -147,7 +98,7 @@ services:
     profiles: [index]
     environment:
       DATABASE_URL: postgres://fdrive:fdrive-dev@db:5432/fdrive
-      INDEX_ROOTS: sftpgo=/roots/sftpgo
+      INDEX_ROOTS: files=/data
       OCR_PORT: "8011"
       STATE_DIR: /state
       OCR_RUN_ON_START: "false"
@@ -158,13 +109,45 @@ services:
     ports:
       - "${FDRIVE_DEV_OCR_HTTP_PORT:-58011}:8011"
     volumes:
-      - fdrive-dev-sftpgo-data:/roots/sftpgo
+      - ./dev/.data/files:/data
       - fdrive-dev-ocr-state:/state
     depends_on:
       db:
         condition: service_healthy
-      sftpgo:
-        condition: service_healthy
+
+  # A local WebDAV target for the WebDAV provider: Apache mod_dav, the server
+  # the provider's integration tests use. Opt in with `--profile webdav`, then
+  # add it under System > Storage as http://localhost:58082/dav/ and sign in
+  # as `dev` with the password `dev-webdav-password`.
+  webdav:
+    image: httpd:2.4
+    profiles: [webdav]
+    ports:
+      - "${FDRIVE_DEV_WEBDAV_PORT:-58082}:80"
+    volumes:
+      - fdrive-dev-webdav-data:/usr/local/apache2/htdocs/dav
+    command:
+      - sh
+      - -c
+      - |
+        set -e
+        if ! grep -q 'fdrive dev' conf/httpd.conf; then
+          sed -i 's/^#LoadModule dav_module/LoadModule dav_module/;s/^#LoadModule dav_fs_module/LoadModule dav_fs_module/' conf/httpd.conf
+          cat >> conf/httpd.conf <<'EOF'
+        DavLockDB /tmp/DavLock
+        <Directory /usr/local/apache2/htdocs/dav>
+          Dav On
+          Options Indexes
+          AuthType Basic
+          AuthName "fdrive dev"
+          AuthUserFile /tmp/dav-passwords
+          Require valid-user
+        </Directory>
+        EOF
+        fi
+        chown www-data:www-data htdocs/dav
+        htpasswd -bc /tmp/dav-passwords dev dev-webdav-password
+        exec httpd-foreground
 
   # A local S3 target for the S3 provider: MinIO with one bucket and one
   # read-write key, prepared by the `mc` client the image ships. Add it under
@@ -206,7 +189,7 @@ services:
 
 volumes:
   fdrive-dev-pgdata:
-  fdrive-dev-sftpgo-data:
+  fdrive-dev-webdav-data:
   fdrive-dev-minio-data:
   fdrive-dev-ocr-state:
   fdrive-dev-ml-models:

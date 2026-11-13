@@ -10,19 +10,19 @@ def test_iso_now_fixed() -> None:
 
 
 def test_build_event_defaults_at() -> None:
-    ev = build_event("created", "sftpgo", "a/b.txt")
+    ev = build_event("created", "files", "a/b.txt")
     assert ev["kind"] == "created"
-    assert ev["root"] == "sftpgo"
+    assert ev["root"] == "files"
     assert ev["path"] == "a/b.txt"
     assert ev["target_path"] is None
     assert ev["at"]
 
 
 def test_build_event_moved_with_target() -> None:
-    ev = build_event("moved", "sftpgo", "old.txt", target_path="new.txt", at="2026-01-01T00:00:00+00:00")
+    ev = build_event("moved", "files", "old.txt", target_path="new.txt", at="2026-01-01T00:00:00+00:00")
     assert ev == {
         "kind": "moved",
-        "root": "sftpgo",
+        "root": "files",
         "path": "old.txt",
         "target_path": "new.txt",
         "at": "2026-01-01T00:00:00+00:00",

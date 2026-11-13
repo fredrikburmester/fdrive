@@ -8,7 +8,7 @@ import type {
   PublicProvider,
 } from "@fdrive/contracts";
 import type { ProbeResult, ProviderInstance, ProviderModule } from "@fdrive/core";
-import { CoreError, parseHomeTemplate, validateFields } from "@fdrive/core";
+import { validateFields } from "@fdrive/core";
 import type { Identity, Provider, ProviderRepo, Repos } from "@fdrive/db";
 import { ConflictError } from "@fdrive/db";
 import { ApiHttpError } from "../errors.js";
@@ -31,19 +31,17 @@ export interface ProviderServiceDeps {
   readonly fetch: typeof globalThis.fetch;
   readonly clock: () => Date;
   readonly eventLog?: SystemEventLog;
-  /**
-   * How `SFTPGO_URL` and `FDRIVE_HOME_TEMPLATE` seed and pin the first
-   * SFTPGo provider, and which index roots (`FDRIVE_INDEX_ROOTS`) exist for
-   * a provider's files to be indexed under.
-   */
+  /** Which index roots (`FDRIVE_INDEX_ROOTS`) exist for a provider's files to be indexed under. */
   readonly environment: {
-    readonly sftpgoUrl: string | undefined;
-    readonly homeTemplate: string;
     readonly indexRootNames: readonly string[];
   };
   /** Whether the recycle folder is switched on for a provider (Trash settings). */
   readonly trashEnabled?: (providerId: string) => Promise<boolean>;
-  /** Replaces the registry's modules by type; tests inject modules over shared fakes. */
+  /**
+   * The modules this deployment has, by type (`createProviderModules`): the
+   * local folder joins them when `FDRIVE_STORAGE_ROOT` is set. Defaults to
+   * the modules every deployment has.
+   */
   readonly modules?: Readonly<Record<string, ProviderModule>>;
 }
 
@@ -52,7 +50,7 @@ export interface ProviderService {
   list(): Promise<Provider[]>;
   /** Enabled providers only, oldest first: what users may log in to. */
   enabled(): Promise<Provider[]>;
-  /** The enabled provider pinned by `SFTPGO_URL`, else the oldest enabled one; `null` before setup. */
+  /** The enabled provider the deployment pins, else the oldest enabled one; `null` before setup. */
   defaultProvider(): Promise<Provider | null>;
   /** The row, module and instance for `id`; `null` when it does not exist or its type is unknown. */
   get(id: string): Promise<ResolvedProvider | null>;
@@ -73,7 +71,10 @@ export interface ProviderService {
   /** Probes a saved provider by id or an unsaved candidate. */
   probe(target: string | AdminProviderTestRequest): Promise<ProbeResult>;
   capabilitiesFor(resolved: ResolvedProvider): Promise<ProviderCapabilities>;
-  /** The admin-set label, else the endpoint host: for callers that already know the row. */
+  /**
+   * The admin-set label, else the endpoint host, or the module's own name for
+   * a row with no endpoint: for callers that already know the row.
+   */
   labelFor(provider: Provider): string;
   /**
    * The login page's view of a row. Its `label` is the admin-set one or
@@ -84,11 +85,12 @@ export interface ProviderService {
   adminView(provider: Provider, probeResult?: { ok: boolean }): Promise<AdminProvider | null>;
   types(): AdminProviderType[];
   /**
-   * Runs once at startup: creates or pins the SFTPGo provider named by
-   * `SFTPGO_URL` and unpins any row the variable no longer names. A row
-   * that already exists keeps whatever enabled state an admin gave it;
-   * a row the variable moved away from is also disabled, so the deployment
-   * has one default again. Idempotent.
+   * Runs once at startup: creates and pins the row of every module the
+   * deployment manages (the local folder, when `FDRIVE_STORAGE_ROOT` is
+   * set), and unpins and disables any other pinned row, such as an SFTPGo
+   * row from before the local folder replaced it or a local row whose folder
+   * is no longer configured. A row that already exists keeps whatever
+   * enabled state an admin gave it. Idempotent.
    */
   seedFromEnvironment(): Promise<void>;
 }
@@ -113,19 +115,16 @@ function assertValidConfig(module: ProviderModule, config: unknown): Record<stri
       issues: result.issues,
     });
   }
-  const homeTemplate = result.value.homeTemplate;
-  if (module.type === "sftpgo" && homeTemplate) {
-    try {
-      parseHomeTemplate(homeTemplate);
-    } catch (error) {
-      throw new ApiHttpError(
-        "bad_request",
-        error instanceof CoreError ? error.message : "invalid home template",
-        error instanceof CoreError ? error.details : undefined,
-      );
-    }
-  }
   return result.value;
+}
+
+/**
+ * The endpoint a deployment-managed row is stored under. It has none, and
+ * one fixed value keeps its row unique per type, wherever the folder is
+ * mounted.
+ */
+function managedBaseUrl(module: ProviderModule): string {
+  return module.type;
 }
 
 export function createProviderService(deps: ProviderServiceDeps): ProviderService {
@@ -172,13 +171,16 @@ export function createProviderService(deps: ProviderServiceDeps): ProviderServic
     return provider;
   }
 
-  const labelFor = (provider: Provider): string =>
-    provider.label.length > 0 ? provider.label : hostLabel(provider.baseUrl);
+  const labelFor = (provider: Provider): string => {
+    if (provider.label.length > 0) return provider.label;
+    const module = moduleForType(provider.type);
+    return module?.deploymentManaged === true ? module.label : hostLabel(provider.baseUrl);
+  };
 
   async function capabilitiesFor(target: ResolvedProvider): Promise<ProviderCapabilities> {
     const flags = target.module.capabilities;
     // Indexing is per row: only a provider whose files live under one of the
-    // configured index roots has thumbnails, folder sizes and scope mapping.
+    // configured index roots has search, thumbnails and folder sizes.
     const root = target.module.indexRootName?.(target.instance) ?? null;
     const hasRoots = root !== null && deps.environment.indexRootNames.includes(root);
     const trashOn =
@@ -192,8 +194,8 @@ export function createProviderService(deps: ProviderServiceDeps): ProviderServic
       trash: trashOn,
       shares: flags.shares,
       office: flags.office,
+      shareWithPeople: flags.shareWithPeople,
       index: flags.index && hasRoots,
-      scopeMapping: flags.scopeMapping && hasRoots,
     };
   }
 
@@ -226,6 +228,9 @@ export function createProviderService(deps: ProviderServiceDeps): ProviderServic
     },
     async create(input, opts) {
       const module = requireModule(input.type);
+      if (module.deploymentManaged === true) {
+        throw new ApiHttpError("bad_request", `${module.label} is set up by the deployment`);
+      }
       const config = assertValidConfig(module, input.config);
       const provider = await repo
         .create({
@@ -307,7 +312,7 @@ export function createProviderService(deps: ProviderServiceDeps): ProviderServic
       if (current.managedByEnv) {
         throw new ApiHttpError(
           "forbidden",
-          "this provider is set by the deployment; remove SFTPGO_URL to manage it here",
+          "this provider is set by the deployment; remove FDRIVE_STORAGE_ROOT to manage it here",
         );
       }
       try {
@@ -362,10 +367,11 @@ export function createProviderService(deps: ProviderServiceDeps): ProviderServic
         id: provider.id,
         type: module.type as AdminProvider["type"],
         label: labelFor(provider),
-        baseUrl: provider.baseUrl,
+        baseUrl: module.deploymentManaged === true ? "" : provider.baseUrl,
         config,
         enabled: provider.enabled,
         managedByEnv: provider.managedByEnv,
+        capabilities: module.capabilities,
         identityCount: await deps.repos.identities.countByProvider(provider.id),
         reachable: probe.ok,
         checkedAt: deps.clock().toISOString(),
@@ -373,61 +379,43 @@ export function createProviderService(deps: ProviderServiceDeps): ProviderServic
       };
     },
     types() {
-      return Object.values(modules).map((module) => ({
-        type: module.type as AdminProviderType["type"],
-        label: module.label,
-        configFields: [...module.configFields],
-        credentialFields: [...module.credentialFields],
-        capabilities: module.capabilities,
-      }));
+      return Object.values(modules)
+        .filter((module) => module.deploymentManaged !== true)
+        .map((module) => ({
+          type: module.type as AdminProviderType["type"],
+          label: module.label,
+          configFields: [...module.configFields],
+          credentialFields: [...module.credentialFields],
+          capabilities: module.capabilities,
+        }));
     },
     async seedFromEnvironment() {
-      const envUrl =
-        deps.environment.sftpgoUrl === undefined || deps.environment.sftpgoUrl.length === 0
-          ? undefined
-          : deps.environment.sftpgoUrl;
+      const managed = Object.values(modules).filter((module) => module.deploymentManaged === true);
       const rows = await repo.list();
       for (const row of rows) {
-        if (
-          !row.managedByEnv ||
-          (envUrl !== undefined && row.baseUrl.replace(/\/+$/, "") === envUrl.replace(/\/+$/, ""))
-        ) {
-          continue;
-        }
-        // Without the variable the row is simply handed to the admin. With
-        // it pointing elsewhere the deployment has moved: retire this row
-        // so its logins stop and the new address is the only default.
-        const moved = envUrl !== undefined;
-        await repo.update(row.id, { managedByEnv: false, ...(moved ? { enabled: false } : {}) });
+        if (!row.managedByEnv || managed.some((module) => module.type === row.type)) continue;
+        // The deployment no longer configures this row (an SFTPGo row from
+        // before the local folder, or a local row whose folder was removed):
+        // its logins stop, and an administrator decides what happens next.
+        await repo.update(row.id, { managedByEnv: false, enabled: false });
         eventLog.record(
           "general",
           "info",
-          moved
-            ? `Storage provider disabled: ${labelFor(row)} (SFTPGO_URL now names another server)`
-            : `Storage provider unpinned: ${labelFor(row)} (SFTPGO_URL is no longer set)`,
+          `Storage provider disabled: ${labelFor(row)} (the deployment no longer configures it)`,
           { providerId: row.id },
         );
       }
-      if (envUrl === undefined) {
-        return;
+      for (const module of managed) {
+        const existing = rows.find((row) => row.type === module.type);
+        const row =
+          existing ?? (await repo.ensure({ type: module.type, baseUrl: managedBaseUrl(module) }));
+        // Only a row this seed creates starts enabled; one an admin disabled
+        // stays that way across restarts.
+        await repo.update(row.id, {
+          managedByEnv: true,
+          ...(existing === undefined ? { enabled: true } : {}),
+        });
       }
-      const matching = rows.filter(
-        (row) =>
-          row.type === "sftpgo" && row.baseUrl.replace(/\/+$/, "") === envUrl.replace(/\/+$/, ""),
-      );
-      // Existing installations can contain both spellings. Keep the pinned
-      // identity binding rather than adopting an older, unpinned duplicate.
-      const existing = matching.find((row) => row.managedByEnv) ?? matching[0];
-      const row = existing ?? (await repo.ensure({ type: "sftpgo", baseUrl: envUrl }));
-      // Only a row this seed creates starts enabled; one an admin disabled
-      // stays that way across restarts.
-      await repo.update(row.id, {
-        managedByEnv: true,
-        ...(existing === undefined ? { enabled: true } : {}),
-        ...(typeof row.config.homeTemplate === "string"
-          ? {}
-          : { config: { ...row.config, homeTemplate: deps.environment.homeTemplate } }),
-      });
     },
   };
 }

@@ -12,9 +12,9 @@ import {
   selectProvider,
 } from "./login-model";
 
-const sftpgo: PublicProvider = {
+const local: PublicProvider = {
   id: "00000000-0000-4000-8000-000000000001",
-  type: "sftpgo",
+  type: "local",
   label: "files.example.org",
   credentialFields: [
     { name: "username", label: "User", kind: "text", required: true },
@@ -23,18 +23,18 @@ const sftpgo: PublicProvider = {
   ],
   capabilities: allCapabilities(true),
 };
-const second: PublicProvider = { ...sftpgo, id: "00000000-0000-4000-8000-000000000002" };
+const second: PublicProvider = { ...local, id: "00000000-0000-4000-8000-000000000002" };
 
 describe("credentialFieldsFor", () => {
-  it("uses the provider's fields, else the SFTPGo-shaped defaults", () => {
-    expect(credentialFieldsFor(sftpgo)).toBe(sftpgo.credentialFields);
+  it("uses the provider's fields, else the defaults", () => {
+    expect(credentialFieldsFor(local)).toBe(local.credentialFields);
     expect(credentialFieldsFor(undefined)).toBe(DEFAULT_CREDENTIAL_FIELDS);
   });
 });
 
 describe("confirmationFieldsFor", () => {
   it("keeps only the secret fields and relabels them as the current login's", () => {
-    const fields = confirmationFieldsFor(sftpgo.credentialFields);
+    const fields = confirmationFieldsFor(local.credentialFields);
     expect(fields.map((field) => field.name)).toEqual(["password", "otp"]);
     expect(fields.map((field) => field.label)).toEqual([
       "Your current password",
@@ -46,22 +46,22 @@ describe("confirmationFieldsFor", () => {
 
 describe("loginSubtitle", () => {
   it("names the one provider, asks to choose among several, and stays generic without any", () => {
-    expect(loginSubtitle([sftpgo])).toBe("Sign in with your SFTPGo account on files.example.org");
-    expect(loginSubtitle([{ ...sftpgo, label: "" }])).toBe("Sign in with your SFTPGo account");
-    expect(loginSubtitle([sftpgo, second])).toBe("Choose a server and sign in");
+    expect(loginSubtitle([local])).toBe("Sign in with your fdrive account on files.example.org");
+    expect(loginSubtitle([{ ...local, label: "" }])).toBe("Sign in with your fdrive account");
+    expect(loginSubtitle([local, second])).toBe("Choose a server and sign in");
     expect(loginSubtitle([])).toBe("Sign in with your account");
   });
 });
 
 describe("providerDisplayName", () => {
   it("uses the admin's label and falls back to the product name", () => {
-    expect(providerDisplayName(sftpgo)).toBe("files.example.org");
-    expect(providerDisplayName({ type: "sftpgo", label: "" })).toBe("SFTPGo");
+    expect(providerDisplayName(local)).toBe("files.example.org");
+    expect(providerDisplayName({ type: "local", label: "" })).toBe("fdrive");
   });
 });
 
 describe("buildCredential and credentialComplete", () => {
-  const fields = sftpgo.credentialFields;
+  const fields = local.credentialFields;
 
   it("keeps filled fields and drops blank optional ones", () => {
     expect(buildCredential(fields, { username: "ada", password: "pw", otp: "" })).toEqual({
@@ -88,9 +88,9 @@ describe("buildCredential and credentialComplete", () => {
 
 describe("selectProvider", () => {
   it("finds the named provider, else the first, else nothing", () => {
-    expect(selectProvider([sftpgo, second], second.id)).toBe(second);
-    expect(selectProvider([sftpgo, second], "missing")).toBe(sftpgo);
-    expect(selectProvider([sftpgo, second], null)).toBe(sftpgo);
+    expect(selectProvider([local, second], second.id)).toBe(second);
+    expect(selectProvider([local, second], "missing")).toBe(local);
+    expect(selectProvider([local, second], null)).toBe(local);
     expect(selectProvider([], null)).toBeUndefined();
   });
 });

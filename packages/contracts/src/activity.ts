@@ -5,7 +5,7 @@ export const SystemActivityId = z.enum([
   "features",
   "general",
   "storage",
-  "sharedFolders",
+  "users",
   "thumbnails",
   "textSearch",
   "semanticSearch",

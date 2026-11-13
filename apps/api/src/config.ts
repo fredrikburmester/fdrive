@@ -1,4 +1,5 @@
 import { tmpdir } from "node:os";
+import { isAbsolute } from "node:path";
 import { z } from "zod";
 import { validateOfficeInfrastructure } from "./office/config.ts";
 import { type OfficeEditRule, parseOfficeEditRules } from "./office/edit-policy.ts";
@@ -12,17 +13,15 @@ export type NodeEnv = (typeof NODE_ENVS)[number];
 export type CookieSecureMode = (typeof COOKIE_SECURE_MODES)[number];
 
 /**
- * One configured index root: `name` must match the root name segment of
- * `FDRIVE_HOME_TEMPLATE` (`core`'s `parseHomeTemplate`/`scopesFor`),
- * `sftpgoPath` is how the path looks inside SFTPGo (its `home_dir` or a
- * mapped virtual folder's target), and `indexerPath` is where the same
- * directory is bind-mounted in the indexer container. fdrive's API only
- * ever needs `name`; the other two fields exist so operators can see the
- * whole mapping in one place and the indexer can read the same env var.
+ * One configured index root: `name` is the root the indexer reports files
+ * under, `storagePath` is where the same folder is mounted in the API (the
+ * local folder, `FDRIVE_STORAGE_ROOT`), and `indexerPath` is where it is
+ * mounted in the indexer container. The local provider's files are indexed
+ * under the root whose `storagePath` is `FDRIVE_STORAGE_ROOT`.
  */
 export interface IndexRootConfig {
   readonly name: string;
-  readonly sftpgoPath: string;
+  readonly storagePath: string;
   readonly indexerPath: string;
 }
 
@@ -44,14 +43,12 @@ export interface AppConfig {
   readonly logLevel: LogLevel;
   readonly databaseUrl: string;
   /**
-   * The SFTPGo base URL, when configured by environment. Undefined means
-   * the connection must come from `settings` (configured through `/setup`
-   * or the admin storage page) or setup is still required. See
-   * `src/providers/`.
+   * The folder the built-in local storage serves, one home per user as
+   * `<root>/<username>`. Undefined means the deployment has no local folder
+   * and storage is WebDAV or S3 added by an administrator.
    */
-  readonly sftpgoUrl: string | undefined;
+  readonly fdriveStorageRoot: string | undefined;
   readonly fdriveMasterKey: string;
-  readonly fdriveHomeTemplate: string;
   readonly fdriveSessionTtlDays: number;
   /** Hard cap on a session's age since login; sliding expiry never extends past it. */
   readonly fdriveSessionMaxAgeDays: number;
@@ -108,7 +105,10 @@ export interface AppConfig {
   readonly fdriveImageEmbedUrl: string | undefined;
   /** Directory the indexer writes thumbnails into. `undefined` disables thumbnails. */
   readonly fdriveThumbsDir: string | undefined;
-  /** SFTPGo usernames that are always treated as admins, in addition to `accounts.is_admin`. */
+  /**
+   * Usernames on the deployment's pinned storage (the local folder) that are
+   * always treated as admins, in addition to `accounts.is_admin`.
+   */
   readonly fdriveAdminUsers: readonly string[];
   /** Overrides the randomly generated setup token. Mainly for tests and scripted installs. */
   readonly fdriveSetupToken: string | undefined;
@@ -178,14 +178,25 @@ export function undefinedWhenEmpty(value: unknown): string | undefined {
   return typeof value === "string" && value.length > 0 ? value : undefined;
 }
 
-const indexRootConfigSchema = z.object({
-  name: z.string().min(1),
-  sftpgoPath: z.string().min(1),
-  indexerPath: z.string().min(1),
-});
+// `sftpgoPath` is the key's name from before the local folder replaced SFTPGo.
+const indexRootConfigSchema = z
+  .object({
+    name: z.string().min(1),
+    storagePath: z.string().min(1).optional(),
+    sftpgoPath: z.string().min(1).optional(),
+    indexerPath: z.string().min(1),
+  })
+  .transform(({ name, storagePath, sftpgoPath, indexerPath }, ctx) => {
+    const path = storagePath ?? sftpgoPath;
+    if (path === undefined) {
+      ctx.addIssue({ code: "custom", message: "storagePath is required" });
+      return z.NEVER;
+    }
+    return { name, storagePath: path, indexerPath };
+  });
 
 /**
- * Parses `FDRIVE_INDEX_ROOTS`'s JSON array of `{ name, sftpgoPath,
+ * Parses `FDRIVE_INDEX_ROOTS`'s JSON array of `{ name, storagePath,
  * indexerPath }`. Exported so its shape can be unit tested directly, in
  * addition to through `loadConfig`. Returns `null` for an absent value
  * (search stays unavailable); throws a plain `Error` describing the problem
@@ -206,13 +217,13 @@ export function parseIndexRoots(value: string | undefined): IndexRootConfig[] | 
 
   const result = z.array(indexRootConfigSchema).min(1).safeParse(parsed);
   if (!result.success) {
-    throw new Error("must be a non-empty array of { name, sftpgoPath, indexerPath }");
+    throw new Error("must be a non-empty array of { name, storagePath, indexerPath }");
   }
   return result.data;
 }
 
 /**
- * Splits a comma-separated list of SFTPGo usernames (`FDRIVE_ADMIN_USERS`)
+ * Splits a comma-separated list of usernames (`FDRIVE_ADMIN_USERS`)
  * into a trimmed, non-empty array. An empty or missing value yields an
  * empty array.
  */
@@ -267,14 +278,13 @@ const envSchema = z.object({
   HOST: z.preprocess((value) => withDefault(value, "0.0.0.0"), z.string().min(1)),
   LOG_LEVEL: z.preprocess((value) => withDefault(value, "info"), z.enum(LOG_LEVELS)),
   DATABASE_URL: z.string().min(1, "is required"),
-  SFTPGO_URL: z.preprocess(
-    (value) => (typeof value === "string" && value.length === 0 ? undefined : value),
+  FDRIVE_STORAGE_ROOT: z.preprocess(
+    undefinedWhenEmpty,
     z
       .string()
-      .min(1)
       .optional()
-      .refine((value) => value === undefined || isHttpUrl(value), {
-        message: "must be an http(s) URL",
+      .refine((value) => value === undefined || isAbsolute(value), {
+        message: "must be an absolute path",
       }),
   ),
   FDRIVE_MASTER_KEY: z
@@ -283,10 +293,6 @@ const envSchema = z.object({
     .refine((value) => isBase64Of32Bytes(value), {
       message: "must be base64-encoded 32 bytes",
     }),
-  FDRIVE_HOME_TEMPLATE: z.preprocess(
-    (value) => withDefault(value, "sftpgo:/{username}"),
-    z.string().min(1),
-  ),
   FDRIVE_SESSION_TTL_DAYS: z.preprocess(
     (value) => withDefault(value, "30"),
     z
@@ -531,9 +537,8 @@ export function loadConfig(env: Record<string, string | undefined>): AppConfig {
     host: parsed.HOST,
     logLevel: parsed.LOG_LEVEL,
     databaseUrl: parsed.DATABASE_URL,
-    sftpgoUrl: parsed.SFTPGO_URL,
+    fdriveStorageRoot: parsed.FDRIVE_STORAGE_ROOT,
     fdriveMasterKey: parsed.FDRIVE_MASTER_KEY,
-    fdriveHomeTemplate: parsed.FDRIVE_HOME_TEMPLATE,
     fdriveSessionTtlDays: parsed.FDRIVE_SESSION_TTL_DAYS,
     fdriveSessionMaxAgeDays: parsed.FDRIVE_SESSION_MAX_AGE_DAYS,
     fdriveCookieSecure: parsed.FDRIVE_COOKIE_SECURE,

@@ -2,8 +2,8 @@ from fdrive_indexer.config import Config, parse_roots
 
 
 def test_parse_roots_multiple() -> None:
-    assert parse_roots("sftpgo=/roots/sftpgo,photos=/roots/photos") == {
-        "sftpgo": "/roots/sftpgo",
+    assert parse_roots("files=/roots/files,photos=/roots/photos") == {
+        "files": "/roots/files",
         "photos": "/roots/photos",
     }
 
@@ -13,7 +13,7 @@ def test_parse_roots_empty_string() -> None:
 
 
 def test_parse_roots_skips_malformed_pairs() -> None:
-    assert parse_roots("sftpgo=/roots/sftpgo,,broken,=novalue,noeq=") == {"sftpgo": "/roots/sftpgo"}
+    assert parse_roots("files=/roots/files,,broken,=novalue,noeq=") == {"files": "/roots/files"}
 
 
 def test_config_defaults(monkeypatch) -> None:
@@ -27,11 +27,11 @@ def test_config_defaults(monkeypatch) -> None:
 
 
 def test_config_reads_env(monkeypatch) -> None:
-    monkeypatch.setenv("INDEX_ROOTS", "sftpgo=/roots/sftpgo")
+    monkeypatch.setenv("INDEX_ROOTS", "files=/roots/files")
     monkeypatch.setenv("WATCH", "false")
     monkeypatch.setenv("INDEX_WORKERS", "9")
     cfg = Config()
-    assert cfg.roots == {"sftpgo": "/roots/sftpgo"}
+    assert cfg.roots == {"files": "/roots/files"}
     assert cfg.watch is False
     assert cfg.workers == 9
 

@@ -14,7 +14,7 @@ function buildClient(setupRequired: boolean): ApiClient {
   return {
     about: vi.fn().mockResolvedValue({
       version: "1.0.0",
-      provider: setupRequired ? null : { type: "sftpgo", label: "sftpgo:8080" },
+      provider: setupRequired ? null : { type: "local", label: "Local folder" },
       setupRequired,
     }),
   } as unknown as ApiClient;

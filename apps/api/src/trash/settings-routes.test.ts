@@ -11,7 +11,7 @@ import { registerTrashSettingsRoutes } from "./settings-routes.js";
 
 const PROVIDER_ID = "123e4567-e89b-42d3-a456-426614174000";
 const IDENTITY_ID = "223e4567-e89b-42d3-a456-426614174000";
-const provider = { id: PROVIDER_ID, type: "sftpgo", enabled: true } as Provider;
+const provider = { id: PROVIDER_ID, type: "local", enabled: true } as Provider;
 const identity: Identity = {
   id: IDENTITY_ID,
   accountId: "323e4567-e89b-42d3-a456-426614174000",
@@ -35,7 +35,7 @@ function buildApp(isAdmin: boolean) {
   const service = createTrashSettingsService({
     settings,
     identities,
-    strategyFor: async () => "native",
+    strategyFor: async () => "move",
   });
   const principal: Principal = {
     accountId: identity.accountId,
@@ -47,13 +47,13 @@ function buildApp(isAdmin: boolean) {
   return createApp({
     config: loadConfig({
       DATABASE_URL: "postgres://localhost/fdrive",
-      SFTPGO_URL: "http://sftpgo.test",
       FDRIVE_MASTER_KEY: Buffer.alloc(32, 7).toString("base64"),
     }),
     logger: { info: vi.fn(), error: vi.fn(), warn: vi.fn() } as unknown as Logger,
     version: "test",
     startedAt: new Date(0),
     principalResolver: async () => principal,
+    connectionStatus: async () => ({ required: false, providers: [] }),
     registerRoutes: (groups) =>
       registerTrashSettingsRoutes(groups, {
         service,
@@ -72,7 +72,7 @@ describe("admin Trash settings routes", () => {
       providerId: PROVIDER_ID,
       revision: 0,
       enabled: false,
-      strategy: "native",
+      strategy: "move",
     });
 
     const response = await app.request(ROUTES.system.trash, {
@@ -103,7 +103,7 @@ describe("admin Trash settings routes", () => {
         path: "/.trash",
         retentionHours: null,
         rulesConfirmed: false,
-        strategy: "native",
+        strategy: "move",
       }),
     });
     expect(response.status).toBe(404);

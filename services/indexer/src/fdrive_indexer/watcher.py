@@ -25,6 +25,8 @@ from collections import Counter
 from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor
 
+from .paths import is_junk_name
+
 IN_CLOSE_WRITE, IN_MOVED_FROM, IN_MOVED_TO, IN_CREATE, IN_DELETE = 0x8, 0x40, 0x80, 0x100, 0x200
 IN_Q_OVERFLOW, IN_IGNORED, IN_ISDIR = 0x4000, 0x8000, 0x40000000
 IN_ONLYDIR, IN_DONT_FOLLOW, IN_EXCL_UNLINK = 0x1000000, 0x2000000, 0x4000000
@@ -38,10 +40,6 @@ _libc = ctypes.CDLL("libc.so.6", use_errno=True)
 _libc.inotify_init1.argtypes = [ctypes.c_int]
 _libc.inotify_add_watch.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_uint32]
 _libc.inotify_rm_watch.argtypes = [ctypes.c_int, ctypes.c_int]
-
-
-def _junk(name: str, skip_names: frozenset[str]) -> bool:
-    return name.startswith("._") or name in skip_names
 
 
 class Watcher:
@@ -129,7 +127,7 @@ class Watcher:
                             if e.is_dir(follow_symlinks=False):
                                 if e.name not in self.skip_dirs:
                                     stack.append(e.path)
-                            elif collect_files and e.is_file(follow_symlinks=False) and not _junk(e.name, self.skip_names):
+                            elif collect_files and e.is_file(follow_symlinks=False) and not is_junk_name(e.name, self.skip_names):
                                 files.append(e.path)
                         except OSError:
                             pass
@@ -216,7 +214,7 @@ class Watcher:
             return
         with self._maps:
             base = self._wd_path.get(wd)
-        if base is None or not name or _junk(name, self.skip_names):
+        if base is None or not name or is_junk_name(name, self.skip_names):
             return
         is_dir = bool(mask & IN_ISDIR)
         if is_dir and name in self.skip_dirs:

@@ -41,9 +41,8 @@ export async function applyOfficeRootEvent(
 /**
  * Wraps `metadata` so a user-initiated move/delete (from the fs or trash
  * routes) also updates the office file registry, using the same trusted
- * `configuredMappings` an office actor's requests use (never a raw
- * home-template computation with no override support, and never a
- * database/config fetch beyond the one `configuredMappings` call itself).
+ * `configuredMappings` an office actor's requests use, never a username
+ * joined onto a root by hand.
  */
 export function withOfficeMetadata(
   metadata: MetadataService,

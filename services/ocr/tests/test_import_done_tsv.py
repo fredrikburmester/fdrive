@@ -151,11 +151,11 @@ def test_main_end_to_end_against_fake_psycopg(
     fake_psycopg.connect = lambda dsn: conn  # type: ignore[attr-defined]
     monkeypatch.setitem(sys.modules, "psycopg", fake_psycopg)
 
-    exit_code = import_done_tsv.main([str(tsv_path), "--root", "sftpgo", "--database-url", "postgres://x"])
+    exit_code = import_done_tsv.main([str(tsv_path), "--root", "files", "--database-url", "postgres://x"])
 
     assert exit_code == 0
     assert conn.committed is True
     assert len(cursor.queries) == 3
-    assert cursor.queries[0][1] == ("sftpgo",)
+    assert cursor.queries[0][1] == ("files",)
     assert "INSERT INTO" in cursor.queries[1][0]
     assert cursor.queries[1][1][0] == 7  # root_id

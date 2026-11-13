@@ -35,7 +35,8 @@ RUN pnpm deploy --filter @fdrive/api --prod --legacy /out
 
 FROM node:24-alpine@sha256:e67514e5d0f6c46656005e1b693b2ec9d52e80b641307de684d4a015ba7a4eaf AS runtime
 
-RUN addgroup -S fdrive && adduser -S fdrive -G fdrive
+# setpriv lets docker-entrypoint.sh drop from root to FDRIVE_RUN_AS_UID.
+RUN apk add --no-cache setpriv && addgroup -S fdrive && adduser -S fdrive -G fdrive
 
 WORKDIR /app
 ENV NODE_ENV=production
@@ -56,6 +57,12 @@ RUN printf '%s' "$FDRIVE_BUILD_VERSION" > build-version
 LABEL org.opencontainers.image.version=$FDRIVE_BUILD_VERSION
 
 RUN mkdir -p /var/lib/fdrive/desktop /var/lib/fdrive/backups && chown fdrive:fdrive /var/lib/fdrive/desktop /var/lib/fdrive/backups
+
+# deploy/compose.yaml starts the container as root with FDRIVE_RUN_AS_UID set:
+# the entrypoint gives the state directories to that uid and drops to it
+# before the API starts, so files it writes in the storage folder belong to
+# the uid the indexer and OCR use. Any other start runs as this user.
+COPY --chmod=0755 apps/api/docker-entrypoint.sh /usr/local/bin/fdrive-entrypoint
 USER fdrive
 
 EXPOSE 3001
@@ -63,4 +70,5 @@ EXPOSE 3001
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
   CMD wget -qO- http://127.0.0.1:3001/api/v1/health || exit 1
 
+ENTRYPOINT ["fdrive-entrypoint"]
 CMD ["node", "dist/main.js"]

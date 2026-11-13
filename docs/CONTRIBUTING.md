@@ -19,7 +19,8 @@ fdrive is a Turborepo monorepo with `pnpm` workspaces:
 - **`packages/`**: Shared TypeScript packages:
   - `packages/core`: Pure domain logic and ports (zero I/O, 100% testable).
   - `packages/contracts`: Zod schemas and typed API client.
-  - `packages/sftpgo`: SFTPGo REST client and in-memory test fake.
+  - `packages/local`, `packages/webdav`, `packages/s3`: Storage providers (the local files
+    folder, WebDAV and S3), with in-memory protocol fakes for the remote ones.
   - `packages/db`: Drizzle schemas, migrations, and database repositories.
   - `packages/config`: Shared Vitest and TypeScript configurations.
 - **`services/`**: Companion services:

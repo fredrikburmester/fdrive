@@ -269,10 +269,6 @@ export function createOfficeService(deps: OfficeDeps) {
         scope.locks.withFileLock(mutationKey(location), async () => {
           await requireOfficeEdit(deps, actor, path);
           if (await fileExists(actor, path)) throw new WopiError(409, { "X-WOPI-Lock": "" });
-          // SFTPGo HTTP uploads have no conditional-create primitive. This serializes
-          // fdrive writers and rejects observed collisions; external SFTP writers can race.
-          await requireOfficeEdit(deps, actor, path);
-          if (await fileExists(actor, path)) throw new WopiError(409, { "X-WOPI-Lock": "" });
           const file = await scope.files.ensure(location);
           await recordOfficeAction(
             deps,
@@ -282,8 +278,12 @@ export function createOfficeService(deps: OfficeDeps) {
             path,
             file.id,
             () =>
+              // The lock serializes fdrive's own writers; `overwrite: false`
+              // refuses a name a writer outside fdrive took since the check,
+              // as a `conflict` the route reports like the check's 409.
               actor.storage.upload(path, bytes, {
                 contentLength: bytes.byteLength,
+                overwrite: false,
                 signal: officeSignal(config),
               }),
             { size: bytes.byteLength },

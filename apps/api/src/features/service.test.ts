@@ -33,7 +33,7 @@ const base = loadConfig({
 });
 const full: AppConfig = {
   ...base,
-  fdriveIndexRoots: [{ name: "sftpgo", sftpgoPath: "/data", indexerPath: "/roots/sftpgo" }],
+  fdriveIndexRoots: [{ name: "files", storagePath: "/data", indexerPath: "/roots/files" }],
   fdriveIndexerUrl: "http://indexer",
   fdriveEmbedRuntimeUrl: "http://embed:8099",
   fdriveImageEmbedRuntimeUrl: "http://image:8013",
@@ -245,7 +245,7 @@ describe("observed feature status", () => {
       fetch: async () =>
         Response.json({
           ok: true,
-          storage: { sftpgo: { readable: false, writable: false } },
+          storage: { files: { readable: false, writable: false } },
           features: { revision: 1 },
         }),
     }).service.status();
@@ -255,7 +255,7 @@ describe("observed feature status", () => {
       fetch: async () =>
         Response.json({
           ok: true,
-          storage: { sftpgo: { readable: true, writable: true } },
+          storage: { files: { readable: true, writable: true } },
           features: { revision: 1, status: "ok" },
         }),
     }).service.status();
@@ -266,7 +266,7 @@ describe("observed feature status", () => {
       fetch: async () =>
         Response.json({
           ok: true,
-          storage: { sftpgo: { readable: true, writable: false } },
+          storage: { files: { readable: true, writable: false } },
           features: { revision: 0, values: DISABLED_FEATURES },
         }),
     }).service.status();

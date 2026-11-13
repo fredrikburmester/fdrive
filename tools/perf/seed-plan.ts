@@ -1,10 +1,16 @@
-import type { SeedUser } from "@fdrive/testkit";
+/** A local user the fixture creates, with the password it signs in with. */
+export interface PerfUser {
+  readonly username: string;
+  readonly password: string;
+}
 
-/** The perf-only SFTPGo user, full permissions, seeded alongside the shared testkit users. */
-export const PERF_USER: SeedUser = {
-  username: "perf",
-  password: "perf-password",
-  permissions: { "/": ["*"] },
+/** The measured local user. */
+export const PERF_USER: PerfUser = { username: "perf", password: "perf-password" };
+
+/** A second local user whose search results the measured user must never see. */
+export const FORBIDDEN_USER: PerfUser = {
+  username: "forbidden",
+  password: "forbidden-perf-password",
 };
 
 export interface FlatSeedFile {

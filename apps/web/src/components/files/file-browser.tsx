@@ -1,6 +1,12 @@
 "use client";
 
-import type { ArchiveFormat, CompressRequest, ExtractRequest, FsEntry } from "@fdrive/contracts";
+import type {
+  ArchiveFormat,
+  CompressRequest,
+  ExtractRequest,
+  FsEntry,
+  ReceivedGrant,
+} from "@fdrive/contracts";
 import { baseName, isRoot, joinPath, parentPath } from "@fdrive/core";
 import { useQueryClient } from "@tanstack/react-query";
 import type { Route } from "next";
@@ -20,6 +26,8 @@ import { OrganizeActivity } from "@/components/ai/organize-activity";
 import { OrganizeSheet } from "@/components/ai/organize-sheet";
 import { NewFileDialog } from "@/components/editor/new-file-dialog";
 import { useUploadReveal } from "@/components/files/use-upload-reveal";
+import { LeaveSharedFolderDialog } from "@/components/grants/leave-shared-folder-dialog";
+import { ShareWithPeopleDialog } from "@/components/grants/share-with-people-dialog";
 import { Inspector } from "@/components/inspector/inspector";
 import { TagsEditDialog } from "@/components/metadata/tags-edit-dialog";
 import { NewOfficeDocumentDialog } from "@/components/office/new-document-dialog";
@@ -108,6 +116,13 @@ import {
 import { useGridSize } from "@/lib/files/use-grid-size";
 import { useListDensity } from "@/lib/files/use-list-density";
 import { useRowClickAction } from "@/lib/files/use-row-click";
+import {
+  dropBlock,
+  entryRestrictions,
+  firstLockedReason,
+  folderWriteBlock,
+} from "@/lib/grants/paths";
+import { useReceivedGrants } from "@/lib/grants/queries";
 import { capabilitiesFor, selectionOf } from "@/lib/identity/capabilities";
 import { type RunJobRequestDeps, runJobRequest } from "@/lib/jobs/actions";
 import { useJobsStore } from "@/lib/jobs/store";
@@ -193,6 +208,10 @@ export function FileBrowser({
   const entries = useMemo(() => data?.entries ?? [], [data]);
   const { data: trashStatus } = useTrashStatus();
   const capabilities = capabilitiesFor(me);
+  // Folders others share with this login: what they allow, and the
+  // `Shared with me` captions and menu items.
+  const received = useReceivedGrants(capabilities.shareWithPeople);
+  const writeBlock = folderWriteBlock(path, received);
   const slowMoveWarning = capabilities.atomicMove
     ? null
     : "This server cannot move a folder in one step: it copies the folder and then deletes the original, which can take a while for a large one.";
@@ -252,6 +271,8 @@ export function FileBrowser({
   const orderedPaths = useMemo(() => displayEntries.map((entry) => entry.path), [displayEntries]);
 
   const [sharing, setSharing] = useState<FsEntry[] | null>(null);
+  const [sharingWithPeople, setSharingWithPeople] = useState<FsEntry | null>(null);
+  const [leaving, setLeaving] = useState<ReceivedGrant | null>(null);
   const [selection, dispatchSelection] = useReducer(
     (state: SelectionState, action: SelectionAction) =>
       selectionReducer(state, action, orderedPaths),
@@ -324,6 +345,10 @@ export function FileBrowser({
   const existingNames = useMemo(() => new Set(entries.map((entry) => entry.name)), [entries]);
   const destinationName = isRoot(path) ? "Home" : baseName(path);
   const { isDraggingOver } = useExternalDrop(listingRef, (files) => {
+    if (writeBlock !== null) {
+      toast.error(writeBlock);
+      return;
+    }
     uploadFiles(files, path, existingNames);
   });
 
@@ -489,6 +514,11 @@ export function FileBrowser({
   }
 
   function handleInternalDrop(paths: string[], targetFolderPath: string, effect: "move" | "copy") {
+    const block = dropBlock(paths, targetFolderPath, effect, received);
+    if (block !== null) {
+      toast.error(block);
+      return;
+    }
     const mutation = effect === "copy" ? copy : move;
     for (const source of movablePaths(paths, targetFolderPath)) {
       mutation.mutate({ path: source, target: joinPath(targetFolderPath, baseName(source)) });
@@ -550,6 +580,12 @@ export function FileBrowser({
     switch (action) {
       case "share":
         setSharing(entriesForAction(entry));
+        return;
+      case "shareWithPeople":
+        setSharingWithPeople(entry);
+        return;
+      case "leave":
+        setLeaving(entryRestrictions(entry, capabilities, received).leave);
         return;
       case "office:view":
       case "office:edit":
@@ -835,11 +871,18 @@ export function FileBrowser({
         }
         break;
       }
-      case "delete":
-        if (selectedEntries.length > 0) {
+      case "delete": {
+        const lock = firstLockedReason(
+          selectedEntries.map((entry) => entry.path),
+          received,
+        );
+        if (lock !== null) {
+          toast.error(lock);
+        } else if (selectedEntries.length > 0) {
           setDeleteTargets(selectedEntries);
         }
         break;
+      }
       case "selectAll":
         dispatchSelection({ type: "selectAll" });
         break;
@@ -848,7 +891,10 @@ export function FileBrowser({
         break;
       case "rename": {
         const entry = displayEntries.find((candidate) => candidate.path === selection.focus);
-        if (entry !== undefined) {
+        const lock = entry === undefined ? null : firstLockedReason([entry.path], received);
+        if (lock !== null) {
+          toast.error(lock);
+        } else if (entry !== undefined) {
           setRenameTarget(entry);
         }
         break;
@@ -872,7 +918,8 @@ export function FileBrowser({
         break;
       }
       case "newFolder":
-        setNewFolderOpen(true);
+        if (writeBlock !== null) toast.error(writeBlock);
+        else setNewFolderOpen(true);
         break;
       case "goToParent":
         router.push(toRoute(pathToHref(parentPath(path))));
@@ -931,6 +978,7 @@ export function FileBrowser({
             onDownloadSelection={handleDownloadSelection}
             showThumbnails={showThumbnails && capabilities.index}
             onShowThumbnailsChange={setShowThumbnails}
+            writeBlock={writeBlock}
           />
         }
       />
@@ -979,9 +1027,11 @@ export function FileBrowser({
             ) : sortedEntries.length === 0 ? (
               <EmptyState
                 action={
-                  <Button variant="outline" size="sm" onClick={handleUploadFiles}>
-                    Upload
-                  </Button>
+                  writeBlock === null ? (
+                    <Button variant="outline" size="sm" onClick={handleUploadFiles}>
+                      Upload
+                    </Button>
+                  ) : undefined
                 }
               />
             ) : viewMode === "list" ? (
@@ -1005,6 +1055,7 @@ export function FileBrowser({
                 onOpenTagsEditor={handleOpenTagsEditor}
                 onToggleFavorite={handleToggleFavorite}
                 capabilities={capabilities}
+                received={received}
                 scrollRequest={scrollRequest}
                 onScrollConsumed={handleScrollConsumed}
                 showThumbnails={showThumbnails && capabilities.index}
@@ -1029,6 +1080,7 @@ export function FileBrowser({
                 onOpenTagsEditor={handleOpenTagsEditor}
                 onToggleFavorite={handleToggleFavorite}
                 capabilities={capabilities}
+                received={received}
                 scrollRequest={scrollRequest}
                 onScrollConsumed={handleScrollConsumed}
                 thumbnails={capabilities.index}
@@ -1058,6 +1110,7 @@ export function FileBrowser({
                 onOpenTagsEditor={handleOpenTagsEditor}
                 onToggleFavorite={handleToggleFavorite}
                 capabilities={capabilities}
+                received={received}
                 scrollRequest={scrollRequest}
                 onScrollConsumed={handleScrollConsumed}
                 showThumbnails={showThumbnails && capabilities.index}
@@ -1088,6 +1141,13 @@ export function FileBrowser({
         />
       )}
       {sharing && <ShareDialog entries={sharing} onClose={() => setSharing(null)} />}
+      {sharingWithPeople && (
+        <ShareWithPeopleDialog
+          folder={sharingWithPeople}
+          onClose={() => setSharingWithPeople(null)}
+        />
+      )}
+      <LeaveSharedFolderDialog grant={leaving} onClose={() => setLeaving(null)} />
       <OrganizeSheet
         organize={organize}
         provider={aiStatus?.provider ?? null}

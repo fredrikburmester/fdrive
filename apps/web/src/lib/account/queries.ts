@@ -1,6 +1,6 @@
 "use client";
 
-import type { CreateApiTokenRequest } from "@fdrive/contracts";
+import type { ChangePasswordRequest, CreateApiTokenRequest } from "@fdrive/contracts";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiClient } from "@/lib/api/client";
 import { queryKeys } from "@/lib/api/keys";
@@ -43,5 +43,16 @@ export function useAccountFavorites(accountId: string | undefined) {
     queryKey: queryKeys.account.favorites(accountId ?? ""),
     queryFn: () => apiClient.accountFavorites(),
     enabled: accountId !== undefined,
+  });
+}
+
+/**
+ * Changes the active local login's own password. The API ends the
+ * account's other sessions; this one stays signed in, so nothing cached
+ * needs refreshing.
+ */
+export function useChangePassword() {
+  return useMutation({
+    mutationFn: (req: ChangePasswordRequest) => apiClient.changePassword(req),
   });
 }

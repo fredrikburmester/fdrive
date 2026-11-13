@@ -128,7 +128,7 @@ describe("metadata prefix operations", () => {
   async function createIdentity(label: string) {
     const repos = createRepos(db);
     const provider = await repos.providers.ensure({
-      type: "sftpgo",
+      type: "webdav",
       baseUrl: `http://prefix-${label}`,
     });
     const account = await repos.accounts.create({ displayName: label });
@@ -505,7 +505,7 @@ it("cascades office_files when their provider is deleted", async () => {
   await db.execute(sql`truncate table app.office_files, app.providers cascade`);
   const repos = createRepos(db);
   const officeFiles = createOfficeFileRepo(db);
-  const provider = await repos.providers.ensure({ type: "sftpgo", baseUrl: "http://office" });
+  const provider = await repos.providers.ensure({ type: "webdav", baseUrl: "http://office" });
   const file = await officeFiles.ensure({
     providerId: provider.id,
     rootName: "sftpgo",
@@ -544,7 +544,7 @@ describe("metadata lookups for oversized directory listings", () => {
   async function seedListing() {
     const repos = createRepos(db);
     const provider = await repos.providers.ensure({
-      type: "sftpgo",
+      type: "webdav",
       baseUrl: "http://oversized",
     });
     const account = await repos.accounts.create({ displayName: "oversized" });

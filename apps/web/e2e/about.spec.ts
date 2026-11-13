@@ -1,10 +1,11 @@
 import { expect, test } from "@playwright/test";
 
-test("/about credits no storage backend", async ({ page }) => {
+test("/about credits no storage backend and drops the retired SFTPGo guides", async ({ page }) => {
   await page.goto("/about");
 
   await expect(page.getByText("Built on")).toHaveCount(0);
   await expect(page.getByRole("link", { name: "SFTPGo" })).toHaveCount(0);
+  await expect(page.getByRole("link", { name: "Shared folders" })).toHaveCount(0);
 });
 
 test("/about drops the connected-provider line once every provider is disabled", async ({
@@ -87,7 +88,7 @@ test("/about identifies the running API and links to the project and feature gui
     );
   }
   const guides = info.locator('a[href*="/blob/main/"]');
-  await expect(guides).toHaveCount(11);
+  await expect(guides).toHaveCount(10);
   for (const link of await info.locator('a[target="_blank"]').all()) {
     await expect(link).toHaveAttribute("rel", "noopener noreferrer");
   }

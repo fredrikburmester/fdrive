@@ -2,14 +2,14 @@
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { accountTransition } from "@/lib/account/transition";
 import { apiClient } from "@/lib/api/client";
 import { allCapabilities, storageNote } from "@/lib/identity/capabilities";
 import { makeIdentity, makeMe } from "@/test-fixtures/identity";
 import { IdentitiesCard } from "./identities-card";
 
-/** The note for storage with none of the features fdrive builds on SFTPGo. */
+/** The note for storage with none of search, shares and Office. */
 const FILES_ONLY_NOTE = storageNote({ ...allCapabilities(false), trash: true }) as string;
 
 vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn() }) }));
@@ -24,12 +24,6 @@ afterEach(() => {
   cleanup();
   accountTransition.finish(false);
   vi.restoreAllMocks();
-});
-
-beforeEach(() => {
-  // Each identity row loads its own index status; keep it pending here so
-  // these tests stay about linking and unlinking.
-  vi.spyOn(apiClient, "identityScope").mockImplementation(() => new Promise(() => {}));
 });
 
 it("confirms the exact login, explains retained files, and reports unlink conflicts", async () => {
@@ -71,7 +65,7 @@ it("names a key login by its storage and confirms removal with the key beneath",
         providerType: "s3",
         username: "0041234abcdef",
         providerLabel: "Backblaze",
-        capabilities: { scopeMapping: false, index: false, shares: false, office: false },
+        capabilities: { index: false, shares: false, office: false },
       }),
     ],
   });
@@ -81,30 +75,23 @@ it("names a key login by its storage and confirms removal with the key beneath",
     </QueryClientProvider>,
   );
   expect(screen.getByRole("img", { name: "S3" })).toBeDefined();
-  // Only the S3 login is files only; the SFTPGo one carries no note.
+  // Only the S3 login is files only; the local one carries no note.
   expect(screen.getAllByText(FILES_ONLY_NOTE)).toHaveLength(1);
   fireEvent.click(screen.getByRole("button", { name: "Remove Backblaze" }));
   expect(screen.getByRole("dialog", { name: "Remove Backblaze?" })).toBeDefined();
   expect(screen.getByText(/0041234abcdef. Files remain on the server/)).toBeDefined();
 });
 
-it("shows the index status only for logins whose provider maps virtual folders", async () => {
+it("lists every login with its storage and no per-login mapping controls", () => {
   const client = new QueryClient({ defaultOptions: { queries: { staleTime: Infinity } } });
-  const [ada, bob] = me.identities;
-  if (ada === undefined || bob === undefined) throw new Error("fixture");
-  client.setQueryData(["auth", "me"], {
-    ...me,
-    identities: [ada, { ...bob, capabilities: { ...bob.capabilities, scopeMapping: false } }],
-  });
-  const scope = vi.mocked(apiClient.identityScope);
+  client.setQueryData(["auth", "me"], me);
   render(
     <QueryClientProvider client={client}>
       <IdentitiesCard />
     </QueryClientProvider>,
   );
-  await waitFor(() => expect(scope).toHaveBeenCalledTimes(1));
-  expect(scope.mock.calls[0]?.[0]).toBe("one");
-  expect(screen.getAllByRole("img", { name: "SFTPGo" })).toHaveLength(2);
+  expect(screen.getAllByRole("img", { name: "fdrive" })).toHaveLength(2);
+  expect(screen.queryByText(/virtual folder|index status/i)).toBeNull();
 });
 
 it("keeps the last identity linked, and disables controls while loading", async () => {

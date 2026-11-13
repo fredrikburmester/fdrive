@@ -189,6 +189,8 @@ test.describe("installation backups", () => {
       apiPort: await getFreePort("127.0.0.1"),
       webPort: await getFreePort("127.0.0.1"),
       skipStatePersist: true,
+      // A restore needs an empty database: the backup brings the users along.
+      createUsers: false,
       extraApiEnv: {
         FDRIVE_RESTORE_MODE: "true",
         FDRIVE_SETUP_TOKEN: "local-browser-recovery-token-123456",

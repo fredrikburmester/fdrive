@@ -10,8 +10,8 @@ function jsonResponse(status: number, body: unknown): Response {
 
 const HEALTH_RAW = {
   ok: true,
-  roots: ["sftpgo"],
-  watcher: { sftpgo: true },
+  roots: ["files"],
+  watcher: { files: true },
   embed_ok: true,
   schema_version: 3,
 };
@@ -19,7 +19,7 @@ const HEALTH_RAW = {
 const STATS_RAW = {
   roots: [
     {
-      root: "sftpgo",
+      root: "files",
       counts_by_status: { indexed: 5, pending: 1 },
       chunks: 20,
       chunks_embedded: 18,
@@ -49,8 +49,8 @@ describe("createIndexerClient: health", () => {
       ok: true,
       data: {
         ok: true,
-        roots: ["sftpgo"],
-        watcher: { sftpgo: true },
+        roots: ["files"],
+        watcher: { files: true },
         embedOk: true,
         schemaVersion: 3,
       },
@@ -85,7 +85,7 @@ describe("createIndexerClient: stats", () => {
       data: {
         roots: [
           {
-            root: "sftpgo",
+            root: "files",
             countsByStatus: { indexed: 5, pending: 1 },
             chunks: 20,
             chunksEmbedded: 18,
@@ -194,7 +194,7 @@ describe("createIndexerClient: stats", () => {
       jsonResponse(200, {
         roots: [
           {
-            root: "sftpgo",
+            root: "files",
             counts_by_status: {},
             chunks: 0,
             chunks_embedded: 0,
@@ -220,31 +220,31 @@ describe("createIndexerClient: reindex", () => {
     const fetchStub = vi.fn().mockResolvedValue(jsonResponse(200, { count: 12 }));
     const client = createIndexerClient({ baseUrl: "http://indexer:8010", fetch: fetchStub });
 
-    const result = await client.reindex("sftpgo");
+    const result = await client.reindex("files");
 
     expect(result).toEqual({ ok: true, data: { marked: 12 } });
     const [, init] = fetchStub.mock.calls[0] as [string, RequestInit];
-    expect(JSON.parse(String(init.body))).toEqual({ root: "sftpgo" });
+    expect(JSON.parse(String(init.body))).toEqual({ root: "files" });
   });
 
   it("posts { root, path } when a path is given", async () => {
     const fetchStub = vi.fn().mockResolvedValue(jsonResponse(200, { count: 1 }));
     const client = createIndexerClient({ baseUrl: "http://indexer:8010", fetch: fetchStub });
 
-    await client.reindex("sftpgo", "folder/sub");
+    await client.reindex("files", "folder/sub");
 
     const [, init] = fetchStub.mock.calls[0] as [string, RequestInit];
-    expect(JSON.parse(String(init.body))).toEqual({ root: "sftpgo", path: "folder/sub" });
+    expect(JSON.parse(String(init.body))).toEqual({ root: "files", path: "folder/sub" });
   });
 
   it("posts { root, thumbnails: true } when a thumbnail rebuild is also requested", async () => {
     const fetchStub = vi.fn().mockResolvedValue(jsonResponse(200, { count: 1 }));
     const client = createIndexerClient({ baseUrl: "http://indexer:8010", fetch: fetchStub });
 
-    await client.reindex("sftpgo", undefined, true);
+    await client.reindex("files", undefined, true);
 
     const [, init] = fetchStub.mock.calls[0] as [string, RequestInit];
-    expect(JSON.parse(String(init.body))).toEqual({ root: "sftpgo", thumbnails: true });
+    expect(JSON.parse(String(init.body))).toEqual({ root: "files", thumbnails: true });
   });
 });
 
@@ -264,10 +264,10 @@ describe("createIndexerClient: thumbnailsRebuild", () => {
     const fetchStub = vi.fn().mockResolvedValue(jsonResponse(202, { started: true, total: 5 }));
     const client = createIndexerClient({ baseUrl: "http://indexer:8010", fetch: fetchStub });
 
-    await client.thumbnailsRebuild({ root: "sftpgo", path: "folder", force: true });
+    await client.thumbnailsRebuild({ root: "files", path: "folder", force: true });
 
     const [, init] = fetchStub.mock.calls[0] as [string, RequestInit];
-    expect(JSON.parse(String(init.body))).toEqual({ root: "sftpgo", path: "folder", force: true });
+    expect(JSON.parse(String(init.body))).toEqual({ root: "files", path: "folder", force: true });
   });
 
   it("carries the sidecar's status through on failure (e.g. 409 already running)", async () => {
@@ -306,10 +306,10 @@ describe("createIndexerClient: imageEmbeddingsRebuild", () => {
     const fetchStub = vi.fn().mockResolvedValue(jsonResponse(202, { started: true, total: 3 }));
     const client = createIndexerClient({ baseUrl: "http://indexer:8010", fetch: fetchStub });
 
-    await client.imageEmbeddingsRebuild({ root: "sftpgo", path: "folder", force: true });
+    await client.imageEmbeddingsRebuild({ root: "files", path: "folder", force: true });
 
     const [, init] = fetchStub.mock.calls[0] as [string, RequestInit];
-    expect(JSON.parse(String(init.body))).toEqual({ root: "sftpgo", path: "folder", force: true });
+    expect(JSON.parse(String(init.body))).toEqual({ root: "files", path: "folder", force: true });
   });
 
   it("carries the sidecar's status through on failure (e.g. 409 already running)", async () => {
@@ -344,7 +344,7 @@ describe("createIndexerClient: clearImageEmbeddings", () => {
 });
 
 describe("createIndexerClient: clear", () => {
-  it.each([undefined, {}, { root: "sftpgo" }, { root: "sftpgo", path: "/a.pdf" }])(
+  it.each([undefined, {}, { root: "files" }, { root: "files", path: "/a.pdf" }])(
     "posts index scope %j",
     async (options) => {
       const fetchStub = vi.fn().mockResolvedValue(jsonResponse(202, { started: true }));
@@ -406,35 +406,6 @@ describe("createIndexerClient: clear", () => {
     expect(old.ok && old.data).not.toHaveProperty("indexClear");
     expect(old.ok && old.data).not.toHaveProperty("thumbnailClear");
   });
-});
-
-it("lists bounded directory metadata with exact query encoding and strict response validation", async () => {
-  const body = { items: [{ name: "文 space%20", kind: "file" }], overflow: false };
-  const fetchStub = vi.fn<typeof fetch>().mockResolvedValue(jsonResponse(200, body));
-  const client = createIndexerClient({ baseUrl: "http://indexer:8010/", fetch: fetchStub });
-  expect(await client.directory("my root", "/文 space%20/%2F")).toEqual({ ok: true, data: body });
-  const url = new URL(String(fetchStub.mock.calls[0]?.[0]));
-  expect(url.pathname).toBe("/directory");
-  expect([...url.searchParams]).toEqual([
-    ["root", "my root"],
-    ["path", "/文 space%20/%2F"],
-  ]);
-  for (const invalid of [
-    { items: [], overflow: false, secret: "bad" },
-    { items: [{ name: "/absolute", kind: "file" }], overflow: false },
-    { items: [], overflow: "no" },
-  ]) {
-    fetchStub.mockResolvedValueOnce(jsonResponse(200, invalid));
-    expect(await client.directory("r", "/")).toMatchObject({ ok: false, reason: "invalid" });
-  }
-  fetchStub.mockResolvedValueOnce(jsonResponse(404, {}));
-  expect(await client.directory("r", "/")).toMatchObject({
-    ok: false,
-    reason: "unreachable",
-    status: 404,
-  });
-  fetchStub.mockRejectedValueOnce(new Error("offline"));
-  expect(await client.directory("r", "/")).toMatchObject({ ok: false, reason: "unreachable" });
 });
 
 it("retains image embedding counts and accepts asynchronous rebuild discovery", async () => {

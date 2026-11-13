@@ -391,6 +391,12 @@ export interface FilesToolbarActionsProps {
   showThumbnails: boolean;
   /** Toggles the show-thumbnails preference for list view. */
   onShowThumbnailsChange: (show: boolean) => void;
+  /**
+   * Why nothing can be added to this folder (a folder shared to view, or
+   * `Shared with me` itself), or absent when it can: New, Upload and
+   * Duplicate are then off, with the reason as their tooltip.
+   */
+  writeBlock?: string | null | undefined;
 }
 
 interface ViewSortMenuItemsProps {
@@ -673,7 +679,9 @@ export function FilesToolbarActions({
   onDownloadSelection,
   showThumbnails,
   onShowThumbnailsChange,
+  writeBlock = null,
 }: FilesToolbarActionsProps) {
+  const blocked = writeBlock !== null;
   const isMobile = useIsMobile();
   const { inline, overflow } = toolbarVisibility(isMobile);
   const inOverflow = overflow.length > 0;
@@ -714,7 +722,15 @@ export function FilesToolbarActions({
 
       <DropdownMenu>
         <DropdownMenuTrigger
-          render={<Button variant="ghost" size="sm" title="New" className={MOBILE_TAP_TARGET} />}
+          render={
+            <Button
+              variant="ghost"
+              size="sm"
+              title={writeBlock ?? "New"}
+              disabled={blocked}
+              className={MOBILE_TAP_TARGET}
+            />
+          }
         >
           <PlusIcon />
           <span className="max-[899px]:hidden">New</span>
@@ -751,7 +767,11 @@ export function FilesToolbarActions({
 
       {!inOverflow && (
         <DropdownMenu>
-          <DropdownMenuTrigger render={<Button variant="ghost" size="sm" title="Upload" />}>
+          <DropdownMenuTrigger
+            render={
+              <Button variant="ghost" size="sm" title={writeBlock ?? "Upload"} disabled={blocked} />
+            }
+          >
             <UploadIcon />
             <span className="max-[899px]:hidden">Upload</span>
             <ChevronDownIcon className="text-muted-foreground" />
@@ -805,7 +825,7 @@ export function FilesToolbarActions({
                 <Button
                   variant="ghost"
                   size="icon-xs"
-                  disabled={selectedCount !== 1}
+                  disabled={selectedCount !== 1 || blocked}
                   aria-label="Duplicate"
                   onClick={onDuplicateSelection}
                 />
@@ -925,7 +945,7 @@ export function FilesToolbarActions({
               </DropdownMenuSubContent>
             </DropdownMenuSub>
             <DropdownMenuSub>
-              <DropdownMenuSubTrigger>
+              <DropdownMenuSubTrigger disabled={blocked}>
                 <UploadIcon />
                 Upload
               </DropdownMenuSubTrigger>
@@ -934,7 +954,10 @@ export function FilesToolbarActions({
               </DropdownMenuSubContent>
             </DropdownMenuSub>
             <DropdownMenuSeparator />
-            <DropdownMenuItem disabled={selectedCount !== 1} onClick={onDuplicateSelection}>
+            <DropdownMenuItem
+              disabled={selectedCount !== 1 || blocked}
+              onClick={onDuplicateSelection}
+            >
               <CopyIcon />
               Duplicate
             </DropdownMenuItem>

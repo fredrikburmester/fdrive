@@ -1,0 +1,313 @@
+import { existsSync } from "node:fs";
+import {
+  EntryResponse,
+  ListResponse,
+  MeResponse,
+  OkResponse,
+  ROUTES,
+  TrashListResponse,
+  TrashRestoreResponse,
+  TrashStatusResponse,
+} from "@fdrive/contracts";
+import { createDb, createRepos } from "@fdrive/db";
+import { startLocalStorage, startPostgres } from "@fdrive/testkit";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { composeApp } from "../../src/composition.js";
+import { loadConfig } from "../../src/config.js";
+import { trashSettingsKey } from "../../src/trash/settings.js";
+import { seedLocalUsers, silentLogger } from "./helpers/local-storage.ts";
+
+const TRASH_PATH = "/.trash";
+
+const cookieFrom = (response: Response) => response.headers.get("set-cookie")?.split(";")[0] ?? "";
+
+/**
+ * Exercises the trash routes (`/api/v1/trash/*`) plus the `fs/delete` and
+ * `fs/list` interactions with a trash, against a real local folder, whose
+ * Trash is fdrive's own: a delete moves the item into the recycle folder
+ * (`<home>/.trash/.fdrive-move-v1`). Follows `accounts-local.test.ts`'s
+ * composition pattern: one Postgres, one local folder, one composed app with
+ * provider-bound Trash settings persisted, and plain `app.request` calls per user.
+ */
+describe("trash against real PostgreSQL and a local folder", () => {
+  let postgres: Awaited<ReturnType<typeof startPostgres>>;
+  let storage: Awaited<ReturnType<typeof startLocalStorage>>;
+  let composed: Awaited<ReturnType<typeof composeApp>>;
+  let database: ReturnType<typeof createDb>;
+
+  beforeAll(async () => {
+    [postgres, storage] = await Promise.all([
+      startPostgres(),
+      startLocalStorage({
+        users: ["alice", "carol"].map((username) => ({ username, password: `${username}-pass` })),
+        files: {},
+      }),
+    ]);
+    await seedLocalUsers(postgres.connectionString, storage);
+    const config = loadConfig({
+      DATABASE_URL: postgres.connectionString,
+      FDRIVE_STORAGE_ROOT: storage.root,
+      FDRIVE_MASTER_KEY: Buffer.alloc(32, 9).toString("base64"),
+    });
+    composed = await composeApp(config, silentLogger());
+    database = createDb(postgres.connectionString);
+    const repos = createRepos(database.db);
+    const provider = await repos.providers.ensure({ type: "local", baseUrl: "local" });
+    await repos.settings.set(trashSettingsKey(provider.id), {
+      providerId: provider.id,
+      revision: 1,
+      enabled: true,
+      path: TRASH_PATH,
+      retentionHours: 72,
+      rulesConfirmed: false,
+    });
+  }, 180000);
+
+  afterAll(async () => {
+    await composed?.close();
+    await database?.close();
+    await storage?.stop();
+    await postgres?.stop();
+  }, 180000);
+
+  async function call(
+    path: string,
+    options: {
+      method?: string;
+      cookie?: string;
+      body?: unknown;
+      rawBody?: string;
+      headers?: Record<string, string>;
+    } = {},
+  ) {
+    const jsonBody = options.body !== undefined ? JSON.stringify(options.body) : undefined;
+    return composed.app.request(path, {
+      method: options.method ?? "GET",
+      headers: {
+        "x-requested-with": "fdrive",
+        ...(options.cookie ? { cookie: options.cookie } : {}),
+        ...(jsonBody !== undefined ? { "content-type": "application/json" } : {}),
+        ...options.headers,
+      },
+      ...(jsonBody !== undefined ? { body: jsonBody } : {}),
+      ...(options.rawBody !== undefined ? { body: options.rawBody } : {}),
+    });
+  }
+
+  async function login(username: string) {
+    const response = await call(ROUTES.auth.login, {
+      method: "POST",
+      body: { credential: { username, password: `${username}-pass` } },
+    });
+    expect(response.status).toBe(200);
+    return { cookie: cookieFrom(response), me: MeResponse.parse(await response.json()) };
+  }
+
+  async function upload(cookie: string, path: string, content: string) {
+    const response = await call(
+      `${ROUTES.fs.upload}?path=${encodeURIComponent(path)}&mkdirParents=true`,
+      { method: "PUT", cookie, rawBody: content },
+    );
+    expect(response.status).toBe(201);
+    return EntryResponse.parse(await response.json());
+  }
+
+  async function deleteItem(cookie: string, path: string, kind: "file" | "dir") {
+    const response = await call(ROUTES.fs.delete, {
+      method: "POST",
+      cookie,
+      body: { items: [{ path, kind }] },
+    });
+    expect(response.status).toBe(200);
+    return OkResponse.parse(await response.json());
+  }
+
+  async function listTrash(cookie: string) {
+    const response = await call(ROUTES.trash.list, { cookie });
+    expect(response.status).toBe(200);
+    return TrashListResponse.parse(await response.json());
+  }
+
+  async function listFs(cookie: string, path = "/") {
+    const response = await call(`${ROUTES.fs.list}?path=${encodeURIComponent(path)}`, { cookie });
+    expect(response.status).toBe(200);
+    return ListResponse.parse(await response.json());
+  }
+
+  it("moves deletes into the trash, lists and hides it from fs/list, restores, resolves conflicts, purges, empties, and isolates users", async () => {
+    const alice = await login("alice");
+    const aliceCookie = alice.cookie;
+
+    // 1. trash status is available with the configured path and retention.
+    const status = TrashStatusResponse.parse(
+      await (await call(ROUTES.trash.status, { cookie: aliceCookie })).json(),
+    );
+    expect(status).toEqual({ available: true, path: TRASH_PATH, retentionHours: 72 });
+
+    // 2. delete files whose names contain spaces, Unicode, and a literal
+    // "%20" (not a URL-encoded space), the last from inside a folder, then
+    // the folder itself, which goes to the trash as one item.
+    const spacedName = "My Report (final).txt";
+    const unicodeName = "héllo wörld 名前.txt";
+    const percentName = "literal%20name.txt";
+    await upload(aliceCookie, `/${spacedName}`, "spaced content");
+    await upload(aliceCookie, `/${unicodeName}`, "unicode content");
+    await upload(aliceCookie, `/A Folder/${percentName}`, "percent content");
+    await upload(aliceCookie, "/A Folder/kept-inside.txt", "inside the folder");
+
+    await deleteItem(aliceCookie, `/${spacedName}`, "file");
+    await deleteItem(aliceCookie, `/${unicodeName}`, "file");
+    await deleteItem(aliceCookie, `/A Folder/${percentName}`, "file");
+    await deleteItem(aliceCookie, "/A Folder", "dir");
+    expect(existsSync(storage.path("alice", "/A Folder"))).toBe(false);
+    expect(existsSync(storage.path("alice", `${TRASH_PATH}/.fdrive-move-v1`))).toBe(true);
+
+    // 3. the trash list parses originalPath, name, and deletedAt correctly
+    // for every deleted item, the folder included.
+    const afterDeletes = await listTrash(aliceCookie);
+    expect(afterDeletes.truncated).toBe(false);
+    const byName = new Map(afterDeletes.entries.map((entry) => [entry.name, entry]));
+    expect(byName.get(spacedName)).toMatchObject({
+      originalPath: `/${spacedName}`,
+      name: spacedName,
+    });
+    expect(byName.get(unicodeName)).toMatchObject({
+      originalPath: `/${unicodeName}`,
+      name: unicodeName,
+    });
+    expect(byName.get(percentName)).toMatchObject({
+      originalPath: `/A Folder/${percentName}`,
+      name: percentName,
+    });
+    expect(byName.get("A Folder")).toMatchObject({ originalPath: "/A Folder", name: "A Folder" });
+    expect(afterDeletes.entries).toHaveLength(4);
+    for (const entry of afterDeletes.entries) {
+      expect(new Date(entry.deletedAt).toString()).not.toBe("Invalid Date");
+    }
+
+    // 4. fs/list never shows the trash folder itself.
+    const rootListing = await listFs(aliceCookie, "/");
+    expect(rootListing.entries.some((entry) => entry.name === ".trash")).toBe(false);
+
+    // 5. restore the spaced-name file to its original path.
+    const spacedEntry = byName.get(spacedName);
+    if (spacedEntry === undefined) throw new Error("expected the spaced-name trash entry");
+    const restoreSame = await call(ROUTES.trash.restore, {
+      method: "POST",
+      cookie: aliceCookie,
+      body: { ids: [spacedEntry.id] },
+    });
+    expect(restoreSame.status).toBe(200);
+    const restoreSameBody = TrashRestoreResponse.parse(await restoreSame.json());
+    expect(restoreSameBody.restored[0]?.path).toBe(`/${spacedName}`);
+
+    // 6. deleting it again and uploading a fresh file at the same path, then
+    // restoring the older trash entry to its default (original) target,
+    // conflicts.
+    await deleteItem(aliceCookie, `/${spacedName}`, "file");
+    const secondTrashList = await listTrash(aliceCookie);
+    const secondSpacedEntry = secondTrashList.entries.find((entry) => entry.name === spacedName);
+    if (secondSpacedEntry === undefined) throw new Error("expected a second spaced-name entry");
+    await upload(aliceCookie, `/${spacedName}`, "a fresh file occupying the same path");
+
+    const restoreConflict = await call(ROUTES.trash.restore, {
+      method: "POST",
+      cookie: aliceCookie,
+      body: { ids: [secondSpacedEntry.id] },
+    });
+    expect(restoreConflict.status).toBe(409);
+    const conflictBody = (await restoreConflict.json()) as {
+      error: { details?: Record<string, unknown> };
+    };
+    expect(conflictBody.error.details?.failedId).toBe(secondSpacedEntry.id);
+
+    // 7. restoring the same entry to a brand-new target under a new parent
+    // folder succeeds (mkdir parents happens automatically).
+    const restoreNewTarget = await call(ROUTES.trash.restore, {
+      method: "POST",
+      cookie: aliceCookie,
+      body: { ids: [secondSpacedEntry.id], target: "/recovered/from-trash/moved.txt" },
+    });
+    expect(restoreNewTarget.status).toBe(200);
+    const newTargetBody = TrashRestoreResponse.parse(await restoreNewTarget.json());
+    expect(newTargetBody.restored[0]?.path).toBe("/recovered/from-trash/moved.txt");
+
+    // 8. purge the Unicode-named entry permanently.
+    const beforePurge = await listTrash(aliceCookie);
+    const unicodeEntry = beforePurge.entries.find((entry) => entry.name === unicodeName);
+    if (unicodeEntry === undefined) throw new Error("expected the unicode trash entry");
+    const purgeRes = await call(ROUTES.trash.purge, {
+      method: "POST",
+      cookie: aliceCookie,
+      body: { ids: [unicodeEntry.id] },
+    });
+    expect(purgeRes.status).toBe(200);
+    const afterPurge = await listTrash(aliceCookie);
+    expect(afterPurge.entries.some((entry) => entry.id === unicodeEntry.id)).toBe(false);
+
+    // 9. a second user (carol) never sees alice's trash entries.
+    const carol = await login("carol");
+    await upload(carol.cookie, "/carol-own.txt", "carol's file");
+    await deleteItem(carol.cookie, "/carol-own.txt", "file");
+    const carolTrash = await listTrash(carol.cookie);
+    expect(carolTrash.entries.map((entry) => entry.name)).toEqual(["carol-own.txt"]);
+    const aliceTrashAfterCarol = await listTrash(aliceCookie);
+    expect(aliceTrashAfterCarol.entries.every((entry) => entry.name !== "carol-own.txt")).toBe(
+      true,
+    );
+
+    // 10. empty alice's trash entirely; her remaining entries (the
+    // percent-named file and the folder) are gone, but carol's trash is untouched.
+    const emptyRes = await call(ROUTES.trash.empty, { method: "POST", cookie: aliceCookie });
+    expect(emptyRes.status).toBe(200);
+    const aliceTrashAfterEmpty = await listTrash(aliceCookie);
+    expect(aliceTrashAfterEmpty.entries).toEqual([]);
+    const carolTrashAfterAliceEmpty = await listTrash(carol.cookie);
+    expect(carolTrashAfterAliceEmpty.entries.map((entry) => entry.name)).toEqual(["carol-own.txt"]);
+  }, 180000);
+
+  it("preserves and relocates retained metadata without taking it from replacement files", async () => {
+    const { cookie } = await login("alice");
+    await upload(cookie, "/metadata-restore.txt", "original");
+    expect(
+      (
+        await call("/api/v1/favorites", {
+          method: "POST",
+          cookie,
+          body: { path: "/metadata-restore.txt" },
+        })
+      ).status,
+    ).toBe(200);
+    const favoritePaths = async () => {
+      const response = await call("/api/v1/favorites", { cookie });
+      expect(response.status).toBe(200);
+      const body = (await response.json()) as { items: Array<{ path: string }> };
+      return body.items.map((item) => item.path);
+    };
+    const restore = async (original: string, target?: string) => {
+      const entry = (await listTrash(cookie)).entries.find(
+        (item) => item.originalPath === original,
+      );
+      if (!entry) throw new Error("expected trash entry");
+      const response = await call(ROUTES.trash.restore, {
+        method: "POST",
+        cookie,
+        body: { ids: [entry.id], ...(target ? { target } : {}) },
+      });
+      expect(response.status).toBe(200);
+    };
+
+    await deleteItem(cookie, "/metadata-restore.txt", "file");
+    await restore("/metadata-restore.txt");
+    expect(await favoritePaths()).toEqual(["/metadata-restore.txt"]);
+
+    await deleteItem(cookie, "/metadata-restore.txt", "file");
+    await restore("/metadata-restore.txt", "/metadata-recovered.txt");
+    expect(await favoritePaths()).toEqual(["/metadata-recovered.txt"]);
+
+    await deleteItem(cookie, "/metadata-recovered.txt", "file");
+    await upload(cookie, "/metadata-recovered.txt", "replacement");
+    await restore("/metadata-recovered.txt", "/metadata-archive.txt");
+    expect(await favoritePaths()).toEqual(["/metadata-recovered.txt"]);
+  }, 180000);
+});

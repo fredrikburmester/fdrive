@@ -48,8 +48,8 @@ def _make_state(
     targets: list[RootTarget] | None = None,
     include_globs: tuple[str, ...] = (),
 ) -> server.ServerState:
-    root_id = db.upsert_root(db.connect(postgres_dsn), "sftpgo")
-    resolved_targets = targets if targets is not None else [RootTarget(name="sftpgo", root_id=root_id, abs_path=str(tmp_path))]
+    root_id = db.upsert_root(db.connect(postgres_dsn), "files")
+    resolved_targets = targets if targets is not None else [RootTarget(name="files", root_id=root_id, abs_path=str(tmp_path))]
     return server.ServerState(
         conn_factory=lambda: db.connect(postgres_dsn),
         targets=resolved_targets,
@@ -227,7 +227,7 @@ def test_run_applies_the_state_include_globs(postgres_dsn: str, tmp_path: Path) 
     (tmp_path / "fredrik" / "in-scope.pdf").write_bytes(b"HASTEXT\n")
     (tmp_path / "alice").mkdir()
     (tmp_path / "alice" / "out-of-scope.pdf").write_bytes(b"HASTEXT\n")
-    state = _make_state(postgres_dsn, tmp_path, include_globs=("sftpgo/fredrik/**",))
+    state = _make_state(postgres_dsn, tmp_path, include_globs=("files/fredrik/**",))
     _set_pdf_ocr(state)
     client = TestClient(server.create_app(state))
 
@@ -326,10 +326,10 @@ def _keep_original(state: server.ServerState, root: Path, rel_path: str = "docs/
     rewritten = root / "rewritten.pdf"
     rewritten.write_bytes(b"OK-OCRED-OUTPUT\n")
     runner.apply_rewrite(
-        str(source), str(rewritten), state.state_dir, "sftpgo", rel_path, info.st_size, info.st_mtime_ns, True
+        str(source), str(rewritten), state.state_dir, "files", rel_path, info.st_size, info.st_mtime_ns, True
     )
     state.originals.invalidate()
-    return os.path.basename(runner.originals_dest(state.state_dir, "sftpgo", rel_path, info.st_size, info.st_mtime_ns))
+    return os.path.basename(runner.originals_dest(state.state_dir, "files", rel_path, info.st_size, info.st_mtime_ns))
 
 
 def test_originals_lists_kept_files_with_their_source_path(postgres_dsn: str, tmp_path: Path) -> None:
@@ -470,8 +470,8 @@ def test_a_manual_run_prunes_aged_originals(postgres_dsn: str, tmp_path: Path) -
     # directory and treat the kept originals themselves as candidate PDFs.
     root = tmp_path / "root"
     root.mkdir()
-    root_id = db.upsert_root(db.connect(postgres_dsn), "sftpgo")
-    state = _make_state(postgres_dsn, tmp_path, targets=[RootTarget(name="sftpgo", root_id=root_id, abs_path=str(root))])
+    root_id = db.upsert_root(db.connect(postgres_dsn), "files")
+    state = _make_state(postgres_dsn, tmp_path, targets=[RootTarget(name="files", root_id=root_id, abs_path=str(root))])
     _set_pdf_ocr(state)
     original_id = _keep_original(state, root)
     conn = state.conn_factory()

@@ -28,13 +28,12 @@ from .activity import timestamp
 from .chunking import is_textual
 from .clear_jobs import clear_image_embeddings, clear_index, clear_thumbnails, start_clear
 from .content_extract import MAX_CONTENT_BYTES, ContentExtractor
-from .directory_listing import directory_parts, directory_query, list_directory
 from .extract import embed_health
 from .failure_retry import start_retry
 from .features import FeatureConfiguration
 from .image_embed_rebuild import start_image_embed_rebuild
 from .indexer import RootContext, work_features
-from .paths import ext_of, reindex_scope
+from .paths import ext_of, reindex_scope, request_path_parts
 from .stats import shape_health, shape_stats
 from .thumb_rebuild import ThumbnailRebuildJob, start_rebuild
 
@@ -75,7 +74,7 @@ def _extract_parts(path: str) -> list[str]:
     """Validate the request path and return root-relative path components."""
     if not path:
         raise ValueError("invalid path")
-    return directory_parts(path if path.startswith("/") else f"/{path}")
+    return request_path_parts(path if path.startswith("/") else f"/{path}")
 
 
 def _descriptor_path(descriptor: int) -> str:
@@ -127,30 +126,6 @@ def storage_diagnostics(contexts: dict[str, RootContext]) -> dict[str, dict[str,
             pass
         result[name] = {"readable": readable, "writable": os.access(ctx.abs_path, os.W_OK)}
     return result
-
-
-async def directory(request: Request) -> JSONResponse:
-    state: ServerState = request.app.state.server_state
-    try:
-        root, path = directory_query(request.query_params.multi_items())
-    except ValueError:
-        return JSONResponse({"error": "invalid directory query"}, status_code=400)
-    ctx = state.contexts.get(root)
-    if ctx is None:
-        return JSONResponse({"error": "unknown root"}, status_code=404)
-    try:
-        result = await run_in_threadpool(list_directory, ctx.abs_path, path)
-    except OSError as error:
-        statuses: dict[int | None, int] = {
-            errno.ENOENT: 404,
-            errno.ENOTDIR: 400,
-            errno.ELOOP: 400,
-            errno.EACCES: 403,
-            errno.EPERM: 403,
-        }
-        status = statuses.get(error.errno, 503)
-        return JSONResponse({"error": "directory unavailable"}, status_code=status)
-    return JSONResponse(result)
 
 
 async def health(request: Request) -> JSONResponse:
@@ -470,7 +445,6 @@ def create_app(state: ServerState) -> Starlette:
         routes=[
             Route("/failures/retry", retry_failures, methods=["POST"]),
             Route("/health", health, methods=["GET"]),
-            Route("/directory", directory, methods=["GET"]),
             Route("/stats", stats, methods=["GET"]),
             Route("/activity", activity, methods=["GET"]),
             Route("/extract", extract_text, methods=["POST"]),

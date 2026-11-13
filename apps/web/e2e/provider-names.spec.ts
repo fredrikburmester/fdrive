@@ -7,30 +7,44 @@ import { getFreePort } from "./support/ports.js";
 
 test.use({ storageState: { cookies: [], origins: [] } });
 
-test("names storage during setup and propagates a label-only rename to logins and Mac approval", async ({
+test("without a local folder, setup connects and names WebDAV storage, and a label-only rename reaches logins and Mac approval", async ({
   page,
   browser,
 }) => {
-  test.setTimeout(240_000);
+  test.setTimeout(300_000);
+  // No FDRIVE_STORAGE_ROOT: the owner connects storage at an address instead.
   const env = await startEnvironment({
     apiPort: await getFreePort(E2E_HOST),
     webPort: await getFreePort(E2E_HOST),
     skipStatePersist: true,
+    storage: false,
+    webdav: true,
     extraApiEnv: {
-      SFTPGO_URL: "",
       FDRIVE_ADMIN_USERS: "",
       FDRIVE_SETUP_TOKEN: "provider-name-test-token",
     },
   });
+  const webdav = env.webdav;
+  if (webdav === undefined) throw new Error("environment missing its WebDAV server");
   const url = (path: string) => env.webBaseUrl + path;
   const headers = { "x-requested-with": "fdrive" };
   const anonymous = await browser.newContext({ storageState: { cookies: [], origins: [] } });
   try {
+    const status = await (await page.request.get(url("/api/v1/setup/status"))).json();
+    expect(status).toMatchObject({ required: true, mode: "provider" });
+    expect(status.types.map((type: { type: string }) => type.type)).not.toContain("local");
     await page.goto(url("/setup"));
+    await expect(page.getByText("Step 1 of 13")).toBeVisible();
     await page.getByLabel("Setup token").fill("provider-name-test-token");
     await page.getByRole("button", { name: "Continue", exact: true }).click();
+    await expect(page.getByText("Connect the storage people sign in to")).toBeVisible();
     await expect(page.getByText("Shown when choosing storage and in Finder.")).toBeVisible();
-    await page.getByLabel("SFTPGo URL").fill(env.sftpgoUrl);
+    await page.getByLabel("Storage type").click();
+    await page.getByRole("option", { name: "WebDAV", exact: true }).click();
+    await expect(page.getByLabel("Storage type")).toHaveText(/WebDAV/);
+    // The note names what WebDAV storage lacks before anyone picks it.
+    await expect(page.getByText(/^Files only\./)).toBeVisible();
+    await page.getByLabel("Address").fill(webdav.url);
     await page.getByRole("button", { name: "Test connection" }).click();
     await expect(page.getByText("Reachable", { exact: true })).toBeVisible();
     await page.getByLabel("Storage name").fill("   ");
@@ -38,8 +52,9 @@ test("names storage during setup and propagates a label-only rename to logins an
     await expect(page.getByRole("button", { name: "Continue", exact: true })).toBeDisabled();
     await page.getByLabel("Storage name").fill("  Initial storage  ");
     await page.getByRole("button", { name: "Continue", exact: true }).click();
-    await page.getByLabel("SFTPGo file-user username").fill("alice");
-    await page.getByLabel("Password", { exact: true }).fill("alice-password");
+    await expect(page.getByText("Sign in with your account on Initial storage.")).toBeVisible();
+    await page.getByLabel("Username").fill(webdav.username);
+    await page.getByLabel("Password", { exact: true }).fill(webdav.password);
     await page.getByRole("button", { name: "Continue setup" }).click();
     await expect(page.getByText("Step 4 of 13 · Thumbnails")).toBeVisible();
     const before = MeResponse.parse(await (await page.request.get(url("/api/v1/auth/me"))).json());

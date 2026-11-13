@@ -2,85 +2,7 @@ import net from "node:net";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { PostgresContainer } from "../../src/containers/postgres.js";
 import { startPostgres } from "../../src/containers/postgres.js";
-import type { SftpgoContainer } from "../../src/containers/sftpgo.js";
-import { startSftpgo } from "../../src/containers/sftpgo.js";
-import { SEED_USERS } from "../../src/seed-data.js";
-
-interface DirEntry {
-  readonly name: string;
-}
-
-function seedUser(username: string): { username: string; password: string } {
-  const user = SEED_USERS.find((candidate) => candidate.username === username);
-  if (!user) {
-    throw new Error(`No seed user named "${username}" in SEED_USERS`);
-  }
-  return user;
-}
-
-async function tokenFor(baseUrl: string, username: string, password: string): Promise<string> {
-  const credentials = Buffer.from(`${username}:${password}`).toString("base64");
-  const response = await fetch(`${baseUrl}/api/v2/user/token`, {
-    headers: { Authorization: `Basic ${credentials}` },
-  });
-  expect(response.status).toBe(200);
-  const body = (await response.json()) as { access_token: string };
-  return body.access_token;
-}
-
-async function listDir(baseUrl: string, token: string, path: string): Promise<DirEntry[]> {
-  const response = await fetch(`${baseUrl}/api/v2/user/dirs?path=${encodeURIComponent(path)}`, {
-    headers: { Authorization: `Bearer ${token}` },
-  });
-  expect(response.status).toBe(200);
-  return (await response.json()) as DirEntry[];
-}
-
-interface TrashDirEntry {
-  readonly name: string;
-  readonly type: number;
-}
-
-async function listTrashDir(
-  baseUrl: string,
-  token: string,
-  path: string,
-): Promise<TrashDirEntry[]> {
-  const response = await fetch(`${baseUrl}/api/v2/user/dirs?path=${encodeURIComponent(path)}`, {
-    headers: { Authorization: `Bearer ${token}` },
-  });
-  expect(response.status).toBe(200);
-  return (await response.json()) as TrashDirEntry[];
-}
-
-async function uploadFile(
-  baseUrl: string,
-  token: string,
-  path: string,
-  content: string,
-): Promise<void> {
-  const response = await fetch(
-    `${baseUrl}/api/v2/user/files/upload?path=${encodeURIComponent(path)}`,
-    { method: "POST", headers: { Authorization: `Bearer ${token}` }, body: content },
-  );
-  expect(response.status).toBe(201);
-}
-
-async function deleteFile(baseUrl: string, token: string, path: string): Promise<number> {
-  const response = await fetch(`${baseUrl}/api/v2/user/files?path=${encodeURIComponent(path)}`, {
-    method: "DELETE",
-    headers: { Authorization: `Bearer ${token}` },
-  });
-  return response.status;
-}
-
-async function deleteDirRecursive(baseUrl: string, token: string, path: string): Promise<number> {
-  const response = await fetch(`${baseUrl}/api/v2/user/dirs?path=${encodeURIComponent(path)}`, {
-    method: "DELETE",
-    headers: { Authorization: `Bearer ${token}` },
-  });
-  return response.status;
-}
+import { type ApacheWebdavContainer, startApacheWebdav } from "../../src/containers/webdav.js";
 
 async function assertTcpReachable(host: string, port: number): Promise<void> {
   await new Promise<void>((resolve, reject) => {
@@ -92,166 +14,106 @@ async function assertTcpReachable(host: string, port: number): Promise<void> {
   });
 }
 
+function basic(user: { username: string; password: string }): string {
+  return `Basic ${Buffer.from(`${user.username}:${user.password}`).toString("base64")}`;
+}
+
+function userNamed(dav: ApacheWebdavContainer, username: string) {
+  const user = dav.users.find((candidate) => candidate.username === username);
+  if (user === undefined) throw new Error(`no WebDAV user ${username}`);
+  return user;
+}
+
+async function propfind(url: string, authorization?: string): Promise<Response> {
+  return fetch(url, {
+    method: "PROPFIND",
+    headers: { Depth: "1", ...(authorization === undefined ? {} : { authorization }) },
+  });
+}
+
 describe("testkit containers", () => {
-  let sftpgo: SftpgoContainer;
   let postgres: PostgresContainer;
+  let single: ApacheWebdavContainer;
+  let multi: ApacheWebdavContainer;
 
   beforeAll(async () => {
-    [sftpgo, postgres] = await Promise.all([startSftpgo(), startPostgres()]);
+    [postgres, single, multi] = await Promise.all([
+      startPostgres(),
+      startApacheWebdav(),
+      startApacheWebdav({
+        users: [
+          { username: "alice", password: "alice-password" },
+          { username: "bob", password: 'bob\'s "quoted" password', readOnly: true },
+        ],
+        files: {
+          alice: { "/docs/readme.md": "alice's readme" },
+          bob: { "/notes.txt": "bob's notes" },
+        },
+      }),
+    ]);
   }, 180_000);
 
   afterAll(async () => {
-    await Promise.all([sftpgo?.stop(), postgres?.stop()]);
+    await Promise.all([postgres?.stop(), single?.stop(), multi?.stop()]);
   }, 180_000);
-
-  it("sftpgo container reports healthy", async () => {
-    const response = await fetch(`${sftpgo.baseUrl}/healthz`);
-    expect(response.status).toBe(200);
-  });
-
-  it("sftpgo serves the same users over its WebDAV binding", async () => {
-    const anonymous = await fetch(`${sftpgo.webdavUrl}/`, { method: "OPTIONS" });
-    expect(anonymous.status).toBe(401);
-    expect(anonymous.headers.get("www-authenticate")).toMatch(/^Basic/);
-    const alice = seedUser("alice");
-    const credentials = Buffer.from(`${alice.username}:${alice.password}`).toString("base64");
-    const listing = await fetch(`${sftpgo.webdavUrl}/`, {
-      method: "PROPFIND",
-      headers: { Authorization: `Basic ${credentials}`, Depth: "1" },
-    });
-    expect(listing.status).toBe(207);
-    expect(await listing.text()).toContain("photo.jpg");
-  });
 
   it("postgres container accepts TCP connections", async () => {
     const url = new URL(postgres.connectionString);
     await assertTcpReachable(url.hostname, Number(url.port));
   });
 
-  it("alice logs in and lists her seeded root", async () => {
-    const alice = seedUser("alice");
-    const token = await tokenFor(sftpgo.baseUrl, alice.username, alice.password);
-    const entries = await listDir(sftpgo.baseUrl, token, "/");
-    const names = entries.map((entry) => entry.name);
-
-    expect(names).toContain("docs");
-    expect(names).toContain("photo.jpg");
-  });
-
-  it("bob logs in and lists his seeded root", async () => {
-    const bob = seedUser("bob");
-    const token = await tokenFor(sftpgo.baseUrl, bob.username, bob.password);
-    const entries = await listDir(sftpgo.baseUrl, token, "/");
-    const names = entries.map((entry) => entry.name);
-
-    expect(names).toContain("inbox");
-    expect(names).toContain("public");
-  });
-
-  it("bob gets 403 creating a directory at the root but 201 inside /inbox", async () => {
-    const bob = seedUser("bob");
-    const token = await tokenFor(sftpgo.baseUrl, bob.username, bob.password);
-
-    const rootAttempt = await fetch(`${sftpgo.baseUrl}/api/v2/user/dirs?path=/newdir`, {
-      method: "POST",
-      headers: { Authorization: `Bearer ${token}` },
+  it("serves one login at /dav/ by default and asks anyone else to sign in", async () => {
+    expect(single.baseUrl).toMatch(/\/dav\/$/);
+    expect(single.users).toEqual([{ ...single.credential, baseUrl: single.baseUrl }]);
+    const anonymous = await fetch(single.baseUrl, { method: "OPTIONS" });
+    expect(anonymous.status).toBe(401);
+    expect(anonymous.headers.get("www-authenticate")).toMatch(/^Basic/);
+    const put = await fetch(new URL("hello.txt", single.baseUrl), {
+      method: "PUT",
+      headers: { authorization: basic(single.credential) },
+      body: "hello",
     });
-    expect(rootAttempt.status).toBe(403);
+    expect(put.status).toBe(201);
+    const listing = await propfind(single.baseUrl, basic(single.credential));
+    expect(listing.status).toBe(207);
+    expect(await listing.text()).toContain("hello.txt");
+  });
 
-    const inboxAttempt = await fetch(`${sftpgo.baseUrl}/api/v2/user/dirs?path=/inbox/newdir`, {
-      method: "POST",
-      headers: { Authorization: `Bearer ${token}` },
+  it("gives each login a home of its own with its seeded files", async () => {
+    const alice = userNamed(multi, "alice");
+    const bob = userNamed(multi, "bob");
+    expect(multi.baseUrl).toBe(alice.baseUrl);
+    expect(multi.credential).toEqual({ username: "alice", password: "alice-password" });
+    expect(alice.baseUrl).toMatch(/\/dav\/alice\/$/);
+    expect(bob.baseUrl).toMatch(/\/dav\/bob\/$/);
+
+    const readme = await fetch(new URL("docs/readme.md", alice.baseUrl), {
+      headers: { authorization: basic(alice) },
     });
-    expect(inboxAttempt.status).toBe(201);
+    expect(await readme.text()).toBe("alice's readme");
+    // A login cannot open another login's home.
+    expect((await propfind(bob.baseUrl, basic(alice))).status).toBe(401);
+    expect((await propfind(alice.baseUrl, basic(bob))).status).toBe(401);
   });
 
-  it("carol sees the shared folder at her root and team.txt inside it", async () => {
-    const carol = seedUser("carol");
-    const token = await tokenFor(sftpgo.baseUrl, carol.username, carol.password);
-
-    const rootEntries = await listDir(sftpgo.baseUrl, token, "/");
-    expect(rootEntries.map((entry) => entry.name)).toContain("shared");
-
-    const sharedEntries = await listDir(sftpgo.baseUrl, token, "/shared");
-    expect(sharedEntries.map((entry) => entry.name)).toContain("team.txt");
-  });
-});
-
-describe("testkit containers: trash", () => {
-  const TRASH_PATH = "/.trash";
-  let trashSftpgo: SftpgoContainer;
-
-  beforeAll(async () => {
-    trashSftpgo = await startSftpgo({ trash: { path: TRASH_PATH } });
-  }, 180_000);
-
-  afterAll(async () => {
-    await trashSftpgo?.stop();
-  }, 180_000);
-
-  it("deleting a file moves it under <trashPath>/<dir>/<name>/<timestamp>", async () => {
-    const alice = seedUser("alice");
-    const token = await tokenFor(trashSftpgo.baseUrl, alice.username, alice.password);
-
-    await uploadFile(trashSftpgo.baseUrl, token, "/trash-top.txt", "top level file");
-    expect(await deleteFile(trashSftpgo.baseUrl, token, "/trash-top.txt")).toBe(200);
-
-    const rootEntries = await listDir(trashSftpgo.baseUrl, token, "/");
-    expect(rootEntries.map((entry) => entry.name)).not.toContain("trash-top.txt");
-
-    const leaves = await listTrashDir(trashSftpgo.baseUrl, token, `${TRASH_PATH}/trash-top.txt`);
-    expect(leaves).toHaveLength(1);
-    expect(leaves[0]?.name).toMatch(/^[0-9]{1,20}$/);
-  });
-
-  it("deleting a directory moves every nested file individually, including names with a space, Unicode, and a literal %20", async () => {
-    const alice = seedUser("alice");
-    const token = await tokenFor(trashSftpgo.baseUrl, alice.username, alice.password);
-    const dir = "/trash-dir-delete";
-
-    await fetch(`${trashSftpgo.baseUrl}/api/v2/user/dirs?path=${encodeURIComponent(dir)}`, {
-      method: "POST",
-      headers: { Authorization: `Bearer ${token}` },
+  it("lets a read-only login read its home and refuses every change with 403", async () => {
+    const bob = userNamed(multi, "bob");
+    const notes = await fetch(new URL("notes.txt", bob.baseUrl), {
+      headers: { authorization: basic(bob) },
     });
-    await fetch(
-      `${trashSftpgo.baseUrl}/api/v2/user/dirs?path=${encodeURIComponent(`${dir}/inner`)}`,
-      { method: "POST", headers: { Authorization: `Bearer ${token}` } },
-    );
-    await uploadFile(trashSftpgo.baseUrl, token, `${dir}/sp ace.txt`, "space");
-    await uploadFile(trashSftpgo.baseUrl, token, `${dir}/inner/Å unicode.txt`, "unicode");
-    await uploadFile(trashSftpgo.baseUrl, token, `${dir}/literal%20.txt`, "literal");
-
-    expect(await deleteDirRecursive(trashSftpgo.baseUrl, token, dir)).toBe(200);
-
-    const rootEntries = await listDir(trashSftpgo.baseUrl, token, "/");
-    expect(rootEntries.map((entry) => entry.name)).not.toContain("trash-dir-delete");
-
-    expect(
-      await listTrashDir(trashSftpgo.baseUrl, token, `${TRASH_PATH}${dir}/sp ace.txt`),
-    ).toHaveLength(1);
-    expect(
-      await listTrashDir(trashSftpgo.baseUrl, token, `${TRASH_PATH}${dir}/inner/Å unicode.txt`),
-    ).toHaveLength(1);
-    expect(
-      await listTrashDir(trashSftpgo.baseUrl, token, `${TRASH_PATH}${dir}/literal%20.txt`),
-    ).toHaveLength(1);
-  });
-
-  it("deleting a file already under the trash path is permanent", async () => {
-    const alice = seedUser("alice");
-    const token = await tokenFor(trashSftpgo.baseUrl, alice.username, alice.password);
-
-    await uploadFile(trashSftpgo.baseUrl, token, "/trash-permanent.txt", "gone for good");
-    expect(await deleteFile(trashSftpgo.baseUrl, token, "/trash-permanent.txt")).toBe(200);
-
-    const trashDir = `${TRASH_PATH}/trash-permanent.txt`;
-    const leaves = await listTrashDir(trashSftpgo.baseUrl, token, trashDir);
-    expect(leaves).toHaveLength(1);
-    const leafName = leaves[0]?.name;
-    expect(leafName).toBeDefined();
-
-    expect(await deleteFile(trashSftpgo.baseUrl, token, `${trashDir}/${leafName}`)).toBe(200);
-
-    expect(await listTrashDir(trashSftpgo.baseUrl, token, trashDir)).toEqual([]);
+    expect(await notes.text()).toBe("bob's notes");
+    expect((await propfind(bob.baseUrl, basic(bob))).status).toBe(207);
+    for (const [method, path] of [
+      ["PUT", "new.txt"],
+      ["MKCOL", "folder"],
+      ["DELETE", "notes.txt"],
+    ] as const) {
+      const response = await fetch(new URL(path, bob.baseUrl), {
+        method,
+        headers: { authorization: basic(bob) },
+        ...(method === "PUT" ? { body: "x" } : {}),
+      });
+      expect(response.status, `${method} ${path}`).toBe(403);
+    }
   });
 });

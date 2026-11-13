@@ -1,6 +1,5 @@
 import { MeResponse, ROUTES } from "@fdrive/contracts";
 import { IdentityLinksError } from "@fdrive/db";
-import { SftpgoError } from "@fdrive/sftpgo";
 import { describe, expect, it, vi } from "vitest";
 import { officeHarness } from "../../test/fixtures/office/harness.ts";
 import { open } from "../auth/crypto.js";
@@ -39,7 +38,7 @@ describe("identity account routes", () => {
     expect(me.isAdmin).toBe(false);
     expect(me.activeIdentityId).toBe(bob.me.activeIdentityId);
     expect(me.identities).toHaveLength(2);
-    expect(me.identities.every((identity) => identity.providerLabel === "storage.test")).toBe(true);
+    expect(me.identities.every((identity) => identity.providerLabel === "Local folder")).toBe(true);
     expect(cookie).not.toBe(alice.cookie);
     const rotated = await h.repos.sessions.getByIdHash(hashCookie(cookie), h.clock());
     expect(rotated?.expiresAt).toEqual(previous?.expiresAt);
@@ -338,40 +337,6 @@ describe("identity account routes", () => {
     expect(h.logger.error).not.toHaveBeenCalled();
   });
 });
-it("passes optional TOTP through link verification and never mutates for invalid codes", async () => {
-  const h = accountsHarness();
-  const a = await h.login();
-  const original = h.client.login.bind(h.client);
-  const login = vi.spyOn(h.client, "login").mockImplementation(async (input) => {
-    if (input.username === "bob" && input.otp !== "123456")
-      throw new SftpgoError("bad OTP", "unauthorized", 401, "invalid OTP");
-    return original(input);
-  });
-  expect(
-    (
-      await h.call(ROUTES.account.identities, {
-        method: "POST",
-        cookie: a.cookie,
-        body: {
-          credential: { username: "bob", password: "bob-pass", otp: "wrong" },
-          currentCredential: { password: "alice-pass" },
-        },
-      })
-    ).status,
-  ).toBe(401);
-  expect(await h.repos.identities.listByAccount(a.me.account.id)).toHaveLength(1);
-  const linked = await h.call(ROUTES.account.identities, {
-    method: "POST",
-    cookie: a.cookie,
-    body: {
-      credential: { username: "bob", password: "bob-pass", otp: "123456" },
-      currentCredential: { password: "alice-pass" },
-    },
-  });
-  expect(linked.status).toBe(200);
-  expect(login).toHaveBeenLastCalledWith({ username: "bob", password: "bob-pass", otp: "123456" });
-  expect(login).toHaveBeenCalledWith({ username: "alice", password: "alice-pass" });
-});
 it("linking re-authenticates the signed-in login: missing or wrong owner password never links", async () => {
   const h = accountsHarness();
   const a = await h.login();
@@ -424,16 +389,16 @@ it("linking re-authenticates the signed-in login: missing or wrong owner passwor
     ).status,
   ).toBe(429);
 });
-it("login with a replaced SFTPGo password revokes the account's other sessions; same password keeps them", async () => {
+it("login with a replaced password revokes the account's other sessions; same password keeps them", async () => {
   const h = accountsHarness();
   const first = await h.login();
   const second = await h.login();
   expect((await h.call(ROUTES.auth.me, { cookie: first.cookie })).status).toBe(200);
-  const original = h.client.login.bind(h.client);
-  vi.spyOn(h.client, "login").mockImplementation(async (input) =>
-    input.username === "alice" && input.password === "alice-rotated"
-      ? original({ ...input, password: "alice-pass" })
-      : original(input),
+  const original = h.users.verify.bind(h.users);
+  vi.spyOn(h.users, "verify").mockImplementation(async (username, password) =>
+    username === "alice" && password === "alice-rotated"
+      ? original(username, "alice-pass")
+      : original(username, password),
   );
   const rotated = await h.call(ROUTES.auth.login, {
     method: "POST",
@@ -576,7 +541,7 @@ it("re-authentication refuses a vanished active login and passes upstream outage
     kind: "unauthorized",
     message: "identity ownership changed; sign in again",
   });
-  vi.spyOn(h.client, "login").mockRejectedValueOnce(new SftpgoError("down", "network", null, null));
+  vi.spyOn(h.users, "verify").mockRejectedValueOnce(new Error("users table unreachable"));
   const outage = await h.call(ROUTES.account.identities, {
     method: "POST",
     cookie: a.cookie,
@@ -648,10 +613,10 @@ it.each(["alice-pass", "alice-rotated"])(
     const started = new Promise<void>((resolve) => {
       entered = resolve;
     });
-    const original = h.client.login.bind(h.client);
+    const original = h.users.verify.bind(h.users);
     let hold = true;
-    vi.spyOn(h.client, "login").mockImplementation(async (input) => {
-      const result = await original({ ...input, password: "alice-pass" });
+    vi.spyOn(h.users, "verify").mockImplementation(async (username) => {
+      const result = await original(username, "alice-pass");
       if (hold) {
         hold = false;
         entered();

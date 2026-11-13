@@ -29,7 +29,7 @@ export function encodeMinimalPdf(text: string): Buffer {
   ];
 
   let body = PDF_HEADER;
-  // Index 0 is the free-list head SFTPGo/PDF readers expect at object 0;
+  // Index 0 is the free-list head PDF readers expect at object 0;
   // it has no real offset, so it is left as 0 and never written into `body`.
   const offsetByObjectId: number[] = [0];
 

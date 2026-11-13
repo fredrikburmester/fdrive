@@ -4,21 +4,22 @@ import { allCapabilities } from "@/lib/identity/capabilities";
 import {
   connectionSourceLabel,
   enabledCapabilities,
-  homeTemplatePreview,
-  isPlausibleHomeTemplate,
+  hasAddress,
+  LOCAL_FOLDER_NOTE,
   missingCapabilities,
   normalizeProviderConfig,
   providerAddressHint,
   providerAddressLock,
   providerConfigDraft,
   providerFormError,
+  providerReachError,
   providerRemoveBlock,
   providerUpdatePatch,
 } from "./connection";
 
-const HOME_TEMPLATE_FIELD: ProviderField = {
-  name: "homeTemplate",
-  label: "Home template",
+const PREFIX_FIELD: ProviderField = {
+  name: "prefix",
+  label: "Folder prefix",
   kind: "text",
   required: false,
 };
@@ -31,21 +32,32 @@ const TOKEN_FIELD: ProviderField = {
 
 const PROVIDER: AdminProvider = {
   id: "00000000-0000-4000-8000-000000000009",
-  type: "sftpgo",
+  type: "webdav",
   label: "Primary",
-  baseUrl: "http://sftpgo:8080",
-  config: { homeTemplate: "sftpgo:/{username}" },
+  baseUrl: "https://dav.example.com/",
+  config: { prefix: "/files" },
   enabled: true,
   managedByEnv: false,
   identityCount: 0,
   reachable: true,
   checkedAt: "2026-01-01T00:00:00.000Z",
   createdAt: "2026-01-01T00:00:00.000Z",
+  capabilities: allCapabilities(false),
+};
+
+const FOLDER: AdminProvider = {
+  ...PROVIDER,
+  id: "00000000-0000-4000-8000-00000000000a",
+  type: "local",
+  label: "Local folder",
+  baseUrl: "",
+  config: {},
+  managedByEnv: true,
 };
 
 describe("connectionSourceLabel", () => {
-  it("labels env as locked", () => {
-    expect(connectionSourceLabel(true)).toBe("Environment (locked)");
+  it("labels a deployment-pinned row as locked", () => {
+    expect(connectionSourceLabel(true)).toBe("Deployment (locked)");
   });
 
   it("labels settings as editable", () => {
@@ -53,46 +65,34 @@ describe("connectionSourceLabel", () => {
   });
 });
 
-describe("isPlausibleHomeTemplate", () => {
-  it.each([
-    ["sftpgo:/{username}", true],
-    ["sftpgo:/shared", true],
-    ["sftpgo/{username}", false],
-    [":/{username}", false],
-    ["SFTPgo:/{username}", false],
-    ["sftpgo:home/{username}", false],
-  ])("template %s -> %s", (template, expected) => {
-    expect(isPlausibleHomeTemplate(template)).toBe(expected);
+describe("hasAddress", () => {
+  it("is true for a provider reached at a URL", () => {
+    expect(hasAddress(PROVIDER)).toBe(true);
   });
-});
 
-describe("homeTemplatePreview", () => {
-  it.each([
-    ["sftpgo:/{username}", "carol", "carol → sftpgo:/carol"],
-    ["sftpgo:/{username}", "  ", "alice → sftpgo:/alice"],
-    ["sftpgo:/{username}", "  carol  ", "carol → sftpgo:/carol"],
-    ["sftpgo:/shared", "carol", "carol → sftpgo:/shared"],
-  ])("preview for %s with user %s", (template, user, expected) => {
-    expect(homeTemplatePreview(template, user)).toBe(expected);
+  it("is false for the local folder, which has none", () => {
+    expect(hasAddress(FOLDER)).toBe(false);
+    expect(LOCAL_FOLDER_NOTE).toBe("Folder on this server, set by FDRIVE_STORAGE_ROOT.");
   });
 });
 
 describe("providerConfigDraft", () => {
   it("prefills a saved value and blanks anything unset", () => {
-    expect(
-      providerConfigDraft([HOME_TEMPLATE_FIELD, TOKEN_FIELD], { homeTemplate: "sftpgo:/x" }),
-    ).toEqual({ homeTemplate: "sftpgo:/x", token: "" });
+    expect(providerConfigDraft([PREFIX_FIELD, TOKEN_FIELD], { prefix: "/x" })).toEqual({
+      prefix: "/x",
+      token: "",
+    });
   });
 
   it("blanks every field for a new provider", () => {
-    expect(providerConfigDraft([HOME_TEMPLATE_FIELD])).toEqual({ homeTemplate: "" });
+    expect(providerConfigDraft([PREFIX_FIELD])).toEqual({ prefix: "" });
   });
 });
 
 describe("normalizeProviderConfig", () => {
   it("trims values and drops blank ones", () => {
-    expect(normalizeProviderConfig({ homeTemplate: "  sftpgo:/x  ", token: "   " })).toEqual({
-      homeTemplate: "sftpgo:/x",
+    expect(normalizeProviderConfig({ prefix: "  /x  ", token: "   " })).toEqual({
+      prefix: "/x",
     });
   });
 
@@ -104,7 +104,7 @@ describe("normalizeProviderConfig", () => {
 });
 
 describe("providerFormError", () => {
-  const draft = { label: "Primary", baseUrl: "http://sftpgo:8080", config: {} };
+  const draft = { label: "Primary", baseUrl: "https://dav.example.com/", config: {} };
 
   it("accepts a filled form", () => {
     expect(providerFormError([], draft)).toBeNull();
@@ -117,7 +117,16 @@ describe("providerFormError", () => {
   });
 
   it("asks for an http(s) address", () => {
-    expect(providerFormError([], { ...draft, baseUrl: "sftpgo:8080" })).toMatch(/http\(s\) URL/);
+    expect(providerFormError([], { ...draft, baseUrl: "dav.example.com" })).toBe(
+      "Enter the address as an http(s) URL.",
+    );
+  });
+
+  it("does not ask the local folder for an address", () => {
+    expect(providerFormError([], { ...draft, baseUrl: "" }, false)).toBeNull();
+    expect(providerFormError([], { ...draft, label: "", baseUrl: "" }, false)).toBe(
+      "Enter a name for this storage.",
+    );
   });
 
   it("asks for a required configuration field", () => {
@@ -126,18 +135,24 @@ describe("providerFormError", () => {
     );
   });
 
-  it("accepts a filled required configuration field", () => {
-    expect(providerFormError([TOKEN_FIELD], { ...draft, config: { token: "t" } })).toBeNull();
-  });
-
-  it("accepts an empty optional home template", () => {
-    expect(providerFormError([HOME_TEMPLATE_FIELD], { ...draft, config: {} })).toBeNull();
-  });
-
-  it("rejects a home template that cannot parse", () => {
+  it("accepts a filled required field and an empty optional one", () => {
     expect(
-      providerFormError([HOME_TEMPLATE_FIELD], { ...draft, config: { homeTemplate: "nonsense" } }),
-    ).toBe('The home template is written as "<root>:<path>".');
+      providerFormError([TOKEN_FIELD, PREFIX_FIELD], { ...draft, config: { token: "t" } }),
+    ).toBe(null);
+  });
+});
+
+describe("providerReachError", () => {
+  const draft = { baseUrl: "https://dav.example.com/", config: {} };
+
+  it("needs no name, only what reaching the storage takes", () => {
+    expect(providerReachError([], draft)).toBeNull();
+    expect(providerReachError([], { ...draft, baseUrl: "dav.example.com" })).toBe(
+      "Enter the address as an http(s) URL.",
+    );
+    expect(providerReachError([], { ...draft, baseUrl: "" }, false)).toBeNull();
+    expect(providerReachError([TOKEN_FIELD], draft)).toBe("Enter api token.");
+    expect(providerReachError([TOKEN_FIELD], { ...draft, config: { token: "t" } })).toBeNull();
   });
 });
 
@@ -145,7 +160,7 @@ describe("providerUpdatePatch", () => {
   const draft = {
     label: PROVIDER.label,
     baseUrl: PROVIDER.baseUrl,
-    config: { homeTemplate: "sftpgo:/{username}" },
+    config: { prefix: "/files" },
   };
 
   it.each([
@@ -158,20 +173,25 @@ describe("providerUpdatePatch", () => {
     ],
     [
       "sends address when allowed",
-      { ...draft, baseUrl: "http://other:8080" },
+      { ...draft, baseUrl: "https://other.example.com/" },
       true,
-      { baseUrl: "http://other:8080" },
+      { baseUrl: "https://other.example.com/" },
     ],
-    ["omits address when not allowed", { ...draft, baseUrl: "http://other:8080" }, false, {}],
+    [
+      "omits address when not allowed",
+      { ...draft, baseUrl: "https://other.example.com/" },
+      false,
+      {},
+    ],
     [
       "sends whole configuration on field change",
-      { ...draft, config: { homeTemplate: "sftpgo:/h/{username}" } },
+      { ...draft, config: { prefix: "/media" } },
       true,
-      { config: { homeTemplate: "sftpgo:/h/{username}" } },
+      { config: { prefix: "/media" } },
     ],
     [
       "sends empty configuration on optional field clear",
-      { ...draft, config: { homeTemplate: "" } },
+      { ...draft, config: { prefix: "" } },
       true,
       { config: {} },
     ],
@@ -181,10 +201,8 @@ describe("providerUpdatePatch", () => {
 });
 
 describe("providerAddressLock", () => {
-  it("names the environment variable for an env-managed provider", () => {
-    expect(providerAddressLock({ ...PROVIDER, managedByEnv: true })).toBe(
-      "Set by the deployment. Remove SFTPGO_URL to manage the address here.",
-    );
+  it("locks a row the deployment pins", () => {
+    expect(providerAddressLock(FOLDER)).toBe("Set by the deployment, so it cannot change here.");
   });
 
   it("explains that logins are bound to the address they were verified against", () => {
@@ -205,16 +223,20 @@ describe("providerAddressHint", () => {
     expect(hint.description).toContain("bucket in its path");
   });
 
-  it("describes a WebDAV URL and falls back to the SFTPGo example", () => {
+  it("describes a WebDAV URL and falls back to a generic example", () => {
     expect(providerAddressHint("webdav").description).toContain("WebDAV");
-    expect(providerAddressHint("sftpgo").example).toBe("http://sftpgo:8080");
-    expect(providerAddressHint("").example).toBe("http://sftpgo:8080");
+    expect(providerAddressHint("").example).toBe("https://storage.example.com/");
+    expect(providerAddressHint("").description).toBe(
+      "Where fdrive reaches this storage, such as https://storage.example.com/.",
+    );
   });
 });
 
 describe("providerRemoveBlock", () => {
-  it("blocks an env-managed provider", () => {
-    expect(providerRemoveBlock({ ...PROVIDER, managedByEnv: true })).toMatch(/SFTPGO_URL/);
+  it("blocks the deployment's own folder", () => {
+    expect(providerRemoveBlock(FOLDER)).toBe(
+      "Set by the deployment with FDRIVE_STORAGE_ROOT, so it cannot be removed here.",
+    );
   });
 
   it("blocks a provider with logins", () => {

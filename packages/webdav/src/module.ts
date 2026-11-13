@@ -91,8 +91,8 @@ export function createWebdavModule(options: CreateWebdavModuleOptions = {}): Pro
       trash: true,
       shares: false,
       office: false,
+      shareWithPeople: false,
       index: false,
-      scopeMapping: false,
     },
     // No recycle bin in the protocol: the API storage factory moves deleted
     // files into the configured folder itself (`withMoveToTrash`).

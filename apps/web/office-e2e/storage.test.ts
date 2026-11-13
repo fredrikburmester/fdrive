@@ -1,111 +1,82 @@
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, stat, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it } from "vitest";
 import { run } from "./process";
 import { fixtureState, type OfficeFixtureState } from "./state";
 import {
-  putOverSftp,
-  storageToken,
+  putExternally,
   storedBytes,
   storedMetadata,
+  storedPath,
   storedText,
   storedXml,
 } from "./storage";
 
-it("reads only the configured private fixture state", async () => {
-  await expect(fixtureState("")).rejects.toThrow("not started");
-  const directory = await mkdtemp(join(tmpdir(), "office-state-unit-"));
-  try {
-    await writeFile(join(directory, "office.json"), JSON.stringify({ product: "onlyoffice" }));
-    expect(await fixtureState(directory)).toEqual({ product: "onlyoffice" });
-  } finally {
-    await rm(directory, { recursive: true, force: true });
-  }
-});
-it("logs in and downloads the literal storage path without printing credentials", async () => {
-  const state = { sftpgoUrl: "http://fixture.test" } as OfficeFixtureState;
-  const calls: string[] = [];
-  const fetcher: typeof fetch = async (input) => {
-    calls.push(String(input));
-    return String(input).endsWith("/token")
-      ? Response.json({ access_token: "fixture-token" })
-      : new Response("saved");
-  };
-  expect(await storageToken(state, fetcher)).toBe("fixture-token");
-  expect(Buffer.from(await storedBytes(state, "/Å %20.docx", fetcher)).toString()).toBe("saved");
-  expect(calls.at(-1)).toBe("http://fixture.test/api/v2/user/files?path=%2F%C3%85%20%2520.docx");
-  await expect(
-    storageToken(state, async () => new Response(null, { status: 403 })),
-  ).rejects.toThrow("403");
-  await expect(
-    storedBytes(state, "/x", async (input) =>
-      String(input).endsWith("/token")
-        ? Response.json({ access_token: "fixture" })
-        : new Response(null, { status: 404 }),
-    ),
-  ).rejects.toThrow("404");
-});
-it("extracts real OOXML and tolerates the initial empty document", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "office-zip-unit-"));
-  const state = { directory, sftpgoUrl: "http://fixture.test" } as OfficeFixtureState;
-  const fetcher =
-    (bytes: Uint8Array): typeof fetch =>
-    async (input) =>
-      String(input).endsWith("/token")
-        ? Response.json({ access_token: "fixture" })
-        : new Response(Buffer.from(bytes));
-  try {
-    expect(await storedXml(state, "/empty.docx", fetcher(new Uint8Array()))).toBe("");
-    const file = join(directory, "source.zip");
-    await run("python3", [
-      "-c",
-      "import sys,zipfile\nwith zipfile.ZipFile(sys.argv[1],'w') as z:\n z.writestr('word/document.xml','<p>saved text<span> &amp; more</span></p>')\n z.writestr('binary.bin',b'\\xff')",
-      file,
-    ]);
-    expect(await storedXml(state, "/x.docx", fetcher(await readFile(file)))).toContain(
-      "<p>saved text<span> &amp; more</span></p>",
-    );
-    expect(await storedText(state, "/x.docx", fetcher(await readFile(file)))).toBe(
-      "saved text & more\n",
-    );
-  } finally {
-    await rm(directory, { recursive: true, force: true });
-  }
-});
-it("uses an actual SFTP batch upload with preserved timestamps", async () => {
-  const execute = vi.fn<typeof import("./process").runWithInput>().mockResolvedValue();
-  const state = {
-    directory: "/tmp/fixture",
-    sftpgoContainer: "123456abcdef",
-  } as OfficeFixtureState;
-  await putOverSftp(state, "/tmp/a b", "/Å %20.docx", execute);
-  expect(execute.mock.calls[0]?.[0]).toBe("sftp");
-  expect(execute.mock.calls[0]?.[2]).toBe('put -p "/tmp/a b" "/Å %20.docx"\n');
+let directory: string;
+let state: OfficeFixtureState;
+
+beforeEach(async () => {
+  directory = await mkdtemp(join(tmpdir(), "office-storage-unit-"));
+  const storageRoot = join(directory, "root");
+  await mkdir(join(storageRoot, "alice"), { recursive: true });
+  state = { directory, storageRoot } as OfficeFixtureState;
 });
 
-it("reads remote size and last-modified with a real HEAD contract", async () => {
-  const state = { sftpgoUrl: "http://fixture.test" } as OfficeFixtureState;
-  const fetcher: typeof fetch = async (input, init) => {
-    if (String(input).endsWith("/token")) return Response.json({ access_token: "fixture" });
-    expect(init?.method).toBe("HEAD");
-    return new Response(null, {
-      headers: { "content-length": "12", "last-modified": "Tue, 14 Nov 2023 22:13:20 GMT" },
-    });
-  };
-  expect(await storedMetadata(state, "/x", fetcher)).toEqual({
-    size: 12,
-    modified: "Tue, 14 Nov 2023 22:13:20 GMT",
+afterEach(async () => {
+  await rm(directory, { recursive: true, force: true });
+});
+
+it("reads only the configured private fixture state", async () => {
+  await expect(fixtureState("")).rejects.toThrow("not started");
+  await writeFile(join(directory, "office.json"), JSON.stringify({ product: "onlyoffice" }));
+  expect(await fixtureState(directory)).toEqual({ product: "onlyoffice" });
+});
+
+it("reads the literal path from alice's home and names a missing file", async () => {
+  await writeFile(storedPath(state, "/Å %20.docx"), "saved");
+  expect(Buffer.from(await storedBytes(state, "/Å %20.docx")).toString()).toBe("saved");
+  await expect(storedBytes(state, "/missing.docx")).rejects.toThrow(
+    "Stored file missing: /missing.docx",
+  );
+  await mkdir(storedPath(state, "/folder"));
+  await expect(storedBytes(state, "/folder")).rejects.toThrow("EISDIR");
+});
+
+it("extracts real OOXML and tolerates the initial empty document", async () => {
+  await writeFile(storedPath(state, "/empty.docx"), new Uint8Array());
+  expect(await storedXml(state, "/empty.docx")).toBe("");
+  await run("python3", [
+    "-c",
+    "import sys,zipfile\nwith zipfile.ZipFile(sys.argv[1],'w') as z:\n z.writestr('word/document.xml','<p>saved text<span> &amp; more</span></p>')\n z.writestr('binary.bin',b'\\xff')",
+    storedPath(state, "/x.docx"),
+  ]);
+  expect(await storedXml(state, "/x.docx")).toContain("<p>saved text<span> &amp; more</span></p>");
+  expect(await storedText(state, "/x.docx")).toBe("saved text & more\n");
+});
+
+it("writes an outside edit in place and keeps its modification time", async () => {
+  const target = storedPath(state, "/Å %20.docx");
+  await writeFile(target, "before");
+  const inode = (await stat(target)).ino;
+  const local = join(directory, "a b");
+  await writeFile(local, "edited");
+  await utimes(local, 1_700_000_000, 1_700_000_000);
+  await putExternally(state, local, "/Å %20.docx");
+  expect(await readFile(target, "utf8")).toBe("edited");
+  expect((await stat(target)).ino).toBe(inode);
+  expect(await storedMetadata(state, "/Å %20.docx")).toEqual({
+    size: 6,
+    modifiedSeconds: 1_700_000_000,
   });
-  for (const response of [
-    new Response(null, { status: 404 }),
-    new Response(null),
-    new Response(null, { headers: { "content-length": "1" } }),
-  ]) {
-    await expect(
-      storedMetadata(state, "/x", async (input) =>
-        String(input).endsWith("/token") ? Response.json({ access_token: "fixture" }) : response,
-      ),
-    ).rejects.toThrow("metadata unavailable");
-  }
+});
+
+it("reads size and whole-second modification time, and only of files", async () => {
+  const target = storedPath(state, "/x");
+  await writeFile(target, "twelve bytes");
+  await utimes(target, 1_700_000_000.75, 1_700_000_000.75);
+  expect(await storedMetadata(state, "/x")).toEqual({ size: 12, modifiedSeconds: 1_700_000_000 });
+  await mkdir(storedPath(state, "/folder"));
+  await expect(storedMetadata(state, "/folder")).rejects.toThrow("metadata unavailable");
+  await expect(storedMetadata(state, "/missing")).rejects.toThrow("ENOENT");
 });

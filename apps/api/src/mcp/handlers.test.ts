@@ -33,27 +33,27 @@ import {
 import type { ScopeContext } from "./scope-context.js";
 import { resolveScopeContext } from "./scope-context.js";
 
-/** The verified home scope of an identity whose SFTPGo home is "/alice", mapped as the whole root. */
+/** The verified home scope of an identity whose home is "/alice", mapped as the whole root. */
 const ALICE_HOME_SCOPES: readonly Scope[] = [
-  { rootName: "sftpgo", fsPrefix: "/alice", virtualPrefix: "/" },
+  { rootName: "files", fsPrefix: "/alice", virtualPrefix: "/" },
 ];
 
 /** A scope covering only "/only", used to exercise the "outside this identity's scope" branches directly. */
 const NARROW_SCOPES: readonly Scope[] = [
-  { rootName: "sftpgo", fsPrefix: "/alice", virtualPrefix: "/only" },
+  { rootName: "files", fsPrefix: "/alice", virtualPrefix: "/only" },
 ];
 
 const NARROW_SCOPE_CONTEXT: ScopeContext = {
   scopes: NARROW_SCOPES,
   scopePrefixes: [{ rootId: 1, fsPrefix: "/alice" }],
-  rootNameById: new Map([[1, "sftpgo"]]),
-  rootIdByName: new Map([["sftpgo", 1]]),
+  rootNameById: new Map([[1, "files"]]),
+  rootIdByName: new Map([["files", 1]]),
   trashPath: null,
 };
 
 /** Like `NARROW_SCOPE_CONTEXT`, but with a root name that has no id yet, to exercise the "root not indexed" branch. */
 const UNINDEXED_ROOT_SCOPE_CONTEXT: ScopeContext = {
-  scopes: [{ rootName: "sftpgo", fsPrefix: "/alice", virtualPrefix: "/" }],
+  scopes: [{ rootName: "files", fsPrefix: "/alice", virtualPrefix: "/" }],
   scopePrefixes: [],
   rootNameById: new Map(),
   rootIdByName: new Map(),
@@ -73,8 +73,7 @@ function stubIndexQueries(overrides: Partial<IndexQueries> = {}): IndexQueries {
     fileByPath: overrides.fileByPath ?? (async () => fail("fileByPath")),
     listFiles: overrides.listFiles ?? (async () => fail("listFiles")),
     filesBySha256: overrides.filesBySha256 ?? (async () => fail("filesBySha256")),
-    rootIdsByName: overrides.rootIdsByName ?? (async () => ({ sftpgo: 1 })),
-    directoriesWithFiles: overrides.directoriesWithFiles ?? (async () => []),
+    rootIdsByName: overrides.rootIdsByName ?? (async () => ({ files: 1 })),
     stats: overrides.stats ?? (async () => fail("stats")),
     statsForFileIds: overrides.statsForFileIds ?? (async () => fail("statsForFileIds")),
     fileTextPrefix: overrides.fileTextPrefix ?? (async () => fail("fileTextPrefix")),
@@ -300,7 +299,7 @@ describe("runSearch", () => {
 
   it("passes the identity's verified scopes to the search service", async () => {
     const scopes: readonly Scope[] = [
-      { rootName: "sftpgo", fsPrefix: "/alice", virtualPrefix: "/" },
+      { rootName: "files", fsPrefix: "/alice", virtualPrefix: "/" },
     ];
     let received: Parameters<SearchService["search"]>[0] | undefined;
     const deps = baseDeps({
@@ -749,7 +748,7 @@ describe("runReadFileText / readFileTextWithScopes", () => {
     const deps = baseDeps({
       indexerClient: {
         extract: async ({ root, path }) => {
-          expect(root).toBe("sftpgo");
+          expect(root).toBe("files");
           expect(path).toBe("alice/a.txt");
           return { text: "hello world", status: "ok" };
         },
@@ -1499,8 +1498,8 @@ describe("runCreateFolder", () => {
         verifiedIndexScopes: async () => ({
           available: true,
           scopes: [
-            { rootName: "sftpgo", fsPrefix: "/alice", virtualPrefix: "/" },
-            { rootName: "sftpgo", fsPrefix: "/alice/docs", virtualPrefix: "/other" },
+            { rootName: "files", fsPrefix: "/alice", virtualPrefix: "/" },
+            { rootName: "files", fsPrefix: "/alice/docs", virtualPrefix: "/other" },
           ],
         }),
       },
@@ -1536,7 +1535,7 @@ describe("runCreateFolder", () => {
       scopeResolver: {
         verifiedIndexScopes: async () => ({
           available: true,
-          scopes: [{ rootName: "sftpgo", fsPrefix: "/alice/docs", virtualPrefix: "/docs" }],
+          scopes: [{ rootName: "files", fsPrefix: "/alice/docs", virtualPrefix: "/docs" }],
         }),
       },
     });
@@ -1556,7 +1555,7 @@ describe("runCreateFolder", () => {
       scopeResolver: {
         verifiedIndexScopes: async () => ({
           available: true,
-          scopes: [{ rootName: "sftpgo", fsPrefix: "/alice/docs", virtualPrefix: "/docs" }],
+          scopes: [{ rootName: "files", fsPrefix: "/alice/docs", virtualPrefix: "/docs" }],
         }),
       },
     });
@@ -1756,7 +1755,7 @@ describe("runMovePath", () => {
       scopeResolver: {
         verifiedIndexScopes: async () => ({
           available: true,
-          scopes: [{ rootName: "sftpgo", fsPrefix: "/alice/docs", virtualPrefix: "/docs" }],
+          scopes: [{ rootName: "files", fsPrefix: "/alice/docs", virtualPrefix: "/docs" }],
         }),
       },
     });
@@ -1820,7 +1819,7 @@ describe("runMovePath", () => {
       scopeResolver: {
         verifiedIndexScopes: async () => ({
           available: true,
-          scopes: [{ rootName: "sftpgo", fsPrefix: "/alice/docs", virtualPrefix: "/docs" }],
+          scopes: [{ rootName: "files", fsPrefix: "/alice/docs", virtualPrefix: "/docs" }],
         }),
       },
     });
@@ -1870,7 +1869,7 @@ describe("recordMoveIfInScope", () => {
     const deps = baseDeps();
     const twoRootScopes: ScopeContext = {
       scopes: [
-        { rootName: "sftpgo", fsPrefix: "/alice", virtualPrefix: "/a" },
+        { rootName: "files", fsPrefix: "/alice", virtualPrefix: "/a" },
         { rootName: "photos", fsPrefix: "/alice", virtualPrefix: "/b" },
       ],
       scopePrefixes: [
@@ -1878,11 +1877,11 @@ describe("recordMoveIfInScope", () => {
         { rootId: 2, fsPrefix: "/alice" },
       ],
       rootNameById: new Map([
-        [1, "sftpgo"],
+        [1, "files"],
         [2, "photos"],
       ]),
       rootIdByName: new Map([
-        ["sftpgo", 1],
+        ["files", 1],
         ["photos", 2],
       ]),
       trashPath: null,
