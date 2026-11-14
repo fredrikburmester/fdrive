@@ -214,24 +214,34 @@ try {
       ]);
       const page = await context.newPage();
       await page.goto(`${baseUrl}/system/indexer`, { waitUntil: "domcontentloaded" });
-      await page.getByRole("heading", { name: "Indexer", exact: true }).waitFor();
+      await page.getByRole("heading", { name: "Full-text search", exact: true }).waitFor();
+      await page.getByRole("button", { name: "Settings", exact: true }).click();
       await page.getByLabel("Scan interval (seconds)", { exact: true }).waitFor();
-      await page.getByRole("button", { name: "Save", exact: true }).waitFor();
-      const layout = await page.locator('[data-slot="sidebar-inset"]').evaluate((element) => {
-        element.scrollTop = element.scrollHeight;
+      const save = page.getByRole("button", { name: "Save", exact: true });
+      await save.waitFor();
+      // The settings sheet must fit the viewport, scroll its form when that is
+      // taller, and keep Save on screen.
+      const layout = await page.locator('[data-slot="sheet-content"]').evaluate((element) => {
+        const form = element.querySelector('[data-slot="scroll-area-viewport"]');
+        if (!(form instanceof HTMLElement)) throw Error("Settings sheet has no scroll area");
+        form.scrollTop = form.scrollHeight;
         return {
           height: element.clientHeight,
-          scrollHeight: element.scrollHeight,
-          scrollTop: element.scrollTop,
+          scrollHeight: form.scrollHeight,
+          formHeight: form.clientHeight,
+          scrollTop: form.scrollTop,
           viewport: innerHeight,
           documentWidth: document.documentElement.scrollWidth,
           viewportWidth: innerWidth,
         };
       });
+      const saveBox = await save.boundingBox();
       if (
         layout.height > layout.viewport ||
-        layout.scrollTop <= 0 ||
-        layout.documentWidth > layout.viewportWidth
+        (layout.scrollHeight > layout.formHeight && layout.scrollTop <= 0) ||
+        layout.documentWidth > layout.viewportWidth ||
+        saveBox === null ||
+        saveBox.y + saveBox.height > layout.viewport
       )
         throw Error(`Settings viewport or scrolling failed: ${JSON.stringify(layout)}`);
       layoutChecks.push(layout);
