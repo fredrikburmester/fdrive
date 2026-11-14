@@ -109,6 +109,7 @@ import { createScopeResolver } from "./scoping/resolver.ts";
 import { createEmbedClient } from "./search/embeddings.js";
 import { createImageEmbedClient } from "./search/image-embed-client.js";
 import { createImageSearchService } from "./search/image-service.js";
+import { createNameIndexClient } from "./search/name-index.js";
 import { registerSearchRoutes } from "./search/routes.js";
 import { createSearchService } from "./search/service.js";
 import { registerSetupRoutes } from "./setup/routes.js";
@@ -414,6 +415,10 @@ export async function composeApp(
     features: featureValues,
     indexQueries,
     embedClient,
+    nameIndex:
+      config.fdriveIndexerUrl === undefined
+        ? null
+        : createNameIndexClient({ baseUrl: config.fdriveIndexerUrl, fetch: fetchImpl }),
     thumbsEnabled: config.fdriveThumbsDir !== undefined,
     clock,
   });
