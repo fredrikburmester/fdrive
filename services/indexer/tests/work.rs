@@ -270,7 +270,7 @@ fn an_upload_is_indexed_with_the_digest_the_api_sent() {
 #[test]
 fn a_hint_earns_no_stamp_until_the_indexer_reads_the_file_itself() {
     let env = Env::new();
-    let ctx = env.ctx_with(text_on(), |ctx| ctx.stamp_settle = Duration::from_millis(50));
+    let ctx = started(env.ctx_with(text_on(), |ctx| ctx.stamp_settle = Duration::from_millis(50)));
     env.write("right.txt", b"hello world");
     env.write("wrong.txt", b"hello world");
     let right = hex_sha(b"hello world");
