@@ -250,6 +250,25 @@ fn the_loop_neither_scans_nor_watches_a_folder_without_its_marker() {
 }
 
 #[test]
+fn watcher_folders_wait_for_the_marker() {
+    let env = Env::new();
+    let ctx = env.ctx_with(fv(false, true, false, false, false), |ctx| {
+        ctx.files_folder_recheck = Duration::ZERO;
+    });
+    let handler = Handler(Arc::clone(&ctx));
+    std::fs::create_dir_all(env.path("alice/new")).unwrap();
+    std::fs::remove_file(env.path(FILES_MARKER)).unwrap();
+    handler.folder_changed("alice/new");
+    assert!(env.folders(&ctx).is_empty());
+    common::mark_files_folder(&ctx.cfg.database_url, &env.path(""));
+    handler.folder_changed("alice/new");
+    assert_eq!(
+        env.folders(&ctx).into_iter().map(|(path, _)| path).collect::<Vec<_>>(),
+        ["alice", "alice/new"]
+    );
+}
+
+#[test]
 fn watcher_deletes_and_renames_wait_for_the_marker() {
     let env = Env::new();
     let ctx = env.ctx_with(fv(false, true, false, false, false), |ctx| {

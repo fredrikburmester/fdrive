@@ -79,6 +79,9 @@ impl WatchHandler for Handler {
     }
 
     fn folder_changed(&self, rel: &str) {
+        if !self.0.files_folder_verified() {
+            return;
+        }
         watch_folder(&self.0, rel);
     }
 
