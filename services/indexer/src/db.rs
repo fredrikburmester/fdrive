@@ -484,28 +484,11 @@ pub fn move_paths(c: &mut Client, root_id: i64, old: &str, new: &str, is_dir: bo
     Ok(moved)
 }
 
-pub fn insert_move(c: &mut Client, root_id: i64, src: &str, dst: &str, actor: &str) -> Result<()> {
-    c.execute(
-        r#"INSERT INTO "idx"."moves" (root_id, src, dst, actor) VALUES ($1::bigint, $2, $3, $4)"#,
-        &[&root_id, &src, &dst, &actor],
-    )?;
+/// Tell `LISTEN idx_events` about an applied change. Nothing is stored: the change journal
+/// is the durable record.
+pub fn notify_event(c: &mut Client, event: &Event) -> Result<()> {
+    c.execute("SELECT pg_notify('idx_events', $1)", &[&to_json(event)])?;
     Ok(())
-}
-
-/// Insert the durable row and NOTIFY listeners with the same payload.
-pub fn record_event(c: &mut Client, root_id: i64, event: &Event) -> Result<()> {
-    let payload = to_json(event);
-    c.execute(
-        r#"INSERT INTO "idx"."events" (root_id, kind, path, target_path) VALUES ($1::bigint, $2, $3, $4)"#,
-        &[&root_id, &event.kind.as_str(), &event.path, &event.target_path],
-    )?;
-    c.execute("SELECT pg_notify('idx_events', $1)", &[&payload])?;
-    Ok(())
-}
-
-pub fn prune_events(c: &mut Client, older_than_days: i64) -> Result<u64> {
-    let cutoff = Utc::now() - chrono::Duration::days(older_than_days);
-    Ok(c.execute(r#"DELETE FROM "idx"."events" WHERE at < $1"#, &[&cutoff])?)
 }
 
 pub fn start_scan(c: &mut Client, root_id: i64) -> Result<(i64, DateTime<Utc>)> {
@@ -822,6 +805,23 @@ pub fn save_change_cursor(c: &mut Client, consumer: &str, root_id: i64, position
         &[&root_id, &consumer, &position],
     )?;
     Ok(())
+}
+
+/// How long ago, by the database's clock, the root's last finished scan ended, when the
+/// change journal holds everything since: the root has live rows and the indexer has a
+/// position in the journal (`consumer`). `None` otherwise: a first start, an index that was
+/// cleared or restored (a restore starts a new journal without positions), or a root never
+/// scanned to the end.
+pub fn last_scan_age(c: &mut Client, root_id: i64, consumer: &str) -> Result<Option<Duration>> {
+    let row = c.query_opt(
+        r#"SELECT greatest(extract(epoch FROM now() - s.finished_at), 0)::float8 FROM "idx"."scans" s
+           WHERE s.root_id = $1::bigint AND s.finished_at IS NOT NULL
+             AND EXISTS (SELECT 1 FROM "idx"."files" WHERE root_id = $1::bigint AND deleted_at IS NULL)
+             AND EXISTS (SELECT 1 FROM "idx"."change_cursors" WHERE root_id = $1::bigint AND consumer = $2)
+           ORDER BY s.started_at DESC LIMIT 1"#,
+        &[&root_id, &consumer],
+    )?;
+    Ok(row.map(|r| Duration::from_secs_f64(r.get(0))))
 }
 
 /// What a scan can compare against before it journals differences: whether an earlier scan

@@ -3,6 +3,7 @@ import type { StorageProvider, StorageSession } from "@fdrive/core";
 import { createChangeWriter, createDb, createIndexQueries, createRepos, migrate } from "@fdrive/db";
 import { createLocalModule, type IndexChange, type LocalUsers } from "@fdrive/local";
 import { sql } from "drizzle-orm";
+import { Client } from "pg";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { type ChangeQueue, createChangeQueue } from "../../src/local/change-queue.js";
 import { LocalIndexerStack } from "./helpers/local-indexer-stack.js";
@@ -29,11 +30,21 @@ describe("changes fdrive makes, through the real indexer with its watcher off", 
   let queue: ChangeQueue;
   let storage: StorageProvider;
   const failures: unknown[] = [];
+  /** What the indexer told `LISTEN idx_events`, oldest first. */
+  const heard: { kind: string; path: string }[] = [];
+  let listener: Client | undefined;
 
   beforeAll(async () => {
     await stack.startDatabaseAndStorage();
     connection = createDb(stack.connectionString);
     await migrate(connection.db);
+    listener = new Client({ connectionString: stack.connectionString });
+    listener.on("notification", (message) => {
+      if (message.channel === "idx_events" && message.payload)
+        heard.push(JSON.parse(message.payload));
+    });
+    await listener.connect();
+    await listener.query("LISTEN idx_events");
     // Text search reads plain text itself, so no ml service is needed.
     await createRepos(connection.db).settings.set("features.configuration", {
       version: 1,
@@ -72,6 +83,7 @@ describe("changes fdrive makes, through the real indexer with its watcher off", 
 
   afterAll(async () => {
     try {
+      await listener?.end();
       await connection?.close();
     } finally {
       await stack.stop();
@@ -171,10 +183,14 @@ describe("changes fdrive makes, through the real indexer with its watcher off", 
     );
     await expect.poll(notes, { timeout: 15_000, interval: 100 }).toEqual([]);
 
-    const events = await connection.db.execute(
-      sql`select kind from idx.events where path like 'alice/notes/%' order by id`,
-    );
-    expect(events.rows.map((row) => row.kind)).toEqual(["created", "moved", "deleted"]);
+    // Live updates still hear of each change; nothing stores them.
+    await expect
+      .poll(
+        () =>
+          heard.filter((event) => event.path.startsWith("alice/notes/")).map((event) => event.kind),
+        { timeout: 15_000, interval: 100 },
+      )
+      .toEqual(["created", "moved", "deleted"]);
     // Only fdrive wrote rows: the first scan of an empty index journaled
     // nothing, and the indexer has read every row.
     await expect

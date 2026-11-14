@@ -470,9 +470,9 @@ pub fn work_features(features: &FeatureValues, ext: Option<&str>, embed_only: bo
 
 pub fn emit_event(ctx: &RootContext, kind: EventKind, rel_path: &str, target: Option<&str>) {
     let event = build(kind, &ctx.name, rel_path, target);
-    if let Err(error) = ctx.db.with(|c| db::record_event(c, ctx.root_id, &event)) {
+    if let Err(error) = ctx.db.with(|c| db::notify_event(c, &event)) {
         log(&format!(
-            "event: failed to record {} for {rel_path}: {}",
+            "event: failed to send {} for {rel_path}: {}",
             kind.as_str(),
             describe(&error)
         ));
@@ -1581,11 +1581,9 @@ fn scan_inner(ctx: &Arc<RootContext>, operations: &HashMap<String, Op>) -> ScanR
     // An unreadable entry only stops the sweep; it is not a file failure.
     let errors = counters.errors.load(Ordering::SeqCst);
     let changed = counters.changed.load(Ordering::SeqCst);
-    let finished = ctx.db.with(|c| {
-        db::finish_scan(c, scan_id, seen, changed, deleted, errors)?;
-        db::prune_events(c, ctx.cfg.events_retention_days)?;
-        Ok(())
-    });
+    let finished = ctx
+        .db
+        .with(|c| db::finish_scan(c, scan_id, seen, changed, deleted, errors));
     if let Err(e) = finished.and_then(|()| failures::prune(&ctx.db)) {
         log(&format!("[{}] scan bookkeeping failed: {}", ctx.name, describe(&e)));
     }
@@ -1849,14 +1847,7 @@ pub fn watch_rename(ctx: &RootContext, old: &str, new: &str, is_dir: bool) -> us
         return 0;
     }
     let _guard = ctx.path_locks.get_many(&[old, new]);
-    let moved = ctx.db.with(|c| {
-        let moved = db::move_paths(c, ctx.root_id, old, new, is_dir)?;
-        if moved.files > 0 {
-            db::insert_move(c, ctx.root_id, old, new, "watcher")?;
-        }
-        Ok(moved)
-    });
-    match moved {
+    match ctx.db.with(|c| db::move_paths(c, ctx.root_id, old, new, is_dir)) {
         Ok(moved) => {
             if moved.files > 0 {
                 emit_event(ctx, EventKind::Moved, old, Some(new));

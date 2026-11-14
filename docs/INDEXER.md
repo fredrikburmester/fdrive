@@ -213,12 +213,13 @@ read from their own position (see the [change journal plan](plans/CHANGE-JOURNAL
 
    What is on disk when a row is applied decides, as for the watcher, and moves and
    deletes wait for the files queued before them, so a batch applied again after a restart
-   does no harm. On its first start the indexer begins at the journal's end; its startup scan
-   covers what came before. It passes over `watcher` and `scan` rows, which it wrote itself
-   after applying them, and applies `api` and `ocr` rows. While indexing is off its position
-   moves past rows without applying them (turning it on starts a scan). The API drops rows
-   older than 30 days; when rows after the indexer's position were dropped before it read
-   them, it scans the root and continues from the end.
+   does no harm. On its first start the indexer begins at the journal's end; without a
+   position it scans at start (below), which covers what came before. It passes over
+   `watcher` and `scan` rows, which it wrote itself after applying them, and applies `api`
+   and `ocr` rows. While indexing is off its position moves past rows without applying them
+   (turning it on starts a scan). The API drops rows older than 30 days; when rows after the
+   indexer's position were dropped before it read them, it scans the root and continues from
+   the end.
 2. **The watcher** (inotify, Linux only) sees changes made on the disk directly, for
    example over SMB, after a 2-second debounce. It sees fdrive's own changes too; whichever
    comes second finds the row current and does nothing, apart from stamping it (below). What
@@ -227,12 +228,16 @@ read from their own position (see the [change journal plan](plans/CHANGE-JOURNAL
    added or dropped. When it applies an API change before the indexer reads the API's row,
    the change is journaled twice; readers treat rows as "look again", so that is harmless.
 3. **The scan** walks the whole root every `indexer.scan_interval_seconds` (an hour by
-   default), at startup, when settings or features change, after a watcher overflow and
-   when the journal's reader asks for one, and catches anything the other two missed. It
-   journals what it finds with source `scan`: new and changed files, files it sweeps as
-   vanished, and folder rows it adds or drops. It does so only against a baseline: file
-   rows when the root had `idx.files` rows and an earlier scan of it finished, folder rows
-   when `idx.folders` had rows too. The first scan of an empty index, the scan after the
+   default), when settings or features change, after a watcher overflow and when the
+   journal's reader asks for one, and catches anything the other two missed. A restart keeps
+   counting the interval from the last scan that finished, since the journal holds fdrive's
+   changes from the indexer's position; it scans at start only when no scan of the root has
+   finished, the index has no live rows (a first start, a cleared index, a restore) or the
+   indexer has no position in the journal. Changes made outside fdrive while the indexer was
+   down wait for the next scan. It journals what it finds with source `scan`: new and changed
+   files, files it sweeps as vanished, and folder rows it adds or drops. It does so only
+   against a baseline: file rows when the root had `idx.files` rows and an earlier scan of it
+   finished, folder rows when `idx.folders` had rows too. The first scan of an empty index, the scan after the
    whole index was cleared and the scan after an interrupted first scan journal nothing,
    since every file would look new. A scan after clearing part of the index journals the
    cleared files as new.
@@ -292,7 +297,7 @@ INDEX_ROOTS=files=/data,photos=/roots/photos
 
 Each name becomes a row in `idx.roots` (upserted by name on start, so restarts
 reuse the same `root_id`); every `idx.files` / `idx.chunks` / `idx.folders` /
-`idx.scans` / `idx.moves` / `idx.events` / `idx.changes` / `idx.change_cursors` row carries
+`idx.scans` / `idx.moves` / `idx.changes` / `idx.change_cursors` row carries
 that `root_id`. Each root gets its own
 inotify watcher and its own periodic scan, running independently. Every root needs the
 `.fdrive-files` marker; the API writes it only into the files folder.
@@ -313,13 +318,12 @@ the next cycle.
 
 ## Change events
 
-After every applied change (create, change, delete, move), the indexer emits an event.
+After every applied change (create, change, delete, move), the indexer sends
+`NOTIFY idx_events, '<json>'`:
+`{ "kind": "created|changed|deleted|moved", "root": "<name>", "path": "<rel>", "target_path": "<rel or null>", "at": "<iso8601>" }`.
 A new or changed file's event follows its row and thumbnails, before its text, since
-listeners only check access and refresh listings. For each event, the indexer:
-
-1. `INSERT`s a row into `idx.events` (`root_id`, `kind`, `path`, `target_path`).
-2. `NOTIFY idx_events, '<json>'` with the same payload:
-   `{ "kind": "created|changed|deleted|moved", "root": "<name>", "path": "<rel>", "target_path": "<rel or null>", "at": "<iso8601>" }`.
+listeners only check access and refresh listings. Events are not stored; the
+[change journal](plans/CHANGE-JOURNAL.md) is the durable record.
 
 A reindex request or feature change that re-derives index data for a file whose
 size and mtime are unchanged is not a change and emits nothing: listeners check
@@ -329,12 +333,10 @@ A scan soft-deletes live rows its completed walk did not find, compared against
 the manifest it read at the start, so a tree with no deletions writes nothing.
 Rows the watcher or a worker wrote after the scan started are left alone.
 
-`idx.events` rows older than 7 days (`EVENTS_RETENTION_DAYS`) are pruned once
-per scan. The API (`apps/api`) listens on `idx_events` for live updates and
-re-subscribes after a disconnect. It does not replay stored events; notifications
-missed while disconnected are lost. A refresh/re-query reads current data; no missed-event replay is implemented. The
-[change journal](plans/CHANGE-JOURNAL.md) records the same changes durably and in order; the
-API is to read it instead of these events, which then go.
+The API (`apps/api`) listens on `idx_events` for live updates and re-subscribes after a
+disconnect. Notifications missed while disconnected are lost; a refresh reads current data.
+The change journal records the same changes in order; the API is to read it instead of these
+events, which then go.
 
 ## Internal HTTP API
 
@@ -454,7 +456,7 @@ traversal, malformed bodies, and unknown roots are rejected. Directory matching
 uses a literal boundary, so `%` and `_` in names are never wildcards.
 
 The background pass deletes selected `idx.files` rows and their cascading chunks
-and embeddings. Original files, roots, scan/event/move history, tags, favorites,
+and embeddings. Original files, roots, scan and move history, tags, favorites,
 recents, and thumbnail cache remain. It uses bounded batches and shares each
 path's lock with extraction and embedding retries. It does not request a scan;
 scheduled scans and later watcher changes can repopulate the index.

@@ -82,8 +82,10 @@ again at 1 after a restore.
 
 ### The indexer as a consumer
 
-- **Start at the end.** With no cursor, the indexer starts at the journal's newest position;
-  its startup scan covers everything before.
+- **Start at the end.** With no cursor, the indexer starts at the journal's newest position
+  and scans the root at start, which covers everything before. With one, a restart does not
+  scan: the journal holds what changed since, and the next scan is due an interval after the
+  last one finished.
 - **Apply in order, then save.** It reads its root's rows after its position, 500 at a time,
   applies them exactly as it applied `idx.work` rows (hints, foreground priority, the worker
   pool, moves and deletes waiting for the files before them), and saves its position after each
@@ -122,8 +124,8 @@ again at 1 after a restore.
 
 All three tables are `transient` in [the backup registry](../../packages/backup/src/registry.ts). A
 restore rebuilds the index from the disk (`idx.files`, `idx.chunks` and `idx.folders` are
-rebuildable and the indexer scans at startup), so no consumer could resume from a position
-taken before it; and a month of rows would grow every backup for nothing. After a restore the
+rebuildable and the indexer scans an empty index at start), so no consumer could resume from
+a position taken before it; and a month of rows would grow every backup for nothing. After a restore the
 journal starts again at position 1 under a new epoch, and the indexer at its end.
 
 ## Rules for every consumer
@@ -151,9 +153,9 @@ Proposal: one reader in the API follows the journal (`LISTEN idx_changes`, its o
   favorites, grants, the Office registry and share links in one consumer, replacing the per-route
   hooks that update them today.
 - **Drop the duplicates.** Remove the API hook routes and the indexer-listener routes that
-  report the same change, and `idx.events` with them. Keep a light "processed" signal from the
-  indexer, so the web can show a thumbnail or search result once it is ready; it says the index
-  has a file, not that the file changed.
+  report the same change. Keep a light "processed" signal from the indexer, so the web can
+  show a thumbnail or search result once it is ready; it says the index has a file, not that
+  the file changed.
 - **Restores.** Positions restart after a restore. A browser's `Last-Event-ID` from before
   could pass for a later position; the API should qualify positions it hands out with something
   a restore changes (the journal's epoch, `idx.change_epoch`, as the Mac feed does) and answer a
@@ -161,7 +163,7 @@ Proposal: one reader in the API follows the journal (`LISTEN idx_changes`, its o
 
 Done when: the web gets one event per change and resumes after a reconnect without a reload;
 tags, favorites, grants, Office files and share links follow moves and deletes made over SMB as
-well as in fdrive; `idx.events` and the duplicate routes are gone; tests cover a gap, a resumed
+well as in fdrive; the duplicate routes are gone; tests cover a gap, a resumed
 stream and a restore.
 
 ### b) A Mac change feed: done

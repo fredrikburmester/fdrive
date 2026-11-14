@@ -161,21 +161,6 @@ export const moves = idxSchema.table(
   (table) => [index("moves_root_id_idx").on(table.rootId)],
 );
 
-export const events = idxSchema.table(
-  "events",
-  {
-    id: bigserial("id", { mode: "number" }).primaryKey(),
-    at: timestamp("at", { withTimezone: true }).defaultNow(),
-    rootId: smallint("root_id")
-      .notNull()
-      .references(() => roots.id),
-    kind: text("kind").notNull(),
-    path: text("path").notNull(),
-    targetPath: text("target_path"),
-  },
-  (table) => [index("events_at_idx").on(table.at)],
-);
-
 /**
  * The change journal: one row per change to an indexed root, append-only,
  * its `id` the position consumers read from. A row without `target_path`
