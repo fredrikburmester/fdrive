@@ -218,7 +218,9 @@ export function ownedShareAccess(opts: OwnedShareAccessOptions): PublicShareAcce
     async upload(name, body, options = {}) {
       const target = resolve(`/${name}`);
       await shareCall(() =>
+        // A visitor's upload replaces a file of the same name, as it always has.
         storage.upload(target, body, {
+          overwrite: true,
           ...(options.contentLength === undefined ? {} : { contentLength: options.contentLength }),
           ...(options.signal === undefined ? {} : { signal: options.signal }),
         }),

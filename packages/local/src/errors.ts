@@ -11,6 +11,7 @@ const CODE_KINDS: Readonly<Record<string, StorageErrorKind>> = {
   EEXIST: "conflict",
   ENOTEMPTY: "conflict",
   EBUSY: "conflict",
+  ERR_FS_CP_EEXIST: "conflict",
   ERR_FS_CP_DIR_TO_NON_DIR: "conflict",
   ERR_FS_CP_NON_DIR_TO_DIR: "conflict",
   EISDIR: "bad_request",

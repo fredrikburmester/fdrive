@@ -1,6 +1,4 @@
 import { createHash, randomUUID } from "node:crypto";
-import { createReadStream } from "node:fs";
-import { rm } from "node:fs/promises";
 import {
   ArchiveEntriesResponse,
   CompressRequest,
@@ -30,15 +28,14 @@ import { activityRequestContext, recordFsAction } from "../activity/fs-context.j
 import { activityStat } from "../activity/service.js";
 import { activityStorage } from "../activity/storage.js";
 import type { AppHono, AuthedHono } from "../app.js";
-import { compressToTemp } from "../archive/compress.js";
+import { compress } from "../archive/compress.js";
 import { extractArchive } from "../archive/extract.js";
-import { protectArchiveWrites } from "../archive/new-file-storage.ts";
 import {
   peekArchive,
   UnreadableArchiveError,
   UnsupportedPeekFormatError,
 } from "../archive/peek.js";
-import { isZstdSupported, webStreamFromNodeReadable } from "../archive/stream-utils.js";
+import { isZstdSupported } from "../archive/stream-utils.js";
 import type { Principal } from "../auth/principal.js";
 import { DEFAULT_ARCHIVE_PEEK_MAX_BYTES } from "../config.js";
 import { ApiHttpError } from "../errors.js";
@@ -215,31 +212,21 @@ async function handleCompress(c: FsContext, deps: FsRoutesDeps): Promise<Respons
   }
   const name = body.name ?? defaultArchiveName(paths);
   const targetPath = joinPath(destination, `${name}${archiveExtensionFor(body.format)}`);
+  // Answers a taken name before queueing a job; the job's own write is what
+  // refuses one taken meanwhile.
   if (await pathExists(principal.storage, targetPath)) {
     throw new ApiHttpError("conflict", `already exists: ${targetPath}`);
   }
 
   const job = await submitJob(deps, c, "compress", paths, targetPath, async (ctx, storage) => {
-    const { file, size } = await compressToTemp({
+    await compress({
       storage,
       paths,
       format: body.format,
-      tmpDir: deps.tmpDir,
+      target: targetPath,
       signal: ctx.signal,
       report: ctx.report,
     });
-    try {
-      if (await pathExists(principal.storage, targetPath)) {
-        throw new ApiHttpError("conflict", `already exists: ${targetPath}`);
-      }
-      await protectArchiveWrites(storage, principal.identityId).upload(
-        targetPath,
-        webStreamFromNodeReadable(createReadStream(file)),
-        { contentLength: size, signal: ctx.signal, overwrite: false },
-      );
-    } finally {
-      await rm(file, { force: true });
-    }
     publishFsEvent(deps, principal, "create", [targetPath]);
     return { path: targetPath };
   });
@@ -279,7 +266,7 @@ async function handleExtract(c: FsContext, deps: FsRoutesDeps): Promise<Response
     destination,
     async (ctx, storage) => {
       const result = await extractArchive({
-        storage: protectArchiveWrites(storage, principal.identityId),
+        storage,
         archivePath,
         destination,
         tmpDir: deps.tmpDir,

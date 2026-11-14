@@ -1585,19 +1585,20 @@ describe("runCreateFolder", () => {
 });
 
 describe("runMovePath", () => {
-  it("refuses occupied destinations without moving", async () => {
-    const move = vi.fn();
-    const storage = fakeStorage({
-      move,
-      statFile: async () => ({ size: 12, modifiedAt: null, contentType: null }),
+  it("leaves refusing an occupied destination to storage, checking nothing first", async () => {
+    const statFile = vi.fn();
+    const move = vi.fn(async () => {
+      throw new StorageError("conflict", "something already exists at /b");
     });
+    const storage = fakeStorage({ move, statFile });
     await expect(
       runMovePath(baseDeps({ writesEnabled: true }), fakePrincipal(storage), {
         src: "/a",
         dst: "/b",
       }),
     ).rejects.toThrow("already exists");
-    expect(move).not.toHaveBeenCalled();
+    expect(move).toHaveBeenCalledWith("/a", "/b");
+    expect(statFile).not.toHaveBeenCalled();
   });
 
   it("reports completed moves with warnings when metadata and audit persistence fail", async () => {
@@ -1680,7 +1681,7 @@ describe("runMovePath", () => {
       dst: "/b.txt",
     });
 
-    expect(move).toHaveBeenCalledWith("/a.txt", "/b.txt", { overwrite: false });
+    expect(move).toHaveBeenCalledWith("/a.txt", "/b.txt");
     expect(recordMove).toHaveBeenCalledWith({
       rootId: 1,
       src: "alice/a.txt",
@@ -1707,7 +1708,7 @@ describe("runMovePath", () => {
 
     // The provider forwards both strings verbatim, so both must be the exact
     // paths the scope admission was decided on.
-    expect(move).toHaveBeenCalledWith("/a.txt", "/b.txt", { overwrite: false });
+    expect(move).toHaveBeenCalledWith("/a.txt", "/b.txt");
     expect(recordMove).toHaveBeenCalledWith({
       rootId: 1,
       src: "alice/a.txt",

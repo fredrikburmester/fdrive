@@ -174,7 +174,7 @@ it("rejects stale content, occupied/case-folded names, root and escaping scope m
   const f = await fixture();
   const source = await f.service.stat(f.principal, "/old.txt");
   const stale = await f.stage("old.txt", "local", source);
-  await f.raw.upload("/old.txt", new TextEncoder().encode("new"));
+  await f.raw.upload("/old.txt", new TextEncoder().encode("new"), { overwrite: true });
   await expect(f.service.commit(f.principal, stale.operationId)).rejects.toMatchObject({
     details: { code: "version_conflict" },
   });

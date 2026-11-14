@@ -3,11 +3,6 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 export interface StorageConformanceOptions {
   /**
-   * Whether the provider's `move` overwrites an existing target by default
-   * rather than refusing it with `conflict`.
-   */
-  readonly overwritesOnMove?: boolean;
-  /**
    * A directory the suite may create everything under, when the provider
    * cannot offer a clean root per test (a shared real server). Defaults to
    * a unique directory under "/".
@@ -53,8 +48,6 @@ export function describeStorageProvider(
   factory: StorageFactory,
   options: StorageConformanceOptions = {},
 ): void {
-  const overwrites = options.overwritesOnMove ?? false;
-
   describe(`StorageProvider conformance: ${name}`, () => {
     let storage: StorageProvider;
     let cleanup: (() => Promise<void>) | undefined;
@@ -141,12 +134,15 @@ export function describeStorageProvider(
       await expect(storage.download(file, { signal: controller.signal })).rejects.toThrow();
     });
 
-    it("uploads with parents, overwrites, and keeps the given mtime when supported", async () => {
+    it("uploads with parents, replaces when asked, and keeps the given mtime when supported", async () => {
       const path = `${root}/deep/er/file.txt`;
       await storage.upload(path, new TextEncoder().encode("one"), { mkdirParents: true });
       expect(await text((await storage.download(path)).body)).toBe("one");
       const at = new Date("2020-01-02T03:04:05Z");
-      await storage.upload(path, new TextEncoder().encode("two"), { modifiedAt: at });
+      await storage.upload(path, new TextEncoder().encode("two"), {
+        modifiedAt: at,
+        overwrite: true,
+      });
       expect(await text((await storage.download(path)).body)).toBe("two");
       if (storage.setModifiedAt !== undefined) {
         expect((await storage.statFile(path)).modifiedAt?.getTime()).toBe(at.getTime());
@@ -172,17 +168,38 @@ export function describeStorageProvider(
       expect(await kindOf(storage.move(`${root}/nope`, `${root}/x`))).toBe("not_found");
     });
 
-    it(`move onto an existing target ${overwrites ? "overwrites" : "conflicts"}`, async () => {
-      const source = await seed("o/src.txt", "new");
-      const target = await seed("o/dst.txt", "old");
-      const kind = await kindOf(storage.move(source, target));
-      if (overwrites) {
-        expect(kind).toBeNull();
-        expect(await text((await storage.download(target)).body)).toBe("new");
-      } else {
-        expect(kind).toBe("conflict");
+    for (const overwrite of [undefined, false] as const) {
+      it(`refuses a taken target for move, copy and upload with overwrite ${overwrite}`, async () => {
+        const source = await seed("o/src.txt", "new");
+        const target = await seed("o/dst.txt", "old");
+        const folder = `${root}/o/folder`;
+        await storage.mkdir(folder);
+        const opts = overwrite === undefined ? undefined : { overwrite };
+        expect(await kindOf(storage.move(source, target, opts))).toBe("conflict");
+        expect(await kindOf(storage.copy(source, target, opts))).toBe("conflict");
+        expect(await kindOf(storage.move(folder, target, opts))).toBe("conflict");
+        expect(await kindOf(storage.copy(source, folder, opts))).toBe("conflict");
+        expect(await kindOf(storage.upload(target, new TextEncoder().encode("newer"), opts))).toBe(
+          "conflict",
+        );
         expect(await text((await storage.download(target)).body)).toBe("old");
-      }
+        expect(await text((await storage.download(source)).body)).toBe("new");
+        expect(await storage.stat(folder)).toMatchObject({ kind: "dir" });
+      });
+    }
+
+    it("replaces a taken file target for move, copy and upload with overwrite true", async () => {
+      const target = await seed("r/dst.txt", "old");
+      await storage.upload(target, new TextEncoder().encode("uploaded"), { overwrite: true });
+      expect(await text((await storage.download(target)).body)).toBe("uploaded");
+      const copied = await seed("r/copied.txt", "copied");
+      await storage.copy(copied, target, { overwrite: true });
+      expect(await text((await storage.download(target)).body)).toBe("copied");
+      expect(await text((await storage.download(copied)).body)).toBe("copied");
+      const moved = await seed("r/moved.txt", "moved");
+      await storage.move(moved, target, { overwrite: true });
+      expect(await text((await storage.download(target)).body)).toBe("moved");
+      expect(await kindOf(storage.stat(moved))).toBe("not_found");
     });
 
     it("copies files and whole directories, leaving the source in place", async () => {

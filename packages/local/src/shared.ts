@@ -419,7 +419,7 @@ export function createUserStorage(options: UserStorageOptions): UserStorage {
           name,
         });
       }
-      return mapped(paths.join(", "), () => zipItems(items, opts?.signal));
+      return mapped(paths.join(", "), () => zipItems(items, opts));
     },
   };
 
