@@ -94,6 +94,9 @@ How the files folder implements it:
   current second.
 - **Read proofs** open nothing: `probeFileRead` asks `access(R_OK)` and then checks for a
   regular file, the checks `download` makes, and fails with the kinds `download` would.
+- **Stamps.** `contentStamp` reads a file's size, modification time, inode and change time from
+  its open descriptor, none of its bytes. Office versions documents from it and requires it;
+  the Mac's version checks use it to trust index rows.
 - **Zip** streams with `yazl`.
 - **Trash.** The storage factory wraps the storage with core's `withMoveToTrash` and
   `createRecycleFolderTrash`; deleted items live in `<trash folder>/.fdrive-move-v1`. Settings
