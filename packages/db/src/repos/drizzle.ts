@@ -20,7 +20,7 @@ import {
 import { files } from "../schema/idx.js";
 import { createAiChatRepo } from "./ai-chats.js";
 import { supersedeDesktopEffects } from "./desktop-effects.js";
-import { validateIdentityLinkId } from "./identity-links-types.js";
+import { validateCanonicalUuid } from "./logins-types.js";
 import { selectPathChunks } from "./path-chunks.js";
 import { createSystemEventRepo } from "./system-events.js";
 import type {
@@ -145,7 +145,7 @@ function toSession(row: typeof sessions.$inferSelect): Session {
   return {
     idHash: row.idHash,
     accountId: row.accountId,
-    activeIdentityId: row.activeIdentityId,
+    identityId: row.identityId,
     createdAt: row.createdAt,
     expiresAt: row.expiresAt,
     lastSeenAt: row.lastSeenAt,
@@ -166,7 +166,7 @@ function createProviderRepo(db: Db): ProviderRepo {
       return toProvider(row);
     },
     async get(id) {
-      validateIdentityLinkId(id);
+      validateCanonicalUuid(id);
       const [row] = await db.select().from(providers).where(eq(providers.id, id));
       return row ? toProvider(row) : null;
     },
@@ -175,7 +175,7 @@ function createProviderRepo(db: Db): ProviderRepo {
       return rows.map(toProvider);
     },
     async update(id, patch) {
-      validateIdentityLinkId(id);
+      validateCanonicalUuid(id);
       return db
         .transaction(async (tx) => {
           const [current] = await tx
@@ -212,7 +212,7 @@ function createProviderRepo(db: Db): ProviderRepo {
         });
     },
     async delete(id) {
-      validateIdentityLinkId(id);
+      validateCanonicalUuid(id);
       await db.transaction(async (tx) => {
         const [current] = await tx
           .select()
@@ -296,10 +296,6 @@ function createIdentityRepo(db: Db): IdentityRepo {
       const [row] = await db.select().from(identities).where(eq(identities.id, id));
       return row ? toIdentity(row) : null;
     },
-    async listByAccount(accountId) {
-      const rows = await db.select().from(identities).where(eq(identities.accountId, accountId));
-      return rows.map(toIdentity);
-    },
     async countByProvider(providerId) {
       const [row] = await db
         .select({ count: sql<number>`count(*)::int` })
@@ -364,7 +360,7 @@ function createSessionRepo(db: Db): SessionRepo {
         .values({
           idHash: input.idHash,
           accountId: input.accountId,
-          activeIdentityId: input.activeIdentityId,
+          identityId: input.identityId,
           expiresAt: input.expiresAt,
           userAgent: input.userAgent,
           ip: input.ip,

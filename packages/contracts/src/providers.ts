@@ -8,7 +8,7 @@ export const ProviderType = z.enum(["local"]);
 export type ProviderType = z.infer<typeof ProviderType>;
 
 /**
- * What one linked login's storage can do, as the web reads it. Every route
+ * What the signed-in login's storage can do, as the web reads it. Every route
  * that depends on a flag refuses with `unsupported` when it is false, so a
  * stale client cannot bypass the hidden control.
  */

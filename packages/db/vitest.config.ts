@@ -28,7 +28,7 @@ export default definePackageConfig({
         "src/repos/wopi-locks.ts",
         "src/repos/office-files.ts",
         "src/repos/office-write-scope.ts",
-        "src/repos/identity-links.ts",
+        "src/repos/logins.ts",
         "src/repos/shares.ts",
         "src/repos/system-events.ts",
       ],

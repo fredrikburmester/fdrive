@@ -71,7 +71,7 @@ async function fixture() {
       office: null,
       ...context,
     };
-    const effects = await desktop.captureEffects(identity.id, account.id, contextToCapture);
+    const effects = await desktop.captureEffects(identity.id, contextToCapture);
     expect(await desktop.complete(identity.id, account.id, id, result, effects)).toBe(true);
     return { id, result, effects };
   };
@@ -349,7 +349,7 @@ it("rejects oversized snapshots and ownership changes before receipt publication
     sql`insert into app.favorites (identity_id,path,kind) select ${f.identity.id}, '/old/' || n, 'file' from generate_series(1,100001) n`,
   );
   await expect(
-    f.desktop.captureEffects(f.identity.id, f.account.id, {
+    f.desktop.captureEffects(f.identity.id, {
       from: "/old",
       to: "/new",
       directory: true,
@@ -359,16 +359,6 @@ it("rejects oversized snapshots and ownership changes before receipt publication
   ).rejects.toThrow("capacity");
   expect((await f.desktop.operation(f.identity.id, f.account.id, id))?.state).toBe("committing");
   expect(await f.worker.pending(f.identity.id)).toBe(false);
-  await first.db.execute(sql`delete from app.favorites where identity_id = ${f.identity.id}`);
-  await expect(
-    f.desktop.captureEffects(f.identity.id, randomUUID(), {
-      from: null,
-      to: "/new",
-      directory: false,
-      trash: false,
-      office: null,
-    }),
-  ).rejects.toThrow("ownership");
 });
 
 it("does not follow metadata moved away and back before recovery, including Office registrations", async () => {
@@ -565,7 +555,7 @@ it("commits the prepublication snapshot without recapturing concurrent metadata 
   const f = await fixture();
   await f.seed("/old/a");
   const context = { from: "/old", to: "/new", directory: true, trash: false, office: null };
-  const payload = await f.desktop.captureEffects(f.identity.id, f.account.id, context);
+  const payload = await f.desktop.captureEffects(f.identity.id, context);
   await first.db.execute(
     sql`insert into app.favorites (identity_id,path,kind) select ${f.identity.id}, '/old/' || n, 'file' from generate_series(1,100001) n`,
   );

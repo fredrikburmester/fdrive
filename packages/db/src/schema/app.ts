@@ -127,7 +127,8 @@ export const identities = appSchema.table(
       table.providerId,
       table.externalUsername,
     ),
-    index("identities_account_id_idx").on(table.accountId),
+    // One login per account.
+    unique("identities_account_id_unique").on(table.accountId),
   ],
 );
 
@@ -149,9 +150,9 @@ export const sessions = appSchema.table(
     accountId: uuid("account_id")
       .notNull()
       .references(() => accounts.id, { onDelete: "cascade" }),
-    activeIdentityId: uuid("active_identity_id").references(() => identities.id, {
-      onDelete: "set null",
-    }),
+    identityId: uuid("identity_id")
+      .notNull()
+      .references(() => identities.id, { onDelete: "cascade" }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
     lastSeenAt: timestamp("last_seen_at", { withTimezone: true }).notNull().defaultNow(),
@@ -161,7 +162,7 @@ export const sessions = appSchema.table(
   (table) => [
     index("sessions_expires_at_idx").on(table.expiresAt),
     index("sessions_account_id_idx").on(table.accountId),
-    index("sessions_active_identity_id_idx").on(table.activeIdentityId),
+    index("sessions_identity_id_idx").on(table.identityId),
   ],
 );
 
@@ -172,7 +173,9 @@ export const apiTokens = appSchema.table(
     accountId: uuid("account_id")
       .notNull()
       .references(() => accounts.id, { onDelete: "cascade" }),
-    identityId: uuid("identity_id").references(() => identities.id, { onDelete: "set null" }),
+    identityId: uuid("identity_id")
+      .notNull()
+      .references(() => identities.id, { onDelete: "cascade" }),
     name: text("name").notNull(),
     tokenHash: text("token_hash").notNull().unique(),
     access: jsonb("access").$type<ApiTokenAccess>(),

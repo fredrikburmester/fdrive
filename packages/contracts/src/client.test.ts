@@ -237,7 +237,6 @@ describe("createApiClient: login", () => {
       JSON.stringify({ credential: { username: "alice", password: "hunter2" } }),
     );
   });
-
 });
 
 describe("createApiClient: logout", () => {

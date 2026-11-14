@@ -141,7 +141,6 @@ export interface IdentityRepo {
     externalUsername: string;
   }): Promise<Identity>;
   get(id: string): Promise<Identity | null>;
-  listByAccount(accountId: string): Promise<Identity[]>;
   touchLogin(id: string, at: Date): Promise<void>;
   /** How many identities reference `providerId`. */
   countByProvider(providerId: string): Promise<number>;
@@ -181,7 +180,8 @@ export interface CredentialRepo {
 export interface Session {
   readonly idHash: string;
   readonly accountId: string;
-  readonly activeIdentityId: string | null;
+  /** The account's one login, which the session acts as. */
+  readonly identityId: string;
   readonly createdAt: Date;
   readonly expiresAt: Date;
   readonly lastSeenAt: Date;
@@ -193,7 +193,7 @@ export interface SessionRepo {
   create(input: {
     idHash: string;
     accountId: string;
-    activeIdentityId: string | null;
+    identityId: string;
     expiresAt: Date;
     userAgent: string | null;
     ip: string | null;
@@ -228,8 +228,8 @@ export interface SettingsRepo {
 }
 
 /**
- * A long-lived per-account (optionally per-identity) token for MCP and
- * Raycast, shown once at creation and stored only as a sha256 hash.
+ * A long-lived token for MCP, Raycast and the Mac app, acting as the login
+ * that created it, shown once at creation and stored only as a sha256 hash.
  */
 export interface ApiTokenAccess {
   readonly mode: "read" | "organize" | "full";
@@ -239,8 +239,7 @@ export interface ApiTokenAccess {
 export interface ApiToken {
   readonly id: string;
   readonly accountId: string;
-  /** The identity the token is scoped to. `null` after that identity is unlinked; such a token can no longer authenticate. */
-  readonly identityId: string | null;
+  readonly identityId: string;
   readonly name: string;
   readonly tokenHash: string;
   readonly access?: ApiTokenAccess;
@@ -252,7 +251,7 @@ export interface ApiToken {
 export interface ApiTokenRepo {
   create(input: {
     accountId: string;
-    identityId: string | null;
+    identityId: string;
     name: string;
     tokenHash: string;
     access?: ApiTokenAccess;

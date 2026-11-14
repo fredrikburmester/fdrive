@@ -13,10 +13,7 @@ import { ApiError } from "./error.ts";
 const Ok = z.object({ ok: z.literal(true) });
 const Accepted = z.object({ id: z.uuid() });
 export function createBackupClient(
-  options: {
-    fetch?: typeof globalThis.fetch;
-    baseUrl?: string;
-  } = {},
+  options: { fetch?: typeof globalThis.fetch; baseUrl?: string } = {},
 ) {
   const base = `${options.baseUrl ?? ""}/api/v1/system/backups`;
   async function request<T>(

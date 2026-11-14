@@ -74,7 +74,6 @@ export interface ActivityFinish {
   readonly bridge?: { namespace: "office" | "desktop" | "provider"; externalId: string };
 }
 export interface ActivityListOptions {
-  readonly identityId?: string;
   readonly action?: PersonalActivityAction;
   readonly source?: PersonalActivitySource;
   readonly outcome?: PersonalActivityOutcome;

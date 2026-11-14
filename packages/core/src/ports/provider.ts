@@ -92,8 +92,8 @@ export interface ProviderContext {
 export interface AuthenticateContext extends ProviderContext {
   /**
    * The username fdrive already knows for this identity, when it
-   * re-authenticates an existing login (link, unlink) rather than a new
-   * one. A module may fill a missing username field from it and must refuse
+   * re-authenticates an existing login (unlocking backups) rather than a
+   * new one. A module may fill a missing username field from it and must refuse
    * a credential that names a different user.
    */
   readonly expectedUsername?: string;

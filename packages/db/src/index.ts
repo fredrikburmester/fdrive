@@ -59,31 +59,6 @@ export {
   type DesktopPublishLockOptions,
 } from "./repos/desktop-publish-lock.js";
 export { createFilesFolderFacts, createRepos } from "./repos/drizzle.js";
-export { createIdentityLinksRepo } from "./repos/identity-links.js";
-export type {
-  IdentityLinksErrorCode,
-  IdentityLinksRepo,
-  LinkVerifiedInput,
-  LoginSessionInput,
-  LoginVerifiedInput,
-  LoginVerifiedResult,
-  RotateSessionInput,
-  SealedIdentityCredential,
-  SwitchActiveIdentityInput,
-  UnlinkIdentityInput,
-  UnlinkIdentityResult,
-} from "./repos/identity-links-types.js";
-export {
-  IdentityLinksError,
-  validateIdentityLinkId,
-  validateLinkVerified,
-  validateLoginVerified,
-  validateRotateSession,
-  validateSealedIdentityCredential,
-  validateSessionIdHash,
-  validateSwitchActiveIdentity,
-  validateUnlinkIdentity,
-} from "./repos/identity-links-types.js";
 export type {
   ContentHit,
   DuplicateGroup,
@@ -115,6 +90,22 @@ export {
   escapeLikePattern,
   toScopeClauses,
 } from "./repos/index-queries.js";
+export { createLoginRepo } from "./repos/logins.js";
+export type {
+  LoginErrorCode,
+  LoginRepo,
+  LoginSessionInput,
+  LoginVerifiedInput,
+  LoginVerifiedResult,
+  SealedIdentityCredential,
+} from "./repos/logins-types.js";
+export {
+  LoginError,
+  validateCanonicalUuid,
+  validateLoginVerified,
+  validateSealedIdentityCredential,
+  validateSessionIdHash,
+} from "./repos/logins-types.js";
 export { createOfficeFileRepo } from "./repos/office-files.js";
 export type {
   MemoryOfficeFileOptions,
