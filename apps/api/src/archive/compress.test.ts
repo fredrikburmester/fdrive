@@ -1,15 +1,15 @@
 import { createWriteStream } from "node:fs";
-import { mkdir, readFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { Readable } from "node:stream";
+import { dirname, join } from "node:path";
 import { StorageError, type StorageProvider } from "@fdrive/core";
+import { createLocalStorage } from "@fdrive/local";
 import { createMemoryStorage } from "@fdrive/testkit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as yauzl from "yauzl";
 import { ZipFile } from "yazl";
 import type { JobProgressPatch } from "../jobs/types.js";
-import { compressToTemp, UnsupportedFormatError } from "./compress.js";
+import { compress, UnsupportedFormatError } from "./compress.js";
 import { extractArchive } from "./extract.js";
 
 vi.mock("node:fs", async (original) => {
@@ -17,17 +17,40 @@ vi.mock("node:fs", async (original) => {
   return { ...fs, createWriteStream: vi.fn(fs.createWriteStream) };
 });
 
+const FORMATS = ["zip", "tar.gz", "tar.zst"] as const;
+const TAR_FORMATS = ["tar.gz", "tar.zst"] as const;
+
 const tempPaths: string[] = [];
 
 afterEach(async () => {
+  vi.mocked(createWriteStream).mockClear();
   await Promise.all(tempPaths.splice(0).map((path) => rm(path, { force: true, recursive: true })));
 });
 
-async function tmpDirFor(name: string): Promise<string> {
-  const dir = join(tmpdir(), `fdrive-compress-test-${name}-${Date.now()}-${Math.random()}`);
-  await mkdir(dir, { recursive: true });
+async function tempDir(name: string): Promise<string> {
+  const dir = await realpath(await mkdtemp(join(tmpdir(), `fdrive-compress-test-${name}-`)));
   tempPaths.push(dir);
   return dir;
+}
+
+/** Local storage, which zips, over a fresh folder holding `files`. */
+async function localStorage(
+  files: Readonly<Record<string, string | Uint8Array>>,
+): Promise<{ storage: StorageProvider; home: string }> {
+  const home = await tempDir("home");
+  for (const [path, content] of Object.entries(files)) {
+    await mkdir(dirname(join(home, path)), { recursive: true });
+    await writeFile(join(home, path), content);
+  }
+  return { storage: createLocalStorage({ home }), home };
+}
+
+/** Storage holding `files` that can compress to `format`. */
+async function storageFor(
+  format: (typeof FORMATS)[number],
+  files: Readonly<Record<string, string>>,
+): Promise<StorageProvider> {
+  return format === "zip" ? (await localStorage(files)).storage : createMemoryStorage(files);
 }
 
 function collectingReport(): {
@@ -38,11 +61,15 @@ function collectingReport(): {
   return { report: (patch) => calls.push(patch), calls };
 }
 
-async function readZipEntries(
-  file: string,
+async function bytesOf(storage: StorageProvider, path: string): Promise<Buffer> {
+  return Buffer.from(await new Response((await storage.download(path)).body).arrayBuffer());
+}
+
+async function zipEntries(
+  bytes: Buffer,
 ): Promise<{ fileName: string; compressionMethod: number }[]> {
   return new Promise((resolve, reject) => {
-    yauzl.open(file, { lazyEntries: true, autoClose: true }, (err, zipfile) => {
+    yauzl.fromBuffer(bytes, { lazyEntries: true }, (err, zipfile) => {
       if (err || !zipfile) {
         reject(err ?? new Error("failed to open"));
         return;
@@ -59,345 +86,34 @@ async function readZipEntries(
   });
 }
 
-describe("compressToTemp", () => {
-  it("builds a zip that round-trips through extractArchive", async () => {
-    const storage = createMemoryStorage({
-      "/docs/a.txt": "alpha",
-      "/docs/nested/b.txt": "bravo",
-      "/docs/nested/c.txt": "charlie",
-    });
-    const tmpDir = await tmpDirFor("zip-roundtrip");
-    const controller = new AbortController();
-    const { report, calls } = collectingReport();
-
-    const result = await compressToTemp({
-      storage,
-      paths: ["/docs"],
-      format: "zip",
-      tmpDir,
-      signal: controller.signal,
-      report,
-    });
-    tempPaths.push(result.file);
-
-    expect(result.size).toBeGreaterThan(0);
-    expect(calls[0]).toEqual({ processed: 0, total: 3, bytes: 0 });
-    expect(calls.some((c) => c.processed === 3)).toBe(true);
-
-    const destStorage = createMemoryStorage();
-    // Feed the produced zip back in as the archive to extract, by uploading
-    // it into the same memory storage under a path.
-    await destStorage.upload("/docs.zip", await readFile(result.file));
-    const extraction = await extractArchive({
-      storage: destStorage,
-      archivePath: "/docs.zip",
-      destination: "/out",
-      tmpDir,
-      signal: controller.signal,
-      report: () => {},
-      maxBytes: 10 * 1024 * 1024,
-    });
-
-    expect(extraction.path).toBe("/out");
-    expect(destStorage.dump()).toMatchObject({
-      "/out/docs/a.txt": "alpha",
-      "/out/docs/nested/b.txt": "bravo",
-      "/out/docs/nested/c.txt": "charlie",
-    });
+/** What extracting `archivePath` from `storage` into `/out` writes. */
+async function extracted(storage: StorageProvider, archivePath: string) {
+  const out = createMemoryStorage();
+  await out.upload(archivePath, await bytesOf(storage, archivePath), { mkdirParents: true });
+  await extractArchive({
+    storage: out,
+    archivePath,
+    destination: "/out",
+    tmpDir: await tempDir("extract"),
+    signal: new AbortController().signal,
+    report: () => {},
+    maxBytes: 10 * 1024 * 1024,
   });
+  const files = out.dump();
+  delete files[archivePath];
+  return files;
+}
 
-  it("builds a tar.gz that round-trips through extractArchive", async () => {
-    const storage = createMemoryStorage({ "/docs/a.txt": "alpha", "/docs/b.txt": "bravo" });
-    const tmpDir = await tmpDirFor("targz-roundtrip");
-    const controller = new AbortController();
-
-    const result = await compressToTemp({
-      storage,
-      paths: ["/docs"],
-      format: "tar.gz",
-      tmpDir,
-      signal: controller.signal,
-      report: () => {},
-    });
-    tempPaths.push(result.file);
-
-    const destStorage = createMemoryStorage();
-    await destStorage.upload("/docs.tar.gz", await readFile(result.file));
-    await extractArchive({
-      storage: destStorage,
-      archivePath: "/docs.tar.gz",
-      destination: "/out",
-      tmpDir,
-      signal: controller.signal,
-      report: () => {},
-      maxBytes: 10 * 1024 * 1024,
-    });
-
-    expect(destStorage.dump()).toMatchObject({
-      "/out/docs/a.txt": "alpha",
-      "/out/docs/b.txt": "bravo",
-    });
-  });
-
-  it("builds a tar.zst that round-trips through extractArchive (Node 22.15+)", async () => {
-    const storage = createMemoryStorage({ "/docs/a.txt": "alpha" });
-    const tmpDir = await tmpDirFor("tarzst-roundtrip");
-    const controller = new AbortController();
-
-    const result = await compressToTemp({
-      storage,
-      paths: ["/docs"],
-      format: "tar.zst",
-      tmpDir,
-      signal: controller.signal,
-      report: () => {},
-    });
-    tempPaths.push(result.file);
-
-    const destStorage = createMemoryStorage();
-    await destStorage.upload("/docs.tar.zst", await readFile(result.file));
-    await extractArchive({
-      storage: destStorage,
-      archivePath: "/docs.tar.zst",
-      destination: "/out",
-      tmpDir,
-      signal: controller.signal,
-      report: () => {},
-      maxBytes: 10 * 1024 * 1024,
-    });
-
-    expect(destStorage.dump()).toMatchObject({ "/out/docs/a.txt": "alpha" });
-  });
-
-  it("never calls list on a top-level file selection", async () => {
-    const storage = createMemoryStorage({ "/report.txt": "just one file" });
-    const listSpy = vi.fn(storage.list.bind(storage));
-    const spiedOnList: StorageProvider = { ...storage, list: listSpy };
-    const tmpDir = await tmpDirFor("no-list-on-file");
-
-    const result = await compressToTemp({
-      storage: spiedOnList,
-      paths: ["/report.txt"],
-      format: "zip",
-      tmpDir,
-      signal: new AbortController().signal,
-      report: () => {},
-    });
-    tempPaths.push(result.file);
-
-    expect(listSpy).not.toHaveBeenCalled();
-  });
-
-  it("compresses a single file selection directly (no folder)", async () => {
-    const storage = createMemoryStorage({ "/report.txt": "just one file" });
-    const tmpDir = await tmpDirFor("single-file");
-
-    const result = await compressToTemp({
-      storage,
-      paths: ["/report.txt"],
-      format: "zip",
-      tmpDir,
-      signal: new AbortController().signal,
-      report: () => {},
-    });
-    tempPaths.push(result.file);
-
-    const entries = await readZipEntries(result.file);
-    expect(entries.map((e) => e.fileName)).toEqual(["report.txt"]);
-  });
-
-  it("compresses the root itself without producing absolute entry names", async () => {
-    const storage = createMemoryStorage({ "/a.txt": "alpha", "/sub/b.txt": "bravo" });
-    const tmpDir = await tmpDirFor("compress-root");
-
-    const result = await compressToTemp({
-      storage,
-      paths: ["/"],
-      format: "zip",
-      tmpDir,
-      signal: new AbortController().signal,
-      report: () => {},
-    });
-    tempPaths.push(result.file);
-
-    const entries = await readZipEntries(result.file);
-    expect(entries.map((e) => e.fileName).sort()).toEqual(["a.txt", "sub/b.txt"]);
-  });
-
-  it("stores already-compressed extensions and deflates everything else", async () => {
-    const storage = createMemoryStorage({
-      "/mix/photo.jpg": "pretend-jpeg-bytes",
-      "/mix/notes.txt": "some text notes some text notes some text notes",
-    });
-    const tmpDir = await tmpDirFor("mixed-compression");
-
-    const result = await compressToTemp({
-      storage,
-      paths: ["/mix"],
-      format: "zip",
-      tmpDir,
-      signal: new AbortController().signal,
-      report: () => {},
-    });
-    tempPaths.push(result.file);
-
-    const entries = await readZipEntries(result.file);
-    const photo = entries.find((e) => e.fileName.endsWith("photo.jpg"));
-    const notes = entries.find((e) => e.fileName.endsWith("notes.txt"));
-    expect(photo?.compressionMethod).toBe(0);
-    expect(notes?.compressionMethod).toBe(8);
-  });
-
-  it("skips symlink and other non-file, non-dir entries", async () => {
-    const storage = createMemoryStorage({ "/mix/a.txt": "a" });
-    const originalList = storage.list.bind(storage);
-    const withSymlink: StorageProvider = {
-      ...storage,
-      list: async (path: string) => {
-        const entries = await originalList(path);
-        if (path === "/mix") {
-          return [
-            ...entries,
-            {
-              name: "link",
-              path: "/mix/link",
-              kind: "symlink",
-              size: 0,
-              modifiedAt: new Date(0),
-              ext: "",
-            },
-          ];
-        }
-        return entries;
-      },
-    };
-    const tmpDir = await tmpDirFor("skip-symlink");
-
-    const result = await compressToTemp({
-      storage: withSymlink,
-      paths: ["/mix"],
-      format: "zip",
-      tmpDir,
-      signal: new AbortController().signal,
-      report: () => {},
-    });
-    tempPaths.push(result.file);
-
-    const entries = await readZipEntries(result.file);
-    expect(entries.map((e) => e.fileName)).toEqual(["mix/a.txt"]);
-  });
-
-  it("rethrows a non-bad_request StorageError from a top-level list unchanged", async () => {
-    const storage = createMemoryStorage();
-    const failing: StorageProvider = {
-      ...storage,
-      // `path` stats as a directory, so `collectPath` lists it, and that
-      // listing's own failure below is asserted to propagate unchanged.
-      stat: async () => ({ kind: "dir", size: 0, modifiedAt: null, contentType: null }),
-      list: async () => {
-        throw new StorageError("forbidden", "no access");
-      },
-    };
-    const tmpDir = await tmpDirFor("collect-rethrow");
-
-    await expect(
-      compressToTemp({
-        storage: failing,
-        paths: ["/mix"],
-        format: "zip",
-        tmpDir,
-        signal: new AbortController().signal,
-        report: () => {},
-      }),
-    ).rejects.toThrow(StorageError);
-  });
-
-  it("defaults a single file's modifiedAt to the epoch when the provider reports none", async () => {
-    const storage = createMemoryStorage({ "/report.txt": "content" });
-    const withNullModifiedAt: StorageProvider = {
-      ...storage,
-      stat: async () => ({ kind: "file", size: 7, modifiedAt: null, contentType: null }),
-    };
-    const tmpDir = await tmpDirFor("null-modified-at");
-
-    const result = await compressToTemp({
-      storage: withNullModifiedAt,
-      paths: ["/report.txt"],
-      format: "zip",
-      tmpDir,
-      signal: new AbortController().signal,
-      report: () => {},
-    });
-    tempPaths.push(result.file);
-
-    expect(result.size).toBeGreaterThan(0);
-  });
-
-  it("rejects tar.zst up front when unsupported, without touching the temp dir", async () => {
-    const storage = createMemoryStorage({ "/a.txt": "a" });
-    const tmpDir = await tmpDirFor("unsupported-zstd");
-
-    await expect(
-      compressToTemp({
-        storage,
-        paths: ["/a.txt"],
-        format: "tar.zst",
-        tmpDir,
-        signal: new AbortController().signal,
-        report: () => {},
-        zstdSupported: false,
-      }),
-    ).rejects.toThrow(UnsupportedFormatError);
-  });
-
-  it("removes the temp file and rejects when the job is cancelled mid-way", async () => {
-    const storage = createMemoryStorage({
-      "/docs/a.txt": "alpha",
-      "/docs/b.txt": "bravo",
-      "/docs/c.txt": "charlie",
-    });
-    const tmpDir = await tmpDirFor("cancel-midway");
-    const controller = new AbortController();
-
-    const { report } = collectingReport();
-    const abortingReport = (patch: JobProgressPatch): void => {
-      report(patch);
-      if (patch.processed === 1) {
-        controller.abort();
-      }
-    };
-
-    const promise = compressToTemp({
-      storage,
-      paths: ["/docs"],
-      format: "zip",
-      tmpDir,
-      signal: controller.signal,
-      report: abortingReport,
-    });
-
-    await expect(promise).rejects.toThrow();
-
-    // The temp file path is deterministic only after the call; recover it by
-    // scanning tmpDir for the single file this test created (if any).
-    const { readdir } = await import("node:fs/promises");
-    let leftover: string[] = [];
-    try {
-      leftover = await readdir(tmpDir);
-    } catch {
-      leftover = [];
-    }
-    expect(leftover).toEqual([]);
-  });
-});
-
-for (const format of ["zip", "tar.gz", "tar.zst"] as const) {
-  it(`${format} closes all active streams before deleting a cancelled archive`, async () => {
-    const memory = createMemoryStorage({ "/large.txt": "x".repeat(65536) });
-    const controller = new AbortController();
-    let cancelled = false;
-    let delivered = false;
-    const storage: StorageProvider = {
+/** Downloads that stall after one chunk and record whether they were cancelled. */
+function stallingDownloads(memory: StorageProvider): {
+  storage: StorageProvider;
+  delivered: () => boolean;
+  cancelled: () => boolean;
+} {
+  let cancelled = false;
+  let delivered = false;
+  return {
+    storage: {
       ...memory,
       download: async (...args) => ({
         ...(await memory.download(...args)),
@@ -413,178 +129,371 @@ for (const format of ["zip", "tar.gz", "tar.zst"] as const) {
           },
         }),
       }),
-    };
-    const dir = await tmpDirFor(`cancel-stream-${format}`);
-    await expect(
-      compressToTemp({
+    },
+    delivered: () => delivered,
+    cancelled: () => cancelled,
+  };
+}
+
+describe("compress", () => {
+  for (const format of FORMATS) {
+    it(`streams a ${format} into a new file that round-trips through extractArchive`, async () => {
+      const storage = await storageFor(format, {
+        "/docs/a.txt": "alpha",
+        "/docs/nested/b.txt": "bravo",
+        "/docs/nested/c.txt": "charlie",
+      });
+      const { report, calls } = collectingReport();
+      const target = `/docs.${format}`;
+
+      await compress({
         storage,
-        paths: ["/large.txt"],
+        paths: ["/docs"],
         format,
-        tmpDir: dir,
+        target,
+        signal: new AbortController().signal,
+        report,
+      });
+
+      // Straight into storage: no temporary archive is written anywhere.
+      expect(createWriteStream).not.toHaveBeenCalled();
+      expect(calls[0]).toEqual({ processed: 0, total: 3, bytes: 0 });
+      expect(calls.at(-1)).toEqual({ processed: 3, total: 3, bytes: 17 });
+      expect(await extracted(storage, target)).toEqual({
+        "/out/docs/a.txt": "alpha",
+        "/out/docs/nested/b.txt": "bravo",
+        "/out/docs/nested/c.txt": "charlie",
+      });
+    });
+
+    it(`refuses a taken ${format} target, keeps it and stops the archive`, async () => {
+      const target = `/a.${format}`;
+      const memory = createMemoryStorage({ "/a.txt": "x".repeat(65536), [target]: "kept" });
+      const stalled = stallingDownloads(memory);
+      const local = await localStorage({ "/a.txt": "a", [target]: "kept" });
+
+      await expect(
+        compress({
+          storage: format === "zip" ? local.storage : stalled.storage,
+          paths: ["/a.txt"],
+          format,
+          target,
+          signal: new AbortController().signal,
+          report: () => {},
+        }),
+      ).rejects.toMatchObject({ kind: "conflict" });
+
+      if (format === "zip") {
+        expect((await bytesOf(local.storage, target)).toString()).toBe("kept");
+      } else {
+        expect(memory.dump()[target]).toBe("kept");
+        expect(stalled.cancelled()).toBe(true);
+      }
+    });
+  }
+
+  it("names zip entries as the storage's zip does: single files, folders, compression", async () => {
+    const { storage } = await localStorage({
+      "/report.txt": "just one file",
+      "/mix/photo.jpg": "pretend-jpeg-bytes",
+      "/mix/notes.txt": "some text notes some text notes some text notes",
+    });
+    const run = (paths: string[], target: string) =>
+      compress({
+        storage,
+        paths,
+        format: "zip",
+        target,
+        signal: new AbortController().signal,
+        report: () => {},
+      });
+
+    await run(["/report.txt"], "/one.zip");
+    const one = await zipEntries(await bytesOf(storage, "/one.zip"));
+    expect(one.map((entry) => entry.fileName)).toEqual(["report.txt"]);
+    await run(["/mix"], "/mix.zip");
+    const mix = await zipEntries(await bytesOf(storage, "/mix.zip"));
+    expect(mix.find((entry) => entry.fileName === "mix/photo.jpg")?.compressionMethod).toBe(0);
+    expect(mix.find((entry) => entry.fileName === "mix/notes.txt")?.compressionMethod).toBe(8);
+  });
+
+  it("refuses a zip from storage that cannot build one", async () => {
+    await expect(
+      compress({
+        storage: createMemoryStorage({ "/a.txt": "a" }),
+        paths: ["/a.txt"],
+        format: "zip",
+        target: "/a.zip",
+        signal: new AbortController().signal,
+        report: () => {},
+      }),
+    ).rejects.toThrow(UnsupportedFormatError);
+  });
+
+  it("rejects tar.zst up front when unsupported", async () => {
+    const storage = createMemoryStorage({ "/a.txt": "a" });
+    await expect(
+      compress({
+        storage,
+        paths: ["/a.txt"],
+        format: "tar.zst",
+        target: "/a.tar.zst",
+        signal: new AbortController().signal,
+        report: () => {},
+        zstdSupported: false,
+      }),
+    ).rejects.toThrow(UnsupportedFormatError);
+    expect(storage.dump()).toEqual({ "/a.txt": "a" });
+  });
+
+  it("rejects a job cancelled before it starts without writing anything", async () => {
+    const storage = createMemoryStorage({ "/a.txt": "a" });
+    const controller = new AbortController();
+    controller.abort();
+    await expect(
+      compress({
+        storage,
+        paths: ["/a.txt"],
+        format: "tar.gz",
+        target: "/a.tar.gz",
+        signal: controller.signal,
+        report: () => {},
+      }),
+    ).rejects.toThrow("cancelled");
+    expect(storage.dump()).toEqual({ "/a.txt": "a" });
+  });
+});
+
+describe("compress to tar", () => {
+  it("never calls list on a top-level file selection", async () => {
+    const storage = createMemoryStorage({ "/report.txt": "just one file" });
+    const list = vi.fn(storage.list.bind(storage));
+
+    await compress({
+      storage: { ...storage, list },
+      paths: ["/report.txt"],
+      format: "tar.gz",
+      target: "/report.tar.gz",
+      signal: new AbortController().signal,
+      report: () => {},
+    });
+
+    expect(list).not.toHaveBeenCalled();
+    expect(await extracted(storage, "/report.tar.gz")).toEqual({
+      "/out/report.txt": "just one file",
+    });
+  });
+
+  it("archives the root itself without absolute entry names", async () => {
+    const storage = createMemoryStorage({ "/a.txt": "alpha", "/sub/b.txt": "bravo" });
+
+    await compress({
+      storage,
+      paths: ["/"],
+      format: "tar.gz",
+      target: "/sub/root.tar.gz",
+      signal: new AbortController().signal,
+      report: () => {},
+    });
+
+    expect(await extracted(storage, "/sub/root.tar.gz")).toEqual({
+      "/out/a.txt": "alpha",
+      "/out/sub/b.txt": "bravo",
+    });
+  });
+
+  it("skips symlinks and other kinds, and dates a file without a time at the epoch", async () => {
+    const storage = createMemoryStorage({ "/mix/a.txt": "a" });
+    const withSymlink: StorageProvider = {
+      ...storage,
+      list: async (path: string) => [
+        ...(await storage.list(path)),
+        {
+          name: "link",
+          path: "/mix/link",
+          kind: "symlink",
+          size: 0,
+          modifiedAt: new Date(0),
+          ext: "",
+        },
+      ],
+      stat: async (path) =>
+        path === "/mix/a.txt"
+          ? { kind: "file", size: 1, modifiedAt: null, contentType: null }
+          : storage.stat(path),
+    };
+
+    await compress({
+      storage: withSymlink,
+      paths: ["/mix", "/mix/a.txt"],
+      format: "tar.gz",
+      target: "/mix.tar.gz",
+      signal: new AbortController().signal,
+      report: () => {},
+    });
+
+    expect(await extracted(storage, "/mix.tar.gz")).toEqual({
+      "/out/mix/a.txt": "a",
+      "/out/a.txt": "a",
+    });
+  });
+
+  it("rethrows a listing's StorageError unchanged and writes nothing", async () => {
+    const storage = createMemoryStorage();
+    const failure = new StorageError("forbidden", "no access");
+    const failing: StorageProvider = {
+      ...storage,
+      stat: async () => ({ kind: "dir", size: 0, modifiedAt: null, contentType: null }),
+      list: async () => {
+        throw failure;
+      },
+    };
+
+    await expect(
+      compress({
+        storage: failing,
+        paths: ["/mix"],
+        format: "tar.gz",
+        target: "/mix.tar.gz",
+        signal: new AbortController().signal,
+        report: () => {},
+      }),
+    ).rejects.toBe(failure);
+    expect(storage.dump()).toEqual({});
+  });
+
+  for (const format of TAR_FORMATS) {
+    it(`${format} cancels the file it was reading and writes nothing when the job is cancelled`, async () => {
+      const controller = new AbortController();
+      const stalled = stallingDownloads(createMemoryStorage({ "/large.txt": "x".repeat(65536) }));
+
+      await expect(
+        compress({
+          storage: stalled.storage,
+          paths: ["/large.txt"],
+          format,
+          target: `/large.${format}`,
+          signal: controller.signal,
+          report: (patch) => {
+            if ((patch.bytes ?? 0) > 0) controller.abort();
+          },
+        }),
+      ).rejects.toThrow();
+
+      expect(stalled.cancelled()).toBe(true);
+      await expect(stalled.storage.stat(`/large.${format}`)).rejects.toMatchObject({
+        kind: "not_found",
+      });
+    });
+
+    it(`${format} reports a failed download or body as itself and writes nothing`, async () => {
+      for (const bodyError of [false, true]) {
+        const memory = createMemoryStorage({ "/large.txt": "x".repeat(65536) });
+        const failure = new StorageError("upstream_unavailable", "broken upstream");
+        const storage: StorageProvider = {
+          ...memory,
+          download: async (...args) => {
+            if (!bodyError) throw failure;
+            return {
+              ...(await memory.download(...args)),
+              body: new ReadableStream<Uint8Array>({
+                start(stream) {
+                  stream.enqueue(new Uint8Array(4096));
+                  stream.error(failure);
+                },
+              }),
+            };
+          },
+        };
+
+        await expect(
+          compress({
+            storage,
+            paths: ["/large.txt"],
+            format,
+            target: `/large.${format}`,
+            signal: new AbortController().signal,
+            report: () => {},
+          }),
+        ).rejects.toBe(failure);
+        expect(Object.keys(memory.dump())).toEqual(["/large.txt"]);
+      }
+    });
+
+    it(`${format} stops reading files when the upload fails`, async () => {
+      const failure = new StorageError("payload_too_large", "disk full");
+      const stalled = stallingDownloads(createMemoryStorage({ "/large.txt": "x".repeat(65536) }));
+      const storage: StorageProvider = {
+        ...stalled.storage,
+        // Fails once the archive is under way, as a full disk would.
+        upload: async (_path, body) => {
+          const reader = (body as ReadableStream<Uint8Array>).getReader();
+          void reader.read().catch(() => undefined);
+          await vi.waitFor(() => expect(stalled.delivered()).toBe(true));
+          await reader.cancel(failure);
+          throw failure;
+        },
+      };
+
+      await expect(
+        compress({
+          storage,
+          paths: ["/large.txt"],
+          format,
+          target: `/large.${format}`,
+          signal: new AbortController().signal,
+          report: () => {},
+        }),
+      ).rejects.toBe(failure);
+      expect(stalled.cancelled()).toBe(true);
+    });
+  }
+});
+
+describe("compress to zip on the files folder", () => {
+  it("leaves nothing at the target or beside it when the job is cancelled", async () => {
+    // Stored, not deflated, so the archive is still being read when cancelled.
+    const { storage, home } = await localStorage({ "/big.jpg": new Uint8Array(4 * 1024 * 1024) });
+    const controller = new AbortController();
+
+    await expect(
+      compress({
+        storage,
+        paths: ["/big.jpg"],
+        format: "zip",
+        target: "/big.zip",
         signal: controller.signal,
         report: (patch) => {
           if ((patch.bytes ?? 0) > 0) controller.abort();
         },
       }),
-    ).rejects.toThrow();
-    expect(cancelled).toBe(true);
-    const { readdir } = await import("node:fs/promises");
-    expect(await readdir(dir)).toEqual([]);
+    ).rejects.toMatchObject({ name: "AbortError" });
+
+    expect(await readdir(home)).toEqual(["big.jpg"]);
   });
-  it(`${format} awaits output closure after upstream download and body errors`, async () => {
-    for (const bodyError of [false, true]) {
-      const memory = createMemoryStorage({ "/large.txt": "x".repeat(65536) });
-      const failure = new StorageError("upstream_unavailable", "broken upstream");
-      const storage: StorageProvider = {
-        ...memory,
-        download: async (...args) => {
-          if (!bodyError) throw failure;
-          return {
-            ...(await memory.download(...args)),
-            body: new ReadableStream<Uint8Array>({
-              start(stream) {
-                stream.enqueue(new Uint8Array(4096));
-                stream.error(failure);
-              },
-            }),
-          };
-        },
-      };
-      const dir = await tmpDirFor(`upstream-${format}-${bodyError}`);
+
+  it("reports the zip writer's own failure and leaves nothing behind", async () => {
+    const failure = new Error("zip writer failure");
+    const add = vi.spyOn(ZipFile.prototype, "addReadStreamLazy").mockImplementationOnce(function (
+      this: ZipFile,
+    ) {
+      this.emit("error", failure);
+    });
+    try {
+      const { storage, home } = await localStorage({ "/a.txt": "data" });
       await expect(
-        compressToTemp({
+        compress({
           storage,
-          paths: ["/large.txt"],
-          format,
-          tmpDir: dir,
+          paths: ["/a.txt"],
+          format: "zip",
+          target: "/a.zip",
           signal: new AbortController().signal,
           report: () => {},
         }),
       ).rejects.toBe(failure);
-      const { readdir } = await import("node:fs/promises");
-      expect(await readdir(dir)).toEqual([]);
-    }
-  });
-}
-
-for (const format of ["zip", "tar.gz", "tar.zst"] as const) {
-  it(`${format} waits for delayed destination open and actual stream closure on abort`, async () => {
-    const fs = await vi.importActual<typeof import("node:fs")>("node:fs");
-    let signalOpen: (() => void) | undefined;
-    const opened = new Promise<void>((resolve) => {
-      signalOpen = resolve;
-    });
-    let releaseOpen: (() => void) | undefined;
-    let output: ReturnType<typeof createWriteStream> | undefined;
-    vi.mocked(createWriteStream).mockImplementationOnce((path) => {
-      output = fs.createWriteStream(path, {
-        fs: {
-          open(path, flags, mode, callback) {
-            releaseOpen = () => fs.open(path, flags, mode, callback);
-            signalOpen?.();
-          },
-          close: fs.close,
-          write: fs.write,
-          writev: fs.writev,
-        },
-      });
-      return output;
-    });
-    const destroyed = new Set<Readable>();
-    const originalDestroy = Readable.prototype.destroy;
-    const destroy = vi.spyOn(Readable.prototype, "destroy").mockImplementation(function (
-      this: Readable,
-      error,
-    ) {
-      destroyed.add(this);
-      return originalDestroy.call(this, error);
-    });
-    try {
-      const controller = new AbortController();
-      const reason = new Error("delayed-open cancellation");
-      const directory = await tmpDirFor(`delayed-open-${format}`);
-      const promise = compressToTemp({
-        storage: createMemoryStorage({ "/file.txt": "content" }),
-        paths: ["/file.txt"],
-        format,
-        tmpDir: directory,
-        signal: controller.signal,
-        report: () => {},
-      });
-      let settled = false;
-      const outcome = promise.then(
-        () => {
-          settled = true;
-          return null;
-        },
-        (error) => {
-          settled = true;
-          return error;
-        },
-      );
-      await opened;
-      controller.abort(reason);
-      await Promise.resolve();
-      expect(settled).toBe(false);
-      if (!releaseOpen) throw Error("open callback missing");
-      releaseOpen();
-      expect(await outcome).toBe(reason);
-      expect(output?.closed).toBe(true);
-      expect(destroyed.size).toBeGreaterThan(0);
-      for (const stream of destroyed) expect(stream.closed).toBe(true);
-      expect(await fs.promises.readdir(directory)).toEqual([]);
+      expect(await readdir(home)).toEqual(["a.txt"]);
     } finally {
-      destroy.mockRestore();
+      add.mockRestore();
     }
   });
-}
-
-it("preserves an archive writer error while closing the output and active input", async () => {
-  const failure = new Error("zip writer failure");
-  const add = vi.spyOn(ZipFile.prototype, "addReadStream").mockImplementationOnce(function (
-    this: ZipFile,
-  ) {
-    this.emit("error", failure);
-  });
-  try {
-    const directory = await tmpDirFor("writer-error");
-    await expect(
-      compressToTemp({
-        storage: createMemoryStorage({ "/a.txt": "data" }),
-        paths: ["/a.txt"],
-        format: "zip",
-        tmpDir: directory,
-        signal: new AbortController().signal,
-        report: () => {},
-      }),
-    ).rejects.toBe(failure);
-    const { readdir } = await import("node:fs/promises");
-    expect(await readdir(directory)).toEqual([]);
-  } finally {
-    add.mockRestore();
-  }
 });
-
-for (const format of ["zip", "tar.gz", "tar.zst"] as const) {
-  it(`${format} preserves destination errors and closes the failed output`, async () => {
-    const fs = await vi.importActual<typeof import("node:fs")>("node:fs");
-    const directory = await tmpDirFor(`output-failure-${format}`);
-    let output: ReturnType<typeof createWriteStream> | undefined;
-    vi.mocked(createWriteStream).mockImplementationOnce(() => {
-      output = fs.createWriteStream(directory);
-      return output;
-    });
-    await expect(
-      compressToTemp({
-        storage: createMemoryStorage({ "/a.txt": "data" }),
-        paths: ["/a.txt"],
-        format,
-        tmpDir: directory,
-        signal: new AbortController().signal,
-        report: () => {},
-      }),
-    ).rejects.toMatchObject({ code: "EISDIR" });
-    expect(output?.closed).toBe(true);
-    expect(await fs.promises.readdir(directory)).toEqual([]);
-  });
-}

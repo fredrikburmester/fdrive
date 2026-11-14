@@ -88,10 +88,10 @@ provider, writes a temporary extraction file, removes it afterward, and never ta
 filesystem path. It also works when no index roots are mounted. Extraction status describes
 unsupported formats, disabled processing and documents without extracted text.
 
-Creation, moves and copies use provider no-overwrite support plus a destination check.
-Editing checks SHA-256 and serializes competing MCP edits within one API process. The current
-provider contract cannot make those checks atomic against other API processes, browser
-writes or external storage clients. Re-read before editing; avoid concurrent external edits.
+Creation, moves and copies leave an occupied destination to storage, which refuses it
+(creation atomically). Editing checks SHA-256 and serializes competing MCP edits within one
+API process; that check is not atomic against other API processes, browser writes or
+external storage clients. Re-read before editing; avoid concurrent external edits.
 Completed storage mutations remain successful if metadata/history updates fail, with warnings
 explaining what was not updated. Do not retry the storage operation merely to repair a warning.
 

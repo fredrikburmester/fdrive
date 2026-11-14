@@ -58,7 +58,7 @@ export function withIdempotentMkdir(storage: StorageProvider): StorageProvider {
 
 /**
  * Extends `storage` with a `trash` provider built on top of its own
- * list/stat/move/mkdir/deleteFile/deleteDir, reading the leaves
+ * list/stat/move/mkdir/deleteFile/deleteDir/deleteEmptyDir, reading the leaves
  * `withMoveToTrash` writes under `trashPath`. Spreads `storage` into a new
  * object so the original provider is left untouched.
  */
@@ -89,6 +89,7 @@ export function unavailableStorage(error: Error): StorageProvider {
     copy: fail,
     deleteFile: fail,
     deleteDir: fail,
+    deleteEmptyDir: fail,
   };
 }
 

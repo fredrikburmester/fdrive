@@ -1,9 +1,9 @@
 import { createHash } from "node:crypto";
-import { extensionOf, isStorageError, trashLeafPath } from "@fdrive/core";
+import { extensionOf, isStorageError, parseMoveTrashLeaf, trashLeafPath } from "@fdrive/core";
 import { recordMetadataCommand } from "../activity/metadata.js";
 import { deleteWithActivityReceipt } from "../activity/trash.js";
 import type { Principal } from "../auth/principal.ts";
-import { relocatePath, requireUnoccupiedTarget } from "../fs/mutations.ts";
+import { relocatePath } from "../fs/mutations.ts";
 import { createReadAuthorizer } from "../scoping/read-authorizer.ts";
 import {
   assertMutablePath,
@@ -54,7 +54,6 @@ export async function createFile(
   );
   if (args.data !== undefined && bytes.toString("base64") !== args.data)
     throw new Error("data must be canonical base64");
-  await requireUnoccupiedTarget(principal.storage, path);
   const publicUrl = await deps.publicUrl();
   await principal.storage.upload(path, bytes, {
     overwrite: false,
@@ -113,6 +112,7 @@ async function editFileUnlocked(
     throw new Error("edit_file only replaces UTF-8 text files");
   }
   await principal.storage.upload(previous.path, bytes, {
+    overwrite: true,
     contentLength: bytes.length,
     signal: AbortSignal.timeout(30_000),
   });
@@ -213,11 +213,10 @@ export async function restorePath(
   args: { id: string; target?: string | undefined },
 ) {
   const { trash, path: trashRoot } = requireTrash(deps, principal);
-  // Ask the provider to decode its own layout; never guess a different original path from an id.
-  const listing = await trash.list({ limit: 10_000 });
-  const candidate = listing.entries.find((entry) => entry.id === args.id);
-  if (candidate === undefined) throw new Error("item is not in the available Trash listing");
-  const original = ordinaryPath(deps, principal, candidate.originalPath);
+  // The id is the leaf's path, which names where the item came from.
+  const leaf = parseMoveTrashLeaf(trashRoot, trashLeafPath(trashRoot, args.id));
+  if (leaf === null) throw new Error("not a Trash item id");
+  const original = ordinaryPath(deps, principal, leaf.originalPath);
   const target = ordinaryPath(deps, principal, args.target ?? original);
   const publicUrl = await deps.publicUrl();
   const result = await trash.restore(args.id, { target });

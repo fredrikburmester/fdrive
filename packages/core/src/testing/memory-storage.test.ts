@@ -56,13 +56,16 @@ describe("createMemoryStorage extras", () => {
     expect(storage.dump()).toEqual({ "/dst/a.txt": "a", "/file.txt": "f", "/other.txt": "o" });
     await storage.move("/file.txt", "/other.txt", { overwrite: true });
     expect(storage.dump()).toEqual({ "/dst/a.txt": "a", "/other.txt": "f" });
-    await expect(storage.copy("/other.txt", "/dst", { overwrite: false })).rejects.toMatchObject({
-      kind: "conflict",
-    });
-    await storage.copy("/other.txt", "/dst");
+    for (const opts of [undefined, { overwrite: false }]) {
+      await expect(storage.copy("/other.txt", "/dst", opts)).rejects.toMatchObject({
+        kind: "conflict",
+        message: "something already exists at /dst",
+      });
+    }
+    await storage.copy("/other.txt", "/dst", { overwrite: true });
     expect(storage.dump()).toEqual({ "/dst": "f", "/other.txt": "f" });
     await storage.mkdir("/tree");
-    await storage.copy("/tree", "/dst");
+    await storage.copy("/tree", "/dst", { overwrite: true });
     expect(storage.dirs()).toContain("/dst");
     expect(storage.dump()).toEqual({ "/other.txt": "f" });
     await expect(storage.copy("/nope", "/x")).rejects.toMatchObject({ kind: "not_found" });
@@ -84,6 +87,24 @@ describe("createMemoryStorage extras", () => {
     const storage = createMemoryStorage();
     await expect(storage.statFile("/")).rejects.toMatchObject({ kind: "bad_request" });
     await storage.deleteDir("/");
+    expect(storage.dirs()).toEqual(["/"]);
+  });
+
+  it("removes only an empty directory, never the root", async () => {
+    const storage = createMemoryStorage({ "/full/a.txt": "a" });
+    await storage.mkdir("/empty/inner", { parents: true });
+    await expect(storage.deleteEmptyDir("/full")).rejects.toMatchObject({ kind: "conflict" });
+    await expect(storage.deleteEmptyDir("/empty")).rejects.toMatchObject({ kind: "conflict" });
+    await expect(storage.deleteEmptyDir("/full/a.txt")).rejects.toMatchObject({
+      kind: "bad_request",
+    });
+    await expect(storage.deleteEmptyDir("/nope")).rejects.toMatchObject({ kind: "not_found" });
+    await storage.deleteEmptyDir("/empty/inner");
+    await storage.deleteEmptyDir("/empty");
+    expect(storage.dirs()).toEqual(["/", "/full"]);
+    await storage.deleteFile("/full/a.txt");
+    await storage.deleteEmptyDir("/full");
+    await expect(storage.deleteEmptyDir("/")).rejects.toMatchObject({ kind: "bad_request" });
     expect(storage.dirs()).toEqual(["/"]);
   });
 });

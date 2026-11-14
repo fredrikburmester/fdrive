@@ -1,4 +1,4 @@
-import { existsSync } from "node:fs";
+import { existsSync, readdirSync } from "node:fs";
 import {
   EntryResponse,
   ListResponse,
@@ -261,6 +261,8 @@ describe("trash against real PostgreSQL and a local folder", () => {
     expect(emptyRes.status).toBe(200);
     const aliceTrashAfterEmpty = await listTrash(aliceCookie);
     expect(aliceTrashAfterEmpty.entries).toEqual([]);
+    // Restores, the purge and emptying left no folders behind.
+    expect(readdirSync(storage.path("alice", `${TRASH_PATH}/.fdrive-move-v1`))).toEqual([]);
     const carolTrashAfterAliceEmpty = await listTrash(carol.cookie);
     expect(carolTrashAfterAliceEmpty.entries.map((entry) => entry.name)).toEqual(["carol-own.txt"]);
   }, 180000);

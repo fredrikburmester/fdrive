@@ -204,6 +204,7 @@ describe("createUserStorage", () => {
     await bob.move(inShare("/new.txt"), inShare("/a/renamed.txt"));
     await bob.copy(inShare("/a/renamed.txt"), inShare("/copy.txt"));
     await bob.deleteFile(inShare("/a/renamed.txt"));
+    await bob.deleteEmptyDir(inShare("/a/b"));
     await bob.deleteDir(inShare("/a"));
     expect(await names(inShare(""))).toEqual(["brief.txt", "copy.txt", "plans"]);
   });
@@ -215,6 +216,7 @@ describe("createUserStorage", () => {
       bob.mkdir(`/${SHARED_WITH_ME}/Photos/new`),
       bob.deleteFile(photo),
       bob.deleteDir(`/${SHARED_WITH_ME}/Photos/sub`),
+      bob.deleteEmptyDir(`/${SHARED_WITH_ME}/Photos/sub`),
       bob.setModifiedAt(photo, new Date()),
       bob.move(photo, "/cat.jpg"),
       bob.move("/own.txt", `/${SHARED_WITH_ME}/Photos/own.txt`),
@@ -233,6 +235,8 @@ describe("createUserStorage", () => {
     for (const change of [
       bob.deleteDir(shelf),
       bob.deleteDir(folder),
+      bob.deleteEmptyDir(shelf),
+      bob.deleteEmptyDir(folder),
       bob.deleteFile(shelf),
       bob.setModifiedAt(shelf, new Date()),
       bob.setModifiedAt(folder, new Date()),

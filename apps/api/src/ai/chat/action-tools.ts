@@ -13,11 +13,11 @@ import {
   isUnderPath,
   normalizePath,
   parentPath,
+  StorageError,
 } from "@fdrive/core";
 import { z } from "zod";
 import type { ActivityCallContext } from "../../activity/fs-context.js";
 import { recordActivity } from "../../activity/fs-context.js";
-import { requireUnoccupiedTarget } from "../../fs/mutations.js";
 import type { FsRoutesDeps } from "../../fs/routes.js";
 import { moveMany, publishFsEvent, trashMany } from "../../fs/routes.js";
 import { decodeText } from "../../mcp/content.js";
@@ -263,12 +263,21 @@ function movedResults(results: readonly MoveManyResult[]): ChatActionResult[] {
   );
 }
 
-async function occupied(storage: DriveToolsDeps["principal"]["storage"], target: string) {
+/**
+ * Whether something other than `path` is at `target`, so a proposal names
+ * only targets that are free. A disk that ignores case finds `path` itself
+ * under a new spelling of its name, which a rename may take.
+ */
+async function occupied(
+  storage: DriveToolsDeps["principal"]["storage"],
+  target: string,
+  path?: string,
+) {
   try {
-    await requireUnoccupiedTarget(storage, target);
-    return false;
+    const found = await storage.stat(target);
+    return (found.path ?? target) !== path;
   } catch (error) {
-    if (isStorageError(error) && error.kind === "conflict") return true;
+    if (isStorageError(error) && error.kind === "not_found") return false;
     throw error;
   }
 }
@@ -330,7 +339,8 @@ function renameItemsTool(deps: ChatActionToolsDeps): ActionTool {
           if (isReservedName(deps, target))
             throw new AiToolError(`${path} cannot be named ${name}: that name is fdrive's own.`);
           const stat = await statItem(deps, path);
-          const conflict = targets.has(target) || (await occupied(deps.principal.storage, target));
+          const conflict =
+            targets.has(target) || (await occupied(deps.principal.storage, target, path));
           targets.add(target);
           items.push({ path, kind: stat.kind, name, reason: rename.reason, conflict });
         }
@@ -434,7 +444,8 @@ async function checkWriteTarget(
       throw new AiToolError(
         `${path} is not next to a ${deps.focus.adjective} item; new files go into a ${deps.focus.adjective} folder or beside a ${deps.focus.adjective} file.`,
       );
-    await requireUnoccupiedTarget(deps.principal.storage, path);
+    if (await occupied(deps.principal.storage, path))
+      throw new StorageError("conflict", `something already exists at ${path}`);
     return { path, sha256: null };
   }
   const stored = await referencedArg(deps, path);

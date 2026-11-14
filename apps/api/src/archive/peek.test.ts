@@ -56,6 +56,7 @@ function createRangeAwareStorage(files: Record<string, Buffer>): StorageProvider
     copy: notImplemented,
     deleteFile: notImplemented,
     deleteDir: notImplemented,
+    deleteEmptyDir: notImplemented,
     setModifiedAt: notImplemented,
     zip: notImplemented,
   };
