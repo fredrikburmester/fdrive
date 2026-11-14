@@ -22,7 +22,6 @@ docker run --rm \
   --user root \
   -v /var/run/docker.sock:/var/run/docker.sock \
   -v "$(pwd)/tests:/app-src/tests:ro" \
-  -v "$(pwd)/scripts:/app-src/scripts:ro" \
   -v "$(pwd)/pyproject.toml:/app-src/pyproject.toml:ro" \
   -v "$(pwd)/../../packages/db/drizzle:/repo-migrations:ro" \
   -e FDRIVE_DB_MIGRATIONS_DIR=/repo-migrations \

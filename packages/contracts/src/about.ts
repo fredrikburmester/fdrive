@@ -13,20 +13,17 @@ import { ProviderType } from "./providers.ts";
  * `/setup` in that case.
  */
 export const AboutResponse = z.object({
-  /**
-   * The build as one value, which is all older servers send: the full Git
-   * revision, else the release, else `development` (`0.0.0` from the oldest).
-   */
+  /** The build as one value: the full Git revision, else the release, else `development`. */
   version: z.string(),
   /**
    * Release the API image was built as: `X.Y.Z` from a `vX.Y.Z` tag, or `main`
-   * for the main branch. Absent for any other build and from older servers.
+   * for the main branch. Absent for any other build.
    */
   release: z.string().optional(),
-  /** Full Git commit the API was built from. Absent when unknown and from older servers. */
+  /** Full Git commit the API was built from. Absent when unknown. */
   revision: z.string().optional(),
-  /** API process uptime, sampled on request. Optional for older servers. */
-  uptimeSeconds: z.number().nonnegative().optional(),
+  /** API process uptime, sampled on request. */
+  uptimeSeconds: z.number().nonnegative(),
   providers: z.array(
     z.object({
       type: ProviderType,

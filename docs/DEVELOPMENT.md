@@ -115,8 +115,8 @@ pnpm --filter @fdrive/web test:e2e
   ```bash
   pnpm dev:env:down
   ```
-- **Wipe all development data and re-seed from scratch** (a fresh database, a fresh copy of
-  the dev files and the dev users again):
+- **Wipe all development data and re-seed from scratch** (fresh `.env` files and database, a
+  fresh copy of the dev files and the dev users again):
   ```bash
   pnpm dev:env:reset
   ```
@@ -126,8 +126,9 @@ pnpm --filter @fdrive/web test:e2e
 Set `FDRIVE_DEV_API_PORT`, `FDRIVE_DEV_DB_PORT`, `FDRIVE_DEV_INDEXER_HTTP_PORT`,
 `FDRIVE_DEV_OCR_HTTP_PORT` and `FDRIVE_DEV_ML_PORT` before generating a fresh environment.
 `pnpm dev:env` uses those same overrides for the API/web URLs and
-compose publishes. Existing environment assignments are preserved; update them
-when changing ports in an already configured checkout.
+compose publishes. It writes `apps/api/.env.dev` and `apps/web/.env.local` only
+when they are missing; after changing ports in a configured checkout, edit them
+or run `pnpm dev:env:reset`, which writes them again.
 
 The dev stack keeps every unit of the ml service on (`FDRIVE_ML_STATIC_UNITS`), and
 `FDRIVE_EMBED_URL`, `FDRIVE_IMAGE_EMBED_URL` and `FDRIVE_TIKA_URL` point at its `/text`,
