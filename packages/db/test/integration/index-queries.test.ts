@@ -566,6 +566,57 @@ describe("index-queries", () => {
     });
   });
 
+  describe("contentAt", () => {
+    it("returns the live rows at exactly the pairs asked for, in one query", async () => {
+      const files = await insertRoot("files");
+      const photos = await insertRoot("photos");
+      const stamped = await insertFile(files, "alice/a.txt", { size: 5, sha256: "a".repeat(64) });
+      await db
+        .update(schema.files)
+        .set({ inode: -7n, ctimeNs: 1_800_000_000_000_000_000n })
+        .where(sql`${schema.files.id} = ${stamped.id}`);
+      await insertFile(files, "alice/b.txt", { sha256: "b".repeat(64) });
+      await insertFile(files, "alice/gone.txt", { deletedAt: new Date() });
+      // The same path in another root, and another root's path asked for in this one,
+      // must not pair up across the two lists.
+      await insertFile(photos, "alice/a.txt");
+      await insertFile(photos, "bob/c.txt");
+
+      const found = await queries.contentAt([
+        { rootName: "files", path: "alice/a.txt" },
+        { rootName: "files", path: "alice/b.txt" },
+        { rootName: "files", path: "alice/gone.txt" },
+        { rootName: "files", path: "bob/c.txt" },
+        { rootName: "files", path: "alice/missing.txt" },
+      ]);
+
+      expect(found.sort((x, y) => x.path.localeCompare(y.path))).toEqual([
+        {
+          rootName: "files",
+          path: "alice/a.txt",
+          size: 5,
+          mtimeNs: 1_700_000_000_000_000_000n,
+          sha256: "a".repeat(64),
+          inode: -7n,
+          ctimeNs: 1_800_000_000_000_000_000n,
+        },
+        {
+          rootName: "files",
+          path: "alice/b.txt",
+          size: 100,
+          mtimeNs: 1_700_000_000_000_000_000n,
+          sha256: "b".repeat(64),
+          inode: null,
+          ctimeNs: null,
+        },
+      ]);
+    });
+
+    it("asks nothing for no pairs", async () => {
+      expect(await queries.contentAt([])).toEqual([]);
+    });
+  });
+
   describe("rootIdsByName", () => {
     it("maps every root's name to its id", async () => {
       const first = await insertRoot("sftpgo");

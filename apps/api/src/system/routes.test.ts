@@ -43,6 +43,7 @@ function fakeIndexQueries(overrides: Partial<IndexQueries> = {}): IndexQueries {
     folders: notImplemented,
     filesByIds: notImplemented,
     fileByPath: notImplemented,
+    contentAt: notImplemented,
     listFiles: notImplemented,
     filesBySha256: notImplemented,
     rootIdsByName: async () => ({}),

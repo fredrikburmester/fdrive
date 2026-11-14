@@ -169,6 +169,13 @@
       "when": 1794603793648,
       "tag": "0023_index_folders",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1794654978592,
+      "tag": "0024_index_file_stamp",
+      "breakpoints": true
     }
   ]
 }

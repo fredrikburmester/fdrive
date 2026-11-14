@@ -64,6 +64,21 @@ export interface EntryStat {
 }
 
 /**
+ * What a file on disk is right now, read from its open descriptor: the
+ * size, modification time, inode and change time (`st_ctim`), times in
+ * nanoseconds since the epoch. A client can set a modification time but
+ * never an inode or a change time, and any write changes the change time,
+ * so a digest recorded with the same four still describes the file's bytes.
+ */
+export interface ContentStamp {
+  readonly size: number;
+  readonly mtimeNs: bigint;
+  /** The unsigned inode number. */
+  readonly ino: bigint;
+  readonly ctimeNs: bigint;
+}
+
+/**
  * Provider-neutral storage port. `@fdrive/local` implements it over a folder
  * on the API's disk. All paths are the
  * provider's own paths, already resolved from a scope by the caller: this
@@ -165,6 +180,13 @@ export interface StorageProvider {
    * download proves it; callers then open `download` and cancel the body.
    */
   probeFileRead?(path: string): Promise<void>;
+
+  /**
+   * The file at `path` as `download` would open it, without reading any of
+   * it: see `ContentStamp`. Fails as `download` does. Absent where the
+   * backend has no inodes or change times.
+   */
+  contentStamp?(path: string): Promise<ContentStamp>;
 
   statFile(path: string): Promise<{
     size: number;

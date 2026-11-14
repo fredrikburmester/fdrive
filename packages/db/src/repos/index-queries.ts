@@ -96,6 +96,27 @@ function toIndexedFile(row: typeof files.$inferSelect): IndexedFile {
   };
 }
 
+/** One file to look up by its root's name and its root-relative path. */
+export interface IndexRef {
+  readonly rootName: string;
+  /** Root-relative, like `idx.files.path`. */
+  readonly path: string;
+}
+
+/**
+ * A live file's digest and what stands behind it, see
+ * `IndexQueries.contentAt`. `inode` and `ctimeNs` are the stamp of the
+ * indexer's own read that produced `sha256`, or null when no such read
+ * stands behind it (see `idx.files.inode`).
+ */
+export interface IndexedContent extends IndexRef {
+  readonly size: number;
+  readonly mtimeNs: bigint;
+  readonly sha256: string | null;
+  readonly inode: bigint | null;
+  readonly ctimeNs: bigint | null;
+}
+
 /** One hit from `semantic` or `fulltext`: a matching file plus a content excerpt. */
 export interface ContentHit {
   readonly fileId: number;
@@ -301,6 +322,13 @@ export interface IndexQueries {
   filesByIds(ids: readonly number[]): Promise<IndexedFile[]>;
   /** The (non-deleted) file at exactly `path` in `rootId`, `null` when absent. */
   fileByPath(rootId: number, path: string): Promise<IndexedFile | null>;
+  /**
+   * The live rows at exactly these `(rootName, path)` pairs, in one query
+   * and no particular order; a pair without a live row is left out. Like
+   * `fileByPath` it applies no scope of its own: callers map each path
+   * through the caller's verified scopes first.
+   */
+  contentAt(refs: readonly IndexRef[]): Promise<IndexedContent[]>;
   /**
    * Metadata-only listing over a scope: optional name/ext/date/size filters,
    * one of four sort orders, and the total match count (before `limit`).
@@ -681,6 +709,32 @@ export function createIndexQueries(db: Db): IndexQueries {
         .from(files)
         .where(and(eq(files.rootId, rootId), eq(files.path, path), isNull(files.deletedAt)));
       return row ? toIndexedFile(row) : null;
+    },
+
+    async contentAt(refs) {
+      if (refs.length === 0) {
+        return [];
+      }
+      const names = [...new Set(refs.map((ref) => ref.rootName))];
+      const paths = [...new Set(refs.map((ref) => ref.path))];
+      const rows = await db
+        .select({
+          rootName: roots.name,
+          path: files.path,
+          size: files.size,
+          mtimeNs: files.mtimeNs,
+          sha256: files.sha256,
+          inode: files.inode,
+          ctimeNs: files.ctimeNs,
+        })
+        .from(files)
+        .innerJoin(roots, eq(roots.id, files.rootId))
+        .where(
+          and(inArray(roots.name, names), inArray(files.path, paths), isNull(files.deletedAt)),
+        );
+      // Names and paths are matched separately above; only the exact pairs asked for count.
+      const wanted = new Set(refs.map((ref) => JSON.stringify([ref.rootName, ref.path])));
+      return rows.filter((row) => wanted.has(JSON.stringify([row.rootName, row.path])));
     },
 
     async listFiles(scopePrefixes, filter, order, limit, offset = 0) {

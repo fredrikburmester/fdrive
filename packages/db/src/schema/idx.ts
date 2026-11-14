@@ -52,6 +52,18 @@ export const files = idxSchema.table(
     lastSeen: timestamp("last_seen", { withTimezone: true }).defaultNow(),
     indexedAt: timestamp("indexed_at", { withTimezone: true }),
     deletedAt: timestamp("deleted_at", { withTimezone: true }),
+    /**
+     * The inode and change time (nanoseconds) of the file `sha256` was read
+     * from, recorded only by a read the indexer made itself that began at
+     * least a second after the file last changed and saw no change while it
+     * ran. Any later write, rename or replacement changes one of the two, and
+     * no client can set either, so while a fresh stat still shows both (with
+     * `size` and `mtime_ns`) the digest describes the bytes on disk. Null when
+     * no such read stands behind the current digest. `inode` holds the
+     * unsigned inode number's 64 bits as a signed bigint, like `idx.work`.
+     */
+    inode: bigint("inode", { mode: "bigint" }),
+    ctimeNs: bigint("ctime_ns", { mode: "bigint" }),
   },
   (table) => [
     unique("files_root_id_path_unique").on(table.rootId, table.path),

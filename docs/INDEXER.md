@@ -199,7 +199,7 @@ Three paths lead to the same per-file processing, fastest first.
    day, which only build up when no indexer drains them.
 2. **The watcher** (inotify, Linux only) sees changes made on the disk directly, for
    example over SMB, after a 2-second debounce. It sees fdrive's own changes too; whichever
-   comes second finds the row current and does nothing.
+   comes second finds the row current and does nothing, apart from stamping it (below).
 3. **The scan** walks the whole root every `indexer.scan_interval_seconds` (an hour by
    default), at startup, when settings or features change and after a watcher overflow,
    and catches anything the other two missed.
@@ -212,6 +212,30 @@ watcher's deletes and renames are ignored, and queued rows stay in `idx.work`, s
 empty mount is never read as every file deleted. The verdict is reused for two seconds,
 logged once when it changes, and kept through a database outage; a scan that came due runs as
 soon as the marker is right. The marker itself is never indexed.
+
+### Stamps
+
+A row's `inode` and `ctime_ns` stamp its sha256: the inode and change time of the file the
+indexer itself read for it. A read stamps the row only when it began at least a second
+(`STAMP_SETTLE`) after the file last changed and the file kept that inode and change time
+until it ended, since a write within the same tick of the filesystem's clock as the one
+before it leaves the change time unchanged. Every later write, rename or replacement moves
+one of the two on, and no client can set either, so while a fresh stat still shows the stamp
+(and the row's size and `mtime_ns`) the digest describes the bytes on disk. The desktop
+`versions` check relies on that ([MACOS.md](MACOS.md#metadata-versions-and-limits)).
+`indexed_at` cannot stand in for it: text extraction sets it after the hash, and re-extracting
+an unchanged file sets it again without reading the bytes.
+
+A digest from an upload hint or reused for an unchanged file earns no stamp: a new digest
+drops the old one, and a reused one keeps it. A watcher or queued look at an unchanged file
+whose stamp no longer matches, or that has none, reads it again once it has settled. The same
+digest stamps the row; another one is a change that kept the size and modification time, and
+the file is indexed again. So a file fdrive writes or renames is stamped by the watcher's look
+two seconds later, when the queue's immediate look found it too fresh. A rename made outside
+fdrive only moves the row, so that file goes unstamped until its next change. Scans never
+re-read unchanged files: rows indexed before stamps existed get theirs from a reindex or their
+next change. Where the API and the indexer see different inode numbers, a stamp never matches
+and every check hashes.
 
 Watcher and queued files are foreground work: while any is pending, scan workers wait
 before starting their next file, for at most a minute at a time, so a change someone just

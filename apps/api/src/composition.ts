@@ -55,6 +55,7 @@ import { registerBackupRoutes } from "./backups/routes.js";
 import type { AppConfig } from "./config.js";
 import { type Subsystem, type SubsystemProbe, startupSummaryLines } from "./config-keys.js";
 import { createDesktopEffectContext, createDesktopEffectsWorker } from "./desktop/effects.js";
+import { createIndexedContentLookup } from "./desktop/indexed-content.js";
 import { withDesktopMetadata } from "./desktop/metadata.js";
 import { createDesktopRetention, DEFAULT_DESKTOP_RETENTION } from "./desktop/retention.js";
 import { registerDesktopRoutes } from "./desktop/routes.js";
@@ -898,11 +899,18 @@ export async function composeApp(
         workerToken: config.fdriveWorkerToken,
       });
       auth.registerRoutes(groups);
+      // Version checks answer from the index where its row provably describes the file.
+      const desktopIndexedContent = createIndexedContentLookup({
+        identities: repos.identities,
+        resolver: scopeResolver,
+        index: indexQueries,
+      });
       registerDesktopRoutes(groups, {
         activity: personalActivity,
         recovery: desktopEffects,
         writes: createDesktopWrites({
           repo: desktopRepo,
+          indexedContent: desktopIndexedContent,
           publishLock: desktopPublishLock,
           clock,
           effectContext: createDesktopEffectContext(
@@ -922,6 +930,7 @@ export async function composeApp(
         providers: repos.providers,
         storageFactory,
         clock,
+        indexedContent: desktopIndexedContent,
         publishLock: desktopPublishLock,
         clientIp: (c) => extractClientIp(c, config.fdriveTrustedProxyHops),
         trashPathForStorage: (storage) => {

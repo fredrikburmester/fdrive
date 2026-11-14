@@ -235,6 +235,28 @@ export function createLocalStorage(options: LocalStorageOptions): LocalStorage {
         if (!info.isFile()) throw new StorageError("bad_request", `not a file: ${path}`);
       }),
 
+    // Opened as `download` opens it, so it fails as a download would and
+    // describes the file a download would read; none of it is read.
+    contentStamp: (path) =>
+      mapped(path, async () => {
+        const handle = await open(
+          await home.target(path),
+          constants.O_RDONLY | constants.O_NONBLOCK,
+        );
+        try {
+          const info = await handle.stat({ bigint: true });
+          if (!info.isFile()) throw new StorageError("bad_request", `not a file: ${path}`);
+          return {
+            size: Number(info.size),
+            mtimeNs: info.mtimeNs,
+            ino: info.ino,
+            ctimeNs: info.ctimeNs,
+          };
+        } finally {
+          await handle.close();
+        }
+      }),
+
     async statFile(path) {
       const info = await storage.stat(path);
       if (info.kind !== "file") throw new StorageError("bad_request", `not a file: ${path}`);
