@@ -9,7 +9,6 @@ import {
 } from "./backups.ts";
 import { ApiClientError } from "./client.ts";
 import { ApiError } from "./error.ts";
-import { IDENTITY_HEADER } from "./routes.ts";
 
 const Ok = z.object({ ok: z.literal(true) });
 const Accepted = z.object({ id: z.uuid() });
@@ -17,7 +16,6 @@ export function createBackupClient(
   options: {
     fetch?: typeof globalThis.fetch;
     baseUrl?: string;
-    identityId?: () => string | undefined;
   } = {},
 ) {
   const base = `${options.baseUrl ?? ""}/api/v1/system/backups`;
@@ -29,8 +27,6 @@ export function createBackupClient(
     additional: Record<string, string> = {},
   ) {
     const headers = new Headers({ "X-Requested-With": "fdrive", ...additional });
-    const identity = options.identityId?.();
-    if (identity) headers.set(IDENTITY_HEADER, identity);
     const response = await (options.fetch ?? globalThis.fetch)(`${base}${suffix}`, {
       method,
       headers,

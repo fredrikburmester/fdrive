@@ -1,5 +1,4 @@
 import { z } from "zod";
-import { CanonicalUuid } from "./canonical-uuid.ts";
 
 /**
  * The expiry choices offered on the account page's "create token" dialog:
@@ -38,8 +37,6 @@ export type ApiTokenAccess = z.infer<typeof ApiTokenAccess>;
 export const ApiTokenSummary = z.object({
   id: z.uuid(),
   name: z.string(),
-  /** The identity the token is scoped to. `null` if that identity was since unlinked; the token can no longer authenticate. */
-  identityId: z.uuid().nullable(),
   createdAt: z.iso.datetime(),
   lastUsedAt: z.iso.datetime().nullable(),
   expiresAt: z.iso.datetime().nullable(),
@@ -57,13 +54,12 @@ export const ApiTokensResponse = z.object({
 export type ApiTokensResponse = z.infer<typeof ApiTokensResponse>;
 
 /**
- * Body for `POST /api/v1/account/tokens`. The route defaults `identityId`
- * to the active login when omitted; omitted `expiresInDays` means the
- * token never expires. Omitted `access` creates a Read token for `/`.
+ * Body for `POST /api/v1/account/tokens`. The token acts as the signed-in
+ * login; omitted `expiresInDays` means the token never expires. Omitted
+ * `access` creates a Read token for `/`.
  */
 export const CreateApiTokenRequest = z.object({
   name: z.string().min(1).max(200),
-  identityId: CanonicalUuid.optional(),
   expiresInDays: ApiTokenExpiresInDays.optional(),
   access: ApiTokenAccess.optional(),
 });

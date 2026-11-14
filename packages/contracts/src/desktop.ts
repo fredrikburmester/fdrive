@@ -46,10 +46,8 @@ export const DesktopPath = z
     "Invalid path",
   );
 export const DesktopPairRequest = z.strictObject({ deviceName: z.string().trim().min(1).max(100) });
-export const DesktopPairApproval = z.strictObject({
-  identityIds: z.array(CanonicalUuid).min(1).max(16),
-  access: z.record(CanonicalUuid, z.enum(["read", "full"])).optional(),
-});
+/** The browser connects the Mac to its signed-in login, read-only or with Finder writes. */
+export const DesktopPairApproval = z.strictObject({ access: z.enum(["read", "full"]) });
 export const DesktopPairSecret = z.strictObject({
   secret: z.string().regex(/^[A-Za-z0-9_-]{43}$/),
 });
