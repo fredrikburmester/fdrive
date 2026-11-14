@@ -30,19 +30,16 @@ test("readonly identity cannot inject edits through a concurrent writer", async 
     const reader = await readerContext.newPage();
     await observeOfficeReady(reader, state.officeUrl);
     await loginAs(reader, "reader", "reader-password");
-    const me = (await (await reader.request.get("/api/v1/auth/me")).json()) as {
-      activeIdentityId: string;
-    };
     const descriptorResponse = reader.waitForResponse(
       (response) => new URL(response.url()).pathname === "/api/v1/office/open",
     );
-    await reader.goto(sharedOfficeHref(me.activeIdentityId, OFFICE_TEAM_FOLDER, filename, "edit"));
+    await reader.goto(sharedOfficeHref(OFFICE_TEAM_FOLDER, filename, "edit"));
     expect((await descriptorResponse).status()).toBe(403);
     await expect(reader.getByTitle("Office document")).toHaveCount(0);
     const viewResponse = reader.waitForResponse(
       (response) => new URL(response.url()).pathname === "/api/v1/office/open",
     );
-    await reader.goto(sharedOfficeHref(me.activeIdentityId, OFFICE_TEAM_FOLDER, filename, "view"));
+    await reader.goto(sharedOfficeHref(OFFICE_TEAM_FOLDER, filename, "view"));
     expect((await viewResponse).status()).toBe(200);
     await documentLoaded(reader);
     const readerEditor = reader

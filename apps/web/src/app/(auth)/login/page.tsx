@@ -1,5 +1,5 @@
 import type { PublicProvider } from "@fdrive/contracts";
-import { AccountIdentityId } from "@fdrive/contracts";
+import { CanonicalUuid } from "@fdrive/contracts";
 import type { Route } from "next";
 import { redirect } from "next/navigation";
 import { serverApiClient } from "@/lib/api/server";
@@ -51,7 +51,7 @@ export default async function LoginPage({
     redirect("/setup");
   }
   const providers = await resolveLoginProviders();
-  const request = AccountIdentityId.safeParse((await searchParams).desktopRequest);
+  const request = CanonicalUuid.safeParse((await searchParams).desktopRequest);
   const destination = request.success
     ? (`/desktop/connect?request=${request.data}` as Route)
     : undefined;

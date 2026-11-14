@@ -3,9 +3,7 @@
 import type { MeResponse } from "@fdrive/contracts";
 import { useQueryClient } from "@tanstack/react-query";
 import { type ReactNode, useState } from "react";
-import { pinTabIdentity } from "@/lib/api/client";
 import { queryKeys } from "@/lib/api/keys";
-import { useUploadStore } from "@/lib/upload/store";
 
 export interface MeHydrationProps {
   readonly me: MeResponse;
@@ -25,10 +23,6 @@ export function MeHydration({ me, children }: MeHydrationProps) {
   // `children`: a lazy `useState` initializer, not an effect, so there is
   // no flash of an empty cache.
   useState(() => {
-    pinTabIdentity(me.activeIdentityId);
-    if (typeof window !== "undefined") {
-      useUploadStore.getState().setActiveIdentity(me.activeIdentityId);
-    }
     queryClient.setQueryData(queryKeys.auth.me(), me);
   });
   return <>{children}</>;

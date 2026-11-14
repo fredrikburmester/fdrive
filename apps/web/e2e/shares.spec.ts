@@ -69,8 +69,6 @@ function publicRequests(page: Page): string[] {
     const url = new URL(request.url());
     if (url.pathname.startsWith("/api/v1/") && !url.pathname.startsWith("/api/v1/public/shares/"))
       forbidden.push(url.pathname);
-    if (url.pathname.startsWith("/api/v1/public/shares/") && request.headers()["x-identity-id"])
-      forbidden.push("identity header");
   });
   return forbidden;
 }

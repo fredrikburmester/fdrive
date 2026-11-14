@@ -16,7 +16,6 @@ import type { Route } from "next";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useTheme } from "next-themes";
-import { toast } from "sonner";
 import { ProviderIcon } from "@/components/identity/provider-icon";
 import { FavoritesSection } from "@/components/shell/favorites-section";
 import { FolderTree } from "@/components/shell/folder-tree";
@@ -53,9 +52,8 @@ import {
   SidebarMenuButton,
   SidebarMenuItem,
 } from "@/components/ui/sidebar";
-import { useIdentityActions } from "@/lib/account/use-identities";
 import { useLogout } from "@/lib/api/auth-queries";
-import { anyLoginCan } from "@/lib/identity/capabilities";
+import { capabilitiesFor } from "@/lib/identity/capabilities";
 import { loginDisplay } from "@/lib/identity/login-display";
 import { SYSTEM_SCOPE_CAPTION } from "@/lib/system/pages";
 
@@ -95,11 +93,10 @@ export function AppSidebar() {
   const { data: me } = useShellMe();
   const { theme, setTheme } = useTheme();
   const logout = useLogout();
-  const identityActions = useIdentityActions();
   const pathname = usePathname();
 
-  const activeIdentity = me?.identities.find((identity) => identity.id === me.activeIdentityId);
-  const active = activeIdentity ? loginDisplay(activeIdentity) : undefined;
+  const identity = me?.identity;
+  const login = identity ? loginDisplay(identity) : undefined;
 
   return (
     <Sidebar className="border-r border-sidebar-border backdrop-blur-xl">
@@ -155,7 +152,7 @@ export function AppSidebar() {
                   <span>Shares</span>
                 </SidebarMenuButton>
               </SidebarMenuItem>
-              {anyLoginCan(me, "trash") && (
+              {capabilitiesFor(me).trash && (
                 <SidebarMenuItem>
                   <SidebarMenuButton
                     isActive={isTrashRoute(pathname)}
@@ -189,13 +186,13 @@ export function AppSidebar() {
             render={
               <SidebarMenuButton size="lg">
                 <Avatar className="size-6">
-                  <AvatarFallback>{active ? avatarInitials(active.title) : "?"}</AvatarFallback>
+                  <AvatarFallback>{login ? avatarInitials(login.title) : "?"}</AvatarFallback>
                 </Avatar>
                 <div className="flex min-w-0 flex-1 flex-col text-left leading-tight">
-                  <span className="truncate text-sm font-medium">{active?.title ?? "..."}</span>
+                  <span className="truncate text-sm font-medium">{login?.title ?? "..."}</span>
                   <span className="flex items-center gap-1 truncate text-xs text-muted-foreground">
-                    {activeIdentity && <ProviderIcon type={activeIdentity.providerType} />}
-                    <span className="truncate">{active?.detail ?? ""}</span>
+                    {identity && <ProviderIcon type={identity.providerType} />}
+                    <span className="truncate">{login?.detail ?? ""}</span>
                   </span>
                 </div>
                 <ChevronsUpDown className="ml-auto size-4 text-muted-foreground" />
@@ -204,39 +201,7 @@ export function AppSidebar() {
           />
           <DropdownMenuContent align="start" className="w-56">
             <DropdownMenuGroup>
-              <DropdownMenuLabel>Logins</DropdownMenuLabel>
-              <DropdownMenuRadioGroup
-                value={me?.activeIdentityId ?? ""}
-                onValueChange={(id) => {
-                  if (id !== me?.activeIdentityId)
-                    void identityActions
-                      .switch(id)
-                      .catch(() => toast.error("Could not switch login. Please try again."));
-                }}
-              >
-                {me?.identities.map((identity) => {
-                  const display = loginDisplay(identity);
-                  return (
-                    <DropdownMenuRadioItem
-                      key={identity.id}
-                      value={identity.id}
-                      disabled={identityActions.pending}
-                    >
-                      <span className="flex min-w-0 flex-col">
-                        <span className="truncate">{display.title}</span>
-                        <span className="flex items-center gap-1 truncate text-xs text-muted-foreground">
-                          <ProviderIcon type={identity.providerType} />
-                          <span className="truncate">{display.detail}</span>
-                        </span>
-                      </span>
-                    </DropdownMenuRadioItem>
-                  );
-                })}
-              </DropdownMenuRadioGroup>
-            </DropdownMenuGroup>
-            <DropdownMenuSeparator />
-            <DropdownMenuGroup>
-              <DropdownMenuLabel>{active?.title ?? "Account"}</DropdownMenuLabel>
+              <DropdownMenuLabel>{login?.title ?? "Account"}</DropdownMenuLabel>
               <DropdownMenuSub>
                 <DropdownMenuSubTrigger>
                   <Monitor />

@@ -1,5 +1,4 @@
 import type { CompressRequest, ExtractRequest, JobAccepted, JobStatus } from "@fdrive/contracts";
-import { accountTransition } from "../account/transition";
 import { describeFsError } from "../files/queries";
 import { placeholderJob } from "./placeholder";
 import type { JobRequest } from "./types";
@@ -43,17 +42,11 @@ function startFailedMessage(kind: JobRequest["kind"]): string {
  * `notifyError`, never thrown.
  */
 export async function runJobRequest(deps: RunJobRequestDeps, request: JobRequest): Promise<void> {
-  const epoch = accountTransition.getSnapshot().generation;
   try {
     const accepted =
       request.kind === "compress"
         ? await deps.compress(request.req)
         : await deps.extract(request.req);
-    if (
-      accountTransition.getSnapshot().generation !== epoch ||
-      accountTransition.getSnapshot().pending
-    )
-      return;
     deps.seedJob(placeholderJob(accepted.jobId, request.kind, deps.now), request);
     deps.notifySuccess(startedMessage(request.kind));
   } catch (err) {

@@ -75,10 +75,10 @@ vi.mock("./client.js", () => ({
 
 const ME_RESPONSE = makeMe({
   account: { id: "00000000-0000-0000-0000-000000000000", displayName: "Ada" },
-  identities: [
-    makeIdentity({ id: "00000000-0000-0000-0000-000000000001", providerLabel: "Local folder" }),
-  ],
-  activeIdentityId: "00000000-0000-0000-0000-000000000001",
+  identity: makeIdentity({
+    id: "00000000-0000-0000-0000-000000000001",
+    providerLabel: "Local folder",
+  }),
   isAdmin: true,
 });
 
@@ -233,7 +233,7 @@ describe("useAdminUpdateProvider", () => {
   });
 });
 
-it("invalidates cached login names and public choices after a rename, keeping identities separate", async () => {
+it("invalidates the cached login name and public choices after a rename", async () => {
   adminUpdateProviderMock.mockResolvedValue({ ...PROVIDER, label: "Home storage" });
   const { useAdminUpdateProvider } = await import("./system-queries.js");
   const client = new QueryClient();

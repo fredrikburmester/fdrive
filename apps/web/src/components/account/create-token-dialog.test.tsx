@@ -16,7 +16,6 @@ const RESULT: CreateApiTokenResponse = {
   item: {
     id: "11111111-1111-4111-8111-111111111111",
     name: "Claude",
-    identityId: "22222222-2222-4222-8222-222222222222",
     createdAt: "2026-09-11T10:00:00.000Z",
     lastUsedAt: null,
     expiresAt: "2026-12-10T10:00:00.000Z",
@@ -26,26 +25,7 @@ const RESULT: CreateApiTokenResponse = {
 function renderDialog(onCreated = vi.fn()) {
   render(
     <QueryClientProvider client={new QueryClient()}>
-      <CreateTokenDialog
-        identities={[
-          {
-            id: "22222222-2222-4222-8222-222222222222",
-            username: "alice",
-            providerType: "local",
-            providerLabel: "Work",
-          },
-          {
-            id: "33333333-3333-4333-8333-333333333333",
-            username: "alice",
-            providerType: "local",
-            providerLabel: "Personal",
-          },
-        ]}
-        activeIdentityId={"22222222-2222-4222-8222-222222222222"}
-        open
-        onOpenChange={vi.fn()}
-        onCreated={onCreated}
-      />
+      <CreateTokenDialog open onOpenChange={vi.fn()} onCreated={onCreated} />
     </QueryClientProvider>,
   );
   const input = screen.getByLabelText("Name") as HTMLInputElement;
@@ -96,7 +76,6 @@ it("creates the token when Enter is pressed in the name field", async () => {
   expect(create).toHaveBeenCalledWith({
     name: "Claude",
     expiresInDays: 90,
-    identityId: RESULT.item.identityId,
     access: { mode: "read", paths: ["/"] },
   });
   await waitFor(() => expect(onCreated).toHaveBeenCalledWith(RESULT));
@@ -111,7 +90,6 @@ it("creates the token when the button is clicked", async () => {
   expect(create).toHaveBeenCalledWith({
     name: "Claude",
     expiresInDays: 90,
-    identityId: RESULT.item.identityId,
     access: { mode: "read", paths: ["/"] },
   });
   await waitFor(() => expect(onCreated).toHaveBeenCalledWith(RESULT));
@@ -156,25 +134,6 @@ it("does not send a second request while the first one is pending", async () => 
   expect(onCreated).toHaveBeenCalledTimes(1);
 });
 
-it("creates a token for the selected login", async () => {
-  const create = vi.spyOn(apiClient, "createApiToken").mockResolvedValue(RESULT);
-  const { input } = renderDialog();
-  fireEvent.change(input, { target: { value: "Personal assistant" } });
-  fireEvent.click(screen.getByRole("combobox", { name: "Login" }));
-  fireEvent.keyDown(await screen.findByRole("option", { name: "Personal · alice" }), {
-    key: "Enter",
-  });
-  pressEnter(input);
-  await waitFor(() =>
-    expect(create).toHaveBeenCalledWith({
-      name: "Personal assistant",
-      identityId: "33333333-3333-4333-8333-333333333333",
-      expiresInDays: 90,
-      access: { mode: "read", paths: ["/"] },
-    }),
-  );
-});
-
 it("creates a Full management token with specific folders", async () => {
   const create = vi.spyOn(apiClient, "createApiToken").mockResolvedValue(RESULT);
   const { input } = renderDialog();
@@ -188,7 +147,6 @@ it("creates a Full management token with specific folders", async () => {
   await waitFor(() =>
     expect(create).toHaveBeenCalledWith({
       name: "Work assistant",
-      identityId: RESULT.item.identityId,
       expiresInDays: 90,
       access: { mode: "full", paths: ["/docs", "/team"] },
     }),
@@ -201,7 +159,7 @@ it("keeps invalid folder grants in the form instead of creating a token", async 
   fireEvent.change(input, { target: { value: "Assistant" } });
   fireEvent.change(screen.getByLabelText("Allowed folders"), { target: { value: "relative" } });
   pressEnter(input);
-  expect(await screen.findByText(/enter 1–32 folder paths/)).toBeDefined();
+  expect(await screen.findByText(/Enter 1–32 folder paths/)).toBeDefined();
   await flush();
   expect(create).not.toHaveBeenCalled();
 });

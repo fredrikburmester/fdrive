@@ -64,8 +64,7 @@ function OwnerUnlock({
   const { data: providers } = useProviders();
   const [current, setCurrent] = useState<Record<string, string>>({});
   const id = useId();
-  const identity = me?.identities.find((item) => item.id === me.activeIdentityId);
-  const provider = providers?.providers.find((item) => item.id === identity?.providerId);
+  const provider = providers?.providers.find((item) => item.id === me?.identity.providerId);
   const fields = confirmationFieldsFor(credentialFieldsFor(provider));
   return (
     <form
