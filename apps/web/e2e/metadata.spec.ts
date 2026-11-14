@@ -127,17 +127,32 @@ test("a tag survives renaming its enclosing folder", async ({ page }) => {
 });
 
 test("opening a preview adds the file to Recents", async ({ page }) => {
+  // A folder of its own: the root listing is virtualized with folders first,
+  // and earlier specs leave enough folders there that a root file can sit
+  // below the rows a fresh load renders.
+  const sandbox = uniqueName("recents");
+  const headers = { "x-requested-with": "fdrive" };
+  expect(
+    (await page.request.post("/api/v1/fs/mkdir", { headers, data: { path: `/${sandbox}` } })).ok(),
+  ).toBe(true);
   const fileName = `${uniqueName("recent-me")}.txt`;
-  await page.goto("/files");
+  await page.goto(`/files/${sandbox}`);
   await uploadTextFile(page, fileName, "open me for recents");
 
   await listing(page).getByText(fileName, { exact: true }).dblclick();
-  await expect(page).toHaveURL(new RegExp(`/view/${fileName}$`));
+  await expect(page).toHaveURL(new RegExp(`/view/${sandbox}/${fileName}$`));
 
   await expect(sidebar(page).getByRole("link", { name: fileName })).toBeVisible();
 
-  await page.goto("/files");
+  await page.goto(`/files/${sandbox}`);
   await listing(page).getByText(fileName, { exact: true }).click({ button: "right" });
   await page.getByRole("menuitem", { name: "Delete" }).click();
   await page.getByRole("alertdialog").getByRole("button", { name: "Delete" }).click();
+  await expect(listing(page).getByText(fileName, { exact: true })).toHaveCount(0);
+  // Cleanup, not under test: later specs read the same root listing.
+  const removed = await page.request.post("/api/v1/fs/delete", {
+    headers,
+    data: { items: [{ path: `/${sandbox}`, kind: "dir" }] },
+  });
+  expect(removed.ok(), await removed.text()).toBe(true);
 });

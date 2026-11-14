@@ -1,6 +1,7 @@
 import { rename } from "node:fs/promises";
 import { ActivityFileResponse, PersonalActivityResponse } from "@fdrive/contracts";
 import { expect, test } from "@playwright/test";
+import { dismissActivityPanel } from "./support/activity.js";
 import { homePath } from "./support/local-folder.js";
 import { uniqueName } from "./support/unique.js";
 import { uploadFiles } from "./support/upload.js";
@@ -65,6 +66,9 @@ test("upload completion leads to a durable journey, copies branch and exports ke
   await expect(activity.getByText("Renamed", { exact: true })).toBeVisible();
   await expect(activity.getByText(`From ${name}`, { exact: true })).toBeVisible();
   await expect(activity.getByText("Uploaded", { exact: true })).toBeVisible();
+  // Finished archive jobs from earlier specs reopen the Activity panel on this
+  // fresh load, over the Info panel's lower half where See all sits.
+  await dismissActivityPanel(page);
   await activity.getByRole("button", { name: "See all" }).click();
   await expect(page).toHaveURL(new RegExp(`/activity/files/${id}$`));
   const history = page.locator('[data-slot="personal-activity"]');
