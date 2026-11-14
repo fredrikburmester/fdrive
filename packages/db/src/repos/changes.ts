@@ -1,6 +1,6 @@
-import { and, asc, eq, gt, sql } from "drizzle-orm";
+import { and, asc, eq, gt, inArray, sql } from "drizzle-orm";
 import type { Db } from "../index.js";
-import { changeCursors, changes, roots } from "../schema/idx.js";
+import { changeCursors, changeEpoch, changes, roots } from "../schema/idx.js";
 
 /** The `NOTIFY` channel a write to `idx.changes` wakes; the payload is the root's name. */
 export const CHANGES_CHANNEL = "idx_changes";
@@ -48,6 +48,8 @@ export interface ChangeInput {
 /** A row of the journal; `position` orders them. */
 export interface Change {
   readonly position: number;
+  /** The index root's name, which `path` is relative to. */
+  readonly root: string;
   readonly path: string;
   readonly targetPath: string | null;
   readonly source: ChangeSource;
@@ -83,10 +85,20 @@ export interface ChangeJournal {
    * Returns the rows dropped.
    */
   prune(): Promise<number>;
-  /** Up to `limit` rows of `root` after `after`, oldest first, and whether rows after it were pruned. */
-  read(root: string, after: number, limit: number): Promise<ChangePage>;
+  /**
+   * Up to `limit` rows of `root` (or of any of several roots) after `after`,
+   * oldest first, and whether rows after it were pruned. One statement, so
+   * the rows are every row after `after` up to the last one returned.
+   */
+  read(root: string | readonly string[], after: number, limit: number): Promise<ChangePage>;
   /** The newest position over every root; 0 before anything was written. A new consumer starts here. */
   end(): Promise<number>;
+  /**
+   * The journal's epoch, a random id created on first use and never backed
+   * up. It changes when positions start again (a restore into a new
+   * database), so a position handed to a client is only good with it.
+   */
+  epoch(): Promise<string>;
   /** Where `consumer` last saved its position for `root`, or `null`. */
   cursor(consumer: string, root: string): Promise<number | null>;
   /** Saves `consumer`'s position for `root`; nothing for an unknown root. */
@@ -152,32 +164,40 @@ export function createChangeJournal(db: Db): ChangeJournal {
     },
 
     async read(root, after, limit) {
+      const names = typeof root === "string" ? [root] : [...root];
+      const rows =
+        names.length === 0
+          ? []
+          : await db
+              .select({
+                position: changes.id,
+                root: roots.name,
+                path: changes.path,
+                targetPath: changes.targetPath,
+                source: changes.source,
+                sha256: changes.sha256,
+                size: changes.size,
+                mtimeNs: changes.mtimeNs,
+                inode: changes.inode,
+                ctimeNs: changes.ctimeNs,
+                createdAt: changes.createdAt,
+              })
+              .from(changes)
+              .innerJoin(roots, eq(roots.id, changes.rootId))
+              .where(and(inArray(roots.name, names), gt(changes.id, after)))
+              .orderBy(asc(changes.id))
+              .limit(limit);
+      // Looked up after the rows: rows pruned before the read then show as a
+      // gap, and a prune after it took nothing the read did not already see.
       const [bounds] = await db
         .select({ oldest: sql<string | null>`min(${changes.id})` })
         .from(changes);
       const oldest = bounds?.oldest == null ? null : Number(bounds.oldest);
-      const rows = await db
-        .select({
-          position: changes.id,
-          path: changes.path,
-          targetPath: changes.targetPath,
-          source: changes.source,
-          sha256: changes.sha256,
-          size: changes.size,
-          mtimeNs: changes.mtimeNs,
-          inode: changes.inode,
-          ctimeNs: changes.ctimeNs,
-          createdAt: changes.createdAt,
-        })
-        .from(changes)
-        .innerJoin(roots, eq(roots.id, changes.rootId))
-        .where(and(eq(roots.name, root), gt(changes.id, after)))
-        .orderBy(asc(changes.id))
-        .limit(limit);
       return {
         gap: oldest !== null && after < oldest - 1,
         changes: rows.map((row) => ({
           position: row.position,
+          root: row.root,
           path: row.path,
           targetPath: row.targetPath,
           source: row.source as ChangeSource,
@@ -192,6 +212,19 @@ export function createChangeJournal(db: Db): ChangeJournal {
         .select({ end: sql<string>`coalesce(max(${changes.id}), 0)` })
         .from(changes);
       return Number(row?.end ?? 0);
+    },
+
+    async epoch() {
+      const [existing] = await db.select({ epoch: changeEpoch.epoch }).from(changeEpoch);
+      if (existing !== undefined) return existing.epoch;
+      // Created on first use. Against a reader creating it at the same moment, the
+      // update returns the row that reader made, so both get the same epoch.
+      const [created] = await db
+        .insert(changeEpoch)
+        .values({})
+        .onConflictDoUpdate({ target: changeEpoch.single, set: { single: true } })
+        .returning({ epoch: changeEpoch.epoch });
+      return (created as { epoch: string }).epoch;
     },
 
     async cursor(consumer, root) {
