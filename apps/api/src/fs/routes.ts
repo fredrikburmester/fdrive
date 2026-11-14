@@ -28,6 +28,7 @@ import {
   extensionOf,
   type FileEntry,
   isInlinePreviewable,
+  isReservedPath,
   isStorageError,
   isUnderPath,
   mimeFromExtension,
@@ -51,7 +52,6 @@ import { deleteWithActivityReceipt } from "../activity/trash.js";
 import type { AppHono, AppVariables, AuthedHono } from "../app.js";
 import type { Principal, PrincipalVariables } from "../auth/principal.js";
 import { DEFAULT_JSON_MAX_BYTES } from "../config.js";
-import { DESKTOP_INTERNAL_ROOT } from "../desktop/internal-root.js";
 import { ApiHttpError } from "../errors.js";
 import type { EventBus } from "../events/bus.js";
 import type { JobRunner } from "../jobs/runner.js";
@@ -622,13 +622,10 @@ export function registerFsRoutes(
     // Comparison runs beside the response: it probes the provider, and a
     // listing is not worth slowing down to notice an outside change sooner.
     void deps.activityObservations?.refresh(principal, path, entries);
-    const trashPath = deps.trashPathForStorage?.(principal.storage);
-    // The provider-bound trash folder and the Mac app's bookkeeping namespace are fdrive's own;
-    // neither is a user folder, so the tree does not show them.
-    const visible = entries.filter((entry) => {
-      const entryPath = normalizeOrThrow(entry.path);
-      return entryPath !== trashPath && entryPath !== DESKTOP_INTERNAL_ROOT;
-    });
+    const trashPath = deps.trashPathForStorage?.(principal.storage) ?? null;
+    // fdrive's own folders (the Trash, the Mac app's folder) are not the
+    // user's, so the tree does not show them.
+    const visible = entries.filter((entry) => !isReservedPath(entry.path, trashPath));
     const serialized = visible.map(serializeEntry);
     const decorated =
       deps.metadata !== undefined

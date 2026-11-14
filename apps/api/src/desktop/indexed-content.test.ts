@@ -196,9 +196,10 @@ describe("version checks answered from the index", () => {
         (path, index) => [path, { ...STAMP, ino: BigInt(index + 1) }],
       ),
     );
+    const { contentStamp: _unstamped, ...withoutStamps } = raw;
     const storage: StorageProvider =
       options.stamps === false
-        ? raw
+        ? withoutStamps
         : {
             ...raw,
             contentStamp: async (path) => {

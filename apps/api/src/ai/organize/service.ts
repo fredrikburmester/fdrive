@@ -4,7 +4,7 @@ import {
   type OrganizeRequest,
   type OrganizeRun,
 } from "@fdrive/contracts";
-import { isStorageError, isUnderPath, normalizePath } from "@fdrive/core";
+import { isReservedPath, isStorageError, isUnderPath, normalizePath } from "@fdrive/core";
 import type { Principal } from "../../auth/principal.js";
 import { ApiHttpError } from "../../errors.js";
 import type { McpToolDeps } from "../../mcp/handlers.js";
@@ -106,8 +106,11 @@ export function createOrganizeService(deps: OrganizeServiceDeps): OrganizeServic
           throw new ApiHttpError("bad_request", `"${raw}" is not a valid path.`);
         }
         if (path === "/") throw new ApiHttpError("bad_request", "The drive root cannot be moved.");
-        if (trashPath !== null && (path === trashPath || isUnderPath(trashPath, path)))
-          throw new ApiHttpError("bad_request", "Items in Trash cannot be organized.");
+        if (isReservedPath(path, trashPath))
+          throw new ApiHttpError(
+            "bad_request",
+            "Items in Trash or fdrive's own folders cannot be organized.",
+          );
         if (!paths.includes(path)) paths.push(path);
       }
       // Moving a folder moves its contents too, so an item inside another selected folder is redundant.

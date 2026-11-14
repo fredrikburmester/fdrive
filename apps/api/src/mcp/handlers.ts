@@ -1,4 +1,10 @@
-import { isUnderPath, normalizePath, parseSearchFilters, type Scope, toFsPath } from "@fdrive/core";
+import {
+  isReservedPath,
+  normalizePath,
+  parseSearchFilters,
+  type Scope,
+  toFsPath,
+} from "@fdrive/core";
 import type {
   DuplicateGroup,
   FileFilter,
@@ -23,6 +29,7 @@ import {
   canOrganize,
   canReadPath,
   ordinaryPath,
+  RESERVED_MESSAGE,
   tokenScopes,
 } from "./access.ts";
 import { liveFileInfo, readFileTextDirect } from "./content.ts";
@@ -38,6 +45,7 @@ import {
 import type { IndexerExtractClient } from "./indexer-client.js";
 import {
   narrowScopePrefixes,
+  reservedExclusionOf,
   resolveScopeContext,
   type ScopeContext,
   virtualPathFor,
@@ -329,6 +337,7 @@ export async function findFilesInScope(
   const modifiedAfterNs = nsFromIso(args.modified_after);
   const modifiedBeforeNs = nsFromIso(args.modified_before);
   const filter: FileFilter = {
+    exclude: reservedExclusionOf(ctx),
     ...(args.name_contains !== undefined ? { nameContains: args.name_contains } : {}),
     ...(ext !== undefined ? { ext } : {}),
     ...(modifiedAfterNs !== undefined ? { modifiedAfterNs } : {}),
@@ -389,11 +398,12 @@ export interface ListDirectoryArgs {
  * Lists a folder directly through `principal.storage`, authorized by the
  * storage itself (the login's own and shared folders), independent of index
  * availability: this tool never consults `ScopeResolver` or `IndexQueries`.
- * A configured recycle folder is the one provider-backed location withheld
- * from ordinary browsing; direct requests into it fail before storage is
- * touched, and its entry is removed before pagination. The listing is taken
- * at the normalized path the Trash check ran against, never the raw
- * argument, so the folder read is always the one that was checked.
+ * fdrive's own folders (`isReservedPath`: the Trash, the Mac app's folder
+ * and the rest) are withheld from ordinary browsing; direct requests into
+ * one fail before storage is touched, and their entries are removed before
+ * pagination. The listing is taken at the normalized path that check ran
+ * against, never the raw argument, so the folder read is always the one
+ * that was checked.
  */
 export async function runListDirectory(
   deps: TrashPathDeps & Partial<Pick<McpToolDeps, "publicUrl">>,
@@ -404,20 +414,14 @@ export async function runListDirectory(
   if (!canBrowsePath(principal, path))
     throw new McpToolError("path is outside this token's allowed folders");
   const trashPath = currentTrashPath(deps, principal);
-  if (trashPath !== null && (path === trashPath || isUnderPath(trashPath, path))) {
-    throw new McpToolError("path is in the configured Trash folder");
+  if (isReservedPath(path, trashPath)) {
+    throw new McpToolError(RESERVED_MESSAGE);
   }
 
   const limit = Math.max(1, Math.min(args.limit ?? 300, 2000));
   const entries = await principal.storage.list(path);
-  const notTrashed =
-    trashPath === null
-      ? entries
-      : entries.filter((entry) => {
-          const entryPath = normalizePath(entry.path);
-          return entryPath !== trashPath && !isUnderPath(trashPath, entryPath);
-        });
-  const visible = notTrashed.filter((entry) =>
+  const ordinary = entries.filter((entry) => !isReservedPath(entry.path, trashPath));
+  const visible = ordinary.filter((entry) =>
     entry.kind === "dir"
       ? canBrowsePath(principal, entry.path)
       : canReadPath(principal, entry.path),
@@ -522,9 +526,8 @@ export async function runReadFileText(
 ) {
   if (principal.tokenAccess !== undefined) return readFileTextDirect(deps, principal, args);
   const path = normalizePath(args.path);
-  const trashPath = currentTrashPath(deps, principal);
-  if (trashPath !== null && (path === trashPath || isUnderPath(trashPath, path))) {
-    throw new McpToolError("path is in the configured Trash folder");
+  if (isReservedPath(path, currentTrashPath(deps, principal))) {
+    throw new McpToolError(RESERVED_MESSAGE);
   }
   const identity = await deps.identities.get(principal.identityId);
   const verified =
@@ -586,7 +589,9 @@ export async function fileInfoInScope(
   let identicalCopies: string[] = [];
   let partial = false;
   if (file.sha256 !== null) {
-    const copies = await deps.indexQueries.filesBySha256(ctx.scopePrefixes, file.sha256, file.id);
+    const copies = await deps.indexQueries.filesBySha256(ctx.scopePrefixes, file.sha256, file.id, {
+      exclude: reservedExclusionOf(ctx),
+    });
     const authorizedCopies = await authorizeIndexedFiles(ctx, authorizer, copies);
     identicalCopies = authorizedCopies.files
       .map((copy) => authorizedCopies.virtualPaths.get(copy.id))
@@ -701,6 +706,7 @@ export async function findDuplicatesInScope(
     prefixes,
     minSize,
     Math.max(1, Math.min(args.limit ?? 40, 200)),
+    { exclude: reservedExclusionOf(ctx) },
   );
 
   const { groups: mappedGroups, partial } = await authorizeDuplicateGroups(ctx, authorizer, groups);
@@ -771,6 +777,7 @@ export async function similarFilesInScope(
     file.id,
     ctx.scopePrefixes,
     Math.max(1, Math.min(args.limit ?? 10, 50)),
+    { exclude: reservedExclusionOf(ctx) },
   );
   if (similar.length === 0) {
     return { path: args.path, results: [] };
@@ -852,7 +859,7 @@ export async function folderOverviewInScope(
   const prefixDepth = pathDepth(args.path_prefix ?? "/");
   const { total, files: candidates } = await deps.indexQueries.listFiles(
     prefixes,
-    {},
+    { exclude: reservedExclusionOf(ctx) },
     "path",
     MAX_CANDIDATE_FILES,
   );
@@ -941,7 +948,7 @@ export async function indexStatsInScope(
 ) {
   const { total, files: candidates } = await deps.indexQueries.listFiles(
     ctx.scopePrefixes,
-    {},
+    { exclude: reservedExclusionOf(ctx) },
     "path",
     MAX_CANDIDATE_FILES,
   );
@@ -1047,10 +1054,7 @@ function assertWritablePath(
   const resolved = toFsPath(scopes, path);
   const virtualPath =
     resolved === null ? null : roundTripVirtualPath(scopes, resolved.rootName, resolved.fsPath);
-  if (
-    virtualPath === null ||
-    (trashPath !== null && (virtualPath === trashPath || isUnderPath(trashPath, virtualPath)))
-  ) {
+  if (virtualPath === null || isReservedPath(virtualPath, trashPath)) {
     throw new McpToolError(`${label} is outside this identity's scope`);
   }
   return virtualPath;
@@ -1209,6 +1213,7 @@ export async function recentMovesInScope(
     ctx.scopePrefixes,
     "mcp",
     Math.max(1, Math.min(args.limit ?? 50, 500)),
+    { exclude: reservedExclusionOf(ctx) },
   );
   const capped = rows.slice(0, MAX_CANDIDATE_FILES);
   let partial = rows.length > capped.length;

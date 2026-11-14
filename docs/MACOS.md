@@ -390,9 +390,9 @@ Rows are read under the location's verified index scopes ([scoping](SCOPING.md))
 row, its path and a move's target, is mapped from the root-relative path with the round trip
 index reads use, so folders shared with the login appear under `/Shared with me`, a path no scope
 covers or one a shared folder shadows is dropped, and so is anything the location's listings
-hide (Trash, `/.fdrive-desktop`, outside its grants). A row does not say whether it was a file or
-a folder, so each kept end is a changed **path**, below which the app lists every browsed folder
-and validates every download. Its parent and grandparent are changed **folders**: the parent's
+hide (fdrive's own folders such as Trash and `/.fdrive-desktop`, outside its grants). A row
+does not say whether it was a file or a folder, so each kept end is a changed **path**, below
+which the app lists every browsed folder and validates every download. Its parent and grandparent are changed **folders**: the parent's
 listing holds the path, and the grandparent's shows the parent's modification time, which is
 part of the version a Finder rename of that folder must match. Paths and folders inside another
 changed path are left out, and each appears once.

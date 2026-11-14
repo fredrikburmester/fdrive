@@ -1,5 +1,5 @@
-import { type Scope, toFsPath } from "@fdrive/core";
-import type { ScopePrefix } from "@fdrive/db";
+import { RESERVED_FOLDER_NAMES, reservedFolders, type Scope, toFsPath } from "@fdrive/core";
+import type { IndexExclusion, ScopePrefix } from "@fdrive/db";
 
 /**
  * Converts `mtimeNs` (nanoseconds since epoch, as the indexer stores it) to
@@ -19,19 +19,21 @@ export function toIndexRelativePath(fsPath: string): string {
 }
 
 /**
- * The login's Trash folder where the index keeps it: `trashPath` mapped
- * through the same scopes the search runs over, for the queries to leave out
- * before their limit. Empty without a Trash, or when no indexed root holds it.
+ * fdrive's own folders (`isReservedPath`) as the index keeps them, for a
+ * query over `scopes` to leave out before its limit: the folders
+ * `reservedFolders` names, mapped through the same scopes, and the folder
+ * names reserved wherever they lie. A folder no indexed root holds is left
+ * out of the prefixes; there is nothing of it to find.
  */
-export function trashExclusion(
+export function reservedExclusion(
   scopes: readonly Scope[],
   trashPath: string | null,
   rootIds: Readonly<Record<string, number>>,
-): ScopePrefix[] {
-  if (trashPath === null) {
-    return [];
-  }
-  const located = toFsPath(scopes, trashPath);
-  const rootId = located === null ? undefined : rootIds[located.rootName];
-  return located === null || rootId === undefined ? [] : [{ rootId, fsPrefix: located.fsPath }];
+): IndexExclusion {
+  const prefixes = reservedFolders(trashPath).flatMap((folder): ScopePrefix[] => {
+    const located = toFsPath(scopes, folder);
+    const rootId = located === null ? undefined : rootIds[located.rootName];
+    return located === null || rootId === undefined ? [] : [{ rootId, fsPrefix: located.fsPath }];
+  });
+  return { prefixes, names: RESERVED_FOLDER_NAMES };
 }

@@ -5,7 +5,13 @@ import type {
   OwnedGrant,
   UpdateGrantRequest,
 } from "@fdrive/contracts";
-import { isStorageError, joinPath, normalizePath, splitSegments } from "@fdrive/core";
+import {
+  isReservedPath,
+  isStorageError,
+  joinPath,
+  normalizePath,
+  splitSegments,
+} from "@fdrive/core";
 import type { Identity, LocalGrant, Repos } from "@fdrive/db";
 import { closedToShares, namedSharedGrants, SHARED_WITH_ME } from "@fdrive/local";
 import type { IdentityStorageFactory } from "../auth/storage-factory.js";
@@ -192,9 +198,8 @@ export function createLocalGrantService(deps: LocalGrantServiceDeps): LocalGrant
       if (splitSegments(path)[0] === SHARED_WITH_ME) {
         throw new ApiHttpError("bad_request", "a folder shared with you cannot be shared on");
       }
-      const trash = await deps.trashPathFor?.(identityId);
-      if (trash !== null && trash !== undefined && under(path, normalizePath(trash))) {
-        throw new ApiHttpError("bad_request", "Trash cannot be shared");
+      if (isReservedPath(path, (await deps.trashPathFor?.(identityId)) ?? null)) {
+        throw new ApiHttpError("bad_request", "fdrive's own folders, like Trash, cannot be shared");
       }
       const grantee = await repos.localUsers.get(request.username);
       if (grantee === null) throw new ApiHttpError("not_found", "no such user");

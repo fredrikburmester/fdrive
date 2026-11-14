@@ -15,7 +15,7 @@ describe("office opening and creation", () => {
     expect(a.actionUrl).toContain("https://app.test/onlyoffice/editor?");
     expect(a.formFields.access_token_ttl).toBe(String(h.clock().getTime() + 8 * 3600000));
     const before = (await (await h.callback(a)).json()) as { Version: string };
-    await h.storage.upload("/a.docx", Buffer.from("world"));
+    await h.storage.upload("/a.docx", Buffer.from("world"), { overwrite: true });
     await h.open();
     const after = (await (await h.callback(a)).json()) as { Version: string; Size: number };
     expect(before.Version).not.toBe(after.Version);
@@ -104,7 +104,7 @@ describe("office opening and creation", () => {
       expect(created.path).toBe(`/New.${ext}`);
       const bytes = await new Response((await h.storage.download(created.path)).body).arrayBuffer();
       expect(Buffer.from(bytes).subarray(0, 2).toString()).toBe("PK");
-      await expect(h.service.create(input, request)).rejects.toMatchObject({ status: 409 });
+      await expect(h.service.create(input, request)).rejects.toMatchObject({ kind: "conflict" });
       expect(h.events.at(-1)?.type).toBe("fs");
     },
   );
@@ -123,20 +123,12 @@ describe("office opening and creation", () => {
       expect.anything(),
       expect.objectContaining({ overwrite: false }),
     );
-    // A writer outside fdrive takes the name between the check and the
-    // publish: the storage refuses it, and nothing is overwritten.
+    // A name taken by a writer outside fdrive is refused, and nothing is overwritten.
     upload.mockRejectedValueOnce(new StorageError("conflict", "exists"));
     await expect(h.service.create(input, { parent: "/", name: "Race.docx" })).rejects.toMatchObject(
       { kind: "conflict" },
     );
     await expect(h.storage.statFile("/Race.docx")).rejects.toMatchObject({ kind: "not_found" });
-    const stat = vi
-      .spyOn(h.storage, "statFile")
-      .mockResolvedValueOnce({ size: 1, modifiedAt: null, contentType: null });
-    await expect(
-      h.service.create(input, { parent: "/", name: "Taken.docx" }),
-    ).rejects.toMatchObject({ status: 409 });
-    stat.mockRestore();
   });
   it("preserves storage denial and directory collisions", async () => {
     const h = await officeHarness();
@@ -152,7 +144,13 @@ describe("office opening and creation", () => {
         "/directory.docx",
       ),
     ).toBe(true);
-    vi.spyOn(h.storage, "statFile").mockRejectedValue(new StorageError("forbidden", "private"));
+    await expect(
+      h.service.create(
+        { principal: h.alice.principal, sessionId: h.alice.sessionId },
+        { parent: "/", name: "directory.docx" },
+      ),
+    ).rejects.toMatchObject({ kind: "conflict" });
+    vi.spyOn(h.storage, "upload").mockRejectedValue(new StorageError("forbidden", "private"));
     await expect(
       h.service.create(
         { principal: h.alice.principal, sessionId: h.alice.sessionId },
@@ -296,7 +294,9 @@ describe("WOPI reads", () => {
   it("enforces configured max and detects a larger actual download", async () => {
     const h = await officeHarness({ config: { maxBytes: 5 } });
     const opened = await h.open();
-    await h.storage.upload("/a.docx", Buffer.from("longer"));
+    await h.storage.upload("/a.docx", Buffer.from("longer"), { overwrite: true });
+    // A document past the limit does not open, and an open one is not served.
+    await expect(h.open()).rejects.toMatchObject({ status: 413 });
     expect((await h.callback(opened, { contents: true })).status).toBe(413);
     vi.spyOn(h.storage, "statFile").mockResolvedValue({
       size: 5,
@@ -322,9 +322,7 @@ describe("WOPI reads", () => {
     const content = await h.callback(opened, { contents: true });
     expect(content.headers.get("Content-Type")).toBe("text/plain");
     expect(await content.text()).toBe("hello");
-    const info = (await (await h.callback(opened)).json()) as { LastModifiedTime?: string };
-    expect(info.LastModifiedTime).toBeUndefined();
-    vi.spyOn(h.storage, "download").mockRejectedValue(new Error("private"));
+    vi.spyOn(h.storage, "contentStamp").mockRejectedValue(new Error("private"));
     expect((await h.callback(opened)).status).toBe(500);
   });
   it("returns 501 for unsupported methods", async () => {

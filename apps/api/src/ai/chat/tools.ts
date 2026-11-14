@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { baseName, extensionOf, isUnderPath, normalizePath, parentPath } from "@fdrive/core";
+import { baseName, extensionOf, isReservedPath, normalizePath, parentPath } from "@fdrive/core";
 import { z } from "zod";
 import { boundedBytes, decodeText, MAX_FILE_BYTES } from "../../mcp/content.js";
 import { pageText } from "../../mcp/format.js";
@@ -48,9 +48,8 @@ async function storedArg(deps: DriveToolsDeps, path: string): Promise<string> {
 /** The stored path of a referenced item, or a tool error the model can act on. */
 export async function referencedArg(deps: DriveToolsDeps, raw: string): Promise<string> {
   const path = await storedArg(deps, raw);
-  const trashPath = trashPathOf(deps);
-  if (trashPath !== null && (path === trashPath || isUnderPath(trashPath, path)))
-    throw new AiToolError("That path is in the Trash.");
+  if (isReservedPath(path, trashPathOf(deps)))
+    throw new AiToolError("That path is in fdrive's own folders, like the Trash.");
   if (!isWithin(deps.focus.paths, path))
     throw new AiToolError(
       `${path} is not ${deps.focus.adjective}; only ${deps.focus.adjective} items and their contents can be used. Ask the person to open its folder or add it to the chat.`,

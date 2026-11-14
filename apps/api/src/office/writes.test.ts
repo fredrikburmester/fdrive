@@ -204,7 +204,7 @@ describe("PutFile", () => {
       ).status,
     ).toBe(403);
     upload.mockRestore();
-    vi.spyOn(h.storage, "download").mockRejectedValueOnce(new Error("readback"));
+    vi.spyOn(h.storage, "contentStamp").mockRejectedValueOnce(new Error("readback"));
     expect(
       (
         await h.callback(opened, {
@@ -345,6 +345,25 @@ describe("PutRelative", () => {
 });
 
 describe("RenameFile", () => {
+  it("refuses a taken name from the storage's own refusal and passes other failures on", async () => {
+    const h = await officeHarness();
+    const opened = await h.open();
+    const rename = () =>
+      h.callback(opened, {
+        method: "POST",
+        headers: { "X-WOPI-Override": "RENAME_FILE", "X-WOPI-RequestedName": "plain" },
+      });
+    const move = vi.spyOn(h.storage, "move");
+    move.mockRejectedValueOnce(new StorageError("conflict", "exists"));
+    const taken = await rename();
+    expect(taken.status).toBe(400);
+    expect(taken.headers.get("X-WOPI-InvalidFileNameError")).toBe("Name already exists");
+    expect(move).toHaveBeenCalledWith("/a.docx", "/plain.docx", { overwrite: false });
+    move.mockRejectedValueOnce(new StorageError("forbidden", "private"));
+    expect((await rename()).status).toBe(403);
+    expect((await h.files.get(opened.fileId))?.path).toBe("shared/a.docx");
+    expect(h.events).toHaveLength(0);
+  });
   it("preserves UUID, extension, tags and favorites when renaming Unicode", async () => {
     const h = await officeHarness();
     const opened = await h.open();
@@ -424,33 +443,8 @@ describe("RenameFile", () => {
 });
 
 describe("save-copy collision races", () => {
-  it.each([true, false])("rechecks suggested=%s immediately before upload", async (suggested) => {
-    const h = await officeHarness();
-    const opened = await h.open();
-    const original = h.storage.statFile.bind(h.storage);
-    let calls = 0;
-    vi.spyOn(h.storage, "statFile").mockImplementation(async (path) => {
-      if (path === "/race.docx") {
-        calls++;
-        if (calls === 1) throw new StorageError("not_found", "missing");
-        return { size: 1, modifiedAt: null, contentType: null };
-      }
-      return original(path);
-    });
-    const response = await h.callback(opened, {
-      method: "POST",
-      headers: {
-        "X-WOPI-Override": "PUT_RELATIVE",
-        [suggested ? "X-WOPI-SuggestedTarget" : "X-WOPI-RelativeTarget"]: "race.docx",
-      },
-      body: "new",
-    });
-    expect(response.status).toBe(suggested ? 200 : 409);
-    if (suggested)
-      expect((await response.json()) as unknown).toMatchObject({ Name: "race (1).docx" });
-  });
   it.each([true, false])(
-    "refuses a name taken after the recheck, suggested=%s, without overwriting it",
+    "refuses a name taken after the check, suggested=%s, without overwriting it",
     async (suggested) => {
       const h = await officeHarness();
       const opened = await h.open();
@@ -487,7 +481,7 @@ describe("save-copy collision races", () => {
       body: "new",
     });
     expect(response.status).toBe(200);
-    expect(upload.mock.calls.at(-1)?.[2]).not.toHaveProperty("overwrite");
+    expect(upload.mock.calls.at(-1)?.[2]).toMatchObject({ overwrite: true });
   });
   it("bounds repeated suggested-name collisions", async () => {
     const h = await officeHarness();
@@ -520,7 +514,7 @@ it("retains extension case during rename", async () => {
   expect((await h.files.get(opened.fileId))?.path).toBe("shared/Renamed.DOCX");
 });
 
-it("rejects a chunked oversized save before the upstream file is touched", async () => {
+it("refuses a chunked oversized save without touching the document", async () => {
   const h = await officeHarness({ config: { maxBytes: 5 } });
   const opened = await h.open();
   await h.locks.apply({
@@ -529,7 +523,6 @@ it("rejects a chunked oversized save before the upstream file is touched", async
     lockId: "writer",
     now: h.clock(),
   });
-  const upload = vi.spyOn(h.storage, "upload");
   const response = await h.callback(opened, {
     contents: true,
     method: "POST",
@@ -543,16 +536,16 @@ it("rejects a chunked oversized save before the upstream file is touched", async
     }),
   });
   expect(response.status).toBe(413);
-  expect(upload).not.toHaveBeenCalled();
   expect(await new Response((await h.storage.download("/a.docx")).body).text()).toBe("hello");
+  expect(h.events).toHaveLength(0);
 });
 
-it("keeps scoped writes on scoped repositories and runs metadata only after commit", async () => {
+it("keeps lock and move work on the scope, ensures on its own and runs metadata after commit", async () => {
   const h = await officeHarness();
   const scopedFiles = { ...h.files };
   const scopedLocks = { ...h.locks };
   let inScope = false;
-  vi.spyOn(h.deps, "withWriteScope").mockImplementation(async (_providerId, callback) => {
+  vi.spyOn(h.deps, "withWriteScope").mockImplementation(async (callback) => {
     inScope = true;
     try {
       return await callback({ files: scopedFiles, locks: scopedLocks });
@@ -560,10 +553,9 @@ it("keeps scoped writes on scoped repositories and runs metadata only after comm
       inScope = false;
     }
   });
-  vi.spyOn(h.files, "ensure").mockImplementation(async (input) => {
-    expect(inScope).toBe(false);
-    return scopedFiles.ensure(input);
-  });
+  // Ensured on its own transaction: on the scope it would hold the registry's
+  // lock for the whole root until the document is written.
+  const ensure = vi.spyOn(scopedFiles, "ensure");
   vi.spyOn(h.files, "movePrefix").mockImplementation(async (input) => {
     expect(inScope).toBe(false);
     return scopedFiles.movePrefix(input);
@@ -608,6 +600,7 @@ it("keeps scoped writes on scoped repositories and runs metadata only after comm
     ).status,
   ).toBe(200);
   expect(metadata).toHaveBeenCalledOnce();
+  expect(ensure).not.toHaveBeenCalled();
 });
 
 it("saves a queued PUT to the current registry path after an earlier rename", async () => {
@@ -619,16 +612,16 @@ it("saves a queued PUT to the current registry path after an earlier rename", as
   const release = writeBarrier();
   const withWriteScope = h.deps.withWriteScope;
   let calls = 0;
-  vi.spyOn(h.deps, "withWriteScope").mockImplementation(async (provider, callback) => {
-    const first = calls++ === 0;
-    if (!first) queued.resolve();
-    return withWriteScope(provider, async (scope) => {
-      if (first) {
-        entered.resolve();
-        await release.promise;
-      }
-      return callback(scope);
-    });
+  vi.spyOn(h.deps, "withWriteScope").mockImplementation(async (callback) => {
+    if (calls++ > 0) queued.resolve();
+    return withWriteScope(callback);
+  });
+  // The rename holds the document's lock while its move waits.
+  const move = h.storage.move.bind(h.storage);
+  vi.spyOn(h.storage, "move").mockImplementationOnce(async (...args) => {
+    entered.resolve();
+    await release.promise;
+    return move(...args);
   });
   const renamed = h.callback(opened, {
     method: "POST",
@@ -663,21 +656,23 @@ it("denies a PUT queued behind deletion without recreating its old path", async 
   const release = writeBarrier();
   const queued = writeBarrier();
   const withWriteScope = h.deps.withWriteScope;
-  const deletion = withWriteScope(h.provider.id, async (scope) => {
-    entered.resolve();
-    await release.promise;
-    await h.storage.deleteFile("/a.docx");
-    await scope.files.deletePrefix({
-      providerId: h.provider.id,
-      rootName: "files",
-      path: "shared/a.docx",
-      at: h.clock(),
-    });
-  });
+  const deletion = withWriteScope((scope) =>
+    scope.locks.withFileLock(opened.fileId, async () => {
+      entered.resolve();
+      await release.promise;
+      await h.storage.deleteFile("/a.docx");
+      await scope.files.deletePrefix({
+        providerId: h.provider.id,
+        rootName: "files",
+        path: "shared/a.docx",
+        at: h.clock(),
+      });
+    }),
+  );
   await entered.promise;
-  vi.spyOn(h.deps, "withWriteScope").mockImplementation((provider, callback) => {
+  vi.spyOn(h.deps, "withWriteScope").mockImplementation((callback) => {
     queued.resolve();
-    return withWriteScope(provider, callback);
+    return withWriteScope(callback);
   });
   const saved = h.callback(opened, {
     method: "POST",
@@ -705,8 +700,8 @@ it.each(["RENAME_FILE", "PUT_RELATIVE"])(
       now: h.clock(),
     });
     const withWriteScope = h.deps.withWriteScope;
-    vi.spyOn(h.deps, "withWriteScope").mockImplementation((provider, callback) =>
-      withWriteScope(provider, async (scope) => {
+    vi.spyOn(h.deps, "withWriteScope").mockImplementation((callback) =>
+      withWriteScope(async (scope) => {
         await h.storage.move("/a.docx", "/folder/current.DOCX");
         await scope.files.movePrefix({
           providerId: h.provider.id,
@@ -862,4 +857,50 @@ describe("editor writes in personal history", () => {
     expect(h.activity.operations.map((row) => row.action)).toEqual(["file.open"]);
     expect(await new Response((await h.storage.download("/a.docx")).body).text()).toBe("hello");
   });
+});
+
+it("saves different documents side by side and one document's saves in turn", async () => {
+  const h = await officeHarness();
+  const a = await h.open("/a.docx");
+  const b = await h.open("/plain");
+  for (const opened of [a, b])
+    await h.locks.apply({ fileId: opened.fileId, operation: "lock", lockId: "w", now: h.clock() });
+  const log: string[] = [];
+  const upload = h.storage.upload.bind(h.storage);
+  vi.spyOn(h.storage, "upload").mockImplementation(async (path, body, options) => {
+    log.push(`start ${path}`);
+    await upload(path, body, options);
+    log.push(`end ${path}`);
+  });
+  const save = (opened: typeof a, body: string | ReadableStream<Uint8Array>) =>
+    h.callback(opened, {
+      contents: true,
+      method: "POST",
+      headers: { "X-WOPI-Override": "PUT", "X-WOPI-Lock": "w" },
+      body,
+    });
+  const release = writeBarrier();
+  const reading = writeBarrier();
+  let pulls = 0;
+  const first = save(
+    a,
+    new ReadableStream<Uint8Array>({
+      async pull(controller) {
+        if (pulls++ > 0) {
+          reading.resolve();
+          await release.promise;
+          controller.close();
+        } else controller.enqueue(new TextEncoder().encode("first"));
+      },
+    }),
+  );
+  await reading.promise;
+  const second = save(a, "second");
+  expect((await save(b, "other")).status).toBe(200);
+  expect(log).toEqual(["start /a.docx", "start /plain", "end /plain"]);
+  release.resolve();
+  expect((await first).status).toBe(200);
+  expect((await second).status).toBe(200);
+  expect(log.slice(3)).toEqual(["end /a.docx", "start /a.docx", "end /a.docx"]);
+  expect(await new Response((await h.storage.download("/a.docx")).body).text()).toBe("second");
 });
