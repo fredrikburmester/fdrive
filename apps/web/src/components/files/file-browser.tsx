@@ -61,6 +61,7 @@ import { buildDownloadDeps } from "@/lib/files/download-deps";
 import { useFolderView } from "@/lib/files/folder-view-queries";
 import { readInspectorOpen, writeInspectorOpen } from "@/lib/files/inspector-visibility";
 import { keyToAction } from "@/lib/files/keyboard";
+import { isLink } from "@/lib/files/links";
 import {
   DEFAULT_SHOW_THUMBNAILS,
   readShowThumbnails,
@@ -261,7 +262,16 @@ export function FileBrowser({
     [treeRows],
   );
   const displayEntries = viewMode === "tree" ? treeRows.map((row) => row.entry) : sortedEntries;
-  const orderedPaths = useMemo(() => displayEntries.map((entry) => entry.path), [displayEntries]);
+  // What selection, select-all, the arrow keys and type-ahead move through: a link is shown,
+  // never selected.
+  const selectableEntries = useMemo(
+    () => displayEntries.filter((entry) => !isLink(entry)),
+    [displayEntries],
+  );
+  const orderedPaths = useMemo(
+    () => selectableEntries.map((entry) => entry.path),
+    [selectableEntries],
+  );
 
   const [sharing, setSharing] = useState<FsEntry[] | null>(null);
   const [sharingWithPeople, setSharingWithPeople] = useState<FsEntry | null>(null);
@@ -801,7 +811,7 @@ export function FileBrowser({
       typeAheadRef.current = buffer;
       const currentIndex = selection.focus === null ? -1 : orderedPaths.indexOf(selection.focus);
       const matchIndex = typeAheadMatch(
-        displayEntries.map((entry) => entry.name),
+        selectableEntries.map((entry) => entry.name),
         buffer.query,
         currentIndex + 1,
       );

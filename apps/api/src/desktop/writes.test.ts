@@ -1124,9 +1124,10 @@ it("bounds Trash listings and surfaces upstream failures instead of returning an
     .spyOn(f.storage, "stat")
     .mockRejectedValueOnce(new StorageError("upstream_unavailable", "Offline"));
   await expect(f.service.list(f.principal, DESKTOP_TRASH, "token")).rejects.toThrow("Offline");
-  denied.mockImplementation(async (path) =>
-    path.endsWith(`/${original.id}`) ? { ...(await stat(path)), kind: "symlink" } : stat(path),
-  );
+  denied.mockImplementation(async (path) => {
+    if (path.endsWith(`/${original.id}`)) throw new StorageError("forbidden", "a link");
+    return stat(path);
+  });
   await expect(f.service.stat(f.principal, result.path)).rejects.toMatchObject({
     kind: "forbidden",
   });
@@ -1866,11 +1867,10 @@ it("bounds folder checks by size and access, and fails on upstream outages", asy
     { path: "/folder", status: "changed" },
   ]);
   const stat = f.storage.stat.bind(f.storage);
-  const link = vi
-    .spyOn(f.storage, "stat")
-    .mockImplementation(async (path) =>
-      path === "/folder" ? { ...(await stat(path)), kind: "symlink" } : stat(path),
-    );
+  const link = vi.spyOn(f.storage, "stat").mockImplementation(async (path) => {
+    if (path === "/folder") throw new StorageError("forbidden", "a link");
+    return stat(path);
+  });
   expect((await f.service.check(f.principal, ask("/folder"), signal)).folders).toEqual([
     { path: "/folder", status: "forbidden" },
   ]);

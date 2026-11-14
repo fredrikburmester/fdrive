@@ -253,9 +253,10 @@ describe("createLocalModule", () => {
     expect(await kindOf(bob().upload(`/${SHARED_WITH_ME}/1/x`, bytes("x")))).toBe("forbidden");
     expect(await kindOf(bob().list(`/${SHARED_WITH_ME}/Bin link`))).toBe("forbidden");
 
-    // Trash turned off: what is still in fdrive's Trash layout stays out of reach.
+    // Trash turned off: what is still in fdrive's Trash layout stays out of reach, and a
+    // link stays a link.
     closedFolders.mockResolvedValue([]);
-    expect(await shelf()).toEqual(["Bin link", "Projects", "loose"]);
+    expect(await shelf()).toEqual(["Projects", "loose"]);
   });
 
   it("asks for the closed folders only when something is shared", async () => {

@@ -311,6 +311,21 @@ def test_resolve_target_path_refuses_a_parent_symlinked_out_of_the_root(tmp_path
     assert restore.resolve_target_path(str(root), "docs/a.pdf") is not None
 
 
+def test_resolve_target_path_refuses_a_parent_through_any_symlink_below_the_root(tmp_path: Path) -> None:
+    real = tmp_path / "real"
+    (real / "docs").mkdir(parents=True)
+    (real / ".trash").mkdir()
+    (real / "bin").symlink_to(real / ".trash")
+    (real / "alias").symlink_to(real / "docs")
+    # The root itself may be a link, as the deployment set it up.
+    root = tmp_path / "root"
+    root.symlink_to(real)
+    assert restore.resolve_target_path(str(root), "bin/a.pdf") is None
+    assert restore.resolve_target_path(str(root), "alias/a.pdf") is None
+    assert restore.resolve_target_path(str(root), "docs/a.pdf") == os.path.join(root, "docs", "a.pdf")
+    assert restore.resolve_target_path(str(root), "a.pdf") == os.path.join(root, "a.pdf")
+
+
 # -- legacy originals ------------------------------------------------------------------
 
 

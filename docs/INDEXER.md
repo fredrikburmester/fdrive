@@ -38,7 +38,7 @@ Every regular file under a configured root, except:
   embeddings; every index read leaves it out instead (see [search](SEARCH-AND-AI.md)).
 
 A walk (a scan, a queued folder, a folder the watcher saw appear) never follows a link below
-its starting folder. On network and FUSE storage such as Unraid's `/mnt/user` every look at a
+its starting folder, and the watcher never watches or indexes one. On network and FUSE storage such as Unraid's `/mnt/user` every look at a
 folder or file is a round trip, so while the walking thread works through one folder, eight
 reader threads (`walk.rs`) list and look at the folders that come next. Files still arrive
 in one order: a folder's files by lowercase name, then each of its folders, depth first. A

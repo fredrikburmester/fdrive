@@ -1211,6 +1211,36 @@ mod linux {
         }
 
         #[test]
+        fn never_watches_walks_or_indexes_through_a_link() {
+            let tmp = tempfile::tempdir().unwrap();
+            let elsewhere = tempfile::tempdir().unwrap();
+            fs::create_dir(tmp.path().join("real")).unwrap();
+            fs::create_dir(elsewhere.path().join("outside")).unwrap();
+            fs::write(elsewhere.path().join("outside/secret.txt"), "secret").unwrap();
+            // Links present when watching starts, to a folder inside the root and one outside it.
+            std::os::unix::fs::symlink(tmp.path().join("real"), tmp.path().join("alias")).unwrap();
+            std::os::unix::fs::symlink(elsewhere.path().join("outside"), tmp.path().join("out")).unwrap();
+            let rec = Arc::new(Recorder::new(tmp.path()));
+            let w = started(tmp.path(), &rec, 0.2);
+            assert_eq!(w.dirs(), 2);
+            assert!(!w.inner.add_watch(&tmp.path().join("alias")));
+            assert!(w.inner.add_tree(&tmp.path().join("out"), true).is_empty());
+            // Links that arrive while watching, to a folder and to a file.
+            for (target, name) in [("outside", "moved-in"), ("outside/secret.txt", "leak.txt")] {
+                let staged = elsewhere.path().join(name);
+                std::os::unix::fs::symlink(elsewhere.path().join(target), &staged).unwrap();
+                fs::rename(&staged, tmp.path().join(name)).unwrap();
+            }
+            // A change made through a link is heard at its real path only.
+            fs::write(tmp.path().join("alias/b.txt"), "b").unwrap();
+            assert!(wait_until(|| rec.indexed() == ["real/b.txt"]));
+            std::thread::sleep(Duration::from_millis(700));
+            assert_eq!(rec.indexed(), ["real/b.txt"]);
+            assert!(lock(&rec.folders).is_empty());
+            assert_eq!(w.dirs(), 2);
+        }
+
+        #[test]
         fn add_watch_of_a_missing_path_fails_quietly() {
             let tmp = tempfile::tempdir().unwrap();
             let rec = Arc::new(Recorder::new(tmp.path()));

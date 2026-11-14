@@ -1,4 +1,3 @@
-import { stat } from "node:fs/promises";
 import { basename } from "node:path";
 import {
   type FileEntry,
@@ -30,16 +29,13 @@ export interface SharedFolder {
   readonly name: string;
   /** The shared folder on disk. */
   readonly dir: string;
-  /** Its owner's home, which `dir` must really be inside. */
+  /**
+   * Its owner's home, which `dir` is a folder in: the folder is reached from
+   * it as any path is, so a symbolic link on the way to it is refused.
+   */
   readonly ownerHome: string;
   /** Whether the user may change what is in it. */
   readonly writable: boolean;
-  /**
-   * Folders on disk in its owner's files that no share reaches
-   * (`closedToShares`). A shared folder really inside one, links resolved,
-   * is left out of `Shared with me` and refused.
-   */
-  readonly closed?: readonly string[];
 }
 
 /** One folder shared with a user, before it has a name in their files. */
@@ -143,7 +139,8 @@ const SHELF_PATH = `/${SHARED_WITH_ME}`;
 /**
  * A user's files: their own home, plus `/Shared with me/<name>` for every
  * folder another user shares with them. Paths under a shared folder reach
- * the owner's folder on disk, confined to it like a home; a read-only one
+ * the owner's folder on disk, confined to it like a home, and one whose own
+ * path passes through a symbolic link is refused; a read-only one
  * refuses every change. `Shared with me` itself and the shared folders in
  * it cannot be renamed, moved or deleted here (their owner removes the
  * share), and nothing else can be added to it. A move or copy between the
@@ -168,13 +165,7 @@ export function createUserStorage(options: UserStorageOptions): UserStorage {
   function mountStorage(folder: SharedFolder): LocalStorage {
     let storage = mounts.get(folder.name);
     if (storage === undefined) {
-      storage = createLocalStorage({
-        home: folder.dir,
-        create: false,
-        within: folder.ownerHome,
-        ...(folder.closed === undefined ? {} : { outside: folder.closed }),
-        ...heard,
-      });
+      storage = createLocalStorage({ home: folder.dir, within: folder.ownerHome, ...heard });
       mounts.set(folder.name, storage);
     }
     return storage;
@@ -227,13 +218,14 @@ export function createUserStorage(options: UserStorageOptions): UserStorage {
 
   /**
    * When a shared folder last changed, or `null` when it cannot be read: its
-   * owner removed it, or it is no longer a folder. Such a share is left out
-   * of `Shared with me` rather than failing the whole listing.
+   * owner removed it, it is no longer a folder, or a symbolic link is on the
+   * way to it. Such a share is left out of `Shared with me` rather than
+   * failing the whole listing.
    */
   async function folderTime(folder: SharedFolder): Promise<Date | null> {
     try {
-      const info = await stat(await mountStorage(folder).home.real());
-      return info.isDirectory() ? info.mtime : null;
+      const info = await mountStorage(folder).stat("/");
+      return info.kind === "dir" ? info.modifiedAt : null;
     } catch {
       return null;
     }
@@ -347,11 +339,10 @@ export function createUserStorage(options: UserStorageOptions): UserStorage {
         return;
       }
       await mapped(path, async () => {
-        const entry = await source.storage.home.entry(source.rel);
-        if (entry === (await source.storage.home.real())) {
-          throw new StorageError("not_found", `not found: ${path}`);
-        }
-        const to = await destination.storage.home.entry(destination.rel);
+        // Only the user's own home can be the source's top: a shared one is fixed.
+        if (source.rel === "/") throw new StorageError("not_found", `not found: ${path}`);
+        const entry = (await source.storage.home.locate(source.rel)).at;
+        const to = (await destination.storage.home.locate(destination.rel)).at;
         await moveEntry(entry, to, { path, target }, opts);
         notify(listener, { kind: "moved", path: entry, target: to });
       });
@@ -369,8 +360,9 @@ export function createUserStorage(options: UserStorageOptions): UserStorage {
         if (from.kind === "own" && from.rel === "/") {
           throw new StorageError("not_found", `not found: ${path}`);
         }
-        const to = await destination.storage.home.entry(destination.rel);
-        await copyEntry(await from.storage.home.target(from.rel), to, { path, target }, opts);
+        const source = (await from.storage.home.locate(from.rel)).at;
+        const to = (await destination.storage.home.locate(destination.rel)).at;
+        await copyEntry(source, to, { path, target }, opts);
         notify(listener, { kind: "changed", path: to });
       });
     },
@@ -414,7 +406,7 @@ export function createUserStorage(options: UserStorageOptions): UserStorage {
           for (const folder of await folders()) {
             if ((await folderTime(folder)) === null) continue;
             items.push({
-              at: await mountStorage(folder).home.real(),
+              at: (await mapped(path, () => mountStorage(folder).home.locate("/"))).at,
               name: `${SHARED_WITH_ME}/${folder.name}`,
             });
           }
@@ -422,7 +414,7 @@ export function createUserStorage(options: UserStorageOptions): UserStorage {
         }
         const name = at.kind === "mount" && at.rel === "/" ? at.folder.name : basename(at.rel);
         items.push({
-          at: await mapped(path, () => at.storage.home.target(at.rel)),
+          at: (await mapped(path, () => at.storage.home.locate(at.rel))).at,
           name,
         });
       }

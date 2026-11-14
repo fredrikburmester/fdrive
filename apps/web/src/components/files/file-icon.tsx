@@ -5,6 +5,7 @@ import {
   FileTextIcon,
   FolderIcon,
   ImageIcon,
+  LinkIcon,
   MusicIcon,
   PresentationIcon,
   TableIcon,
@@ -23,6 +24,7 @@ const ICONS = {
   code: FileCodeIcon,
   presentation: PresentationIcon,
   table: TableIcon,
+  link: LinkIcon,
   file: FileGenericIcon,
 } as const;
 

@@ -28,7 +28,9 @@ Current implementation reference. Unfinished work belongs in [plans](plans/READM
 - fdrive serves a folder on its own disk (`FDRIVE_STORAGE_ROOT`, one home per user at
   `<root>/<username>`, plain files) and keeps its own users. That files folder is the only
   storage. Its plain files stay authoritative: fdrive keeps no database of their contents, and
-  writers outside fdrive (OCR, rsync, SMB, Syncthing) may change them. The API reaches it
+  writers outside fdrive (OCR, rsync, SMB, Syncthing) may change them. fdrive never creates a
+  symbolic link and never follows one: storage refuses a path through a link for every caller,
+  and the indexer and OCR skip links. The API reaches it
   through the internal [storage port](STORAGE-PROVIDERS.md), and every login carries
   capability flags (`ProviderCapabilities`) that decide what the UI offers and the API
   accepts. Without `FDRIVE_STORAGE_ROOT` the deployment has no storage and setup refuses to

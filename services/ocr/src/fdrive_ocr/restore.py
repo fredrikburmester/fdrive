@@ -288,8 +288,8 @@ def resolve_target_path(root_abs: str, rel_path: str) -> str | None:
     """Joins a recorded relative path onto its root, refusing anything that does
     not stay inside it. The sidecar is service-written, but it is also the only
     caller-reachable path input here, so containment is enforced rather than
-    assumed: absolute paths, `..` traversal, and a parent directory that resolves
-    through a symlink out of the root are all rejected."""
+    assumed: absolute paths, `..` traversal, and a parent directory reached
+    through a symlink below the root, wherever it leads, are all rejected."""
     if not rel_path or rel_path.startswith("/") or "\0" in rel_path:
         return None
     root_normalized = os.path.normpath(root_abs)
@@ -297,8 +297,8 @@ def resolve_target_path(root_abs: str, rel_path: str) -> str | None:
     if candidate != root_normalized and not candidate.startswith(root_normalized + os.sep):
         return None
     root_real = os.path.realpath(root_normalized)
-    parent_real = os.path.realpath(os.path.dirname(candidate))
-    if parent_real != root_real and not parent_real.startswith(root_real + os.sep):
+    parent = os.path.relpath(os.path.dirname(candidate), root_normalized)
+    if os.path.realpath(os.path.dirname(candidate)) != os.path.normpath(os.path.join(root_real, parent)):
         return None
     return candidate
 

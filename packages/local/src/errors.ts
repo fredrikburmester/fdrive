@@ -17,8 +17,9 @@ const CODE_KINDS: Readonly<Record<string, StorageErrorKind>> = {
   EISDIR: "bad_request",
   EINVAL: "bad_request",
   ENAMETOOLONG: "bad_request",
-  ELOOP: "bad_request",
   ERR_FS_CP_EINVAL: "bad_request",
+  // Only a symbolic link gives it, and storage never follows one.
+  ELOOP: "forbidden",
   EACCES: "forbidden",
   EPERM: "forbidden",
   EROFS: "forbidden",

@@ -1,4 +1,6 @@
+import { mkdir, rm, symlink, writeFile } from "node:fs/promises";
 import { expect, type Page, test } from "@playwright/test";
+import { homePath } from "./support/local-folder.js";
 import { breadcrumb, listing } from "./support/regions.js";
 import { uniqueName } from "./support/unique.js";
 import { createViewFolder } from "./support/view-folder.js";
@@ -180,4 +182,33 @@ test("a very long folder name never widens the page past the viewport", async ({
 
   await page.getByRole("link", { name: "Home" }).click();
   await deleteEntry(page, name);
+});
+
+test("a symbolic link left by a writer outside fdrive shows as a quiet row nothing can open", async ({
+  page,
+}) => {
+  const folder = uniqueName("links");
+  await mkdir(homePath("alice", `/${folder}`), { recursive: true });
+  await writeFile(homePath("alice", `/${folder}/kept.txt`), "kept");
+  await symlink(homePath("alice", "/.trash"), homePath("alice", `/${folder}/bin`));
+  try {
+    await page.goto(`/files/${folder}`);
+    const link = listing(page).locator(`[data-path="/${folder}/bin"]`);
+    await expect(link).toHaveAttribute("aria-disabled", "true");
+    await expect(link).toHaveAttribute("title", /symbolic link/i);
+    await link.dblclick();
+    await expect(page).toHaveURL(new RegExp(`/files/${folder}$`));
+    await link.click({ button: "right" });
+    await expect(page.getByRole("menuitem")).toHaveCount(0);
+    // Select all takes every entry but the link.
+    await page.getByRole("checkbox", { name: "Select all", exact: true }).click();
+    await expect(listing(page).locator('[data-selected="true"]')).toHaveCount(1);
+    await expect(listing(page).locator(`[data-path="/${folder}/kept.txt"]`)).toHaveAttribute(
+      "data-selected",
+      "true",
+    );
+  } finally {
+    // Removes the link itself, never what it points at.
+    await rm(homePath("alice", `/${folder}`), { recursive: true, force: true });
+  }
 });

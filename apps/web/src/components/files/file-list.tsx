@@ -17,6 +17,7 @@ import {
   writeDraggedPaths,
 } from "@/lib/files/deps";
 import { dropTargetState, effectFor } from "@/lib/files/dnd-targets";
+import { isLink, LINK_TITLE } from "@/lib/files/links";
 import { findRevealIndex, type ScrollRequest } from "@/lib/files/reveal";
 import { contextEntries } from "@/lib/files/selection";
 import { wantsThumbnail } from "@/lib/files/thumbnail";
@@ -335,6 +336,37 @@ export function FileList({
           const isFocused = focusedPath === entry.path;
           const isTreeRow = treeDepths !== undefined;
           const depth = treeDepths?.get(entry.path) ?? 0;
+          const rowStyle = {
+            height: virtualRow.size,
+            transform: `translateY(${virtualRow.start - FILE_LIST_HEADER_HEIGHT}px)`,
+            paddingLeft: 12 + depth * TREE_INDENT_PX,
+            paddingRight: 12,
+          };
+          if (isLink(entry)) {
+            // Shown so its name stays visible, and nothing more: no menu, no
+            // selection, no drag, nothing to open.
+            return (
+              <div
+                key={entry.path}
+                data-path={entry.path}
+                aria-disabled="true"
+                title={LINK_TITLE}
+                className="absolute inset-x-0 flex items-center gap-3 border-border/60 border-b px-3 text-muted-foreground text-sm"
+                style={rowStyle}
+              >
+                {isTreeRow && <span className="size-4 shrink-0" />}
+                <div className="flex min-w-0 flex-1 items-center gap-3 opacity-60">
+                  <span className="size-4 shrink-0" />
+                  <ListRowIcon key={entry.path} entry={entry} showThumbnail={showThumbnails} />
+                  <span className="min-w-0 flex-1 truncate">{entry.name}</span>
+                  <span className="w-20 shrink-0 text-right text-xs">--</span>
+                  <span className="w-28 shrink-0 text-xs">
+                    {formatDate(new Date(entry.modifiedAt))}
+                  </span>
+                </div>
+              </div>
+            );
+          }
           const isExpandedFolder = entry.kind === "dir" && (treeExpanded?.has(entry.path) ?? false);
           const group = contextEntries(entry, entries, selected);
           const groupPaths = group.map((candidate) => candidate.path);
@@ -378,12 +410,7 @@ export function FileList({
                 onClick={(event) => onEntryClick(entry, modifiersFrom(event))}
                 onDoubleClick={() => onEntryDoubleClick(entry)}
                 className="absolute inset-x-0 flex items-center gap-3 border-border/60 border-b px-3 text-sm hover:bg-muted/60 data-[drop-target=true]:bg-primary/5 data-[drop-target=true]:ring-2 data-[drop-target=true]:ring-inset data-[drop-target=true]:ring-primary/50 data-[focused=true]:ring-1 data-[focused=true]:ring-inset data-[focused=true]:ring-ring data-[selected=true]:bg-primary/10"
-                style={{
-                  height: virtualRow.size,
-                  transform: `translateY(${virtualRow.start - FILE_LIST_HEADER_HEIGHT}px)`,
-                  paddingLeft: 12 + depth * TREE_INDENT_PX,
-                  paddingRight: 12,
-                }}
+                style={rowStyle}
                 data-focused={isFocused}
               >
                 {isTreeRow &&

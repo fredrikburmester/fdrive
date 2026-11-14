@@ -1,4 +1,6 @@
-import { ApiError, PublicShare } from "@fdrive/contracts";
+import { symlinkSync } from "node:fs";
+import { join } from "node:path";
+import { ApiError, PublicShare, ShareEntriesResponse } from "@fdrive/contracts";
 import { describe, expect, it, vi } from "vitest";
 import * as yauzl from "yauzl";
 import { cookieFrom, patchStorage, sharesHarness } from "./test-fixtures/index.ts";
@@ -65,6 +67,41 @@ describe("archive downloads of a public share", () => {
     expect(zip.headers.get("cache-control")).toBe("no-store");
     expect(await unzip(zip)).toEqual({ "folder/a.txt": "alpha", "folder/sub/b.txt": "bravo" });
     expect(await used(h, id)).toBe(1);
+  });
+
+  it("never reaches the Trash through a symbolic link in the shared folder", async () => {
+    const h = sharesHarness({ trashPath: "/.trash" });
+    h.write("/folder/a.txt", "alpha");
+    h.write("/.trash/old.txt", "gone");
+    h.write("/.fdrive-desktop/mac/secret.txt", "the Mac's");
+    // Left by a writer outside fdrive, such as SMB: fdrive never makes links.
+    symlinkSync(join(h.root, "alice", ".trash"), join(h.root, "alice", "folder", "bin"));
+    symlinkSync("../.fdrive-desktop", join(h.root, "alice", "folder", "desk"));
+    const cookie = await h.login();
+    const { id } = await h.create(cookie, { name: "Holiday", paths: ["/folder"] });
+    const listing = ShareEntriesResponse.parse(
+      await (await h.request(`${pub(id)}/entries`)).json(),
+    );
+    expect(Object.fromEntries(listing.items.map((entry) => [entry.name, entry.kind]))).toEqual({
+      "a.txt": "file",
+      bin: "symlink",
+      desk: "symlink",
+    });
+    for (const suffix of [
+      "/entries?path=/bin",
+      "/download?path=/bin/old.txt",
+      "/download?path=/bin",
+      "/entries?path=/desk/mac",
+      "/download?path=/desk/mac/secret.txt",
+    ]) {
+      // Storage refuses the path; a visitor hears only that it is unavailable.
+      const response = await h.request(`${pub(id)}${suffix}`);
+      expect(response.status, suffix).toBe(502);
+      expect(await response.text(), suffix).not.toMatch(/gone|the Mac's|symbolic/);
+    }
+    expect(await unzip(await h.request(`${pub(id)}/archive`))).toEqual({
+      "folder/a.txt": "alpha",
+    });
   });
 
   it("zips every path of an archive share under its own name", async () => {
