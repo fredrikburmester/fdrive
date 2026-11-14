@@ -8,7 +8,7 @@ warning. Background job state survives navigation and reload.
 
 The section never follows the login being browsed. Activity, counts and actions cover every
 indexed root. The group label carries an "Admins only" caption and every System page header states its scope with
-shared copy from `lib/system/pages`. Scoping the sidebar to the active login made it disagree
+shared copy from `lib/system/pages`. Scoping the sidebar to the signed-in login made it disagree
 with the pages and was reverted.
 
 Features sits last, with a separate expand/collapse button nesting

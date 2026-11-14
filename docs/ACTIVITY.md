@@ -15,9 +15,8 @@ Source of truth: the [schema](../packages/db/src/schema/activity.ts) and its mig
 
 ## Rules
 
-- The private owner is the authenticated **account**, so one timeline covers every login it
-  has. Each event also keeps its **storage identity**, for paths, location filters and
-  share/grant checks. Every API, count, lineage edge, export and notification is owner-scoped.
+- The private owner is the authenticated **account**, so one timeline covers its login. Each
+  event also keeps its **storage identity**, for paths and share/grant checks. Every API, count, lineage edge, export and notification is owner-scoped.
 - Actions belong to their actor, who is the owner. Unknown observations have no actor and
   attach only to files the owner already tracks. Shared-file access and administrator rights
   never reveal another user's actions; there is no global feed.
@@ -237,11 +236,9 @@ facts schema. Session and credential context is hashed before read aggregation.
    sequence and copy unsealed reads in one transaction, so late seals and outcomes cannot cross
    the export cutoff.
 
-Linking a login to another account never transfers authorship; tags and favorites keep their
-own transfer behavior. Recently opened is built from attributed opens, grouped before limiting
-to 100 distinct live paths, and follows known moves. Account deletion follows the account
-deletion policy; unlinking a login or removing storage keeps the identity snapshots and disables
-live file actions.
+Recently opened is built from attributed opens, grouped before limiting to 100 distinct live
+paths, and follows known moves. Account deletion follows the account deletion policy; removing
+a login or its storage keeps the identity snapshots and disables live file actions.
 
 ## How observations arise
 
@@ -320,23 +317,22 @@ A new file command needs its action in the contracts and a history test before r
 
 Paths are under `/api/v1/activity`. Only browser account sessions read history; MCP, Mac and
 other tokens get no history API. There is no owner parameter: another account's event, file or
-export ID is not found. Live actions recheck the identity's owner and read access. Responses are
-uncached.
+export ID is not found. Live actions probe only the session's own login and recheck read
+access. Responses are uncached.
 
 | Method/path | Contract |
 | --- | --- |
-| `GET /` | identityId/action/source/outcome/from/to/q/cursor/limit filters; items, provisionalReads, nextCursor, historyStartsAt, retainedFrom, coverage. |
-| `GET /locations` | The owner's historical storage identities and labels, including disconnected ones. |
+| `GET /` | action/source/outcome/from/to/q/cursor/limit filters; items, provisionalReads, nextCursor, historyStartsAt, retainedFrom, coverage. |
 | `GET /events/:eventId` | One owned event with up to 20 preview subjects and `subjectsTruncated`. |
 | `GET /events/:eventId/subjects` | Signed cursor; complete membership in pages of 100. |
-| `GET /files/resolve?identityId=…&path=…` | The journey ID of an already tracked path, for the inspector. 404 before anything is recorded. |
+| `GET /files/resolve?path=…` | The journey ID of an already tracked path of the session's login, for the inspector. 404 before anything is recorded. |
 | `GET /files/:fileId` | Label, kind, last-known and current path, availability, last confirmation, revision. Current path is null when unreadable. |
 | `GET /files/:fileId/events` | The feed's filters, limited to that file. |
 | `GET /batches/:batchId/events` | The feed plus `batchSummary` `{total, outcomes}`, counting every owned operation in the batch regardless of filters. |
 | `GET /files/:fileId/lineage` | Paginated owned edges and safe path snapshots. |
 | `GET /files/:fileId/revisions` | Paginated owned revision metadata; no historical bytes. |
 | `GET /stream` | Server-Sent Events: committed sequences from the outbox, resumable with a signed `Last-Event-ID` or cursor. Checks authority and polls every two seconds. |
-| `POST /client-events` | Identity, logical request UUID, time, path, allowlisted gesture, optional share ID. The server supplies the owner and `client_reported` evidence. 300 per account per minute. |
+| `POST /client-events` | Logical request UUID, time, path, allowlisted gesture, optional share ID. The server supplies the owner, the session's login and `client_reported` evidence. 300 per account per minute. |
 | `POST /files/:fileId/recheck` | A bounded live check for an owned, readable file; `{checked: boolean}`. 12 per account per minute. |
 | `POST /exports` | `{format: json\|csv, filters}`, the feed's filters plus fileId or batchId. 202 with a ready manifest ID, format and expiry. 20 per account per minute. |
 | `GET /exports/:id` | Manifest state, format and expiry. |
