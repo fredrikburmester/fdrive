@@ -18,7 +18,7 @@ migrations, compatibility shims or configuration aliases; a full reindex is acce
   pullable S3 test image first.
 - 11–15 run strictly in order: they share `apps/api/src/auth/service.ts`, `composition.ts` and the
   contracts.
-- 16 before 17, 26, 31 and 32. 22 before 29. 16 and 23 before 18. 36 and 37 last.
+- 16 before 17, 26, 31 and 32. 16 and 23 before 18. 36 and 37 last.
 
 ## Decisions
 
@@ -156,8 +156,6 @@ Recommended on 2026-11-14. Confirm each before the group that depends on it.
 
 All but 27 are server-only and keep shipped Mac builds working.
 
-22. Remove the write lease, publish size cap and copy-based folder moves from `desktop/writes.ts`;
-    stat directly instead of listing every ancestor (`desktop/files.ts` `entry`).
 23. Apply metadata inline after Mac writes and drop `app.desktop_effects` and the five `revision`
     columns that serve it.
 24. Detect conflicts from the file stamp; drop the publish lock and its pool, `previous` copies,

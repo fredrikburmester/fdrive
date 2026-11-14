@@ -32,31 +32,6 @@ export function trashSettingsForStorage(storage: StorageProvider): TrashSettings
 }
 
 /**
- * Wraps `storage.mkdir` so creating a directory that already exists
- * succeeds instead of throwing, for callers that may race another request
- * to the same folder. Every other error, and an existing file at the path,
- * still throws.
- */
-export function withIdempotentMkdir(storage: StorageProvider): StorageProvider {
-  return {
-    ...storage,
-    async mkdir(path, opts) {
-      try {
-        await storage.mkdir(path, opts);
-      } catch (error) {
-        if (!isStorageError(error)) {
-          throw error;
-        }
-        const existing = await storage.stat(path).catch(() => null);
-        if (existing?.kind !== "dir") {
-          throw error;
-        }
-      }
-    },
-  };
-}
-
-/**
  * Extends `storage` with a `trash` provider built on top of its own
  * list/stat/move/mkdir/deleteFile/deleteDir/deleteEmptyDir, reading the leaves
  * `withMoveToTrash` writes under `trashPath`. Spreads `storage` into a new

@@ -7,11 +7,12 @@ import {
   isReservedPath,
   isUnderPath,
   normalizePath,
+  type StorageProvider,
 } from "@fdrive/core";
 import type { IndexedContent } from "@fdrive/db";
 import type { Principal } from "../auth/principal.js";
 import { ApiHttpError } from "../errors.js";
-import { runStorageCall } from "../fs/routes.js";
+import { runStorageCall, statEntry } from "../fs/routes.js";
 import { indexedVersion } from "./indexed-content.js";
 import type { DesktopDeps } from "./pairing.js";
 
@@ -26,10 +27,31 @@ interface Snapshot {
 
 /** Entries per listing page; a folder with more never gets a listing token. */
 export const DESKTOP_PAGE_SIZE = 500;
-/** Lists one upstream folder; a caller may share listings across ancestor walks. */
-export type DesktopLister = (path: string) => Promise<FileEntry[]>;
 
 export { DESKTOP_INTERNAL_ROOT };
+
+/**
+ * The entry at the normalized `path`, from one stat. The files folder follows
+ * a link only while it stays inside the home and refuses one that leaves it;
+ * a storage that reports a link as one is refused here. Desktop paths are
+ * spelled as listings show them and the registry keys items by them, so
+ * another spelling of a stored name (on a disk that ignores case) is not that
+ * item.
+ */
+export async function storedEntry(storage: StorageProvider, path: string): Promise<DesktopEntry> {
+  const found = await statEntry(storage, path);
+  if (found.path !== path) throw new ApiHttpError("not_found", "Item no longer exists");
+  if (found.kind === "symlink")
+    throw new ApiHttpError("forbidden", "Symbolic links are not supported by this connection");
+  return {
+    path,
+    name: found.name,
+    kind: found.kind,
+    size: found.size,
+    modifiedAt: found.modifiedAt.toISOString(),
+    readable: found.kind === "file" || found.kind === "dir",
+  };
+}
 
 /**
  * Whether a desktop connection may see the normalized `path` at all: inside
@@ -85,45 +107,10 @@ export function createDesktopFiles(
       }))
       .sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
   }
-  // Do not follow a symlink inside a folder grant. The adapters expose entry kinds in
-  // listings, whereas HTTP stat can describe the symlink's target as an ordinary file.
-  async function entry(
-    principal: Principal,
-    path: string,
-    list: DesktopLister = (parent) => principal.storage.list(parent),
-  ): Promise<DesktopEntry> {
-    if (path === "/") {
-      await runStorageCall(async () => {
-        await (principal.storage.probeDirectoryRead?.("/") ?? principal.storage.list("/"));
-      });
-      return {
-        path,
-        name: "/",
-        kind: "dir",
-        size: 0,
-        modifiedAt: new Date(0).toISOString(),
-        readable: true,
-      };
-    }
-    const parts = path.slice(1).split("/");
-    if (parts.length > 128) throw new ApiHttpError("bad_request", "Path has too many components");
-    let parent = "";
-    let result: DesktopEntry | undefined;
-    for (let i = 0; i < parts.length; i++) {
-      const current = `${parent}/${parts[i]}`;
-      const entries = await runStorageCall(() => list(parent || "/"));
-      const found = entries.find((candidate) => normalizePath(candidate.path) === current);
-      if (!found) throw new ApiHttpError("not_found", "Item no longer exists");
-      if ((i < parts.length - 1 && found.kind !== "dir") || found.kind === "symlink")
-        throw new ApiHttpError("forbidden", "Symbolic links are not supported by this connection");
-      result = {
-        ...found,
-        modifiedAt: found.modifiedAt.toISOString(),
-        readable: found.kind === "file" || found.kind === "dir",
-      };
-      parent = current;
-    }
-    return result as DesktopEntry;
+  async function entry(principal: Principal, path: string): Promise<DesktopEntry> {
+    const found = await storedEntry(principal.storage, path);
+    // The root keeps the presentation clients already hold for it.
+    return path === "/" ? { ...found, name: "/", modifiedAt: new Date(0).toISOString() } : found;
   }
   /**
    * The index rows behind the files of a version request this connection may
@@ -213,10 +200,13 @@ export function createDesktopFiles(
      * must not use up the listing capacity that paged listings share. Null when the
      * path is no longer a folder.
      */
-    async folder(principal: Principal, raw: string, list: DesktopLister) {
+    async folder(principal: Principal, raw: string) {
       const path = authorize(principal, raw, true);
-      if ((await entry(principal, path, list)).kind !== "dir") return null;
-      return { path, entries: visible(principal, await runStorageCall(() => list(path))) };
+      if ((await entry(principal, path)).kind !== "dir") return null;
+      return {
+        path,
+        entries: visible(principal, await runStorageCall(() => principal.storage.list(path))),
+      };
     },
     async content(principal: Principal, raw: string, signal: AbortSignal) {
       const path = authorize(principal, raw);

@@ -1,11 +1,12 @@
 import { createHash, randomUUID } from "node:crypto";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DESKTOP_API, DesktopPairing, DesktopPairResult } from "@fdrive/contracts";
 import { StorageError, type StorageProvider } from "@fdrive/core";
 import type { DesktopEffectsRepo } from "@fdrive/db";
 import { createMemoryRepos } from "@fdrive/db/testing";
+import { createLocalStorage } from "@fdrive/local";
 import { createMemoryStorage } from "@fdrive/testkit";
 import { afterEach, expect, it, vi } from "vitest";
 import { activityFixture } from "../../test/activity-fixture.js";
@@ -275,10 +276,6 @@ async function fixture(
     "/.trash/old": "trash",
     "/hidden/b.txt": "private",
   });
-  if (writable) {
-    const raw = { ...storage };
-    storage.withWriteLease = async (action) => action(raw);
-  }
   const stateDir = writable ? await mkdtemp(join(tmpdir(), "desktop-routes-")) : undefined;
   if (stateDir) desktopDirectories.push(stateDir);
   const otherStorage = createMemoryStorage({ "/docs/a.txt": "bravo" });
@@ -287,6 +284,9 @@ async function fixture(
     clock,
     storageFactory: vi.fn(async (id: string) => (id === identity.id ? storage : otherStorage)),
     trashPathForStorage: () => "/.trash",
+    ...(writable
+      ? { publishLock: async <T>(_identityId: string, run: () => Promise<T>) => run() }
+      : {}),
   };
   const principal: Principal = {
     accountId: account.id,
@@ -738,20 +738,86 @@ it("preserves ancestor visibility while enforcing grants, Trash exclusion, live 
     f.files.content(f.principal, "/docs", new AbortController().signal),
   ).rejects.toMatchObject({ kind: "bad_request" });
   await expect(f.files.stat(f.principal, "/absent")).rejects.toMatchObject({ kind: "not_found" });
-  await expect(
-    f.files.stat(f.principal, `/${Array(129).fill("a").join("/")}`),
-  ).rejects.toMatchObject({ kind: "bad_request" });
   vi.spyOn(f.storage, "list").mockResolvedValue([
     { path: "/link", name: "link", kind: "symlink", size: 0, modifiedAt: new Date(), ext: "" },
   ]);
   expect((await f.files.list(f.principal, "/", "token")).entries[0]?.readable).toBe(false);
-  await expect(f.files.stat(f.principal, "/link/secret")).rejects.toMatchObject({
+  // A storage that reports a link as one has it refused.
+  vi.spyOn(f.storage, "stat").mockResolvedValueOnce({
+    kind: "symlink",
+    size: 0,
+    modifiedAt: null,
+    contentType: null,
+  });
+  await expect(f.files.stat(f.principal, "/link")).rejects.toMatchObject({
     kind: "forbidden",
+    message: "Symbolic links are not supported by this connection",
   });
   vi.mocked(f.storage.list).mockRejectedValue(new StorageError("forbidden", "revoked"));
   await expect(f.files.list(f.principal, "/", "token")).rejects.toMatchObject({
     kind: "forbidden",
   });
+});
+
+it("reads every entry with one stat and never lists its ancestors", async () => {
+  const f = await fixture();
+  const deep = "/docs/deep/er/c.txt";
+  await f.storage.upload(deep, new TextEncoder().encode("charlie"), { mkdirParents: true });
+  const list = vi.spyOn(f.storage, "list");
+  const stat = vi.spyOn(f.storage, "stat");
+  const signal = new AbortController().signal;
+  expect(await f.files.stat(f.principal, deep)).toMatchObject({
+    path: deep,
+    kind: "file",
+    size: 7,
+  });
+  await f.files.content(f.principal, deep, signal);
+  await f.files.versions(f.principal, [deep, "/docs/a.txt"], signal);
+  expect(list).not.toHaveBeenCalled();
+  expect(stat.mock.calls).toEqual([[deep], [deep], [deep], ["/docs/a.txt"]]);
+  // A listing reads the folder itself and nothing above it.
+  await f.files.list(f.principal, "/docs/deep/er", "token");
+  expect(list.mock.calls).toEqual([["/docs/deep/er"]]);
+  // Another spelling of a stored name, as a disk that ignores case finds it, is not that item.
+  stat.mockResolvedValueOnce({
+    kind: "file",
+    size: 5,
+    modifiedAt: null,
+    contentType: null,
+    path: "/docs/a.txt",
+  });
+  await expect(f.files.stat(f.principal, "/docs/A.txt")).rejects.toMatchObject({
+    kind: "not_found",
+  });
+});
+
+it("serves a link inside the home as what it leads to and refuses one that leaves it", async () => {
+  const f = await fixture();
+  const root = await realpath(await mkdtemp(join(tmpdir(), "desktop-links-")));
+  desktopDirectories.push(root);
+  const home = join(root, "alice");
+  await mkdir(join(home, "docs"), { recursive: true });
+  await writeFile(join(home, "docs", "a.txt"), "alpha");
+  await writeFile(join(root, "secret.txt"), "secret");
+  await symlink(join(home, "docs"), join(home, "alias"));
+  await symlink(join(root, "secret.txt"), join(home, "out.txt"));
+  await symlink(join(root, "nowhere"), join(home, "dangling"));
+  const principal = { ...f.principal, storage: createLocalStorage({ home }) };
+  const signal = new AbortController().signal;
+  expect(await f.files.stat(principal, "/alias/a.txt")).toMatchObject({ kind: "file", size: 5 });
+  expect(
+    await new Response((await f.files.content(principal, "/alias/a.txt", signal)).body).text(),
+  ).toBe("alpha");
+  const listed = (await f.files.list(principal, "/", "token")).entries;
+  expect(listed.find((entry) => entry.name === "out.txt")).toMatchObject({
+    kind: "symlink",
+    readable: false,
+  });
+  await expect(f.files.stat(principal, "/out.txt")).rejects.toMatchObject({ kind: "forbidden" });
+  await expect(f.files.content(principal, "/out.txt", signal)).rejects.toMatchObject({
+    kind: "forbidden",
+  });
+  await expect(f.files.stat(principal, "/dangling")).rejects.toMatchObject({ kind: "not_found" });
 });
 
 it("detects equal-size replacements, rejects short streams and releases validation after cancellation", async () => {
@@ -1107,20 +1173,11 @@ it("explains a read-only full grant by every unmet gate", async () => {
   expect(await reason(f.identity.id, ["state_dir"], "read")).toBeUndefined();
 });
 
-it("advertises the smaller of fdrive's upload ceiling and what the storage can publish", async () => {
+it("advertises fdrive's 16 GiB upload limit to every writable location", async () => {
   const f = await fixture();
-  async function advertised(maxPublishBytes?: number) {
-    const bounded = maxPublishBytes === undefined ? f.storage : { ...f.storage, maxPublishBytes };
-    const pairing = createDesktopPairing({ ...f.deps, storageFactory: vi.fn(async () => bounded) });
-    const pair = pairing.create("Mac", "limits", 2);
-    await pairing.approve(pair.id, f.account.id, [f.identity.id], { [f.identity.id]: "full" });
-    const result = await pairing.poll(pair.id, pair.secret);
-    if (result.status !== "connected") throw new Error("Expected credentials");
-    const location = result.credentials[0]?.location;
-    return location && "maxUploadBytes" in location ? location.maxUploadBytes : undefined;
-  }
-  expect(await advertised()).toBe(16 * 1024 ** 3);
-  // A backend's copy ceiling. Telling the Mac app 16 GiB would spend a whole transfer
-  // before publication refused it and left the commit needing an administrator.
-  expect(await advertised(5 * 1024 ** 3)).toBe(5 * 1024 ** 3);
+  const pair = f.pairing.create("Mac", "limits", 2);
+  await f.pairing.approve(pair.id, f.account.id, [f.identity.id], { [f.identity.id]: "full" });
+  const result = await f.pairing.poll(pair.id, pair.secret);
+  if (result.status !== "connected") throw new Error("Expected credentials");
+  expect(result.credentials[0]?.location).toMatchObject({ maxUploadBytes: 16 * 1024 ** 3 });
 });

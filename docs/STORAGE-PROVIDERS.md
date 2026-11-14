@@ -73,10 +73,7 @@ Required: `list`, `stat`, `statFile`, `download`, `upload`, `mkdir`, `move`, `co
 `deleteFile`, `deleteDir` and `deleteEmptyDir`, which removes a folder only while it is empty
 (the files folder's `rmdir`), so tidying up never takes what arrived meanwhile. Optional members
 are absent, never throwing, and agree with the flags: `probeDirectoryRead` and `probeFileRead`
-(live read proofs), `setModifiedAt`, `zip` and `trash`. Three more, `withWriteLease`,
-`maxPublishBytes` and `movesDirectoriesByCopy`, describe backends that need a write lease, cap
-publication or move folders by copying; the files folder sets none of them, and the Mac write
-path still honours them.
+(live read proofs), `setModifiedAt`, `zip` and `trash`.
 
 Paths are the storage's own, already resolved from a scope. `statFile` throws `bad_request` on a
 directory and `not_found` on a missing path. `move`, `copy` and `upload` refuse a taken target
