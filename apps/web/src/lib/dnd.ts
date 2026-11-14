@@ -21,6 +21,21 @@ export function writeDraggedPaths(dt: DndDataTransferLike, paths: readonly strin
 }
 
 /**
+ * Lets Chromium save a dragged file where it is dropped outside the browser, such as Finder or
+ * the desktop, through `DownloadURL` drag data: `<mime>:<name>:<absolute URL>`. Only a drag of
+ * one file carries it; folders and several items stay in-app.
+ */
+export function writeDownloadUrl(
+  dt: DndDataTransferLike,
+  dragged: readonly string[],
+  entry: { readonly kind: string; readonly name: string; readonly mime: string | null },
+  url: string,
+): void {
+  if (dragged.length !== 1 || entry.kind !== "file") return;
+  dt.setData("DownloadURL", `${entry.mime ?? "application/octet-stream"}:${entry.name}:${url}`);
+}
+
+/**
  * Reads the paths written by `writeDraggedPaths`, or `null` when `dt` does
  * not carry the internal type, its payload is missing, or it fails to parse
  * as an array of strings.

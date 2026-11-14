@@ -168,4 +168,17 @@ describe("keyToAction", () => {
     expect(keyToAction(key({ key: "ArrowRight" }), "mac")).toBeNull();
     expect(keyToAction(key({ key: "ArrowLeft" }), "mac", false)).toBeNull();
   });
+
+  it("maps the primary modifier with C, X and Z to copy, cut and undo", () => {
+    expect(keyToAction(key({ key: "c", metaKey: true }), "mac")).toEqual({ type: "copy" });
+    expect(keyToAction(key({ key: "X", ctrlKey: true }), "other")).toEqual({ type: "cut" });
+    expect(keyToAction(key({ key: "z", metaKey: true }), "mac")).toEqual({ type: "undo" });
+  });
+
+  it("leaves C, X and Z alone without the primary modifier or with Shift or Alt", () => {
+    expect(keyToAction(key({ key: "c", ctrlKey: true }), "mac")).toBeNull();
+    expect(keyToAction(key({ key: "x", metaKey: true, altKey: true }), "mac")).toBeNull();
+    expect(keyToAction(key({ key: "z", metaKey: true, shiftKey: true }), "mac")).toBeNull();
+    expect(keyToAction(key({ key: "v", metaKey: true }), "mac")).toBeNull();
+  });
 });

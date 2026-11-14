@@ -8,6 +8,7 @@ import {
   readDraggedPaths,
   startDragSession,
   subscribeDragSession,
+  writeDownloadUrl,
   writeDraggedPaths,
 } from "./dnd.ts";
 
@@ -108,5 +109,29 @@ describe("drag session", () => {
     unsubscribe();
     startDragSession(["/b"]);
     expect(listener).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("writeDownloadUrl", () => {
+  const url = "https://files.example/api/v1/fs/download?path=%2Fa.png";
+  const file = { kind: "file", name: "a.png", mime: "image/png" };
+
+  it("lets a single dragged file download where it is dropped", () => {
+    const dt = new FakeDataTransfer();
+    writeDownloadUrl(dt, ["/a.png"], file, url);
+    expect(dt.getData("DownloadURL")).toBe(`image/png:a.png:${url}`);
+  });
+
+  it("falls back to a generic type when the file's is unknown", () => {
+    const dt = new FakeDataTransfer();
+    writeDownloadUrl(dt, ["/a.png"], { ...file, mime: null }, url);
+    expect(dt.getData("DownloadURL")).toBe(`application/octet-stream:a.png:${url}`);
+  });
+
+  it("leaves folders and drags of several items in-app", () => {
+    const dt = new FakeDataTransfer();
+    writeDownloadUrl(dt, ["/a.png", "/b.png"], file, url);
+    writeDownloadUrl(dt, ["/photos"], { kind: "dir", name: "photos", mime: null }, url);
+    expect(dt.types).toEqual([]);
   });
 });
