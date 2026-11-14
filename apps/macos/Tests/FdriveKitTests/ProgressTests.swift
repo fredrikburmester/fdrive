@@ -119,8 +119,10 @@ private final class Samples: @unchecked Sendable {
 private final class EndlessMoveServer: URLProtocol, @unchecked Sendable {
     private static let lock = NSLock()
     nonisolated(unsafe) private static var cancels: [String] = []
-    static func reset() { lock.withLock { cancels = [] } }
+    nonisolated(unsafe) private static var commits = 0
+    static func reset() { lock.withLock { cancels = []; commits = 0 } }
     static var cancelled: [String] { lock.withLock { cancels } }
+    static var committing: Bool { lock.withLock { commits > 0 } }
     override class func canInit(with request: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
     private func deliver(_ body: String) {
@@ -139,7 +141,10 @@ private final class EndlessMoveServer: URLProtocol, @unchecked Sendable {
             deliver("{\"operationId\":\"\(id)\",\"state\":\"cancelled\",\"item\":null,\"recoveryId\":null}")
             return
         }
-        if path.hasSuffix("/commit") { return }  // Answers only when cancelled.
+        if path.hasSuffix("/commit") {  // Answers only when cancelled.
+            Self.lock.withLock { Self.commits += 1 }
+            return
+        }
         if path.hasSuffix("/moves") {
             let body = request.httpBody.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
             let made = body?["operationId"] as? String ?? ""
@@ -170,8 +175,11 @@ private final class EndlessMoveServer: URLProtocol, @unchecked Sendable {
                                       name: "moved", base: nil, contents: nil,
                                       progress: Progress(totalUnitCount: -1))
     }
-    // Let the commit get under way, the way Finder's cancel arrives mid-copy.
-    try await Task.sleep(for: .milliseconds(120))
+    // Cancel once the commit is under way, the way Finder's cancel arrives mid-copy.
+    // A fixed sleep raced it on a loaded runner and cancelled before the commit began.
+    let deadline = ContinuousClock.now + .seconds(10)
+    while !EndlessMoveServer.committing, ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(10)) }
+    #expect(EndlessMoveServer.committing)
     task.cancel()
     let outcome = await task.result
     #expect(throws: Error.self) { try outcome.get() }
