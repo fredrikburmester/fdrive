@@ -63,11 +63,7 @@ export interface DesktopRepo {
     attempt?: string,
   ): Promise<boolean>;
   /** Bound recovery work before publishing storage changes. */
-  captureEffects(
-    identityId: string,
-    accountId: string,
-    effects: DesktopEffectContext,
-  ): Promise<DesktopEffectPayload>;
+  captureEffects(identityId: string, effects: DesktopEffectContext): Promise<DesktopEffectPayload>;
   /** Commit the publication receipt and its metadata recovery work together. */
   complete(
     identityId: string,
@@ -287,12 +283,8 @@ export function createDesktopRepo(db: Db): DesktopRepo {
         )[0] ?? null
       );
     },
-    async captureEffects(identityId, accountId, effects) {
+    async captureEffects(identityId, effects) {
       return db.transaction(async (tx) => {
-        const owner = await tx.execute(
-          sql`select account_id from app.identities where id = ${identityId} for update`,
-        );
-        if (owner.rows[0]?.account_id !== accountId) throw Error("Identity ownership changed");
         const office = effects.office;
         if (office)
           await tx.execute(
@@ -303,10 +295,6 @@ export function createDesktopRepo(db: Db): DesktopRepo {
     },
     async complete(identityId, accountId, id, result, effects) {
       return db.transaction(async (tx) => {
-        const owner = await tx.execute(
-          sql`select account_id from app.identities where id = ${identityId} for update`,
-        );
-        if (owner.rows[0]?.account_id !== accountId) return false;
         const updated = await tx
           .update(desktopOperations)
           .set({ state: "completed", result, updatedAt: new Date() })

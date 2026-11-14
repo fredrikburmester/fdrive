@@ -5,7 +5,7 @@ import { useInfiniteQuery, useQuery, useQueryClient } from "@tanstack/react-quer
 import { useEffect } from "react";
 import { useMe } from "@/lib/api/auth-queries";
 import { queryKeys } from "@/lib/api/keys";
-import { activityFeed, activityFile, activityLocations, resolveActivityFile } from "./api";
+import { activityFeed, activityFile, resolveActivityFile } from "./api";
 
 /**
  * One feed of the caller's history, refreshed whenever the server records a
@@ -53,20 +53,12 @@ export function useActivityFile(id: string) {
     queryFn: () => activityFile(id),
   });
 }
-/** The history ID at a path of the tab's login; `null` until something there is recorded. */
-export function useActivityFileAt(identityId: string | undefined, path: string) {
+/** The history ID at a path; `null` until something there is recorded. */
+export function useActivityFileAt(path: string) {
   const { data: me } = useMe();
   return useQuery({
-    queryKey: queryKeys.activity.resolve(me?.account.id ?? "", identityId ?? "", path),
-    enabled: !!me && !!identityId,
-    queryFn: () => resolveActivityFile(identityId ?? "", path),
-  });
-}
-export function useActivityLocations() {
-  const { data: me } = useMe();
-  return useQuery({
-    queryKey: [...queryKeys.activity.all(me?.account.id ?? ""), "locations"],
+    queryKey: queryKeys.activity.resolve(me?.account.id ?? "", path),
     enabled: !!me,
-    queryFn: activityLocations,
+    queryFn: () => resolveActivityFile(path),
   });
 }

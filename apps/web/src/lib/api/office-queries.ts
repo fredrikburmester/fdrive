@@ -1,5 +1,4 @@
 "use client";
-import { createApiClient } from "@fdrive/contracts";
 import { useQuery } from "@tanstack/react-query";
 import { apiClient } from "./client";
 
@@ -16,8 +15,4 @@ export function officeStatusQueryOptions() {
 }
 export function useOfficeStatus() {
   return useQuery(officeStatusQueryOptions());
-}
-
-export function officeClientForIdentity(identityId: string) {
-  return createApiClient({ baseUrl: "", identityId });
 }

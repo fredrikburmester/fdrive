@@ -31,8 +31,7 @@ export function credentialFieldsFor(
  * signed in with: the secret ones (a password, a one-time code), never the
  * username the server already knows. The password field
  * stays required; a code stays optional. Labels and help are rewritten to
- * say whose credential this is, so "Password" does not read as the new
- * login's password next to it in the Add login dialog.
+ * say whose credential this is.
  */
 export function confirmationFieldsFor(fields: readonly ProviderField[]): readonly ProviderField[] {
   return fields

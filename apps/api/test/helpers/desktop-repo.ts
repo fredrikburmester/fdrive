@@ -150,7 +150,7 @@ export function memoryRepo() {
       });
       return true;
     },
-    async captureEffects(_identityId, _accountId, context) {
+    async captureEffects(_identityId, context) {
       return { ...context, snapshots: [] };
     },
     async complete(identityId, accountId, id, result) {

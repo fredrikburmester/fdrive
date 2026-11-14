@@ -9,8 +9,8 @@ const PROVIDERS_STALE_TIME_MS = 5 * 60 * 1000;
 
 /**
  * The enabled storage with its credential form, from the public
- * `GET /api/v1/providers`. Powers the account page's Add and Remove login
- * dialogs; the login page reads the same list server-side.
+ * `GET /api/v1/providers`. Powers the backups unlock form; the login page
+ * reads the same list server-side.
  */
 export function useProviders() {
   return useQuery({

@@ -46,8 +46,7 @@ export function SharesPage() {
   async function edit(share: ManagedShare) {
     setError(null);
     try {
-      const entries = await management.entries(share.paths);
-      if (entries) setEditing({ share, entries });
+      setEditing({ share, entries: await management.entries(share.paths) });
     } catch {
       setError("Could not load the shared files. Refresh and try again.");
     }
@@ -69,7 +68,8 @@ export function SharesPage() {
     setPending(true);
     setError(null);
     try {
-      if (await management.revoke(revoking.id)) setRevoking(null);
+      await management.revoke(revoking.id);
+      setRevoking(null);
     } catch {
       setError("Could not revoke the link. Try again.");
     } finally {

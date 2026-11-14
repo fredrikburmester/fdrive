@@ -33,20 +33,13 @@ afterEach(() => {
 });
 
 describe("PasswordCard", () => {
-  it("stays hidden while the account loads, or when the active login is unknown", () => {
-    const { container, rerender } = render(<PasswordCard />);
-    expect(container.textContent).toBe("");
-
-    mocks.me = makeMe({ activeIdentityId: "gone" });
-    rerender(<PasswordCard />);
+  it("stays hidden while the account loads", () => {
+    const { container } = render(<PasswordCard />);
     expect(container.textContent).toBe("");
   });
 
-  it("follows the active login, not just the first one", () => {
-    mocks.me = makeMe({
-      identities: [makeIdentity(), makeIdentity({ id: "two", username: "bob" })],
-      activeIdentityId: "two",
-    });
+  it("names the signed-in login", () => {
+    mocks.me = makeMe({ identity: makeIdentity({ id: "two", username: "bob" }) });
     render(<PasswordCard />);
 
     expect(screen.getByText(/The password bob signs in with/)).toBeTruthy();

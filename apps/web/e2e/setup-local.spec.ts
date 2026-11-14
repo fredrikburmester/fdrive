@@ -63,9 +63,9 @@ test("setup on a fresh local folder creates the owner's account, which becomes t
     await expect(page.getByText("Step 3 of 12 · Thumbnails")).toBeVisible();
     const me = MeResponse.parse(await (await page.request.get(url("/api/v1/auth/me"))).json());
     expect(me.isAdmin).toBe(true);
-    expect(me.identities).toEqual([
+    expect(me.identity).toEqual(
       expect.objectContaining({ providerType: "local", username: OWNER.username }),
-    ]);
+    );
     const after = await (await page.request.get(url("/api/v1/setup/status"))).json();
     expect(after.required).toBe(false);
 

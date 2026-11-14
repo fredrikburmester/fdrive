@@ -45,8 +45,7 @@ test("a storage rename on System > General reaches the login page, logins and Ma
     ).toBe(true);
 
     const before = MeResponse.parse(await (await page.request.get(url("/api/v1/auth/me"))).json());
-    const providerId = before.identities[0]?.providerId;
-    if (!providerId) throw new Error("missing the files folder's storage row");
+    const providerId = before.identity.providerId;
     const pair = await (
       await page.request.post(url(`${DESKTOP_API}/pairings`), {
         headers,
@@ -55,7 +54,7 @@ test("a storage rename on System > General reaches the login page, logins and Ma
     ).json();
     const approval = await page.context().newPage();
     await approval.goto(url(`/desktop/connect?request=${pair.id}`));
-    await expect(approval.getByRole("checkbox", { name: /alice$/ })).toBeVisible();
+    await expect(approval.getByText("alice", { exact: true })).toBeVisible();
 
     await page.bringToFront();
     await page.goto(url("/system/general"));
@@ -87,11 +86,8 @@ test("a storage rename on System > General reaches the login page, logins and Ma
     );
     await approval.evaluate(() => window.dispatchEvent(new Event("visibilitychange")));
     await approvalMe;
-    await expect(
-      approval.getByRole("checkbox", { name: "Home storage alice", exact: true }),
-    ).toBeVisible();
-    await approval.getByRole("checkbox").check();
-    await approval.getByRole("button", { name: "Allow selected logins" }).click();
+    await expect(approval.getByText("Home storage", { exact: true })).toBeVisible();
+    await approval.getByRole("button", { name: "Allow this Mac" }).click();
     await expect(approval.getByText("Connection approved", { exact: true })).toBeVisible();
     const connected = DesktopPairResult.parse(
       await (
@@ -110,15 +106,15 @@ test("a storage rename on System > General reaches the login page, logins and Ma
       data: { secret: pair.secret },
     });
 
+    // The sidebar names the signed-in login's storage beneath the username.
     await page.goto(url("/account"));
-    await expect(page.getByRole("main").getByText("Home storage", { exact: true })).toBeVisible();
+    await expect(
+      page.locator('[data-sidebar="footer"]').getByText("Home storage", { exact: true }),
+    ).toBeVisible();
     const after = MeResponse.parse(await (await page.request.get(url("/api/v1/auth/me"))).json());
     expect(after).toEqual({
       ...before,
-      identities: before.identities.map((identity) => ({
-        ...identity,
-        providerLabel: "Home storage",
-      })),
+      identity: { ...before.identity, providerLabel: "Home storage" },
     });
 
     const login = await anonymous.newPage();

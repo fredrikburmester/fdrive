@@ -328,7 +328,7 @@ export function SearchPanel({ open, onOpenChange }: SearchPanelProps) {
       me
         ? readRecent(window.localStorage, {
             accountId: me.account.id,
-            identityId: me.activeIdentityId,
+            identityId: me.identity.id,
           })
         : [],
     );
@@ -359,7 +359,6 @@ export function SearchPanel({ open, onOpenChange }: SearchPanelProps) {
     enabled: open && trimmedQuery.length > 0 && me !== undefined,
     retryUnavailable: retryActive && !isPermanentSearchStatus(searchStatus),
     status: searchStatus,
-    identityId: me?.activeIdentityId,
   });
 
   const {
@@ -368,7 +367,6 @@ export function SearchPanel({ open, onOpenChange }: SearchPanelProps) {
     error: imageError,
   } = useImageSearchResults(committedQuery, {
     enabled: queryVisualMatches,
-    identityId: me?.activeIdentityId,
     retryUnavailable: retryActive && !isPermanentSearchStatus(searchStatus),
     status: searchStatus,
   });
@@ -387,7 +385,7 @@ export function SearchPanel({ open, onOpenChange }: SearchPanelProps) {
         pushRecent(
           window.localStorage,
           { path, name: baseName(path), openedAt: new Date().toISOString() },
-          { accountId: me.account.id, identityId: me.activeIdentityId },
+          { accountId: me.account.id, identityId: me.identity.id },
         );
       onOpenChange(false);
     },

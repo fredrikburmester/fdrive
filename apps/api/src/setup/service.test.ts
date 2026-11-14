@@ -22,17 +22,14 @@ const CAPABILITIES = {
 const PROVIDER_ID = "123e4567-e89b-42d3-a456-426614174000";
 const ME: MeResponse = {
   account: { id: "account-1", displayName: "alice" },
-  identities: [
-    {
-      id: "identity-1",
-      username: "alice",
-      providerId: PROVIDER_ID,
-      providerType: "local",
-      providerLabel: "x",
-      capabilities: CAPABILITIES,
-    },
-  ],
-  activeIdentityId: "identity-1",
+  identity: {
+    id: "identity-1",
+    username: "alice",
+    providerId: PROVIDER_ID,
+    providerType: "local",
+    providerLabel: "x",
+    capabilities: CAPABILITIES,
+  },
   isAdmin: false,
 };
 
@@ -243,12 +240,7 @@ describe("createSetupService: complete", () => {
     const bob: MeResponse = {
       ...ME,
       account: { id: "account-2", displayName: "bob" },
-      identities: ME.identities.map((identity) => ({
-        ...identity,
-        id: "identity-2",
-        username: "bob",
-      })),
-      activeIdentityId: "identity-2",
+      identity: { ...ME.identity, id: "identity-2", username: "bob" },
     };
     vi.mocked(h.authService.loginCandidate)
       .mockResolvedValueOnce({ sessionId: "session-1", me: ME })

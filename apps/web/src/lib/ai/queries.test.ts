@@ -17,16 +17,10 @@ const client = {
   systemTestAi: vi.fn(),
 };
 
-vi.mock("@/lib/api/client", () => ({
-  apiClient: client,
-  snapshotTabApiClient: () => client,
-  pinTabIdentity: vi.fn(),
-}));
+vi.mock("@/lib/api/client", () => ({ apiClient: client }));
 
 const toastError = vi.hoisted(() => vi.fn());
 vi.mock("sonner", () => ({ toast: { error: toastError, success: vi.fn() } }));
-
-const { accountTransition } = await import("@/lib/account/transition");
 
 const {
   ORGANIZE_POLL_MS,
@@ -153,21 +147,6 @@ describe("useMoveMany", () => {
       ).rejects.toBe(failure);
     });
     expect(toastError).not.toHaveBeenCalled();
-  });
-
-  it("refuses to move, or undo, once the tab has switched to another login", async () => {
-    const { wrapper } = setup();
-    const { result } = renderHook(() => useMoveMany(), { wrapper });
-    act(() => {
-      accountTransition.begin();
-      accountTransition.finish(true);
-    });
-    await act(async () => {
-      await expect(
-        result.current.mutateAsync({ items: [{ path: "/b/a", target: "/a" }] }),
-      ).rejects.toThrow("The active login changed.");
-    });
-    expect(client.moveMany).not.toHaveBeenCalled();
   });
 });
 

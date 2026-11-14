@@ -63,7 +63,7 @@ export async function officeHarness(
     const session = await repos.sessions.create({
       idHash: hashSessionId(sessionId),
       accountId: account.id,
-      activeIdentityId: identity.id,
+      identityId: identity.id,
       expiresAt: new Date(now.value.getTime() + 86400000),
       userAgent: null,
       ip: null,

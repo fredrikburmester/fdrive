@@ -37,25 +37,6 @@ import { useApiTokens, useRevokeApiToken } from "@/lib/account/queries";
 import { CreateTokenDialog, TOKEN_ACCESS_LABELS } from "./create-token-dialog";
 import { type CreatedToken, TokenCreatedDialog } from "./token-created-dialog";
 
-/** Looks up an identity's username by id, "-" when the identity was unlinked. */
-function identityLabel(
-  identities: {
-    id: string;
-    username: string;
-    providerLabel: string | null;
-    providerType: string;
-  }[],
-  identityId: string | null,
-): string {
-  if (identityId === null) {
-    return "-";
-  }
-  const identity = identities.find((identity) => identity.id === identityId);
-  return identity === undefined
-    ? "(unlinked)"
-    : `${identity.providerLabel || identity.providerType} · ${identity.username}`;
-}
-
 /** Account page card: the signed-in account's API tokens (MCP, Raycast). */
 export function ApiTokensCard() {
   const { data: me } = useShellMe();
@@ -65,7 +46,6 @@ export function ApiTokensCard() {
   const [created, setCreated] = useState<CreatedToken | null>(null);
   const [revokeTarget, setRevokeTarget] = useState<ApiTokenSummary | null>(null);
 
-  const identities = me?.identities ?? [];
   const tokens = data?.items ?? [];
 
   return (
@@ -96,7 +76,6 @@ export function ApiTokensCard() {
               <TableHeader>
                 <TableRow>
                   <TableHead>Name</TableHead>
-                  <TableHead>Identity</TableHead>
                   <TableHead>Access</TableHead>
                   <TableHead>Created</TableHead>
                   <TableHead>Last used</TableHead>
@@ -108,7 +87,6 @@ export function ApiTokensCard() {
                 {tokens.map((token) => (
                   <TableRow key={token.id}>
                     <TableCell className="font-medium">{token.name}</TableCell>
-                    <TableCell>{identityLabel(identities, token.identityId)}</TableCell>
                     <TableCell>
                       {token.access ? (
                         <>
@@ -148,9 +126,7 @@ export function ApiTokensCard() {
       </Card>
 
       <CreateTokenDialog
-        key={`${createOpen}:${me?.activeIdentityId}`}
-        identities={identities}
-        activeIdentityId={me?.activeIdentityId ?? ""}
+        key={String(createOpen)}
         open={createOpen}
         onOpenChange={setCreateOpen}
         onCreated={(result) => {

@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
-import { validateIdentityLinkId } from "../repos/identity-links-types.js";
+import { validateCanonicalUuid } from "../repos/logins-types.js";
 import type {
   Account,
   AccountRepo,
@@ -55,7 +55,7 @@ function createMemoryProviderRepo(
 
   return {
     async get(id) {
-      validateIdentityLinkId(id);
+      validateCanonicalUuid(id);
       return byId.get(id) ?? null;
     },
     async list() {
@@ -99,7 +99,7 @@ function createMemoryProviderRepo(
       return provider;
     },
     async update(id, patch) {
-      validateIdentityLinkId(id);
+      validateCanonicalUuid(id);
       const existing = byId.get(id);
       if (!existing) {
         return null;
@@ -132,7 +132,7 @@ function createMemoryProviderRepo(
       return next;
     },
     async delete(id) {
-      validateIdentityLinkId(id);
+      validateCanonicalUuid(id);
       if (identityCount(id) > 0) {
         throw new ConflictError("provider is still used by identities");
       }
@@ -297,6 +297,10 @@ function createMemoryIdentityRepo(ids: () => string): IdentityRepo & {
           `identity already exists for provider ${input.providerId} and username ${input.externalUsername}`,
         );
       }
+      // One login per account, as the database's unique constraint enforces.
+      if (Array.from(byId.values()).some((identity) => identity.accountId === input.accountId)) {
+        throw new Error(`account ${input.accountId} already has a login`);
+      }
       const identity: Identity = {
         id: ids(),
         accountId: input.accountId,
@@ -310,9 +314,6 @@ function createMemoryIdentityRepo(ids: () => string): IdentityRepo & {
     },
     async get(id) {
       return byId.get(id) ?? null;
-    },
-    async listByAccount(accountId) {
-      return Array.from(byId.values()).filter((identity) => identity.accountId === accountId);
     },
     countByProviderSync(providerId) {
       return Array.from(byId.values()).filter((identity) => identity.providerId === providerId)
@@ -372,7 +373,7 @@ function createMemorySessionRepo(): SessionRepo {
   const byIdHash = new Map<string, Session>();
 
   return {
-    // Identity-operation fixtures may copy an existing login without resetting its age.
+    // Sign-in fixtures pass the test clock's time as the session's age.
     async create(
       input: Parameters<SessionRepo["create"]>[0] &
         Partial<Pick<Session, "createdAt" | "lastSeenAt">>,
@@ -380,7 +381,7 @@ function createMemorySessionRepo(): SessionRepo {
       const session: Session = {
         idHash: input.idHash,
         accountId: input.accountId,
-        activeIdentityId: input.activeIdentityId,
+        identityId: input.identityId,
         createdAt: input.createdAt ?? new Date(),
         expiresAt: input.expiresAt,
         lastSeenAt: input.lastSeenAt ?? new Date(),

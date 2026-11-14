@@ -169,43 +169,20 @@ describe("createResolveTokenPrincipal", () => {
     expect(await resolve(token)).toBeNull();
   });
 
-  it("returns null when the token has no identity", async () => {
+  it("returns null when the token's login no longer exists", async () => {
     const repos = createMemoryRepos();
-    const { account } = await seedAccountWithIdentity(repos);
+    const { account, identity } = await seedAccountWithIdentity(repos);
     const token = generateApiToken();
     await repos.apiTokens.create({
       accountId: account.id,
-      identityId: null,
-      name: "Claude",
-      tokenHash: hashApiToken(token),
-      expiresAt: null,
-    });
-    const resolve = createResolveTokenPrincipal({
-      apiTokens: repos.apiTokens,
-      identities: repos.identities,
-      clock: () => new Date(),
-      storageFactory: async () => FAKE_STORAGE,
-    });
-
-    expect(await resolve(token)).toBeNull();
-  });
-
-  it("returns null when the identity no longer belongs to the token's account", async () => {
-    const repos = createMemoryRepos();
-    const { account, identity } = await seedAccountWithIdentity(repos);
-    const otherAccount = await repos.accounts.create({ displayName: "Mallory" });
-    const token = generateApiToken();
-    await repos.apiTokens.create({
-      accountId: otherAccount.id,
       identityId: identity.id,
       name: "Claude",
       tokenHash: hashApiToken(token),
       expiresAt: null,
     });
-    void account;
     const resolve = createResolveTokenPrincipal({
       apiTokens: repos.apiTokens,
-      identities: repos.identities,
+      identities: { ...repos.identities, get: async () => null },
       clock: () => new Date(),
       storageFactory: async () => FAKE_STORAGE,
     });

@@ -16,7 +16,6 @@ import type { IdentityRepo, IndexQueries } from "@fdrive/db";
 import type { Context } from "hono";
 import { getCookie, setCookie } from "hono/cookie";
 import type { z } from "zod";
-import { accountContext } from "../accounts/routes.ts";
 import { recordFsAction } from "../activity/fs-context.js";
 import type { PersonalActivityService } from "../activity/service.js";
 import type { AppHono, AuthedHono } from "../app.ts";
@@ -25,6 +24,7 @@ import {
   UnreadableArchiveError,
   UnsupportedPeekFormatError,
 } from "../archive/peek.ts";
+import { accountContext } from "../auth/account-context.ts";
 import { withoutApiV1Prefix } from "../auth/routes.ts";
 import { cookieSecureFor } from "../auth/sessions.ts";
 import type { AppConfig } from "../config.ts";

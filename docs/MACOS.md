@@ -11,7 +11,7 @@ the first hosted release, Homebrew installation and tests on another Mac.
 2. Enter the fdrive web address. HTTPS is required; HTTP loopback works for development.
    The address field shows until a location exists; **Add Server** brings it back to allow
    more logins.
-3. Sign in in the browser, compare the connection code and select storage logins and access.
+3. Sign in in the browser, compare the connection code and choose read-only or read and write.
 4. Open a location from the app. Click **Enable** in Finder if macOS requests it.
 
 The app checks each location's Finder registration on every refresh. A location whose
@@ -27,8 +27,10 @@ launches the installed copy and quits, keeping the locations window open or clos
 It waits while FDrive is the active app or a pairing, license change or disconnect is under
 way. If the new copy cannot be launched, the app asks you to quit and reopen FDrive.
 
-Each selected server/account/identity gets its own domain, token and metadata database.
-The fdrive server reads and writes the files folder; the Mac talks only to the fdrive API. Switching the web app's active login cannot retarget a native location.
+Each paired server/account/identity gets its own domain, token and metadata database. A pairing
+connects the login signed in to the browser that approves it; the bundle stays a list of
+credentials, now always one long. The fdrive server reads and writes the files folder; the Mac
+talks only to the fdrive API.
 
 Browsing retrieves directory metadata without fetching original file contents to the Mac.
 Opening, Quick Look, copying out and other applications' reads fetch contents on demand.
@@ -361,7 +363,7 @@ Desktop protocol v1 lives at `/api/v1/desktop`; contracts are in
 | --- | --- |
 | `POST /pairings` | Creates a five-minute request, app-held secret and visible code |
 | `GET /pairings/:id` | Signed-in browser reads device/code/expiry only |
-| `POST /pairings/:id/approve` | Browser session, CSRF and ownership of selected identities |
+| `POST /pairings/:id/approve` | Browser session and CSRF; `{ access: "read" \| "full" }` for the session's login |
 | `POST /pairings/:id/poll` | App secret; repeated redemption returns the same issued bundle |
 | `POST /pairings/:id/cancel` | App secret; cancels issuance and revokes unconfirmed credentials |
 | `POST /pairings/:id/confirm` | App secret; the bundle is stored on the Mac and survives expiry |

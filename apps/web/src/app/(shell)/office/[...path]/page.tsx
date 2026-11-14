@@ -7,15 +7,9 @@ export default async function OfficeRoute({
   params,
   searchParams,
 }: {
-  params: Promise<{ identity: string; path: string[] }>;
+  params: Promise<{ path: string[] }>;
   searchParams: Promise<{ mode?: string | string[] }>;
 }) {
   const [route, search] = await Promise.all([params, searchParams]);
-  return (
-    <OfficePage
-      identityId={route.identity}
-      path={officePathFromSegments(route.path)}
-      mode={officeMode(search.mode)}
-    />
-  );
+  return <OfficePage path={officePathFromSegments(route.path)} mode={officeMode(search.mode)} />;
 }

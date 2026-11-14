@@ -41,10 +41,12 @@ Current implementation reference. Unfinished work belongs in [plans](plans/READM
 The optional [native macOS companion](MACOS.md) exposes File Provider domains, read-only by
 default with explicitly granted writes on qualified storage. Each domain binds one
 server/account/storage identity. Its versioned desktop API uses separate identity-bound
-credentials; browser identity selection and MCP tokens cannot retarget these domains.
+credentials; MCP tokens cannot retarget these domains.
 
-The files folder is one row in `app.providers`; an identity is a login on that row; an
-account links identities. Sessions select an active identity. A login's password is also kept
+The files folder is one row in `app.providers`; an identity is a login on that row, and an
+account has exactly one (`identities.account_id` is unique). A session and an API token act as
+that login (`sessions.identity_id`, `api_tokens.identity_id`), and deleting the login ends
+them. A login's password is also kept
 sealed in `app.credentials`, bound to its identity, so a later sign-in can tell whether it
 changed. The files folder's row comes from the deployment (`deploymentManaged`); administrators
 can only rename it. See [authentication](AUTH.md) and [storage port](STORAGE-PROVIDERS.md).
@@ -100,12 +102,10 @@ stored in clear: a row holds only a scrypt hash in `password_hash`, which no sha
 projection returns; the public credential-cookie flow has separate protections. See the
 API's [share implementation](../apps/api/src/shares/).
 
-Linking an already-owned identity transfers that login and its metadata, not the source
-account's administrator rights or API tokens. Re-authentication and session revocation
-follow the [authentication guide](AUTH.md#re-authentication-and-session-revocation).
+Session revocation follows the [authentication guide](AUTH.md#session-revocation).
 
 Personal activity is separately owned by the initiating account, with the storage identity
-captured alongside it. History never transfers with tags/favorites and never extends the
+captured alongside it. History never extends the
 actorless administrator `system_events`. The append-only journal, file registry, copied
 native receipts, read aggregation and Unknown observations are documented in
 [personal activity](ACTIVITY.md).
@@ -129,8 +129,8 @@ Trash is a storage capability, not application-owned snapshot history; see [Tras
 - Feature activation is persisted through onboarding/System settings. Optional processing
   begins disabled; the ml service and the Office controller expose starting, ready and failed
   states.
-- System pages are installation-wide and independent of the active login, and every page header
-  says so. System > General holds the files folder's name, reachability and Trash.
+- System pages are installation-wide and independent of the signed-in login, and every page
+  header says so. System > General holds the files folder's name, reachability and Trash.
 - The admin sidebar shows live processing activity and percentages only for fixed workloads.
   Lightweight worker snapshots and one shared poll drive it; see [System activity](SYSTEM-ACTIVITY.md).
 - Search combines text/filename and available visual results, with separate failure states.

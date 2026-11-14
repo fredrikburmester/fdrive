@@ -47,7 +47,7 @@ export function inputTypeFor(fieldOrKind: ProviderField | string): string {
 
 /**
  * Renders a provider's credential fields exactly as the API describes them:
- * the same list drives the login page and the Add and Remove login dialogs.
+ * the same list drives the login page and the backups unlock form.
  */
 export function ProviderFieldInputs({
   fields,

@@ -1,4 +1,4 @@
-import { AccountIdentityId, ApiClientError } from "@fdrive/contracts";
+import { ApiClientError, CanonicalUuid } from "@fdrive/contracts";
 import type { Route } from "next";
 import { redirect } from "next/navigation";
 import { serverApiClient } from "@/lib/api/server";
@@ -9,7 +9,7 @@ export default async function DesktopConnectPage({
 }: {
   searchParams: Promise<{ request?: string }>;
 }) {
-  const parsed = AccountIdentityId.safeParse((await searchParams).request);
+  const parsed = CanonicalUuid.safeParse((await searchParams).request);
   if (!parsed.success)
     return <main className="p-6">Start a connection from the fdrive Mac app.</main>;
   const client = await serverApiClient();

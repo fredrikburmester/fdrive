@@ -8,7 +8,6 @@ import {
   chatMessagesRoute,
   chatRoute,
   grantRoute,
-  IDENTITY_HEADER,
   jobCancelRoute,
   jobRoute,
   MODIFIED_AT_HEADER,
@@ -106,7 +105,6 @@ describe("ROUTES", () => {
     expect(ROUTES.activity).toEqual({
       feed: "/api/v1/activity",
       clientEvents: "/api/v1/activity/client-events",
-      locations: "/api/v1/activity/locations",
       resolveFile: "/api/v1/activity/files/resolve",
       files: "/api/v1/activity/files",
       batches: "/api/v1/activity/batches",
@@ -176,9 +174,6 @@ describe("ROUTES", () => {
   it("defines the account tokens route", () => {
     expect(ROUTES.account).toEqual({
       tokens: "/api/v1/account/tokens",
-      identities: "/api/v1/account/identities",
-      activeIdentity: "/api/v1/account/active-identity",
-      favorites: "/api/v1/account/favorites",
     });
   });
 });
@@ -245,10 +240,6 @@ describe("tagFilesRoute", () => {
 });
 
 describe("headers", () => {
-  it("IDENTITY_HEADER is x-identity-id", () => {
-    expect(IDENTITY_HEADER).toBe("x-identity-id");
-  });
-
   it("MODIFIED_AT_HEADER is x-modified-at", () => {
     expect(MODIFIED_AT_HEADER).toBe("x-modified-at");
   });

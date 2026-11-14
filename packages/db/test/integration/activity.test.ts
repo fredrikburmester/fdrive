@@ -22,7 +22,7 @@ import { finishNativeFailure } from "../../src/repos/activity-native.js";
 import { requireActivityRow } from "../../src/repos/activity-types.js";
 import { appendActivityEvent } from "../../src/repos/activity-writer.js";
 
-it("keeps personal journeys stable, immutable and private across pools and identity transfer", {
+it("keeps personal journeys stable, immutable and private across pools", {
   timeout: 180_000,
 }, async () => {
   const container = await new PostgreSqlContainer("pgvector/pgvector:pg17").start();
@@ -43,11 +43,6 @@ it("keeps personal journeys stable, immutable and private across pools and ident
       accountId: alice.id,
       providerId: provider.id,
       externalUsername: "alice",
-    });
-    const otherIdentity = await repos.identities.create({
-      accountId: bob.id,
-      providerId: provider.id,
-      externalUsername: "bob",
     });
     let at = new Date("2026-09-14T10:00:00.000Z");
     const a = createActivityRepo(first.db, () => at, firstLocks.db),
@@ -133,7 +128,6 @@ it("keeps personal journeys stable, immutable and private across pools and ident
     expect((await b.file(alice.id, uploaded.fileId as string))?.file.path).toBe("/b.txt");
     expect((await b.list(alice.id, { q: "a_%" })).some((row) => row.id === uploaded.id)).toBe(true);
     expect(await b.list(alice.id, { q: "a_X" })).toEqual([]);
-    expect(await b.list(alice.id, { identityId: otherIdentity.id })).toEqual([]);
     const page = await b.list(alice.id, {
       limit: 2,
       outcome: "success",
@@ -266,7 +260,7 @@ it("keeps personal journeys stable, immutable and private across pools and ident
       at,
       outcome: "unknown",
     });
-    expect(await reads.provisional(alice.id, identity.id)).toHaveLength(2);
+    expect(await reads.provisional(alice.id)).toHaveLength(2);
     expect((await reads.recents(alice.id, identity.id))[0]?.path).toBe("/c.txt");
     at = new Date(at.getTime() + 420_000);
     expect(await reads.seal()).toBe(2);
@@ -723,13 +717,6 @@ it("keeps personal journeys stable, immutable and private across pools and ident
     expect((await exports.revisions(alice.id, snapshot.snapshotSequence)).length).toBeGreaterThan(
       0,
     );
-    expect(await a.locations(alice.id)).toHaveLength(1);
-    expect(await a.locations(bob.id)).toEqual([]);
-    const secondLogin = await repos.identities.create({
-      accountId: alice.id,
-      providerId: provider.id,
-      externalUsername: "alice-other",
-    });
     const tag = await repos.tags.create(alice.id, { name: "Journey", color: null });
     const tagFact = { id: tag.id, name: tag.name, color: tag.color };
     // These paths are established by storage evidence before tag membership
@@ -737,7 +724,6 @@ it("keeps personal journeys stable, immutable and private across pools and ident
     await run("file.create", { path: "/tagged.txt", kind: "file" });
     const otherTagged = await a.begin({
       ...actor,
-      identityId: secondLogin.id,
       action: "file.create",
       source: "web",
       producerOperationId: randomUUID(),
@@ -746,9 +732,9 @@ it("keeps personal journeys stable, immutable and private across pools and ident
     });
     await a.finish(alice.id, otherTagged.id, { outcome: "success" });
     await repos.fileTags.setTags(identity.id, "/tagged.txt", [tag.id]);
-    await repos.fileTags.setTags(secondLogin.id, "/other-tagged.txt", [tag.id]);
+    await repos.fileTags.setTags(identity.id, "/other-tagged.txt", [tag.id]);
     await repos.folderViews.set(identity.id, "/pinned", { mode: "grid" });
-    await repos.folderViews.set(secondLogin.id, "/other-pinned", { mode: "tree" });
+    await repos.folderViews.set(identity.id, "/other-pinned", { mode: "tree" });
     async function metadataChange(
       action: PersonalActivityAction,
       requested: ActivityFacts,
@@ -794,11 +780,6 @@ it("keeps personal journeys stable, immutable and private across pools and ident
     expect(
       (await a.subjects(alice.id, [changedTag.id])).filter((subject) => subject.fileId),
     ).toHaveLength(2);
-    expect(
-      (await a.list(alice.id, { identityId: secondLogin.id })).some(
-        (event) => event.id === changedTag.id,
-      ),
-    ).toBe(true);
     const unchangedTag = await metadataChange(
       "tag.update",
       { tags: [{ ...tagFact, name: "Renamed" }] },
@@ -837,7 +818,6 @@ it("keeps personal journeys stable, immutable and private across pools and ident
     ).toBe("skipped");
     const reset = await metadataChange("folder.view.reset", { variant: "all" }, async (tx) => {
       await tx.folderViews.clear(identity.id);
-      await tx.folderViews.clear(secondLogin.id);
     });
     expect(
       (await a.subjects(alice.id, [reset.id])).filter((subject) => subject.fileId),

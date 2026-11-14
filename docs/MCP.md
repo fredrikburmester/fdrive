@@ -7,9 +7,9 @@ indexed.
 
 ## Create a token
 
-Open the sidebar account menu → **Account** → **Create token**. Choose a name, storage login,
-access level, allowed folders and expiry. The active login is selected initially; Read is the
-default. Enter one absolute virtual folder per line, or `/` for all folders in that login.
+Open the sidebar account menu → **Account** → **Create token**. Choose a name, access level,
+allowed folders and expiry; Read is the default. The token acts as your login. Enter one
+absolute virtual folder per line, or `/` for all your folders.
 The token is shown once. Copy it before closing the dialog.
 
 | Access | Available actions |
@@ -19,9 +19,8 @@ The token is shown once. Copy it before closing the dialog.
 | Full management | Organize plus create/upload/edit and recoverable Trash/restore. |
 
 Tokens never confer administration and reach only their own login's files. Every HTTP request
-checks that the token is unrevoked and unexpired, that its login still belongs to the token's
-account, and that the fdrive user is neither disabled nor removed.
-Changing the active login in the browser does not retarget an existing token.
+checks that the token is unrevoked and unexpired and that the fdrive user is neither disabled
+nor removed.
 
 ## Connect
 

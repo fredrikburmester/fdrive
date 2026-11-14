@@ -1,5 +1,4 @@
-import type { Repos } from "@fdrive/db";
-import type { AccountIdentityOperations } from "../accounts/types.ts";
+import type { LoginRepo, Repos } from "@fdrive/db";
 import type { AppHono, AuthedHono } from "../app.js";
 import type { AppConfig } from "../config.js";
 import type { ProviderService } from "../providers/service.js";
@@ -29,7 +28,7 @@ const LOGIN_BLOCK_MS = 60_000;
 
 export interface CreateAuthModuleDeps {
   readonly repos: Repos;
-  readonly identityLinks: AccountIdentityOperations;
+  readonly logins: LoginRepo;
   readonly providers: ProviderService;
   readonly fetch: typeof globalThis.fetch;
   readonly master: Uint8Array;
@@ -67,7 +66,7 @@ export function createAuthModule(deps: CreateAuthModuleDeps): AuthModule {
 
   const service = createAuthService({
     repos: deps.repos,
-    identityLinks: deps.identityLinks,
+    logins: deps.logins,
     providers: deps.providers,
     fetch: deps.fetch,
     master: deps.master,

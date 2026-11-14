@@ -42,8 +42,7 @@ export function FolderViewsCard() {
         </div>
         <div className="space-y-2">
           <p className="text-sm text-muted-foreground">
-            Remove saved views and sorts for every linked login. All folders will follow the
-            defaults.
+            Remove every saved view and sort. All folders will follow the defaults.
           </p>
           <Button variant="outline" disabled={reset.isPending} onClick={() => reset.mutate()}>
             {reset.isPending ? "Resetting…" : "Reset all folder views"}

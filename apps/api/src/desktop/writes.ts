@@ -796,11 +796,7 @@ export function createDesktopWrites(deps: DesktopWriteDeps) {
               source ? { from: source.path, to: target } : undefined,
             )
           : { ...context, office: null };
-        const effects = await repo.captureEffects(
-          principal.identityId,
-          principal.accountId,
-          effectContext,
-        );
+        const effects = await repo.captureEffects(principal.identityId, effectContext);
         let recoveryId: string | null = null;
         if (request.kind === "upload") {
           if (source && source.kind !== "file")
@@ -1076,7 +1072,7 @@ export function createDesktopWrites(deps: DesktopWriteDeps) {
             source ? { from: source.path, to: target } : undefined,
           )
         : { ...context, office: null };
-      const effects = await repo.captureEffects(identityId, accountId, effectContext);
+      const effects = await repo.captureEffects(identityId, effectContext);
       const item = await decorate(
         principal,
         entry,

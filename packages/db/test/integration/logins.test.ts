@@ -4,9 +4,9 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import {
   type CreateDbResult,
   createDb,
-  createIdentityLinksRepo,
+  createLoginRepo,
   createRepos,
-  type IdentityLinksRepo,
+  type LoginRepo,
   type LoginVerifiedInput,
   migrate,
 } from "../../src/index.js";
@@ -22,8 +22,6 @@ import {
 } from "../../src/schema/app.js";
 
 const providerId = "00000000-0000-0000-0000-000000000001";
-const accountA = "00000000-0000-0000-0000-000000000011";
-const accountB = "00000000-0000-0000-0000-000000000012";
 const missing = "00000000-0000-0000-0000-000000000099";
 const at = new Date("2026-09-07T01:00:00Z");
 const later = new Date(at.getTime() + 1000);
@@ -40,8 +38,8 @@ function loginInput(hash: string, username = "alice"): LoginVerifiedInput {
 let container: StartedPostgreSqlContainer | undefined;
 let first: CreateDbResult;
 let second: CreateDbResult;
-let a: IdentityLinksRepo;
-let b: IdentityLinksRepo;
+let a: LoginRepo;
+let b: LoginRepo;
 beforeAll(async () => {
   container = await new PostgreSqlContainer("pgvector/pgvector:pg17")
     .withDatabase("fdrive_test")
@@ -54,8 +52,8 @@ beforeAll(async () => {
   await first.db
     .insert(providers)
     .values({ id: providerId, type: "local", baseUrl: "http://provider" });
-  a = createIdentityLinksRepo(first.db);
-  b = createIdentityLinksRepo(second.db);
+  a = createLoginRepo(first.db);
+  b = createLoginRepo(second.db);
 });
 afterAll(async () => {
   await Promise.allSettled([first?.close(), second?.close()]);
@@ -63,10 +61,6 @@ afterAll(async () => {
 });
 beforeEach(async () => {
   await first.db.execute(sql`truncate app.accounts cascade`);
-  await first.db.insert(accounts).values([
-    { id: accountA, displayName: "Target" },
-    { id: accountB, displayName: "Other" },
-  ]);
 });
 async function snapshot() {
   return {
@@ -84,52 +78,35 @@ async function snapshot() {
 }
 async function assertSessionOwnership(): Promise<void> {
   const rows = await first.db.execute<{ count: number }>(
-    sql`select count(*)::integer as count from app.sessions s join app.identities i on i.id=s.active_identity_id where s.account_id<>i.account_id`,
+    sql`select count(*)::integer as count from app.sessions s join app.identities i on i.id=s.identity_id where s.account_id<>i.account_id`,
   );
   expect(rows.rows[0]?.count).toBe(0);
 }
-async function linkedFixture() {
-  const alice = await a.linkVerified({ ...base, accountId: accountA });
-  const sibling = await a.linkVerified({ ...base, username: "sibling", accountId: accountA });
-  const bob = await a.linkVerified({ ...base, username: "bob", accountId: accountB });
-  await first.db.insert(sessions).values([
-    {
-      idHash: "a".repeat(64),
-      accountId: accountA,
-      activeIdentityId: alice.id,
-      createdAt: at,
-      expiresAt: expiry,
-      lastSeenAt: at,
-      userAgent: "Original",
-      ip: "::1",
-    },
-    {
-      idHash: "b".repeat(64),
-      accountId: accountB,
-      activeIdentityId: bob.id,
-      createdAt: at,
-      expiresAt: expiry,
-      lastSeenAt: at,
-    },
-    {
-      idHash: "e".repeat(64),
-      accountId: accountA,
-      activeIdentityId: alice.id,
-      createdAt: at,
-      expiresAt: at,
-      lastSeenAt: at,
-    },
-  ]);
+/** Two signed-in users, with a tag, a token and an expired session on alice's account. */
+async function signedInFixture() {
+  const alice = (await a.loginVerified(loginInput("a"))).identity;
+  const bob = (await a.loginVerified(loginInput("b", "bob"))).identity;
+  await first.db.insert(sessions).values({
+    idHash: "e".repeat(64),
+    accountId: alice.accountId,
+    identityId: alice.id,
+    createdAt: at,
+    expiresAt: at,
+    lastSeenAt: at,
+  });
   const [tag] = await first.db
     .insert(tags)
-    .values({ accountId: accountA, name: "Used", color: "red" })
+    .values({ accountId: alice.accountId, name: "Used", color: "red" })
     .returning();
   if (!tag) throw new Error("Missing tag");
   await first.db.insert(fileTags).values({ identityId: alice.id, path: "/file", tagId: tag.id });
-  await first.db
-    .insert(apiTokens)
-    .values({ accountId: accountA, identityId: alice.id, name: "Token", tokenHash: "token" });
-  return { alice, sibling, bob };
+  await first.db.insert(apiTokens).values({
+    accountId: alice.accountId,
+    identityId: alice.id,
+    name: "Token",
+    tokenHash: "token",
+  });
+  return { alice, bob };
 }
 
 describe("atomic verified login", () => {
@@ -146,7 +123,7 @@ describe("atomic verified login", () => {
     expect(result.session).toMatchObject({
       idHash: "a".repeat(64),
       accountId: result.identity.accountId,
-      activeIdentityId: result.identity.id,
+      identityId: result.identity.id,
       createdAt: at,
       lastSeenAt: at,
       expiresAt: expiry,
@@ -173,7 +150,7 @@ describe("atomic verified login", () => {
       .where(eq(credentials.identityId, firstLogin.identity.id));
     const next = await b.loginVerified({ ...loginInput("b"), at: later });
     expect(next.identity).toEqual({ ...firstLogin.identity, lastLoginAt: later });
-    expect(await first.db.select().from(accounts)).toHaveLength(3);
+    expect(await first.db.select().from(accounts)).toHaveLength(1);
     expect(await first.db.select().from(sessions)).toHaveLength(2);
     const [credential] = await first.db.select().from(credentials);
     expect(credential).toMatchObject({
@@ -184,7 +161,7 @@ describe("atomic verified login", () => {
     await assertSessionOwnership();
   });
   it("revokes every other session of the account only when asked, and never on a first login", async () => {
-    const f = await linkedFixture();
+    const f = await signedInFixture();
     await a.loginVerified({ ...loginInput("c", "new-user"), revokeOtherSessions: true });
     expect(await first.db.select().from(sessions)).toHaveLength(4);
     const kept = await a.loginVerified({ ...loginInput("d"), at: later });
@@ -197,22 +174,13 @@ describe("atomic verified login", () => {
       revokeOtherSessions: true,
     });
     const remaining = await first.db.select().from(sessions).orderBy(asc(sessions.idHash));
-    // Account A (alice + sibling) keeps only the new session; account B and
-    // the unrelated new user are untouched; the expired "e" row goes too.
+    // Alice keeps only the new session; bob and the unrelated new user are
+    // untouched; the expired "e" row goes too.
     expect(remaining.map((s) => s.idHash)).toEqual(["1", "b", "c"].map((h) => h.repeat(64)));
-    expect(remaining[0]).toMatchObject({
-      accountId: f.alice.accountId,
-      activeIdentityId: f.alice.id,
-    });
+    expect(remaining[0]).toMatchObject({ accountId: f.alice.accountId, identityId: f.alice.id });
     expect(replaced.session.idHash).toBe("1".repeat(64));
     expect(kept.session.accountId).toBe(f.alice.accountId);
     await assertSessionOwnership();
-    await expect(
-      a.loginVerified({
-        ...loginInput("2"),
-        revokeOtherSessions: "yes" as unknown as boolean,
-      }),
-    ).rejects.toThrow(TypeError);
   });
   it("serializes first logins across pools without duplicate accounts or identities", async () => {
     const logins = await Promise.all(
@@ -221,245 +189,35 @@ describe("atomic verified login", () => {
       ),
     );
     expect(new Set(logins.map((r) => r.identity.id)).size).toBe(1);
-    expect(await first.db.select().from(accounts)).toHaveLength(3);
+    expect(await first.db.select().from(accounts)).toHaveLength(1);
     expect(await first.db.select().from(identities)).toHaveLength(1);
     expect(await first.db.select().from(sessions)).toHaveLength(10);
     await assertSessionOwnership();
   });
-  it("serializes a first login racing verified linking and leaves no foreign sessions", async () => {
-    const [login, linked] = await Promise.all([
-      a.loginVerified(loginInput("a")),
-      b.linkVerified({ ...base, accountId: accountA }),
-    ]);
-    expect(login.identity.id).toBe(linked.id);
-    const [identity] = await first.db.select().from(identities);
-    expect(identity?.accountId).toBe(accountA);
-    const allAccounts = await first.db.select().from(accounts);
-    // A successful login account is retained if a subsequent transfer empties it.
-    expect(allAccounts.length).toBe(login.identity.accountId === accountA ? 2 : 3);
-    await assertSessionOwnership();
-  });
-  it("serializes login against transfer and unlink", async () => {
-    const f = await linkedFixture();
-    await Promise.all([
-      a.loginVerified(loginInput("c")),
-      b.linkVerified({ ...base, accountId: accountB }),
-    ]);
-    await assertSessionOwnership();
-    const afterTransfer = await a.loginVerified(loginInput("d"));
-    expect(afterTransfer.identity.accountId).toBe(accountB);
-    await Promise.all([
-      a.loginVerified(loginInput("f")),
-      b.unlink({ accountId: accountB, identityId: f.alice.id, at }),
-    ]);
-    await assertSessionOwnership();
-    const [identity] = await first.db
-      .select()
-      .from(identities)
-      .where(eq(identities.id, f.alice.id));
-    const afterUnlink = await a.loginVerified(loginInput("1"));
-    expect(afterUnlink.identity.accountId).toBe(identity?.accountId);
-  });
   it("rolls back accounts, credentials, login timestamps and sessions on sealing or insertion failure", async () => {
+    await signedInFixture();
     const before = await snapshot();
     await expect(
       a.loginVerified({
-        ...loginInput("a"),
+        ...loginInput("c", "carol"),
         sealCredential: () => {
           throw new Error("seal failed");
         },
       }),
     ).rejects.toThrow("seal failed");
     expect(await snapshot()).toEqual(before);
-    await a.loginVerified(loginInput("a"));
-    const existing = await snapshot();
     await expect(
       a.loginVerified({
-        ...loginInput("b"),
+        ...loginInput("c"),
         at: later,
         sealCredential: () => {
           throw new Error("seal failed");
         },
       }),
     ).rejects.toThrow("seal failed");
-    expect(await snapshot()).toEqual(existing);
+    expect(await snapshot()).toEqual(before);
     await expect(a.loginVerified({ ...loginInput("a"), at: later })).rejects.toThrow();
-    expect(await snapshot()).toEqual(existing);
-  });
-});
-
-describe("requesting session authorization", () => {
-  it("rejects absent, expired and foreign requesting sessions before link or unlink changes", async () => {
-    const f = await linkedFixture();
-    const before = await snapshot();
-    for (const hash of ["b", "e", "f"]) {
-      await expect(
-        a.linkVerified({
-          ...base,
-          username: "bob",
-          accountId: accountA,
-          requestingSessionIdHash: hash.repeat(64),
-        }),
-      ).rejects.toMatchObject({ code: "invalid_session" });
-      await expect(
-        a.unlink({
-          accountId: accountA,
-          identityId: f.alice.id,
-          at,
-          requestingSessionIdHash: hash.repeat(64),
-        }),
-      ).rejects.toMatchObject({ code: "invalid_session" });
-      expect(await snapshot()).toEqual(before);
-    }
-  });
-  it("accepts live requesting sessions and rejects one revoked by logout", async () => {
-    const f = await linkedFixture();
-    await a.linkVerified({
-      ...base,
-      username: "new",
-      accountId: accountA,
-      requestingSessionIdHash: "a".repeat(64),
-    });
-    await a.unlink({
-      accountId: accountA,
-      identityId: f.sibling.id,
-      at,
-      requestingSessionIdHash: "a".repeat(64),
-    });
-    await createRepos(second.db).sessions.delete("a".repeat(64));
-    const before = await snapshot();
-    await expect(
-      a.linkVerified({
-        ...base,
-        username: "another",
-        accountId: accountA,
-        requestingSessionIdHash: "a".repeat(64),
-      }),
-    ).rejects.toMatchObject({ code: "invalid_session" });
     expect(await snapshot()).toEqual(before);
-  });
-  it("rechecks a requesting session when logout races link or unlink", async () => {
-    const f = await linkedFixture();
-    const result = await Promise.allSettled([
-      a.linkVerified({
-        ...base,
-        username: "new",
-        accountId: accountA,
-        requestingSessionIdHash: "a".repeat(64),
-      }),
-      createRepos(second.db).sessions.delete("a".repeat(64)),
-    ]);
-    if (result[0]?.status === "rejected")
-      expect(result[0].reason).toMatchObject({ code: "invalid_session" });
-    expect(await createRepos(first.db).sessions.getByIdHash("a".repeat(64), at)).toBeNull();
-    await expect(
-      a.unlink({
-        accountId: accountA,
-        identityId: f.alice.id,
-        at,
-        requestingSessionIdHash: "a".repeat(64),
-      }),
-    ).rejects.toMatchObject({ code: "invalid_session" });
-    await assertSessionOwnership();
-  });
-});
-
-describe("atomic session rotation", () => {
-  it("preserves expiry and metadata, revokes the old hash and changes only this session", async () => {
-    const f = await linkedFixture();
-    const before = await snapshot();
-    const rotated = await a.rotateSession({
-      accountId: accountA,
-      oldSessionIdHash: "a".repeat(64),
-      newSessionIdHash: "c".repeat(64),
-      activeIdentityId: f.sibling.id,
-      at: later,
-    });
-    expect(rotated).toMatchObject({
-      accountId: accountA,
-      activeIdentityId: f.sibling.id,
-      // Rotation keeps the original login time: it must not extend the
-      // session's absolute lifetime.
-      createdAt: at,
-      lastSeenAt: later,
-      expiresAt: expiry,
-      userAgent: "Original",
-      ip: "::1",
-    });
-    expect(await createRepos(first.db).sessions.getByIdHash("a".repeat(64), at)).toBeNull();
-    const after = await snapshot();
-    expect(after.sessions.filter((s) => s.idHash !== rotated.idHash)).toEqual(
-      before.sessions.filter((s) => s.idHash !== "a".repeat(64)),
-    );
-    expect(after.credentials).toEqual(before.credentials);
-  });
-  it("rolls back duplicate hashes and rejects expired, foreign, revoked sessions or identities", async () => {
-    const f = await linkedFixture();
-    const request = {
-      accountId: accountA,
-      oldSessionIdHash: "a".repeat(64),
-      newSessionIdHash: "c".repeat(64),
-      activeIdentityId: f.alice.id,
-      at,
-    };
-    const before = await snapshot();
-    await expect(
-      a.rotateSession({ ...request, newSessionIdHash: "b".repeat(64) }),
-    ).rejects.toThrow();
-    expect(await snapshot()).toEqual(before);
-    for (const hash of ["b", "e", "f"])
-      await expect(
-        a.rotateSession({ ...request, oldSessionIdHash: hash.repeat(64) }),
-      ).rejects.toMatchObject({ code: "invalid_session" });
-    await expect(a.rotateSession({ ...request, activeIdentityId: f.bob.id })).rejects.toMatchObject(
-      { code: "forbidden" },
-    );
-    expect(await snapshot()).toEqual(before);
-  });
-  it("allows only one competing rotation and serializes with logout and transfer", async () => {
-    const f = await linkedFixture();
-    const request = {
-      accountId: accountA,
-      oldSessionIdHash: "a".repeat(64),
-      newSessionIdHash: "c".repeat(64),
-      activeIdentityId: f.alice.id,
-      at,
-    };
-    const results = await Promise.allSettled([
-      a.rotateSession(request),
-      b.rotateSession({ ...request, newSessionIdHash: "d".repeat(64) }),
-    ]);
-    expect(results.filter((r) => r.status === "fulfilled")).toHaveLength(1);
-    expect(results.find((r) => r.status === "rejected")).toMatchObject({
-      reason: { code: "invalid_session" },
-    });
-    const winner = results.find((r) => r.status === "fulfilled");
-    if (winner?.status !== "fulfilled") throw new Error("Missing rotation");
-    await Promise.allSettled([
-      a.rotateSession({
-        ...request,
-        oldSessionIdHash: winner.value.idHash,
-        newSessionIdHash: "f".repeat(64),
-      }),
-      createRepos(second.db).sessions.delete(winner.value.idHash),
-    ]);
-    await assertSessionOwnership();
-    const login = await a.loginVerified(loginInput("1"));
-    const transferRace = await Promise.allSettled([
-      a.rotateSession({
-        ...request,
-        oldSessionIdHash: login.session.idHash,
-        newSessionIdHash: "2".repeat(64),
-      }),
-      b.linkVerified({ ...base, accountId: accountB }),
-    ]);
-    expect(transferRace[1]?.status).toBe("fulfilled");
-    await assertSessionOwnership();
-    const oldAccountSessions = await first.db
-      .select()
-      .from(sessions)
-      .where(eq(sessions.accountId, accountA));
-    expect(oldAccountSessions.every((s) => s.activeIdentityId !== f.alice.id)).toBe(true);
   });
 });
 
@@ -471,18 +229,26 @@ it("validates before IO and reports missing provider without a speculative accou
   expect(await snapshot()).toEqual(before);
   const closed = createDb("postgresql://unused:unused@127.0.0.1:1/unused");
   await closed.close();
-  const repo = createIdentityLinksRepo(closed.db);
+  const repo = createLoginRepo(closed.db);
   await expect(repo.loginVerified({ ...loginInput("a"), username: "" })).rejects.toThrow(TypeError);
-  await expect(
-    repo.rotateSession({
-      accountId: accountA,
-      activeIdentityId: missing,
-      oldSessionIdHash: "bad",
-      newSessionIdHash: "a".repeat(64),
-      at,
-    }),
-  ).rejects.toThrow(TypeError);
   await expect(createRepos(closed.db).providers.get("bad")).rejects.toThrow(TypeError);
+});
+
+it("refuses a second login for an account in the database itself", async () => {
+  const alice = (await a.loginVerified(loginInput("a"))).identity;
+  await expect(
+    first.db
+      .insert(identities)
+      .values({ accountId: alice.accountId, providerId, externalUsername: "second" }),
+  ).rejects.toThrow();
+  expect(await first.db.select().from(identities)).toHaveLength(1);
+});
+
+it("ends a login's sessions and tokens with it", async () => {
+  const { alice, bob } = await signedInFixture();
+  await first.db.delete(identities).where(eq(identities.id, alice.id));
+  expect((await first.db.select().from(sessions)).map((s) => s.identityId)).toEqual([bob.id]);
+  expect(await first.db.select().from(apiTokens)).toEqual([]);
 });
 
 it("compares credentials under the login lock so equal replacements retain both sessions", async () => {
@@ -572,4 +338,43 @@ it("preserves existing records when setup loses and allows only the pending owne
     code: "setup_claimed",
   });
   expect(await first.db.select().from(sessions)).toHaveLength(3);
+});
+
+describe("provider endpoint binding", () => {
+  it("rejects a login verified against an endpoint that changed before persistence", async () => {
+    const repos = createRepos(first.db);
+    const row = await repos.providers.ensure({ type: "local", baseUrl: "http://stale-login" });
+    await repos.providers.update(row.id, { baseUrl: "http://replacement-login" });
+    await expect(
+      a.loginVerified({
+        ...loginInput("e"),
+        providerId: row.id,
+        verifiedProvider: { type: row.type, baseUrl: row.baseUrl },
+      }),
+    ).rejects.toMatchObject({ code: "invalid_session" });
+    expect(await repos.identities.countByProvider(row.id)).toBe(0);
+  });
+
+  it("serializes a racing address update and first login", async () => {
+    const repos = createRepos(second.db);
+    const row = await repos.providers.ensure({ type: "local", baseUrl: "http://race-login" });
+    const [identityResult, addressResult] = await Promise.allSettled([
+      a.loginVerified({
+        ...loginInput("e"),
+        providerId: row.id,
+        verifiedProvider: { type: row.type, baseUrl: row.baseUrl },
+      }),
+      repos.providers.update(row.id, { baseUrl: "http://raced-login" }),
+    ]);
+    expect(
+      [identityResult, addressResult].filter((result) => result.status === "fulfilled"),
+    ).toHaveLength(1);
+    if (identityResult.status === "fulfilled") {
+      expect(await repos.providers.get(row.id)).toMatchObject({ baseUrl: row.baseUrl });
+      expect(await repos.identities.countByProvider(row.id)).toBe(1);
+    } else {
+      expect(identityResult.reason).toMatchObject({ code: "invalid_session" });
+      expect(await repos.identities.countByProvider(row.id)).toBe(0);
+    }
+  });
 });

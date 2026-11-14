@@ -1,13 +1,5 @@
 export { AboutResponse } from "./about.ts";
 export {
-  AccountFavoriteItem,
-  AccountFavoritesResponse,
-  AccountIdentityId,
-  LinkIdentityRequest,
-  SwitchIdentityRequest,
-  UnlinkIdentityRequest,
-} from "./accounts.ts";
-export {
   ActivityOperation,
   SystemActivityId,
   SystemActivityItem,
@@ -197,8 +189,6 @@ export {
   chatMessagesRoute,
   chatRoute,
   grantRoute,
-  IDENTITY_HEADER,
-  IDENTITY_QUERY_PARAM,
   jobCancelRoute,
   jobRoute,
   MODIFIED_AT_HEADER,

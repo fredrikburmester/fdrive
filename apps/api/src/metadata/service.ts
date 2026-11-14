@@ -9,7 +9,6 @@ import type {
   FolderViewPatch,
   FolderViewRepo,
   FolderViewSort,
-  IdentityRepo,
   MetadataPathRepo,
   RecentRepo,
   TagRepo,
@@ -59,7 +58,6 @@ export interface MetadataServiceDeps {
   readonly fileTags: FileTagRepo;
   readonly favorites: FavoriteRepo;
   readonly folderViews: FolderViewRepo;
-  readonly identities: Pick<IdentityRepo, "listByAccount">;
   readonly metadataPaths: MetadataPathRepo;
   readonly recents: RecentRepo;
 }
@@ -126,8 +124,8 @@ export interface MetadataService {
   setFolderView(identityId: string, path: string, patch: FolderViewPatch): Promise<void>;
   /** Removes a folder's pin, or only its mode or sort when `part` is given. */
   removeFolderView(identityId: string, path: string, part?: "mode" | "sort"): Promise<void>;
-  /** Resets every folder pin owned through every identity linked to `accountId`. */
-  resetFolderViews(accountId: string): Promise<void>;
+  /** Resets every folder pin of the login. */
+  resetFolderViews(identityId: string): Promise<void>;
   listRecents(identityId: string, limit?: number): Promise<MetadataRecentItem[]>;
   touchRecent(identityId: string, path: string): Promise<void>;
   /** Atomically rewrites all path-keyed metadata after a move made through fdrive or seen on disk. */
@@ -265,9 +263,8 @@ export function createMetadataService(deps: MetadataServiceDeps): MetadataServic
       );
     },
 
-    async resetFolderViews(accountId) {
-      const identities = await deps.identities.listByAccount(accountId);
-      await Promise.all(identities.map((identity) => deps.folderViews.clear(identity.id)));
+    async resetFolderViews(identityId) {
+      await deps.folderViews.clear(identityId);
     },
 
     async listRecents(identityId, limit = DEFAULT_RECENTS_LIMIT) {

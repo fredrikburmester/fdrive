@@ -162,20 +162,15 @@ describe("createMetadataService: folder views", () => {
     expect(await service.getFolderView(IDENTITY_ID, "/photos")).toBeNull();
   });
 
-  it("resets views across every linked identity without touching another account", async () => {
+  it("resets every view of the login without touching another login's", async () => {
     const { repos, service } = buildService();
     const provider = await repos.providers.ensure({ type: "test", baseUrl: "http://test" });
     const account = await repos.accounts.create({ displayName: "Alice" });
     const otherAccount = await repos.accounts.create({ displayName: "Bob" });
-    const first = await repos.identities.create({
+    const alice = await repos.identities.create({
       accountId: account.id,
       providerId: provider.id,
-      externalUsername: "alice-1",
-    });
-    const second = await repos.identities.create({
-      accountId: account.id,
-      providerId: provider.id,
-      externalUsername: "alice-2",
+      externalUsername: "alice",
     });
     const other = await repos.identities.create({
       accountId: otherAccount.id,
@@ -183,15 +178,15 @@ describe("createMetadataService: folder views", () => {
       externalUsername: "bob",
     });
     await Promise.all([
-      service.setFolderView(first.id, "/one", { mode: "list" }),
-      service.setFolderView(second.id, "/two", { mode: "grid" }),
+      service.setFolderView(alice.id, "/one", { mode: "list" }),
+      service.setFolderView(alice.id, "/two", { mode: "grid" }),
       service.setFolderView(other.id, "/keep", { mode: "tree" }),
     ]);
 
-    await service.resetFolderViews(account.id);
+    await service.resetFolderViews(alice.id);
 
-    await expect(service.getFolderView(first.id, "/one")).resolves.toBeNull();
-    await expect(service.getFolderView(second.id, "/two")).resolves.toBeNull();
+    await expect(service.getFolderView(alice.id, "/one")).resolves.toBeNull();
+    await expect(service.getFolderView(alice.id, "/two")).resolves.toBeNull();
     await expect(service.getFolderView(other.id, "/keep")).resolves.toMatchObject({ mode: "tree" });
   });
 });

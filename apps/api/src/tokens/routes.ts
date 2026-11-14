@@ -36,10 +36,7 @@ export function registerTokenRoutes(
       });
     }
 
-    const result = await deps.service.create(principal.accountId, {
-      ...parsed.data,
-      identityId: parsed.data.identityId ?? principal.identityId,
-    });
+    const result = await deps.service.create(principal, parsed.data);
     return c.json(result, 201);
   });
 

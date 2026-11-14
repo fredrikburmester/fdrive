@@ -17,7 +17,6 @@ const loginMock = vi.fn();
 const logoutMock = vi.fn();
 
 vi.mock("./client.js", () => ({
-  pinTabIdentity: vi.fn(),
   apiClient: {
     me: (...args: unknown[]) => meMock(...args),
     login: (...args: unknown[]) => loginMock(...args),
@@ -27,10 +26,10 @@ vi.mock("./client.js", () => ({
 
 const ME_RESPONSE = makeMe({
   account: { id: "00000000-0000-0000-0000-000000000000", displayName: "Ada" },
-  identities: [
-    makeIdentity({ id: "00000000-0000-0000-0000-000000000001", providerLabel: "Local folder" }),
-  ],
-  activeIdentityId: "00000000-0000-0000-0000-000000000001",
+  identity: makeIdentity({
+    id: "00000000-0000-0000-0000-000000000001",
+    providerLabel: "Local folder",
+  }),
 });
 
 function createWrapper(queryClient: QueryClient) {

@@ -13,15 +13,14 @@ import { describeCredentialError } from "@/lib/api/errors";
 import { newPasswordErrors } from "@/lib/auth/local-account";
 
 /**
- * Account page card: the active login changes its own password, which
+ * Account page card: the signed-in login changes its own password, which
  * fdrive keeps for every user of its files folder. Hidden until the account
  * has loaded.
  */
 export function PasswordCard() {
   const { data: me } = useShellMe();
-  const active = me?.identities.find((identity) => identity.id === me.activeIdentityId);
-  if (active === undefined) return null;
-  return <PasswordForm key={active.id} username={active.username} />;
+  if (me === undefined) return null;
+  return <PasswordForm key={me.identity.id} username={me.identity.username} />;
 }
 
 function PasswordForm({ username }: { username: string }) {

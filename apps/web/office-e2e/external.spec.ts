@@ -18,7 +18,6 @@ test("a same-size same-second edit outside fdrive invalidates editor content", a
   await expect
     .poll(async () => (await storedXml(state, path)).includes("CACHE_BEFORE"), { timeout: 90_000 })
     .toBe(true);
-  const identity = new URL(page.url()).pathname.split("/")[2];
   await page.goto("/files");
   const modifiedSeconds = Math.floor(Date.now() / 1000) - 60;
   const normalized = await rewriteArchive(
@@ -34,7 +33,7 @@ test("a same-size same-second edit outside fdrive invalidates editor content", a
   const firstMetadata = await storedMetadata(state, path);
   expect(firstMetadata.modifiedSeconds).toBe(modifiedSeconds);
   expect(first).toEqual(new Uint8Array(await readFile(normalized)));
-  await page.goto(`/office/${identity}/${encodeURIComponent(filename)}?mode=view`);
+  await page.goto(`/office/${encodeURIComponent(filename)}?mode=view`);
   await documentLoaded(page);
   await editor.locator("#area_id").waitFor({ state: "attached", timeout: 120_000 });
   await editor
@@ -62,7 +61,7 @@ test("a same-size same-second edit outside fdrive invalidates editor content", a
   expect(createHash("sha256").update(second).digest("hex")).not.toBe(
     createHash("sha256").update(first).digest("hex"),
   );
-  await page.goto(`/office/${identity}/${encodeURIComponent(filename)}?mode=view`);
+  await page.goto(`/office/${encodeURIComponent(filename)}?mode=view`);
   await documentLoaded(page);
   await editor.locator("#area_id").waitFor({ state: "attached", timeout: 120_000 });
   await editor
