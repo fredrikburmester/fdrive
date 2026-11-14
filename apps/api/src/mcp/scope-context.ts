@@ -1,7 +1,8 @@
 import type { Scope } from "@fdrive/core";
-import { isUnderPath, toFsPath } from "@fdrive/core";
-import type { IndexQueries, ScopePrefix } from "@fdrive/db";
+import { isReservedPath, toFsPath } from "@fdrive/core";
+import type { IndexExclusion, IndexQueries, ScopePrefix } from "@fdrive/db";
 import { roundTripVirtualPath } from "../scoping/round-trip.ts";
+import { reservedExclusion } from "../search/scopes.ts";
 
 /**
  * Everything an MCP tool needs to translate between a principal's virtual
@@ -16,13 +17,22 @@ export interface ScopeContext {
   readonly rootNameById: ReadonlyMap<number, string>;
   readonly rootIdByName: ReadonlyMap<string, number>;
   /**
-   * The storage provider's recycle folder virtual path, when configured.
-   * `virtualPathFor` treats a path at or under this prefix as unmapped, so
-   * trashed files never appear in MCP tool results (`find_files`,
-   * `find_duplicates`, `similar_files`, `folder_overview`, `recent_moves`,
-   * ...).
+   * The login's Trash folder virtual path, when Trash is on. With it, every
+   * query leaves fdrive's own folders out (`reservedExclusionOf`) and
+   * `virtualPathFor` never maps a row into one, so they never appear in MCP
+   * tool results (`find_files`, `find_duplicates`, `similar_files`,
+   * `folder_overview`, `recent_moves`, ...).
    */
   readonly trashPath: string | null;
+}
+
+/**
+ * fdrive's own folders (`isReservedPath`) in `ctx`'s index coordinates, for
+ * every query a tool runs to leave out before its limit, so pages are full
+ * and totals count only what the tool can return.
+ */
+export function reservedExclusionOf(ctx: ScopeContext): IndexExclusion {
+  return reservedExclusion(ctx.scopes, ctx.trashPath, Object.fromEntries(ctx.rootIdByName));
 }
 
 /**
@@ -64,7 +74,9 @@ export async function resolveScopeContext(
 /**
  * Maps `(rootId, fsPath)` back to the caller's virtual path, `null` when out
  * of scope, when a more specific override shadows this exact location (see
- * `roundTripVirtualPath`), or (per `ctx.trashPath`) inside the trash. Every
+ * `roundTripVirtualPath`), or in one of fdrive's own folders
+ * (`isReservedPath`, per `ctx.trashPath`), which a lookup by id or exact
+ * path does not leave out on its own. Every
  * index-derived candidate must be filtered through this before it can
  * contribute to a tool's result; it is never sufficient on its own, though:
  * callers still need a live read check (`ReadAuthorizer`) before returning
@@ -79,13 +91,7 @@ export function virtualPathFor(ctx: ScopeContext, rootId: number, fsPath: string
   if (virtualPath === null) {
     return null;
   }
-  if (
-    ctx.trashPath !== null &&
-    (virtualPath === ctx.trashPath || isUnderPath(ctx.trashPath, virtualPath))
-  ) {
-    return null;
-  }
-  return virtualPath;
+  return isReservedPath(virtualPath, ctx.trashPath) ? null : virtualPath;
 }
 
 /**

@@ -1199,6 +1199,8 @@ mod linux {
             let w = started(tmp.path(), &rec, 0.2);
             fs::create_dir(tmp.path().join("node_modules")).unwrap();
             fs::write(tmp.path().join("node_modules/x.txt"), "x").unwrap();
+            fs::create_dir(tmp.path().join(".fdrive-desktop")).unwrap();
+            fs::write(tmp.path().join(".fdrive-desktop/staged.txt"), "x").unwrap();
             fs::write(tmp.path().join(".DS_Store"), "junk").unwrap();
             fs::write(tmp.path().join("._real.txt"), "junk").unwrap();
             fs::write(tmp.path().join("real.txt"), "real").unwrap();

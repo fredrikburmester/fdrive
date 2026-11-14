@@ -18,6 +18,17 @@ import {
   selectImageHits,
 } from "./image-service.js";
 
+/** What the query leaves out for alice: the Mac app's folder, the reserved names and her Trash, if any. */
+function reserved(...trash: string[]) {
+  return {
+    prefixes: [
+      ...trash.map((fsPrefix) => ({ rootId: 1, fsPrefix })),
+      { rootId: 1, fsPrefix: "/alice/.fdrive-desktop" },
+    ],
+    names: [".fdrive-move-v1", ".fdrive-backups"],
+  };
+}
+
 const HOME_SCOPES: readonly Scope[] = [
   { rootName: "files", fsPrefix: "/alice", virtualPrefix: "/" },
 ];
@@ -259,7 +270,7 @@ describe("createImageSearchService", () => {
     expect(result.hits).toEqual([]);
   });
 
-  it("asks the query to leave out the Trash, mapped through the scopes, before its limit", async () => {
+  it("asks the query to leave out fdrive's own folders, mapped through the scopes, before its limit", async () => {
     const searchImages = vi.fn(async () => [makeRow({ path: "alice/cat.jpg" })]);
     const indexQueries = fakeIndexQueries({ searchImages });
 
@@ -272,9 +283,9 @@ describe("createImageSearchService", () => {
     await createImageSearchService(buildDeps({ indexQueries })).search(buildInput());
 
     expect(searchImages.mock.calls.map((call) => (call as unknown[])[4])).toEqual([
-      { exclude: [{ rootId: 1, fsPrefix: "/alice/.trash" }] },
-      { exclude: [{ rootId: 1, fsPrefix: "/alice/Bin" }] },
-      { exclude: [] },
+      { exclude: reserved("/alice/.trash") },
+      { exclude: reserved("/alice/Bin") },
+      { exclude: reserved() },
     ]);
   });
 

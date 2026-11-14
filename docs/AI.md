@@ -109,7 +109,8 @@ suggestions, which the person still has to approve; the organizer has no tool th
 - Chat (`apps/api/src/ai/chat/`, routes under `/api/v1/ai/chats`) is the API side of
   [AI chat](plans/AI-CHAT.md); the panel is not built yet. A chat's *references* (the files and
   folders a person attached), plus the folder the person has open when sending a message (a
-  verified folder outside Trash, stored as that message's `location`, never as a reference),
+  verified folder outside fdrive's own folders such as Trash, stored as that message's
+  `location`, never as a reference),
   are the tools' focus for that message. `service.ts` stores transcripts and references
   through `AiChatRepo` (`app.ai_chats`, `app.ai_chat_messages`, `app.ai_chat_references`), keeps
   one live provider conversation per active chat in memory (`live.ts`) and rebuilds it from the

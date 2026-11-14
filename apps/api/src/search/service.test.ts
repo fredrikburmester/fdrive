@@ -126,6 +126,17 @@ function buildDeps(overrides: Partial<SearchServiceDeps> = {}): SearchServiceDep
 
 const NO_FILTERS = { exts: null, folder: null, after: null, before: null };
 
+/** What every query leaves out for alice: the Mac app's folder, the reserved names and her Trash, if any. */
+function reserved(...trash: string[]) {
+  return {
+    prefixes: [
+      ...trash.map((fsPrefix) => ({ rootId: 1, fsPrefix })),
+      { rootId: 1, fsPrefix: "/alice/.fdrive-desktop" },
+    ],
+    names: [".fdrive-move-v1", ".fdrive-backups"],
+  };
+}
+
 it("stops text search immediately when its runtime feature is disabled", async () => {
   const service = createSearchService(
     buildDeps({
@@ -444,9 +455,9 @@ describe("createSearchService: search - ranking", () => {
     expect(fulltext.mock.calls[0]?.[3]).toEqual({
       recency,
       preferTsquery: "annual:*&report:*",
-      exclude: [],
+      exclude: reserved(),
     });
-    expect(filename.mock.calls[0]?.[4]).toEqual({ recency, exclude: [] });
+    expect(filename.mock.calls[0]?.[4]).toEqual({ recency, exclude: reserved() });
   });
 });
 
@@ -740,7 +751,7 @@ describe("createSearchService: search - hits", () => {
       ["microlä"],
       "Microlä",
       50,
-      { recency: { now: NOW, halfLifeDays: 180, floor: 0.4 }, exclude: [] },
+      { recency: { now: NOW, halfLifeDays: 180, floor: 0.4 }, exclude: reserved() },
     );
   });
 
@@ -943,7 +954,7 @@ describe("createSearchService: search - hits", () => {
     expect(result.sections.files.map((hit) => hit.path)).toEqual(["/microtest/readme.txt"]);
   });
 
-  it("asks every query to leave out the Trash, mapped through the scopes, before its limit", async () => {
+  it("asks every query to leave out fdrive's own folders, mapped through the scopes, before its limit", async () => {
     const semantic = vi.fn(async () => []);
     const fulltext = vi.fn(async () => []);
     const filename = vi.fn(async () => []);
@@ -962,7 +973,7 @@ describe("createSearchService: search - hits", () => {
 
     await service.search(baseInput());
 
-    const exclude = [{ rootId: 1, fsPrefix: "/alice/.trash" }];
+    const exclude = reserved("/alice/.trash");
     expect(semantic).toHaveBeenCalledWith(expect.anything(), [0.1], 60, { exclude });
     expect(fulltext).toHaveBeenCalledWith(
       expect.anything(),
@@ -986,7 +997,7 @@ describe("createSearchService: search - hits", () => {
     );
   });
 
-  it("uses the request's Trash over the default, and leaves nothing out without one", async () => {
+  it("uses the request's Trash over the default, and leaves out only the rest without one", async () => {
     const filename = vi.fn(async () => []);
     const indexQueries = fakeIndexQueries({
       rootIdsByName: async () => ({ files: 1 }),
@@ -1001,8 +1012,8 @@ describe("createSearchService: search - hits", () => {
     await createSearchService(buildDeps({ indexQueries })).search(baseInput());
 
     expect(filename.mock.calls.map((call) => (call as unknown[])[4])).toEqual([
-      expect.objectContaining({ exclude: [{ rootId: 1, fsPrefix: "/alice/Bin" }] }),
-      expect.objectContaining({ exclude: [] }),
+      expect.objectContaining({ exclude: reserved("/alice/Bin") }),
+      expect.objectContaining({ exclude: reserved() }),
     ]);
   });
 

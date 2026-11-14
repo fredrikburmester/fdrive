@@ -13,8 +13,12 @@ pub const SKIP_NAMES: &[&str] = &[
     ".localized",
     crate::files_marker::FILES_MARKER,
 ];
+/// Folders a walk never enters, wherever they lie. fdrive's own are the Mac app's folder (staged
+/// uploads, the versions its writes replace and its Trash) and backup folders; its Trash is
+/// indexed, so moves into and out of it stay renames that keep thumbnails and embeddings.
 pub const SKIP_DIRS: &[&str] = &[
     ".fdrive-backups",
+    ".fdrive-desktop",
     "@eaDir",
     ".Trash",
     ".Trashes",

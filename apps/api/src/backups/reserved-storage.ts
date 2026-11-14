@@ -1,10 +1,5 @@
-import { normalizePath, type StorageProvider } from "@fdrive/core";
+import { isBackupPath, normalizePath, type StorageProvider } from "@fdrive/core";
 import { ApiHttpError } from "../errors.js";
-export function isBackupPath(path: string): boolean {
-  return normalizePath(path)
-    .split("/")
-    .some((part) => part.toLowerCase() === ".fdrive-backups");
-}
 /** Backup I/O uses the raw adapter. Normal browsing, writes and shares never expose it. */
 export function withoutBackupPaths(storage: StorageProvider): StorageProvider {
   const guard = (path: string) => {

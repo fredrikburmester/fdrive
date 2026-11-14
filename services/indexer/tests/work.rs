@@ -220,6 +220,7 @@ fn entries_are_judged_like_the_walk() {
     let env = Env::new();
     let (_, stat) = env.write("d/a.txt", b"hello");
     env.write(".git/x.txt", b"hidden");
+    env.write("alice/.fdrive-desktop/staging/x.txt", b"staged");
     env.write("d/.DS_Store", b"junk");
     std::fs::create_dir_all(env.path("node_modules")).unwrap();
     std::os::unix::fs::symlink(env.path("d"), env.path("link")).unwrap();
@@ -230,6 +231,8 @@ fn entries_are_judged_like_the_walk() {
         "missing.txt",
         "d/a.txt/below",
         ".git/x.txt",
+        "alice/.fdrive-desktop",
+        "alice/.fdrive-desktop/staging/x.txt",
         "d/.DS_Store",
         "node_modules",
         "link",

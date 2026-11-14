@@ -187,22 +187,30 @@ describe("buildProposal", () => {
     ]);
   });
 
-  it("keeps an item in place when the destination is in Trash", async () => {
+  it("keeps an item in place when the destination is in one of fdrive's own folders", async () => {
     const proposal = await build({
-      items: [file("/Inbox/a.pdf"), file("/Inbox/b.pdf"), file("/Inbox/c.pdf")],
+      items: [
+        file("/Inbox/a.pdf"),
+        file("/Inbox/b.pdf"),
+        file("/Inbox/c.pdf"),
+        file("/Inbox/d.pdf"),
+      ],
       trashPath: "/.Trash",
       submission: submission({
         moves: [
           move("/Inbox/a.pdf", "/.Trash"),
           move("/Inbox/b.pdf", "/.Trash/2024"),
           move("/Inbox/c.pdf", "/.Trash-not/2024"),
+          move("/Inbox/d.pdf", "/.fdrive-desktop/staging"),
         ],
       }),
     });
 
+    const reason = "The suggested folder is in Trash or another of fdrive's own folders.";
     expect(proposal.unchanged).toEqual([
-      { path: "/Inbox/a.pdf", reason: "The suggested folder is in Trash." },
-      { path: "/Inbox/b.pdf", reason: "The suggested folder is in Trash." },
+      { path: "/Inbox/a.pdf", reason },
+      { path: "/Inbox/b.pdf", reason },
+      { path: "/Inbox/d.pdf", reason },
     ]);
     expect(proposal.suggestions.map((s) => s.path)).toEqual(["/Inbox/c.pdf"]);
   });

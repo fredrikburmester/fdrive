@@ -370,7 +370,7 @@ describe("rename_items", () => {
     ).rejects.toThrow(/not referenced/);
   });
 
-  it("never lets an item take the Trash folder's name, proposed or typed", async () => {
+  it("never lets an item take the name of one of fdrive's own folders, proposed or typed", async () => {
     const { verify, apply, storage } = setup({
       trash: true,
       referenced: ["/"],
@@ -381,7 +381,14 @@ describe("rename_items", () => {
         summary: "s",
         renames: [{ path: "/notes.txt", name: ".Trash", reason: "r" }],
       }),
-    ).rejects.toThrow("/notes.txt cannot be named .Trash: that is the Trash.");
+    ).rejects.toThrow("/notes.txt cannot be named .Trash: that name is fdrive's own.");
+    for (const name of [".fdrive-desktop", ".fdrive-backups", ".fdrive-move-v1"])
+      await expect(
+        verify("rename_items", {
+          summary: "s",
+          renames: [{ path: "/notes.txt", name, reason: "r" }],
+        }),
+      ).rejects.toThrow(`/notes.txt cannot be named ${name}: that name is fdrive's own.`);
 
     const proposal = await verify("rename_items", {
       summary: "s",
