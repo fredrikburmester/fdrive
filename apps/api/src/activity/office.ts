@@ -58,6 +58,8 @@ export async function recordOfficeOpen<T>(
  * Records one editor write. The editor reports a save against the document it
  * opened, so the recorded subject is the opened path and the target is where
  * the bytes actually landed. Save As therefore reads as a copy of the original.
+ * `facts` describe the target once `mutate` is done: a streamed save knows its
+ * size only then.
  */
 export async function recordOfficeAction<T>(
   deps: OfficeDeps,
@@ -67,7 +69,7 @@ export async function recordOfficeAction<T>(
   target: string,
   bridgeId: string | undefined,
   mutate: () => Promise<T>,
-  facts: ActivityFacts = {},
+  facts: (value: T) => ActivityFacts = () => ({}),
 ): Promise<T> {
   if (!deps.activity) return mutate();
   const before = await activityStat(actor.storage, path);
@@ -85,7 +87,7 @@ export async function recordOfficeAction<T>(
       ...(bridgeId ? { bridge: { namespace: "office", externalId: bridgeId } } : {}),
     },
     mutate,
-    () => ({ path: target, kind: "file" as const, ...facts }),
+    (value) => ({ path: target, kind: "file" as const, ...facts(value) }),
   );
   return result.value;
 }

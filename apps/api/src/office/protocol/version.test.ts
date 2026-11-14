@@ -1,26 +1,42 @@
-import { expect, it } from "vitest";
-import { deriveFileVersion } from "./version.ts";
+import { createMemoryStorage } from "@fdrive/testkit";
+import { expect, it, vi } from "vitest";
+import { deriveFileVersion, documentVersion } from "./version.ts";
 
-it("retains nanosecond precision and optional normalized hash prefix", () => {
-  expect(deriveFileVersion({ mtimeNs: 1788652800123456789n, size: 999n })).toBe(
-    "1788652800123456789:999",
-  );
-  expect(deriveFileVersion({ mtimeNs: 1n, size: 0n, sha256: "AB".repeat(32) })).toBe(
-    "1:0:abababababababab",
-  );
-  expect(deriveFileVersion({ mtimeNs: -1n, size: 0n })).toBe("-1:0");
+const stamp = { size: 5, mtimeNs: 1788652800123456789n, ino: 7n, ctimeNs: 1788652800123456789n };
+
+it("derives a short opaque version that changes with every part of the stamp", () => {
+  const version = deriveFileVersion(stamp);
+  expect(version).toMatch(/^[0-9a-f]{32}$/);
+  expect(deriveFileVersion({ ...stamp })).toBe(version);
+  const changed = [
+    { ...stamp, size: 6 },
+    { ...stamp, mtimeNs: stamp.mtimeNs + 1n },
+    { ...stamp, ino: 8n },
+    { ...stamp, ctimeNs: stamp.ctimeNs + 1n },
+  ].map(deriveFileVersion);
+  expect(new Set([version, ...changed]).size).toBe(5);
 });
-it("changes with any version input", () => {
-  const inputs = [
-    { mtimeNs: 1n, size: 1n },
-    { mtimeNs: 2n, size: 1n },
-    { mtimeNs: 1n, size: 2n },
-    { mtimeNs: 1n, size: 1n, sha256: "ab".repeat(32) },
-    { mtimeNs: 1n, size: 1n, sha256: "cd".repeat(32) },
-  ];
-  expect(new Set(inputs.map(deriveFileVersion)).size).toBe(5);
+
+it("versions a document from its stamp without reading it", async () => {
+  const storage = createMemoryStorage({ "/a.docx": "hello", "/b.docx": "hello" });
+  const download = vi.spyOn(storage, "download");
+  const first = await documentVersion(storage, "/a.docx");
+  expect(first).toMatchObject({ size: 5, modifiedAt: new Date(0) });
+  expect(await documentVersion(storage, "/a.docx")).toEqual(first);
+  // Same size and modification time, as an external writer keeping the mtime would leave it.
+  await storage.upload("/a.docx", new TextEncoder().encode("world"), { modifiedAt: new Date(0) });
+  const replaced = await documentVersion(storage, "/a.docx");
+  expect(replaced).toMatchObject({ size: 5, modifiedAt: new Date(0) });
+  expect(replaced.version).not.toBe(first.version);
+  expect((await documentVersion(storage, "/b.docx")).version).not.toBe(first.version);
+  expect(download).not.toHaveBeenCalled();
 });
-it("rejects invalid size and hash", () => {
-  expect(() => deriveFileVersion({ mtimeNs: 1n, size: -1n })).toThrow();
-  expect(() => deriveFileVersion({ mtimeNs: 1n, size: 0n, sha256: "a" })).toThrow();
+
+it("fails as the storage does, and refuses storage without stamps", async () => {
+  const storage = createMemoryStorage({});
+  await expect(documentVersion(storage, "/missing.docx")).rejects.toMatchObject({
+    kind: "not_found",
+  });
+  const { contentStamp: _unstamped, ...unstamped } = storage;
+  await expect(documentVersion(unstamped, "/a.docx")).rejects.toThrow("stamps its files");
 });

@@ -3,7 +3,11 @@ import { requireOfficeEdit } from "./auth.ts";
 import { WopiError } from "./errors.ts";
 import type { OfficeDeps, OfficeFileRepo, OpenedFile } from "./types.ts";
 
-/** Resolve under the provider write scope without reacquiring credentials or a pool connection. */
+/**
+ * The document's current registry row and path, with edit admission proven
+ * there again. Read on the write scope's own connection; called under the
+ * document's lock, a write follows a rename and never recreates a deleted path.
+ */
 export async function currentWriteFile(
   deps: OfficeDeps,
   files: OfficeFileRepo,

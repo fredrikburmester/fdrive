@@ -133,8 +133,7 @@ export async function officeHarness(
     canEdit: async (actor) =>
       actor.identity.providerId === provider.id &&
       ["alice", "bob"].includes(actor.identity.externalUsername),
-    withWriteScope: (providerId, callback) =>
-      locks.withFileLock(`office-write:${providerId}`, () => callback({ files, locks })),
+    withWriteScope: (callback) => callback({ files, locks }),
     config,
     discovery: cache,
     tokens: createOfficeTokenCodec(Buffer.alloc(32, 7)),
@@ -197,6 +196,7 @@ export async function officeHarness(
       body?: string | ReadableStream<Uint8Array>;
       pair?: typeof proofPair;
       urlSuffix?: string;
+      signal?: AbortSignal;
     } = {},
   ) {
     const suffix = `/files/${fileId}${options.contents ? "/contents" : ""}?access_token=${encodeURIComponent(token)}${options.urlSuffix ?? ""}`;
@@ -210,6 +210,7 @@ export async function officeHarness(
       method: options.method ?? "GET",
       headers: { "X-WOPI-TimeStamp": timestamp, "X-WOPI-Proof": proof, ...options.headers },
       ...(options.body === undefined ? {} : { body: options.body, duplex: "half" }),
+      ...(options.signal === undefined ? {} : { signal: options.signal }),
     });
   }
   async function callback(

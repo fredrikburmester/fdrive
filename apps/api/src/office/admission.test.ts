@@ -145,7 +145,7 @@ it.each(["PUT_RELATIVE", "RENAME_FILE"])(
 );
 
 it.each(["PUT", "PUT_RELATIVE"])(
-  "rechecks source admission after staging %s bytes",
+  "rechecks admission once %s bytes have arrived, publishing nothing when it is gone",
   async (override) => {
     let allowed = true;
     const h = await officeHarness({ deps: { canEdit: async () => allowed } });
@@ -158,12 +158,12 @@ it.each(["PUT", "PUT_RELATIVE"])(
     });
     const upload = vi.spyOn(h.storage, "upload");
     let release: (() => void) | undefined;
-    const staged = new Promise<void>((resolve) => {
+    const arrived = new Promise<void>((resolve) => {
       release = resolve;
     });
     const body = new ReadableStream<Uint8Array>({
       async pull(controller) {
-        await staged;
+        await arrived;
         controller.enqueue(new TextEncoder().encode("denied"));
         controller.close();
       },
@@ -183,6 +183,8 @@ it.each(["PUT", "PUT_RELATIVE"])(
     allowed = false;
     release?.();
     expect((await response).status).toBe(403);
-    expect(upload).not.toHaveBeenCalled();
+    expect(upload).toHaveBeenCalledOnce();
+    expect(await new Response((await h.storage.download("/a.docx")).body).text()).toBe("hello");
+    await expect(h.storage.statFile("/copy.docx")).rejects.toMatchObject({ kind: "not_found" });
   },
 );

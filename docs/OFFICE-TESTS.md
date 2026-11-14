@@ -79,14 +79,14 @@ or claim a storage permission-introspection API. See [Office deployment](OFFICE.
 The suite exposed three other production defects: a zero-slide PPTX template,
 ONLYOFFICE's timestamp-based view cache key, and Collabora's missing UTF-8 locale.
 The authored PPTX now includes one editable slide with a complete master, layout,
-theme and relationships. ONLYOFFICE receives the strong content Version without
+theme and relationships. ONLYOFFICE receives the stamp-derived Version without
 optional LastModifiedTime; equal-size, equal-mtime external changes therefore select a
 fresh view. Collabora uses the pinned 26.04.3.2.1 locale fix. Image digests come from
 `deploy/office/compose.services.yaml`.
 
 A separate deterministic API regression covers writes queued behind rename or
 deletion. Every write resolves the current registry row and canonical virtual path
-inside its provider transaction, retaining the already resolved credentials. A
+under the document's lock, retaining the already resolved credentials. A
 queued save follows the renamed UUID; deletion denies the save without recreating
 the old path.
 

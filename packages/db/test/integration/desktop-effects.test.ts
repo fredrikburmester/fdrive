@@ -603,7 +603,7 @@ it("rechecks invalidation after an in-flight physical hook without inverting Off
   const started = new Promise<void>((resolve) => {
     ready = resolve;
   });
-  const hook = createOfficeWriteScope(second.db)(f.provider.id, async ({ files }) => {
+  const hook = createOfficeWriteScope(second.db)(async ({ files }) => {
     await files.movePrefix({
       providerId: f.provider.id,
       rootName: "root",

@@ -109,3 +109,28 @@ it("preserves read, probe, range and timestamp semantics", async () => {
   await expect(storage.move("/dir/f.txt", "/dir")).rejects.toMatchObject({ kind: "conflict" });
   await expect(storage.copy("/", "/other")).rejects.toMatchObject({ kind: "not_found" });
 });
+
+it("stamps files as a disk does: every write moves the stamp, reads leave it", async () => {
+  const at = new Date("2026-01-01T00:00:00.123Z");
+  const storage = createMemoryStorage({ "/a.txt": "a", "/dir/b.txt": "b" }, { clock: () => at });
+  const first = await storage.contentStamp?.("/a.txt");
+  expect(first).toMatchObject({ size: 1, mtimeNs: 0n });
+  await storage.download("/a.txt");
+  expect(await storage.contentStamp?.("/a.txt")).toEqual(first);
+  await storage.upload("/a.txt", new TextEncoder().encode("z"), { modifiedAt: new Date(0) });
+  const rewritten = await storage.contentStamp?.("/a.txt");
+  expect(rewritten).toMatchObject({ size: 1, mtimeNs: 0n });
+  expect(rewritten?.ino).not.toBe(first?.ino);
+  await storage.setModifiedAt?.("/a.txt", new Date(0));
+  const touched = await storage.contentStamp?.("/a.txt");
+  expect(touched?.ino).toBe(rewritten?.ino);
+  expect(touched?.ctimeNs).not.toBe(rewritten?.ctimeNs);
+  await storage.upload("/c.txt", new TextEncoder().encode("c"));
+  expect((await storage.contentStamp?.("/c.txt"))?.mtimeNs).toBe(1767225600123000000n);
+  await expect(storage.contentStamp?.("/dir")).rejects.toMatchObject({ kind: "bad_request" });
+  await expect(storage.contentStamp?.("/none")).rejects.toMatchObject({ kind: "not_found" });
+  await expect(
+    storage.upload("/short.txt", new TextEncoder().encode("ab"), { contentLength: 3 }),
+  ).rejects.toMatchObject({ kind: "bad_request" });
+  await expect(storage.statFile("/short.txt")).rejects.toMatchObject({ kind: "not_found" });
+});
