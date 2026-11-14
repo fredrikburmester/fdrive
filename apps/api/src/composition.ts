@@ -111,6 +111,7 @@ import { createSetupService } from "./setup/service.js";
 import { createSetupTokenGuard, generateSetupToken } from "./setup/token.js";
 import { createShareCredentialCodec } from "./shares/credentials.ts";
 import { createShareLimiter } from "./shares/limiter.ts";
+import { createShareMoves } from "./shares/moves.ts";
 import { createScryptSharePasswords } from "./shares/passwords.js";
 import { registerSharesRoutes } from "./shares/routes.ts";
 import { createSharesService } from "./shares/service.ts";
@@ -315,6 +316,7 @@ export async function composeApp(
     clock,
     resolveTrashSettings: (identityId) => trashSettings.forIdentity(identityId),
   });
+  const shareRepo = createShareRepo(db);
   const admitActivity = createActivityAdmission({
     reads: activityReads,
     repo: activityRepo,
@@ -322,7 +324,7 @@ export async function composeApp(
     storageFactory,
     secret: config.fdriveMasterKey,
     clock,
-    shares: createShareRepo(db),
+    shares: shareRepo,
   });
   const pinnedStorageFactory = createPinnedStorageFactory({
     providers: providerService,
@@ -437,11 +439,20 @@ export async function composeApp(
   const accountsService = createAccountsService(accountDeps);
   const accountViews = createAccountViews(accountDeps);
 
+  // Public links follow moves in their owner's files, never into the Trash.
+  const shareMoves = createShareMoves({
+    shares: shareRepo,
+    trashPathFor: (identityId) => trashSettings.pathForIdentity(identityId),
+    ownerPath: (identityId, path) => localGrants.ownerPath(identityId, path),
+  });
   // Metadata (phase 3): tags, favorites, recents. `onMoved`/`onDeleted` are
   // called both from the fs routes below (moves and deletes made through
   // fdrive) and from the indexer listener (changes seen over SFTP or any
   // other client), so metadata survives renames from either source.
-  const metadataService = createMetadataService({ ...repos, followers: [localGrants] });
+  const metadataService = createMetadataService({
+    ...repos,
+    followers: [localGrants, shareMoves],
+  });
   const desktopRepo = createDesktopRepo(db);
   // Serializes Mac desktop commits per identity; no other fdrive writer takes
   // it. Storage without its own lease is read-only unless this is configured.
@@ -908,6 +919,7 @@ export async function composeApp(
           effectContext: createDesktopEffectContext(
             repos.identities,
             scopeResolver.configuredMappings,
+            shareMoves.resolve,
           ),
           effects: desktopEffectsWorker,
           storageForIdentity: storageFactory,
@@ -934,7 +946,7 @@ export async function composeApp(
         thumbnailsEnabled: () => featureService.enabled("thumbnails"),
         service: createSharesService({
           repos,
-          shares: createShareRepo(db),
+          shares: shareRepo,
           providers: providerService,
           storageFor: storageFactory,
           trashPathFor: (identityId) => trashSettings.pathForIdentity(identityId),

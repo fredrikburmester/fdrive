@@ -177,6 +177,52 @@ describe("PostgreSQL shares", () => {
     expect(await a.listOwned(accountId)).toEqual([]);
   });
 
+  it("follows a move: the exact path, what is inside a folder, never a sibling prefix or another identity", async () => {
+    const folder = await a.insert({ ...input, paths: ["/docs"] });
+    const many = await a.insert({
+      ...input,
+      paths: ["/docs/a b%20.txt", "/docsx/b.txt", "/docs/deep/c", "/other"],
+    });
+    const file = await a.insert({ ...input, paths: ["/docs"] });
+    const foreign = await a.insert({ ...input, identityId: otherIdentity, paths: ["/docs/a"] });
+    await b.movePrefix(identityId, "/docs", "/archive/docs", true);
+    expect(await a.get(folder.id)).toEqual({ ...folder, paths: ["/archive/docs"] });
+    expect((await a.get(many.id))?.paths).toEqual([
+      "/archive/docs/a b%20.txt",
+      "/docsx/b.txt",
+      "/archive/docs/deep/c",
+      "/other",
+    ]);
+    expect((await a.get(file.id))?.updatedAt).toEqual(at);
+    expect(await a.get(foreign.id)).toEqual(foreign);
+    // A file's move rewrites only that path; one onto another shared path keeps it once.
+    await a.movePrefix(identityId, "/archive/docs/deep", "/deep", false);
+    expect((await a.get(many.id))?.paths).toContain("/archive/docs/deep/c");
+    await a.movePrefix(identityId, "/archive/docs/a b%20.txt", "/other", false);
+    expect((await a.get(many.id))?.paths).toEqual([
+      "/other",
+      "/docsx/b.txt",
+      "/archive/docs/deep/c",
+    ]);
+    await a.movePrefix(identityId, "/nothing", "/else", true);
+    expect((await a.get(many.id))?.paths).toEqual([
+      "/other",
+      "/docsx/b.txt",
+      "/archive/docs/deep/c",
+    ]);
+    await expect(a.movePrefix(identityId, "/", "/x", true)).rejects.toThrow(TypeError);
+    await expect(a.movePrefix(identityId, "/x", "x", true)).rejects.toThrow(TypeError);
+  });
+
+  it("loses neither of two moves of one share's paths made at once", async () => {
+    const paths = Array.from({ length: 20 }, (_, i) => `/f${i}/x`);
+    const share = await a.insert({ ...input, paths });
+    await Promise.all(
+      paths.map((_, i) => (i % 2 ? a : b).movePrefix(identityId, `/f${i}`, `/g${i}`, true)),
+    );
+    expect((await a.get(share.id))?.paths).toEqual(paths.map((_, i) => `/g${i}/x`));
+  });
+
   it("keeps the same share when its identity transfers to another account", async () => {
     const share = await a.insert(input);
     await createIdentityLinksRepo(first.db).linkVerified({

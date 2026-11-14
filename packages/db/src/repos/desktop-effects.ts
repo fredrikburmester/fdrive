@@ -9,6 +9,7 @@ import type {
   EffectRevision,
   EffectSnapshot,
 } from "./desktop-effects-types.js";
+import { moveSharePrefix } from "./shares.js";
 
 const recoveryOwner = alias(identities, "recovery_owner");
 
@@ -219,6 +220,16 @@ export function createDesktopEffectsRepo(db: Db): DesktopEffectsRepo {
               if (job.payload.superseded) throw new MetadataTargetSuperseded();
               for (const snapshot of job.payload.snapshots)
                 await applySnapshot(tx, job.identityId, job.payload, snapshot);
+              // Links carry no revisions: whatever still names the moved path follows it.
+              const shareMove = job.payload.shareMove;
+              if (shareMove)
+                await moveSharePrefix(
+                  tx,
+                  shareMove.identityId,
+                  shareMove.from,
+                  shareMove.to,
+                  job.payload.directory,
+                );
               await tx
                 .update(desktopEffects)
                 .set({

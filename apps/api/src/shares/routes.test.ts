@@ -93,6 +93,7 @@ describe("share management", () => {
     const h = sharesHarness({ trashPath: "/.trash" });
     h.write("/.trash/old.txt", "gone");
     h.write("/.fdrive-backups/b", "backup");
+    h.write("/.fdrive-desktop/mac/trash/old.txt", "the Mac's Trash");
     h.write("/one/report.txt", "one");
     h.write("/two/Report.txt", "two");
     const cookie = await h.login();
@@ -102,6 +103,7 @@ describe("share management", () => {
       ["/.trash"],
       ["/.trash/old.txt"],
       ["/.fdrive-backups/b"],
+      ["/.fdrive-desktop/mac/trash/old.txt"],
       ["/a.docx", "/.trash"],
     ])
       expect((await attempt({ paths })).status, paths.join()).toBe(403);
@@ -538,6 +540,7 @@ describe("public shares", () => {
     h.write("/folder/a.txt", "content");
     h.write("/.trash/old.txt", "gone");
     h.write("/.fdrive-backups/b", "backup");
+    h.write("/.fdrive-desktop/mac/trash/old.txt", "the Mac's Trash");
     const cookie = await h.login();
     const { id } = await h.create(cookie, { paths: ["/"] });
     const path = pub(id);
@@ -549,7 +552,12 @@ describe("public shares", () => {
     ]);
     expect(await names(await h.request(`${path}/entries?path=/folder`))).toEqual(["a.txt"]);
     expect(await (await h.request(`${path}/download?path=/folder/a.txt`)).text()).toBe("content");
-    for (const hidden of ["/.trash/old.txt", "/.fdrive-backups/b", "/nope"])
+    for (const hidden of [
+      "/.trash/old.txt",
+      "/.fdrive-backups/b",
+      "/.fdrive-desktop/mac/trash/old.txt",
+      "/nope",
+    ])
       expect((await h.request(`${path}/download?path=${hidden}`)).status, hidden).toBe(404);
     expect((await h.request(`${path}/entries?path=/.trash`)).status).toBe(404);
     // A file share has no listing, and an archive share no single file.

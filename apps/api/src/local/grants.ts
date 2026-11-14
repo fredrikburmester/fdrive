@@ -5,7 +5,7 @@ import type {
   OwnedGrant,
   UpdateGrantRequest,
 } from "@fdrive/contracts";
-import { isStorageError, normalizePath, splitSegments } from "@fdrive/core";
+import { isStorageError, joinPath, normalizePath, splitSegments } from "@fdrive/core";
 import type { Identity, LocalGrant, Repos } from "@fdrive/db";
 import { namedSharedGrants, SHARED_WITH_ME } from "@fdrive/local";
 import type { IdentityStorageFactory } from "../auth/storage-factory.js";
@@ -34,6 +34,13 @@ export interface LocalGrantService {
     identity: Pick<Identity, "providerId" | "externalUsername">,
     path: string,
   ): Promise<boolean>;
+  /**
+   * Where `path` (the login's own path) lies in its owner's files: a path in
+   * a folder shared with the login is the owner's login and the owner's
+   * path; any other is the login's own. `null` when the owner has never
+   * signed in, so nothing of theirs is keyed by their login yet.
+   */
+  ownerPath(identityId: string, path: string): Promise<{ identityId: string; path: string } | null>;
   /** The owner moved a folder in fdrive: its shares follow. */
   onMoved(identityId: string, from: string, to: string, isDir: boolean): Promise<void>;
   /** The owner deleted a folder for good: its shares end. */
@@ -241,6 +248,25 @@ export function createLocalGrantService(deps: LocalGrantServiceDeps): LocalGrant
       return folders.some(
         (folder) => !folder.writable && under(target, `${SHELF_PATH}/${folder.name}`),
       );
+    },
+
+    async ownerPath(identityId, path) {
+      const own = { identityId, path };
+      const segments = splitSegments(path);
+      if (segments[0] !== SHARED_WITH_ME || segments.length < 2) return own;
+      const identity = await localLogin(identityId);
+      if (identity === null) return own;
+      const folder = (await received(identity.externalUsername)).find(
+        (candidate) => candidate.name === segments[1],
+      );
+      // No such shared folder: an ordinary folder of that name, or nothing.
+      if (folder === undefined) return own;
+      const owner = await repos.identities.findByProviderUsername(
+        identity.providerId,
+        folder.owner,
+      );
+      if (owner === null) return null;
+      return { identityId: owner.id, path: joinPath(folder.path, ...segments.slice(2)) };
     },
 
     async onMoved(identityId, from, to, isDir) {

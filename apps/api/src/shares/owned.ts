@@ -6,15 +6,18 @@ import {
 } from "@fdrive/contracts";
 import { normalizePath } from "@fdrive/core";
 import type { ShareRecord, ShareRepo } from "@fdrive/db";
-import { SHARED_WITH_ME } from "@fdrive/local";
 import type { IdentityStorageFactory } from "../auth/storage-factory.ts";
-import { isBackupPath } from "../backups/reserved-storage.ts";
 import { ApiHttpError } from "../errors.ts";
 import type { PublicShareAccess } from "./access.ts";
 import { shareCall } from "./access.ts";
 import type { ShareCredential } from "./credentials.ts";
 import { type PublicThumbTarget, type ShareLimits, unavailableReason } from "./limits.ts";
-import { archiveConflict, isUnder, ownedShareAccess } from "./owned-access.ts";
+import {
+  archiveConflict,
+  hiddenFromLinks,
+  ownedShareAccess,
+  restrictedRoots as restrictedFor,
+} from "./owned-access.ts";
 import type { SharePasswords } from "./passwords.ts";
 import { createShareZipSlots, type ShareZipLimits } from "./zip-limits.ts";
 
@@ -72,15 +75,9 @@ export function createOwnedShares(deps: OwnedSharesDeps) {
       throw new ApiHttpError("upstream_unavailable", "Share storage unavailable");
     }
   }
-  /**
-   * The folders no link may reach: the owner's Trash while it is on, and the
-   * folder that holds what other users share with the owner, which is theirs
-   * to share. The latter only exists while something is shared, but a link
-   * never needs it, so it is kept out always.
-   */
+  /** The folders no link of `identityId`'s may reach (`restrictedRoots`). */
   async function restrictedRoots(identityId: string): Promise<string[]> {
-    const trash = await deps.trashPathFor(identityId);
-    return [...(trash === null ? [] : [normalizePath(trash)]), `/${SHARED_WITH_ME}`];
+    return restrictedFor(await deps.trashPathFor(identityId));
   }
   /**
    * Every shared path, canonical and outside the restricted and backup
@@ -96,7 +93,7 @@ export function createOwnedShares(deps: OwnedSharesDeps) {
       } catch {
         throw new ApiHttpError("bad_request", "Invalid shared path");
       }
-      if (isBackupPath(canonical) || restricted.some((root) => isUnder(canonical, root)))
+      if (hiddenFromLinks(canonical, restricted))
         throw new ApiHttpError(
           "forbidden",
           "The Trash, backup folders and folders shared with you can't be shared",

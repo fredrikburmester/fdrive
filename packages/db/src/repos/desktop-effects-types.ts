@@ -1,3 +1,10 @@
+/** A move public links follow, already in their owner's files (`ShareRepo.movePrefix`). */
+export interface DesktopShareMove {
+  identityId: string;
+  from: string;
+  to: string;
+}
+
 export interface DesktopEffectContext {
   from: string | null;
   to: string;
@@ -5,6 +12,12 @@ export interface DesktopEffectContext {
   trash: boolean;
   restored?: boolean;
   office: { providerId: string; rootName: string; from: string; to: string | null } | null;
+  /**
+   * The move the owner's public links follow, decided before publication;
+   * absent or `null` when they stay where they are (a trash, a move a link
+   * may not follow, or no move at all).
+   */
+  shareMove?: DesktopShareMove | null;
 }
 
 export interface EffectRevision {

@@ -1,5 +1,11 @@
 import { toFsPath } from "@fdrive/core";
-import type { DesktopEffectContext, DesktopEffectsRepo, Identity, IdentityRepo } from "@fdrive/db";
+import type {
+  DesktopEffectContext,
+  DesktopEffectsRepo,
+  DesktopShareMove,
+  Identity,
+  IdentityRepo,
+} from "@fdrive/db";
 import type { Principal } from "../auth/principal.js";
 import { ApiHttpError } from "../errors.js";
 import type { EventBus } from "../events/bus.js";
@@ -7,20 +13,24 @@ import type { ConfiguredMappingsResult } from "../scoping/types.js";
 import type { SystemEventLog } from "../system/event-log.js";
 
 /** Resolve once, before publication. Recovery never reinterprets an old path
- * against a new provider configuration or needs a user's storage credentials. */
+ * against a new provider configuration or needs a user's storage credentials.
+ * `shareMove` decides the move public links follow (`ShareMoves.resolve`). */
 export function createDesktopEffectContext(
   identities: Pick<IdentityRepo, "get">,
   configuredMappings: (identity: Identity) => Promise<ConfiguredMappingsResult>,
+  shareMove?: (identityId: string, from: string, to: string) => Promise<DesktopShareMove | null>,
 ) {
   return async (
     principal: Principal,
-    context: Omit<DesktopEffectContext, "office">,
+    context: Omit<DesktopEffectContext, "office" | "shareMove">,
   ): Promise<DesktopEffectContext> => {
     const result: DesktopEffectContext = { ...context, office: null };
     if (!context.from || context.from === context.to || context.trash) return result;
     const identity = await identities.get(principal.identityId);
     if (!identity || identity.accountId !== principal.accountId)
       throw new ApiHttpError("unauthorized", "Connection was revoked");
+    if (shareMove)
+      result.shareMove = await shareMove(principal.identityId, context.from, context.to);
     const configured = await configuredMappings(identity);
     if (!configured.available) return result;
     const source = toFsPath(configured.scopes, context.from);

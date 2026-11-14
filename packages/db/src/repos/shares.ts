@@ -10,6 +10,7 @@ import {
   shareListLimit,
   validateShareId,
   validateShareInsert,
+  validateShareMove,
   validateShareOwnedUpdate,
   validateShareOwnership,
 } from "./shares-state.js";
@@ -19,6 +20,48 @@ import {
 const { passwordHash: _passwordHash, ...recordColumns } = getTableColumns(shares);
 
 type RecordRow = Omit<typeof shares.$inferSelect, "passwordHash">;
+
+/**
+ * `ShareRepo.movePrefix` as one statement on `db`, so a caller already in a
+ * transaction (the Mac's metadata recovery) applies it there. Each row's new
+ * paths are computed from the row as it is when the update reaches it, so a
+ * concurrent edit or move of the same share is never lost; a path the move
+ * lands on twice is kept once, where it first stood.
+ */
+export async function moveSharePrefix(
+  db: Pick<Db, "execute">,
+  identityId: string,
+  from: string,
+  to: string,
+  isDir: boolean,
+): Promise<void> {
+  validateShareMove(identityId, from, to);
+  if (from === to) return;
+  const prefix = `${from}/`;
+  await db.execute(sql`
+    update "app"."shares" as link
+    set paths = array(
+      select moved.path
+      from (
+        select case
+                 when entry.path = ${from} then ${to}
+                 when ${isDir} and starts_with(entry.path, ${prefix})
+                   then ${`${to}/`} || substr(entry.path, char_length(${prefix}) + 1)
+                 else entry.path
+               end as path,
+               entry.ord
+        from unnest(link.paths) with ordinality as entry(path, ord)
+      ) as moved
+      group by moved.path
+      order by min(moved.ord)
+    )
+    where link.identity_id = ${identityId}
+      and exists (
+        select 1 from unnest(link.paths) as entry(path)
+        where entry.path = ${from} or (${isDir} and starts_with(entry.path, ${prefix}))
+      )
+  `);
+}
 
 function toShareRecord(row: RecordRow): ShareRecord {
   return {
@@ -91,6 +134,9 @@ export function createShareRepo(db: Db): ShareRepo {
         .where(and(eq(shares.identityId, identityId), eq(shares.id, id)))
         .returning({ id: shares.id });
       return removed.length > 0;
+    },
+    movePrefix(identityId, from, to, isDir) {
+      return moveSharePrefix(db, identityId, from, to, isDir);
     },
     async passwordHash(id) {
       validateShareId(id);

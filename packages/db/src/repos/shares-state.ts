@@ -55,6 +55,14 @@ export interface ShareRepo {
   /** Removes the row; `false` for a missing or foreign one. */
   removeOwned(identityId: string, id: string): Promise<boolean>;
   /**
+   * Follows a move in the owner's files: in every share of `identityId`, the
+   * path `from` and (when `isDir`) every path inside it take their place
+   * under `to`; `/a` never matches `/ab`. Whether a link may follow a move at
+   * all is the caller's to decide (`apps/api/src/shares/moves.ts`): this only
+   * rewrites. Leaves `updatedAt` alone, since the owner changed nothing.
+   */
+  movePrefix(identityId: string, from: string, to: string, isDir: boolean): Promise<void>;
+  /**
    * The stored password hash of an owned share, for the credential check
    * only; `null` for an open share or a missing one.
    */
@@ -202,6 +210,39 @@ export function compareShareRecords(a: ShareRecord, b: ShareRecord): number {
   if (time !== 0) return time;
   return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
 }
+/** Checks a move `movePrefix` follows: canonical paths, and never the root itself. */
+export function validateShareMove(identityId: string, from: string, to: string): void {
+  validateShareId(identityId);
+  validateSharePath(from);
+  validateSharePath(to);
+  if (from === "/" || to === "/") throw new TypeError("The root cannot move");
+}
+/**
+ * `paths` once `from` moved to `to`, in order. A path the move lands on a
+ * second time (an overwriting move onto another shared path) is kept once,
+ * where it first stood.
+ */
+export function movedSharePaths(
+  paths: readonly string[],
+  from: string,
+  to: string,
+  isDir: boolean,
+): string[] {
+  const prefix = `${from}/`;
+  const moved = paths.map((path) =>
+    path === from
+      ? to
+      : isDir && path.startsWith(prefix)
+        ? `${to}/${path.slice(prefix.length)}`
+        : path,
+  );
+  return [...new Set(moved)];
+}
+/** Whether a move of `from` touches any of `paths`. */
+export function shareMoveMatches(paths: readonly string[], from: string, isDir: boolean): boolean {
+  return paths.some((path) => path === from || (isDir && path.startsWith(`${from}/`)));
+}
+
 /** Whether `record` still admits one more download at `now`; the check `consume` makes. */
 export function shareAdmitsDownload(
   record: Pick<ShareRecord, "expiresAt" | "maxDownloads" | "views">,
@@ -271,6 +312,14 @@ export function createMemoryShareRepo(options: MemoryShareOptions = {}): ShareRe
       if (rows.get(id)?.identityId !== identityId) return false;
       hashes.delete(id);
       return rows.delete(id);
+    },
+    async movePrefix(identityId, from, to, isDir) {
+      validateShareMove(identityId, from, to);
+      if (from === to) return;
+      for (const [id, row] of rows) {
+        if (row.identityId !== identityId || !shareMoveMatches(row.paths, from, isDir)) continue;
+        rows.set(id, { ...row, paths: movedSharePaths(row.paths, from, to, isDir) });
+      }
     },
     async passwordHash(id) {
       validateShareId(id);
