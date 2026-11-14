@@ -274,7 +274,7 @@ describe("shared folders in their owner's Trash, through the real indexer", () =
     } catch (error) {
       console.error(await stack.logs());
       const reported = await database.db.execute(
-        sql`select kind, path, target_path from idx.events order by id`,
+        sql`select source, path, target_path from idx.changes order by id`,
       );
       console.error(reported.rows);
       throw error;

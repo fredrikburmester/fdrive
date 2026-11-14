@@ -461,7 +461,7 @@ it("rehearses into a new installation identity without any provider contact or p
     sourceInstallationId: inspection.header.installationId,
     snapshotId: inspection.header.id,
     result: "passed",
-    tableCount: 47,
+    tableCount: 46,
     blobCount: 1,
   });
   expect(

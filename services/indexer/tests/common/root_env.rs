@@ -4,8 +4,8 @@
 use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 use fdrive_indexer::config::Config;
@@ -14,6 +14,7 @@ use fdrive_indexer::features::FeatureValues;
 use fdrive_indexer::indexer::{FileStat, RootContext};
 use fdrive_indexer::thumbs::{SIZES, storage_path};
 use postgres::Client;
+use postgres::fallible_iterator::FallibleIterator;
 
 use super::fake_ml::FakeMl;
 
@@ -22,8 +23,16 @@ pub struct Env {
     pub url: String,
     pub root: PathBuf,
     pub thumbs: PathBuf,
+    /// Listening on `idx_events` since the database was made, with what it heard so far.
+    events: Mutex<(Client, Vec<Notified>)>,
     _dir: tempfile::TempDir,
 }
+
+/// One `NOTIFY idx_events` payload: `(kind, path, target_path)`.
+pub type Notified = (String, String, Option<String>);
+
+/// Sent after the indexer's notifications to mark that every earlier one has arrived.
+const HEARD_ALL: &str = "heard-all";
 
 /// `thumbnails, textSearch, searchOcr, semanticSearch, imageSearch`; `pdfOcr` off.
 pub fn fv(thumbnails: bool, text: bool, ocr: bool, semantic: bool, image: bool) -> FeatureValues {
@@ -165,11 +174,15 @@ impl Env {
         let root = dir.path().join("root");
         let thumbs = dir.path().join("thumbs");
         std::fs::create_dir_all(&root).unwrap();
+        let url = super::database();
+        let mut listener = super::connect(&url);
+        listener.batch_execute("LISTEN idx_events").unwrap();
         Self {
             ml: FakeMl::start(),
-            url: super::database(),
+            url,
             root,
             thumbs,
+            events: Mutex::new((listener, Vec::new())),
             _dir: dir,
         }
     }
@@ -291,13 +304,33 @@ impl Env {
         db::count(&mut self.client(), table).unwrap()
     }
 
-    pub fn events(&self) -> Vec<String> {
+    /// Every event the indexer has sent on `idx_events` so far, oldest first. Notifications
+    /// arrive in commit order, so once a marker sent now arrives, every earlier one has.
+    pub fn notified(&self) -> Vec<Notified> {
+        let mut events = self.events.lock().unwrap_or_else(PoisonError::into_inner);
+        let (listener, heard) = &mut *events;
         self.client()
-            .query(r#"SELECT kind FROM "idx"."events" ORDER BY id"#, &[])
-            .unwrap()
-            .iter()
-            .map(|r| r.get(0))
-            .collect()
+            .execute("SELECT pg_notify('idx_events', $1)", &[&HEARD_ALL])
+            .unwrap();
+        let mut notifications = listener.notifications();
+        let mut arriving = notifications.timeout_iter(Duration::from_secs(10));
+        loop {
+            let notification = arriving.next().unwrap().expect("the marker arrives");
+            if notification.payload() == HEARD_ALL {
+                return heard.clone();
+            }
+            let event: serde_json::Value = serde_json::from_str(notification.payload()).unwrap();
+            heard.push((
+                event["kind"].as_str().unwrap().to_owned(),
+                event["path"].as_str().unwrap().to_owned(),
+                event["target_path"].as_str().map(str::to_owned),
+            ));
+        }
+    }
+
+    /// The kinds of `notified`.
+    pub fn events(&self) -> Vec<String> {
+        self.notified().into_iter().map(|(kind, _, _)| kind).collect()
     }
 
     pub fn thumb_path(&self, sha: &str, size: u32) -> PathBuf {

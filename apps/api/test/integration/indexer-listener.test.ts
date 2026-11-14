@@ -53,10 +53,7 @@ describe("indexer listener (real Postgres LISTEN/NOTIFY)", () => {
       const tag = await repos.tags.create(account.id, { name: "Work", color: null });
       await repos.fileTags.setTags(identity.id, "/a.txt", [tag.id]);
 
-      const [root] = await db.insert(schema.roots).values({ name: "files" }).returning();
-      if (root === undefined) {
-        throw new Error("expected the root insert to return a row");
-      }
+      await db.insert(schema.roots).values({ name: "files" });
 
       const metadata = createMetadataService(repos);
       const bus = createEventBus();
@@ -92,10 +89,6 @@ describe("indexer listener (real Postgres LISTEN/NOTIFY)", () => {
           target_path: "alice/b.txt",
           at: new Date().toISOString(),
         });
-        await db.execute(sql`
-          insert into "idx"."events" (root_id, kind, path, target_path)
-          values (${root.id}, 'moved', 'alice/a.txt', 'alice/b.txt')
-        `);
         await db.execute(sql`select pg_notify('idx_events', ${payload})`);
 
         await waitUntil(() => received.length > 0);

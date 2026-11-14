@@ -81,7 +81,7 @@ it("measures capture, writer pause, spool bytes and fresh restore for small and 
     if (size === "large") {
       await db.pool.query("insert into idx.roots(id,name) values(1,'documents')");
       await db.pool.query(
-        "insert into idx.events(root_id,path,kind) select 1,'folder/file-'||g||'.pdf','upsert' from generate_series(1,50000) g",
+        "insert into idx.scans(root_id,started_at) select 1,now() - g * interval '1 hour' from generate_series(1,50000) g",
       );
       await db.pool.query(
         "insert into app.system_events(subsystem,level,message,data) select 'general','info','Event '||g,'{}' from generate_series(1,10000) g",

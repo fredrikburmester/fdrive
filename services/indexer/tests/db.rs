@@ -665,41 +665,13 @@ fn rename_a_directory_rekeys_its_subtree() {
 }
 
 #[test]
-fn moves_are_recorded() {
-    let (_, mut c) = setup();
-    let root = db::upsert_root(&mut c, "files").unwrap();
-    db::insert_move(&mut c, root, "old.txt", "new.txt", "watcher").unwrap();
-    let rows: Vec<(String, String, String)> = c
-        .query(r#"SELECT src, dst, actor FROM "idx"."moves""#, &[])
-        .unwrap()
-        .iter()
-        .map(|r| (r.get(0), r.get(1), r.get(2)))
-        .collect();
-    assert_eq!(rows, vec![("old.txt".into(), "new.txt".into(), "watcher".into())]);
-}
-
-#[test]
-fn events_are_stored_and_notified_with_the_same_payload() {
+fn events_are_notified_and_never_stored() {
     let (url, mut c) = setup();
-    let root = db::upsert_root(&mut c, "files").unwrap();
     let mut listener = common::connect(&url);
     listener.batch_execute("LISTEN idx_events").unwrap();
     let event = build(EventKind::Moved, "files", "a.txt", Some("b.txt"));
-    db::record_event(&mut c, root, &event).unwrap();
-    db::record_event(&mut c, root, &build(EventKind::Created, "files", "c.txt", None)).unwrap();
-    let rows: Vec<(String, String, Option<String>)> = c
-        .query(r#"SELECT kind, path, target_path FROM "idx"."events" ORDER BY id"#, &[])
-        .unwrap()
-        .iter()
-        .map(|r| (r.get(0), r.get(1), r.get(2)))
-        .collect();
-    assert_eq!(
-        rows,
-        vec![
-            ("moved".into(), "a.txt".into(), Some("b.txt".into())),
-            ("created".into(), "c.txt".into(), None)
-        ]
-    );
+    db::notify_event(&mut c, &event).unwrap();
+    db::notify_event(&mut c, &build(EventKind::Created, "files", "c.txt", None)).unwrap();
     let mut notifications = listener.notifications();
     let mut iter = notifications.timeout_iter(Duration::from_secs(5));
     let first = iter.next().unwrap().unwrap();
@@ -715,27 +687,48 @@ fn events_are_stored_and_notified_with_the_same_payload() {
         (second["kind"].as_str(), second["target_path"].is_null()),
         (Some("created"), true)
     );
+    // The change journal is the durable record; there is no event table.
+    let table: Option<String> = c
+        .query_one("SELECT to_regclass('idx.events')::text", &[])
+        .unwrap()
+        .get(0);
+    assert_eq!(table, None);
 }
 
 #[test]
-fn prune_events_drops_only_old_rows() {
+fn the_last_scan_counts_only_while_the_journal_covers_the_time_since() {
     let (_, mut c) = setup();
     let root = db::upsert_root(&mut c, "files").unwrap();
-    let old = Utc::now() - chrono::Duration::days(30);
-    c.execute(
-        &format!(r#"INSERT INTO "idx"."events" (at, root_id, kind, path) VALUES ($1, {root}, 'created', 'old.txt')"#),
-        &[&old],
+    let other = db::upsert_root(&mut c, "other").unwrap();
+    let age = |c: &mut Client| db::last_scan_age(c, root, "indexer").unwrap();
+    let finish = |c: &mut Client, root: i64| {
+        let (scan, _) = db::start_scan(c, root).unwrap();
+        db::finish_scan(c, scan, 1, 1, 0, 0).unwrap();
+    };
+    // Never scanned: another root's scan does not count.
+    finish(&mut c, other);
+    assert_eq!(age(&mut c), None);
+    finish(&mut c, root);
+    // Nothing indexed: a first start, or a cleared or restored index.
+    assert_eq!(age(&mut c), None);
+    add(&mut c, root, "a.txt", ".txt", 1, 1, "sha");
+    db::mark_deleted(&mut c, root, "a.txt", false).unwrap();
+    assert_eq!(age(&mut c), None);
+    add(&mut c, root, "b.txt", ".txt", 1, 1, "sha");
+    // No position in the journal: only another consumer, or another root, has one.
+    db::save_change_cursor(&mut c, "mac", root, 1).unwrap();
+    db::save_change_cursor(&mut c, "indexer", other, 1).unwrap();
+    assert_eq!(age(&mut c), None);
+    db::save_change_cursor(&mut c, "indexer", root, 1).unwrap();
+    assert!(age(&mut c).unwrap() < Duration::from_secs(60));
+    // The last scan that finished counts, not one still running or cut short.
+    c.batch_execute(
+        "UPDATE idx.scans SET started_at = now() - interval '2 hours', finished_at = now() - interval '90 minutes'",
     )
     .unwrap();
-    db::record_event(&mut c, root, &build(EventKind::Created, "files", "new.txt", None)).unwrap();
-    assert_eq!(db::prune_events(&mut c, 7).unwrap(), 1);
-    let paths: Vec<String> = c
-        .query(r#"SELECT path FROM "idx"."events""#, &[])
-        .unwrap()
-        .iter()
-        .map(|r| r.get(0))
-        .collect();
-    assert_eq!(paths, vec!["new.txt"]);
+    db::start_scan(&mut c, root).unwrap();
+    let minutes = age(&mut c).unwrap().as_secs() / 60;
+    assert!((89..=90).contains(&minutes), "{minutes}");
 }
 
 #[test]
@@ -1182,7 +1175,6 @@ fn every_query_reports_a_missing_schema_as_an_error() {
         sha256: "sha",
         mime: None,
     };
-    let event = build(EventKind::Created, "r", "a.txt", None);
     let c = &mut c;
     assert!(db::upsert_root(c, "r").is_err());
     assert!(db::scan_manifest(c, 1).is_err());
@@ -1199,9 +1191,6 @@ fn every_query_reports_a_missing_schema_as_an_error() {
     assert!(db::mark_deleted(c, 1, "a", false).is_err());
     assert!(db::rename_paths(c, 1, "a", "b", false).is_err());
     assert!(db::rename_paths(c, 1, "a", "b", true).is_err());
-    assert!(db::insert_move(c, 1, "a", "b", "watcher").is_err());
-    assert!(db::record_event(c, 1, &event).is_err());
-    assert!(db::prune_events(c, 7).is_err());
     assert!(db::start_scan(c, 1).is_err());
     assert!(db::finish_scan(c, 1, 0, 0, 0, 0).is_err());
     assert!(db::sweep_vanished(c, 1, &["a".into()], Utc::now()).is_err());
@@ -1215,6 +1204,7 @@ fn every_query_reports_a_missing_schema_as_an_error() {
     assert!(db::change_cursor(c, "indexer", 1).is_err());
     assert!(db::save_change_cursor(c, "indexer", 1, 1).is_err());
     assert!(db::scan_baseline(c, 1).is_err());
+    assert!(db::last_scan_age(c, 1, "indexer").is_err());
     assert!(db::read_settings(c).is_err());
     assert!(db::upsert_thumbnail(c, "k", 256, "p", 1, 1).is_err());
     assert!(db::count(c, "idx.files").is_err());

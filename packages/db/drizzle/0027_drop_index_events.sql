@@ -1,0 +1,1 @@
+DROP TABLE "idx"."events" CASCADE;

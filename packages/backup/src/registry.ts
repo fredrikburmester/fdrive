@@ -38,7 +38,6 @@ export const DURABLE_TABLES = [
   "idx.roots",
   "idx.scans",
   "idx.moves",
-  "idx.events",
   "idx.ocr_log",
   "idx.ocr_runs",
   "idx.processing_failures",
