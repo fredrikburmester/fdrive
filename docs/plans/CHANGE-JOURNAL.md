@@ -189,8 +189,8 @@ Built on 2026-11-14: `GET /api/v2/desktop/changes?since=<anchor>`
   the downloads under changed paths, and stores the anchor only once all of that applied. On
   `resync`, without an anchor, after 50 pages, after a failed feed request, on a refresh the
   person asked for and once an hour it runs the folder checks and then stores the anchor from
-  before them. Feed refreshes are paced
-  by their own duration only, so a large location sees changes within about a minute.
+  before them. Feed refreshes are paced by their own duration only, so a large location sees
+  changes within about a minute.
 
 Verified by unit tests for the mapping and the anchor, an integration test over a real files
 folder and Postgres (an upload, a move and a delete through the web, a watcher row, a restore
