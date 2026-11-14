@@ -12,11 +12,11 @@ Current implementation reference. Unfinished work belongs in [plans](plans/READM
 - `packages/db` owns Drizzle migrations for PostgreSQL's `app` metadata and `idx` index
   schemas. The indexer and OCR consume those schemas; they do not independently migrate them.
 - The indexer scans mounted roots, extracts content and builds thumbnails/embeddings.
-  The API records each change it makes in the change journal, `idx.changes`, which the
-  indexer reads from its own position and applies at once; its file watcher and periodic
-  scan cover changes made outside fdrive and journal them too, so the journal holds every
-  change. See [how changes arrive](INDEXER.md#how-changes-arrive) and the
-  [change journal](plans/CHANGE-JOURNAL.md). OCR may write to mounted originals. Browser file operations go through the API, which reads
+  The API records each change it makes in the change journal, `idx.changes`, and OCR each
+  PDF it rewrites; the indexer reads the journal from its own position and applies them at
+  once. Its file watcher and periodic scan cover changes made outside fdrive and journal them
+  too, so the journal holds every change. See [how changes arrive](INDEXER.md#how-changes-arrive)
+  and the [change journal](plans/CHANGE-JOURNAL.md). OCR may write to mounted originals. Browser file operations go through the API, which reads
   and writes the files folder on its own disk. See [indexer](INDEXER.md), [OCR](OCR.md) and
   [search](SEARCH-AND-AI.md).
 - Model inference and office-document text extraction run in the Rust
@@ -54,7 +54,11 @@ name, then `<name> (<owner>)` on a clash), confined to the owner's folder; a rea
 refuses every change, and the grantee cannot rename, move or delete `Shared with me` or the
 shared folders themselves. A move between a user's files and a writable shared folder is one
 rename. Grants follow the owner's moves and deletes made through fdrive, and index scopes
-follow the grants ([scoping](SCOPING.md)).
+follow the grants ([scoping](SCOPING.md)). A grant follows its folder into the owner's Trash
+too, whether fdrive or the indexer reports the move (`isMoveIntoTrash`), so it never stays at a
+path a new folder can take; a purge deletes it. The grantee's storage and index scopes refuse a
+grant in the owner's Trash, in fdrive's Trash layout or in the Mac's `/.fdrive-desktop`
+(`closedToShares`) ([Trash](TRASH.md)).
 
 Metadata uses identity plus canonical virtual path. Application moves and indexer events
 propagate renames; index paths must be translated through the identity's scopes. A path

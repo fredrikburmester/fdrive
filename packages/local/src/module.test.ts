@@ -1,4 +1,4 @@
-import { chmod, mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { StorageError, type StorageSession } from "@fdrive/core";
@@ -216,6 +216,54 @@ describe("createLocalModule", () => {
     const bob = module.createStorage(instance, session("bob"), ctx);
     expect((await bob.list(`/${SHARED_WITH_ME}`)).map((entry) => entry.name)).toEqual(["Projects"]);
     expect(await kindOf(bob.upload(`/${SHARED_WITH_ME}/Projects/x`, bytes("x")))).toBe("forbidden");
+  });
+
+  it("refuses a folder shared from its owner's Trash, on, off or renamed since", async () => {
+    const closedFolders = vi.fn(async (): Promise<readonly string[]> => ["/Bin"]);
+    const module = createLocalModule({
+      root,
+      closedFolders,
+      users: users("ok", "active", [
+        { owner: "alice", path: "/Bin/.fdrive-move-v1/dir/p/Old/v/1", writable: true },
+        // In the Trash folder before it was renamed to `/Bin`.
+        { owner: "alice", path: "/.trash/.fdrive-move-v1/dir/p/Older/v/2", writable: true },
+        { owner: "alice", path: "/Bin/loose", writable: true },
+        { owner: "alice", path: "/Bin link", writable: true },
+        { owner: "alice", path: "/Projects", writable: true },
+      ]),
+    });
+    const alice = module.createStorage(instance, session("alice"), ctx);
+    await alice.upload("/Bin/.fdrive-move-v1/dir/p/Old/v/1/kept.txt", bytes("kept"), {
+      mkdirParents: true,
+    });
+    await alice.upload("/.trash/.fdrive-move-v1/dir/p/Older/v/2/kept.txt", bytes("kept"), {
+      mkdirParents: true,
+    });
+    await alice.upload("/Bin/loose/kept.txt", bytes("kept"), { mkdirParents: true });
+    await alice.upload("/Projects/plan.txt", bytes("plan"), { mkdirParents: true });
+    await symlink(join(root, "alice", "Bin"), join(root, "alice", "Bin link"));
+    const bob = () => module.createStorage(instance, session("bob"), ctx);
+    const shelf = async () =>
+      (await bob().list(`/${SHARED_WITH_ME}`)).map((entry) => entry.name).sort();
+
+    expect(await shelf()).toEqual(["Projects"]);
+    expect(closedFolders).toHaveBeenCalledWith("p1");
+    expect(await kindOf(bob().list(`/${SHARED_WITH_ME}/1`))).toBe("not_found");
+    expect(await kindOf(bob().list(`/${SHARED_WITH_ME}/2`))).toBe("not_found");
+    expect(await kindOf(bob().upload(`/${SHARED_WITH_ME}/1/x`, bytes("x")))).toBe("forbidden");
+    expect(await kindOf(bob().list(`/${SHARED_WITH_ME}/Bin link`))).toBe("forbidden");
+
+    // Trash turned off: what is still in fdrive's Trash layout stays out of reach.
+    closedFolders.mockResolvedValue([]);
+    expect(await shelf()).toEqual(["Bin link", "Projects", "loose"]);
+  });
+
+  it("asks for the closed folders only when something is shared", async () => {
+    const closedFolders = vi.fn(async () => ["/.trash"]);
+    const module = createLocalModule({ root, closedFolders, users: users("ok") });
+    const bob = module.createStorage(instance, session("bob"), ctx);
+    expect(await bob.list("/")).toEqual([]);
+    expect(closedFolders).not.toHaveBeenCalled();
   });
 
   it("refuses to build storage for a name that cannot be a home", () => {

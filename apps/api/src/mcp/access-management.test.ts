@@ -105,7 +105,8 @@ async function fixture(mode: "read" | "organize" | "full" = "full", paths = ["/a
           change.target ?? change.path,
           change.isDir,
         );
-      if (change.kind === "trash") await metadata.onTrashed(identity.id, change.path, change.isDir);
+      if (change.kind === "trash")
+        await metadata.onTrashed(identity.id, change.path, change.isDir, change.trashLeaf ?? null);
     }),
   };
   return { base, principal, deps, repos };

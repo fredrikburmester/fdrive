@@ -40,7 +40,11 @@ export interface MetadataFolderView {
   readonly sort: FolderViewSort | null;
 }
 
-/** Something else keyed by a login's paths that follows its moves and deletes. */
+/**
+ * Something else keyed by a login's paths that follows its moves and deletes,
+ * and, since it grants access, follows an item into Trash as a move: what
+ * is in Trash is never left at a path a new item could take.
+ */
 export interface PathFollower {
   onMoved(identityId: string, oldPath: string, newPath: string, isDir: boolean): Promise<void>;
   onDeleted(identityId: string, path: string, isDir: boolean): Promise<void>;
@@ -136,8 +140,18 @@ export interface MetadataService {
    * favorites are left in place (keyed at the original path) so a
    * same-path restore recovers them. Alternate restores relocate surviving
    * metadata only when no replacement entry occupies the original path.
+   * A move into the Trash reaches here too (`withTrashMoves`).
+   *
+   * `followers` grant access, so they follow the item to `trashedTo`, its
+   * path in Trash, where nothing new can take their path, and back out on a
+   * restore. When that path is not known (`null`) they end instead.
    */
-  onTrashed(identityId: string, path: string, isDir: boolean): Promise<void>;
+  onTrashed(
+    identityId: string,
+    path: string,
+    isDir: boolean,
+    trashedTo: string | null,
+  ): Promise<void>;
   /**
    * No-op by design: a copy is a brand new file as far as metadata is
    * concerned, so tags, favorites, and recents on the source are never
@@ -282,7 +296,12 @@ export function createMetadataService(deps: MetadataServiceDeps): MetadataServic
       }
     },
 
-    async onTrashed(identityId, path, isDir) {
+    async onTrashed(identityId, path, isDir, trashedTo) {
+      // Access first: a share must not stay where a new item can take its path.
+      for (const follower of deps.followers ?? []) {
+        if (trashedTo === null) await follower.onDeleted(identityId, path, isDir);
+        else await follower.onMoved(identityId, path, trashedTo, isDir);
+      }
       await deps.recents.deletePrefix(identityId, path, isDir);
       await deps.aiChats?.markReferencesMissing(identityId, path, isDir);
     },

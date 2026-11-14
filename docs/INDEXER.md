@@ -33,6 +33,14 @@ Every regular file under a configured root, except:
 - Directories in `SKIP_DIRS` (`@eaDir`, `.Trash`, `.Trashes`, `node_modules`,
   `.git`).
 
+A walk (a scan, a queued folder, a folder the watcher saw appear) never follows a link below
+its starting folder. On network and FUSE storage such as Unraid's `/mnt/user` every look at a
+folder or file is a round trip, so while the walking thread works through one folder, eight
+reader threads (`walk.rs`) list and look at the folders that come next. Files still arrive
+in one order: a folder's files by lowercase name, then each of its folders, depth first. A
+folder listing already says what is a folder, a link, a pipe or a device, so only files are
+looked at, for their size and time.
+
 For each file the indexer records size, mtime, a sha256, a guessed MIME type,
 and (for textual extensions) extracted text, chunked and embedded. Extraction
 follows filesai's rules exactly:
@@ -175,17 +183,21 @@ read from their own position (see the [change journal plan](plans/CHANGE-JOURNAL
    delete, Trash and restore, an Office save, a new modification time, a new folder) it
    appends a row to `idx.changes` with source `api` and sends `NOTIFY idx_changes` with the
    root's name (`createChangeJournal` in `packages/db`, fed by local storage's change
-   listener). Every writer takes the journal's advisory lock before inserting, so positions
-   commit in order. A row without `target_path` says "look at `path` again"; with it, `path`
-   moved there. An upload's row carries the sha256 the API computed while writing it and the
-   size, `mtime_ns`, `inode` and `ctime_ns` of the file it published, so the indexer does not
-   read the file again to hash it while it is still that file. A client chooses an upload's
-   modification time, but no client sets an inode or a change time, so a different file with
-   the same size and time is always hashed: its bytes never key thumbnails or embeddings under
-   another file's digest. Where the API and the indexer see different inode numbers, the hint
-   simply never matches. A `work-<root>` thread listens on the channel, looks every 30
-   seconds without it, and applies the root's rows after its position, oldest first, saving
-   its position in `idx.change_cursors` (consumer `indexer`) after each batch:
+   listener). The OCR service does the same, with source `ocr`, when it replaces a PDF with
+   its searchable version or puts a kept original back (`journal_change` in
+   `services/ocr`), with a row for that file and no content hint, so search has the new text
+   layer without waiting for the scan. Every writer takes the journal's advisory lock before
+   inserting, so positions commit in order. A row without `target_path` says "look at `path`
+   again"; with it, `path` moved there. An upload's row carries the sha256 the API computed
+   while writing it and the size, `mtime_ns`, `inode` and `ctime_ns` of the file it
+   published, so the indexer does not read the file again to hash it while it is still that
+   file. A client chooses an upload's modification time, but no client sets an inode or a
+   change time, so a different file with the same size and time is always hashed: its bytes
+   never key thumbnails or embeddings under another file's digest. Where the API and the
+   indexer see different inode numbers, the hint simply never matches. A `work-<root>` thread
+   listens on the channel, looks every 30 seconds without it, and applies the root's rows
+   after its position, oldest first, saving its position in `idx.change_cursors` (consumer
+   `indexer`) after each batch:
    - a file is indexed on one of `indexer.workers` workers;
    - a folder is compared with its rows, like a scan of just that folder: new and changed
      files are indexed, and rows of files no longer there are dropped;

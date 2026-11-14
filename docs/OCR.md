@@ -47,6 +47,19 @@ with `--skip-big 50` (50 megapixels per page, independent of the PDF megabyte
 limit) as a page-level guard against runaway memory use on a huge scanned page,
 in addition to the whole-file size cap applied before the subprocess is even started.
 
+## Telling the indexer
+
+A rewrite keeps the file's mtime but changes its bytes, and the indexer needs to read them
+again to find the new text layer. After each replace, and after each restore (see
+[Restoring](#restoring)), the service adds an `idx.work` row for the file's root-relative
+path and sends `NOTIFY idx_work` with the root's name, in one transaction, as the API does
+for its own changes (see [how changes arrive](INDEXER.md#how-changes-arrive)), so the
+indexer reads the file as soon as it is notified rather than when its watcher (unreliable on
+some mounts) or its scan (hourly by default) gets to it. The row has no content hint, since
+the bytes are new. The write is `db.queue_index_work`. A failure is logged as `could not tell
+the indexer about <path>` and never fails the file or the restore: the watcher and the scan
+still find it. Nothing is queued for a PDF left untouched.
+
 ## Settings (read from `app.settings` before every pass)
 
 | Key | Type | Default |
@@ -173,7 +186,8 @@ A successful restore records an `idx.ocr_log` row for the *restored* file's own
 would see a key it has never decided on and OCR the file straight back again,
 which is what made the old manual "copy it back over the PDF yourself"
 procedure silently undo itself. The kept copy is not deleted, so a restore can
-be repeated, and the pre-rewrite row for the OCR output is left alone.
+be repeated, and the pre-rewrite row for the OCR output is left alone. The restored path
+is queued for the indexer like a rewrite.
 
 A restore is refused, never half-applied, when the sidecar cannot be resolved,
 its root is not configured on this service, its recorded path does not stay
