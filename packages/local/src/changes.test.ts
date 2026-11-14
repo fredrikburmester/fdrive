@@ -186,7 +186,7 @@ describe("local storage changes", () => {
     expect(await readFile(join(home(), "a.txt"), "utf8")).toBe("ab");
   });
 
-  it("reports moves, copies, deletes and new times, but not new folders", async () => {
+  it("reports moves, copies, deletes, new times and new folders", async () => {
     const files = storage();
     await files.mkdir("/dir");
     await files.upload("/dir/a.txt", bytes("a"));
@@ -207,7 +207,18 @@ describe("local storage changes", () => {
       { kind: "changed", path: join(home(), "c.txt") },
       { kind: "changed", path: join(home(), "copy") },
       { kind: "changed", path: home() },
+      { kind: "changed", path: join(home(), "again") },
     ]);
+  });
+
+  it("reports the first folder a mkdir with parents made, and nothing when all existed", async () => {
+    const files = storage();
+    await files.mkdir("/x");
+    changes = [];
+    await files.mkdir("/x/y/z", { parents: true });
+    await files.mkdir("/x/y", { parents: true });
+    await expect(files.mkdir("/x")).rejects.toThrow();
+    expect(changes).toEqual([{ kind: "changed", path: join(home(), "x", "y") }]);
   });
 
   it("reports the file a link leads to when its time changes", async () => {

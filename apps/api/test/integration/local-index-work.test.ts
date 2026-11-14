@@ -1,7 +1,13 @@
 import { createHash } from "node:crypto";
 import type { StorageProvider, StorageSession } from "@fdrive/core";
-import { createDb, createIndexWorkWriter, createRepos, migrate } from "@fdrive/db";
-import { createLocalModule, type LocalUsers } from "@fdrive/local";
+import {
+  createDb,
+  createIndexQueries,
+  createIndexWorkWriter,
+  createRepos,
+  migrate,
+} from "@fdrive/db";
+import { createLocalModule, type IndexChange, type LocalUsers } from "@fdrive/local";
 import { sql } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createIndexWorkQueue, type IndexWorkQueue } from "../../src/local/index-work.js";
@@ -84,6 +90,20 @@ describe("changes fdrive makes, through the real indexer with its watcher off", 
     }));
   }
 
+  /**
+   * Queues `change` once more after the indexer's container sees `paths` as
+   * given. A queued change is applied to what is on disk, and Docker Desktop
+   * can show the container this host's folder as it was a moment ago; on a
+   * Linux host the first one already did it. A change queued twice is
+   * harmless.
+   */
+  async function settle(change: IndexChange, paths: Record<string, boolean>): Promise<void> {
+    await queue.flush();
+    for (const [path, present] of Object.entries(paths)) await stack.seen(path, present);
+    queue.record("files", change);
+    await queue.flush();
+  }
+
   async function count(table: "idx.scans" | "idx.work"): Promise<number> {
     const result = await connection.db.execute(
       sql`select count(*)::int as n from ${sql.raw(table)}`,
@@ -111,13 +131,19 @@ describe("changes fdrive makes, through the real indexer with its watcher off", 
     expect(hits.rows.map((row) => row.path)).toEqual(["alice/notes/invoice.txt"]);
 
     await storage.move("/notes/invoice.txt", "/notes/renamed.txt");
-    await queue.flush();
+    await settle(
+      { kind: "moved", path: "alice/notes/invoice.txt", target: "alice/notes/renamed.txt" },
+      { "alice/notes/invoice.txt": false, "alice/notes/renamed.txt": true },
+    );
     await expect
       .poll(async () => (await notes()).map((row) => row.path), { timeout: 15_000, interval: 100 })
       .toEqual(["alice/notes/renamed.txt"]);
 
     await storage.deleteFile("/notes/renamed.txt");
-    await queue.flush();
+    await settle(
+      { kind: "changed", path: "alice/notes/renamed.txt" },
+      { "alice/notes/renamed.txt": false },
+    );
     await expect.poll(notes, { timeout: 15_000, interval: 100 }).toEqual([]);
 
     const events = await connection.db.execute(
@@ -125,6 +151,41 @@ describe("changes fdrive makes, through the real indexer with its watcher off", 
     );
     expect(events.rows.map((row) => row.kind)).toEqual(["created", "moved", "deleted"]);
     await expect.poll(() => count("idx.work"), { timeout: 15_000, interval: 100 }).toBe(0);
+    expect(await count("idx.scans")).toBe(scans);
+    expect(failures).toEqual([]);
+  });
+
+  it("records a new folder, empty or not, so search finds it by name within seconds", async () => {
+    const scans = await count("idx.scans");
+    const queries = createIndexQueries(connection.db);
+    const roots = await queries.rootIdsByName();
+    const scope = [{ rootId: roots.files ?? -1, fsPrefix: "/alice" }];
+    const found = async () =>
+      (await queries.folders(scope, ["microlä"], "Microlä", 10)).map((row) =>
+        row.path.normalize("NFC"),
+      );
+
+    await storage.mkdir("/Kurser/Microlärande", { parents: true });
+    await settle({ kind: "changed", path: "alice/Kurser" }, { "alice/Kurser/Microlärande": true });
+    await expect
+      .poll(found, { timeout: 15_000, interval: 100 })
+      .toEqual(["alice/Kurser/Microlärande"]);
+
+    await storage.move("/Kurser/Microlärande", "/Microlärande 2026");
+    await settle(
+      { kind: "moved", path: "alice/Kurser/Microlärande", target: "alice/Microlärande 2026" },
+      { "alice/Kurser/Microlärande": false, "alice/Microlärande 2026": true },
+    );
+    await expect
+      .poll(found, { timeout: 15_000, interval: 100 })
+      .toEqual(["alice/Microlärande 2026"]);
+
+    await storage.deleteDir("/Microlärande 2026");
+    await settle(
+      { kind: "changed", path: "alice/Microlärande 2026" },
+      { "alice/Microlärande 2026": false },
+    );
+    await expect.poll(found, { timeout: 15_000, interval: 100 }).toEqual([]);
     expect(await count("idx.scans")).toBe(scans);
     expect(failures).toEqual([]);
   });

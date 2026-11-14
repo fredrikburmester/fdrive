@@ -13,7 +13,8 @@ volume there; standalone workers must configure a writable directory to retain t
 > **Looking to configure or use search in fdrive?** See the simple user guide in **[docs/SEARCH-AND-AI.md](SEARCH-AND-AI.md)**. This document is a technical reference for developers on the indexing service.
 
 `services/indexer` is a Rust program (`fdrive-indexer`) that walks and watches one or
-more disk roots, keeps `idx.files` / `idx.chunks` current, and generates thumbnails. It
+more disk roots, keeps `idx.files` / `idx.chunks` / `idx.folders` current, and generates
+thumbnails. It
 replaced a Python service of the same behaviour and keeps its HTTP API, database writes,
 events and thumbnail layout, so existing index data stays valid. It never creates or migrates
 its own schema: `packages/db`'s Drizzle migrations own `idx.*` and
@@ -146,14 +147,32 @@ admission lock (only one heavy background pass runs at a time).
 The admin **Logs** sheet on System > Indexer lists these `error` rows together with
 `idx.scans` history and API-side events (settings saves, reindex and clear requests).
 
+## Folders
+
+`idx.folders` holds one row per folder a walk descends into (`path`, `name`, `mtime_ns`),
+empty folders included, so search can find a folder by its own name. Skipped folders
+(`SKIP_DIRS`, junk names) and everything below them get no row. The rows follow the same
+three paths as files:
+
+- a scan writes every folder it walked and, once its walk completed, drops the rows of
+  folders it no longer found;
+- a queued folder records itself, the folders above it and those in it, and drops the rows
+  of folders below it that are gone; a queued file records the folders above it;
+- the watcher records a new folder and those in it once its events settle;
+- deleting or renaming a path deletes or renames its folder rows in the same transaction as
+  its file rows.
+
+Rows are rebuilt by the next scan, so backups leave them out.
+
 ## How changes arrive
 
 Three paths lead to the same per-file processing, fastest first.
 
 1. **The API's queue.** fdrive's API writes the files folder, apart from OCR and the
    host's own tools. After each change it makes (an upload, a move or rename, a copy, a
-   delete, Trash and restore, an Office save, a new modification time) it adds a row to
-   `idx.work` and sends `NOTIFY idx_work` with the root's name (`createIndexWorkWriter` in
+   delete, Trash and restore, an Office save, a new modification time, a new folder) it
+   adds a row to `idx.work` and sends `NOTIFY idx_work` with the root's name
+   (`createIndexWorkWriter` in
    `packages/db`, fed by local storage's change listener). A row without `target_path`
    says "look at `path` again"; with it, `path` moved there. An upload's row carries the
    sha256 the API computed while writing it and the size, `mtime_ns`, `inode` and
@@ -215,8 +234,8 @@ INDEX_ROOTS=files=/data,photos=/roots/photos
 ```
 
 Each name becomes a row in `idx.roots` (upserted by name on start, so restarts
-reuse the same `root_id`); every `idx.files` / `idx.chunks` / `idx.scans` /
-`idx.moves` / `idx.events` row carries that `root_id`. Each root gets its own
+reuse the same `root_id`); every `idx.files` / `idx.chunks` / `idx.folders` /
+`idx.scans` / `idx.moves` / `idx.events` row carries that `root_id`. Each root gets its own
 inotify watcher and its own periodic scan, running independently. Every root needs the
 `.fdrive-files` marker; the API writes it only into the files folder.
 

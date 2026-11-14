@@ -38,6 +38,13 @@ of 180 days. A recent file therefore beats an older one that matched about as we
 old file still surfaces when it matches clearly better. The constants live in
 [ranking.ts](../packages/core/src/search/ranking.ts).
 
+The Folders section lists up to five folders whose own name holds every query word, empty
+ones included, ranked the same way: by how the name matches, then by the folder's
+modification time. The indexer records every folder it walks in `idx.folders`, so a folder
+made a moment ago in fdrive is found at once, as is one made over SMB once the watcher sees
+it. Your own home folder, and the folder a "This folder only" search starts in, are never
+listed, and a type filter hides the section, since folders have no type.
+
 Index-backed results cover the files folder, including folders other users share with you,
 and require live read permission. The login's Trash folder is left out by every search query,
 mapped through its index scopes, before the query's row limit, so trashed files never crowd out

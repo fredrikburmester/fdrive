@@ -53,6 +53,7 @@ export const OMITTED_TABLES = {
   "app.image_embeddings": "rebuildable",
   "idx.files": "rebuildable",
   "idx.chunks": "rebuildable",
+  "idx.folders": "rebuildable",
   "app.sessions": "transient",
   "app.activity_read_receipts": "transient",
   "app.activity_outbox": "transient",

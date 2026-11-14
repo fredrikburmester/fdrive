@@ -425,6 +425,93 @@ describe("index-queries", () => {
     });
   });
 
+  describe("folders", () => {
+    async function insertFolder(rootId: number, path: string, mtimeNs = daysBeforeNs(NOW, 0)) {
+      await db
+        .insert(schema.folders)
+        .values({ rootId, path, name: path.split("/").at(-1) ?? path, mtimeNs });
+    }
+
+    it("finds folders whose own name holds every word, however the accent is stored", async () => {
+      const rootId = await insertRoot("primary");
+      await insertFolder(rootId, "alice/Microlärande".normalize("NFD"));
+      await insertFolder(rootId, "alice/kurs/MICROLÄRANDE 2026");
+      await insertFolder(rootId, "alice/microtest");
+      await insertFolder(rootId, "alice/Microlärande".normalize("NFD") + "/inside");
+
+      const results = await queries.folders(
+        [{ rootId, fsPrefix: "/" }],
+        ["microlä"],
+        "Microlä",
+        10,
+      );
+
+      expect(results.map((r) => r.path.normalize("NFC")).sort()).toEqual([
+        "alice/Microlärande",
+        "alice/kurs/MICROLÄRANDE 2026",
+      ]);
+      const both = await queries.folders(
+        [{ rootId, fsPrefix: "/" }],
+        ["microlä", "2026"],
+        "Microlä 2026",
+        10,
+      );
+      expect(both).toEqual([
+        {
+          rootId,
+          path: "alice/kurs/MICROLÄRANDE 2026",
+          name: "MICROLÄRANDE 2026",
+          mtimeNs: daysBeforeNs(NOW, 0),
+        },
+      ]);
+    });
+
+    it("stays within the scope and leaves out excluded folders, taking LIKE characters literally", async () => {
+      const rootId = await insertRoot("primary");
+      const other = await insertRoot("other");
+      await insertFolder(rootId, "alice/plan");
+      await insertFolder(rootId, "alice/.trash/plan");
+      await insertFolder(rootId, "alice_x/plan");
+      await insertFolder(rootId, "bob/plan");
+      await insertFolder(other, "alice/plan");
+
+      const results = await queries.folders(
+        [{ rootId, fsPrefix: "/alice" }],
+        ["plan"],
+        "plan",
+        10,
+        { exclude: [{ rootId, fsPrefix: "/alice/.trash" }] },
+      );
+
+      expect(results.map((r) => [r.rootId, r.path])).toEqual([[rootId, "alice/plan"]]);
+      expect(await queries.folders([], ["plan"], "plan", 10)).toEqual([]);
+    });
+
+    it("sorts the closer name first, then the recently modified of two equal names, up to the limit", async () => {
+      const rootId = await insertRoot("primary");
+      await insertFolder(rootId, "a/plan", daysBeforeNs(NOW, 700));
+      await insertFolder(rootId, "b/plan", daysBeforeNs(NOW, 1));
+      await insertFolder(rootId, "c/project plan archive", daysBeforeNs(NOW, 1));
+
+      const scope = [{ rootId, fsPrefix: "/" }];
+      const byAge = await queries.folders(scope, ["plan"], "plan", 10, { recency: RECENCY });
+      const limited = await queries.folders(scope, ["plan"], "plan", 1, { recency: RECENCY });
+      const unweighted = await queries.folders(scope, ["plan"], "plan", 10);
+
+      expect(byAge.map((r) => r.path)).toEqual(["b/plan", "a/plan", "c/project plan archive"]);
+      expect(limited.map((r) => r.path)).toEqual(["b/plan"]);
+      // Without an age weight, equal names fall back to the path.
+      expect(unweighted.map((r) => r.path)).toEqual(["a/plan", "b/plan", "c/project plan archive"]);
+    });
+
+    it("returns nothing for a query without words", async () => {
+      const rootId = await insertRoot("primary");
+      await insertFolder(rootId, "alice/plan");
+
+      expect(await queries.folders([{ rootId, fsPrefix: "/" }], [], "pl", 10)).toEqual([]);
+    });
+  });
+
   describe("filesByIds", () => {
     it("omits rows deleted after search selected their ids", async () => {
       const rootId = await insertRoot("primary");

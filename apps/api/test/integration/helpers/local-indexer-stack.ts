@@ -185,6 +185,26 @@ export class LocalIndexerStack {
     );
   }
 
+  /**
+   * Waits until the indexer's container sees `path` (root-relative) as
+   * present or gone. Docker Desktop shows a container a change made on this
+   * host a moment late; on a Linux host both always see the same folder.
+   */
+  async seen(path: string, present: boolean): Promise<void> {
+    const container = `${this.prefix}-indexer`;
+    const target = `${ROOT_IN_CONTAINER}/${path}`;
+    await vi.waitFor(
+      async () => {
+        const exists = await this.docker(["exec", container, "test", "-e", target]).then(
+          () => true,
+          () => false,
+        );
+        expect(exists).toBe(present);
+      },
+      { timeout: 10_000, interval: 100 },
+    );
+  }
+
   /** Renames alice's `/docs` to `/renamed` on disk, outside fdrive. */
   async renameDirectory(): Promise<void> {
     await this.docker([

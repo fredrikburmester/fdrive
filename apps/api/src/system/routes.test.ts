@@ -40,6 +40,7 @@ function fakeIndexQueries(overrides: Partial<IndexQueries> = {}): IndexQueries {
     semantic: notImplemented,
     fulltext: notImplemented,
     filename: notImplemented,
+    folders: notImplemented,
     filesByIds: notImplemented,
     fileByPath: notImplemented,
     listFiles: notImplemented,

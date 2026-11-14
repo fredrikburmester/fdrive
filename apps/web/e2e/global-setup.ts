@@ -23,7 +23,7 @@ function extensionOf(name: string): string {
 
 /**
  * Seeds `idx.roots`, `idx.files` for every one of alice's testkit-seeded
- * files, and an `idx.chunks` row (no embedding) for the readme's text, so
+ * files, `idx.folders` for the folders they are in, and an `idx.chunks` row (no embedding) for the readme's text, so
  * `search.spec.ts` has real rows to find: a filename match on "readme.md",
  * a content match on a word from the readme, and (since only alice's files
  * are indexed under alice's scope) proof that bob's search for the same
@@ -95,6 +95,16 @@ async function seedSearchIndex(databaseUrl: string): Promise<void> {
          returning id`,
           [rootId, relativePath, name, ext, size, mtimeNs, sha256],
         );
+        // The indexer records every folder it walks; a file's own folders stand in here.
+        const parts = relativePath.split("/").slice(0, -1);
+        for (let depth = 1; depth <= parts.length; depth++) {
+          await client.query(
+            `insert into idx.folders (root_id, path, name, mtime_ns)
+             values ($1, $2, $3, $4)
+             on conflict (root_id, path) do nothing`,
+            [rootId, parts.slice(0, depth).join("/"), parts[depth - 1], mtimeNs],
+          );
+        }
         const fileId = fileResult.rows[0]?.id;
         if (relativePath === "alice/docs/readme.md") {
           readmeFileId = fileId;

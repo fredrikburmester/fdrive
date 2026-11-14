@@ -99,11 +99,8 @@ test("Enter opens the preview", async ({ page }) => {
   await page.getByPlaceholder(SEARCH_INPUT_PLACEHOLDER).fill("readme");
   await expect(dialog.getByText("readme.md").first()).toBeVisible();
 
-  // The panel always lists a matched file's containing folder ahead of the
-  // file itself (Folders, then Files, then Content matches), so cmdk
-  // highlights "/docs" first; move down once to reach readme.md before
-  // opening it.
-  await page.keyboard.press("ArrowDown");
+  // No folder is named "readme", so cmdk highlights readme.md, the first
+  // Files row (sections run Folders, then Files, then Content matches).
   await page.keyboard.press("Enter");
 
   await expect(page).toHaveURL(/\/view\/docs\/readme\.md$/);
@@ -139,9 +136,8 @@ test("switching the Enter preference to Enclosing folder makes Enter reveal inst
   await dialog.getByRole("button", { name: "Enclosing folder" }).click();
 
   // Re-focus the search input (clicking the preference button above moved
-  // focus away from it) so ArrowDown/Enter drive cmdk's own navigation.
+  // focus away from it) so Enter drives cmdk's own navigation, on readme.md.
   await page.getByPlaceholder(SEARCH_INPUT_PLACEHOLDER).click();
-  await page.keyboard.press("ArrowDown");
   await page.keyboard.press("Enter");
 
   await expect(page).toHaveURL(/\/files\/docs$/);
@@ -173,18 +169,16 @@ test("a type filter other than Any type hides the Folders section, even though t
 
   await openSearch(page);
   const dialog = page.getByRole("dialog");
-  await page.getByPlaceholder(SEARCH_INPUT_PLACEHOLDER).fill("readme");
+  await page.getByPlaceholder(SEARCH_INPUT_PLACEHOLDER).fill("docs");
 
-  // Unfiltered, "readme" matches readme.md by both filename and content, so
-  // its containing folder ("/docs") is derived into the Folders section
-  // (see the "Enter opens the preview" test's note on section ordering).
+  // Unfiltered, "docs" names the "/docs" folder, listed under Folders, and
+  // is in readme.md's path, listed under Files.
   await expect(dialog.getByText("readme.md").first()).toBeVisible();
   await expect(dialog.getByText("Folders")).toBeVisible();
 
   // readme.md is a ".md" file, which the "Documents" chip includes, so the
   // Files section still lists it; only Folders disappears, since a type
-  // filter is a files-only filter (see `service.ts`'s `deriveFolders` call
-  // site).
+  // filter is a files-only filter (see `rankFolders` in the search service).
   await dialog.getByRole("button", { name: "Documents", exact: true }).click();
 
   await expect(dialog.getByText("readme.md").first()).toBeVisible();

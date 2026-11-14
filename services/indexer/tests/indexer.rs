@@ -19,7 +19,8 @@ use fdrive_indexer::files_marker::FILES_MARKER;
 use fdrive_indexer::indexer::{
     self, FileStat, ImageStage, backfill_media, embed_missing, embed_thumbnail, emit_event, error_kind,
     exclusion_still_applies, guess_mime, process_file, process_thumbnails, safe_process, scan_once,
-    should_retry_unchanged, unchanged_in_db, walk, watch_index, watch_mark_deleted, watch_rename, work_features,
+    should_retry_unchanged, unchanged_in_db, walk, walk_tree, watch_index, watch_mark_deleted, watch_rename,
+    work_features,
 };
 use fdrive_indexer::settings::Settings;
 
@@ -126,6 +127,41 @@ fn walk_skips_junk_and_sorts_directories() {
         },
     );
     assert_eq!(first, vec!["A.txt"]);
+}
+
+#[test]
+fn walk_tree_reports_the_folders_it_descends_into() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    for rel in [
+        "empty",
+        "sub/deeper",
+        "Zed",
+        "node_modules/pkg",
+        ".git/objects",
+        "@eaDir",
+    ] {
+        std::fs::create_dir_all(root.join(rel)).unwrap();
+    }
+    std::fs::write(root.join("sub/a.txt"), "a").unwrap();
+    std::os::unix::fs::symlink(root.join("sub"), root.join("linked-dir")).unwrap();
+    let mut folders = Vec::new();
+    let mut files = Vec::new();
+    walk_tree(
+        root,
+        || {},
+        |folder| {
+            assert!(folder.mtime_ns > 0);
+            folders.push(folder.path);
+        },
+        |_, rel, _| {
+            files.push(rel);
+            true
+        },
+    );
+    folders.sort();
+    assert_eq!(folders, ["Zed", "empty", "sub", "sub/deeper"]);
+    assert_eq!(files, ["sub/a.txt"]);
 }
 
 #[test]
@@ -1275,6 +1311,31 @@ fn a_scan_indexes_new_files_and_sweeps_vanished_rows() {
 }
 
 #[test]
+fn a_scan_records_every_folder_and_drops_vanished_ones() {
+    let env = Env::new();
+    let ctx = env.ctx(fv(false, true, false, false, false));
+    let mut c = env.client();
+    db::sync_folders(
+        &mut c,
+        ctx.root_id,
+        &[db::FolderRow {
+            path: "gone".to_owned(),
+            mtime_ns: 1,
+        }],
+        None,
+    )
+    .unwrap();
+    std::fs::create_dir_all(env.path("alice/Microlärande")).unwrap();
+    env.write("alice/notes/a.txt", b"hello");
+    scan_once(&ctx);
+    let paths = |env: &Env| env.folders(&ctx).into_iter().map(|(p, _)| p).collect::<Vec<_>>();
+    assert_eq!(paths(&env), ["alice", "alice/Microlärande", "alice/notes"]);
+    std::fs::remove_dir(env.path("alice/Microlärande")).unwrap();
+    scan_once(&ctx);
+    assert_eq!(paths(&env), ["alice", "alice/notes"]);
+}
+
+#[test]
 fn a_scan_counts_errors_and_keeps_a_failed_operation() {
     let env = Env::new();
     let ctx = env.ctx(fv(false, true, false, false, false));
@@ -1375,6 +1436,11 @@ fn a_cancelled_scan_never_sweeps_unseen_rows() {
         },
     )
     .unwrap();
+    let gone = [db::FolderRow {
+        path: "gone".to_owned(),
+        mtime_ns: 1,
+    }];
+    db::sync_folders(&mut env.client(), ctx.root_id, &gone, None).unwrap();
     env.ml.hold(TIKA);
     let scan = {
         let ctx = Arc::clone(&ctx);
@@ -1386,6 +1452,7 @@ fn a_cancelled_scan_never_sweeps_unseen_rows() {
     let result = scan.join().unwrap();
     assert_eq!(result.deleted, 0);
     assert!(!env.row(&ctx, "gone.txt").deleted);
+    assert_eq!(env.folders(&ctx), [("gone".to_owned(), "gone".to_owned())]);
     assert_eq!(Env::snapshot(&ctx, "textSearch")["state"], "stopped");
 }
 

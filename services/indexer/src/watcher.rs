@@ -5,7 +5,8 @@
 //!   CLOSE_WRITE, unpaired MOVED_TO   -> (re)index the file, unless size+mtime already match its row
 //!   DELETE, unpaired MOVED_FROM      -> mark the row (or the subtree) deleted and drop its chunks
 //!   MOVED_FROM + MOVED_TO (cookie)   -> rename rows in place: no re-extraction, no re-embedding
-//!   CREATE|ISDIR, MOVED_TO|ISDIR     -> watch the new directory and index whatever is already in it
+//!   CREATE|ISDIR, MOVED_TO|ISDIR     -> watch the new directory, record its folders and index whatever
+//!                                       is already in it
 //! Events are debounced per path. What is applied is decided by what is on disk at apply
 //! time, not by event order.
 
@@ -23,6 +24,9 @@ pub trait WatchHandler: Send + Sync + 'static {
     /// Rename rows; returns rows moved (0 means nothing was indexed under the old path, so the new path
     /// gets indexed instead).
     fn rename(&self, old_rel: &str, new_rel: &str, is_dir: bool) -> usize;
+    /// A folder appeared or changed: record it and the folders in it. Its files are indexed
+    /// separately.
+    fn folder_changed(&self, _rel: &str) {}
     /// Called when a file is queued for indexing; the returned closure is called exactly once with the
     /// job's result (including synthetic results "cancelled", "error", "deleted", "skipped").
     fn on_queue(&self, abs: &Path) -> Box<dyn FnOnce(&FileResult) + Send>;
@@ -150,6 +154,9 @@ mod linux {
         /// event for the same path needs no second job until one is running.
         queued: HashSet<PathBuf>,
         running: HashMap<PathBuf, usize>,
+        /// Folders that appeared, reported once their events settle. Their files are pending
+        /// on their own.
+        folders: HashMap<PathBuf, Instant>,
     }
 
     impl State {
@@ -465,6 +472,9 @@ mod linux {
         fn new_dir(&self, abs: &Path, now: Instant) {
             let files = self.add_tree(abs, true);
             let mut state = lock(&self.state);
+            if let Some(rel) = self.rel_of(abs) {
+                state.folders.insert(rel, now);
+            }
             for file in files {
                 if let Some(rel) = self.rel_of(&file) {
                     state.set(rel, false, now);
@@ -563,8 +573,14 @@ mod linux {
             }
             let now = Instant::now();
             let ready = |at: Instant| now.saturating_duration_since(at) >= self.debounce;
-            let (renames, mut due) = {
+            let (folders, renames, mut due) = {
                 let mut state = lock(&self.state);
+                let mut folders: Vec<PathBuf> = state
+                    .folders
+                    .extract_if(|_, at| ready(*at))
+                    .map(|(rel, _)| rel)
+                    .collect();
+                folders.sort();
                 let n = state.renames.iter().take_while(|r| ready(r.at)).count();
                 let renames: Vec<Rename> = state.renames.drain(..n).collect();
                 let expired: Vec<u32> = state
@@ -580,13 +596,23 @@ mod linux {
                 }
                 let mut due: Vec<(PathBuf, Pending)> = state.pending.extract_if(|_, p| ready(p.at)).collect();
                 due.sort_by_key(|(_, p)| p.seq);
-                (renames, Due::new(due.into_iter().map(|(rel, p)| (rel, p.is_dir))))
+                (
+                    folders,
+                    renames,
+                    Due::new(due.into_iter().map(|(rel, p)| (rel, p.is_dir))),
+                )
             };
-            if renames.is_empty() && due.items.is_empty() {
+            if folders.is_empty() && renames.is_empty() && due.items.is_empty() {
                 return Ok(());
             }
 
             let batch = Batch::new(Arc::clone(&self.handler));
+            for rel in folders {
+                // Moved or removed since: its rename or delete covers it.
+                if fs::symlink_metadata(self.root.join(&rel)).is_ok_and(|m| m.is_dir()) {
+                    self.folder_changed(&text(&rel), &batch);
+                }
+            }
             for Rename { old, new, is_dir, .. } in renames {
                 // Jobs submitted for the old path may run from it after the move; recheck the new
                 // path so a change they missed is not left for the next scan. Only this thread
@@ -637,6 +663,7 @@ mod linux {
                     }
                 };
                 let found = if metadata.is_dir() {
+                    self.folder_changed(&rel_text, &batch);
                     self.add_tree(&abs, true)
                 } else if metadata.is_file() {
                     vec![abs]
@@ -650,6 +677,13 @@ mod linux {
             // Waiting for the batch here held every later event behind its slowest file.
             batch.end(None);
             Ok(())
+        }
+
+        fn folder_changed(&self, rel: &str, batch: &Batch) {
+            if let Err(message) = guarded(|| self.handler.folder_changed(rel)) {
+                batch.add("error", 1);
+                self.log(&format!("watch: folder {rel} failed: {message}"));
+            }
         }
 
         fn submit(&self, abs: &Path, batch: &Arc<Batch>) -> Result<(), String> {
@@ -905,6 +939,7 @@ mod linux {
             indexed: Mutex<Vec<String>>,
             deleted: Mutex<Vec<(String, bool)>>,
             renamed: Mutex<Vec<(String, String, bool)>>,
+            folders: Mutex<Vec<String>>,
             logs: Mutex<Vec<String>>,
             started: Mutex<Vec<String>>,
             finished: Arc<Mutex<Vec<(String, String)>>>,
@@ -914,6 +949,7 @@ mod linux {
             moved: usize,
             fail_rename: bool,
             fail_delete: bool,
+            fail_folder: bool,
         }
 
         impl Recorder {
@@ -975,6 +1011,11 @@ mod linux {
                 assert!(!self.fail_rename, "db down");
                 lock(&self.renamed).push((old_rel.to_owned(), new_rel.to_owned(), is_dir));
                 self.moved
+            }
+
+            fn folder_changed(&self, rel: &str) {
+                assert!(!self.fail_folder, "db down");
+                lock(&self.folders).push(rel.to_owned());
             }
 
             fn on_queue(&self, abs: &Path) -> Box<dyn FnOnce(&FileResult) + Send> {
@@ -1049,6 +1090,34 @@ mod linux {
             assert!(wait_until(|| rec
                 .logged("watch: 0 renamed, 0 deleted, 1 indexed, 0 unchanged, 0 errors (")
                 == 1));
+        }
+
+        #[test]
+        fn reports_a_new_folder_before_indexing_its_files() {
+            let tmp = tempfile::tempdir().unwrap();
+            let rec = Arc::new(Recorder::new(tmp.path()));
+            let _w = started(tmp.path(), &rec, 0.2);
+            fs::create_dir(tmp.path().join("Microlärande")).unwrap();
+            assert!(wait_until(|| lock(&rec.folders).len() == 1));
+            assert_eq!(*lock(&rec.folders), ["Microlärande"]);
+            assert!(rec.indexed().is_empty());
+        }
+
+        #[test]
+        fn a_failed_folder_report_is_logged_and_its_files_still_indexed() {
+            let tmp = tempfile::tempdir().unwrap();
+            fs::create_dir_all(tmp.path().join("d")).unwrap();
+            fs::write(tmp.path().join("d/a.txt"), "x").unwrap();
+            let rec = Arc::new(Recorder {
+                fail_folder: true,
+                ..Recorder::new(tmp.path())
+            });
+            let w = manual(tmp.path(), &rec, 1);
+            lock(&w.inner.state).set(PathBuf::from("d"), true, Instant::now());
+            flush(&w);
+            assert!(wait_until(|| rec.indexed() == ["d/a.txt"]));
+            assert_eq!(rec.logged("watch: folder d failed: db down"), 1);
+            assert!(wait_until(|| rec.logged("1 indexed, 0 unchanged, 1 errors (") == 1));
         }
 
         #[test]

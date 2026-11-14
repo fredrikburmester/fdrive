@@ -11,6 +11,7 @@ use std::thread::LocalKey;
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
+use chrono::{DateTime, Utc};
 
 use crate::activity::{Op, RootActivity};
 use crate::backoff::{Backoff, is_outage};
@@ -1218,7 +1219,17 @@ pub fn safe_process_with(
 
 /// Yield `(abs, rel, stat)` for regular files below `root`, directories sorted by
 /// lowercase name, skipping junk. `on_error` hears about unreadable entries.
-pub fn walk(root: &Path, mut on_error: impl FnMut(), mut visit: impl FnMut(PathBuf, String, FileStat) -> bool) {
+pub fn walk(root: &Path, on_error: impl FnMut(), visit: impl FnMut(PathBuf, String, FileStat) -> bool) {
+    walk_tree(root, on_error, |_| {}, visit);
+}
+
+/// `walk`, also reporting each folder below `root` it will descend into, before its contents.
+pub fn walk_tree(
+    root: &Path,
+    mut on_error: impl FnMut(),
+    mut on_folder: impl FnMut(db::FolderRow),
+    mut visit: impl FnMut(PathBuf, String, FileStat) -> bool,
+) {
     let mut stack = vec![root.to_path_buf()];
     while let Some(dir) = stack.pop() {
         let mut entries: Vec<std::fs::DirEntry> = match std::fs::read_dir(&dir) {
@@ -1246,7 +1257,13 @@ pub fn walk(root: &Path, mut on_error: impl FnMut(), mut visit: impl FnMut(PathB
             };
             if metadata.is_dir() {
                 if should_walk_dir(&name, SKIP_DIRS) {
-                    subdirs.push(entry.path());
+                    let path = entry.path();
+                    let rel = path.strip_prefix(root).unwrap_or(&path).to_string_lossy().into_owned();
+                    on_folder(db::FolderRow {
+                        path: rel,
+                        mtime_ns: FileStat::of(&metadata).mtime_ns,
+                    });
+                    subdirs.push(path);
                 }
                 continue;
             }
@@ -1380,9 +1397,11 @@ fn scan_inner(ctx: &Arc<RootContext>, operations: &HashMap<String, Op>) -> ScanR
     let mut seen = 0;
     let mut traversal_complete = true;
     let mut traversal_errors = false;
-    walk(
+    let mut folders = Vec::new();
+    walk_tree(
         &ctx.abs_path,
         || traversal_errors = true,
+        |folder| folders.push(folder),
         |abs, rel, stat| {
             seen += 1;
             unseen.remove(&rel);
@@ -1468,6 +1487,10 @@ fn scan_inner(ctx: &Arc<RootContext>, operations: &HashMap<String, Op>) -> ScanR
     } else {
         0
     };
+    let sweep = traversal_complete.then_some(("", started_at));
+    if let Err(e) = ctx.db.with(|c| db::sync_folders(c, ctx.root_id, &folders, sweep)) {
+        log(&format!("[{}] folder sync failed: {}", ctx.name, describe(&e)));
+    }
     if traversal_complete && ctx.needs_media_backfill() && counters.media_backfill_errors.load(Ordering::SeqCst) == 0 {
         ctx.finish_media_backfill();
     }
@@ -1648,6 +1671,71 @@ pub fn watch_mark_deleted(ctx: &RootContext, rel_path: &str, is_dir: bool) -> us
             0
         }
     }
+}
+
+/// The folders from the top of the root down to `rel` (a root-relative folder, or `""`), as
+/// they are on disk. Stops at the first one that is gone, not a folder, or never walked.
+pub fn folder_chain(root: &Path, rel: &str) -> Vec<db::FolderRow> {
+    let mut chain = Vec::new();
+    let mut path = String::new();
+    for part in rel.split('/').filter(|p| !p.is_empty()) {
+        if !should_index_name(part, SKIP_NAMES) || !should_walk_dir(part, SKIP_DIRS) {
+            break;
+        }
+        if !path.is_empty() {
+            path.push('/');
+        }
+        path.push_str(part);
+        match std::fs::symlink_metadata(root.join(&path)) {
+            Ok(metadata) if metadata.is_dir() => chain.push(db::FolderRow {
+                path: path.clone(),
+                mtime_ns: FileStat::of(&metadata).mtime_ns,
+            }),
+            _ => break,
+        }
+    }
+    chain
+}
+
+/// Write `found` to the root's folder rows; with `sweep`, also drop the rows below that folder
+/// the walk that found them did not see. Nothing is written while indexing is off.
+pub fn record_folders(ctx: &RootContext, found: &[db::FolderRow], sweep: Option<(&str, DateTime<Utc>)>) {
+    if (found.is_empty() && sweep.is_none()) || !ctx.values().indexer_enabled() {
+        return;
+    }
+    if let Err(e) = ctx.db.with(|c| db::sync_folders(c, ctx.root_id, found, sweep)) {
+        log(&format!("[{}] folder sync failed: {}", ctx.name, describe(&e)));
+    }
+}
+
+/// A folder appeared or changed under `rel`: record it, the folders above it and every folder
+/// below it, and drop the rows of folders below it that are gone.
+pub fn watch_folder(ctx: &RootContext, rel: &str) {
+    if !ctx.values().indexer_enabled() {
+        return;
+    }
+    let started_at = match ctx.db.with(db::now) {
+        Ok(now) => now,
+        Err(e) => {
+            log(&format!("[{}] folder sync failed: {}", ctx.name, describe(&e)));
+            return;
+        }
+    };
+    let mut found = folder_chain(&ctx.abs_path, rel);
+    if found.last().is_none_or(|f| f.path != rel) {
+        return;
+    }
+    let mut complete = true;
+    walk_tree(
+        &ctx.abs_path.join(rel),
+        || complete = false,
+        |mut folder| {
+            folder.path = format!("{rel}/{}", folder.path);
+            found.push(folder);
+        },
+        |_, _, _| true,
+    );
+    record_folders(ctx, &found, complete.then_some((rel, started_at)));
 }
 
 /// Rename rows in place. A file whose extension changes is a delete; its new path is

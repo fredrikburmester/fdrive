@@ -81,8 +81,8 @@ pub fn read_schema_version(client: &mut Client) -> Result<Option<i64>> {
     }
 }
 
-/// Wait for the compatible schema and the failure-history and work-queue tables before
-/// any processing. Both tables came without a version bump, which OCR waits for too.
+/// Wait for the compatible schema and the failure-history, work-queue and folder tables
+/// before any processing. They came without a version bump, which OCR waits for too.
 pub fn wait_for_schema_version(
     db: &Db,
     expected: i64,
@@ -95,11 +95,12 @@ pub fn wait_for_schema_version(
         let (version, ready) = db.with(|c| {
             let version = read_schema_version(c)?;
             let row = c.query_one(
-                "SELECT to_regclass('idx.processing_failures')::text, to_regclass('idx.work')::text",
+                "SELECT to_regclass('idx.processing_failures')::text, to_regclass('idx.work')::text, \
+                 to_regclass('idx.folders')::text",
                 &[],
             )?;
-            let (failures, work): (Option<String>, Option<String>) = (row.get(0), row.get(1));
-            Ok((version, failures.is_some() && work.is_some()))
+            let tables: [Option<String>; 3] = [row.get(0), row.get(1), row.get(2)];
+            Ok((version, tables.iter().all(Option::is_some)))
         })?;
         if version == Some(expected) && ready {
             return Ok(version);
@@ -107,12 +108,12 @@ pub fn wait_for_schema_version(
         let seen = version.map_or("None".to_owned(), |v| v.to_string());
         if Instant::now() >= deadline {
             log(&format!(
-                "schema not ready (expected {expected}, last seen: {seen}, requires processing_failures and work); giving up"
+                "schema not ready (expected {expected}, last seen: {seen}, requires processing_failures, work and folders); giving up"
             ));
             return Ok(None);
         }
         log(&format!(
-            "waiting for idx.schema_version = {expected} and the processing_failures and work migrations (last seen: {seen})"
+            "waiting for idx.schema_version = {expected} and the processing_failures, work and folders migrations (last seen: {seen})"
         ));
         sleep(Duration::from_secs(5));
     }
@@ -316,7 +317,8 @@ pub fn mark_file_error(c: &mut Client, root_id: i64, path: &str, error: &str) ->
     Ok(())
 }
 
-/// Soft-delete a path (or a directory's subtree) and drop its chunks; returns the row ids.
+/// Soft-delete a path (or a directory's subtree), drop its chunks and its folder rows;
+/// returns the file row ids.
 pub fn mark_deleted(c: &mut Client, root_id: i64, path: &str, is_dir: bool) -> Result<Vec<i64>> {
     let mut tx = c.transaction()?;
     let prefix = format!("{path}/");
@@ -335,11 +337,16 @@ pub fn mark_deleted(c: &mut Client, root_id: i64, path: &str, is_dir: bool) -> R
             &[&ids],
         )?;
     }
+    tx.execute(
+        r#"DELETE FROM "idx"."folders" WHERE root_id = $1::bigint AND (path = $2 OR ($3 AND starts_with(path, $4)))"#,
+        &[&root_id, &path, &is_dir, &prefix],
+    )?;
     tx.commit()?;
     Ok(ids)
 }
 
-/// Rename rows in place, replacing a stale row at the destination. Returns rows moved.
+/// Rename rows in place, replacing a stale row at the destination; a folder's rows in
+/// `idx.folders` follow it. Returns file rows moved.
 pub fn rename_paths(c: &mut Client, root_id: i64, old: &str, new: &str, is_dir: bool) -> Result<u64> {
     let mut tx = c.transaction()?;
     let moved = if is_dir {
@@ -351,11 +358,13 @@ pub fn rename_paths(c: &mut Client, root_id: i64, old: &str, new: &str, is_dir: 
                AND f.path = $3 || substr(s.path, $4::int)"#,
             &[&root_id, &old_prefix, &new_prefix, &from],
         )?;
-        tx.execute(
+        let moved = tx.execute(
             r#"UPDATE "idx"."files" SET path = $1 || substr(path, $2::int), last_seen = now()
                WHERE root_id = $3::bigint AND starts_with(path, $4) AND deleted_at IS NULL"#,
             &[&new_prefix, &from, &root_id, &old_prefix],
-        )?
+        )?;
+        rename_folders(&mut tx, root_id, old, new)?;
+        moved
     } else {
         tx.execute(
             r#"DELETE FROM "idx"."files" WHERE root_id = $1::bigint AND path = $2 AND EXISTS
@@ -640,4 +649,73 @@ pub fn installation_id(c: &mut Client) -> Result<Option<String>> {
 
 pub fn now(c: &mut Client) -> Result<DateTime<Utc>> {
     Ok(c.query_one("SELECT now()", &[])?.get(0))
+}
+
+/// Move the folder rows at and below `old` to `new`, replacing rows already there.
+fn rename_folders(tx: &mut postgres::Transaction<'_>, root_id: i64, old: &str, new: &str) -> Result<()> {
+    let old_prefix = format!("{old}/");
+    let rest = old.chars().count() as i32 + 1;
+    let name = crate::paths::basename(new);
+    tx.execute(
+        r#"DELETE FROM "idx"."folders" d USING "idx"."folders" s
+           WHERE d.root_id = $1::bigint AND s.root_id = $1::bigint AND (s.path = $2 OR starts_with(s.path, $3))
+           AND d.path = $4 || substr(s.path, $5::int)"#,
+        &[&root_id, &old, &old_prefix, &new, &rest],
+    )?;
+    tx.execute(
+        r#"UPDATE "idx"."folders" SET path = $4 || substr(path, $5::int),
+           name = CASE WHEN path = $2 THEN $6 ELSE name END, seen_at = now()
+           WHERE root_id = $1::bigint AND (path = $2 OR starts_with(path, $3))"#,
+        &[&root_id, &old, &old_prefix, &new, &rest, &name],
+    )?;
+    Ok(())
+}
+
+/// One folder as a walk found it: root-relative path and modification time.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FolderRow {
+    pub path: String,
+    pub mtime_ns: i64,
+}
+
+/// Write the folders a walk found. With `sweep`, a root-relative folder (`""` for the whole
+/// root) and when the walk started, also drop the rows below that folder the walk did not
+/// write: everything it found was written after it started. Returns rows dropped.
+pub fn sync_folders(
+    c: &mut Client,
+    root_id: i64,
+    found: &[FolderRow],
+    sweep: Option<(&str, DateTime<Utc>)>,
+) -> Result<u64> {
+    // One statement cannot write a row twice, and two names that are not valid UTF-8 can read
+    // the same.
+    let mut unique: Vec<&FolderRow> = found.iter().collect();
+    unique.sort_by(|a, b| a.path.cmp(&b.path));
+    unique.dedup_by(|a, b| a.path == b.path);
+    let mut tx = c.transaction()?;
+    for batch in unique.chunks(SWEEP_BATCH) {
+        let paths: Vec<&str> = batch.iter().map(|f| f.path.as_str()).collect();
+        let names: Vec<&str> = batch.iter().map(|f| crate::paths::basename(&f.path)).collect();
+        let mtimes: Vec<i64> = batch.iter().map(|f| f.mtime_ns).collect();
+        tx.execute(
+            r#"INSERT INTO "idx"."folders" (root_id, path, name, mtime_ns)
+               SELECT $1::bigint, p, n, m FROM unnest($2::text[], $3::text[], $4::bigint[]) AS t(p, n, m)
+               ON CONFLICT (root_id, path) DO UPDATE
+               SET name = EXCLUDED.name, mtime_ns = EXCLUDED.mtime_ns, seen_at = now()"#,
+            &[&root_id, &paths, &names, &mtimes],
+        )?;
+    }
+    let dropped = match sweep {
+        Some((under, started_at)) => {
+            let prefix = format!("{under}/");
+            tx.execute(
+                r#"DELETE FROM "idx"."folders" WHERE root_id = $1::bigint AND seen_at < $2
+                   AND ($3 = '' OR starts_with(path, $4))"#,
+                &[&root_id, &started_at, &under, &prefix],
+            )?
+        }
+        None => 0,
+    };
+    tx.commit()?;
+    Ok(dropped)
 }
