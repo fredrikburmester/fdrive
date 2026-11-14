@@ -28,10 +28,16 @@ describe("ApiTokenSummary", () => {
     createdAt: "2026-01-01T00:00:00.000Z",
     lastUsedAt: null,
     expiresAt: null,
+    access: { mode: "read", paths: ["/"] },
   };
 
   it("parses a valid summary", () => {
     expect(ApiTokenSummary.parse(valid)).toEqual(valid);
+  });
+
+  it("rejects a summary without an access level", () => {
+    const { access: _access, ...withoutAccess } = valid;
+    expect(ApiTokenSummary.safeParse(withoutAccess).success).toBe(false);
   });
 
   it("rejects a non-datetime createdAt", () => {
@@ -77,6 +83,7 @@ describe("CreateApiTokenResponse", () => {
         createdAt: "2026-01-01T00:00:00.000Z",
         lastUsedAt: null,
         expiresAt: null,
+        access: { mode: "full", paths: ["/docs"] },
       },
     };
     expect(CreateApiTokenResponse.parse(value)).toEqual(value);

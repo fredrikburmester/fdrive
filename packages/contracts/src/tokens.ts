@@ -40,8 +40,7 @@ export const ApiTokenSummary = z.object({
   createdAt: z.iso.datetime(),
   lastUsedAt: z.iso.datetime().nullable(),
   expiresAt: z.iso.datetime().nullable(),
-  /** Absent for legacy tokens, which retain the old index/global-write policy. */
-  access: ApiTokenAccess.optional(),
+  access: ApiTokenAccess,
 });
 
 export type ApiTokenSummary = z.infer<typeof ApiTokenSummary>;
