@@ -788,7 +788,7 @@ describe("read_excerpts", () => {
   it("is not available when the identity's index scopes are unverified", async () => {
     const { tool } = excerptSetup({
       scopeResolver: {
-        verifiedIndexScopes: async () => ({ available: false, reason: "indexer_unreachable" }),
+        verifiedIndexScopes: async () => ({ available: false, reason: "provider_mismatch" }),
       },
     });
 

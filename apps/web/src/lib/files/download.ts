@@ -1,3 +1,5 @@
+import { defaultArchiveName } from "@fdrive/core";
+
 /** The minimal anchor shape a hidden `<a>` download link needs. */
 export interface AnchorLike {
   href: string;
@@ -104,32 +106,6 @@ export function needsZipDownload(entries: readonly { kind: string }[]): boolean 
   return entries.length !== 1 || entries.some((entry) => entry.kind === "dir");
 }
 
-/** How a download of some entries is carried out, by `planDownload`. */
-export type DownloadPlan =
-  | { readonly kind: "single"; readonly path: string }
-  | { readonly kind: "zip"; readonly paths: string[] }
-  | { readonly kind: "each"; readonly paths: string[] };
-
-/**
- * Decides how to download `entries` for a login whose provider may lack
- * the `zip` capability: one file streams directly; with `zip`, anything
- * else becomes one archive; without it, every file is downloaded on its
- * own and folders are skipped (they have no byte stream to hand out).
- * Returns `null` when there is nothing to download.
- */
-export function planDownload(
-  entries: readonly { kind: string; path: string }[],
-  zip: boolean,
-): DownloadPlan | null {
-  const first = entries[0];
-  if (first === undefined) return null;
-  if (!needsZipDownload(entries)) return { kind: "single", path: first.path };
-  if (zip) return { kind: "zip", paths: entries.map((entry) => entry.path) };
-  const files = entries.filter((entry) => entry.kind !== "dir").map((entry) => entry.path);
-  if (files.length === 0) return null;
-  return { kind: "each", paths: files };
-}
-
 /** Navigates a hidden anchor to the direct download URL for `path`. */
 export function downloadSingle(path: string, deps: DownloadDeps): void {
   const url = deps.downloadUrl(path, { inline: false });
@@ -155,4 +131,23 @@ export async function downloadMany(
 
   const blob = await response.blob();
   downloadObjectUrl(deps.createObjectUrl(blob), name ?? DEFAULT_ZIP_NAME, deps);
+}
+
+/**
+ * Downloads `entries`: one file streams straight from its download URL;
+ * anything else, several entries or a folder, becomes one zip named after
+ * them. Does nothing for an empty selection. Rejects when the zip fails.
+ */
+export async function downloadEntries(
+  entries: readonly { kind: string; path: string }[],
+  deps: DownloadDeps,
+): Promise<void> {
+  const first = entries[0];
+  if (first === undefined) return;
+  if (!needsZipDownload(entries)) {
+    downloadSingle(first.path, deps);
+    return;
+  }
+  const paths = entries.map((entry) => entry.path);
+  await downloadMany(paths, deps, `${defaultArchiveName(paths)}.zip`);
 }

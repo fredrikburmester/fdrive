@@ -19,7 +19,7 @@ import type { MetadataService } from "../metadata/service.ts";
 import { createReadAuthorizer, type ReadAuthorizer } from "../scoping/read-authorizer.ts";
 import type { ScopeResolver } from "../scoping/resolver.ts";
 import { roundTripVirtualPath } from "../scoping/round-trip.ts";
-import type { VerifiedUnavailableReason } from "../scoping/types.ts";
+import type { UnavailableReason } from "../scoping/types.ts";
 import type { ImageSearchService } from "../search/image-service.ts";
 import { toIndexRelativePath } from "../search/scopes.js";
 import type { SearchService } from "../search/service.js";
@@ -122,7 +122,7 @@ interface ScopedRequest {
 }
 
 /** A short, reason-carrying message that never leaks anything about individual paths, only the caller's own scope status. */
-function indexUnavailableMessage(reason: VerifiedUnavailableReason | "no_roots"): string {
+function indexUnavailableMessage(reason: UnavailableReason): string {
   return `index features are unavailable for this identity (${reason})`;
 }
 

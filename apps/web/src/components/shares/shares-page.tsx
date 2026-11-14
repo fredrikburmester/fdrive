@@ -1,7 +1,7 @@
 "use client";
 
 import type { FsEntry, ManagedShare } from "@fdrive/contracts";
-import { Copy, Link2Off, Pencil, Trash2, TriangleAlertIcon } from "lucide-react";
+import { Copy, Pencil, Trash2, TriangleAlertIcon } from "lucide-react";
 import { useState } from "react";
 import { EmptyState } from "@/components/files/empty-state";
 import { SharedWithPeopleSection } from "@/components/grants/shared-with-people-section";
@@ -29,32 +29,15 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { activityGesture } from "@/lib/activity/gestures";
-import { useMe } from "@/lib/api/auth-queries";
 import { describeApiError } from "@/lib/api/errors";
-import { capabilitiesFor } from "@/lib/identity/capabilities";
-import { loginDisplay } from "@/lib/identity/login-display";
 import { useShareManagement } from "@/lib/shares/management";
 import { publicShareHref } from "@/lib/shares/paths";
 import { PRESENTATION_LABEL } from "@/lib/shares/presentation-label";
 import { shareAccessLabel, shareItemLabel, shareUsage } from "@/lib/shares/status";
 import { ShareDialog } from "./share-dialog";
 
-/**
- * Said when the active login cannot share while another linked login can
- * (the sidebar shows Shares for the union), or when someone opens the page
- * by address with such a login.
- */
-export function unavailableNote(login: string): string {
-  return `${login} can't create share links. Switch to another login to see its links.`;
-}
-
 export function SharesPage() {
-  const me = useMe();
-  const activeLogin = me.data?.identities.find((login) => login.id === me.data?.activeIdentityId);
-  // Before `me` answers, the default (a local-folder login) applies, as in Files.
-  const canShare = capabilitiesFor(me.data).shares;
-  const canShareWithPeople = capabilitiesFor(me.data).shareWithPeople;
-  const management = useShareManagement({ list: canShare });
+  const management = useShareManagement();
   const [editing, setEditing] = useState<{ share: ManagedShare; entries: FsEntry[] } | null>(null);
   const [revoking, setRevoking] = useState<ManagedShare | null>(null);
   const [pending, setPending] = useState(false);
@@ -100,8 +83,7 @@ export function SharesPage() {
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Shares</h1>
           <p className="mt-1 text-sm text-muted-foreground">
-            Links created by this login. Select files or a folder in Files and choose Share to
-            create one.
+            Links you created. Select files or a folder in Files and choose Share to create one.
           </p>
         </div>
         {(error || management.query.isError) && (
@@ -111,15 +93,7 @@ export function SharesPage() {
             <AlertDescription>{error ?? describeApiError(management.query.error)}</AlertDescription>
           </Alert>
         )}
-        {!canShare ? (
-          <EmptyState
-            icon={Link2Off}
-            title="Shares aren't available for this login"
-            description={unavailableNote(
-              activeLogin ? loginDisplay(activeLogin).title : "This login",
-            )}
-          />
-        ) : management.query.isPending ? (
+        {management.query.isPending ? (
           <p role="status" className="text-sm text-muted-foreground">
             Loading links…
           </p>
@@ -207,7 +181,7 @@ export function SharesPage() {
             </TableBody>
           </Table>
         )}
-        {canShareWithPeople && <SharedWithPeopleSection />}
+        <SharedWithPeopleSection />
       </main>
       {editing && (
         <ShareDialog

@@ -9,14 +9,18 @@ describe("IdentityScopeReason", () => {
       "provider_mismatch",
       "invalid_configuration",
       "no_roots",
-      "mismatch",
-      "indexer_unreachable",
     ])
       expect(IdentityScopeReason.safeParse(reason).success).toBe(true);
   });
 
-  it("rejects an unknown reason and the retired virtual-folder reasons", () => {
-    for (const reason of ["something_else", "unmapped_mount", "overflow"])
+  it("rejects an unknown reason and the retired ones", () => {
+    for (const reason of [
+      "something_else",
+      "unmapped_mount",
+      "overflow",
+      "mismatch",
+      "indexer_unreachable",
+    ])
       expect(IdentityScopeReason.safeParse(reason).success).toBe(false);
   });
 });

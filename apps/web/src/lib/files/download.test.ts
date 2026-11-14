@@ -4,11 +4,11 @@ import {
   createAnchorDownloader,
   type DocumentLike,
   type DownloadDeps,
+  downloadEntries,
   downloadMany,
   downloadObjectUrl,
   downloadSingle,
   needsZipDownload,
-  planDownload,
 } from "./download";
 
 /** Runs the macrotask the deferred object-URL release is scheduled in. */
@@ -146,31 +146,53 @@ describe("needsZipDownload", () => {
   });
 });
 
-describe("planDownload", () => {
-  const file = { kind: "file", path: "/a.txt" };
-  const other = { kind: "file", path: "/b.txt" };
-  const dir = { kind: "dir", path: "/d" };
+describe("downloadEntries", () => {
+  const file = { kind: "file", path: "/docs/a.txt" };
+  const other = { kind: "file", path: "/docs/b.txt" };
+  const dir = { kind: "dir", path: "/docs/photos" };
 
-  it("streams a single file directly whatever the capability", () => {
-    expect(planDownload([file], false)).toEqual({ kind: "single", path: "/a.txt" });
-    expect(planDownload([file], true)).toEqual({ kind: "single", path: "/a.txt" });
+  function deps(): DownloadDeps {
+    return {
+      downloadUrl: vi.fn((path: string) => `https://example.test/download?path=${path}`),
+      zip: vi.fn().mockResolvedValue(new Response(new Blob(["zip"]), { status: 200 })),
+      anchor: { click: vi.fn() },
+      createObjectUrl: vi.fn().mockReturnValue("blob:fake"),
+      revokeObjectUrl: vi.fn(),
+    };
+  }
+
+  it("streams a single file directly, without a zip", async () => {
+    const d = deps();
+    await downloadEntries([file], d);
+    expect(d.downloadUrl).toHaveBeenCalledWith("/docs/a.txt", { inline: false });
+    expect(d.anchor.click).toHaveBeenCalledWith("https://example.test/download?path=/docs/a.txt");
+    expect(d.zip).not.toHaveBeenCalled();
   });
 
-  it("zips anything else when the provider can", () => {
-    expect(planDownload([file, dir], true)).toEqual({ kind: "zip", paths: ["/a.txt", "/d"] });
-    expect(planDownload([dir], true)).toEqual({ kind: "zip", paths: ["/d"] });
+  it("zips a folder, named after it", async () => {
+    const d = deps();
+    await downloadEntries([dir], d);
+    expect(d.zip).toHaveBeenCalledWith(["/docs/photos"], "photos.zip");
+    expect(d.anchor.click).toHaveBeenCalledWith("blob:fake", "photos.zip");
+    expect(d.downloadUrl).not.toHaveBeenCalled();
   });
 
-  it("downloads each file on its own and skips folders without zip", () => {
-    expect(planDownload([file, dir, other], false)).toEqual({
-      kind: "each",
-      paths: ["/a.txt", "/b.txt"],
-    });
-    expect(planDownload([dir], false)).toBeNull();
+  it("zips several entries, named after their folder", async () => {
+    const d = deps();
+    await downloadEntries([file, dir, other], d);
+    expect(d.zip).toHaveBeenCalledWith(["/docs/a.txt", "/docs/photos", "/docs/b.txt"], "docs.zip");
   });
 
-  it("is null for an empty selection", () => {
-    expect(planDownload([], true)).toBeNull();
+  it("does nothing for an empty selection", async () => {
+    const d = deps();
+    await downloadEntries([], d);
+    expect(d.zip).not.toHaveBeenCalled();
+    expect(d.anchor.click).not.toHaveBeenCalled();
+  });
+
+  it("rejects when the zip fails", async () => {
+    const d = { ...deps(), zip: vi.fn().mockResolvedValue(new Response(null, { status: 500 })) };
+    await expect(downloadEntries([dir], d)).rejects.toThrow("zip request failed with status 500");
   });
 });
 

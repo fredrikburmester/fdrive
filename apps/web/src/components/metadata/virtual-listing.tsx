@@ -14,14 +14,11 @@ import { ShareDialog } from "@/components/shares/share-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import { defaultArchiveName } from "@/lib/files/archive";
 import {
   type AnchorDownloader,
   adaptDocument,
   createAnchorDownloader,
-  downloadMany,
-  downloadSingle,
-  planDownload,
+  downloadEntries,
 } from "@/lib/files/download";
 import { buildDownloadDeps } from "@/lib/files/download-deps";
 import { entryRestrictions } from "@/lib/grants/paths";
@@ -86,7 +83,7 @@ export function VirtualListing({ title, paths, onRemoveMissing }: VirtualListing
   const duplicate = useDuplicate();
   const { data: me } = useMe();
   const capabilities = capabilitiesFor(me);
-  const received = useReceivedGrants(capabilities.shareWithPeople);
+  const received = useReceivedGrants();
 
   const liveEntries = useMemo(
     () => resolved.flatMap((item) => (item.entry !== null ? [item.entry] : [])),
@@ -111,34 +108,11 @@ export function VirtualListing({ title, paths, onRemoveMissing }: VirtualListing
     return anchorRef.current;
   }
 
-  /**
-   * Downloads `targets` the way the login's provider allows, sharing the
-   * file browser's plan: one file streams directly, a provider with `zip`
-   * archives anything else (a folder has no byte stream of its own, so
-   * asking for it directly would only 400), and a provider without `zip`
-   * hands out each file on its own and skips folders.
-   */
+  /** Downloads `targets` like the file browser: one file directly, anything else as one zip. */
   function handleDownload(targets: readonly FsEntry[]) {
-    const plan = planDownload(targets, capabilities.zip);
-    if (plan === null) {
-      return;
-    }
-    const deps = buildDownloadDeps(getAnchorDownloader(), apiClient);
-    switch (plan.kind) {
-      case "single":
-        downloadSingle(plan.path, deps);
-        break;
-      case "zip":
-        downloadMany(plan.paths, deps, `${defaultArchiveName(plan.paths)}.zip`).catch(() =>
-          toast.error("Could not download the selection."),
-        );
-        break;
-      case "each":
-        for (const target of plan.paths) {
-          downloadSingle(target, deps);
-        }
-        break;
-    }
+    downloadEntries(targets, buildDownloadDeps(getAnchorDownloader(), apiClient)).catch(() =>
+      toast.error("Could not download the selection."),
+    );
   }
 
   function handleContextAction(
@@ -154,7 +128,7 @@ export function VirtualListing({ title, paths, onRemoveMissing }: VirtualListing
         setSharingWithPeople(entry);
         break;
       case "leave":
-        setLeaving(entryRestrictions(entry, capabilities, received).leave);
+        setLeaving(entryRestrictions(entry, received).leave);
         break;
       case "open":
         handleOpen(entry);
@@ -252,7 +226,7 @@ export function VirtualListing({ title, paths, onRemoveMissing }: VirtualListing
                   hideMoveCopy
                   hideArchive
                   showReveal
-                  capabilities={capabilities}
+                  trash={capabilities.trash}
                   received={received}
                 />
               </div>

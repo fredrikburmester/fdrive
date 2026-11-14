@@ -55,9 +55,7 @@ import {
   type AnchorDownloader,
   adaptDocument,
   createAnchorDownloader,
-  downloadMany,
-  downloadSingle,
-  planDownload,
+  downloadEntries,
 } from "@/lib/files/download";
 import { buildDownloadDeps } from "@/lib/files/download-deps";
 import { useFolderView } from "@/lib/files/folder-view-queries";
@@ -208,11 +206,8 @@ export function FileBrowser({
   const capabilities = capabilitiesFor(me);
   // Folders others share with this login: what they allow, and the
   // `Shared with me` captions and menu items.
-  const received = useReceivedGrants(capabilities.shareWithPeople);
+  const received = useReceivedGrants();
   const writeBlock = folderWriteBlock(path, received);
-  const slowMoveWarning = capabilities.atomicMove
-    ? null
-    : "This server cannot move a folder in one step: it copies the folder and then deletes the original, which can take a while for a large one.";
 
   const folderView = useFolderView(path, me?.activeIdentityId);
   const [rowClickAction] = useRowClickAction();
@@ -393,32 +388,11 @@ export function FileBrowser({
     router.replace(toRoute(cleanHref));
   }, [selectName, isLoading, orderedPaths, path, searchParams, router]);
 
-  /**
-   * Downloads `targets` the way the login's provider allows: one file
-   * streams directly, a provider with `zip` archives anything else, and one
-   * without hands out each file on its own (folders are skipped there).
-   */
+  /** Downloads `targets`: one file directly, anything else as one zip. */
   function runDownload(targets: readonly FsEntry[]) {
-    const plan = planDownload(targets, capabilities.zip);
-    if (plan === null) {
-      return;
-    }
-    const deps = buildDownloadDeps(getAnchorDownloader(), apiClient);
-    switch (plan.kind) {
-      case "single":
-        downloadSingle(plan.path, deps);
-        break;
-      case "zip":
-        downloadMany(plan.paths, deps, `${defaultArchiveName(plan.paths)}.zip`).catch(() =>
-          toast.error("Could not download the selection."),
-        );
-        break;
-      case "each":
-        for (const target of plan.paths) {
-          downloadSingle(target, deps);
-        }
-        break;
-    }
+    downloadEntries(targets, buildDownloadDeps(getAnchorDownloader(), apiClient)).catch(() =>
+      toast.error("Could not download the selection."),
+    );
   }
 
   function handleDownloadSelection() {
@@ -583,7 +557,7 @@ export function FileBrowser({
         setSharingWithPeople(entry);
         return;
       case "leave":
-        setLeaving(entryRestrictions(entry, capabilities, received).leave);
+        setLeaving(entryRestrictions(entry, received).leave);
         return;
       case "office:view":
       case "office:edit":
@@ -959,7 +933,7 @@ export function FileBrowser({
             detailsOpen={detailsOpen}
             onToggleDetails={() => setDetailsOpen(!detailsOpen)}
             selection={selectionOf(selectedEntries)}
-            capabilities={capabilities}
+            indexed={capabilities.index}
             onClearSelection={() => dispatchSelection({ type: "clear" })}
             onDuplicateSelection={handleDuplicateSelection}
             onCompressSelection={handleCompressSelection}
@@ -1052,7 +1026,7 @@ export function FileBrowser({
                 onToggleTag={handleToggleTag}
                 onOpenTagsEditor={handleOpenTagsEditor}
                 onToggleFavorite={handleToggleFavorite}
-                capabilities={capabilities}
+                trash={capabilities.trash}
                 received={received}
                 scrollRequest={scrollRequest}
                 onScrollConsumed={handleScrollConsumed}
@@ -1077,7 +1051,7 @@ export function FileBrowser({
                 onToggleTag={handleToggleTag}
                 onOpenTagsEditor={handleOpenTagsEditor}
                 onToggleFavorite={handleToggleFavorite}
-                capabilities={capabilities}
+                trash={capabilities.trash}
                 received={received}
                 scrollRequest={scrollRequest}
                 onScrollConsumed={handleScrollConsumed}
@@ -1107,7 +1081,7 @@ export function FileBrowser({
                 onToggleTag={handleToggleTag}
                 onOpenTagsEditor={handleOpenTagsEditor}
                 onToggleFavorite={handleToggleFavorite}
-                capabilities={capabilities}
+                trash={capabilities.trash}
                 received={received}
                 scrollRequest={scrollRequest}
                 onScrollConsumed={handleScrollConsumed}
@@ -1121,7 +1095,7 @@ export function FileBrowser({
           <Inspector
             entries={selectedEntries}
             onClose={() => setDetailsOpen(false)}
-            capabilities={capabilities}
+            indexed={capabilities.index}
           />
         )}
       </div>
@@ -1177,7 +1151,6 @@ export function FileBrowser({
         }}
         onRename={handleRenameSubmit}
         pending={rename.isPending}
-        warning={renameTarget?.kind === "dir" ? slowMoveWarning : null}
       />
       <DeleteDialog
         entries={deleteTargets}
@@ -1206,14 +1179,6 @@ export function FileBrowser({
             }
           }}
           onConfirm={handleDestinationConfirm}
-          warning={
-            destinationPicker.mode === "move" &&
-            destinationPicker.paths.some(
-              (target) => entries.find((entry) => entry.path === target)?.kind === "dir",
-            )
-              ? slowMoveWarning
-              : null
-          }
           pending={
             destinationPicker.mode === "move"
               ? move.isPending

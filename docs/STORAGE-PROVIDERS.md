@@ -51,8 +51,8 @@ removed on 2026-11-13.
 ## Capabilities
 
 The API combines the module's flags with configuration into each login's
-`IdentitySummary.capabilities` (`capabilitiesFor`), and the web reads them through
-`capabilitiesFor` and `anyLoginCan` in
+`IdentitySummary.capabilities` (`capabilitiesFor`). Only `trash` and `index` vary, so the web
+reads only those, through `capabilitiesFor` and `anyLoginCan` in
 [capabilities.ts](../apps/web/src/lib/identity/capabilities.ts). Nothing keys on a type name,
 and the API refuses what a login lacks even when a stale client asks.
 

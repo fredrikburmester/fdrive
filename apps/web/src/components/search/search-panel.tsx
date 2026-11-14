@@ -59,7 +59,6 @@ import { makeItemValue, parseItemValue } from "@/lib/search/item-value";
 import { searchPanelLayout } from "@/lib/search/panel-layout";
 import {
   isPermanentSearchStatus,
-  isSearchStarting,
   searchUnavailableMessage,
   useImageSearchResults,
   useSearchResults,
@@ -305,8 +304,8 @@ export function SearchPanel({ open, onOpenChange }: SearchPanelProps) {
   const [selectedValue, setSelectedValue] = useState("");
   const [enterAction, setEnterActionState] = useState<EnterAction>(DEFAULT_ENTER_ACTION);
   const trimmedQuery = committedQuery.trim();
-  const statusRetryActive = open && trimmedQuery.length > 0;
-  const { data: searchStatus } = useSearchStatus({ retryUnavailable: statusRetryActive });
+  const retryActive = open && trimmedQuery.length > 0;
+  const { data: searchStatus } = useSearchStatus();
   const imagesAvailable = searchStatus?.images === true;
 
   const debouncerRef = useRef<Debounced<string> | null>(null);
@@ -358,7 +357,7 @@ export function SearchPanel({ open, onOpenChange }: SearchPanelProps) {
     error: searchError,
   } = useSearchResults(committedQuery, chips, currentFolder, {
     enabled: open && trimmedQuery.length > 0 && me !== undefined,
-    retryUnavailable: statusRetryActive && !isPermanentSearchStatus(searchStatus),
+    retryUnavailable: retryActive && !isPermanentSearchStatus(searchStatus),
     status: searchStatus,
     identityId: me?.activeIdentityId,
   });
@@ -370,7 +369,7 @@ export function SearchPanel({ open, onOpenChange }: SearchPanelProps) {
   } = useImageSearchResults(committedQuery, {
     enabled: queryVisualMatches,
     identityId: me?.activeIdentityId,
-    retryUnavailable: statusRetryActive && !isPermanentSearchStatus(searchStatus),
+    retryUnavailable: retryActive && !isPermanentSearchStatus(searchStatus),
     status: searchStatus,
   });
 
@@ -474,13 +473,6 @@ export function SearchPanel({ open, onOpenChange }: SearchPanelProps) {
   const showVisualUnavailableNotice =
     visualUnavailable && !(unavailable && !hasVisualResults && !waitingForImages);
   const unavailableMessage = searchUnavailableMessage(searchStatus);
-  const searchIsStarting = isSearchStarting(searchStatus);
-  const textUnavailableMessage = searchIsStarting
-    ? unavailableMessage
-    : "Text search is unavailable.";
-  const visualUnavailableMessage = searchIsStarting
-    ? unavailableMessage
-    : "Visual search is unavailable.";
   const visualFolderNotice = queryVisualMatches && chips.folderOnly && !isImageFetching;
   const textPartial = Boolean(response?.partial);
   const visualPartial = queryVisualMatches && Boolean(imageResponse?.partial);
@@ -592,7 +584,7 @@ export function SearchPanel({ open, onOpenChange }: SearchPanelProps) {
             role="status"
             className="border-b border-border bg-muted/50 px-3 py-1.5 text-xs text-muted-foreground"
           >
-            {textUnavailableMessage}
+            Text search is unavailable.
           </p>
         ) : null}
         {showVisualUnavailableNotice ? (
@@ -600,7 +592,7 @@ export function SearchPanel({ open, onOpenChange }: SearchPanelProps) {
             role="status"
             className="border-b border-border bg-muted/50 px-3 py-1.5 text-xs text-muted-foreground"
           >
-            {visualUnavailableMessage}
+            Visual search is unavailable.
           </p>
         ) : null}
         {visualFolderNotice ? (

@@ -83,17 +83,12 @@ export const SearchStatusResponse = z.object({
   available: z.boolean(),
   semantic: z.boolean(),
   /**
-   * Why the active identity cannot use its index-backed scope. Omitted for
-   * available scopes and for older servers that do not expose a reason.
+   * Why the active identity cannot use its index-backed scope. Omitted when
+   * the scope is available, including when search itself is turned off.
    */
   reason: IdentityScopeReason.optional(),
-  /**
-   * Whether image-content search (`FDRIVE_IMAGE_EMBED_URL`) is configured.
-   * Optional (rather than required) so a client built against an older
-   * contract version still parses a response from a newer API, and vice
-   * versa.
-   */
-  images: z.boolean().optional(),
+  /** Whether image-content search is on. */
+  images: z.boolean(),
 });
 
 export type SearchStatusResponse = z.infer<typeof SearchStatusResponse>;
