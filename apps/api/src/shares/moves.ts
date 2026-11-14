@@ -37,10 +37,10 @@ export interface ShareMoves extends PathFollower {
  *
  * That includes moves to where no link may reach: into the Trash, the Mac's
  * Trash, a backup folder or `Shared with me`. The public routes refuse those
- * paths, so the link shows not found there, and follows the item back out
- * on a restore. A delete removes the item's paths from its links, and a link
- * left with none goes. Purging something from the Trash leaves its link at
- * the Trash path, which no link may reach and no other item can take.
+ * paths (fdrive's Trash layout whatever Trash is set to), so the link shows
+ * not found there, and follows the item back out on a restore. A delete,
+ * or a purge from the Trash (`MetadataService.onPurged`), removes the item's
+ * paths from its links, and a link left with none goes.
  *
  * A move by someone a folder is shared with counts in the owner's files:
  * within that folder the owner's links follow it. Taken out of the owner's
