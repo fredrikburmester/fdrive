@@ -172,6 +172,26 @@ three paths as files:
 
 Rows are rebuilt by the next scan, so backups leave them out.
 
+## Name index
+
+Search finds a name typed with a typo through the name index (`names.rs`): the name of every
+live `idx.files` and `idx.folders` row in a [Tantivy](https://github.com/quickwit-oss/tantivy)
+index held in memory. Postgres stays the source of truth, so the index needs no volume and no
+migration. A `names` thread builds each root from the tables when the indexer starts and again
+after every completed scan and index clear. In between, every write of a name row (a file
+indexed, a path deleted or moved, a folder row added or dropped, a scan's sweep) reports its
+paths to the thread, which reads those rows again and commits them together about 100 ms
+after the last change. A root with more than 2,000 changed paths waiting, as during a first
+scan, is rebuilt whole instead. On a database error the thread rolls back and rebuilds the
+roots involved once the database answers, waiting up to a minute between tries. A million
+names take about 30 MB.
+
+A query word must start a word of the name within its typo budget: none below five letters,
+one up to eight and two from nine, a swap of two neighbours counting once (`typoBudget` in
+`packages/core` counts the same way). One-letter words are left out while the query has longer
+ones. Fewer typos, then a newer modification time, rank first; the API ranks the hits again
+with its own rules.
+
 ## How changes arrive
 
 Three paths lead to the same per-file processing, fastest first. Every change ends up in the
@@ -348,6 +368,7 @@ a published port in the non-dev compose file.
 | `/thumbnails/rebuild` | POST | `{ root?, path?, force? }` | Starts a background thumbnail-only pass: regenerates both sizes for every live media file in scope, writing only `app.thumbnails` (`idx.files.text_status`, chunks, and embeddings are never touched, unlike `/reindex`). Without `force`, an existing thumbnail for a given sha256 and size is left alone; with `force`, it is deleted and rewritten. `root` omitted targets every configured root; `path` omitted targets the whole root. Returns `202 { started: true, total }` (`total` is `null` until discovery completes in the background; poll `/stats` or `/activity` for the count), or `409` if a rebuild is already running (only one runs at a time, process-wide). |
 | `/image-embeddings/rebuild` | POST | `{ root?, path?, force? }` | Starts a background image-embedding backfill/rebuild pass over live images in scope; see "Image embeddings" above for the `force` semantics. Unconfigured roots are skipped. Returns `202 { started: true, total: null }` before discovery; `/stats` and `/activity` expose the discovered total, or `409` if a rebuild is already running. |
 | `/image-embeddings/clear` | POST | `{}` or empty | Deletes every row of `app.image_embeddings`; see "Clearing derived data" below. |
+| `/names/search` | POST | `{ query, scopes: [{ root_id, prefix }], exclude?, files?, folders? }` | Files and folders whose name answers `query` with typos allowed (see "Name index"), at or below a scope's root-relative `prefix` (`""` for the whole root) and outside every `exclude` place: `{ files, folders }`, each at most the count asked for (up to 200), as `{ id, root_id, path, mtime_ns }` with `mtime_ns` a string. `503` until the index is built, so the API searches without it. |
 
 ## Image embeddings
 

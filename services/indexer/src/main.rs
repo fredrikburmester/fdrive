@@ -8,6 +8,7 @@ use fdrive_indexer::config::Config;
 use fdrive_indexer::db::{self, Db};
 use fdrive_indexer::extract::ContentExtractor;
 use fdrive_indexer::log::log;
+use fdrive_indexer::names::NameIndex;
 use fdrive_indexer::runner::{EXPECTED_SCHEMA_VERSION, build_context, refresh_settings, run_root};
 use fdrive_indexer::server::{AppState, Jobs, Wake, router};
 use fdrive_indexer::work::run_work;
@@ -27,6 +28,12 @@ fn main() -> Result<(), String> {
     let mut contexts = Vec::new();
     for (name, path) in &cfg.roots {
         contexts.push(build_context(&cfg, name, path).map_err(|e| e.to_string())?);
+    }
+    // Built from the tables in the background; until then search finds names without typos.
+    let root_ids: Vec<i64> = contexts.iter().map(|ctx| ctx.root_id).collect();
+    let names = NameIndex::start(Db::new(&cfg.database_url), &root_ids).map_err(|e| e.to_string())?;
+    for ctx in &contexts {
+        let _ = ctx.names.set(Arc::clone(&names));
     }
     let watchers = Arc::new(Mutex::new(HashMap::new()));
     let mut wakes = HashMap::new();
@@ -67,6 +74,7 @@ fn main() -> Result<(), String> {
         jobs: Jobs::default(),
         failure_retry_feature: Mutex::new("thumbnails".to_owned()),
         instance_id: uuid::Uuid::new_v4().to_string(),
+        names: Some(names),
     });
     let names: Vec<&str> = cfg.roots.iter().map(|(name, _)| name.as_str()).collect();
     log(&format!("indexer up. roots={names:?} port={}", cfg.indexer_port));

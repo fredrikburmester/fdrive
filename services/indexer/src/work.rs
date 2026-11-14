@@ -405,12 +405,20 @@ impl Applier {
         record_folders(ctx, &folders, complete.then_some((path, started_at)));
         if complete && !unseen.is_empty() {
             let unseen: Vec<String> = unseen.into_iter().collect();
-            if let Err(e) = ctx.db.with(|c| db::sweep_vanished(c, ctx.root_id, &unseen, started_at)) {
-                log(&format!(
+            match ctx
+                .db
+                .with(|c| db::sweep_vanished_paths(c, ctx.root_id, &unseen, started_at))
+            {
+                Ok(swept) => {
+                    for gone in &swept {
+                        ctx.names_touched(gone, false);
+                    }
+                }
+                Err(e) => log(&format!(
                     "[{}] work: sweep under {path} failed: {}",
                     ctx.name,
                     describe(&e)
-                ));
+                )),
             }
         }
     }

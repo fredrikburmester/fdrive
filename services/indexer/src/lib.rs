@@ -22,6 +22,7 @@ pub mod journal;
 pub mod locks;
 pub mod log;
 pub mod maintenance;
+pub mod names;
 pub mod paths;
 pub mod promise;
 pub mod raw;

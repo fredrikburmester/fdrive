@@ -24,6 +24,7 @@ use crate::fsx;
 use crate::indexer::{RootContext, work_features};
 use crate::jobs::Job;
 use crate::maintenance;
+use crate::names::{NameIndex, NameSearch};
 use crate::paths::{ext_of, reindex_scope};
 
 /// Wakes a root's loop early, like a set `threading.Event`.
@@ -89,6 +90,8 @@ pub struct AppState {
     pub jobs: Jobs,
     pub failure_retry_feature: Mutex<String>,
     pub instance_id: String,
+    /// The name index `/names/search` reads; `None` answers 503.
+    pub names: Option<Arc<NameIndex>>,
 }
 
 impl AppState {
@@ -613,6 +616,23 @@ async fn retry_failures(State(state): State<Shared>, body: axum::body::Bytes) ->
         .into_response()
 }
 
+/// Files and folders whose name answers a query, typos allowed: see `NameIndex::search`.
+/// 503 while the index is building or absent, so the caller falls back to its own queries.
+async fn search_names(State(state): State<Shared>, body: axum::body::Bytes) -> Response {
+    let query = match serde_json::from_slice::<NameSearch>(&body) {
+        Ok(query) => query,
+        Err(_) => return error(StatusCode::BAD_REQUEST, "query is required"),
+    };
+    let Some(names) = state.names.clone() else {
+        return error(StatusCode::SERVICE_UNAVAILABLE, "name index unavailable");
+    };
+    match blocking(move || names.search(&query)).await {
+        Ok(Ok(Some(hits))) => Json(hits).into_response(),
+        Ok(Ok(None)) => error(StatusCode::SERVICE_UNAVAILABLE, "name index is building"),
+        Ok(Err(_)) | Err(_) => error(StatusCode::INTERNAL_SERVER_ERROR, "name search failed"),
+    }
+}
+
 pub fn router(state: Shared) -> Router {
     Router::new()
         .route("/failures/retry", post(retry_failures))
@@ -627,5 +647,6 @@ pub fn router(state: Shared) -> Router {
         .route("/thumbnails/rebuild", post(thumbnails_rebuild))
         .route("/image-embeddings/clear", post(clear))
         .route("/image-embeddings/rebuild", post(image_embeddings_rebuild))
+        .route("/names/search", post(search_names))
         .with_state(state)
 }
