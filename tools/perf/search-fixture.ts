@@ -50,6 +50,6 @@ export function validateVector(value: unknown): number[] {
     value.length !== 384 ||
     !value.every((v) => typeof v === "number" && Number.isFinite(v))
   )
-    throw Error("TEI did not return a finite384-dimensional vector");
+    throw Error("The ml server did not return a finite 384-dimensional vector");
   return value as number[];
 }
