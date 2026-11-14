@@ -1,3 +1,5 @@
+import type { SearchTypeFilter } from "@fdrive/contracts";
+
 /** A storage backend instance: the files folder. */
 export interface Provider {
   readonly id: string;
@@ -397,6 +399,24 @@ export interface RecentRepo {
   prune(identityId: string, keep: number): Promise<void>;
 }
 
+/** A search an account saved from the search panel. */
+export interface SavedSearch {
+  readonly id: string;
+  readonly name: string;
+  readonly query: string;
+  readonly type: SearchTypeFilter;
+  /** The folder "This folder only" searched; null searches everything. */
+  readonly folder: string | null;
+}
+
+export interface SavedSearchRepo {
+  /** The account's saved searches, oldest first. */
+  list(accountId: string): Promise<SavedSearch[]>;
+  create(accountId: string, input: Omit<SavedSearch, "id">): Promise<SavedSearch>;
+  /** Deletes the search, scoped to `accountId`. A no-op when not found. */
+  delete(id: string, accountId: string): Promise<void>;
+}
+
 /**
  * Coordinates path changes across every metadata table. Implementations must
  * apply each operation atomically: callers either observe all metadata moved
@@ -562,6 +582,7 @@ export interface Repos {
   readonly favorites: FavoriteRepo;
   readonly folderViews: FolderViewRepo;
   readonly recents: RecentRepo;
+  readonly savedSearches: SavedSearchRepo;
   readonly metadataPaths: MetadataPathRepo;
   readonly systemEvents: SystemEventRepo;
   readonly aiChats: AiChatRepo;

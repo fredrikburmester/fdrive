@@ -22,6 +22,7 @@ import { FolderTree } from "@/components/shell/folder-tree";
 import { useShellMe } from "@/components/shell/page-header";
 import { RecentsSection } from "@/components/shell/recents-section";
 import { SidebarResizeHandle } from "@/components/shell/resizable-sidebar";
+import { SavedSearchesSection } from "@/components/shell/saved-searches-section";
 import { SharedWithMeItem } from "@/components/shell/shared-with-me-item";
 import { SystemNav } from "@/components/shell/system-nav";
 import { TagsSection } from "@/components/shell/tags-section";
@@ -138,6 +139,7 @@ export function AppSidebar() {
           </SidebarGroupContent>
         </SidebarGroup>
         <TagsSection />
+        <SavedSearchesSection />
         <RecentsSection />
         {/* Shares and Trash sit at the bottom of the navigation, above System. */}
         <SidebarGroup>

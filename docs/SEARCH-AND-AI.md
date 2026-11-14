@@ -51,6 +51,10 @@ made a moment ago in fdrive is found at once, as is one made over SMB once the w
 it. Your own home folder, and the folder a "This folder only" search starts in, are never
 listed, and a type filter hides the section, since folders have no type.
 
+**Save search** in the panel keeps the query, the type filter and, with "This folder only", that
+folder under a name in the sidebar's Saved searches (`app.saved_searches`, one list per account).
+Opening one runs the search again for live results; its context menu removes it.
+
 Index-backed results cover the files folder, including folders other users share with you,
 and require live read permission. fdrive's own folders (`isReservedPath` in `@fdrive/core`: the
 login's Trash folder, fdrive's Trash layout `.fdrive-move-v1` wherever it lies, the Mac app's

@@ -5,6 +5,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { SidebarProvider } from "@/components/ui/sidebar";
+import { SearchShortcutProvider } from "@/lib/search/shortcut";
 import { makeIdentity, makeMe } from "@/test-fixtures/identity";
 import { AppSidebar } from "./app-sidebar";
 
@@ -40,12 +41,15 @@ function renderSidebar(account: MeResponse = me) {
   client.setQueryData(["favorites", "list"], []);
   client.setQueryData(["recents", "list"], []);
   client.setQueryData(["tags", "list"], []);
+  client.setQueryData(["saved-searches", "list"], []);
   client.setQueryData(["grants", "list"], { available: true, owned: [], received: [] });
   return render(
     <QueryClientProvider client={client}>
-      <SidebarProvider>
-        <AppSidebar />
-      </SidebarProvider>
+      <SearchShortcutProvider>
+        <SidebarProvider>
+          <AppSidebar />
+        </SidebarProvider>
+      </SearchShortcutProvider>
     </QueryClientProvider>,
   );
 }

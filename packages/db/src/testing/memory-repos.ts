@@ -31,6 +31,8 @@ import type {
   Recent,
   RecentRepo,
   Repos,
+  SavedSearch,
+  SavedSearchRepo,
   Session,
   SessionRepo,
   SettingsRepo,
@@ -564,6 +566,25 @@ function createMemoryTagRepo(ids: () => string, onDeleted: (tagId: string) => vo
         byId.delete(id);
         onDeleted(id);
       }
+    },
+  };
+}
+
+function createMemorySavedSearchRepo(ids: () => string): SavedSearchRepo {
+  const byId = new Map<string, { accountId: string; search: SavedSearch }>();
+  return {
+    async list(accountId) {
+      return [...byId.values()]
+        .filter((row) => row.accountId === accountId)
+        .map((row) => row.search);
+    },
+    async create(accountId, input) {
+      const search: SavedSearch = { id: ids(), ...input };
+      byId.set(search.id, { accountId, search });
+      return search;
+    },
+    async delete(id, accountId) {
+      if (byId.get(id)?.accountId === accountId) byId.delete(id);
     },
   };
 }
@@ -1231,6 +1252,7 @@ export function createMemoryRepos(opts: CreateMemoryReposOptions = {}): Repos {
     favorites,
     folderViews,
     recents,
+    savedSearches: createMemorySavedSearchRepo(ids),
     metadataPaths: createMemoryMetadataPathRepo({ fileTags, favorites, folderViews, recents }),
     systemEvents: createMemorySystemEventRepo(),
     aiChats: createMemoryAiChatRepo(ids),

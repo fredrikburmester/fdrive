@@ -1106,6 +1106,39 @@ export function defineReposSuite(name: string, setup: () => Promise<Repos> | Rep
       });
     });
 
+    describe("savedSearches", () => {
+      it("lists an account's own searches oldest first and deletes only its own", async () => {
+        const account = await repos.accounts.create({ displayName: "Kim" });
+        const other = await repos.accounts.create({ displayName: "Lee" });
+        const first = await repos.savedSearches.create(account.id, {
+          name: "Invoices",
+          query: "invoice",
+          type: "documents",
+          folder: "/Work",
+        });
+        const second = await repos.savedSearches.create(account.id, {
+          name: "Beach",
+          query: "beach",
+          type: "any",
+          folder: null,
+        });
+        expect(first).toEqual({
+          id: expect.any(String),
+          name: "Invoices",
+          query: "invoice",
+          type: "documents",
+          folder: "/Work",
+        });
+        expect(await repos.savedSearches.list(account.id)).toEqual([first, second]);
+        expect(await repos.savedSearches.list(other.id)).toEqual([]);
+
+        await repos.savedSearches.delete(first.id, other.id);
+        expect(await repos.savedSearches.list(account.id)).toHaveLength(2);
+        await repos.savedSearches.delete(first.id, account.id);
+        expect(await repos.savedSearches.list(account.id)).toEqual([second]);
+      });
+    });
+
     describe("fileTags", () => {
       async function seedIdentityAndTags() {
         const provider = await repos.providers.ensure({

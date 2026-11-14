@@ -124,6 +124,7 @@ export {
   JobsResponse,
 } from "./jobs.ts";
 export {
+  CreateSavedSearchRequest,
   CreateTagRequest,
   FavoriteItem,
   FavoriteKind,
@@ -137,6 +138,8 @@ export {
   RecentsResponse,
   RecentTouchRequest,
   RemoveFolderViewRequest,
+  SavedSearch,
+  SavedSearchesResponse,
   SetFileTagsRequest,
   SetFolderViewRequest,
   Tag,
@@ -197,6 +200,7 @@ export {
   PUBLIC_SHARE_SUFFIXES,
   publicShareRoute,
   ROUTES,
+  savedSearchRoute,
   systemLogsRoute,
   tagFilesRoute,
   tagRoute,
@@ -213,6 +217,7 @@ export {
   SearchSections,
   SearchSnippet,
   SearchStatusResponse,
+  SearchTypeFilter,
 } from "./search.ts";
 export {
   SETUP_TOKEN_HEADER,

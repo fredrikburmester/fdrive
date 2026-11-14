@@ -12,6 +12,7 @@ export const DURABLE_TABLES = [
   "app.favorites",
   "app.folder_views",
   "app.recents",
+  "app.saved_searches",
   "app.ai_chats",
   "app.ai_chat_messages",
   "app.ai_chat_references",

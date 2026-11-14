@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import type { SavedSearch } from "@fdrive/contracts";
 import { cleanup, fireEvent, render, renderHook, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { isSearchShortcut, SearchShortcutProvider, useSearchShortcut } from "./shortcut";
@@ -41,6 +42,43 @@ describe("search shortcut ownership", () => {
     expect(screen.getByText("Closed")).toBeDefined();
     unmount();
     expect(remove).toHaveBeenCalledWith("keydown", expect.any(Function));
+  });
+
+  it("opens with a saved search until the panel closes or the shortcut reopens it", () => {
+    const saved: SavedSearch = {
+      id: "s1",
+      name: "Invoices",
+      query: "invoice",
+      type: "any",
+      folder: null,
+    };
+    function SavedState() {
+      const { open, saved: current, setOpen, openSaved } = useSearchShortcut();
+      return (
+        <>
+          <span>{`${open ? "Open" : "Closed"}:${current?.name ?? "none"}`}</span>
+          <button type="button" onClick={() => openSaved(saved)}>
+            Saved
+          </button>
+          <button type="button" onClick={() => setOpen(false)}>
+            Close
+          </button>
+        </>
+      );
+    }
+    render(
+      <SearchShortcutProvider>
+        <SavedState />
+      </SearchShortcutProvider>,
+    );
+    fireEvent.click(screen.getByText("Saved"));
+    expect(screen.getByText("Open:Invoices")).toBeDefined();
+    fireEvent.click(screen.getByText("Close"));
+    expect(screen.getByText("Closed:none")).toBeDefined();
+    fireEvent.click(screen.getByText("Saved"));
+    fireEvent.keyDown(window, { key: "k", ctrlKey: true });
+    fireEvent.keyDown(window, { key: "k", ctrlKey: true });
+    expect(screen.getByText("Open:none")).toBeDefined();
   });
 
   it("requires the shell provider", () => {
