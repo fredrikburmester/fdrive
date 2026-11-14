@@ -46,6 +46,11 @@ admin UI and upgrades.
   and drops the virtual-folder settings. The one-time password carry-over, the `sftpgoPath`,
   `FDRIVE_INDEX_SFTPGO_DIR` and `FDRIVE_INDEX_UID` aliases and the token-minting path of the
   provider port were removed afterwards: nothing upgrades from SFTPGo any more.
+- **The folder carries a marker (2026-11-13).** `.fdrive-files` at the top names the
+  installation. An empty folder where the database expects files, or another installation's
+  folder, is refused by the API and skipped by the indexer, so Compose's empty default mount
+  never reads as every file deleted. Adopting an unmarked folder with files, or any folder on
+  a fresh installation, keeps upgrades and new installs working without a step.
 - **Plain files stay authoritative.** No database of file contents; writers outside fdrive
   (OCR, rsync) remain allowed.
 - **Sharing between users is a grant plus a path.** `app.local_grants` (owner, folder, grantee,

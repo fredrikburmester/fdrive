@@ -1,5 +1,6 @@
 import { resolve } from "node:path";
 import type { Repos } from "@fdrive/db";
+import type { FilesFolderGuard } from "@fdrive/local";
 import type { AppConfig, IndexRootConfig } from "../config.js";
 import { createProviderModules, type ProviderModules } from "../providers/registry.js";
 import { createScryptSharePasswords, type SharePasswords } from "../shares/passwords.js";
@@ -46,13 +47,16 @@ export function indexWorkRoot(
  * `app.local_users` when `FDRIVE_STORAGE_ROOT` is set, else none. The API
  * and the backup worker build theirs the same way. With `indexWork`, every
  * change fdrive makes in the folder is queued for the indexer, when the
- * indexer reads the folder itself (`indexWorkRoot`).
+ * indexer reads the folder itself (`indexWorkRoot`). With `guard`, storage
+ * is refused while the folder is not this installation's
+ * (`createDeploymentFilesFolderGuard`).
  */
 export function deploymentModules(
   config: Pick<AppConfig, "fdriveStorageRoot" | "fdriveIndexRoots">,
   repos: Pick<Repos, "localUsers" | "localGrants">,
   passwords: SharePasswords = createScryptSharePasswords(),
   indexWork?: IndexWorkQueue,
+  guard?: FilesFolderGuard,
 ): ProviderModules {
   const root = config.fdriveStorageRoot;
   if (root === undefined) return createProviderModules();
@@ -63,6 +67,7 @@ export function deploymentModules(
       users: createLocalUserStore({ repo: repos.localUsers, grants: repos.localGrants, passwords }),
       // When `queued` names a root, this is the same one: it matches first.
       indexRoot: localIndexRoot(config.fdriveIndexRoots, root),
+      ...(guard === undefined ? {} : { guard }),
       ...(queued === null || indexWork === undefined
         ? {}
         : { onIndexChange: (name, change) => indexWork.record(name, change) }),

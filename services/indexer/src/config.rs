@@ -6,7 +6,13 @@ use std::time::Duration;
 use crate::rules::split_prefixes;
 use crate::settings::Settings;
 
-pub const SKIP_NAMES: &[&str] = &[".DS_Store", "Thumbs.db", "desktop.ini", ".localized"];
+pub const SKIP_NAMES: &[&str] = &[
+    ".DS_Store",
+    "Thumbs.db",
+    "desktop.ini",
+    ".localized",
+    crate::files_marker::FILES_MARKER,
+];
 pub const SKIP_DIRS: &[&str] = &[
     ".fdrive-backups",
     "@eaDir",

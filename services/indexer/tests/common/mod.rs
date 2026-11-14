@@ -121,6 +121,21 @@ pub fn connect(url: &str) -> Client {
     Client::connect(url, NoTls).unwrap()
 }
 
+/// Records the installation id and writes `root`'s `.fdrive-files` marker with it, as the API
+/// does when it first accepts the files folder. Returns the id.
+pub fn mark_files_folder(url: &str, root: &std::path::Path) -> String {
+    let id: String = connect(url)
+        .query_one(
+            "INSERT INTO app.backup_configuration (id) VALUES (1) ON CONFLICT (id) DO UPDATE SET id = 1 \
+             RETURNING installation_id::text",
+            &[],
+        )
+        .unwrap()
+        .get(0);
+    std::fs::write(root.join(fdrive_indexer::files_marker::FILES_MARKER), format!("{id}\n")).unwrap();
+    id
+}
+
 pub fn all_features() -> FeatureValues {
     FeatureValues {
         thumbnails: true,
@@ -152,6 +167,7 @@ pub fn config(url: &str, root: &std::path::Path, thumbs: &std::path::Path, ml: &
 /// A root context registered in the database, with the given features.
 pub fn context(cfg: &Arc<Config>, values: FeatureValues) -> Arc<RootContext> {
     let (name, path) = cfg.roots[0].clone();
+    mark_files_folder(&cfg.database_url, &path);
     let mut client = connect(&cfg.database_url);
     let root_id = fdrive_indexer::db::upsert_root(&mut client, &name).unwrap();
     Arc::new(RootContext::new(

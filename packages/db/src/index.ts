@@ -44,7 +44,7 @@ export {
   type DesktopPublishLock,
   type DesktopPublishLockOptions,
 } from "./repos/desktop-publish-lock.js";
-export { createRepos } from "./repos/drizzle.js";
+export { createFilesFolderFacts, createRepos } from "./repos/drizzle.js";
 export { createIdentityLinksRepo } from "./repos/identity-links.js";
 export type {
   IdentityLinksErrorCode,

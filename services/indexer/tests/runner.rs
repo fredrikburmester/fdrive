@@ -12,6 +12,7 @@ use common::root_env::{Env, OFF, fv, jpeg};
 use fdrive_indexer::config::Config;
 use fdrive_indexer::db;
 use fdrive_indexer::failures::FileResult;
+use fdrive_indexer::files_marker::FILES_MARKER;
 use fdrive_indexer::indexer::RootContext;
 use fdrive_indexer::runner::{
     EXPECTED_SCHEMA_VERSION, Handler, RootLoop, build_context, refresh_settings, start_watcher,
@@ -27,6 +28,7 @@ fn quiet_config(env: &Env) -> Config {
 fn build(cfg: Config) -> Arc<RootContext> {
     let cfg = Arc::new(cfg);
     let (name, path) = cfg.roots[0].clone();
+    common::mark_files_folder(&cfg.database_url, &path);
     build_context(&cfg, &name, &path).unwrap()
 }
 
@@ -214,6 +216,57 @@ fn the_loop_stops_scanning_while_every_feature_is_off() {
     root.step(&ctx, &watchers);
     assert!(!root.has_watcher());
     assert!(!watchers.lock().unwrap()["r"]);
+}
+
+#[test]
+fn the_loop_neither_scans_nor_watches_a_folder_without_its_marker() {
+    let env = Env::new();
+    common::save_features(&env.url, fv(false, true, false, false, false));
+    let ctx = env.ctx_with(fv(false, true, false, false, false), |ctx| {
+        ctx.files_folder_recheck = Duration::ZERO;
+    });
+    let marker = env.path(FILES_MARKER);
+    let id = std::fs::read_to_string(&marker).unwrap();
+    std::fs::remove_file(&marker).unwrap();
+    let watchers = Mutex::new(HashMap::new());
+    let mut root = RootLoop::default();
+    root.step(&ctx, &watchers);
+    root.step(&ctx, &watchers);
+    assert_eq!(scans(&env), 0);
+    assert!(!root.has_watcher());
+
+    // Back in place: the scan that was due runs at once.
+    std::fs::write(&marker, &id).unwrap();
+    root.step(&ctx, &watchers);
+    assert_eq!(scans(&env), 1);
+    assert_eq!(root.has_watcher(), cfg!(target_os = "linux"));
+
+    // Gone again: the watcher stops.
+    std::fs::remove_file(&marker).unwrap();
+    root.wake();
+    root.step(&ctx, &watchers);
+    assert!(!root.has_watcher());
+    assert_eq!(scans(&env), 1);
+}
+
+#[test]
+fn watcher_deletes_and_renames_wait_for_the_marker() {
+    let env = Env::new();
+    let ctx = env.ctx_with(fv(false, true, false, false, false), |ctx| {
+        ctx.files_folder_recheck = Duration::ZERO;
+    });
+    let handler = Handler(Arc::clone(&ctx));
+    let (path, _) = env.write("a.txt", b"hello");
+    assert_eq!(
+        handler
+            .index_file(&path, "a.txt", &std::fs::metadata(&path).unwrap())
+            .status,
+        "indexed"
+    );
+    std::fs::remove_file(env.path(FILES_MARKER)).unwrap();
+    assert_eq!(handler.rename("a.txt", "b.txt", false), 0);
+    assert_eq!(handler.mark_deleted("a.txt", false), 0);
+    assert!(!env.row(&ctx, "a.txt").deleted);
 }
 
 #[test]

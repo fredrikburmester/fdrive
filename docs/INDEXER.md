@@ -185,6 +185,15 @@ Three paths lead to the same per-file processing, fastest first.
    default), at startup, when settings or features change and after a watcher overflow,
    and catches anything the other two missed.
 
+None of the three runs on a root without this installation's `.fdrive-files` marker
+(`files_marker.rs`): the API writes it at the top of the files folder holding
+`app.backup_configuration.installation_id`, and the indexer only reads it. While the marker is
+missing, empty or names another installation, the root loop neither scans nor watches, the
+watcher's deletes and renames are ignored, and queued rows stay in `idx.work`, so a wrong or
+empty mount is never read as every file deleted. The verdict is reused for two seconds,
+logged once when it changes, and kept through a database outage; a scan that came due runs as
+soon as the marker is right. The marker itself is never indexed.
+
 Watcher and queued files are foreground work: while any is pending, scan workers wait
 before starting their next file, for at most a minute at a time, so a change someone just
 made is not queued behind a library-wide scan.
@@ -208,7 +217,8 @@ INDEX_ROOTS=files=/data,photos=/roots/photos
 Each name becomes a row in `idx.roots` (upserted by name on start, so restarts
 reuse the same `root_id`); every `idx.files` / `idx.chunks` / `idx.scans` /
 `idx.moves` / `idx.events` row carries that `root_id`. Each root gets its own
-inotify watcher and its own periodic scan, running independently.
+inotify watcher and its own periodic scan, running independently. Every root needs the
+`.fdrive-files` marker; the API writes it only into the files folder.
 
 ## Settings (read from `app.settings` at the start of every scan cycle)
 

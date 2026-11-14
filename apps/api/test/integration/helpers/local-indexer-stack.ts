@@ -5,6 +5,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
+import { createDb, createFilesFolderFacts } from "@fdrive/db";
+import { verifyFilesFolder } from "@fdrive/local";
 import { type LocalStorageFixture, startLocalStorage } from "@fdrive/testkit";
 import { expect, vi } from "vitest";
 
@@ -138,6 +140,15 @@ export class LocalIndexerStack {
    */
   async startIndexer(options: { readonly watch?: boolean } = {}): Promise<void> {
     const watch = options.watch ?? true;
+    // The API marks the files folder as this installation's when it starts;
+    // the indexer touches no folder without that marker. Needs the migrations.
+    const marking = createDb(this.connectionString);
+    try {
+      const verdict = await verifyFilesFolder(this.folder.root, createFilesFolderFacts(marking.db));
+      if (!verdict.ok) throw new Error(verdict.reason);
+    } finally {
+      await marking.close();
+    }
     // A first build compiles MuPDF from source, which takes several minutes.
     await this.docker(["build", "-t", this.prefix, join(repoRoot, "services/indexer")], 1_800_000);
     this.imageCreated = true;
