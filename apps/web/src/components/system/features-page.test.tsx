@@ -130,7 +130,10 @@ describe("feature walkthrough", () => {
     fireEvent.click(screen.getByRole("switch"));
     fireEvent.click(screen.getByRole("button", { name: "Save and continue" }));
     expect(mocks.mutate).toHaveBeenLastCalledWith(
-      expect.objectContaining({ walkthroughStep: 6, values: { ...off, pdfOcr: true } }),
+      expect.objectContaining({
+        walkthroughStep: 6,
+        values: { ...off, textSearch: true, pdfOcr: true },
+      }),
       expect.anything(),
     );
   });

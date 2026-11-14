@@ -95,12 +95,14 @@ def test_read_settings_empty(postgres_dsn: str) -> None:
         conn.close()
 
 
-def test_record_ocr_log_and_done_keys(postgres_dsn: str) -> None:
+def test_a_recorded_decision_marks_its_content_done_wherever_it_lies(postgres_dsn: str) -> None:
     conn = db.connect(postgres_dsn)
     try:
         root_id = db.upsert_root(conn, "files")
-        db.record_ocr_log(conn, root_id, "a.pdf", 100, 111, "has_text", None)
-        assert db.done_keys(conn, root_id) == {("a.pdf", 100, 111)}
+        assert db.is_done(conn, "a" * 64) is False
+        db.record_ocr_log(conn, root_id, "a.pdf", 100, 111, "a" * 64, "has_text", None)
+        assert db.is_done(conn, "a" * 64) is True
+        assert db.is_done(conn, "b" * 64) is False
     finally:
         conn.close()
 
@@ -109,14 +111,36 @@ def test_record_ocr_log_upserts_on_conflict(postgres_dsn: str) -> None:
     conn = db.connect(postgres_dsn)
     try:
         root_id = db.upsert_root(conn, "files")
-        db.record_ocr_log(conn, root_id, "a.pdf", 100, 111, "failed", "boom")
-        db.record_ocr_log(conn, root_id, "a.pdf", 100, 111, "ocred", None)
+        db.record_ocr_log(conn, root_id, "a.pdf", 100, 111, "a" * 64, "failed", "boom")
+        db.record_ocr_log(conn, root_id, "a.pdf", 100, 111, "b" * 64, "ocred", None)
         with conn.cursor() as cur:
-            cur.execute('SELECT status, detail FROM "idx"."ocr_log" WHERE root_id = %s AND path = %s', (root_id, "a.pdf"))
-            row = cur.fetchone()
-            assert row is not None
-            assert row[0] == "ocred"
-            assert row[1] is None
+            cur.execute(
+                'SELECT sha256, status, detail FROM "idx"."ocr_log" WHERE root_id = %s AND path = %s', (root_id, "a.pdf")
+            )
+            assert cur.fetchall() == [("b" * 64, "ocred", None)]
+    finally:
+        conn.close()
+
+
+def test_pdf_candidates_leave_out_decided_content_in_any_root(postgres_dsn: str) -> None:
+    conn = db.connect(postgres_dsn)
+    try:
+        root_id = db.upsert_root(conn, "files")
+        other_id = db.upsert_root(conn, "other")
+        for path, digest in (("b.pdf", "b" * 64), ("a.pdf", "a" * 64), ("done.pdf", "d" * 64), ("c.PDF", "e" * 64)):
+            conn.execute(
+                'INSERT INTO "idx"."files" (root_id, path, name, ext, size, mtime_ns, sha256) '
+                "VALUES (%s, %s, %s, '.pdf', 10, 20, %s)",
+                (root_id, path, path, digest),
+            )
+        db.record_ocr_log(conn, other_id, "elsewhere.pdf", 10, 20, "d" * 64, "has_text", None)
+
+        assert db.pdf_candidates(conn, root_id, ()) == [
+            db.IndexedPdf("a.pdf", 10, 20, "a" * 64),
+            db.IndexedPdf("b.pdf", 10, 20, "b" * 64),
+            db.IndexedPdf("c.PDF", 10, 20, "e" * 64),
+        ]
+        assert db.pdf_candidates(conn, other_id, ()) == []
     finally:
         conn.close()
 

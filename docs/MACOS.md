@@ -166,8 +166,10 @@ directly and do not take it: for each of them publication *is* the transfer, and
 identity for the length of an upload is the cost this contract exists to avoid. The content proof
 catches them the same way it catches a writer outside fdrive entirely — and, the same way, a
 write of theirs landing between that proof and the replacement is silently lost, with the retained
-backup holding the pre-fdrive content rather than the lost version. OCR's own size and mtime
-checks mean a collision there is refused on both sides rather than silently applied.
+backup holding the pre-fdrive content rather than the lost version. OCR checks that the file
+is still the version it read (inode, ctime, size and mtime) right before its replace, so a
+collision there, short of the instant between that check and the replace, leaves the newer file
+in place rather than the OCR output.
 
 **Upload size.** fdrive accepts files up to 16 GiB.
 

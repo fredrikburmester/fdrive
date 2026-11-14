@@ -17,8 +17,7 @@ def test_original_mapping_preserves_source_facts_and_checksum(tmp_path: Path) ->
     rewritten = tmp_path / "processed.pdf"
     rewritten.write_bytes(b"searchable PDF")
     state = tmp_path / "state"
-    runner.apply_rewrite(str(source), str(rewritten), str(state), "documents", "folder/source.pdf",
-                         stat.st_size, stat.st_mtime_ns, True)
+    runner.apply_rewrite(str(source), str(rewritten), str(state), "documents", "folder/source.pdf", stat, True)
     mapping = json.loads(next((state / "original-mappings").glob("*.json")).read_text())
     assert mapping["path"] == "folder/source.pdf"
     assert mapping["root"] == "documents"
@@ -55,6 +54,5 @@ def test_directory_flush_failure_keeps_source_unchanged(tmp_path: Path, monkeypa
 
     monkeypatch.setattr(os, "fsync", fail_directory_flush)
     with pytest.raises(OSError, match="directory flush failed"):
-        runner.apply_rewrite(str(source), str(rewritten), str(tmp_path / "state"), "documents", "source.pdf",
-                             before.st_size, before.st_mtime_ns, True)
+        runner.apply_rewrite(str(source), str(rewritten), str(tmp_path / "state"), "documents", "source.pdf", before, True)
     assert source.read_bytes() == b"original"

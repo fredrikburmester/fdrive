@@ -73,9 +73,6 @@ Recommended on 2026-11-14. Confirm each before the group that depends on it.
    read (keep the notification). The indexer writes `idx.moves` rows nothing reads. Every start
    walks the whole library (`runner.rs` `next_scan: Instant::now()`), though the journal now
    covers restarts.
-6. **OCR: find PDFs through the index.** OCR walks the whole folder nightly and keys its done
-   log by path, size and modification time. API writes do not take OCR's per-path lock, so a
-   rewrite can replace an upload that lands during its copy.
 7. **Delete dead tooling and shims.** The public URL's fallback to Office's `appUrl`, after a
    check of the production database.
 8. **Web: drop gates on capabilities that are always on.** `zip`, `setModifiedAt`, `atomicMove`,

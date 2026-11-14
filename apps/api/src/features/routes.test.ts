@@ -89,6 +89,11 @@ describe("feature routes", () => {
         values: { ...DISABLED_FEATURES, semanticSearch: true },
         walkthroughComplete: false,
       }),
+      JSON.stringify({
+        revision: 0,
+        values: { ...DISABLED_FEATURES, thumbnails: true, pdfOcr: true },
+        walkthroughComplete: false,
+      }),
     ]) {
       expect(
         (await app.request(ROUTES.system.features, { method: "PUT", headers, body })).status,
@@ -100,13 +105,13 @@ describe("feature routes", () => {
       headers,
       body: JSON.stringify({
         revision: 0,
-        values: { ...DISABLED_FEATURES, pdfOcr: true },
+        values: { ...DISABLED_FEATURES, textSearch: true, pdfOcr: true },
         walkthroughComplete: false,
       }),
     });
     expect(res.status).toBe(200);
     expect(await res.json()).toMatchObject({
-      configuration: { revision: 1, values: { pdfOcr: true, searchOcr: false } },
+      configuration: { revision: 1, values: { textSearch: true, pdfOcr: true, searchOcr: false } },
     });
   });
   it("serves internal config during setup only with a valid worker credential", async () => {

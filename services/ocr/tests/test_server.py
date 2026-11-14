@@ -9,6 +9,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
+from conftest import index_pdfs
 from psycopg.types.json import Json
 from starlette.testclient import TestClient
 
@@ -63,6 +64,15 @@ def _make_state(
         log=lambda _msg: None,
         include_globs=include_globs,
     )
+
+
+def _index(state: server.ServerState) -> None:
+    conn = state.conn_factory()
+    try:
+        for target in state.targets:
+            index_pdfs(conn, target.root_id, target.abs_path)
+    finally:
+        conn.close()
 
 
 def _wait_until(predicate: object, timeout: float = 5.0, interval: float = 0.02) -> bool:
@@ -206,6 +216,7 @@ def test_run_starts_a_pass_and_stats_reflects_it(postgres_dsn: str, tmp_path: Pa
 
     (tmp_path / "a.pdf").write_bytes(b"HASTEXT\n")
     state = _make_state(postgres_dsn, tmp_path)
+    _index(state)
     _set_pdf_ocr(state)
     client = TestClient(server.create_app(state))
 
@@ -228,6 +239,7 @@ def test_run_applies_the_state_include_globs(postgres_dsn: str, tmp_path: Path) 
     (tmp_path / "alice").mkdir()
     (tmp_path / "alice" / "out-of-scope.pdf").write_bytes(b"HASTEXT\n")
     state = _make_state(postgres_dsn, tmp_path, include_globs=("files/fredrik/**",))
+    _index(state)
     _set_pdf_ocr(state)
     client = TestClient(server.create_app(state))
 
@@ -242,8 +254,7 @@ def test_run_applies_the_state_include_globs(postgres_dsn: str, tmp_path: Path) 
             statuses = dict(cur.fetchall())
     finally:
         conn.close()
-    assert statuses[str(Path("alice") / "out-of-scope.pdf")] == "excluded"
-    assert statuses[str(Path("fredrik") / "in-scope.pdf")] == "has_text"
+    assert statuses == {"fredrik/in-scope.pdf": "has_text"}
 
 
 def test_run_returns_409_when_already_running(postgres_dsn: str, tmp_path: Path) -> None:
@@ -325,9 +336,7 @@ def _keep_original(state: server.ServerState, root: Path, rel_path: str = "docs/
     info = source.stat()
     rewritten = root / "rewritten.pdf"
     rewritten.write_bytes(b"OK-OCRED-OUTPUT\n")
-    runner.apply_rewrite(
-        str(source), str(rewritten), state.state_dir, "files", rel_path, info.st_size, info.st_mtime_ns, True
-    )
+    runner.apply_rewrite(str(source), str(rewritten), state.state_dir, "files", rel_path, info, True)
     state.originals.invalidate()
     return os.path.basename(runner.originals_dest(state.state_dir, "files", rel_path, info.st_size, info.st_mtime_ns))
 
