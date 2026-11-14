@@ -117,9 +117,11 @@ How the files folder implements it:
   `mtimeNs` and inode of the file before it is published, and the change time once it is;
   when the published name no longer holds that inode, the change carries no content.
   Hashing runs only while something listens. The module turns these into paths under the index root (`onIndexChange`), and the
-  API queues them in `idx.work` (`createIndexWorkQueue`) only when a configured root's
-  `storagePath` is the files folder itself (`indexWorkRoot`). A failed write is logged, never
-  failing the request; see [how changes arrive](INDEXER.md#how-changes-arrive).
+  API records them in the change journal, `idx.changes`, with source `api`
+  (`createChangeQueue`, `createChangeWriter`) only when a configured root's `storagePath` is
+  the files folder itself (`journalRoot`). A failed write is logged, never failing the
+  request; see [how changes arrive](INDEXER.md#how-changes-arrive) and the
+  [change journal](plans/CHANGE-JOURNAL.md).
 
 ## Tests
 

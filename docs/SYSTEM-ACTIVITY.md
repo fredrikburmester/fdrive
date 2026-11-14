@@ -92,7 +92,7 @@ Maintenance `/stats` records now include `outcome` (`completed`, `failed`, `stop
 An interrupted finite rebuild is never labelled completed in its settings summary.
 
 Scan totals remain unknown during traversal, then freeze at the scheduled count while
-remaining workers finish. Watcher arrivals and changes the API queued belong to a separate open-ended operation;
+remaining workers finish. Watcher arrivals and changes the API journaled belong to a separate open-ended operation;
 their text and image embeddings run on threads of their own, so Semantic search and Image
 search can trail.
 Compatible simultaneous operations are weighted by their counts. Mixed kinds/units, zero

@@ -3,7 +3,7 @@
 Per-file failures for thumbnails, text extraction and embeddings are persisted in
 PostgreSQL, with recovery and retry controls in System. See
 [persistent failure details](SYSTEM-ACTIVITY.md#persistent-failure-details).
-Startup waits for the failure-history and work-queue migrations before processing files,
+Startup waits for the failure-history and change-journal migrations before processing files,
 including when the schema's compatibility version is unchanged during an upgrade.
 `INDEXER_LOG_DIR` optionally retains timestamped diagnostic output as `indexer.log` and
 four rotated files, 10 MiB each, alongside stdout. Deployment mounts a persistent named
@@ -108,7 +108,7 @@ service.
 
 The pass follows thumbnail generation (`indexer.rs`'s `embed_thumbnail`,
 called once a thumbnail is written). Retries embed inline. A scan hands
-embeddings to a thread of its own, and watcher and queued changes share one
+embeddings to a thread of its own, and watcher and journaled changes share one
 long-lived thread per root, because the model runs one inference at a time and waiting
 inline would pace every worker, and every later change, at the model's speed. Before writing anything, it checks the unit's `GET /health`
 against the column's fixed dimension (1024) and an `"ok"` status, reusing a
@@ -136,7 +136,7 @@ admission lock (only one heavy background pass runs at a time).
 | --- | --- |
 | `pending` | Row exists, not yet processed by this cycle. |
 | `indexed` | Text extracted, chunked, and (if the embedding service was reachable) embedded. |
-| `partial` | Text extracted and chunked, and searchable by full text, but not embedded yet: the embeddings are on their way (watcher and queued changes) or failed and are retried on the next scan. |
+| `partial` | Text extracted and chunked, and searchable by full text, but not embedded yet: the embeddings are on their way (watcher and journaled changes) or failed and are retried on the next scan. |
 | `no_text` | Extraction, including OCR for images and PDFs, found too little text to be useful. Not retried until the file changes. |
 | `disabled` | Skipped while a feature was off: `disabled:text` (`textSearch`), `disabled:search_ocr` (`searchOcr`, for images and PDFs without a text layer). Turning the feature on processes each row once. |
 | `empty` | The file itself is empty. |
@@ -156,8 +156,8 @@ three paths as files:
 
 - a scan writes every folder it walked and, once its walk completed, drops the rows of
   folders it no longer found;
-- a queued folder records itself, the folders above it and those in it, and drops the rows
-  of folders below it that are gone; a queued file records the folders above it;
+- a journaled folder records itself, the folders above it and those in it, and drops the rows
+  of folders below it that are gone; a journaled file records the folders above it;
 - the watcher records a new folder and those in it once its events settle;
 - deleting or renaming a path deletes or renames its folder rows in the same transaction as
   its file rows.
@@ -166,24 +166,26 @@ Rows are rebuilt by the next scan, so backups leave them out.
 
 ## How changes arrive
 
-Three paths lead to the same per-file processing, fastest first.
+Three paths lead to the same per-file processing, fastest first. Every change ends up in the
+change journal, `idx.changes`: one numbered record of file changes that other parts of fdrive
+read from their own position (see the [change journal plan](plans/CHANGE-JOURNAL.md)).
 
-1. **The API's queue.** fdrive's API writes the files folder, apart from OCR and the
+1. **The change journal.** fdrive's API writes the files folder, apart from OCR and the
    host's own tools. After each change it makes (an upload, a move or rename, a copy, a
    delete, Trash and restore, an Office save, a new modification time, a new folder) it
-   adds a row to `idx.work` and sends `NOTIFY idx_work` with the root's name
-   (`createIndexWorkWriter` in
-   `packages/db`, fed by local storage's change listener). A row without `target_path`
-   says "look at `path` again"; with it, `path` moved there. An upload's row carries the
-   sha256 the API computed while writing it and the size, `mtime_ns`, `inode` and
-   `ctime_ns` of the file it published, so the indexer does not read the file again to hash
-   it while it is still that file. A client chooses an upload's modification time, but no
-   client sets an inode or a change time, so a different file with the same size and time
-   is always hashed: its bytes never key thumbnails or embeddings under another file's
-   digest. Where the API and the indexer see different inode numbers, the hint simply never
-   matches. A `work-<root>`
-   thread listens on the channel, looks every 30 seconds without it, and applies rows
-   oldest first, deleting each batch once its files are done:
+   appends a row to `idx.changes` with source `api` and sends `NOTIFY idx_changes` with the
+   root's name (`createChangeJournal` in `packages/db`, fed by local storage's change
+   listener). Every writer takes the journal's advisory lock before inserting, so positions
+   commit in order. A row without `target_path` says "look at `path` again"; with it, `path`
+   moved there. An upload's row carries the sha256 the API computed while writing it and the
+   size, `mtime_ns`, `inode` and `ctime_ns` of the file it published, so the indexer does not
+   read the file again to hash it while it is still that file. A client chooses an upload's
+   modification time, but no client sets an inode or a change time, so a different file with
+   the same size and time is always hashed: its bytes never key thumbnails or embeddings under
+   another file's digest. Where the API and the indexer see different inode numbers, the hint
+   simply never matches. A `work-<root>` thread listens on the channel, looks every 30
+   seconds without it, and applies the root's rows after its position, oldest first, saving
+   its position in `idx.change_cursors` (consumer `indexer`) after each batch:
    - a file is indexed on one of `indexer.workers` workers;
    - a folder is compared with its rows, like a scan of just that folder: new and changed
      files are indexed, and rows of files no longer there are dropped;
@@ -194,32 +196,47 @@ Three paths lead to the same per-file processing, fastest first.
      index never looked.
 
    What is on disk when a row is applied decides, as for the watcher, and moves and
-   deletes wait for the files queued before them. Rows are hints: while indexing is off
-   they are dropped (turning it on starts a scan), and the API drops rows older than a
-   day, which only build up when no indexer drains them.
+   deletes wait for the files queued before them, so a batch applied again after a restart
+   does no harm. On its first start the indexer begins at the journal's end; its startup scan
+   covers what came before. It passes over `watcher` and `scan` rows, which it wrote itself
+   after applying them, and applies `api` and `ocr` rows. While indexing is off its position
+   moves past rows without applying them (turning it on starts a scan). The API drops rows
+   older than 30 days; when rows after the indexer's position were dropped before it read
+   them, it scans the root and continues from the end.
 2. **The watcher** (inotify, Linux only) sees changes made on the disk directly, for
    example over SMB, after a 2-second debounce. It sees fdrive's own changes too; whichever
-   comes second finds the row current and does nothing.
+   comes second finds the row current and does nothing. What it applies is journaled with
+   source `watcher`: a file indexed as new or changed, a path whose rows it deleted, a move
+   it paired (empty folders included) and each folder row it added or dropped. When it
+   applies an API change before the indexer reads the API's row, the change is journaled
+   twice; readers treat rows as "look again", so that is harmless.
 3. **The scan** walks the whole root every `indexer.scan_interval_seconds` (an hour by
-   default), at startup, when settings or features change and after a watcher overflow,
-   and catches anything the other two missed.
+   default), at startup, when settings or features change, after a watcher overflow and
+   when the journal's reader asks for one, and catches anything the other two missed. It
+   journals what it finds with source `scan`: new and changed files, files it sweeps as
+   vanished, and folder rows it adds or drops. It does so only against a baseline: file
+   rows when the root had `idx.files` rows and an earlier scan of it finished, folder rows
+   when `idx.folders` had rows too. The first scan of an empty index, the scan after the
+   whole index was cleared and the scan after an interrupted first scan journal nothing,
+   since every file would look new. A scan after clearing part of the index journals the
+   cleared files as new.
 
 None of the three runs on a root without this installation's `.fdrive-files` marker
 (`files_marker.rs`): the API writes it at the top of the files folder holding
 `app.backup_configuration.installation_id`, and the indexer only reads it. While the marker is
 missing, empty or names another installation, the root loop neither scans nor watches, the
-watcher's deletes and renames are ignored, and queued rows stay in `idx.work`, so a wrong or
-empty mount is never read as every file deleted. The verdict is reused for two seconds,
+watcher's deletes and renames are ignored, and the journal's reader keeps its position, so a
+wrong or empty mount is never read as every file deleted. The verdict is reused for two seconds,
 logged once when it changes, and kept through a database outage; a scan that came due runs as
 soon as the marker is right. The marker itself is never indexed.
 
-Watcher and queued files are foreground work: while any is pending, scan workers wait
+Watcher and journaled files are foreground work: while any is pending, scan workers wait
 before starting their next file, for at most a minute at a time, so a change someone just
 made is not queued behind a library-wide scan.
 
 A file is processed in the order a person notices it: its row (a name search finds it),
-its thumbnails, its event, its text and last its embeddings. For watcher and queued
-changes, text embeddings go to a `text-embed-<root>` thread, as image embeddings do: the
+its thumbnails, its event and journal row, its text and last its embeddings. For watcher and
+journaled changes, text embeddings go to a `text-embed-<root>` thread, as image embeddings do: the
 chunks are stored without vectors as `partial`, searchable by full text at once, and the
 worker moves on instead of waiting for the model. The thread fills in the vectors and marks
 the row `indexed`, skipping a row a newer version has replaced; when its queue is full, the
@@ -235,7 +252,8 @@ INDEX_ROOTS=files=/data,photos=/roots/photos
 
 Each name becomes a row in `idx.roots` (upserted by name on start, so restarts
 reuse the same `root_id`); every `idx.files` / `idx.chunks` / `idx.folders` /
-`idx.scans` / `idx.moves` / `idx.events` row carries that `root_id`. Each root gets its own
+`idx.scans` / `idx.moves` / `idx.events` / `idx.changes` / `idx.change_cursors` row carries
+that `root_id`. Each root gets its own
 inotify watcher and its own periodic scan, running independently. Every root needs the
 `.fdrive-files` marker; the API writes it only into the files folder.
 
@@ -274,7 +292,9 @@ Rows the watcher or a worker wrote after the scan started are left alone.
 `idx.events` rows older than 7 days (`EVENTS_RETENTION_DAYS`) are pruned once
 per scan. The API (`apps/api`) listens on `idx_events` for live updates and
 re-subscribes after a disconnect. It does not replay stored events; notifications
-missed while disconnected are lost. A refresh/re-query reads current data; no missed-event replay is implemented.
+missed while disconnected are lost. A refresh/re-query reads current data; no missed-event replay is implemented. The
+[change journal](plans/CHANGE-JOURNAL.md) records the same changes durably and in order; the
+API is to read it instead of these events, which then go.
 
 ## Internal HTTP API
 
