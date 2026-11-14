@@ -51,11 +51,15 @@ async function fixture(options: { provider?: boolean; environmentAdmins?: string
   return { repos, row, store, events, deps, service, loginOf, alice, viewer };
 }
 
-async function sessionFor(repos: Repos, accountId: string, idHash: string) {
+async function sessionFor(
+  repos: Repos,
+  login: { readonly id: string; readonly accountId: string },
+  idHash: string,
+) {
   await repos.sessions.create({
     idHash,
-    accountId,
-    activeIdentityId: null,
+    accountId: login.accountId,
+    identityId: login.id,
     expiresAt: new Date(Date.now() + 3_600_000),
     userAgent: null,
     ip: null,
@@ -157,8 +161,8 @@ describe("createLocalUserService: update", () => {
   it("resets a password, ending every session that predates it", async () => {
     const h = await fixture();
     const bob = await h.loginOf("bob");
-    await sessionFor(h.repos, bob.accountId, "bob-1");
-    await sessionFor(h.repos, h.alice.accountId, "alice-session");
+    await sessionFor(h.repos, bob, "bob-1");
+    await sessionFor(h.repos, h.alice, "alice-session");
     const updated = await h.service.update("BOB", { password: "bob-new-pass" }, h.viewer);
     expect(updated).toMatchObject({ username: "bob", disabled: false });
     expect(await h.store.verify("bob", "bob-new-pass")).toMatchObject({ result: "ok" });
@@ -170,8 +174,8 @@ describe("createLocalUserService: update", () => {
 
   it("keeps the administrator's own session when they reset their own password", async () => {
     const h = await fixture();
-    await sessionFor(h.repos, h.alice.accountId, "alice-session");
-    await sessionFor(h.repos, h.alice.accountId, "alice-phone");
+    await sessionFor(h.repos, h.alice, "alice-session");
+    await sessionFor(h.repos, h.alice, "alice-phone");
     await h.service.update("alice", { password: "alice-new-pass" }, h.viewer);
     expect(await alive(h.repos, "alice-session")).toBe(true);
     expect(await alive(h.repos, "alice-phone")).toBe(false);
@@ -180,13 +184,13 @@ describe("createLocalUserService: update", () => {
   it("disables and enables a user, and changes who is an administrator", async () => {
     const h = await fixture();
     const bob = await h.loginOf("bob");
-    await sessionFor(h.repos, bob.accountId, "bob-1");
+    await sessionFor(h.repos, bob, "bob-1");
     expect(
       await h.service.update("bob", { disabled: true, isAdmin: true }, h.viewer),
     ).toMatchObject({ disabled: true, isAdmin: true });
     expect(await alive(h.repos, "bob-1")).toBe(false);
     expect(await h.store.status("bob")).toBe("disabled");
-    await sessionFor(h.repos, bob.accountId, "bob-2");
+    await sessionFor(h.repos, bob, "bob-2");
     expect(
       await h.service.update("bob", { disabled: false, isAdmin: false }, h.viewer),
     ).toMatchObject({ disabled: false, isAdmin: false });
@@ -233,7 +237,7 @@ describe("createLocalUserService: remove", () => {
   it("revokes the user's sign-in, sessions, API tokens and administrator flag", async () => {
     const h = await fixture();
     const bob = await h.loginOf("bob", true);
-    await sessionFor(h.repos, bob.accountId, "bob-1");
+    await sessionFor(h.repos, bob, "bob-1");
     await h.repos.apiTokens.create({
       accountId: bob.accountId,
       identityId: bob.id,
@@ -313,8 +317,8 @@ describe("createLocalUserService: createOwner", () => {
 describe("createLocalUserService: changeOwnPassword", () => {
   it("changes the password, reseals the stored credential and ends the other sessions", async () => {
     const h = await fixture();
-    await sessionFor(h.repos, h.alice.accountId, "alice-session");
-    await sessionFor(h.repos, h.alice.accountId, "alice-phone");
+    await sessionFor(h.repos, h.alice, "alice-session");
+    await sessionFor(h.repos, h.alice, "alice-phone");
 
     await h.service.changeOwnPassword({
       identityId: h.alice.id,
@@ -353,8 +357,9 @@ describe("createLocalUserService: changeOwnPassword", () => {
 
     // A login on a WebDAV row left from before the files folder was the only storage.
     const retired = await h.repos.providers.ensure({ type: "webdav", baseUrl: "http://dav.test" });
+    const retiredAccount = await h.repos.accounts.create({ displayName: "alice" });
     const retiredLogin = await h.repos.identities.create({
-      accountId: h.alice.accountId,
+      accountId: retiredAccount.id,
       providerId: retired.id,
       externalUsername: "alice",
     });

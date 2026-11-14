@@ -12,8 +12,8 @@ import {
   createDesktopPublishLock,
   createDesktopRepo,
   createFilesFolderFacts,
-  createIdentityLinksRepo,
   createIndexQueries,
+  createLoginRepo,
   createOfficeFileRepo,
   createOfficeWriteScope,
   createPool,
@@ -26,10 +26,6 @@ import {
 import { SHARED_WITH_ME } from "@fdrive/local";
 import type { Logger } from "pino";
 import { verifyCredentials } from "./accounts/credentials.js";
-import { registerAccountsRoutes } from "./accounts/routes.ts";
-import { createAccountsService } from "./accounts/service.ts";
-import type { AccountsDeps } from "./accounts/types.ts";
-import { createAccountViews } from "./accounts/views.ts";
 import { createActivityAdmission } from "./activity/admission.ts";
 import { registerActivityExports } from "./activity/exports.ts";
 import { createActivityMaintenance } from "./activity/maintenance.ts";
@@ -88,7 +84,6 @@ import { withTrashMoves } from "./metadata/trash-moves.js";
 import { extractClientIp } from "./net.js";
 import { configuredOfficeProduct, officeConfig } from "./office/config.ts";
 import { allowsOfficeEdit } from "./office/edit-policy.ts";
-import { WopiError } from "./office/errors.ts";
 import { createDiscoveryCache } from "./office/protocol/discovery-cache.ts";
 import { applyOfficeRootEvent, withOfficeMetadata } from "./office/registry-events.ts";
 import { registerOfficeRoutes, registerWopiRoutes } from "./office/routes.ts";
@@ -335,7 +330,6 @@ export async function composeApp(
   const admitActivity = createActivityAdmission({
     reads: activityReads,
     repo: activityRepo,
-    identities: repos.identities,
     storageFactory,
     secret: config.fdriveMasterKey,
     clock,
@@ -345,9 +339,8 @@ export async function composeApp(
     providers: providerService,
     fetch: fetchImpl,
   });
-  const identityLinks = createIdentityLinksRepo(db);
   const auth = createAuthModule({
-    identityLinks,
+    logins: createLoginRepo(db),
     repos,
     providers: providerService,
     fetch: fetchImpl,
@@ -435,29 +428,7 @@ export async function composeApp(
     clock,
   });
 
-  const accountStorage = createOfficeStorageFactory({ pinned: pinnedStorageFactory });
-  const identityStorageForAccount = async (identity: { id: string; providerId: string }) => {
-    try {
-      return await accountStorage(identity.id, identity.providerId);
-    } catch (error) {
-      if (error instanceof WopiError && error.status === 401)
-        throw new ApiHttpError("upstream_unavailable", "identity provider unavailable");
-      throw error;
-    }
-  };
-  const accountDeps: AccountsDeps = {
-    repos,
-    links: identityLinks,
-    auth: auth.service,
-    providers: providerService,
-    fetch: fetchImpl,
-    limiter,
-    master,
-    clock,
-    storageForIdentity: identityStorageForAccount,
-  };
-  const accountsService = createAccountsService(accountDeps);
-  const accountViews = createAccountViews(accountDeps);
+  const officeStorage = createOfficeStorageFactory({ pinned: pinnedStorageFactory });
 
   // Public links follow the items they name wherever they go, into Trash too.
   const shareMoves = createShareMoves({
@@ -622,7 +593,7 @@ export async function composeApp(
     withWriteScope: createOfficeWriteScope(officeLocks.db),
     clock,
     location: officeLocation,
-    storageFactory: accountStorage,
+    storageFactory: officeStorage,
     metadata: metadataService,
     bus,
     activity: personalActivity,
@@ -667,11 +638,7 @@ export async function composeApp(
       : createOcrClient({ baseUrl: config.fdriveOcrUrl, fetch: fetchImpl });
   const thumbnailsRepo = createThumbnailsRepo(db);
 
-  const tokenService = createTokenService({
-    apiTokens: repos.apiTokens,
-    identities: repos.identities,
-    clock,
-  });
+  const tokenService = createTokenService({ apiTokens: repos.apiTokens, clock });
   const resolveTokenPrincipal = createResolveTokenPrincipal({
     apiTokens: repos.apiTokens,
     identities: repos.identities,
@@ -1044,12 +1011,6 @@ export async function composeApp(
         identities: repos.identities,
         thumbsDir: config.fdriveThumbsDir,
       });
-      registerAccountsRoutes(groups, {
-        service: accountsService,
-        views: accountViews,
-        config,
-        clock,
-      });
       registerSetupRoutes(groups, {
         service: setupService,
         tokenGuard: setupTokenGuard,
@@ -1121,8 +1082,6 @@ export async function composeApp(
       registerPersonalActivityRoutes(groups, {
         repo: activityRepo,
         reads: activityReads,
-        identities: repos.identities,
-        storageFactory,
         observations: activityObservations,
         admitActivity,
         cursorSecret: config.fdriveMasterKey,

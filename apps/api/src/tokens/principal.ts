@@ -18,10 +18,10 @@ export interface ResolveTokenPrincipalDeps {
 
 /**
  * Builds `resolveTokenPrincipal(bearer)`: maps a bearer value to the
- * `Principal` it authenticates as, or `null` when the value is not a
- * recognizable, live, unexpired fdrive token, or its identity has since been
- * unlinked. Tokens never grant admin access. `lastUsedAt` is touched at most
- * once per `TOUCH_INTERVAL_MS`.
+ * `Principal` it authenticates as, the login that created it, or `null` when
+ * the value is not a recognizable, live, unexpired fdrive token. Tokens never
+ * grant admin access. `lastUsedAt` is touched at most once per
+ * `TOUCH_INTERVAL_MS`.
  */
 export function createResolveTokenPrincipal(
   deps: ResolveTokenPrincipalDeps,
@@ -42,14 +42,8 @@ export function createResolveTokenPrincipal(
     if (token.expiresAt !== null && token.expiresAt.getTime() <= now.getTime()) {
       return null;
     }
-    if (token.identityId === null) {
-      return null;
-    }
-
     const identity = await deps.identities.get(token.identityId);
-    if (!identity || identity.accountId !== token.accountId) {
-      return null;
-    }
+    if (identity === null) return null;
 
     const shouldTouch =
       token.lastUsedAt === null || now.getTime() - token.lastUsedAt.getTime() >= TOUCH_INTERVAL_MS;

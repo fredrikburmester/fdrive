@@ -12,12 +12,10 @@ import type {
   ActivityListOptions,
   ActivityReadsRepo,
   ActivityRepo,
-  IdentityRepo,
 } from "@fdrive/db";
 import { streamSSE } from "hono/streaming";
-import { accountContext } from "../accounts/routes.js";
 import type { AppHono, AuthedHono } from "../app.js";
-import type { IdentityStorageFactory } from "../auth/storage-factory.js";
+import { accountContext } from "../auth/account-context.ts";
 import { ApiHttpError } from "../errors.js";
 import type { FsContext } from "../fs/routes.js";
 import { normalizeOrThrow, parseBody } from "../fs/routes.js";
@@ -38,8 +36,6 @@ export interface PersonalActivityRoutesDeps {
   readonly admitActivity: ActivityAdmission;
   readonly reads: ActivityReadsRepo;
   readonly repo: ActivityRepo;
-  readonly identities: IdentityRepo;
-  readonly storageFactory: IdentityStorageFactory;
   readonly observations: ActivityObservations;
   readonly cursorSecret: string;
   /**
@@ -173,7 +169,6 @@ export function registerPersonalActivityRoutes(
     const options: ActivityListOptions = {
       limit: filters.limit,
       ...scope,
-      ...(filters.identityId ? { identityId: filters.identityId } : {}),
       ...(filters.action ? { action: filters.action } : {}),
       ...(filters.source ? { source: filters.source } : {}),
       ...(filters.outcome ? { outcome: filters.outcome } : {}),
@@ -206,10 +201,7 @@ export function registerPersonalActivityRoutes(
     const last = rows.at(-1);
     // Open read windows belong at the top of the first page only. A later page
     // or a batch view would show them a second time, out of order.
-    const reads =
-      cursor || scope.batchId
-        ? []
-        : await deps.reads.provisional(principal.accountId, filters.identityId);
+    const reads = cursor || scope.batchId ? [] : await deps.reads.provisional(principal.accountId);
     const body: PersonalActivityResponse = {
       items: rows.map((row) =>
         serializeActivity(
@@ -255,14 +247,10 @@ export function registerPersonalActivityRoutes(
   }
 
   authed.get(routePath(ROUTES.activity.feed), (c) => feed(c));
-  authed.get(routePath(ROUTES.activity.locations), async (c) =>
-    c.json({ items: await deps.repo.locations(accountContext(c).principal.accountId) }),
-  );
   authed.get(routePath(ROUTES.activity.resolveFile), async (c) => {
     const { principal } = accountContext(c);
-    const identityId = uuid(c.req.query("identityId"));
     const path = normalizeOrThrow(c.req.query("path") ?? "");
-    const id = await deps.repo.resolveFile(principal.accountId, identityId, path);
+    const id = await deps.repo.resolveFile(principal.accountId, principal.identityId, path);
     if (!id) throw new ApiHttpError("not_found", "No recorded history for this file yet");
     return c.json({ id });
   });
@@ -352,18 +340,11 @@ export function registerPersonalActivityRoutes(
     recheck(principal.accountId);
     const result = await deps.repo.file(principal.accountId, uuid(c.req.param("fileId")));
     if (!result) throw new ApiHttpError("not_found", "File journey not found");
-    // A recheck is bounded to what the caller may read right now, so an
-    // unlinked login is refused instead of probed.
-    const identity = await deps.identities.get(result.file.identityId);
-    if (identity?.accountId !== principal.accountId)
-      throw new ApiHttpError("forbidden", "Login is no longer linked");
-    const storage = await deps.storageFactory(identity.id);
-    return c.json(
-      await deps.observations.check(
-        { ...principal, identityId: identity.id, storage },
-        result.file.path,
-      ),
-    );
+    // A recheck is bounded to what the caller may read right now, so a file
+    // of a login that no longer exists is refused instead of probed.
+    if (result.file.identityId !== principal.identityId)
+      throw new ApiHttpError("forbidden", "This file's login no longer exists");
+    return c.json(await deps.observations.check(principal, result.file.path));
   });
 
   authed.get(`${files}/:fileId`, async (c) => {
@@ -373,15 +354,13 @@ export function registerPersonalActivityRoutes(
     const { file, storage, lastSubject, lastEvent } = result;
     let currentPath: string | null = null;
     let availability: ActivityFileResponse["availability"] = "unavailable";
-    // History survives an unlinked login, but the current location does not:
-    // only a still-linked identity may be probed for where the file is now.
-    const identity = await deps.identities.get(file.identityId);
-    if (identity?.accountId === principal.accountId) {
+    // History outlives a login, but the current location does not: only the
+    // caller's own login is probed for where the file is now.
+    if (file.identityId === principal.identityId) {
       availability = file.state;
       if (file.state === "live") {
         try {
-          const provider = await deps.storageFactory(file.identityId);
-          const read = await createReadAuthorizer({ storage: provider }).authorize({
+          const read = await createReadAuthorizer({ storage: principal.storage }).authorize({
             path: file.path,
             kind: file.kind,
           });

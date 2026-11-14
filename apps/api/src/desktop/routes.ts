@@ -16,11 +16,11 @@ import {
 } from "@fdrive/contracts";
 import type { DesktopEffectsRepo } from "@fdrive/db";
 import type { Context } from "hono";
-import { accountContext } from "../accounts/routes.js";
 import { activityOperationId } from "../activity/fs-context.js";
 import type { PersonalActivityService } from "../activity/service.js";
 import { activityStream } from "../activity/streams.js";
 import type { AppHono, AuthedHono } from "../app.js";
+import { accountContext } from "../auth/account-context.ts";
 import { createRequireAdmin, type Principal } from "../auth/principal.js";
 import { ApiHttpError } from "../errors.js";
 import { parseBody } from "../fs/routes.js";
@@ -176,14 +176,9 @@ export function registerDesktopRoutes(
     return c.json(pairing.info(c.req.param("id")));
   });
   groups.authed.post(`${base}/pairings/:id/approve`, async (c) => {
-    const owner = accountContext(c);
+    const { principal } = accountContext(c);
     const body = await parseBody(DesktopPairApproval, c);
-    await pairing.approve(
-      c.req.param("id"),
-      owner.principal.accountId,
-      body.identityIds,
-      body.access,
-    );
+    await pairing.approve(c.req.param("id"), principal, body.access);
     return c.json({ ok: true });
   });
   groups.public.get(`${base}/location`, async (c) =>

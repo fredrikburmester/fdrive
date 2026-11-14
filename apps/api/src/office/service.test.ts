@@ -192,17 +192,18 @@ describe("WOPI authentication", () => {
     await h.repos.sessions.delete(h.alice.session.idHash);
     expect((await h.callback(opened)).status).toBe(401);
   });
-  it("rechecks account, identity and provider on every callback", async () => {
+  it("rechecks the session's login and its provider on every callback", async () => {
     const h = await officeHarness();
     const opened = await h.open();
-    const get = vi.spyOn(h.repos.identities, "get");
-    get.mockResolvedValueOnce({ ...h.alice.identity, accountId: h.bob.account.id });
+    vi.spyOn(h.repos.sessions, "getByIdHash").mockResolvedValueOnce({
+      ...h.alice.session,
+      identityId: h.bob.identity.id,
+    });
     expect((await h.callback(opened)).status).toBe(401);
+    const get = vi.spyOn(h.repos.identities, "get");
     get.mockResolvedValueOnce(null);
     expect((await h.callback(opened)).status).toBe(401);
     get.mockResolvedValueOnce({ ...h.alice.identity, providerId: randomUUID() });
-    expect((await h.callback(opened)).status).toBe(401);
-    vi.spyOn(h.repos.accounts, "get").mockResolvedValueOnce(null);
     expect((await h.callback(opened)).status).toBe(401);
   });
   it("rejects expired, removed, foreign-provider and newly out-of-scope records", async () => {
@@ -344,7 +345,7 @@ it("supports an old-proof-only rotation and rejects absent timestamp", async () 
   noTimestamp.headers.delete("X-WOPI-TimeStamp");
   expect((await h.app.request(noTimestamp)).status).toBe(500);
 });
-it("revalidates session expiry and principal account even with permissive repositories", async () => {
+it("revalidates session expiry and the session's login even with permissive repositories", async () => {
   const h = await officeHarness();
   const opened = await h.open();
   const sessions = vi
@@ -355,7 +356,7 @@ it("revalidates session expiry and principal account even with permissive reposi
   await expect(
     h.service.open(
       {
-        principal: { ...h.alice.principal, accountId: h.bob.account.id },
+        principal: { ...h.alice.principal, identityId: h.bob.identity.id },
         sessionId: h.alice.sessionId,
       },
       { path: "/a.docx", mode: "edit" },
@@ -372,12 +373,6 @@ it("returns router-compatible folder and explicit edit links from view mode", as
   expect(info.CloseUrl).toBe(`${h.config.appUrl}/files/folder%20%C3%A5`);
   expect(info.HostViewUrl).toContain("?mode=view");
   expect(info.HostEditUrl).toContain("?mode=edit");
-  vi.spyOn(h.repos.sessions, "getByIdHash").mockResolvedValue({
-    ...h.alice.session,
-    activeIdentityId: h.bob.identity.id,
-  });
-  const nonactive = (await (await h.callback(opened)).json()) as Record<string, unknown>;
-  expect(nonactive.CloseUrl).toBe(`${h.config.appUrl}/files`);
 });
 
 it("applies runtime activation changes to status, opens and existing callbacks", async () => {

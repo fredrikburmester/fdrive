@@ -117,7 +117,7 @@ async function checkFileInfo(config: OfficeConfig, opened: OpenedFile): Promise<
   const { actor, file, path, mode } = opened;
   const content = await documentVersion(actor.storage, path);
   const edit = mode === "edit";
-  const folder = actor.session.activeIdentityId === actor.identity.id ? parentPath(path) : "/";
+  const folder = parentPath(path);
   const close = `${config.appUrl.replace(/\/$/, "")}/files${folder === "/" ? "" : folder.split("/").map(encodeURIComponent).join("/")}`;
   return Response.json({
     BaseFileName: baseName(path),
@@ -146,10 +146,8 @@ async function checkFileInfo(config: OfficeConfig, opened: OpenedFile): Promise<
     BreadcrumbFolderUrl: close,
     BreadcrumbDocName: baseName(path),
     CloseUrl: close,
-    HostViewUrl: editorHostUrl(config, actor.identity.id, path, "view"),
-    ...(opened.editAllowed
-      ? { HostEditUrl: editorHostUrl(config, actor.identity.id, path, "edit") }
-      : {}),
+    HostViewUrl: editorHostUrl(config, path, "view"),
+    ...(opened.editAllowed ? { HostEditUrl: editorHostUrl(config, path, "edit") } : {}),
     PostMessageOrigin: new URL(config.appUrl).origin,
     FileNameMaxLength: 255,
   });

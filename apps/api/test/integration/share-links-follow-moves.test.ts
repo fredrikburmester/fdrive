@@ -7,7 +7,6 @@ import {
   DesktopWriteEntry,
   DesktopWritePairResult,
   ManagedShare,
-  MeResponse,
   publicShareRoute,
   ROUTES,
 } from "@fdrive/contracts";
@@ -432,7 +431,6 @@ describe("public links follow the files they point at", () => {
       body: { credential: { username: "alice", password: "alice-pass" } },
     });
     const cookie = cookieFrom(loggedIn);
-    const me = MeResponse.parse(await loggedIn.json());
     const base = "/api/v2/desktop";
     const pairing = DesktopPairing.parse(
       await ok(call(`${base}/pairings`, { cookie, body: { deviceName: "Share moves" } })),
@@ -440,10 +438,7 @@ describe("public links follow the files they point at", () => {
     await ok(
       call(`/api/v1/desktop/pairings/${pairing.id}/approve`, {
         cookie,
-        body: {
-          identityIds: me.identities.map((identity) => identity.id),
-          access: Object.fromEntries(me.identities.map((identity) => [identity.id, "full"])),
-        },
+        body: { access: "full" },
       }),
     );
     const pair = DesktopWritePairResult.parse(

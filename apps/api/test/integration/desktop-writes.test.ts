@@ -2,12 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import {
-  DesktopPairing,
-  DesktopWriteEntry,
-  DesktopWritePairResult,
-  MeResponse,
-} from "@fdrive/contracts";
+import { DesktopPairing, DesktopWriteEntry, DesktopWritePairResult } from "@fdrive/contracts";
 import { createDb, createDesktopEffectsRepo, createRepos } from "@fdrive/db";
 import { startLocalStorage, startPostgres } from "@fdrive/testkit";
 import pino from "pino";
@@ -65,14 +60,10 @@ it("publishes complete files with durable replay and conflict protection", async
     });
     expect(login.status).toBe(200);
     cookie = login.headers.get("set-cookie")?.split(";")[0] ?? "";
-    const me = MeResponse.parse(await login.json());
     const pairResponse = await call(`${base}/pairings`, { deviceName: "Write test" });
     expect(pairResponse.status).toBe(201);
     const pairing = DesktopPairing.parse(await pairResponse.json());
-    await json(`/api/v1/desktop/pairings/${pairing.id}/approve`, {
-      identityIds: me.identities.map((i) => i.id),
-      access: Object.fromEntries(me.identities.map((i) => [i.id, "full"])),
-    });
+    await json(`/api/v1/desktop/pairings/${pairing.id}/approve`, { access: "full" });
     const pair = DesktopWritePairResult.parse(
       await json(`${base}/pairings/${pairing.id}/poll`, { secret: pairing.secret }),
     );

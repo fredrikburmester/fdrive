@@ -10,7 +10,7 @@ import { COOKIE_NAME } from "../auth/sessions.js";
 import { ApiHttpError } from "../errors.js";
 import { type ActivityAdmissionDeps, createActivityAdmission } from "./admission.js";
 
-it("admits only linked readable gestures, scopes copied links, and hashes the session context", async () => {
+it("admits only the login's readable gestures, scopes copied links, and hashes the session context", async () => {
   const owner = randomUUID(),
     identityId = randomUUID(),
     shareId = randomUUID(),
@@ -19,17 +19,15 @@ it("admits only linked readable gestures, scopes copied links, and hashes the se
   await storage.upload("/a", new Uint8Array([1]));
   await storage.mkdir("/d");
   const deps = {
-    identities: { get: vi.fn(async () => ({ accountId: owner })) },
     storageFactory: async () => storage,
     clock: () => now,
     secret: "server-secret",
     reads: { record: vi.fn(async (_input: unknown) => "window") },
-    repo: { clientEvent: vi.fn(async () => ({ id: "copy" })) },
+    repo: { clientEvent: vi.fn(async (..._args: unknown[]) => ({ id: "copy" })) },
     shares: { getOwned: vi.fn(async () => ({ paths: ["/a"] }) as { paths: string[] } | null) },
   };
   const admit = createActivityAdmission(deps as unknown as ActivityAdmissionDeps);
   let input: ClientActivityRequest = {
-    identityId,
     requestId: randomUUID(),
     at: now.toISOString(),
     action: "file.open",
@@ -65,6 +63,12 @@ it("admits only linked readable gestures, scopes copied links, and hashes the se
 
   input = { ...input, path: "/a", action: "share.copy_link", shareId };
   expect(await (await request()).json()).toEqual({ id: "copy" });
+  expect(deps.repo.clientEvent).toHaveBeenLastCalledWith(
+    owner,
+    expect.any(String),
+    expect.objectContaining({ identityId, path: "/a" }),
+    "file",
+  );
   deps.shares.getOwned.mockResolvedValueOnce(null);
   expect((await request()).status).toBe(403);
   deps.shares.getOwned.mockResolvedValueOnce({ paths: ["/other"] });
@@ -72,8 +76,6 @@ it("admits only linked readable gestures, scopes copied links, and hashes the se
   input = { ...input, shareId: undefined } as unknown as ClientActivityRequest;
   expect((await request()).status).toBe(403);
 
-  deps.identities.get.mockResolvedValueOnce({ accountId: randomUUID() });
-  expect((await request()).status).toBe(403);
   for (const at of [new Date(now.getTime() - 700_000), new Date(now.getTime() + 70_000)]) {
     input = { ...input, at: at.toISOString() };
     expect((await request()).status).toBe(403);
