@@ -33,6 +33,14 @@ Every regular file under a configured root, except:
 - Directories in `SKIP_DIRS` (`@eaDir`, `.Trash`, `.Trashes`, `node_modules`,
   `.git`).
 
+A walk (a scan, a queued folder, a folder the watcher saw appear) never follows a link below
+its starting folder. On network and FUSE storage such as Unraid's `/mnt/user` every look at a
+folder or file is a round trip, so while the walking thread works through one folder, eight
+reader threads (`walk.rs`) list and look at the folders that come next. Files still arrive
+in one order: a folder's files by lowercase name, then each of its folders, depth first. A
+folder listing already says what is a folder, a link, a pipe or a device, so only files are
+looked at, for their size and time.
+
 For each file the indexer records size, mtime, a sha256, a guessed MIME type,
 and (for textual extensions) extracted text, chunked and embedded. Extraction
 follows filesai's rules exactly:
