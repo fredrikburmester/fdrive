@@ -660,7 +660,8 @@ describe("POST /trash/restore", () => {
 
 describe("POST /trash/purge", () => {
   it("permanently removes the given ids and publishes one delete event", async () => {
-    const { app, storage, events } = await buildHarness();
+    const { app, storage, events, metadata } = await buildHarness();
+    const onPurged = vi.spyOn(metadata, "onPurged");
     await storage.deleteFile("/hello.txt");
     const listed = TrashListResponse.parse(await readJson(await app.request(ROUTES.trash.list)));
     const id = listed.entries[0]?.id;
@@ -688,6 +689,12 @@ describe("POST /trash/purge", () => {
     ]);
     const after = TrashListResponse.parse(await readJson(await app.request(ROUTES.trash.list)));
     expect(after.entries).toEqual([]);
+    // What followed the file into the Trash (a public link) lets it go.
+    expect(onPurged).toHaveBeenCalledWith(
+      ALICE_IDENTITY_ID,
+      normalizePath(`${TRASH_PATH}/${id}`),
+      false,
+    );
   });
 
   it("returns bad_request for an invalid id", async () => {
@@ -811,10 +818,17 @@ describe("personal activity for trash commands", () => {
     const h = await buildHarness();
     await trashed(h, "/hello.txt");
     await trashed(h, "/dir", "dir");
+    const onPurged = vi.spyOn(h.metadata, "onPurged");
 
     const res = await h.app.request(ROUTES.trash.empty, requestedWith({ method: "POST" }));
 
     expect(res.status).toBe(200);
+    expect(
+      onPurged.mock.calls.map(([, leaf, isDir]) => [leaf.split("/")[3], isDir]).sort(),
+    ).toEqual([
+      ["dir", true],
+      ["file", false],
+    ]);
     expect(h.activity.outcomes.map((row) => [row.action, row.outcome])).toEqual([
       ["file.delete", "success"],
       ["file.delete", "success"],

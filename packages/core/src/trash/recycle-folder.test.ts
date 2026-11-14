@@ -2,6 +2,7 @@ import fc from "fast-check";
 import { describe, expect, it } from "vitest";
 import { isSafeSegment, normalizePath } from "../paths.ts";
 import {
+  isInMoveTrashLayout,
   isUnderPath,
   moveTrashLeafPath,
   moveTrashRootPath,
@@ -28,6 +29,19 @@ describe("isUnderPath", () => {
 
   it("is false for the root itself when the prefix is the root", () => {
     expect(isUnderPath("/", "/")).toBe(false);
+  });
+});
+
+describe("isInMoveTrashLayout", () => {
+  it("finds the layout under any folder, in any case, whatever Trash is set to", () => {
+    for (const path of [
+      "/.trash/.fdrive-move-v1",
+      "/.trash/.fdrive-move-v1/dir/p/a/v/1/b.txt",
+      "/old bin/.FDRIVE-MOVE-V1/file/p/a/v/1",
+    ])
+      expect(isInMoveTrashLayout(path), path).toBe(true);
+    for (const path of ["/", "/.trash", "/a/.fdrive-move-v1x", "/a/fdrive-move-v1"])
+      expect(isInMoveTrashLayout(path), path).toBe(false);
   });
 });
 

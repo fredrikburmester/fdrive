@@ -147,6 +147,9 @@ export function registerTrashRoutes(
   deps: TrashRoutesDeps,
 ): void {
   const { authed } = groups;
+  /** What followed a leaf into the Trash lets it go once it is purged for good. */
+  const afterPurge = async (identityId: string, trashPath: string, leaf: string) =>
+    deps.metadata?.onPurged(identityId, leaf, parseMoveTrashLeaf(trashPath, leaf)?.kind !== "file");
 
   authed.get(routePath(ROUTES.trash.status), (c) => {
     const principal = c.get("principal");
@@ -260,6 +263,7 @@ export function registerTrashRoutes(
         },
         () => runStorageCall(() => trash.purge([id])),
       );
+      await afterPurge(principal.identityId, trashPath, leaf);
     }
 
     const paths = ids.map((id) => trashLeafPath(trashPath, id));
@@ -324,6 +328,7 @@ export function registerTrashRoutes(
                 },
                 () => runStorageCall(() => trash.purge([entry.id])),
               );
+              await afterPurge(principal.identityId, trashPath, leaf);
               completed++;
             }
           }

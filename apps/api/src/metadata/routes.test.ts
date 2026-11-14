@@ -651,6 +651,7 @@ describe("tag CRUD: error mapping", () => {
       onDeleted: async () => fail("onDeleted"),
       onTrashed: async () => fail("onTrashed"),
       onRestored: async () => fail("onRestored"),
+      onPurged: async () => fail("onPurged"),
       onCopied: () => undefined,
     };
     const app = await buildHarnessWithStubMetadata(metadata);

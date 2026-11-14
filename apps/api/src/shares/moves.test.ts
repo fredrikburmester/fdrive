@@ -148,6 +148,10 @@ describe("public links following their item", () => {
     expect(recents).toEqual(["/Projects"]);
     await metadata.onRestored(alice, "/.trash/leaf", "/Back", true);
     expect(await paths(link.id)).toEqual(["/Back"]);
+    // Purged from the Trash, it is let go like a delete.
+    const purged = await shares.insert(row(alice, ["/.trash/other", "/kept"]));
+    await metadata.onPurged(alice, "/.trash/other", true);
+    expect(await paths(purged.id)).toEqual(["/kept"]);
     // Trashed with no leaf known, the link drops the path rather than wait at it.
     await metadata.onTrashed(alice, "/Back", true);
     expect(await shares.get(link.id)).toBeNull();

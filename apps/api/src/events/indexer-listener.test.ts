@@ -109,6 +109,7 @@ function fakeMetadataService(): { metadata: MetadataService; calls: MetadataCall
     },
     onTrashed: async () => fail("onTrashed"),
     onRestored: async () => fail("onRestored"),
+    onPurged: async () => fail("onPurged"),
     onCopied: () => undefined,
   };
   return { metadata, calls };

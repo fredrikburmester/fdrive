@@ -1,4 +1,10 @@
-import { joinPath, normalizePath, parseRangeHeader, type StorageProvider } from "@fdrive/core";
+import {
+  isInMoveTrashLayout,
+  joinPath,
+  normalizePath,
+  parseRangeHeader,
+  type StorageProvider,
+} from "@fdrive/core";
 import { SHARED_WITH_ME } from "@fdrive/local";
 import { isBackupPath } from "../backups/reserved-storage.ts";
 import { DESKTOP_INTERNAL_ROOT } from "../desktop/internal-root.ts";
@@ -34,9 +40,18 @@ export function restrictedRoots(trashPath: string | null): string[] {
   ];
 }
 
-/** True when no link may reach canonical `path`: a backup folder, or inside one of `restricted`. */
+/**
+ * True when no link may reach canonical `path`: a backup folder, anything in
+ * fdrive's Trash layout wherever it lies (a link follows its item into the
+ * Trash, and must stay refused there after Trash is turned off or moved), or
+ * inside one of `restricted`.
+ */
 export function hiddenFromLinks(path: string, restricted: readonly string[]): boolean {
-  return isBackupPath(path) || restricted.some((root) => isUnder(path, root));
+  return (
+    isBackupPath(path) ||
+    isInMoveTrashLayout(path) ||
+    restricted.some((root) => isUnder(path, root))
+  );
 }
 
 /**

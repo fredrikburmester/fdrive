@@ -151,6 +151,11 @@ export interface MetadataService {
    */
   onRestored(identityId: string, leaf: string, path: string, isDir: boolean): Promise<void>;
   /**
+   * `leaf` was purged from the Trash. Followers that went into the Trash
+   * with it (`PathFollower.onTrashed`) let it go, as after a delete.
+   */
+  onPurged(identityId: string, leaf: string, isDir: boolean): Promise<void>;
+  /**
    * No-op by design: a copy is a brand new file as far as metadata is
    * concerned, so tags, favorites, and recents on the source are never
    * duplicated onto the copy. Kept as an explicit method (rather than
@@ -305,6 +310,12 @@ export function createMetadataService(deps: MetadataServiceDeps): MetadataServic
     async onRestored(identityId, leaf, path, isDir) {
       for (const follower of deps.followers ?? []) {
         if (follower.onTrashed !== undefined) await follower.onMoved(identityId, leaf, path, isDir);
+      }
+    },
+
+    async onPurged(identityId, leaf, isDir) {
+      for (const follower of deps.followers ?? []) {
+        if (follower.onTrashed !== undefined) await follower.onDeleted(identityId, leaf, isDir);
       }
     },
 

@@ -89,15 +89,7 @@ describe("public links follow the files they point at", () => {
       silentLogger(),
     );
     database = createDb(postgres.connectionString);
-    const repos = createRepos(database.db);
-    const provider = await repos.providers.ensure({ type: "local", baseUrl: "local" });
-    await repos.settings.set(trashSettingsKey(provider.id), {
-      providerId: provider.id,
-      revision: 1,
-      enabled: true,
-      path: "/.trash",
-      retentionHours: null,
-    });
+    await setTrash(true, "/.trash");
     alice = await login("alice");
     bob = await login("bob");
   }, 180_000);
@@ -109,6 +101,19 @@ describe("public links follow the files they point at", () => {
     await postgres?.stop();
     if (stateDir) await rm(stateDir, { recursive: true, force: true });
   }, 180_000);
+
+  /** Sets the files folder's Trash, as System > General would. */
+  async function setTrash(enabled: boolean, path: string): Promise<void> {
+    const repos = createRepos(database.db);
+    const provider = await repos.providers.ensure({ type: "local", baseUrl: "local" });
+    await repos.settings.set(trashSettingsKey(provider.id), {
+      providerId: provider.id,
+      revision: 1,
+      enabled,
+      path,
+      retentionHours: null,
+    });
+  }
 
   async function call(
     path: string,
@@ -251,6 +256,15 @@ describe("public links follow the files they point at", () => {
     // Something new of the same name is not what the link was made for.
     await put(alice, "/Binned/new.txt", "never shared");
     expect(await served(id, "/new.txt")).toEqual([404, 404, 404]);
+    // In the Trash it stays refused, whatever Trash is set to later.
+    try {
+      await setTrash(false, "/.trash");
+      expect(await served(id, "/inside.txt")).toEqual([404, 404, 404]);
+      await setTrash(true, "/.bin");
+      expect(await served(id, "/inside.txt")).toEqual([404, 404, 404]);
+    } finally {
+      await setTrash(true, "/.trash");
+    }
 
     // Restored to its place, once that is free again, the link works again.
     await move(alice, "/Binned", "/NotBinned");
@@ -271,12 +285,11 @@ describe("public links follow the files they point at", () => {
     expect(await linkPaths(alice, id)).toEqual(["/Recovered/Binned"]);
     expect(await visit(id)).toBe(200);
 
-    // Purged for good: the link keeps the Trash path, never the original one.
+    // Purged for good: the link lets it go, and with nothing left the link goes too.
     await trash("/Recovered/Binned");
-    const purged = await trashId();
-    await ok(call(ROUTES.trash.purge, { cookie: alice, body: { ids: [purged] } }));
+    await ok(call(ROUTES.trash.purge, { cookie: alice, body: { ids: [await trashId()] } }));
+    expect(await linkStatus(alice, id)).toBe(404);
     await put(alice, "/Recovered/Binned/new.txt", "a replacement");
-    expect(await linkPaths(alice, id)).toEqual([`/.trash/${purged}`]);
     expect(await served(id, "/new.txt")).toEqual([404, 404, 404]);
   });
 
