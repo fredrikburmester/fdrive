@@ -67,15 +67,65 @@ function taken(path: string): StorageError {
 /**
  * Uploads are written here, beside their target, and renamed into place, so
  * a reader never sees half a file. Listings, copies and zips skip the name;
- * one left by a crash is ordinary clutter, not data.
+ * one left by a crash is ordinary clutter, not data. A resumable upload's
+ * part waits under this name at the top of the home until its last piece.
  */
 const PARTIAL = /^\.fdrive-partial-[0-9a-f]{16}$/;
 
 /** `link` errors meaning the filesystem has no hard links, not that the name is taken. */
 const NO_HARD_LINKS = new Set(["EPERM", "ENOTSUP", "EOPNOTSUPP", "ENOSYS"]);
 
-function partialIn(dir: string): string {
-  return join(dir, `.fdrive-partial-${randomBytes(8).toString("hex")}`);
+function partialIn(dir: string, id = randomBytes(8).toString("hex")): string {
+  return join(dir, `.fdrive-partial-${id}`);
+}
+
+/**
+ * Writes `body` into a resumable upload's part at `offset`, first cutting off
+ * whatever a failed earlier call left past it; offset 0 starts it afresh.
+ */
+async function writePart(
+  at: string,
+  offset: number,
+  body: ReadableStream<Uint8Array> | Uint8Array,
+  signal: AbortSignal | undefined,
+): Promise<void> {
+  const create = offset === 0 ? constants.O_CREAT | constants.O_TRUNC : 0;
+  const handle = await open(at, constants.O_WRONLY | constants.O_NOFOLLOW | create);
+  try {
+    if ((await handle.stat()).size < offset) {
+      throw new StorageError("bad_request", `the upload has no byte ${offset}`);
+    }
+    await handle.truncate(offset);
+  } catch (error) {
+    await handle.close();
+    throw error;
+  }
+  const sink = handle.createWriteStream({ start: offset });
+  const source =
+    body instanceof Uint8Array
+      ? Readable.from([body])
+      : Readable.fromWeb(body as unknown as NodeReadableStream<Uint8Array>);
+  await (signal ? pipeline(source, sink, { signal }) : pipeline(source, sink));
+}
+
+/**
+ * Removes the parts of resumable uploads nobody finished: the ones at the top
+ * of each home under `root` that last changed before `before`. Returns how
+ * many it removed.
+ */
+export async function removeStaleParts(root: string, before: Date): Promise<number> {
+  let removed = 0;
+  for (const home of await readdir(root)) {
+    const names = await readdir(join(root, home)).catch(() => []);
+    for (const name of names.filter((candidate) => PARTIAL.test(candidate))) {
+      const at = join(root, home, name);
+      const info = await lstatOrNull(at);
+      if (info?.isFile() !== true || info.mtime >= before) continue;
+      await rm(at, { force: true });
+      removed += 1;
+    }
+  }
+  return removed;
 }
 
 function aborted(signal: AbortSignal): unknown {
@@ -163,6 +213,8 @@ export function createLocalStorage(options: LocalStorageOptions): LocalStorage {
     options.within === undefined ? {} : { within: options.within },
   );
   const listener = options.onChange;
+  /** The top of the home, or of its owner's for a shared folder: where resumable uploads' parts wait. */
+  const partsDir = options.within ?? options.home;
 
   /** The entry `path` names on disk; refuses a path through a symbolic link. */
   async function entry(path: string): Promise<string> {
@@ -320,12 +372,18 @@ export function createLocalStorage(options: LocalStorageOptions): LocalStorage {
           throw new StorageError("conflict", `a directory exists at ${path}`);
         }
         if (existing !== null && !overwrite) throw taken(path);
-        const partial = partialIn(dir);
+        const part = opts?.part;
+        const partial = part === undefined ? partialIn(dir) : partialIn(partsDir, part.id);
+        if (!PARTIAL.test(basename(partial))) {
+          throw new StorageError("bad_request", `invalid upload part: ${path}`);
+        }
         // Only a listener needs the digest, so nobody else pays for it.
         const hash = listener === undefined ? undefined : createHash("sha256");
         let written: Omit<DiskContent, "ctimeNs"> | undefined;
         try {
-          if (body instanceof Uint8Array) {
+          if (part !== undefined) {
+            await writePart(partial, part.offset, body, signal);
+          } else if (body instanceof Uint8Array) {
             await writeFile(partial, body, { flag: "wx", ...(signal ? { signal } : {}) });
             hash?.update(body);
           } else {
@@ -342,15 +400,21 @@ export function createLocalStorage(options: LocalStorageOptions): LocalStorage {
                 : pipeline(source, tap, sink));
             }
           }
-          const size = (await stat(partial)).size;
+          const size = (await stat(partial)).size - (part?.offset ?? 0);
           if (opts?.contentLength !== undefined && size !== opts.contentLength) {
             throw new StorageError(
               "bad_request",
               `upload ended after ${size} of ${opts.contentLength} bytes: ${path}`,
             );
           }
+          // A piece before the last stays in the part for the next one.
+          if (part?.final === false) return;
           if (opts?.modifiedAt !== undefined) await utimes(partial, new Date(), opts.modifiedAt);
           if (hash !== undefined) {
+            // A part arrived over several calls, so its digest is read back whole.
+            if (part !== undefined) {
+              for await (const chunk of createReadStream(partial)) hash.update(chunk as Buffer);
+            }
             // Taken before publishing: whatever is at the name later may be
             // another writer's file.
             const info = await stat(partial, { bigint: true });
@@ -363,8 +427,10 @@ export function createLocalStorage(options: LocalStorageOptions): LocalStorage {
           }
           if (overwrite) await rename(partial, target);
           else await publishNew(partial, target, path);
+          if (part !== undefined) await rm(partial, { force: true });
         } finally {
-          await rm(partial, { force: true });
+          // A part outlives a failed call, so the call can be repeated.
+          if (part === undefined) await rm(partial, { force: true });
         }
         notify(listener, {
           kind: "changed",

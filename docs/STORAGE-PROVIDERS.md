@@ -97,6 +97,12 @@ How the files folder implements it:
 - **Atomic publish.** Uploads and file copies write a temporary file beside the target and
   publish it with `link`, a real create-if-absent; only `overwrite: true` renames it over a
   taken name.
+- **Uploads in pieces.** The web app sends files over 8 MiB in 8 MiB pieces (`upload` with
+  `part`; `/fs/upload` with `part`, `offset` and `final`). Each piece is written into
+  `.fdrive-partial-<part>` at the top of the home (the owner's home for a shared folder), cut
+  back to its offset first so a failed piece can be sent again, and the last piece publishes it
+  as above. Every piece is checked like an upload; at startup the API removes parts older than
+  a day.
 - **Copies** keep modification times. A link inside a copied folder is copied as the link it
   is, its target text unchanged, as a move takes it along: never followed, never its target.
 - **Moves** are one `rename`, also between a user's files and a writable shared folder. The

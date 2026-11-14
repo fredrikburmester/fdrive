@@ -23,7 +23,7 @@ import {
   createWopiLockRepo,
   migrate,
 } from "@fdrive/db";
-import { SHARED_WITH_ME } from "@fdrive/local";
+import { removeStaleParts, SHARED_WITH_ME } from "@fdrive/local";
 import type { Logger } from "pino";
 import { verifyCredentials } from "./accounts/credentials.js";
 import { registerAccountsRoutes } from "./accounts/routes.ts";
@@ -213,7 +213,14 @@ export async function composeApp(
           info: (message) => logger.info(message),
           error: (message) => logger.error(message),
         });
-  await filesFolder?.verify();
+  const filesVerdict = await filesFolder?.verify();
+  // Uploads nobody finished within a day are not coming back for their parts.
+  if (config.fdriveStorageRoot !== undefined && filesVerdict?.ok === true) {
+    void removeStaleParts(
+      config.fdriveStorageRoot,
+      new Date(clock().getTime() - 24 * 60 * 60_000),
+    ).catch((error: unknown) => logger.warn({ err: error }, "unfinished upload parts not removed"));
+  }
   /**
    * Folders in each user's files no share reaches (`reservedFolders`): their
    * Trash while it is on and the Mac's bookkeeping, which holds its Trash.

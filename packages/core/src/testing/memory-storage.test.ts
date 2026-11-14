@@ -30,6 +30,21 @@ describe("createMemoryStorage extras", () => {
     expect(storage.dump()).toEqual({ "/s.txt": "stream" });
   });
 
+  it("publishes an upload sent in pieces only at the last, refusing a gap", async () => {
+    const storage = createMemoryStorage();
+    const encode = (value: string) => new TextEncoder().encode(value);
+    const piece = (offset: number, final = false) => ({
+      part: { id: "0123456789abcdef", offset, final },
+    });
+    await storage.upload("/p.txt", encode("hel"), piece(0));
+    await expect(storage.upload("/p.txt", encode("?"), piece(9))).rejects.toMatchObject({
+      kind: "bad_request",
+    });
+    expect(storage.dump()).toEqual({});
+    await storage.upload("/p.txt", encode("lo"), piece(3, true));
+    expect(storage.dump()).toEqual({ "/p.txt": "hello" });
+  });
+
   it("refuses uploads over directories, unknown parents and, on request, existing files", async () => {
     const storage = createMemoryStorage({ "/x/y.txt": "y" });
     await expect(storage.upload("/x", new Uint8Array())).rejects.toMatchObject({

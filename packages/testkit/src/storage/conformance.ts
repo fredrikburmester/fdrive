@@ -149,6 +149,24 @@ export function describeStorageProvider(
       }
     });
 
+    it("publishes an upload sent in pieces at the last, and takes a piece sent again", async () => {
+      const path = `${root}/pieces/file.txt`;
+      const encode = (value: string) => new TextEncoder().encode(value);
+      const piece = (offset: number, final = false) => ({
+        mkdirParents: true,
+        part: { id: "0123456789abcdef", offset, final },
+      });
+      await storage.upload(path, encode("hello"), piece(0));
+      await storage.upload(path, encode(" WORLD!"), piece(5));
+      expect(await kindOf(storage.statFile(path))).toBe("not_found");
+      // Sent again from its offset, a piece replaces what the last attempt left.
+      await storage.upload(path, encode(" world"), piece(5, true));
+      expect(await text((await storage.download(path)).body)).toBe("hello world");
+      expect((await storage.list(`${root}/pieces`)).map((entry) => entry.name)).toEqual([
+        "file.txt",
+      ]);
+    });
+
     it("creates directories, with parents on request", async () => {
       await storage.mkdir(`${root}/one`);
       await storage.mkdir(`${root}/two/three`, { parents: true });

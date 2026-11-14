@@ -700,7 +700,15 @@ export function registerFsRoutes(
       contentLength?: number;
       overwrite: boolean;
       signal?: AbortSignal;
+      part?: { id: string; offset: number; final: boolean };
     } = { overwrite: query.intent !== "create", signal: c.req.raw.signal };
+    if (query.part !== undefined) {
+      uploadOpts.part = {
+        id: query.part,
+        offset: Number(query.offset ?? 0),
+        final: query.final === "true",
+      };
+    }
     if (query.mkdirParents !== undefined) {
       uploadOpts.mkdirParents = query.mkdirParents === "true";
     }
@@ -717,6 +725,14 @@ export function registerFsRoutes(
       if (Number.isFinite(contentLength)) {
         uploadOpts.contentLength = contentLength;
       }
+    }
+    // A piece before the last only grows the upload's part; the last one
+    // publishes the file as one upload, recorded and announced once.
+    if (uploadOpts.part?.final === false) {
+      await runStorageCall(() =>
+        principal.storage.upload(path, c.req.raw.body ?? new Uint8Array(), uploadOpts),
+      );
+      return c.body(null, 204);
     }
 
     const before = deps.activity ? await activityStat(principal.storage, path) : undefined;

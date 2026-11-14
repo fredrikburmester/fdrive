@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { expect, type Locator, type Page, test } from "@playwright/test";
 import { listing } from "./support/regions.js";
 import { uniqueName } from "./support/unique.js";
-import { uploadFiles } from "./support/upload.js";
+import { fileInputLocator, uploadFiles } from "./support/upload.js";
 
 async function seedFolder(page: Page): Promise<string> {
   const path = `/${uniqueName("upload-reveal")}`;
@@ -164,7 +164,8 @@ test("a successful retry selects and reveals the uploaded file", async ({ page }
     async (route) => {
       attempts += 1;
       if (attempts === 1) {
-        await route.fulfill({ status: 503, body: "Temporary upload failure" });
+        // A refusal: a server fault or lost connection is sent again by itself.
+        await route.fulfill({ status: 400, body: "Refused once" });
       } else {
         await route.continue();
       }
@@ -177,4 +178,42 @@ test("a successful retry selects and reveals the uploaded file", async ({ page }
   await expect(target).toBeInViewport();
   await expect(target).toHaveAttribute("data-selected", "true");
   expect(attempts).toBe(2);
+});
+
+test("a file bigger than one piece goes up in pieces and survives a dropped piece", async ({
+  page,
+}) => {
+  const path = `/${uniqueName("upload-pieces")}`;
+  const created = await page.request.post("/api/v1/fs/mkdir", {
+    data: { path },
+    headers: { "x-requested-with": "fdrive" },
+  });
+  expect(created.ok(), await created.text()).toBe(true);
+  await page.goto(`/files${path}`);
+  const requests: string[] = [];
+  await page.route(
+    (url) => url.pathname === "/api/v1/fs/upload",
+    async (route) => {
+      const query = new URL(route.request().url()).searchParams;
+      requests.push(`${query.get("offset")}${query.get("final") === "true" ? " final" : ""}`);
+      // The connection drops once, under the last piece.
+      if (requests.length === 2) await route.abort("connectionreset");
+      else await route.continue();
+    },
+  );
+  const piece = 8 * 1024 * 1024;
+  await fileInputLocator(page).setInputFiles({
+    name: "big.bin",
+    mimeType: "application/octet-stream",
+    buffer: Buffer.concat([Buffer.alloc(piece, "a"), Buffer.alloc(1024 * 1024, "b")]),
+  });
+
+  await expect(uploadSummary(page, 1)).toBeVisible();
+  expect(requests).toEqual(["0", `${piece} final`, `${piece} final`]);
+  const download = await page.request.get(
+    `/api/v1/fs/download?path=${encodeURIComponent(`${path}/big.bin`)}`,
+  );
+  const body = await download.body();
+  expect(body.length).toBe(piece + 1024 * 1024);
+  expect(body.subarray(piece - 1, piece + 1).toString()).toBe("ab");
 });

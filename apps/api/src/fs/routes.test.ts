@@ -963,6 +963,45 @@ describe("PUT /fs/upload", () => {
     });
     expect(await read()).toBe("saved");
   });
+
+  it("takes a file in pieces, publishing and recording it once at the last", async () => {
+    const { app, events, activity } = await buildHarness();
+    const put = (query: string, body: string) =>
+      app.request(
+        `/api/v1/fs/upload?path=/big/file.txt&mkdirParents=true&part=0123456789abcdef${query}`,
+        requestedWith({
+          method: "PUT",
+          headers: { "content-length": String(body.length) },
+          body,
+        }),
+      );
+
+    expect((await put("&offset=0", "hello")).status).toBe(204);
+    expect((await put("&offset=5", " WORLD")).status).toBe(204);
+    // Sent again from its offset, a piece replaces what the last attempt left.
+    expect((await put("&offset=5", " world")).status).toBe(204);
+    expect((await app.request("/api/v1/fs/download?path=/big/file.txt")).status).toBe(404);
+    expect(events).toEqual([]);
+    expect(activity.operations).toHaveLength(0);
+
+    const last = await put("&offset=11&final=true", "!");
+    expect(last.status).toBe(201);
+    expect(await last.json()).toMatchObject({ path: "/big/file.txt", size: 12 });
+    expect(events).toMatchObject([{ op: "create", paths: ["/big/file.txt"] }]);
+    expect(activity.operations.map((row) => row.action)).toEqual(["file.upload"]);
+    const download = await app.request("/api/v1/fs/download?path=/big/file.txt");
+    expect(await download.text()).toBe("hello world!");
+  });
+
+  it("refuses a malformed piece and checks write access on every piece", async () => {
+    const put = (app: Harness["app"], query: string) =>
+      app.request(`/api/v1/fs/upload?path=/x.txt&${query}`, requestedWith({ method: "PUT" }));
+    const { app } = await buildHarness();
+    expect((await put(app, "part=../../etc&offset=0")).status).toBe(400);
+    expect((await put(app, "part=0123456789abcdef&offset=-1")).status).toBe(400);
+    const bob = await buildHarness(SEED, "bob");
+    expect((await put(bob.app, "part=0123456789abcdef&offset=0")).status).toBe(403);
+  });
 });
 
 describe("POST /fs/mkdir", () => {
