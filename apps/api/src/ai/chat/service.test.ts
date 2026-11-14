@@ -282,7 +282,7 @@ describe("chat service", () => {
     ]);
   });
 
-  it("refuses references that do not exist, are in Trash or exceed the limit", async () => {
+  it("refuses references that do not exist, are in fdrive's own folders or exceed the limit", async () => {
     const chat = await s.service.create(s.principal, {});
     await expect(
       s.service.send(s.principal, chat.id, { text: "x", references: ["/nope.txt"] }),
@@ -304,7 +304,16 @@ describe("chat service", () => {
       trashed.service.send(trashed.principal, t.id, { text: "x", references: ["/.Trash/x"] }),
     ).rejects.toMatchObject({
       kind: "bad_request",
-      message: "Items in Trash cannot be referenced.",
+      message: "Items in Trash or fdrive's own folders cannot be referenced.",
+    });
+    await expect(
+      trashed.service.send(trashed.principal, t.id, {
+        text: "x",
+        references: ["/.fdrive-desktop/staging/x"],
+      }),
+    ).rejects.toMatchObject({
+      kind: "bad_request",
+      message: "Items in Trash or fdrive's own folders cannot be referenced.",
     });
     expect((await s.service.get(s.principal, chat.id)).messages).toEqual([]);
   });

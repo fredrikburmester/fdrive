@@ -97,6 +97,7 @@ export type {
   FulltextOptions,
   ImageEmbeddingStats,
   ImageSearchHit,
+  IndexExclusion,
   IndexedContent,
   IndexedFile,
   IndexQueries,
@@ -105,8 +106,8 @@ export type {
   MoveRecord,
   RecencyDecay,
   ScopeClause,
+  ScopedReadOptions,
   ScopePrefix,
-  SearchQueryOptions,
   SimilarFile,
 } from "./repos/index-queries.js";
 export {

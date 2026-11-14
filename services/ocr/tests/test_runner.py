@@ -58,6 +58,26 @@ def test_iter_candidate_pdfs_skips_configured_dirs(tmp_path: Path) -> None:
     assert found[0].endswith("visible.pdf")
 
 
+@pytest.mark.parametrize(
+    "folder",
+    [
+        "alice/.trash",
+        "alice/Bin/.fdrive-move-v1/file/p/a.pdf/v",
+        "alice/old-trash/.fdrive-move-v1",
+        "alice/.fdrive-desktop/trash",
+        "alice/.fdrive-desktop/staging",
+    ],
+)
+def test_iter_candidate_pdfs_never_reaches_fdrives_own_folders(tmp_path: Path, folder: str) -> None:
+    hidden = tmp_path / folder
+    hidden.mkdir(parents=True)
+    (hidden / "scan.pdf").write_text("x")
+    (tmp_path / "alice" / "scan.pdf").write_text("x")
+
+    found = [os.path.relpath(p, tmp_path) for p in runner.iter_candidate_pdfs(str(tmp_path))]
+    assert found == [os.path.join("alice", "scan.pdf")]
+
+
 # -- originals_dest --------------------------------------------------------------
 
 

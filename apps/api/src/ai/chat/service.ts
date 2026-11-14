@@ -15,7 +15,7 @@ import {
   MAX_CHAT_REFERENCES,
   MAX_CHATS,
 } from "@fdrive/contracts";
-import { isStorageError, isUnderPath, normalizePath } from "@fdrive/core";
+import { isReservedPath, isStorageError, normalizePath } from "@fdrive/core";
 import type { AiChat, AiChatMessage, AiChatRepo } from "@fdrive/db";
 import type { Principal } from "../../auth/principal.js";
 import { ApiHttpError } from "../../errors.js";
@@ -224,9 +224,7 @@ export function createChatService(deps: ChatServiceDeps): ChatService {
     }
     const located = await createPathLocator(principal.storage).locate(path);
     if (located.occupancy !== "dir") return null;
-    const trashPath = trashPathOf(principal);
-    if (trashPath !== null && (located.path === trashPath || isUnderPath(trashPath, located.path)))
-      return null;
+    if (isReservedPath(located.path, trashPathOf(principal))) return null;
     return located.path;
   }
 
@@ -478,8 +476,11 @@ export function createChatService(deps: ChatServiceDeps): ChatService {
         } catch {
           throw new ApiHttpError("bad_request", `"${raw}" is not a valid path.`);
         }
-        if (trashPath !== null && (path === trashPath || isUnderPath(trashPath, path)))
-          throw new ApiHttpError("bad_request", "Items in Trash cannot be referenced.");
+        if (isReservedPath(path, trashPath))
+          throw new ApiHttpError(
+            "bad_request",
+            "Items in Trash or fdrive's own folders cannot be referenced.",
+          );
         if (!known.has(path) && !added.includes(path)) added.push(path);
       }
       if (existing.length + added.length > limits.maxReferences)

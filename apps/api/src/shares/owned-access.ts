@@ -1,7 +1,12 @@
-import { joinPath, normalizePath, parseRangeHeader, type StorageProvider } from "@fdrive/core";
+import {
+  isBackupPath,
+  joinPath,
+  normalizePath,
+  parseRangeHeader,
+  reservedFolders,
+  type StorageProvider,
+} from "@fdrive/core";
 import { closedToShares, SHARED_WITH_ME } from "@fdrive/local";
-import { isBackupPath } from "../backups/reserved-storage.ts";
-import { DESKTOP_INTERNAL_ROOT } from "../desktop/internal-root.ts";
 import { ApiHttpError } from "../errors.ts";
 import {
   formatShareRange,
@@ -20,18 +25,15 @@ export function isUnder(path: string, root: string): boolean {
 }
 
 /**
- * The folders no link may reach besides backup folders, all canonical: the
- * owner's Trash while it is on (`trashPath`), the Mac's own bookkeeping,
- * which holds its Trash, and the folder that holds what other users share
- * with the owner, which is theirs to share. The last only exists while
- * something is shared, but a link never needs it, so it is kept out always.
+ * The folders no link may reach besides backup folders, all canonical:
+ * fdrive's own (`reservedFolders`: the owner's Trash while it is on and the
+ * Mac's own bookkeeping, which holds its Trash), and, unlike a share between
+ * users, the folder that holds what other users share with the owner, which
+ * is theirs to share. The last only exists while something is shared, but a
+ * link never needs it, so it is kept out always.
  */
 export function restrictedRoots(trashPath: string | null): string[] {
-  return [
-    ...(trashPath === null ? [] : [normalizePath(trashPath)]),
-    DESKTOP_INTERNAL_ROOT,
-    `/${SHARED_WITH_ME}`,
-  ];
+  return [...reservedFolders(trashPath), `/${SHARED_WITH_ME}`];
 }
 
 /**

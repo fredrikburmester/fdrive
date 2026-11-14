@@ -1,5 +1,5 @@
 import { withBackupWriter } from "@fdrive/backup";
-import type { ProviderModule, StorageProvider } from "@fdrive/core";
+import { type ProviderModule, reservedFolders, type StorageProvider } from "@fdrive/core";
 import {
   createActivityExportsRepo,
   createActivityObservationsRepo,
@@ -58,7 +58,6 @@ import { type Subsystem, type SubsystemProbe, startupSummaryLines } from "./conf
 import { createDesktopChanges } from "./desktop/changes.js";
 import { createDesktopEffectContext, createDesktopEffectsWorker } from "./desktop/effects.js";
 import { createIndexedContentLookup } from "./desktop/indexed-content.js";
-import { DESKTOP_INTERNAL_ROOT } from "./desktop/internal-root.js";
 import { withDesktopMetadata } from "./desktop/metadata.js";
 import { createDesktopRetention, DEFAULT_DESKTOP_RETENTION } from "./desktop/retention.js";
 import { registerDesktopRoutes } from "./desktop/routes.js";
@@ -217,13 +216,14 @@ export async function composeApp(
         });
   await filesFolder?.verify();
   /**
-   * Folders in each user's files no share reaches: their Trash while it is on
-   * and the Mac's bookkeeping, which holds its Trash. Read per request, like
-   * the rest of Trash; `trashSettings` exists by the time it is asked.
+   * Folders in each user's files no share reaches (`reservedFolders`): their
+   * Trash while it is on and the Mac's bookkeeping, which holds its Trash.
+   * Read per request, like the rest of Trash; `trashSettings` exists by the
+   * time it is asked.
    */
   const closedFolders = async (providerId: string): Promise<readonly string[]> => {
     const settings = await trashSettings.configuration(providerId);
-    return [...(settings.enabled ? [settings.path] : []), DESKTOP_INTERNAL_ROOT];
+    return reservedFolders(settings.enabled ? settings.path : null);
   };
   const modules =
     deps.modules ??

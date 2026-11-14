@@ -20,8 +20,10 @@ See [architecture](ARCHITECTURE.md) for the service boundaries.
 
 Once per configured hour (and on demand via `POST /run`), the service walks
 every configured root for `*.pdf` files (skipping AppleDouble sidecars like
-`._report.pdf` and the same directories the indexer skips: `@eaDir`,
-`.Trash`, `.Trashes`, `node_modules`, `.git`) and runs `ocrmypdf` on each one
+`._report.pdf`, the directories the indexer skips: `.fdrive-backups`,
+`.fdrive-desktop`, `@eaDir`, `.Trash`, `.Trashes`, `node_modules`, `.git`, and every
+Trash: fdrive's Trash layout `.fdrive-move-v1` wherever its Trash folder is or was, and
+`.trash`, its default and where SFTPGo's recycle bin left files) and runs `ocrmypdf` on each one
 that is not already recorded as done for its current size and mtime.
 
 `ocrmypdf` is **never** called with `--skip-text` or `--force-ocr`. That is

@@ -36,7 +36,23 @@ from .originals import Mapping, mapping_document
 from .rules import is_candidate_pdf, is_excluded, is_too_big
 from .settings import Settings
 
-SKIP_DIRS = frozenset({".fdrive-backups", "@eaDir", ".Trash", ".Trashes", "node_modules", ".git"})
+# The indexer's, plus every Trash: fdrive's own layout wherever its Trash folder is or was
+# (`.fdrive-move-v1`), `.trash` (its default, and where SFTPGo's recycle bin left files) and the
+# Mac app's folder, which holds staged uploads, replaced versions and its Trash. A PDF in any of
+# them is not the user's live file, so it is never rewritten.
+SKIP_DIRS = frozenset(
+    {
+        ".fdrive-backups",
+        ".fdrive-desktop",
+        ".fdrive-move-v1",
+        ".trash",
+        "@eaDir",
+        ".Trash",
+        ".Trashes",
+        "node_modules",
+        ".git",
+    }
+)
 PROCESS_GROUP_KILL_WAIT_SECONDS = 5
 
 
