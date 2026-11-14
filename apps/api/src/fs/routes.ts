@@ -28,6 +28,7 @@ import {
   extensionOf,
   type FileEntry,
   isInlinePreviewable,
+  isReservedPath,
   isStorageError,
   isUnderPath,
   mimeFromExtension,
@@ -51,14 +52,13 @@ import { deleteWithActivityReceipt } from "../activity/trash.js";
 import type { AppHono, AppVariables, AuthedHono } from "../app.js";
 import type { Principal, PrincipalVariables } from "../auth/principal.js";
 import { DEFAULT_JSON_MAX_BYTES } from "../config.js";
-import { DESKTOP_INTERNAL_ROOT } from "../desktop/internal-root.js";
 import { ApiHttpError } from "../errors.js";
 import type { EventBus } from "../events/bus.js";
 import type { JobRunner } from "../jobs/runner.js";
 import type { MetadataService } from "../metadata/service.js";
 import { registerArchiveRoutes } from "./archive-routes.js";
 import { type FolderSizeRoutesDeps, registerFolderSizeRoutes } from "./folder-size.js";
-import { relocatePath, requireUnoccupiedTarget } from "./mutations.js";
+import { relocatePath } from "./mutations.js";
 
 const API_PREFIX = "/api/v1";
 
@@ -196,27 +196,6 @@ export async function runStorageCall<T>(fn: () => Promise<T>): Promise<T> {
     }
     throw error;
   }
-}
-
-/**
- * Ensures nothing already exists at `target` before move, copy, or rename
- * ask the storage provider to relocate something there. The storage port
- * lets move and copy replace an occupied target unless told not to (the
- * local folder's copy does), and a route that let that happen would
- * silently destroy whatever used to be at `target`, so it checks first with
- * `statFile` instead, mirroring the same check `@fdrive/core`'s trash
- * restore relies on (see
- * `packages/core/src/trash/recycle-folder-trash.ts`).
- *
- * `statFile` succeeding means a file is already there: conflict. A
- * directory is reported as `StorageError("bad_request")` by every
- * `StorageProvider` implementation: also a conflict. `"not_found"` means
- * the target is free. Any other storage error is mapped through
- * `toApiHttpError` like every other storage call; anything that is not a
- * `StorageError` propagates unchanged.
- */
-export async function requireTargetFree(storage: StorageProvider, target: string): Promise<void> {
-  await runStorageCall(() => requireUnoccupiedTarget(storage, target));
 }
 
 export function serializeEntry(entry: FileEntry): FsEntry {
@@ -643,13 +622,10 @@ export function registerFsRoutes(
     // Comparison runs beside the response: it probes the provider, and a
     // listing is not worth slowing down to notice an outside change sooner.
     void deps.activityObservations?.refresh(principal, path, entries);
-    const trashPath = deps.trashPathForStorage?.(principal.storage);
-    // The provider-bound trash folder and the Mac app's bookkeeping namespace are fdrive's own;
-    // neither is a user folder, so the tree does not show them.
-    const visible = entries.filter((entry) => {
-      const entryPath = normalizeOrThrow(entry.path);
-      return entryPath !== trashPath && entryPath !== DESKTOP_INTERNAL_ROOT;
-    });
+    const trashPath = deps.trashPathForStorage?.(principal.storage) ?? null;
+    // fdrive's own folders (the Trash, the Mac app's folder) are not the
+    // user's, so the tree does not show them.
+    const visible = entries.filter((entry) => !isReservedPath(entry.path, trashPath));
     const serialized = visible.map(serializeEntry);
     const decorated =
       deps.metadata !== undefined
@@ -715,12 +691,16 @@ export function registerFsRoutes(
     const query = parseQuery(UploadQuery, c.req.query());
     const path = normalizeOrThrow(query.path);
 
+    // The browser asks before an upload replaces a file (its conflict
+    // dialog) and saves over the file it opened; only a new file must not
+    // take a name that is already there.
     const uploadOpts: {
       mkdirParents?: boolean;
       modifiedAt?: Date;
       contentLength?: number;
+      overwrite: boolean;
       signal?: AbortSignal;
-    } = { signal: c.req.raw.signal };
+    } = { overwrite: query.intent !== "create", signal: c.req.raw.signal };
     if (query.mkdirParents !== undefined) {
       uploadOpts.mkdirParents = query.mkdirParents === "true";
     }

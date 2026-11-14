@@ -87,6 +87,7 @@ fn search(names: &NameIndex, query: &str, scopes: Vec<Place>, exclude: Vec<Place
             query: query.to_owned(),
             scopes,
             exclude,
+            exclude_names: vec![],
             files: 20,
             folders: 20,
         })
@@ -139,6 +140,7 @@ fn finds_names_typed_with_typos() {
                 query: "mikrolärande".to_owned(),
                 scopes: vec![place(root_id, ""); MAX_PLACES + 1],
                 exclude: vec![],
+                exclude_names: vec![],
                 files: 1,
                 folders: 1,
             })
@@ -212,6 +214,52 @@ fn searches_only_inside_the_scopes_and_outside_the_exclusions() {
 }
 
 #[test]
+fn leaves_out_folders_named_like_fdrives_own_wherever_they_lie() {
+    let url = common::database();
+    let root_id = root(&url);
+    folders(
+        &url,
+        root_id,
+        &[
+            ("alice/Budget", 1),
+            ("alice/.fdrive-move-v1/Budget", 1),
+            ("alice/Old/.FDRIVE-BACKUPS/Budget", 1),
+            ("alice/.fdrive-backups", 1),
+        ],
+    );
+    file(&url, root_id, "alice/.fdrive-move-v1/a/Budget.xlsx", 1);
+    let names = start(&url, &[root_id]);
+    let hits = names
+        .search(&NameSearch {
+            query: "budget".to_owned(),
+            scopes: vec![place(root_id, "alice")],
+            exclude: vec![],
+            exclude_names: vec![".fdrive-move-v1".to_owned(), ".fdrive-backups".to_owned()],
+            files: 10,
+            folders: 10,
+        })
+        .unwrap()
+        .unwrap();
+    assert!(hits.files.is_empty());
+    assert_eq!(
+        hits.folders.into_iter().map(|h| h.path).collect::<Vec<_>>(),
+        ["alice/Budget"]
+    );
+    // Without the names, all of them are found.
+    let (files, mut found) = search(&names, "budget", vec![place(root_id, "alice")], vec![]);
+    found.sort();
+    assert_eq!(files, ["alice/.fdrive-move-v1/a/Budget.xlsx"]);
+    assert_eq!(
+        found,
+        [
+            "alice/.fdrive-move-v1/Budget",
+            "alice/Budget",
+            "alice/Old/.FDRIVE-BACKUPS/Budget"
+        ]
+    );
+}
+
+#[test]
 fn answers_with_nothing_for_an_empty_query_or_no_room() {
     let url = common::database();
     let root_id = root(&url);
@@ -224,6 +272,7 @@ fn answers_with_nothing_for_an_empty_query_or_no_room() {
             query: "budget".to_owned(),
             scopes: vec![place(root_id, "")],
             exclude: vec![],
+            exclude_names: vec![],
             files: 1,
             folders: 0,
         })
@@ -250,6 +299,7 @@ fn follows_the_rows_it_is_told_about() {
             query: "ofert".to_owned(),
             scopes: vec![place(root_id, "")],
             exclude: vec![],
+            exclude_names: vec![],
             files: 5,
             folders: 5,
         })
@@ -306,6 +356,7 @@ fn rebuilds_a_root_when_more_changes_wait_than_it_reads_one_by_one() {
             query: "mapp 2000".to_owned(),
             scopes: vec![place(root_id, "")],
             exclude: vec![],
+            exclude_names: vec![],
             files: 0,
             folders: 5,
         })
@@ -334,6 +385,7 @@ fn waits_for_the_database_before_answering() {
                 query: "anything".to_owned(),
                 scopes: vec![place(1, "")],
                 exclude: vec![],
+                exclude_names: vec![],
                 files: 5,
                 folders: 5,
             })

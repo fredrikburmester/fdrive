@@ -1,4 +1,4 @@
-import type { ScopePrefix } from "@fdrive/db";
+import type { IndexExclusion, ScopePrefix } from "@fdrive/db";
 import { toIndexRelativePath } from "./scopes.js";
 
 /** One file or folder row whose name answered a search, as the name index returns it. */
@@ -20,8 +20,8 @@ export interface NameIndexSearch {
   readonly query: string;
   /** Where to look, already verified; the same prefixes the index queries get. */
   readonly scopes: readonly ScopePrefix[];
-  /** What to leave out before the limits: the Trash. */
-  readonly exclude: readonly ScopePrefix[];
+  /** What to leave out before the limits: fdrive's own folders (`reservedExclusion`). */
+  readonly exclude: IndexExclusion;
   /** How many files and how many folders to return at most. */
   readonly files: number;
   readonly folders: number;
@@ -88,7 +88,8 @@ export function createNameIndexClient(deps: CreateNameIndexClientDeps): NameInde
           body: JSON.stringify({
             query: input.query,
             scopes: input.scopes.map(place),
-            exclude: input.exclude.map(place),
+            exclude: input.exclude.prefixes.map(place),
+            exclude_names: input.exclude.names,
             files: input.files,
             folders: input.folders,
           }),

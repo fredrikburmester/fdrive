@@ -97,6 +97,10 @@ pub struct NameSearch {
     pub scopes: Vec<Place>,
     #[serde(default)]
     pub exclude: Vec<Place>,
+    /// Folder names left out wherever they lie, in any case: fdrive's own, like its Trash
+    /// layout and backup folders (`RESERVED_FOLDER_NAMES` in packages/core).
+    #[serde(default)]
+    pub exclude_names: Vec<String>,
     #[serde(default)]
     pub files: usize,
     #[serde(default)]
@@ -106,7 +110,8 @@ pub struct NameSearch {
 impl NameSearch {
     /// Why the search asks for more than one search may, if it does.
     pub fn too_much(&self) -> Option<&'static str> {
-        (self.scopes.len() > MAX_PLACES || self.exclude.len() > MAX_PLACES).then_some("too many places")
+        (self.scopes.len() > MAX_PLACES || self.exclude.len() > MAX_PLACES || self.exclude_names.len() > MAX_PLACES)
+            .then_some("too many places")
     }
 }
 
@@ -141,6 +146,8 @@ struct Fields {
     key: Field,
     /// `<root id>:` and `<root id>:<folder>` for every folder above the row, for places.
     dirs: Field,
+    /// Every part of the row's path, lowercased, for leaving out folders by name.
+    segments: Field,
     /// The name, words lowercased.
     name: Field,
     mtime: Field,
@@ -160,6 +167,7 @@ fn schema() -> (Schema, Fields) {
         path: builder.add_text_field("path", STORED),
         key: builder.add_text_field("key", STRING),
         dirs: builder.add_text_field("dirs", STRING),
+        segments: builder.add_text_field("segments", STRING),
         name: builder.add_text_field("name", words),
         mtime: builder.add_i64_field("mtime", FAST | STORED),
     };
@@ -366,6 +374,13 @@ impl NameIndex {
         );
         base.push((Occur::Must, filter(Box::new(places))));
         base.extend(query.exclude.iter().map(|p| (Occur::MustNot, self.place_query(p))));
+        base.extend(query.exclude_names.iter().map(|name| {
+            let term = Term::from_field_text(self.fields.segments, &name.to_lowercase());
+            (
+                Occur::MustNot,
+                Box::new(TermQuery::new(term, IndexRecordOption::Basic)) as Box<dyn Query>,
+            )
+        }));
         let searcher = self.reader.searcher();
         let now = now_ns();
         Ok(Some(NameHits {
@@ -483,6 +498,9 @@ impl NameIndex {
         doc.add_text(f.key, key(root_id, &row.path));
         for term in dir_terms(root_id, &row.path) {
             doc.add_text(f.dirs, term);
+        }
+        for segment in row.path.split('/').filter(|s| !s.is_empty()) {
+            doc.add_text(f.segments, segment.to_lowercase());
         }
         doc.add_text(f.name, nfc(basename(&row.path)));
         doc.add_i64(f.mtime, row.mtime_ns);
@@ -703,6 +721,7 @@ mod tests {
             query: "a".to_owned(),
             scopes: vec![place.clone(); MAX_PLACES],
             exclude: vec![place.clone(); MAX_PLACES],
+            exclude_names: vec![String::new(); MAX_PLACES],
             files: 1,
             folders: 1,
         };
@@ -711,6 +730,9 @@ mod tests {
         assert_eq!(search.too_much(), Some("too many places"));
         search.exclude.pop();
         search.scopes.push(place);
+        assert_eq!(search.too_much(), Some("too many places"));
+        search.scopes.pop();
+        search.exclude_names.push(String::new());
         assert_eq!(search.too_much(), Some("too many places"));
     }
 

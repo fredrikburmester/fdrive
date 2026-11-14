@@ -13,7 +13,7 @@ const folder: FsEntry = {
   mime: null,
   modifiedAt: "2026-01-01T00:00:00.000Z",
 };
-const trash = { available: true, retentionHours: null };
+const trash = { available: true };
 
 afterEach(cleanup);
 

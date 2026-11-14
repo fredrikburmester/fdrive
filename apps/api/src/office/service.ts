@@ -18,7 +18,8 @@ import { browserActor, callbackFile, requireOfficeEdit } from "./auth.ts";
 import { officeErrorResponse, WopiError } from "./errors.ts";
 import { selectDiscoveryAction } from "./protocol/discovery.ts";
 import { verifyProof } from "./protocol/proof.ts";
-import { boundedStream, contentVersion } from "./streams.ts";
+import { documentVersion } from "./protocol/version.ts";
+import { boundedStream } from "./streams.ts";
 import { blankDocument } from "./templates.ts";
 import type {
   BrowserOfficeInput,
@@ -112,14 +113,9 @@ export function mintedFields(
     },
   };
 }
-async function checkFileInfo(
-  _deps: OfficeDeps,
-  config: OfficeConfig,
-  opened: OpenedFile,
-  signal: AbortSignal,
-): Promise<Response> {
+async function checkFileInfo(config: OfficeConfig, opened: OpenedFile): Promise<Response> {
   const { actor, file, path, mode } = opened;
-  const content = await contentVersion(actor.storage, path, config.maxBytes, signal);
+  const content = await documentVersion(actor.storage, path);
   const edit = mode === "edit";
   const folder = actor.session.activeIdentityId === actor.identity.id ? parentPath(path) : "/";
   const close = `${config.appUrl.replace(/\/$/, "")}/files${folder === "/" ? "" : folder.split("/").map(encodeURIComponent).join("/")}`;
@@ -131,8 +127,8 @@ async function checkFileInfo(
     Size: content.size,
     Version: content.version,
     // ONLYOFFICE prefers this optional timestamp over Version for its view cache key.
-    // Omit it there so same-mtime external writes invalidate through the content hash.
-    ...(config.product === "collabora" && content.modifiedAt !== null
+    // Omit it there so same-mtime external writes invalidate through Version.
+    ...(config.product === "collabora"
       ? { LastModifiedTime: content.modifiedAt.toISOString() }
       : {}),
     UserCanWrite: edit,
@@ -232,7 +228,9 @@ export function createOfficeService(deps: OfficeDeps) {
       const doc = await discovery.get();
       const action = selectDiscoveryAction(doc, extensionOf(baseName(request.path)), request.mode);
       if (action === undefined) throw new WopiError(400);
-      await contentVersion(actor.storage, request.path, config.maxBytes, officeSignal(config));
+      // The document must be there, readable and within what Office accepts.
+      const { size } = await documentVersion(actor.storage, request.path);
+      if (size > config.maxBytes) throw new WopiError(413);
       const file = await deps.files.ensure(officeLocation(actor, request.path));
       const actionUrl = officeActionUrl(action.url, config, file.id, request.ui);
       const fields = mintedFields(
@@ -265,11 +263,11 @@ export function createOfficeService(deps: OfficeDeps) {
       const location = officeLocation(actor, path);
       await requireOfficeEdit(deps, actor, path);
       const bytes = await blankDocument(extensionOf(request.name).slice(1));
-      await deps.withWriteScope(actor.identity.providerId, (scope) =>
+      await deps.withWriteScope((scope) =>
         scope.locks.withFileLock(mutationKey(location), async () => {
           await requireOfficeEdit(deps, actor, path);
-          if (await fileExists(actor, path)) throw new WopiError(409, { "X-WOPI-Lock": "" });
-          const file = await scope.files.ensure(location);
+          // On its own transaction, so the registry's lock is not held while the document is written.
+          const file = await deps.files.ensure(location);
           await recordOfficeAction(
             deps,
             actor,
@@ -278,15 +276,14 @@ export function createOfficeService(deps: OfficeDeps) {
             path,
             file.id,
             () =>
-              // The lock serializes fdrive's own writers; `overwrite: false`
-              // refuses a name a writer outside fdrive took since the check,
-              // as a `conflict` the route reports like the check's 409.
+              // Published only while the name is free: a taken name is a
+              // `conflict` (409), never replaced.
               actor.storage.upload(path, bytes, {
                 contentLength: bytes.byteLength,
                 overwrite: false,
                 signal: officeSignal(config),
               }),
-            { size: bytes.byteLength },
+            () => ({ size: bytes.byteLength }),
           );
         }),
       );
@@ -326,7 +323,7 @@ export function createOfficeService(deps: OfficeDeps) {
         if (request.method === "GET")
           return await (contents
             ? getContents(config, opened, request, signal)
-            : checkFileInfo(deps, config, opened, signal));
+            : checkFileInfo(config, opened));
         if (request.method !== "POST") throw new WopiError(501);
         return await dispatchOfficeWrite(deps, config, opened, request, contents, signal);
       } catch (error) {

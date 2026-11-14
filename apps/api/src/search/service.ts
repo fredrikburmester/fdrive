@@ -34,7 +34,7 @@ import type {
 import { roundTripVirtualPath } from "../scoping/round-trip.ts";
 import type { EmbedClient } from "./embeddings.js";
 import type { NameIndexClient, NameIndexHit, NameIndexHits } from "./name-index.js";
-import { dateFromMtimeNs, trashExclusion } from "./scopes.js";
+import { dateFromMtimeNs, reservedExclusion } from "./scopes.js";
 
 /** How many rows each of the three underlying signals fans out to, matching filesai's `LIMIT 60`. */
 const CONTENT_FANOUT_LIMIT = 60;
@@ -66,10 +66,11 @@ export interface SearchServiceDeps {
   readonly thumbsEnabled: boolean;
   /**
    * The login's Trash folder virtual path, when Trash is on. Every query
-   * leaves out the folder and everything under it before its limit, so
-   * trashed files never appear in search hits, folder grouping, or counts,
-   * and never take a place in the fanout. A test/default value; production
-   * passes a request snapshot in `SearchServiceInput`.
+   * leaves out fdrive's own folders (`isReservedPath`: the Trash, its layout
+   * wherever it lies, the Mac app's folder, backups) before its limit, so
+   * they never appear in search hits, folder grouping, or counts, and never
+   * take a place in the fanout. A test/default value; production passes a
+   * request snapshot in `SearchServiceInput`.
    */
   readonly trashPath?: string | null;
   readonly clock: () => Date;
@@ -249,7 +250,7 @@ export function createSearchService(deps: SearchServiceDeps): SearchService {
       if (prefixes.length === 0) {
         return emptyResponse(input.query, tookMs(), { degraded: false, unavailable: true });
       }
-      const exclude = trashExclusion(input.scopes, trashPath, rootIds);
+      const exclude = reservedExclusion(input.scopes, trashPath, rootIds);
 
       const authMemo = new Map<string, Promise<ReadAuthorizeResult>>();
 

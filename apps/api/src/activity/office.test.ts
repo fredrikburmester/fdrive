@@ -42,9 +42,11 @@ it("attributes Office saves to the authorized session, maps paths before recordi
       "/b",
       "office-file-id",
       async () => 7,
-      { size: 1 },
+      (size) => ({ size }),
     ),
   ).toBe(7);
+  // The target's facts are taken from what the write returned.
+  expect(run.mock.calls.at(-1)?.[3]?.(7)).toEqual({ path: "/b", kind: "file", size: 7 });
   expect(run).toHaveBeenCalledWith(
     expect.objectContaining({ accountId, identityId }),
     expect.objectContaining({
@@ -58,6 +60,7 @@ it("attributes Office saves to the authorized session, maps paths before recordi
   );
   await recordOfficeAction(deps, actor, "file.create", "/missing", "/b", undefined, async () => 1);
   expect(run.mock.calls.at(-1)?.[1]).not.toHaveProperty("before");
+  expect(run.mock.calls.at(-1)?.[3]?.(1)).toEqual({ path: "/b", kind: "file" });
   expect(
     await recordOfficeAction(
       { ...deps, activity: undefined } as unknown as OfficeDeps,

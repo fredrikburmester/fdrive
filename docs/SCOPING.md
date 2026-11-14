@@ -72,6 +72,8 @@ and the MCP tools).
 Explicit MCP token grants narrow virtual paths independently of indexing. Provider operations
 check these grants directly; index-backed operations intersect them with indexed scopes,
 retain nested scope shadow boundaries and then perform the usual live read authorization.
-Ancestor browsing exposes only the chains to granted roots. Configured Trash remains excluded
-from ordinary tools; restore admits both original and destination paths. Legacy tokens retain
-the indexed-scope restrictions described in [MCP](MCP.md).
+Ancestor browsing exposes only the chains to granted roots. fdrive's own folders (Trash, the
+Mac app's folder, the Trash layout and backups; `isReservedPath`) remain excluded from ordinary
+tools, and index queries leave them out before their limit; restore admits both original and
+destination paths. Legacy tokens retain the indexed-scope restrictions described in
+[MCP](MCP.md).

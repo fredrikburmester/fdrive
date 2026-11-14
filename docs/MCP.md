@@ -66,9 +66,10 @@ assistant deciding whether the user requested that action.
 
 Direct operations enforce normalized folder grants and current provider permissions. Browsing
 an ancestor of an allowed folder reveals only the directory chain leading to that folder.
-Ordinary operations exclude configured Trash. Moving/deleting a grant root or a folder
-containing Trash is refused. Restore checks both the original and requested destination paths.
-There are no permanent-delete or public-sharing tools.
+Ordinary operations and indexed results exclude fdrive's own folders: the configured Trash,
+the Mac app's `/.fdrive-desktop`, fdrive's Trash layout and backup folders. Moving/deleting a
+grant root or a folder containing Trash is refused. Restore checks both the original and
+requested destination paths. There are no permanent-delete or public-sharing tools.
 
 Index-derived data intersects grants with verified index mappings and live provider read
 proofs. A login whose root is not indexed can still browse/read/organize/manage files; it does
@@ -87,10 +88,10 @@ provider, writes a temporary extraction file, removes it afterward, and never ta
 filesystem path. It also works when no index roots are mounted. Extraction status describes
 unsupported formats, disabled processing and documents without extracted text.
 
-Creation, moves and copies use provider no-overwrite support plus a destination check.
-Editing checks SHA-256 and serializes competing MCP edits within one API process. The current
-provider contract cannot make those checks atomic against other API processes, browser
-writes or external storage clients. Re-read before editing; avoid concurrent external edits.
+Creation, moves and copies leave an occupied destination to storage, which refuses it
+(creation atomically). Editing checks SHA-256 and serializes competing MCP edits within one
+API process; that check is not atomic against other API processes, browser writes or
+external storage clients. Re-read before editing; avoid concurrent external edits.
 Completed storage mutations remain successful if metadata/history updates fail, with warnings
 explaining what was not updated. Do not retry the storage operation merely to repair a warning.
 

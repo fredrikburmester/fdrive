@@ -22,6 +22,9 @@ import {
   verifyDelivery,
 } from "../../src/index.js";
 
+// MinIO stopped publishing images; coollabsio builds the last upstream release from source.
+const MINIO_IMAGE =
+  "ghcr.io/coollabsio/minio:RELEASE.2025-10-15T17-29-55Z@sha256:69b55a1c1c5dc285ce04db96689f5b2102317fc77a50680a1874ca6efd1c87f9";
 let container: Awaited<ReturnType<GenericContainer["start"]>>;
 let directory: string;
 let admin: S3Client;
@@ -29,7 +32,7 @@ let destination: ReturnType<typeof s3Destination>;
 const bucket = "fdrive-backup-protocol-test";
 const prefix = `private/${randomUUID()}`;
 beforeAll(async () => {
-  container = await new GenericContainer("quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z")
+  container = await new GenericContainer(MINIO_IMAGE)
     .withEnvironment({
       MINIO_ROOT_USER: "test-backup-user",
       MINIO_ROOT_PASSWORD: "test-backup-password",

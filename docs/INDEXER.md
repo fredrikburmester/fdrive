@@ -30,8 +30,12 @@ Every regular file under a configured root, except:
 - Names in `SKIP_NAMES` (`.DS_Store`, `Thumbs.db`, `desktop.ini`, `.localized`),
   AppleDouble sidecars (`._*`) and uploads local storage is still writing
   (`.fdrive-partial-<16 hex>`, renamed to the real name once complete).
-- Directories in `SKIP_DIRS` (`@eaDir`, `.Trash`, `.Trashes`, `node_modules`,
-  `.git`).
+- Directories in `SKIP_DIRS` (`.fdrive-backups`, `.fdrive-desktop`, `@eaDir`, `.Trash`,
+  `.Trashes`, `node_modules`, `.git`), wherever they lie. `.fdrive-desktop` is the Mac app's
+  folder (staged uploads, the versions its writes replace and its Trash), so none of it is
+  indexed or journaled; the next scan sweeps rows indexed there before. fdrive's own Trash is
+  indexed, so moving an item into and out of it stays a rename that keeps its thumbnails and
+  embeddings; every index read leaves it out instead (see [search](SEARCH-AND-AI.md)).
 
 A walk (a scan, a queued folder, a folder the watcher saw appear) never follows a link below
 its starting folder. On network and FUSE storage such as Unraid's `/mnt/user` every look at a
@@ -368,7 +372,7 @@ a published port in the non-dev compose file.
 | `/thumbnails/rebuild` | POST | `{ root?, path?, force? }` | Starts a background thumbnail-only pass: regenerates both sizes for every live media file in scope, writing only `app.thumbnails` (`idx.files.text_status`, chunks, and embeddings are never touched, unlike `/reindex`). Without `force`, an existing thumbnail for a given sha256 and size is left alone; with `force`, it is deleted and rewritten. `root` omitted targets every configured root; `path` omitted targets the whole root. Returns `202 { started: true, total }` (`total` is `null` until discovery completes in the background; poll `/stats` or `/activity` for the count), or `409` if a rebuild is already running (only one runs at a time, process-wide). |
 | `/image-embeddings/rebuild` | POST | `{ root?, path?, force? }` | Starts a background image-embedding backfill/rebuild pass over live images in scope; see "Image embeddings" above for the `force` semantics. Unconfigured roots are skipped. Returns `202 { started: true, total: null }` before discovery; `/stats` and `/activity` expose the discovered total, or `409` if a rebuild is already running. |
 | `/image-embeddings/clear` | POST | `{}` or empty | Deletes every row of `app.image_embeddings`; see "Clearing derived data" below. |
-| `/names/search` | POST | `{ query, scopes: [{ root_id, prefix }], exclude?, files?, folders? }` | Files and folders whose name answers `query` with typos allowed (see "Name index"), at or below a scope's root-relative `prefix` (`""` for the whole root) and outside every `exclude` place: `{ files, folders }`, each at most the count asked for (up to 200), as `{ id, root_id, path, mtime_ns }` with `mtime_ns` a string. Only the first 8 words of the first 512 characters are matched (the API checks every word again), and more than 64 scopes or 64 exclusions is a `400`. `503` until the index is built, so the API searches without it. |
+| `/names/search` | POST | `{ query, scopes: [{ root_id, prefix }], exclude?, exclude_names?, files?, folders? }` | Files and folders whose name answers `query` with typos allowed (see "Name index"), at or below a scope's root-relative `prefix` (`""` for the whole root), outside every `exclude` place and with no folder in their path named one of `exclude_names` (in any case): `{ files, folders }`, each at most the count asked for (up to 200), as `{ id, root_id, path, mtime_ns }` with `mtime_ns` a string. Only the first 8 words of the first 512 characters are matched (the API checks every word again), and more than 64 scopes, exclusions or excluded names is a `400`. `503` until the index is built, so the API searches without it. |
 
 ## Image embeddings
 

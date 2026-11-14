@@ -1,11 +1,29 @@
-export interface FileVersionInput {
-  readonly mtimeNs: bigint;
-  readonly size: bigint;
-  readonly sha256?: string;
+import { createHash } from "node:crypto";
+import type { ContentStamp, StorageProvider } from "@fdrive/core";
+
+/**
+ * A WOPI file version from a file's stamp. Any write moves the change time and
+ * a publish replaces the inode, so the version changes whenever the bytes can
+ * have, including a same-size replacement that keeps its modification time.
+ */
+export function deriveFileVersion(stamp: ContentStamp): string {
+  return createHash("sha256")
+    .update(`${stamp.size}:${stamp.mtimeNs}:${stamp.ino}:${stamp.ctimeNs}`)
+    .digest("hex")
+    .slice(0, 32);
 }
 
-export function deriveFileVersion({ mtimeNs, size, sha256 }: FileVersionInput): string {
-  if (size < 0n) throw new Error("File size cannot be negative");
-  if (sha256 !== undefined && !/^[a-fA-F0-9]{64}$/.test(sha256)) throw new Error("Invalid SHA-256");
-  return `${mtimeNs}:${size}${sha256 === undefined ? "" : `:${sha256.slice(0, 16).toLowerCase()}`}`;
+/** The document at `path` as CheckFileInfo and PutFile describe it, read without reading its bytes. */
+export async function documentVersion(
+  storage: StorageProvider,
+  path: string,
+): Promise<{ version: string; size: number; modifiedAt: Date }> {
+  if (storage.contentStamp === undefined)
+    throw new Error("Office needs storage that stamps its files");
+  const stamp = await storage.contentStamp(path);
+  return {
+    version: deriveFileVersion(stamp),
+    size: stamp.size,
+    modifiedAt: new Date(Number(stamp.mtimeNs / 1_000_000n)),
+  };
 }

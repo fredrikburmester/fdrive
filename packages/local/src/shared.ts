@@ -389,6 +389,13 @@ export function createUserStorage(options: UserStorageOptions): UserStorage {
       await located.storage.deleteDir(located.rel);
     },
 
+    async deleteEmptyDir(path) {
+      const at = await readable(path);
+      if (at.kind === "shelf") throw forbidden(`a shared folder is changed by its owner: ${path}`);
+      const located = (await writable(path)) as Located;
+      await located.storage.deleteEmptyDir(located.rel);
+    },
+
     async setModifiedAt(path, modifiedAt) {
       const at = await readable(path);
       if (at.kind === "shelf") throw forbidden(`a shared folder is changed by its owner: ${path}`);
@@ -419,7 +426,7 @@ export function createUserStorage(options: UserStorageOptions): UserStorage {
           name,
         });
       }
-      return mapped(paths.join(", "), () => zipItems(items, opts?.signal));
+      return mapped(paths.join(", "), () => zipItems(items, opts));
     },
   };
 

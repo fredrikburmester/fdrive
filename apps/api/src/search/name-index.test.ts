@@ -11,7 +11,10 @@ function jsonResponse(status: number, body: unknown): Response {
 const SEARCH: NameIndexSearch = {
   query: "Microlär",
   scopes: [{ rootId: 1, fsPrefix: "/alice" }],
-  exclude: [{ rootId: 1, fsPrefix: "/alice/.fdrive-trash" }],
+  exclude: {
+    prefixes: [{ rootId: 1, fsPrefix: "/alice/.trash" }],
+    names: [".fdrive-move-v1", ".fdrive-backups"],
+  },
   files: 25,
   folders: 50,
 };
@@ -35,7 +38,8 @@ describe("createNameIndexClient", () => {
         body: JSON.stringify({
           query: "Microlär",
           scopes: [{ root_id: 1, prefix: "alice" }],
-          exclude: [{ root_id: 1, prefix: "alice/.fdrive-trash" }],
+          exclude: [{ root_id: 1, prefix: "alice/.trash" }],
+          exclude_names: [".fdrive-move-v1", ".fdrive-backups"],
           files: 25,
           folders: 50,
         }),
@@ -47,7 +51,11 @@ describe("createNameIndexClient", () => {
     const fetchStub = vi.fn().mockResolvedValue(jsonResponse(200, { files: [], folders: [] }));
     const client = createNameIndexClient({ baseUrl: "http://indexer:8010", fetch: fetchStub });
 
-    await client.search({ ...SEARCH, scopes: [{ rootId: 2, fsPrefix: "/" }], exclude: [] });
+    await client.search({
+      ...SEARCH,
+      scopes: [{ rootId: 2, fsPrefix: "/" }],
+      exclude: { prefixes: [], names: [] },
+    });
 
     const init = fetchStub.mock.calls[0]?.[1] as RequestInit;
     expect(JSON.parse(init.body as string)).toMatchObject({ scopes: [{ root_id: 2, prefix: "" }] });

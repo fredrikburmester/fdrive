@@ -380,6 +380,7 @@ function makeStubStorage(overrides: Partial<StorageProvider>): StorageProvider {
     copy: notImplemented,
     deleteFile: notImplemented,
     deleteDir: notImplemented,
+    deleteEmptyDir: notImplemented,
     setModifiedAt: notImplemented,
     zip: notImplemented,
     ...overrides,
@@ -420,6 +421,23 @@ describe("POST /fs/duplicate", () => {
     });
   });
 
+  it("refuses a copy name taken after it was chosen, keeping that file", async () => {
+    const h = await buildHarness();
+    const list = h.storage.list.bind(h.storage);
+    vi.spyOn(h.storage, "list").mockImplementationOnce(async (path) => {
+      const entries = await list(path);
+      await h.storage.upload("/hello copy.txt", Buffer.from("someone else's"));
+      return entries;
+    });
+
+    const res = await h.app.request("/api/v1/fs/duplicate", jsonPost({ path: "/hello.txt" }));
+
+    expect(res.status).toBe(409);
+    expect(await new Response((await h.storage.download("/hello copy.txt")).body).text()).toBe(
+      "someone else's",
+    );
+  });
+
   it("numbers the second duplicate", async () => {
     const { app } = await buildHarness();
 
@@ -434,10 +452,12 @@ describe("POST /fs/duplicate", () => {
 describe("POST /fs/compress and the resulting job", () => {
   it("records a job that fails on an externally created target and keeps those bytes", async () => {
     const h = await buildHarness();
-    const download = h.storage.download.bind(h.storage);
-    vi.spyOn(h.storage, "download").mockImplementationOnce(async (...args) => {
-      await h.storage.upload("/dir.zip", Buffer.from("external bytes"));
-      return download(...args);
+    const storage = h.storage as Required<StorageProvider>;
+    const zip = storage.zip.bind(storage);
+    // The name is taken after the request was admitted, while the job reads.
+    vi.spyOn(storage, "zip").mockImplementationOnce(async (...args) => {
+      await storage.upload("/dir.zip", Buffer.from("external bytes"));
+      return zip(...args);
     });
     const accepted = await h.app.request(
       "/api/v1/fs/compress",
@@ -1047,8 +1067,11 @@ describe("GET /fs/jobs, GET /fs/jobs/:id, POST /fs/jobs/:id/cancel", () => {
     const { app } = await buildHarness();
     const other = await buildHarness(SEED, "bob");
 
-    await app.request("/api/v1/fs/compress", jsonPost({ paths: ["/dir"], format: "zip" }));
-    await other.app.request(
+    const mine = await app.request(
+      "/api/v1/fs/compress",
+      jsonPost({ paths: ["/dir"], format: "zip" }),
+    );
+    const theirs = await other.app.request(
       "/api/v1/fs/compress",
       jsonPost({ paths: ["/note.txt"], format: "zip" }),
     );
@@ -1056,6 +1079,9 @@ describe("GET /fs/jobs, GET /fs/jobs/:id, POST /fs/jobs/:id/cancel", () => {
     const res = await app.request("/api/v1/fs/jobs");
     const body = (await res.json()) as { jobs: JobStatus[] };
     expect(body.jobs).toHaveLength(1);
+    // Each job writes into its user's folder, which the test then removes.
+    await waitForJobDone(app, ((await mine.json()) as { jobId: string }).jobId);
+    await waitForJobDone(other.app, ((await theirs.json()) as { jobId: string }).jobId);
   });
 
   it("returns not_found for a job that does not exist", async () => {
@@ -1198,5 +1224,6 @@ describe("SSE integration: job events over GET /events", () => {
     expect(sawJobEvent).toBe(true);
     controller.abort();
     await reader.cancel();
+    await waitForJobDone(app, jobId);
   });
 });

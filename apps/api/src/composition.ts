@@ -1,5 +1,5 @@
 import { withBackupWriter } from "@fdrive/backup";
-import type { ProviderModule, StorageProvider } from "@fdrive/core";
+import { type ProviderModule, reservedFolders, type StorageProvider } from "@fdrive/core";
 import {
   createActivityExportsRepo,
   createActivityObservationsRepo,
@@ -58,7 +58,6 @@ import { type Subsystem, type SubsystemProbe, startupSummaryLines } from "./conf
 import { createDesktopChanges } from "./desktop/changes.js";
 import { createDesktopEffectContext, createDesktopEffectsWorker } from "./desktop/effects.js";
 import { createIndexedContentLookup } from "./desktop/indexed-content.js";
-import { DESKTOP_INTERNAL_ROOT } from "./desktop/internal-root.js";
 import { withDesktopMetadata } from "./desktop/metadata.js";
 import { createDesktopRetention, DEFAULT_DESKTOP_RETENTION } from "./desktop/retention.js";
 import { registerDesktopRoutes } from "./desktop/routes.js";
@@ -218,13 +217,14 @@ export async function composeApp(
         });
   await filesFolder?.verify();
   /**
-   * Folders in each user's files no share reaches: their Trash while it is on
-   * and the Mac's bookkeeping, which holds its Trash. Read per request, like
-   * the rest of Trash; `trashSettings` exists by the time it is asked.
+   * Folders in each user's files no share reaches (`reservedFolders`): their
+   * Trash while it is on and the Mac's bookkeeping, which holds its Trash.
+   * Read per request, like the rest of Trash; `trashSettings` exists by the
+   * time it is asked.
    */
   const closedFolders = async (providerId: string): Promise<readonly string[]> => {
     const settings = await trashSettings.configuration(providerId);
-    return [...(settings.enabled ? [settings.path] : []), DESKTOP_INTERNAL_ROOT];
+    return reservedFolders(settings.enabled ? settings.path : null);
   };
   const modules =
     deps.modules ??
@@ -589,6 +589,15 @@ export async function composeApp(
     const provider = await providerService.defaultProvider();
     return provider === null ? null : { id: provider.id, label: provider.label };
   };
+  // Office's document locks on a pool of their own: a save holds its document's
+  // lock, and a connection, while its body arrives, and checks admission and
+  // records history on the main pool meanwhile. Nothing on the main pool waits
+  // for these locks, so a saturated pool lengthens a save but cannot deadlock.
+  const officeLocks = createDb(config.databaseUrl, {
+    max: 10,
+    connectionTimeoutMillis: 30_000,
+    onError: (error) => logger.warn({ err: error }, "idle office lock connection error"),
+  });
   const officeService = createOfficeService({
     canEdit: async (actor, path) => {
       const settings = await officeSettings.configuration();
@@ -611,8 +620,8 @@ export async function composeApp(
     tokens: createOfficeTokenCodec(master),
     repos,
     files: officeFiles,
-    locks: createWopiLockRepo(db),
-    withWriteScope: createOfficeWriteScope(db),
+    locks: createWopiLockRepo(officeLocks.db),
+    withWriteScope: createOfficeWriteScope(officeLocks.db),
     clock,
     location: officeLocation,
     storageFactory: accountStorage,
@@ -1211,6 +1220,7 @@ export async function composeApp(
       }
       await desktopPublishPool.end();
       await activityPathLocks.close();
+      await officeLocks.close();
       await pool.end();
     },
   };

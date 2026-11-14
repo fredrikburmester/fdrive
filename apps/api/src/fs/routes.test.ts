@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -19,7 +19,7 @@ import { loadConfig } from "../config.js";
 import { type BusEvent, createEventBus, type EventBus } from "../events/bus.js";
 import { createJobRunner, type JobRunner } from "../jobs/runner.js";
 import { createMetadataService, type MetadataService } from "../metadata/service.js";
-import { type FsRoutesDeps, registerFsRoutes, requireTargetFree, trashMany } from "./routes.js";
+import { type FsRoutesDeps, registerFsRoutes, trashMany } from "./routes.js";
 
 function buildJobRunner(): JobRunner {
   return createJobRunner({
@@ -81,6 +81,22 @@ const BOB_IDENTITY_ID = "00000000-0000-4000-8000-0000000000b1";
 const ACCOUNT_ID = "00000000-0000-4000-8000-000000000001";
 const CLOCK_ISO = "2024-06-01T00:00:00.000Z";
 
+/** Whether the temporary folder's disk ignores case, as a Mac's does by default. */
+async function ignoresCase(): Promise<boolean> {
+  const dir = await mkdtemp(join(tmpdir(), "fdrive-case-"));
+  try {
+    await writeFile(join(dir, "probe"), "");
+    return await stat(join(dir, "PROBE")).then(
+      () => true,
+      () => false,
+    );
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+}
+
+const IGNORES_CASE = await ignoresCase();
+
 const homes: string[] = [];
 
 afterEach(async () => {
@@ -115,6 +131,7 @@ function forbiddenStorage(): StorageProvider {
     copy: deny,
     deleteFile: deny,
     deleteDir: deny,
+    deleteEmptyDir: deny,
   };
 }
 
@@ -193,6 +210,7 @@ function makeStubStorage(overrides: Partial<StorageProvider>): StorageProvider {
     copy: notImplemented,
     deleteFile: notImplemented,
     deleteDir: notImplemented,
+    deleteEmptyDir: notImplemented,
     setModifiedAt: notImplemented,
     zip: notImplemented,
     ...overrides,
@@ -924,6 +942,27 @@ describe("PUT /fs/upload", () => {
     );
     expect(res.status).toBe(400);
   });
+
+  it("replaces a file the browser chose to replace, but never with a new file", async () => {
+    const { app } = await buildHarness();
+    const put = (query: string, body: string) =>
+      app.request(
+        `/api/v1/fs/upload?path=/hello.txt${query}`,
+        requestedWith({ method: "PUT", body }),
+      );
+    const read = async () => (await app.request("/api/v1/fs/download?path=/hello.txt")).text();
+
+    expect((await put("", "uploaded")).status).toBe(201);
+    expect(await read()).toBe("uploaded");
+    expect((await put("&intent=save", "saved")).status).toBe(201);
+    expect(await read()).toBe("saved");
+    const created = await put("&intent=create", "");
+    expect(created.status).toBe(409);
+    expect(await created.json()).toMatchObject({
+      error: { kind: "conflict", message: "something already exists at /hello.txt" },
+    });
+    expect(await read()).toBe("saved");
+  });
 });
 
 describe("POST /fs/mkdir", () => {
@@ -1309,25 +1348,6 @@ describe("POST /fs/move-many", () => {
   });
 });
 
-describe("requireTargetFree", () => {
-  it("maps a non-conflict StorageError from statFile through toApiHttpError", async () => {
-    const storage = makeStubStorage({
-      statFile: () => Promise.reject(new StorageError("forbidden", "no access")),
-    });
-
-    await expect(requireTargetFree(storage, "/blocked.txt")).rejects.toMatchObject({
-      kind: "forbidden",
-    });
-  });
-
-  it("propagates a non-StorageError from statFile unchanged", async () => {
-    const boom = new Error("boom");
-    const storage = makeStubStorage({ statFile: () => Promise.reject(boom) });
-
-    await expect(requireTargetFree(storage, "/target.txt")).rejects.toBe(boom);
-  });
-});
-
 describe("POST /fs/copy", () => {
   it("copies a file, returns the entry at the target, and publishes a copy event", async () => {
     const { app, events } = await buildHarness();
@@ -1467,6 +1487,52 @@ describe("POST /fs/rename", () => {
     expect(await helloDownload.text()).toBe("hello world");
     const siblingDownload = await app.request("/api/v1/fs/download?path=/sibling.txt");
     expect(await siblingDownload.text()).toBe("sibling content");
+  });
+
+  it("leaves a taken name to storage instead of checking it first", async () => {
+    const storage = await seededStorage({ "/hello.txt": "hello world" });
+    // Finds a file at "/HELLO.txt" as a disk that ignores case would.
+    const statFile = vi.fn(async () => storage.statFile("/hello.txt"));
+    const { app } = await buildHarnessWithStorage({ ...storage, statFile });
+
+    const res = await app.request(
+      "/api/v1/fs/rename",
+      requestedWith({
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ path: "/hello.txt", newName: "HELLO.txt" }),
+      }),
+    );
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ path: "/HELLO.txt" });
+    expect(statFile).not.toHaveBeenCalled();
+  });
+
+  // Only a disk that ignores case (a Mac's, as Docker Desktop shares it) has
+  // "hello.txt" and "HELLO.txt" as one name; on any other they are two.
+  it.skipIf(!IGNORES_CASE)("renames to another case on a disk that ignores case", async () => {
+    const { app } = await buildHarness();
+
+    for (const [path, newName] of [
+      ["/hello.txt", "Hello.txt"],
+      ["/dir", "Dir"],
+    ]) {
+      const res = await app.request(
+        "/api/v1/fs/rename",
+        requestedWith({
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ path, newName }),
+        }),
+      );
+      expect(res.status).toBe(200);
+      expect(await res.json()).toMatchObject({ name: newName });
+    }
+    const listing = await readJson<{ entries: { name: string }[] }>(
+      await app.request("/api/v1/fs/list?path=/"),
+    );
+    expect(listing.entries.map((entry) => entry.name).sort()).toEqual(["Dir", "Hello.txt"]);
   });
 
   it("rejects an invalid new name with bad_request", async () => {

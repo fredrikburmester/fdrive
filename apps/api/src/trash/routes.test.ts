@@ -40,6 +40,8 @@ const ACCOUNT_ID = "00000000-0000-4000-8000-000000000001";
 const CLOCK_ISO = "2024-06-01T00:00:00.000Z";
 const TRASH_PATH = "/.trash";
 const PROVIDER_ID = "123e4567-e89b-42d3-a456-426614174000";
+/** The folder every trashed item lives under. */
+const LAYOUT_ROOT = `${TRASH_PATH}/.fdrive-move-v1`;
 /** A well-formed leaf id of fdrive's Trash layout, for routes that never reach storage. */
 const LEAF_ID = ".fdrive-move-v1/file/p/hello.txt/v/168176641123456789";
 
@@ -229,13 +231,6 @@ describe("GET /trash", () => {
     expect(res.status).toBe(404);
     const body = await readJson<ErrorJson>(res);
     expect(body.error.kind).toBe("not_found");
-  });
-
-  it("returns not_found when the deployment's trash path is unset even though this identity's storage has one (defensive)", async () => {
-    const { app } = await buildHarness({ trashPathOverride: null });
-
-    const res = await app.request(ROUTES.trash.list);
-    expect(res.status).toBe(404);
   });
 
   it("lists a deleted file and a deleted directory, with parsed originalPath, name, and deletedAt", async () => {
@@ -548,13 +543,13 @@ describe("POST /trash/restore", () => {
       copy: () => Promise.reject(new Error("not implemented")),
       deleteFile: () => Promise.reject(new Error("not implemented")),
       deleteDir: () => Promise.reject(new Error("not implemented")),
+      deleteEmptyDir: () => Promise.reject(new Error("not implemented")),
       setModifiedAt: () => Promise.reject(new Error("not implemented")),
       zip: () => Promise.reject(new Error("not implemented")),
       trash: {
         list: () => Promise.reject(new Error("not implemented")),
         restore: () => Promise.reject(boom),
         purge: () => Promise.reject(new Error("not implemented")),
-        empty: () => Promise.reject(new Error("not implemented")),
       },
     };
     const principal: Principal = {
@@ -566,9 +561,11 @@ describe("POST /trash/restore", () => {
     };
     const clock = () => new Date(CLOCK_ISO);
     const deps: TrashRoutesDeps = {
+      activity: activityFixture(clock).service,
       bus: createEventBus(),
       clock,
       settingsForStorage: () => trashSettings(TRASH_PATH),
+      metadata: createMetadataService(createMemoryRepos()),
     };
     const app = createApp({
       config: loadConfig(REQUIRED_ENV),
@@ -607,13 +604,13 @@ describe("POST /trash/restore", () => {
       copy: () => Promise.reject(new Error("not implemented")),
       deleteFile: () => Promise.reject(new Error("not implemented")),
       deleteDir: () => Promise.reject(new Error("not implemented")),
+      deleteEmptyDir: () => Promise.reject(new Error("not implemented")),
       setModifiedAt: () => Promise.reject(new Error("not implemented")),
       zip: () => Promise.reject(new Error("not implemented")),
       trash: {
         list: () => Promise.reject(new Error("not implemented")),
         restore: () => Promise.reject(new StorageError("conflict", "already exists")),
         purge: () => Promise.reject(new Error("not implemented")),
-        empty: () => Promise.reject(new Error("not implemented")),
       },
     };
     const principal: Principal = {
@@ -625,9 +622,11 @@ describe("POST /trash/restore", () => {
     };
     const clock = () => new Date(CLOCK_ISO);
     const deps: TrashRoutesDeps = {
+      activity: activityFixture(clock).service,
       bus: createEventBus(),
       clock,
       settingsForStorage: () => trashSettings(TRASH_PATH),
+      metadata: createMetadataService(createMemoryRepos()),
     };
     const app = createApp({
       config: loadConfig(REQUIRED_ENV),
@@ -652,51 +651,6 @@ describe("POST /trash/restore", () => {
     expect(res.status).toBe(409);
     const body = await readJson<ErrorJson>(res);
     expect(body.error.details).toEqual({ failedId: LEAF_ID });
-  });
-
-  it("succeeds without calling any metadata hook when no metadata service is configured", async () => {
-    const { storage } = await buildHarness();
-    await storage.deleteFile("/hello.txt");
-    const trashList = await storage.trash?.list();
-    const id = trashList?.entries[0]?.id;
-    if (id === undefined) throw new Error("expected a trash entry");
-
-    const principal: Principal = {
-      accountId: ACCOUNT_ID,
-      identityId: ALICE_IDENTITY_ID,
-      username: "alice",
-      storage,
-      isAdmin: false,
-    };
-    const clock = () => new Date(CLOCK_ISO);
-    const deps: TrashRoutesDeps = {
-      bus: createEventBus(),
-      clock,
-      settingsForStorage: () => trashSettings(TRASH_PATH),
-    };
-    const app = createApp({
-      config: loadConfig(REQUIRED_ENV),
-      logger: createTestLogger(),
-      version: "1.0.0",
-      startedAt: new Date(CLOCK_ISO),
-      clock,
-      principalResolver: async () => principal,
-      connectionStatus: READY,
-      registerRoutes: (groups) => registerTrashRoutes(groups, deps),
-    });
-
-    const res = await app.request(
-      ROUTES.trash.restore,
-      requestedWith({
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ ids: [id] }),
-      }),
-    );
-
-    expect(res.status).toBe(200);
-    const body = TrashRestoreResponse.parse(await readJson(res));
-    expect(body.restored[0]?.path).toBe("/hello.txt");
   });
 
   it("returns not_found when the identity's storage has no trash", async () => {
@@ -745,6 +699,29 @@ describe("POST /trash/purge", () => {
     ]);
     const after = TrashListResponse.parse(await readJson(await app.request(ROUTES.trash.list)));
     expect(after.entries).toEqual([]);
+  });
+
+  it("leaves no empty folders in the Trash folder after a restore and a purge", async () => {
+    const { app, storage } = await buildHarness();
+    await storage.deleteFile("/dir/nested.txt");
+    await storage.deleteFile("/hello.txt");
+    const [first, second] = TrashListResponse.parse(
+      await readJson(await app.request(ROUTES.trash.list)),
+    ).entries.map((entry) => entry.id);
+    const post = (route: string, ids: (string | undefined)[]) =>
+      app.request(
+        route,
+        requestedWith({
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ ids }),
+        }),
+      );
+
+    expect((await post(ROUTES.trash.restore, [first])).status).toBe(200);
+    expect((await post(ROUTES.trash.purge, [second])).status).toBe(200);
+
+    expect(await storage.list(LAYOUT_ROOT)).toEqual([]);
   });
 
   it("returns bad_request for an invalid id", async () => {
@@ -968,37 +945,6 @@ describe("personal activity for trash commands", () => {
     expect((await trash.list()).entries).toHaveLength(1);
   });
 
-  it("leaves a truthful unresolved result when Trash cannot make progress", async () => {
-    const h = await buildHarness();
-    const trash = h.storage.trash;
-    if (!trash) throw Error("Expected Trash");
-    vi.spyOn(trash, "list").mockResolvedValue({ entries: [], truncated: true });
-
-    expect(
-      (await h.app.request(ROUTES.trash.empty, requestedWith({ method: "POST" }))).status,
-    ).toBe(409);
-    expect(h.activity.outcomes.at(-1)).toMatchObject({
-      action: "trash.empty",
-      outcome: "conflict",
-    });
-  });
-
-  it("stops instead of re-recording when the provider keeps a purged leaf listed", async () => {
-    const h = await buildHarness();
-    await h.storage.deleteFile("/hello.txt");
-    const trash = h.storage.trash;
-    if (!trash) throw Error("Expected Trash");
-    const listed = await trash.list();
-    vi.spyOn(trash, "purge").mockResolvedValue();
-    vi.spyOn(trash, "list").mockResolvedValue(listed);
-
-    expect(
-      (await h.app.request(ROUTES.trash.empty, requestedWith({ method: "POST" }))).status,
-    ).toBe(409);
-    expect(h.activity.outcomes.map((row) => row.action)).toEqual(["file.delete", "trash.empty"]);
-    expect(h.activity.outcomes.at(-1)).toMatchObject({ outcome: "partial" });
-  });
-
   it("rejects a malformed correlation header before touching Trash", async () => {
     const h = await buildHarness();
     const id = await trashed(h, "/hello.txt");
@@ -1056,100 +1002,36 @@ describe("POST /trash/empty", () => {
     expect(follower.onDeleted.mock.calls.map((call) => call[1]).sort()).toEqual(leaves.sort());
   });
 
-  it("empties leaf by leaf when only metadata is wired, so what followed each leaf ends", async () => {
-    const { storage } = await buildHarness();
-    await storage.deleteDir("/dir");
-    const trash = storage.trash;
-    if (!trash) throw Error("Expected Trash");
-    const [leaf] = (await trash.list()).entries.map((entry) =>
-      normalizePath(`${TRASH_PATH}/${entry.id}`),
-    );
-    const empty = vi.spyOn(trash, "empty");
-    const follower = recordingFollower();
-    const metadata = createMetadataService({ ...createMemoryRepos(), followers: [follower] });
-    const principal: Principal = {
-      accountId: ACCOUNT_ID,
-      identityId: ALICE_IDENTITY_ID,
-      username: "alice",
-      storage,
-      isAdmin: false,
-    };
-    const clock = () => new Date(CLOCK_ISO);
-    const app = createApp({
-      config: loadConfig(REQUIRED_ENV),
-      logger: createTestLogger(),
-      version: "1.0.0",
-      startedAt: new Date(CLOCK_ISO),
-      clock,
-      principalResolver: async () => principal,
-      connectionStatus: READY,
-      registerRoutes: (groups) =>
-        registerTrashRoutes(groups, {
-          bus: createEventBus(),
-          clock,
-          settingsForStorage: () => trashSettings(TRASH_PATH),
-          metadata,
-        }),
-    });
+  it("empties a Trash of more items than one listing page once held", async () => {
+    const { app, storage, activity } = await buildHarness();
+    const names = Array.from({ length: 120 }, (_, i) => `/many/file-${i}.txt`);
+    for (const name of names) {
+      await storage.upload(name, new TextEncoder().encode(name), { mkdirParents: true });
+      await storage.deleteFile(name);
+    }
 
     const res = await app.request(ROUTES.trash.empty, requestedWith({ method: "POST" }));
 
     expect(res.status).toBe(200);
-    expect(empty).not.toHaveBeenCalled();
-    expect((await trash.list()).entries).toEqual([]);
-    expect(follower.onDeleted.mock.calls).toEqual([[ALICE_IDENTITY_ID, leaf, true]]);
+    expect((await storage.trash?.list())?.entries).toEqual([]);
+    expect(activity.outcomes.at(-1)).toMatchObject({
+      action: "trash.empty",
+      outcome: "success",
+      after: { path: TRASH_PATH, completedCount: names.length },
+    });
+    expect(await storage.list(LAYOUT_ROOT)).toEqual([]);
   });
 
-  it("empties Trash with the provider's one bulk call when no activity journal is wired", async () => {
-    const { storage } = await buildHarness();
+  it("clears the empty folders the Trash folder holds from before", async () => {
+    const { app, storage } = await buildHarness();
+    await storage.mkdir(`${LAYOUT_ROOT}/file/p/old/p/gone.txt/v`, { parents: true });
+    await storage.mkdir(`${LAYOUT_ROOT}/dir/p/old/v`, { parents: true });
     await storage.deleteFile("/hello.txt");
-    await storage.deleteDir("/dir");
-    const trash = storage.trash;
-    if (!trash) throw Error("Expected Trash");
-    const empty = vi.spyOn(trash, "empty");
-    const purge = vi.spyOn(trash, "purge");
-    const bus = createEventBus();
-    const events: BusEvent[] = [];
-    bus.subscribe({ identityId: ALICE_IDENTITY_ID }, (event) => events.push(event));
-    const principal: Principal = {
-      accountId: ACCOUNT_ID,
-      identityId: ALICE_IDENTITY_ID,
-      username: "alice",
-      storage,
-      isAdmin: false,
-    };
-    const clock = () => new Date(CLOCK_ISO);
-    const app = createApp({
-      config: loadConfig(REQUIRED_ENV),
-      logger: createTestLogger(),
-      version: "1.0.0",
-      startedAt: new Date(CLOCK_ISO),
-      clock,
-      principalResolver: async () => principal,
-      connectionStatus: READY,
-      registerRoutes: (groups) =>
-        registerTrashRoutes(groups, {
-          bus,
-          clock,
-          settingsForStorage: () => trashSettings(TRASH_PATH),
-        }),
-    });
 
     const res = await app.request(ROUTES.trash.empty, requestedWith({ method: "POST" }));
 
     expect(res.status).toBe(200);
-    expect(empty).toHaveBeenCalledTimes(1);
-    expect(purge).not.toHaveBeenCalled();
-    expect((await trash.list()).entries).toEqual([]);
-    expect(events).toEqual([
-      {
-        type: "fs",
-        op: "delete",
-        identityId: ALICE_IDENTITY_ID,
-        paths: [TRASH_PATH],
-        at: CLOCK_ISO,
-      },
-    ]);
+    expect(await storage.list(LAYOUT_ROOT)).toEqual([]);
   });
 
   it("returns not_found when the identity's storage has no trash", async () => {

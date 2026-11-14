@@ -7,16 +7,17 @@ import type {
 import {
   baseName,
   changeBaseName,
+  isReservedPath,
   isSafeSegment,
   isStorageError,
   isUnderPath,
   normalizePath,
   parentPath,
+  StorageError,
 } from "@fdrive/core";
 import { z } from "zod";
 import type { ActivityCallContext } from "../../activity/fs-context.js";
 import { recordActivity } from "../../activity/fs-context.js";
-import { requireUnoccupiedTarget } from "../../fs/mutations.js";
 import type { FsRoutesDeps } from "../../fs/routes.js";
 import { moveMany, publishFsEvent, trashMany } from "../../fs/routes.js";
 import { decodeText } from "../../mcp/content.js";
@@ -262,20 +263,31 @@ function movedResults(results: readonly MoveManyResult[]): ChatActionResult[] {
   );
 }
 
-async function occupied(storage: DriveToolsDeps["principal"]["storage"], target: string) {
+/**
+ * Whether something other than `path` is at `target`, so a proposal names
+ * only targets that are free. A disk that ignores case finds `path` itself
+ * under a new spelling of its name, which a rename may take.
+ */
+async function occupied(
+  storage: DriveToolsDeps["principal"]["storage"],
+  target: string,
+  path?: string,
+) {
   try {
-    await requireUnoccupiedTarget(storage, target);
-    return false;
+    const found = await storage.stat(target);
+    return (found.path ?? target) !== path;
   } catch (error) {
-    if (isStorageError(error) && error.kind === "conflict") return true;
+    if (isStorageError(error) && error.kind === "not_found") return false;
     throw error;
   }
 }
 
-/** A rename keeps its folder, so the only way into the Trash is taking the Trash folder's own name. */
-function isTrashPath(deps: DriveToolsDeps, target: string): boolean {
-  const trashPath = trashPathOf(deps);
-  return trashPath !== null && (target === trashPath || isUnderPath(trashPath, target));
+/**
+ * A rename keeps its folder, so the only way into one of fdrive's own
+ * folders (`isReservedPath`) is taking such a folder's name.
+ */
+function isReservedName(deps: DriveToolsDeps, target: string): boolean {
+  return isReservedPath(target, trashPathOf(deps));
 }
 
 function depth(path: string): number {
@@ -324,10 +336,11 @@ function renameItemsTool(deps: ChatActionToolsDeps): ActionTool {
             );
           if (alreadyNamed(path, name)) continue;
           const target = changeBaseName(path, name);
-          if (isTrashPath(deps, target))
-            throw new AiToolError(`${path} cannot be named ${name}: that is the Trash.`);
+          if (isReservedName(deps, target))
+            throw new AiToolError(`${path} cannot be named ${name}: that name is fdrive's own.`);
           const stat = await statItem(deps, path);
-          const conflict = targets.has(target) || (await occupied(deps.principal.storage, target));
+          const conflict =
+            targets.has(target) || (await occupied(deps.principal.storage, target, path));
           targets.add(target);
           items.push({ path, kind: stat.kind, name, reason: rename.reason, conflict });
         }
@@ -349,7 +362,7 @@ function renameItemsTool(deps: ChatActionToolsDeps): ActionTool {
           if (!allowed.has(rename.path) || items.some((item) => item.path === rename.path))
             continue;
           const name = cleanName(rename.name);
-          if (name === null || isTrashPath(deps, changeBaseName(rename.path, name)))
+          if (name === null || isReservedName(deps, changeBaseName(rename.path, name)))
             invalid.push({
               path: rename.path,
               ok: false,
@@ -423,16 +436,16 @@ async function checkWriteTarget(
   } catch {
     throw new AiToolError(`"${input.path}" is not a valid path.`);
   }
-  const trashPath = trashPathOf(deps);
-  if (trashPath !== null && (path === trashPath || isUnderPath(trashPath, path)))
-    throw new AiToolError("That path is in the Trash.");
+  if (isReservedPath(path, trashPathOf(deps)))
+    throw new AiToolError("That path is in fdrive's own folders, like the Trash.");
   assertTextName(path);
   if (input.mode === "create") {
     if (!besideReference(deps, path))
       throw new AiToolError(
         `${path} is not next to a ${deps.focus.adjective} item; new files go into a ${deps.focus.adjective} folder or beside a ${deps.focus.adjective} file.`,
       );
-    await requireUnoccupiedTarget(deps.principal.storage, path);
+    if (await occupied(deps.principal.storage, path))
+      throw new StorageError("conflict", `something already exists at ${path}`);
     return { path, sha256: null };
   }
   const stored = await referencedArg(deps, path);

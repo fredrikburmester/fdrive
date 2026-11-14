@@ -83,7 +83,6 @@ export const queryKeys = {
     people: () => ["grants", "people"] as const,
   },
   trash: {
-    status: () => ["trash", "status"] as const,
     list: () => ["trash", "list"] as const,
   },
 } as const;

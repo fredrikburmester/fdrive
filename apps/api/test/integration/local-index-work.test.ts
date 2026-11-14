@@ -137,7 +137,10 @@ describe("changes fdrive makes, through the real indexer with its watcher off", 
   it("indexes an upload, follows its move and drops it once deleted, within seconds", async () => {
     const scans = await count("idx.scans");
     const bytes = new TextEncoder().encode("quarterly invoice from the harbour office");
-    await storage.upload("/notes/invoice.txt", bytes, { mkdirParents: true });
+    // As the browser uploads, published by a rename. A new file published
+    // with a hard link, then moved, stays visible under its old name to a
+    // Docker Desktop container for longer than `seen` waits.
+    await storage.upload("/notes/invoice.txt", bytes, { mkdirParents: true, overwrite: true });
     await queue.flush();
     await expect.poll(notes, { timeout: 15_000, interval: 100 }).toEqual([
       {
@@ -227,7 +230,7 @@ describe("changes fdrive makes, through the real indexer with its watcher off", 
       const hits = await names.search({
         query: "Microlär",
         scopes: [{ rootId: roots.files ?? -1, fsPrefix: "/alice" }],
-        exclude: [],
+        exclude: { prefixes: [], names: [] },
         files: 5,
         folders: 5,
       });

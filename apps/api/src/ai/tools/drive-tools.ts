@@ -2,6 +2,7 @@ import { DEFAULT_ORGANIZE_SHARING, type OrganizeSharing } from "@fdrive/contract
 import {
   baseName,
   type FileEntry,
+  isReservedPath,
   isUnderPath,
   normalizePath,
   parentPath,
@@ -65,12 +66,11 @@ function sharingOf(deps: DriveToolsDeps): OrganizeSharing {
   return deps.share ?? DEFAULT_ORGANIZE_SHARING;
 }
 
+/** Why a folder tool refuses one of fdrive's own folders (`isReservedPath`), which it never opens or shows. */
+const RESERVED_FOLDER = "That folder is fdrive's own, like the Trash.";
+
 function trashPathOf(deps: DriveToolsDeps): string | null {
   return deps.mcp.trashPathForStorage?.(deps.principal.storage) ?? deps.mcp.trashPath ?? null;
-}
-
-function inTrash(trashPath: string | null, path: string): boolean {
-  return trashPath !== null && (path === trashPath || isUnderPath(trashPath, path));
 }
 
 function normalizeArg(path: string): string {
@@ -146,7 +146,7 @@ function folderTreeTool(deps: DriveToolsDeps): AiTool {
       async run(args, signal) {
         const root = await storedArg(deps, args.path);
         const trashPath = trashPathOf(deps);
-        if (inTrash(trashPath, root)) throw new AiToolError("That folder is the Trash.");
+        if (isReservedPath(root, trashPath)) throw new AiToolError(RESERVED_FOLDER);
         const listings = new Map<string, FileEntry[] | string>();
         let frontier = isClosed(focus, root) ? [] : [root];
         let budget = TREE_LISTING_BUDGET;
@@ -171,7 +171,7 @@ function folderTreeTool(deps: DriveToolsDeps): AiTool {
                   .filter(
                     (entry) =>
                       entry.kind === "dir" &&
-                      !inTrash(trashPath, entry.path) &&
+                      !isReservedPath(entry.path, trashPath) &&
                       !isClosed(focus, entry.path),
                   )
                   .map((entry) => entry.path)
@@ -199,7 +199,7 @@ function folderTreeTool(deps: DriveToolsDeps): AiTool {
             return;
           }
           const dirs = entries
-            .filter((entry) => entry.kind === "dir" && !inTrash(trashPath, entry.path))
+            .filter((entry) => entry.kind === "dir" && !isReservedPath(entry.path, trashPath))
             .sort((a, b) => a.name.localeCompare(b.name));
           const files = entries.filter((entry) => entry.kind !== "dir");
           // Without other file names, only files in the focus are named; the count still covers every file.
@@ -247,9 +247,9 @@ function listFolderTool(deps: DriveToolsDeps): AiTool {
       async run(args) {
         const path = await storedArg(deps, args.path);
         const trashPath = trashPathOf(deps);
-        if (inTrash(trashPath, path)) throw new AiToolError("That folder is the Trash.");
+        if (isReservedPath(path, trashPath)) throw new AiToolError(RESERVED_FOLDER);
         const all = (await deps.principal.storage.list(path)).filter(
-          (entry) => !inTrash(trashPath, entry.path),
+          (entry) => !isReservedPath(entry.path, trashPath),
         );
         const withheld = otherFileNames
           ? 0
