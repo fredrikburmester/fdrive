@@ -54,7 +54,8 @@ const EXPECTED_TABLES: ReadonlyArray<{ readonly schema: string; readonly table: 
   { schema: "idx", table: "scans" },
   { schema: "idx", table: "moves" },
   { schema: "idx", table: "events" },
-  { schema: "idx", table: "work" },
+  { schema: "idx", table: "changes" },
+  { schema: "idx", table: "change_cursors" },
   { schema: "idx", table: "folders" },
   { schema: "idx", table: "schema_version" },
 ];
@@ -101,6 +102,8 @@ describe("migrate", () => {
 
   it("indexes the idx read paths on their filter and sort columns", async () => {
     const expected: ReadonlyArray<{ readonly name: string; readonly definition: string }> = [
+      { name: "changes_root_id_id_idx", definition: "USING btree (root_id, id)" },
+      { name: "changes_created_at_idx", definition: "USING btree (created_at)" },
       { name: "moves_root_id_idx", definition: "USING btree (root_id)" },
       { name: "ocr_log_status_at_idx", definition: "USING btree (status, at DESC NULLS LAST)" },
       {

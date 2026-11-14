@@ -2,10 +2,12 @@ import { sql } from "drizzle-orm";
 import {
   bigint,
   bigserial,
+  check,
   customType,
   index,
   integer,
   pgSchema,
+  primaryKey,
   smallint,
   smallserial,
   text,
@@ -161,21 +163,23 @@ export const events = idxSchema.table(
 );
 
 /**
- * Changes fdrive's API made to an indexed root, for the indexer to apply
- * right away instead of waiting for its file watcher or next scan. A row
- * without `target_path` says "look at `path` again" (a file, a folder, or
- * nothing any more); one with it says `path` moved there. `sha256` is an
- * upload's digest, and `size`, `mtime_ns`, `inode` and `ctime_ns` describe
- * the file it was published as, so the indexer need not read it again to
- * hash it while the file still matches all four. A client chooses an
- * upload's modification time but never its inode or change time, so a
- * different file cannot pass for it. `inode` holds the unsigned inode
- * number's 64 bits as a signed bigint. Rows are
- * hints the indexer deletes once applied; a scan covers anything lost.
- * The API sends `NOTIFY idx_work` with the root's name after adding rows.
+ * The change journal: one row per change to an indexed root, append-only,
+ * its `id` the position consumers read from. A row without `target_path`
+ * says "look at `path` again" (a file, a folder, or nothing any more); one
+ * with it says `path` moved there. `source` says who wrote it: the API and
+ * OCR for changes they made, the indexer's watcher and scan for changes made
+ * outside fdrive that it applied. An API upload's row carries `sha256`, and
+ * `size`, `mtime_ns`, `inode` and `ctime_ns` of the file it was published
+ * as, so the indexer need not read it again to hash it while the file still
+ * matches all four. A client chooses an upload's modification time but
+ * never its inode or change time, so a different file cannot pass for it.
+ * `inode` holds the unsigned inode number's 64 bits as a signed bigint.
+ * Writers take the journal's advisory lock before inserting, so positions
+ * commit in order, and send `NOTIFY idx_changes` with the root's name. See
+ * docs/plans/CHANGE-JOURNAL.md.
  */
-export const work = idxSchema.table(
-  "work",
+export const changes = idxSchema.table(
+  "changes",
   {
     id: bigserial("id", { mode: "number" }).primaryKey(),
     rootId: smallint("root_id")
@@ -183,6 +187,7 @@ export const work = idxSchema.table(
       .references(() => roots.id, { onDelete: "cascade" }),
     path: text("path").notNull(),
     targetPath: text("target_path"),
+    source: text("source").notNull(),
     sha256: text("sha256"),
     size: bigint("size", { mode: "number" }),
     mtimeNs: bigint("mtime_ns", { mode: "bigint" }),
@@ -190,11 +195,30 @@ export const work = idxSchema.table(
     ctimeNs: bigint("ctime_ns", { mode: "bigint" }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
-  // The indexer reads a root's rows oldest first; writers prune by age.
+  // Consumers read a root's rows from a position; the API prunes by age.
   (table) => [
-    index("work_root_id_id_idx").on(table.rootId, table.id),
-    index("work_created_at_idx").on(table.createdAt),
+    index("changes_root_id_id_idx").on(table.rootId, table.id),
+    index("changes_created_at_idx").on(table.createdAt),
+    check("changes_source", sql`${table.source} in ('api', 'watcher', 'scan', 'ocr')`),
   ],
+);
+
+/**
+ * How far each consumer of the change journal has read, per root: the
+ * position of the last row it handled. The key leads with `root_id`, which
+ * covers the foreign key.
+ */
+export const changeCursors = idxSchema.table(
+  "change_cursors",
+  {
+    rootId: smallint("root_id")
+      .notNull()
+      .references(() => roots.id, { onDelete: "cascade" }),
+    consumer: text("consumer").notNull(),
+    position: bigint("position", { mode: "number" }).notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [primaryKey({ columns: [table.rootId, table.consumer] })],
 );
 
 export const schemaVersion = idxSchema.table("schema_version", {
