@@ -1,9 +1,16 @@
 import { randomUUID } from "node:crypto";
-import type { DesktopItemRecord, DesktopOperationRecord, DesktopRepo } from "@fdrive/db";
+import type {
+  DesktopItemRecord,
+  DesktopOperationRecord,
+  DesktopRepo,
+  NativeActivityFacts,
+} from "@fdrive/db";
 
 export function memoryRepo() {
   const items = new Map<string, DesktopItemRecord>();
   const operations = new Map<string, DesktopOperationRecord>();
+  /** What each completed receipt recorded for history, by operation ID. */
+  const completed = new Map<string, NativeActivityFacts>();
   const repo: DesktopRepo = {
     async ensure(identityId, path, kind) {
       const item = await repo.at(identityId, path);
@@ -15,7 +22,6 @@ export function memoryRepo() {
         path,
         kind,
         metadataVersion: randomUUID(),
-        contentVersion: null,
         originalPath: null,
         deletedAt: null,
       };
@@ -150,12 +156,18 @@ export function memoryRepo() {
       });
       return true;
     },
-    async captureEffects(_identityId, context) {
-      return { ...context, snapshots: [] };
-    },
-    async complete(identityId, accountId, id, result) {
-      return repo.transition(identityId, accountId, id, "committing", "completed", result);
+    async complete(identityId, accountId, id, result, activity) {
+      const done = await repo.transition(
+        identityId,
+        accountId,
+        id,
+        "committing",
+        "completed",
+        result,
+      );
+      if (done) completed.set(id, activity);
+      return done;
     },
   };
-  return { repo, items, operations };
+  return { repo, items, operations, completed };
 }

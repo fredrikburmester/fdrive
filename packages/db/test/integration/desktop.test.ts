@@ -52,17 +52,14 @@ it("coordinates desktop identities and operation receipts across independent Pos
     expect((await a.item(other.id, isolated.id))?.path).toBe(isolated.path);
     expect(await a.item(other.id, child.id)).toBeNull();
     expect(await a.at(identity.id, left.path)).toBeNull();
-    const updated = await b.update(identity.id, child.id, {
-      contentVersion: "digest",
-      originalPath: "/original",
-    });
-    expect(updated.contentVersion).toBe("digest");
+    const updated = await b.update(identity.id, child.id, { originalPath: "/original" });
+    expect(updated.originalPath).toBe("/original");
     expect(updated.metadataVersion).not.toBe(child.metadataVersion);
     await a.move(identity.id, "/renamed", "/renamed");
     const replaced = await a.ensure(identity.id, "/renamed", "file");
     expect(replaced.id).not.toBe(left.id);
     expect(await b.item(identity.id, child.id)).toBeNull();
-    await expect(a.update(identity.id, child.id, { contentVersion: "gone" })).rejects.toThrow(
+    await expect(a.update(identity.id, child.id, { originalPath: null })).rejects.toThrow(
       "no longer exists",
     );
     await a.remove(identity.id, "/renamed");
@@ -116,6 +113,19 @@ it("coordinates desktop identities and operation receipts across independent Pos
     expect((await b.operation(identity.id, account.id, input.id))?.result).toEqual({
       receipt: "durable",
     });
+    // A commit's receipt is written once, whichever pool asks, and only for its own account.
+    const committed = { ...input, id: randomUUID(), state: "committing" };
+    await a.reserve(committed);
+    const facts = { from: null, to: "/new", directory: false, trash: false };
+    const receipts = await Promise.all([
+      a.complete(identity.id, account.id, committed.id, { receipt: "first" }, facts),
+      b.complete(identity.id, account.id, committed.id, { receipt: "second" }, facts),
+    ]);
+    expect(receipts.filter(Boolean)).toHaveLength(1);
+    expect(await a.complete(identity.id, randomUUID(), committed.id, {}, facts)).toBe(false);
+    const kept = await b.operation(identity.id, account.id, committed.id);
+    expect(kept?.state).toBe("completed");
+    expect(kept?.result).toEqual({ receipt: receipts[0] ? "first" : "second" });
     // Retention: only expired states qualify, reclaiming releases the reservation once.
     const retention = { idleMs: 1000, conflictMs: 2000, retainMs: 3000 };
     const now = new Date();

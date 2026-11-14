@@ -422,7 +422,7 @@ describe("public links follow the files they point at", () => {
     expect(await visit(gone)).toBe(404);
   });
 
-  it("follows the Mac's moves through its metadata recovery, into its Trash and back", async () => {
+  it("follows the Mac's moves as they commit, into its Trash and back", async () => {
     const file = await link(alice, "/mac.txt");
     const folder = await link(alice, "/MacFolder/inside.txt");
     const trashed = await link(alice, "/mac-trash.txt");
@@ -472,14 +472,10 @@ describe("public links follow the files they point at", () => {
     await macMove(await stat("/MacFolder"), "root", "MacMoved");
     const inTrash = await macMove(await stat("/mac-trash.txt"), "trash", "mac-trash.txt");
 
-    await vi.waitFor(
-      async () => {
-        expect(await linkPaths(alice, file)).toEqual(["/mac-renamed.txt"]);
-        expect(await linkPaths(alice, folder)).toEqual(["/MacMoved/inside.txt"]);
-        expect((await linkPaths(alice, trashed))[0]).toMatch(/^\/\.fdrive-desktop\//);
-      },
-      { timeout: 15_000, interval: 100 },
-    );
+    // Nothing waits: each link follows before its commit answers.
+    expect(await linkPaths(alice, file)).toEqual(["/mac-renamed.txt"]);
+    expect(await linkPaths(alice, folder)).toEqual(["/MacMoved/inside.txt"]);
+    expect((await linkPaths(alice, trashed))[0]).toMatch(/^\/\.fdrive-desktop\//);
     expect(await downloadText(file)).toBe("mac");
     expect(await downloadText(folder)).toBe("mac inside");
     await put(alice, "/mac-trash.txt", "never shared");
@@ -487,10 +483,7 @@ describe("public links follow the files they point at", () => {
 
     // Put back from the Mac's Trash, under a new name since its place is taken.
     await macMove(inTrash, "root", "mac-back.txt");
-    await vi.waitFor(
-      async () => expect(await linkPaths(alice, trashed)).toEqual(["/mac-back.txt"]),
-      { timeout: 15_000, interval: 100 },
-    );
+    expect(await linkPaths(alice, trashed)).toEqual(["/mac-back.txt"]);
     expect(await downloadText(trashed)).toBe("mac trash");
   });
 });

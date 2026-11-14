@@ -8,7 +8,6 @@ import {
   createChangeJournal,
   createChangeWriter,
   createDb,
-  createDesktopEffectsRepo,
   createDesktopPublishLock,
   createDesktopRepo,
   createFilesFolderFacts,
@@ -52,7 +51,6 @@ import { registerBackupRoutes } from "./backups/routes.js";
 import type { AppConfig } from "./config.js";
 import { type Subsystem, type SubsystemProbe, startupSummaryLines } from "./config-keys.js";
 import { createDesktopChanges } from "./desktop/changes.js";
-import { createDesktopEffectContext, createDesktopEffectsWorker } from "./desktop/effects.js";
 import { createIndexedContentLookup } from "./desktop/indexed-content.js";
 import { withDesktopMetadata } from "./desktop/metadata.js";
 import { createDesktopRetention, DEFAULT_DESKTOP_RETENTION } from "./desktop/retention.js";
@@ -473,8 +471,6 @@ export async function composeApp(
     onConnectError: (cause) =>
       logger.warn({ err: cause }, "publish lock connection unavailable; reported as busy"),
   });
-  const desktopEffects = createDesktopEffectsRepo(db);
-  const desktopEffectsWorker = createDesktopEffectsWorker({ repo: desktopEffects, bus, eventLog });
   const desktopRetention = createDesktopRetention({
     repo: desktopRepo,
     storageForIdentity: storageFactory,
@@ -487,16 +483,22 @@ export async function composeApp(
     ...(config.fdriveDesktopStateDir ? { stateDir: config.fdriveDesktopStateDir } : {}),
   });
   const officeFiles = createOfficeFileRepo(db);
-  const fsMetadata = withTrashMoves(
+  const withOffice = (metadata: typeof metadataCore) =>
     withOfficeMetadata(
-      withDesktopMetadata(metadataCore, desktopRepo),
+      metadata,
       officeFiles,
       repos.identities,
       scopeResolver.configuredMappings,
       clock,
-    ),
+    );
+  const fsMetadata = withTrashMoves(
+    withOffice(withDesktopMetadata(metadataCore, desktopRepo)),
     trashPathOf,
   );
+  // Mac writes keep their own item handles (`desktop/writes.ts`), so their
+  // metadata skips the handle registry: its `onTrashed` would retire the
+  // handle of an item the Mac puts in its own Trash.
+  const desktopMetadata = withTrashMoves(withOffice(metadataCore), trashPathOf);
   const officeProduct = configuredOfficeProduct(config);
   const officeDiscoveries = new Map<string, ReturnType<typeof createDiscoveryCache>>();
   /** Only the compose-bundled ONLYOFFICE image runs a controller with a `/runtime` status document. */
@@ -945,7 +947,6 @@ export async function composeApp(
         : null;
       registerDesktopRoutes(groups, {
         activity: personalActivity,
-        recovery: desktopEffects,
         changes: createDesktopChanges({
           journal: createChangeJournal(db),
           rootIds: () => indexQueries.rootIdsByName(),
@@ -964,12 +965,9 @@ export async function composeApp(
           indexedContent: desktopIndexedContent,
           publishLock: desktopPublishLock,
           clock,
-          effectContext: createDesktopEffectContext(
-            repos.identities,
-            scopeResolver.configuredMappings,
-            shareMoves.resolve,
-          ),
-          effects: desktopEffectsWorker,
+          metadata: desktopMetadata,
+          bus,
+          logger,
           storageForIdentity: storageFactory,
           ...(config.fdriveDesktopStateDir ? { stateDir: config.fdriveDesktopStateDir } : {}),
           trashPathForStorage: (storage) => {
@@ -1162,7 +1160,6 @@ export async function composeApp(
   });
 
   activityMaintenance.start();
-  desktopEffectsWorker.start();
   desktopRetention.start();
   return {
     app,
@@ -1171,7 +1168,6 @@ export async function composeApp(
       await backups.close();
       await activityMaintenance.stop();
       await desktopRetention.stop();
-      await desktopEffectsWorker.stop();
       if (indexerListener !== null) {
         await indexerListener.stop();
       }

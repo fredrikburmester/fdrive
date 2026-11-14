@@ -1,14 +1,13 @@
 import { randomUUID } from "node:crypto";
 import { and, asc, eq, inArray, isNull, like, lt, or, sql } from "drizzle-orm";
 import type { Db } from "../index.js";
-import { desktopEffects, desktopItems, desktopOperations } from "../schema/app.js";
+import { desktopItems, desktopOperations } from "../schema/app.js";
 import {
   appendNativeActivity,
   finishNativeFailure,
+  type NativeActivityFacts,
   prepareNativeActivity,
 } from "./activity-native.js";
-import { captureDesktopEffects } from "./desktop-effects.js";
-import type { DesktopEffectContext, DesktopEffectPayload } from "./desktop-effects-types.js";
 
 export type DesktopItemRecord = typeof desktopItems.$inferSelect;
 export type DesktopOperationRecord = typeof desktopOperations.$inferSelect;
@@ -36,9 +35,7 @@ export interface DesktopRepo {
   update(
     identityId: string,
     id: string,
-    changes: Partial<
-      Pick<DesktopItemRecord, "path" | "kind" | "contentVersion" | "originalPath" | "deletedAt">
-    >,
+    changes: Partial<Pick<DesktopItemRecord, "path" | "kind" | "originalPath" | "deletedAt">>,
   ): Promise<DesktopItemRecord>;
   move(identityId: string, from: string, to: string): Promise<void>;
   remove(identityId: string, path: string): Promise<void>;
@@ -62,15 +59,13 @@ export interface DesktopRepo {
     result?: Record<string, unknown>,
     attempt?: string,
   ): Promise<boolean>;
-  /** Bound recovery work before publishing storage changes. */
-  captureEffects(identityId: string, effects: DesktopEffectContext): Promise<DesktopEffectPayload>;
-  /** Commit the publication receipt and its metadata recovery work together. */
+  /** Commit the publication receipt and its personal history together. */
   complete(
     identityId: string,
     accountId: string,
     id: string,
     result: Record<string, unknown>,
-    effects: DesktopEffectPayload,
+    activity: NativeActivityFacts,
   ): Promise<boolean>;
   /** Operations past their retention window, oldest first. Reclaimed rows are excluded. */
   expired(now: Date, retention: DesktopRetention, limit: number): Promise<DesktopOperationRecord[]>;
@@ -283,17 +278,7 @@ export function createDesktopRepo(db: Db): DesktopRepo {
         )[0] ?? null
       );
     },
-    async captureEffects(identityId, effects) {
-      return db.transaction(async (tx) => {
-        const office = effects.office;
-        if (office)
-          await tx.execute(
-            sql`select pg_advisory_xact_lock(hashtextextended(${JSON.stringify(["office-files", office.providerId, office.rootName])}, 0))`,
-          );
-        return captureDesktopEffects(tx, identityId, effects);
-      });
-    },
-    async complete(identityId, accountId, id, result, effects) {
+    async complete(identityId, accountId, id, result, activity) {
       return db.transaction(async (tx) => {
         const updated = await tx
           .update(desktopOperations)
@@ -301,9 +286,7 @@ export function createDesktopRepo(db: Db): DesktopRepo {
           .where(and(op(identityId, accountId, id), eq(desktopOperations.state, "committing")))
           .returning();
         if (!updated.length) return false;
-        await appendNativeActivity(tx, updated[0] as DesktopOperationRecord, result, effects);
-        const payload = effects;
-        await tx.insert(desktopEffects).values({ operationId: id, identityId, accountId, payload });
+        await appendNativeActivity(tx, updated[0] as DesktopOperationRecord, result, activity);
         return true;
       });
     },

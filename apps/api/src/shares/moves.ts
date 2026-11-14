@@ -1,4 +1,4 @@
-import type { DesktopShareMove, ShareRepo } from "@fdrive/db";
+import type { ShareRepo } from "@fdrive/db";
 import type { PathFollower } from "../metadata/service.ts";
 
 /** A path as it lies in its owner's files: the owner's login and the owner's own path. */
@@ -17,13 +17,14 @@ export interface ShareMovesDeps {
   readonly ownerPath?: (identityId: string, path: string) => Promise<OwnedPath | null>;
 }
 
-export interface ShareMoves extends PathFollower {
-  /**
-   * What public links do when `from` moved to `to` in `identityId`'s files,
-   * in their owner's files: follow to `to`, or drop `from` (`to: null`) when
-   * the item left the owner's files. `null` when there is nothing to do.
-   */
-  resolve(identityId: string, from: string, to: string): Promise<DesktopShareMove | null>;
+/**
+ * What public links do after a move, in their owner's files: follow `from`
+ * to `to`, or drop `from` (`to: null`) when the item left the owner's files.
+ */
+interface ShareMove {
+  readonly identityId: string;
+  readonly from: string;
+  readonly to: string | null;
 }
 
 /**
@@ -32,8 +33,8 @@ export interface ShareMoves extends PathFollower {
  * a path, it would serve whatever is put there next, content its owner never
  * shared. So a link follows every move of what it names, or of a folder
  * above it, through the hooks every other path-keyed record follows (fdrive's
- * own moves, MCP and the AI, Office renames, Trash and its restores, moves
- * the indexer reports) and through the Mac's metadata recovery (`resolve`).
+ * own moves, the Mac's, MCP and the AI, Office renames, Trash and its
+ * restores, moves the indexer reports).
  *
  * That includes moves to where no link may reach: into the Trash, the Mac's
  * Trash, a backup folder or `Shared with me`. The public routes refuse those
@@ -49,11 +50,12 @@ export interface ShareMoves extends PathFollower {
  * folder someone else shares with them, it is followed there, under
  * `Shared with me`, which no link reaches.
  */
-export function createShareMoves(deps: ShareMovesDeps): ShareMoves {
+export function createShareMoves(deps: ShareMovesDeps): PathFollower {
   const ownerPath =
     deps.ownerPath ?? (async (identityId: string, path: string) => ({ identityId, path }));
 
-  async function resolve(identityId: string, from: string, to: string) {
+  /** `null` when there is nothing to do. */
+  async function resolve(identityId: string, from: string, to: string): Promise<ShareMove | null> {
     if (from === to) return null;
     const source = await ownerPath(identityId, from);
     if (source === null || source.path === "/") return null;
@@ -80,5 +82,5 @@ export function createShareMoves(deps: ShareMovesDeps): ShareMoves {
       await deps.shares.deletePrefix(owned.identityId, owned.path, isDir);
   }
 
-  return { resolve, onMoved: follow, onDeleted: drop };
+  return { onMoved: follow, onDeleted: drop };
 }

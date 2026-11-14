@@ -207,50 +207,40 @@ destination, stages and validates new bytes, backs up an existing file, then pub
 atomic rename, fenced by the per-identity lock plus the pre-publication recheck. Original backups remain under the reserved
 `/.fdrive-desktop` namespace, hidden from native ordinary reads and from the web file tree.
 Failed staging reuses its recorded directory. A commit whose publication cannot be confirmed stays
-uncertain and cannot automatically replay as a new write. The completed receipt and a metadata
-recovery job commit in one PostgreSQL transaction after publication. A failure before that
-transaction commits remains uncertain; an effect failure after it commits leaves the receipt
-completed. Replaying or acknowledging that receipt never republishes the file.
+uncertain and cannot automatically replay as a new write. The completed receipt and the write's
+personal history commit in one PostgreSQL transaction after publication. A failure before that
+transaction commits remains uncertain. Replaying or acknowledging that receipt never republishes
+the file.
 
-The API drains the durable queue at startup, after saves and every five seconds. Each job
-updates tags, favorites, recents, folder views, mapped Office registrations and the paths of
-public links atomically, then commits before dispatching its filesystem notification. Links
-carry no revisions: what they do is decided before publication from where the item really
-moves, into and out of the Mac's Trash too. Delivery is a second durable
-pending phase: retries send only the notification and never reapply metadata. Before another
-native publication, older pending work for the identity must finish; other identities continue. Recovery bounds lock waits to two seconds and individual
-statements to fifteen seconds. Failed jobs use exponential backoff, capped at five minutes.
-Shutdown waits for active recovery before closing the database. No Mac connection or storage
-credential is needed, and the worker never changes file contents or backups.
+**Metadata.** Once the receipt is kept, the commit brings path-keyed metadata along through
+the service web writes use, and tells the web once, as web writes do right after their storage
+call ([writes.ts](../apps/api/src/desktop/writes.ts), `follow`): tags, favorites, folder views,
+recents, AI chat references, folders shared with people, public links and Office files follow
+a move. A move into the Mac's Trash is a trash: folders shared with people and public links
+follow the item into `/.fdrive-desktop/<identity>/trash`, which neither reaches, recents go, and
+tags, favorites and folder views stay at the original path. A restore brings those back as a
+web restore does, only while nothing has taken the original path, and what followed the item
+into the Trash comes back with it. The Mac's item handles are the commit's own; this step never
+touches them. A new write never waits for an earlier one's metadata.
 
-Jobs capture trusted Office locations and metadata row revisions before filesystem publication
-(at most 100,000 source/destination revisions). Capacity exhaustion returns `quota_exceeded`
-with the operation still ready and the source untouched. Receipt persistence uses that bounded
-snapshot without recapturing later metadata growth. Identity, Office-root and row locks
-protect concurrent edits. Upgrade all API writers together; older binaries neither rotate
-these revisions nor invalidate superseded recovery destinations.
-Recovery only changes matching captured revisions: later source edits survive, and newer
-destination metadata blocks the transaction for inspection. Later web/MCP/Office/indexer
-move or delete hooks invalidate overlapping queued destinations, including descendants and
-paths with no current metadata. Exact move replays remain idempotent. Superseded jobs preserve
-their snapshots and stay pending for attention rather than attaching metadata to a reused path.
-Account ownership changes retire old jobs. Successful metadata application discards snapshots
-while retaining notification delivery state. Restoring into an overlapping original path
-hierarchy is refused before publication to avoid overlapping metadata moves.
+A metadata failure is logged and never fails the commit: the file is published and its receipt
+answers. The indexer reports the same move from the change journal, and its listener
+([indexer-listener.ts](../apps/api/src/events/indexer-listener.ts)) moves metadata and tells the
+web then, which also covers a crash between the rename and this step. As for web writes, that
+second chance needs indexing on, and an empty folder's move is not reported as a move. The
+listener sees a move into the Mac's Trash as a delete, since the indexer never walks
+`/.fdrive-desktop`, so with indexing on tags left at a trashed item's original path go.
 
-Administrators can inspect the first 100 pending jobs at `GET /api/v1/desktop/recovery`;
-`attempts`, `lastError` and `nextAttemptAt` show retry/failure state without file contents or
-credentials. The same response lists up to 100 `uncertain` commits (state, kind, name and
-whether a `committing` row has stalled for 15 minutes). After inspecting storage, an
-administrator resolves one with `POST /api/v1/desktop/recovery/:identityId/:operationId/resolve`
-and `{"outcome":"published"}` or `{"outcome":"discarded"}`. `published` verifies the target
-exists (and, for saves, carries the uploaded digest), records the receipt and queues the
-usual metadata recovery; `discarded` cancels the operation and leaves spool and backups to
-retention. Neither replays bytes. Failures also appear in the General System log. Do not
-delete queue or receipt rows to clear a conflict: inspect the preserved source/destination
-metadata first. A recovery administration UI remains separate work. Filesystem notifications use
-the existing identity-scoped in-process event bus; a crash can repeat a notification. Disconnected
-clients refresh on reconnect, and indexing remains the indexer's responsibility.
+Administrators can list up to 100 `uncertain` commits at `GET /api/v1/desktop/recovery` (state,
+kind, name and whether a `committing` row has stalled for 15 minutes). After inspecting storage,
+an administrator resolves one with
+`POST /api/v1/desktop/recovery/:identityId/:operationId/resolve` and `{"outcome":"published"}`
+or `{"outcome":"discarded"}`. `published` verifies the target exists (and, for saves, carries
+the uploaded digest), records the receipt and brings metadata along as a commit does;
+`discarded` cancels the operation and leaves spool and backups to retention. Neither replays
+bytes. Do not delete receipt rows to clear a conflict. A recovery administration UI remains
+separate work. Notifications use the identity-scoped in-process event bus; disconnected clients
+refresh on reconnect, and indexing remains the indexer's responsibility.
 
 A file is limited to 16 GiB. Admission allows 1024 active operations and 64 GiB of combined
 pending payload/recovery reservations across the installation. Acknowledgement releases the

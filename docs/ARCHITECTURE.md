@@ -86,7 +86,7 @@ allows. Trash, backup folders, `/Shared with me` and the Mac's `/.fdrive-desktop
 holds its Trash) are never reachable through a link. A link follows the item it names
 wherever it moves, so it never stays at a path where something new could appear: on every
 route other path-keyed metadata follows, through the Trash and its restores, the Mac's
-metadata recovery and moves the indexer reports. Inside a place no link reaches (Trash, say)
+writes and moves the indexer reports. Inside a place no link reaches (Trash, say)
 it shows not found, and it works again once the item comes back out. Anything in fdrive's
 Trash layout (a `.fdrive-move-v1` segment) stays refused wherever it lies, even after Trash
 is turned off or moved. A move inside a folder shared with someone counts in the owner's

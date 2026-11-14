@@ -519,14 +519,7 @@ it("keeps personal journeys stable, immutable and private across pools", {
         alice.id,
         nativeId,
         { item: { id: nativeItem, size: 3 } },
-        {
-          from: null,
-          to: "/native.txt",
-          directory: false,
-          trash: false,
-          office: null,
-          snapshots: [],
-        },
+        { from: null, to: "/native.txt", directory: false, trash: false },
       ),
     ).toBe(true);
     expect(
@@ -535,14 +528,7 @@ it("keeps personal journeys stable, immutable and private across pools", {
         alice.id,
         nativeId,
         { item: { id: nativeItem, size: 3 } },
-        {
-          from: null,
-          to: "/native.txt",
-          directory: false,
-          trash: false,
-          office: null,
-          snapshots: [],
-        },
+        { from: null, to: "/native.txt", directory: false, trash: false },
       ),
     ).toBe(false);
     const nativeEvents = await a.list(alice.id, { source: "native" });
@@ -613,7 +599,7 @@ it("keeps personal journeys stable, immutable and private across pools", {
           alice.id,
           id,
           { item: itemId ? { id: itemId } : null },
-          { from, to, directory, trash, restored, office: null, snapshots: [] },
+          { from, to, directory, trash, restored },
         ),
       ).toBe(true);
       return (await a.list(alice.id, { source: "native" })).find(
