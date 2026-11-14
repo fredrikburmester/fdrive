@@ -82,12 +82,12 @@ describe("office write transaction scope", () => {
     const release = signal();
     const order: string[] = [];
     let fileId = "";
-    const firstWrite = write(providerId, async (scope) => {
-      order.push("first enters");
-      entered.resolve();
-      await release.promise;
-      return scope.locks.withFileLock("destination", () =>
-        scope.locks.withFileLock("file", async (locked) => {
+    const firstWrite = write((scope) =>
+      scope.locks.withFileLock("file", async (locked) => {
+        order.push("first enters");
+        entered.resolve();
+        await release.promise;
+        return scope.locks.withFileLock("destination", async () => {
           const file = await scope.files.ensure(location);
           fileId = file.id;
           expect(await locked.get(at)).toBeNull();
@@ -96,17 +96,19 @@ describe("office write transaction scope", () => {
           expect((await scope.files.get(file.id))?.path).toBe("moved/file.docx");
           order.push("first leaves");
           return file.id;
-        }),
-      );
-    });
+        });
+      }),
+    );
     await entered.promise;
-    const secondWrite = write(providerId, async (scope) => {
-      order.push("second enters");
-      expect((await scope.files.get(fileId))?.path).toBe("moved/file.docx");
-      expect(await scope.locks.get("file", at)).toBe("lock");
-      const same = await scope.files.ensure({ ...location, path: "moved/file.docx" });
-      return same.id;
-    });
+    const secondWrite = write((scope) =>
+      scope.locks.withFileLock("file", async (locked) => {
+        order.push("second enters");
+        expect((await scope.files.get(fileId))?.path).toBe("moved/file.docx");
+        expect(await locked.get(at)).toBe("lock");
+        const same = await scope.files.ensure({ ...location, path: "moved/file.docx" });
+        return same.id;
+      }),
+    );
     const both = Promise.all([firstWrite, secondWrite]);
     const completed = expect(both).resolves.toEqual(expect.any(Array));
     try {
@@ -122,12 +124,36 @@ describe("office write transaction scope", () => {
     expect(first.pool.totalCount).toBe(2);
   }, 10000);
 
+  it("lets a writer holding its pool's last connection work on another pool", async () => {
+    const entered = signal();
+    const release = signal();
+    const held = write((scope) =>
+      scope.locks.withFileLock("file", async () => {
+        entered.resolve();
+        await release.promise;
+        // Admission and history run on the main pool while the document stays locked.
+        const rows = await observer.db.execute<{ one: number }>(sql`select 1 as one`);
+        return rows.rows[0]?.one;
+      }),
+    );
+    await entered.promise;
+    const waiting = write((scope) => scope.locks.withFileLock("file", async () => "second"));
+    const completed = expect(Promise.all([held, waiting])).resolves.toEqual([1, "second"]);
+    try {
+      await waitForAdvisoryWaiter();
+      expect(first.pool.totalCount).toBe(2);
+    } finally {
+      release.resolve();
+    }
+    await completed;
+  }, 10000);
+
   it("rolls back registry replacements and lock rows together on callback failure", async () => {
     const files = createOfficeFileRepo(first.db);
     const original = await files.ensure(location);
     const replaced = await files.ensure({ ...location, path: "moved/file.docx" });
     await expect(
-      write(providerId, async (scope) => {
+      write(async (scope) => {
         await scope.locks.withFileLock("file", async (locked) => {
           await locked.apply(request);
           await scope.files.ensure({ ...location, path: "new.docx" });
@@ -140,7 +166,7 @@ describe("office write transaction scope", () => {
     expect(await files.get(replaced.id)).toEqual(replaced);
     expect(await first.db.select().from(officeFiles)).toHaveLength(2);
     expect(await first.db.select().from(wopiLocks)).toHaveLength(0);
-    await writeOther(providerId, async (scope) => {
+    await writeOther(async (scope) => {
       await scope.files.movePrefix(move);
       expect(await scope.locks.apply(request)).toEqual({ ok: true });
     });
@@ -148,28 +174,34 @@ describe("office write transaction scope", () => {
     expect(await createWopiLockRepo(first.db).get("file", at)).toBe("lock");
   });
 
-  it("serializes across independent pools but permits another provider", async () => {
+  it("serializes one document across independent pools and lets another through", async () => {
     const entered = signal();
     const release = signal();
-    const held = write(providerId, async (scope) => {
-      await scope.files.ensure(location);
-      entered.resolve();
-      await release.promise;
-      return "first";
-    });
+    const held = write((scope) =>
+      scope.locks.withFileLock("file", async () => {
+        await scope.files.ensure(location);
+        entered.resolve();
+        await release.promise;
+        return "first";
+      }),
+    );
     await entered.promise;
-    const waiting = writeOther(providerId, async (scope) => {
-      expect(await scope.files.ensure(location)).toMatchObject(location);
-      return "second";
-    });
+    const waiting = writeOther((scope) =>
+      scope.locks.withFileLock("file", async () => {
+        expect(await scope.files.ensure(location)).toMatchObject(location);
+        return "second";
+      }),
+    );
     const completed = expect(Promise.all([held, waiting])).resolves.toEqual(["first", "second"]);
     try {
       await waitForAdvisoryWaiter();
       await expect(
-        writeOther(otherProviderId, async (scope) => {
-          await scope.files.ensure({ ...location, providerId: otherProviderId });
-          return "independent";
-        }),
+        writeOther((scope) =>
+          scope.locks.withFileLock("other", async () => {
+            await scope.files.ensure({ ...location, providerId: otherProviderId });
+            return "independent";
+          }),
+        ),
       ).resolves.toBe("independent");
     } finally {
       release.resolve();
@@ -180,7 +212,7 @@ describe("office write transaction scope", () => {
   it("holds a scoped file lock against an ordinary request until transaction commit", async () => {
     const entered = signal();
     const release = signal();
-    const held = write(providerId, (scope) =>
+    const held = write((scope) =>
       scope.locks.withFileLock("file", async (locked) => {
         await locked.apply(request);
         entered.resolve();
@@ -202,7 +234,7 @@ describe("office write transaction scope", () => {
   });
 
   it("supports every scoped registry and lock operation while active", async () => {
-    await write(providerId, async (scope) => {
+    await write(async (scope) => {
       const file = await scope.files.ensure(location);
       expect(await scope.files.ensure(location)).toEqual(file);
       await scope.files.movePrefix({ ...move, to: "folder" });
@@ -216,14 +248,14 @@ describe("office write transaction scope", () => {
   });
 
   it("rejects all escaped repository methods and retained bound locks", async () => {
-    const escaped = await write(providerId, async (scope) => {
+    const escaped = await write(async (scope) => {
       const bound = await scope.locks.withFileLock("file", async (locked) => locked);
       return { scope, bound };
     });
     await assertExpired(escaped.scope, escaped.bound);
     let failed: { scope: OfficeWriteContext; bound: BoundWopiLockRepo } | undefined;
     await expect(
-      write(providerId, async (scope) => {
+      write(async (scope) => {
         const bound = await scope.locks.withFileLock("file", async (locked) => locked);
         failed = { scope, bound };
         throw new Error("failed callback");
@@ -233,14 +265,6 @@ describe("office write transaction scope", () => {
     await assertExpired(failed.scope, failed.bound);
     expect(await first.db.select().from(officeFiles)).toHaveLength(0);
     expect(await first.db.select().from(wopiLocks)).toHaveLength(0);
-  });
-
-  it("validates provider IDs before taking any database connection", async () => {
-    const closed = createDb("postgresql://unused:unused@127.0.0.1:1/unused");
-    await closed.close();
-    await expect(createOfficeWriteScope(closed.db)("bad", async () => "unused")).rejects.toThrow(
-      TypeError,
-    );
   });
 });
 

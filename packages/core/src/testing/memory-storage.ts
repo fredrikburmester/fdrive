@@ -23,6 +23,9 @@ export interface MemoryStorageOptions {
 interface MemFile {
   content: Uint8Array;
   mtime: Date | null;
+  /** Like a disk's: every publish is a new inode, and every write moves the change time. */
+  ino: bigint;
+  ctimeNs: bigint;
 }
 
 async function readAll(body: ReadableStream<Uint8Array> | Uint8Array): Promise<Uint8Array> {
@@ -46,6 +49,12 @@ export function createMemoryStorage(
   const childrenOf = new Map<string, Set<string>>([["/", new Set()]]);
   const nullMtimePaths = new Set((options.nullMtimePaths ?? []).map((p) => normalizePath(p)));
   const clock = options.clock ?? (() => new Date(0));
+  // BigInt() rather than literals: the web app type-checks this file for an older target.
+  let ticks = BigInt(0);
+  const tick = () => {
+    ticks += BigInt(1);
+    return ticks;
+  };
 
   function isDir(p: string): boolean {
     return childrenOf.has(p);
@@ -70,7 +79,7 @@ export function createMemoryStorage(
     const parent = parentPath(normalized);
     ensureDirsFor(parent);
     childrenOf.get(parent)?.add(normalized);
-    fileMap.set(normalized, { content, mtime });
+    fileMap.set(normalized, { content, mtime, ino: tick(), ctimeNs: tick() });
   }
 
   function removeFile(path: string): void {
@@ -158,6 +167,18 @@ export function createMemoryStorage(
       await storage.list(path);
     },
 
+    async contentStamp(path: string) {
+      const s = await storage.stat(path);
+      if (s.kind === "dir") throw new StorageError("bad_request", "is a directory");
+      const { file } = requireFile(path);
+      return {
+        size: file.content.length,
+        mtimeNs: BigInt(file.mtime?.getTime() ?? 0) * BigInt(1_000_000),
+        ino: file.ino,
+        ctimeNs: file.ctimeNs,
+      };
+    },
+
     async statFile(path: string) {
       const s = await storage.stat(path);
       if (s.kind === "dir") throw new StorageError("bad_request", "is a directory");
@@ -218,6 +239,8 @@ export function createMemoryStorage(
       if (opts?.mkdirParents !== true && !isDir(parentPath(normalized)))
         throw new StorageError("not_found", `parent not found: ${path}`);
       const bytes = await readAll(body);
+      if (opts?.contentLength !== undefined && bytes.length !== opts.contentLength)
+        throw new StorageError("bad_request", `upload ended after ${bytes.length} bytes: ${path}`);
       putFile(normalized, bytes, opts?.modifiedAt ?? clock());
     },
 
@@ -283,6 +306,7 @@ export function createMemoryStorage(
     async setModifiedAt(path: string, modifiedAt: Date): Promise<void> {
       const { file } = requireFile(path);
       file.mtime = modifiedAt;
+      file.ctimeNs = tick();
     },
   };
 

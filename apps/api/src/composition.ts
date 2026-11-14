@@ -584,6 +584,15 @@ export async function composeApp(
     const provider = await providerService.defaultProvider();
     return provider === null ? null : { id: provider.id, label: provider.label };
   };
+  // Office's document locks on a pool of their own: a save holds its document's
+  // lock, and a connection, while its body arrives, and checks admission and
+  // records history on the main pool meanwhile. Nothing on the main pool waits
+  // for these locks, so a saturated pool lengthens a save but cannot deadlock.
+  const officeLocks = createDb(config.databaseUrl, {
+    max: 10,
+    connectionTimeoutMillis: 30_000,
+    onError: (error) => logger.warn({ err: error }, "idle office lock connection error"),
+  });
   const officeService = createOfficeService({
     canEdit: async (actor, path) => {
       const settings = await officeSettings.configuration();
@@ -606,8 +615,8 @@ export async function composeApp(
     tokens: createOfficeTokenCodec(master),
     repos,
     files: officeFiles,
-    locks: createWopiLockRepo(db),
-    withWriteScope: createOfficeWriteScope(db),
+    locks: createWopiLockRepo(officeLocks.db),
+    withWriteScope: createOfficeWriteScope(officeLocks.db),
     clock,
     location: officeLocation,
     storageFactory: accountStorage,
@@ -1206,6 +1215,7 @@ export async function composeApp(
       }
       await desktopPublishPool.end();
       await activityPathLocks.close();
+      await officeLocks.close();
       await pool.end();
     },
   };
