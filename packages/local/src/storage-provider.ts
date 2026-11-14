@@ -22,7 +22,7 @@ import {
 import { basename, dirname, join, sep } from "node:path";
 import { addAbortSignal, Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
-import type { ReadableStream as NodeReadableStream } from "node:stream/web";
+import { ReadableStream as NodeReadableStream } from "node:stream/web";
 import {
   type EntryKind,
   type EntryStat,
@@ -673,7 +673,10 @@ export async function zipItems(
   report();
   zip.end();
   if (signal !== undefined) addAbortSignal(signal, output);
-  return webStream(output);
+  // Read through the stream's async iterator, not `Readable.toWeb`: that
+  // adapter can still hand on a chunk the zip had buffered after its reader
+  // cancelled, and the throw lands where nothing catches it.
+  return NodeReadableStream.from(output) as unknown as ReadableStream<Uint8Array>;
 }
 
 /**
