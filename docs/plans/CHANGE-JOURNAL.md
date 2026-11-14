@@ -201,11 +201,15 @@ Left open: changes made on the disk reach the feed only through the indexer, so 
 a rewrite with the same size and modification time and anything while the marker is missing
 wait for the app's hourly full check.
 
-### c) OCR finds PDFs from the journal and the index
+### c) OCR finds PDFs from the index: done
 
-Proposal: the OCR worker reads PDFs that need OCR from `idx.files` (and new ones from the
-journal) instead of walking the folder every night. It already writes an `ocr` row after
-rewriting or restoring a PDF, so the indexer re-reads it at once.
+Built on 2026-11-14 ([OCR](../OCR.md#which-pdfs)). The nightly pass reads the live PDFs in
+`idx.files` instead of walking the folder, leaves out fdrive's own folders and every PDF whose
+`sha256` the done-log, `idx.ocr_log`, has a decision for, and checks for a text layer with
+`pdftotext` before it starts `ocrmypdf`. A rewritten or restored PDF is journaled with source
+`ocr`, so the indexer reads it back at once.
 
-Done when: OCR no longer walks the folder; a rewritten PDF is re-indexed within seconds; the
-nightly pass reads only PDFs that need it.
+It does not read the journal. A row for an upload is written before the indexer has read the
+file, and OCR needs the index's digest, so a journal reader would wait for the index anyway; the
+nightly schedule exists to keep this CPU-heavy work at night. New PDFs wait for the next pass,
+or for Run now.

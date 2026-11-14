@@ -4,6 +4,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
+from conftest import index_pdfs
 from psycopg.types.json import Json
 from starlette.testclient import TestClient
 
@@ -16,6 +17,14 @@ FIXED_NOW = datetime(2026, 1, 1, 1, 0, tzinfo=UTC)
 DEFAULT_SETTINGS = Settings(
     hour=3, langs="swe+eng", exclude_globs=(), max_mb=200, keep_originals=True, originals_retention_days=0
 )
+
+
+def _index(postgres_dsn: str, root_id: int, root: Path) -> None:
+    conn = db.connect(postgres_dsn)
+    try:
+        index_pdfs(conn, root_id, root)
+    finally:
+        conn.close()
 
 
 def _set_pdf_ocr(postgres_dsn: str, enabled: bool = True) -> None:
@@ -68,6 +77,7 @@ def test_run_once_runs_a_pass_and_releases_the_lock(postgres_dsn: str, tmp_path:
     target_dir = tmp_path / "root"
     target_dir.mkdir()
     (target_dir / "a.pdf").write_bytes(b"HASTEXT\n")
+    _index(postgres_dsn, root_id, target_dir)
     from fdrive_ocr.runner import RootTarget
 
     targets = [RootTarget(name="files", root_id=root_id, abs_path=str(target_dir))]
@@ -91,6 +101,7 @@ def test_run_once_applies_include_globs(postgres_dsn: str, tmp_path: Path) -> No
     (target_dir / "fredrik" / "in-scope.pdf").write_bytes(b"HASTEXT\n")
     (target_dir / "alice").mkdir()
     (target_dir / "alice" / "out-of-scope.pdf").write_bytes(b"HASTEXT\n")
+    _index(postgres_dsn, root_id, target_dir)
     from fdrive_ocr.runner import RootTarget
 
     targets = [RootTarget(name="files", root_id=root_id, abs_path=str(target_dir))]
@@ -114,8 +125,7 @@ def test_run_once_applies_include_globs(postgres_dsn: str, tmp_path: Path) -> No
             statuses = dict(cur.fetchall())
     finally:
         conn.close()
-    assert statuses[str(Path("alice") / "out-of-scope.pdf")] == "excluded"
-    assert statuses[str(Path("fredrik") / "in-scope.pdf")] == "has_text"
+    assert statuses == {"fredrik/in-scope.pdf": "has_text"}
 
 
 def test_run_once_skips_when_already_running(postgres_dsn: str, tmp_path: Path) -> None:

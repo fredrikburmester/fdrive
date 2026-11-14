@@ -41,9 +41,12 @@ export const FeaturesUpdateRequest = z
   })
   .strict()
   .refine(
-    (value) => value.values.textSearch || (!value.values.searchOcr && !value.values.semanticSearch),
+    (value) =>
+      value.values.textSearch ||
+      (!value.values.searchOcr && !value.values.semanticSearch && !value.values.pdfOcr),
     {
-      message: "Search OCR and semantic search require full-text search.",
+      // Searchable PDFs finds the PDFs to convert in the index full-text search keeps.
+      message: "Search OCR, semantic search and searchable PDFs require full-text search.",
       path: ["values", "textSearch"],
     },
   );

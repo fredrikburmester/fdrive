@@ -8,7 +8,7 @@ durability properties: the replacement is staged in the destination directory,
 hashed while it is copied, fsynced, given the destination's ownership and the
 recorded mtime, and only then swapped in with `os.replace`, all inside the same
 `db.backup_checkpoint` gate a rewrite takes. It then records a `restored` row in
-the done-log for the restored file's own key, without which the next pass would
+the done-log for the restored bytes' digest, without which the next pass would
 immediately OCR the file straight back again, and journals the path in
 `idx.changes` for the indexer, as a rewrite does.
 """
@@ -513,7 +513,8 @@ def restore_original(
                 os.remove(pending)
         _fsync_directory(parent)
         db.record_ocr_log(
-            conn, target.root_id, mapping.path, mapping.size, mapping.mtime_ns, STATUS_RESTORED, "original restored"
+            conn, target.root_id, mapping.path, mapping.size, mapping.mtime_ns, digest, STATUS_RESTORED,
+            "original restored",
         )
     index.invalidate()
     db.journal_change(conn, target.root_id, target.name, mapping.path, log)

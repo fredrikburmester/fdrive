@@ -73,9 +73,6 @@ Recommended on 2026-11-14. Confirm each before the group that depends on it.
    read (keep the notification). The indexer writes `idx.moves` rows nothing reads. Every start
    walks the whole library (`runner.rs` `next_scan: Instant::now()`), though the journal now
    covers restarts.
-6. **OCR: find PDFs through the index.** OCR walks the whole folder nightly and keys its done
-   log by path, size and modification time. API writes do not take OCR's per-path lock, so a
-   rewrite can replace an upload that lands during its copy.
 7. **Delete dead tooling and shims.** `services/runtime`'s generic controller (dead since the ML
    server); the unused `fdrive-migrate` binary and `FDRIVE_AUTO_MIGRATE`; tests of the 0019 and
    0020 upgrades and `sftpgo`/`photos` fixtures; the perf harness, which still starts TEI and a

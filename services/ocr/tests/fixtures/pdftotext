@@ -1,0 +1,34 @@
+#!/usr/bin/env python3
+"""A fake `pdftotext` for the I/O tests, next to the fake `ocrmypdf` and read the
+same way: the first line of the input file says what a real `pdftotext` would
+have found.
+
+  "HASTEXT", "TAGGED"   -> prints text, exits 0 (a PDF with a text layer)
+  "OK-OCRED-OUTPUT"     -> prints text, exits 0 (the fake `ocrmypdf`'s output)
+  "UNREADABLE"          -> prints an error, exits 1
+  anything else         -> prints nothing, exits 0 (a scan without a text layer)
+
+Called as `pdftotext -q <input> -`, so the input is the second-to-last argument.
+"""
+
+from __future__ import annotations
+
+import sys
+
+
+def main() -> int:
+    src = sys.argv[-2]
+    with open(src, "rb") as fh:
+        marker = fh.readline().strip().decode(errors="replace")
+    if marker in ("HASTEXT", "TAGGED", "OK-OCRED-OUTPUT"):
+        sys.stdout.write("Some text on the first page.\n\f")
+        return 0
+    if marker == "UNREADABLE":
+        sys.stderr.write("Syntax Error: Couldn't read xref table\n")
+        return 1
+    sys.stdout.write("\f\f")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

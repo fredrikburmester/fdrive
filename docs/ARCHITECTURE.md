@@ -65,9 +65,9 @@ fdrive keeps its own places inside each user's files, and one rule in `@fdrive/c
 (`isReservedPath`): the Trash folder while Trash is on and the Mac's `/.fdrive-desktop`
 (`reservedFolders`), plus fdrive's Trash layout (`.fdrive-move-v1`) and backup folders
 (`.fdrive-backups`) wherever they lie. Listings, the Mac, search, MCP and AI never show them;
-index queries leave them out in SQL before their limit. The indexer and OCR never walk
-`/.fdrive-desktop` or backup folders; the indexer does index the Trash, so moves into and out
-of it stay renames. Where a consumer differs it says so: links also never reach
+index queries leave them out in SQL before their limit. The indexer never walks
+`/.fdrive-desktop` or backup folders; it does index the Trash, so moves into and out of it stay
+renames. OCR takes its PDFs from the index and leaves out all of these. Where a consumer differs it says so: links also never reach
 `/Shared with me`.
 
 Metadata uses identity plus canonical virtual path. Application moves and indexer events
