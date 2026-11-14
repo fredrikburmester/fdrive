@@ -1151,6 +1151,7 @@ export function FileBrowser({
       <OrganizeSheet
         organize={organize}
         provider={aiStatus?.provider ?? null}
+        assist={aiStatus?.assist === true}
         onMoved={() => dispatchSelection({ type: "clear" })}
       />
       <OrganizeActivity status={organize.status} onOpen={organize.show} />

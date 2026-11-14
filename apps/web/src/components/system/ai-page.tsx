@@ -138,6 +138,10 @@ export function AiSystemPage() {
               { label: "API key", value: saved.hasApiKey ? "Saved" : "None" },
               { label: "Organize", value: saved.organize ? "On" : "Off" },
               { label: "Chat", value: saved.chat ? "On" : "Off" },
+              {
+                label: "TypeSafe assist",
+                value: !saved.assist ? "Off" : saved.hasAssistKey ? "On" : "Needs a key",
+              },
             ]}
           />
 
@@ -160,6 +164,14 @@ export function AiSystemPage() {
                 other files are shared. Files themselves are never uploaded, and nothing moves until
                 the person approves.
               </li>
+              {saved.assist ? (
+                <li>
+                  With the assist on, TypeSafe also receives the selected items' names, sizes and
+                  dates before a run, and afterwards the folders each one would move to, with a
+                  sample of what those folders already hold when the person shares other file names.
+                  It never receives file contents.
+                </li>
+              ) : null}
             </ul>
           </SystemSection>
         </>
@@ -184,6 +196,7 @@ export function AiSystemPage() {
           <AiSettingsFields
             values={values}
             hasSavedKey={saved.hasApiKey}
+            hasSavedAssistKey={saved.hasAssistKey}
             keyDropped={keyWillBeDropped(values, saved)}
             disabled={update.isPending}
             onChange={change}
@@ -198,6 +211,7 @@ export function AiSystemPage() {
 function AiSettingsFields({
   values,
   hasSavedKey,
+  hasSavedAssistKey,
   keyDropped,
   disabled,
   onChange,
@@ -205,6 +219,7 @@ function AiSettingsFields({
 }: {
   values: AiDraft;
   hasSavedKey: boolean;
+  hasSavedAssistKey: boolean;
   keyDropped: boolean;
   disabled: boolean;
   onChange: (patch: Partial<AiDraft>) => void;
@@ -323,6 +338,52 @@ function AiSettingsFields({
             onClick={() => onChange({ clearKey: !values.clearKey })}
           >
             {values.clearKey ? "Keep the saved key" : "Remove the saved key"}
+          </Button>
+        ) : null}
+      </Field>
+      <Field orientation="horizontal">
+        <FieldLabel htmlFor="ai-assist">TypeSafe assist</FieldLabel>
+        <Switch
+          id="ai-assist"
+          checked={values.assist}
+          disabled={disabled}
+          onCheckedChange={(assist) => onChange({ assist })}
+        />
+      </Field>
+      <FieldDescription>
+        Sends names to TypeSafe to speed Organize up and flag suggestions that look wrong.
+      </FieldDescription>
+      <Field>
+        <FieldLabel htmlFor="ai-assist-key">TypeSafe API key</FieldLabel>
+        <Input
+          id="ai-assist-key"
+          type="password"
+          autoComplete="off"
+          value={values.assistApiKey}
+          disabled={disabled}
+          placeholder={
+            hasSavedAssistKey && !values.clearAssistKey
+              ? "Saved. Enter a new key to replace it"
+              : "Optional"
+          }
+          onChange={(event) =>
+            onChange({ assistApiKey: event.target.value, clearAssistKey: false })
+          }
+        />
+        <FieldDescription>
+          A key from typesafe.ai, separate from the provider's. Stored encrypted and never shown
+          again.
+        </FieldDescription>
+        {hasSavedAssistKey && values.assistApiKey === "" ? (
+          <Button
+            type="button"
+            variant="link"
+            size="sm"
+            className="self-start px-0"
+            disabled={disabled}
+            onClick={() => onChange({ clearAssistKey: !values.clearAssistKey })}
+          >
+            {values.clearAssistKey ? "Keep the saved key" : "Remove the saved key"}
           </Button>
         ) : null}
       </Field>
