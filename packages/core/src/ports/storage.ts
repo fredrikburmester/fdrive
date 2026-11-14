@@ -65,6 +65,11 @@ export interface EntryStat {
    * when the path asked for is the stored spelling.
    */
   readonly path?: string;
+  /**
+   * Set when reaching `path` follows a symbolic link, at its last segment or
+   * at any folder on the way: the entry is not where `path` says it is.
+   */
+  readonly link?: true;
 }
 
 /**
@@ -92,6 +97,12 @@ export interface ZipProgress {
   readonly bytes: number;
 }
 
+/** Options shared by `move` and `copy`. */
+export interface TransferOptions {
+  /** Replace an existing target; without it a taken target is a `conflict`. */
+  readonly overwrite?: boolean;
+}
+
 /**
  * Provider-neutral storage port. `@fdrive/local` implements it over a folder
  * on the API's disk. All paths are the
@@ -111,69 +122,7 @@ export interface ZipProgress {
  * - Optional methods are absent, not throwing, when the backend cannot
  *   offer them; `ProviderCapabilities` says which.
  */
-/** Options shared by `move` and `copy`. */
-export interface TransferOptions {
-  /** Replace an existing target; without it a taken target is a `conflict`. */
-  readonly overwrite?: boolean;
-  /**
-   * Continue a transfer an earlier attempt left unfinished: what is already at
-   * the target is that attempt's own progress, so the target is not cleared
-   * first and an entry already copied is left in place. Only a backend that
-   * copies a directory has anything to resume; the rest may ignore it, since
-   * their move is one operation that either happened or did not.
-   */
-  readonly resume?: boolean;
-  /**
-   * Called as a transfer proceeds, in bytes, with `total` settled before the
-   * first byte moves. Only a backend that copies object by object can report
-   * anything; supplying it may cost that backend an extra listing pass, so
-   * callers pass it only when something is waiting to watch.
-   */
-  readonly onProgress?: (completed: number, total: number) => void;
-  /**
-   * Stops a transfer that copies entry by entry. Honoured only while it is
-   * still copying: a backend that copies removes the source only once every
-   * entry is at the destination, so abandoning it before that leaves the source
-   * whole, and abandoning it after would be the one way to lose the only copy.
-   */
-  readonly signal?: AbortSignal;
-}
-
 export interface StorageProvider {
-  /**
-   * Runs under a storage-enforced exclusive namespace lease. Only provided for
-   * explicitly qualified configurations whose writers all obey that lease.
-   * The scoped storage must reject use after release/loss. Uploads still need
-   * staging: a lease alone does not make a streaming overwrite atomic.
-   */
-  withWriteLease?<T>(
-    action: (storage: StorageProvider) => Promise<T>,
-    signal?: AbortSignal,
-  ): Promise<T>;
-
-  /**
-   * The largest file this backend can publish, when it bounds it at all.
-   * Publication copies or renames a staged file into place, and a backend
-   * whose copy has a size limit (an object store's server-side copy, say)
-   * can accept an upload it could never publish. Callers that stage before
-   * publishing must apply this before accepting the transfer: discovering it
-   * at publication spends the whole transfer first and leaves a commit that
-   * only an administrator can clear. Absent when the backend publishes
-   * whatever it accepts.
-   */
-  readonly maxPublishBytes?: number;
-
-  /**
-   * Set when moving a directory copies every object under it instead of
-   * renaming it in one step, so the work is proportional to the tree rather
-   * than constant, as on an object store without rename. No backend does
-   * today.
-   * Callers that serialize publication must keep a move like this outside that
-   * serialization: holding a lock for a copy of unbounded length would refuse
-   * every other writer for as long as it runs.
-   */
-  readonly movesDirectoriesByCopy?: boolean;
-
   list(path: string): Promise<FileEntry[]>;
 
   /** Stats `path` whatever its kind. Throws `not_found` when nothing is there. */

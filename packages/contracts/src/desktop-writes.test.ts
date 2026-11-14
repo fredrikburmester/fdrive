@@ -8,17 +8,16 @@ import {
   DesktopFolderRequest,
   DesktopName,
   DesktopUploadRequest,
-  DesktopWriteApproval,
 } from "./desktop-writes.js";
 
 const id = "00000000-0000-4000-8000-000000000001";
 it("validates explicit per-identity grants without changing legacy defaults", () => {
   expect(DesktopPairApproval.parse({ identityIds: [id] }).access).toBeUndefined();
   expect(
-    DesktopWriteApproval.parse({ identityIds: [id], access: { [id]: "full" } }).access?.[id],
+    DesktopPairApproval.parse({ identityIds: [id], access: { [id]: "full" } }).access?.[id],
   ).toBe("full");
   expect(
-    DesktopWriteApproval.safeParse({ identityIds: [id], access: { [id]: "admin" } }).success,
+    DesktopPairApproval.safeParse({ identityIds: [id], access: { [id]: "admin" } }).success,
   ).toBe(false);
 });
 it("rejects escaping, control, ambiguous and overlong filenames", () => {

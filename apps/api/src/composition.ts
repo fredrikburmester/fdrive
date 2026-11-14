@@ -480,7 +480,7 @@ export async function composeApp(
   const metadataService = withTrashMoves(metadataCore, trashPathOf);
   const desktopRepo = createDesktopRepo(db);
   // Serializes Mac desktop commits per identity; no other fdrive writer takes
-  // it. Storage without its own lease is read-only unless this is configured.
+  // it. Mac writes are read-only unless this is configured.
   //
   // On its own pool: the lock holds a connection for the whole critical section,
   // so on the main pool a few slow publications would starve every other query.
