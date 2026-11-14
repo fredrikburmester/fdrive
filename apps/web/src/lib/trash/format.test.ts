@@ -9,8 +9,6 @@ import {
   purgedToastMessage,
   restoreConflictMessage,
   restoredToastMessage,
-  retentionDaysLabel,
-  retentionNote,
   trashAvailabilityFor,
 } from "./format";
 
@@ -21,38 +19,6 @@ describe("originalFolderLabel", () => {
 
   it("returns Home for a top-level entry", () => {
     expect(originalFolderLabel("/top.txt")).toBe("Home");
-  });
-});
-
-describe("retentionDaysLabel", () => {
-  it("formats a whole number of days without a decimal", () => {
-    expect(retentionDaysLabel(48)).toBe("2 days");
-  });
-
-  it("uses the singular for exactly one day", () => {
-    expect(retentionDaysLabel(24)).toBe("1 day");
-  });
-
-  it("rounds to at most one decimal place", () => {
-    expect(retentionDaysLabel(36)).toBe("1.5 days");
-  });
-
-  it("rounds a value that would otherwise need two decimals", () => {
-    expect(retentionDaysLabel(20)).toBe("0.8 days");
-  });
-
-  it("uses the plural below one day", () => {
-    expect(retentionDaysLabel(12)).toBe("0.5 days");
-  });
-});
-
-describe("retentionNote", () => {
-  it("is null when retention is not configured", () => {
-    expect(retentionNote(null)).toBeNull();
-  });
-
-  it("states the configured retention in days", () => {
-    expect(retentionNote(72)).toBe("Items in Trash are removed automatically after 3 days.");
   });
 });
 
@@ -67,7 +33,7 @@ describe("deleteDialogCopy", () => {
   });
 
   it("uses the permanent-delete copy when trash is unavailable", () => {
-    expect(deleteDialogCopy(["a.txt"], { available: false, retentionHours: null })).toEqual({
+    expect(deleteDialogCopy(["a.txt"], { available: false })).toEqual({
       title: "Delete item?",
       description: '"a.txt" will be permanently deleted. This cannot be undone.',
       confirmLabel: "Delete",
@@ -85,7 +51,7 @@ describe("deleteDialogCopy", () => {
   });
 
   it("uses the move-to-trash copy, quoting the single entry's name, when trash is available", () => {
-    expect(deleteDialogCopy(["a.txt"], { available: true, retentionHours: null })).toEqual({
+    expect(deleteDialogCopy(["a.txt"], { available: true })).toEqual({
       title: "Move to Trash?",
       description: '"a.txt" will be moved to Trash.',
       confirmLabel: "Move to Trash",
@@ -94,21 +60,9 @@ describe("deleteDialogCopy", () => {
   });
 
   it("summarizes multiple items by count for the move-to-trash copy", () => {
-    expect(deleteDialogCopy(["a.txt", "b.txt"], { available: true, retentionHours: null })).toEqual(
-      {
-        title: "Move to Trash?",
-        description: "2 items will be moved to Trash.",
-        confirmLabel: "Move to Trash",
-        pendingLabel: "Moving to Trash…",
-      },
-    );
-  });
-
-  it("appends the retention note when configured", () => {
-    expect(deleteDialogCopy(["a.txt"], { available: true, retentionHours: 24 })).toEqual({
+    expect(deleteDialogCopy(["a.txt", "b.txt"], { available: true })).toEqual({
       title: "Move to Trash?",
-      description:
-        '"a.txt" will be moved to Trash. Items in Trash are removed automatically after 1 day.',
+      description: "2 items will be moved to Trash.",
       confirmLabel: "Move to Trash",
       pendingLabel: "Moving to Trash…",
     });
@@ -185,16 +139,8 @@ describe("restoreConflictMessage", () => {
 });
 
 describe("trashAvailabilityFor", () => {
-  it("follows the login's trash capability and keeps only the retention note from the status", () => {
-    expect(trashAvailabilityFor({ trash: true }, { retentionHours: 48 })).toEqual({
-      available: true,
-      retentionHours: 48,
-    });
-    expect(trashAvailabilityFor({ trash: true }, undefined)).toEqual({
-      available: true,
-      retentionHours: null,
-    });
-    // A stale cached status cannot promise a trash the login no longer has.
-    expect(trashAvailabilityFor({ trash: false }, { retentionHours: 48 })).toBeNull();
+  it("follows the login's trash capability", () => {
+    expect(trashAvailabilityFor({ trash: true })).toEqual({ available: true });
+    expect(trashAvailabilityFor({ trash: false })).toBeNull();
   });
 });

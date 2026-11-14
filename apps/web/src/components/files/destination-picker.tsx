@@ -63,8 +63,6 @@ export interface DestinationPickerProps {
    * navigation and dismissal until the request settles.
    */
   pending?: boolean;
-  /** A caution shown under the description, e.g. that this provider moves a folder by copying it. */
-  warning?: string | null;
 }
 
 /**
@@ -85,7 +83,6 @@ function DestinationPickerContent({
   onOpenChange,
   onConfirm,
   pending = false,
-  warning = null,
 }: DestinationPickerProps) {
   const [path, setPath] = useState(initialPath);
   const [newFolderOpen, setNewFolderOpen] = useState(false);
@@ -124,7 +121,6 @@ function DestinationPickerContent({
         <DialogHeader>
           <DialogTitle>{labels.title}</DialogTitle>
           <DialogDescription>Choose a destination folder.</DialogDescription>
-          {warning !== null && <p className="text-sm text-muted-foreground">{warning}</p>}
         </DialogHeader>
 
         <div className="flex min-w-0 flex-wrap items-start justify-between gap-2">

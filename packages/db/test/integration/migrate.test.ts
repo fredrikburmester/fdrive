@@ -1,64 +1,21 @@
-import { copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { fileURLToPath } from "node:url";
 import { PostgreSqlContainer, type StartedPostgreSqlContainer } from "@testcontainers/postgresql";
-import { sql } from "drizzle-orm";
-import { migrate as runMigrations } from "drizzle-orm/node-postgres/migrator";
+import { is, sql } from "drizzle-orm";
+import { getTableConfig, PgTable } from "drizzle-orm/pg-core";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createDb, type Db, migrate, schema } from "../../src/index.js";
-
-const MIGRATIONS = fileURLToPath(new URL("../../drizzle/", import.meta.url));
-
-/** A copy of the migrations folder that ends at `last`, to leave a database as an older fdrive did. */
-async function migrationsUpTo(last: string): Promise<string> {
-  const journal = JSON.parse(await readFile(join(MIGRATIONS, "meta", "_journal.json"), "utf8")) as {
-    entries: { tag: string }[];
-  };
-  const end = journal.entries.findIndex((entry) => entry.tag === last);
-  if (end < 0) throw new Error(`no migration ${last}`);
-  const entries = journal.entries.slice(0, end + 1);
-  const folder = await mkdtemp(join(tmpdir(), "fdrive-migrations-"));
-  await mkdir(join(folder, "meta"));
-  await writeFile(join(folder, "meta", "_journal.json"), JSON.stringify({ ...journal, entries }));
-  for (const entry of entries) {
-    await copyFile(join(MIGRATIONS, `${entry.tag}.sql`), join(folder, `${entry.tag}.sql`));
-  }
-  return folder;
-}
 
 let container: StartedPostgreSqlContainer;
 let db: Db;
 let close: () => Promise<void>;
 
-const EXPECTED_TABLES: ReadonlyArray<{ readonly schema: string; readonly table: string }> = [
-  { schema: "app", table: "providers" },
-  { schema: "app", table: "accounts" },
-  { schema: "app", table: "identities" },
-  { schema: "app", table: "credentials" },
-  { schema: "app", table: "sessions" },
-  { schema: "app", table: "api_tokens" },
-  { schema: "app", table: "tags" },
-  { schema: "app", table: "file_tags" },
-  { schema: "app", table: "favorites" },
-  { schema: "app", table: "folder_views" },
-  { schema: "app", table: "recents" },
-  { schema: "app", table: "thumbnails" },
-  { schema: "app", table: "image_embeddings" },
-  { schema: "app", table: "wopi_locks" },
-  { schema: "app", table: "shares" },
-  { schema: "app", table: "settings" },
-  { schema: "idx", table: "roots" },
-  { schema: "idx", table: "files" },
-  { schema: "idx", table: "chunks" },
-  { schema: "idx", table: "scans" },
-  { schema: "idx", table: "moves" },
-  { schema: "idx", table: "changes" },
-  { schema: "idx", table: "change_cursors" },
-  { schema: "idx", table: "change_epoch" },
-  { schema: "idx", table: "folders" },
-  { schema: "idx", table: "schema_version" },
-];
+/** Every table the drizzle schema declares, as `schema.table`. */
+const EXPECTED_TABLES = Object.values(schema as Record<string, unknown>)
+  .filter((value): value is PgTable => is(value, PgTable))
+  .map((table) => {
+    const config = getTableConfig(table);
+    return `${config.schema}.${config.name}`;
+  })
+  .sort();
 
 beforeAll(async () => {
   container = await new PostgreSqlContainer("pgvector/pgvector:pg17")
@@ -123,15 +80,14 @@ describe("migrate", () => {
     }
   });
 
-  it("creates every table from the domain model", async () => {
-    for (const { schema: schemaName, table } of EXPECTED_TABLES) {
-      const result = await db.execute(sql`
-        select 1
-        from information_schema.tables
-        where table_schema = ${schemaName} and table_name = ${table}
-      `);
-      expect(result.rows, `${schemaName}.${table} should exist`).toHaveLength(1);
-    }
+  it("creates exactly the tables of the domain model", async () => {
+    const result = await db.execute<{ name: string }>(sql`
+      select table_schema || '.' || table_name as name
+      from information_schema.tables
+      where table_schema in ('app', 'idx')
+    `);
+    expect(EXPECTED_TABLES).toContain("idx.changes");
+    expect(result.rows.map((row) => row.name).sort()).toEqual(EXPECTED_TABLES);
   });
 
   it("indexes a root, a file, and a chunk with a 384-dim embedding, then queries them back", async () => {
@@ -233,102 +189,5 @@ describe("migrate", () => {
         mtimeNs: 2n,
       }),
     ).rejects.toThrow();
-  });
-});
-
-describe("migration 0019", () => {
-  it("keeps the old index when an indexer created the files root before the API migrated", async () => {
-    await db.execute(sql.raw("create database fdrive_root_race"));
-    const url = new URL(container.getConnectionUri());
-    url.pathname = "/fdrive_root_race";
-    const older = createDb(url.toString());
-    const folder = await migrationsUpTo("0016_personal_activity");
-    try {
-      // A 0.6 install: the folder is indexed under `sftpgo`, with an Office document.
-      await runMigrations(older.db, { migrationsFolder: folder });
-      await older.db.execute(sql`
-        insert into app.providers (id, type, base_url, enabled, managed_by_env)
-        values ('00000000-0000-4000-8000-0000000000a1', 'sftpgo', 'http://sftpgo:8080', true, true)`);
-      await older.db.execute(sql`insert into idx.roots (name) values ('sftpgo')`);
-      await older.db.execute(sql`
-        insert into idx.files (root_id, path, name, ext, size, mtime_ns, text_status)
-        select id, 'alice/report.docx', 'report.docx', '.docx', 10, 1, 'done'
-        from idx.roots where name = 'sftpgo'`);
-      await older.db.execute(sql`
-        insert into app.office_files (provider_id, root_name, path)
-        values ('00000000-0000-4000-8000-0000000000a1', 'sftpgo', 'alice/report.docx')`);
-      // The new indexer starts first and creates `files`, then indexes again under it.
-      await older.db.execute(sql`insert into idx.roots (name) values ('files')`);
-      await older.db.execute(sql`
-        insert into idx.files (root_id, path, name, ext, size, mtime_ns, text_status)
-        select id, 'alice/report.docx', 'report.docx', '.docx', 10, 1, 'pending'
-        from idx.roots where name = 'files'`);
-      await older.db.execute(sql`
-        insert into app.office_files (provider_id, root_name, path)
-        values ('00000000-0000-4000-8000-0000000000a1', 'files', 'alice/report.docx')`);
-
-      await migrate(older.db);
-
-      const roots = await older.db.execute<{ id: number; name: string }>(
-        sql`select id, name from idx.roots order by id`,
-      );
-      expect(roots.rows).toEqual([{ id: 1, name: "files" }]);
-      const files = await older.db.execute<{ root_id: number; status: string }>(
-        sql`select root_id, text_status as status from idx.files`,
-      );
-      expect(files.rows).toEqual([{ root_id: 1, status: "done" }]);
-      const office = await older.db.execute<{ root_name: string }>(
-        sql`select root_name from app.office_files`,
-      );
-      expect(office.rows).toEqual([{ root_name: "files" }]);
-      // The indexer and OCR wait for this before touching roots.
-      const version = await older.db.execute<{ version: number }>(
-        sql`select max(version) as version from idx.schema_version`,
-      );
-      expect(version.rows[0]?.version).toBe(2);
-    } finally {
-      await older.close();
-      await rm(folder, { recursive: true, force: true });
-    }
-  });
-
-  it("switches off WebDAV and S3 rows and keeps them for the logins that reference them", async () => {
-    await db.execute(sql.raw("create database fdrive_storage_types"));
-    const url = new URL(container.getConnectionUri());
-    url.pathname = "/fdrive_storage_types";
-    const older = createDb(url.toString());
-    const folder = await migrationsUpTo("0018_local_grants");
-    try {
-      await runMigrations(older.db, { migrationsFolder: folder });
-      await older.db.execute(sql`
-        insert into app.providers (type, base_url, enabled, managed_by_env) values
-          ('local', 'local', true, true),
-          ('webdav', 'http://dav.test/', true, true),
-          ('s3', 'http://s3.test/bucket', true, false)`);
-      await older.db.execute(sql`
-        insert into app.accounts (id) values ('00000000-0000-4000-8000-000000000001')`);
-      await older.db.execute(sql`
-        insert into app.identities (account_id, provider_id, external_username)
-        select '00000000-0000-4000-8000-000000000001', id, 'alice'
-        from app.providers where type = 'webdav'`);
-
-      await migrate(older.db);
-
-      const rows = await older.db.execute<{
-        type: string;
-        enabled: boolean;
-        managed_by_env: boolean;
-      }>(sql`select type, enabled, managed_by_env from app.providers order by type`);
-      expect(rows.rows).toEqual([
-        { type: "local", enabled: true, managed_by_env: true },
-        { type: "s3", enabled: false, managed_by_env: false },
-        { type: "webdav", enabled: false, managed_by_env: false },
-      ]);
-      const logins = await older.db.execute(sql`select 1 from app.identities`);
-      expect(logins.rows).toHaveLength(1);
-    } finally {
-      await older.close();
-      await rm(folder, { recursive: true, force: true });
-    }
   });
 });

@@ -133,16 +133,6 @@ const nextConfig: NextConfig = {
   // `next dev`. In the compose deployment (see deploy/README.md), Caddy
   // routes /api/* and /mcp* straight to the api service; local development
   // proxies both so the connection URLs shown on the account page work.
-  // `System > Connection` became `System > General` (see
-  // `docs/ARCHITECTURE.md`), and `System > Storage` folded into it once the
-  // files folder became the only storage; bookmarks and links to the old
-  // routes keep working.
-  async redirects() {
-    return [
-      { source: "/system/connection", destination: "/system/general", permanent: true },
-      { source: "/system/storage", destination: "/system/general", permanent: true },
-    ];
-  },
   async rewrites() {
     return [
       {

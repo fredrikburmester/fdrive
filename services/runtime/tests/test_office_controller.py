@@ -60,6 +60,13 @@ def test_parse_office_snapshot_is_strict() -> None:
             parse_office_snapshot(body)
 
 
+def test_parse_retry_after_defaults_and_rejects_non_positive() -> None:
+    assert office_controller.parse_retry_after("") == office_controller.DEFAULT_RETRY_AFTER_SECONDS
+    assert office_controller.parse_retry_after("12.5") == 12.5
+    with pytest.raises(ValueError):
+        office_controller.parse_retry_after("0")
+
+
 def test_office_client_authenticates_and_rejects_bad_responses(monkeypatch: pytest.MonkeyPatch) -> None:
     seen: dict[str, object] = {}
 
@@ -231,6 +238,37 @@ def test_lifecycle_fails_closed_and_reports_cleanup_failure() -> None:
     )
     lifecycle.reconcile(OfficeSnapshot(1, False))
     assert lifecycle.status()["error"] == "Office service shutdown failed: OSError"
+
+
+def test_lifecycle_reports_a_failed_start_and_survives_a_vanished_process_group() -> None:
+    lifecycle = OfficeLifecycle(
+        ("start",),
+        ("stop",),
+        "http://ready",
+        popen=lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("no such file")),
+        run_command=lambda *_args, **_kwargs: completed(),
+    )
+    lifecycle.reconcile(OfficeSnapshot(1, True))
+    assert lifecycle.status()["status"] == "failed"
+    assert lifecycle.status()["error"] == "Office start failed: OSError"
+
+    process = FakeProcess()
+
+    def killpg(_pid: int, _sig: signal.Signals) -> None:
+        raise OSError("gone")
+
+    lifecycle = OfficeLifecycle(
+        ("start",),
+        ("stop",),
+        "http://ready",
+        popen=lambda *_args, **_kwargs: process,
+        run_command=lambda *_args, **_kwargs: completed(),
+        killpg=killpg,
+    )
+    lifecycle.reconcile(OfficeSnapshot(1, True))
+    lifecycle.reconcile(OfficeSnapshot(2, False))
+    assert process.wait_calls == [5]
+    assert lifecycle.status()["status"] == "off"
 
 
 def test_lifecycle_validates_configuration_and_reports_not_ready() -> None:

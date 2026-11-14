@@ -146,17 +146,15 @@ export function AppSidebar() {
         <SidebarGroup>
           <SidebarGroupContent>
             <SidebarMenu>
-              {anyLoginCan(me, "shares") && (
-                <SidebarMenuItem>
-                  <SidebarMenuButton
-                    isActive={pathname === "/shares"}
-                    render={<Link href={"/shares" as Route} />}
-                  >
-                    <Link2 />
-                    <span>Shares</span>
-                  </SidebarMenuButton>
-                </SidebarMenuItem>
-              )}
+              <SidebarMenuItem>
+                <SidebarMenuButton
+                  isActive={pathname === "/shares"}
+                  render={<Link href={"/shares" as Route} />}
+                >
+                  <Link2 />
+                  <span>Shares</span>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
               {anyLoginCan(me, "trash") && (
                 <SidebarMenuItem>
                   <SidebarMenuButton

@@ -1,7 +1,7 @@
 [project]
 name = "fdrive-runtime"
 version = "0.1.0"
-description = "Fail-closed lifecycle controller for fdrive's bundled optional workers"
+description = "Fail-closed lifecycle controller for fdrive's bundled ONLYOFFICE server"
 requires-python = ">=3.12"
 
 [project.optional-dependencies]
@@ -34,7 +34,6 @@ exclude_lines = [
   "raise NotImplementedError",
   "def fetch",
   "class NoRedirect",
-  "def _child_ready",
   "class RuntimeServer",
   "class RuntimeHandler",
   "def serve_status",

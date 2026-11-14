@@ -240,25 +240,6 @@ mounts the dev files folder (`deploy/dev/.data/files`) read-write and starts wit
 `OCR_RUN_ON_START=false` so bringing the profile up does not immediately rewrite dev
 fixtures; trigger a pass explicitly with `POST /run` when you want to exercise it.
 
-## Migrating from filesai
-
-filesai kept its done-log as a flat `$STATE/done.tsv` (`<size>_<mtime>|<path>
-TAB status`). `scripts/import-done-tsv.py` imports it into `idx.ocr_log` so
-the first pass here does not re-OCR everything filesai had already handled:
-
-```sh
-python scripts/import-done-tsv.py done.tsv --root files \
-  --database-url "$DATABASE_URL"
-```
-
-filesai's key only has second-precision mtimes, while `idx.ocr_log` keys on
-`mtime_ns`; the importer scales seconds to nanoseconds. If a file's real mtime
-carries sub-second precision the imported key will not match on the first
-pass, so that one file gets reprocessed once; this is safe, since OCR is idempotent
-and refuses PDFs that already have text. It is otherwise idempotent: rows are
-inserted `ON CONFLICT ... DO NOTHING` on the same unique key the service
-itself uses, so running it twice is a no-op the second time.
-
 ## Testing
 
 Pure modules (`schedule.py`, `decide.py`, `rules.py`, `settings.py`,

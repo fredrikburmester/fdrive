@@ -14,22 +14,41 @@ import os
 import signal
 import subprocess
 import sys
+import threading
 import time
 import urllib.error
 import urllib.request
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Protocol
 
-from fdrive_runtime.controller import (
-    DEFAULT_RETRY_AFTER_SECONDS,
-    EndpointUnavailable,
-    NoRedirect,
-    parse_retry_after,
-    serve_status,
-)
-
 DEFAULT_OFFICE_URL = "http://api:3001/api/v1/internal/office"
+DEFAULT_RETRY_AFTER_SECONDS = 300.0
+
+
+def parse_retry_after(raw: str) -> float:
+    value = float(raw) if raw else DEFAULT_RETRY_AFTER_SECONDS
+    if value <= 0:
+        raise ValueError("FDRIVE_RUNTIME_RETRY_AFTER_SECONDS must be positive")
+    return value
+
+
+class EndpointUnavailable(ValueError):
+    """The settings endpoint could not be reached, as distinct from answering
+    with something the contract rejects.
+
+    The two deserve different patience. A document that arrives and violates
+    the contract is a real signal and should fail closed quickly. A poll that
+    never completed usually means the host is busy, and stopping a healthy
+    engine for that restarts it, which makes the host busier, which fails the
+    next poll.
+    """
+
+
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, *_args: object, **_kwargs: object) -> urllib.request.Request | None:
+        return None
 
 
 @dataclass(frozen=True)
@@ -139,9 +158,9 @@ class OfficeLifecycle:
         if self._process is not None and self._process.poll() is None:
             self._status = "ready" if self._ready() else "starting"
             if self._status == "ready":
-                # See `controller.py`: an `error` that outlives the condition it
-                # describes is worse than no error at all, because the health
-                # endpoint and the Features page both surface it as the reason.
+                # An `error` that outlives the condition it describes is worse
+                # than no error at all, because the health endpoint and the
+                # Features page both surface it as the reason.
                 self._error = None
             return
         if self._process is not None:
@@ -246,6 +265,33 @@ class OfficeLifecycle:
         }
 
 
+class RuntimeServer(ThreadingHTTPServer):
+    lifecycle: OfficeLifecycle
+
+
+class RuntimeHandler(BaseHTTPRequestHandler):
+    def do_GET(self) -> None:  # noqa: N802 - HTTP verb required by stdlib
+        if self.path not in {"/health", "/runtime"}:
+            self.send_error(404)
+            return
+        body = json.dumps(self.server.lifecycle.status()).encode("utf-8")  # type: ignore[attr-defined]
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, _format: str, *_args: object) -> None:
+        return
+
+
+def serve_status(lifecycle: OfficeLifecycle, port: int) -> RuntimeServer:
+    server = RuntimeServer(("0.0.0.0", port), RuntimeHandler)  # noqa: S104 - compose network only
+    server.lifecycle = lifecycle
+    threading.Thread(target=server.serve_forever, daemon=True, name="runtime-status").start()
+    return server
+
+
 def run(
     lifecycle: OfficeLifecycle,
     client: OfficeClient,
@@ -254,9 +300,12 @@ def run(
     sleep: Callable[[float], None],
     unreachable_seconds: float | None = None,
 ) -> None:
-    """Same two windows as `controller.run`: a rejected document fails closed
-    after `stale_seconds`, an unreachable endpoint after the longer
-    `unreachable_seconds`, so a busy host does not tear down a healthy engine."""
+    """Poll the Office document and reconcile the engine against it.
+
+    Two windows rather than one, for the reason `EndpointUnavailable` gives: a
+    rejected document fails closed after `stale_seconds`, an unreachable
+    endpoint after the longer `unreachable_seconds`, so a busy host does not
+    tear down a healthy engine. Both still fail closed."""
     unreachable_after = stale_seconds if unreachable_seconds is None else unreachable_seconds
     last_good_at: float | None = None
     while True:

@@ -4,23 +4,12 @@ import type { Scope } from "@fdrive/core";
 export type { Scope } from "@fdrive/core";
 
 /**
- * Why an identity has no configured scopes: its provider is missing or
+ * Why an identity's scopes are unavailable: its provider is missing or
  * disabled, its username cannot name a folder, or its storage is not under
  * any index root. `no_connection` is for callers that have no identity at
  * all; the resolver never returns it.
  */
-export type ConfiguredUnavailableReason = Extract<
-  IdentityScopeReason,
-  "no_connection" | "provider_mismatch" | "invalid_configuration" | "no_roots"
->;
-
-/**
- * Why index-backed features are unavailable for an identity. Every
- * contract reason except "ok", so callers and fakes may report the ones
- * the web still recognizes; the resolver itself only returns a
- * `ConfiguredUnavailableReason`.
- */
-export type VerifiedUnavailableReason = Exclude<IdentityScopeReason, "ok">;
+export type UnavailableReason = Exclude<IdentityScopeReason, "ok">;
 
 /**
  * An identity's trusted scopes: where its virtual paths live under an
@@ -33,7 +22,7 @@ export type ConfiguredMappingsResult =
       readonly providerId: string;
       readonly scopes: readonly Scope[];
     }
-  | { readonly available: false; readonly reason: ConfiguredUnavailableReason };
+  | { readonly available: false; readonly reason: UnavailableReason };
 
 /**
  * The configured scopes whose root is one of the indexed roots
@@ -43,4 +32,4 @@ export type ConfiguredMappingsResult =
  */
 export type VerifiedIndexScopesResult =
   | { readonly available: true; readonly scopes: readonly Scope[] }
-  | { readonly available: false; readonly reason: VerifiedUnavailableReason };
+  | { readonly available: false; readonly reason: UnavailableReason };

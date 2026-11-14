@@ -63,7 +63,6 @@ export interface AppConfig {
    */
   readonly fdriveTrustedProxyHops: number;
   readonly nodeEnv: NodeEnv;
-  readonly fdriveAutoMigrate: boolean;
   /** Directory archive jobs spool temp files into. Defaults to the OS temp dir. */
   readonly fdriveTmpDir: string;
   /** Durable, private spool. Unset disables desktop writes. */
@@ -311,10 +310,6 @@ const envSchema = z.object({
       .pipe(z.number().int().min(0)),
   ),
   NODE_ENV: z.preprocess((value) => withDefault(value, "development"), z.enum(NODE_ENVS)),
-  FDRIVE_AUTO_MIGRATE: z.preprocess(
-    (value) => withDefault(value, "true"),
-    z.enum(["true", "false"]).transform((value) => value === "true"),
-  ),
   FDRIVE_TMP_DIR: z.preprocess((value) => withDefault(value, tmpdir()), z.string().min(1)),
   FDRIVE_BACKUP_STATE_DIR: z.preprocess(undefinedWhenEmpty, z.string().startsWith("/").optional()),
   FDRIVE_RESTORE_MODE: z.preprocess(
@@ -533,7 +528,6 @@ export function loadConfig(env: Record<string, string | undefined>): AppConfig {
     fdriveCookieSecure: parsed.FDRIVE_COOKIE_SECURE,
     fdriveTrustedProxyHops: parsed.FDRIVE_TRUSTED_PROXY_HOPS,
     nodeEnv: parsed.NODE_ENV,
-    fdriveAutoMigrate: parsed.FDRIVE_AUTO_MIGRATE,
     fdriveTmpDir: parsed.FDRIVE_TMP_DIR,
     ...(parsed.FDRIVE_DESKTOP_STATE_DIR
       ? { fdriveDesktopStateDir: parsed.FDRIVE_DESKTOP_STATE_DIR }

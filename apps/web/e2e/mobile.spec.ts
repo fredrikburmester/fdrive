@@ -112,7 +112,7 @@ test.describe("mobile layout (390x844 and 320px)", () => {
       route.fulfill({
         status: 200,
         contentType: "application/json",
-        body: JSON.stringify({ available: false, semantic: false }),
+        body: JSON.stringify({ available: false, semantic: false, images: false }),
       }),
     );
     await page.setViewportSize(MOBILE_VIEWPORT);

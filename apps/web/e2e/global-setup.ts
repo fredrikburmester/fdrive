@@ -33,7 +33,7 @@ function extensionOf(name: string): string {
  * a search hit.
  *
  * Runs after the API is healthy, since the API applies the `idx`/`app`
- * schema migrations on boot (`FDRIVE_AUTO_MIGRATE=true`) and this needs
+ * schema migrations on boot and this needs
  * those tables to already exist.
  */
 async function seedSearchIndex(databaseUrl: string): Promise<void> {

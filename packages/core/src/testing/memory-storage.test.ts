@@ -89,6 +89,24 @@ describe("createMemoryStorage extras", () => {
     await storage.deleteDir("/");
     expect(storage.dirs()).toEqual(["/"]);
   });
+
+  it("removes only an empty directory, never the root", async () => {
+    const storage = createMemoryStorage({ "/full/a.txt": "a" });
+    await storage.mkdir("/empty/inner", { parents: true });
+    await expect(storage.deleteEmptyDir("/full")).rejects.toMatchObject({ kind: "conflict" });
+    await expect(storage.deleteEmptyDir("/empty")).rejects.toMatchObject({ kind: "conflict" });
+    await expect(storage.deleteEmptyDir("/full/a.txt")).rejects.toMatchObject({
+      kind: "bad_request",
+    });
+    await expect(storage.deleteEmptyDir("/nope")).rejects.toMatchObject({ kind: "not_found" });
+    await storage.deleteEmptyDir("/empty/inner");
+    await storage.deleteEmptyDir("/empty");
+    expect(storage.dirs()).toEqual(["/", "/full"]);
+    await storage.deleteFile("/full/a.txt");
+    await storage.deleteEmptyDir("/full");
+    await expect(storage.deleteEmptyDir("/")).rejects.toMatchObject({ kind: "bad_request" });
+    expect(storage.dirs()).toEqual(["/"]);
+  });
 });
 
 it("preserves read, probe, range and timestamp semantics", async () => {

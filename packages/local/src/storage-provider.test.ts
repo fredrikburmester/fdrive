@@ -110,7 +110,9 @@ describe("symlinks", () => {
   });
 
   it("lists a link that leaves the home as a symlink and refuses to follow it", async () => {
-    expect(await f.storage.list("/")).toMatchObject([{ name: "out", kind: "symlink", size: 0 }]);
+    expect(await f.storage.list("/")).toMatchObject([
+      { name: "out", kind: "symlink", size: 0, link: true },
+    ]);
     expect(await kindOf(f.storage.list("/out"))).toBe("forbidden");
     expect(await kindOf(f.storage.stat("/out"))).toBe("forbidden");
     expect(await kindOf(f.storage.download("/out/secret.txt"))).toBe("forbidden");
@@ -135,11 +137,16 @@ describe("symlinks", () => {
     await symlink(join(f.home, "real"), join(f.home, "alias"));
     await symlink(join(f.home, "real", "a.txt"), join(f.home, "a-link.txt"));
     const entries = await f.storage.list("/");
-    expect(entries.find((entry) => entry.name === "alias")).toMatchObject({ kind: "dir" });
+    expect(entries.find((entry) => entry.name === "alias")).toMatchObject({
+      kind: "dir",
+      link: true,
+    });
     expect(entries.find((entry) => entry.name === "a-link.txt")).toMatchObject({
       kind: "file",
       size: 1,
+      link: true,
     });
+    expect(entries.find((entry) => entry.name === "real")).not.toHaveProperty("link");
     expect(await read(f.storage, "/alias/a.txt")).toBe("a");
     expect(await read(f.storage, "/a-link.txt")).toBe("a");
     expect(await f.storage.list("/alias")).toMatchObject([{ path: "/alias/a.txt" }]);
@@ -147,6 +154,11 @@ describe("symlinks", () => {
     expect(await f.storage.stat("/alias/a.txt")).not.toHaveProperty("path");
     expect(await f.storage.stat("/a-link.txt")).not.toHaveProperty("path");
     expect(await f.storage.stat("/real/a.txt")).not.toHaveProperty("path");
+    // Stat says when it followed a link, at the last segment or on the way.
+    expect(await f.storage.stat("/alias/a.txt")).toMatchObject({ kind: "file", link: true });
+    expect(await f.storage.stat("/alias")).toMatchObject({ kind: "dir", link: true });
+    expect(await f.storage.stat("/a-link.txt")).toMatchObject({ kind: "file", link: true });
+    expect(await f.storage.stat("/real/a.txt")).not.toHaveProperty("link");
   });
 
   it("lists a dangling link as a symlink and reports it missing", async () => {
@@ -450,6 +462,17 @@ describe("delete", () => {
     await f.storage.upload("/c.txt", bytes("c"));
     await f.storage.deleteDir("/");
     expect(await readdir(f.home)).toEqual([]);
+  });
+
+  it("removes an empty folder but never the home, a file or a folder with anything in it", async () => {
+    await f.storage.mkdir("/empty");
+    await f.storage.upload("/full/.hidden", bytes("h"), { mkdirParents: true });
+    expect(await kindOf(f.storage.deleteEmptyDir("/full"))).toBe("conflict");
+    expect(await kindOf(f.storage.deleteEmptyDir("/full/.hidden"))).toBe("bad_request");
+    expect(await kindOf(f.storage.deleteEmptyDir("/"))).toBe("bad_request");
+    await f.storage.deleteEmptyDir("/empty");
+    expect(await kindOf(f.storage.deleteEmptyDir("/empty"))).toBe("not_found");
+    expect((await readdir(f.home)).sort()).toEqual(["full"]);
   });
 });
 

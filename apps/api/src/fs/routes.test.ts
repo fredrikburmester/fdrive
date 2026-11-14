@@ -131,6 +131,7 @@ function forbiddenStorage(): StorageProvider {
     copy: deny,
     deleteFile: deny,
     deleteDir: deny,
+    deleteEmptyDir: deny,
   };
 }
 
@@ -209,6 +210,7 @@ function makeStubStorage(overrides: Partial<StorageProvider>): StorageProvider {
     copy: notImplemented,
     deleteFile: notImplemented,
     deleteDir: notImplemented,
+    deleteEmptyDir: notImplemented,
     setModifiedAt: notImplemented,
     zip: notImplemented,
     ...overrides,

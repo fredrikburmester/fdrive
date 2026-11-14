@@ -53,10 +53,6 @@ describe("queryKeys", () => {
     expect(queryKeys.recents.list()).toEqual(["recents", "list"]);
   });
 
-  it("trash.status() builds a stable key", () => {
-    expect(queryKeys.trash.status()).toEqual(["trash", "status"]);
-  });
-
   it("trash.list() builds a stable key", () => {
     expect(queryKeys.trash.list()).toEqual(["trash", "list"]);
   });

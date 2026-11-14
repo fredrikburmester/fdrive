@@ -51,7 +51,7 @@ it("hides backup paths from browsing and refuses reads, writes and ancestor muta
   expect(await raw.stat("/private/.fdrive-backups/snapshot")).toHaveProperty("size", 1);
   expect(Reflect.get(storage, "marker")).toBe("memory");
 });
-it("keeps protection inside write leases and rejects malformed provider listings", async () => {
+it("rejects malformed provider listings", async () => {
   const raw = Object.assign(createMemoryStorage(), {
     zip: vi.fn(
       async () =>
@@ -62,18 +62,7 @@ it("keeps protection inside write leases and rejects malformed provider listings
           },
         }),
     ),
-    marker: "memory",
   });
-  const lease = vi.fn(async (action: Parameters<NonNullable<typeof raw.withWriteLease>>[0]) =>
-    action(raw),
-  );
-  const storage = withoutBackupPaths({
-    ...raw,
-    withWriteLease: lease as NonNullable<typeof raw.withWriteLease>,
-  });
-  await expect(
-    storage.withWriteLease?.((leased) => leased.mkdir("/.fdrive-backups")),
-  ).rejects.toMatchObject({ kind: "forbidden" });
   await raw.mkdir("/dir");
   const list = vi
     .spyOn(raw, "list")

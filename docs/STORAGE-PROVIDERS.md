@@ -51,8 +51,8 @@ removed on 2026-11-13.
 ## Capabilities
 
 The API combines the module's flags with configuration into each login's
-`IdentitySummary.capabilities` (`capabilitiesFor`), and the web reads them through
-`capabilitiesFor` and `anyLoginCan` in
+`IdentitySummary.capabilities` (`capabilitiesFor`). Only `trash` and `index` vary, so the web
+reads only those, through `capabilitiesFor` and `anyLoginCan` in
 [capabilities.ts](../apps/web/src/lib/identity/capabilities.ts). Nothing keys on a type name,
 and the API refuses what a login lacks even when a stale client asks.
 
@@ -70,11 +70,10 @@ and the API refuses what a login lacks even when a stale client asks.
 ## StorageProvider
 
 Required: `list`, `stat`, `statFile`, `download`, `upload`, `mkdir`, `move`, `copy`,
-`deleteFile`, `deleteDir`. Optional members are absent, never throwing, and agree with the
-flags: `probeDirectoryRead` and `probeFileRead` (live read proofs), `setModifiedAt`, `zip` and
-`trash`. Three more, `withWriteLease`, `maxPublishBytes` and `movesDirectoriesByCopy`, describe
-backends that need a write lease, cap publication or move folders by copying; the files folder
-sets none of them, and the Mac write path still honours them.
+`deleteFile`, `deleteDir` and `deleteEmptyDir`, which removes a folder only while it is empty
+(the files folder's `rmdir`), so tidying up never takes what arrived meanwhile. Optional members
+are absent, never throwing, and agree with the flags: `probeDirectoryRead` and `probeFileRead`
+(live read proofs), `setModifiedAt`, `zip` and `trash`.
 
 Paths are the storage's own, already resolved from a scope. `statFile` throws `bad_request` on a
 directory and `not_found` on a missing path. `move`, `copy` and `upload` refuse a taken target
@@ -86,6 +85,8 @@ How the files folder implements it:
 
 - **Confinement.** Paths are normalized and joined to the home; a symlink is followed only when
   its real path stays inside the home or the shared folder ([home.ts](../packages/local/src/home.ts)).
+  A followed link is marked `link` on its listing entry, and `stat` marks a path that passes
+  through one at any segment, so the Mac's reads can refuse it.
 - **Atomic publish.** Uploads and file copies write a temporary file beside the target and
   publish it with `link`, a real create-if-absent; only `overwrite: true` renames it over a
   taken name.

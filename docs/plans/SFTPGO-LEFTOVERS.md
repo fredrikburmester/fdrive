@@ -18,7 +18,7 @@ migrations, compatibility shims or configuration aliases; a full reindex is acce
   pullable S3 test image first.
 - 11–15 run strictly in order: they share `apps/api/src/auth/service.ts`, `composition.ts` and the
   contracts.
-- 16 before 17, 26, 31 and 32. 22 before 29. 16 and 23 before 18. 36 and 37 last.
+- 16 before 17, 26, 31 and 32. 16 and 23 before 18. 36 and 37 last.
 
 ## Decisions
 
@@ -76,12 +76,8 @@ Recommended on 2026-11-14. Confirm each before the group that depends on it.
 6. **OCR: find PDFs through the index.** OCR walks the whole folder nightly and keys its done
    log by path, size and modification time. API writes do not take OCR's per-path lock, so a
    rewrite can replace an upload that lands during its copy.
-7. **Delete dead tooling and shims.** `services/runtime`'s generic controller (dead since the ML
-   server); the unused `fdrive-migrate` binary and `FDRIVE_AUTO_MIGRATE`; tests of the 0019 and
-   0020 upgrades and `sftpgo`/`photos` fixtures; the perf harness, which still starts TEI and a
-   Python script in the Rust indexer image; the dev env generator's in-place key rewriting;
-   `/system/connection` and `/system/storage` redirects; `/about` fields for older servers; the
-   public URL's fallback to Office's `appUrl`.
+7. **Delete dead tooling and shims.** The public URL's fallback to Office's `appUrl`, after a
+   check of the production database.
 8. **Web: drop gates on capabilities that are always on.** `zip`, `setModifiedAt`, `atomicMove`,
    `shares`, `office` and `shareWithPeople` are always true: the one-by-one download plan, the
    slow-move warning, the upload-time note, "Shares aren't available for this login" and the
@@ -156,8 +152,6 @@ Recommended on 2026-11-14. Confirm each before the group that depends on it.
 
 All but 27 are server-only and keep shipped Mac builds working.
 
-22. Remove the write lease, publish size cap and copy-based folder moves from `desktop/writes.ts`;
-    stat directly instead of listing every ancestor (`desktop/files.ts` `entry`).
 23. Apply metadata inline after Mac writes and drop `app.desktop_effects` and the five `revision`
     columns that serve it.
 24. Detect conflicts from the file stamp; drop the publish lock and its pool, `previous` copies,

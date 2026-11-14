@@ -1,9 +1,5 @@
 import { describe, expect, it } from "vitest";
-import nextConfig, {
-  buildContentSecurityPolicy,
-  buildFixedSecurityHeaders,
-  originOf,
-} from "../next.config.ts";
+import { buildContentSecurityPolicy, buildFixedSecurityHeaders, originOf } from "../next.config.ts";
 
 describe("originOf", () => {
   it("returns null for undefined", () => {
@@ -102,14 +98,5 @@ describe("buildFixedSecurityHeaders", () => {
       key: "Permissions-Policy",
       value: "camera=(), microphone=(), geolocation=()",
     });
-  });
-});
-
-describe("redirects", () => {
-  it("sends the retired Connection and Storage pages to General", async () => {
-    expect(await nextConfig.redirects?.()).toEqual([
-      { source: "/system/connection", destination: "/system/general", permanent: true },
-      { source: "/system/storage", destination: "/system/general", permanent: true },
-    ]);
   });
 });

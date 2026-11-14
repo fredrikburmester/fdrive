@@ -1,12 +1,6 @@
 "use client";
 
-import type {
-  FsEntry,
-  OfficeStatusResponse,
-  ProviderCapabilities,
-  ReceivedGrant,
-  Tag,
-} from "@fdrive/contracts";
+import type { FsEntry, OfficeStatusResponse, ReceivedGrant, Tag } from "@fdrive/contracts";
 import { detectArchiveKind } from "@fdrive/core";
 import {
   CopyIcon,
@@ -41,12 +35,7 @@ import {
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
 import { entryRestrictions } from "@/lib/grants/paths";
-import {
-  type BrowserSelection,
-  canDownload,
-  DEFAULT_CAPABILITIES,
-  selectionOf,
-} from "@/lib/identity/capabilities";
+import { type BrowserSelection, selectionOf } from "@/lib/identity/capabilities";
 import { tagDotClassName } from "@/lib/metadata/colors";
 import type { TagCheckState } from "@/lib/metadata/tag-set";
 import { OFFICE_MODE_LABELS, officeModesFor } from "@/lib/office/capabilities";
@@ -84,23 +73,17 @@ export interface FileContextMenuProps {
    * just `entry`. Defaults to `entry` alone. A multi-entry selection
    * disables "Duplicate" and hides "Extract here"/"Extract to", since both
    * only ever make sense for a single entry; a selection with a folder
-   * makes the download item read "Download as zip" (see `capabilities`).
+   * makes the download item read "Download as zip".
    */
   selection?: BrowserSelection;
-  /**
-   * What the active login's storage can do (see `browserActions`): hides
-   * Share without `shares`, the Office items without `office`, and Download
-   * when the selection needs a zip the provider cannot build; labels the
-   * last item "Move to Trash" with `trash`. Defaults to
-   * `DEFAULT_CAPABILITIES`.
-   */
-  capabilities?: ProviderCapabilities;
+  /** Whether deletes go to Trash: the last item then reads "Move to Trash", not "Delete". */
+  trash?: boolean;
   /**
    * The folders others share with the active login. With them the menu
    * offers "Leave" on such a folder, hides rename, move, duplicate and
    * delete where only the owner may do them, keeps public links out of
    * `Shared with me`, and offers "Share with people" on the login's own
-   * folders (with `capabilities.shareWithPeople`). Defaults to none.
+   * folders. Defaults to none.
    */
   received?: readonly ReceivedGrant[];
   /**
@@ -153,7 +136,7 @@ export function FileContextMenu({
   children,
   onAction,
   selection,
-  capabilities = DEFAULT_CAPABILITIES,
+  trash = false,
   received = DEFAULT_RECEIVED,
   hideMoveCopy = false,
   showOrganize = false,
@@ -170,18 +153,17 @@ export function FileContextMenu({
   const group = selection ?? selectionOf([entry]);
   const selectionCount = group.files + group.folders;
   const includesFolder = group.folders > 0;
-  const trashAvailable = capabilities.trash;
   const isMultiSelection = selectionCount > 1;
   const archiveKind = entry.kind !== "dir" ? detectArchiveKind(entry.name) : null;
   const canExtract = !isMultiSelection && archiveKind !== null;
-  const restrictions = entryRestrictions(entry, capabilities, received);
+  const restrictions = entryRestrictions(entry, received);
   const locked = restrictions.locked !== null;
 
   return (
     <ContextMenu>
       <ContextMenuTrigger>{children}</ContextMenuTrigger>
       <ContextMenuContent>
-        {capabilities.shares && restrictions.publicLink && (
+        {restrictions.publicLink && (
           <ContextMenuItem onClick={() => onAction("share", entry)}>
             <Link2Icon />
             Share
@@ -197,13 +179,12 @@ export function FileContextMenu({
           <ExternalLinkIcon />
           Open
         </ContextMenuItem>
-        {capabilities.office &&
-          officeModesFor(entry, officeStatus, selectionCount).map((mode) => (
-            <ContextMenuItem key={mode} onClick={() => onAction(`office:${mode}`, entry)}>
-              <ExternalLinkIcon />
-              {OFFICE_MODE_LABELS[mode]}
-            </ContextMenuItem>
-          ))}
+        {officeModesFor(entry, officeStatus, selectionCount).map((mode) => (
+          <ContextMenuItem key={mode} onClick={() => onAction(`office:${mode}`, entry)}>
+            <ExternalLinkIcon />
+            {OFFICE_MODE_LABELS[mode]}
+          </ContextMenuItem>
+        ))}
         {showReveal && (
           <ContextMenuItem onClick={() => onAction("revealInFolder", entry)}>
             <FolderSearchIcon />
@@ -315,15 +296,11 @@ export function FileContextMenu({
             )}
           </>
         )}
-        {canDownload(capabilities, group) && (
-          <>
-            <ContextMenuSeparator />
-            <ContextMenuItem onClick={() => onAction("download", entry)}>
-              <DownloadIcon />
-              {includesFolder && capabilities.zip ? "Download as zip" : "Download"}
-            </ContextMenuItem>
-          </>
-        )}
+        <ContextMenuSeparator />
+        <ContextMenuItem onClick={() => onAction("download", entry)}>
+          <DownloadIcon />
+          {includesFolder ? "Download as zip" : "Download"}
+        </ContextMenuItem>
         {restrictions.leave !== null && !isMultiSelection && (
           <>
             <ContextMenuSeparator />
@@ -337,11 +314,11 @@ export function FileContextMenu({
           <>
             <ContextMenuSeparator />
             <ContextMenuItem
-              variant={trashAvailable ? "default" : "destructive"}
+              variant={trash ? "default" : "destructive"}
               onClick={() => onAction("delete", entry)}
             >
               <Trash2Icon />
-              {trashAvailable ? "Move to Trash" : "Delete"}
+              {trash ? "Move to Trash" : "Delete"}
             </ContextMenuItem>
           </>
         )}

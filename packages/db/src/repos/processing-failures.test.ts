@@ -4,7 +4,7 @@ import { createProcessingFailureReader } from "./processing-failures.js";
 
 const at = new Date("2026-09-13T08:00:00Z");
 const row = (id: number, resolvedAt: Date | null = null) => ({
-  root: "photos",
+  root: "files",
   failure: {
     id,
     path: "photo.png",
@@ -57,7 +57,7 @@ describe("failure query shaping", () => {
     });
     expect(result).toMatchObject({ total: 2, openCount: 4, nextCursor: 3 });
     expect(result.entries[0]).toMatchObject({
-      root: "photos",
+      root: "files",
       firstFailedAt: at.toISOString(),
       resolvedAt: null,
       attempts: 3,

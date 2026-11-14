@@ -53,7 +53,7 @@ export async function removeRecoveryTree(storage: StorageProvider, internal: str
   await storage.deleteDir(internal);
 }
 
-/** Bounded, lease-fenced reclamation of expired uploads, stale conflicts and old backups.
+/** Bounded reclamation of expired uploads, stale conflicts and old backups.
  * Uncertain and committing operations are never touched; failures defer to the next pass. */
 export function createDesktopRetention(deps: DesktopRetentionDeps) {
   const retention = deps.retention ?? DEFAULT_DESKTOP_RETENTION;
@@ -66,10 +66,7 @@ export function createDesktopRetention(deps: DesktopRetentionDeps) {
   }
   async function reclaim(op: DesktopOperationRecord, now: Date) {
     const storage = await deps.storageForIdentity(op.identityId);
-    const internal = `${DESKTOP_INTERNAL_ROOT}/${op.identityId}/${op.id}`;
-    const remove = (scoped: StorageProvider) => removeRecoveryTree(scoped, internal);
-    if (storage.withWriteLease) await storage.withWriteLease(remove);
-    else await remove(storage);
+    await removeRecoveryTree(storage, `${DESKTOP_INTERNAL_ROOT}/${op.identityId}/${op.id}`);
     await spool(op);
     await deps.repo.reclaim(op.identityId, op.accountId, op.id, now);
   }
