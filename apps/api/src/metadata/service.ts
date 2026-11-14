@@ -44,6 +44,12 @@ export interface MetadataFolderView {
 export interface PathFollower {
   onMoved(identityId: string, oldPath: string, newPath: string, isDir: boolean): Promise<void>;
   onDeleted(identityId: string, path: string, isDir: boolean): Promise<void>;
+  /**
+   * `path` went to the Trash, at `leaf` when known. Optional: a follower
+   * without it stays at the original path, as tags do. A restore reaches
+   * `onMoved` from the leaf.
+   */
+  onTrashed?(identityId: string, path: string, leaf: string | null, isDir: boolean): Promise<void>;
 }
 
 export interface MetadataServiceDeps {
@@ -137,7 +143,13 @@ export interface MetadataService {
    * same-path restore recovers them. Alternate restores relocate surviving
    * metadata only when no replacement entry occupies the original path.
    */
-  onTrashed(identityId: string, path: string, isDir: boolean): Promise<void>;
+  onTrashed(identityId: string, path: string, isDir: boolean, leaf?: string | null): Promise<void>;
+  /**
+   * A restore moved `leaf`, out of the Trash, to `path`. Only followers that
+   * went into the Trash with it (`PathFollower.onTrashed`) follow it back;
+   * the rest still sit at the original path (see `onTrashed`).
+   */
+  onRestored(identityId: string, leaf: string, path: string, isDir: boolean): Promise<void>;
   /**
    * No-op by design: a copy is a brand new file as far as metadata is
    * concerned, so tags, favorites, and recents on the source are never
@@ -282,9 +294,18 @@ export function createMetadataService(deps: MetadataServiceDeps): MetadataServic
       }
     },
 
-    async onTrashed(identityId, path, isDir) {
+    async onTrashed(identityId, path, isDir, leaf = null) {
       await deps.recents.deletePrefix(identityId, path, isDir);
       await deps.aiChats?.markReferencesMissing(identityId, path, isDir);
+      for (const follower of deps.followers ?? []) {
+        await follower.onTrashed?.(identityId, path, leaf, isDir);
+      }
+    },
+
+    async onRestored(identityId, leaf, path, isDir) {
+      for (const follower of deps.followers ?? []) {
+        if (follower.onTrashed !== undefined) await follower.onMoved(identityId, leaf, path, isDir);
+      }
     },
 
     onCopied() {

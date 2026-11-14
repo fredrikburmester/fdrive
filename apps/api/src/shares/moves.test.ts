@@ -1,5 +1,6 @@
 import { createMemoryShareRepo, type ShareInsertInput } from "@fdrive/db";
 import { describe, expect, it } from "vitest";
+import { createMetadataService } from "../metadata/service.ts";
 import { createShareMoves, type OwnedPath } from "./moves.ts";
 
 const alice = "00000000-0000-0000-0000-00000000000a";
@@ -17,29 +18,23 @@ const row = (identityId: string, paths: string[]): ShareInsertInput => ({
   at: new Date("2026-11-14T00:00:00Z"),
 });
 
-/** bob sees alice's `/Team` at `/Shared with me/Team`; alice's Trash is `/.trash`. */
 function harness(ownerPath?: (identityId: string, path: string) => Promise<OwnedPath | null>) {
   const shares = createMemoryShareRepo();
-  const moves = createShareMoves({
-    shares,
-    trashPathFor: async (identityId) => (identityId === alice ? "/.trash" : null),
-    ...(ownerPath === undefined ? {} : { ownerPath }),
-  });
+  const moves = createShareMoves({ shares, ...(ownerPath === undefined ? {} : { ownerPath }) });
   const paths = async (id: string) => (await shares.get(id))?.paths;
   return { shares, moves, paths };
 }
 
+/** bob sees alice's `/Team` at `/Shared with me/Team`; `Gone`'s owner has no login. */
 const shelf = async (identityId: string, path: string): Promise<OwnedPath | null> => {
-  if (
-    identityId === bob &&
-    (path === "/Shared with me/Team" || path.startsWith("/Shared with me/Team/"))
-  )
-    return { identityId: alice, path: `/Team${path.slice("/Shared with me/Team".length)}` };
+  const team = "/Shared with me/Team";
+  if (identityId === bob && (path === team || path.startsWith(`${team}/`)))
+    return { identityId: alice, path: `/Team${path.slice(team.length)}` };
   if (identityId === bob && path.startsWith("/Shared with me/Gone/")) return null;
   return { identityId, path };
 };
 
-describe("public links following moves", () => {
+describe("public links following their item", () => {
   it("follows the owner's moves of a shared item and of a folder above one", async () => {
     const { shares, moves, paths } = harness();
     const folder = await shares.insert(row(alice, ["/Projects"]));
@@ -53,34 +48,48 @@ describe("public links following moves", () => {
     expect(await paths(inside.id)).toEqual(["/a.txt", "/Other/b.txt"]);
   });
 
-  it("never follows into the Trash, the Mac's bookkeeping, a backup folder or Shared with me", async () => {
+  it("follows into the Trash and every other place no link reaches, never staying behind", async () => {
     const { shares, moves, paths } = harness();
     const link = await shares.insert(row(alice, ["/Projects"]));
+    let at = "/Projects";
     for (const target of [
       "/.trash/.fdrive-move-v1/Projects",
-      "/.trash",
       "/.fdrive-desktop/x/trash/Projects",
       "/Stuff/.fdrive-backups/Projects",
       "/Shared with me/Projects",
+      "/Projects",
     ]) {
-      expect(await moves.resolve(alice, "/Projects", target)).toBeNull();
-      await moves.onMoved(alice, "/Projects", target, true);
-      expect(await paths(link.id)).toEqual(["/Projects"]);
+      await moves.onMoved(alice, at, target, true);
+      expect(await paths(link.id)).toEqual([target]);
+      at = target;
     }
-    // Without Trash on, its folder is an ordinary one.
-    const bobs = await shares.insert(row(bob, ["/notes"]));
-    await moves.onMoved(bob, "/notes", "/.trash/notes", true);
-    expect(await paths(bobs.id)).toEqual(["/.trash/notes"]);
   });
 
-  it("keeps a deleted item's link where it was", async () => {
+  it("goes into the Trash at its leaf, and drops the path when no leaf is known", async () => {
     const { shares, moves, paths } = harness();
-    const link = await shares.insert(row(alice, ["/Projects"]));
-    await moves.onDeleted(alice, "/Projects", true);
-    expect(await paths(link.id)).toEqual(["/Projects"]);
+    const folder = await shares.insert(row(alice, ["/Projects", "/notes.txt"]));
+    await moves.onTrashed?.(alice, "/Projects", "/.trash/leaf", true);
+    expect(await paths(folder.id)).toEqual(["/.trash/leaf", "/notes.txt"]);
+    await moves.onTrashed?.(alice, "/notes.txt", null, false);
+    expect(await paths(folder.id)).toEqual(["/.trash/leaf"]);
   });
 
-  it("follows a move inside a folder shared with someone in its owner's files, and no further", async () => {
+  it("drops a deleted item's paths, and the link once nothing is left, so nothing new is served", async () => {
+    const { shares, moves, paths } = harness();
+    const many = await shares.insert(row(alice, ["/a/x.txt", "/ab/y.txt", "/c"]));
+    const only = await shares.insert(row(alice, ["/a"]));
+    const foreign = await shares.insert(row(bob, ["/a"]));
+    await moves.onDeleted(alice, "/a", true);
+    expect(await paths(many.id)).toEqual(["/ab/y.txt", "/c"]);
+    expect(await shares.get(only.id)).toBeNull();
+    expect(await paths(foreign.id)).toEqual(["/a"]);
+    // A file's delete takes only that path.
+    await moves.onDeleted(alice, "/c", false);
+    await moves.onDeleted(alice, "/ab", false);
+    expect(await paths(many.id)).toEqual(["/ab/y.txt"]);
+  });
+
+  it("counts moves in a folder shared with someone in its owner's files", async () => {
     const { shares, moves, paths } = harness(shelf);
     const aliceLink = await shares.insert(row(alice, ["/Team/brief.txt", "/Team/sub"]));
     const bobLink = await shares.insert(row(bob, ["/mine.txt"]));
@@ -92,17 +101,55 @@ describe("public links following moves", () => {
       false,
     );
     expect(await paths(aliceLink.id)).toEqual(["/Team/old/brief.txt", "/Team/sub"]);
-    // Out of alice's files into bob's, and into alice's from bob's: nothing follows.
-    expect(await moves.resolve(bob, "/Shared with me/Team/sub", "/sub")).toBeNull();
+    // Taken out of alice's files, it is gone for her links.
+    expect(await moves.resolve(bob, "/Shared with me/Team/sub", "/sub")).toEqual({
+      identityId: alice,
+      from: "/Team/sub",
+      to: null,
+    });
     await moves.onMoved(bob, "/Shared with me/Team/sub", "/sub", true);
+    expect(await paths(aliceLink.id)).toEqual(["/Team/old/brief.txt"]);
+    // bob's own file into alice's folder: followed there, under Shared with me.
     await moves.onMoved(bob, "/mine.txt", "/Shared with me/Team/mine.txt", false);
-    expect(await paths(aliceLink.id)).toEqual(["/Team/old/brief.txt", "/Team/sub"]);
-    expect(await paths(bobLink.id)).toEqual(["/mine.txt"]);
-    // A folder whose owner has no login here has no links to follow.
+    expect(await paths(bobLink.id)).toEqual(["/Shared with me/Team/mine.txt"]);
+    // bob trashing alice's file into his own Trash takes it from her links.
+    await moves.onTrashed?.(bob, "/Shared with me/Team/old/brief.txt", "/.trash/leaf", false);
+    expect(await shares.get(aliceLink.id)).toBeNull();
+    // A folder whose owner has no login here has no links to follow or drop.
     expect(await moves.resolve(bob, "/Shared with me/Gone/a", "/Shared with me/Gone/b")).toBeNull();
-    // Nothing moves onto or off the root of anyone's files.
+    await moves.onDeleted(bob, "/Shared with me/Gone/a", true);
+  });
+
+  it("never moves or drops the root of anyone's files", async () => {
+    const { shares, moves, paths } = harness(shelf);
+    const whole = await shares.insert(row(alice, ["/"]));
     expect(await moves.resolve(alice, "/a", "/a")).toBeNull();
     expect(await moves.resolve(alice, "/", "/x")).toBeNull();
     expect(await moves.resolve(alice, "/x", "/")).toBeNull();
+    expect(await moves.resolve(bob, "/Shared with me/Team/x", "/")).toEqual({
+      identityId: alice,
+      from: "/Team/x",
+      to: null,
+    });
+    await moves.onDeleted(alice, "/", true);
+    expect(await paths(whole.id)).toEqual(["/"]);
+  });
+
+  it("goes into and out of the Trash with the metadata hooks, which leave tags behind", async () => {
+    const { shares, moves, paths } = harness();
+    const link = await shares.insert(row(alice, ["/Projects"]));
+    const recents: string[] = [];
+    const metadata = createMetadataService({
+      followers: [moves, { onMoved: async () => {}, onDeleted: async () => {} }],
+      recents: { deletePrefix: async (_id: string, path: string) => void recents.push(path) },
+    } as unknown as Parameters<typeof createMetadataService>[0]);
+    await metadata.onTrashed(alice, "/Projects", true, "/.trash/leaf");
+    expect(await paths(link.id)).toEqual(["/.trash/leaf"]);
+    expect(recents).toEqual(["/Projects"]);
+    await metadata.onRestored(alice, "/.trash/leaf", "/Back", true);
+    expect(await paths(link.id)).toEqual(["/Back"]);
+    // Trashed with no leaf known, the link drops the path rather than wait at it.
+    await metadata.onTrashed(alice, "/Back", true);
+    expect(await shares.get(link.id)).toBeNull();
   });
 });

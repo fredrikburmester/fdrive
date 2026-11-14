@@ -11,7 +11,7 @@ import {
   type ThumbSize,
   UpdateShareRequest,
 } from "@fdrive/contracts";
-import { toFsPath } from "@fdrive/core";
+import { normalizePath, toFsPath } from "@fdrive/core";
 import type { IdentityRepo, IndexQueries } from "@fdrive/db";
 import type { Context } from "hono";
 import { getCookie, setCookie } from "hono/cookie";
@@ -52,6 +52,7 @@ import {
   type ShareCredentialCodec,
 } from "./credentials.ts";
 import type { ShareLimiter } from "./limiter.ts";
+import { hiddenFromLinks } from "./owned-access.ts";
 import type { SharesService } from "./service.ts";
 
 export async function publicBody<T>(
@@ -503,6 +504,14 @@ export function registerSharesRoutes(
       throw THUMB_NOT_FOUND();
 
     const virtualPath = query.path === "/" ? sharedRoot : `${sharedRoot}${query.path}`;
+    // The index covers the Trash and folders shared in too, so their thumbnails are refused here.
+    let hidden: boolean;
+    try {
+      hidden = hiddenFromLinks(normalizePath(virtualPath), target.restricted);
+    } catch {
+      hidden = true;
+    }
+    if (hidden) throw THUMB_NOT_FOUND();
     const identity = await deps.identities.get(target.identityId);
     if (identity === null) throw THUMB_NOT_FOUND();
     const verifiedScopes = await deps.resolver.verifiedIndexScopes(identity);

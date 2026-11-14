@@ -188,7 +188,7 @@ it("commits metadata before delivery and retries only notification after a failu
   ]);
 });
 
-it("moves the public links it was told to with the rest of the metadata, once, and no others", async () => {
+it("moves or drops the public links it was told to with the rest of the metadata, once, and no others", async () => {
   const f = await fixture();
   const shares = createShareRepo(first.db);
   const link = (paths: string[]) =>
@@ -206,21 +206,29 @@ it("moves the public links it was told to with the rest of the metadata, once, a
     });
   const moved = await link(["/old/a.txt", "/oldish"]);
   const untold = await link(["/kept/a.txt"]);
+  const taken = await link(["/taken"]);
   await f.commit({
     shareMove: { identityId: f.identity.id, from: "/old", to: "/new" },
   });
-  // No decision recorded (a trash, or a move a link may not follow): links stay.
-  await f.commit({ from: "/kept", to: "/.fdrive-desktop/trash/kept", trash: true });
+  // Nothing recorded, or nothing to do: links stay.
+  await f.commit({ from: "/kept", to: "/elsewhere" });
   await f.commit({ from: "/kept", to: "/elsewhere", shareMove: null });
+  // Taken out of the owner's files: the link drops it.
+  await f.commit({
+    from: "/taken",
+    to: "/taken",
+    shareMove: { identityId: f.identity.id, from: "/taken", to: null },
+  });
   expect(await f.worker.processNext(vi.fn(), f.identity.id)).toMatchObject({
     state: "completed",
   });
   expect((await shares.get(moved.id))?.paths).toEqual(["/new/a.txt", "/oldish"]);
-  for (let i = 0; i < 2; i++)
+  for (let i = 0; i < 3; i++)
     expect(await f.worker.processNext(vi.fn(), f.identity.id)).toMatchObject({
       state: "completed",
     });
   expect((await shares.get(untold.id))?.paths).toEqual(["/kept/a.txt"]);
+  expect(await shares.get(taken.id)).toBeNull();
   expect((await shares.get(moved.id))?.paths).toEqual(["/new/a.txt", "/oldish"]);
 });
 

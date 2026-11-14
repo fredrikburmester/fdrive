@@ -1,8 +1,12 @@
-/** A move public links follow, already in their owner's files (`ShareRepo.movePrefix`). */
+/**
+ * What public links do after a Mac write, in their owner's files: follow
+ * `from` to `to` (`ShareRepo.movePrefix`), or drop `from` when the item
+ * left the owner's files (`to: null`, `ShareRepo.deletePrefix`).
+ */
 export interface DesktopShareMove {
   identityId: string;
   from: string;
-  to: string;
+  to: string | null;
 }
 
 export interface DesktopEffectContext {
@@ -13,9 +17,9 @@ export interface DesktopEffectContext {
   restored?: boolean;
   office: { providerId: string; rootName: string; from: string; to: string | null } | null;
   /**
-   * The move the owner's public links follow, decided before publication;
-   * absent or `null` when they stay where they are (a trash, a move a link
-   * may not follow, or no move at all).
+   * What the owner's public links do, decided before publication from where
+   * the item really moved (into the Mac's Trash too); absent or `null` when
+   * nothing moved.
    */
   shareMove?: DesktopShareMove | null;
 }

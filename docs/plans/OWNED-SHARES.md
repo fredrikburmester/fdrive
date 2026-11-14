@@ -16,8 +16,8 @@ refused when the storage has no `zip`, when the owner's Trash lies inside a shar
 and when two shared paths would land on the same name; new multi-path shares are refused
 on that last rule too.
 
-Since 2026-11-14 a link's paths follow moves of what it names, never into Trash, backup
-folders or `Shared with me` ([architecture](../ARCHITECTURE.md#accounts-and-storage)).
+Since 2026-11-14 a link follows the item it names wherever it moves, into Trash too, and
+never stays where something new could appear ([architecture](../ARCHITECTURE.md#accounts-and-storage)).
 
 Steps 7 and 8 of that plan (2026-09-18), owned shares on S3 and WebDAV, were dropped
 when that storage was removed on 2026-11-13; the plan is in git history. One item is open.

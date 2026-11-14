@@ -439,10 +439,9 @@ export async function composeApp(
   const accountsService = createAccountsService(accountDeps);
   const accountViews = createAccountViews(accountDeps);
 
-  // Public links follow moves in their owner's files, never into the Trash.
+  // Public links follow the items they name wherever they go, into Trash too.
   const shareMoves = createShareMoves({
     shares: shareRepo,
-    trashPathFor: (identityId) => trashSettings.pathForIdentity(identityId),
     ownerPath: (identityId, path) => localGrants.ownerPath(identityId, path),
   });
   // Metadata (phase 3): tags, favorites, recents. `onMoved`/`onDeleted` are
@@ -776,6 +775,14 @@ export async function composeApp(
     imageSearchService,
     onMutation: async (principal, change) => {
       try {
+        if (change.kind === "restore" && change.eventPath !== undefined && change.target) {
+          await fsMetadata.onRestored(
+            principal.identityId,
+            change.eventPath,
+            change.target,
+            change.isDir,
+          );
+        }
         if (change.kind === "move" || (change.kind === "restore" && change.moveMetadata)) {
           await fsMetadata.onMoved(
             principal.identityId,
@@ -784,7 +791,12 @@ export async function composeApp(
             change.isDir,
           );
         } else if (change.kind === "trash") {
-          await fsMetadata.onTrashed(principal.identityId, change.path, change.isDir);
+          await fsMetadata.onTrashed(
+            principal.identityId,
+            change.path,
+            change.isDir,
+            change.trashLeaf ?? null,
+          );
         } else if (change.kind === "copy") {
           fsMetadata.onCopied(principal.identityId, change.path, change.target ?? change.path);
         }

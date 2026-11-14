@@ -214,6 +214,26 @@ describe("PostgreSQL shares", () => {
     await expect(a.movePrefix(identityId, "/x", "x", true)).rejects.toThrow(TypeError);
   });
 
+  it("drops deleted paths, removes a share left with none, and keeps other identities' shares", async () => {
+    const many = await a.insert({
+      ...input,
+      paths: ["/docs/a b%20.txt", "/docsx/b.txt", "/docs/deep/c", "/other"],
+    });
+    const only = await a.insert({ ...input, paths: ["/docs"], passwordHash: "hash" });
+    const foreign = await a.insert({ ...input, identityId: otherIdentity, paths: ["/docs"] });
+    await b.deletePrefix(identityId, "/docs", false);
+    expect((await a.get(many.id))?.paths).toHaveLength(4);
+    expect(await a.get(only.id)).toBeNull();
+    await b.deletePrefix(identityId, "/docs", true);
+    expect(await a.get(many.id)).toEqual({ ...many, paths: ["/docsx/b.txt", "/other"] });
+    expect(await a.get(foreign.id)).toEqual(foreign);
+    await a.deletePrefix(identityId, "/docsx/b.txt", false);
+    await a.deletePrefix(identityId, "/other", true);
+    expect(await a.get(many.id)).toBeNull();
+    expect(await first.db.select().from(shares)).toHaveLength(1);
+    await expect(a.deletePrefix(identityId, "/", true)).rejects.toThrow(TypeError);
+  });
+
   it("loses neither of two moves of one share's paths made at once", async () => {
     const paths = Array.from({ length: 20 }, (_, i) => `/f${i}/x`);
     const share = await a.insert({ ...input, paths });

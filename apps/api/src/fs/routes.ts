@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import {
+  type ActivityFacts,
   CopyRequest,
   DeleteRequest,
   DownloadQuery,
@@ -539,7 +540,7 @@ async function removeOne(
   item: { path: string; kind: "file" | "dir" },
   context: ActivityCallContext,
   operation: { operationId: string; batchId: string },
-): Promise<void> {
+): Promise<string | null> {
   const trashRoot = deps.trashPathForStorage?.(principal.storage) ?? null;
   const insideTrash =
     trashRoot !== null && (item.path === trashRoot || isUnderPath(trashRoot, item.path));
@@ -563,11 +564,11 @@ async function removeOne(
       () => deleteWithActivityReceipt(principal.storage, item.path, item.kind),
       (facts) => facts,
     );
-  if (!deps.activity) {
-    await remove();
-    return;
-  }
-  await deps.activity.repo.withPathLock(principal.identityId, item.path, remove);
+  // The Trash path the item went to; `null` once it is gone for good.
+  const leaf = (facts: ActivityFacts) =>
+    typeof facts.trashLeaf === "string" ? facts.trashLeaf : null;
+  if (!deps.activity) return leaf(await remove());
+  return leaf(await deps.activity.repo.withPathLock(principal.identityId, item.path, remove));
 }
 
 export interface TrashManyResult {
@@ -595,7 +596,7 @@ export async function trashMany(
     for (const item of items) {
       try {
         const path = normalizeOrThrow(item.path);
-        await runStorageCall(() =>
+        const leaf = await runStorageCall(() =>
           removeOne(deps, principal, { path, kind: item.kind }, context, {
             operationId: `${operationBase}:${results.length}`,
             batchId,
@@ -604,7 +605,7 @@ export async function trashMany(
         removed.push(path);
         try {
           if (principal.storage.trash !== undefined)
-            await deps.metadata?.onTrashed(principal.identityId, path, item.kind === "dir");
+            await deps.metadata?.onTrashed(principal.identityId, path, item.kind === "dir", leaf);
           else await deps.metadata?.onDeleted(principal.identityId, path, item.kind === "dir");
         } catch {
           // The item is gone either way; stale metadata is repaired by the next listing.
@@ -898,8 +899,9 @@ export function registerFsRoutes(
     try {
       for (const item of body.items) {
         const path = normalizeOrThrow(item.path);
+        let leaf: string | null;
         try {
-          await removeOne(
+          leaf = await removeOne(
             deps,
             principal,
             { path, kind: item.kind === "dir" ? "dir" : "file" },
@@ -919,7 +921,7 @@ export function registerFsRoutes(
         removed.push(path);
         if (deps.metadata !== undefined) {
           if (principal.storage.trash !== undefined) {
-            await deps.metadata.onTrashed(principal.identityId, path, item.kind === "dir");
+            await deps.metadata.onTrashed(principal.identityId, path, item.kind === "dir", leaf);
           } else {
             await deps.metadata.onDeleted(principal.identityId, path, item.kind === "dir");
           }

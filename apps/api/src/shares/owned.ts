@@ -109,13 +109,18 @@ export function createOwnedShares(deps: OwnedSharesDeps) {
   }
   /**
    * A single-path share must name something that exists, and an upload
-   * share a directory. Many paths are an archive.
+   * share a directory. Many paths are an archive. A share whose item went
+   * where no link reaches (the Trash, say: links follow their item there)
+   * is as unavailable as one whose item is gone.
    */
   async function layout(
     identityId: string,
     scope: ShareRecord["scope"],
     paths: readonly string[],
   ): Promise<PublicShare["layout"]> {
+    const restricted = await restrictedRoots(identityId);
+    if (paths.some((shared) => hiddenFromLinks(shared, restricted)))
+      throw new ApiHttpError("not_found", "Share unavailable");
     const path = paths[0];
     if (path === undefined || paths.length !== 1) return "archive";
     const stat = await shareCall(async () => (await storage(identityId)).stat(path));
@@ -272,6 +277,7 @@ export function createOwnedShares(deps: OwnedSharesDeps) {
         paths: [...row.paths],
         unavailableReason: unavailableReason(ownedLimits(row), deps.clock()),
         unlocked: !row.hasPassword || (credential !== undefined && (await verify(row, credential))),
+        restricted: await restrictedRoots(row.identityId),
       };
     },
   };

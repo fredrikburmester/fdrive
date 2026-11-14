@@ -57,11 +57,17 @@ export interface ShareRepo {
   /**
    * Follows a move in the owner's files: in every share of `identityId`, the
    * path `from` and (when `isDir`) every path inside it take their place
-   * under `to`; `/a` never matches `/ab`. Whether a link may follow a move at
-   * all is the caller's to decide (`apps/api/src/shares/moves.ts`): this only
-   * rewrites. Leaves `updatedAt` alone, since the owner changed nothing.
+   * under `to`, wherever that is; `/a` never matches `/ab`. What a link may
+   * serve there is the public routes' to decide. Leaves `updatedAt` alone,
+   * since the owner changed nothing. See `apps/api/src/shares/moves.ts`.
    */
   movePrefix(identityId: string, from: string, to: string, isDir: boolean): Promise<void>;
+  /**
+   * Follows a delete in the owner's files: every share of `identityId` drops
+   * `path` and (when `isDir`) every path inside it, and a share left with no
+   * path is removed, so no link is left where a new item could appear.
+   */
+  deletePrefix(identityId: string, path: string, isDir: boolean): Promise<void>;
   /**
    * The stored password hash of an owned share, for the credential check
    * only; `null` for an open share or a missing one.
@@ -210,12 +216,13 @@ export function compareShareRecords(a: ShareRecord, b: ShareRecord): number {
   if (time !== 0) return time;
   return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
 }
-/** Checks a move `movePrefix` follows: canonical paths, and never the root itself. */
-export function validateShareMove(identityId: string, from: string, to: string): void {
+/** Checks paths `movePrefix` or `deletePrefix` follows: canonical, and never the root itself. */
+export function validateSharePathChange(identityId: string, ...paths: string[]): void {
   validateShareId(identityId);
-  validateSharePath(from);
-  validateSharePath(to);
-  if (from === "/" || to === "/") throw new TypeError("The root cannot move");
+  for (const path of paths) {
+    validateSharePath(path);
+    if (path === "/") throw new TypeError("The root cannot move or go");
+  }
 }
 /**
  * `paths` once `from` moved to `to`, in order. A path the move lands on a
@@ -238,9 +245,9 @@ export function movedSharePaths(
   );
   return [...new Set(moved)];
 }
-/** Whether a move of `from` touches any of `paths`. */
-export function shareMoveMatches(paths: readonly string[], from: string, isDir: boolean): boolean {
-  return paths.some((path) => path === from || (isDir && path.startsWith(`${from}/`)));
+/** Whether `path` is `changed`, or (when `isDir`) inside it. */
+export function sharePathChanged(path: string, changed: string, isDir: boolean): boolean {
+  return path === changed || (isDir && path.startsWith(`${changed}/`));
 }
 
 /** Whether `record` still admits one more download at `now`; the check `consume` makes. */
@@ -314,11 +321,25 @@ export function createMemoryShareRepo(options: MemoryShareOptions = {}): ShareRe
       return rows.delete(id);
     },
     async movePrefix(identityId, from, to, isDir) {
-      validateShareMove(identityId, from, to);
+      validateSharePathChange(identityId, from, to);
       if (from === to) return;
       for (const [id, row] of rows) {
-        if (row.identityId !== identityId || !shareMoveMatches(row.paths, from, isDir)) continue;
+        if (row.identityId !== identityId) continue;
+        if (!row.paths.some((path) => sharePathChanged(path, from, isDir))) continue;
         rows.set(id, { ...row, paths: movedSharePaths(row.paths, from, to, isDir) });
+      }
+    },
+    async deletePrefix(identityId, path, isDir) {
+      validateSharePathChange(identityId, path);
+      for (const [id, row] of rows) {
+        if (row.identityId !== identityId) continue;
+        const kept = row.paths.filter((shared) => !sharePathChanged(shared, path, isDir));
+        if (kept.length === row.paths.length) continue;
+        if (kept.length > 0) rows.set(id, { ...row, paths: kept });
+        else {
+          rows.delete(id);
+          hashes.delete(id);
+        }
       }
     },
     async passwordHash(id) {

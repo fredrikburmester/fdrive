@@ -560,6 +560,16 @@ describe("public shares", () => {
     ])
       expect((await h.request(`${path}/download?path=${hidden}`)).status, hidden).toBe(404);
     expect((await h.request(`${path}/entries?path=/.trash`)).status).toBe(404);
+    // A link that followed its item into the Trash is not found until it comes back out.
+    const trashed = await h.create(cookie, { paths: ["/folder"] });
+    const row = await h.shares.get(trashed.id);
+    if (row === null) throw new Error("missing row");
+    h.write("/.trash/folder/a.txt", "content");
+    await h.shares.movePrefix(row.identityId, "/folder", "/.trash/folder", true);
+    for (const suffix of ["", "/entries", "/download?path=/a.txt"])
+      expect((await h.request(`${pub(trashed.id)}${suffix}`)).status, suffix).toBe(404);
+    await h.shares.movePrefix(row.identityId, "/.trash/folder", "/folder", true);
+    expect((await metadata(h, trashed.id)).layout).toBe("directory");
     // A file share has no listing, and an archive share no single file.
     const file = await h.create(cookie);
     expect((await h.request(`${pub(file.id)}/entries`)).status).toBe(400);
@@ -1004,6 +1014,25 @@ describe("GET /public/shares/:id/thumb", () => {
       expect(await error(res)).toMatchObject({ kind: "not_found" });
     }
     expect((await h.request(thumb("00000000-0000-4000-8000-000000000000"))).status).toBe(404);
+  });
+
+  it("404s inside the folders no link reaches, where a link follows its item to", async () => {
+    const fileByPath = vi.fn(async () => makeIndexedFile());
+    const h = thumbsHarness({ indexQueries: { fileByPath } });
+    h.mkdir("/folder");
+    const cookie = await h.login();
+    const { id } = await h.create(cookie, { paths: ["/"] });
+    for (const path of ["/Shared with me/team/x.jpg", "/.fdrive-desktop/x.jpg"])
+      expect(
+        (await h.request(thumb(id, `path=${encodeURIComponent(path)}&size=256`))).status,
+        path,
+      ).toBe(404);
+    const folder = await h.create(cookie, { paths: ["/folder"] });
+    const row = await h.shares.get(folder.id);
+    if (row === null) throw new Error("missing row");
+    await h.shares.movePrefix(row.identityId, "/folder", "/Shared with me/team/folder", true);
+    expect((await h.request(thumb(folder.id, "path=%2Fx.jpg&size=256"))).status).toBe(404);
+    expect(fileByPath).not.toHaveBeenCalled();
   });
 
   it("404s when thumbnails are off or not configured", async () => {

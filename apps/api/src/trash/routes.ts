@@ -210,6 +210,12 @@ export function registerTrashRoutes(
         );
         trashPaths.push(trashVirtualPath);
         targetPaths.push(entry.path);
+        await deps.metadata?.onRestored(
+          principal.identityId,
+          trashVirtualPath,
+          entry.path,
+          entry.kind === "dir",
+        );
         if (
           deps.metadata !== undefined &&
           entry.originalPath !== entry.path &&

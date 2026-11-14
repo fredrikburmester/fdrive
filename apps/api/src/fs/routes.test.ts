@@ -1581,7 +1581,13 @@ describe("POST /fs/delete", () => {
     );
 
     expect(res.status).toBe(200);
-    expect(onTrashedSpy).toHaveBeenCalledWith(ALICE_IDENTITY_ID, "/hello.txt", false);
+    // With where it went in the Trash, which public links follow it to.
+    expect(onTrashedSpy).toHaveBeenCalledWith(
+      ALICE_IDENTITY_ID,
+      "/hello.txt",
+      false,
+      expect.stringMatching(/^\/\.trash\/.+hello\.txt/),
+    );
     expect(onDeletedSpy).not.toHaveBeenCalled();
     expect(events).toEqual([
       {

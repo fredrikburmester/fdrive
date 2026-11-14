@@ -10,7 +10,6 @@ import {
   MeResponse,
   publicShareRoute,
   ROUTES,
-  TrashListResponse,
 } from "@fdrive/contracts";
 import { createDb, createRepos, schema } from "@fdrive/db";
 import { startLocalStorage, startPostgres } from "@fdrive/testkit";
@@ -27,11 +26,12 @@ const SHELF = "/Shared with me";
 const q = encodeURIComponent;
 
 /**
- * A public link keeps paths in its owner's files. These follow the owner's
- * renames and moves on every route fdrive learns of one: its own file
- * routes, MCP, the Mac's writes and the indexer's reports of changes made
- * outside fdrive. A link never follows into the Trash, `Shared with me` or
- * out of its owner's files, and a delete leaves it where it was.
+ * A public link keeps paths in its owner's files. These follow the item on
+ * every route fdrive learns of a move: its own file routes and Trash, MCP,
+ * the Mac's writes and the indexer's reports of changes made outside fdrive.
+ * A link follows its item into the Trash too, where it is not served, and
+ * back out on a restore; it never stays behind at a path where something
+ * new could appear, so it never serves what its owner did not share.
  */
 describe("public links follow the files they point at", () => {
   let postgres: Awaited<ReturnType<typeof startPostgres>>;
@@ -158,6 +158,31 @@ describe("public links follow the files they point at", () => {
     return ManagedShare.parse(await ok(call(`${ROUTES.shares}/${id}`, { cookie }))).paths;
   }
 
+  /** The owner's view of a link: `404` once it is gone. */
+  async function linkStatus(cookie: string, id: string): Promise<number> {
+    return (await call(`${ROUTES.shares}/${id}`, { cookie })).status;
+  }
+
+  /** Writes a new file, the way something new appears where a linked item was. */
+  async function put(cookie: string, path: string, content: string): Promise<void> {
+    const response = await composed.app.request(
+      `${ROUTES.fs.upload}?path=${q(path)}&mkdirParents=true`,
+      { method: "PUT", headers: { "x-requested-with": "fdrive", cookie }, body: content },
+    );
+    expect(response.status, await response.clone().text()).toBe(201);
+  }
+
+  /** Every way a visitor could read through a folder or file link. */
+  async function served(id: string, child = "/"): Promise<number[]> {
+    return Promise.all(
+      [
+        publicShareRoute(id),
+        `${publicShareRoute(id, "entries")}?path=${q("/")}`,
+        `${publicShareRoute(id, "download")}?path=${q(child)}`,
+      ].map(async (path) => (await call(path)).status),
+    );
+  }
+
   /** What a visitor gets: the metadata status, which stats a single shared path. */
   async function visit(id: string): Promise<number> {
     return (await call(publicShareRoute(id))).status;
@@ -210,41 +235,49 @@ describe("public links follow the files they point at", () => {
     expect((await call(publicShareRoute(multi, "archive"))).status).toBe(200);
   });
 
-  it("keeps a link out of the Trash, so a restore brings it back, and follows a restore elsewhere", async () => {
+  it("follows its item into the Trash and back, and never serves what takes its place", async () => {
     const id = await link(alice, "/Binned");
-    await ok(
-      call(ROUTES.fs.delete, {
-        cookie: alice,
-        body: { items: [{ path: "/Binned", kind: "dir" }] },
-      }),
-    );
-    expect(await linkPaths(alice, id)).toEqual(["/Binned"]);
-    expect(await visit(id)).toBe(404);
-
-    const trashed = async () => {
-      const listed = TrashListResponse.parse(await ok(call(ROUTES.trash.list, { cookie: alice })));
-      const entry = listed.entries.find((candidate) => candidate.originalPath === "/Binned");
-      if (entry === undefined) throw new Error("expected /Binned in the Trash");
-      return entry.id;
+    const trash = (path: string) =>
+      ok(call(ROUTES.fs.delete, { cookie: alice, body: { items: [{ path, kind: "dir" }] } }));
+    /** The Trash entry the link followed its folder to. */
+    const trashId = async () => {
+      const [path] = await linkPaths(alice, id);
+      if (!path?.startsWith("/.trash/")) throw new Error(`expected the link in the Trash: ${path}`);
+      return path.slice("/.trash/".length);
     };
-    await ok(call(ROUTES.trash.restore, { cookie: alice, body: { ids: [await trashed()] } }));
-    expect(await linkPaths(alice, id)).toEqual(["/Binned"]);
-    expect(await visit(id)).toBe(200);
 
-    await ok(
-      call(ROUTES.fs.delete, {
-        cookie: alice,
-        body: { items: [{ path: "/Binned", kind: "dir" }] },
-      }),
-    );
+    await trash("/Binned");
+    expect(await visit(id)).toBe(404);
+    // Something new of the same name is not what the link was made for.
+    await put(alice, "/Binned/new.txt", "never shared");
+    expect(await served(id, "/new.txt")).toEqual([404, 404, 404]);
+
+    // Restored to its place, once that is free again, the link works again.
+    await move(alice, "/Binned", "/NotBinned");
+    await ok(call(ROUTES.trash.restore, { cookie: alice, body: { ids: [await trashId()] } }));
+    expect(await linkPaths(alice, id)).toEqual(["/Binned"]);
+    expect(await ok(call(`${publicShareRoute(id, "entries")}?path=${q("/")}`))).toMatchObject({
+      items: [{ name: "inside.txt" }],
+    });
+
+    // Restored somewhere else, the link goes with it.
+    await trash("/Binned");
     await ok(
       call(ROUTES.trash.restore, {
         cookie: alice,
-        body: { ids: [await trashed()], target: "/Recovered/Binned" },
+        body: { ids: [await trashId()], target: "/Recovered/Binned" },
       }),
     );
     expect(await linkPaths(alice, id)).toEqual(["/Recovered/Binned"]);
     expect(await visit(id)).toBe(200);
+
+    // Purged for good: the link keeps the Trash path, never the original one.
+    await trash("/Recovered/Binned");
+    const purged = await trashId();
+    await ok(call(ROUTES.trash.purge, { cookie: alice, body: { ids: [purged] } }));
+    await put(alice, "/Recovered/Binned/new.txt", "a replacement");
+    expect(await linkPaths(alice, id)).toEqual([`/.trash/${purged}`]);
+    expect(await served(id, "/new.txt")).toEqual([404, 404, 404]);
   });
 
   it("follows moves inside a writable shared folder, but never out of its owner's files or into Shared with me", async () => {
@@ -263,18 +296,22 @@ describe("public links follow the files they point at", () => {
     expect(await linkPaths(alice, brief)).toEqual(["/Team/brief-v2.txt"]);
     expect(await downloadText(brief)).toBe("team brief");
 
-    // bob takes a folder out into his own files: her link cannot reach it there.
+    // bob takes a folder out into his own files: gone from hers, so her link goes, and
+    // a new folder there is served by nobody.
     await move(bob, `${SHELF}/Team/sub`, "/bobs/sub");
-    expect(await linkPaths(alice, sub)).toEqual(["/Team/sub"]);
+    expect(await linkStatus(alice, sub)).toBe(404);
+    await put(alice, "/Team/sub/new.txt", "never shared");
     expect(await visit(sub)).toBe(404);
 
-    // bob moves his own linked file into alice's folder: his link stays out of Shared with me.
+    // bob moves his own linked file into alice's folder: his link follows it under
+    // Shared with me, where no link reaches, and serves no new file at its old path.
     await move(bob, "/mine.txt", `${SHELF}/Team/mine.txt`);
-    expect(await linkPaths(bob, bobs)).toEqual(["/mine.txt"]);
-    expect(await visit(bobs)).toBe(404);
+    expect(await linkPaths(bob, bobs)).toEqual([`${SHELF}/Team/mine.txt`]);
+    await put(bob, "/mine.txt", "never shared");
+    expect(await served(bobs)).toEqual([404, 404, 404]);
   });
 
-  it("follows moves made through MCP", async () => {
+  it("follows moves, trashes and restores made through MCP", async () => {
     const id = await link(alice, "/Mcp/report.txt");
     const repos = createRepos(database.db);
     const identity = (await repos.identities.listAll()).find(
@@ -290,28 +327,49 @@ describe("public links follow the files they point at", () => {
       expiresAt: null,
       access: { mode: "full", paths: ["/"] },
     });
-    const response = await composed.app.request("/mcp", {
-      method: "POST",
-      headers: {
-        authorization: `Bearer ${token}`,
-        "content-type": "application/json",
-        accept: "application/json, text/event-stream",
-      },
-      body: JSON.stringify({
-        jsonrpc: "2.0",
-        id: 1,
-        method: "tools/call",
-        params: { name: "move_path", arguments: { src: "/Mcp", dst: "/Reports" } },
+    let requestId = 0;
+    const tool = async (name: string, args: Record<string, unknown>) => {
+      const response = await composed.app.request("/mcp", {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${token}`,
+          "content-type": "application/json",
+          accept: "application/json, text/event-stream",
+        },
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: ++requestId,
+          method: "tools/call",
+          params: { name, arguments: args },
+        }),
+      });
+      expect(response.status).toBe(200);
+      const result = await response.text();
+      expect(result, name).not.toContain('"isError":true');
+    };
+
+    await tool("move_path", { src: "/Mcp", dst: "/Reports" });
+    expect(await linkPaths(alice, id)).toEqual(["/Reports/report.txt"]);
+    expect(await downloadText(id)).toBe("report");
+
+    await tool("trash_path", { path: "/Reports" });
+    const [trashed] = await linkPaths(alice, id);
+    expect(trashed).toMatch(/^\/\.trash\/.+\/report\.txt$/);
+    await put(alice, "/Reports/report.txt", "never shared");
+    expect(await visit(id)).toBe(404);
+    await ok(
+      call(ROUTES.fs.delete, {
+        cookie: alice,
+        body: { items: [{ path: "/Reports", kind: "dir" }] },
       }),
-    });
-    expect(response.status).toBe(200);
-    const result = await response.text();
-    expect(result).not.toContain('"isError":true');
+    );
+    const entry = (trashed as string).slice("/.trash/".length, -"/report.txt".length);
+    await tool("restore_path", { id: entry });
     expect(await linkPaths(alice, id)).toEqual(["/Reports/report.txt"]);
     expect(await downloadText(id)).toBe("report");
   });
 
-  it("follows outside moves the indexer reports, but not into the Trash, and keeps a deleted path", async () => {
+  it("follows outside moves the indexer reports, into the Trash too, and lets a deleted item's link go", async () => {
     const seen = await link(alice, "/Outside/seen.txt");
     const binned = await link(alice, "/OutsideTrash");
     const gone = await link(alice, "/Gone/x.txt");
@@ -343,12 +401,16 @@ describe("public links follow the files they point at", () => {
       interval: 100,
     });
     expect(await downloadText(seen)).toBe("seen");
-    expect(await linkPaths(alice, binned)).toEqual(["/OutsideTrash"]);
-    expect(await linkPaths(alice, gone)).toEqual(["/Gone/x.txt"]);
+    expect(await linkPaths(alice, binned)).toEqual([`/${trashLeaf}`]);
+    expect(await visit(binned)).toBe(404);
+    expect(await linkStatus(alice, gone)).toBe(404);
+    await put(alice, "/OutsideTrash/x.txt", "never shared");
+    await put(alice, "/Gone/x.txt", "never shared");
+    expect(await served(binned, "/x.txt")).toEqual([404, 404, 404]);
     expect(await visit(gone)).toBe(404);
   });
 
-  it("follows the Mac's moves through its metadata recovery, but not into its Trash", async () => {
+  it("follows the Mac's moves through its metadata recovery, into its Trash and back", async () => {
     const file = await link(alice, "/mac.txt");
     const folder = await link(alice, "/MacFolder/inside.txt");
     const trashed = await link(alice, "/mac-trash.txt");
@@ -380,8 +442,11 @@ describe("public links follow the files they point at", () => {
     const headers = { authorization: `Bearer ${credential.token}` };
     const stat = async (path: string) =>
       DesktopWriteEntry.parse(await ok(call(`${base}/entry?path=${q(path)}`, { headers })));
-    const macMove = async (path: string, parentId: string, name: string) => {
-      const item = await stat(path);
+    const macMove = async (
+      item: ReturnType<typeof DesktopWriteEntry.parse>,
+      parentId: string,
+      name: string,
+    ) => {
       const operationId = randomUUID();
       await ok(
         call(`${base}/moves`, {
@@ -389,23 +454,35 @@ describe("public links follow the files they point at", () => {
           body: { operationId, itemId: item.id, parentId, name, base: item.version },
         }),
       );
-      await ok(call(`${base}/operations/${operationId}/commit`, { headers, body: {} }));
+      const committed = await ok(
+        call(`${base}/operations/${operationId}/commit`, { headers, body: {} }),
+      );
+      return DesktopWriteEntry.parse((committed as { item: unknown }).item);
     };
 
-    await macMove("/mac.txt", "root", "mac-renamed.txt");
-    await macMove("/MacFolder", "root", "MacMoved");
-    await macMove("/mac-trash.txt", "trash", "mac-trash.txt");
+    await macMove(await stat("/mac.txt"), "root", "mac-renamed.txt");
+    await macMove(await stat("/MacFolder"), "root", "MacMoved");
+    const inTrash = await macMove(await stat("/mac-trash.txt"), "trash", "mac-trash.txt");
 
     await vi.waitFor(
       async () => {
         expect(await linkPaths(alice, file)).toEqual(["/mac-renamed.txt"]);
         expect(await linkPaths(alice, folder)).toEqual(["/MacMoved/inside.txt"]);
+        expect((await linkPaths(alice, trashed))[0]).toMatch(/^\/\.fdrive-desktop\//);
       },
       { timeout: 15_000, interval: 100 },
     );
     expect(await downloadText(file)).toBe("mac");
     expect(await downloadText(folder)).toBe("mac inside");
-    expect(await linkPaths(alice, trashed)).toEqual(["/mac-trash.txt"]);
+    await put(alice, "/mac-trash.txt", "never shared");
     expect(await visit(trashed)).toBe(404);
+
+    // Put back from the Mac's Trash, under a new name since its place is taken.
+    await macMove(inTrash, "root", "mac-back.txt");
+    await vi.waitFor(
+      async () => expect(await linkPaths(alice, trashed)).toEqual(["/mac-back.txt"]),
+      { timeout: 15_000, interval: 100 },
+    );
+    expect(await downloadText(trashed)).toBe("mac trash");
   });
 });

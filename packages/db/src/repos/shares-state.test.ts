@@ -12,9 +12,9 @@ import {
   shareListLimit,
   validateShareId,
   validateShareInsert,
-  validateShareMove,
   validateShareOwnedUpdate,
   validateSharePath,
+  validateSharePathChange,
 } from "./shares-state.js";
 
 const identityId = "00000000-0000-0000-0000-000000000001";
@@ -308,7 +308,7 @@ describe("share paths following a move", () => {
     expect(movedSharePaths(["/a/f", "/c", "/b/f"], "/a", "/b", true)).toEqual(["/b/f", "/c"]);
   });
   it("refuses noncanonical paths and the root", () => {
-    expect(() => validateShareMove(identityId, "/a", "/b")).not.toThrow();
+    expect(() => validateSharePathChange(identityId, "/a", "/b")).not.toThrow();
     for (const [from, to] of [
       ["/", "/b"],
       ["/a", "/"],
@@ -316,8 +316,27 @@ describe("share paths following a move", () => {
       ["/a", "/b/../c"],
       ["/a/", "/b"],
     ] as const)
-      expect(() => validateShareMove(identityId, from, to)).toThrow(TypeError);
-    expect(() => validateShareMove("bad", "/a", "/b")).toThrow(TypeError);
+      expect(() => validateSharePathChange(identityId, from, to)).toThrow(TypeError);
+    expect(() => validateSharePathChange("bad", "/a", "/b")).toThrow(TypeError);
+  });
+  it("drops a deleted path and what is inside it, removing a share left with none", async () => {
+    let sequence = 0;
+    const repo = createMemoryShareRepo({
+      id: () => `00000000-0000-0000-0000-${(++sequence).toString(16).padStart(12, "0")}`,
+    });
+    const many = await repo.insert({ ...owned, paths: ["/docs/a.txt", "/docsx/b.txt", "/c"] });
+    const only = await repo.insert({ ...owned, paths: ["/docs"], passwordHash: "hash" });
+    const foreign = await repo.insert({ ...owned, identityId: otherIdentity, paths: ["/docs"] });
+    await repo.deletePrefix(identityId, "/docs", false);
+    expect((await repo.get(many.id))?.paths).toEqual(["/docs/a.txt", "/docsx/b.txt", "/c"]);
+    expect(await repo.get(only.id)).toBeNull();
+    expect(await repo.passwordHash(only.id)).toBeNull();
+    await repo.deletePrefix(identityId, "/docs", true);
+    expect(await repo.get(many.id)).toEqual({ ...many, paths: ["/docsx/b.txt", "/c"] });
+    expect(await repo.get(foreign.id)).toEqual(foreign);
+    await repo.deletePrefix(identityId, "/nothing", true);
+    expect((await repo.get(many.id))?.paths).toEqual(["/docsx/b.txt", "/c"]);
+    await expect(repo.deletePrefix(identityId, "/", true)).rejects.toThrow(TypeError);
   });
   it("rewrites only the identity's own shares and leaves their update time", async () => {
     let sequence = 0;

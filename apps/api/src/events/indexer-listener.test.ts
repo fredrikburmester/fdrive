@@ -108,6 +108,7 @@ function fakeMetadataService(): { metadata: MetadataService; calls: MetadataCall
       calls.onDeleted.push([identityId, path, isDir]);
     },
     onTrashed: async () => fail("onTrashed"),
+    onRestored: async () => fail("onRestored"),
     onCopied: () => undefined,
   };
   return { metadata, calls };
