@@ -101,6 +101,22 @@ describe("createUserStorage", () => {
     expect(zip.map((entry) => entry.name)).toContain(`${SHARED_WITH_ME}/Projects/brief.txt`);
   });
 
+  it("never creates again a shared folder its owner removed", async () => {
+    const gone = createUserStorage({
+      home: join(root, "bob"),
+      shared: async () => [
+        { name: "Gone", dir: alice("Gone", "deeper"), ownerHome: alice(), writable: true },
+      ],
+    });
+    const inside = `/${SHARED_WITH_ME}/Gone/new`;
+    expect(await kindOf(gone.mkdir(inside, { parents: true }))).toBe("not_found");
+    expect(await kindOf(gone.upload(`${inside}/x.txt`, bytes("x"), { mkdirParents: true }))).toBe(
+      "not_found",
+    );
+    expect(await kindOf(gone.move("/own.txt", `${inside}.txt`))).toBe("not_found");
+    await expect(stat(alice("Gone"))).rejects.toThrow();
+  });
+
   it("reads inside a shared folder at the paths the user sees", async () => {
     const entries = await bob.list(`/${SHARED_WITH_ME}/Projects`);
     expect(entries.map((entry) => entry.path).sort()).toEqual([
@@ -120,75 +136,33 @@ describe("createUserStorage", () => {
     expect(await kindOf(bob.download(`/${SHARED_WITH_ME}`))).toBe("bad_request");
   });
 
-  it("refuses a shared folder its owner replaced with a link out of their files", async () => {
+  it("refuses a shared folder its owner replaced with a link", async () => {
     await mkdir(join(root, "elsewhere"));
     await writeFile(join(root, "elsewhere", "private.txt"), "private");
     await symlink(join(root, "elsewhere"), alice("Linked"));
+    await symlink(alice(".trash"), alice("Bin link"));
     const linked = createUserStorage({
       home: join(root, "bob"),
       shared: async () => [
         { name: "Linked", dir: alice("Linked"), ownerHome: alice(), writable: true },
+        { name: "Bin link", dir: alice("Bin link"), ownerHome: alice(), writable: true },
       ],
     });
     expect(await kindOf(linked.list(`/${SHARED_WITH_ME}/Linked`))).toBe("forbidden");
     expect(await kindOf(linked.download(`/${SHARED_WITH_ME}/Linked/private.txt`))).toBe(
       "forbidden",
     );
+    expect(await kindOf(linked.list(`/${SHARED_WITH_ME}/Bin link`))).toBe("forbidden");
     expect((await linked.list(`/${SHARED_WITH_ME}`)).map((entry) => entry.name)).toEqual([]);
   });
 
-  it("refuses a shared folder in its owner's Trash, however the path reaches it", async () => {
-    const trashed = alice(".trash", ".fdrive-move-v1", "dir", "p", "Old", "v", "1");
-    await mkdir(trashed, { recursive: true });
-    await writeFile(join(trashed, "kept.txt"), "kept");
-    await symlink(alice(".trash"), alice("Bin link"));
-    await mkdir(alice(".fdrive-desktop", "id", "trash", "Mac"), { recursive: true });
-    const mounted = (folders: { name: string; dir: string }[], closed?: string[]) =>
-      createUserStorage({
-        home: join(root, "bob"),
-        shared: async () =>
-          folders.map((folder) => ({
-            ...folder,
-            ownerHome: alice(),
-            writable: true,
-            ...(closed === undefined ? {} : { closed }),
-          })),
-      });
-    const folders = [
-      { name: "Old", dir: trashed },
-      { name: "Linked", dir: alice("Bin link") },
-      { name: "Mac", dir: alice(".fdrive-desktop", "id", "trash", "Mac") },
-      { name: "Projects", dir: alice("Projects") },
-    ];
-    const guarded = mounted(folders, [alice(".trash"), alice(".fdrive-desktop")]);
-    expect(await kindOf(guarded.list(`/${SHARED_WITH_ME}/Old`))).toBe("forbidden");
-    expect(await kindOf(guarded.download(`/${SHARED_WITH_ME}/Old/kept.txt`))).toBe("forbidden");
-    expect(await kindOf(guarded.upload(`/${SHARED_WITH_ME}/Old/new.txt`, bytes("x")))).toBe(
+  it("keeps a shared folder's links unfollowed, even to its own files", async () => {
+    await symlink(alice("secret.txt"), alice("Projects", "leak.txt"));
+    await symlink(alice("Projects", "brief.txt"), alice("Projects", "brief-link.txt"));
+    expect(await kindOf(bob.download(`/${SHARED_WITH_ME}/Projects/leak.txt`))).toBe("forbidden");
+    expect(await kindOf(bob.download(`/${SHARED_WITH_ME}/Projects/brief-link.txt`))).toBe(
       "forbidden",
     );
-    expect(await kindOf(guarded.list(`/${SHARED_WITH_ME}/Linked`))).toBe("forbidden");
-    expect(await kindOf(guarded.list(`/${SHARED_WITH_ME}/Mac`))).toBe("forbidden");
-    expect((await guarded.list(`/${SHARED_WITH_ME}`)).map((entry) => entry.name)).toEqual([
-      "Projects",
-    ]);
-    await expect(stat(join(trashed, "new.txt"))).rejects.toThrow();
-
-    // Only the folders given count, and one that does not exist rules nothing out.
-    const elsewhere = mounted(folders, [alice("Bin")]);
-    expect((await elsewhere.list(`/${SHARED_WITH_ME}`)).map((entry) => entry.name).sort()).toEqual([
-      "Linked",
-      "Mac",
-      "Old",
-      "Projects",
-    ]);
-    expect((await mounted(folders).list(`/${SHARED_WITH_ME}/Old`)).map((e) => e.name)).toEqual([
-      "kept.txt",
-    ]);
-  });
-
-  it("keeps a shared folder's links inside it", async () => {
-    await symlink(alice("secret.txt"), alice("Projects", "leak.txt"));
-    expect(await kindOf(bob.download(`/${SHARED_WITH_ME}/Projects/leak.txt`))).toBe("forbidden");
   });
 
   it("writes into a writable shared folder on its owner's disk", async () => {

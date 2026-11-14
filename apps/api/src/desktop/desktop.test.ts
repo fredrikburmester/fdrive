@@ -754,16 +754,12 @@ it("preserves ancestor visibility while enforcing grants, Trash exclusion, live 
     { path: "/link", name: "link", kind: "symlink", size: 0, modifiedAt: new Date(), ext: "" },
   ]);
   expect((await f.files.list(f.principal, "/", "token")).entries[0]?.readable).toBe(false);
-  // A storage that reports a link as one has it refused.
-  vi.spyOn(f.storage, "stat").mockResolvedValueOnce({
-    kind: "symlink",
-    size: 0,
-    modifiedAt: null,
-    contentType: null,
-  });
+  // Storage refuses a path through a link, and the connection says so.
+  vi.spyOn(f.storage, "stat").mockRejectedValueOnce(
+    new StorageError("forbidden", "symbolic links are not followed: /link"),
+  );
   await expect(f.files.stat(f.principal, "/link")).rejects.toMatchObject({
     kind: "forbidden",
-    message: "Symbolic links are not supported by this connection",
   });
   vi.mocked(f.storage.list).mockRejectedValue(new StorageError("forbidden", "revoked"));
   await expect(f.files.list(f.principal, "/", "token")).rejects.toMatchObject({
@@ -852,7 +848,7 @@ it("refuses every read that reaches its item through a symbolic link, at any seg
     ["/docs/desk/state/secret.txt", "/alias/a.txt", "/docs/inner/b.txt", "/a-link.txt"],
   );
   await expect(f.files.stat(own, "/out.txt")).rejects.toMatchObject({ kind: "forbidden" });
-  await expect(f.files.stat(own, "/dangling")).rejects.toMatchObject({ kind: "not_found" });
+  await expect(f.files.stat(own, "/dangling")).rejects.toMatchObject({ kind: "forbidden" });
   // Listings show every link as one, unreadable, and the real paths still read.
   const kinds = async (principal: Principal, path: string) =>
     Object.fromEntries(

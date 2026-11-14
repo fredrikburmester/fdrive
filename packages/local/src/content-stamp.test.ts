@@ -94,7 +94,7 @@ describe("contentStamp on a home folder", () => {
     const expected: Record<string, string | null> = {
       "/f.txt": null,
       "/nope.txt": "not_found",
-      "/dangling.txt": "not_found",
+      "/dangling.txt": "forbidden",
       "/dir": "bad_request",
       "/pipe": "bad_request",
       "/out.txt": "forbidden",

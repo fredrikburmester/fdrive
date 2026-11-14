@@ -1,6 +1,7 @@
-import { readFile } from "node:fs/promises";
+import { mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { ManagedShare } from "@fdrive/contracts";
 import { expect, type Page, test } from "@playwright/test";
+import { homePath } from "./support/local-folder.js";
 import { loginAs } from "./support/login.js";
 import { listing, sidebar } from "./support/regions.js";
 import {
@@ -9,6 +10,7 @@ import {
   shareImageFixture,
   shareZipFixture,
 } from "./support/share-fixture.js";
+import { uniqueName } from "./support/unique.js";
 
 const DESKTOP_VIEWPORT = { width: 1440, height: 900 };
 const MOBILE_VIEWPORT = { width: 390, height: 844 };
@@ -260,6 +262,48 @@ test("directory paths, bounded safe previews, Range and multipath ZIP use only p
     expect(forbidden).toEqual([]);
   } finally {
     await context.close().catch(() => {});
+  }
+});
+
+test("a public link never reaches the Trash through a symbolic link in its folder", async ({
+  page,
+  browser,
+}) => {
+  const folder = uniqueName("linked");
+  const owner = (path: string) => homePath("share_owner", path);
+  await mkdir(owner("/.trash"), { recursive: true });
+  await writeFile(owner(`/.trash/${folder}-deleted.txt`), "deleted secret");
+  await mkdir(owner(`/${folder}`));
+  await writeFile(owner(`/${folder}/kept.txt`), "kept");
+  // Left by a writer outside fdrive, such as SMB: fdrive never makes links.
+  await symlink(owner("/.trash"), owner(`/${folder}/bin`));
+  const context = await browser.newContext();
+  try {
+    await loginAs(page, "share_owner", "share-owner-test-password");
+    const url = await createLink(page, [folder], "Linked folder");
+    const visitor = await context.newPage();
+    await visitor.goto(url);
+    const bin = visitor.getByRole("row").filter({ hasText: "bin" });
+    await expect(bin).toHaveAttribute("aria-disabled", "true");
+    await expect(bin.getByRole("link")).toHaveCount(0);
+    const id = new URL(url).pathname.split("/").at(-1) ?? "";
+    for (const path of ["/bin", `/bin/${folder}-deleted.txt`]) {
+      const download = await visitor.request.get(
+        new URL(`/api/v1/public/shares/${id}/download?path=${encodeURIComponent(path)}`, url).href,
+      );
+      expect(download.ok(), path).toBe(false);
+      expect(await download.text(), path).not.toContain("deleted secret");
+    }
+    const zip = await downloaded(visitor, () =>
+      visitor.getByRole("link", { name: "Download ZIP" }).click(),
+    );
+    expect(zip.includes(Buffer.from("kept.txt"))).toBe(true);
+    expect(zip.includes(Buffer.from("deleted secret"))).toBe(false);
+  } finally {
+    await context.close().catch(() => {});
+    // Removes the link itself, never what it points at.
+    await rm(owner(`/${folder}`), { recursive: true, force: true });
+    await rm(owner(`/.trash/${folder}-deleted.txt`), { force: true });
   }
 });
 

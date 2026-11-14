@@ -31,19 +31,15 @@ export const DESKTOP_PAGE_SIZE = 500;
 
 export { DESKTOP_INTERNAL_ROOT };
 
-const SYMLINKS = "Symbolic links are not supported by this connection";
-
 /**
- * The entry at the normalized `path`, from one stat. A path that reaches it
- * through a symbolic link, at any segment, is refused: grants and fdrive's own
- * folders are checked against the path as asked, and a link would lead past
- * them. Desktop paths are spelled as listings show them and the registry keys
- * items by them, so another spelling of a stored name (on a disk that ignores
- * case) is not that item.
+ * The entry at the normalized `path`, from one stat. Storage refuses a path
+ * through a symbolic link, at any segment (`forbidden`). Desktop paths are
+ * spelled as listings show them and the registry keys items by them, so
+ * another spelling of a stored name (on a disk that ignores case) is not that
+ * item.
  */
 export async function storedEntry(storage: StorageProvider, path: string): Promise<DesktopEntry> {
   const found = await runStorageCall(() => storage.stat(path));
-  if (found.link || found.kind === "symlink") throw new ApiHttpError("forbidden", SYMLINKS);
   if ((found.path ?? path) !== path) throw new ApiHttpError("not_found", "Item no longer exists");
   return {
     path,
@@ -97,22 +93,19 @@ export function createDesktopFiles(
   }
   /**
    * What this connection may see of a folder's upstream listing, in path order.
-   * A link shows as one, unreadable, whatever it leads to: reads refuse it.
+   * A link shows as one, unreadable: storage refuses every read through it.
    */
   function visible(principal: Principal, live: readonly FileEntry[]): DesktopEntry[] {
     return live
       .filter((item) => allowed(principal, normalizePath(item.path), item.kind === "dir"))
-      .map((item) => {
-        const kind = item.link ? "symlink" : item.kind;
-        return {
-          path: normalizePath(item.path),
-          name: item.name,
-          kind,
-          size: kind === "symlink" ? 0 : item.size,
-          modifiedAt: item.modifiedAt.toISOString(),
-          readable: kind === "file" || kind === "dir",
-        };
-      })
+      .map((item) => ({
+        path: normalizePath(item.path),
+        name: item.name,
+        kind: item.kind,
+        size: item.size,
+        modifiedAt: item.modifiedAt.toISOString(),
+        readable: item.kind === "file" || item.kind === "dir",
+      }))
       .sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
   }
   async function entry(principal: Principal, path: string): Promise<DesktopEntry> {

@@ -109,10 +109,8 @@ describe("symlinks", () => {
     await symlink(outside, join(await home(), "out"));
   });
 
-  it("lists a link that leaves the home as a symlink and refuses to follow it", async () => {
-    expect(await f.storage.list("/")).toMatchObject([
-      { name: "out", kind: "symlink", size: 0, link: true },
-    ]);
+  it("lists a link as what it is and refuses to follow it", async () => {
+    expect(await f.storage.list("/")).toMatchObject([{ name: "out", kind: "symlink", size: 0 }]);
     expect(await kindOf(f.storage.list("/out"))).toBe("forbidden");
     expect(await kindOf(f.storage.stat("/out"))).toBe("forbidden");
     expect(await kindOf(f.storage.download("/out/secret.txt"))).toBe("forbidden");
@@ -121,51 +119,41 @@ describe("symlinks", () => {
     expect(await readdir(outside)).toEqual(["secret.txt"]);
   });
 
-  it("refuses a file link that leaves the home", async () => {
-    await symlink(join(outside, "secret.txt"), join(f.home, "secret.txt"));
-    expect(await kindOf(f.storage.download("/secret.txt"))).toBe("forbidden");
-  });
-
-  it("deletes a link itself, never what it points at", async () => {
-    await f.storage.deleteFile("/out");
-    expect(await f.storage.list("/")).toEqual([]);
+  it("refuses to delete a link, keeping it and what it points at", async () => {
+    expect(await kindOf(f.storage.deleteFile("/out"))).toBe("forbidden");
+    expect(await kindOf(f.storage.deleteDir("/out"))).toBe("forbidden");
+    expect((await lstat(join(f.home, "out"))).isSymbolicLink()).toBe(true);
     expect(await readFile(join(outside, "secret.txt"), "utf8")).toBe("secret");
   });
 
-  it("follows links that stay inside the home", async () => {
+  it("refuses a link that stays inside the home just the same", async () => {
     await f.storage.upload("/real/a.txt", bytes("a"), { mkdirParents: true });
     await symlink(join(f.home, "real"), join(f.home, "alias"));
     await symlink(join(f.home, "real", "a.txt"), join(f.home, "a-link.txt"));
     const entries = await f.storage.list("/");
-    expect(entries.find((entry) => entry.name === "alias")).toMatchObject({
-      kind: "dir",
-      link: true,
-    });
+    expect(entries.find((entry) => entry.name === "alias")).toMatchObject({ kind: "symlink" });
     expect(entries.find((entry) => entry.name === "a-link.txt")).toMatchObject({
-      kind: "file",
-      size: 1,
-      link: true,
+      kind: "symlink",
+      size: 0,
     });
-    expect(entries.find((entry) => entry.name === "real")).not.toHaveProperty("link");
-    expect(await read(f.storage, "/alias/a.txt")).toBe("a");
-    expect(await read(f.storage, "/a-link.txt")).toBe("a");
-    expect(await f.storage.list("/alias")).toMatchObject([{ path: "/alias/a.txt" }]);
-    // A path through links is spelled as asked: the link's own name, not its target's.
-    expect(await f.storage.stat("/alias/a.txt")).not.toHaveProperty("path");
-    expect(await f.storage.stat("/a-link.txt")).not.toHaveProperty("path");
+    expect(await kindOf(f.storage.stat("/alias/a.txt"))).toBe("forbidden");
+    expect(await kindOf(f.storage.list("/alias"))).toBe("forbidden");
+    expect(await kindOf(f.storage.download("/a-link.txt"))).toBe("forbidden");
+    expect(await read(f.storage, "/real/a.txt")).toBe("a");
     expect(await f.storage.stat("/real/a.txt")).not.toHaveProperty("path");
-    // Stat says when it followed a link, at the last segment or on the way.
-    expect(await f.storage.stat("/alias/a.txt")).toMatchObject({ kind: "file", link: true });
-    expect(await f.storage.stat("/alias")).toMatchObject({ kind: "dir", link: true });
-    expect(await f.storage.stat("/a-link.txt")).toMatchObject({ kind: "file", link: true });
-    expect(await f.storage.stat("/real/a.txt")).not.toHaveProperty("link");
   });
 
-  it("lists a dangling link as a symlink and reports it missing", async () => {
+  it("refuses a link that leads nowhere, and writing over it", async () => {
     await symlink(join(f.root, "nowhere"), join(f.home, "dangling"));
     const entries = await f.storage.list("/");
     expect(entries.find((entry) => entry.name === "dangling")).toMatchObject({ kind: "symlink" });
-    expect(await kindOf(f.storage.stat("/dangling"))).toBe("not_found");
+    expect(await kindOf(f.storage.stat("/dangling"))).toBe("forbidden");
+    expect(await kindOf(f.storage.upload("/dangling", bytes("x"), { overwrite: true }))).toBe(
+      "forbidden",
+    );
+    expect(await kindOf(f.storage.mkdir("/dangling/dir", { parents: true }))).toBe("forbidden");
+    expect((await lstat(join(f.home, "dangling"))).isSymbolicLink()).toBe(true);
+    expect(await readdir(f.root)).toEqual(expect.not.arrayContaining(["nowhere"]));
   });
 });
 

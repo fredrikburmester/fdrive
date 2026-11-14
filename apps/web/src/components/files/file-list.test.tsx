@@ -284,6 +284,39 @@ describe("FileList", () => {
     expect(queryByText(/Can edit/)).toBeNull();
   });
 
+  it("shows a symbolic link as a quiet row that does nothing", async () => {
+    const onEntryClick = vi.fn();
+    const onEntryDoubleClick = vi.fn();
+    const onContextAction = vi.fn();
+    const entries = [
+      makeEntry("bin", { kind: "symlink" }),
+      makeEntry("photo.jpg", { ext: ".jpg", mime: "image/jpeg" }),
+    ];
+    const { container, getByText, queryAllByRole, findAllByRole } = renderList({
+      entries,
+      onEntryClick,
+      onEntryDoubleClick,
+      onContextAction,
+      showThumbnails: true,
+    });
+
+    const row = container.querySelector('[data-path="/bin"]');
+    expect(row?.getAttribute("aria-disabled")).toBe("true");
+    expect(row?.getAttribute("title")).toMatch(/symbolic link/i);
+    expect(row?.querySelector('[draggable="true"], [role="checkbox"], img')).toBeNull();
+    fireEvent.click(getByText("bin"));
+    fireEvent.doubleClick(getByText("bin"));
+    fireEvent.contextMenu(getByText("bin"));
+    expect(onEntryClick).not.toHaveBeenCalled();
+    expect(onEntryDoubleClick).not.toHaveBeenCalled();
+    expect(queryAllByRole("menuitem")).toEqual([]);
+    // The rest of the listing works as before.
+    fireEvent.click(getByText("photo.jpg"));
+    expect(onEntryClick).toHaveBeenCalledWith(entries[1], { shift: false, meta: false });
+    fireEvent.contextMenu(getByText("photo.jpg"));
+    expect((await findAllByRole("menuitem")).length).toBeGreaterThan(0);
+  });
+
   it("renders standard FileIcon directly when showThumbnails is false", () => {
     const entries = [makeEntry("pic.png", { ext: ".png", mime: "image/png" })];
     const { container } = renderList({ entries, showThumbnails: false });

@@ -65,10 +65,10 @@ describe("probeFileRead on a home folder", () => {
 
     const expected: Record<string, string | null> = {
       "/f.txt": null,
-      "/link.txt": null,
+      "/link.txt": "forbidden",
       "/nope.txt": "not_found",
       "/f.txt/x": "not_found",
-      "/dangling.txt": "not_found",
+      "/dangling.txt": "forbidden",
       "/dir": "bad_request",
       "/": "bad_request",
       "/pipe": "bad_request",

@@ -11,7 +11,6 @@ import {
   open,
   opendir,
   readdir,
-  realpath,
   rename,
   rm,
   rmdir,
@@ -42,17 +41,10 @@ import { codeOf, mapped, toStorageError } from "./errors.js";
 import { createHome, type Home } from "./home.js";
 
 export interface LocalStorageOptions {
-  /** The user's home folder; created on first use. */
+  /** The user's home folder, created on first use, or a folder someone shares. */
   readonly home: string;
-  /**
-   * False for a folder someone else owns (a shared folder): it is never
-   * created, so a folder its owner removed reads as missing.
-   */
-  readonly create?: boolean;
-  /** A folder `home` must really be inside; see `CreateHomeOptions.within`. */
+  /** For a folder someone shares, its owner's home; see `CreateHomeOptions.within`. */
   readonly within?: string;
-  /** Folders `home` must not really be inside; see `CreateHomeOptions.outside`. */
-  readonly outside?: readonly string[];
   /** Hears every change this storage makes on disk, once it is done. */
   readonly onChange?: DiskChangeListener;
 }
@@ -88,6 +80,14 @@ function partialIn(dir: string): string {
 
 function aborted(signal: AbortSignal): unknown {
   return signal.reason ?? new DOMException("The operation was aborted.", "AbortError");
+}
+
+/** Opens for reading without following a link at the last segment, nor blocking on a FIFO. */
+const READ_FLAGS = constants.O_RDONLY | constants.O_NONBLOCK | constants.O_NOFOLLOW;
+
+/** True for the home itself, which some operations treat apart. */
+function isTop(path: string): boolean {
+  return splitSegments(normalizePath(path)).length === 0;
 }
 
 function kindOf(info: Stats): EntryKind {
@@ -151,43 +151,37 @@ function rangeApplies(ifRange: string | undefined, modifiedAt: Date): boolean {
 
 /**
  * Files in one user's home folder on this machine's disk. Paths are the
- * user's own (`/` is the home); see `createHome` for how they are confined.
+ * user's own (`/` is the home); see `createHome` for how they are confined,
+ * and why a path through a symbolic link is refused.
  * Uploads and copies publish atomically and, unless asked to overwrite,
  * only while the name is free (`link`, a real create-if-absent); moves are
  * one `rename` within a filesystem.
  */
 export function createLocalStorage(options: LocalStorageOptions): LocalStorage {
-  const home = createHome(options.home, {
-    create: options.create ?? true,
-    ...(options.within === undefined ? {} : { within: options.within }),
-    ...(options.outside === undefined ? {} : { outside: options.outside }),
-  });
+  const home = createHome(
+    options.home,
+    options.within === undefined ? {} : { within: options.within },
+  );
   const listener = options.onChange;
 
-  async function isHome(at: string): Promise<boolean> {
-    return at === (await home.real());
+  /** The entry `path` names on disk; refuses a path through a symbolic link. */
+  async function entry(path: string): Promise<string> {
+    return (await home.locate(path)).at;
   }
 
+  /**
+   * A listing's entry, as it is: a symbolic link is one, kind `symlink`,
+   * which every operation then refuses.
+   */
   async function describe(dir: string, parent: string, name: string): Promise<FileEntry | null> {
-    const at = join(dir, name);
-    let info = await lstatOrNull(at);
+    const info = await lstatOrNull(join(dir, name));
     if (info === null) return null;
-    const link = info.isSymbolicLink();
-    if (link) {
-      try {
-        const resolved = await realpath(at);
-        if (await home.contains(resolved)) info = await stat(resolved);
-      } catch {
-        // A dangling link is listed as what it is.
-      }
-    }
     const kind = kindOf(info);
     return makeEntry(parent, {
       name,
       kind,
       size: kind === "file" ? info.size : 0,
       modifiedAt: info.mtime,
-      link,
     });
   }
 
@@ -201,8 +195,8 @@ export function createLocalStorage(options: LocalStorageOptions): LocalStorage {
     list: (path) =>
       mapped(path, async () => {
         const parent = normalizePath(path);
-        const dir = await home.target(parent);
-        if (!(await stat(dir)).isDirectory()) {
+        const dir = await entry(parent);
+        if (!(await lstat(dir)).isDirectory()) {
           throw new StorageError("bad_request", `not a directory: ${path}`);
         }
         const names = (await readdir(dir)).filter((name) => !PARTIAL.test(name));
@@ -212,23 +206,22 @@ export function createLocalStorage(options: LocalStorageOptions): LocalStorage {
 
     stat: (path) =>
       mapped(path, async (): Promise<EntryStat> => {
-        const info = await stat(await home.target(path));
+        const found = await home.locate(path);
+        const info = await lstat(found.at);
         const kind = kindOf(info);
-        const spelled = await home.spelled(path);
         return {
           kind,
           size: kind === "file" ? info.size : 0,
           modifiedAt: info.mtime,
           contentType: null,
-          ...(spelled.path === normalizePath(path) ? {} : { path: spelled.path }),
-          ...(spelled.link ? { link: true as const } : {}),
+          ...(found.path === normalizePath(path) ? {} : { path: found.path }),
         };
       }),
 
     probeDirectoryRead: (path) =>
       mapped(path, async () => {
-        const dir = await home.target(path);
-        if (!(await stat(dir)).isDirectory()) {
+        const dir = await entry(path);
+        if (!(await lstat(dir)).isDirectory()) {
           throw new StorageError("bad_request", `not a directory: ${path}`);
         }
         const handle = await opendir(dir);
@@ -244,9 +237,9 @@ export function createLocalStorage(options: LocalStorageOptions): LocalStorage {
     // looked up, which the kernel usually has cached; no content is read.
     probeFileRead: (path) =>
       mapped(path, async () => {
-        const at = await home.target(path);
+        const at = await entry(path);
         await access(at, constants.R_OK);
-        const info = await stat(at);
+        const info = await lstat(at);
         if (!info.isFile()) throw new StorageError("bad_request", `not a file: ${path}`);
       }),
 
@@ -254,10 +247,7 @@ export function createLocalStorage(options: LocalStorageOptions): LocalStorage {
     // describes the file a download would read; none of it is read.
     contentStamp: (path) =>
       mapped(path, async () => {
-        const handle = await open(
-          await home.target(path),
-          constants.O_RDONLY | constants.O_NONBLOCK,
-        );
+        const handle = await open(await entry(path), READ_FLAGS);
         try {
           const info = await handle.stat({ bigint: true });
           if (!info.isFile()) throw new StorageError("bad_request", `not a file: ${path}`);
@@ -282,12 +272,7 @@ export function createLocalStorage(options: LocalStorageOptions): LocalStorage {
       mapped(path, async () => {
         const signal = opts?.signal;
         if (signal?.aborted === true) throw aborted(signal);
-        // Non-blocking, so a FIFO answers instead of hanging the open; it
-        // changes nothing for a regular file.
-        const handle = await open(
-          await home.target(path),
-          constants.O_RDONLY | constants.O_NONBLOCK,
-        );
+        const handle = await open(await entry(path), READ_FLAGS);
         try {
           const info = await handle.stat();
           if (!info.isFile()) throw new StorageError("bad_request", `not a file: ${path}`);
@@ -325,9 +310,8 @@ export function createLocalStorage(options: LocalStorageOptions): LocalStorage {
       mapped(path, async () => {
         const signal = opts?.signal;
         if (signal?.aborted === true) throw aborted(signal);
-        const target = await home.entry(path);
-        if (await isHome(target))
-          throw new StorageError("conflict", `a directory exists at ${path}`);
+        if (isTop(path)) throw new StorageError("conflict", `a directory exists at ${path}`);
+        const target = await entry(path);
         const dir = dirname(target);
         if (opts?.mkdirParents === true) await mkdir(dir, { recursive: true });
         const overwrite = opts?.overwrite === true;
@@ -391,7 +375,7 @@ export function createLocalStorage(options: LocalStorageOptions): LocalStorage {
 
     mkdir: (path, opts) =>
       mapped(path, async () => {
-        const at = await home.entry(path);
+        const at = await entry(path);
         const parents = opts?.parents === true;
         // With `parents`, the first folder it made, if any; without, it made `at` or threw.
         const created = parents ? await mkdir(at, { recursive: true }) : await mkdir(at);
@@ -402,26 +386,25 @@ export function createLocalStorage(options: LocalStorageOptions): LocalStorage {
 
     move: (path, target, opts) =>
       mapped(path, async () => {
-        const from = await home.entry(path);
-        if (await isHome(from)) throw new StorageError("not_found", `not found: ${path}`);
-        const to = await home.entry(target);
+        if (isTop(path)) throw new StorageError("not_found", `not found: ${path}`);
+        const from = await entry(path);
+        const to = await entry(target);
         await moveEntry(from, to, { path, target }, opts);
         notify(listener, { kind: "moved", path: from, target: to });
       }),
 
     copy: (path, target, opts) =>
       mapped(path, async () => {
-        if (splitSegments(normalizePath(path)).length === 0) {
-          throw new StorageError("not_found", `not found: ${path}`);
-        }
-        const to = await home.entry(target);
-        await copyEntry(await home.target(path), to, { path, target }, opts);
+        if (isTop(path)) throw new StorageError("not_found", `not found: ${path}`);
+        const from = await entry(path);
+        const to = await entry(target);
+        await copyEntry(from, to, { path, target }, opts);
         notify(listener, { kind: "changed", path: to });
       }),
 
     deleteFile: (path) =>
       mapped(path, async () => {
-        const at = await home.entry(path);
+        const at = await entry(path);
         if ((await lstat(at)).isDirectory()) {
           throw new StorageError("bad_request", `is a directory: ${path}`);
         }
@@ -431,23 +414,23 @@ export function createLocalStorage(options: LocalStorageOptions): LocalStorage {
 
     deleteDir: (path) =>
       mapped(path, async () => {
-        const at = await home.entry(path);
+        const at = await entry(path);
         if (!(await lstat(at)).isDirectory()) {
           throw new StorageError("bad_request", `not a directory: ${path}`);
         }
         // The home itself stays: deleting "/" empties it.
-        if (await isHome(at)) await clearChildren(at);
+        if (isTop(path)) await clearChildren(at);
         else await rm(at, { recursive: true });
         notify(listener, { kind: "changed", path: at });
       }),
 
     deleteEmptyDir: (path) =>
       mapped(path, async () => {
-        const at = await home.entry(path);
+        const at = await entry(path);
         if (!(await lstat(at)).isDirectory()) {
           throw new StorageError("bad_request", `not a directory: ${path}`);
         }
-        if (await isHome(at)) throw new StorageError("bad_request", `the home stays: ${path}`);
+        if (isTop(path)) throw new StorageError("bad_request", `the home stays: ${path}`);
         // `rmdir` refuses a folder that holds anything, whatever arrived in it.
         await rmdir(at);
         notify(listener, { kind: "changed", path: at });
@@ -455,8 +438,8 @@ export function createLocalStorage(options: LocalStorageOptions): LocalStorage {
 
     setModifiedAt: (path, modifiedAt) =>
       mapped(path, async () => {
-        const at = await home.target(path);
-        await utimes(at, (await stat(at)).atime, modifiedAt);
+        const at = await entry(path);
+        await utimes(at, (await lstat(at)).atime, modifiedAt);
         notify(listener, { kind: "changed", path: at });
       }),
 
@@ -464,7 +447,7 @@ export function createLocalStorage(options: LocalStorageOptions): LocalStorage {
       mapped(paths.join(", "), async () => {
         const items: ZipItem[] = [];
         for (const path of paths) {
-          items.push({ at: await home.target(path), name: basename(normalizePath(path)) });
+          items.push({ at: await entry(path), name: basename(normalizePath(path)) });
         }
         return zipItems(items, opts);
       }),
@@ -508,9 +491,10 @@ interface Names {
 }
 
 /**
- * Moves the entry at `from` to `to`, both real paths already confined by
- * their homes: one `rename`, which also works between two users' folders on
- * the same disk. A taken target is a `conflict` unless `overwrite`.
+ * Moves the entry at `from` to `to`, both located by their homes: one
+ * `rename`, which also works between two users' folders on the same disk. A
+ * folder takes the links in it along as they are, followed by nothing. A
+ * taken target is a `conflict` unless `overwrite`.
  *
  * Checking the target and renaming are two steps, since Node has no
  * `RENAME_NOREPLACE`: a writer that takes the name between them is
@@ -552,16 +536,19 @@ export async function moveEntry(
       preserveTimestamps: true,
       force: overwrite,
       errorOnExist: true,
+      verbatimSymlinks: true,
     });
     await rm(from, { recursive: true, force: true });
   }
 }
 
 /**
- * Copies `from` (a file or folder, already resolved) to the entry `to`,
+ * Copies `from` (a file or folder, already located) to the entry `to`,
  * keeping modification times. A taken target is a `conflict` unless
  * `overwrite`, which replaces a file and merges into a folder. A file is
  * published atomically, and without `overwrite` only while the name is free.
+ * A link in a folder is copied as the link it is, its target text unchanged,
+ * as a move would take it along: never followed, and never its target.
  */
 export async function copyEntry(
   from: string,
@@ -573,7 +560,7 @@ export async function copyEntry(
     throw new StorageError("bad_request", `cannot copy ${names.path} into itself`);
   }
   const overwrite = opts?.overwrite === true;
-  const source = await stat(from);
+  const source = await lstat(from);
   const existing = await lstatOrNull(to);
   if (existing !== null && !overwrite) throw taken(names.target);
   const dir = dirname(to);
@@ -598,11 +585,12 @@ export async function copyEntry(
     preserveTimestamps: true,
     force: overwrite,
     errorOnExist: true,
+    verbatimSymlinks: true,
     filter: (src) => !PARTIAL.test(basename(src)),
   });
 }
 
-/** One thing to put in a zip: a resolved file or folder and its name in the archive. */
+/** One thing to put in a zip: a located file or folder and its name in the archive. */
 export interface ZipItem {
   readonly at: string;
   readonly name: string;
@@ -634,7 +622,7 @@ export async function zipItems(
   if (signal?.aborted === true) throw aborted(signal);
   const entries: ZipEntry[] = [];
   for (const { at, name } of items) {
-    const info = await stat(at);
+    const info = await lstat(at);
     if (info.isFile()) {
       entries.push({ name, mtime: info.mtime, file: { at, mode: info.mode, size: info.size } });
     } else if (info.isDirectory()) {
@@ -697,8 +685,8 @@ export async function zipItems(
 
 /**
  * Adds the folder at `dir` to `entries` under `prefix` (empty for the home).
- * Only regular files and folders go in: a symlink is skipped, so a zip can
- * never reach outside the home through one.
+ * Only regular files and folders go in: a symbolic link is skipped, as are
+ * pipes and devices, since storage never follows one.
  */
 async function collectTree(
   entries: ZipEntry[],

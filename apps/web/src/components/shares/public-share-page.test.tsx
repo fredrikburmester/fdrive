@@ -286,3 +286,25 @@ it("names a withheld share generically and reports a password the server did not
   await screen.findByText("Share password incorrect.");
   expect(calls.entries).not.toHaveBeenCalled();
 });
+it("shows a symbolic link in a shared folder by name only, with nothing to open", async () => {
+  calls.metadata.mockResolvedValue({
+    ...metadata,
+    hasPassword: false,
+    layout: "directory",
+    presentation: "list",
+    fileName: null,
+  });
+  calls.entries.mockResolvedValue({
+    items: [
+      { name: "bin", kind: "symlink", size: 0, modifiedAt: "2026-01-01T00:00:00Z" },
+      { name: "notes.txt", kind: "file", size: 5, modifiedAt: "2026-01-01T00:00:00Z" },
+    ],
+  });
+  setup();
+  const row = (await screen.findByText("bin")).closest("tr");
+  expect(row?.getAttribute("aria-disabled")).toBe("true");
+  expect(row?.querySelector("a, button")).toBeNull();
+  expect(row?.textContent).not.toContain("bytes");
+  const file = screen.getByText("notes.txt").closest("tr");
+  expect(file?.querySelector("a")).not.toBeNull();
+});

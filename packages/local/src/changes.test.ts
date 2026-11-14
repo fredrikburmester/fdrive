@@ -221,20 +221,17 @@ describe("local storage changes", () => {
     expect(changes).toEqual([{ kind: "changed", path: join(home(), "x", "y") }]);
   });
 
-  it("reports the file a link leads to when its time changes", async () => {
+  it("reports nothing for an operation that failed", async () => {
     const files = storage();
     await files.upload("/real.txt", bytes("r"));
     await symlink(join(home(), "real.txt"), join(home(), "link.txt"));
     changes = [];
-    await files.setModifiedAt?.("/link.txt", new Date("2020-01-01T00:00:00Z"));
-    expect(changes).toEqual([{ kind: "changed", path: join(home(), "real.txt") }]);
-  });
-
-  it("reports nothing for an operation that failed", async () => {
-    const files = storage();
     expect(await kindOf(files.move("/missing", "/x"))).toBe("not_found");
     expect(await kindOf(files.copy("/missing", "/x"))).toBe("not_found");
     expect(await kindOf(files.deleteFile("/missing"))).toBe("not_found");
+    expect(await kindOf(files.setModifiedAt?.("/link.txt", new Date(0)) ?? Promise.resolve())).toBe(
+      "forbidden",
+    );
     expect(changes).toEqual([]);
   });
 });

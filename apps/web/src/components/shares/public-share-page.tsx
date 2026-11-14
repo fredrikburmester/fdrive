@@ -2,7 +2,7 @@
 
 import type { PublicShare, ShareEntriesResponse } from "@fdrive/contracts";
 import { useQueryClient } from "@tanstack/react-query";
-import { File, Folder, Link2, RefreshCw } from "lucide-react";
+import { File, Folder, Link2, LinkIcon, RefreshCw } from "lucide-react";
 import type { Route } from "next";
 import Link from "next/link";
 import { type FormEvent, useEffect, useRef, useState } from "react";
@@ -27,6 +27,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { isLink, LINK_TITLE } from "@/lib/files/links";
 import { type PublicShareClient, publicShareClient } from "@/lib/shares/client";
 import { appendShareName, publicShareHref, shareBreadcrumbs } from "@/lib/shares/paths";
 import { canPeekArchive } from "@/lib/shares/peek";
@@ -311,6 +312,20 @@ function SharedEntries({
         {entries.map((entry) => {
           const entryPath = appendShareName(path, entry.name);
           const kind = entry.kind === "file" ? publicPreviewKind(entry.name, entry.size) : "none";
+          if (isLink(entry))
+            // Shown so its name stays visible; nothing behind it can be reached.
+            return (
+              <TableRow key={entryPath} aria-disabled="true" title={LINK_TITLE}>
+                <TableCell>
+                  <div className="flex items-center gap-2 text-muted-foreground opacity-60">
+                    <LinkIcon className="size-4" />
+                    <span>{entry.name}</span>
+                  </div>
+                </TableCell>
+                <TableCell className="text-muted-foreground">—</TableCell>
+                <TableCell />
+              </TableRow>
+            );
           return (
             <TableRow key={entryPath}>
               <TableCell>

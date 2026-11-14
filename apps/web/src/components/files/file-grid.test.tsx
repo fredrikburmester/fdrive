@@ -133,6 +133,31 @@ describe("FileGrid", () => {
     expect(container.querySelector('[data-slot="listing-skeleton-grid"]')).not.toBeNull();
   });
 
+  it("shows a symbolic link as a quiet tile that does nothing", () => {
+    window.localStorage.setItem(GRID_WIDTH_STORAGE_KEY, JSON.stringify(700));
+    const onEntryClick = vi.fn();
+    const onEntryDoubleClick = vi.fn();
+    const entries = [makeEntry("bin.jpg", { kind: "symlink", ext: ".jpg", mime: "image/jpeg" })];
+    const { container, getByText, queryAllByRole } = renderGrid({
+      entries,
+      onEntryClick,
+      onEntryDoubleClick,
+      thumbnails: true,
+    });
+
+    const tile = container.querySelector('[data-path="/bin.jpg"]');
+    expect(tile?.getAttribute("aria-disabled")).toBe("true");
+    expect(tile?.getAttribute("title")).toMatch(/symbolic link/i);
+    expect(tile?.getAttribute("draggable")).toBeNull();
+    expect(tile?.querySelector("img")).toBeNull();
+    fireEvent.click(getByText("bin.jpg"));
+    fireEvent.doubleClick(getByText("bin.jpg"));
+    fireEvent.contextMenu(getByText("bin.jpg"));
+    expect(onEntryClick).not.toHaveBeenCalled();
+    expect(onEntryDoubleClick).not.toHaveBeenCalled();
+    expect(queryAllByRole("menuitem")).toEqual([]);
+  });
+
   it("says who shares a folder in Shared with me under its name", () => {
     window.localStorage.setItem(GRID_WIDTH_STORAGE_KEY, JSON.stringify(700));
     const entries = [makeEntry("Trip", { path: "/Shared with me/Trip", kind: "dir" })];

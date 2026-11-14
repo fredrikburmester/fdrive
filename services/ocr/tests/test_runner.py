@@ -630,6 +630,56 @@ def test_process_file_skips_a_file_the_index_has_not_caught_up_with(
     assert db_conn.execute('SELECT count(*) FROM "idx"."ocr_log"').fetchone() == (0,)
 
 
+@pytest.mark.parametrize("where", ["file", "folder"])
+def test_process_file_never_follows_a_link_left_where_the_index_saw_a_file(
+    db_conn: psycopg.Connection, files_root: runner.RootTarget, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, where: str
+) -> None:
+    root = Path(files_root.abs_path)
+    _write_pdf(root / "docs" / "a.pdf", "OK")
+    pdf = _indexed(root, "docs/a.pdf")
+    # A writer outside fdrive moves it away and leaves a link behind; size and time stay.
+    if where == "file":
+        (root / "docs" / "a.pdf").rename(root / "docs" / "moved.pdf")
+        (root / "docs" / "a.pdf").symlink_to(root / "docs" / "moved.pdf")
+    else:
+        (root / "docs").rename(root / "moved")
+        (root / "docs").symlink_to(root / "moved")
+    calls = _ocrmypdf_calls(monkeypatch)
+
+    status = runner.process_file(db_conn, files_root, pdf, DEFAULT_SETTINGS, str(tmp_path / "state"), 30, 2, lambda _m: None)
+    assert status == ("changed", False)
+    assert calls == []
+    assert (root / "docs" / "a.pdf").read_bytes() == b"OK\n"
+    assert (root / ("docs/a.pdf" if where == "file" else "docs")).is_symlink()
+    assert db_conn.execute('SELECT count(*) FROM "idx"."ocr_log"').fetchone() == (0,)
+
+
+def test_a_file_swapped_for_a_link_while_ocr_reads_it_stays_a_link(
+    db_conn: psycopg.Connection,
+    files_root: runner.RootTarget,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    journal: Journal,
+) -> None:
+    root = Path(files_root.abs_path)
+    _write_pdf(root / "a.pdf", "OK")
+    real = runner.run_ocrmypdf
+
+    def link_lands_during_ocr(src: str, *args: object) -> tuple[int, str, bool]:
+        result = real(src, *args)
+        # The same file, under another name, with a link where it was.
+        os.rename(src, root / "moved.pdf")
+        os.symlink(root / "moved.pdf", src)
+        return result
+
+    monkeypatch.setattr(runner, "run_ocrmypdf", link_lands_during_ocr)
+    totals = _pass(db_conn, files_root, tmp_path)
+    assert (totals.seen, totals.ocred) == (1, 0)
+    assert (root / "a.pdf").is_symlink()
+    assert (root / "moved.pdf").read_bytes() == b"OK\n"
+    assert journal.rows() == []
+
+
 @pytest.mark.parametrize("how", ["publish", "edit"])
 def test_a_file_replaced_while_ocr_reads_it_is_left_as_the_newer_version(
     db_conn: psycopg.Connection,

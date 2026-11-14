@@ -16,7 +16,7 @@ migrations, compatibility shims or configuration aliases; a full reindex is acce
 ## Order
 
 - Groups that add a migration run one at a time and need `pnpm test:integration`.
-- 10 folds into 12; 38 is independent.
+- 10 folds into 12.
 - 12–15 run strictly in order: they share `apps/api/src/auth/service.ts`, `composition.ts` and the
   contracts.
 - 16 before 17, 26, 31 and 32. 16 and 23 before 18. 36 and 37 last.
@@ -50,17 +50,6 @@ Recommended on 2026-11-14 and approved by the owner the same day.
 
 10\. **Rate-limit password change.** `POST /auth/password` checks the current password without
 the login limiter (`local/routes.ts`, `local/service.ts`). Folds into 12.
-
-38\. **Stop following symlinks in the files folder.** Local storage follows a symlink whose real
-path stays inside the user's home or the shared folder
-([home.ts](../../packages/local/src/home.ts)), so the web, MCP and public share links reach
-whatever it points at, while their reserved-path checks look only at the path asked for. A
-public link to `/docs` holding a symlink to `/.trash` exposes the Trash, which links must never
-reach; `/.fdrive-desktop` and backup folders are exposed the same way. Desktop reads already
-refuse any path through a symlink (#168), using the `link` mark local storage puts on list
-entries and stat results. fdrive never creates symlinks; only writers outside it (SMB, rsync)
-do. The simplest fix is for local storage to refuse to follow any symlink. That changes what
-users see if they keep symlinks in their files: say so in the release notes.
 
 ## Wave 1: one user, one storage
 

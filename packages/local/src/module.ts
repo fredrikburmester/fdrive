@@ -248,7 +248,6 @@ export function createLocalModule(options: CreateLocalModuleOptions): ProviderMo
               dir: inHome(grant.owner, grant.path),
               ownerHome: join(options.root, grant.owner),
               writable: grant.writable,
-              closed: closed.map((folder) => inHome(grant.owner, folder)),
             }));
         },
       });

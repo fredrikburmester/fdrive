@@ -448,9 +448,9 @@ never served for the new item; a handle observed at another path keeps its item 
 downloaded content. Names colliding by Unicode normalization/case, containing a colon, or
 named `.Trash` in the root of a writable location fail the listing with guidance rather
 than merge, hide or shadow distinct entries. Symlinks, wherever they lead, and other special
-entries have no reading capability: listings show every link as one, and the server refuses any
-read whose path passes through a link, at any segment, since grants and fdrive's own folders are
-checked against the path as asked.
+entries have no reading capability: listings show every link as one, and storage refuses any
+path that passes through a link, at any segment, for every caller, since grants and fdrive's
+own folders are checked against the path as asked.
 
 The most recent 100,000 revisions retain deletion evidence. Older tombstones are pruned;
 anchors before the retained floor or from another generation force resynchronization.

@@ -13,6 +13,7 @@ import { INTERNAL_DND_TYPE, readDraggedPaths, writeDraggedPaths } from "@/lib/fi
 import { dropTargetState, effectFor } from "@/lib/files/dnd-targets";
 import { computeGridLayout, readGridWidth, writeGridWidth } from "@/lib/files/grid-layout";
 import { DEFAULT_GRID_SIZE, type GridSize } from "@/lib/files/grid-size";
+import { isLink, LINK_TITLE } from "@/lib/files/links";
 import { findRevealIndex, gridRowForIndex, type ScrollRequest } from "@/lib/files/reveal";
 import { contextEntries } from "@/lib/files/selection";
 import { wantsGridThumbnail } from "@/lib/files/thumbnail";
@@ -391,6 +392,29 @@ export function FileGrid({
                   }}
                 >
                   {rowEntries.map((entry) => {
+                    if (isLink(entry)) {
+                      // Shown so its name stays visible, and nothing more: no menu,
+                      // no selection, no drag, nothing to open.
+                      return (
+                        <div
+                          key={entry.path}
+                          data-path={entry.path}
+                          aria-disabled="true"
+                          title={LINK_TITLE}
+                          className="flex flex-col items-center gap-1.5 rounded-lg p-2 text-center text-muted-foreground opacity-60"
+                        >
+                          <GridTileIcon
+                            key={entry.path}
+                            entry={entry}
+                            thumbnails={false}
+                            tile={tile}
+                          />
+                          <span className="line-clamp-2 w-full break-words text-xs">
+                            {entry.name}
+                          </span>
+                        </div>
+                      );
+                    }
                     const isSelected = selected.has(entry.path);
                     const isFocused = focusedPath === entry.path;
                     const group = contextEntries(entry, entries, selected);
