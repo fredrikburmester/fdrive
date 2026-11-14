@@ -49,7 +49,9 @@ schedule exists to keep this CPU-heavy work at night.
 ### Deciding
 
 Each candidate is checked against the disk first. A file that is gone, or whose size or mtime
-no longer match its row (the index has not read that version yet), is left for a later pass.
+no longer match its row (the index has not read that version yet), is left for a later pass, and
+so is one that is now a symbolic link or sits behind one below the root: OCR never follows a
+link, as fdrive and the indexer never do.
 Then `pdftotext` (poppler) reads it: a PDF in which it finds any text is recorded as
 `has_text` and never handed to `ocrmypdf`. Everything else goes to `ocrmypdf`, which is
 **never** called with `--skip-text` or `--force-ocr`. That is the single most important safety

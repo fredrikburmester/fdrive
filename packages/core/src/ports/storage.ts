@@ -65,11 +65,6 @@ export interface EntryStat {
    * when the path asked for is the stored spelling.
    */
   readonly path?: string;
-  /**
-   * Set when reaching `path` follows a symbolic link, at its last segment or
-   * at any folder on the way: the entry is not where `path` says it is.
-   */
-  readonly link?: true;
 }
 
 /**
@@ -119,6 +114,10 @@ export interface TransferOptions {
  *   true`). Callers do not check a target first: the storage refuses it.
  * - `download` honours `range` with status 206 and a `Content-Range`, and
  *   `ifRange` when given.
+ * - A symbolic link is never followed: every operation refuses a path that
+ *   passes through one, at any segment including the last, with
+ *   `StorageError("forbidden")`. Listings show the link itself, as kind
+ *   `symlink`; `stat` never reports that kind.
  * - Optional methods are absent, not throwing, when the backend cannot
  *   offer them; `ProviderCapabilities` says which.
  */

@@ -11,6 +11,8 @@ filesystem and the done-log. Pure decision-making lives in `decide.py` and
   `--force-ocr`, so a text layer it finds is left untouched too (exit 6, or
   `TaggedPDFError`).
 - Signed and encrypted PDFs are refused and only recorded, never touched.
+- A symbolic link is never followed: a path that is one, or passes through one
+  below the root, is left alone, as fdrive and the indexer leave it.
 - A rewritten file keeps the original's owner, mode, and mtime; the original
   bytes are kept under `<state_dir>/originals` when `keep_originals` is set.
   Nothing is written or recorded unless the file is still the version OCR read.
@@ -90,11 +92,21 @@ def _version(info: os.stat_result) -> tuple[int, int, int, int, int]:
 
 
 def is_still(path: str, read: os.stat_result) -> bool:
-    """Whether `path` is still the version `read` describes."""
+    """Whether `path` is still the version `read` describes. A link put in its
+    place is not, whatever it leads to."""
     try:
-        return _version(os.stat(path)) == _version(read)
+        return _version(os.lstat(path)) == _version(read)
     except FileNotFoundError:
         return False
+
+
+def through_a_link(root: str, rel_path: str) -> bool:
+    """Whether a folder between `root` and the file at `rel_path` is a symbolic
+    link. The root itself may be one, as the deployment set it up; nothing below
+    it is followed."""
+    real_root = os.path.realpath(root)
+    parent = os.path.dirname(os.path.join(real_root, rel_path))
+    return os.path.realpath(parent) != parent
 
 
 def has_text_layer(path: str) -> bool:
@@ -305,8 +317,11 @@ def process_file(
     """Processes one indexed PDF end to end. Returns `(status, rewrote)`."""
     abs_path = os.path.join(target.abs_path, pdf.path)
     try:
-        read = os.stat(abs_path)
+        read = os.lstat(abs_path)
     except FileNotFoundError:
+        return STATUS_CHANGED, False
+    if not stat.S_ISREG(read.st_mode) or through_a_link(target.abs_path, pdf.path):
+        # A link now, at the file or a folder on the way: no file the index knows.
         return STATUS_CHANGED, False
     if (read.st_size, read.st_mtime_ns) != (pdf.size, pdf.mtime_ns):
         # The index has not read this version yet; its digest would not describe it.

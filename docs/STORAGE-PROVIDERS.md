@@ -78,19 +78,27 @@ Paths are the storage's own, already resolved from a scope. `statFile` throws `b
 directory and `not_found` on a missing path. `move`, `copy` and `upload` refuse a taken target
 with `conflict` unless `overwrite: true`; callers never check a target first.
 `download` honours `range` with a 206 and `Content-Range`, and `ifRange`.
-Failures are `StorageError`s from core.
+Every operation refuses a path through a symbolic link with `forbidden`; listings show the link
+itself as kind `symlink`. Failures are `StorageError`s from core.
 
 How the files folder implements it:
 
-- **Confinement.** Paths are normalized and joined to the home; a symlink is followed only when
-  its real path stays inside the home or the shared folder ([home.ts](../packages/local/src/home.ts)).
-  A followed link is marked `link` on its listing entry, and `stat` marks a path that passes
-  through one at any segment, so the Mac's reads can refuse it. A shared folder must itself
-  resolve inside its owner's home, so a share never reaches further than its owner can.
+- **No symbolic links.** fdrive never creates one; writers outside it (SMB, rsync) may. Paths
+  are normalized and joined to the home, and any operation whose path passes through a link,
+  at any segment including the last, fails with `forbidden`, wherever the link leads
+  ([home.ts](../packages/local/src/home.ts)). Everything fdrive checks about a path (grants,
+  its own folders, share links) holds for the path as asked, so this one rule keeps web, MCP,
+  AI, share links and the Mac out of Trash and `/.fdrive-desktop`. One `realpath` per call
+  finds both links and the stored spelling; only when it differs from the path asked does an
+  `lstat` per segment tell which. A listing shows a link as kind `symlink`, which nothing can
+  open, download, move or delete, and a zip leaves it out. A shared folder is reached from its
+  owner's home the same way, so a grant whose own path passes through a link is refused. The
+  home itself, `<root>/<username>`, is the deployment's and may be a link.
 - **Atomic publish.** Uploads and file copies write a temporary file beside the target and
   publish it with `link`, a real create-if-absent; only `overwrite: true` renames it over a
   taken name.
-- **Copies** keep modification times.
+- **Copies** keep modification times. A link inside a copied folder is copied as the link it
+  is, its target text unchanged, as a move takes it along: never followed, never its target.
 - **Moves** are one `rename`, also between a user's files and a writable shared folder. The
   target is checked just before, since Node has no `RENAME_NOREPLACE`; a `link` and `unlink`
   would close that gap for files, but file watchers (the indexer's) would see a deleted file and

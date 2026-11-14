@@ -86,13 +86,18 @@ describe("filesystem errors while resolving", () => {
   it("refuses a parent it may not resolve", async () => {
     vi.mocked(realpath).mockRejectedValueOnce(systemError("EACCES"));
     expect(await kindOf(f.storage.stat("/a/b"))).toBe("forbidden");
+    vi.mocked(realpath).mockRejectedValueOnce(new Error("no code"));
+    expect(await kindOf(f.storage.stat("/a/b"))).toBe("internal");
   });
 
   it("refuses an entry it may not inspect", async () => {
+    // Whether the missing name is a link.
     vi.mocked(lstat).mockRejectedValueOnce(systemError("EACCES"));
     expect(await kindOf(f.storage.stat("/a"))).toBe("forbidden");
+    // What an upload would replace.
+    await f.storage.upload("/a", bytes("a"));
     vi.mocked(lstat).mockRejectedValueOnce(systemError("EACCES"));
-    expect(await kindOf(f.storage.upload("/a", bytes("a")))).toBe("forbidden");
+    expect(await kindOf(f.storage.upload("/a", bytes("b"), { overwrite: true }))).toBe("forbidden");
   });
 
   it("skips an entry deleted between reading the folder and describing it", async () => {

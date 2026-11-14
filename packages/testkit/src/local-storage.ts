@@ -47,8 +47,8 @@ export async function startLocalStorage(
   const users = options.users ?? SEED_USERS;
   const files = options.files ?? SEED_FILES;
   const grants = options.grants ?? (options.users === undefined ? SEED_GRANTS : []);
-  // A real path: on macOS the temporary folder sits behind a symlink, and a
-  // folder fdrive confines homes to is compared by its real path.
+  // A real path: on macOS the temporary folder sits behind a symlink, and
+  // storage names what it changes on disk by the home's real path.
   const root = await realpath(await mkdtemp(join(tmpdir(), "fdrive-local-")));
   try {
     for (const user of users) await mkdir(join(root, user.username), { recursive: true });
