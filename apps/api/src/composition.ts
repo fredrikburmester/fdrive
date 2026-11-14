@@ -57,6 +57,7 @@ import type { AppConfig } from "./config.js";
 import { type Subsystem, type SubsystemProbe, startupSummaryLines } from "./config-keys.js";
 import { createDesktopChanges } from "./desktop/changes.js";
 import { createDesktopEffectContext, createDesktopEffectsWorker } from "./desktop/effects.js";
+import { createIndexedContentLookup } from "./desktop/indexed-content.js";
 import { DESKTOP_INTERNAL_ROOT } from "./desktop/internal-root.js";
 import { withDesktopMetadata } from "./desktop/metadata.js";
 import { createDesktopRetention, DEFAULT_DESKTOP_RETENTION } from "./desktop/retention.js";
@@ -952,6 +953,12 @@ export async function composeApp(
         workerToken: config.fdriveWorkerToken,
       });
       auth.registerRoutes(groups);
+      // Version checks answer from the index where its row provably describes the file.
+      const desktopIndexedContent = createIndexedContentLookup({
+        identities: repos.identities,
+        resolver: scopeResolver,
+        index: indexQueries,
+      });
       // The change journal has this API's own changes only for the root it
       // journals under; a location's feed needs every one of its roots there.
       const journaled = config.fdriveStorageRoot
@@ -975,6 +982,7 @@ export async function composeApp(
         }),
         writes: createDesktopWrites({
           repo: desktopRepo,
+          indexedContent: desktopIndexedContent,
           publishLock: desktopPublishLock,
           clock,
           effectContext: createDesktopEffectContext(
@@ -995,6 +1003,7 @@ export async function composeApp(
         providers: repos.providers,
         storageFactory,
         clock,
+        indexedContent: desktopIndexedContent,
         publishLock: desktopPublishLock,
         clientIp: (c) => extractClientIp(c, config.fdriveTrustedProxyHops),
         trashPathForStorage: (storage) => {

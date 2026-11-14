@@ -268,6 +268,42 @@ fn an_upload_is_indexed_with_the_digest_the_api_sent() {
 }
 
 #[test]
+fn a_hint_earns_no_stamp_until_the_indexer_reads_the_file_itself() {
+    let env = Env::new();
+    let ctx = started(env.ctx_with(text_on(), |ctx| ctx.stamp_settle = Duration::from_millis(50)));
+    env.write("right.txt", b"hello world");
+    env.write("wrong.txt", b"hello world");
+    let right = hex_sha(b"hello world");
+    let claimed = "b".repeat(64);
+    queue(&env, &ctx, "right.txt", None, Some(hint_for(&env, "right.txt", &right)));
+    queue(
+        &env,
+        &ctx,
+        "wrong.txt",
+        None,
+        Some(hint_for(&env, "wrong.txt", &claimed)),
+    );
+    assert_eq!(drain(&ctx), 2);
+    for path in ["right.txt", "wrong.txt"] {
+        assert_eq!(env.row(&ctx, path).stamp, None, "{path}");
+    }
+    assert!(indexed(&env, &ctx, "right.txt") && indexed(&env, &ctx, "wrong.txt"));
+
+    // The next look once the files have settled reads them: the API's digest earns the row
+    // a stamp, and a wrong one is replaced by what the file holds.
+    std::thread::sleep(Duration::from_millis(150));
+    queue(&env, &ctx, "right.txt", None, None);
+    queue(&env, &ctx, "wrong.txt", None, None);
+    drain(&ctx);
+    for path in ["right.txt", "wrong.txt"] {
+        let row = env.row(&ctx, path);
+        let stamp = fdrive_indexer::db::Stamp::of(&std::fs::metadata(env.path(path)).unwrap());
+        assert_eq!((row.sha256, row.stamp), (Some(right.clone()), Some(stamp)), "{path}");
+    }
+    assert_eq!(env.events(), ["created", "created", "changed"]);
+}
+
+#[test]
 fn a_hint_for_another_file_is_ignored() {
     let env = Env::new();
     let ctx = ctx(&env, text_on());

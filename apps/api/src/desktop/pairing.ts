@@ -13,6 +13,7 @@ import { hostLabel } from "../providers/service.js";
 import { createResolveTokenPrincipal } from "../tokens/principal.js";
 import { createTokenService } from "../tokens/service.js";
 import { hashApiToken } from "../tokens/token-format.js";
+import type { IndexedContentLookup } from "./indexed-content.js";
 import { generateDesktopToken, looksLikeDesktopToken } from "./tokens.js";
 import {
   DESKTOP_MAX_UPLOAD_BYTES,
@@ -54,6 +55,12 @@ export interface DesktopDeps {
   storageFactory: IdentityStorageFactory;
   clock: () => Date;
   trashPathForStorage: (storage: Principal["storage"]) => string | null;
+  /**
+   * The index rows behind a connection's files, which answer a version check
+   * without reading a file whose row provably describes it. Absent when
+   * nothing is indexed: every check hashes.
+   */
+  indexedContent?: IndexedContentLookup;
   /** Serializes Mac desktop commits for one identity; no other fdrive writer
    * takes it. Absent means storage without a lease stays read-only. */
   publishLock?: DesktopPublishLock;

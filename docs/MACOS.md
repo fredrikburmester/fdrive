@@ -353,7 +353,7 @@ Desktop protocol v1 lives at `/api/v1/desktop`; contracts are in
 | `GET /changes?since=` | Protocol 2, where `location` says `changeFeed`: the paths changed since an anchor and the folders whose listings they changed, in the location's own paths, with the next anchor and `more`; `resync` and a fresh anchor otherwise. See [change feed](#change-feed) |
 | `GET /entry?path=` | Current entry, with ancestor/symlink checks |
 | `GET /content?path=` | Original streamed bytes; no MCP size cap |
-| `POST /versions` | Hash up to 16 authorized files for cache validation |
+| `POST /versions` | Content versions (sha256) of up to 16 authorized files for cache validation, from the index where it provably holds them |
 | `POST /disconnect` | Revoke this bearer only |
 
 Desktop tokens use `fdd_`, distinct from MCP's `fdr_`; neither audience accepts the other.
@@ -436,10 +436,11 @@ anchors before the retained floor or from another generation force resynchroniza
 Live metadata remains proportional to the number of items in browsed folders.
 
 First download computes SHA-256 locally in 1 MiB chunks and validates transfer length. Later
-refresh hashes only materialized files on the server, one batch at a time per identity. This
-detects different bytes even when size/mtime are unchanged. It **rereads those files from the
-files folder each refresh**, which can be expensive for large media.
-No originals are sent to the Mac by validation, but that cost remains a beta tuning gate. The storage port supplies no common strong validator.
+refresh validates only materialized files on the server, one batch at a time per identity. This
+detects different bytes even when size/mtime are unchanged. A file whose index row the indexer
+stamped from its own read ([stamps](INDEXER.md#stamps)) is answered with the row's sha256
+while a fresh stat still shows the row's inode, change time, size and modification time; any
+other file is read and hashed in full. No originals are sent to the Mac by validation.
 
 Downloads use URLSession temporary files, then the manager-provided transfer directory.
 A free-space preflight (file size plus 512 MiB headroom) refuses downloads and saves that

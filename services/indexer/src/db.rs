@@ -81,8 +81,9 @@ pub fn read_schema_version(client: &mut Client) -> Result<Option<i64>> {
     }
 }
 
-/// Wait for the compatible schema and the failure-history, change-journal and folder tables
-/// before any processing. They came without a version bump, which OCR waits for too.
+/// Wait for the compatible schema, the failure-history, change-journal and folder tables and
+/// the files' stamp columns before any processing. They came without a version bump, which
+/// OCR waits for too.
 pub fn wait_for_schema_version(
     db: &Db,
     expected: i64,
@@ -96,11 +97,14 @@ pub fn wait_for_schema_version(
             let version = read_schema_version(c)?;
             let row = c.query_one(
                 "SELECT to_regclass('idx.processing_failures')::text, to_regclass('idx.changes')::text, \
-                 to_regclass('idx.change_cursors')::text, to_regclass('idx.folders')::text",
+                 to_regclass('idx.change_cursors')::text, to_regclass('idx.folders')::text, \
+                 (SELECT count(*) FROM information_schema.columns WHERE table_schema = 'idx' \
+                  AND table_name = 'files' AND column_name IN ('inode', 'ctime_ns'))",
                 &[],
             )?;
             let tables: [Option<String>; 4] = [row.get(0), row.get(1), row.get(2), row.get(3)];
-            Ok((version, tables.iter().all(Option::is_some)))
+            let stamps: i64 = row.get(4);
+            Ok((version, tables.iter().all(Option::is_some) && stamps == 2))
         })?;
         if version == Some(expected) && ready {
             return Ok(version);
@@ -108,12 +112,12 @@ pub fn wait_for_schema_version(
         let seen = version.map_or("None".to_owned(), |v| v.to_string());
         if Instant::now() >= deadline {
             log(&format!(
-                "schema not ready (expected {expected}, last seen: {seen}, requires processing_failures, changes and folders); giving up"
+                "schema not ready (expected {expected}, last seen: {seen}, requires processing_failures, changes, folders and file stamps); giving up"
             ));
             return Ok(None);
         }
         log(&format!(
-            "waiting for idx.schema_version = {expected} and the processing_failures, changes and folders migrations (last seen: {seen})"
+            "waiting for idx.schema_version = {expected} and the processing_failures, changes, folders and file stamp migrations (last seen: {seen})"
         ));
         sleep(Duration::from_secs(5));
     }
@@ -180,6 +184,27 @@ pub fn pending_count(c: &mut Client, root_id: i64) -> Result<i64> {
     .get(0))
 }
 
+/// The inode and change time (nanoseconds) of the file a row's digest was read from, by a
+/// read of the indexer's own that began after the file had settled and saw no change while
+/// it ran (`idx.files.inode`, `ctime_ns`). `inode` holds the unsigned inode number's 64
+/// bits, as stored.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Stamp {
+    pub inode: i64,
+    pub ctime_ns: i64,
+}
+
+/// What writing a row's digest does to its stamp.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StampUpdate {
+    /// The digest was not read just now: the row keeps its stamp while the digest stays the
+    /// same, and a different digest has none.
+    Keep,
+    /// The digest was just read (or came from the API): this is the read's stamp, if it
+    /// earned one.
+    Set(Option<Stamp>),
+}
+
 /// The row `process_file` checks under its path lock.
 #[derive(Debug, Clone)]
 pub struct FileRow {
@@ -189,21 +214,27 @@ pub struct FileRow {
     pub deleted: bool,
     pub sha256: Option<String>,
     pub error: Option<String>,
+    pub stamp: Option<Stamp>,
 }
 
 pub fn file_row(c: &mut Client, root_id: i64, path: &str) -> Result<Option<FileRow>> {
     let row = c.query_opt(
-        r#"SELECT size::bigint, mtime_ns::bigint, text_status, deleted_at IS NOT NULL, sha256, error
+        r#"SELECT size::bigint, mtime_ns::bigint, text_status, deleted_at IS NOT NULL, sha256, error,
+                  inode::bigint, ctime_ns::bigint
            FROM "idx"."files" WHERE root_id = $1::bigint AND path = $2"#,
         &[&root_id, &path],
     )?;
-    Ok(row.map(|r| FileRow {
-        size: r.get(0),
-        mtime_ns: r.get(1),
-        status: r.get(2),
-        deleted: r.get(3),
-        sha256: r.get(4),
-        error: r.get(5),
+    Ok(row.map(|r| {
+        let (inode, ctime_ns): (Option<i64>, Option<i64>) = (r.get(6), r.get(7));
+        FileRow {
+            size: r.get(0),
+            mtime_ns: r.get(1),
+            status: r.get(2),
+            deleted: r.get(3),
+            sha256: r.get(4),
+            error: r.get(5),
+            stamp: inode.zip(ctime_ns).map(|(inode, ctime_ns)| Stamp { inode, ctime_ns }),
+        }
     }))
 }
 
@@ -228,17 +259,32 @@ pub struct NewFile<'a> {
     pub mime: Option<&'a str>,
 }
 
-/// Insert or reset a row to `pending` and drop its chunks. Returns the row id.
+/// Insert or reset a row to `pending` and drop its chunks. Returns the row id. The row
+/// keeps its stamp only while its digest stays the same (`StampUpdate::Keep`).
 pub fn upsert_file(c: &mut Client, file: &NewFile<'_>) -> Result<i64> {
+    upsert_file_stamped(c, file, StampUpdate::Keep)
+}
+
+/// `upsert_file`, saying what the write does to the row's stamp.
+pub fn upsert_file_stamped(c: &mut Client, file: &NewFile<'_>, stamp: StampUpdate) -> Result<i64> {
+    let (keep, set) = match stamp {
+        StampUpdate::Keep => (true, None),
+        StampUpdate::Set(stamp) => (false, stamp),
+    };
+    let (inode, ctime_ns) = (set.map(|s| s.inode), set.map(|s| s.ctime_ns));
     let id: i64 = c
         .query_one(
-            r#"INSERT INTO "idx"."files"
-                 (root_id, path, name, ext, size, mtime_ns, sha256, mime, text_status, last_seen, deleted_at, error)
-               VALUES ($1::bigint, $2, $3, $4, $5::bigint, $6::bigint, $7, $8, 'pending', now(), NULL, NULL)
+            r#"INSERT INTO "idx"."files" AS f
+                 (root_id, path, name, ext, size, mtime_ns, sha256, mime, text_status, last_seen, deleted_at, error,
+                  inode, ctime_ns)
+               VALUES ($1::bigint, $2, $3, $4, $5::bigint, $6::bigint, $7, $8, 'pending', now(), NULL, NULL,
+                       $9::bigint, $10::bigint)
                ON CONFLICT (root_id, path) DO UPDATE SET
                  name = EXCLUDED.name, ext = EXCLUDED.ext, size = EXCLUDED.size, mtime_ns = EXCLUDED.mtime_ns,
                  sha256 = EXCLUDED.sha256, mime = EXCLUDED.mime, text_status = 'pending',
-                 last_seen = now(), deleted_at = NULL, error = NULL
+                 last_seen = now(), deleted_at = NULL, error = NULL,
+                 inode = CASE WHEN $11 AND f.sha256 = EXCLUDED.sha256 THEN f.inode ELSE EXCLUDED.inode END,
+                 ctime_ns = CASE WHEN $11 AND f.sha256 = EXCLUDED.sha256 THEN f.ctime_ns ELSE EXCLUDED.ctime_ns END
                RETURNING id::bigint"#,
             &[
                 &file.root_id,
@@ -249,11 +295,42 @@ pub fn upsert_file(c: &mut Client, file: &NewFile<'_>) -> Result<i64> {
                 &file.mtime_ns,
                 &file.sha256,
                 &file.mime,
+                &inode,
+                &ctime_ns,
+                &keep,
             ],
         )?
         .get(0);
     c.execute(r#"DELETE FROM "idx"."chunks" WHERE file_id = $1::bigint"#, &[&id])?;
     Ok(id)
+}
+
+/// Give an unchanged row the stamp of a read that found its digest still right. Nothing
+/// happens when the row changed meanwhile (another digest, size or time, or a delete).
+/// Returns whether the row took it.
+pub fn set_stamp(
+    c: &mut Client,
+    root_id: i64,
+    path: &str,
+    sha256: &str,
+    size: i64,
+    mtime_ns: i64,
+    stamp: Stamp,
+) -> Result<bool> {
+    Ok(c.execute(
+        r#"UPDATE "idx"."files" SET inode = $1::bigint, ctime_ns = $2::bigint
+           WHERE root_id = $3::bigint AND path = $4 AND sha256 = $5 AND size = $6::bigint
+             AND mtime_ns = $7::bigint AND deleted_at IS NULL"#,
+        &[
+            &stamp.inode,
+            &stamp.ctime_ns,
+            &root_id,
+            &path,
+            &sha256,
+            &size,
+            &mtime_ns,
+        ],
+    )? == 1)
 }
 
 pub fn insert_chunks(c: &mut Client, file_id: i64, pieces: &[String], vectors: &[Option<Vec<f32>>]) -> Result<()> {

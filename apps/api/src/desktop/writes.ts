@@ -96,7 +96,7 @@ type Request =
   | (DesktopFolderRequest & { kind: "folder" })
   | (DesktopMoveRequest & { kind: "move" });
 export interface DesktopWriteDeps
-  extends Pick<DesktopDeps, "clock" | "trashPathForStorage" | "publishLock"> {
+  extends Pick<DesktopDeps, "clock" | "trashPathForStorage" | "publishLock" | "indexedContent"> {
   repo: DesktopRepo;
   stateDir?: string;
   effectContext?: (
@@ -662,16 +662,25 @@ export function createDesktopWrites(deps: DesktopWriteDeps) {
         return runStorageCall(() => principal.storage.download(physical, { signal }));
       },
       async versions(principal: Principal, paths: string[], signal: AbortSignal) {
+        // Every file outside Trash in one call, so their index rows come in one lookup.
+        const live = paths.filter((path) => !physicalTrashPath(principal, path));
+        const answered =
+          live.length === 0 ? [] : (await files.versions(principal, live, signal)).items;
+        if (live.length === paths.length) return { items: answered };
+        const outside = answered.values();
         const items = [];
         for (const path of paths) {
           const physical = physicalTrashPath(principal, path);
-          if (physical) {
-            const entry = await trashEntry(principal, physical);
-            if (entry.kind !== "file")
-              throw new ApiHttpError("bad_request", "Only files have content versions");
-            const value = await runStorageCall(() => digest(principal.storage, physical, signal));
-            items.push({ path, size: value.size, version: value.sha256 });
-          } else items.push(...(await files.versions(principal, [path], signal)).items);
+          // `files.versions` answered every path outside Trash, in order.
+          if (!physical) {
+            items.push(outside.next().value as (typeof answered)[number]);
+            continue;
+          }
+          const entry = await trashEntry(principal, physical);
+          if (entry.kind !== "file")
+            throw new ApiHttpError("bad_request", "Only files have content versions");
+          const value = await runStorageCall(() => digest(principal.storage, physical, signal));
+          items.push({ path, size: value.size, version: value.sha256 });
         }
         return { items };
       },

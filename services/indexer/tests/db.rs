@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use std::time::Duration;
 
 use chrono::Utc;
-use fdrive_indexer::db::{self, Db, ManifestRow, NewFile};
+use fdrive_indexer::db::{self, Db, ManifestRow, NewFile, Stamp, StampUpdate};
 use fdrive_indexer::events::{EventKind, build};
 use postgres::Client;
 use postgres::fallible_iterator::FallibleIterator;
@@ -181,7 +181,8 @@ fn schema_wait_waits_for_the_failure_history_migration() {
     let logs = logs.borrow();
     assert_eq!(logs.len(), 1);
     assert!(
-        logs[0].contains("processing_failures, changes and folders migrations") && logs[0].contains("last seen: 2")
+        logs[0].contains("processing_failures, changes, folders and file stamp migrations")
+            && logs[0].contains("last seen: 2")
     );
 }
 
@@ -227,6 +228,30 @@ fn schema_wait_waits_for_the_folders_migration() {
             client
                 .borrow_mut()
                 .batch_execute(r#"ALTER TABLE "idx"."folders_pending" RENAME TO folders"#)
+                .unwrap();
+        },
+    )
+    .unwrap();
+    assert_eq!(version, Some(2));
+    assert_eq!(logs.borrow().len(), 1);
+}
+
+#[test]
+fn schema_wait_waits_for_the_file_stamp_columns() {
+    let (url, mut c) = setup();
+    c.batch_execute(r#"ALTER TABLE "idx"."files" RENAME COLUMN ctime_ns TO ctime_pending"#)
+        .unwrap();
+    let client = RefCell::new(c);
+    let logs = RefCell::new(Vec::<String>::new());
+    let version = db::wait_for_schema_version(
+        &Db::new(&url),
+        2,
+        Duration::from_secs(60),
+        &|m| logs.borrow_mut().push(m.to_owned()),
+        &|_| {
+            client
+                .borrow_mut()
+                .batch_execute(r#"ALTER TABLE "idx"."files" RENAME COLUMN ctime_pending TO ctime_ns"#)
                 .unwrap();
         },
     )
@@ -470,6 +495,66 @@ fn upsert_resets_to_pending_and_drops_chunks() {
     );
     assert_eq!(db::count(&mut c, "idx.chunks").unwrap(), 0);
     assert!(db::file_row(&mut c, root, "missing.txt").unwrap().is_none());
+}
+
+fn file(root_id: i64, sha256: &str) -> NewFile<'_> {
+    NewFile {
+        root_id,
+        path: "a.txt",
+        name: "a.txt",
+        ext: ".txt",
+        size: 10,
+        mtime_ns: 1,
+        sha256,
+        mime: None,
+    }
+}
+
+#[test]
+fn a_row_keeps_its_stamp_only_while_its_digest_does() {
+    let (_, mut c) = setup();
+    let root = db::upsert_root(&mut c, "files").unwrap();
+    let stamp = Stamp {
+        inode: -3,
+        ctime_ns: 1_800_000_000_000_000_007,
+    };
+    let stamp_now = |c: &mut Client| db::file_row(c, root, "a.txt").unwrap().unwrap().stamp;
+    db::upsert_file_stamped(&mut c, &file(root, "sha1"), StampUpdate::Set(Some(stamp))).unwrap();
+    assert_eq!(stamp_now(&mut c), Some(stamp));
+    // The same digest, not read again (a feature retry): the stamp still stands.
+    db::upsert_file(&mut c, &file(root, "sha1")).unwrap();
+    assert_eq!(stamp_now(&mut c), Some(stamp));
+    // Another digest without a read of its own has none.
+    db::upsert_file(&mut c, &file(root, "sha2")).unwrap();
+    assert_eq!(stamp_now(&mut c), None);
+    db::upsert_file_stamped(&mut c, &file(root, "sha2"), StampUpdate::Set(Some(stamp))).unwrap();
+    // A digest the API sent, for the same bytes or not, is no read of the indexer's.
+    db::upsert_file_stamped(&mut c, &file(root, "sha2"), StampUpdate::Set(None)).unwrap();
+    assert_eq!(stamp_now(&mut c), None);
+    // A new row takes what it is given.
+    let new = NewFile {
+        path: "b.txt",
+        ..file(root, "sha3")
+    };
+    db::upsert_file(&mut c, &new).unwrap();
+    assert_eq!(db::file_row(&mut c, root, "b.txt").unwrap().unwrap().stamp, None);
+}
+
+#[test]
+fn a_stamp_is_set_only_on_the_row_that_was_read() {
+    let (_, mut c) = setup();
+    let root = db::upsert_root(&mut c, "files").unwrap();
+    let stamp = Stamp { inode: 9, ctime_ns: 5 };
+    db::upsert_file(&mut c, &file(root, "sha1")).unwrap();
+    for (sha, size, mtime) in [("sha2", 10, 1), ("sha1", 11, 1), ("sha1", 10, 2)] {
+        assert!(!db::set_stamp(&mut c, root, "a.txt", sha, size, mtime, stamp).unwrap());
+    }
+    assert!(!db::set_stamp(&mut c, root, "b.txt", "sha1", 10, 1, stamp).unwrap());
+    assert_eq!(db::file_row(&mut c, root, "a.txt").unwrap().unwrap().stamp, None);
+    assert!(db::set_stamp(&mut c, root, "a.txt", "sha1", 10, 1, stamp).unwrap());
+    assert_eq!(db::file_row(&mut c, root, "a.txt").unwrap().unwrap().stamp, Some(stamp));
+    db::mark_deleted(&mut c, root, "a.txt", false).unwrap();
+    assert!(!db::set_stamp(&mut c, root, "a.txt", "sha1", 10, 1, stamp).unwrap());
 }
 
 #[test]

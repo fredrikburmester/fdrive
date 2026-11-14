@@ -49,6 +49,7 @@ function stubIndexQueries(): IndexQueries {
     folders: async () => fail("folders"),
     filesByIds: async () => fail("filesByIds"),
     fileByPath: async () => null,
+    contentAt: async () => [],
     listFiles: async () => ({ total: 0, files: [] }),
     filesBySha256: async () => fail("filesBySha256"),
     rootIdsByName: async () => ({ files: 1 }),

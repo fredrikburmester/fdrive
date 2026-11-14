@@ -1,9 +1,11 @@
 import { createHash, randomUUID } from "node:crypto";
 import type { DesktopEntry } from "@fdrive/contracts";
-import { type FileEntry, isUnderPath, normalizePath } from "@fdrive/core";
+import { type ContentStamp, type FileEntry, isUnderPath, normalizePath } from "@fdrive/core";
+import type { IndexedContent } from "@fdrive/db";
 import type { Principal } from "../auth/principal.js";
 import { ApiHttpError } from "../errors.js";
 import { runStorageCall } from "../fs/routes.js";
+import { indexedVersion } from "./indexed-content.js";
 import { DESKTOP_INTERNAL_ROOT } from "./internal-root.js";
 import type { DesktopDeps } from "./pairing.js";
 
@@ -45,7 +47,7 @@ export function desktopPathAllowed(
 }
 
 export function createDesktopFiles(
-  deps: Pick<DesktopDeps, "clock" | "trashPathForStorage">,
+  deps: Pick<DesktopDeps, "clock" | "trashPathForStorage" | "indexedContent">,
   writeProtocol = false,
 ) {
   const snapshots = new Map<string, Snapshot>();
@@ -116,6 +118,34 @@ export function createDesktopFiles(
       parent = current;
     }
     return result as DesktopEntry;
+  }
+  /**
+   * The index rows behind the files of a version request this connection may
+   * read, in one lookup. Paths it may not read are left for `authorize` to
+   * refuse in their turn, as before.
+   */
+  async function indexedRows(principal: Principal, paths: readonly string[]) {
+    if (deps.indexedContent === undefined || principal.storage.contentStamp === undefined)
+      return new Map();
+    const readable = paths.flatMap((raw) => {
+      try {
+        const path = normalizePath(raw);
+        return allowed(principal, path) ? [path] : [];
+      } catch {
+        return [];
+      }
+    });
+    return deps.indexedContent(principal, readable);
+  }
+  /** A file's version from its index row, when the row provably describes the file now. */
+  async function indexed(principal: Principal, path: string, row: IndexedContent | undefined) {
+    if (row === undefined) return null;
+    // `indexedRows` finds rows only where storage has stamps.
+    const stamp = (await runStorageCall(async () =>
+      principal.storage.contentStamp?.(path),
+    )) as ContentStamp;
+    const version = indexedVersion(row, stamp);
+    return version === null ? null : { path, size: stamp.size, version };
   }
   function prune() {
     for (const [id, snapshot] of snapshots)
@@ -194,12 +224,18 @@ export function createDesktopFiles(
         throw new ApiHttpError("rate_limited", "Content validation is already running");
       hashing.add(principal.identityId);
       try {
+        const rows = await indexedRows(principal, paths);
         const results = [];
         for (const raw of paths) {
           const path = authorize(principal, raw);
           const current = await entry(principal, path);
           if (current.kind !== "file")
             throw new ApiHttpError("bad_request", "Only files have content versions");
+          const known = await indexed(principal, path, rows.get(path));
+          if (known !== null) {
+            results.push(known);
+            continue;
+          }
           const result = await runStorageCall(() => principal.storage.download(path, { signal }));
           const reader = result.body.getReader();
           const digest = createHash("sha256");

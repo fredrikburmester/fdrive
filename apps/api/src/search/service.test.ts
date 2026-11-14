@@ -26,6 +26,7 @@ function fakeIndexQueries(overrides: Partial<IndexQueries> = {}): IndexQueries {
     folders: overrides.folders ?? (async () => []),
     filesByIds: overrides.filesByIds ?? (async () => fail("filesByIds")),
     fileByPath: overrides.fileByPath ?? (async () => fail("fileByPath")),
+    contentAt: overrides.contentAt ?? (async () => fail("contentAt")),
     listFiles: overrides.listFiles ?? (async () => fail("listFiles")),
     filesBySha256: overrides.filesBySha256 ?? (async () => fail("filesBySha256")),
     rootIdsByName: overrides.rootIdsByName ?? (async () => fail("rootIdsByName")),

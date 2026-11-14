@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicI64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, RwLock};
 use std::thread::LocalKey;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::Result;
 use chrono::{DateTime, Utc};
@@ -17,7 +17,7 @@ use crate::activity::{Op, RootActivity};
 use crate::backoff::{Backoff, is_outage};
 use crate::chunking::{chunk, is_document, is_image, is_pdf, is_textual, max_chunks_for};
 use crate::config::{Config, SKIP_DIRS, SKIP_NAMES};
-use crate::db::{self, Db, ManifestRow, NewChange, NewFile};
+use crate::db::{self, Db, FileRow, ManifestRow, NewChange, NewFile, Stamp, StampUpdate};
 use crate::events::{EventKind, build};
 use crate::extract::{Extractor, embed_passages};
 use crate::failures::{self, FileResult, Report, attempt, describe, report};
@@ -50,6 +50,54 @@ impl FileStat {
             mtime_ns: metadata.mtime() * 1_000_000_000 + metadata.mtime_nsec(),
         }
     }
+}
+
+/// How long after a file last changed a read of it may stamp its row (`db::Stamp`). A write
+/// within the same tick of the filesystem's clock as the change before it leaves the change
+/// time as it was, so a read that began within that tick may have missed one; a read that
+/// began later cannot, since any write after it moves the change time on. One second covers
+/// filesystems that keep whole seconds, and stays under the watcher's two-second debounce,
+/// so a change the watcher reports is stamped when it is indexed.
+pub const STAMP_SETTLE: Duration = Duration::from_secs(1);
+
+impl Stamp {
+    pub fn of(metadata: &std::fs::Metadata) -> Self {
+        Self {
+            inode: metadata.ino() as i64,
+            ctime_ns: metadata.ctime() * 1_000_000_000 + metadata.ctime_nsec(),
+        }
+    }
+}
+
+/// Whether a file whose change time is `ctime_ns` had settled `settle` before `at`.
+pub fn settled(ctime_ns: i64, at: SystemTime, settle: Duration) -> bool {
+    let at_ns = at.duration_since(UNIX_EPOCH).unwrap_or_default().as_nanos() as i64;
+    ctime_ns <= at_ns - settle.as_nanos() as i64
+}
+
+/// The stamp a read of a file earns: the file had settled when the read began (`before`
+/// was taken after `started`), it is still that inode with that change time afterwards, and
+/// it is the version the row records (`stat`). `None` otherwise.
+pub fn earned_stamp(
+    stat: FileStat,
+    before: &std::fs::Metadata,
+    after: &std::fs::Metadata,
+    started: SystemTime,
+    settle: Duration,
+) -> Option<Stamp> {
+    let stamp = Stamp::of(before);
+    let unchanged = FileStat::of(before) == stat && FileStat::of(after) == stat && Stamp::of(after) == stamp;
+    (unchanged && settled(stamp.ctime_ns, started, settle)).then_some(stamp)
+}
+
+/// Hash an open file from where it is, and the stamp the read earns (`earned_stamp`).
+pub fn read_digest(file: &mut std::fs::File, stat: FileStat, settle: Duration) -> Result<(String, Option<Stamp>)> {
+    let started = SystemTime::now();
+    let before = file.metadata()?;
+    let sha = crate::fsx::sha256_of_file(file)?;
+    let after = file.metadata()?;
+    let stamp = earned_stamp(stat, &before, &after, started, settle);
+    Ok((sha, stamp))
 }
 
 /// What fdrive's API knew about an upload when it published it: the bytes' digest and the
@@ -140,6 +188,8 @@ pub struct RootContext {
     files_folder: Mutex<Option<(Instant, Result<(), &'static str>)>>,
     /// How long that verdict is reused before the marker is read again.
     pub files_folder_recheck: Duration,
+    /// How long after a file last changed a read of it may stamp its row: `STAMP_SETTLE`.
+    pub stamp_settle: Duration,
     /// Set when the root needs a scan before its next one is due: the journal's reader
     /// found rows it never read were pruned.
     scan_requested: AtomicBool,
@@ -192,6 +242,7 @@ impl RootContext {
             activity: RootActivity::default(),
             files_folder: Mutex::new(None),
             files_folder_recheck: FILES_FOLDER_RECHECK,
+            stamp_settle: STAMP_SETTLE,
             scan_requested: AtomicBool::new(false),
             cfg,
         }
@@ -464,12 +515,10 @@ pub fn process_file_with(
         None => String::new(),
     };
     let unchanged = unchanged_in_db(manifest.as_ref(), stat);
-    if unchanged {
-        if status.starts_with("excluded") && exclusion_still_applies(ctx, rel_path, stat.size) {
-            return Ok(false);
-        }
-        if !should_retry_unchanged(&status, &ctx.values()) {
-            return Ok(false);
+    if let Some(row) = row.as_ref().filter(|_| unchanged) {
+        let excluded = status.starts_with("excluded") && exclusion_still_applies(ctx, rel_path, stat.size);
+        if excluded || !should_retry_unchanged(&status, &ctx.values()) {
+            return restamp(ctx, rel_path, stat, row);
         }
     }
     let was_new = row.is_none();
@@ -477,7 +526,11 @@ pub fn process_file_with(
         .as_ref()
         .is_some_and(|r| r.size == stat.size as i64 && r.mtime_ns == stat.mtime_ns && !r.deleted);
     // A feature transition may re-extract an unchanged file; its digest is still valid.
-    let known_sha = if unchanged { row.and_then(|r| r.sha256) } else { None };
+    let known = if unchanged {
+        row.and_then(|r| r.sha256).map(|sha| (sha, StampUpdate::Keep))
+    } else {
+        None
+    };
     // Listeners hear about the file once it has a row and a preview, not after its text:
     // they check access and refresh listings for every event, and need nothing more.
     // Re-deriving the same version changes nothing they show, and is no change to journal.
@@ -496,8 +549,54 @@ pub fn process_file_with(
             journal::record(ctx, vec![NewChange::path(rel_path)]);
         }
     };
-    process_stages(ctx, rel_path, stat, known_sha, hint, None, visible)?;
+    process_stages(ctx, rel_path, stat, known, hint, None, visible)?;
     Ok(true)
+}
+
+/// An unchanged row whose stamp does not describe its file (any more, or ever): read the
+/// file again once it has settled. The same digest earns the row the read's stamp; another
+/// one means the bytes changed under the same size and modification time, and the file is
+/// indexed again. True when it was.
+fn restamp(ctx: &Arc<RootContext>, rel_path: &str, stat: FileStat, row: &FileRow) -> Result<bool> {
+    let Some(known) = row.sha256.as_deref() else {
+        return Ok(false);
+    };
+    // Best effort: a file that cannot be read now keeps its row as it is, as before.
+    let Ok(Some((sha, stamp))) = reread(ctx, rel_path, stat, row) else {
+        return Ok(false);
+    };
+    if sha == known {
+        if let Some(stamp) = stamp {
+            ctx.db
+                .with(|c| db::set_stamp(c, ctx.root_id, rel_path, &sha, stat.size as i64, stat.mtime_ns, stamp))?;
+        }
+        return Ok(false);
+    }
+    let changed = || {
+        emit_event(ctx, EventKind::Changed, rel_path, None);
+        journal::record(ctx, vec![NewChange::path(rel_path)]);
+    };
+    process_stages(
+        ctx,
+        rel_path,
+        stat,
+        Some((sha, StampUpdate::Set(stamp))),
+        None,
+        None,
+        changed,
+    )?;
+    Ok(true)
+}
+
+/// An unchanged file's digest and the stamp the read earns, unless its row's stamp already
+/// proves it or it has not settled yet (the next look tries again): `None` then.
+fn reread(ctx: &RootContext, rel_path: &str, stat: FileStat, row: &FileRow) -> Result<Option<(String, Option<Stamp>)>> {
+    let mut source = open_source(ctx, rel_path)?;
+    let now = Stamp::of(&source.file.metadata()?);
+    if row.stamp == Some(now) || !settled(now.ctime_ns, SystemTime::now(), ctx.stamp_settle) {
+        return Ok(None);
+    }
+    read_digest(&mut source.file, stat, ctx.stamp_settle).map(Some)
 }
 
 fn note_embed_outage(ctx: &RootContext, error: &anyhow::Error) {
@@ -540,20 +639,22 @@ pub fn process_inner(
     known_sha: Option<String>,
     only_feature: Option<&str>,
 ) -> Result<()> {
-    process_stages(ctx, rel_path, stat, known_sha, None, only_feature, || {})
+    let known = known_sha.map(|sha| (sha, StampUpdate::Keep));
+    process_stages(ctx, rel_path, stat, known, None, only_feature, || {})
 }
 
 /// One file in the order a person notices it: its row (a name search finds it), its
 /// thumbnails, then `visible`, then its text and last its embeddings. With a text stage on
 /// this thread (watcher and queued changes), the embeddings go to that stage: the chunks are
 /// searchable by text at once and the worker moves on instead of waiting for the model.
-/// The file is reopened from the root by descriptor; `hint` stands in for hashing it while
-/// the opened file still matches it.
+/// The file is reopened from the root by descriptor; `known` is a digest already in hand
+/// and what it does to the row's stamp, and `hint` stands in for hashing it while the
+/// opened file still matches it. Only the indexer's own read earns a stamp.
 pub fn process_stages(
     ctx: &Arc<RootContext>,
     rel_path: &str,
     stat: FileStat,
-    known_sha: Option<String>,
+    known: Option<(String, StampUpdate)>,
     hint: Option<&ContentHint>,
     only_feature: Option<&str>,
     visible: impl FnOnce(),
@@ -562,14 +663,20 @@ pub fn process_stages(
     let ext = ext_of(name);
     let mime = guess_mime(name);
     let mut source = open_source(ctx, rel_path)?;
-    let sha = match known_sha.or_else(|| hint.and_then(|h| h.digest_for(&source.file))) {
-        Some(sha) => sha,
-        None => crate::fsx::sha256_of_file(&mut source.file)?,
+    let (sha, stamp) = match known.or_else(|| {
+        hint.and_then(|h| h.digest_for(&source.file))
+            .map(|sha| (sha, StampUpdate::Set(None)))
+    }) {
+        Some(known) => known,
+        None => {
+            let (sha, stamp) = read_digest(&mut source.file, stat, ctx.stamp_settle)?;
+            (sha, StampUpdate::Set(stamp))
+        }
     };
     let source_path = source.path();
     let abs_path = source_path.as_path();
     let file_id = ctx.db.with(|c| {
-        db::upsert_file(
+        db::upsert_file_stamped(
             c,
             &NewFile {
                 root_id: ctx.root_id,
@@ -581,6 +688,7 @@ pub fn process_stages(
                 sha256: &sha,
                 mime: mime.as_deref(),
             },
+            stamp,
         )
     })?;
 

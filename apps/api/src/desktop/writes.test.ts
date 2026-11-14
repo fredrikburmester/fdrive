@@ -832,6 +832,20 @@ it("preserves file/folder contents and handles through scoped Trash and restore"
       (await f.service.files.versions(f.principal, [contentPath], new AbortController().signal))
         .items[0]?.version,
     ).toBe(sha(original.kind === "file" ? "old" : "child"));
+    if (original.kind === "file")
+      // Paths in and outside Trash are answered together, in the order asked.
+      expect(
+        (
+          await f.service.files.versions(
+            f.principal,
+            [contentPath, "/folder/child"],
+            new AbortController().signal,
+          )
+        ).items,
+      ).toEqual([
+        { path: contentPath, size: 3, version: sha("old") },
+        { path: "/folder/child", size: 5, version: sha("child") },
+      ]);
     if (original.kind === "dir") {
       expect((await f.service.list(f.principal, trashed.path, "token")).entries).toHaveLength(1);
       await expect(
