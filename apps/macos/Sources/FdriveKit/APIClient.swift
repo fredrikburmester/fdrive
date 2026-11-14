@@ -173,6 +173,18 @@ public struct APIClient: Sendable {
         }
         return result.folders
     }
+    /// What changed since `anchor`, one page; without an anchor the server answers `resync`
+    /// from now. A 404 means this server keeps no feed for the location.
+    public func changes(since anchor: String?) async throws -> ChangePage {
+        let page: ChangePage = try await send("changes", query: anchor.map { [URLQueryItem(name: "since", value: $0)] } ?? [])
+        let paths = (page.paths ?? []) + (page.folders ?? [])
+        guard !page.anchor.isEmpty, page.anchor.utf8.count <= 256,
+              page.status == .resync || (page.paths != nil && page.folders != nil && page.more != nil),
+              paths.allSatisfy({ (try? canonicalPath($0)) == $0 }) else {
+            throw DriveError.server("Invalid change feed response.")
+        }
+        return page
+    }
     public func stat(_ path: String) async throws -> RemoteEntry {
         try await send("entry", query: [.init(name: "path", value: try canonicalPath(path))])
     }

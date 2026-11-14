@@ -236,6 +236,7 @@ describe("read", () => {
     expect(page.changes.map(({ createdAt, ...change }) => change)).toEqual([
       {
         position: 1,
+        root: "files",
         path: "alice/a.pdf",
         targetPath: null,
         source: "api",
@@ -247,13 +248,32 @@ describe("read", () => {
           ctimeNs: 11n,
         },
       },
-      { position: 3, path: "alice/old", targetPath: "alice/new", source: "scan", content: null },
+      {
+        position: 3,
+        root: "files",
+        path: "alice/old",
+        targetPath: "alice/new",
+        source: "scan",
+        content: null,
+      },
     ]);
     expect(page.changes[0]?.createdAt).toBeInstanceOf(Date);
     const rest = await journal.read("files", 3, 10);
     expect(rest.changes.map((change) => [change.position, change.source])).toEqual([[4, "ocr"]]);
     expect((await journal.read("files", 4, 10)).changes).toEqual([]);
     expect(await journal.read("nowhere", 0, 10)).toEqual({ gap: false, changes: [] });
+    // Several roots read as one, in position order, each row naming its root.
+    expect(
+      (await journal.read(["photos", "files"], 1, 10)).changes.map((change) => [
+        change.position,
+        change.root,
+      ]),
+    ).toEqual([
+      [2, "photos"],
+      [3, "files"],
+      [4, "files"],
+    ]);
+    expect(await journal.read([], 0, 10)).toEqual({ gap: false, changes: [] });
   });
 
   it("returns no content for a hint missing any of its columns", async () => {
@@ -292,6 +312,25 @@ describe("read", () => {
       "alice/2.txt",
       "alice/3.txt",
     ]);
+  });
+});
+
+describe("epoch", () => {
+  it("names the journal with one id until the database starts again without it", async () => {
+    await db.execute(sql`delete from idx.change_epoch`);
+    // Readers creating it at the same moment agree on it.
+    const created = await Promise.all([1, 2, 3, 4].map(() => journal.epoch()));
+    const first = created[0];
+    expect(first).toMatch(/^[0-9a-f-]{36}$/);
+    expect(new Set(created)).toEqual(new Set([first]));
+    expect(await journal.epoch()).toBe(first);
+    const rows = await db.execute<{ n: number }>(
+      sql`select count(*)::int as n from idx.change_epoch`,
+    );
+    expect(rows.rows[0]?.n).toBe(1);
+    // A restored database has no row (the table is never backed up): a new epoch.
+    await db.execute(sql`delete from idx.change_epoch`);
+    expect(await journal.epoch()).not.toBe(first);
   });
 });
 

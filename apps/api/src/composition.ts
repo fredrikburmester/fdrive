@@ -5,6 +5,7 @@ import {
   createActivityObservationsRepo,
   createActivityReadsRepo,
   createActivityRepo,
+  createChangeJournal,
   createChangeWriter,
   createDb,
   createDesktopEffectsRepo,
@@ -54,6 +55,7 @@ import { createRecoveryApp } from "./backups/recovery.js";
 import { registerBackupRoutes } from "./backups/routes.js";
 import type { AppConfig } from "./config.js";
 import { type Subsystem, type SubsystemProbe, startupSummaryLines } from "./config-keys.js";
+import { createDesktopChanges } from "./desktop/changes.js";
 import { createDesktopEffectContext, createDesktopEffectsWorker } from "./desktop/effects.js";
 import { createIndexedContentLookup } from "./desktop/indexed-content.js";
 import { DESKTOP_INTERNAL_ROOT } from "./desktop/internal-root.js";
@@ -74,7 +76,7 @@ import { createChangeQueue } from "./local/change-queue.js";
 import { createDeploymentFilesFolderGuard, filesFolderHealth } from "./local/files-folder.js";
 import { registerGrantRoutes } from "./local/grant-routes.js";
 import { createLocalGrantService } from "./local/grants.js";
-import { deploymentModules } from "./local/modules.js";
+import { deploymentModules, journalRoot } from "./local/modules.js";
 import { registerLocalUserRoutes } from "./local/routes.js";
 import { createLocalUserService } from "./local/service.js";
 import { createLocalUserStore } from "./local/users.js";
@@ -957,9 +959,27 @@ export async function composeApp(
         resolver: scopeResolver,
         index: indexQueries,
       });
+      // The change journal has this API's own changes only for the root it
+      // journals under; a location's feed needs every one of its roots there.
+      const journaled = config.fdriveStorageRoot
+        ? journalRoot(config.fdriveIndexRoots, config.fdriveStorageRoot)
+        : null;
       registerDesktopRoutes(groups, {
         activity: personalActivity,
         recovery: desktopEffects,
+        changes: createDesktopChanges({
+          journal: createChangeJournal(db),
+          rootIds: () => indexQueries.rootIdsByName(),
+          scopes: async (identityId) => {
+            const identity = await repos.identities.get(identityId);
+            return identity ? scopeResolver.verifiedIndexScopes(identity) : null;
+          },
+          journaledRoots: new Set(journaled === null ? [] : [journaled]),
+          trashPathForStorage: (storage) => {
+            const settings = trashSettingsForStorage(storage);
+            return settings?.enabled === true ? settings.path : null;
+          },
+        }),
         writes: createDesktopWrites({
           repo: desktopRepo,
           indexedContent: desktopIndexedContent,

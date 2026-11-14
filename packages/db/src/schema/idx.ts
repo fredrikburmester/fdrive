@@ -2,6 +2,7 @@ import { sql } from "drizzle-orm";
 import {
   bigint,
   bigserial,
+  boolean,
   check,
   customType,
   index,
@@ -13,6 +14,7 @@ import {
   text,
   timestamp,
   unique,
+  uuid,
 } from "drizzle-orm/pg-core";
 import { vector } from "../vector.js";
 
@@ -231,6 +233,24 @@ export const changeCursors = idxSchema.table(
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [primaryKey({ columns: [table.rootId, table.consumer] })],
+);
+
+/**
+ * One row naming the change journal: a random `epoch`, created the first
+ * time a reader asks for it. Like the journal it is never backed up, so a
+ * restore, after which positions start again at 1, gets a new one. A reader
+ * that hands positions to clients outside the database (the Mac app's change
+ * feed) qualifies them with it, so a position from before a restore is never
+ * taken for a later one.
+ */
+export const changeEpoch = idxSchema.table(
+  "change_epoch",
+  {
+    single: boolean("single").primaryKey().default(true),
+    epoch: uuid("epoch").notNull().defaultRandom(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [check("change_epoch_single", sql`${table.single}`)],
 );
 
 export const schemaVersion = idxSchema.table("schema_version", {

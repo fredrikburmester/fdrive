@@ -1,6 +1,7 @@
 import {
   CanonicalUuid,
   DESKTOP_API,
+  DesktopChangeAnchor,
   DesktopFolderCheckRequest,
   DesktopFolderRequest,
   DesktopMoveRequest,
@@ -24,6 +25,7 @@ import { createRequireAdmin, type Principal } from "../auth/principal.js";
 import { ApiHttpError } from "../errors.js";
 import { parseBody } from "../fs/routes.js";
 import { hashApiToken } from "../tokens/token-format.js";
+import type { DesktopChanges } from "./changes.js";
 import { createDesktopFiles } from "./files.js";
 import { createDesktopPairing, type DesktopDeps } from "./pairing.js";
 import { publishesSafely } from "./publish-gate.js";
@@ -34,6 +36,8 @@ export function registerDesktopRoutes(
   deps: DesktopDeps & {
     clientIp: (c: Context) => string;
     writes?: DesktopWrites;
+    /** The change feed; absent where the server keeps no change journal. */
+    changes?: DesktopChanges;
     recovery?: Pick<DesktopEffectsRepo, "status">;
     /** Records hydration. A background fetch is not a proven human open. */
     activity?: PersonalActivityService;
@@ -84,11 +88,13 @@ export function registerDesktopRoutes(
       );
     },
   );
+  const changes = deps.changes;
   const pairing = createDesktopPairing({
     ...deps,
     ...(writes
       ? { writeAvailability: async (principal: Principal) => writes.availability(principal) }
       : {}),
+    ...(changes ? { changeFeed: (principal: Principal) => changes.available(principal) } : {}),
   });
   const files = createDesktopFiles(deps);
   function path(c: Context) {
@@ -265,6 +271,14 @@ export function registerDesktopRoutes(
       const auth = await principal(c, true);
       const body = await parseBody(DesktopFolderCheckRequest, c);
       return c.json(await writeService().check(auth.principal, body.folders, c.req.raw.signal));
+    });
+    v2.get(`${base}/changes`, async (c) => {
+      const auth = await principal(c, true);
+      if (!changes) throw new ApiHttpError("not_found", "This server keeps no change feed");
+      const since = c.req.query("since");
+      const parsed = DesktopChangeAnchor.optional().safeParse(since);
+      if (!parsed.success) throw new ApiHttpError("bad_request", "Invalid change anchor");
+      return c.json(await changes.read(auth.principal, parsed.data));
     });
     v2.get(`${base}/entry`, async (c) =>
       c.json(await writeService().stat((await principal(c, true)).principal, path(c))),

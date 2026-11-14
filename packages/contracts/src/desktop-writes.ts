@@ -24,6 +24,8 @@ export const DesktopWriteLocation = DesktopLocation.extend({
   writeUnavailableReason: z.string().optional(),
   /** The server answers folder checks, so a refresh lists only folders that changed. */
   listingChecks: z.literal(true).optional(),
+  /** The server answers `GET /changes`, so a refresh asks which folders changed since its last one. */
+  changeFeed: z.literal(true).optional(),
 });
 export const DesktopWriteCredential = z.object({
   token: z.string(),
@@ -84,6 +86,29 @@ export const DesktopFolderState = z.enum(["unchanged", "changed", "missing", "fo
 export const DesktopFolderCheckResponse = z.object({
   folders: z.array(z.object({ path: DesktopPath, status: DesktopFolderState })),
 });
+/** Where a client got to in the server's changes; opaque to the client. */
+export const DesktopChangeAnchor = z.string().min(1).max(256);
+/**
+ * What changed since an anchor, or `resync`: the anchor is unknown, from
+ * before a restore, or older than the changes the server keeps, so the client
+ * checks every folder it has listed and continues from `anchor`.
+ */
+export const DesktopChangesResponse = z.discriminatedUnion("status", [
+  z.object({
+    status: z.literal("changes"),
+    /**
+     * Changed paths, files or folders: each browsed folder at or below one is
+     * listed again, and each downloaded file at or below one is checked.
+     */
+    paths: z.array(DesktopPath),
+    /** Folders whose listing changed because something in it did. */
+    folders: z.array(DesktopPath),
+    anchor: DesktopChangeAnchor,
+    /** More changes follow: ask again from `anchor` before applying any. */
+    more: z.boolean(),
+  }),
+  z.object({ status: z.literal("resync"), anchor: DesktopChangeAnchor }),
+]);
 const OperationId = CanonicalUuid;
 const Digest = z.string().regex(/^[a-f0-9]{64}$/);
 export const DesktopUploadRequest = z.strictObject({
@@ -157,6 +182,7 @@ export type DesktopWriteEntry = z.infer<typeof DesktopWriteEntry>;
 export type DesktopFolderState = z.infer<typeof DesktopFolderState>;
 export type DesktopFolderCheck = z.infer<typeof DesktopFolderCheckRequest>["folders"][number];
 export type DesktopFolderCheckResponse = z.infer<typeof DesktopFolderCheckResponse>;
+export type DesktopChangesResponse = z.infer<typeof DesktopChangesResponse>;
 export type DesktopWriteCredential = z.infer<typeof DesktopWriteCredential>;
 export type DesktopWriteCapabilities = z.infer<typeof DesktopWriteCapabilities>;
 export type DesktopUploadRequest = z.infer<typeof DesktopUploadRequest>;

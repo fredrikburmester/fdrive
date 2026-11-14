@@ -46,6 +46,8 @@ interface Pair {
 export interface DesktopDeps {
   /** How the deployment answers a full grant; absent when desktop writes are not wired. */
   writeAvailability?: (principal: Principal) => Promise<DesktopWriteAvailability>;
+  /** Whether the change feed covers this location; absent when the server has none. */
+  changeFeed?: (principal: Principal) => Promise<boolean>;
   maxUploadBytes?: number;
   apiTokens: ApiTokenRepo;
   identities: IdentityRepo;
@@ -167,6 +169,7 @@ export function createDesktopPairing(deps: DesktopDeps) {
       ...(granted && readOnly ? { writeUnavailableReason: writeUnavailableReason(missing) } : {}),
       // Folder checks are served by the same write service that reports availability.
       ...(deps.writeAvailability ? { listingChecks: true as const } : {}),
+      ...((await deps.changeFeed?.(principal)) ? { changeFeed: true as const } : {}),
     };
   }
   async function issue(pair: Pair): Promise<IssuedCredential[]> {
