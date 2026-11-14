@@ -11,7 +11,7 @@ use axum::http::{Method, Request};
 use common::root_env::{Env, fv, wait_until};
 use fdrive_indexer::db::{self, Db, FolderRow, NewFile};
 use fdrive_indexer::indexer::{RootContext, scan_once, watch_folder, watch_mark_deleted, watch_rename};
-use fdrive_indexer::names::{MAX_PENDING_PATHS, NameHit, NameIndex, NameSearch, Place};
+use fdrive_indexer::names::{MAX_PENDING_PATHS, MAX_PLACES, MAX_WORDS, NameHit, NameIndex, NameSearch, Place};
 use fdrive_indexer::server::{AppState, Jobs, router};
 use http_body_util::BodyExt;
 use serde_json::{Value, json};
@@ -130,6 +130,20 @@ fn finds_names_typed_with_typos() {
     assert_eq!(find(&names, root_id, "work").1, ["Work"]);
     // A one-letter word does not narrow a query with longer ones.
     assert_eq!(find(&names, root_id, "mikrolärande b").1, ["Work/Mikrolärande"]);
+    // Words past the most one search matches are left for the API to check.
+    let long = format!("{} zzzzz", ["mikrolärande"; MAX_WORDS].join(" "));
+    assert_eq!(find(&names, root_id, &long).1, ["Work/Mikrolärande"]);
+    assert!(
+        names
+            .search(&NameSearch {
+                query: "mikrolärande".to_owned(),
+                scopes: vec![place(root_id, ""); MAX_PLACES + 1],
+                exclude: vec![],
+                files: 1,
+                folders: 1,
+            })
+            .is_err()
+    );
 }
 
 #[test]
@@ -428,6 +442,11 @@ fn serves_searches_once_the_index_is_ready() {
     assert!(answer["folders"][0]["mtime_ns"].is_string());
 
     assert_eq!(post(&state, "{\"scopes\": []}").0, 400);
+    let crowded = json!({"query": "x", "scopes": vec![json!({"root_id": root_id}); MAX_PLACES + 1]});
+    assert_eq!(
+        post(&state, &crowded.to_string()),
+        (400, json!({"error": "too many places"}))
+    );
     assert_eq!(post(&state, "not json").0, 400);
     assert_eq!(post(&app(&url, None), &body.to_string()).0, 503);
 

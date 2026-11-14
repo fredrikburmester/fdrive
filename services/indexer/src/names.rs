@@ -34,6 +34,14 @@ pub const MAX_PENDING_PATHS: usize = 2_000;
 pub const SETTLE: Duration = Duration::from_millis(100);
 /// The most hits of each kind one search returns.
 pub const MAX_HITS: usize = 200;
+/// The most query words one search matches; each costs a few fuzzy matches over every name.
+/// The API checks every word again, so later ones only narrow what it shows.
+pub const MAX_WORDS: usize = 8;
+/// How much of a query is read.
+pub const MAX_QUERY_CHARS: usize = 512;
+/// The most places one search may name, and the most it may leave out. Never cut short: a
+/// left-out place dropped would let its names through.
+pub const MAX_PLACES: usize = 64;
 /// The writer's indexing memory; Tantivy's minimum for one thread.
 const WRITER_MEMORY: usize = 15_000_000;
 /// The longest the index waits before trying a failed update again.
@@ -93,6 +101,13 @@ pub struct NameSearch {
     pub files: usize,
     #[serde(default)]
     pub folders: usize,
+}
+
+impl NameSearch {
+    /// Why the search asks for more than one search may, if it does.
+    pub fn too_much(&self) -> Option<&'static str> {
+        (self.scopes.len() > MAX_PLACES || self.exclude.len() > MAX_PLACES).then_some("too many places")
+    }
 }
 
 fn as_string<S: Serializer>(value: &i64, serializer: S) -> Result<S::Ok, S::Error> {
@@ -331,6 +346,9 @@ impl NameIndex {
     /// start of a word of the name, inside `scopes` and outside `exclude`. Fewer typos, then a
     /// newer modification time, rank first. `None` until the index is ready.
     pub fn search(&self, query: &NameSearch) -> Result<Option<NameHits>> {
+        if let Some(reason) = query.too_much() {
+            anyhow::bail!(reason);
+        }
         if !self.ready() {
             return Ok(None);
         }
@@ -360,14 +378,16 @@ impl NameIndex {
     /// the query has longer ones, as `nameMatch` does.
     fn words(&self, query: &str) -> Result<Vec<String>> {
         let mut analyzer = self.index.tokenizer_for_field(self.fields.name)?;
-        let text = nfc(query);
+        let text = nfc(&query.chars().take(MAX_QUERY_CHARS).collect::<String>());
         let mut stream = analyzer.token_stream(&text);
         let mut words = Vec::new();
         while stream.advance() {
             words.push(stream.token().text.clone());
         }
         let longer: Vec<String> = words.iter().filter(|w| w.chars().count() > 1).cloned().collect();
-        Ok(if longer.is_empty() { words } else { longer })
+        let mut words = if longer.is_empty() { words } else { longer };
+        words.truncate(MAX_WORDS);
+        Ok(words)
     }
 
     /// A word of the name starts with `word`, give or take its typo budget; fewer typos score
@@ -671,6 +691,27 @@ mod tests {
         );
         add(&mut pending, Touch::Rebuild(2));
         assert_eq!(pending.get(&2), Some(&Pending::Rebuild));
+    }
+
+    #[test]
+    fn refuses_more_places_than_one_search_may_name() {
+        let place = Place {
+            root_id: 1,
+            prefix: String::new(),
+        };
+        let mut search = NameSearch {
+            query: "a".to_owned(),
+            scopes: vec![place.clone(); MAX_PLACES],
+            exclude: vec![place.clone(); MAX_PLACES],
+            files: 1,
+            folders: 1,
+        };
+        assert_eq!(search.too_much(), None);
+        search.exclude.push(place.clone());
+        assert_eq!(search.too_much(), Some("too many places"));
+        search.exclude.pop();
+        search.scopes.push(place);
+        assert_eq!(search.too_much(), Some("too many places"));
     }
 
     #[test]

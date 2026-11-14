@@ -623,6 +623,9 @@ async fn search_names(State(state): State<Shared>, body: axum::body::Bytes) -> R
         Ok(query) => query,
         Err(_) => return error(StatusCode::BAD_REQUEST, "query is required"),
     };
+    if let Some(reason) = query.too_much() {
+        return error(StatusCode::BAD_REQUEST, reason);
+    }
     let Some(names) = state.names.clone() else {
         return error(StatusCode::SERVICE_UNAVAILABLE, "name index unavailable");
     };
