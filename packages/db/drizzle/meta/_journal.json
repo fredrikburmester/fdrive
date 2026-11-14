@@ -176,6 +176,13 @@
       "when": 1794654863361,
       "tag": "0024_change_journal",
       "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "7",
+      "when": 1794660340886,
+      "tag": "0025_change_epoch",
+      "breakpoints": true
     }
   ]
 }

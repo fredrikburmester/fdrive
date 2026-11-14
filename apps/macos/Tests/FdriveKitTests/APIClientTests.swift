@@ -108,10 +108,33 @@ struct APIClientTests {
     }
     @Test func readsWhetherTheServerAnswersFolderChecks() async throws {
         let base = "\"accountId\":\"a\",\"identityId\":\"i\",\"providerId\":\"p\",\"displayName\":\"Drive\",\"username\":\"u\",\"paths\":[\"/\"],\"protocolVersion\":2,\"readOnly\":false,\"capabilities\":{\"create\":true,\"update\":true,\"move\":true,\"trash\":true,\"restore\":true}"
-        let (api, session) = try client(Responses([(200, "{\(base),\"listingChecks\":true}"), (200, "{\(base)}")]))
+        let (api, session) = try client(Responses([(200, "{\(base),\"listingChecks\":true,\"changeFeed\":true}"), (200, "{\(base)}")]))
         defer { session.invalidateAndCancel() }
-        #expect(try await api.location().listingChecks == true)
-        #expect(try await api.location().listingChecks == nil)
+        let current = try await api.location()
+        #expect(current.listingChecks == true && current.changeFeed == true)
+        let older = try await api.location()
+        #expect(older.listingChecks == nil && older.changeFeed == nil)
+    }
+    @Test func readsTheChangeFeedAndRefusesAnswersItCannotUse() async throws {
+        let changes = "{\"status\":\"changes\",\"paths\":[\"/a/b.txt\"],\"folders\":[\"/a\",\"/\"],\"anchor\":\"v1.next\",\"more\":false}"
+        let responses = Responses([(200, "{\"status\":\"resync\",\"anchor\":\"v1.start\"}"), (200, changes)])
+        let (api, session) = try client(responses); defer { session.invalidateAndCancel() }
+        #expect(try await api.changes(since: nil) == ChangePage(status: .resync, anchor: "v1.start"))
+        #expect(try await api.changes(since: "v1.start")
+            == ChangePage(status: .changes, paths: ["/a/b.txt"], folders: ["/a", "/"], anchor: "v1.next", more: false))
+        #expect(responses.requests.map { $0.url?.path } == ["/api/v1/desktop/changes", "/api/v1/desktop/changes"])
+        #expect(responses.requests.first?.url?.query == nil)
+        #expect(responses.requests.last?.url?.query == "since=v1.start")
+        for body in ["{\"status\":\"changes\",\"paths\":[\"/a\"],\"folders\":[],\"anchor\":\"v1.next\"}",
+                     "{\"status\":\"changes\",\"paths\":[\"a\"],\"folders\":[],\"anchor\":\"v1.next\",\"more\":false}",
+                     "{\"status\":\"changes\",\"paths\":[\"/a/../b\"],\"folders\":[],\"anchor\":\"v1.next\",\"more\":false}",
+                     "{\"status\":\"resync\",\"anchor\":\"\"}",
+                     "{\"status\":\"gap\",\"anchor\":\"v1.next\"}"] {
+            let (invalid, invalidSession) = try client(Responses([(200, body)])); defer { invalidSession.invalidateAndCancel() }
+            await #expect(throws: (any Error).self) { try await invalid.changes(since: "v1.start") }
+        }
+        let (old, oldSession) = try client(Responses([(404, "{}")])); defer { oldSession.invalidateAndCancel() }
+        await #expect(throws: DriveError.missing) { try await old.changes(since: nil) }
     }
     @Test func preservesRetryAndQuotaErrorsForPendingWrites() async throws {
         for (status, expected) in [(413, DriveError.quota), (502, .unavailable), (503, .unavailable)] {

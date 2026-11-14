@@ -66,6 +66,9 @@ export const OMITTED_TABLES = {
   // After a restore the journal starts again and the indexer at its end.
   "idx.changes": "transient",
   "idx.change_cursors": "transient",
+  // Names the journal's positions. A restore must get a new one, so a Mac
+  // app's position from before it reads as unknown rather than as a later one.
+  "idx.change_epoch": "transient",
   "idx.schema_version": "migration",
 } as const;
 export type DurableTable = (typeof DURABLE_TABLES)[number];

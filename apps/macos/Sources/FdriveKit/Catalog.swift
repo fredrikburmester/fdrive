@@ -26,7 +26,7 @@ public actor Catalog {
         sqlite3_busy_timeout(connection, 10_000)
         var version: OpaquePointer?
         sqlite3_prepare_v2(connection, "PRAGMA user_version", -1, &version, nil)
-        let supported = sqlite3_step(version) == SQLITE_ROW && sqlite3_column_int(version, 0) <= 4
+        let supported = sqlite3_step(version) == SQLITE_ROW && sqlite3_column_int(version, 0) <= 5
         sqlite3_finalize(version)
         guard supported else {
             throw DriveError.database("This metadata store requires a newer version of fdrive.")
@@ -48,10 +48,11 @@ public actor Catalog {
         CREATE TABLE IF NOT EXISTS folders (path TEXT PRIMARY KEY);
         CREATE TABLE IF NOT EXISTS listings (path TEXT PRIMARY KEY, token TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS folder_tokens (path TEXT PRIMARY KEY, token TEXT NOT NULL);
+        CREATE TABLE IF NOT EXISTS change_feed (id INTEGER PRIMARY KEY CHECK (id=1), anchor TEXT NOT NULL, checked_at REAL NOT NULL);
         CREATE TABLE IF NOT EXISTS pending (key TEXT PRIMARY KEY, id TEXT UNIQUE NOT NULL, localId TEXT NOT NULL, value TEXT NOT NULL, completed INTEGER NOT NULL DEFAULT 0);
         CREATE TABLE IF NOT EXISTS departures (id TEXT NOT NULL, parent TEXT NOT NULL, revision INTEGER NOT NULL);
         CREATE INDEX IF NOT EXISTS departure_revision ON departures(revision);
-        PRAGMA user_version=4;
+        PRAGMA user_version=5;
         COMMIT;
         """
         guard sqlite3_exec(connection, schema, nil, nil, nil) == SQLITE_OK else {
@@ -117,9 +118,26 @@ public actor Catalog {
     public func hasListing(_ path: String) throws -> Bool { !(try rows("SELECT path FROM folders WHERE path=?", [path])).isEmpty }
     /// The server's token for each folder whose local children still match that listing.
     public func folderTokens() throws -> [String: String] {
-        Dictionary(uniqueKeysWithValues: try rows("SELECT path,token FROM folder_tokens").map { ($0[0], $0[1]) })
+        Dictionary(uniqueKeysWithValues: try rows("SELECT path,token FROM folder_tokens WHERE token<>''").map { ($0[0], $0[1]) })
     }
-    private func forgetToken(_ path: String) throws { try execute("DELETE FROM folder_tokens WHERE path=?", [path]) }
+    /// Folders whose local children still match a listing applied in full, with a token or without
+    /// one (a listing of several pages has none). The change feed names every change after that.
+    public func listedInFull() throws -> Set<String> { Set(try rows("SELECT path FROM folder_tokens").map { $0[0] }) }
+    /// The next refresh lists this folder whatever the server says about it.
+    public func forgetToken(_ path: String) throws { try execute("DELETE FROM folder_tokens WHERE path=?", [path]) }
+    /// Where the change feed got to, and when every browsed folder was last checked; nil until a
+    /// refresh that checked them all stored the anchor it started from.
+    public func changeFeed() throws -> (anchor: String, checkedAt: Date)? {
+        try rows("SELECT anchor,checked_at FROM change_feed").first.flatMap { row in
+            Double(row[1]).map { (row[0], Date(timeIntervalSince1970: $0)) }
+        }
+    }
+    /// Stored only once the refresh that read up to `anchor` applied everything it named.
+    public func saveChangeFeed(anchor: String, checkedAt: Date) throws {
+        try execute("INSERT INTO change_feed VALUES (1,?,?) ON CONFLICT(id) DO UPDATE SET anchor=excluded.anchor,checked_at=excluded.checked_at",
+                    [anchor, String(checkedAt.timeIntervalSince1970)])
+    }
+    public func forgetChangeFeed() throws { try execute("DELETE FROM change_feed") }
     public func generation() throws -> String { try rows("SELECT value FROM state WHERE key='generation'")[0][0] }
     public func revision() throws -> Int64 { Int64(try rows("SELECT value FROM state WHERE key='revision'")[0][0]) ?? 0 }
     /// Rename only the domain root's display metadata; preserve the catalog and cached items.
@@ -168,7 +186,8 @@ public actor Catalog {
     }
     /// Only complete listings enter this transaction. A timeout cannot turn a folder empty.
     /// `token` names this exact listing; it is kept only when every entry was applied, so a
-    /// later check that finds the same token proves the folder's children are current.
+    /// later check that finds the same token proves the folder's children are current. A listing
+    /// without one, applied in full, is still recorded as such for the change feed.
     public func reconcile(_ entries: [RemoteEntry], folder: String, listing: String? = nil, token: String? = nil) throws {
         try transaction {
             if let listing, try rows("SELECT token FROM listings WHERE path=?", [folder]).first?.first != listing { return }
@@ -232,8 +251,8 @@ public actor Catalog {
                 }
             }
             try execute("INSERT OR IGNORE INTO folders VALUES (?)", [folder])
-            if let token, !skipped {
-                try execute("INSERT INTO folder_tokens VALUES (?,?) ON CONFLICT(path) DO UPDATE SET token=excluded.token", [folder, token])
+            if !skipped {
+                try execute("INSERT INTO folder_tokens VALUES (?,?) ON CONFLICT(path) DO UPDATE SET token=excluded.token", [folder, token ?? ""])
             } else { try forgetToken(folder) }
         }
     }
