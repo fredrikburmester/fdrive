@@ -16,6 +16,7 @@ import { loadConfig } from "../config.js";
 import { ApiHttpError } from "../errors.js";
 import { createResolveTokenPrincipal } from "../tokens/principal.js";
 import { createTokenService } from "../tokens/service.js";
+import type { DesktopChanges } from "./changes.js";
 import { createDesktopFiles } from "./files.js";
 import { createDesktopPairing } from "./pairing.js";
 import { registerDesktopRoutes } from "./routes.js";
@@ -171,13 +172,81 @@ it("runs the complete v2 routes with explicit grants, streamed content, receipts
   expect((await call(`/pairings/${next.id}/poll`, { secret: next.secret })).status).toBe(404);
 });
 
+/** Pairs a write-protocol location through the routes and returns a caller for it. */
+async function pairWritable(f: Awaited<ReturnType<typeof fixture>>) {
+  const base = "/api/v2/desktop";
+  const json = { "x-requested-with": "fdrive", "content-type": "application/json" };
+  const created = await f.app.request(`${base}/pairings`, {
+    method: "POST",
+    headers: json,
+    body: JSON.stringify({ deviceName: "Mac" }),
+  });
+  const request = DesktopPairing.parse(await created.json());
+  await f.request(
+    `/pairings/${request.id}/approve`,
+    { identityIds: [f.identity.id], access: { [f.identity.id]: "full" } },
+    { cookie: "fdrive_session=test" },
+  );
+  const polled = await f.app.request(`${base}/pairings/${request.id}/poll`, {
+    method: "POST",
+    headers: json,
+    body: JSON.stringify({ secret: request.secret }),
+  });
+  const token = ((await polled.json()) as { credentials: Array<{ token: string }> }).credentials[0]
+    ?.token;
+  if (!token) throw Error("Missing token");
+  return (route: string, authorized = true) =>
+    f.app.request(base + route, {
+      headers: { ...json, ...(authorized ? { authorization: `Bearer ${token}` } : {}) },
+    });
+}
+
+it("advertises the change feed where it covers the location and answers it", async () => {
+  // Without a feed: nothing advertised, nothing served.
+  const plain = await fixture(true);
+  const plainCall = await pairWritable(plain);
+  expect(await (await plainCall("/location")).json()).not.toHaveProperty("changeFeed");
+  expect((await plainCall("/changes")).status).toBe(404);
+
+  let available = true;
+  const read = vi.fn(async (_principal: Principal, since: string | undefined) => ({
+    status: "resync" as const,
+    anchor: since ?? "v1.start",
+  }));
+  const f = await fixture(true, undefined, { available: async () => available, read });
+  const call = await pairWritable(f);
+  expect(await (await call("/location")).json()).toMatchObject({
+    listingChecks: true,
+    changeFeed: true,
+  });
+  expect(await (await call("/changes")).json()).toEqual({ status: "resync", anchor: "v1.start" });
+  expect(await (await call("/changes?since=v1.mine")).json()).toEqual({
+    status: "resync",
+    anchor: "v1.mine",
+  });
+  expect(read.mock.calls.map(([principal, since]) => [principal.identityId, since])).toEqual([
+    [f.identity.id, undefined],
+    [f.identity.id, "v1.mine"],
+  ]);
+  for (const since of ["", "a".repeat(257)])
+    expect((await call(`/changes?since=${since}`)).status).toBe(400);
+  expect((await call("/changes", false)).status).toBe(401);
+  // A location the journal cannot cover keeps folder checks only.
+  available = false;
+  expect(await (await call("/location")).json()).not.toHaveProperty("changeFeed");
+});
+
 const desktopDirectories: string[] = [];
 afterEach(async () => {
   await Promise.all(
     desktopDirectories.splice(0).map((path) => rm(path, { recursive: true, force: true })),
   );
 });
-async function fixture(writable = false, recovery?: Pick<DesktopEffectsRepo, "status">) {
+async function fixture(
+  writable = false,
+  recovery?: Pick<DesktopEffectsRepo, "status">,
+  changes?: DesktopChanges,
+) {
   const repos = createMemoryRepos();
   let now = new Date("2026-09-13T00:00:00Z");
   const clock = () => now;
@@ -246,6 +315,7 @@ async function fixture(writable = false, recovery?: Pick<DesktopEffectsRepo, "st
       registerDesktopRoutes(groups, {
         ...deps,
         ...(recovery ? { recovery } : {}),
+        ...(changes ? { changes } : {}),
         activity: activity.service,
         clientIp: () => "test",
         ...(stateDir

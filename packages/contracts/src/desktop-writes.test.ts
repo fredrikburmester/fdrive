@@ -1,6 +1,8 @@
 import { expect, it } from "vitest";
 import { DesktopPairApproval } from "./desktop.js";
 import {
+  DesktopChangeAnchor,
+  DesktopChangesResponse,
   DesktopFolderCheckRequest,
   DesktopFolderCheckResponse,
   DesktopFolderRequest,
@@ -66,4 +68,26 @@ it("bounds folder checks to unique, valid folders and known answers", () => {
   expect(
     DesktopFolderCheckResponse.safeParse({ folders: [{ path: "/a", status: "renamed" }] }).success,
   ).toBe(false);
+});
+
+it("answers changes with paths and an anchor, or a resync", () => {
+  const changes = {
+    status: "changes",
+    paths: ["/docs/a.txt"],
+    folders: ["/docs", "/"],
+    anchor: "v1.anchor",
+    more: false,
+  };
+  expect(DesktopChangesResponse.parse(changes)).toEqual(changes);
+  expect(DesktopChangesResponse.parse({ status: "resync", anchor: "v1.anchor" }).status).toBe(
+    "resync",
+  );
+  for (const invalid of [
+    { ...changes, paths: ["relative"] },
+    { ...changes, anchor: "" },
+    { ...changes, more: undefined },
+    { status: "gap", anchor: "v1.anchor" },
+  ])
+    expect(DesktopChangesResponse.safeParse(invalid).success).toBe(false);
+  expect(DesktopChangeAnchor.safeParse("a".repeat(257)).success).toBe(false);
 });

@@ -22,6 +22,28 @@ export const DESKTOP_PAGE_SIZE = 500;
 export type DesktopLister = (path: string) => Promise<FileEntry[]>;
 
 export { DESKTOP_INTERNAL_ROOT };
+
+/**
+ * Whether a desktop connection may see the normalized `path` at all: inside
+ * its grants (or above one, when `browse`ing towards it), and outside the
+ * storage's Trash (`trash`) and fdrive's own desktop folder. Listings drop
+ * every entry this refuses, and so does the change feed.
+ */
+export function desktopPathAllowed(
+  principal: Principal,
+  path: string,
+  options: { trash: string | null; writeProtocol: boolean; browse?: boolean },
+): boolean {
+  const grants = principal.tokenAccess;
+  const { trash, writeProtocol, browse = false } = options;
+  return (
+    (grants?.mode === "read" || (writeProtocol && grants?.mode === "full")) &&
+    grants.paths.some((root) => contains(root, path) || (browse && contains(path, root))) &&
+    !(trash && contains(trash, path)) &&
+    !contains(DESKTOP_INTERNAL_ROOT, path)
+  );
+}
+
 export function createDesktopFiles(
   deps: Pick<DesktopDeps, "clock" | "trashPathForStorage">,
   writeProtocol = false,
@@ -29,14 +51,11 @@ export function createDesktopFiles(
   const snapshots = new Map<string, Snapshot>();
   const hashing = new Set<string>();
   function allowed(principal: Principal, path: string, browse = false) {
-    const grants = principal.tokenAccess;
-    const trash = deps.trashPathForStorage(principal.storage);
-    return (
-      (grants?.mode === "read" || (writeProtocol && grants?.mode === "full")) &&
-      grants.paths.some((root) => contains(root, path) || (browse && contains(path, root))) &&
-      !(trash && contains(trash, path)) &&
-      !contains(DESKTOP_INTERNAL_ROOT, path)
-    );
+    return desktopPathAllowed(principal, path, {
+      trash: deps.trashPathForStorage(principal.storage),
+      writeProtocol,
+      browse,
+    });
   }
   function authorize(principal: Principal, raw: string, browse = false) {
     const path = normalizePath(raw);
