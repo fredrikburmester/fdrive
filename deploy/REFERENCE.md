@@ -257,6 +257,22 @@ too, or leave group or other permissions that let it read and write; otherwise f
 those files but can't change them. A share the host mounts (NFS, SMB) works when its user
 mapping gives `FDRIVE_RUN_AS_UID` that access.
 
+### The `.fdrive-files` marker
+
+The API keeps a `.fdrive-files` file at the top of the files folder holding this
+installation's ID (the one backups carry, so a restore keeps it valid). On start it writes the
+file into a folder that has anything in it, or into any folder while fdrive has no users or
+indexed files yet. It refuses a folder that is empty while fdrive has users or indexed files,
+or whose marker names another installation: Compose mounts an empty `./data/files` when
+`FDRIVE_FILES_DIR` is unset, and reading that as every file deleted would empty search.
+
+While refused, file routes and backups to a folder destination fail with the reason, `core`
+in `GET /api/v1/health` reports `failed` with it in `detail`, `wait-ready.ts` keeps waiting,
+and the indexer neither scans, watches nor applies queued changes. The API and indexer check
+again every few seconds, so fixing `FDRIVE_FILES_DIR` and running `docker compose up -d` is
+enough. To adopt a folder fdrive refuses, create an empty `.fdrive-files` in it; to take over
+another installation's folder, delete its marker.
+
 ## Native ARM64 embeddings
 
 The published `fdrive-embed` image is native on Apple Silicon and other ARM64 hosts. Its

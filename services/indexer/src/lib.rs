@@ -11,6 +11,7 @@ pub mod events;
 pub mod extract;
 pub mod failures;
 pub mod features;
+pub mod files_marker;
 pub mod fsx;
 pub mod http;
 pub mod image_embed;

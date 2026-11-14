@@ -146,6 +146,7 @@ pub fn wait_until(timeout: Duration, mut predicate: impl FnMut() -> bool) -> boo
 pub fn context_with(cfg: Config, values: FeatureValues, tweak: impl FnOnce(&mut RootContext)) -> Arc<RootContext> {
     let cfg = Arc::new(cfg);
     let (name, path) = cfg.roots[0].clone();
+    super::mark_files_folder(&cfg.database_url, &path);
     let root_id = db::upsert_root(&mut super::connect(&cfg.database_url), &name).unwrap();
     let mut ctx = RootContext::new(&name, root_id, path, Arc::clone(&cfg), super::features(values));
     tweak(&mut ctx);

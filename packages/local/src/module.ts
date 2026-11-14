@@ -11,6 +11,7 @@ import {
   splitSegments,
 } from "@fdrive/core";
 import { type DiskChangeListener, type IndexChange, underRoot } from "./changes.js";
+import type { FilesFolderGuard } from "./files-marker.js";
 import { isLocalUsername } from "./names.js";
 import { createUserStorage, namedSharedGrants, type SharedGrant } from "./shared.js";
 
@@ -61,6 +62,13 @@ export interface CreateLocalModuleOptions {
    * `indexRoot`.
    */
   readonly onIndexChange?: (root: string, change: IndexChange) => void;
+  /**
+   * Whether `root` is this installation's files folder. With it, storage is
+   * refused (`upstream_unavailable`) while the folder is not, so a wrong
+   * mount is never served or written; `admit`, `authenticate` and `probe`
+   * check it again as it goes stale.
+   */
+  readonly guard?: FilesFolderGuard;
 }
 
 export const LOCAL_CREDENTIAL_FIELDS: readonly ProviderField[] = [
@@ -127,7 +135,7 @@ export function createIndexListener(
  * atomic, uploads keep their modification time, and zips stream.
  */
 export function createLocalModule(options: CreateLocalModuleOptions): ProviderModule {
-  const { indexRoot, onIndexChange } = options;
+  const { indexRoot, onIndexChange, guard } = options;
   const onChange =
     indexRoot === undefined || indexRoot === null || onIndexChange === undefined
       ? undefined
@@ -154,9 +162,17 @@ export function createLocalModule(options: CreateLocalModuleOptions): ProviderMo
 
     indexRootName: () => options.indexRoot ?? null,
 
-    probe: () => probeRoot(options.root),
+    async probe() {
+      const verdict = await guard?.verify();
+      if (verdict !== undefined && !verdict.ok) return { ok: false, detail: verdict.reason };
+      return probeRoot(options.root);
+    },
 
     async admit(_instance, externalUsername) {
+      const verdict = await guard?.verify();
+      if (verdict !== undefined && !verdict.ok) {
+        throw new StorageError("upstream_unavailable", verdict.reason);
+      }
       let status: LocalUserStatus;
       try {
         status = await options.users.status(externalUsername);
@@ -167,6 +183,9 @@ export function createLocalModule(options: CreateLocalModuleOptions): ProviderMo
     },
 
     async authenticate(_instance, credential, ctx) {
+      // Signing in only reads the database, so it works while the folder is
+      // refused, but it brings the verdict up to date for `createStorage`.
+      await guard?.verify();
       const username = credential.username ?? ctx.expectedUsername;
       const password = credential.password ?? "";
       if (username === undefined || !isLocalUsername(username) || password.length === 0) {
@@ -192,6 +211,7 @@ export function createLocalModule(options: CreateLocalModuleOptions): ProviderMo
     },
 
     createStorage(_instance, session) {
+      guard?.assertUsable();
       // Authentication admits only valid names, so this guards a stored
       // identity that predates a rule change, not a caller's input.
       if (!isLocalUsername(session.externalUsername)) {

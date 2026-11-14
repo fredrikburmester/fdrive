@@ -637,6 +637,16 @@ pub fn subtree_manifest(c: &mut Client, root_id: i64, path: &str) -> Result<Hash
 }
 
 /// The database's clock, which `last_seen` is written with.
+/// The installation's id, which the files folder's `.fdrive-files` marker must hold; `None`
+/// until the API has recorded it.
+pub fn installation_id(c: &mut Client) -> Result<Option<String>> {
+    Ok(c.query_opt(
+        r#"SELECT installation_id::text FROM "app"."backup_configuration" WHERE id = 1"#,
+        &[],
+    )?
+    .map(|row| row.get(0)))
+}
+
 pub fn now(c: &mut Client) -> Result<DateTime<Utc>> {
     Ok(c.query_one("SELECT now()", &[])?.get(0))
 }

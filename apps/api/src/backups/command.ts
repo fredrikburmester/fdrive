@@ -13,10 +13,11 @@ import {
   s3Destination,
 } from "@fdrive/backup";
 import { stripTransientFields } from "@fdrive/core";
-import { createDb, createRepos, migrate } from "@fdrive/db";
+import { createDb, createFilesFolderFacts, createRepos, migrate } from "@fdrive/db";
 import { z } from "zod";
 import { open, parseMasterKey, seal } from "../auth/crypto.js";
 import type { AppConfig } from "../config.js";
+import { createDeploymentFilesFolderGuard } from "../local/files-folder.js";
 import { deploymentModules } from "../local/modules.js";
 import { moduleFor } from "../providers/registry.js";
 import { createBackupModule, masterSecrets } from "./module.js";
@@ -346,9 +347,22 @@ export async function runBackupCommand(
     // Local users live in the database, so a destination in the local folder
     // is checked against them like a sign-in.
     const users = createDb(config.databaseUrl, { max: 2 });
+    // A destination in the files folder is only written while the folder is
+    // this installation's, as for the API.
+    const guard =
+      config.fdriveStorageRoot === undefined
+        ? undefined
+        : createDeploymentFilesFolderGuard(
+            config.fdriveStorageRoot,
+            createFilesFolderFacts(users.db),
+            {
+              info: (message) => console.log(message),
+              error: (message) => console.error(message),
+            },
+          );
     const module = createBackupModule(
       { ...config, fdriveBackupWorker: false },
-      deploymentModules(config, createRepos(users.db)),
+      deploymentModules(config, createRepos(users.db), undefined, undefined, guard),
     );
     try {
       await module.start();

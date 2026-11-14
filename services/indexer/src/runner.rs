@@ -65,10 +65,16 @@ impl WatchHandler for Handler {
     }
 
     fn mark_deleted(&self, rel: &str, is_dir: bool) -> usize {
+        if !self.0.files_folder_verified() {
+            return 0;
+        }
         watch_mark_deleted(&self.0, rel, is_dir)
     }
 
     fn rename(&self, old_rel: &str, new_rel: &str, is_dir: bool) -> usize {
+        if !self.0.files_folder_verified() {
+            return 0;
+        }
         watch_rename(&self.0, old_rel, new_rel, is_dir)
     }
 
@@ -162,7 +168,10 @@ impl RootLoop {
             if refresh_settings(ctx)? {
                 self.next_scan = Instant::now();
             }
-            let enabled = ctx.values().indexer_enabled();
+            // A folder without this installation's marker is neither watched nor scanned; a
+            // due scan waits and runs as soon as the folder is right.
+            let verified = ctx.files_folder_verified();
+            let enabled = ctx.values().indexer_enabled() && verified;
             if enabled && self.watcher.is_none() {
                 self.watcher = start_watcher(ctx);
             } else if !enabled && let Some(stopped) = self.watcher.take() {
@@ -173,7 +182,7 @@ impl RootLoop {
                 .unwrap_or_else(PoisonError::into_inner)
                 .insert(ctx.name.clone(), self.watcher.is_some());
             let overflowed = self.watcher.as_ref().is_some_and(Watcher::take_overflow);
-            if Instant::now() >= self.next_scan || overflowed {
+            if verified && (Instant::now() >= self.next_scan || overflowed) {
                 scan_once(ctx);
                 self.next_scan = Instant::now() + Duration::from_secs(ctx.settings().scan_interval_seconds);
             }

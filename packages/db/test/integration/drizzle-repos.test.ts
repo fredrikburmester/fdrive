@@ -3,9 +3,17 @@ import { and, eq, sql } from "drizzle-orm";
 import type { Pool, PoolClient } from "pg";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { createDb, createOfficeFileRepo, type Db, migrate } from "../../src/index.js";
-import { createRepos } from "../../src/repos/drizzle.js";
+import { createFilesFolderFacts, createRepos } from "../../src/repos/drizzle.js";
 import { PATH_CHUNK_SIZE } from "../../src/repos/path-chunks.js";
-import { favorites, fileTags, folderViews, recents } from "../../src/schema/app.js";
+import {
+  backupConfiguration,
+  favorites,
+  fileTags,
+  folderViews,
+  localUsers,
+  recents,
+} from "../../src/schema/app.js";
+import { files, roots } from "../../src/schema/idx.js";
 import { defineReposSuite } from "../repos-suite.js";
 
 let container: StartedPostgreSqlContainer;
@@ -629,5 +637,48 @@ describe("metadata lookups for oversized directory listings", () => {
     expect(await repos.favorites.has(identity.id, small)).toEqual(new Set([pathAt(1)]));
     expect(await repos.fileTags.tagsForPaths(identity.id, [])).toEqual(new Map());
     expect(await repos.favorites.has(identity.id, [])).toEqual(new Set());
+  });
+});
+
+describe("createFilesFolderFacts", () => {
+  beforeEach(async () => {
+    await db.execute(
+      sql`truncate table idx.files, app.local_users, app.backup_configuration cascade`,
+    );
+  });
+
+  it("creates the installation id once and keeps answering with it", async () => {
+    const facts = createFilesFolderFacts(db);
+    const id = await facts.installationId();
+    expect(id).toMatch(/^[0-9a-f-]{36}$/);
+    expect(await facts.installationId()).toBe(id);
+    const [row] = await db.select().from(backupConfiguration);
+    expect(row?.installationId).toBe(id);
+  });
+
+  it("holds files once there is a user or a live indexed file, not a deleted one", async () => {
+    const facts = createFilesFolderFacts(db);
+    expect(await facts.holdsFiles()).toBe(false);
+
+    const [root] = await db
+      .insert(roots)
+      .values({ name: "files-facts" })
+      .onConflictDoUpdate({ target: roots.name, set: { name: "files-facts" } })
+      .returning();
+    if (root === undefined) throw new Error("no root");
+    const file = {
+      rootId: root.id,
+      name: "a.txt",
+      size: 1,
+      mtimeNs: 1n,
+    };
+    await db.insert(files).values({ ...file, path: "alice/gone.txt", deletedAt: new Date() });
+    expect(await facts.holdsFiles()).toBe(false);
+    await db.insert(files).values({ ...file, path: "alice/a.txt" });
+    expect(await facts.holdsFiles()).toBe(true);
+
+    await db.execute(sql`truncate table idx.files cascade`);
+    await db.insert(localUsers).values({ username: "alice", passwordHash: "x" });
+    expect(await facts.holdsFiles()).toBe(true);
   });
 });
