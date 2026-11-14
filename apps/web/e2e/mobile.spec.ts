@@ -96,7 +96,9 @@ test.describe("mobile layout (390x844 and 320px)", () => {
     await page.goto("/files");
     const folder = uniqueName("mobile-crumb");
     await createFolder(page, folder);
-    await page.getByText(folder, { exact: true }).dblclick();
+    // By URL: a new folder is selected, not scrolled to, and the shared
+    // root's virtualized listing may not render its row.
+    await page.goto(`/files/${folder}`);
     await expect(page).toHaveURL(new RegExp(`/files/${folder}$`));
 
     const nav = page.getByRole("navigation", { name: "breadcrumb" });

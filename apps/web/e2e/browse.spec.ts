@@ -1,5 +1,6 @@
 import { expect, type Page, test } from "@playwright/test";
 import { breadcrumb, listing } from "./support/regions.js";
+import { removeSandbox } from "./support/sandbox.js";
 import { uniqueName } from "./support/unique.js";
 import { createViewFolder } from "./support/view-folder.js";
 
@@ -19,14 +20,6 @@ async function createFolder(page: Page, name: string): Promise<void> {
   await dialog.getByLabel("Folder name").fill(name);
   await dialog.getByRole("button", { name: "Create" }).click();
   await expect(dialog).toBeHidden();
-}
-
-async function deleteEntry(page: Page, name: string): Promise<void> {
-  await listing(page).getByText(name, { exact: true }).click({ button: "right" });
-  await page.getByRole("menuitem", { name: "Delete" }).click();
-  const confirmDialog = page.getByRole("alertdialog");
-  await confirmDialog.getByRole("button", { name: "Delete" }).click();
-  await expect(confirmDialog).toBeHidden();
 }
 
 test("root listing shows docs and photo.jpg", async ({ page }) => {
@@ -169,7 +162,9 @@ test("a very long folder name never widens the page past the viewport", async ({
   await page.goto("/files");
 
   await createFolder(page, name);
-  await listing(page).getByText(name, { exact: true }).dblclick();
+  // By URL: a new folder is selected, not scrolled to, and the shared root's
+  // virtualized listing may not render its row.
+  await page.goto(`/files/${name}`);
   await expect(page).toHaveURL(new RegExp(`/files/${name}$`));
 
   const { scrollWidth, innerWidth } = await page.evaluate(() => ({
@@ -178,6 +173,5 @@ test("a very long folder name never widens the page past the viewport", async ({
   }));
   expect(scrollWidth).toBeLessThanOrEqual(innerWidth);
 
-  await page.getByRole("link", { name: "Home" }).click();
-  await deleteEntry(page, name);
+  await removeSandbox(page, name);
 });

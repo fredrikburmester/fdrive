@@ -1,5 +1,6 @@
 import { expect, type Page, test } from "@playwright/test";
 import { listing } from "./support/regions.js";
+import { openSandbox, removeSandbox } from "./support/sandbox.js";
 import { uniqueName } from "./support/unique.js";
 
 const PRIMARY_MODIFIER = process.platform === "darwin" ? "Meta" : "Control";
@@ -23,19 +24,20 @@ async function deleteEntry(page: Page, name: string): Promise<void> {
 
 test("the New folder dialog creates a folder that appears in the list", async ({ page }) => {
   const name = uniqueName("new-folder");
-  await page.goto("/files");
+  const sandbox = await openSandbox(page, "folders");
 
   await createFolder(page, name);
 
   await expect(listing(page).getByText(name, { exact: true })).toBeVisible();
 
   await deleteEntry(page, name);
+  await removeSandbox(page, sandbox);
 });
 
 test("renaming a folder via the context menu updates its name in the list", async ({ page }) => {
   const originalName = uniqueName("rename-me");
   const newName = uniqueName("renamed");
-  await page.goto("/files");
+  const sandbox = await openSandbox(page, "folders");
   await createFolder(page, originalName);
 
   await listing(page).getByText(originalName, { exact: true }).click({ button: "right" });
@@ -49,13 +51,14 @@ test("renaming a folder via the context menu updates its name in the list", asyn
   await expect(listing(page).getByText(originalName, { exact: true })).toBeHidden();
 
   await deleteEntry(page, newName);
+  await removeSandbox(page, sandbox);
 });
 
 test("deleting a folder via the context menu asks for confirmation, then removes it", async ({
   page,
 }) => {
   const name = uniqueName("delete-me");
-  await page.goto("/files");
+  const sandbox = await openSandbox(page, "folders");
   await createFolder(page, name);
   await expect(listing(page).getByText(name, { exact: true })).toBeVisible();
 
@@ -69,19 +72,16 @@ test("deleting a folder via the context menu asks for confirmation, then removes
   await confirmDialog.getByRole("button", { name: "Delete" }).click();
 
   await expect(listing(page).getByText(name, { exact: true })).toBeHidden();
+  await removeSandbox(page, sandbox);
 });
 
 test("keyboard navigation: arrow down moves focus, Enter opens a folder, and select-all checks every row", async ({
   page,
 }) => {
-  const sandbox = uniqueName("keyboard-sandbox");
   const folderA = uniqueName("folder-a");
   const folderB = uniqueName("folder-b");
 
-  await page.goto("/files");
-  await createFolder(page, sandbox);
-  await listing(page).getByText(sandbox, { exact: true }).dblclick();
-  await expect(page).toHaveURL(new RegExp(`/files/${sandbox}$`));
+  const sandbox = await openSandbox(page, "keyboard-sandbox");
 
   await createFolder(page, folderA);
   await createFolder(page, folderB);
@@ -114,8 +114,7 @@ test("keyboard navigation: arrow down moves focus, Enter opens a folder, and sel
   // the same now-multi-selected pair a second time and hang waiting for a
   // row that is already gone.
   await deleteEntry(page, folderA);
-  await page.getByRole("link", { name: "Home" }).click();
-  await deleteEntry(page, sandbox);
+  await removeSandbox(page, sandbox);
 });
 
 test("select-all checkbox keeps its native Space key behavior", async ({ page }) => {
