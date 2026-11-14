@@ -168,12 +168,15 @@ Rows are rebuilt by the next scan, so backups leave them out.
 
 Three paths lead to the same per-file processing, fastest first.
 
-1. **The API's queue.** fdrive's API writes the files folder, apart from OCR and the
+1. **The queue.** fdrive's API writes the files folder, apart from OCR and the
    host's own tools. After each change it makes (an upload, a move or rename, a copy, a
    delete, Trash and restore, an Office save, a new modification time, a new folder) it
    adds a row to `idx.work` and sends `NOTIFY idx_work` with the root's name
    (`createIndexWorkWriter` in
-   `packages/db`, fed by local storage's change listener). A row without `target_path`
+   `packages/db`, fed by local storage's change listener). The OCR service does the same
+   when it replaces a PDF with its searchable version or puts a kept original back
+   (`queue_index_work` in `services/ocr`), with a row for that file and no content hint,
+   so search has the new text layer without waiting for the scan. A row without `target_path`
    says "look at `path` again"; with it, `path` moved there. An upload's row carries the
    sha256 the API computed while writing it and the size, `mtime_ns`, `inode` and
    `ctime_ns` of the file it published, so the indexer does not read the file again to hash

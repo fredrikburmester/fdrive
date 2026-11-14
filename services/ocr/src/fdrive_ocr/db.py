@@ -1,7 +1,8 @@
 """All SQL. This service never creates or alters tables: schema ownership lives
 in `packages/db/drizzle/*.sql`. It reads `app.settings` (shared with the
 indexer) and `idx.roots` (upserting by name, same as the indexer), and owns
-`idx.ocr_log` (the done-log) and `idx.ocr_runs` (nightly pass history).
+`idx.ocr_log` (the done-log) and `idx.ocr_runs` (nightly pass history). It
+adds `idx.work` rows for the files it rewrites, as the API does for its own.
 """
 
 from __future__ import annotations
@@ -131,6 +132,28 @@ def record_ocr_log(
             """,
             (root_id, path, size, mtime_ns, status, detail),
         )
+
+
+#: The channel the indexer listens on for new `idx.work` rows; the payload is the root's name.
+INDEX_WORK_CHANNEL = "idx_work"
+
+
+def queue_index_work(conn: psycopg.Connection, root_id: int, root: str, path: str, log: Callable[[str], None]) -> None:
+    """Tells the indexer this service rewrote `path` (root-relative, as
+    `idx.files.path`) with an OCR result or a restored original: an `idx.work`
+    row and `NOTIFY idx_work` with the root's name in one transaction, as the
+    API's `createIndexWorkWriter` writes them. The row has no content hint,
+    since the bytes are new and the indexer has to read them.
+
+    A hint only makes the indexer look sooner. A failure is logged and never
+    raised: its watcher and periodic scan still find the change.
+    """
+    try:
+        with conn.transaction(), conn.cursor() as cur:
+            cur.execute('INSERT INTO "idx"."work" (root_id, path) VALUES (%s, %s)', (root_id, path))
+            cur.execute("SELECT pg_notify(%s, %s)", (INDEX_WORK_CHANNEL, root))
+    except psycopg.Error as error:
+        log(f"[{root}] could not tell the indexer about {path}: {error}")
 
 
 def ocred_keys_for_paths(

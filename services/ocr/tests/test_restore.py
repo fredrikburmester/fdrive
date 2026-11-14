@@ -12,6 +12,7 @@ from pathlib import Path
 
 import psycopg
 import pytest
+from conftest import IndexWork
 
 from fdrive_ocr import db, restore, runner
 from fdrive_ocr.originals import Mapping, mapping_document
@@ -110,6 +111,59 @@ def test_a_restored_original_stays_kept_and_can_be_restored_again(
     assert restore.restore_original(db_conn, state_dir, [target], index, original_id, False, True, lambda _m: None).ok
     assert scan.read_bytes() == ORIGINAL_BODY
     assert len(restore.scan_originals(state_dir)) == 1
+
+
+def test_a_restore_queues_the_restored_pdf_for_the_indexer(
+    db_conn: psycopg.Connection, root_dir: Path, state_dir: str, target: RootTarget, index_work: IndexWork
+) -> None:
+    (root_dir / "docs" / "scan.pdf").write_bytes(ORIGINAL_BODY)
+    _run_pass(db_conn, target, state_dir)
+    assert index_work.notifications() == ["files"]
+    index = restore.OriginalsIndex()
+
+    assert restore.restore_original(
+        db_conn, state_dir, [target], index, _sole_original(state_dir).id, False, False, lambda _m: None
+    ).ok
+
+    hint = (target.root_id, "docs/scan.pdf", None, None, None, None, None, None)
+    assert index_work.rows() == [hint, hint]  # the rewrite's, then the restore's
+    assert index_work.notifications() == ["files"]
+
+
+def test_a_refused_restore_queues_nothing(
+    db_conn: psycopg.Connection, root_dir: Path, state_dir: str, target: RootTarget, index_work: IndexWork
+) -> None:
+    original_id = _keep(state_dir, root_dir, "docs/scan.pdf")
+    (root_dir / "docs" / "scan.pdf").unlink()
+
+    refused = restore.restore_original(
+        db_conn, state_dir, [target], restore.OriginalsIndex(), original_id, False, False, lambda _m: None
+    )
+    assert refused.ok is False
+    assert index_work.rows() == []
+    assert index_work.notifications() == []
+
+
+@pytest.mark.usefixtures("failing_index_work")
+def test_a_failed_indexer_hint_is_logged_and_the_restore_still_succeeds(
+    db_conn: psycopg.Connection, root_dir: Path, state_dir: str, target: RootTarget, index_work: IndexWork
+) -> None:
+    scan = root_dir / "docs" / "scan.pdf"
+    scan.write_bytes(ORIGINAL_BODY)
+    before = scan.stat()
+    _run_pass(db_conn, target, state_dir)
+    logs: list[str] = []
+
+    outcome = restore.restore_original(
+        db_conn, state_dir, [target], restore.OriginalsIndex(), _sole_original(state_dir).id, False, False, logs.append
+    )
+
+    assert outcome.ok
+    assert scan.read_bytes() == ORIGINAL_BODY
+    assert ("docs/scan.pdf", before.st_size, before.st_mtime_ns, "restored") in _ocr_log(db_conn)
+    assert any("could not tell the indexer about docs/scan.pdf: idx.work is unavailable" in line for line in logs)
+    assert index_work.rows() == []
+    assert index_work.notifications() == []
 
 
 # -- refusals -------------------------------------------------------------------------
