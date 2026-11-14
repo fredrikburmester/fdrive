@@ -1,4 +1,4 @@
-import { isUnderPath, normalizePath, type Scope, toFsPath } from "@fdrive/core";
+import { isReservedPath, isUnderPath, normalizePath, type Scope, toFsPath } from "@fdrive/core";
 import type { Principal } from "../auth/principal.ts";
 
 export function containsPath(root: string, path: string): boolean {
@@ -53,11 +53,13 @@ export function trashPathFor(deps: TrashAccessDeps, principal: Principal): strin
   return deps.trashPathForStorage?.(principal.storage) ?? deps.trashPath ?? null;
 }
 
+/** Why a tool refuses a path in one of fdrive's own folders (`isReservedPath`). */
+export const RESERVED_MESSAGE = "path is in the Trash or another of fdrive's own folders";
+
+/** A token path outside fdrive's own folders (`isReservedPath`), which ordinary tools never touch. */
 export function ordinaryPath(deps: TrashAccessDeps, principal: Principal, rawPath: string): string {
   const path = assertTokenPath(principal, rawPath);
-  const trashPath = trashPathFor(deps, principal);
-  if (trashPath !== null && containsPath(trashPath, path))
-    throw new Error("path is in the configured Trash folder");
+  if (isReservedPath(path, trashPathFor(deps, principal))) throw new Error(RESERVED_MESSAGE);
   return path;
 }
 

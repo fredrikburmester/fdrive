@@ -46,10 +46,12 @@ it. Your own home folder, and the folder a "This folder only" search starts in, 
 listed, and a type filter hides the section, since folders have no type.
 
 Index-backed results cover the files folder, including folders other users share with you,
-and require live read permission. The login's Trash folder is left out by every search query,
-mapped through its index scopes, before the query's row limit, so trashed files never crowd out
-live ones. For account-wide queries, text may span linked identities while visual results
-remain scoped to the active identity.
+and require live read permission. fdrive's own folders (`isReservedPath` in `@fdrive/core`: the
+login's Trash folder, fdrive's Trash layout `.fdrive-move-v1` wherever it lies, the Mac app's
+`/.fdrive-desktop` and `.fdrive-backups`) are left out by every search, image search, MCP and
+AI index query, mapped through the login's index scopes, before the query's row limit, so they
+never crowd out live files or count in a total. For account-wide queries, text may span linked
+identities while visual results remain scoped to the active identity.
 
 PDF conversion rewrites the file in place, so System > Searchable PDFs keeps the file each
 rewrite replaced. **Kept originals** there lists them with what each one would overwrite, and

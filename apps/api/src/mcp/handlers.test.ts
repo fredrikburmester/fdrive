@@ -60,6 +60,12 @@ const UNINDEXED_ROOT_SCOPE_CONTEXT: ScopeContext = {
   trashPath: null,
 };
 
+/** What alice's index queries leave out with Trash off: the Mac app's folder and the reserved names. */
+const ALICE_RESERVED = {
+  prefixes: [{ rootId: 1, fsPrefix: "/alice/.fdrive-desktop" }],
+  names: [".fdrive-move-v1", ".fdrive-backups"],
+};
+
 function fail(name: string): never {
   throw new Error(`unexpected call to ${name} in this test`);
 }
@@ -483,6 +489,7 @@ describe("runFindFiles / findFilesInScope", () => {
       indexQueries: stubIndexQueries({
         listFiles: async (_prefixes, filter) => {
           expect(filter).toEqual({
+            exclude: ALICE_RESERVED,
             nameContains: "report",
             modifiedAfterNs: BigInt(new Date("2026-01-01T00:00:00.000Z").getTime()) * 1_000_000n,
             modifiedBeforeNs: BigInt(new Date("2026-02-01T00:00:00.000Z").getTime()) * 1_000_000n,
@@ -657,11 +664,19 @@ describe("runListDirectory", () => {
     expect(result.truncated).toBe(true);
   });
 
-  it("hides the configured Trash entry before pagination", async () => {
+  it("hides the configured Trash and the Mac app's folder before pagination", async () => {
     const modifiedAt = new Date();
     const storage = fakeStorage({
       list: async () => [
         { name: ".trash", path: "/.trash", kind: "dir" as const, size: 0, modifiedAt, ext: "" },
+        {
+          name: ".fdrive-desktop",
+          path: "/.fdrive-desktop",
+          kind: "dir" as const,
+          size: 0,
+          modifiedAt,
+          ext: "",
+        },
         { name: "a", path: "/a", kind: "file" as const, size: 1, modifiedAt, ext: "" },
       ],
     });
@@ -673,19 +688,22 @@ describe("runListDirectory", () => {
     expect(result.truncated).toBe(false);
   });
 
-  it.each(["/.trash", "/.trash/deleted.txt", "/docs/../.trash"])(
-    "rejects configured Trash path %s before touching storage",
-    async (path) => {
-      const list = vi.fn(async () => []);
-      const storage = fakeStorage({ list });
-      const deps = baseDeps({ trashPathForStorage: () => "/.trash" });
+  it.each([
+    "/.trash",
+    "/.trash/deleted.txt",
+    "/docs/../.trash",
+    "/.fdrive-desktop",
+    "/old/.fdrive-move-v1/file",
+  ])("rejects %s, in one of fdrive's own folders, before touching storage", async (path) => {
+    const list = vi.fn(async () => []);
+    const storage = fakeStorage({ list });
+    const deps = baseDeps({ trashPathForStorage: () => "/.trash" });
 
-      await expect(runListDirectory(deps, fakePrincipal(storage), { path })).rejects.toThrow(
-        "configured Trash folder",
-      );
-      expect(list).not.toHaveBeenCalled();
-    },
-  );
+    await expect(runListDirectory(deps, fakePrincipal(storage), { path })).rejects.toThrow(
+      "fdrive's own folders",
+    );
+    expect(list).not.toHaveBeenCalled();
+  });
 
   it("keeps a Trash-looking entry when Trash is disabled", async () => {
     const modifiedAt = new Date();
@@ -1586,19 +1604,20 @@ describe("runCreateFolder", () => {
 });
 
 describe("runMovePath", () => {
-  it("refuses occupied destinations without moving", async () => {
-    const move = vi.fn();
-    const storage = fakeStorage({
-      move,
-      statFile: async () => ({ size: 12, modifiedAt: null, contentType: null }),
+  it("leaves refusing an occupied destination to storage, checking nothing first", async () => {
+    const statFile = vi.fn();
+    const move = vi.fn(async () => {
+      throw new StorageError("conflict", "something already exists at /b");
     });
+    const storage = fakeStorage({ move, statFile });
     await expect(
       runMovePath(baseDeps({ writesEnabled: true }), fakePrincipal(storage), {
         src: "/a",
         dst: "/b",
       }),
     ).rejects.toThrow("already exists");
-    expect(move).not.toHaveBeenCalled();
+    expect(move).toHaveBeenCalledWith("/a", "/b");
+    expect(statFile).not.toHaveBeenCalled();
   });
 
   it("reports completed moves with warnings when metadata and audit persistence fail", async () => {
@@ -1681,7 +1700,7 @@ describe("runMovePath", () => {
       dst: "/b.txt",
     });
 
-    expect(move).toHaveBeenCalledWith("/a.txt", "/b.txt", { overwrite: false });
+    expect(move).toHaveBeenCalledWith("/a.txt", "/b.txt");
     expect(recordMove).toHaveBeenCalledWith({
       rootId: 1,
       src: "alice/a.txt",
@@ -1708,7 +1727,7 @@ describe("runMovePath", () => {
 
     // The provider forwards both strings verbatim, so both must be the exact
     // paths the scope admission was decided on.
-    expect(move).toHaveBeenCalledWith("/a.txt", "/b.txt", { overwrite: false });
+    expect(move).toHaveBeenCalledWith("/a.txt", "/b.txt");
     expect(recordMove).toHaveBeenCalledWith({
       rootId: 1,
       src: "alice/a.txt",
@@ -2040,5 +2059,75 @@ describe("runRecentMoves / recentMovesInScope", () => {
 
     expect(result.moves).toEqual([{ at: at.toISOString(), src: "/a.txt", dst: "/keep.txt" }]);
     expect(result.partial).toBe(true);
+  });
+});
+
+describe("fdrive's own folders", () => {
+  /** What alice's index queries leave out with Trash at `/.trash`. */
+  const exclude = {
+    prefixes: [
+      { rootId: 1, fsPrefix: "/alice/.trash" },
+      { rootId: 1, fsPrefix: "/alice/.fdrive-desktop" },
+    ],
+    names: [".fdrive-move-v1", ".fdrive-backups"],
+  };
+
+  it("asks every index query to leave them out before its limit", async () => {
+    const target = makeFile({ id: 1, path: "alice/target.md", sha256: "s" });
+    const listFiles = vi.fn(async () => ({ total: 0, files: [] }));
+    const filesBySha256 = vi.fn(async () => []);
+    const duplicates = vi.fn(async () => []);
+    const similar = vi.fn(async () => []);
+    const recentMoves = vi.fn(async () => []);
+    const deps = baseDeps({
+      trashPathForStorage: () => "/.trash",
+      indexQueries: stubIndexQueries({
+        listFiles,
+        filesBySha256,
+        duplicates,
+        similar,
+        recentMoves,
+        fileByPath: async () => target,
+        statsForFileIds: async () => ({ chunks: 0, chunksEmbedded: 0 }),
+      }),
+    });
+    const principal = fakePrincipal();
+
+    await runFindFiles(deps, principal, {});
+    await runFolderOverview(deps, principal, {});
+    await runIndexStats(deps, principal);
+    await runFileInfo(deps, principal, { path: "/target.md" });
+    await runFindDuplicates(deps, principal, {});
+    await runSimilarFiles(deps, principal, { path: "/target.md" });
+    await runRecentMoves(deps, principal, {});
+
+    expect(listFiles.mock.calls.map((call) => (call as unknown[])[1])).toEqual([
+      expect.objectContaining({ exclude }),
+      { exclude },
+      { exclude },
+    ]);
+    expect(filesBySha256).toHaveBeenCalledWith(expect.anything(), "s", 1, { exclude });
+    expect(duplicates).toHaveBeenCalledWith(expect.anything(), expect.any(Number), 40, {
+      exclude,
+    });
+    expect(similar).toHaveBeenCalledWith(1, expect.anything(), 10, { exclude });
+    expect(recentMoves).toHaveBeenCalledWith(expect.anything(), "mcp", 50, { exclude });
+  });
+
+  it("never maps an index row into one, even one a lookup by path finds", async () => {
+    const ctx = await resolveScopeContext(stubIndexQueries(), ALICE_HOME_SCOPES, "/.trash");
+    if (ctx === null) throw new Error("expected a scope context");
+    for (const path of [
+      "alice/.trash/a.txt",
+      "alice/.fdrive-desktop/staging/a.txt",
+      "alice/old/.fdrive-move-v1/file/p/a.txt/v/1",
+      "alice/nas/.fdrive-backups/a.tar",
+    ]) {
+      const file = makeFile({ id: 1, path });
+      const deps = baseDeps({ indexQueries: stubIndexQueries({ fileByPath: async () => file }) });
+      await expect(
+        fileInfoInScope(deps, ctx, fakeAuthorizer(), { path: `/${path.slice(6)}` }),
+      ).rejects.toThrow("not indexed");
+    }
   });
 });

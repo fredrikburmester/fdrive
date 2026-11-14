@@ -207,9 +207,13 @@ describe("createOrganizeService", () => {
       expect(root.kind).toBe("bad_request");
       expect(root.message).toBe("The drive root cannot be moved.");
 
-      const trash = await startError(service, principal, { paths: ["/.Trash/old.pdf"] });
-      expect(trash.kind).toBe("bad_request");
-      expect(trash.message).toBe("Items in Trash cannot be organized.");
+      for (const path of ["/.Trash/old.pdf", "/.fdrive-desktop/staging/a.pdf"]) {
+        const reserved = await startError(service, principal, { paths: [path] });
+        expect(reserved.kind).toBe("bad_request");
+        expect(reserved.message).toBe(
+          "Items in Trash or fdrive's own folders cannot be organized.",
+        );
+      }
     });
 
     it("uses the configured Trash path when the storage has none of its own", async () => {
@@ -308,7 +312,12 @@ describe("createOrganizeService", () => {
             conflict: false,
           },
         ],
-        unchanged: [{ path: "/Inbox/b.pdf", reason: "The suggested folder is in Trash." }],
+        unchanged: [
+          {
+            path: "/Inbox/b.pdf",
+            reason: "The suggested folder is in Trash or another of fdrive's own folders.",
+          },
+        ],
       });
       expect(starts[0]?.tools.map((tool) => tool.name)).toEqual([
         "folder_tree",

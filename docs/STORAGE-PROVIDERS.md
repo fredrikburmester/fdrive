@@ -79,24 +79,35 @@ publication or move folders by copying; the files folder sets none of them, and 
 path still honours them.
 
 Paths are the storage's own, already resolved from a scope. `statFile` throws `bad_request` on a
-directory and `not_found` on a missing path. `move`, `copy` and `upload` overwrite unless
-`overwrite: false`. `download` honours `range` with a 206 and `Content-Range`, and `ifRange`.
+directory and `not_found` on a missing path. `move`, `copy` and `upload` refuse a taken target
+with `conflict` unless `overwrite: true`; callers never check a target first.
+`download` honours `range` with a 206 and `Content-Range`, and `ifRange`.
 Failures are `StorageError`s from core.
 
 How the files folder implements it:
 
 - **Confinement.** Paths are normalized and joined to the home; a symlink is followed only when
   its real path stays inside the home or the shared folder ([home.ts](../packages/local/src/home.ts)).
-- **Atomic publish.** Uploads and copies write a temporary file beside the target and `rename`
-  it over the name; `overwrite: false` publishes with `link`, a real create-if-absent.
-- **Moves** are one `rename`, also between a user's files and a writable shared folder.
+- **Atomic publish.** Uploads and file copies write a temporary file beside the target and
+  publish it with `link`, a real create-if-absent; only `overwrite: true` renames it over a
+  taken name.
+- **Moves** are one `rename`, also between a user's files and a writable shared folder. The
+  target is checked just before, since Node has no `RENAME_NOREPLACE`; a `link` and `unlink`
+  would close that gap for files, but file watchers (the indexer's) would see a deleted file and
+  an unfinished new one instead of a move. A target that is the source under another spelling,
+  on a disk that ignores case, is a case-only rename, not a conflict.
 - **Spelling.** On a disk that ignores case or accent encoding, `stat` reports the stored
   spelling as `path`, so links and lookups land on the name listings show.
 - **Downloads** send `Last-Modified` and no ETag; `ifRange` applies when it names the file's
   current second.
+- **Stamps.** `contentStamp` reads a file's size, modification time, inode and change time from
+  its open descriptor, none of its bytes. Office versions documents from it and requires it;
+  the Mac's version checks use it to trust index rows.
 - **Read proofs** open nothing: `probeFileRead` asks `access(R_OK)` and then checks for a
   regular file, the checks `download` makes, and fails with the kinds `download` would.
-- **Zip** streams with `yazl`.
+- **Zip** streams with `yazl`, reading each file only as the archive is read, and reports files
+  and bytes read once every file is counted (`onProgress`). Compressing to zip
+  (`/fs/compress`) streams this zip straight into an upload of the archive.
 - **Trash.** The storage factory wraps the storage with core's `withMoveToTrash` and
   `createRecycleFolderTrash`; deleted items live in `<trash folder>/.fdrive-move-v1`. Settings
   are `trash.configuration.<providerId>` in `app.settings`, disabled at `/.trash` by default,

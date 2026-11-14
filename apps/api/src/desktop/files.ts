@@ -1,12 +1,18 @@
 import { createHash, randomUUID } from "node:crypto";
 import type { DesktopEntry } from "@fdrive/contracts";
-import { type ContentStamp, type FileEntry, isUnderPath, normalizePath } from "@fdrive/core";
+import {
+  type ContentStamp,
+  DESKTOP_INTERNAL_ROOT,
+  type FileEntry,
+  isReservedPath,
+  isUnderPath,
+  normalizePath,
+} from "@fdrive/core";
 import type { IndexedContent } from "@fdrive/db";
 import type { Principal } from "../auth/principal.js";
 import { ApiHttpError } from "../errors.js";
 import { runStorageCall } from "../fs/routes.js";
 import { indexedVersion } from "./indexed-content.js";
-import { DESKTOP_INTERNAL_ROOT } from "./internal-root.js";
 import type { DesktopDeps } from "./pairing.js";
 
 const contains = (root: string, path: string) => root === path || isUnderPath(root, path);
@@ -27,9 +33,10 @@ export { DESKTOP_INTERNAL_ROOT };
 
 /**
  * Whether a desktop connection may see the normalized `path` at all: inside
- * its grants (or above one, when `browse`ing towards it), and outside the
- * storage's Trash (`trash`) and fdrive's own desktop folder. Listings drop
- * every entry this refuses, and so does the change feed.
+ * its grants (or above one, when `browse`ing towards it), and outside
+ * fdrive's own folders (`isReservedPath`: the storage's Trash, `trash`, the
+ * Mac app's own folder and the rest). Listings drop every entry this
+ * refuses, and so does the change feed.
  */
 export function desktopPathAllowed(
   principal: Principal,
@@ -41,8 +48,7 @@ export function desktopPathAllowed(
   return (
     (grants?.mode === "read" || (writeProtocol && grants?.mode === "full")) &&
     grants.paths.some((root) => contains(root, path) || (browse && contains(path, root))) &&
-    !(trash && contains(trash, path)) &&
-    !contains(DESKTOP_INTERNAL_ROOT, path)
+    !isReservedPath(path, trash)
   );
 }
 

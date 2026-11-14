@@ -82,6 +82,16 @@ export interface ContentStamp {
   readonly ctimeNs: bigint;
 }
 
+/** How far `StorageProvider.zip` has got. */
+export interface ZipProgress {
+  /** Files read into the archive so far. */
+  readonly processed: number;
+  /** Files the archive holds. */
+  readonly total: number;
+  /** Bytes of those files read so far. */
+  readonly bytes: number;
+}
+
 /**
  * Provider-neutral storage port. `@fdrive/local` implements it over a folder
  * on the API's disk. All paths are the
@@ -93,9 +103,9 @@ export interface ContentStamp {
  *
  * - `statFile` on a directory throws `StorageError("bad_request")`; on a
  *   missing path `not_found`. `stat` reports either kind.
- * - `move`, `copy` and `upload` overwrite an existing target unless the
- *   provider can refuse it (`overwrite: false`); callers that need a
- *   conflict pre-check the target.
+ * - `move`, `copy` and `upload` refuse an existing target with
+ *   `StorageError("conflict")` unless asked to replace it (`overwrite:
+ *   true`). Callers do not check a target first: the storage refuses it.
  * - `download` honours `range` with status 206 and a `Content-Range`, and
  *   `ifRange` when given.
  * - Optional methods are absent, not throwing, when the backend cannot
@@ -103,7 +113,7 @@ export interface ContentStamp {
  */
 /** Options shared by `move` and `copy`. */
 export interface TransferOptions {
-  /** Replace an existing target rather than refusing it. */
+  /** Replace an existing target; without it a taken target is a `conflict`. */
   readonly overwrite?: boolean;
   /**
    * Continue a transfer an earlier attempt left unfinished: what is already at
@@ -222,7 +232,7 @@ export interface StorageProvider {
       mkdirParents?: boolean;
       modifiedAt?: Date;
       contentLength?: number;
-      /** False asks the provider to refuse an existing target with `conflict`, where it can. */
+      /** Replace an existing file; without it a taken name is a `conflict`. */
       overwrite?: boolean;
       signal?: AbortSignal;
     },
@@ -252,7 +262,11 @@ export interface StorageProvider {
   /** Absent when the backend has no server-side zip. */
   zip?(
     paths: readonly string[],
-    opts?: { signal?: AbortSignal },
+    opts?: {
+      signal?: AbortSignal;
+      /** Called once every file is counted, then as each is read into the archive. */
+      onProgress?: (progress: ZipProgress) => void;
+    },
   ): Promise<ReadableStream<Uint8Array>>;
 
   /** Present only when this provider exposes a recoverable recycle folder. */

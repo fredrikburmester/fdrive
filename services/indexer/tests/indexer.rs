@@ -81,6 +81,8 @@ fn walk_skips_junk_and_sorts_directories() {
         ("._a.txt", "resource fork"),
         ("node_modules/x.txt", "x"),
         (".git/config", "x"),
+        ("alice/.fdrive-desktop/staging/s.txt", "staged"),
+        ("alice/.fdrive-backups/install/b.tar", "backup"),
         ("sub/c.txt", "c"),
         ("sub/deeper/d.txt", "d"),
         ("Zed/e.txt", "e"),
@@ -140,6 +142,7 @@ fn walk_tree_reports_the_folders_it_descends_into() {
         "node_modules/pkg",
         ".git/objects",
         "@eaDir",
+        ".fdrive-desktop/trash",
     ] {
         std::fs::create_dir_all(root.join(rel)).unwrap();
     }
@@ -1308,6 +1311,37 @@ fn a_scan_indexes_new_files_and_sweeps_vanished_rows() {
     // Nothing left to do: the deleted row stays deleted and is not swept twice.
     let again = scan_once(&ctx);
     assert_eq!((again.seen, again.changed, again.deleted), (3, 0, 0));
+}
+
+#[test]
+fn a_scan_sweeps_what_was_indexed_in_the_mac_apps_folder() {
+    let env = Env::new();
+    let ctx = env.ctx(fv(false, true, false, false, false));
+    let mut c = env.client();
+    env.write("alice/.fdrive-desktop/staging/a.txt", b"staged");
+    env.seed(&ctx, "alice/.fdrive-desktop/staging/a.txt", "sha", "indexed");
+    let folder = |path: &str| db::FolderRow {
+        path: path.to_owned(),
+        mtime_ns: 1,
+    };
+    db::sync_folders(
+        &mut c,
+        ctx.root_id,
+        &[
+            folder("alice"),
+            folder("alice/.fdrive-desktop"),
+            folder("alice/.fdrive-desktop/staging"),
+        ],
+        None,
+    )
+    .unwrap();
+    env.write("alice/a.txt", b"mine");
+    let result = scan_once(&ctx);
+    assert_eq!((result.seen, result.changed, result.deleted), (1, 1, 1));
+    let manifest = db::scan_manifest(&mut c, ctx.root_id).unwrap();
+    assert!(manifest["alice/.fdrive-desktop/staging/a.txt"].deleted);
+    let paths: Vec<String> = env.folders(&ctx).into_iter().map(|(p, _)| p).collect();
+    assert_eq!(paths, ["alice"]);
 }
 
 #[test]

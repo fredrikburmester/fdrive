@@ -5,7 +5,7 @@ import type { ReadAuthorizer } from "../scoping/read-authorizer.ts";
 import { roundTripVirtualPath } from "../scoping/round-trip.ts";
 import type { SidecarResult } from "../system/sidecar-client.js";
 import type { ImageEmbedClient, ImageEmbedHealthInfo } from "./image-embed-client.js";
-import { trashExclusion } from "./scopes.js";
+import { reservedExclusion } from "./scopes.js";
 
 /**
  * Rows fanned out from `IndexQueries.searchImages` before ranking. Matches
@@ -65,8 +65,8 @@ export interface ImageSearchServiceDeps {
    */
   readonly resolveHealth: () => Promise<SidecarResult<ImageEmbedHealthInfo> | null>;
   /**
-   * Same Trash rule as `SearchServiceDeps.trashPath`: the query leaves the
-   * folder out before its limit. A test/default value; production passes a
+   * Same rule as `SearchServiceDeps.trashPath`: the query leaves fdrive's
+   * own folders out before its limit. A test/default value; production passes a
    * request snapshot.
    */
   readonly trashPath?: string | null;
@@ -163,7 +163,7 @@ export function createImageSearchService(deps: ImageSearchServiceDeps): ImageSea
         embedded.vector,
         health.data.model,
         IMAGE_SEARCH_FANOUT_LIMIT,
-        { exclude: trashExclusion(input.scopes, trashPath, rootIds) },
+        { exclude: reservedExclusion(input.scopes, trashPath, rootIds) },
       );
       const fanoutCut = rows.length >= IMAGE_SEARCH_FANOUT_LIMIT;
       const ranked = selectImageHits(rows, input.limit);

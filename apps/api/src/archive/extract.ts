@@ -8,8 +8,6 @@ import { createGunzip, createZstdDecompress } from "node:zlib";
 import {
   baseName,
   detectArchiveKind,
-  isStorageError,
-  StorageError,
   type StorageProvider,
   safeEntryPath,
   stripArchiveExtension,
@@ -111,23 +109,6 @@ function capStreamBytes(source: Readable, maxBytes: number): Readable {
   return capped;
 }
 
-/** Preserve existing files for every archive format, even outside the route wrapper. */
-async function uploadNewEntry(
-  storage: StorageProvider,
-  target: string,
-  body: ReadableStream<Uint8Array>,
-  opts: { mkdirParents: true; signal: AbortSignal; contentLength?: number },
-): Promise<void> {
-  try {
-    await storage.stat(target);
-  } catch (error) {
-    if (!isStorageError(error) || error.kind !== "not_found") throw error;
-    await storage.upload(target, body, { ...opts, overwrite: false });
-    return;
-  }
-  throw new StorageError("conflict", `already exists: ${target}`);
-}
-
 /**
  * Caps one upload while sharing the expanded-byte budget across all archive entries.
  * Closing either side closes the other, so a rejected upload or limit error cannot
@@ -155,7 +136,8 @@ async function uploadCappedEntry(
   entryStream.pipe(capped);
 
   try {
-    await uploadNewEntry(storage, target, webStreamFromNodeReadable(capped), opts);
+    // A new file only: storage refuses a name that is taken.
+    await storage.upload(target, webStreamFromNodeReadable(capped), { ...opts, overwrite: false });
   } catch (error) {
     entryStream.destroy();
     capped.destroy();
@@ -348,7 +330,10 @@ async function handleTarEntry(
   };
   limits.noteDeclaredFileSize(header.size ?? 0);
   try {
-    await uploadNewEntry(storage, target, webStreamFromNodeReadable(entryStream), uploadOpts);
+    await storage.upload(target, webStreamFromNodeReadable(entryStream), {
+      ...uploadOpts,
+      overwrite: false,
+    });
   } catch (error) {
     entryStream.destroy();
     throw error;

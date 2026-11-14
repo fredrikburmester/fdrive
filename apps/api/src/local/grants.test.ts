@@ -58,6 +58,8 @@ async function fixture(options: Partial<LocalGrantServiceDeps> = {}) {
   return { repos, local, row, alice, bob, carol, aliceRetired, service, storageFor };
 }
 
+const RESERVED = "fdrive's own folders, like Trash, cannot be shared";
+
 describe("createLocalGrantService: sharing a folder", () => {
   it("shares a folder, which the other user finds under Shared with me", async () => {
     const h = await fixture();
@@ -137,8 +139,11 @@ describe("createLocalGrantService: sharing a folder", () => {
       "bad_request",
       "a folder shared with you cannot be shared on",
     ],
-    ["Trash", "/.trash", "bad_request", "Trash cannot be shared"],
-    ["a folder in Trash", "/.trash/old", "bad_request", "Trash cannot be shared"],
+    ["Trash", "/.trash", "bad_request", RESERVED],
+    ["a folder in Trash", "/.trash/old", "bad_request", RESERVED],
+    ["the Mac app's folder", "/.fdrive-desktop/staging", "bad_request", RESERVED],
+    ["fdrive's Trash layout", "/old/.fdrive-move-v1/dir", "bad_request", RESERVED],
+    ["a backup folder", "/nas/.fdrive-backups", "bad_request", RESERVED],
     ["a file", "/notes.txt", "bad_request", "only folders can be shared"],
     ["a folder that does not exist", "/Missing", "not_found", "folder not found"],
   ])("refuses to share %s", async (_name, path, kind, message) => {
@@ -161,13 +166,6 @@ describe("createLocalGrantService: sharing a folder", () => {
       kind: "bad_request",
       message: "you already have this folder",
     });
-  });
-
-  it("shares nothing while Trash is the whole of the user's files", async () => {
-    const h = await fixture({ trashPathFor: async () => "/" });
-    await expect(
-      h.service.create(h.alice.id, { path: "/Projects", username: "bob", access: "read" }),
-    ).rejects.toMatchObject({ kind: "bad_request", message: "Trash cannot be shared" });
   });
 
   it("shares a folder named like Trash while Trash is off", async () => {

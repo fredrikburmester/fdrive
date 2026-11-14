@@ -140,18 +140,26 @@ export interface RecencyDecay {
   readonly floor: number;
 }
 
-/** Options every search query takes. */
-export interface SearchQueryOptions {
-  /**
-   * Subtrees to leave out, shaped like the scope: a row at or under any of
-   * them is dropped before the limit, so it never takes a place a match the
-   * caller can use would have had. Search passes the Trash folder here.
-   */
-  readonly exclude?: readonly ScopePrefix[];
+/**
+ * What a read over a scope leaves out: rows at or under one of `prefixes`
+ * (shaped like the scope), and rows with a folder named one of `names`, in
+ * any case, anywhere in their path. They are dropped before the limit and
+ * every count, so they never take a place or a total a row the caller can
+ * use would have had. The API leaves fdrive's own folders out here
+ * (`isReservedPath` in `@fdrive/core`).
+ */
+export interface IndexExclusion {
+  readonly prefixes: readonly ScopePrefix[];
+  readonly names: readonly string[];
+}
+
+/** Options every scoped read that can leave rows out takes. */
+export interface ScopedReadOptions {
+  readonly exclude?: IndexExclusion;
 }
 
 /** Options for `IndexQueries.fulltext`. */
-export interface FulltextOptions extends SearchQueryOptions {
+export interface FulltextOptions extends ScopedReadOptions {
   /** Weights each chunk's rank by its file's age; by rank alone when absent. */
   readonly recency?: RecencyDecay;
   /** A stricter `to_tsquery('simple', ...)` expression; chunks matching it sort ahead of the rest. */
@@ -168,13 +176,13 @@ export interface FolderHit {
 }
 
 /** Options for `IndexQueries.folders`. */
-export interface FolderOptions extends SearchQueryOptions {
+export interface FolderOptions extends ScopedReadOptions {
   /** Weights each name's similarity by the folder's age; by similarity alone when absent. */
   readonly recency?: RecencyDecay;
 }
 
 /** Options for `IndexQueries.filename`. */
-export interface FilenameOptions extends SearchQueryOptions {
+export interface FilenameOptions extends ScopedReadOptions {
   /** Weights each name's similarity by its file's age; by similarity alone when absent. */
   readonly recency?: RecencyDecay;
 }
@@ -212,7 +220,7 @@ export const MAX_STATS_FILE_ID_PARAMS = 2000;
  * Metadata-only filters for `listFiles`, matching the MCP `find_files` tool
  * and the `folder_overview` aggregation.
  */
-export interface FileFilter {
+export interface FileFilter extends ScopedReadOptions {
   readonly nameContains?: string;
   readonly ext?: string;
   readonly modifiedAfterNs?: bigint;
@@ -284,7 +292,7 @@ export interface IndexQueries {
     scopePrefixes: readonly ScopePrefix[],
     embedding: readonly number[],
     limit: number,
-    options?: SearchQueryOptions,
+    options?: ScopedReadOptions,
   ): Promise<ContentHit[]>;
   /** Chunks matching `tsquery` (a `to_tsquery('simple', ...)` expression), best rank first. */
   fulltext(
@@ -346,6 +354,7 @@ export interface IndexQueries {
     scopePrefixes: readonly ScopePrefix[],
     sha256: string,
     excludeId: number,
+    options?: ScopedReadOptions,
   ): Promise<IndexedFile[]>;
   /**
    * The sha256 of the most recently soft-deleted row at exactly
@@ -396,12 +405,14 @@ export interface IndexQueries {
     scopePrefixes: readonly ScopePrefix[],
     minSize: number,
     limit: number,
+    options?: ScopedReadOptions,
   ): Promise<DuplicateGroup[]>;
   /** Files whose average chunk embedding is closest to `fileId`'s, excluding itself. */
   similar(
     fileId: number,
     scopePrefixes: readonly ScopePrefix[],
     limit: number,
+    options?: ScopedReadOptions,
   ): Promise<SimilarFile[]>;
   /** The most recently modified files in a scope. */
   recentFiles(scopePrefixes: readonly ScopePrefix[], limit: number): Promise<IndexedFile[]>;
@@ -419,17 +430,22 @@ export interface IndexQueries {
     vector: readonly number[],
     model: string,
     limit: number,
-    options?: SearchQueryOptions,
+    options?: ScopedReadOptions,
   ): Promise<ImageSearchHit[]>;
   /** Total embedded rows and the model that wrote the most of them, for the System page. */
   imageEmbeddingStats(): Promise<ImageEmbeddingStats>;
   /** Appends a row to `idx.moves`, the audit log the MCP `move_path` tool writes to and `recentMoves` reads back. */
   recordMove(input: { rootId: number; src: string; dst: string; actor: string }): Promise<void>;
-  /** The most recent `idx.moves` rows for `actor`, restricted to roots present in `scopePrefixes`. */
+  /**
+   * The most recent `idx.moves` rows for `actor` whose both ends lie in
+   * `scopePrefixes`; with `exclude`, a move either end of which it leaves
+   * out is left out.
+   */
   recentMoves(
     scopePrefixes: readonly ScopePrefix[],
     actor: string,
     limit: number,
+    options?: ScopedReadOptions,
   ): Promise<MoveRecord[]>;
 }
 
@@ -456,8 +472,8 @@ function scopeCondition(prefixes: readonly ScopePrefix[], columns: PathColumns =
 
 /** The root and path columns of a table whose rows `ScopePrefix`es select. */
 interface PathColumns {
-  readonly rootId: typeof files.rootId | typeof folders.rootId;
-  readonly path: typeof files.path | typeof folders.path;
+  readonly rootId: typeof files.rootId | typeof folders.rootId | typeof moves.rootId;
+  readonly path: typeof files.path | typeof folders.path | typeof moves.src | typeof moves.dst;
 }
 
 const FILE_COLUMNS: PathColumns = { rootId: files.rootId, path: files.path };
@@ -473,15 +489,21 @@ function underClause(clause: ScopeClause, columns: PathColumns = FILE_COLUMNS) {
 }
 
 /**
- * Leaves out the rows at or under any of `prefixes`, the inverse of
- * `scopeCondition`; `undefined`, which `and()` skips, when there are none.
+ * Leaves out what `exclude` names (see `IndexExclusion`); `undefined`, which
+ * `and()` skips, when it names nothing. A name is matched as a whole segment
+ * of the path, its own last one included.
  */
-function exclusionCondition(prefixes: readonly ScopePrefix[] = [], columns = FILE_COLUMNS) {
-  const clauses = toScopeClauses(prefixes);
-  if (clauses.length === 0) {
-    return undefined;
-  }
-  return and(...clauses.map((clause) => sql`NOT ${underClause(clause, columns)}`));
+function exclusionCondition(exclude: IndexExclusion | undefined, columns = FILE_COLUMNS) {
+  const parts = [
+    ...toScopeClauses(exclude?.prefixes ?? []).map(
+      (clause) => sql`NOT ${underClause(clause, columns)}`,
+    ),
+    ...(exclude?.names ?? []).map(
+      (name) =>
+        sql`('/' || ${columns.path} || '/') NOT ILIKE ${`%/${escapeLikePattern(name)}/%`} ESCAPE '\\'`,
+    ),
+  ];
+  return parts.length === 0 ? undefined : and(...parts);
 }
 
 /** Restricts one `idx.moves` path to the caller's root-relative scope. */
@@ -738,7 +760,11 @@ export function createIndexQueries(db: Db): IndexQueries {
     },
 
     async listFiles(scopePrefixes, filter, order, limit, offset = 0) {
-      const conditions = [scopeCondition(scopePrefixes), isNull(files.deletedAt)];
+      const conditions = [
+        scopeCondition(scopePrefixes),
+        exclusionCondition(filter.exclude),
+        isNull(files.deletedAt),
+      ];
       if (filter.nameContains !== undefined) {
         const pattern = `%${escapeLikePattern(filter.nameContains)}%`;
         conditions.push(sql`${files.name} ILIKE ${pattern} ESCAPE '\\'`);
@@ -778,13 +804,14 @@ export function createIndexQueries(db: Db): IndexQueries {
       return { total: Number(totalRow?.value ?? 0), files: rows.map(toIndexedFile) };
     },
 
-    async filesBySha256(scopePrefixes, sha256, excludeId) {
+    async filesBySha256(scopePrefixes, sha256, excludeId, options = {}) {
       const rows = await db
         .select()
         .from(files)
         .where(
           and(
             scopeCondition(scopePrefixes),
+            exclusionCondition(options.exclude),
             isNull(files.deletedAt),
             eq(files.sha256, sha256),
             ne(files.id, excludeId),
@@ -915,7 +942,7 @@ export function createIndexQueries(db: Db): IndexQueries {
         .slice(0, maxChars);
     },
 
-    async duplicates(scopePrefixes, minSize, limit) {
+    async duplicates(scopePrefixes, minSize, limit, options = {}) {
       const rows = await db
         .select({
           sha256: files.sha256,
@@ -929,6 +956,7 @@ export function createIndexQueries(db: Db): IndexQueries {
         .where(
           and(
             scopeCondition(scopePrefixes),
+            exclusionCondition(options.exclude),
             isNull(files.deletedAt),
             isNotNull(files.sha256),
             sql`${files.size} >= ${minSize}`,
@@ -948,7 +976,7 @@ export function createIndexQueries(db: Db): IndexQueries {
       }));
     },
 
-    async similar(fileId, scopePrefixes, limit) {
+    async similar(fileId, scopePrefixes, limit, options = {}) {
       const [avgRow] = await db
         .select({ avgEmbedding: sql<string | null>`avg(${chunks.embedding})::vector` })
         .from(chunks)
@@ -967,6 +995,7 @@ export function createIndexQueries(db: Db): IndexQueries {
         .where(
           and(
             scopeCondition(scopePrefixes),
+            exclusionCondition(options.exclude),
             isNull(files.deletedAt),
             ne(files.id, fileId),
             isNotNull(chunks.embedding),
@@ -1050,7 +1079,7 @@ export function createIndexQueries(db: Db): IndexQueries {
       });
     },
 
-    async recentMoves(scopePrefixes, actor, limit) {
+    async recentMoves(scopePrefixes, actor, limit, options = {}) {
       if (scopePrefixes.length === 0) {
         return [];
       }
@@ -1063,6 +1092,8 @@ export function createIndexQueries(db: Db): IndexQueries {
             isNotNull(moves.src),
             movePathScopeCondition(scopePrefixes, moves.dst),
             isNotNull(moves.dst),
+            exclusionCondition(options.exclude, { rootId: moves.rootId, path: moves.src }),
+            exclusionCondition(options.exclude, { rootId: moves.rootId, path: moves.dst }),
             eq(moves.actor, actor),
           ),
         )

@@ -160,6 +160,9 @@ describe("ownedShareAccess", () => {
     await access.upload("new.txt", new TextEncoder().encode("hello"), { contentLength: 5 });
     expect(storage.dump()["/inbox/new.txt"]).toBe("hello");
     expect(consume).toHaveBeenCalledTimes(1);
+    // A visitor's upload of a name already there replaces it.
+    await access.upload("new.txt", new TextEncoder().encode("again"));
+    expect(storage.dump()["/inbox/new.txt"]).toBe("again");
     const archive = build({ "/a": "a", "/b": "b" }, { paths: ["/a", "/b"] });
     expect(await kindOf(archive.access.list("/"))).toBe("bad_request");
     expect(await kindOf(archive.access.download("/"))).toBe("bad_request");

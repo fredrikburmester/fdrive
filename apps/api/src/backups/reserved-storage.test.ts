@@ -2,7 +2,7 @@ import { Readable } from "node:stream";
 import { StorageError } from "@fdrive/core";
 import { createMemoryStorage } from "@fdrive/core/testing";
 import { expect, it, vi } from "vitest";
-import { isBackupPath, withoutBackupPaths } from "./reserved-storage.js";
+import { withoutBackupPaths } from "./reserved-storage.js";
 
 it("hides backup paths from browsing and refuses reads, writes and ancestor mutation", async () => {
   const raw = Object.assign(createMemoryStorage(), {
@@ -22,7 +22,6 @@ it("hides backup paths from browsing and refuses reads, writes and ancestor muta
   await raw.upload("/private/.fdrive-backups/snapshot", new Uint8Array([1]));
   await raw.upload("/private/visible", new Uint8Array([2]));
   const storage = withoutBackupPaths(raw);
-  expect(isBackupPath("/private/.FDRIVE-BACKUPS/file")).toBe(true);
   expect((await storage.list("/private")).map((item) => item.name)).toEqual(["visible"]);
   await expect(storage.list("/private/.fdrive-backups")).rejects.toMatchObject({
     kind: "forbidden",

@@ -1,7 +1,10 @@
 import { execFileSync } from "node:child_process";
+import { createReadStream, type ReadStream } from "node:fs";
 import {
+  chmod,
   lstat,
   mkdir,
+  mkdtemp,
   readdir,
   readFile,
   rm,
@@ -10,8 +13,9 @@ import {
   truncate,
   writeFile,
 } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   bytes,
   type Fixture,
@@ -21,6 +25,27 @@ import {
   streamOf,
   zipEntries,
 } from "../test/helpers.js";
+
+vi.mock("node:fs", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs")>();
+  return { ...actual, createReadStream: vi.fn(actual.createReadStream) };
+});
+
+/** Whether the temporary folder's disk ignores case, as a Mac's does by default. */
+async function ignoresCase(): Promise<boolean> {
+  const dir = await mkdtemp(join(tmpdir(), "fdrive-case-"));
+  try {
+    await writeFile(join(dir, "probe"), "");
+    return await stat(join(dir, "PROBE")).then(
+      () => true,
+      () => false,
+    );
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+}
+
+const IGNORES_CASE = await ignoresCase();
 
 let f: Fixture;
 
@@ -33,7 +58,7 @@ afterEach(async () => {
 });
 
 /** The storage's zip, which local storage always has. */
-function zip(paths: readonly string[], opts?: { signal?: AbortSignal }) {
+function zip(paths: readonly string[], opts?: Parameters<NonNullable<typeof f.storage.zip>>[1]) {
   if (f.storage.zip === undefined) throw new Error("local storage has no zip");
   return f.storage.zip(paths, opts);
 }
@@ -193,19 +218,25 @@ describe("upload", () => {
 
   it("creates only when the name is free, even under a race", async () => {
     await f.storage.upload("/taken.txt", bytes("old"));
+    expect(await kindOf(f.storage.upload("/taken.txt", bytes("new")))).toBe("conflict");
     expect(await kindOf(f.storage.upload("/taken.txt", bytes("new"), { overwrite: false }))).toBe(
       "conflict",
     );
     expect(await read(f.storage, "/taken.txt")).toBe("old");
 
     const results = await Promise.allSettled(
-      ["one", "two", "three"].map((value) =>
-        f.storage.upload("/race.txt", bytes(value), { overwrite: false }),
-      ),
+      ["one", "two", "three"].map((value) => f.storage.upload("/race.txt", bytes(value))),
     );
     expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
     expect(["one", "two", "three"]).toContain(await read(f.storage, "/race.txt"));
     expect((await readdir(f.home)).sort()).toEqual(["race.txt", "taken.txt"]);
+  });
+
+  it("replaces a file only when asked to overwrite", async () => {
+    await f.storage.upload("/f.txt", bytes("old"));
+    await f.storage.upload("/f.txt", streamOf(["n", "ew"]), { overwrite: true });
+    expect(await read(f.storage, "/f.txt")).toBe("new");
+    expect(await readdir(f.home)).toEqual(["f.txt"]);
   });
 
   it("refuses a folder or the home as a target", async () => {
@@ -305,6 +336,31 @@ describe("move", () => {
     expect(await kindOf(f.storage.stat("/new.txt"))).toBe("not_found");
   });
 
+  it("refuses a taken file or folder unless asked to overwrite", async () => {
+    await f.storage.upload("/a.txt", bytes("a"));
+    await f.storage.upload("/b.txt", bytes("b"));
+    await f.storage.mkdir("/dir");
+    expect(await kindOf(f.storage.move("/a.txt", "/b.txt"))).toBe("conflict");
+    expect(await kindOf(f.storage.move("/a.txt", "/dir"))).toBe("conflict");
+    expect(await kindOf(f.storage.move("/dir", "/b.txt", { overwrite: false }))).toBe("conflict");
+    expect(await read(f.storage, "/a.txt")).toBe("a");
+    expect(await read(f.storage, "/b.txt")).toBe("b");
+  });
+
+  // Only a disk that ignores case has "A.txt" and "a.txt" as one name; on
+  // any other (Linux CI) they are two names and nothing is taken.
+  it.skipIf(!IGNORES_CASE)(
+    "renames a file to another case on a disk that ignores case",
+    async () => {
+      await f.storage.upload("/notes/a.txt", bytes("a"), { mkdirParents: true });
+      await f.storage.move("/notes", "/Notes");
+      await f.storage.move("/Notes/a.txt", "/Notes/A.txt");
+      expect(await readdir(f.home)).toEqual(["Notes"]);
+      expect(await readdir(join(f.home, "Notes"))).toEqual(["A.txt"]);
+      expect(await read(f.storage, "/Notes/A.txt")).toBe("a");
+    },
+  );
+
   it("refuses moving a folder into itself or the home anywhere", async () => {
     await f.storage.mkdir("/a");
     expect(await kindOf(f.storage.move("/a", "/a/b/c"))).toBe("bad_request");
@@ -321,12 +377,23 @@ describe("move", () => {
 });
 
 describe("copy", () => {
-  it("keeps the modification time and refuses a taken name when asked", async () => {
+  it("keeps the modification time and refuses a taken name", async () => {
     const at = new Date("2018-01-01T00:00:00Z");
     await f.storage.upload("/a.txt", bytes("a"), { modifiedAt: at });
     await f.storage.copy("/a.txt", "/b.txt");
     expect((await f.storage.statFile("/b.txt")).modifiedAt?.getTime()).toBe(at.getTime());
+    expect(await kindOf(f.storage.copy("/a.txt", "/b.txt"))).toBe("conflict");
     expect(await kindOf(f.storage.copy("/a.txt", "/b.txt", { overwrite: false }))).toBe("conflict");
+  });
+
+  it("creates a file only while the name is free, even under a race", async () => {
+    for (const name of ["one", "two", "three"]) await f.storage.upload(`/${name}`, bytes(name));
+    const results = await Promise.allSettled(
+      ["one", "two", "three"].map((name) => f.storage.copy(`/${name}`, "/race.txt")),
+    );
+    expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+    expect(["one", "two", "three"]).toContain(await read(f.storage, "/race.txt"));
+    expect((await readdir(f.home)).sort()).toEqual(["one", "race.txt", "three", "two"]);
   });
 
   it("refuses the home, a copy onto itself and a folder into itself", async () => {
@@ -336,23 +403,32 @@ describe("copy", () => {
     expect(await kindOf(f.storage.copy("/d", "/d/inner"))).toBe("bad_request");
   });
 
-  it("replaces a target of the other kind", async () => {
+  it("replaces a target of the other kind when asked to overwrite", async () => {
     await f.storage.upload("/file.txt", bytes("file"));
     await f.storage.upload("/dir/inner.txt", bytes("inner"), { mkdirParents: true });
     await f.storage.mkdir("/as-dir");
     await f.storage.upload("/as-file", bytes("x"));
-    await f.storage.copy("/file.txt", "/as-dir");
-    await f.storage.copy("/dir", "/as-file");
+    expect(await kindOf(f.storage.copy("/file.txt", "/as-dir"))).toBe("conflict");
+    expect(await kindOf(f.storage.copy("/dir", "/as-file"))).toBe("conflict");
+    await f.storage.copy("/file.txt", "/as-dir", { overwrite: true });
+    await f.storage.copy("/dir", "/as-file", { overwrite: true });
     expect(await read(f.storage, "/as-dir")).toBe("file");
     expect(await read(f.storage, "/as-file/inner.txt")).toBe("inner");
   });
 
-  it("merges into an existing folder and skips unfinished uploads", async () => {
+  it("merges into an existing folder when asked to overwrite and skips unfinished uploads", async () => {
     await f.storage.upload("/src/a.txt", bytes("a"), { mkdirParents: true });
     await writeFile(join(f.home, "src", ".fdrive-partial-0123456789abcdef"), "half");
     await f.storage.upload("/dst/b.txt", bytes("b"), { mkdirParents: true });
-    await f.storage.copy("/src", "/dst");
+    await f.storage.copy("/src", "/dst", { overwrite: true });
     expect((await readdir(join(f.home, "dst"))).sort()).toEqual(["a.txt", "b.txt"]);
+  });
+
+  it("copies a file nobody may write to a new name", async () => {
+    await f.storage.upload("/locked.txt", bytes("locked"));
+    await chmod(join(f.home, "locked.txt"), 0o444);
+    await f.storage.copy("/locked.txt", "/copy.txt");
+    expect(await read(f.storage, "/copy.txt")).toBe("locked");
   });
 
   it("refuses a special file", async () => {
@@ -463,5 +539,41 @@ describe("zip", () => {
     await new Promise((resolve) => setTimeout(resolve, 50));
     await truncate(join(f.home, "big.jpg"), 0);
     await expect(new Response(body).arrayBuffer()).rejects.toThrow();
+  });
+
+  it("reports files and bytes read, out of every file it counted first", async () => {
+    await f.storage.upload("/album/a.txt", bytes("aaa"), { mkdirParents: true });
+    await f.storage.upload("/album/b.txt", bytes("bb"));
+    await f.storage.mkdir("/album/empty");
+    const progress: { processed: number; total: number; bytes: number }[] = [];
+    const body = await zip(["/album"], { onProgress: (step) => progress.push(step) });
+    expect(progress).toEqual([{ processed: 0, total: 2, bytes: 0 }]);
+    await new Response(body).arrayBuffer();
+    expect(progress.at(-1)).toEqual({ processed: 2, total: 2, bytes: 5 });
+  });
+
+  it("names a file that vanished before it was read by its place in the zip", async () => {
+    // Stored, not deflated, so backpressure holds the zip on the first file.
+    await f.storage.upload("/big.jpg", new Uint8Array(4 * 1024 * 1024));
+    await f.storage.upload("/notes/gone.txt", bytes("gone"), { mkdirParents: true });
+    const body = await zip(["/big.jpg", "/notes"]);
+    await rm(join(f.home, "notes", "gone.txt"));
+    await expect(new Response(body).arrayBuffer()).rejects.toMatchObject({
+      kind: "not_found",
+      message: "not found: notes/gone.txt",
+    });
+  });
+
+  it("closes the file it was reading when its reader cancels", async () => {
+    vi.mocked(createReadStream).mockClear();
+    // Stored, not deflated, so backpressure stops the read long before the end.
+    await f.storage.upload("/big.jpg", new Uint8Array(4 * 1024 * 1024));
+    const reader = (await zip(["/big.jpg"])).getReader();
+    await reader.read();
+    const [opened] = vi.mocked(createReadStream).mock.results;
+    const file = opened?.value as ReadStream;
+    expect(file.closed).toBe(false);
+    await reader.cancel();
+    await vi.waitFor(() => expect(file.closed).toBe(true));
   });
 });

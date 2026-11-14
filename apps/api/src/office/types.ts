@@ -51,9 +51,10 @@ export interface OfficeDeps {
   readonly tokens: OfficeTokenCodec;
   readonly repos: Pick<Repos, "sessions" | "identities" | "accounts">;
   readonly files: OfficeFileRepo;
+  /** On the write scope's pool: lock requests wait for the document locks writes hold. */
   readonly locks: WopiLockRepo;
+  /** One transaction holding the document locks a write takes; see `createOfficeWriteScope`. */
   readonly withWriteScope: <T>(
-    providerId: string,
     callback: (scope: { files: OfficeFileRepo; locks: WopiLockRepo }) => Promise<T>,
   ) => Promise<T>;
   readonly clock: () => Date;
