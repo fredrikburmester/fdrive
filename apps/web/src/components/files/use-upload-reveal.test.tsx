@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import type { ListResponse } from "@fdrive/contracts";
 import { QueryClient, QueryClientProvider, useQuery } from "@tanstack/react-query";
-import { act, renderHook, waitFor } from "@testing-library/react";
+import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, expect, it, vi } from "vitest";
 import { queryKeys } from "@/lib/api/keys";
@@ -10,7 +10,13 @@ import { useUploadStore } from "@/lib/upload/store";
 import type { UploadItem } from "@/lib/upload/types";
 import { useUploadReveal } from "./use-upload-reveal";
 
-afterEach(() => useUploadStore.getState().reset());
+// Every hook subscribes to the one upload store: unmount each test's hook, or
+// later tests' uploads drive refreshes and renders in roots whose test is over,
+// which can land after the jsdom environment is gone.
+afterEach(() => {
+  cleanup();
+  useUploadStore.getState().reset();
+});
 
 function item(id: string, overrides: Partial<UploadItem> = {}): UploadItem {
   return {

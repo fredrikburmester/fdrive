@@ -54,8 +54,11 @@ test("alice (admin) renames the files folder on System > General and the name st
 
     await page.reload();
     await expect(storageCard(page).getByLabel("Name", { exact: true })).toHaveValue("Home server");
+    // The sidebar names the signed-in login's storage beneath the username.
     await page.goto("/account");
-    await expect(page.getByRole("main").getByText("Home server", { exact: true })).toBeVisible();
+    await expect(
+      page.locator('[data-sidebar="footer"]').getByText("Home server", { exact: true }),
+    ).toBeVisible();
   } finally {
     // Restore the original name so this test stays idempotent across
     // repeated local runs against the same environment.
