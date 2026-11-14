@@ -180,7 +180,7 @@ test.describe("file controls ux", () => {
     await expect(fileListRow(page, name)).toBeVisible();
 
     // Open View dropdown menu
-    await page.getByRole("button", { name: "View" }).click();
+    await page.getByRole("button", { name: "View", exact: true }).click();
     const checkboxItem = page.getByRole("menuitemcheckbox", { name: /Show thumbnails/ });
     await expect(checkboxItem).toBeVisible();
     await expect(checkboxItem).toHaveAttribute("aria-checked", "false");
@@ -218,7 +218,7 @@ test.describe("file controls ux", () => {
       .toBe(true);
 
     // Open View menu again to verify checkbox state persists
-    await page.getByRole("button", { name: "View" }).click();
+    await page.getByRole("button", { name: "View", exact: true }).click();
     const reloadedCheckboxItem = page.getByRole("menuitemcheckbox", { name: /Show thumbnails/ });
     await expect(reloadedCheckboxItem).toHaveAttribute("aria-checked", "true");
   });
