@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { FileEntry } from "../entries.ts";
 import { isStorageError, StorageError } from "../errors.ts";
-import { baseName, parentPath } from "../paths.ts";
+import { parentPath } from "../paths.ts";
 import { createMemoryStorage } from "../testing/memory-storage.ts";
 import { moveTrashLeafPath, moveTrashRootPath } from "./recycle-folder.ts";
 import { createRecycleFolderTrash } from "./recycle-folder-trash.ts";
@@ -243,29 +243,28 @@ describe("createRecycleFolderTrash: list", () => {
     expect(listing.entries).toHaveLength(1);
   });
 
-  it("lists every leaf however many empty folders it passes first", async () => {
-    // Synthesize the empty folders instead of materializing 20,000 of them:
-    // the walk only calls list, and building that many in memory storage was
-    // slow enough to time out under coverage on a loaded CI runner.
-    const dirEntry = (path: string, name: string): FileEntry => ({
-      name,
-      path,
-      kind: "dir",
-      size: 0,
-      modifiedAt: new Date(0),
-      ext: "",
-    });
+  it("lists every leaf past more empty folders than a listing used to visit", async () => {
+    // Listings stopped after 10,000 folders, and leftover empty folders came
+    // first. Synthesize just that many once, rather than materializing them in
+    // memory storage or rebuilding them per call: the walk only calls list,
+    // and on a loaded CI runner every visit counts.
     const storage = createMemoryStorage({ [A.path]: "a", [TOP.path]: "top" });
+    const leftovers = Array.from(
+      { length: 10_000 },
+      (_, i): FileEntry => ({
+        name: `e${i}`,
+        path: `${NAMESPACE}/e${i}`,
+        kind: "dir",
+        size: 0,
+        modifiedAt: new Date(0),
+        ext: "",
+      }),
+    );
+    const namespace = [...leftovers, ...(await storage.list(NAMESPACE))];
     const originalList = storage.list.bind(storage);
-    const leftovers = Array.from({ length: 20_000 }, (_, i) => `${NAMESPACE}/file/p/old${i}`);
-    storage.list = async (path: string): Promise<FileEntry[]> => {
-      if (path === NAMESPACE) {
-        return [
-          ...leftovers.map((dir) => dirEntry(dir, baseName(dir))),
-          ...(await originalList(path)),
-        ];
-      }
-      return path.startsWith(`${NAMESPACE}/file/p/old`) ? [] : originalList(path);
+    storage.list = async (path: string) => {
+      if (path === NAMESPACE) return namespace;
+      return path.startsWith(`${NAMESPACE}/e`) ? [] : originalList(path);
     };
 
     const listing = await trashFor(storage).list();
