@@ -217,8 +217,9 @@ impl Applier {
         Self { ctx, pool }
     }
 
-    /// The saved position for this root. On first start it is the journal's end: the startup
-    /// scan covers whatever came before.
+    /// The saved position for this root. On first start it is the journal's end: a root
+    /// without a position is scanned at start (`RootLoop::new`), which covers whatever came
+    /// before.
     pub fn position(&self) -> Result<i64> {
         let ctx = &self.ctx;
         if let Some(position) = ctx.db.with(|c| db::change_cursor(c, CONSUMER, ctx.root_id))? {

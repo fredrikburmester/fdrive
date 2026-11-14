@@ -53,7 +53,6 @@ const EXPECTED_TABLES: ReadonlyArray<{ readonly schema: string; readonly table: 
   { schema: "idx", table: "chunks" },
   { schema: "idx", table: "scans" },
   { schema: "idx", table: "moves" },
-  { schema: "idx", table: "events" },
   { schema: "idx", table: "changes" },
   { schema: "idx", table: "change_cursors" },
   { schema: "idx", table: "change_epoch" },

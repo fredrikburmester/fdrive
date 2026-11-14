@@ -1,6 +1,8 @@
 //! Start-up and the per-root loop: refresh settings and features, keep the watcher in step
 //! with them, and scan on the interval, on a wake, after a watcher overflow, or when the
-//! change journal's reader asks for one.
+//! change journal's reader asks for one. A restart does not walk the root: the journal holds
+//! fdrive's changes from the indexer's position, and the interval stays counted from the last
+//! finished scan.
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -161,16 +163,36 @@ pub struct RootLoop {
     next_scan: Instant,
 }
 
-impl Default for RootLoop {
-    fn default() -> Self {
-        Self {
-            watcher: None,
-            next_scan: Instant::now(),
-        }
-    }
-}
-
 impl RootLoop {
+    /// The loop for a root, its first scan due an interval after the last one that finished.
+    /// The scan is due at once when the change journal cannot cover the time since: no
+    /// scan finished, the index has no live rows, or the indexer has no position in the
+    /// journal yet. Runs before the journal's reader starts, since the reader takes a
+    /// position on its first look. A gap the reader finds later (rows pruned before it read
+    /// them) asks for a scan itself.
+    pub fn new(ctx: &RootContext) -> Result<Self> {
+        let interval = Duration::from_secs(ctx.settings().scan_interval_seconds);
+        let since = ctx
+            .db
+            .with(|c| db::last_scan_age(c, ctx.root_id, crate::work::CONSUMER))?;
+        let wait = since.map_or(Duration::ZERO, |since| interval.saturating_sub(since));
+        log(&match since {
+            Some(_) => format!(
+                "[{}] the change journal covers the time since the last scan; next scan in {}s",
+                ctx.name,
+                wait.as_secs()
+            ),
+            None => format!(
+                "[{}] scanning at start: no finished scan, indexed file or journal position to resume from",
+                ctx.name
+            ),
+        });
+        Ok(Self {
+            watcher: None,
+            next_scan: Instant::now() + wait,
+        })
+    }
+
     /// Refresh settings, keep the watcher in step with the features, and scan when due.
     /// Returns how long to wait before the next step.
     pub fn step(&mut self, ctx: &Arc<RootContext>, watchers: &Mutex<HashMap<String, bool>>) -> Duration {
@@ -225,9 +247,8 @@ impl RootLoop {
     }
 }
 
-/// One root's loop; never returns.
-pub fn run_root(ctx: &Arc<RootContext>, watchers: &Mutex<HashMap<String, bool>>, wake: &Wake) {
-    let mut root = RootLoop::default();
+/// One root's loop, from `root` (`RootLoop::new`); never returns.
+pub fn run_root(mut root: RootLoop, ctx: &Arc<RootContext>, watchers: &Mutex<HashMap<String, bool>>, wake: &Wake) {
     loop {
         let timeout = root.step(ctx, watchers);
         if wake.wait(timeout) {

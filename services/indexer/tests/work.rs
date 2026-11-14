@@ -381,7 +381,7 @@ fn a_moved_file_keeps_its_row_without_being_read_again() {
     assert_eq!(env.status(&ctx, "b.txt"), "indexed");
     assert_eq!(env.ml.count(TEXT_EMBED), embedded);
     assert_eq!(env.events(), ["created", "moved"]);
-    assert_eq!(env.count("idx.moves"), 1);
+    assert_eq!(env.count("idx.moves"), 0);
 }
 
 #[test]

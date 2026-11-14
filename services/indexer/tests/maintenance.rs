@@ -12,10 +12,9 @@ use std::time::{Duration, Instant};
 use common::fake_ml::{self, FakeMl};
 use fdrive_indexer::config::Config;
 use fdrive_indexer::db::{self, NewFile};
-use fdrive_indexer::events::EventKind;
 use fdrive_indexer::failures;
 use fdrive_indexer::features::FeatureValues;
-use fdrive_indexer::indexer::{RootContext, emit_event};
+use fdrive_indexer::indexer::RootContext;
 use fdrive_indexer::jobs::Job;
 use fdrive_indexer::maintenance::{
     clear_image_embeddings, clear_index, clear_thumbnails, retry_file, start_clear, start_image_rebuild, start_retry,
@@ -315,10 +314,14 @@ fn index_clear_scope_is_literal_and_keeps_everything_else() {
         .with(|c| {
             db::upsert_thumbnail(c, "sha", 256, "sh/sha.webp", 1, 1)?;
             db::start_scan(c, env.ctx.root_id)?;
-            db::insert_move(c, env.ctx.root_id, "old", "new", "test")
+            // MCP's move log.
+            c.execute(
+                "INSERT INTO idx.moves (root_id, src, dst, actor) VALUES ($1::bigint, 'old', 'new', 'mcp')",
+                &[&env.ctx.root_id],
+            )?;
+            Ok(())
         })
         .unwrap();
-    emit_event(&env.ctx, EventKind::Created, "keep", None);
     std::fs::write(env.root.join("original"), "safe").unwrap();
     env.client()
         .batch_execute(
@@ -343,7 +346,6 @@ fn index_clear_scope_is_literal_and_keeps_everything_else() {
         ("idx.roots", 2),
         ("idx.scans", 1),
         ("idx.moves", 1),
-        ("idx.events", 1),
         ("app.thumbnails", 1),
         ("app.file_tags", 1),
         ("app.favorites", 1),
