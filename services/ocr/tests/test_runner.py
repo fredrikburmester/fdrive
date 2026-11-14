@@ -12,6 +12,7 @@ from io import StringIO
 from pathlib import Path
 
 import pytest
+from conftest import IndexWork
 
 from fdrive_ocr import db, runner
 from fdrive_ocr.decide import STATUS_TIMEOUT
@@ -323,6 +324,7 @@ def test_process_file_uses_same_directory_for_atomic_replace(tmp_path: Path, mon
     monkeypatch.setattr(runner.db, "is_done", lambda *args: False)
     monkeypatch.setattr(runner.db, "ocr_file_lock", lambda *args: nullcontext())
     monkeypatch.setattr(runner.db, "backup_checkpoint", lambda _conn: nullcontext())
+    monkeypatch.setattr(runner.db, "queue_index_work", lambda *args: None)
     monkeypatch.setattr(runner.os, "replace", replace_across_mounts_fails)
 
     status, rewrite = runner.process_file(
@@ -500,6 +502,75 @@ def test_process_file_timeout(postgres_dsn: str, tmp_path: Path) -> None:
         )
         assert status == STATUS_TIMEOUT
         assert rewrite is False
+    finally:
+        conn.close()
+
+
+# -- telling the indexer -------------------------------------------------------------
+
+
+def test_process_file_queues_the_rewritten_pdf_for_the_indexer(
+    postgres_dsn: str, tmp_path: Path, index_work: IndexWork
+) -> None:
+    conn = db.connect(postgres_dsn)
+    try:
+        root_id = db.upsert_root(conn, "files")
+        target = runner.RootTarget(name="files", root_id=root_id, abs_path=str(tmp_path))
+        (tmp_path / "docs").mkdir()
+        f = tmp_path / "docs" / "a.pdf"
+        _write_pdf(f, "OK")
+        status, rewrite = runner.process_file(
+            conn, target, str(f), DEFAULT_SETTINGS, str(tmp_path / "state"), 30, 2, set(), lambda _m: None
+        )
+        assert (status, rewrite) == ("ocred", True)
+        # No content hint: OCR changed the bytes, so the indexer reads them.
+        assert index_work.rows() == [(root_id, "docs/a.pdf", None, None, None, None, None, None)]
+        assert index_work.notifications() == ["files"]
+    finally:
+        conn.close()
+
+
+@pytest.mark.parametrize("marker", ["FAIL", "HASTEXT"])
+def test_process_file_queues_nothing_when_it_leaves_the_pdf_alone(
+    postgres_dsn: str, tmp_path: Path, index_work: IndexWork, marker: str
+) -> None:
+    conn = db.connect(postgres_dsn)
+    try:
+        target = runner.RootTarget(name="files", root_id=db.upsert_root(conn, "files"), abs_path=str(tmp_path))
+        f = tmp_path / "a.pdf"
+        _write_pdf(f, marker)
+        status, rewrite = runner.process_file(
+            conn, target, str(f), DEFAULT_SETTINGS, str(tmp_path / "state"), 30, 2, set(), lambda _m: None
+        )
+        assert rewrite is False, status
+        assert index_work.rows() == []
+        assert index_work.notifications() == []
+    finally:
+        conn.close()
+
+
+@pytest.mark.usefixtures("failing_index_work")
+def test_a_failed_indexer_hint_is_logged_and_the_pass_goes_on(
+    postgres_dsn: str, tmp_path: Path, index_work: IndexWork
+) -> None:
+    conn = db.connect(postgres_dsn)
+    try:
+        root_id = db.upsert_root(conn, "files")
+        target = runner.RootTarget(name="files", root_id=root_id, abs_path=str(tmp_path))
+        _write_pdf(tmp_path / "a.pdf", "OK")
+        _write_pdf(tmp_path / "b.pdf", "OK")
+        logs: list[str] = []
+        totals = runner.run_pass(conn, [target], DEFAULT_SETTINGS, str(tmp_path / "state"), 30, 1, logs.append)
+
+        assert (totals.ocred, totals.failed) == (2, 0)
+        assert (tmp_path / "a.pdf").read_bytes() == b"OK-OCRED-OUTPUT\n"
+        assert (tmp_path / "b.pdf").read_bytes() == b"OK-OCRED-OUTPUT\n"
+        assert {key[0] for key in db.done_keys(conn, root_id)} == {"a.pdf", "b.pdf"}
+        failures = [line for line in logs if "could not tell the indexer" in line]
+        assert len(failures) == 2
+        assert "[files] could not tell the indexer about a.pdf: idx.work is unavailable" in failures[0]
+        assert index_work.rows() == []
+        assert index_work.notifications() == []
     finally:
         conn.close()
 

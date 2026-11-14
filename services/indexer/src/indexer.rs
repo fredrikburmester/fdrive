@@ -30,6 +30,7 @@ use crate::rules::{Globs, should_index_name, should_walk_dir};
 use crate::settings::{self, Settings};
 use crate::thumbs::{SIZES, kind_for_ext, skip_reason, storage_path};
 use crate::thumbs_io;
+pub use crate::walk::{walk, walk_tree};
 
 /// Classified files a scan holds before traversal waits for workers.
 pub const SCAN_BACKLOG_LIMIT: usize = 20_000;
@@ -1214,69 +1215,6 @@ pub fn safe_process_with(
             let _ = ctx.db.with(|c| db::mark_file_error(c, ctx.root_id, rel_path, &message));
             "error"
         }
-    }
-}
-
-/// Yield `(abs, rel, stat)` for regular files below `root`, directories sorted by
-/// lowercase name, skipping junk. `on_error` hears about unreadable entries.
-pub fn walk(root: &Path, on_error: impl FnMut(), visit: impl FnMut(PathBuf, String, FileStat) -> bool) {
-    walk_tree(root, on_error, |_| {}, visit);
-}
-
-/// `walk`, also reporting each folder below `root` it will descend into, before its contents.
-pub fn walk_tree(
-    root: &Path,
-    mut on_error: impl FnMut(),
-    mut on_folder: impl FnMut(db::FolderRow),
-    mut visit: impl FnMut(PathBuf, String, FileStat) -> bool,
-) {
-    let mut stack = vec![root.to_path_buf()];
-    while let Some(dir) = stack.pop() {
-        let mut entries: Vec<std::fs::DirEntry> = match std::fs::read_dir(&dir) {
-            Ok(entries) => entries.filter_map(std::result::Result::ok).collect(),
-            Err(e) => {
-                log(&format!("skip dir {}: {e}", dir.display()));
-                on_error();
-                continue;
-            }
-        };
-        entries.sort_by_key(|e| e.file_name().to_string_lossy().to_lowercase());
-        let mut subdirs = Vec::new();
-        for entry in entries {
-            let name = entry.file_name().to_string_lossy().into_owned();
-            if !should_index_name(&name, SKIP_NAMES) {
-                continue;
-            }
-            let metadata = match std::fs::symlink_metadata(entry.path()) {
-                Ok(metadata) => metadata,
-                Err(e) => {
-                    log(&format!("skip {}: {e}", entry.path().display()));
-                    on_error();
-                    continue;
-                }
-            };
-            if metadata.is_dir() {
-                if should_walk_dir(&name, SKIP_DIRS) {
-                    let path = entry.path();
-                    let rel = path.strip_prefix(root).unwrap_or(&path).to_string_lossy().into_owned();
-                    on_folder(db::FolderRow {
-                        path: rel,
-                        mtime_ns: FileStat::of(&metadata).mtime_ns,
-                    });
-                    subdirs.push(path);
-                }
-                continue;
-            }
-            if !metadata.is_file() {
-                continue;
-            }
-            let path = entry.path();
-            let rel = path.strip_prefix(root).unwrap_or(&path).to_string_lossy().into_owned();
-            if !visit(path, rel, FileStat::of(&metadata)) {
-                return;
-            }
-        }
-        stack.extend(subdirs.into_iter().rev());
     }
 }
 
