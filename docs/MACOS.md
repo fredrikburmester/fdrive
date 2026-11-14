@@ -46,13 +46,38 @@ not use (older than the installed app, run from a disk image, or missing its ext
 in the window footer and disables Add Server, Reconnect and Disconnect.
 
 The app refreshes browsed folders and materialized files every 60 seconds, on wake,
-after pairing and on manual Refresh. When the server advertises `listingChecks`, a refresh
-sends each browsed folder's listing token in batches of 100 and lists only the folders the
-server reports changed, plus Trash and folders without a token; otherwise it lists every
-browsed folder separately. Every pass still reads each browsed folder on the server, so a
-location's next automatic one waits four times as long as its last one took and at least a
-fifth of a second per browsed folder, up to 15 minutes: a 1,700-folder location refreshes about
-every six minutes, where listing it took three minutes per pass. Only Refresh, pairing and
+after pairing and on manual Refresh. When the server advertises `changeFeed`, a refresh asks
+[the change feed](#change-feed) what changed since the anchor the location stored, usually in
+one request, and lists only the browsed folders it names, plus Trash and folders whose last
+listing was not applied in full (after the app's own write there, a skipped pending write or
+a denied listing). It validates only downloaded files at or below a changed path. The new
+anchor is stored only once everything named before it was applied: a failed listing or
+validation keeps the old one, so the next refresh asks again from it. A folder that is gone
+counts as applied; one this connection may not read loses its token and is listed by every
+refresh until it can be read, rather than holding the anchor back. With no anchor, when the
+server answers `resync`, after more than 50 pages of changes, after a failed feed request, on
+Refresh, pairing and license activation, and at least once an hour, the refresh checks every
+folder as described next and then continues from the anchor the feed gave before that check.
+
+The hourly check is the safety net for what the feed cannot see. The feed is fdrive's change
+journal: changes made through fdrive are in it at once, but a change made on the server's
+disk directly (over SMB, rsync or Syncthing) reaches it only once the indexer's watcher sees it,
+within seconds, or its scan does, hourly by default and at its start after downtime. The
+indexer journals nothing for names it skips (`.git`, `node_modules` and similar), nor for a file
+rewritten with the same size and modification time, nor while the files folder lacks its
+marker. An hour matches that default scan interval, so a change the watcher missed is no later
+in Finder than in search; for a 1,700-folder location it costs about 17 check requests an hour,
+where checks alone sent them every six minutes.
+
+Without the feed, when the server advertises `listingChecks`, a refresh sends each browsed
+folder's listing token in batches of 100 and lists only the folders the server reports changed,
+plus Trash and folders without a token; otherwise it lists every browsed folder separately.
+A refresh that read every browsed folder on the server, checked or listed, waits four times as
+long as it took and at least a fifth of a second per browsed folder before the next automatic
+one, up to 15 minutes: a 1,700-folder location checks about every six minutes, where listing it
+took three minutes per pass. A refresh that followed the feed read only what changed, so it
+waits only four times as long as it took, and such a location shows a change within about a
+minute. Only Refresh, pairing and
 license activation show progress; background refreshes keep each location's last status, and
 Refresh replaces one already running. The extension records a heartbeat in the shared
 catalog on every enumeration and download callback; if Finder has not answered a signalled
@@ -323,6 +348,7 @@ Desktop protocol v1 lives at `/api/v1/desktop`; contracts are in
 | `GET /location` | Desktop bearer; current identity/provider and readonly protocol |
 | `GET /entries?path=&cursor=` | Authorized, bounded metadata snapshot; protocol 2 adds a `token` to a complete single-page listing outside Trash |
 | `POST /checks` | Protocol 2: up to 200 `{path, token}` pairs; answers `unchanged`, `changed`, `missing` or `forbidden` per folder, and only a leading part when its 30-second budget runs out |
+| `GET /changes?since=` | Protocol 2, where `location` says `changeFeed`: the paths changed since an anchor and the folders whose listings they changed, in the location's own paths, with the next anchor and `more`; `resync` and a fresh anchor otherwise. See [change feed](#change-feed) |
 | `GET /entry?path=` | Current entry, with ancestor/symlink checks |
 | `GET /content?path=` | Original streamed bytes; no MCP size cap |
 | `POST /versions` | Hash up to 16 authorized files for cache validation |
@@ -349,6 +375,37 @@ process. Pages contain 500 entries. Provider-specific limits can be lower. Overf
 fail visibly instead of truncating a folder. Multi-process deployments need sticky routing
 for pairing and listing snapshots or a shared transient store.
 
+### Change feed
+
+`GET /api/v2/desktop/changes` reads fdrive's change journal (`idx.changes`, see the
+[change journal plan](plans/CHANGE-JOURNAL.md)) for one location. A location has a feed, and
+its v2 `location` says `changeFeed: true`, when its login's index root is indexed
+(`FDRIVE_INDEX_ROOTS`), this API journals its own changes under that root (the root's
+`storagePath` is the files folder) and the indexer has created the root. Otherwise the route
+answers 404 and the app uses folder checks. Older apps ignore the key and keep using checks.
+
+Rows are read under the location's verified index scopes ([scoping](SCOPING.md)): each end of a
+row, its path and a move's target, is mapped from the root-relative path with the round trip
+index reads use, so folders shared with the login appear under `/Shared with me`, a path no scope
+covers or one a shared folder shadows is dropped, and so is anything the location's listings
+hide (Trash, `/.fdrive-desktop`, outside its grants). A row does not say whether it was a file or
+a folder, so each kept end is a changed **path**, below which the app lists every browsed folder
+and validates every download. Its parent and grandparent are changed **folders**: the parent's
+listing holds the path, and the grandparent's shows the parent's modification time, which is
+part of the version a Finder rename of that folder must match. Paths and folders inside another
+changed path are left out, and each appears once.
+
+The anchor is opaque to the app: `v1.<epoch>.<fingerprint>.<position>`. The epoch is a random id
+in `idx.change_epoch`, which backups never include, so a restore, after which positions start
+again at 1, gets a new one. The fingerprint covers the location's scopes and their roots' ids,
+so sharing or unsharing a folder, or a root created again, changes it. A mismatch of either, an
+unreadable anchor, one past the journal's end and a gap (rows after it were pruned, past 30
+days) answer `resync` with an anchor at the journal's end, as does a request without one, so a
+new app starts from now after one full check. An answer covers up to 1,000 rows; with `more`,
+the app asks again from its anchor before applying anything. A complete answer's anchor is the
+journal's end, read before the rows, so a location whose root is quiet keeps up with the
+journal instead of falling into a gap.
+
 ## Metadata, versions and limits
 
 One SQLite catalog per domain stores UUID items, paths, browsed folders, materialized flags,
@@ -356,9 +413,12 @@ tombstones, a generation and revision anchors. WAL and transactions serialize ap
 writes. Listing reservations prevent an older concurrent network response overwriting a
 newer snapshot. Only complete valid listings reconcile; failures never imply deletion.
 
-Schema v4 migrates v1–v3 in place. A folder's token is kept only when its listing was applied
+Schema v5 migrates v1–v4 in place; v5 adds the change feed's anchor and when every folder was
+last checked. A folder's token is kept only when its listing was applied
 in full; any listing without one, a skipped pending write and the app's own writes to the
-folder clear it, so `unchanged` always means the catalog matches the server. Metadata edits preserve IDs; an observed removal tombstones
+folder clear it, so `unchanged` always means the catalog matches the server. The catalog also
+records a listing applied in full without a token (one of several pages), so the feed does not
+list that folder again until something in it changes. Metadata edits preserve IDs; an observed removal tombstones
 the item and known descendants, and a later recreation receives a new ID. External moves
 appear as removal plus addition. Path-only backends cannot prove a delete/recreate or rename
 that occurred entirely between observations. With protocol 2 server handles, a changed

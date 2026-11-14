@@ -759,7 +759,9 @@ final class AppModel: ObservableObject {
                    enumerationStale(lastCallback: callback.at, signalled: unansweredSignals[saved.id], now: Date()) {
                     warnings[saved.id] = "Finder has not responded to this location's updates. See Troubleshooting in the macOS guide."
                 } else { warnings.removeValue(forKey: saved.id) }
-                try await refreshCatalog(catalog, client: client, checks: current.listingChecks == true) {
+                // A refresh the person asked for checks every folder, beyond what the feed saw.
+                let kind = try await refreshCatalog(catalog, client: client, checks: current.listingChecks == true,
+                                                    feed: current.changeFeed == true, checkAll: visible) {
                     // Replicated domains ignore every container but the working set.
                     let domain = NSFileProviderDomain(identifier: .init(updated.id), displayName: updated.title)
                     if let manager = NSFileProviderManager(for: domain) { try await manager.signalEnumerator(for: .workingSet) }
@@ -770,8 +772,9 @@ final class AppModel: ObservableObject {
                     lastCallback: answer.at, callbackRevision: answer.revision)
                 let pending = try await catalog.pendingWrites().filter { $0.result == nil }
                 status[saved.id] = pending.isEmpty ? (current.readOnly ? "Connected · Read-only" : "Connected · Read and write") : "\(pending.count) pending · \(pending.first?.error ?? "Waiting to upload")"
+                // A refresh that followed the change feed read only what changed on the server.
                 automaticAfter[saved.id] = nextAutomaticRefresh(finished: Date(), took: Date().timeIntervalSince(started),
-                                                                folders: try await catalog.folders().count)
+                                                                folders: kind == .feed ? 0 : try await catalog.folders().count)
                 failures[saved.id] = nil
             } catch {
                 if Task.isCancelled {

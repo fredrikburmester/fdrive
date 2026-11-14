@@ -44,6 +44,11 @@ Indexes: `(root_id, id)` for reading a root from a position, `(created_at)` for 
 `position` (the last row it handled) and `updated_at`. The indexer's consumer name is
 `indexer`.
 
+`idx.change_epoch` (migration `0025_change_epoch`, added with step b): one row holding a random
+`epoch`, created the first time a reader asks (`createChangeJournal().epoch()`). A reader that
+hands positions to clients outside the database qualifies them with it, since positions start
+again at 1 after a restore.
+
 ### Writers
 
 - **Ordered commits.** A writer appends in one transaction that first takes
@@ -104,17 +109,19 @@ Indexes: `(root_id, id)` for reading a root from a position, `(created_at)` for 
 - **Gap.** A consumer at position P has missed rows when `P < oldest - 1`, where `oldest` is the
   journal's oldest position over all roots. The test can report a gap that is not there (the
   missing positions were another root's, or rolled back) but never misses one. TypeScript's
-  `read` returns it as `gap`; the indexer checks it before each batch.
+  `read` returns it as `gap`, looking up `oldest` after the rows so a prune between the two
+  cannot hide one, and reads one root or several in one statement; the indexer checks it
+  before each batch.
 - **Resync.** A consumer with a gap rebuilds from the current state and continues from the
   newest position. The indexer requests a scan of the root and moves its position to the end.
 
 ### Backups
 
-Both tables are `transient` in [the backup registry](../../packages/backup/src/registry.ts). A
+All three tables are `transient` in [the backup registry](../../packages/backup/src/registry.ts). A
 restore rebuilds the index from the disk (`idx.files`, `idx.chunks` and `idx.folders` are
 rebuildable and the indexer scans at startup), so no consumer could resume from a position
 taken before it; and a month of rows would grow every backup for nothing. After a restore the
-journal starts again at position 1 and the indexer at its end.
+journal starts again at position 1 under a new epoch, and the indexer at its end.
 
 ## Rules for every consumer
 
@@ -146,7 +153,7 @@ Proposal: one reader in the API follows the journal (`LISTEN idx_changes`, its o
   has a file, not that the file changed.
 - **Restores.** Positions restart after a restore. A browser's `Last-Event-ID` from before
   could pass for a later position; the API should qualify positions it hands out with something
-  a restore changes (for example an id stored with the journal and not backed up) and answer a
+  a restore changes (the journal's epoch, `idx.change_epoch`, as the Mac feed does) and answer a
   mismatch as a gap.
 
 Done when: the web gets one event per change and resumes after a reconnect without a reload;
@@ -154,15 +161,42 @@ tags, favorites, grants, Office files and share links follow moves and deletes m
 well as in fdrive; `idx.events` and the duplicate routes are gone; tests cover a gap, a resumed
 stream and a restore.
 
-### b) A Mac change feed
+### b) A Mac change feed: done
 
-Proposal: `GET /desktop/changes?since=<position>` returns the rows under the domain's scope
-after `since`, mapped to the domain's paths, with the newest position, or a gap that tells the
-app to re-check its folders. Apps that know the feed stop polling folder checks; older apps keep
-folder checks, which stay.
+Built on 2026-11-14: `GET /api/v2/desktop/changes?since=<anchor>`
+([implementation](../../apps/api/src/desktop/changes.ts), [macOS guide](../MACOS.md#change-feed)).
 
-Done when: an app with the feed sees a change made in the web or over SMB without re-reading
-folders; a gap or a restore leads to one full check; an older app still works.
+- **Rows to folders.** The route reads the location's roots' rows after the anchor, 1,000 at a
+  time, and maps each end of a row through the login's verified index scopes with
+  `roundTripVirtualPath`, so a folder shared with the login appears under `/Shared with me`
+  and a path no scope covers, or that the listings hide (Trash, `/.fdrive-desktop`), is dropped.
+  Each kept end is a changed path (the app lists every browsed folder at or below it and
+  validates the downloads there); its parent and grandparent are changed folders, the
+  grandparent because its listing shows the parent's modification time.
+- **Anchors.** `v1.<epoch>.<fingerprint>.<position>`. A different epoch (a restore), a different
+  fingerprint of the location's scopes and root ids (a share added or removed, a root made
+  again), a gap, an anchor past the end or none at all answers `resync` with the journal's end.
+  A complete answer moves the anchor to the journal's end read before the rows, so a quiet
+  location never falls into a gap.
+- **Availability.** A location has a feed when its root is indexed, this API journals under it
+  and the indexer has created it; its v2 `location` then says `changeFeed: true`. Otherwise the
+  route answers 404 and the app keeps folder checks, as older apps do.
+- **The app.** Catalog v5 stores the anchor and when every folder was last checked. A refresh
+  reads every page, lists the folders named plus those not listed in full since, validates
+  the downloads under changed paths, and stores the anchor only once all of that applied. On
+  `resync`, without an anchor, after 50 pages, after a failed feed request, on a refresh the
+  person asked for and once an hour it runs the folder checks and then stores the anchor from
+  before them. Feed refreshes are paced
+  by their own duration only, so a large location sees changes within about a minute.
+
+Verified by unit tests for the mapping and the anchor, an integration test over a real files
+folder and Postgres (an upload, a move and a delete through the web, a watcher row, a restore
+and a gap), and Swift tests for the anchor's storage, resync and partial application. Not yet
+verified: a signed app against a live server, and the hourly safety net's real cost.
+
+Left open: changes made on the disk reach the feed only through the indexer, so names it skips,
+a rewrite with the same size and modification time and anything while the marker is missing
+wait for the app's hourly full check.
 
 ### c) OCR finds PDFs from the journal and the index
 
