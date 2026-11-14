@@ -6,7 +6,10 @@ it.each(["onlyoffice", "collabora"] as const)(
   async (product) => {
     const h = await officeHarness({ config: { product } });
     const modified = new Date("2026-09-07T00:00:00Z");
-    await h.storage.upload("/a.docx", Buffer.from("hello"), { modifiedAt: modified });
+    await h.storage.upload("/a.docx", Buffer.from("hello"), {
+      modifiedAt: modified,
+      overwrite: true,
+    });
     const opened = await h.open("/a.docx", "view");
     const download = vi.spyOn(h.storage, "download");
     const info = async () =>
@@ -21,7 +24,10 @@ it.each(["onlyoffice", "collabora"] as const)(
     );
     expect((await info()).Version).toBe(before.Version);
     // Same size and modification time, as a writer outside fdrive could leave it.
-    await h.storage.upload("/a.docx", Buffer.from("world"), { modifiedAt: modified });
+    await h.storage.upload("/a.docx", Buffer.from("world"), {
+      modifiedAt: modified,
+      overwrite: true,
+    });
     const after = await info();
     expect(after.Size).toBe(before.Size);
     expect(after.LastModifiedTime).toBe(before.LastModifiedTime);

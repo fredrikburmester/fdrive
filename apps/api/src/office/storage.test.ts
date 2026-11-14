@@ -60,7 +60,7 @@ it("resolves the identity once and performs storage calls without database callb
   expect(forIdentity).toHaveBeenCalledExactlyOnceWith(h.identity.id);
   forIdentity.mockClear();
   expect((await storage.statFile("/a.docx")).size).toBe(5);
-  await storage.upload("/a.docx", new TextEncoder().encode("saved"));
+  await storage.upload("/a.docx", new TextEncoder().encode("saved"), { overwrite: true });
   expect(await new Response((await storage.download("/a.docx")).body).text()).toBe("saved");
   expect(forIdentity).not.toHaveBeenCalled();
 });

@@ -24,7 +24,10 @@ it("versions a document from its stamp without reading it", async () => {
   expect(first).toMatchObject({ size: 5, modifiedAt: new Date(0) });
   expect(await documentVersion(storage, "/a.docx")).toEqual(first);
   // Same size and modification time, as an external writer keeping the mtime would leave it.
-  await storage.upload("/a.docx", new TextEncoder().encode("world"), { modifiedAt: new Date(0) });
+  await storage.upload("/a.docx", new TextEncoder().encode("world"), {
+    modifiedAt: new Date(0),
+    overwrite: true,
+  });
   const replaced = await documentVersion(storage, "/a.docx");
   expect(replaced).toMatchObject({ size: 5, modifiedAt: new Date(0) });
   expect(replaced.version).not.toBe(first.version);

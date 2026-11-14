@@ -117,7 +117,10 @@ it("stamps files as a disk does: every write moves the stamp, reads leave it", a
   expect(first).toMatchObject({ size: 1, mtimeNs: 0n });
   await storage.download("/a.txt");
   expect(await storage.contentStamp?.("/a.txt")).toEqual(first);
-  await storage.upload("/a.txt", new TextEncoder().encode("z"), { modifiedAt: new Date(0) });
+  await storage.upload("/a.txt", new TextEncoder().encode("z"), {
+    modifiedAt: new Date(0),
+    overwrite: true,
+  });
   const rewritten = await storage.contentStamp?.("/a.txt");
   expect(rewritten).toMatchObject({ size: 1, mtimeNs: 0n });
   expect(rewritten?.ino).not.toBe(first?.ino);

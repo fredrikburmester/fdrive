@@ -15,7 +15,7 @@ describe("office opening and creation", () => {
     expect(a.actionUrl).toContain("https://app.test/onlyoffice/editor?");
     expect(a.formFields.access_token_ttl).toBe(String(h.clock().getTime() + 8 * 3600000));
     const before = (await (await h.callback(a)).json()) as { Version: string };
-    await h.storage.upload("/a.docx", Buffer.from("world"));
+    await h.storage.upload("/a.docx", Buffer.from("world"), { overwrite: true });
     await h.open();
     const after = (await (await h.callback(a)).json()) as { Version: string; Size: number };
     expect(before.Version).not.toBe(after.Version);
@@ -294,7 +294,7 @@ describe("WOPI reads", () => {
   it("enforces configured max and detects a larger actual download", async () => {
     const h = await officeHarness({ config: { maxBytes: 5 } });
     const opened = await h.open();
-    await h.storage.upload("/a.docx", Buffer.from("longer"));
+    await h.storage.upload("/a.docx", Buffer.from("longer"), { overwrite: true });
     // A document past the limit does not open, and an open one is not served.
     await expect(h.open()).rejects.toMatchObject({ status: 413 });
     expect((await h.callback(opened, { contents: true })).status).toBe(413);
