@@ -7,7 +7,7 @@ import type {
 } from "@fdrive/contracts";
 import { isStorageError, joinPath, normalizePath, splitSegments } from "@fdrive/core";
 import type { Identity, LocalGrant, Repos } from "@fdrive/db";
-import { namedSharedGrants, SHARED_WITH_ME } from "@fdrive/local";
+import { closedToShares, namedSharedGrants, SHARED_WITH_ME } from "@fdrive/local";
 import type { IdentityStorageFactory } from "../auth/storage-factory.js";
 import { ApiHttpError } from "../errors.js";
 
@@ -54,6 +54,12 @@ export interface LocalGrantServiceDeps {
   readonly storageFor: IdentityStorageFactory;
   /** The owner's Trash folder while Trash is on, which is never shared. */
   readonly trashPathFor?: (identityId: string) => Promise<string | null>;
+  /**
+   * Folders in each user's files no share reaches (the local module's
+   * `closedFolders`). A share whose folder is in one, or in fdrive's Trash
+   * layout (`closedToShares`), is left out of what its grantee receives.
+   */
+  readonly closedFolders?: (providerId: string) => Promise<readonly string[]>;
 }
 
 const SHELF_PATH = `/${SHARED_WITH_ME}`;
@@ -109,9 +115,13 @@ export function createLocalGrantService(deps: LocalGrantServiceDeps): LocalGrant
     return grant;
   }
 
-  async function received(username: string): Promise<ReceivedFolder[]> {
+  /**
+   * What is shared with `username`, named as their storage names it: before
+   * the shares their storage refuses (`closedToShares`) are left out.
+   */
+  async function reachable(username: string, providerId: string) {
     const grants = await repos.localGrants.listReceived(username);
-    return namedSharedGrants(
+    const named = namedSharedGrants(
       username,
       grants.map((grant) => ({
         owner: grant.ownerUsername,
@@ -119,7 +129,14 @@ export function createLocalGrantService(deps: LocalGrantServiceDeps): LocalGrant
         writable: grant.access === "write",
         grant,
       })),
-    ).map(({ grant, name }) => ({
+    );
+    if (named.length === 0) return named;
+    const closed = (await deps.closedFolders?.(providerId)) ?? [];
+    return named.filter(({ grant }) => !closedToShares(grant.path, closed));
+  }
+
+  async function received(username: string, providerId: string): Promise<ReceivedFolder[]> {
+    return (await reachable(username, providerId)).map(({ grant, name }) => ({
       name,
       owner: grant.owner,
       path: grant.path,
@@ -132,7 +149,7 @@ export function createLocalGrantService(deps: LocalGrantServiceDeps): LocalGrant
   ): Promise<ReceivedFolder[]> {
     const providerId = await deps.providerId();
     if (providerId === null || identity.providerId !== providerId) return [];
-    return received(identity.externalUsername);
+    return received(identity.externalUsername, providerId);
   }
 
   return {
@@ -140,16 +157,7 @@ export function createLocalGrantService(deps: LocalGrantServiceDeps): LocalGrant
       const identity = await localLogin(identityId);
       if (identity === null) return { available: false, owned: [], received: [] };
       const username = identity.externalUsername;
-      const grants = await repos.localGrants.listReceived(username);
-      const named = namedSharedGrants(
-        username,
-        grants.map((grant) => ({
-          owner: grant.ownerUsername,
-          path: grant.path,
-          writable: grant.access === "write",
-          grant,
-        })),
-      );
+      const named = await reachable(username, identity.providerId);
       return {
         available: true,
         owned: (await repos.localGrants.listOwned(username)).map(ownedView),
@@ -256,7 +264,7 @@ export function createLocalGrantService(deps: LocalGrantServiceDeps): LocalGrant
       if (segments[0] !== SHARED_WITH_ME || segments.length < 2) return own;
       const identity = await localLogin(identityId);
       if (identity === null) return own;
-      const folder = (await received(identity.externalUsername)).find(
+      const folder = (await received(identity.externalUsername, identity.providerId)).find(
         (candidate) => candidate.name === segments[1],
       );
       // No such shared folder: an ordinary folder of that name, or nothing.

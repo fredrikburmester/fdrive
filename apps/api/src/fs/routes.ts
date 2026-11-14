@@ -1,6 +1,5 @@
 import { randomUUID } from "node:crypto";
 import {
-  type ActivityFacts,
   CopyRequest,
   DeleteRequest,
   DownloadQuery,
@@ -532,7 +531,8 @@ export async function moveMany(
 /**
  * Deletes one item and records it as a trash or a real delete, whichever the
  * login's storage actually performs. Deletes of the same path are serialized so
- * two callers cannot claim the same new trash leaf.
+ * two callers cannot claim the same new trash leaf. Returns that leaf, or
+ * `null` when the delete was for good or its leaf was not reported.
  */
 async function removeOne(
   deps: Pick<FsRoutesDeps, "activity" | "trashPathForStorage">,
@@ -564,11 +564,10 @@ async function removeOne(
       () => deleteWithActivityReceipt(principal.storage, item.path, item.kind),
       (facts) => facts,
     );
-  // The Trash path the item went to; `null` once it is gone for good.
-  const leaf = (facts: ActivityFacts) =>
-    typeof facts.trashLeaf === "string" ? facts.trashLeaf : null;
-  if (!deps.activity) return leaf(await remove());
-  return leaf(await deps.activity.repo.withPathLock(principal.identityId, item.path, remove));
+  const facts = deps.activity
+    ? await deps.activity.repo.withPathLock(principal.identityId, item.path, remove)
+    : await remove();
+  return facts.trashLeaf ?? null;
 }
 
 export interface TrashManyResult {

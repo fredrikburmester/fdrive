@@ -38,9 +38,10 @@ export interface ShareMoves extends PathFollower {
  * That includes moves to where no link may reach: into the Trash, the Mac's
  * Trash, a backup folder or `Shared with me`. The public routes refuse those
  * paths (fdrive's Trash layout whatever Trash is set to), so the link shows
- * not found there, and follows the item back out on a restore. A delete,
- * or a purge from the Trash (`MetadataService.onPurged`), removes the item's
- * paths from its links, and a link left with none goes.
+ * not found there, and follows the item back out on a restore. Trash moves
+ * reach it as moves (`MetadataService.onTrashed`, `withTrashMoves`). A
+ * delete, or a purge from the Trash, removes the item's paths from its
+ * links, and a link left with none goes.
  *
  * A move by someone a folder is shared with counts in the owner's files:
  * within that folder the owner's links follow it. Taken out of the owner's
@@ -79,14 +80,5 @@ export function createShareMoves(deps: ShareMovesDeps): ShareMoves {
       await deps.shares.deletePrefix(owned.identityId, owned.path, isDir);
   }
 
-  return {
-    resolve,
-    onMoved: follow,
-    onDeleted: drop,
-    async onTrashed(identityId, path, leaf, isDir) {
-      // Without the Trash path the item is as good as gone for its links.
-      if (leaf === null) await drop(identityId, path, isDir);
-      else await follow(identityId, path, leaf, isDir);
-    },
-  };
+  return { resolve, onMoved: follow, onDeleted: drop };
 }

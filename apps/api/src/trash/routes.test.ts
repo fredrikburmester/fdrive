@@ -19,7 +19,11 @@ import type { Principal } from "../auth/principal.js";
 import { withRecycleFolderTrash } from "../auth/storage-factory.ts";
 import { loadConfig } from "../config.js";
 import { type BusEvent, createEventBus, type EventBus } from "../events/bus.js";
-import { createMetadataService, type MetadataService } from "../metadata/service.js";
+import {
+  createMetadataService,
+  type MetadataService,
+  type PathFollower,
+} from "../metadata/service.js";
 import { registerTrashRoutes, type TrashRoutesDeps } from "./routes.js";
 
 const REQUIRED_ENV = {
@@ -94,6 +98,14 @@ async function homeWith(files: Readonly<Record<string, string>>): Promise<Storag
   return createLocalStorage({ home });
 }
 
+/** A `PathFollower` that records what it is told, as folders shared with people follow paths. */
+function recordingFollower() {
+  return {
+    onMoved: vi.fn(async (_identityId: string, _from: string, _to: string, _isDir: boolean) => {}),
+    onDeleted: vi.fn(async (_identityId: string, _path: string, _isDir: boolean) => {}),
+  };
+}
+
 interface Harness {
   readonly app: ReturnType<typeof createApp>;
   readonly bus: EventBus;
@@ -110,6 +122,8 @@ async function buildHarness(
     trashPathOverride?: string | null;
     retentionHours?: number | null;
     identityId?: string;
+    /** What follows items into Trash and out, as folders shared with people do. */
+    followers?: PathFollower[];
   } = {},
 ): Promise<Harness> {
   const username = opts.username ?? "alice";
@@ -140,7 +154,10 @@ async function buildHarness(
   bus.subscribe({ identityId }, (event) => events.push(event));
 
   const config = loadConfig(REQUIRED_ENV);
-  const metadata = createMetadataService(createMemoryRepos());
+  const metadata = createMetadataService({
+    ...createMemoryRepos(),
+    ...(opts.followers === undefined ? {} : { followers: opts.followers }),
+  });
 
   const deps: TrashRoutesDeps = {
     activity: activity.service,
@@ -260,10 +277,45 @@ describe("GET /trash", () => {
 });
 
 describe("POST /trash/restore", () => {
+  it("brings what followed an item into Trash back with it, to its place or another", async () => {
+    const follower = recordingFollower();
+    const { app, storage } = await buildHarness({ followers: [follower] });
+    await storage.deleteDir("/dir");
+    await storage.deleteFile("/hello.txt");
+    const entries = TrashListResponse.parse(
+      await readJson(await app.request(ROUTES.trash.list)),
+    ).entries;
+    const leaf = (name: string) => {
+      const entry = entries.find((candidate) => candidate.name === name);
+      if (entry === undefined) throw new Error(`expected ${name} in Trash`);
+      return entry.id;
+    };
+    const restore = (body: unknown) =>
+      app.request(
+        ROUTES.trash.restore,
+        requestedWith({
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(body),
+        }),
+      );
+
+    expect((await restore({ ids: [leaf("dir")] })).status).toBe(200);
+    expect((await restore({ ids: [leaf("hello.txt")], target: "/again.txt" })).status).toBe(200);
+
+    expect(follower.onMoved.mock.calls).toEqual([
+      [ALICE_IDENTITY_ID, normalizePath(`${TRASH_PATH}/${leaf("dir")}`), "/dir", true],
+      // "Restore to": tags move from the original path, what followed from the leaf.
+      [ALICE_IDENTITY_ID, "/hello.txt", "/again.txt", false],
+      [ALICE_IDENTITY_ID, normalizePath(`${TRASH_PATH}/${leaf("hello.txt")}`), "/again.txt", false],
+    ]);
+    expect(follower.onDeleted).not.toHaveBeenCalled();
+  });
+
   it("restores to the original path without relocating its retained metadata", async () => {
     const { app, storage, metadata, events } = await buildHarness();
     await metadata.addFavorite(ALICE_IDENTITY_ID, "/hello.txt", "file");
-    await metadata.onTrashed(ALICE_IDENTITY_ID, "/hello.txt", false);
+    await metadata.onTrashed(ALICE_IDENTITY_ID, "/hello.txt", false, null);
     await storage.deleteFile("/hello.txt");
     const listed = TrashListResponse.parse(await readJson(await app.request(ROUTES.trash.list)));
     const id = listed.entries[0]?.id;
@@ -283,7 +335,10 @@ describe("POST /trash/restore", () => {
     const body = TrashRestoreResponse.parse(await readJson(res));
     expect(body.restored).toHaveLength(1);
     expect(body.restored[0]?.path).toBe("/hello.txt");
-    expect(onMovedSpy).not.toHaveBeenCalled();
+    // Only what followed the item into Trash moves, back out with it.
+    expect(onMovedSpy.mock.calls).toEqual([
+      [ALICE_IDENTITY_ID, normalizePath(`${TRASH_PATH}/${id}`), "/hello.txt", false],
+    ]);
     expect((await metadata.listFavorites(ALICE_IDENTITY_ID)).map((entry) => entry.path)).toEqual([
       "/hello.txt",
     ]);
@@ -303,7 +358,7 @@ describe("POST /trash/restore", () => {
   it("moves retained metadata to an explicit restore target", async () => {
     const { app, storage, metadata } = await buildHarness();
     await metadata.addFavorite(ALICE_IDENTITY_ID, "/hello.txt", "file");
-    await metadata.onTrashed(ALICE_IDENTITY_ID, "/hello.txt", false);
+    await metadata.onTrashed(ALICE_IDENTITY_ID, "/hello.txt", false, null);
     await storage.deleteFile("/hello.txt");
     const listed = TrashListResponse.parse(await readJson(await app.request(ROUTES.trash.list)));
     const id = listed.entries[0]?.id;
@@ -360,7 +415,7 @@ describe("POST /trash/restore", () => {
   it("keeps metadata on a replacement file at the original path", async () => {
     const { app, storage, metadata } = await buildHarness();
     await metadata.addFavorite(ALICE_IDENTITY_ID, "/hello.txt", "file");
-    await metadata.onTrashed(ALICE_IDENTITY_ID, "/hello.txt", false);
+    await metadata.onTrashed(ALICE_IDENTITY_ID, "/hello.txt", false, null);
     await storage.deleteFile("/hello.txt");
     const listed = TrashListResponse.parse(await readJson(await app.request(ROUTES.trash.list)));
     const id = listed.entries[0]?.id;
@@ -377,7 +432,9 @@ describe("POST /trash/restore", () => {
       }),
     );
     expect(res.status).toBe(200);
-    expect(onMoved).not.toHaveBeenCalled();
+    expect(onMoved.mock.calls).toEqual([
+      [ALICE_IDENTITY_ID, normalizePath(`${TRASH_PATH}/${id}`), "/recovered.txt", false],
+    ]);
     expect((await metadata.listFavorites(ALICE_IDENTITY_ID)).map((entry) => entry.path)).toEqual([
       "/hello.txt",
     ]);
@@ -388,7 +445,7 @@ describe("POST /trash/restore", () => {
     const { app, storage, metadata } = await buildHarness();
     await metadata.addFavorite(ALICE_IDENTITY_ID, "/dir/nested.txt", "file");
     await metadata.setFolderView(ALICE_IDENTITY_ID, "/dir", { mode: "grid" });
-    await metadata.onTrashed(ALICE_IDENTITY_ID, "/dir", true);
+    await metadata.onTrashed(ALICE_IDENTITY_ID, "/dir", true, null);
     await storage.deleteDir("/dir");
     const listed = TrashListResponse.parse(await readJson(await app.request(ROUTES.trash.list)));
     const id = listed.entries[0]?.id;
@@ -660,8 +717,7 @@ describe("POST /trash/restore", () => {
 
 describe("POST /trash/purge", () => {
   it("permanently removes the given ids and publishes one delete event", async () => {
-    const { app, storage, events, metadata } = await buildHarness();
-    const onPurged = vi.spyOn(metadata, "onPurged");
+    const { app, storage, events } = await buildHarness();
     await storage.deleteFile("/hello.txt");
     const listed = TrashListResponse.parse(await readJson(await app.request(ROUTES.trash.list)));
     const id = listed.entries[0]?.id;
@@ -689,12 +745,6 @@ describe("POST /trash/purge", () => {
     ]);
     const after = TrashListResponse.parse(await readJson(await app.request(ROUTES.trash.list)));
     expect(after.entries).toEqual([]);
-    // What followed the file into the Trash (a public link) lets it go.
-    expect(onPurged).toHaveBeenCalledWith(
-      ALICE_IDENTITY_ID,
-      normalizePath(`${TRASH_PATH}/${id}`),
-      false,
-    );
   });
 
   it("returns bad_request for an invalid id", async () => {
@@ -725,6 +775,69 @@ describe("POST /trash/purge", () => {
     );
 
     expect(res.status).toBe(404);
+  });
+
+  it("ends what followed a purged item into Trash, even with a new item where it was", async () => {
+    const follower = recordingFollower();
+    const { app, storage, metadata } = await buildHarness({ followers: [follower] });
+    await metadata.addFavorite(ALICE_IDENTITY_ID, "/dir", "dir");
+    await storage.deleteDir("/dir");
+    await storage.deleteFile("/hello.txt");
+    await storage.upload("/hello.txt", new TextEncoder().encode("a new file"));
+    const ids = TrashListResponse.parse(
+      await readJson(await app.request(ROUTES.trash.list)),
+    ).entries.map((entry) => entry.id);
+
+    const res = await app.request(
+      ROUTES.trash.purge,
+      requestedWith({
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ ids }),
+      }),
+    );
+
+    expect(res.status).toBe(200);
+    const leaves = ids.map((id) => normalizePath(`${TRASH_PATH}/${id}`));
+    expect(follower.onDeleted.mock.calls.sort()).toEqual(
+      leaves
+        .map((leaf) => [ALICE_IDENTITY_ID, leaf, leaf.includes("/dir/p/") ? true : false])
+        .sort(),
+    );
+    expect(follower.onMoved).not.toHaveBeenCalled();
+    // Tags and favorites keep their place, as before.
+    expect((await metadata.listFavorites(ALICE_IDENTITY_ID)).map((entry) => entry.path)).toEqual([
+      "/dir",
+    ]);
+  });
+
+  it("reports a purge whose records could not end, which still name the purged leaf", async () => {
+    const follower = recordingFollower();
+    follower.onDeleted.mockRejectedValue(new Error("grants unavailable"));
+    const { app, storage } = await buildHarness({ followers: [follower] });
+    await storage.deleteDir("/dir");
+    const [id] = TrashListResponse.parse(
+      await readJson(await app.request(ROUTES.trash.list)),
+    ).entries.map((entry) => entry.id);
+
+    const res = await app.request(
+      ROUTES.trash.purge,
+      requestedWith({
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ ids: [id] }),
+      }),
+    );
+
+    expect(res.status).toBe(500);
+    expect((await storage.trash?.list())?.entries).toEqual([]);
+    // Nothing was put back at the original path: what followed the item stays at its leaf.
+    expect(follower.onDeleted).toHaveBeenCalledWith(
+      ALICE_IDENTITY_ID,
+      normalizePath(`${TRASH_PATH}/${id}`),
+      true,
+    );
+    expect(follower.onMoved).not.toHaveBeenCalled();
   });
 });
 
@@ -818,17 +931,10 @@ describe("personal activity for trash commands", () => {
     const h = await buildHarness();
     await trashed(h, "/hello.txt");
     await trashed(h, "/dir", "dir");
-    const onPurged = vi.spyOn(h.metadata, "onPurged");
 
     const res = await h.app.request(ROUTES.trash.empty, requestedWith({ method: "POST" }));
 
     expect(res.status).toBe(200);
-    expect(
-      onPurged.mock.calls.map(([, leaf, isDir]) => [leaf.split("/")[3], isDir]).sort(),
-    ).toEqual([
-      ["dir", true],
-      ["file", false],
-    ]);
     expect(h.activity.outcomes.map((row) => [row.action, row.outcome])).toEqual([
       ["file.delete", "success"],
       ["file.delete", "success"],
@@ -933,6 +1039,65 @@ describe("POST /trash/empty", () => {
     ]);
     const after = TrashListResponse.parse(await readJson(await app.request(ROUTES.trash.list)));
     expect(after.entries).toEqual([]);
+  });
+
+  it("ends what followed each emptied item into Trash", async () => {
+    const follower = recordingFollower();
+    const { app, storage } = await buildHarness({ followers: [follower] });
+    await storage.deleteDir("/dir");
+    await storage.deleteFile("/hello.txt");
+    const leaves = TrashListResponse.parse(
+      await readJson(await app.request(ROUTES.trash.list)),
+    ).entries.map((entry) => normalizePath(`${TRASH_PATH}/${entry.id}`));
+
+    const res = await app.request(ROUTES.trash.empty, requestedWith({ method: "POST" }));
+
+    expect(res.status).toBe(200);
+    expect(follower.onDeleted.mock.calls.map((call) => call[1]).sort()).toEqual(leaves.sort());
+  });
+
+  it("empties leaf by leaf when only metadata is wired, so what followed each leaf ends", async () => {
+    const { storage } = await buildHarness();
+    await storage.deleteDir("/dir");
+    const trash = storage.trash;
+    if (!trash) throw Error("Expected Trash");
+    const [leaf] = (await trash.list()).entries.map((entry) =>
+      normalizePath(`${TRASH_PATH}/${entry.id}`),
+    );
+    const empty = vi.spyOn(trash, "empty");
+    const follower = recordingFollower();
+    const metadata = createMetadataService({ ...createMemoryRepos(), followers: [follower] });
+    const principal: Principal = {
+      accountId: ACCOUNT_ID,
+      identityId: ALICE_IDENTITY_ID,
+      username: "alice",
+      storage,
+      isAdmin: false,
+    };
+    const clock = () => new Date(CLOCK_ISO);
+    const app = createApp({
+      config: loadConfig(REQUIRED_ENV),
+      logger: createTestLogger(),
+      version: "1.0.0",
+      startedAt: new Date(CLOCK_ISO),
+      clock,
+      principalResolver: async () => principal,
+      connectionStatus: READY,
+      registerRoutes: (groups) =>
+        registerTrashRoutes(groups, {
+          bus: createEventBus(),
+          clock,
+          settingsForStorage: () => trashSettings(TRASH_PATH),
+          metadata,
+        }),
+    });
+
+    const res = await app.request(ROUTES.trash.empty, requestedWith({ method: "POST" }));
+
+    expect(res.status).toBe(200);
+    expect(empty).not.toHaveBeenCalled();
+    expect((await trash.list()).entries).toEqual([]);
+    expect(follower.onDeleted.mock.calls).toEqual([[ALICE_IDENTITY_ID, leaf, true]]);
   });
 
   it("empties Trash with the provider's one bulk call when no activity journal is wired", async () => {

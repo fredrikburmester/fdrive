@@ -180,7 +180,7 @@ export async function trashPath(deps: McpToolDeps, principal: Principal, rawPath
     ...(await mutationEffects(deps, principal, {
       kind: "trash",
       path,
-      ...(typeof trashLeaf === "string" ? { trashLeaf } : {}),
+      ...(trashLeaf === undefined ? {} : { trashLeaf }),
       isDir: kind === "dir",
     })),
   };

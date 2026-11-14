@@ -40,16 +40,14 @@ export interface MetadataFolderView {
   readonly sort: FolderViewSort | null;
 }
 
-/** Something else keyed by a login's paths that follows its moves and deletes. */
+/**
+ * Something else keyed by a login's paths that follows its moves and deletes,
+ * and, since it grants access, follows an item into Trash as a move: what
+ * is in Trash is never left at a path a new item could take.
+ */
 export interface PathFollower {
   onMoved(identityId: string, oldPath: string, newPath: string, isDir: boolean): Promise<void>;
   onDeleted(identityId: string, path: string, isDir: boolean): Promise<void>;
-  /**
-   * `path` went to the Trash, at `leaf` when known. Optional: a follower
-   * without it stays at the original path, as tags do. A restore reaches
-   * `onMoved` from the leaf.
-   */
-  onTrashed?(identityId: string, path: string, leaf: string | null, isDir: boolean): Promise<void>;
 }
 
 export interface MetadataServiceDeps {
@@ -142,19 +140,18 @@ export interface MetadataService {
    * favorites are left in place (keyed at the original path) so a
    * same-path restore recovers them. Alternate restores relocate surviving
    * metadata only when no replacement entry occupies the original path.
+   * A move into the Trash reaches here too (`withTrashMoves`).
+   *
+   * `followers` grant access, so they follow the item to `trashedTo`, its
+   * path in Trash, where nothing new can take their path, and back out on a
+   * restore. When that path is not known (`null`) they end instead.
    */
-  onTrashed(identityId: string, path: string, isDir: boolean, leaf?: string | null): Promise<void>;
-  /**
-   * A restore moved `leaf`, out of the Trash, to `path`. Only followers that
-   * went into the Trash with it (`PathFollower.onTrashed`) follow it back;
-   * the rest still sit at the original path (see `onTrashed`).
-   */
-  onRestored(identityId: string, leaf: string, path: string, isDir: boolean): Promise<void>;
-  /**
-   * `leaf` was purged from the Trash. Followers that went into the Trash
-   * with it (`PathFollower.onTrashed`) let it go, as after a delete.
-   */
-  onPurged(identityId: string, leaf: string, isDir: boolean): Promise<void>;
+  onTrashed(
+    identityId: string,
+    path: string,
+    isDir: boolean,
+    trashedTo: string | null,
+  ): Promise<void>;
   /**
    * No-op by design: a copy is a brand new file as far as metadata is
    * concerned, so tags, favorites, and recents on the source are never
@@ -299,24 +296,14 @@ export function createMetadataService(deps: MetadataServiceDeps): MetadataServic
       }
     },
 
-    async onTrashed(identityId, path, isDir, leaf = null) {
+    async onTrashed(identityId, path, isDir, trashedTo) {
+      // Access first: a share must not stay where a new item can take its path.
+      for (const follower of deps.followers ?? []) {
+        if (trashedTo === null) await follower.onDeleted(identityId, path, isDir);
+        else await follower.onMoved(identityId, path, trashedTo, isDir);
+      }
       await deps.recents.deletePrefix(identityId, path, isDir);
       await deps.aiChats?.markReferencesMissing(identityId, path, isDir);
-      for (const follower of deps.followers ?? []) {
-        await follower.onTrashed?.(identityId, path, leaf, isDir);
-      }
-    },
-
-    async onRestored(identityId, leaf, path, isDir) {
-      for (const follower of deps.followers ?? []) {
-        if (follower.onTrashed !== undefined) await follower.onMoved(identityId, leaf, path, isDir);
-      }
-    },
-
-    async onPurged(identityId, leaf, isDir) {
-      for (const follower of deps.followers ?? []) {
-        if (follower.onTrashed !== undefined) await follower.onDeleted(identityId, leaf, isDir);
-      }
     },
 
     onCopied() {

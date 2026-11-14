@@ -18,7 +18,11 @@ export function isUnderPath(prefix: string, path: string): boolean {
 
 export type MoveTrashLeafKind = "file" | "dir";
 
-const MOVE_LAYOUT_NAMESPACE = ".fdrive-move-v1";
+/**
+ * The folder every trashed item lives under, directly in the trash folder.
+ * Its name stays fdrive's even after Trash is turned off or moved.
+ */
+export const MOVE_LAYOUT_NAMESPACE = ".fdrive-move-v1";
 
 /**
  * True when `path` lies in fdrive's Trash layout under any folder: one of its

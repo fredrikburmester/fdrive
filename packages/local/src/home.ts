@@ -69,6 +69,13 @@ export interface CreateHomeOptions {
    * replaced with a link would lead somewhere the owner cannot go themselves.
    */
   readonly within?: string;
+  /**
+   * Folders this one must not really be inside, links resolved: for a folder
+   * someone shares, their Trash and fdrive's own bookkeeping, so a share
+   * never reaches what its owner deleted. A folder that does not exist rules
+   * nothing out.
+   */
+  readonly outside?: readonly string[];
 }
 
 /** The home folder at `dir`, which need not exist yet. */
@@ -81,6 +88,18 @@ export function createHome(dir: string, options: CreateHomeOptions = {}): Home {
     const resolved = await realpath(dir);
     if (options.within !== undefined && !inside(await realpath(options.within), resolved)) {
       throw new StorageError("forbidden", "the shared folder is outside its owner's files");
+    }
+    for (const folder of options.outside ?? []) {
+      const excluded = await realpath(folder).catch((error: unknown) => {
+        if (isMissing(error)) return null;
+        throw error;
+      });
+      if (excluded !== null && inside(excluded, resolved)) {
+        throw new StorageError(
+          "forbidden",
+          "the shared folder is in a place its owner cannot share from",
+        );
+      }
     }
     return resolved;
   }

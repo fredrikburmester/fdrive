@@ -16,9 +16,9 @@ export function withDesktopMetadata(
       await desktop.remove(identityId, path);
       await metadata.onDeleted(identityId, path, directory);
     },
-    async onTrashed(identityId, path, directory, leaf) {
+    async onTrashed(identityId, path, directory, trashedTo) {
       await desktop.remove(identityId, path);
-      await metadata.onTrashed(identityId, path, directory, leaf);
+      await metadata.onTrashed(identityId, path, directory, trashedTo);
     },
   };
 }
