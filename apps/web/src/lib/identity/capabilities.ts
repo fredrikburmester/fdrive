@@ -16,48 +16,43 @@ const CAPABILITY_FLAGS: Readonly<Record<CapabilityKey, true>> = {
 
 export const CAPABILITY_KEYS = Object.keys(CAPABILITY_FLAGS) as readonly CapabilityKey[];
 
-/** Every capability set to `value`; for tests and for "this provider type can do nothing here". */
+/** Every capability set to `value`; for tests that build a login or a provider. */
 export const allCapabilities = (value: boolean): ProviderCapabilities =>
   Object.fromEntries(CAPABILITY_KEYS.map((k) => [k, value])) as unknown as ProviderCapabilities;
 
 /**
- * What the file browser assumes before `/auth/me` has answered: everything
- * a local-folder login can do, except Trash, whose "Move to Trash" label must
- * wait for the login's configuration, and sharing with people, which asks
- * the API about other users and so waits for a login known to have them.
- * This is what the browser showed before capabilities existed, so the
- * common case never flickers.
+ * The flags the web reads. Every other flag is always on: the files folder
+ * zips, keeps modification times, moves in one step, shares links and
+ * folders, and opens in Office.
  */
-export const DEFAULT_CAPABILITIES: ProviderCapabilities = {
-  ...allCapabilities(true),
-  trash: false,
-  shareWithPeople: false,
-};
+export type LoginCapabilities = Pick<ProviderCapabilities, "trash" | "index">;
 
 /**
- * The capabilities of one linked login (`identityId`, defaulting to the
- * active one). Falls back to `DEFAULT_CAPABILITIES` while `me` is still
- * loading or when the login is unknown.
+ * Whether deletes go to Trash (the System Trash switch) and whether the
+ * files folder is indexed, for search, thumbnails and folder sizes. Before
+ * `me` loads, the folder counts as indexed, so thumbnails never flicker, and
+ * Trash as off, since "Move to Trash" must wait for the setting.
  */
 export function capabilitiesFor(
   me: MeResponse | undefined,
   identityId?: string,
-): ProviderCapabilities {
+): LoginCapabilities {
   const id = identityId ?? me?.activeIdentityId;
   const identity = me?.identities.find((candidate) => candidate.id === id);
-  return identity?.capabilities ?? DEFAULT_CAPABILITIES;
+  return {
+    trash: identity?.capabilities.trash ?? false,
+    index: identity?.capabilities.index ?? true,
+  };
 }
 
 /**
  * Whether any login linked to the account has `key`: the sidebar shows
- * Shares and Trash when at least one login can use them, since the login
- * switcher in the sidebar footer works from either page. A page reached
- * with a login that lacks the capability states that limit itself
- * (`capabilitiesFor`) rather than asking the API for a refusal. Before
- * `me` loads, the default applies.
+ * Trash when at least one login has it, since the login switcher in the
+ * sidebar footer works from either page. Before `me` loads, the default
+ * applies.
  */
-export function anyLoginCan(me: MeResponse | undefined, key: CapabilityKey): boolean {
-  if (me === undefined) return DEFAULT_CAPABILITIES[key];
+export function anyLoginCan(me: MeResponse | undefined, key: keyof LoginCapabilities): boolean {
+  if (me === undefined) return capabilitiesFor(undefined)[key];
   return me.identities.some((identity) => identity.capabilities[key]);
 }
 
@@ -77,16 +72,4 @@ export function selectionOf(entries: readonly Pick<FsEntry, "kind">[]): BrowserS
     else files += 1;
   }
   return { files, folders };
-}
-
-export function downloadNeedsZip(selection: BrowserSelection): boolean {
-  return selection.folders > 0 || selection.files !== 1;
-}
-
-export function canDownload(
-  capabilities: Pick<ProviderCapabilities, "zip">,
-  selection: BrowserSelection,
-): boolean {
-  if (capabilities.zip) return selection.files + selection.folders > 0;
-  return selection.files > 0;
 }

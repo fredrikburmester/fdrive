@@ -42,7 +42,7 @@ beforeEach(async () => {
 });
 
 it("keeps stage failures across reader restarts, separates roots and paginates equal timestamps", async () => {
-  const firstRoot = await insertRoot("photos");
+  const firstRoot = await insertRoot("files");
   const secondRoot = await insertRoot("other");
   await db.insert(schema.processingFailures).values([
     {
@@ -79,7 +79,7 @@ it("keeps stage failures across reader restarts, separates roots and paginates e
     limit: 1,
     before: first.nextCursor,
   });
-  expect(next.entries[0]?.root).toBe("photos");
+  expect(next.entries[0]?.root).toBe("files");
   expect(next.nextCursor).toBeUndefined();
   const logs = await repo.list("thumbnails", { limit: 10, minLevel: "error" });
   expect(logs).toHaveLength(2);
@@ -112,7 +112,7 @@ async function insertRoot(name: string): Promise<number> {
 
 describe("system event log: indexer merge", () => {
   it("omits extraction failures for deleted files", async () => {
-    const rootId = await insertRoot("sftpgo");
+    const rootId = await insertRoot("files");
     await db.insert(schema.files).values({
       rootId,
       path: "gone.pdf",
@@ -128,7 +128,7 @@ describe("system event log: indexer merge", () => {
   });
 
   it("merges API rows, scans and file extraction errors newest first", async () => {
-    const rootId = await insertRoot("sftpgo");
+    const rootId = await insertRoot("files");
     await db.insert(schema.scans).values({
       rootId,
       startedAt: at(1),
@@ -150,7 +150,7 @@ describe("system event log: indexer merge", () => {
     });
     await db.execute(
       sql`insert into app.system_events (at, subsystem, level, message, data)
-          values (${at(4)}, 'indexer', 'info', 'Reindex requested', ${JSON.stringify({ root: "sftpgo" })}::jsonb)`,
+          values (${at(4)}, 'indexer', 'info', 'Reindex requested', ${JSON.stringify({ root: "files" })}::jsonb)`,
     );
 
     const entries = await repo.list("indexer", { limit: 10 });
@@ -158,13 +158,13 @@ describe("system event log: indexer merge", () => {
     expect(entries.map((entry) => [entry.source, entry.level, entry.message])).toEqual([
       ["api", "info", "Reindex requested"],
       ["indexer", "error", "docs/broken.pdf: unsupported encoding"],
-      ["indexer", "info", "Scan of sftpgo finished: 10 seen, 3 changed, 1 deleted"],
+      ["indexer", "info", "Scan of files finished: 10 seen, 3 changed, 1 deleted"],
     ]);
     expect(entries.map((entry) => entry.id)).toEqual(["api:1", "file:1", "scan:1"]);
   });
 
   it("reports a scan that recorded errors as a warning and drops it below an error filter", async () => {
-    const rootId = await insertRoot("sftpgo");
+    const rootId = await insertRoot("files");
     await db.insert(schema.scans).values({
       rootId,
       startedAt: at(1),
@@ -184,7 +184,7 @@ describe("system event log: indexer merge", () => {
   });
 
   it("applies the before cursor and the limit across every source", async () => {
-    const rootId = await insertRoot("sftpgo");
+    const rootId = await insertRoot("files");
     await db.insert(schema.scans).values({
       rootId,
       startedAt: at(1),
@@ -210,13 +210,13 @@ describe("system event log: indexer merge", () => {
 
     const older = await repo.list("indexer", { limit: 10, before: at(5) });
     expect(older.map((entry) => entry.source)).toEqual(["indexer"]);
-    expect(older[0]?.message).toContain("Scan of sftpgo");
+    expect(older[0]?.message).toContain("Scan of files");
   });
 });
 
 describe("system event log: ocr merge", () => {
   it("merges OCR runs and per-file failures, and ignores succeeded log rows", async () => {
-    const rootId = await insertRoot("sftpgo");
+    const rootId = await insertRoot("files");
     await db.insert(schema.ocrRuns).values({
       startedAt: at(1),
       finishedAt: at(2),

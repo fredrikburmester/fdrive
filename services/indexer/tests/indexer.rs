@@ -1727,16 +1727,16 @@ fn only_a_new_or_changed_version_emits_an_event() {
 }
 
 #[test]
-fn a_failing_event_write_is_swallowed() {
+fn a_failing_event_is_swallowed() {
     let env = Env::new();
     let ctx = env.ctx(fv(false, true, false, false, false));
-    env.client()
-        .batch_execute("ALTER TABLE idx.events RENAME TO events_gone")
-        .unwrap();
-    emit_event(&ctx, EventKind::Created, "a.txt", None);
+    // Postgres refuses a notification payload of 8000 bytes or more.
+    emit_event(&ctx, EventKind::Created, &"a".repeat(8000), None);
+    assert!(env.events().is_empty());
     let (path, stat) = env.write("a.txt", b"hello");
     assert!(process_file(&ctx, &path, "a.txt", stat).unwrap());
     assert_eq!(env.status(&ctx, "a.txt"), "partial");
+    assert_eq!(env.events(), ["created"]);
 }
 
 #[test]
@@ -1776,29 +1776,10 @@ fn watcher_renames_move_rows_or_delete_on_an_extension_change() {
     assert_eq!(watch_rename(&ctx, "docs", "moved", true), 1);
     assert!(!env.row(&ctx, "renamed.txt").deleted);
     assert!(!env.row(&ctx, "moved/c.txt").deleted);
-    let moves: Vec<(String, String, String)> = env
-        .client()
-        .query("SELECT src, dst, actor FROM idx.moves ORDER BY id", &[])
-        .unwrap()
-        .iter()
-        .map(|r| (r.get(0), r.get(1), r.get(2)))
-        .collect();
+    // The move log is MCP's own; the indexer's moves are in the journal and the events.
+    assert_eq!(env.count("idx.moves"), 0);
     assert_eq!(
-        moves,
-        vec![
-            ("b.txt".into(), "renamed.txt".into(), "watcher".into()),
-            ("docs".into(), "moved".into(), "watcher".into())
-        ]
-    );
-    let events: Vec<(String, String, Option<String>)> = env
-        .client()
-        .query("SELECT kind, path, target_path FROM idx.events ORDER BY id", &[])
-        .unwrap()
-        .iter()
-        .map(|r| (r.get(0), r.get(1), r.get(2)))
-        .collect();
-    assert_eq!(
-        events,
+        env.notified(),
         vec![
             ("deleted".into(), "a.txt".into(), None),
             ("moved".into(), "b.txt".into(), Some("renamed.txt".into())),
@@ -1827,11 +1808,7 @@ fn watcher_parent_mutations_wait_for_an_in_flight_child() {
         };
         std::thread::sleep(Duration::from_millis(50));
         assert!(!operation.is_finished());
-        assert_eq!(
-            env.count("idx.events"),
-            0,
-            "nothing changed while the child is in flight"
-        );
+        assert!(env.events().is_empty(), "nothing changed while the child is in flight");
         drop(child);
         assert_eq!(operation.join().unwrap(), 1);
         assert!(ctx.path_locks.is_empty());

@@ -43,14 +43,10 @@ function withCapabilities(overrides: Partial<MeResponse["identities"][number]["c
 function renderSidebar(account: MeResponse = me) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   client.setQueryData(["auth", "me"], account);
-  client.setQueryData(["trash", "status"], {
-    available: true,
-    path: "/.trash",
-    retentionHours: null,
-  });
   client.setQueryData(["favorites", "list"], []);
   client.setQueryData(["recents", "list"], []);
   client.setQueryData(["tags", "list"], []);
+  client.setQueryData(["grants", "list"], { available: true, owned: [], received: [] });
   return render(
     <QueryClientProvider client={client}>
       <SidebarProvider>
@@ -104,23 +100,17 @@ it("hides Trash when no linked login has one", async () => {
   expect(screen.queryByRole("link", { name: "Trash" })).toBeNull();
 });
 
-it("hides Shares when no linked login can share", async () => {
-  renderSidebar(withCapabilities({ shares: false }));
-  await screen.findByRole("link", { name: "Files" });
-  expect(screen.queryByRole("link", { name: "Shares" })).toBeNull();
-});
-
-it("shows Shares and Trash when any linked login has them, and names each login's provider type", async () => {
+it("shows Trash when any linked login has it, and names each login's provider type", async () => {
   renderSidebar({
     ...me,
     identities: [
-      { ...ada, capabilities: { ...ada.capabilities, shares: false, trash: false } },
+      { ...ada, capabilities: { ...ada.capabilities, trash: false } },
       {
         ...ada,
         id: "two",
         username: "bob",
         providerLabel: "Other",
-        capabilities: { ...ada.capabilities, trash: true, shares: true },
+        capabilities: { ...ada.capabilities, trash: true },
       },
     ],
   });

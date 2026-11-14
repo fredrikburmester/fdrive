@@ -373,7 +373,7 @@ it("restores only authorized Trash entries and preserves tags/favorites through 
   expect((await fileTags(deps, principal, "/allowed/restored.txt")).tags[0]?.name).toBe("Work");
   await setFavorite(deps, principal, { path: "/allowed/restored.txt", favorite: false });
   expect(await fileTags(deps, principal, "/allowed/restored.txt", [])).toMatchObject({ tags: [] });
-  await expect(restorePath(deps, principal, { id })).rejects.toThrow("listing");
+  await expect(restorePath(deps, principal, { id })).rejects.toMatchObject({ kind: "not_found" });
   await expect(
     trashPath({ ...deps, trashPath: null }, principal, "/allowed/restored.txt"),
   ).rejects.toThrow("no file was deleted");
@@ -383,6 +383,24 @@ it("restores only authorized Trash entries and preserves tags/favorites through 
   expect(await restorePath(deps, principal, { id: folder?.id ?? "missing" })).toMatchObject({
     restored: "/allowed/version.1",
   });
+});
+
+it("restores a Trash item from its id without listing Trash", async () => {
+  const { principal, deps, base } = await fixture();
+  await trashPath(deps, principal, "/allowed/a.txt");
+  const [entry] = (await listTrash(deps, principal, {})).entries;
+  const trash = principal.storage.trash;
+  if (entry === undefined || trash === undefined) throw new Error("expected a Trash item");
+  const list = vi.spyOn(trash, "list");
+
+  expect(await restorePath(deps, principal, { id: entry.id })).toMatchObject({
+    restored: "/allowed/a.txt",
+  });
+  expect(list).not.toHaveBeenCalled();
+  expect(await base.stat("/allowed/a.txt")).toMatchObject({ kind: "file" });
+  await expect(restorePath(deps, principal, { id: "allowed/a.txt" })).rejects.toThrow(
+    "not a Trash item id",
+  );
 });
 
 it("preserves search availability and passes grants to visual search", async () => {

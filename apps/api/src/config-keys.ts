@@ -220,14 +220,6 @@ export const CONFIG_KEYS: readonly ConfigKeyDef[] = [
     subsystem: "network",
   },
   {
-    key: "FDRIVE_AUTO_MIGRATE",
-    description: "Whether the API runs pending database migrations on startup.",
-    default: "true",
-    example: "true",
-    secret: false,
-    subsystem: "core",
-  },
-  {
     key: "FDRIVE_TMP_DIR",
     description:
       "Directory archive jobs spool temporary files into. Defaults to the OS temp directory.",

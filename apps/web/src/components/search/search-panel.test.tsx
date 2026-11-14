@@ -618,7 +618,7 @@ it("shows Search is not available when both text and visual search are unavailab
   await waitFor(() => expect(screen.getByText("Search is not available.")).toBeDefined());
 });
 
-it("keeps permanent scope failures unavailable without startup wording", async () => {
+it("says the files are not indexed when the status has no index root", async () => {
   stubMatchMedia(false);
   vi.spyOn(apiClient, "searchStatus").mockResolvedValue({
     available: false,
@@ -642,20 +642,16 @@ it("keeps permanent scope failures unavailable without startup wording", async (
   });
 
   await waitFor(() =>
-    expect(
-      screen.getByText("Search is not available for this login. Its folder is not indexed."),
-    ).toBeDefined(),
+    expect(screen.getByText("Search is not available. Your files are not indexed.")).toBeDefined(),
   );
-  expect(screen.queryByText("Search is starting… Retrying automatically.")).toBeNull();
 });
 
-it("starts visual search when transient status recovery enables images", async () => {
+it("starts visual search once the status turns images on", async () => {
   stubMatchMedia(false);
   vi.spyOn(apiClient, "searchStatus").mockResolvedValue({
-    available: false,
+    available: true,
     semantic: false,
     images: false,
-    reason: "indexer_unreachable",
   });
   vi.spyOn(apiClient, "search").mockResolvedValue({
     query: "sunset",
@@ -672,12 +668,7 @@ it("starts visual search when transient status recovery enables images", async (
   });
   const client = new QueryClient({ defaultOptions: { queries: { staleTime: Infinity } } });
   client.setQueryData(["auth", "me"], me);
-  client.setQueryData(["search", "status"], {
-    available: false,
-    semantic: false,
-    images: false,
-    reason: "indexer_unreachable",
-  });
+  client.setQueryData(["search", "status"], { available: true, semantic: false, images: false });
   renderPanel(client);
 
   fireEvent.change(screen.getByPlaceholderText("Search files, content, and images..."), {

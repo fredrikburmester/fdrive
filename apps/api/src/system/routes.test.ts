@@ -151,6 +151,7 @@ function buildApp(opts: { isAdmin?: boolean; deps?: Partial<SystemRoutesDeps> })
       copy: notImplemented,
       deleteFile: notImplemented,
       deleteDir: notImplemented,
+      deleteEmptyDir: notImplemented,
       setModifiedAt: notImplemented,
       zip: notImplemented,
     },

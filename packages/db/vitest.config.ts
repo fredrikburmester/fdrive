@@ -22,7 +22,6 @@ export default definePackageConfig({
         "src/**/*.d.ts",
         "src/**/index.ts",
         "src/schema/**",
-        "src/bin/**",
         "src/repos/ai-chats.ts",
         "src/repos/drizzle.ts",
         "src/repos/index-queries.ts",

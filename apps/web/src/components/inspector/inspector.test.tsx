@@ -73,6 +73,16 @@ describe("Inspector: folder size states", () => {
     expect(screen.getAllByText("Not indexed")).toHaveLength(2);
   });
 
+  it("shows Not indexed without asking when the files folder is not indexed", () => {
+    useFolderSizeMock.mockReturnValue({ isPending: true, isError: false, data: undefined });
+
+    render(<Inspector entries={[DIR_ENTRY]} onClose={() => {}} indexed={false} />);
+
+    expect(useFolderSizeMock).toHaveBeenCalledWith("/photos", { enabled: false });
+    expect(screen.getAllByText("Not indexed")).toHaveLength(2);
+    expect(screen.queryByText("Calculating")).toBeNull();
+  });
+
   it("shows the real size and file count once indexed, with a note", () => {
     useFolderSizeMock.mockReturnValue({
       isPending: false,

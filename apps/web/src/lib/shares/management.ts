@@ -10,16 +10,7 @@ import { getTabIdentity, snapshotTabApiClient } from "@/lib/api/client";
 export const managedSharesKey = (identity: string | undefined) =>
   ["shares", "managed", identity] as const;
 
-export interface ShareManagementOptions {
-  /**
-   * Whether to list the login's links at all. The Shares page passes false
-   * for a login whose storage cannot share, so the page states the limit
-   * instead of asking the API for a refusal it already knows about.
-   */
-  readonly list?: boolean;
-}
-
-export function useShareManagement({ list = true }: ShareManagementOptions = {}) {
+export function useShareManagement() {
   const queryClient = useQueryClient();
   const { pending } = useAccountTransition();
   const [scope] = useState(() => ({
@@ -44,7 +35,7 @@ export function useShareManagement({ list = true }: ShareManagementOptions = {})
       if (!current()) throw new Error("The active login changed.");
       return scope.client.listShares();
     },
-    enabled: list && !pending,
+    enabled: !pending,
   });
   return {
     query,

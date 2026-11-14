@@ -17,8 +17,6 @@ import {
   trashLeafPath,
 } from "./recycle-folder.ts";
 
-/** Directory visits are bounded on top of the entry limit, matching the spec's default. */
-const MAX_DIR_VISITS = 10000;
 const DEFAULT_LIMIT = 10000;
 
 export interface CreateRecycleFolderTrashOptions {
@@ -38,37 +36,56 @@ function compareEntries(a: TrashEntry, b: TrashEntry): number {
   return byDate !== 0 ? byDate : a.id.localeCompare(b.id);
 }
 
+/**
+ * Removes `dir` and then each parent while it is empty, stopping below the
+ * layout root. Removal is never recursive, so a folder something was moved
+ * into meanwhile stays. This is tidying after an operation that already
+ * succeeded: the first folder that cannot go, for whatever reason (not
+ * empty, already gone), ends the climb without failing anything.
+ */
+async function removeEmptyFolders(
+  storage: StorageProvider,
+  trashRoot: string,
+  dir: string,
+): Promise<void> {
+  const layoutRoot = moveTrashRootPath(trashRoot);
+  for (let at = dir; isUnderPath(layoutRoot, at); at = parentPath(at)) {
+    try {
+      await storage.deleteEmptyDir(at);
+    } catch {
+      return;
+    }
+  }
+}
+
 async function walk(
   storage: StorageProvider,
   trashRoot: string,
-  limit: number,
-  signal: AbortSignal | undefined,
+  options: { limit: number; prune: boolean; signal: AbortSignal | undefined },
 ): Promise<TrashListing> {
+  const { limit, prune, signal } = options;
   const entries: TrashEntry[] = [];
   let truncated = false;
-  let dirVisits = 0;
-  const walkRoot = moveTrashRootPath(trashRoot);
-  const queue: string[] = [walkRoot];
+  const queue: string[] = [moveTrashRootPath(trashRoot)];
 
   for (const dir of queue) {
     checkAborted(signal);
     if (truncated) {
       break;
     }
-    dirVisits += 1;
-    if (dirVisits > MAX_DIR_VISITS) {
-      truncated = true;
-      break;
-    }
     let children: FileEntry[];
     try {
       children = await storage.list(dir);
     } catch (error) {
-      // Nothing has been deleted yet: the namespace is created on the first delete.
-      if (dir === walkRoot && isStorageError(error) && error.kind === "not_found") {
-        return { entries: [], truncated: false };
+      // A folder that is gone holds nothing: the namespace before the first
+      // delete, or a folder a restore or purge removed since it was queued.
+      if (isStorageError(error) && error.kind === "not_found") {
+        continue;
       }
       throw error;
+    }
+    if (prune && children.length === 0) {
+      await removeEmptyFolders(storage, trashRoot, dir);
     }
     for (const child of children) {
       const parsed = parseMoveTrashLeaf(trashRoot, child.path);
@@ -122,8 +139,9 @@ async function statLeaf(
 
 /**
  * Moves a leaf back to `target` (default: its original path), creating
- * missing parents. The move refuses an occupied target (`overwrite: false`),
- * so a restore never replaces what is there now: it fails with `conflict`.
+ * missing parents, then removes the layout folders that leaves empty. The
+ * move refuses an occupied target (`overwrite: false`), so a restore never
+ * replaces what is there now: it fails with `conflict`.
  */
 async function restoreLeaf(
   storage: StorageProvider,
@@ -146,6 +164,7 @@ async function restoreLeaf(
 
   await storage.mkdir(parentPath(resolvedTarget), { parents: true });
   await storage.move(leafPath, resolvedTarget, { overwrite: false });
+  await removeEmptyFolders(storage, trashRoot, parentPath(leafPath));
 
   return {
     ...makeEntry(parentPath(resolvedTarget), {
@@ -158,48 +177,34 @@ async function restoreLeaf(
   };
 }
 
-async function purgeLeaves(
-  storage: StorageProvider,
-  trashRoot: string,
-  ids: readonly string[],
-): Promise<void> {
-  for (const id of ids) {
-    const leafPath = trashLeafPath(trashRoot, id);
-    try {
-      const parsed = parseMoveTrashLeaf(trashRoot, leafPath);
-      if (parsed === null) {
-        throw new StorageError("bad_request", `invalid trash id: ${id}`, { details: { id } });
-      }
-      const stat = await statLeaf(storage, id, leafPath, parsed.kind);
-      if (stat.kind === "dir") {
-        await storage.deleteDir(leafPath);
-      } else {
-        await storage.deleteFile(leafPath);
-      }
-    } catch (error) {
-      if (isStorageError(error) && error.kind === "not_found") {
-        continue;
-      }
-      throw error;
-    }
+/** Deletes a leaf for good, then the folders that leaves empty. A missing leaf is ignored. */
+async function purgeLeaf(storage: StorageProvider, trashRoot: string, id: string): Promise<void> {
+  const leafPath = trashLeafPath(trashRoot, id);
+  const parsed = parseMoveTrashLeaf(trashRoot, leafPath);
+  if (parsed === null) {
+    throw new StorageError("bad_request", `invalid trash id: ${id}`, { details: { id } });
   }
-}
-
-async function emptyTrash(storage: StorageProvider, trashRoot: string): Promise<void> {
-  const children = await storage.list(trashRoot);
-  for (const child of children) {
-    if (child.kind === "dir") {
-      await storage.deleteDir(child.path);
+  try {
+    const stat = await statLeaf(storage, id, leafPath, parsed.kind);
+    if (stat.kind === "dir") {
+      await storage.deleteDir(leafPath);
     } else {
-      await storage.deleteFile(child.path);
+      await storage.deleteFile(leafPath);
     }
+  } catch (error) {
+    if (isStorageError(error) && error.kind === "not_found") {
+      return;
+    }
+    throw error;
   }
+  await removeEmptyFolders(storage, trashRoot, parentPath(leafPath));
 }
 
 /**
  * Builds a `TrashProvider` purely on top of a `StorageProvider`'s own
- * `list`, `stat`, `move`, `mkdir`, `deleteFile`, and `deleteDir`, reading
- * the leaves `withMoveToTrash` writes (layout in `./recycle-folder.ts`).
+ * `list`, `stat`, `move`, `mkdir`, `deleteFile`, `deleteDir` and
+ * `deleteEmptyDir`, reading the leaves `withMoveToTrash` writes (layout in
+ * `./recycle-folder.ts`).
  */
 export function createRecycleFolderTrash(options: CreateRecycleFolderTrashOptions): TrashProvider {
   const { storage, limit = DEFAULT_LIMIT } = options;
@@ -207,16 +212,17 @@ export function createRecycleFolderTrash(options: CreateRecycleFolderTrashOption
 
   return {
     list(listOptions) {
-      return walk(storage, trashRoot, listOptions?.limit ?? limit, listOptions?.signal);
+      return walk(storage, trashRoot, {
+        limit: listOptions?.limit ?? limit,
+        prune: listOptions?.prune === true,
+        signal: listOptions?.signal,
+      });
     },
     restore(id, restoreOptions) {
       return restoreLeaf(storage, trashRoot, id, restoreOptions?.target);
     },
-    purge(ids) {
-      return purgeLeaves(storage, trashRoot, ids);
-    },
-    empty() {
-      return emptyTrash(storage, trashRoot);
+    purge(id) {
+      return purgeLeaf(storage, trashRoot, id);
     },
   };
 }

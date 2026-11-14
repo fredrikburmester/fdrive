@@ -516,7 +516,7 @@ it("cascades office_files when their provider is deleted", async () => {
   const provider = await repos.providers.ensure({ type: "local", baseUrl: "http://office" });
   const file = await officeFiles.ensure({
     providerId: provider.id,
-    rootName: "sftpgo",
+    rootName: "files",
     path: "alice/report.docx",
   });
   expect(await officeFiles.get(file.id)).not.toBeNull();

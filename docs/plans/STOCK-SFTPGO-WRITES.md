@@ -6,14 +6,15 @@ contract for the files folder, described in
 [macOS behavior](../MACOS.md#write-configuration-and-recovery); open Mac write work is in
 [macOS writes](MACOS-WRITES.md). This page stays as the design record that comments in
 `apps/api/src/desktop/writes.ts` and `packages/db/src/repos/desktop-publish-lock.ts` point to.
-WebDAV (with `apache-webdav-exclusive`) and S3 storage were removed on 2026-11-13; their
+WebDAV (with `apache-webdav-exclusive`) and S3 storage were removed on 2026-11-13, and the
+write lease, publication size cap and copy-based folder moves they needed on 2026-11-14; their
 mentions below are history.
 
 Updated 2026-09-16. Outcome: Finder create/update/move/trash/restore works against
 **unmodified** SFTPGo. The forked image and its `fdrive-local-v1` mode were removed on
 2026-09-16, so this is now the only SFTPGo write contract. Current behavior: since 2026-09-18 this
-is the default contract for every storage (`publishesSafely` in
-`apps/api/src/desktop/publish-gate.ts` accepts any storage once the publish lock is configured);
+is the default contract for every storage (`missingPublishGates` in
+`apps/api/src/desktop/publish-gate.ts` allows Mac writes once the publish lock is configured);
 the `verified-optimistic` selector was removed, S3 publishes the same way, and a stale value in a
 stored row is ignored. Related:
 [macOS writes](MACOS-WRITES.md), [macOS behavior](../MACOS.md#write-configuration-and-recovery),
@@ -76,10 +77,10 @@ fresh stat would adopt whatever another writer had just written; `optimistic-pub
 pins that with a regression test firing a write the instant the recovery copy is taken.
 
 **3. `verified-optimistic` is selectable on stock SFTPGo.** Superseded 2026-09-18: it is the
-default for every storage and no longer selectable. The capability gate moved off
-`storage.withWriteLease` onto `publishesSafely` in `apps/api/src/desktop/publish-gate.ts`, which
-now accepts any storage **together with** a configured publish lock — a deployment without the
-lock stays read-only instead of publishing unserialized.
+default for every storage and no longer selectable. The capability gate moved off the
+storage's write lease onto `apps/api/src/desktop/publish-gate.ts`, which now requires a
+configured publish lock — a deployment without the lock stays read-only instead of publishing
+unserialized.
 
 **4. Documentation.** `docs/MACOS.md#write-configuration-and-recovery` carries the default
 contract, the optional Apache mode, and what each actually guarantees.

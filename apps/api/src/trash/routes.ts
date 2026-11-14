@@ -45,38 +45,30 @@ function routePath(fullPath: string): string {
 }
 
 export interface TrashRoutesDeps {
-  /** Optional so route tests that do not exercise history can omit it. */
-  readonly activity?: PersonalActivityService;
+  readonly activity: PersonalActivityService;
   readonly bus: EventBus;
   readonly clock: () => Date;
   /** Reads the provider/path revision captured with the request's storage. */
   readonly settingsForStorage: (storage: StorageProvider) => TrashSettings | null;
-  /**
-   * Rewrites tag/favorite/recent metadata after a restore, keyed at the
-   * restored path. Optional so route tests that do not exercise metadata
-   * can omit it; `composition.ts` always wires the real service.
-   */
-  readonly metadata?: MetadataService;
+  /** Rewrites tag/favorite/recent metadata and what followed an item into Trash. */
+  readonly metadata: MetadataService;
 }
 
 /**
- * Resolves the caller's `TrashProvider` and the configured trash path
- * together, throwing the shared `not_found` when either is missing: the
- * identity's storage exposes no trash, or (defensively, should never
- * happen in a correctly wired `composeApp`) the deployment's trash path is
- * unset even though this identity's storage somehow has one.
+ * The caller's Trash and its folder, or the shared `not_found` while Trash
+ * is off. The storage factory adds a Trash only while it is on, recording
+ * the settings it read beside the storage.
  */
 function requireTrash(
   c: FsContext,
   deps: TrashRoutesDeps,
 ): { trash: TrashProvider; trashPath: string } {
-  const principal = c.get("principal");
-  const trash = principal.storage.trash;
-  const settings = deps.settingsForStorage(principal.storage);
-  if (trash === undefined || settings?.enabled !== true) {
+  const { storage } = c.get("principal");
+  const settings = deps.settingsForStorage(storage);
+  if (storage.trash === undefined || settings === null) {
     throw new ApiHttpError("not_found", "trash is not configured");
   }
-  return { trash, trashPath: settings.path };
+  return { trash: storage.trash, trashPath: settings.path };
 }
 
 /**
@@ -130,7 +122,7 @@ async function forgetPurged(
 ): Promise<void> {
   const leaf = trashLeafPath(trashPath, id);
   const isDir = parseMoveTrashLeaf(trashPath, leaf)?.kind !== "file";
-  await deps.metadata?.onDeleted(principal.identityId, leaf, isDir);
+  await deps.metadata.onDeleted(principal.identityId, leaf, isDir);
 }
 
 /** Runs `trash.restore(id, ...)`, tagging any `StorageError` it throws with `failedId` before rethrowing. */
@@ -228,7 +220,6 @@ export function registerTrashRoutes(
         trashPaths.push(trashVirtualPath);
         targetPaths.push(entry.path);
         if (
-          deps.metadata !== undefined &&
           entry.originalPath !== entry.path &&
           (await runStorageCall(() => originalPathIsMissing(principal.storage, entry.originalPath)))
         ) {
@@ -240,7 +231,7 @@ export function registerTrashRoutes(
           );
         }
         // A restore is a move out of Trash: shares that followed the item there come back with it.
-        await deps.metadata?.onMoved(
+        await deps.metadata.onMoved(
           principal.identityId,
           trashVirtualPath,
           entry.path,
@@ -276,7 +267,7 @@ export function registerTrashRoutes(
           action: "file.delete",
           requested: { path, trashLeaf: leaf },
         },
-        () => runStorageCall(() => trash.purge([id])),
+        () => runStorageCall(() => trash.purge(id)),
       );
       await forgetPurged(deps, principal, trashPath, id);
     }
@@ -290,75 +281,52 @@ export function registerTrashRoutes(
   authed.post(routePath(ROUTES.trash.empty), async (c) => {
     const principal = c.get("principal");
     const { trash, trashPath } = requireTrash(c, deps);
-
-    if (deps.activity || deps.metadata) {
-      const context = activityRequestContext(c);
-      const batchId = context.batchId ?? randomUUID();
-      let completed = 0;
-      await recordFsAction(
-        deps.activity,
-        c,
-        {
-          ...context,
-          batchId,
-          action: "trash.empty",
-          requested: { path: trashPath, kind: "dir" },
-          failure: (error) =>
-            completed > 0
-              ? {
-                  outcome: "partial",
-                  detail: { completedCount: completed, failedCount: 1 },
-                  errorCode: "partial",
-                }
-              : activityFailure(error),
-        },
-        async () => {
-          // Purge leaf by leaf so every emptied file keeps its own history row.
-          const purged = new Set<string>();
-          for (let page = 0; page < 1000; page++) {
-            const listing = await runStorageCall(() =>
-              trash.list({ limit: 100, signal: c.req.raw.signal }),
-            );
-            const remaining = listing.entries.filter((entry) => !purged.has(entry.id));
-            // A page that only repeats leaves this request already purged means
-            // the provider is not removing them. Stop rather than record the
-            // same delete again.
-            if (!remaining.length) {
-              if (listing.truncated || listing.entries.length)
-                throw new ApiHttpError("conflict", "Trash listing could not make progress");
-              return;
-            }
-            for (const entry of remaining) {
-              purged.add(entry.id);
-              const leaf = trashLeafPath(trashPath, entry.id);
-              await recordFsAction(
-                deps.activity,
-                c,
-                {
-                  ...context,
-                  producerOperationId: `${context.producerOperationId}:leaf:${completed}`,
-                  batchId,
-                  action: "file.delete",
-                  requested: { path: entry.originalPath, trashLeaf: leaf },
-                },
-                () => runStorageCall(() => trash.purge([entry.id])),
-              );
-              await forgetPurged(deps, principal, trashPath, entry.id);
-              completed++;
-            }
-          }
-          throw new ApiHttpError(
-            "conflict",
-            "Trash is still changing; retry to finish emptying it",
+    const context = activityRequestContext(c);
+    const batchId = context.batchId ?? randomUUID();
+    let completed = 0;
+    await recordFsAction(
+      deps.activity,
+      c,
+      {
+        ...context,
+        batchId,
+        action: "trash.empty",
+        requested: { path: trashPath, kind: "dir" },
+        failure: (error) =>
+          completed > 0
+            ? {
+                outcome: "partial",
+                detail: { completedCount: completed, failedCount: 1 },
+                errorCode: "partial",
+              }
+            : activityFailure(error),
+      },
+      async () => {
+        // Every item, also clearing the empty folders the layout holds.
+        const { entries } = await runStorageCall(() =>
+          trash.list({ limit: Number.POSITIVE_INFINITY, prune: true, signal: c.req.raw.signal }),
+        );
+        // Purge item by item so every emptied item keeps its own history row.
+        for (const entry of entries) {
+          const leaf = trashLeafPath(trashPath, entry.id);
+          await recordFsAction(
+            deps.activity,
+            c,
+            {
+              ...context,
+              producerOperationId: `${context.producerOperationId}:leaf:${completed}`,
+              batchId,
+              action: "file.delete",
+              requested: { path: entry.originalPath, trashLeaf: leaf },
+            },
+            () => runStorageCall(() => trash.purge(entry.id)),
           );
-        },
-        () => ({ path: trashPath, completedCount: completed }),
-      );
-    } else {
-      // Without a journal or metadata there is nothing per-file to do, so keep
-      // the provider's single bulk call. `composeApp` always wires both.
-      await runStorageCall(() => trash.empty());
-    }
+          await forgetPurged(deps, principal, trashPath, entry.id);
+          completed++;
+        }
+      },
+      () => ({ path: trashPath, completedCount: completed }),
+    );
 
     publishFsEvent(deps, principal, "delete", [trashPath]);
     const responseBody: OkResponse = OkResponse.parse({ ok: true });

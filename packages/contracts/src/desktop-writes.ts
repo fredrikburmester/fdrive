@@ -5,10 +5,6 @@ import { DesktopEntry, DesktopLocation, DesktopPath } from "./desktop.ts";
 /** Protocol 1 stays read-only for installed clients. */
 export const DESKTOP_WRITE_API = "/api/v2/desktop";
 export const DesktopAccessMode = z.enum(["read", "full"]);
-export const DesktopWriteApproval = z.strictObject({
-  identityIds: z.array(CanonicalUuid).min(1).max(16),
-  access: z.record(CanonicalUuid, DesktopAccessMode).optional(),
-});
 export const DesktopWriteCapabilities = z.object({
   create: z.boolean(),
   update: z.boolean(),
@@ -82,7 +78,7 @@ export const DesktopFolderCheckRequest = z.strictObject({
     ),
 });
 export const DesktopFolderState = z.enum(["unchanged", "changed", "missing", "forbidden"]);
-/** Answers a leading part of the request when time runs out; the client asks again. */
+/** One status per folder asked about. */
 export const DesktopFolderCheckResponse = z.object({
   folders: z.array(z.object({ path: DesktopPath, status: DesktopFolderState })),
 });
@@ -132,11 +128,6 @@ export const DesktopMoveRequest = z.strictObject({
   name: DesktopName,
   base: DesktopBaseVersion,
 });
-export const DesktopTrashRequest = z.strictObject({
-  operationId: OperationId,
-  itemId: DesktopItemId,
-  base: DesktopBaseVersion,
-});
 export const DesktopOperationState = z.enum([
   "receiving",
   "uploading",
@@ -148,35 +139,13 @@ export const DesktopOperationState = z.enum([
   "cancelled",
   "acknowledged",
 ]);
-/**
- * How far a publication that runs for long enough to be worth watching has got,
- * in bytes so a folder of uneven files advances evenly. Only a publication that
- * copies object by object reports it; everything else publishes in one step and
- * has nothing to show. `total` is settled before the first byte moves.
- */
-export const DesktopOperationProgress = z.object({
-  completed: z.number().int().nonnegative(),
-  total: z.number().int().nonnegative(),
-});
 export const DesktopOperationResult = z.object({
   operationId: OperationId,
   state: DesktopOperationState,
   item: DesktopWriteEntry.nullable(),
   /** A post-commit recovery copy, if one was retained. Never an upstream path. */
   recoveryId: CanonicalUuid.nullable(),
-  progress: DesktopOperationProgress.optional(),
 });
-export const DesktopWriteErrorCode = z.enum([
-  "version_conflict",
-  "name_collision",
-  "permission_denied",
-  "quota_exceeded",
-  "operation_uncertain",
-  "operation_cancelled",
-  "operation_expired",
-  "unsupported",
-  "invalid_upload",
-]);
 export type DesktopWriteLocation = z.infer<typeof DesktopWriteLocation>;
 export type DesktopWriteEntry = z.infer<typeof DesktopWriteEntry>;
 export type DesktopFolderState = z.infer<typeof DesktopFolderState>;
@@ -188,8 +157,6 @@ export type DesktopWriteCapabilities = z.infer<typeof DesktopWriteCapabilities>;
 export type DesktopUploadRequest = z.infer<typeof DesktopUploadRequest>;
 export type DesktopFolderRequest = z.infer<typeof DesktopFolderRequest>;
 export type DesktopMoveRequest = z.infer<typeof DesktopMoveRequest>;
-export type DesktopTrashRequest = z.infer<typeof DesktopTrashRequest>;
-export type DesktopOperationProgress = z.infer<typeof DesktopOperationProgress>;
 export type DesktopOperationResult = z.infer<typeof DesktopOperationResult>;
 export type DesktopBaseVersion = z.infer<typeof DesktopBaseVersion>;
 export type DesktopAccessMode = z.infer<typeof DesktopAccessMode>;

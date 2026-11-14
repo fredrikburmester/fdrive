@@ -217,8 +217,9 @@ impl Applier {
         Self { ctx, pool }
     }
 
-    /// The saved position for this root. On first start it is the journal's end: the startup
-    /// scan covers whatever came before.
+    /// The saved position for this root. On first start it is the journal's end: a root
+    /// without a position is scanned at start (`RootLoop::new`), which covers whatever came
+    /// before.
     pub fn position(&self) -> Result<i64> {
         let ctx = &self.ctx;
         if let Some(position) = ctx.db.with(|c| db::change_cursor(c, CONSUMER, ctx.root_id))? {
@@ -405,12 +406,20 @@ impl Applier {
         record_folders(ctx, &folders, complete.then_some((path, started_at)));
         if complete && !unseen.is_empty() {
             let unseen: Vec<String> = unseen.into_iter().collect();
-            if let Err(e) = ctx.db.with(|c| db::sweep_vanished(c, ctx.root_id, &unseen, started_at)) {
-                log(&format!(
+            match ctx
+                .db
+                .with(|c| db::sweep_vanished_paths(c, ctx.root_id, &unseen, started_at))
+            {
+                Ok(swept) => {
+                    for gone in &swept {
+                        ctx.names_touched(gone, false);
+                    }
+                }
+                Err(e) => log(&format!(
                     "[{}] work: sweep under {path} failed: {}",
                     ctx.name,
                     describe(&e)
-                ));
+                )),
             }
         }
     }

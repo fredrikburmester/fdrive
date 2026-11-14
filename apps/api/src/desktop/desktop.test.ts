@@ -1,11 +1,12 @@
 import { createHash, randomUUID } from "node:crypto";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DESKTOP_API, DesktopPairing, DesktopPairResult } from "@fdrive/contracts";
 import { StorageError, type StorageProvider } from "@fdrive/core";
 import type { DesktopEffectsRepo } from "@fdrive/db";
 import { createMemoryRepos } from "@fdrive/db/testing";
+import { createLocalStorage, createUserStorage, SHARED_WITH_ME } from "@fdrive/local";
 import { createMemoryStorage } from "@fdrive/testkit";
 import { afterEach, expect, it, vi } from "vitest";
 import { activityFixture } from "../../test/activity-fixture.js";
@@ -275,10 +276,6 @@ async function fixture(
     "/.trash/old": "trash",
     "/hidden/b.txt": "private",
   });
-  if (writable) {
-    const raw = { ...storage };
-    storage.withWriteLease = async (action) => action(raw);
-  }
   const stateDir = writable ? await mkdtemp(join(tmpdir(), "desktop-routes-")) : undefined;
   if (stateDir) desktopDirectories.push(stateDir);
   const otherStorage = createMemoryStorage({ "/docs/a.txt": "bravo" });
@@ -287,6 +284,9 @@ async function fixture(
     clock,
     storageFactory: vi.fn(async (id: string) => (id === identity.id ? storage : otherStorage)),
     trashPathForStorage: () => "/.trash",
+    ...(writable
+      ? { publishLock: async <T>(_identityId: string, run: () => Promise<T>) => run() }
+      : {}),
   };
   const principal: Principal = {
     accountId: account.id,
@@ -738,20 +738,152 @@ it("preserves ancestor visibility while enforcing grants, Trash exclusion, live 
     f.files.content(f.principal, "/docs", new AbortController().signal),
   ).rejects.toMatchObject({ kind: "bad_request" });
   await expect(f.files.stat(f.principal, "/absent")).rejects.toMatchObject({ kind: "not_found" });
-  await expect(
-    f.files.stat(f.principal, `/${Array(129).fill("a").join("/")}`),
-  ).rejects.toMatchObject({ kind: "bad_request" });
   vi.spyOn(f.storage, "list").mockResolvedValue([
     { path: "/link", name: "link", kind: "symlink", size: 0, modifiedAt: new Date(), ext: "" },
   ]);
   expect((await f.files.list(f.principal, "/", "token")).entries[0]?.readable).toBe(false);
-  await expect(f.files.stat(f.principal, "/link/secret")).rejects.toMatchObject({
+  // A storage that reports a link as one has it refused.
+  vi.spyOn(f.storage, "stat").mockResolvedValueOnce({
+    kind: "symlink",
+    size: 0,
+    modifiedAt: null,
+    contentType: null,
+  });
+  await expect(f.files.stat(f.principal, "/link")).rejects.toMatchObject({
     kind: "forbidden",
+    message: "Symbolic links are not supported by this connection",
   });
   vi.mocked(f.storage.list).mockRejectedValue(new StorageError("forbidden", "revoked"));
   await expect(f.files.list(f.principal, "/", "token")).rejects.toMatchObject({
     kind: "forbidden",
   });
+});
+
+it("reads every entry with one stat and never lists its ancestors", async () => {
+  const f = await fixture();
+  const deep = "/docs/deep/er/c.txt";
+  await f.storage.upload(deep, new TextEncoder().encode("charlie"), { mkdirParents: true });
+  const list = vi.spyOn(f.storage, "list");
+  const stat = vi.spyOn(f.storage, "stat");
+  const signal = new AbortController().signal;
+  expect(await f.files.stat(f.principal, deep)).toMatchObject({
+    path: deep,
+    kind: "file",
+    size: 7,
+  });
+  await f.files.content(f.principal, deep, signal);
+  await f.files.versions(f.principal, [deep, "/docs/a.txt"], signal);
+  expect(list).not.toHaveBeenCalled();
+  expect(stat.mock.calls).toEqual([[deep], [deep], [deep], ["/docs/a.txt"]]);
+  // A listing reads the folder itself and nothing above it.
+  await f.files.list(f.principal, "/docs/deep/er", "token");
+  expect(list.mock.calls).toEqual([["/docs/deep/er"]]);
+  // Another spelling of a stored name, as a disk that ignores case finds it, is not that item.
+  stat.mockResolvedValueOnce({
+    kind: "file",
+    size: 5,
+    modifiedAt: null,
+    contentType: null,
+    path: "/docs/a.txt",
+  });
+  await expect(f.files.stat(f.principal, "/docs/A.txt")).rejects.toMatchObject({
+    kind: "not_found",
+  });
+});
+
+it("refuses every read that reaches its item through a symbolic link, at any segment", async () => {
+  const f = await fixture();
+  const root = await realpath(await mkdtemp(join(tmpdir(), "desktop-links-")));
+  desktopDirectories.push(root);
+  const home = join(root, "alice");
+  await mkdir(join(home, "docs", "sub"), { recursive: true });
+  await mkdir(join(home, ".fdrive-desktop", "state"), { recursive: true });
+  await writeFile(join(home, "docs", "a.txt"), "alpha");
+  await writeFile(join(home, "docs", "sub", "b.txt"), "bravo");
+  await writeFile(join(home, ".fdrive-desktop", "state", "secret.txt"), "secret");
+  await writeFile(join(root, "outside.txt"), "outside");
+  // Into a folder fdrive keeps to itself, into an ordinary folder, and as the last segment.
+  await symlink(join(home, ".fdrive-desktop"), join(home, "docs", "desk"));
+  await symlink(join(home, "docs"), join(home, "alias"));
+  await symlink(join(home, "docs", "sub"), join(home, "docs", "inner"));
+  await symlink(join(home, "docs", "a.txt"), join(home, "a-link.txt"));
+  await symlink(join(root, "outside.txt"), join(home, "out.txt"));
+  await symlink(join(root, "nowhere"), join(home, "dangling"));
+  const signal = new AbortController().signal;
+  const full = { mode: "full" as const, paths: ["/"] };
+  const writes = createDesktopWrites({ ...f.deps, repo: memoryRepo().repo });
+  const refuses = async (principal: Principal, folders: string[], files: string[]) => {
+    const writer = { ...principal, tokenAccess: full };
+    for (const path of [...folders, ...files])
+      await expect(f.files.stat(principal, path)).rejects.toMatchObject({ kind: "forbidden" });
+    for (const path of folders) {
+      await expect(f.files.list(principal, path, "token")).rejects.toMatchObject({
+        kind: "forbidden",
+      });
+      expect((await writes.check(writer, [{ path, token: "v1:x" }], signal)).folders).toEqual([
+        { path, status: "forbidden" },
+      ]);
+    }
+    for (const path of files) {
+      await expect(f.files.content(principal, path, signal)).rejects.toMatchObject({
+        kind: "forbidden",
+      });
+      await expect(f.files.versions(principal, [path], signal)).rejects.toMatchObject({
+        kind: "forbidden",
+      });
+    }
+  };
+  const own = { ...f.principal, storage: createLocalStorage({ home }) };
+  await refuses(
+    own,
+    ["/docs/desk", "/docs/desk/state", "/alias", "/alias/sub", "/docs/inner"],
+    ["/docs/desk/state/secret.txt", "/alias/a.txt", "/docs/inner/b.txt", "/a-link.txt"],
+  );
+  await expect(f.files.stat(own, "/out.txt")).rejects.toMatchObject({ kind: "forbidden" });
+  await expect(f.files.stat(own, "/dangling")).rejects.toMatchObject({ kind: "not_found" });
+  // Listings show every link as one, unreadable, and the real paths still read.
+  const kinds = async (principal: Principal, path: string) =>
+    Object.fromEntries(
+      (await f.files.list(principal, path, "token")).entries.map((entry) => [
+        entry.name,
+        `${entry.kind}${entry.readable ? "" : " (unreadable)"}`,
+      ]),
+    );
+  expect(await kinds(own, "/")).toEqual({
+    "a-link.txt": "symlink (unreadable)",
+    alias: "symlink (unreadable)",
+    dangling: "symlink (unreadable)",
+    docs: "dir",
+    "out.txt": "symlink (unreadable)",
+  });
+  expect(await kinds(own, "/docs")).toEqual({
+    "a.txt": "file",
+    desk: "symlink (unreadable)",
+    inner: "symlink (unreadable)",
+    sub: "dir",
+  });
+  expect(
+    await new Response((await f.files.content(own, "/docs/sub/b.txt", signal)).body).text(),
+  ).toBe("bravo");
+  // The same holds inside a folder someone shares.
+  await mkdir(join(root, "bob"));
+  const shared = {
+    ...f.principal,
+    storage: createUserStorage({
+      home: join(root, "bob"),
+      shared: async () => [
+        { name: "Docs", dir: join(home, "docs"), ownerHome: home, writable: false },
+      ],
+    }),
+  };
+  const docs = `/${SHARED_WITH_ME}/Docs`;
+  await refuses(shared, [`${docs}/inner`, `${docs}/desk`], [`${docs}/inner/b.txt`]);
+  expect(await kinds(shared, docs)).toMatchObject({
+    desk: "symlink (unreadable)",
+    inner: "symlink (unreadable)",
+    sub: "dir",
+  });
+  expect(await f.files.stat(shared, `${docs}/sub/b.txt`)).toMatchObject({ kind: "file" });
 });
 
 it("detects equal-size replacements, rejects short streams and releases validation after cancellation", async () => {
@@ -1107,20 +1239,11 @@ it("explains a read-only full grant by every unmet gate", async () => {
   expect(await reason(f.identity.id, ["state_dir"], "read")).toBeUndefined();
 });
 
-it("advertises the smaller of fdrive's upload ceiling and what the storage can publish", async () => {
+it("advertises fdrive's 16 GiB upload limit to every writable location", async () => {
   const f = await fixture();
-  async function advertised(maxPublishBytes?: number) {
-    const bounded = maxPublishBytes === undefined ? f.storage : { ...f.storage, maxPublishBytes };
-    const pairing = createDesktopPairing({ ...f.deps, storageFactory: vi.fn(async () => bounded) });
-    const pair = pairing.create("Mac", "limits", 2);
-    await pairing.approve(pair.id, f.account.id, [f.identity.id], { [f.identity.id]: "full" });
-    const result = await pairing.poll(pair.id, pair.secret);
-    if (result.status !== "connected") throw new Error("Expected credentials");
-    const location = result.credentials[0]?.location;
-    return location && "maxUploadBytes" in location ? location.maxUploadBytes : undefined;
-  }
-  expect(await advertised()).toBe(16 * 1024 ** 3);
-  // A backend's copy ceiling. Telling the Mac app 16 GiB would spend a whole transfer
-  // before publication refused it and left the commit needing an administrator.
-  expect(await advertised(5 * 1024 ** 3)).toBe(5 * 1024 ** 3);
+  const pair = f.pairing.create("Mac", "limits", 2);
+  await f.pairing.approve(pair.id, f.account.id, [f.identity.id], { [f.identity.id]: "full" });
+  const result = await f.pairing.poll(pair.id, pair.secret);
+  if (result.status !== "connected") throw new Error("Expected credentials");
+  expect(result.credentials[0]?.location).toMatchObject({ maxUploadBytes: 16 * 1024 ** 3 });
 });

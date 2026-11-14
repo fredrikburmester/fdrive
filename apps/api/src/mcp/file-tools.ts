@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { extensionOf, isStorageError, trashLeafPath } from "@fdrive/core";
+import { extensionOf, isStorageError, parseMoveTrashLeaf, trashLeafPath } from "@fdrive/core";
 import { recordMetadataCommand } from "../activity/metadata.js";
 import { deleteWithActivityReceipt } from "../activity/trash.js";
 import type { Principal } from "../auth/principal.ts";
@@ -213,11 +213,10 @@ export async function restorePath(
   args: { id: string; target?: string | undefined },
 ) {
   const { trash, path: trashRoot } = requireTrash(deps, principal);
-  // Ask the provider to decode its own layout; never guess a different original path from an id.
-  const listing = await trash.list({ limit: 10_000 });
-  const candidate = listing.entries.find((entry) => entry.id === args.id);
-  if (candidate === undefined) throw new Error("item is not in the available Trash listing");
-  const original = ordinaryPath(deps, principal, candidate.originalPath);
+  // The id is the leaf's path, which names where the item came from.
+  const leaf = parseMoveTrashLeaf(trashRoot, trashLeafPath(trashRoot, args.id));
+  if (leaf === null) throw new Error("not a Trash item id");
+  const original = ordinaryPath(deps, principal, leaf.originalPath);
   const target = ordinaryPath(deps, principal, args.target ?? original);
   const publicUrl = await deps.publicUrl();
   const result = await trash.restore(args.id, { target });

@@ -1,12 +1,6 @@
 "use client";
 
-import type {
-  FsEntry,
-  OfficeStatusResponse,
-  ProviderCapabilities,
-  ReceivedGrant,
-  Tag,
-} from "@fdrive/contracts";
+import type { FsEntry, OfficeStatusResponse, ReceivedGrant, Tag } from "@fdrive/contracts";
 import { useEffect, useMemo, useReducer, useState } from "react";
 import { useTreeChildren } from "@/lib/files/queries";
 import { resolveRowClick } from "@/lib/files/row-click";
@@ -29,7 +23,6 @@ import { useDefaultView } from "@/lib/files/use-default-view";
 import { useGridSize } from "@/lib/files/use-grid-size";
 import { useListDensity } from "@/lib/files/use-list-density";
 import { useRowClickAction } from "@/lib/files/use-row-click";
-import { DEFAULT_CAPABILITIES } from "@/lib/identity/capabilities";
 import type { RowContextAction } from "./file-context-menu";
 import { FileGrid } from "./file-grid";
 import { type ClickModifierKeys, FileList } from "./file-list";
@@ -53,8 +46,8 @@ export interface VirtualFileListingProps {
   readonly hideMoveCopy?: boolean | undefined;
   readonly hideArchive?: boolean | undefined;
   readonly showReveal?: boolean | undefined;
-  /** What the active login's storage can do, for every row's context menu. */
-  readonly capabilities?: ProviderCapabilities | undefined;
+  /** Whether deletes go to Trash, for every row's context menu. */
+  readonly trash?: boolean | undefined;
   /** The folders others share with the active login, for every row's context menu. */
   readonly received?: readonly ReceivedGrant[] | undefined;
 }
@@ -76,7 +69,7 @@ export function VirtualFileListing({
   hideMoveCopy = false,
   hideArchive = false,
   showReveal = false,
-  capabilities = DEFAULT_CAPABILITIES,
+  trash = false,
   received = EMPTY_RECEIVED,
 }: VirtualFileListingProps) {
   const [viewMode] = useDefaultView();
@@ -191,7 +184,7 @@ export function VirtualFileListing({
     hideMoveCopy,
     hideArchive,
     showReveal,
-    capabilities,
+    trash,
     received,
   };
 

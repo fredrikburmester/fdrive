@@ -8,7 +8,8 @@ use fdrive_indexer::config::Config;
 use fdrive_indexer::db::{self, Db};
 use fdrive_indexer::extract::ContentExtractor;
 use fdrive_indexer::log::log;
-use fdrive_indexer::runner::{EXPECTED_SCHEMA_VERSION, build_context, refresh_settings, run_root};
+use fdrive_indexer::names::NameIndex;
+use fdrive_indexer::runner::{EXPECTED_SCHEMA_VERSION, RootLoop, build_context, refresh_settings, run_root};
 use fdrive_indexer::server::{AppState, Jobs, Wake, router};
 use fdrive_indexer::work::run_work;
 
@@ -28,12 +29,20 @@ fn main() -> Result<(), String> {
     for (name, path) in &cfg.roots {
         contexts.push(build_context(&cfg, name, path).map_err(|e| e.to_string())?);
     }
+    // Built from the tables in the background; until then search finds names without typos.
+    let root_ids: Vec<i64> = contexts.iter().map(|ctx| ctx.root_id).collect();
+    let names = NameIndex::start(Db::new(&cfg.database_url), &root_ids).map_err(|e| e.to_string())?;
+    for ctx in &contexts {
+        let _ = ctx.names.set(Arc::clone(&names));
+    }
     let watchers = Arc::new(Mutex::new(HashMap::new()));
     let mut wakes = HashMap::new();
     for ctx in &contexts {
         if let Err(e) = refresh_settings(ctx) {
             log(&format!("[{}] settings unavailable: {e}", ctx.name));
         }
+        // Decided before the journal's reader takes its first position.
+        let root = RootLoop::new(ctx).map_err(|e| e.to_string())?;
         let wake = Arc::new(Wake::default());
         wakes.insert(ctx.name.clone(), Arc::clone(&wake));
         // Changes the API queues are applied beside the scan loop, never behind a scan.
@@ -45,7 +54,7 @@ fn main() -> Result<(), String> {
         let (ctx, watchers) = (Arc::clone(ctx), Arc::clone(&watchers));
         std::thread::Builder::new()
             .name(format!("root-{}", ctx.name))
-            .spawn(move || run_root(&ctx, &watchers, &wake))
+            .spawn(move || run_root(root, &ctx, &watchers, &wake))
             .map_err(|e| e.to_string())?;
     }
 
@@ -67,6 +76,7 @@ fn main() -> Result<(), String> {
         jobs: Jobs::default(),
         failure_retry_feature: Mutex::new("thumbnails".to_owned()),
         instance_id: uuid::Uuid::new_v4().to_string(),
+        names: Some(names),
     });
     let names: Vec<&str> = cfg.roots.iter().map(|(name, _)| name.as_str()).collect();
     log(&format!("indexer up. roots={names:?} port={}", cfg.indexer_port));

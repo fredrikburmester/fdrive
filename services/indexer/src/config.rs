@@ -52,7 +52,6 @@ pub struct Config {
     pub thumb_max_bytes: u64,
     pub indexer_port: u16,
     pub schema_wait: Duration,
-    pub events_retention_days: i64,
     pub settings_refresh: Duration,
 }
 
@@ -123,7 +122,6 @@ impl Config {
             thumb_max_bytes: mb("THUMB_MAX_MB", 200)?,
             indexer_port: number("INDEXER_PORT", 8010)? as u16,
             schema_wait: Duration::from_secs(number("SCHEMA_WAIT_SECONDS", 300)?),
-            events_retention_days: number("EVENTS_RETENTION_DAYS", 7)? as i64,
             settings_refresh: Duration::from_secs(number("SETTINGS_REFRESH_SECONDS", 5)?.max(1)),
         })
     }

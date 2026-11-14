@@ -55,16 +55,12 @@ async function fixture() {
     "/peer.txt": "peer",
     "/folder/file.txt": "folder bytes",
   });
-  const storage = {
-    ...raw,
-    withWriteLease: async <T>(action: (value: typeof raw) => Promise<T>) => action(raw),
-  };
   const principal: Principal = {
     accountId: account.id,
     identityId: identity.id,
     isAdmin: false,
     username: "alice",
-    storage,
+    storage: raw,
     tokenAccess: { mode: "full", paths: ["/"] },
   };
   const stateDir = await mkdtemp(join(tmpdir(), "desktop-recovery-"));
@@ -79,6 +75,7 @@ async function fixture() {
     repo,
     stateDir,
     clock: () => new Date(),
+    publishLock: async (_identityId, run) => run(),
     trashPathForStorage: () => null,
     effectContext: createDesktopEffectContext(repos.identities, mapping),
   });

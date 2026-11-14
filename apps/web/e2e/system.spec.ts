@@ -15,9 +15,7 @@ async function clickSave(page: Page): Promise<void> {
   await page.getByRole("button", { name: "Save", exact: true }).dispatchEvent("click");
 }
 
-test("alice (admin) finds the files folder under System > General, where the retired Storage page now leads", async ({
-  page,
-}) => {
+test("alice (admin) finds the files folder under System > General", async ({ page }) => {
   await page.goto("/files");
 
   // The files folder is the only storage, so System has no Storage page.
@@ -26,19 +24,6 @@ test("alice (admin) finds the files folder under System > General, where the ret
   await page.getByRole("link", { name: "General" }).click();
   await expect(page).toHaveURL(/\/system\/general$/);
   await expect(page.getByText("Folder on this server, set by FDRIVE_STORAGE_ROOT.")).toBeVisible();
-
-  // Bookmarks of the old page land on General.
-  await page.goto("/system/storage");
-  await expect(page).toHaveURL(/\/system\/general$/);
-  await expect(page.getByRole("heading", { name: "General" })).toBeVisible();
-  await expect(page.getByText("Folder on this server, set by FDRIVE_STORAGE_ROOT.")).toBeVisible();
-});
-
-test("the retired /system/connection route redirects to General", async ({ page }) => {
-  await page.goto("/system/connection");
-
-  await expect(page).toHaveURL(/\/system\/general$/);
-  await expect(page.getByRole("heading", { name: "General" })).toBeVisible();
 });
 
 test("alice (admin) sees the Search embedding server and OCR as not configured in the e2e stack", async ({
@@ -251,12 +236,7 @@ test.describe("bob (not admin)", () => {
   test("is sent back to /files when typing a System page's address directly", async ({ page }) => {
     await loginAs(page, "bob", "bob-password");
 
-    for (const path of [
-      "/system/storage",
-      "/system/general",
-      "/system/features",
-      "/system/users",
-    ]) {
+    for (const path of ["/system/general", "/system/features", "/system/users"]) {
       await page.goto(path);
       await expect(page).toHaveURL(/\/files$/);
       await expect(page.getByRole("heading", { name: "General" })).toHaveCount(0);

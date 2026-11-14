@@ -37,7 +37,6 @@ vi.mock("@/components/files/empty-state", () => ({ EmptyState: () => null }));
 vi.mock("@/components/files/error-state", () => ({ ErrorState: () => null }));
 vi.mock("@/lib/trash/queries", () => ({
   isRestoreConflict: () => fixtures.restoreConflict,
-  useTrashStatus: () => ({ data: { retentionHours: null } }),
   useTrash: () => ({
     data: {
       entries: [

@@ -145,7 +145,7 @@ describe("SearchStatusResponse", () => {
         available: false,
         semantic: false,
         images: false,
-        reason: "indexer_unreachable",
+        reason: "no_roots",
       }).success,
     ).toBe(true);
   });
@@ -155,13 +155,14 @@ describe("SearchStatusResponse", () => {
       SearchStatusResponse.safeParse({
         available: false,
         semantic: false,
+        images: false,
         reason: "not-a-reason",
       }).success,
     ).toBe(false);
   });
 
-  it("parses a missing images field (an older API without image search)", () => {
-    expect(SearchStatusResponse.safeParse({ available: true, semantic: true }).success).toBe(true);
+  it("requires the images field", () => {
+    expect(SearchStatusResponse.safeParse({ available: true, semantic: true }).success).toBe(false);
   });
 });
 

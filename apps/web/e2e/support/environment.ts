@@ -298,7 +298,6 @@ export async function startEnvironment(
             : {}),
           FDRIVE_MASTER_KEY: masterKey,
           FDRIVE_COOKIE_SECURE: "false",
-          FDRIVE_AUTO_MIGRATE: "true",
           // alice is the e2e suite's always-admin user (system.spec.ts),
           // so the System sidebar section and its admin-only routes have
           // someone to exercise them without a `/setup` run in every spec.

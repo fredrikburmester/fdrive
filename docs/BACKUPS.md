@@ -199,9 +199,8 @@ restored annotations are inactive. Before setting `pathBindingsReviewed`:
 
 2. Compare the annotated paths (`select path from app.file_tags where identity_id = ...`, and
    the same for the other three tables) with the current files folder on the host. The
-   restored `idx.events` and `idx.moves` history shows what fdrive last observed at each path;
-   it is evidence, not proof of continuity, and a freshly rebuilt index must not be used to
-   infer it either.
+   restored `idx.moves` log of MCP's moves is evidence, not proof of continuity, and a freshly
+   rebuilt index must not be used to infer it either.
 3. Delete rows whose path is gone or was reused, or leave the provider disabled until the
    owner decides. Keep the archive: it remains the evidence for any row you remove.
 4. Only then set `pathBindingsReviewed: true`. A checked flag alone does not make an ambiguous

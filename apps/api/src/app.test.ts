@@ -21,6 +21,7 @@ const FAKE_STORAGE: StorageProvider = {
   copy: notImplemented,
   deleteFile: notImplemented,
   deleteDir: notImplemented,
+  deleteEmptyDir: notImplemented,
   setModifiedAt: notImplemented,
   zip: notImplemented,
 };

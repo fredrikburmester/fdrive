@@ -32,13 +32,14 @@ export interface Home {
    */
   target(path: string): Promise<string>;
   /**
-   * How the disk spells `path`, an entry that exists. A disk that ignores
-   * case or how accents are encoded (macOS) finds "Årsbesked" written with
-   * one character or with a combining ring, but stores one of them, and
-   * that is the one every listing shows. A symlink keeps the name it was
-   * asked by: the disk only reports the stored names of what links lead to.
+   * How the disk spells `path`, an entry that exists, and whether reaching it
+   * follows a symlink (`link`). A disk that ignores case or how accents are
+   * encoded (macOS) finds "Årsbesked" written with one character or with a
+   * combining ring, but stores one of them, and that is the one every listing
+   * shows. A symlink keeps the name it was asked by: the disk only reports the
+   * stored names of what links lead to.
    */
-  spelled(path: string): Promise<string>;
+  spelled(path: string): Promise<{ readonly path: string; readonly link: boolean }>;
   /** True when `realPath` is the home or inside it. */
   contains(realPath: string): Promise<boolean>;
 }
@@ -162,16 +163,18 @@ export function createHome(dir: string, options: CreateHomeOptions = {}): Home {
       const asked = join(home, ...segments);
       // The real path names every folder as stored, so one that matches
       // what was asked means no link and no other spelling on the way.
-      if ((await realpath(asked)) === asked) return normalized;
+      if ((await realpath(asked)) === asked) return { path: normalized, link: false };
       const names: string[] = [];
+      let linked = false;
       let dir = home;
       for (const segment of segments) {
         const at = join(dir, segment);
         const link = (await lstat(at)).isSymbolicLink();
+        linked ||= link;
         dir = await realpath(at);
         names.push(link ? segment : basename(dir));
       }
-      return `/${names.join("/")}`;
+      return { path: `/${names.join("/")}`, link: linked };
     },
 
     async contains(realPath) {

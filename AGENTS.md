@@ -17,8 +17,8 @@
 
 ## Checks
 
-First install: `pnpm bootstrap` (frozen install plus the `@fdrive/db` build that links
-`fdrive-migrate`). Dev stack: [DEVELOPMENT.md](docs/DEVELOPMENT.md).
+First install: `pnpm bootstrap` (a frozen install). Dev stack:
+[DEVELOPMENT.md](docs/DEVELOPMENT.md).
 
 | Change | Required checks |
 | --- | --- |

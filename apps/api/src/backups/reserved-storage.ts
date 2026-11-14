@@ -23,9 +23,6 @@ export function withoutBackupPaths(storage: StorageProvider): StorageProvider {
     get(target, key) {
       const value = Reflect.get(target, key);
       if (typeof value !== "function") return value;
-      if (key === "withWriteLease")
-        return (action: (storage: StorageProvider) => Promise<unknown>, signal?: AbortSignal) =>
-          target.withWriteLease?.((leased) => action(withoutBackupPaths(leased)), signal);
       if (key === "list")
         return async (path: string) => {
           guard(path);

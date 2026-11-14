@@ -1,12 +1,14 @@
 import { createHash, randomUUID } from "node:crypto";
 import type { DesktopEntry } from "@fdrive/contracts";
 import {
+  baseName,
   type ContentStamp,
   DESKTOP_INTERNAL_ROOT,
   type FileEntry,
   isReservedPath,
   isUnderPath,
   normalizePath,
+  type StorageProvider,
 } from "@fdrive/core";
 import type { IndexedContent } from "@fdrive/db";
 import type { Principal } from "../auth/principal.js";
@@ -26,10 +28,32 @@ interface Snapshot {
 
 /** Entries per listing page; a folder with more never gets a listing token. */
 export const DESKTOP_PAGE_SIZE = 500;
-/** Lists one upstream folder; a caller may share listings across ancestor walks. */
-export type DesktopLister = (path: string) => Promise<FileEntry[]>;
 
 export { DESKTOP_INTERNAL_ROOT };
+
+const SYMLINKS = "Symbolic links are not supported by this connection";
+
+/**
+ * The entry at the normalized `path`, from one stat. A path that reaches it
+ * through a symbolic link, at any segment, is refused: grants and fdrive's own
+ * folders are checked against the path as asked, and a link would lead past
+ * them. Desktop paths are spelled as listings show them and the registry keys
+ * items by them, so another spelling of a stored name (on a disk that ignores
+ * case) is not that item.
+ */
+export async function storedEntry(storage: StorageProvider, path: string): Promise<DesktopEntry> {
+  const found = await runStorageCall(() => storage.stat(path));
+  if (found.link || found.kind === "symlink") throw new ApiHttpError("forbidden", SYMLINKS);
+  if ((found.path ?? path) !== path) throw new ApiHttpError("not_found", "Item no longer exists");
+  return {
+    path,
+    name: baseName(path),
+    kind: found.kind,
+    size: found.size,
+    modifiedAt: (found.modifiedAt ?? new Date(0)).toISOString(),
+    readable: found.kind === "file" || found.kind === "dir",
+  };
+}
 
 /**
  * Whether a desktop connection may see the normalized `path` at all: inside
@@ -71,59 +95,30 @@ export function createDesktopFiles(
       throw new ApiHttpError("forbidden", "Path is not available to this connection");
     return path;
   }
-  /** What this connection may see of a folder's upstream listing, in path order. */
+  /**
+   * What this connection may see of a folder's upstream listing, in path order.
+   * A link shows as one, unreadable, whatever it leads to: reads refuse it.
+   */
   function visible(principal: Principal, live: readonly FileEntry[]): DesktopEntry[] {
     return live
       .filter((item) => allowed(principal, normalizePath(item.path), item.kind === "dir"))
-      .map((item) => ({
-        path: normalizePath(item.path),
-        name: item.name,
-        kind: item.kind,
-        size: item.size,
-        modifiedAt: item.modifiedAt.toISOString(),
-        readable: item.kind === "file" || item.kind === "dir",
-      }))
+      .map((item) => {
+        const kind = item.link ? "symlink" : item.kind;
+        return {
+          path: normalizePath(item.path),
+          name: item.name,
+          kind,
+          size: kind === "symlink" ? 0 : item.size,
+          modifiedAt: item.modifiedAt.toISOString(),
+          readable: kind === "file" || kind === "dir",
+        };
+      })
       .sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
   }
-  // Do not follow a symlink inside a folder grant. The adapters expose entry kinds in
-  // listings, whereas HTTP stat can describe the symlink's target as an ordinary file.
-  async function entry(
-    principal: Principal,
-    path: string,
-    list: DesktopLister = (parent) => principal.storage.list(parent),
-  ): Promise<DesktopEntry> {
-    if (path === "/") {
-      await runStorageCall(async () => {
-        await (principal.storage.probeDirectoryRead?.("/") ?? principal.storage.list("/"));
-      });
-      return {
-        path,
-        name: "/",
-        kind: "dir",
-        size: 0,
-        modifiedAt: new Date(0).toISOString(),
-        readable: true,
-      };
-    }
-    const parts = path.slice(1).split("/");
-    if (parts.length > 128) throw new ApiHttpError("bad_request", "Path has too many components");
-    let parent = "";
-    let result: DesktopEntry | undefined;
-    for (let i = 0; i < parts.length; i++) {
-      const current = `${parent}/${parts[i]}`;
-      const entries = await runStorageCall(() => list(parent || "/"));
-      const found = entries.find((candidate) => normalizePath(candidate.path) === current);
-      if (!found) throw new ApiHttpError("not_found", "Item no longer exists");
-      if ((i < parts.length - 1 && found.kind !== "dir") || found.kind === "symlink")
-        throw new ApiHttpError("forbidden", "Symbolic links are not supported by this connection");
-      result = {
-        ...found,
-        modifiedAt: found.modifiedAt.toISOString(),
-        readable: found.kind === "file" || found.kind === "dir",
-      };
-      parent = current;
-    }
-    return result as DesktopEntry;
+  async function entry(principal: Principal, path: string): Promise<DesktopEntry> {
+    const found = await storedEntry(principal.storage, path);
+    // The root keeps the presentation clients already hold for it.
+    return path === "/" ? { ...found, name: "/", modifiedAt: new Date(0).toISOString() } : found;
   }
   /**
    * The index rows behind the files of a version request this connection may
@@ -213,10 +208,13 @@ export function createDesktopFiles(
      * must not use up the listing capacity that paged listings share. Null when the
      * path is no longer a folder.
      */
-    async folder(principal: Principal, raw: string, list: DesktopLister) {
+    async folder(principal: Principal, raw: string) {
       const path = authorize(principal, raw, true);
-      if ((await entry(principal, path, list)).kind !== "dir") return null;
-      return { path, entries: visible(principal, await runStorageCall(() => list(path))) };
+      if ((await entry(principal, path)).kind !== "dir") return null;
+      return {
+        path,
+        entries: visible(principal, await runStorageCall(() => principal.storage.list(path))),
+      };
     },
     async content(principal: Principal, raw: string, signal: AbortSignal) {
       const path = authorize(principal, raw);

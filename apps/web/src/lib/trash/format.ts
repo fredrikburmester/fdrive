@@ -10,47 +10,19 @@ export function originalFolderLabel(originalPath: string): string {
   return isRoot(parent) ? "Home" : parent;
 }
 
-/**
- * Formats a positive hour count as a day count: whole days print without a
- * decimal ("2 days"), everything else rounds to at most one decimal place
- * ("1.5 days"), and exactly one day is singular ("1 day").
- */
-export function retentionDaysLabel(retentionHours: number): string {
-  const days = Math.round((retentionHours / 24) * 10) / 10;
-  const formatted = Number.isInteger(days) ? String(days) : days.toFixed(1);
-  return `${formatted} ${days === 1 ? "day" : "days"}`;
-}
-
-/**
- * The Trash page and delete dialog's retention sentence, or `null` when
- * retention is not configured (fdrive never enforces it itself either way,
- * this is purely informational).
- */
-export function retentionNote(retentionHours: number | null): string | null {
-  if (retentionHours === null) {
-    return null;
-  }
-  return `Items in Trash are removed automatically after ${retentionDaysLabel(retentionHours)}.`;
-}
-
 export interface TrashAvailability {
   readonly available: boolean;
-  readonly retentionHours: number | null;
 }
 
 /**
  * What the delete confirmation should promise. The login's `trash`
  * capability decides between "Move to Trash" and a permanent delete, the
- * same source the row menu labels read, so the two never disagree; the
- * separately cached trash status only contributes its retention note.
+ * same source the row menu labels read, so the two never disagree.
  */
-export function trashAvailabilityFor(
-  capabilities: { readonly trash: boolean },
-  status: { readonly retentionHours: number | null } | null | undefined,
-): TrashAvailability | null {
-  return capabilities.trash
-    ? { available: true, retentionHours: status?.retentionHours ?? null }
-    : null;
+export function trashAvailabilityFor(capabilities: {
+  readonly trash: boolean;
+}): TrashAvailability | null {
+  return capabilities.trash ? { available: true } : null;
 }
 
 export interface DeleteDialogCopy {
@@ -78,14 +50,9 @@ export function deleteDialogCopy(
   const subject = count === 1 && first !== undefined ? `"${first}"` : `${count} items`;
 
   if (trash?.available === true) {
-    const note = retentionNote(trash.retentionHours);
-    const description =
-      note === null
-        ? `${subject} will be moved to Trash.`
-        : `${subject} will be moved to Trash. ${note}`;
     return {
       title: "Move to Trash?",
-      description,
+      description: `${subject} will be moved to Trash.`,
       confirmLabel: "Move to Trash",
       pendingLabel: "Moving to Trash…",
     };

@@ -1,10 +1,5 @@
 import type { TrashSettings } from "@fdrive/contracts";
-import {
-  moveTrashLeafPath,
-  type ProviderModule,
-  StorageError,
-  type StorageProvider,
-} from "@fdrive/core";
+import { moveTrashLeafPath, type ProviderModule, type StorageProvider } from "@fdrive/core";
 import type { Identity, Provider } from "@fdrive/db";
 import { createMemoryRepos } from "@fdrive/db/testing";
 import { createMemoryStorage } from "@fdrive/testkit";
@@ -18,7 +13,6 @@ import {
   createPinnedStorageFactory,
   trashSettingsForStorage,
   unavailableStorage,
-  withIdempotentMkdir,
   withRecycleFolderTrash,
 } from "./storage-factory.ts";
 
@@ -38,6 +32,7 @@ function makeStubStorage(overrides: Partial<StorageProvider>): StorageProvider {
     copy: notImplemented,
     deleteFile: notImplemented,
     deleteDir: notImplemented,
+    deleteEmptyDir: notImplemented,
     setModifiedAt: notImplemented,
     zip: notImplemented,
     ...overrides,
@@ -243,57 +238,6 @@ it("withRecycleFolderTrash spreads the original provider and adds trash without 
   expect(withTrash.list).toBe(storage.list);
 });
 
-it("withIdempotentMkdir passes a successful mkdir straight through", async () => {
-  const mkdir = vi.fn().mockResolvedValue(undefined);
-  const storage = makeStubStorage({ mkdir });
-  await withIdempotentMkdir(storage).mkdir("/new-dir", { parents: true });
-  expect(mkdir).toHaveBeenCalledWith("/new-dir", { parents: true });
-});
-
-it("withIdempotentMkdir swallows an already-exists failure when stat reports a directory", async () => {
-  const storage = makeStubStorage({
-    mkdir: async () => {
-      throw new StorageError("internal", "failed to create directory");
-    },
-    stat: async () => ({ kind: "dir", size: 0, modifiedAt: null, contentType: null }),
-  });
-  await expect(withIdempotentMkdir(storage).mkdir("/")).resolves.toBeUndefined();
-});
-
-it("withIdempotentMkdir rethrows when the path is actually a file, not a directory", async () => {
-  const failure = new StorageError("internal", "failed to create directory");
-  const storage = makeStubStorage({
-    mkdir: async () => {
-      throw failure;
-    },
-    stat: async () => ({ kind: "file", size: 1, modifiedAt: null, contentType: null }),
-  });
-  await expect(withIdempotentMkdir(storage).mkdir("/a-file")).rejects.toBe(failure);
-});
-
-it("withIdempotentMkdir rethrows when the path does not exist at all", async () => {
-  const failure = new StorageError("not_found", "parent not found");
-  const storage = makeStubStorage({
-    mkdir: async () => {
-      throw failure;
-    },
-    stat: async () => {
-      throw new StorageError("not_found", "not found");
-    },
-  });
-  await expect(withIdempotentMkdir(storage).mkdir("/missing/child")).rejects.toBe(failure);
-});
-
-it("withIdempotentMkdir rethrows a non-StorageError from mkdir unchanged", async () => {
-  const failure = new Error("boom");
-  const storage = makeStubStorage({
-    mkdir: async () => {
-      throw failure;
-    },
-  });
-  await expect(withIdempotentMkdir(storage).mkdir("/x")).rejects.toBe(failure);
-});
-
 it("unavailableStorage rejects every call with the given error and has no trash", async () => {
   const error = new ApiHttpError("upstream_unavailable", "storage provider unavailable");
   const storage = unavailableStorage(error);
@@ -309,6 +253,7 @@ it("unavailableStorage rejects every call with the given error and has no trash"
   await expect(storage.copy("/a", "/b")).rejects.toBe(error);
   await expect(storage.deleteFile("/a")).rejects.toBe(error);
   await expect(storage.deleteDir("/a")).rejects.toBe(error);
+  await expect(storage.deleteEmptyDir("/a")).rejects.toBe(error);
   expect(trashSettingsForStorage(storage)).toBeNull();
 });
 

@@ -1,5 +1,5 @@
 {
-  "id": "0b2256d7-a57c-4403-9dba-f7c77aecbada",
+  "id": "6e888e2c-3037-41dc-b299-5ad6a27afb16",
   "prevId": "ca975a94-4b4e-4028-a03e-2a5b78b71506",
   "version": "7",
   "dialect": "postgresql",
@@ -3071,83 +3071,6 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
-    "idx.events": {
-      "name": "events",
-      "schema": "idx",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "bigserial",
-          "primaryKey": true,
-          "notNull": true
-        },
-        "at": {
-          "name": "at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false,
-          "default": "now()"
-        },
-        "root_id": {
-          "name": "root_id",
-          "type": "smallint",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "kind": {
-          "name": "kind",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "path": {
-          "name": "path",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "target_path": {
-          "name": "target_path",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        }
-      },
-      "indexes": {
-        "events_at_idx": {
-          "name": "events_at_idx",
-          "columns": [
-            {
-              "expression": "at",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
-      "foreignKeys": {
-        "events_root_id_roots_id_fk": {
-          "name": "events_root_id_roots_id_fk",
-          "tableFrom": "events",
-          "tableTo": "roots",
-          "schemaTo": "idx",
-          "columnsFrom": ["root_id"],
-          "columnsTo": ["id"],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "policies": {},
-      "checkConstraints": {},
-      "isRLSEnabled": false
-    },
     "idx.files": {
       "name": "files",
       "schema": "idx",
@@ -3564,12 +3487,6 @@
           "primaryKey": false,
           "notNull": true
         },
-        "sha256": {
-          "name": "sha256",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
         "status": {
           "name": "status",
           "type": "text",
@@ -3604,21 +3521,6 @@
               "expression": "at",
               "isExpression": false,
               "asc": false,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "ocr_log_sha256_idx": {
-          "name": "ocr_log_sha256_idx",
-          "columns": [
-            {
-              "expression": "sha256",
-              "isExpression": false,
-              "asc": true,
               "nulls": "last"
             }
           ],

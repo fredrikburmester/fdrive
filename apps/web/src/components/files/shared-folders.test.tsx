@@ -2,13 +2,11 @@
 import type { FsEntry, ReceivedGrant } from "@fdrive/contracts";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { allCapabilities, NO_SELECTION } from "@/lib/identity/capabilities";
+import { NO_SELECTION } from "@/lib/identity/capabilities";
 import { FileContextMenu, type RowContextAction } from "./file-context-menu";
 import { FilesToolbarActions } from "./toolbar";
 
 vi.mock("@/hooks/use-mobile", () => ({ useIsMobile: () => false }));
-
-const everything = allCapabilities(true);
 
 function entry(path: string, kind: FsEntry["kind"] = "dir"): FsEntry {
   return {
@@ -56,7 +54,6 @@ afterEach(() => {
 async function openMenu(
   target: FsEntry,
   options: {
-    capabilities?: typeof everything;
     selection?: { files: number; folders: number };
     onAction?: (action: RowContextAction, entry: FsEntry) => void;
   } = {},
@@ -64,7 +61,7 @@ async function openMenu(
   render(
     <FileContextMenu
       entry={target}
-      capabilities={options.capabilities ?? everything}
+      trash
       received={[TRIP, BUDGET]}
       {...(options.selection === undefined ? {} : { selection: options.selection })}
       onAction={options.onAction ?? vi.fn()}
@@ -91,16 +88,16 @@ describe("Share with people", () => {
     expect(onAction).toHaveBeenCalledWith("shareWithPeople", photos);
   });
 
-  it("is not offered for a file, a multi-selection or storage that cannot share", async () => {
+  it("is not offered for a file, a multi-selection or all of the login's files", async () => {
     await openMenu(entry("/a.zip", "file"));
     expect(item("Share with people")).toBeNull();
+    expect(item("Share")).toBeTruthy();
     cleanup();
     await openMenu(entry("/Photos"), { selection: { files: 0, folders: 2 } });
     expect(item("Share with people")).toBeNull();
     cleanup();
-    await openMenu(entry("/Photos"), { capabilities: { ...everything, shareWithPeople: false } });
+    await openMenu(entry("/"));
     expect(item("Share with people")).toBeNull();
-    expect(item("Share")).toBeTruthy();
   });
 });
 

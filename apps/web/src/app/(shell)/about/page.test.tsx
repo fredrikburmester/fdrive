@@ -43,13 +43,11 @@ it("labels a development build without a commit", async () => {
   expect(within(value).queryByRole("link")).toBeNull();
 });
 
-it("shows an older server's commit alone, as it did before releases", async () => {
-  const value = await serverVersion({ version: revision });
+it("labels a development build with its commit linked beside it", async () => {
+  const value = await serverVersion({ version: revision, revision });
 
-  expect(value.textContent).toBe(short);
-  const commit = within(value).getByRole("link", { name: short });
-  expect(commit.getAttribute("href")).toBe(
+  expect(value.textContent).toBe(`Development${short}`);
+  expect(within(value).getByRole("link", { name: short }).getAttribute("href")).toBe(
     `https://github.com/fredrikburmester/fdrive/commit/${revision}`,
   );
-  expect(commit.className).not.toContain("text-muted-foreground");
 });

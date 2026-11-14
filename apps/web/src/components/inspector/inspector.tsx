@@ -1,6 +1,6 @@
 "use client";
 
-import type { FsEntry, ProviderCapabilities } from "@fdrive/contracts";
+import type { FsEntry } from "@fdrive/contracts";
 import {
   File,
   FileArchive,
@@ -21,7 +21,6 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { useActivityGesture } from "@/lib/activity/gestures";
-import { DEFAULT_CAPABILITIES } from "@/lib/identity/capabilities";
 import { useFolderSize } from "@/lib/inspector/queries";
 import { apiClient } from "@/lib/preview/deps";
 import { describeEntry } from "@/lib/preview/describe";
@@ -35,17 +34,13 @@ export interface InspectorProps {
   readonly entries: readonly FsEntry[];
   readonly onClose: () => void;
   /**
-   * What the active login's storage can do: without `index` a folder's
-   * size reads "Not indexed" without asking the API, and without
-   * `setModifiedAt` a note explains that Modified is the upload time.
-   * Defaults to `DEFAULT_CAPABILITIES`.
+   * Whether the files folder is indexed: without it a folder's size reads
+   * "Not indexed" without asking the API. Defaults to `true`.
    */
-  readonly capabilities?: ProviderCapabilities;
+  readonly indexed?: boolean;
 }
 
 const NOT_INDEXED = { isPending: false, isError: false } as const;
-const UPLOAD_TIME_NOTE =
-  "Modified is when the file reached this server; uploads do not keep the original time.";
 
 const WIDE_MEDIA_QUERY = "(min-width: 1024px)";
 
@@ -86,23 +81,17 @@ function iconFor(entry: FsEntry) {
   return ICON_BY_PREVIEW_KIND[previewKindFor(entry)];
 }
 
-function SingleEntryBody({
-  entry,
-  capabilities,
-}: {
-  entry: FsEntry;
-  capabilities: ProviderCapabilities;
-}) {
+function SingleEntryBody({ entry, indexed }: { entry: FsEntry; indexed: boolean }) {
   const { prefs } = useFormatters();
   const isDir = entry.kind === "dir";
-  const folderSizeQuery = useFolderSize(entry.path, { enabled: isDir && capabilities.index });
+  const folderSizeQuery = useFolderSize(entry.path, { enabled: isDir && indexed });
   const { rows, note } = describeEntry(entry, {
     now: new Date(),
     units: prefs.sizes,
     clock: prefs.clock,
     ...(isDir
       ? {
-          folderSize: capabilities.index
+          folderSize: indexed
             ? {
                 isPending: folderSizeQuery.isPending,
                 isError: folderSizeQuery.isError,
@@ -149,9 +138,6 @@ function SingleEntryBody({
         ))}
       </dl>
       {note !== null && <p className="text-xs text-muted-foreground">{note}</p>}
-      {!capabilities.setModifiedAt && (
-        <p className="text-xs text-muted-foreground">{UPLOAD_TIME_NOTE}</p>
-      )}
       <EntryMetadataSection entries={[entry]} />
       <FileActivitySection path={entry.path} />
     </div>
@@ -177,13 +163,7 @@ function MultiEntryBody({ entries }: { entries: readonly FsEntry[] }) {
   );
 }
 
-function InspectorBody({
-  entries,
-  capabilities,
-}: {
-  entries: readonly FsEntry[];
-  capabilities: ProviderCapabilities;
-}) {
+function InspectorBody({ entries, indexed }: { entries: readonly FsEntry[]; indexed: boolean }) {
   if (entries.length === 0) {
     return (
       <div className="flex h-full items-center justify-center p-6 text-sm text-muted-foreground">
@@ -194,7 +174,7 @@ function InspectorBody({
 
   const single = entries.length === 1 ? entries.at(0) : undefined;
   if (single !== undefined) {
-    return <SingleEntryBody key={single.path} entry={single} capabilities={capabilities} />;
+    return <SingleEntryBody key={single.path} entry={single} indexed={indexed} />;
   }
 
   return <MultiEntryBody entries={entries} />;
@@ -205,11 +185,7 @@ function InspectorBody({
  * shadcn `Sheet` on narrow ones. Shows a single entry's icon/thumbnail and
  * `describeEntry` rows, or a count-and-size summary for a multi-selection.
  */
-export function Inspector({
-  entries,
-  onClose,
-  capabilities = DEFAULT_CAPABILITIES,
-}: InspectorProps) {
+export function Inspector({ entries, onClose, indexed = true }: InspectorProps) {
   useActivityGesture("file.inspect", entries.length === 1 ? entries[0]?.path : undefined);
   const isWide = useIsWideScreen();
 
@@ -223,7 +199,7 @@ export function Inspector({
           </Button>
         </div>
         <ScrollArea className="flex-1">
-          <InspectorBody entries={entries} capabilities={capabilities} />
+          <InspectorBody entries={entries} indexed={indexed} />
         </ScrollArea>
       </aside>
     );
@@ -243,7 +219,7 @@ export function Inspector({
           <SheetTitle>Info</SheetTitle>
         </SheetHeader>
         <ScrollArea className="flex-1">
-          <InspectorBody entries={entries} capabilities={capabilities} />
+          <InspectorBody entries={entries} indexed={indexed} />
         </ScrollArea>
       </SheetContent>
     </Sheet>

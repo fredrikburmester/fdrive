@@ -37,6 +37,13 @@ describe("makeEntry", () => {
     expect(entry.ext).toBe("");
   });
 
+  it("marks a symbolic link only when told it is one", () => {
+    const input = { name: "alias", kind: "dir" as const, size: 0, modifiedAt: new Date() };
+    expect(makeEntry("/", { ...input, link: true })).toMatchObject({ kind: "dir", link: true });
+    expect(makeEntry("/", { ...input, link: false })).not.toHaveProperty("link");
+    expect(makeEntry("/", input)).not.toHaveProperty("link");
+  });
+
   it("normalizes the parent path", () => {
     const entry = makeEntry("/a//b/", {
       name: "x.txt",

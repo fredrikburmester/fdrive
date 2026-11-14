@@ -569,7 +569,7 @@ describe("index-queries", () => {
   describe("contentAt", () => {
     it("returns the live rows at exactly the pairs asked for, in one query", async () => {
       const files = await insertRoot("files");
-      const photos = await insertRoot("photos");
+      const other = await insertRoot("other");
       const stamped = await insertFile(files, "alice/a.txt", { size: 5, sha256: "a".repeat(64) });
       await db
         .update(schema.files)
@@ -579,8 +579,8 @@ describe("index-queries", () => {
       await insertFile(files, "alice/gone.txt", { deletedAt: new Date() });
       // The same path in another root, and another root's path asked for in this one,
       // must not pair up across the two lists.
-      await insertFile(photos, "alice/a.txt");
-      await insertFile(photos, "bob/c.txt");
+      await insertFile(other, "alice/a.txt");
+      await insertFile(other, "bob/c.txt");
 
       const found = await queries.contentAt([
         { rootName: "files", path: "alice/a.txt" },
@@ -619,12 +619,12 @@ describe("index-queries", () => {
 
   describe("rootIdsByName", () => {
     it("maps every root's name to its id", async () => {
-      const first = await insertRoot("sftpgo");
-      const second = await insertRoot("photos");
+      const first = await insertRoot("files");
+      const second = await insertRoot("other");
 
       const map = await queries.rootIdsByName();
 
-      expect(map).toEqual({ sftpgo: first, photos: second });
+      expect(map).toEqual({ files: first, other: second });
     });
 
     it("returns an empty object when there are no roots", async () => {

@@ -1,28 +1,19 @@
 // @vitest-environment jsdom
-import type { ManagedShare, MeResponse } from "@fdrive/contracts";
+import type { ManagedShare } from "@fdrive/contracts";
 import { ApiClientError } from "@fdrive/contracts";
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { makeIdentity, makeMe } from "@/test-fixtures/identity";
-import { SharesPage, unavailableNote } from "./shares-page";
+import { SharesPage } from "./shares-page";
 
-const mocks = vi.hoisted(() => ({
-  me: undefined as MeResponse | undefined,
-  management: vi.fn(),
-  query: {} as Record<string, unknown>,
-}));
-vi.mock("@/lib/api/auth-queries", () => ({ useMe: () => ({ data: mocks.me }) }));
+const mocks = vi.hoisted(() => ({ query: {} as Record<string, unknown> }));
 vi.mock("@/lib/shares/management", () => ({
-  useShareManagement: (options: unknown) => {
-    mocks.management(options);
-    return {
-      query: mocks.query,
-      create: vi.fn(),
-      update: vi.fn(),
-      revoke: vi.fn(),
-      entries: vi.fn(),
-    };
-  },
+  useShareManagement: () => ({
+    query: mocks.query,
+    create: vi.fn(),
+    update: vi.fn(),
+    revoke: vi.fn(),
+    entries: vi.fn(),
+  }),
 }));
 vi.mock("@/components/grants/shared-with-people-section", () => ({
   SharedWithPeopleSection: () => <section aria-label="Shared with people" />,
@@ -45,13 +36,6 @@ const share: ManagedShare = {
   updatedAt: "2026-01-01T00:00:00Z",
   presentation: "auto",
 };
-const local = makeIdentity({ id: "local", username: "ada", providerLabel: "Main" });
-const noShares = makeIdentity({
-  id: "no-shares",
-  username: "bob",
-  providerLabel: "Main",
-  capabilities: { shares: false },
-});
 
 beforeEach(() => {
   mocks.query = { isPending: false, isError: false, error: null, data: { items: [share] } };
@@ -61,39 +45,19 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
-it("lists the active login's links when its storage can share", () => {
-  mocks.me = makeMe({ identities: [local, noShares], activeIdentityId: "local" });
+it("lists the login's links and the folders it shares with people", () => {
   render(<SharesPage />);
-  expect(mocks.management).toHaveBeenCalledWith({ list: true });
   expect(screen.getByText("Quarterly report")).toBeTruthy();
-  expect(screen.queryByText(/isn't|aren't/)).toBeNull();
+  expect(screen.getByRole("region", { name: "Shared with people" })).toBeTruthy();
 });
 
-it("states the limit for a login that cannot share instead of asking for a refusal", () => {
-  mocks.me = makeMe({ identities: [local, noShares], activeIdentityId: "no-shares" });
+it("says it is loading until the links arrive", () => {
   mocks.query = { isPending: true, isError: false, error: null, data: undefined };
   render(<SharesPage />);
-  expect(mocks.management).toHaveBeenCalledWith({ list: false });
-  expect(screen.getByText("Shares aren't available for this login")).toBeTruthy();
-  expect(screen.getByText(unavailableNote("bob"))).toBeTruthy();
-  expect(unavailableNote("bob")).toBe(
-    "bob can't create share links. Switch to another login to see its links.",
-  );
-  expect(screen.queryByRole("status")).toBeNull();
-  expect(screen.queryByRole("columnheader", { name: "Name" })).toBeNull();
-  expect(screen.queryByText("Could not load share links")).toBeNull();
-});
-
-it("assumes a sharing login until the account has loaded", () => {
-  mocks.me = undefined;
-  mocks.query = { isPending: true, isError: false, error: null, data: undefined };
-  render(<SharesPage />);
-  expect(mocks.management).toHaveBeenCalledWith({ list: true });
   expect(screen.getByRole("status").textContent).toBe("Loading links…");
 });
 
 it("shows a failed listing as an alert without an empty table beneath it", () => {
-  mocks.me = makeMe({ identities: [local], activeIdentityId: "local" });
   mocks.query = {
     isPending: false,
     isError: true,
@@ -107,17 +71,4 @@ it("shows a failed listing as an alert without an empty table beneath it", () =>
   ).toBeTruthy();
   expect(screen.queryByRole("columnheader", { name: "Name" })).toBeNull();
   expect(screen.queryByText("No share links yet")).toBeNull();
-});
-
-it("lists folders shared with people when the login's storage shares between its users", () => {
-  mocks.me = makeMe({
-    identities: [makeIdentity({ id: "local", capabilities: { shareWithPeople: true } })],
-    activeIdentityId: "local",
-  });
-  const view = render(<SharesPage />);
-  expect(screen.getByRole("region", { name: "Shared with people" })).toBeTruthy();
-
-  mocks.me = makeMe({ identities: [local, noShares], activeIdentityId: "no-shares" });
-  view.rerender(<SharesPage />);
-  expect(screen.queryByRole("region", { name: "Shared with people" })).toBeNull();
 });

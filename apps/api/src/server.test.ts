@@ -29,7 +29,6 @@ function buildConfig(): AppConfig {
     fdriveCookieSecure: "auto",
     fdriveTrustedProxyHops: 1,
     nodeEnv: "test",
-    fdriveAutoMigrate: true,
     fdriveTmpDir: "/tmp",
     fdriveDesktopRetentionDays: 30,
     fdriveJobMaxBytes: 1_000_000_000,

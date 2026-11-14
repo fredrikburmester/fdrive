@@ -4,10 +4,7 @@ import {
   allCapabilities,
   anyLoginCan,
   CAPABILITY_KEYS,
-  canDownload,
   capabilitiesFor,
-  DEFAULT_CAPABILITIES,
-  downloadNeedsZip,
   NO_SELECTION,
   selectionOf,
 } from "./capabilities";
@@ -37,64 +34,47 @@ const me: MeResponse = {
 };
 
 describe("capabilitiesFor", () => {
-  it("returns the active login's capabilities by default and another login's on request", () => {
-    expect(capabilitiesFor(me)).toEqual(me.identities[0]?.capabilities);
-    expect(capabilitiesFor(me, "two")).toEqual(me.identities[1]?.capabilities);
+  it("reads Trash and the index from the active login by default and another login on request", () => {
+    expect(capabilitiesFor(me)).toEqual({ trash: false, index: true });
+    expect(capabilitiesFor(me, "two")).toEqual({ trash: true, index: false });
   });
 
-  it("falls back to the defaults while me is loading or the login is unknown", () => {
-    expect(capabilitiesFor(undefined)).toBe(DEFAULT_CAPABILITIES);
-    expect(capabilitiesFor(me, "missing")).toBe(DEFAULT_CAPABILITIES);
-  });
-
-  it("defaults to everything a local-folder login can do except Trash and sharing with people", () => {
-    expect(DEFAULT_CAPABILITIES).toEqual({
-      ...allCapabilities(true),
-      trash: false,
-      shareWithPeople: false,
-    });
+  it("assumes an indexed folder without Trash while me is loading or the login is unknown", () => {
+    expect(capabilitiesFor(undefined)).toEqual({ trash: false, index: true });
+    expect(capabilitiesFor(me, "missing")).toEqual({ trash: false, index: true });
   });
 });
 
 describe("anyLoginCan", () => {
   it("is the union across linked logins", () => {
     expect(anyLoginCan(me, "trash")).toBe(true);
-    expect(anyLoginCan(me, "shares")).toBe(true);
-    expect(anyLoginCan({ ...me, identities: me.identities.slice(1) }, "shares")).toBe(false);
+    expect(anyLoginCan({ ...me, identities: me.identities.slice(0, 1) }, "trash")).toBe(false);
   });
 
   it("uses the defaults before me loads", () => {
-    expect(anyLoginCan(undefined, "shares")).toBe(true);
     expect(anyLoginCan(undefined, "trash")).toBe(false);
+    expect(anyLoginCan(undefined, "index")).toBe(true);
   });
 });
 
-describe("selectionOf and downloads", () => {
-  it("counts files and folders", () => {
-    expect(selectionOf([])).toEqual(NO_SELECTION);
-    expect(selectionOf([{ kind: "file" }, { kind: "dir" }, { kind: "file" }])).toEqual({
-      files: 2,
-      folders: 1,
-    });
-  });
-
-  it("needs a zip for anything but exactly one file", () => {
-    expect(downloadNeedsZip({ files: 1, folders: 0 })).toBe(false);
-    expect(downloadNeedsZip({ files: 2, folders: 0 })).toBe(true);
-    expect(downloadNeedsZip({ files: 0, folders: 1 })).toBe(true);
-    expect(downloadNeedsZip(NO_SELECTION)).toBe(true);
-  });
-
-  it("without zip, downloads only when the selection holds a file", () => {
-    expect(canDownload({ zip: false }, { files: 0, folders: 1 })).toBe(false);
-    expect(canDownload({ zip: false }, { files: 1, folders: 1 })).toBe(true);
-    expect(canDownload({ zip: false }, { files: 2, folders: 0 })).toBe(true);
-    expect(canDownload({ zip: true }, { files: 0, folders: 1 })).toBe(true);
-    expect(canDownload({ zip: true }, NO_SELECTION)).toBe(false);
+it("counts files and folders in a selection", () => {
+  expect(selectionOf([])).toEqual(NO_SELECTION);
+  expect(selectionOf([{ kind: "file" }, { kind: "dir" }, { kind: "file" }])).toEqual({
+    files: 2,
+    folders: 1,
   });
 });
 
-it("lists every capability once", () => {
-  expect(new Set(CAPABILITY_KEYS).size).toBe(CAPABILITY_KEYS.length);
-  expect([...CAPABILITY_KEYS].sort()).toEqual(Object.keys(DEFAULT_CAPABILITIES).sort());
+it("sets every capability flag", () => {
+  expect(Object.keys(allCapabilities(false)).sort()).toEqual([
+    "atomicMove",
+    "index",
+    "office",
+    "setModifiedAt",
+    "shareWithPeople",
+    "shares",
+    "trash",
+    "zip",
+  ]);
+  expect(CAPABILITY_KEYS.every((key) => allCapabilities(true)[key])).toBe(true);
 });

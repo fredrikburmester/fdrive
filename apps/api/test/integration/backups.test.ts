@@ -79,7 +79,7 @@ it("recovers durable metadata, exact bigint history, credentials, ZIPs and bytes
   ]);
   await source.pool.query("insert into idx.roots(name) values('documents')");
   await source.pool.query(
-    "insert into idx.events(id,root_id,path,kind) values(9007199254740993,1,'report.pdf','upsert')",
+    "insert into idx.scans(id,root_id,started_at) values(9007199254740993,1,now())",
   );
   const store = new BackupStore(source.pool);
   const config = await store.configuration();
@@ -120,7 +120,7 @@ it("recovers durable metadata, exact bigint history, credentials, ZIPs and bytes
   expect(result.manifest.coverage).toEqual([]);
   expect((await readFile(file)).includes(Buffer.from("test-secret"))).toBe(false);
   const inspection = await inspectArchive(file, identity);
-  expect(inspection.manifest.tables["idx.events"]?.rows).toBe(1);
+  expect(inspection.manifest.tables["idx.scans"]?.rows).toBe(1);
   const restored = await restoreArchive(
     restoreOptions(
       loadConfig({
@@ -134,7 +134,7 @@ it("recovers durable metadata, exact bigint history, credentials, ZIPs and bytes
     ),
   );
   expect(restored.header.id).toBe(inspection.header.id);
-  expect((await target.pool.query("select id::text from idx.events")).rows[0].id).toBe(
+  expect((await target.pool.query("select id::text from idx.scans")).rows[0].id).toBe(
     "9007199254740993",
   );
   expect((await target.pool.query("select enabled from app.providers")).rows[0].enabled).toBe(

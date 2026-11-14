@@ -155,7 +155,6 @@ describe("loadConfig", () => {
       fdriveCookieSecure: "auto",
       fdriveTrustedProxyHops: 1,
       nodeEnv: "development",
-      fdriveAutoMigrate: true,
       fdriveTmpDir: tmpdir(),
       fdriveDesktopRetentionDays: 30,
       fdriveJobMaxBytes: DEFAULT_JOB_MAX_BYTES,
@@ -208,7 +207,6 @@ describe("loadConfig", () => {
       FDRIVE_COOKIE_SECURE: "true",
       FDRIVE_TRUSTED_PROXY_HOPS: "2",
       NODE_ENV: "production",
-      FDRIVE_AUTO_MIGRATE: "false",
       FDRIVE_TMP_DIR: "/var/tmp/fdrive",
       FDRIVE_JOB_MAX_BYTES: "1000",
       FDRIVE_ARCHIVE_PEEK_MAX_BYTES: "1500",
@@ -253,7 +251,6 @@ describe("loadConfig", () => {
       fdriveCookieSecure: "true",
       fdriveTrustedProxyHops: 2,
       nodeEnv: "production",
-      fdriveAutoMigrate: false,
       fdriveTmpDir: "/var/tmp/fdrive",
       fdriveDesktopRetentionDays: 30,
       fdriveJobMaxBytes: 1000,
@@ -320,22 +317,6 @@ describe("loadConfig", () => {
   it("rejects a non-http FDRIVE_EMBED_URL", () => {
     expect(() => loadConfig({ ...REQUIRED_ENV, FDRIVE_EMBED_URL: "not a url" })).toThrow(
       /FDRIVE_EMBED_URL/,
-    );
-  });
-
-  it("defaults FDRIVE_AUTO_MIGRATE to true and accepts an explicit false", () => {
-    expect(loadConfig(REQUIRED_ENV).fdriveAutoMigrate).toBe(true);
-    expect(loadConfig({ ...REQUIRED_ENV, FDRIVE_AUTO_MIGRATE: "true" }).fdriveAutoMigrate).toBe(
-      true,
-    );
-    expect(loadConfig({ ...REQUIRED_ENV, FDRIVE_AUTO_MIGRATE: "false" }).fdriveAutoMigrate).toBe(
-      false,
-    );
-  });
-
-  it("rejects an invalid FDRIVE_AUTO_MIGRATE value", () => {
-    expect(() => loadConfig({ ...REQUIRED_ENV, FDRIVE_AUTO_MIGRATE: "yes" })).toThrow(
-      /FDRIVE_AUTO_MIGRATE/,
     );
   });
 

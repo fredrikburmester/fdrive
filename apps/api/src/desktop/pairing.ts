@@ -19,7 +19,6 @@ import {
   DESKTOP_MAX_UPLOAD_BYTES,
   type DesktopWriteAvailability,
   type DesktopWriteGate,
-  maxWritableBytes,
 } from "./writes.js";
 
 type IssuedCredential = Omit<DesktopCredential, "location"> & {
@@ -48,7 +47,6 @@ export interface DesktopDeps {
   writeAvailability?: (principal: Principal) => Promise<DesktopWriteAvailability>;
   /** Whether the change feed covers this location; absent when the server has none. */
   changeFeed?: (principal: Principal) => Promise<boolean>;
-  maxUploadBytes?: number;
   apiTokens: ApiTokenRepo;
   identities: IdentityRepo;
   providers: ProviderRepo;
@@ -62,7 +60,7 @@ export interface DesktopDeps {
    */
   indexedContent?: IndexedContentLookup;
   /** Serializes Mac desktop commits for one identity; no other fdrive writer
-   * takes it. Absent means storage without a lease stays read-only. */
+   * takes it. Absent means Mac writes stay read-only. */
   publishLock?: DesktopPublishLock;
 }
 
@@ -162,10 +160,7 @@ export function createDesktopPairing(deps: DesktopDeps) {
       protocolVersion: 2 as const,
       readOnly,
       capabilities,
-      maxUploadBytes: maxWritableBytes(
-        principal.storage,
-        deps.maxUploadBytes ?? DESKTOP_MAX_UPLOAD_BYTES,
-      ),
+      maxUploadBytes: DESKTOP_MAX_UPLOAD_BYTES,
       ...(granted && readOnly ? { writeUnavailableReason: writeUnavailableReason(missing) } : {}),
       // Folder checks are served by the same write service that reports availability.
       ...(deps.writeAvailability ? { listingChecks: true as const } : {}),

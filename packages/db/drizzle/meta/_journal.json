@@ -194,8 +194,15 @@
     {
       "idx": 27,
       "version": "7",
-      "when": 1794680987678,
-      "tag": "0027_ocr_log_sha256",
+      "when": 1794680742269,
+      "tag": "0027_drop_index_events",
+      "breakpoints": true
+    },
+    {
+      "idx": 28,
+      "version": "7",
+      "when": 1794685554995,
+      "tag": "0028_ocr_log_sha256",
       "breakpoints": true
     }
   ]

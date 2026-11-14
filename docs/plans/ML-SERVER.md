@@ -33,11 +33,6 @@ records them as unsupported. Text inside embedded objects (documents attached to
 workbooks behind a chart) is skipped, which is most of the remaining difference from Tika. Add
 a format when a real library shows it is missed.
 
-## Move the perf harness off TEI
-
-`tools/perf` still starts upstream text-embeddings-inference to seed its disposable stack. The
-vectors are the same, so its results stand, but it should start the `ml` image the stack runs.
-
 ## A smaller image model, if indexing speed still matters
 
 SigLIP 2 base with 32-pixel patches embeds an image 13 times faster than the full-precision

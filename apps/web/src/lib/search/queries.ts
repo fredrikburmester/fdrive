@@ -5,51 +5,32 @@ import { useQuery } from "@tanstack/react-query";
 import { apiClient } from "./deps";
 import { chipsToQueryParams, type SearchChipState } from "./filters";
 
-/** Delay between retries while an indexer is coming online after deployment. */
+/** Delay between retries while the indexer registers the files folder after deployment. */
 export const SEARCH_STARTUP_RETRY_MS = 5_000;
 
-/** True for a configured scope failure that cannot recover by waiting. */
+/** True for a scope failure the status names: configuration, which waiting does not fix. */
 export function isPermanentSearchStatus(status: SearchStatusResponse | undefined): boolean {
-  return (
-    status?.available === false &&
-    status.reason !== undefined &&
-    status.reason !== "indexer_unreachable"
-  );
-}
-
-/** True for an unavailable status that may recover without reloading the page. */
-export function shouldRetrySearchStatus(status: SearchStatusResponse | undefined): boolean {
-  return status?.available === false && !isPermanentSearchStatus(status);
-}
-
-/** True while the indexer is still coming online: the one unavailable state that fixes itself. */
-export function isSearchStarting(status: SearchStatusResponse | undefined): boolean {
-  return status?.available === false && status.reason === "indexer_unreachable";
+  return status?.available === false && status.reason !== undefined;
 }
 
 /**
- * True when the active login's storage is not indexed at all: the files
- * folder has no index root. No waiting or remapping changes that, so the
- * copy says what search needs instead.
+ * True when the files folder is not indexed at all. No waiting changes
+ * that, so the copy says what search needs instead.
  */
 export function isSearchUnsupported(status: SearchStatusResponse | undefined): boolean {
   return status?.available === false && status.reason === "no_roots";
 }
 
-/** The search button's tooltip for a permanent failure: short, and about the login when that is the cause. */
+/** The search button's tooltip for a permanent failure: short, and about the index when that is the cause. */
 export function searchUnavailableHint(status: SearchStatusResponse | undefined): string {
-  return isSearchUnsupported(status)
-    ? "Search is not available for this login"
-    : "Search index is unavailable";
+  return isSearchUnsupported(status) ? "Your files are not indexed" : "Search index is unavailable";
 }
 
-/** User-facing wording for unavailable text or visual search of the active login. */
+/** User-facing wording for unavailable text or visual search. */
 export function searchUnavailableMessage(status: SearchStatusResponse | undefined): string {
-  if (isSearchStarting(status)) return "Search is starting… Retrying automatically.";
-  if (isSearchUnsupported(status)) {
-    return "Search is not available for this login. Its folder is not indexed.";
-  }
-  return "Search is not available.";
+  return isSearchUnsupported(status)
+    ? "Search is not available. Your files are not indexed."
+    : "Search is not available.";
 }
 
 /**
@@ -157,14 +138,10 @@ export function useImageSearchResults(query: string, options: UseImageSearchResu
  * disable the search trigger with a tooltip when the index is not
  * configured.
  */
-export function useSearchStatus(options: { readonly retryUnavailable?: boolean } = {}) {
+export function useSearchStatus() {
   return useQuery<SearchStatusResponse>({
     queryKey: searchStatusQueryKey(),
     queryFn: () => apiClient.searchStatus(),
     staleTime: 60_000,
-    refetchInterval: (query) =>
-      options.retryUnavailable && shouldRetrySearchStatus(query.state.data)
-        ? SEARCH_STARTUP_RETRY_MS
-        : false,
   });
 }

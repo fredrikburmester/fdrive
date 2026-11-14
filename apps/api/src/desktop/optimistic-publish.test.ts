@@ -8,7 +8,6 @@ import { createMemoryStorage } from "@fdrive/testkit";
 import { afterEach, expect, it, vi } from "vitest";
 import { memoryRepo } from "../../test/helpers/desktop-repo.js";
 import type { Principal } from "../auth/principal.js";
-import { publishesSafely } from "./publish-gate.js";
 import { createDesktopWrites, NO_WRITES } from "./writes.js";
 
 const sha = (value: string) => createHash("sha256").update(value).digest("hex");
@@ -18,12 +17,11 @@ afterEach(async () => {
   await Promise.all(temporary.splice(0).map((path) => rm(path, { recursive: true, force: true })));
 });
 
-/** Stock storage: no lease, publication qualified by fdrive-side serialization. */
+/** Publication qualified by fdrive-side serialization. */
 async function fixture(
   options: {
     lock?: boolean;
     publishLock?: DesktopPublishLock;
-    lease?: boolean;
     onAuthority?: () => Promise<void>;
     onCopy?: (to: string) => Promise<void>;
     onStat?: (path: string) => Promise<void>;
@@ -36,7 +34,7 @@ async function fixture(
   const raw = createMemoryStorage({ "/old.txt": "old" });
   const uploaded: string[] = [];
   const copied: string[] = [];
-  const base: StorageProvider = {
+  const storage: StorageProvider = {
     ...raw,
     copy: async (from, to, opts) => {
       const result = await raw.copy(from, to, opts);
@@ -57,9 +55,6 @@ async function fixture(
       return raw.download(path, opts);
     },
   };
-  const storage: StorageProvider = options.lease
-    ? { ...base, withWriteLease: (action) => action(base) }
-    : base;
   const principal: Principal = {
     accountId: randomUUID(),
     identityId: randomUUID(),
@@ -148,15 +143,6 @@ async function fixture(
   };
 }
 
-it("qualifies publication by lease, or by fdrive serialization, and never by neither", () => {
-  const plain = createMemoryStorage({}) as StorageProvider;
-  const leased: StorageProvider = { ...plain, withWriteLease: async (action) => action(plain) };
-  expect(publishesSafely(leased, false)).toBe(true);
-  // Any storage publishes once fdrive serializes its own writers; without that it stays read-only.
-  expect(publishesSafely(plain, true)).toBe(true);
-  expect(publishesSafely(plain, false)).toBe(false);
-});
-
 it("publishes on stock storage once fdrive serializes its own writers", async () => {
   const f = await fixture();
   expect(f.service.capabilities(f.principal)).toMatchObject({ update: true });
@@ -175,16 +161,16 @@ it("stays read-only when the publish lock is not configured", async () => {
 it("refuses to publish over a destination that changed after verification", async () => {
   // `verifyAuthority` runs between the last observation of the original and the
   // rename, which is exactly the window an unfenced external writer occupies.
-  // Commit calls verifyAuthority three times: at entry, inside the publish scope,
-  // and immediately before the rename. Only the third lands after the base check
-  // and the recovery copy, which is the window `unchanged` exists to catch.
+  // Commit calls verifyAuthority twice: at entry and immediately before the
+  // rename. Only the second lands after the base check and the recovery copy,
+  // which is the window `unchanged` exists to catch.
   let authorityCalls = 0;
   let arm = false;
   const f = await fixture({
     onAuthority: async () => {
       if (!arm) return;
       authorityCalls += 1;
-      if (authorityCalls !== 3) return;
+      if (authorityCalls !== 2) return;
       await f.raw.upload("/old.txt", body("changed by somebody else"), { overwrite: true });
     },
   });
@@ -193,7 +179,7 @@ it("refuses to publish over a destination that changed after verification", asyn
   await expect(f.service.commit(f.principal, request.operationId)).rejects.toThrow(
     /changed remotely/,
   );
-  expect(authorityCalls).toBe(3);
+  expect(authorityCalls).toBe(2);
   expect(await f.read("/old.txt")).toBe("changed by somebody else");
   const after = await f.service.status(f.principal, request.operationId);
   expect(after.state).toBe("conflict");
@@ -234,23 +220,6 @@ it("refuses to publish over a write that landed while the recovery copy was veri
   );
   expect(fired).toBe(true);
   expect(await f.read("/old.txt")).toBe("changed by somebody else");
-});
-
-it("does not take the publish lock when the storage enforces a lease", async () => {
-  // The lease already fences every fdrive writer for the length of the action, so
-  // taking the lock as well would only pin a database connection to the transfer.
-  let taken = 0;
-  const f = await fixture({
-    lease: true,
-    publishLock: async (_id, run) => {
-      taken += 1;
-      return run();
-    },
-  });
-  const request = await f.stage("saved");
-  await f.service.commit(f.principal, request.operationId);
-  expect(taken).toBe(0);
-  expect(await f.read("/old.txt")).toBe("saved");
 });
 
 it("takes the lock for publication only, not for the staged upload", async () => {
@@ -367,22 +336,25 @@ it("proves the live destination when a recovery copy survives an earlier attempt
 });
 
 it("reports a failed destination recheck as retryable, not as a remote change", async () => {
-  // The recheck is one stat. A storage failure there says nothing about the
-  // destination, and a 409 would make the Mac fork a conflict copy of a file that
-  // nobody touched. Only a vanished entry is a conflict.
-  let stats = 0;
+  // The recheck is one stat, the only one under the lock. A storage failure there
+  // says nothing about the destination, and a 409 would make the Mac fork a
+  // conflict copy of a file that nobody touched. Only a vanished entry is a conflict.
+  let locked = false;
   const f = await fixture({
+    publishLock: async (_id, run) => {
+      locked = true;
+      return run();
+    },
     onStat: async (path) => {
-      if (path !== "/old.txt") return;
-      stats += 1;
-      if (stats === 2) throw new StorageError("upstream_unavailable", "HEAD failed");
+      if (locked && path === "/old.txt")
+        throw new StorageError("upstream_unavailable", "stat failed");
     },
   });
   const request = await f.rename("renamed.txt");
   await expect(f.service.commit(f.principal, request.operationId)).rejects.toMatchObject({
     kind: "upstream_unavailable",
   });
-  expect(stats).toBe(2);
+  expect(locked).toBe(true);
   expect(await f.read("/old.txt")).toBe("old");
   expect((await f.service.status(f.principal, request.operationId)).state).toBe("ready");
 });

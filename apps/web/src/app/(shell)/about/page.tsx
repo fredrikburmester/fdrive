@@ -7,7 +7,6 @@ import { serverApiClient } from "@/lib/api/server";
 import { providerTypeLabel } from "@/lib/identity/provider-type";
 import { formatUptime } from "@/lib/system/format";
 import { describeServerVersion } from "@/lib/system/server-version";
-import { cn } from "@/lib/utils";
 
 export const metadata: Metadata = { title: "About - fdrive" };
 
@@ -64,17 +63,14 @@ export default async function AboutPage() {
               <div className="min-w-0">
                 <dt className="text-muted-foreground">Server version</dt>
                 <dd className="mt-1 flex flex-wrap items-center gap-x-2 font-medium [overflow-wrap:anywhere]">
-                  {server.label !== null && <span>{server.label}</span>}
+                  <span>{server.label}</span>
                   {server.revision !== null && (
                     <a
                       href={`${GITHUB}/commit/${server.revision}`}
                       target="_blank"
                       rel="noopener noreferrer"
                       title={server.revision}
-                      className={cn(
-                        "inline-flex min-h-11 items-center gap-1 font-mono underline-offset-4 hover:underline",
-                        server.label !== null && "text-muted-foreground hover:text-foreground",
-                      )}
+                      className="inline-flex min-h-11 items-center gap-1 font-mono text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
                     >
                       {server.revision.slice(0, 12)}
                       <ArrowUpRight aria-hidden="true" className="size-3.5" />
@@ -85,9 +81,7 @@ export default async function AboutPage() {
               <div className="min-w-0">
                 <dt className="text-muted-foreground">API uptime</dt>
                 <dd className="mt-1 flex min-h-11 items-center font-medium tabular-nums">
-                  {about.uptimeSeconds === undefined
-                    ? "Unavailable"
-                    : formatUptime(about.uptimeSeconds)}
+                  {formatUptime(about.uptimeSeconds)}
                 </dd>
                 <p className="text-xs text-muted-foreground">
                   At page load. Resets when the API restarts.

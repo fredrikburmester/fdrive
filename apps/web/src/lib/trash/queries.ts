@@ -6,7 +6,6 @@ import {
   type OkResponse,
   type TrashListResponse,
   type TrashRestoreResponse,
-  type TrashStatusResponse,
 } from "@fdrive/contracts";
 import { parentPath } from "@fdrive/core";
 import { type QueryClient, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -16,20 +15,6 @@ import { refreshIdentityQuery } from "@/lib/account/invalidation";
 import { accountTransition } from "@/lib/account/transition";
 import { describeFsError } from "@/lib/files/queries";
 import { apiClient, queryKeys, snapshotTabApiClient } from "./deps";
-
-/** How long a fetched trash status is considered fresh: it only ever
- * changes when an operator reconfigures the storage provider, not while a
- * tab is open. */
-const TRASH_STATUS_STALE_TIME_MS = 5 * 60 * 1000;
-
-/** Whether the active identity's storage provider exposes a trash, and its configuration. */
-export function useTrashStatus() {
-  return useQuery({
-    queryKey: queryKeys.trash.status(),
-    queryFn: () => apiClient.trashStatus(),
-    staleTime: TRASH_STATUS_STALE_TIME_MS,
-  });
-}
 
 /** The active identity's trash listing. */
 export function useTrash() {
@@ -133,4 +118,4 @@ export function useTrashEmpty() {
   });
 }
 
-export type { TrashListResponse, TrashStatusResponse };
+export type { TrashListResponse };

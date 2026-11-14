@@ -1,9 +1,8 @@
 // @vitest-environment jsdom
-import type { FsEntry, MeResponse, ProviderCapabilities, ReceivedGrant } from "@fdrive/contracts";
+import type { FsEntry, ReceivedGrant } from "@fdrive/contracts";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { Button } from "@/components/ui/button";
-import { allCapabilities } from "@/lib/identity/capabilities";
 import { VirtualListing } from "./virtual-listing";
 
 const fixtures = vi.hoisted(() => {
@@ -41,21 +40,13 @@ const fixtures = vi.hoisted(() => {
     files: [file, other],
     /** What `useResolvedEntries` hands the component; set per test. */
     shown: { entries: [] as FsEntry[] },
-    /** What `useMe` hands the component; `undefined` means "still loading". */
-    me: { data: undefined as MeResponse | undefined },
     downloadUrl: vi.fn((path: string) => `/api/v1/fs/download?path=${encodeURIComponent(path)}`),
     zip: vi.fn(),
-    /** What `useReceivedGrants` hands the component, and whether it was asked to fetch. */
+    /** What `useReceivedGrants` hands the component. */
     received: [] as ReceivedGrant[],
-    receivedEnabled: [] as boolean[],
   };
 });
-vi.mock("@/lib/grants/queries", () => ({
-  useReceivedGrants: (enabled: boolean) => {
-    fixtures.receivedEnabled.push(enabled);
-    return fixtures.received;
-  },
-}));
+vi.mock("@/lib/grants/queries", () => ({ useReceivedGrants: () => fixtures.received }));
 vi.mock("@/components/grants/share-with-people-dialog", () => ({
   ShareWithPeopleDialog: ({ folder, onClose }: { folder: FsEntry; onClose: () => void }) => (
     <section aria-label="Share with people">
@@ -96,8 +87,7 @@ vi.mock("@/lib/metadata/deps", async (importOriginal) => ({
   useRename: () => ({ mutate: vi.fn() }),
   useDelete: () => ({ mutate: vi.fn() }),
   useDuplicate: () => ({ mutate: vi.fn() }),
-  useTrashStatus: () => ({ data: undefined }),
-  useMe: () => fixtures.me,
+  useMe: () => ({ data: undefined }),
   PageHeader: () => null,
   RenameDialog: () => null,
   DeleteDialog: () => null,
@@ -176,24 +166,6 @@ const OBJECT_URL = "blob:fdrive/archive";
 const originalCreateObjectUrl = URL.createObjectURL;
 const originalRevokeObjectUrl = URL.revokeObjectURL;
 
-function meWith(capabilities: ProviderCapabilities): MeResponse {
-  return {
-    account: { id: "00000000-0000-4000-8000-000000000001", displayName: null },
-    activeIdentityId: "00000000-0000-4000-8000-000000000002",
-    isAdmin: false,
-    identities: [
-      {
-        id: "00000000-0000-4000-8000-000000000002",
-        username: "user",
-        providerId: "00000000-0000-4000-8000-000000000003",
-        providerType: "local",
-        providerLabel: "Local folder",
-        capabilities,
-      },
-    ],
-  };
-}
-
 function zipResponse(): Response {
   return {
     ok: true,
@@ -217,9 +189,7 @@ beforeEach(() => {
   objectUrls.created = 0;
   objectUrls.revoked = [];
   fixtures.shown.entries = fixtures.files;
-  fixtures.me.data = undefined;
   fixtures.received = [];
-  fixtures.receivedEnabled.length = 0;
   fixtures.downloadUrl.mockClear();
   fixtures.zip.mockReset();
   fixtures.zip.mockResolvedValue(zipResponse());
@@ -282,7 +252,6 @@ it("streams a single file straight from the download URL, without a zip request"
 
 it("zips a folder instead of navigating to the file download URL", async () => {
   fixtures.shown.entries = [fixtures.folder];
-  fixtures.me.data = meWith(allCapabilities(true));
   renderListing();
 
   fireEvent.click(screen.getByRole("button", { name: "Download photos" }));
@@ -296,7 +265,6 @@ it("zips a folder instead of navigating to the file download URL", async () => {
 
 it("zips the whole context selection, not just the right-clicked row", async () => {
   fixtures.shown.entries = [fixtures.file, fixtures.folder];
-  fixtures.me.data = meWith(allCapabilities(true));
   renderListing();
 
   fireEvent.click(screen.getByRole("button", { name: "Download all" }));
@@ -306,37 +274,9 @@ it("zips the whole context selection, not just the right-clicked row", async () 
   expect(clicks).toEqual([{ href: OBJECT_URL, download: "archive.zip", rel: "noopener" }]);
 });
 
-it("skips a folder on a provider without zip rather than requesting a 400", async () => {
-  fixtures.shown.entries = [fixtures.folder];
-  fixtures.me.data = meWith({ ...allCapabilities(true), zip: false });
-  renderListing();
-
-  fireEvent.click(screen.getByRole("button", { name: "Download photos" }));
-  await Promise.resolve();
-
-  expect(fixtures.downloadUrl).not.toHaveBeenCalled();
-  expect(fixtures.zip).not.toHaveBeenCalled();
-  expect(clicks).toEqual([]);
-});
-
-it("downloads only the files when a mixed selection cannot be zipped", async () => {
-  fixtures.shown.entries = [fixtures.file, fixtures.folder];
-  fixtures.me.data = meWith({ ...allCapabilities(true), zip: false });
-  renderListing();
-
-  fireEvent.click(screen.getByRole("button", { name: "Download all" }));
-  await Promise.resolve();
-
-  expect(fixtures.zip).not.toHaveBeenCalled();
-  expect(clicks).toEqual([
-    { href: "/api/v1/fs/download?path=%2Fa.txt", download: null, rel: "noopener" },
-  ]);
-});
-
 it("reports a failed zip with the file browser's download error toast", async () => {
   const { toast } = await import("sonner");
   fixtures.shown.entries = [fixtures.folder];
-  fixtures.me.data = meWith(allCapabilities(true));
   fixtures.zip.mockRejectedValue(new Error("offline"));
   renderListing();
 
@@ -350,7 +290,6 @@ it("reports a failed zip with the file browser's download error toast", async ()
 it("shares a folder with people and leaves a folder shared with this login", () => {
   const shared: FsEntry = { ...fixtures.folder, name: "Trip", path: "/Shared with me/Trip" };
   fixtures.shown.entries = [shared];
-  fixtures.me.data = meWith({ ...allCapabilities(true), shareWithPeople: true });
   fixtures.received = [
     {
       id: "00000000-0000-4000-8000-0000000000aa",
@@ -363,7 +302,6 @@ it("shares a folder with people and leaves a folder shared with this login", () 
   ];
   renderListing();
 
-  expect(fixtures.receivedEnabled).toContain(true);
   expect(screen.getByText("1 shared with me")).toBeTruthy();
   fireEvent.click(screen.getByRole("button", { name: "Share first with people" }));
   expect(screen.getByRole("region", { name: "Share with people" }).textContent).toContain(
@@ -376,11 +314,4 @@ it("shares a folder with people and leaves a folder shared with this login", () 
   expect(screen.getByText("Leave Trip from alice")).toBeTruthy();
   fireEvent.click(screen.getByRole("button", { name: "Close leave" }));
   expect(screen.queryByText("Leave Trip from alice")).toBeNull();
-});
-
-it("asks for nothing shared on storage that cannot share folders", () => {
-  fixtures.me.data = meWith({ ...allCapabilities(true), shareWithPeople: false });
-  renderListing();
-
-  expect(fixtures.receivedEnabled.every((enabled) => !enabled)).toBe(true);
 });

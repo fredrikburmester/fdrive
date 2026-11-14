@@ -1,4 +1,5 @@
-//! Change event payloads, published on `NOTIFY idx_events` and stored in `idx.events`.
+//! Change event payloads, published on `NOTIFY idx_events`. They are not stored: the change
+//! journal (`idx.changes`) is the durable record of changes.
 
 use chrono::{DateTime, SecondsFormat, Utc};
 use serde::Serialize;

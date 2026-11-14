@@ -7,6 +7,7 @@ import type {
   ReadAuthorizeTarget,
 } from "../scoping/read-authorizer.ts";
 import type { EmbedClient } from "./embeddings.js";
+import type { NameIndexClient, NameIndexHit, NameIndexHits } from "./name-index.js";
 import { createSearchService, type SearchServiceDeps, type SearchServiceInput } from "./service.js";
 
 const HOME_SCOPES: readonly Scope[] = [
@@ -1364,4 +1365,163 @@ describe("createSearchService: search - hits", () => {
     expect(result.sections.files).toEqual([]);
     expect(calls).toEqual([]);
   });
+});
+
+describe("createSearchService: search - typos", () => {
+  function nameHit(id: number, path: string, ageDays = 0): NameIndexHit {
+    return { id, rootId: 1, path, mtimeNs: NOW_NS - BigInt(ageDays) * DAY_NS };
+  }
+
+  function nameIndex(hits: Partial<NameIndexHits> | null) {
+    return {
+      search: vi.fn<NameIndexClient["search"]>(async () =>
+        hits === null ? null : { files: hits.files ?? [], folders: hits.folders ?? [] },
+      ),
+    };
+  }
+
+  it("lists a folder found with a typo after every folder spelled as typed", async () => {
+    const service = createSearchService(
+      buildDeps({
+        indexQueries: folderOnlyQueries([makeFolder("alice/Microlärsätt", 3000)]),
+        nameIndex: nameIndex({
+          folders: [
+            folderHitOf("alice/Mikrolärande", 0),
+            folderHitOf("alice/Microlärsätt", 3000),
+            folderHitOf("alice/Something else", 0),
+          ],
+        }),
+      }),
+    );
+
+    const result = await service.search(baseInput({ query: "Microlär" }));
+
+    expect(result.sections.folders.map((folder) => folder.path)).toEqual([
+      "/Microlärsätt",
+      "/Mikrolärande",
+    ]);
+  });
+
+  it("ranks a file found with a typo below names spelled as typed and above content matches", async () => {
+    const typed = makeFile({
+      id: 1,
+      path: "alice/Microlär plan.pdf",
+      name: "Microlär plan.pdf",
+      mtimeNs: daysAgoNs(3000),
+    });
+    const typo = makeFile({
+      id: 2,
+      path: "alice/Mikrolärande.pdf",
+      name: "Mikrolärande.pdf",
+      mtimeNs: daysAgoNs(0),
+    });
+    const content = makeFile({
+      id: 3,
+      path: "alice/notes.txt",
+      name: "notes.txt",
+      mtimeNs: daysAgoNs(0),
+    });
+    const filesByIds = vi.fn(async () => [typed, typo, content]);
+    const indexQueries = fakeIndexQueries({
+      rootIdsByName: async () => ({ files: 1 }),
+      semantic: async () => [],
+      fulltext: async () => [{ fileId: 3, snippet: "microlär" }],
+      filename: async () => [{ fileId: 1, hits: 1, similarity: 0.5 }],
+      filesByIds,
+    });
+    const service = createSearchService(
+      buildDeps({
+        indexQueries,
+        nameIndex: nameIndex({
+          files: [
+            nameHit(1, "alice/Microlär plan.pdf", 3000),
+            nameHit(2, "alice/Mikrolärande.pdf"),
+            nameHit(4, "alice/Unrelated.pdf"),
+          ],
+        }),
+      }),
+    );
+
+    const result = await service.search(baseInput({ query: "Microlär" }));
+
+    expect(result.sections.files.map((hit) => hit.name)).toEqual([
+      "Microlär plan.pdf",
+      "Mikrolärande.pdf",
+      "notes.txt",
+    ]);
+    // A hit fdrive would not call a match is never even loaded.
+    expect(filesByIds).toHaveBeenLastCalledWith(expect.not.arrayContaining([4]));
+  });
+
+  it("asks the name index about the same places with fdrive's own folders left out", async () => {
+    const names = nameIndex({});
+    const service = createSearchService(
+      buildDeps({
+        indexQueries: folderOnlyQueries([]),
+        nameIndex: names,
+        trashPath: "/.trash",
+      }),
+    );
+
+    await service.search(baseInput({ query: "Microlär" }));
+    await service.search(
+      baseInput({ query: "Microlär", filters: { ...NO_FILTERS, exts: [".pdf"] } }),
+    );
+
+    expect(names.search).toHaveBeenNthCalledWith(1, {
+      query: "Microlär",
+      scopes: [{ rootId: 1, fsPrefix: "/alice" }],
+      exclude: reserved("/alice/.trash"),
+      files: 25,
+      folders: 50,
+    });
+    // A type filter is files-only.
+    expect(names.search).toHaveBeenNthCalledWith(2, expect.objectContaining({ folders: 0 }));
+  });
+
+  it("does not ask the name index about a query with no words", async () => {
+    const names = nameIndex({});
+    const service = createSearchService(
+      buildDeps({ indexQueries: folderOnlyQueries([]), nameIndex: names }),
+    );
+
+    await service.search(baseInput({ query: " - " }));
+
+    expect(names.search).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["has no answer", nameIndex(null)],
+    ["fails", { search: vi.fn(async () => Promise.reject(new Error("down"))) }],
+  ])("finds names only as typed when the name index %s", async (_, names) => {
+    const service = createSearchService(
+      buildDeps({
+        indexQueries: folderOnlyQueries([makeFolder("alice/Microlärsätt", 1)]),
+        nameIndex: names,
+      }),
+    );
+
+    const result = await service.search(baseInput({ query: "Microlär" }));
+
+    expect(result.sections.folders.map((folder) => folder.path)).toEqual(["/Microlärsätt"]);
+    expect(result.partial).toBeUndefined();
+  });
+
+  it("reports partial when the name index fills its limit", async () => {
+    const folders = Array.from({ length: 50 }, (_, i) => folderHitOf(`alice/Mikrolärande ${i}`, i));
+    const service = createSearchService(
+      buildDeps({ indexQueries: folderOnlyQueries([]), nameIndex: nameIndex({ folders }) }),
+    );
+
+    const result = await service.search(baseInput({ query: "Microlär" }));
+
+    expect(result.partial).toBe(true);
+    expect(result.sections.folders).toHaveLength(5);
+  });
+
+  let nextFolderId = 100;
+  function folderHitOf(path: string, ageDays: number): NameIndexHit {
+    nextFolderId += 1;
+    return nameHit(nextFolderId, path, ageDays);
+  }
 });

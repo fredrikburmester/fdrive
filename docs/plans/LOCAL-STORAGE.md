@@ -75,6 +75,6 @@ admin UI and upgrades.
 
 ## Later
 
-Feed indexer change events from the local provider's own writes, offer `withWriteLease` for Mac
-writes, share single files with people, and drop the sealed credentials (`app.credentials`),
-which only a later login's change check and backup restore still read.
+Feed indexer change events from the local provider's own writes, share single files with
+people, and drop the sealed credentials (`app.credentials`), which only a later login's change
+check and backup restore still read.

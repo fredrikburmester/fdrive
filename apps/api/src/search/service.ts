@@ -33,6 +33,7 @@ import type {
 } from "../scoping/read-authorizer.ts";
 import { roundTripVirtualPath } from "../scoping/round-trip.ts";
 import type { EmbedClient } from "./embeddings.js";
+import type { NameIndexClient, NameIndexHit, NameIndexHits } from "./name-index.js";
 import { dateFromMtimeNs, reservedExclusion } from "./scopes.js";
 
 /** How many rows each of the three underlying signals fans out to, matching filesai's `LIMIT 60`. */
@@ -55,6 +56,12 @@ export interface SearchServiceDeps {
   readonly indexQueries: IndexQueries;
   /** `null` when `FDRIVE_EMBED_URL` is not configured; semantic search never runs then. */
   readonly embedClient: EmbedClient | null;
+  /**
+   * The indexer's name index, which finds names typed with a typo or two;
+   * `null` or absent when `FDRIVE_INDEXER_URL` is not configured. While it
+   * cannot answer, search finds names only as typed.
+   */
+  readonly nameIndex?: NameIndexClient | null;
   /** Whether `FDRIVE_THUMBS_DIR` is configured; when false, every hit reports `hasThumbnail: false`. */
   readonly thumbsEnabled: boolean;
   /**
@@ -115,6 +122,8 @@ function emptyResponse(
 
 interface RankFoldersInput {
   readonly rows: readonly FolderHit[];
+  /** Folders the name index found, typos allowed; those `rows` already has are skipped. */
+  readonly nameRows: readonly FolderHit[];
   readonly query: string;
   readonly filters: SearchFilters;
   readonly now: Date;
@@ -129,34 +138,47 @@ interface FolderCandidate {
   readonly path: string;
   readonly modifiedAt: Date;
   readonly score: number;
+  /** The name matches only with a typo. */
+  readonly typo: boolean;
 }
 
 /**
  * The Folders section: folders whose own name answers the query, empty ones
  * included, ranked like files by how the name matches (`nameMatch`) and then
  * by age (`recencyWeight`), live-read checked and capped at `MAX_FOLDERS`.
+ * A folder whose name matches only with a typo comes after every other.
  * The caller's own home (`/`) and the folder a folder filter starts at are
  * left out. Never called while a type filter (`SearchFilters.exts`) is
  * active: a type filter is a files-only filter.
  */
 async function rankFolders(input: RankFoldersInput): Promise<FsEntry[]> {
   const candidates = new Map<string, FolderCandidate>();
-  for (const row of input.rows) {
+  const consider = (row: FolderHit, fromNameIndex: boolean) => {
     const path = input.virtualPathFor(row.rootId, row.path);
     if (path === null || path === "/" || path === input.filters.folder || candidates.has(path)) {
-      continue;
+      return;
     }
     const modifiedAt = dateFromMtimeNs(row.mtimeNs);
     if (!matchesSearchFilters({ path, ext: "", modifiedAt }, input.filters)) {
-      continue;
+      return;
     }
     const match = nameMatch(input.query, { name: baseName(path), folder: parentPath(path) });
+    // The name index reads words a little differently; only names fdrive itself would match count.
+    if (fromNameIndex && match === "none") {
+      return;
+    }
     const score = (1 + NAME_MATCH_BOOST[match]) * recencyWeight(modifiedAt, input.now);
-    candidates.set(path, { path, modifiedAt, score });
+    candidates.set(path, { path, modifiedAt, score, typo: match === "typo" });
+  };
+  for (const row of input.rows) {
+    consider(row, false);
+  }
+  for (const row of input.nameRows) {
+    consider(row, true);
   }
 
   const ranked = Array.from(candidates.values()).sort(
-    (a, b) => b.score - a.score || a.path.localeCompare(b.path),
+    (a, b) => Number(a.typo) - Number(b.typo) || b.score - a.score || a.path.localeCompare(b.path),
   );
   const resolvedFolders = await Promise.all(
     ranked.map(async ({ path, modifiedAt }): Promise<FsEntry | null> => {
@@ -181,14 +203,21 @@ async function rankFolders(input: RankFoldersInput): Promise<FsEntry[]> {
   return resolvedFolders.filter((entry): entry is FsEntry => entry !== null).slice(0, MAX_FOLDERS);
 }
 
+/** A name-index folder hit in the shape the folders query returns. */
+function folderHit(hit: NameIndexHit): FolderHit {
+  return { rootId: hit.rootId, path: hit.path, name: baseName(hit.path), mtimeNs: hit.mtimeNs };
+}
+
 /**
  * Builds the fdrive hybrid search service. Candidates come from three
  * bounded signals (semantic top 60, full-text prefix `tsquery` top 60,
  * filename word hits plus trigram similarity top 25) fused by reciprocal
- * rank (k=60). A file whose name answers the query (`nameMatch`) is then
- * lifted above every result found by content alone, and every score is
- * weighted by the file's age (`recencyWeight`), so of two similar matches
- * the recently modified one comes first. Scoped to `input.scopes` (already
+ * rank (k=60), plus the files and folders the name index finds with a typo
+ * or two (top 25 and 50). A file whose name answers the query (`nameMatch`)
+ * is then lifted above every result found by content alone, a name that
+ * matches only with a typo below every name spelled as typed, and every
+ * score is weighted by the file's age (`recencyWeight`), so of two similar
+ * matches the recently modified one comes first. Scoped to `input.scopes` (already
  * verified by the caller), with every candidate round-tripped
  * (`roundTripVirtualPath`) and live-read checked (`input.authorizer`) before
  * it can contribute to hits, snippets, thumbnail flags, or derived folders.
@@ -318,11 +347,24 @@ export function createSearchService(deps: SearchServiceDeps): SearchService {
               exclude,
             })
           : Promise.resolve<FolderHit[]>([]);
+      const namesPromise: Promise<NameIndexHits | null> =
+        deps.nameIndex !== undefined && deps.nameIndex !== null && words.length > 0
+          ? deps.nameIndex
+              .search({
+                query: input.query,
+                scopes: prefixes,
+                exclude,
+                files: FILENAME_FANOUT_LIMIT,
+                folders: input.filters.exts === null ? FOLDER_FANOUT_LIMIT : 0,
+              })
+              .catch(() => null)
+          : Promise.resolve(null);
       // Folder probes start before any file probe, so the request-local
       // authorization semaphore does not queue them behind every ranked file.
-      const foldersPromise = folderRowsPromise.then((rows) =>
+      const foldersPromise = Promise.all([folderRowsPromise, namesPromise]).then(([rows, names]) =>
         rankFolders({
           rows,
+          nameRows: (names?.folders ?? []).map(folderHit),
           query: input.query,
           filters: input.filters,
           now: startedAt,
@@ -345,13 +387,15 @@ export function createSearchService(deps: SearchServiceDeps): SearchService {
         ),
       );
 
-      const [embedding, semanticRows, fulltextRows, filenameRows, folderRows] = await Promise.all([
-        embeddingPromise,
-        semanticPipeline,
-        fulltextPipeline,
-        filenamePromise,
-        folderRowsPromise,
-      ]);
+      const [embedding, semanticRows, fulltextRows, filenameRows, folderRows, names] =
+        await Promise.all([
+          embeddingPromise,
+          semanticPipeline,
+          fulltextPipeline,
+          filenamePromise,
+          folderRowsPromise,
+          namesPromise,
+        ]);
       const degraded = features?.semanticSearch !== false && embedding === null;
 
       // The underlying queries are bounded (`LIMIT 60`/`LIMIT 25`); a row
@@ -361,7 +405,9 @@ export function createSearchService(deps: SearchServiceDeps): SearchService {
         semanticRows.length >= CONTENT_FANOUT_LIMIT ||
         fulltextRows.length >= CONTENT_FANOUT_LIMIT ||
         filenameRows.length >= FILENAME_FANOUT_LIMIT ||
-        folderRows.length >= FOLDER_FANOUT_LIMIT;
+        folderRows.length >= FOLDER_FANOUT_LIMIT ||
+        (names?.files.length ?? 0) >= FILENAME_FANOUT_LIMIT ||
+        (names?.folders.length ?? 0) >= FOLDER_FANOUT_LIMIT;
 
       const textFused = fuseRankings<number>([
         semanticRows.map((row) => ({ id: row.fileId, snippet: row.snippet })),
@@ -379,6 +425,25 @@ export function createSearchService(deps: SearchServiceDeps): SearchService {
         const contribution = filenameScore(row.hits, words.length, rank, DEFAULT_FUSION_K);
         scoreById.set(row.fileId, (scoreById.get(row.fileId) ?? 0) + contribution);
       });
+      // Files only the name index found, most a typo or two away, count as one
+      // more filename list; `nameMatch` then ranks each by how its name
+      // matches. One fdrive would not call a match at all is left out.
+      const named = new Set(filenameRows.map((row) => row.fileId));
+      (names?.files ?? [])
+        .filter(
+          (hit) =>
+            !named.has(hit.id) &&
+            nameMatch(input.query, { name: baseName(hit.path), folder: "" }) !== "none",
+        )
+        .forEach((hit, index) => {
+          const contribution = filenameScore(
+            words.length,
+            words.length,
+            index + 1,
+            DEFAULT_FUSION_K,
+          );
+          scoreById.set(hit.id, (scoreById.get(hit.id) ?? 0) + contribution);
+        });
 
       if (scoreById.size === 0) {
         const folders = await foldersPromise;

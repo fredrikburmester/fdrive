@@ -14,10 +14,4 @@ describe("resolveMigrationsFolder", () => {
 
     expect(result).toBe(path.join("/repo/packages/db", "drizzle"));
   });
-
-  it("resolves correctly from a nested bin module", () => {
-    const result = resolveMigrationsFolder("file:///repo/packages/db/src/bin/migrate.ts");
-
-    expect(result).toBe(path.join("/repo/packages/db/src", "drizzle"));
-  });
 });

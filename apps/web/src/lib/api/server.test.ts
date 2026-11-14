@@ -55,7 +55,8 @@ describe("serverApiClient", () => {
   it("builds an ApiClient that forwards the incoming cookie header", async () => {
     headersMock.mockReturnValue({ get: () => "session=abc" });
     const body = {
-      version: "1.0.0",
+      version: "development",
+      uptimeSeconds: 1,
       providers: [{ type: "local", label: "Local folder" }],
       setupRequired: false,
     };

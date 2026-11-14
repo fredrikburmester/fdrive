@@ -108,6 +108,7 @@ import { createScopeResolver } from "./scoping/resolver.ts";
 import { createEmbedClient } from "./search/embeddings.js";
 import { createImageEmbedClient } from "./search/image-embed-client.js";
 import { createImageSearchService } from "./search/image-service.js";
+import { createNameIndexClient } from "./search/name-index.js";
 import { registerSearchRoutes } from "./search/routes.js";
 import { createSearchService } from "./search/service.js";
 import { registerSetupRoutes } from "./setup/routes.js";
@@ -162,7 +163,7 @@ const HEALTH_PROBE_TTL_MS = 15_000;
 
 /**
  * Wires every fdrive API dependency together: the Postgres pool and repos
- * (running migrations first when `config.fdriveAutoMigrate` is set), the
+ * (running pending migrations first), the
  * provider service (rows in `app.providers`; the local folder is pinned from
  * `FDRIVE_STORAGE_ROOT`, see `src/providers/service.ts`), the event bus, the login rate limiter, the
  * auth module, the setup module (logging the one-time setup token while
@@ -188,9 +189,7 @@ export async function composeApp(
   const { db, pool } = createDb(config.databaseUrl, {
     onError: (error) => logger.warn({ err: error }, "idle database connection error"),
   });
-  if (config.fdriveAutoMigrate) {
-    await migrate(db);
-  }
+  await migrate(db);
   const repos = createRepos(db);
   const restored = await repos.settings.get("backup.restore.v1");
   if (config.fdriveRestoreMode || restored) return createRecoveryApp(config, pool, !!restored);
@@ -414,6 +413,10 @@ export async function composeApp(
     features: featureValues,
     indexQueries,
     embedClient,
+    nameIndex:
+      config.fdriveIndexerUrl === undefined
+        ? null
+        : createNameIndexClient({ baseUrl: config.fdriveIndexerUrl, fetch: fetchImpl }),
     thumbsEnabled: config.fdriveThumbsDir !== undefined,
     clock,
   });
@@ -482,7 +485,7 @@ export async function composeApp(
   const metadataService = withTrashMoves(metadataCore, trashPathOf);
   const desktopRepo = createDesktopRepo(db);
   // Serializes Mac desktop commits per identity; no other fdrive writer takes
-  // it. Storage without its own lease is read-only unless this is configured.
+  // it. Mac writes are read-only unless this is configured.
   //
   // On its own pool: the lock holds a connection for the whole critical section,
   // so on the main pool a few slow publications would starve every other query.
