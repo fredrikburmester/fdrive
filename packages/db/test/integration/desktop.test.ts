@@ -23,8 +23,9 @@ it("coordinates desktop identities and operation receipts across independent Pos
       providerId: provider.id,
       externalUsername: "alice",
     });
+    const bob = await repos.accounts.create({ displayName: "Bob" });
     const other = await repos.identities.create({
-      accountId: account.id,
+      accountId: bob.id,
       providerId: provider.id,
       externalUsername: "bob",
     });
@@ -174,8 +175,9 @@ it("registers many desktop paths at once, parents first, without the lock when a
       providerId: provider.id,
       externalUsername: "alice",
     });
+    const bob = await repos.accounts.create({ displayName: "Bob" });
     const other = await repos.identities.create({
-      accountId: account.id,
+      accountId: bob.id,
       providerId: provider.id,
       externalUsername: "bob",
     });

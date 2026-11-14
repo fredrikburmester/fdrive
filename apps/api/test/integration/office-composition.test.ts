@@ -80,31 +80,6 @@ it("composes persisted editor admission, advanced policy and explicit server inj
         expect(login.status).toBe(200);
         const cookie = login.headers.get("set-cookie")?.split(";")[0];
         if (!cookie) throw new Error("Missing login cookie");
-        if (scenario === "settings-allow") {
-          const repos = createRepos(db);
-          const account = await repos.identities.findByProviderUsername(provider.id, "alice");
-          if (!account) throw new Error("Missing fixture identity");
-          // A login on storage that is gone: a WebDAV row from before the files
-          // folder was the only storage, switched off by migration 0019.
-          const staleProvider = await repos.providers.ensure({
-            type: "webdav",
-            baseUrl: "http://previous-storage",
-          });
-          await repos.providers.update(staleProvider.id, { enabled: false });
-          const staleIdentity = await repos.identities.create({
-            accountId: account.accountId,
-            providerId: staleProvider.id,
-            externalUsername: "alice",
-          });
-          const favorites = await composed.app.request("/api/v1/account/favorites", {
-            headers: { cookie },
-          });
-          expect(favorites.status).toBe(200);
-          expect(await favorites.json()).toMatchObject({
-            items: [],
-            unavailableIdentityIds: [staleIdentity.id],
-          });
-        }
         const created = await composed.app.request("/api/v1/office/documents", {
           method: "POST",
           headers: { ...headers, cookie },

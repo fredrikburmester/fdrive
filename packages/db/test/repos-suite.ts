@@ -1749,9 +1749,10 @@ export function defineReposSuite(name: string, setup: () => Promise<Repos> | Rep
             externalUsername: "alice",
           })
         ).id;
+        const bob = await repos.accounts.create({ displayName: null });
         other = (
           await repos.identities.create({
-            accountId: account.id,
+            accountId: bob.id,
             providerId: provider.id,
             externalUsername: "bob",
           })

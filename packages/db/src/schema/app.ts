@@ -38,7 +38,7 @@ export const providers = appSchema.table(
     id: uuid("id").primaryKey().defaultRandom(),
     type: text("type").notNull(),
     baseUrl: text("base_url").notNull(),
-    /** Shown to users on the login page and in the login switcher. Defaults to the endpoint host. */
+    /** Shown to users on the login page. Defaults to the endpoint host. */
     label: text("label").notNull().default(""),
     /** The provider module's `configFields` values. */
     config: jsonb("config").$type<Record<string, unknown>>().notNull().default({}),
