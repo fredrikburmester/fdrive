@@ -28,7 +28,8 @@ keeps long, Unicode and literal-percent names reversible. On the host that is
 `<files folder>/<username>/.trash/.fdrive-move-v1`. Deleting inside the Trash
 folder is permanent, which is how **Delete permanently** and **Empty Trash** work. Trash
 lists, restores and empties only what fdrive put there; other files in the Trash folder are
-left alone.
+left alone. A restore or a permanent delete removes the layout folders it leaves empty, and
+**Empty Trash** also removes empty folders an earlier version left in the layout.
 
 A restore never replaces anything: when a file or folder already sits at the original path,
 the restore fails with a conflict, and **Restore to** can pick another place.

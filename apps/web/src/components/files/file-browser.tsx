@@ -139,7 +139,6 @@ import { isOfficePreviewCandidate, officeModesFor, opensInOffice } from "@/lib/o
 import type { OfficeDocumentKind } from "@/lib/office/new-document";
 import { officeHref } from "@/lib/office/route";
 import { trashAvailabilityFor } from "@/lib/trash/format";
-import { useTrashStatus } from "@/lib/trash/queries";
 import { collectInputFiles } from "@/lib/upload/traverse";
 import { CompressDialog, type CompressDialogState } from "./compress-dialog";
 import { DeleteDialog } from "./delete-dialog";
@@ -206,7 +205,6 @@ export function FileBrowser({
   const queryClient = useQueryClient();
   const { data, isLoading, isFetching, isError, error, refetch } = useListing(path);
   const entries = useMemo(() => data?.entries ?? [], [data]);
-  const { data: trashStatus } = useTrashStatus();
   const capabilities = capabilitiesFor(me);
   // Folders others share with this login: what they allow, and the
   // `Shared with me` captions and menu items.
@@ -1190,7 +1188,7 @@ export function FileBrowser({
         }}
         onConfirm={handleDeleteConfirm}
         pending={remove.isPending}
-        trash={trashAvailabilityFor(capabilities, trashStatus)}
+        trash={trashAvailabilityFor(capabilities)}
       />
       {destinationPicker !== null && (
         <DestinationPicker

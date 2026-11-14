@@ -451,6 +451,17 @@ describe("delete", () => {
     await f.storage.deleteDir("/");
     expect(await readdir(f.home)).toEqual([]);
   });
+
+  it("removes an empty folder but never the home, a file or a folder with anything in it", async () => {
+    await f.storage.mkdir("/empty");
+    await f.storage.upload("/full/.hidden", bytes("h"), { mkdirParents: true });
+    expect(await kindOf(f.storage.deleteEmptyDir("/full"))).toBe("conflict");
+    expect(await kindOf(f.storage.deleteEmptyDir("/full/.hidden"))).toBe("bad_request");
+    expect(await kindOf(f.storage.deleteEmptyDir("/"))).toBe("bad_request");
+    await f.storage.deleteEmptyDir("/empty");
+    expect(await kindOf(f.storage.deleteEmptyDir("/empty"))).toBe("not_found");
+    expect((await readdir(f.home)).sort()).toEqual(["full"]);
+  });
 });
 
 describe("probeDirectoryRead", () => {

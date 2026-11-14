@@ -17,7 +17,6 @@ function entry(overrides: Partial<FsEntry> & Pick<FsEntry, "path" | "kind">): Fs
   };
 }
 
-const trashStatusMock = vi.fn();
 const trashListMock = vi.fn();
 const trashRestoreMock = vi.fn();
 const trashPurgeMock = vi.fn();
@@ -26,7 +25,6 @@ const toastErrorMock = vi.fn();
 
 function fakeApiClient() {
   return {
-    trashStatus: (...args: unknown[]) => trashStatusMock(...args),
     trashList: (...args: unknown[]) => trashListMock(...args),
     trashRestore: (...args: unknown[]) => trashRestoreMock(...args),
     trashPurge: (...args: unknown[]) => trashPurgeMock(...args),
@@ -69,26 +67,11 @@ function createWrapper(options?: { staleTime?: number; onMutate?: () => Promise<
 }
 
 beforeEach(() => {
-  trashStatusMock.mockReset();
   trashListMock.mockReset();
   trashRestoreMock.mockReset();
   trashPurgeMock.mockReset();
   trashEmptyMock.mockReset();
   toastErrorMock.mockReset();
-});
-
-describe("useTrashStatus", () => {
-  it("fetches and returns the trash status", async () => {
-    const { useTrashStatus } = await import("./queries");
-    trashStatusMock.mockResolvedValue({ available: true, path: "/.trash", retentionHours: 720 });
-    const { wrapper } = createWrapper();
-
-    const { result } = renderHook(() => useTrashStatus(), { wrapper });
-
-    await waitFor(() => expect(result.current.isSuccess).toBe(true));
-    expect(trashStatusMock).toHaveBeenCalledWith();
-    expect(result.current.data).toEqual({ available: true, path: "/.trash", retentionHours: 720 });
-  });
 });
 
 describe("useTrash", () => {

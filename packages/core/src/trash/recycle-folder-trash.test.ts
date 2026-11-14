@@ -28,6 +28,24 @@ function trashFor(storage: ReturnType<typeof createMemoryStorage>, limit?: numbe
   });
 }
 
+/** The layout folders between the namespace and each leaf, as the layout makes them. */
+function foldersAbove(...leafPaths: string[]): string[] {
+  const folders = new Set<string>();
+  for (const leafPath of leafPaths) {
+    for (let at = parentPath(leafPath); at !== NAMESPACE; at = parentPath(at)) folders.add(at);
+  }
+  return [...folders].sort();
+}
+
+/** Every folder storage holds below the namespace. */
+function layoutFolders(storage: ReturnType<typeof createMemoryStorage>): string[] {
+  return storage.dirs().filter((dir) => dir.startsWith(`${NAMESPACE}/`));
+}
+
+/** A folder of the layout without a leaf: what restores and purges used to leave behind. */
+const LEFTOVER = `${NAMESPACE}/file/p/old/p/gone.txt/v`;
+const LEFTOVER_BESIDE_A = `${NAMESPACE}/file/p/docs/p/b.txt/v`;
+
 describe("createRecycleFolderTrash: list", () => {
   it("returns an empty, non-truncated listing before anything was deleted", async () => {
     const storage = createMemoryStorage();
@@ -45,15 +63,31 @@ describe("createRecycleFolderTrash: list", () => {
     await expect(trashFor(storage).list()).rejects.toMatchObject({ kind: "forbidden" });
   });
 
-  it("propagates not_found from a folder below the namespace", async () => {
-    const storage = createMemoryStorage({ [A.path]: "a" });
+  it("skips a folder that is gone by the time the walk reaches it", async () => {
+    const storage = createMemoryStorage({ [A.path]: "a", [TOP.path]: "top" });
     const originalList = storage.list.bind(storage);
     storage.list = async (path: string) => {
-      if (path !== NAMESPACE) throw new StorageError("not_found", `gone: ${path}`);
+      if (path === parentPath(A.path)) throw new StorageError("not_found", `gone: ${path}`);
       return originalList(path);
     };
 
-    await expect(trashFor(storage).list()).rejects.toMatchObject({ kind: "not_found" });
+    const listing = await trashFor(storage).list();
+
+    expect(listing).toEqual({
+      entries: [expect.objectContaining({ id: TOP.id })],
+      truncated: false,
+    });
+  });
+
+  it("propagates a failure to list a folder below the namespace", async () => {
+    const storage = createMemoryStorage({ [A.path]: "a" });
+    const originalList = storage.list.bind(storage);
+    storage.list = async (path: string) => {
+      if (path !== NAMESPACE) throw new StorageError("forbidden", `denied: ${path}`);
+      return originalList(path);
+    };
+
+    await expect(trashFor(storage).list()).rejects.toMatchObject({ kind: "forbidden" });
   });
 
   it("lists a top-level and a nested leaf, parsing name, originalPath, size, and deletedAt", async () => {
@@ -209,30 +243,72 @@ describe("createRecycleFolderTrash: list", () => {
     expect(listing.entries).toHaveLength(1);
   });
 
-  it("truncates once the directory-visit bound is hit", async () => {
-    // Synthesize the listing instead of materializing 10,005 folders: the walk
-    // only calls list, and building that many entries in memory storage was
-    // slow enough to time out under coverage on a loaded CI runner.
-    const dirCount = 10_005;
-    const dirEntry = (path: string, name: string): FileEntry => ({
-      name,
-      path,
-      kind: "dir",
-      size: 0,
-      modifiedAt: new Date(0),
-      ext: "",
-    });
-    const storage = createMemoryStorage();
-    storage.list = async (path: string): Promise<FileEntry[]> => {
-      if (path === NAMESPACE) {
-        return Array.from({ length: dirCount }, (_, i) => dirEntry(`${NAMESPACE}/d${i}`, `d${i}`));
-      }
-      return [];
+  it("lists every leaf past more empty folders than a listing used to visit", async () => {
+    // Listings stopped after 10,000 folders, and leftover empty folders came
+    // first. Synthesize just that many once, rather than materializing them in
+    // memory storage or rebuilding them per call: the walk only calls list,
+    // and on a loaded CI runner every visit counts.
+    const storage = createMemoryStorage({ [A.path]: "a", [TOP.path]: "top" });
+    const leftovers = Array.from(
+      { length: 10_000 },
+      (_, i): FileEntry => ({
+        name: `e${i}`,
+        path: `${NAMESPACE}/e${i}`,
+        kind: "dir",
+        size: 0,
+        modifiedAt: new Date(0),
+        ext: "",
+      }),
+    );
+    const namespace = [...leftovers, ...(await storage.list(NAMESPACE))];
+    const originalList = storage.list.bind(storage);
+    storage.list = async (path: string) => {
+      if (path === NAMESPACE) return namespace;
+      return path.startsWith(`${NAMESPACE}/e`) ? [] : originalList(path);
     };
 
-    const listing = await trashFor(storage).list({ limit: 1_000_000 });
+    const listing = await trashFor(storage).list();
 
-    expect(listing).toEqual({ entries: [], truncated: true });
+    expect(listing).toEqual({
+      entries: [expect.objectContaining({ id: TOP.id }), expect.objectContaining({ id: A.id })],
+      truncated: false,
+    });
+  });
+
+  it("leaves empty folders alone unless asked to prune", async () => {
+    const storage = createMemoryStorage({ [A.path]: "a" });
+    await storage.mkdir(LEFTOVER, { parents: true });
+    const before = layoutFolders(storage);
+
+    await trashFor(storage).list();
+
+    expect(layoutFolders(storage)).toEqual(before);
+  });
+
+  it("with prune, removes the empty folders it passes and keeps every leaf's", async () => {
+    const storage = createMemoryStorage({ [A.path]: "a", [TOP.path]: "top" });
+    await storage.mkdir(LEFTOVER, { parents: true });
+    await storage.mkdir(LEFTOVER_BESIDE_A, { parents: true });
+    await storage.mkdir(`${NAMESPACE}/dir`, { parents: true });
+
+    const listing = await trashFor(storage).list({ prune: true });
+
+    expect(listing.entries.map((entry) => entry.id)).toEqual([TOP.id, A.id]);
+    expect(layoutFolders(storage)).toEqual(foldersAbove(A.path, TOP.path));
+    expect(storage.dirs()).toContain(NAMESPACE);
+  });
+
+  it("with prune, lists every leaf even when an empty folder cannot be removed", async () => {
+    const storage = createMemoryStorage({ [A.path]: "a" });
+    await storage.mkdir(LEFTOVER, { parents: true });
+    storage.deleteEmptyDir = async () => {
+      throw new StorageError("forbidden", "denied");
+    };
+
+    const listing = await trashFor(storage).list({ prune: true });
+
+    expect(listing.entries.map((entry) => entry.id)).toEqual([A.id]);
+    expect(storage.dirs()).toContain(LEFTOVER);
   });
 
   it("throws AbortError immediately for an already-aborted signal", async () => {
@@ -351,23 +427,33 @@ describe("createRecycleFolderTrash: restore", () => {
     expect(restored.modifiedAt).toEqual(new Date(0));
   });
 
-  it("leaves the leaf's now-empty folder after restoring the only version", async () => {
-    const storage = createMemoryStorage({ [A.path]: "hello a" });
+  it("removes the folders the restored leaf leaves empty, up to the namespace", async () => {
+    const storage = createMemoryStorage({ [A.path]: "hello a", [TOP.path]: "top" });
 
     await trashFor(storage).restore(A.id);
 
-    // StorageProvider.deleteDir is recursive, so pruning after an empty-list
-    // check could destroy a version created concurrently after that check.
-    expect(storage.dirs()).toContain(parentPath(A.path));
+    expect(layoutFolders(storage)).toEqual(foldersAbove(TOP.path));
+    expect(storage.dirs()).toContain(NAMESPACE);
   });
 
-  it("keeps a sibling version of the same path in Trash", async () => {
+  it("keeps a sibling version of the same path in Trash, and its folders", async () => {
     const storage = createMemoryStorage({ [A.path]: "version one", [A2.path]: "version two" });
     const trash = trashFor(storage);
 
     await trash.restore(A.id);
 
     expect((await trash.list()).entries.map((entry) => entry.id)).toEqual([A2.id]);
+    expect(layoutFolders(storage)).toEqual(foldersAbove(A2.path));
+  });
+
+  it("restores even when a folder it leaves empty cannot be removed", async () => {
+    const storage = createMemoryStorage({ [A.path]: "hello a" });
+    storage.deleteEmptyDir = async () => {
+      throw new StorageError("forbidden", "denied");
+    };
+
+    await expect(trashFor(storage).restore(A.id)).resolves.toMatchObject({ path: "/docs/a.txt" });
+    expect(storage.dirs()).toContain(parentPath(A.path));
   });
 
   it("throws bad_request for an id that does not parse", async () => {
@@ -427,7 +513,7 @@ describe("createRecycleFolderTrash: purge", () => {
     const storage = createMemoryStorage({ [A.path]: "hello a", [TOP.path]: "top" });
     const trash = trashFor(storage);
 
-    await trash.purge([A.id]);
+    await trash.purge(A.id);
 
     expect((await trash.list()).entries.map((entry) => entry.id)).toEqual([TOP.id]);
   });
@@ -436,7 +522,7 @@ describe("createRecycleFolderTrash: purge", () => {
     const storage = createMemoryStorage({ [`${DOCS.path}/sub/file.txt`]: "inside" });
     const trash = trashFor(storage);
 
-    await trash.purge([DOCS.id]);
+    await trash.purge(DOCS.id);
 
     expect(storage.dump()).toEqual({});
     expect((await trash.list()).entries).toEqual([]);
@@ -446,7 +532,7 @@ describe("createRecycleFolderTrash: purge", () => {
     const storage = createMemoryStorage({ [A.path]: "hello a" });
     const folderId = parentPath(A.path).slice(`${TRASH_PATH}/`.length);
 
-    await expect(trashFor(storage).purge([folderId])).rejects.toMatchObject({
+    await expect(trashFor(storage).purge(folderId)).rejects.toMatchObject({
       kind: "bad_request",
     });
     expect(storage.dump()).toEqual({ [A.path]: "hello a" });
@@ -456,7 +542,7 @@ describe("createRecycleFolderTrash: purge", () => {
     const other = `${TRASH_PATH}/docs/a.txt/1000000`;
     const storage = createMemoryStorage({ [other]: "put there by another tool" });
 
-    await expect(trashFor(storage).purge(["docs/a.txt/1000000"])).rejects.toMatchObject({
+    await expect(trashFor(storage).purge("docs/a.txt/1000000")).rejects.toMatchObject({
       kind: "bad_request",
     });
     expect(storage.dump()).toEqual({ [other]: "put there by another tool" });
@@ -466,7 +552,7 @@ describe("createRecycleFolderTrash: purge", () => {
     const storage = createMemoryStorage({ [TOP.path]: "top" });
 
     await expect(
-      trashFor(storage).purge([leaf("/docs/missing.txt", "9999999").id]),
+      trashFor(storage).purge(leaf("/docs/missing.txt", "9999999").id),
     ).resolves.toBeUndefined();
   });
 
@@ -482,15 +568,35 @@ describe("createRecycleFolderTrash: purge", () => {
       return stat;
     };
 
-    await expect(trashFor(storage).purge([TOP.id])).resolves.toBeUndefined();
+    await expect(trashFor(storage).purge(TOP.id)).resolves.toBeUndefined();
   });
 
-  it("leaves the leaf's now-empty folder after purging the only version", async () => {
+  it("removes the folders the purged leaf leaves empty, up to the namespace", async () => {
+    const storage = createMemoryStorage({ [A.path]: "hello a", [TOP.path]: "top" });
+    const trash = trashFor(storage);
+
+    await trash.purge(A.id);
+    expect(layoutFolders(storage)).toEqual(foldersAbove(TOP.path));
+
+    await trash.purge(TOP.id);
+    expect(layoutFolders(storage)).toEqual([]);
+    expect(storage.dirs()).toContain(NAMESPACE);
+  });
+
+  it("never removes a folder something was moved into meanwhile", async () => {
     const storage = createMemoryStorage({ [A.path]: "hello a" });
+    const originalDeleteFile = storage.deleteFile.bind(storage);
+    storage.deleteFile = async (path: string) => {
+      await originalDeleteFile(path);
+      // A delete of the same path lands beside the purged leaf before its folders go.
+      await storage.upload(A2.path, new TextEncoder().encode("deleted again"));
+    };
+    const trash = trashFor(storage);
 
-    await trashFor(storage).purge([A.id]);
+    await trash.purge(A.id);
 
-    expect(storage.dirs()).toContain(parentPath(A.path));
+    expect(storage.dump()).toEqual({ [A2.path]: "deleted again" });
+    expect((await trash.list()).entries.map((entry) => entry.id)).toEqual([A2.id]);
   });
 
   it("propagates a deleteFile failure that is not a not_found StorageError", async () => {
@@ -499,29 +605,6 @@ describe("createRecycleFolderTrash: purge", () => {
       throw new Error("disk on fire");
     };
 
-    await expect(trashFor(storage).purge([A.id])).rejects.toThrow("disk on fire");
-  });
-});
-
-describe("createRecycleFolderTrash: empty", () => {
-  it("deletes every child of the trash root but never the root itself, including stray items", async () => {
-    const storage = createMemoryStorage({
-      [A.path]: "hello a",
-      [TOP.path]: "top",
-      [`${TRASH_PATH}/orphan.txt`]: "not a leaf, just a stray file at the trash root",
-    });
-    const trash = trashFor(storage);
-
-    await trash.empty();
-
-    expect(await storage.list(TRASH_PATH)).toEqual([]);
-    expect((await trash.list()).entries).toEqual([]);
-  });
-
-  it("is a no-op on an already-empty trash", async () => {
-    const storage = createMemoryStorage();
-    await storage.mkdir(TRASH_PATH);
-
-    await expect(trashFor(storage).empty()).resolves.toBeUndefined();
+    await expect(trashFor(storage).purge(A.id)).rejects.toThrow("disk on fire");
   });
 });

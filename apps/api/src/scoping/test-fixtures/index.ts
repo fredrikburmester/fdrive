@@ -68,6 +68,7 @@ export function fakeStorageProvider(overrides: Partial<StorageProvider> = {}): S
     copy: overrides.copy ?? (boom as StorageProvider["copy"]),
     deleteFile: overrides.deleteFile ?? (boom as StorageProvider["deleteFile"]),
     deleteDir: overrides.deleteDir ?? (boom as StorageProvider["deleteDir"]),
+    deleteEmptyDir: overrides.deleteEmptyDir ?? (boom as StorageProvider["deleteEmptyDir"]),
     setModifiedAt:
       overrides.setModifiedAt ?? (boom as NonNullable<StorageProvider["setModifiedAt"]>),
     zip: overrides.zip ?? (boom as NonNullable<StorageProvider["zip"]>),

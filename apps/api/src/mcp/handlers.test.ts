@@ -138,6 +138,7 @@ function fakeStorage(overrides: Partial<StorageProvider> = {}): StorageProvider 
     copy: overrides.copy ?? notImplemented,
     deleteFile: overrides.deleteFile ?? notImplemented,
     deleteDir: overrides.deleteDir ?? notImplemented,
+    deleteEmptyDir: overrides.deleteEmptyDir ?? notImplemented,
     setModifiedAt: overrides.setModifiedAt ?? notImplemented,
     zip: overrides.zip ?? notImplemented,
   };
