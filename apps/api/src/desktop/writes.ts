@@ -138,7 +138,7 @@ export function createDesktopWrites(deps: DesktopWriteDeps) {
    * What stays outside is the transfer. The staged upload writes only to a path
    * keyed by operation id and a per-attempt UUID, which no other operation can
    * reach, so serializing it would hold a lock and its connection for the length
-   * of a transfer to no purpose. See `docs/plans/STOCK-SFTPGO-WRITES.md`.
+   * of a transfer to no purpose. See `docs/MACOS.md#write-configuration-and-recovery`.
    *
    * `authority()` has already refused the write unless the lock is configured.
    */
@@ -154,7 +154,7 @@ export function createDesktopWrites(deps: DesktopWriteDeps) {
    * is why a replace-upload does not rely on it: the recovery copy's digest, taken
    * inside the serialized section, is what proves the destination's content there.
    * This remains the whole guard for moves, of files and directories alike, which
-   * have no content to digest. See `docs/plans/STOCK-SFTPGO-WRITES.md`.
+   * have no content to digest. See `docs/MACOS.md#write-configuration-and-recovery`.
    *
    * Only a missing entry is a conflict. Any other storage failure propagates so
    * the caller maps it to a retryable status; reporting it as a remote change
@@ -844,7 +844,7 @@ export function createDesktopWrites(deps: DesktopWriteDeps) {
               // look identical to it. Taking the snapshot under the lock means no
               // writer that honours the lock can have written between the proof and
               // the rename. It costs no extra I/O — this digest already ran, just
-              // outside. See `docs/plans/STOCK-SFTPGO-WRITES.md`.
+              // outside. See `docs/MACOS.md#write-configuration-and-recovery`.
               const previous = (await storage.list(internal)).find(
                 (item) => item.path === `${internal}/previous`,
               );

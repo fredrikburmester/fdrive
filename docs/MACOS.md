@@ -171,6 +171,22 @@ is still the version it read (inode, ctime, size and mtime) right before its rep
 collision there, short of the instant between that check and the replace, leaves the newer file
 in place rather than the OCR output.
 
+**Publish lock.** The lock is a PostgreSQL session advisory lock per identity
+([desktop-publish-lock.ts](../packages/db/src/repos/desktop-publish-lock.ts)) on a pool of its
+own, four connections with a five-second checkout, so slow publications cannot starve the API's
+main pool. A waiter tries every 100 ms for up to 30 seconds and returns its connection between
+attempts. A busy lock, or no free connection, answers 429 (`rate_limited`), which the Mac
+retries; it is never a 409, which the Mac would resolve by forking a conflict copy. The lock is
+released when its connection dies, so a crashed API frees the identity.
+
+Only publication runs under the lock: the check that the name is still free, for a replacement
+the recovery copy and its digest, the size and modification-time recheck, and the rename. The
+upload and its digest run before it, in a staging folder keyed by operation and attempt that no
+other operation can reach. On a retry, a recovery copy kept from an earlier attempt says nothing
+about the destination now, so the live file is digested instead. A move has no content to prove:
+the size and modification-time recheck is its whole guard. A name taken meanwhile fails with
+`name_collision`, changed content with `version_conflict`.
+
 **Upload size.** fdrive accepts files up to 16 GiB.
 
 Publication is refused, and every location stays read-only, only when the server has no recovery
@@ -363,7 +379,6 @@ Tokens have identity-root read or explicitly approved full grants and expire aft
 server-side. Native read requests resolve token expiry/revocation, account ownership and
 the current provider binding. Neither a cursor nor a local item ID grants access. The native
 client refuses redirects, cookies and non-loopback HTTP, and never puts bearer secrets in URLs.
-Existing upstream OTP/reauthentication requirements still apply.
 Disconnect validates possession of the desktop secret and revokes only that token's hash;
 it works after provider disablement or token expiry without resolving storage credentials.
 
@@ -375,7 +390,7 @@ confirms after every credential is in the Keychain; a crash in between is resume
 next launch with the same bundle. A bundle nobody confirms is revoked when the five-minute
 window closes, so an orphaned credential never outlives the pairing. Snapshot cursors bind identity, bearer
 and path, expire after 120 seconds and hold at most 100,000 entries; at most 32 unfinished snapshots exist per API
-process. Pages contain 500 entries. Provider-specific limits can be lower. Overflow/errors
+process. Pages contain 500 entries. Overflow/errors
 fail visibly instead of truncating a folder. Multi-process deployments need sticky routing
 for pairing and listing snapshots or a shared transient store.
 

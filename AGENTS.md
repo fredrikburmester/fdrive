@@ -9,7 +9,8 @@
 - Frontend: use shadcn/ui CLI primitives, `globals.css` tokens, quiet Apple-like design, lucide
   icons, and one-line descriptions for settings fields.
 - Preserve unrelated changes. Never hand-edit lockfiles, commit secrets or generated outputs, or
-  publish Claude session links. Connecting to live user SFTPGo requires the user's decision.
+  publish Claude session links. Connecting to the owner's live fdrive server or files folder
+  requires the user's decision.
 - Git naming follows Conventional Commits. Commit subjects and PR titles are
   `type(scope)?: summary` with a lowercase type (`feat`, `fix`, `chore`, `docs`, `refactor`,
   `test`, `perf`, `build`, `ci`), imperative summary, no trailing period; `!` or a

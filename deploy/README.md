@@ -143,16 +143,6 @@ overlays, data folders, the database and your files, and don't delete volumes or
 fix an error. After changing `.env`, run `docker compose up -d`; `docker restart` doesn't
 apply it.
 
-**Installed from a git checkout?** Releases from 0.3.0 have no `update.sh`. Update from the
-checkout's `deploy` folder like any other installation, and move extra Compose files from
-`FDRIVE_COMPOSE_FILES` to `COMPOSE_FILE` in `.env`, the list Compose itself reads. The
-checkout's `compose.yaml` runs the newest release, so to try a pre-release from a checkout,
-set `FDRIVE_VERSION` to it in `.env` as well.
-
-**Used WebDAV or S3 storage?** The files folder is now fdrive's only storage. The update
-disables WebDAV and S3 storage and their logins disappear, so copy anything you need from them
-into the files folder first. Backups to an S3 bucket keep working.
-
 ## Troubleshooting
 
 - **Can't open fdrive**: check the containers, port, host address and firewall. With

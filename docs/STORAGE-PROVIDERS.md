@@ -4,8 +4,7 @@ The files folder ([`packages/local`](../packages/local/src/)) is fdrive's only s
 reaches it through a small port in `packages/core/src/ports/`: `ProviderModule` configures,
 authenticates and builds storage, and `StorageProvider` does the file operations. The port keeps
 routes, the web app, the schema and the indexer off filesystem details and lets tests run on an
-in-memory storage. It is an internal boundary, not a plugin system; WebDAV and S3 modules were
-removed on 2026-11-13.
+in-memory storage. It is an internal boundary, not a plugin system.
 
 | Contract | Source |
 | --- | --- |
@@ -22,8 +21,8 @@ removed on 2026-11-13.
   registry holds only the local module, present when `FDRIVE_STORAGE_ROOT` is set. Without it
   the deployment has no storage and setup refuses to complete with `bad_request`.
 - The storage is one row in `app.providers`. Startup creates and pins it (`baseUrl` `local`),
-  enables it, and unpins and disables any other pinned row. Rows left from WebDAV or S3 are
-  disabled by migration 0019 and kept, since logins reference them; with no module, those
+  enables it, and unpins and disables any other pinned row. Any other row is left from storage
+  fdrive no longer has: disabled, and kept because logins reference it. With no module, those
   logins do not appear.
 - `GET /api/v1/admin/providers` lists the storage with a reachability probe.
   `PATCH /api/v1/admin/providers/:id` changes only its display label (trimmed, 1 to 120
@@ -41,7 +40,7 @@ removed on 2026-11-13.
 | `capabilities` | All eight flags true (below) |
 | `trash` | `"move"`: fdrive moves deletes into the Trash folder (`"none"` would mean no Trash) |
 | `shares` | `"owned"`: fdrive keeps links in `app.shares` and serves them through this storage ([owned.ts](../apps/api/src/shares/owned.ts)) |
-| `deploymentManaged` | True: the row comes from `FDRIVE_STORAGE_ROOT`; the API cannot create, re-address or remove it |
+| `deploymentManaged` | True: the row comes from `FDRIVE_STORAGE_ROOT`; the API cannot create, re-address or remove it, so no administrator can point it at another folder, such as the API's own secrets |
 | `indexRootName` | The index root the folder is read under (`localIndexRoot`) |
 | `probe` | The root is a folder the API can read, write and enter |
 | `authenticate` | Checks the password against `app.local_users`: `unauthorized` when wrong, `forbidden` when disabled, and a credential naming another user than `ctx.expectedUsername` is refused |
@@ -86,10 +85,12 @@ How the files folder implements it:
 - **Confinement.** Paths are normalized and joined to the home; a symlink is followed only when
   its real path stays inside the home or the shared folder ([home.ts](../packages/local/src/home.ts)).
   A followed link is marked `link` on its listing entry, and `stat` marks a path that passes
-  through one at any segment, so the Mac's reads can refuse it.
+  through one at any segment, so the Mac's reads can refuse it. A shared folder must itself
+  resolve inside its owner's home, so a share never reaches further than its owner can.
 - **Atomic publish.** Uploads and file copies write a temporary file beside the target and
   publish it with `link`, a real create-if-absent; only `overwrite: true` renames it over a
   taken name.
+- **Copies** keep modification times.
 - **Moves** are one `rename`, also between a user's files and a writable shared folder. The
   target is checked just before, since Node has no `RENAME_NOREPLACE`; a `link` and `unlink`
   would close that gap for files, but file watchers (the indexer's) would see a deleted file and

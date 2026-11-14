@@ -30,6 +30,18 @@ person who owns it, needs virtual-path to root/fs-path resolution through the
 and would put a destructive action behind a non-admin surface. Deliberately not built with
 the admin inventory; a future proposal must settle authorization before the UI.
 
+## Sharing single files with people
+
+Users share folders with each other (`app.local_grants`); a grant on a file is refused
+(`apps/api/src/local/grants.ts`). Sharing one file with another user was listed as later work
+when local storage landed and has no design yet.
+
+## Personal activity retention
+
+[Personal activity](../ACTIVITY.md) keeps all history; no cutoff, archive or purge
+administration exists. A future policy must show its cutoff and keep tombstones and lineage
+across it.
+
 Native mobile apps, OIDC, comments and collaboration outside Office remain outside the
 current product scope. Old alternative folder-view designs and the
 application-owned Trash proposal were superseded, not deferred.

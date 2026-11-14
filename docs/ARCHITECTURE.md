@@ -27,10 +27,12 @@ Current implementation reference. Unfinished work belongs in [plans](plans/READM
   tools and returns suggestions the person applies through `fs/move-many`. See [AI](AI.md).
 - fdrive serves a folder on its own disk (`FDRIVE_STORAGE_ROOT`, one home per user at
   `<root>/<username>`, plain files) and keeps its own users. That files folder is the only
-  storage; WebDAV and S3 storage were removed on 2026-11-13. The API reaches it through the
-  internal [storage port](STORAGE-PROVIDERS.md), and every login carries capability flags
-  (`ProviderCapabilities`) that decide what the UI offers and the API accepts. Without
-  `FDRIVE_STORAGE_ROOT` the deployment has no storage and setup refuses to complete.
+  storage. Its plain files stay authoritative: fdrive keeps no database of their contents, and
+  writers outside fdrive (OCR, rsync, SMB, Syncthing) may change them. The API reaches it
+  through the internal [storage port](STORAGE-PROVIDERS.md), and every login carries
+  capability flags (`ProviderCapabilities`) that decide what the UI offers and the API
+  accepts. Without `FDRIVE_STORAGE_ROOT` the deployment has no storage and setup refuses to
+  complete.
 
 ## Accounts and storage
 
@@ -39,11 +41,11 @@ default with explicitly granted writes on qualified storage. Each domain binds o
 server/account/storage identity. Its versioned desktop API uses separate identity-bound
 credentials; browser identity selection and MCP tokens cannot retarget these domains.
 
-A provider row identifies a configured backend instance; an identity is a login on that row;
-an account links identities. Sessions select an active identity. Credentials are encrypted
-and bound to their identity and provider, including during retries and background jobs.
-The files folder's row comes from the deployment (`deploymentManaged`); administrators can
-only rename it. See [authentication](AUTH.md) and [storage port](STORAGE-PROVIDERS.md).
+The files folder is one row in `app.providers`; an identity is a login on that row; an
+account links identities. Sessions select an active identity. A login's password is also kept
+sealed in `app.credentials`, bound to its identity, so a later sign-in can tell whether it
+changed. The files folder's row comes from the deployment (`deploymentManaged`); administrators
+can only rename it. See [authentication](AUTH.md) and [storage port](STORAGE-PROVIDERS.md).
 
 Local users are `app.local_users`: a username unique in any case, a scrypt hash and a disabled
 flag. Setup creates the first one and System > Users the rest; the local module's `admit`
@@ -86,7 +88,11 @@ Trash layout (a `.fdrive-move-v1` segment) stays refused wherever it lies, even 
 is turned off or moved. A move inside a folder shared with someone counts in the owner's
 files; taken out of them, deleted, or purged from Trash, the item leaves its links, and a
 link left with nothing goes.
-Folder ZIP downloads are held to two at a time per link, an hour and `FDRIVE_JOB_MAX_BYTES`.
+Folder ZIP downloads are held to two at a time per link, an hour and `FDRIVE_JOB_MAX_BYTES`
+([zip-limits.ts](../apps/api/src/shares/zip-limits.ts)), and each counts one download. A link
+whose folder holds the owner's Trash, `/.fdrive-desktop` or `/Shared with me` cannot be
+downloaded as an archive, nor can one whose paths overlap or would land on one name (compared
+ignoring case); new links with several paths are refused on that last rule too.
 Protected share metadata must not leak before authentication. Share passwords are never
 stored in clear: a row holds only a scrypt hash in `password_hash`, which no share record
 projection returns; the public credential-cookie flow has separate protections. See the
@@ -94,15 +100,13 @@ API's [share implementation](../apps/api/src/shares/).
 
 Linking an already-owned identity transfers that login and its metadata, not the source
 account's administrator rights or API tokens. Re-authentication and session revocation
-rules in the authentication guide supersede the original account-linking briefs.
+follow the [authentication guide](AUTH.md#re-authentication-and-session-revocation).
 
 Personal activity is separately owned by the initiating account, with the storage identity
 captured alongside it. History never transfers with tags/favorites and never extends the
 actorless administrator `system_events`. The append-only journal, file registry, copied
-native receipts, read aggregation and provider-specific Unknown evidence are documented in
-the [activity schema and API](plans/RECENT-ACTIVITY-SCHEMA.md),
-[taxonomy](plans/RECENT-ACTIVITY-EVENTS.md) and
-[producer inventory](plans/RECENT-ACTIVITY-COVERAGE.md).
+native receipts, read aggregation and Unknown observations are documented in
+[personal activity](ACTIVITY.md).
 
 ## Index authorization
 
