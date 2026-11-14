@@ -269,6 +269,41 @@ export interface ImageSearchHit {
   readonly score: number;
 }
 
+/** A photo's details from its EXIF (see `idx.files.taken_at`); null where it has none. */
+export interface PhotoDetails {
+  /** The camera's wall-clock time, `YYYY-MM-DDTHH:MM:SS` without a time zone. */
+  readonly takenAt: string | null;
+  readonly camera: string | null;
+  readonly width: number | null;
+  readonly height: number | null;
+  readonly latitude: number | null;
+  readonly longitude: number | null;
+}
+
+/** Where `IndexQueries.photos` continues: the `at` and `id` of the last row of the page before. */
+export interface PhotoCursor {
+  readonly at: string;
+  readonly id: number;
+}
+
+/** Options for `IndexQueries.photos`. */
+export interface PhotoOptions extends ScopedReadOptions {
+  readonly after?: PhotoCursor;
+}
+
+/** One row from `photos`, newest first. */
+export interface PhotoRow {
+  readonly id: number;
+  readonly rootId: number;
+  /** Root-relative, like `idx.files.path`. */
+  readonly path: string;
+  readonly size: number;
+  readonly mtimeNs: bigint;
+  readonly takenAt: string | null;
+  /** What the row sorts by, to the microsecond: `takenAt`, or else the modification time in UTC. */
+  readonly at: string;
+}
+
 /**
  * Aggregate counts for `app.image_embeddings`, backing the System page.
  * `model` is the id embedding the most rows (rows from a stale model, left
@@ -434,6 +469,19 @@ export interface IndexQueries {
   ): Promise<ImageSearchHit[]>;
   /** Total embedded rows and the model that wrote the most of them, for the System page. */
   imageEmbeddingStats(): Promise<ImageEmbeddingStats>;
+  /**
+   * Live files in scope whose extension is one of `exts`, newest first by
+   * when they were taken, or by their modification time when that is
+   * unknown; only those after `options.after` when given.
+   */
+  photos(
+    scopePrefixes: readonly ScopePrefix[],
+    exts: readonly string[],
+    limit: number,
+    options?: PhotoOptions,
+  ): Promise<PhotoRow[]>;
+  /** The photo details of the live file at exactly `path` in `rootId`, `null` when absent. */
+  photoDetails(rootId: number, path: string): Promise<PhotoDetails | null>;
   /** Appends a row to `idx.moves`, the audit log the MCP `move_path` tool writes to and `recentMoves` reads back. */
   recordMove(input: { rootId: number; src: string; dst: string; actor: string }): Promise<void>;
   /**
@@ -552,6 +600,10 @@ function accentForms(text: string): string[] {
 }
 
 const SNIPPET_LENGTH = 300;
+
+/** `to_char` formats of a photo's time, and of what it sorts by, to the microsecond. */
+const PHOTO_TIME = 'YYYY-MM-DD"T"HH24:MI:SS';
+const PHOTO_SORT_TIME = 'YYYY-MM-DD"T"HH24:MI:SS.US';
 
 /** Chunks `fileTextPrefix` reads at most; a prefix is meant to be short. */
 const FILE_TEXT_PREFIX_CHUNKS = 8;
@@ -1016,6 +1068,50 @@ export function createIndexQueries(db: Db): IndexQueries {
         .orderBy(desc(files.mtimeNs))
         .limit(limit);
       return rows.map(toIndexedFile);
+    },
+
+    async photos(scopePrefixes, exts, limit, options = {}) {
+      const at = sql`coalesce(${files.takenAt}, to_timestamp(${files.mtimeNs}::double precision / 1e9) at time zone 'UTC')`;
+      const after = options.after;
+      return db
+        .select({
+          id: files.id,
+          rootId: files.rootId,
+          path: files.path,
+          size: files.size,
+          mtimeNs: files.mtimeNs,
+          takenAt: sql<string | null>`to_char(${files.takenAt}, ${PHOTO_TIME})`,
+          at: sql<string>`to_char(${at}, ${PHOTO_SORT_TIME})`,
+        })
+        .from(files)
+        .where(
+          and(
+            scopeCondition(scopePrefixes),
+            exclusionCondition(options.exclude),
+            isNull(files.deletedAt),
+            inArray(files.ext, [...exts]),
+            after === undefined
+              ? undefined
+              : sql`(${at}, ${files.id}) < (${after.at}::timestamp, ${after.id})`,
+          ),
+        )
+        .orderBy(desc(at), desc(files.id))
+        .limit(limit);
+    },
+
+    async photoDetails(rootId, path) {
+      const [row] = await db
+        .select({
+          takenAt: sql<string | null>`to_char(${files.takenAt}, ${PHOTO_TIME})`,
+          camera: files.camera,
+          width: files.width,
+          height: files.height,
+          latitude: files.latitude,
+          longitude: files.longitude,
+        })
+        .from(files)
+        .where(and(eq(files.rootId, rootId), eq(files.path, path), isNull(files.deletedAt)));
+      return row ?? null;
     },
 
     async thumbnail(contentKey, size) {

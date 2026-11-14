@@ -5,6 +5,7 @@ import {
   boolean,
   check,
   customType,
+  doublePrecision,
   index,
   integer,
   pgSchema,
@@ -68,6 +69,18 @@ export const files = idxSchema.table(
      */
     inode: bigint("inode", { mode: "bigint" }),
     ctimeNs: bigint("ctime_ns", { mode: "bigint" }),
+    /**
+     * A photo's details from its EXIF, written by the indexer for image
+     * files and null where the file has none. `taken_at` is the camera's
+     * wall-clock time, without a time zone; `width` and `height` are as the
+     * photo is shown, after its orientation.
+     */
+    takenAt: timestamp("taken_at", { mode: "string" }),
+    camera: text("camera"),
+    width: integer("width"),
+    height: integer("height"),
+    latitude: doublePrecision("latitude"),
+    longitude: doublePrecision("longitude"),
   },
   (table) => [
     unique("files_root_id_path_unique").on(table.rootId, table.path),

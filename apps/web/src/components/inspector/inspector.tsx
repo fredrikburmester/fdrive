@@ -21,9 +21,9 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { useActivityGesture } from "@/lib/activity/gestures";
-import { useFolderSize } from "@/lib/inspector/queries";
+import { useFolderSize, usePhotoDetails } from "@/lib/inspector/queries";
 import { apiClient } from "@/lib/preview/deps";
-import { describeEntry } from "@/lib/preview/describe";
+import { describeEntry, describePhoto } from "@/lib/preview/describe";
 import { isHeicExt } from "@/lib/preview/heic";
 import { previewKindFor } from "@/lib/preview/kind";
 import { isRawExt } from "@/lib/preview/raw";
@@ -84,7 +84,9 @@ function iconFor(entry: FsEntry) {
 function SingleEntryBody({ entry, indexed }: { entry: FsEntry; indexed: boolean }) {
   const { prefs } = useFormatters();
   const isDir = entry.kind === "dir";
+  const kind = previewKindFor(entry);
   const folderSizeQuery = useFolderSize(entry.path, { enabled: isDir && indexed });
+  const photoQuery = usePhotoDetails(entry.path, { enabled: kind === "image" && indexed });
   const { rows, note } = describeEntry(entry, {
     now: new Date(),
     units: prefs.sizes,
@@ -101,7 +103,8 @@ function SingleEntryBody({ entry, indexed }: { entry: FsEntry; indexed: boolean 
         }
       : {}),
   });
-  const kind = previewKindFor(entry);
+  const photoRows =
+    photoQuery.data === undefined ? [] : describePhoto(photoQuery.data, { clock: prefs.clock });
   const Icon = iconFor(entry);
   // Browsers other than Safari cannot decode HEIC, and none decodes camera raw,
   // so those show the indexer's thumbnail; any image that fails to load falls
@@ -130,7 +133,7 @@ function SingleEntryBody({ entry, indexed }: { entry: FsEntry; indexed: boolean 
       </div>
       <Separator />
       <dl className="flex flex-col gap-2 text-sm">
-        {rows.map((row) => (
+        {[...rows, ...photoRows].map((row) => (
           <div key={row.label} className="flex items-baseline justify-between gap-4">
             <dt className="shrink-0 text-muted-foreground">{row.label}</dt>
             <dd className="truncate text-right">{row.value}</dd>

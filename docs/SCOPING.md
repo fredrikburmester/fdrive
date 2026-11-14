@@ -25,8 +25,8 @@ file registry, desktop effects and activity observations use it. It is unavailab
 `invalid_configuration` (the username is not one path segment).
 
 `verifiedIndexScopes(identity)` keeps the configured scopes whose root is in
-`FDRIVE_INDEX_ROOTS`, and is `no_roots` when none is. Search, duplicates, thumbnails, folder
-sizes, extraction, AI tools, MCP and the desktop `versions` check use it, never
+`FDRIVE_INDEX_ROOTS`, and is `no_roots` when none is. Search, duplicates, thumbnails, photos,
+folder sizes, extraction, AI tools, MCP and the desktop `versions` check use it, never
 `configuredMappings`.
 `GET /api/v1/search/status` reports its reason. "Verified" means indexed: nothing compares
 live listings with the index any more.

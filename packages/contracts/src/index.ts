@@ -167,6 +167,7 @@ export {
   SystemOfficeResponse,
 } from "./office.ts";
 export * from "./personal-activity.ts";
+export { PhotoDetailsResponse, PhotoItem, PhotosResponse } from "./photos.ts";
 export * from "./processing-failures.ts";
 export {
   AdminProvider,

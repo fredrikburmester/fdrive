@@ -102,6 +102,7 @@ import { registerOfficeSettingsRoutes } from "./office/settings-routes.ts";
 import { createOfficeStorageFactory } from "./office/storage.ts";
 import { createOfficeTokenCodec } from "./office/tokens.ts";
 import type { OfficeDeps } from "./office/types.ts";
+import { registerPhotoRoutes } from "./photos/routes.js";
 import { registerProviderRoutes } from "./providers/routes.js";
 import { createProviderService } from "./providers/service.js";
 import { createScopeResolver } from "./scoping/resolver.ts";
@@ -1143,6 +1144,15 @@ export async function composeApp(
         identities: repos.identities,
         semanticEnabled: embedClient !== null,
         imageSearchEnabled: imageEmbedClient !== null,
+        trashPathForStorage: (storage) => {
+          const settings = trashSettingsForStorage(storage);
+          return settings?.enabled === true ? settings.path : null;
+        },
+      });
+      registerPhotoRoutes(groups, {
+        indexQueries,
+        resolver: scopeResolver,
+        identities: repos.identities,
         trashPathForStorage: (storage) => {
           const settings = trashSettingsForStorage(storage);
           return settings?.enabled === true ? settings.path : null;

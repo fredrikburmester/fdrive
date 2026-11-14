@@ -3,6 +3,7 @@
 import {
   ChevronsUpDown,
   Clock3,
+  Images,
   Info,
   Link2,
   LogOut,
@@ -128,6 +129,15 @@ export function AppSidebar() {
         <SidebarGroup>
           <SidebarGroupContent>
             <SidebarMenu>
+              <SidebarMenuItem>
+                <SidebarMenuButton
+                  isActive={pathname === "/photos"}
+                  render={<Link href={"/photos" as Route} />}
+                >
+                  <Images />
+                  <span>Photos</span>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
               <SidebarMenuItem>
                 <SidebarMenuButton
                   isActive={pathname?.startsWith("/activity")}

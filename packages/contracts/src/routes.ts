@@ -103,6 +103,12 @@ export const ROUTES = {
   },
   /** GET: stream a cached WebP thumbnail for a file. 404 when none exists. */
   thumb: "/api/v1/thumb",
+  photos: {
+    /** GET: every image the caller can read, newest first, a page at a time -> `PhotosResponse`. */
+    list: "/api/v1/photos",
+    /** GET: one image's EXIF details -> `PhotoDetailsResponse`. 404 when it is not indexed. */
+    details: "/api/v1/photos/details",
+  },
   /** GET, Server-Sent Events: a stream of `SseEvent`s. */
   events: "/api/v1/events",
   trash: {

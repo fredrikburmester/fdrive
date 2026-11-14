@@ -88,6 +88,13 @@ it("orders navigation as Files tree, metadata sections, then Shares and Trash at
   expect(isBefore(sharesLink, trashLink)).toBe(true);
 });
 
+it("links Photos above My activity", async () => {
+  renderSidebar();
+  const photos = await screen.findByRole("link", { name: "Photos" });
+  expect(photos.getAttribute("href")).toBe("/photos");
+  expect(isBefore(photos, screen.getByRole("link", { name: "My activity" }))).toBe(true);
+});
+
 it("links the fdrive wordmark to the root of Files", async () => {
   renderSidebar();
   const wordmark = await screen.findByRole("link", { name: "fdrive" });
