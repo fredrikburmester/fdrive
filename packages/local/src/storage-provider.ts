@@ -14,6 +14,7 @@ import {
   realpath,
   rename,
   rm,
+  rmdir,
   stat,
   unlink,
   utimes,
@@ -427,6 +428,18 @@ export function createLocalStorage(options: LocalStorageOptions): LocalStorage {
         // The home itself stays: deleting "/" empties it.
         if (await isHome(at)) await clearChildren(at);
         else await rm(at, { recursive: true });
+        notify(listener, { kind: "changed", path: at });
+      }),
+
+    deleteEmptyDir: (path) =>
+      mapped(path, async () => {
+        const at = await home.entry(path);
+        if (!(await lstat(at)).isDirectory()) {
+          throw new StorageError("bad_request", `not a directory: ${path}`);
+        }
+        if (await isHome(at)) throw new StorageError("bad_request", `the home stays: ${path}`);
+        // `rmdir` refuses a folder that holds anything, whatever arrived in it.
+        await rmdir(at);
         notify(listener, { kind: "changed", path: at });
       }),
 

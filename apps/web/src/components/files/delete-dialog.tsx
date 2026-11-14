@@ -28,9 +28,8 @@ export interface DeleteDialogProps {
   /**
    * Whether the active identity's storage provider exposes a trash. `null`
    * (the default) and `{ available: false }` both render the permanent
-   * "Delete" copy; `{ available: true, retentionHours }` renders the
-   * non-destructive "Move to Trash" copy, adding the retention sentence
-   * when `retentionHours` is configured.
+   * "Delete" copy; `{ available: true }` renders the non-destructive "Move
+   * to Trash" copy.
    */
   trash?: TrashAvailability | null;
 }

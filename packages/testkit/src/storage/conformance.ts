@@ -207,6 +207,19 @@ export function describeStorageProvider(
       expect(await kindOf(storage.stat(`${root}/del/sub/b.txt`))).toBe("not_found");
     });
 
+    it("deletes a directory only while it is empty", async () => {
+      const file = await seed("e/full/a.txt", "a");
+      await storage.mkdir(`${root}/e/nested/inner`, { parents: true });
+      expect(await kindOf(storage.deleteEmptyDir(`${root}/e/full`))).toBe("conflict");
+      expect(await kindOf(storage.deleteEmptyDir(`${root}/e/nested`))).toBe("conflict");
+      expect(await kindOf(storage.deleteEmptyDir(file))).toBe("bad_request");
+      expect(await text((await storage.download(file)).body)).toBe("a");
+      await storage.deleteEmptyDir(`${root}/e/nested/inner`);
+      await storage.deleteEmptyDir(`${root}/e/nested`);
+      expect(await kindOf(storage.stat(`${root}/e/nested`))).toBe("not_found");
+      expect(await kindOf(storage.deleteEmptyDir(`${root}/e/nested`))).toBe("not_found");
+    });
+
     it("keeps Unicode and literal-percent names intact", async () => {
       const name = "ünï cødé %41 😀.txt";
       const path = await seed(name, "u");

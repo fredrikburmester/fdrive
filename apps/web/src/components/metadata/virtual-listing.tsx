@@ -40,7 +40,6 @@ import {
   useDuplicate,
   useMe,
   useRename,
-  useTrashStatus,
   viewHref,
 } from "@/lib/metadata/deps";
 import {
@@ -85,7 +84,6 @@ export function VirtualListing({ title, paths, onRemoveMissing }: VirtualListing
   const rename = useRename();
   const remove = useDelete();
   const duplicate = useDuplicate();
-  const { data: trashStatus } = useTrashStatus();
   const { data: me } = useMe();
   const capabilities = capabilitiesFor(me);
   const received = useReceivedGrants(capabilities.shareWithPeople);
@@ -310,7 +308,7 @@ export function VirtualListing({ title, paths, onRemoveMissing }: VirtualListing
         }}
         onConfirm={handleDeleteConfirm}
         pending={remove.isPending}
-        trash={trashAvailabilityFor(capabilities, trashStatus)}
+        trash={trashAvailabilityFor(capabilities)}
       />
     </>
   );

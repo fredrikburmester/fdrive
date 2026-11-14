@@ -22,7 +22,7 @@ function leafNameFor(at: Date): string {
  * `createRecycleFolderTrash` reads back. The move refuses a taken leaf
  * (`overwrite: false`), so a delete never replaces an earlier trashed item.
  * Deleting something already inside the recycle folder deletes it for real,
- * so purge and empty keep working through the same wrapper.
+ * so purge keeps working through the same wrapper.
  */
 export function withMoveToTrash(options: MoveToTrashOptions): StorageProvider {
   const { storage, clock } = options;

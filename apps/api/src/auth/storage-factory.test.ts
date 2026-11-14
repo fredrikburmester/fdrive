@@ -309,6 +309,7 @@ it("unavailableStorage rejects every call with the given error and has no trash"
   await expect(storage.copy("/a", "/b")).rejects.toBe(error);
   await expect(storage.deleteFile("/a")).rejects.toBe(error);
   await expect(storage.deleteDir("/a")).rejects.toBe(error);
+  await expect(storage.deleteEmptyDir("/a")).rejects.toBe(error);
   expect(trashSettingsForStorage(storage)).toBeNull();
 });
 

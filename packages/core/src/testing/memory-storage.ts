@@ -280,6 +280,17 @@ export function createMemoryStorage(
       removeDirTree(normalized);
     },
 
+    async deleteEmptyDir(path: string): Promise<void> {
+      const normalized = normalizePath(path);
+      if (fileMap.has(normalized))
+        throw new StorageError("bad_request", `not a directory: ${path}`);
+      const children = childrenOf.get(normalized);
+      if (children === undefined) throw new StorageError("not_found", `not found: ${path}`);
+      if (normalized === "/") throw new StorageError("bad_request", "the root stays");
+      if (children.size > 0) throw new StorageError("conflict", `not empty: ${path}`);
+      removeDirTree(normalized);
+    },
+
     async setModifiedAt(path: string, modifiedAt: Date): Promise<void> {
       const { file } = requireFile(path);
       file.mtime = modifiedAt;

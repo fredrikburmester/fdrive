@@ -115,6 +115,7 @@ function forbiddenStorage(): StorageProvider {
     copy: deny,
     deleteFile: deny,
     deleteDir: deny,
+    deleteEmptyDir: deny,
   };
 }
 

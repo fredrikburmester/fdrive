@@ -43,11 +43,6 @@ function withCapabilities(overrides: Partial<MeResponse["identities"][number]["c
 function renderSidebar(account: MeResponse = me) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   client.setQueryData(["auth", "me"], account);
-  client.setQueryData(["trash", "status"], {
-    available: true,
-    path: "/.trash",
-    retentionHours: null,
-  });
   client.setQueryData(["favorites", "list"], []);
   client.setQueryData(["recents", "list"], []);
   client.setQueryData(["tags", "list"], []);

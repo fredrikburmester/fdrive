@@ -40,7 +40,6 @@ import {
   purgedToastMessage,
   restoreConflictMessage,
   restoredToastMessage,
-  retentionNote,
 } from "@/lib/trash/format";
 import {
   isRestoreConflict,
@@ -48,7 +47,6 @@ import {
   useTrashEmpty,
   useTrashPurge,
   useTrashRestore,
-  useTrashStatus,
 } from "@/lib/trash/queries";
 import { useFormatters } from "@/lib/use-format-preferences";
 
@@ -63,7 +61,6 @@ type ConfirmAction =
 export function TrashPage() {
   const { formatBytes, formatDate } = useFormatters();
   const [viewMode] = useDefaultView();
-  const status = useTrashStatus();
   const trash = useTrash();
   const restore = useTrashRestore();
   const purge = useTrashPurge();
@@ -195,8 +192,6 @@ export function TrashPage() {
   // A restore started from the toolbar; a "Restore to" restore shows its
   // busy state in the picker instead, while the toolbar is merely disabled.
   const restoringSelection = restore.isPending && restoreTargetEntry === null;
-  const note = retentionNote(status.data?.retentionHours ?? null);
-  const helperText = `Files and folders moved to Trash from Files show up here until you restore or permanently delete them.${note ? ` ${note}` : ""}`;
 
   return (
     <>
@@ -204,7 +199,10 @@ export function TrashPage() {
       <main className="mx-auto w-full max-w-6xl space-y-5 p-6">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Trash</h1>
-          <p className="mt-1 text-sm text-muted-foreground">{helperText}</p>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Files and folders moved to Trash from Files show up here until you restore or
+            permanently delete them.
+          </p>
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
