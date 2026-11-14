@@ -100,6 +100,9 @@ describe("public links following moves", () => {
     expect(await paths(bobLink.id)).toEqual(["/mine.txt"]);
     // A folder whose owner has no login here has no links to follow.
     expect(await moves.resolve(bob, "/Shared with me/Gone/a", "/Shared with me/Gone/b")).toBeNull();
+    // Nothing moves onto or off the root of anyone's files.
     expect(await moves.resolve(alice, "/a", "/a")).toBeNull();
+    expect(await moves.resolve(alice, "/", "/x")).toBeNull();
+    expect(await moves.resolve(alice, "/x", "/")).toBeNull();
   });
 });

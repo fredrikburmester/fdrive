@@ -149,6 +149,17 @@ it("captures trusted Office locations once, handling unmapped paths and ownershi
   await expect(resolve({ ...principal, identityId: randomUUID() }, move)).rejects.toMatchObject({
     kind: "unauthorized",
   });
+  // The move public links follow is decided here, before publication, and only for a move.
+  const shareMove = vi.fn(async (identityId: string, from: string, to: string) =>
+    to === "/b" ? { identityId, from, to } : null,
+  );
+  const deciding = createDesktopEffectContext(repos.identities, mapping, shareMove);
+  expect(await deciding(principal, move)).toMatchObject({
+    shareMove: { identityId: identity.id, from: "/a", to: "/b" },
+  });
+  expect(await deciding(principal, { ...move, to: "/c" })).toMatchObject({ shareMove: null });
+  expect(await deciding(principal, { ...move, trash: true })).not.toHaveProperty("shareMove");
+  expect(shareMove).toHaveBeenCalledTimes(2);
 });
 
 it("does not wait for another identity's background recovery before admitting a save", async () => {
