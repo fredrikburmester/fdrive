@@ -16,6 +16,7 @@ Only unfinished work lives here. Reviewed against source and delivery history on
 | [Owned shares](OWNED-SHARES.md) | fdrive-served share links: done; server-side gallery gating for unindexed logins remains |
 | [Local storage](LOCAL-STORAGE.md) | fdrive serves a folder on its own disk with its own users, its only storage since SFTPGo, WebDAV and S3 went: decisions and what comes later |
 | [ML server follow-ups](ML-SERVER.md) | What is left after moving embeddings and document extraction into one Rust server: amd64 measurements, memory, extraction gaps |
+| [Encryption](ENCRYPTION.md) | Host encryption at rest, and end-to-end encrypted folders with one password in the web app and FDrive for Mac; decided, not started |
 
 These are a backlog, not a claim that an agent is working on every item.
 
