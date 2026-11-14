@@ -3,6 +3,7 @@ import {
   cloneShareRecord,
   compareShareRecords,
   createMemoryShareRepo,
+  movedSharePaths,
   parseSharePresentation,
   parseShareScope,
   type ShareInsertInput,
@@ -13,6 +14,7 @@ import {
   validateShareInsert,
   validateShareOwnedUpdate,
   validateSharePath,
+  validateSharePathChange,
 } from "./shares-state.js";
 
 const identityId = "00000000-0000-0000-0000-000000000001";
@@ -277,5 +279,86 @@ describe("memory share repository", () => {
     await expect(repo.removeOwned(identityId, "bad")).rejects.toThrow(TypeError);
     await expect(repo.listOwned("bad")).rejects.toThrow(TypeError);
     await expect(repo.listOwned(identityId, { limit: 1001 })).rejects.toThrow(TypeError);
+  });
+});
+
+describe("share paths following a move", () => {
+  it("moves the exact path, and what is inside it only for a folder, never a sibling prefix", () => {
+    const paths = ["/a", "/a/x.txt", "/a/b/c", "/ab", "/ab/x.txt", "/b"];
+    expect(movedSharePaths(paths, "/a", "/z", true)).toEqual([
+      "/z",
+      "/z/x.txt",
+      "/z/b/c",
+      "/ab",
+      "/ab/x.txt",
+      "/b",
+    ]);
+    expect(movedSharePaths(paths, "/a", "/z", false)).toEqual([
+      "/z",
+      "/a/x.txt",
+      "/a/b/c",
+      "/ab",
+      "/ab/x.txt",
+      "/b",
+    ]);
+    expect(movedSharePaths(["/x/a b%20.txt"], "/x", "/y/é", true)).toEqual(["/y/é/a b%20.txt"]);
+  });
+  it("keeps a path the move lands on twice once, where it first stood", () => {
+    expect(movedSharePaths(["/b/f", "/c", "/a/f"], "/a", "/b", true)).toEqual(["/b/f", "/c"]);
+    expect(movedSharePaths(["/a/f", "/c", "/b/f"], "/a", "/b", true)).toEqual(["/b/f", "/c"]);
+  });
+  it("refuses noncanonical paths and the root", () => {
+    expect(() => validateSharePathChange(identityId, "/a", "/b")).not.toThrow();
+    for (const [from, to] of [
+      ["/", "/b"],
+      ["/a", "/"],
+      ["a", "/b"],
+      ["/a", "/b/../c"],
+      ["/a/", "/b"],
+    ] as const)
+      expect(() => validateSharePathChange(identityId, from, to)).toThrow(TypeError);
+    expect(() => validateSharePathChange("bad", "/a", "/b")).toThrow(TypeError);
+  });
+  it("drops a deleted path and what is inside it, removing a share left with none", async () => {
+    let sequence = 0;
+    const repo = createMemoryShareRepo({
+      id: () => `00000000-0000-0000-0000-${(++sequence).toString(16).padStart(12, "0")}`,
+    });
+    const many = await repo.insert({ ...owned, paths: ["/docs/a.txt", "/docsx/b.txt", "/c"] });
+    const only = await repo.insert({ ...owned, paths: ["/docs"], passwordHash: "hash" });
+    const foreign = await repo.insert({ ...owned, identityId: otherIdentity, paths: ["/docs"] });
+    await repo.deletePrefix(identityId, "/docs", false);
+    expect((await repo.get(many.id))?.paths).toEqual(["/docs/a.txt", "/docsx/b.txt", "/c"]);
+    expect(await repo.get(only.id)).toBeNull();
+    expect(await repo.passwordHash(only.id)).toBeNull();
+    await repo.deletePrefix(identityId, "/docs", true);
+    expect(await repo.get(many.id)).toEqual({ ...many, paths: ["/docsx/b.txt", "/c"] });
+    expect(await repo.get(foreign.id)).toEqual(foreign);
+    await repo.deletePrefix(identityId, "/nothing", true);
+    expect((await repo.get(many.id))?.paths).toEqual(["/docsx/b.txt", "/c"]);
+    await expect(repo.deletePrefix(identityId, "/", true)).rejects.toThrow(TypeError);
+  });
+  it("rewrites only the identity's own shares and leaves their update time", async () => {
+    let sequence = 0;
+    const repo = createMemoryShareRepo({
+      id: () => `00000000-0000-0000-0000-${(++sequence).toString(16).padStart(12, "0")}`,
+    });
+    const folder = await repo.insert({ ...owned, paths: ["/docs"] });
+    const many = await repo.insert({ ...owned, paths: ["/docs/a.txt", "/docsx/b.txt", "/other"] });
+    const untouched = await repo.insert({ ...owned, paths: ["/elsewhere"] });
+    const foreign = await repo.insert({ ...owned, identityId: otherIdentity, paths: ["/docs"] });
+    await repo.movePrefix(identityId, "/docs", "/archive/docs", true);
+    expect(await repo.get(folder.id)).toEqual({ ...folder, paths: ["/archive/docs"] });
+    expect((await repo.get(many.id))?.paths).toEqual([
+      "/archive/docs/a.txt",
+      "/docsx/b.txt",
+      "/other",
+    ]);
+    expect(await repo.get(untouched.id)).toEqual(untouched);
+    expect(await repo.get(foreign.id)).toEqual(foreign);
+    await repo.movePrefix(identityId, "/other", "/other", true);
+    await repo.movePrefix(identityId, "/archive/docs/a.txt", "/a.txt", false);
+    expect((await repo.get(many.id))?.paths).toEqual(["/a.txt", "/docsx/b.txt", "/other"]);
+    await expect(repo.movePrefix(identityId, "/", "/b", true)).rejects.toThrow(TypeError);
   });
 });

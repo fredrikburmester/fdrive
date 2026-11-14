@@ -102,6 +102,8 @@ export interface DesktopWriteDeps
   effectContext?: (
     principal: Principal,
     context: Omit<DesktopEffectContext, "office">,
+    /** Where the item really moves, Trash included, when it moves. */
+    moved?: { readonly from: string; readonly to: string },
   ) => Promise<DesktopEffectContext>;
   effects?: { beforeWrite(identityId: string): Promise<void>; kick(): void };
   /** Administrator resolution of uncertain commits needs the identity's storage. */
@@ -961,7 +963,11 @@ export function createDesktopWrites(deps: DesktopWriteDeps) {
               "Restore this item outside its original folder hierarchy to preserve metadata.",
             );
           const effectContext = deps.effectContext
-            ? await deps.effectContext(principal, context)
+            ? await deps.effectContext(
+                principal,
+                context,
+                source ? { from: source.path, to: target } : undefined,
+              )
             : { ...context, office: null };
           const effects = await repo.captureEffects(
             principal.identityId,
@@ -1321,7 +1327,11 @@ export function createDesktopWrites(deps: DesktopWriteDeps) {
         trash: trashing,
       };
       const effectContext = deps.effectContext
-        ? await deps.effectContext(principal, context)
+        ? await deps.effectContext(
+            principal,
+            context,
+            source ? { from: source.path, to: target } : undefined,
+          )
         : { ...context, office: null };
       const effects = await repo.captureEffects(identityId, accountId, effectContext);
       const item = await decorate(

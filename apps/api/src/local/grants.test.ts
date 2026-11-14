@@ -261,6 +261,38 @@ describe("createLocalGrantService: changing and ending shares", () => {
     expect(await h.repos.localGrants.listOwned("alice")).toEqual([]);
   });
 
+  it("places a path in a folder shared with a user in its owner's files", async () => {
+    const h = await fixture();
+    await h.service.create(h.alice.id, { path: "/Projects", username: "bob", access: "write" });
+    await h.service.create(h.carol.id, { path: "/Projects", username: "bob", access: "read" });
+    expect(await h.service.ownerPath(h.bob.id, "/Shared with me/Projects (alice)/a/b.txt")).toEqual(
+      {
+        identityId: h.alice.id,
+        path: "/Projects/a/b.txt",
+      },
+    );
+    expect(await h.service.ownerPath(h.bob.id, "/Shared with me/Projects (carol)")).toEqual({
+      identityId: h.carol.id,
+      path: "/Projects",
+    });
+    // Anything else is the user's own: their files, the shelf itself, a name nobody shares.
+    for (const path of ["/notes.txt", "/Shared with me", "/Shared with me/Other/x"])
+      expect(await h.service.ownerPath(h.bob.id, path)).toEqual({ identityId: h.bob.id, path });
+    expect(await h.service.ownerPath(h.aliceRetired.id, "/Shared with me/Projects/x")).toEqual({
+      identityId: h.aliceRetired.id,
+      path: "/Shared with me/Projects/x",
+    });
+    // An owner who never signed in has no login, so nothing of theirs to place it in.
+    await h.repos.localUsers.update("dave", { disabled: false });
+    await h.repos.localGrants.put({
+      ownerUsername: "dave",
+      path: "/Music",
+      granteeUsername: "carol",
+      access: "read",
+    });
+    expect(await h.service.ownerPath(h.carol.id, "/Shared with me/Music/song.mp3")).toBeNull();
+  });
+
   it("keeps a share that followed its folder into Trash from the person it is shared with", async () => {
     const closedFolders = vi.fn(async (): Promise<readonly string[]> => ["/.trash"]);
     const h = await fixture({ closedFolders });

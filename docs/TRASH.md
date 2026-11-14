@@ -33,11 +33,11 @@ left alone.
 A restore never replaces anything: when a file or folder already sits at the original path,
 the restore fails with a conflict, and **Restore to** can pick another place.
 
-When a folder shared with other users goes to Trash, its shares go with it, and nobody it is
-shared with can reach it there, even after Trash is turned off or moved. A new folder at the old
-path is not shared. A restore, to the same place or another, brings the
-share back; deleting the item permanently, in fdrive or on the host, ends it. Tags and favorites
-stay at the original path for a restore there.
+When a folder shared with other users, or anything a public link names, goes to Trash, its
+shares and links go with it, and nobody can reach it through them there, even after Trash is
+turned off or moved. A new item at the old path is not shared. A restore, to the same place or
+another, brings the shares and links back; deleting the item permanently, in fdrive or on the
+host, ends them. Tags and favorites stay at the original path for a restore there.
 
 Reaching System takes an administrator: the setup owner, a user made administrator under
 **System > Users**, or a username in `FDRIVE_ADMIN_USERS`.

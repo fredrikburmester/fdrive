@@ -93,6 +93,7 @@ describe("share management", () => {
     const h = sharesHarness({ trashPath: "/.trash" });
     h.write("/.trash/old.txt", "gone");
     h.write("/.fdrive-backups/b", "backup");
+    h.write("/.fdrive-desktop/mac/trash/old.txt", "the Mac's Trash");
     h.write("/one/report.txt", "one");
     h.write("/two/Report.txt", "two");
     const cookie = await h.login();
@@ -102,6 +103,7 @@ describe("share management", () => {
       ["/.trash"],
       ["/.trash/old.txt"],
       ["/.fdrive-backups/b"],
+      ["/.fdrive-desktop/mac/trash/old.txt"],
       ["/a.docx", "/.trash"],
     ])
       expect((await attempt({ paths })).status, paths.join()).toBe(403);
@@ -129,6 +131,32 @@ describe("share management", () => {
       ).status,
     ).toBe(403);
     expect((await h.shares.get(id))?.paths).toEqual(["/a.docx"]);
+  });
+
+  it("keeps a link refused in fdrive's Trash layout after Trash is turned off or moved", async () => {
+    // Trash is off here: neither folder is the Trash any more, yet both hold its leaves.
+    const h = sharesHarness();
+    const leaf = "/.fdrive-move-v1/dir/p/folder/v/1";
+    for (const bin of ["/.trash", "/old bin"]) h.write(`${bin}${leaf}/a.txt`, "trashed");
+    h.write("/folder/a.txt", "content");
+    const cookie = await h.login();
+    const { id } = await h.create(cookie, { paths: ["/folder"] });
+    const row = await h.shares.get(id);
+    if (row === null) throw new Error("missing row");
+    let at = "/folder";
+    for (const bin of ["/.trash", "/old bin"]) {
+      await h.shares.movePrefix(row.identityId, at, `${bin}${leaf}`, true);
+      at = `${bin}${leaf}`;
+      for (const suffix of ["", "/entries", "/download?path=/a.txt", "/archive"])
+        expect((await h.request(`${pub(id)}${suffix}`)).status, `${bin} ${suffix}`).toBe(404);
+    }
+    // Nor can a link be made there.
+    const made = await h.request(base, {
+      cookie,
+      method: "POST",
+      body: { name: "Bad", scope: "read", paths: [`/old bin${leaf}/a.txt`] },
+    });
+    expect(made.status).toBe(403);
   });
 
   it("keeps folders shared with the owner out of every link, as their owner's to share", async () => {
@@ -538,6 +566,7 @@ describe("public shares", () => {
     h.write("/folder/a.txt", "content");
     h.write("/.trash/old.txt", "gone");
     h.write("/.fdrive-backups/b", "backup");
+    h.write("/.fdrive-desktop/mac/trash/old.txt", "the Mac's Trash");
     const cookie = await h.login();
     const { id } = await h.create(cookie, { paths: ["/"] });
     const path = pub(id);
@@ -549,9 +578,24 @@ describe("public shares", () => {
     ]);
     expect(await names(await h.request(`${path}/entries?path=/folder`))).toEqual(["a.txt"]);
     expect(await (await h.request(`${path}/download?path=/folder/a.txt`)).text()).toBe("content");
-    for (const hidden of ["/.trash/old.txt", "/.fdrive-backups/b", "/nope"])
+    for (const hidden of [
+      "/.trash/old.txt",
+      "/.fdrive-backups/b",
+      "/.fdrive-desktop/mac/trash/old.txt",
+      "/nope",
+    ])
       expect((await h.request(`${path}/download?path=${hidden}`)).status, hidden).toBe(404);
     expect((await h.request(`${path}/entries?path=/.trash`)).status).toBe(404);
+    // A link that followed its item into the Trash is not found until it comes back out.
+    const trashed = await h.create(cookie, { paths: ["/folder"] });
+    const row = await h.shares.get(trashed.id);
+    if (row === null) throw new Error("missing row");
+    h.write("/.trash/folder/a.txt", "content");
+    await h.shares.movePrefix(row.identityId, "/folder", "/.trash/folder", true);
+    for (const suffix of ["", "/entries", "/download?path=/a.txt"])
+      expect((await h.request(`${pub(trashed.id)}${suffix}`)).status, suffix).toBe(404);
+    await h.shares.movePrefix(row.identityId, "/.trash/folder", "/folder", true);
+    expect((await metadata(h, trashed.id)).layout).toBe("directory");
     // A file share has no listing, and an archive share no single file.
     const file = await h.create(cookie);
     expect((await h.request(`${pub(file.id)}/entries`)).status).toBe(400);
@@ -996,6 +1040,25 @@ describe("GET /public/shares/:id/thumb", () => {
       expect(await error(res)).toMatchObject({ kind: "not_found" });
     }
     expect((await h.request(thumb("00000000-0000-4000-8000-000000000000"))).status).toBe(404);
+  });
+
+  it("404s inside the folders no link reaches, where a link follows its item to", async () => {
+    const fileByPath = vi.fn(async () => makeIndexedFile());
+    const h = thumbsHarness({ indexQueries: { fileByPath } });
+    h.mkdir("/folder");
+    const cookie = await h.login();
+    const { id } = await h.create(cookie, { paths: ["/"] });
+    for (const path of ["/Shared with me/team/x.jpg", "/.fdrive-desktop/x.jpg"])
+      expect(
+        (await h.request(thumb(id, `path=${encodeURIComponent(path)}&size=256`))).status,
+        path,
+      ).toBe(404);
+    const folder = await h.create(cookie, { paths: ["/folder"] });
+    const row = await h.shares.get(folder.id);
+    if (row === null) throw new Error("missing row");
+    await h.shares.movePrefix(row.identityId, "/folder", "/Shared with me/team/folder", true);
+    expect((await h.request(thumb(folder.id, "path=%2Fx.jpg&size=256"))).status).toBe(404);
+    expect(fileByPath).not.toHaveBeenCalled();
   });
 
   it("404s when thumbnails are off or not configured", async () => {

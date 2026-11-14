@@ -2,7 +2,7 @@ import { stat } from "node:fs/promises";
 import { basename } from "node:path";
 import {
   type FileEntry,
-  MOVE_LAYOUT_NAMESPACE,
+  isInMoveTrashLayout,
   makeEntry,
   normalizePath,
   StorageError,
@@ -78,7 +78,7 @@ export function sharedFolderNames(grants: readonly SharedGrant[]): string[] {
  */
 export function closedToShares(path: string, folders: readonly string[]): boolean {
   const target = normalizePath(path);
-  if (splitSegments(target).includes(MOVE_LAYOUT_NAMESPACE)) return true;
+  if (isInMoveTrashLayout(target)) return true;
   return folders.some((folder) => {
     const closed = normalizePath(folder);
     return closed === "/" || target === closed || target.startsWith(`${closed}/`);
