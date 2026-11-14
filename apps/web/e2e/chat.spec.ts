@@ -3,7 +3,7 @@ import { expect, type Locator, type Page, test } from "@playwright/test";
 import { dismissActivityPanel } from "./support/activity.js";
 import { FAKE_AI_MODEL, startFakeAi } from "./support/fake-ai.js";
 import { listing } from "./support/regions.js";
-import { uniqueName } from "./support/unique.js";
+import { openSandbox } from "./support/sandbox.js";
 import { uploadFiles } from "./support/upload.js";
 
 const AI_URL = "/api/v1/system/ai";
@@ -49,11 +49,7 @@ test("chat follows the person between folders, hides elsewhere, takes dropped fi
     await sheet.getByRole("button", { name: "Save" }).click();
     await expect(sheet).toBeHidden();
 
-    const sandbox = uniqueName("chat");
-    await page.goto("/files");
-    await createFolder(page, sandbox);
-    await listing(page).getByText(sandbox, { exact: true }).dblclick();
-    await expect(page).toHaveURL(new RegExp(`/files/${sandbox}$`));
+    const sandbox = await openSandbox(page, "chat");
     await uploadFiles(page, [
       { name: "invoice-2024.txt", mimeType: "text/plain", contents: "Invoice 2024-001" },
       { name: "shopping.txt", mimeType: "text/plain", contents: "milk, eggs" },

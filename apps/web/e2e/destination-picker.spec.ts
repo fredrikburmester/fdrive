@@ -1,5 +1,6 @@
 import { expect, type Page, test } from "@playwright/test";
 import { listing } from "./support/regions.js";
+import { openSandbox } from "./support/sandbox.js";
 import { uniqueName } from "./support/unique.js";
 import { uploadFiles } from "./support/upload.js";
 
@@ -11,13 +12,7 @@ async function createFolder(page: Page, name: string) {
 }
 
 async function openPicker(page: Page, operation: "Move" | "Copy") {
-  const sandbox = uniqueName("destination");
-  await page.goto("/files");
-  await page.getByRole("button", { name: "New", exact: true }).click();
-  await page.getByRole("menuitem", { name: "New folder" }).click();
-  await createFolder(page, sandbox);
-  await listing(page).getByText(sandbox, { exact: true }).dblclick();
-  await expect(page).toHaveURL(new RegExp(`/files/${sandbox}$`));
+  const sandbox = await openSandbox(page, "destination");
   await uploadFiles(page, [
     { name: "note.txt", mimeType: "text/plain", contents: "keep these bytes" },
   ]);

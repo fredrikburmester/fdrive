@@ -1,5 +1,6 @@
 import { expect, type Page, test } from "@playwright/test";
 import { listing } from "./support/regions.js";
+import { openSandbox, removeSandbox } from "./support/sandbox.js";
 import { uniqueName } from "./support/unique.js";
 
 const PRIMARY_MODIFIER = process.platform === "darwin" ? "Meta" : "Control";
@@ -16,14 +17,10 @@ async function createFolder(page: Page, name: string): Promise<void> {
 test("the header checkbox selects and deselects every row, and shows indeterminate for a partial selection", async ({
   page,
 }) => {
-  const sandbox = uniqueName("select-all");
   const folderA = uniqueName("a");
   const folderB = uniqueName("b");
 
-  await page.goto("/files");
-  await createFolder(page, sandbox);
-  await listing(page).getByText(sandbox, { exact: true }).dblclick();
-  await expect(page).toHaveURL(new RegExp(`/files/${sandbox}$`));
+  const sandbox = await openSandbox(page, "select-all");
 
   // Creating a folder auto-selects it, so folderB starts out selected.
   await createFolder(page, folderA);
@@ -63,10 +60,5 @@ test("the header checkbox selects and deselects every row, and shows indetermina
   await confirmDialog.getByRole("button", { name: "Delete" }).click();
   await expect(confirmDialog).toBeHidden();
 
-  await page.getByRole("link", { name: "Home" }).click();
-  await listing(page).getByText(sandbox, { exact: true }).click({ button: "right" });
-  await page.getByRole("menuitem", { name: "Delete" }).click();
-  const sandboxConfirm = page.getByRole("alertdialog");
-  await sandboxConfirm.getByRole("button", { name: "Delete" }).click();
-  await expect(sandboxConfirm).toBeHidden();
+  await removeSandbox(page, sandbox);
 });
