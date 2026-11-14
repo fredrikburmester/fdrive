@@ -12,7 +12,7 @@ from pathlib import Path
 
 import psycopg
 import pytest
-from conftest import Journal
+from conftest import Journal, index_pdfs
 
 from fdrive_ocr import db, restore, runner
 from fdrive_ocr.originals import Mapping, mapping_document
@@ -44,6 +44,7 @@ def target(db_conn: psycopg.Connection, root_dir: Path) -> RootTarget:
 
 
 def _run_pass(conn: psycopg.Connection, target: RootTarget, state_dir: str, settings: Settings = SETTINGS) -> runner.RunTotals:
+    index_pdfs(conn, target.root_id, target.abs_path)
     return runner.run_pass(conn, [target], settings, state_dir, 30, 1, lambda _msg: None)
 
 
@@ -177,7 +178,7 @@ def _keep(state_dir: str, root_dir: Path, rel_path: str, body: bytes = ORIGINAL_
     info = source.stat()
     rewritten = root_dir.parent / "rewritten.pdf"
     rewritten.write_bytes(OCRED_BODY)
-    runner.apply_rewrite(str(source), str(rewritten), state_dir, "files", rel_path, info.st_size, info.st_mtime_ns, True)
+    runner.apply_rewrite(str(source), str(rewritten), state_dir, "files", rel_path, info, True)
     return os.path.basename(runner.originals_dest(state_dir, "files", rel_path, info.st_size, info.st_mtime_ns))
 
 
@@ -320,7 +321,7 @@ def test_resolves_a_legacy_original_from_the_done_log_and_backfills_its_sidecar(
     kept = Path(restore.originals_dir(state_dir), original_id)
     source_mtime_ns = kept.stat().st_mtime_ns
     Path(restore.mappings_dir(state_dir), f"{original_id}.json").unlink()
-    db.record_ocr_log(db_conn, target.root_id, "docs/scan.pdf", len(OCRED_BODY), source_mtime_ns, "ocred", None)
+    db.record_ocr_log(db_conn, target.root_id, "docs/scan.pdf", len(OCRED_BODY), source_mtime_ns, "o" * 64, "ocred", None)
 
     index = restore.OriginalsIndex()
     listed, _total = restore.list_originals(db_conn, state_dir, [target], index)
@@ -372,7 +373,7 @@ def test_does_not_guess_between_two_matching_legacy_candidates(
     original_id = _keep(state_dir, root_dir, "docs/scan.pdf")
     Path(restore.mappings_dir(state_dir), f"{original_id}.json").unlink()
     kept_mtime_ns = Path(restore.originals_dir(state_dir), original_id).stat().st_mtime_ns
-    db.record_ocr_log(db_conn, target.root_id, "docs/scan.pdf", 1, kept_mtime_ns, "ocred", None)
+    db.record_ocr_log(db_conn, target.root_id, "docs/scan.pdf", 1, kept_mtime_ns, "o" * 64, "ocred", None)
     monkeypatch.setattr(restore, "LEGACY_CANDIDATE_LIMIT", 0)
 
     assert restore.resolve_legacy(db_conn, state_dir, _sole_original(state_dir)) is None
@@ -453,9 +454,7 @@ def test_kept_at_ignores_the_source_mtime_the_copy_inherited(
     rewritten = root_dir.parent / "rewritten.pdf"
     rewritten.write_bytes(OCRED_BODY)
     info = source.stat()
-    runner.apply_rewrite(
-        str(source), str(rewritten), state_dir, "files", "docs/old.pdf", info.st_size, info.st_mtime_ns, True
-    )
+    runner.apply_rewrite(str(source), str(rewritten), state_dir, "files", "docs/old.pdf", info, True)
 
     entry = _sole_original(state_dir)
     assert Path(restore.originals_dir(state_dir), entry.id).stat().st_mtime == pytest.approx(ancient, abs=1)

@@ -16,7 +16,7 @@ export const FEATURE_DESCRIPTIONS: Record<
     description: "Find files by their names and document contents.",
     cost: "Reads your files and stores a searchable index.",
     dependency:
-      "Requires mounted storage. Turning this off also turns off search OCR and semantic search.",
+      "Requires mounted storage. Turning this off also turns off search OCR, semantic search and searchable PDFs.",
   },
   searchOcr: {
     title: "Search OCR",
@@ -43,7 +43,8 @@ export const FEATURE_DESCRIPTIONS: Record<
     description:
       "Add a searchable text layer to PDFs in mounted storage, for use in any PDF reader.",
     cost: "Modifies original PDFs and keeps backup originals by default, using additional disk space.",
-    dependency: "Requires writable mounted storage. This is independent of search OCR.",
+    dependency:
+      "Requires writable mounted storage. Enabling this also enables full-text search, which finds the PDFs.",
   },
 };
 
@@ -53,10 +54,12 @@ export function changeFeature(
   enabled: boolean,
 ): FeatureValues {
   const next = { ...values, [id]: enabled };
-  if ((id === "searchOcr" || id === "semanticSearch") && enabled) next.textSearch = true;
+  if ((id === "searchOcr" || id === "semanticSearch" || id === "pdfOcr") && enabled)
+    next.textSearch = true;
   if (id === "textSearch" && !enabled) {
     next.searchOcr = false;
     next.semanticSearch = false;
+    next.pdfOcr = false;
   }
   return next;
 }

@@ -20,8 +20,6 @@ STATUS_OCRED = "ocred"
 STATUS_HAS_TEXT = "has_text"
 STATUS_SIGNED = "signed"
 STATUS_ENCRYPTED = "encrypted"
-STATUS_TOO_BIG = "too_big"
-STATUS_EXCLUDED = "excluded"
 STATUS_TIMEOUT = "timeout"
 STATUS_FAILED = "failed"
 

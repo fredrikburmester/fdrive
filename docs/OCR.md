@@ -3,9 +3,9 @@
 > [!TIP]
 > **Looking to configure or use OCR in fdrive?** See the simple user guide in **[docs/SEARCH-AND-AI.md](SEARCH-AND-AI.md)**. This document is a technical reference for developers on the Python OCR service.
 
-`services/ocr` is a small Python service that runs a nightly OCR pass over one
-or more disk roots, rewriting scanned PDFs to add a permanent searchable text layer
-via `ocrmypdf` for PDF readers. (Search indexing itself also extracts text in-memory
+`services/ocr` is a small Python service that runs a nightly OCR pass over the
+PDFs the indexer has found, rewriting scanned PDFs to add a permanent searchable text
+layer via `ocrmypdf` for PDF readers. (Search indexing itself also extracts text in-memory
 from scans and images during indexer scans when the `searchOcr` feature is enabled,
 without altering original files). It is the direct port of filesai's
 `ocr/run.sh`, extended for multiple roots and a Postgres-backed done-log, with
@@ -18,36 +18,87 @@ See [architecture](ARCHITECTURE.md) for the service boundaries.
 
 ## What it does, and what it refuses to touch
 
-Once per configured hour (and on demand via `POST /run`), the service walks
-every configured root for `*.pdf` files (skipping AppleDouble sidecars like
-`._report.pdf`, the directories the indexer skips: `.fdrive-backups`,
-`.fdrive-desktop`, `@eaDir`, `.Trash`, `.Trashes`, `node_modules`, `.git`, and every
-Trash: fdrive's Trash layout `.fdrive-move-v1` wherever its Trash folder is or was, and
-`.trash`, its default and where SFTPGo's recycle bin left files) and runs `ocrmypdf` on each one
-that is not already recorded as done for its current size and mtime.
+Once per configured hour (and on demand via `POST /run`), the service reads each configured
+root's PDFs from the index and runs `ocrmypdf` on each one that needs it. It walks no folder.
 
-`ocrmypdf` is **never** called with `--skip-text` or `--force-ocr`. That is
-the single most important safety property of this service: a PDF that already
-has a text layer is left completely alone.
+### Which PDFs
 
-| `ocrmypdf` result | Recorded status | What happens to the file |
+A pass takes the live rows of `idx.files` with the extension `.pdf` and a digest
+(`db.pdf_candidates`), in path order, and leaves out:
+
+- every PDF whose content (`sha256`) already has a row in the done-log, wherever that row was
+  written, so a PDF moved, renamed or restored from Trash is never processed again;
+- every PDF in fdrive's own folders: a path with a segment named `.fdrive-move-v1` (fdrive's
+  Trash layout, wherever its Trash folder is or was), `.trash` (its default Trash folder),
+  `.fdrive-desktop` (the Mac app's staged uploads, replaced versions and Trash) or
+  `.fdrive-backups`, in any case (`RESERVED_FOLDERS` in `rules.py`, after `isReservedPath` in
+  `@fdrive/core`). The indexer indexes the Trash, so this is what keeps OCR out of it;
+- PDFs matched by `ocr.exclude_globs` (or outside `OCR_INCLUDE_GLOBS`) and PDFs over
+  `ocr.max_mb`. These are settings, not facts about a file, so nothing is recorded for them
+  and a change to the rules applies on the next pass.
+
+The index must have the PDFs, so Searchable PDFs requires full-text search: System > Features
+refuses one without the other (`FeaturesUpdateRequest`), switching Searchable PDFs on switches
+full-text search on, and switching full-text search off switches Searchable PDFs off.
+
+New PDFs wait for the next pass, as they did when the service walked the folder. It does not
+follow the [change journal](plans/CHANGE-JOURNAL.md): a journal row for an upload is written
+before the indexer has read the file, so OCR would have to wait for the index anyway, and the
+schedule exists to keep this CPU-heavy work at night.
+
+### Deciding
+
+Each candidate is checked against the disk first. A file that is gone, or whose size or mtime
+no longer match its row (the index has not read that version yet), is left for a later pass.
+Then `pdftotext` (poppler) reads it: a PDF in which it finds any text is recorded as
+`has_text` and never handed to `ocrmypdf`. Everything else goes to `ocrmypdf`, which is
+**never** called with `--skip-text` or `--force-ocr`. That is the single most important safety
+property of this service: a PDF that already has a text layer is left completely alone, and
+`ocrmypdf` refuses one that `pdftotext` did not read.
+
+The text check is the service's own, not the index's `text_status`: with search OCR on, the
+indexer reads a scan with tesseract and records it as `indexed`, exactly as it records a PDF
+with a text layer.
+
+| Result | Recorded status | What happens to the file |
 | --- | --- | --- |
-| Exit 0 | `ocred` | The output replaces the original, keeping its owner, mode, and mtime. The original bytes are kept under `<state_dir>/originals` when `ocr.keep_originals` is set, and can be put back later; see [Kept originals](#kept-originals). |
-| Exit 6, or stderr mentions `TaggedPDFError` | `has_text` | Untouched. `ocrmypdf` already found a text layer (an office-generated PDF sometimes only reports this via the error message, not the exit code). |
+| `pdftotext` finds text | `has_text` | Untouched; `ocrmypdf` never starts. |
+| `ocrmypdf` exit 0 | `ocred` | The output replaces the original, keeping its owner, mode, and mtime. The original bytes are kept under `<state_dir>/originals` when `ocr.keep_originals` is set, and can be put back later; see [Kept originals](#kept-originals). |
+| `ocrmypdf` exit 6, or stderr mentions `TaggedPDFError` | `has_text` | Untouched. `ocrmypdf` found a text layer (an office-generated PDF sometimes only reports this via the error message, not the exit code). |
 | stderr mentions `DigitalSignatureError` | `signed` | Untouched. Signed PDFs are refused outright: OCR would invalidate the signature. |
 | stderr mentions `EncryptedPdfError` | `encrypted` | Untouched. |
-| Over `ocr.max_mb`, or matched by `ocr.exclude_globs` | `too_big` / `excluded` | Untouched, never even handed to `ocrmypdf`. |
 | Killed after `OCR_TIMEOUT_SECONDS` (default 900) | `timeout` | Untouched. |
 | Anything else | `failed`, with the last few lines of stderr as `detail` | Untouched. |
 
-Every outcome, including failures, is written to `idx.ocr_log` keyed on
-`(root_id, path, size, mtime_ns)`. This is the done-log: the next pass skips a
-file whose key is already present, so a large tree with a handful of scanned
-PDFs is only ever OCR'd once, and a `failed` result is not retried on every
-single pass either (only once the file itself changes). `ocrmypdf` also runs
-with `--skip-big 50` (50 megapixels per page, independent of the PDF megabyte
-limit) as a page-level guard against runaway memory use on a huge scanned page,
+Every outcome, including failures, is written to `idx.ocr_log` with the content's `sha256`.
+This is the done-log: the next pass leaves out a PDF whose digest has a row, so a large tree
+with a handful of scanned PDFs is only ever OCR'd once, and a `failed` result is not retried
+on every single pass either (only once the file itself changes). An `ocred` row carries the
+digest of OCR's output, which the indexer reads back after the rewrite, so a copy of the same
+scan elsewhere still gets its own text layer. Rows also keep the `(root_id, path, size,
+mtime_ns)` the file had, their unique key, which is what [kept originals](#kept-originals)
+compare a live file with. Rows written before the digest existed have none and mark nothing
+done. `ocrmypdf` also runs with `--skip-big 50` (50 megapixels per page, independent of the
+PDF megabyte limit) as a page-level guard against runaway memory use on a huge scanned page,
 in addition to the whole-file size cap applied before the subprocess is even started.
+
+### A file that changes meanwhile
+
+Nothing is recorded or written unless the file is still the version OCR read: same device,
+inode, size, mtime and ctime as the `stat` taken before it was read. Any write changes the
+ctime, which no client can set, and fdrive's API publishes uploads and saves by renaming over
+the path, which changes the inode. A decision on a file that changed is dropped; a rewrite is
+dropped if the file changed by the time its original is copied (from the same open file) or
+right before the `os.replace`, and the newer version stays. The next pass looks at the new
+version once the index has read it. The API does not take OCR's per-path lock (its storage
+reports changes only after they happen), so what is left is:
+
+- a write landing between that last check and the `os.replace`, a few system calls apart, is
+  replaced by the OCR output;
+- an edit in place that keeps the size and mtime and lands in the same filesystem timestamp
+  tick (milliseconds) as the file's previous change keeps even the ctime;
+- a change after the original was kept but before the replace leaves that kept copy behind; it
+  holds the version OCR read and lists as `changed`.
 
 ## Telling the indexer
 
@@ -98,8 +149,8 @@ INDEX_ROOTS=files=/data,photos=/roots/photos
 
 Each name is upserted into the shared `idx.roots` table (same rows the indexer
 uses), so `idx.ocr_log.root_id` lines up with `idx.files.root_id`. Every
-configured root is walked in the same pass; there is one `idx.ocr_runs` row
-per pass covering all of them, not one per root.
+configured root's PDFs are read from the index in the same pass; there is one
+`idx.ocr_runs` row per pass covering all of them, not one per root.
 
 ## Internal HTTP API
 
@@ -121,10 +172,11 @@ Only `/run` is gated on the `pdfOcr` feature. Everything under `/originals`
 keeps working while OCR is switched off, because switching it off is exactly
 what an operator does first when a pass has damaged a file they now need back.
 
-`seen` in a run summary counts every candidate PDF the walk encountered,
-including ones already in the done-log; `ocred` / `skipped` / `failed` only
-count files actually decided on this pass (`too_big`, `excluded`, `has_text`,
-`signed`, and `encrypted` all fold into `skipped`).
+`seen` in a run summary counts every candidate the pass went through: PDFs it
+had not decided on, outside the exclude rules and the size cap. `ocred` /
+`skipped` / `failed` only count files actually decided on this pass (`has_text`,
+`signed`, and `encrypted` fold into `skipped`); a candidate that changed, or
+whose content a copy earlier in the pass settled, counts as seen only.
 
 The admin **Logs** sheet on System > OCR reads `idx.ocr_runs` and failed or timed-out
 `idx.ocr_log` rows, alongside API-side events such as settings saves and run requests.
@@ -167,12 +219,12 @@ during the copy is refused even if the caller opted into overwriting the
 previously inspected version or recreating a missing file.
 
 OCR and restore commits also share a PostgreSQL lock per root/path. OCR runs
-its subprocess outside that lock, then refreshes the done-log while holding it
-before committing output. Cache misses also consult the current done-log, so
-a pass that started before a restore cannot undo it. Ordinary storage writes
-do not participate in this OCR lock; their concurrent edits are checked
-optimistically immediately before replacement. Lock waits and restore copies
-run off the HTTP event loop.
+its subprocess outside that lock, then checks the done-log for the content
+while holding it before committing output, so a pass that listed a file before
+a restore cannot undo it. Ordinary storage writes do not participate in this
+OCR lock; their concurrent edits are checked immediately before replacement
+(see [A file that changes meanwhile](#a-file-that-changes-meanwhile)). Lock
+waits and restore copies run off the HTTP event loop.
 
 The state of the file at a kept original's source path decides what a restore
 means. A rewrite keeps the source's mtime; an OCR result with another mtime
@@ -185,12 +237,13 @@ belongs to another revision and requires overwrite consent:
 | `changed` | the file matches neither: edited or replaced after OCR ran | needs `allow_overwrite_changed` |
 | `missing` | nothing is at that path any more | needs `allow_recreate` |
 
-A successful restore records an `idx.ocr_log` row for the *restored* file's own
-`(path, size, mtime_ns)` key with status `restored`. Without it the next pass
-would see a key it has never decided on and OCR the file straight back again,
-which is what made the old manual "copy it back over the PDF yourself"
-procedure silently undo itself. The kept copy is not deleted, so a restore can
-be repeated, and the pre-rewrite row for the OCR output is left alone. The restored path
+A successful restore records an `idx.ocr_log` row for the *restored* file's
+`(path, size, mtime_ns)` and the digest of the bytes it put back, with status
+`restored`. Without it the next pass would see content it has never decided on
+and OCR the file straight back again, which is what made the old manual "copy
+it back over the PDF yourself" procedure silently undo itself. The same content
+anywhere else counts as decided too. The kept copy is not deleted, so a restore
+can be repeated, and the row for the OCR output is left alone. The restored path
 is queued for the indexer like a rewrite.
 
 A restore is refused, never half-applied, when the sidecar cannot be resolved,
@@ -265,18 +318,19 @@ Pure modules (`schedule.py`, `decide.py`, `rules.py`, `settings.py`,
 `stats.py`, `originals.py`) have no I/O and are covered at 100%. I/O modules
 (`db.py`, `runner.py`, `restore.py`, `server.py`, `main.py`) are tested against a real Postgres via
 `testcontainers`, with the repo's own `packages/db/drizzle/*.sql` migrations
-applied in a fixture, and a fake `ocrmypdf` executable
-(`tests/fixtures/ocrmypdf`) placed first on `PATH` by an autouse fixture in
-`tests/conftest.py`. The fake reads a marker from the first line of its input
-file (`OK`, `HASTEXT`, `TAGGED`, `SIGNED`, `ENCRYPTED`, `FAIL`, `HANG`) and
-exits accordingly, so no test needs a real scanned PDF or the real (slow)
-tool.
+applied in a fixture, and fake `ocrmypdf` and `pdftotext` executables
+(`tests/fixtures/`) placed first on `PATH` by an autouse fixture in
+`tests/conftest.py`. The fakes read a marker from the first line of their input
+file (`OK`, `HASTEXT`, `TAGGED`, `SIGNED`, `ENCRYPTED`, `FAIL`, `HANG`,
+`UNREADABLE`) and act accordingly, so no test needs a real scanned PDF or the
+real (slow) tools. `index_pdfs` in the same file stands in for the indexer,
+writing the `idx.files` rows a pass reads.
 
 ```sh
 services/ocr/scripts/test-in-docker.sh
 ```
 
-builds the service's own Docker image (the only place `ocrmypdf` and its
+builds the service's own Docker image (the only place `ocrmypdf`, `pdftotext` and the
 Swedish/English tesseract data are actually installed) and runs the same
 suite inside it, using the host's Docker socket so `testcontainers` can start
 its own Postgres from inside the container. CI runs the suite natively on

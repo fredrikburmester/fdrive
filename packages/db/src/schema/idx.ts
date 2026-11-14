@@ -300,6 +300,14 @@ export const ocrLog = idxSchema.table(
     path: text("path").notNull(),
     size: bigint("size", { mode: "number" }).notNull(),
     mtimeNs: bigint("mtime_ns", { mode: "bigint" }).notNull(),
+    /**
+     * The content OCR decided on, as `idx.files.sha256`: a PDF whose digest
+     * has a row here is done wherever it lies, so a move or a restore from
+     * Trash is not processed again. For a rewrite it is the digest of OCR's
+     * output, so a copy of the scan elsewhere still gets its own text layer.
+     * Null on rows written before OCR keyed its work by content.
+     */
+    sha256: text("sha256"),
     status: text("status").notNull(),
     detail: text("detail"),
     at: timestamp("at", { withTimezone: true }).defaultNow(),
@@ -308,6 +316,7 @@ export const ocrLog = idxSchema.table(
   // (`status in ('failed','timeout') [and at < ?] order by at desc nulls last`).
   // `status` leads because it is the equality side; `at` follows in the
   // order the feed asks for so the index serves the range and the sort.
+  // OCR looks up a digest for every PDF it considers.
   (table) => [
     unique("ocr_log_root_id_path_size_mtime_ns_unique").on(
       table.rootId,
@@ -316,6 +325,7 @@ export const ocrLog = idxSchema.table(
       table.mtimeNs,
     ),
     index("ocr_log_status_at_idx").on(table.status, table.at.desc().nullsLast()),
+    index("ocr_log_sha256_idx").on(table.sha256),
   ],
 );
 

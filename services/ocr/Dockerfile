@@ -1,8 +1,10 @@
 # Base image ships ocrmypdf itself in an isolated venv at /app/.venv (built with
 # uv, no pip inside it) and runs as a non-root "app" user (uid 1000, the default
 # owner of the files folder, so bind-mounted roots stay writable). We add
-# Swedish and English tesseract data, then install this package into its own
-# venv rather than trying to inject pip into the base image's venv.
+# Swedish and English tesseract data and poppler's `pdftotext`, which finds the
+# PDFs that already have text without starting ocrmypdf, then install this
+# package into its own venv rather than trying to inject pip into the base
+# image's venv.
 #
 # Pinned to ocrmypdf 17.11.0 by tag and digest below, so a rebuild never silently
 # picks up a new ocrmypdf release or base image without a deliberate bump here.
@@ -12,6 +14,7 @@ USER root
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
       tesseract-ocr-swe tesseract-ocr-eng \
+      poppler-utils \
       python3-venv \
       curl \
     && rm -rf /var/lib/apt/lists/*

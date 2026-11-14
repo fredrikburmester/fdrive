@@ -1,15 +1,17 @@
 """All SQL. This service never creates or alters tables: schema ownership lives
 in `packages/db/drizzle/*.sql`. It reads `app.settings` (shared with the
-indexer) and `idx.roots` (upserting by name, same as the indexer), and owns
-`idx.ocr_log` (the done-log) and `idx.ocr_runs` (nightly pass history). It
-journals the files it rewrites in `idx.changes`, as the API does its own.
+indexer), `idx.roots` (upserting by name, same as the indexer) and the PDFs the
+indexer recorded in `idx.files`, and owns `idx.ocr_log` (the done-log) and
+`idx.ocr_runs` (nightly pass history). It journals the files it rewrites in
+`idx.changes`, as the API does its own.
 """
 
 from __future__ import annotations
 
 import time
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
+from dataclasses import dataclass
 
 import psycopg
 
@@ -77,21 +79,40 @@ def read_settings(conn: psycopg.Connection) -> dict[str, object]:
         return {r[0]: r[1] for r in cur.fetchall()}
 
 
-def done_keys(conn: psycopg.Connection, root_id: int) -> set[tuple[str, int, int]]:
-    """Every `(path, size, mtime_ns)` already recorded for this root: the
-    done-log a pass consults so unchanged files are never reprocessed."""
-    with conn.cursor() as cur:
-        cur.execute('SELECT path, size, mtime_ns FROM "idx"."ocr_log" WHERE root_id = %s', (root_id,))
-        return {(r[0], int(r[1]), int(r[2])) for r in cur.fetchall()}
+@dataclass(frozen=True)
+class IndexedPdf:
+    """A PDF as the indexer last read it: root-relative `path`, and the `size`,
+    `mtime_ns` and content digest it had then."""
+
+    path: str
+    size: int
+    mtime_ns: int
+    sha256: str
 
 
-def is_done(conn: psycopg.Connection, root_id: int, path: str, size: int, mtime_ns: int) -> bool:
-    """Refresh a cache miss: a restore may have added this key during the pass."""
+def pdf_candidates(conn: psycopg.Connection, root_id: int, reserved: Sequence[str]) -> list[IndexedPdf]:
+    """The PDFs a pass considers for this root, by path: every live PDF the index
+    holds outside the folders named in `reserved` (any segment, any case) whose
+    content this service has not decided on yet, wherever it decided on it."""
     with conn.cursor() as cur:
         cur.execute(
-            'SELECT 1 FROM "idx"."ocr_log" WHERE root_id = %s AND path = %s AND size = %s AND mtime_ns = %s',
-            (root_id, path, size, mtime_ns),
+            """
+            SELECT f.path, f.size, f.mtime_ns, f.sha256 FROM "idx"."files" f
+            WHERE f.root_id = %s AND f.ext = '.pdf' AND f.deleted_at IS NULL AND f.sha256 IS NOT NULL
+              AND NOT (string_to_array(lower(f.path), '/') && %s::text[])
+              AND NOT EXISTS (SELECT 1 FROM "idx"."ocr_log" l WHERE l.sha256 = f.sha256)
+            ORDER BY f.path
+            """,
+            (root_id, list(reserved)),
         )
+        return [IndexedPdf(str(r[0]), int(r[1]), int(r[2]), str(r[3])) for r in cur.fetchall()]
+
+
+def is_done(conn: psycopg.Connection, sha256: str) -> bool:
+    """Whether this content was decided on since a pass listed it: by a copy of it
+    earlier in the same pass, or by a restore."""
+    with conn.cursor() as cur:
+        cur.execute('SELECT 1 FROM "idx"."ocr_log" WHERE sha256 = %s LIMIT 1', (sha256,))
         return cur.fetchone() is not None
 
 
@@ -101,7 +122,8 @@ def ocr_file_lock(conn: psycopg.Connection, root_id: int, path: str) -> Iterator
 
     Take this before the backup gate. The two-int key space is separate from
     the backup gate's bigint keys; a hash collision only serializes extra files.
-    External storage writers do not take this lock, so callers also recheck stat.
+    fdrive's API and other writers do not take this lock, so callers also check
+    right before they write that the file is still the version they read.
     """
     key = f"{root_id}:{path}"
     with conn.cursor() as cur:
@@ -119,18 +141,22 @@ def record_ocr_log(
     path: str,
     size: int,
     mtime_ns: int,
+    sha256: str,
     status: str,
     detail: str | None,
 ) -> None:
+    """Records a decision on the content `sha256`, found at `path` with `size` and
+    `mtime_ns`. The digest is what marks the content done; the path and stamp are
+    what kept originals compare a live file with."""
     with conn.cursor() as cur:
         cur.execute(
             """
-            INSERT INTO "idx"."ocr_log" (root_id, path, size, mtime_ns, status, detail, at)
-            VALUES (%s, %s, %s, %s, %s, %s, now())
+            INSERT INTO "idx"."ocr_log" (root_id, path, size, mtime_ns, sha256, status, detail, at)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, now())
             ON CONFLICT (root_id, path, size, mtime_ns) DO UPDATE SET
-              status = EXCLUDED.status, detail = EXCLUDED.detail, at = now()
+              sha256 = EXCLUDED.sha256, status = EXCLUDED.status, detail = EXCLUDED.detail, at = now()
             """,
-            (root_id, path, size, mtime_ns, status, detail),
+            (root_id, path, size, mtime_ns, sha256, status, detail),
         )
 
 

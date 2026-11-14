@@ -1,11 +1,13 @@
 """Shared fixtures for the I/O tests: a real Postgres (via testcontainers) with
 the repo's own Drizzle migrations applied, matching what this service runs
-against in production, and a fake `ocrmypdf` executable placed first on PATH so
-no test ever needs a real scanned PDF or the real (slow) tool.
+against in production, fake `ocrmypdf` and `pdftotext` executables placed first
+on PATH so no test ever needs a real scanned PDF or the real (slow) tools, and
+`index_pdfs`, which stands in for the indexer.
 """
 
 from __future__ import annotations
 
+import hashlib
 import os
 import re
 from collections.abc import Iterator
@@ -88,9 +90,40 @@ def _clean_tables(postgres_dsn: str) -> Iterator[None]:
 
 @pytest.fixture(autouse=True)
 def _fake_ocrmypdf_on_path(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Puts `tests/fixtures` (the fake `ocrmypdf`) first on `PATH` for every
-    test, matching how `scripts/test-in-docker.sh` and CI run against it."""
+    """Puts `tests/fixtures` (the fake `ocrmypdf` and `pdftotext`) first on
+    `PATH` for every test, matching how `scripts/test-in-docker.sh` and CI run
+    against them."""
     monkeypatch.setenv("PATH", f"{FIXTURES_DIR}{os.pathsep}{os.environ.get('PATH', '')}")
+
+
+def index_pdfs(conn: psycopg.Connection, root_id: int, root_dir: Path | str) -> None:
+    """What the indexer would have recorded for `root_dir`: one live `idx.files`
+    row per PDF below it, with its size, mtime and digest, replacing a row the
+    path already had. Walks every folder; which of them OCR skips is OCR's rule."""
+    for dirpath, _dirnames, filenames in os.walk(root_dir):
+        for name in filenames:
+            if not name.lower().endswith(".pdf") or name.startswith("._"):
+                continue
+            abs_path = os.path.join(dirpath, name)
+            info = os.stat(abs_path)
+            with open(abs_path, "rb") as handle:
+                digest = hashlib.file_digest(handle, "sha256").hexdigest()
+            conn.execute(
+                """
+                INSERT INTO "idx"."files" (root_id, path, name, ext, size, mtime_ns, sha256)
+                VALUES (%s, %s, %s, '.pdf', %s, %s, %s)
+                ON CONFLICT (root_id, path) DO UPDATE SET
+                  size = EXCLUDED.size, mtime_ns = EXCLUDED.mtime_ns, sha256 = EXCLUDED.sha256, deleted_at = NULL
+                """,
+                (
+                    root_id,
+                    os.path.relpath(abs_path, root_dir).replace(os.sep, "/"),
+                    name,
+                    info.st_size,
+                    info.st_mtime_ns,
+                    digest,
+                ),
+            )
 
 
 class Journal:
