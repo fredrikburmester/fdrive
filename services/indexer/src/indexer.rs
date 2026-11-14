@@ -6,7 +6,7 @@ use std::collections::{HashMap, HashSet};
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicI64, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError, RwLock};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError, RwLock};
 use std::thread::LocalKey;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -193,6 +193,9 @@ pub struct RootContext {
     /// Set when the root needs a scan before its next one is due: the journal's reader
     /// found rows it never read were pruned.
     scan_requested: AtomicBool,
+    /// The name index every name row this root writes is reported to; unset where nothing
+    /// searches names, as in most tests.
+    pub names: OnceLock<Arc<crate::names::NameIndex>>,
 }
 
 /// How long a verdict on the files folder's marker is reused by default.
@@ -244,6 +247,7 @@ impl RootContext {
             files_folder_recheck: FILES_FOLDER_RECHECK,
             stamp_settle: STAMP_SETTLE,
             scan_requested: AtomicBool::new(false),
+            names: OnceLock::new(),
             cfg,
         }
     }
@@ -413,6 +417,20 @@ impl RootContext {
     /// Whether a scan was requested since the last call.
     pub fn take_scan_request(&self) -> bool {
         self.scan_requested.swap(false, Ordering::SeqCst)
+    }
+
+    /// Tell the name index this root's rows at `path` changed (with `subtree`, also those below it).
+    pub fn names_touched(&self, path: &str, subtree: bool) {
+        if let Some(names) = self.names.get() {
+            names.touch(self.root_id, path, subtree);
+        }
+    }
+
+    /// Tell the name index to read every row of this root again.
+    pub fn names_rebuild(&self) {
+        if let Some(names) = self.names.get() {
+            names.rebuild(self.root_id);
+        }
     }
 }
 
@@ -691,6 +709,7 @@ pub fn process_stages(
             stamp,
         )
     })?;
+    ctx.names_touched(rel_path, false);
 
     let mut features = ctx.values();
     if only_feature == Some("textSearch") {
@@ -1559,6 +1578,9 @@ fn scan_inner(ctx: &Arc<RootContext>, operations: &HashMap<String, Op>) -> ScanR
         Vec::new()
     };
     let deleted = vanished.len() as i64;
+    for path in &vanished {
+        ctx.names_touched(path, false);
+    }
     if let Some(source) = journal_files {
         let gone: Vec<NewChange> = vanished.iter().map(|path| NewChange::path(path)).collect();
         journal::record_as(ctx, source, &gone);
@@ -1569,6 +1591,7 @@ fn scan_inner(ctx: &Arc<RootContext>, operations: &HashMap<String, Op>) -> ScanR
         .with(|c| db::sync_folders_changes(c, ctx.root_id, &folders, sweep))
     {
         Ok(changes) => {
+            touch_folders(ctx, &changes);
             if let Some(source) = journal_folders {
                 journal::record_as(ctx, source, &folder_changes(&changes));
             }
@@ -1594,6 +1617,11 @@ fn scan_inner(ctx: &Arc<RootContext>, operations: &HashMap<String, Op>) -> ScanR
         ctx.name,
         t0.elapsed().as_secs_f64()
     ));
+    // A completed walk is a good moment to read the names again whole: it catches modification
+    // times of unchanged folders and anything the index missed.
+    if traversal_complete {
+        ctx.names_rebuild();
+    }
     ScanResult {
         seen,
         changed,
@@ -1745,6 +1773,9 @@ pub fn watch_mark_deleted(ctx: &RootContext, rel_path: &str, is_dir: bool) -> us
     let _guard = ctx.path_locks.get(rel_path);
     match ctx.db.with(|c| db::delete_paths(c, ctx.root_id, rel_path, is_dir)) {
         Ok(deleted) => {
+            if !deleted.files.is_empty() || deleted.folders > 0 {
+                ctx.names_touched(rel_path, is_dir);
+            }
             if !deleted.files.is_empty() {
                 emit_event(ctx, EventKind::Deleted, rel_path, None);
             }
@@ -1793,8 +1824,18 @@ pub fn record_folders(ctx: &RootContext, found: &[db::FolderRow], sweep: Option<
         return;
     }
     match ctx.db.with(|c| db::sync_folders_changes(c, ctx.root_id, found, sweep)) {
-        Ok(changes) => journal::record(ctx, folder_changes(&changes)),
+        Ok(changes) => {
+            touch_folders(ctx, &changes);
+            journal::record(ctx, folder_changes(&changes));
+        }
         Err(e) => log(&format!("[{}] folder sync failed: {}", ctx.name, describe(&e))),
+    }
+}
+
+/// Tell the name index about every folder row added or dropped.
+fn touch_folders(ctx: &RootContext, changes: &db::FolderChanges) {
+    for path in changes.added.iter().chain(&changes.dropped) {
+        ctx.names_touched(path, false);
     }
 }
 
@@ -1858,6 +1899,10 @@ pub fn watch_rename(ctx: &RootContext, old: &str, new: &str, is_dir: bool) -> us
     });
     match moved {
         Ok(moved) => {
+            if moved.files + moved.folders > 0 {
+                ctx.names_touched(old, is_dir);
+                ctx.names_touched(new, is_dir);
+            }
             if moved.files > 0 {
                 emit_event(ctx, EventKind::Moved, old, Some(new));
             }

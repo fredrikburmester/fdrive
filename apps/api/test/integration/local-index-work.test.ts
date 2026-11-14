@@ -5,6 +5,7 @@ import { createLocalModule, type IndexChange, type LocalUsers } from "@fdrive/lo
 import { sql } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { type ChangeQueue, createChangeQueue } from "../../src/local/change-queue.js";
+import { createNameIndexClient } from "../../src/search/name-index.js";
 import { LocalIndexerStack } from "./helpers/local-indexer-stack.js";
 
 const users: LocalUsers = {
@@ -216,6 +217,40 @@ describe("changes fdrive makes, through the real indexer with its watcher off", 
     );
     await expect.poll(found, { timeout: 15_000, interval: 100 }).toEqual([]);
     expect(await count("idx.scans")).toBe(scans);
+    expect(failures).toEqual([]);
+  });
+
+  it("finds a new folder by a name typed with a typo, and follows it when it moves", async () => {
+    const roots = await createIndexQueries(connection.db).rootIdsByName();
+    const names = createNameIndexClient({
+      baseUrl: await stack.indexerUrl(),
+      fetch: globalThis.fetch,
+    });
+    const found = async () => {
+      const hits = await names.search({
+        query: "Microlär",
+        scopes: [{ rootId: roots.files ?? -1, fsPrefix: "/alice" }],
+        exclude: { prefixes: [], names: [] },
+        files: 5,
+        folders: 5,
+      });
+      return hits?.folders.map((hit) => hit.path.normalize("NFC")) ?? null;
+    };
+
+    await storage.mkdir("/Kurser/Mikrolärande", { parents: true });
+    await settle({ kind: "changed", path: "alice/Kurser" }, { "alice/Kurser/Mikrolärande": true });
+    await expect
+      .poll(found, { timeout: 15_000, interval: 100 })
+      .toEqual(["alice/Kurser/Mikrolärande"]);
+
+    await storage.move("/Kurser/Mikrolärande", "/Mikrolärande 2026");
+    await settle(
+      { kind: "moved", path: "alice/Kurser/Mikrolärande", target: "alice/Mikrolärande 2026" },
+      { "alice/Kurser/Mikrolärande": false, "alice/Mikrolärande 2026": true },
+    );
+    await expect
+      .poll(found, { timeout: 15_000, interval: 100 })
+      .toEqual(["alice/Mikrolärande 2026"]);
     expect(failures).toEqual([]);
   });
 });

@@ -315,6 +315,7 @@ pub fn clear_index(contexts: &[Arc<RootContext>], scope: Option<&str>, job: &Job
                 job.advance(deleted.is_ok(), false);
             }
         }
+        ctx.names_rebuild();
     }
     Ok(())
 }
@@ -538,6 +539,7 @@ pub fn retry_file(ctx: &Arc<RootContext>, path: &str, feature: &str) -> (bool, b
                             },
                         )
                     })?;
+                    ctx.names_touched(path, false);
                 }
                 if feature == "thumbnails" {
                     return Ok(Some(process_thumbnails(

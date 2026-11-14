@@ -32,15 +32,21 @@ Results are ordered by what the query most likely meant, then by age. A file who
 the query comes first, then one whose name holds every query word, then one whose name and
 folders hold them between them; all of these rank above a file found by its content alone.
 Words match from their start, ignoring case, punctuation and how accents are encoded, so a
-name macOS stored with decomposed accents matches the same word typed normally. Every score
-is then weighted by modification time: full weight today, falling toward 40% with a half-life
+name macOS stored with decomposed accents matches the same word typed normally.
+
+A name typed with a typo is found too: a word of five to eight letters may hold one typo, and
+a longer word two (a letter changed, added, dropped, or two neighbours swapped), so "Microlär"
+finds "Mikrolärande". An a typed for an ä counts as one typo. These matches come from the
+indexer's name index and rank below every name spelled as typed, however new, but above a file
+found by its content alone. While the indexer cannot answer, names are found only as typed.
+Every score is then weighted by modification time: full weight today, falling toward 40% with a half-life
 of 180 days. A recent file therefore beats an older one that matched about as well, and an
 old file still surfaces when it matches clearly better. The constants live in
 [ranking.ts](../packages/core/src/search/ranking.ts).
 
 The Folders section lists up to five folders whose own name holds every query word, empty
 ones included, ranked the same way: by how the name matches, then by the folder's
-modification time. The indexer records every folder it walks in `idx.folders`, so a folder
+modification time. A folder whose name matches only with a typo comes after every other. The indexer records every folder it walks in `idx.folders`, so a folder
 made a moment ago in fdrive is found at once, as is one made over SMB once the watcher sees
 it. Your own home folder, and the folder a "This folder only" search starts in, are never
 listed, and a type filter hides the section, since folders have no type.
