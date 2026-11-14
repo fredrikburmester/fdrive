@@ -193,8 +193,10 @@ transaction commits remains uncertain; an effect failure after it commits leaves
 completed. Replaying or acknowledging that receipt never republishes the file.
 
 The API drains the durable queue at startup, after saves and every five seconds. Each job
-updates tags, favorites, recents, folder views and mapped Office registrations atomically,
-then commits before dispatching its filesystem notification. Delivery is a second durable
+updates tags, favorites, recents, folder views, mapped Office registrations and the paths of
+public links atomically, then commits before dispatching its filesystem notification. Links
+carry no revisions: what they do is decided before publication from where the item really
+moves, into and out of the Mac's Trash too. Delivery is a second durable
 pending phase: retries send only the notification and never reapply metadata. Before another
 native publication, older pending work for the identity must finish; other identities continue. Recovery bounds lock waits to two seconds and individual
 statements to fifteen seconds. Failed jobs use exponential backoff, capped at five minutes.

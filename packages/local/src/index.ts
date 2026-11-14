@@ -28,6 +28,7 @@ export {
 } from "./module.js";
 export type { SharedFolder, SharedGrant, UserStorageOptions } from "./shared.js";
 export {
+  closedToShares,
   createUserStorage,
   namedSharedGrants,
   SHARED_WITH_ME,

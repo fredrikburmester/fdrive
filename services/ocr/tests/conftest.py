@@ -91,3 +91,58 @@ def _fake_ocrmypdf_on_path(monkeypatch: pytest.MonkeyPatch) -> None:
     """Puts `tests/fixtures` (the fake `ocrmypdf`) first on `PATH` for every
     test, matching how `scripts/test-in-docker.sh` and CI run against it."""
     monkeypatch.setenv("PATH", f"{FIXTURES_DIR}{os.pathsep}{os.environ.get('PATH', '')}")
+
+
+class Journal:
+    """What the indexer would receive from this service: `idx.changes` rows and
+    `NOTIFY idx_changes` payloads, read through a connection that listens the
+    way the indexer's journal thread does."""
+
+    def __init__(self, dsn: str, listener: psycopg.Connection) -> None:
+        self._dsn = dsn
+        self._listener = listener
+
+    def rows(self) -> list[tuple[object, ...]]:
+        # Not on the listener: a query there could consume a pending notification.
+        with psycopg.connect(self._dsn, autocommit=True) as conn, conn.cursor() as cur:
+            cur.execute(
+                "SELECT root_id, path, target_path, source, sha256, size, mtime_ns, inode, ctime_ns "
+                'FROM "idx"."changes" ORDER BY id'
+            )
+            return list(cur.fetchall())
+
+    def notifications(self) -> list[str]:
+        """Payloads delivered since the last call. Postgres sends them on commit,
+        before the writer's call returns, so a short wait collects them all."""
+        return [notify.payload for notify in self._listener.notifies(timeout=0.5) if notify.channel == "idx_changes"]
+
+
+@pytest.fixture
+def journal(postgres_dsn: str) -> Iterator[Journal]:
+    listener = psycopg.connect(postgres_dsn, autocommit=True)
+    try:
+        listener.execute("LISTEN idx_changes")
+        yield Journal(postgres_dsn, listener)
+    finally:
+        listener.close()
+
+
+@pytest.fixture
+def failing_journal(postgres_dsn: str) -> Iterator[None]:
+    """Makes every `idx.changes` insert fail inside Postgres, as a broken or
+    unreachable journal would, until the test ends."""
+    conn = psycopg.connect(postgres_dsn, autocommit=True)
+    try:
+        conn.execute(
+            "CREATE FUNCTION public.fail_journal() RETURNS trigger LANGUAGE plpgsql AS "
+            "$$ BEGIN RAISE EXCEPTION 'idx.changes is unavailable'; END $$"
+        )
+        conn.execute(
+            'CREATE TRIGGER fail_journal BEFORE INSERT ON "idx"."changes" '
+            "FOR EACH ROW EXECUTE FUNCTION public.fail_journal()"
+        )
+        yield
+    finally:
+        conn.execute('DROP TRIGGER IF EXISTS fail_journal ON "idx"."changes"')
+        conn.execute("DROP FUNCTION IF EXISTS public.fail_journal()")
+        conn.close()

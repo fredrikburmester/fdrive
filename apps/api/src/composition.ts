@@ -57,6 +57,7 @@ import type { AppConfig } from "./config.js";
 import { type Subsystem, type SubsystemProbe, startupSummaryLines } from "./config-keys.js";
 import { createDesktopChanges } from "./desktop/changes.js";
 import { createDesktopEffectContext, createDesktopEffectsWorker } from "./desktop/effects.js";
+import { DESKTOP_INTERNAL_ROOT } from "./desktop/internal-root.js";
 import { withDesktopMetadata } from "./desktop/metadata.js";
 import { createDesktopRetention, DEFAULT_DESKTOP_RETENTION } from "./desktop/retention.js";
 import { registerDesktopRoutes } from "./desktop/routes.js";
@@ -83,6 +84,7 @@ import { createIndexerExtractClient } from "./mcp/indexer-client.js";
 import { registerMcpRoutes } from "./mcp/routes.js";
 import { registerMetadataRoutes } from "./metadata/routes.js";
 import { createMetadataService } from "./metadata/service.js";
+import { withTrashMoves } from "./metadata/trash-moves.js";
 import { extractClientIp } from "./net.js";
 import { configuredOfficeProduct, officeConfig } from "./office/config.ts";
 import { allowsOfficeEdit } from "./office/edit-policy.ts";
@@ -113,6 +115,7 @@ import { createSetupService } from "./setup/service.js";
 import { createSetupTokenGuard, generateSetupToken } from "./setup/token.js";
 import { createShareCredentialCodec } from "./shares/credentials.ts";
 import { createShareLimiter } from "./shares/limiter.ts";
+import { createShareMoves } from "./shares/moves.ts";
 import { createScryptSharePasswords } from "./shares/passwords.js";
 import { registerSharesRoutes } from "./shares/routes.ts";
 import { createSharesService } from "./shares/service.ts";
@@ -212,7 +215,18 @@ export async function composeApp(
           error: (message) => logger.error(message),
         });
   await filesFolder?.verify();
-  const modules = deps.modules ?? deploymentModules(config, repos, passwords, changes, filesFolder);
+  /**
+   * Folders in each user's files no share reaches: their Trash while it is on
+   * and the Mac's bookkeeping, which holds its Trash. Read per request, like
+   * the rest of Trash; `trashSettings` exists by the time it is asked.
+   */
+  const closedFolders = async (providerId: string): Promise<readonly string[]> => {
+    const settings = await trashSettings.configuration(providerId);
+    return [...(settings.enabled ? [settings.path] : []), DESKTOP_INTERNAL_ROOT];
+  };
+  const modules =
+    deps.modules ??
+    deploymentModules(config, repos, passwords, changes, filesFolder, closedFolders);
   const backups = createBackupModule(config, modules);
   await backups.start();
 
@@ -317,6 +331,7 @@ export async function composeApp(
     clock,
     resolveTrashSettings: (identityId) => trashSettings.forIdentity(identityId),
   });
+  const shareRepo = createShareRepo(db);
   const admitActivity = createActivityAdmission({
     reads: activityReads,
     repo: activityRepo,
@@ -324,7 +339,7 @@ export async function composeApp(
     storageFactory,
     secret: config.fdriveMasterKey,
     clock,
-    shares: createShareRepo(db),
+    shares: shareRepo,
   });
   const pinnedStorageFactory = createPinnedStorageFactory({
     providers: providerService,
@@ -359,6 +374,7 @@ export async function composeApp(
     providerId: async () => (await localProvider())?.id ?? null,
     storageFor: storageFactory,
     trashPathFor: (identityId) => trashSettings.pathForIdentity(identityId),
+    closedFolders,
   });
   const scopeResolver = createScopeResolver({
     providers: providerService,
@@ -439,11 +455,30 @@ export async function composeApp(
   const accountsService = createAccountsService(accountDeps);
   const accountViews = createAccountViews(accountDeps);
 
+  // Public links follow the items they name wherever they go, into Trash too.
+  const shareMoves = createShareMoves({
+    shares: shareRepo,
+    ownerPath: (identityId, path) => localGrants.ownerPath(identityId, path),
+  });
   // Metadata (phase 3): tags, favorites, recents. `onMoved`/`onDeleted` are
   // called both from the fs routes below (moves and deletes made through
   // fdrive) and from the indexer listener (changes seen over SFTP or any
   // other client), so metadata survives renames from either source.
-  const metadataService = createMetadataService({ ...repos, followers: [localGrants] });
+  const metadataCore = createMetadataService({
+    ...repos,
+    followers: [localGrants, shareMoves],
+  });
+  /** A login's Trash folder while Trash is on; none for a login removed since. */
+  const trashPathOf = async (identityId: string): Promise<string | null> => {
+    try {
+      return await trashSettings.pathForIdentity(identityId);
+    } catch (error) {
+      if (error instanceof ApiHttpError && error.kind === "unauthorized") return null;
+      throw error;
+    }
+  };
+  // A move into the Trash, whoever reports it, leaves metadata where the item was.
+  const metadataService = withTrashMoves(metadataCore, trashPathOf);
   const desktopRepo = createDesktopRepo(db);
   // Serializes Mac desktop commits per identity; no other fdrive writer takes
   // it. Storage without its own lease is read-only unless this is configured.
@@ -477,12 +512,15 @@ export async function composeApp(
     ...(config.fdriveDesktopStateDir ? { stateDir: config.fdriveDesktopStateDir } : {}),
   });
   const officeFiles = createOfficeFileRepo(db);
-  const fsMetadata = withOfficeMetadata(
-    withDesktopMetadata(metadataService, desktopRepo),
-    officeFiles,
-    repos.identities,
-    scopeResolver.configuredMappings,
-    clock,
+  const fsMetadata = withTrashMoves(
+    withOfficeMetadata(
+      withDesktopMetadata(metadataCore, desktopRepo),
+      officeFiles,
+      repos.identities,
+      scopeResolver.configuredMappings,
+      clock,
+    ),
+    trashPathOf,
   );
   const officeProduct = configuredOfficeProduct(config);
   const officeDiscoveries = new Map<string, ReturnType<typeof createDiscoveryCache>>();
@@ -774,8 +812,22 @@ export async function composeApp(
             change.target ?? change.path,
             change.isDir,
           );
+        }
+        if (change.kind === "restore" && change.eventPath !== undefined) {
+          // A restore is a move out of Trash: shares that followed the item there come back.
+          await fsMetadata.onMoved(
+            principal.identityId,
+            change.eventPath,
+            change.target ?? change.path,
+            change.isDir,
+          );
         } else if (change.kind === "trash") {
-          await fsMetadata.onTrashed(principal.identityId, change.path, change.isDir);
+          await fsMetadata.onTrashed(
+            principal.identityId,
+            change.path,
+            change.isDir,
+            change.trashLeaf ?? null,
+          );
         } else if (change.kind === "copy") {
           fsMetadata.onCopied(principal.identityId, change.path, change.target ?? change.path);
         }
@@ -928,6 +980,7 @@ export async function composeApp(
           effectContext: createDesktopEffectContext(
             repos.identities,
             scopeResolver.configuredMappings,
+            shareMoves.resolve,
           ),
           effects: desktopEffectsWorker,
           storageForIdentity: storageFactory,
@@ -954,7 +1007,7 @@ export async function composeApp(
         thumbnailsEnabled: () => featureService.enabled("thumbnails"),
         service: createSharesService({
           repos,
-          shares: createShareRepo(db),
+          shares: shareRepo,
           providers: providerService,
           storageFor: storageFactory,
           trashPathFor: (identityId) => trashSettings.pathForIdentity(identityId),

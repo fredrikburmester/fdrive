@@ -149,6 +149,29 @@ it("captures trusted Office locations once, handling unmapped paths and ownershi
   await expect(resolve({ ...principal, identityId: randomUUID() }, move)).rejects.toMatchObject({
     kind: "unauthorized",
   });
+  // What public links do is decided here, before publication, from where the item really
+  // moves: into the Mac's Trash too, and out of it from there, not from its original path.
+  const shareMove = vi.fn(async (identityId: string, from: string, to: string) =>
+    to === "/c" ? null : { identityId, from, to },
+  );
+  const deciding = createDesktopEffectContext(repos.identities, mapping, shareMove);
+  expect(await deciding(principal, move, { from: "/a", to: "/b" })).toMatchObject({
+    shareMove: { identityId: identity.id, from: "/a", to: "/b" },
+  });
+  const trashed = { from: "/a", to: "/.fdrive-desktop/x/trash/1" };
+  expect(await deciding(principal, { ...move, trash: true }, trashed)).toMatchObject({
+    office: null,
+    shareMove: { from: "/a", to: "/.fdrive-desktop/x/trash/1" },
+  });
+  expect(
+    await deciding(principal, { ...move, restored: true }, { from: trashed.to, to: "/b" }),
+  ).toMatchObject({ shareMove: { from: trashed.to, to: "/b" } });
+  expect(await deciding(principal, move, { from: "/a", to: "/c" })).toMatchObject({
+    shareMove: null,
+  });
+  for (const moved of [undefined, { from: "/a", to: "/a" }])
+    expect(await deciding(principal, move, moved)).not.toHaveProperty("shareMove");
+  expect(shareMove).toHaveBeenCalledTimes(4);
 });
 
 it("does not wait for another identity's background recovery before admitting a save", async () => {

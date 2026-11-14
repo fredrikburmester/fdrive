@@ -24,4 +24,6 @@ export interface PublicThumbTarget {
   readonly unavailableReason: ReturnType<typeof unavailableReason>;
   /** False when the share has a password the visitor's credential does not open. */
   readonly unlocked: boolean;
+  /** Folders no link may reach (`restrictedRoots`); a thumbnail inside one is refused. */
+  readonly restricted: readonly string[];
 }

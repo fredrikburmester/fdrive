@@ -100,6 +100,8 @@ async function handleMcpRequest(c: Context, deps: McpRoutesDeps): Promise<Respon
     };
   registerMcpTools(server, principal, {
     ...deps.toolDeps,
+    // Trash settings are found by the storage they came with, which the wrapper above replaced.
+    trashPath: trashPathFor(deps.toolDeps, auth.principal),
     activityContext: context,
     activityRequestId: operationId,
   });

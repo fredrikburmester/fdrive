@@ -50,7 +50,8 @@ export function journalRoot(
  * change fdrive makes in the folder is recorded in the change journal, when
  * the indexer reads the folder itself (`journalRoot`). With `guard`, storage
  * is refused while the folder is not this installation's
- * (`createDeploymentFilesFolderGuard`).
+ * (`createDeploymentFilesFolderGuard`). With `closedFolders`, a folder shared
+ * from inside its owner's Trash is refused to the person it is shared with.
  */
 export function deploymentModules(
   config: Pick<AppConfig, "fdriveStorageRoot" | "fdriveIndexRoots">,
@@ -58,6 +59,7 @@ export function deploymentModules(
   passwords: SharePasswords = createScryptSharePasswords(),
   changes?: ChangeQueue,
   guard?: FilesFolderGuard,
+  closedFolders?: (providerId: string) => Promise<readonly string[]>,
 ): ProviderModules {
   const root = config.fdriveStorageRoot;
   if (root === undefined) return createProviderModules();
@@ -69,6 +71,7 @@ export function deploymentModules(
       // When `journaled` names a root, this is the same one: it matches first.
       indexRoot: localIndexRoot(config.fdriveIndexRoots, root),
       ...(guard === undefined ? {} : { guard }),
+      ...(closedFolders === undefined ? {} : { closedFolders }),
       ...(journaled === null || changes === undefined
         ? {}
         : { onIndexChange: (name, change) => changes.record(name, change) }),

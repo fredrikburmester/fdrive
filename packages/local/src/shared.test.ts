@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { bytes, kindOf, read, zipEntries } from "../test/helpers.js";
 import {
+  closedToShares,
   createUserStorage,
   SHARED_WITH_ME,
   type SharedFolder,
@@ -50,6 +51,21 @@ describe("sharedFolderNames", () => {
         { owner: "erin", path: "/", writable: false },
       ]),
     ).toEqual(["Projects (alice)", "Projects (carol)", "Projects (carol, 2)", "Photos", "erin"]);
+  });
+});
+
+describe("closedToShares", () => {
+  it("closes the folders given and fdrive's Trash layout wherever it is", () => {
+    const closed = ["/.trash", "/.fdrive-desktop"];
+    expect(closedToShares("/.trash", closed)).toBe(true);
+    expect(closedToShares("/.trash/.fdrive-move-v1/dir/p/Old/v/1", closed)).toBe(true);
+    expect(closedToShares("/.fdrive-desktop/id/trash/Old", closed)).toBe(true);
+    // Trash turned off or moved: what is still in the old one stays closed.
+    expect(closedToShares("/.trash/.fdrive-move-v1/dir/p/Old/v/1/sub", [])).toBe(true);
+    expect(closedToShares("/Bin/.fdrive-move-v1/dir/p/Old/v/1", ["/.trash"])).toBe(true);
+    expect(closedToShares("/.trash/Old", [])).toBe(false);
+    expect(closedToShares("/.trashy/Old", closed)).toBe(false);
+    expect(closedToShares("/Projects", closed)).toBe(false);
   });
 });
 
@@ -119,6 +135,55 @@ describe("createUserStorage", () => {
       "forbidden",
     );
     expect((await linked.list(`/${SHARED_WITH_ME}`)).map((entry) => entry.name)).toEqual([]);
+  });
+
+  it("refuses a shared folder in its owner's Trash, however the path reaches it", async () => {
+    const trashed = alice(".trash", ".fdrive-move-v1", "dir", "p", "Old", "v", "1");
+    await mkdir(trashed, { recursive: true });
+    await writeFile(join(trashed, "kept.txt"), "kept");
+    await symlink(alice(".trash"), alice("Bin link"));
+    await mkdir(alice(".fdrive-desktop", "id", "trash", "Mac"), { recursive: true });
+    const mounted = (folders: { name: string; dir: string }[], closed?: string[]) =>
+      createUserStorage({
+        home: join(root, "bob"),
+        shared: async () =>
+          folders.map((folder) => ({
+            ...folder,
+            ownerHome: alice(),
+            writable: true,
+            ...(closed === undefined ? {} : { closed }),
+          })),
+      });
+    const folders = [
+      { name: "Old", dir: trashed },
+      { name: "Linked", dir: alice("Bin link") },
+      { name: "Mac", dir: alice(".fdrive-desktop", "id", "trash", "Mac") },
+      { name: "Projects", dir: alice("Projects") },
+    ];
+    const guarded = mounted(folders, [alice(".trash"), alice(".fdrive-desktop")]);
+    expect(await kindOf(guarded.list(`/${SHARED_WITH_ME}/Old`))).toBe("forbidden");
+    expect(await kindOf(guarded.download(`/${SHARED_WITH_ME}/Old/kept.txt`))).toBe("forbidden");
+    expect(await kindOf(guarded.upload(`/${SHARED_WITH_ME}/Old/new.txt`, bytes("x")))).toBe(
+      "forbidden",
+    );
+    expect(await kindOf(guarded.list(`/${SHARED_WITH_ME}/Linked`))).toBe("forbidden");
+    expect(await kindOf(guarded.list(`/${SHARED_WITH_ME}/Mac`))).toBe("forbidden");
+    expect((await guarded.list(`/${SHARED_WITH_ME}`)).map((entry) => entry.name)).toEqual([
+      "Projects",
+    ]);
+    await expect(stat(join(trashed, "new.txt"))).rejects.toThrow();
+
+    // Only the folders given count, and one that does not exist rules nothing out.
+    const elsewhere = mounted(folders, [alice("Bin")]);
+    expect((await elsewhere.list(`/${SHARED_WITH_ME}`)).map((entry) => entry.name).sort()).toEqual([
+      "Linked",
+      "Mac",
+      "Old",
+      "Projects",
+    ]);
+    expect((await mounted(folders).list(`/${SHARED_WITH_ME}/Old`)).map((e) => e.name)).toEqual([
+      "kept.txt",
+    ]);
   });
 
   it("keeps a shared folder's links inside it", async () => {

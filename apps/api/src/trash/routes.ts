@@ -23,6 +23,7 @@ import {
 import { activityRequestContext, recordFsAction } from "../activity/fs-context.js";
 import { activityFailure, type PersonalActivityService } from "../activity/service.js";
 import type { AppHono, AuthedHono } from "../app.js";
+import type { Principal } from "../auth/principal.js";
 import { ApiHttpError } from "../errors.js";
 import type { EventBus } from "../events/bus.js";
 import {
@@ -114,6 +115,22 @@ async function originalPathIsMissing(storage: StorageProvider, path: string): Pr
     if (isStorageError(error) && error.kind === "not_found") return true;
     throw error;
   }
+}
+
+/**
+ * After the leaf `id` is purged for good, what followed the item into Trash
+ * (folders shared with people) ends with it. Should this fail, those records
+ * still name the leaf, which no share reaches and no new item can take.
+ */
+async function forgetPurged(
+  deps: TrashRoutesDeps,
+  principal: Principal,
+  trashPath: string,
+  id: string,
+): Promise<void> {
+  const leaf = trashLeafPath(trashPath, id);
+  const isDir = parseMoveTrashLeaf(trashPath, leaf)?.kind !== "file";
+  await deps.metadata?.onDeleted(principal.identityId, leaf, isDir);
 }
 
 /** Runs `trash.restore(id, ...)`, tagging any `StorageError` it throws with `failedId` before rethrowing. */
@@ -222,6 +239,13 @@ export function registerTrashRoutes(
             entry.kind === "dir",
           );
         }
+        // A restore is a move out of Trash: shares that followed the item there come back with it.
+        await deps.metadata?.onMoved(
+          principal.identityId,
+          trashVirtualPath,
+          entry.path,
+          entry.kind === "dir",
+        );
         restored.push(serializeEntry(entry));
       }
     } finally {
@@ -254,6 +278,7 @@ export function registerTrashRoutes(
         },
         () => runStorageCall(() => trash.purge([id])),
       );
+      await forgetPurged(deps, principal, trashPath, id);
     }
 
     const paths = ids.map((id) => trashLeafPath(trashPath, id));
@@ -266,7 +291,7 @@ export function registerTrashRoutes(
     const principal = c.get("principal");
     const { trash, trashPath } = requireTrash(c, deps);
 
-    if (deps.activity) {
+    if (deps.activity || deps.metadata) {
       const context = activityRequestContext(c);
       const batchId = context.batchId ?? randomUUID();
       let completed = 0;
@@ -318,6 +343,7 @@ export function registerTrashRoutes(
                 },
                 () => runStorageCall(() => trash.purge([entry.id])),
               );
+              await forgetPurged(deps, principal, trashPath, entry.id);
               completed++;
             }
           }
@@ -329,8 +355,8 @@ export function registerTrashRoutes(
         () => ({ path: trashPath, completedCount: completed }),
       );
     } else {
-      // Without a journal there is nothing per-file to record, so keep the
-      // provider's single bulk call. `composeApp` always wires the journal.
+      // Without a journal or metadata there is nothing per-file to do, so keep
+      // the provider's single bulk call. `composeApp` always wires both.
       await runStorageCall(() => trash.empty());
     }
 

@@ -71,6 +71,40 @@ describe("deploymentModules", () => {
     ).toEqual({ externalUsername: "alice" });
   });
 
+  it("refuses a share in a folder the deployment closes to shares", async () => {
+    const repos = createMemoryRepos();
+    await seedLocalUsers(repos, [
+      { username: "alice", password: "alice-pass" },
+      { username: "bob", password: "bob-pass" },
+    ]);
+    for (const path of ["/Bin/old", "/Projects"]) {
+      await repos.localGrants.put({
+        ownerUsername: "alice",
+        path,
+        granteeUsername: "bob",
+        access: "read",
+      });
+    }
+    const storageRoot = temporaryStorageRoot();
+    const closedFolders = vi.fn(async () => ["/Bin"]);
+    const local = deploymentModules(
+      { fdriveStorageRoot: storageRoot, fdriveIndexRoots: null },
+      repos,
+      FAST_PASSWORDS,
+      undefined,
+      undefined,
+      closedFolders,
+    ).local;
+    if (local === undefined) throw new Error("no local module");
+    const instance = { id: "row", baseUrl: "local", config: {} };
+    const alice = local.createStorage(instance, { externalUsername: "alice" }, { fetch });
+    await alice.mkdir("/Bin/old", { parents: true });
+    await alice.mkdir("/Projects");
+    const bob = local.createStorage(instance, { externalUsername: "bob" }, { fetch });
+    expect((await bob.list("/Shared with me")).map((entry) => entry.name)).toEqual(["Projects"]);
+    expect(closedFolders).toHaveBeenCalledWith("row");
+  });
+
   it("hashes with scrypt by default", async () => {
     const repos = createMemoryRepos();
     const modules = deploymentModules(

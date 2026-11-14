@@ -2,11 +2,17 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import type { ActivityFacts } from "@fdrive/contracts";
 import type { StorageProvider } from "@fdrive/core";
 
-const receipts = new AsyncLocalStorage<{ path: string; leaf?: string }>();
+interface Receipt {
+  readonly path: string;
+  leaf?: string;
+  /** A delete of the same path further out, by a caller wrapping this storage. */
+  readonly outer: Receipt | undefined;
+}
+const receipts = new AsyncLocalStorage<Receipt>();
 /** The move-to-trash wrapper supplies its actual destination through the active operation. */
 export function captureRecycleReceipt(path: string, leaf: string) {
-  const receipt = receipts.getStore();
-  if (receipt?.path === path) receipt.leaf = leaf;
+  for (let receipt = receipts.getStore(); receipt !== undefined; receipt = receipt.outer)
+    if (receipt.path === path) receipt.leaf = leaf;
 }
 /**
  * Deletes `path` and reports the Trash leaf the move-to-trash wrapper chose
@@ -18,7 +24,7 @@ export async function deleteWithActivityReceipt(
   path: string,
   kind: "file" | "dir",
 ): Promise<ActivityFacts> {
-  const receipt: { path: string; leaf?: string } = { path };
+  const receipt: Receipt = { path, outer: receipts.getStore() };
   await receipts.run(receipt, () =>
     kind === "dir" ? storage.deleteDir(path) : storage.deleteFile(path),
   );
