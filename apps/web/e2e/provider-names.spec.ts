@@ -106,8 +106,11 @@ test("a storage rename on System > General reaches the login page, logins and Ma
       data: { secret: pair.secret },
     });
 
+    // The sidebar names the signed-in login's storage beneath the username.
     await page.goto(url("/account"));
-    await expect(page.getByRole("main").getByText("Home storage", { exact: true })).toBeVisible();
+    await expect(
+      page.locator('[data-sidebar="footer"]').getByText("Home storage", { exact: true }),
+    ).toBeVisible();
     const after = MeResponse.parse(await (await page.request.get(url("/api/v1/auth/me"))).json());
     expect(after).toEqual({
       ...before,
