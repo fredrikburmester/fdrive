@@ -1,31 +1,18 @@
 # Backup verification
 
-Implementation is in `codex/backups`, worktree `/private/tmp/fdrive-backups`, uncommitted.
 Behavior, operator procedures and measured costs: [Installation backups](../BACKUPS.md).
-The original design and acceptance criteria this work is checked against are recorded in
-that document's sections and in the archived plan in the main checkout's history.
-
-Implemented and locally qualified: durable registry, encrypted snapshots and opaque ZIP
-attachments, local downloads, S3/B2-compatible destinations (MinIO) and pinned-fileserver
-destinations (Apache WebDAV and SFTPGo, including large streamed transfers and fileserver-only
-recovery; since 2026-11-13 the files folder is the only fileserver destination),
-schedules, retention and pins, worker heartbeat, size estimates, metadata-only fallback,
-retention-kept probes, spool sweeps, isolated rehearsal, CLI cutover and rollback rehearsal,
-and the browser owner flow including the health panel.
+Backups going to S3 only, without configuration ZIP attachments, is decision 4 and group 34 of
+[SFTPGo leftovers](SFTPGO-LEFTOVERS.md).
 
 Remaining before the feature is complete:
 
-- Real Backblaze B2 passed through the browser UI on 2026-09-14 against the owner's test
-  bucket `fdrive-local-test` (`s3.us-west-004.backblazeb2.com`, virtual-host addressing):
-  probe, upload with full readback, B2 file version IDs recorded for archive and marker,
-  byte verification, and exact-version deletion. Real AWS S3 and B2 Object Lock remain
-  untested; a local MinIO with versioning and default Object Lock retention covered those
-  paths through the same UI.
-- Hosted CI has not run on this branch (Actions is disabled for cost). Run `CI (full)` by
-  dispatch before merge.
+- Real AWS S3 has not been contacted, and Object Lock has run only against a local MinIO with
+  versioning and default retention. A real Backblaze B2 bucket passed probe, upload with full
+  readback, version IDs, byte verification and exact-version deletion through the browser, but
+  has not been measured with large transfers.
 - A real host cutover on a deployed installation, following the documented replacement and
   rollback procedure, has not been performed; only the CLI rehearsal has.
 - Capture holds the exclusive checkpoint for its whole duration; writers give up after 30 s.
   Releasing the pause once sources are pinned is a follow-up if measured captures grow long.
-- Legacy OCR mapping recovery queries per original with a 1001-row candidate cap; large legacy
-  inventories may need batching.
+- Legacy OCR mapping recovery (`packages/backup/src/ocr-mappings.ts`) queries once per original
+  with a 1001-row candidate cap; large legacy inventories may need batching.

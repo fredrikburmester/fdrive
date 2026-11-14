@@ -1,9 +1,10 @@
 # SFTPGo leftovers
 
 Audit of `main` at 64cb537b, 2026-11-14. fdrive grew on SFTPGo, WebDAV and S3, storage it did
-not own, so many parts still check, guess, copy or abstract what [local storage](LOCAL-STORAGE.md)
-now guarantees. Each numbered group below is one pull request. Remove a group when it merges;
-delete this plan when none are left.
+not own, so many parts still check, guess, copy or abstract what the
+[files folder](../STORAGE-PROVIDERS.md) now guarantees. Each numbered group below is one pull
+request. Numbers are stable: a group is removed when it merges, leaving a gap. Delete this plan
+when none are left.
 
 ## Outcome
 
@@ -14,20 +15,22 @@ migrations, compatibility shims or configuration aliases; a full reindex is acce
 
 ## Order
 
-- Groups that add a migration run one at a time and need `pnpm test:integration`, which needs a
-  pullable S3 test image first.
+- Groups that add a migration run one at a time and need `pnpm test:integration`.
+- 7 waits for decision 1; 10 folds into 12; 38 is independent.
 - 11–15 run strictly in order: they share `apps/api/src/auth/service.ts`, `composition.ts` and the
   contracts.
 - 16 before 17, 26, 31 and 32. 16 and 23 before 18. 36 and 37 last.
 
 ## Decisions
 
-Recommended on 2026-11-14. Confirm each before the group that depends on it.
+Recommended on 2026-11-14 and approved by the owner the same day. The production-database
+facts in decision 1 are still needed before the groups that depend on them.
 
-1. Before 11–13 and 36, read from the production database: provider rows with their login
+1. Before 7, 11–13 and 36, read from the production database: provider rows with their login
    counts, accounts with more than one login, API tokens without an access level, the `setup.%`
-   and `trash.configuration.%` settings keys; and from its environment `FDRIVE_INDEX_ROOTS`,
-   `FDRIVE_ADMIN_USERS` and `FDRIVE_OFFICE_EDIT_RULES`.
+   and `trash.configuration.%` settings keys, and whether `system.publicUrl` is saved or the
+   public URL still comes from `office.configuration`'s `appUrl`; and from its environment
+   `FDRIVE_INDEX_ROOTS`, `FDRIVE_ADMIN_USERS` and `FDRIVE_OFFICE_EDIT_RULES`.
 2. The disabled `sftpgo`, `webdav` and `s3` provider rows and their logins are deleted, with
    those logins' tags, favorites, shares and chats, which no one can reach. Activity history has
    no foreign key to logins and stays.
@@ -46,46 +49,23 @@ Recommended on 2026-11-14. Confirm each before the group that depends on it.
 
 ## Wave 0: independent fixes
 
-1. **Hide fdrive's own folders everywhere.** The indexer walks `/.fdrive-desktop`
-   (`services/indexer/src/config.rs` `SKIP_DIRS`), so search can return the Mac's staged uploads,
-   `previous` copies and Trash. OCR skips `.Trash` but not `.trash`, `.fdrive-move-v1` or
-   `.fdrive-desktop` (`services/ocr/src/fdrive_ocr/runner.py`), so it rewrites PDFs there. MCP
-   and AI index tools drop Trash after the SQL limit (`mcp/scope-context.ts` `virtualPathFor`),
-   so pages are short and totals wrong. Eight separate reserved-path checks (shares, MCP, AI,
-   search, grants, listing, desktop, backups) disagree; one helper in core replaces them.
-2. **Stop the Trash from rotting.** Restore and purge remove only the leaf
-   (`packages/core/src/trash/recycle-folder-trash.ts`), so layout folders pile up until the
-   10,000-visit listing truncates and Empty Trash fails. Empty Trash re-walks per page and keeps
-   guards for a provider that does not remove items; MCP restore scans 10,000 entries for one
-   id. The Trash page claims items are "removed automatically", which fdrive never does.
-3. **Let storage refuse taken targets.** Callers stat before every move, copy, upload and
-   archive write (`fs/mutations.ts`, `archive/new-file-storage.ts`, `archive/extract.ts`,
-   `fs/archive-routes.ts`, `mcp/file-tools.ts`) because SFTPGo overwrote on move. The pre-check
-   makes case-only renames fail on case-insensitive disks. The overwrite defaults disagree
-   between the port doc, `move` and `copy`. Local `moveEntry` with `overwrite: false` checks then
-   renames. Compress builds the archive in a temp file and uploads it again, through a second zip
-   writer.
-4. **Office: version from the file stamp, lock per file.** CheckFileInfo, open and save download
-   and hash the whole document (`office/streams.ts` `contentVersion`); every save is copied to a
-   temp file first; one `office-write:<providerId>` lock serializes every save in the
-   installation (`packages/db/src/repos/office-write-scope.ts`).
-5. **Indexer: drop dead writes and restart walks.** `idx.events` is written and pruned, never
-   read (keep the notification). The indexer writes `idx.moves` rows nothing reads. Every start
-   walks the whole library (`runner.rs` `next_scan: Instant::now()`), though the journal now
-   covers restarts.
-7. **Delete dead tooling and shims.** The public URL's fallback to Office's `appUrl`, after a
-   check of the production database.
-8. **Web: drop gates on capabilities that are always on.** `zip`, `setModifiedAt`, `atomicMove`,
-   `shares`, `office` and `shareWithPeople` are always true: the one-by-one download plan, the
-   slow-move warning, the upload-time note, "Shares aren't available for this login" and the
-   capability props through six components go (`apps/web/src/lib/identity/capabilities.ts`). The
-   search scope reasons the server no longer sends go too.
-9. **Docs.** Delete `STOCK-SFTPGO-WRITES.md` and the shipped `SYSTEM-ACTIVITY.md` plan; rewrite
-   the Backups, macOS writes and Local storage plans to what remains; the activity plans cite SFTP
-   tests that do not exist; drop the upgrade notes in `deploy/README.md`, the TEI section in
-   `deploy/REFERENCE.md`, "linked logins" in `MCP.md` and the SFTPGo rule in `AGENTS.md`.
-10. **Rate-limit password change.** `POST /auth/password` checks the current password without the
-    login limiter (`local/routes.ts`, `local/service.ts`). Folds into 12.
+7\. **Drop the public URL's fallback to Office's `appUrl`**, the one shim #163 left
+(`apps/api/src/composition.ts`, `legacyUrl`), once decision 1 shows the production database has
+`system.publicUrl` saved.
+
+10\. **Rate-limit password change.** `POST /auth/password` checks the current password without
+the login limiter (`local/routes.ts`, `local/service.ts`). Folds into 12.
+
+38\. **Stop following symlinks in the files folder.** Local storage follows a symlink whose real
+path stays inside the user's home or the shared folder
+([home.ts](../../packages/local/src/home.ts)), so the web, MCP and public share links reach
+whatever it points at, while their reserved-path checks look only at the path asked for. A
+public link to `/docs` holding a symlink to `/.trash` exposes the Trash, which links must never
+reach; `/.fdrive-desktop` and backup folders are exposed the same way. Desktop reads already
+refuse any path through a symlink (#168), using the `link` mark local storage puts on list
+entries and stat results. fdrive never creates symlinks; only writers outside it (SMB, rsync)
+do. The simplest fix is for local storage to refuse to follow any symlink. That changes what
+users see if they keep symlinks in their files: say so in the release notes.
 
 ## Wave 1: one user, one storage
 
@@ -130,7 +110,9 @@ Recommended on 2026-11-14. Confirm each before the group that depends on it.
     out through AsyncLocalStorage (`activity/trash.ts`); the Trash path is built in nine places.
     Tags, favorites and folder views stay at a trashed item's path, so a new file there inherits
     them. A grantee deleting in a writable shared folder may send the owner's file to the
-    grantee's Trash (unverified). Retention per decision 3.
+    grantee's Trash (unverified). Retention per decision 3. Office's save path now has its own
+    database pool (#162), and so does the Mac publish lock (personal activity's path locks have a
+    third). When 24 removes the publish lock, those two pools become one or go.
 17. **Flat Trash layout.** The `p/<segment>` path encoding, made for WebDAV, becomes one folder
     per item plus a row.
 18. **Live updates and metadata from the journal.** Every fdrive change returns through the
@@ -166,7 +148,10 @@ All but 27 are server-only and keep shipped Mac builds working.
     is always null (MCP reports `mime: null`); non-null modification times and lengths; writes
     return the new entry; one conformance suite with no options.
 30. Open files instead of HTTP-shaped downloads: peek parses `Content-Range` with a regex,
-    extract copies the zip to a temp folder, shares have a second range implementation.
+    extract copies the zip to a temp folder, shares have a second range implementation. The perf
+    harness measured downloads through the API at 84% of direct throughput against its 90%
+    budget, on a heavily loaded machine; rerun `pnpm perf:strict` on a quiet one before acting
+    on that.
 
 ## Shares, activity, Office, backups, MCP
 

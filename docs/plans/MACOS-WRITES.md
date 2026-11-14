@@ -1,31 +1,25 @@
 # macOS write beta: remaining work
 
-Updated 2026-11-12. Apache DAV native writes merged in PR #21. The pinned SFTPGo
-integration merged in PR #22 and was later removed together with its `fdrive-local-v1` mode,
-and SFTPGo itself has since been replaced by fdrive's local folder, which writes under fdrive's
-optimistic contract. WebDAV, its Apache DAV locks and S3 were removed on 2026-11-13.
-Full beta qualification remains open.
-Current behavior: [macOS](../MACOS.md#write-configuration-and-recovery).
-Search remains excluded.
+Full beta qualification of Mac writes remains open. Current behavior:
+[macOS](../MACOS.md#write-configuration-and-recovery). Search remains excluded.
 
 ## Safety boundary
 
-The user first chose **storage-side enforcement** (the leased Apache DAV mode, gone with
-WebDAV), and later accepted the weaker optimistic contract, the default since 2026-09-18 and
-now the only one; see [STOCK-SFTPGO-WRITES.md](STOCK-SFTPGO-WRITES.md) for the design record.
+Mac writes use fdrive's optimistic contract: a per-identity publish lock and a content proof
+inside it, with no fence at the storage against writers outside fdrive.
 
-Keep explicit v2 write grants, staged uploads, retained originals, durable server receipts
-and native pending copies. Publication followed by a crash before the receipt remains
-uncertain until reconciled; never blindly replay it. No claim of exactly-once behavior
-across HTTP, filesystem and PostgreSQL. A server item ID cannot prove every unobserved
+Keep explicit v2 write grants, staged uploads, durable server receipts and native pending
+copies. Never blindly replay a publication whose outcome is unknown. No claim of exactly-once
+behavior across HTTP, filesystem and PostgreSQL. A server item ID cannot prove every unobserved
 external delete/recreate, particularly with identical bytes.
 
 ## Implementation still required
 
-- **Retention and recovery administration.** Define retained receipt and backup lifetimes,
-  inspect/export/reconcile uncertain operations, and reclaim only unreferenced acknowledged
-  data. Protect active uploads and expired-operation retries. The current 64 GiB reservation
-  ceiling refuses new writes; acknowledgements free incoming bytes but do not purge originals.
+- **Retention and recovery administration** is not to be built out. Groups 24 and 25 of
+  [SFTPGo leftovers](SFTPGO-LEFTOVERS.md) remove what it would administer: conflicts come from
+  the file stamp, uploads stage inside the files folder so a commit can always tell whether it
+  happened, and the publish lock, `previous` copies, 30-day retention, the 64 GiB reservation,
+  the `uncertain` state and the admin recovery endpoints go.
 - **Deployment qualification.** Inventory every writer before enabling native writes. Keep
   configuration, logs, databases, backups and temporary directories outside user homes.
   Qualify restart, upgrade and rollback against disposable data before production use.
@@ -47,7 +41,7 @@ external delete/recreate, particularly with identical bytes.
   identity changes or lost pending content. Explicit write permission upgrade, old/new
   protocol combinations and refusal to open newer schemas all need release rehearsal.
 - Second-Mac installation, signing/notarization and distribution remain separate in
-  [native beta qualification](MACOS-APP.md). Keep Actions disabled per the current handoff.
+  [native beta qualification](MACOS-APP.md).
 
 Deferred: delta/chunk-resumable uploads, remote search, automatic text merging, POSIX ACL
 sync, general extended attributes/resource forks, synced Finder tags, symlinks/special files,
@@ -60,10 +54,10 @@ Do not promise support for arbitrary package documents or live databases.
   drag a nested folder, save repeatedly in TextEdit and a safe-save editor, rename while
   saving, move a folder with downloaded children, conflict on destination, and restore from
   Trash.
-- Use two independent clients plus the web app and an external storage writer: concurrent
+- Use two independent clients plus the web app and a writer outside fdrive: concurrent
   saves; same-size/same-mtime replacement; content edit versus rename/delete; changed parent;
   directory deletion versus new descendants. Preserve every unacknowledged local edit.
-- Interrupt before/during upload, before commit, after upstream commit, after DB receipt and
+- Interrupt before/during upload, before commit, after the storage commit, after DB receipt and
   before native completion. Retry after extension/API restart and token rotation. No duplicate
   creates, wrong-target mutation, partial original or unverified destructive replay.
 - Offline save/new-file/new-folder chains, network flapping, quota/low disk, denied parent,

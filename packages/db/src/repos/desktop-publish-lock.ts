@@ -24,7 +24,7 @@ import type { Pool } from "pg";
  * their publication *is* their transfer and serializing that is what this design
  * exists to avoid. A desktop commit is protected from all of them by proving the
  * destination's content inside the section instead; see
- * `docs/plans/STOCK-SFTPGO-WRITES.md`.
+ * `docs/MACOS.md#write-configuration-and-recovery`.
  */
 export type DesktopPublishLock = <T>(identityId: string, run: () => Promise<T>) => Promise<T>;
 

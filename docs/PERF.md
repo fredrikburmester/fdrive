@@ -12,7 +12,7 @@ gate by default. Diagnostic, quick and single-scenario runs are not full-gate ev
 | 1,000-entry cold listing | p95 <400 ms |
 | Search over 25,000 indexed files | p95 <300 ms |
 | 10,000-entry list and grid | Ready <500 ms after data arrival; bounded DOM and interaction checks |
-| Download through API | At least 90% of direct upstream payload throughput |
+| Download through API | At least 90% of a bare Node server streaming the same file from disk |
 | 200 small uploads, six streams | <30 seconds, complete integrity verification |
 
 Executable decisions live in [budgets](../tools/perf/budgets.ts). Do not relax them to fit

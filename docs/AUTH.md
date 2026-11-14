@@ -192,7 +192,7 @@ These events revoke sessions server-side:
   that stores the new credential. Logging in again with the unchanged
   password leaves other devices signed in.
   Credential comparison happens under the identity/account persistence locks. A different
-  credential committed since upstream authentication began rejects the delayed login;
+  credential committed since the password check began rejects the delayed login;
   concurrent logins presenting the same new credential keep both sessions.
 - Unlinking a login deletes every session that was using it as its active
   identity, except the requesting session, which moves to a remaining login

@@ -40,7 +40,7 @@ remain outside this release's scope. The development app targets macOS 26+, Appl
   peak memory and additional content types still need a broader rehearsal.
 - Test offline cached files/listings, uncached content, permission revocation, token expiry,
   identity unlink and provider disable in Finder; one failed location must leave another usable.
-- Repeat external create/overwrite/rename/move/delete on both providers while connected and
+- Repeat external create/overwrite/rename/move/delete in the files folder while connected and
   disconnected, including same-size/same-mtime replacements and folders with cached children.
   Path-only backends cannot identify every change missed between observations; do not claim
   stable identity across an unobserved external delete/recreate or rename.
@@ -51,7 +51,7 @@ remain outside this release's scope. The development app targets macOS 26+, Appl
   colliding names on the target volume. Current behavior is a visible listing failure for
   ambiguous names, with no silent merge or omission.
 
-## Provider validation cost
+## Validation cost
 
 The current strong validator streams SHA-256 on the server for materialized files. A
 60-second refresh can reread every downloaded large file from the files folder. Measure that

@@ -272,10 +272,3 @@ and the indexer neither scans, watches nor applies queued changes. The API and i
 again every few seconds, so fixing `FDRIVE_FILES_DIR` and running `docker compose up -d` is
 enough. To adopt a folder fdrive refuses, create an empty `.fdrive-files` in it; to take over
 another installation's folder, delete its marker.
-
-## Native ARM64 embeddings
-
-The published `fdrive-embed` image is native on Apple Silicon and other ARM64 hosts. Its
-arm64 variant is built in CI from TEI's pinned upstream source with the same
-multilingual-e5-small model, so embeddings match those made on amd64 and no overlay is
-needed.
