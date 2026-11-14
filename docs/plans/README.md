@@ -16,6 +16,7 @@ Only unfinished work lives here. Reviewed against source and delivery history on
 | [Owned shares](OWNED-SHARES.md) | fdrive-served share links: done; server-side gallery gating for unindexed logins remains |
 | [Local storage](LOCAL-STORAGE.md) | fdrive serves a folder on its own disk with its own users, its only storage since SFTPGo, WebDAV and S3 went: decisions and what comes later |
 | [ML server follow-ups](ML-SERVER.md) | What is left after moving embeddings and document extraction into one Rust server: amd64 measurements, memory, extraction gaps |
+| [SFTPGo leftovers](SFTPGO-LEFTOVERS.md) | Code, settings and tables that exist only because fdrive grew on storage it did not own, grouped into pull requests with their order and open decisions |
 | [Change journal](CHANGE-JOURNAL.md) | One numbered record of file changes (`idx.changes`) that every part of fdrive reads from its own position: the foundation and the Mac change feed are built; API fan-out and OCR remain |
 
 These are a backlog, not a claim that an agent is working on every item.
