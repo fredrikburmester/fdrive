@@ -139,6 +139,7 @@ import type { OfficeDocumentKind } from "@/lib/office/new-document";
 import { officeHref } from "@/lib/office/route";
 import { trashAvailabilityFor } from "@/lib/trash/format";
 import { collectInputFiles } from "@/lib/upload/traverse";
+import { BatchRenameDialog } from "./batch-rename-dialog";
 import { CompressDialog, type CompressDialogState } from "./compress-dialog";
 import { DeleteDialog } from "./delete-dialog";
 import { DestinationPicker, type DestinationPickerMode } from "./destination-picker";
@@ -317,6 +318,7 @@ export function FileBrowser({
   const [newFileKind, setNewFileKind] = useState<NewFileKind | null>(null);
   const [newFilePending, setNewFilePending] = useState(false);
   const [renameTarget, setRenameTarget] = useState<FsEntry | null>(null);
+  const [batchRenameTargets, setBatchRenameTargets] = useState<FsEntry[] | null>(null);
   const [deleteTargets, setDeleteTargets] = useState<FsEntry[]>([]);
   const [destinationPicker, setDestinationPicker] = useState<{
     mode: DestinationPickerMode;
@@ -588,7 +590,7 @@ export function FileBrowser({
         runDownload(entriesForAction(entry));
         break;
       case "rename":
-        setRenameTarget(entry);
+        startRename(entriesForAction(entry));
         break;
       case "moveTo":
         setDestinationPicker({ mode: "move", paths: pathsForAction(entry) });
@@ -692,6 +694,18 @@ export function FileBrowser({
     } finally {
       setOfficePending(false);
     }
+  }
+
+  /** Opens Rename for `targets`, the batch dialog for more than one, unless one is locked. */
+  function startRename(targets: readonly FsEntry[]) {
+    const lock = firstLockedReason(
+      targets.map((target) => target.path),
+      received,
+    );
+    const [only] = targets;
+    if (lock !== null) toast.error(lock);
+    else if (targets.length > 1) setBatchRenameTargets([...targets]);
+    else if (only !== undefined) setRenameTarget(only);
   }
 
   function handleRenameSubmit(newName: string) {
@@ -873,12 +887,7 @@ export function FileBrowser({
         break;
       case "rename": {
         const entry = displayEntries.find((candidate) => candidate.path === selection.focus);
-        const lock = entry === undefined ? null : firstLockedReason([entry.path], received);
-        if (lock !== null) {
-          toast.error(lock);
-        } else if (entry !== undefined) {
-          setRenameTarget(entry);
-        }
+        startRename(selectedEntries.length > 1 ? selectedEntries : entry ? [entry] : []);
         break;
       }
       case "expand": {
@@ -1162,6 +1171,14 @@ export function FileBrowser({
         onRename={handleRenameSubmit}
         pending={rename.isPending}
       />
+      {batchRenameTargets !== null && (
+        <BatchRenameDialog
+          entries={batchRenameTargets}
+          siblings={displayEntries}
+          onClose={() => setBatchRenameTargets(null)}
+          onRename={rename.mutateAsync}
+        />
+      )}
       <DeleteDialog
         entries={deleteTargets}
         onOpenChange={(open) => {
