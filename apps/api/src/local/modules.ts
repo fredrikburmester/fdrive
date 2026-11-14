@@ -49,7 +49,8 @@ export function indexWorkRoot(
  * change fdrive makes in the folder is queued for the indexer, when the
  * indexer reads the folder itself (`indexWorkRoot`). With `guard`, storage
  * is refused while the folder is not this installation's
- * (`createDeploymentFilesFolderGuard`).
+ * (`createDeploymentFilesFolderGuard`). With `closedFolders`, a folder shared
+ * from inside its owner's Trash is refused to the person it is shared with.
  */
 export function deploymentModules(
   config: Pick<AppConfig, "fdriveStorageRoot" | "fdriveIndexRoots">,
@@ -57,6 +58,7 @@ export function deploymentModules(
   passwords: SharePasswords = createScryptSharePasswords(),
   indexWork?: IndexWorkQueue,
   guard?: FilesFolderGuard,
+  closedFolders?: (providerId: string) => Promise<readonly string[]>,
 ): ProviderModules {
   const root = config.fdriveStorageRoot;
   if (root === undefined) return createProviderModules();
@@ -68,6 +70,7 @@ export function deploymentModules(
       // When `queued` names a root, this is the same one: it matches first.
       indexRoot: localIndexRoot(config.fdriveIndexRoots, root),
       ...(guard === undefined ? {} : { guard }),
+      ...(closedFolders === undefined ? {} : { closedFolders }),
       ...(queued === null || indexWork === undefined
         ? {}
         : { onIndexChange: (name, change) => indexWork.record(name, change) }),

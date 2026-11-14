@@ -13,7 +13,12 @@ import {
 import { type DiskChangeListener, type IndexChange, underRoot } from "./changes.js";
 import type { FilesFolderGuard } from "./files-marker.js";
 import { isLocalUsername } from "./names.js";
-import { createUserStorage, namedSharedGrants, type SharedGrant } from "./shared.js";
+import {
+  closedToShares,
+  createUserStorage,
+  namedSharedGrants,
+  type SharedGrant,
+} from "./shared.js";
 
 export { isLocalUsername };
 
@@ -69,6 +74,14 @@ export interface CreateLocalModuleOptions {
    * check it again as it goes stale.
    */
   readonly guard?: FilesFolderGuard;
+  /**
+   * Folders in each user's files, as paths in them, that no share reaches
+   * for the provider row `providerId`: their Trash while it is on and
+   * fdrive's own bookkeeping. A folder shared from inside one, or from
+   * anywhere in fdrive's Trash layout (`closedToShares`), is refused to the
+   * person it is shared with.
+   */
+  readonly closedFolders?: (providerId: string) => Promise<readonly string[]>;
 }
 
 export const LOCAL_CREDENTIAL_FIELDS: readonly ProviderField[] = [
@@ -210,7 +223,7 @@ export function createLocalModule(options: CreateLocalModuleOptions): ProviderMo
       return { externalUsername: check.username };
     },
 
-    createStorage(_instance, session) {
+    createStorage(instance, session) {
       guard?.assertUsable();
       // Authentication admits only valid names, so this guards a stored
       // identity that predates a rule change, not a caller's input.
@@ -218,18 +231,26 @@ export function createLocalModule(options: CreateLocalModuleOptions): ProviderMo
         throw new StorageError("forbidden", "this login has no valid home folder");
       }
       const username = session.externalUsername;
+      const inHome = (owner: string, path: string) =>
+        join(options.root, owner, ...splitSegments(normalizePath(path)));
       return createUserStorage({
         ...(onChange === undefined ? {} : { onChange }),
         home: join(options.root, username),
-        shared: async () =>
-          namedSharedGrants(username, await options.users.shared(username)).map(
-            ({ grant, name }) => ({
+        shared: async () => {
+          const grants = await options.users.shared(username);
+          const closed =
+            grants.length === 0 ? [] : ((await options.closedFolders?.(instance.id)) ?? []);
+          // Named before any is left out, as the API names them, so names never disagree.
+          return namedSharedGrants(username, grants)
+            .filter(({ grant }) => !closedToShares(grant.path, closed))
+            .map(({ grant, name }) => ({
               name,
-              dir: join(options.root, grant.owner, ...splitSegments(normalizePath(grant.path))),
+              dir: inHome(grant.owner, grant.path),
               ownerHome: join(options.root, grant.owner),
               writable: grant.writable,
-            }),
-          ),
+              closed: closed.map((folder) => inHome(grant.owner, folder)),
+            }));
+        },
       });
     },
   };
