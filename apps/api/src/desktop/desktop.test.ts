@@ -758,7 +758,7 @@ it("detects equal-size replacements, rejects short streams and releases validati
   const f = await fixture();
   const signal = new AbortController().signal;
   const first = await f.files.versions(f.principal, ["/docs/a.txt"], signal);
-  await f.storage.upload("/docs/a.txt", new TextEncoder().encode("bravo"));
+  await f.storage.upload("/docs/a.txt", new TextEncoder().encode("bravo"), { overwrite: true });
   expect((await f.files.versions(f.principal, ["/docs/a.txt"], signal)).items[0]?.version).not.toBe(
     first.items[0]?.version,
   );

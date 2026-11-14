@@ -1,19 +1,11 @@
-import { isStorageError, isUnderPath, StorageError, type StorageProvider } from "@fdrive/core";
+import { isUnderPath, StorageError, type StorageProvider } from "@fdrive/core";
 
-/** Shared admission for REST and MCP. Provider support determines atomicity. */
-export async function requireUnoccupiedTarget(
-  storage: StorageProvider,
-  target: string,
-): Promise<void> {
-  try {
-    await storage.statFile(target);
-  } catch (error) {
-    if (isStorageError(error) && error.kind === "not_found") return;
-    if (!isStorageError(error) || error.kind !== "bad_request") throw error;
-  }
-  throw new StorageError("conflict", `something already exists at ${target}`);
-}
-
+/**
+ * Moves or copies `path` to `target` for REST and MCP. Storage refuses a
+ * taken target itself (`conflict`), so nothing is checked first: a check
+ * would cost a stat, race the write, and on a disk that ignores case call a
+ * case-only rename a conflict.
+ */
 export async function relocatePath(
   storage: StorageProvider,
   operation: "move" | "copy",
@@ -24,6 +16,5 @@ export async function relocatePath(
     throw new StorageError("bad_request", `cannot ${operation} a path into its own descendant`);
   }
   if (path === target) return;
-  await requireUnoccupiedTarget(storage, target);
-  await storage[operation](path, target, { overwrite: false });
+  await storage[operation](path, target);
 }

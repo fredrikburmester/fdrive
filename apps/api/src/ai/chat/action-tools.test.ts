@@ -405,11 +405,38 @@ describe("rename_items", () => {
     await expect(storage.stat("/.Trash")).rejects.toMatchObject({ kind: "not_found" });
   });
 
+  it("proposes a case-only rename on a disk that finds the item under its new spelling", async () => {
+    const { verify, storage } = setup();
+    const stat = storage.stat.bind(storage);
+    // A disk that ignores case finds "/Inbox/a.txt" as "/Inbox/A.txt" and reports its stored name.
+    vi.spyOn(storage, "stat").mockImplementation(async (path) =>
+      path === "/Inbox/A.txt" || path === "/Inbox/TAKEN.txt"
+        ? { ...(await stat("/Inbox/a.txt")), path: "/Inbox/a.txt" }
+        : stat(path),
+    );
+    const proposal = await verify("rename_items", {
+      summary: "s",
+      renames: [
+        { path: "/Inbox/a.txt", name: "A.txt", reason: "r" },
+        { path: "/Inbox/scan.pdf", name: "TAKEN.txt", reason: "r" },
+      ],
+    });
+    expect(proposal).toMatchObject({
+      items: [
+        { path: "/Inbox/a.txt", name: "A.txt", conflict: false },
+        { path: "/Inbox/scan.pdf", name: "TAKEN.txt", conflict: true },
+      ],
+    });
+  });
+
   it("passes on storage failures while checking whether a name is taken", async () => {
     const { verify, storage } = setup();
-    vi.spyOn(storage, "statFile").mockRejectedValueOnce(
-      new StorageError("upstream_unavailable", "storage is down"),
-    );
+    const stat = storage.stat.bind(storage);
+    vi.spyOn(storage, "stat").mockImplementation(async (path) => {
+      if (path === "/Inbox/b.txt")
+        throw new StorageError("upstream_unavailable", "storage is down");
+      return stat(path);
+    });
     await expect(
       verify("rename_items", {
         summary: "s",

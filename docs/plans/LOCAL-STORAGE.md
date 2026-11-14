@@ -64,8 +64,9 @@ admin UI and upgrades.
 - **Confinement.** Paths go through `normalizePath`, then join the home. Symlinks are followed
   only when their real path stays inside the home (or the shared folder). A shared folder must
   itself resolve inside its owner's home, so a share never reaches further than its owner can.
-- **Atomic publish.** Uploads stream to a temporary file beside the target and `rename` over the
-  name; `overwrite: false` publishes with `link`, a real create-if-absent.
+- **Atomic publish.** Uploads and file copies stream to a temporary file beside the target and
+  publish it with `link`, a real create-if-absent; only `overwrite: true` renames over a taken
+  name. A taken target is refused by storage, never checked first by callers.
 - **Moves** are one `rename`, also between a user's files and a folder shared with them.
 - **Copy** keeps timestamps; **zip** streams with `yazl`; **Trash** uses the generic `move`
   strategy (`<home>/.trash/.fdrive-move-v1`). Items SFTPGo's recycle rule left in `.trash` stay

@@ -1,25 +1,16 @@
-import { randomUUID } from "node:crypto";
-import { createWriteStream } from "node:fs";
-import { stat as fsStat, rm } from "node:fs/promises";
-import { join } from "node:path";
 import type { Readable } from "node:stream";
-import { finished, pipeline } from "node:stream/promises";
+import { pipeline } from "node:stream";
+import { pipeline as pipelineAsync } from "node:stream/promises";
 import { createGzip, createZstdCompress } from "node:zlib";
-import {
-  type ArchiveFormat,
-  archiveExtensionFor,
-  baseName,
-  isPrecompressedEntry,
-  type StorageProvider,
-} from "@fdrive/core";
+import { type ArchiveFormat, baseName, type StorageProvider } from "@fdrive/core";
 import * as tar from "tar-stream";
-import { ZipFile } from "yazl";
 import type { ReportProgress } from "../jobs/types.js";
 import {
   countingTransform,
   isZstdSupported,
   nodeReadableFromWeb,
   throwIfAborted,
+  webStreamFromNodeReadable,
 } from "./stream-utils.js";
 
 /** Thrown when `format` is not supported by this server's Node runtime. */
@@ -30,12 +21,13 @@ export class UnsupportedFormatError extends Error {
   }
 }
 
-export interface CompressToTempOptions {
+export interface CompressOptions {
   readonly storage: StorageProvider;
   /** The selection to archive; every file and folder is walked recursively. */
   readonly paths: readonly string[];
   readonly format: ArchiveFormat;
-  readonly tmpDir: string;
+  /** Where the archive goes: a new file, never one that is already there. */
+  readonly target: string;
   readonly signal: AbortSignal;
   readonly report: ReportProgress;
   /**
@@ -46,16 +38,20 @@ export interface CompressToTempOptions {
   readonly zstdSupported?: boolean;
 }
 
-export interface CompressResult {
-  readonly file: string;
-  readonly size: number;
-}
-
 interface CollectedFile {
   readonly path: string;
   readonly entryName: string;
   readonly size: number;
   readonly modifiedAt: Date;
+}
+
+/** An archive being written. */
+interface Archive {
+  readonly body: ReadableStream<Uint8Array>;
+  /** What failed while writing it, when that is more than its stream reports. */
+  failure(): unknown;
+  /** Settles once nothing is writing it any more. */
+  readonly stopped: Promise<void>;
 }
 
 /**
@@ -116,8 +112,7 @@ async function collectDirectory(
   for (const child of children) {
     // Compressing the root ("/") itself gives every top-level entry an
     // empty `entryName` prefix; without this guard the joined name would
-    // start with a leading "/", which yazl's own validation rejects as an
-    // absolute path.
+    // start with a leading "/".
     const childEntryName = entryName.length > 0 ? `${entryName}/${child.name}` : child.name;
     if (child.kind === "dir") {
       await collectDirectory(storage, child.path, childEntryName, out, signal);
@@ -134,192 +129,98 @@ async function collectDirectory(
   }
 }
 
-type Completion = { ok: true } | { ok: false; error: unknown };
-
-/** Observe rejection immediately, including while another archive entry is awaited. */
-function observe(promise: Promise<void>, controller: AbortController): Promise<Completion> {
-  return promise.then(
-    () => ({ ok: true }),
-    (error: unknown) => {
-      controller.abort(error);
-      return { ok: false, error };
-    },
-  );
-}
-
-function requireCompleted(result: Completion): void {
-  if (!result.ok) throw result.error;
-}
-
-/** Yazl's private pipe chain exposes each upstream source through public unpipe events. */
-function cancelZipSources(
-  output: NodeJS.ReadableStream,
-  controller: AbortController,
-  signal: AbortSignal,
-): Promise<Completion>[] {
-  const closed: Promise<Completion>[] = [];
-  const watched = new WeakSet<NodeJS.ReadableStream>();
-  function watch(stream: NodeJS.ReadableStream): void {
-    watched.add(stream);
-    stream.on("unpipe", (source: Readable) => {
-      if (!signal.aborted || watched.has(source)) return;
-      watch(source);
-      closed.push(observe(finished(source, { cleanup: true }), controller));
-      source.destroy();
-    });
-  }
-  watch(output);
-  return closed;
-}
-
-async function writeZip(
-  files: readonly CollectedFile[],
-  storage: StorageProvider,
-  destPath: string,
-  signal: AbortSignal,
-  report: ReportProgress,
-): Promise<void> {
-  const controller = new AbortController();
-  const combined = AbortSignal.any([signal, controller.signal]);
-  const zipfile = new ZipFile();
-  const outStream = createWriteStream(destPath);
-  const privateStreams = cancelZipSources(zipfile.outputStream, controller, combined);
-  zipfile.on("error", (error: unknown) => controller.abort(error));
-  const outFinished = observe(
-    pipeline(zipfile.outputStream, outStream, { signal: combined }),
-    controller,
-  );
-  let inputFinished: Promise<Completion> | undefined;
-  try {
-    let processed = 0;
-    let bytes = 0;
-    for (const file of files) {
-      throwIfAborted(combined);
-      const download = await storage.download(file.path, { signal: combined });
-      const nodeStream = nodeReadableFromWeb(download.body);
-      const counted = countingTransform((n) => {
-        bytes += n;
-        report({ bytes });
-      });
-      // Wait for consumption as well as writing, since yazl pulls entries lazily.
-      const consumed = observe(finished(counted, { cleanup: true }), controller);
-      inputFinished = observe(pipeline(nodeStream, counted, { signal: combined }), controller);
-      zipfile.addReadStream(counted, file.entryName, {
-        mtime: file.modifiedAt,
-        compress: !isPrecompressedEntry(file.entryName),
-      });
-      requireCompleted(await consumed);
-      requireCompleted(await inputFinished);
-      processed += 1;
-      report({ processed, total: files.length, bytes });
-    }
-    throwIfAborted(combined);
-    zipfile.end();
-    requireCompleted(await outFinished);
-  } catch (error) {
-    throw combined.aborted ? combined.reason : error;
-  } finally {
-    controller.abort();
-    await inputFinished;
-    await outFinished;
-    // Destroying one destination can expose another source on its close event.
-    for (let index = 0; index < privateStreams.length; index++) await privateStreams[index];
-  }
-}
-
-async function writeTar(
-  files: readonly CollectedFile[],
-  storage: StorageProvider,
-  destPath: string,
-  signal: AbortSignal,
-  report: ReportProgress,
-  compression: "gzip" | "zstd",
-): Promise<void> {
-  const controller = new AbortController();
-  const combined = AbortSignal.any([signal, controller.signal]);
-  const pack = tar.pack();
-  const outStream = createWriteStream(destPath);
-  const compressor = compression === "gzip" ? createGzip() : createZstdCompress();
-  const outFinished = observe(
-    pipeline(pack, compressor, outStream, { signal: combined }),
-    controller,
-  );
-  let inputFinished: Promise<Completion> | undefined;
-  try {
-    let processed = 0;
-    let bytes = 0;
-    for (const file of files) {
-      throwIfAborted(combined);
-      const download = await storage.download(file.path, { signal: combined });
-      const nodeStream = nodeReadableFromWeb(download.body);
-      const counted = countingTransform((n) => {
-        bytes += n;
-        report({ bytes });
-      });
-      const entryStream = pack.entry({
-        name: file.entryName,
-        size: file.size,
-        mtime: file.modifiedAt,
-      });
-      inputFinished = observe(
-        pipeline(nodeStream, counted, entryStream, { signal: combined }),
-        controller,
-      );
-      requireCompleted(await inputFinished);
-      processed += 1;
-      report({ processed, total: files.length, bytes });
-    }
-    throwIfAborted(combined);
-    pack.finalize();
-    requireCompleted(await outFinished);
-  } catch (error) {
-    throw combined.aborted ? combined.reason : error;
-  } finally {
-    controller.abort();
-    await inputFinished;
-    await outFinished;
-  }
+/** A zip from the storage's own zip writer, which reports how far it has got. */
+async function zipArchive(opts: CompressOptions): Promise<Archive> {
+  if (opts.storage.zip === undefined) throw new UnsupportedFormatError("zip");
+  const body = await opts.storage.zip(opts.paths, {
+    signal: opts.signal,
+    onProgress: opts.report,
+  });
+  return { body, failure: () => undefined, stopped: Promise.resolve() };
 }
 
 /**
- * Builds an archive of `paths` in `format` at a temp file under `tmpDir`,
- * streaming every file from `storage` and never buffering a whole file in
- * memory. Removes the temp file and rethrows on any failure (including
- * cancellation via `signal`), so callers never need to clean up themselves
- * except on success.
+ * A compressed tar of `paths`, read file by file from `storage` as the
+ * archive is read. Once its reader goes away, the file being read is
+ * cancelled and nothing more is read. A file that fails ends the stream as
+ * a premature close, so the failure itself is kept for `failure`.
  */
-export async function compressToTemp(opts: CompressToTempOptions): Promise<CompressResult> {
+async function tarArchive(opts: CompressOptions, compression: "gzip" | "zstd"): Promise<Archive> {
+  const files = await collectFiles(opts.storage, opts.paths, opts.signal);
+  opts.report({ processed: 0, total: files.length, bytes: 0 });
+  const stop = new AbortController();
+  const signal = AbortSignal.any([opts.signal, stop.signal]);
+  const pack = tar.pack();
+  const compressor = compression === "gzip" ? createGzip() : createZstdCompress();
+  const output: Readable = pipeline(pack, compressor, () => stop.abort());
+  let failure: unknown;
+  const stopped = (async () => {
+    let processed = 0;
+    let bytes = 0;
+    for (const file of files) {
+      throwIfAborted(signal);
+      const download = await opts.storage.download(file.path, { signal });
+      const counted = countingTransform((n) => {
+        bytes += n;
+        opts.report({ bytes });
+      });
+      const entry = pack.entry({ name: file.entryName, size: file.size, mtime: file.modifiedAt });
+      await pipelineAsync(nodeReadableFromWeb(download.body), counted, entry, { signal });
+      processed += 1;
+      opts.report({ processed, total: files.length, bytes });
+    }
+    pack.finalize();
+  })().catch((error: unknown) => {
+    failure = error;
+    output.destroy(error as Error);
+  });
+  return { body: webStreamFromNodeReadable(output), failure: () => failure, stopped };
+}
+
+/**
+ * Archives `paths` into a new file at `target`, writing the archive as it
+ * is read: it streams straight into `storage.upload`, which publishes the
+ * file only once it is whole and refuses a name that is taken. A failure
+ * or cancellation leaves nothing at `target` and rejects with what stopped
+ * the archive, or else with the upload's own refusal.
+ */
+export async function compress(opts: CompressOptions): Promise<void> {
   const zstdSupported = opts.zstdSupported ?? isZstdSupported();
   if (opts.format === "tar.zst" && !zstdSupported) {
     throw new UnsupportedFormatError("tar.zst");
   }
-
   throwIfAborted(opts.signal);
-  const files = await collectFiles(opts.storage, opts.paths, opts.signal);
-  opts.report({ processed: 0, total: files.length, bytes: 0 });
 
-  const tempFile = join(
-    opts.tmpDir,
-    `fdrive-compress-${randomUUID()}${archiveExtensionFor(opts.format)}`,
+  const archive =
+    opts.format === "zip"
+      ? await zipArchive(opts)
+      : await tarArchive(opts, opts.format === "tar.gz" ? "gzip" : "zstd");
+  // Storage reports a body that failed under the target's name; the job
+  // reports what actually stopped the archive.
+  let failed: { readonly error: unknown } | undefined;
+  const reader = archive.body.getReader();
+  const body = new ReadableStream<Uint8Array>(
+    {
+      async pull(controller) {
+        const next = await reader.read().catch((error: unknown) => {
+          failed = { error };
+          throw error;
+        });
+        if (next.done) controller.close();
+        else controller.enqueue(next.value);
+      },
+      cancel: (reason) => reader.cancel(reason),
+    },
+    // Nothing is read until the upload asks, so a refused upload reads nothing.
+    { highWaterMark: 0 },
   );
-
   try {
-    if (opts.format === "zip") {
-      await writeZip(files, opts.storage, tempFile, opts.signal, opts.report);
-    } else {
-      await writeTar(
-        files,
-        opts.storage,
-        tempFile,
-        opts.signal,
-        opts.report,
-        opts.format === "tar.gz" ? "gzip" : "zstd",
-      );
-    }
-    const stat = await fsStat(tempFile);
-    return { file: tempFile, size: stat.size };
+    await opts.storage.upload(opts.target, body, { overwrite: false, signal: opts.signal });
   } catch (error) {
-    await rm(tempFile, { force: true });
-    throw error;
+    // Refused before it read anything (the name is taken): stop the archive too.
+    await body.cancel(error).catch(() => undefined);
+    throw failed === undefined ? error : (archive.failure() ?? failed.error);
+  } finally {
+    await archive.stopped;
   }
 }

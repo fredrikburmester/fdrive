@@ -28,6 +28,11 @@ interface MemFile {
   ctimeNs: bigint;
 }
 
+/** The refusal for a name that is taken, worded as the local folder words it. */
+function taken(path: string): StorageError {
+  return new StorageError("conflict", `something already exists at ${path}`);
+}
+
 async function readAll(body: ReadableStream<Uint8Array> | Uint8Array): Promise<Uint8Array> {
   return body instanceof Uint8Array ? body : new Uint8Array(await new Response(body).arrayBuffer());
 }
@@ -234,8 +239,7 @@ export function createMemoryStorage(
     async upload(path, body, opts): Promise<void> {
       const normalized = normalizePath(path);
       if (isDir(normalized)) throw new StorageError("conflict", `a directory exists at ${path}`);
-      if (opts?.overwrite === false && fileMap.has(normalized))
-        throw new StorageError("conflict", `target exists: ${path}`);
+      if (opts?.overwrite !== true && fileMap.has(normalized)) throw taken(path);
       if (opts?.mkdirParents !== true && !isDir(parentPath(normalized)))
         throw new StorageError("not_found", `parent not found: ${path}`);
       const bytes = await readAll(body);
@@ -259,8 +263,7 @@ export function createMemoryStorage(
       const s = await storage.stat(source);
       if (source === "/") throw new StorageError("not_found", `not found: ${path}`);
       if (fileMap.has(destination) || isDir(destination)) {
-        if (opts?.overwrite !== true)
-          throw new StorageError("conflict", `target exists: ${target}`);
+        if (opts?.overwrite !== true) throw taken(target);
         if (isDir(destination)) removeDirTree(destination);
         else removeFile(destination);
       }
@@ -273,8 +276,8 @@ export function createMemoryStorage(
       const destination = normalizePath(target);
       if ((!fileMap.has(source) && !isDir(source)) || source === "/")
         throw new StorageError("not_found", `not found: ${path}`);
-      if ((fileMap.has(destination) || isDir(destination)) && opts?.overwrite === false)
-        throw new StorageError("conflict", `target exists: ${target}`);
+      if ((fileMap.has(destination) || isDir(destination)) && opts?.overwrite !== true)
+        throw taken(target);
       const file = fileMap.get(source);
       if (file !== undefined) {
         if (isDir(destination)) removeDirTree(destination);

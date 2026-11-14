@@ -11,10 +11,10 @@ describeStorageProvider(
 );
 
 /**
- * Memory storage dressed as a backend that overwrites on move, zips, proves a
- * file readable without downloading it, and has no mtime or directory probe.
+ * Memory storage dressed as a backend that zips, proves a file readable
+ * without downloading it, and has no mtime or directory probe.
  */
-function overwritingZippingStorage(): StorageProvider {
+function zippingStorage(): StorageProvider {
   const base = createMemoryStorage();
   const { setModifiedAt: _mtime, probeDirectoryRead: _probe, ...rest } = base;
   return {
@@ -22,7 +22,6 @@ function overwritingZippingStorage(): StorageProvider {
     probeFileRead: async (path) => {
       await base.statFile(path);
     },
-    move: (path, target, opts) => base.move(path, target, { overwrite: opts?.overwrite ?? true }),
     zip: async () =>
       new ReadableStream<Uint8Array>({
         start(controller) {
@@ -33,8 +32,6 @@ function overwritingZippingStorage(): StorageProvider {
   };
 }
 
-describeStorageProvider(
-  "overwriting, zipping storage without mtime or directory probe",
-  () => ({ storage: overwritingZippingStorage() }),
-  { overwritesOnMove: true },
-);
+describeStorageProvider("zipping storage without mtime or directory probe", () => ({
+  storage: zippingStorage(),
+}));
