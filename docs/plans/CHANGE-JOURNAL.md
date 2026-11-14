@@ -70,7 +70,10 @@ Indexes: `(root_id, id)` for reading a root from a position, `(created_at)` for 
   index and the scan after an interrupted first scan write nothing: with nothing to compare,
   every file would look new, and none of them changed. A scan after clearing part of the index
   does write the cleared files as new.
-- **OCR** (`ocr`): not written yet; see the remaining steps.
+- **OCR** (`source = 'ocr'`) writes a row with no content hint after it replaces a PDF with
+  its searchable version or puts a kept original back (`journal_change` in
+  `services/ocr/src/fdrive_ocr/db.py`), with the same lock and notification. A failure is
+  logged and never fails the file or the restore.
 
 ### The indexer as a consumer
 
@@ -167,12 +170,8 @@ folders; a gap or a restore leads to one full check; an older app still works.
 ### c) OCR finds PDFs from the journal and the index
 
 Proposal: the OCR worker reads PDFs that need OCR from `idx.files` (and new ones from the
-journal) instead of walking the folder every night, and writes an `ocr` row after rewriting a
-PDF so the indexer re-reads it.
-
-- The OCR hint (#148, `queue_index_work` in `services/ocr/src/fdrive_ocr/db.py`) writes
-  `idx.work`, which this step removed. Whichever of the two merges second moves it to
-  `idx.changes` with `source = 'ocr'`, taking the journal lock as above.
+journal) instead of walking the folder every night. It already writes an `ocr` row after
+rewriting or restoring a PDF, so the indexer re-reads it at once.
 
 Done when: OCR no longer walks the folder; a rewritten PDF is re-indexed within seconds; the
 nightly pass reads only PDFs that need it.

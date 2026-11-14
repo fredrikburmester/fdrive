@@ -8,8 +8,8 @@ module is the glue, mirroring filesai's `run.sh` behaviour:
 - Signed and encrypted PDFs are refused and only recorded, never touched.
 - A rewritten file keeps the original's owner, mode, and mtime; the original
   bytes are kept under `<state_dir>/originals` when `keep_originals` is set.
-- A rewrite is queued in `idx.work` so the indexer reads the new text layer
-  without waiting for its watcher or scan.
+- A rewrite is journaled in `idx.changes` so the indexer reads the new text
+  layer without waiting for its watcher or scan.
 - Per-file timeouts and a size cap (`--skip-big` plus a pre-filter) bound the
   worst case.
 """
@@ -272,7 +272,7 @@ def process_file(
                 db.record_ocr_log(
                     conn, target.root_id, rel_path, new_st.st_size, new_st.st_mtime_ns, decision.status, decision.detail
                 )
-            db.queue_index_work(conn, target.root_id, target.name, rel_path, log)
+            db.journal_change(conn, target.root_id, target.name, rel_path, log)
             log(f"[{target.name}] OCR'd: {rel_path}")
         else:
             with db.ocr_file_lock(conn, target.root_id, rel_path):

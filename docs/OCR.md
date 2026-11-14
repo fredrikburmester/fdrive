@@ -51,14 +51,16 @@ in addition to the whole-file size cap applied before the subprocess is even sta
 
 A rewrite keeps the file's mtime but changes its bytes, and the indexer needs to read them
 again to find the new text layer. After each replace, and after each restore (see
-[Restoring](#restoring)), the service adds an `idx.work` row for the file's root-relative
-path and sends `NOTIFY idx_work` with the root's name, in one transaction, as the API does
-for its own changes (see [how changes arrive](INDEXER.md#how-changes-arrive)), so the
-indexer reads the file as soon as it is notified rather than when its watcher (unreliable on
-some mounts) or its scan (hourly by default) gets to it. The row has no content hint, since
-the bytes are new. The write is `db.queue_index_work`. A failure is logged as `could not tell
-the indexer about <path>` and never fails the file or the restore: the watcher and the scan
-still find it. Nothing is queued for a PDF left untouched.
+[Restoring](#restoring)), the service appends a row for the file's root-relative path to the
+change journal, `idx.changes`, with source `ocr`, and sends `NOTIFY idx_changes` with the
+root's name. It does so in one transaction that first takes the journal's advisory lock, as
+the API does for its own changes (see [how changes arrive](INDEXER.md#how-changes-arrive) and
+the [change journal](plans/CHANGE-JOURNAL.md)), so the indexer reads the file as soon as it
+is notified rather than when its watcher (unreliable on some mounts) or its scan (hourly by
+default) gets to it. The row has no content hint, since the bytes are new. The write is
+`db.journal_change`. A failure is logged as `could not tell the indexer about <path>` and
+never fails the file or the restore: the watcher and the scan still find it. Nothing is
+journaled for a PDF left untouched.
 
 ## Settings (read from `app.settings` before every pass)
 

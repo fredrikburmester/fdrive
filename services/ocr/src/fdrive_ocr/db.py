@@ -2,7 +2,7 @@
 in `packages/db/drizzle/*.sql`. It reads `app.settings` (shared with the
 indexer) and `idx.roots` (upserting by name, same as the indexer), and owns
 `idx.ocr_log` (the done-log) and `idx.ocr_runs` (nightly pass history). It
-adds `idx.work` rows for the files it rewrites, as the API does for its own.
+journals the files it rewrites in `idx.changes`, as the API does its own.
 """
 
 from __future__ import annotations
@@ -134,24 +134,33 @@ def record_ocr_log(
         )
 
 
-#: The channel the indexer listens on for new `idx.work` rows; the payload is the root's name.
-INDEX_WORK_CHANNEL = "idx_work"
+#: The channel a write to the change journal wakes; the payload is the root's name.
+CHANGES_CHANNEL = "idx_changes"
+
+#: Taken before inserting into the journal and held until commit, by every writer in every
+#: language, so positions commit in order (docs/plans/CHANGE-JOURNAL.md).
+JOURNAL_LOCK = "SELECT pg_advisory_xact_lock(hashtextextended('idx.changes', 0))"
 
 
-def queue_index_work(conn: psycopg.Connection, root_id: int, root: str, path: str, log: Callable[[str], None]) -> None:
-    """Tells the indexer this service rewrote `path` (root-relative, as
-    `idx.files.path`) with an OCR result or a restored original: an `idx.work`
-    row and `NOTIFY idx_work` with the root's name in one transaction, as the
-    API's `createIndexWorkWriter` writes them. The row has no content hint,
-    since the bytes are new and the indexer has to read them.
+def journal_change(conn: psycopg.Connection, root_id: int, root: str, path: str, log: Callable[[str], None]) -> None:
+    """Tells the indexer, and every other reader of the change journal, that this
+    service rewrote `path` (root-relative, as `idx.files.path`) with an OCR
+    result or a restored original: an `idx.changes` row with source `ocr`, in
+    one transaction that takes the journal's lock first and sends
+    `NOTIFY idx_changes` with the root's name, as the API's
+    `createChangeJournal` writes them. The row has no content hint, since the
+    bytes are new and the indexer has to read them.
 
-    A hint only makes the indexer look sooner. A failure is logged and never
+    A row only makes the indexer look sooner. A failure is logged and never
     raised: its watcher and periodic scan still find the change.
     """
     try:
         with conn.transaction(), conn.cursor() as cur:
-            cur.execute('INSERT INTO "idx"."work" (root_id, path) VALUES (%s, %s)', (root_id, path))
-            cur.execute("SELECT pg_notify(%s, %s)", (INDEX_WORK_CHANNEL, root))
+            cur.execute(JOURNAL_LOCK)
+            cur.execute(
+                """INSERT INTO "idx"."changes" (root_id, path, source) VALUES (%s, %s, 'ocr')""", (root_id, path)
+            )
+            cur.execute("SELECT pg_notify(%s, %s)", (CHANGES_CHANNEL, root))
     except psycopg.Error as error:
         log(f"[{root}] could not tell the indexer about {path}: {error}")
 

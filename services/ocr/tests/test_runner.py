@@ -12,7 +12,7 @@ from io import StringIO
 from pathlib import Path
 
 import pytest
-from conftest import IndexWork
+from conftest import Journal
 
 from fdrive_ocr import db, runner
 from fdrive_ocr.decide import STATUS_TIMEOUT
@@ -324,7 +324,7 @@ def test_process_file_uses_same_directory_for_atomic_replace(tmp_path: Path, mon
     monkeypatch.setattr(runner.db, "is_done", lambda *args: False)
     monkeypatch.setattr(runner.db, "ocr_file_lock", lambda *args: nullcontext())
     monkeypatch.setattr(runner.db, "backup_checkpoint", lambda _conn: nullcontext())
-    monkeypatch.setattr(runner.db, "queue_index_work", lambda *args: None)
+    monkeypatch.setattr(runner.db, "journal_change", lambda *args: None)
     monkeypatch.setattr(runner.os, "replace", replace_across_mounts_fails)
 
     status, rewrite = runner.process_file(
@@ -509,8 +509,8 @@ def test_process_file_timeout(postgres_dsn: str, tmp_path: Path) -> None:
 # -- telling the indexer -------------------------------------------------------------
 
 
-def test_process_file_queues_the_rewritten_pdf_for_the_indexer(
-    postgres_dsn: str, tmp_path: Path, index_work: IndexWork
+def test_process_file_journals_the_rewritten_pdf_for_the_indexer(
+    postgres_dsn: str, tmp_path: Path, journal: Journal
 ) -> None:
     conn = db.connect(postgres_dsn)
     try:
@@ -524,15 +524,15 @@ def test_process_file_queues_the_rewritten_pdf_for_the_indexer(
         )
         assert (status, rewrite) == ("ocred", True)
         # No content hint: OCR changed the bytes, so the indexer reads them.
-        assert index_work.rows() == [(root_id, "docs/a.pdf", None, None, None, None, None, None)]
-        assert index_work.notifications() == ["files"]
+        assert journal.rows() == [(root_id, "docs/a.pdf", None, "ocr", None, None, None, None, None)]
+        assert journal.notifications() == ["files"]
     finally:
         conn.close()
 
 
 @pytest.mark.parametrize("marker", ["FAIL", "HASTEXT"])
-def test_process_file_queues_nothing_when_it_leaves_the_pdf_alone(
-    postgres_dsn: str, tmp_path: Path, index_work: IndexWork, marker: str
+def test_process_file_journals_nothing_when_it_leaves_the_pdf_alone(
+    postgres_dsn: str, tmp_path: Path, journal: Journal, marker: str
 ) -> None:
     conn = db.connect(postgres_dsn)
     try:
@@ -543,15 +543,15 @@ def test_process_file_queues_nothing_when_it_leaves_the_pdf_alone(
             conn, target, str(f), DEFAULT_SETTINGS, str(tmp_path / "state"), 30, 2, set(), lambda _m: None
         )
         assert rewrite is False, status
-        assert index_work.rows() == []
-        assert index_work.notifications() == []
+        assert journal.rows() == []
+        assert journal.notifications() == []
     finally:
         conn.close()
 
 
-@pytest.mark.usefixtures("failing_index_work")
+@pytest.mark.usefixtures("failing_journal")
 def test_a_failed_indexer_hint_is_logged_and_the_pass_goes_on(
-    postgres_dsn: str, tmp_path: Path, index_work: IndexWork
+    postgres_dsn: str, tmp_path: Path, journal: Journal
 ) -> None:
     conn = db.connect(postgres_dsn)
     try:
@@ -568,9 +568,9 @@ def test_a_failed_indexer_hint_is_logged_and_the_pass_goes_on(
         assert {key[0] for key in db.done_keys(conn, root_id)} == {"a.pdf", "b.pdf"}
         failures = [line for line in logs if "could not tell the indexer" in line]
         assert len(failures) == 2
-        assert "[files] could not tell the indexer about a.pdf: idx.work is unavailable" in failures[0]
-        assert index_work.rows() == []
-        assert index_work.notifications() == []
+        assert "[files] could not tell the indexer about a.pdf: idx.changes is unavailable" in failures[0]
+        assert journal.rows() == []
+        assert journal.notifications() == []
     finally:
         conn.close()
 

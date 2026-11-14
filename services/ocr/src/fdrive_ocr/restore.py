@@ -9,8 +9,8 @@ hashed while it is copied, fsynced, given the destination's ownership and the
 recorded mtime, and only then swapped in with `os.replace`, all inside the same
 `db.backup_checkpoint` gate a rewrite takes. It then records a `restored` row in
 the done-log for the restored file's own key, without which the next pass would
-immediately OCR the file straight back again, and queues the path in `idx.work`
-for the indexer, as a rewrite does.
+immediately OCR the file straight back again, and journals the path in
+`idx.changes` for the indexer, as a rewrite does.
 """
 
 from __future__ import annotations
@@ -516,7 +516,7 @@ def restore_original(
             conn, target.root_id, mapping.path, mapping.size, mapping.mtime_ns, STATUS_RESTORED, "original restored"
         )
     index.invalidate()
-    db.queue_index_work(conn, target.root_id, target.name, mapping.path, log)
+    db.journal_change(conn, target.root_id, target.name, mapping.path, log)
     log(f"[{mapping.root}] restored original: {mapping.path}")
     return RestoreOutcome(True, state=state, root=mapping.root, path=mapping.path)
 
