@@ -24,6 +24,18 @@ export type MoveTrashLeafKind = "file" | "dir";
  */
 export const MOVE_LAYOUT_NAMESPACE = ".fdrive-move-v1";
 
+/**
+ * True when `path` lies in fdrive's Trash layout under any folder: one of its
+ * segments is the layout's namespace, in any case. It does not depend on
+ * where Trash is set to be now, so a leaf in a Trash since turned off or
+ * moved is still recognised.
+ */
+export function isInMoveTrashLayout(path: string): boolean {
+  return splitSegments(normalizePath(path)).some(
+    (segment) => segment.toLowerCase() === MOVE_LAYOUT_NAMESPACE,
+  );
+}
+
 /** The versioned namespace under the trash folder that every leaf lives in. */
 export function moveTrashRootPath(trashPath: string): string {
   return normalizePath(`${normalizePath(trashPath)}/${MOVE_LAYOUT_NAMESPACE}`);

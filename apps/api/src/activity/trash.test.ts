@@ -34,6 +34,28 @@ describe("trash binding for a recorded delete", () => {
     });
   });
 
+  it("tells a delete wrapping another, of the same path, where it went too", async () => {
+    const base = createMemoryStorage();
+    await seed(base, "/docs/a.txt");
+    const moving = withMoveToTrash({
+      storage: base,
+      trashPath: TRASH,
+      clock: () => CLOCK,
+      onRecycled: captureRecycleReceipt,
+    });
+    // As the activity-recording storage MCP uses wraps the move-to-trash one.
+    const recording: StorageProvider = {
+      ...moving,
+      deleteFile: async (path) => {
+        await deleteWithActivityReceipt(moving, path, "file");
+      },
+    };
+
+    const facts = await deleteWithActivityReceipt(recording, "/docs/a.txt", "file");
+
+    expect(parseMoveTrashLeaf(TRASH, facts.trashLeaf as string)?.originalPath).toBe("/docs/a.txt");
+  });
+
   it("deletes a folder for real and never lists anything when there is no Trash", async () => {
     const storage = createMemoryStorage();
     await storage.mkdir("/docs");

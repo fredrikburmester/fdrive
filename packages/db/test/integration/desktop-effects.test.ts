@@ -9,6 +9,7 @@ import {
   createOfficeFileRepo,
   createOfficeWriteScope,
   createRepos,
+  createShareRepo,
   type DesktopEffectContext,
   migrate,
 } from "../../src/index.js";
@@ -185,6 +186,50 @@ it("commits metadata before delivery and retries only notification after a failu
     "/new/a",
     "/old/a",
   ]);
+});
+
+it("moves or drops the public links it was told to with the rest of the metadata, once, and no others", async () => {
+  const f = await fixture();
+  const shares = createShareRepo(first.db);
+  const link = (paths: string[]) =>
+    shares.insert({
+      identityId: f.identity.id,
+      name: "Link",
+      description: "",
+      scope: "read",
+      paths,
+      expiresAt: null,
+      maxDownloads: 0,
+      presentation: "auto",
+      passwordHash: null,
+      at: new Date(),
+    });
+  const moved = await link(["/old/a.txt", "/oldish"]);
+  const untold = await link(["/kept/a.txt"]);
+  const taken = await link(["/taken"]);
+  await f.commit({
+    shareMove: { identityId: f.identity.id, from: "/old", to: "/new" },
+  });
+  // Nothing recorded, or nothing to do: links stay.
+  await f.commit({ from: "/kept", to: "/elsewhere" });
+  await f.commit({ from: "/kept", to: "/elsewhere", shareMove: null });
+  // Taken out of the owner's files: the link drops it.
+  await f.commit({
+    from: "/taken",
+    to: "/taken",
+    shareMove: { identityId: f.identity.id, from: "/taken", to: null },
+  });
+  expect(await f.worker.processNext(vi.fn(), f.identity.id)).toMatchObject({
+    state: "completed",
+  });
+  expect((await shares.get(moved.id))?.paths).toEqual(["/new/a.txt", "/oldish"]);
+  for (let i = 0; i < 3; i++)
+    expect(await f.worker.processNext(vi.fn(), f.identity.id)).toMatchObject({
+      state: "completed",
+    });
+  expect((await shares.get(untold.id))?.paths).toEqual(["/kept/a.txt"]);
+  expect(await shares.get(taken.id)).toBeNull();
+  expect((await shares.get(moved.id))?.paths).toEqual(["/new/a.txt", "/oldish"]);
 });
 
 it("preserves reused source paths and refuses newer destination metadata atomically", async () => {

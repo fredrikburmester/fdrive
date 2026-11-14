@@ -37,6 +37,7 @@ export type {
   DesktopEffectEvent,
   DesktopEffectStatus,
   DesktopEffectsRepo,
+  DesktopShareMove,
 } from "./repos/desktop-effects-types.js";
 export {
   createDesktopPublishLock,
@@ -118,7 +119,7 @@ export type {
 export { createMemoryOfficeFileRepo } from "./repos/office-files-state.js";
 export type { OfficeWriteContext, OfficeWriteScope } from "./repos/office-write-scope.js";
 export { createOfficeWriteScope } from "./repos/office-write-scope.js";
-export { createShareRepo } from "./repos/shares.js";
+export { createShareRepo, deleteSharePrefix, moveSharePrefix } from "./repos/shares.js";
 export type {
   MemoryShareOptions,
   ShareInsertInput,

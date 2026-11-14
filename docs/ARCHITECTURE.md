@@ -65,7 +65,16 @@ or content hash alone never grants another identity access. Public share links a
 own: a module whose share strategy is `owned` (the local folder) keeps the share in
 `app.shares` and serves it through the owner's storage, which the share reaches only through
 the identity storage factory, only inside its paths, and only for the operations its scope
-allows. Trash, backup folders and `/Shared with me` are never reachable through a link.
+allows. Trash, backup folders, `/Shared with me` and the Mac's `/.fdrive-desktop` (which
+holds its Trash) are never reachable through a link. A link follows the item it names
+wherever it moves, so it never stays at a path where something new could appear: on every
+route other path-keyed metadata follows, through the Trash and its restores, the Mac's
+metadata recovery and moves the indexer reports. Inside a place no link reaches (Trash, say)
+it shows not found, and it works again once the item comes back out. Anything in fdrive's
+Trash layout (a `.fdrive-move-v1` segment) stays refused wherever it lies, even after Trash
+is turned off or moved. A move inside a folder shared with someone counts in the owner's
+files; taken out of them, deleted, or purged from Trash, the item leaves its links, and a
+link left with nothing goes.
 Folder ZIP downloads are held to two at a time per link, an hour and `FDRIVE_JOB_MAX_BYTES`.
 Protected share metadata must not leak before authentication. Share passwords are never
 stored in clear: a row holds only a scrypt hash in `password_hash`, which no share record

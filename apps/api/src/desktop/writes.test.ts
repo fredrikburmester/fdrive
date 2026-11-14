@@ -114,12 +114,11 @@ it("retains a durable upload receipt and never republishes after acknowledgement
   expect(result.item?.id).toBe(original.id);
   expect(result.item?.version.content).toBe(sha("saved"));
   expect(await f.read("/old.txt")).toBe("saved");
-  expect(f.effectContext).toHaveBeenCalledWith(f.principal, {
-    from: "/old.txt",
-    to: "/old.txt",
-    directory: false,
-    trash: false,
-  });
+  expect(f.effectContext).toHaveBeenCalledWith(
+    f.principal,
+    { from: "/old.txt", to: "/old.txt", directory: false, trash: false },
+    { from: "/old.txt", to: "/old.txt" },
+  );
   const restarted = createDesktopWrites(f.deps);
   expect(await restarted.commit(f.principal, request.operationId)).toEqual(result);
   await restarted.acknowledge(f.principal, request.operationId);

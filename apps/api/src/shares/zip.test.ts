@@ -149,7 +149,8 @@ describe("archive downloads of a public share", () => {
       at: h.clock(),
     });
     expect((await h.request(`${pub(id)}/archive`)).status).toBe(404);
-    expect(await used(h, id)).toBe(0);
+    expect((await h.request(pub(id))).status).toBe(404);
+    expect((await h.shares.get(id))?.views).toBe(0);
   });
 
   it("is unsupported on storage without a zip", async () => {

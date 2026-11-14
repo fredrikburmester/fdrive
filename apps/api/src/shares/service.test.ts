@@ -66,6 +66,7 @@ describe("the shares service", () => {
       paths: ["/folder"],
       unavailableReason: null,
       unlocked: false,
+      restricted: ["/.fdrive-desktop", "/Shared with me"],
     });
     const issued = await h.service.credential(id, "secret");
     expect((await h.service.publicThumbTarget(id, issued)).unlocked).toBe(true);
