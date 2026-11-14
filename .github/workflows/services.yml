@@ -38,6 +38,6 @@ jobs:
         with:
           python-version: '3.12'
       - run: python -m pip install -e '.[dev]'
-      - run: ruff check src tests $([[ -d scripts ]] && echo scripts)
-      - run: mypy src $([[ -d scripts ]] && echo scripts)
+      - run: ruff check src tests
+      - run: mypy src
       - run: pytest -q --cov=${{ matrix.module }} --cov-report=term-missing --cov-fail-under=95

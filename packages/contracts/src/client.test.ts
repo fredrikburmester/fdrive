@@ -153,7 +153,8 @@ const VALID_ENTRY = {
 
 const VALID_LIST = { path: "/photos", entries: [VALID_ENTRY] };
 const VALID_ABOUT = {
-  version: "1.0.0",
+  version: "development",
+  uptimeSeconds: 2,
   providers: [{ type: "local", label: "Local folder" }],
   setupRequired: false,
 };

@@ -214,7 +214,7 @@ describe("prune", () => {
 
 describe("read", () => {
   it("returns a root's rows after a position, oldest first, up to a limit", async () => {
-    await db.execute(sql`insert into idx.roots (name) values ('files'), ('photos')`);
+    await db.execute(sql`insert into idx.roots (name) values ('files'), ('other')`);
     await journal.append("files", "api", [
       {
         path: "alice/a.pdf",
@@ -227,7 +227,7 @@ describe("read", () => {
         },
       },
     ]);
-    await journal.append("photos", "watcher", [{ path: "p.jpg" }]);
+    await journal.append("other", "watcher", [{ path: "p.jpg" }]);
     await journal.append("files", "scan", [{ path: "alice/old", targetPath: "alice/new" }]);
     await journal.append("files", "ocr", [{ path: "alice/b.pdf" }]);
 
@@ -264,12 +264,12 @@ describe("read", () => {
     expect(await journal.read("nowhere", 0, 10)).toEqual({ gap: false, changes: [] });
     // Several roots read as one, in position order, each row naming its root.
     expect(
-      (await journal.read(["photos", "files"], 1, 10)).changes.map((change) => [
+      (await journal.read(["other", "files"], 1, 10)).changes.map((change) => [
         change.position,
         change.root,
       ]),
     ).toEqual([
-      [2, "photos"],
+      [2, "other"],
       [3, "files"],
       [4, "files"],
     ]);
@@ -337,23 +337,23 @@ describe("epoch", () => {
 describe("positions and cursors", () => {
   it("ends at the newest position over every root, 0 when nothing was written", async () => {
     expect(await journal.end()).toBe(0);
-    await db.execute(sql`insert into idx.roots (name) values ('files'), ('photos')`);
+    await db.execute(sql`insert into idx.roots (name) values ('files'), ('other')`);
     await journal.append("files", "api", [{ path: "a" }, { path: "b" }]);
-    await journal.append("photos", "api", [{ path: "c" }]);
+    await journal.append("other", "api", [{ path: "c" }]);
     expect(await journal.end()).toBe(3);
   });
 
   it("saves and reads a position per consumer and root", async () => {
-    await db.execute(sql`insert into idx.roots (name) values ('files'), ('photos')`);
+    await db.execute(sql`insert into idx.roots (name) values ('files'), ('other')`);
     expect(await journal.cursor("indexer", "files")).toBeNull();
     await journal.saveCursor("indexer", "files", 7);
-    await journal.saveCursor("indexer", "photos", 2);
+    await journal.saveCursor("indexer", "other", 2);
     await journal.saveCursor("web", "files", 5);
     await journal.saveCursor("indexer", "files", 9);
     expect(await journal.cursor("indexer", "files")).toBe(9);
-    expect(await journal.cursor("indexer", "photos")).toBe(2);
+    expect(await journal.cursor("indexer", "other")).toBe(2);
     expect(await journal.cursor("web", "files")).toBe(5);
-    expect(await journal.cursor("web", "photos")).toBeNull();
+    expect(await journal.cursor("web", "other")).toBeNull();
     // A root the indexer has not created has no position to keep.
     await journal.saveCursor("indexer", "nowhere", 3);
     expect(await journal.cursor("indexer", "nowhere")).toBeNull();

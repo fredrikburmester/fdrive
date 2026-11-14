@@ -8,7 +8,7 @@
     "node": ">=24"
   },
   "scripts": {
-    "bootstrap": "pnpm install --frozen-lockfile && pnpm --filter \"@fdrive/db...\" run build && pnpm install --frozen-lockfile",
+    "bootstrap": "pnpm install --frozen-lockfile",
     "lint": "biome check .",
     "lint:fix": "biome check --write .",
     "typecheck": "turbo run typecheck && pnpm typecheck:tools",

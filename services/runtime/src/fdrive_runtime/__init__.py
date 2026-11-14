@@ -1,1 +1,1 @@
-"""Runtime lifecycle control for bundled, UI-selected fdrive workers."""
+"""Lifecycle control for the bundled ONLYOFFICE server."""

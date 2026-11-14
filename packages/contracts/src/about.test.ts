@@ -3,18 +3,19 @@ import { AboutResponse } from "./about";
 
 describe("AboutResponse", () => {
   const valid = {
-    version: "1.0.0",
+    version: "development",
+    uptimeSeconds: 90.5,
     providers: [{ type: "local", label: "Local folder" }],
     setupRequired: false,
   };
 
-  it("accepts API uptime while remaining compatible with older servers", () => {
-    expect(AboutResponse.parse({ ...valid, uptimeSeconds: 90.5 }).uptimeSeconds).toBe(90.5);
-    expect(AboutResponse.parse(valid).uptimeSeconds).toBeUndefined();
+  it("requires a non-negative API uptime", () => {
+    const { uptimeSeconds: _drop, ...rest } = valid;
+    expect(AboutResponse.safeParse(rest).success).toBe(false);
     expect(AboutResponse.safeParse({ ...valid, uptimeSeconds: -1 }).success).toBe(false);
   });
 
-  it("accepts the release and revision while remaining compatible with older servers", () => {
+  it("carries the release and revision when the build has them", () => {
     const build = { release: "0.1.0", revision: "0123456789abcdef0123456789abcdef01234567" };
     expect(AboutResponse.parse({ ...valid, ...build })).toEqual({ ...valid, ...build });
     expect(AboutResponse.parse(valid)).not.toHaveProperty("release");
