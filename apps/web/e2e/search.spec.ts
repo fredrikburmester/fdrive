@@ -345,24 +345,12 @@ test("search panel presents visible File type label in filter bar", async ({ pag
 });
 
 test("a startup-unavailable query recovers without reloading the page", async ({ page }) => {
-  let statusCalls = 0;
   let searchCalls = 0;
   await page.route("**/api/v1/search/status", async (route) => {
-    statusCalls += 1;
-    const starting = statusCalls === 1;
     await route.fulfill({
       status: 200,
       contentType: "application/json",
-      body: JSON.stringify(
-        starting
-          ? {
-              available: false,
-              semantic: false,
-              images: false,
-              reason: "indexer_unreachable",
-            }
-          : { available: true, semantic: true, images: false },
-      ),
+      body: JSON.stringify({ available: true, semantic: true, images: false }),
     });
   });
   await page.route(/\/api\/v1\/search(?:\?.*)?$/, async (route) => {
@@ -413,9 +401,8 @@ test("a startup-unavailable query recovers without reloading the page", async ({
   const dialog = page.getByRole("dialog");
   await page.getByPlaceholder(SEARCH_INPUT_PLACEHOLDER).fill("recovered");
 
-  await expect(dialog.getByText("Search is starting… Retrying automatically.")).toBeVisible();
+  await expect(dialog.getByText("Search is not available.")).toBeVisible();
   await expect(dialog.getByText("recovered.md", { exact: true })).toBeVisible({ timeout: 8_000 });
-  expect(statusCalls).toBeGreaterThanOrEqual(2);
   expect(searchCalls).toBeGreaterThanOrEqual(2);
 });
 

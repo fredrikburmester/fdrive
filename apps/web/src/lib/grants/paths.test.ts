@@ -30,7 +30,6 @@ const EDIT: ReceivedGrant = {
   access: "write",
 };
 const RECEIVED = [VIEW, EDIT];
-const SHARING = { shareWithPeople: true };
 
 describe("Shared with me paths", () => {
   it("knows the folder and everything under it", () => {
@@ -59,18 +58,15 @@ describe("Shared with me paths", () => {
 describe("canShareWithPeople", () => {
   const folder = { kind: "dir" as const, path: "/Photos" };
 
-  it("offers a folder of the login's own on storage that shares", () => {
-    expect(canShareWithPeople(folder, SHARING)).toBe(true);
+  it("offers a folder of the login's own", () => {
+    expect(canShareWithPeople(folder)).toBe(true);
   });
 
-  it("refuses files, all of the files, anything shared with the login, and other storage", () => {
-    expect(canShareWithPeople({ kind: "file", path: "/a.txt" }, SHARING)).toBe(false);
-    expect(canShareWithPeople({ kind: "dir", path: "/" }, SHARING)).toBe(false);
-    expect(canShareWithPeople({ kind: "dir", path: "/Shared with me" }, SHARING)).toBe(false);
-    expect(canShareWithPeople({ kind: "dir", path: "/Shared with me/Trip/x" }, SHARING)).toBe(
-      false,
-    );
-    expect(canShareWithPeople(folder, { shareWithPeople: false })).toBe(false);
+  it("refuses files, all of the files and anything shared with the login", () => {
+    expect(canShareWithPeople({ kind: "file", path: "/a.txt" })).toBe(false);
+    expect(canShareWithPeople({ kind: "dir", path: "/" })).toBe(false);
+    expect(canShareWithPeople({ kind: "dir", path: "/Shared with me" })).toBe(false);
+    expect(canShareWithPeople({ kind: "dir", path: "/Shared with me/Trip/x" })).toBe(false);
   });
 });
 
@@ -139,7 +135,7 @@ describe("dropBlock", () => {
 
 describe("entryRestrictions", () => {
   it("leaves the login's own folder unrestricted and offers sharing it", () => {
-    expect(entryRestrictions({ kind: "dir", path: "/Photos" }, SHARING, RECEIVED)).toEqual({
+    expect(entryRestrictions({ kind: "dir", path: "/Photos" }, RECEIVED)).toEqual({
       shareWithPeople: true,
       publicLink: true,
       leave: null,
@@ -148,9 +144,7 @@ describe("entryRestrictions", () => {
   });
 
   it("offers leaving a shared folder and nothing its owner keeps", () => {
-    expect(
-      entryRestrictions({ kind: "dir", path: "/Shared with me/Trip" }, SHARING, RECEIVED),
-    ).toEqual({
+    expect(entryRestrictions({ kind: "dir", path: "/Shared with me/Trip" }, RECEIVED)).toEqual({
       shareWithPeople: false,
       publicLink: false,
       leave: VIEW,
@@ -161,7 +155,6 @@ describe("entryRestrictions", () => {
   it("keeps public links out of a shared folder without offering to leave what is inside", () => {
     const inside = entryRestrictions(
       { kind: "file", path: "/Shared with me/Budget/q1.xlsx" },
-      SHARING,
       RECEIVED,
     );
     expect(inside.publicLink).toBe(false);

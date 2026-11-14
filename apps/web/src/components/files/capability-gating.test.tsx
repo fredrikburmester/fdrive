@@ -2,7 +2,6 @@
 import type { FsEntry, OfficeStatusResponse } from "@fdrive/contracts";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { allCapabilities } from "@/lib/identity/capabilities";
 import { FileContextMenu } from "./file-context-menu";
 import { FilesToolbarActions, type FilesToolbarActionsProps } from "./toolbar";
 
@@ -23,8 +22,6 @@ const office: OfficeStatusResponse = {
   extensions: { view: ["docx"], edit: ["docx"], convert: [] },
 } as unknown as OfficeStatusResponse;
 
-const everything = allCapabilities(true);
-
 beforeEach(() => {
   vi.stubGlobal("matchMedia", (query: string) => ({
     matches: false,
@@ -39,19 +36,9 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-async function openMenu(
-  entry: FsEntry,
-  capabilities = everything,
-  selection?: { files: number; folders: number },
-) {
+async function openMenu(entry: FsEntry, trash = true) {
   render(
-    <FileContextMenu
-      entry={entry}
-      officeStatus={office}
-      capabilities={capabilities}
-      {...(selection === undefined ? {} : { selection })}
-      onAction={vi.fn()}
-    >
+    <FileContextMenu entry={entry} officeStatus={office} trash={trash} onAction={vi.fn()}>
       <span>Row</span>
     </FileContextMenu>,
   );
@@ -59,7 +46,7 @@ async function openMenu(
   await screen.findByRole("menuitem", { name: "Open" });
 }
 
-it("shows Share, the Office items and Download as zip when the login can do everything", async () => {
+it("shows Share, the Office items and Download as zip", async () => {
   await openMenu(folder);
   expect(screen.getByRole("menuitem", { name: "Share" })).toBeTruthy();
   expect(screen.getByRole("menuitem", { name: "Download as zip" })).toBeTruthy();
@@ -67,34 +54,11 @@ it("shows Share, the Office items and Download as zip when the login can do ever
   cleanup();
   await openMenu(file);
   expect(screen.getByRole("menuitem", { name: "View in Office" })).toBeTruthy();
-});
-
-it("hides Share without shares", async () => {
-  await openMenu(file, { ...everything, shares: false });
-  expect(screen.queryByRole("menuitem", { name: "Share" })).toBeNull();
-});
-
-it("hides the Office items without office even when Office itself is available", async () => {
-  await openMenu(file, { ...everything, office: false });
-  expect(screen.queryByRole("menuitem", { name: "View in Office" })).toBeNull();
-  expect(screen.queryByRole("menuitem", { name: "Edit in Office" })).toBeNull();
-});
-
-it("hides Download for a folder without zip but keeps a single file's download", async () => {
-  await openMenu(folder, { ...everything, zip: false });
-  expect(screen.queryByRole("menuitem", { name: /Download/ })).toBeNull();
-  cleanup();
-  await openMenu(file, { ...everything, zip: false });
-  expect(screen.getByRole("menuitem", { name: "Download" })).toBeTruthy();
-});
-
-it("reads Download, not Download as zip, for a mixed selection without zip", async () => {
-  await openMenu(file, { ...everything, zip: false }, { files: 2, folders: 1 });
   expect(screen.getByRole("menuitem", { name: "Download" })).toBeTruthy();
 });
 
 it("reads Delete without trash", async () => {
-  await openMenu(file, { ...everything, trash: false });
+  await openMenu(file, false);
   expect(screen.getByRole("menuitem", { name: "Delete" })).toBeTruthy();
   expect(screen.queryByRole("menuitem", { name: "Move to Trash" })).toBeNull();
 });
@@ -127,44 +91,18 @@ function toolbarProps(overrides: Partial<FilesToolbarActionsProps> = {}): FilesT
   };
 }
 
-it("toolbar hides Download for a folder-only selection without zip", () => {
-  render(<FilesToolbarActions {...toolbarProps({ capabilities: everything })} />);
-  expect(screen.getByLabelText("Download")).toBeTruthy();
-  cleanup();
-  render(
-    <FilesToolbarActions {...toolbarProps({ capabilities: { ...everything, zip: false } })} />,
-  );
-  expect(screen.queryByLabelText("Download")).toBeNull();
-  cleanup();
-  render(
-    <FilesToolbarActions
-      {...toolbarProps({
-        capabilities: { ...everything, zip: false },
-        selection: { files: 2, folders: 0 },
-      })}
-    />,
-  );
+it("toolbar downloads a selection of folders", () => {
+  render(<FilesToolbarActions {...toolbarProps()} />);
   expect(screen.getByLabelText("Download")).toBeTruthy();
 });
 
-it("toolbar hides the Office document kinds without office", async () => {
-  render(
-    <FilesToolbarActions {...toolbarProps({ capabilities: { ...everything, office: false } })} />,
-  );
-  fireEvent.click(screen.getByTitle("New"));
-  await screen.findByRole("menuitem", { name: "Text file" });
-  expect(screen.queryByRole("menuitem", { name: "Document" })).toBeNull();
-});
-
-it("toolbar hides Show thumbnails without index", async () => {
-  render(
-    <FilesToolbarActions {...toolbarProps({ capabilities: { ...everything, index: false } })} />,
-  );
+it("toolbar hides Show thumbnails when the files folder is not indexed", async () => {
+  render(<FilesToolbarActions {...toolbarProps({ indexed: false })} />);
   fireEvent.click(screen.getByTitle("View"));
   await screen.findByRole("menuitemradio", { name: /List/ });
   expect(screen.queryByText("Show thumbnails")).toBeNull();
   cleanup();
-  render(<FilesToolbarActions {...toolbarProps({ capabilities: everything })} />);
+  render(<FilesToolbarActions {...toolbarProps()} />);
   fireEvent.click(screen.getByTitle("View"));
   expect(await screen.findByText("Show thumbnails")).toBeTruthy();
 });
@@ -191,7 +129,7 @@ it("toolbar offers icon size in grid view and density in list view", async () =>
 it("offers Organize in the menu and selection bar only when AI is set up", async () => {
   const onAction = vi.fn();
   render(
-    <FileContextMenu entry={file} capabilities={everything} showOrganize onAction={onAction}>
+    <FileContextMenu entry={file} showOrganize onAction={onAction}>
       <span>Row</span>
     </FileContextMenu>,
   );
