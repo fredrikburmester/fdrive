@@ -163,6 +163,8 @@ export class LocalIndexerStack {
       "infinity",
     ]);
     await this.run("indexer", [
+      "-p",
+      "127.0.0.1::8010",
       "-v",
       `${this.folder.root}:${ROOT_IN_CONTAINER}:ro`,
       "-e",
@@ -183,6 +185,11 @@ export class LocalIndexerStack {
       },
       { timeout: 60_000, interval: 100 },
     );
+  }
+
+  /** The indexer's internal HTTP API, as this host reaches it. */
+  async indexerUrl(): Promise<string> {
+    return `http://127.0.0.1:${await this.port("indexer", 8010)}`;
   }
 
   /**

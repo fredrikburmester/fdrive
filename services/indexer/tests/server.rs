@@ -98,6 +98,7 @@ fn app_state(contexts: Vec<Arc<RootContext>>, db_url: &str, content: Option<Arc<
         jobs: Jobs::default(),
         failure_retry_feature: Mutex::new("thumbnails".to_owned()),
         instance_id: uuid::Uuid::new_v4().to_string(),
+        names: None,
     })
 }
 
@@ -730,6 +731,7 @@ fn reindex_validation_disabled_and_unavailable() {
         jobs: Jobs::default(),
         failure_retry_feature: Mutex::new("thumbnails".to_owned()),
         instance_id: "instance".to_owned(),
+        names: None,
     });
     assert_eq!(post_json(&unwoken, "/reindex", &json!({"root": "r"})).0, 200);
 
