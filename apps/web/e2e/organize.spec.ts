@@ -3,7 +3,7 @@ import { expect, type Page, test } from "@playwright/test";
 import { dismissActivityPanel } from "./support/activity.js";
 import { FAKE_AI_MODEL, startFakeAi } from "./support/fake-ai.js";
 import { listing } from "./support/regions.js";
-import { uniqueName } from "./support/unique.js";
+import { openSandbox } from "./support/sandbox.js";
 import { uploadFiles } from "./support/upload.js";
 
 const AI_URL = "/api/v1/system/ai";
@@ -47,10 +47,7 @@ test("Organize suggests other folders, keeps both on a clash, moves what is kept
     await page.getByRole("button", { name: "Check connection" }).click();
     await expect(page.getByText(`${FAKE_AI_MODEL} is available.`)).toBeVisible();
 
-    const sandbox = uniqueName("organize");
-    await page.goto("/files");
-    await createFolder(page, sandbox);
-    await openFolder(page, sandbox, new RegExp(`/files/${sandbox}$`));
+    const sandbox = await openSandbox(page, "organize");
     await createFolder(page, "Finance");
     await createFolder(page, "inbox");
     // An older invoice already in Finance clashes with the one the assistant will file there.

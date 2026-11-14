@@ -1,5 +1,6 @@
 import { expect, type Locator, type Page, test } from "@playwright/test";
 import { breadcrumb, listing } from "./support/regions.js";
+import { openSandbox } from "./support/sandbox.js";
 import { uniqueName } from "./support/unique.js";
 import { uploadFiles } from "./support/upload.js";
 
@@ -20,12 +21,7 @@ async function uploadTextFile(page: Page, name: string, contents: string): Promi
 
 /** Creates a fresh sandbox folder under root, navigates into it, and returns its name. */
 async function createSandbox(page: Page): Promise<string> {
-  const sandbox = uniqueName("move-copy");
-  await page.goto("/files");
-  await createFolder(page, sandbox);
-  await listing(page).getByText(sandbox, { exact: true }).dblclick();
-  await expect(page).toHaveURL(new RegExp(`/files/${sandbox}$`));
-  return sandbox;
+  return openSandbox(page, "move-copy");
 }
 
 test("Move to moves a file into the chosen folder", async ({ page }) => {

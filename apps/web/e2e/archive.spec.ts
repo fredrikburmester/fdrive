@@ -1,6 +1,6 @@
 import { expect, type Page, test } from "@playwright/test";
-import { listing } from "./support/regions.js";
-import { uniqueName } from "./support/unique.js";
+import { breadcrumb, listing } from "./support/regions.js";
+import { openSandbox } from "./support/sandbox.js";
 import { uploadFiles } from "./support/upload.js";
 
 async function createFolder(page: Page, name: string): Promise<void> {
@@ -17,14 +17,12 @@ async function uploadTextFile(page: Page, name: string, contents: string): Promi
   await expect(listing(page).getByText(name, { exact: true })).toBeVisible();
 }
 
-/** Creates a fresh sandbox folder under root, navigates into it, and returns its name. */
+/**
+ * Creates a fresh sandbox folder under root, navigates into it, and returns its name.
+ * Tests return to it through its breadcrumb, never by finding it in the root listing.
+ */
 async function createSandbox(page: Page): Promise<string> {
-  const sandbox = uniqueName("archive");
-  await page.goto("/files");
-  await createFolder(page, sandbox);
-  await listing(page).getByText(sandbox, { exact: true }).dblclick();
-  await expect(page).toHaveURL(new RegExp(`/files/${sandbox}$`));
-  return sandbox;
+  return openSandbox(page, "archive");
 }
 
 test("Duplicate creates a copy with a unique name", async ({ page }) => {
@@ -45,8 +43,7 @@ test("Compress builds a zip that shows as a job in the Activity panel and appear
   await listing(page).getByText("docs", { exact: true }).dblclick();
   await expect(page).toHaveURL(new RegExp(`/files/${sandbox}/docs$`));
   await uploadTextFile(page, "note.txt", "a note");
-  await page.getByRole("link", { name: "Home" }).click();
-  await listing(page).getByText(sandbox, { exact: true }).dblclick();
+  await breadcrumb(page).getByRole("link", { name: sandbox, exact: true }).click();
   await expect(page).toHaveURL(new RegExp(`/files/${sandbox}$`));
 
   await listing(page).getByText("docs", { exact: true }).click({ button: "right" });
@@ -69,8 +66,7 @@ test("Compress also works with the tar.gz format", async ({ page }) => {
   await listing(page).getByText("docs", { exact: true }).dblclick();
   await expect(page).toHaveURL(new RegExp(`/files/${sandbox}/docs$`));
   await uploadTextFile(page, "note.txt", "a note");
-  await page.getByRole("link", { name: "Home" }).click();
-  await listing(page).getByText(sandbox, { exact: true }).dblclick();
+  await breadcrumb(page).getByRole("link", { name: sandbox, exact: true }).click();
   await expect(page).toHaveURL(new RegExp(`/files/${sandbox}$`));
 
   await listing(page).getByText("docs", { exact: true }).click({ button: "right" });
@@ -118,8 +114,7 @@ test("Extract to unpacks the archive into a new folder under the chosen destinat
   await listing(page).getByText("docs", { exact: true }).dblclick();
   await expect(page).toHaveURL(new RegExp(`/files/${sandbox}/docs$`));
   await uploadTextFile(page, "note.txt", "a note");
-  await page.getByRole("link", { name: "Home" }).click();
-  await listing(page).getByText(sandbox, { exact: true }).dblclick();
+  await breadcrumb(page).getByRole("link", { name: sandbox, exact: true }).click();
   await expect(page).toHaveURL(new RegExp(`/files/${sandbox}$`));
 
   await listing(page).getByText("docs", { exact: true }).click({ button: "right" });
@@ -168,8 +163,7 @@ test("opening a zip previews its entries and filters them", async ({ page }) => 
   await expect(page).toHaveURL(new RegExp(`/files/${sandbox}/docs$`));
   await uploadTextFile(page, "note.txt", "a note");
   await uploadTextFile(page, "other.txt", "something else");
-  await page.getByRole("link", { name: "Home" }).click();
-  await listing(page).getByText(sandbox, { exact: true }).dblclick();
+  await breadcrumb(page).getByRole("link", { name: sandbox, exact: true }).click();
   await expect(page).toHaveURL(new RegExp(`/files/${sandbox}$`));
 
   await listing(page).getByText("docs", { exact: true }).click({ button: "right" });
@@ -202,8 +196,7 @@ test("extracting from the preview unpacks the archive into a chosen destination"
   await listing(page).getByText("docs", { exact: true }).dblclick();
   await expect(page).toHaveURL(new RegExp(`/files/${sandbox}/docs$`));
   await uploadTextFile(page, "note.txt", "a note");
-  await page.getByRole("link", { name: "Home" }).click();
-  await listing(page).getByText(sandbox, { exact: true }).dblclick();
+  await breadcrumb(page).getByRole("link", { name: sandbox, exact: true }).click();
   await expect(page).toHaveURL(new RegExp(`/files/${sandbox}$`));
 
   await listing(page).getByText("docs", { exact: true }).click({ button: "right" });
@@ -244,8 +237,7 @@ test("opening a tar.gz previews its entries", async ({ page }) => {
   await listing(page).getByText("docs", { exact: true }).dblclick();
   await expect(page).toHaveURL(new RegExp(`/files/${sandbox}/docs$`));
   await uploadTextFile(page, "note.txt", "a note");
-  await page.getByRole("link", { name: "Home" }).click();
-  await listing(page).getByText(sandbox, { exact: true }).dblclick();
+  await breadcrumb(page).getByRole("link", { name: sandbox, exact: true }).click();
   await expect(page).toHaveURL(new RegExp(`/files/${sandbox}$`));
 
   await listing(page).getByText("docs", { exact: true }).click({ button: "right" });

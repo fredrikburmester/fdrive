@@ -1,5 +1,6 @@
 import { expect, type Page, test } from "@playwright/test";
 import { listing, sidebar } from "./support/regions.js";
+import { removeSandbox } from "./support/sandbox.js";
 import { uniqueName } from "./support/unique.js";
 
 /** The `[data-slot="tree-row-skeleton"]` shown for a sidebar tree row still
@@ -62,11 +63,7 @@ test("creating a folder in the listing makes it appear in the sidebar tree", asy
   await expect(sidebar(page).getByRole("link", { name })).toBeVisible();
 
   // Clean up: the folder is created directly under alice's shared root.
-  await listing(page).getByText(name, { exact: true }).click({ button: "right" });
-  await page.getByRole("menuitem", { name: "Delete" }).click();
-  const confirmDialog = page.getByRole("alertdialog");
-  await confirmDialog.getByRole("button", { name: "Delete" }).click();
-  await expect(confirmDialog).toBeHidden();
+  await removeSandbox(page, name);
 });
 
 test("a folder with only files shows no chevron once its listing is known", async ({ page }) => {
@@ -91,7 +88,9 @@ test("a folder with subfolders shows a chevron and expands without a skeleton fl
 
   await page.goto("/files");
   await createFolder(page, parent);
-  await listing(page).getByText(parent, { exact: true }).dblclick();
+  // By URL: a new folder is selected, not scrolled to, and the shared root's
+  // virtualized listing may not render its row.
+  await page.goto(`/files/${parent}`);
   await expect(page).toHaveURL(new RegExp(`/files/${parent}$`));
   await createFolder(page, child);
 
@@ -120,12 +119,6 @@ test("a folder with subfolders shows a chevron and expands without a skeleton fl
 
   await expect(sidebar(page).getByRole("link", { name: child })).toBeVisible();
 
-  // Clean up: deleting the parent removes both folders. Still on the Files
-  // root listing from the navigation above.
-  await expect(listing(page).getByText(parent, { exact: true })).toBeVisible();
-  await listing(page).getByText(parent, { exact: true }).click({ button: "right" });
-  await page.getByRole("menuitem", { name: "Delete" }).click();
-  const confirmDialog = page.getByRole("alertdialog");
-  await confirmDialog.getByRole("button", { name: "Delete" }).click();
-  await expect(confirmDialog).toBeHidden();
+  // Clean up: deleting the parent removes both folders.
+  await removeSandbox(page, parent);
 });
