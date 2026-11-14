@@ -1,21 +1,21 @@
-import type { IndexWorkInput } from "@fdrive/db";
+import type { ChangeInput } from "@fdrive/db";
 import { describe, expect, it, vi } from "vitest";
-import { createIndexWorkQueue, INDEX_WORK_BATCH } from "./index-work.js";
+import { CHANGE_BATCH, createChangeQueue } from "./change-queue.js";
 
-type Write = [string, IndexWorkInput[]];
+type Write = [string, ChangeInput[]];
 
 function recorder() {
   const writes: Write[] = [];
-  const write = vi.fn(async (root: string, items: readonly IndexWorkInput[]) => {
+  const write = vi.fn(async (root: string, items: readonly ChangeInput[]) => {
     writes.push([root, [...items]]);
   });
   return { writes, write };
 }
 
-describe("createIndexWorkQueue", () => {
+describe("createChangeQueue", () => {
   it("writes one tick's changes together, per root and in order", async () => {
     const { writes, write } = recorder();
-    const queue = createIndexWorkQueue({ write, onError: vi.fn() });
+    const queue = createChangeQueue({ write, onError: vi.fn() });
     const content = { sha256: "c".repeat(64), size: 4, mtimeNs: 9n, ino: 3n, ctimeNs: 10n };
     queue.record("files", { kind: "changed", path: "alice/a.txt", content });
     queue.record("photos", { kind: "changed", path: "b.jpg" });
@@ -36,13 +36,13 @@ describe("createIndexWorkQueue", () => {
 
   it("splits a large tick into bounded writes", async () => {
     const { writes, write } = recorder();
-    const queue = createIndexWorkQueue({ write, onError: vi.fn() });
-    for (let i = 0; i < INDEX_WORK_BATCH + 1; i += 1) {
+    const queue = createChangeQueue({ write, onError: vi.fn() });
+    for (let i = 0; i < CHANGE_BATCH + 1; i += 1) {
       queue.record("files", { kind: "changed", path: `alice/${i}.txt` });
     }
     await queue.flush();
-    expect(writes.map(([, items]) => items.length)).toEqual([INDEX_WORK_BATCH, 1]);
-    expect(writes[1]?.[1]).toEqual([{ path: `alice/${INDEX_WORK_BATCH}.txt` }]);
+    expect(writes.map(([, items]) => items.length)).toEqual([CHANGE_BATCH, 1]);
+    expect(writes[1]?.[1]).toEqual([{ path: `alice/${CHANGE_BATCH}.txt` }]);
   });
 
   it("finishes one write before starting the next", async () => {
@@ -51,13 +51,13 @@ describe("createIndexWorkQueue", () => {
       release = resolve;
     });
     const order: string[] = [];
-    const write = vi.fn(async (_root: string, items: readonly IndexWorkInput[]) => {
+    const write = vi.fn(async (_root: string, items: readonly ChangeInput[]) => {
       const path = items[0]?.path ?? "";
       order.push(`start ${path}`);
       if (path === "first") await gate;
       order.push(`end ${path}`);
     });
-    const queue = createIndexWorkQueue({ write, onError: vi.fn() });
+    const queue = createChangeQueue({ write, onError: vi.fn() });
     queue.record("files", { kind: "changed", path: "first" });
     const first = queue.flush();
     queue.record("files", { kind: "changed", path: "second" });
@@ -70,13 +70,13 @@ describe("createIndexWorkQueue", () => {
 
   it("reports a failed write and keeps writing later changes", async () => {
     const write = vi
-      .fn<(root: string, items: readonly IndexWorkInput[]) => Promise<void>>()
+      .fn<(root: string, items: readonly ChangeInput[]) => Promise<void>>()
       .mockRejectedValueOnce(new Error("database down"))
       .mockResolvedValue(undefined);
     const onError = vi.fn(() => {
       throw new Error("the handler broke too");
     });
-    const queue = createIndexWorkQueue({ write, onError });
+    const queue = createChangeQueue({ write, onError });
     queue.record("files", { kind: "changed", path: "lost.txt" });
     await queue.flush();
     expect(onError).toHaveBeenCalledWith(new Error("database down"));
@@ -87,7 +87,7 @@ describe("createIndexWorkQueue", () => {
 
   it("flushes nothing when nothing was recorded, and writes a flushed tick only once", async () => {
     const { write } = recorder();
-    const queue = createIndexWorkQueue({ write, onError: vi.fn() });
+    const queue = createChangeQueue({ write, onError: vi.fn() });
     await queue.flush();
     expect(write).not.toHaveBeenCalled();
     queue.record("files", { kind: "changed", path: "a.txt" });

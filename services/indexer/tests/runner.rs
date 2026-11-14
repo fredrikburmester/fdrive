@@ -182,6 +182,36 @@ fn the_loop_scans_on_start_then_waits_for_its_interval_or_a_wake() {
 }
 
 #[test]
+fn the_loop_scans_when_the_journal_reader_asks_and_the_folder_is_right() {
+    let env = Env::new();
+    common::save_features(&env.url, fv(false, true, false, false, false));
+    let ctx = env.ctx_with(fv(false, true, false, false, false), |ctx| {
+        ctx.files_folder_recheck = Duration::ZERO;
+    });
+    let watchers = Mutex::new(HashMap::new());
+    let mut root = RootLoop::default();
+    root.step(&ctx, &watchers);
+    assert_eq!(scans(&env), 1);
+    root.step(&ctx, &watchers);
+    assert_eq!(scans(&env), 1);
+
+    // A request waits while the folder is not this installation's.
+    let marker = env.path(FILES_MARKER);
+    let id = std::fs::read_to_string(&marker).unwrap();
+    std::fs::remove_file(&marker).unwrap();
+    ctx.request_scan();
+    root.step(&ctx, &watchers);
+    assert_eq!(scans(&env), 1);
+    std::fs::write(&marker, &id).unwrap();
+    root.step(&ctx, &watchers);
+    assert_eq!(scans(&env), 2);
+    // Answered once.
+    root.step(&ctx, &watchers);
+    assert_eq!(scans(&env), 2);
+    assert!(!ctx.take_scan_request());
+}
+
+#[test]
 fn the_loop_keeps_going_after_a_crash() {
     let env = Env::new();
     let ctx = env.ctx_with(fv(false, true, false, false, false), |c| {

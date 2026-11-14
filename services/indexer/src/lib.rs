@@ -18,6 +18,7 @@ pub mod image_embed;
 pub mod images;
 pub mod indexer;
 pub mod jobs;
+pub mod journal;
 pub mod locks;
 pub mod log;
 pub mod maintenance;

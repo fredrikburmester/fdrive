@@ -5,6 +5,7 @@ import {
   createActivityObservationsRepo,
   createActivityReadsRepo,
   createActivityRepo,
+  createChangeWriter,
   createDb,
   createDesktopEffectsRepo,
   createDesktopPublishLock,
@@ -12,7 +13,6 @@ import {
   createFilesFolderFacts,
   createIdentityLinksRepo,
   createIndexQueries,
-  createIndexWorkWriter,
   createOfficeFileRepo,
   createOfficeWriteScope,
   createPool,
@@ -69,10 +69,10 @@ import { registerFeatureRoutes } from "./features/routes.js";
 import { createFeatureService } from "./features/service.js";
 import { publishFsEvent, registerFsRoutes } from "./fs/routes.js";
 import { createJobRunner } from "./jobs/runner.js";
+import { createChangeQueue } from "./local/change-queue.js";
 import { createDeploymentFilesFolderGuard, filesFolderHealth } from "./local/files-folder.js";
 import { registerGrantRoutes } from "./local/grant-routes.js";
 import { createLocalGrantService } from "./local/grants.js";
-import { createIndexWorkQueue } from "./local/index-work.js";
 import { deploymentModules } from "./local/modules.js";
 import { registerLocalUserRoutes } from "./local/routes.js";
 import { createLocalUserService } from "./local/service.js";
@@ -193,13 +193,14 @@ export async function composeApp(
   const restored = await repos.settings.get("backup.restore.v1");
   if (config.fdriveRestoreMode || restored) return createRecoveryApp(config, pool, !!restored);
   const passwords = createScryptSharePasswords();
-  // Changes fdrive makes reach the indexer at once instead of at its next scan.
-  const indexWork = createIndexWorkQueue({
-    write: createIndexWorkWriter(db),
+  // Changes fdrive makes go to the change journal, so the indexer hears of
+  // them at once instead of at its next scan.
+  const changes = createChangeQueue({
+    write: createChangeWriter(db, "api"),
     onError: (error) =>
       logger.warn(
         { err: error },
-        "index work not queued; the indexer's watcher or scan will find it",
+        "change not journaled; the indexer's watcher or scan will find it",
       ),
   });
   // A wrong or empty files folder is refused, not served or read as every
@@ -223,7 +224,7 @@ export async function composeApp(
   };
   const modules =
     deps.modules ??
-    deploymentModules(config, repos, passwords, indexWork, filesFolder, closedFolders);
+    deploymentModules(config, repos, passwords, changes, filesFolder, closedFolders);
   const backups = createBackupModule(config, modules);
   await backups.start();
 
@@ -1166,7 +1167,7 @@ export async function composeApp(
   return {
     app,
     close: async () => {
-      await indexWork.flush();
+      await changes.flush();
       await backups.close();
       await activityMaintenance.stop();
       await desktopRetention.stop();

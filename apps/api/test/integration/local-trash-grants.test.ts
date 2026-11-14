@@ -7,13 +7,13 @@ import {
   ROUTES,
   TrashListResponse,
 } from "@fdrive/contracts";
-import { createDb, createIndexWorkWriter, createRepos } from "@fdrive/db";
+import { createChangeWriter, createDb, createRepos } from "@fdrive/db";
 import type { IndexChange } from "@fdrive/local";
 import { sql } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { composeApp } from "../../src/composition.js";
 import { loadConfig } from "../../src/config.js";
-import { createIndexWorkQueue, type IndexWorkQueue } from "../../src/local/index-work.js";
+import { type ChangeQueue, createChangeQueue } from "../../src/local/change-queue.js";
 import { trashSettingsKey } from "../../src/trash/settings.js";
 import { LocalIndexerStack } from "./helpers/local-indexer-stack.js";
 import { seedLocalUsers, silentLogger } from "./helpers/local-storage.ts";
@@ -37,7 +37,7 @@ describe("shared folders in their owner's Trash, through the real indexer", () =
   const stack = new LocalIndexerStack();
   let database: ReturnType<typeof createDb>;
   let composed: Awaited<ReturnType<typeof composeApp>>;
-  let index: IndexWorkQueue;
+  let index: ChangeQueue;
   let providerId: string;
   const failures: unknown[] = [];
 
@@ -60,7 +60,7 @@ describe("shared folders in their owner's Trash, through the real indexer", () =
         pdfOcr: false,
       },
     });
-    // Only the API's queue tells the indexer about a change, as for every change fdrive makes.
+    // Only the change journal tells the indexer about a change, as for every change fdrive makes.
     await stack.startIndexer({ watch: false });
     composed = await composeApp(
       loadConfig({
@@ -74,8 +74,8 @@ describe("shared folders in their owner's Trash, through the real indexer", () =
       silentLogger(),
     );
     providerId = (await repos.providers.ensure({ type: "local", baseUrl: "local" })).id;
-    index = createIndexWorkQueue({
-      write: createIndexWorkWriter(database.db),
+    index = createChangeQueue({
+      write: createChangeWriter(database.db, "api"),
       onError: (error) => failures.push(error),
     });
   }, 720_000);
@@ -247,17 +247,19 @@ describe("shared folders in their owner's Trash, through the real indexer", () =
     await settled();
   }
 
-  /** Waits until the indexer has applied every change queued so far, the repeats included. */
+  /** Waits until the indexer has read every change journaled so far, the repeats included. */
   async function settled(): Promise<void> {
     await expect
       .poll(
         async () =>
-          Number(
-            (await database.db.execute(sql`select count(*)::int as n from idx.work`)).rows[0]?.n,
-          ),
+          (
+            await database.db.execute(sql`
+              select coalesce((select position from idx.change_cursors where consumer = 'indexer'), 0)
+                >= (select coalesce(max(id), 0) from idx.changes) as read`)
+          ).rows[0]?.read,
         { timeout: 30_000, interval: 100 },
       )
-      .toBe(0);
+      .toBe(true);
   }
 
   /** Runs `test` with alice's browser listening, and prints the indexer's logs when it fails. */

@@ -194,6 +194,12 @@ describe("a folder renamed on disk outside fdrive, through the real indexer", ()
         sql`select path, target_path from idx.events where kind = 'moved'`,
       );
       expect(events.rows).toEqual([{ path: "alice/docs", target_path: "alice/renamed" }]);
+      // The indexer journals the move it applied for every later reader; its
+      // first scan, of an empty index, journaled nothing.
+      const journal = await db.execute(sql`select path, target_path, source from idx.changes`);
+      expect(journal.rows).toEqual([
+        { path: "alice/docs", target_path: "alice/renamed", source: "watcher" },
+      ]);
     } catch (error) {
       console.error(await stack.logs());
       throw error;

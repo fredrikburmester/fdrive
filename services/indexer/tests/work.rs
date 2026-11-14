@@ -1,5 +1,5 @@
-//! Changes the API queues in `idx.work`, applied against a real filesystem, Postgres and a
-//! fake `ml` server.
+//! The indexer reading the change journal (`idx.changes`) from its position, applied against
+//! a real filesystem, Postgres and a fake `ml` server.
 
 mod common;
 
@@ -8,9 +8,10 @@ use std::time::{Duration, Instant};
 
 use common::fake_ml::TEXT_EMBED;
 use common::root_env::{Env, OFF, fv, wait_until};
-use fdrive_indexer::db::{self, WorkRow};
+use fdrive_indexer::db::{self, ChangeRow, NewChange};
+use fdrive_indexer::features::FeatureValues;
 use fdrive_indexer::indexer::{ContentHint, Embedded, FOREGROUND_WAIT_LIMIT, RootContext, Stage, embed_chunks};
-use fdrive_indexer::work::{Applier, Change, Entry, WorkLoop, clean_path, entry, parse};
+use fdrive_indexer::work::{Applier, CONSUMER, Change, Entry, WorkLoop, applies, clean_path, entry, parse};
 
 const WAIT: Duration = Duration::from_secs(10);
 
@@ -39,28 +40,65 @@ fn hint_for<'a>(env: &Env, rel: &str, sha: &'a str) -> Hint<'a> {
     )
 }
 
-/// Queue a row the way the API does, notification included.
+/// A context whose position in the journal is set, as the indexer's first start does: rows
+/// appended from here on are applied.
+fn ctx(env: &Env, values: FeatureValues) -> Arc<RootContext> {
+    started(env.ctx(values))
+}
+
+fn started(ctx: Arc<RootContext>) -> Arc<RootContext> {
+    Applier::new(Arc::clone(&ctx)).position().unwrap();
+    ctx
+}
+
+/// Journal a change the way the API does, lock and notification included.
 fn queue(env: &Env, ctx: &RootContext, path: &str, target: Option<&str>, hint: Option<Hint<'_>>) {
     queue_on(&mut env.client(), ctx, path, target, hint);
 }
 
 fn queue_on(c: &mut postgres::Client, ctx: &RootContext, path: &str, target: Option<&str>, hint: Option<Hint<'_>>) {
-    let (sha, size, mtime, inode, ctime) = match hint {
-        Some((sha, size, mtime, inode, ctime)) => (Some(sha), Some(size), Some(mtime), Some(inode), Some(ctime)),
-        None => (None, None, None, None, None),
+    let mut change = NewChange {
+        path: path.to_owned(),
+        target_path: target.map(str::to_owned),
+        ..NewChange::default()
     };
-    let root_id = i16::try_from(ctx.root_id).unwrap();
-    c.execute(
-        r#"INSERT INTO "idx"."work" (root_id, path, target_path, sha256, size, mtime_ns, inode, ctime_ns)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8)"#,
-        &[&root_id, &path, &target, &sha, &size, &mtime, &inode, &ctime],
-    )
-    .unwrap();
-    c.execute("SELECT pg_notify('idx_work', 'r')", &[]).unwrap();
+    if let Some((sha, size, mtime, inode, ctime)) = hint {
+        change.sha256 = Some(sha.to_owned());
+        (change.size, change.mtime_ns, change.inode, change.ctime_ns) =
+            (Some(size), Some(mtime), Some(inode), Some(ctime));
+    }
+    db::append_changes(c, ctx.root_id, &ctx.name, "api", &[change]).unwrap();
 }
 
-fn queued(env: &Env) -> i64 {
-    env.count("idx.work")
+/// Journal plain "look again" rows from `source`.
+fn append(env: &Env, ctx: &RootContext, source: &str, paths: &[&str]) {
+    let changes: Vec<NewChange> = paths.iter().map(|p| NewChange::path(p)).collect();
+    db::append_changes(&mut env.client(), ctx.root_id, &ctx.name, source, &changes).unwrap();
+}
+
+fn position(env: &Env, ctx: &RootContext) -> Option<i64> {
+    db::change_cursor(&mut env.client(), CONSUMER, ctx.root_id).unwrap()
+}
+
+/// The root's rows after the indexer's position.
+fn queued(env: &Env, ctx: &RootContext) -> i64 {
+    env.client()
+        .query_one(
+            r#"SELECT count(*) FROM "idx"."changes" WHERE root_id = $1::bigint AND id > $2::bigint"#,
+            &[&ctx.root_id, &position(env, ctx).unwrap_or(0)],
+        )
+        .unwrap()
+        .get(0)
+}
+
+/// `(path, source)` of every journal row, oldest first.
+fn journal(env: &Env) -> Vec<(String, String)> {
+    env.client()
+        .query(r#"SELECT path, source FROM "idx"."changes" ORDER BY id"#, &[])
+        .unwrap()
+        .iter()
+        .map(|r| (r.get(0), r.get(1)))
+        .collect()
 }
 
 fn live_paths(env: &Env, ctx: &RootContext) -> Vec<String> {
@@ -87,11 +125,12 @@ fn indexed(env: &Env, ctx: &RootContext, rel: &str) -> bool {
     wait_until(WAIT, || env.status(ctx, rel) == "indexed")
 }
 
-fn row(path: &str, target: Option<&str>, sha: Option<&str>, size: Option<i64>, mtime: Option<i64>) -> WorkRow {
-    WorkRow {
+fn row(path: &str, target: Option<&str>, sha: Option<&str>, size: Option<i64>, mtime: Option<i64>) -> ChangeRow {
+    ChangeRow {
         id: 1,
         path: path.to_owned(),
         target_path: target.map(str::to_owned),
+        source: "api".to_owned(),
         sha256: sha.map(str::to_owned),
         size,
         mtime_ns: mtime,
@@ -130,11 +169,11 @@ fn rows_parse_to_changes_and_hints_need_every_column() {
     );
     // Without the inode or the change time, a digest proves nothing.
     for missing in [
-        WorkRow {
+        ChangeRow {
             inode: None,
             ..row("a.txt", None, Some(&sha), Some(3), Some(9))
         },
-        WorkRow {
+        ChangeRow {
             ctime_ns: None,
             ..row("a.txt", None, Some(&sha), Some(3), Some(9))
         },
@@ -210,7 +249,7 @@ fn entries_are_judged_like_the_walk() {
 #[test]
 fn an_upload_is_indexed_with_the_digest_the_api_sent() {
     let env = Env::new();
-    let ctx = env.ctx(text_on());
+    let ctx = ctx(&env, text_on());
     env.write("alice/a.txt", b"hello world");
     // A digest the file does not have proves the file was not hashed again.
     let claimed = "b".repeat(64);
@@ -222,7 +261,7 @@ fn an_upload_is_indexed_with_the_digest_the_api_sent() {
         Some(hint_for(&env, "alice/a.txt", &claimed)),
     );
     assert_eq!(drain(&ctx), 1);
-    assert_eq!(queued(&env), 0);
+    assert_eq!(queued(&env, &ctx), 0);
     assert_eq!(env.row(&ctx, "alice/a.txt").sha256.as_deref(), Some(claimed.as_str()));
     assert!(indexed(&env, &ctx, "alice/a.txt"));
     assert_eq!(env.events(), ["created"]);
@@ -231,7 +270,7 @@ fn an_upload_is_indexed_with_the_digest_the_api_sent() {
 #[test]
 fn a_hint_for_another_file_is_ignored() {
     let env = Env::new();
-    let ctx = env.ctx(text_on());
+    let ctx = ctx(&env, text_on());
     env.write("a.txt", b"hello world");
     let claimed = "b".repeat(64);
     let (sha, size, mtime, inode, ctime) = hint_for(&env, "a.txt", &claimed);
@@ -252,7 +291,7 @@ fn a_hint_for_another_file_is_ignored() {
 #[test]
 fn a_file_that_is_already_indexed_is_left_alone() {
     let env = Env::new();
-    let ctx = env.ctx(text_on());
+    let ctx = ctx(&env, text_on());
     env.write("a.txt", b"hello world");
     queue(&env, &ctx, "a.txt", None, None);
     drain(&ctx);
@@ -267,7 +306,7 @@ fn a_file_that_is_already_indexed_is_left_alone() {
 #[test]
 fn a_deleted_file_or_folder_loses_its_rows() {
     let env = Env::new();
-    let ctx = env.ctx(text_on());
+    let ctx = ctx(&env, text_on());
     env.write("a.txt", b"one");
     env.write("d/b.txt", b"two");
     env.write("d/e/c.txt", b"three");
@@ -288,7 +327,7 @@ fn a_deleted_file_or_folder_loses_its_rows() {
 #[test]
 fn a_moved_file_keeps_its_row_without_being_read_again() {
     let env = Env::new();
-    let ctx = env.ctx(text_on());
+    let ctx = ctx(&env, text_on());
     env.write("a.txt", b"hello world");
     queue(&env, &ctx, "a.txt", None, None);
     drain(&ctx);
@@ -309,7 +348,7 @@ fn a_moved_file_keeps_its_row_without_being_read_again() {
 #[test]
 fn a_moved_folder_moves_its_rows_and_matches_the_disk() {
     let env = Env::new();
-    let ctx = env.ctx(text_on());
+    let ctx = ctx(&env, text_on());
     env.write("d/a.txt", b"one");
     env.write("d/s/b.txt", b"two");
     queue(&env, &ctx, "d", None, None);
@@ -328,7 +367,7 @@ fn a_moved_folder_moves_its_rows_and_matches_the_disk() {
 #[test]
 fn a_file_moved_out_of_sight_is_deleted_and_one_moved_back_is_indexed() {
     let env = Env::new();
-    let ctx = env.ctx(text_on());
+    let ctx = ctx(&env, text_on());
     env.write("a.txt", b"hello world");
     queue(&env, &ctx, "a.txt", None, None);
     drain(&ctx);
@@ -346,7 +385,7 @@ fn a_file_moved_out_of_sight_is_deleted_and_one_moved_back_is_indexed() {
 #[test]
 fn a_renamed_extension_is_indexed_as_a_new_file() {
     let env = Env::new();
-    let ctx = env.ctx(text_on());
+    let ctx = ctx(&env, text_on());
     env.write("a.txt", b"hello world");
     queue(&env, &ctx, "a.txt", None, None);
     drain(&ctx);
@@ -360,7 +399,7 @@ fn a_renamed_extension_is_indexed_as_a_new_file() {
 #[test]
 fn a_folder_is_compared_with_its_rows() {
     let env = Env::new();
-    let ctx = env.ctx(text_on());
+    let ctx = ctx(&env, text_on());
     env.write("d/a.txt", b"one");
     env.write("d/b.txt", b"two");
     env.write("d/.git/c.txt", b"hidden");
@@ -381,7 +420,7 @@ fn folder_paths(env: &Env, ctx: &RootContext) -> Vec<String> {
 #[test]
 fn a_new_folder_is_recorded_with_the_folders_above_and_in_it() {
     let env = Env::new();
-    let ctx = env.ctx(text_on());
+    let ctx = ctx(&env, text_on());
     std::fs::create_dir_all(env.path("alice/Microlärande")).unwrap();
     queue(&env, &ctx, "alice/Microlärande", None, None);
     drain(&ctx);
@@ -405,7 +444,7 @@ fn a_new_folder_is_recorded_with_the_folders_above_and_in_it() {
 #[test]
 fn an_upload_records_the_folders_it_landed_in() {
     let env = Env::new();
-    let ctx = env.ctx(text_on());
+    let ctx = ctx(&env, text_on());
     env.write("alice/new/deeper/a.txt", b"one");
     queue(&env, &ctx, "alice/new/deeper/a.txt", None, None);
     drain(&ctx);
@@ -420,7 +459,7 @@ fn an_upload_records_the_folders_it_landed_in() {
 #[test]
 fn folders_that_are_gone_lose_their_rows() {
     let env = Env::new();
-    let ctx = env.ctx(text_on());
+    let ctx = ctx(&env, text_on());
     std::fs::create_dir_all(env.path("d/s/t")).unwrap();
     std::fs::create_dir_all(env.path("d/u")).unwrap();
     queue(&env, &ctx, "d", None, None);
@@ -441,7 +480,7 @@ fn folders_that_are_gone_lose_their_rows() {
 #[test]
 fn a_moved_folder_takes_its_folder_rows_along() {
     let env = Env::new();
-    let ctx = env.ctx(text_on());
+    let ctx = ctx(&env, text_on());
     std::fs::create_dir_all(env.path("old/empty")).unwrap();
     env.write("old/s/a.txt", b"one");
     std::fs::create_dir_all(env.path("new/s")).unwrap();
@@ -476,7 +515,7 @@ fn while_indexing_is_off_no_folder_is_recorded() {
 #[test]
 fn a_file_replaced_by_a_folder_loses_its_row() {
     let env = Env::new();
-    let ctx = env.ctx(text_on());
+    let ctx = ctx(&env, text_on());
     env.write("x", b"a file");
     queue(&env, &ctx, "x", None, None);
     drain(&ctx);
@@ -488,9 +527,9 @@ fn a_file_replaced_by_a_folder_loses_its_row() {
 }
 
 #[test]
-fn queue_order_holds_across_an_upload_and_a_move() {
+fn journal_order_holds_across_an_upload_and_a_move() {
     let env = Env::new();
-    let ctx = env.ctx(text_on());
+    let ctx = ctx(&env, text_on());
     env.write("a.txt", b"hello world");
     let sha = hex_sha(b"hello world");
     let hint = hint_for(&env, "a.txt", &sha);
@@ -504,7 +543,7 @@ fn queue_order_holds_across_an_upload_and_a_move() {
 #[test]
 fn many_uploads_are_indexed_in_parallel_and_drained_in_batches() {
     let env = Env::new();
-    let ctx = env.ctx(fv(false, true, false, false, false));
+    let ctx = ctx(&env, fv(false, true, false, false, false));
     let count = usize::try_from(fdrive_indexer::work::BATCH).unwrap() + 5;
     let mut c = env.client();
     for i in 0..count {
@@ -513,14 +552,14 @@ fn many_uploads_are_indexed_in_parallel_and_drained_in_batches() {
     }
     assert_eq!(drain(&ctx), count);
     assert_eq!(live_paths(&env, &ctx).len(), count);
-    assert_eq!(queued(&env), 0);
+    assert_eq!(queued(&env, &ctx), 0);
     assert_eq!(ctx.foreground_pending(), 0);
 }
 
 #[test]
-fn queued_changes_wait_while_the_folder_has_no_marker() {
+fn journaled_changes_wait_while_the_folder_has_no_marker() {
     let env = Env::new();
-    let ctx = env.ctx_with(text_on(), |ctx| ctx.files_folder_recheck = Duration::ZERO);
+    let ctx = started(env.ctx_with(text_on(), |ctx| ctx.files_folder_recheck = Duration::ZERO));
     env.write("a.txt", b"one");
     queue(&env, &ctx, "a.txt", None, None);
     drain(&ctx);
@@ -532,7 +571,7 @@ fn queued_changes_wait_while_the_folder_has_no_marker() {
     std::fs::remove_file(env.path("a.txt")).unwrap();
     queue(&env, &ctx, "a.txt", None, None);
     assert_eq!(drain(&ctx), 0);
-    assert_eq!(queued(&env), 1);
+    assert_eq!(queued(&env, &ctx), 1);
     assert_eq!(live_paths(&env, &ctx), ["a.txt"]);
 
     std::fs::write(&marker, id).unwrap();
@@ -541,32 +580,32 @@ fn queued_changes_wait_while_the_folder_has_no_marker() {
 }
 
 #[test]
-fn while_indexing_is_off_the_queue_is_dropped() {
+fn while_indexing_is_off_rows_are_passed_over() {
     let env = Env::new();
-    let ctx = env.ctx(OFF);
+    let ctx = ctx(&env, OFF);
     env.write("a.txt", b"hello world");
     queue(&env, &ctx, "a.txt", None, None);
     assert_eq!(drain(&ctx), 1);
-    assert_eq!(queued(&env), 0);
+    assert_eq!(queued(&env, &ctx), 0);
     assert!(live_paths(&env, &ctx).is_empty());
 }
 
 #[test]
-fn malformed_rows_are_dropped() {
+fn malformed_rows_are_skipped() {
     let env = Env::new();
-    let ctx = env.ctx(text_on());
+    let ctx = ctx(&env, text_on());
     env.write("a.txt", b"hello world");
     queue(&env, &ctx, "../a.txt", None, None);
     queue(&env, &ctx, "a.txt", Some("/"), None);
     assert_eq!(drain(&ctx), 2);
-    assert_eq!(queued(&env), 0);
+    assert_eq!(queued(&env, &ctx), 0);
     assert!(live_paths(&env, &ctx).is_empty());
 }
 
 #[test]
 fn a_change_to_something_unreadable_is_left_for_the_scan() {
     let env = Env::new();
-    let ctx = env.ctx(text_on());
+    let ctx = ctx(&env, text_on());
     env.write("a.txt", b"hello world");
     queue(&env, &ctx, "a.txt", None, None);
     drain(&ctx);
@@ -590,7 +629,7 @@ fn a_change_to_something_unreadable_is_left_for_the_scan() {
 }
 
 #[test]
-fn a_queue_without_a_database_reports_an_error() {
+fn a_journal_without_a_database_reports_an_error() {
     let env = Env::new();
     let mut cfg = env.config();
     cfg.database_url = "postgres://nobody@127.0.0.1:1/nope".to_owned();
@@ -603,12 +642,165 @@ fn a_queue_without_a_database_reports_an_error() {
     assert!(Applier::new(ctx).drain().is_err());
 }
 
+// -- the position in the journal ------------------------------------------------------------
+
+#[test]
+fn the_indexer_starts_at_the_end_of_the_journal() {
+    let env = Env::new();
+    let ctx = env.ctx(text_on());
+    env.write("before.txt", b"one");
+    env.write("after.txt", b"two");
+    append(&env, &ctx, "api", &["before.txt"]);
+    // The first start takes the end: its startup scan covers what came before.
+    assert_eq!(position(&env, &ctx), None);
+    assert_eq!(drain(&ctx), 0);
+    assert_eq!(position(&env, &ctx), Some(1));
+    assert!(live_paths(&env, &ctx).is_empty());
+    queue(&env, &ctx, "after.txt", None, None);
+    assert_eq!(drain(&ctx), 1);
+    assert_eq!(position(&env, &ctx), Some(2));
+    assert_eq!(live_paths(&env, &ctx), ["after.txt"]);
+}
+
+#[test]
+fn a_restart_resumes_from_the_saved_position() {
+    let env = Env::new();
+    let ctx = ctx(&env, fv(false, true, false, false, false));
+    env.write("a.txt", b"one");
+    queue(&env, &ctx, "a.txt", None, None);
+    assert_eq!(drain(&ctx), 1);
+    // Another applier, as after a restart: what was applied stays applied.
+    env.write("b.txt", b"two");
+    queue(&env, &ctx, "b.txt", None, None);
+    let restarted = Applier::new(Arc::clone(&ctx));
+    assert_eq!(restarted.position().unwrap(), 1);
+    assert_eq!(restarted.drain().unwrap(), 1);
+    assert_eq!(restarted.drain().unwrap(), 0);
+    assert_eq!(live_paths(&env, &ctx), ["a.txt", "b.txt"]);
+    assert_eq!(env.events(), ["created", "created"]);
+}
+
+#[test]
+fn rows_the_indexer_wrote_are_passed_over_and_ocr_rows_applied() {
+    let env = Env::new();
+    let ctx = ctx(&env, fv(false, true, false, false, false));
+    env.write("seen.txt", b"one");
+    env.write("found.txt", b"two");
+    env.write("ocred.pdf", b"not really a pdf");
+    // The watcher and the scan journal what they already applied: nothing to do again.
+    append(&env, &ctx, "watcher", &["seen.txt"]);
+    append(&env, &ctx, "scan", &["found.txt"]);
+    append(&env, &ctx, "ocr", &["ocred.pdf"]);
+    assert_eq!(drain(&ctx), 3);
+    assert_eq!(live_paths(&env, &ctx), ["ocred.pdf"]);
+    assert_eq!(queued(&env, &ctx), 0);
+    assert!(applies(&row("a", None, None, None, None)));
+    for (source, applied) in [
+        ("api", true),
+        ("ocr", true),
+        ("watcher", false),
+        ("scan", false),
+        ("new", true),
+    ] {
+        let change = ChangeRow {
+            source: source.to_owned(),
+            ..row("a", None, None, None, None)
+        };
+        assert_eq!(applies(&change), applied, "{source}");
+    }
+}
+
+#[test]
+fn applying_the_journal_writes_nothing_to_it() {
+    let env = Env::new();
+    let ctx = ctx(&env, text_on());
+    env.write("d/a.txt", b"one");
+    std::fs::create_dir_all(env.path("e/f")).unwrap();
+    queue(&env, &ctx, "d/a.txt", None, None);
+    queue(&env, &ctx, "e", None, None);
+    drain(&ctx);
+    std::fs::rename(env.path("d"), env.path("g")).unwrap();
+    queue(&env, &ctx, "d", Some("g"), None);
+    std::fs::remove_dir_all(env.path("e")).unwrap();
+    queue(&env, &ctx, "e", None, None);
+    drain(&ctx);
+    assert_eq!(live_paths(&env, &ctx), ["g/a.txt"]);
+    assert_eq!(
+        journal(&env),
+        [
+            ("d/a.txt".to_owned(), "api".to_owned()),
+            ("e".to_owned(), "api".to_owned()),
+            ("d".to_owned(), "api".to_owned()),
+            ("e".to_owned(), "api".to_owned())
+        ]
+    );
+}
+
+#[test]
+fn pruned_rows_it_never_read_request_a_scan_and_move_it_to_the_end() {
+    let env = Env::new();
+    let ctx = ctx(&env, text_on());
+    env.write("a.txt", b"one");
+    env.write("b.txt", b"two");
+    queue(&env, &ctx, "a.txt", None, None);
+    queue(&env, &ctx, "b.txt", None, None);
+    // Pruned before it was read: only the newest row is left.
+    env.client()
+        .execute(r#"DELETE FROM "idx"."changes" WHERE id = 1"#, &[])
+        .unwrap();
+    assert!(!ctx.take_scan_request());
+    assert_eq!(drain(&ctx), 0);
+    assert!(ctx.take_scan_request());
+    assert_eq!(position(&env, &ctx), Some(2));
+    // The scan covers them; the reader applied nothing.
+    assert!(live_paths(&env, &ctx).is_empty());
+    // Read up to the oldest row left: nothing is missing.
+    queue(&env, &ctx, "a.txt", None, None);
+    env.client()
+        .execute(r#"DELETE FROM "idx"."changes" WHERE id = 2"#, &[])
+        .unwrap();
+    assert_eq!(drain(&ctx), 1);
+    assert!(!ctx.take_scan_request());
+    assert_eq!(live_paths(&env, &ctx), ["a.txt"]);
+}
+
+#[test]
+fn rows_of_another_root_move_the_position_along() {
+    let env = Env::new();
+    let ctx = ctx(&env, text_on());
+    let other = db::upsert_root(&mut env.client(), "other").unwrap();
+    env.write("a.txt", b"one");
+    db::append_changes(&mut env.client(), other, "other", "api", &[NewChange::path("a.txt")]).unwrap();
+    assert_eq!(drain(&ctx), 0);
+    assert_eq!(position(&env, &ctx), Some(1));
+    assert!(live_paths(&env, &ctx).is_empty());
+    // Nothing new: no write.
+    assert_eq!(drain(&ctx), 0);
+    assert_eq!(position(&env, &ctx), Some(1));
+}
+
+#[test]
+fn a_position_it_cannot_save_is_an_error() {
+    let env = Env::new();
+    let ctx = ctx(&env, text_on());
+    env.write("a.txt", b"one");
+    queue(&env, &ctx, "a.txt", None, None);
+    env.client()
+        .batch_execute(r#"ALTER TABLE "idx"."change_cursors" RENAME TO change_cursors_gone"#)
+        .unwrap();
+    assert!(Applier::new(Arc::clone(&ctx)).drain().is_err());
+    env.client()
+        .batch_execute(r#"ALTER TABLE "idx"."change_cursors_gone" RENAME TO change_cursors"#)
+        .unwrap();
+    assert_eq!(drain(&ctx), 1);
+}
+
 // -- the loop ------------------------------------------------------------------------------
 
 #[test]
 fn the_loop_wakes_on_a_notification() {
     let env = Env::new();
-    let ctx = env.ctx(fv(false, true, false, false, false));
+    let ctx = ctx(&env, fv(false, true, false, false, false));
     let mut work = WorkLoop::new(Arc::clone(&ctx));
     assert_eq!(work.step(Duration::from_millis(50)), 0);
     assert!(work.is_listening());
@@ -648,7 +840,7 @@ fn the_loop_polls_without_a_database() {
 #[test]
 fn the_loop_listens_again_after_losing_its_connection() {
     let env = Env::new();
-    let ctx = env.ctx(text_on());
+    let ctx = ctx(&env, text_on());
     let mut work = WorkLoop::new(Arc::clone(&ctx));
     work.step(Duration::from_millis(10));
     assert!(work.is_listening());
@@ -670,7 +862,7 @@ fn the_loop_listens_again_after_losing_its_connection() {
 #[test]
 fn scans_wait_for_foreground_work_but_not_forever() {
     let env = Env::new();
-    let ctx = env.ctx(text_on());
+    let ctx = ctx(&env, text_on());
     let started = Instant::now();
     ctx.yield_to_foreground(FOREGROUND_WAIT_LIMIT);
     assert!(started.elapsed() < Duration::from_secs(1));
@@ -696,7 +888,7 @@ fn scans_wait_for_foreground_work_but_not_forever() {
 #[test]
 fn queued_text_is_searchable_before_its_embeddings_arrive() {
     let env = Env::new();
-    let ctx = env.ctx(text_on());
+    let ctx = ctx(&env, text_on());
     env.ml.hold(TEXT_EMBED);
     env.write("a.txt", b"hello world");
     queue(&env, &ctx, "a.txt", None, None);
@@ -718,7 +910,7 @@ fn queued_text_is_searchable_before_its_embeddings_arrive() {
 #[test]
 fn a_failed_staged_embedding_is_recorded_and_left_partial() {
     let env = Env::new();
-    let ctx = env.ctx(text_on());
+    let ctx = ctx(&env, text_on());
     env.ml.fail(TEXT_EMBED, 400);
     env.write("a.txt", b"hello world");
     queue(&env, &ctx, "a.txt", None, None);
@@ -734,7 +926,7 @@ fn a_failed_staged_embedding_is_recorded_and_left_partial() {
 #[test]
 fn the_text_stage_skips_a_superseded_or_disabled_file() {
     let env = Env::new();
-    let ctx = env.ctx(text_on());
+    let ctx = ctx(&env, text_on());
     env.write("a.txt", b"hello world");
     env.seed(&ctx, "a.txt", &"c".repeat(64), "partial");
     assert_eq!(
@@ -758,7 +950,7 @@ fn the_text_stage_skips_a_superseded_or_disabled_file() {
 #[test]
 fn a_full_text_stage_embeds_on_the_worker() {
     let env = Env::new();
-    let ctx = env.ctx(text_on());
+    let ctx = ctx(&env, text_on());
     let stage = ctx.watch_text_stage();
     assert!(Arc::ptr_eq(&stage, &ctx.watch_text_stage()));
     // A closed stage takes nothing, as a full one would.

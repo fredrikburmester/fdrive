@@ -1,28 +1,29 @@
-import type { IndexWorkInput, IndexWorkWriter } from "@fdrive/db";
+import type { ChangeInput, ChangeWriter } from "@fdrive/db";
 import type { IndexChange } from "@fdrive/local";
 
-/** Rows per write: well under Postgres's 65,535 bind parameters at eight per row. */
-export const INDEX_WORK_BATCH = 1_000;
+/** Rows per write: well under Postgres's 65,535 bind parameters at nine per row. */
+export const CHANGE_BATCH = 1_000;
 
 /**
- * Tells the indexer about changes fdrive made, so a new upload is indexed
- * in seconds rather than at the next scan. Changes are hints: losing one
- * costs only that wait, so nothing here ever fails a request.
+ * Records the changes fdrive makes in the change journal, so the indexer
+ * (and every later reader of `idx.changes`) hears of a new upload in
+ * seconds rather than at the next scan. A row is a hint: losing one costs
+ * only that wait, so nothing here ever fails a request.
  */
-export interface IndexWorkQueue {
+export interface ChangeQueue {
   /** Adds a change; it is written with the others from the same tick. */
   record(root: string, change: IndexChange): void;
   /** Writes everything recorded so far and waits for every write to finish. */
   flush(): Promise<void>;
 }
 
-export interface IndexWorkQueueDeps {
-  readonly write: IndexWorkWriter;
+export interface ChangeQueueDeps {
+  readonly write: ChangeWriter;
   /** Hears a failed write; the indexer's watcher or next scan covers its changes. */
   readonly onError: (error: unknown) => void;
 }
 
-function toInput(change: IndexChange): IndexWorkInput {
+function toInput(change: IndexChange): ChangeInput {
   if (change.kind === "moved") return { path: change.path, targetPath: change.target };
   return change.content === undefined
     ? { path: change.path }
@@ -31,11 +32,11 @@ function toInput(change: IndexChange): IndexWorkInput {
 
 /**
  * Buffers changes and writes them on the next tick, one write per root and
- * at most `INDEX_WORK_BATCH` rows each. Writes run one after another, so the
- * indexer reads changes in the order they happened.
+ * at most `CHANGE_BATCH` rows each. Writes run one after another, so the
+ * journal holds changes in the order they happened.
  */
-export function createIndexWorkQueue(deps: IndexWorkQueueDeps): IndexWorkQueue {
-  let pending = new Map<string, IndexWorkInput[]>();
+export function createChangeQueue(deps: ChangeQueueDeps): ChangeQueue {
+  let pending = new Map<string, ChangeInput[]>();
   let scheduled = false;
   let chain: Promise<void> = Promise.resolve();
 
@@ -52,8 +53,8 @@ export function createIndexWorkQueue(deps: IndexWorkQueueDeps): IndexWorkQueue {
     const batch = pending;
     pending = new Map();
     for (const [root, items] of batch) {
-      for (let start = 0; start < items.length; start += INDEX_WORK_BATCH) {
-        const rows = items.slice(start, start + INDEX_WORK_BATCH);
+      for (let start = 0; start < items.length; start += CHANGE_BATCH) {
+        const rows = items.slice(start, start + CHANGE_BATCH);
         chain = chain.then(() => deps.write(root, rows)).catch(report);
       }
     }

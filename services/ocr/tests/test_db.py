@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import threading
+
 import psycopg
 import pytest
 
@@ -155,4 +157,26 @@ def test_last_run_orders_by_most_recent(postgres_dsn: str) -> None:
         assert summary is not None
         assert summary.seen == 2
     finally:
+        conn.close()
+
+
+def test_journal_change_waits_for_the_journal_lock_so_positions_commit_in_order(postgres_dsn: str) -> None:
+    conn = db.connect(postgres_dsn)
+    holder = psycopg.connect(postgres_dsn)
+    try:
+        root_id = db.upsert_root(conn, "files")
+        holder.execute(db.JOURNAL_LOCK)  # held until `holder` commits
+        logs: list[str] = []
+        writer = threading.Thread(target=db.journal_change, args=(conn, root_id, "files", "a.pdf", logs.append))
+        writer.start()
+        writer.join(timeout=0.5)
+        assert writer.is_alive()
+        holder.commit()
+        writer.join(timeout=10)
+        assert not writer.is_alive()
+        assert logs == []
+        rows = conn.execute('SELECT path, target_path, source FROM "idx"."changes"').fetchall()
+        assert rows == [("a.pdf", None, "ocr")]
+    finally:
+        holder.close()
         conn.close()

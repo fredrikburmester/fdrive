@@ -4,7 +4,7 @@ import type { FilesFolderGuard } from "@fdrive/local";
 import type { AppConfig, IndexRootConfig } from "../config.js";
 import { createProviderModules, type ProviderModules } from "../providers/registry.js";
 import { createScryptSharePasswords, type SharePasswords } from "../shares/passwords.js";
-import type { IndexWorkQueue } from "./index-work.js";
+import type { ChangeQueue } from "./change-queue.js";
 import { createLocalUserStore } from "./users.js";
 
 /** The index root name the local folder has when no configured root names it. */
@@ -29,12 +29,13 @@ export function localIndexRoot(
 }
 
 /**
- * The index root the indexer reads the files folder itself under: the
- * configured root whose `storagePath` is the folder, or `null`. Unlike
- * `localIndexRoot` it never guesses, since changes reported under a root
- * that names another folder would carry paths the indexer cannot find.
+ * The index root the indexer reads the files folder itself under, and so
+ * the root fdrive's changes are journaled under: the configured root whose
+ * `storagePath` is the folder, or `null`. Unlike `localIndexRoot` it never
+ * guesses, since changes reported under a root that names another folder
+ * would carry paths the indexer cannot find.
  */
-export function indexWorkRoot(
+export function journalRoot(
   roots: readonly IndexRootConfig[] | null,
   storageRoot: string,
 ): string | null {
@@ -45,9 +46,9 @@ export function indexWorkRoot(
 /**
  * Every provider module this deployment has: the files folder over
  * `app.local_users` when `FDRIVE_STORAGE_ROOT` is set, else none. The API
- * and the backup worker build theirs the same way. With `indexWork`, every
- * change fdrive makes in the folder is queued for the indexer, when the
- * indexer reads the folder itself (`indexWorkRoot`). With `guard`, storage
+ * and the backup worker build theirs the same way. With `changes`, every
+ * change fdrive makes in the folder is recorded in the change journal, when
+ * the indexer reads the folder itself (`journalRoot`). With `guard`, storage
  * is refused while the folder is not this installation's
  * (`createDeploymentFilesFolderGuard`). With `closedFolders`, a folder shared
  * from inside its owner's Trash is refused to the person it is shared with.
@@ -56,24 +57,24 @@ export function deploymentModules(
   config: Pick<AppConfig, "fdriveStorageRoot" | "fdriveIndexRoots">,
   repos: Pick<Repos, "localUsers" | "localGrants">,
   passwords: SharePasswords = createScryptSharePasswords(),
-  indexWork?: IndexWorkQueue,
+  changes?: ChangeQueue,
   guard?: FilesFolderGuard,
   closedFolders?: (providerId: string) => Promise<readonly string[]>,
 ): ProviderModules {
   const root = config.fdriveStorageRoot;
   if (root === undefined) return createProviderModules();
-  const queued = indexWork === undefined ? null : indexWorkRoot(config.fdriveIndexRoots, root);
+  const journaled = changes === undefined ? null : journalRoot(config.fdriveIndexRoots, root);
   return createProviderModules({
     local: {
       root,
       users: createLocalUserStore({ repo: repos.localUsers, grants: repos.localGrants, passwords }),
-      // When `queued` names a root, this is the same one: it matches first.
+      // When `journaled` names a root, this is the same one: it matches first.
       indexRoot: localIndexRoot(config.fdriveIndexRoots, root),
       ...(guard === undefined ? {} : { guard }),
       ...(closedFolders === undefined ? {} : { closedFolders }),
-      ...(queued === null || indexWork === undefined
+      ...(journaled === null || changes === undefined
         ? {}
-        : { onIndexChange: (name, change) => indexWork.record(name, change) }),
+        : { onIndexChange: (name, change) => changes.record(name, change) }),
     },
   });
 }
