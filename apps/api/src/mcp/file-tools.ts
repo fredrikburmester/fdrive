@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { extensionOf, isStorageError, trashLeafPath } from "@fdrive/core";
 import { recordMetadataCommand } from "../activity/metadata.js";
+import { deleteWithActivityReceipt } from "../activity/trash.js";
 import type { Principal } from "../auth/principal.ts";
 import { relocatePath, requireUnoccupiedTarget } from "../fs/mutations.ts";
 import { createReadAuthorizer } from "../scoping/read-authorizer.ts";
@@ -172,14 +173,15 @@ export async function trashPath(deps: McpToolDeps, principal: Principal, rawPath
   const path = ordinaryPath(deps, principal, rawPath);
   assertMutablePath(principal, path, configured.path);
   const stat = await principal.storage.stat(path);
-  if (stat.kind === "dir") await principal.storage.deleteDir(path);
-  else await principal.storage.deleteFile(path);
+  const kind = stat.kind === "dir" ? "dir" : "file";
+  const { trashLeaf } = await deleteWithActivityReceipt(principal.storage, path, kind);
   return {
     trashed: path,
     ...(await mutationEffects(deps, principal, {
       kind: "trash",
       path,
-      isDir: stat.kind === "dir",
+      ...(trashLeaf === undefined ? {} : { trashLeaf }),
+      isDir: kind === "dir",
     })),
   };
 }

@@ -1,10 +1,10 @@
 import type { StorageSession } from "@fdrive/core";
-import type { IndexWorkInput } from "@fdrive/db";
+import type { ChangeInput } from "@fdrive/db";
 import { createMemoryRepos } from "@fdrive/db/testing";
 import { createFilesFolderGuard, FILES_FOLDER_REASONS } from "@fdrive/local";
 import { describe, expect, it, vi } from "vitest";
-import { createIndexWorkQueue } from "./index-work.js";
-import { deploymentModules, indexWorkRoot, LOCAL_INDEX_ROOT, localIndexRoot } from "./modules.js";
+import { createChangeQueue } from "./change-queue.js";
+import { deploymentModules, journalRoot, LOCAL_INDEX_ROOT, localIndexRoot } from "./modules.js";
 import { FAST_PASSWORDS, seedLocalUsers, temporaryStorageRoot } from "./test-fixtures/index.ts";
 
 const root = (name: string, storagePath: string) => ({
@@ -32,13 +32,13 @@ describe("localIndexRoot", () => {
   });
 });
 
-describe("indexWorkRoot", () => {
+describe("journalRoot", () => {
   it("is only a root that names the folder itself", () => {
-    expect(indexWorkRoot([root("photos", "/media"), root("files", "/data/")], "/srv/../data")).toBe(
+    expect(journalRoot([root("photos", "/media"), root("files", "/data/")], "/srv/../data")).toBe(
       "files",
     );
-    expect(indexWorkRoot([root("files", "/elsewhere")], "/data")).toBeNull();
-    expect(indexWorkRoot(null, "/data")).toBeNull();
+    expect(journalRoot([root("files", "/elsewhere")], "/data")).toBeNull();
+    expect(journalRoot(null, "/data")).toBeNull();
   });
 });
 
@@ -69,6 +69,40 @@ describe("deploymentModules", () => {
     expect(
       await local.authenticate(instance, { username: "alice", password: "alice-pass" }, { fetch }),
     ).toEqual({ externalUsername: "alice" });
+  });
+
+  it("refuses a share in a folder the deployment closes to shares", async () => {
+    const repos = createMemoryRepos();
+    await seedLocalUsers(repos, [
+      { username: "alice", password: "alice-pass" },
+      { username: "bob", password: "bob-pass" },
+    ]);
+    for (const path of ["/Bin/old", "/Projects"]) {
+      await repos.localGrants.put({
+        ownerUsername: "alice",
+        path,
+        granteeUsername: "bob",
+        access: "read",
+      });
+    }
+    const storageRoot = temporaryStorageRoot();
+    const closedFolders = vi.fn(async () => ["/Bin"]);
+    const local = deploymentModules(
+      { fdriveStorageRoot: storageRoot, fdriveIndexRoots: null },
+      repos,
+      FAST_PASSWORDS,
+      undefined,
+      undefined,
+      closedFolders,
+    ).local;
+    if (local === undefined) throw new Error("no local module");
+    const instance = { id: "row", baseUrl: "local", config: {} };
+    const alice = local.createStorage(instance, { externalUsername: "alice" }, { fetch });
+    await alice.mkdir("/Bin/old", { parents: true });
+    await alice.mkdir("/Projects");
+    const bob = local.createStorage(instance, { externalUsername: "bob" }, { fetch });
+    expect((await bob.list("/Shared with me")).map((entry) => entry.name)).toEqual(["Projects"]);
+    expect(closedFolders).toHaveBeenCalledWith("row");
   });
 
   it("hashes with scrypt by default", async () => {
@@ -107,37 +141,37 @@ describe("deploymentModules", () => {
     ).toThrow(FILES_FOLDER_REASONS.empty);
   });
 
-  describe("with an index work queue", () => {
+  describe("with a change queue", () => {
     const instance = { id: "row", baseUrl: "local", config: {} };
     const session: StorageSession = {
       externalUsername: "alice",
     };
 
     function queue() {
-      const writes: [string, IndexWorkInput[]][] = [];
-      const indexWork = createIndexWorkQueue({
+      const writes: [string, ChangeInput[]][] = [];
+      const changes = createChangeQueue({
         write: async (name, items) => {
           writes.push([name, [...items]]);
         },
         onError: vi.fn(),
       });
-      return { writes, indexWork };
+      return { writes, changes };
     }
 
-    it("queues the changes fdrive makes in an indexed files folder", async () => {
+    it("records the changes fdrive makes in an indexed files folder", async () => {
       const storageRoot = temporaryStorageRoot();
-      const { writes, indexWork } = queue();
+      const { writes, changes } = queue();
       const modules = deploymentModules(
         { fdriveStorageRoot: storageRoot, fdriveIndexRoots: [root("files", storageRoot)] },
         createMemoryRepos(),
         FAST_PASSWORDS,
-        indexWork,
+        changes,
       );
       const storage = modules.local?.createStorage(instance, session, { fetch });
       await storage?.upload("/a.txt", new TextEncoder().encode("a"));
       await storage?.move("/a.txt", "/b.txt");
       await vi.waitFor(async () => {
-        await indexWork.flush();
+        await changes.flush();
         expect(writes.flatMap(([, items]) => items)).toHaveLength(2);
       });
       expect(new Set(writes.map(([name]) => name))).toEqual(new Set(["files"]));
@@ -147,20 +181,20 @@ describe("deploymentModules", () => {
       ]);
     });
 
-    it("queues nothing when no root is the files folder itself", async () => {
+    it("records nothing when no root is the files folder itself", async () => {
       const storageRoot = temporaryStorageRoot();
-      const { writes, indexWork } = queue();
+      const { writes, changes } = queue();
       const modules = deploymentModules(
         { fdriveStorageRoot: storageRoot, fdriveIndexRoots: [root("files", "/elsewhere")] },
         createMemoryRepos(),
         FAST_PASSWORDS,
-        indexWork,
+        changes,
       );
       expect(modules.local?.indexRootName?.(instance)).toBe("files");
       const storage = modules.local?.createStorage(instance, session, { fetch });
       await storage?.upload("/a.txt", new TextEncoder().encode("a"));
       await new Promise((resolve) => setImmediate(resolve));
-      await indexWork.flush();
+      await changes.flush();
       expect(writes).toEqual([]);
     });
   });

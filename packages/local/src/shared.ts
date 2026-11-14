@@ -2,6 +2,7 @@ import { stat } from "node:fs/promises";
 import { basename } from "node:path";
 import {
   type FileEntry,
+  isInMoveTrashLayout,
   makeEntry,
   normalizePath,
   StorageError,
@@ -33,6 +34,12 @@ export interface SharedFolder {
   readonly ownerHome: string;
   /** Whether the user may change what is in it. */
   readonly writable: boolean;
+  /**
+   * Folders on disk in its owner's files that no share reaches
+   * (`closedToShares`). A shared folder really inside one, links resolved,
+   * is left out of `Shared with me` and refused.
+   */
+  readonly closed?: readonly string[];
 }
 
 /** One folder shared with a user, before it has a name in their files. */
@@ -59,6 +66,22 @@ export function sharedFolderNames(grants: readonly SharedGrant[]): string[] {
     for (let n = 2; taken.has(name); n += 1) name = `${own} (${grant.owner}, ${n})`;
     taken.add(name);
     return name;
+  });
+}
+
+/**
+ * True when no share reaches a folder at `path` in its owner's files: one of
+ * `folders` (their Trash while it is on, fdrive's own bookkeeping) or inside
+ * one, or anywhere inside fdrive's Trash layout, which stays put when Trash
+ * is turned off or moved. A share follows its folder into Trash, and is
+ * refused there until a restore brings it back or a purge ends it.
+ */
+export function closedToShares(path: string, folders: readonly string[]): boolean {
+  const target = normalizePath(path);
+  if (isInMoveTrashLayout(target)) return true;
+  return folders.some((folder) => {
+    const closed = normalizePath(folder);
+    return closed === "/" || target === closed || target.startsWith(`${closed}/`);
   });
 }
 
@@ -149,6 +172,7 @@ export function createUserStorage(options: UserStorageOptions): UserStorage {
         home: folder.dir,
         create: false,
         within: folder.ownerHome,
+        ...(folder.closed === undefined ? {} : { outside: folder.closed }),
         ...heard,
       });
       mounts.set(folder.name, storage);

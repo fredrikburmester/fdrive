@@ -25,6 +25,19 @@ export {
 export * from "./repos/activity-types.js";
 export { createAiChatRepo } from "./repos/ai-chats.js";
 export {
+  CHANGES_CHANNEL,
+  CHANGES_RETENTION,
+  type Change,
+  type ChangeContent,
+  type ChangeInput,
+  type ChangeJournal,
+  type ChangePage,
+  type ChangeSource,
+  type ChangeWriter,
+  createChangeJournal,
+  createChangeWriter,
+} from "./repos/changes.js";
+export {
   createDesktopRepo,
   type DesktopItemRecord,
   type DesktopOperationRecord,
@@ -37,6 +50,7 @@ export type {
   DesktopEffectEvent,
   DesktopEffectStatus,
   DesktopEffectsRepo,
+  DesktopShareMove,
 } from "./repos/desktop-effects-types.js";
 export {
   createDesktopPublishLock,
@@ -100,14 +114,6 @@ export {
   escapeLikePattern,
   toScopeClauses,
 } from "./repos/index-queries.js";
-export {
-  createIndexWorkWriter,
-  INDEX_WORK_CHANNEL,
-  INDEX_WORK_RETENTION,
-  type IndexWorkContent,
-  type IndexWorkInput,
-  type IndexWorkWriter,
-} from "./repos/index-work.js";
 export { createOfficeFileRepo } from "./repos/office-files.js";
 export type {
   MemoryOfficeFileOptions,
@@ -120,7 +126,7 @@ export type {
 export { createMemoryOfficeFileRepo } from "./repos/office-files-state.js";
 export type { OfficeWriteContext, OfficeWriteScope } from "./repos/office-write-scope.js";
 export { createOfficeWriteScope } from "./repos/office-write-scope.js";
-export { createShareRepo } from "./repos/shares.js";
+export { createShareRepo, deleteSharePrefix, moveSharePrefix } from "./repos/shares.js";
 export type {
   MemoryShareOptions,
   ShareInsertInput,

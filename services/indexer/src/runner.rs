@@ -1,5 +1,6 @@
 //! Start-up and the per-root loop: refresh settings and features, keep the watcher in step
-//! with them, and scan on the interval, on a wake, or after a watcher overflow.
+//! with them, and scan on the interval, on a wake, after a watcher overflow, or when the
+//! change journal's reader asks for one.
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -14,6 +15,7 @@ use crate::failures::FileResult;
 use crate::indexer::{
     FileStat, RootContext, scan_once, watch_folder, watch_index, watch_mark_deleted, watch_rename, work_features,
 };
+use crate::journal::{Source, with_source};
 use crate::log::log;
 use crate::paths::ext_of;
 use crate::server::Wake;
@@ -56,33 +58,38 @@ pub fn refresh_settings(ctx: &RootContext) -> Result<bool> {
     Ok(!changed.is_empty() || features_changed)
 }
 
-/// The watcher's callbacks into the indexer, reporting live activity per feature.
+/// The watcher's callbacks into the indexer, reporting live activity per feature. The changes
+/// they apply were made outside fdrive, so they are journaled as the watcher's.
 pub struct Handler(pub Arc<RootContext>);
 
 impl WatchHandler for Handler {
     fn index_file(&self, abs: &Path, rel: &str, metadata: &std::fs::Metadata) -> FileResult {
-        watch_index(&self.0, abs, rel, FileStat::of(metadata))
+        with_source(Some(Source::Watcher), || {
+            watch_index(&self.0, abs, rel, FileStat::of(metadata))
+        })
     }
 
     fn mark_deleted(&self, rel: &str, is_dir: bool) -> usize {
         if !self.0.files_folder_verified() {
             return 0;
         }
-        watch_mark_deleted(&self.0, rel, is_dir)
+        with_source(Some(Source::Watcher), || watch_mark_deleted(&self.0, rel, is_dir))
     }
 
     fn rename(&self, old_rel: &str, new_rel: &str, is_dir: bool) -> usize {
         if !self.0.files_folder_verified() {
             return 0;
         }
-        watch_rename(&self.0, old_rel, new_rel, is_dir)
+        with_source(Some(Source::Watcher), || {
+            watch_rename(&self.0, old_rel, new_rel, is_dir)
+        })
     }
 
     fn folder_changed(&self, rel: &str) {
         if !self.0.files_folder_verified() {
             return;
         }
-        watch_folder(&self.0, rel);
+        with_source(Some(Source::Watcher), || watch_folder(&self.0, rel));
     }
 
     fn on_queue(&self, abs: &Path) -> Box<dyn FnOnce(&FileResult) + Send> {
@@ -185,7 +192,10 @@ impl RootLoop {
                 .unwrap_or_else(PoisonError::into_inner)
                 .insert(ctx.name.clone(), self.watcher.is_some());
             let overflowed = self.watcher.as_ref().is_some_and(Watcher::take_overflow);
-            if verified && (Instant::now() >= self.next_scan || overflowed) {
+            // The journal's reader asks for a scan when rows it never read were pruned; the
+            // request waits for the folder's marker like any scan.
+            let requested = verified && ctx.take_scan_request();
+            if verified && (Instant::now() >= self.next_scan || overflowed || requested) {
                 scan_once(ctx);
                 self.next_scan = Instant::now() + Duration::from_secs(ctx.settings().scan_interval_seconds);
             }

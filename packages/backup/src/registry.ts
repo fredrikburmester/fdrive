@@ -60,7 +60,12 @@ export const OMITTED_TABLES = {
   "app.activity_exports": "transient",
   "app.activity_export_reads": "transient",
   "app.wopi_locks": "transient",
-  "idx.work": "transient",
+  // The change journal and its readers' positions. A restore rebuilds the
+  // index from the disk, so no consumer could resume from a position taken
+  // before it, and a month of rows would grow every backup for nothing.
+  // After a restore the journal starts again and the indexer at its end.
+  "idx.changes": "transient",
+  "idx.change_cursors": "transient",
   "idx.schema_version": "migration",
 } as const;
 export type DurableTable = (typeof DURABLE_TABLES)[number];

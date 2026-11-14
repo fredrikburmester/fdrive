@@ -1,7 +1,8 @@
 """All SQL. This service never creates or alters tables: schema ownership lives
 in `packages/db/drizzle/*.sql`. It reads `app.settings` (shared with the
 indexer) and `idx.roots` (upserting by name, same as the indexer), and owns
-`idx.ocr_log` (the done-log) and `idx.ocr_runs` (nightly pass history).
+`idx.ocr_log` (the done-log) and `idx.ocr_runs` (nightly pass history). It
+journals the files it rewrites in `idx.changes`, as the API does its own.
 """
 
 from __future__ import annotations
@@ -131,6 +132,37 @@ def record_ocr_log(
             """,
             (root_id, path, size, mtime_ns, status, detail),
         )
+
+
+#: The channel a write to the change journal wakes; the payload is the root's name.
+CHANGES_CHANNEL = "idx_changes"
+
+#: Taken before inserting into the journal and held until commit, by every writer in every
+#: language, so positions commit in order (docs/plans/CHANGE-JOURNAL.md).
+JOURNAL_LOCK = "SELECT pg_advisory_xact_lock(hashtextextended('idx.changes', 0))"
+
+
+def journal_change(conn: psycopg.Connection, root_id: int, root: str, path: str, log: Callable[[str], None]) -> None:
+    """Tells the indexer, and every other reader of the change journal, that this
+    service rewrote `path` (root-relative, as `idx.files.path`) with an OCR
+    result or a restored original: an `idx.changes` row with source `ocr`, in
+    one transaction that takes the journal's lock first and sends
+    `NOTIFY idx_changes` with the root's name, as the API's
+    `createChangeJournal` writes them. The row has no content hint, since the
+    bytes are new and the indexer has to read them.
+
+    A row only makes the indexer look sooner. A failure is logged and never
+    raised: its watcher and periodic scan still find the change.
+    """
+    try:
+        with conn.transaction(), conn.cursor() as cur:
+            cur.execute(JOURNAL_LOCK)
+            cur.execute(
+                """INSERT INTO "idx"."changes" (root_id, path, source) VALUES (%s, %s, 'ocr')""", (root_id, path)
+            )
+            cur.execute("SELECT pg_notify(%s, %s)", (CHANGES_CHANNEL, root))
+    except psycopg.Error as error:
+        log(f"[{root}] could not tell the indexer about {path}: {error}")
 
 
 def ocred_keys_for_paths(

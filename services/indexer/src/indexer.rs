@@ -17,12 +17,13 @@ use crate::activity::{Op, RootActivity};
 use crate::backoff::{Backoff, is_outage};
 use crate::chunking::{chunk, is_document, is_image, is_pdf, is_textual, max_chunks_for};
 use crate::config::{Config, SKIP_DIRS, SKIP_NAMES};
-use crate::db::{self, Db, FileRow, ManifestRow, NewFile, Stamp, StampUpdate};
+use crate::db::{self, Db, FileRow, ManifestRow, NewChange, NewFile, Stamp, StampUpdate};
 use crate::events::{EventKind, build};
 use crate::extract::{Extractor, embed_passages};
 use crate::failures::{self, FileResult, Report, attempt, describe, report};
 use crate::features::{FeatureConfiguration, FeatureValues};
 use crate::image_embed::{self, Health};
+use crate::journal::{self, Source};
 use crate::log::log;
 use crate::paths::{basename, ext_of};
 use crate::promise::{Outcome, Promise};
@@ -30,6 +31,7 @@ use crate::rules::{Globs, should_index_name, should_walk_dir};
 use crate::settings::{self, Settings};
 use crate::thumbs::{SIZES, kind_for_ext, skip_reason, storage_path};
 use crate::thumbs_io;
+pub use crate::walk::{walk, walk_tree};
 
 /// Classified files a scan holds before traversal waits for workers.
 pub const SCAN_BACKLOG_LIMIT: usize = 20_000;
@@ -142,7 +144,7 @@ impl ContentHint {
     }
 }
 
-/// Counts foreground work (watcher changes and the API's queue) while it is pending, so
+/// Counts foreground work (watcher changes and the change journal) while it is pending, so
 /// scan workers wait for it; dropping the guard ends it.
 pub struct Foreground(Arc<AtomicUsize>);
 
@@ -188,6 +190,9 @@ pub struct RootContext {
     pub files_folder_recheck: Duration,
     /// How long after a file last changed a read of it may stamp its row: `STAMP_SETTLE`.
     pub stamp_settle: Duration,
+    /// Set when the root needs a scan before its next one is due: the journal's reader
+    /// found rows it never read were pruned.
+    scan_requested: AtomicBool,
 }
 
 /// How long a verdict on the files folder's marker is reused by default.
@@ -238,6 +243,7 @@ impl RootContext {
             files_folder: Mutex::new(None),
             files_folder_recheck: FILES_FOLDER_RECHECK,
             stamp_settle: STAMP_SETTLE,
+            scan_requested: AtomicBool::new(false),
             cfg,
         }
     }
@@ -398,6 +404,16 @@ impl RootContext {
     fn report(&self, path: &str, feature: &str, result: Report<'_>) {
         report(&self.db, self.root_id, path, feature, result);
     }
+
+    /// Ask the root's loop for a scan at its next step.
+    pub fn request_scan(&self) {
+        self.scan_requested.store(true, Ordering::SeqCst);
+    }
+
+    /// Whether a scan was requested since the last call.
+    pub fn take_scan_request(&self) -> bool {
+        self.scan_requested.swap(false, Ordering::SeqCst)
+    }
 }
 
 /// The DB row matches what is on disk and needs no work.
@@ -517,7 +533,7 @@ pub fn process_file_with(
     };
     // Listeners hear about the file once it has a row and a preview, not after its text:
     // they check access and refresh listings for every event, and need nothing more.
-    // Re-deriving the same version changes nothing they show.
+    // Re-deriving the same version changes nothing they show, and is no change to journal.
     let visible = || {
         if !same_version {
             emit_event(
@@ -530,6 +546,7 @@ pub fn process_file_with(
                 rel_path,
                 None,
             );
+            journal::record(ctx, vec![NewChange::path(rel_path)]);
         }
     };
     process_stages(ctx, rel_path, stat, known, hint, None, visible)?;
@@ -555,7 +572,10 @@ fn restamp(ctx: &Arc<RootContext>, rel_path: &str, stat: FileStat, row: &FileRow
         }
         return Ok(false);
     }
-    let changed = || emit_event(ctx, EventKind::Changed, rel_path, None);
+    let changed = || {
+        emit_event(ctx, EventKind::Changed, rel_path, None);
+        journal::record(ctx, vec![NewChange::path(rel_path)]);
+    };
     process_stages(
         ctx,
         rel_path,
@@ -1322,69 +1342,6 @@ pub fn safe_process_with(
     }
 }
 
-/// Yield `(abs, rel, stat)` for regular files below `root`, directories sorted by
-/// lowercase name, skipping junk. `on_error` hears about unreadable entries.
-pub fn walk(root: &Path, on_error: impl FnMut(), visit: impl FnMut(PathBuf, String, FileStat) -> bool) {
-    walk_tree(root, on_error, |_| {}, visit);
-}
-
-/// `walk`, also reporting each folder below `root` it will descend into, before its contents.
-pub fn walk_tree(
-    root: &Path,
-    mut on_error: impl FnMut(),
-    mut on_folder: impl FnMut(db::FolderRow),
-    mut visit: impl FnMut(PathBuf, String, FileStat) -> bool,
-) {
-    let mut stack = vec![root.to_path_buf()];
-    while let Some(dir) = stack.pop() {
-        let mut entries: Vec<std::fs::DirEntry> = match std::fs::read_dir(&dir) {
-            Ok(entries) => entries.filter_map(std::result::Result::ok).collect(),
-            Err(e) => {
-                log(&format!("skip dir {}: {e}", dir.display()));
-                on_error();
-                continue;
-            }
-        };
-        entries.sort_by_key(|e| e.file_name().to_string_lossy().to_lowercase());
-        let mut subdirs = Vec::new();
-        for entry in entries {
-            let name = entry.file_name().to_string_lossy().into_owned();
-            if !should_index_name(&name, SKIP_NAMES) {
-                continue;
-            }
-            let metadata = match std::fs::symlink_metadata(entry.path()) {
-                Ok(metadata) => metadata,
-                Err(e) => {
-                    log(&format!("skip {}: {e}", entry.path().display()));
-                    on_error();
-                    continue;
-                }
-            };
-            if metadata.is_dir() {
-                if should_walk_dir(&name, SKIP_DIRS) {
-                    let path = entry.path();
-                    let rel = path.strip_prefix(root).unwrap_or(&path).to_string_lossy().into_owned();
-                    on_folder(db::FolderRow {
-                        path: rel,
-                        mtime_ns: FileStat::of(&metadata).mtime_ns,
-                    });
-                    subdirs.push(path);
-                }
-                continue;
-            }
-            if !metadata.is_file() {
-                continue;
-            }
-            let path = entry.path();
-            let rel = path.strip_prefix(root).unwrap_or(&path).to_string_lossy().into_owned();
-            if !visit(path, rel, FileStat::of(&metadata)) {
-                return;
-            }
-        }
-        stack.extend(subdirs.into_iter().rev());
-    }
-}
-
 /// Counts a scan reports, also kept in `idx.scans`.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct ScanResult {
@@ -1448,8 +1405,9 @@ fn scan_inner(ctx: &Arc<RootContext>, operations: &HashMap<String, Op>) -> ScanR
         };
     }
     let started = match ctx.db.with(|c| {
+        let baseline = db::scan_baseline(c, ctx.root_id)?;
         let started = db::start_scan(c, ctx.root_id)?;
-        Ok((started, db::scan_manifest(c, ctx.root_id)?))
+        Ok((baseline, started, db::scan_manifest(c, ctx.root_id)?))
     }) {
         Ok(started) => started,
         Err(e) => {
@@ -1460,7 +1418,13 @@ fn scan_inner(ctx: &Arc<RootContext>, operations: &HashMap<String, Op>) -> ScanR
             };
         }
     };
-    let ((scan_id, started_at), manifest) = started;
+    let ((finished_before, had_folders), (scan_id, started_at), manifest) = started;
+    // Differences are journaled only against a baseline: without rows to compare with, every
+    // file would look new, and none of them changed. The first scan of an empty index, the
+    // one after the whole index was cleared and the one after an interrupted first scan
+    // journal nothing.
+    let journal_files = (finished_before && !manifest.is_empty()).then_some(Source::Scan);
+    let journal_folders = journal_files.filter(|_| had_folders);
     let t0 = Instant::now();
     let mut unseen: HashSet<String> = manifest
         .iter()
@@ -1490,10 +1454,12 @@ fn scan_inner(ctx: &Arc<RootContext>, operations: &HashMap<String, Op>) -> ScanR
             std::thread::Builder::new()
                 .name(format!("scan-{}-{i}", ctx.name))
                 .spawn(move || {
-                    for job in receiver {
-                        ctx.yield_to_foreground(FOREGROUND_WAIT_LIMIT);
-                        tracked_job(&ctx, job, &counters, stage.as_ref(), image_op.as_ref());
-                    }
+                    journal::with_source(journal_files, || {
+                        for job in receiver {
+                            ctx.yield_to_foreground(FOREGROUND_WAIT_LIMIT);
+                            tracked_job(&ctx, job, &counters, stage.as_ref(), image_op.as_ref());
+                        }
+                    });
                 })
                 .ok()
         })
@@ -1582,19 +1548,32 @@ fn scan_inner(ctx: &Arc<RootContext>, operations: &HashMap<String, Op>) -> ScanR
     // A worker can observe disablement after traversal finished.
     let traversal_complete = traversal_complete && ctx.values().indexer_enabled();
     let unseen: Vec<String> = unseen.into_iter().collect();
-    let deleted = if traversal_complete {
+    let vanished = if traversal_complete {
         ctx.db
-            .with(|c| db::sweep_vanished(c, ctx.root_id, &unseen, started_at))
+            .with(|c| db::sweep_vanished_paths(c, ctx.root_id, &unseen, started_at))
             .unwrap_or_else(|e| {
                 log(&format!("[{}] sweep failed: {}", ctx.name, describe(&e)));
-                0
+                Vec::new()
             })
     } else {
-        0
+        Vec::new()
     };
+    let deleted = vanished.len() as i64;
+    if let Some(source) = journal_files {
+        let gone: Vec<NewChange> = vanished.iter().map(|path| NewChange::path(path)).collect();
+        journal::record_as(ctx, source, &gone);
+    }
     let sweep = traversal_complete.then_some(("", started_at));
-    if let Err(e) = ctx.db.with(|c| db::sync_folders(c, ctx.root_id, &folders, sweep)) {
-        log(&format!("[{}] folder sync failed: {}", ctx.name, describe(&e)));
+    match ctx
+        .db
+        .with(|c| db::sync_folders_changes(c, ctx.root_id, &folders, sweep))
+    {
+        Ok(changes) => {
+            if let Some(source) = journal_folders {
+                journal::record_as(ctx, source, &folder_changes(&changes));
+            }
+        }
+        Err(e) => log(&format!("[{}] folder sync failed: {}", ctx.name, describe(&e))),
     }
     if traversal_complete && ctx.needs_media_backfill() && counters.media_backfill_errors.load(Ordering::SeqCst) == 0 {
         ctx.finish_media_backfill();
@@ -1764,12 +1743,16 @@ pub fn watch_mark_deleted(ctx: &RootContext, rel_path: &str, is_dir: bool) -> us
         return 0;
     }
     let _guard = ctx.path_locks.get(rel_path);
-    match ctx.db.with(|c| db::mark_deleted(c, ctx.root_id, rel_path, is_dir)) {
-        Ok(ids) => {
-            if !ids.is_empty() {
+    match ctx.db.with(|c| db::delete_paths(c, ctx.root_id, rel_path, is_dir)) {
+        Ok(deleted) => {
+            if !deleted.files.is_empty() {
                 emit_event(ctx, EventKind::Deleted, rel_path, None);
             }
-            ids.len()
+            // An empty folder has no file rows, but its going is still a change.
+            if !deleted.files.is_empty() || deleted.folders > 0 {
+                journal::record(ctx, vec![NewChange::path(rel_path)]);
+            }
+            deleted.files.len()
         }
         Err(e) => {
             log(&format!("watch: delete {rel_path} failed: {}", describe(&e)));
@@ -1803,14 +1786,26 @@ pub fn folder_chain(root: &Path, rel: &str) -> Vec<db::FolderRow> {
 }
 
 /// Write `found` to the root's folder rows; with `sweep`, also drop the rows below that folder
-/// the walk that found them did not see. Nothing is written while indexing is off.
+/// the walk that found them did not see. Nothing is written while indexing is off. Folders
+/// added and dropped are journaled under the thread's source.
 pub fn record_folders(ctx: &RootContext, found: &[db::FolderRow], sweep: Option<(&str, DateTime<Utc>)>) {
     if (found.is_empty() && sweep.is_none()) || !ctx.values().indexer_enabled() {
         return;
     }
-    if let Err(e) = ctx.db.with(|c| db::sync_folders(c, ctx.root_id, found, sweep)) {
-        log(&format!("[{}] folder sync failed: {}", ctx.name, describe(&e)));
+    match ctx.db.with(|c| db::sync_folders_changes(c, ctx.root_id, found, sweep)) {
+        Ok(changes) => journal::record(ctx, folder_changes(&changes)),
+        Err(e) => log(&format!("[{}] folder sync failed: {}", ctx.name, describe(&e))),
     }
+}
+
+/// One journal row per folder added or dropped.
+fn folder_changes(changes: &db::FolderChanges) -> Vec<NewChange> {
+    changes
+        .added
+        .iter()
+        .chain(&changes.dropped)
+        .map(|path| NewChange::path(path))
+        .collect()
 }
 
 /// A folder appeared or changed under `rel`: record it, the folders above it and every folder
@@ -1855,18 +1850,22 @@ pub fn watch_rename(ctx: &RootContext, old: &str, new: &str, is_dir: bool) -> us
     }
     let _guard = ctx.path_locks.get_many(&[old, new]);
     let moved = ctx.db.with(|c| {
-        let moved = db::rename_paths(c, ctx.root_id, old, new, is_dir)?;
-        if moved > 0 {
+        let moved = db::move_paths(c, ctx.root_id, old, new, is_dir)?;
+        if moved.files > 0 {
             db::insert_move(c, ctx.root_id, old, new, "watcher")?;
         }
         Ok(moved)
     });
     match moved {
         Ok(moved) => {
-            if moved > 0 {
+            if moved.files > 0 {
                 emit_event(ctx, EventKind::Moved, old, Some(new));
             }
-            moved as usize
+            // An empty folder moves only its folder rows, but that is still a move.
+            if moved.files + moved.folders > 0 {
+                journal::record(ctx, vec![NewChange::moved(old, new)]);
+            }
+            moved.files as usize
         }
         Err(e) => {
             log(&format!("watch: rename {old} -> {new} failed: {}", describe(&e)));

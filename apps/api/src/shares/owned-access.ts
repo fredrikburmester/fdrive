@@ -1,5 +1,7 @@
 import { joinPath, normalizePath, parseRangeHeader, type StorageProvider } from "@fdrive/core";
+import { closedToShares, SHARED_WITH_ME } from "@fdrive/local";
 import { isBackupPath } from "../backups/reserved-storage.ts";
+import { DESKTOP_INTERNAL_ROOT } from "../desktop/internal-root.ts";
 import { ApiHttpError } from "../errors.ts";
 import {
   formatShareRange,
@@ -15,6 +17,31 @@ import { guardZipStream, type ShareZipLimits, ShareZipTimeoutError } from "./zip
 /** True when `path` is `root` or lies beneath it. Both canonical. */
 export function isUnder(path: string, root: string): boolean {
   return root === "/" || path === root || path.startsWith(`${root}/`);
+}
+
+/**
+ * The folders no link may reach besides backup folders, all canonical: the
+ * owner's Trash while it is on (`trashPath`), the Mac's own bookkeeping,
+ * which holds its Trash, and the folder that holds what other users share
+ * with the owner, which is theirs to share. The last only exists while
+ * something is shared, but a link never needs it, so it is kept out always.
+ */
+export function restrictedRoots(trashPath: string | null): string[] {
+  return [
+    ...(trashPath === null ? [] : [normalizePath(trashPath)]),
+    DESKTOP_INTERNAL_ROOT,
+    `/${SHARED_WITH_ME}`,
+  ];
+}
+
+/**
+ * True when no link may reach canonical `path`: a backup folder, or what no
+ * share between users reaches either (`closedToShares`): inside one of
+ * `restricted`, or anywhere in fdrive's Trash layout, which a link follows
+ * its item into and which stays refused after Trash is turned off or moved.
+ */
+export function hiddenFromLinks(path: string, restricted: readonly string[]): boolean {
+  return isBackupPath(path) || closedToShares(path, restricted);
 }
 
 /**
@@ -58,9 +85,8 @@ export interface OwnedShareAccessOptions {
   readonly storage: Pick<StorageProvider, "list" | "statFile" | "download" | "upload" | "zip">;
   readonly view: ShareView;
   /**
-   * Canonical roots hidden from every listing and refused on every read:
-   * the owner's Trash and the folder of what others share with the owner.
-   * Backup folders always are.
+   * Canonical roots hidden from every listing and refused on every read
+   * (`restrictedRoots`). Backup folders always are.
    */
   readonly restricted: readonly string[];
   /** Spends one download once it has been served; `false` when the limit or expiry refuses it. */
@@ -82,8 +108,7 @@ export interface OwnedShareAccessOptions {
 export function ownedShareAccess(opts: OwnedShareAccessOptions): PublicShareAccess {
   const { storage, view, restricted, consume } = opts;
   const root = view.paths.length === 1 && view.paths[0] !== undefined ? view.paths[0] : null;
-  const hidden = (path: string) =>
-    isBackupPath(path) || restricted.some((folder) => isUnder(path, folder));
+  const hidden = (path: string) => hiddenFromLinks(path, restricted);
   function canonical(path: string): string {
     try {
       return normalizePath(path);

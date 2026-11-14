@@ -1,5 +1,5 @@
 {
-  "id": "f9db62fd-e774-4c23-8ba9-518dbe78beab",
+  "id": "a119208f-c3b8-4246-bb2c-c1430d8479fa",
   "prevId": "78fce511-48d6-4a78-ad7f-8d820748c402",
   "version": "7",
   "dialect": "postgresql",
@@ -2734,6 +2734,193 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
+    "idx.change_cursors": {
+      "name": "change_cursors",
+      "schema": "idx",
+      "columns": {
+        "root_id": {
+          "name": "root_id",
+          "type": "smallint",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "consumer": {
+          "name": "consumer",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "position": {
+          "name": "position",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "change_cursors_root_id_roots_id_fk": {
+          "name": "change_cursors_root_id_roots_id_fk",
+          "tableFrom": "change_cursors",
+          "tableTo": "roots",
+          "schemaTo": "idx",
+          "columnsFrom": ["root_id"],
+          "columnsTo": ["id"],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "change_cursors_root_id_consumer_pk": {
+          "name": "change_cursors_root_id_consumer_pk",
+          "columns": ["root_id", "consumer"]
+        }
+      },
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "idx.changes": {
+      "name": "changes",
+      "schema": "idx",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "bigserial",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "root_id": {
+          "name": "root_id",
+          "type": "smallint",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "path": {
+          "name": "path",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "target_path": {
+          "name": "target_path",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "source": {
+          "name": "source",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "sha256": {
+          "name": "sha256",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "size": {
+          "name": "size",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "mtime_ns": {
+          "name": "mtime_ns",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "inode": {
+          "name": "inode",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "ctime_ns": {
+          "name": "ctime_ns",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "changes_root_id_id_idx": {
+          "name": "changes_root_id_id_idx",
+          "columns": [
+            {
+              "expression": "root_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "changes_created_at_idx": {
+          "name": "changes_created_at_idx",
+          "columns": [
+            {
+              "expression": "created_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "changes_root_id_roots_id_fk": {
+          "name": "changes_root_id_roots_id_fk",
+          "tableFrom": "changes",
+          "tableTo": "roots",
+          "schemaTo": "idx",
+          "columnsFrom": ["root_id"],
+          "columnsTo": ["id"],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "changes_source": {
+          "name": "changes_source",
+          "value": "\"idx\".\"changes\".\"source\" in ('api', 'watcher', 'scan', 'ocr')"
+        }
+      },
+      "isRLSEnabled": false
+    },
     "idx.chunks": {
       "name": "chunks",
       "schema": "idx",
@@ -3024,18 +3211,6 @@
         "deleted_at": {
           "name": "deleted_at",
           "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "inode": {
-          "name": "inode",
-          "type": "bigint",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "ctime_ns": {
-          "name": "ctime_ns",
-          "type": "bigint",
           "primaryKey": false,
           "notNull": false
         }
@@ -3748,128 +3923,6 @@
       },
       "indexes": {},
       "foreignKeys": {},
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "policies": {},
-      "checkConstraints": {},
-      "isRLSEnabled": false
-    },
-    "idx.work": {
-      "name": "work",
-      "schema": "idx",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "bigserial",
-          "primaryKey": true,
-          "notNull": true
-        },
-        "root_id": {
-          "name": "root_id",
-          "type": "smallint",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "path": {
-          "name": "path",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "target_path": {
-          "name": "target_path",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "sha256": {
-          "name": "sha256",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "size": {
-          "name": "size",
-          "type": "bigint",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "mtime_ns": {
-          "name": "mtime_ns",
-          "type": "bigint",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "inode": {
-          "name": "inode",
-          "type": "bigint",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "ctime_ns": {
-          "name": "ctime_ns",
-          "type": "bigint",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "created_at": {
-          "name": "created_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        }
-      },
-      "indexes": {
-        "work_root_id_id_idx": {
-          "name": "work_root_id_id_idx",
-          "columns": [
-            {
-              "expression": "root_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "work_created_at_idx": {
-          "name": "work_created_at_idx",
-          "columns": [
-            {
-              "expression": "created_at",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
-      "foreignKeys": {
-        "work_root_id_roots_id_fk": {
-          "name": "work_root_id_roots_id_fk",
-          "tableFrom": "work",
-          "tableTo": "roots",
-          "schemaTo": "idx",
-          "columnsFrom": ["root_id"],
-          "columnsTo": ["id"],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        }
-      },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
       "policies": {},

@@ -1,16 +1,10 @@
 import { createHash } from "node:crypto";
 import type { StorageProvider, StorageSession } from "@fdrive/core";
-import {
-  createDb,
-  createIndexQueries,
-  createIndexWorkWriter,
-  createRepos,
-  migrate,
-} from "@fdrive/db";
+import { createChangeWriter, createDb, createIndexQueries, createRepos, migrate } from "@fdrive/db";
 import { createLocalModule, type IndexChange, type LocalUsers } from "@fdrive/local";
 import { sql } from "drizzle-orm";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { createIndexWorkQueue, type IndexWorkQueue } from "../../src/local/index-work.js";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { type ChangeQueue, createChangeQueue } from "../../src/local/change-queue.js";
 import { LocalIndexerStack } from "./helpers/local-indexer-stack.js";
 
 const users: LocalUsers = {
@@ -27,12 +21,12 @@ function session(externalUsername: string): StorageSession {
 
 /**
  * The watcher is off and the next scan is an hour away, so anything indexed
- * within seconds reached the indexer through `idx.work`.
+ * within seconds reached the indexer through the change journal.
  */
 describe("changes fdrive makes, through the real indexer with its watcher off", () => {
   const stack = new LocalIndexerStack();
   let connection: ReturnType<typeof createDb>;
-  let queue: IndexWorkQueue;
+  let queue: ChangeQueue;
   let storage: StorageProvider;
   const failures: unknown[] = [];
 
@@ -55,8 +49,14 @@ describe("changes fdrive makes, through the real indexer with its watcher off", 
       },
     });
     await stack.startIndexer({ watch: false });
-    queue = createIndexWorkQueue({
-      write: createIndexWorkWriter(connection.db),
+    // The indexer starts reading the journal at its end; changes before that
+    // are its first scan's.
+    await vi.waitFor(async () => expect(await indexerPosition()).not.toBeNull(), {
+      timeout: 15_000,
+      interval: 100,
+    });
+    queue = createChangeQueue({
+      write: createChangeWriter(connection.db, "api"),
       onError: (error) => failures.push(error),
     });
     const module = createLocalModule({
@@ -104,11 +104,33 @@ describe("changes fdrive makes, through the real indexer with its watcher off", 
     await queue.flush();
   }
 
-  async function count(table: "idx.scans" | "idx.work"): Promise<number> {
+  async function count(table: "idx.scans"): Promise<number> {
     const result = await connection.db.execute(
       sql`select count(*)::int as n from ${sql.raw(table)}`,
     );
     return Number(result.rows[0]?.n);
+  }
+
+  /** The position the indexer has read the journal to, or `null` before it started. */
+  async function indexerPosition(): Promise<number | null> {
+    const result = await connection.db.execute(
+      sql`select position from idx.change_cursors where consumer = 'indexer'`,
+    );
+    const position = result.rows[0]?.position;
+    return position === undefined ? null : Number(position);
+  }
+
+  /** Every row of the journal, by source, then whether the indexer read past them. */
+  async function journal(): Promise<{ sources: string[]; read: boolean }> {
+    const result = await connection.db.execute(
+      sql`select coalesce(max(id), 0)::bigint as newest, array_agg(distinct source) as sources
+          from idx.changes`,
+    );
+    const row = result.rows[0];
+    return {
+      sources: (row?.sources as string[] | null) ?? [],
+      read: (await indexerPosition()) === Number(row?.newest),
+    };
   }
 
   it("indexes an upload, follows its move and drops it once deleted, within seconds", async () => {
@@ -150,7 +172,11 @@ describe("changes fdrive makes, through the real indexer with its watcher off", 
       sql`select kind from idx.events where path like 'alice/notes/%' order by id`,
     );
     expect(events.rows.map((row) => row.kind)).toEqual(["created", "moved", "deleted"]);
-    await expect.poll(() => count("idx.work"), { timeout: 15_000, interval: 100 }).toBe(0);
+    // Only fdrive wrote rows: the first scan of an empty index journaled
+    // nothing, and the indexer has read every row.
+    await expect
+      .poll(journal, { timeout: 15_000, interval: 100 })
+      .toEqual({ sources: ["api"], read: true });
     expect(await count("idx.scans")).toBe(scans);
     expect(failures).toEqual([]);
   });

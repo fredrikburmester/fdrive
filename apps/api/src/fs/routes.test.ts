@@ -1581,7 +1581,13 @@ describe("POST /fs/delete", () => {
     );
 
     expect(res.status).toBe(200);
-    expect(onTrashedSpy).toHaveBeenCalledWith(ALICE_IDENTITY_ID, "/hello.txt", false);
+    // With where it went in Trash, so what follows it there (shares) can.
+    expect(onTrashedSpy).toHaveBeenCalledWith(
+      ALICE_IDENTITY_ID,
+      "/hello.txt",
+      false,
+      expect.stringMatching(/^\/\.trash\/\.fdrive-move-v1\/file\/p\/hello\.txt\/v\/\d+$/),
+    );
     expect(onDeletedSpy).not.toHaveBeenCalled();
     expect(events).toEqual([
       {
@@ -1957,6 +1963,50 @@ describe("trashMany", () => {
         { path: "/dir/b.txt", kind: "file" },
       ]),
     ).rejects.toThrow("socket hang up");
+  });
+});
+
+describe("trashMany with Trash", () => {
+  it("moves what follows an item into Trash with it, and ends it when the leaf is not known", async () => {
+    const trashed = (onRecycled?: typeof captureRecycleReceipt) =>
+      withRecycleFolderTrash(
+        withMoveToTrash({
+          storage: createMemoryStorage({ "/a.txt": "a", "/dir/b.txt": "b" }),
+          trashPath: "/.trash",
+          clock: () => new Date(CLOCK_ISO),
+          ...(onRecycled === undefined ? {} : { onRecycled }),
+        }),
+        "/.trash",
+      );
+    const follower = {
+      onMoved: vi.fn(async (_id: string, _from: string, _to: string, _isDir: boolean) => {}),
+      onDeleted: vi.fn(async (_id: string, _path: string, _isDir: boolean) => {}),
+    };
+    const metadata = createMetadataService({ ...createMemoryRepos(), followers: [follower] });
+    const principal = (storage: StorageProvider): Principal => ({
+      accountId: ACCOUNT_ID,
+      identityId: ALICE_IDENTITY_ID,
+      username: "alice",
+      storage,
+      isAdmin: false,
+    });
+    const deps = { bus: createEventBus(), clock: () => new Date(CLOCK_ISO), metadata };
+
+    await trashMany(deps, principal(trashed(captureRecycleReceipt)), [
+      { path: "/dir", kind: "dir" },
+    ]);
+    expect(follower.onMoved.mock.calls).toEqual([
+      [
+        ALICE_IDENTITY_ID,
+        "/dir",
+        expect.stringMatching(/^\/\.trash\/\.fdrive-move-v1\/dir\/p\/dir\/v\/\d+$/),
+        true,
+      ],
+    ]);
+
+    // A storage that does not say where the item went: its shares end rather than stay behind.
+    await trashMany(deps, principal(trashed()), [{ path: "/dir", kind: "dir" }]);
+    expect(follower.onDeleted.mock.calls).toEqual([[ALICE_IDENTITY_ID, "/dir", true]]);
   });
 });
 

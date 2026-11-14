@@ -1,4 +1,4 @@
-import { mkdtemp, realpath, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rm, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -26,6 +26,16 @@ describe("createHome", () => {
     const home = createHome("/");
     expect(await home.contains("/")).toBe(true);
     expect(await home.contains("/etc")).toBe(true);
+  });
+
+  it("refuses a folder when it cannot tell whether it is in the one it must stay out of", async () => {
+    await mkdir(join(root, "alice", "Projects"), { recursive: true });
+    await symlink(join(root, "alice", ".trash"), join(root, "alice", ".trash"));
+    const home = createHome(join(root, "alice", "Projects"), {
+      create: false,
+      outside: [join(root, "alice", ".trash")],
+    });
+    await expect(home.real()).rejects.toMatchObject({ code: "ELOOP" });
   });
 
   it("maps the home's own path to its folder", async () => {

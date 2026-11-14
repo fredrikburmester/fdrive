@@ -81,9 +81,9 @@ pub fn read_schema_version(client: &mut Client) -> Result<Option<i64>> {
     }
 }
 
-/// Wait for the compatible schema, the failure-history, work-queue and folder tables and the
-/// files' stamp columns before any processing. They came without a version bump, which OCR
-/// waits for too.
+/// Wait for the compatible schema, the failure-history, change-journal and folder tables and
+/// the files' stamp columns before any processing. They came without a version bump, which
+/// OCR waits for too.
 pub fn wait_for_schema_version(
     db: &Db,
     expected: i64,
@@ -96,14 +96,14 @@ pub fn wait_for_schema_version(
         let (version, ready) = db.with(|c| {
             let version = read_schema_version(c)?;
             let row = c.query_one(
-                "SELECT to_regclass('idx.processing_failures')::text, to_regclass('idx.work')::text, \
-                 to_regclass('idx.folders')::text, \
+                "SELECT to_regclass('idx.processing_failures')::text, to_regclass('idx.changes')::text, \
+                 to_regclass('idx.change_cursors')::text, to_regclass('idx.folders')::text, \
                  (SELECT count(*) FROM information_schema.columns WHERE table_schema = 'idx' \
                   AND table_name = 'files' AND column_name IN ('inode', 'ctime_ns'))",
                 &[],
             )?;
-            let tables: [Option<String>; 3] = [row.get(0), row.get(1), row.get(2)];
-            let stamps: i64 = row.get(3);
+            let tables: [Option<String>; 4] = [row.get(0), row.get(1), row.get(2), row.get(3)];
+            let stamps: i64 = row.get(4);
             Ok((version, tables.iter().all(Option::is_some) && stamps == 2))
         })?;
         if version == Some(expected) && ready {
@@ -112,12 +112,12 @@ pub fn wait_for_schema_version(
         let seen = version.map_or("None".to_owned(), |v| v.to_string());
         if Instant::now() >= deadline {
             log(&format!(
-                "schema not ready (expected {expected}, last seen: {seen}, requires processing_failures, work, folders and file stamps); giving up"
+                "schema not ready (expected {expected}, last seen: {seen}, requires processing_failures, changes, folders and file stamps); giving up"
             ));
             return Ok(None);
         }
         log(&format!(
-            "waiting for idx.schema_version = {expected} and the processing_failures, work, folders and file stamp migrations (last seen: {seen})"
+            "waiting for idx.schema_version = {expected} and the processing_failures, changes, folders and file stamp migrations (last seen: {seen})"
         ));
         sleep(Duration::from_secs(5));
     }
@@ -394,9 +394,21 @@ pub fn mark_file_error(c: &mut Client, root_id: i64, path: &str, error: &str) ->
     Ok(())
 }
 
+/// What `delete_paths` removed: file row ids soft-deleted and folder rows dropped.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Deleted {
+    pub files: Vec<i64>,
+    pub folders: u64,
+}
+
 /// Soft-delete a path (or a directory's subtree), drop its chunks and its folder rows;
 /// returns the file row ids.
 pub fn mark_deleted(c: &mut Client, root_id: i64, path: &str, is_dir: bool) -> Result<Vec<i64>> {
+    Ok(delete_paths(c, root_id, path, is_dir)?.files)
+}
+
+/// `mark_deleted`, also counting the folder rows it dropped.
+pub fn delete_paths(c: &mut Client, root_id: i64, path: &str, is_dir: bool) -> Result<Deleted> {
     let mut tx = c.transaction()?;
     let prefix = format!("{path}/");
     let ids: Vec<i64> = tx
@@ -414,17 +426,29 @@ pub fn mark_deleted(c: &mut Client, root_id: i64, path: &str, is_dir: bool) -> R
             &[&ids],
         )?;
     }
-    tx.execute(
+    let folders = tx.execute(
         r#"DELETE FROM "idx"."folders" WHERE root_id = $1::bigint AND (path = $2 OR ($3 AND starts_with(path, $4)))"#,
         &[&root_id, &path, &is_dir, &prefix],
     )?;
     tx.commit()?;
-    Ok(ids)
+    Ok(Deleted { files: ids, folders })
+}
+
+/// What `move_paths` moved: file rows and folder rows.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Moved {
+    pub files: u64,
+    pub folders: u64,
 }
 
 /// Rename rows in place, replacing a stale row at the destination; a folder's rows in
 /// `idx.folders` follow it. Returns file rows moved.
 pub fn rename_paths(c: &mut Client, root_id: i64, old: &str, new: &str, is_dir: bool) -> Result<u64> {
+    Ok(move_paths(c, root_id, old, new, is_dir)?.files)
+}
+
+/// `rename_paths`, also counting the folder rows that moved.
+pub fn move_paths(c: &mut Client, root_id: i64, old: &str, new: &str, is_dir: bool) -> Result<Moved> {
     let mut tx = c.transaction()?;
     let moved = if is_dir {
         let (old_prefix, new_prefix) = (format!("{old}/"), format!("{new}/"));
@@ -435,13 +459,13 @@ pub fn rename_paths(c: &mut Client, root_id: i64, old: &str, new: &str, is_dir: 
                AND f.path = $3 || substr(s.path, $4::int)"#,
             &[&root_id, &old_prefix, &new_prefix, &from],
         )?;
-        let moved = tx.execute(
+        let files = tx.execute(
             r#"UPDATE "idx"."files" SET path = $1 || substr(path, $2::int), last_seen = now()
                WHERE root_id = $3::bigint AND starts_with(path, $4) AND deleted_at IS NULL"#,
             &[&new_prefix, &from, &root_id, &old_prefix],
         )?;
-        rename_folders(&mut tx, root_id, old, new)?;
-        moved
+        let folders = rename_folders(&mut tx, root_id, old, new)?;
+        Moved { files, folders }
     } else {
         tx.execute(
             r#"DELETE FROM "idx"."files" WHERE root_id = $1::bigint AND path = $2 AND EXISTS
@@ -449,11 +473,12 @@ pub fn rename_paths(c: &mut Client, root_id: i64, old: &str, new: &str, is_dir: 
             &[&root_id, &new, &old],
         )?;
         let name = crate::paths::basename(new);
-        tx.execute(
+        let files = tx.execute(
             r#"UPDATE "idx"."files" SET path = $1, name = $2, last_seen = now()
                WHERE root_id = $3::bigint AND path = $4 AND deleted_at IS NULL"#,
             &[&new, &name, &root_id, &old],
-        )?
+        )?;
+        Moved { files, folders: 0 }
     };
     tx.commit()?;
     Ok(moved)
@@ -501,23 +526,34 @@ pub fn finish_scan(c: &mut Client, scan_id: i64, seen: i64, changed: i64, delete
 }
 
 /// Soft-delete live rows a completed walk no longer found, unless written after `started_at`.
+/// Returns how many it deleted.
 pub fn sweep_vanished(c: &mut Client, root_id: i64, vanished: &[String], started_at: DateTime<Utc>) -> Result<i64> {
+    Ok(sweep_vanished_paths(c, root_id, vanished, started_at)?.len() as i64)
+}
+
+/// `sweep_vanished`, returning the paths it deleted.
+pub fn sweep_vanished_paths(
+    c: &mut Client,
+    root_id: i64,
+    vanished: &[String],
+    started_at: DateTime<Utc>,
+) -> Result<Vec<String>> {
     let mut paths = vanished.to_vec();
     paths.sort();
-    let mut deleted = 0;
+    let mut deleted = Vec::new();
     for batch in paths.chunks(SWEEP_BATCH) {
-        let row = c.query_one(
+        let rows = c.query(
             r#"WITH gone AS (
                  UPDATE "idx"."files" SET deleted_at = now()
                  WHERE root_id = $1::bigint AND deleted_at IS NULL AND last_seen < $2 AND path = ANY($3)
-                 RETURNING id
+                 RETURNING id, path
                ), dropped AS (
                  DELETE FROM "idx"."chunks" WHERE file_id IN (SELECT id FROM gone)
                )
-               SELECT count(*) FROM gone"#,
+               SELECT path FROM gone ORDER BY path"#,
             &[&root_id, &started_at, &batch],
         )?;
-        deleted += row.get::<_, i64>(0);
+        deleted.extend(rows.into_iter().map(|r| r.get::<_, String>(0)));
     }
     Ok(deleted)
 }
@@ -642,12 +678,25 @@ pub fn mark_pending(c: &mut Client, root_id: i64, scope: Option<(&str, &str)>) -
     })
 }
 
-/// One change the API queued in `idx.work`, exactly as stored; `work` checks it.
+/// The `NOTIFY` channel a write to the change journal wakes; the payload is the root's name.
+pub const CHANGES_CHANNEL: &str = "idx_changes";
+
+/// Taken before inserting into the journal and held until commit, by every writer in every
+/// language: positions are handed out and committed one transaction at a time, so a reader
+/// that sees a position has seen every one below it.
+const JOURNAL_LOCK: &str = "SELECT pg_advisory_xact_lock(hashtextextended('idx.changes', 0))";
+
+/// Rows per insert statement: well under Postgres's bind parameter limit.
+const APPEND_BATCH: usize = 1_000;
+
+/// One row of the change journal, exactly as stored; `work` checks it.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct WorkRow {
+pub struct ChangeRow {
+    /// The row's position.
     pub id: i64,
     pub path: String,
     pub target_path: Option<String>,
+    pub source: String,
     pub sha256: Option<String>,
     pub size: Option<i64>,
     pub mtime_ns: Option<i64>,
@@ -656,34 +705,134 @@ pub struct WorkRow {
     pub ctime_ns: Option<i64>,
 }
 
-/// A root's oldest queued changes, at most `limit`.
-pub fn work_batch(c: &mut Client, root_id: i64, limit: i64) -> Result<Vec<WorkRow>> {
+/// A row to append: look at `path` again, or `path` moved to `target_path`. The hint columns
+/// are an API upload's; the indexer's own rows leave them empty.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct NewChange {
+    pub path: String,
+    pub target_path: Option<String>,
+    pub sha256: Option<String>,
+    pub size: Option<i64>,
+    pub mtime_ns: Option<i64>,
+    pub inode: Option<i64>,
+    pub ctime_ns: Option<i64>,
+}
+
+impl NewChange {
+    /// Look at `path` again.
+    pub fn path(path: &str) -> Self {
+        Self {
+            path: path.to_owned(),
+            ..Self::default()
+        }
+    }
+
+    /// `from` moved to `to`.
+    pub fn moved(from: &str, to: &str) -> Self {
+        Self {
+            path: from.to_owned(),
+            target_path: Some(to.to_owned()),
+            ..Self::default()
+        }
+    }
+}
+
+/// Append `changes` under one root in one transaction holding the journal's lock, and wake
+/// `LISTEN idx_changes` with the root's name on commit.
+pub fn append_changes(c: &mut Client, root_id: i64, root: &str, source: &str, changes: &[NewChange]) -> Result<()> {
+    if changes.is_empty() {
+        return Ok(());
+    }
+    let mut tx = c.transaction()?;
+    tx.batch_execute(JOURNAL_LOCK)?;
+    for batch in changes.chunks(APPEND_BATCH) {
+        let column = |f: fn(&NewChange) -> Option<String>| batch.iter().map(f).collect::<Vec<_>>();
+        let number = |f: fn(&NewChange) -> Option<i64>| batch.iter().map(f).collect::<Vec<_>>();
+        let paths: Vec<&str> = batch.iter().map(|c| c.path.as_str()).collect();
+        tx.execute(
+            r#"INSERT INTO "idx"."changes" (root_id, path, target_path, source, sha256, size, mtime_ns, inode, ctime_ns)
+               SELECT $1::bigint, p, t, $2, s, z, m, i, ct
+               FROM unnest($3::text[], $4::text[], $5::text[], $6::bigint[], $7::bigint[], $8::bigint[], $9::bigint[])
+                 WITH ORDINALITY AS u(p, t, s, z, m, i, ct, n)
+               ORDER BY n"#,
+            &[
+                &root_id,
+                &source,
+                &paths,
+                &column(|c| c.target_path.clone()),
+                &column(|c| c.sha256.clone()),
+                &number(|c| c.size),
+                &number(|c| c.mtime_ns),
+                &number(|c| c.inode),
+                &number(|c| c.ctime_ns),
+            ],
+        )?;
+    }
+    tx.execute("SELECT pg_notify($1, $2)", &[&CHANGES_CHANNEL, &root])?;
+    tx.commit()?;
+    Ok(())
+}
+
+/// A root's journal rows after `after`, oldest first, at most `limit`.
+pub fn changes_after(c: &mut Client, root_id: i64, after: i64, limit: i64) -> Result<Vec<ChangeRow>> {
     Ok(c.query(
-        r#"SELECT id::bigint, path, target_path, sha256, size::bigint, mtime_ns::bigint, inode::bigint,
-           ctime_ns::bigint FROM "idx"."work"
-           WHERE root_id = $1::bigint ORDER BY id LIMIT $2::bigint"#,
-        &[&root_id, &limit],
+        r#"SELECT id::bigint, path, target_path, source, sha256, size::bigint, mtime_ns::bigint, inode::bigint,
+           ctime_ns::bigint FROM "idx"."changes"
+           WHERE root_id = $1::bigint AND id > $2::bigint ORDER BY id LIMIT $3::bigint"#,
+        &[&root_id, &after, &limit],
     )?
     .into_iter()
-    .map(|r| WorkRow {
+    .map(|r| ChangeRow {
         id: r.get(0),
         path: r.get(1),
         target_path: r.get(2),
-        sha256: r.get(3),
-        size: r.get(4),
-        mtime_ns: r.get(5),
-        inode: r.get(6),
-        ctime_ns: r.get(7),
+        source: r.get(3),
+        sha256: r.get(4),
+        size: r.get(5),
+        mtime_ns: r.get(6),
+        inode: r.get(7),
+        ctime_ns: r.get(8),
     })
     .collect())
 }
 
-/// Remove applied (or discarded) queue rows.
-pub fn delete_work(c: &mut Client, ids: &[i64]) -> Result<u64> {
-    if ids.is_empty() {
-        return Ok(0);
-    }
-    Ok(c.execute(r#"DELETE FROM "idx"."work" WHERE id = ANY($1::bigint[])"#, &[&ids])?)
+/// The journal's oldest position (`None` while empty) and its newest (0 while empty), over
+/// every root.
+pub fn journal_bounds(c: &mut Client) -> Result<(Option<i64>, i64)> {
+    let row = c.query_one(
+        r#"SELECT min(id)::bigint, coalesce(max(id), 0)::bigint FROM "idx"."changes""#,
+        &[],
+    )?;
+    Ok((row.get(0), row.get(1)))
+}
+
+/// Where `consumer` last saved its position in the journal for a root.
+pub fn change_cursor(c: &mut Client, consumer: &str, root_id: i64) -> Result<Option<i64>> {
+    Ok(c.query_opt(
+        r#"SELECT position::bigint FROM "idx"."change_cursors" WHERE root_id = $1::bigint AND consumer = $2"#,
+        &[&root_id, &consumer],
+    )?
+    .map(|r| r.get(0)))
+}
+
+pub fn save_change_cursor(c: &mut Client, consumer: &str, root_id: i64, position: i64) -> Result<()> {
+    c.execute(
+        r#"INSERT INTO "idx"."change_cursors" (root_id, consumer, position) VALUES ($1::bigint, $2, $3::bigint)
+           ON CONFLICT (root_id, consumer) DO UPDATE SET position = EXCLUDED.position, updated_at = now()"#,
+        &[&root_id, &consumer, &position],
+    )?;
+    Ok(())
+}
+
+/// What a scan can compare against before it journals differences: whether an earlier scan
+/// of the root finished, and whether the root has folder rows.
+pub fn scan_baseline(c: &mut Client, root_id: i64) -> Result<(bool, bool)> {
+    let row = c.query_one(
+        r#"SELECT EXISTS (SELECT 1 FROM "idx"."scans" WHERE root_id = $1::bigint AND finished_at IS NOT NULL),
+                  EXISTS (SELECT 1 FROM "idx"."folders" WHERE root_id = $1::bigint)"#,
+        &[&root_id],
+    )?;
+    Ok((row.get(0), row.get(1)))
 }
 
 /// Live rows at or below `path`, for comparing one folder against the disk.
@@ -728,8 +877,9 @@ pub fn now(c: &mut Client) -> Result<DateTime<Utc>> {
     Ok(c.query_one("SELECT now()", &[])?.get(0))
 }
 
-/// Move the folder rows at and below `old` to `new`, replacing rows already there.
-fn rename_folders(tx: &mut postgres::Transaction<'_>, root_id: i64, old: &str, new: &str) -> Result<()> {
+/// Move the folder rows at and below `old` to `new`, replacing rows already there. Returns
+/// the rows moved.
+fn rename_folders(tx: &mut postgres::Transaction<'_>, root_id: i64, old: &str, new: &str) -> Result<u64> {
     let old_prefix = format!("{old}/");
     let rest = old.chars().count() as i32 + 1;
     let name = crate::paths::basename(new);
@@ -739,13 +889,12 @@ fn rename_folders(tx: &mut postgres::Transaction<'_>, root_id: i64, old: &str, n
            AND d.path = $4 || substr(s.path, $5::int)"#,
         &[&root_id, &old, &old_prefix, &new, &rest],
     )?;
-    tx.execute(
+    Ok(tx.execute(
         r#"UPDATE "idx"."folders" SET path = $4 || substr(path, $5::int),
            name = CASE WHEN path = $2 THEN $6 ELSE name END, seen_at = now()
            WHERE root_id = $1::bigint AND (path = $2 OR starts_with(path, $3))"#,
         &[&root_id, &old, &old_prefix, &new, &rest, &name],
-    )?;
-    Ok(())
+    )?)
 }
 
 /// One folder as a walk found it: root-relative path and modification time.
@@ -753,6 +902,13 @@ fn rename_folders(tx: &mut postgres::Transaction<'_>, root_id: i64, old: &str, n
 pub struct FolderRow {
     pub path: String,
     pub mtime_ns: i64,
+}
+
+/// What `sync_folders_changes` did: folder rows it added and rows it dropped.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct FolderChanges {
+    pub added: Vec<String>,
+    pub dropped: Vec<String>,
 }
 
 /// Write the folders a walk found. With `sweep`, a root-relative folder (`""` for the whole
@@ -764,35 +920,53 @@ pub fn sync_folders(
     found: &[FolderRow],
     sweep: Option<(&str, DateTime<Utc>)>,
 ) -> Result<u64> {
+    Ok(sync_folders_changes(c, root_id, found, sweep)?.dropped.len() as u64)
+}
+
+/// `sync_folders`, returning the paths of the rows it added and dropped.
+pub fn sync_folders_changes(
+    c: &mut Client,
+    root_id: i64,
+    found: &[FolderRow],
+    sweep: Option<(&str, DateTime<Utc>)>,
+) -> Result<FolderChanges> {
     // One statement cannot write a row twice, and two names that are not valid UTF-8 can read
     // the same.
     let mut unique: Vec<&FolderRow> = found.iter().collect();
     unique.sort_by(|a, b| a.path.cmp(&b.path));
     unique.dedup_by(|a, b| a.path == b.path);
+    let mut changes = FolderChanges::default();
     let mut tx = c.transaction()?;
     for batch in unique.chunks(SWEEP_BATCH) {
         let paths: Vec<&str> = batch.iter().map(|f| f.path.as_str()).collect();
         let names: Vec<&str> = batch.iter().map(|f| crate::paths::basename(&f.path)).collect();
         let mtimes: Vec<i64> = batch.iter().map(|f| f.mtime_ns).collect();
-        tx.execute(
+        // New rows first, so the folders that were new are known; then the rest are refreshed.
+        let added = tx.query(
             r#"INSERT INTO "idx"."folders" (root_id, path, name, mtime_ns)
                SELECT $1::bigint, p, n, m FROM unnest($2::text[], $3::text[], $4::bigint[]) AS t(p, n, m)
-               ON CONFLICT (root_id, path) DO UPDATE
-               SET name = EXCLUDED.name, mtime_ns = EXCLUDED.mtime_ns, seen_at = now()"#,
+               ON CONFLICT (root_id, path) DO NOTHING RETURNING path"#,
+            &[&root_id, &paths, &names, &mtimes],
+        )?;
+        changes.added.extend(added.into_iter().map(|r| r.get::<_, String>(0)));
+        tx.execute(
+            r#"UPDATE "idx"."folders" f SET name = t.n, mtime_ns = t.m, seen_at = now()
+               FROM unnest($2::text[], $3::text[], $4::bigint[]) AS t(p, n, m)
+               WHERE f.root_id = $1::bigint AND f.path = t.p"#,
             &[&root_id, &paths, &names, &mtimes],
         )?;
     }
-    let dropped = match sweep {
-        Some((under, started_at)) => {
-            let prefix = format!("{under}/");
-            tx.execute(
-                r#"DELETE FROM "idx"."folders" WHERE root_id = $1::bigint AND seen_at < $2
-                   AND ($3 = '' OR starts_with(path, $4))"#,
-                &[&root_id, &started_at, &under, &prefix],
-            )?
-        }
-        None => 0,
-    };
+    if let Some((under, started_at)) = sweep {
+        let prefix = format!("{under}/");
+        let dropped = tx.query(
+            r#"DELETE FROM "idx"."folders" WHERE root_id = $1::bigint AND seen_at < $2
+               AND ($3 = '' OR starts_with(path, $4)) RETURNING path"#,
+            &[&root_id, &started_at, &under, &prefix],
+        )?;
+        changes.dropped = dropped.into_iter().map(|r| r.get(0)).collect();
+    }
     tx.commit()?;
-    Ok(dropped)
+    changes.added.sort();
+    changes.dropped.sort();
+    Ok(changes)
 }

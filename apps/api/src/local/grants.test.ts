@@ -261,6 +261,69 @@ describe("createLocalGrantService: changing and ending shares", () => {
     expect(await h.repos.localGrants.listOwned("alice")).toEqual([]);
   });
 
+  it("places a path in a folder shared with a user in its owner's files", async () => {
+    const h = await fixture();
+    await h.service.create(h.alice.id, { path: "/Projects", username: "bob", access: "write" });
+    await h.service.create(h.carol.id, { path: "/Projects", username: "bob", access: "read" });
+    expect(await h.service.ownerPath(h.bob.id, "/Shared with me/Projects (alice)/a/b.txt")).toEqual(
+      {
+        identityId: h.alice.id,
+        path: "/Projects/a/b.txt",
+      },
+    );
+    expect(await h.service.ownerPath(h.bob.id, "/Shared with me/Projects (carol)")).toEqual({
+      identityId: h.carol.id,
+      path: "/Projects",
+    });
+    // Anything else is the user's own: their files, the shelf itself, a name nobody shares.
+    for (const path of ["/notes.txt", "/Shared with me", "/Shared with me/Other/x"])
+      expect(await h.service.ownerPath(h.bob.id, path)).toEqual({ identityId: h.bob.id, path });
+    expect(await h.service.ownerPath(h.aliceRetired.id, "/Shared with me/Projects/x")).toEqual({
+      identityId: h.aliceRetired.id,
+      path: "/Shared with me/Projects/x",
+    });
+    // An owner who never signed in has no login, so nothing of theirs to place it in.
+    await h.repos.localUsers.update("dave", { disabled: false });
+    await h.repos.localGrants.put({
+      ownerUsername: "dave",
+      path: "/Music",
+      granteeUsername: "carol",
+      access: "read",
+    });
+    expect(await h.service.ownerPath(h.carol.id, "/Shared with me/Music/song.mp3")).toBeNull();
+  });
+
+  it("keeps a share that followed its folder into Trash from the person it is shared with", async () => {
+    const closedFolders = vi.fn(async (): Promise<readonly string[]> => ["/.trash"]);
+    const h = await fixture({ closedFolders });
+    await h.service.create(h.alice.id, { path: "/Photos/2026", username: "bob", access: "read" });
+    await h.service.create(h.alice.id, { path: "/Projects", username: "bob", access: "write" });
+    await h.service.create(h.carol.id, { path: "/Projects", username: "bob", access: "read" });
+    const leaf = "/.trash/.fdrive-move-v1/dir/p/Projects/v/1";
+    writeHomeFiles(h.local.root, "alice", { [`${leaf}/plan.txt`]: "plan" });
+    await h.service.onMoved(h.alice.id, "/Projects", leaf, true);
+    await h.service.onMoved(h.alice.id, "/Photos/2026", "/.trash/loose", true);
+
+    expect(await h.service.received(h.bob)).toEqual([
+      { name: "Projects", owner: "carol", path: "/Projects", writable: false },
+    ]);
+    expect(closedFolders).toHaveBeenCalledWith(h.row.id);
+    expect((await h.service.list(h.bob.id)).received.map((grant) => grant.name)).toEqual([
+      "Projects",
+    ]);
+    expect(await h.service.isReadOnly(h.bob, "/Shared with me/1/plan.txt")).toBe(false);
+    // Bob's storage agrees: the leaf in fdrive's Trash layout is refused there too.
+    const bobs = await h.storageFor(h.bob.id);
+    expect((await bobs.list("/Shared with me")).map((entry) => entry.name)).not.toContain("1");
+
+    // Trash turned off: what is still in fdrive's Trash layout stays closed; the rest opens.
+    closedFolders.mockResolvedValue([]);
+    expect((await h.service.received(h.bob)).map((folder) => folder.name)).toEqual([
+      "loose",
+      "Projects",
+    ]);
+  });
+
   it("ignores moves and deletes on other storage, whose paths are not the folder's", async () => {
     const h = await fixture();
     await h.service.create(h.alice.id, { path: "/Projects", username: "bob", access: "read" });

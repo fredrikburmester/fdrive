@@ -10,6 +10,7 @@ use common::root_env::{Env, fv};
 use fdrive_indexer::db::Stamp;
 use fdrive_indexer::features::FeatureValues;
 use fdrive_indexer::indexer::{FileStat, RootContext, STAMP_SETTLE, earned_stamp, process_file, read_digest, settled};
+use fdrive_indexer::journal::{Source, with_source};
 
 /// Short enough for a test to wait out, long enough to span many ticks of any test machine's
 /// file clock.
@@ -141,13 +142,22 @@ fn a_rewrite_that_keeps_size_and_time_is_found_and_indexed_again() {
     assert_eq!(env.stat("a.txt"), stat, "size and modification time are as indexed");
     assert_ne!(Some(stamp_of(&env, "a.txt")), stamped, "the change time moved on");
     std::thread::sleep(PAST);
-    assert!(index(&env, &ctx, "a.txt"));
+    // As the watcher looks: what it finds changed is journaled for other readers.
+    assert!(with_source(Some(Source::Watcher), || index(&env, &ctx, "a.txt")));
     let row = env.row(&ctx, "a.txt");
     assert_eq!(
         (row.sha256.as_deref(), row.stamp),
         (Some(hex_sha(b"other").as_str()), Some(stamp_of(&env, "a.txt")))
     );
     assert_eq!(env.events(), ["created", "changed"]);
+    let journaled: Vec<(String, String)> = env
+        .client()
+        .query(r#"SELECT path, source FROM "idx"."changes" ORDER BY id"#, &[])
+        .unwrap()
+        .iter()
+        .map(|r| (r.get(0), r.get(1)))
+        .collect();
+    assert_eq!(journaled, [("a.txt".to_owned(), "watcher".to_owned())]);
 }
 
 #[test]
