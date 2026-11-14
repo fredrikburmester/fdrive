@@ -137,7 +137,7 @@ it("passes onTrashed through unchanged: office registrations are untouched, rece
     path: "alice/a.docx",
   });
   await repos.recents.touch(identity.id, "/a.docx");
-  await wrapped.onTrashed(identity.id, "/a.docx", false);
+  await wrapped.onTrashed(identity.id, "/a.docx", false, "/.trash/a.docx");
   expect(await files.get(file.id)).not.toBeNull();
   expect(await metadata.listRecents(identity.id)).toEqual([]);
 });

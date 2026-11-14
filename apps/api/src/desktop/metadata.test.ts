@@ -12,7 +12,7 @@ it("updates stable desktop handles with shared metadata mutations", async () => 
   const service = withDesktopMetadata(metadata, desktop);
   await service.onMoved("identity", "/before", "/after", true);
   await service.onDeleted("identity", "/gone", false);
-  await service.onTrashed("identity", "/trash", false);
+  await service.onTrashed("identity", "/trash", false, "/.trash/leaf");
   expect(desktop.move).toHaveBeenCalledWith("identity", "/before", "/after");
   expect(desktop.remove.mock.calls).toEqual([
     ["identity", "/gone"],
@@ -20,5 +20,5 @@ it("updates stable desktop handles with shared metadata mutations", async () => 
   ]);
   expect(metadata.onMoved).toHaveBeenCalledWith("identity", "/before", "/after", true);
   expect(metadata.onDeleted).toHaveBeenCalledWith("identity", "/gone", false);
-  expect(metadata.onTrashed).toHaveBeenCalledWith("identity", "/trash", false);
+  expect(metadata.onTrashed).toHaveBeenCalledWith("identity", "/trash", false, "/.trash/leaf");
 });

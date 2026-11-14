@@ -49,6 +49,8 @@ export interface LocalStorageOptions {
   readonly create?: boolean;
   /** A folder `home` must really be inside; see `CreateHomeOptions.within`. */
   readonly within?: string;
+  /** Folders `home` must not really be inside; see `CreateHomeOptions.outside`. */
+  readonly outside?: readonly string[];
   /** Hears every change this storage makes on disk, once it is done. */
   readonly onChange?: DiskChangeListener;
 }
@@ -149,6 +151,7 @@ export function createLocalStorage(options: LocalStorageOptions): LocalStorage {
   const home = createHome(options.home, {
     create: options.create ?? true,
     ...(options.within === undefined ? {} : { within: options.within }),
+    ...(options.outside === undefined ? {} : { outside: options.outside }),
   });
   const listener = options.onChange;
 

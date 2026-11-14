@@ -342,7 +342,7 @@ describe("createMetadataService: onTrashed", () => {
     await service.addFavorite(IDENTITY_ID, "/a.txt", "file");
     await service.touchRecent(IDENTITY_ID, "/a.txt");
 
-    await service.onTrashed(IDENTITY_ID, "/a.txt", false);
+    await service.onTrashed(IDENTITY_ID, "/a.txt", false, "/.trash/a.txt");
 
     expect(await service.filesForTag(IDENTITY_ID, tag.id)).toEqual(["/a.txt"]);
     expect((await service.listFavorites(IDENTITY_ID)).map((f) => f.path)).toEqual(["/a.txt"]);
@@ -352,7 +352,7 @@ describe("createMetadataService: onTrashed", () => {
   it("is idempotent: trashing an already-gone path is harmless", async () => {
     const { service } = buildService();
     await expect(
-      service.onTrashed(IDENTITY_ID, "/never-existed.txt", false),
+      service.onTrashed(IDENTITY_ID, "/never-existed.txt", false, null),
     ).resolves.toBeUndefined();
   });
 });
@@ -431,7 +431,7 @@ describe("createMetadataService: AI chat references", () => {
       ["/moved/x.txt", false],
     ]);
 
-    await service.onTrashed(identity, "/b.txt", false);
+    await service.onTrashed(identity, "/b.txt", false, null);
     await service.onDeleted(identity, "/moved", true);
     expect(await references()).toEqual([
       ["/b.txt", true],
@@ -444,12 +444,12 @@ describe("createMetadataService: AI chat references", () => {
     const { aiChats: _aiChats, ...withoutChats } = repos;
     const service = createMetadataService(withoutChats);
     await expect(service.onMoved(IDENTITY_ID, "/a", "/b", false)).resolves.toBeUndefined();
-    await expect(service.onTrashed(IDENTITY_ID, "/b", false)).resolves.toBeUndefined();
+    await expect(service.onTrashed(IDENTITY_ID, "/b", false, null)).resolves.toBeUndefined();
   });
 });
 
 describe("createMetadataService: followers", () => {
-  it("tells each follower about moves and deletes, in order, after its own records", async () => {
+  it("tells each follower about moves, deletes and trashes, in order", async () => {
     const repos = createMemoryRepos();
     const calls: string[] = [];
     const follower = (name: string) => ({
@@ -468,15 +468,22 @@ describe("createMetadataService: followers", () => {
 
     await service.onMoved(IDENTITY_ID, "/Projects", "/Work", true);
     await service.onDeleted(IDENTITY_ID, "/Work", true);
-    // Trash is not a delete: a share of a trashed folder stays until it is gone for good.
-    await service.onTrashed(IDENTITY_ID, "/Other", true);
+    // A share follows its folder into Trash, where no new folder can take its path.
+    await service.onTrashed(IDENTITY_ID, "/Other", true, "/.trash/leaf");
+    // Where it went is not known: the share ends rather than stay at a path a new folder can take.
+    await service.onTrashed(IDENTITY_ID, "/Lost", true, null);
 
+    expect(movePrefix).toHaveBeenCalledTimes(1);
     expect(movePrefix).toHaveBeenCalledWith(IDENTITY_ID, "/Projects", "/Work", true);
     expect(calls).toEqual([
       `grants moved ${IDENTITY_ID} /Projects /Work true`,
       `other moved ${IDENTITY_ID} /Projects /Work true`,
       `grants deleted ${IDENTITY_ID} /Work true`,
       `other deleted ${IDENTITY_ID} /Work true`,
+      `grants moved ${IDENTITY_ID} /Other /.trash/leaf true`,
+      `other moved ${IDENTITY_ID} /Other /.trash/leaf true`,
+      `grants deleted ${IDENTITY_ID} /Lost true`,
+      `other deleted ${IDENTITY_ID} /Lost true`,
     ]);
   });
 
