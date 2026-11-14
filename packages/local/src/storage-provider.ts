@@ -172,7 +172,8 @@ export function createLocalStorage(options: LocalStorageOptions): LocalStorage {
     const at = join(dir, name);
     let info = await lstatOrNull(at);
     if (info === null) return null;
-    if (info.isSymbolicLink()) {
+    const link = info.isSymbolicLink();
+    if (link) {
       try {
         const resolved = await realpath(at);
         if (await home.contains(resolved)) info = await stat(resolved);
@@ -186,6 +187,7 @@ export function createLocalStorage(options: LocalStorageOptions): LocalStorage {
       kind,
       size: kind === "file" ? info.size : 0,
       modifiedAt: info.mtime,
+      link,
     });
   }
 
@@ -218,7 +220,8 @@ export function createLocalStorage(options: LocalStorageOptions): LocalStorage {
           size: kind === "file" ? info.size : 0,
           modifiedAt: info.mtime,
           contentType: null,
-          ...(spelled === normalizePath(path) ? {} : { path: spelled }),
+          ...(spelled.path === normalizePath(path) ? {} : { path: spelled.path }),
+          ...(spelled.link ? { link: true as const } : {}),
         };
       }),
 

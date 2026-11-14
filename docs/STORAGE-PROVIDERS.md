@@ -85,6 +85,8 @@ How the files folder implements it:
 
 - **Confinement.** Paths are normalized and joined to the home; a symlink is followed only when
   its real path stays inside the home or the shared folder ([home.ts](../packages/local/src/home.ts)).
+  A followed link is marked `link` on its listing entry, and `stat` marks a path that passes
+  through one at any segment, so the Mac's reads can refuse it.
 - **Atomic publish.** Uploads and file copies write a temporary file beside the target and
   publish it with `link`, a real create-if-absent; only `overwrite: true` renames it over a
   taken name.

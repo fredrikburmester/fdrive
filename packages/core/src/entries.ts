@@ -9,6 +9,12 @@ export interface FileEntry {
   readonly size: number;
   readonly modifiedAt: Date;
   readonly ext: string;
+  /**
+   * Set when the entry is a symbolic link. Storage follows one that stays
+   * inside the home, and `kind`, `size` and `modifiedAt` then describe what
+   * it leads to; any other link is kind `symlink`.
+   */
+  readonly link?: true;
 }
 
 /**
@@ -22,6 +28,7 @@ export function makeEntry(
     readonly kind: EntryKind;
     readonly size: number;
     readonly modifiedAt: Date;
+    readonly link?: boolean;
   },
 ): FileEntry {
   return {
@@ -31,6 +38,7 @@ export function makeEntry(
     size: input.size,
     modifiedAt: input.modifiedAt,
     ext: input.kind === "dir" ? "" : extensionOf(input.name),
+    ...(input.link === true ? { link: true as const } : {}),
   };
 }
 

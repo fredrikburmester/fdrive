@@ -65,6 +65,11 @@ export interface EntryStat {
    * when the path asked for is the stored spelling.
    */
   readonly path?: string;
+  /**
+   * Set when reaching `path` follows a symbolic link, at its last segment or
+   * at any folder on the way: the entry is not where `path` says it is.
+   */
+  readonly link?: true;
 }
 
 /**

@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import type { DesktopEntry } from "@fdrive/contracts";
 import {
+  baseName,
   type ContentStamp,
   DESKTOP_INTERNAL_ROOT,
   type FileEntry,
@@ -12,7 +13,7 @@ import {
 import type { IndexedContent } from "@fdrive/db";
 import type { Principal } from "../auth/principal.js";
 import { ApiHttpError } from "../errors.js";
-import { runStorageCall, statEntry } from "../fs/routes.js";
+import { runStorageCall } from "../fs/routes.js";
 import { indexedVersion } from "./indexed-content.js";
 import type { DesktopDeps } from "./pairing.js";
 
@@ -30,25 +31,26 @@ export const DESKTOP_PAGE_SIZE = 500;
 
 export { DESKTOP_INTERNAL_ROOT };
 
+const SYMLINKS = "Symbolic links are not supported by this connection";
+
 /**
- * The entry at the normalized `path`, from one stat. The files folder follows
- * a link only while it stays inside the home and refuses one that leaves it;
- * a storage that reports a link as one is refused here. Desktop paths are
- * spelled as listings show them and the registry keys items by them, so
- * another spelling of a stored name (on a disk that ignores case) is not that
- * item.
+ * The entry at the normalized `path`, from one stat. A path that reaches it
+ * through a symbolic link, at any segment, is refused: grants and fdrive's own
+ * folders are checked against the path as asked, and a link would lead past
+ * them. Desktop paths are spelled as listings show them and the registry keys
+ * items by them, so another spelling of a stored name (on a disk that ignores
+ * case) is not that item.
  */
 export async function storedEntry(storage: StorageProvider, path: string): Promise<DesktopEntry> {
-  const found = await statEntry(storage, path);
-  if (found.path !== path) throw new ApiHttpError("not_found", "Item no longer exists");
-  if (found.kind === "symlink")
-    throw new ApiHttpError("forbidden", "Symbolic links are not supported by this connection");
+  const found = await runStorageCall(() => storage.stat(path));
+  if (found.link || found.kind === "symlink") throw new ApiHttpError("forbidden", SYMLINKS);
+  if ((found.path ?? path) !== path) throw new ApiHttpError("not_found", "Item no longer exists");
   return {
     path,
-    name: found.name,
+    name: baseName(path),
     kind: found.kind,
     size: found.size,
-    modifiedAt: found.modifiedAt.toISOString(),
+    modifiedAt: (found.modifiedAt ?? new Date(0)).toISOString(),
     readable: found.kind === "file" || found.kind === "dir",
   };
 }
@@ -93,18 +95,24 @@ export function createDesktopFiles(
       throw new ApiHttpError("forbidden", "Path is not available to this connection");
     return path;
   }
-  /** What this connection may see of a folder's upstream listing, in path order. */
+  /**
+   * What this connection may see of a folder's upstream listing, in path order.
+   * A link shows as one, unreadable, whatever it leads to: reads refuse it.
+   */
   function visible(principal: Principal, live: readonly FileEntry[]): DesktopEntry[] {
     return live
       .filter((item) => allowed(principal, normalizePath(item.path), item.kind === "dir"))
-      .map((item) => ({
-        path: normalizePath(item.path),
-        name: item.name,
-        kind: item.kind,
-        size: item.size,
-        modifiedAt: item.modifiedAt.toISOString(),
-        readable: item.kind === "file" || item.kind === "dir",
-      }))
+      .map((item) => {
+        const kind = item.link ? "symlink" : item.kind;
+        return {
+          path: normalizePath(item.path),
+          name: item.name,
+          kind,
+          size: kind === "symlink" ? 0 : item.size,
+          modifiedAt: item.modifiedAt.toISOString(),
+          readable: kind === "file" || kind === "dir",
+        };
+      })
       .sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
   }
   async function entry(principal: Principal, path: string): Promise<DesktopEntry> {

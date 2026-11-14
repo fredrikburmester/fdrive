@@ -351,7 +351,7 @@ Desktop protocol v1 lives at `/api/v1/desktop`; contracts are in
 | `GET /entries?path=&cursor=` | Authorized, bounded metadata snapshot; protocol 2 adds a `token` to a complete single-page listing outside Trash |
 | `POST /checks` | Protocol 2: up to 200 `{path, token}` pairs; answers `unchanged`, `changed`, `missing` or `forbidden` for every folder, each from one stat and one listing of the folder |
 | `GET /changes?since=` | Protocol 2, where `location` says `changeFeed`: the paths changed since an anchor and the folders whose listings they changed, in the location's own paths, with the next anchor and `more`; `resync` and a fresh anchor otherwise. See [change feed](#change-feed) |
-| `GET /entry?path=` | Current entry, from one stat; a link that leaves the home is refused |
+| `GET /entry?path=` | Current entry, from one stat; a path through a symbolic link is refused |
 | `GET /content?path=` | Original streamed bytes; no MCP size cap |
 | `POST /versions` | Content versions (sha256) of up to 16 authorized files for cache validation, from the index where it provably holds them |
 | `POST /disconnect` | Revoke this bearer only |
@@ -428,8 +428,10 @@ handle or kind at an unchanged path is treated as delete plus recreate, so cache
 never served for the new item; a handle observed at another path keeps its item and
 downloaded content. Names colliding by Unicode normalization/case, containing a colon, or
 named `.Trash` in the root of a writable location fail the listing with guidance rather
-than merge, hide or shadow distinct entries. Symlinks and other special entries have no
-reading capability.
+than merge, hide or shadow distinct entries. Symlinks, wherever they lead, and other special
+entries have no reading capability: listings show every link as one, and the server refuses any
+read whose path passes through a link, at any segment, since grants and fdrive's own folders are
+checked against the path as asked.
 
 The most recent 100,000 revisions retain deletion evidence. Older tombstones are pruned;
 anchors before the retained floor or from another generation force resynchronization.

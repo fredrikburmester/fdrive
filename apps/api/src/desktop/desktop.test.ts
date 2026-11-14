@@ -6,7 +6,7 @@ import { DESKTOP_API, DesktopPairing, DesktopPairResult } from "@fdrive/contract
 import { StorageError, type StorageProvider } from "@fdrive/core";
 import type { DesktopEffectsRepo } from "@fdrive/db";
 import { createMemoryRepos } from "@fdrive/db/testing";
-import { createLocalStorage } from "@fdrive/local";
+import { createLocalStorage, createUserStorage, SHARED_WITH_ME } from "@fdrive/local";
 import { createMemoryStorage } from "@fdrive/testkit";
 import { afterEach, expect, it, vi } from "vitest";
 import { activityFixture } from "../../test/activity-fixture.js";
@@ -791,33 +791,99 @@ it("reads every entry with one stat and never lists its ancestors", async () => 
   });
 });
 
-it("serves a link inside the home as what it leads to and refuses one that leaves it", async () => {
+it("refuses every read that reaches its item through a symbolic link, at any segment", async () => {
   const f = await fixture();
   const root = await realpath(await mkdtemp(join(tmpdir(), "desktop-links-")));
   desktopDirectories.push(root);
   const home = join(root, "alice");
-  await mkdir(join(home, "docs"), { recursive: true });
+  await mkdir(join(home, "docs", "sub"), { recursive: true });
+  await mkdir(join(home, ".fdrive-desktop", "state"), { recursive: true });
   await writeFile(join(home, "docs", "a.txt"), "alpha");
-  await writeFile(join(root, "secret.txt"), "secret");
+  await writeFile(join(home, "docs", "sub", "b.txt"), "bravo");
+  await writeFile(join(home, ".fdrive-desktop", "state", "secret.txt"), "secret");
+  await writeFile(join(root, "outside.txt"), "outside");
+  // Into a folder fdrive keeps to itself, into an ordinary folder, and as the last segment.
+  await symlink(join(home, ".fdrive-desktop"), join(home, "docs", "desk"));
   await symlink(join(home, "docs"), join(home, "alias"));
-  await symlink(join(root, "secret.txt"), join(home, "out.txt"));
+  await symlink(join(home, "docs", "sub"), join(home, "docs", "inner"));
+  await symlink(join(home, "docs", "a.txt"), join(home, "a-link.txt"));
+  await symlink(join(root, "outside.txt"), join(home, "out.txt"));
   await symlink(join(root, "nowhere"), join(home, "dangling"));
-  const principal = { ...f.principal, storage: createLocalStorage({ home }) };
   const signal = new AbortController().signal;
-  expect(await f.files.stat(principal, "/alias/a.txt")).toMatchObject({ kind: "file", size: 5 });
+  const full = { mode: "full" as const, paths: ["/"] };
+  const writes = createDesktopWrites({ ...f.deps, repo: memoryRepo().repo });
+  const refuses = async (principal: Principal, folders: string[], files: string[]) => {
+    const writer = { ...principal, tokenAccess: full };
+    for (const path of [...folders, ...files])
+      await expect(f.files.stat(principal, path)).rejects.toMatchObject({ kind: "forbidden" });
+    for (const path of folders) {
+      await expect(f.files.list(principal, path, "token")).rejects.toMatchObject({
+        kind: "forbidden",
+      });
+      expect((await writes.check(writer, [{ path, token: "v1:x" }], signal)).folders).toEqual([
+        { path, status: "forbidden" },
+      ]);
+    }
+    for (const path of files) {
+      await expect(f.files.content(principal, path, signal)).rejects.toMatchObject({
+        kind: "forbidden",
+      });
+      await expect(f.files.versions(principal, [path], signal)).rejects.toMatchObject({
+        kind: "forbidden",
+      });
+    }
+  };
+  const own = { ...f.principal, storage: createLocalStorage({ home }) };
+  await refuses(
+    own,
+    ["/docs/desk", "/docs/desk/state", "/alias", "/alias/sub", "/docs/inner"],
+    ["/docs/desk/state/secret.txt", "/alias/a.txt", "/docs/inner/b.txt", "/a-link.txt"],
+  );
+  await expect(f.files.stat(own, "/out.txt")).rejects.toMatchObject({ kind: "forbidden" });
+  await expect(f.files.stat(own, "/dangling")).rejects.toMatchObject({ kind: "not_found" });
+  // Listings show every link as one, unreadable, and the real paths still read.
+  const kinds = async (principal: Principal, path: string) =>
+    Object.fromEntries(
+      (await f.files.list(principal, path, "token")).entries.map((entry) => [
+        entry.name,
+        `${entry.kind}${entry.readable ? "" : " (unreadable)"}`,
+      ]),
+    );
+  expect(await kinds(own, "/")).toEqual({
+    "a-link.txt": "symlink (unreadable)",
+    alias: "symlink (unreadable)",
+    dangling: "symlink (unreadable)",
+    docs: "dir",
+    "out.txt": "symlink (unreadable)",
+  });
+  expect(await kinds(own, "/docs")).toEqual({
+    "a.txt": "file",
+    desk: "symlink (unreadable)",
+    inner: "symlink (unreadable)",
+    sub: "dir",
+  });
   expect(
-    await new Response((await f.files.content(principal, "/alias/a.txt", signal)).body).text(),
-  ).toBe("alpha");
-  const listed = (await f.files.list(principal, "/", "token")).entries;
-  expect(listed.find((entry) => entry.name === "out.txt")).toMatchObject({
-    kind: "symlink",
-    readable: false,
+    await new Response((await f.files.content(own, "/docs/sub/b.txt", signal)).body).text(),
+  ).toBe("bravo");
+  // The same holds inside a folder someone shares.
+  await mkdir(join(root, "bob"));
+  const shared = {
+    ...f.principal,
+    storage: createUserStorage({
+      home: join(root, "bob"),
+      shared: async () => [
+        { name: "Docs", dir: join(home, "docs"), ownerHome: home, writable: false },
+      ],
+    }),
+  };
+  const docs = `/${SHARED_WITH_ME}/Docs`;
+  await refuses(shared, [`${docs}/inner`, `${docs}/desk`], [`${docs}/inner/b.txt`]);
+  expect(await kinds(shared, docs)).toMatchObject({
+    desk: "symlink (unreadable)",
+    inner: "symlink (unreadable)",
+    sub: "dir",
   });
-  await expect(f.files.stat(principal, "/out.txt")).rejects.toMatchObject({ kind: "forbidden" });
-  await expect(f.files.content(principal, "/out.txt", signal)).rejects.toMatchObject({
-    kind: "forbidden",
-  });
-  await expect(f.files.stat(principal, "/dangling")).rejects.toMatchObject({ kind: "not_found" });
+  expect(await f.files.stat(shared, `${docs}/sub/b.txt`)).toMatchObject({ kind: "file" });
 });
 
 it("detects equal-size replacements, rejects short streams and releases validation after cancellation", async () => {
