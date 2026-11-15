@@ -21,6 +21,9 @@ export const queryKeys = {
     stat: (path: string) => ["fs", "stat", path] as const,
     folderSize: (path: string) => ["fs", "folder-size", path] as const,
   },
+  storage: {
+    usage: () => ["storage", "usage"] as const,
+  },
   photos: {
     list: () => ["photos", "list"] as const,
     details: (path: string) => ["photos", "details", path] as const,

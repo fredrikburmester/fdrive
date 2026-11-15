@@ -193,6 +193,12 @@ export interface SubtreeSize {
   readonly files: number;
 }
 
+/** The live bytes of one file extension, see `IndexQueries.bytesByExtension`. */
+export interface ExtensionBytes {
+  readonly ext: string;
+  readonly bytes: number;
+}
+
 /** Aggregate counts over one scope, mirroring filesai's `index_stats`. */
 export interface IndexStats {
   readonly filesTracked: number;
@@ -400,6 +406,11 @@ export interface IndexQueries {
     relativePrefix: string,
     excludedRelativePrefixes?: readonly string[],
   ): Promise<SubtreeSize>;
+  /**
+   * The live bytes in scope per file extension (`ext` as the indexer
+   * stores it, `""` for none), in no particular order.
+   */
+  bytesByExtension(scopePrefixes: readonly ScopePrefix[]): Promise<ExtensionBytes[]>;
   /**
    * Chunk counts restricted to exactly `fileIds` (capped defensively at
    * `MAX_STATS_FILE_ID_PARAMS`), never a broader scope predicate. For a
@@ -882,6 +893,15 @@ export function createIndexQueries(db: Db): IndexQueries {
         );
 
       return { bytes: Number(row?.bytes ?? 0), files: Number(row?.files ?? 0) };
+    },
+
+    async bytesByExtension(scopePrefixes) {
+      const rows = await db
+        .select({ ext: files.ext, bytes: sql<number>`coalesce(sum(${files.size}), 0)` })
+        .from(files)
+        .where(and(scopeCondition(scopePrefixes), isNull(files.deletedAt)))
+        .groupBy(files.ext);
+      return rows.map((row) => ({ ext: row.ext, bytes: Number(row.bytes) }));
     },
 
     async statsForFileIds(fileIds) {

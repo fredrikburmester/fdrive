@@ -436,7 +436,7 @@ interface MappedDuplicateGroup {
  * every group combined), dropping any group left with fewer than two
  * copies. Counts and wasted bytes are computed only from what survives.
  */
-function visibleDuplicateGroups(
+export function visibleDuplicateGroups(
   ctx: ScopeContext,
   groups: readonly DuplicateGroup[],
 ): { groups: MappedDuplicateGroup[]; partial: boolean } {

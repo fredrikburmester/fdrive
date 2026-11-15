@@ -10,6 +10,7 @@ const MESSAGE_BY_KIND: Record<ApiErrorKind, string> = {
   not_found: "That item could not be found.",
   conflict: "That change conflicts with the current state. Refresh and try again.",
   payload_too_large: "That file is too large.",
+  storage_limit_reached: "Storage limit reached. Free up space or ask an administrator for more.",
   rate_limited: "Too many requests. Try again in a moment.",
   internal: "Something went wrong on the server. Please try again.",
   upstream_unavailable: "fdrive can't reach the server. Check your connection and try again.",

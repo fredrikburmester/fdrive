@@ -78,7 +78,9 @@ describe("stat on a disk that ignores how accents are encoded", () => {
   it("reports a shared folder's spelling under the name the user sees it by", async () => {
     const bob = createUserStorage({
       home: join(f.root, "bob"),
-      shared: async () => [{ name: "Alice's", dir: f.home, ownerHome: f.home, writable: false }],
+      shared: async () => [
+        { name: "Alice's", dir: f.home, owner: "alice", ownerHome: f.home, writable: false },
+      ],
     });
     expect(await bob.stat(`/Shared with me/Alice's/${TYPED}/Notes`)).toMatchObject({
       kind: "dir",

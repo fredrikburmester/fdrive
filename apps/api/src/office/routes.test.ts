@@ -48,7 +48,7 @@ describe("office browser routes", () => {
       (await h.browser("/api/v1/office/documents", { parent: "/", name: "file.exe" })).status,
     ).toBe(400);
   });
-  it.each([401, 403, 404, 409, 413, 400, 503])(
+  it.each([401, 403, 404, 409, 413, 507, 400, 503])(
     "maps error %s without private messages",
     async (status) => {
       const h = await officeHarness();

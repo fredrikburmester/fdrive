@@ -29,6 +29,10 @@ describe("queryKeys", () => {
     expect(queryKeys.fs.folderSize("/photos")).toEqual(["fs", "folder-size", "/photos"]);
   });
 
+  it("storage.usage() builds a stable key", () => {
+    expect(queryKeys.storage.usage()).toEqual(["storage", "usage"]);
+  });
+
   it("photo keys separate the timeline from one photo's details", () => {
     expect(queryKeys.photos.list()).toEqual(["photos", "list"]);
     expect(queryKeys.photos.details("/a.jpg")).toEqual(["photos", "details", "/a.jpg"]);

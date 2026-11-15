@@ -8,6 +8,7 @@ import { ConflictError, type Identity, type LocalUser, LoginError, type Repos } 
 import type { CheckPassword } from "../auth/password.ts";
 import { ApiHttpError } from "../errors.js";
 import type { SharePasswords } from "../shares/passwords.js";
+import type { HomeUsage } from "../storage/usage.js";
 import { noopSystemEventLog, type SystemEventLog } from "../system/event-log.js";
 
 /** Who is asking: the administrator's account, and their session when they act on themselves. */
@@ -55,6 +56,8 @@ export interface LocalUserServiceDeps {
   /** The files folder's provider row, which every login is on. */
   readonly storageId: string;
   readonly eventLog?: SystemEventLog;
+  /** What each user's folder holds, shown beside their storage limit. */
+  readonly usage?: HomeUsage;
 }
 
 /** Local user administration over `app.local_users` and the logins that name them. */
@@ -88,6 +91,8 @@ export function createLocalUserService(deps: LocalUserServiceDeps): LocalUserSer
       isYou: identity.accountId === viewer.accountId,
       createdAt: user.createdAt.toISOString(),
       lastLoginAt: identity.lastLoginAt?.toISOString() ?? null,
+      storageUsed: (await deps.usage?.(user.username)) ?? null,
+      storageLimit: user.storageLimit,
     };
   }
 
@@ -155,6 +160,7 @@ export function createLocalUserService(deps: LocalUserServiceDeps): LocalUserSer
               ...(passwordHash === undefined ? {} : { passwordHash }),
               ...(patch.disabled === undefined ? {} : { disabled: patch.disabled }),
               ...(patch.isAdmin === undefined ? {} : { isAdmin: patch.isAdmin }),
+              ...(patch.storageLimit === undefined ? {} : { storageLimit: patch.storageLimit }),
               at: clock(),
             }),
           )
@@ -169,6 +175,13 @@ export function createLocalUserService(deps: LocalUserServiceDeps): LocalUserSer
         ...(patch.isAdmin === undefined
           ? []
           : [patch.isAdmin ? "made an administrator" : "no longer an administrator"]),
+        ...(patch.storageLimit === undefined
+          ? []
+          : [
+              patch.storageLimit === null
+                ? "no storage limit"
+                : `storage limit ${patch.storageLimit} bytes`,
+            ]),
       ];
       if (changes.length > 0) {
         eventLog.record("general", "info", `User ${current.username}: ${changes.join(", ")}`);

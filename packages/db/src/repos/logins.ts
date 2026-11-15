@@ -219,6 +219,7 @@ export function createLoginRepo(db: Db): LoginRepo {
           .set({
             ...(patch.passwordHash === undefined ? {} : { passwordHash: patch.passwordHash }),
             ...(patch.disabled === undefined ? {} : { disabled: patch.disabled }),
+            ...(patch.storageLimit === undefined ? {} : { storageLimit: patch.storageLimit }),
             updatedAt: patch.at,
           })
           .where(eq(localUsers.username, found.user.username))

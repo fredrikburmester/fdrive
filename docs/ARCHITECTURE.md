@@ -55,9 +55,10 @@ sign-in finds it by name in any case; passwords live only as scrypt hashes in
 installation setting administrators change on System > General. See
 [authentication](AUTH.md) and [storage](STORAGE.md).
 
-Local users are `app.local_users`: a username unique in any case, a scrypt hash and a disabled
-flag. Setup creates the first one and System > Users the rest; a disabled user is refused on
-every request, not only at sign-in, by the one query that resolves the request
+Local users are `app.local_users`: a username unique in any case, a scrypt hash, a disabled
+flag and an optional storage limit ([storage](STORAGE.md#storageprovider)). Setup creates the
+first one and System > Users the rest; a disabled user is refused on every request, not only at
+sign-in, by the one query that resolves the request
 ([authentication](AUTH.md#resolving-a-request)). Folders shared between users
 are `app.local_grants` (owner, folder path, grantee, read or write), served by
 `/api/v1/grants`. The grantee's storage shows each at `/Shared with me/<name>` (the folder's

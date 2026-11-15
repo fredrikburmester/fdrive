@@ -75,6 +75,14 @@ export const CHUNK_BYTES = 8 * 1024 * 1024;
 /** Waits before each retry of a piece that failed on the way; then the file fails. */
 const RETRY_DELAYS_MS: readonly number[] = [1000, 2000, 4000, 8000];
 
+/**
+ * Whether an answer to a piece is final: anything but a server fault. A full
+ * folder (507, `storage_limit_reached`) is a refusal, so it is not sent again.
+ */
+function isFinal(status: number): boolean {
+  return status < 500 || status === 507;
+}
+
 /** Where a file's upload stands: its part on the server and the bytes the server has. */
 interface Part {
   readonly id: string;
@@ -176,7 +184,7 @@ export function createUploadStore(deps: UploadStoreDeps = {}): UploadStore {
             createXhr,
           );
           // Only a server fault may pass on its own; any other answer is final.
-          if (result.status < 500 || delay === undefined) return result;
+          if (isFinal(result.status) || delay === undefined) return result;
         } catch (err) {
           if (isAbortError(err) || delay === undefined) throw err;
         }
@@ -211,7 +219,7 @@ export function createUploadStore(deps: UploadStoreDeps = {}): UploadStore {
         .then((result) => {
           controllers.delete(item.id);
           // Done, or refused: a refusal would not pass on a retry, which starts afresh.
-          if (result.status < 500) parts.delete(item.id);
+          if (isFinal(result.status)) parts.delete(item.id);
           if (result.status >= 200 && result.status < 300) {
             dispatch({ type: "succeed", id: item.id, completedAt: Date.now() });
             onUploaded(parentPath(item.targetPath));

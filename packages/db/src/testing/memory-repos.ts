@@ -165,6 +165,7 @@ function createMemoryLocalUserRepo(): LocalUserRepo & {
         username: input.username,
         passwordHash: input.passwordHash,
         disabled: false,
+        storageLimit: null,
         createdAt: input.at,
         updatedAt: input.at,
       });
@@ -1355,6 +1356,7 @@ function createMemoryLoginRepo(repos: {
           (await repos.localUsers.update(found.user.username, {
             ...(patch.passwordHash === undefined ? {} : { passwordHash: patch.passwordHash }),
             ...(patch.disabled === undefined ? {} : { disabled: patch.disabled }),
+            ...(patch.storageLimit === undefined ? {} : { storageLimit: patch.storageLimit }),
           })) ?? found.user;
         if (patch.isAdmin !== undefined)
           await repos.accounts.setAdmin(found.login.accountId, patch.isAdmin);

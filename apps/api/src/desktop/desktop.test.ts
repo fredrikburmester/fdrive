@@ -981,7 +981,7 @@ it("refuses every read that reaches its item through a symbolic link, at any seg
     storage: createUserStorage({
       home: join(root, "bob"),
       shared: async () => [
-        { name: "Docs", dir: join(home, "docs"), ownerHome: home, writable: false },
+        { name: "Docs", owner: "alice", dir: join(home, "docs"), ownerHome: home, writable: false },
       ],
     }),
   };
