@@ -134,11 +134,8 @@ pub fn start_thumbnail_rebuild(job: &Arc<Job>, ctx: Arc<RootContext>, path: Opti
 /// Backfill image embeddings, or with `force` replace another model's rows. Never writes
 /// anything when the unit fails its health guard.
 pub fn rebuild_image_embeddings(ctx: &RootContext, rows: &[MediaRow], force: bool, job: &Job) {
-    let url = &ctx.cfg.image_embed_url;
-    if url.is_empty() {
-        return;
-    }
-    let health = image_embed::health(url, std::time::Duration::from_secs(5));
+    let url = ctx.cfg.image_url();
+    let health = image_embed::health(&url, std::time::Duration::from_secs(5));
     if let Some(guard) = image_embed::dimension_guard(health.as_ref()) {
         log(&format!("image embedding rebuild: {guard}; skipping"));
         return;
@@ -167,7 +164,7 @@ pub fn rebuild_image_embeddings(ctx: &RootContext, rows: &[MediaRow], force: boo
         }
         let mut succeeded = std::collections::HashSet::new();
         if !opened.is_empty() {
-            let embedded = image_embed::embed_images(&data, url, batch).and_then(|(vectors, model)| {
+            let embedded = image_embed::embed_images(&data, &url, batch).and_then(|(vectors, model)| {
                 for (sha, vector) in opened.iter().zip(&vectors) {
                     ctx.db.with(|c| db::upsert_image_embedding(c, sha, &model, vector))?;
                     succeeded.insert(sha.clone());
@@ -223,23 +220,18 @@ pub fn rebuild_image_embeddings(ctx: &RootContext, rows: &[MediaRow], force: boo
     flush(&mut pending);
 }
 
-/// Without an image unit there is nothing to rebuild: the pass completes with no files.
 pub fn start_image_rebuild(job: &Arc<Job>, ctx: Arc<RootContext>, path: Option<String>, force: bool) -> bool {
     crate::jobs::spawn(job, ctx.features().revision, "image-embed-rebuild", move |job| {
         let scope = normalize_scope(path.as_deref());
-        let rows = if ctx.cfg.image_embed_url.is_empty() {
-            Vec::new()
-        } else {
-            match ctx.db.with(|c| db::media_files(c, ctx.root_id)) {
-                Ok(rows) => rows
-                    .into_iter()
-                    .filter(|(rel, ext, _, _)| image_embed::is_rebuild_candidate(ext, rel, &scope))
-                    .collect(),
-                Err(e) => {
-                    job.fail();
-                    log(&format!("image-embed-rebuild job crashed: {}", describe(&e)));
-                    return;
-                }
+        let rows: Vec<MediaRow> = match ctx.db.with(|c| db::media_files(c, ctx.root_id)) {
+            Ok(rows) => rows
+                .into_iter()
+                .filter(|(rel, ext, _, _)| image_embed::is_rebuild_candidate(ext, rel, &scope))
+                .collect(),
+            Err(e) => {
+                job.fail();
+                log(&format!("image-embed-rebuild job crashed: {}", describe(&e)));
+                return;
             }
         };
         job.discover(rows.len() as u64);

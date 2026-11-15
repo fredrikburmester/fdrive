@@ -58,13 +58,6 @@ fn row(size: i64, mtime_ns: i64, sha: &str, embedded: bool, failed: bool) -> Man
 }
 
 #[test]
-fn connect_reads_the_schema_version() {
-    let (url, _) = setup();
-    let mut client = db::connect(&url, 1, |_| panic!("no retry needed")).unwrap();
-    assert_eq!(db::read_schema_version(&mut client).unwrap(), Some(2));
-}
-
-#[test]
 fn connect_retries_then_fails() {
     let sleeps = RefCell::new(Vec::new());
     let error = db::connect("postgres://nobody@127.0.0.1:1/nope", 3, |d| sleeps.borrow_mut().push(d))
@@ -105,152 +98,6 @@ fn a_thread_connection_is_reopened_after_postgres_drops_it() {
     };
     assert!(unreachable.with(|_| Ok(())).is_err());
     assert_eq!(Db::new("x").retries, 30);
-}
-
-#[test]
-fn schema_wait_succeeds_at_once_when_ready() {
-    let (url, _) = setup();
-    let logs = RefCell::new(Vec::<String>::new());
-    let version = db::wait_for_schema_version(
-        &Db::new(&url),
-        2,
-        Duration::from_secs(10),
-        &|m| logs.borrow_mut().push(m.to_owned()),
-        &|_| panic!("no wait needed"),
-    )
-    .unwrap();
-    assert_eq!(version, Some(2));
-    assert!(logs.borrow().is_empty());
-}
-
-#[test]
-fn schema_wait_gives_up_after_the_timeout() {
-    let (url, mut c) = setup();
-    c.batch_execute(r#"DROP TABLE "idx"."schema_version""#).unwrap();
-    assert_eq!(
-        db::read_schema_version(&mut c).unwrap(),
-        None,
-        "a missing table reads as no version"
-    );
-    let logs = RefCell::new(Vec::<String>::new());
-    let version = db::wait_for_schema_version(
-        &Db::new(&url),
-        2,
-        Duration::ZERO,
-        &|m| logs.borrow_mut().push(m.to_owned()),
-        &|_| {},
-    )
-    .unwrap();
-    assert_eq!(version, None);
-    let logs = logs.borrow();
-    assert_eq!(logs.len(), 1);
-    assert!(logs[0].contains("giving up") && logs[0].contains("last seen: None"));
-}
-
-#[test]
-fn schema_wait_waits_for_the_failure_history_migration() {
-    let (url, mut c) = setup();
-    c.batch_execute(r#"ALTER TABLE "idx"."processing_failures" RENAME TO migration_pending"#)
-        .unwrap();
-    let client = RefCell::new(c);
-    let logs = RefCell::new(Vec::<String>::new());
-    let sleeps = RefCell::new(Vec::new());
-    let version = db::wait_for_schema_version(
-        &Db::new(&url),
-        2,
-        Duration::from_secs(60),
-        &|m| logs.borrow_mut().push(m.to_owned()),
-        &|d| {
-            sleeps.borrow_mut().push(d);
-            client
-                .borrow_mut()
-                .batch_execute(r#"ALTER TABLE "idx"."migration_pending" RENAME TO processing_failures"#)
-                .unwrap();
-        },
-    )
-    .unwrap();
-    assert_eq!(version, Some(2));
-    assert_eq!(*sleeps.borrow(), vec![Duration::from_secs(5)]);
-    let logs = logs.borrow();
-    assert_eq!(logs.len(), 1);
-    assert!(
-        logs[0].contains("processing_failures, changes, folders and file stamp migrations")
-            && logs[0].contains("last seen: 2")
-    );
-}
-
-#[test]
-fn schema_wait_waits_for_the_change_journal_migration() {
-    for table in ["changes", "change_cursors"] {
-        let (url, mut c) = setup();
-        c.batch_execute(&format!(r#"ALTER TABLE "idx"."{table}" RENAME TO journal_pending"#))
-            .unwrap();
-        let client = RefCell::new(c);
-        let logs = RefCell::new(Vec::<String>::new());
-        let version = db::wait_for_schema_version(
-            &Db::new(&url),
-            2,
-            Duration::from_secs(60),
-            &|m| logs.borrow_mut().push(m.to_owned()),
-            &|_| {
-                client
-                    .borrow_mut()
-                    .batch_execute(&format!(r#"ALTER TABLE "idx"."journal_pending" RENAME TO {table}"#))
-                    .unwrap();
-            },
-        )
-        .unwrap();
-        assert_eq!(version, Some(2), "{table}");
-        assert_eq!(logs.borrow().len(), 1, "{table}");
-    }
-}
-
-#[test]
-fn schema_wait_waits_for_the_folders_migration() {
-    let (url, mut c) = setup();
-    c.batch_execute(r#"ALTER TABLE "idx"."folders" RENAME TO folders_pending"#)
-        .unwrap();
-    let client = RefCell::new(c);
-    let logs = RefCell::new(Vec::<String>::new());
-    let version = db::wait_for_schema_version(
-        &Db::new(&url),
-        2,
-        Duration::from_secs(60),
-        &|m| logs.borrow_mut().push(m.to_owned()),
-        &|_| {
-            client
-                .borrow_mut()
-                .batch_execute(r#"ALTER TABLE "idx"."folders_pending" RENAME TO folders"#)
-                .unwrap();
-        },
-    )
-    .unwrap();
-    assert_eq!(version, Some(2));
-    assert_eq!(logs.borrow().len(), 1);
-}
-
-#[test]
-fn schema_wait_waits_for_the_file_stamp_columns() {
-    let (url, mut c) = setup();
-    c.batch_execute(r#"ALTER TABLE "idx"."files" RENAME COLUMN ctime_ns TO ctime_pending"#)
-        .unwrap();
-    let client = RefCell::new(c);
-    let logs = RefCell::new(Vec::<String>::new());
-    let version = db::wait_for_schema_version(
-        &Db::new(&url),
-        2,
-        Duration::from_secs(60),
-        &|m| logs.borrow_mut().push(m.to_owned()),
-        &|_| {
-            client
-                .borrow_mut()
-                .batch_execute(r#"ALTER TABLE "idx"."files" RENAME COLUMN ctime_pending TO ctime_ns"#)
-                .unwrap();
-        },
-    )
-    .unwrap();
-    assert_eq!(version, Some(2));
-    assert_eq!(logs.borrow().len(), 1);
 }
 
 /// The root's folder rows, sorted by path byte by byte.
@@ -348,39 +195,6 @@ fn folder_rows_follow_deletes_and_renames() {
     // A folder's delete drops it and everything below it.
     db::mark_deleted(&mut c, root, "x", true).unwrap();
     assert_eq!(paths(&mut c), ["ab"]);
-}
-
-#[test]
-fn schema_wait_waits_until_the_api_has_migrated() {
-    let (url, mut c) = setup();
-    c.batch_execute(r#"DELETE FROM "idx"."schema_version" WHERE version = 2"#)
-        .unwrap();
-    let client = RefCell::new(c);
-    let logs = RefCell::new(Vec::<String>::new());
-    let version = db::wait_for_schema_version(
-        &Db::new(&url),
-        2,
-        Duration::from_secs(60),
-        &|m| logs.borrow_mut().push(m.to_owned()),
-        &|_| {
-            client
-                .borrow_mut()
-                .batch_execute(r#"INSERT INTO "idx"."schema_version" (version) VALUES (2)"#)
-                .unwrap();
-        },
-    )
-    .unwrap();
-    assert_eq!(version, Some(2));
-    assert!(logs.borrow()[0].contains("last seen: 1"));
-}
-
-#[test]
-fn schema_wait_reports_a_missing_database() {
-    let db = Db {
-        url: "postgres://nobody@127.0.0.1:1/nope".to_owned(),
-        retries: 1,
-    };
-    assert!(db::wait_for_schema_version(&db, 1, Duration::ZERO, &|_| {}, &|_| {}).is_err());
 }
 
 #[test]
@@ -1208,5 +1022,4 @@ fn every_query_reports_a_missing_schema_as_an_error() {
     assert!(db::errors_sample(c, 1, 20).is_err());
     assert!(db::mark_pending(c, 1, None).is_err());
     assert!(db::mark_pending(c, 1, Some(("a", "a/"))).is_err());
-    assert_eq!(db::read_schema_version(c).unwrap(), None);
 }

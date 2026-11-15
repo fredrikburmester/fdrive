@@ -235,7 +235,7 @@ pub fn extract_plain(path: &Path, cap: usize) -> Result<Extracted> {
     })
 }
 
-/// Office documents through the `ml` server's extraction unit (Tika's contract).
+/// Office documents through the `ml` server's extraction unit.
 pub fn extract_document(path: &Path, url: &str) -> Result<Extracted> {
     let file = std::fs::File::open(path)?;
     let response = client()
@@ -262,7 +262,7 @@ pub struct Extractor {
     pub plain_text_cap: usize,
     pub tesseract_langs: String,
     pub ocr_image_globs: Globs,
-    pub tika_url: String,
+    pub extract_url: String,
 }
 
 impl Extractor {
@@ -304,7 +304,7 @@ impl Extractor {
             if size > self.text_max_bytes {
                 return too_big();
             }
-            return extract_document(path, &self.tika_url);
+            return extract_document(path, &self.extract_url);
         }
         Ok((None, "none".to_owned()))
     }
@@ -354,7 +354,7 @@ pub struct ContentExtractor {
 pub const MAX_CONTENT_BYTES: usize = 4 * 1024 * 1024;
 
 impl ContentExtractor {
-    pub fn new(max_pdf_pages: usize, plain_text_cap: usize, tesseract_langs: &str, tika_url: &str) -> Self {
+    pub fn new(max_pdf_pages: usize, plain_text_cap: usize, tesseract_langs: &str, extract_url: &str) -> Self {
         Self {
             extractor: Extractor {
                 root: "mcp".to_owned(),
@@ -364,7 +364,7 @@ impl ContentExtractor {
                 plain_text_cap,
                 tesseract_langs: tesseract_langs.to_owned(),
                 ocr_image_globs: Globs::new(&["*".to_owned()]),
-                tika_url: tika_url.to_owned(),
+                extract_url: extract_url.to_owned(),
             },
             admission: std::sync::Arc::new(tokio::sync::Semaphore::new(2)),
         }
@@ -451,7 +451,7 @@ mod tests {
         out
     }
 
-    fn extractor(tika_url: &str) -> Extractor {
+    fn extractor(extract_url: &str) -> Extractor {
         Extractor {
             root: "r".into(),
             text_max_bytes: 1000,
@@ -460,7 +460,7 @@ mod tests {
             plain_text_cap: 300_000,
             tesseract_langs: "eng".into(),
             ocr_image_globs: Globs::new(&["r/scans/*".to_owned()]),
-            tika_url: tika_url.into(),
+            extract_url: extract_url.into(),
         }
     }
 

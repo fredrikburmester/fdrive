@@ -452,14 +452,6 @@ def test_scheduler_loop_recovers_after_settings_refresh_failure_and_closes_conne
 # -- main -----------------------------------------------------------------------
 
 
-def test_main_exits_when_schema_never_ready(postgres_dsn: str, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("DATABASE_URL", postgres_dsn)
-    monkeypatch.setattr(db, "wait_for_schema_version", lambda *a, **k: None)
-    with pytest.raises(SystemExit) as exc_info:
-        main.main()
-    assert exc_info.value.code == 1
-
-
 def test_main_wires_everything_and_serves(postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setenv("DATABASE_URL", postgres_dsn)
     monkeypatch.setenv("OCR_PORT", "0")
@@ -480,7 +472,6 @@ def test_main_wires_everything_and_serves(postgres_dsn: str, monkeypatch: pytest
     assert served["kwargs"]["port"] == 0  # type: ignore[index]
     state = served["app"].state.server_state  # type: ignore[attr-defined]
     assert state.target == RootTarget(name="files", root_id=1, abs_path="/data")
-    assert state.schema_ready() is True
     assert state.now().tzinfo is not None
 
 
@@ -495,13 +486,9 @@ def test_main_health_recovers_on_probe_after_connection_failure(monkeypatch: pyt
         def close(self) -> None:
             self.closed = True
 
-    bootstrap = FakeConnection("bootstrap")
-    settings_conn = FakeConnection("settings")
     recovered = FakeConnection("recovered")
     connections: list[FakeConnection | Exception] = [
-        bootstrap,
         RuntimeError("database unavailable"),
-        settings_conn,
         recovered,
     ]
     connect_kwargs: list[dict[str, object]] = []
@@ -522,9 +509,7 @@ def test_main_health_recovers_on_probe_after_connection_failure(monkeypatch: pyt
 
     served: dict[str, object] = {}
     monkeypatch.setattr(db, "connect", fake_connect)
-    monkeypatch.setattr(db, "wait_for_schema_version", lambda *a, **k: 1)
     monkeypatch.setattr(db, "read_settings", lambda _conn: {})
-    monkeypatch.setattr(db, "read_schema_version", lambda conn: 1 if conn is recovered else None)
     monkeypatch.setattr(main.threading, "Thread", NoopThread)
     monkeypatch.setattr(main.uvicorn, "run", lambda app, **_kwargs: served.setdefault("app", app))
 
@@ -533,12 +518,10 @@ def test_main_health_recovers_on_probe_after_connection_failure(monkeypatch: pyt
     client = TestClient(served["app"], raise_server_exceptions=False)  # type: ignore[arg-type]
     unavailable = client.get("/health")
     response = client.get("/health")
-    assert bootstrap.closed is True
     assert unavailable.status_code == 500
     assert response.status_code == 200
     assert response.json()["ok"] is True
-    assert settings_conn.closed is True
     assert recovered.closed is True
     assert connections == []
-    assert all(kwargs["retries"] == 1 for kwargs in connect_kwargs[1:])
-    assert all(callable(kwargs["sleep"]) for kwargs in connect_kwargs[1:])
+    assert all(kwargs["retries"] == 1 for kwargs in connect_kwargs)
+    assert all(callable(kwargs["sleep"]) for kwargs in connect_kwargs)

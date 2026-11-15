@@ -53,7 +53,7 @@ export function selectImageHits<T extends { readonly score: number }>(
 export interface ImageSearchServiceDeps {
   readonly enabled?: () => Promise<boolean>;
   readonly indexQueries: Pick<IndexQueries, "searchImages">;
-  /** `null` when `FDRIVE_IMAGE_EMBED_URL` is not configured; image search never runs then. */
+  /** `null` when `FDRIVE_ML_URL` is not configured; image search never runs then. */
   readonly imageEmbedClient: ImageEmbedClient | null;
   /**
    * Resolves the sidecar's cached health (`{status, model, dim, device}` or

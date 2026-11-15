@@ -153,6 +153,6 @@ describe("SearchPage", () => {
 
     render(<SearchPage />);
 
-    expect(await screen.findByText("Not configured: set FDRIVE_EMBED_URL.")).toBeTruthy();
+    expect(await screen.findByText("Not configured: set FDRIVE_ML_URL.")).toBeTruthy();
   });
 });

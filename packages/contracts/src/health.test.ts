@@ -4,8 +4,8 @@ import { HealthResponse, HealthSubsystemName, HealthSubsystemStatus } from "./he
 const CONFIGURED_SUBSYSTEMS = {
   core: { status: "configured", missing: [] },
   index: { status: "configured", missing: [] },
-  search: { status: "not_configured", missing: ["FDRIVE_EMBED_URL"] },
-  imageSearch: { status: "not_configured", missing: ["FDRIVE_IMAGE_EMBED_URL"] },
+  search: { status: "not_configured", missing: ["FDRIVE_ML_URL"] },
+  imageSearch: { status: "not_configured", missing: ["FDRIVE_ML_URL"] },
   ocr: { status: "unreachable", missing: [] },
   thumbnails: { status: "configured", missing: [] },
   office: { status: "not_configured", missing: ["FDRIVE_OFFICE_PRODUCT"] },

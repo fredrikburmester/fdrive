@@ -1,4 +1,4 @@
-//! Environment configuration, with the Python indexer's names and defaults.
+//! Environment configuration, mostly with the Python indexer's names and defaults.
 
 use std::path::PathBuf;
 use std::time::Duration;
@@ -37,10 +37,9 @@ pub struct Config {
     pub database_url: String,
     /// The files folder: `ROOT_PATH`, never read from the environment.
     pub root: PathBuf,
-    pub tika_url: String,
-    pub embed_url: String,
+    /// The `ml` server; its units are `extract_url`, `text_url` and `image_url`.
+    pub ml_url: String,
     pub embed_batch: usize,
-    pub image_embed_url: String,
     pub image_embed_batch_size: usize,
     pub scan_interval: u64,
     pub text_max_bytes: u64,
@@ -58,7 +57,6 @@ pub struct Config {
     pub thumbs_dir: PathBuf,
     pub thumb_max_bytes: u64,
     pub indexer_port: u16,
-    pub schema_wait: Duration,
     pub settings_refresh: Duration,
 }
 
@@ -96,10 +94,8 @@ impl Config {
         Ok(Self {
             database_url: text("DATABASE_URL", "postgres://fdrive:fdrive@db:5432/fdrive"),
             root: PathBuf::from(ROOT_PATH),
-            tika_url: text("TIKA_URL", "http://tika:9998").trim_end_matches('/').to_owned(),
-            embed_url: text("EMBED_URL", "http://embed:80").trim_end_matches('/').to_owned(),
+            ml_url: text("ML_URL", "http://ml:8080").trim_end_matches('/').to_owned(),
             embed_batch: number("EMBED_BATCH", 16)?.max(1) as usize,
-            image_embed_url: text("IMAGE_EMBED_URL", "").trim_end_matches('/').to_owned(),
             image_embed_batch_size: image_batch as usize,
             scan_interval: number("SCAN_INTERVAL_SECONDS", 3600)?,
             text_max_bytes: mb("TEXT_MAX_MB", 64)?,
@@ -117,9 +113,23 @@ impl Config {
             thumbs_dir: PathBuf::from(text("THUMBS_DIR", "/thumbs")),
             thumb_max_bytes: mb("THUMB_MAX_MB", 200)?,
             indexer_port: number("INDEXER_PORT", 8010)? as u16,
-            schema_wait: Duration::from_secs(number("SCHEMA_WAIT_SECONDS", 300)?),
             settings_refresh: Duration::from_secs(number("SETTINGS_REFRESH_SECONDS", 5)?.max(1)),
         })
+    }
+
+    /// The `ml` server's document extraction unit.
+    pub fn extract_url(&self) -> String {
+        format!("{}/extract", self.ml_url)
+    }
+
+    /// The `ml` server's text embedding unit.
+    pub fn text_url(&self) -> String {
+        format!("{}/text", self.ml_url)
+    }
+
+    /// The `ml` server's image embedding unit.
+    pub fn image_url(&self) -> String {
+        format!("{}/image", self.ml_url)
     }
 
     /// Feature admission is separate; once search OCR is on, an unset scope covers the whole root.
@@ -152,19 +162,28 @@ mod tests {
         assert!(c.watch);
         assert_eq!(c.chunk_chars, 1200);
         assert_eq!(c.indexer_port, 8010);
-        assert_eq!(c.image_embed_url, "");
+        assert_eq!(c.ml_url, "http://ml:8080");
+        assert_eq!(
+            (c.extract_url(), c.text_url(), c.image_url()),
+            (
+                "http://ml:8080/extract".to_owned(),
+                "http://ml:8080/text".to_owned(),
+                "http://ml:8080/image".to_owned()
+            )
+        );
         assert_eq!(c.image_embed_batch_size, 8);
         assert_eq!(c.default_settings().ocr_image_globs, vec!["**"]);
         assert_eq!(c.text_max_bytes, 64 * 1024 * 1024);
         let c = config(&[
             ("WATCH", "false"),
-            ("IMAGE_EMBED_URL", "http://ml/image/"),
+            ("ML_URL", "http://models:9000/"),
             ("IMAGE_EMBED_BATCH_SIZE", "4"),
             ("TEXT_EXCLUDE_GLOBS", "a/*, b"),
         ])
         .unwrap();
         assert!(!c.watch);
-        assert_eq!(c.image_embed_url, "http://ml/image");
+        assert_eq!(c.ml_url, "http://models:9000");
+        assert_eq!(c.image_url(), "http://models:9000/image");
         assert_eq!(c.image_embed_batch_size, 4);
         assert_eq!(c.text_exclude_globs, vec!["a/*", "b"]);
         let c = config(&[("IMAGE_EMBED_BATCH_SIZE", "4"), ("IMAGE_EMBED_REQUEST_BATCH_SIZE", "2")]).unwrap();

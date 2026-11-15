@@ -206,7 +206,6 @@ describe("GET /system/indexer", () => {
       ok: true,
       watcher: true,
       embedOk: true,
-      schemaVersion: 1,
     };
     const stats = {
       countsByStatus: {},
