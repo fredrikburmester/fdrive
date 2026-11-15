@@ -1,7 +1,6 @@
 import type { ImageSearchHit, ImageSearchResponse } from "@fdrive/contracts";
 import { baseName, extensionOf, mimeFromExtension, type Scope } from "@fdrive/core";
-import type { ImageSearchHit as DbImageSearchHit, IndexQueries, ScopePrefix } from "@fdrive/db";
-import type { ReadAuthorizer } from "../scoping/read-authorizer.ts";
+import type { IndexQueries, ScopePrefix } from "@fdrive/db";
 import { roundTripVirtualPath } from "../scoping/round-trip.ts";
 import type { SidecarResult } from "../system/sidecar-client.js";
 import type { ImageEmbedClient, ImageEmbedHealthInfo } from "./image-embed-client.js";
@@ -76,7 +75,6 @@ export interface ImageSearchServiceDeps {
 export interface ImageSearchServiceInput {
   readonly trashPath?: string | null;
   readonly scopes: readonly Scope[];
-  readonly authorizer: ReadAuthorizer;
   readonly query: string;
   readonly limit: number;
 }
@@ -105,10 +103,10 @@ function unavailableResponse(
 
 /**
  * Builds the image-content search service: resolves the query's embedding
- * against the image-embed sidecar, ranks `IndexQueries.searchImages` rows
- * with `selectImageHits`, and round-trips plus live-read checks every
- * candidate before it can appear in a hit, exactly like the text search
- * service. `unavailable: true` covers three distinct causes (no verified
+ * against the image-embed sidecar, round-trips every
+ * `IndexQueries.searchImages` row through the caller's scopes (which are the
+ * permission, exactly as for text search), then ranks what is left with
+ * `selectImageHits`, so a page is full whenever there are enough matches. `unavailable: true` covers three distinct causes (no verified
  * scope, image search not configured, or no embedding for this query); the
  * caller cannot tell which from the response alone, only that there is
  * nothing to search or show.
@@ -166,52 +164,32 @@ export function createImageSearchService(deps: ImageSearchServiceDeps): ImageSea
         { exclude: reservedExclusion(input.scopes, trashPath, rootIds) },
       );
       const fanoutCut = rows.length >= IMAGE_SEARCH_FANOUT_LIMIT;
-      const ranked = selectImageHits(rows, input.limit);
 
-      function virtualPathFor(row: DbImageSearchHit): string | null {
+      const visible = rows.flatMap((row) => {
         const rootName = rootNameById.get(row.rootId);
-        if (rootName === undefined) {
-          return null;
-        }
-        return roundTripVirtualPath(input.scopes, rootName, row.path);
-      }
-
-      let authUnavailable = false;
-
-      const resolvedHits = await Promise.all(
-        ranked.map(async (row): Promise<ImageSearchHit | null> => {
-          const virtualPath = virtualPathFor(row);
-          if (virtualPath === null) {
-            return null;
-          }
-          const authResult = await input.authorizer.authorize({ path: virtualPath, kind: "file" });
-          if (!authResult.allowed) {
-            if (authResult.reason === "unavailable") {
-              authUnavailable = true;
-            }
-            return null;
-          }
-          const name = baseName(virtualPath);
-          const ext = extensionOf(name);
-          return {
-            path: virtualPath,
-            name,
-            ext,
-            mime: mimeFromExtension(ext),
-            size: row.size,
-            modifiedAt: row.modifiedAt.toISOString(),
-            score: row.score,
-          };
-        }),
-      );
-
-      const hits = resolvedHits.filter((hit): hit is ImageSearchHit => hit !== null);
+        const path =
+          rootName === undefined ? null : roundTripVirtualPath(input.scopes, rootName, row.path);
+        return path === null ? [] : [{ ...row, path }];
+      });
+      const hits = selectImageHits(visible, input.limit).map((row): ImageSearchHit => {
+        const name = baseName(row.path);
+        const ext = extensionOf(name);
+        return {
+          path: row.path,
+          name,
+          ext,
+          mime: mimeFromExtension(ext),
+          size: row.size,
+          modifiedAt: row.modifiedAt.toISOString(),
+          score: row.score,
+        };
+      });
 
       return {
         query: input.query,
         hits,
         unavailable: false,
-        ...((fanoutCut || authUnavailable) && { partial: true }),
+        ...(fanoutCut && { partial: true }),
         tookMs: tookMs(),
       };
     },

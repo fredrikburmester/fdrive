@@ -70,7 +70,7 @@ export async function loginToApi(
   const response = await fetch(`${baseUrl}/api/v1/auth/login`, {
     method: "POST",
     headers: { "content-type": "application/json", "x-requested-with": "fdrive" },
-    body: JSON.stringify({ credential: { username, password } }),
+    body: JSON.stringify({ username, password }),
   });
   await response.body?.cancel();
   if (!response.ok) throw Error(`Fixture login failed: ${response.status}`);
@@ -180,7 +180,9 @@ export async function startPerfStack(): Promise<PerfStack> {
     });
     await migrate(db.db);
     const repos = createRepos(db.db);
-    await seedLocalUsers(repos.localUsers, [PERF_USER, FORBIDDEN_USER]);
+    // The settings layout check opens admin-only System pages; admin status gates
+    // nothing on the measured listing, search, download and upload paths.
+    await seedLocalUsers(repos, [{ ...PERF_USER, isAdmin: true }, FORBIDDEN_USER]);
     await repos.settings.set(FEATURES_SETTINGS_KEY, SEARCH_FEATURES);
     await command("docker", ["pull", ML_IMAGE]);
     const mlImage = await command("docker", [
@@ -258,9 +260,6 @@ export async function startPerfStack(): Promise<PerfStack> {
         { name: "files", storagePath: dataDir, indexerPath: "/data" },
       ]),
       FDRIVE_EMBED_URL: embedUrl,
-      // The settings layout check opens admin-only System pages; admin status gates
-      // nothing on the measured listing, search, download and upload paths.
-      FDRIVE_ADMIN_USERS: PERF_USER.username,
     });
     const composed = await composeApp(config, pino({ level: "silent" }));
     cleanup.add(() => composed.close());

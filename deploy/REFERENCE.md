@@ -88,9 +88,11 @@ from private-network peers only (where an edge proxy lives: the host, the LAN, o
 container); a LAN client forging `https` only breaks its own session.
 
 The address everyone opens fdrive at is chosen in onboarding (afterwards in
-**System > Features > Server address**), prefilled from the browser's own address. The
+**System > General > Server address**), prefilled from the browser's own address. The
 bundled editor is told fdrive lives there and links from connected assistants point there,
 so onboard through the address others will use: behind an HTTPS edge, the `https://` one.
+Until it is saved, Office cannot be enabled and assistants get links that are paths on
+fdrive's own origin (`/view/...`).
 An `http://` address saved there hands the editor `http://` document URLs that an HTTPS
 page blocks as mixed content ("Download failed" with clean server logs).
 
@@ -142,9 +144,8 @@ fdrive actively monitors its internal subsystems on startup and exposes diagnost
   fails and names what is still pending. It checks startup, not finished indexing or
   account-specific search results.
 
-- **Startup Summary**: At launch, `docker compose logs api` logs the exact status of each subsystem (`search`, `indexer`, `ocr`, `office`, `trash`). If a variable is missing, it explicitly logs `missing=VARIABLE_NAME`.
+- **Startup Summary**: At launch, `docker compose logs api` logs the exact status of each subsystem (`search`, `indexer`, `ocr`, `office`). If a variable is missing, it explicitly logs `missing=VARIABLE_NAME`.
 - **ONLYOFFICE:** the bundled controller is healthy while disabled. Enable in **System > Features**; the document engine starts on demand. Readiness is shown in those settings. See [Office setup](../docs/OFFICE.md).
-- **Trash:** startup health means its integration is available, not enabled. The saved choice is in **System > Features > Trash**; user capability is reported by `/api/v1/trash/status`.
 - **Optional workers:** the `ml` service holds three units (document text extraction, text embeddings, image embeddings) and loads a model only while a feature that needs it is enabled; the Office container runs a small controller that does the same for the document engine. Each reports at `GET /runtime` (per unit under `/extract`, `/text` and `/image` on `ml`; on its own port for Office) with `status` (`preparing`, `ready`, `off`, `failed`; Office also `stopping`), `attempts` and `error`; **System > Features** shows that state per feature. Startup is bounded: after three failed attempts a worker reports `failed` and waits five minutes before trying again (`FDRIVE_RUNTIME_RETRY_AFTER_SECONDS` for Office), so a machine that is briefly out of memory or slow to download a model recovers without an operator restarting anything. Saving features in the UI clears the wait immediately. A worker also distinguishes an API that answers with a document it must reject (stopped after `FDRIVE_RUNTIME_STALE_SECONDS`, default 9) from an API it could not reach at all (`FDRIVE_RUNTIME_UNREACHABLE_SECONDS`, default 60): a loaded host makes the API slow, and stopping a healthy worker for that reloads a model, which loads the host further. Both still fail closed. A `failed` status persisting across several windows means the worker itself cannot start; read that container's logs.
 - **Postgres restarts:** the indexer, OCR worker and API reopen their database connections when postgres goes away, for example after `docker compose up -d --force-recreate db`. While the database is down the indexer's `/health` returns 500 and its container reports unhealthy; both recover on the next probe after postgres accepts connections. No container needs to be restarted by hand.
 - **Health Check Endpoint**: `GET /api/v1/health` is an unauthenticated JSON endpoint returning status (`configured`, `not_configured`, `unreachable`, `failed`) for all services. `failed` means the worker is down and its controller reports why, with the controller's reason in `detail` (for example `worker exceeded bounded startup retries`), so a worker the controller gave up on is distinguishable from a network problem. The same reason appears in the feature's detail line on **System > Features**.
@@ -228,20 +229,19 @@ All services are hardened following security best practices:
 ## Files folder and permissions
 
 `FDRIVE_FILES_DIR` on the host (default `files` inside `FDRIVE_DATA_DIR`) is mounted at
-`/data` read-write in the `api`, `backup` and `ocr` containers and read-only in the
+`/data` read-write in the `api` and `ocr` containers and read-only in the
 `indexer`. Compose fixes the rest: `FDRIVE_STORAGE_ROOT=/data`, and one indexed root named
 `files` at `/data` in both the API and the indexer. Each user's files are `/data/<username>`.
 
 Users live in fdrive's database, with scrypt password hashes, and are added, reset and
-disabled under **System > Users**. `FDRIVE_ADMIN_USERS` lists usernames that are always
-administrators.
+disabled under **System > Users**, where an administrator makes others administrators. The
+setup owner is the first.
 
 The four containers start as root for one step: each gives its own state directories to
 `FDRIVE_RUN_AS_UID` (default 1000) and then drops to that user for good. The API also gives
 a new, empty files folder to that user, but never changes the owner of files already there,
 and logs `cannot write /data` when that user can't write it. The backup worker keeps one capability after the drop, reading any file,
-because the state it backs up belongs to other services; it writes as the same user, so a
-backup in someone's folder belongs to them. Check the user each process runs as:
+because the state it backs up belongs to other services. Check the user each process runs as:
 
 ```sh
 docker compose exec -T api stat -c %u:%g /proc/1
@@ -266,9 +266,9 @@ indexed files yet. It refuses a folder that is empty while fdrive has users or i
 or whose marker names another installation: Compose mounts an empty `./data/files` when
 `FDRIVE_FILES_DIR` is unset, and reading that as every file deleted would empty search.
 
-While refused, file routes and backups to a folder destination fail with the reason, `core`
-in `GET /api/v1/health` reports `failed` with it in `detail`, `wait-ready.ts` keeps waiting,
-and the indexer neither scans, watches nor applies queued changes. The API and indexer check
+While refused, file routes fail with the reason, `core` in `GET /api/v1/health` reports
+`failed` with it in `detail`, `wait-ready.ts` keeps waiting, and the indexer neither scans,
+watches nor applies queued changes. The API and indexer check
 again every few seconds, so fixing `FDRIVE_FILES_DIR` and running `docker compose up -d` is
 enough. To adopt a folder fdrive refuses, create an empty `.fdrive-files` in it; to take over
 another installation's folder, delete its marker.

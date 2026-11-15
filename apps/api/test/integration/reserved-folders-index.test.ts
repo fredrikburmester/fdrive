@@ -2,26 +2,25 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { createDb, createIndexQueries, createRepos, migrate, schema } from "@fdrive/db";
-import { createLocalModule, type LocalUsers } from "@fdrive/local";
+import { createFilesFolder, type LocalUsers } from "@fdrive/local";
 import { startPostgres } from "@fdrive/testkit";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import type { Principal } from "../../src/auth/principal.ts";
 import { createIdentityStorageFactory } from "../../src/auth/storage-factory.ts";
 import {
+  fileInfoInScope,
   type McpToolDeps,
-  runFileInfo,
   runFindDuplicates,
   runFindFiles,
   runFolderOverview,
   runIndexStats,
   runListDirectory,
-  runRecentMoves,
   runSearch,
   runSimilarFiles,
 } from "../../src/mcp/handlers.ts";
-import { memoryProviderService } from "../../src/providers/test-fixtures/index.ts";
+import { resolveScopeContext } from "../../src/mcp/scope-context.ts";
 import { createScopeResolver } from "../../src/scoping/resolver.ts";
 import { createSearchService } from "../../src/search/service.ts";
+import type { TokenPrincipal } from "../../src/tokens/principal.ts";
 
 const SAME = "a".repeat(64);
 /** Live files, oldest first; fdrive's own copies of them are newer, so they would sort first. */
@@ -54,7 +53,7 @@ describe("fdrive's own folders in the index, through the MCP tools", () => {
   let database: ReturnType<typeof createDb>;
   let root: string;
   let deps: McpToolDeps;
-  let alice: Principal;
+  let alice: TokenPrincipal;
 
   async function put(path: string): Promise<void> {
     const target = join(root, "alice", path);
@@ -73,14 +72,11 @@ describe("fdrive's own folders in the index, through the MCP tools", () => {
     const repos = createRepos(db);
     const clock = () => new Date();
     const users: LocalUsers = {
-      verify: async () => ({ result: "invalid" }),
       status: async () => "active",
       shared: async () => [],
     };
-    const module = createLocalModule({ root, users, indexRoot: "files" });
-    const providers = memoryProviderService(repos, { modules: { local: module } });
+    const folder = createFilesFolder({ root, users, indexRoot: "files" });
     const provider = await repos.providers.ensure({ type: "local", baseUrl: "local" });
-    await repos.providers.update(provider.id, { enabled: true, managedByEnv: true });
     const account = await repos.accounts.create({ displayName: "alice" });
     const identity = await repos.identities.create({
       accountId: account.id,
@@ -88,8 +84,8 @@ describe("fdrive's own folders in the index, through the MCP tools", () => {
       externalUsername: "alice",
     });
     const storage = await createIdentityStorageFactory({
-      providers,
-      fetch: globalThis.fetch,
+      identities: repos.identities,
+      folder,
       clock,
     })(identity.id);
 
@@ -119,13 +115,6 @@ describe("fdrive's own folders in the index, through the MCP tools", () => {
         embedding: vector(DISTANCE[row.path] ?? 0),
       })),
     );
-    const at = (path: string) => `alice/${path}`;
-    await db.insert(schema.moves).values([
-      { rootId: indexRoot.id, src: at("draft.txt"), dst: at("report-c.txt"), actor: "mcp" },
-      { rootId: indexRoot.id, src: at("x.txt"), dst: at(RESERVED[0] as string), actor: "mcp" },
-      { rootId: indexRoot.id, src: at(RESERVED[1] as string), dst: at("y.txt"), actor: "mcp" },
-    ]);
-
     const indexQueries = createIndexQueries(db);
     deps = {
       indexQueries,
@@ -135,11 +124,13 @@ describe("fdrive's own folders in the index, through the MCP tools", () => {
         thumbsEnabled: false,
         clock,
       }),
-      scopeResolver: createScopeResolver({ providers, indexRootNames: ["files"] }),
-      identities: repos.identities,
+      scopeResolver: createScopeResolver({
+        storageId: provider.id,
+        rootName: "files",
+        indexRootNames: ["files"],
+      }),
       publicUrl: async () => null,
       indexerClient: null,
-      writesEnabled: false,
       clock,
       trashPathForStorage: () => "/.trash",
     };
@@ -149,6 +140,7 @@ describe("fdrive's own folders in the index, through the MCP tools", () => {
       username: "alice",
       storage,
       isAdmin: false,
+      tokenAccess: { mode: "read", paths: ["/"] },
     };
   }, 180_000);
 
@@ -177,7 +169,12 @@ describe("fdrive's own folders in the index, through the MCP tools", () => {
     ]);
     expect(duplicates).not.toHaveProperty("partial");
 
-    const info = await runFileInfo(deps, alice, { path: "/report-a.txt" });
+    // The AI's index-backed file_info.
+    const verified = await deps.scopeResolver.verifiedIndexScopes(alice.username);
+    if (!verified.available) throw new Error("expected alice's verified scopes");
+    const ctx = await resolveScopeContext(deps.indexQueries, verified.scopes, "/.trash");
+    if (ctx === null) throw new Error("expected alice's scope context");
+    const info = await fileInfoInScope(deps, ctx, { path: "/report-a.txt" });
     expect(info.identical_copies).toEqual(["/report-b.txt"]);
     expect(info).not.toHaveProperty("partial");
 
@@ -186,7 +183,7 @@ describe("fdrive's own folders in the index, through the MCP tools", () => {
     expect(similar).not.toHaveProperty("partial");
   });
 
-  it("folder_overview, index_stats, search and recent_moves count only the user's files", async () => {
+  it("folder_overview, index_stats and search count only the user's files", async () => {
     const overview = await runFolderOverview(deps, alice, {});
     expect(overview).toMatchObject({ total_files: 3, truncated: false });
     expect(overview.folders.map((folder) => folder.path)).toEqual(["/"]);
@@ -197,11 +194,6 @@ describe("fdrive's own folders in the index, through the MCP tools", () => {
 
     const search = await runSearch(deps, alice, { query: "report", limit: 3 });
     expect(search.results.map((file) => file.path).sort()).toEqual(LIVE.map((name) => `/${name}`));
-
-    const moves = await runRecentMoves(deps, alice, { limit: 1 });
-    expect(moves).toEqual({
-      moves: [expect.objectContaining({ src: "/draft.txt", dst: "/report-c.txt" })],
-    });
   });
 
   it("list_directory hides fdrive's own folders and refuses to open one", async () => {

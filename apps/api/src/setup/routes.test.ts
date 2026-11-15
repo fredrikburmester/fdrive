@@ -1,15 +1,15 @@
 import type { MeResponse } from "@fdrive/contracts";
-import { createMemoryRepos } from "@fdrive/db/testing";
 import { describe, expect, it, vi } from "vitest";
 import { createApp } from "../app.js";
 import { createLoginLimiter, type LoginLimiter } from "../auth/login-limiter.js";
 import { loadConfig } from "../config.js";
 import { registerSetupRoutes } from "./routes.js";
-import { createSetupService, type SetupService } from "./service.js";
+import type { SetupService } from "./service.js";
 import { createSetupTokenGuard, type SetupTokenGuard } from "./token.js";
 
 const REQUIRED_ENV = {
   DATABASE_URL: "postgres://localhost/fdrive",
+  FDRIVE_STORAGE_ROOT: "/srv/files",
   FDRIVE_MASTER_KEY: Buffer.alloc(32, 3).toString("base64"),
 };
 
@@ -19,25 +19,16 @@ const ME: MeResponse = {
     id: "identity-1",
     username: "alice",
     providerId: "123e4567-e89b-42d3-a456-426614174000",
-    providerType: "local",
-    providerLabel: "x",
-    capabilities: {
-      zip: true,
-      setModifiedAt: true,
-      atomicMove: true,
-      trash: false,
-      shares: true,
-      office: true,
-      index: false,
-      shareWithPeople: true,
-    },
   },
   isAdmin: true,
+  storageName: "x",
+  trash: false,
+  index: false,
 };
 
 function buildService(overrides: Partial<SetupService> = {}): SetupService {
   return {
-    status: vi.fn().mockResolvedValue({ required: true, storageConfigured: true }),
+    status: vi.fn().mockResolvedValue({ required: true }),
     complete: vi.fn().mockResolvedValue({ sessionId: "session-1", me: ME }),
     ...overrides,
   };
@@ -63,7 +54,7 @@ function buildApp(
     } as never,
     version: "1.0.0",
     startedAt: new Date(0),
-    connectionStatus: async () => ({ required: true, providers: [] }),
+    setupRequired: async () => true,
     registerRoutes: (groups) => {
       registerSetupRoutes(groups, { service, tokenGuard, limiter, config });
     },
@@ -97,7 +88,7 @@ describe("setup routes: GET /setup/status", () => {
     const res = await app.request("/api/v1/setup/status");
 
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ required: true, storageConfigured: true });
+    expect(await res.json()).toEqual({ required: true });
   });
 });
 
@@ -210,40 +201,11 @@ describe("setup routes: POST /setup/complete", () => {
   it("returns 404 once setup is no longer required", async () => {
     const { app } = buildApp({
       service: buildService({
-        status: vi.fn().mockResolvedValue({ required: false, storageConfigured: true }),
+        status: vi.fn().mockResolvedValue({ required: false }),
       }),
     });
 
     expect((await postComplete(app)).status).toBe(404);
-  });
-
-  it("refuses an installation people signed in to before, though it has no local user", async () => {
-    const repos = createMemoryRepos();
-    const row = await repos.providers.ensure({ type: "local", baseUrl: "local" });
-    const account = await repos.accounts.create({ displayName: "owner" });
-    await repos.identities.create({
-      accountId: account.id,
-      providerId: row.id,
-      externalUsername: "owner",
-    });
-    const createOwner = vi.fn();
-    const loginCandidate = vi.fn();
-    const service = createSetupService({
-      authService: { loginCandidate, me: vi.fn(), logout: vi.fn() },
-      accounts: { setAdmin: vi.fn() },
-      identities: repos.identities,
-      settings: repos.settings,
-      local: {
-        provider: async () => row,
-        userCount: () => repos.localUsers.count(),
-        users: { createOwner },
-      },
-    });
-    const { app } = buildApp({ service });
-
-    expect((await postComplete(app)).status).toBe(404);
-    expect(createOwner).not.toHaveBeenCalled();
-    expect(loginCandidate).not.toHaveBeenCalled();
   });
 
   it("rejects a missing or wrong setup token", async () => {

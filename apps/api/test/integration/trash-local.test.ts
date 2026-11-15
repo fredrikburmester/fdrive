@@ -96,7 +96,7 @@ describe("trash against real PostgreSQL and a local folder", () => {
   async function login(username: string) {
     const response = await call(ROUTES.auth.login, {
       method: "POST",
-      body: { credential: { username, password: `${username}-pass` } },
+      body: { username, password: `${username}-pass` },
     });
     expect(response.status).toBe(200);
     return { cookie: cookieFrom(response), me: MeResponse.parse(await response.json()) };

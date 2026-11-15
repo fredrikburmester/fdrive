@@ -1,7 +1,7 @@
 import { and, asc, count, desc, eq, inArray, isNotNull, isNull, ne, sql } from "drizzle-orm";
 import type { Db } from "../index.js";
 import { imageEmbeddings, thumbnails } from "../schema/app.js";
-import { chunks, files, folders, moves, roots } from "../schema/idx.js";
+import { chunks, files, folders, roots } from "../schema/idx.js";
 import { formatVectorLiteral } from "../vector.js";
 
 /**
@@ -105,8 +105,8 @@ export interface IndexRef {
 
 /**
  * A live file's digest and what stands behind it, see
- * `IndexQueries.contentAt`. `inode` and `ctimeNs` are the stamp of the
- * indexer's own read that produced `sha256`, or null when no such read
+ * `IndexQueries.contentAt`. `inode` and `ctimeNs` stamp `sha256`: the file
+ * the indexer read for it or the API published it as, or null when neither
  * stands behind it (see `idx.files.inode`).
  */
 export interface IndexedContent extends IndexRef {
@@ -230,15 +230,6 @@ export interface FileFilter extends ScopedReadOptions {
 
 /** Sort order for `listFiles`. */
 export type FileOrder = "modified_desc" | "modified_asc" | "size_desc" | "path";
-
-/** One move recorded in `idx.moves`, as read back by `recentMoves`. */
-export interface MoveRecord {
-  readonly at: Date;
-  readonly rootId: number;
-  readonly src: string | null;
-  readonly dst: string | null;
-  readonly actor: string | null;
-}
 
 /** One location a duplicate's bytes live at. */
 export interface DuplicateLocation {
@@ -418,6 +409,8 @@ export interface IndexQueries {
   recentFiles(scopePrefixes: readonly ScopePrefix[], limit: number): Promise<IndexedFile[]>;
   /** The cached thumbnail file for `(contentKey, size)`, `null` when not generated yet. */
   thumbnail(contentKey: string, size: number): Promise<{ storagePath: string } | null>;
+  /** Which of `contentKeys` have a thumbnail of `size` generated, in one query. */
+  thumbnailKeys(contentKeys: readonly string[], size: number): Promise<ReadonlySet<string>>;
   /**
    * Live files whose thumbnail embedding (joined `app.image_embeddings` on
    * `files.sha256 = image_embeddings.content_key`) is closest to `vector`
@@ -434,19 +427,6 @@ export interface IndexQueries {
   ): Promise<ImageSearchHit[]>;
   /** Total embedded rows and the model that wrote the most of them, for the System page. */
   imageEmbeddingStats(): Promise<ImageEmbeddingStats>;
-  /** Appends a row to `idx.moves`, the audit log the MCP `move_path` tool writes to and `recentMoves` reads back. */
-  recordMove(input: { rootId: number; src: string; dst: string; actor: string }): Promise<void>;
-  /**
-   * The most recent `idx.moves` rows for `actor` whose both ends lie in
-   * `scopePrefixes`; with `exclude`, a move either end of which it leaves
-   * out is left out.
-   */
-  recentMoves(
-    scopePrefixes: readonly ScopePrefix[],
-    actor: string,
-    limit: number,
-    options?: ScopedReadOptions,
-  ): Promise<MoveRecord[]>;
 }
 
 /**
@@ -472,8 +452,8 @@ function scopeCondition(prefixes: readonly ScopePrefix[], columns: PathColumns =
 
 /** The root and path columns of a table whose rows `ScopePrefix`es select. */
 interface PathColumns {
-  readonly rootId: typeof files.rootId | typeof folders.rootId | typeof moves.rootId;
-  readonly path: typeof files.path | typeof folders.path | typeof moves.src | typeof moves.dst;
+  readonly rootId: typeof files.rootId | typeof folders.rootId;
+  readonly path: typeof files.path | typeof folders.path;
 }
 
 const FILE_COLUMNS: PathColumns = { rootId: files.rootId, path: files.path };
@@ -504,27 +484,6 @@ function exclusionCondition(exclude: IndexExclusion | undefined, columns = FILE_
     ),
   ];
   return parts.length === 0 ? undefined : and(...parts);
-}
-
-/** Restricts one `idx.moves` path to the caller's root-relative scope. */
-function movePathScopeCondition(
-  prefixes: readonly ScopePrefix[],
-  pathColumn: typeof moves.src | typeof moves.dst,
-) {
-  const clauses = toScopeClauses(prefixes);
-  if (clauses.length === 0) {
-    return sql`false`;
-  }
-
-  const parts = clauses.map((clause) => {
-    if (clause.relativePrefix === "") {
-      return sql`(${moves.rootId} = ${clause.rootId})`;
-    }
-    const likePattern = `${escapeLikePattern(clause.relativePrefix)}/%`;
-    return sql`(${moves.rootId} = ${clause.rootId} AND (${pathColumn} = ${clause.relativePrefix} OR ${pathColumn} LIKE ${likePattern} ESCAPE '\\'))`;
-  });
-
-  return sql`(${sql.join(parts, sql` OR `)})`;
 }
 
 const NS_PER_DAY = 86_400_000_000_000;
@@ -1026,6 +985,17 @@ export function createIndexQueries(db: Db): IndexQueries {
       return row ?? null;
     },
 
+    async thumbnailKeys(contentKeys, size) {
+      if (contentKeys.length === 0) return new Set();
+      const rows = await db
+        .select({ contentKey: thumbnails.contentKey })
+        .from(thumbnails)
+        .where(
+          and(inArray(thumbnails.contentKey, contentKeys as string[]), eq(thumbnails.size, size)),
+        );
+      return new Set(rows.map((row) => row.contentKey));
+    },
+
     async searchImages(scopePrefixes, vector, model, limit, options = {}) {
       const vectorLiteral = formatVectorLiteral(vector);
       const distance = sql<number>`${imageEmbeddings.embedding} <=> ${vectorLiteral}::vector`;
@@ -1068,44 +1038,6 @@ export function createIndexQueries(db: Db): IndexQueries {
 
       const total = rows.reduce((sum, row) => sum + Number(row.rows), 0);
       return { total, model: rows[0]?.model ?? null };
-    },
-
-    async recordMove(input) {
-      await db.insert(moves).values({
-        rootId: input.rootId,
-        src: input.src,
-        dst: input.dst,
-        actor: input.actor,
-      });
-    },
-
-    async recentMoves(scopePrefixes, actor, limit, options = {}) {
-      if (scopePrefixes.length === 0) {
-        return [];
-      }
-      const rows = await db
-        .select()
-        .from(moves)
-        .where(
-          and(
-            movePathScopeCondition(scopePrefixes, moves.src),
-            isNotNull(moves.src),
-            movePathScopeCondition(scopePrefixes, moves.dst),
-            isNotNull(moves.dst),
-            exclusionCondition(options.exclude, { rootId: moves.rootId, path: moves.src }),
-            exclusionCondition(options.exclude, { rootId: moves.rootId, path: moves.dst }),
-            eq(moves.actor, actor),
-          ),
-        )
-        .orderBy(desc(moves.id))
-        .limit(limit);
-      return rows.map((row) => ({
-        at: row.at ?? new Date(0),
-        rootId: row.rootId,
-        src: row.src,
-        dst: row.dst,
-        actor: row.actor,
-      }));
     },
   };
 }

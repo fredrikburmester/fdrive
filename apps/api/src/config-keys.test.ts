@@ -16,6 +16,7 @@ const MASTER_KEY = Buffer.alloc(32, 7).toString("base64");
 
 const REQUIRED_ENV = {
   DATABASE_URL: "postgres://localhost/fdrive",
+  FDRIVE_STORAGE_ROOT: "/srv/files",
   FDRIVE_MASTER_KEY: MASTER_KEY,
 };
 
@@ -101,7 +102,6 @@ describe("subsystemsStatus", () => {
     });
     expect(statuses.ocr).toEqual({ status: "not_configured", missing: ["FDRIVE_OCR_URL"] });
     expect(statuses.office).toEqual({ status: "configured", missing: [] });
-    expect(statuses.trash).toEqual({ status: "configured", missing: [] });
   });
 
   it("reports index as configured only once both FDRIVE_INDEX_ROOTS and FDRIVE_INDEXER_URL are set", () => {
@@ -145,7 +145,6 @@ describe("applyReachability", () => {
     thumbnails: { status: "configured", missing: [] },
     ocr: { status: "configured", missing: [] },
     office: { status: "configured", missing: [] },
-    trash: { status: "configured", missing: [] },
   };
 
   it("marks a configured subsystem unreachable when its probe fails", () => {

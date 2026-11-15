@@ -1,46 +1,38 @@
 import { isReservedPath, isUnderPath, normalizePath, type Scope, toFsPath } from "@fdrive/core";
 import type { Principal } from "../auth/principal.ts";
+import type { TokenPrincipal } from "../tokens/principal.ts";
 
 export function containsPath(root: string, path: string): boolean {
   return root === path || isUnderPath(root, path);
 }
 
-export function canReadPath(principal: Principal, rawPath: string): boolean {
+export function canReadPath(principal: TokenPrincipal, rawPath: string): boolean {
   const path = normalizePath(rawPath);
-  return (
-    principal.tokenAccess === undefined ||
-    principal.tokenAccess.paths.some((root) => containsPath(normalizePath(root), path))
-  );
+  return principal.tokenAccess.paths.some((root) => containsPath(normalizePath(root), path));
 }
 
-export function canBrowsePath(principal: Principal, rawPath: string): boolean {
+export function canBrowsePath(principal: TokenPrincipal, rawPath: string): boolean {
   const path = normalizePath(rawPath);
   return (
     canReadPath(principal, path) ||
-    principal.tokenAccess?.paths.some((root) => containsPath(path, normalizePath(root))) === true
+    principal.tokenAccess.paths.some((root) => containsPath(path, normalizePath(root)))
   );
 }
 
-export function assertTokenPath(principal: Principal, rawPath: string): string {
+export function assertTokenPath(principal: TokenPrincipal, rawPath: string): string {
   const path = normalizePath(rawPath);
   if (!canReadPath(principal, path))
     throw new Error("path is outside this token's allowed folders");
   return path;
 }
 
-export function canOrganize(principal: Principal, legacyWrites: boolean): boolean {
-  return principal.tokenAccess === undefined ? legacyWrites : principal.tokenAccess.mode !== "read";
+export function canOrganize(principal: TokenPrincipal): boolean {
+  return principal.tokenAccess.mode !== "read";
 }
 
-export function requireMode(
-  principal: Principal,
-  mode: "organize" | "full",
-  legacyWrites = false,
-): void {
+export function requireMode(principal: TokenPrincipal, mode: "organize" | "full"): void {
   const allowed =
-    mode === "organize"
-      ? canOrganize(principal, legacyWrites)
-      : principal.tokenAccess?.mode === "full";
+    mode === "organize" ? canOrganize(principal) : principal.tokenAccess.mode === "full";
   if (!allowed) throw new Error(`this token does not allow ${mode} operations`);
 }
 
@@ -57,27 +49,26 @@ export function trashPathFor(deps: TrashAccessDeps, principal: Principal): strin
 export const RESERVED_MESSAGE = "path is in the Trash or another of fdrive's own folders";
 
 /** A token path outside fdrive's own folders (`isReservedPath`), which ordinary tools never touch. */
-export function ordinaryPath(deps: TrashAccessDeps, principal: Principal, rawPath: string): string {
+export function ordinaryPath(
+  deps: TrashAccessDeps,
+  principal: TokenPrincipal,
+  rawPath: string,
+): string {
   const path = assertTokenPath(principal, rawPath);
   if (isReservedPath(path, trashPathFor(deps, principal))) throw new Error(RESERVED_MESSAGE);
   return path;
 }
 
-export function requireExplicitAccess(principal: Principal): void {
-  if (principal.tokenAccess === undefined)
-    throw new Error("Create a token with explicit permissions to use this tool.");
-}
-
 /** Prevents moving/deleting a grant root and thereby invalidating or retargeting the grant. */
 export function assertMutablePath(
-  principal: Principal,
+  principal: TokenPrincipal,
   path: string,
   trashPath: string | null,
 ): void {
   assertTokenPath(principal, path);
   if (
     path === "/" ||
-    principal.tokenAccess?.paths.some((root) => containsPath(path, normalizePath(root)))
+    principal.tokenAccess.paths.some((root) => containsPath(path, normalizePath(root)))
   ) {
     throw new Error("cannot move or delete an allowed folder root");
   }
@@ -113,6 +104,10 @@ export function intersectScopes(scopes: readonly Scope[], paths: readonly string
   return [...result.values()];
 }
 
+/**
+ * A token's verified scopes narrowed to its folders. A session principal (the
+ * AI's tools) carries no grants and keeps every verified scope.
+ */
 export function tokenScopes(principal: Principal, scopes: readonly Scope[]): readonly Scope[] {
   return principal.tokenAccess === undefined
     ? scopes

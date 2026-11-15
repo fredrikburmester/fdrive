@@ -2,7 +2,7 @@
 
 Audit of `main` at 64cb537b, 2026-11-14. fdrive grew on SFTPGo, WebDAV and S3, storage it did
 not own, so many parts still check, guess, copy or abstract what the
-[files folder](../STORAGE-PROVIDERS.md) now guarantees. Each numbered group below is one pull
+[files folder](../STORAGE.md) now guarantees. Each numbered group below is one pull
 request. Numbers are stable: a group is removed when it merges, leaving a gap. Delete this plan
 when none are left.
 
@@ -16,10 +16,7 @@ migrations, compatibility shims or configuration aliases; a full reindex is acce
 ## Order
 
 - Groups that add a migration run one at a time and need `pnpm test:integration`.
-- 10 folds into 12.
-- 12–15 run strictly in order: they share `apps/api/src/auth/service.ts`, `composition.ts` and the
-  contracts.
-- 16 before 17, 26, 31 and 32. 16 and 23 before 18. 36 and 37 last.
+- 16 before 17, 18, 26 and 31. 36 and 37 last.
 
 ## Decisions
 
@@ -41,38 +38,9 @@ Recommended on 2026-11-14 and approved by the owner the same day.
    tags instead of being guessed from its hash.
 8. `Shared with me` is a reserved name at the top of each home.
 9. The migration history is squashed last.
-10. The Mac cleanup release (27) waits until a Mac release is due anyway.
-
-## Wave 0: independent fixes
-
-7\. **Drop the public URL's fallback to Office's `appUrl`**, the one shim #163 left
-(`apps/api/src/composition.ts`, `legacyUrl`).
-
-10\. **Rate-limit password change.** `POST /auth/password` checks the current password without
-the login limiter (`local/routes.ts`, `local/service.ts`). Folds into 12.
 
 ## Wave 1: one user, one storage
 
-12. **Check passwords locally and drop stored passwords.** Sign-in goes through the provider
-    module's `authenticate` with metadata-driven fields and a one-time-code field
-    (`accounts/credentials.ts`). `app.credentials` keeps reversible copies of every password,
-    compared at sign-in, and the master key travels in backup archives. Setup is a two-step
-    resumable claim. Backups re-authenticate every login on restore, read Mac recovery by signing
-    in as each user, and unlock with a provider credential map. Logins are created at first
-    sign-in with a case-sensitive lookup. The web form becomes plain username and password.
-13. **One storage, no provider modules.** `ProviderModule`, the registry and `ProviderService`
-    for one row (base URL, config, probe, `fetch`, a pinned storage factory); per-login
-    `ProviderCapabilities` become two installation flags on `/me`; one-value Trash and share
-    strategies; `available` flags and "no files folder" states; `FDRIVE_STORAGE_ROOT` becomes
-    required; administrators come from `accounts.is_admin` only; `GET /providers`,
-    `/admin/providers` and the `/about` provider list go, the storage name becomes a setting;
-    errors that cannot happen (`reauth_required` from storage, `upstream_unavailable`,
-    `rate_limited`) and the always-configured `trash` health entry go.
-14. **Two queries per request.** About 11 queries run before a signed-in handler and `/auth/me`
-    adds 7 (the setup gate lists providers on every request). About 25 call sites fetch the login
-    again; each scope resolution re-reads provider, grants and Trash. Every index result gets a
-    live storage probe: search probes about 145 candidates before cutting to its limit, and each
-    thumbnail tile costs about 8 queries and is sent `no-store`.
 15. **One files index root.** `FDRIVE_INDEX_ROOTS` and `INDEX_ROOTS` map several roots with
     separate API and indexer paths; the API guesses the root name and journals nothing until the
     indexer creates the root row; three System pages have root pickers; indexer routes take a
@@ -82,41 +50,31 @@ the login limiter (`local/routes.ts`, `local/service.ts`). Folds into 12.
 ## Wave 2: Trash, metadata and the journal
 
 16. **One installation-wide Trash, as an explicit operation.** Settings are per provider row with
-    a strategy and an old-data repair (`trash/settings.ts`). Trash intercepts deletes in a
+    an old-data repair (`trash/settings.ts`). Trash intercepts deletes in a
     wrapper, keeps its settings in a WeakMap lost when storage is re-wrapped, and passes the leaf
     out through AsyncLocalStorage (`activity/trash.ts`); the Trash path is built in nine places.
     Tags, favorites and folder views stay at a trashed item's path, so a new file there inherits
     them. A grantee deleting in a writable shared folder may send the owner's file to the
-    grantee's Trash (unverified). Retention per decision 3. Office's save path now has its own
-    database pool (#162), and so does the Mac publish lock (personal activity's path locks have a
-    third). When 24 removes the publish lock, those two pools become one or go.
+    grantee's Trash (unverified). Retention per decision 3. Office's save path (#162) and
+    personal activity's path locks each keep a database pool of their own; they never wait on
+    each other, and sharing one would let slow Office saves hold up Trash moves.
 17. **Flat Trash layout.** The `p/<segment>` path encoding, made for WebDAV, becomes one folder
     per item plus a row.
 18. **Live updates and metadata from the journal.** Every fdrive change returns through the
     indexer's `idx_events`; `events/indexer-listener.ts` handles it once per login, sends the
     actor a second live update and moves metadata a second time. With indexing off, grantees get
-    no live updates and metadata ignores SMB moves. Activity's per-listing "refresh comparison"
-    goes; activity observations and Office follow the journal.
+    no live updates and metadata ignores SMB moves (the Office registry follows with metadata).
+    Activity observations follow the journal.
 19. **One file-operations service.** MCP's activity proxy and its copy of metadata following
     (`composition.ts` `onMutation`) merge with the fs and Trash routes' recorders.
 20. **Delete removed files from the index.** Tombstones are never purged and every scan loads
     them, for a sha256 relink guess.
-21. **Reuse the API's file stamp in the indexer.** The watcher re-reads every uploaded or renamed
-    file.
 
 ## Mac
 
-All but 27 are server-only and keep shipped Mac builds working.
+All are server-only and keep shipped Mac builds working.
 
-23. Apply metadata inline after Mac writes and drop `app.desktop_effects` and the five `revision`
-    columns that serve it.
-24. Detect conflicts from the file stamp; drop the publish lock and its pool, `previous` copies,
-    30-day retention, the 64 GiB reservation and re-hashing on renames.
-25. Stage uploads inside the files folder so a commit can always tell whether it happened; drop
-    `FDRIVE_DESKTOP_STATE_DIR`, the `uncertain` state and the unused admin recovery endpoints.
 26. Finder's Trash becomes fdrive's Trash.
-27. Mac release: drop commit progress polling, `follow` and the 24-hour commit timeout. Check
-    whether cancelling a stuck commit deletes the Mac's own copy (unverified).
 28. Optional: drop `/checks` now that the change feed exists, after measuring the hourly pass.
 
 ## Storage contract
@@ -130,22 +88,13 @@ All but 27 are server-only and keep shipped Mac builds working.
     budget, on a heavily loaded machine; rerun `pnpm perf:strict` on a quiet one before acting
     on that.
 
-## Shares, activity, Office, backups, MCP
+## Shares
 
-31. **Shares.** One module instead of the access-object layers; no strategy lookup per public
-    request; one range implementation; drop `has_password` and rename `views`.
-32. **Activity.** Drop `provider_version`, `trashStrategy: "sftpgo_rule"`, the `provider` bridge
-    namespace and the per-login provider snapshot.
-33. **Office.** Key Office files by owner path; no provider in settings or edit rules; pick
-    editors from fdrive's users.
-34. **Backups.** S3 only; this also removes the guard that lists every moved, deleted or zipped
-    folder (`backups/reserved-storage.ts`).
-35. **MCP.** Remove tokens without an access level, `FDRIVE_MCP_WRITES` and the indexer's
-    path-based `/extract`; serve `recent_moves` from activity.
+31. **Shares.** One module instead of the access-object layers; one range implementation; drop
+    `has_password` and rename `views`.
 
 ## Last
 
-36. Collapse the schema: provider columns and rows, `app.credentials`, `identities.provider_id`,
-    `office_files.provider_id`. Keep the provider row's UUID, which the Mac app compares as
-    `providerId`.
+36. Collapse the schema: provider columns and rows, `identities.provider_id`. Keep the provider
+    row's UUID, which the Mac app compares as `providerId`.
 37. Squash the migrations into one baseline.

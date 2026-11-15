@@ -3,12 +3,20 @@
 import { type OfficeSettings, OfficeSettingsUpdateRequest } from "@fdrive/contracts";
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
-import { Field, FieldDescription, FieldLabel } from "@/components/ui/field";
+import { Checkbox } from "@/components/ui/checkbox";
+import {
+  Field,
+  FieldDescription,
+  FieldGroup,
+  FieldLabel,
+  FieldLegend,
+  FieldSet,
+} from "@/components/ui/field";
 import { Switch } from "@/components/ui/switch";
-import { Textarea } from "@/components/ui/textarea";
 import { describeApiError } from "@/lib/api/errors";
 import { useSystemOffice, useUpdateOfficeSettings } from "@/lib/api/office-settings-queries";
 import { useSystemPublicUrl } from "@/lib/api/public-url-queries";
+import { useAdminUsers } from "@/lib/api/system-queries";
 import { SystemErrorState } from "./system-error-state";
 import { SystemSection } from "./system-section";
 
@@ -20,6 +28,8 @@ export function officeProductName(product: string | undefined): string {
 export interface OfficeSettingsDraft {
   query: ReturnType<typeof useSystemOffice>;
   update: ReturnType<typeof useUpdateOfficeSettings>;
+  /** fdrive's users, whom editors are chosen from. */
+  users: ReturnType<typeof useAdminUsers>;
   /** "ONLYOFFICE" or "Collabora". */
   product: string;
   /** The saved record, `undefined` until the query resolves. */
@@ -32,12 +42,9 @@ export interface OfficeSettingsDraft {
   dirty: boolean;
   /** No server address is set, so the API would refuse to enable Office. */
   addressMissing: boolean;
-  /** The saved editor grants belong to a different storage provider. */
-  providerChanged: boolean;
-  editingMatchesProvider: boolean;
-  editorsText: string | null;
-  setEditorsText: (text: string) => void;
   change: (patch: Partial<OfficeSettings>) => void;
+  /** Adds `username` to the editors, or takes them off. */
+  setEditor: (username: string, editor: boolean) => void;
   /** Turning Office off also drops the unsaved editing draft. */
   setEnabled: (enabled: boolean) => void;
   reset: () => void;
@@ -47,33 +54,23 @@ export interface OfficeSettingsDraft {
 /**
  * The Office settings draft shared by the wizard's card, the Features
  * page's Office card, and the Office page's settings sheet: one place that
- * knows how a draft merges with the polled record, when saved editor grants
- * stop applying because the storage provider changed, and what a save sends.
+ * knows how a draft merges with the polled record and what a save sends.
+ * Editors are fdrive's users, so a name no user has any more (one removed
+ * since it was saved) is left out of what a save sends.
  */
 export function useOfficeSettingsDraft(): OfficeSettingsDraft {
   const query = useSystemOffice();
   const address = useSystemPublicUrl();
   const update = useUpdateOfficeSettings();
+  const users = useAdminUsers();
   const [draft, setDraft] = useState<OfficeSettings | null>(null);
-  const [editorsText, setEditorsText] = useState<string | null>(null);
   const saved = query.data?.configuration;
   const stored = draft ?? saved;
-  const providerChanged =
-    (stored?.editingEnabled ?? false) && stored?.editingProviderId !== query.data?.activeProviderId;
-  const base =
-    stored && providerChanged
-      ? { ...stored, editingEnabled: false, editingProviderId: null, editorUsernames: [] }
-      : stored;
+  const known = users.data ? new Set(users.data.users.map((user) => user.username)) : null;
   const values =
-    base && editorsText !== null
-      ? {
-          ...base,
-          editorUsernames: editorsText
-            .split("\n")
-            .map((name) => name.trim())
-            .filter(Boolean),
-        }
-      : base;
+    stored && known
+      ? { ...stored, editorUsernames: stored.editorUsernames.filter((name) => known.has(name)) }
+      : stored;
   // The editor is told fdrive lives at the server address; without one the
   // api refuses to enable Office, so say so before the owner tries.
   const addressMissing = address.data !== undefined && address.data.url === null;
@@ -84,30 +81,30 @@ export function useOfficeSettingsDraft(): OfficeSettingsDraft {
 
   function reset() {
     setDraft(null);
-    setEditorsText(null);
   }
 
   return {
     query,
     update,
+    users,
     product: officeProductName(query.data?.product),
     saved,
     values,
     parsed: OfficeSettingsUpdateRequest.safeParse(values),
-    dirty: draft !== null || editorsText !== null,
+    dirty: draft !== null,
     addressMissing,
-    providerChanged,
-    editingMatchesProvider: values?.editingProviderId === query.data?.activeProviderId,
-    editorsText,
-    setEditorsText,
     change,
+    setEditor: (username: string, editor: boolean) => {
+      if (!values) return;
+      const editors = values.editorUsernames.filter((name) => name !== username);
+      change({ editorUsernames: editor ? [...editors, username] : editors });
+    },
     setEnabled: (enabled: boolean) => {
       if (enabled) {
         change({ enabled });
         return;
       }
       setDraft(saved ? { ...saved, enabled: false } : null);
-      setEditorsText(null);
     },
     reset,
     commit: (input: OfficeSettings, onSaved?: () => void) => {
@@ -119,6 +116,50 @@ export function useOfficeSettingsDraft(): OfficeSettingsDraft {
       });
     },
   };
+}
+
+/** fdrive's users as checkboxes: the ones checked may edit documents. */
+function OfficeEditorsField({
+  draft,
+  values,
+  disabled,
+}: {
+  draft: OfficeSettingsDraft;
+  values: OfficeSettings;
+  disabled: boolean;
+}) {
+  const { users } = draft;
+  return (
+    <FieldSet>
+      <FieldLegend variant="label">Users allowed to edit</FieldLegend>
+      <FieldDescription>
+        Everyone else opens documents view-only, and saves still need write access.
+      </FieldDescription>
+      {users.isError ? (
+        <SystemErrorState error={users.error} onRetry={() => void users.refetch()} />
+      ) : users.data === undefined ? (
+        <p role="status" className="text-sm text-muted-foreground">
+          Loading users…
+        </p>
+      ) : (
+        <FieldGroup data-slot="checkbox-group">
+          {users.data.users.map((user) => (
+            <Field key={user.username} orientation="horizontal">
+              <Checkbox
+                id={`office-editor-${user.username}`}
+                checked={values.editorUsernames.includes(user.username)}
+                disabled={disabled}
+                onCheckedChange={(checked) => draft.setEditor(user.username, checked)}
+              />
+              <FieldLabel htmlFor={`office-editor-${user.username}`} className="font-normal">
+                {user.username}
+              </FieldLabel>
+            </Field>
+          ))}
+        </FieldGroup>
+      )}
+    </FieldSet>
+  );
 }
 
 /**
@@ -133,7 +174,7 @@ export function OfficeSettingsFields({
   draft: OfficeSettingsDraft;
   disabled?: boolean;
 }) {
-  const { product, values, parsed, dirty, addressMissing, providerChanged } = draft;
+  const { product, values, parsed, dirty, addressMissing } = draft;
   if (!values) return null;
   return (
     <>
@@ -159,52 +200,23 @@ export function OfficeSettingsFields({
           ) : null}
           {dirty && !parsed.success ? (
             <p role="alert" className="text-sm text-destructive">
-              When editing is enabled, enter at least one allowed username.
-            </p>
-          ) : null}
-          {providerChanged ? (
-            <p role="status" className="text-sm text-muted-foreground">
-              The storage changed. Choose editors again to enable editing for this server.
+              When editing is enabled, choose at least one user.
             </p>
           ) : null}
           <Field orientation="horizontal">
             <FieldLabel htmlFor="office-editing">Allow document editing</FieldLabel>
             <Switch
               id="office-editing"
-              checked={values.editingEnabled && draft.editingMatchesProvider}
+              checked={values.editingEnabled}
               disabled={disabled}
-              onCheckedChange={(editingEnabled) => {
-                if (!draft.editingMatchesProvider) draft.setEditorsText("");
-                draft.change({
-                  editingEnabled,
-                  editingProviderId: draft.query.data?.activeProviderId ?? null,
-                  editorUsernames: draft.editingMatchesProvider ? values.editorUsernames : [],
-                });
-              }}
+              onCheckedChange={(editingEnabled) => draft.change({ editingEnabled })}
             />
           </Field>
           <FieldDescription>
-            When off, all documents open for viewing. When on, only the users you list below can
-            edit.
+            When off, all documents open for viewing. When on, only the users you choose can edit.
           </FieldDescription>
-          {values.editingEnabled && draft.editingMatchesProvider ? (
-            <Field>
-              <FieldLabel htmlFor="office-editors">Users allowed to edit</FieldLabel>
-              <Textarea
-                id="office-editors"
-                disabled={disabled}
-                value={draft.editorsText ?? values.editorUsernames.join("\n")}
-                onChange={(event) => {
-                  draft.change({});
-                  draft.setEditorsText(event.target.value);
-                }}
-              />
-              <FieldDescription>
-                One username per line. These users can open documents for editing; everyone else
-                gets view-only. Being listed here grants no file access — storage permissions still
-                apply to saves.
-              </FieldDescription>
-            </Field>
+          {values.editingEnabled ? (
+            <OfficeEditorsField draft={draft} values={values} disabled={disabled} />
           ) : null}
         </>
       ) : null}

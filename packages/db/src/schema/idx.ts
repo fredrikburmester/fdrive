@@ -57,14 +57,16 @@ export const files = idxSchema.table(
     indexedAt: timestamp("indexed_at", { withTimezone: true }),
     deletedAt: timestamp("deleted_at", { withTimezone: true }),
     /**
-     * The inode and change time (nanoseconds) of the file `sha256` was read
-     * from, recorded only by a read the indexer made itself that began at
-     * least a second after the file last changed and saw no change while it
-     * ran. Any later write, rename or replacement changes one of the two, and
-     * no client can set either, so while a fresh stat still shows both (with
-     * `size` and `mtime_ns`) the digest describes the bytes on disk. Null when
-     * no such read stands behind the current digest. `inode` holds the
-     * unsigned inode number's 64 bits as a signed bigint, like `idx.work`.
+     * The inode and change time (nanoseconds) of the file whose bytes
+     * `sha256` describes: one the indexer read itself, starting at least a
+     * second after the file last changed and seeing no change while it ran,
+     * or one fdrive's API published those hashed bytes as, carried along
+     * when fdrive renames the file unchanged. Any later write, rename or
+     * replacement changes one of the two, and no client can set either, so
+     * while a fresh stat still shows both (with `size` and `mtime_ns`) the
+     * digest describes the bytes on disk. Null when neither stands behind the
+     * current digest. `inode` holds the unsigned inode number's 64 bits as a
+     * signed bigint, like `idx.changes`. See docs/INDEXER.md#stamps.
      */
     inode: bigint("inode", { mode: "bigint" }),
     ctimeNs: bigint("ctime_ns", { mode: "bigint" }),
@@ -144,23 +146,6 @@ export const scans = idxSchema.table(
   (table) => [index("scans_root_id_started_at_idx").on(table.rootId, table.startedAt.desc())],
 );
 
-export const moves = idxSchema.table(
-  "moves",
-  {
-    id: bigserial("id", { mode: "number" }).primaryKey(),
-    at: timestamp("at", { withTimezone: true }).defaultNow(),
-    rootId: smallint("root_id")
-      .notNull()
-      .references(() => roots.id),
-    src: text("src"),
-    dst: text("dst"),
-    actor: text("actor"),
-  },
-  // `recentMoves` restricts every scope clause with `root_id = ?`, so the
-  // scope filter has no access path without this index.
-  (table) => [index("moves_root_id_idx").on(table.rootId)],
-);
-
 /**
  * The change journal: one row per change to an indexed root, append-only,
  * its `id` the position consumers read from. A row without `target_path`
@@ -168,10 +153,12 @@ export const moves = idxSchema.table(
  * with it says `path` moved there. `source` says who wrote it: the API and
  * OCR for changes they made, the indexer's watcher and scan for changes made
  * outside fdrive that it applied. An API upload's row carries `sha256`, and
- * `size`, `mtime_ns`, `inode` and `ctime_ns` of the file it was published
- * as, so the indexer need not read it again to hash it while the file still
- * matches all four. A client chooses an upload's modification time but
- * never its inode or change time, so a different file cannot pass for it.
+ * `size`, `mtime_ns`, `inode` and `ctime_ns` of the file exactly as it was
+ * published, so the indexer need not read it again while the file still
+ * matches all four. A file move's row carries those four for the file
+ * exactly as the rename left it, and `previous_ctime_ns`, without a digest.
+ * A client chooses an upload's modification time but never its inode or
+ * change time, so a different file cannot pass for it.
  * `inode` holds the unsigned inode number's 64 bits as a signed bigint.
  * Writers take the journal's advisory lock before inserting, so positions
  * commit in order, and send `NOTIFY idx_changes` with the root's name. See
@@ -192,6 +179,13 @@ export const changes = idxSchema.table(
     mtimeNs: bigint("mtime_ns", { mode: "bigint" }),
     inode: bigint("inode", { mode: "bigint" }),
     ctimeNs: bigint("ctime_ns", { mode: "bigint" }),
+    /**
+     * A file move's: the moved file's change time just before the rename,
+     * when `size`, `mtime_ns`, `inode` and `ctime_ns` describe it right
+     * after. The indexer carries the row's stamp across only when it was
+     * this.
+     */
+    previousCtimeNs: bigint("previous_ctime_ns", { mode: "bigint" }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   // Consumers read a root's rows from a position; the API prunes by age.

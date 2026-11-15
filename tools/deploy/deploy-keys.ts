@@ -40,7 +40,7 @@ export const DEPLOY_EXTRA_KEYS: readonly ConfigKeyDef[] = [
   {
     key: "FDRIVE_FILES_DIR",
     description:
-      "Host folder with every user's files, one folder per username, by default the files folder in FDRIVE_DATA_DIR. Mounted read-write into the api, backup worker and OCR and read-only into the indexer.",
+      "Host folder with every user's files, one folder per username, by default the files folder in FDRIVE_DATA_DIR. Mounted read-write into the api and OCR and read-only into the indexer.",
     default: "./data/files",
     example: "/srv/files",
     secret: false,

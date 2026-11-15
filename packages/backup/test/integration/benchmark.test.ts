@@ -1,27 +1,32 @@
 import { randomBytes, randomUUID } from "node:crypto";
-import { createWriteStream } from "node:fs";
+import { createWriteStream, existsSync } from "node:fs";
 import { mkdir, mkdtemp, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
+import { setTimeout as sleep } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { createDb, migrate } from "@fdrive/db";
 import { startPostgres } from "@fdrive/testkit";
 import { generateIdentity, identityToRecipient } from "age-encryption";
+import type { Pool } from "pg";
 import { afterAll, beforeAll, expect, it } from "vitest";
 import {
+  BACKUP_GATE,
   BackupStore,
   captureSnapshot,
   localBlobs,
   restoreArchive,
-  withBackupWriter,
+  withDatabaseWriter,
 } from "../../src/index.js";
-import { secrets } from "../helpers.js";
 
 /**
  * Publishes measured capture/restore costs for the operator documentation. Numbers are local
- * observations on the test host; the assertions only guard the fixture shapes.
+ * observations on the test host, so the assertions guard the fixture shapes and the checkpoint
+ * contract (docs/BACKUPS.md), never a duration: a request waits only while the capture takes its
+ * database snapshot, so requests run while it reads; a recovery file writer waits for the
+ * capture to publish its archive.
  */
 const MiB = 1024 * 1024;
 let container: Awaited<ReturnType<typeof startPostgres>>;
@@ -54,6 +59,62 @@ async function measure<T>(work: () => Promise<T>) {
     clearInterval(sampler);
   }
 }
+async function gateHeld(pool: Pool, gate: number) {
+  // A single bigint advisory key shows in pg_locks as classid = high 32 bits, objid = low 32 bits.
+  const { rows } = await pool.query<{ held: boolean }>(
+    `select exists (select 1 from pg_locks where locktype = 'advisory' and granted
+       and mode = 'ExclusiveLock' and classid = ($1::bigint >> 32)::oid
+       and objid = ($1::bigint & 4294967295)::oid and objsubid = 1
+       and database = (select oid from pg_database where datname = current_database())) as held`,
+    [gate],
+  );
+  return rows[0]?.held ?? false;
+}
+function settled(capture: Promise<unknown>) {
+  const state = { settled: false };
+  const settle = () => {
+    state.settled = true;
+  };
+  capture.then(settle, settle);
+  return state;
+}
+/**
+ * Mutating requests, one after another for as long as the capture runs. The longest wait is the
+ * pause a request sees; `whileReading` counts the requests that started while the capture held
+ * the recovery files gate and finished before it published.
+ */
+async function requests(pool: Pool, capture: Promise<unknown>, output: string) {
+  const state = settled(capture);
+  let pauseMs = 0;
+  let whileReading = 0;
+  while (!state.settled) {
+    const reading = await gateHeld(pool, BACKUP_GATE);
+    const started = performance.now();
+    const published = await withDatabaseWriter(pool, async () => existsSync(output));
+    pauseMs = Math.max(pauseMs, Math.round(performance.now() - started));
+    if (reading && !published) whileReading++;
+    await sleep(5);
+  }
+  return { pauseMs, whileReading };
+}
+/**
+ * A recovery file writer, as OCR is, asking for the shared recovery files gate as soon as the
+ * capture holds it: its wait is the pause OCR's rewrites see.
+ */
+async function recoveryWriter(pool: Pool, capture: Promise<unknown>, output: string) {
+  const state = settled(capture);
+  while (!state.settled && !(await gateHeld(pool, BACKUP_GATE))) await sleep(5);
+  const client = await pool.connect();
+  try {
+    const started = performance.now();
+    await client.query("select pg_advisory_lock_shared($1)", [BACKUP_GATE]);
+    const pauseMs = Math.round(performance.now() - started);
+    await client.query("select pg_advisory_unlock_shared($1)", [BACKUP_GATE]);
+    return { pauseMs, published: existsSync(output) };
+  } finally {
+    client.release();
+  }
+}
 beforeAll(async () => {
   container = await startPostgres();
   control = createDb(container.connectionString);
@@ -68,7 +129,7 @@ afterAll(async () => {
   if (directory) await rm(directory, { recursive: true, force: true });
 }, 180_000);
 
-it("measures capture, writer pause, spool bytes and fresh restore for small and large fixtures", async () => {
+it("measures capture, request and recovery writer pauses, spool bytes and fresh restore for small and large fixtures", async () => {
   const report: Record<string, Record<string, number>> = {};
   for (const size of ["small", "large"] as const) {
     const db = await fresh();
@@ -98,27 +159,25 @@ it("measures capture, writer pause, spool bytes and fresh restore for small and 
       );
     }
     const output = join(directory, `${size}.fdrive.age`);
-    // A cooperating writer asks for the shared checkpoint lock shortly after capture starts;
-    // its wait is the pause every fdrive-owned recovery writer experiences.
-    let writerPauseMs = 0;
-    const writer = (async () => {
-      await new Promise((resolve) => setTimeout(resolve, 100));
-      const started = performance.now();
-      await withBackupWriter(db.pool, async () => undefined);
-      writerPauseMs = Math.round(performance.now() - started);
-    })();
-    const capture = await measure(() =>
+    const capturing = measure(() =>
       captureSnapshot(
         {
           pool: db.pool,
           masterKey: randomBytes(32).toString("base64"),
           environment: { release: "benchmark" },
-          blobs: async () => ({ sources: await localBlobs(recovery, "desktop"), coverage: [] }),
+          blobs: async () => ({ sources: await localBlobs(recovery, "office"), coverage: [] }),
         },
         { id: randomUUID(), installationId: config.installation_id, recipient, output },
       ),
     );
-    await writer;
+    const [capture, request, writer] = await Promise.all([
+      capturing,
+      requests(db.pool, capturing, output),
+      recoveryWriter(db.pool, capturing, output),
+    ]);
+    expect(writer.published).toBe(true);
+    // Reading 64 MiB takes long enough for requests to run while it does.
+    if (size === "large") expect(request.whileReading).toBeGreaterThan(0);
     const archiveBytes = (await stat(output)).size;
     const target = await fresh();
     const stage = join(directory, `${size}-restore`);
@@ -129,7 +188,6 @@ it("measures capture, writer pause, spool bytes and fresh restore for small and 
         file: output,
         identity,
         stateDirectory: stage,
-        secrets,
         reseal: (bytes) => bytes,
       }),
     );
@@ -139,7 +197,9 @@ it("measures capture, writer pause, spool bytes and fresh restore for small and 
       recoveryBytes,
       encryptedSpoolBytes: archiveBytes,
       captureMs: capture.ms,
-      captureAndWriterPauseMs: writerPauseMs,
+      requestPauseMs: request.pauseMs,
+      requestsWhileReading: request.whileReading,
+      recoveryWriterPauseMs: writer.pauseMs,
       capturePeakRssMiB: Math.round(capture.peakRssBytes / MiB),
       freshRestoreMs: restore.ms,
       restorePeakRssMiB: Math.round(restore.peakRssBytes / MiB),

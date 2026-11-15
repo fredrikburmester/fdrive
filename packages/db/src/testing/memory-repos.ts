@@ -1,6 +1,16 @@
 import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
-import { validateCanonicalUuid } from "../repos/logins-types.js";
+import {
+  type Login,
+  LoginError,
+  type LoginRepo,
+  type NewLocalUser,
+  SETUP_OWNER_KEY,
+  type SetupOwner,
+  validateCanonicalUuid,
+  validateNewLocalUser,
+  validateSignIn,
+} from "../repos/logins-types.js";
 import type {
   Account,
   AccountRepo,
@@ -10,8 +20,6 @@ import type {
   AiChatRepo,
   ApiToken,
   ApiTokenRepo,
-  Credential,
-  CredentialRepo,
   Favorite,
   FavoriteKind,
   FavoriteRepo,
@@ -141,11 +149,24 @@ function createMemoryProviderRepo(
   };
 }
 
-function createMemoryLocalUserRepo(): LocalUserRepo {
+function createMemoryLocalUserRepo(): LocalUserRepo & {
+  /** For the login repo, the only way to create a user. */
+  insert(input: { username: string; passwordHash: string; at: Date }): void;
+} {
   const byName = new Map<string, LocalUser>();
   const key = (username: string) => username.toLowerCase();
 
   return {
+    insert(input) {
+      if (byName.has(key(input.username))) throw new ConflictError("username already exists");
+      byName.set(key(input.username), {
+        username: input.username,
+        passwordHash: input.passwordHash,
+        disabled: false,
+        createdAt: input.at,
+        updatedAt: input.at,
+      });
+    },
     async get(username) {
       return byName.get(key(username)) ?? null;
     },
@@ -156,19 +177,6 @@ function createMemoryLocalUserRepo(): LocalUserRepo {
     },
     async count() {
       return byName.size;
-    },
-    async create(input) {
-      if (byName.has(key(input.username))) throw new ConflictError("username already exists");
-      const now = new Date();
-      const user: LocalUser = {
-        username: input.username,
-        passwordHash: input.passwordHash,
-        disabled: false,
-        createdAt: now,
-        updatedAt: now,
-      };
-      byName.set(key(input.username), user);
-      return user;
     },
     async update(username, patch) {
       const existing = byName.get(key(username));
@@ -245,10 +253,14 @@ function createMemoryLocalGrantRepo(
   };
 }
 
-function createMemoryAccountRepo(ids: () => string): AccountRepo {
+function createMemoryAccountRepo(ids: () => string): AccountRepo & {
+  /** For the login repo: how many accounts exist. */
+  countSync(): number;
+} {
   const byId = new Map<string, Account>();
 
   return {
+    countSync: () => byId.size,
     async create(input) {
       const account: Account = {
         id: ids(),
@@ -274,8 +286,18 @@ function createMemoryAccountRepo(ids: () => string): AccountRepo {
 
 function createMemoryIdentityRepo(ids: () => string): IdentityRepo & {
   countByProviderSync(providerId: string): number;
+  /** The login named `username` in any case, as the database's unique index finds it. */
+  byName(username: string): Identity | null;
 } {
   const byId = new Map<string, Identity>();
+
+  function byName(username: string): Identity | null {
+    const name = username.toLowerCase();
+    for (const identity of byId.values()) {
+      if (identity.externalUsername.toLowerCase() === name) return identity;
+    }
+    return null;
+  }
 
   function findByProviderUsername(providerId: string, username: string): Identity | null {
     for (const identity of byId.values()) {
@@ -290,12 +312,12 @@ function createMemoryIdentityRepo(ids: () => string): IdentityRepo & {
     async findByProviderUsername(providerId, username) {
       return findByProviderUsername(providerId, username);
     },
+    byName,
     async create(input) {
-      const existing = findByProviderUsername(input.providerId, input.externalUsername);
+      // Unique in any case, as the database's index on the login's name is.
+      const existing = byName(input.externalUsername);
       if (existing) {
-        throw new Error(
-          `identity already exists for provider ${input.providerId} and username ${input.externalUsername}`,
-        );
+        throw new Error(`a login named ${input.externalUsername} already exists`);
       }
       // One login per account, as the database's unique constraint enforces.
       if (Array.from(byId.values()).some((identity) => identity.accountId === input.accountId)) {
@@ -332,39 +354,6 @@ function createMemoryIdentityRepo(ids: () => string): IdentityRepo & {
     },
     async listAll() {
       return Array.from(byId.values());
-    },
-  };
-}
-
-function createMemoryCredentialRepo(): CredentialRepo {
-  const byIdentityId = new Map<string, Credential>();
-
-  return {
-    async put(input) {
-      const existing = byIdentityId.get(input.identityId);
-      byIdentityId.set(input.identityId, {
-        identityId: input.identityId,
-        ciphertext: input.ciphertext,
-        keyId: input.keyId,
-        cachedToken: existing?.cachedToken ?? null,
-        cachedTokenExpiresAt: existing?.cachedTokenExpiresAt ?? null,
-        updatedAt: new Date(),
-      });
-    },
-    async get(identityId) {
-      return byIdentityId.get(identityId) ?? null;
-    },
-    async setCachedToken(identityId, token) {
-      const existing = byIdentityId.get(identityId);
-      if (!existing) {
-        return;
-      }
-      byIdentityId.set(identityId, {
-        ...existing,
-        cachedToken: token?.sealed ?? null,
-        cachedTokenExpiresAt: token?.expiresAt ?? null,
-        updatedAt: new Date(),
-      });
     },
   };
 }
@@ -449,7 +438,7 @@ function createMemoryApiTokenRepo(ids: () => string): ApiTokenRepo {
         identityId: input.identityId,
         name: input.name,
         tokenHash: input.tokenHash,
-        ...(input.access === undefined ? {} : { access: structuredClone(input.access) }),
+        access: structuredClone(input.access),
         createdAt: new Date(),
         lastUsedAt: null,
         expiresAt: input.expiresAt,
@@ -1205,6 +1194,184 @@ function createMemoryAiChatRepo(ids: () => string): AiChatRepo {
   };
 }
 
+/**
+ * The login repo over the other memory repos. Each call checks everything
+ * that could refuse it before it writes, and calls run one at a time, so a
+ * refused call leaves nothing behind, as the database's transactions do.
+ */
+function createMemoryLoginRepo(repos: {
+  readonly localUsers: ReturnType<typeof createMemoryLocalUserRepo>;
+  readonly accounts: ReturnType<typeof createMemoryAccountRepo>;
+  readonly identities: ReturnType<typeof createMemoryIdentityRepo>;
+  readonly sessions: SessionRepo;
+  readonly settings: SettingsRepo;
+  readonly apiTokens: ApiTokenRepo;
+}): LoginRepo {
+  /** `identityId`'s login, as the joined query reads it. */
+  async function login(identityId: string): Promise<Login | null> {
+    const identity = await repos.identities.get(identityId);
+    if (identity === null) return null;
+    const account = await repos.accounts.get(identity.accountId);
+    if (account === null) return null;
+    const user = await repos.localUsers.get(identity.externalUsername);
+    return {
+      identityId: identity.id,
+      accountId: identity.accountId,
+      providerId: identity.providerId,
+      username: identity.externalUsername,
+      displayName: account.displayName,
+      isAdmin: account.isAdmin,
+      active: user !== null && user.username === identity.externalUsername && !user.disabled,
+    };
+  }
+
+  let tail: Promise<unknown> = Promise.resolve();
+  function atomic<T>(run: () => Promise<T>): Promise<T> {
+    const next = tail.then(run, run);
+    tail = next.catch(() => undefined);
+    return next;
+  }
+
+  /** The login a removed user of exactly this name left; `ConflictError` when the name is taken. */
+  async function leftLogin(username: string): Promise<Identity | null> {
+    const left = repos.identities.byName(username);
+    if (
+      (await repos.localUsers.get(username)) !== null ||
+      (left !== null && left.externalUsername !== username)
+    )
+      throw new ConflictError("username already exists");
+    return left;
+  }
+
+  async function insertUser(input: NewLocalUser, left: Identity | null): Promise<Identity> {
+    repos.localUsers.insert({
+      username: input.username,
+      passwordHash: input.passwordHash,
+      at: input.at,
+    });
+    if (left !== null) {
+      await repos.accounts.setAdmin(left.accountId, input.isAdmin);
+      return left;
+    }
+    const account = await repos.accounts.create({ displayName: input.username });
+    await repos.accounts.setAdmin(account.id, input.isAdmin);
+    return repos.identities.create({
+      accountId: account.id,
+      providerId: input.providerId,
+      externalUsername: input.username,
+    });
+  }
+
+  /** A fresh install: no owner record, no user, no account and no login. */
+  async function isFresh(): Promise<boolean> {
+    return (
+      (await repos.settings.get(SETUP_OWNER_KEY)) === null &&
+      (await repos.localUsers.count()) === 0 &&
+      repos.accounts.countSync() === 0 &&
+      (await repos.identities.listAll()).length === 0
+    );
+  }
+
+  /** The user (matched in any case), their login and whether their account is an administrator's. */
+  async function userWithLogin(username: string) {
+    const user = await repos.localUsers.get(username);
+    if (user === null) return null;
+    const login = repos.identities.byName(user.username);
+    if (login === null || login.externalUsername !== user.username)
+      throw new LoginError("missing_identity");
+    const isAdmin = (await repos.accounts.get(login.accountId))?.isAdmin === true;
+    return { user, login, isAdmin };
+  }
+
+  async function enabledAdmins(): Promise<number> {
+    let count = 0;
+    for (const user of await repos.localUsers.list()) {
+      const login = repos.identities.byName(user.username);
+      if (user.disabled || login === null || login.externalUsername !== user.username) continue;
+      if ((await repos.accounts.get(login.accountId))?.isAdmin === true) count += 1;
+    }
+    return count;
+  }
+
+  return {
+    get: login,
+    async bySession(idHash, now) {
+      const session = await repos.sessions.getByIdHash(idHash, now);
+      const found = session === null ? null : await login(session.identityId);
+      return session === null || found === null ? null : { session, login: found };
+    },
+    async byToken(tokenHash) {
+      const token = await repos.apiTokens.findByHash(tokenHash);
+      const found = token === null ? null : await login(token.identityId);
+      return token === null || found === null ? null : { token, login: found };
+    },
+    async createUser(input) {
+      validateNewLocalUser(input);
+      return atomic(async () => insertUser(input, await leftLogin(input.username)));
+    },
+    async setup(input) {
+      validateNewLocalUser(input);
+      return atomic(async () => {
+        if (!(await isFresh())) throw new LoginError("setup_claimed");
+        // Always a new account and login, never one left behind.
+        const identity = await insertUser({ ...input, isAdmin: true }, null);
+        const owner: SetupOwner = { state: "complete", accountId: identity.accountId };
+        await repos.settings.set(SETUP_OWNER_KEY, owner);
+        return identity;
+      });
+    },
+    setupOpen: () => atomic(isFresh),
+    updateUser(username, patch) {
+      return atomic(async () => {
+        const found = await userWithLogin(username);
+        if (found === null) return null;
+        const wasAdmin = found.isAdmin && !found.user.disabled;
+        const staysAdmin =
+          (patch.isAdmin ?? found.isAdmin) && !(patch.disabled ?? found.user.disabled);
+        if (wasAdmin && !staysAdmin && (await enabledAdmins()) <= 1)
+          throw new LoginError("last_admin");
+        const user =
+          (await repos.localUsers.update(found.user.username, {
+            ...(patch.passwordHash === undefined ? {} : { passwordHash: patch.passwordHash }),
+            ...(patch.disabled === undefined ? {} : { disabled: patch.disabled }),
+          })) ?? found.user;
+        if (patch.isAdmin !== undefined)
+          await repos.accounts.setAdmin(found.login.accountId, patch.isAdmin);
+        return { user, login: found.login };
+      });
+    },
+    removeUser(username) {
+      return atomic(async () => {
+        const found = await userWithLogin(username);
+        if (found === null) return null;
+        if (found.isAdmin && !found.user.disabled && (await enabledAdmins()) <= 1)
+          throw new LoginError("last_admin");
+        await repos.localUsers.delete(found.user.username);
+        await repos.accounts.setAdmin(found.login.accountId, false);
+        return found.login;
+      });
+    },
+    async signIn(input) {
+      validateSignIn(input);
+      return atomic(async () => {
+        const found = repos.identities.byName(input.username);
+        if (found === null) throw new LoginError("missing_identity");
+        await repos.identities.touchLogin(found.id, input.at);
+        const session = await repos.sessions.create({
+          ...input.session,
+          accountId: found.accountId,
+          identityId: found.id,
+          // Kept as given, so the session's age is the caller's clock, as the
+          // database's transaction writes it.
+          createdAt: input.at,
+          lastSeenAt: input.at,
+        } as Parameters<SessionRepo["create"]>[0]);
+        return { identity: { ...found, lastLoginAt: input.at }, session };
+      });
+    },
+  };
+}
+
 export function createMemoryRepos(opts: CreateMemoryReposOptions = {}): Repos {
   const ids = opts.ids ?? randomUUID;
   const fileTags = createMemoryFileTagRepo();
@@ -1213,6 +1380,10 @@ export function createMemoryRepos(opts: CreateMemoryReposOptions = {}): Repos {
   const identities = createMemoryIdentityRepo(ids);
   const recents = createMemoryRecentRepo();
   const localUsers = createMemoryLocalUserRepo();
+  const accounts = createMemoryAccountRepo(ids);
+  const sessions = createMemorySessionRepo();
+  const settings = createMemorySettingsRepo();
+  const apiTokens = createMemoryApiTokenRepo(ids);
 
   return {
     providers: createMemoryProviderRepo(ids, (providerId) =>
@@ -1220,12 +1391,19 @@ export function createMemoryRepos(opts: CreateMemoryReposOptions = {}): Repos {
     ),
     localUsers,
     localGrants: createMemoryLocalGrantRepo(ids, localUsers),
-    accounts: createMemoryAccountRepo(ids),
+    accounts,
     identities,
-    credentials: createMemoryCredentialRepo(),
-    sessions: createMemorySessionRepo(),
-    settings: createMemorySettingsRepo(),
-    apiTokens: createMemoryApiTokenRepo(ids),
+    logins: createMemoryLoginRepo({
+      localUsers,
+      accounts,
+      identities,
+      sessions,
+      settings,
+      apiTokens,
+    }),
+    sessions,
+    settings,
+    apiTokens,
     tags: createMemoryTagRepo(ids, (tagId) => fileTags.removeTag(tagId)),
     fileTags,
     favorites,

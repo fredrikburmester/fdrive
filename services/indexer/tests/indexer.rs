@@ -82,7 +82,8 @@ fn walk_skips_junk_and_sorts_directories() {
         ("node_modules/x.txt", "x"),
         (".git/config", "x"),
         ("alice/.fdrive-desktop/staging/s.txt", "staged"),
-        ("alice/.fdrive-backups/install/b.tar", "backup"),
+        // Backups no longer go into the files folder; one an old release left is the user's.
+        ("alice/.fdrive-backups/install/b.age", "backup"),
         ("sub/c.txt", "c"),
         ("sub/deeper/d.txt", "d"),
         ("Zed/e.txt", "e"),
@@ -109,6 +110,7 @@ fn walk_skips_junk_and_sorts_directories() {
         vec![
             "A.txt",
             "b.txt",
+            "alice/.fdrive-backups/install/b.age",
             "sub/.fdrive-partial-0123456789abcdef.docx",
             "sub/c.txt",
             "sub/deeper/d.txt",
@@ -1776,8 +1778,6 @@ fn watcher_renames_move_rows_or_delete_on_an_extension_change() {
     assert_eq!(watch_rename(&ctx, "docs", "moved", true), 1);
     assert!(!env.row(&ctx, "renamed.txt").deleted);
     assert!(!env.row(&ctx, "moved/c.txt").deleted);
-    // The move log is MCP's own; the indexer's moves are in the journal and the events.
-    assert_eq!(env.count("idx.moves"), 0);
     assert_eq!(
         env.notified(),
         vec![

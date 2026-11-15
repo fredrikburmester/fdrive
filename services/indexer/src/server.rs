@@ -2,7 +2,6 @@
 //! Response shapes and status codes are the ones `apps/api` parses.
 
 use std::collections::HashMap;
-use std::io;
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Condvar, Mutex, PoisonError};
 use std::time::Duration;
@@ -20,12 +19,11 @@ use crate::events::iso_now;
 use crate::extract::{ContentExtractor, MAX_CONTENT_BYTES, embed_health};
 use crate::failures::FEATURES;
 use crate::features::FeatureConfiguration;
-use crate::fsx;
 use crate::indexer::{RootContext, work_features};
 use crate::jobs::Job;
 use crate::maintenance;
 use crate::names::{NameIndex, NameSearch};
-use crate::paths::{ext_of, reindex_scope};
+use crate::paths::reindex_scope;
 
 /// Wakes a root's loop early, like a set `threading.Event`.
 #[derive(Default)]
@@ -129,16 +127,6 @@ impl IntoResponse for ApiError {
 
 fn fail(status: StatusCode, message: &str) -> ApiError {
     ApiError(status, message.to_owned())
-}
-
-fn io_status(e: &io::Error) -> StatusCode {
-    match e.raw_os_error().map(rustix::io::Errno::from_raw_os_error) {
-        Some(rustix::io::Errno::NOENT) => StatusCode::NOT_FOUND,
-        Some(rustix::io::Errno::NOTDIR | rustix::io::Errno::LOOP) => StatusCode::BAD_REQUEST,
-        Some(rustix::io::Errno::ACCESS | rustix::io::Errno::PERM) => StatusCode::FORBIDDEN,
-        _ if e.kind() == io::ErrorKind::NotFound => StatusCode::NOT_FOUND,
-        _ => StatusCode::SERVICE_UNAVAILABLE,
-    }
 }
 
 async fn blocking<R: Send + 'static>(work: impl FnOnce() -> R + Send + 'static) -> Result<R, ApiError> {
@@ -282,82 +270,6 @@ async fn stats(State(state): State<Shared>) -> Response {
     match result {
         Ok(Ok(body)) => Json(body).into_response(),
         Ok(Err(_)) | Err(_) => error(StatusCode::INTERNAL_SERVER_ERROR, "database unavailable"),
-    }
-}
-
-async fn extract_text(State(state): State<Shared>, body: axum::body::Bytes) -> Response {
-    let payload = match object(&body) {
-        Ok(payload) => payload,
-        Err(response) => return response.into_response(),
-    };
-    let (Some(root), Some(path)) = (
-        payload.get("root").and_then(Value::as_str),
-        payload.get("path").and_then(Value::as_str),
-    ) else {
-        return error(StatusCode::BAD_REQUEST, "root and path are required");
-    };
-    let Some(ctx) = state.context(root).cloned() else {
-        return error(StatusCode::NOT_FOUND, &format!("unknown root: {root}"));
-    };
-    let features = ctx.values();
-    if !features.text_search {
-        return Json(json!({"text": null, "status": "disabled"})).into_response();
-    }
-    let path = path.to_owned();
-    let offset = payload.get("offset").and_then(Value::as_u64).unwrap_or(0) as usize;
-    let max_chars = payload.get("max_chars").and_then(Value::as_u64).map(|v| v as usize);
-    let result = blocking(move || {
-        let parts = if path.is_empty() {
-            Err("invalid path")
-        } else {
-            fsx::path_parts(&if path.starts_with('/') {
-                path.clone()
-            } else {
-                format!("/{path}")
-            })
-        };
-        let parts = match parts {
-            Ok(parts) if !parts.is_empty() => parts,
-            _ => return Err(fail(StatusCode::BAD_REQUEST, "invalid path")),
-        };
-        let opened = fsx::open_file(&ctx.abs_path, &parts).map_err(|e| {
-            let status = io_status(&e);
-            fail(
-                status,
-                if status == StatusCode::NOT_FOUND {
-                    "not found"
-                } else {
-                    "path unavailable"
-                },
-            )
-        })?;
-        let ext = ext_of(crate::paths::basename(&path));
-        if crate::chunking::is_image(&ext) && !features.search_ocr {
-            return Ok(json!({"text": null, "status": "disabled"}));
-        }
-        if !crate::chunking::is_textual(&ext) {
-            return Ok(json!({"text": null, "status": "none"}));
-        }
-        let (text, status) = ctx
-            .extractor()
-            .extract(&opened.path(), &path, &ext, opened.size, features.search_ocr);
-        Ok(match text {
-            None => json!({"text": null, "status": status}),
-            Some(text) => {
-                let total = text.chars().count();
-                let slice: String = text
-                    .chars()
-                    .skip(offset)
-                    .take(max_chars.unwrap_or(usize::MAX))
-                    .collect();
-                json!({"text": slice, "status": status, "total_chars": total})
-            }
-        })
-    })
-    .await;
-    match result {
-        Ok(Ok(body)) => Json(body).into_response(),
-        Ok(Err(response)) | Err(response) => response.into_response(),
     }
 }
 
@@ -642,7 +554,6 @@ pub fn router(state: Shared) -> Router {
         .route("/health", get(health))
         .route("/stats", get(stats))
         .route("/activity", get(activity))
-        .route("/extract", post(extract_text))
         .route("/extract-content", post(extract_content))
         .route("/reindex", post(reindex))
         .route("/index/clear", post(clear))

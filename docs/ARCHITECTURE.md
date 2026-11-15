@@ -31,10 +31,8 @@ Current implementation reference. Unfinished work belongs in [plans](plans/READM
   writers outside fdrive (OCR, rsync, SMB, Syncthing) may change them. fdrive never creates a
   symbolic link and never follows one: storage refuses a path through a link for every caller,
   and the indexer and OCR skip links. The API reaches it
-  through the internal [storage port](STORAGE-PROVIDERS.md), and every login carries
-  capability flags (`ProviderCapabilities`) that decide what the UI offers and the API
-  accepts. Without `FDRIVE_STORAGE_ROOT` the deployment has no storage and setup refuses to
-  complete.
+  through the [storage port](STORAGE.md). `FDRIVE_STORAGE_ROOT` is required. Two installation-wide flags on `/auth/me` say what the UI offers: `trash`
+  (Trash is on) and `index` (the files folder is indexed).
 
 ## Accounts and storage
 
@@ -46,14 +44,16 @@ credentials; MCP tokens cannot retarget these domains.
 The files folder is one row in `app.providers`; an identity is a login on that row, and an
 account has exactly one (`identities.account_id` is unique). A session and an API token act as
 that login (`sessions.identity_id`, `api_tokens.identity_id`), and deleting the login ends
-them. A login's password is also kept
-sealed in `app.credentials`, bound to its identity, so a later sign-in can tell whether it
-changed. The files folder's row comes from the deployment (`deploymentManaged`); administrators
-can only rename it. See [authentication](AUTH.md) and [storage port](STORAGE-PROVIDERS.md).
+them. Every local user has a login of the same name from the moment the user exists, and
+sign-in finds it by name in any case; passwords live only as scrypt hashes in
+`app.local_users`. The files folder's row comes from the deployment; its name is an
+installation setting administrators change on System > General. See
+[authentication](AUTH.md) and [storage](STORAGE.md).
 
 Local users are `app.local_users`: a username unique in any case, a scrypt hash and a disabled
-flag. Setup creates the first one and System > Users the rest; the local module's `admit`
-refuses a disabled user on every request, not only at sign-in. Folders shared between users
+flag. Setup creates the first one and System > Users the rest; a disabled user is refused on
+every request, not only at sign-in, by the one query that resolves the request
+([authentication](AUTH.md#resolving-a-request)). Folders shared between users
 are `app.local_grants` (owner, folder path, grantee, read or write), served by
 `/api/v1/grants`. The grantee's storage shows each at `/Shared with me/<name>` (the folder's
 name, then `<name> (<owner>)` on a clash), confined to the owner's folder; a read-only grant
@@ -62,31 +62,32 @@ shared folders themselves. A move between a user's files and a writable shared f
 rename. Grants follow the owner's moves and deletes made through fdrive, and index scopes
 follow the grants ([scoping](SCOPING.md)). A grant follows its folder into the owner's Trash
 too, whether fdrive or the indexer reports the move (`isMoveIntoTrash`), so it never stays at a
-path a new folder can take; a purge deletes it. Sharing refuses fdrive's own folders
+path a new folder can take; a purge deletes it. Grants and public links follow a move before
+any other path-keyed metadata (`withFollowers`), so a failure in tags or favorites never leaves
+them behind; a Mac write moves them with its receipt. Sharing refuses fdrive's own folders
 (`isReservedPath`, below), and the grantee's storage and index scopes refuse a grant in the
 owner's Trash, in fdrive's Trash layout or in the Mac's `/.fdrive-desktop` (`closedToShares`)
 ([Trash](TRASH.md)).
 
 fdrive keeps its own places inside each user's files, and one rule in `@fdrive/core` names them
 (`isReservedPath`): the Trash folder while Trash is on and the Mac's `/.fdrive-desktop`
-(`reservedFolders`), plus fdrive's Trash layout (`.fdrive-move-v1`) and backup folders
-(`.fdrive-backups`) wherever they lie. Listings, the Mac, search, MCP and AI never show them;
-index queries leave them out in SQL before their limit. The indexer never walks
-`/.fdrive-desktop` or backup folders; it does index the Trash, so moves into and out of it stay
-renames. OCR takes its PDFs from the index and leaves out all of these. Where a consumer differs it says so: links also never reach
+(`reservedFolders`), plus fdrive's Trash layout (`.fdrive-move-v1`) wherever it lies.
+Listings, the Mac, search, MCP and AI never show them; index queries leave them out in SQL
+before their limit. The indexer never walks `/.fdrive-desktop`; it does index the Trash, so
+moves into and out of it stay renames. OCR takes its PDFs from the index and leaves out all of these. Where a consumer differs it says so: links also never reach
 `/Shared with me`.
 
 Metadata uses identity plus canonical virtual path. Application moves and indexer events
 propagate renames; index paths must be translated through the identity's scopes. A path
 or content hash alone never grants another identity access. Public share links are fdrive's
-own: a module whose share strategy is `owned` (the local folder) keeps the share in
-`app.shares` and serves it through the owner's storage, which the share reaches only through
+own: fdrive keeps the share in `app.shares` and serves it through the owner's storage, which
+the share reaches only through
 the identity storage factory, only inside its paths, and only for the operations its scope
-allows. Trash, backup folders, `/Shared with me` and the Mac's `/.fdrive-desktop` (which
+allows. Trash, `/Shared with me` and the Mac's `/.fdrive-desktop` (which
 holds its Trash) are never reachable through a link. A link follows the item it names
 wherever it moves, so it never stays at a path where something new could appear: on every
 route other path-keyed metadata follows, through the Trash and its restores, the Mac's
-metadata recovery and moves the indexer reports. Inside a place no link reaches (Trash, say)
+writes and moves the indexer reports. Inside a place no link reaches (Trash, say)
 it shows not found, and it works again once the item comes back out. Anything in fdrive's
 Trash layout (a `.fdrive-move-v1` segment) stays refused wherever it lies, even after Trash
 is turned off or moved. A move inside a folder shared with someone counts in the owner's
@@ -112,16 +113,16 @@ native receipts, read aggregation and Unknown observations are documented in
 
 ## Index authorization
 
-Use [scoping](SCOPING.md) when touching search, thumbnails, metadata events, Office paths
-or MCP. Trusted configuration and live read authorization are separate requirements. Index
-scopes come from the provider's index root and the login's username, plus one per folder
-shared with it, never from a path a client sends. A login whose root is not indexed keeps
+Use [scoping](SCOPING.md) when touching search, thumbnails, metadata events or MCP. Index
+scopes come from the files folder's index root and the login's username, plus one per folder
+shared with it, computed for each request and never from a path a client sends; an index row
+they map to is the login's to see, with no storage read. A login whose root is not indexed keeps
 ordinary file operations, including explicitly scoped [MCP file tools](MCP.md).
 
 ## Office and recovery
 
-Office uses durable file UUIDs, session-bound tokens, callback verification and explicit
-edit admission. See [Office implementation](OFFICE-DEVELOPMENT.md) and [setup](OFFICE.md).
+Office uses durable file UUIDs keyed by owner and owner's path, session-bound tokens, callback
+verification and explicit edit admission. See [Office implementation](OFFICE-DEVELOPMENT.md) and [setup](OFFICE.md).
 Trash is a storage capability, not application-owned snapshot history; see [Trash](TRASH.md).
 
 ## UI and runtime decisions
@@ -130,7 +131,8 @@ Trash is a storage capability, not application-owned snapshot history; see [Tras
   begins disabled; the ml service and the Office controller expose starting, ready and failed
   states.
 - System pages are installation-wide and independent of the signed-in login, and every page
-  header says so. System > General holds the files folder's name, reachability and Trash.
+  header says so. System > General holds the server address and the files folder's name,
+  health and Trash.
 - The admin sidebar shows live processing activity and percentages only for fixed workloads.
   Lightweight worker snapshots and one shared poll drive it; see [System activity](SYSTEM-ACTIVITY.md).
 - Search combines text/filename and available visual results, with separate failure states.

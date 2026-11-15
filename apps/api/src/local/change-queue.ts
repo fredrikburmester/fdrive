@@ -24,7 +24,10 @@ export interface ChangeQueueDeps {
 }
 
 function toInput(change: IndexChange): ChangeInput {
-  if (change.kind === "moved") return { path: change.path, targetPath: change.target };
+  if (change.kind === "moved")
+    return change.stamp === undefined
+      ? { path: change.path, targetPath: change.target }
+      : { path: change.path, targetPath: change.target, stamp: change.stamp };
   return change.content === undefined
     ? { path: change.path }
     : { path: change.path, content: change.content };

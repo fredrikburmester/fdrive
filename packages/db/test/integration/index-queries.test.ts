@@ -1144,91 +1144,6 @@ describe("index-queries", () => {
     });
   });
 
-  describe("recordMove and recentMoves", () => {
-    it("records a move and reads it back for the matching actor and root", async () => {
-      const rootId = await insertRoot("primary");
-      await queries.recordMove({ rootId, src: "a.txt", dst: "b.txt", actor: "mcp" });
-
-      const results = await queries.recentMoves([{ rootId, fsPrefix: "/" }], "mcp", 10);
-
-      expect(results).toHaveLength(1);
-      expect(results[0]).toMatchObject({ rootId, src: "a.txt", dst: "b.txt", actor: "mcp" });
-    });
-
-    it("excludes moves from a different actor", async () => {
-      const rootId = await insertRoot("primary");
-      await queries.recordMove({ rootId, src: "a.txt", dst: "b.txt", actor: "user" });
-
-      const results = await queries.recentMoves([{ rootId, fsPrefix: "/" }], "mcp", 10);
-
-      expect(results).toEqual([]);
-    });
-
-    it("excludes moves from a root outside the scope prefixes", async () => {
-      const rootId = await insertRoot("primary");
-      const other = await insertRoot("other");
-      await queries.recordMove({ rootId: other, src: "a.txt", dst: "b.txt", actor: "mcp" });
-
-      const results = await queries.recentMoves([{ rootId, fsPrefix: "/" }], "mcp", 10);
-
-      expect(results).toEqual([]);
-    });
-
-    it("returns an empty array for an empty scope", async () => {
-      const rootId = await insertRoot("primary");
-      await queries.recordMove({ rootId, src: "a.txt", dst: "b.txt", actor: "mcp" });
-
-      expect(await queries.recentMoves([], "mcp", 10)).toEqual([]);
-    });
-
-    it("orders moves newest first and respects the limit", async () => {
-      const rootId = await insertRoot("primary");
-      await queries.recordMove({ rootId, src: "1.txt", dst: "1b.txt", actor: "mcp" });
-      await queries.recordMove({ rootId, src: "2.txt", dst: "2b.txt", actor: "mcp" });
-
-      const results = await queries.recentMoves([{ rootId, fsPrefix: "/" }], "mcp", 1);
-
-      expect(results).toHaveLength(1);
-      expect(results[0]?.src).toBe("2.txt");
-    });
-
-    it("filters both move paths by scope before applying the limit", async () => {
-      const rootId = await insertRoot("primary");
-      await queries.recordMove({
-        rootId,
-        src: "alice/old.txt",
-        dst: "alice/current.txt",
-        actor: "mcp",
-      });
-      await queries.recordMove({
-        rootId,
-        src: "bob/old.txt",
-        dst: "bob/current.txt",
-        actor: "mcp",
-      });
-      await queries.recordMove({
-        rootId,
-        src: "alice/old-cross.txt",
-        dst: "bob/current-cross.txt",
-        actor: "mcp",
-      });
-      await queries.recordMove({
-        rootId,
-        src: "bob/old-cross.txt",
-        dst: "alice/current-cross.txt",
-        actor: "mcp",
-      });
-
-      const results = await queries.recentMoves([{ rootId, fsPrefix: "/alice" }], "mcp", 1);
-
-      expect(results).toHaveLength(1);
-      expect(results[0]).toMatchObject({
-        src: "alice/old.txt",
-        dst: "alice/current.txt",
-      });
-    });
-  });
-
   describe("thumbnail", () => {
     it("finds a generated thumbnail by content key and size", async () => {
       await db
@@ -1250,6 +1165,19 @@ describe("index-queries", () => {
 
     it("returns null for an unknown content key", async () => {
       expect(await queries.thumbnail("unknown", 256)).toBeNull();
+    });
+
+    it("tells which of many content keys have a thumbnail of one size, in one query", async () => {
+      await db.insert(schema.thumbnails).values([
+        { contentKey: "sha-a", size: 256, storagePath: "a.256.webp" },
+        { contentKey: "sha-b", size: 1024, storagePath: "b.1024.webp" },
+        { contentKey: "sha-c", size: 256, storagePath: "c.256.webp" },
+      ]);
+
+      expect(await queries.thumbnailKeys(["sha-a", "sha-b", "sha-c", "unknown"], 256)).toEqual(
+        new Set(["sha-a", "sha-c"]),
+      );
+      expect(await queries.thumbnailKeys([], 256)).toEqual(new Set());
     });
   });
 
@@ -1566,27 +1494,6 @@ describe("index-queries", () => {
       ]);
       const results = await queries.similar(target.id, scope, 1, { exclude: trash(rootId) });
       expect(results.map((r) => r.fileId)).toEqual([live.id]);
-    });
-
-    it("recentMoves: a move into or out of Trash never takes a place", async () => {
-      const rootId = await insertRoot("primary");
-      await queries.recordMove({ rootId, src: "alice/a.md", dst: "alice/b.md", actor: "mcp" });
-      await queries.recordMove({
-        rootId,
-        src: "alice/c.md",
-        dst: "alice/.trash/c.md",
-        actor: "mcp",
-      });
-      await queries.recordMove({
-        rootId,
-        src: "alice/.trash/d.md",
-        dst: "alice/d.md",
-        actor: "mcp",
-      });
-      const scope = [{ rootId, fsPrefix: "/" }];
-
-      const results = await queries.recentMoves(scope, "mcp", 1, { exclude: trash(rootId) });
-      expect(results.map((move) => [move.src, move.dst])).toEqual([["alice/a.md", "alice/b.md"]]);
     });
   });
 

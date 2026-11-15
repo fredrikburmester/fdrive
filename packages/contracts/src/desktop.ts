@@ -1,41 +1,7 @@
 import { z } from "zod";
-import { CanonicalUuid } from "./canonical-uuid.ts";
 
 export const DESKTOP_API = "/api/v1/desktop";
 export const DESKTOP_PROTOCOL_VERSION = 1;
-/** Administrator-only bounded queue view. No file payloads or credentials. */
-export const DesktopRecoveryResponse = z.object({
-  pending: z
-    .array(
-      z.object({
-        identityId: CanonicalUuid,
-        operationId: CanonicalUuid,
-        attempts: z.number().int().nonnegative(),
-        lastError: z.string().nullable(),
-        createdAt: z.iso.datetime(),
-        nextAttemptAt: z.iso.datetime(),
-      }),
-    )
-    .max(100),
-  /** Commits without a receipt. `stalled` means the commit stopped reporting progress. */
-  uncertain: z
-    .array(
-      z.object({
-        identityId: CanonicalUuid,
-        operationId: CanonicalUuid,
-        state: z.enum(["committing", "uncertain"]),
-        stalled: z.boolean(),
-        kind: z.enum(["upload", "folder", "move"]),
-        name: z.string(),
-        updatedAt: z.iso.datetime(),
-      }),
-    )
-    .max(100),
-});
-/** The administrator inspected storage: the publication happened, or it did not. */
-export const DesktopRecoveryResolution = z.strictObject({
-  outcome: z.enum(["published", "discarded"]),
-});
 export const DesktopPath = z
   .string()
   .min(1)

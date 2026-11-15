@@ -5,22 +5,15 @@ import { join } from "node:path";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { createGunzip } from "node:zlib";
-import { Decrypter, Encrypter, identityToRecipient } from "age-encryption";
+import { Decrypter } from "age-encryption";
 import type { Pool } from "pg";
 import tar from "tar-stream";
 import { z } from "zod";
 import { HeaderSchema, ManifestSchema } from "./format.js";
 import { DURABLE_TABLES, quoteIdentifier, quoteTable } from "./registry.js";
 import { describeSchema, migrationHashes, schemaFingerprint } from "./snapshot.js";
-import {
-  digest,
-  fileStream,
-  ignoreCleanupError,
-  limitBytes,
-  readBounded,
-  syncFile,
-} from "./streams.js";
-import type { BlobRecord, Column, SecretCodec, SnapshotHeader, SnapshotManifest } from "./types.js";
+import { fileStream, ignoreCleanupError, limitBytes, readBounded, syncFile } from "./streams.js";
+import type { Column, SnapshotHeader, SnapshotManifest } from "./types.js";
 
 export interface Inspection {
   header: SnapshotHeader;
@@ -150,7 +143,6 @@ export interface RestoreOptions {
   identity: string;
   stateDirectory: string;
   reseal(bytes: Uint8Array, context: string, sourceMaster: string): Uint8Array;
-  secrets: SecretCodec;
 }
 /** Target must be a freshly migrated, unused database. Cutover is an operator action. */
 export async function restoreArchive(options: RestoreOptions): Promise<Inspection> {
@@ -186,29 +178,13 @@ export async function restoreArchive(options: RestoreOptions): Promise<Inspectio
       async row(table, columns, values) {
         const row = [...values];
         const position = (name: string) => columns.findIndex((column) => column.name === name);
-        if (
-          ["app.credentials", "app.backup_destinations", "app.backup_attachments"].includes(table)
-        ) {
-          const field = table === "app.credentials" ? "ciphertext" : "secret";
-          const index = position(field);
-          const id =
-            row[
-              position(
-                table === "app.credentials"
-                  ? "identity_id"
-                  : table === "app.backup_attachments"
-                    ? "version_id"
-                    : "id",
-              )
-            ];
+        if (table === "app.backup_destinations") {
+          const index = position("secret");
+          const id = row[position("id")];
           if (index < 0 || !id || !row[index]?.startsWith("\\x"))
-            throw Error("Invalid encrypted credential in backup");
-          const context =
-            table === "app.credentials"
-              ? id
-              : `${table === "app.backup_destinations" ? "backup-destination" : "backup-attachment"}:${id}`;
+            throw Error("Invalid encrypted secret in backup");
           row[index] =
-            `\\x${Buffer.from(options.reseal(Buffer.from(row[index].slice(2), "hex"), context, inspected.header.masterKey)).toString("hex")}`;
+            `\\x${Buffer.from(options.reseal(Buffer.from(row[index].slice(2), "hex"), `backup-destination:${id}`, inspected.header.masterKey)).toString("hex")}`;
         }
         const indices = columns
           .map((column, index) => ({ column, index }))
@@ -218,46 +194,11 @@ export async function restoreArchive(options: RestoreOptions): Promise<Inspectio
           indices.map(({ index }) => row[index]),
         );
       },
+      // The first pass proved every blob entry is one the manifest lists.
       async blob(entry, stream) {
-        const record = inspected.manifest.blobs.find((blob) => blob.entry === entry);
-        if (!record) throw Error("Unexpected backup blob");
-        if (record.kind === "attachment") {
-          const attachment = (
-            await client.query<{ secret: Buffer; sha256: string; bytes: string }>(
-              "select secret,sha256,bytes from app.backup_attachments where version_id=$1",
-              [record.path],
-            )
-          ).rows[0];
-          if (
-            !attachment ||
-            attachment.sha256 !== record.sha256 ||
-            attachment.bytes !== String(record.size)
-          )
-            throw Error("Attachment reference does not match captured bytes");
-          const key = Buffer.from(
-            options.secrets.open(attachment.secret, `backup-attachment:${record.path}`),
-          ).toString();
-          const encrypt = new Encrypter();
-          encrypt.addRecipient(await identityToRecipient(key));
-          await mkdir(join(stage, "attachments"), { recursive: true, mode: 0o700 });
-          await pipeline(
-            Readable.fromWeb(
-              await encrypt.encrypt(Readable.toWeb(stream) as ReadableStream<Uint8Array>),
-            ),
-            createWriteStream(join(stage, "attachments", `${record.path}.age`), {
-              flags: "wx",
-              mode: 0o600,
-            }),
-          );
-          await syncFile(join(stage, "attachments", `${record.path}.age`));
-          await syncFile(join(stage, "attachments"));
-        } else {
-          await pipeline(
-            stream,
-            createWriteStream(join(stage, entry.replace("/", "-")), { flags: "wx", mode: 0o600 }),
-          );
-          await syncFile(join(stage, entry.replace("/", "-")));
-        }
+        const file = join(stage, entry.replace("/", "-"));
+        await pipeline(stream, createWriteStream(file, { flags: "wx", mode: 0o600 }));
+        await syncFile(file);
       },
     });
     await client.query("delete from app.api_tokens");
@@ -287,12 +228,6 @@ export async function restoreArchive(options: RestoreOptions): Promise<Inspectio
     await client.query("update app.backup_destinations set enabled = false, tested_at = null");
     await client.query(
       "update app.backup_runs set artifact = null, state = case when state in ('queued','capturing','transferring') then 'cancelled' else state end",
-    );
-    await client.query(
-      "update app.desktop_effects set state = 'quarantined' where state = 'pending'",
-    );
-    await client.query(
-      "update app.desktop_operations set state = 'uncertain' where state in ('receiving','uploading','ready','committing')",
     );
     await client.query(
       "insert into app.settings(key, value) values ('backup.restore.v1', $1::jsonb) on conflict(key) do update set value = excluded.value",
@@ -334,37 +269,5 @@ export async function restoreArchive(options: RestoreOptions): Promise<Inspectio
     throw error;
   } finally {
     client.release();
-  }
-}
-export async function extractAttachment(
-  file: string,
-  identity: string,
-  record: BlobRecord,
-  output: string,
-): Promise<void> {
-  await inspectArchive(file, identity);
-  let created = false;
-  try {
-    let found = false;
-    await inspectArchive(file, identity, {
-      async blob(entry, stream) {
-        if (entry === record.entry) {
-          found = true;
-          const { open } = await import("node:fs/promises");
-          const file = await open(output, "wx", 0o600);
-          created = true;
-          await pipeline(stream, file.createWriteStream());
-        } else
-          for await (const _chunk of stream) {
-            /* drain */
-          }
-      },
-    });
-    if (!found) throw Error("Attachment not found");
-    const result = await digest(fileStream(output));
-    if (result.sha256 !== record.sha256) throw Error("Attachment integrity check failed");
-  } catch (error) {
-    if (created) await rm(output, { force: true });
-    throw error;
   }
 }

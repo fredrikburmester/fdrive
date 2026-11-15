@@ -1,7 +1,9 @@
 import { randomUUID } from "node:crypto";
 import {
   ActivityConflict,
+  type ActivityEventRecord,
   type ActivityFinish,
+  type ActivityListOptions,
   type ActivityOperationInput,
   type ActivityRepo,
 } from "@fdrive/db";
@@ -16,6 +18,20 @@ export function activityFixture(clock: () => Date) {
     action: ActivityOperationInput["action"];
   })[] = [];
   const pending: string[] = [];
+  /** Each finished operation's event, newest last, with the fields `list` filters and returns. */
+  const events: Pick<
+    ActivityEventRecord,
+    | "id"
+    | "ownerAccountId"
+    | "identityId"
+    | "action"
+    | "source"
+    | "outcome"
+    | "before"
+    | "after"
+    | "occurredAt"
+    | "sortAt"
+  >[] = [];
   const repo = {
     async begin(input: ActivityOperationInput) {
       const prior = operations.find(
@@ -46,7 +62,35 @@ export function activityFixture(clock: () => Date) {
       if (!row) throw new Error("Operation missing");
       outcomes.push({ ...result, operationId: id, action: row.action });
       row.state = result.outcome === "success" ? "completed" : result.outcome;
-      return { id: randomUUID() };
+      const at = result.at ?? clock();
+      const event = {
+        id: randomUUID(),
+        ownerAccountId: accountId,
+        identityId: row.identityId,
+        action: row.action,
+        source: row.source,
+        outcome: result.outcome,
+        before: result.before ?? row.before ?? row.requested,
+        after: result.after ?? null,
+        occurredAt: at,
+        sortAt: at,
+      };
+      events.push(event);
+      return { id: event.id };
+    },
+    /** Newest first, with the filters MCP's `recent_moves` uses. */
+    async list(accountId: string, options: ActivityListOptions = {}) {
+      return events
+        .filter(
+          (event) =>
+            event.ownerAccountId === accountId &&
+            (options.identityId === undefined || event.identityId === options.identityId) &&
+            (options.action === undefined || event.action === options.action) &&
+            (options.source === undefined || event.source === options.source) &&
+            (options.outcome === undefined || event.outcome === options.outcome),
+        )
+        .reverse()
+        .slice(0, Math.min(options.limit ?? 50, 100));
     },
     async withPathLock<T>(_identityId: string, _path: string, work: () => Promise<T>) {
       return work();

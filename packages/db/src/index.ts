@@ -12,6 +12,7 @@ export * from "./parse-database-url.js";
 export { type ActivityRepo, appendActivityOutcome, createActivityRepo } from "./repos/activity.js";
 export { type ActivityExportsRepo, createActivityExportsRepo } from "./repos/activity-exports.js";
 export { activityMetadataUnchanged, captureActivityMetadata } from "./repos/activity-metadata.js";
+export type { NativeActivityFacts } from "./repos/activity-native.js";
 export {
   type ActivityObservationsRepo,
   createActivityObservationsRepo,
@@ -31,33 +32,23 @@ export {
   type ChangeContent,
   type ChangeInput,
   type ChangeJournal,
+  type ChangeMovedStamp,
   type ChangePage,
   type ChangeSource,
+  type ChangeStamp,
   type ChangeWriter,
   createChangeJournal,
   createChangeWriter,
 } from "./repos/changes.js";
 export {
   createDesktopRepo,
+  type DesktopAccessMove,
   type DesktopItemRecord,
   type DesktopOperationRecord,
   type DesktopRepo,
   type DesktopRetention,
+  type DesktopShareMove,
 } from "./repos/desktop.js";
-export { createDesktopEffectsRepo } from "./repos/desktop-effects.js";
-export type {
-  DesktopEffectContext,
-  DesktopEffectEvent,
-  DesktopEffectStatus,
-  DesktopEffectsRepo,
-  DesktopShareMove,
-} from "./repos/desktop-effects-types.js";
-export {
-  createDesktopPublishLock,
-  DesktopPublishBusyError,
-  type DesktopPublishLock,
-  type DesktopPublishLockOptions,
-} from "./repos/desktop-publish-lock.js";
 export { createFilesFolderFacts, createRepos } from "./repos/drizzle.js";
 export type {
   ContentHit,
@@ -78,7 +69,6 @@ export type {
   IndexQueries,
   IndexRef,
   IndexStats,
-  MoveRecord,
   RecencyDecay,
   ScopeClause,
   ScopedReadOptions,
@@ -90,21 +80,24 @@ export {
   escapeLikePattern,
   toScopeClauses,
 } from "./repos/index-queries.js";
-export { createLoginRepo } from "./repos/logins.js";
 export type {
+  LocalUserUpdate,
+  Login,
   LoginErrorCode,
   LoginRepo,
   LoginSessionInput,
-  LoginVerifiedInput,
-  LoginVerifiedResult,
-  SealedIdentityCredential,
+  NewLocalUser,
+  SetupOwner,
+  SignInInput,
+  SignInResult,
 } from "./repos/logins-types.js";
 export {
   LoginError,
+  SETUP_OWNER_KEY,
   validateCanonicalUuid,
-  validateLoginVerified,
-  validateSealedIdentityCredential,
+  validateNewLocalUser,
   validateSessionIdHash,
+  validateSignIn,
 } from "./repos/logins-types.js";
 export { createOfficeFileRepo } from "./repos/office-files.js";
 export type {
@@ -118,7 +111,7 @@ export type {
 export { createMemoryOfficeFileRepo } from "./repos/office-files-state.js";
 export type { OfficeWriteContext, OfficeWriteScope } from "./repos/office-write-scope.js";
 export { createOfficeWriteScope } from "./repos/office-write-scope.js";
-export { createShareRepo, deleteSharePrefix, moveSharePrefix } from "./repos/shares.js";
+export { createShareRepo } from "./repos/shares.js";
 export type {
   MemoryShareOptions,
   ShareInsertInput,
@@ -153,8 +146,6 @@ export type {
   AiChatSharing,
   ApiToken,
   ApiTokenRepo,
-  Credential,
-  CredentialRepo,
   Favorite,
   FavoriteKind,
   FavoriteRepo,

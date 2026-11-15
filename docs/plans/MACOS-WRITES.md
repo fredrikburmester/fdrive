@@ -5,25 +5,20 @@ Full beta qualification of Mac writes remains open. Current behavior:
 
 ## Safety boundary
 
-Mac writes use fdrive's optimistic contract: a per-identity publish lock and a content proof
-inside it, with no fence at the storage against writers outside fdrive.
+Mac writes use fdrive's optimistic contract: the file stamp proves the destination right before
+the rename that publishes, with no lock and no fence at the storage against other writers.
 
-Keep explicit v2 write grants, staged uploads, durable server receipts and native pending
-copies. Never blindly replay a publication whose outcome is unknown. No claim of exactly-once
-behavior across HTTP, filesystem and PostgreSQL. A server item ID cannot prove every unobserved
-external delete/recreate, particularly with identical bytes.
+Keep explicit v2 write grants, uploads staged in the files folder, durable server receipts and
+native pending copies. A commit records what it publishes before publishing it, so its outcome is
+always read from disk and never replayed blindly. No claim of exactly-once behavior across HTTP,
+filesystem and PostgreSQL. A server item ID cannot prove every unobserved external
+delete/recreate, particularly with identical bytes.
 
 ## Implementation still required
 
-- **Retention and recovery administration** is not to be built out. Groups 24 and 25 of
-  [SFTPGo leftovers](SFTPGO-LEFTOVERS.md) remove what it would administer: conflicts come from
-  the file stamp, uploads stage inside the files folder so a commit can always tell whether it
-  happened, and the publish lock, `previous` copies, 30-day retention, the 64 GiB reservation,
-  the `uncertain` state and the admin recovery endpoints go.
 - **Deployment qualification.** Inventory every writer before enabling native writes. Keep
   configuration, logs, databases, backups and temporary directories outside user homes.
   Qualify restart, upgrade and rollback against disposable data before production use.
-  Server spool must be persistent and shared or durably routed in multi-process API setups.
 
 ## Product and release qualification
 

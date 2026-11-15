@@ -110,7 +110,6 @@ function fixture() {
     identityId,
     fileId,
     previousRevisionId: null,
-    providerVersion: null,
     size: 1,
     sha256: null,
   };

@@ -1,5 +1,4 @@
 import {
-  isBackupPath,
   joinPath,
   normalizePath,
   parseRangeHeader,
@@ -25,9 +24,9 @@ export function isUnder(path: string, root: string): boolean {
 }
 
 /**
- * The folders no link may reach besides backup folders, all canonical:
- * fdrive's own (`reservedFolders`: the owner's Trash while it is on and the
- * Mac's own bookkeeping, which holds its Trash), and, unlike a share between
+ * The folders no link may reach, all canonical: fdrive's own
+ * (`reservedFolders`: the owner's Trash while it is on and the Mac's own
+ * bookkeeping, which holds its Trash), and, unlike a share between
  * users, the folder that holds what other users share with the owner, which
  * is theirs to share. The last only exists while something is shared, but a
  * link never needs it, so it is kept out always.
@@ -37,13 +36,13 @@ export function restrictedRoots(trashPath: string | null): string[] {
 }
 
 /**
- * True when no link may reach canonical `path`: a backup folder, or what no
- * share between users reaches either (`closedToShares`): inside one of
- * `restricted`, or anywhere in fdrive's Trash layout, which a link follows
- * its item into and which stays refused after Trash is turned off or moved.
+ * True when no link may reach canonical `path`: what no share between users
+ * reaches either (`closedToShares`): inside one of `restricted`, or anywhere
+ * in fdrive's Trash layout, which a link follows its item into and which
+ * stays refused after Trash is turned off or moved.
  */
 export function hiddenFromLinks(path: string, restricted: readonly string[]): boolean {
-  return isBackupPath(path) || closedToShares(path, restricted);
+  return closedToShares(path, restricted);
 }
 
 /**

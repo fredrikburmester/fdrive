@@ -12,9 +12,9 @@ export interface ShareMovesDeps {
   /**
    * Where a login's path lies in its owner's files (`LocalGrantService.ownerPath`):
    * a path in a folder shared with the login belongs to that folder's owner.
-   * `null` when nobody here owns it. Without it every path is the login's own.
+   * Without it every path is the login's own.
    */
-  readonly ownerPath?: (identityId: string, path: string) => Promise<OwnedPath | null>;
+  readonly ownerPath?: (identityId: string, path: string) => Promise<OwnedPath>;
 }
 
 export interface ShareMoves extends PathFollower {
@@ -33,7 +33,7 @@ export interface ShareMoves extends PathFollower {
  * shared. So a link follows every move of what it names, or of a folder
  * above it, through the hooks every other path-keyed record follows (fdrive's
  * own moves, MCP and the AI, Office renames, Trash and its restores, moves
- * the indexer reports) and through the Mac's metadata recovery (`resolve`).
+ * the indexer reports) and with the receipt of each Mac write (`resolve`).
  *
  * That includes moves to where no link may reach: into the Trash, the Mac's
  * Trash, a backup folder or `Shared with me`. The public routes refuse those
@@ -56,9 +56,9 @@ export function createShareMoves(deps: ShareMovesDeps): ShareMoves {
   async function resolve(identityId: string, from: string, to: string) {
     if (from === to) return null;
     const source = await ownerPath(identityId, from);
-    if (source === null || source.path === "/") return null;
+    if (source.path === "/") return null;
     const target = await ownerPath(identityId, to);
-    if (target?.identityId === source.identityId)
+    if (target.identityId === source.identityId)
       return target.path === source.path || target.path === "/"
         ? null
         : { identityId: source.identityId, from: source.path, to: target.path };
@@ -76,8 +76,7 @@ export function createShareMoves(deps: ShareMovesDeps): ShareMoves {
 
   async function drop(identityId: string, path: string, isDir: boolean) {
     const owned = await ownerPath(identityId, path);
-    if (owned !== null && owned.path !== "/")
-      await deps.shares.deletePrefix(owned.identityId, owned.path, isDir);
+    if (owned.path !== "/") await deps.shares.deletePrefix(owned.identityId, owned.path, isDir);
   }
 
   return { resolve, onMoved: follow, onDeleted: drop };

@@ -34,7 +34,6 @@ function reasonForStorageErrorKind(kind: StorageErrorKind): ReadAuthorizeReason 
     case "not_found":
       return "missing";
     case "forbidden":
-    case "unauthorized":
       return "denied";
     default:
       return "unavailable";
