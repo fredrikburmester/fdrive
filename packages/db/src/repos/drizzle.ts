@@ -12,6 +12,7 @@ import {
   localUsers,
   providers,
   recents,
+  savedSearches,
   sessions,
   settings,
   tags,
@@ -49,6 +50,8 @@ import type {
   Recent,
   RecentRepo,
   Repos,
+  SavedSearch,
+  SavedSearchRepo,
   Session,
   SessionRepo,
   SettingsRepo,
@@ -481,6 +484,37 @@ function createTagRepo(db: Db): TagRepo {
     },
     async delete(id, accountId) {
       await db.delete(tags).where(and(eq(tags.id, id), eq(tags.accountId, accountId)));
+    },
+  };
+}
+
+function toSavedSearch(row: typeof savedSearches.$inferSelect): SavedSearch {
+  const type = row.type as SavedSearch["type"];
+  return { id: row.id, name: row.name, query: row.query, type, folder: row.folder };
+}
+
+function createSavedSearchRepo(db: Db): SavedSearchRepo {
+  return {
+    async list(accountId) {
+      const rows = await db
+        .select()
+        .from(savedSearches)
+        .where(eq(savedSearches.accountId, accountId))
+        .orderBy(asc(savedSearches.createdAt), asc(savedSearches.id));
+      return rows.map(toSavedSearch);
+    },
+    async create(accountId, input) {
+      const [row] = await db
+        .insert(savedSearches)
+        .values({ accountId, ...input })
+        .returning();
+      if (!row) throw new Error("savedSearches.create: insert returned no row");
+      return toSavedSearch(row);
+    },
+    async delete(id, accountId) {
+      await db
+        .delete(savedSearches)
+        .where(and(eq(savedSearches.id, id), eq(savedSearches.accountId, accountId)));
     },
   };
 }
@@ -1088,6 +1122,7 @@ export function createRepos(db: Db): Repos {
     favorites: createFavoriteRepo(db),
     folderViews: createFolderViewRepo(db),
     recents: createRecentRepo(db),
+    savedSearches: createSavedSearchRepo(db),
     metadataPaths: createMetadataPathRepo(db),
     systemEvents: createSystemEventRepo(db),
     aiChats: createAiChatRepo(db),

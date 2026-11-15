@@ -27,7 +27,8 @@ export interface XhrLike {
 
 export interface UploadWithProgressOptions {
   readonly url: string;
-  readonly file: File;
+  /** A file, or one piece of it. */
+  readonly file: Blob;
   readonly headers?: Readonly<Record<string, string>>;
   readonly onProgress?: (loaded: number, total: number) => void;
   readonly signal?: AbortSignal;

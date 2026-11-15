@@ -156,6 +156,30 @@ describe("local storage changes", () => {
     });
   });
 
+  it("reports an upload sent in pieces once, with the digest of the whole file", async () => {
+    const files = storage();
+    const piece = (offset: number, final = false) => ({
+      part: { id: "0123456789abcdef", offset, final },
+    });
+    await files.upload("/a.txt", bytes("hello "), piece(0));
+    expect(changes).toEqual([]);
+    await files.upload("/a.txt", streamOf(["world"]), piece(6, true));
+    const a = await stat(join(home(), "a.txt"), { bigint: true });
+    expect(changes).toEqual([
+      {
+        kind: "changed",
+        path: join(home(), "a.txt"),
+        content: {
+          sha256: sha256("hello world"),
+          size: 11,
+          mtimeNs: a.mtimeNs,
+          ino: a.ino,
+          ctimeNs: a.ctimeNs,
+        },
+      },
+    ]);
+  });
+
   it("reports nothing for an upload that did not publish", async () => {
     const files = storage();
     expect(await kindOf(files.upload("/a.txt", streamOf(["x"], new Error("cut off"))))).not.toBe(

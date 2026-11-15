@@ -205,6 +205,14 @@ export interface StorageProvider {
        */
       durable?: boolean;
       signal?: AbortSignal;
+      /**
+       * One piece of a file sent in several calls, in order: the body goes into
+       * the upload's part `id` (16 lowercase hex digits) at `offset`, and only
+       * the call marked `final` publishes the part at `path`. Whatever the part
+       * holds past `offset` is cut off first, so a failed call can be repeated.
+       * `contentLength` is then the body's own length.
+       */
+      part?: { id: string; offset: number; final: boolean };
     },
   ): Promise<void>;
 
