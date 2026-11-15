@@ -184,7 +184,6 @@ function feed(overrides: Partial<DesktopChangesDeps> = {}) {
     rootIds: async () => roots,
     scopes: async () => verified,
     journaledRoots: new Set(["files"]),
-    trashPathForStorage: () => "/.trash",
     ...overrides,
   });
   return {

@@ -46,8 +46,6 @@ export interface VirtualFileListingProps {
   readonly hideMoveCopy?: boolean | undefined;
   readonly hideArchive?: boolean | undefined;
   readonly showReveal?: boolean | undefined;
-  /** Whether deletes go to Trash, for every row's context menu. */
-  readonly trash?: boolean | undefined;
   /** The folders others share with the active login, for every row's context menu. */
   readonly received?: readonly ReceivedGrant[] | undefined;
 }
@@ -69,7 +67,6 @@ export function VirtualFileListing({
   hideMoveCopy = false,
   hideArchive = false,
   showReveal = false,
-  trash = false,
   received = EMPTY_RECEIVED,
 }: VirtualFileListingProps) {
   const [viewMode] = useDefaultView();
@@ -184,7 +181,6 @@ export function VirtualFileListing({
     hideMoveCopy,
     hideArchive,
     showReveal,
-    trash,
     received,
   };
 

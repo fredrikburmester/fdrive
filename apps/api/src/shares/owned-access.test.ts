@@ -46,7 +46,6 @@ function build(
       maxDownloads: 0,
       ...view,
     },
-    restricted: ["/.trash"],
     consume,
     zip: { limits: DEFAULT_SHARE_ZIP_LIMITS, acquire },
   });

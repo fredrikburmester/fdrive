@@ -15,7 +15,6 @@ export function makeMe(overrides: Partial<MeResponse> = {}): MeResponse {
     identity: makeIdentity(),
     isAdmin: false,
     storageName: "Main",
-    trash: false,
     index: true,
     ...overrides,
   };

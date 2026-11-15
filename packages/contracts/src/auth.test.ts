@@ -57,7 +57,6 @@ describe("MeResponse", () => {
     },
     isAdmin: false,
     storageName: "Home",
-    trash: true,
     index: false,
   };
 
@@ -66,7 +65,7 @@ describe("MeResponse", () => {
   });
 
   it("rejects a missing isAdmin, storage name or installation flag", () => {
-    for (const key of ["isAdmin", "storageName", "trash", "index"] as const) {
+    for (const key of ["isAdmin", "storageName", "index"] as const) {
       const { [key]: _drop, ...rest } = valid;
       expect(MeResponse.safeParse(rest).success, key).toBe(false);
     }

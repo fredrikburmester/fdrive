@@ -16,9 +16,9 @@ async function createFolder(page: Page, name: string): Promise<void> {
 
 async function deleteEntry(page: Page, name: string): Promise<void> {
   await listing(page).getByText(name, { exact: true }).click({ button: "right" });
-  await page.getByRole("menuitem", { name: "Delete" }).click();
+  await page.getByRole("menuitem", { name: "Move to Trash" }).click();
   const confirmDialog = page.getByRole("alertdialog");
-  await confirmDialog.getByRole("button", { name: "Delete" }).click();
+  await confirmDialog.getByRole("button", { name: "Move to Trash" }).click();
   await expect(confirmDialog).toBeHidden();
 }
 
@@ -63,13 +63,13 @@ test("deleting a folder via the context menu asks for confirmation, then removes
   await expect(listing(page).getByText(name, { exact: true })).toBeVisible();
 
   await listing(page).getByText(name, { exact: true }).click({ button: "right" });
-  await page.getByRole("menuitem", { name: "Delete" }).click();
+  await page.getByRole("menuitem", { name: "Move to Trash" }).click();
 
   const confirmDialog = page.getByRole("alertdialog");
   await expect(confirmDialog).toBeVisible();
   await expect(confirmDialog).toContainText(name);
 
-  await confirmDialog.getByRole("button", { name: "Delete" }).click();
+  await confirmDialog.getByRole("button", { name: "Move to Trash" }).click();
 
   await expect(listing(page).getByText(name, { exact: true })).toBeHidden();
   await removeSandbox(page, sandbox);

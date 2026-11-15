@@ -22,7 +22,6 @@ const ME: MeResponse = {
   },
   isAdmin: true,
   storageName: "x",
-  trash: false,
   index: false,
 };
 

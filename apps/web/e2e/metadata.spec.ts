@@ -68,8 +68,8 @@ test("tagging a file from the context menu shows a dot, and the tag page lists i
   // Cleanup: delete the file, then its folder.
   await page.goto(`/files/${sandbox}`);
   await listing(page).getByText(fileName, { exact: true }).click({ button: "right" });
-  await page.getByRole("menuitem", { name: "Delete" }).click();
-  await page.getByRole("alertdialog").getByRole("button", { name: "Delete" }).click();
+  await page.getByRole("menuitem", { name: "Move to Trash" }).click();
+  await page.getByRole("alertdialog").getByRole("button", { name: "Move to Trash" }).click();
   await expect(listing(page).getByText(fileName, { exact: true })).toHaveCount(0);
   await removeSandbox(page, sandbox);
 });
@@ -91,8 +91,8 @@ test("favoriting a file from the context menu shows it in the sidebar, and remov
   await expect(sidebar(page).getByRole("link", { name: fileName })).toBeHidden();
 
   await listing(page).getByText(fileName, { exact: true }).click({ button: "right" });
-  await page.getByRole("menuitem", { name: "Delete" }).click();
-  await page.getByRole("alertdialog").getByRole("button", { name: "Delete" }).click();
+  await page.getByRole("menuitem", { name: "Move to Trash" }).click();
+  await page.getByRole("alertdialog").getByRole("button", { name: "Move to Trash" }).click();
   await expect(listing(page).getByText(fileName, { exact: true })).toHaveCount(0);
   await removeSandbox(page, sandbox);
 });
@@ -143,8 +143,8 @@ test("opening a preview adds the file to Recents", async ({ page }) => {
 
   await page.goto(`/files/${sandbox}`);
   await listing(page).getByText(fileName, { exact: true }).click({ button: "right" });
-  await page.getByRole("menuitem", { name: "Delete" }).click();
-  await page.getByRole("alertdialog").getByRole("button", { name: "Delete" }).click();
+  await page.getByRole("menuitem", { name: "Move to Trash" }).click();
+  await page.getByRole("alertdialog").getByRole("button", { name: "Move to Trash" }).click();
   await expect(listing(page).getByText(fileName, { exact: true })).toHaveCount(0);
   await removeSandbox(page, sandbox);
 });

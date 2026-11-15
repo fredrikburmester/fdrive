@@ -131,7 +131,6 @@ describe("desktop version checks answered from the index", () => {
 
     const files = createDesktopFiles({
       clock: () => new Date(),
-      trashPathForStorage: () => null,
       indexedContent: createIndexedContentLookup({
         resolver,
         index: createIndexQueries(db),

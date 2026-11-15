@@ -73,14 +73,6 @@ export interface LocalGrantServiceDeps {
   /** The files folder's provider row, which every login is on. */
   readonly storageId: string;
   readonly storageFor: IdentityStorageFactory;
-  /** The owner's Trash folder while Trash is on, which is never shared. */
-  readonly trashPathFor?: (identityId: string) => Promise<string | null>;
-  /**
-   * Folders in each user's files no share reaches (the files folder's
-   * `closedFolders`). A share whose folder is in one, or in fdrive's Trash
-   * layout (`closedToShares`), is left out of what its grantee receives.
-   */
-  readonly closedFolders?: () => Promise<readonly string[]>;
 }
 
 const SHELF_PATH = `/${SHARED_WITH_ME}`;
@@ -143,9 +135,7 @@ export function createLocalGrantService(deps: LocalGrantServiceDeps): LocalGrant
         grant,
       })),
     );
-    if (named.length === 0) return named;
-    const closed = (await deps.closedFolders?.()) ?? [];
-    return named.filter(({ grant }) => !closedToShares(grant.path, closed));
+    return named.filter(({ grant }) => !closedToShares(grant.path));
   }
 
   async function received(username: string): Promise<ReceivedFolder[]> {
@@ -195,7 +185,7 @@ export function createLocalGrantService(deps: LocalGrantServiceDeps): LocalGrant
       if (splitSegments(path)[0] === SHARED_WITH_ME) {
         throw new ApiHttpError("bad_request", "a folder shared with you cannot be shared on");
       }
-      if (isReservedPath(path, (await deps.trashPathFor?.(identityId)) ?? null)) {
+      if (isReservedPath(path)) {
         throw new ApiHttpError("bad_request", "fdrive's own folders, like Trash, cannot be shared");
       }
       const grantee = await repos.localUsers.get(request.username);

@@ -55,9 +55,9 @@ test("the header checkbox selects and deselects every row, and shows indetermina
   await listing(page).getByText(folderA, { exact: true }).click();
   await page.keyboard.press(`${PRIMARY_MODIFIER}+a`);
   await listing(page).getByText(folderA, { exact: true }).click({ button: "right" });
-  await page.getByRole("menuitem", { name: "Delete" }).click();
+  await page.getByRole("menuitem", { name: "Move to Trash" }).click();
   const confirmDialog = page.getByRole("alertdialog");
-  await confirmDialog.getByRole("button", { name: "Delete" }).click();
+  await confirmDialog.getByRole("button", { name: "Move to Trash" }).click();
   await expect(confirmDialog).toBeHidden();
 
   await removeSandbox(page, sandbox);

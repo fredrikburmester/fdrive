@@ -2,7 +2,7 @@ import {
   joinPath,
   normalizePath,
   parseRangeHeader,
-  reservedFolders,
+  RESERVED_FOLDERS,
   type StorageProvider,
 } from "@fdrive/core";
 import { closedToShares, SHARED_WITH_ME } from "@fdrive/local";
@@ -25,24 +25,22 @@ export function isUnder(path: string, root: string): boolean {
 
 /**
  * The folders no link may reach, all canonical: fdrive's own
- * (`reservedFolders`: the owner's Trash while it is on and the Mac's own
- * bookkeeping, which holds its Trash), and, unlike a share between
- * users, the folder that holds what other users share with the owner, which
- * is theirs to share. The last only exists while something is shared, but a
- * link never needs it, so it is kept out always.
+ * (`RESERVED_FOLDERS`: the owner's Trash and the Mac's own bookkeeping,
+ * which holds its Trash), and, unlike a share between users, the folder
+ * that holds what other users share with the owner, which is theirs to
+ * share. The last only exists while something is shared, but a link never
+ * needs it, so it is kept out always.
  */
-export function restrictedRoots(trashPath: string | null): string[] {
-  return [...reservedFolders(trashPath), `/${SHARED_WITH_ME}`];
-}
+export const RESTRICTED_ROOTS: readonly string[] = [...RESERVED_FOLDERS, `/${SHARED_WITH_ME}`];
 
 /**
  * True when no link may reach canonical `path`: what no share between users
- * reaches either (`closedToShares`): inside one of `restricted`, or anywhere
- * in fdrive's Trash layout, which a link follows its item into and which
- * stays refused after Trash is turned off or moved.
+ * reaches either (`closedToShares`: fdrive's own folders and its Trash
+ * layout wherever it lies, which a link follows its item into), and
+ * anything in `Shared with me`.
  */
-export function hiddenFromLinks(path: string, restricted: readonly string[]): boolean {
-  return closedToShares(path, restricted);
+export function hiddenFromLinks(path: string): boolean {
+  return closedToShares(path) || isUnder(path, `/${SHARED_WITH_ME}`);
 }
 
 /**
@@ -85,11 +83,6 @@ export interface OwnedShareAccessOptions {
    */
   readonly storage: Pick<StorageProvider, "list" | "statFile" | "download" | "upload" | "zip">;
   readonly view: ShareView;
-  /**
-   * Canonical roots hidden from every listing and refused on every read
-   * (`restrictedRoots`). Backup folders always are.
-   */
-  readonly restricted: readonly string[];
   /** Spends one download once it has been served; `false` when the limit or expiry refuses it. */
   readonly consume: () => Promise<boolean>;
   readonly zip: {
@@ -107,9 +100,9 @@ export interface OwnedShareAccessOptions {
  * against the share's budget only after storage has actually answered it.
  */
 export function ownedShareAccess(opts: OwnedShareAccessOptions): PublicShareAccess {
-  const { storage, view, restricted, consume } = opts;
+  const { storage, view, consume } = opts;
   const root = view.paths.length === 1 && view.paths[0] !== undefined ? view.paths[0] : null;
-  const hidden = (path: string) => hiddenFromLinks(path, restricted);
+  const hidden = hiddenFromLinks;
   function canonical(path: string): string {
     try {
       return normalizePath(path);
@@ -139,7 +132,7 @@ export function ownedShareAccess(opts: OwnedShareAccessOptions): PublicShareAcce
   function archivePaths(): string[] {
     const paths = view.paths.map(canonical);
     if (paths.some(hidden)) throw new ApiHttpError("not_found", "Share unavailable");
-    if (restricted.some((folder) => paths.some((path) => isUnder(folder, path))))
+    if (RESTRICTED_ROOTS.some((folder) => paths.some((path) => isUnder(folder, path))))
       throw new ApiHttpError(
         "forbidden",
         "A share that holds the Trash or folders shared with its owner can't be downloaded as an archive",

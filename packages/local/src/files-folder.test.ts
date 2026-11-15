@@ -136,15 +136,13 @@ describe("createFilesFolder", () => {
     expect(room).toHaveBeenLastCalledWith("alice");
   });
 
-  it("refuses a folder shared from its owner's Trash, on, off or renamed since", async () => {
-    const closedFolders = vi.fn(async (): Promise<readonly string[]> => ["/Bin"]);
+  it("refuses a folder shared from its owner's Trash, or from a Trash an earlier version kept elsewhere", async () => {
     const folder = createFilesFolder({
       root,
-      closedFolders,
       users: users("active", [
         { owner: "alice", path: "/Bin/.fdrive-move-v1/dir/p/Old/v/1", writable: true },
-        // In the Trash folder before it was renamed to `/Bin`.
         { owner: "alice", path: "/.trash/.fdrive-move-v1/dir/p/Older/v/2", writable: true },
+        { owner: "alice", path: "/.trash/stray", writable: true },
         { owner: "alice", path: "/Bin/loose", writable: true },
         { owner: "alice", path: "/Bin link", writable: true },
         { owner: "alice", path: "/Projects", writable: true },
@@ -157,32 +155,23 @@ describe("createFilesFolder", () => {
     await alice.upload("/.trash/.fdrive-move-v1/dir/p/Older/v/2/kept.txt", bytes("kept"), {
       mkdirParents: true,
     });
+    await alice.upload("/.trash/stray/kept.txt", bytes("kept"), { mkdirParents: true });
     await alice.upload("/Bin/loose/kept.txt", bytes("kept"), { mkdirParents: true });
     await alice.upload("/Projects/plan.txt", bytes("plan"), { mkdirParents: true });
     await symlink(join(root, "alice", "Bin"), join(root, "alice", "Bin link"));
-    const bob = () => folder.storage("bob");
-    const shelf = async () =>
-      (await bob().list(`/${SHARED_WITH_ME}`)).map((entry) => entry.name).sort();
-
-    expect(await shelf()).toEqual(["Projects"]);
-    expect(closedFolders).toHaveBeenCalled();
-    expect(await kindOf(bob().list(`/${SHARED_WITH_ME}/1`))).toBe("not_found");
-    expect(await kindOf(bob().list(`/${SHARED_WITH_ME}/2`))).toBe("not_found");
-    expect(await kindOf(bob().upload(`/${SHARED_WITH_ME}/1/x`, bytes("x")))).toBe("forbidden");
-    expect(await kindOf(bob().list(`/${SHARED_WITH_ME}/Bin link`))).toBe("forbidden");
-
-    // Trash turned off: what is still in fdrive's Trash layout stays out of reach, and a
-    // link stays a link.
-    closedFolders.mockResolvedValue([]);
-    expect(await shelf()).toEqual(["Projects", "loose"]);
-  });
-
-  it("asks for the closed folders only when something is shared", async () => {
-    const closedFolders = vi.fn(async () => ["/.trash"]);
-    const folder = createFilesFolder({ root, closedFolders, users: users() });
     const bob = folder.storage("bob");
-    expect(await bob.list("/")).toEqual([]);
-    expect(closedFolders).not.toHaveBeenCalled();
+    const shelf = async () =>
+      (await bob.list(`/${SHARED_WITH_ME}`)).map((entry) => entry.name).sort();
+
+    expect(await shelf()).toEqual(["Projects", "loose"]);
+    expect(await kindOf(bob.list(`/${SHARED_WITH_ME}/1`))).toBe("not_found");
+    expect(await kindOf(bob.list(`/${SHARED_WITH_ME}/2`))).toBe("not_found");
+    expect(await kindOf(bob.upload(`/${SHARED_WITH_ME}/1/x`, bytes("x")))).toBe("forbidden");
+    expect(await kindOf(bob.list(`/${SHARED_WITH_ME}/Bin link`))).toBe("forbidden");
+    // `/Bin` is an ordinary folder now; `stray`, loose in the Trash, stays closed.
+    expect((await bob.list(`/${SHARED_WITH_ME}/loose`)).map((entry) => entry.path)).toEqual([
+      `/${SHARED_WITH_ME}/loose/kept.txt`,
+    ]);
   });
 
   it("refuses to build storage for a name that cannot be a home", () => {

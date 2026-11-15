@@ -38,13 +38,11 @@ function build(input: {
   items: readonly OrganizeItem[];
   submission: OrganizeSubmission;
   storage?: StorageProvider;
-  trashPath?: string | null;
 }) {
   return buildProposal({
     storage: input.storage ?? drive(),
     items: input.items,
     submission: input.submission,
-    trashPath: input.trashPath ?? null,
   });
 }
 
@@ -195,12 +193,11 @@ describe("buildProposal", () => {
         file("/Inbox/c.pdf"),
         file("/Inbox/d.pdf"),
       ],
-      trashPath: "/.Trash",
       submission: submission({
         moves: [
-          move("/Inbox/a.pdf", "/.Trash"),
-          move("/Inbox/b.pdf", "/.Trash/2024"),
-          move("/Inbox/c.pdf", "/.Trash-not/2024"),
+          move("/Inbox/a.pdf", "/.trash"),
+          move("/Inbox/b.pdf", "/.trash/2024"),
+          move("/Inbox/c.pdf", "/.trash-not/2024"),
           move("/Inbox/d.pdf", "/.fdrive-desktop/staging"),
         ],
       }),

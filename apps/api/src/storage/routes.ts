@@ -1,5 +1,5 @@
 import { ROUTES, StorageKind, StorageUsageResponse } from "@fdrive/contracts";
-import { mimeFromExtension, type StorageProvider } from "@fdrive/core";
+import { mimeFromExtension } from "@fdrive/core";
 import type { IndexQueries, LocalUserRepo } from "@fdrive/db";
 import type { AuthedHono } from "../app.js";
 import { withoutApiV1Prefix } from "../auth/routes.js";
@@ -26,7 +26,6 @@ export interface StorageUsageRoutesDeps {
   readonly resolver: Pick<ScopeResolver, "verifiedIndexScopes">;
   readonly indexQueries: Pick<IndexQueries, "rootIdsByName" | "bytesByExtension" | "listFiles">;
   readonly localUsers: Pick<LocalUserRepo, "get">;
-  readonly trashPathForStorage: (storage: StorageProvider) => string | null;
 }
 
 /**
@@ -48,11 +47,7 @@ export function registerStorageUsageRoutes(
     const home = verified.available
       ? verified.scopes.filter((scope) => scope.virtualPrefix === "/")
       : [];
-    const ctx = await resolveScopeContext(
-      deps.indexQueries,
-      home,
-      deps.trashPathForStorage(principal.storage),
-    );
+    const ctx = await resolveScopeContext(deps.indexQueries, home);
     const limit = (await deps.localUsers.get(principal.username))?.storageLimit ?? null;
     const bytes = Object.fromEntries(StorageKind.options.map((kind) => [kind, 0])) as Record<
       StorageKind,

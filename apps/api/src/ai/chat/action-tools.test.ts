@@ -43,7 +43,6 @@ function setup(
     publicUrl: async () => null,
     indexerClient: null,
     clock: () => new Date("2026-09-18T10:00:00.000Z"),
-    ...(options.trash ? { trashPathForStorage: () => "/.Trash" } : {}),
   };
   const bus = createEventBus();
   const events: BusEvent[] = [];
@@ -64,7 +63,6 @@ function setup(
       bus,
       clock: () => new Date("2026-09-18T10:00:00.000Z"),
       activity: activity.service,
-      ...(options.trash ? { trashPathForStorage: () => "/.Trash" } : {}),
     },
   });
   const tool = (name: string): ActionTool => {
@@ -85,13 +83,8 @@ function setup(
 const sha = (text: string) => createHash("sha256").update(text).digest("hex");
 
 describe("createChatActionTools", () => {
-  it("offers trash only where the login has a Trash", () => {
+  it("always offers trash, since every login has a Trash", () => {
     expect(setup().tools.map((tool) => tool.spec.name)).toEqual([
-      "move_items",
-      "rename_items",
-      "write_text_file",
-    ]);
-    expect(setup({ trash: true }).tools.map((tool) => tool.spec.name)).toEqual([
       "move_items",
       "rename_items",
       "trash_items",
@@ -338,7 +331,7 @@ describe("rename_items", () => {
     await expect(
       verify("rename_items", {
         summary: "s",
-        renames: [{ path: "/.Trash/x", name: "y", reason: "r" }],
+        renames: [{ path: "/.trash/x", name: "y", reason: "r" }],
       }),
     ).rejects.toThrow(/Trash/);
     for (const name of ["/Docs/a.txt", "..", "  "])
@@ -399,7 +392,7 @@ describe("rename_items", () => {
       toolResult: 'Could not rename /notes.txt: ".Trash" is not a usable name.',
     });
     await expect(storage.stat("/notes.txt")).resolves.toBeDefined();
-    await expect(storage.stat("/.Trash")).rejects.toMatchObject({ kind: "not_found" });
+    await expect(storage.stat("/.trash")).rejects.toMatchObject({ kind: "not_found" });
   });
 
   it("proposes a case-only rename on a disk that finds the item under its new spelling", async () => {
@@ -489,7 +482,7 @@ describe("trash_items", () => {
       verify("trash_items", { summary: "s", items: [{ path: "/", reason: "r" }] }),
     ).rejects.toThrow(/root/);
     await expect(
-      verify("trash_items", { summary: "s", items: [{ path: "/.Trash/x", reason: "r" }] }),
+      verify("trash_items", { summary: "s", items: [{ path: "/.trash/x", reason: "r" }] }),
     ).rejects.toThrow(/Trash/);
     const narrow = setup({ trash: true, referenced: ["/Docs"] });
     await expect(
@@ -677,7 +670,7 @@ describe("action tools: edge cases", () => {
       verify("write_text_file", { summary: "s", path: "/bad\0", mode: "create", text: "x" }),
     ).rejects.toThrow(/not a valid path/);
     await expect(
-      verify("write_text_file", { summary: "s", path: "/.Trash/x.md", mode: "create", text: "x" }),
+      verify("write_text_file", { summary: "s", path: "/.trash/x.md", mode: "create", text: "x" }),
     ).rejects.toThrow(/Trash/);
     await expect(
       verify("write_text_file", {

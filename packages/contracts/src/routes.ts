@@ -122,9 +122,9 @@ export const ROUTES = {
   /** GET, Server-Sent Events: a stream of `SseEvent`s. */
   events: "/api/v1/events",
   trash: {
-    /** GET: whether the caller's storage exposes a trash -> `TrashStatusResponse`. */
-    status: "/api/v1/trash/status",
-    /** GET: the trash's entries -> `TrashListResponse`. 404 when no trash is configured. */
+    /** GET: how long Trash keeps an item -> `TrashSettings`. */
+    settings: "/api/v1/trash/settings",
+    /** GET: the trash's entries -> `TrashListResponse`. */
     list: "/api/v1/trash",
     /** POST: restore one or more entries -> `TrashRestoreResponse`. */
     restore: "/api/v1/trash/restore",
@@ -190,7 +190,7 @@ export const ROUTES = {
     ai: "/api/v1/system/ai",
     /** POST, admin only: send one short request with the saved AI settings -> `AiConnectionTestResponse`. */
     aiTest: "/api/v1/system/ai/test",
-    /** GET/PUT, admin only: provider-bound Trash configuration. */
+    /** PUT, admin only: how long Trash keeps an item -> `TrashSettings`. */
     trash: "/api/v1/system/trash",
     /** GET, admin only: indexer health, stats, and settings -> `SystemIndexerResponse`. */
     indexer: "/api/v1/system/indexer",

@@ -44,7 +44,6 @@ export async function buildProposal(input: {
   storage: StorageProvider;
   items: readonly OrganizeItem[];
   submission: OrganizeSubmission;
-  trashPath: string | null;
 }): Promise<OrganizeProposal> {
   const itemsByPath = new Map(input.items.map((item) => [item.path, item]));
   const itemsByKey = new Map(input.items.map((item) => [nameKey(item.path), item]));
@@ -83,7 +82,7 @@ export async function buildProposal(input: {
     if (folder.occupancy === "unknown") return UNCHECKED;
     const destination = folder.path;
     if (destination === parentPath(item.path)) return reason;
-    if (isReservedPath(destination, input.trashPath))
+    if (isReservedPath(destination))
       return "The suggested folder is in Trash or another of fdrive's own folders.";
     if (selectedDirs.some((dir) => destination === dir || isUnderPath(dir, destination)))
       return "The suggested folder is itself part of the selection.";

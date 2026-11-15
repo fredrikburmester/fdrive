@@ -75,7 +75,6 @@ function buildApp(
       listFiles: async () => ({ total: 0, files: [] }),
     },
     localUsers: { get: async () => user(null) },
-    trashPathForStorage: () => "/.trash",
     ...rest,
   };
   return createApp({
