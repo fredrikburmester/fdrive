@@ -81,8 +81,6 @@ Recommended on 2026-11-14 and approved by the owner the same day.
 
 All are server-only and keep shipped Mac builds working.
 
-25. Stage uploads inside the files folder so a commit can always tell whether it happened; drop
-    `FDRIVE_DESKTOP_STATE_DIR`, the `uncertain` state and the unused admin recovery endpoints.
 26. Finder's Trash becomes fdrive's Trash.
 28. Optional: drop `/checks` now that the change feed exists, after measuring the hourly pass.
 

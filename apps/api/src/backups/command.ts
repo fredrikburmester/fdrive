@@ -43,7 +43,6 @@ export function environmentFingerprint(config: AppConfig): string {
       JSON.stringify({
         roots: config.fdriveIndexRoots,
         publicUrl: config.fdriveOfficePublicUrl,
-        desktop: config.fdriveDesktopStateDir,
         sources: config.fdriveBackupSources,
       }),
     )

@@ -1,7 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { access, mkdir, realpath } from "node:fs/promises";
 import { join } from "node:path";
-import { Readable } from "node:stream";
 import {
   AttachmentStore,
   type BackupDestination,
@@ -139,12 +138,7 @@ export function createBackupModule(config: AppConfig, files: BackupFiles) {
       tested_at: null,
     };
   }
-  const mounts = [
-    ...(config.fdriveBackupSources ?? []),
-    ...(config.fdriveDesktopStateDir
-      ? [{ kind: "desktop" as const, path: config.fdriveDesktopStateDir }]
-      : []),
-  ].map((mount) => ({
+  const mounts = (config.fdriveBackupSources ?? []).map((mount) => ({
     ...mount,
     sourceId: createHash("sha256").update(`${mount.kind}:${mount.path}`).digest("hex"),
   }));
@@ -204,13 +198,13 @@ export function createBackupModule(config: AppConfig, files: BackupFiles) {
               entry: string;
               path: string;
               size: number;
-              identityId?: string;
               sourceId?: string;
             }[];
           }
         | undefined;
       if (recovered?.stateDirectory && recovered.blobs) {
-        const entries = await localBlobs(recovered.stateDirectory, "desktop").catch(() => null);
+        // Read as plain files; each takes the kind it was captured as below.
+        const entries = await localBlobs(recovered.stateDirectory, "office").catch(() => null);
         if (!entries)
           coverage.push("Staged recovery files from the previous restore are unavailable");
         else
@@ -222,7 +216,6 @@ export function createBackupModule(config: AppConfig, files: BackupFiles) {
                 ...entry,
                 kind: blob.kind,
                 path: blob.path,
-                identityId: blob.identityId,
                 sourceId: blob.sourceId,
               });
             else coverage.push(`Previous recovery file is missing: ${blob.path}`);
@@ -241,59 +234,6 @@ export function createBackupModule(config: AppConfig, files: BackupFiles) {
         coverage.push(
           "Office persistent proof keys/configuration are external or unmounted; include an exported configuration bundle",
         );
-      const operations = await client.query<{
-        identity_id: string;
-        id: string;
-        result: Record<string, unknown> | null;
-      }>("select identity_id,id,result from app.desktop_operations");
-      for (const identityId of new Set(operations.rows.map((op) => op.identity_id))) {
-        try {
-          const identity = (
-            await client.query<{ external_username: string }>(
-              "select external_username from app.identities where id=$1",
-              [identityId],
-            )
-          ).rows[0];
-          if (!identity) throw Error("Missing source login");
-          const storage = files.folder.storage(identity.external_username);
-          async function walk(path: string, depth = 0) {
-            if (depth > 128) throw Error("Recovery directory is too deep");
-            for (const item of await storage.list(path)) {
-              if (sources.length >= 100_000) throw Error("Recovery inventory is too large");
-              if (
-                !item.path.startsWith(`${path}/`) ||
-                item.path.slice(path.length + 1).includes("/")
-              )
-                throw Error("Invalid recovery entry");
-              if (item.kind === "dir") await walk(item.path, depth + 1);
-              else if (item.kind === "file")
-                sources.push({
-                  kind: "remote",
-                  path: item.path,
-                  identityId,
-                  size: item.size,
-                  open: async () =>
-                    Readable.fromWeb(
-                      (await storage.download(item.path))
-                        .body as import("node:stream/web").ReadableStream<Uint8Array>,
-                    ),
-                });
-              else throw Error("Unsupported recovery entry");
-            }
-          }
-          const root = `/.fdrive-desktop/${identityId}`;
-          const required = operations.rows.some(
-            (op) => op.identity_id === identityId && typeof op.result?.remoteAttempt === "string",
-          );
-          try {
-            await walk(root);
-          } catch (error) {
-            if (required || !isStorageError(error) || error.kind !== "not_found") throw error;
-          }
-        } catch {
-          coverage.push(`Native remote recovery is unavailable for identity ${identityId}`);
-        }
-      }
       return { sources, coverage };
     },
   };

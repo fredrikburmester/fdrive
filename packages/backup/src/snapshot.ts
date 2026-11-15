@@ -219,7 +219,6 @@ export async function captureSnapshot(
         path: blob.path,
         size: blob.size,
         sha256: hash.digest("hex"),
-        ...(blob.identityId ? { identityId: blob.identityId } : {}),
         ...(blob.sourceId ? { sourceId: blob.sourceId } : {}),
       };
       manifest.blobs.push(record);

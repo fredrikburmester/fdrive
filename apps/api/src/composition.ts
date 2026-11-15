@@ -425,7 +425,6 @@ export async function composeApp(
     storageForIdentity: storageWithoutTrash,
     clock,
     eventLog,
-    ...(config.fdriveDesktopStateDir ? { stateDir: config.fdriveDesktopStateDir } : {}),
   });
   const officeFiles = createOfficeFileRepo(db);
   const withOffice = (metadata: typeof metadataCore) =>
@@ -892,8 +891,7 @@ export async function composeApp(
           metadata: desktopMetadata,
           bus,
           logger,
-          storageForIdentity: storageFactory,
-          ...(config.fdriveDesktopStateDir ? { stateDir: config.fdriveDesktopStateDir } : {}),
+          storageForIdentity: storageWithoutTrash,
           trashPathForStorage: (storage) => {
             const settings = trashSettingsForStorage(storage);
             return settings?.enabled === true ? settings.path : null;

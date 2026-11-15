@@ -10,8 +10,6 @@ import {
   DesktopPairRequest,
   DesktopPairSecret,
   DesktopPath,
-  DesktopRecoveryResolution,
-  DesktopRecoveryResponse,
   DesktopUploadRequest,
   DesktopVersionRequest,
 } from "@fdrive/contracts";
@@ -21,7 +19,7 @@ import type { PersonalActivityService } from "../activity/service.js";
 import { activityStream } from "../activity/streams.js";
 import type { AppHono, AuthedHono } from "../app.js";
 import { accountContext } from "../auth/account-context.ts";
-import { createRequireAdmin, type Principal } from "../auth/principal.js";
+import type { Principal } from "../auth/principal.js";
 import { ApiHttpError } from "../errors.js";
 import { parseBody } from "../fs/routes.js";
 import { hashApiToken } from "../tokens/token-format.js";
@@ -47,41 +45,11 @@ export function registerDesktopRoutes(
     if (!deps.writes) throw new ApiHttpError("not_found", "Desktop writes are unavailable");
     return deps.writes;
   };
-  groups.authed.get(`${base}/recovery`, createRequireAdmin(), async (c) => {
-    c.header("Cache-Control", "no-store");
-    if (!writes) throw new ApiHttpError("upstream_unavailable", "Recovery status is unavailable");
-    return c.json(
-      DesktopRecoveryResponse.parse({ uncertain: await writes.uncertain(deps.clock()) }),
-    );
-  });
-  groups.authed.post(
-    `${base}/recovery/:identityId/:operationId/resolve`,
-    createRequireAdmin(),
-    async (c) => {
-      c.header("Cache-Control", "no-store");
-      const body = await parseBody(DesktopRecoveryResolution, c);
-      const identityId = CanonicalUuid.safeParse(c.req.param("identityId"));
-      const operationId = CanonicalUuid.safeParse(c.req.param("operationId"));
-      if (!identityId.success || !operationId.success)
-        throw new ApiHttpError("bad_request", "Invalid recovery reference");
-      const identity = await deps.identities.get(identityId.data);
-      if (!identity) throw new ApiHttpError("not_found", "Storage login no longer exists");
-      return c.json(
-        await writeService().resolve(
-          identity.id,
-          identity.accountId,
-          operationId.data,
-          body.outcome,
-          deps.clock(),
-        ),
-      );
-    },
-  );
   const changes = deps.changes;
   const pairing = createDesktopPairing({
     ...deps,
     ...(writes
-      ? { writeAvailability: async (principal: Principal) => writes.availability(principal) }
+      ? { writeCapabilities: (principal: Principal) => writes.capabilities(principal) }
       : {}),
     ...(changes ? { changeFeed: (principal: Principal) => changes.available(principal) } : {}),
   });

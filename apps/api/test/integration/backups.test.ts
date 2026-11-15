@@ -90,9 +90,9 @@ it("recovers durable metadata, exact bigint history, users, ZIPs and bytes into 
     { label: "Compose", filename: "compose.zip", sourceDate: null, notes: "Restore on fileserver" },
     Readable.from([Buffer.from("PK\x03\x04opaque zip fixture")]),
   );
-  const recovery = join(directory, "desktop");
+  const recovery = join(directory, "office");
   await mkdir(recovery);
-  await writeFile(join(recovery, "accepted.payload"), "native recovery data");
+  await writeFile(join(recovery, "accepted.payload"), "office recovery data");
   const file = join(directory, "snapshot.age");
   const result = await captureSnapshot(
     {
@@ -103,7 +103,7 @@ it("recovers durable metadata, exact bigint history, users, ZIPs and bytes into 
         return {
           sources: [
             ...(await store.attachments(client)).map((row) => attachments.source(row)),
-            ...(await localBlobs(recovery, "desktop")),
+            ...(await localBlobs(recovery, "office")),
           ],
           coverage: [],
         };
@@ -211,7 +211,7 @@ it("delivers a large streamed snapshot to a local folder destination that restor
         pool: source.pool,
         masterKey: master.toString("base64"),
         environment: {},
-        blobs: async () => ({ sources: await localBlobs(recovery, "desktop"), coverage: [] }),
+        blobs: async () => ({ sources: await localBlobs(recovery, "office"), coverage: [] }),
       },
       {
         id,

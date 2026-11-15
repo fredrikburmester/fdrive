@@ -62,7 +62,6 @@ export interface AppConfig {
   /** Directory archive jobs spool temp files into. Defaults to the OS temp dir. */
   readonly fdriveTmpDir: string;
   /** Durable, private spool. Unset disables desktop writes. */
-  readonly fdriveDesktopStateDir?: string;
   readonly fdriveBackupStateDir?: string;
   readonly fdriveBackupSources?: { kind: "ocr" | "logs" | "office"; path: string }[];
   readonly fdriveBackupWorker?: boolean;
@@ -306,7 +305,6 @@ const envSchema = z.object({
       )
       .max(20),
   ),
-  FDRIVE_DESKTOP_STATE_DIR: z.preprocess(undefinedWhenEmpty, z.string().startsWith("/").optional()),
   FDRIVE_JOB_MAX_BYTES: z.preprocess(
     (value) => withDefault(value, String(DEFAULT_JOB_MAX_BYTES)),
     z
@@ -488,9 +486,6 @@ export function loadConfig(env: Record<string, string | undefined>): AppConfig {
     fdriveTrustedProxyHops: parsed.FDRIVE_TRUSTED_PROXY_HOPS,
     nodeEnv: parsed.NODE_ENV,
     fdriveTmpDir: parsed.FDRIVE_TMP_DIR,
-    ...(parsed.FDRIVE_DESKTOP_STATE_DIR
-      ? { fdriveDesktopStateDir: parsed.FDRIVE_DESKTOP_STATE_DIR }
-      : {}),
     ...(parsed.FDRIVE_BACKUP_STATE_DIR
       ? { fdriveBackupStateDir: parsed.FDRIVE_BACKUP_STATE_DIR }
       : {}),
