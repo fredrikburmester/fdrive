@@ -237,6 +237,15 @@ public struct APIClient: Sendable {
     public func cancelWrite(_ id: String) async throws -> WriteResult {
         try await send("operations/\(id)/cancel", body: Data("{}".utf8), writing: true)
     }
+    /// Deletes an item in fdrive's Trash for good, as Empty Trash does; `itemId` is its handle.
+    /// The server answers an item gone already as done, and refuses anything not a whole Trash
+    /// item. A server too old for this answers 404, and the item stays.
+    public func purge(_ itemId: String) async throws {
+        guard protocolVersion == 2 else { throw DriveError.permission }
+        struct Result: Decodable, Sendable { let ok: Bool }
+        let body = try JSONSerialization.data(withJSONObject: ["itemId": itemId])
+        let _: Result = try await send("purges", body: body, writing: true)
+    }
     public func download(_ path: String, to directory: URL, progress: Progress) async throws -> (URL, String, Int64) {
         let delegate = TransferDelegate(progress: progress)
         let (temporary, response) = try await session.download(for: request("content", query: [.init(name: "path", value: try canonicalPath(path))]), delegate: delegate)

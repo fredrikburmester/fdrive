@@ -98,9 +98,7 @@ describe("a folder renamed on disk outside fdrive, through the real indexer", ()
     await expect
       .poll(
         async () => {
-          const rows = await db.execute(
-            sql`select path from idx.files where deleted_at is null order by path`,
-          );
+          const rows = await db.execute(sql`select path from idx.files order by path`);
           return rows.rows.map((row) => String(row.path)).sort();
         },
         { timeout: 30_000, interval: 100 },
@@ -111,9 +109,7 @@ describe("a folder renamed on disk outside fdrive, through the real indexer", ()
         "alice/docs/nested/child.dat",
         "alice/docs/top.dat",
       ]);
-    const before = await db.execute(
-      sql`select id, path from idx.files where deleted_at is null order by id`,
-    );
+    const before = await db.execute(sql`select id, path from idx.files order by id`);
     const bus = createEventBus();
     const received: BusEvent[] = [];
     const otherReceived: BusEvent[] = [];
@@ -192,9 +188,7 @@ describe("a folder renamed on disk outside fdrive, through the real indexer", ()
       expect(await metadata.listRecents(otherIdentity.id)).toEqual(otherRecents);
       expect(otherReceived).toEqual([]);
       expect(warnings).toEqual([]);
-      const after = await db.execute(
-        sql`select id, path from idx.files where deleted_at is null order by id`,
-      );
+      const after = await db.execute(sql`select id, path from idx.files order by id`);
       expect(after.rows).toEqual(
         before.rows.map((row) => ({
           ...row,

@@ -5,11 +5,14 @@ Trash is always on, for every user. A deleted file or folder waits in its user's
 longer than the installation's retention. There is nothing to turn on, no folder to choose,
 and no worker or restart.
 
-Every delete in fdrive moves to Trash: the web app, MCP's `trash_path`, AI chat's cards and a Mac
-save that renames its file. Storage itself never decides: `deleteFile` and `deleteDir` delete for
-good, and `trash.put` moves an item into Trash and says where, so each caller chooses. fdrive does
-not intercept changes made outside it: deleting directly on the host disk bypasses Trash, and
-overwriting a file does not retain its previous version.
+Every delete in fdrive moves to Trash: the web app, MCP's `trash_path`, AI chat's cards, Finder
+in an FDrive for Mac location (Move to Trash and Delete Immediately alike) and a Mac save that
+renames its file. Finder's Trash for a location is this Trash; Empty Trash there deletes for
+good, as **Delete permanently** does ([macOS](MACOS.md#trash)). Storage itself never decides:
+`deleteFile` and `deleteDir` delete for good, and `trash.put` moves an item into Trash and says
+where, so each caller chooses. fdrive does not intercept changes made outside it: deleting
+directly on the host disk bypasses Trash, and overwriting a file does not retain its previous
+version.
 
 ## Retention
 
@@ -73,3 +76,7 @@ that fdrive never acted on. They are gone; nothing reads the old settings.
   `<files folder>/<username>/.trash/.fdrive-move-v1` does not exist yet, moving the old
   `.fdrive-move-v1` folder to that place makes them ordinary Trash items again, which retention
   then counts from the day each was deleted.
+- FDrive for Mac once kept a Trash of its own, in `/.fdrive-desktop/<login id>/trash`. When the
+  API starts it moves each item there into its user's Trash, under the path it was deleted from,
+  as deleted at that moment: Days in Trash counts from the start that moved it. An item it cannot
+  move stays where it is and is tried again at the next start; nothing there is deleted.

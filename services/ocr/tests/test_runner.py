@@ -120,7 +120,7 @@ def test_fdrives_own_folders_are_never_candidates(
     assert (root / folder / "scan.pdf").read_bytes() == b"OK\n"
 
 
-def test_only_live_indexed_pdfs_are_candidates(db_conn: psycopg.Connection, files_root: runner.RootTarget) -> None:
+def test_only_indexed_pdfs_are_candidates(db_conn: psycopg.Connection, files_root: runner.RootTarget) -> None:
     root = Path(files_root.abs_path)
     for name in ("a.pdf", "gone.pdf", "unread.pdf"):
         _write_pdf(root / name, "OK")
@@ -131,7 +131,7 @@ def test_only_live_indexed_pdfs_are_candidates(db_conn: psycopg.Connection, file
         "VALUES (%s, 'notes.txt', 'notes.txt', '.txt', 3, 1, 'x')",
         (files_root.root_id,),
     )
-    db_conn.execute("""UPDATE "idx"."files" SET deleted_at = now() WHERE path = 'gone.pdf'""")
+    db_conn.execute("""DELETE FROM "idx"."files" WHERE path = 'gone.pdf'""")
     db_conn.execute("""UPDATE "idx"."files" SET sha256 = NULL WHERE path = 'unread.pdf'""")
 
     assert [pdf.path for pdf in db.pdf_candidates(db_conn, files_root.root_id, runner.RESERVED_FOLDERS)] == ["a.pdf"]

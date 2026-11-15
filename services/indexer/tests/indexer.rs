@@ -19,7 +19,7 @@ use fdrive_indexer::files_marker::FILES_MARKER;
 use fdrive_indexer::indexer::{
     self, FileStat, ImageStage, backfill_media, embed_missing, embed_thumbnail, error_kind, exclusion_still_applies,
     guess_mime, notify_indexed, process_file, process_thumbnails, safe_process, scan_once, should_retry_unchanged,
-    unchanged_in_db, walk, walk_tree, watch_index, watch_mark_deleted, watch_rename, work_features,
+    unchanged_in_db, walk, walk_tree, watch_delete, watch_index, watch_rename, work_features,
 };
 use fdrive_indexer::settings::Settings;
 
@@ -190,12 +190,11 @@ fn walk_reports_unreadable_directories_and_continues() {
 
 // -- pure decisions ------------------------------------------------------------------------
 
-fn manifest_row(size: i64, mtime_ns: i64, status: &str, deleted: bool) -> ManifestRow {
+fn manifest_row(size: i64, mtime_ns: i64, status: &str) -> ManifestRow {
     ManifestRow {
         size,
         mtime_ns,
         status: status.to_owned(),
-        deleted,
         sha256: None,
         image_embedded: false,
         thumbnail_failed: false,
@@ -203,17 +202,16 @@ fn manifest_row(size: i64, mtime_ns: i64, status: &str, deleted: bool) -> Manife
 }
 
 #[test]
-fn unchanged_in_db_needs_a_settled_live_row_of_the_same_version() {
+fn unchanged_in_db_needs_a_settled_row_of_the_same_version() {
     let stat = FileStat {
         size: 10,
         mtime_ns: 123,
     };
     assert!(!unchanged_in_db(None, stat));
-    assert!(unchanged_in_db(Some(&manifest_row(10, 123, "indexed", false)), stat));
-    assert!(!unchanged_in_db(Some(&manifest_row(10, 123, "pending", false)), stat));
-    assert!(!unchanged_in_db(Some(&manifest_row(10, 123, "indexed", true)), stat));
-    assert!(!unchanged_in_db(Some(&manifest_row(9, 123, "indexed", false)), stat));
-    assert!(!unchanged_in_db(Some(&manifest_row(10, 124, "indexed", false)), stat));
+    assert!(unchanged_in_db(Some(&manifest_row(10, 123, "indexed")), stat));
+    assert!(!unchanged_in_db(Some(&manifest_row(10, 123, "pending")), stat));
+    assert!(!unchanged_in_db(Some(&manifest_row(9, 123, "indexed")), stat));
+    assert!(!unchanged_in_db(Some(&manifest_row(10, 124, "indexed")), stat));
 }
 
 #[test]
@@ -558,7 +556,7 @@ fn a_scan_deletes_nothing_from_a_folder_without_this_installations_marker() {
         ["alice/a.txt", "alice/b.txt"],
         "the marker itself is never indexed"
     );
-    let live = || env.count("idx.files WHERE deleted_at IS NULL");
+    let live = || env.count("idx.files");
 
     // An empty folder mounted in its place, as Compose does when FDRIVE_FILES_DIR is unset.
     std::fs::remove_dir_all(env.path("alice")).unwrap();
@@ -628,7 +626,7 @@ fn nothing_is_processed_while_every_feature_is_off() {
     assert_eq!(env.count("idx.files"), 0);
     assert_eq!(scan_once(&ctx), Default::default());
     assert_eq!(watch_index(&ctx, &path, "a.txt", stat).status, "disabled");
-    assert_eq!(watch_mark_deleted(&ctx, "a.txt", false), 0);
+    assert_eq!(watch_delete(&ctx, "a.txt", false), 0);
     assert_eq!(watch_rename(&ctx, "a.txt", "b.txt", false), 0);
     assert!(ctx.activity.snapshot().is_empty());
 }
@@ -1314,7 +1312,7 @@ fn a_scan_indexes_new_files_and_sweeps_vanished_rows() {
         (3, 2, 1, 0)
     );
     let manifest = db::scan_manifest(&mut c, ctx.root_id).unwrap();
-    assert!(manifest["gone.txt"].deleted);
+    assert!(!manifest.contains_key("gone.txt"));
     assert_eq!(manifest["a.txt"].status, "indexed");
     assert_eq!(manifest["kept.txt"].status, "indexed");
     let scan = c
@@ -1345,7 +1343,7 @@ fn a_scan_indexes_new_files_and_sweeps_vanished_rows() {
         ),
         (Some("scan"), Some("completed"), Some(2), Some(2), Some("processing"))
     );
-    // Nothing left to do: the deleted row stays deleted and is not swept twice.
+    // Nothing left to do: the swept row is gone and is not swept twice.
     let again = scan_once(&ctx);
     assert_eq!((again.seen, again.changed, again.deleted), (3, 0, 0));
 }
@@ -1376,7 +1374,7 @@ fn a_scan_sweeps_what_was_indexed_in_the_mac_apps_folder() {
     let result = scan_once(&ctx);
     assert_eq!((result.seen, result.changed, result.deleted), (1, 1, 1));
     let manifest = db::scan_manifest(&mut c, ctx.root_id).unwrap();
-    assert!(manifest["alice/.fdrive-desktop/staging/a.txt"].deleted);
+    assert!(!manifest.contains_key("alice/.fdrive-desktop/staging/a.txt"));
     let paths: Vec<String> = env.folders(&ctx).into_iter().map(|(p, _)| p).collect();
     assert_eq!(paths, ["alice"]);
 }
@@ -1522,7 +1520,7 @@ fn a_cancelled_scan_never_sweeps_unseen_rows() {
     env.ml.release(EXTRACT);
     let result = scan.join().unwrap();
     assert_eq!(result.deleted, 0);
-    assert!(!env.row(&ctx, "gone.txt").deleted);
+    assert!(env.has_row(&ctx, "gone.txt"));
     assert_eq!(env.folders(&ctx), [("gone".to_owned(), "gone".to_owned())]);
     assert_eq!(Env::snapshot(&ctx, "textSearch")["state"], "stopped");
 }
@@ -1758,7 +1756,7 @@ fn only_a_new_or_changed_version_emits_an_event() {
 
     let (path, stat) = env.write("a.txt", b"second version");
     assert!(process_file(&ctx, &path, "a.txt", stat).unwrap());
-    db::mark_deleted(&mut env.client(), ctx.root_id, "a.txt", false).unwrap();
+    db::delete_paths(&mut env.client(), ctx.root_id, "a.txt", false).unwrap();
     assert!(process_file(&ctx, &path, "a.txt", stat).unwrap());
     assert_eq!(env.signals(), 3);
 }
@@ -1781,20 +1779,20 @@ fn a_failing_signal_is_swallowed() {
 fn watcher_deletes_count_rows_and_emit_once() {
     let env = Env::new();
     let ctx = env.ctx(fv(false, true, false, false, false));
-    assert_eq!(watch_mark_deleted(&ctx, "missing.txt", false), 0);
+    assert_eq!(watch_delete(&ctx, "missing.txt", false), 0);
     assert_eq!(env.signals(), 0);
     for rel in ["a.txt", "dir/b.txt", "dir/c.txt"] {
         env.write(rel, b"x");
         env.seed(&ctx, rel, "sha", "indexed");
     }
-    assert_eq!(watch_mark_deleted(&ctx, "a.txt", false), 1);
-    assert_eq!(watch_mark_deleted(&ctx, "dir", true), 2);
+    assert_eq!(watch_delete(&ctx, "a.txt", false), 1);
+    assert_eq!(watch_delete(&ctx, "dir", true), 2);
     assert_eq!(env.signals(), 2);
     // The database is gone: logged, nothing affected.
     env.client()
         .batch_execute("ALTER TABLE idx.files RENAME TO files_gone")
         .unwrap();
-    assert_eq!(watch_mark_deleted(&ctx, "x.txt", false), 0);
+    assert_eq!(watch_delete(&ctx, "x.txt", false), 0);
     assert_eq!(watch_rename(&ctx, "x.txt", "y.txt", false), 0);
 }
 
@@ -1809,11 +1807,14 @@ fn watcher_renames_move_rows_or_delete_on_an_extension_change() {
     assert_eq!(watch_rename(&ctx, "missing.txt", "new.txt", false), 0);
     // A new extension is a different kind of file: delete it and index the new path later.
     assert_eq!(watch_rename(&ctx, "a.txt", "a.pdf", false), 0);
-    assert!(env.row(&ctx, "a.txt").deleted);
+    assert!(!env.has_row(&ctx, "a.txt"));
+    let renamed = env.row_id(&ctx, "b.txt");
     assert_eq!(watch_rename(&ctx, "b.txt", "renamed.txt", false), 1);
     assert_eq!(watch_rename(&ctx, "docs", "moved", true), 1);
-    assert!(!env.row(&ctx, "renamed.txt").deleted);
-    assert!(!env.row(&ctx, "moved/c.txt").deleted);
+    // A move keeps the row, and with it the digest.
+    assert_eq!(env.row_id(&ctx, "renamed.txt"), renamed);
+    assert!(!env.has_row(&ctx, "b.txt"));
+    assert!(env.has_row(&ctx, "moved/c.txt"));
     // The delete and both moves each told the API once.
     assert_eq!(env.signals(), 3);
 }
@@ -1832,7 +1833,7 @@ fn watcher_parent_mutations_wait_for_an_in_flight_child() {
                 if rename {
                     watch_rename(&ctx, "docs", "moved", true)
                 } else {
-                    watch_mark_deleted(&ctx, "docs", true)
+                    watch_delete(&ctx, "docs", true)
                 }
             })
         };
@@ -1912,7 +1913,7 @@ fn an_unreadable_directory_stops_the_sweep_but_is_not_a_file_failure() {
         (result.seen, result.changed, result.deleted, result.errors),
         (1, 1, 0, 0)
     );
-    assert!(!env.row(&ctx, "locked/inside.txt").deleted);
+    assert!(env.has_row(&ctx, "locked/inside.txt"));
     // The scan never finished discovery, so it reports no total.
     assert!(Env::snapshot(&ctx, "textSearch")["total"].is_null());
 }

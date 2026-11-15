@@ -1,15 +1,8 @@
 import { parentPath } from "@fdrive/core";
 import type { AccessChange, AccessRepo, DesktopShareMove, PathLock } from "@fdrive/db";
+import type { OwnerPath } from "../metadata/trash.ts";
 
-/**
- * Where `path`, a login's own path, lies in its owner's files: in a folder
- * shared with the login, the owner's login and path; anywhere else, the
- * login's own (`LocalGrantService.ownerPath`).
- */
-export type OwnerPath = (
-  identityId: string,
-  path: string,
-) => Promise<{ identityId: string; path: string }>;
+export type { OwnerPath };
 
 /**
  * Changes what grants access to a login's paths in the file operation's

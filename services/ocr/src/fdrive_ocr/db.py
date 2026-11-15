@@ -46,14 +46,14 @@ class IndexedPdf:
 
 
 def pdf_candidates(conn: psycopg.Connection, root_id: int, reserved: Sequence[str]) -> list[IndexedPdf]:
-    """The PDFs a pass considers for this root, by path: every live PDF the index
+    """The PDFs a pass considers for this root, by path: every PDF the index
     holds outside the folders named in `reserved` (any segment, any case) whose
     content this service has not decided on yet, wherever it decided on it."""
     with conn.cursor() as cur:
         cur.execute(
             """
             SELECT f.path, f.size, f.mtime_ns, f.sha256 FROM "idx"."files" f
-            WHERE f.root_id = %s AND f.ext = '.pdf' AND f.deleted_at IS NULL AND f.sha256 IS NOT NULL
+            WHERE f.root_id = %s AND f.ext = '.pdf' AND f.sha256 IS NOT NULL
               AND NOT (string_to_array(lower(f.path), '/') && %s::text[])
               AND NOT EXISTS (SELECT 1 FROM "idx"."ocr_log" l WHERE l.sha256 = f.sha256)
             ORDER BY f.path

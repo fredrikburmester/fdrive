@@ -80,14 +80,14 @@ fn a_delete_the_watcher_applies_is_journaled_when_rows_went() {
     env.write("a.txt", b"hello");
     index(&handler, &env, "a.txt");
     std::fs::remove_file(env.path("a.txt")).unwrap();
-    assert_eq!(handler.mark_deleted("a.txt", false), 1);
-    assert_eq!(handler.mark_deleted("a.txt", false), 0);
+    assert_eq!(handler.delete("a.txt", false), 1);
+    assert_eq!(handler.delete("a.txt", false), 0);
     assert_eq!(journal(&env), [watched("a.txt"), watched("a.txt")]);
     // An empty folder has no file rows, but its going is a change.
     std::fs::create_dir_all(env.path("empty")).unwrap();
     handler.folder_changed("empty");
     std::fs::remove_dir(env.path("empty")).unwrap();
-    assert_eq!(handler.mark_deleted("empty", true), 0);
+    assert_eq!(handler.delete("empty", true), 0);
     assert_eq!(journal(&env)[2..], [watched("empty"), watched("empty")]);
 }
 
@@ -147,7 +147,7 @@ fn outside_a_source_nothing_is_journaled() {
     // The journal's reader and maintenance call these without a source.
     fdrive_indexer::indexer::watch_index(&ctx, &path, "a.txt", stat);
     fdrive_indexer::indexer::watch_rename(&ctx, "a.txt", "b.txt", false);
-    fdrive_indexer::indexer::watch_mark_deleted(&ctx, "b.txt", false);
+    fdrive_indexer::indexer::watch_delete(&ctx, "b.txt", false);
     std::fs::create_dir_all(env.path("d")).unwrap();
     fdrive_indexer::indexer::watch_folder(&ctx, "d");
     assert!(journal(&env).is_empty());

@@ -61,6 +61,7 @@ async function fixture(
     repo: memory.repo,
     storageForIdentity: async () => options.staging ?? raw,
     clock: () => new Date(),
+    purge: async () => {},
     ...(options.access
       ? {
           access: async () => {

@@ -106,8 +106,8 @@ or content hash alone never grants another identity access. Public share links a
 own: fdrive keeps the share in `app.shares` and serves it through the owner's storage, which
 the share reaches only through
 the identity storage factory, only inside its paths, and only for the operations its scope
-allows. Trash, `/Shared with me` and the Mac's `/.fdrive-desktop` (which
-holds its Trash) are never reachable through a link. A link follows the item it names
+allows. Trash, `/Shared with me` and the Mac's `/.fdrive-desktop` are never reachable through a
+link. A link follows the item it names
 wherever it moves, so it never stays at a path where something new could appear: on every
 route other path-keyed metadata follows, through the Trash and its restores, the Mac's
 writes and moves the indexer's watcher journals. Inside a place no link reaches (Trash, say)

@@ -3,8 +3,11 @@
 //!
 //! One inotify watch per directory under the root. Kernel events become index actions:
 //!   CLOSE_WRITE, unpaired MOVED_TO   -> (re)index the file, unless size+mtime already match its row
-//!   DELETE, unpaired MOVED_FROM      -> mark the row (or the subtree) deleted and drop its chunks
+//!   DELETE, unpaired MOVED_FROM      -> delete the row (or the subtree's rows) and its chunks
 //!   MOVED_FROM + MOVED_TO (cookie)   -> rename rows in place: no re-extraction, no re-embedding
+//! Only a rename the kernel pairs by its cookie keeps a file's row, and with it the metadata
+//! that follows the path. A move it does not pair, such as a copy and delete over SMB, is a
+//! delete and a new file.
 //!   CREATE|ISDIR, MOVED_TO|ISDIR     -> watch the new directory, record its folders and index whatever
 //!                                       is already in it
 //! Events are debounced per path. What is applied is decided by what is on disk at apply
@@ -19,8 +22,8 @@ use crate::failures::FileResult;
 pub trait WatchHandler: Send + Sync + 'static {
     /// Index one regular file; returns its result (status "indexed" | "unchanged" | "error" | "disabled" …).
     fn index_file(&self, abs: &Path, rel: &str, metadata: &Metadata) -> FileResult;
-    /// Soft-delete a path or subtree; returns rows affected.
-    fn mark_deleted(&self, rel: &str, is_dir: bool) -> usize;
+    /// Delete the rows of a path or subtree; returns rows affected.
+    fn delete(&self, rel: &str, is_dir: bool) -> usize;
     /// Rename rows; returns rows moved (0 means nothing was indexed under the old path, so the new path
     /// gets indexed instead).
     fn rename(&self, old_rel: &str, new_rel: &str, is_dir: bool) -> usize;
@@ -647,7 +650,7 @@ mod linux {
                         if is_dir {
                             self.drop_dir(&abs);
                         }
-                        match guarded(|| self.handler.mark_deleted(&rel_text, is_dir)) {
+                        match guarded(|| self.handler.delete(&rel_text, is_dir)) {
                             Ok(n) => batch.add("deleted", n),
                             Err(message) => {
                                 batch.add("error", 1);
@@ -777,7 +780,7 @@ mod linux {
             let rel = text(rel);
             match fs::symlink_metadata(abs) {
                 Err(e) if e.kind() == ErrorKind::NotFound => {
-                    self.handler.mark_deleted(&rel, false);
+                    self.handler.delete(&rel, false);
                     FileResult::plain("deleted")
                 }
                 Err(e) => {
@@ -1001,7 +1004,7 @@ mod linux {
                 FileResult::plain("indexed")
             }
 
-            fn mark_deleted(&self, rel: &str, is_dir: bool) -> usize {
+            fn delete(&self, rel: &str, is_dir: bool) -> usize {
                 assert!(!self.fail_delete, "db down");
                 lock(&self.deleted).push((rel.to_owned(), is_dir));
                 1
@@ -1734,7 +1737,7 @@ mod stub {
             fn index_file(&self, _abs: &Path, _rel: &str, _metadata: &std::fs::Metadata) -> FileResult {
                 FileResult::plain("indexed")
             }
-            fn mark_deleted(&self, _rel: &str, _is_dir: bool) -> usize {
+            fn delete(&self, _rel: &str, _is_dir: bool) -> usize {
                 0
             }
             fn rename(&self, _old_rel: &str, _new_rel: &str, _is_dir: bool) -> usize {
@@ -1754,7 +1757,7 @@ mod stub {
             assert_eq!(error.kind(), io::ErrorKind::Unsupported);
             assert_eq!(error.to_string(), "inotify is only available on Linux");
             let noop: &dyn WatchHandler = &Noop;
-            assert_eq!(noop.mark_deleted("a", false) + noop.rename("a", "b", false), 0);
+            assert_eq!(noop.delete("a", false) + noop.rename("a", "b", false), 0);
         }
     }
 }

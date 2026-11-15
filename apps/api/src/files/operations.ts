@@ -21,6 +21,7 @@ import {
 import type { Principal } from "../auth/principal.ts";
 import { ApiHttpError } from "../errors.ts";
 import type { MetadataService } from "../metadata/service.ts";
+import { followIntoTrash } from "../metadata/trash.ts";
 import type { AccessFollowers, OwnerPath } from "./access.ts";
 
 /**
@@ -373,13 +374,9 @@ export function createFileOperations(deps: FileOperationsDeps): FileOperations {
           }),
         ({ item: moved }) => ({ path, kind: moved.kind, trashLeaf: moved.leaf }),
       );
-      const directory = item.kind === "dir";
-      const warning = await bestEffort("Moved to Trash", async (metadata) => {
-        // The owner's tags and the rest follow the item; the login's own at
-        // a path it can no longer reach end.
-        await metadata.onMoved(owned.identityId, owned.path, item.leaf, directory);
-        if (owned.identityId !== identityId) await metadata.onDeleted(identityId, path, directory);
-      });
+      const warning = await bestEffort("Moved to Trash", (metadata) =>
+        followIntoTrash(metadata, async () => owned, identityId, path, item),
+      );
       return done({ item }, history, warning);
     },
 

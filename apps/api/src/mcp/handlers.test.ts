@@ -178,7 +178,6 @@ function makeFile(overrides: Partial<IndexedFile> & { id: number }): IndexedFile
     textChars: overrides.textChars ?? 0,
     error: overrides.error ?? null,
     indexedAt: overrides.indexedAt ?? null,
-    deletedAt: overrides.deletedAt ?? null,
   };
 }
 

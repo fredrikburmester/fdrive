@@ -89,7 +89,7 @@ describe("changes fdrive makes, through the real indexer with its watcher off", 
   async function notes(): Promise<{ path: string; sha256: string | null; status: string }[]> {
     const result = await connection.db.execute(
       sql`select path, sha256, text_status from idx.files
-          where path like 'alice/notes/%' and deleted_at is null order by path`,
+          where path like 'alice/notes/%' order by path`,
     );
     return result.rows.map((row) => ({
       path: String(row.path),

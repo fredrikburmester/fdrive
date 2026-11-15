@@ -478,9 +478,7 @@ impl RootContext {
 
 /// The DB row matches what is on disk and needs no work.
 pub fn unchanged_in_db(row: Option<&ManifestRow>, stat: FileStat) -> bool {
-    row.is_some_and(|r| {
-        r.size == stat.size as i64 && r.mtime_ns == stat.mtime_ns && r.status != "pending" && !r.deleted
-    })
+    row.is_some_and(|r| r.size == stat.size as i64 && r.mtime_ns == stat.mtime_ns && r.status != "pending")
 }
 
 /// Whether a feature transition makes an unchanged row actionable. Each status must stop
@@ -565,7 +563,6 @@ pub fn process_file_with(
         size: r.size,
         mtime_ns: r.mtime_ns,
         status: r.status.clone(),
-        deleted: r.deleted,
         sha256: r.sha256.clone(),
         image_embedded: false,
         thumbnail_failed: false,
@@ -584,7 +581,7 @@ pub fn process_file_with(
     }
     let same_version = row
         .as_ref()
-        .is_some_and(|r| r.size == stat.size as i64 && r.mtime_ns == stat.mtime_ns && !r.deleted);
+        .is_some_and(|r| r.size == stat.size as i64 && r.mtime_ns == stat.mtime_ns);
     // A feature transition may re-extract an unchanged file; its digest is still valid.
     let known = if unchanged {
         row.and_then(|r| r.sha256).map(|sha| (sha, StampUpdate::Keep))
@@ -687,7 +684,7 @@ pub fn carry_stamp(ctx: &RootContext, rel_path: &str, renamed: &Renamed) -> Resu
     let (Some(sha), Some(stamp)) = (row.sha256.as_deref(), row.stamp) else {
         return Ok(false);
     };
-    if row.deleted || recorded != renamed.version.stat || stamp != renamed.previous() {
+    if recorded != renamed.version.stat || stamp != renamed.previous() {
         return Ok(false);
     }
     if Version::of(&open_source(ctx, rel_path)?.file.metadata()?) != renamed.version {
@@ -1540,11 +1537,7 @@ fn scan_inner(ctx: &Arc<RootContext>, operations: &HashMap<String, Op>) -> ScanR
     let journal_files = (finished_before && !manifest.is_empty()).then_some(Source::Scan);
     let journal_folders = journal_files.filter(|_| had_folders);
     let t0 = Instant::now();
-    let mut unseen: HashSet<String> = manifest
-        .iter()
-        .filter(|(_, row)| !row.deleted)
-        .map(|(path, _)| path.clone())
-        .collect();
+    let mut unseen: HashSet<String> = manifest.keys().cloned().collect();
     let counters = Arc::new(ScanCounters {
         changed: AtomicI64::new(0),
         errors: AtomicI64::new(0),
@@ -1676,6 +1669,9 @@ fn scan_inner(ctx: &Arc<RootContext>, operations: &HashMap<String, Op>) -> ScanR
     let deleted = vanished.len() as i64;
     for path in &vanished {
         ctx.names_touched(path, false);
+    }
+    if traversal_complete && let Err(e) = failures::resolve_gone(&ctx.db, ctx.root_id, started_at) {
+        log(&format!("[{}] resolving failures failed: {}", ctx.name, describe(&e)));
     }
     if let Some(source) = journal_files {
         let gone: Vec<NewChange> = vanished.iter().map(|path| NewChange::path(path)).collect();
@@ -1860,7 +1856,9 @@ pub fn watch_index_with(
     }
 }
 
-pub fn watch_mark_deleted(ctx: &RootContext, rel_path: &str, is_dir: bool) -> usize {
+/// Delete the rows of a path that is gone (with `is_dir`, also those below it); returns file
+/// rows deleted.
+pub fn watch_delete(ctx: &RootContext, rel_path: &str, is_dir: bool) -> usize {
     if !ctx.values().indexer_enabled() {
         return 0;
     }
@@ -1980,7 +1978,7 @@ pub fn watch_rename(ctx: &RootContext, old: &str, new: &str, is_dir: bool) -> us
         return 0;
     }
     if !is_dir && ext_of(basename(old)) != ext_of(basename(new)) {
-        watch_mark_deleted(ctx, old, false);
+        watch_delete(ctx, old, false);
         return 0;
     }
     let _guard = ctx.path_locks.get_many(&[old, new]);

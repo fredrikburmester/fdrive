@@ -35,7 +35,6 @@ function indexed(path: string, size: number): IndexedFile {
     textChars: 0,
     error: null,
     indexedAt: null,
-    deletedAt: null,
   };
 }
 

@@ -164,8 +164,8 @@ describe("desktop version checks answered from the index", () => {
     ]);
     expect(download).toHaveBeenCalledTimes(1);
 
-    // A row the indexer marked deleted proves nothing.
-    await db.update(schema.files).set({ deletedAt: new Date() }).where(eq(schema.files.id, cat));
+    // Without its row, the file is read.
+    await db.delete(schema.files).where(eq(schema.files.id, cat));
     expect(await versions([shared])).toEqual([{ path: shared, size: 4, version: sha("meow") }]);
     expect(download).toHaveBeenCalledTimes(2);
   });

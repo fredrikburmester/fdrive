@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { createMemoryStorage } from "../testing/memory-storage.ts";
 import { moveTrashLeafPath } from "./recycle-folder.ts";
+import { adoptIntoTrash } from "./recycle-folder-trash.ts";
 
 const AT = new Date("2026-09-10T12:00:00.000Z");
 const LEAF = (BigInt(AT.getTime()) * BigInt(1_000_000)).toString();
@@ -95,6 +96,19 @@ describe("TrashProvider.put", () => {
       expect(storage.dump()).toMatchObject({ "/.trash/docs/a.txt": "kept" });
     },
   );
+
+  it("adopts what fdrive kept in its own folders as an item deleted from its original path", async () => {
+    const storage = storageWith({ "/.fdrive-desktop/mac/trash/handle": "kept" });
+    expect(
+      await adoptIntoTrash(storage, "/.fdrive-desktop/mac/trash/handle", "/docs/a.txt", AT),
+    ).toEqual({ leaf: FILE_LEAF, kind: "file" });
+    expect(storage.dump()).toEqual({ [FILE_LEAF]: "kept" });
+    const [entry] = (await storage.trash.list()).entries;
+    expect(entry).toMatchObject({ originalPath: "/docs/a.txt", deletedAt: AT });
+    await expect(
+      adoptIntoTrash(storage, FILE_LEAF, "/.fdrive-desktop/x", AT),
+    ).rejects.toMatchObject({ kind: "bad_request" });
+  });
 
   it("refuses what is not there", async () => {
     await expect(storageWith().trash.put("/missing.txt")).rejects.toMatchObject({

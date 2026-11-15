@@ -92,6 +92,14 @@ export function memoryRepo() {
         )
           items.set(id, { ...item, deletedAt: new Date() });
     },
+    async oldTrash() {
+      return [...items.values()].filter(
+        (item): item is DesktopItemRecord & { originalPath: string } =>
+          !item.deletedAt &&
+          item.originalPath !== null &&
+          item.path.startsWith("/.fdrive-desktop/"),
+      );
+    },
     async reserve(input) {
       const key = input.identityId + input.id;
       const old = operations.get(key);

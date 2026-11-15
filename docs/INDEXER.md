@@ -34,8 +34,7 @@ Every regular file in the files folder, except:
   (`.fdrive-partial-<16 hex>`, renamed to the real name once complete).
 - Directories in `SKIP_DIRS` (`.fdrive-desktop`, `@eaDir`, `.Trash`, `.Trashes`,
   `node_modules`, `.git`), wherever they lie. `.fdrive-desktop` is the Mac app's
-  folder (staged uploads, the versions its writes replace and its Trash), so none of it is
-  indexed or journaled; the next scan sweeps rows indexed there before. fdrive's own Trash is
+  folder (its staged uploads), so none of it is indexed or journaled; the next scan sweeps rows indexed there before. fdrive's own Trash is
   indexed, so moving an item into and out of it stays a rename that keeps its thumbnails and
   embeddings; every index read leaves it out instead (see [search](SEARCH-AND-AI.md)).
 
@@ -77,11 +76,15 @@ ffmpeg, at 1 second in, or the first frame for shorter clips) get thumbnails at
 256px and 1024px on the longest side,
 written as WebP under `THUMBS_DIR/<sha[:2]>/<sha>.<size>.webp` and recorded in
 `app.thumbnails`, keyed by the file's sha256 so identical files never generate
-the same thumbnail twice. Thumbnail failures are logged once and never fail the
-file's own indexing; the image-embedding pass that follows skips a file whose
-256px thumbnail was never written without logging a second error for it. Scans
-do not retry a failed thumbnail until the file changes or thumbnails are turned
-on again; System can retry it sooner.
+the same thumbnail twice. Being keyed by content, thumbnails and image embeddings (below)
+outlive the rows that used them: the same bytes uploaded again, or the new file of a move
+the watcher saw as a delete and a create (see [how changes arrive](#how-changes-arrive)),
+find them again. Nothing collects the ones no file uses any more; clearing them (see
+[clearing derived data](#clearing-derived-data)) empties the whole cache. Thumbnail
+failures are logged once and never fail the file's own indexing; the image-embedding pass
+that follows skips a file whose 256px thumbnail was never written without logging a second
+error for it. Scans do not retry a failed thumbnail until the file changes or thumbnails are
+turned on again; System can retry it sooner.
 
 The api serves this same cache twice: `GET /api/v1/thumb` for the logged-in
 file browser, and `GET /api/v1/public/shares/:id/thumb` for a public share's
@@ -184,7 +187,7 @@ Rows are rebuilt by the next scan, so backups leave them out.
 ## Name index
 
 Search finds a name typed with a typo through the name index (`names.rs`): the name of every
-live `idx.files` and `idx.folders` row in a [Tantivy](https://github.com/quickwit-oss/tantivy)
+`idx.files` and `idx.folders` row in a [Tantivy](https://github.com/quickwit-oss/tantivy)
 index held in memory. Postgres stays the source of truth, so the index needs no volume and no
 migration. A `names` thread builds each root from the tables when the indexer starts and again
 after every completed scan and index clear. In between, every write of a name row (a file
@@ -233,7 +236,7 @@ read from their own position (see the [change journal plan](plans/CHANGE-JOURNAL
    - a folder is compared with its rows, like a scan of just that folder: new and changed
      files are indexed, and rows of files no longer there are dropped;
    - a missing path, or one a walk skips (a link, a skipped folder or name), has its rows
-     and those below it marked deleted;
+     and those below it deleted;
    - a move renames rows in place (a changed extension is a delete and a new file), carries
      a moved file's stamp along (below), then compares the destination with the disk, which
      covers a restore from somewhere the index never looked.
@@ -255,12 +258,20 @@ read from their own position (see the [change journal plan](plans/CHANGE-JOURNAL
    whose rows it deleted, a move it paired (empty folders included) and each folder row it
    added or dropped. When it applies an API change before the indexer reads the API's row,
    the change is journaled twice; readers treat rows as "look again", so that is harmless.
+
+   Only a rename the kernel reports as one (a `MOVED_FROM` and `MOVED_TO` with the same
+   cookie, within the debounce) is a move: the file's row moves with its digest, text and
+   stamp, and the API moves its tags, favorites and other path-keyed metadata
+   ([below](#the-apis-reader)). Any other move, such as a copy and a delete over SMB, is a
+   delete and a new file: the old row and its chunks are deleted and the new file is indexed
+   from scratch, reusing thumbnails and image embeddings by its digest. The old path's
+   metadata is dropped, never guessed onto the new one.
 3. **The scan** walks the whole root every `indexer.scan_interval_seconds` (an hour by
    default), when settings or features change, after a watcher overflow and when the
    journal's reader asks for one, and catches anything the other two missed. A restart keeps
    counting the interval from the last scan that finished, since the journal holds fdrive's
    changes from the indexer's position; it scans at start only when no scan of the root has
-   finished, the index has no live rows (a first start, a cleared index, a restore) or the
+   finished, the index has no file rows (a first start, a cleared index, a restore) or the
    indexer has no position in the journal. Changes made outside fdrive while the indexer was
    down wait for the next scan. It journals what it finds with source `scan`: new and changed
    files, files it sweeps as vanished, and folder rows it adds or drops. It does so only
@@ -370,9 +381,10 @@ own events. What changed is in the journal, which the API reads for live updates
 A reindex request or feature change that re-derives index data for a file whose size and mtime
 are unchanged is not a change and sends nothing.
 
-A scan soft-deletes live rows its completed walk did not find, compared against
-the manifest it read at the start, so a tree with no deletions writes nothing.
-Rows the watcher or a worker wrote after the scan started are left alone.
+A scan deletes the rows its completed walk did not find, and their chunks with them. It
+compares the walk with the rows it read at the start and deletes the difference in batches,
+so a tree with no deletions writes nothing. Rows the watcher or a worker wrote after the scan
+started are left alone. Removed files leave no row behind: the index holds what is on disk.
 
 ## The API's reader
 
@@ -420,8 +432,8 @@ a published port in the non-dev compose file.
 | `/stats` | GET | None | File counts by `text_status` (`counts_by_status`), chunk and embedded-chunk counts, the last scan's summary (`last_scan`), queue depth, total thumbnails, total image embeddings, a sample of recent errors, and `thumbnail_rebuild` / `image_embedding_rebuild`: `{ running, processed, total, total_known, started_at, finished_at, errors, outcome }` for the most recent rebuild pass of each kind (all zero/`null`/`false` if none has run yet). |
 | `/extract-content?name=` | POST | The file's bytes, at most 4 MiB | `{ text, status }`: live text extraction of bytes the API already read through the caller's own storage, for MCP's `read_file_text` (not persisted). `name` gives the format; it is never a path. The bytes go to a temporary file removed afterwards; two run at once and a third is `429`. |
 | `/reindex` | POST | `{ path?, thumbnails? }` | Marks matching rows `pending` (everything if `path` is omitted, otherwise that path and everything under it) and wakes the scan, which re-extracts text and re-embeds. Returns `{ count }`. With `thumbnails: true`, also starts a thumbnail-rebuild pass (see below) over the same scope; if one is already running, this is a no-op (best effort, not reported back). |
-| `/thumbnails/rebuild` | POST | `{ path?, force? }` | Starts a background thumbnail-only pass: regenerates both sizes for every live media file in scope, writing only `app.thumbnails` (`idx.files.text_status`, chunks, and embeddings are never touched, unlike `/reindex`). Without `force`, an existing thumbnail for a given sha256 and size is left alone; with `force`, it is deleted and rewritten. `path` omitted targets the whole files folder. Returns `202 { started: true, total }` (`total` is `null` until discovery completes in the background; poll `/stats` or `/activity` for the count), or `409` if a rebuild is already running (only one runs at a time, process-wide). |
-| `/image-embeddings/rebuild` | POST | `{ path?, force? }` | Starts a background image-embedding backfill/rebuild pass over live images in scope; see "Image embeddings" above for the `force` semantics. Returns `202 { started: true, total: null }` before discovery; `/stats` and `/activity` expose the discovered total, or `409` if a rebuild is already running. |
+| `/thumbnails/rebuild` | POST | `{ path?, force? }` | Starts a background thumbnail-only pass: regenerates both sizes for every media file in scope, writing only `app.thumbnails` (`idx.files.text_status`, chunks, and embeddings are never touched, unlike `/reindex`). Without `force`, an existing thumbnail for a given sha256 and size is left alone; with `force`, it is deleted and rewritten. `path` omitted targets the whole files folder. Returns `202 { started: true, total }` (`total` is `null` until discovery completes in the background; poll `/stats` or `/activity` for the count), or `409` if a rebuild is already running (only one runs at a time, process-wide). |
+| `/image-embeddings/rebuild` | POST | `{ path?, force? }` | Starts a background image-embedding backfill/rebuild pass over images in scope; see "Image embeddings" above for the `force` semantics. Returns `202 { started: true, total: null }` before discovery; `/stats` and `/activity` expose the discovered total, or `409` if a rebuild is already running. |
 | `/image-embeddings/clear` | POST | `{}` or empty | Deletes every row of `app.image_embeddings`; see "Clearing derived data" below. |
 | `/names/search` | POST | `{ query, scopes: [{ root_id, prefix }], exclude?, exclude_names?, files?, folders? }` | Files and folders whose name answers `query` with typos allowed (see "Name index"), at or below a scope's root-relative `prefix` (`""` for the whole root), outside every `exclude` place and with no folder in their path named one of `exclude_names` (in any case): `{ files, folders }`, each at most the count asked for (up to 200), as `{ id, root_id, path, mtime_ns }` with `mtime_ns` a string. Only the first 8 words of the first 512 characters are matched (the API checks every word again), and more than 64 scopes, exclusions or excluded names is a `400`. `503` until the index is built, so the API searches without it. |
 

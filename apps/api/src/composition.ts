@@ -70,7 +70,7 @@ import { registerFeatureAdmission } from "./features/admission.js";
 import { registerFeatureRoutes } from "./features/routes.js";
 import { createFeatureService } from "./features/service.js";
 import { createAccessFollowers } from "./files/access.js";
-import { createFileOperations } from "./files/operations.js";
+import { createFileOperations, fileActor } from "./files/operations.js";
 import { registerFsRoutes } from "./fs/routes.js";
 import { registerVideoRoutes } from "./fs/video-routes.js";
 import { createJobRunner } from "./jobs/runner.js";
@@ -398,21 +398,31 @@ export async function composeApp(
   const metadataService = createMetadataService(repos);
   const officeFiles = createOfficeFileRepo(db);
   const desktopRepo = createDesktopRepo(db);
-  const desktopRetention = createDesktopRetention({
-    repo: desktopRepo,
-    storageForIdentity: storageFactory,
-    clock,
-    eventLog,
-  });
+  // What is kept by path without granting access, the Mac's item handles included.
+  const fileMetadata = withDesktopMetadata(metadataService, desktopRepo);
   // The one way fdrive changes files, whoever asks: the web, MCP, AI chat,
-  // Office and a link's visitors. The Mac's item handles follow too.
+  // Office and a link's visitors.
   const files = createFileOperations({
     activity: personalActivity,
     access,
-    metadata: withDesktopMetadata(metadataService, desktopRepo),
+    metadata: fileMetadata,
     ownerPath: localGrants.ownerPath,
     storageFor: storageFactory,
     logger,
+  });
+  const desktopRetention = createDesktopRetention({
+    repo: desktopRepo,
+    storageForIdentity: storageFactory,
+    // The Mac's old Trash moves into fdrive's once: from a place no link
+    // reaches to another, so what grants access follows on its own, first.
+    metadata: {
+      async onMoved(identityId, from, to, directory) {
+        await access.moved(identityId, from, to, directory);
+        await fileMetadata.onMoved(identityId, from, to, directory);
+      },
+    },
+    clock,
+    eventLog,
   });
   // Deletes what each Trash kept longer than the installation's retention.
   const trashRetention = createTrashRetention({
@@ -432,6 +442,7 @@ export async function composeApp(
       await officeMoves.onMoved(identityId, from, to);
       await metadataService.onMoved(identityId, from, to, directory);
     },
+    onDeleted: metadataService.onDeleted,
   };
   const desktopAccess = async (
     identityId: string,
@@ -789,6 +800,11 @@ export async function composeApp(
           clock,
           access: desktopAccess,
           metadata: desktopMetadata,
+          ownerPath: localGrants.ownerPath,
+          // Finder's Empty Trash deletes for good, as the web's does.
+          purge: async (principal, id) => {
+            await files.purge(fileActor(principal, { source: "native" }), id);
+          },
           logger,
           storageForIdentity: storageFactory,
         }),

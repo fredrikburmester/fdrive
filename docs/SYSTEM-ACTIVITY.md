@@ -69,8 +69,9 @@ counts describe a run's attempts; the durable count describes files awaiting rec
 
 Successful processing resolves a record; repeated failures update the same root/path/feature
 record. Recurrence starts a new attempt count. All unresolved records remain; resolved
-history is pruned after 30 days and capped at 10,000 records. Deleted files resolve their
-records during pruning. Details lost before this feature was installed cannot be recovered.
+history is pruned after 30 days and capped at 10,000 records. A completed scan resolves the
+records of paths the index has no row for that it did not report again: files that are gone.
+Details lost before this feature was installed cannot be recovered.
 
 Admin-only `GET /api/v1/system/processing-failures/:feature` supports `status`, `code`,
 `limit` and an ID-based `before` cursor. Reads do not call workers and remain available
