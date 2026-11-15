@@ -2,7 +2,7 @@ import { readJson, type StorageLike, writeJson } from "./deps";
 
 /** The sidebar's collapsible sections, each with its own persisted
  * collapsed/expanded state. */
-export type SidebarSectionKey = "favorites" | "recents" | "tags" | "features";
+export type SidebarSectionKey = "favorites" | "recents" | "tags" | "savedSearches" | "features";
 
 const STORAGE_KEY_PREFIX = "fdrive.sidebar.section.";
 

@@ -171,6 +171,8 @@ export type {
   Recent,
   RecentRepo,
   Repos,
+  SavedSearch,
+  SavedSearchRepo,
   Session,
   SessionRepo,
   SettingsRepo,

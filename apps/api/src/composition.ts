@@ -85,6 +85,7 @@ import type { McpToolDeps } from "./mcp/handlers.js";
 import { createIndexerExtractClient } from "./mcp/indexer-client.js";
 import { registerMcpRoutes } from "./mcp/routes.js";
 import { registerMetadataRoutes } from "./metadata/routes.js";
+import { registerSavedSearchRoutes } from "./metadata/saved-searches.js";
 import { createMetadataService, withFollowers } from "./metadata/service.js";
 import { withTrashMoves } from "./metadata/trash-moves.js";
 import { extractClientIp } from "./net.js";
@@ -967,6 +968,7 @@ export async function composeApp(
         reads: activityReads,
         admitActivity,
       });
+      registerSavedSearchRoutes(groups, { savedSearches: repos.savedSearches });
       registerActivityExports(groups.authed, {
         repo: activityRepo,
         exports: createActivityExportsRepo(db, clock),

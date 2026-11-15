@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { SearchTypeFilter } from "./search.ts";
 
 /**
  * A tag an account can attach to files and folders. Tags are per-account,
@@ -134,3 +135,30 @@ export const RecentTouchRequest = z.object({
 });
 
 export type RecentTouchRequest = z.infer<typeof RecentTouchRequest>;
+
+/** A search the account saved from the search panel, with its type filter and folder scope. */
+export const SavedSearch = z.object({
+  id: z.string(),
+  name: z.string(),
+  query: z.string(),
+  type: SearchTypeFilter,
+  /** The folder "This folder only" searched; null searches everything. */
+  folder: z.string().nullable(),
+});
+
+export type SavedSearch = z.infer<typeof SavedSearch>;
+
+export const SavedSearchesResponse = z.object({
+  searches: z.array(SavedSearch),
+});
+
+export type SavedSearchesResponse = z.infer<typeof SavedSearchesResponse>;
+
+export const CreateSavedSearchRequest = z.object({
+  name: z.string().min(1).max(100),
+  query: z.string().min(1).max(500),
+  type: SearchTypeFilter,
+  folder: z.string().nullable(),
+});
+
+export type CreateSavedSearchRequest = z.infer<typeof CreateSavedSearchRequest>;

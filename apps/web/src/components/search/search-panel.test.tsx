@@ -978,3 +978,82 @@ it("renders visible File type label in the filter bar", async () => {
 
   expect(screen.getByText("File type:")).toBeDefined();
 });
+
+it("opens on a saved search's query and filters, in the folder it was saved in", async () => {
+  stubMatchMedia(false);
+  pathnameMock.mockReturnValue("/files/Elsewhere");
+  const search = vi.spyOn(apiClient, "search").mockResolvedValue({
+    query: "same",
+    sections: { folders: [], files: [hit], content: [] },
+    degraded: false,
+    unavailable: false,
+    tookMs: 1,
+  });
+  const client = new QueryClient({ defaultOptions: { queries: { staleTime: Infinity } } });
+  client.setQueryData(["auth", "me"], me);
+  render(
+    <QueryClientProvider client={client}>
+      <SearchPanel
+        open
+        onOpenChange={vi.fn()}
+        saved={{ id: "s1", name: "Same", query: "same", type: "documents", folder: "/Work" }}
+      />
+    </QueryClientProvider>,
+  );
+
+  await screen.findByText("same.txt");
+  expect(screen.getByDisplayValue("same")).toBeDefined();
+  expect(screen.getByRole("button", { name: "Documents" }).getAttribute("aria-pressed")).toBe(
+    "true",
+  );
+  expect(screen.getByRole("button", { name: "Only in Work" }).getAttribute("aria-pressed")).toBe(
+    "true",
+  );
+  expect(search).toHaveBeenCalledWith("same", {
+    limit: 20,
+    ext: expect.stringContaining(".pdf"),
+    folder: "/Work",
+  });
+});
+
+it("saves the query and filters under the name typed, defaulting to the query", async () => {
+  stubMatchMedia(false);
+  pathnameMock.mockReturnValue("/files/Work");
+  vi.spyOn(apiClient, "search").mockResolvedValue({
+    query: "same",
+    sections: { folders: [], files: [hit], content: [] },
+    degraded: false,
+    unavailable: false,
+    tookMs: 1,
+  });
+  const create = vi.spyOn(apiClient, "createSavedSearch").mockImplementation(async (req) => ({
+    id: "s1",
+    ...req,
+  }));
+  const client = new QueryClient({ defaultOptions: { queries: { staleTime: Infinity } } });
+  client.setQueryData(["auth", "me"], me);
+  renderPanel(client);
+
+  expect(screen.getByRole("button", { name: "Save search" }).hasAttribute("disabled")).toBe(true);
+  fireEvent.change(screen.getByPlaceholderText("Search files, content, and images..."), {
+    target: { value: "same" },
+  });
+  await screen.findByText("same.txt");
+  fireEvent.click(screen.getByRole("button", { name: "This folder only" }));
+  fireEvent.click(screen.getByRole("button", { name: "Save search" }));
+  const name = await screen.findByRole("textbox", { name: "Name" });
+  expect((name as HTMLInputElement).value).toBe("same");
+  fireEvent.keyDown(name, { key: "Enter" });
+  fireEvent.change(name, { target: { value: "  " } });
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+  await waitFor(() =>
+    expect(create).toHaveBeenCalledWith({
+      name: "same",
+      query: "same",
+      type: "any",
+      folder: "/Work",
+    }),
+  );
+  await waitFor(() => expect(screen.queryByRole("textbox", { name: "Name" })).toBeNull());
+});
