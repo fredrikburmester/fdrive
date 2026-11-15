@@ -552,7 +552,7 @@ test.describe("scoping", () => {
     // so pressing the shortcut immediately after login can race that
     // hydration. Waiting for the button to render and become enabled first
     // guarantees the listener is already attached.
-    await expect(page.getByRole("button", { name: "Search" })).toBeEnabled();
+    await expect(page.getByRole("button", { name: "Search", exact: true })).toBeEnabled();
 
     await openSearch(page);
     const dialog = page.getByRole("dialog");
