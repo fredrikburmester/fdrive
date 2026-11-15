@@ -70,7 +70,7 @@ it("answers which folders an upload, a move and a delete changed, and detects a 
   /** Signs `username` in on the web and pairs a read-and-write Mac location for them. */
   async function connect(username: string) {
     const login = await send("/api/v1/auth/login", {
-      body: { credential: { username, password: `${username}-password` } },
+      body: { username, password: `${username}-password` },
     });
     MeResponse.parse(await ok(login));
     const cookie = login.headers.get("set-cookie")?.split(";")[0] ?? "";

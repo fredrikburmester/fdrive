@@ -19,6 +19,8 @@ import type { LocalUserService, UserViewer } from "./service.js";
 
 export interface RegisterLocalUserRoutesDeps {
   readonly service: LocalUserService;
+  /** The caller's address, for the login limiter a password change is checked behind. */
+  readonly clientIp: (c: Context) => string;
 }
 
 async function parseBody<T>(schema: z.ZodType<T>, c: Context, what: string): Promise<T> {
@@ -91,6 +93,7 @@ export function registerLocalUserRoutes(
       sessionIdHash: hash,
       currentPassword: body.currentPassword,
       newPassword: body.newPassword,
+      ip: deps.clientIp(c),
     });
     return c.json(OkResponse.parse({ ok: true }));
   });

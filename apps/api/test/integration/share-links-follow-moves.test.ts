@@ -136,7 +136,7 @@ describe("public links follow the files they point at", () => {
 
   async function login(username: string): Promise<string> {
     const response = await call(ROUTES.auth.login, {
-      body: { credential: { username, password: `${username}-pass` } },
+      body: { username, password: `${username}-pass` },
     });
     expect(response.status).toBe(200);
     return cookieFrom(response);
@@ -427,7 +427,7 @@ describe("public links follow the files they point at", () => {
     const trashed = await link(alice, "/mac-trash.txt");
 
     const loggedIn = await call(ROUTES.auth.login, {
-      body: { credential: { username: "alice", password: "alice-pass" } },
+      body: { username: "alice", password: "alice-pass" },
     });
     const cookie = cookieFrom(loggedIn);
     const base = "/api/v2/desktop";

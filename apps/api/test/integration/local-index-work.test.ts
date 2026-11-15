@@ -10,7 +10,6 @@ import { createNameIndexClient } from "../../src/search/name-index.js";
 import { LocalIndexerStack } from "./helpers/local-indexer-stack.js";
 
 const users: LocalUsers = {
-  verify: async () => ({ result: "invalid" }),
   status: async () => "active",
   shared: async () => [],
 };

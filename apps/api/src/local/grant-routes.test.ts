@@ -14,16 +14,12 @@ import { seedLocalUsers } from "./test-fixtures/index.ts";
 async function harness() {
   const repos = createMemoryRepos();
   const row = await seedLocalProvider(repos);
-  await seedLocalUsers(repos, [
+  const [identity] = await seedLocalUsers(repos, [
     { username: "alice", password: "alice-pass" },
     { username: "bob", password: "bob-pass" },
   ]);
-  const account = await repos.accounts.create({ displayName: "alice" });
-  const identity = await repos.identities.create({
-    accountId: account.id,
-    providerId: row.id,
-    externalUsername: "alice",
-  });
+  if (identity === undefined) throw new Error("unseeded");
+  const account = { id: identity.accountId };
   // Alice's files: one folder to share.
   const storage = createMemoryStorage({ "/Projects/plan.txt": "plan" });
   const service = createLocalGrantService({

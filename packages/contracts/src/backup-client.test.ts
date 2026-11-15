@@ -20,7 +20,7 @@ it("sends the owner session and CSRF marker for every backup operation", async (
     fetch,
     baseUrl: "https://fdrive.invalid",
   });
-  await client.unlock({ password: "owner" });
+  await client.unlock("owner-password");
   await client.key("public key");
   await client.confirm("proof");
   await client.estimate();
@@ -61,6 +61,7 @@ it("sends the owner session and CSRF marker for every backup operation", async (
   };
   await client.destination(destination);
   await client.destination(destination, id);
+  await client.destination({ type: "provider", name: "Files", providerId: id, prefix: "/Backups" });
   await client.testDestination(id);
   await client.removeDestination(id);
   const metadata = {
@@ -78,6 +79,8 @@ it("sends the owner session and CSRF marker for every backup operation", async (
     const headers = new Headers(init?.headers);
     expect(headers.get("x-requested-with")).toBe("fdrive");
   }
+  const unlock = fetch.mock.calls.find(([url]) => String(url).endsWith("/unlock"));
+  expect(JSON.parse(String(unlock?.[1]?.body))).toEqual({ password: "owner-password" });
   const upload = fetch.mock.calls.find(([_url, init]) => init?.body === body);
   const encoded = new Headers(upload?.[1]?.headers).get("x-backup-metadata") ?? "";
   expect(
@@ -145,4 +148,10 @@ it("rejects unsafe destinations and invalid schedules before making requests", (
       prefix: "private/fdrive",
     }).success,
   ).toBe(true);
+  // A files folder destination keeps no password.
+  const files = { type: "provider", name: "Files", providerId: id, prefix: "/Backups" };
+  expect(BackupDestinationInput.safeParse(files).success).toBe(true);
+  expect(
+    BackupDestinationInput.safeParse({ ...files, credential: { password: "secret" } }).success,
+  ).toBe(false);
 });

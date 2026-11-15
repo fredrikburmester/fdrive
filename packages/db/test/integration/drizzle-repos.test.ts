@@ -48,7 +48,7 @@ defineReposSuite("drizzle", async () => {
       app.ai_chats,
       app.sessions,
       app.api_tokens,
-      app.credentials,
+      app.local_users,
       app.file_tags,
       app.favorites,
       app.folder_views,

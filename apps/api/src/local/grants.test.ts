@@ -8,14 +8,14 @@ import { createLocalGrantService, type LocalGrantServiceDeps } from "./grants.js
 import { localModuleFixture, seedLocalUsers, writeHomeFiles } from "./test-fixtures/index.ts";
 
 /**
- * Alice, Bob and Carol on the local folder (Dave disabled), Alice also on a
+ * Alice, Bob and Carol on the local folder (Dave disabled), and a login on a
  * WebDAV row left from before the files folder was the only storage, with
  * folders in Alice's and Carol's homes and Trash at `/.trash`.
  */
 async function fixture(options: Partial<LocalGrantServiceDeps> = {}) {
   const repos = createMemoryRepos();
   const local = localModuleFixture(repos);
-  await seedLocalUsers(repos, [
+  const [alice, bob, carol] = await seedLocalUsers(repos, [
     { username: "alice", password: "alice-pass" },
     { username: "bob", password: "bob-pass" },
     { username: "carol", password: "carol-pass" },
@@ -44,10 +44,8 @@ async function fixture(options: Partial<LocalGrantServiceDeps> = {}) {
       externalUsername: username,
     });
   }
-  const alice = await login(row.id, "alice");
-  const bob = await login(row.id, "bob");
-  const carol = await login(row.id, "carol");
-  const aliceRetired = await login(retired.id, "alice");
+  if (alice === undefined || bob === undefined || carol === undefined) throw new Error("unseeded");
+  const aliceRetired = await login(retired.id, "alice-on-dav");
   const service = createLocalGrantService({
     repos,
     providerId: async () => row.id,
@@ -280,15 +278,6 @@ describe("createLocalGrantService: changing and ending shares", () => {
       identityId: h.aliceRetired.id,
       path: "/Shared with me/Projects/x",
     });
-    // An owner who never signed in has no login, so nothing of theirs to place it in.
-    await h.repos.localUsers.update("dave", { disabled: false });
-    await h.repos.localGrants.put({
-      ownerUsername: "dave",
-      path: "/Music",
-      granteeUsername: "carol",
-      access: "read",
-    });
-    expect(await h.service.ownerPath(h.carol.id, "/Shared with me/Music/song.mp3")).toBeNull();
   });
 
   it("keeps a share that followed its folder into Trash from the person it is shared with", async () => {

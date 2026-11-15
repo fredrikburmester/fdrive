@@ -24,7 +24,6 @@ async function fixture() {
     root,
     indexRoot: "files",
     users: {
-      verify: async () => ({ result: "invalid" }),
       status: async () => status,
       shared: async () => [],
     },

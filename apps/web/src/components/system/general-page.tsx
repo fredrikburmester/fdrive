@@ -59,7 +59,7 @@ function StorageCard({ provider }: { provider: AdminProvider }) {
           aria-invalid={error !== null}
           onChange={(event) => setDraft(event.target.value)}
         />
-        <FieldDescription>Shown on the login page and in Finder.</FieldDescription>
+        <FieldDescription>Shown under each username and in Finder.</FieldDescription>
         {error === null ? null : <FieldError>{error}</FieldError>}
       </Field>
       {update.isError ? (

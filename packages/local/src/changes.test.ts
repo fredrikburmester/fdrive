@@ -324,7 +324,6 @@ describe("local module index changes", () => {
   const instance = { id: "p1", baseUrl: "http://local.invalid", config: {} };
   const ctx = { fetch: globalThis.fetch };
   const users: LocalUsers = {
-    verify: async (username) => ({ result: "ok", username }),
     status: async () => "active",
     shared: async () => [],
   };

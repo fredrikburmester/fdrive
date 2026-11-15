@@ -114,7 +114,7 @@ test("upload completion leads to a durable journey, copies branch and exports ke
       (
         await foreign.request.post("/api/v1/auth/login", {
           headers,
-          data: { credential: { username: "bob", password: "bob-password" } },
+          data: { username: "bob", password: "bob-password" },
         })
       ).ok(),
     ).toBe(true);

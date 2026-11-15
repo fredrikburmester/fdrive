@@ -94,7 +94,7 @@ describe("useLogin", () => {
     const queryClient = new QueryClient();
 
     const { result } = renderHook(() => useLogin(), { wrapper: createWrapper(queryClient) });
-    result.current.mutate({ credential: { username: "ada", password: "secret" } });
+    result.current.mutate({ username: "ada", password: "secret" });
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
     expect(queryClient.getQueryData(["auth", "me"])).toEqual(ME_RESPONSE);

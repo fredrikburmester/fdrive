@@ -180,7 +180,8 @@ fdrive keeps no copy of what a Mac write replaced, as for web and Office saves. 
 renames its file moves the old name to [Trash](TRASH.md), and only while it still has the stamp
 the save was based on. `recoveryId` in operation results is always null; shipped apps decode it.
 
-**Upload size.** fdrive accepts files up to 16 GiB.
+**Upload size.** fdrive accepts files up to 16 GiB. Pairing advertises the limit, and the Mac app
+refuses a larger file before copying it.
 
 Publication is refused, and every location stays read-only, only when the server has no recovery
 storage; the Mac app shows that reason on each card. A publication the storage refuses outright
@@ -243,7 +244,12 @@ releases kept) are deleted; anything unexpected defers that operation with a Gen
 warning. Committing and uncertain operations are never touched.
 
 The native catalog stores immutable pending copies before networking, and records the remote
-receipt before acknowledging Finder. Retry uses the same operation. Offline edits synchronize
+receipt before acknowledging Finder. Retry uses the same operation; one that finds the commit
+still `committing` or `uncertain` reports the save unconfirmed and keeps the pending copy, without
+waiting on the commit or cancelling it. Finder's cancel stops the request and asks the server to
+cancel the operation. The pending copy goes only when the server answers that it is cancelled,
+which it does only for an operation that can no longer publish: a commit already under way is
+refused, finishes on the server, and the next retry reads its outcome. Offline edits synchronize
 when the connection recovers. A conflicting file save creates a uniquely named conflict copy,
 preserving the remote original; if that name is taken too, numbered names are tried up to
 three times before the error stands. `failOnConflict` retains the local edit with a visible error.

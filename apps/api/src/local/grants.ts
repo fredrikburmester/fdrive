@@ -43,10 +43,9 @@ export interface LocalGrantService {
   /**
    * Where `path` (the login's own path) lies in its owner's files: a path in
    * a folder shared with the login is the owner's login and the owner's
-   * path; any other is the login's own. `null` when the owner has never
-   * signed in, so nothing of theirs is keyed by their login yet.
+   * path; any other is the login's own.
    */
-  ownerPath(identityId: string, path: string): Promise<{ identityId: string; path: string } | null>;
+  ownerPath(identityId: string, path: string): Promise<{ identityId: string; path: string }>;
   /**
    * What `onMoved` does, as data a caller applies in its own transaction (a
    * Mac write's receipt): the owner's username and the move, or `null` when
@@ -291,11 +290,12 @@ export function createLocalGrantService(deps: LocalGrantServiceDeps): LocalGrant
       );
       // No such shared folder: an ordinary folder of that name, or nothing.
       if (folder === undefined) return own;
+      // A grant goes with its owner's user, whose login exists as long as they do.
       const owner = await repos.identities.findByProviderUsername(
         identity.providerId,
         folder.owner,
       );
-      if (owner === null) return null;
+      if (owner === null) throw new Error("the owner of a shared folder has no login");
       return { identityId: owner.id, path: joinPath(folder.path, ...segments.slice(2)) };
     },
 

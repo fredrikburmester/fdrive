@@ -26,7 +26,7 @@ its folder, `.env` and data.
 
 > [!IMPORTANT]
 > Back up `.env` and keep it out of logs and reports. The master key encrypts stored
-> credentials, and a lost or replaced key can't be recovered.
+> secrets such as backup keys, and a lost or replaced key can't be recovered.
 
 **Portainer, Dockge, Unraid's Compose Manager or a NAS app:** create a stack from
 `compose.yaml` and set `FDRIVE_MASTER_KEY` (`openssl rand -base64 32`) and

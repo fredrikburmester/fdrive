@@ -46,10 +46,11 @@ credentials; MCP tokens cannot retarget these domains.
 The files folder is one row in `app.providers`; an identity is a login on that row, and an
 account has exactly one (`identities.account_id` is unique). A session and an API token act as
 that login (`sessions.identity_id`, `api_tokens.identity_id`), and deleting the login ends
-them. A login's password is also kept
-sealed in `app.credentials`, bound to its identity, so a later sign-in can tell whether it
-changed. The files folder's row comes from the deployment (`deploymentManaged`); administrators
-can only rename it. See [authentication](AUTH.md) and [storage port](STORAGE-PROVIDERS.md).
+them. Every local user has a login of the same name from the moment the user exists, and
+sign-in finds it by name in any case; passwords live only as scrypt hashes in
+`app.local_users`. The files folder's row comes from the deployment (`deploymentManaged`);
+administrators can only rename it. See [authentication](AUTH.md) and
+[storage port](STORAGE-PROVIDERS.md).
 
 Local users are `app.local_users`: a username unique in any case, a scrypt hash and a disabled
 flag. Setup creates the first one and System > Users the rest; the local module's `admit`

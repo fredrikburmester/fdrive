@@ -1,16 +1,18 @@
-import type { LoginRepo, Repos } from "@fdrive/db";
+import type { Repos } from "@fdrive/db";
 import type { AppHono, AuthedHono } from "../app.js";
 import type { AppConfig } from "../config.js";
 import type { ProviderService } from "../providers/service.js";
-import { createLoginLimiter, type LoginLimiter } from "./login-limiter.js";
+import type { CheckPassword } from "./password.ts";
 import type { PrincipalResolver } from "./principal.js";
 import { registerAuthRoutes } from "./routes.js";
 import { createAuthService } from "./service.js";
 import type { IdentityStorageFactory } from "./storage-factory.ts";
 
-export { CryptoError, KEY_ID, open, parseMasterKey, seal } from "./crypto.js";
+export { CryptoError, open, parseMasterKey, seal } from "./crypto.js";
 export type { LoginLimiter } from "./login-limiter.js";
 export { createLoginLimiter } from "./login-limiter.js";
+export type { CheckPassword, PasswordCheckInput } from "./password.ts";
+export { createLoginReauthentication, createPasswordCheck, loginIpKey } from "./password.ts";
 export type { AuthService, LoginInput, LoginResult } from "./service.js";
 export { createAuthService } from "./service.js";
 export {
@@ -22,20 +24,14 @@ export {
   hashSessionId,
 } from "./sessions.js";
 
-const LOGIN_MAX_FAILURES = 5;
-const LOGIN_WINDOW_MS = 60_000;
-const LOGIN_BLOCK_MS = 60_000;
-
 export interface CreateAuthModuleDeps {
   readonly repos: Repos;
-  readonly logins: LoginRepo;
   readonly providers: ProviderService;
-  readonly fetch: typeof globalThis.fetch;
-  readonly master: Uint8Array;
   readonly clock: () => Date;
   readonly config: AppConfig;
   readonly storageFactory: IdentityStorageFactory;
-  readonly limiter?: LoginLimiter;
+  /** The one password check, behind the login limiter (`createPasswordCheck`). */
+  readonly checkPassword: CheckPassword;
   /**
    * Usernames always treated as admins, in addition to `accounts.is_admin`.
    * Defaults to `config.fdriveAdminUsers`.
@@ -50,29 +46,17 @@ export interface AuthModule {
 }
 
 /**
- * Wires the auth module: rate limiter, auth service, and route
- * registration, so the app-wiring chunk needs a single call to get a
- * `principalResolver` and a `registerRoutes` function.
+ * Wires the auth module: auth service and route registration, so the
+ * app-wiring chunk needs a single call to get a `principalResolver` and a
+ * `registerRoutes` function.
  */
 export function createAuthModule(deps: CreateAuthModuleDeps): AuthModule {
-  const limiter =
-    deps.limiter ??
-    createLoginLimiter({
-      clock: deps.clock,
-      maxFailures: LOGIN_MAX_FAILURES,
-      windowMs: LOGIN_WINDOW_MS,
-      blockMs: LOGIN_BLOCK_MS,
-    });
-
   const service = createAuthService({
     repos: deps.repos,
-    logins: deps.logins,
     providers: deps.providers,
-    fetch: deps.fetch,
-    master: deps.master,
     clock: deps.clock,
     config: deps.config,
-    limiter,
+    checkPassword: deps.checkPassword,
     storageFactory: deps.storageFactory,
     adminUsernames: deps.adminUsernames ?? deps.config.fdriveAdminUsers,
   });

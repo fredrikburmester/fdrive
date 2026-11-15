@@ -90,7 +90,7 @@ it("holds the installation-wide settings: the address, the files folder and its 
   expect(screen.getByText("Server address card")).toBeTruthy();
   expect(screen.getByText("Storage")).toBeTruthy();
   expect(screen.getByText("Folder on this server, set by FDRIVE_STORAGE_ROOT.")).toBeTruthy();
-  expect(screen.getByText("Shown on the login page and in Finder.")).toBeTruthy();
+  expect(screen.getByText("Shown under each username and in Finder.")).toBeTruthy();
   expect(screen.getByText("Trash card for Local folder")).toBeTruthy();
   // A reachable folder needs no reachability line, and nothing links elsewhere.
   expect(screen.queryByText("Unreachable")).toBeNull();

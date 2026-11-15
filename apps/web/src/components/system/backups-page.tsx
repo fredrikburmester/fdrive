@@ -5,7 +5,6 @@ import { Decrypter, generateIdentity, identityToRecipient } from "age-encryption
 import { Download, LoaderCircle, Plus, ShieldCheck } from "lucide-react";
 import { type ReactNode, useId, useRef, useState } from "react";
 import { toast } from "sonner";
-import { ProviderFieldInputs } from "@/components/identity/provider-fields";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -37,14 +36,7 @@ import {
 import { Textarea } from "@/components/ui/textarea";
 import { useMe } from "@/lib/api/auth-queries";
 import { backupClient, backupQueryKey, useBackups } from "@/lib/api/backup-queries";
-import { useProviders } from "@/lib/api/provider-queries";
 import { useAdminProviders } from "@/lib/api/system-queries";
-import {
-  buildCredential,
-  confirmationFieldsFor,
-  credentialComplete,
-  credentialFieldsFor,
-} from "@/lib/auth/login-model";
 import { formatBytes, type SizeUnits } from "@/lib/format";
 import { useFormatters } from "@/lib/use-format-preferences";
 import { BackupHealth } from "./backup-health";
@@ -61,31 +53,43 @@ function OwnerUnlock({
   onUnlocked: () => void;
 }) {
   const { data: me } = useMe();
-  const { data: providers } = useProviders();
-  const [current, setCurrent] = useState<Record<string, string>>({});
+  const [password, setPassword] = useState("");
   const id = useId();
-  const provider = providers?.providers.find((item) => item.id === me?.identity.providerId);
-  const fields = confirmationFieldsFor(credentialFieldsFor(provider));
   return (
     <form
       className="grid max-w-lg gap-3"
       onSubmit={(event) => {
         event.preventDefault();
         void act(async () => {
-          await backupClient.unlock(buildCredential(fields, current));
-          setCurrent({});
+          await backupClient.unlock(password);
+          setPassword("");
           onUnlocked();
         });
       }}
     >
-      <ProviderFieldInputs
-        fields={fields}
-        values={current}
-        onChange={(name, value) => setCurrent({ ...current, [name]: value })}
-        idPrefix={id}
-        disabled={busy}
+      {/* Lets password managers fill the signed-in user's own password. */}
+      <input
+        type="text"
+        name="username"
+        autoComplete="username"
+        value={me?.identity.username ?? ""}
+        readOnly
+        hidden
       />
-      <Button type="submit" disabled={busy || !credentialComplete(fields, current)}>
+      <FormField>
+        <FieldLabel htmlFor={id}>Current password</FieldLabel>
+        <Input
+          id={id}
+          type="password"
+          autoComplete="current-password"
+          maxLength={1024}
+          value={password}
+          disabled={busy}
+          onChange={(event) => setPassword(event.target.value)}
+        />
+        <FieldDescription>The password you sign in with.</FieldDescription>
+      </FormField>
+      <Button type="submit" disabled={busy || password.length === 0}>
         Unlock backups
       </Button>
     </form>
@@ -351,7 +355,6 @@ function Destinations({
   const [accessKeyId, setAccessKeyId] = useState("");
   const [secret, setSecret] = useState("");
   const [providerId, setProviderId] = useState("");
-  const [username, setUsername] = useState("");
   return (
     <SystemSection
       title="Destinations"
@@ -489,13 +492,7 @@ function Destinations({
                       accessKeyId,
                       secretAccessKey: secret,
                     }
-                  : {
-                      type: "provider",
-                      name,
-                      providerId,
-                      prefix,
-                      credential: { username, password: secret },
-                    },
+                  : { type: "provider", name, providerId, prefix },
               );
               setSecret("");
               setAdding(false);
@@ -520,12 +517,12 @@ function Destinations({
               >
                 <SelectTrigger id={id}>
                   <SelectValue>
-                    {type === "s3" ? "S3 or Backblaze B2" : "Connected fileserver"}
+                    {type === "s3" ? "S3 or Backblaze B2" : "Folder in your files"}
                   </SelectValue>
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="s3">S3 or Backblaze B2</SelectItem>
-                  <SelectItem value="provider">Connected fileserver</SelectItem>
+                  <SelectItem value="provider">Folder in your files</SelectItem>
                 </SelectContent>
               </Select>
             )}
@@ -606,58 +603,53 @@ function Destinations({
               </Field>
             </>
           ) : (
-            <>
-              <Field label="Fileserver">
-                {(id) => (
-                  <Select value={providerId} onValueChange={(value) => setProviderId(value ?? "")}>
-                    <SelectTrigger id={id}>
-                      <SelectValue placeholder="Choose storage" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {providers.data?.providers.map((provider) => (
-                        <SelectItem key={provider.id} value={provider.id}>
-                          {provider.label}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                )}
-              </Field>
-              <Field label="Backup username">
-                {(id) => (
-                  <Input
-                    id={id}
-                    value={username}
-                    onChange={(e) => setUsername(e.target.value)}
-                    autoComplete="off"
-                    required
-                  />
-                )}
-              </Field>
-            </>
+            <Field label="Fileserver">
+              {(id) => (
+                <Select value={providerId} onValueChange={(value) => setProviderId(value ?? "")}>
+                  <SelectTrigger id={id}>
+                    <SelectValue placeholder="Choose storage" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {providers.data?.providers.map((provider) => (
+                      <SelectItem key={provider.id} value={provider.id}>
+                        {provider.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              )}
+            </Field>
           )}
           <Field label={type === "s3" ? "Key prefix" : "Private backup directory"}>
             {(id) => (
               <Input id={id} value={prefix} onChange={(e) => setPrefix(e.target.value)} required />
             )}
           </Field>
-          <Field label={type === "s3" ? "Secret access key" : "Backup password"}>
-            {(id) => (
-              <Input
-                id={id}
-                type="password"
-                value={secret}
-                onChange={(e) => setSecret(e.target.value)}
-                autoComplete="new-password"
-                required
-              />
-            )}
-          </Field>
-          <p className="text-sm text-muted-foreground sm:col-span-2">
-            Use private storage with a dedicated password that signs in without one-time codes;
-            scheduled backups run unattended. Keep a copy of those credentials outside fdrive for
-            disaster recovery.
-          </p>
+          {type === "s3" ? (
+            <>
+              <Field label="Secret access key">
+                {(id) => (
+                  <Input
+                    id={id}
+                    type="password"
+                    value={secret}
+                    onChange={(e) => setSecret(e.target.value)}
+                    autoComplete="new-password"
+                    required
+                  />
+                )}
+              </Field>
+              <p className="text-sm text-muted-foreground sm:col-span-2">
+                Use a private bucket with dedicated credentials; scheduled backups run unattended.
+                Keep a copy of those credentials outside fdrive for disaster recovery.
+              </p>
+            </>
+          ) : (
+            <p className="text-sm text-muted-foreground sm:col-span-2">
+              Copies go to this folder in your own files, on this host. Copy them off the host with
+              the rest of the files folder.
+            </p>
+          )}
           <Button disabled={busy} type="submit">
             Test and save
           </Button>
@@ -747,7 +739,7 @@ export function BackupsPage() {
           <>
             <SystemSection
               title="Owner access"
-              description="Confirm your storage password to manage sensitive backups for the next ten minutes."
+              description="Confirm your password to manage sensitive backups for the next ten minutes."
             >
               {unlocked ? (
                 <p className="text-sm">Backup controls unlocked.</p>

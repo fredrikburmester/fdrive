@@ -246,6 +246,8 @@ describe("migrate", () => {
         .values({ accountId: account.id, providerId: provider.id, externalUsername: "alice" })
         .returning();
       if (identity === undefined) throw new Error("expected an identity");
+      // Its user, so the next migration keeps the login.
+      await older.insert(schema.localUsers).values({ username: "alice", passwordHash: "x" });
       await older.execute(sql`
         insert into app.api_tokens (account_id, identity_id, name, token_hash, access) values
           (${account.id}, ${identity.id}, 'Old', 'old-hash', null),
@@ -264,7 +266,7 @@ describe("migrate", () => {
   });
 
   it("leaves personal activity with nothing only remote storage produced, so every event parses", async () => {
-    await withDatabaseBefore("0033_activity_without_provider_values", async (older) => {
+    await withDatabaseBefore("0034_activity_without_provider_values", async (older) => {
       const [account] = await older.insert(schema.accounts).values({}).returning();
       const [provider] = await older
         .insert(schema.providers)
@@ -339,6 +341,68 @@ describe("migrate", () => {
         select column_name as column from information_schema.columns
         where table_schema = 'app' and table_name = 'activity_revisions'`);
       expect(revisions.rows.map((row) => row.column)).not.toContain("provider_version");
+    });
+  });
+
+  it("keeps only logins with a user of the same name, and drops the stored passwords", async () => {
+    await withDatabaseBefore("0033_local_passwords", async (older) => {
+      const [local] = await older
+        .insert(schema.providers)
+        .values({ type: "local", baseUrl: "local" })
+        .returning();
+      const [webdav] = await older
+        .insert(schema.providers)
+        .values({ type: "webdav", baseUrl: "http://dav.invalid", enabled: false })
+        .returning();
+      if (local === undefined || webdav === undefined) throw new Error("expected rows");
+      const login = async (providerId: string, externalUsername: string) => {
+        const [account] = await older.insert(schema.accounts).values({}).returning();
+        if (account === undefined) throw new Error("expected an account");
+        await older
+          .insert(schema.identities)
+          .values({ accountId: account.id, providerId, externalUsername });
+        return account.id;
+      };
+      const owner = await login(local.id, "alice");
+      await login(local.id, "Bob"); // a removed user's login under another spelling of bob
+      await login(webdav.id, "alice-dav"); // a login on storage fdrive no longer has
+      for (const username of ["alice", "bob", "carol"])
+        await older.insert(schema.localUsers).values({ username, passwordHash: "x" });
+      // A files folder destination with a sealed password, and a bucket.
+      await older.execute(sql`
+        insert into app.backup_destinations (id, revision, name, type, config, secret) values
+          (gen_random_uuid(), gen_random_uuid(), 'Files', 'provider', '{}', '\\x01'),
+          (gen_random_uuid(), gen_random_uuid(), 'Bucket', 's3', '{}', '\\x01')
+      `);
+      await older.execute(sql`
+        insert into app.settings (key, value) values
+          ('setup.initialized.v1', 'true'),
+          ('setup.owner.v1', ${JSON.stringify({ version: 1, state: "complete", accountId: owner })})
+      `);
+
+      await migrate(older);
+
+      const logins = await older.execute<{ name: string }>(
+        sql`select external_username as name from app.identities order by 1`,
+      );
+      expect(logins.rows.map((row) => row.name)).toEqual(["alice"]);
+      // bob and carol had no login of their own name; alice keeps hers.
+      const users = await older.execute<{ name: string }>(
+        sql`select username as name from app.local_users order by 1`,
+      );
+      expect(users.rows.map((row) => row.name)).toEqual(["alice"]);
+      const settings = await older.execute<{ key: string }>(
+        sql`select key from app.settings where key like 'setup.%' order by 1`,
+      );
+      expect(settings.rows).toEqual([{ key: "setup.owner.v1" }]);
+      const destinations = await older.execute<{ type: string }>(
+        sql`select type from app.backup_destinations`,
+      );
+      expect(destinations.rows).toEqual([{ type: "s3" }]);
+      const credentials = await older.execute<{ table: string | null }>(
+        sql`select to_regclass('app.credentials')::text as table`,
+      );
+      expect(credentials.rows).toEqual([{ table: null }]);
     });
   });
 });

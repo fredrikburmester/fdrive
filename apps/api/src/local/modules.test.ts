@@ -5,7 +5,7 @@ import { createFilesFolderGuard, FILES_FOLDER_REASONS } from "@fdrive/local";
 import { describe, expect, it, vi } from "vitest";
 import { createChangeQueue } from "./change-queue.js";
 import { deploymentModules, journalRoot, LOCAL_INDEX_ROOT, localIndexRoot } from "./modules.js";
-import { FAST_PASSWORDS, seedLocalUsers, temporaryStorageRoot } from "./test-fixtures/index.ts";
+import { seedLocalUsers, temporaryStorageRoot } from "./test-fixtures/index.ts";
 
 const root = (name: string, storagePath: string) => ({
   name,
@@ -58,7 +58,6 @@ describe("deploymentModules", () => {
     const modules = deploymentModules(
       { fdriveStorageRoot: storageRoot, fdriveIndexRoots: [root("files", storageRoot)] },
       repos,
-      FAST_PASSWORDS,
     );
     expect(Object.keys(modules)).toEqual(["local"]);
     const local = modules.local;
@@ -66,9 +65,8 @@ describe("deploymentModules", () => {
     const instance = { id: "row", baseUrl: "local", config: {} };
     expect(local.indexRootName?.(instance)).toBe("files");
     expect(await local.probe(instance, { fetch })).toMatchObject({ ok: true });
-    expect(
-      await local.authenticate(instance, { username: "alice", password: "alice-pass" }, { fetch }),
-    ).toEqual({ externalUsername: "alice" });
+    await expect(local.admit?.(instance, "alice")).resolves.toBeUndefined();
+    await expect(local.admit?.(instance, "nobody")).rejects.toMatchObject({ kind: "forbidden" });
   });
 
   it("refuses a share in a folder the deployment closes to shares", async () => {
@@ -90,7 +88,6 @@ describe("deploymentModules", () => {
     const local = deploymentModules(
       { fdriveStorageRoot: storageRoot, fdriveIndexRoots: null },
       repos,
-      FAST_PASSWORDS,
       undefined,
       undefined,
       closedFolders,
@@ -105,16 +102,12 @@ describe("deploymentModules", () => {
     expect(closedFolders).toHaveBeenCalledWith("row");
   });
 
-  it("hashes with scrypt by default", async () => {
-    const repos = createMemoryRepos();
+  it("reads the folder under the default root when no root names it", () => {
     const modules = deploymentModules(
       { fdriveStorageRoot: temporaryStorageRoot(), fdriveIndexRoots: null },
-      repos,
+      createMemoryRepos(),
     );
     const instance = { id: "row", baseUrl: "local", config: {} };
-    await expect(
-      modules.local?.authenticate(instance, { username: "nobody", password: "x" }, { fetch }),
-    ).rejects.toMatchObject({ kind: "unauthorized" });
     expect(modules.local?.indexRootName?.(instance)).toBe(LOCAL_INDEX_ROOT);
   });
 
@@ -127,7 +120,6 @@ describe("deploymentModules", () => {
     const modules = deploymentModules(
       { fdriveStorageRoot: storageRoot, fdriveIndexRoots: null },
       createMemoryRepos(),
-      FAST_PASSWORDS,
       undefined,
       guard,
     );
@@ -164,7 +156,6 @@ describe("deploymentModules", () => {
       const modules = deploymentModules(
         { fdriveStorageRoot: storageRoot, fdriveIndexRoots: [root("files", storageRoot)] },
         createMemoryRepos(),
-        FAST_PASSWORDS,
         changes,
       );
       const storage = modules.local?.createStorage(instance, session, { fetch });
@@ -191,7 +182,6 @@ describe("deploymentModules", () => {
       const modules = deploymentModules(
         { fdriveStorageRoot: storageRoot, fdriveIndexRoots: [root("files", "/elsewhere")] },
         createMemoryRepos(),
-        FAST_PASSWORDS,
         changes,
       );
       expect(modules.local?.indexRootName?.(instance)).toBe("files");

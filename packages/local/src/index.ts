@@ -22,7 +22,6 @@ export type { Home } from "./home.js";
 export { createHome } from "./home.js";
 export type {
   CreateLocalModuleOptions,
-  LocalUserCheck,
   LocalUserStatus,
   LocalUsers,
 } from "./module.js";

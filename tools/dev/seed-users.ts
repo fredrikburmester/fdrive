@@ -1,14 +1,13 @@
 /**
  * Creates the dev users (alice, bob, carol and dev, see `generate-seed.ts`)
- * in `app.local_users`, so they sign in to the api dev server's local folder
+ * with their logins, so they sign in to the api dev server's local folder
  * with their known passwords. Run with `pnpm dev:users`, which `pnpm dev:env`
  * also runs; it reads `DATABASE_URL` from apps/api/.env.dev and applies the
  * same migrations the api runs on start. A user that already exists keeps its
  * password and state, so running it again changes nothing.
  *
- * Once a local user exists, a fresh database counts as set up and the setup
- * wizard is skipped: sign in as dev/dev, an administrator through
- * FDRIVE_ADMIN_USERS.
+ * Once a local user exists, setup is closed and the setup wizard is skipped:
+ * sign in as dev/dev, an administrator through FDRIVE_ADMIN_USERS.
  */
 import { createDb, createRepos, migrate } from "@fdrive/db";
 import { devUsers } from "./generate-seed.js";
@@ -23,7 +22,7 @@ async function main(env: NodeJS.ProcessEnv): Promise<void> {
   try {
     await migrate(database.db);
     const users = devUsers();
-    const created = await seedLocalUsers(createRepos(database.db).localUsers, users);
+    const created = await seedLocalUsers(createRepos(database.db), users);
     const kept = users.map((user) => user.username).filter((name) => !created.includes(name));
     console.log(
       [

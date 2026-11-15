@@ -220,11 +220,11 @@ describe("buildRequestUrl", () => {
 });
 
 describe("createApiClient: login", () => {
-  it("posts credentials and returns MeResponse", async () => {
+  it("posts the username and password and returns MeResponse", async () => {
     const { fetchStub, calls } = createStubFetch([jsonResponse(200, VALID_ME)]);
     const client = createApiClient({ baseUrl: "https://api.test", fetch: fetchStub });
 
-    const result = await client.login({ credential: { username: "alice", password: "hunter2" } });
+    const result = await client.login({ username: "alice", password: "hunter2" });
 
     expect(result).toEqual(VALID_ME);
     expect(calls).toHaveLength(1);
@@ -233,9 +233,7 @@ describe("createApiClient: login", () => {
     expect(calls[0]?.init.credentials).toBe("include");
     expect(headerValue(calls[0]?.init ?? {}, "x-requested-with")).toBe("fdrive");
     expect(headerValue(calls[0]?.init ?? {}, "content-type")).toBe("application/json");
-    expect(calls[0]?.init.body).toBe(
-      JSON.stringify({ credential: { username: "alice", password: "hunter2" } }),
-    );
+    expect(calls[0]?.init.body).toBe(JSON.stringify({ username: "alice", password: "hunter2" }));
   });
 });
 

@@ -134,7 +134,7 @@ describe("metadata follows the Mac's writes as they commit", () => {
 
   async function login(username: string): Promise<string> {
     const response = await call(ROUTES.auth.login, {
-      body: { credential: { username, password: `${username}-pass` } },
+      body: { username, password: `${username}-pass` },
     });
     expect(response.status).toBe(200);
     return cookieFrom(response);

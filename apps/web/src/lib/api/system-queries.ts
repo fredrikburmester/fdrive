@@ -74,7 +74,6 @@ export function useSetupComplete() {
       apiClient.setupComplete(token, request),
     onSuccess: (me) => {
       queryClient.setQueryData(queryKeys.auth.me(), me);
-      void queryClient.invalidateQueries({ queryKey: queryKeys.providers.list() });
     },
   });
 }
@@ -110,7 +109,7 @@ function useInvalidatingMutation<TInput, TOutput>(
 
 /**
  * Renames the storage and refreshes everywhere the name shows: the admin
- * view, the login page's list and the signed-in account's logins.
+ * view and the signed-in account's login.
  */
 export const useAdminUpdateProvider = () =>
   useInvalidatingMutation(
@@ -119,7 +118,6 @@ export const useAdminUpdateProvider = () =>
     ({ id, patch }: { id: string; patch: AdminProviderUpdateRequest }) =>
       apiClient.adminUpdateProvider(id, patch),
     queryKeys.admin.providers(),
-    queryKeys.providers.list(),
     queryKeys.auth.me(),
   );
 

@@ -170,12 +170,7 @@ export async function captureSnapshot(
     for (const table of DURABLE_TABLES) {
       const columns = schema[table];
       if (!columns) throw Error("Missing backup table");
-      const projection = columns.map((column) =>
-        table === "app.credentials" &&
-        ["cached_token", "cached_token_expires_at"].includes(column.name)
-          ? "null::text"
-          : `${quoteIdentifier(column.name)}::text`,
-      );
+      const projection = columns.map((column) => `${quoteIdentifier(column.name)}::text`);
       await client.query(
         `declare backup_rows no scroll cursor for select array[${projection.join(",")}]::text[] as values from ${quoteTable(table)}`,
       );
