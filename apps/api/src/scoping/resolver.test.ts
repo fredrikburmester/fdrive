@@ -1,157 +1,87 @@
-import type { ProviderModule, Scope } from "@fdrive/core";
-import { createLocalModule, type LocalUsers } from "@fdrive/local";
+import type { Scope } from "@fdrive/core";
 import { describe, expect, it, vi } from "vitest";
-import { fakeProviderModule } from "../providers/test-fixtures/index.ts";
 import { createScopeResolver } from "./resolver.ts";
-import { buildIdentity, buildProvider, fakeProviders } from "./test-fixtures/index.ts";
-
-const users: LocalUsers = {
-  verify: async () => ({ result: "invalid" }),
-  status: async () => "active",
-  shared: async () => [],
-};
-
-function local(indexRoot: string | null): ProviderModule {
-  return createLocalModule({ root: "/srv/files", users, indexRoot });
-}
 
 const HOME: Scope = { rootName: "files", fsPrefix: "/alice", virtualPrefix: "/" };
 
+function resolver(
+  indexRootNames: Iterable<string>,
+  extraScopes?: Parameters<typeof createScopeResolver>[0]["extraScopes"],
+) {
+  return createScopeResolver({
+    storageId: "provider-1",
+    rootName: "files",
+    indexRootNames,
+    ...(extraScopes === undefined ? {} : { extraScopes }),
+  });
+}
+
 describe("configuredMappings", () => {
   it("maps the login's home to <root>/<username> without touching storage", async () => {
-    const resolver = createScopeResolver({
-      providers: fakeProviders([buildProvider()], () => local("files")),
-      indexRootNames: [],
-    });
-    expect(await resolver.configuredMappings(buildIdentity())).toEqual({
+    expect(await resolver([]).configuredMappings("alice")).toEqual({
       available: true,
       providerId: "provider-1",
       scopes: [HOME],
     });
-  });
-
-  it("names the provider row the identity belongs to", async () => {
-    const resolver = createScopeResolver({
-      providers: fakeProviders([buildProvider(), buildProvider({ id: "provider-2" })], () =>
-        local("files"),
-      ),
-      indexRootNames: ["files"],
-    });
-    const bob = buildIdentity({ providerId: "provider-2", externalUsername: "bob" });
-    expect(await resolver.configuredMappings(bob)).toEqual({
+    expect(await resolver(["files"]).configuredMappings("bob")).toEqual({
       available: true,
-      providerId: "provider-2",
+      providerId: "provider-1",
       scopes: [{ rootName: "files", fsPrefix: "/bob", virtualPrefix: "/" }],
     });
   });
 
-  it("reports provider_mismatch for a missing or disabled provider", async () => {
-    const resolver = createScopeResolver({
-      providers: fakeProviders([buildProvider({ enabled: false })], () => local("files")),
-      indexRootNames: ["files"],
-    });
-    expect(await resolver.configuredMappings(buildIdentity())).toEqual({
-      available: false,
-      reason: "provider_mismatch",
-    });
-    expect(await resolver.configuredMappings(buildIdentity({ providerId: "gone" }))).toEqual({
-      available: false,
-      reason: "provider_mismatch",
-    });
-  });
-
-  it("reports no_roots for storage outside every index root", async () => {
-    // The folder read under no root, and storage that names none at all.
-    for (const module of [local(null), fakeProviderModule()]) {
-      const resolver = createScopeResolver({
-        providers: fakeProviders([buildProvider()], () => module),
-        indexRootNames: ["files"],
-      });
-      expect(await resolver.configuredMappings(buildIdentity())).toEqual({
-        available: false,
-        reason: "no_roots",
-      });
-    }
-  });
-
   it("reports invalid_configuration for a username that cannot name one folder", async () => {
-    const resolver = createScopeResolver({
-      providers: fakeProviders([buildProvider()], () => local("files")),
-      indexRootNames: ["files"],
-    });
-    for (const externalUsername of ["..", "a/b", ""]) {
-      expect(await resolver.configuredMappings(buildIdentity({ externalUsername }))).toEqual({
+    for (const username of ["..", "a/b", ""]) {
+      expect(await resolver(["files"]).configuredMappings(username)).toEqual({
         available: false,
         reason: "invalid_configuration",
       });
     }
   });
 
-  it("appends extra scopes after the home, given the identity and its home", async () => {
+  it("appends extra scopes after the home, given the username and its home", async () => {
     const shared: Scope = {
       rootName: "files",
       fsPrefix: "/bob/Photos",
       virtualPrefix: "/Shared with me/Photos",
     };
     const extraScopes = vi.fn(async () => [shared]);
-    const resolver = createScopeResolver({
-      providers: fakeProviders([buildProvider()], () => local("files")),
-      indexRootNames: ["files"],
-      extraScopes,
-    });
-    const alice = buildIdentity();
-    expect(await resolver.configuredMappings(alice)).toEqual({
+    expect(await resolver(["files"], extraScopes).configuredMappings("alice")).toEqual({
       available: true,
       providerId: "provider-1",
       scopes: [HOME, shared],
     });
-    expect(extraScopes).toHaveBeenCalledWith(alice, HOME);
+    expect(extraScopes).toHaveBeenCalledWith("alice", HOME);
   });
 
   it("asks for no extra scopes when the login has no home", async () => {
     const extraScopes = vi.fn(async () => []);
-    const resolver = createScopeResolver({
-      providers: fakeProviders([buildProvider()], () => local(null)),
-      indexRootNames: [],
-      extraScopes,
-    });
-    await resolver.configuredMappings(buildIdentity());
+    await resolver([], extraScopes).configuredMappings("..");
     expect(extraScopes).not.toHaveBeenCalled();
   });
 });
 
 describe("verifiedIndexScopes", () => {
   it("returns the configured scopes when their root is indexed", async () => {
-    const resolver = createScopeResolver({
-      providers: fakeProviders([buildProvider()], () => local("files")),
-      indexRootNames: new Set(["files", "other"]),
-    });
-    expect(await resolver.verifiedIndexScopes(buildIdentity())).toEqual({
+    expect(await resolver(new Set(["files", "other"])).verifiedIndexScopes("alice")).toEqual({
       available: true,
       scopes: [HOME],
     });
   });
 
   it("reports no_roots when the login's root is not indexed, though Office keeps its mapping", async () => {
-    const resolver = createScopeResolver({
-      providers: fakeProviders([buildProvider()], () => local("files")),
-      indexRootNames: ["other"],
-    });
-    expect(await resolver.verifiedIndexScopes(buildIdentity())).toEqual({
+    const elsewhere = resolver(["other"]);
+    expect(await elsewhere.verifiedIndexScopes("alice")).toEqual({
       available: false,
       reason: "no_roots",
     });
-    expect((await resolver.configuredMappings(buildIdentity())).available).toBe(true);
+    expect((await elsewhere.configuredMappings("alice")).available).toBe(true);
   });
 
   it("passes on why the configured mapping is unavailable", async () => {
-    const resolver = createScopeResolver({
-      providers: fakeProviders([], () => local("files")),
-      indexRootNames: ["files"],
-    });
-    expect(await resolver.verifiedIndexScopes(buildIdentity())).toEqual({
+    expect(await resolver(["files"]).verifiedIndexScopes("..")).toEqual({
       available: false,
-      reason: "provider_mismatch",
+      reason: "invalid_configuration",
     });
   });
 
@@ -162,22 +92,12 @@ describe("verifiedIndexScopes", () => {
       virtualPrefix: "/Shared with me/Photos",
     };
     const elsewhere: Scope = { rootName: "nas", fsPrefix: "/team", virtualPrefix: "/Team" };
-    const resolver = createScopeResolver({
-      providers: fakeProviders([buildProvider()], () => local("files")),
-      indexRootNames: ["files"],
-      extraScopes: async () => [indexedShare, elsewhere],
-    });
-    expect(await resolver.verifiedIndexScopes(buildIdentity())).toEqual({
+    const extra = async () => [indexedShare, elsewhere];
+    expect(await resolver(["files"], extra).verifiedIndexScopes("alice")).toEqual({
       available: true,
       scopes: [HOME, indexedShare],
     });
-
-    const nasOnly = createScopeResolver({
-      providers: fakeProviders([buildProvider()], () => local("files")),
-      indexRootNames: ["nas"],
-      extraScopes: async () => [indexedShare, elsewhere],
-    });
-    expect(await nasOnly.verifiedIndexScopes(buildIdentity())).toEqual({
+    expect(await resolver(["nas"], extra).verifiedIndexScopes("alice")).toEqual({
       available: true,
       scopes: [elsewhere],
     });

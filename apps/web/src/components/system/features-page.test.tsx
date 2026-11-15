@@ -61,7 +61,8 @@ vi.mock("@/lib/api/auth-queries", () => ({
     data: {
       account: { id: "a", displayName: null },
       isAdmin: true,
-      identity: { id: "i", providerId: "p", providerLabel: "Primary", providerType: "local" },
+      storageName: "Primary",
+      identity: { id: "i", providerId: "p" },
     },
   }),
 }));

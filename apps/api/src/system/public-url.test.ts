@@ -3,7 +3,7 @@ import type { SettingsRepo } from "@fdrive/db";
 import { describe, expect, it } from "vitest";
 import { createPublicUrlService } from "./public-url.js";
 
-function harness(options: { legacyUrl?: string | null; stored?: unknown } = {}) {
+function harness(options: { stored?: unknown } = {}) {
   let stored: unknown | null = options.stored ?? null;
   const settings: Pick<SettingsRepo, "get" | "compareAndSet"> = {
     async get<T>() {
@@ -15,12 +15,7 @@ function harness(options: { legacyUrl?: string | null; stored?: unknown } = {}) 
       return true;
     },
   };
-  const service = createPublicUrlService({
-    settings,
-    ...(options.legacyUrl === undefined
-      ? {}
-      : { legacyUrl: async () => options.legacyUrl ?? null }),
-  });
+  const service = createPublicUrlService({ settings });
   return {
     service,
     setStored: (value: unknown) => {
@@ -38,23 +33,6 @@ describe("public URL service", () => {
     expect(saved).toEqual({ revision: 1, url: "https://drive.example" });
     expect(await service.current()).toBe("https://drive.example");
     expect(await service.update({ revision: 1, url: null })).toEqual({ revision: 2, url: null });
-  });
-
-  it("defaults to the address Office stored before the setting existed", async () => {
-    const { service } = harness({ legacyUrl: "https://old.example" });
-    expect(await service.configuration()).toEqual({ revision: 0, url: "https://old.example" });
-    expect(await service.current()).toBe("https://old.example");
-    // Saving replaces the inherited default with a row of its own.
-    expect(await service.update({ revision: 0, url: "https://new.example" })).toEqual({
-      revision: 1,
-      url: "https://new.example",
-    });
-    expect(await service.current()).toBe("https://new.example");
-  });
-
-  it("ignores a legacy address that is not a clean origin", async () => {
-    const { service } = harness({ legacyUrl: "https://old.example/path" });
-    expect(await service.current()).toBeNull();
   });
 
   it("rejects stale revisions and lost compare-and-set races as conflicts", async () => {

@@ -145,11 +145,7 @@ export function registerMcpTools(
     wrap(async () => {
       let index: { available: boolean; reason?: string };
       try {
-        const identity = await deps.identities.get(principal.identityId);
-        index =
-          identity === null
-            ? { available: false, reason: "login unavailable" }
-            : await deps.scopeResolver.verifiedIndexScopes(identity);
+        index = await deps.scopeResolver.verifiedIndexScopes(principal.username);
       } catch {
         index = { available: false, reason: "index mapping unavailable" };
       }

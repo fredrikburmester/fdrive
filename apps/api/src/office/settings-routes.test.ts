@@ -35,6 +35,7 @@ function buildApp(isAdmin: boolean, workerToken = "worker-secret") {
     product: "onlyoffice",
     publicUrl: async () => "https://drive.example",
     probeStatus: async () => "ready",
+    usernames: async () => ["alice"],
   });
   const principal: Principal = {
     accountId: identity.accountId,
@@ -46,18 +47,18 @@ function buildApp(isAdmin: boolean, workerToken = "worker-secret") {
   return createApp({
     config: loadConfig({
       DATABASE_URL: "postgres://localhost/fdrive",
+      FDRIVE_STORAGE_ROOT: "/srv/files",
       FDRIVE_MASTER_KEY: Buffer.alloc(32, 7).toString("base64"),
     }),
     logger: { info: vi.fn(), error: vi.fn(), warn: vi.fn() } as unknown as Logger,
     version: "test",
     startedAt: new Date(0),
     principalResolver: async () => principal,
-    connectionStatus: async () => ({ required: false, providers: [] }),
+    setupRequired: async () => false,
     registerRoutes: (groups) =>
       registerOfficeSettingsRoutes(groups, {
         service,
         workerToken,
-        activeProvider: async () => ({ id: PROVIDER_ID, label: "Primary" }),
       }),
   });
 }
@@ -72,8 +73,6 @@ describe("Office settings routes", () => {
       configuration: { revision: 0, enabled: false },
       product: "onlyoffice",
       status: "off",
-      activeProviderId: PROVIDER_ID,
-      activeProviderLabel: "Primary",
     });
     const response = await app.request(ROUTES.system.office, {
       method: "PUT",

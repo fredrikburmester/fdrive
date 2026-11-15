@@ -7,6 +7,7 @@ import {
   type PersonalActivityResponse,
   ROUTES,
 } from "@fdrive/contracts";
+import { isStorageError } from "@fdrive/core";
 import type {
   ActivityEventRecord,
   ActivityListOptions,
@@ -19,11 +20,8 @@ import { accountContext } from "../auth/account-context.ts";
 import { ApiHttpError } from "../errors.js";
 import type { FsContext } from "../fs/routes.js";
 import { normalizeOrThrow, parseBody } from "../fs/routes.js";
-import { createReadAuthorizer } from "../scoping/read-authorizer.js";
 import type { ActivityAdmission } from "./admission.js";
 import { createActivityCursors } from "./cursor.js";
-import { createActivityLimiter } from "./limiter.js";
-import type { ActivityObservations } from "./observations.js";
 
 const API_PREFIX = "/api/v1";
 
@@ -36,13 +34,7 @@ export interface PersonalActivityRoutesDeps {
   readonly admitActivity: ActivityAdmission;
   readonly reads: ActivityReadsRepo;
   readonly repo: ActivityRepo;
-  readonly observations: ActivityObservations;
   readonly cursorSecret: string;
-  /**
-   * True when an indexer watcher is running. Without one, observations come
-   * only from refresh comparison, and the UI must keep saying so.
-   */
-  readonly watcherEnabled: boolean;
 }
 
 const iso = (value: Date | null) => value?.toISOString() ?? null;
@@ -151,9 +143,6 @@ export function registerPersonalActivityRoutes(
 ) {
   const { authed } = groups;
   const cursors = createActivityCursors(deps.cursorSecret);
-  // An explicit recheck reaches the provider, so it gets a tighter budget
-  // than a read of already recorded history.
-  const recheck = createActivityLimiter(12);
   const files = routePath(ROUTES.activity.files);
   const events = routePath(ROUTES.activity.events);
 
@@ -234,14 +223,6 @@ export function registerPersonalActivityRoutes(
       ...(scope.batchId
         ? { batchSummary: await deps.repo.batchSummary(principal.accountId, scope.batchId) }
         : {}),
-      coverage: {
-        mutations: true,
-        reads: true,
-        // Nothing detects changes made outside fdrive yet, so the UI must keep
-        // saying so. Provider watchers and refresh reconciliation are slice 3.
-        observations: deps.watcherEnabled ? "watcher_and_refresh" : "refresh",
-        observationGap: true,
-      },
     };
     return c.json(body);
   }
@@ -335,18 +316,6 @@ export function registerPersonalActivityRoutes(
       ),
     });
   });
-  authed.post(`${files}/:fileId/recheck`, async (c) => {
-    const { principal } = accountContext(c);
-    recheck(principal.accountId);
-    const result = await deps.repo.file(principal.accountId, uuid(c.req.param("fileId")));
-    if (!result) throw new ApiHttpError("not_found", "File journey not found");
-    // A recheck is bounded to what the caller may read right now, so a file
-    // of a login that no longer exists is refused instead of probed.
-    if (result.file.identityId !== principal.identityId)
-      throw new ApiHttpError("forbidden", "This file's login no longer exists");
-    return c.json(await deps.observations.check(principal, result.file.path));
-  });
-
   authed.get(`${files}/:fileId`, async (c) => {
     const { principal } = accountContext(c);
     const result = await deps.repo.file(principal.accountId, uuid(c.req.param("fileId")));
@@ -360,14 +329,11 @@ export function registerPersonalActivityRoutes(
       availability = file.state;
       if (file.state === "live") {
         try {
-          const read = await createReadAuthorizer({ storage: principal.storage }).authorize({
-            path: file.path,
-            kind: file.kind,
-          });
-          if (read.allowed) currentPath = file.path;
-          else availability = read.reason === "missing" ? "unknown" : "unavailable";
-        } catch {
-          availability = "unavailable";
+          await principal.storage.stat(file.path);
+          currentPath = file.path;
+        } catch (error) {
+          availability =
+            isStorageError(error) && error.kind === "not_found" ? "unknown" : "unavailable";
         }
       }
     }

@@ -5,7 +5,6 @@ import type { IndexedFile, IndexQueries } from "@fdrive/db";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Principal } from "../../auth/principal.js";
 import { type McpToolDeps, runSearch, runSimilarFiles } from "../../mcp/handlers.js";
-import { buildIdentity } from "../../scoping/test-fixtures/index.ts";
 import {
   createDriveTools,
   EXCERPT_CHARS,
@@ -43,7 +42,6 @@ function mcpDeps(overrides: Partial<McpToolDeps> = {}): McpToolDeps {
     scopeResolver: {
       verifiedIndexScopes: async () => ({ available: true, scopes: HOME_SCOPES }),
     },
-    identities: { get: async () => buildIdentity() },
     publicUrl: async () => null,
     indexerClient: null,
     clock: () => new Date("2026-01-01T00:00:00.000Z"),
@@ -601,7 +599,6 @@ describe("read_excerpts", () => {
     "alice/scan.pdf": indexedFile(1, "alice/scan.pdf"),
     "alice/blank.pdf": indexedFile(2, "alice/blank.pdf", "empty"),
     "alice/Folder/inner.txt": indexedFile(3, "alice/Folder/inner.txt"),
-    "alice/private.pdf": indexedFile(4, "alice/private.pdf"),
     // The row that answers for this path claims to live elsewhere.
     "alice/moved.pdf": indexedFile(5, "alice/elsewhere/moved.pdf"),
   };
@@ -610,7 +607,6 @@ describe("read_excerpts", () => {
     1: "  Invoice from ACME  ",
     2: "   ",
     3: "inner text",
-    4: "secret",
   };
 
   function excerptSetup(overrides: Partial<McpToolDeps> = {}) {
@@ -618,16 +614,9 @@ describe("read_excerpts", () => {
       "/Inbox/scan.pdf": "x",
       "/Inbox/blank.pdf": "x",
       "/Inbox/Folder/inner.txt": "x",
-      "/Inbox/private.pdf": "x",
       "/Inbox/moved.pdf": "x",
     });
-    const storage: StorageProvider = {
-      ...memory,
-      download: async (path, opts) => {
-        if (path === "/Inbox/private.pdf") throw new StorageError("forbidden", "denied");
-        return memory.download(path, opts);
-      },
-    };
+    const storage: StorageProvider = memory;
     const fileByPath = vi.fn(async (rootId: number, path: string) => {
       expect(rootId).toBe(1);
       return FILES[path] ?? null;
@@ -636,7 +625,10 @@ describe("read_excerpts", () => {
       expect(chars).toBe(EXCERPT_CHARS);
       return TEXT[id] ?? "";
     });
-    const identitiesGet = vi.fn(async () => buildIdentity());
+    const verifiedIndexScopes = vi.fn(async (_username: string) => ({
+      available: true as const,
+      scopes: EXCERPT_SCOPES,
+    }));
     const setup = toolsFor({
       storage,
       selected: SELECTED,
@@ -646,14 +638,11 @@ describe("read_excerpts", () => {
           fileByPath,
           fileTextPrefix,
         } as unknown as IndexQueries,
-        identities: { get: identitiesGet },
-        scopeResolver: {
-          verifiedIndexScopes: async () => ({ available: true, scopes: EXCERPT_SCOPES }),
-        },
+        scopeResolver: { verifiedIndexScopes },
         ...overrides,
       },
     });
-    return { ...setup, fileByPath, fileTextPrefix, identitiesGet };
+    return { ...setup, fileByPath, fileTextPrefix, verifiedIndexScopes };
   }
 
   it("accepts between 1 and 25 paths and describes what it reads", () => {
@@ -735,17 +724,11 @@ describe("read_excerpts", () => {
     );
   });
 
-  it("reports selected files it cannot tie to a readable index row as not indexed", async () => {
+  it("reports selected files it cannot tie to an index row as not indexed", async () => {
     const { tool, fileTextPrefix } = excerptSetup();
 
     const output = await runTool(tool("read_excerpts"), {
-      paths: [
-        "/Loose.pdf",
-        "/Archive/old.pdf",
-        "/Inbox/unindexed.pdf",
-        "/Inbox/moved.pdf",
-        "/Inbox/private.pdf",
-      ],
+      paths: ["/Loose.pdf", "/Archive/old.pdf", "/Inbox/unindexed.pdf", "/Inbox/moved.pdf"],
     });
 
     expect(output).toBe(
@@ -754,40 +737,27 @@ describe("read_excerpts", () => {
         "### /Archive/old.pdf\n(Not indexed.)",
         "### /Inbox/unindexed.pdf\n(Not indexed.)",
         "### /Inbox/moved.pdf\n(Not indexed.)",
-        "### /Inbox/private.pdf\n(Not indexed.)",
       ].join("\n\n"),
     );
     expect(fileTextPrefix).not.toHaveBeenCalled();
   });
 
-  it("resolves the identity's scope once across calls", async () => {
-    const { tool, identitiesGet } = excerptSetup();
+  it("resolves the login's scope once across calls", async () => {
+    const { tool, verifiedIndexScopes } = excerptSetup();
     const readExcerpts = tool("read_excerpts");
 
     await runTool(readExcerpts, { paths: ["/Inbox/scan.pdf"] });
     await runTool(readExcerpts, { paths: ["/Inbox/blank.pdf"] });
 
-    expect(identitiesGet).toHaveBeenCalledTimes(1);
+    expect(verifiedIndexScopes).toHaveBeenCalledTimes(1);
   });
 
   const UNAVAILABLE = "Extracted text is not available for this drive.";
 
-  it("is not available when the identity no longer exists", async () => {
-    const verifiedIndexScopes = vi.fn();
-    const { tool, fileByPath } = excerptSetup({
-      identities: { get: async () => null },
-      scopeResolver: { verifiedIndexScopes },
-    });
-
-    expect(await runTool(tool("read_excerpts"), { paths: ["/Inbox/scan.pdf"] })).toBe(UNAVAILABLE);
-    expect(verifiedIndexScopes).not.toHaveBeenCalled();
-    expect(fileByPath).not.toHaveBeenCalled();
-  });
-
   it("is not available when the identity's index scopes are unverified", async () => {
     const { tool } = excerptSetup({
       scopeResolver: {
-        verifiedIndexScopes: async () => ({ available: false, reason: "provider_mismatch" }),
+        verifiedIndexScopes: async () => ({ available: false, reason: "no_roots" }),
       },
     });
 

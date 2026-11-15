@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
-import type { StorageProvider, StorageSession } from "@fdrive/core";
+import type { StorageProvider } from "@fdrive/core";
 import { createChangeWriter, createDb, createIndexQueries, createRepos, migrate } from "@fdrive/db";
-import { createLocalModule, type IndexChange, type LocalUsers } from "@fdrive/local";
+import { createFilesFolder, type IndexChange, type LocalUsers } from "@fdrive/local";
 import { sql } from "drizzle-orm";
 import { Client } from "pg";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
@@ -10,16 +10,9 @@ import { createNameIndexClient } from "../../src/search/name-index.js";
 import { LocalIndexerStack } from "./helpers/local-indexer-stack.js";
 
 const users: LocalUsers = {
-  verify: async () => ({ result: "invalid" }),
   status: async () => "active",
   shared: async () => [],
 };
-
-function session(externalUsername: string): StorageSession {
-  return {
-    externalUsername,
-  };
-}
 
 /**
  * The watcher is off and the next scan is an hour away, so anything indexed
@@ -71,15 +64,12 @@ describe("changes fdrive makes, through the real indexer with its watcher off", 
       write: createChangeWriter(connection.db, "api"),
       onError: (error) => failures.push(error),
     });
-    const module = createLocalModule({
+    storage = createFilesFolder({
       root: stack.folder.root,
       users,
       indexRoot: "files",
       onIndexChange: (root, change) => queue.record(root, change),
-    });
-    storage = module.createStorage({ id: "p1", baseUrl: "local", config: {} }, session("alice"), {
-      fetch: globalThis.fetch,
-    });
+    }).storage("alice");
   }, 720_000);
 
   afterAll(async () => {

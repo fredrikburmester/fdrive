@@ -95,9 +95,6 @@ export function JourneyDetails({ fileId }: { fileId: string }) {
               {revision.sha256 && (
                 <p className="break-all text-muted-foreground">SHA-256 {revision.sha256}</p>
               )}
-              {revision.providerVersion && (
-                <p className="break-all">Version {revision.providerVersion}</p>
-              )}
             </div>
           ))}
         {revisions.data?.pages.every((page) => !page.items.length) && (

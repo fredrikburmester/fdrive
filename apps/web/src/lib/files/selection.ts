@@ -1,3 +1,5 @@
+import type { FsEntry } from "@fdrive/contracts";
+
 /**
  * A pure selection model over an ordered list of paths (the currently
  * visible listing, in display order). `anchor` is the fixed end of a
@@ -244,4 +246,22 @@ export function contextEntries<T extends { path: string }>(
     return entries.filter((candidate) => selected.has(candidate.path));
   }
   return [entry];
+}
+
+/** How many files and folders an action would apply to. */
+export interface BrowserSelection {
+  readonly files: number;
+  readonly folders: number;
+}
+
+export const NO_SELECTION: BrowserSelection = { files: 0, folders: 0 };
+
+export function selectionOf(entries: readonly Pick<FsEntry, "kind">[]): BrowserSelection {
+  let files = 0;
+  let folders = 0;
+  for (const entry of entries) {
+    if (entry.kind === "dir") folders += 1;
+    else files += 1;
+  }
+  return { files, folders };
 }

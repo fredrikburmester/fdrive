@@ -4,10 +4,9 @@ import type { Scope } from "@fdrive/core";
 export type { Scope } from "@fdrive/core";
 
 /**
- * Why an identity's scopes are unavailable: its provider is missing or
- * disabled, its username cannot name a folder, or its storage is not under
- * any index root. `no_connection` is for callers that have no identity at
- * all; the resolver never returns it.
+ * Why an identity's scopes are unavailable: its username cannot name a
+ * folder, or the files folder is not under any indexed root. `no_connection`
+ * is for callers that have no identity at all; the resolver never returns it.
  */
 export type UnavailableReason = Exclude<IdentityScopeReason, "ok">;
 
@@ -27,8 +26,8 @@ export type ConfiguredMappingsResult =
 /**
  * The configured scopes whose root is one of the indexed roots
  * (`FDRIVE_INDEX_ROOTS`). Only index-backed features (search, duplicates,
- * thumbnails, folder sizes, extraction, MCP) may use this, and every result
- * still passes a live read check.
+ * thumbnails, folder sizes, extraction, MCP) use this; a row they map to is
+ * the login's to see.
  */
 export type VerifiedIndexScopesResult =
   | { readonly available: true; readonly scopes: readonly Scope[] }

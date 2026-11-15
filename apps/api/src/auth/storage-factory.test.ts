@@ -1,100 +1,16 @@
 import type { TrashSettings } from "@fdrive/contracts";
-import { moveTrashLeafPath, type ProviderModule, type StorageProvider } from "@fdrive/core";
-import type { Identity, Provider } from "@fdrive/db";
+import { moveTrashLeafPath, type StorageProvider } from "@fdrive/core";
 import { createMemoryRepos } from "@fdrive/db/testing";
+import type { FilesFolder } from "@fdrive/local";
 import { createMemoryStorage } from "@fdrive/testkit";
 import { expect, it, vi } from "vitest";
 import { ApiHttpError } from "../errors.js";
-import { localModuleFixture, seedLocalUsers } from "../local/test-fixtures/index.ts";
-import type { IdentityProvider } from "../providers/service.js";
-import { fakeProviderModule } from "../providers/test-fixtures/index.ts";
+import { filesFolderFixture, seedLocalUsers } from "../local/test-fixtures/index.ts";
 import {
   createIdentityStorageFactory,
-  createPinnedStorageFactory,
   trashSettingsForStorage,
-  unavailableStorage,
   withRecycleFolderTrash,
 } from "./storage-factory.ts";
-
-function notImplemented(): never {
-  throw new Error("not implemented in this stub");
-}
-
-function makeStubStorage(overrides: Partial<StorageProvider>): StorageProvider {
-  return {
-    list: notImplemented,
-    stat: notImplemented,
-    statFile: notImplemented,
-    download: notImplemented,
-    upload: notImplemented,
-    mkdir: notImplemented,
-    move: notImplemented,
-    copy: notImplemented,
-    deleteFile: notImplemented,
-    deleteDir: notImplemented,
-    deleteEmptyDir: notImplemented,
-    setModifiedAt: notImplemented,
-    zip: notImplemented,
-    ...overrides,
-  } as StorageProvider;
-}
-
-const IDENTITY: Identity = {
-  id: "identity-a",
-  accountId: "account-1",
-  providerId: "provider-a",
-  externalUsername: "alice",
-  createdAt: new Date(0),
-  lastLoginAt: null,
-};
-
-function providerRow(id: string, baseUrl: string): Provider {
-  return {
-    id,
-    type: "local",
-    baseUrl,
-    label: "",
-    config: {},
-    enabled: true,
-    managedByEnv: false,
-    createdAt: new Date(0),
-  };
-}
-
-/**
- * Storage that sends every call to the instance's address: `list` and
- * `deleteFile` each send one request there, naming the session's user.
- */
-const addressedModule: ProviderModule = fakeProviderModule({
-  trash: "move",
-  createStorage: (instance, session, ctx) =>
-    makeStubStorage({
-      async list(path) {
-        await ctx.fetch(`${instance.baseUrl}/list?path=${encodeURIComponent(path)}`, {
-          headers: { "x-user": session.externalUsername },
-        });
-        return [];
-      },
-      async deleteFile(path) {
-        await ctx.fetch(`${instance.baseUrl}/files?path=${encodeURIComponent(path)}`, {
-          method: "DELETE",
-          headers: { "x-user": session.externalUsername },
-        });
-      },
-    }),
-});
-
-function resolvedFor(
-  provider: Provider,
-  module: ProviderModule = addressedModule,
-): IdentityProvider {
-  return {
-    identity: { ...IDENTITY, providerId: provider.id },
-    provider,
-    module,
-    instance: { id: provider.id, baseUrl: provider.baseUrl, config: provider.config },
-  };
-}
 
 const TRASH_SETTINGS: TrashSettings = {
   providerId: "123e4567-e89b-42d3-a456-426614174000",
@@ -102,74 +18,59 @@ const TRASH_SETTINGS: TrashSettings = {
   enabled: true,
   path: "/.trash",
   retentionHours: null,
-  strategy: "move",
 };
 
-it("captures the identity's provider for delayed reads/writes without retargeting", async () => {
-  const requests: { host: string; user: string | null }[] = [];
-  const fetchImpl: typeof globalThis.fetch = async (url, init) => {
-    requests.push({
-      host: new URL(String(url)).host,
-      user: new Headers(init?.headers).get("x-user"),
-    });
-    return Response.json(init?.method === "DELETE" ? { message: "ok" } : []);
+/** Alice's login over a files folder whose storage is `storage` for every user. */
+async function fixture(storage: StorageProvider = createMemoryStorage()) {
+  const repos = createMemoryRepos();
+  const [alice] = await seedLocalUsers(repos, [{ username: "alice", password: "pw" }]);
+  if (alice === undefined) throw new Error("unseeded");
+  const folder: Pick<FilesFolder, "storage" | "admit"> = {
+    storage: vi.fn(() => storage as ReturnType<FilesFolder["storage"]>),
+    admit: vi.fn(async () => undefined),
   };
-  const forIdentity = vi
-    .fn()
-    .mockResolvedValue(resolvedFor(providerRow("provider-a", "http://a.test")));
-  const factory = createIdentityStorageFactory({
-    providers: { forIdentity },
-    fetch: fetchImpl,
-    clock: () => new Date(0),
-  });
-  const storage = await factory("identity-a");
-  forIdentity.mockResolvedValue(resolvedFor(providerRow("provider-b", "http://b.test")));
-  await storage.list("/");
-  await storage.deleteFile("/same.txt");
-  expect(requests).toEqual([
-    { host: "a.test", user: "alice" },
-    { host: "a.test", user: "alice" },
-  ]);
-  expect(forIdentity).toHaveBeenCalledOnce();
-});
+  return { repos, alice, folder };
+}
 
-it("awaits binding and refuses an unresolved provider", async () => {
+it("builds the login's own storage, once per call, for delayed reads and writes", async () => {
+  const h = await fixture();
   const factory = createIdentityStorageFactory({
-    providers: {
-      forIdentity: async () => {
-        throw new ApiHttpError("upstream_unavailable", "Unavailable");
-      },
-    },
-    fetch: vi.fn(),
+    identities: h.repos.identities,
+    folder: h.folder,
     clock: () => new Date(0),
   });
-  await expect(factory("identity-a")).rejects.toMatchObject({ kind: "upstream_unavailable" });
-});
-
-it("leaves storage.trash undefined when no trash settings are configured", async () => {
-  const factory = createIdentityStorageFactory({
-    providers: { forIdentity: async () => resolvedFor(providerRow("provider-a", "http://a.test")) },
-    fetch: async () => Response.json([]),
-    clock: () => new Date(0),
-  });
-  const storage = await factory("identity-a");
+  const storage = await factory(h.alice.id);
+  expect(h.folder.admit).toHaveBeenCalledExactlyOnceWith("alice");
+  expect(h.folder.storage).toHaveBeenCalledExactlyOnceWith("alice");
+  expect(await storage.list("/")).toEqual([]);
   expect(storage.trash).toBeUndefined();
   expect(trashSettingsForStorage(storage)).toBeNull();
 });
 
-it("moves deletes into the recycle folder for a module whose trash strategy is move", async () => {
+it("asks a login that is gone to sign in again", async () => {
+  const h = await fixture();
+  const factory = createIdentityStorageFactory({
+    identities: h.repos.identities,
+    folder: h.folder,
+    clock: () => new Date(0),
+  });
+  await expect(factory("00000000-0000-4000-8000-000000000000")).rejects.toMatchObject({
+    kind: "unauthorized",
+  });
+  expect(h.folder.storage).not.toHaveBeenCalled();
+});
+
+it("moves deletes into the recycle folder while Trash is on", async () => {
   const memory = createMemoryStorage({ "/docs/a.txt": "x" });
-  const module = fakeProviderModule({ trash: "move", createStorage: () => memory });
+  const h = await fixture(memory);
   const at = new Date("2026-09-10T12:00:00Z");
   const factory = createIdentityStorageFactory({
-    providers: {
-      forIdentity: async () => resolvedFor(providerRow("provider-a", "http://a.test"), module),
-    },
-    fetch: vi.fn(),
+    identities: h.repos.identities,
+    folder: h.folder,
     clock: () => at,
     resolveTrashSettings: async () => TRASH_SETTINGS,
   });
-  const storage = await factory("identity-a");
+  const storage = await factory(h.alice.id);
   await storage.deleteFile("/docs/a.txt");
   const leaf = (BigInt(at.getTime()) * BigInt(1_000_000)).toString();
   expect(memory.dump()).toEqual({
@@ -181,53 +82,37 @@ it("moves deletes into the recycle folder for a module whose trash strategy is m
   expect(memory.dump()).toEqual({});
 });
 
-it("adds no trash for a module without one even when settings enable it", async () => {
-  const module = fakeProviderModule({ trash: "none", createStorage: () => createMemoryStorage() });
+it("adds no trash while Trash is off, and keeps the revision it read", async () => {
+  const h = await fixture();
   const factory = createIdentityStorageFactory({
-    providers: {
-      forIdentity: async () => resolvedFor(providerRow("provider-a", "http://a.test"), module),
-    },
-    fetch: vi.fn(),
+    identities: h.repos.identities,
+    folder: h.folder,
     clock: () => new Date(0),
-    resolveTrashSettings: async () => TRASH_SETTINGS,
+    resolveTrashSettings: async () => ({ ...TRASH_SETTINGS, enabled: false }),
   });
-  const storage = await factory("identity-a");
+  const storage = await factory(h.alice.id);
   expect(storage.trash).toBeUndefined();
-  expect(trashSettingsForStorage(storage)).toMatchObject({ revision: 1 });
+  expect(trashSettingsForStorage(storage)).toMatchObject({ revision: 1, enabled: false });
 });
 
 it("keeps a coherent Trash revision per storage while new requests see updates", async () => {
+  const h = await fixture();
   let settings = TRASH_SETTINGS;
   const factory = createIdentityStorageFactory({
-    providers: { forIdentity: async () => resolvedFor(providerRow("provider-a", "http://a.test")) },
-    fetch: async () => Response.json([]),
+    identities: h.repos.identities,
+    folder: h.folder,
     clock: () => new Date(0),
     resolveTrashSettings: async () => settings,
   });
 
-  const first = await factory("identity-a");
+  const first = await factory(h.alice.id);
   settings = { ...settings, revision: 2, path: "/deleted" };
-  const second = await factory("identity-a");
+  const second = await factory(h.alice.id);
 
   expect(trashSettingsForStorage(first)).toMatchObject({ revision: 1, path: "/.trash" });
   expect(trashSettingsForStorage(second)).toMatchObject({ revision: 2, path: "/deleted" });
   expect(first.trash).toBeDefined();
   expect(second.trash).toBeDefined();
-});
-
-it("pins storage to the identity's provider and refuses a foreign provider", async () => {
-  const requests: string[] = [];
-  const factory = createPinnedStorageFactory({
-    providers: { forIdentity: async () => resolvedFor(providerRow("provider-a", "http://a.test")) },
-    fetch: async (url, init) => {
-      requests.push(`${new URL(String(url)).host} ${new Headers(init?.headers).get("x-user")}`);
-      return Response.json([]);
-    },
-  });
-  const storage = await factory("identity-a", "provider-a");
-  await storage.list("/");
-  expect(requests).toEqual(["a.test alice"]);
-  await expect(factory("identity-a", "provider-b")).rejects.toThrow(/not bound/);
 });
 
 it("withRecycleFolderTrash spreads the original provider and adds trash without mutating it", () => {
@@ -238,70 +123,94 @@ it("withRecycleFolderTrash spreads the original provider and adds trash without 
   expect(withTrash.list).toBe(storage.list);
 });
 
-it("unavailableStorage rejects every call with the given error and has no trash", async () => {
-  const error = new ApiHttpError("upstream_unavailable", "storage provider unavailable");
-  const storage = unavailableStorage(error);
-  expect(storage.trash).toBeUndefined();
-  expect(storage.zip).toBeUndefined();
-  await expect(storage.list("/")).rejects.toBe(error);
-  await expect(storage.stat("/a")).rejects.toBe(error);
-  await expect(storage.statFile("/a")).rejects.toBe(error);
-  await expect(storage.download("/a")).rejects.toBe(error);
-  await expect(storage.upload("/a", new Uint8Array())).rejects.toBe(error);
-  await expect(storage.mkdir("/a")).rejects.toBe(error);
-  await expect(storage.move("/a", "/b")).rejects.toBe(error);
-  await expect(storage.copy("/a", "/b")).rejects.toBe(error);
-  await expect(storage.deleteFile("/a")).rejects.toBe(error);
-  await expect(storage.deleteDir("/a")).rejects.toBe(error);
-  await expect(storage.deleteEmptyDir("/a")).rejects.toBe(error);
-  expect(trashSettingsForStorage(storage)).toBeNull();
-});
-
-it("asks the module to admit the login before building any storage", async () => {
+it("asks the files folder to admit the login before building any storage", async () => {
   const repos = createMemoryRepos();
-  const local = localModuleFixture(repos);
-  await seedLocalUsers(repos, [{ username: "alice", password: "pw", disabled: true }]);
-  const createStorage = vi.spyOn(local.module, "createStorage");
-  const localRow: Provider = { ...providerRow("provider-local", "local"), type: "local" };
-  const deps = {
-    providers: { forIdentity: async () => resolvedFor(localRow, local.module) },
-    fetch: vi.fn(),
+  const local = filesFolderFixture(repos);
+  const [alice] = await seedLocalUsers(repos, [{ username: "alice", password: "pw" }]);
+  if (alice === undefined) throw new Error("unseeded");
+  await repos.localUsers.update("alice", { disabled: true });
+  const storage = vi.spyOn(local.folder, "storage");
+  const factory = createIdentityStorageFactory({
+    identities: repos.identities,
+    folder: local.folder,
     clock: () => new Date(0),
-  };
+  });
 
   // A user an administrator disabled after they signed in stops at once.
-  await expect(createIdentityStorageFactory(deps)("identity-a")).rejects.toMatchObject({
+  await expect(factory(alice.id)).rejects.toMatchObject({
     kind: "forbidden",
     message: "this user may not sign in",
   });
-  await expect(
-    createPinnedStorageFactory(deps)("identity-a", "provider-local"),
-  ).rejects.toMatchObject({ kind: "forbidden" });
   // So does one whose user was removed.
   await repos.localUsers.delete("alice");
-  await expect(createIdentityStorageFactory(deps)("identity-a")).rejects.toBeInstanceOf(
-    ApiHttpError,
-  );
-  expect(createStorage).not.toHaveBeenCalled();
+  await expect(factory(alice.id)).rejects.toBeInstanceOf(ApiHttpError);
+  expect(storage).not.toHaveBeenCalled();
 
   await seedLocalUsers(repos, [{ username: "alice", password: "pw" }]);
-  expect(await (await createIdentityStorageFactory(deps)("identity-a")).list("/")).toEqual([]);
-  expect(createStorage).toHaveBeenCalledOnce();
+  expect(await (await factory(alice.id)).list("/")).toEqual([]);
+  expect(storage).toHaveBeenCalledOnce();
 });
 
-it("passes a failure that is not a storage error out of admission unchanged", async () => {
-  const failure = new Error("users table unreachable");
-  const module = fakeProviderModule({
-    admit: async () => {
-      throw failure;
-    },
+it("refuses a login whose name cannot be a home folder, and passes other failures on", async () => {
+  const repos = createMemoryRepos();
+  const local = filesFolderFixture(repos);
+  const account = await repos.accounts.create({ displayName: null });
+  const row = await repos.providers.ensure({ type: "local", baseUrl: "local" });
+  const odd = await repos.identities.create({
+    accountId: account.id,
+    providerId: row.id,
+    externalUsername: "..",
   });
+  const admitted: Pick<FilesFolder, "storage" | "admit"> = {
+    storage: local.folder.storage,
+    admit: async () => undefined,
+  };
+  await expect(
+    createIdentityStorageFactory({
+      identities: repos.identities,
+      folder: admitted,
+      clock: () => new Date(0),
+    })(odd.id),
+  ).rejects.toMatchObject({ kind: "forbidden" });
+
+  const failure = new Error("users table unreachable");
   const factory = createIdentityStorageFactory({
-    providers: {
-      forIdentity: async () => resolvedFor(providerRow("provider-a", "http://a"), module),
+    identities: repos.identities,
+    folder: {
+      storage: local.folder.storage,
+      admit: async () => {
+        throw failure;
+      },
     },
-    fetch: vi.fn(),
     clock: () => new Date(0),
   });
-  await expect(factory("identity-a")).rejects.toBe(failure);
+  await expect(factory(odd.id)).rejects.toBe(failure);
+});
+
+it("moves, copies, zips and deletes a folder without listing it first", async () => {
+  // Backups no longer write into the files folder, so nothing walks a folder's tree for them
+  // before an operation; a backup folder an old release left there moves with its parent.
+  const memory = createMemoryStorage({
+    "/docs/b.txt": "y",
+    "/docs/.fdrive-backups/install/a.fdrive.age": "x",
+  });
+  const zip = vi.fn(async () => new ReadableStream<Uint8Array>());
+  const list = vi.spyOn(memory, "list");
+  const h = await fixture(Object.assign(memory, { zip }));
+  const factory = createIdentityStorageFactory({
+    identities: h.repos.identities,
+    folder: h.folder,
+    clock: () => new Date(0),
+  });
+  const storage = await factory(h.alice.id);
+  await storage.copy("/docs", "/copy");
+  await storage.move("/copy", "/moved");
+  await storage.zip?.(["/moved"]);
+  await storage.deleteDir("/moved");
+  expect(zip).toHaveBeenCalledExactlyOnceWith(["/moved"]);
+  expect(list).not.toHaveBeenCalled();
+  expect(memory.dump()).toEqual({
+    "/docs/b.txt": "y",
+    "/docs/.fdrive-backups/install/a.fdrive.age": "x",
+  });
 });

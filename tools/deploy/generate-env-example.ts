@@ -26,7 +26,6 @@ const SUBSYSTEMS: readonly Subsystem[] = [
   "thumbnails",
   "ocr",
   "office",
-  "trash",
   "shares",
 ];
 
@@ -39,7 +38,6 @@ const SUBSYSTEM_TITLES: Record<Subsystem, string> = {
   thumbnails: "Thumbnails",
   ocr: "OCR",
   office: "Office editing",
-  trash: "Trash",
   shares: "Shares",
 };
 
@@ -57,7 +55,6 @@ export const COMPOSE_PASSTHROUGH_EXCLUDED_KEYS: ReadonlySet<string> = new Set([
   "FDRIVE_BACKUP_STATE_DIR",
   "FDRIVE_BACKUP_WORKER",
   "FDRIVE_BACKUP_SOURCES",
-  "FDRIVE_DESKTOP_STATE_DIR",
   "FDRIVE_EMBED_RUNTIME_URL",
   "FDRIVE_IMAGE_EMBED_RUNTIME_URL",
   "FDRIVE_TIKA_RUNTIME_URL",
@@ -98,7 +95,6 @@ export const ENV_EXAMPLE_EXCLUDED_KEYS: ReadonlySet<string> = new Set([
   "FDRIVE_BACKUP_STATE_DIR",
   "FDRIVE_BACKUP_WORKER",
   "FDRIVE_BACKUP_SOURCES",
-  "FDRIVE_DESKTOP_STATE_DIR",
   "NODE_ENV",
   "FDRIVE_WORKER_TOKEN",
   "PORT",

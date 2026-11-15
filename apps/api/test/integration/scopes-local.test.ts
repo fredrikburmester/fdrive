@@ -4,7 +4,7 @@ import { dirname, join } from "node:path";
 import { joinPath, parseSearchFilters, type Scope } from "@fdrive/core";
 import { createDb, createIndexQueries, createRepos, migrate, schema } from "@fdrive/db";
 import {
-  createLocalModule,
+  createFilesFolder,
   type LocalUsers,
   SHARED_WITH_ME,
   type SharedGrant,
@@ -23,8 +23,6 @@ import {
   runFolderOverview,
 } from "../../src/mcp/handlers.ts";
 import { resolveScopeContext } from "../../src/mcp/scope-context.ts";
-import { memoryProviderService } from "../../src/providers/test-fixtures/index.ts";
-import { createReadAuthorizer } from "../../src/scoping/read-authorizer.ts";
 import { createScopeResolver } from "../../src/scoping/resolver.ts";
 import { createSearchService } from "../../src/search/service.ts";
 import type { TokenPrincipal } from "../../src/tokens/principal.ts";
@@ -68,7 +66,7 @@ describe("index scopes over a local folder and Postgres", () => {
     if (root !== undefined) await rm(root, { recursive: true, force: true });
   }, 180_000);
 
-  it("keeps each login to its own home and its shared folders, and checks every hit live", async () => {
+  it("keeps each login to its own home and its shared folders, by its scopes alone", async () => {
     const { db } = database;
     const repos = createRepos(db);
     const clock = () => new Date();
@@ -76,14 +74,11 @@ describe("index scopes over a local folder and Postgres", () => {
       alice: [{ owner: "bob", path: "/Photos", writable: false }],
     };
     const users: LocalUsers = {
-      verify: async () => ({ result: "invalid" }),
       status: async () => "active",
       shared: async (username) => grants[username] ?? [],
     };
-    const module = createLocalModule({ root, users, indexRoot: "files" });
-    const providers = memoryProviderService(repos, { modules: { local: module } });
+    const folder = createFilesFolder({ root, users, indexRoot: "files" });
     const row = await repos.providers.ensure({ type: "local", baseUrl: "local" });
-    await repos.providers.update(row.id, { enabled: true, managedByEnv: true });
 
     const identities = await Promise.all(
       ["alice", "bob"].map(async (username) => {
@@ -100,16 +95,17 @@ describe("index scopes over a local folder and Postgres", () => {
     if (alice === undefined || bob === undefined) throw new Error("expected two identities");
 
     const storageFactory = createIdentityStorageFactory({
-      providers,
-      fetch: globalThis.fetch,
+      identities: repos.identities,
+      folder,
       clock,
     });
 
     const resolver = createScopeResolver({
-      providers,
+      storageId: row.id,
+      rootName: "files",
       indexRootNames: ["files"],
-      extraScopes: async (identity, home) => {
-        const shared = await users.shared(identity.externalUsername);
+      extraScopes: async (username, home) => {
+        const shared = await users.shared(username);
         const names = sharedFolderNames(shared);
         return shared.map(
           (grant, index): Scope => ({
@@ -121,8 +117,8 @@ describe("index scopes over a local folder and Postgres", () => {
       },
     });
 
-    const aliceScopes = await resolver.verifiedIndexScopes(alice.identity);
-    const bobScopes = await resolver.verifiedIndexScopes(bob.identity);
+    const aliceScopes = await resolver.verifiedIndexScopes("alice");
+    const bobScopes = await resolver.verifiedIndexScopes("bob");
     expect(aliceScopes).toEqual({
       available: true,
       scopes: [
@@ -154,7 +150,7 @@ describe("index scopes over a local folder and Postgres", () => {
       row_("alice/report.txt", 15),
       row_("alice/report-copy.txt", 15),
       row_(`alice/${SHARED_WITH_ME}/Photos/stale.txt`, 8, "b".repeat(64)),
-      // Indexed, but gone from disk: the live read check drops it.
+      // Indexed, but gone from disk since: listed until the next index pass.
       row_("alice/gone.txt", 4, "c".repeat(64)),
       row_("bob/report.txt", 15),
       row_("bob/Photos/cat.txt", 4, "d".repeat(64)),
@@ -168,15 +164,9 @@ describe("index scopes over a local folder and Postgres", () => {
       clock,
     });
     const aliceStorage = await storageFactory(alice.identity.id);
-    const bobStorage = await storageFactory(bob.identity.id);
-    async function search(
-      scopes: readonly Scope[],
-      storage: Principal["storage"],
-      query: string,
-    ): Promise<string[]> {
+    async function search(scopes: readonly Scope[], query: string): Promise<string[]> {
       const result = await searchService.search({
         scopes,
-        authorizer: createReadAuthorizer({ storage }),
         query,
         filters: parseSearchFilters({}),
         limit: 20,
@@ -185,25 +175,21 @@ describe("index scopes over a local folder and Postgres", () => {
     }
 
     // Same virtual names in two homes: each login finds only its own.
-    expect(await search(aliceScopes.scopes, aliceStorage, "report")).toEqual([
-      "/report-copy.txt",
-      "/report.txt",
-    ]);
-    expect(await search(bobScopes.scopes, bobStorage, "report")).toEqual(["/report.txt"]);
+    expect(await search(aliceScopes.scopes, "report")).toEqual(["/report-copy.txt", "/report.txt"]);
+    expect(await search(bobScopes.scopes, "report")).toEqual(["/report.txt"]);
     // The shared folder appears under alice's mount, and under bob's own path for bob.
-    expect(await search(aliceScopes.scopes, aliceStorage, "cat")).toEqual([
-      "/Shared with me/Photos/cat.txt",
-    ]);
-    expect(await search(bobScopes.scopes, bobStorage, "cat")).toEqual(["/Photos/cat.txt"]);
-    // The physical folder the mount shadows, and a file gone from disk, never surface.
-    expect(await search(aliceScopes.scopes, aliceStorage, "stale")).toEqual([]);
-    expect(await search(aliceScopes.scopes, aliceStorage, "gone")).toEqual([]);
+    expect(await search(aliceScopes.scopes, "cat")).toEqual(["/Shared with me/Photos/cat.txt"]);
+    expect(await search(bobScopes.scopes, "cat")).toEqual(["/Photos/cat.txt"]);
+    // The physical folder the mount shadows never surfaces.
+    expect(await search(aliceScopes.scopes, "stale")).toEqual([]);
+    // The scope is the permission: a file gone from disk is listed until the
+    // next index pass, and opening it answers not found (below).
+    expect(await search(aliceScopes.scopes, "gone")).toEqual(["/gone.txt"]);
 
     const toolDeps: McpToolDeps = {
       indexQueries,
       searchService,
       scopeResolver: resolver,
-      identities: repos.identities,
       publicUrl: async () => null,
       indexerClient: null,
       clock,
@@ -219,27 +205,21 @@ describe("index scopes over a local folder and Postgres", () => {
     const files = await runFindFiles(toolDeps, alicePrincipal, {});
     expect(files.results.map((result) => result.path).sort()).toEqual([
       "/Shared with me/Photos/cat.txt",
+      "/gone.txt",
       "/report-copy.txt",
       "/report.txt",
     ]);
     // Bob's report has the same content, but it is outside alice's scopes.
     const ctx = await resolveScopeContext(indexQueries, aliceScopes.scopes, null);
     if (ctx === null) throw new Error("expected alice's scope context");
-    const info = await fileInfoInScope(
-      toolDeps,
-      ctx,
-      createReadAuthorizer({ storage: aliceStorage }),
-      {
-        path: "/report.txt",
-      },
-    );
+    const info = await fileInfoInScope(toolDeps, ctx, { path: "/report.txt" });
     expect(info.identical_copies).toEqual(["/report-copy.txt"]);
     const duplicates = await runFindDuplicates(toolDeps, alicePrincipal, { min_size_mb: 0 });
     expect(duplicates.groups.map((group) => [...group.paths].sort())).toEqual([
       ["/report-copy.txt", "/report.txt"],
     ]);
     const overview = await runFolderOverview(toolDeps, alicePrincipal, {});
-    expect(overview.total_files).toBe(3);
+    expect(overview.total_files).toBe(4);
 
     // MCP reads the bytes through alice's own storage, a shared folder included.
     const aliceToken: TokenPrincipal = {

@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import type { ContentStamp, Scope, StorageProvider } from "@fdrive/core";
-import type { Identity, IndexedContent, IndexRef } from "@fdrive/db";
+import type { IndexedContent, IndexRef } from "@fdrive/db";
 import { createMemoryStorage } from "@fdrive/testkit";
 import { describe, expect, it, vi } from "vitest";
 import type { Principal } from "../auth/principal.js";
@@ -82,35 +82,24 @@ const NESTED: Scope = {
 function lookup(
   rows: readonly IndexedContent[],
   scopes: VerifiedIndexScopesResult = { available: true, scopes: [HOME, SHARED, NESTED] },
-  identity: Identity | null = {
-    id: "identity",
-    accountId: "account",
-    providerId: "provider",
-    externalUsername: "alice",
-    createdAt: new Date(0),
-    lastLoginAt: null,
-  },
 ) {
   const contentAt = vi.fn(async (refs: readonly IndexRef[]) =>
     rows.filter((row) =>
       refs.some((ref) => ref.rootName === row.rootName && ref.path === row.path),
     ),
   );
-  const verifiedIndexScopes = vi.fn(async () => scopes);
-  const get = vi.fn(async () => identity);
+  const verifiedIndexScopes = vi.fn(async (_username: string) => scopes);
   return {
     contentAt,
     verifiedIndexScopes,
-    get,
     find: createIndexedContentLookup({
-      identities: { get },
       resolver: { verifiedIndexScopes },
       index: { contentAt },
     }),
   };
 }
 
-const PRINCIPAL = { identityId: "identity" } as Principal;
+const PRINCIPAL = { identityId: "identity", username: "alice" } as Principal;
 
 describe("createIndexedContentLookup", () => {
   it("maps each path through the verified scopes, shared folders included, in one query", async () => {
@@ -156,18 +145,15 @@ describe("createIndexedContentLookup", () => {
     ]);
   });
 
-  it("asks nothing when the identity has no indexed scope, is gone, or asks for nothing", async () => {
+  it("asks nothing when the login has no indexed scope or asks for nothing", async () => {
     const unindexed = lookup([], { available: false, reason: "no_roots" });
     expect((await unindexed.find(PRINCIPAL, ["/docs/a.txt"])).size).toBe(0);
+    expect(unindexed.verifiedIndexScopes).toHaveBeenCalledWith("alice");
     expect(unindexed.contentAt).not.toHaveBeenCalled();
-
-    const gone = lookup([], undefined, null);
-    expect((await gone.find(PRINCIPAL, ["/docs/a.txt"])).size).toBe(0);
-    expect(gone.verifiedIndexScopes).not.toHaveBeenCalled();
 
     const idle = lookup([]);
     expect((await idle.find(PRINCIPAL, [])).size).toBe(0);
-    expect(idle.get).not.toHaveBeenCalled();
+    expect(idle.verifiedIndexScopes).not.toHaveBeenCalled();
 
     const shadowedOnly = lookup([]);
     await shadowedOnly.find(PRINCIPAL, ["/Shared with me/Photos/2024/x.jpg"]);
@@ -295,7 +281,7 @@ describe("version checks answered from the index", () => {
     expect(await f.versions(["/docs/a.txt"])).toEqual([
       { path: "/docs/a.txt", size: 5, version: sha("alpha") },
     ]);
-    expect(f.l.get).not.toHaveBeenCalled();
+    expect(f.l.verifiedIndexScopes).not.toHaveBeenCalled();
   });
 
   it("looks up only paths the connection may read, and still refuses the others in turn", async () => {

@@ -17,7 +17,6 @@ it("refreshes the backup overview after owner actions invalidate it", async () =
     nextRunAt: null,
     restored: false,
     destinations: [],
-    attachments: [],
     runs: [],
   };
   const status = vi.spyOn(backupClient, "status").mockResolvedValue(data);

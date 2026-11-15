@@ -115,9 +115,9 @@ test -e .env || printf 'FDRIVE_MASTER_KEY=%s\nPOSTGRES_PASSWORD=%s\n' "$(openssl
 
 `test -e .env` checks whether `.env` already exists. That line creates it with two random
 secrets only if it doesn't, so it never replaces your keys. Keep `.env` private and back it
-up: the master key encrypts stored credentials, and a lost key cannot be recovered. In
-Portainer, Dockge or a NAS app, paste `compose.yaml` as a new stack and add the same two
-variables instead.
+up: the master key encrypts stored secrets such as backup keys, and a lost key cannot be
+recovered. In Portainer, Dockge or a NAS app, paste `compose.yaml` as a new stack and add the
+same two variables instead.
 
 ### 2. Choose the files folder and start
 
@@ -211,7 +211,7 @@ ship with bounded concurrency and optional hard caps. See
 - 🔒 **[Advanced Deployment Reference](deploy/REFERENCE.md)**: Custom domain setup, reverse proxies (Caddy / NPM), and security hardening.
 - 💻 **[Development Guide](docs/DEVELOPMENT.md)**: Run the dev stack locally and run tests.
 - 🏷️ **[Releases](docs/RELEASES.md)**: How server releases and their Docker images are published.
-- **[Storage port](docs/STORAGE-PROVIDERS.md)**: The internal boundary between the API and the files folder.
+- **[Storage port](docs/STORAGE.md)**: The internal boundary between the API and the files folder.
 
 ---
 

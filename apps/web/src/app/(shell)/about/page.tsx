@@ -4,7 +4,6 @@ import type { ReactNode } from "react";
 import { PageHeader } from "@/components/shell/page-header";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { serverApiClient } from "@/lib/api/server";
-import { providerTypeLabel } from "@/lib/identity/provider-type";
 import { formatUptime } from "@/lib/system/format";
 import { describeServerVersion } from "@/lib/system/server-version";
 
@@ -120,13 +119,6 @@ export default async function AboutPage() {
           </CardContent>
         </Card>
         <div className="flex w-full max-w-3xl flex-col gap-2 text-sm text-muted-foreground [overflow-wrap:anywhere]">
-          {about.providers
-            .filter((provider) => provider.label !== null)
-            .map((provider) => (
-              <p key={`${provider.type}-${provider.label}`}>
-                Connected to {providerTypeLabel(provider.type)} at {provider.label}.
-              </p>
-            ))}
           <p>fdrive is licensed under the AGPL-3.0 license.</p>
         </div>
       </section>
