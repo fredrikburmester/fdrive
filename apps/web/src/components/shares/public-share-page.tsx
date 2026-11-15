@@ -64,11 +64,18 @@ function ZipDownloadCard({ id, client }: { id: string; client: PublicShareClient
 }
 
 /**
- * Opens a preview of one shared file, counted once, and returns the URL that serves it for the
- * preview's reads without counting again. Called from a click, never an effect, so React's
- * development double effects never open two.
+ * The URL a preview of one shared file reads. Audio and video stream in many Range reads, so
+ * they are opened through the share first, counted once, and read with the token it returns;
+ * anything else is one plain download, counted as it is. Called from a click, never an effect,
+ * so React's development double effects never open two.
  */
-async function openPreview(client: PublicShareClient, id: string, path: string): Promise<string> {
+async function previewUrl(
+  client: PublicShareClient,
+  id: string,
+  path: string,
+  kind: SelectedPreview["kind"],
+): Promise<string> {
+  if (kind !== "audio" && kind !== "video") return client.shareDownloadUrl(id, path);
   const { token } = await client.sharePreview(id, path);
   return client.shareDownloadUrl(id, path, token);
 }
@@ -108,7 +115,6 @@ function DirectoryListing({
         }))}
         thumbUrl={(entryPath, size) => client.shareThumbUrl(id, entryPath, size)}
         downloadUrl={(entryPath) => client.shareDownloadUrl(id, entryPath)}
-        previewUrl={(entryPath) => openPreview(client, id, entryPath)}
       />
     );
   return (
@@ -185,7 +191,7 @@ function SharedContents({
     setPreview(selected);
     const settle = (opened: Pick<SelectedPreview, "url" | "error">) =>
       setPreview((current) => (current === selected ? { ...selected, ...opened } : current));
-    openPreview(client, id, filePath).then(
+    previewUrl(client, id, filePath, kind).then(
       (url) => settle({ url, error: null }),
       (cause: unknown) =>
         settle({
@@ -252,7 +258,6 @@ function SharedContents({
           images={[{ name: share.fileName ?? "Shared file", path: "/" }]}
           thumbUrl={(entryPath, size) => client.shareThumbUrl(id, entryPath, size)}
           downloadUrl={(entryPath) => client.shareDownloadUrl(id, entryPath)}
-          previewUrl={(entryPath) => openPreview(client, id, entryPath)}
         />
       ) : (
         <div className="flex flex-wrap items-center justify-between gap-4">

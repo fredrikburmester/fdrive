@@ -335,7 +335,7 @@ describe("PostgreSQL shares", () => {
     await expect(
       a.updateOwned(identityId, share.id, { ...update, maxDownloads: -1 }),
     ).rejects.toThrow(TypeError);
-    expect(await a.get(share.id)).toEqual(share);
+    expect(await a.getOwned(identityId, share.id)).toEqual(share);
     const closed = createDb("postgresql://unused:unused@127.0.0.1:1/unused");
     await closed.close();
     const repo = createShareRepo(closed.db);

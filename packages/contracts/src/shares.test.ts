@@ -4,6 +4,7 @@ import { publicShareRoute, shareRoute } from "./routes.ts";
 import {
   CreateShareRequest,
   isImageFileName,
+  isStreamedPreviewName,
   MAX_SHARE_DOWNLOADS,
   ManagedShare,
   PublicShare,
@@ -151,6 +152,12 @@ describe("share contracts", () => {
         .filter((r) => r.method !== "GET")
         .every((r) => r.headers.get("x-requested-with") === "fdrive"),
     ).toBe(true);
+  });
+  it("streams only audio and video previews", () => {
+    for (const name of ["clip.MP4", "song.mp3", "a.b.webm", "voice.opus"])
+      expect(isStreamedPreviewName(name), name).toBe(true);
+    for (const name of ["photo.png", "notes.txt", "doc.pdf", "mp4", "archive.zip", ""])
+      expect(isStreamedPreviewName(name), name).toBe(false);
   });
   it("recognizes image extensions case-insensitively and rejects names without one", () => {
     for (const name of [

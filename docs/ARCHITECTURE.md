@@ -203,10 +203,14 @@ thresholds and CI configuration are authoritative; do not copy historic phase ta
 
 Public share `usedDownloads` (`app.shares.used_downloads`) is fdrive's own counter. Write
 shares count uploads; read shares count downloads, archives, previews and peeks, each once
-however many Range reads it takes. A preview is opened through the share (`POST .../preview`),
-which counts it and returns a token the download URL serves that one file for, without
-counting again, for an hour; a limited link previews and peeks like any other. Thumbnails
-never count.
+however many reads it takes, and a limited link previews and peeks like any other. Audio and
+video, which a viewer streams in Range reads, are opened through the share
+(`POST .../preview`): it counts the preview up front, refuses it once nothing is left, and
+returns a token for that one file, that browser (an httpOnly visitor cookie on the share's
+path) and five minutes, which the download URL serves without counting again. The token holds
+no state: what it names is all it opens, and it opens nothing a full download by the same
+visitor would not. Every other preview is one counted download; a download without a token
+always counts. Thumbnails never count.
 
 A `TrashEntry.id` is an opaque provider entry identifier; the recycle-folder adapter
 uses its path relative to the trash root. Public System logs merge internal

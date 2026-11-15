@@ -37,9 +37,12 @@ import {
   type ThumbFileReader,
 } from "../thumbs/serve.ts";
 import {
+  newShareVisitor,
   SHARE_CREDENTIAL_COOKIE,
   SHARE_CREDENTIAL_SECONDS,
+  SHARE_VISITOR_COOKIE,
   type ShareCredentialCodec,
+  shareVisitor,
 } from "./credentials.ts";
 import type { ShareLimiter } from "./limiter.ts";
 import { hiddenFromLinks, managedShare, type SharesService, shareCall } from "./service.ts";
@@ -337,14 +340,29 @@ export function registerSharesRoutes(
   function credential(c: Context) {
     return deps.codec.decode(shareId(c), getCookie(c, SHARE_CREDENTIAL_COOKIE));
   }
-  function credentialCookie(c: Context, value: string, maxAge: number) {
-    setCookie(c, SHARE_CREDENTIAL_COOKIE, value, {
+  function shareCookie(c: Context, name: string, value: string, maxAge: number) {
+    setCookie(c, name, value, {
       path: `${ROUTES.publicShares}/${shareId(c)}`,
       httpOnly: true,
       sameSite: "Lax",
       secure: cookieSecureFor(deps.config, c),
       maxAge,
     });
+  }
+  function credentialCookie(c: Context, value: string, maxAge: number) {
+    shareCookie(c, SHARE_CREDENTIAL_COOKIE, value, maxAge);
+  }
+  /** This browser's visitor name for the share, if it has one. */
+  function visitor(c: Context): string | undefined {
+    return shareVisitor(getCookie(c, SHARE_VISITOR_COOKIE));
+  }
+  /** This browser's visitor name for the share, given one on its first preview. */
+  function visitorGiven(c: Context): string {
+    const known = visitor(c);
+    if (known !== undefined) return known;
+    const given = newShareVisitor();
+    shareCookie(c, SHARE_VISITOR_COOKIE, given, SHARE_CREDENTIAL_SECONDS);
+    return given;
   }
   /** The share for this request, read once, as the visitor may use it for `scope`. */
   async function authorized(c: Context, scope: "read" | "write", counted = false) {
@@ -470,15 +488,16 @@ export function registerSharesRoutes(
     response.headers.set("Cache-Control", "private, max-age=60");
     return response;
   });
-  // Opens a preview: counted once here, then the download URL with the
-  // returned token serves that one file, Range requests included, without
-  // counting again.
+  // Opens a preview of audio or video, counted here, up front, and refused
+  // once the link has nothing left. For a few minutes the returned token lets
+  // the download URL serve that one file's Range reads to this browser (its
+  // visitor cookie) without counting again; no one else, no other file.
   groups.public.post(`${pub}${PUBLIC_SHARE_SUFFIXES.preview}`, (c) =>
     shareCall(async () => {
       const path = publicPath(c);
       await deps.service.preview(await authorized(c, "read"), path);
       const response: SharePreviewResponse = {
-        token: deps.codec.previewToken(shareId(c), path),
+        token: deps.codec.previewToken(shareId(c), path, visitorGiven(c)),
       };
       return c.json(response);
     }),
@@ -492,7 +511,11 @@ export function registerSharesRoutes(
       const path = publicPath(c);
       const preview = new URL(c.req.url).searchParams.get("preview");
       const previewed = preview !== null;
-      if (previewed && !deps.codec.previewed(shareId(c), path, preview))
+      const by = visitor(c);
+      if (
+        preview !== null &&
+        (by === undefined || !deps.codec.previewed(shareId(c), path, by, preview))
+      )
         throw new ApiHttpError("forbidden", "This preview has ended. Open it again.");
       const share = await authorized(c, "read", previewed);
       const name =

@@ -203,6 +203,8 @@ describe("counting a public share's downloads", () => {
     }
     expect(await used()).toBe(1);
     expect(await kindOf(service.preview(previewed, "/missing.mp4"))).toBe("not_found");
+    // Only what a viewer streams opens as a preview; the rest is one plain download.
+    expect(await kindOf(service.preview(previewed, "/notes.txt"))).toBe("bad_request");
     expect(await used()).toBe(1);
   });
 

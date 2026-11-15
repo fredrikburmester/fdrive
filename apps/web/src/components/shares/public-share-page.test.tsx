@@ -211,7 +211,7 @@ it("a directory shows Peek beside Download only for archive rows, and peeking op
   await screen.findByText("a.txt");
   expect(calls.archiveEntries).toHaveBeenCalledWith(id, "/bundle.zip");
 });
-it("previews and peeks a download-limited link, opening each preview once through the share", async () => {
+it("previews and peeks a download-limited link, opening streamed media through the share", async () => {
   calls.metadata.mockResolvedValue({
     ...metadata,
     hasPassword: false,
@@ -223,6 +223,7 @@ it("previews and peeks a download-limited link, opening each preview once throug
   calls.entries.mockResolvedValue({
     items: [
       { name: "notes.txt", kind: "file", size: 5, modifiedAt: "2026-01-01T00:00:00Z" },
+      { name: "song.mp3", kind: "file", size: 5, modifiedAt: "2026-01-01T00:00:00Z" },
       { name: "bundle.zip", kind: "file", size: 100, modifiedAt: "2026-01-01T00:00:00Z" },
     ],
   });
@@ -233,15 +234,26 @@ it("previews and peeks a download-limited link, opening each preview once throug
     const directory = setup();
     await screen.findByText("notes.txt");
     expect(screen.getByRole("button", { name: "Peek" })).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "Preview" }));
-    const preview = await screen.findByRole("region", { name: "Preview of notes.txt" });
-    await within(preview).findByText("hello");
-    expect(calls.preview).toHaveBeenCalledTimes(1);
-    expect(calls.preview).toHaveBeenCalledWith(id, "/notes.txt");
+    const row = (name: string) => screen.getByText(name).closest("tr") as HTMLElement;
+    // Text is one plain download, counted as it is.
+    fireEvent.click(within(row("notes.txt")).getByRole("button", { name: "Preview" }));
+    const text = await screen.findByRole("region", { name: "Preview of notes.txt" });
+    await within(text).findByText("hello");
     expect(fetched).toHaveBeenCalledTimes(1);
     expect(fetched.mock.calls[0]?.[0]).toBe(
-      `/api/v1/public/shares/${id}/download?path=%2Fnotes.txt&preview=opened`,
+      `/api/v1/public/shares/${id}/download?path=%2Fnotes.txt`,
     );
+    expect(calls.preview).not.toHaveBeenCalled();
+    // Audio streams in Range reads, so it is opened through the share once, then read with it.
+    fireEvent.click(within(row("song.mp3")).getByRole("button", { name: "Preview" }));
+    const audio = await screen.findByRole("region", { name: "Preview of song.mp3" });
+    await waitFor(() =>
+      expect(audio.querySelector("audio")?.getAttribute("src")).toBe(
+        `/api/v1/public/shares/${id}/download?path=%2Fsong.mp3&preview=opened`,
+      ),
+    );
+    expect(calls.preview).toHaveBeenCalledTimes(1);
+    expect(calls.preview).toHaveBeenCalledWith(id, "/song.mp3");
     directory.unmount();
 
     calls.metadata.mockResolvedValue({
@@ -262,7 +274,7 @@ it("says why a preview could not be opened, and fetches nothing", async () => {
   calls.metadata.mockResolvedValue({
     ...metadata,
     hasPassword: false,
-    fileName: "notes.txt",
+    fileName: "song.mp3",
     maxDownloads: 1,
   });
   calls.preview.mockRejectedValue(new Error("Share download limit reached"));
@@ -271,8 +283,9 @@ it("says why a preview could not be opened, and fetches nothing", async () => {
   try {
     setup();
     fireEvent.click(await screen.findByRole("button", { name: "Preview" }));
-    const preview = await screen.findByRole("region", { name: "Preview of notes.txt" });
+    const preview = await screen.findByRole("region", { name: "Preview of song.mp3" });
     await within(preview).findByText("Share download limit reached");
+    expect(preview.querySelector("audio")).toBeNull();
     expect(fetched).not.toHaveBeenCalled();
   } finally {
     vi.unstubAllGlobals();

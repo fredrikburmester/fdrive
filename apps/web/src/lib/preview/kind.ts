@@ -1,4 +1,8 @@
-import { IMAGE_EXTENSIONS as GALLERY_IMAGE_EXTENSIONS } from "@fdrive/contracts";
+import {
+  AUDIO_EXTENSIONS,
+  IMAGE_EXTENSIONS as GALLERY_IMAGE_EXTENSIONS,
+  VIDEO_EXTENSIONS,
+} from "@fdrive/contracts";
 import { isPeekableArchiveName } from "@fdrive/core";
 
 /**
@@ -38,10 +42,7 @@ export const HEIC_EXTENSIONS: ReadonlySet<string> = new Set([".heic", ".heif"]);
 // Authenticated viewing also permits SVG and icons; public galleries exclude them.
 const IMAGE_EXTENSIONS = new Set([...GALLERY_IMAGE_EXTENSIONS, ".ico", ".svg"]);
 
-// `video.ts` says which of these the browser plays and which the API transcodes.
-const VIDEO_EXTENSIONS = new Set([".mp4", ".webm", ".mov", ".mkv", ".avi", ".m4v", ".wmv", ".flv"]);
-
-const AUDIO_EXTENSIONS = new Set([".mp3", ".wav", ".ogg", ".flac", ".m4a", ".aac", ".opus"]);
+// `VIDEO_EXTENSIONS`: `video.ts` says which the browser plays and which the API transcodes.
 
 const MARKDOWN_EXTENSIONS = new Set([".md", ".markdown", ".mdx"]);
 

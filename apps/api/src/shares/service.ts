@@ -1,10 +1,12 @@
 import {
   CreateShareRequest,
+  isStreamedPreviewName,
   type ManagedShare,
   type PublicShare,
   type UpdateShareRequest,
 } from "@fdrive/contracts";
 import {
+  baseName,
   isAtOrUnder,
   isReservedPath,
   isStorageError,
@@ -466,9 +468,16 @@ export function createSharesService(deps: SharesDeps) {
       }
       return outcome;
     },
-    /** Opens a preview of the file at `path`: one download, however many reads follow. */
+    /**
+     * Opens a preview of the audio or video at `path`, the only files a
+     * viewer streams in Range reads: one download, counted now, however many
+     * reads follow. Anything else the page previews is one plain download.
+     */
     async preview(share: OpenShare, path: string): Promise<void> {
-      await shareCall(() => share.storage.statFile(resolve(share.row, path)));
+      const target = resolve(share.row, path);
+      if (!isStreamedPreviewName(baseName(target)))
+        throw new ApiHttpError("bad_request", "Only audio and video open as a preview");
+      await shareCall(() => share.storage.statFile(target));
       await consume(share.row);
     },
     /** Lists the archive at `path` without extracting it: one download, however many reads. */

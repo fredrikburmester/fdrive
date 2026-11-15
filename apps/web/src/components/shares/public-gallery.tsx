@@ -98,65 +98,6 @@ function GalleryTile({
   );
 }
 
-/** A full-size image the lightbox opened as a counted preview: its URL, or why it failed. */
-type OpenedImage = { readonly url: string } | { readonly error: string };
-
-/**
- * The lightbox's image: the 1024px thumbnail (cached, preloaded) the moment it is shown, then the
- * full-size image once its preview is open and the image has decoded, so stepping never shows an
- * empty frame. Keyed by path, so another image starts from its own thumbnail. A share whose
- * files are not indexed has no thumbnail: its `onError` falls straight through to the full
- * image. HEIC hands the original to `ImageViewer`, which decodes it itself; a camera raw file is
- * only ever its thumbnail.
- */
-function LightboxImage({
-  image,
-  thumbUrl,
-  downloadUrl,
-  opened,
-}: {
-  image: GalleryImage;
-  thumbUrl: (path: string, size: ThumbSize) => string;
-  downloadUrl: (path: string) => string;
-  opened: OpenedImage | undefined;
-}) {
-  const [fullLoaded, setFullLoaded] = useState(false);
-  const [thumbFailed, setThumbFailed] = useState(false);
-  const heic = isHeicExt(extensionOf(image.name));
-  const full = opened !== undefined && "url" in opened ? opened.url : null;
-  useEffect(() => {
-    if (heic || full === null) return;
-    const preload = new Image();
-    preload.src = full;
-    if (preload.complete) setFullLoaded(true);
-    else preload.onload = () => setFullLoaded(true);
-    return () => {
-      preload.onload = null;
-    };
-  }, [full, heic]);
-  const thumb = thumbUrl(image.path, 1024);
-  const src = full !== null && (heic || fullLoaded || thumbFailed) ? full : thumb;
-  return (
-    <div className="relative h-full">
-      <ImageViewer
-        src={src}
-        thumbUrl={thumb}
-        downloadUrl={downloadUrl(image.path)}
-        name={image.name}
-        onError={() => setThumbFailed(true)}
-      />
-      {opened !== undefined && "error" in opened && (
-        <p
-          role="status"
-          className="pointer-events-none absolute bottom-4 left-1/2 -translate-x-1/2 rounded-full border bg-background/90 px-3 py-1 text-xs text-muted-foreground shadow-sm backdrop-blur-sm"
-        >
-          {opened.error}
-        </p>
-      )}
-    </div>
-  );
-}
-
 /**
  * The full-page lightbox: a `fixed inset-0` overlay reading as the logged-in
  * `components/preview/preview-shell.tsx` view (same `h-12` top bar shape, ghost icon buttons
@@ -170,7 +111,6 @@ function Lightbox({
   total,
   thumbUrl,
   downloadUrl,
-  opened,
   onClose,
   onStep,
 }: {
@@ -179,11 +119,32 @@ function Lightbox({
   total: number;
   thumbUrl: (path: string, size: ThumbSize) => string;
   downloadUrl: (path: string) => string;
-  opened: OpenedImage | undefined;
   onClose: () => void;
   onStep: (delta: 1 | -1) => void;
 }) {
   const overlayRef = useRef<HTMLDivElement>(null);
+  // Shows the (cached, preloaded) 1024px thumbnail the moment an arrow is
+  // pressed, and swaps to the full-size image once it has decoded, so
+  // stepping never shows an empty frame. Keyed by path so moving to another
+  // image starts from its thumbnail again rather than holding the previous
+  // full image. A share whose files are not indexed has no thumbnail: the
+  // `onError` there falls straight through to the full image. HEIC and camera
+  // raw files never preload the original: `ImageViewer` owns those.
+  const [fullLoaded, setFullLoaded] = useState(false);
+  const [thumbFailed, setThumbFailed] = useState(false);
+  const thumbnailOnly = isHeicExt(extensionOf(image.name)) || isRawExt(extensionOf(image.name));
+  useEffect(() => {
+    if (thumbnailOnly) return;
+    setFullLoaded(false);
+    setThumbFailed(false);
+    const full = new Image();
+    full.src = downloadUrl(image.path);
+    if (full.complete) setFullLoaded(true);
+    else full.onload = () => setFullLoaded(true);
+    return () => {
+      full.onload = null;
+    };
+  }, [image.path, downloadUrl, thumbnailOnly]);
   useEffect(() => {
     const previouslyFocused =
       document.activeElement instanceof HTMLElement ? document.activeElement : null;
@@ -204,6 +165,11 @@ function Lightbox({
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose, onStep]);
+  const activeSrc = thumbnailOnly
+    ? downloadUrl(image.path)
+    : fullLoaded || thumbFailed
+      ? downloadUrl(image.path)
+      : thumbUrl(image.path, 1024);
   return (
     <div
       ref={overlayRef}
@@ -240,12 +206,13 @@ function Lightbox({
         <NativeShareDownload href={downloadUrl(image.path)} icon />
       </header>
       <div className="min-h-0 flex-1">
-        <LightboxImage
+        <ImageViewer
           key={image.path}
-          image={image}
-          thumbUrl={thumbUrl}
-          downloadUrl={downloadUrl}
-          opened={opened}
+          src={activeSrc}
+          thumbUrl={thumbUrl(image.path, 1024)}
+          downloadUrl={downloadUrl(image.path)}
+          name={image.name}
+          onError={() => setThumbFailed(true)}
         />
       </div>
     </div>
@@ -254,56 +221,34 @@ function Lightbox({
 
 /**
  * Bounded image grid for the public share page. Tiles show a thumbnail (`thumbUrl`, never
- * counted as a download) with `loading="lazy"`; a tap opens the full-page lightbox, which opens
- * the full-size image as a preview (`previewUrl`), counted once per image however often the
- * visitor steps back to it, with previous/next, a per-image download, and Escape or the close
- * button to return to the grid. The neighbours' 1024px thumbnails are preloaded whenever the
- * open index changes, so stepping through the lightbox rarely shows a blank frame.
+ * counted as a download) with `loading="lazy"`; a tap opens the full-page lightbox on the
+ * full-size image (`downloadUrl`, one counted download per image shown: the document keeps a
+ * loaded image, so its own `<img>` and a step back reuse it), with previous/next, a per-image download, and Escape or the
+ * close button to return to the grid. The neighbouring full-size images are preloaded whenever
+ * the open index changes, so stepping through the lightbox rarely shows a blank frame.
  */
 export function PublicGallery({
   images,
   thumbUrl,
   downloadUrl,
-  previewUrl,
 }: {
   images: readonly GalleryImage[];
   thumbUrl: (path: string, size: ThumbSize) => string;
   downloadUrl: (path: string) => string;
-  /** Opens one image as a counted preview, resolving to the URL its full-size reads use. */
-  previewUrl: (path: string) => Promise<string>;
 }) {
   const [shown, setShown] = useState(() => galleryVisibleCount(images.length, 0));
   const [openIndex, setOpenIndex] = useState<number | null>(null);
-  const [opened, setOpened] = useState<ReadonlyMap<string, OpenedImage>>(() => new Map());
-  const requested = useRef(new Set<string>());
   useEffect(() => {
     setShown(galleryVisibleCount(images.length, 0));
     setOpenIndex(null);
   }, [images]);
   const visible = images.slice(0, shown);
   const active = openIndex === null ? null : (visible[openIndex] ?? null);
-  /** Shows image `index` in the lightbox, opening its full size once. Called from clicks and
-   * keys, never an effect, so React's development double effects never open it twice. */
-  function show(index: number) {
-    setOpenIndex(index);
-    const image = visible[index];
-    // A camera raw file is only ever shown as its thumbnail, so there is nothing to open.
-    if (image === undefined || isRawExt(extensionOf(image.name))) return;
-    if (requested.current.has(image.path)) return;
-    requested.current.add(image.path);
-    const settle = (result: OpenedImage) =>
-      setOpened((current) => new Map(current).set(image.path, result));
-    previewUrl(image.path).then(
-      (url) => settle({ url }),
-      (cause: unknown) =>
-        settle({
-          error: cause instanceof Error ? cause.message : "The full-size image is unavailable.",
-        }),
-    );
-  }
-  // Preloads the neighbours' *thumbnails*, not their full-size images: each full-size image is
-  // a counted preview, opened only when the visitor steps to it. The 1024px thumbnail is
-  // cacheable, so it is on screen the instant the arrow is pressed while the full image loads.
+  // Preloads the neighbours' *thumbnails*, not their full-size images: a
+  // full download answers `no-store`, so a preloaded one could never be
+  // reused and would only spend another of the link's downloads. The 1024px
+  // thumbnail is cacheable, so it is on screen the instant the arrow is
+  // pressed while the full image loads behind it.
   useEffect(() => {
     if (openIndex === null) return;
     for (const neighbor of neighborIndexes(openIndex, visible.length)) {
@@ -325,7 +270,7 @@ export function PublicGallery({
             key={image.path}
             image={image}
             thumbUrl={thumbUrl}
-            onOpen={() => show(index)}
+            onOpen={() => setOpenIndex(index)}
           />
         ))}
       </div>
@@ -346,9 +291,12 @@ export function PublicGallery({
           total={visible.length}
           thumbUrl={thumbUrl}
           downloadUrl={downloadUrl}
-          opened={opened.get(active.path)}
           onClose={() => setOpenIndex(null)}
-          onStep={(delta) => show(stepLightboxIndex(openIndex, visible.length, delta))}
+          onStep={(delta) =>
+            setOpenIndex((current) =>
+              current === null ? current : stepLightboxIndex(current, visible.length, delta),
+            )
+          }
         />
       )}
     </div>
