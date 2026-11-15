@@ -761,7 +761,7 @@ export function FileBrowser({
       {
         onSuccess: () => {
           setDeleteTargets([]);
-          if (capabilities.trash)
+          if (trash)
             offerUndo(`Moved ${itemCount(paths.length)} to Trash`, () => restoreFromTrash(paths));
         },
       },
