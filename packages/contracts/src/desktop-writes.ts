@@ -127,6 +127,8 @@ export const DesktopMoveRequest = z.strictObject({
   name: DesktopName,
   base: DesktopBaseVersion,
 });
+/** Deletes an item in fdrive's Trash for good, as Empty Trash does; `itemId` is its handle. */
+export const DesktopPurgeRequest = z.strictObject({ itemId: CanonicalUuid });
 export const DesktopOperationState = z.enum([
   "receiving",
   "uploading",
@@ -155,6 +157,7 @@ export type DesktopWriteCapabilities = z.infer<typeof DesktopWriteCapabilities>;
 export type DesktopUploadRequest = z.infer<typeof DesktopUploadRequest>;
 export type DesktopFolderRequest = z.infer<typeof DesktopFolderRequest>;
 export type DesktopMoveRequest = z.infer<typeof DesktopMoveRequest>;
+export type DesktopPurgeRequest = z.infer<typeof DesktopPurgeRequest>;
 export type DesktopOperationResult = z.infer<typeof DesktopOperationResult>;
 export type DesktopBaseVersion = z.infer<typeof DesktopBaseVersion>;
 export type DesktopAccessMode = z.infer<typeof DesktopAccessMode>;

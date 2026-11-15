@@ -10,6 +10,7 @@ import {
   DesktopPairRequest,
   DesktopPairSecret,
   DesktopPath,
+  DesktopPurgeRequest,
   DesktopUploadRequest,
   DesktopVersionRequest,
 } from "@fdrive/contracts";
@@ -284,6 +285,12 @@ export function registerDesktopRoutes(
       const auth = await principal(c, true);
       const body = await parseBody(DesktopMoveRequest, c);
       return c.json(await writeService().prepare(auth.principal, { ...body, kind: "move" }));
+    });
+    v2.post(`${base}/purges`, async (c) => {
+      const auth = await principal(c, true);
+      const body = await parseBody(DesktopPurgeRequest, c);
+      await writeService().purge(auth.principal, body.itemId);
+      return c.json({ ok: true });
     });
     v2.get(`${base}/operations/:id`, async (c) =>
       c.json(await writeService().status((await principal(c, true)).principal, operationId(c))),

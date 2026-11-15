@@ -438,13 +438,14 @@ describe("public links follow the files they point at", () => {
     // Nothing waits: each link follows before its commit answers.
     expect(await linkPaths(alice, file)).toEqual(["/mac-renamed.txt"]);
     expect(await linkPaths(alice, folder)).toEqual(["/MacMoved/inside.txt"]);
-    expect((await linkPaths(alice, trashed))[0]).toMatch(/^\/\.fdrive-desktop\//);
+    // The Mac's Trash is fdrive's: the link follows its item there, where it is not served.
+    expect((await linkPaths(alice, trashed))[0]).toMatch(/^\/\.trash\/.+\/mac-trash\.txt\//);
     expect(await downloadText(file)).toBe("mac");
     expect(await downloadText(folder)).toBe("mac inside");
     await put(alice, "/mac-trash.txt", "never shared");
     expect(await visit(trashed)).toBe(404);
 
-    // Put back from the Mac's Trash, under a new name since its place is taken.
+    // Put back from Trash, under a new name since its place is taken.
     await macMove(inTrash, "root", "mac-back.txt");
     expect(await linkPaths(alice, trashed)).toEqual(["/mac-back.txt"]);
     expect(await downloadText(trashed)).toBe("mac trash");

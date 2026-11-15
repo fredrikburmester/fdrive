@@ -215,7 +215,7 @@ it("publishes complete files with durable replay and conflict protection", async
       entries: unknown[];
     };
     expect(trashListing.entries.map((item) => DesktopWriteEntry.parse(item).id)).toEqual([tree.id]);
-    // No permanent-delete endpoint is exposed to desktop credentials.
+    // Deleting for good is `POST /purges` of a whole item in Trash, nothing else.
     expect(
       (
         await call(
@@ -229,6 +229,18 @@ it("publishes complete files with durable replay and conflict protection", async
     expect((await stat("/Tree/nested/child.txt")).id).toBe(child.id);
     expect((await stat("/Tree/empty")).kind).toBe("dir");
     expect(await readDisk("/Tree/nested/new.txt")).toBe("new");
+    // Finder's Empty Trash deletes the item in fdrive's Trash for good; a live one is refused.
+    await writeFile(onDisk("/binned.txt"), "binned");
+    const live = await stat("/binned.txt");
+    expect((await call(`${base}/purges`, { itemId: live.id })).status).toBe(409);
+    const binned = await commit(await move(live, "trash"));
+    expect(await json(`${base}/purges`, { itemId: binned.id })).toEqual({ ok: true });
+    expect(
+      ((await json(`${base}/entries?path=/.fdrive-desktop/trash`)) as { entries: unknown[] })
+        .entries,
+    ).toEqual([]);
+    expect((await call(`${base}/entry?path=/binned.txt`)).status).toBe(404);
+    expect(await json(`${base}/purges`, { itemId: binned.id })).toEqual({ ok: true });
 
     // A successful publication remains completed even when PostgreSQL refuses
     // its metadata, and nothing waits for that metadata, which stays where it

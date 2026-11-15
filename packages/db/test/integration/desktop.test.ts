@@ -71,6 +71,16 @@ it("coordinates desktop identities and operation receipts across independent Pos
     );
     await a.remove(identity.id, "/renamed");
     expect(await b.at(identity.id, "/renamed")).toBeNull();
+    // The Mac's old Trash: only its top-level items, which know where they were deleted from.
+    const binned = await a.ensure(identity.id, `/.fdrive-desktop/${identity.id}/trash/x`, "dir");
+    await a.ensure(identity.id, `${binned.path}/inside`, "file");
+    await a.update(identity.id, binned.id, { originalPath: "/Projects" });
+    await a.update(identity.id, untouched.id, { originalPath: "/elsewhere" });
+    expect((await b.oldTrash()).map((item) => [item.id, item.originalPath])).toEqual([
+      [binned.id, "/Projects"],
+    ]);
+    await a.remove(identity.id, binned.path);
+    expect(await b.oldTrash()).toEqual([]);
     const input = {
       id: randomUUID(),
       identityId: identity.id,

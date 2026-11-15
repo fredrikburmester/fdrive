@@ -32,7 +32,7 @@ A pass takes the live rows of `idx.files` with the extension `.pdf` and a digest
   written, so a PDF moved, renamed or restored from Trash is never processed again;
 - every PDF in fdrive's own folders: a path with a segment named `.fdrive-move-v1` (fdrive's
   Trash layout, wherever it lies), `.trash` (its Trash folder) or
-  `.fdrive-desktop` (the Mac app's staged uploads, replaced versions and Trash), in any case
+  `.fdrive-desktop` (the Mac app's staged uploads), in any case
   (`RESERVED_FOLDERS` in `rules.py`, after `isReservedPath` in `@fdrive/core`). The indexer indexes the Trash, so this is what keeps OCR out of it;
 - PDFs matched by `ocr.exclude_globs` (or outside `OCR_INCLUDE_GLOBS`) and PDFs over
   `ocr.max_mb`. These are settings, not facts about a file, so nothing is recorded for them

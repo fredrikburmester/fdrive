@@ -42,7 +42,8 @@ Recommended on 2026-11-14 and approved by the owner the same day.
 ## Wave 2: Trash, metadata and the journal
 
 17. **Flat Trash layout.** The `p/<segment>` path encoding, made for WebDAV, becomes one folder
-    per item plus a row.
+    per item plus a row. The Mac's Trash (`desktop/writes.ts`) finds an item's leaf and original
+    path with the layout's parser too.
 19. **One file-operations service.** MCP's activity proxy and its copy of metadata following
     (`composition.ts` `onMutation`) merge with the fs and Trash routes' recorders.
 20. **Delete removed files from the index.** Tombstones are never purged and every scan loads
@@ -52,7 +53,6 @@ Recommended on 2026-11-14 and approved by the owner the same day.
 
 All are server-only and keep shipped Mac builds working.
 
-26. Finder's Trash becomes fdrive's Trash.
 28. Optional: drop `/checks` now that the change feed exists, after measuring the hourly pass.
 
 ## Storage contract
@@ -74,5 +74,7 @@ All are server-only and keep shipped Mac builds working.
 ## Last
 
 36. Collapse the schema: provider columns and rows, `identities.provider_id`. Keep the provider
-    row's UUID, which the Mac app compares as `providerId`.
+    row's UUID, which the Mac app compares as `providerId`. `desktop_items.original_path` goes
+    with the start-up move of the Mac's old Trash (`adoptOldTrash` in `desktop/retention.ts`)
+    once the owner's server has run it.
 37. Squash the migrations into one baseline.

@@ -7,6 +7,7 @@ import {
   GrantsResponse,
   ManagedShare,
   ROUTES,
+  TrashListResponse,
 } from "@fdrive/contracts";
 import { createDb, createRepos, type Repos } from "@fdrive/db";
 import { startLocalStorage, startPostgres } from "@fdrive/testkit";
@@ -256,7 +257,7 @@ describe("metadata follows the Mac's writes as they commit", () => {
     }
   });
 
-  it("takes tags and sharing with a folder into the Mac's Trash and back out", async () => {
+  it("takes tags, sharing and its handle with a folder into Trash and back out", async () => {
     const tag = await repos.tags.create(accountId, { name: "Binned", color: null });
     await repos.fileTags.setTags(identityId, "/Binned/inside.txt", [tag.id]);
     await repos.recents.touch(identityId, "/Binned/inside.txt");
@@ -269,7 +270,12 @@ describe("metadata follows the Mac's writes as they commit", () => {
     expect((await stat(trashed.path)).id).toBe(folder.id);
     // Tags and recents follow the folder, so nothing new at its old path takes
     // them; the share follows it out of bob's reach.
-    const binned = `/.fdrive-desktop/${identityId}/trash/${folder.id}`;
+    // fdrive's Trash took it, which the web's Trash page lists too.
+    const [inTrash] = TrashListResponse.parse(
+      await ok(call(ROUTES.trash.list, { cookie: alice })),
+    ).entries;
+    expect(inTrash?.originalPath).toBe("/Binned");
+    const binned = `/.trash/${inTrash?.id}`;
     expect(await repos.fileTags.pathsForTag(identityId, tag.id)).toEqual([`${binned}/inside.txt`]);
     expect((await repos.recents.list(identityId, 10)).map((recent) => recent.path)).not.toContain(
       "/Binned/inside.txt",

@@ -23,6 +23,9 @@ final class ProviderItem: NSObject, NSFileProviderItem {
         if record.id != "root", record.id != "trash" {
             if remote.move { result.formUnion([.allowsRenaming, .allowsReparenting]) }
             if remote.trash { result.insert(.allowsTrashing) }
+            // Delete Immediately moves a live item to fdrive's Trash; Empty Trash deletes a
+            // whole Trash item for good (`WriteCoordinator.delete`).
+            if remote.trash || (record.parentId == "trash" && remote.restore) { result.insert(.allowsDeleting) }
         }
         return result
     }
