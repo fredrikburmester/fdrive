@@ -450,7 +450,7 @@ describe("migrate", () => {
   });
 
   it("keeps only the files root, as row 1, with what was indexed under it", async () => {
-    await withDatabaseBefore("0038_index_root_files", async (older) => {
+    await withDatabaseBefore("0039_index_root_files", async (older) => {
       await older.execute(sql`insert into idx.roots (name) values ('files'), ('photos')`);
       await older.execute(sql`
         insert into idx.files (root_id, path, name, size, mtime_ns) values

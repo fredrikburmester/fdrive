@@ -67,6 +67,7 @@ import { registerFeatureAdmission } from "./features/admission.js";
 import { registerFeatureRoutes } from "./features/routes.js";
 import { createFeatureService } from "./features/service.js";
 import { publishFsEvent, registerFsRoutes } from "./fs/routes.js";
+import { registerVideoRoutes } from "./fs/video-routes.js";
 import { createJobRunner } from "./jobs/runner.js";
 import { createChangeQueue } from "./local/change-queue.js";
 import {
@@ -98,6 +99,7 @@ import { createOfficeSettingsService, probeOnlyOfficeRuntime } from "./office/se
 import { registerOfficeSettingsRoutes } from "./office/settings-routes.ts";
 import { createOfficeStorageFactory } from "./office/storage.ts";
 import { createOfficeTokenCodec } from "./office/tokens.ts";
+import { registerPhotoRoutes } from "./photos/routes.js";
 import { createScopeResolver } from "./scoping/resolver.ts";
 import { createEmbedClient } from "./search/embeddings.js";
 import { createImageEmbedClient } from "./search/image-embed-client.js";
@@ -938,6 +940,7 @@ export async function composeApp(
         },
       };
       registerFsRoutes(groups, fsRoutesDeps);
+      registerVideoRoutes(groups);
       registerTrashRoutes(groups, {
         activity: personalActivity,
         bus,
@@ -984,6 +987,15 @@ export async function composeApp(
         indexerConfigured: config.fdriveIndexerUrl !== undefined,
         semanticEnabled: embedClient !== null,
         imageSearchEnabled: imageEmbedClient !== null,
+        trashPathForStorage: (storage) => {
+          const settings = trashSettingsForStorage(storage);
+          return settings?.enabled === true ? settings.path : null;
+        },
+      });
+      registerPhotoRoutes(groups, {
+        indexQueries,
+        resolver: scopeResolver,
+        indexed,
         trashPathForStorage: (storage) => {
           const settings = trashSettingsForStorage(storage);
           return settings?.enabled === true ? settings.path : null;

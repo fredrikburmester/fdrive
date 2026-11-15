@@ -24,6 +24,7 @@ pub mod log;
 pub mod maintenance;
 pub mod names;
 pub mod paths;
+pub mod photo;
 pub mod promise;
 pub mod raw;
 pub mod rules;

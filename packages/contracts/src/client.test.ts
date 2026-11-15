@@ -380,6 +380,18 @@ describe("createApiClient: downloadUrl", () => {
   });
 });
 
+describe("createApiClient: video urls", () => {
+  it("builds transcode and subtitle urls", () => {
+    const client = createApiClient({ baseUrl: "https://api.test" });
+    expect(client.transcodeUrl("/a/b.mkv")).toBe(
+      "https://api.test/api/v1/fs/transcode?path=%2Fa%2Fb.mkv",
+    );
+    expect(client.subtitlesUrl("/a/b.en.srt")).toBe(
+      "https://api.test/api/v1/fs/subtitles?path=%2Fa%2Fb.en.srt",
+    );
+  });
+});
+
 describe("createApiClient: upload", () => {
   it("puts the body to fs/upload with the path query", async () => {
     const { fetchStub, calls } = createStubFetch([jsonResponse(200, VALID_ENTRY)]);
@@ -703,6 +715,50 @@ describe("createApiClient: shareThumbUrl", () => {
     expect(client.shareThumbUrl("share-1", "/café/日本語.jpg", 256)).toBe(
       "https://api.test/api/v1/public/shares/share-1/thumb?path=%2Fcaf%C3%A9%2F%E6%97%A5%E6%9C%AC%E8%AA%9E.jpg&size=256",
     );
+  });
+});
+
+describe("createApiClient: photos", () => {
+  const page = {
+    photos: [
+      {
+        path: "/a.jpg",
+        name: "a.jpg",
+        size: 10,
+        modifiedAt: "2024-05-02T10:00:00.000Z",
+        takenAt: "2024-05-01T14:03:09",
+      },
+    ],
+    nextCursor: "next",
+  };
+  const details = {
+    takenAt: null,
+    camera: "Apple iPhone 15 Pro",
+    width: 4032,
+    height: 3024,
+    latitude: 59.5,
+    longitude: -18,
+  };
+
+  it("gets the first page, then the page after a cursor", async () => {
+    const { fetchStub, calls } = createStubFetch([
+      jsonResponse(200, page),
+      jsonResponse(200, { photos: [], nextCursor: null }),
+    ]);
+    const client = createApiClient({ fetch: fetchStub });
+
+    expect(await client.photos()).toEqual(page);
+    await client.photos("next");
+
+    expect(calls.map((call) => call.url)).toEqual(["/api/v1/photos", "/api/v1/photos?cursor=next"]);
+  });
+
+  it("gets one photo's details by path", async () => {
+    const { fetchStub, calls } = createStubFetch([jsonResponse(200, details)]);
+    const client = createApiClient({ fetch: fetchStub });
+
+    expect(await client.photoDetails("/a.jpg")).toEqual(details);
+    expect(calls[0]?.url).toBe("/api/v1/photos/details?path=%2Fa.jpg");
   });
 });
 

@@ -201,6 +201,13 @@ describe("sharing folders between local users", () => {
     expect(await readFile(storage.path("alice", "/Docs/big.txt"), "utf8")).toBe("bob's big file");
     expect(existsSync(storage.path("alice", `/.fdrive-partial-${PART}`))).toBe(false);
     expect(await list(alice, "/Docs")).toEqual(["big.txt", "mine.txt", "notes.txt", "plan.txt"]);
+    // Subtitles read through the same storage as downloads.
+    const srt = "1\n00:00:01,000 --> 00:00:02,000\nThe plan\n";
+    expect((await upload(bob, `${SHELF}/Docs/plan.srt`, srt)).status).toBe(201);
+    const subtitles = await call(`${ROUTES.fs.subtitles}?path=${q(`${SHELF}/Docs/plan.srt`)}`, {
+      cookie: bob,
+    });
+    expect(await subtitles.text()).toBe("WEBVTT\n\n1\n00:00:01.000 --> 00:00:02.000\nThe plan\n");
 
     // Nobody passes on what was shared with them: not to a third user, not as a public link.
     expect((await share(bob, `${SHELF}/Docs`, "carol", "read")).status).toBe(400);
@@ -226,6 +233,10 @@ describe("sharing folders between local users", () => {
     expect(await list(carol, "/")).toEqual([]);
     expect(
       (await call(`${ROUTES.fs.download}?path=${q(`${SHELF}/Docs/plan.txt`)}`, { cookie: carol }))
+        .status,
+    ).toBe(404);
+    expect(
+      (await call(`${ROUTES.fs.subtitles}?path=${q(`${SHELF}/Docs/plan.srt`)}`, { cookie: carol }))
         .status,
     ).toBe(404);
 

@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use common::fake_ml::{self, IMAGE_EMBED, IMAGE_HEALTH, TEXT_EMBED, TIKA};
 use common::root_env::{
-    Env, OFF, context_with, fake_sha, fv, jpeg, manual_clock, pdf, png, tesseract_available, wait_until,
+    Env, OFF, context_with, fake_sha, fv, jpeg, jpeg_with_exif, manual_clock, pdf, png, tesseract_available, wait_until,
 };
 use fdrive_indexer::backoff::Backoff;
 use fdrive_indexer::config::{ROOT_ID, ROOT_NAME};
@@ -660,6 +660,55 @@ fn thumbnails_are_generated_for_real_images() {
         env.unresolved(),
         [("broken.png".to_owned(), "thumbnails".to_owned())].into()
     );
+}
+
+#[test]
+fn photo_details_are_read_from_exif_within_the_thumbnail_limit() {
+    type Details = (
+        Option<String>,
+        Option<String>,
+        Option<i32>,
+        Option<i32>,
+        Option<f64>,
+        Option<f64>,
+    );
+    let details = |env: &Env, rel: &str| -> Details {
+        let row = env
+            .client()
+            .query_one(
+                "SELECT to_char(taken_at, 'YYYY-MM-DD HH24:MI:SS'), camera, width, height, latitude, longitude \
+                 FROM idx.files WHERE path = $1",
+                &[&rel],
+            )
+            .unwrap();
+        (row.get(0), row.get(1), row.get(2), row.get(3), row.get(4), row.get(5))
+    };
+    let env = Env::new();
+    let ctx = env.ctx(fv(false, true, false, false, false));
+    let (path, stat) = env.write("photo.jpg", &jpeg_with_exif());
+    assert!(process_file(&ctx, &path, "photo.jpg", stat).unwrap());
+    assert_eq!(
+        details(&env, "photo.jpg"),
+        (
+            Some("2024-05-01 14:03:09".to_owned()),
+            Some("Apple iPhone 15 Pro".to_owned()),
+            Some(4032),
+            Some(3024),
+            Some(59.5),
+            Some(18.0)
+        )
+    );
+    // A new version without EXIF clears them.
+    std::fs::write(&path, jpeg(8, 8, 4)).unwrap();
+    assert!(process_file(&ctx, &path, "photo.jpg", env.stat("photo.jpg")).unwrap());
+    assert_eq!(details(&env, "photo.jpg"), (None, None, None, None, None, None));
+    // Over the thumbnail limit the file is not read for them.
+    let mut cfg = env.config();
+    cfg.thumb_max_bytes = 1;
+    let ctx = context_with(cfg, fv(false, true, false, false, false), |_| {});
+    let (path, stat) = env.write("large.jpg", &jpeg_with_exif());
+    assert!(process_file(&ctx, &path, "large.jpg", stat).unwrap());
+    assert_eq!(details(&env, "large.jpg"), (None, None, None, None, None, None));
 }
 
 #[test]

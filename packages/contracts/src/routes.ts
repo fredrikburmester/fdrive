@@ -32,6 +32,10 @@ export const ROUTES = {
     stat: "/api/v1/fs/stat",
     /** GET or HEAD: stream (or probe) file contents. */
     download: "/api/v1/fs/download",
+    /** GET: a video transcoded on the fly to H.264/AAC fragmented MP4, for browsers that cannot play it. */
+    transcode: "/api/v1/fs/transcode",
+    /** GET: a `.srt` or `.vtt` subtitle file as WebVTT. */
+    subtitles: "/api/v1/fs/subtitles",
     /** POST: stream a zip of the given paths. */
     zip: "/api/v1/fs/zip",
     /** PUT: stream a file's contents to `path`. */
@@ -107,6 +111,12 @@ export const ROUTES = {
   },
   /** GET: stream a cached WebP thumbnail for a file. 404 when none exists. */
   thumb: "/api/v1/thumb",
+  photos: {
+    /** GET: every image the caller can read, newest first, a page at a time -> `PhotosResponse`. */
+    list: "/api/v1/photos",
+    /** GET: one image's EXIF details -> `PhotoDetailsResponse`. 404 when it is not indexed. */
+    details: "/api/v1/photos/details",
+  },
   /** GET, Server-Sent Events: a stream of `SseEvent`s. */
   events: "/api/v1/events",
   trash: {

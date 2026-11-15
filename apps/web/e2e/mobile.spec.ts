@@ -44,7 +44,7 @@ test.describe("mobile layout (390x844 and 320px)", () => {
 
     // Search and New stay inline; every other desktop-only trigger moves
     // into "More" and is no longer reachable as its own toolbar button.
-    await expect(page.getByRole("button", { name: "Search" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Search", exact: true })).toBeVisible();
     await expect(page.getByRole("button", { name: "New" })).toBeVisible();
     await expect(page.getByRole("button", { name: "View" })).toHaveCount(0);
     await expect(page.getByRole("button", { name: "Upload" })).toHaveCount(0);
@@ -124,7 +124,7 @@ test.describe("mobile layout (390x844 and 320px)", () => {
     // never races the query resolving mid-check.
     await statusResponse;
 
-    const search = page.getByRole("button", { name: "Search" });
+    const search = page.getByRole("button", { name: "Search", exact: true });
     await expect(search).toBeEnabled();
 
     // `expect.poll` retries `boundingBox`, which otherwise can momentarily
@@ -152,7 +152,7 @@ test.describe("mobile layout (390x844 and 320px)", () => {
     await page.setViewportSize(MOBILE_VIEWPORT);
     await page.goto("/files");
 
-    await page.getByRole("button", { name: "Search" }).click();
+    await page.getByRole("button", { name: "Search", exact: true }).click();
     const dialog = page.getByRole("dialog");
     await expect(dialog).toBeVisible();
 

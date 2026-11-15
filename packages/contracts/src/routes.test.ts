@@ -33,6 +33,8 @@ describe("ROUTES", () => {
       list: "/api/v1/fs/list",
       stat: "/api/v1/fs/stat",
       download: "/api/v1/fs/download",
+      transcode: "/api/v1/fs/transcode",
+      subtitles: "/api/v1/fs/subtitles",
       zip: "/api/v1/fs/zip",
       upload: "/api/v1/fs/upload",
       mkdir: "/api/v1/fs/mkdir",
@@ -83,6 +85,13 @@ describe("ROUTES", () => {
 
   it("defines the thumb route", () => {
     expect(ROUTES.thumb).toBe("/api/v1/thumb");
+  });
+
+  it("defines the photos routes", () => {
+    expect(ROUTES.photos).toEqual({
+      list: "/api/v1/photos",
+      details: "/api/v1/photos/details",
+    });
   });
 
   it("defines events and about routes", () => {
