@@ -663,7 +663,6 @@ export async function composeApp(
   const setupService = createSetupService({
     authService: auth.service,
     logins: repos.logins,
-    localUsers: repos.localUsers,
     passwords,
     clock,
     ...(modules.local === undefined ? {} : { localProvider }),

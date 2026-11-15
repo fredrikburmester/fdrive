@@ -234,6 +234,32 @@ describe("createLocalUserService: update", () => {
   });
 });
 
+describe("createLocalUserService: the last administrator", () => {
+  it("cannot be disabled, demoted or removed, even by an administrator the deployment names", async () => {
+    // carol administers through FDRIVE_ADMIN_USERS; alice is the only administrator account.
+    const h = await fixture({ environmentAdmins: ["carol"] });
+    const [carol] = await seedLocalUsers(h.repos, [{ username: "carol", password: "carol-pass" }]);
+    if (carol === undefined) throw new Error("unseeded");
+    const viewer: UserViewer = { accountId: carol.accountId };
+    const refused = {
+      kind: "forbidden",
+      message: "fdrive needs at least one enabled administrator",
+    };
+    await expect(h.service.update("alice", { disabled: true }, viewer)).rejects.toMatchObject(
+      refused,
+    );
+    await expect(h.service.update("alice", { isAdmin: false }, viewer)).rejects.toMatchObject(
+      refused,
+    );
+    await expect(h.service.remove("alice", viewer)).rejects.toMatchObject(refused);
+    expect(await h.store.status("alice")).toBe("active");
+    // With a second administrator account, alice can go.
+    await h.service.update("bob", { isAdmin: true }, viewer);
+    await h.service.remove("alice", viewer);
+    expect(await h.repos.localUsers.get("alice")).toBeNull();
+  });
+});
+
 describe("createLocalUserService: remove", () => {
   it("revokes the user's sign-in, sessions, API tokens and administrator flag", async () => {
     const h = await fixture();

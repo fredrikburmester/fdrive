@@ -11,29 +11,57 @@ import {
   validateSignIn,
 } from "./logins-types.js";
 import { isUniqueViolation } from "./pg-errors.js";
-import { ConflictError, type Identity } from "./types.js";
+import { ConflictError, type Identity, type LocalUser } from "./types.js";
 
 type Transaction = Parameters<Parameters<Db["transaction"]>[0]>[0];
+type Executor = Pick<Db, "execute">;
 
-/** The user, then the login a removed user of this name left behind, else a new account and login. */
-async function insertUser(tx: Transaction, input: NewLocalUser): Promise<Identity> {
+/**
+ * Serializes every write that creates users or could leave fdrive without an
+ * administrator: setup, adding a user, and disabling, demoting or removing
+ * one. Held until the transaction ends.
+ */
+async function lockUsers(tx: Transaction): Promise<void> {
+  await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended('fdrive.users', 0))`);
+}
+
+/** A fresh install: no owner record, no user, no account and no login. */
+async function isFresh(db: Executor): Promise<boolean> {
+  const result = await db.execute<{ fresh: boolean }>(sql`
+    select not exists (select 1 from ${settings} where ${settings.key} = ${SETUP_OWNER_KEY})
+      and not exists (select 1 from ${localUsers})
+      and not exists (select 1 from ${accounts})
+      and not exists (select 1 from ${identities}) as fresh
+  `);
+  return result.rows[0]?.fresh === true;
+}
+
+/** How many users may administer fdrive: enabled, with an administrator account. */
+async function enabledAdmins(tx: Transaction): Promise<number> {
+  const result = await tx.execute<{ count: number }>(sql`
+    select count(*)::int as count
+    from ${localUsers}
+    join ${identities} on ${identities.externalUsername} = ${localUsers.username}
+    join ${accounts} on ${accounts.id} = ${identities.accountId}
+    where ${accounts.isAdmin} and not ${localUsers.disabled}
+  `);
+  return result.rows[0]?.count ?? 0;
+}
+
+async function insertLocalUser(
+  tx: Transaction,
+  input: Omit<NewLocalUser, "isAdmin">,
+): Promise<void> {
   await tx.insert(localUsers).values({
     username: input.username,
     passwordHash: input.passwordHash,
     createdAt: input.at,
     updatedAt: input.at,
   });
-  const [left] = await tx
-    .select()
-    .from(identities)
-    .where(eq(identities.externalUsername, input.username));
-  if (left !== undefined) {
-    await tx
-      .update(accounts)
-      .set({ isAdmin: input.isAdmin })
-      .where(eq(accounts.id, left.accountId));
-    return left;
-  }
+}
+
+/** A new account and login for `input`'s user, never one left behind. */
+async function insertAccountAndLogin(tx: Transaction, input: NewLocalUser): Promise<Identity> {
   const [account] = await tx
     .insert(accounts)
     .values({ displayName: input.username, isAdmin: input.isAdmin, createdAt: input.at })
@@ -52,6 +80,25 @@ async function insertUser(tx: Transaction, input: NewLocalUser): Promise<Identit
   return identity;
 }
 
+/** The user (matched in any case), their login and whether their account is an administrator's. */
+async function userWithLogin(
+  tx: Transaction,
+  username: string,
+): Promise<{ user: LocalUser; login: Identity; isAdmin: boolean } | null> {
+  const [user] = await tx
+    .select()
+    .from(localUsers)
+    .where(sql`lower(${localUsers.username}) = lower(${username})`);
+  if (user === undefined) return null;
+  const [row] = await tx
+    .select({ login: identities, isAdmin: accounts.isAdmin })
+    .from(identities)
+    .innerJoin(accounts, eq(accounts.id, identities.accountId))
+    .where(eq(identities.externalUsername, user.username));
+  if (row === undefined) throw new LoginError("missing_identity");
+  return { user, login: row.login, isAdmin: row.isAdmin };
+}
+
 /** A name taken in any case, by a user or by a login a removed user left, is a conflict. */
 async function creating<T>(run: () => Promise<T>): Promise<T> {
   try {
@@ -64,34 +111,95 @@ async function creating<T>(run: () => Promise<T>): Promise<T> {
 
 export function createLoginRepo(db: Db): LoginRepo {
   return {
-    createUser(input) {
-      validateNewLocalUser(input);
-      return creating(() => db.transaction((tx) => insertUser(tx, input)));
-    },
-
-    setup(input) {
+    async createUser(input) {
       validateNewLocalUser(input);
       return creating(() =>
         db.transaction(async (tx) => {
-          // Setup is open only while no user exists. The lock holds back every
-          // other insert until this transaction ends, so of two racing setups
-          // the second sees the first one's user and is refused.
-          await tx.execute(sql`lock table ${localUsers} in exclusive mode`);
-          const [existing] = await tx
-            .select({ username: localUsers.username })
-            .from(localUsers)
-            .limit(1);
-          if (existing !== undefined) throw new LoginError("setup_claimed");
-          const identity = await insertUser(tx, { ...input, isAdmin: true });
-          // Names the owner, who alone manages backups; it never decides whether setup is open.
-          const owner: SetupOwner = { state: "complete", accountId: identity.accountId };
+          await lockUsers(tx);
+          await insertLocalUser(tx, input);
+          const [left] = await tx
+            .select()
+            .from(identities)
+            .where(eq(identities.externalUsername, input.username));
+          if (left === undefined) return insertAccountAndLogin(tx, input);
           await tx
+            .update(accounts)
+            .set({ isAdmin: input.isAdmin })
+            .where(eq(accounts.id, left.accountId));
+          return left;
+        }),
+      );
+    },
+
+    async setup(input) {
+      validateNewLocalUser(input);
+      return creating(() =>
+        db.transaction(async (tx) => {
+          await lockUsers(tx);
+          if (!(await isFresh(tx))) throw new LoginError("setup_claimed");
+          await insertLocalUser(tx, input);
+          const identity = await insertAccountAndLogin(tx, { ...input, isAdmin: true });
+          const owner: SetupOwner = { state: "complete", accountId: identity.accountId };
+          const [claimed] = await tx
             .insert(settings)
             .values({ key: SETUP_OWNER_KEY, value: owner })
-            .onConflictDoUpdate({ target: settings.key, set: { value: owner } });
+            .onConflictDoNothing()
+            .returning();
+          if (claimed === undefined) throw new LoginError("setup_claimed");
           return identity;
         }),
       );
+    },
+
+    setupOpen() {
+      return isFresh(db);
+    },
+
+    async updateUser(username, patch) {
+      return db.transaction(async (tx) => {
+        await lockUsers(tx);
+        const found = await userWithLogin(tx, username);
+        if (found === null) return null;
+        const wasAdmin = found.isAdmin && !found.user.disabled;
+        const staysAdmin =
+          (patch.isAdmin ?? found.isAdmin) && !(patch.disabled ?? found.user.disabled);
+        if (wasAdmin && !staysAdmin && (await enabledAdmins(tx)) <= 1) {
+          throw new LoginError("last_admin");
+        }
+        const [updated] = await tx
+          .update(localUsers)
+          .set({
+            ...(patch.passwordHash === undefined ? {} : { passwordHash: patch.passwordHash }),
+            ...(patch.disabled === undefined ? {} : { disabled: patch.disabled }),
+            updatedAt: patch.at,
+          })
+          .where(eq(localUsers.username, found.user.username))
+          .returning();
+        if (patch.isAdmin !== undefined) {
+          await tx
+            .update(accounts)
+            .set({ isAdmin: patch.isAdmin })
+            .where(eq(accounts.id, found.login.accountId));
+        }
+        return { user: updated ?? found.user, login: found.login };
+      });
+    },
+
+    async removeUser(username) {
+      return db.transaction(async (tx) => {
+        await lockUsers(tx);
+        const found = await userWithLogin(tx, username);
+        if (found === null) return null;
+        if (found.isAdmin && !found.user.disabled && (await enabledAdmins(tx)) <= 1) {
+          throw new LoginError("last_admin");
+        }
+        await tx.delete(localUsers).where(eq(localUsers.username, found.user.username));
+        await tx
+          .update(accounts)
+          .set({ isAdmin: false })
+          .where(eq(accounts.id, found.login.accountId));
+        return found.login;
+      });
     },
 
     async signIn(input) {

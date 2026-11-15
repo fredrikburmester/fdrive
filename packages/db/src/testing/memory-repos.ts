@@ -252,10 +252,14 @@ function createMemoryLocalGrantRepo(
   };
 }
 
-function createMemoryAccountRepo(ids: () => string): AccountRepo {
+function createMemoryAccountRepo(ids: () => string): AccountRepo & {
+  /** For the login repo: how many accounts exist. */
+  countSync(): number;
+} {
   const byId = new Map<string, Account>();
 
   return {
+    countSync: () => byId.size,
     async create(input) {
       const account: Account = {
         id: ids(),
@@ -1196,7 +1200,7 @@ function createMemoryAiChatRepo(ids: () => string): AiChatRepo {
  */
 function createMemoryLoginRepo(repos: {
   readonly localUsers: ReturnType<typeof createMemoryLocalUserRepo>;
-  readonly accounts: AccountRepo;
+  readonly accounts: ReturnType<typeof createMemoryAccountRepo>;
   readonly identities: ReturnType<typeof createMemoryIdentityRepo>;
   readonly sessions: SessionRepo;
   readonly settings: SettingsRepo;
@@ -1238,26 +1242,85 @@ function createMemoryLoginRepo(repos: {
     });
   }
 
+  /** A fresh install: no owner record, no user, no account and no login. */
+  async function isFresh(): Promise<boolean> {
+    return (
+      (await repos.settings.get(SETUP_OWNER_KEY)) === null &&
+      (await repos.localUsers.count()) === 0 &&
+      repos.accounts.countSync() === 0 &&
+      (await repos.identities.listAll()).length === 0
+    );
+  }
+
+  /** The user (matched in any case), their login and whether their account is an administrator's. */
+  async function userWithLogin(username: string) {
+    const user = await repos.localUsers.get(username);
+    if (user === null) return null;
+    const login = repos.identities.byName(user.username);
+    if (login === null || login.externalUsername !== user.username)
+      throw new LoginError("missing_identity");
+    const isAdmin = (await repos.accounts.get(login.accountId))?.isAdmin === true;
+    return { user, login, isAdmin };
+  }
+
+  async function enabledAdmins(): Promise<number> {
+    let count = 0;
+    for (const user of await repos.localUsers.list()) {
+      const login = repos.identities.byName(user.username);
+      if (user.disabled || login === null || login.externalUsername !== user.username) continue;
+      if ((await repos.accounts.get(login.accountId))?.isAdmin === true) count += 1;
+    }
+    return count;
+  }
+
   return {
-    createUser(input) {
+    async createUser(input) {
       validateNewLocalUser(input);
       return atomic(async () => insertUser(input, await leftLogin(input.username)));
     },
-    setup(input) {
+    async setup(input) {
       validateNewLocalUser(input);
       return atomic(async () => {
-        // Open only while no user exists, whatever the owner record says.
-        if ((await repos.localUsers.count()) > 0) throw new LoginError("setup_claimed");
-        const identity = await insertUser(
-          { ...input, isAdmin: true },
-          await leftLogin(input.username),
-        );
+        if (!(await isFresh())) throw new LoginError("setup_claimed");
+        // Always a new account and login, never one left behind.
+        const identity = await insertUser({ ...input, isAdmin: true }, null);
         const owner: SetupOwner = { state: "complete", accountId: identity.accountId };
         await repos.settings.set(SETUP_OWNER_KEY, owner);
         return identity;
       });
     },
-    signIn(input) {
+    setupOpen: () => atomic(isFresh),
+    updateUser(username, patch) {
+      return atomic(async () => {
+        const found = await userWithLogin(username);
+        if (found === null) return null;
+        const wasAdmin = found.isAdmin && !found.user.disabled;
+        const staysAdmin =
+          (patch.isAdmin ?? found.isAdmin) && !(patch.disabled ?? found.user.disabled);
+        if (wasAdmin && !staysAdmin && (await enabledAdmins()) <= 1)
+          throw new LoginError("last_admin");
+        const user =
+          (await repos.localUsers.update(found.user.username, {
+            ...(patch.passwordHash === undefined ? {} : { passwordHash: patch.passwordHash }),
+            ...(patch.disabled === undefined ? {} : { disabled: patch.disabled }),
+          })) ?? found.user;
+        if (patch.isAdmin !== undefined)
+          await repos.accounts.setAdmin(found.login.accountId, patch.isAdmin);
+        return { user, login: found.login };
+      });
+    },
+    removeUser(username) {
+      return atomic(async () => {
+        const found = await userWithLogin(username);
+        if (found === null) return null;
+        if (found.isAdmin && !found.user.disabled && (await enabledAdmins()) <= 1)
+          throw new LoginError("last_admin");
+        await repos.localUsers.delete(found.user.username);
+        await repos.accounts.setAdmin(found.login.accountId, false);
+        return found.login;
+      });
+    },
+    async signIn(input) {
       validateSignIn(input);
       return atomic(async () => {
         const found = repos.identities.byName(input.username);

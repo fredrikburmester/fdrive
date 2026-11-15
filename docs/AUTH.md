@@ -53,16 +53,19 @@ unaffected, since no password is sealed.
 
 ## Setup ownership
 
-Setup is open only while no local user exists, whatever any setting says, so
-a server with users never reopens it. Setup creates the owner in one database
-transaction: it locks `app.local_users`, refuses if any row is there, and
-writes their `local_users` row, an administrator account, their login and the
-owner record (`setup.owner.v1 = { state: "complete", accountId }`, which names
-who manages [backups](BACKUPS.md) and nothing else). A refused setup writes
-nothing, and of two racing setups the second sees the first one's user, so
-exactly one owner remains. The owner is then signed in through the same
-password check as anyone else. Without `FDRIVE_STORAGE_ROOT` setup refuses to
-complete (`bad_request`).
+Setup is open only on a fresh install: no owner record (`setup.owner.v1`), no
+row in `app.local_users`, no account and no login. Once anyone has used fdrive
+it never reopens, whatever any setting says, and deleting every user does not
+reopen it either, since their logins and accounts remain. Setup runs in one
+transaction under the advisory lock that every user-creating or
+administrator-removing write takes: it checks the install is still fresh,
+creates the owner's `local_users` row, a new administrator account and a new
+login (never one left behind), and inserts the owner record, which is never
+overwritten (`setup_claimed` if it already exists). A refused setup writes
+nothing, and of two racing setups exactly one owner remains. The owner record
+names who manages [backups](BACKUPS.md). The owner is then signed in through
+the same password check as anyone else. Without `FDRIVE_STORAGE_ROOT` setup
+refuses to complete (`bad_request`).
 
 ## Session cookie
 
@@ -203,7 +206,10 @@ Administration is `apps/api/src/local/service.ts` behind
   a login from the moment they exist, and sign-in only looks it up.
 - **Reset password** and **disable** end every session of that user, except
   the administrator's own when they act on themselves. Nobody can disable
-  themselves or remove their own administrator rights.
+  themselves or remove their own administrator rights, and the last enabled
+  administrator account can be neither disabled, demoted nor removed: the
+  check runs in the same locked transaction as the change, so two
+  administrators removing each other leave one.
 - **Remove** stops the user signing in, ends their sessions, deletes their API
   tokens and removes administrator rights. Their files and fdrive data (tags,
   favorites, shares, activity) stay with the name, so adding the same name

@@ -150,6 +150,16 @@ describe("setup", () => {
     }
   });
 
+  it("never overwrites an owner record, even on an otherwise empty database", async () => {
+    await first.db
+      .insert(settings)
+      .values({ key: SETUP_OWNER_KEY, value: { state: "complete", accountId: "earlier" } });
+    const before = await snapshot();
+
+    await expect(a.setup(user("ivan"))).rejects.toMatchObject({ code: "setup_claimed" });
+
+    expect(await snapshot()).toEqual(before);
+  });
   it("lets exactly one of two racing pools own the installation, and rolls the other back", async () => {
     const results = await Promise.allSettled([a.setup(user("dave")), b.setup(user("erin"))]);
 
@@ -171,6 +181,33 @@ describe("setup", () => {
   });
 });
 
+describe("administrators", () => {
+  it("lets only one of two racing pools remove the last two administrators", async () => {
+    await a.createUser({ ...user("jo"), isAdmin: true });
+    await a.createUser({ ...user("kai"), isAdmin: true });
+
+    const results = await Promise.allSettled([a.removeUser("jo"), b.removeUser("kai")]);
+
+    expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+    expect(results.find((result) => result.status === "rejected")).toMatchObject({
+      reason: { code: "last_admin" },
+    });
+    expect((await snapshot()).users).toHaveLength(1);
+  });
+
+  it("lets only one of two racing pools disable and demote the last two administrators", async () => {
+    await a.createUser({ ...user("lee"), isAdmin: true });
+    await a.createUser({ ...user("max"), isAdmin: true });
+
+    const results = await Promise.allSettled([
+      a.updateUser("lee", { disabled: true, at }),
+      b.updateUser("max", { isAdmin: false, at }),
+    ]);
+
+    expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+  });
+});
+
 describe("signing in", () => {
   it("finds the login in any case and keeps every other session", async () => {
     const alice = await a.createUser(user("Alice"));
@@ -188,7 +225,7 @@ describe("signing in", () => {
 
     expect(new Set(results.map((result) => result.identity.id))).toEqual(new Set([alice.id]));
     const rows = await first.db.select().from(sessions);
-    expect(rows).toHaveLength(6);
+    expect(rows).toHaveLength(7);
     expect(
       rows.every((row) => row.identityId === alice.id && row.accountId === alice.accountId),
     ).toBe(true);

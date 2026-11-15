@@ -66,7 +66,6 @@ describe("one password check for every place a password is typed", () => {
     const setup = createSetupService({
       authService: h.auth.service,
       logins: h.repos.logins,
-      localUsers: h.repos.localUsers,
       passwords: h.passwords,
       localProvider: async () => row,
     });

@@ -585,7 +585,7 @@ export function defineReposSuite(name: string, setup: () => Promise<Repos> | Rep
         expect(await owner()).toEqual({ state: "complete", accountId: first.accountId });
       });
 
-      it("refuses setup once any user exists, whatever the owner record says", async () => {
+      it("refuses setup on anything but a fresh install, and never overwrites an owner", async () => {
         const provider = await repos.providers.ensure({ type: "local", baseUrl: "local" });
         const setup = () =>
           repos.logins.setup({
@@ -594,22 +594,44 @@ export function defineReposSuite(name: string, setup: () => Promise<Repos> | Rep
             passwordHash: "h",
             at,
           });
-        await addUser("dave");
-        // No owner record, as an installation from before it keeps.
-        await expect(setup()).rejects.toMatchObject({ code: "setup_claimed" });
-        // An unfinished claim, or anything else, keeps setup closed just the same.
-        for (const record of [{ state: "claiming", accountId: "x" }, { version: 1 }]) {
-          await repos.settings.set(SETUP_OWNER_KEY, record);
+        const refused = async () => {
+          expect(await repos.logins.setupOpen()).toBe(false);
           await expect(setup()).rejects.toMatchObject({ code: "setup_claimed" });
-        }
-        // So does a disabled user.
-        await repos.localUsers.update("dave", { disabled: true });
-        await expect(setup()).rejects.toMatchObject({ code: "setup_claimed" });
+        };
+        expect(await repos.logins.setupOpen()).toBe(true);
+        // An owner record alone closes setup, and is left exactly as it was.
+        const record = { state: "complete", accountId: "someone-else" };
+        await repos.settings.set(SETUP_OWNER_KEY, record);
+        await refused();
+        expect(await owner()).toEqual(record);
+        expect(await repos.localUsers.list()).toEqual([]);
+      });
 
-        expect((await repos.localUsers.list()).map((user) => user.username)).toEqual(["dave"]);
+      it("keeps setup closed once anyone has used the installation, even with every user gone", async () => {
+        const provider = await repos.providers.ensure({ type: "local", baseUrl: "local" });
+        const setup = () =>
+          repos.logins.setup({
+            providerId: provider.id,
+            username: "mallory",
+            passwordHash: "h",
+            at,
+          });
+        // A user and no owner record, as installations from before the record keep.
+        await addUser("dave");
+        await expect(setup()).rejects.toMatchObject({ code: "setup_claimed" });
+        // Every user deleted: their logins and accounts remain, so setup stays closed.
+        await repos.localUsers.delete("dave");
+        expect(await repos.logins.setupOpen()).toBe(false);
+        await expect(setup()).rejects.toMatchObject({ code: "setup_claimed" });
+        expect(await repos.localUsers.list()).toEqual([]);
         expect(
           (await repos.identities.listAll()).map((identity) => identity.externalUsername),
         ).toEqual(["dave"]);
+      });
+
+      it("keeps setup closed for an account alone, with no user or login", async () => {
+        await repos.accounts.create({ displayName: null });
+        expect(await repos.logins.setupOpen()).toBe(false);
       });
 
       it("lets exactly one of two racing setups own the installation", async () => {
@@ -630,6 +652,50 @@ export function defineReposSuite(name: string, setup: () => Promise<Repos> | Rep
           winner?.externalUsername,
         ]);
         expect(await owner()).toEqual({ state: "complete", accountId: winner?.accountId });
+      });
+
+      it("never disables, demotes or removes the last enabled administrator", async () => {
+        await addUser("ann", "h", true);
+        await addUser("ben", "h", false);
+        const last = { code: "last_admin" };
+        await expect(repos.logins.updateUser("ANN", { disabled: true, at })).rejects.toMatchObject(
+          last,
+        );
+        await expect(repos.logins.updateUser("ann", { isAdmin: false, at })).rejects.toMatchObject(
+          last,
+        );
+        await expect(repos.logins.removeUser("ann")).rejects.toMatchObject(last);
+        // Other changes, and changes to anyone else, go through.
+        expect(
+          (await repos.logins.updateUser("ann", { passwordHash: "new", at }))?.user,
+        ).toMatchObject({ username: "ann", passwordHash: "new" });
+        expect((await repos.logins.updateUser("ben", { disabled: true, at }))?.user).toMatchObject({
+          disabled: true,
+        });
+        // A disabled administrator is no administrator: promoting ben while disabled leaves ann last.
+        await repos.logins.updateUser("ben", { isAdmin: true, at });
+        await expect(repos.logins.removeUser("ann")).rejects.toMatchObject(last);
+        await repos.logins.updateUser("ben", { disabled: false, at });
+        const removed = await repos.logins.removeUser("ann");
+        expect(removed?.externalUsername).toBe("ann");
+        expect(await repos.localUsers.get("ann")).toBeNull();
+        expect((await repos.accounts.get(removed?.accountId ?? ""))?.isAdmin).toBe(false);
+        expect(await repos.logins.updateUser("nobody", { disabled: true, at })).toBeNull();
+        expect(await repos.logins.removeUser("nobody")).toBeNull();
+      });
+
+      it("lets only one of two racing removals of the last two administrators through", async () => {
+        await addUser("cy", "h", true);
+        await addUser("di", "h", true);
+        const results = await Promise.allSettled([
+          repos.logins.removeUser("cy"),
+          repos.logins.removeUser("di"),
+        ]);
+        expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+        expect(results.find((result) => result.status === "rejected")).toMatchObject({
+          reason: { code: "last_admin" },
+        });
+        expect(await repos.localUsers.list()).toHaveLength(1);
       });
     });
 

@@ -91,6 +91,7 @@ export {
   toScopeClauses,
 } from "./repos/index-queries.js";
 export type {
+  LocalUserUpdate,
   LoginErrorCode,
   LoginRepo,
   LoginSessionInput,

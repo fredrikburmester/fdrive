@@ -1,9 +1,9 @@
-import type { Identity, Session } from "./types.js";
+import type { Identity, LocalUser, Session } from "./types.js";
 
 /**
  * The setting that names the installation's owner, who alone manages
- * backups. Whether setup is open is decided by whether any user exists, never
- * by this record.
+ * backups. Setup writes it once and never overwrites it; while it exists,
+ * setup stays closed.
  */
 export const SETUP_OWNER_KEY = "setup.owner.v1";
 
@@ -13,7 +13,7 @@ export interface SetupOwner {
   readonly accountId: string;
 }
 
-export type LoginErrorCode = "missing_identity" | "setup_claimed";
+export type LoginErrorCode = "missing_identity" | "setup_claimed" | "last_admin";
 export class LoginError extends Error {
   constructor(readonly code: LoginErrorCode) {
     super(code);
@@ -45,6 +45,13 @@ export interface SignInResult {
   readonly identity: Identity;
   readonly session: Session;
 }
+/** A change to a user and their account; any subset. */
+export interface LocalUserUpdate {
+  readonly passwordHash?: string;
+  readonly disabled?: boolean;
+  readonly isAdmin?: boolean;
+  readonly at: Date;
+}
 /** The writes that span a local user, their account, their login and their sessions. */
 export interface LoginRepo {
   /**
@@ -54,13 +61,30 @@ export interface LoginRepo {
    */
   createUser(input: NewLocalUser): Promise<Identity>;
   /**
-   * Setup: creates the owner as `createUser` does, as an administrator, and
-   * records them under `SETUP_OWNER_KEY`, in one transaction. Setup is open
-   * only while no user exists: `LoginError("setup_claimed")` once any does,
-   * checked inside the transaction so two racing setups leave one owner.
-   * Nothing is written when any step fails.
+   * Setup: creates the owner, an administrator, with a new account and login
+   * (never one left behind), and records them under `SETUP_OWNER_KEY`, in
+   * one locked transaction. Only a fresh install can be set up (`setupOpen`);
+   * otherwise, or when an owner record appeared, `LoginError("setup_claimed")`
+   * and nothing is written.
    */
   setup(input: Omit<NewLocalUser, "isAdmin">): Promise<Identity>;
+  /** True only on a fresh install: no owner record, no user, no account and no login. */
+  setupOpen(): Promise<boolean>;
+  /**
+   * Changes the user (matched in any case) and their account, in one locked
+   * transaction. `LoginError("last_admin")` when it would disable or demote
+   * the last enabled administrator; `null` when there is no such user.
+   */
+  updateUser(
+    username: string,
+    patch: LocalUserUpdate,
+  ): Promise<{ user: LocalUser; login: Identity } | null>;
+  /**
+   * Removes the user (matched in any case) and their administrator flag,
+   * keeping their login, in one locked transaction. `LoginError("last_admin")`
+   * for the last enabled administrator; `null` when there is no such user.
+   */
+  removeUser(username: string): Promise<Identity | null>;
   /**
    * Finds the login named `username` in any case, records the sign-in on it
    * and creates the session, in one transaction. The caller has checked the

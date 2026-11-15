@@ -4,7 +4,7 @@ import type {
   AdminUsersResponse,
   AdminUserUpdateRequest,
 } from "@fdrive/contracts";
-import { ConflictError, type Identity, type LocalUser, type Repos } from "@fdrive/db";
+import { ConflictError, type Identity, type LocalUser, LoginError, type Repos } from "@fdrive/db";
 import type { CheckPassword } from "../auth/password.ts";
 import { ApiHttpError } from "../errors.js";
 import type { SharePasswords } from "../shares/passwords.js";
@@ -31,7 +31,8 @@ export interface LocalUserService {
   update(username: string, patch: AdminUserUpdateRequest, viewer: UserViewer): Promise<AdminUser>;
   /**
    * Removes the user: they can no longer sign in, their sessions and API
-   * tokens end and their account is no longer an administrator. Their files
+   * tokens end and their account is no longer an administrator. The last
+   * enabled administrator cannot be removed, disabled or demoted. Their files
    * and fdrive data stay with the name, so adding the same name again gives
    * them back, without any of the access that was revoked.
    */
@@ -102,6 +103,18 @@ export function createLocalUserService(deps: LocalUserServiceDeps): LocalUserSer
     };
   }
 
+  /** Runs a change that could leave no enabled administrator; refused when it would. */
+  async function keepingAnAdmin<T>(change: () => Promise<T>): Promise<T> {
+    try {
+      return await change();
+    } catch (error) {
+      if (error instanceof LoginError && error.code === "last_admin") {
+        throw new ApiHttpError("forbidden", "fdrive needs at least one enabled administrator");
+      }
+      throw error;
+    }
+  }
+
   /** Signs the user out everywhere, except the viewer's own session when the user is them. */
   async function endSessions(accountId: string, viewer: UserViewer): Promise<void> {
     await repos.sessions.deleteByAccount(
@@ -158,15 +171,19 @@ export function createLocalUserService(deps: LocalUserServiceDeps): LocalUserSer
           "FDRIVE_ADMIN_USERS makes this user an administrator; change it in the deployment",
         );
       }
+      const passwordHash =
+        patch.password === undefined ? undefined : await deps.passwords.hash(patch.password);
       const updated =
-        (await repos.localUsers.update(current.username, {
-          ...(patch.password === undefined
-            ? {}
-            : { passwordHash: await deps.passwords.hash(patch.password) }),
-          ...(patch.disabled === undefined ? {} : { disabled: patch.disabled }),
-        })) ?? current;
-      if (patch.isAdmin !== undefined)
-        await repos.accounts.setAdmin(identity.accountId, patch.isAdmin);
+        (
+          await keepingAnAdmin(() =>
+            repos.logins.updateUser(current.username, {
+              ...(passwordHash === undefined ? {} : { passwordHash }),
+              ...(patch.disabled === undefined ? {} : { disabled: patch.disabled }),
+              ...(patch.isAdmin === undefined ? {} : { isAdmin: patch.isAdmin }),
+              at: clock(),
+            }),
+          )
+        )?.user ?? current;
       // A new password or a disabled user ends every session that predates it.
       if (patch.password !== undefined || patch.disabled === true) {
         await endSessions(identity.accountId, viewer);
@@ -191,9 +208,8 @@ export function createLocalUserService(deps: LocalUserServiceDeps): LocalUserSer
       if (identity.accountId === viewer.accountId) {
         throw new ApiHttpError("forbidden", "you cannot remove yourself");
       }
-      await repos.localUsers.delete(current.username);
+      await keepingAnAdmin(() => repos.logins.removeUser(current.username));
       await endSessions(identity.accountId, viewer);
-      await repos.accounts.setAdmin(identity.accountId, false);
       for (const token of await repos.apiTokens.listByAccount(identity.accountId)) {
         await repos.apiTokens.delete(token.id, identity.accountId);
       }

@@ -1,11 +1,5 @@
 import type { SetupCompleteRequest, SetupStatusResponse } from "@fdrive/contracts";
-import {
-  ConflictError,
-  type LocalUserRepo,
-  LoginError,
-  type LoginRepo,
-  type Provider,
-} from "@fdrive/db";
+import { ConflictError, LoginError, type LoginRepo, type Provider } from "@fdrive/db";
 import type { AuthService, LoginResult } from "../auth/service.js";
 import { ApiHttpError } from "../errors.js";
 import type { SharePasswords } from "../shares/passwords.js";
@@ -22,9 +16,7 @@ export interface SetupService {
 
 export interface CreateSetupServiceDeps {
   readonly authService: Pick<AuthService, "login">;
-  readonly logins: Pick<LoginRepo, "setup">;
-  /** Setup is open only while there is no local user at all. */
-  readonly localUsers: Pick<LocalUserRepo, "count">;
+  readonly logins: Pick<LoginRepo, "setup" | "setupOpen">;
   readonly passwords: Pick<SharePasswords, "hash">;
   readonly clock?: () => Date;
   /**
@@ -38,12 +30,12 @@ export interface CreateSetupServiceDeps {
 /**
  * Builds the `SetupService` backing `/api/v1/setup/*`: reports whether setup
  * is required and whether the deployment has a files folder, and completes
- * setup. Setup is open only while no local user exists, whatever any
- * setting says, so a server with users never reopens it. The owner picks a
- * username and password; one transaction checks that no user exists and
- * creates them as the first local user, an administrator, with their account
- * and login, and records them as the owner. They are then signed in like
- * anyone else.
+ * setup. Setup is open only on a fresh install (no owner record, user,
+ * account or login), so once anyone has used fdrive it never reopens. The
+ * owner picks a username and password; one locked transaction checks the
+ * install is still fresh, creates them as the first local user, an
+ * administrator, with a new account and login, and records them as the
+ * owner. They are then signed in like anyone else.
  */
 export function createSetupService(deps: CreateSetupServiceDeps): SetupService {
   const clock = deps.clock ?? (() => new Date());
@@ -51,7 +43,7 @@ export function createSetupService(deps: CreateSetupServiceDeps): SetupService {
   return {
     async status() {
       return {
-        required: (await deps.localUsers.count()) === 0,
+        required: await deps.logins.setupOpen(),
         storageConfigured: deps.localProvider !== undefined,
       };
     },

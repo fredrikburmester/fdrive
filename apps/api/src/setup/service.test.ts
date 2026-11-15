@@ -18,7 +18,6 @@ async function harness(
   const service = createSetupService({
     authService: h.auth.service,
     logins: h.repos.logins,
-    localUsers: h.repos.localUsers,
     passwords: h.passwords,
     clock: h.clock,
     ...(options.local === false
@@ -44,17 +43,22 @@ const INPUT: SetupCompleteInput = {
 };
 
 describe("createSetupService: status", () => {
-  it("is open only while the folder has no user, whatever the owner record says", async () => {
+  it("is open only on a fresh install", async () => {
     const h = await harness();
-    // An owner record without any user does not close setup.
-    await h.repos.settings.set(SETUP_OWNER_KEY, { state: "complete", accountId: "account-1" });
     expect(await h.service.status()).toEqual({ required: true, storageConfigured: true });
+    // An owner record alone closes it.
+    await h.repos.settings.set(SETUP_OWNER_KEY, { state: "complete", accountId: "account-1" });
+    expect(await h.service.status()).toEqual({ required: false, storageConfigured: true });
 
+    // So does a user, with no owner record or an unfinished one, and it stays closed
+    // once every user is gone, since their logins remain.
     const used = await harness({ users: ["alice"] });
-    for (const record of [null, { state: "claiming", accountId: "account-1" }, "complete"]) {
-      if (record !== null) await used.repos.settings.set(SETUP_OWNER_KEY, record);
-      expect(await used.service.status()).toEqual({ required: false, storageConfigured: true });
-    }
+    expect((await used.service.status()).required).toBe(false);
+    await used.repos.settings.set(SETUP_OWNER_KEY, { state: "claiming", accountId: "account-1" });
+    expect((await used.service.status()).required).toBe(false);
+    await used.repos.localUsers.delete("alice");
+    expect((await used.service.status()).required).toBe(false);
+    await expect(used.service.complete(INPUT)).rejects.toMatchObject({ kind: "conflict" });
   });
 
   it("says when the deployment has no files folder", async () => {
