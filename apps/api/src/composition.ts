@@ -8,13 +8,11 @@ import {
   createChangeJournal,
   createChangeWriter,
   createDb,
-  createDesktopPublishLock,
   createDesktopRepo,
   createFilesFolderFacts,
   createIndexQueries,
   createOfficeFileRepo,
   createOfficeWriteScope,
-  createPool,
   createProcessingFailureReader,
   createRepos,
   createShareRepo,
@@ -60,7 +58,7 @@ import { type Subsystem, type SubsystemProbe, startupSummaryLines } from "./conf
 import { createDesktopChanges } from "./desktop/changes.js";
 import { createIndexedContentLookup } from "./desktop/indexed-content.js";
 import { withDesktopMetadata } from "./desktop/metadata.js";
-import { createDesktopRetention, DEFAULT_DESKTOP_RETENTION } from "./desktop/retention.js";
+import { createDesktopRetention } from "./desktop/retention.js";
 import { registerDesktopRoutes } from "./desktop/routes.js";
 import { createDesktopWrites } from "./desktop/writes.js";
 import { ApiHttpError } from "./errors.js";
@@ -459,33 +457,17 @@ export async function composeApp(
   // A move into the Trash, whoever reports it, leaves metadata where the item was.
   const metadataService = withFollowers(withTrashMoves(metadataCore, trashPathOf), accessFollowers);
   const desktopRepo = createDesktopRepo(db);
-  // Serializes Mac desktop commits per identity; no other fdrive writer takes
-  // it. Mac writes are read-only unless this is configured.
-  //
-  // On its own pool: the lock holds a connection for the whole critical section,
-  // so on the main pool a few slow publications would starve every other query.
-  // The holder still runs its short authority queries on the main pool, so a
-  // saturated main pool lengthens a hold; it cannot deadlock, since nothing on
-  // the main pool waits for this lock. The bounded checkout turns exhaustion
-  // into a retryable busy rather than a stall.
-  const desktopPublishPool = createPool(config.databaseUrl, {
-    max: 4,
-    connectionTimeoutMillis: 5_000,
-    onError: (error) => logger.warn({ err: error }, "idle publish lock connection error"),
-  });
-  const desktopPublishLock = createDesktopPublishLock(desktopPublishPool, {
-    onConnectError: (cause) =>
-      logger.warn({ err: cause }, "publish lock connection unavailable; reported as busy"),
-  });
   const desktopRetention = createDesktopRetention({
     repo: desktopRepo,
-    storageForIdentity: storageFactory,
+    // Without Trash settings, so the Mac's staged files are deleted rather
+    // than moved into the Trash their owner sees.
+    storageForIdentity: createIdentityStorageFactory({
+      providers: providerService,
+      fetch: fetchImpl,
+      clock,
+    }),
     clock,
     eventLog,
-    retention: {
-      ...DEFAULT_DESKTOP_RETENTION,
-      retainMs: config.fdriveDesktopRetentionDays * 24 * 60 * 60_000,
-    },
     ...(config.fdriveDesktopStateDir ? { stateDir: config.fdriveDesktopStateDir } : {}),
   });
   const officeFiles = createOfficeFileRepo(db);
@@ -956,7 +938,6 @@ export async function composeApp(
         writes: createDesktopWrites({
           repo: desktopRepo,
           indexedContent: desktopIndexedContent,
-          publishLock: desktopPublishLock,
           clock,
           access: desktopAccess,
           metadata: desktopMetadata,
@@ -975,7 +956,6 @@ export async function composeApp(
         storageFactory,
         clock,
         indexedContent: desktopIndexedContent,
-        publishLock: desktopPublishLock,
         clientIp: (c) => extractClientIp(c, config.fdriveTrustedProxyHops),
         trashPathForStorage: (storage) => {
           const settings = trashSettingsForStorage(storage);
@@ -1168,7 +1148,6 @@ export async function composeApp(
       if (indexerListener !== null) {
         await indexerListener.stop();
       }
-      await desktopPublishPool.end();
       await activityPathLocks.close();
       await officeLocks.close();
       await pool.end();
