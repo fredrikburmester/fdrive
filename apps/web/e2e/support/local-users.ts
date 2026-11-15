@@ -8,18 +8,26 @@ import { Client } from "pg";
 import { createScryptSharePasswords } from "../../../api/src/shares/passwords.ts";
 
 /**
- * `app.local_users` and `app.local_grants` written with plain SQL: the web
- * app does not depend on `@fdrive/db`, and these are the same rows its
- * repos would write.
+ * Local users, their accounts and logins, and their grants written with
+ * plain SQL: the web app does not depend on `@fdrive/db`, and these are the
+ * same rows its repos would write. A user and their login are one statement,
+ * on the files folder's row the API created when it started.
  */
 function sqlRepos(client: Client): LocalUserRepos {
   return {
     localUsers: {
       create: ({ username, passwordHash }) =>
-        client.query("insert into app.local_users (username, password_hash) values ($1, $2)", [
-          username,
-          passwordHash,
-        ]),
+        client.query(
+          `with created as (
+             insert into app.local_users (username, password_hash) values ($1, $2) returning username
+           ), account as (
+             insert into app.accounts (display_name) select username from created returning id
+           )
+           insert into app.identities (account_id, provider_id, external_username)
+           select account.id, providers.id, $1 from account, app.providers
+           where providers.type = 'local'`,
+          [username, passwordHash],
+        ),
       update: (username, { disabled }) =>
         client.query(
           "update app.local_users set disabled = $2, updated_at = now() where username = $1",
@@ -40,9 +48,9 @@ function sqlRepos(client: Client): LocalUserRepos {
 
 /**
  * Creates the local folder's users, their passwords hashed exactly as the
- * API checks them at sign-in, and the folders they share with each other:
- * what setup and System > Users would have done. Needs the API to have
- * migrated the database first.
+ * API checks them at sign-in, and the folders they share with each other,
+ * with the first user recorded as the owner: what setup and System > Users
+ * would have done. Needs the API to have migrated the database first.
  */
 export async function createE2eLocalUsers(
   databaseUrl: string,
@@ -52,6 +60,16 @@ export async function createE2eLocalUsers(
   await client.connect();
   try {
     await insertLocalUsers(sqlRepos(client), seed, createScryptSharePasswords());
+    const [owner] = seed.users;
+    if (owner !== undefined) {
+      await client.query(
+        `insert into app.settings (key, value)
+         select 'setup.owner.v1', jsonb_build_object('state', 'complete', 'accountId', account_id)
+         from app.identities where external_username = $1
+         on conflict (key) do nothing`,
+        [owner.username],
+      );
+    }
   } finally {
     await client.end();
   }

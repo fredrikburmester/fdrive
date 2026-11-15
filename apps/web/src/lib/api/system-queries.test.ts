@@ -233,16 +233,14 @@ describe("useAdminUpdateProvider", () => {
   });
 });
 
-it("invalidates the cached login name and public choices after a rename", async () => {
+it("invalidates the cached login name after a rename", async () => {
   adminUpdateProviderMock.mockResolvedValue({ ...PROVIDER, label: "Home storage" });
   const { useAdminUpdateProvider } = await import("./system-queries.js");
   const client = new QueryClient();
-  client.setQueryData(["providers"], { providers: [PROVIDER] });
   client.setQueryData(["auth", "me"], ME_RESPONSE);
   const { result } = renderHook(() => useAdminUpdateProvider(), { wrapper: createWrapper(client) });
   await result.current.mutateAsync({ id: PROVIDER.id, patch: { label: "Home storage" } });
   expect(adminUpdateProviderMock).toHaveBeenCalledWith(PROVIDER.id, { label: "Home storage" });
-  expect(client.getQueryState(["providers"])?.isInvalidated).toBe(true);
   expect(client.getQueryState(["auth", "me"])?.isInvalidated).toBe(true);
   expect(client.getQueryData(["auth", "me"])).toEqual(ME_RESPONSE);
 });

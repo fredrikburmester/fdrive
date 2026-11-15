@@ -39,9 +39,10 @@ test.describe("installation backups", () => {
     const db = new Client({ connectionString: environment.databaseUrl });
     await db.connect();
     try {
-      await db.query("insert into app.settings(key,value) values('setup.owner.v1',$1)", [
-        JSON.stringify({ state: "complete", accountId: me.account.id }),
-      ]);
+      await db.query(
+        "insert into app.settings(key,value) values('setup.owner.v1',$1) on conflict(key) do update set value=excluded.value",
+        [JSON.stringify({ state: "complete", accountId: me.account.id })],
+      );
     } finally {
       await db.end();
     }
@@ -61,7 +62,7 @@ test.describe("installation backups", () => {
       ).ok(),
     ).toBe(true);
     await page.goto(`${environment.webBaseUrl}/system/backups`);
-    await page.getByLabel("Your current password").fill("alice-password");
+    await page.getByLabel("Current password").fill("alice-password");
     await page.getByRole("button", { name: "Unlock backups" }).click();
     await expect(page.getByText("Backup controls unlocked.")).toBeVisible();
     const keyDownload = page.waitForEvent("download");
@@ -97,18 +98,18 @@ test.describe("installation backups", () => {
     await page.getByRole("button", { name: "Verify bytes" }).first().click();
     await expect(page.getByText(/Bytes verified/).first()).toBeVisible({ timeout: 20_000 });
     await page.getByRole("button", { name: "Add destination" }).click();
-    await page.getByLabel("Name", { exact: true }).fill("Separate fileserver");
+    await page.getByLabel("Name", { exact: true }).fill("Folder in my files");
     await page.getByLabel("Destination type").click();
-    await page.getByRole("option", { name: "Connected fileserver" }).click();
+    await page.getByRole("option", { name: "Folder in your files" }).click();
     await page.getByLabel("Fileserver", { exact: true }).click();
     await page.getByRole("option").first().click();
-    await page.getByLabel("Backup username").fill("alice");
-    await page.getByLabel("Backup password").fill("alice-password");
+    // The folder is in the owner's own files: no username or password is asked or kept.
+    await expect(page.getByLabel("Backup password")).toHaveCount(0);
     await page.getByLabel("Private backup directory").fill("/docs");
     await page.getByRole("button", { name: "Test and save" }).click();
-    await expect(page.getByText("Separate fileserver", { exact: true }).first()).toBeVisible();
+    await expect(page.getByText("Folder in my files", { exact: true }).first()).toBeVisible();
     await page.getByRole("button", { name: "Back up now", exact: true }).click();
-    await expect(page.getByText("Separate fileserver: complete")).toBeVisible({ timeout: 30_000 });
+    await expect(page.getByText("Folder in my files: complete")).toBeVisible({ timeout: 30_000 });
     // Health: a size estimate runs through the worker, and an owner-recorded rehearsal report
     // replaces the monthly reminder.
     await expect(page.getByText(/Restore rehearsal due/)).toBeVisible();
