@@ -24,6 +24,10 @@ export const queryKeys = {
   storage: {
     usage: () => ["storage", "usage"] as const,
   },
+  photos: {
+    list: () => ["photos", "list"] as const,
+    details: (path: string) => ["photos", "details", path] as const,
+  },
   folderViews: {
     all: () => ["folder-views"] as const,
     path: (path: string) => ["folder-views", path] as const,

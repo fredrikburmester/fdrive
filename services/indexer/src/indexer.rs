@@ -3,6 +3,7 @@
 
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
+use std::io::Seek;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicI64, AtomicUsize, Ordering};
@@ -26,10 +27,11 @@ use crate::image_embed::{self, Health};
 use crate::journal::{self, Source};
 use crate::log::log;
 use crate::paths::{basename, ext_of};
+use crate::photo::{self, Photo};
 use crate::promise::{Outcome, Promise};
 use crate::rules::{Globs, should_index_name, should_walk_dir};
 use crate::settings::{self, Settings};
-use crate::thumbs::{SIZES, kind_for_ext, skip_reason, storage_path};
+use crate::thumbs::{Kind, SIZES, kind_for_ext, skip_reason, storage_path};
 use crate::thumbs_io;
 pub use crate::walk::{walk, walk_tree};
 
@@ -800,6 +802,19 @@ pub fn process_stages(
         )
     })?;
     ctx.names_touched(rel_path, false);
+    if kind_for_ext(&ext) == Some(Kind::Image) {
+        // Within the thumbnail size limit, since a TIFF-based file's EXIF is read whole.
+        let photo = if skip_reason(stat.size, ctx.cfg.thumb_max_bytes).is_none() {
+            source
+                .file
+                .rewind()
+                .map(|()| photo::read(&source.file))
+                .unwrap_or_default()
+        } else {
+            Photo::default()
+        };
+        ctx.db.with(|c| db::set_photo(c, file_id, &photo))?;
+    }
 
     let mut features = ctx.values();
     if only_feature == Some("textSearch") {
