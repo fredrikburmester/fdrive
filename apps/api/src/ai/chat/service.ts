@@ -78,8 +78,8 @@ export interface ChatServiceDeps {
   readonly chats: AiChatRepo;
   /** The MCP read handlers the tools reuse. */
   readonly mcp: McpToolDeps;
-  /** What applying a move, rename or trash card needs: events and metadata hooks. */
-  readonly fs: Pick<FsRoutesDeps, "bus" | "clock" | "metadata" | "activity" | "ownerPath">;
+  /** What applying a move, rename or trash card needs: history and metadata hooks. */
+  readonly fs: Pick<FsRoutesDeps, "metadata" | "activity" | "ownerPath">;
   readonly clock: () => Date;
   readonly ids?: () => string;
   readonly live?: LiveChats;

@@ -122,7 +122,7 @@ fn a_settled_file_is_stamped_when_indexed_and_a_fresh_one_once_it_settles() {
         (row.stamp, row.sha256.as_deref(), row.status),
         (Some(stamp_of(&env, "new.txt")), Some(hex_sha(b"new").as_str()), status)
     );
-    assert_eq!(env.events(), ["created", "created"]);
+    assert_eq!(env.signals(), 2);
     // Stamped, it is left alone.
     assert!(!index(&env, &ctx, "new.txt"));
 }
@@ -149,7 +149,7 @@ fn a_rewrite_that_keeps_size_and_time_is_found_and_indexed_again() {
         (row.sha256.as_deref(), row.stamp),
         (Some(hex_sha(b"other").as_str()), Some(stamp_of(&env, "a.txt")))
     );
-    assert_eq!(env.events(), ["created", "changed"]);
+    assert_eq!(env.signals(), 2);
     let journaled: Vec<(String, String)> = env
         .client()
         .query(r#"SELECT path, source FROM "idx"."changes" ORDER BY id"#, &[])

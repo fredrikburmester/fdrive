@@ -8,7 +8,6 @@ use std::time::Duration;
 
 use chrono::Utc;
 use fdrive_indexer::db::{self, Db, ManifestRow, NewFile, Stamp, StampUpdate};
-use fdrive_indexer::events::{EventKind, build};
 use postgres::Client;
 use postgres::fallible_iterator::FallibleIterator;
 
@@ -671,28 +670,15 @@ fn rename_a_directory_rekeys_its_subtree() {
 }
 
 #[test]
-fn events_are_notified_and_never_stored() {
+fn the_indexed_signal_names_only_its_root_and_is_never_stored() {
     let (url, mut c) = setup();
     let mut listener = common::connect(&url);
     listener.batch_execute("LISTEN idx_events").unwrap();
-    let event = build(EventKind::Moved, "files", "a.txt", Some("b.txt"));
-    db::notify_event(&mut c, &event).unwrap();
-    db::notify_event(&mut c, &build(EventKind::Created, "files", "c.txt", None)).unwrap();
+    db::notify_indexed(&mut c, "files").unwrap();
     let mut notifications = listener.notifications();
     let mut iter = notifications.timeout_iter(Duration::from_secs(5));
     let first = iter.next().unwrap().unwrap();
-    assert_eq!(first.channel(), "idx_events");
-    let payload: serde_json::Value = serde_json::from_str(first.payload()).unwrap();
-    assert_eq!(payload["kind"], "moved");
-    assert_eq!(payload["root"], "files");
-    assert_eq!(payload["path"], "a.txt");
-    assert_eq!(payload["target_path"], "b.txt");
-    assert_eq!(payload["at"], event.at);
-    let second: serde_json::Value = serde_json::from_str(iter.next().unwrap().unwrap().payload()).unwrap();
-    assert_eq!(
-        (second["kind"].as_str(), second["target_path"].is_null()),
-        (Some("created"), true)
-    );
+    assert_eq!((first.channel(), first.payload()), ("idx_events", "files"));
     // The change journal is the durable record; there is no event table.
     let table: Option<String> = c
         .query_one("SELECT to_regclass('idx.events')::text", &[])

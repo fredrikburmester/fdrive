@@ -1,5 +1,6 @@
 import { withDatabaseWriter } from "@fdrive/backup";
 import {
+  CHANGES_CHANNEL,
   createActivityExportsRepo,
   createActivityObservationsRepo,
   createActivityReadsRepo,
@@ -58,12 +59,15 @@ import { createDesktopRetention } from "./desktop/retention.js";
 import { registerDesktopRoutes } from "./desktop/routes.js";
 import { createDesktopWrites } from "./desktop/writes.js";
 import { createEventBus } from "./events/bus.js";
-import { createIndexerListener, createPgNotificationClient } from "./events/indexer-listener.js";
+import { createIndexedSignal, INDEXED_CHANNEL } from "./events/indexed.ts";
+import { createJournalFanout } from "./events/journal.ts";
+import { createNotificationListener, createPgNotificationClient } from "./events/notifications.ts";
+import { createOutsideChanges } from "./events/outside.ts";
 import { registerEventRoutes } from "./events/routes.js";
 import { registerFeatureAdmission } from "./features/admission.js";
 import { registerFeatureRoutes } from "./features/routes.js";
 import { createFeatureService } from "./features/service.js";
-import { publishFsEvent, registerFsRoutes } from "./fs/routes.js";
+import { registerFsRoutes } from "./fs/routes.js";
 import { registerVideoRoutes } from "./fs/video-routes.js";
 import { createJobRunner } from "./jobs/runner.js";
 import { createChangeQueue } from "./local/change-queue.js";
@@ -375,10 +379,9 @@ export async function composeApp(
     shares: shareRepo,
     ownerPath: (identityId, path) => localGrants.ownerPath(identityId, path),
   });
-  // Metadata (phase 3): tags, favorites, recents. `onMoved`/`onDeleted` are
-  // called both from the fs routes below (moves and deletes made through
-  // fdrive) and from the indexer listener (changes seen over SFTP or any
-  // other client), so metadata survives renames from either source.
+  // Tags, favorites, folder views, recents and chat references. `onMoved` and
+  // `onDeleted` run in the request for moves and deletes made through fdrive,
+  // and from the change journal for those made outside it (over SMB, say).
   const metadataCore = createMetadataService(repos);
   // What grants access (folders shared with people, public links) follows
   // first, in an outer layer, so a failure in tags or favorites never leaves
@@ -389,7 +392,7 @@ export async function composeApp(
   const officeFiles = createOfficeFileRepo(db);
   const officeMoves = createOfficeMoves({ files: officeFiles, grants: localGrants, clock });
   const followers = [...accessFollowers, officeMoves];
-  // Into the Trash and back out are moves like any other, whoever reports them.
+  // Into the Trash and back out are moves like any other, whoever makes them.
   const metadataService = withFollowers(metadataCore, followers);
   const desktopRepo = createDesktopRepo(db);
   const desktopRetention = createDesktopRetention({
@@ -500,46 +503,41 @@ export async function composeApp(
     grants: localGrants,
     storageFactory: officeStorage,
     metadata: metadataService,
-    bus,
     activity: personalActivity,
   });
 
-  // The indexer's `LISTEN idx_events` connection only has anything to listen
-  // for once at least one index root is configured; it is otherwise left
-  // unstarted so a deployment without an indexer never opens a spare
-  // Postgres connection.
-  // The indexer's notifications are the only way personal activity notices a
-  // change made outside fdrive.
-  const activityObservations = createActivityObservations({
-    repo: createActivityObservationsRepo(db, clock),
+  // The API's one reader of the change journal: every change to the files
+  // folder, whoever made it, reaches each person who can see it once, as a
+  // live update; one made outside fdrive also brings metadata and personal
+  // activity along. `NOTIFY idx_changes` wakes it, and the indexer's
+  // `NOTIFY idx_events` says the index took a change in.
+  const journalFanout = createJournalFanout({
+    journal: createChangeJournal(db),
+    root: rootName,
     identities: repos.identities,
-    storageFactory,
-    resolver: scopeResolver,
+    scopes: (username) => scopeResolver.configuredMappings(username),
+    bus,
+    outside: createOutsideChanges({
+      metadata: metadataCore,
+      followers,
+      storageFor: storageFactory,
+      observations: createActivityObservations({
+        repo: createActivityObservationsRepo(db, clock),
+      }),
+    }),
+    logger,
   });
-  const indexerListener =
-    config.fdriveIndexRoots === null
-      ? null
-      : createIndexerListener({
-          createClient: () => createPgNotificationClient(config.databaseUrl),
-          identities: repos.identities,
-          indexQueries,
-          fileTags: repos.fileTags,
-          favorites: repos.favorites,
-          metadata: metadataService,
-          onActivityEvent: activityObservations.watcher,
-          activityTracks: activityObservations.tracks,
-          onActivityRelink: activityObservations.relink,
-          bus,
-          configuredMappingsFor: (identity) =>
-            scopeResolver.configuredMappings(identity.externalUsername),
-          storageForIdentity: (identityId) => storageFactory(identityId),
-          indexRootNames,
-          clock,
-          logger,
-        });
-  if (indexerListener !== null) {
-    await indexerListener.start();
-  }
+  const indexedSignal = createIndexedSignal({ bus, clock });
+  const notifications = createNotificationListener({
+    channels: [CHANGES_CHANNEL, INDEXED_CHANNEL],
+    createClient: () => createPgNotificationClient(config.databaseUrl),
+    onNotification: (channel) =>
+      channel === CHANGES_CHANNEL ? journalFanout.wake() : indexedSignal.notify(),
+    onListening: () => journalFanout.wake(),
+    logger,
+  });
+  await journalFanout.start();
+  await notifications.start();
 
   // System pages (phase 2): sidecar clients are `null` when their base URL
   // is not configured, so the routes degrade to "not configured" rather
@@ -687,46 +685,34 @@ export async function composeApp(
     metadata: metadataService,
     imageSearchService,
     onMutation: async (principal, change) => {
-      try {
-        if (change.kind === "move") {
-          await fsMetadata.onMoved(
-            principal.identityId,
-            change.path,
-            change.target ?? change.path,
-            change.isDir,
-          );
-        } else if (change.kind === "restore" && change.eventPath !== undefined) {
-          // A restore is a move out of Trash: what followed the item there comes back.
-          await fsMetadata.onMoved(
-            principal.identityId,
-            change.eventPath,
-            change.target ?? change.path,
-            change.isDir,
-          );
-        } else if (change.kind === "trash" && change.trashLeaf !== undefined) {
-          await followIntoTrash(
-            fsMetadata,
-            localGrants.ownerPath,
-            principal.identityId,
-            change.path,
-            {
-              leaf: change.trashLeaf,
-              kind: change.isDir ? "dir" : "file",
-            },
-          );
-        } else if (change.kind === "copy") {
-          fsMetadata.onCopied(principal.identityId, change.path, change.target ?? change.path);
-        }
-      } finally {
-        const kind =
-          change.kind === "trash" ? "delete" : change.kind === "restore" ? "move" : change.kind;
-        publishFsEvent(
-          { bus, clock },
-          principal,
-          kind,
-          [change.eventPath ?? change.path],
-          change.target === undefined ? undefined : [change.target],
+      if (change.kind === "move") {
+        await fsMetadata.onMoved(
+          principal.identityId,
+          change.path,
+          change.target ?? change.path,
+          change.isDir,
         );
+      } else if (change.kind === "restore" && change.eventPath !== undefined) {
+        // A restore is a move out of Trash: what followed the item there comes back.
+        await fsMetadata.onMoved(
+          principal.identityId,
+          change.eventPath,
+          change.target ?? change.path,
+          change.isDir,
+        );
+      } else if (change.kind === "trash" && change.trashLeaf !== undefined) {
+        await followIntoTrash(
+          fsMetadata,
+          localGrants.ownerPath,
+          principal.identityId,
+          change.path,
+          {
+            leaf: change.trashLeaf,
+            kind: change.isDir ? "dir" : "file",
+          },
+        );
+      } else if (change.kind === "copy") {
+        fsMetadata.onCopied(principal.identityId, change.path, change.target ?? change.path);
       }
     },
     clock,
@@ -755,8 +741,6 @@ export async function composeApp(
     chats: repos.aiChats,
     mcp: mcpToolDeps,
     fs: {
-      bus,
-      clock,
       metadata: metadataService,
       activity: personalActivity,
       ownerPath: localGrants.ownerPath,
@@ -832,7 +816,6 @@ export async function composeApp(
           clock,
           access: desktopAccess,
           metadata: desktopMetadata,
-          bus,
           logger,
           storageForIdentity: storageFactory,
         }),
@@ -882,8 +865,6 @@ export async function composeApp(
       // rejecting it.
       const fsRoutesDeps = {
         activity: personalActivity,
-        bus,
-        clock,
         jobRunner,
         tmpDir: config.fdriveTmpDir,
         jobMaxBytes: config.fdriveJobMaxBytes,
@@ -900,8 +881,6 @@ export async function composeApp(
       registerVideoRoutes(groups);
       registerTrashRoutes(groups, {
         activity: personalActivity,
-        bus,
-        clock,
         metadata: fsMetadata,
       });
       registerTrashSettingsRoutes(groups, { service: trashSettings });
@@ -934,7 +913,7 @@ export async function composeApp(
         chat: chatService,
         modelFor: aiModelFor,
       });
-      registerEventRoutes(groups, { bus, clock });
+      registerEventRoutes(groups, { bus, journal: journalFanout, clock });
       registerSearchRoutes(groups, {
         features: featureValues,
         searchService,
@@ -1008,9 +987,9 @@ export async function composeApp(
       await activityMaintenance.stop();
       await desktopRetention.stop();
       await trashRetention.stop();
-      if (indexerListener !== null) {
-        await indexerListener.stop();
-      }
+      await notifications.stop();
+      await journalFanout.stop();
+      indexedSignal.stop();
       await activityPathLocks.close();
       await officeLocks.close();
       await pool.end();

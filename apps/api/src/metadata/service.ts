@@ -86,8 +86,8 @@ function toMetadataTag(tag: DbTag): MetadataTag {
  * The metadata use cases shared by the tags, favorites, and recents routes,
  * plus the hooks `fs/routes.ts` calls after a move or delete so tag and
  * favorite and folder-view metadata survives renames made through fdrive itself. Renames and
- * deletes seen via the indexer (rsync, SMB, other writers) reach the same
- * hooks through `events/indexer-listener.ts`.
+ * deletes made outside fdrive (rsync, SMB, other writers), which the indexer's
+ * watcher journals, reach the same hooks through `events/outside.ts`.
  */
 export interface MetadataService {
   /**
@@ -143,25 +143,6 @@ export interface MetadataService {
    * nothing.
    */
   onCopied(identityId: string, path: string, target: string): void;
-}
-
-/**
- * Whether `identityId` has any tags or a favorite recorded at exactly
- * `path`. Used by the indexer listener's sha256 relink fallback: only a path
- * that was actually tracked is worth reconciling when it disappears.
- */
-export async function hasTrackedMetadata(
-  deps: Pick<MetadataServiceDeps, "fileTags" | "favorites"> &
-    Partial<Pick<MetadataServiceDeps, "folderViews">>,
-  identityId: string,
-  path: string,
-): Promise<boolean> {
-  const [tagsByPath, favoritedPaths, hasFolderView] = await Promise.all([
-    deps.fileTags.tagsForPaths(identityId, [path]),
-    deps.favorites.has(identityId, [path]),
-    deps.folderViews?.has(identityId, path) ?? false,
-  ]);
-  return (tagsByPath.get(path)?.length ?? 0) > 0 || favoritedPaths.has(path) || hasFolderView;
 }
 
 /**

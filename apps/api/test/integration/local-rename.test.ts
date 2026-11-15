@@ -1,14 +1,24 @@
 import { performance } from "node:perf_hooks";
 import type { StorageProvider } from "@fdrive/core";
-import { createDb, createIndexQueries, createRepos, migrate } from "@fdrive/db";
+import {
+  CHANGES_CHANNEL,
+  createActivityObservationsRepo,
+  createChangeJournal,
+  createDb,
+  createRepos,
+  migrate,
+} from "@fdrive/db";
 import { createLocalStorage } from "@fdrive/local";
 import { sql } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { createActivityObservations } from "../../src/activity/observations.js";
 import { type BusEvent, createEventBus } from "../../src/events/bus.js";
+import { createJournalFanout } from "../../src/events/journal.js";
 import {
-  createIndexerListener,
+  createNotificationListener,
   createPgNotificationClient,
-} from "../../src/events/indexer-listener.js";
+} from "../../src/events/notifications.js";
+import { createOutsideChanges } from "../../src/events/outside.js";
 import { createMetadataService } from "../../src/metadata/service.js";
 import { LocalIndexerStack } from "./helpers/local-indexer-stack.js";
 
@@ -110,9 +120,8 @@ describe("a folder renamed on disk outside fdrive, through the real indexer", ()
     const warnings: string[] = [];
     bus.subscribe({ identityId: identity.id }, (event) => received.push(event));
     bus.subscribe({ identityId: otherIdentity.id }, (event) => otherReceived.push(event));
-    // Live storage per identity, over the same folder on disk: the
-    // listener's live-read check before announcing a move destination must
-    // pass against the identity's actual storage, not a stub.
+    // Live storage per identity, over the same folder on disk, which the
+    // journal's reader looks at for what personal activity records.
     const storageByIdentityId = new Map<string, StorageProvider>();
     for (const [id, username] of [
       [identity.id, "alice"],
@@ -120,32 +129,41 @@ describe("a folder renamed on disk outside fdrive, through the real indexer", ()
     ] as const) {
       storageByIdentityId.set(id, createLocalStorage({ home: stack.folder.path(username) }));
     }
-    const listener = createIndexerListener({
-      createClient: () => createPgNotificationClient(stack.connectionString),
+    const logger = { warn: (_data: unknown, message: string) => warnings.push(message) };
+    const fanout = createJournalFanout({
+      journal: createChangeJournal(db),
+      root: "files",
       identities: repos.identities,
-      indexQueries: createIndexQueries(db),
-      fileTags: repos.fileTags,
-      favorites: repos.favorites,
-      metadata,
-      bus,
-      configuredMappingsFor: async (id) => ({
+      scopes: async (username) => ({
         available: true,
-        providerId: id.providerId,
-        scopes: [{ rootName: "files", fsPrefix: `/${id.externalUsername}`, virtualPrefix: "/" }],
+        providerId: provider.id,
+        scopes: [{ rootName: "files", fsPrefix: `/${username}`, virtualPrefix: "/" }],
       }),
-      storageForIdentity: async (id) => {
-        const storage = storageByIdentityId.get(id);
-        if (storage === undefined) throw new Error(`no storage seeded for identity ${id}`);
-        return storage;
-      },
-      indexRootNames: new Set(["files"]),
-      clock: () => new Date(),
-      logger: { warn: (_data, message) => warnings.push(message) },
+      bus,
+      outside: createOutsideChanges({
+        metadata,
+        followers: [],
+        storageFor: async (id) => {
+          const storage = storageByIdentityId.get(id);
+          if (storage === undefined) throw new Error(`no storage seeded for identity ${id}`);
+          return storage;
+        },
+        observations: createActivityObservations({ repo: createActivityObservationsRepo(db) }),
+      }),
+      logger,
     });
+    const listener = createNotificationListener({
+      channels: [CHANGES_CHANNEL],
+      createClient: () => createPgNotificationClient(stack.connectionString),
+      onNotification: () => fanout.wake(),
+      onListening: () => fanout.wake(),
+      logger,
+    });
+    await fanout.start();
     await listener.start();
     try {
       const started = performance.now();
-      // This is the only mutation trigger. The indexer itself records and publishes the move.
+      // This is the only mutation trigger. The indexer's watcher journals the move.
       await stack.renameDirectory();
       await expect
         .poll(() => received.filter((event) => event.type === "fs" && event.op === "move"), {
@@ -155,7 +173,7 @@ describe("a folder renamed on disk outside fdrive, through the real indexer", ()
         .toMatchObject([{ identityId: identity.id, paths: ["/docs"], targetPaths: ["/renamed"] }]);
       const elapsed = performance.now() - started;
       expect(elapsed).toBeLessThan(10_000);
-      console.info(`rename on disk -> indexer -> API metadata: ${Math.round(elapsed)} ms`);
+      console.info(`rename on disk -> journal -> API metadata: ${Math.round(elapsed)} ms`);
       const rename = (path: string) =>
         path === "/docs" || path.startsWith("/docs/")
           ? `/renamed${path.slice("/docs".length)}`
@@ -199,6 +217,7 @@ describe("a folder renamed on disk outside fdrive, through the real indexer", ()
       throw error;
     } finally {
       await listener.stop();
+      await fanout.stop();
     }
   });
 });

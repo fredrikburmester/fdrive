@@ -242,8 +242,8 @@ keeps the receipt, moving sharing from where the item was. Replaying or acknowle
 never republishes the file; acknowledging only marks the operation done.
 
 **Metadata.** Once the receipt is kept, the commit brings the rest of path-keyed metadata along
-through the service web writes use, and tells the web once, as web writes do right after their
-storage call ([writes.ts](../apps/api/src/desktop/writes.ts), `follow`): tags, favorites, folder
+through the service web writes use, as web writes do right after their storage call
+([writes.ts](../apps/api/src/desktop/writes.ts), `follow`): tags, favorites, folder
 views, recents, AI chat references and Office files follow a move. Into the Mac's Trash and
 back out is a move too: everything follows the item into `/.fdrive-desktop/<identity>/trash`,
 which no list, link or share reaches, so nothing new at its old path inherits it, and comes back
@@ -251,16 +251,11 @@ with a restore, as for fdrive's Trash. The Mac's item handles are the commit's o
 never touches them. A new write never waits for an earlier one's metadata.
 
 None of that step grants access, so a failure there is logged and never fails the commit: the
-file is published and its receipt answers. The indexer reports the same move from the change
-journal, and its listener ([indexer-listener.ts](../apps/api/src/events/indexer-listener.ts))
-moves metadata and tells the web then, which also covers a crash between the receipt and this
-step. As for web writes, that second chance needs indexing on, and an empty folder's move is not
-reported as a move. The listener sees a move into the Mac's Trash as a delete, since the indexer
-never walks `/.fdrive-desktop`; by then the commit has moved what was at the old path.
+file is published and its receipt answers, and what could not follow stays where it was. The web
+hears of the write from the change journal, where local storage records it, as of every other
+write ([the API's reader](INDEXER.md#the-apis-reader)).
 
-Do not delete receipt rows to clear a conflict. Notifications use the identity-scoped in-process
-event bus; disconnected clients refresh on reconnect, and indexing remains the indexer's
-responsibility.
+Do not delete receipt rows to clear a conflict.
 
 A file is limited to 16 GiB. What an operation staged goes once it is completed or cancelled. A
 cleanup job runs every ten minutes, deleting for good:

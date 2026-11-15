@@ -17,8 +17,8 @@ folder is read under (`localIndexRoot`): the configured root whose `storagePath`
 ## Configured and indexed scopes
 
 `configuredMappings(username)` returns the home plus one scope per folder shared with the
-login, indexed or not: one grants query, reading neither storage nor the indexer. Index events
-and activity observations use it. It is unavailable only as `invalid_configuration` (the
+login, indexed or not: one grants query, reading neither storage nor the indexer. The API's
+reader of the change journal uses it, for live updates, metadata and activity observations. It is unavailable only as `invalid_configuration` (the
 username is not one path segment).
 
 `verifiedIndexScopes(username)` keeps the configured scopes whose root is in
@@ -49,17 +49,16 @@ and the index agree on what each login reaches, the indexer never follows a symb
 storage refuses one, and the reserved folders are left out in SQL. A file deleted outside
 fdrive can still be listed until the indexer notices; opening it answers not found.
 
-Only the indexer listener still checks each event's path with a live read
-([read authorizer](../apps/api/src/scoping/read-authorizer.ts)) before it tells a browser,
-until live updates come from the [change journal](plans/CHANGE-JOURNAL.md).
+Live updates follow the same rule: a change journal row reaches a login whose scopes map one
+of its ends, with no storage read ([the API's reader](INDEXER.md#the-apis-reader)).
 
 ## Consumers and tests
 
 HTTP and MCP consumers must receive explicit indexed scopes, respect native/API-token
 identity ownership and omit paths outside them. Bounded aggregates must report partial or
 sampled results honestly. Office keys documents by owner and owner's path, not by scope, and
-authorizes each callback itself; an Office UUID does not grant access. Index events must not
-leak paths to unauthorized subscribers.
+authorizes each callback itself; an Office UUID does not grant access. Live updates must not
+leak paths to a login whose scopes do not reach them.
 
 Regression coverage includes the [resolver](../apps/api/src/scoping/resolver.test.ts),
 [round trip](../apps/api/src/scoping/round-trip.test.ts),

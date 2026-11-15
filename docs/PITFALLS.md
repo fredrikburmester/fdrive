@@ -71,6 +71,11 @@ Reference for affected code; shared rules live in [AGENTS.md](../AGENTS.md).
   write retention, built on it, moved the recovery copies it reclaimed into their owner's Trash.
   Now `deleteFile` and `deleteDir` delete for good, and moving to Trash is `trash.put`, so each
   caller says which it means.
+- Shares, public links and Office files keep the owner's paths, and each translates any
+  login's path into the owner's (`ownerPath`). Followed once per login for one change on the
+  disk, a rename of a shared folder that the person it is shared with sees only one end of reads
+  as "left their files" and dropped the owner's links whenever that login came first. One
+  change follows them once, as its owner; each login only moves its own tags and favorites.
 - Office's save path and personal activity's path locks, which moves to Trash take, each keep a
   database pool of their own. They never wait on each other; sharing one would let slow Office
   saves hold up Trash moves.

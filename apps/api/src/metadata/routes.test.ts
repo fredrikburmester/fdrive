@@ -121,7 +121,6 @@ async function buildHarness(withActivity = false) {
   const repos = createMemoryRepos();
   const metadata = createMetadataService(repos);
   const activity = activityReadsFixture(storage);
-  const bus = createEventBus();
   const config = loadConfig(REQUIRED_ENV);
   const clock = () => new Date(CLOCK_ISO);
 
@@ -135,8 +134,6 @@ async function buildHarness(withActivity = false) {
     setupRequired: READY,
     registerRoutes: (groups) => {
       registerFsRoutes(groups, {
-        bus,
-        clock,
         jobRunner: buildJobRunner(),
         tmpDir: "/tmp",
         jobMaxBytes: 1_000_000_000,

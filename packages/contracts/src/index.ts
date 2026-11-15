@@ -70,7 +70,15 @@ export { ApiClientError, buildRequestUrl, createApiClient, toQueryString } from 
 export * from "./desktop.ts";
 export * from "./desktop-writes.ts";
 export { ApiError, ApiErrorKind, statusForKind } from "./error.ts";
-export { FsEvent, JobEvent, PingEvent, SseEvent } from "./events.ts";
+export {
+  FsEvent,
+  IndexedEvent,
+  JobEvent,
+  PingEvent,
+  ResyncEvent,
+  SSE_EVENT_ID,
+  SseEvent,
+} from "./events.ts";
 export {
   FEATURE_IDS,
   FEATURES_SETTINGS_KEY,

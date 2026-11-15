@@ -231,8 +231,8 @@ it("publishes complete files with durable replay and conflict protection", async
     expect(await readDisk("/Tree/nested/new.txt")).toBe("new");
 
     // A successful publication remains completed even when PostgreSQL refuses
-    // its metadata, and nothing waits for that metadata: the indexer's report
-    // of the move brings it along (`desktop-metadata.test.ts`).
+    // its metadata, and nothing waits for that metadata, which stays where it
+    // was (`desktop-metadata.test.ts`).
     const database = createDb(postgres.connectionString);
     try {
       const repos = createRepos(database.db);

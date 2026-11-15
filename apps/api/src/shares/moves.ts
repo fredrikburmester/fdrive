@@ -33,7 +33,8 @@ export interface ShareMoves extends PathFollower {
  * shared. So a link follows every move of what it names, or of a folder
  * above it, through the hooks every other path-keyed record follows (fdrive's
  * own moves, MCP and the AI, Office renames, Trash and its restores, moves
- * the indexer reports) and with the receipt of each Mac write (`resolve`).
+ * the change journal holds for changes made outside fdrive) and with the
+ * receipt of each Mac write (`resolve`).
  *
  * That includes moves to where no link may reach: into the Trash, the Mac's
  * Trash, a backup folder or `Shared with me`. The public routes refuse those

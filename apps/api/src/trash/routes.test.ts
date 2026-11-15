@@ -11,7 +11,6 @@ import { activityFixture } from "../../test/activity-fixture.js";
 import { createApp } from "../app.js";
 import type { Principal } from "../auth/principal.js";
 import { loadConfig } from "../config.js";
-import { type BusEvent, createEventBus, type EventBus } from "../events/bus.js";
 import {
   createMetadataService,
   type MetadataService,
@@ -112,8 +111,6 @@ function recordingFollower() {
 
 interface Harness {
   readonly app: ReturnType<typeof createApp>;
-  readonly bus: EventBus;
-  readonly events: BusEvent[];
   readonly storage: StorageProvider;
   readonly metadata: MetadataService;
   readonly activity: ReturnType<typeof activityFixture>;
@@ -142,17 +139,11 @@ async function buildHarness(
     isAdmin: false,
   };
 
-  const bus = createEventBus();
-  const events: BusEvent[] = [];
-  bus.subscribe({ identityId }, (event) => events.push(event));
-
   const config = loadConfig(REQUIRED_ENV);
   const metadata = withFollowers(createMetadataService(createMemoryRepos()), opts.followers ?? []);
 
   const deps: TrashRoutesDeps = {
     activity: activity.service,
-    bus,
-    clock,
     metadata,
   };
 
@@ -167,7 +158,7 @@ async function buildHarness(
     registerRoutes: (groups) => registerTrashRoutes(groups, deps),
   });
 
-  return { app, bus, events, storage, metadata, activity };
+  return { app, storage, metadata, activity };
 }
 
 function requestedWith(init: RequestInit = {}): RequestInit {
@@ -256,7 +247,7 @@ describe("POST /trash/restore", () => {
   });
 
   it("brings metadata back from Trash on a restore to the original path", async () => {
-    const { app, storage, metadata, events } = await buildHarness();
+    const { app, storage, metadata } = await buildHarness();
     await metadata.addFavorite(ALICE_IDENTITY_ID, "/hello.txt", "file");
     await trashWithMetadata(storage, metadata, "/hello.txt");
     expect(await metadata.listFavorites(ALICE_IDENTITY_ID)).toEqual([]);
@@ -284,16 +275,6 @@ describe("POST /trash/restore", () => {
     ]);
     expect((await metadata.listFavorites(ALICE_IDENTITY_ID)).map((entry) => entry.path)).toEqual([
       "/hello.txt",
-    ]);
-    expect(events).toEqual([
-      {
-        type: "fs",
-        op: "move",
-        identityId: ALICE_IDENTITY_ID,
-        paths: [normalizePath(`${TRASH_PATH}/${id}`)],
-        targetPaths: ["/hello.txt"],
-        at: CLOCK_ISO,
-      },
     ]);
     expect(await storage.statFile("/hello.txt")).toMatchObject({ size: 11 });
   });
@@ -482,8 +463,6 @@ describe("POST /trash/restore", () => {
     const clock = () => new Date(CLOCK_ISO);
     const deps: TrashRoutesDeps = {
       activity: activityFixture(clock).service,
-      bus: createEventBus(),
-      clock,
       metadata: createMetadataService(createMemoryRepos()),
     };
     const app = createApp({
@@ -543,8 +522,6 @@ describe("POST /trash/restore", () => {
     const clock = () => new Date(CLOCK_ISO);
     const deps: TrashRoutesDeps = {
       activity: activityFixture(clock).service,
-      bus: createEventBus(),
-      clock,
       metadata: createMetadataService(createMemoryRepos()),
     };
     const app = createApp({
@@ -574,8 +551,8 @@ describe("POST /trash/restore", () => {
 });
 
 describe("POST /trash/purge", () => {
-  it("permanently removes the given ids and publishes one delete event", async () => {
-    const { app, storage, events } = await buildHarness();
+  it("permanently removes the given ids", async () => {
+    const { app, storage } = await buildHarness();
     await storage.trash.put("/hello.txt");
     const listed = TrashListResponse.parse(await readJson(await app.request(ROUTES.trash.list)));
     const id = listed.entries[0]?.id;
@@ -592,15 +569,6 @@ describe("POST /trash/purge", () => {
 
     expect(res.status).toBe(200);
     expect(await readJson(res)).toEqual(OkResponse.parse({ ok: true }));
-    expect(events).toEqual([
-      {
-        type: "fs",
-        op: "delete",
-        identityId: ALICE_IDENTITY_ID,
-        paths: [normalizePath(`${TRASH_PATH}/${id}`)],
-        at: CLOCK_ISO,
-      },
-    ]);
     const after = TrashListResponse.parse(await readJson(await app.request(ROUTES.trash.list)));
     expect(after.entries).toEqual([]);
   });
@@ -854,8 +822,8 @@ describe("personal activity for trash commands", () => {
 });
 
 describe("POST /trash/empty", () => {
-  it("removes every trash entry and publishes one delete event for the trash folder", async () => {
-    const { app, storage, events } = await buildHarness();
+  it("removes every trash entry", async () => {
+    const { app, storage } = await buildHarness();
     await storage.trash.put("/hello.txt");
     await storage.trash.put("/dir");
 
@@ -863,15 +831,6 @@ describe("POST /trash/empty", () => {
 
     expect(res.status).toBe(200);
     expect(await readJson(res)).toEqual(OkResponse.parse({ ok: true }));
-    expect(events).toEqual([
-      {
-        type: "fs",
-        op: "delete",
-        identityId: ALICE_IDENTITY_ID,
-        paths: [TRASH_PATH],
-        at: CLOCK_ISO,
-      },
-    ]);
     const after = TrashListResponse.parse(await readJson(await app.request(ROUTES.trash.list)));
     expect(after.entries).toEqual([]);
   });
@@ -924,8 +883,8 @@ describe("POST /trash/empty", () => {
   });
 });
 
-it("publishes successful restores before a later item fails", async () => {
-  const { app, storage, events } = await buildHarness();
+it("keeps the restores made before a later item fails", async () => {
+  const { app, storage } = await buildHarness();
   await storage.trash.put("/hello.txt");
   const list = TrashListResponse.parse(await readJson(await app.request(ROUTES.trash.list)));
   const id = list.entries[0]?.id;
@@ -939,7 +898,5 @@ it("publishes successful restores before a later item fails", async () => {
     }),
   );
   expect(response.status).toBe(404);
-  expect(events).toEqual([
-    expect.objectContaining({ type: "fs", op: "move", targetPaths: ["/hello.txt"] }),
-  ]);
+  expect(await storage.statFile("/hello.txt")).toMatchObject({ size: 11 });
 });

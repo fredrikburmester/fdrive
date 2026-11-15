@@ -56,8 +56,6 @@ function fakeIndexQueries(overrides: Partial<IndexQueries> = {}): IndexQueries {
     recentFiles: notImplemented,
     thumbnail: notImplemented,
     thumbnailKeys: notImplemented,
-    deletedRowSha: notImplemented,
-    liveRowsBySha: notImplemented,
     searchImages: notImplemented,
     imageEmbeddingStats: async () => ({ total: 0, model: null }),
     subtreeSize: notImplemented,

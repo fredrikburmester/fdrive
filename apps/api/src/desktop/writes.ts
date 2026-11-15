@@ -30,8 +30,7 @@ import type {
 } from "@fdrive/db";
 import type { Principal } from "../auth/principal.js";
 import { ApiHttpError } from "../errors.js";
-import type { EventBus } from "../events/bus.js";
-import { publishFsEvent, runStorageCall } from "../fs/routes.js";
+import { runStorageCall } from "../fs/routes.js";
 import type { MetadataService } from "../metadata/service.js";
 import {
   createDesktopFiles,
@@ -103,8 +102,6 @@ export interface DesktopWriteDeps extends Pick<DesktopDeps, "clock" | "indexedCo
    * not exercise metadata.
    */
   metadata?: Pick<MetadataService, "onMoved">;
-  /** Live updates for the web, as web writes publish them. Absent in fixtures. */
-  bus?: EventBus;
   /** Hears metadata that could not follow a published write, and bookkeeping left behind. */
   logger?: { warn(obj: Record<string, unknown>, msg: string): void };
 }
@@ -460,48 +457,34 @@ export function createDesktopWrites(deps: DesktopWriteDeps) {
   }
   /**
    * Brings the rest of path-keyed metadata along once a write is published
-   * and its receipt (with what grants access) kept, and tells the web, the
-   * way web writes do right after their storage call (`fs/routes.ts`): tags,
-   * favorites, folder views, recents, AI chat references and Office files
-   * follow a move, into the Mac's Trash and back out too, as they follow an
-   * item into fdrive's Trash, so nothing new at the old path inherits them.
+   * and its receipt (with what grants access) kept, the way web writes do
+   * right after their storage call (`fs/routes.ts`): tags, favorites, folder
+   * views, recents, AI chat references and Office files follow a move, into
+   * the Mac's Trash and back out too, as they follow an item into fdrive's
+   * Trash, so nothing new at the old path inherits them. The web hears of
+   * the write from the change journal, as of every other.
    *
    * None of this grants access, so a failure is logged rather than failing
-   * the commit, whose file is already published. The indexer reports the
-   * same move from the change journal, and its listener
-   * (`events/indexer-listener.ts`) moves this metadata then; that also covers
-   * a crash between the receipt and this call.
+   * the commit, whose file is already published; what could not follow stays
+   * where it was.
    */
   async function follow(
     principal: Principal,
     request: Request,
     source: Source | null,
     target: string,
-    trashing: boolean,
   ) {
     const { identityId } = principal;
     const directory = request.kind === "folder" || source?.kind === "dir";
-    const metadata = deps.metadata;
-    const publish = (
-      op: "create" | "mkdir" | "move" | "delete",
-      paths: string[],
-      to?: string[],
-    ) => {
-      if (deps.bus) publishFsEvent({ bus: deps.bus, clock: deps.clock }, principal, op, paths, to);
-    };
     try {
       if (source && source.path !== target)
-        await metadata?.onMoved(identityId, source.path, target, directory);
+        await deps.metadata?.onMoved(identityId, source.path, target, directory);
     } catch (error) {
       deps.logger?.warn(
         { err: error, identityId, operationId: request.operationId },
-        "Mac write published; its metadata follows when the indexer reports it",
+        "Mac write published; its metadata could not follow",
       );
     }
-    if (source && trashing) publish("delete", [source.path]);
-    else if (source && (source.originalPath ?? source.path) !== target)
-      publish("move", [source.originalPath ?? source.path], [target]);
-    else publish(directory ? "mkdir" : "create", [target]);
   }
   async function operation(principal: Principal, id: string) {
     const result = await repo.operation(principal.identityId, principal.accountId, id);
@@ -631,7 +614,7 @@ export function createDesktopWrites(deps: DesktopWriteDeps) {
       );
     }
     await discard(principal, op.id);
-    await follow(principal, request, source, to, trashing);
+    await follow(principal, request, source, to);
     return receipt;
   }
   /**

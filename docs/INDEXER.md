@@ -329,7 +329,7 @@ before starting their next file, for at most a minute at a time, so a change som
 made is not queued behind a library-wide scan.
 
 A file is processed in the order a person notices it: its row (a name search finds it),
-its thumbnails, its event and journal row, its text and last its embeddings. For watcher and
+its thumbnails, its "indexed" signal and journal row, its text and last its embeddings. For watcher and
 journaled changes, text embeddings go to a `text-embed-<root>` thread, as image embeddings do: the
 chunks are stored without vectors as `partial`, searchable by full text at once, and the
 worker moves on instead of waiting for the model. The thread fills in the vectors and marks
@@ -365,27 +365,54 @@ A value change is logged (`settings changed: workers, tesseract_langs`) so an
 admin editing these from the web UI's System pages can see it take effect on
 the next cycle.
 
-## Change events
+## The indexed signal
 
-After every applied change (create, change, delete, move), the indexer sends
-`NOTIFY idx_events, '<json>'`:
-`{ "kind": "created|changed|deleted|moved", "root": "<name>", "path": "<rel>", "target_path": "<rel or null>", "at": "<iso8601>" }`.
-A new or changed file's event follows its row and thumbnails, before its text, since
-listeners only check access and refresh listings. Events are not stored; the
-[change journal](plans/CHANGE-JOURNAL.md) is the durable record.
+After every applied change that touched index rows (a file indexed as new or changed, rows
+deleted or moved), the indexer sends `NOTIFY idx_events, '<root name>'`, naming nothing else.
+A new or changed file's signal follows its row and thumbnails, before its text. The API passes
+it on to every open browser as an `indexed` event, at most once a second, so what the index
+backs (folder sizes) refreshes; listings come from disk and refresh with the change journal's
+own events. What changed is in the journal, which the API reads for live updates and metadata
+(see [the API's reader](#the-apis-reader) below); the signal is not stored.
 
-A reindex request or feature change that re-derives index data for a file whose
-size and mtime are unchanged is not a change and emits nothing: listeners check
-access and refresh listings for every event, and those passes cover every file.
+A reindex request or feature change that re-derives index data for a file whose size and mtime
+are unchanged is not a change and sends nothing.
 
 A scan soft-deletes live rows its completed walk did not find, compared against
 the manifest it read at the start, so a tree with no deletions writes nothing.
 Rows the watcher or a worker wrote after the scan started are left alone.
 
-The API (`apps/api`) listens on `idx_events` for live updates and re-subscribes after a
-disconnect. Notifications missed while disconnected are lost; a refresh reads current data.
-The change journal records the same changes in order; the API is to read it instead of these
-events, which then go.
+## The API's reader
+
+The API reads the journal from its own position (consumer `api` in `idx.change_cursors`,
+starting at the journal's end the first time) and is the only route by which it learns of file
+changes ([journal.ts](../apps/api/src/events/journal.ts)). `NOTIFY idx_changes`, which every
+writer sends on append, wakes it, and so does each reconnect of its `LISTEN` connection, which
+reads what it missed; it does not poll. For each row it maps both ends through every login's
+scopes (the home plus folders shared with it, one grants query per login per read, no storage
+read) and sends each login that sees an end one live update with the row's position. A row the
+API wrote brings nothing else: the request that made the change moved metadata already. A row
+from the watcher, a scan or OCR first brings path-keyed metadata and personal activity along for
+each login that sees it ([outside.ts](../apps/api/src/events/outside.ts)):
+
+- a move both ends of which a login sees moves its tags, favorites, folder views, recents and
+  chat references, and a move out of what it sees drops them;
+- a row that says to look again looks: a path that is gone (its folder still lists) drops them
+  too, and one still there is compared with personal activity's last confirmation;
+- shares with people, public links and Office files keep the owner's paths for everyone, so they
+  follow once, first, in the pass for the login whose home the row's path is in.
+
+Browsers get these on `GET /api/v1/events` ([routes.ts](../apps/api/src/events/routes.ts)).
+Each `fs` event, and each ping, carries `id: <epoch>.<position>` (the journal's epoch from
+`idx.change_epoch`). The web client reconnects with the last id it saw (`Last-Event-ID`, or the
+`lastEventId` query parameter when it reconnects itself) and first gets the rows it missed,
+mapped through its login's scopes now; when they are gone (pruned, another epoch after a
+restore, or unreadable) it gets one `resync` and refetches every query on screen
+([sse.ts](../apps/web/src/lib/api/sse.ts)).
+
+Since every change fdrive makes is journaled by the API itself, live updates reach everyone
+with indexing off too. Changes made on the disk reach the journal only through the watcher and
+scans, which run while indexing is on.
 
 ## Internal HTTP API
 

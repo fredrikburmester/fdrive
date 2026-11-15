@@ -5,8 +5,7 @@ import { metadataKeysToInvalidate } from "./invalidation";
 function fsEvent(overrides: Partial<FsEvent> = {}): FsEvent {
   return {
     type: "fs",
-    op: "update",
-    identityId: "00000000-0000-0000-0000-000000000000",
+    op: "change",
     paths: ["/a/b.txt"],
     at: "2026-09-06T00:00:00.000Z",
     ...overrides,
@@ -29,30 +28,16 @@ const JOB_EVENT: JobEvent = {
 };
 
 describe("metadataKeysToInvalidate", () => {
-  it("invalidates favorites, recents, and tag files for a move", () => {
-    expect(metadataKeysToInvalidate(fsEvent({ op: "move" }))).toEqual([
-      ["favorites", "list"],
-      ["recents", "list"],
-      ["tags", "files"],
-    ]);
-  });
-
-  it("invalidates favorites, recents, and tag files for a delete", () => {
-    expect(metadataKeysToInvalidate(fsEvent({ op: "delete" }))).toEqual([
-      ["favorites", "list"],
-      ["recents", "list"],
-      ["tags", "files"],
-    ]);
-  });
-
-  it("invalidates nothing for an update", () => {
-    expect(metadataKeysToInvalidate(fsEvent({ op: "update" }))).toEqual([]);
-  });
-
-  it("invalidates nothing for a copy or mkdir", () => {
-    expect(metadataKeysToInvalidate(fsEvent({ op: "copy" }))).toEqual([]);
-    expect(metadataKeysToInvalidate(fsEvent({ op: "mkdir" }))).toEqual([]);
-  });
+  it.each(["move", "change"] as const)(
+    "invalidates favorites, recents, and tag files for a %s",
+    (op) => {
+      expect(metadataKeysToInvalidate(fsEvent({ op }))).toEqual([
+        ["favorites", "list"],
+        ["recents", "list"],
+        ["tags", "files"],
+      ]);
+    },
+  );
 
   it("invalidates nothing for a ping event", () => {
     expect(metadataKeysToInvalidate(PING_EVENT)).toEqual([]);

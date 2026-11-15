@@ -405,7 +405,7 @@ fn an_upload_is_indexed_with_the_digest_the_api_sent() {
     assert_eq!(queued(&env, &ctx), 0);
     assert_eq!(env.row(&ctx, "alice/a.txt").sha256.as_deref(), Some(claimed.as_str()));
     assert!(indexed(&env, &ctx, "alice/a.txt"));
-    assert_eq!(env.events(), ["created"]);
+    assert_eq!(env.signals(), 1);
 }
 
 #[test]
@@ -438,7 +438,7 @@ fn an_upload_is_stamped_from_its_hint_and_its_watcher_event_reads_nothing() {
         (row.sha256.as_deref(), row.stamp),
         (Some(claimed.as_str()), Some(version_of(&env, "alice/a.txt").stamp))
     );
-    assert_eq!(env.events(), ["created"]);
+    assert_eq!(env.signals(), 1);
 }
 
 #[test]
@@ -464,7 +464,7 @@ fn a_rewrite_that_keeps_size_and_time_after_an_upload_is_read_again() {
         (row.sha256, row.stamp),
         (Some(hex_sha(b"other world")), Some(version_of(&env, "a.txt").stamp))
     );
-    assert_eq!(env.events(), ["created", "changed"]);
+    assert_eq!(env.signals(), 2);
 }
 
 #[test]
@@ -493,7 +493,7 @@ fn an_upload_that_keeps_the_size_and_time_of_the_file_it_replaces_is_taken_from_
         (row.sha256.as_deref(), row.stamp),
         (Some(claimed.as_str()), Some(version_of(&env, "a.txt").stamp))
     );
-    assert_eq!(env.events(), ["created", "changed"]);
+    assert_eq!(env.signals(), 2);
 }
 
 #[test]
@@ -561,7 +561,7 @@ fn a_file_that_is_already_indexed_is_left_alone() {
     queue(&env, &ctx, "a.txt", None, None);
     drain(&ctx);
     assert_eq!(env.ml.count(TEXT_EMBED), embedded);
-    assert_eq!(env.events(), ["created"]);
+    assert_eq!(env.signals(), 1);
 }
 
 #[test]
@@ -582,7 +582,7 @@ fn a_deleted_file_or_folder_loses_its_rows() {
     drain(&ctx);
     assert!(live_paths(&env, &ctx).is_empty());
     assert_eq!(env.count("idx.chunks"), 0);
-    assert_eq!(env.events(), ["created", "created", "created", "deleted", "deleted"]);
+    assert_eq!(env.signals(), 5);
 }
 
 #[test]
@@ -602,7 +602,7 @@ fn a_moved_file_keeps_its_row_without_being_read_again() {
     assert_eq!(env.row(&ctx, "b.txt").sha256, id.sha256);
     assert_eq!(env.status(&ctx, "b.txt"), "indexed");
     assert_eq!(env.ml.count(TEXT_EMBED), embedded);
-    assert_eq!(env.events(), ["created", "moved"]);
+    assert_eq!(env.signals(), 2);
 }
 
 #[test]
@@ -640,7 +640,7 @@ fn an_api_rename_carries_the_stamp_and_reads_nothing() {
         (Some(claimed.as_str()), Some(after.stamp))
     );
     assert_eq!(live_paths(&env, &ctx), ["b.txt"]);
-    assert_eq!(env.events(), ["created", "moved"]);
+    assert_eq!(env.signals(), 2);
 }
 
 /// A root sharing `env`'s database and folder whose reads never stamp: only a hint or a
@@ -687,7 +687,7 @@ fn a_write_after_an_api_rename_keeps_the_stamp_from_following() {
         (row.sha256, row.stamp),
         (Some(hex_sha(b"other world")), Some(version_of(&env, "b.txt").stamp))
     );
-    assert_eq!(env.events(), ["created", "moved", "changed"]);
+    assert_eq!(env.signals(), 3);
 }
 
 #[test]
@@ -743,7 +743,7 @@ fn a_rename_carries_no_stamp_the_file_had_already_outgrown() {
         (row.sha256, row.stamp),
         (Some(hex_sha(b"other bytes")), Some(version_of(&env, "c.txt").stamp))
     );
-    assert_eq!(env.events(), ["created", "moved", "moved", "changed"]);
+    assert_eq!(env.signals(), 4);
 }
 
 #[test]
@@ -823,7 +823,7 @@ fn a_renamed_extension_is_indexed_as_a_new_file() {
     queue(&env, &ctx, "a.txt", Some("a.md"), None);
     drain(&ctx);
     assert_eq!(live_paths(&env, &ctx), ["a.md"]);
-    assert_eq!(env.events()[1..], ["deleted", "created"]);
+    assert_eq!(env.signals(), 3);
 }
 
 #[test]
@@ -1108,7 +1108,7 @@ fn a_restart_resumes_from_the_saved_position() {
     assert_eq!(restarted.drain().unwrap(), 1);
     assert_eq!(restarted.drain().unwrap(), 0);
     assert_eq!(live_paths(&env, &ctx), ["a.txt", "b.txt"]);
-    assert_eq!(env.events(), ["created", "created"]);
+    assert_eq!(env.signals(), 2);
 }
 
 #[test]
@@ -1332,7 +1332,7 @@ fn queued_text_is_searchable_before_its_embeddings_arrive() {
         .unwrap()
         .get(0);
     assert_eq!(chunks, 1);
-    assert_eq!(env.events(), ["created"]);
+    assert_eq!(env.signals(), 1);
     env.ml.release(TEXT_EMBED);
     assert!(indexed(&env, &ctx, "a.txt"));
     assert!(env.unresolved().is_empty());

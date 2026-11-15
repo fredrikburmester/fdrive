@@ -63,8 +63,6 @@ function stubIndexQueries(): IndexQueries {
     recentFiles: async () => fail("recentFiles"),
     thumbnail: async () => fail("thumbnail"),
     thumbnailKeys: async () => fail("thumbnailKeys"),
-    deletedRowSha: async () => null,
-    liveRowsBySha: async () => [],
     searchImages: async () => [],
     imageEmbeddingStats: async () => ({ total: 0, model: null }),
     photos: async () => fail("photos"),

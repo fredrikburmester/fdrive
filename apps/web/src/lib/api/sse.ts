@@ -31,22 +31,28 @@ export const INVALIDATION_MAX_WAIT_MS = 1000;
  * under, so `useFsEvents` registers one listener per entry here rather than
  * relying on `onmessage`, which only fires for the unnamed default event.
  */
-const SSE_EVENT_TYPES = ["fs", "job", "ping"] as const;
+const SSE_EVENT_TYPES = ["fs", "job", "ping", "resync", "indexed"] as const;
 
 /**
- * Pure mapping from an incoming SSE event to the fs list query keys that
- * should be invalidated. Ping events invalidate nothing. `fs` events
+ * Pure mapping from an incoming SSE event to the query keys that should be
+ * invalidated. Ping events invalidate nothing, and `resync` is handled by
+ * refetching everything on screen instead (`useFsEvents`). `fs` events
  * invalidate the parent directory listing of every affected path, plus of
- * every `targetPaths` entry (present for `move` and `copy`), deduplicated.
- * `job` events invalidate nothing until the job reaches `done`, at which
- * point they invalidate both the result path's parent (so the new archive
- * or extracted folder shows up in its listing) and the result path itself
- * (so an already-open listing of an extraction's destination folder picks
- * up its new contents).
+ * every `targetPaths` entry (present for a move), deduplicated, and what is
+ * kept by path: a `change` may be a delete. `indexed` invalidates what the
+ * index backs: folder sizes. `job` events invalidate nothing until the job
+ * reaches `done`, at which point they invalidate both the result path's
+ * parent (so the new archive or extracted folder shows up in its listing)
+ * and the result path itself (so an already-open listing of an extraction's
+ * destination folder picks up its new contents).
  */
 export function keysToInvalidate(event: SseEvent): QueryKey[] {
-  if (event.type === "ping") {
+  if (event.type === "ping" || event.type === "resync") {
     return [];
+  }
+
+  if (event.type === "indexed") {
+    return [["fs", "folder-size"]];
   }
 
   if (event.type === "job") {
@@ -76,7 +82,7 @@ export function keysToInvalidate(event: SseEvent): QueryKey[] {
     ["fs", "stat"],
     ["fs", "folder-size"],
     ...metadataKeysToInvalidate(event),
-    ...(event.op === "move" || event.op === "delete" ? [queryKeys.folderViews.all()] : []),
+    queryKeys.folderViews.all(),
     ...trashKeysToInvalidate(event),
     ...archiveKeysToInvalidate(event),
   ];
@@ -186,16 +192,31 @@ export function createInvalidationBatch(queryClient: QueryClient): InvalidationB
 }
 
 /**
+ * Where the stream resumes after a reconnect: the last event id the server
+ * sent (`<epoch>.<position>`), as a query parameter, since a new
+ * `EventSource` cannot send `Last-Event-ID` itself. Without one it starts now.
+ */
+export function eventsUrl(lastEventId: string | undefined): string {
+  return lastEventId === undefined || lastEventId === ""
+    ? ROUTES.events
+    : `${ROUTES.events}?${new URLSearchParams({ lastEventId })}`;
+}
+
+/**
  * Opens a single `EventSource` to `ROUTES.events` for the lifetime of the
  * mounted component, parsing each message as an `SseEvent`, invalidating
- * the fs list queries it affects in batches, and feeding `job` events into the jobs
+ * the queries it affects in batches, and feeding `job` events into the jobs
  * store (defaulting to the app-wide `useJobsStore`; overridable so tests
  * never need to touch that global singleton). Reconnects with exponential
- * backoff (`nextBackoffMs`) on error, and closes the connection on unmount.
+ * backoff (`nextBackoffMs`) on error, resuming from the last event id it
+ * saw so nothing in between is missed; on `resync` (the server no longer
+ * knows what came in between) it refetches every query on screen. Closes
+ * the connection on unmount.
  */
 export function useFsEvents(jobsStore: JobsStoreLike = useJobsStore.getState()): void {
   const queryClient = useQueryClient();
   const backoffRef = useRef<number | undefined>(undefined);
+  const lastEventIdRef = useRef<string | undefined>(undefined);
 
   useEffect(() => {
     let source: EventSource | undefined;
@@ -204,7 +225,7 @@ export function useFsEvents(jobsStore: JobsStoreLike = useJobsStore.getState()):
     const invalidations = createInvalidationBatch(queryClient);
 
     function connect(): void {
-      source = new EventSource(ROUTES.events);
+      source = new EventSource(eventsUrl(lastEventIdRef.current));
 
       function handleMessage(message: MessageEvent<string>): void {
         if (cancelled) return;
@@ -213,6 +234,8 @@ export function useFsEvents(jobsStore: JobsStoreLike = useJobsStore.getState()):
           return;
         }
         backoffRef.current = undefined;
+        if (message.lastEventId) lastEventIdRef.current = message.lastEventId;
+        if (event.type === "resync") void queryClient.invalidateQueries();
         invalidations.add(keysToInvalidate(event));
         applyJobEvent(jobsStore, event);
       }

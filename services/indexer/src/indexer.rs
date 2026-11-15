@@ -19,7 +19,6 @@ use crate::backoff::{Backoff, is_outage};
 use crate::chunking::{chunk, is_document, is_image, is_pdf, is_textual, max_chunks_for};
 use crate::config::{Config, SKIP_DIRS, SKIP_NAMES};
 use crate::db::{self, Db, FileRow, ManifestRow, NewChange, NewFile, Stamp, StampUpdate};
-use crate::events::{EventKind, build};
 use crate::extract::{Extractor, embed_passages};
 use crate::failures::{self, FileResult, Report, attempt, describe, report};
 use crate::features::{FeatureConfiguration, FeatureValues};
@@ -529,12 +528,13 @@ pub fn work_features(features: &FeatureValues, ext: Option<&str>, embed_only: bo
     result
 }
 
-pub fn emit_event(ctx: &RootContext, kind: EventKind, rel_path: &str, target: Option<&str>) {
-    let event = build(kind, &ctx.name, rel_path, target);
-    if let Err(error) = ctx.db.with(|c| db::notify_event(c, &event)) {
+/// Tell the API the index took in a change, so browsers refresh what it backs (folder sizes).
+/// What changed is in the change journal; a failure is logged and changes nothing else.
+pub fn notify_indexed(ctx: &RootContext) {
+    if let Err(error) = ctx.db.with(|c| db::notify_indexed(c, &ctx.name)) {
         log(&format!(
-            "event: failed to send {} for {rel_path}: {}",
-            kind.as_str(),
+            "indexed: failed to notify for {}: {}",
+            ctx.name,
             describe(&error)
         ));
     }
@@ -582,7 +582,6 @@ pub fn process_file_with(
             return restamp(ctx, rel_path, stat, row, hint);
         }
     }
-    let was_new = row.is_none();
     let same_version = row
         .as_ref()
         .is_some_and(|r| r.size == stat.size as i64 && r.mtime_ns == stat.mtime_ns && !r.deleted);
@@ -592,21 +591,12 @@ pub fn process_file_with(
     } else {
         None
     };
-    // Listeners hear about the file once it has a row and a preview, not after its text:
-    // they check access and refresh listings for every event, and need nothing more.
-    // Re-deriving the same version changes nothing they show, and is no change to journal.
+    // The API hears of the file once it has a row and a preview, not after its text: what
+    // browsers refresh needs nothing more. Re-deriving the same version changes nothing they
+    // show, and is no change to journal.
     let visible = || {
         if !same_version {
-            emit_event(
-                ctx,
-                if was_new {
-                    EventKind::Created
-                } else {
-                    EventKind::Changed
-                },
-                rel_path,
-                None,
-            );
+            notify_indexed(ctx);
             journal::record(ctx, vec![NewChange::path(rel_path)]);
         }
     };
@@ -640,7 +630,7 @@ fn restamp(
         return Ok(false);
     }
     let changed = || {
-        emit_event(ctx, EventKind::Changed, rel_path, None);
+        notify_indexed(ctx);
         journal::record(ctx, vec![NewChange::path(rel_path)]);
     };
     process_stages(
@@ -1880,7 +1870,7 @@ pub fn watch_mark_deleted(ctx: &RootContext, rel_path: &str, is_dir: bool) -> us
                 ctx.names_touched(rel_path, is_dir);
             }
             if !deleted.files.is_empty() {
-                emit_event(ctx, EventKind::Deleted, rel_path, None);
+                notify_indexed(ctx);
             }
             // An empty folder has no file rows, but its going is still a change.
             if !deleted.files.is_empty() || deleted.folders > 0 {
@@ -2000,7 +1990,7 @@ pub fn watch_rename(ctx: &RootContext, old: &str, new: &str, is_dir: bool) -> us
                 ctx.names_touched(new, is_dir);
             }
             if moved.files > 0 {
-                emit_event(ctx, EventKind::Moved, old, Some(new));
+                notify_indexed(ctx);
             }
             // An empty folder moves only its folder rows, but that is still a move.
             if moved.files + moved.folders > 0 {

@@ -6,7 +6,6 @@ import { createMemoryRepos } from "@fdrive/db/testing";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Principal } from "../../auth/principal.js";
 import { ApiHttpError } from "../../errors.js";
-import { createEventBus } from "../../events/bus.js";
 import type { McpToolDeps } from "../../mcp/handlers.js";
 import { createMetadataService } from "../../metadata/service.js";
 import type { AiInput, AiModel, AiStartOptions, AiTurn } from "../model.ts";
@@ -142,8 +141,6 @@ async function setup(
       chats: repos.aiChats,
       mcp,
       fs: {
-        bus: createEventBus(),
-        clock: () => new Date(),
         metadata: createMetadataService(repos),
       },
       clock: () => new Date(),
