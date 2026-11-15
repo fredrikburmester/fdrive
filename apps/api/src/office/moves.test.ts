@@ -1,5 +1,6 @@
 import { createMemoryOfficeFileRepo } from "@fdrive/db";
 import { expect, it } from "vitest";
+import { memoryAccessRepo, testAccessFollowers } from "../../test/file-operations.ts";
 import { createOfficeMoves } from "./moves.ts";
 
 const ALICE = "00000000-0000-4000-8000-000000000001";
@@ -7,20 +8,41 @@ const BOB = "00000000-0000-4000-8000-000000000002";
 const at = new Date("2026-11-15T00:00:00Z");
 
 /** Bob finds alice's `/Team` as `/Shared with me/Team`; every other path is the login's own. */
+const ownerPath = async (identityId: string, path: string) =>
+  identityId === BOB && path.startsWith("/Shared with me/Team")
+    ? { identityId: ALICE, path: path.replace("/Shared with me/Team", "/Team") }
+    : { identityId, path };
+
+/**
+ * Documents as every file operation moves them, with what grants access
+ * (`files/access.ts`).
+ */
 async function fixture() {
   const files = createMemoryOfficeFileRepo();
-  const moves = createOfficeMoves({
-    files,
-    clock: () => at,
-    grants: {
-      ownerPath: async (identityId, path) =>
-        identityId === BOB && path.startsWith("/Shared with me/Team")
-          ? { identityId: ALICE, path: path.replace("/Shared with me/Team", "/Team") }
-          : { identityId, path },
+  const access = testAccessFollowers(
+    memoryAccessRepo({ office: files }, () => at),
+    {
+      ownerPath,
     },
-  });
+  );
+  const moves = {
+    onMoved: (identityId: string, from: string, to: string, isDir: boolean) =>
+      access.moved(identityId, from, to, isDir),
+    onDeleted: (identityId: string, path: string, isDir: boolean) =>
+      access.removed(identityId, path, isDir),
+  };
   return { files, moves };
 }
+
+it("moves a document after a Mac write, in its owner's files", async () => {
+  const files = createMemoryOfficeFileRepo();
+  const moves = createOfficeMoves({ files, clock: () => at, grants: { ownerPath } });
+  const doc = await files.ensure({ identityId: ALICE, path: "/Team/plan.docx" });
+  await moves.onMoved(BOB, "/Shared with me/Team/plan.docx", "/Shared with me/Team/b.docx");
+  expect(await files.get(doc.id)).toMatchObject({ identityId: ALICE, path: "/Team/b.docx" });
+  await moves.onMoved(ALICE, "/", "/elsewhere");
+  expect(await files.get(doc.id)).toMatchObject({ path: "/Team/b.docx" });
+});
 
 it("keeps a document's id across a rename, a folder move and a move by someone it is shared with", async () => {
   const { files, moves } = await fixture();

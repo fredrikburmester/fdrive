@@ -60,6 +60,31 @@ describe("createMemoryStorage extras", () => {
     await expect(storage.mkdir("/nope/dir")).rejects.toMatchObject({ kind: "not_found" });
   });
 
+  it("refuses at publish a name something else took while the body was staged", async () => {
+    const storage = createMemoryStorage({ "/dir/.keep": "" });
+    const meanwhile = (take: () => Promise<void>) => ({
+      critical: async <T>(work: () => Promise<T>) => {
+        await take();
+        return work();
+      },
+    });
+    await expect(
+      storage.upload(
+        "/dir/a.txt",
+        new Uint8Array([1]),
+        meanwhile(() => storage.upload("/dir/a.txt", new Uint8Array([2]))),
+      ),
+    ).rejects.toMatchObject({ kind: "conflict" });
+    await expect(
+      storage.upload(
+        "/dir/b",
+        new Uint8Array([1]),
+        meanwhile(() => storage.mkdir("/dir/b")),
+      ),
+    ).rejects.toMatchObject({ kind: "conflict" });
+    expect(storage.dump()).toEqual({ "/dir/.keep": "", "/dir/a.txt": "\u0002" });
+  });
+
   it("overwrites on move and copy only when asked, replacing files or trees", async () => {
     const storage = createMemoryStorage({
       "/src/a.txt": "a",

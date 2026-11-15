@@ -14,20 +14,13 @@ import {
   parseMoveTrashLeaf,
   TRASH_PATH,
   type TrashEntry,
-  type TrashProvider,
-  type TrashRestoreResult,
   trashLeafPath,
 } from "@fdrive/core";
-import {
-  type ActivityCallContext,
-  activityRequestContext,
-  recordActivity,
-  recordFsAction,
-} from "../activity/fs-context.js";
+import { activityHeaders, activityRequestContext, recordFsAction } from "../activity/fs-context.js";
 import { activityFailure, type PersonalActivityService } from "../activity/service.js";
 import type { AppHono, AuthedHono } from "../app.js";
-import type { Principal } from "../auth/principal.js";
 import { ApiHttpError } from "../errors.js";
+import { type FileOperations, fileActor } from "../files/operations.js";
 import {
   normalizeOrThrow,
   parseBody,
@@ -35,7 +28,6 @@ import {
   serializeEntry,
   toApiHttpError,
 } from "../fs/routes.js";
-import type { MetadataService } from "../metadata/service.js";
 
 const API_PREFIX = "/api/v1";
 
@@ -45,9 +37,10 @@ function routePath(fullPath: string): string {
 }
 
 export interface TrashRoutesDeps {
+  /** Records Empty Trash, the parent of each item's permanent delete. */
   readonly activity: PersonalActivityService;
-  /** Rewrites tag/favorite/recent metadata and what followed an item into Trash. */
-  readonly metadata: MetadataService;
+  /** Restores and purges items, and what followed them into Trash. */
+  readonly files: Pick<FileOperations, "restore" | "purge">;
 }
 
 /**
@@ -76,50 +69,10 @@ function serializeTrashEntry(entry: TrashEntry): TrashEntryContract {
   };
 }
 
-/**
- * Deletes the leaf `id` from `principal`'s Trash for good and records it as
- * a permanent delete of the item it held. Then what followed the item into
- * Trash (folders shared with people, public links) ends with it. Should that
- * fail, those records still name the leaf, which no share reaches and no new
- * item can take. Purge, Empty Trash and retention all delete this way.
- */
-export async function purgeTrashItem(
-  deps: Pick<TrashRoutesDeps, "activity" | "metadata">,
-  principal: Principal,
-  id: string,
-  context: ActivityCallContext & { readonly reason?: "retention" },
-): Promise<void> {
-  const leaf = trashLeafPath(TRASH_PATH, id);
-  const parsed = parseMoveTrashLeaf(TRASH_PATH, leaf);
-  const trash = principal.storage.trash;
-  await recordActivity(
-    deps.activity,
-    principal,
-    {
-      source: context.source,
-      ...(context.producerOperationId ? { producerOperationId: context.producerOperationId } : {}),
-      ...(context.batchId ? { batchId: context.batchId } : {}),
-      action: "file.delete",
-      requested: {
-        path: parsed?.originalPath ?? leaf,
-        trashLeaf: leaf,
-        ...(context.reason ? { reason: context.reason } : {}),
-      },
-    },
-    () => runStorageCall(() => trash.purge(id)),
-  );
-  await deps.metadata.onDeleted(principal.identityId, leaf, parsed?.kind !== "file");
-}
-
-/** Runs `trash.restore(id, ...)`, tagging any `StorageError` it throws with `failedId` before rethrowing. */
-async function restoreOne(
-  trash: TrashProvider,
-  id: string,
-  target: string | undefined,
-): Promise<TrashRestoreResult> {
-  const restoreOptions = target === undefined ? undefined : { target };
+/** Runs `restore`, tagging any `StorageError` it throws with `failedId` before rethrowing. */
+async function restoreOne<T>(id: string, restore: () => Promise<T>): Promise<T> {
   try {
-    return await trash.restore(id, restoreOptions);
+    return await restore();
   } catch (error) {
     if (isStorageError(error)) {
       const mapped = toApiHttpError(error);
@@ -155,7 +108,6 @@ export function registerTrashRoutes(
 
   authed.post(routePath(ROUTES.trash.restore), async (c) => {
     const principal = c.get("principal");
-    const trash = principal.storage.trash;
     const body = await parseBody(TrashRestoreRequest, c);
     const validated = body.ids.map((id) => validateTrashId(id));
     const target = body.target === undefined ? undefined : normalizeOrThrow(body.target);
@@ -164,38 +116,19 @@ export function registerTrashRoutes(
     const context = activityRequestContext(c);
     const batchId = context.batchId ?? randomUUID();
     for (const id of validated) {
-      const trashVirtualPath = trashLeafPath(TRASH_PATH, id);
-      const originalPath =
-        parseMoveTrashLeaf(TRASH_PATH, trashVirtualPath)?.originalPath ?? trashVirtualPath;
-      const entry = await recordFsAction(
-        deps.activity,
-        c,
-        {
-          ...context,
-          producerOperationId: `${context.producerOperationId}:${restored.length}`,
-          batchId,
-          action: "file.restore",
-          requested: {
-            path: originalPath,
-            trashLeaf: trashVirtualPath,
-            ...(target ? { targetPath: target } : {}),
-          },
-        },
-        () => restoreOne(trash, id, target),
-        (entry) => ({
-          path: entry.path,
-          kind: entry.kind === "dir" ? "dir" : "file",
-          size: entry.size,
-        }),
+      const done = await restoreOne(id, () =>
+        deps.files.restore(
+          fileActor(principal, {
+            ...context,
+            producerOperationId: `${context.producerOperationId}:${restored.length}`,
+            batchId,
+          }),
+          id,
+          target,
+        ),
       );
-      // A restore is a move out of Trash: what followed the item there comes back with it.
-      await deps.metadata.onMoved(
-        principal.identityId,
-        trashVirtualPath,
-        entry.path,
-        entry.kind === "dir",
-      );
-      restored.push(serializeEntry(entry));
+      activityHeaders(c, done.history);
+      restored.push(serializeEntry(done.entry));
     }
     const responseBody: TrashRestoreResponse = TrashRestoreResponse.parse({ restored });
     return c.json(responseBody);
@@ -209,11 +142,16 @@ export function registerTrashRoutes(
     const context = activityRequestContext(c);
     const batchId = context.batchId ?? randomUUID();
     for (const [index, id] of ids.entries()) {
-      await purgeTrashItem(deps, principal, id, {
-        ...context,
-        producerOperationId: `${context.producerOperationId}:${index}`,
-        batchId,
-      });
+      await runStorageCall(() =>
+        deps.files.purge(
+          fileActor(principal, {
+            ...context,
+            producerOperationId: `${context.producerOperationId}:${index}`,
+            batchId,
+          }),
+          id,
+        ),
+      );
     }
 
     const responseBody: OkResponse = OkResponse.parse({ ok: true });
@@ -250,11 +188,16 @@ export function registerTrashRoutes(
         );
         // Purge item by item so every emptied item keeps its own history row.
         for (const entry of entries) {
-          await purgeTrashItem(deps, principal, entry.id, {
-            ...context,
-            producerOperationId: `${context.producerOperationId}:leaf:${completed}`,
-            batchId,
-          });
+          await runStorageCall(() =>
+            deps.files.purge(
+              fileActor(principal, {
+                ...context,
+                producerOperationId: `${context.producerOperationId}:leaf:${completed}`,
+                batchId,
+              }),
+              entry.id,
+            ),
+          );
           completed++;
         }
       },

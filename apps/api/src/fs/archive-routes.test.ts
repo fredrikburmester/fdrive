@@ -11,6 +11,7 @@ import * as tar from "tar-stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ZipFile } from "yazl";
 import { activityFixture } from "../../test/activity-fixture.js";
+import { testFileOperations } from "../../test/file-operations.js";
 import { createApp } from "../app.js";
 import { isZstdSupported } from "../archive/stream-utils.js";
 import type { Principal } from "../auth/principal.js";
@@ -172,6 +173,7 @@ async function buildHarness(seed: Seed = SEED, username = "alice", jobMaxBytes =
     registerRoutes: (groups) => {
       registerFsRoutes(groups, {
         activity: activity.service,
+        files: testFileOperations({ activity: activity.service }),
         jobRunner,
         tmpDir,
         jobMaxBytes,
@@ -214,6 +216,7 @@ async function buildHarnessWithArchivePeekMaxBytes(archivePeekMaxBytes: number):
   const config = loadConfig(REQUIRED_ENV);
   const fsRoutesDeps = {
     activity: activity.service,
+    files: testFileOperations({ activity: activity.service }),
     jobRunner,
     tmpDir,
     jobMaxBytes: 10 * 1024 * 1024,
@@ -264,6 +267,7 @@ async function buildHarnessWithStorage(storage: StorageProvider): Promise<Harnes
     registerRoutes: (groups) =>
       registerFsRoutes(groups, {
         activity: activity.service,
+        files: testFileOperations({ activity: activity.service }),
         jobRunner,
         tmpDir,
         jobMaxBytes: 10 * 1024 * 1024,
@@ -809,6 +813,7 @@ describe("POST /fs/compress and the resulting job", () => {
       registerRoutes: (groups) =>
         registerFsRoutes(groups, {
           activity: activity.service,
+          files: testFileOperations({ activity: activity.service }),
           jobRunner,
           tmpDir,
           jobMaxBytes: 1000,

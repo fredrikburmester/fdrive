@@ -15,6 +15,8 @@ export interface ActivityCallContext {
   readonly batchId?: string;
   /** The chat that proposed this command, when the person applied an AI action. */
   readonly conversationId?: string;
+  /** The Office document the command came from, so its history follows the document. */
+  readonly bridge?: ActivityRunInput["bridge"];
 }
 
 /** Validates a caller-supplied operation ID, which routes outside `FsContext` also accept. */
@@ -70,4 +72,14 @@ export async function recordFsAction<T>(
   c.header("X-Activity-Status", result.historyPending ? "pending" : "recorded");
   if (result.eventId) c.header("X-Activity-Event-Id", result.eventId);
   return result.value;
+}
+
+/** The response headers the web client reads for a command the file operations recorded. */
+export function activityHeaders(
+  c: FsContext,
+  history: { readonly eventId: string | null; readonly pending: boolean } | undefined,
+): void {
+  if (history === undefined) return;
+  c.header("X-Activity-Status", history.pending ? "pending" : "recorded");
+  if (history.eventId) c.header("X-Activity-Event-Id", history.eventId);
 }

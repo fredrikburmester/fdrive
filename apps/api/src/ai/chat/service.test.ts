@@ -4,6 +4,7 @@ import { createMemoryStorage } from "@fdrive/core/testing";
 import type { IndexQueries, Repos } from "@fdrive/db";
 import { createMemoryRepos } from "@fdrive/db/testing";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { testFileOperations } from "../../../test/file-operations.js";
 import type { Principal } from "../../auth/principal.js";
 import { ApiHttpError } from "../../errors.js";
 import type { McpToolDeps } from "../../mcp/handlers.js";
@@ -137,9 +138,7 @@ async function setup(
       modelFor: () => script.model,
       chats: repos.aiChats,
       mcp,
-      fs: {
-        metadata: createMetadataService(repos),
-      },
+      files: testFileOperations({ metadata: createMetadataService(repos) }),
       clock: () => new Date(),
       ids: () => `id-${++counter}`,
       limits: { turnDeadlineMs: 2000, ...options.limits },

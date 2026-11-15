@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { StorageError, type StorageProvider } from "@fdrive/core";
 import { createMemoryRepos } from "@fdrive/db/testing";
 import { describe, expect, it } from "vitest";
+import { memoryAccessRepo, testAccessFollowers } from "../../test/file-operations.js";
 import { createIdentityStorageFactory } from "../auth/storage-factory.js";
 import { createLocalGrantService, type LocalGrantServiceDeps } from "./grants.js";
 import {
@@ -43,7 +44,13 @@ async function fixture(options: Partial<LocalGrantServiceDeps> = {}) {
     storageFor,
     ...options,
   });
-  return { repos, local, row, alice, bob, carol, service, storageFor };
+  // Shares follow moves and deletes the way every file operation follows them.
+  const access = testAccessFollowers(memoryAccessRepo({ grants: repos.localGrants }), {
+    ownerPath: service.ownerPath,
+    usernameOf: async (identityId) =>
+      (await repos.identities.get(identityId))?.externalUsername ?? null,
+  });
+  return { repos, local, row, alice, bob, carol, service, storageFor, access };
 }
 
 const RESERVED = "fdrive's own folders, like Trash, cannot be shared";
@@ -212,13 +219,13 @@ describe("createLocalGrantService: changing and ending shares", () => {
   it("follows the owner's folder moves and ends with its deletion, ignoring files", async () => {
     const h = await fixture();
     await h.service.create(h.alice.id, { path: "/Photos/2026", username: "bob", access: "read" });
-    await h.service.onMoved(h.alice.id, "/Photos", "/Pictures", false);
+    await h.access.moved(h.alice.id, "/Photos", "/Pictures", false);
     expect((await h.repos.localGrants.listOwned("alice"))[0]?.path).toBe("/Photos/2026");
-    await h.service.onMoved(h.alice.id, "/Photos", "/Pictures", true);
+    await h.access.moved(h.alice.id, "/Photos", "/Pictures", true);
     expect((await h.repos.localGrants.listOwned("alice"))[0]?.path).toBe("/Pictures/2026");
-    await h.service.onDeleted(h.alice.id, "/Pictures", false);
+    await h.access.removed(h.alice.id, "/Pictures", false);
     expect(await h.repos.localGrants.listOwned("alice")).toHaveLength(1);
-    await h.service.onDeleted(h.alice.id, "/Pictures", true);
+    await h.access.removed(h.alice.id, "/Pictures", true);
     expect(await h.repos.localGrants.listOwned("alice")).toEqual([]);
   });
 
@@ -288,8 +295,8 @@ describe("createLocalGrantService: changing and ending shares", () => {
     await h.service.create(h.carol.id, { path: "/Projects", username: "bob", access: "read" });
     const leaf = "/.trash/.fdrive-move-v1/dir/p/Projects/v/1";
     writeHomeFiles(h.local.root, "alice", { [`${leaf}/plan.txt`]: "plan" });
-    await h.service.onMoved(h.alice.id, "/Projects", leaf, true);
-    await h.service.onMoved(h.alice.id, "/Photos/2026", "/.trash/loose", true);
+    await h.access.moved(h.alice.id, "/Projects", leaf, true);
+    await h.access.moved(h.alice.id, "/Photos/2026", "/.trash/loose", true);
 
     expect(await h.service.received("bob")).toEqual([
       { name: "Projects", owner: "carol", path: "/Projects", writable: false },
@@ -306,8 +313,8 @@ describe("createLocalGrantService: changing and ending shares", () => {
   it("ignores moves and deletes of a login that is gone", async () => {
     const h = await fixture();
     await h.service.create(h.alice.id, { path: "/Projects", username: "bob", access: "read" });
-    await h.service.onMoved(randomUUID(), "/Projects", "/Elsewhere", true);
-    await h.service.onDeleted(randomUUID(), "/Projects", true);
+    await h.access.moved(randomUUID(), "/Projects", "/Elsewhere", true);
+    await h.access.removed(randomUUID(), "/Projects", true);
     expect((await h.repos.localGrants.listOwned("alice"))[0]?.path).toBe("/Projects");
   });
 });

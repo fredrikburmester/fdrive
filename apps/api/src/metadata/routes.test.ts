@@ -7,6 +7,7 @@ import { createMemoryRepos } from "@fdrive/db/testing";
 import { createLocalStorage } from "@fdrive/local";
 import type { Logger } from "pino";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { testFileOperations } from "../../test/file-operations.js";
 import { type ActivityAdmissionDeps, createActivityAdmission } from "../activity/admission.js";
 import { createApp } from "../app.js";
 import type { Principal } from "../auth/principal.js";
@@ -134,6 +135,7 @@ async function buildHarness(withActivity = false) {
     setupRequired: READY,
     registerRoutes: (groups) => {
       registerFsRoutes(groups, {
+        files: testFileOperations({ metadata }),
         jobRunner: buildJobRunner(),
         tmpDir: "/tmp",
         jobMaxBytes: 1_000_000_000,

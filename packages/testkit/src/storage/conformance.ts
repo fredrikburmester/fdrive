@@ -167,6 +167,38 @@ export function describeStorageProvider(
       ]);
     });
 
+    it("stages an upload's body outside the caller's critical section and publishes inside it", async () => {
+      let inside = 0;
+      /** How many critical sections were open each time the body was read. */
+      const openWhileStaging: number[] = [];
+      const seen: (string | null)[] = [];
+      const entered: number[] = [];
+      const path = `${root}/staged/deep/file.txt`;
+      const body = new ReadableStream<Uint8Array>({
+        async pull(controller) {
+          openWhileStaging.push(inside);
+          seen.push(await kindOf(storage.stat(path)));
+          controller.enqueue(new TextEncoder().encode("staged"));
+          controller.close();
+        },
+      });
+      await storage.upload(path, body, {
+        mkdirParents: true,
+        critical: async (work) => {
+          inside++;
+          entered.push(openWhileStaging.length);
+          const result = await work();
+          inside--;
+          return result;
+        },
+      });
+      expect(openWhileStaging).toEqual([0]);
+      // Nothing is at the path while the body arrives, and it is published last.
+      expect(seen).toEqual(["not_found"]);
+      expect(entered.at(-1)).toBe(1);
+      expect(await text((await storage.download(path)).body)).toBe("staged");
+    });
+
     it("creates directories, with parents on request", async () => {
       await storage.mkdir(`${root}/one`);
       await storage.mkdir(`${root}/two/three`, { parents: true });

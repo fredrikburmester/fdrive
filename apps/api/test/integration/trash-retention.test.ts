@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { ROUTES, TrashListResponse } from "@fdrive/contracts";
-import { createActivityRepo, createDb, createRepos } from "@fdrive/db";
+import { createAccessRepo, createActivityRepo, createDb, createRepos } from "@fdrive/db";
 import { startLocalStorage, startPostgres } from "@fdrive/testkit";
 import { sql } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -9,8 +9,11 @@ import { createActivityService } from "../../src/activity/service.js";
 import { createIdentityStorageFactory } from "../../src/auth/storage-factory.js";
 import { composeApp } from "../../src/composition.js";
 import { loadConfig } from "../../src/config.js";
+import { createAccessFollowers } from "../../src/files/access.js";
+import { createFileOperations } from "../../src/files/operations.js";
 import { deploymentFilesFolder } from "../../src/local/files-folder.js";
 import { createMetadataService } from "../../src/metadata/service.js";
+import { createShareMoves } from "../../src/shares/moves.js";
 import { createTrashRetention } from "../../src/trash/retention.js";
 import { createTrashSettingsService } from "../../src/trash/settings.js";
 import { seedLocalUsers, silentLogger } from "./helpers/local-storage.ts";
@@ -130,19 +133,32 @@ describe("Trash retention against real PostgreSQL and a local folder", () => {
     // Forty days after the first deletes, fifteen after the last, the hourly pass comes.
     now += 15 * DAY;
     const repos = createRepos(database.db);
+    const storageFor = createIdentityStorageFactory({
+      identities: repos.identities,
+      folder: deploymentFilesFolder(config, repos),
+    });
+    const ownerPath = async (identityId: string, path: string) => ({ identityId, path });
     const retention = createTrashRetention({
       identities: repos.identities,
-      storageFor: createIdentityStorageFactory({
-        identities: repos.identities,
-        folder: deploymentFilesFolder(config, repos),
-      }),
+      storageFor,
       settings: createTrashSettingsService({ settings: repos.settings }),
-      activity: createActivityService({
-        repo: createActivityRepo(database.db, clock),
-        clock,
-        pending: () => undefined,
+      files: createFileOperations({
+        activity: createActivityService({
+          repo: createActivityRepo(database.db, clock),
+          clock,
+          pending: () => undefined,
+        }),
+        access: createAccessFollowers({
+          repo: createAccessRepo(database.db, clock),
+          ownerPath,
+          links: createShareMoves({ ownerPath }).resolve,
+          usernameOf: async (identityId) =>
+            (await repos.identities.get(identityId))?.externalUsername ?? null,
+        }),
+        metadata: createMetadataService(repos),
+        ownerPath,
+        storageFor,
       }),
-      metadata: createMetadataService(repos),
       clock,
       eventLog: { record: () => undefined },
     });

@@ -1023,6 +1023,15 @@ export async function moveLocalGrantPrefix(
     .where(and(eq(localGrants.ownerUsername, owner), atOrUnder(from)));
 }
 
+/** `LocalGrantRepo.deletePrefix` on `db`, for a caller already in a transaction. */
+export async function deleteLocalGrantPrefix(
+  db: Pick<Db, "delete">,
+  owner: string,
+  path: string,
+): Promise<void> {
+  await db.delete(localGrants).where(and(eq(localGrants.ownerUsername, owner), atOrUnder(path)));
+}
+
 function createLocalGrantRepo(db: Db): LocalGrantRepo {
   return {
     async get(id) {
@@ -1070,9 +1079,7 @@ function createLocalGrantRepo(db: Db): LocalGrantRepo {
       await moveLocalGrantPrefix(db, owner, from, to);
     },
     async deletePrefix(owner, path) {
-      await db
-        .delete(localGrants)
-        .where(and(eq(localGrants.ownerUsername, owner), atOrUnder(path)));
+      await deleteLocalGrantPrefix(db, owner, path);
     },
   };
 }

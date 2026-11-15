@@ -1,6 +1,6 @@
 import { createMemoryRepos } from "@fdrive/db/testing";
 import { describe, expect, it, vi } from "vitest";
-import { createMetadataService, withFollowers } from "./service.js";
+import { createMetadataService, type MetadataService } from "./service.js";
 import { followIntoTrash } from "./trash.js";
 
 const ALICE = "identity-alice";
@@ -9,8 +9,12 @@ const LEAF = "/.trash/.fdrive-move-v1/file/p/a.txt/v/1";
 
 async function setup() {
   const repos = createMemoryRepos();
-  const grants = { onMoved: vi.fn(async () => {}), onDeleted: vi.fn(async () => {}) };
-  const metadata = withFollowers(createMetadataService(repos), [grants]);
+  const metadata = createMetadataService(repos);
+  // What follows, in order, as `onMoved` and `onDeleted` are told.
+  const grants = {
+    onMoved: vi.spyOn(metadata as MetadataService, "onMoved"),
+    onDeleted: vi.spyOn(metadata as MetadataService, "onDeleted"),
+  };
   const account = await repos.accounts.create({ displayName: "Alice" });
   const tag = await metadata.createTag(account.id, { name: "Work", color: null });
   const tagged = (identityId: string, path: string) =>

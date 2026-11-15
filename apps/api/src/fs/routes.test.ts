@@ -11,13 +11,14 @@ import { getRequestListener } from "@hono/node-server";
 import type { Logger } from "pino";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { activityFixture } from "../../test/activity-fixture.js";
+import { testFileOperations } from "../../test/file-operations.js";
 import { createApp } from "../app.js";
 import type { Principal } from "../auth/principal.js";
 import { loadConfig } from "../config.js";
 import { createEventBus } from "../events/bus.js";
 import { createJobRunner, type JobRunner } from "../jobs/runner.js";
 import { createMetadataService, type MetadataService } from "../metadata/service.js";
-import { registerFsRoutes, trashMany } from "./routes.js";
+import { registerFsRoutes } from "./routes.js";
 
 function buildJobRunner(): JobRunner {
   return createJobRunner({
@@ -166,6 +167,10 @@ async function buildHarness(seed: Seed = SEED, username = "alice", metadata?: Me
     registerRoutes: (groups) =>
       registerFsRoutes(groups, {
         activity: activity.service,
+        files: testFileOperations({
+          activity: activity.service,
+          ...(metadata === undefined ? {} : { metadata }),
+        }),
         jobRunner: buildJobRunner(),
         tmpDir: "/tmp",
         jobMaxBytes: 1_000_000_000,
@@ -253,6 +258,10 @@ async function buildHarnessWithStorage(
     registerRoutes: (groups) =>
       registerFsRoutes(groups, {
         activity: activity.service,
+        files: testFileOperations({
+          activity: activity.service,
+          ...(opts.metadata === undefined ? {} : { metadata: opts.metadata }),
+        }),
         jobRunner: buildJobRunner(),
         tmpDir: "/tmp",
         jobMaxBytes: 1_000_000_000,
@@ -1882,88 +1891,6 @@ it("keeps the deletes made before a later item fails", async () => {
   );
   expect(response.status).toBe(404);
   expect((await app.request("/api/v1/fs/download?path=/hello.txt")).status).toBe(404);
-});
-
-describe("trashMany", () => {
-  it("moves what it can to Trash and continues past failures", async () => {
-    const storage = createMemoryStorage({ "/a.txt": "a", "/dir/b.txt": "b" });
-    const metadata = createMetadataService(createMemoryRepos());
-    const onMoved = vi.spyOn(metadata, "onMoved");
-    const principal: Principal = {
-      accountId: ACCOUNT_ID,
-      identityId: ALICE_IDENTITY_ID,
-      username: "alice",
-      storage,
-      isAdmin: false,
-    };
-
-    const results = await trashMany({ metadata }, principal, [
-      { path: "/a.txt", kind: "file" },
-      { path: "/missing.txt", kind: "file" },
-      { path: "/dir", kind: "dir" },
-    ]);
-
-    expect(results).toEqual([
-      { path: "/a.txt", ok: true },
-      {
-        path: "/missing.txt",
-        ok: false,
-        error: { kind: "not_found", message: expect.any(String) },
-      },
-      { path: "/dir", ok: true },
-    ]);
-    expect(onMoved.mock.calls.map(([, path, leaf, isDir]) => [path, leaf, isDir])).toEqual([
-      ["/a.txt", "/.trash/.fdrive-move-v1/file/p/a.txt/v/0", false],
-      ["/dir", "/.trash/.fdrive-move-v1/dir/p/dir/v/0", true],
-    ]);
-    expect(storage.dump()).toEqual({
-      "/.trash/.fdrive-move-v1/dir/p/dir/v/0/b.txt": "b",
-      "/.trash/.fdrive-move-v1/file/p/a.txt/v/0": "a",
-    });
-
-    // An item still in Trash once the metadata failed is reported moved; any other error stops.
-    onMoved.mockRejectedValueOnce(new Error("database offline"));
-    await storage.upload("/c.txt", new Uint8Array([1]));
-    expect(await trashMany({ metadata }, principal, [{ path: "/c.txt", kind: "file" }])).toEqual([
-      { path: "/c.txt", ok: true },
-    ]);
-    vi.spyOn(storage.trash, "put").mockRejectedValueOnce(new Error("socket hang up"));
-    await expect(
-      trashMany({ metadata }, principal, [{ path: "/d.txt", kind: "file" }]),
-    ).rejects.toThrow("socket hang up");
-  });
-
-  it("moves an item in a folder shared with the login into its owner's Trash, with what follows it", async () => {
-    const storage = createMemoryStorage({ "/Shared with me/Team/a.txt": "a" });
-    vi.spyOn(storage.trash, "put").mockResolvedValue({
-      leaf: "/.trash/.fdrive-move-v1/file/p/Team/p/a.txt/v/0",
-      kind: "file",
-    });
-    const metadata = createMetadataService(createMemoryRepos());
-    const onMoved = vi.spyOn(metadata, "onMoved");
-    const onDeleted = vi.spyOn(metadata, "onDeleted");
-    const principal: Principal = {
-      accountId: ACCOUNT_ID,
-      identityId: ALICE_IDENTITY_ID,
-      username: "alice",
-      storage,
-      isAdmin: false,
-    };
-    const ownerPath = vi.fn(async () => ({ identityId: "owner", path: "/Team/a.txt" }));
-
-    await trashMany({ metadata, ownerPath }, principal, [
-      { path: "/Shared with me/Team/a.txt", kind: "file" },
-    ]);
-
-    expect(ownerPath).toHaveBeenCalledWith(ALICE_IDENTITY_ID, "/Shared with me/Team/a.txt");
-    expect(onMoved).toHaveBeenCalledWith(
-      "owner",
-      "/Team/a.txt",
-      "/.trash/.fdrive-move-v1/file/p/Team/p/a.txt/v/0",
-      false,
-    );
-    expect(onDeleted).toHaveBeenCalledWith(ALICE_IDENTITY_ID, "/Shared with me/Team/a.txt", false);
-  });
 });
 
 describe("personal activity for fs commands", () => {

@@ -28,8 +28,6 @@ it("keeps personal journeys stable, immutable and private across pools", {
   const container = await new PostgreSqlContainer("pgvector/pgvector:pg17").start();
   const first = createDb(container.getConnectionUri()),
     second = createDb(container.getConnectionUri());
-  const firstLocks = createDb(container.getConnectionUri()),
-    secondLocks = createDb(container.getConnectionUri());
   try {
     await migrate(first.db);
     const repos = createRepos(first.db);
@@ -45,8 +43,8 @@ it("keeps personal journeys stable, immutable and private across pools", {
       externalUsername: "alice",
     });
     let at = new Date("2026-09-14T10:00:00.000Z");
-    const a = createActivityRepo(first.db, () => at, firstLocks.db),
-      b = createActivityRepo(second.db, () => at, secondLocks.db);
+    const a = createActivityRepo(first.db, () => at),
+      b = createActivityRepo(second.db, () => at);
     const actor = { accountId: alice.id, identityId: identity.id };
     const batchId = randomUUID();
     async function run(
@@ -1041,31 +1039,6 @@ it("keeps personal journeys stable, immutable and private across pools", {
     expect((await defaultExport.create(alice.id, "json", {})).state).toBe("completed");
     expect(await a.completedChildren(alice.id, archiveJob.id)).toBe(1);
     expect(await a.completedChildren(bob.id, archiveJob.id)).toBe(0);
-    const lockOrder: number[] = [];
-    let release!: () => void;
-    let entered!: () => void;
-    const started = new Promise<void>((resolve) => {
-      entered = resolve;
-    });
-    const blocked = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    const firstLock = a.withPathLock(identity.id, "/same", async () => {
-      lockOrder.push(1);
-      entered();
-      await blocked;
-      lockOrder.push(2);
-    });
-    await started;
-    const secondLock = b.withPathLock(identity.id, "/same", async () => {
-      lockOrder.push(3);
-    });
-    await b.withPathLock(identity.id, "/different", async () => {
-      lockOrder.push(0);
-    });
-    release();
-    await Promise.all([firstLock, secondLock]);
-    expect(lockOrder).toEqual([1, 0, 2, 3]);
     const tagA = { id: randomUUID(), name: "a", color: null },
       tagB = { id: randomUUID(), name: "b", color: null };
     expect(
@@ -1224,8 +1197,6 @@ it("keeps personal journeys stable, immutable and private across pools", {
       ),
     ).rejects.toThrow();
   } finally {
-    await firstLocks.close();
-    await secondLocks.close();
     await first.close();
     await second.close();
     await container.stop();
@@ -1237,7 +1208,6 @@ it("preserves folder journeys, fences descendant observations, leases queued wor
 }, async () => {
   const container = await new PostgreSqlContainer("pgvector/pgvector:pg17").start();
   const main = createDb(container.getConnectionUri(), { max: 2, connectionTimeoutMillis: 2_000 });
-  const locks = createDb(container.getConnectionUri(), { max: 2, connectionTimeoutMillis: 2_000 });
   try {
     await migrate(main.db);
     const repos = createRepos(main.db);
@@ -1253,7 +1223,7 @@ it("preserves folder journeys, fences descendant observations, leases queued wor
     });
     const actor = { accountId: account.id, identityId: identity.id };
     let now = new Date("2026-09-20T12:00:00Z");
-    const repo = createActivityRepo(main.db, () => now, locks.db);
+    const repo = createActivityRepo(main.db, () => now);
     const observations = createActivityObservationsRepo(main.db, () => now);
     async function begin(
       action: PersonalActivityAction,
@@ -1410,30 +1380,7 @@ it("preserves folder journeys, fences descendant observations, leases queued wor
     await repo.finish(account.id, queued.id, { outcome: "cancelled" });
     await repo.heartbeat(account.id, queued.id);
     expect(await repo.claim(account.id, queued.id)).toBe(false);
-
-    // Fill the entire lock pool before either callback needs the main pool.
-    // Sharing the pools deadlocks both callbacks at begin().
-    let entered = 0;
-    let release!: () => void;
-    const together = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    await Promise.all(
-      ["/lock-a", "/lock-b"].map((path) =>
-        repo.withPathLock(identity.id, path, async () => {
-          if (++entered === 2) release();
-          await together;
-          const op = await begin("file.delete", { path });
-          await repo.claim(account.id, op.id);
-          await repo.finish(account.id, op.id, { outcome: "success" });
-        }),
-      ),
-    );
-    await expect(
-      createActivityRepo(main.db).withPathLock(identity.id, "/unsafe", async () => {}),
-    ).rejects.toThrow("dedicated database pool");
   } finally {
-    await locks.close();
     await main.close();
     await container.stop();
   }

@@ -21,7 +21,7 @@ describe("office opening and creation", () => {
     const after = (await (await h.callback(a)).json()) as { Version: string; Size: number };
     expect(before.Version).not.toBe(after.Version);
     expect(after.Size).toBe(5);
-    expect((await h.deps.metadata.listRecents(h.alice.identity.id))[0]?.path).toBe("/a.docx");
+    expect((await h.metadata.listRecents(h.alice.identity.id))[0]?.path).toBe("/a.docx");
     // Recently opened reads history, so each browser open is recorded there too.
     expect(h.activity.outcomes.map((row) => [row.action, row.outcome])).toEqual([
       ["file.open", "success"],
@@ -44,7 +44,7 @@ describe("office opening and creation", () => {
     expect((await h.open()).fileId).toBeTruthy();
 
     expect(h.activity.operations).toEqual([]);
-    expect((await h.deps.metadata.listRecents(h.alice.identity.id))[0]?.path).toBe("/a.docx");
+    expect((await h.metadata.listRecents(h.alice.identity.id))[0]?.path).toBe("/a.docx");
   });
 
   it("refuses to record an open whose session is revoked after it was authorized", async () => {
@@ -60,7 +60,7 @@ describe("office opening and creation", () => {
     expect(h.activity.outcomes).toEqual([
       expect.objectContaining({ action: "file.open", outcome: "denied" }),
     ]);
-    expect(await h.deps.metadata.listRecents(h.alice.identity.id)).toEqual([]);
+    expect(await h.metadata.listRecents(h.alice.identity.id)).toEqual([]);
   });
   it("returns quiet unavailable status for missing config and discovery failure", async () => {
     const h = await officeHarness();

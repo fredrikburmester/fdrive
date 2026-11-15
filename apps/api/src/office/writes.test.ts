@@ -1,5 +1,6 @@
 import { StorageError } from "@fdrive/core";
 import { describe, expect, it, vi } from "vitest";
+import { recordingFileOperations } from "../../test/file-operations.ts";
 import { officeHarness } from "../../test/fixtures/office/harness.ts";
 
 describe("WOPI locks", () => {
@@ -356,7 +357,8 @@ describe("RenameFile", () => {
     const taken = await rename();
     expect(taken.status).toBe(400);
     expect(taken.headers.get("X-WOPI-InvalidFileNameError")).toBe("Name already exists");
-    expect(move).toHaveBeenCalledWith("/a.docx", "/plain.docx", { overwrite: false });
+    // Storage refuses a taken name itself; nothing is checked first.
+    expect(move).toHaveBeenCalledWith("/a.docx", "/plain.docx");
     move.mockRejectedValueOnce(new StorageError("forbidden", "private"));
     expect((await rename()).status).toBe(403);
     expect((await h.files.get(opened.fileId))?.path).toBe("/a.docx");
@@ -364,13 +366,13 @@ describe("RenameFile", () => {
   it("preserves UUID, extension, tags and favorites when renaming Unicode", async () => {
     const h = await officeHarness();
     const opened = await h.open();
-    const tag = await h.deps.metadata.createTag(h.alice.account.id, { name: "work", color: null });
-    await h.deps.metadata.setFileTags(
+    const tag = await h.metadata.createTag(h.alice.account.id, { name: "work", color: null });
+    await h.metadata.setFileTags(
       { accountId: h.alice.account.id, identityId: h.alice.identity.id },
       "/a.docx",
       [tag.id],
     );
-    await h.deps.metadata.addFavorite(h.alice.identity.id, "/a.docx", "file");
+    await h.metadata.addFavorite(h.alice.identity.id, "/a.docx", "file");
     const result = await h.callback(opened, {
       method: "POST",
       headers: { "X-WOPI-Override": "RENAME_FILE", "X-WOPI-RequestedName": "+AMU-rsrapport" },
@@ -378,9 +380,7 @@ describe("RenameFile", () => {
     expect(result.status).toBe(200);
     expect(await result.json()).toEqual({ Name: "Årsrapport" });
     expect((await h.files.get(opened.fileId))?.path).toBe("/Årsrapport.docx");
-    expect(await h.deps.metadata.filesForTag(h.alice.identity.id, tag.id)).toEqual([
-      "/Årsrapport.docx",
-    ]);
+    expect(await h.metadata.filesForTag(h.alice.identity.id, tag.id)).toEqual(["/Årsrapport.docx"]);
     expect((await h.callback(opened)).status).toBe(200);
     expect((await h.open("/Årsrapport.docx")).fileId).toBe(opened.fileId);
   });
@@ -534,7 +534,7 @@ it("refuses a chunked oversized save without touching the document", async () =>
   expect(await new Response((await h.storage.download("/a.docx")).body).text()).toBe("hello");
 });
 
-it("keeps lock and move work on the scope, ensures on its own and runs metadata after commit", async () => {
+it("keeps lock work on the scope, ensures on its own and moves the document with its file", async () => {
   const h = await officeHarness();
   const scopedFiles = { ...h.files };
   const scopedLocks = { ...h.locks };
@@ -548,18 +548,14 @@ it("keeps lock and move work on the scope, ensures on its own and runs metadata 
     }
   });
   // Ensured on its own transaction: on the scope it would hold the registry's
-  // lock for the owner's files until the document is written.
+  // lock for the owner's files until the document is written. A rename moves
+  // the document in the file operation's transaction, never on the scope.
   const ensure = vi.spyOn(scopedFiles, "ensure");
-  vi.spyOn(h.files, "movePrefix").mockImplementation(async (input) => {
-    expect(inScope).toBe(false);
-    return scopedFiles.movePrefix(input);
-  });
+  const scopedMove = vi.spyOn(scopedFiles, "movePrefix");
+  const registryMove = vi.spyOn(h.files, "movePrefix");
   vi.spyOn(h.locks, "withFileLock").mockImplementation(async (id, callback) => {
     expect(inScope).toBe(false);
     return scopedLocks.withFileLock(id, callback);
-  });
-  const metadata = vi.spyOn(h.deps.metadata, "onMoved").mockImplementation(async () => {
-    expect(inScope).toBe(false);
   });
   await h.service.create(
     { principal: h.alice.principal, sessionId: h.alice.sessionId },
@@ -593,7 +589,9 @@ it("keeps lock and move work on the scope, ensures on its own and runs metadata 
       })
     ).status,
   ).toBe(200);
-  expect(metadata).toHaveBeenCalledOnce();
+  expect(registryMove).toHaveBeenCalledOnce();
+  expect(scopedMove).not.toHaveBeenCalled();
+  expect((await h.files.get(opened.fileId))?.path).toBe("/renamed.docx");
   expect(ensure).not.toHaveBeenCalled();
 });
 
@@ -740,6 +738,34 @@ function writeBarrier(): { promise: Promise<void>; resolve: () => void } {
   return { promise, resolve: () => resolve() };
 }
 
+it("creates, saves, saves as and renames documents through the file operations", async () => {
+  const recorded = recordingFileOperations();
+  const h = await officeHarness({ deps: { operations: recorded.files } });
+  const opened = await h.open();
+  await h.locks.apply({ fileId: opened.fileId, operation: "lock", lockId: "w", now: h.clock() });
+  const write = (headers: Record<string, string>, contents = false, body?: string) =>
+    h.callback(opened, {
+      method: "POST",
+      contents,
+      headers: { "X-WOPI-Lock": "w", ...headers },
+      ...(body === undefined ? {} : { body }),
+    });
+  expect((await write({ "X-WOPI-Override": "PUT" }, true, "saved")).status).toBe(200);
+  const saveAs = { "X-WOPI-Override": "PUT_RELATIVE", "X-WOPI-RelativeTarget": "copy.docx" };
+  expect((await write(saveAs, false, "copied")).status).toBe(200);
+  const rename = { "X-WOPI-Override": "RENAME_FILE", "X-WOPI-RequestedName": "renamed" };
+  expect((await write(rename)).status).toBe(200);
+  expect(
+    (await h.browser("/api/v1/office/documents", { parent: "/", name: "new.docx" })).status,
+  ).toBe(201);
+  expect(recorded.calls).toEqual([
+    "upload /a.docx",
+    "upload /copy.docx",
+    "move /a.docx",
+    "upload /new.docx",
+  ]);
+});
+
 describe("editor writes in personal history", () => {
   it("records save, Save As lineage, rename and creation, and keeps a rejected save out", async () => {
     const h = await officeHarness();
@@ -767,7 +793,7 @@ describe("editor writes in personal history", () => {
     expect(h.activity.operations.at(-1)).toMatchObject({
       source: "office",
       accountId: h.alice.session.accountId,
-      requested: { path: "/a.docx", targetPath: "/a.docx" },
+      requested: { path: "/a.docx", kind: "file" },
     });
 
     // Save As keeps the opened document as the source, so the copy has lineage.
