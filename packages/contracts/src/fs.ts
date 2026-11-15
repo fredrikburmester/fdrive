@@ -81,6 +81,20 @@ export const UploadQuery = z.object({
   intent: z.enum(["upload", "create", "save"]).optional(),
   path: z.string(),
   mkdirParents: z.enum(["true", "false"]).optional(),
+  /**
+   * A file sent in pieces, in order: each request names the upload's part (16
+   * hex digits) and the offset of its body; only the one with `final` publishes
+   * the file, and a failed piece can be sent again.
+   */
+  part: z
+    .string()
+    .regex(/^[0-9a-f]{16}$/)
+    .optional(),
+  offset: z
+    .string()
+    .regex(/^(0|[1-9]\d{0,14})$/)
+    .optional(),
+  final: z.literal("true").optional(),
 });
 
 export type UploadQuery = z.infer<typeof UploadQuery>;

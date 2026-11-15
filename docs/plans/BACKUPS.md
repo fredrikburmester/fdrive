@@ -1,8 +1,6 @@
 # Backup verification
 
 Behavior, operator procedures and measured costs: [Installation backups](../BACKUPS.md).
-Backups going to S3 only, without configuration ZIP attachments, is decision 4 and group 34 of
-[SFTPGo leftovers](SFTPGO-LEFTOVERS.md).
 
 Remaining before the feature is complete:
 
@@ -12,7 +10,9 @@ Remaining before the feature is complete:
   has not been measured with large transfers.
 - A real host cutover on a deployed installation, following the documented replacement and
   rollback procedure, has not been performed; only the CLI rehearsal has.
-- Capture holds the exclusive checkpoint for its whole duration; writers give up after 30 s.
-  Releasing the pause once sources are pinned is a follow-up if measured captures grow long.
+- OCR's writes to kept originals wait for a whole capture (requests wait only for its database
+  snapshot). OCR waits without giving up; if large OCR collections make captures long enough to
+  matter, read the originals after an inventory taken under the gate, and make OCR's deletes
+  alone wait.
 - Legacy OCR mapping recovery (`packages/backup/src/ocr-mappings.ts`) queries once per original
   with a 1001-row candidate cap; large legacy inventories may need batching.

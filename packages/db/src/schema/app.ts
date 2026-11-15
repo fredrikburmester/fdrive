@@ -53,7 +53,8 @@ export const providers = appSchema.table(
  * The users of the built-in local storage, which fdrive owns: one row per
  * home folder `<FDRIVE_STORAGE_ROOT>/<username>`. Names are unique without
  * regard to case, because the home folders may sit on a case-insensitive
- * disk. A login (`identities`) on the local provider names one of these.
+ * disk. Each has a login (`identities`) of the same name, created with it;
+ * a removed user's login stays, so adding the name again gives it back.
  */
 export const localUsers = appSchema.table(
   "local_users",
@@ -130,19 +131,13 @@ export const identities = appSchema.table(
     ),
     // One login per account.
     unique("identities_account_id_unique").on(table.accountId),
+    // A login is its local user's: unique in any case, as `local_users` is,
+    // so a sign-in finds it however its name is typed.
+    uniqueIndex("identities_external_username_lower_unique").on(
+      sql`lower(${table.externalUsername})`,
+    ),
   ],
 );
-
-export const credentials = appSchema.table("credentials", {
-  identityId: uuid("identity_id")
-    .primaryKey()
-    .references(() => identities.id, { onDelete: "cascade" }),
-  ciphertext: bytea("ciphertext").notNull(),
-  keyId: text("key_id").notNull(),
-  cachedToken: text("cached_token"),
-  cachedTokenExpiresAt: timestamp("cached_token_expires_at", { withTimezone: true }),
-  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
-});
 
 export const sessions = appSchema.table(
   "sessions",
@@ -265,6 +260,24 @@ export const recents = appSchema.table(
   ],
 );
 
+/** A search an account saved from the search panel: its query, type filter and folder scope. */
+export const savedSearches = appSchema.table(
+  "saved_searches",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    accountId: uuid("account_id")
+      .notNull()
+      .references(() => accounts.id, { onDelete: "cascade" }),
+    name: text("name").notNull(),
+    query: text("query").notNull(),
+    type: text("type").notNull(),
+    /** The folder "This folder only" searched; null searches everything. */
+    folder: text("folder"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [index("saved_searches_account_id_idx").on(table.accountId, table.createdAt)],
+);
+
 export const thumbnails = appSchema.table(
   "thumbnails",
   {
@@ -353,26 +366,27 @@ export const settings = appSchema.table("settings", {
 });
 
 /**
- * Shared office identity survives index clears and user-specific scopes.
- * Rows go with their provider: once a provider row is removed (which
- * requires that no login uses it) nothing can open the documents it named.
+ * The durable ids Office gives documents, keyed by where each lies in its
+ * owner's files: the owner's login and the owner's own path, a canonical
+ * virtual path. A document in a folder shared with someone is its owner's,
+ * so everyone who reaches it opens one id. Rows go with the owner's login.
+ * Deleted rows stay as tombstones (`deleted_at`).
  */
 export const officeFiles = appSchema.table(
   "office_files",
   {
     id: uuid("id").primaryKey().defaultRandom(),
-    providerId: uuid("provider_id")
+    identityId: uuid("identity_id")
       .notNull()
-      .references(() => providers.id, { onDelete: "cascade" }),
-    rootName: text("root_name").notNull(),
+      .references(() => identities.id, { onDelete: "cascade" }),
     path: text("path").notNull(),
     deletedAt: timestamp("deleted_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [
-    index("office_files_provider_id_idx").on(table.providerId),
-    uniqueIndex("office_files_active_location_unique")
-      .on(table.providerId, table.rootName, table.path)
+    index("office_files_identity_id_idx").on(table.identityId),
+    uniqueIndex("office_files_active_path_unique")
+      .on(table.identityId, table.path)
       .where(sql`${table.deletedAt} is null`),
   ],
 );
@@ -518,19 +532,6 @@ export const backupDeliveries = appSchema.table(
     unique("backup_delivery_run_destination").on(table.runId, table.destinationId),
   ],
 );
-export const backupAttachments = appSchema.table("backup_attachments", {
-  id: uuid("id").primaryKey().defaultRandom(),
-  versionId: uuid("version_id").notNull(),
-  label: text("label").notNull(),
-  filename: text("filename").notNull(),
-  sourceDate: timestamp("source_date", { withTimezone: true }),
-  notes: text("notes").notNull().default(""),
-  uploadedAt: timestamp("uploaded_at", { withTimezone: true }).notNull().defaultNow(),
-  bytes: text("bytes").notNull(),
-  sha256: text("sha256").notNull(),
-  secret: bytea("secret").notNull(),
-});
-
 /** One AI chat a login keeps; its transcript is in `ai_chat_messages`, what it may read in `ai_chat_references`. */
 export const aiChats = appSchema.table(
   "ai_chats",

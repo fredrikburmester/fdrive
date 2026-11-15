@@ -4,7 +4,7 @@ Current design: [Architecture](ARCHITECTURE.md). Unfinished work: [Plans](plans/
 
 This guide covers running fdrive locally for development with hot reloading, seeded test accounts, and integration test environments.
 
-The API reaches the files folder through an internal [storage port](STORAGE-PROVIDERS.md).
+The API reaches the files folder through an internal [storage port](STORAGE.md).
 
 ---
 
@@ -13,6 +13,8 @@ The API reaches the files folder through an internal [storage port](STORAGE-PROV
 - **Node.js**: Node 24 (pinned in `.node-version` / `.nvmrc`)
 - **Package manager**: `pnpm` (version 10+)
 - **Docker**: Docker Desktop or Docker Engine running
+- **ffmpeg** on the API's `PATH` (`brew install ffmpeg`): the preview plays videos browsers
+  cannot (MKV, AVI and the like) by transcoding them as they stream; the API image ships it
 
 ---
 
@@ -48,7 +50,7 @@ Visit **`http://localhost:3000`** and log in with any of the seeded development 
 
 | Username | Password | Role / Setup |
 | :--- | :--- | :--- |
-| **`dev`** | `dev` | **Administrator** (`FDRIVE_ADMIN_USERS`), sample photos, documents, and spreadsheets. |
+| **`dev`** | `dev` | **Administrator** (made one by `pnpm dev:users`), sample photos, documents, and spreadsheets. |
 | **`alice`** | `alice-password` | Standard user with documents and a photo. |
 | **`bob`** | `bob-password` | Standard user with `inbox` and `public` folders. |
 | **`carol`** | `carol-password` | Standard user with one file; share a folder with her to try **Shared with me**. |

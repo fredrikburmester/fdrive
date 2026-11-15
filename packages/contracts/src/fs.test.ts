@@ -148,6 +148,19 @@ describe("UploadQuery", () => {
   it("rejects an invalid mkdirParents value", () => {
     expect(UploadQuery.safeParse({ path: "/a/b.txt", mkdirParents: "1" }).success).toBe(false);
   });
+
+  it("takes a piece of a part by hex id and plain offset, and nothing else", () => {
+    const piece = { path: "/a", part: "0123456789abcdef", offset: "8388608", final: "true" };
+    expect(UploadQuery.safeParse(piece).success).toBe(true);
+    for (const bad of [
+      { part: "0123456789ABCDEF" },
+      { part: "../x" },
+      { offset: "-1" },
+      { offset: "01" },
+    ]) {
+      expect(UploadQuery.safeParse({ ...piece, ...bad }).success).toBe(false);
+    }
+  });
 });
 
 describe("MkdirRequest", () => {

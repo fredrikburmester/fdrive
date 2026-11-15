@@ -25,7 +25,6 @@ import { entryRestrictions } from "@/lib/grants/paths";
 import { useReceivedGrants } from "@/lib/grants/queries";
 import {
   apiClient,
-  capabilitiesFor,
   DeleteDialog,
   describeFsError,
   PageHeader,
@@ -82,7 +81,8 @@ export function VirtualListing({ title, paths, onRemoveMissing }: VirtualListing
   const remove = useDelete();
   const duplicate = useDuplicate();
   const { data: me } = useMe();
-  const capabilities = capabilitiesFor(me);
+  // Trash counts as off until `me` loads: "Move to Trash" waits for the setting.
+  const trash = me?.trash === true;
   const received = useReceivedGrants();
 
   const liveEntries = useMemo(
@@ -226,7 +226,7 @@ export function VirtualListing({ title, paths, onRemoveMissing }: VirtualListing
                   hideMoveCopy
                   hideArchive
                   showReveal
-                  trash={capabilities.trash}
+                  trash={trash}
                   received={received}
                 />
               </div>
@@ -282,7 +282,7 @@ export function VirtualListing({ title, paths, onRemoveMissing }: VirtualListing
         }}
         onConfirm={handleDeleteConfirm}
         pending={remove.isPending}
-        trash={trashAvailabilityFor(capabilities)}
+        trash={trashAvailabilityFor({ trash })}
       />
     </>
   );

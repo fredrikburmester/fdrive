@@ -3,19 +3,14 @@ import { IdentityScopeReason } from "./scopes.ts";
 
 describe("IdentityScopeReason", () => {
   it("accepts every documented reason", () => {
-    for (const reason of [
-      "ok",
-      "no_connection",
-      "provider_mismatch",
-      "invalid_configuration",
-      "no_roots",
-    ])
+    for (const reason of ["ok", "no_connection", "invalid_configuration", "no_roots"])
       expect(IdentityScopeReason.safeParse(reason).success).toBe(true);
   });
 
   it("rejects an unknown reason and the retired ones", () => {
     for (const reason of [
       "something_else",
+      "provider_mismatch",
       "unmapped_mount",
       "overflow",
       "mismatch",

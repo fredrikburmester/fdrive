@@ -53,7 +53,6 @@ describe("admin user contracts", () => {
     disabled: false,
     isAdmin: true,
     isYou: true,
-    adminByDeployment: false,
     createdAt: AT,
     lastLoginAt: null,
     storageUsed: null,
@@ -69,11 +68,8 @@ describe("admin user contracts", () => {
       storageLimit: 5,
     });
     expect(AdminUser.safeParse({ ...user, storageLimit: 0 }).success).toBe(false);
-    expect(AdminUsersResponse.parse({ available: false, users: [] })).toEqual({
-      available: false,
-      users: [],
-    });
-    expect(AdminUsersResponse.safeParse({ users: [user] }).success).toBe(false);
+    expect(AdminUsersResponse.parse({ users: [user] })).toEqual({ users: [user] });
+    expect(AdminUsersResponse.safeParse({}).success).toBe(false);
   });
 
   it("creates a user with an optional administrator flag and nothing else", () => {

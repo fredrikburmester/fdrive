@@ -2,11 +2,10 @@ import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, readFile, realpath, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { StorageSession } from "@fdrive/core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { bytes, kindOf, streamOf } from "../test/helpers.js";
 import { type DiskChange, type IndexChange, notify, relativeTo, underRoot } from "./changes.js";
-import { createIndexListener, createLocalModule, type LocalUsers } from "./module.js";
+import { createFilesFolder, createIndexListener, type LocalUsers } from "./files-folder.js";
 import { createUserStorage, SHARED_WITH_ME } from "./shared.js";
 import { createLocalStorage, published } from "./storage-provider.js";
 
@@ -155,6 +154,30 @@ describe("local storage changes", () => {
       path: join(home(), "a.txt"),
       content: { sha256: sha256("new!"), size: 4 },
     });
+  });
+
+  it("reports an upload sent in pieces once, with the digest of the whole file", async () => {
+    const files = storage();
+    const piece = (offset: number, final = false) => ({
+      part: { id: "0123456789abcdef", offset, final },
+    });
+    await files.upload("/a.txt", bytes("hello "), piece(0));
+    expect(changes).toEqual([]);
+    await files.upload("/a.txt", streamOf(["world"]), piece(6, true));
+    const a = await stat(join(home(), "a.txt"), { bigint: true });
+    expect(changes).toEqual([
+      {
+        kind: "changed",
+        path: join(home(), "a.txt"),
+        content: {
+          sha256: sha256("hello world"),
+          size: 11,
+          mtimeNs: a.mtimeNs,
+          ino: a.ino,
+          ctimeNs: a.ctimeNs,
+        },
+      },
+    ]);
   });
 
   it("reports nothing for an upload that did not publish", async () => {
@@ -326,30 +349,24 @@ describe("user storage changes", () => {
   });
 });
 
-describe("local module index changes", () => {
-  const instance = { id: "p1", baseUrl: "http://local.invalid", config: {} };
-  const ctx = { fetch: globalThis.fetch };
+describe("files folder index changes", () => {
   const users: LocalUsers = {
-    verify: async (username) => ({ result: "ok", username }),
     status: async () => "active",
     shared: async () => [],
   };
-  const session = (externalUsername: string): StorageSession => ({
-    externalUsername,
-  });
 
   it("reports changes under the index root by the indexer's paths, in order", async () => {
     // The root as configured may be a link to the real folder; storage reports real paths.
     const link = join(await realpath(await mkdtemp(join(tmpdir(), "fdrive-link-"))), "root");
     await symlink(root, link);
     const heard: [string, IndexChange][] = [];
-    const module = createLocalModule({
+    const folder = createFilesFolder({
       root: link,
       users,
       indexRoot: "files",
       onIndexChange: (name, change) => heard.push([name, change]),
     });
-    const files = module.createStorage(instance, session("alice"), ctx);
+    const files = folder.storage("alice");
     await files.upload("/docs/a.txt", bytes("a"), { mkdirParents: true });
     await files.move("/docs/a.txt", "/docs/b.txt");
     await files.deleteFile("/docs/b.txt");
@@ -381,13 +398,13 @@ describe("local module index changes", () => {
     const hear = vi.fn(() => {
       throw new Error("never reached");
     });
-    const unindexed = createLocalModule({ root, users, indexRoot: null, onIndexChange: hear });
-    await unindexed.createStorage(instance, session("alice"), ctx).upload("/a.txt", bytes("a"));
-    const quiet = createLocalModule({ root, users, indexRoot: "files" });
-    await quiet.createStorage(instance, session("alice"), ctx).upload("/b.txt", bytes("b"));
+    const unindexed = createFilesFolder({ root, users, indexRoot: null, onIndexChange: hear });
+    await unindexed.storage("alice").upload("/a.txt", bytes("a"));
+    const quiet = createFilesFolder({ root, users, indexRoot: "files" });
+    await quiet.storage("alice").upload("/b.txt", bytes("b"));
 
-    const throwing = createLocalModule({ root, users, indexRoot: "files", onIndexChange: hear });
-    await throwing.createStorage(instance, session("alice"), ctx).upload("/c.txt", bytes("c"));
+    const throwing = createFilesFolder({ root, users, indexRoot: "files", onIndexChange: hear });
+    await throwing.storage("alice").upload("/c.txt", bytes("c"));
     await vi.waitFor(() => expect(hear).toHaveBeenCalledOnce());
   });
 

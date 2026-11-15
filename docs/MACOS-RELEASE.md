@@ -165,7 +165,7 @@ brew update
 brew upgrade --cask fdrive
 ```
 
-Homebrew downloads the ordinary GitHub release URL and checks the pinned checksum. Disconnect
+Homebrew downloads the ordinary GitHub release URL and checks the pinned checksum. Remove
 locations inside the app before uninstalling; the cask deliberately does not remove File
 Provider databases or files under `~/Library/CloudStorage`.
 

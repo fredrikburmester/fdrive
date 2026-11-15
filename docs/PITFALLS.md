@@ -70,8 +70,12 @@ Reference for affected code; shared rules live in [AGENTS.md](../AGENTS.md).
   listing any.
 - Per-request storage moves every delete into Trash while Trash is on (`withMoveToTrash`),
   fdrive's own folders included: Mac write retention, built on it, moved the recovery copies it
-  reclaimed into their owner's Trash. Delete fdrive's bookkeeping through storage built without
-  Trash settings.
+  reclaimed into their owner's Trash. Delete fdrive's bookkeeping, such as the Mac's staged
+  uploads, through storage built without Trash settings.
+- The API keeps what every request would read again in memory: that setup is done, the Trash
+  settings, the storage name and the index root ids. Only the API writes them, so a test (or
+  anything else) that changes Trash settings or the storage name straight in `app.settings`
+  goes unseen until a restart; change them through their routes.
 - Storage compares names byte for byte, and accents come in two encodings: macOS stores "ö" as
   "o" plus a combining mark, while models (and most typing) produce one character. A model
   that echoed Swedish file names matched none of them, so organize dropped every suggestion.

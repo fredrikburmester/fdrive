@@ -64,6 +64,26 @@ struct APIClientTests {
             await #expect(throws: expected) { try await api.list("/") }
         }
     }
+    // Only the server's explicit code says a credential is gone. Every other 401, including one
+    // carrying another code, or from a server too old to send any, is a plain sign-out.
+    @Test func readsAGoneCredentialOnlyFromItsExplicitCode() async throws {
+        let gone = "{\"error\":{\"kind\":\"unauthorized\",\"message\":\"Gone\",\"details\":{\"code\":\"credential_gone\"}}}"
+        let other = "{\"error\":{\"kind\":\"unauthorized\",\"message\":\"Revoked\",\"details\":{\"code\":\"version_conflict\"}}}"
+        let plain = "{\"error\":{\"kind\":\"unauthorized\",\"message\":\"Reconnect this location in the Mac app\"}}"
+        for (status, body, expected) in [(401, gone, DriveError.credentialGone), (401, plain, .authentication),
+                                         (401, "not json", .authentication), (403, gone, .forbidden), (503, gone, .unavailable)] {
+            let (api, session) = try client(Responses([(status, body)])); defer { session.invalidateAndCancel() }
+            await #expect(throws: expected) { _ = try await api.location() }
+        }
+        // Writes read it too; another code on a 401 is still a sign-out.
+        let (writer, writerSession) = try client(Responses([(401, gone)])); defer { writerSession.invalidateAndCancel() }
+        await #expect(throws: DriveError.credentialGone) { _ = try await writer.commitWrite(UUID().uuidString.lowercased()) }
+        let (reader, readerSession) = try client(Responses([(401, other)])); defer { readerSession.invalidateAndCancel() }
+        await #expect(throws: DriveError.authentication) { _ = try await reader.location() }
+        // Revoking a credential the server no longer holds has nothing left to do.
+        let (api, session) = try client(Responses([(401, gone)])); defer { session.invalidateAndCancel() }
+        #expect(await api.revokeAccess())
+    }
     @Test func rejectsUnrelatedContentValidators() async throws {
         let json = "{\"items\":[{\"path\":\"/other\",\"version\":\"bad\",\"size\":3}]}"
         let (api, session) = try client(Responses([(200, json)])); defer { session.invalidateAndCancel() }

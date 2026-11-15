@@ -8,21 +8,17 @@ Full beta qualification of Mac writes remains open. Current behavior:
 Mac writes use fdrive's optimistic contract: the file stamp proves the destination right before
 the rename that publishes, with no lock and no fence at the storage against other writers.
 
-Keep explicit v2 write grants, staged uploads, durable server receipts and native pending
-copies. Never blindly replay a publication whose outcome is unknown. No claim of exactly-once
-behavior across HTTP, filesystem and PostgreSQL. A server item ID cannot prove every unobserved
-external delete/recreate, particularly with identical bytes.
+Keep explicit v2 write grants, uploads staged in the files folder, durable server receipts and
+native pending copies. A commit records what it publishes before publishing it, so its outcome is
+always read from disk and never replayed blindly. No claim of exactly-once behavior across HTTP,
+filesystem and PostgreSQL. A server item ID cannot prove every unobserved external
+delete/recreate, particularly with identical bytes.
 
 ## Implementation still required
 
-- **Recovery administration** is not to be built out. Group 25 of
-  [SFTPGo leftovers](SFTPGO-LEFTOVERS.md) removes what it would administer: uploads stage inside
-  the files folder so a commit can always tell whether it happened, and the `uncertain` state and
-  the admin recovery endpoints go.
 - **Deployment qualification.** Inventory every writer before enabling native writes. Keep
   configuration, logs, databases, backups and temporary directories outside user homes.
   Qualify restart, upgrade and rollback against disposable data before production use.
-  Server spool must be persistent and shared or durably routed in multi-process API setups.
 
 ## Product and release qualification
 
@@ -33,7 +29,7 @@ external delete/recreate, particularly with identical bytes.
 - Reboot, extension/API crash, low disk, large transfer and cross-domain cases below.
   Cross-domain copies can download then upload; advertise no atomic cross-domain move.
   Prove source preservation when the destination upload fails.
-- Pending-aware Disconnect under callback races, expired credentials and revoked providers.
+- Pending-aware Remove under callback races, expired credentials and revoked providers.
   Preserve/export unsynchronized content before removing a domain; never infer an empty
   journal from the framework's bounded pending-set enumeration alone.
 - Upgrade the installed read-only app and existing catalogs without duplicate domains,
@@ -60,7 +56,7 @@ Do not promise support for arbitrary package documents or live databases.
   before native completion. Retry after extension/API restart and token rotation. No duplicate
   creates, wrong-target mutation, partial original or unverified destructive replay.
 - Offline save/new-file/new-folder chains, network flapping, quota/low disk, denied parent,
-  token expiry/revocation, provider disable, reconnect and Disconnect with pending work. Other
+  token expiry/revocation, provider disable, reconnect and Remove with pending work. Other
   locations continue working; failures explain how to recover.
 - Upload a representative multi-gigabyte file; verify full-byte hash, bounded memory, progress,
   cancellation and staging cleanup. Refresh racing an upload never replaces its base or loses

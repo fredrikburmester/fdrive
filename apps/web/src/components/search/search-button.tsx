@@ -30,7 +30,7 @@ import { useSearchShortcut } from "@/lib/search/shortcut";
  * every viewport.
  */
 export function SearchButton() {
-  const { open, setOpen } = useSearchShortcut();
+  const { open, setOpen, saved } = useSearchShortcut();
   const { data: status } = useSearchStatus();
   const indexUnavailable = isPermanentSearchStatus(status);
 
@@ -54,7 +54,7 @@ export function SearchButton() {
       ) : (
         button
       )}
-      <SearchPanel open={open} onOpenChange={setOpen} />
+      <SearchPanel open={open} onOpenChange={setOpen} saved={saved} />
     </>
   );
 }

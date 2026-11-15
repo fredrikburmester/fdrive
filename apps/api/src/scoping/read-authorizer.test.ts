@@ -57,8 +57,8 @@ describe("createReadAuthorizer: files", () => {
     });
   });
 
-  it("maps forbidden and unauthorized to denied", async () => {
-    for (const kind of ["forbidden", "unauthorized"] as const) {
+  it("maps forbidden to denied", async () => {
+    for (const kind of ["forbidden"] as const) {
       const download = vi.fn(async () => {
         throw new StorageError(kind, "no");
       });
@@ -122,7 +122,6 @@ describe("createReadAuthorizer: files with probeFileRead", () => {
     const cases = [
       ["not_found", "missing"],
       ["forbidden", "denied"],
-      ["unauthorized", "denied"],
       ["bad_request", "unavailable"],
     ] as const;
     for (const [kind, reason] of cases) {

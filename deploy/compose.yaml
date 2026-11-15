@@ -80,7 +80,6 @@ services:
       # managed worker processes are always present but start no processing
       # or model loading until the owner enables a feature in the walkthrough.
       FDRIVE_THUMBS_DIR: /thumbs
-      FDRIVE_DESKTOP_STATE_DIR: /var/lib/fdrive/desktop
       FDRIVE_BACKUP_STATE_DIR: /var/lib/fdrive/backups
       FDRIVE_BACKUP_WORKER: "false"
       FDRIVE_BACKUP_SOURCES: '[{"kind":"ocr","path":"/backup-sources/ocr"},{"kind":"logs","path":"/backup-sources/logs"},{"kind":"office","path":"/backup-sources/office"}]'
@@ -129,10 +128,8 @@ services:
       FDRIVE_JSON_MAX_BYTES: ${FDRIVE_JSON_MAX_BYTES:-}
       FDRIVE_ARCHIVE_PEEK_MAX_BYTES: ${FDRIVE_ARCHIVE_PEEK_MAX_BYTES:-}
       FDRIVE_SHARE_UPLOAD_MAX_BYTES: ${FDRIVE_SHARE_UPLOAD_MAX_BYTES:-}
-      FDRIVE_ADMIN_USERS: ${FDRIVE_ADMIN_USERS:-}
       FDRIVE_OFFICE_PUBLIC_URL: ${FDRIVE_OFFICE_PUBLIC_URL:-}
       FDRIVE_OFFICE_MAX_BYTES: ${FDRIVE_OFFICE_MAX_BYTES:-}
-      FDRIVE_OFFICE_EDIT_RULES: ${FDRIVE_OFFICE_EDIT_RULES:-}
       # END GENERATED CONFIG KEYS
     depends_on:
       db:
@@ -140,7 +137,6 @@ services:
     volumes:
       - ${FDRIVE_FILES_DIR:-${FDRIVE_DATA_DIR:-./data}/files}:/data
       - fdrive-thumbs:/thumbs:ro
-      - fdrive-desktop:/var/lib/fdrive/desktop
       - fdrive-backups:/var/lib/fdrive/backups
     restart: unless-stopped
     security_opt: ["no-new-privileges:true"]
@@ -158,10 +154,9 @@ services:
     environment:
       <<: *api-environment
       # Source state has different owners and may be mode 0600. The worker
-      # runs as FDRIVE_RUN_AS_UID like the api, so a backup it writes to a
-      # folder in someone's home belongs to them, and keeps only the
-      # capability to read any file. Source mounts are read-only. No Docker
-      # socket or host root.
+      # runs as FDRIVE_RUN_AS_UID like the api and keeps only the capability
+      # to read any file. Source mounts are read-only. No files folder,
+      # Docker socket or host root.
       FDRIVE_RUN_AS_CAPS: dac_read_search
     user: "0:0"
     cap_drop: [ALL]
@@ -170,10 +165,7 @@ services:
     read_only: true
     tmpfs: ["/tmp"]
     volumes:
-      # A backup destination may be a folder in a user's home.
-      - ${FDRIVE_FILES_DIR:-${FDRIVE_DATA_DIR:-./data}/files}:/data
       - fdrive-backups:/var/lib/fdrive/backups
-      - fdrive-desktop:/var/lib/fdrive/desktop:ro
       - ${FDRIVE_DATA_DIR:-./data}/ocr:/backup-sources/ocr:ro
       - fdrive-indexer-logs:/backup-sources/logs:ro
       - office_onlyoffice_data:/backup-sources/office:ro
@@ -372,7 +364,6 @@ services:
 
 volumes:
   fdrive-backups:
-  fdrive-desktop:
   fdrive-indexer-logs:
   fdrive-thumbs:
   fdrive-ml-models:

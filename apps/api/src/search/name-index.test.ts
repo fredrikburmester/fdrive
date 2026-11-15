@@ -13,7 +13,7 @@ const SEARCH: NameIndexSearch = {
   scopes: [{ rootId: 1, fsPrefix: "/alice" }],
   exclude: {
     prefixes: [{ rootId: 1, fsPrefix: "/alice/.trash" }],
-    names: [".fdrive-move-v1", ".fdrive-backups"],
+    names: [".fdrive-move-v1"],
   },
   files: 25,
   folders: 50,
@@ -39,7 +39,7 @@ describe("createNameIndexClient", () => {
           query: "Microlär",
           scopes: [{ root_id: 1, prefix: "alice" }],
           exclude: [{ root_id: 1, prefix: "alice/.trash" }],
-          exclude_names: [".fdrive-move-v1", ".fdrive-backups"],
+          exclude_names: [".fdrive-move-v1"],
           files: 25,
           folders: 50,
         }),

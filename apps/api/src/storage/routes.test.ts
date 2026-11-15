@@ -7,11 +7,11 @@ import { describe, expect, it, vi } from "vitest";
 import { createApp } from "../app.js";
 import type { Principal } from "../auth/principal.js";
 import { loadConfig } from "../config.js";
-import { buildIdentity } from "../scoping/test-fixtures/index.ts";
-import { registerStorageRoutes, type StorageRoutesDeps, storageKind } from "./routes.js";
+import { registerStorageUsageRoutes, type StorageUsageRoutesDeps, storageKind } from "./routes.js";
 
 const REQUIRED_ENV = {
   DATABASE_URL: "postgres://localhost/fdrive",
+  FDRIVE_STORAGE_ROOT: "/srv/files",
   FDRIVE_MASTER_KEY: Buffer.alloc(32, 7).toString("base64"),
 };
 
@@ -51,9 +51,11 @@ function user(storageLimit: number | null): LocalUser {
   };
 }
 
-function buildApp(overrides: Partial<StorageRoutesDeps> & { scopes?: readonly Scope[] | null }) {
-  // The memory storage holds what alice can read now: gone.mov left the disk.
-  const storage = createMemoryStorage({ "/big.mp4": "v", "/docs/report.pdf": "p" });
+function buildApp(
+  overrides: Partial<StorageUsageRoutesDeps> & { scopes?: readonly Scope[] | null },
+) {
+  // The scopes are the permission: nothing is read from storage.
+  const storage = createMemoryStorage({});
   const principal: Principal = {
     accountId: "account-1",
     identityId: "identity-1",
@@ -62,8 +64,7 @@ function buildApp(overrides: Partial<StorageRoutesDeps> & { scopes?: readonly Sc
     isAdmin: false,
   };
   const { scopes = SCOPES, ...rest } = overrides;
-  const deps: StorageRoutesDeps = {
-    identities: { get: async () => buildIdentity() },
+  const deps: StorageUsageRoutesDeps = {
     resolver: {
       verifiedIndexScopes: async () =>
         scopes === null ? { available: false, reason: "no_roots" } : { available: true, scopes },
@@ -83,7 +84,7 @@ function buildApp(overrides: Partial<StorageRoutesDeps> & { scopes?: readonly Sc
     version: "1.0.0",
     startedAt: new Date(0),
     principalResolver: async () => principal,
-    registerRoutes: (groups) => registerStorageRoutes(groups, deps),
+    registerRoutes: (groups) => registerStorageUsageRoutes(groups, deps),
   });
 }
 
@@ -112,7 +113,7 @@ describe("storageKind", () => {
 });
 
 describe("GET /api/v1/storage", () => {
-  it("sums the login's own home by kind, against its limit, with its largest readable files", async () => {
+  it("sums the login's own home by kind, against its limit, with its largest files", async () => {
     const bytesByExtension = vi.fn(async () => [
       { ext: ".mp4", bytes: 700 },
       { ext: ".JPG", bytes: 200 },
@@ -123,7 +124,8 @@ describe("GET /api/v1/storage", () => {
       total: 3,
       files: [
         indexed("alice/big.mp4", 700),
-        indexed("alice/gone.mov", 300),
+        // Outside the home scope, so not alice's to see.
+        indexed("bob/secret.mov", 300),
         indexed("alice/docs/report.pdf", 90),
       ],
     }));
@@ -179,7 +181,7 @@ describe("GET /api/v1/storage", () => {
       indexQueries: { rootIdsByName: async () => ({}), bytesByExtension, listFiles: vi.fn() },
     });
     expect(await usage(noRoot)).toMatchObject({ indexed: false, limit: null });
-    const noLogin = buildApp({ identities: { get: async () => null } });
-    expect(await usage(noLogin)).toMatchObject({ indexed: false, limit: null });
+    const noUser = buildApp({ scopes: null, localUsers: { get: async () => null } });
+    expect(await usage(noUser)).toMatchObject({ indexed: false, limit: null });
   });
 });

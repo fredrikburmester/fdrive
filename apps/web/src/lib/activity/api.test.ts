@@ -17,7 +17,6 @@ it("sends private uncached requests, encodes filters and validates API shapes", 
     nextCursor: null,
     historyStartsAt: null,
     retainedFrom: null,
-    coverage: { mutations: true, reads: true, observations: "refresh", observationGap: true },
   };
   const fetcher = vi.fn(async (_url: string, _init: RequestInit) => Response.json(feed));
   vi.stubGlobal("fetch", fetcher);
@@ -48,7 +47,7 @@ it("sends private uncached requests, encodes filters and validates API shapes", 
   const file = {
     id,
     identityId: id,
-    label: "Drive",
+    label: "alice",
     kind: "file",
     lastKnownPath: "/a",
     currentPath: null,

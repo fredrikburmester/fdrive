@@ -96,7 +96,7 @@ private func handle(_ path: String, id: String, kind: String = "file", size: Int
     try await catalog.reconcile([inner], folder: "/outer")
     let outerItem = try await catalog.itemAt("/outer"), innerItem = try await catalog.itemAt("/outer/inner")
     let client = try APIClient(server: URL(string: "http://127.0.0.1:1")!, protocolVersion: 2)
-    let coordinator = WriteCoordinator(catalog: catalog, client: client)
+    let coordinator = WriteCoordinator(catalog: catalog, client: client, maxUploadBytes: 16 << 30)
     for destination in [innerItem.id, outerItem.id] {
         await #expect(throws: DriveError.unsupported) {
             _ = try await coordinator.perform(route: "moves", localId: outerItem.id, templateKey: outerItem.id, parentId: destination,
@@ -161,7 +161,7 @@ private func mockClient(_ transport: Transport) throws -> (APIClient, URLSession
     let versions = "{\"items\":[{\"path\":\"/doc.txt\",\"version\":\"\(sha)\",\"size\":5}]}"
     let transport = Transport([(200, listing), (200, versions)])
     let (client, session) = try mockClient(transport); defer { session.invalidateAndCancel() }
-    let coordinator = WriteCoordinator(catalog: catalog, client: client)
+    let coordinator = WriteCoordinator(catalog: catalog, client: client, maxUploadBytes: 16 << 30)
     let matched = try await coordinator.reimport(parentId: "root", name: "doc.txt", directory: false, contents: file)
     #expect(matched?.entry.id == remoteId && matched?.materialized == true && matched?.contentVersion == sha)
     #expect(transport.requests.map { $0.url?.path } == ["/api/v2/desktop/entries", "/api/v2/desktop/versions"])

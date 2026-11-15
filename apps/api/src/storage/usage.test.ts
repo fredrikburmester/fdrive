@@ -22,18 +22,24 @@ describe("createHomeUsage", () => {
     );
   });
 
-  it("is null without a files folder or an index root for it, without asking the index", async () => {
+  it("is null without an index root for the files folder, without asking the index", async () => {
     const queries = index();
-    const noFolder = createHomeUsage(
-      { fdriveStorageRoot: undefined, fdriveIndexRoots: ROOTS },
-      queries,
-    );
     const noRoots = createHomeUsage(
       { fdriveStorageRoot: "/data", fdriveIndexRoots: null },
       queries,
     );
-    expect(await noFolder("alice")).toBeNull();
+    const elsewhere = createHomeUsage(
+      {
+        fdriveStorageRoot: "/data",
+        fdriveIndexRoots: [
+          { name: "media", storagePath: "/media", indexerPath: "/media" },
+          { name: "docs", storagePath: "/docs", indexerPath: "/docs" },
+        ],
+      },
+      queries,
+    );
     expect(await noRoots("alice")).toBeNull();
+    expect(await elsewhere("alice")).toBeNull();
     expect(queries.rootIdsByName).not.toHaveBeenCalled();
   });
 

@@ -37,9 +37,10 @@ export function isCoreError(e: unknown): e is CoreError {
 }
 
 /**
- * The kinds of failure a `StorageProvider` can raise, shared by every
- * provider implementation so callers such as `apps/api` can map them to
- * HTTP responses without knowing which provider backs a given identity.
+ * The kinds of failure a `StorageProvider` can raise, which `apps/api` maps
+ * to HTTP responses. `upstream_unavailable` means the files folder cannot be
+ * used right now: it is not this installation's, or the process is out of
+ * file descriptors.
  */
 export type StorageErrorKind =
   | "not_found"
@@ -47,10 +48,8 @@ export type StorageErrorKind =
   | "conflict"
   | "payload_too_large"
   | "storage_limit_reached"
-  | "rate_limited"
   | "bad_request"
   | "upstream_unavailable"
-  | "unauthorized"
   | "internal";
 
 /**

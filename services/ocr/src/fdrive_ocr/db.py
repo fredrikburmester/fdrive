@@ -265,7 +265,8 @@ def last_run(conn: psycopg.Connection) -> RunSummary | None:
 
 @contextmanager
 def backup_checkpoint(conn: psycopg.Connection) -> Iterator[None]:
-    """Match the API's blob writer gate through rewrite and its durable receipt."""
+    """Hold the recovery files gate (`BACKUP_GATE` in packages/backup) through a write to
+    kept originals and its durable receipt; a backup holds it while it reads them."""
     with conn.cursor() as cur:
         cur.execute("SELECT pg_advisory_lock_shared(%s)", (736591204,))
     try:

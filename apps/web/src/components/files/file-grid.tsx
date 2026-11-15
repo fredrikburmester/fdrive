@@ -7,7 +7,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react
 import { TagDots } from "@/components/metadata/tag-dots";
 import { Checkbox } from "@/components/ui/checkbox";
 import { apiClient } from "@/lib/api/client";
-import { endDragSession, getActiveDragPaths, startDragSession } from "@/lib/dnd";
+import { endDragSession, getActiveDragPaths, startDragSession, writeDownloadUrl } from "@/lib/dnd";
 import { isBackgroundClick } from "@/lib/files/background-click";
 import { INTERNAL_DND_TYPE, readDraggedPaths, writeDraggedPaths } from "@/lib/files/deps";
 import { dropTargetState, effectFor } from "@/lib/files/dnd-targets";
@@ -15,10 +15,9 @@ import { computeGridLayout, readGridWidth, writeGridWidth } from "@/lib/files/gr
 import { DEFAULT_GRID_SIZE, type GridSize } from "@/lib/files/grid-size";
 import { isLink, LINK_TITLE } from "@/lib/files/links";
 import { findRevealIndex, gridRowForIndex, type ScrollRequest } from "@/lib/files/reveal";
-import { contextEntries } from "@/lib/files/selection";
+import { contextEntries, selectionOf } from "@/lib/files/selection";
 import { wantsGridThumbnail } from "@/lib/files/thumbnail";
 import { sharedFolderCaption } from "@/lib/grants/format";
-import { selectionOf } from "@/lib/identity/capabilities";
 import { tagCheckState as computeTagCheckState } from "@/lib/metadata/tag-set";
 import { cn } from "@/lib/utils";
 import { createDragImageElement } from "./drag-image";
@@ -313,6 +312,12 @@ export function FileGrid({
   function handleDragStart(event: DragEvent<HTMLDivElement>, entry: FsEntry) {
     const paths = getDragPaths(entry);
     writeDraggedPaths(event.dataTransfer, paths);
+    writeDownloadUrl(
+      event.dataTransfer,
+      paths,
+      entry,
+      new URL(apiClient.downloadUrl(entry.path), window.location.href).href,
+    );
     event.dataTransfer.effectAllowed = "copyMove";
     startDragSession(paths);
     const dragImage = createDragImageElement(document, entry.name, paths.length);

@@ -6,7 +6,6 @@ import { describe, expect, it, vi } from "vitest";
 import type { Principal } from "../../auth/principal.js";
 import { ApiHttpError } from "../../errors.js";
 import type { McpToolDeps } from "../../mcp/handlers.js";
-import { buildIdentity } from "../../scoping/test-fixtures/index.ts";
 import {
   type AiInput,
   type AiModel,
@@ -81,7 +80,6 @@ function mcpDeps(overrides: Partial<McpToolDeps> = {}): McpToolDeps {
     scopeResolver: {
       verifiedIndexScopes: async () => ({ available: false, reason: "no_roots" }),
     },
-    identities: { get: async () => buildIdentity() },
     publicUrl: async () => null,
     indexerClient: null,
     clock: () => new Date("2026-01-01T00:00:00.000Z"),
@@ -422,30 +420,6 @@ describe("createOrganizeService", () => {
         "similar_files",
         SUBMIT_TOOL,
       ]);
-    });
-
-    it("works without index-backed tools when the identity is gone", async () => {
-      const { model, starts, inputs } = fakeModel([submitTurn([])]);
-      const verifiedIndexScopes = vi.fn();
-      const { service } = setup({
-        model,
-        mcp: { identities: { get: async () => null }, scopeResolver: { verifiedIndexScopes } },
-      });
-      const principal = principalWith(drive());
-
-      const started = await service.start(principal, { paths: ["/Inbox"], instructions: "" });
-      const run = await finished(service, principal, started.id);
-
-      expect(run.state).toBe("done");
-      expect(verifiedIndexScopes).not.toHaveBeenCalled();
-      expect(starts[0]?.tools.map((tool) => tool.name)).toEqual([
-        "folder_tree",
-        "list_folder",
-        SUBMIT_TOOL,
-      ]);
-      const firstText = inputs[0]?.kind === "user" ? inputs[0].text : "";
-      expect(firstText).toContain("- /Inbox (folder)");
-      expect(firstText).not.toContain("instructions");
     });
 
     it("skips selected items that no longer exist or are not files or folders", async () => {

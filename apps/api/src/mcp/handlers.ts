@@ -1,16 +1,8 @@
 import { isReservedPath, normalizePath, parseSearchFilters, toFsPath } from "@fdrive/core";
-import type {
-  DuplicateGroup,
-  FileFilter,
-  FileOrder,
-  IdentityRepo,
-  IndexedFile,
-  IndexQueries,
-} from "@fdrive/db";
+import type { DuplicateGroup, FileFilter, FileOrder, IndexedFile, IndexQueries } from "@fdrive/db";
 import type { Principal } from "../auth/principal.js";
 import { relocatePath } from "../fs/mutations.js";
 import type { MetadataService } from "../metadata/service.ts";
-import { createReadAuthorizer, type ReadAuthorizer } from "../scoping/read-authorizer.ts";
 import type { ScopeResolver } from "../scoping/resolver.ts";
 import type { UnavailableReason } from "../scoping/types.ts";
 import type { ImageSearchService } from "../search/image-service.ts";
@@ -39,12 +31,11 @@ import {
 import { fileUrl, folderUrl } from "./urls.js";
 
 /**
- * Every index-backed tool authorizes at most this many candidate files per
- * request, at the `ReadAuthorizer`'s default concurrency (6). Whenever this
- * cap, a denial, or an unavailable probe reduces what a tool actually
- * examined below what the index reported, the response carries
- * `partial: true` rather than presenting a bounded, filtered count as an
- * exhaustive one. See `docs/SCOPING.md`.
+ * Every index-backed tool examines at most this many candidate files per
+ * request. Whenever this cap, or a row a nested scope shadows, reduces what
+ * a tool actually examined below what the index reported, the response
+ * carries `partial: true` rather than presenting a bounded, filtered count
+ * as an exhaustive one. See `docs/SCOPING.md`.
  */
 export const MAX_CANDIDATE_FILES = 2000;
 
@@ -66,7 +57,6 @@ export interface McpToolDeps {
    * username/template fallback. See `docs/SCOPING.md`.
    */
   readonly scopeResolver: Pick<ScopeResolver, "verifiedIndexScopes">;
-  readonly identities: Pick<IdentityRepo, "get">;
   /**
    * The address everyone opens fdrive at (System > Features), the base of
    * every link a tool returns; `null` until the owner sets one, when links
@@ -101,32 +91,22 @@ export interface McpToolDeps {
 /** Thrown by a handler when a business rule fails; `tools.ts` maps this (and any other error) to an MCP tool error. */
 export class McpToolError extends Error {}
 
-/** A resolved, verified scope plus the one bounded live-read authorizer built for this tool call. */
-interface ScopedRequest {
-  readonly ctx: ScopeContext;
-  readonly authorizer: ReadAuthorizer;
-}
-
 /** A short, reason-carrying message that never leaks anything about individual paths, only the caller's own scope status. */
 function indexUnavailableMessage(reason: UnavailableReason): string {
   return `index features are unavailable for this identity (${reason})`;
 }
 
 /**
- * Resolves the caller's verified index scopes and builds one bounded,
- * request-local `ReadAuthorizer` bound to their own storage. Throws a
- * friendly, reason-safe `McpToolError` when index-backed tools are
- * unavailable for them, rather than ever falling back to a username/template
- * mapping. Kept separate from the `*InScope` functions below (which take an
- * already-resolved `ScopeContext` and `ReadAuthorizer` as plain arguments)
- * so those can be unit tested without a real `IndexQueries` or `Principal`.
+ * Resolves the caller's verified index scopes for this request, narrowed to
+ * the token's folders. Throws a friendly, reason-safe `McpToolError` when
+ * index-backed tools are unavailable for them, rather than ever falling
+ * back to a username/template mapping. Kept separate from the `*InScope`
+ * functions below (which take an already-resolved `ScopeContext` as a plain
+ * argument) so those can be unit tested without a real `IndexQueries` or
+ * `Principal`.
  */
-async function requireScope(deps: McpToolDeps, principal: Principal): Promise<ScopedRequest> {
-  const identity = await deps.identities.get(principal.identityId);
-  const verified =
-    identity === null
-      ? ({ available: false, reason: "no_connection" } as const)
-      : await deps.scopeResolver.verifiedIndexScopes(identity);
+async function requireScope(deps: McpToolDeps, principal: Principal): Promise<ScopeContext> {
+  const verified = await deps.scopeResolver.verifiedIndexScopes(principal.username);
   if (!verified.available) {
     throw new McpToolError(indexUnavailableMessage(verified.reason));
   }
@@ -140,8 +120,7 @@ async function requireScope(deps: McpToolDeps, principal: Principal): Promise<Sc
   if (ctx === null) {
     throw new McpToolError(indexUnavailableMessage("no_roots"));
   }
-
-  return { ctx, authorizer: createReadAuthorizer({ storage: principal.storage }) };
+  return ctx;
 }
 
 type TrashPathDeps = Pick<McpToolDeps, "trashPath" | "trashPathForStorage">;
@@ -163,7 +142,7 @@ export interface FileSummary {
   readonly text_chars: number;
 }
 
-/** Builds a `FileSummary` from a file and its already round-tripped, already read-authorized virtual path. */
+/** Builds a `FileSummary` from a file and its already round-tripped virtual path. */
 function fileSummaryFor(
   publicUrl: string | null,
   file: IndexedFile,
@@ -182,8 +161,8 @@ function fileSummaryFor(
   };
 }
 
-/** The outcome of authorizing a bounded batch of `IndexedFile` candidates: only the accessible ones, plus their virtual paths and whether anything was left out. */
-export interface AuthorizedFiles {
+/** The candidates a caller can see, with their virtual paths, and whether anything was left out. */
+interface VisibleFiles {
   readonly files: readonly IndexedFile[];
   readonly virtualPaths: ReadonlyMap<number, string>;
   readonly partial: boolean;
@@ -191,43 +170,27 @@ export interface AuthorizedFiles {
 
 /**
  * Filters `candidates` (already restricted to `ctx`'s scope by the caller's
- * `IndexQueries` predicate) down to the subset that both round-trips
- * (`virtualPathFor`) and passes a live read check, preserving `candidates`'
- * original order. Never examines more than `MAX_CANDIDATE_FILES`.
- * `partial` is `true` whenever the cap was hit or any candidate was dropped
- * (shadowed, denied, or an unavailable probe), so a caller can report that
- * truthfully rather than presenting the accessible subset as exhaustive.
+ * `IndexQueries` predicate) down to the subset that round-trips
+ * (`virtualPathFor`), preserving `candidates`' original order. Never
+ * examines more than `MAX_CANDIDATE_FILES`. `partial` is `true` whenever the
+ * cap was hit or any candidate was dropped (shadowed by a nested scope), so
+ * a caller can report that truthfully rather than presenting the visible
+ * subset as exhaustive.
  */
-export async function authorizeIndexedFiles(
-  ctx: ScopeContext,
-  authorizer: ReadAuthorizer,
-  candidates: readonly IndexedFile[],
-): Promise<AuthorizedFiles> {
+function visibleFiles(ctx: ScopeContext, candidates: readonly IndexedFile[]): VisibleFiles {
   const capped = candidates.slice(0, MAX_CANDIDATE_FILES);
   let partial = candidates.length > capped.length;
-
-  const resolved = await Promise.all(
-    capped.map(async (file): Promise<{ file: IndexedFile; virtualPath: string } | null> => {
-      const virtualPath = virtualPathFor(ctx, file.rootId, file.path);
-      if (virtualPath === null) {
-        return null;
-      }
-      const authResult = await authorizer.authorize({ path: virtualPath, kind: "file" });
-      return authResult.allowed ? { file, virtualPath } : null;
-    }),
-  );
-
   const virtualPaths = new Map<number, string>();
   const files: IndexedFile[] = [];
-  for (const entry of resolved) {
-    if (entry === null) {
+  for (const file of capped) {
+    const virtualPath = virtualPathFor(ctx, file.rootId, file.path);
+    if (virtualPath === null) {
       partial = true;
       continue;
     }
-    virtualPaths.set(entry.file.id, entry.virtualPath);
-    files.push(entry.file);
+    virtualPaths.set(file.id, virtualPath);
+    files.push(file);
   }
-
   return { files, virtualPaths, partial };
 }
 
@@ -249,15 +212,10 @@ export async function runSearch(deps: McpToolDeps, principal: Principal, args: S
     after: args.modified_after,
     before: args.modified_before,
   });
-  const identity = await deps.identities.get(principal.identityId);
-  const verified =
-    identity === null
-      ? { available: false as const }
-      : await deps.scopeResolver.verifiedIndexScopes(identity);
+  const verified = await deps.scopeResolver.verifiedIndexScopes(principal.username);
   const response = await deps.searchService.search({
     trashPath: currentTrashPath(deps, principal),
     scopes: verified.available ? tokenScopes(principal, verified.scopes) : [],
-    authorizer: createReadAuthorizer({ storage: principal.storage }),
     query: args.query,
     filters,
     limit: Math.max(1, Math.min(args.limit ?? 10, 50)),
@@ -302,18 +260,13 @@ export interface FindFilesArgs {
 }
 
 /**
- * `find_files`'s logic given an already-resolved scope and authorizer.
- * Exported so tests can exercise every branch with a hand-built
- * `ScopeContext`. `total_matches` is the count of files this call actually
- * verified are readable, never the underlying SQL query's unfiltered total;
- * `partial` is set whenever that undercounts what might really be there.
+ * `find_files`'s logic given an already-resolved scope. Exported so tests
+ * can exercise every branch with a hand-built `ScopeContext`.
+ * `total_matches` is the count of files this call returns, never the
+ * underlying SQL query's unfiltered total; `partial` is set whenever that
+ * undercounts what might really be there.
  */
-export async function findFilesInScope(
-  deps: McpToolDeps,
-  ctx: ScopeContext,
-  authorizer: ReadAuthorizer,
-  args: FindFilesArgs,
-) {
+export async function findFilesInScope(deps: McpToolDeps, ctx: ScopeContext, args: FindFilesArgs) {
   const prefixes = narrowScopePrefixes(ctx, args.path_prefix);
   if (prefixes === null) {
     throw new McpToolError("path_prefix is outside this identity's scope");
@@ -342,18 +295,14 @@ export async function findFilesInScope(
     ...(args.offset === undefined ? [] : [args.offset]),
   );
 
-  const {
-    files: accessible,
-    virtualPaths,
-    partial: authPartial,
-  } = await authorizeIndexedFiles(ctx, authorizer, candidates);
+  const { files: accessible, virtualPaths, partial: authPartial } = visibleFiles(ctx, candidates);
 
   const publicUrl = await deps.publicUrl();
   const results = accessible.map((file) => {
     const virtualPath = virtualPaths.get(file.id);
     // Every entry of `accessible` has a matching `virtualPaths` entry by
-    // construction (`authorizeIndexedFiles` sets both together); the
-    // fallback below only guards the type checker.
+    // construction (`visibleFiles` sets both together); the fallback below
+    // only guards the type checker.
     return fileSummaryFor(publicUrl, file, virtualPath ?? "");
   });
   const nextOffset = (args.offset ?? 0) + candidates.length;
@@ -368,8 +317,7 @@ export async function findFilesInScope(
 }
 
 export async function runFindFiles(deps: McpToolDeps, principal: Principal, args: FindFilesArgs) {
-  const { ctx, authorizer } = await requireScope(deps, principal);
-  return findFilesInScope(deps, ctx, authorizer, args);
+  return findFilesInScope(deps, await requireScope(deps, principal), args);
 }
 
 // --------------------------------------------------------- list_directory
@@ -440,13 +388,8 @@ export interface FileInfoArgs {
   readonly path: string;
 }
 
-/** `file_info`'s logic given an already-resolved scope and authorizer. Exported so tests can exercise every branch with a hand-built `ScopeContext`. */
-export async function fileInfoInScope(
-  deps: McpToolDeps,
-  ctx: ScopeContext,
-  authorizer: ReadAuthorizer,
-  args: FileInfoArgs,
-) {
+/** `file_info`'s logic given an already-resolved scope. Exported so tests can exercise every branch with a hand-built `ScopeContext`. */
+export async function fileInfoInScope(deps: McpToolDeps, ctx: ScopeContext, args: FileInfoArgs) {
   const resolved = toFsPath(ctx.scopes, args.path);
   if (resolved === null) {
     throw new McpToolError("path is outside this identity's scope");
@@ -461,16 +404,10 @@ export async function fileInfoInScope(
     throw new McpToolError(`file is not indexed yet: ${args.path}`);
   }
 
+  // A row a nested scope shadows, or one in fdrive's own folders, is
+  // reported exactly like an unindexed one.
   const virtualPath = virtualPathFor(ctx, file.rootId, file.path);
   if (virtualPath === null) {
-    throw new McpToolError(`file is not indexed yet: ${args.path}`);
-  }
-
-  // A read-denied file is reported exactly like an unindexed one: revealing
-  // that it exists but cannot be read would itself leak information a
-  // wrong or narrower mapping should never disclose.
-  const authResult = await authorizer.authorize({ path: virtualPath, kind: "file" });
-  if (!authResult.allowed) {
     throw new McpToolError(`file is not indexed yet: ${args.path}`);
   }
 
@@ -482,11 +419,11 @@ export async function fileInfoInScope(
     const copies = await deps.indexQueries.filesBySha256(ctx.scopePrefixes, file.sha256, file.id, {
       exclude: reservedExclusionOf(ctx),
     });
-    const authorizedCopies = await authorizeIndexedFiles(ctx, authorizer, copies);
-    identicalCopies = authorizedCopies.files
-      .map((copy) => authorizedCopies.virtualPaths.get(copy.id))
+    const visibleCopies = visibleFiles(ctx, copies);
+    identicalCopies = visibleCopies.files
+      .map((copy) => visibleCopies.virtualPaths.get(copy.id))
       .filter((path): path is string => path !== undefined);
-    partial = authorizedCopies.partial;
+    partial = visibleCopies.partial;
   }
 
   return {
@@ -516,42 +453,30 @@ interface MappedDuplicateGroup {
 }
 
 /**
- * Filters raw `DuplicateGroup` rows down to only authorized copies (round
- * trip plus a live read check on every location, capped in total at
- * `MAX_CANDIDATE_FILES` across every group combined), dropping any group
- * left with fewer than two authorized copies. Counts and wasted bytes are
- * computed only from what survives.
+ * Maps raw `DuplicateGroup` rows to the copies the caller can see (each
+ * location round-tripped, capped in total at `MAX_CANDIDATE_FILES` across
+ * every group combined), dropping any group left with fewer than two
+ * copies. Counts and wasted bytes are computed only from what survives.
  */
-async function authorizeDuplicateGroups(
+function visibleDuplicateGroups(
   ctx: ScopeContext,
-  authorizer: ReadAuthorizer,
   groups: readonly DuplicateGroup[],
-): Promise<{ groups: MappedDuplicateGroup[]; partial: boolean }> {
+): { groups: MappedDuplicateGroup[]; partial: boolean } {
   const flat = groups.flatMap((group, groupIndex) =>
     group.files.map((location) => ({ groupIndex, location })),
   );
   const capped = flat.slice(0, MAX_CANDIDATE_FILES);
   let partial = flat.length > capped.length;
 
-  const resolved = await Promise.all(
-    capped.map(async (entry): Promise<{ groupIndex: number; virtualPath: string } | null> => {
-      const virtualPath = virtualPathFor(ctx, entry.location.rootId, entry.location.path);
-      if (virtualPath === null) {
-        return null;
-      }
-      const authResult = await authorizer.authorize({ path: virtualPath, kind: "file" });
-      return authResult.allowed ? { groupIndex: entry.groupIndex, virtualPath } : null;
-    }),
-  );
-
   const pathsByGroup = new Map<number, string[]>();
-  for (const entry of resolved) {
-    if (entry === null) {
+  for (const entry of capped) {
+    const virtualPath = virtualPathFor(ctx, entry.location.rootId, entry.location.path);
+    if (virtualPath === null) {
       partial = true;
       continue;
     }
     const list = pathsByGroup.get(entry.groupIndex) ?? [];
-    list.push(entry.virtualPath);
+    list.push(virtualPath);
     pathsByGroup.set(entry.groupIndex, list);
   }
 
@@ -573,11 +498,10 @@ async function authorizeDuplicateGroups(
   return { groups: mappedGroups, partial };
 }
 
-/** `find_duplicates`'s logic given an already-resolved scope and authorizer. Exported so tests can exercise every branch with a hand-built `ScopeContext`. */
+/** `find_duplicates`'s logic given an already-resolved scope. Exported so tests can exercise every branch with a hand-built `ScopeContext`. */
 export async function findDuplicatesInScope(
   deps: McpToolDeps,
   ctx: ScopeContext,
-  authorizer: ReadAuthorizer,
   args: FindDuplicatesArgs,
 ) {
   const prefixes = narrowScopePrefixes(ctx, args.path_prefix);
@@ -593,7 +517,7 @@ export async function findDuplicatesInScope(
     { exclude: reservedExclusionOf(ctx) },
   );
 
-  const { groups: mappedGroups, partial } = await authorizeDuplicateGroups(ctx, authorizer, groups);
+  const { groups: mappedGroups, partial } = visibleDuplicateGroups(ctx, groups);
   const totalWasted = mappedGroups.reduce((sum, group) => sum + group.wasted_bytes, 0);
 
   return {
@@ -609,8 +533,7 @@ export async function runFindDuplicates(
   principal: Principal,
   args: FindDuplicatesArgs,
 ) {
-  const { ctx, authorizer } = await requireScope(deps, principal);
-  return findDuplicatesInScope(deps, ctx, authorizer, args);
+  return findDuplicatesInScope(deps, await requireScope(deps, principal), args);
 }
 
 // ---------------------------------------------------------- similar_files
@@ -623,15 +546,14 @@ export interface SimilarFilesArgs {
 type SimilarResult = FileSummary & { similarity: number };
 
 /**
- * `similar_files`'s logic given an already-resolved scope and authorizer.
- * Exported so tests can exercise every branch with a hand-built
- * `ScopeContext`. The source file itself must round-trip and pass a live
- * read check too, not only the candidates it is compared against.
+ * `similar_files`'s logic given an already-resolved scope. Exported so tests
+ * can exercise every branch with a hand-built `ScopeContext`. The source
+ * file itself must round-trip too, not only the candidates it is compared
+ * against.
  */
 export async function similarFilesInScope(
   deps: McpToolDeps,
   ctx: ScopeContext,
-  authorizer: ReadAuthorizer,
   args: SimilarFilesArgs,
 ) {
   const resolved = toFsPath(ctx.scopes, args.path);
@@ -648,12 +570,7 @@ export async function similarFilesInScope(
     throw new McpToolError("file is not indexed");
   }
 
-  const sourceVirtualPath = virtualPathFor(ctx, file.rootId, file.path);
-  if (sourceVirtualPath === null) {
-    throw new McpToolError("file is not indexed");
-  }
-  const sourceAuth = await authorizer.authorize({ path: sourceVirtualPath, kind: "file" });
-  if (!sourceAuth.allowed) {
+  if (virtualPathFor(ctx, file.rootId, file.path) === null) {
     throw new McpToolError("file is not indexed");
   }
 
@@ -680,11 +597,7 @@ export async function similarFilesInScope(
     .map((row) => loadedById.get(row.fileId))
     .filter((candidate): candidate is IndexedFile => candidate !== undefined);
 
-  const {
-    files: accessible,
-    virtualPaths,
-    partial,
-  } = await authorizeIndexedFiles(ctx, authorizer, candidates);
+  const { files: accessible, virtualPaths, partial } = visibleFiles(ctx, candidates);
 
   const publicUrl = await deps.publicUrl();
   const results = accessible
@@ -709,8 +622,7 @@ export async function runSimilarFiles(
   principal: Principal,
   args: SimilarFilesArgs,
 ) {
-  const { ctx, authorizer } = await requireScope(deps, principal);
-  return similarFilesInScope(deps, ctx, authorizer, args);
+  return similarFilesInScope(deps, await requireScope(deps, principal), args);
 }
 
 // -------------------------------------------------------- folder_overview
@@ -721,17 +633,15 @@ export interface FolderOverviewArgs {
 }
 
 /**
- * `folder_overview`'s logic given an already-resolved scope and authorizer.
- * Exported so tests can exercise every branch with a hand-built
- * `ScopeContext`. Bytes and folder aggregates are only ever added for files
- * that passed both the round trip and a live read check; `truncated`
- * reflects both the underlying SQL cap and anything the authorization step
- * left out.
+ * `folder_overview`'s logic given an already-resolved scope. Exported so
+ * tests can exercise every branch with a hand-built `ScopeContext`. Bytes
+ * and folder aggregates are only ever added for files that round-trip;
+ * `truncated` reflects both the underlying SQL cap and anything the round
+ * trip left out.
  */
 export async function folderOverviewInScope(
   deps: McpToolDeps,
   ctx: ScopeContext,
-  authorizer: ReadAuthorizer,
   args: FolderOverviewArgs,
 ) {
   const prefixes = narrowScopePrefixes(ctx, args.path_prefix);
@@ -748,11 +658,7 @@ export async function folderOverviewInScope(
     MAX_CANDIDATE_FILES,
   );
 
-  const {
-    files: accessible,
-    virtualPaths,
-    partial: authPartial,
-  } = await authorizeIndexedFiles(ctx, authorizer, candidates);
+  const { files: accessible, virtualPaths, partial: authPartial } = visibleFiles(ctx, candidates);
 
   interface Agg {
     files: number;
@@ -812,35 +718,25 @@ export async function runFolderOverview(
   principal: Principal,
   args: FolderOverviewArgs,
 ) {
-  const { ctx, authorizer } = await requireScope(deps, principal);
-  return folderOverviewInScope(deps, ctx, authorizer, args);
+  return folderOverviewInScope(deps, await requireScope(deps, principal), args);
 }
 
 // ------------------------------------------------------------ index_stats
 
 /**
- * `index_stats`'s logic given an already-resolved scope and authorizer.
- * File and chunk counts are derived only from candidates that round-tripped
- * and passed a live read check (bounded at `MAX_CANDIDATE_FILES`), never
- * from the raw scope-wide SQL aggregate `IndexQueries.stats` computes for
- * the (unscoped, admin-only) System page.
+ * `index_stats`'s logic given an already-resolved scope. File and chunk
+ * counts are derived only from candidates that round-tripped (bounded at
+ * `MAX_CANDIDATE_FILES`), never from the raw scope-wide SQL aggregate
+ * `IndexQueries.stats` computes for the (unscoped, admin-only) System page.
  */
-export async function indexStatsInScope(
-  deps: McpToolDeps,
-  ctx: ScopeContext,
-  authorizer: ReadAuthorizer,
-) {
+export async function indexStatsInScope(deps: McpToolDeps, ctx: ScopeContext) {
   const { total, files: candidates } = await deps.indexQueries.listFiles(
     ctx.scopePrefixes,
     { exclude: reservedExclusionOf(ctx) },
     "path",
     MAX_CANDIDATE_FILES,
   );
-  const { files: accessible, partial: authPartial } = await authorizeIndexedFiles(
-    ctx,
-    authorizer,
-    candidates,
-  );
+  const { files: accessible, partial: authPartial } = visibleFiles(ctx, candidates);
 
   const byStatus = new Map<string, { files: number; bytes: number }>();
   for (const file of accessible) {
@@ -868,8 +764,7 @@ export async function indexStatsInScope(
 
 /** `index_stats` for a token: the index counts plus whether it may organize (`writes_enabled`). */
 export async function runIndexStats(deps: McpToolDeps, principal: TokenPrincipal) {
-  const { ctx, authorizer } = await requireScope(deps, principal);
-  const stats = await indexStatsInScope(deps, ctx, authorizer);
+  const stats = await indexStatsInScope(deps, await requireScope(deps, principal));
   return { ...stats, writes_enabled: canOrganize(principal) };
 }
 

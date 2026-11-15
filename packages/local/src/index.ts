@@ -7,6 +7,14 @@ export type {
 } from "./changes.js";
 export { codeOf, toStorageError } from "./errors.js";
 export type {
+  FilesFolder,
+  FilesFolderHealth,
+  FilesFolderOptions,
+  LocalUserStatus,
+  LocalUsers,
+} from "./files-folder.js";
+export { createFilesFolder, isLocalUsername, probeRoot } from "./files-folder.js";
+export type {
   FilesFolderFacts,
   FilesFolderGuard,
   FilesFolderGuardOptions,
@@ -20,19 +28,7 @@ export {
 } from "./files-marker.js";
 export type { Home } from "./home.js";
 export { createHome } from "./home.js";
-export type {
-  CreateLocalModuleOptions,
-  LocalUserCheck,
-  LocalUserStatus,
-  LocalUsers,
-} from "./module.js";
-export {
-  createLocalModule,
-  isLocalUsername,
-  LOCAL_CREDENTIAL_FIELDS,
-  probeRoot,
-} from "./module.js";
-export type { SharedFolder, SharedGrant, UserStorageOptions } from "./shared.js";
+export type { SharedFolder, SharedGrant, UserStorage, UserStorageOptions } from "./shared.js";
 export {
   closedToShares,
   createUserStorage,
@@ -46,4 +42,4 @@ export type {
   MoveOptions,
   ZipItem,
 } from "./storage-provider.js";
-export { createLocalStorage } from "./storage-provider.js";
+export { createLocalStorage, removeStaleParts } from "./storage-provider.js";

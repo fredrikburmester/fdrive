@@ -29,10 +29,8 @@ export const StorageLimit = z.number().int().positive().max(Number.MAX_SAFE_INTE
 export const AdminUser = z.object({
   username: z.string(),
   disabled: z.boolean(),
-  /** Whether the user is an administrator, by account or by `FDRIVE_ADMIN_USERS`. */
+  /** Whether the user's account is an administrator. */
   isAdmin: z.boolean(),
-  /** `FDRIVE_ADMIN_USERS` names this user: an administrator whatever the account says. */
-  adminByDeployment: z.boolean(),
   /** True for the signed-in administrator's own user, which they cannot disable or remove. */
   isYou: z.boolean(),
   createdAt: z.iso.datetime(),
@@ -44,12 +42,7 @@ export const AdminUser = z.object({
 });
 export type AdminUser = z.infer<typeof AdminUser>;
 
-/**
- * `available` is false when the deployment serves no local folder, so there
- * are no local users to manage.
- */
 export const AdminUsersResponse = z.object({
-  available: z.boolean(),
   users: z.array(AdminUser),
 });
 export type AdminUsersResponse = z.infer<typeof AdminUsersResponse>;

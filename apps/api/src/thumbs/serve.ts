@@ -50,11 +50,13 @@ export interface ThumbTarget {
  * thumb route, once each has independently resolved and authorized a
  * `(rootName, fsPath)` pair its own way: looks up the file's sha256 in the
  * index, then its cached thumbnail for `size`, and streams the cached WebP
- * from `thumbsDir/<storage_path>` with `Content-Type: image/webp` and
- * `Cache-Control: private, no-store` (never cached by the browser, so a
- * permission or mapping change is never served stale). 404 when the root is
- * not configured, the file is not indexed or has no sha256, no thumbnail has
- * been generated for that size yet, or the cached file is missing from disk.
+ * from `thumbsDir/<storage_path>` with `Content-Type: image/webp`. The
+ * browser may keep it (`Cache-Control: private, no-cache`) but asks again on
+ * every use with the file's sha256 as `ETag`: the same file answers `304`
+ * without a body, while a changed file, or a permission or mapping change,
+ * is never served stale. 404 when the root is not configured, the file is
+ * not indexed or has no sha256, no thumbnail has been generated for that
+ * size yet, or the cached file is missing from disk.
  */
 export async function serveThumb(
   c: Context,
@@ -77,6 +79,11 @@ export async function serveThumb(
   if (thumb === null) {
     throw THUMB_NOT_FOUND();
   }
+  const etag = `"${file.sha256}"`;
+  const cache = { "Cache-Control": "private, no-cache", ETag: etag };
+  if (c.req.header("if-none-match") === etag) {
+    return c.body(null, 304, cache);
+  }
 
   const absolutePath = join(deps.thumbsDir, thumb.storagePath);
   let stat: { size: number };
@@ -90,7 +97,6 @@ export async function serveThumb(
   return c.body(body, 200, {
     "Content-Type": "image/webp",
     "Content-Length": String(stat.size),
-    "Cache-Control": "private, no-store",
-    ETag: `"${file.sha256}"`,
+    ...cache,
   });
 }

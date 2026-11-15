@@ -9,7 +9,6 @@ const CONFIGURED_SUBSYSTEMS = {
   ocr: { status: "unreachable", missing: [] },
   thumbnails: { status: "configured", missing: [] },
   office: { status: "not_configured", missing: ["FDRIVE_OFFICE_PRODUCT"] },
-  trash: { status: "configured", missing: [] },
   shares: { status: "configured", missing: [] },
   network: { status: "configured", missing: [] },
 };
@@ -143,7 +142,6 @@ describe("HealthSubsystemName", () => {
       "ocr",
       "thumbnails",
       "office",
-      "trash",
       "shares",
       "network",
     ]) {

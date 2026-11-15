@@ -12,14 +12,12 @@ export function officeErrorResponse(error: unknown): Response {
     return new Response(null, { status: error.status, headers: error.headers });
   if (isStorageError(error)) {
     const status = {
-      unauthorized: 401,
       forbidden: 403,
       not_found: 404,
       conflict: 409,
       payload_too_large: 413,
       storage_limit_reached: 507,
       bad_request: 400,
-      rate_limited: 429,
       upstream_unavailable: 502,
       internal: 500,
     }[error.kind];

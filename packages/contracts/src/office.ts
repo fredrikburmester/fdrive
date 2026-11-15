@@ -52,7 +52,7 @@ const officeSettingsShape = {
   revision: z.number().int().nonnegative(),
   enabled: z.boolean(),
   editingEnabled: z.boolean(),
-  editingProviderId: z.uuid().nullable(),
+  /** The fdrive users who may open documents for editing, by username. */
   editorUsernames: z.array(z.string().min(1).max(255)).max(1000),
 };
 
@@ -60,15 +60,10 @@ function withOfficeRules<T extends z.ZodType<z.infer<z.ZodObject<typeof officeSe
   schema: T,
 ) {
   return schema
-    .refine(
-      (value) =>
-        !value.editingEnabled ||
-        (value.editingProviderId !== null && value.editorUsernames.length > 0),
-      {
-        message: "editing requires a provider and at least one username",
-        path: ["editorUsernames"],
-      },
-    )
+    .refine((value) => !value.editingEnabled || value.editorUsernames.length > 0, {
+      message: "editing requires at least one editor",
+      path: ["editorUsernames"],
+    })
     .refine((value) => new Set(value.editorUsernames).size === value.editorUsernames.length, {
       message: "editor usernames must be unique",
       path: ["editorUsernames"],
@@ -78,9 +73,9 @@ function withOfficeRules<T extends z.ZodType<z.infer<z.ZodObject<typeof officeSe
 /**
  * Owner-controlled activation of the configured Office service. The
  * browser origin the editor is told fdrive lives at is the system-wide
- * `PublicUrlSettings`, not part of this record. Stored rows written before
- * that split carry an `appUrl` key; parsing strips it (the update request
- * below stays strict).
+ * `PublicUrlSettings`, not part of this record. Parsing a stored record
+ * strips keys it no longer has (`appUrl`, `editingProviderId`); the update
+ * request below stays strict.
  */
 export const OfficeSettings = withOfficeRules(z.object(officeSettingsShape));
 export type OfficeSettings = z.infer<typeof OfficeSettings>;
@@ -92,9 +87,6 @@ export const SystemOfficeResponse = z.object({
   configuration: OfficeSettings,
   product: z.enum(["onlyoffice", "collabora"]),
   status: z.enum(["off", "starting", "ready", "unavailable"]),
-  /** The storage server editor grants apply to: the installation's default provider. */
-  activeProviderId: z.uuid().nullable(),
-  activeProviderLabel: z.string().nullable(),
 });
 export type SystemOfficeResponse = z.infer<typeof SystemOfficeResponse>;
 

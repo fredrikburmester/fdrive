@@ -177,7 +177,7 @@ function journal(rows: Array<Pick<Change, "root" | "path" | "targetPath">>) {
 
 function feed(overrides: Partial<DesktopChangesDeps> = {}) {
   const log = journal([row("alice/old.txt")]);
-  let verified: VerifiedIndexScopesResult | null = { available: true, scopes };
+  let verified: VerifiedIndexScopesResult = { available: true, scopes };
   let roots: Record<string, number> = { files: 1 };
   const changes = createDesktopChanges({
     journal: log.fake,
@@ -190,7 +190,7 @@ function feed(overrides: Partial<DesktopChangesDeps> = {}) {
   return {
     log,
     changes,
-    setScopes(next: VerifiedIndexScopesResult | null) {
+    setScopes(next: VerifiedIndexScopesResult) {
       verified = next;
     },
     setRoots(next: Record<string, number>) {
@@ -303,8 +303,7 @@ describe("createDesktopChanges", () => {
       );
     };
     expect(await feed().changes.available(principal)).toBe(true);
-    // The identity is gone, or its root is not indexed.
-    await unavailable((f) => f.setScopes(null));
+    // The login's root is not indexed.
     await unavailable((f) => f.setScopes({ available: false, reason: "no_roots" }));
     // This API does not journal its changes under that root.
     await unavailable(() => undefined, { journaledRoots: new Set(["photos"]) });

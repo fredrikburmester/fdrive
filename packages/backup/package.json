@@ -21,7 +21,6 @@
     "@aws-sdk/client-s3": "3.1131.0",
     "@aws-sdk/lib-storage": "3.1131.0",
     "@fdrive/contracts": "workspace:*",
-    "@fdrive/core": "workspace:*",
     "@fdrive/db": "workspace:*",
     "age-encryption": "0.3.1",
     "pg": "^8.23.0",

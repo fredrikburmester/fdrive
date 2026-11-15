@@ -26,7 +26,8 @@ vi.mock("@/components/shell/page-header", () => ({
 }));
 const me = makeMe({
   account: { id: "account", displayName: "Ada" },
-  identity: makeIdentity({ id: "identity", providerLabel: "Storage" }),
+  identity: makeIdentity({ id: "identity" }),
+  storageName: "Storage",
 });
 const descriptor: OfficeOpenResponse = {
   fileId: "file",

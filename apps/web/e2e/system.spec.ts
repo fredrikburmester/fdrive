@@ -198,7 +198,7 @@ test("alice (admin) can save the indexer's settings even while the indexer sidec
 });
 
 test.describe("bob (not admin)", () => {
-  // bob is not in FDRIVE_ADMIN_USERS, so this spec logs in as bob itself
+  // bob holds no administrator account, so this spec logs in as bob itself
   // rather than reusing the alice storage state the "chromium" project
   // otherwise applies by default.
   test.use({ storageState: { cookies: [], origins: [] } });
@@ -218,8 +218,7 @@ test.describe("bob (not admin)", () => {
 
     await expect(page.getByRole("link", { name: "Users" })).toBeHidden();
 
-    const connectionRes = await page.request.get("/api/v1/admin/providers");
-    expect(connectionRes.status()).toBe(403);
+    expect((await page.request.get("/api/v1/system/storage")).status()).toBe(403);
     expect((await page.request.get("/api/v1/admin/users")).status()).toBe(403);
 
     for (const path of [

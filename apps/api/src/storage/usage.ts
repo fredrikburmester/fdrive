@@ -1,6 +1,6 @@
 import type { IndexQueries } from "@fdrive/db";
 import type { AppConfig } from "../config.js";
-import { localIndexRoot } from "../local/modules.js";
+import { localIndexRoot } from "../local/files-folder.js";
 
 /** The bytes in a user's home folder as the index counts them; `null` while it is not indexed. */
 export type HomeUsage = (username: string) => Promise<number | null>;
@@ -15,9 +15,7 @@ export function createHomeUsage(
   config: Pick<AppConfig, "fdriveStorageRoot" | "fdriveIndexRoots">,
   index: Pick<IndexQueries, "rootIdsByName" | "subtreeSize">,
 ): HomeUsage {
-  const storageRoot = config.fdriveStorageRoot;
-  const name =
-    storageRoot === undefined ? null : localIndexRoot(config.fdriveIndexRoots, storageRoot);
+  const name = localIndexRoot(config.fdriveIndexRoots, config.fdriveStorageRoot);
   const rootName = (config.fdriveIndexRoots ?? []).some((root) => root.name === name) ? name : null;
   return async (username) => {
     if (rootName === null) return null;

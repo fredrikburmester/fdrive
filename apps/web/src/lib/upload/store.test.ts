@@ -34,7 +34,11 @@ class FakeXhr implements XhrLike {
     this.headers[name] = value;
   }
 
-  send(): void {}
+  sent: Blob | undefined;
+
+  send(body: Blob): void {
+    this.sent = body;
+  }
 
   abort(): void {
     this.aborted = true;
@@ -151,6 +155,7 @@ describe("createUploadStore", () => {
     const onUploaded = vi.fn();
     const store = createUploadStore({
       concurrency,
+      retryDelaysMs: [],
       createXhr: () => {
         const xhr = new FakeXhr();
         xhrs.push(xhr);
@@ -177,8 +182,14 @@ describe("createUploadStore", () => {
     store.getState().enqueue([makeItem("a", { targetPath: "/dest/a.txt" })]);
 
     expect(xhrs[0]?.openCalls).toEqual([
-      ["PUT", "/api/v1/fs/upload?path=%2Fdest%2Fa.txt&mkdirParents=true"],
+      [
+        "PUT",
+        expect.stringMatching(
+          /^\/api\/v1\/fs\/upload\?path=%2Fdest%2Fa\.txt&mkdirParents=true&part=[0-9a-f]{16}&offset=0&final=true$/,
+        ),
+      ],
     ]);
+    expect(xhrs[0]?.sent?.size).toBe(10);
     expect(xhrs[0]?.headers["x-requested-with"]).toBe("fdrive");
     expect(xhrs[0]?.withCredentials).toBe(true);
     expect(xhrs[0]?.headers["x-modified-at"]).toBe(String(FIXED_LAST_MODIFIED_MS));
@@ -294,7 +305,7 @@ describe("createUploadStore", () => {
   });
 
   it("falls back to a real XMLHttpRequest when createXhr is not configured", async () => {
-    const store = createUploadStore();
+    const store = createUploadStore({ retryDelaysMs: [] });
     store.getState().enqueue([makeItem("a")]);
     await flush();
 
@@ -313,6 +324,87 @@ describe("createUploadStore", () => {
     await flush();
 
     expect(replacement).toHaveBeenCalledWith("/dest");
+  });
+
+  describe("a file bigger than one piece", () => {
+    function pieces(retryDelaysMs: readonly number[] = []) {
+      const xhrs: FakeXhr[] = [];
+      const store = createUploadStore({
+        chunkBytes: 4,
+        retryDelaysMs,
+        createXhr: () => {
+          const xhr = new FakeXhr();
+          xhrs.push(xhr);
+          return xhr;
+        },
+      });
+      // Ten bytes: pieces of 4, 4 and 2.
+      store.getState().enqueue([makeItem("a")]);
+      const query = (index: number) =>
+        new URL(xhrs[index]?.openCalls[0]?.[1] ?? "", "http://fdrive").searchParams;
+      return { store, xhrs, query };
+    }
+
+    it("goes in order into one part, with progress across the pieces", async () => {
+      const { store, xhrs, query } = pieces();
+      xhrs[0]?.finishWith(204, "");
+      await flush();
+      xhrs[1]?.emitProgress({ lengthComputable: true, loaded: 2, total: 4 });
+      expect(store.getState().state.items.a?.progress).toBe(0.6);
+      xhrs[1]?.finishWith(204, "");
+      await flush();
+      xhrs[2]?.finishWith(201, "{}");
+      await flush();
+
+      expect(xhrs.map((xhr) => xhr.sent?.size)).toEqual([4, 4, 2]);
+      expect([0, 1, 2].map((i) => query(i).get("offset"))).toEqual(["0", "4", "8"]);
+      expect([0, 1, 2].map((i) => query(i).get("final"))).toEqual([null, null, "true"]);
+      expect(new Set([0, 1, 2].map((i) => query(i).get("part"))).size).toBe(1);
+      expect(store.getState().state.items.a?.status).toBe("done");
+    });
+
+    it("sends a piece again after a lost connection, then goes on", async () => {
+      const { store, xhrs, query } = pieces([0]);
+      xhrs[0]?.finishWith(204, "");
+      await flush();
+      xhrs[1]?.emit("error");
+      await flush();
+      await flush();
+
+      expect(query(2).get("offset")).toBe("4");
+      expect(store.getState().state.items.a?.status).toBe("uploading");
+    });
+
+    it("resumes on retry after a lost piece, but starts afresh after a refusal", async () => {
+      const { store, xhrs, query } = pieces();
+      xhrs[0]?.finishWith(204, "");
+      await flush();
+      xhrs[1]?.finishWith(503, "");
+      await flush();
+      expect(store.getState().state.items.a?.status).toBe("error");
+
+      store.getState().retry("a");
+      expect(query(2).get("offset")).toBe("4");
+      expect(query(2).get("part")).toBe(query(0).get("part"));
+      expect(store.getState().state.items.a?.progress).toBe(0.4);
+
+      xhrs[2]?.finishWith(409, JSON.stringify({ error: { kind: "conflict", message: "exists" } }));
+      await flush();
+      store.getState().retry("a");
+      expect(query(3).get("offset")).toBe("0");
+      expect(query(3).get("part")).not.toBe(query(0).get("part"));
+    });
+
+    it("stops waiting to send a piece again once cancelled", async () => {
+      const { store, xhrs } = pieces([60_000]);
+      xhrs[0]?.emit("error");
+      await flush();
+      store.getState().cancel("a");
+      await flush();
+
+      expect(store.getState().state.items.a?.status).toBe("cancelled");
+      expect(xhrs).toHaveLength(1);
+    });
   });
 });
 

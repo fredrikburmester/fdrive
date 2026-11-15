@@ -75,7 +75,7 @@ enum NativeEnvironment {
         if native.domain == NSCocoaErrorDomain || native.domain == NSFileProviderErrorDomain { return native }
         switch error as? DriveError {
         // Resolvable: macOS keeps pending edits and retries after signalErrorResolved.
-        case .authentication, .unlicensed: return NSFileProviderError(.notAuthenticated) as NSError
+        case .authentication, .credentialGone, .unlicensed: return NSFileProviderError(.notAuthenticated) as NSError
         case .missing: return NSFileProviderError(.noSuchItem) as NSError
         case .expiredSnapshot: return NSFileProviderError(.syncAnchorExpired) as NSError
         case .changedContent: return NSFileProviderError(.versionNoLongerAvailable) as NSError
@@ -100,6 +100,18 @@ enum NativeEnvironment {
             return NSError(domain: NSCocoaErrorDomain, code: NSFileReadUnknownError,
                            userInfo: [NSLocalizedDescriptionKey: error.localizedDescription])
         }
+    }
+}
+
+/// File Provider's registered domains, for removal and reconciliation.
+struct SystemDomains: DomainRegistry {
+    func domains() async throws -> [RegisteredDomain] {
+        try await NSFileProviderManager.domains().map { RegisteredDomain(id: $0.identifier.rawValue) }
+    }
+    /// Never `removeAll`: if macOS cannot keep the dirty files, the domain stays.
+    func remove(id: String) async throws -> URL? {
+        guard let domain = try await NSFileProviderManager.domains().first(where: { $0.identifier.rawValue == id }) else { return nil }
+        return try await NSFileProviderManager.remove(domain, mode: .preserveDirtyUserData)
     }
 }
 

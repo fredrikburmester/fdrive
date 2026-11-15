@@ -43,6 +43,7 @@ import {
 import { HealthResponse } from "./health.ts";
 import { JobAccepted, JobStatus, JobsResponse } from "./jobs.ts";
 import {
+  type CreateSavedSearchRequest,
   type CreateTagRequest,
   type FavoriteRequest,
   FavoritesResponse,
@@ -50,6 +51,8 @@ import {
   RecentsResponse,
   type RecentTouchRequest,
   type RemoveFolderViewRequest,
+  SavedSearch,
+  SavedSearchesResponse,
   type SetFileTagsRequest,
   type SetFolderViewRequest,
   Tag,
@@ -73,16 +76,9 @@ import {
   type RetryProcessingFailuresRequest,
   RetryProcessingFailuresResponse,
 } from "./processing-failures.ts";
-import {
-  AdminProvider,
-  AdminProvidersResponse,
-  type AdminProviderUpdateRequest,
-  ProvidersResponse,
-} from "./providers.ts";
 import { PublicUrlSettings, type PublicUrlUpdateRequest } from "./public-url.ts";
 import {
   accountTokenRoute,
-  adminProviderRoute,
   adminUserRoute,
   chatActionRoute,
   chatCancelRoute,
@@ -96,6 +92,7 @@ import {
   organizeRunRoute,
   publicShareRoute,
   ROUTES,
+  savedSearchRoute,
   shareRoute,
   systemLogsRoute,
   tagFilesRoute,
@@ -111,7 +108,7 @@ import {
   SharesResponse,
   type UpdateShareRequest,
 } from "./shares.ts";
-import { StorageUsageResponse } from "./storage.ts";
+import { StorageUsageResponse, SystemStorage, type SystemStorageUpdateRequest } from "./storage.ts";
 import {
   IndexerActionResponse,
   type IndexerClearRequest,
@@ -228,6 +225,10 @@ export interface ApiClient {
   systemUpdateFeatures(input: FeaturesUpdateRequest): Promise<SystemFeaturesResponse>;
   systemPublicUrl(): Promise<PublicUrlSettings>;
   systemUpdatePublicUrl(input: PublicUrlUpdateRequest): Promise<PublicUrlSettings>;
+  /** Admin only: the files folder's name and health. */
+  systemStorage(): Promise<SystemStorage>;
+  /** Admin only: renames the storage. */
+  systemUpdateStorage(input: SystemStorageUpdateRequest): Promise<SystemStorage>;
   systemOffice(): Promise<SystemOfficeResponse>;
   systemUpdateOffice(input: OfficeSettingsUpdateRequest): Promise<SystemOfficeResponse>;
   systemAi(): Promise<SystemAiResponse>;
@@ -293,6 +294,10 @@ export interface ApiClient {
   remove(items: DeleteRequest["items"]): Promise<OkResponse>;
   zip(paths: string[], name?: string): Promise<Response>;
   downloadUrl(path: string, opts?: { inline?: boolean }): string;
+  /** The video at `path` as H.264/AAC fragmented MP4, transcoded as it plays. */
+  transcodeUrl(path: string): string;
+  /** The `.srt` or `.vtt` file at `path` as WebVTT, for a `<track>`. */
+  subtitlesUrl(path: string): string;
   upload(path: string, body: UploadBody, opts?: ApiClientUploadOptions): Promise<FsEntry>;
   duplicate(path: string): Promise<FsEntry>;
   compress(req: CompressRequest): Promise<JobAccepted>;
@@ -313,10 +318,6 @@ export interface ApiClient {
   thumbUrl(path: string, size: ThumbSize): string;
   setupStatus(): Promise<SetupStatusResponse>;
   setupComplete(setupToken: string, req: SetupCompleteRequest): Promise<MeResponse>;
-  /** Public: the enabled providers with their credential forms, for the login page. */
-  providers(): Promise<ProvidersResponse>;
-  adminProviders(): Promise<AdminProvidersResponse>;
-  adminUpdateProvider(id: string, patch: AdminProviderUpdateRequest): Promise<AdminProvider>;
   adminUsers(): Promise<AdminUsersResponse>;
   adminCreateUser(req: AdminUserCreateRequest): Promise<AdminUser>;
   adminUpdateUser(username: string, patch: AdminUserUpdateRequest): Promise<AdminUser>;
@@ -386,6 +387,9 @@ export interface ApiClient {
   listFavorites(): Promise<FavoritesResponse>;
   addFavorite(req: FavoriteRequest): Promise<OkResponse>;
   removeFavorite(req: FavoriteRequest): Promise<OkResponse>;
+  listSavedSearches(): Promise<SavedSearchesResponse>;
+  createSavedSearch(req: CreateSavedSearchRequest): Promise<SavedSearch>;
+  deleteSavedSearch(id: string): Promise<OkResponse>;
   getFolderView(path: string): Promise<FolderViewResponse>;
   setFolderView(req: SetFolderViewRequest): Promise<OkResponse>;
   removeFolderView(req: RemoveFolderViewRequest): Promise<OkResponse>;
@@ -691,6 +695,14 @@ export function createApiClient(options: ApiClientOptions = {}): ApiClient {
       });
     },
 
+    transcodeUrl(path: string): string {
+      return buildRequestUrl(ctx.baseUrl, ROUTES.fs.transcode, { path });
+    },
+
+    subtitlesUrl(path: string): string {
+      return buildRequestUrl(ctx.baseUrl, ROUTES.fs.subtitles, { path });
+    },
+
     upload(path: string, body: UploadBody, opts?: ApiClientUploadOptions): Promise<FsEntry> {
       const extraHeaders: Record<string, string> = {};
       if (opts?.modifiedAt !== undefined) {
@@ -798,10 +810,6 @@ export function createApiClient(options: ApiClientOptions = {}): ApiClient {
       });
     },
 
-    providers: () => get(ROUTES.providers, ProvidersResponse),
-    adminProviders: () => get(ROUTES.admin.providers, AdminProvidersResponse),
-    adminUpdateProvider: (id: string, input: AdminProviderUpdateRequest) =>
-      patch(adminProviderRoute(id), AdminProvider, { jsonBody: input }),
     adminUsers: () => get(ROUTES.admin.users, AdminUsersResponse),
     adminCreateUser: (req: AdminUserCreateRequest) =>
       post(ROUTES.admin.users, AdminUser, { jsonBody: req }),
@@ -827,6 +835,12 @@ export function createApiClient(options: ApiClientOptions = {}): ApiClient {
     },
     systemUpdatePublicUrl(input: PublicUrlUpdateRequest): Promise<PublicUrlSettings> {
       return put(ROUTES.system.publicUrl, PublicUrlSettings, { jsonBody: input });
+    },
+    systemStorage(): Promise<SystemStorage> {
+      return get(ROUTES.system.storage, SystemStorage);
+    },
+    systemUpdateStorage(input: SystemStorageUpdateRequest): Promise<SystemStorage> {
+      return patch(ROUTES.system.storage, SystemStorage, { jsonBody: input });
     },
     systemOffice(): Promise<SystemOfficeResponse> {
       return get(ROUTES.system.office, SystemOfficeResponse);
@@ -1063,6 +1077,18 @@ export function createApiClient(options: ApiClientOptions = {}): ApiClient {
 
     removeFavorite(req: FavoriteRequest): Promise<OkResponse> {
       return del(ROUTES.favorites.base, OkResponse, { jsonBody: req });
+    },
+
+    listSavedSearches(): Promise<SavedSearchesResponse> {
+      return get(ROUTES.savedSearches, SavedSearchesResponse);
+    },
+
+    createSavedSearch(req: CreateSavedSearchRequest): Promise<SavedSearch> {
+      return post(ROUTES.savedSearches, SavedSearch, { jsonBody: req });
+    },
+
+    deleteSavedSearch(id: string): Promise<OkResponse> {
+      return del(savedSearchRoute(id), OkResponse);
     },
 
     getFolderView(path: string): Promise<FolderViewResponse> {

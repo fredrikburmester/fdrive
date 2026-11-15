@@ -41,13 +41,12 @@ describe("storage usage and limits through the API", () => {
         },
       }),
     ]);
-    await seedLocalUsers(postgres.connectionString, storage);
+    await seedLocalUsers(postgres.connectionString, storage, ["alice"]);
     composed = await composeApp(
       loadConfig({
         DATABASE_URL: postgres.connectionString,
         FDRIVE_STORAGE_ROOT: storage.root,
         FDRIVE_MASTER_KEY: Buffer.alloc(32, 43).toString("base64"),
-        FDRIVE_ADMIN_USERS: "alice",
         FDRIVE_INDEX_ROOTS: JSON.stringify([
           { name: "files", storagePath: storage.root, indexerPath: "/roots/files" },
         ]),
@@ -113,6 +112,12 @@ describe("storage usage and limits through the API", () => {
       cookie,
       raw: "x".repeat(bytes),
     });
+  /** One piece of an upload sent in pieces. */
+  const piece = (cookie: string, path: string, offset: number, bytes: number, final = false) =>
+    call(
+      `${ROUTES.fs.upload}?path=${encodeURIComponent(path)}&part=0123456789abcdef&offset=${offset}${final ? "&final=true" : ""}`,
+      { method: "PUT", cookie, raw: "x".repeat(bytes) },
+    );
   const limit = async (cookie: string, username: string, storageLimit: number | null) => {
     const response = await call(`${ROUTES.admin.users}/${username}`, {
       method: "PATCH",
@@ -170,6 +175,11 @@ describe("storage usage and limits through the API", () => {
     expect((await upload(bob, "/fits.bin", 200)).status).toBe(201);
     await refused(upload(bob, "/too-big.bin", 400));
     expect(existsSync(storage.path("bob", "/too-big.bin"))).toBe(false);
+    // An upload sent in pieces shares the room: the 200 bytes already sent count.
+    expect((await piece(bob, "/pieces.bin", 0, 200)).status).toBe(204);
+    await refused(piece(bob, "/pieces.bin", 200, 200, true));
+    expect((await piece(bob, "/pieces.bin", 200, 90, true)).status).toBe(201);
+    expect(existsSync(storage.path("bob", "/pieces.bin"))).toBe(true);
     await refused(
       call(ROUTES.fs.copy, {
         method: "POST",

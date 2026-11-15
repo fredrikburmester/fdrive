@@ -10,7 +10,7 @@ import { COOKIE_NAME } from "../auth/sessions.js";
 import { ApiHttpError } from "../errors.js";
 import { type ActivityAdmissionDeps, createActivityAdmission } from "./admission.js";
 
-it("admits only the login's readable gestures, scopes copied links, and hashes the session context", async () => {
+it("admits only gestures on the login's own files, scopes copied links, and hashes the session context", async () => {
   const owner = randomUUID(),
     identityId = randomUUID(),
     shareId = randomUUID(),
@@ -19,7 +19,6 @@ it("admits only the login's readable gestures, scopes copied links, and hashes t
   await storage.upload("/a", new Uint8Array([1]));
   await storage.mkdir("/d");
   const deps = {
-    storageFactory: async () => storage,
     clock: () => now,
     secret: "server-secret",
     reads: { record: vi.fn(async (_input: unknown) => "window") },
@@ -80,7 +79,10 @@ it("admits only the login's readable gestures, scopes copied links, and hashes t
     input = { ...input, at: at.toISOString() };
     expect((await request()).status).toBe(403);
   }
-  input = { ...input, at: now.toISOString(), action: "file.open" };
-  vi.spyOn(storage, "download").mockRejectedValueOnce(new StorageError("forbidden", "denied"));
+  // A path the login's storage does not have (or refuses) is not admitted.
+  input = { ...input, at: now.toISOString(), action: "file.open", path: "/missing" };
+  expect((await request()).status).not.toBe(200);
+  input = { ...input, path: "/a" };
+  vi.spyOn(storage, "stat").mockRejectedValueOnce(new StorageError("forbidden", "denied"));
   expect((await request()).status).toBe(403);
 });
