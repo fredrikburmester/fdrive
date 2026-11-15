@@ -16,8 +16,7 @@ migrations, compatibility shims or configuration aliases; a full reindex is acce
 ## Order
 
 - Groups that add a migration run one at a time and need `pnpm test:integration`.
-- 10 folds into 12.
-- 12–15 run strictly in order: they share `apps/api/src/auth/service.ts`, `composition.ts` and the
+- 13–15 run strictly in order: they share `apps/api/src/auth/service.ts`, `composition.ts` and the
   contracts.
 - 16 before 17, 26, 31 and 32. 16 and 23 before 18. 36 and 37 last.
 
@@ -48,18 +47,8 @@ Recommended on 2026-11-14 and approved by the owner the same day.
 7\. **Drop the public URL's fallback to Office's `appUrl`**, the one shim #163 left
 (`apps/api/src/composition.ts`, `legacyUrl`).
 
-10\. **Rate-limit password change.** `POST /auth/password` checks the current password without
-the login limiter (`local/routes.ts`, `local/service.ts`). Folds into 12.
-
 ## Wave 1: one user, one storage
 
-12. **Check passwords locally and drop stored passwords.** Sign-in goes through the provider
-    module's `authenticate` with metadata-driven fields and a one-time-code field
-    (`accounts/credentials.ts`). `app.credentials` keeps reversible copies of every password,
-    compared at sign-in, and the master key travels in backup archives. Setup is a two-step
-    resumable claim. Backups re-authenticate every login on restore, read Mac recovery by signing
-    in as each user, and unlock with a provider credential map. Logins are created at first
-    sign-in with a case-sensitive lookup. The web form becomes plain username and password.
 13. **One storage, no provider modules.** `ProviderModule`, the registry and `ProviderService`
     for one row (base URL, config, probe, `fetch`, a pinned storage factory); per-login
     `ProviderCapabilities` become two installation flags on `/me`; one-value Trash and share
@@ -145,7 +134,7 @@ All but 27 are server-only and keep shipped Mac builds working.
 
 ## Last
 
-36. Collapse the schema: provider columns and rows, `app.credentials`, `identities.provider_id`,
+36. Collapse the schema: provider columns and rows, `identities.provider_id`,
     `office_files.provider_id`. Keep the provider row's UUID, which the Mac app compares as
     `providerId`.
 37. Squash the migrations into one baseline.

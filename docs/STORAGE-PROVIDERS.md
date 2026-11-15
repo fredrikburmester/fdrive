@@ -1,8 +1,9 @@
 # Storage port
 
 The files folder ([`packages/local`](../packages/local/src/)) is fdrive's only storage. The API
-reaches it through a small port in `packages/core/src/ports/`: `ProviderModule` configures,
-authenticates and builds storage, and `StorageProvider` does the file operations. The port keeps
+reaches it through a small port in `packages/core/src/ports/`: `ProviderModule` configures
+and builds storage, and `StorageProvider` does the file operations. fdrive checks passwords
+itself ([authentication](AUTH.md)). The port keeps
 routes, the web app, the schema and the indexer off filesystem details and lets tests run on an
 in-memory storage. It is an internal boundary, not a plugin system.
 
@@ -36,14 +37,13 @@ in-memory storage. It is an internal boundary, not a plugin system.
 | Member | Local folder |
 | --- | --- |
 | `type`, `label` | `"local"`, "Local folder" until the row is renamed |
-| `configFields`, `credentialFields` | None; `username` and `password`. Fields drive the login form and the API's validation (`validateFields` in [provider-fields.ts](../packages/core/src/provider-fields.ts)) |
+| `configFields`, `credentialFields` | None; `username` and `password`, as `GET /api/v1/providers` lists them. The login form does not read them |
 | `capabilities` | All eight flags true (below) |
 | `trash` | `"move"`: fdrive moves deletes into the Trash folder (`"none"` would mean no Trash) |
 | `shares` | `"owned"`: fdrive keeps links in `app.shares` and serves them through this storage ([owned.ts](../apps/api/src/shares/owned.ts)) |
 | `deploymentManaged` | True: the row comes from `FDRIVE_STORAGE_ROOT`; the API cannot create, re-address or remove it, so no administrator can point it at another folder, such as the API's own secrets |
 | `indexRootName` | The index root the folder is read under (`localIndexRoot`) |
 | `probe` | The root is a folder the API can read, write and enter |
-| `authenticate` | Checks the password against `app.local_users`: `unauthorized` when wrong, `forbidden` when disabled, and a credential naming another user than `ctx.expectedUsername` is refused |
 | `admit` | Refuses a disabled or removed user on every request, not only at sign-in |
 | `createStorage` | The home at `<root>/<username>`, plus `/Shared with me` from `app.local_grants` |
 
@@ -128,8 +128,8 @@ How the files folder implements it:
   written into a folder with entries, or any folder while the database has no live
   `idx.files` rows and no local users, and an empty marker is filled in. Otherwise
   `createStorage` and `admit` throw `upstream_unavailable` with the reason, `probe` reports
-  it, and `core` health fails; `authenticate` still works, so administrators can sign in. The
-  verdict is reused for ten seconds, and a database outage keeps a verified folder.
+  it, and `core` health fails; signing in only reads the database, so administrators can still
+  sign in. The verdict is reused for ten seconds, and a database outage keeps a verified folder.
 - **Changes for the indexer.** Storage reports each change once it succeeds (`onChange`, a
   `DiskChange` by absolute path; [changes.ts](../packages/local/src/changes.ts)): an upload,
   copy, delete, new modification time or new folder is `changed` (for `mkdir` with `parents`,

@@ -1,7 +1,8 @@
 # Installation backups
 
 System → Backups protects one installation, including every account. Only the setup owner,
-using a browser session and fresh storage authentication, can manage or download backups.
+using a browser session and having just confirmed their password, can manage or download
+backups.
 Other administrators and MCP/desktop bearer tokens do not grant backup access.
 
 ## Configure
@@ -19,15 +20,15 @@ to run the worker inside the API process. Only one worker holds the database wor
 `FDRIVE_DESKTOP_STATE_DIR` is included automatically. Keep the backup directory outside all
 source directories. Missing or unreadable recovery sources appear as coverage gaps.
 
-1. Open System → Backups and authenticate again.
+1. Open System → Backups and confirm your password.
 2. Create and download a recovery key. Paste the saved key to prove it can decrypt a challenge.
    The private key is generated in the browser; scheduled backups use only its public recipient.
 3. Optionally add an S3/B2 destination or a folder in the files folder. Adding it tests
    create, read and delete permissions using a uniquely named probe. Use a private bucket or
    directory and dedicated credentials, and keep those credentials outside fdrive too. A files
-   folder destination signs in as one of fdrive's users and is checked like a sign-in, so a
-   disabled or removed user, or a changed password, stops its copies. It sits on the same host
-   as the installation, so copy it off the host with the rest of the files folder.
+   folder destination is a folder in your own files, and fdrive keeps no password for it; if
+   your user is disabled or removed, its copies stop. It sits on the same host as the
+   installation, so copy it off the host with the rest of the files folder.
    A bucket with default Object Lock retention keeps the probe object; fdrive never asks for a
    retention bypass. The destination is saved and the kept object's name and deadline are shown
    on its card and recorded in the event log.
@@ -42,7 +43,7 @@ source directories. Missing or unreadable recovery sources appear as coverage ga
 S3 supports a custom endpoint, region, bucket, prefix and path-style addressing, including
 Backblaze B2's S3-compatible endpoints. Enter the endpoint and region belonging to your bucket;
 the B2 preset is an editable example. A files folder destination is bound to the storage row
-and the user that signed it in, independent of the current browsing identity. Its archives
+and the owner who added it, independent of the current browsing identity. Its archives
 live beneath `<chosen folder>/.fdrive-backups/<installation ID>` in that user's files. fdrive's
 file API hides that namespace and rejects ancestor archive/mutation operations that would
 include it. Host permissions remain the boundary against other tools on the host; encryption
@@ -89,18 +90,17 @@ The explicit table registry is in `packages/backup/src/registry.ts`. A capture f
 unclassified application/index table, including tables introduced by a future migration.
 
 - Accounts, identities, providers, local users (password hashes included) and the folders
-  they share with each other, credentials, settings, tags, favorites, folder views, recents,
+  they share with each other, settings, tags, favorites, folder views, recents,
   AI chats (transcripts and references), share metadata (password hashes included, so links
   restore fully), activity, stable Office/native file IDs and native recovery receipts.
 - Retained index scan/move/event history, OCR rewrite history and processing failures.
 - Exact active configuration ZIP versions, pre-OCR originals and original-file mappings,
   native local/remote recovery material, retained logs and configured external source mounts.
 - Effective deployment configuration, mount identities, migration hashes and database schema
-  fingerprint. The source master key is inside the independently encrypted archive so stored
-  credential envelopes can be resealed on a replacement installation.
+  fingerprint. The source master key is inside the independently encrypted archive so
+  destination secrets and configuration ZIP keys can be resealed on a replacement installation.
 
-Indexes, extracted chunks, thumbnails, embeddings, sessions, provider token caches and WOPI
-locks are omitted. Original user files (the files folder, Trash included), unsaved external
+Indexes, extracted chunks, thumbnails, embeddings, sessions and WOPI locks are omitted. Original user files (the files folder, Trash included), unsaved external
 editor state and device-only edits require their own backups. A configuration ZIP
 protects only the version uploaded.
 
@@ -108,8 +108,8 @@ Database rows are captured in a repeatable-read transaction, using PostgreSQL te
 preserve bigint, bytea, JSON and timestamps exactly. An exclusive advisory checkpoint prevents
 cooperating native/attachment/OCR writes from publishing new recovery bytes during capture.
 Local files reject symlinks, inode replacement and mutation during reading; log files capture
-their checkpoint prefix while allowing append. Remote recovery is read through its original
-identity. Independently changing user files and external writers are not a filesystem snapshot.
+their checkpoint prefix while allowing append. The Mac's recovery files are read from each
+user's own files. Independently changing user files and external writers are not a filesystem snapshot.
 
 ## Recovery
 
@@ -153,7 +153,7 @@ does not compose normal providers, auth, feature services, outboxes or backup wo
 the web and API behind HTTPS before submitting a recovery key remotely.
 
 Both paths validate every archive entry and checksum before import. Paths from an archive
-are never used as extraction paths. Credentials are resealed under the new master key.
+are never used as extraction paths. Destination secrets are resealed under the new master key.
 All providers/features/schedules start disabled, browser sessions are absent, API tokens are
 revoked, unfinished scans become interrupted history, and old native effects remain quarantined.
 Captures enforce the same format limits as restore: 4 MiB per database row/header, 100,000 recovery files, 64 MiB manifest and 1 TiB uncompressed archive. Oversized captures fail before publication. Existing archive files are never replaced.
@@ -170,12 +170,13 @@ mounts, root names and Office/public URLs. Create a private review file:
   "environmentFingerprint": "SHA256_FROM_BACKUP_ENVIRONMENT",
   "providers": [{ "id": "ORIGINAL_PROVIDER_UUID", "baseUrl": "local" }],
   "ownerIdentityId": "ORIGINAL_OWNER_IDENTITY_UUID",
-  "credential": { "username": "owner", "password": "CURRENT_STORAGE_PASSWORD" },
+  "password": "OWNER_PASSWORD",
   "oldDeploymentStopped": true,
   "pathBindingsReviewed": true
 }
 ```
 
+`password` is the owner's fdrive password, checked against their restored user.
 `pathBindingsReviewed` is the operator's statement that the annotation review below was done.
 Resume refuses a review file without both flags set to `true`.
 
@@ -261,8 +262,8 @@ Limitations these numbers expose:
 node dist/main.js backup resume --review-file review.json
 ```
 
-Resume reauthenticates the original owner even if their saved credential is missing, checks
-the listed provider bindings and saved identities, and publishes verified configuration ZIPs.
+Resume checks the original owner's password against their restored user, checks the listed
+provider bindings, and publishes verified configuration ZIPs.
 Restart the API with `FDRIVE_RESTORE_MODE=false`. Review and re-enable features and schedules
 in System; confirm a recovery key before scheduling again. Reconnect native/MCP clients.
 
