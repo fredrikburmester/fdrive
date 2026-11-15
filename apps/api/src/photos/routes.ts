@@ -6,13 +6,7 @@ import {
   PhotosResponse,
   ROUTES,
 } from "@fdrive/contracts";
-import {
-  baseName,
-  type CoreError,
-  normalizePath,
-  type StorageProvider,
-  toFsPath,
-} from "@fdrive/core";
+import { baseName, type CoreError, normalizePath, toFsPath } from "@fdrive/core";
 import type { IndexQueries, PhotoCursor } from "@fdrive/db";
 import type { AppHono, AuthedHono } from "../app.js";
 import { ApiHttpError } from "../errors.js";
@@ -37,7 +31,6 @@ const CURSOR = /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6})_(\d+)$/;
 export interface PhotoRoutesDeps {
   readonly indexQueries: Pick<IndexQueries, "rootIdsByName" | "photos" | "photoDetails">;
   readonly resolver: Pick<ScopeResolver, "verifiedIndexScopes">;
-  readonly trashPathForStorage?: (storage: StorageProvider) => string | null;
 }
 
 function parseCursor(raw: string | undefined): PhotoCursor | undefined {
@@ -82,9 +75,8 @@ export function registerPhotoRoutes(
       const rootId = rootIds[scope.rootName];
       return rootId === undefined ? [] : [{ rootId, fsPrefix: scope.fsPrefix }];
     });
-    const trashPath = deps.trashPathForStorage?.(principal.storage) ?? null;
     const rows = await deps.indexQueries.photos(prefixes, IMAGE_EXTS, PHOTOS_PAGE_SIZE, {
-      exclude: reservedExclusion(scopes, trashPath, rootIds),
+      exclude: reservedExclusion(scopes, rootIds),
       ...(after === undefined ? {} : { after }),
     });
 

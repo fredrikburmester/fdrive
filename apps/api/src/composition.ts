@@ -956,14 +956,7 @@ export async function composeApp(
         semanticEnabled: embedClient !== null,
         imageSearchEnabled: imageEmbedClient !== null,
       });
-      registerPhotoRoutes(groups, {
-        indexQueries,
-        resolver: scopeResolver,
-        trashPathForStorage: (storage) => {
-          const settings = trashSettingsForStorage(storage);
-          return settings?.enabled === true ? settings.path : null;
-        },
-      });
+      registerPhotoRoutes(groups, { indexQueries, resolver: scopeResolver });
       registerThumbRoutes(groups, {
         enabled: async () =>
           (await featureService.enabled("thumbnails")) ||
