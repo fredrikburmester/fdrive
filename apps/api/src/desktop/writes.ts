@@ -165,7 +165,7 @@ export interface DesktopWriteDeps extends Pick<DesktopDeps, "clock" | "indexedCo
   ownerPath?: OwnerPath;
   /**
    * Deletes the item `id` in a user's Trash for good, the way Delete
-   * permanently does (`purgeTrashItem`).
+   * permanently does (`FileOperations.purge`).
    */
   purge: (principal: Principal, id: string) => Promise<void>;
   /** Hears metadata that could not follow a published write, and bookkeeping left behind. */
@@ -577,7 +577,7 @@ export function createDesktopWrites(deps: DesktopWriteDeps) {
   /**
    * Brings the rest of path-keyed metadata along once a write is published
    * and its receipt (with what grants access) kept, the way web writes do
-   * right after their storage call (`fs/routes.ts`): tags, favorites, folder
+   * right after their storage call (`files/operations.ts`): tags, favorites, folder
    * views, recents, AI chat references and Office files follow a move, into
    * Trash and back out too (`followIntoTrash`), so nothing new at the old
    * path inherits them. The web hears of the write from the change journal,
@@ -1142,7 +1142,7 @@ export function createDesktopWrites(deps: DesktopWriteDeps) {
     prepare,
     /**
      * Deletes an item in the user's own Trash for good, as Empty Trash does
-     * (`purgeTrashItem`): Finder's Empty Trash, or a delete in its Trash. An
+     * (`FileOperations.purge`): Finder's Empty Trash, or a delete in its Trash. An
      * item gone already is done; anything else, a live item or something
      * inside a Trash item, is refused.
      */

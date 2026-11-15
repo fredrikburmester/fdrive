@@ -1,5 +1,4 @@
-import type { DesktopShareMove, ShareRepo } from "@fdrive/db";
-import type { PathFollower } from "../metadata/service.ts";
+import type { DesktopShareMove } from "@fdrive/db";
 
 /** A path as it lies in its owner's files: the owner's login and the owner's own path. */
 export interface OwnedPath {
@@ -8,7 +7,6 @@ export interface OwnedPath {
 }
 
 export interface ShareMovesDeps {
-  readonly shares: Pick<ShareRepo, "movePrefix" | "deletePrefix">;
   /**
    * Where a login's path lies in its owner's files (`LocalGrantService.ownerPath`):
    * a path in a folder shared with the login belongs to that folder's owner.
@@ -17,7 +15,7 @@ export interface ShareMovesDeps {
   readonly ownerPath?: (identityId: string, path: string) => Promise<OwnedPath>;
 }
 
-export interface ShareMoves extends PathFollower {
+export interface ShareMoves {
   /**
    * What public links do when `from` moved to `to` in `identityId`'s files,
    * in their owner's files: follow to `to`, or drop `from` (`to: null`) when
@@ -31,18 +29,16 @@ export interface ShareMoves extends PathFollower {
  * canonical paths in its owner's files (`app.shares.paths`); left behind at
  * a path, it would serve whatever is put there next, content its owner never
  * shared. So a link follows every move of what it names, or of a folder
- * above it, through the hooks every other path-keyed record follows (fdrive's
- * own moves, MCP and the AI, Office renames, Trash and its restores, moves
- * the change journal holds for changes made outside fdrive) and with the
- * receipt of each Mac write (`resolve`).
+ * above it: with every file operation's storage call (`files/access.ts`),
+ * with the receipt of each Mac write, and once the change journal holds a
+ * change made outside fdrive.
  *
  * That includes moves to where no link may reach: into the Trash, the Mac's
  * Trash, a backup folder or `Shared with me`. The public routes refuse those
  * paths (fdrive's Trash layout wherever it lies), so the link shows
- * not found there, and follows the item back out on a restore. Moves into
- * and out of the Trash reach it as moves (`followIntoTrash`). A
- * delete, or a purge from the Trash, removes the item's paths from its
- * links, and a link left with none goes.
+ * not found there, and follows the item back out on a restore. A delete, or
+ * a purge from the Trash, removes the item's paths from its links, and a
+ * link left with none goes.
  *
  * A move by someone a folder is shared with counts in the owner's files:
  * within that folder the owner's links follow it. Taken out of the owner's
@@ -54,31 +50,19 @@ export function createShareMoves(deps: ShareMovesDeps): ShareMoves {
   const ownerPath =
     deps.ownerPath ?? (async (identityId: string, path: string) => ({ identityId, path }));
 
-  async function resolve(identityId: string, from: string, to: string) {
-    if (from === to) return null;
-    const source = await ownerPath(identityId, from);
-    if (source.path === "/") return null;
-    const target = await ownerPath(identityId, to);
-    if (target.identityId === source.identityId)
-      return target.path === source.path || target.path === "/"
-        ? null
-        : { identityId: source.identityId, from: source.path, to: target.path };
-    // Into someone else's files: its owner still finds it under `Shared with me`.
-    if (source.identityId === identityId && to !== "/") return { identityId, from, to };
-    return { identityId: source.identityId, from: source.path, to: null };
-  }
-
-  async function follow(identityId: string, from: string, to: string, isDir: boolean) {
-    const move = await resolve(identityId, from, to);
-    if (move === null) return;
-    if (move.to === null) await deps.shares.deletePrefix(move.identityId, move.from, isDir);
-    else await deps.shares.movePrefix(move.identityId, move.from, move.to, isDir);
-  }
-
-  async function drop(identityId: string, path: string, isDir: boolean) {
-    const owned = await ownerPath(identityId, path);
-    if (owned.path !== "/") await deps.shares.deletePrefix(owned.identityId, owned.path, isDir);
-  }
-
-  return { resolve, onMoved: follow, onDeleted: drop };
+  return {
+    async resolve(identityId, from, to) {
+      if (from === to) return null;
+      const source = await ownerPath(identityId, from);
+      if (source.path === "/") return null;
+      const target = await ownerPath(identityId, to);
+      if (target.identityId === source.identityId)
+        return target.path === source.path || target.path === "/"
+          ? null
+          : { identityId: source.identityId, from: source.path, to: target.path };
+      // Into someone else's files: its owner still finds it under `Shared with me`.
+      if (source.identityId === identityId && to !== "/") return { identityId, from, to };
+      return { identityId: source.identityId, from: source.path, to: null };
+    },
+  };
 }

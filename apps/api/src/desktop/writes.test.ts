@@ -96,7 +96,7 @@ async function fixture() {
       ({ directory, shares: { identityId, from, to }, grants: null }) as DesktopAccessMove,
   );
   const metadata = { onMoved: vi.fn(async () => {}), onDeleted: vi.fn(async () => {}) };
-  // Delete permanently, as `purgeTrashItem` does it.
+  // Delete permanently, as `FileOperations.purge` does it.
   const purge = vi.fn((principal: Principal, id: string) => principal.storage.trash.purge(id));
   const deps = {
     repo: memory.repo,

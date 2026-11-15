@@ -15,6 +15,11 @@ import { createOfficeService } from "../../../src/office/service.ts";
 import { createOfficeTokenCodec } from "../../../src/office/tokens.ts";
 import type { OfficeConfig, OfficeDeps } from "../../../src/office/types.ts";
 import { activityFixture } from "../../activity-fixture.js";
+import {
+  memoryAccessRepo,
+  testAccessFollowers,
+  testFileOperations,
+} from "../../file-operations.js";
 export const proofPair = generateKeyPairSync("rsa", { modulusLength: 2048 });
 export function proofKey(pair = proofPair) {
   const jwk = pair.publicKey.export({ format: "jwk" });
@@ -122,6 +127,15 @@ export async function officeHarness(
   const files = createMemoryOfficeFileRepo();
   const locks = createMemoryWopiLockRepo();
   const activity = activityFixture(clock);
+  // Every user reaches alice's files at the same paths, so cross-user
+  // cases need no copies: every document is alice's.
+  const ownerPath = async (_identityId: string, path: string) => ({
+    identityId: alice.identity.id,
+    path,
+  });
+  const metadata = createMetadataService(repos);
+  const activityService =
+    options.deps && "activity" in options.deps ? options.deps.activity : activity.service;
   const deps: OfficeDeps = {
     canEdit: async (actor) => ["alice", "bob"].includes(actor.identity.username),
     withWriteScope: (callback) => callback({ files, locks }),
@@ -132,10 +146,8 @@ export async function officeHarness(
     files,
     locks,
     clock,
-    // Every user reaches alice's files at the same paths, so cross-user
-    // cases need no copies: every document is alice's.
     grants: {
-      ownerPath: async (_identityId, path) => ({ identityId: alice.identity.id, path }),
+      ownerPath,
       pathFor: async (_identityId, owned) =>
         owned.identityId === alice.identity.id ? owned.path : null,
     },
@@ -143,7 +155,14 @@ export async function officeHarness(
       options.storageForUser?.(
         users.find((user) => user.identity.id === id)?.identity.username ?? "alice",
       ) ?? storage,
-    metadata: createMetadataService(repos),
+    // Documents keep their ids through renames with what grants access.
+    operations: testFileOperations({
+      ...(activityService === undefined ? {} : { activity: activityService }),
+      metadata,
+      ownerPath,
+      access: testAccessFollowers(memoryAccessRepo({ office: files }, clock), { ownerPath }),
+    }),
+    metadata,
     activity: activity.service,
     ...options.deps,
   };
@@ -217,6 +236,7 @@ export async function officeHarness(
   return {
     app,
     deps,
+    metadata,
     activity,
     service,
     config,

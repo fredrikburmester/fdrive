@@ -17,9 +17,7 @@ import {
 } from "@fdrive/core";
 import { z } from "zod";
 import type { ActivityCallContext } from "../../activity/fs-context.js";
-import { recordActivity } from "../../activity/fs-context.js";
-import type { FsRoutesDeps } from "../../fs/routes.js";
-import { moveMany, trashMany } from "../../fs/routes.js";
+import { type FileOperations, fileActor, moveMany, trashMany } from "../../files/operations.js";
 import { decodeText } from "../../mcp/content.js";
 import type { OrganizeItem } from "../organize/agent.ts";
 import { buildProposal } from "../organize/proposal.ts";
@@ -29,7 +27,8 @@ import { type ActionOutcome, type ActionTool, defineActionTool } from "./actions
 import { DOCUMENT_EXTENSIONS, readBytes, referencedArg } from "./tools.ts";
 
 export interface ChatActionToolsDeps extends DriveToolsDeps {
-  readonly fs: Pick<FsRoutesDeps, "metadata" | "activity" | "ownerPath">;
+  /** Applies what the person approved, the way every other change to files is made. */
+  readonly files: FileOperations;
   /** The chat whose proposal the person approved, recorded with every action it applies. */
   readonly conversationId: string;
 }
@@ -135,7 +134,7 @@ function moveItemsTool(deps: ChatActionToolsDeps): ActionTool {
             toolResult: "The person kept no moves.",
           };
         const results = await moveMany(
-          deps.fs,
+          deps.files,
           deps.principal,
           { items, createParents: true },
           activityContext(deps),
@@ -205,7 +204,7 @@ function trashItemsTool(deps: ChatActionToolsDeps): ActionTool {
             results: [],
             toolResult: "The person kept no items.",
           };
-        const results = await trashMany(deps.fs, deps.principal, items, activityContext(deps));
+        const results = await trashMany(deps.files, deps.principal, items, activityContext(deps));
         const mapped: ChatActionResult[] = results.map((result) =>
           result.ok
             ? { path: result.path, ok: true }
@@ -367,7 +366,7 @@ function renameItemsTool(deps: ChatActionToolsDeps): ActionTool {
           items.length === 0
             ? []
             : await moveMany(
-                deps.fs,
+                deps.files,
                 deps.principal,
                 { items },
                 activityContext(deps),
@@ -517,22 +516,12 @@ function writeTextFileTool(deps: ChatActionToolsDeps): ActionTool {
         }
         const bytes = Buffer.from(proposal.text, "utf8");
         try {
-          await recordActivity(
-            deps.fs.activity,
-            deps.principal,
-            {
-              ...activityContext(deps),
-              action: mode === "create" ? "file.create" : "file.save",
-              requested: { path, kind: "file", conversationId: deps.conversationId },
-            },
-            () =>
-              deps.principal.storage.upload(path, bytes, {
-                overwrite: mode === "replace",
-                contentLength: bytes.length,
-                signal,
-              }),
-            () => ({ path, kind: "file", size: bytes.length }),
-          );
+          await deps.files.upload(fileActor(deps.principal, activityContext(deps)), path, bytes, {
+            action: mode === "create" ? "file.create" : "file.save",
+            overwrite: mode === "replace",
+            contentLength: bytes.length,
+            signal,
+          });
         } catch (error) {
           const message = errorMessage(error);
           return {

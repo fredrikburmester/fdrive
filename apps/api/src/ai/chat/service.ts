@@ -19,7 +19,7 @@ import { isReservedPath, isStorageError, normalizePath } from "@fdrive/core";
 import type { AiChat, AiChatMessage, AiChatRepo } from "@fdrive/db";
 import type { Principal } from "../../auth/principal.js";
 import { ApiHttpError } from "../../errors.js";
-import type { FsRoutesDeps } from "../../fs/routes.js";
+import type { FileOperations } from "../../files/operations.js";
 import type { McpToolDeps } from "../../mcp/handlers.js";
 import type { AiInput, AiModel, AiToolResult } from "../model.ts";
 import type { AiSettingsService, ResolvedAiConfig } from "../settings.ts";
@@ -78,8 +78,8 @@ export interface ChatServiceDeps {
   readonly chats: AiChatRepo;
   /** The MCP read handlers the tools reuse. */
   readonly mcp: McpToolDeps;
-  /** What applying a move, rename or trash card needs: history and metadata hooks. */
-  readonly fs: Pick<FsRoutesDeps, "metadata" | "activity" | "ownerPath">;
+  /** Applies a move, rename, trash or write card the person approved. */
+  readonly files: FileOperations;
   readonly clock: () => Date;
   readonly ids?: () => string;
   readonly live?: LiveChats;
@@ -239,7 +239,7 @@ export function createChatService(deps: ChatServiceDeps): ChatService {
     ];
     const actions: ActionTool[] = createChatActionTools({
       ...toolDeps,
-      fs: deps.fs,
+      files: deps.files,
       conversationId: chat.id,
     });
     return {

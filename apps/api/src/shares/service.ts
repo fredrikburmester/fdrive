@@ -3,6 +3,7 @@ import type { Repos, ShareRecord, ShareRepo } from "@fdrive/db";
 import type { AccountRequestContext } from "../auth/account-context.ts";
 import type { IdentityStorageFactory } from "../auth/storage-factory.ts";
 import { ApiHttpError } from "../errors.ts";
+import type { FileOperations } from "../files/operations.ts";
 import type { PublicShareAccess } from "./access.ts";
 import type { ShareCredential } from "./credentials.ts";
 import type { PublicThumbTarget } from "./limits.ts";
@@ -15,6 +16,8 @@ export interface SharesDeps {
   shares: ShareRepo;
   /** The owner's storage as every feature gets it: the only way a share reaches bytes. */
   storageFor: IdentityStorageFactory;
+  /** Stores a visitor's upload the way every change to files is made. */
+  files: Pick<FileOperations, "upload">;
   passwords: SharePasswords;
   /** Ceilings on public archive downloads; each one left out keeps its default. */
   zipLimits?: Partial<ShareZipLimits>;
@@ -30,6 +33,7 @@ export function createSharesService(deps: SharesDeps) {
   const owned = createOwnedShares({
     shares: deps.shares,
     storageFor: deps.storageFor,
+    files: deps.files,
     passwords: deps.passwords,
     zipLimits: { ...DEFAULT_SHARE_ZIP_LIMITS, ...deps.zipLimits },
     clock: deps.clock,

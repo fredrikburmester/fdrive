@@ -1,7 +1,6 @@
-import type { ActivityFacts, PersonalActivityAction } from "@fdrive/contracts";
 import type { Principal } from "../auth/principal.js";
+import { type FileActor, fileActor } from "../files/operations.js";
 import type { OfficeActor, OfficeDeps } from "../office/types.js";
-import { activityStat } from "./service.js";
 
 /**
  * The authorized browser session behind an editor action, as an actor history
@@ -55,39 +54,13 @@ export async function recordOfficeOpen<T>(
 }
 
 /**
- * Records one editor write. The editor reports a save against the document it
- * opened, so the recorded subject is the opened path and the target is where
- * the bytes actually landed. Save As therefore reads as a copy of the original.
- * `facts` describe the target once `mutate` is done: a streamed save knows its
- * size only then.
+ * The editor's session running a file operation on a document, recorded as
+ * Office's and bridged to the document, so its history follows the document
+ * through renames.
  */
-export async function recordOfficeAction<T>(
-  deps: OfficeDeps,
-  actor: OfficeActor,
-  action: PersonalActivityAction,
-  path: string,
-  target: string,
-  bridgeId: string | undefined,
-  mutate: () => Promise<T>,
-  facts: (value: T) => ActivityFacts = () => ({}),
-): Promise<T> {
-  if (!deps.activity) return mutate();
-  const before = await activityStat(actor.storage, path);
-  const result = await deps.activity.run(
-    officeActivityPrincipal(deps, actor),
-    {
-      action,
-      source: "office",
-      requested: {
-        path,
-        targetPath: target,
-        ...(action === "file.copy" ? { variant: "save_as" as const } : {}),
-      },
-      ...(before ? { before } : {}),
-      ...(bridgeId ? { bridge: { namespace: "office", externalId: bridgeId } } : {}),
-    },
-    mutate,
-    (value) => ({ path: target, kind: "file" as const, ...facts(value) }),
-  );
-  return result.value;
+export function officeFileActor(deps: OfficeDeps, actor: OfficeActor, fileId: string): FileActor {
+  return fileActor(officeActivityPrincipal(deps, actor), {
+    source: "office",
+    bridge: { namespace: "office", externalId: fileId },
+  });
 }

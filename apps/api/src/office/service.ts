@@ -6,7 +6,7 @@ import type {
   OfficeStatusResponse,
 } from "@fdrive/contracts";
 import { baseName, extensionOf, isStorageError, joinPath, parentPath } from "@fdrive/core";
-import { recordOfficeAction, recordOfficeOpen } from "../activity/office.js";
+import { officeFileActor, recordOfficeOpen } from "../activity/office.js";
 import { browserActor, callbackFile, requireOfficeEdit } from "./auth.ts";
 import { officeErrorResponse, WopiError } from "./errors.ts";
 import { selectDiscoveryAction } from "./protocol/discovery.ts";
@@ -240,23 +240,14 @@ export function createOfficeService(deps: OfficeDeps) {
           await requireOfficeEdit(deps, actor, path);
           // On its own transaction, so the registry's lock is not held while the document is written.
           const file = await deps.files.ensure(location);
-          await recordOfficeAction(
-            deps,
-            actor,
-            "file.create",
-            path,
-            path,
-            file.id,
-            () =>
-              // Published only while the name is free: a taken name is a
-              // `conflict` (409), never replaced.
-              actor.storage.upload(path, bytes, {
-                contentLength: bytes.byteLength,
-                overwrite: false,
-                signal: officeSignal(config),
-              }),
-            () => ({ size: bytes.byteLength }),
-          );
+          // Published only while the name is free: a taken name is a
+          // `conflict` (409), never replaced.
+          await deps.operations.upload(officeFileActor(deps, actor, file.id), path, bytes, {
+            action: "file.create",
+            contentLength: bytes.byteLength,
+            overwrite: false,
+            signal: officeSignal(config),
+          });
         }),
       );
       return { identityId: actor.identity.id, path };

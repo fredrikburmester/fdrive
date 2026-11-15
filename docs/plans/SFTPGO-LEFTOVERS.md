@@ -44,8 +44,6 @@ Recommended on 2026-11-14 and approved by the owner the same day.
 17. **Flat Trash layout.** The `p/<segment>` path encoding, made for WebDAV, becomes one folder
     per item plus a row. The Mac's Trash (`desktop/writes.ts`) finds an item's leaf and original
     path with the layout's parser too.
-19. **One file-operations service.** MCP's activity proxy and its copy of metadata following
-    (`composition.ts` `onMutation`) merge with the fs and Trash routes' recorders.
 
 ## Mac
 
