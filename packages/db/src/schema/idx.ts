@@ -174,7 +174,7 @@ export const scans = idxSchema.table(
  * `inode` holds the unsigned inode number's 64 bits as a signed bigint.
  * Writers take the journal's advisory lock before inserting, so positions
  * commit in order, and send `NOTIFY idx_changes` with the root's name. See
- * docs/plans/CHANGE-JOURNAL.md.
+ * docs/INDEXER.md#the-change-journal.
  */
 export const changes = idxSchema.table(
   "changes",

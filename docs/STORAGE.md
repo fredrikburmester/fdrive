@@ -181,7 +181,7 @@ How the files folder implements it:
   to it (`onIndexChange`), and the API records them in the change journal, `idx.changes`, with
   source `api` (`createChangeQueue`, `createChangeWriter`), from its first start. A failed write
   is logged, never failing the request; see [how changes arrive](INDEXER.md#how-changes-arrive)
-  and the [change journal](plans/CHANGE-JOURNAL.md).
+  and the [change journal](INDEXER.md#the-change-journal).
 
 ## Tests
 

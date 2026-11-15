@@ -4,7 +4,7 @@
 //! position per root in `idx.change_cursors` and saves it after each applied batch. Rows are
 //! hints. What is on disk when one is applied decides what happens, as for the watcher, so a
 //! batch applied twice after a restart does no harm, and the periodic scan still covers
-//! anything lost. See docs/plans/CHANGE-JOURNAL.md.
+//! anything lost. See docs/INDEXER.md#how-changes-arrive.
 
 use std::collections::HashSet;
 use std::path::Path;

@@ -440,7 +440,7 @@ for pairing and listing snapshots or a shared transient store.
 ### Change feed
 
 `GET /api/v2/desktop/changes` reads fdrive's change journal (`idx.changes`, see the
-[change journal plan](plans/CHANGE-JOURNAL.md)) for one location. Every location has a feed,
+[change journal](INDEXER.md#the-change-journal)) for one location. Every location has a feed,
 and its v2 `location` says `changeFeed: true`: the API journals every change it makes from its
 first start. Older apps ignore the key and keep using checks.
 
