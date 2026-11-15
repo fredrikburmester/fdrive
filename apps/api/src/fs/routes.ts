@@ -5,7 +5,6 @@ import {
   DownloadQuery,
   EntryResponse,
   type FsEntry,
-  FsEvent,
   ListResponse,
   MkdirRequest,
   MODIFIED_AT_HEADER,
@@ -53,7 +52,6 @@ import type { AppHono, AppVariables, AuthedHono } from "../app.js";
 import type { Principal, PrincipalVariables } from "../auth/principal.js";
 import { DEFAULT_JSON_MAX_BYTES } from "../config.js";
 import { ApiHttpError } from "../errors.js";
-import type { EventBus } from "../events/bus.js";
 import type { JobRunner } from "../jobs/runner.js";
 import type { MetadataService } from "../metadata/service.js";
 import { followIntoTrash, type OwnerPath } from "../metadata/trash.js";
@@ -71,8 +69,6 @@ function routePath(fullPath: string): string {
 export interface FsRoutesDeps {
   /** Absent in fixtures that do not exercise personal history; every route works without it. */
   readonly activity?: PersonalActivityService;
-  readonly bus: EventBus;
-  readonly clock: () => Date;
   readonly jobRunner: JobRunner;
   /** Directory archive jobs spool temp files into. */
   readonly tmpDir: string;
@@ -224,24 +220,6 @@ export async function statEntry(storage: StorageProvider, path: string): Promise
     modifiedAt: stat.modifiedAt ?? new Date(0),
     ext: stat.kind === "dir" ? "" : extensionOf(name),
   };
-}
-
-export function publishFsEvent(
-  deps: Pick<FsRoutesDeps, "bus" | "clock">,
-  principal: Principal,
-  op: FsEvent["op"],
-  paths: string[],
-  targetPaths?: string[],
-): void {
-  const event: FsEvent = FsEvent.parse({
-    type: "fs",
-    op,
-    identityId: principal.identityId,
-    paths,
-    at: deps.clock().toISOString(),
-    ...(targetPaths !== undefined ? { targetPaths } : {}),
-  });
-  deps.bus.publish(event);
 }
 
 interface DownloadCallOpts {
@@ -402,7 +380,7 @@ async function handleDownload(c: FsContext, deps: FsRoutesDeps): Promise<Respons
  * no empty folder behind.
  */
 export async function moveMany(
-  deps: Pick<FsRoutesDeps, "bus" | "clock" | "metadata" | "activity">,
+  deps: Pick<FsRoutesDeps, "metadata" | "activity">,
   principal: Principal,
   body: MoveManyRequest,
   context: ActivityCallContext = { source: "api" },
@@ -412,94 +390,76 @@ export async function moveMany(
   const batchId = context.batchId ?? randomUUID();
   const operationBase = context.producerOperationId ?? randomUUID();
   const provenance = context.conversationId ? { conversationId: context.conversationId } : {};
-  const moved: { path: string; target: string }[] = [];
-  const created: string[] = [];
   const readyParents = new Set<string>();
 
-  /** Creates the target's missing parent folders, recording each one so every listing above them refreshes. */
+  /** Creates the target's missing parent folders, once per folder for the whole batch. */
   async function ensureParent(target: string): Promise<void> {
     const parent = parentPath(target);
-    const missing: string[] = [];
+    let missing = false;
     for (let folder = parent; folder !== "/" && !readyParents.has(folder); ) {
       try {
         await principal.storage.stat(folder);
         break;
       } catch (error) {
         if (!isStorageError(error) || error.kind !== "not_found") throw error;
-        missing.unshift(folder);
+        missing = true;
         folder = parentPath(folder);
       }
     }
-    if (missing.length > 0) {
-      await principal.storage.mkdir(parent, { parents: true });
-      created.push(...missing);
-    }
+    if (missing) await principal.storage.mkdir(parent, { parents: true });
     for (let folder = parent; folder !== "/"; folder = parentPath(folder)) readyParents.add(folder);
   }
 
-  try {
-    for (const item of body.items) {
-      try {
-        const path = normalizeOrThrow(item.path);
-        const target = normalizeOrThrow(item.target);
-        // Check the source first, so a move that cannot happen leaves no new empty folder behind.
-        const source = await runStorageCall(() => principal.storage.stat(path));
-        const kind = source.kind === "dir" ? "dir" : "file";
-        await recordActivity(
-          deps.activity,
-          principal,
-          {
-            ...context,
-            producerOperationId: `${operationBase}:${results.length}`,
-            batchId,
-            action,
-            requested: { path, targetPath: target, ...provenance },
-            before: {
-              path,
-              kind,
-              ...(source.size === undefined ? {} : { size: source.size }),
-            },
-          },
-          async () => {
-            if (body.createParents === true && path !== target && !isUnderPath(path, target))
-              await runStorageCall(() => ensureParent(target));
-            await runStorageCall(() => relocatePath(principal.storage, "move", path, target));
-          },
-          () => ({ path: target, kind }),
-        );
-        moved.push({ path, target });
-        try {
-          await deps.metadata?.onMoved(principal.identityId, path, target, source.kind === "dir");
-          results.push({ ok: true, path, target });
-        } catch {
-          results.push({
-            ok: true,
+  for (const item of body.items) {
+    try {
+      const path = normalizeOrThrow(item.path);
+      const target = normalizeOrThrow(item.target);
+      // Check the source first, so a move that cannot happen leaves no new empty folder behind.
+      const source = await runStorageCall(() => principal.storage.stat(path));
+      const kind = source.kind === "dir" ? "dir" : "file";
+      await recordActivity(
+        deps.activity,
+        principal,
+        {
+          ...context,
+          producerOperationId: `${operationBase}:${results.length}`,
+          batchId,
+          action,
+          requested: { path, targetPath: target, ...provenance },
+          before: {
             path,
-            target,
-            warning: "Moved, but its tags, favorite or recent entry could not follow it.",
-          });
-        }
-      } catch (error) {
-        // Every storage call above goes through `runStorageCall`, so item failures arrive as `ApiHttpError`s.
-        if (!(error instanceof ApiHttpError)) throw error;
+            kind,
+            ...(source.size === undefined ? {} : { size: source.size }),
+          },
+        },
+        async () => {
+          if (body.createParents === true && path !== target && !isUnderPath(path, target))
+            await runStorageCall(() => ensureParent(target));
+          await runStorageCall(() => relocatePath(principal.storage, "move", path, target));
+        },
+        () => ({ path: target, kind }),
+      );
+      try {
+        await deps.metadata?.onMoved(principal.identityId, path, target, source.kind === "dir");
+        results.push({ ok: true, path, target });
+      } catch {
         results.push({
-          ok: false,
-          path: item.path,
-          target: item.target,
-          error: { kind: error.kind, message: error.message },
+          ok: true,
+          path,
+          target,
+          warning: "Moved, but its tags, favorite or recent entry could not follow it.",
         });
       }
+    } catch (error) {
+      // Every storage call above goes through `runStorageCall`, so item failures arrive as `ApiHttpError`s.
+      if (!(error instanceof ApiHttpError)) throw error;
+      results.push({
+        ok: false,
+        path: item.path,
+        target: item.target,
+        error: { kind: error.kind, message: error.message },
+      });
     }
-  } finally {
-    if (created.length > 0) publishFsEvent(deps, principal, "mkdir", created);
-    if (moved.length > 0)
-      publishFsEvent(
-        deps,
-        principal,
-        "move",
-        moved.map((entry) => entry.path),
-        moved.map((entry) => entry.target),
-      );
   }
   return results;
 }
@@ -551,44 +511,38 @@ export interface TrashManyResult {
  * path follows each into Trash (`followIntoTrash`).
  */
 export async function trashMany(
-  deps: Pick<FsRoutesDeps, "bus" | "clock" | "metadata" | "activity" | "ownerPath">,
+  deps: Pick<FsRoutesDeps, "metadata" | "activity" | "ownerPath">,
   principal: Principal,
   items: readonly { path: string; kind: "file" | "dir" }[],
   context: ActivityCallContext = { source: "api" },
 ): Promise<TrashManyResult[]> {
   const results: TrashManyResult[] = [];
-  const removed: string[] = [];
   const batchId = context.batchId ?? randomUUID();
   const operationBase = context.producerOperationId ?? randomUUID();
-  try {
-    for (const item of items) {
+  for (const item of items) {
+    try {
+      const path = normalizeOrThrow(item.path);
+      const moved = await runStorageCall(() =>
+        trashOne(deps, principal, { path, kind: item.kind }, context, {
+          operationId: `${operationBase}:${results.length}`,
+          batchId,
+        }),
+      );
       try {
-        const path = normalizeOrThrow(item.path);
-        const moved = await runStorageCall(() =>
-          trashOne(deps, principal, { path, kind: item.kind }, context, {
-            operationId: `${operationBase}:${results.length}`,
-            batchId,
-          }),
-        );
-        removed.push(path);
-        try {
-          if (deps.metadata !== undefined)
-            await followIntoTrash(deps.metadata, deps.ownerPath, principal.identityId, path, moved);
-        } catch {
-          // The item is in Trash either way; the indexer's report of the move repairs metadata.
-        }
-        results.push({ path, ok: true });
-      } catch (error) {
-        if (!(error instanceof ApiHttpError)) throw error;
-        results.push({
-          path: item.path,
-          ok: false,
-          error: { kind: error.kind, message: error.message },
-        });
+        if (deps.metadata !== undefined)
+          await followIntoTrash(deps.metadata, deps.ownerPath, principal.identityId, path, moved);
+      } catch {
+        // The item is in Trash either way; what could not follow it stays where it was.
       }
+      results.push({ path, ok: true });
+    } catch (error) {
+      if (!(error instanceof ApiHttpError)) throw error;
+      results.push({
+        path: item.path,
+        ok: false,
+        error: { kind: error.kind, message: error.message },
+      });
     }
-  } finally {
-    if (removed.length > 0) publishFsEvent(deps, principal, "delete", removed);
   }
   return results;
 }
@@ -739,7 +693,6 @@ export function registerFsRoutes(
         },
     );
 
-    publishFsEvent(deps, principal, "create", [path]);
     // The provider accepted the bytes even when the follow-up stat fails, and
     // repeating the upload would overwrite a file that is already committed.
     let body: EntryResponse;
@@ -771,7 +724,6 @@ export function registerFsRoutes(
       () => runStorageCall(() => principal.storage.mkdir(path)),
     );
     const entry = await statEntry(principal.storage, path);
-    publishFsEvent(deps, principal, "mkdir", [path]);
     const responseBody: EntryResponse = EntryResponse.parse(serializeEntry(entry));
     return c.json(responseBody, 201);
   });
@@ -797,7 +749,6 @@ export function registerFsRoutes(
     if (deps.metadata !== undefined) {
       await deps.metadata.onMoved(principal.identityId, path, target, entry.kind === "dir");
     }
-    publishFsEvent(deps, principal, "move", [path], [target]);
     const responseBody: EntryResponse = EntryResponse.parse(serializeEntry(entry));
     return c.json(responseBody);
   });
@@ -835,7 +786,6 @@ export function registerFsRoutes(
     );
     const entry = await statEntry(principal.storage, target);
     deps.metadata?.onCopied(principal.identityId, path, target);
-    publishFsEvent(deps, principal, "copy", [path], [target]);
     const responseBody: EntryResponse = EntryResponse.parse(serializeEntry(entry));
     return c.json(responseBody);
   });
@@ -861,7 +811,6 @@ export function registerFsRoutes(
     if (deps.metadata !== undefined) {
       await deps.metadata.onMoved(principal.identityId, path, target, entry.kind === "dir");
     }
-    publishFsEvent(deps, principal, "move", [path], [target]);
     const responseBody: EntryResponse = EntryResponse.parse(serializeEntry(entry));
     return c.json(responseBody);
   });
@@ -869,38 +818,32 @@ export function registerFsRoutes(
   authed.post(routePath(ROUTES.fs.delete), async (c) => {
     const principal = c.get("principal");
     const body = await parseBody(DeleteRequest, c, jsonMaxBytes);
-    const removed: string[] = [];
     const context = activityRequestContext(c);
     const batchId = context.batchId ?? randomUUID();
     const operationBase = context.producerOperationId ?? randomUUID();
-    try {
-      for (const item of body.items) {
-        const path = normalizeOrThrow(item.path);
-        let moved: TrashedItem;
-        try {
-          moved = await trashOne(
-            deps,
-            principal,
-            { path, kind: item.kind === "dir" ? "dir" : "file" },
-            context,
-            { operationId: `${operationBase}:${removed.length}`, batchId },
-          );
-        } catch (error) {
-          if (isStorageError(error)) {
-            const mapped = toApiHttpError(error);
-            throw new ApiHttpError(mapped.kind, mapped.message, {
-              ...(mapped.details ?? {}),
-              failedPath: path,
-            });
-          }
-          throw error;
+    for (const [index, item] of body.items.entries()) {
+      const path = normalizeOrThrow(item.path);
+      let moved: TrashedItem;
+      try {
+        moved = await trashOne(
+          deps,
+          principal,
+          { path, kind: item.kind === "dir" ? "dir" : "file" },
+          context,
+          { operationId: `${operationBase}:${index}`, batchId },
+        );
+      } catch (error) {
+        if (isStorageError(error)) {
+          const mapped = toApiHttpError(error);
+          throw new ApiHttpError(mapped.kind, mapped.message, {
+            ...(mapped.details ?? {}),
+            failedPath: path,
+          });
         }
-        removed.push(path);
-        if (deps.metadata !== undefined)
-          await followIntoTrash(deps.metadata, deps.ownerPath, principal.identityId, path, moved);
+        throw error;
       }
-    } finally {
-      if (removed.length > 0) publishFsEvent(deps, principal, "delete", removed);
+      if (deps.metadata !== undefined)
+        await followIntoTrash(deps.metadata, deps.ownerPath, principal.identityId, path, moved);
     }
     const body2: OkResponse = OkResponse.parse({ ok: true });
     return c.json(body2);

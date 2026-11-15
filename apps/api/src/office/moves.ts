@@ -6,7 +6,8 @@ import type { OfficeFileRepo } from "./types.ts";
  * Office documents follow their files like any other path-keyed record:
  * every move, rename and delete reaches the registry through the metadata
  * hooks (`withFollowers`), whoever made it (fdrive's own routes, MCP and the
- * AI, Office renames, Trash and its restores, moves the indexer reports). A
+ * AI, Office renames, Trash and its restores, and moves made outside fdrive that the
+ * change journal holds, followed once as their owner's). A
  * document keeps its id wherever its file goes, into the Trash and back out
  * too, and loses it when the file is deleted.
  *

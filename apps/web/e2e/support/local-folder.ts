@@ -19,27 +19,26 @@ export function homePath(username: string, virtualPath = "/"): string {
 }
 
 /**
- * Sends the notification the indexer's file watcher sends on `idx_events`
- * when it sees `virtualPath` in `username`'s files change on disk. The shared
- * run has no real indexer, so a spec that changes files through `homePath`
- * reports the change itself.
+ * Journals what the indexer's file watcher journals when it sees
+ * `virtualPath` in `username`'s files change on disk: a row in
+ * `idx.changes` with source `watcher`, appended under the journal's lock and
+ * announced on `idx_changes`, as every writer does. The shared run has no
+ * real indexer, so a spec that changes files through `homePath` reports the
+ * change itself.
  */
-export async function notifyIndexer(
-  kind: "created" | "changed" | "deleted",
-  username: string,
-  virtualPath: string,
-): Promise<void> {
+export async function journalOutsideChange(username: string, virtualPath: string): Promise<void> {
   const client = new Client({ connectionString: fromEnv("E2E_DATABASE_URL") });
   await client.connect();
   try {
-    await client.query("select pg_notify('idx_events', $1)", [
-      JSON.stringify({
-        kind,
-        path: `${username}${virtualPath}`,
-        target_path: null,
-        at: new Date().toISOString(),
-      }),
-    ]);
+    await client.query("begin");
+    await client.query("select pg_advisory_xact_lock(hashtextextended('idx.changes', 0))");
+    // The files folder is index root 1, which a migration seeds.
+    await client.query(
+      "insert into idx.changes (root_id, path, source) values (1, $1, 'watcher')",
+      [`${username}${virtualPath}`],
+    );
+    await client.query("select pg_notify('idx_changes', 'files')");
+    await client.query("commit");
   } finally {
     await client.end();
   }

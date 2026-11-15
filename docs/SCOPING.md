@@ -14,8 +14,9 @@ files. Mapping is segment-aware and must round-trip. The index has one root, the
 then one scope per folder shared with it, `/<owner>/<path>` shown at `/Shared with me/<name>`.
 It runs one grants query and reads neither storage nor the index. A username that cannot be
 one path segment is refused. Search, duplicates, thumbnails, photos, folder sizes, the Storage
-page (the home scope alone), extraction, AI tools, MCP, index events, activity observations,
-the desktop change feed and its `versions` check all use it with their principal's username.
+page (the home scope alone), extraction, AI tools, MCP, the desktop change feed and its
+`versions` check all use it with their principal's username, and the API's reader of the change
+journal with every login's, for live updates, metadata and activity observations.
 
 Whether index-backed features apply at all is separate: the files folder is indexed while
 `FDRIVE_INDEXER_URL` is set and a feature that needs the indexer (thumbnails, full-text or image
@@ -42,17 +43,16 @@ and the index agree on what each login reaches, the indexer never follows a symb
 storage refuses one, and the reserved folders are left out in SQL. A file deleted outside
 fdrive can still be listed until the indexer notices; opening it answers not found.
 
-Only the indexer listener still checks each event's path with a live read
-([read authorizer](../apps/api/src/scoping/read-authorizer.ts)) before it tells a browser,
-until live updates come from the [change journal](plans/CHANGE-JOURNAL.md).
+Live updates follow the same rule: a change journal row reaches a login whose scopes map one
+of its ends, with no storage read ([the API's reader](INDEXER.md#the-apis-reader)).
 
 ## Consumers and tests
 
 HTTP and MCP consumers must use the login's scopes, respect native/API-token identity
 ownership and omit paths outside them. Bounded aggregates must report partial or sampled
 results honestly. Office keys documents by owner and owner's path, not by scope, and
-authorizes each callback itself; an Office UUID does not grant access. Index events must not
-leak paths to unauthorized subscribers.
+authorizes each callback itself; an Office UUID does not grant access. Live updates must not
+leak paths to a login whose scopes do not reach them.
 
 Regression coverage includes the [resolver](../apps/api/src/scoping/resolver.test.ts),
 [round trip](../apps/api/src/scoping/round-trip.test.ts),

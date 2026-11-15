@@ -1,23 +1,26 @@
-import type { FsEvent, JobEvent } from "@fdrive/contracts";
+import type { FsEvent, IndexedEvent, JobEvent } from "@fdrive/contracts";
 
 /**
- * What flows through the bus: an `FsEvent` (which already carries its own
- * `identityId`), or a `JobEvent` paired with the identity it belongs to
- * (the wire `JobEvent` shape has no `identityId` of its own, since a job
- * belongs to one identity only and doesn't need to say so on every event;
- * `events/routes.ts` strips this field before it reaches the client).
+ * What flows through the bus: an `FsEvent` for one login with the journal
+ * position it came from, a `JobEvent` paired with the login it belongs to,
+ * or an `IndexedEvent`, which names no path and goes to every subscriber.
+ * `events/routes.ts` strips `identityId` and `position` before an event
+ * reaches the client.
  */
-export type BusEvent = FsEvent | (JobEvent & { identityId: string });
+export type BusEvent =
+  | (FsEvent & { readonly identityId: string; readonly position: number })
+  | (JobEvent & { readonly identityId: string })
+  | IndexedEvent;
 
 export type BusEventHandler = (event: BusEvent) => void;
 
 export interface EventBus {
-  /** Publishes an event to every subscriber whose identity matches `event.identityId`. */
+  /** Publishes an event to every subscriber of its identity, or to every subscriber for `indexed`. */
   publish(event: BusEvent): void;
   /**
    * Registers `handler` for every future event whose `identityId` matches
-   * `filter.identityId`. Returns an unsubscribe function; calling it more
-   * than once is a no-op.
+   * `filter.identityId`, and every `indexed` event. Returns an unsubscribe
+   * function; calling it more than once is a no-op.
    */
   subscribe(filter: { identityId: string }, handler: BusEventHandler): () => void;
   /**
@@ -33,8 +36,8 @@ interface Subscription {
 }
 
 /**
- * Builds an in-process event bus for `/api/v1/events` (SSE): publishing an
- * `FsEvent` calls every handler subscribed to that event's identity.
+ * Builds an in-process event bus for `/api/v1/events` (SSE). Delivery is
+ * synchronous, so once `publish` returns every subscriber has its event.
  * Handler errors are swallowed so one broken subscriber (for example, a
  * client that disconnected mid-write) never breaks delivery to the others.
  */
@@ -44,7 +47,7 @@ export function createEventBus(): EventBus {
   return {
     publish(event: BusEvent): void {
       for (const subscription of subscriptions) {
-        if (subscription.identityId === event.identityId) {
+        if (event.type === "indexed" || subscription.identityId === event.identityId) {
           try {
             subscription.handler(event);
           } catch {

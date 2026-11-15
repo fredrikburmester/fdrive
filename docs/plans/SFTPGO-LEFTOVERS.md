@@ -44,15 +44,10 @@ Recommended on 2026-11-14 and approved by the owner the same day.
 17. **Flat Trash layout.** The `p/<segment>` path encoding, made for WebDAV, becomes one folder
     per item plus a row. The Mac's Trash (`desktop/writes.ts`) finds an item's leaf and original
     path with the layout's parser too.
-18. **Live updates and metadata from the journal.** Every fdrive change returns through the
-    indexer's `idx_events`; `events/indexer-listener.ts` handles it once per login, sends the
-    actor a second live update and moves metadata a second time. With indexing off, grantees get
-    no live updates and metadata ignores SMB moves (the Office registry follows with metadata).
-    Activity observations follow the journal.
 19. **One file-operations service.** MCP's activity proxy and its copy of metadata following
     (`composition.ts` `onMutation`) merge with the fs and Trash routes' recorders.
 20. **Delete removed files from the index.** Tombstones are never purged and every scan loads
-    them, for a sha256 relink guess.
+    them, for a sha256 relink guess the API no longer makes.
 
 ## Mac
 

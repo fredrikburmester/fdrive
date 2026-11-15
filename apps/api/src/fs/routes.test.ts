@@ -14,7 +14,7 @@ import { activityFixture } from "../../test/activity-fixture.js";
 import { createApp } from "../app.js";
 import type { Principal } from "../auth/principal.js";
 import { loadConfig } from "../config.js";
-import { type BusEvent, createEventBus, type EventBus } from "../events/bus.js";
+import { createEventBus } from "../events/bus.js";
 import { createJobRunner, type JobRunner } from "../jobs/runner.js";
 import { createMetadataService, type MetadataService } from "../metadata/service.js";
 import { registerFsRoutes, trashMany } from "./routes.js";
@@ -135,8 +135,6 @@ function forbiddenStorage(): StorageProvider {
 
 interface Harness {
   readonly app: ReturnType<typeof createApp>;
-  readonly bus: EventBus;
-  readonly events: BusEvent[];
   readonly activity: ReturnType<typeof activityFixture>;
 }
 
@@ -153,10 +151,6 @@ async function buildHarness(seed: Seed = SEED, username = "alice", metadata?: Me
     isAdmin: false,
   };
 
-  const bus = createEventBus();
-  const events: BusEvent[] = [];
-  bus.subscribe({ identityId }, (event) => events.push(event));
-
   const config = loadConfig(REQUIRED_ENV);
   const clock = () => new Date(CLOCK_ISO);
   const activity = activityFixture(clock);
@@ -172,8 +166,6 @@ async function buildHarness(seed: Seed = SEED, username = "alice", metadata?: Me
     registerRoutes: (groups) =>
       registerFsRoutes(groups, {
         activity: activity.service,
-        bus,
-        clock,
         jobRunner: buildJobRunner(),
         tmpDir: "/tmp",
         jobMaxBytes: 1_000_000_000,
@@ -182,7 +174,7 @@ async function buildHarness(seed: Seed = SEED, username = "alice", metadata?: Me
       }),
   });
 
-  const harness: Harness = { app, bus, events, activity };
+  const harness: Harness = { app, activity };
   return harness;
 }
 
@@ -246,10 +238,6 @@ async function buildHarnessWithStorage(
     isAdmin: false,
   };
 
-  const bus = createEventBus();
-  const events: BusEvent[] = [];
-  bus.subscribe({ identityId: ALICE_IDENTITY_ID }, (event) => events.push(event));
-
   const config = loadConfig(REQUIRED_ENV);
   const clock = () => new Date(CLOCK_ISO);
   const activity = activityFixture(clock);
@@ -265,8 +253,6 @@ async function buildHarnessWithStorage(
     registerRoutes: (groups) =>
       registerFsRoutes(groups, {
         activity: activity.service,
-        bus,
-        clock,
         jobRunner: buildJobRunner(),
         tmpDir: "/tmp",
         jobMaxBytes: 1_000_000_000,
@@ -276,7 +262,7 @@ async function buildHarnessWithStorage(
       }),
   });
 
-  return { app, bus, events, activity };
+  return { app, activity };
 }
 
 function requestedWith(init: RequestInit = {}): RequestInit {
@@ -838,7 +824,7 @@ describe("PUT /fs/upload", () => {
       throw new StorageError("upstream_unavailable", "upload aborted");
     });
     const stat = vi.spyOn(storage, "statFile");
-    const { app, events } = await buildHarnessWithStorage(storage);
+    const { app } = await buildHarnessWithStorage(storage);
     const res = await app.request(
       "/api/v1/fs/upload?path=/cancelled.txt",
       requestedWith({
@@ -850,12 +836,11 @@ describe("PUT /fs/upload", () => {
     expect(res.ok).toBe(false);
     expect(upload).toHaveBeenCalledOnce();
     expect(stat).not.toHaveBeenCalled();
-    expect(events).toEqual([]);
     expect(storage.dump()).toEqual({});
   });
 
-  it("uploads a file, returns 201 with the new entry, and publishes a create event", async () => {
-    const { app, events } = await buildHarness();
+  it("uploads a file and returns 201 with the new entry", async () => {
+    const { app } = await buildHarness();
 
     const res = await app.request(
       "/api/v1/fs/upload?path=/new.txt&mkdirParents=true",
@@ -872,15 +857,6 @@ describe("PUT /fs/upload", () => {
     expect(res.status).toBe(201);
     const body = await res.json();
     expect(body).toMatchObject({ path: "/new.txt", size: 4 });
-    expect(events).toEqual([
-      {
-        type: "fs",
-        op: "create",
-        identityId: ALICE_IDENTITY_ID,
-        paths: ["/new.txt"],
-        at: CLOCK_ISO,
-      },
-    ]);
   });
 
   it("ignores a non-numeric modified-at header", async () => {
@@ -957,8 +933,8 @@ describe("PUT /fs/upload", () => {
     expect(await read()).toBe("saved");
   });
 
-  it("takes a file in pieces, publishing and recording it once at the last", async () => {
-    const { app, events, activity } = await buildHarness();
+  it("takes a file in pieces, recording it once at the last", async () => {
+    const { app, activity } = await buildHarness();
     const put = (query: string, body: string) =>
       app.request(
         `/api/v1/fs/upload?path=/big/file.txt&mkdirParents=true&part=0123456789abcdef${query}`,
@@ -974,13 +950,11 @@ describe("PUT /fs/upload", () => {
     // Sent again from its offset, a piece replaces what the last attempt left.
     expect((await put("&offset=5", " world")).status).toBe(204);
     expect((await app.request("/api/v1/fs/download?path=/big/file.txt")).status).toBe(404);
-    expect(events).toEqual([]);
     expect(activity.operations).toHaveLength(0);
 
     const last = await put("&offset=11&final=true", "!");
     expect(last.status).toBe(201);
     expect(await last.json()).toMatchObject({ path: "/big/file.txt", size: 12 });
-    expect(events).toMatchObject([{ op: "create", paths: ["/big/file.txt"] }]);
     expect(activity.operations.map((row) => row.action)).toEqual(["file.upload"]);
     const download = await app.request("/api/v1/fs/download?path=/big/file.txt");
     expect(await download.text()).toBe("hello world!");
@@ -998,8 +972,8 @@ describe("PUT /fs/upload", () => {
 });
 
 describe("POST /fs/mkdir", () => {
-  it("creates a directory, returns 201, and publishes a mkdir event", async () => {
-    const { app, events } = await buildHarness();
+  it("creates a directory and returns 201", async () => {
+    const { app } = await buildHarness();
 
     const res = await app.request(
       "/api/v1/fs/mkdir",
@@ -1013,15 +987,12 @@ describe("POST /fs/mkdir", () => {
     expect(res.status).toBe(201);
     const body = await res.json();
     expect(body).toMatchObject({ name: "newdir", kind: "dir" });
-    expect(events).toEqual([
-      { type: "fs", op: "mkdir", identityId: ALICE_IDENTITY_ID, paths: ["/newdir"], at: CLOCK_ISO },
-    ]);
   });
 });
 
 describe.each(["move", "copy"] as const)("POST /fs/%s subtree safety", (operation) => {
   it.each(["/folder/folder", "/folder/sub/folder", "/folder//sub/folder", "/folder/sub/../folder"])(
-    "rejects descendant %s without storage, metadata, or event side effects",
+    "rejects descendant %s without storage or metadata side effects",
     async (target) => {
       const files = { "/folder/a.txt": "a", "/folder/sub/b.txt": "b" };
       const storage = createMemoryStorage(files);
@@ -1030,7 +1001,7 @@ describe.each(["move", "copy"] as const)("POST /fs/%s subtree safety", (operatio
       const metadata = createMetadataService(createMemoryRepos());
       const onMoved = vi.spyOn(metadata, "onMoved");
       const onCopied = vi.spyOn(metadata, "onCopied");
-      const { app, events } = await buildHarnessWithStorage(storage, { metadata });
+      const { app } = await buildHarnessWithStorage(storage, { metadata });
       const res = await app.request(
         `/api/v1/fs/${operation}`,
         requestedWith({
@@ -1046,7 +1017,6 @@ describe.each(["move", "copy"] as const)("POST /fs/%s subtree safety", (operatio
       expect(onMoved).not.toHaveBeenCalled();
       expect(onCopied).not.toHaveBeenCalled();
       expect(storage.dump()).toEqual(files);
-      expect(events).toEqual([]);
     },
   );
 
@@ -1068,8 +1038,8 @@ describe.each(["move", "copy"] as const)("POST /fs/%s subtree safety", (operatio
 });
 
 describe("POST /fs/move", () => {
-  it("moves a file, returns the entry at the target, and publishes a move event", async () => {
-    const { app, events } = await buildHarness();
+  it("moves a file and returns the entry at the target", async () => {
+    const { app } = await buildHarness();
 
     const res = await app.request(
       "/api/v1/fs/move",
@@ -1083,16 +1053,6 @@ describe("POST /fs/move", () => {
     expect(res.status).toBe(200);
     const body = await res.json();
     expect(body).toMatchObject({ path: "/moved.txt" });
-    expect(events).toEqual([
-      {
-        type: "fs",
-        op: "move",
-        identityId: ALICE_IDENTITY_ID,
-        paths: ["/hello.txt"],
-        targetPaths: ["/moved.txt"],
-        at: CLOCK_ISO,
-      },
-    ]);
   });
 
   it("maps a conflicting target to conflict", async () => {
@@ -1179,7 +1139,7 @@ describe("POST /fs/move-many", () => {
     const mkdir = vi.spyOn(storage, "mkdir");
     const metadata = createMetadataService(createMemoryRepos());
     const onMoved = vi.spyOn(metadata, "onMoved");
-    const { app, events } = await buildHarnessWithStorage(storage, { metadata });
+    const { app } = await buildHarnessWithStorage(storage, { metadata });
 
     const res = await app.request(
       "/api/v1/fs/move-many",
@@ -1219,29 +1179,12 @@ describe("POST /fs/move-many", () => {
       "/Finance/2024/a.pdf",
       false,
     );
-    expect(events).toEqual([
-      {
-        type: "fs",
-        op: "mkdir",
-        identityId: ALICE_IDENTITY_ID,
-        paths: ["/Finance", "/Finance/2024"],
-        at: CLOCK_ISO,
-      },
-      {
-        type: "fs",
-        op: "move",
-        identityId: ALICE_IDENTITY_ID,
-        paths: ["/inbox/a.pdf", "/inbox/b.pdf"],
-        targetPaths: ["/Finance/2024/a.pdf", "/Finance/2024/b.pdf"],
-        at: CLOCK_ISO,
-      },
-    ]);
   });
 
   it("reports invalid paths per item and creates no folders unless asked", async () => {
     const storage = createMemoryStorage({ "/inbox/a.pdf": "a", "/inbox/b.pdf": "b" });
     const mkdir = vi.spyOn(storage, "mkdir");
-    const { app, events } = await buildHarnessWithStorage(storage);
+    const { app } = await buildHarnessWithStorage(storage);
 
     const res = await app.request(
       "/api/v1/fs/move-many",
@@ -1270,16 +1213,12 @@ describe("POST /fs/move-many", () => {
       { ok: true, path: "/inbox/b.pdf", target: "/inbox/c.pdf" },
     ]);
     expect(mkdir).not.toHaveBeenCalled();
-    expect(events.map((event) => (event.type === "fs" ? event.op : event.type))).toEqual([
-      "move",
-      "move",
-    ]);
   });
 
   it("checks the source before creating folders, so a move that cannot happen leaves none", async () => {
     const storage = createMemoryStorage({ "/inbox/a.pdf": "a", "/inbox/sub/b.pdf": "b" });
     const mkdir = vi.spyOn(storage, "mkdir");
-    const { app, events } = await buildHarnessWithStorage(storage);
+    const { app } = await buildHarnessWithStorage(storage);
 
     const res = await app.request(
       "/api/v1/fs/move-many",
@@ -1301,7 +1240,6 @@ describe("POST /fs/move-many", () => {
     ]);
     expect(mkdir).not.toHaveBeenCalled();
     expect(storage.dump()).toEqual({ "/inbox/a.pdf": "a", "/inbox/sub/b.pdf": "b" });
-    expect(events.map((event) => (event.type === "fs" ? event.op : event.type))).toEqual(["move"]);
   });
 
   it("maps a storage failure while preparing a folder to that item's error", async () => {
@@ -1335,7 +1273,7 @@ describe("POST /fs/move-many", () => {
     const storage = createMemoryStorage({ "/inbox/a.pdf": "a" });
     const metadata = createMetadataService(createMemoryRepos());
     vi.spyOn(metadata, "onMoved").mockRejectedValueOnce(new Error("database down"));
-    const { app, events } = await buildHarnessWithStorage(storage, { metadata });
+    const { app } = await buildHarnessWithStorage(storage, { metadata });
 
     const res = await app.request(
       "/api/v1/fs/move-many",
@@ -1350,16 +1288,15 @@ describe("POST /fs/move-many", () => {
         warning: "Moved, but its tags, favorite or recent entry could not follow it.",
       },
     ]);
-    expect(events).toHaveLength(1);
   });
 
-  it("stops on an unexpected failure but still publishes the moves already made", async () => {
+  it("stops on an unexpected failure but keeps the moves already made", async () => {
     const storage = createMemoryStorage({ "/a.txt": "a", "/b.txt": "b" });
     const move = storage.move.bind(storage);
     vi.spyOn(storage, "move")
       .mockImplementationOnce(move)
       .mockRejectedValueOnce(new Error("socket closed"));
-    const { app, events } = await buildHarnessWithStorage(storage);
+    const { app } = await buildHarnessWithStorage(storage);
 
     const res = await app.request(
       "/api/v1/fs/move-many",
@@ -1373,16 +1310,13 @@ describe("POST /fs/move-many", () => {
     );
 
     expect(res.status).toBe(500);
-    expect(events).toMatchObject([
-      { op: "mkdir", paths: ["/x"] },
-      { op: "move", paths: ["/a.txt"], targetPaths: ["/x/a.txt"] },
-    ]);
+    expect(storage.dump()).toEqual({ "/x/a.txt": "a", "/b.txt": "b" });
   });
 });
 
 describe("POST /fs/copy", () => {
-  it("copies a file, returns the entry at the target, and publishes a copy event", async () => {
-    const { app, events } = await buildHarness();
+  it("copies a file and returns the entry at the target", async () => {
+    const { app } = await buildHarness();
 
     const res = await app.request(
       "/api/v1/fs/copy",
@@ -1396,16 +1330,6 @@ describe("POST /fs/copy", () => {
     expect(res.status).toBe(200);
     const body = await res.json();
     expect(body).toMatchObject({ path: "/copy.txt" });
-    expect(events).toEqual([
-      {
-        type: "fs",
-        op: "copy",
-        identityId: ALICE_IDENTITY_ID,
-        paths: ["/hello.txt"],
-        targetPaths: ["/copy.txt"],
-        at: CLOCK_ISO,
-      },
-    ]);
   });
 
   it("maps a conflicting target to conflict, without touching the target's content", async () => {
@@ -1444,8 +1368,8 @@ describe("POST /fs/copy", () => {
 });
 
 describe("POST /fs/rename", () => {
-  it("renames a file in place and publishes a move event", async () => {
-    const { app, events } = await buildHarness();
+  it("renames a file in place", async () => {
+    const { app } = await buildHarness();
 
     const res = await app.request(
       "/api/v1/fs/rename",
@@ -1459,20 +1383,10 @@ describe("POST /fs/rename", () => {
     expect(res.status).toBe(200);
     const body = await res.json();
     expect(body).toMatchObject({ path: "/renamed.txt", name: "renamed.txt" });
-    expect(events).toEqual([
-      {
-        type: "fs",
-        op: "move",
-        identityId: ALICE_IDENTITY_ID,
-        paths: ["/hello.txt"],
-        targetPaths: ["/renamed.txt"],
-        at: CLOCK_ISO,
-      },
-    ]);
   });
 
   it("returns 200 as a no-op when renaming to the same name", async () => {
-    const { app, events } = await buildHarness();
+    const { app } = await buildHarness();
 
     const res = await app.request(
       "/api/v1/fs/rename",
@@ -1486,16 +1400,6 @@ describe("POST /fs/rename", () => {
     expect(res.status).toBe(200);
     const body = await res.json();
     expect(body).toMatchObject({ path: "/hello.txt", name: "hello.txt" });
-    expect(events).toEqual([
-      {
-        type: "fs",
-        op: "move",
-        identityId: ALICE_IDENTITY_ID,
-        paths: ["/hello.txt"],
-        targetPaths: ["/hello.txt"],
-        at: CLOCK_ISO,
-      },
-    ]);
   });
 
   it("maps a rename onto an existing sibling to conflict, without touching either file", async () => {
@@ -1584,8 +1488,8 @@ describe("POST /fs/rename", () => {
 });
 
 describe("POST /fs/delete", () => {
-  it("deletes files and directories, publishes one delete event, and returns ok", async () => {
-    const { app, events } = await buildHarness();
+  it("deletes files and directories and returns ok", async () => {
+    const { app } = await buildHarness();
 
     const res = await app.request(
       "/api/v1/fs/delete",
@@ -1603,19 +1507,10 @@ describe("POST /fs/delete", () => {
 
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ ok: true });
-    expect(events).toEqual([
-      {
-        type: "fs",
-        op: "delete",
-        identityId: ALICE_IDENTITY_ID,
-        paths: ["/hello.txt", "/dir"],
-        at: CLOCK_ISO,
-      },
-    ]);
   });
 
-  it("stops at the first failure, reports failedPath, and publishes no event", async () => {
-    const { app, events } = await buildHarness();
+  it("stops at the first failure and reports failedPath", async () => {
+    const { app } = await buildHarness();
 
     const res = await app.request(
       "/api/v1/fs/delete",
@@ -1634,7 +1529,6 @@ describe("POST /fs/delete", () => {
     expect(res.status).toBe(404);
     const body = await readJson<ErrorJson>(res);
     expect(body.error.details?.failedPath).toBe("/missing.txt");
-    expect(events).toEqual([]);
   });
 
   it("returns bad_request for an empty items array", async () => {
@@ -1652,7 +1546,7 @@ describe("POST /fs/delete", () => {
     expect(res.status).toBe(400);
   });
 
-  it("moves the item to Trash, its metadata follows it there, and publishes a delete", async () => {
+  it("moves the item to Trash and its metadata follows it there", async () => {
     const storage = await seededStorage(SEED.alice ?? {});
     const repos = createMemoryRepos();
     const metadata = createMetadataService(repos);
@@ -1660,7 +1554,7 @@ describe("POST /fs/delete", () => {
     const onMoved = vi.spyOn(metadata, "onMoved");
     const onDeleted = vi.spyOn(metadata, "onDeleted");
 
-    const { app, events } = await buildHarnessWithStorage(storage, { metadata });
+    const { app } = await buildHarnessWithStorage(storage, { metadata });
 
     const res = await app.request(
       "/api/v1/fs/delete",
@@ -1681,15 +1575,6 @@ describe("POST /fs/delete", () => {
     expect(await metadata.listFavorites(ALICE_IDENTITY_ID)).toEqual([]);
     expect((await storage.trash.list()).entries.map((entry) => entry.originalPath)).toEqual([
       "/hello.txt",
-    ]);
-    expect(events).toEqual([
-      {
-        type: "fs",
-        op: "delete",
-        identityId: ALICE_IDENTITY_ID,
-        paths: ["/hello.txt"],
-        at: CLOCK_ISO,
-      },
     ]);
   });
 
@@ -1980,8 +1865,8 @@ describe("untrusted download documents", () => {
   });
 });
 
-it("publishes successful deletes before a later item fails", async () => {
-  const { app, events } = await buildHarness();
+it("keeps the deletes made before a later item fails", async () => {
+  const { app } = await buildHarness();
   const response = await app.request(
     "/api/v1/fs/delete",
     requestedWith({
@@ -1996,19 +1881,14 @@ it("publishes successful deletes before a later item fails", async () => {
     }),
   );
   expect(response.status).toBe(404);
-  expect(events).toEqual([
-    expect.objectContaining({ type: "fs", op: "delete", paths: ["/hello.txt"] }),
-  ]);
+  expect((await app.request("/api/v1/fs/download?path=/hello.txt")).status).toBe(404);
 });
 
 describe("trashMany", () => {
-  it("moves what it can to Trash, continues past failures, and publishes one delete event", async () => {
+  it("moves what it can to Trash and continues past failures", async () => {
     const storage = createMemoryStorage({ "/a.txt": "a", "/dir/b.txt": "b" });
     const metadata = createMetadataService(createMemoryRepos());
     const onMoved = vi.spyOn(metadata, "onMoved");
-    const bus = createEventBus();
-    const events: BusEvent[] = [];
-    bus.subscribe({ identityId: ALICE_IDENTITY_ID }, (event) => events.push(event));
     const principal: Principal = {
       accountId: ACCOUNT_ID,
       identityId: ALICE_IDENTITY_ID,
@@ -2017,15 +1897,11 @@ describe("trashMany", () => {
       isAdmin: false,
     };
 
-    const results = await trashMany(
-      { bus, clock: () => new Date(CLOCK_ISO), metadata },
-      principal,
-      [
-        { path: "/a.txt", kind: "file" },
-        { path: "/missing.txt", kind: "file" },
-        { path: "/dir", kind: "dir" },
-      ],
-    );
+    const results = await trashMany({ metadata }, principal, [
+      { path: "/a.txt", kind: "file" },
+      { path: "/missing.txt", kind: "file" },
+      { path: "/dir", kind: "dir" },
+    ]);
 
     expect(results).toEqual([
       { path: "/a.txt", ok: true },
@@ -2040,15 +1916,6 @@ describe("trashMany", () => {
       ["/a.txt", "/.trash/.fdrive-move-v1/file/p/a.txt/v/0", false],
       ["/dir", "/.trash/.fdrive-move-v1/dir/p/dir/v/0", true],
     ]);
-    expect(events).toEqual([
-      {
-        type: "fs",
-        op: "delete",
-        identityId: ALICE_IDENTITY_ID,
-        paths: ["/a.txt", "/dir"],
-        at: CLOCK_ISO,
-      },
-    ]);
     expect(storage.dump()).toEqual({
       "/.trash/.fdrive-move-v1/dir/p/dir/v/0/b.txt": "b",
       "/.trash/.fdrive-move-v1/file/p/a.txt/v/0": "a",
@@ -2057,16 +1924,12 @@ describe("trashMany", () => {
     // An item still in Trash once the metadata failed is reported moved; any other error stops.
     onMoved.mockRejectedValueOnce(new Error("database offline"));
     await storage.upload("/c.txt", new Uint8Array([1]));
-    expect(
-      await trashMany({ bus, clock: () => new Date(CLOCK_ISO), metadata }, principal, [
-        { path: "/c.txt", kind: "file" },
-      ]),
-    ).toEqual([{ path: "/c.txt", ok: true }]);
+    expect(await trashMany({ metadata }, principal, [{ path: "/c.txt", kind: "file" }])).toEqual([
+      { path: "/c.txt", ok: true },
+    ]);
     vi.spyOn(storage.trash, "put").mockRejectedValueOnce(new Error("socket hang up"));
     await expect(
-      trashMany({ bus, clock: () => new Date(CLOCK_ISO), metadata }, principal, [
-        { path: "/d.txt", kind: "file" },
-      ]),
+      trashMany({ metadata }, principal, [{ path: "/d.txt", kind: "file" }]),
     ).rejects.toThrow("socket hang up");
   });
 
@@ -2088,11 +1951,9 @@ describe("trashMany", () => {
     };
     const ownerPath = vi.fn(async () => ({ identityId: "owner", path: "/Team/a.txt" }));
 
-    await trashMany(
-      { bus: createEventBus(), clock: () => new Date(CLOCK_ISO), metadata, ownerPath },
-      principal,
-      [{ path: "/Shared with me/Team/a.txt", kind: "file" }],
-    );
+    await trashMany({ metadata, ownerPath }, principal, [
+      { path: "/Shared with me/Team/a.txt", kind: "file" },
+    ]);
 
     expect(ownerPath).toHaveBeenCalledWith(ALICE_IDENTITY_ID, "/Shared with me/Team/a.txt");
     expect(onMoved).toHaveBeenCalledWith(
@@ -2165,7 +2026,7 @@ describe("personal activity for fs commands", () => {
   });
 
   it("records the failed outcome of a move that never happened", async () => {
-    const { app, activity, events } = await buildHarness();
+    const { app, activity } = await buildHarness();
 
     const res = await app.request(
       "/api/v1/fs/move",
@@ -2174,7 +2035,6 @@ describe("personal activity for fs commands", () => {
 
     expect(res.status).toBe(404);
     expect(activity.outcomes.at(-1)).toMatchObject({ outcome: "failed", errorCode: "not_found" });
-    expect(events).toEqual([]);
   });
 
   it("rejects malformed activity correlation headers before touching storage", async () => {

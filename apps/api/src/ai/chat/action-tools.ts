@@ -19,7 +19,7 @@ import { z } from "zod";
 import type { ActivityCallContext } from "../../activity/fs-context.js";
 import { recordActivity } from "../../activity/fs-context.js";
 import type { FsRoutesDeps } from "../../fs/routes.js";
-import { moveMany, publishFsEvent, trashMany } from "../../fs/routes.js";
+import { moveMany, trashMany } from "../../fs/routes.js";
 import { decodeText } from "../../mcp/content.js";
 import type { OrganizeItem } from "../organize/agent.ts";
 import { buildProposal } from "../organize/proposal.ts";
@@ -29,7 +29,7 @@ import { type ActionOutcome, type ActionTool, defineActionTool } from "./actions
 import { DOCUMENT_EXTENSIONS, readBytes, referencedArg } from "./tools.ts";
 
 export interface ChatActionToolsDeps extends DriveToolsDeps {
-  readonly fs: Pick<FsRoutesDeps, "bus" | "clock" | "metadata" | "activity" | "ownerPath">;
+  readonly fs: Pick<FsRoutesDeps, "metadata" | "activity" | "ownerPath">;
   /** The chat whose proposal the person approved, recorded with every action it applies. */
   readonly conversationId: string;
 }
@@ -541,7 +541,6 @@ function writeTextFileTool(deps: ChatActionToolsDeps): ActionTool {
             toolResult: `Could not write ${path}: ${message}`,
           };
         }
-        publishFsEvent(deps.fs, deps.principal, mode === "create" ? "create" : "update", [path]);
         const outcome = `${mode === "create" ? "Created" : "Replaced"} ${path}.`;
         return { outcome, results: [{ path, ok: true, target: path }], toolResult: outcome };
       },

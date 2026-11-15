@@ -106,7 +106,6 @@ describe("office opening and creation", () => {
       const bytes = await new Response((await h.storage.download(created.path)).body).arrayBuffer();
       expect(Buffer.from(bytes).subarray(0, 2).toString()).toBe("PK");
       await expect(h.service.create(input, request)).rejects.toMatchObject({ kind: "conflict" });
-      expect(h.events.at(-1)?.type).toBe("fs");
     },
   );
   it("serializes concurrent creates and publishes without overwriting a name taken meanwhile", async () => {

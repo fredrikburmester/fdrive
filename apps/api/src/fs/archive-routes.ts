@@ -46,7 +46,6 @@ import {
   type FsRoutesDeps,
   normalizeOrThrow,
   parseBody,
-  publishFsEvent,
   runStorageCall,
   serializeEntry,
   statEntry,
@@ -151,7 +150,6 @@ export function registerArchiveRoutes(
       () => ({ path: target }),
     );
     const entry = await statEntry(principal.storage, target);
-    publishFsEvent(deps, principal, "copy", [path], [target]);
     const responseBody = EntryResponse.parse(serializeEntry(entry));
     return c.json(responseBody);
   });
@@ -227,7 +225,6 @@ async function handleCompress(c: FsContext, deps: FsRoutesDeps): Promise<Respons
       signal: ctx.signal,
       report: ctx.report,
     });
-    publishFsEvent(deps, principal, "create", [targetPath]);
     return { path: targetPath };
   });
 
@@ -274,7 +271,6 @@ async function handleExtract(c: FsContext, deps: FsRoutesDeps): Promise<Response
         report: ctx.report,
         maxBytes: deps.jobMaxBytes,
       });
-      publishFsEvent(deps, principal, "create", [destination]);
       return result;
     },
   );

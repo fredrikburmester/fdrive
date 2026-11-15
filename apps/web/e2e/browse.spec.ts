@@ -1,6 +1,6 @@
 import { mkdir, rm, symlink, writeFile } from "node:fs/promises";
 import { expect, type Page, test } from "@playwright/test";
-import { homePath } from "./support/local-folder.js";
+import { homePath, journalOutsideChange } from "./support/local-folder.js";
 import { breadcrumb, listing } from "./support/regions.js";
 import { removeSandbox } from "./support/sandbox.js";
 import { uniqueName } from "./support/unique.js";
@@ -203,6 +203,33 @@ test("a symbolic link left by a writer outside fdrive shows as a quiet row nothi
     );
   } finally {
     // Removes the link itself, never what it points at.
+    await rm(homePath("alice", `/${folder}`), { recursive: true, force: true });
+  }
+});
+
+test("an open folder shows a change from another tab, and one made on the disk once the watcher journals it", async ({
+  page,
+}) => {
+  const folder = uniqueName("live");
+  await mkdir(homePath("alice", `/${folder}`), { recursive: true });
+  await writeFile(homePath("alice", `/${folder}/kept.txt`), "kept");
+  try {
+    const streaming = page.waitForResponse((response) => response.url().endsWith("/api/v1/events"));
+    await page.goto(`/files/${folder}`);
+    await expect(listing(page).getByText("kept.txt", { exact: true })).toBeVisible();
+    await streaming;
+    // Another tab of the same login creates a folder through fdrive.
+    const response = await page.request.post("/api/v1/fs/mkdir", {
+      headers: { "x-requested-with": "fdrive" },
+      data: { path: `/${folder}/from-another-tab` },
+    });
+    expect(response.ok()).toBe(true);
+    await expect(listing(page).getByText("from-another-tab", { exact: true })).toBeVisible();
+    // A writer outside fdrive adds a file; the indexer's watcher journals it.
+    await writeFile(homePath("alice", `/${folder}/from-the-disk.txt`), "outside");
+    await journalOutsideChange("alice", `/${folder}/from-the-disk.txt`);
+    await expect(listing(page).getByText("from-the-disk.txt", { exact: true })).toBeVisible();
+  } finally {
     await rm(homePath("alice", `/${folder}`), { recursive: true, force: true });
   }
 });

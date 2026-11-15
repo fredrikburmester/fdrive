@@ -13,7 +13,7 @@ the owner's login and the owner's path. A path in a folder shared with someone i
 owner's (`LocalGrantService.ownerPath`), so everyone who reaches a document opens one UUID;
 the index plays no part, and Office works with indexing off. The registry is a path follower
 like grants and links (`office/moves.ts`, in `withFollowers`): fdrive's moves, MCP, Office
-renames, Trash moves and restores, Mac writes and moves the indexer reports carry the UUID
+renames, Trash moves and restores, Mac writes and moves the indexer's watcher journals carry the UUID
 along, into the Trash and back too; deletes tombstone it; recreation gets a new UUID.
 Callbacks resolve the current row back into the caller's files (`pathFor`, `null` when the
 login no longer reaches it), with the current identity and session, before using that

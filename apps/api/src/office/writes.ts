@@ -4,13 +4,7 @@ import { requireOfficeEdit } from "./auth.ts";
 import { requireMatchingLock, WopiError } from "./errors.ts";
 import { decodeUtf7, lockHeader, requireFilename, suggestedFilename } from "./names.ts";
 import { documentVersion } from "./protocol/version.ts";
-import {
-  fileExists,
-  mintedFields,
-  mutationKey,
-  officeLocation,
-  publishOfficeChange,
-} from "./service.ts";
+import { fileExists, mintedFields, mutationKey, officeLocation } from "./service.ts";
 import { type BoundedProgress, boundedStream } from "./streams.ts";
 import type { OfficeConfig, OfficeDeps, OpenedFile } from "./types.ts";
 import { editorHostUrl } from "./urls.ts";
@@ -112,7 +106,6 @@ async function putFile(
       };
     }),
   );
-  publishOfficeChange(deps, initial.actor, result.path, "update");
   return result.response;
 }
 async function renameFile(
@@ -170,10 +163,8 @@ async function renameFile(
       return { source: opened.path, target, response };
     }),
   );
-  if (result.target !== result.source) {
+  if (result.target !== result.source)
     await deps.metadata.onMoved(initial.actor.identity.id, result.source, result.target, false);
-    publishOfficeChange(deps, initial.actor, result.source, "move", result.target);
-  }
   return result.response;
 }
 async function putRelative(
@@ -243,7 +234,6 @@ async function putRelative(
     }
     throw new WopiError(500);
   });
-  publishOfficeChange(deps, initial.actor, result.path, result.exists ? "update" : "create");
   return result.response;
 }
 export async function dispatchOfficeWrite(

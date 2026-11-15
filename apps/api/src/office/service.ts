@@ -51,22 +51,6 @@ export async function fileExists(actor: OfficeActor, path: string): Promise<bool
     throw error;
   }
 }
-export function publishOfficeChange(
-  deps: OfficeDeps,
-  actor: OfficeActor,
-  path: string,
-  op: "create" | "update" | "move",
-  target?: string,
-): void {
-  deps.bus.publish({
-    type: "fs",
-    op,
-    identityId: actor.identity.id,
-    paths: [path],
-    at: deps.clock().toISOString(),
-    ...(target === undefined ? {} : { targetPaths: [target] }),
-  });
-}
 export function officeSignal(config: OfficeConfig, request?: Request): AbortSignal {
   const deadline = AbortSignal.timeout(config.timeoutMs ?? 120000);
   return request === undefined ? deadline : AbortSignal.any([deadline, request.signal]);
@@ -275,7 +259,6 @@ export function createOfficeService(deps: OfficeDeps) {
           );
         }),
       );
-      publishOfficeChange(deps, actor, path, "create");
       return { identityId: actor.identity.id, path };
     },
     async callback(request: Request, fileId: string, contents: boolean): Promise<Response> {

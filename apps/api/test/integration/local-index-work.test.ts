@@ -31,8 +31,8 @@ describe("changes fdrive makes, through the real indexer with its watcher off", 
   let queue: ChangeQueue;
   let storage: StorageProvider;
   const failures: unknown[] = [];
-  /** What the indexer told `LISTEN idx_events`, oldest first. */
-  const heard: { kind: string; path: string }[] = [];
+  /** Each time the indexer said it took a change in (`LISTEN idx_events`), by root name. */
+  const heard: string[] = [];
   let listener: Client | undefined;
 
   beforeAll(async () => {
@@ -41,8 +41,7 @@ describe("changes fdrive makes, through the real indexer with its watcher off", 
     await migrate(connection.db);
     listener = new Client({ connectionString: stack.connectionString });
     listener.on("notification", (message) => {
-      if (message.channel === "idx_events" && message.payload)
-        heard.push(JSON.parse(message.payload));
+      if (message.channel === "idx_events") heard.push(message.payload ?? "");
     });
     await listener.connect();
     await listener.query("LISTEN idx_events");
@@ -180,14 +179,11 @@ describe("changes fdrive makes, through the real indexer with its watcher off", 
     );
     await expect.poll(notes, { timeout: 15_000, interval: 100 }).toEqual([]);
 
-    // Live updates still hear of each change; nothing stores them.
+    // The indexer said it took each change in, naming only its root; nothing stores that.
     await expect
-      .poll(
-        () =>
-          heard.filter((event) => event.path.startsWith("alice/notes/")).map((event) => event.kind),
-        { timeout: 15_000, interval: 100 },
-      )
-      .toEqual(["created", "moved", "deleted"]);
+      .poll(() => heard.length, { timeout: 15_000, interval: 100 })
+      .toBeGreaterThanOrEqual(3);
+    expect(new Set(heard)).toEqual(new Set(["files"]));
     // Only fdrive wrote rows: the first scan of an empty index journaled
     // nothing, and the indexer has read every row.
     await expect

@@ -117,7 +117,6 @@ describe("PutFile", () => {
     expect(response.status).toBe(200);
     expect(response.headers.get("X-WOPI-ItemVersion")).toBeTruthy();
     expect(await new Response((await h.storage.download("/a.docx")).body).text()).toBe("new");
-    expect(h.events.at(-1)).toMatchObject({ op: "update", paths: ["/a.docx"] });
   });
   it("allows an empty unlocked target but forbids view writes", async () => {
     const h = await officeHarness();
@@ -215,7 +214,6 @@ describe("PutFile", () => {
         })
       ).status,
     ).toBe(500);
-    expect(h.events).toHaveLength(0);
   });
 });
 
@@ -362,7 +360,6 @@ describe("RenameFile", () => {
     move.mockRejectedValueOnce(new StorageError("forbidden", "private"));
     expect((await rename()).status).toBe(403);
     expect((await h.files.get(opened.fileId))?.path).toBe("/a.docx");
-    expect(h.events).toHaveLength(0);
   });
   it("preserves UUID, extension, tags and favorites when renaming Unicode", async () => {
     const h = await officeHarness();
@@ -386,7 +383,6 @@ describe("RenameFile", () => {
     ]);
     expect((await h.callback(opened)).status).toBe(200);
     expect((await h.open("/Årsrapport.docx")).fileId).toBe(opened.fileId);
-    expect(h.events.at(-1)).toMatchObject({ op: "move", targetPaths: ["/Årsrapport.docx"] });
   });
   it("supports same-name no-op and extensionless files", async () => {
     const h = await officeHarness();
@@ -399,7 +395,6 @@ describe("RenameFile", () => {
         })
       ).status,
     ).toBe(200);
-    expect(h.events).toHaveLength(0);
     const plain = await h.open("/plain");
     expect(
       (
@@ -537,7 +532,6 @@ it("refuses a chunked oversized save without touching the document", async () =>
   });
   expect(response.status).toBe(413);
   expect(await new Response((await h.storage.download("/a.docx")).body).text()).toBe("hello");
-  expect(h.events).toHaveLength(0);
 });
 
 it("keeps lock and move work on the scope, ensures on its own and runs metadata after commit", async () => {
@@ -728,13 +722,6 @@ it.each(["RENAME_FILE", "PUT_RELATIVE"])(
     await expect(h.storage.statFile("/a.docx")).rejects.toThrow();
     if (override === "RENAME_FILE") {
       expect((await h.files.get(opened.fileId))?.path).toBe("/folder/final.DOCX");
-      expect(h.events).toContainEqual(
-        expect.objectContaining({
-          type: "fs",
-          paths: ["/folder/current.DOCX"],
-          targetPaths: [target],
-        }),
-      );
     } else {
       expect(await response.json()).toMatchObject({
         Name: "copy.docx",

@@ -17,7 +17,6 @@ import { createMemoryStorage } from "@fdrive/testkit";
 import { afterEach, expect, it, vi } from "vitest";
 import { memoryRepo } from "../../test/helpers/desktop-repo.js";
 import type { Principal } from "../auth/principal.js";
-import { type BusEvent, createEventBus } from "../events/bus.js";
 import { createDesktopRetention, removeIncoming } from "./retention.js";
 import { createDesktopWrites, DESKTOP_TRASH, NO_WRITES } from "./writes.js";
 
@@ -99,9 +98,6 @@ async function fixture() {
   const metadata = { onMoved: vi.fn(async () => {}), onDeleted: vi.fn(async () => {}) };
   // Delete permanently, as `purgeTrashItem` does it.
   const purge = vi.fn((principal: Principal, id: string) => principal.storage.trash.purge(id));
-  const bus = createEventBus();
-  const events: BusEvent[] = [];
-  bus.subscribe({ identityId: principal.identityId }, (event) => events.push(event));
   const deps = {
     repo: memory.repo,
     storageForIdentity: async () => raw,
@@ -109,7 +105,6 @@ async function fixture() {
     access,
     metadata,
     purge,
-    bus,
   };
   const service = createDesktopWrites(deps);
   const stage = async (name: string, bytes: string, existing?: DesktopWriteEntry) => {
@@ -140,7 +135,6 @@ async function fixture() {
     access,
     metadata,
     purge,
-    events,
   };
 }
 
@@ -170,9 +164,8 @@ it("retains a durable upload receipt and never republishes after acknowledgement
     directory: false,
     trash: false,
   });
-  // A save in place moves no metadata and tells the web once.
+  // A save in place moves no metadata.
   expect(f.metadata.onMoved).not.toHaveBeenCalled();
-  expect(f.events).toMatchObject([{ op: "create", paths: ["/old.txt"] }]);
   const restarted = createDesktopWrites(f.deps);
   expect(await restarted.commit(f.principal, request.operationId)).toEqual(result);
   await restarted.acknowledge(f.principal, request.operationId);
@@ -1677,7 +1670,7 @@ it("preserves a save when its source is trashed after preparation or a hashing s
   ).toBe("old");
 });
 
-it("moves metadata with a Mac move and tells the web once", async () => {
+it("moves metadata with a Mac move once", async () => {
   const f = await fixture();
   const item = await f.service.stat(f.principal, "/old.txt");
   const folder = await f.service.stat(f.principal, "/folder");
@@ -1700,14 +1693,10 @@ it("moves metadata with a Mac move and tells the web once", async () => {
   expect(f.metadata.onMoved.mock.calls).toEqual([
     [f.principal.identityId, "/old.txt", "/folder/moved.txt", false],
   ]);
-  expect(f.events).toMatchObject([
-    { op: "move", paths: ["/old.txt"], targetPaths: ["/folder/moved.txt"] },
-  ]);
   // A replayed commit returns its receipt without applying anything again.
   await f.service.commit(f.principal, operationId);
   expect(f.access).toHaveBeenCalledTimes(1);
   expect(f.metadata.onMoved).toHaveBeenCalledTimes(1);
-  expect(f.events).toHaveLength(1);
 });
 
 it("keeps an item's handle in Trash, and what is kept by path follows it in and back out", async () => {
@@ -1736,13 +1725,11 @@ it("keeps an item's handle in Trash, and what is kept by path follows it in and 
   expect(links()).toEqual({ identityId, from: "/old.txt", to: leaf });
   expect(f.metadata.onMoved.mock.calls).toEqual([[identityId, "/old.txt", leaf, false]]);
   expect(required(await f.repo.item(identityId, file.id)).path).toBe(leaf);
-  expect(f.events.at(-1)).toMatchObject({ op: "delete", paths: ["/old.txt"] });
   // Put back under its own name: what followed it comes back with it.
   const back = await move(trashed, "root");
   expect(back).toMatchObject({ id: file.id, path: "/old.txt", trashed: false });
   expect(links()).toEqual({ identityId, from: leaf, to: "/old.txt" });
   expect(f.metadata.onMoved).toHaveBeenLastCalledWith(identityId, leaf, "/old.txt", false);
-  expect(f.events.at(-1)).toMatchObject({ op: "move", paths: [leaf], targetPaths: ["/old.txt"] });
   expect([...f.completed.values()].at(-1)).toMatchObject({
     from: "/old.txt",
     to: "/old.txt",
@@ -1755,11 +1742,6 @@ it("keeps an item's handle in Trash, and what is kept by path follows it in and 
   await move(again, "root", "renamed.txt");
   expect(links()).toEqual({ identityId, from: second, to: "/renamed.txt" });
   expect(f.metadata.onMoved).toHaveBeenLastCalledWith(identityId, second, "/renamed.txt", false);
-  expect(f.events.at(-1)).toMatchObject({
-    op: "move",
-    paths: [second],
-    targetPaths: ["/renamed.txt"],
-  });
 });
 
 it("restores into a folder that took the item's place without taking that folder's metadata", async () => {
@@ -1824,9 +1806,8 @@ it("never reports success when the receipt cannot be kept, and the app's retry k
   expect(await f.read("/renamed.txt")).toBe("old");
   expect((await f.service.status(f.principal, move.operationId)).state).toBe("committing");
   expect(f.moved.has(move.operationId)).toBe(false);
-  // The rest of the metadata waits for the receipt too, and the web hears nothing yet.
+  // The rest of the metadata waits for the receipt too.
   expect(f.metadata.onMoved).not.toHaveBeenCalled();
-  expect(f.events).toEqual([]);
   await expect(f.service.cancel(f.principal, move.operationId)).rejects.toMatchObject({
     kind: "conflict",
   });
@@ -1842,7 +1823,6 @@ it("never reports success when the receipt cannot be kept, and the app's retry k
     to: "/renamed.txt",
   });
   expect(f.metadata.onMoved).toHaveBeenCalledTimes(1);
-  expect(f.events).toMatchObject([{ op: "move", targetPaths: ["/renamed.txt"] }]);
 });
 
 it("never refuses a new Mac write over earlier metadata, which cannot fail a published one", async () => {
@@ -1870,10 +1850,9 @@ it("never refuses a new Mac write over earlier metadata, which cannot fail a pub
   });
   expect(warn).toHaveBeenCalledWith(
     expect.objectContaining({ identityId: f.principal.identityId, operationId }),
-    expect.stringContaining("indexer"),
+    expect.stringContaining("could not follow"),
   );
-  // The web still hears of the move, and a replay returns the same receipt.
-  expect(f.events).toMatchObject([{ op: "move", targetPaths: ["/renamed.txt"] }]);
+  // A replay returns the same receipt.
   expect(await service.commit(f.principal, operationId)).toEqual(receipt);
   // The next write publishes at once; nothing waits on the metadata that failed.
   const next = await f.stage("next.txt", "next");
@@ -2303,11 +2282,9 @@ it("deletes only a whole item in Trash for good, and an item gone already is don
     f.service.purge({ ...f.principal, tokenAccess: { mode: "read", paths: ["/"] } }, trashed.id),
   ).rejects.toMatchObject({ kind: "forbidden" });
   expect(f.purge).not.toHaveBeenCalled();
-  f.events.splice(0);
   await f.service.purge(f.principal, trashed.id);
   expect(f.purge).toHaveBeenCalledWith(f.principal, leaf.slice(`${TRASH_PATH}/`.length));
   expect((await f.raw.trash.list()).entries).toEqual([]);
-  expect(f.events).toMatchObject([{ op: "delete", paths: [leaf] }]);
   // Gone, as Delete permanently leaves it: asking again is done.
   await f.repo.remove(identityId, leaf);
   await f.service.purge(f.principal, trashed.id);

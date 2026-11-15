@@ -12,7 +12,6 @@ use postgres::{Client, NoTls};
 use serde_json::Value;
 
 use crate::chunking::PDF_EXTS;
-use crate::events::{Event, to_json};
 use crate::photo::Photo;
 use crate::settings::RawSettings;
 
@@ -444,10 +443,11 @@ pub fn move_paths(c: &mut Client, root_id: i64, old: &str, new: &str, is_dir: bo
     Ok(moved)
 }
 
-/// Tell `LISTEN idx_events` about an applied change. Nothing is stored: the change journal
-/// is the durable record.
-pub fn notify_event(c: &mut Client, event: &Event) -> Result<()> {
-    c.execute("SELECT pg_notify('idx_events', $1)", &[&to_json(event)])?;
+/// Tell `LISTEN idx_events` that the index took in a change under `root`, naming nothing
+/// else: the API passes it on so browsers refresh what the index backs. Nothing is stored;
+/// the change journal is the record of what changed.
+pub fn notify_indexed(c: &mut Client, root: &str) -> Result<()> {
+    c.execute("SELECT pg_notify('idx_events', $1)", &[&root])?;
     Ok(())
 }
 
@@ -584,8 +584,8 @@ pub fn root_stats(c: &mut Client, root_id: i64) -> Result<serde_json::Map<String
     )?;
     let last_scan = scan.map(|r| {
         serde_json::json!({
-            "started_at": crate::events::iso(r.get::<_, DateTime<Utc>>(0)),
-            "finished_at": r.get::<_, Option<DateTime<Utc>>>(1).map(crate::events::iso),
+            "started_at": crate::timestamps::iso(r.get::<_, DateTime<Utc>>(0)),
+            "finished_at": r.get::<_, Option<DateTime<Utc>>>(1).map(crate::timestamps::iso),
             "files_seen": r.get::<_, i64>(2), "files_changed": r.get::<_, i64>(3),
             "files_deleted": r.get::<_, i64>(4), "errors": r.get::<_, i64>(5),
         })

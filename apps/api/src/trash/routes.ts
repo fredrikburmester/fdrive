@@ -28,11 +28,9 @@ import { activityFailure, type PersonalActivityService } from "../activity/servi
 import type { AppHono, AuthedHono } from "../app.js";
 import type { Principal } from "../auth/principal.js";
 import { ApiHttpError } from "../errors.js";
-import type { EventBus } from "../events/bus.js";
 import {
   normalizeOrThrow,
   parseBody,
-  publishFsEvent,
   runStorageCall,
   serializeEntry,
   toApiHttpError,
@@ -48,8 +46,6 @@ function routePath(fullPath: string): string {
 
 export interface TrashRoutesDeps {
   readonly activity: PersonalActivityService;
-  readonly bus: EventBus;
-  readonly clock: () => Date;
   /** Rewrites tag/favorite/recent metadata and what followed an item into Trash. */
   readonly metadata: MetadataService;
 }
@@ -165,49 +161,41 @@ export function registerTrashRoutes(
     const target = body.target === undefined ? undefined : normalizeOrThrow(body.target);
 
     const restored: FsEntry[] = [];
-    const trashPaths: string[] = [];
-    const targetPaths: string[] = [];
     const context = activityRequestContext(c);
     const batchId = context.batchId ?? randomUUID();
-    try {
-      for (const id of validated) {
-        const trashVirtualPath = trashLeafPath(TRASH_PATH, id);
-        const originalPath =
-          parseMoveTrashLeaf(TRASH_PATH, trashVirtualPath)?.originalPath ?? trashVirtualPath;
-        const entry = await recordFsAction(
-          deps.activity,
-          c,
-          {
-            ...context,
-            producerOperationId: `${context.producerOperationId}:${restored.length}`,
-            batchId,
-            action: "file.restore",
-            requested: {
-              path: originalPath,
-              trashLeaf: trashVirtualPath,
-              ...(target ? { targetPath: target } : {}),
-            },
+    for (const id of validated) {
+      const trashVirtualPath = trashLeafPath(TRASH_PATH, id);
+      const originalPath =
+        parseMoveTrashLeaf(TRASH_PATH, trashVirtualPath)?.originalPath ?? trashVirtualPath;
+      const entry = await recordFsAction(
+        deps.activity,
+        c,
+        {
+          ...context,
+          producerOperationId: `${context.producerOperationId}:${restored.length}`,
+          batchId,
+          action: "file.restore",
+          requested: {
+            path: originalPath,
+            trashLeaf: trashVirtualPath,
+            ...(target ? { targetPath: target } : {}),
           },
-          () => restoreOne(trash, id, target),
-          (entry) => ({
-            path: entry.path,
-            kind: entry.kind === "dir" ? "dir" : "file",
-            size: entry.size,
-          }),
-        );
-        trashPaths.push(trashVirtualPath);
-        targetPaths.push(entry.path);
-        // A restore is a move out of Trash: what followed the item there comes back with it.
-        await deps.metadata.onMoved(
-          principal.identityId,
-          trashVirtualPath,
-          entry.path,
-          entry.kind === "dir",
-        );
-        restored.push(serializeEntry(entry));
-      }
-    } finally {
-      if (trashPaths.length > 0) publishFsEvent(deps, principal, "move", trashPaths, targetPaths);
+        },
+        () => restoreOne(trash, id, target),
+        (entry) => ({
+          path: entry.path,
+          kind: entry.kind === "dir" ? "dir" : "file",
+          size: entry.size,
+        }),
+      );
+      // A restore is a move out of Trash: what followed the item there comes back with it.
+      await deps.metadata.onMoved(
+        principal.identityId,
+        trashVirtualPath,
+        entry.path,
+        entry.kind === "dir",
+      );
+      restored.push(serializeEntry(entry));
     }
     const responseBody: TrashRestoreResponse = TrashRestoreResponse.parse({ restored });
     return c.json(responseBody);
@@ -228,8 +216,6 @@ export function registerTrashRoutes(
       });
     }
 
-    const paths = ids.map((id) => trashLeafPath(TRASH_PATH, id));
-    publishFsEvent(deps, principal, "delete", paths);
     const responseBody: OkResponse = OkResponse.parse({ ok: true });
     return c.json(responseBody);
   });
@@ -275,7 +261,6 @@ export function registerTrashRoutes(
       () => ({ path: TRASH_PATH, completedCount: completed }),
     );
 
-    publishFsEvent(deps, principal, "delete", [TRASH_PATH]);
     const responseBody: OkResponse = OkResponse.parse({ ok: true });
     return c.json(responseBody);
   });

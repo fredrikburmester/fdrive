@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use serde_json::{Value, json};
 
-use crate::events::iso_now;
+use crate::timestamps::iso_now;
 
 #[derive(Default)]
 struct JobState {

@@ -6,7 +6,6 @@ import type { IndexQueries } from "@fdrive/db";
 import { describe, expect, it, vi } from "vitest";
 import { activityFixture } from "../../../test/activity-fixture.js";
 import type { Principal } from "../../auth/principal.js";
-import { type BusEvent, createEventBus } from "../../events/bus.js";
 import type { McpToolDeps } from "../../mcp/handlers.js";
 import { type ActionTool, createChatActionTools, MAX_WRITE_BYTES } from "./action-tools.ts";
 
@@ -39,9 +38,6 @@ function setup(options: { files?: Record<string, string>; referenced?: string[] 
     indexerClient: null,
     clock: () => new Date("2026-09-18T10:00:00.000Z"),
   };
-  const bus = createEventBus();
-  const events: BusEvent[] = [];
-  bus.subscribe({ identityId: IDENTITY }, (event) => events.push(event));
   const activity = activityFixture(() => new Date("2026-09-18T10:00:00.000Z"));
   const tools = createChatActionTools({
     mcp,
@@ -55,8 +51,6 @@ function setup(options: { files?: Record<string, string>; referenced?: string[] 
     indexed: false,
     conversationId: CONVERSATION,
     fs: {
-      bus,
-      clock: () => new Date("2026-09-18T10:00:00.000Z"),
       activity: activity.service,
     },
   });
@@ -72,7 +66,7 @@ function setup(options: { files?: Record<string, string>; referenced?: string[] 
     proposal: ChatActionProposal,
     edits?: Parameters<ActionTool["apply"]>[1],
   ) => tool(name).apply(proposal, edits, new AbortController().signal);
-  return { storage, tools, tool, verify, apply, events, activity };
+  return { storage, tools, tool, verify, apply, activity };
 }
 
 const sha = (text: string) => createHash("sha256").update(text).digest("hex");
@@ -90,7 +84,7 @@ describe("createChatActionTools", () => {
 
 describe("move_items", () => {
   it("verifies moves like Organize does and applies the ones the person kept", async () => {
-    const { verify, apply, storage, events, tool } = setup();
+    const { verify, apply, storage, tool } = setup();
     expect(
       tool("move_items").activity({
         summary: "",
@@ -128,7 +122,6 @@ describe("move_items", () => {
     });
     await expect(storage.stat("/Docs/notes/a.txt")).resolves.toBeDefined();
     await expect(storage.stat("/Docs/readme.md")).resolves.toBeDefined();
-    expect(events.map((event) => event.type === "fs" && event.op)).toEqual(["mkdir", "move"]);
   });
 
   it("applies every non-conflicting suggestion by default and reports failures", async () => {
@@ -173,7 +166,7 @@ describe("move_items", () => {
 
 describe("rename_items", () => {
   it("verifies new names in place and renames the ones the person kept, with their edits", async () => {
-    const { verify, apply, storage, events, activity, tool } = setup({
+    const { verify, apply, storage, activity, tool } = setup({
       referenced: ["/Inbox", "/Docs"],
     });
     expect(
@@ -259,7 +252,6 @@ describe("rename_items", () => {
     await expect(storage.stat("/Documents/intro.md")).resolves.toBeDefined();
     await expect(storage.stat("/Documents/taken.txt")).resolves.toBeDefined();
     await expect(storage.stat("/Inbox/scan.pdf")).resolves.toBeDefined();
-    expect(events.map((event) => event.type === "fs" && event.op)).toEqual(["move"]);
     expect(activity.operations.map((operation) => [operation.action, operation.source])).toEqual([
       ["file.rename", "ai"],
       ["file.rename", "ai"],
@@ -431,7 +423,7 @@ describe("rename_items", () => {
 
 describe("trash_items", () => {
   it("verifies referenced items with their kinds and trashes the ones kept", async () => {
-    const { verify, apply, storage, events } = setup({
+    const { verify, apply, storage } = setup({
       referenced: ["/Inbox", "/Docs"],
     });
 
@@ -466,7 +458,6 @@ describe("trash_items", () => {
     expect((await storage.trash.list()).entries.map((entry) => entry.originalPath)).toEqual([
       "/Inbox/a.txt",
     ]);
-    expect(events.map((event) => event.type === "fs" && event.op)).toEqual(["delete"]);
     expect(await apply("trash_items", proposal, { paths: [] })).toMatchObject({
       outcome: "Nothing was trashed.",
     });
@@ -492,7 +483,7 @@ describe("trash_items", () => {
 
 describe("write_text_file", () => {
   it("proposes a new text file beside a referenced item and creates it", async () => {
-    const { verify, apply, storage, events } = setup({ referenced: ["/Inbox/scan.pdf"] });
+    const { verify, apply, storage } = setup({ referenced: ["/Inbox/scan.pdf"] });
 
     const proposal = await verify("write_text_file", {
       summary: "A readable version.",
@@ -515,7 +506,6 @@ describe("write_text_file", () => {
       toolResult: "Created /Inbox/scan-notes.md.",
     });
     expect((await storage.stat("/Inbox/scan-notes.md")).size).toBe(14);
-    expect(events.map((event) => event.type === "fs" && event.op)).toEqual(["create"]);
     // A second apply of the same card finds the name taken and reports it instead of throwing.
     expect(
       await apply("write_text_file", proposal, { path: "/Inbox/scan-notes.md" }),
@@ -525,7 +515,7 @@ describe("write_text_file", () => {
   });
 
   it("replaces a referenced text file only with the hash it was read at", async () => {
-    const { verify, apply, storage, events } = setup();
+    const { verify, apply, storage } = setup();
     const current = sha("# Hi");
 
     await expect(
@@ -571,7 +561,6 @@ describe("write_text_file", () => {
     expect(await apply("write_text_file", proposal)).toMatchObject({
       outcome: "Replaced /Docs/readme.md.",
     });
-    expect(events.map((event) => event.type === "fs" && event.op)).toEqual(["update"]);
   });
 
   it("refuses binary names, places outside the references, taken names and oversized text", async () => {

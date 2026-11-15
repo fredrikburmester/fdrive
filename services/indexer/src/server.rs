@@ -14,7 +14,6 @@ use axum::{Json, Router};
 use serde_json::{Value, json};
 
 use crate::db::{self, Db};
-use crate::events::iso_now;
 use crate::extract::{ContentExtractor, MAX_CONTENT_BYTES, embed_health};
 use crate::failures::FEATURES;
 use crate::features::FeatureConfiguration;
@@ -23,6 +22,7 @@ use crate::jobs::Job;
 use crate::maintenance;
 use crate::names::{NameIndex, NameSearch};
 use crate::paths::reindex_scope;
+use crate::timestamps::iso_now;
 
 /// Wakes the root loop early, like a set `threading.Event`.
 #[derive(Default)]
