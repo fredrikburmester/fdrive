@@ -931,6 +931,8 @@ final class AppModel: ObservableObject {
         guard !pairing, disconnecting.insert(location.id).inserted else { return }
         defer { disconnecting.remove(location.id) }
         refreshOperation?.cancel(); await refreshOperation?.value
+        // The refresh just awaited may have finished this removal itself.
+        guard locations.contains(where: { $0.id == location.id }) else { return }
         error = nil; notice = nil
         let shown = status[location.id]
         status[location.id] = Self.removing
