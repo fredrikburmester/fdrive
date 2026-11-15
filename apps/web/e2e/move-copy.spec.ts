@@ -31,7 +31,7 @@ test("Move to moves a file into the chosen folder", async ({ page }) => {
   await uploadTextFile(page, "move-me.txt", "please move me");
 
   await listing(page).getByText("move-me.txt", { exact: true }).click({ button: "right" });
-  await page.getByRole("menuitem", { name: "Move to" }).click();
+  await page.getByRole("menuitem", { name: "Move to", exact: true }).click();
 
   const dialog = page.getByRole("dialog").filter({ hasText: "Move to" });
   await expect(dialog).toBeVisible();
