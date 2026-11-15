@@ -503,6 +503,42 @@ test("concurrent search displays text and visual matches without manual toggle, 
   await expect(dialog.getByText("Visual matches")).toBeHidden();
 });
 
+test("a saved search reopens from the sidebar with its filter and is removed from its menu", async ({
+  page,
+}) => {
+  const name = uniqueName("readme docs");
+  await page.goto("/files");
+  await openSearch(page);
+  const dialog = page.getByRole("dialog");
+  await page.getByPlaceholder(SEARCH_INPUT_PLACEHOLDER).fill("readme");
+  await dialog.getByRole("button", { name: "Documents" }).click();
+  await expect(dialog.getByText("readme.md").first()).toBeVisible();
+
+  await dialog.getByRole("button", { name: "Save search" }).click();
+  const nameInput = page.getByRole("textbox", { name: "Name" });
+  await expect(nameInput).toHaveValue("readme");
+  await nameInput.fill(name);
+  await nameInput.press("Enter");
+  await expect(nameInput).toBeHidden();
+  await page.keyboard.press("Escape");
+  await expect(dialog).toBeHidden();
+
+  const saved = page.getByRole("button", { name, exact: true });
+  await saved.click();
+  await expect(page.getByPlaceholder(SEARCH_INPUT_PLACEHOLDER)).toHaveValue("readme");
+  await expect(dialog.getByRole("button", { name: "Documents" })).toHaveAttribute(
+    "aria-pressed",
+    "true",
+  );
+  await expect(dialog.getByText("readme.md").first()).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(dialog).toBeHidden();
+
+  await saved.click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Remove" }).click();
+  await expect(saved).toBeHidden();
+});
+
 test.describe("scoping", () => {
   test.use({ storageState: { cookies: [], origins: [] } });
 

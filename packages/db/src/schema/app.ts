@@ -257,6 +257,24 @@ export const recents = appSchema.table(
   ],
 );
 
+/** A search an account saved from the search panel: its query, type filter and folder scope. */
+export const savedSearches = appSchema.table(
+  "saved_searches",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    accountId: uuid("account_id")
+      .notNull()
+      .references(() => accounts.id, { onDelete: "cascade" }),
+    name: text("name").notNull(),
+    query: text("query").notNull(),
+    type: text("type").notNull(),
+    /** The folder "This folder only" searched; null searches everything. */
+    folder: text("folder"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [index("saved_searches_account_id_idx").on(table.accountId, table.createdAt)],
+);
+
 export const thumbnails = appSchema.table(
   "thumbnails",
   {

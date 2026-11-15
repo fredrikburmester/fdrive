@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import { readFile } from "node:fs/promises";
+import { readFile, utimes, writeFile } from "node:fs/promises";
 import {
   GrantPeopleResponse,
   GrantsResponse,
@@ -15,6 +15,9 @@ import { seedLocalUsers, silentLogger } from "./helpers/local-storage.ts";
 
 const cookieFrom = (response: Response) => response.headers.get("set-cookie")?.split(";")[0] ?? "";
 const SHELF = "/Shared with me";
+const PART = "0123456789abcdef";
+const STALE_PART = "/.fdrive-partial-00000000000000aa";
+const FRESH_PART = "/.fdrive-partial-00000000000000bb";
 
 /**
  * Folders shared between users of the local folder (`app.local_grants`),
@@ -42,6 +45,11 @@ describe("sharing folders between local users", () => {
       }),
     ]);
     await seedLocalUsers(postgres.connectionString, storage);
+    // Parts of uploads nobody finished; startup sweeps the ones a day old.
+    await writeFile(storage.path("alice", STALE_PART), "stale");
+    await writeFile(storage.path("alice", FRESH_PART), "fresh");
+    const old = new Date(Date.now() - 2 * 24 * 60 * 60_000);
+    await utimes(storage.path("alice", STALE_PART), old, old);
     composed = await composeApp(
       loadConfig({
         DATABASE_URL: postgres.connectionString,
@@ -96,6 +104,12 @@ describe("sharing folders between local users", () => {
   };
   const upload = (cookie: string, path: string, content: string) =>
     call(`${ROUTES.fs.upload}?path=${q(path)}`, { method: "PUT", cookie, raw: content });
+  /** One piece of an upload sent in pieces. */
+  const piece = (cookie: string, path: string, offset: number, content: string, final = false) =>
+    call(
+      `${ROUTES.fs.upload}?path=${q(path)}&part=${PART}&offset=${offset}${final ? "&final=true" : ""}`,
+      { method: "PUT", cookie, raw: content },
+    );
   const share = async (cookie: string, path: string, username: string, access: string) => {
     const response = await call(ROUTES.grants.list, {
       method: "POST",
@@ -104,6 +118,11 @@ describe("sharing folders between local users", () => {
     });
     return response;
   };
+
+  it("removes the parts of uploads nobody finished within a day at startup", async () => {
+    await expect.poll(() => existsSync(storage.path("alice", STALE_PART))).toBe(false);
+    expect(existsSync(storage.path("alice", FRESH_PART))).toBe(true);
+  });
 
   it("shares, reads, refuses changes to a read-only share and writes through a writable one", async () => {
     const alice = await login("alice");
@@ -154,6 +173,7 @@ describe("sharing folders between local users", () => {
 
     // A read-only share refuses every change, and the owner's file stays.
     expect((await upload(bob, `${SHELF}/Photos/dog.jpg`, "woof")).status).toBe(403);
+    expect((await piece(bob, `${SHELF}/Photos/dog.jpg`, 0, "wo")).status).toBe(403);
     const deleted = await call(ROUTES.fs.delete, {
       method: "POST",
       cookie: bob,
@@ -174,7 +194,13 @@ describe("sharing folders between local users", () => {
     expect(await readFile(storage.path("alice", "/Docs/notes.txt"), "utf8")).toBe("bob's notes");
     expect(await readFile(storage.path("alice", "/Docs/mine.txt"), "utf8")).toBe("bob's own");
     expect(existsSync(storage.path("bob", "/mine.txt"))).toBe(false);
-    expect(await list(alice, "/Docs")).toEqual(["mine.txt", "notes.txt", "plan.txt"]);
+    // An upload in pieces waits in the owner's home until its last piece.
+    expect((await piece(bob, `${SHELF}/Docs/big.txt`, 0, "bob's ")).status).toBe(204);
+    expect(existsSync(storage.path("alice", `/.fdrive-partial-${PART}`))).toBe(true);
+    expect((await piece(bob, `${SHELF}/Docs/big.txt`, 6, "big file", true)).status).toBe(201);
+    expect(await readFile(storage.path("alice", "/Docs/big.txt"), "utf8")).toBe("bob's big file");
+    expect(existsSync(storage.path("alice", `/.fdrive-partial-${PART}`))).toBe(false);
+    expect(await list(alice, "/Docs")).toEqual(["big.txt", "mine.txt", "notes.txt", "plan.txt"]);
     // Subtitles read through the same storage as downloads.
     const srt = "1\n00:00:01,000 --> 00:00:02,000\nThe plan\n";
     expect((await upload(bob, `${SHELF}/Docs/plan.srt`, srt)).status).toBe(201);

@@ -20,7 +20,7 @@ import {
   type DesktopAccessMove,
   migrate,
 } from "@fdrive/db";
-import { SHARED_WITH_ME } from "@fdrive/local";
+import { removeStaleParts, SHARED_WITH_ME } from "@fdrive/local";
 import type { Logger } from "pino";
 import { createActivityAdmission } from "./activity/admission.ts";
 import { registerActivityExports } from "./activity/exports.ts";
@@ -86,6 +86,7 @@ import type { McpToolDeps } from "./mcp/handlers.js";
 import { createIndexerExtractClient } from "./mcp/indexer-client.js";
 import { registerMcpRoutes } from "./mcp/routes.js";
 import { registerMetadataRoutes } from "./metadata/routes.js";
+import { registerSavedSearchRoutes } from "./metadata/saved-searches.js";
 import { createMetadataService, withFollowers } from "./metadata/service.js";
 import { withTrashMoves } from "./metadata/trash-moves.js";
 import { extractClientIp } from "./net.js";
@@ -197,7 +198,14 @@ export async function composeApp(
       error: (message) => logger.error(message),
     },
   );
-  await guard.verify();
+  const filesVerdict = await guard.verify();
+  // Uploads nobody finished within a day are not coming back for their parts.
+  if (filesVerdict.ok) {
+    void removeStaleParts(
+      config.fdriveStorageRoot,
+      new Date(clock().getTime() - 24 * 60 * 60_000),
+    ).catch((error: unknown) => logger.warn({ err: error }, "unfinished upload parts not removed"));
+  }
   /** The files folder's row in `app.providers`: Trash settings, Office and the Mac name it. */
   const storageId = await ensureStorageRow(repos);
   /**
@@ -969,6 +977,7 @@ export async function composeApp(
         reads: activityReads,
         admitActivity,
       });
+      registerSavedSearchRoutes(groups, { savedSearches: repos.savedSearches });
       registerActivityExports(groups.authed, {
         repo: activityRepo,
         exports: createActivityExportsRepo(db, clock),

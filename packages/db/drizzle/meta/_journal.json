@@ -260,6 +260,13 @@
       "when": 1794724637340,
       "tag": "0036_backups_s3_only",
       "breakpoints": true
+    },
+    {
+      "idx": 37,
+      "version": "7",
+      "when": 1794729654241,
+      "tag": "0037_saved_searches",
+      "breakpoints": true
     }
   ]
 }

@@ -59,6 +59,9 @@ export const queryKeys = {
   favorites: {
     list: () => ["favorites", "list"] as const,
   },
+  savedSearches: {
+    list: () => ["saved-searches", "list"] as const,
+  },
   recents: {
     list: () => ["recents", "list"] as const,
   },

@@ -45,6 +45,10 @@ describe("queryKeys", () => {
     expect(queryKeys.favorites.list()).toEqual(["favorites", "list"]);
   });
 
+  it("savedSearches.list() builds a stable key", () => {
+    expect(queryKeys.savedSearches.list()).toEqual(["saved-searches", "list"]);
+  });
+
   it("recents.list() builds a stable key", () => {
     expect(queryKeys.recents.list()).toEqual(["recents", "list"]);
   });
