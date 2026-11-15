@@ -6,8 +6,8 @@ Idle services are quiet. Hover or keyboard focus exposes the phase and counts; r
 motion disables rotation. Errors, blocked retries and unavailable telemetry use a static
 warning. Background job state survives navigation and reload.
 
-The section never follows the login being browsed. Activity, counts and actions cover every
-indexed root. The group label carries an "Admins only" caption and every System page header states its scope with
+The section never follows the login being browsed. Activity, counts and actions cover the
+whole files folder. The group label carries an "Admins only" caption and every System page header states its scope with
 shared copy from `lib/system/pages`. Scoping the sidebar to the signed-in login made it disagree
 with the pages and was reverted.
 
@@ -37,7 +37,7 @@ startup/settings changes, not individual editor sessions.
 
 ## Worker accounting
 
-The indexer tracks per-root scan operations, queued reindex requests, concurrent watcher work,
+The indexer tracks scan operations, queued reindex requests, concurrent watcher work,
 and explicit rebuild/clear jobs. OCR tracks both scheduled and manual passes through its
 existing run lock. Snapshots are bounded, thread-safe in-memory records; reads do not query
 storage. Each process has a fresh instance ID and each run has an operation ID. Counters

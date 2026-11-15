@@ -81,14 +81,27 @@ describe("createUserStorage", () => {
     expect(shared).toHaveBeenCalledTimes(1);
   });
 
-  it("hides a real folder of the same name while something is shared, and only then", async () => {
+  it("reserves the name whether or not anything is shared, leaving a real folder on disk", async () => {
     await mkdir(join(root, "bob", SHARED_WITH_ME));
+    await writeFile(join(root, "bob", SHARED_WITH_ME, "mine.txt"), "mine");
     expect((await bob.list("/")).filter((entry) => entry.name === SHARED_WITH_ME)).toHaveLength(1);
+    expect(await names(`/${SHARED_WITH_ME}`)).toEqual(["Photos", "Projects"]);
     const alone = createUserStorage({ home: join(root, "bob"), shared: async () => [] });
-    await alone.upload(`/${SHARED_WITH_ME}/mine.txt`, bytes("mine"));
-    expect((await alone.list(`/${SHARED_WITH_ME}`)).map((entry) => entry.name)).toEqual([
-      "mine.txt",
-    ]);
+    expect((await alone.list("/")).map((entry) => entry.name)).toEqual(["own.txt"]);
+    expect(await alone.list(`/${SHARED_WITH_ME}`)).toEqual([]);
+    expect(await kindOf(alone.download(`/${SHARED_WITH_ME}/mine.txt`))).toBe("not_found");
+    for (const change of [
+      alone.upload(`/${SHARED_WITH_ME}/new.txt`, bytes("x")),
+      alone.mkdir(`/${SHARED_WITH_ME}`),
+      alone.move("/own.txt", `/${SHARED_WITH_ME}`),
+      alone.copy("/own.txt", `/${SHARED_WITH_ME}`),
+      alone.deleteDir(`/${SHARED_WITH_ME}`),
+    ]) {
+      expect(await kindOf(change)).toBe("forbidden");
+    }
+    await expect(alone.mkdir(`/${SHARED_WITH_ME}`)).rejects.toThrow(/is reserved/);
+    // Untouched on disk.
+    expect(await readFile(join(root, "bob", SHARED_WITH_ME, "mine.txt"), "utf8")).toBe("mine");
   });
 
   it("leaves out a shared folder its owner removed or that is not a folder", async () => {

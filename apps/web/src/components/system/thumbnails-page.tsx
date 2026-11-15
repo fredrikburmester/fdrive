@@ -13,13 +13,6 @@ import {
 } from "@/components/ui/dialog";
 import { Field, FieldDescription, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import {
   useClearThumbnails,
@@ -39,8 +32,6 @@ import { SystemErrorState } from "./system-error-state";
 import { SystemPage } from "./system-page";
 import { SystemSection } from "./system-section";
 
-const ALL_ROOTS = "__all__";
-
 /** Admin controls for preview cache maintenance, independent of text indexing. */
 export function ThumbnailsPage() {
   const { formatBytes } = useFormatters();
@@ -58,18 +49,14 @@ export function ThumbnailsPage() {
   // below shows "Not configured" from another.
   const thumbnailsConfigured = (data?.configured ?? false) && (indexer.data?.configured ?? false);
   const status = sidecarStatus(thumbnailsConfigured, indexer.data?.reachable ?? false);
-  const rootNames =
-    indexer.data?.health?.roots ?? indexer.data?.stats?.roots.map((root) => root.root) ?? [];
   const [rebuildOpen, setRebuildOpen] = useState(false);
   const [clearOpen, setClearOpen] = useState(false);
-  const [root, setRoot] = useState(ALL_ROOTS);
   const [path, setPath] = useState("");
   const [force, setForce] = useState(false);
 
   function handleRebuildConfirm() {
     rebuild.mutate(
       {
-        ...(root !== ALL_ROOTS ? { root } : {}),
         ...(path.trim() ? { path: path.trim() } : {}),
         ...(force ? { force: true } : {}),
       },
@@ -83,7 +70,6 @@ export function ThumbnailsPage() {
                 : "No thumbnails need rebuilding.",
           );
           setRebuildOpen(false);
-          setRoot(ALL_ROOTS);
           setPath("");
           setForce(false);
         },
@@ -179,41 +165,15 @@ export function ThumbnailsPage() {
           </DialogHeader>
           <div className="flex flex-col gap-4 py-2">
             <Field>
-              <FieldLabel htmlFor="rebuild-root">Root</FieldLabel>
-              <Select
-                value={root}
-                onValueChange={(value) => {
-                  setRoot(value ?? ALL_ROOTS);
-                  setPath("");
-                }}
-              >
-                <SelectTrigger id="rebuild-root">
-                  <SelectValue>{root === ALL_ROOTS ? "All roots" : root}</SelectValue>
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value={ALL_ROOTS}>All roots</SelectItem>
-                  {rootNames.map((name) => (
-                    <SelectItem key={name} value={name}>
-                      {name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              <FieldDescription>
-                Choose every root or limit the rebuild to one root.
-              </FieldDescription>
-            </Field>
-            <Field>
               <FieldLabel htmlFor="rebuild-path">Path (optional)</FieldLabel>
               <Input
                 id="rebuild-path"
                 value={path}
-                disabled={root === ALL_ROOTS}
                 onChange={(event) => setPath(event.target.value)}
-                placeholder="Whole root"
+                placeholder="Everything"
               />
               <FieldDescription>
-                Choose a root first, then enter a file or folder path relative to it.
+                A file or folder in the files folder, such as alice/Photos.
               </FieldDescription>
             </Field>
             <Field orientation="horizontal">
@@ -239,7 +199,7 @@ export function ThumbnailsPage() {
           <DialogHeader>
             <DialogTitle>Clear thumbnail cache?</DialogTitle>
             <DialogDescription>
-              Removes cached previews for all roots, including unused preview files. Original files,
+              Removes every cached preview, including unused preview files. Original files,
               extracted text, embeddings, tags, favorites, and recents stay. Normal indexing or
               on-demand generation can create previews again.
             </DialogDescription>

@@ -33,9 +33,8 @@ function setup(options: { files?: Record<string, string>; referenced?: string[] 
   const mcp: McpToolDeps = {
     indexQueries: {} as IndexQueries,
     searchService: { search: async () => Promise.reject(new Error("unexpected")) },
-    scopeResolver: {
-      verifiedIndexScopes: async () => ({ available: false, reason: "no_connection" as const }),
-    },
+    scopeResolver: { scopesFor: async () => [] },
+    indexed: async () => false,
     publicUrl: async () => null,
     indexerClient: null,
     clock: () => new Date("2026-09-18T10:00:00.000Z"),

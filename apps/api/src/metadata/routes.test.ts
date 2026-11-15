@@ -143,12 +143,10 @@ async function buildHarness(withActivity = false) {
         metadata,
         folderSize: {
           indexQueries: {
-            rootIdsByName: async () => ({}),
             subtreeSize: async () => ({ bytes: 0, files: 0 }),
           },
-          resolver: {
-            verifiedIndexScopes: async () => ({ available: false, reason: "no_roots" }),
-          },
+          resolver: { scopesFor: async () => [] },
+          indexed: async () => false,
         },
       });
       registerMetadataRoutes(groups, {

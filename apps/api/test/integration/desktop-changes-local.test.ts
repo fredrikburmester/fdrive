@@ -36,13 +36,9 @@ it("answers which folders an upload, a move and a delete changed, and detects a 
   await seedLocalUsers(postgres.connectionString, storage, ["alice"]);
   const database = createDb(postgres.connectionString);
   // What the indexer does when it starts: the API journals nothing for a root without a row.
-  await database.db.execute(sql`insert into idx.roots (name) values ('files')`);
   const config = loadConfig({
     DATABASE_URL: postgres.connectionString,
     FDRIVE_STORAGE_ROOT: storage.root,
-    FDRIVE_INDEX_ROOTS: JSON.stringify([
-      { name: "files", storagePath: storage.root, indexerPath: "/srv/files" },
-    ]),
     FDRIVE_MASTER_KEY: Buffer.alloc(32, 7).toString("base64"),
   });
   const composed = await composeApp(config, pino({ level: "silent" }), () => new Date());
@@ -184,9 +180,7 @@ it("answers which folders an upload, a move and a delete changed, and detects a 
     // journals it, which this suite does in its place.
     await writeFile(storage.path("alice", "/photo.jpg"), "edited on the host");
     expect(await alice.changes(aliceDeleted)).toMatchObject({ paths: [], folders: [] });
-    await createChangeJournal(database.db).append("files", "watcher", [
-      { path: "alice/photo.jpg" },
-    ]);
+    await createChangeJournal(database.db).append("watcher", [{ path: "alice/photo.jpg" }]);
     const aliceWatched = await changed(alice, aliceDeleted, {
       paths: ["/photo.jpg"],
       folders: ["/"],

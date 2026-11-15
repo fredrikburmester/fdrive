@@ -7,6 +7,7 @@ import * as activitySchema from "./schema/activity.js";
 import * as appSchema from "./schema/app.js";
 import * as idxSchema from "./schema/idx.js";
 
+export { INDEX_ROOT_ID, INDEX_ROOT_NAME } from "./index-root.js";
 export { resolveMigrationsFolder } from "./migrations-path.js";
 export * from "./parse-database-url.js";
 export { type ActivityRepo, appendActivityOutcome, createActivityRepo } from "./repos/activity.js";

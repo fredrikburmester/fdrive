@@ -8,7 +8,7 @@ import {
   parentPath,
   toFsPath,
 } from "@fdrive/core";
-import type { IndexedFile } from "@fdrive/db";
+import { INDEX_ROOT_ID, type IndexedFile } from "@fdrive/db";
 import { z } from "zod";
 import type { Principal } from "../../auth/principal.js";
 import { type McpToolDeps, runSearch, runSimilarFiles } from "../../mcp/handlers.js";
@@ -38,7 +38,7 @@ export interface DriveToolsDeps {
   readonly mcp: McpToolDeps;
   readonly principal: Principal;
   readonly focus: ToolFocus;
-  /** Whether the identity has verified index scopes, so excerpts, search and similarity can work. */
+  /** Whether the files folder is indexed, so excerpts, search and similarity can work. */
   readonly indexed: boolean;
   /** What the person chose to share with the model; defaults to everything. */
   readonly share?: OrganizeSharing | undefined;
@@ -279,7 +279,7 @@ export interface IndexScope {
 }
 
 export interface IndexLookup {
-  /** The identity's verified index scope, resolved once; `null` when the index cannot be used. */
+  /** The identity's scopes, resolved once; `null` when the index cannot be used. */
   scope(): Promise<IndexScope | null>;
   /** The index row for a stored path that round-trips, else `null`. */
   file(path: string): Promise<{ file: IndexedFile; scope: IndexScope } | null>;
@@ -292,11 +292,9 @@ export function createIndexLookup(deps: DriveToolsDeps): IndexLookup {
     scope() {
       if (scope === undefined)
         scope = (async (): Promise<IndexScope | null> => {
-          const verified = await deps.mcp.scopeResolver.verifiedIndexScopes(
-            deps.principal.username,
-          );
-          if (!verified.available) return null;
-          const ctx = await resolveScopeContext(deps.mcp.indexQueries, verified.scopes);
+          if (!(await deps.mcp.indexed())) return null;
+          const scopes = await deps.mcp.scopeResolver.scopesFor(deps.principal.username);
+          const ctx = resolveScopeContext(scopes);
           return ctx === null ? null : { ctx };
         })();
       return scope;
@@ -306,12 +304,11 @@ export function createIndexLookup(deps: DriveToolsDeps): IndexLookup {
       if (resolved === null) return null;
       const { ctx } = resolved;
       const fsPath = toFsPath(ctx.scopes, path);
-      const rootId = fsPath === null ? undefined : ctx.rootIdByName.get(fsPath.rootName);
       const file =
-        fsPath === null || rootId === undefined
+        fsPath === null
           ? null
-          : await deps.mcp.indexQueries.fileByPath(rootId, toIndexRelativePath(fsPath.fsPath));
-      if (file === null || virtualPathFor(ctx, file.rootId, file.path) !== path) return null;
+          : await deps.mcp.indexQueries.fileByPath(INDEX_ROOT_ID, toIndexRelativePath(fsPath));
+      if (file === null || virtualPathFor(ctx, file.path) !== path) return null;
       return { file, scope: resolved };
     },
   };

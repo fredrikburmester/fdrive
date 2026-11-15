@@ -1,7 +1,7 @@
-"""I/O: takes each configured root's candidate PDFs from the index, invokes
-`ocrmypdf` as a subprocess per file, and applies the resulting decision to the
-filesystem and the done-log. Pure decision-making lives in `decide.py` and
-`rules.py`; this module is the glue, mirroring filesai's `run.sh` behaviour:
+"""I/O: takes the candidate PDFs from the index, invokes `ocrmypdf` as a
+subprocess per file, and applies the resulting decision to the filesystem and
+the done-log. Pure decision-making lives in `decide.py` and `rules.py`; this
+module is the glue, mirroring filesai's `run.sh` behaviour:
 
 - Candidates are the live PDFs in `idx.files` whose content (`sha256`) the
   done-log has no decision for, so a PDF moved or restored from Trash is never
@@ -52,6 +52,13 @@ TEXT_PROBE_TIMEOUT_SECONDS = 120
 #: is not, or no longer, the version the index recorded. The next pass looks again.
 STATUS_DONE = "done"
 STATUS_CHANGED = "changed"
+
+
+#: The only index root: the files folder, mounted at `/data`. A migration
+#: seeds its `idx.roots` row as id 1.
+FILES_ROOT_NAME = "files"
+FILES_ROOT_ID = 1
+FILES_ROOT_PATH = "/data"
 
 
 @dataclass(frozen=True)
@@ -368,7 +375,7 @@ def process_file(
 
 def run_pass(
     conn: psycopg.Connection,
-    targets: list[RootTarget],
+    target: RootTarget,
     settings: Settings,
     state_dir: str,
     timeout_seconds: int,
@@ -379,28 +386,27 @@ def run_pass(
     on_file: Callable[[str, bool], None] | None = None,
     on_stopped: Callable[[], None] | None = None,
 ) -> RunTotals:
-    """One pass over every target's candidates from the index. `include_globs` is
+    """One pass over the target's candidates from the index. `include_globs` is
     `Config.include_globs` (env `OCR_INCLUDE_GLOBS`), not part of `settings`: it is
     a deployment-fixed restriction, not something an admin edits at runtime."""
     totals = RunTotals()
     run_id = db.start_run(conn)
     log(f"OCR pass start (langs={settings.langs}, max {settings.max_mb}MB)")
     try:
-        for target in targets:
-            for pdf in db.pdf_candidates(conn, target.root_id, RESERVED_FOLDERS):
-                if is_excluded(target.name, pdf.path, list(settings.exclude_globs), list(include_globs)):
-                    continue
-                if is_too_big(pdf.size, settings.max_mb):
-                    continue
-                if is_enabled is not None and not is_enabled():
-                    if on_stopped is not None:
-                        on_stopped()
-                    log("OCR pass stopped: PDF OCR disabled")
-                    return totals
-                status, rewrite = process_file(conn, target, pdf, settings, state_dir, timeout_seconds, jobs, log)
-                totals.add(status, rewrite)
-                if on_file is not None:
-                    on_file(status, rewrite)
+        for pdf in db.pdf_candidates(conn, target.root_id, RESERVED_FOLDERS):
+            if is_excluded(target.name, pdf.path, list(settings.exclude_globs), list(include_globs)):
+                continue
+            if is_too_big(pdf.size, settings.max_mb):
+                continue
+            if is_enabled is not None and not is_enabled():
+                if on_stopped is not None:
+                    on_stopped()
+                log("OCR pass stopped: PDF OCR disabled")
+                return totals
+            status, rewrite = process_file(conn, target, pdf, settings, state_dir, timeout_seconds, jobs, log)
+            totals.add(status, rewrite)
+            if on_file is not None:
+                on_file(status, rewrite)
     finally:
         db.finish_run(conn, run_id, totals.seen, totals.ocred, totals.skipped, totals.failed)
     log(f"OCR pass done: {totals.seen} pdfs seen, {totals.ocred} OCR'd, {totals.skipped} skipped, {totals.failed} failed")

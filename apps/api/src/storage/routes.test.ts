@@ -16,8 +16,8 @@ const REQUIRED_ENV = {
 };
 
 const SCOPES: readonly Scope[] = [
-  { rootName: "files", fsPrefix: "/alice", virtualPrefix: "/" },
-  { rootName: "files", fsPrefix: "/bob/Projects", virtualPrefix: "/Shared with me/Projects" },
+  { fsPrefix: "/alice", virtualPrefix: "/" },
+  { fsPrefix: "/bob/Projects", virtualPrefix: "/Shared with me/Projects" },
 ];
 
 function indexed(path: string, size: number): IndexedFile {
@@ -65,12 +65,9 @@ function buildApp(
   };
   const { scopes = SCOPES, ...rest } = overrides;
   const deps: StorageUsageRoutesDeps = {
-    resolver: {
-      verifiedIndexScopes: async () =>
-        scopes === null ? { available: false, reason: "no_roots" } : { available: true, scopes },
-    },
+    resolver: { scopesFor: async () => scopes ?? [] },
+    indexed: async () => scopes !== null,
     indexQueries: {
-      rootIdsByName: async () => ({ files: 1 }),
       bytesByExtension: async () => [],
       listFiles: async () => ({ total: 0, files: [] }),
     },
@@ -129,7 +126,7 @@ describe("GET /api/v1/storage", () => {
       ],
     }));
     const app = buildApp({
-      indexQueries: { rootIdsByName: async () => ({ files: 1 }), bytesByExtension, listFiles },
+      indexQueries: { bytesByExtension, listFiles },
       localUsers: { get: async () => user(5_000) },
     });
 
@@ -167,19 +164,11 @@ describe("GET /api/v1/storage", () => {
     const app = buildApp({
       scopes: null,
       localUsers: { get: async () => user(9) },
-      indexQueries: {
-        rootIdsByName: async () => ({}),
-        bytesByExtension,
-        listFiles: vi.fn(),
-      },
+      indexQueries: { bytesByExtension, listFiles: vi.fn() },
     });
     expect(await usage(app)).toMatchObject({ indexed: false, used: 0, limit: 9, largest: [] });
     expect(bytesByExtension).not.toHaveBeenCalled();
 
-    const noRoot = buildApp({
-      indexQueries: { rootIdsByName: async () => ({}), bytesByExtension, listFiles: vi.fn() },
-    });
-    expect(await usage(noRoot)).toMatchObject({ indexed: false, limit: null });
     const noUser = buildApp({ scopes: null, localUsers: { get: async () => null } });
     expect(await usage(noUser)).toMatchObject({ indexed: false, limit: null });
   });

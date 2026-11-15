@@ -8,7 +8,6 @@ import {
   isBase64Of32Bytes,
   isHttpUrl,
   loadConfig,
-  parseIndexRoots,
   undefinedWhenEmpty,
   withDefault,
 } from "./config";
@@ -46,49 +45,6 @@ describe("undefinedWhenEmpty", () => {
 
   it("returns the value when it is a non-empty string", () => {
     expect(undefinedWhenEmpty("value")).toBe("value");
-  });
-});
-
-describe("parseIndexRoots", () => {
-  it("returns null for undefined", () => {
-    expect(parseIndexRoots(undefined)).toBeNull();
-  });
-
-  it("parses a valid single-root JSON array", () => {
-    const raw = JSON.stringify([{ name: "files", storagePath: "/data", indexerPath: "/data" }]);
-    expect(parseIndexRoots(raw)).toEqual([
-      { name: "files", storagePath: "/data", indexerPath: "/data" },
-    ]);
-  });
-
-  it("parses multiple roots", () => {
-    const raw = JSON.stringify([
-      { name: "files", storagePath: "/a", indexerPath: "/roots/a" },
-      { name: "photos", storagePath: "/b", indexerPath: "/roots/b" },
-    ]);
-    expect(parseIndexRoots(raw)).toHaveLength(2);
-  });
-
-  it("throws when a root names no storagePath", () => {
-    expect(() =>
-      parseIndexRoots(JSON.stringify([{ name: "files", indexerPath: "/roots/files" }])),
-    ).toThrow(/storagePath/);
-  });
-
-  it("throws for invalid JSON", () => {
-    expect(() => parseIndexRoots("not json")).toThrow(/valid JSON/);
-  });
-
-  it("throws for an empty array", () => {
-    expect(() => parseIndexRoots("[]")).toThrow();
-  });
-
-  it("throws when a root is missing a required field", () => {
-    expect(() => parseIndexRoots(JSON.stringify([{ name: "files" }]))).toThrow();
-  });
-
-  it("throws when the value is not an array", () => {
-    expect(() => parseIndexRoots(JSON.stringify({ name: "files" }))).toThrow();
   });
 });
 
@@ -159,7 +115,6 @@ describe("loadConfig", () => {
       fdriveArchivePeekMaxBytes: DEFAULT_ARCHIVE_PEEK_MAX_BYTES,
       fdriveJsonMaxBytes: DEFAULT_JSON_MAX_BYTES,
       fdriveShareUploadMaxBytes: DEFAULT_SHARE_UPLOAD_MAX_BYTES,
-      fdriveIndexRoots: null,
       fdriveEmbedUrl: undefined,
       fdriveThumbsDir: undefined,
       fdriveSetupToken: undefined,
@@ -211,9 +166,6 @@ describe("loadConfig", () => {
       FDRIVE_ARCHIVE_PEEK_MAX_BYTES: "1500",
       FDRIVE_JSON_MAX_BYTES: "2000",
       FDRIVE_SHARE_UPLOAD_MAX_BYTES: "3000",
-      FDRIVE_INDEX_ROOTS: JSON.stringify([
-        { name: "files", storagePath: "/data", indexerPath: "/roots/files" },
-      ]),
       FDRIVE_EMBED_URL: "http://embed:8081",
       FDRIVE_THUMBS_DIR: "/data/thumbs",
       FDRIVE_SETUP_TOKEN: "fixed-token",
@@ -252,7 +204,6 @@ describe("loadConfig", () => {
       fdriveArchivePeekMaxBytes: 1500,
       fdriveJsonMaxBytes: 2000,
       fdriveShareUploadMaxBytes: 3000,
-      fdriveIndexRoots: [{ name: "files", storagePath: "/data", indexerPath: "/roots/files" }],
       fdriveEmbedUrl: "http://embed:8081",
       fdriveThumbsDir: "/data/thumbs",
       fdriveSetupToken: "fixed-token",
@@ -261,9 +212,8 @@ describe("loadConfig", () => {
     });
   });
 
-  it("defaults FDRIVE_INDEX_ROOTS, FDRIVE_EMBED_URL, and FDRIVE_THUMBS_DIR to unset", () => {
+  it("defaults FDRIVE_EMBED_URL and FDRIVE_THUMBS_DIR to unset", () => {
     const config = loadConfig(REQUIRED_ENV);
-    expect(config.fdriveIndexRoots).toBeNull();
     expect(config.fdriveEmbedUrl).toBeUndefined();
     expect(config.fdriveThumbsDir).toBeUndefined();
   });
@@ -290,12 +240,6 @@ describe("loadConfig", () => {
     expect(
       loadConfig({ ...REQUIRED_ENV, FDRIVE_INDEXER_URL: "" }).fdriveIndexerUrl,
     ).toBeUndefined();
-  });
-
-  it("rejects an invalid FDRIVE_INDEX_ROOTS", () => {
-    expect(() => loadConfig({ ...REQUIRED_ENV, FDRIVE_INDEX_ROOTS: "not json" })).toThrow(
-      /FDRIVE_INDEX_ROOTS/,
-    );
   });
 
   it("rejects a non-http FDRIVE_EMBED_URL", () => {

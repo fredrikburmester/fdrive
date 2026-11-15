@@ -60,7 +60,6 @@ it("recovers durable metadata, exact bigint history, users and recovery files in
   await source.pool.query("insert into app.settings(key,value) values('setup.owner.v1',$1)", [
     JSON.stringify({ state: "complete", accountId: account }),
   ]);
-  await source.pool.query("insert into idx.roots(name) values('documents')");
   await source.pool.query(
     "insert into idx.scans(id,root_id,started_at) values(9007199254740993,1,now())",
   );

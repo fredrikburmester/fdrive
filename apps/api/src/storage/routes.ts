@@ -23,16 +23,18 @@ export function storageKind(ext: string): StorageKind {
 }
 
 export interface StorageUsageRoutesDeps {
-  readonly resolver: Pick<ScopeResolver, "verifiedIndexScopes">;
-  readonly indexQueries: Pick<IndexQueries, "rootIdsByName" | "bytesByExtension" | "listFiles">;
+  readonly resolver: Pick<ScopeResolver, "scopesFor">;
+  readonly indexQueries: Pick<IndexQueries, "bytesByExtension" | "listFiles">;
   readonly localUsers: Pick<LocalUserRepo, "get">;
+  /** Whether the files folder is indexed now: everything here comes from the index. */
+  readonly indexed: () => Promise<boolean>;
 }
 
 /**
  * Registers `GET /storage`: how much the signed-in login's own home holds,
  * by kind, against its storage limit, and its largest files. Everything
- * comes from the index over the home's verified scope alone, never a folder
- * someone shares with the login; the scope is the permission, so no storage
+ * comes from the index over the home's scope alone, never a folder someone
+ * shares with the login; the scope is the permission, so no storage
  * is read. fdrive's own folders are left out of the list, though their bytes
  * count.
  */
@@ -42,12 +44,14 @@ export function registerStorageUsageRoutes(
 ): void {
   groups.authed.get(withoutApiV1Prefix(ROUTES.storage), async (c) => {
     const principal = c.get("principal");
-    const verified = await deps.resolver.verifiedIndexScopes(principal.username);
     // Only the login's own home: never a folder someone shares with it.
-    const home = verified.available
-      ? verified.scopes.filter((scope) => scope.virtualPrefix === "/")
-      : [];
-    const ctx = await resolveScopeContext(deps.indexQueries, home);
+    const ctx = (await deps.indexed())
+      ? resolveScopeContext(
+          (await deps.resolver.scopesFor(principal.username)).filter(
+            (scope) => scope.virtualPrefix === "/",
+          ),
+        )
+      : null;
     const limit = (await deps.localUsers.get(principal.username))?.storageLimit ?? null;
     const bytes = Object.fromEntries(StorageKind.options.map((kind) => [kind, 0])) as Record<
       StorageKind,
@@ -77,7 +81,7 @@ export function registerStorageUsageRoutes(
     ]);
     for (const { ext, bytes: total } of extensions) bytes[storageKind(ext)] += total;
     const largest = candidates.files.flatMap((file) => {
-      const path = virtualPathFor(ctx, file.rootId, file.path);
+      const path = virtualPathFor(ctx, file.path);
       return path === null
         ? []
         : [{ path, size: file.size, modifiedAt: dateFromMtimeNs(file.mtimeNs).toISOString() }];

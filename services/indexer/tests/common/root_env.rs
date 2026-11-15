@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
-use fdrive_indexer::config::Config;
+use fdrive_indexer::config::{Config, ROOT_ID, ROOT_NAME};
 use fdrive_indexer::db::{self, NewFile};
 use fdrive_indexer::features::FeatureValues;
 use fdrive_indexer::indexer::{FileStat, RootContext};
@@ -184,13 +184,17 @@ pub fn wait_until(timeout: Duration, mut predicate: impl FnMut() -> bool) -> boo
     predicate()
 }
 
-/// A context for `cfg`'s first root, adjusted by `tweak` before it is shared.
+/// The files root's context for `cfg`, adjusted by `tweak` before it is shared.
 pub fn context_with(cfg: Config, values: FeatureValues, tweak: impl FnOnce(&mut RootContext)) -> Arc<RootContext> {
     let cfg = Arc::new(cfg);
-    let (name, path) = cfg.roots[0].clone();
-    super::mark_files_folder(&cfg.database_url, &path);
-    let root_id = db::upsert_root(&mut super::connect(&cfg.database_url), &name).unwrap();
-    let mut ctx = RootContext::new(&name, root_id, path, Arc::clone(&cfg), super::features(values));
+    super::mark_files_folder(&cfg.database_url, &cfg.root);
+    let mut ctx = RootContext::new(
+        ROOT_NAME,
+        ROOT_ID,
+        cfg.root.clone(),
+        Arc::clone(&cfg),
+        super::features(values),
+    );
     tweak(&mut ctx);
     Arc::new(ctx)
 }

@@ -140,7 +140,6 @@ it("measures capture, request and recovery writer pauses, spool bytes and fresh 
     let historyRows = 0;
     let recoveryBytes = 0;
     if (size === "large") {
-      await db.pool.query("insert into idx.roots(id,name) values(1,'documents')");
       await db.pool.query(
         "insert into idx.scans(root_id,started_at) select 1,now() - g * interval '1 hour' from generate_series(1,50000) g",
       );

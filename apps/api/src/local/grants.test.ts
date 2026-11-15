@@ -272,12 +272,10 @@ describe("createLocalGrantService: changing and ending shares", () => {
     expect(await h.service.pathFor(h.carol.id, alices("/Projects/plan.txt"))).toBeNull();
     expect(await h.service.pathFor(randomUUID(), alices("/Projects/plan.txt"))).toBeNull();
     expect(await h.service.pathFor(h.bob.id, { identityId: randomUUID(), path: "/x" })).toBeNull();
-    // Bob's own folder named like a folder shared with him is hidden behind it.
+    // Bob's own folder named Shared with me stays out of sight, whatever is in it.
     const bobs = (path: string) => ({ identityId: h.bob.id, path });
     expect(await h.service.pathFor(h.bob.id, bobs("/Shared with me/2026/own.txt"))).toBeNull();
-    expect(await h.service.pathFor(h.bob.id, bobs("/Shared with me/Other/own.txt"))).toBe(
-      "/Shared with me/Other/own.txt",
-    );
+    expect(await h.service.pathFor(h.bob.id, bobs("/Shared with me/Other/own.txt"))).toBeNull();
     // Every path found round-trips through `ownerPath`.
     const shared = "/Shared with me/Projects (alice)/a/b.txt";
     expect(await h.service.ownerPath(h.bob.id, shared)).toEqual(alices("/Projects/a/b.txt"));

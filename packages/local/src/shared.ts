@@ -24,7 +24,10 @@ import {
   zipItems,
 } from "./storage-provider.js";
 
-/** The folder at the top of each user's files that holds what others share with them. */
+/**
+ * The folder at the top of each user's files that holds what others share
+ * with them. The name is reserved there: nothing else can take it.
+ */
 export const SHARED_WITH_ME = "Shared with me";
 
 /** A folder another user shares with this one, as it appears under `Shared with me`. */
@@ -185,8 +188,11 @@ const SHELF_PATH = `/${SHARED_WITH_ME}`;
  * user's own files and a shared folder is one filesystem operation, since
  * both live on the same disk.
  *
- * The name is reserved only while something is shared: a user with no
- * shared folders sees an ordinary folder of that name, should they have one.
+ * The name is reserved at the top of every home, whether or not anything is
+ * shared: nothing can be created, uploaded, moved or renamed to it. A real
+ * folder of that name, made before the name was reserved or outside fdrive,
+ * stays on disk untouched and out of sight. The folder is listed only while
+ * something is shared.
  *
  * Its Trash is at `/.trash` in the user's home. Something in a writable
  * shared folder goes to its owner's Trash, since it is the owner's file:
@@ -222,10 +228,8 @@ export function createUserStorage(options: UserStorageOptions): UserStorage {
     const normalized = normalizePath(path);
     const segments = splitSegments(normalized);
     if (segments[0] !== SHARED_WITH_ME) return { kind: "own", storage: own, rel: normalized };
-    const shared = await folders();
-    if (shared.length === 0) return { kind: "own", storage: own, rel: normalized };
     if (segments.length === 1) return { kind: "shelf" };
-    const folder = shared.find((candidate) => candidate.name === segments[1]);
+    const folder = (await folders()).find((candidate) => candidate.name === segments[1]);
     if (folder === undefined) return { kind: "nowhere", path: normalized };
     return {
       kind: "mount",
@@ -283,7 +287,11 @@ export function createUserStorage(options: UserStorageOptions): UserStorage {
     if (at.kind === "nowhere") {
       throw forbidden(`only folders others share can be in ${SHARED_WITH_ME}: ${path}`);
     }
-    if (at.kind === "shelf" || (at.kind === "mount" && at.rel === "/")) {
+    if (at.kind === "shelf") {
+      if (allowFixed) return null;
+      throw forbidden(`${SHARED_WITH_ME} is reserved for folders others share: ${path}`);
+    }
+    if (at.kind === "mount" && at.rel === "/") {
       if (allowFixed) return null;
       throw forbidden(`a shared folder is changed by its owner: ${path}`);
     }
@@ -349,11 +357,13 @@ export function createUserStorage(options: UserStorageOptions): UserStorage {
       if (at.kind === "shelf") return shelfEntries();
       const entries = await at.storage.list(at.rel);
       if (at.kind === "mount") return under(at.prefix, entries);
-      if (at.rel !== "/" || (await folders()).length === 0) return entries;
-      // A real folder of the same name stays on disk but out of sight.
+      if (at.rel !== "/") return entries;
+      // The name is reserved: a real folder of that name stays out of sight.
+      const mine = entries.filter((entry) => entry.name !== SHARED_WITH_ME);
+      if ((await folders()).length === 0) return mine;
       const shelf = await shelfEntries();
       return [
-        ...entries.filter((entry) => entry.name !== SHARED_WITH_ME),
+        ...mine,
         makeEntry("/", { name: SHARED_WITH_ME, kind: "dir", size: 0, modifiedAt: newest(shelf) }),
       ];
     },

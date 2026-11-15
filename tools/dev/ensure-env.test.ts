@@ -58,9 +58,6 @@ describe("buildApiEnv", () => {
       FDRIVE_MASTER_KEY: "the-key",
       FDRIVE_COOKIE_SECURE: "false",
       FDRIVE_STORAGE_ROOT: storageRoot,
-      FDRIVE_INDEX_ROOTS: JSON.stringify([
-        { name: "files", storagePath: storageRoot, indexerPath: "/data" },
-      ]),
       FDRIVE_EMBED_URL: "http://127.0.0.1:58012/text",
       FDRIVE_IMAGE_EMBED_URL: "http://127.0.0.1:58012/image",
       FDRIVE_TIKA_URL: "http://127.0.0.1:58012/extract",

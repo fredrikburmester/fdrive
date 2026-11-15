@@ -67,7 +67,7 @@ function mockConfigured() {
 
 beforeEach(() => {
   useSystemIndexerMock.mockReturnValue({
-    data: { configured: true, reachable: true, health: { roots: ["files"] } },
+    data: { configured: true, reachable: true },
     error: null,
     refetch: vi.fn(),
   });
@@ -198,9 +198,7 @@ describe("ThumbnailsPage", () => {
     render(<ThumbnailsPage />);
     fireEvent.click(screen.getByRole("button", { name: "Rebuild" }));
     await screen.findByRole("heading", { name: "Rebuild thumbnails" });
-    expect(screen.getByLabelText("Root").textContent).toContain("All roots");
-    expect(screen.getByLabelText("Root").textContent).not.toContain("__all__");
-    expect(screen.getByLabelText("Path (optional)")).toHaveProperty("disabled", true);
+    expect(screen.getByLabelText("Path (optional)")).toHaveProperty("disabled", false);
     fireEvent.click(screen.getByRole("switch", { name: "Regenerate existing thumbnails" }));
     fireEvent.click(screen.getByRole("button", { name: "Rebuild" }));
     expect(mutate).toHaveBeenCalledWith({ force: true }, expect.anything());
@@ -209,6 +207,12 @@ describe("ThumbnailsPage", () => {
     fireEvent.click(screen.getByRole("button", { name: "Rebuild" }));
     fireEvent.click(screen.getByRole("button", { name: "Rebuild" }));
     expect(mutate).toHaveBeenLastCalledWith({}, expect.anything());
+    fireEvent.click(screen.getByRole("button", { name: "Rebuild" }));
+    fireEvent.change(screen.getByLabelText("Path (optional)"), {
+      target: { value: "alice/Photos" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Rebuild" }));
+    expect(mutate).toHaveBeenLastCalledWith({ path: "alice/Photos" }, expect.anything());
   });
 
   it("cancels cache removal, then confirms a global clear", async () => {
@@ -221,7 +225,7 @@ describe("ThumbnailsPage", () => {
     render(<ThumbnailsPage />);
     fireEvent.click(screen.getByRole("button", { name: "Clear cache" }));
     await screen.findByRole("heading", { name: "Clear thumbnail cache?" });
-    expect(screen.getByText(/Removes cached previews for all roots/)).toBeTruthy();
+    expect(screen.getByText(/Removes every cached preview/)).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
     expect(mutate).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", { name: "Clear cache" }));

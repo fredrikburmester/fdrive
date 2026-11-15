@@ -1,51 +1,25 @@
 import { describe, expect, it, vi } from "vitest";
 import { createHomeUsage } from "./usage.js";
 
-const ROOTS = [{ name: "files", storagePath: "/data", indexerPath: "/data" }];
-
-function index(rootIds: Record<string, number> = { files: 3 }) {
-  return {
-    rootIdsByName: vi.fn(async () => rootIds),
-    subtreeSize: vi.fn(async () => ({ bytes: 1_234, files: 2 })),
-  };
+function index() {
+  return { subtreeSize: vi.fn(async () => ({ bytes: 1_234, files: 2 })) };
 }
 
 describe("createHomeUsage", () => {
   it("sums everything the index holds in the user's home", async () => {
     const queries = index();
-    const usage = createHomeUsage({ fdriveStorageRoot: "/data", fdriveIndexRoots: ROOTS }, queries);
+    const usage = createHomeUsage(queries, async () => true);
     expect(await usage("alice")).toBe(1_234);
     expect(queries.subtreeSize).toHaveBeenCalledWith(
-      [{ rootId: 3, fsPrefix: "/alice" }],
-      3,
+      [{ rootId: 1, fsPrefix: "/alice" }],
+      1,
       "alice",
     );
   });
 
-  it("is null without an index root for the files folder, without asking the index", async () => {
+  it("is null while the files folder is not indexed, without asking the index", async () => {
     const queries = index();
-    const noRoots = createHomeUsage(
-      { fdriveStorageRoot: "/data", fdriveIndexRoots: null },
-      queries,
-    );
-    const elsewhere = createHomeUsage(
-      {
-        fdriveStorageRoot: "/data",
-        fdriveIndexRoots: [
-          { name: "media", storagePath: "/media", indexerPath: "/media" },
-          { name: "docs", storagePath: "/docs", indexerPath: "/docs" },
-        ],
-      },
-      queries,
-    );
-    expect(await noRoots("alice")).toBeNull();
-    expect(await elsewhere("alice")).toBeNull();
-    expect(queries.rootIdsByName).not.toHaveBeenCalled();
-  });
-
-  it("is null until the indexer has created the root", async () => {
-    const queries = index({});
-    const usage = createHomeUsage({ fdriveStorageRoot: "/data", fdriveIndexRoots: ROOTS }, queries);
+    const usage = createHomeUsage(queries, async () => false);
     expect(await usage("alice")).toBeNull();
     expect(queries.subtreeSize).not.toHaveBeenCalled();
   });

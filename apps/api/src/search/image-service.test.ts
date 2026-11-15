@@ -13,21 +13,19 @@ import {
   selectImageHits,
 } from "./image-service.js";
 
-/** What the query leaves out for alice: the Mac app's folder, the reserved names and her Trash, if any. */
-/** fdrive's own folders in alice's home, as every query leaves them out. */
+/** fdrive's own folders in alice's home and her own Shared with me, as every query leaves them out. */
 function reserved() {
   return {
     prefixes: [
       { rootId: 1, fsPrefix: "/alice/.trash" },
       { rootId: 1, fsPrefix: "/alice/.fdrive-desktop" },
+      { rootId: 1, fsPrefix: "/alice/Shared with me" },
     ],
     names: [".fdrive-move-v1"],
   };
 }
 
-const HOME_SCOPES: readonly Scope[] = [
-  { rootName: "files", fsPrefix: "/alice", virtualPrefix: "/" },
-];
+const HOME_SCOPES: readonly Scope[] = [{ fsPrefix: "/alice", virtualPrefix: "/" }];
 const NOW = new Date("2026-03-01T00:00:00.000Z");
 
 it("stops image search immediately when disabled", async () => {
@@ -46,10 +44,9 @@ function fail(name: string): never {
 }
 
 function fakeIndexQueries(
-  overrides: Partial<Pick<IndexQueries, "searchImages" | "rootIdsByName">> = {},
-): Pick<IndexQueries, "searchImages" | "rootIdsByName"> {
+  overrides: Partial<Pick<IndexQueries, "searchImages">> = {},
+): Pick<IndexQueries, "searchImages"> {
   return {
-    rootIdsByName: overrides.rootIdsByName ?? (async () => ({ files: 1 })),
     searchImages: overrides.searchImages ?? (async () => fail("searchImages")),
   };
 }
@@ -170,15 +167,6 @@ describe("createImageSearchService", () => {
   it("reports unavailable when the sidecar's dim does not match IMAGE_EMBED_DIM", async () => {
     const service = createImageSearchService(
       buildDeps({ resolveHealth: healthyResolver({ ...HEALTHY, dim: 512 }) }),
-    );
-    const result = await service.search(buildInput());
-
-    expect(result.unavailable).toBe(true);
-  });
-
-  it("reports unavailable when none of the caller's scopes map to a known root", async () => {
-    const service = createImageSearchService(
-      buildDeps({ indexQueries: fakeIndexQueries({ rootIdsByName: async () => ({}) }) }),
     );
     const result = await service.search(buildInput());
 

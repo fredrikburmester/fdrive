@@ -1,6 +1,12 @@
 import { existsSync } from "node:fs";
-import { AdminUser, AdminUsersResponse, ROUTES, StorageUsageResponse } from "@fdrive/contracts";
-import { createDb, schema } from "@fdrive/db";
+import {
+  AdminUser,
+  AdminUsersResponse,
+  FEATURES_SETTINGS_KEY,
+  ROUTES,
+  StorageUsageResponse,
+} from "@fdrive/contracts";
+import { createDb, createRepos, INDEX_ROOT_ID, schema } from "@fdrive/db";
 import { startLocalStorage, startPostgres } from "@fdrive/testkit";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { composeApp } from "../../src/composition.js";
@@ -42,24 +48,39 @@ describe("storage usage and limits through the API", () => {
       }),
     ]);
     await seedLocalUsers(postgres.connectionString, storage, ["alice"]);
+    // The files folder counts as indexed with an indexer and a feature that needs it.
+    const settings = createDb(postgres.connectionString);
+    try {
+      await createRepos(settings.db).settings.set(FEATURES_SETTINGS_KEY, {
+        version: 1,
+        revision: 1,
+        values: {
+          thumbnails: true,
+          textSearch: false,
+          searchOcr: false,
+          semanticSearch: false,
+          imageSearch: false,
+          pdfOcr: false,
+        },
+        walkthroughComplete: true,
+      });
+    } finally {
+      await settings.close();
+    }
     composed = await composeApp(
       loadConfig({
         DATABASE_URL: postgres.connectionString,
         FDRIVE_STORAGE_ROOT: storage.root,
         FDRIVE_MASTER_KEY: Buffer.alloc(32, 43).toString("base64"),
-        FDRIVE_INDEX_ROOTS: JSON.stringify([
-          { name: "files", storagePath: storage.root, indexerPath: "/roots/files" },
-        ]),
+        FDRIVE_INDEXER_URL: "http://127.0.0.1:9",
       }),
       silentLogger(),
     );
     const database = createDb(postgres.connectionString);
     try {
-      const [root] = await database.db.insert(schema.roots).values({ name: "files" }).returning();
-      if (root === undefined) throw new Error("expected the root insert to return a row");
       await database.db.insert(schema.files).values(
         Object.entries(INDEXED).map(([path, size]) => ({
-          rootId: root.id,
+          rootId: INDEX_ROOT_ID,
           path,
           name: path.slice(path.lastIndexOf("/") + 1),
           ext: path.includes(".", path.lastIndexOf("/")) ? path.slice(path.lastIndexOf(".")) : "",

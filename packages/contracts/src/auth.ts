@@ -35,7 +35,10 @@ export const MeResponse = z.object({
   isAdmin: z.boolean(),
   /** The installation's storage name, shown under the username. */
   storageName: z.string(),
-  /** The files folder is indexed: search, thumbnails and folder sizes apply. */
+  /**
+   * The files folder is indexed (the indexer is configured and a feature
+   * that needs it is on): search, thumbnails and folder sizes apply.
+   */
   index: z.boolean(),
 });
 

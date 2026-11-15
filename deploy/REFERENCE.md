@@ -230,8 +230,8 @@ All services are hardened following security best practices:
 
 `FDRIVE_FILES_DIR` on the host (default `files` inside `FDRIVE_DATA_DIR`) is mounted at
 `/data` read-write in the `api` and `ocr` containers and read-only in the
-`indexer`. Compose fixes the rest: `FDRIVE_STORAGE_ROOT=/data`, and one indexed root named
-`files` at `/data` in both the API and the indexer. Each user's files are `/data/<username>`.
+`indexer`. Compose fixes the rest (`FDRIVE_STORAGE_ROOT=/data`). Each user's files are
+`/data/<username>`.
 
 Users live in fdrive's database, with scrypt password hashes, and are added, reset and
 disabled under **System > Users**, where an administrator makes others administrators. The

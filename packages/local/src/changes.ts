@@ -55,7 +55,7 @@ export function notify(listener: DiskChangeListener | undefined, change: DiskCha
 }
 
 /**
- * A change under an index root, by the root-relative path the indexer stores
+ * A change in the files folder, by the path relative to it the indexer stores
  * (`alice/docs/a.pdf`: `/` separators, no leading slash). Otherwise the same
  * as `DiskChange`.
  */

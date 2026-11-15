@@ -2,22 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from fdrive_ocr.config import DEFAULT_EXCLUDE_GLOBS, Config, parse_glob_list, parse_roots
-
-
-def test_parse_roots_multiple() -> None:
-    assert parse_roots("files=/roots/files,photos=/roots/photos") == {
-        "files": "/roots/files",
-        "photos": "/roots/photos",
-    }
-
-
-def test_parse_roots_empty_string() -> None:
-    assert parse_roots("") == {}
-
-
-def test_parse_roots_skips_malformed_pairs() -> None:
-    assert parse_roots("files=/roots/files,,broken,=novalue,noeq=") == {"files": "/roots/files"}
+from fdrive_ocr.config import DEFAULT_EXCLUDE_GLOBS, Config, parse_glob_list
 
 
 def test_parse_glob_list_trims_and_drops_empty_entries() -> None:
@@ -38,11 +23,9 @@ def test_config_treats_an_empty_ocr_exclude_globs_the_same_as_unset(monkeypatch:
 
 
 def test_config_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("INDEX_ROOTS", raising=False)
     monkeypatch.delenv("OCR_RUN_ON_START", raising=False)
     monkeypatch.delenv("OCR_INCLUDE_GLOBS", raising=False)
     cfg = Config()
-    assert cfg.roots == {}
     assert cfg.ocr_port == 8011
     assert cfg.state_dir == "/state"
     assert cfg.run_on_start is True
@@ -57,7 +40,6 @@ def test_config_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_config_reads_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("INDEX_ROOTS", "files=/roots/files")
     monkeypatch.setenv("OCR_PORT", "9000")
     monkeypatch.setenv("OCR_RUN_ON_START", "false")
     monkeypatch.setenv("OCR_TIMEOUT_SECONDS", "60")
@@ -68,7 +50,6 @@ def test_config_reads_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("OCR_INCLUDE_GLOBS", "fredrik/**, alice/**")
     monkeypatch.setenv("OCR_MAX_MB", "50")
     cfg = Config()
-    assert cfg.roots == {"files": "/roots/files"}
     assert cfg.ocr_port == 9000
     assert cfg.run_on_start is False
     assert cfg.timeout_seconds == 60

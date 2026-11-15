@@ -12,7 +12,7 @@ export const CHANGE_BATCH = 1_000;
  */
 export interface ChangeQueue {
   /** Adds a change; it is written with the others from the same tick. */
-  record(root: string, change: IndexChange): void;
+  record(change: IndexChange): void;
   /** Writes everything recorded so far and waits for every write to finish. */
   flush(): Promise<void>;
 }
@@ -34,12 +34,12 @@ function toInput(change: IndexChange): ChangeInput {
 }
 
 /**
- * Buffers changes and writes them on the next tick, one write per root and
- * at most `CHANGE_BATCH` rows each. Writes run one after another, so the
- * journal holds changes in the order they happened.
+ * Buffers changes and writes them on the next tick, at most `CHANGE_BATCH`
+ * rows a write. Writes run one after another, so the journal holds changes
+ * in the order they happened.
  */
 export function createChangeQueue(deps: ChangeQueueDeps): ChangeQueue {
-  let pending = new Map<string, ChangeInput[]>();
+  let pending: ChangeInput[] = [];
   let scheduled = false;
   let chain: Promise<void> = Promise.resolve();
 
@@ -53,21 +53,17 @@ export function createChangeQueue(deps: ChangeQueueDeps): ChangeQueue {
 
   function drain(): void {
     scheduled = false;
-    const batch = pending;
-    pending = new Map();
-    for (const [root, items] of batch) {
-      for (let start = 0; start < items.length; start += CHANGE_BATCH) {
-        const rows = items.slice(start, start + CHANGE_BATCH);
-        chain = chain.then(() => deps.write(root, rows)).catch(report);
-      }
+    const items = pending;
+    pending = [];
+    for (let start = 0; start < items.length; start += CHANGE_BATCH) {
+      const rows = items.slice(start, start + CHANGE_BATCH);
+      chain = chain.then(() => deps.write(rows)).catch(report);
     }
   }
 
   return {
-    record(root, change) {
-      const items = pending.get(root);
-      if (items === undefined) pending.set(root, [toInput(change)]);
-      else items.push(toInput(change));
+    record(change) {
+      pending.push(toInput(change));
       if (!scheduled) {
         scheduled = true;
         setImmediate(() => {

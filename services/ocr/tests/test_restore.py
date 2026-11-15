@@ -16,7 +16,7 @@ from conftest import Journal, index_pdfs
 
 from fdrive_ocr import db, restore, runner
 from fdrive_ocr.originals import Mapping, mapping_document
-from fdrive_ocr.runner import RootTarget
+from fdrive_ocr.runner import FILES_ROOT_ID, FILES_ROOT_NAME, RootTarget
 from fdrive_ocr.settings import Settings
 
 SETTINGS = Settings(
@@ -39,13 +39,13 @@ def state_dir(tmp_path: Path) -> str:
 
 
 @pytest.fixture
-def target(db_conn: psycopg.Connection, root_dir: Path) -> RootTarget:
-    return RootTarget(name="files", root_id=db.upsert_root(db_conn, "files"), abs_path=str(root_dir))
+def target(root_dir: Path) -> RootTarget:
+    return RootTarget(name=FILES_ROOT_NAME, root_id=FILES_ROOT_ID, abs_path=str(root_dir))
 
 
 def _run_pass(conn: psycopg.Connection, target: RootTarget, state_dir: str, settings: Settings = SETTINGS) -> runner.RunTotals:
     index_pdfs(conn, target.root_id, target.abs_path)
-    return runner.run_pass(conn, [target], settings, state_dir, 30, 1, lambda _msg: None)
+    return runner.run_pass(conn, target, settings, state_dir, 30, 1, lambda _msg: None)
 
 
 def _sole_original(state_dir: str) -> restore.OriginalEntry:
@@ -75,12 +75,12 @@ def test_restores_an_ocred_file_and_the_next_pass_leaves_it_alone(
     assert scan.read_bytes() == OCRED_BODY
 
     index = restore.OriginalsIndex()
-    listed, total = restore.list_originals(db_conn, state_dir, [target], index)
+    listed, total = restore.list_originals(db_conn, state_dir, target, index)
     assert total == 1
     assert (listed[0].root, listed[0].path, listed[0].state) == ("files", "docs/scan.pdf", "ocred")
 
     outcome = restore.restore_original(
-        db_conn, state_dir, [target], index, listed[0].id, False, False, lambda _msg: None
+        db_conn, state_dir, target, index, listed[0].id, False, False, lambda _msg: None
     )
     assert outcome == restore.RestoreOutcome(True, None, "ocred", "files", "docs/scan.pdf")
     after = scan.stat()
@@ -94,7 +94,7 @@ def test_restores_an_ocred_file_and_the_next_pass_leaves_it_alone(
     assert _run_pass(db_conn, target, state_dir).ocred == 0
     assert scan.read_bytes() == ORIGINAL_BODY
 
-    relisted, _total = restore.list_originals(db_conn, state_dir, [target], index)
+    relisted, _total = restore.list_originals(db_conn, state_dir, target, index)
     assert relisted[0].state == "restored"
 
 
@@ -107,9 +107,9 @@ def test_a_restored_original_stays_kept_and_can_be_restored_again(
     index = restore.OriginalsIndex()
     original_id = _sole_original(state_dir).id
 
-    assert restore.restore_original(db_conn, state_dir, [target], index, original_id, False, False, lambda _m: None).ok
+    assert restore.restore_original(db_conn, state_dir, target, index, original_id, False, False, lambda _m: None).ok
     scan.write_bytes(b"OK\nlocal edit\n")
-    assert restore.restore_original(db_conn, state_dir, [target], index, original_id, False, True, lambda _m: None).ok
+    assert restore.restore_original(db_conn, state_dir, target, index, original_id, False, True, lambda _m: None).ok
     assert scan.read_bytes() == ORIGINAL_BODY
     assert len(restore.scan_originals(state_dir)) == 1
 
@@ -123,7 +123,7 @@ def test_a_restore_journals_the_restored_pdf_for_the_indexer(
     index = restore.OriginalsIndex()
 
     assert restore.restore_original(
-        db_conn, state_dir, [target], index, _sole_original(state_dir).id, False, False, lambda _m: None
+        db_conn, state_dir, target, index, _sole_original(state_dir).id, False, False, lambda _m: None
     ).ok
 
     hint = (target.root_id, "docs/scan.pdf", None, "ocr", None, None, None, None, None)
@@ -138,7 +138,7 @@ def test_a_refused_restore_journals_nothing(
     (root_dir / "docs" / "scan.pdf").unlink()
 
     refused = restore.restore_original(
-        db_conn, state_dir, [target], restore.OriginalsIndex(), original_id, False, False, lambda _m: None
+        db_conn, state_dir, target, restore.OriginalsIndex(), original_id, False, False, lambda _m: None
     )
     assert refused.ok is False
     assert journal.rows() == []
@@ -156,7 +156,7 @@ def test_a_failed_indexer_hint_is_logged_and_the_restore_still_succeeds(
     logs: list[str] = []
 
     outcome = restore.restore_original(
-        db_conn, state_dir, [target], restore.OriginalsIndex(), _sole_original(state_dir).id, False, False, logs.append
+        db_conn, state_dir, target, restore.OriginalsIndex(), _sole_original(state_dir).id, False, False, logs.append
     )
 
     assert outcome.ok
@@ -170,7 +170,7 @@ def test_a_failed_indexer_hint_is_logged_and_the_restore_still_succeeds(
 # -- refusals -------------------------------------------------------------------------
 
 
-def _keep(state_dir: str, root_dir: Path, rel_path: str, body: bytes = ORIGINAL_BODY) -> str:
+def _keep(state_dir: str, root_dir: Path, rel_path: str, body: bytes = ORIGINAL_BODY, root: str = "files") -> str:
     """Runs a rewrite by hand so a test can set up a kept original without a pass."""
     source = root_dir / rel_path
     source.parent.mkdir(parents=True, exist_ok=True)
@@ -178,8 +178,8 @@ def _keep(state_dir: str, root_dir: Path, rel_path: str, body: bytes = ORIGINAL_
     info = source.stat()
     rewritten = root_dir.parent / "rewritten.pdf"
     rewritten.write_bytes(OCRED_BODY)
-    runner.apply_rewrite(str(source), str(rewritten), state_dir, "files", rel_path, info, True)
-    return os.path.basename(runner.originals_dest(state_dir, "files", rel_path, info.st_size, info.st_mtime_ns))
+    runner.apply_rewrite(str(source), str(rewritten), state_dir, root, rel_path, info, True)
+    return os.path.basename(runner.originals_dest(state_dir, root, rel_path, info.st_size, info.st_mtime_ns))
 
 
 def test_refuses_to_overwrite_a_file_changed_since_ocr_unless_asked(
@@ -190,11 +190,11 @@ def test_refuses_to_overwrite_a_file_changed_since_ocr_unless_asked(
     (root_dir / "docs" / "scan.pdf").write_bytes(edited)
     index = restore.OriginalsIndex()
 
-    refused = restore.restore_original(db_conn, state_dir, [target], index, original_id, False, False, lambda _m: None)
+    refused = restore.restore_original(db_conn, state_dir, target, index, original_id, False, False, lambda _m: None)
     assert (refused.ok, refused.reason, refused.state) == (False, "target_changed", "changed")
     assert (root_dir / "docs" / "scan.pdf").read_bytes() == edited
 
-    allowed = restore.restore_original(db_conn, state_dir, [target], index, original_id, False, True, lambda _m: None)
+    allowed = restore.restore_original(db_conn, state_dir, target, index, original_id, False, True, lambda _m: None)
     assert allowed.ok is True
     assert (root_dir / "docs" / "scan.pdf").read_bytes() == ORIGINAL_BODY
 
@@ -206,11 +206,11 @@ def test_refuses_to_recreate_a_deleted_file_unless_asked(
     (root_dir / "docs" / "scan.pdf").unlink()
     index = restore.OriginalsIndex()
 
-    refused = restore.restore_original(db_conn, state_dir, [target], index, original_id, False, False, lambda _m: None)
+    refused = restore.restore_original(db_conn, state_dir, target, index, original_id, False, False, lambda _m: None)
     assert (refused.ok, refused.reason, refused.state) == (False, "target_missing", "missing")
     assert not (root_dir / "docs" / "scan.pdf").exists()
 
-    allowed = restore.restore_original(db_conn, state_dir, [target], index, original_id, True, False, lambda _m: None)
+    allowed = restore.restore_original(db_conn, state_dir, target, index, original_id, True, False, lambda _m: None)
     assert allowed.ok is True
     assert (root_dir / "docs" / "scan.pdf").read_bytes() == ORIGINAL_BODY
 
@@ -223,7 +223,7 @@ def test_refuses_to_recreate_a_file_whose_directory_is_gone(
     (root_dir / "gone").rmdir()
 
     outcome = restore.restore_original(
-        db_conn, state_dir, [target], restore.OriginalsIndex(), original_id, True, True, lambda _m: None
+        db_conn, state_dir, target, restore.OriginalsIndex(), original_id, True, True, lambda _m: None
     )
     assert (outcome.ok, outcome.reason) == (False, "target_parent_missing")
     assert not (root_dir / "gone").exists()
@@ -236,7 +236,7 @@ def test_refuses_kept_bytes_that_no_longer_match_their_checksum(
     Path(restore.originals_dir(state_dir), original_id).write_bytes(b"OK\nrotted\n")
 
     outcome = restore.restore_original(
-        db_conn, state_dir, [target], restore.OriginalsIndex(), original_id, False, True, lambda _m: None
+        db_conn, state_dir, target, restore.OriginalsIndex(), original_id, False, True, lambda _m: None
     )
     assert (outcome.ok, outcome.reason) == (False, "corrupt")
     assert (root_dir / "docs" / "scan.pdf").read_bytes() == OCRED_BODY
@@ -248,7 +248,7 @@ def test_refuses_an_identifier_that_is_not_a_plain_filename(
     db_conn: psycopg.Connection, state_dir: str, target: RootTarget, original_id: str
 ) -> None:
     outcome = restore.restore_original(
-        db_conn, state_dir, [target], restore.OriginalsIndex(), original_id, True, True, lambda _m: None
+        db_conn, state_dir, target, restore.OriginalsIndex(), original_id, True, True, lambda _m: None
     )
     assert (outcome.ok, outcome.reason) == (False, "not_found")
 
@@ -262,20 +262,21 @@ def test_refuses_a_sidecar_whose_path_escapes_its_root(
     sidecar.write_text(json.dumps({**document, "path": "docs/../../outside.pdf"}))
 
     outcome = restore.restore_original(
-        db_conn, state_dir, [target], restore.OriginalsIndex(), original_id, True, True, lambda _m: None
+        db_conn, state_dir, target, restore.OriginalsIndex(), original_id, True, True, lambda _m: None
     )
     assert (outcome.ok, outcome.reason) == (False, "invalid_path")
     assert not (root_dir.parent / "outside.pdf").exists()
 
 
-def test_refuses_an_original_kept_for_a_root_this_service_no_longer_has(
-    db_conn: psycopg.Connection, root_dir: Path, state_dir: str
+def test_refuses_an_original_kept_for_another_root(
+    db_conn: psycopg.Connection, root_dir: Path, state_dir: str, target: RootTarget
 ) -> None:
-    original_id = _keep(state_dir, root_dir, "docs/scan.pdf")
+    original_id = _keep(state_dir, root_dir, "docs/scan.pdf", root="photos")
     outcome = restore.restore_original(
-        db_conn, state_dir, [], restore.OriginalsIndex(), original_id, True, True, lambda _m: None
+        db_conn, state_dir, target, restore.OriginalsIndex(), original_id, True, True, lambda _m: None
     )
-    assert (outcome.ok, outcome.reason, outcome.root) == (False, "unknown_root", "files")
+    assert (outcome.ok, outcome.reason, outcome.root) == (False, "unknown_root", "photos")
+    assert (root_dir / "docs" / "scan.pdf").read_bytes() == OCRED_BODY
 
 
 def test_refuses_a_kept_path_that_is_not_a_regular_file(
@@ -285,7 +286,7 @@ def test_refuses_a_kept_path_that_is_not_a_regular_file(
     os.symlink(root_dir / "docs", Path(restore.originals_dir(state_dir), "link.pdf"))
 
     outcome = restore.restore_original(
-        db_conn, state_dir, [target], restore.OriginalsIndex(), "link.pdf", True, True, lambda _m: None
+        db_conn, state_dir, target, restore.OriginalsIndex(), "link.pdf", True, True, lambda _m: None
     )
     assert (outcome.ok, outcome.reason) == (False, "not_found")
     assert restore.open_original(state_dir, "link.pdf") is None
@@ -339,14 +340,14 @@ def test_resolves_a_legacy_original_from_the_done_log_and_backfills_its_sidecar(
     db.record_ocr_log(db_conn, target.root_id, "docs/scan.pdf", len(OCRED_BODY), source_mtime_ns, "o" * 64, "ocred", None)
 
     index = restore.OriginalsIndex()
-    listed, _total = restore.list_originals(db_conn, state_dir, [target], index)
+    listed, _total = restore.list_originals(db_conn, state_dir, target, index)
     assert (listed[0].root, listed[0].path, listed[0].legacy) == ("files", "docs/scan.pdf", True)
 
     backfilled = json.loads(Path(restore.mappings_dir(state_dir), f"{original_id}.json").read_text())
     assert backfilled["legacy"] is True
     assert backfilled["path"] == "docs/scan.pdf"
 
-    assert restore.restore_original(db_conn, state_dir, [target], index, original_id, False, True, lambda _m: None).ok
+    assert restore.restore_original(db_conn, state_dir, target, index, original_id, False, True, lambda _m: None).ok
     assert (root_dir / "docs" / "scan.pdf").read_bytes() == ORIGINAL_BODY
 
 
@@ -357,10 +358,10 @@ def test_leaves_an_unresolvable_legacy_original_alone(
     Path(restore.mappings_dir(state_dir), f"{original_id}.json").unlink()
 
     index = restore.OriginalsIndex()
-    listed, _total = restore.list_originals(db_conn, state_dir, [target], index)
+    listed, _total = restore.list_originals(db_conn, state_dir, target, index)
     assert (listed[0].root, listed[0].path, listed[0].state, listed[0].legacy) == (None, None, None, True)
 
-    outcome = restore.restore_original(db_conn, state_dir, [target], index, original_id, True, True, lambda _m: None)
+    outcome = restore.restore_original(db_conn, state_dir, target, index, original_id, True, True, lambda _m: None)
     assert (outcome.ok, outcome.reason) == (False, "unresolved")
     # The bytes survive an unresolved lookup, so they can still be downloaded.
     assert restore.open_original(state_dir, original_id) is not None
@@ -405,11 +406,11 @@ def test_lists_newest_first_and_pages_without_stating_the_whole_archive(
         time.sleep(0.01)
     index = restore.OriginalsIndex()
 
-    page, total = restore.list_originals(db_conn, state_dir, [target], index, limit=2)
+    page, total = restore.list_originals(db_conn, state_dir, target, index, limit=2)
     assert total == 3
     assert [item.path for item in page] == ["docs/scan2.pdf", "docs/scan1.pdf"]
 
-    rest, total = restore.list_originals(db_conn, state_dir, [target], index, offset=2, limit=2)
+    rest, total = restore.list_originals(db_conn, state_dir, target, index, offset=2, limit=2)
     assert (total, [item.path for item in rest]) == (3, ["docs/scan0.pdf"])
 
 
@@ -420,14 +421,14 @@ def test_search_narrows_the_listing_to_matching_source_paths(
     _keep(state_dir, root_dir, "photos/holiday.pdf", ORIGINAL_BODY + b"x")
     index = restore.OriginalsIndex()
 
-    page, total = restore.list_originals(db_conn, state_dir, [target], index, query="INVOICE")
+    page, total = restore.list_originals(db_conn, state_dir, target, index, query="INVOICE")
     assert (total, [item.path for item in page]) == (1, ["docs/invoice.pdf"])
 
 
 def test_an_empty_state_directory_lists_nothing(
     db_conn: psycopg.Connection, state_dir: str, target: RootTarget
 ) -> None:
-    assert restore.list_originals(db_conn, state_dir, [target], restore.OriginalsIndex()) == ([], 0)
+    assert restore.list_originals(db_conn, state_dir, target, restore.OriginalsIndex()) == ([], 0)
     assert restore.originals_stats(state_dir) == (0, 0)
 
 
@@ -441,12 +442,12 @@ def test_skips_half_written_keeps_and_subdirectories(state_dir: str) -> None:
     assert restore.originals_stats(state_dir) == (1, 4)
 
 
-def test_reports_no_state_for_an_original_whose_root_is_not_configured(
-    db_conn: psycopg.Connection, root_dir: Path, state_dir: str
+def test_reports_no_state_for_an_original_kept_for_another_root(
+    db_conn: psycopg.Connection, root_dir: Path, state_dir: str, target: RootTarget
 ) -> None:
-    _keep(state_dir, root_dir, "docs/scan.pdf")
-    listed, _total = restore.list_originals(db_conn, state_dir, [], restore.OriginalsIndex())
-    assert (listed[0].root, listed[0].path, listed[0].state) == ("files", "docs/scan.pdf", None)
+    _keep(state_dir, root_dir, "docs/scan.pdf", root="photos")
+    listed, _total = restore.list_originals(db_conn, state_dir, target, restore.OriginalsIndex())
+    assert (listed[0].root, listed[0].path, listed[0].state) == ("photos", "docs/scan.pdf", None)
 
 
 def test_an_unreadable_sidecar_reads_as_unresolved(state_dir: str, root_dir: Path) -> None:

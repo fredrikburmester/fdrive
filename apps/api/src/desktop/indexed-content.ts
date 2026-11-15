@@ -1,18 +1,18 @@
 import { type ContentStamp, toFsPath } from "@fdrive/core";
-import type { IndexedContent, IndexQueries, IndexRef } from "@fdrive/db";
+import { INDEX_ROOT_ID, type IndexedContent, type IndexQueries } from "@fdrive/db";
 import type { Principal } from "../auth/principal.js";
 import type { ScopeResolver } from "../scoping/resolver.js";
 import { roundTripVirtualPath } from "../scoping/round-trip.js";
 
 export interface IndexedContentDeps {
-  readonly resolver: Pick<ScopeResolver, "verifiedIndexScopes">;
+  readonly resolver: Pick<ScopeResolver, "scopesFor">;
   readonly index: Pick<IndexQueries, "contentAt">;
 }
 
 /**
  * The live index rows behind some of a caller's files, by the normalized
  * virtual path asked for, in one query. A path is looked up only where the
- * identity's verified index scopes map it to the index and back to itself
+ * identity's scopes map it to the index and back to itself
  * (`roundTripVirtualPath`), so no path a client chooses reaches a row
  * outside them, and a folder a nested scope shadows is never consulted.
  * Paths without a row are left out.
@@ -23,29 +23,26 @@ export type IndexedContentLookup = (
 ) => Promise<ReadonlyMap<string, IndexedContent>>;
 
 const SHA256 = /^[0-9a-f]{64}$/;
-const key = (ref: IndexRef) => JSON.stringify([ref.rootName, ref.path]);
 
 export function createIndexedContentLookup(deps: IndexedContentDeps): IndexedContentLookup {
   return async (principal, paths) => {
     const found = new Map<string, IndexedContent>();
     if (paths.length === 0) return found;
-    const verified = await deps.resolver.verifiedIndexScopes(principal.username);
-    if (!verified.available) return found;
-    const wanted = new Map<string, { ref: IndexRef; path: string }>();
+    const scopes = await deps.resolver.scopesFor(principal.username);
+    // By `idx.files.path`, relative to the files folder.
+    const wanted = new Map<string, string>();
     for (const path of paths) {
-      const at = toFsPath(verified.scopes, path);
-      if (at === null || roundTripVirtualPath(verified.scopes, at.rootName, at.fsPath) !== path)
-        continue;
-      // `idx.files.path` is root-relative.
-      const ref = { rootName: at.rootName, path: at.fsPath.replace(/^\/+/, "") };
-      wanted.set(key(ref), { ref, path });
+      const at = toFsPath(scopes, path);
+      if (at === null || roundTripVirtualPath(scopes, at) !== path) continue;
+      wanted.set(at.replace(/^\/+/, ""), path);
     }
     if (wanted.size === 0) return found;
-    const rows = await deps.index.contentAt([...wanted.values()].map((item) => item.ref));
-    const byRef = new Map(rows.map((row) => [key(row), row]));
-    for (const [ref, item] of wanted) {
-      const row = byRef.get(ref);
-      if (row !== undefined) found.set(item.path, row);
+    const rows = await deps.index.contentAt(
+      [...wanted.keys()].map((path) => ({ rootId: INDEX_ROOT_ID, path })),
+    );
+    for (const row of rows) {
+      const path = wanted.get(row.path);
+      if (path !== undefined) found.set(path, row);
     }
     return found;
   };
