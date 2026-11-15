@@ -51,9 +51,7 @@ test("returns to the connection request after signing in", async ({ page }) => {
   });
 });
 
-test("requires an explicit write grant and keeps an unsupported backend read-only", async ({
-  page,
-}) => {
+test("writes only with an explicit write grant, which needs nothing else", async ({ page }) => {
   const api = "/api/v2/desktop";
   const created = await page.request.post(`${api}/pairings`, {
     headers: { "x-requested-with": "fdrive" },
@@ -78,11 +76,8 @@ test("requires an explicit write grant and keeps an unsupported backend read-onl
       {
         location: {
           protocolVersion: 2,
-          readOnly: true,
-          capabilities: { create: false, update: false },
-          // The local folder needs no setting of its own; only the missing state dir is named.
-          writeUnavailableReason:
-            "Read-only until an administrator sets FDRIVE_DESKTOP_STATE_DIR on this server.",
+          readOnly: false,
+          capabilities: { create: true, update: true, move: true, trash: true, restore: true },
         },
       },
     ],

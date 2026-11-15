@@ -2,6 +2,7 @@ import { randomBytes, randomUUID } from "node:crypto";
 import type {
   DesktopAccessMode,
   DesktopCredential,
+  DesktopWriteCapabilities,
   DesktopWriteCredential,
 } from "@fdrive/contracts";
 import type { ApiTokenRepo, IdentityRepo, ProviderRepo } from "@fdrive/db";
@@ -15,11 +16,7 @@ import { createTokenService } from "../tokens/service.js";
 import { hashApiToken } from "../tokens/token-format.js";
 import type { IndexedContentLookup } from "./indexed-content.js";
 import { generateDesktopToken, looksLikeDesktopToken } from "./tokens.js";
-import {
-  DESKTOP_MAX_UPLOAD_BYTES,
-  type DesktopWriteAvailability,
-  type DesktopWriteGate,
-} from "./writes.js";
+import { DESKTOP_MAX_UPLOAD_BYTES, NO_WRITES } from "./writes.js";
 
 type IssuedCredential = Omit<DesktopCredential, "location"> & {
   location: DesktopCredential["location"] | DesktopWriteCredential["location"];
@@ -43,8 +40,8 @@ interface Pair {
   result?: Promise<IssuedCredential[]>;
 }
 export interface DesktopDeps {
-  /** How the deployment answers a full grant; absent when desktop writes are not wired. */
-  writeAvailability?: (principal: Principal) => Promise<DesktopWriteAvailability>;
+  /** What a grant may write; absent when desktop writes are not wired. */
+  writeCapabilities?: (principal: Principal) => DesktopWriteCapabilities;
   /** Whether the change feed covers this location; absent when the server has none. */
   changeFeed?: (principal: Principal) => Promise<boolean>;
   apiTokens: ApiTokenRepo;
@@ -59,16 +56,6 @@ export interface DesktopDeps {
    * nothing is indexed: every check hashes.
    */
   indexedContent?: IndexedContentLookup;
-}
-
-/**
- * Why a full-access grant still lands read-only, phrased for whoever paired the
- * Mac: an administrator can act on it and anyone else can pass it on.
- */
-function writeUnavailableReason(missing: readonly DesktopWriteGate[]): string {
-  if (missing.includes("state_dir"))
-    return "Read-only until an administrator sets FDRIVE_DESKTOP_STATE_DIR on this server.";
-  return "Finder writes are turned off on this server. Files stay read-only.";
 }
 
 /** Pairing is transient, like the existing login limiter. Restart cancels pending requests.
@@ -130,20 +117,7 @@ export function createDesktopPairing(deps: DesktopDeps) {
     };
     if (protocolVersion === 1)
       return { ...common, protocolVersion: 1 as const, readOnly: true as const };
-    const granted = principal.tokenAccess?.mode === "full";
-    const { capabilities, missing } =
-      granted && deps.writeAvailability
-        ? await deps.writeAvailability(principal)
-        : {
-            capabilities: {
-              create: false,
-              update: false,
-              move: false,
-              trash: false,
-              restore: false,
-            },
-            missing: [] as readonly DesktopWriteGate[],
-          };
+    const capabilities = deps.writeCapabilities?.(principal) ?? NO_WRITES;
     const readOnly = !Object.values(capabilities).some(Boolean);
     return {
       ...common,
@@ -151,9 +125,8 @@ export function createDesktopPairing(deps: DesktopDeps) {
       readOnly,
       capabilities,
       maxUploadBytes: DESKTOP_MAX_UPLOAD_BYTES,
-      ...(granted && readOnly ? { writeUnavailableReason: writeUnavailableReason(missing) } : {}),
-      // Folder checks are served by the same write service that reports availability.
-      ...(deps.writeAvailability ? { listingChecks: true as const } : {}),
+      // Folder checks are served by the same write service that reports capabilities.
+      ...(deps.writeCapabilities ? { listingChecks: true as const } : {}),
       ...((await deps.changeFeed?.(principal)) ? { changeFeed: true as const } : {}),
     };
   }

@@ -1,5 +1,5 @@
 import { createHash, type Hash, randomBytes } from "node:crypto";
-import type { Stats } from "node:fs";
+import type { BigIntStats, Stats } from "node:fs";
 import { constants, createReadStream } from "node:fs";
 import {
   access,
@@ -28,6 +28,7 @@ import {
   type EntryStat,
   type FileEntry,
   isPrecompressedEntry,
+  type MoveOptions,
   makeEntry,
   normalizePath,
   StorageError,
@@ -54,10 +55,7 @@ export interface LocalStorage extends StorageProvider {
   readonly home: Home;
 }
 
-export interface MoveOptions {
-  /** Replace a taken target; without it the target must be free. */
-  readonly overwrite?: boolean;
-}
+export type { MoveOptions };
 
 /** The refusal for a name that is taken. */
 function taken(path: string): StorageError {
@@ -90,7 +88,20 @@ function isTop(path: string): boolean {
   return splitSegments(normalizePath(path)).length === 0;
 }
 
-function kindOf(info: Stats): EntryKind {
+/**
+ * Flushes `path`, a file's bytes or a folder's names, to disk. Any
+ * descriptor of an inode flushes all of it.
+ */
+async function flush(path: string): Promise<void> {
+  const handle = await open(path, "r");
+  try {
+    await handle.sync();
+  } finally {
+    await handle.close();
+  }
+}
+
+function kindOf(info: Stats | BigIntStats): EntryKind {
   if (info.isFile()) return "file";
   if (info.isDirectory()) return "dir";
   if (info.isSymbolicLink()) return "symlink";
@@ -223,13 +234,14 @@ export function createLocalStorage(options: LocalStorageOptions): LocalStorage {
     stat: (path) =>
       mapped(path, async (): Promise<EntryStat> => {
         const found = await home.locate(path);
-        const info = await lstat(found.at);
+        const info = await lstat(found.at, { bigint: true });
         const kind = kindOf(info);
         return {
           kind,
-          size: kind === "file" ? info.size : 0,
+          size: kind === "file" ? Number(info.size) : 0,
           modifiedAt: info.mtime,
           contentType: null,
+          ino: info.ino,
           ...(found.path === normalizePath(path) ? {} : { path: found.path }),
         };
       }),
@@ -366,6 +378,7 @@ export function createLocalStorage(options: LocalStorageOptions): LocalStorage {
             );
           }
           if (opts?.modifiedAt !== undefined) await utimes(partial, new Date(), opts.modifiedAt);
+          if (opts?.durable === true) await flush(partial);
           if (hash !== undefined) {
             // Taken before publishing: whatever is at the name later may be
             // another writer's file.
@@ -379,6 +392,7 @@ export function createLocalStorage(options: LocalStorageOptions): LocalStorage {
           }
           if (overwrite) await rename(partial, target);
           else await publishNew(partial, target, path);
+          if (opts?.durable === true) await flush(dir);
         } finally {
           await rm(partial, { force: true });
         }
@@ -526,8 +540,37 @@ interface Names {
  * move stays a `rename` because file watchers (the indexer's) see a rename
  * as a move and keep what they know about the file, while a link and an
  * unlink read as a deleted file and a new one nobody finished writing.
+ *
+ * With `publish`, for an entry fdrive staged where no watcher looks, a new
+ * file is linked into place only while the name is free and then unlinked
+ * where it was staged, and the new name is flushed to disk before this
+ * returns.
  */
 export async function moveEntry(
+  from: string,
+  to: string,
+  names: Names,
+  opts?: MoveOptions,
+): Promise<MovedStamp | undefined> {
+  if (opts?.publish !== true) return relocate(from, to, names, opts);
+  let stamp: MovedStamp | undefined;
+  if (opts.overwrite !== true && (await lstat(from)).isFile()) {
+    await mkdir(dirname(to), { recursive: true });
+    try {
+      await publishNew(from, to, names.target);
+      await rm(from, { force: true });
+    } catch (error) {
+      // Another filesystem under the same home: no link reaches it.
+      if (codeOf(error) !== "EXDEV") throw error;
+      stamp = await relocate(from, to, names, opts);
+    }
+  } else stamp = await relocate(from, to, names, opts);
+  await flush(dirname(to));
+  return stamp;
+}
+
+/** `moveEntry` without `publish`: one `rename`. */
+async function relocate(
   from: string,
   to: string,
   names: Names,

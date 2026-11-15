@@ -158,3 +158,24 @@ it("stamps files as a disk does: every write moves the stamp, reads leave it", a
   ).rejects.toMatchObject({ kind: "bad_request" });
   await expect(storage.statFile("/short.txt")).rejects.toMatchObject({ kind: "not_found" });
 });
+
+it("renames as a disk does: files and folders keep their inodes, copies get new ones", async () => {
+  const storage = createMemoryStorage({ "/a/b/c.txt": "c", "/d.txt": "d" });
+  const folder = (await storage.stat("/a")).ino;
+  const file = (await storage.stat("/a/b/c.txt")).ino;
+  expect(folder).toBeTypeOf("bigint");
+  await storage.move("/a", "/moved");
+  expect((await storage.stat("/moved")).ino).toBe(folder);
+  expect((await storage.stat("/moved/b/c.txt")).ino).toBe(file);
+  await storage.copy("/moved", "/copied");
+  expect(storage.dump()["/copied/b/c.txt"]).toBe("c");
+  expect((await storage.stat("/copied/b/c.txt")).ino).not.toBe(file);
+  await expect(storage.move("/moved", "/moved/b/inside")).rejects.toMatchObject({
+    kind: "bad_request",
+  });
+  const before = await storage.contentStamp?.("/d.txt");
+  await storage.move("/d.txt", "/e.txt");
+  const after = await storage.contentStamp?.("/e.txt");
+  expect(after?.ino).toBe(before?.ino);
+  expect(after?.ctimeNs).not.toBe(before?.ctimeNs);
+});

@@ -96,8 +96,6 @@ export interface DesktopRepo {
   ): Promise<boolean>;
   /** Operations past their retention window, oldest first. */
   expired(now: Date, retention: DesktopRetention, limit: number): Promise<DesktopOperationRecord[]>;
-  /** Commits that never produced a receipt, oldest first, for administrator inspection. */
-  uncertain(limit: number): Promise<DesktopOperationRecord[]>;
   /** Deletes an `acknowledged` or `cancelled` operation's row; false for any other. */
   forget(identityId: string, accountId: string, id: string): Promise<boolean>;
 }
@@ -331,14 +329,6 @@ export function createDesktopRepo(db: Db): DesktopRepo {
             ),
           ),
         )
-        .orderBy(asc(desktopOperations.updatedAt))
-        .limit(limit);
-    },
-    async uncertain(limit) {
-      return db
-        .select()
-        .from(desktopOperations)
-        .where(inArray(desktopOperations.state, ["committing", "uncertain"]))
         .orderBy(asc(desktopOperations.updatedAt))
         .limit(limit);
     },

@@ -1,7 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, mkdtemp, rename, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { mkdir, rename, rm } from "node:fs/promises";
+import { dirname } from "node:path";
 import {
   DesktopPairing,
   DesktopWriteEntry,
@@ -37,7 +36,6 @@ describe("public links follow the files they point at", () => {
   let storage: Awaited<ReturnType<typeof startLocalStorage>>;
   let composed: Awaited<ReturnType<typeof composeApp>>;
   let database: ReturnType<typeof createDb>;
-  let stateDir: string;
   let alice: string;
   let bob: string;
 
@@ -72,13 +70,11 @@ describe("public links follow the files they point at", () => {
       }),
     ]);
     await seedLocalUsers(postgres.connectionString, storage);
-    stateDir = await mkdtemp(join(tmpdir(), "fdrive-share-moves-"));
     composed = await composeApp(
       loadConfig({
         DATABASE_URL: postgres.connectionString,
         FDRIVE_STORAGE_ROOT: storage.root,
         FDRIVE_MASTER_KEY: Buffer.alloc(32, 31).toString("base64"),
-        FDRIVE_DESKTOP_STATE_DIR: stateDir,
         // Configured so the indexer listener runs; no indexer does, the tests notify for it.
         FDRIVE_INDEX_ROOTS: JSON.stringify([
           { name: "files", storagePath: storage.root, indexerPath: "/roots/files" },
@@ -97,7 +93,6 @@ describe("public links follow the files they point at", () => {
     await database?.close();
     await storage?.stop();
     await postgres?.stop();
-    if (stateDir) await rm(stateDir, { recursive: true, force: true });
   }, 180_000);
 
   /** Sets the files folder's Trash, as System > General would. */

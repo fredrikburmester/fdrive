@@ -136,13 +136,6 @@ export function memoryRepo() {
         .slice(0, limit)
         .map((value) => ({ ...value }));
     },
-    async uncertain(limit) {
-      return [...operations.values()]
-        .filter((value) => ["committing", "uncertain"].includes(value.state))
-        .sort((a, b) => a.updatedAt.getTime() - b.updatedAt.getTime())
-        .slice(0, limit)
-        .map((value) => ({ ...value }));
-    },
     async forget(identityId, accountId, id) {
       const old = operations.get(identityId + id);
       if (!old || old.accountId !== accountId || !["acknowledged", "cancelled"].includes(old.state))

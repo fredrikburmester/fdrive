@@ -9,7 +9,7 @@ Other administrators and MCP/desktop bearer tokens do not grant backup access.
 
 The deployment Compose file starts a dedicated `backup` worker. Its persistent `fdrive-backups`
 volume holds encrypted configuration attachments and temporary encrypted download archives.
-The worker reads the desktop, OCR originals, retained indexer logs and Office data mounts.
+The worker reads the OCR originals, retained indexer logs and Office data mounts.
 Those source mounts are read-only. The API and worker must use the same database and master
 key and share the backup volume. Upgrade the API, worker and OCR service together.
 
@@ -17,8 +17,8 @@ For a native installation, set `FDRIVE_BACKUP_STATE_DIR` to a private persistent
 Run `node dist/main.js backup worker` alongside the API, or set `FDRIVE_BACKUP_WORKER=true`
 to run the worker inside the API process. Only one worker holds the database worker lock.
 `FDRIVE_BACKUP_SOURCES` is a JSON array of `{ "kind": "ocr" | "logs" | "office", "path": "/absolute/path" }`.
-`FDRIVE_DESKTOP_STATE_DIR` is included automatically. Keep the backup directory outside all
-source directories. Missing or unreadable recovery sources appear as coverage gaps.
+Keep the backup directory outside all source directories. Missing or unreadable recovery sources
+appear as coverage gaps.
 
 1. Open System → Backups and confirm your password.
 2. Create and download a recovery key. Paste the saved key to prove it can decrypt a challenge.
@@ -92,24 +92,27 @@ unclassified application/index table, including tables introduced by a future mi
 - Accounts, identities, providers, local users (password hashes included) and the folders
   they share with each other, settings, tags, favorites, folder views, recents,
   AI chats (transcripts and references), share metadata (password hashes included, so links
-  restore fully), activity, stable Office/native file IDs and native recovery receipts.
+  restore fully), activity, stable Office/native file IDs and Mac write receipts.
 - Retained index scan/move/event history, OCR rewrite history and processing failures.
 - Exact active configuration ZIP versions, pre-OCR originals and original-file mappings,
-  native local/remote recovery material, retained logs and configured external source mounts.
+  retained logs and configured external source mounts.
 - Effective deployment configuration, mount identities, migration hashes and database schema
   fingerprint. The source master key is inside the independently encrypted archive so
   destination secrets and configuration ZIP keys can be resealed on a replacement installation.
 
 Indexes, extracted chunks, thumbnails, embeddings, sessions and WOPI locks are omitted. Original user files (the files folder, Trash included), unsaved external
-editor state and device-only edits require their own backups. A configuration ZIP
+editor state and device-only edits require their own backups. Uploads the Mac staged in the files
+folder are transient and never backed up: the Mac sends an unfinished one again, and a restored
+Mac write ends from what the files folder shows, like any interrupted one
+([macOS](MACOS.md#write-configuration-and-recovery)). A configuration ZIP
 protects only the version uploaded.
 
 Database rows are captured in a repeatable-read transaction, using PostgreSQL text values to
-preserve bigint, bytea, JSON and timestamps exactly. An exclusive advisory checkpoint prevents
-cooperating native/attachment/OCR writes from publishing new recovery bytes during capture.
+preserve bigint, bytea, JSON and timestamps exactly. An exclusive advisory checkpoint pauses
+cooperating writes, so attachments and OCR publish no new recovery bytes during capture.
 Local files reject symlinks, inode replacement and mutation during reading; log files capture
-their checkpoint prefix while allowing append. The Mac's recovery files are read from each
-user's own files. Independently changing user files and external writers are not a filesystem snapshot.
+their checkpoint prefix while allowing append. Independently changing user files and external
+writers are not a filesystem snapshot.
 
 ## Recovery
 
@@ -266,9 +269,9 @@ provider bindings, and publishes verified configuration ZIPs.
 Restart the API with `FDRIVE_RESTORE_MODE=false`. Review and re-enable features and schedules
 in System; confirm a recovery key before scheduling again. Reconnect native/MCP clients.
 
-Native/OCR/Office recovery bytes remain in the private `restore-UUID` quarantine. Its
-`recovery-manifest.json` maps `blobs-N` files to original kinds, paths, source mount IDs and
-remote identity IDs; the database's `backup.recovery.v1` setting retains the source environment.
+OCR, Office and log recovery bytes remain in the private `restore-UUID` quarantine. Its
+`recovery-manifest.json` maps `blobs-N` files to original kinds, paths and source mount IDs; the
+database's `backup.recovery.v1` setting retains the source environment.
 Reconcile those bytes against the current files folder before applying them. Subsequent backups
 also preserve this quarantine. External configuration ZIPs are restored with their external
-system's own tools. fdrive never replays old remote writes automatically.
+system's own tools. fdrive never applies quarantined bytes automatically.

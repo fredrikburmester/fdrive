@@ -202,13 +202,11 @@ it("coordinates desktop identities and operation receipts across independent Pos
     const conflict = await seed("conflict");
     const acknowledged = await seed("acknowledged");
     const cancelled = await seed("cancelled");
-    const uncertain = await seed("uncertain");
-    const committing = await seed("committing");
+    // A ready or committing operation may still publish what it staged.
+    await seed("ready");
+    await seed("committing");
     expect((await a.expired(now, retention, 10)).map((op) => op.id).sort()).toEqual(
       [idle, conflict, acknowledged, cancelled].sort(),
-    );
-    expect((await b.uncertain(10)).map((op) => op.id).sort()).toEqual(
-      [uncertain, committing].sort(),
     );
     expect(fresh).toBeTruthy();
     expect(await a.forget(identity.id, account.id, idle)).toBe(false);

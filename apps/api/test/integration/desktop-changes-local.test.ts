@@ -1,6 +1,4 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { writeFile } from "node:fs/promises";
 import {
   DesktopChangesResponse,
   DesktopPairing,
@@ -39,7 +37,6 @@ it("answers which folders an upload, a move and a delete changed, and detects a 
   const database = createDb(postgres.connectionString);
   // What the indexer does when it starts: the API journals nothing for a root without a row.
   await database.db.execute(sql`insert into idx.roots (name) values ('files')`);
-  const stateDir = await mkdtemp(join(tmpdir(), "fdrive-changes-"));
   const config = loadConfig({
     DATABASE_URL: postgres.connectionString,
     FDRIVE_STORAGE_ROOT: storage.root,
@@ -48,7 +45,6 @@ it("answers which folders an upload, a move and a delete changed, and detects a 
     ]),
     FDRIVE_MASTER_KEY: Buffer.alloc(32, 7).toString("base64"),
     FDRIVE_ADMIN_USERS: "alice",
-    FDRIVE_DESKTOP_STATE_DIR: stateDir,
   });
   const composed = await composeApp(config, pino({ level: "silent" }), () => new Date());
   const send = (route: string, init: { cookie?: string; bearer?: string; body?: unknown } = {}) =>
@@ -241,7 +237,6 @@ it("answers which folders an upload, a move and a delete changed, and detects a 
   } finally {
     await composed.close?.();
     await database.close();
-    await rm(stateDir, { recursive: true, force: true });
     await storage.stop();
     await postgres.stop();
   }

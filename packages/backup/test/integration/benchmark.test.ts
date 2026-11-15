@@ -113,7 +113,7 @@ it("measures capture, writer pause, spool bytes and fresh restore for small and 
           pool: db.pool,
           masterKey: randomBytes(32).toString("base64"),
           environment: { release: "benchmark" },
-          blobs: async () => ({ sources: await localBlobs(recovery, "desktop"), coverage: [] }),
+          blobs: async () => ({ sources: await localBlobs(recovery, "office"), coverage: [] }),
         },
         { id: randomUUID(), installationId: config.installation_id, recipient, output },
       ),

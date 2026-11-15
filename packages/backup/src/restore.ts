@@ -274,9 +274,6 @@ export async function restoreArchive(options: RestoreOptions): Promise<Inspectio
       "update app.backup_runs set artifact = null, state = case when state in ('queued','capturing','transferring') then 'cancelled' else state end",
     );
     await client.query(
-      "update app.desktop_operations set state = 'uncertain' where state in ('receiving','uploading','ready','committing')",
-    );
-    await client.query(
       "insert into app.settings(key, value) values ('backup.restore.v1', $1::jsonb) on conflict(key) do update set value = excluded.value",
       [
         JSON.stringify({
