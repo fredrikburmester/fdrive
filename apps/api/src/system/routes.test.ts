@@ -61,6 +61,8 @@ function fakeIndexQueries(overrides: Partial<IndexQueries> = {}): IndexQueries {
     searchImages: notImplemented,
     imageEmbeddingStats: async () => ({ total: 0, model: null }),
     subtreeSize: notImplemented,
+    photos: notImplemented,
+    photoDetails: notImplemented,
     ...overrides,
   };
 }

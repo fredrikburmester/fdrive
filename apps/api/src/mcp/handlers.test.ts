@@ -90,6 +90,8 @@ function stubIndexQueries(overrides: Partial<IndexQueries> = {}): IndexQueries {
     liveRowsBySha: overrides.liveRowsBySha ?? (async () => fail("liveRowsBySha")),
     searchImages: overrides.searchImages ?? (async () => fail("searchImages")),
     imageEmbeddingStats: overrides.imageEmbeddingStats ?? (async () => fail("imageEmbeddingStats")),
+    photos: overrides.photos ?? (async () => fail("photos")),
+    photoDetails: overrides.photoDetails ?? (async () => fail("photoDetails")),
     subtreeSize: overrides.subtreeSize ?? (async () => fail("subtreeSize")),
   };
 }

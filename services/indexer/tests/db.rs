@@ -181,7 +181,7 @@ fn schema_wait_waits_for_the_failure_history_migration() {
     let logs = logs.borrow();
     assert_eq!(logs.len(), 1);
     assert!(
-        logs[0].contains("processing_failures, changes, folders and file stamp migrations")
+        logs[0].contains("processing_failures, changes, folders, file stamp and photo migrations")
             && logs[0].contains("last seen: 2")
     );
 }
@@ -237,27 +237,33 @@ fn schema_wait_waits_for_the_folders_migration() {
 }
 
 #[test]
-fn schema_wait_waits_for_the_file_stamp_columns() {
-    let (url, mut c) = setup();
-    c.batch_execute(r#"ALTER TABLE "idx"."files" RENAME COLUMN ctime_ns TO ctime_pending"#)
+fn schema_wait_waits_for_the_file_stamp_and_photo_columns() {
+    for column in ["ctime_ns", "taken_at"] {
+        let (url, mut c) = setup();
+        c.batch_execute(&format!(
+            r#"ALTER TABLE "idx"."files" RENAME COLUMN {column} TO column_pending"#
+        ))
         .unwrap();
-    let client = RefCell::new(c);
-    let logs = RefCell::new(Vec::<String>::new());
-    let version = db::wait_for_schema_version(
-        &Db::new(&url),
-        2,
-        Duration::from_secs(60),
-        &|m| logs.borrow_mut().push(m.to_owned()),
-        &|_| {
-            client
-                .borrow_mut()
-                .batch_execute(r#"ALTER TABLE "idx"."files" RENAME COLUMN ctime_pending TO ctime_ns"#)
-                .unwrap();
-        },
-    )
-    .unwrap();
-    assert_eq!(version, Some(2));
-    assert_eq!(logs.borrow().len(), 1);
+        let client = RefCell::new(c);
+        let logs = RefCell::new(Vec::<String>::new());
+        let version = db::wait_for_schema_version(
+            &Db::new(&url),
+            2,
+            Duration::from_secs(60),
+            &|m| logs.borrow_mut().push(m.to_owned()),
+            &|_| {
+                client
+                    .borrow_mut()
+                    .batch_execute(&format!(
+                        r#"ALTER TABLE "idx"."files" RENAME COLUMN column_pending TO {column}"#
+                    ))
+                    .unwrap();
+            },
+        )
+        .unwrap();
+        assert_eq!(version, Some(2), "{column}");
+        assert_eq!(logs.borrow().len(), 1, "{column}");
+    }
 }
 
 /// The root's folder rows, sorted by path byte by byte.

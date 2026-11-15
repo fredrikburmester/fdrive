@@ -719,6 +719,50 @@ describe("createApiClient: shareThumbUrl", () => {
   });
 });
 
+describe("createApiClient: photos", () => {
+  const page = {
+    photos: [
+      {
+        path: "/a.jpg",
+        name: "a.jpg",
+        size: 10,
+        modifiedAt: "2024-05-02T10:00:00.000Z",
+        takenAt: "2024-05-01T14:03:09",
+      },
+    ],
+    nextCursor: "next",
+  };
+  const details = {
+    takenAt: null,
+    camera: "Apple iPhone 15 Pro",
+    width: 4032,
+    height: 3024,
+    latitude: 59.5,
+    longitude: -18,
+  };
+
+  it("gets the first page, then the page after a cursor", async () => {
+    const { fetchStub, calls } = createStubFetch([
+      jsonResponse(200, page),
+      jsonResponse(200, { photos: [], nextCursor: null }),
+    ]);
+    const client = createApiClient({ fetch: fetchStub });
+
+    expect(await client.photos()).toEqual(page);
+    await client.photos("next");
+
+    expect(calls.map((call) => call.url)).toEqual(["/api/v1/photos", "/api/v1/photos?cursor=next"]);
+  });
+
+  it("gets one photo's details by path", async () => {
+    const { fetchStub, calls } = createStubFetch([jsonResponse(200, details)]);
+    const client = createApiClient({ fetch: fetchStub });
+
+    expect(await client.photoDetails("/a.jpg")).toEqual(details);
+    expect(calls[0]?.url).toBe("/api/v1/photos/details?path=%2Fa.jpg");
+  });
+});
+
 describe("createApiClient: thumbUrl", () => {
   it("builds a thumbnail URL with path and size", () => {
     const client = createApiClient({ baseUrl: "https://api.test" });
