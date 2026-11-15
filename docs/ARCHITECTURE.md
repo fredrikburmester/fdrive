@@ -17,8 +17,12 @@ Current implementation reference. Unfinished work belongs in [plans](plans/READM
   PDF it rewrites; the indexer reads the journal from its own position and applies them at
   once. Its file watcher and periodic scan cover changes made outside fdrive and journal them
   too, so the journal holds every change. See [how changes arrive](INDEXER.md#how-changes-arrive)
-  and the [change journal](plans/CHANGE-JOURNAL.md). OCR may write to mounted originals. Browser file operations go through the API, which reads
-  and writes the files folder on its own disk. See [indexer](INDEXER.md), [OCR](OCR.md) and
+  and the [change journal](plans/CHANGE-JOURNAL.md). The API reads the journal too, as the only
+  way it learns of file changes: each change reaches every person who can see it once, as a
+  resumable live update, and one made outside fdrive brings path-keyed metadata along (see
+  [the API's reader](INDEXER.md#the-apis-reader)). OCR may write to mounted originals.
+  Browser file operations go through the API, which reads and writes the files folder on its
+  own disk. See [indexer](INDEXER.md), [OCR](OCR.md) and
   [search](SEARCH-AND-AI.md).
 - Model inference and office-document text extraction run in the Rust
   [ML server](../services/ml/README.md). It has no database access and no storage mounts: the
@@ -63,9 +67,9 @@ a reserved name at the top of every home, and a real folder of that name stays o
 sight ([storage](STORAGE.md#wiring)); a read-only grant
 refuses every change, and the grantee cannot rename, move or delete `Shared with me` or the
 shared folders themselves. A move between a user's files and a writable shared folder is one
-rename. Grants follow the owner's moves and deletes made through fdrive, and index scopes
-follow the grants ([scoping](SCOPING.md)). A grant follows its folder into the owner's Trash
-too, since that is a move like any other, so it never stays at a path a new folder can take; a
+rename. Grants follow the owner's moves and deletes, made through fdrive or journaled by the
+indexer's watcher, and index scopes follow the grants ([scoping](SCOPING.md)). A grant follows
+its folder into the owner's Trash too, since that is a move like any other, so it never stays at a path a new folder can take; a
 purge deletes it. Something in a writable shared folder that the person it is shared with
 deletes goes to the owner's Trash, since it is the owner's file. Grants and public links follow a move before
 any other path-keyed metadata (`withFollowers`), so a failure in tags or favorites never leaves
@@ -83,8 +87,10 @@ before their limit. The indexer never walks `/.fdrive-desktop`; it does index th
 moves into and out of it stay renames. OCR takes its PDFs from the index and leaves out all of these. Where a consumer differs it says so: links also never reach
 `/Shared with me`.
 
-Metadata uses identity plus canonical virtual path. Application moves and indexer events
-propagate renames; index paths must be translated through the identity's scopes. A path
+Metadata uses identity plus canonical virtual path. fdrive's own moves carry it along in the
+request; moves made outside fdrive, which the indexer's watcher journals, carry it along when
+the API reads the [change journal](INDEXER.md#the-apis-reader); index paths must be translated
+through the identity's scopes. A path
 or content hash alone never grants another identity access. Public share links are fdrive's
 own: fdrive keeps the share in `app.shares` and serves it through the owner's storage, which
 the share reaches only through
@@ -93,7 +99,7 @@ allows. Trash, `/Shared with me` and the Mac's `/.fdrive-desktop` (which
 holds its Trash) are never reachable through a link. A link follows the item it names
 wherever it moves, so it never stays at a path where something new could appear: on every
 route other path-keyed metadata follows, through the Trash and its restores, the Mac's
-writes and moves the indexer reports. Inside a place no link reaches (Trash, say)
+writes and moves the indexer's watcher journals. Inside a place no link reaches (Trash, say)
 it shows not found, and it works again once the item comes back out. Anything in fdrive's
 Trash layout (a `.fdrive-move-v1` segment) stays refused wherever it lies. A move inside a folder shared with someone counts in the owner's
 files; taken out of them, deleted, or purged from Trash, the item leaves its links, and a

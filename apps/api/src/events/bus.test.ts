@@ -1,13 +1,14 @@
-import type { FsEvent, JobEvent } from "@fdrive/contracts";
+import type { JobEvent } from "@fdrive/contracts";
 import { describe, expect, it } from "vitest";
 import type { BusEvent } from "./bus.js";
 import { createEventBus } from "./bus.js";
 
-function makeEvent(overrides: Partial<FsEvent> = {}): FsEvent {
+function makeEvent(overrides: { identityId?: string } = {}): BusEvent {
   return {
     type: "fs",
-    op: "create",
+    op: "change",
     identityId: "identity-1",
+    position: 1,
     paths: ["/a.txt"],
     at: "2024-01-01T00:00:00.000Z",
     ...overrides,
@@ -109,6 +110,17 @@ describe("createEventBus", () => {
     bus.publish(jobEvent);
 
     expect(received).toEqual([jobEvent]);
+  });
+
+  it("delivers an indexed event, which names no path, to every subscriber", () => {
+    const bus = createEventBus();
+    const received: BusEvent[] = [];
+    bus.subscribe({ identityId: "identity-1" }, (event) => received.push(event));
+    bus.subscribe({ identityId: "identity-2" }, (event) => received.push(event));
+
+    bus.publish({ type: "indexed", at: "2024-01-01T00:00:00.000Z" });
+
+    expect(received).toHaveLength(2);
   });
 
   it("swallows an error thrown by one handler and still delivers to the others", () => {

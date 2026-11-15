@@ -9,7 +9,6 @@ import type {
 } from "@fdrive/db";
 import type { PersonalActivityService } from "../activity/service.js";
 import type { Principal } from "../auth/principal.js";
-import type { EventBus } from "../events/bus.js";
 import type { LocalGrantService } from "../local/grants.js";
 import type { MetadataService } from "../metadata/service.js";
 import type { DiscoveryCache } from "./protocol/discovery-cache.ts";
@@ -51,7 +50,6 @@ export interface OfficeDeps {
   readonly grants: Pick<LocalGrantService, "ownerPath" | "pathFor">;
   readonly storageFactory: (identityId: string) => StorageProvider | Promise<StorageProvider>;
   readonly metadata: MetadataService;
-  readonly bus: EventBus;
   /** Optional so office tests and deployments without history keep working.
    * Explicitly `undefined` is allowed so a caller can clear it in a spread. */
   readonly activity?: PersonalActivityService | undefined;

@@ -6,8 +6,7 @@ import { archiveEntriesKey } from "./queries";
 function fsEvent(overrides: Partial<FsEvent> = {}): FsEvent {
   return {
     type: "fs",
-    op: "update",
-    identityId: "00000000-0000-0000-0000-000000000000",
+    op: "change",
     paths: ["/a/b.zip"],
     at: "2026-09-06T00:00:00.000Z",
     ...overrides,
@@ -36,7 +35,7 @@ describe("archiveKeysToInvalidate", () => {
     ]);
   });
 
-  it("invalidates target paths too, for a move or copy", () => {
+  it("invalidates target paths too, for a move", () => {
     expect(
       archiveKeysToInvalidate(
         fsEvent({ op: "move", paths: ["/old.zip"], targetPaths: ["/new.zip"] }),

@@ -97,7 +97,6 @@ describe("Office saves on a real files folder", () => {
     const opened = await locked();
     expect((await save(opened, chunks("12345", "6789"))).status).toBe(413);
     expect(await disk()).toEqual({ names: ["a.docx"], text: "hello" });
-    expect(h.events).toHaveLength(0);
   });
 
   it("refuses a body shorter than its declared length", async () => {

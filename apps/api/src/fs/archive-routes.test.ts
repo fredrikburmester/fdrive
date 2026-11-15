@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { gzipSync } from "node:zlib";
-import type { ArchiveEntriesResponse, FsEvent, JobStatus } from "@fdrive/contracts";
+import type { ArchiveEntriesResponse, JobStatus } from "@fdrive/contracts";
 import { StorageError, type StorageProvider } from "@fdrive/core";
 import { createLocalStorage } from "@fdrive/local";
 import type { Logger } from "pino";
@@ -15,8 +15,8 @@ import { createApp } from "../app.js";
 import { isZstdSupported } from "../archive/stream-utils.js";
 import type { Principal } from "../auth/principal.js";
 import { loadConfig } from "../config.js";
-import { createEventBus, type EventBus } from "../events/bus.js";
-import { registerEventRoutes } from "../events/routes.js";
+import { createEventBus } from "../events/bus.js";
+import { type EventRoutesDeps, registerEventRoutes } from "../events/routes.js";
 import { createJobRunner } from "../jobs/runner.js";
 import { registerFsRoutes } from "./routes.js";
 
@@ -110,13 +110,18 @@ const SEED: Seed = {
 
 interface Harness {
   readonly app: ReturnType<typeof createApp>;
-  readonly bus: EventBus;
-  readonly fsEvents: FsEvent[];
   readonly tmpDir: string;
   readonly activity: ReturnType<typeof activityFixture>;
   readonly storage: StorageProvider;
   readonly jobRunner: ReturnType<typeof createJobRunner>;
 }
+
+/** A change journal with nothing in it: `GET /events` here only carries job events. */
+const NO_JOURNAL: EventRoutesDeps["journal"] = {
+  epoch: () => "0",
+  position: () => 0,
+  replay: async () => true,
+};
 
 const tempDirs: string[] = [];
 
@@ -147,13 +152,6 @@ async function buildHarness(seed: Seed = SEED, username = "alice", jobMaxBytes =
   };
 
   const bus = createEventBus();
-  const fsEvents: FsEvent[] = [];
-  bus.subscribe({ identityId }, (event) => {
-    if (event.type === "fs") {
-      fsEvents.push(event);
-    }
-  });
-
   const clock = () => new Date();
   const activity = activityFixture(clock);
   const jobRunner = createJobRunner({ clock, bus });
@@ -174,18 +172,16 @@ async function buildHarness(seed: Seed = SEED, username = "alice", jobMaxBytes =
     registerRoutes: (groups) => {
       registerFsRoutes(groups, {
         activity: activity.service,
-        bus,
-        clock,
         jobRunner,
         tmpDir,
         jobMaxBytes,
         folderSize: fakeFolderSizeDeps(),
       });
-      registerEventRoutes(groups, { bus, clock });
+      registerEventRoutes(groups, { bus, journal: NO_JOURNAL, clock });
     },
   });
 
-  const harness: Harness = { app, bus, fsEvents, tmpDir, activity, storage, jobRunner };
+  const harness: Harness = { app, tmpDir, activity, storage, jobRunner };
   return harness;
 }
 
@@ -208,13 +204,6 @@ async function buildHarnessWithArchivePeekMaxBytes(archivePeekMaxBytes: number):
   };
 
   const bus = createEventBus();
-  const fsEvents: FsEvent[] = [];
-  bus.subscribe({ identityId: ALICE_IDENTITY_ID }, (event) => {
-    if (event.type === "fs") {
-      fsEvents.push(event);
-    }
-  });
-
   const clock = () => new Date();
   const activity = activityFixture(clock);
   const jobRunner = createJobRunner({ clock, bus });
@@ -225,8 +214,6 @@ async function buildHarnessWithArchivePeekMaxBytes(archivePeekMaxBytes: number):
   const config = loadConfig(REQUIRED_ENV);
   const fsRoutesDeps = {
     activity: activity.service,
-    bus,
-    clock,
     jobRunner,
     tmpDir,
     jobMaxBytes: 10 * 1024 * 1024,
@@ -244,7 +231,7 @@ async function buildHarnessWithArchivePeekMaxBytes(archivePeekMaxBytes: number):
     registerRoutes: (groups) => registerFsRoutes(groups, fsRoutesDeps),
   });
 
-  return { app, bus, fsEvents, tmpDir, activity, storage, jobRunner };
+  return { app, tmpDir, activity, storage, jobRunner };
 }
 
 /** Builds a harness around an arbitrary `StorageProvider`, for exercising error-mapping branches. */
@@ -258,13 +245,6 @@ async function buildHarnessWithStorage(storage: StorageProvider): Promise<Harnes
   };
 
   const bus = createEventBus();
-  const fsEvents: FsEvent[] = [];
-  bus.subscribe({ identityId: ALICE_IDENTITY_ID }, (event) => {
-    if (event.type === "fs") {
-      fsEvents.push(event);
-    }
-  });
-
   const clock = () => new Date();
   const activity = activityFixture(clock);
   const jobRunner = createJobRunner({ clock, bus });
@@ -284,8 +264,6 @@ async function buildHarnessWithStorage(storage: StorageProvider): Promise<Harnes
     registerRoutes: (groups) =>
       registerFsRoutes(groups, {
         activity: activity.service,
-        bus,
-        clock,
         jobRunner,
         tmpDir,
         jobMaxBytes: 10 * 1024 * 1024,
@@ -293,7 +271,7 @@ async function buildHarnessWithStorage(storage: StorageProvider): Promise<Harnes
       }),
   });
 
-  return { app, bus, fsEvents, tmpDir, activity, storage, jobRunner };
+  return { app, tmpDir, activity, storage, jobRunner };
 }
 
 afterEach(async () => {
@@ -387,21 +365,14 @@ function makeStubStorage(overrides: Partial<StorageProvider>): StorageProvider {
 }
 
 describe("POST /fs/duplicate", () => {
-  it("copies the file next to itself with a unique name and publishes a copy event", async () => {
-    const { app, fsEvents } = await buildHarness();
+  it("copies the file next to itself with a unique name", async () => {
+    const { app } = await buildHarness();
 
     const res = await app.request("/api/v1/fs/duplicate", jsonPost({ path: "/hello.txt" }));
 
     expect(res.status).toBe(200);
     const body = await res.json();
     expect(body).toMatchObject({ path: "/hello copy.txt", name: "hello copy.txt" });
-    expect(fsEvents).toEqual([
-      expect.objectContaining({
-        op: "copy",
-        paths: ["/hello.txt"],
-        targetPaths: ["/hello copy.txt"],
-      }),
-    ]);
   });
 
   it("records the duplicate as a copy of the chosen source, with its own target", async () => {
@@ -600,8 +571,8 @@ describe("POST /fs/compress and the resulting job", () => {
     expect((await h.app.request("/api/v1/fs/stat?path=/dir.zip")).status).toBe(404);
   });
 
-  it("compresses a folder to zip, completes, and publishes an fs create event", async () => {
-    const { app, fsEvents } = await buildHarness();
+  it("compresses a folder to zip and completes", async () => {
+    const { app } = await buildHarness();
 
     const res = await app.request(
       "/api/v1/fs/compress",
@@ -613,7 +584,6 @@ describe("POST /fs/compress and the resulting job", () => {
     const final = await waitForJobDone(app, jobId);
     expect(final.state).toBe("done");
     expect(final.result?.path).toBe("/dir.zip");
-    expect(fsEvents.some((e) => e.op === "create" && e.paths.includes("/dir.zip"))).toBe(true);
 
     const listRes = await app.request("/api/v1/fs/list?path=/");
     const listing = (await listRes.json()) as { entries: { name: string }[] };
@@ -839,8 +809,6 @@ describe("POST /fs/compress and the resulting job", () => {
       registerRoutes: (groups) =>
         registerFsRoutes(groups, {
           activity: activity.service,
-          bus,
-          clock: () => new Date(),
           jobRunner,
           tmpDir,
           jobMaxBytes: 1000,
@@ -880,8 +848,8 @@ describe("POST /fs/extract and the resulting job", () => {
     await waitForJobDone(app, jobId);
   }
 
-  it("extracts into the default destination (archive name without extension) and publishes fs create", async () => {
-    const { app, fsEvents } = await buildHarness();
+  it("extracts into the default destination (archive name without extension)", async () => {
+    const { app } = await buildHarness();
     await compressDirToZip(app);
 
     const res = await app.request("/api/v1/fs/extract", jsonPost({ path: "/dir.zip" }));
@@ -891,7 +859,6 @@ describe("POST /fs/extract and the resulting job", () => {
     const final = await waitForJobDone(app, jobId);
     expect(final.state).toBe("done");
     expect(final.result?.path).toBe("/dir");
-    expect(fsEvents.some((e) => e.op === "create" && e.paths.includes("/dir"))).toBe(true);
   });
 
   it("extracts into an explicit destination", async () => {
@@ -912,7 +879,7 @@ describe("POST /fs/extract and the resulting job", () => {
   });
 
   it("fails the job when a compressed archive expands beyond jobMaxBytes", async () => {
-    const { app, fsEvents } = await buildHarness(SEED, "alice", 1000);
+    const { app } = await buildHarness(SEED, "alice", 1000);
     const zipBytes = await buildZipBuffer((zipfile) => {
       zipfile.addBuffer(Buffer.from("x".repeat(20_000)), "large.txt");
     });
@@ -926,9 +893,6 @@ describe("POST /fs/extract and the resulting job", () => {
 
     expect(final.state).toBe("failed");
     expect(final.error).toBe("exceeded the maximum of 1000 bytes allowed for this job");
-    expect(fsEvents.some((event) => event.op === "create" && event.paths.includes("/bomb"))).toBe(
-      false,
-    );
   });
 
   it("rejects an archive path with no recognized extension", async () => {

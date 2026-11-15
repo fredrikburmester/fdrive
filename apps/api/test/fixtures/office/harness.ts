@@ -8,7 +8,6 @@ import type { Logger } from "pino";
 import { createApp } from "../../../src/app.js";
 import { COOKIE_NAME, hashSessionId } from "../../../src/auth/sessions.js";
 import { loadConfig } from "../../../src/config.js";
-import { type BusEvent, createEventBus } from "../../../src/events/bus.js";
 import { createMetadataService } from "../../../src/metadata/service.js";
 import { buildExpectedProof } from "../../../src/office/protocol/proof.ts";
 import { registerOfficeRoutes, registerWopiRoutes } from "../../../src/office/routes.ts";
@@ -125,10 +124,6 @@ export async function officeHarness(
   const files = createMemoryOfficeFileRepo();
   const locks = createMemoryWopiLockRepo();
   const activity = activityFixture(clock);
-  const bus = createEventBus();
-  const events: BusEvent[] = [];
-  for (const user of users)
-    bus.subscribe({ identityId: user.identity.id }, (event) => events.push(event));
   const deps: OfficeDeps = {
     canEdit: async (actor) => ["alice", "bob"].includes(actor.identity.externalUsername),
     withWriteScope: (callback) => callback({ files, locks }),
@@ -151,7 +146,6 @@ export async function officeHarness(
         users.find((user) => user.identity.id === id)?.identity.externalUsername ?? "alice",
       ) ?? storage,
     metadata: createMetadataService(repos),
-    bus,
     activity: activity.service,
     ...options.deps,
   };
@@ -237,7 +231,6 @@ export async function officeHarness(
     provider,
     now,
     clock,
-    events,
     alice,
     bob,
     reader,

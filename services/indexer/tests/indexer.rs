@@ -14,14 +14,12 @@ use common::root_env::{
 use fdrive_indexer::backoff::Backoff;
 use fdrive_indexer::config::{ROOT_ID, ROOT_NAME};
 use fdrive_indexer::db::{self, ManifestRow};
-use fdrive_indexer::events::EventKind;
 use fdrive_indexer::features::FeatureConfiguration;
 use fdrive_indexer::files_marker::FILES_MARKER;
 use fdrive_indexer::indexer::{
-    self, FileStat, ImageStage, backfill_media, embed_missing, embed_thumbnail, emit_event, error_kind,
-    exclusion_still_applies, guess_mime, process_file, process_thumbnails, safe_process, scan_once,
-    should_retry_unchanged, unchanged_in_db, walk, walk_tree, watch_index, watch_mark_deleted, watch_rename,
-    work_features,
+    self, FileStat, ImageStage, backfill_media, embed_missing, embed_thumbnail, error_kind, exclusion_still_applies,
+    guess_mime, notify_indexed, process_file, process_thumbnails, safe_process, scan_once, should_retry_unchanged,
+    unchanged_in_db, walk, walk_tree, watch_index, watch_mark_deleted, watch_rename, work_features,
 };
 use fdrive_indexer::settings::Settings;
 
@@ -507,12 +505,12 @@ fn excluded_text_stays_quiet_until_the_rule_is_removed() {
     let result = scan_once(&ctx);
     assert_eq!((result.seen, result.changed, result.errors), (1, 0, 0));
     assert!(!process_file(&ctx, &path, "a.txt", stat).unwrap());
-    assert_eq!(env.events(), ["created"]);
+    assert_eq!(env.signals(), 1);
     settings.text_exclude_globs = vec![];
     ctx.set_settings(settings);
     assert_eq!(scan_once(&ctx).changed, 1);
     assert_eq!(env.status(&ctx, "a.txt"), "partial");
-    assert_eq!(env.events(), ["created"], "re-deriving the same version emits nothing");
+    assert_eq!(env.signals(), 1, "re-deriving the same version emits nothing");
 }
 
 #[test]
@@ -1110,7 +1108,7 @@ fn enabling_text_reprocesses_unchanged_disabled_rows_with_their_stored_key() {
         (row.status.as_str(), row.sha256.as_deref()),
         ("partial", Some(sha.as_str()))
     );
-    assert!(env.events().is_empty(), "the same version emits nothing");
+    assert_eq!(env.signals(), 0, "the same version emits nothing");
 }
 
 #[test]
@@ -1335,7 +1333,7 @@ fn a_scan_indexes_new_files_and_sweeps_vanished_rows() {
         ),
         (3, 2, 1, 0, true)
     );
-    assert_eq!(env.events(), ["created", "created"]);
+    assert_eq!(env.signals(), 2);
     let text = Env::snapshot(&ctx, "textSearch");
     assert_eq!(
         (
@@ -1747,7 +1745,7 @@ fn only_a_new_or_changed_version_emits_an_event() {
     let ctx = env.ctx(fv(false, true, false, false, false));
     let (path, stat) = env.write("a.txt", b"first");
     assert!(process_file(&ctx, &path, "a.txt", stat).unwrap());
-    assert_eq!(env.events(), ["created"]);
+    assert_eq!(env.signals(), 1);
     // A reindex request re-extracts the same version.
     db::mark_pending(&mut env.client(), ctx.root_id, None).unwrap();
     assert!(process_file(&ctx, &path, "a.txt", stat).unwrap());
@@ -1756,26 +1754,27 @@ fn only_a_new_or_changed_version_emits_an_event() {
         .execute("UPDATE idx.files SET text_status = 'disabled:text'", &[])
         .unwrap();
     assert!(process_file(&ctx, &path, "a.txt", stat).unwrap());
-    assert_eq!(env.events(), ["created"]);
+    assert_eq!(env.signals(), 1);
 
     let (path, stat) = env.write("a.txt", b"second version");
     assert!(process_file(&ctx, &path, "a.txt", stat).unwrap());
     db::mark_deleted(&mut env.client(), ctx.root_id, "a.txt", false).unwrap();
     assert!(process_file(&ctx, &path, "a.txt", stat).unwrap());
-    assert_eq!(env.events(), ["created", "changed", "changed"]);
+    assert_eq!(env.signals(), 3);
 }
 
 #[test]
-fn a_failing_event_is_swallowed() {
+fn a_failing_signal_is_swallowed() {
     let env = Env::new();
-    let ctx = env.ctx(fv(false, true, false, false, false));
     // Postgres refuses a notification payload of 8000 bytes or more.
-    emit_event(&ctx, EventKind::Created, &"a".repeat(8000), None);
-    assert!(env.events().is_empty());
+    let long = env.ctx_with(fv(false, true, false, false, false), |ctx| ctx.name = "a".repeat(8000));
+    notify_indexed(&long);
+    let ctx = env.ctx(fv(false, true, false, false, false));
+    assert_eq!(env.signals(), 0);
     let (path, stat) = env.write("a.txt", b"hello");
     assert!(process_file(&ctx, &path, "a.txt", stat).unwrap());
     assert_eq!(env.status(&ctx, "a.txt"), "partial");
-    assert_eq!(env.events(), ["created"]);
+    assert_eq!(env.signals(), 1);
 }
 
 #[test]
@@ -1783,14 +1782,14 @@ fn watcher_deletes_count_rows_and_emit_once() {
     let env = Env::new();
     let ctx = env.ctx(fv(false, true, false, false, false));
     assert_eq!(watch_mark_deleted(&ctx, "missing.txt", false), 0);
-    assert!(env.events().is_empty());
+    assert_eq!(env.signals(), 0);
     for rel in ["a.txt", "dir/b.txt", "dir/c.txt"] {
         env.write(rel, b"x");
         env.seed(&ctx, rel, "sha", "indexed");
     }
     assert_eq!(watch_mark_deleted(&ctx, "a.txt", false), 1);
     assert_eq!(watch_mark_deleted(&ctx, "dir", true), 2);
-    assert_eq!(env.events(), ["deleted", "deleted"]);
+    assert_eq!(env.signals(), 2);
     // The database is gone: logged, nothing affected.
     env.client()
         .batch_execute("ALTER TABLE idx.files RENAME TO files_gone")
@@ -1815,14 +1814,8 @@ fn watcher_renames_move_rows_or_delete_on_an_extension_change() {
     assert_eq!(watch_rename(&ctx, "docs", "moved", true), 1);
     assert!(!env.row(&ctx, "renamed.txt").deleted);
     assert!(!env.row(&ctx, "moved/c.txt").deleted);
-    assert_eq!(
-        env.notified(),
-        vec![
-            ("deleted".into(), "a.txt".into(), None),
-            ("moved".into(), "b.txt".into(), Some("renamed.txt".into())),
-            ("moved".into(), "docs".into(), Some("moved".into()))
-        ]
-    );
+    // The delete and both moves each told the API once.
+    assert_eq!(env.signals(), 3);
 }
 
 #[test]
@@ -1845,7 +1838,7 @@ fn watcher_parent_mutations_wait_for_an_in_flight_child() {
         };
         std::thread::sleep(Duration::from_millis(50));
         assert!(!operation.is_finished());
-        assert!(env.events().is_empty(), "nothing changed while the child is in flight");
+        assert_eq!(env.signals(), 0, "nothing changed while the child is in flight");
         drop(child);
         assert_eq!(operation.join().unwrap(), 1);
         assert!(ctx.path_locks.is_empty());

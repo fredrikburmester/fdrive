@@ -5,8 +5,7 @@ import { trashKeysToInvalidate } from "./invalidation";
 function fsEvent(overrides: Partial<FsEvent> = {}): FsEvent {
   return {
     type: "fs",
-    op: "update",
-    identityId: "00000000-0000-0000-0000-000000000000",
+    op: "change",
     paths: ["/a/b.txt"],
     at: "2026-09-06T00:00:00.000Z",
     ...overrides,
@@ -30,9 +29,8 @@ const JOB_EVENT: JobEvent = {
 
 describe("trashKeysToInvalidate", () => {
   it("invalidates the trash list for any fs event", () => {
-    expect(trashKeysToInvalidate(fsEvent({ op: "delete" }))).toEqual([["trash", "list"]]);
+    expect(trashKeysToInvalidate(fsEvent({ op: "change" }))).toEqual([["trash", "list"]]);
     expect(trashKeysToInvalidate(fsEvent({ op: "move" }))).toEqual([["trash", "list"]]);
-    expect(trashKeysToInvalidate(fsEvent({ op: "update" }))).toEqual([["trash", "list"]]);
   });
 
   it("invalidates nothing for a ping event", () => {

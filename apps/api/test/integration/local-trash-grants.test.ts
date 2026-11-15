@@ -26,11 +26,11 @@ const cookieFrom = (response: Response) => response.headers.get("set-cookie")?.s
 
 /**
  * Folders alice shares with alice-other, then moves to Trash through fdrive,
- * with the real indexer reporting each move (into `<trash>/.fdrive-move-v1/…`
- * too) back to the API, which handles it as it does in a deployment. A share
- * follows its folder into Trash, where the person it is shared with cannot
- * reach it, and never stays at a path a new folder can take; a restore
- * brings it back, and a purge or a delete outside fdrive ends it.
+ * with the real indexer reading each move (into `<trash>/.fdrive-move-v1/…`
+ * too) from the change journal, as in a deployment. A share follows its
+ * folder into Trash, where the person it is shared with cannot reach it, and
+ * never stays at a path a new folder can take; a restore brings it back, and
+ * a purge or a delete outside fdrive ends it.
  */
 describe("shared folders in their owner's Trash, through the real indexer", () => {
   const stack = new LocalIndexerStack();
@@ -199,9 +199,8 @@ describe("shared folders in their owner's Trash, through the real indexer", () =
    * Runs `action`, a move in alice's files through fdrive, then queues that
    * move once more after the indexer's container sees it (see
    * `local-index-work.test.ts`): Docker Desktop can show the container the
-   * folder as it was a moment ago. Then waits until the API has handled the
-   * indexer's `moved` event for alice, which it announces to her browser
-   * after the route that made the move did.
+   * folder as it was a moment ago. Then waits until alice's browser heard of
+   * the move from the journal and the indexer has read every change.
    */
   async function indexed(events: readonly FsEvent[], action: () => Promise<Moved>): Promise<void> {
     const mark = events.length;
@@ -216,7 +215,7 @@ describe("shared folders in their owner's Trash, through the real indexer", () =
         timeout: 30_000,
         interval: 100,
       })
-      .toBeGreaterThanOrEqual(2);
+      .toBeGreaterThanOrEqual(1);
     await settled();
   }
 
@@ -332,7 +331,7 @@ describe("shared folders in their owner's Trash, through the real indexer", () =
     });
   });
 
-  it("ends a share deleted from Trash outside fdrive once the indexer reports it", async () => {
+  it("ends a share deleted from Trash outside fdrive once the watcher journals it", async () => {
     const other = await login("alice-other");
     await watched(async (alice, events) => {
       await share(alice, "/docs-other");
@@ -345,15 +344,13 @@ describe("shared folders in their owner's Trash, through the real indexer", () =
       expect(await shared(alice, "docs-other")).toEqual([virtual(trashed.target)]);
       expect(await shelf(other)).toEqual([]);
 
-      // Deleted from Trash outside fdrive: until the indexer reports it the share
+      // Deleted from Trash outside fdrive: until the watcher journals it the share
       // still names the deleted folder, which no new folder can take.
       await rm(stack.folder.path("alice", virtual(trashed.target)), { recursive: true });
       await mkdir(alice, "/docs-other");
       expect(await shelf(other)).toEqual([]);
       expect(await shared(alice, "docs-other")).toEqual([virtual(trashed.target)]);
-      await stack.seen(trashed.target, false);
-      index.record({ kind: "changed", path: trashed.target });
-      await index.flush();
+      await createChangeWriter(database.db, "watcher")([{ path: trashed.target }]);
       await expect
         .poll(() => shared(alice, "docs-other"), { timeout: 30_000, interval: 100 })
         .toEqual([]);

@@ -242,31 +242,30 @@ a login keeps its identity snapshot and disables live file actions.
 ## How observations arise
 
 Changes made outside fdrive reach history only as observations of files the owner already
-tracks; nobody else's new files are added. They come from the indexer: with
-`FDRIVE_INDEXER_URL` set, the API listens to its `idx_events` notifications
-([indexer listener](../apps/api/src/events/indexer-listener.ts),
-[observations.ts](../apps/api/src/activity/observations.ts)) and maps each path in the files
-folder through the login's scopes. Listings and other reads never compare anything with
-history.
+tracks; nobody else's new files are added. They come from the change journal's rows that the
+indexer's watcher, a scan or OCR wrote: the API's reader of the journal
+([the API's reader](INDEXER.md#the-apis-reader), [outside.ts](../apps/api/src/events/outside.ts),
+[observations.ts](../apps/api/src/activity/observations.ts)) maps both ends of each row through
+the login's scopes. Rows fdrive wrote itself are its own actions, recorded already.
+Listings and other reads never compare anything with history.
 
-- `moved` to a readable destination records `observation.location_changed` (`watcher_move`)
+- A move to a readable destination records `observation.location_changed` (`watcher_move`)
   for each tracked file under the source. A destination outside the login's scopes records
   `observation.left_scope` without it; an unreadable one records nothing. A destination where
   another tracked file already lives records `observation.continuity_unknown`; the two are
   never merged.
-- `deleted` records `observation.location_missing` (`watcher_change`) for tracked files under
-  the path, only when it is really gone and its parent can still be listed.
-- `created` and `changed` compare a readable file's size and modification time with what
+- A row that says to look again at a path that is gone records `observation.location_missing`
+  (`watcher_change`) for tracked files under it, only when its parent can still be listed.
+- One at a path that is there compares a readable file's size and modification time with what
   history last confirmed; a difference is `observation.content_changed`.
-- When a deleted index row's SHA-256 matches exactly one live row in the same root and
-  scope, the listener moves tags and favorites to it and, if the candidate is readable,
-  records `observation.continuity_unknown` (`sha256_relink`): a candidate, not proof.
+- A move the watcher could not pair is a delete and a new file: the old path's tracked files
+  are missing, and nothing is guessed from a matching hash.
 
 A file seen again after a gap appends `observation.resolved`, linked to the gap. That resolves
 where the file is, not who it is: the rediscovered file gets a new ID and the earlier journey
 stays unknown, since path, size or hash cannot prove continuity across the gap. Observations
 are deduplicated per file, generation and discrepancy (`activity_observation_state`), across
-notifications and restarts. A notification that arrives while an fdrive operation on that path
+rows and restarts. A row read while an fdrive operation on that path
 is prepared or running is dropped; that operation owns the uncertainty. The history page says
 that changes made outside fdrive appear once the indexer notices them.
 
@@ -345,7 +344,7 @@ and `x-fdrive-batch-id`.
 | System settings, maintenance, indexing and OCR | Stay in the administrator log and worker logs; never a user's save. An unexpected change to a tracked file can still be an observation. |
 | Public share recipients | Their downloads and uploads are never attributed to the link's owner. A resulting change can be an observation for a tracked file. |
 | Cached or offline opens on the Mac | Not observable. Mac downloads (`file.materialize`) and writes are recorded. |
-| No indexer, or a gap in notifications | Nothing observes outside changes; fdrive's own actions are still recorded. `LISTEN` is not a durable replay log, and a same-size, same-time change without other evidence is not seen. |
+| Indexing off, or rows the journal dropped | Nothing observes outside changes, since only the indexer's watcher and scans journal them; fdrive's own actions are still recorded. Rows older than the journal keeps (30 days) that the API never read are lost to history, and a same-size, same-time change without other evidence is not seen. |
 | Commands that do not exist yet | Get their action and history test when they ship. |
 
 ## Tests
@@ -360,5 +359,5 @@ and `x-fdrive-batch-id`.
   a local regression budget rather than a hardware promise.
 - Web: `lib/activity/api.test.ts`, `lib/activity/queries.test.tsx` and the browser spec
   [recent-activity.spec.ts](../apps/web/e2e/recent-activity.spec.ts), which also moves a file
-  out of the files folder and back, reports each change as the indexer's watcher would, and
+  out of the files folder and back, journals each change as the indexer's watcher would, and
   checks the missing and rediscovered evidence.

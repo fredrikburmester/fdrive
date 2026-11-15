@@ -25,8 +25,9 @@ const q = encodeURIComponent;
  * people, public links and AI chat references along before its commit
  * answers, and tells the browser once; into the Mac's Trash and back out is
  * a move like any other. What grants access moves with the receipt or the commit is
- * not confirmed; the rest never holds a write back. No indexer runs; the
- * last test sends the move the indexer would report.
+ * not confirmed; the rest never holds a write back. No indexer runs: the
+ * browser hears of each write from the change journal, where the API
+ * records it.
  */
 describe("metadata follows the Mac's writes as they commit", () => {
   let postgres: Awaited<ReturnType<typeof startPostgres>>;
@@ -71,9 +72,6 @@ describe("metadata follows the Mac's writes as they commit", () => {
         DATABASE_URL: postgres.connectionString,
         FDRIVE_STORAGE_ROOT: storage.root,
         FDRIVE_MASTER_KEY: Buffer.alloc(32, 23).toString("base64"),
-        // Configured so the indexer listener runs; no indexer does, the last
-        // test notifies for it.
-        FDRIVE_INDEXER_URL: "http://127.0.0.1:9",
       }),
       silentLogger(),
     );
@@ -250,7 +248,7 @@ describe("metadata follows the Mac's writes as they commit", () => {
       // Another request through the same app later, the browser still heard of it once.
       await ok(call(ROUTES.grants.list, { cookie: alice }));
       expect(watching.events).toMatchObject([
-        { op: "move", identityId, paths: ["/Project"], targetPaths: ["/Renamed"] },
+        { op: "move", paths: ["/Project"], targetPaths: ["/Renamed"] },
       ]);
       expect(watching.events).toHaveLength(1);
     } finally {
@@ -333,7 +331,7 @@ describe("metadata follows the Mac's writes as they commit", () => {
     expect(await sharedWithBob()).not.toContain("Locked");
   });
 
-  it("never refuses a later write, and the indexer's report of a move brings metadata along", async () => {
+  it("never refuses a later write, and leaves metadata that could not follow where it was", async () => {
     await repos.favorites.add(identityId, "/Crash", "dir");
     // Metadata cannot follow this move, as if the API stopped right after the rename.
     await database.pool.query(
@@ -354,25 +352,20 @@ describe("metadata follows the Mac's writes as they commit", () => {
       await database.pool.query("DROP TRIGGER refuse_crash_favorite ON app.favorites");
       await database.pool.query("DROP FUNCTION app.refuse_crash_favorite()");
     }
-    // The rename is in the change journal, which the indexer reads and reports back.
+    // The rename is in the change journal as fdrive's own, so the journal's
+    // reader leaves metadata to the request that made it and applies nothing.
     await expect
       .poll(async () => {
         const rows = await database.db.execute(
-          sql`select source from idx.changes where path = 'alice/Crash' and target_path = 'alice/Crashed'`,
+          sql`select c.source, coalesce(k.position, 0) >= c.id as read
+              from idx.changes c
+              left join idx.change_cursors k on k.root_id = c.root_id and k.consumer = 'api'
+              where c.path = 'alice/Crash' and c.target_path = 'alice/Crashed'`,
         );
-        return rows.rows.map((row) => row.source);
+        return rows.rows;
       })
-      .toEqual(["api"]);
-    await database.db.execute(
-      sql`select pg_notify('idx_events', ${JSON.stringify({
-        kind: "moved",
-        root: "files",
-        path: "alice/Crash",
-        target_path: "alice/Crashed",
-        at: new Date().toISOString(),
-      })})`,
-    );
-    await expect.poll(favorites, { timeout: 10_000 }).toContain("/Crashed");
-    expect(await favorites()).not.toContain("/Crash");
+      .toEqual([{ source: "api", read: true }]);
+    expect(await favorites()).toContain("/Crash");
+    expect(await favorites()).not.toContain("/Crashed");
   });
 });

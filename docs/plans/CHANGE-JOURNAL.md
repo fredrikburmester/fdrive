@@ -138,34 +138,11 @@ journal starts again at position 1 under a new epoch, and the indexer at its end
 - Check for a gap on every read and resync when there is one.
 - Start a new consumer at the newest position; what came before is in the current state.
 
-## Remaining steps
+## Built on the foundation
 
-Proposals until built. Each step keeps the foundation's rules.
-
-### a) The API fans changes out from the journal
-
-Proposal: one reader in the API follows the journal (`LISTEN idx_changes`, its own cursor in
-`idx.change_cursors`) and is the only route by which the API learns of file changes.
-
-- **Resumable SSE.** Each event carries its position as the SSE `id`; a reconnecting browser
-  sends `Last-Event-ID` and gets the rows after it, or a "resync" event when that is a gap. The
-  web hears each change once.
-- **Path-keyed metadata in one place.** Moves and deletes in the journal update tags,
-  favorites, grants, the Office registry and share links in one consumer, replacing the per-route
-  hooks that update them today.
-- **Drop the duplicates.** Remove the API hook routes and the indexer-listener routes that
-  report the same change. Keep a light "processed" signal from the indexer, so the web can
-  show a thumbnail or search result once it is ready; it says the index has a file, not that
-  the file changed.
-- **Restores.** Positions restart after a restore. A browser's `Last-Event-ID` from before
-  could pass for a later position; the API should qualify positions it hands out with something
-  a restore changes (the journal's epoch, `idx.change_epoch`, as the Mac feed does) and answer a
-  mismatch as a gap.
-
-Done when: the web gets one event per change and resumes after a reconnect without a reload;
-tags, favorites, grants, Office files and share links follow moves and deletes made over SMB as
-well as in fdrive; the duplicate routes are gone; tests cover a gap, a resumed
-stream and a restore.
+Each step keeps the foundation's rules. The API's own reader, which sends every live update and
+brings metadata along with changes made outside fdrive, is described with
+[the indexer](../INDEXER.md#the-apis-reader).
 
 ### b) A Mac change feed: done
 

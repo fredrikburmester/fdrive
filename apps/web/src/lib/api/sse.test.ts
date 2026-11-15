@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import type { FsEvent, JobEvent, JobStatus, PingEvent } from "@fdrive/contracts";
+import type { FsEvent, JobEvent, JobStatus, PingEvent, SseEvent } from "@fdrive/contracts";
 import { QueryClient, QueryClientProvider, QueryObserver } from "@tanstack/react-query";
 import { renderHook } from "@testing-library/react";
 import { createElement, type ReactNode } from "react";
@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   applyJobEvent,
   createInvalidationBatch,
+  eventsUrl,
   INVALIDATION_MAX_WAIT_MS,
   INVALIDATION_QUIET_MS,
   type JobsStoreLike,
@@ -19,8 +20,7 @@ import {
 function fsEvent(overrides: Partial<FsEvent> = {}): FsEvent {
   return {
     type: "fs",
-    op: "update",
-    identityId: "00000000-0000-0000-0000-000000000000",
+    op: "change",
     paths: ["/a/b.txt"],
     at: "2026-09-06T00:00:00.000Z",
     ...overrides,
@@ -58,30 +58,31 @@ describe("keysToInvalidate", () => {
     expect(keysToInvalidate(PING_EVENT)).toEqual([]);
   });
 
-  it("invalidates the parent directory of every affected path, and the trash list", () => {
+  it("invalidates nothing for a resync, which refetches everything instead", () => {
+    expect(keysToInvalidate({ type: "resync", at: "2026-09-06T00:00:00.000Z" })).toEqual([]);
+  });
+
+  it("invalidates folder sizes, which the index backs, once the index takes a change in", () => {
+    expect(keysToInvalidate({ type: "indexed", at: "2026-09-06T00:00:00.000Z" })).toEqual([
+      ["fs", "folder-size"],
+    ]);
+  });
+
+  it("invalidates the parent directory of a changed path and what is kept by path", () => {
     expect(keysToInvalidate(fsEvent({ paths: ["/a/b.txt"] }))).toEqual([
       ["fs", "list", "/a"],
       ["fs", "stat"],
       ["fs", "folder-size"],
+      ["favorites", "list"],
+      ["recents", "list"],
+      ["tags", "files"],
+      ["folder-views"],
       ["trash", "list"],
       ["fs", "archiveEntries", "/a/b.txt"],
     ]);
   });
 
-  it("also invalidates the parent of every target path", () => {
-    const event = fsEvent({ op: "copy", paths: ["/a/b.txt"], targetPaths: ["/c/d.txt"] });
-    expect(keysToInvalidate(event)).toEqual([
-      ["fs", "list", "/a"],
-      ["fs", "list", "/c"],
-      ["fs", "stat"],
-      ["fs", "folder-size"],
-      ["trash", "list"],
-      ["fs", "archiveEntries", "/a/b.txt"],
-      ["fs", "archiveEntries", "/c/d.txt"],
-    ]);
-  });
-
-  it("also invalidates favorites, recents, and tag files for a move or delete (metadataKeysToInvalidate)", () => {
+  it("also invalidates the parent of a move's target", () => {
     const moveEvent = fsEvent({ op: "move", paths: ["/a/b.txt"], targetPaths: ["/c/d.txt"] });
     expect(keysToInvalidate(moveEvent)).toEqual([
       ["fs", "list", "/a"],
@@ -96,30 +97,12 @@ describe("keysToInvalidate", () => {
       ["fs", "archiveEntries", "/a/b.txt"],
       ["fs", "archiveEntries", "/c/d.txt"],
     ]);
-
-    const deleteEvent = fsEvent({ op: "delete", paths: ["/a/b.txt"] });
-    expect(keysToInvalidate(deleteEvent)).toEqual([
-      ["fs", "list", "/a"],
-      ["fs", "stat"],
-      ["fs", "folder-size"],
-      ["favorites", "list"],
-      ["recents", "list"],
-      ["tags", "files"],
-      ["folder-views"],
-      ["trash", "list"],
-      ["fs", "archiveEntries", "/a/b.txt"],
-    ]);
   });
 
   it("deduplicates parents shared by multiple paths", () => {
     const event = fsEvent({ paths: ["/a/b.txt", "/a/c.txt"] });
-    expect(keysToInvalidate(event)).toEqual([
+    expect(keysToInvalidate(event).filter((key) => key[0] === "fs" && key[1] === "list")).toEqual([
       ["fs", "list", "/a"],
-      ["fs", "stat"],
-      ["fs", "folder-size"],
-      ["trash", "list"],
-      ["fs", "archiveEntries", "/a/b.txt"],
-      ["fs", "archiveEntries", "/a/c.txt"],
     ]);
   });
 
@@ -364,8 +347,8 @@ class FakeEventSource {
     this.closed = true;
   }
 
-  emitMessage(data: { type: string }): void {
-    const message = { data: JSON.stringify(data) } as MessageEvent<string>;
+  emitMessage(data: { type: string }, lastEventId = ""): void {
+    const message = { data: JSON.stringify(data), lastEventId } as MessageEvent<string>;
     for (const listener of this.listeners.get(data.type) ?? []) {
       listener(message);
     }
@@ -466,6 +449,33 @@ describe("useFsEvents", () => {
     );
   });
 
+  it("resumes from the last event id it saw when it reconnects", () => {
+    const queryClient = new QueryClient();
+    renderHook(() => useFsEvents(), { wrapper: createWrapper(queryClient) });
+    const epoch = "123e4567-e89b-12d3-a456-426614174000";
+
+    const first = FakeEventSource.instances[0] as FakeEventSource;
+    first.emitMessage(PING_EVENT, `${epoch}.4`);
+    first.emitMessage(fsEvent(), `${epoch}.7`);
+    // A job event has no id, which leaves the last one in place.
+    first.emitMessage(jobEvent({ id: "1", state: "running" }));
+    first.emitError();
+    vi.advanceTimersByTime(1000);
+
+    expect(FakeEventSource.instances[1]?.url).toBe(`/api/v1/events?lastEventId=${epoch}.7`);
+  });
+
+  it("refetches every query on a resync", () => {
+    const queryClient = new QueryClient();
+    const spy = vi.spyOn(queryClient, "invalidateQueries");
+    renderHook(() => useFsEvents(), { wrapper: createWrapper(queryClient) });
+
+    const resync: SseEvent = { type: "resync", at: "2026-09-06T00:00:00.000Z" };
+    FakeEventSource.instances[0]?.emitMessage(resync);
+
+    expect(spy).toHaveBeenCalledWith();
+  });
+
   it("reconnects with backoff after an error, and closes the failed connection", () => {
     const queryClient = new QueryClient();
     renderHook(() => useFsEvents(), { wrapper: createWrapper(queryClient) });
@@ -505,16 +515,10 @@ describe("useFsEvents", () => {
   });
 });
 
-it("invalidates cached archive listings for every path an fs event names", async () => {
-  const { keysToInvalidate } = await import("./sse");
-  const keys = keysToInvalidate({
-    type: "fs",
-    op: "move",
-    identityId: "id",
-    paths: ["/a.zip"],
-    targetPaths: ["/b.zip"],
-    at: "2026-01-01T00:00:00.000Z",
+describe("eventsUrl", () => {
+  it("starts now without an id and resumes from one", () => {
+    expect(eventsUrl(undefined)).toBe("/api/v1/events");
+    expect(eventsUrl("")).toBe("/api/v1/events");
+    expect(eventsUrl("e.1")).toBe("/api/v1/events?lastEventId=e.1");
   });
-  expect(keys).toContainEqual(["fs", "archiveEntries", "/a.zip"]);
-  expect(keys).toContainEqual(["fs", "archiveEntries", "/b.zip"]);
 });

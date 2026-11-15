@@ -4,7 +4,6 @@ import { describe, expect, it, vi } from "vitest";
 import {
   createMetadataService,
   DEFAULT_RECENTS_LIMIT,
-  hasTrackedMetadata,
   RECENTS_KEEP,
   withFollowers,
 } from "./service.js";
@@ -341,31 +340,6 @@ describe("createMetadataService: onCopied", () => {
 
     expect(await service.filesForTag(IDENTITY_ID, tag.id)).toEqual(["/a.txt"]);
     expect((await service.listFavorites(IDENTITY_ID)).map((f) => f.path)).toEqual(["/a.txt"]);
-  });
-});
-
-describe("hasTrackedMetadata", () => {
-  it("is false when a path has no tags and is not favorited", async () => {
-    const { repos } = buildService();
-    expect(await hasTrackedMetadata(repos, IDENTITY_ID, "/a.txt")).toBe(false);
-  });
-
-  it("is true when a path has a tag", async () => {
-    const { repos, service } = buildService();
-    const account = await repos.accounts.create({ displayName: "Alice" });
-    const tag = await service.createTag(account.id, { name: "Work", color: null });
-    await service.setFileTags({ accountId: account.id, identityId: IDENTITY_ID }, "/a.txt", [
-      tag.id,
-    ]);
-
-    expect(await hasTrackedMetadata(repos, IDENTITY_ID, "/a.txt")).toBe(true);
-  });
-
-  it("is true when a path is favorited", async () => {
-    const { repos, service } = buildService();
-    await service.addFavorite(IDENTITY_ID, "/a.txt", "file");
-
-    expect(await hasTrackedMetadata(repos, IDENTITY_ID, "/a.txt")).toBe(true);
   });
 });
 

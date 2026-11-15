@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { ActivityFileResponse, PersonalActivityResponse } from "@fdrive/contracts";
 import { expect, test } from "@playwright/test";
 import { dismissActivityPanel } from "./support/activity.js";
-import { homePath, notifyIndexer } from "./support/local-folder.js";
+import { homePath, journalOutsideChange } from "./support/local-folder.js";
 import { uniqueName } from "./support/unique.js";
 import { uploadFiles } from "./support/upload.js";
 
@@ -128,7 +128,7 @@ test("upload completion leads to a durable journey, copies branch and exports ke
   }
 });
 
-test("an outside disappearance and rediscovery the indexer reports keep uncertainty and a separate replacement identity", async ({
+test("an outside disappearance and rediscovery the watcher journals keep uncertainty and a separate replacement identity", async ({
   page,
 }) => {
   const path = `/${uniqueName("outside-fdrive")}.txt`;
@@ -154,9 +154,9 @@ test("an outside disappearance and rediscovery the indexer reports keep uncertai
       await (await page.request.get(`/api/v1/activity/files/${id}/events`)).json(),
     );
   // A writer outside fdrive (the host, rsync) moves the file out of the files
-  // folder, and the indexer's watcher reports it gone.
+  // folder, and the indexer's watcher journals it.
   await rename(homePath("alice", path), away);
-  await notifyIndexer("deleted", "alice", path);
+  await journalOutsideChange("alice", path);
   await expect
     .poll(async () => (await journey()).items.map((event) => event.action))
     .toContain("observation.location_missing");
@@ -172,7 +172,7 @@ test("an outside disappearance and rediscovery the indexer reports keep uncertai
   );
   expect(JSON.stringify(missing)).not.toContain(away);
   await rename(away, homePath("alice", path));
-  await notifyIndexer("created", "alice", path);
+  await journalOutsideChange("alice", path);
   await expect
     .poll(async () => (await journey()).items.map((event) => event.action))
     .toContain("observation.resolved");

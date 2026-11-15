@@ -23,13 +23,10 @@ pub struct Env {
     pub url: String,
     pub root: PathBuf,
     pub thumbs: PathBuf,
-    /// Listening on `idx_events` since the database was made, with what it heard so far.
-    events: Mutex<(Client, Vec<Notified>)>,
+    /// Listening on `idx_events` since the database was made, with how many it heard so far.
+    events: Mutex<(Client, usize)>,
     _dir: tempfile::TempDir,
 }
-
-/// One `NOTIFY idx_events` payload: `(kind, path, target_path)`.
-pub type Notified = (String, String, Option<String>);
 
 /// Sent after the indexer's notifications to mark that every earlier one has arrived.
 const HEARD_ALL: &str = "heard-all";
@@ -219,7 +216,7 @@ impl Env {
             url,
             root,
             thumbs,
-            events: Mutex::new((listener, Vec::new())),
+            events: Mutex::new((listener, 0)),
             _dir: dir,
         }
     }
@@ -343,7 +340,9 @@ impl Env {
 
     /// Every event the indexer has sent on `idx_events` so far, oldest first. Notifications
     /// arrive in commit order, so once a marker sent now arrives, every earlier one has.
-    pub fn notified(&self) -> Vec<Notified> {
+    /// How many times the indexer has said it took in a change (`NOTIFY idx_events` with the
+    /// root's name) since the database was made.
+    pub fn signals(&self) -> usize {
         let mut events = self.events.lock().unwrap_or_else(PoisonError::into_inner);
         let (listener, heard) = &mut *events;
         self.client()
@@ -354,20 +353,11 @@ impl Env {
         loop {
             let notification = arriving.next().unwrap().expect("the marker arrives");
             if notification.payload() == HEARD_ALL {
-                return heard.clone();
+                return *heard;
             }
-            let event: serde_json::Value = serde_json::from_str(notification.payload()).unwrap();
-            heard.push((
-                event["kind"].as_str().unwrap().to_owned(),
-                event["path"].as_str().unwrap().to_owned(),
-                event["target_path"].as_str().map(str::to_owned),
-            ));
+            assert!(!notification.payload().contains('{'), "the signal names only the root");
+            *heard += 1;
         }
-    }
-
-    /// The kinds of `notified`.
-    pub fn events(&self) -> Vec<String> {
-        self.notified().into_iter().map(|(kind, _, _)| kind).collect()
     }
 
     pub fn thumb_path(&self, sha: &str, size: u32) -> PathBuf {

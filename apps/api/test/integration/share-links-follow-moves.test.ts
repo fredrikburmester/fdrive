@@ -9,9 +9,8 @@ import {
   publicShareRoute,
   ROUTES,
 } from "@fdrive/contracts";
-import { createDb, createRepos } from "@fdrive/db";
+import { createChangeJournal, createDb, createRepos } from "@fdrive/db";
 import { startLocalStorage, startPostgres } from "@fdrive/testkit";
-import { sql } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { composeApp } from "../../src/composition.js";
 import { loadConfig } from "../../src/config.js";
@@ -25,7 +24,8 @@ const q = encodeURIComponent;
 /**
  * A public link keeps paths in its owner's files. These follow the item on
  * every route fdrive learns of a move: its own file routes and Trash, MCP,
- * the Mac's writes and the indexer's reports of changes made outside fdrive.
+ * the Mac's writes and the change journal's rows for changes made outside
+ * fdrive.
  * A link follows its item into the Trash too, where it is not served, and
  * back out on a restore; it never stays behind at a path where something
  * new could appear, so it never serves what its owner did not share.
@@ -74,8 +74,6 @@ describe("public links follow the files they point at", () => {
         DATABASE_URL: postgres.connectionString,
         FDRIVE_STORAGE_ROOT: storage.root,
         FDRIVE_MASTER_KEY: Buffer.alloc(32, 31).toString("base64"),
-        // Configured so the indexer listener runs; no indexer does, the tests notify for it.
-        FDRIVE_INDEXER_URL: "http://127.0.0.1:9",
       }),
       silentLogger(),
     );
@@ -351,31 +349,27 @@ describe("public links follow the files they point at", () => {
     expect(await downloadText(id)).toBe("report");
   });
 
-  it("follows outside moves the indexer reports, into the Trash too, and lets a deleted item's link go", async () => {
+  it("follows outside moves the watcher journals, into the Trash too, and lets a deleted item's link go", async () => {
     const seen = await link(alice, "/Outside/seen.txt");
     const binned = await link(alice, "/OutsideTrash");
     const gone = await link(alice, "/Gone/x.txt");
     const onDisk = (path: string) => storage.path("alice", path);
-    const notify = (kind: string, path: string, target: string | null = null) =>
-      database.db.execute(
-        sql`select pg_notify('idx_events', ${JSON.stringify({
-          kind,
-          root: "files",
-          path: `alice/${path}`,
-          target_path: target === null ? null : `alice/${target}`,
-          at: new Date().toISOString(),
-        })})`,
-      );
+    const journal = (path: string, target: string | null = null) =>
+      createChangeJournal(database.db).append("watcher", [
+        target === null
+          ? { path: `alice/${path}` }
+          : { path: `alice/${path}`, targetPath: `alice/${target}` },
+      ]);
 
     const trashLeaf = `.trash/.fdrive-move-v1/${randomUUID()}`;
     await mkdir(dirname(onDisk(`/${trashLeaf}`)), { recursive: true });
     await rename(onDisk("/OutsideTrash"), onDisk(`/${trashLeaf}`));
-    await notify("moved", "OutsideTrash", trashLeaf);
+    await journal("OutsideTrash", trashLeaf);
     await rm(onDisk("/Gone"), { recursive: true });
-    await notify("deleted", "Gone");
-    // Events apply in order: once the last has, so have the others.
+    await journal("Gone");
+    // Rows apply in order: once the last has, so have the others.
     await rename(onDisk("/Outside"), onDisk("/Seen"));
-    await notify("moved", "Outside", "Seen");
+    await journal("Outside", "Seen");
 
     await vi.waitFor(async () => expect(await linkPaths(alice, seen)).toEqual(["/Seen/seen.txt"]), {
       timeout: 10_000,

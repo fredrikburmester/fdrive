@@ -113,8 +113,11 @@ test("an owner shares a folder to view, then to edit, and the person it is share
       page.getByText(`${PEOPLE_GUEST.username} can now edit ${PEOPLE_FOLDER}.`),
     ).toBeVisible();
 
-    // Now the guest uploads, and the file lands in the owner's folder on disk.
+    // Now the guest uploads, and the file lands in the owner's folder on disk. The owner,
+    // looking at the folder already, sees it arrive without a reload.
     const name = "from-the-guest.txt";
+    await page.goto(`/files/${encodeURIComponent(PEOPLE_FOLDER)}`);
+    await expect(listing(page).getByText(PEOPLE_FILE, { exact: true })).toBeVisible();
     await guest.goto(SHARED_HREF);
     await expect(guest.getByRole("button", { name: "New" })).toBeEnabled();
     await uploadFiles(guest, [{ name, mimeType: "text/plain", contents: "added by the guest" }]);
@@ -128,8 +131,14 @@ test("an owner shares a folder to view, then to edit, and the person it is share
         { timeout: 15_000 },
       )
       .toBe("added by the guest");
-    await page.goto(`/files/${encodeURIComponent(PEOPLE_FOLDER)}`);
     await expect(listing(page).getByText(name, { exact: true })).toBeVisible();
+    await page.screenshot({ path: test.info().outputPath("owner-sees-guest-upload-live.png") });
+
+    // And the other way: what the owner adds reaches the guest's open folder live.
+    const fromOwner = `from-the-owner-${test.info().retry}.txt`;
+    await uploadFiles(page, [{ name: fromOwner, mimeType: "text/plain", contents: "owner's" }]);
+    await expect(listing(guest).getByText(fromOwner, { exact: true })).toBeVisible();
+    await guest.screenshot({ path: test.info().outputPath("guest-sees-owner-upload-live.png") });
 
     // The guest moves it to Trash: it is the owner's file, so the owner's Trash takes it.
     await guest.goto(SHARED_HREF);
