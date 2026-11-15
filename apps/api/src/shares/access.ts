@@ -126,6 +126,8 @@ export async function shareCall<T>(fn: () => Promise<T>): Promise<T> {
       if (error.kind === "not_found") throw new ApiHttpError("not_found", "Share unavailable");
       if (error.kind === "bad_request")
         throw new ApiHttpError("bad_request", "Share operation rejected by storage");
+      if (error.kind === "storage_limit_reached")
+        throw new ApiHttpError("storage_limit_reached", "Storage limit reached");
     }
     throw new ApiHttpError("upstream_unavailable", "Share storage unavailable");
   }

@@ -566,6 +566,20 @@ export function createLocalStorage(options: LocalStorageOptions): LocalStorage {
 }
 
 /**
+ * The bytes of the files at `at`, already located: a file's size, or every
+ * file's in a folder and the folders in it. A link counts as nothing, as a
+ * copy takes it along as the link it is.
+ */
+export async function bytesAt(at: string): Promise<number> {
+  const info = await lstat(at);
+  if (info.isFile()) return info.size;
+  if (!info.isDirectory()) return 0;
+  let total = 0;
+  for (const name of await readdir(at)) total += await bytesAt(join(at, name));
+  return total;
+}
+
+/**
  * Creates `target` from the finished `partial`, refusing a name that is
  * taken: the publish step of a create-if-absent upload.
  */

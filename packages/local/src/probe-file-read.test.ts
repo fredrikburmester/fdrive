@@ -103,6 +103,7 @@ describe("probeFileRead on a user's files", () => {
         {
           name: "Projects",
           dir: join(root, "alice", "Projects"),
+          owner: "alice",
           ownerHome: join(root, "alice"),
           writable: false,
         },

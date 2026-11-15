@@ -83,6 +83,10 @@ describe("ROUTES", () => {
     });
   });
 
+  it("defines the storage route", () => {
+    expect(ROUTES.storage).toBe("/api/v1/storage");
+  });
+
   it("defines the thumb route", () => {
     expect(ROUTES.thumb).toBe("/api/v1/thumb");
   });

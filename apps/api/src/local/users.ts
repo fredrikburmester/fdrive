@@ -1,6 +1,7 @@
 import type { LocalGrantRepo, LocalUserRepo } from "@fdrive/db";
 import type { LocalUsers } from "@fdrive/local";
 import type { SharePasswords } from "../shares/passwords.js";
+import type { HomeUsage } from "../storage/usage.js";
 
 /**
  * What checking a local user's password comes to. `ok` carries the name as
@@ -19,13 +20,19 @@ export interface LocalUserStoreDeps {
   readonly repo: LocalUserRepo;
   readonly grants: Pick<LocalGrantRepo, "listReceived">;
   readonly passwords: SharePasswords;
+  /** What each home holds; with it, storage limits are enforced (`room`). */
+  readonly usage?: HomeUsage;
 }
 
 /**
  * The files folder's view of `app.local_users` and `app.local_grants`: is
- * this user still active, what do others share with them.
+ * this user still active, what do others share with them, and, with
+ * `usage`, how much more may their folder hold.
  */
-export function createLocalUsers(deps: Pick<LocalUserStoreDeps, "repo" | "grants">): LocalUsers {
+export function createLocalUsers(
+  deps: Pick<LocalUserStoreDeps, "repo" | "grants" | "usage">,
+): LocalUsers {
+  const { usage } = deps;
   return {
     async status(username) {
       const user = await deps.repo.get(username);
@@ -39,6 +46,16 @@ export function createLocalUsers(deps: Pick<LocalUserStoreDeps, "repo" | "grants
         writable: grant.access === "write",
       }));
     },
+    ...(usage === undefined
+      ? {}
+      : {
+          async room(username: string) {
+            const user = await deps.repo.get(username);
+            if (user === null || user.storageLimit === null) return null;
+            // A folder the index does not hold yet counts as empty.
+            return user.storageLimit - ((await usage(user.username)) ?? 0);
+          },
+        }),
   };
 }
 

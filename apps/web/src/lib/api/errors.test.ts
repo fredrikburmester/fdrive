@@ -10,6 +10,7 @@ const ALL_KINDS: ApiErrorKind[] = [
   "not_found",
   "conflict",
   "payload_too_large",
+  "storage_limit_reached",
   "rate_limited",
   "internal",
   "upstream_unavailable",

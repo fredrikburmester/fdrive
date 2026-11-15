@@ -9,6 +9,7 @@ import {
   closedToShares,
   createUserStorage,
   namedSharedGrants,
+  type SharedFolder,
   type SharedGrant,
   type UserStorage,
 } from "./shared.js";
@@ -28,6 +29,12 @@ export interface LocalUsers {
   status(username: string): Promise<LocalUserStatus>;
   /** The folders other users share with `username`, oldest share first. */
   shared(username: string): Promise<readonly SharedGrant[]>;
+  /**
+   * How many more bytes may land in `username`'s home, or `null` for no
+   * limit; may be negative once they are over it. Without it nothing is
+   * limited.
+   */
+  room?(username: string): Promise<number | null>;
 }
 
 export interface FilesFolderOptions {
@@ -157,10 +164,15 @@ export function createFilesFolder(options: FilesFolderOptions): FilesFolder {
       if (!isLocalUsername(username)) {
         throw new StorageError("forbidden", "this login has no valid home folder");
       }
+      const room = options.users.room?.bind(options.users);
       return createUserStorage({
         ...(onChange === undefined ? {} : { onChange }),
         ...(ready === undefined ? {} : { ready }),
         ...(options.clock === undefined ? {} : { clock: options.clock }),
+        // A write counts against the owner of the folder it lands in.
+        ...(room === undefined
+          ? {}
+          : { room: (folder: SharedFolder | null) => room(folder?.owner ?? username) }),
         home: join(options.root, username),
         shared: async () => {
           const grants = await options.users.shared(username);
@@ -169,6 +181,7 @@ export function createFilesFolder(options: FilesFolderOptions): FilesFolder {
             .filter(({ grant }) => !closedToShares(grant.path))
             .map(({ grant, name }) => ({
               name,
+              owner: grant.owner,
               dir: inHome(grant.owner, grant.path),
               ownerHome: join(options.root, grant.owner),
               writable: grant.writable,

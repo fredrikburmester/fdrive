@@ -547,6 +547,23 @@ describe("createApiClient: folderSize", () => {
   });
 });
 
+describe("createApiClient: storageUsage", () => {
+  it("gets the signed-in login's storage", async () => {
+    const payload = {
+      indexed: true,
+      used: 2048,
+      limit: null,
+      kinds: [{ kind: "images", bytes: 2048 }],
+      largest: [{ path: "/a.jpg", size: 2048, modifiedAt: "2026-11-14T10:00:00.000Z" }],
+    };
+    const { fetchStub, calls } = createStubFetch([jsonResponse(200, payload)]);
+    const client = createApiClient({ fetch: fetchStub });
+
+    expect(await client.storageUsage()).toEqual(payload);
+    expect(calls[0]?.url).toBe("/api/v1/storage");
+  });
+});
+
 describe("createApiClient: jobs", () => {
   it("gets fs/jobs and unwraps the jobs array", async () => {
     const { fetchStub, calls } = createStubFetch([jsonResponse(200, { jobs: [VALID_JOB_STATUS] })]);
@@ -822,6 +839,8 @@ describe("createApiClient: local users", () => {
     isYou: false,
     createdAt: AT,
     lastLoginAt: null,
+    storageUsed: 0,
+    storageLimit: null,
   };
 
   it("lists, adds, updates and removes users", async () => {

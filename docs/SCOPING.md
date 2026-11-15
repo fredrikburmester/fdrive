@@ -13,9 +13,9 @@ files. Mapping is segment-aware and must round-trip. The index has one root, the
 `scopesFor(username)` returns every scope of a login: its home, `/<username>` shown at `/`,
 then one scope per folder shared with it, `/<owner>/<path>` shown at `/Shared with me/<name>`.
 It runs one grants query and reads neither storage nor the index. A username that cannot be
-one path segment is refused. Search, duplicates, thumbnails, photos, folder sizes, extraction,
-AI tools, MCP, index events, activity observations, the desktop change feed and its `versions` check all
-use it with their principal's username.
+one path segment is refused. Search, duplicates, thumbnails, photos, folder sizes, the Storage
+page (the home scope alone), extraction, AI tools, MCP, index events, activity observations,
+the desktop change feed and its `versions` check all use it with their principal's username.
 
 Whether index-backed features apply at all is separate: the files folder is indexed while
 `FDRIVE_INDEXER_URL` is set and a feature that needs the indexer (thumbnails, full-text or image

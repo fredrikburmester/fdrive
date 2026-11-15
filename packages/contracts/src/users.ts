@@ -22,6 +22,9 @@ export const LocalPassword = z
   .min(LOCAL_PASSWORD_MIN_LENGTH, `Use at least ${LOCAL_PASSWORD_MIN_LENGTH} characters.`)
   .max(1024, "Use 1024 characters or fewer.");
 
+/** A storage limit in bytes. */
+export const StorageLimit = z.number().int().positive().max(Number.MAX_SAFE_INTEGER);
+
 /** One local user as `GET /api/v1/admin/users` lists it. */
 export const AdminUser = z.object({
   username: z.string(),
@@ -32,6 +35,10 @@ export const AdminUser = z.object({
   isYou: z.boolean(),
   createdAt: z.iso.datetime(),
   lastLoginAt: z.iso.datetime().nullable(),
+  /** Bytes in their folder, as the search index counts them; `null` while the folder is not indexed. */
+  storageUsed: z.number().int().nonnegative().nullable(),
+  /** The most bytes their folder may hold, or `null` for no limit. */
+  storageLimit: StorageLimit.nullable(),
 });
 export type AdminUser = z.infer<typeof AdminUser>;
 
@@ -47,11 +54,12 @@ export const AdminUserCreateRequest = z.strictObject({
 });
 export type AdminUserCreateRequest = z.infer<typeof AdminUserCreateRequest>;
 
-/** A new password, the disabled flag or the administrator flag; any subset. */
+/** A new password, the disabled flag, the administrator flag or the storage limit (`null` for none); any subset. */
 export const AdminUserUpdateRequest = z.strictObject({
   password: LocalPassword.optional(),
   disabled: z.boolean().optional(),
   isAdmin: z.boolean().optional(),
+  storageLimit: StorageLimit.nullable().optional(),
 });
 export type AdminUserUpdateRequest = z.infer<typeof AdminUserUpdateRequest>;
 

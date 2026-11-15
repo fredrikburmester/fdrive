@@ -43,6 +43,29 @@ describe("createLocalUserStore: verify", () => {
   });
 });
 
+describe("createLocalUserStore: room", () => {
+  it("is the limit less what the folder holds, and absent without a way to count it", async () => {
+    const { repos, store } = await fixture();
+    expect(store.room).toBeUndefined();
+    const usage = vi.fn(async (username: string) => (username === "Alice" ? 300 : null));
+    const limited = createLocalUserStore({
+      repo: repos.localUsers,
+      grants: repos.localGrants,
+      passwords: FAST_PASSWORDS,
+      usage,
+    });
+    expect(await limited.room?.("alice")).toBeNull();
+    expect(usage).not.toHaveBeenCalled();
+    await repos.localUsers.update("alice", { storageLimit: 1_000 });
+    await repos.localUsers.update("bob", { storageLimit: 50 });
+    expect(await limited.room?.("alice")).toBe(700);
+    expect(usage).toHaveBeenLastCalledWith("Alice");
+    // A folder the index does not hold yet counts as empty.
+    expect(await limited.room?.("bob")).toBe(50);
+    expect(await limited.room?.("nobody")).toBeNull();
+  });
+});
+
 describe("createLocalUserStore: status and shared", () => {
   it("reports whether a user may use their files", async () => {
     const { store } = await fixture();

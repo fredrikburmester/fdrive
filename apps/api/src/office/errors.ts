@@ -16,6 +16,7 @@ export function officeErrorResponse(error: unknown): Response {
       not_found: 404,
       conflict: 409,
       payload_too_large: 413,
+      storage_limit_reached: 507,
       bad_request: 400,
       upstream_unavailable: 502,
       internal: 500,

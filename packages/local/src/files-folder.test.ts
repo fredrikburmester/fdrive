@@ -117,6 +117,25 @@ describe("createFilesFolder", () => {
     expect(await kindOf(bob.upload(`/${SHARED_WITH_ME}/Projects/x`, bytes("x")))).toBe("forbidden");
   });
 
+  it("counts each write against the owner of the folder it lands in", async () => {
+    const room = vi.fn(async (username: string) => (username === "alice" ? 100 : 0));
+    const folder = createFilesFolder({
+      root,
+      users: {
+        ...users("active", [{ owner: "alice", path: "/Projects", writable: true }]),
+        room,
+      },
+    });
+    const alice = folder.storage("alice");
+    await alice.upload("/Projects/plan.txt", bytes("plan"), { mkdirParents: true });
+    expect(room).toHaveBeenLastCalledWith("alice");
+    const bob = folder.storage("bob");
+    expect(await kindOf(bob.upload("/note.txt", bytes("note")))).toBe("storage_limit_reached");
+    expect(room).toHaveBeenLastCalledWith("bob");
+    await bob.upload(`/${SHARED_WITH_ME}/Projects/note.txt`, bytes("note"));
+    expect(room).toHaveBeenLastCalledWith("alice");
+  });
+
   it("refuses a folder shared from its owner's Trash, or from a Trash an earlier version kept elsewhere", async () => {
     const folder = createFilesFolder({
       root,

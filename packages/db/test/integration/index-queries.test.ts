@@ -658,6 +658,26 @@ describe("index-queries", () => {
     });
   });
 
+  describe("bytesByExtension", () => {
+    it("sums live bytes per extension in scope only", async () => {
+      const rootId = await insertRoot("primary");
+      await insertFile(rootId, "alice/a.jpg", { size: 100 });
+      await insertFile(rootId, "alice/photos/b.jpg", { size: 50 });
+      await insertFile(rootId, "alice/notes", { size: 7 });
+      await insertFile(rootId, "alice/gone.jpg", { size: 1000, deletedAt: new Date() });
+      await insertFile(rootId, "alicia/c.jpg", { size: 9 });
+      await insertFile(rootId, "bob/d.pdf", { size: 20 });
+
+      const result = await queries.bytesByExtension([{ rootId, fsPrefix: "/alice" }]);
+
+      expect(result.sort((a, b) => a.ext.localeCompare(b.ext))).toEqual([
+        { ext: "", bytes: 7 },
+        { ext: ".jpg", bytes: 150 },
+      ]);
+      expect(await queries.bytesByExtension([])).toEqual([]);
+    });
+  });
+
   describe("subtreeSize", () => {
     it("sums live bytes and files at exactly the given prefix and nested under it", async () => {
       const rootId = await insertRoot("primary");

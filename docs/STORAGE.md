@@ -92,6 +92,16 @@ How the files folder implements it:
   back to its offset first so a failed piece can be sent again, and the last piece publishes it
   as above. Every piece is checked like an upload; at startup the API removes parts older than
   a day.
+- **Storage limits.** A user may have a limit (`app.local_users.storage_limit`, set in
+  System > Users). Every upload, copy and move passes through the user's storage, which asks
+  `LocalUsers.room` how much more the owner of the folder it lands in may hold: their limit
+  less what the index counts in their home, Trash included. An upload is cut off once it
+  passes that (a replaced file's bytes count as freed); a piece of an upload in pieces also
+  counts the bytes the pieces before it wrote, which wait in the part unindexed. A copy, or a
+  move into another owner's files, is refused when its files are larger. Both fail with
+  `storage_limit_reached` (HTTP 507). A move within one owner's files adds nothing and is
+  not checked. Usage comes from the index, so writes in flight together can briefly go
+  over, and files the index has not seen yet do not count.
 - **Copies** keep modification times. A link inside a copied folder is copied as the link it
   is, its target text unchanged, as a move takes it along: never followed, never its target.
 - **Moves** are one `rename`, also between a user's files and a writable shared folder. The

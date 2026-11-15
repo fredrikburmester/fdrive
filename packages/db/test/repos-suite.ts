@@ -219,6 +219,13 @@ export function defineReposSuite(name: string, setup: () => Promise<Repos> | Rep
           disabled: true,
         });
         expect(await repos.localUsers.update("nobody", { disabled: true })).toBeNull();
+        expect((await repos.localUsers.get("erin"))?.storageLimit).toBeNull();
+        expect(
+          await repos.localUsers.update("erin", { storageLimit: 5_000_000_000 }),
+        ).toMatchObject({ storageLimit: 5_000_000_000, disabled: true });
+        expect((await repos.localUsers.update("erin", { storageLimit: null }))?.storageLimit).toBe(
+          null,
+        );
 
         await repos.localUsers.delete("ERIN");
         await repos.localUsers.delete("ERIN");

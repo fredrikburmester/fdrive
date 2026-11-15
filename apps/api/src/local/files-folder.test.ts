@@ -66,6 +66,22 @@ describe("deploymentFilesFolder", () => {
     await expect(folder.admit("nobody")).rejects.toMatchObject({ kind: "forbidden" });
   });
 
+  it("refuses a write over a user's storage limit, counted from their folder's usage", async () => {
+    const repos = createMemoryRepos();
+    await seedLocalUsers(repos, [{ username: "alice", password: "alice-pass" }]);
+    await repos.localUsers.update("alice", { storageLimit: 10 });
+    const usage = vi.fn(async () => 8);
+    const folder = deploymentFilesFolder({ fdriveStorageRoot: temporaryStorageRoot() }, repos, {
+      usage,
+    });
+    const alice = folder.storage("alice");
+    await alice.upload("/two.txt", new TextEncoder().encode("ok"));
+    await expect(alice.upload("/three.txt", new TextEncoder().encode("abc"))).rejects.toMatchObject(
+      { kind: "storage_limit_reached" },
+    );
+    expect(usage).toHaveBeenCalledWith("alice");
+  });
+
   it("refuses a share in the owner's Trash", async () => {
     const repos = createMemoryRepos();
     await seedLocalUsers(repos, [

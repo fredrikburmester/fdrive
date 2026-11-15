@@ -114,6 +114,8 @@ import { createShareMoves } from "./shares/moves.ts";
 import { createScryptSharePasswords } from "./shares/passwords.js";
 import { registerSharesRoutes } from "./shares/routes.ts";
 import { createSharesService } from "./shares/service.ts";
+import { registerStorageUsageRoutes } from "./storage/routes.js";
+import { createHomeUsage } from "./storage/usage.js";
 import { registerActivityRoutes } from "./system/activity.js";
 import { createCachedProbe } from "./system/cached-probe.js";
 import { fetchEmbedStatus } from "./system/embed-status.js";
@@ -206,7 +208,17 @@ export async function composeApp(
   }
   /** The files folder's row in `app.providers`: Office and the Mac name it. */
   const storageId = await ensureStorageRow(repos);
-  const folder = deploymentFilesFolder(config, repos, { changes, guard, clock });
+  const indexQueries = createIndexQueries(db);
+  // What each user's folder holds, as the index counts it: storage limits
+  // refuse a write its owner has no room for. Asked only once a request runs,
+  // by which time `indexed` exists.
+  const homeUsage = createHomeUsage(indexQueries, () => indexed());
+  const folder = deploymentFilesFolder(config, repos, {
+    changes,
+    guard,
+    clock,
+    usage: homeUsage,
+  });
   const backups = createBackupModule(config);
   await backups.start();
 
@@ -263,6 +275,7 @@ export async function composeApp(
     clock,
     storageId,
     eventLog,
+    usage: homeUsage,
   });
 
   const featureService = createFeatureService({
@@ -322,7 +335,6 @@ export async function composeApp(
 
   // Search degrades to `{ unavailable: true }` rather than erroring while
   // the files folder is not indexed.
-  const indexQueries = createIndexQueries(db);
   const textUnit = mlUnitUrl(config, "text");
   const imageUnit = mlUnitUrl(config, "image");
   const embedClient = textUnit === undefined ? null : createEmbedClient({ baseUrl: textUnit });
@@ -848,6 +860,12 @@ export async function composeApp(
       registerLocalUserRoutes(groups, {
         service: localUsers,
         clientIp: (c) => extractClientIp(c, config.fdriveTrustedProxyHops),
+      });
+      registerStorageUsageRoutes(groups, {
+        resolver: scopeResolver,
+        indexQueries,
+        localUsers: repos.localUsers,
+        indexed,
       });
       registerGrantRoutes(groups, { service: localGrants });
       // Built as a local variable (not a fresh object literal at the call

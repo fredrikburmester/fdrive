@@ -55,6 +55,7 @@ export type {
   ContentHit,
   DuplicateGroup,
   DuplicateLocation,
+  ExtensionBytes,
   FileFilter,
   FilenameHit,
   FilenameOptions,

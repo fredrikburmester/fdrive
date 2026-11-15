@@ -50,6 +50,8 @@ export interface LocalUser {
   readonly username: string;
   readonly passwordHash: string;
   readonly disabled: boolean;
+  /** The most bytes their home folder may hold; `null` for no limit. */
+  readonly storageLimit: number | null;
   readonly createdAt: Date;
   readonly updatedAt: Date;
 }
@@ -57,6 +59,7 @@ export interface LocalUser {
 export interface LocalUserPatch {
   readonly passwordHash?: string;
   readonly disabled?: boolean;
+  readonly storageLimit?: number | null;
 }
 
 export interface LocalUserRepo {
