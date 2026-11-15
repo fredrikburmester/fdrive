@@ -29,13 +29,11 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Progress } from "@/components/ui/progress";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { useMe } from "@/lib/api/auth-queries";
 import { describeApiError } from "@/lib/api/errors";
 import { queryKeys } from "@/lib/api/keys";
 import { useDelete } from "@/lib/files/queries";
 import { revealHref } from "@/lib/search/reveal";
 import { useStorageUsage } from "@/lib/storage/queries";
-import { trashAvailabilityFor } from "@/lib/trash/format";
 import { useFormatters } from "@/lib/use-format-preferences";
 
 const KINDS: Readonly<Record<StorageKind, { label: string; Icon: LucideIcon }>> = {
@@ -101,12 +99,12 @@ function UsageCard({ usage }: { usage: StorageUsageResponse }) {
 interface FileRowProps {
   readonly path: string;
   readonly size: number;
-  /** For a duplicate: what removing it is called, and what does it. */
-  readonly remove?: { readonly label: string; readonly onRemove: (path: string) => void };
+  /** For a duplicate: moves it to Trash, after the usual confirmation. */
+  readonly onRemove?: (path: string) => void;
 }
 
 /** One file the page lists: where it is, its size, a way to it and, for a duplicate, out. */
-function FileRow({ path, size, remove }: FileRowProps) {
+function FileRow({ path, size, onRemove }: FileRowProps) {
   const { formatBytes } = useFormatters();
   const name = baseName(path);
   const ext = extensionOf(name);
@@ -134,21 +132,21 @@ function FileRow({ path, size, remove }: FileRowProps) {
         </TooltipTrigger>
         <TooltipContent>Reveal in folder</TooltipContent>
       </Tooltip>
-      {remove === undefined ? null : (
+      {onRemove === undefined ? null : (
         <Tooltip>
           <TooltipTrigger
             render={
               <Button
                 variant="ghost"
                 size="icon-sm"
-                aria-label={remove.label === "Delete" ? `Delete ${name}` : `Move ${name} to Trash`}
-                onClick={() => remove.onRemove(path)}
+                aria-label={`Move ${name} to Trash`}
+                onClick={() => onRemove(path)}
               />
             }
           >
             <Trash2Icon />
           </TooltipTrigger>
-          <TooltipContent>{remove.label}</TooltipContent>
+          <TooltipContent>Move to Trash</TooltipContent>
         </Tooltip>
       )}
     </li>
@@ -176,13 +174,10 @@ function entryAt(path: string): FsEntry {
  */
 function DuplicatesCard({ groups: indexed }: { groups: readonly StorageDuplicates[] }) {
   const { formatBytes } = useFormatters();
-  const { data: me } = useMe();
   const queryClient = useQueryClient();
   const remove = useDelete();
   const [removing, setRemoving] = useState<string | null>(null);
   const [removed, setRemoved] = useState<ReadonlySet<string>>(new Set());
-  const trash = trashAvailabilityFor({ trash: me?.trash === true });
-  const label = trash === null ? "Delete" : "Move to Trash";
   const groups = indexed
     .map((group) => ({ ...group, paths: group.paths.filter((path) => !removed.has(path)) }))
     .filter((group) => group.paths.length > 1);
@@ -219,12 +214,7 @@ function DuplicatesCard({ groups: indexed }: { groups: readonly StorageDuplicate
               </h3>
               <ul className="flex flex-col divide-y">
                 {group.paths.map((path) => (
-                  <FileRow
-                    key={path}
-                    path={path}
-                    size={group.size}
-                    remove={{ label, onRemove: setRemoving }}
-                  />
+                  <FileRow key={path} path={path} size={group.size} onRemove={setRemoving} />
                 ))}
               </ul>
             </section>
@@ -233,7 +223,6 @@ function DuplicatesCard({ groups: indexed }: { groups: readonly StorageDuplicate
       )}
       <DeleteDialog
         entries={removing === null ? [] : [entryAt(removing)]}
-        trash={trash}
         pending={remove.isPending}
         onOpenChange={(open) => {
           if (!open) setRemoving(null);

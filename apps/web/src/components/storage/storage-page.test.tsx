@@ -12,15 +12,14 @@ const mocks = vi.hoisted(() => ({
     isError: false,
     error: null as unknown,
   },
-  trash: true,
   remove: { mutate: vi.fn(), isPending: false },
 }));
 
 vi.mock("@/components/shell/page-header", () => ({ PageHeader: () => null }));
 vi.mock("@/lib/storage/queries", () => ({ useStorageUsage: () => mocks.query }));
 vi.mock("@/lib/files/queries", () => ({ useDelete: () => mocks.remove }));
-vi.mock("@/lib/api/auth-queries", () => ({
-  useMe: () => ({ data: { trash: mocks.trash, index: true } }),
+vi.mock("@/lib/api/trash-settings-queries", () => ({
+  useTrashSettings: () => ({ data: { retentionDays: 30 } }),
 }));
 
 const { StoragePage } = await import("./storage-page");
@@ -52,7 +51,6 @@ function renderPage(query: Partial<typeof mocks.query>) {
 afterEach(() => {
   cleanup();
   vi.clearAllMocks();
-  mocks.trash = true;
 });
 
 describe("StoragePage", () => {
@@ -122,7 +120,7 @@ describe("StoragePage", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Move y.txt to Trash" }));
     const dialog = screen.getByRole("alertdialog");
-    expect(within(dialog).getByText('"y.txt" will be moved to Trash.')).toBeTruthy();
+    expect(within(dialog).getByText(/^"y\.txt" will be moved to Trash\./)).toBeTruthy();
     mocks.remove.mutate.mockImplementationOnce(
       (_entries: unknown, options: { onSuccess: () => void }) => options.onSuccess(),
     );
@@ -138,15 +136,14 @@ describe("StoragePage", () => {
     expect(screen.getByText(/^3 copies, 2\.0 MB/)).toBeTruthy();
   });
 
-  it("says a copy is deleted for good where the login has no Trash, and keeps it on cancel", () => {
-    mocks.trash = false;
+  it("keeps a copy when its move to Trash is cancelled", () => {
     renderPage({ data: { ...EMPTY, duplicates: [{ size: 10, paths: ["/x.txt", "/y.txt"] }] } });
 
-    fireEvent.click(screen.getByRole("button", { name: "Delete x.txt" }));
+    fireEvent.click(screen.getByRole("button", { name: "Move x.txt to Trash" }));
     const dialog = screen.getByRole("alertdialog");
-    expect(within(dialog).getByText(/permanently deleted/)).toBeTruthy();
     fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
     expect(mocks.remove.mutate).not.toHaveBeenCalled();
+    expect(screen.getByText(/^2 copies, 10 B/)).toBeTruthy();
   });
 
   it("explains that the numbers need the search index", () => {

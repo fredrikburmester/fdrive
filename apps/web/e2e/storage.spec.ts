@@ -48,12 +48,10 @@ test("a user finds two identical files under Duplicates and moves one to Trash",
     await duplicates
       .getByRole("listitem")
       .filter({ hasText: "/Backup" })
-      .getByRole("button", {
-        name: /^(Move beach\.txt to Trash|Delete beach\.txt)$/,
-      })
+      .getByRole("button", { name: "Move beach.txt to Trash" })
       .click();
     const confirm = page.getByRole("alertdialog");
-    await confirm.getByRole("button", { name: /^(Move to Trash|Delete)$/ }).click();
+    await confirm.getByRole("button", { name: "Move to Trash" }).click();
     await expect(confirm).toBeHidden();
     // One copy left: nothing is duplicated any more.
     await expect(duplicates.getByText("No identical files in your folder.")).toBeVisible();
