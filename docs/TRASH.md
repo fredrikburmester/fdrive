@@ -8,10 +8,11 @@ and no worker or restart.
 Every delete in fdrive moves to Trash: the web app, MCP's `trash_path`, AI chat's cards, Finder
 in an FDrive for Mac location (Move to Trash and Delete Immediately alike) and a Mac save that
 renames its file. Finder's Trash for a location is this Trash; Empty Trash there deletes for
-good, as **Delete permanently** does ([macOS](MACOS.md#trash)). Storage itself never decides: `deleteFile` and `deleteDir` delete for
-good, and `trash.put` moves an item into Trash and says where, so each caller chooses. fdrive does
-not intercept changes made outside it: deleting directly on the host disk bypasses Trash, and
-overwriting a file does not retain its previous version.
+good, as **Delete permanently** does ([macOS](MACOS.md#trash)). Storage itself never decides:
+`deleteFile` and `deleteDir` delete for good, and `trash.put` moves an item into Trash and says
+where, so each caller chooses. fdrive does not intercept changes made outside it: deleting
+directly on the host disk bypasses Trash, and overwriting a file does not retain its previous
+version.
 
 ## Retention
 
