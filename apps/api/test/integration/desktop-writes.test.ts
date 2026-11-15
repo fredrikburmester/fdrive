@@ -230,7 +230,8 @@ it("publishes complete files with durable replay and conflict protection", async
     expect((await stat("/Tree/empty")).kind).toBe("dir");
     expect(await readDisk("/Tree/nested/new.txt")).toBe("new");
     // Finder's Empty Trash deletes the item in fdrive's Trash for good; a live one is refused.
-    const live = await stat("/restored.txt");
+    await writeFile(onDisk("/binned.txt"), "binned");
+    const live = await stat("/binned.txt");
     expect((await call(`${base}/purges`, { itemId: live.id })).status).toBe(409);
     const binned = await commit(await move(live, "trash"));
     expect(await json(`${base}/purges`, { itemId: binned.id })).toEqual({ ok: true });
@@ -238,6 +239,7 @@ it("publishes complete files with durable replay and conflict protection", async
       ((await json(`${base}/entries?path=/.fdrive-desktop/trash`)) as { entries: unknown[] })
         .entries,
     ).toEqual([]);
+    expect((await call(`${base}/entry?path=/binned.txt`)).status).toBe(404);
     expect(await json(`${base}/purges`, { itemId: binned.id })).toEqual({ ok: true });
 
     // A successful publication remains completed even when PostgreSQL refuses
