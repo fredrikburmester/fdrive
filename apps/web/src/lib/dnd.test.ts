@@ -128,6 +128,23 @@ describe("writeDownloadUrl", () => {
     expect(dt.getData("DownloadURL")).toBe(`application/octet-stream:a.png:${url}`);
   });
 
+  it("keeps colons and control characters in the name from changing the URL", () => {
+    const dt = new FakeDataTransfer();
+    writeDownloadUrl(dt, ["/x"], { ...file, name: "a:https://evil.example/x\u0007" }, url);
+    const [mime, name, ...rest] = dt.getData("DownloadURL").split(":");
+    expect(mime).toBe("image/png");
+    expect(name).toBe("a_https_//evil.example/x_");
+    expect(rest.join(":")).toBe(url);
+  });
+
+  it("uses a generic type for one that is not a plain type/subtype", () => {
+    for (const mime of ["text/html:x", "text/plain; charset=utf-8", "png"]) {
+      const dt = new FakeDataTransfer();
+      writeDownloadUrl(dt, ["/a.png"], { ...file, mime }, url);
+      expect(dt.getData("DownloadURL")).toBe(`application/octet-stream:a.png:${url}`);
+    }
+  });
+
   it("leaves folders and drags of several items in-app", () => {
     const dt = new FakeDataTransfer();
     writeDownloadUrl(dt, ["/a.png", "/b.png"], file, url);
