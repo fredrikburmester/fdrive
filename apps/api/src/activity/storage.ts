@@ -4,7 +4,7 @@ import type {
   PersonalActivityAction,
   PersonalActivitySource,
 } from "@fdrive/contracts";
-import { parseMoveTrashLeaf, type StorageProvider, trashLeafPath } from "@fdrive/core";
+import { parseMoveTrashLeaf, type StorageProvider, TRASH_PATH, trashLeafPath } from "@fdrive/core";
 import type { Principal } from "../auth/principal.js";
 import { activityStat, type PersonalActivityService } from "./service.js";
 import { deleteWithActivityReceipt } from "./trash.js";
@@ -20,7 +20,6 @@ export function activityStorage(
   principal: Principal,
   service: PersonalActivityService,
   context: () => ActivityStorageContext,
-  trashRoot: string | null = null,
 ): StorageProvider {
   const storage = principal.storage;
   async function run<T>(
@@ -85,8 +84,6 @@ export function activityStorage(
       );
     },
     async deleteFile(path) {
-      if (!trashRoot)
-        return run("file.delete", { path, kind: "file" }, () => storage.deleteFile(path));
       await service.repo.withPathLock(principal.identityId, path, () =>
         run(
           "file.trash",
@@ -97,8 +94,6 @@ export function activityStorage(
       );
     },
     async deleteDir(path) {
-      if (!trashRoot)
-        return run("file.delete", { path, kind: "dir" }, () => storage.deleteDir(path));
       await service.repo.withPathLock(principal.identityId, path, () =>
         run(
           "file.trash",
@@ -109,13 +104,13 @@ export function activityStorage(
       );
     },
   };
-  if (storage.trash && trashRoot) {
+  if (storage.trash) {
     const trash = storage.trash;
     overrides.trash = {
       ...trash,
       async restore(id, options) {
-        const leaf = trashLeafPath(trashRoot, id);
-        const original = parseMoveTrashLeaf(trashRoot, leaf)?.originalPath;
+        const leaf = trashLeafPath(TRASH_PATH, id);
+        const original = parseMoveTrashLeaf(TRASH_PATH, leaf)?.originalPath;
         return run(
           "file.restore",
           {

@@ -34,7 +34,7 @@ export async function readStoredFile(
   principal: TokenPrincipal,
   rawPath: string,
 ) {
-  const path = ordinaryPath(deps, principal, rawPath);
+  const path = ordinaryPath(principal, rawPath);
   const stat = await principal.storage.statFile(path);
   if (stat.size > MAX_FILE_BYTES) throw new Error(`file exceeds the ${MAX_FILE_BYTES} byte limit`);
   const result = await principal.storage.download(path, { signal: AbortSignal.timeout(30_000) });
@@ -125,7 +125,7 @@ export async function readFile(deps: McpToolDeps, principal: TokenPrincipal, pat
 }
 
 export async function liveFileInfo(deps: McpToolDeps, principal: TokenPrincipal, rawPath: string) {
-  const path = ordinaryPath(deps, principal, rawPath);
+  const path = ordinaryPath(principal, rawPath);
   const stat = await principal.storage.stat(path);
   const publicUrl = await deps.publicUrl();
   return {

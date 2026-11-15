@@ -14,7 +14,7 @@ import { createLocalUsers } from "./users.js";
 /**
  * The files folder's row in `app.providers`, created on the first start and
  * found again on every later one. Its id never changes: the Mac app compares
- * it as each location's `providerId`, and Trash settings and Office name it.
+ * it as each location's `providerId`, and Office names it.
  */
 export async function ensureStorageRow(repos: Pick<Repos, "providers">): Promise<string> {
   return (await repos.providers.ensure({ type: "local", baseUrl: "local" })).id;
@@ -25,8 +25,6 @@ export interface DeploymentFilesFolderOptions {
   readonly changes?: ChangeQueue;
   /** Refuses storage while the folder is not this installation's (`createDeploymentFilesFolderGuard`). */
   readonly guard?: FilesFolderGuard;
-  /** Folders no share reaches; a folder shared from inside one is refused to its grantee. */
-  readonly closedFolders?: () => Promise<readonly string[]>;
 }
 
 /**
@@ -39,12 +37,11 @@ export function deploymentFilesFolder(
   repos: Pick<Repos, "localUsers" | "localGrants">,
   options: DeploymentFilesFolderOptions = {},
 ): FilesFolder {
-  const { changes, guard, closedFolders } = options;
+  const { changes, guard } = options;
   return createFilesFolder({
     root: config.fdriveStorageRoot,
     users: createLocalUsers({ repo: repos.localUsers, grants: repos.localGrants }),
     ...(guard === undefined ? {} : { guard }),
-    ...(closedFolders === undefined ? {} : { closedFolders }),
     ...(changes === undefined ? {} : { onIndexChange: (change) => changes.record(change) }),
   });
 }

@@ -87,36 +87,32 @@ export async function digestFile(storage: StorageProvider, path: string, signal?
 /**
  * Whether a desktop connection may see the normalized `path` at all: inside
  * its grants (or above one, when `browse`ing towards it), and outside
- * fdrive's own folders (`isReservedPath`: the storage's Trash, `trash`, the
- * Mac app's own folder and the rest). Listings drop every entry this
+ * fdrive's own folders (`isReservedPath`: the Trash, the Mac app's own
+ * folder and the rest). Listings drop every entry this
  * refuses, and so does the change feed.
  */
 export function desktopPathAllowed(
   principal: Principal,
   path: string,
-  options: { trash: string | null; writeProtocol: boolean; browse?: boolean },
+  options: { writeProtocol: boolean; browse?: boolean },
 ): boolean {
   const grants = principal.tokenAccess;
-  const { trash, writeProtocol, browse = false } = options;
+  const { writeProtocol, browse = false } = options;
   return (
     (grants?.mode === "read" || (writeProtocol && grants?.mode === "full")) &&
     grants.paths.some((root) => contains(root, path) || (browse && contains(path, root))) &&
-    !isReservedPath(path, trash)
+    !isReservedPath(path)
   );
 }
 
 export function createDesktopFiles(
-  deps: Pick<DesktopDeps, "clock" | "trashPathForStorage" | "indexedContent">,
+  deps: Pick<DesktopDeps, "clock" | "indexedContent">,
   writeProtocol = false,
 ) {
   const snapshots = new Map<string, Snapshot>();
   const hashing = new Set<string>();
   function allowed(principal: Principal, path: string, browse = false) {
-    return desktopPathAllowed(principal, path, {
-      trash: deps.trashPathForStorage(principal.storage),
-      writeProtocol,
-      browse,
-    });
+    return desktopPathAllowed(principal, path, { writeProtocol, browse });
   }
   function authorize(principal: Principal, raw: string, browse = false) {
     const path = normalizePath(raw);

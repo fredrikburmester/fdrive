@@ -60,5 +60,6 @@ describe("queryKeys", () => {
 
   it("trash.list() builds a stable key", () => {
     expect(queryKeys.trash.list()).toEqual(["trash", "list"]);
+    expect(queryKeys.trash.settings()).toEqual(["trash", "settings"]);
   });
 });

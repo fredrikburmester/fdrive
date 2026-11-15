@@ -31,10 +31,8 @@ import {
   pathToHref,
   RenameDialog,
   type RowContextAction,
-  trashAvailabilityFor,
   useDelete,
   useDuplicate,
-  useMe,
   useRename,
   viewHref,
 } from "@/lib/metadata/deps";
@@ -80,9 +78,6 @@ export function VirtualListing({ title, paths, onRemoveMissing }: VirtualListing
   const rename = useRename();
   const remove = useDelete();
   const duplicate = useDuplicate();
-  const { data: me } = useMe();
-  // Trash counts as off until `me` loads: "Move to Trash" waits for the setting.
-  const trash = me?.trash === true;
   const received = useReceivedGrants();
 
   const liveEntries = useMemo(
@@ -226,7 +221,6 @@ export function VirtualListing({ title, paths, onRemoveMissing }: VirtualListing
                   hideMoveCopy
                   hideArchive
                   showReveal
-                  trash={trash}
                   received={received}
                 />
               </div>
@@ -282,7 +276,6 @@ export function VirtualListing({ title, paths, onRemoveMissing }: VirtualListing
         }}
         onConfirm={handleDeleteConfirm}
         pending={remove.isPending}
-        trash={trashAvailabilityFor({ trash })}
       />
     </>
   );

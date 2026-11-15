@@ -9,15 +9,15 @@ import {
 
 const ALICE_HOME_SCOPES: readonly Scope[] = [{ fsPrefix: "/alice", virtualPrefix: "/" }];
 
-function context(scopes: readonly Scope[] = ALICE_HOME_SCOPES, trashPath: string | null = null) {
-  const ctx = resolveScopeContext(scopes, trashPath);
+function context(scopes: readonly Scope[] = ALICE_HOME_SCOPES) {
+  const ctx = resolveScopeContext(scopes);
   if (ctx === null) throw new Error("expected a scope context");
   return ctx;
 }
 
 describe("resolveScopeContext", () => {
   it("returns null for an empty scope list", () => {
-    expect(resolveScopeContext([], null)).toBeNull();
+    expect(resolveScopeContext([])).toBeNull();
   });
 
   it("maps every scope to a prefix in the files folder's root", () => {
@@ -53,7 +53,7 @@ describe("virtualPathFor", () => {
   });
 
   it("returns null in the Trash and for the Trash itself", () => {
-    const ctx = context(ALICE_HOME_SCOPES, "/.trash");
+    const ctx = context();
     expect(virtualPathFor(ctx, "alice/.trash/report.pdf/168176641123456789")).toBeNull();
     expect(virtualPathFor(ctx, "alice/.trash")).toBeNull();
     expect(virtualPathFor(ctx, "alice/docs/report.pdf")).toBe("/docs/report.pdf");
@@ -62,7 +62,7 @@ describe("virtualPathFor", () => {
 
 describe("reservedExclusionOf", () => {
   it("leaves out fdrive's own folders and the home's own Shared with me", () => {
-    expect(reservedExclusionOf(context(ALICE_HOME_SCOPES, "/.trash"))).toEqual({
+    expect(reservedExclusionOf(context())).toEqual({
       prefixes: [
         { rootId: 1, fsPrefix: "/alice/.trash" },
         { rootId: 1, fsPrefix: "/alice/.fdrive-desktop" },

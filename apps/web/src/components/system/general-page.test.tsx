@@ -11,11 +11,7 @@ const mocks = vi.hoisted(() => ({
   refetch: vi.fn(),
 }));
 vi.mock("./public-url-card", () => ({ PublicUrlCard: () => <p>Server address card</p> }));
-vi.mock("./trash-settings-card", () => ({
-  TrashSettingsCard: (props: { provider: { id: string; label: string } }) => (
-    <p>Trash card for {props.provider.label}</p>
-  ),
-}));
+vi.mock("./trash-settings-card", () => ({ TrashSettingsCard: () => <p>Trash card</p> }));
 vi.mock("./system-page", () => ({
   SystemPage: (props: {
     title: string;
@@ -72,7 +68,7 @@ function saveButton(): HTMLButtonElement {
   return screen.getByRole("button", { name: "Save name" }) as HTMLButtonElement;
 }
 
-it("holds the installation-wide settings: the address, the files folder and its Trash", () => {
+it("holds the installation-wide settings: the address, the files folder and Trash", () => {
   render(<GeneralPage />);
 
   expect(screen.getByRole("heading", { name: "General" })).toBeTruthy();
@@ -82,7 +78,7 @@ it("holds the installation-wide settings: the address, the files folder and its 
   expect(screen.getByText("Storage")).toBeTruthy();
   expect(screen.getByText("Folder on this server, set by FDRIVE_STORAGE_ROOT.")).toBeTruthy();
   expect(screen.getByText("Shown under each username and in Finder.")).toBeTruthy();
-  expect(screen.getByText("Trash card for Local folder")).toBeTruthy();
+  expect(screen.getByText("Trash card")).toBeTruthy();
   // A healthy folder needs no health line, and nothing links elsewhere.
   expect(screen.queryByText("Unavailable")).toBeNull();
   expect(screen.queryByRole("alert")).toBeNull();
@@ -139,7 +135,7 @@ it("says why fdrive cannot use the folder", () => {
 
   expect(screen.getByText("Unavailable")).toBeTruthy();
   expect(screen.getByRole("alert").textContent).toBe(reason);
-  expect(screen.getByText("Trash card for Local folder")).toBeTruthy();
+  expect(screen.getByText("Trash card")).toBeTruthy();
 });
 
 it("shows a placeholder while loading and a retry when the storage fails to load", () => {

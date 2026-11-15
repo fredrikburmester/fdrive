@@ -15,8 +15,6 @@ export interface SharesDeps {
   shares: ShareRepo;
   /** The owner's storage as every feature gets it: the only way a share reaches bytes. */
   storageFor: IdentityStorageFactory;
-  /** The owner's Trash folder while Trash is on: never shared and never listed through a share. */
-  trashPathFor: (identityId: string) => Promise<string | null>;
   passwords: SharePasswords;
   /** Ceilings on public archive downloads; each one left out keeps its default. */
   zipLimits?: Partial<ShareZipLimits>;
@@ -32,7 +30,6 @@ export function createSharesService(deps: SharesDeps) {
   const owned = createOwnedShares({
     shares: deps.shares,
     storageFor: deps.storageFor,
-    trashPathFor: deps.trashPathFor,
     passwords: deps.passwords,
     zipLimits: { ...DEFAULT_SHARE_ZIP_LIMITS, ...deps.zipLimits },
     clock: deps.clock,

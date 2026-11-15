@@ -205,7 +205,7 @@ describe("index scopes over a local folder and Postgres", () => {
       "/report.txt",
     ]);
     // Bob's report has the same content, but it is outside alice's scopes.
-    const ctx = resolveScopeContext(aliceScopes, null);
+    const ctx = resolveScopeContext(aliceScopes);
     if (ctx === null) throw new Error("expected alice's scope context");
     const info = await fileInfoInScope(toolDeps, ctx, { path: "/report.txt" });
     expect(info.identical_copies).toEqual(["/report-copy.txt"]);

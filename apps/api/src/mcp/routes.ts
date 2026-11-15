@@ -4,7 +4,6 @@ import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/
 import type { Context } from "hono";
 import { activityStorage } from "../activity/storage.js";
 import type { AppHono } from "../app.js";
-import { trashPathFor } from "./access.js";
 import { authenticateMcpRequest, type McpAuthDeps } from "./auth.js";
 import { boundedBytes } from "./content.ts";
 import type { McpToolDeps } from "./handlers.js";
@@ -82,26 +81,19 @@ async function handleMcpRequest(c: Context, deps: McpRoutesDeps): Promise<Respon
   if (deps.toolDeps.activity)
     principal = {
       ...principal,
-      storage: activityStorage(
-        principal,
-        deps.toolDeps.activity,
-        () => ({
-          source: "mcp",
-          operationId: `${context}:${operationId}:${child++}`,
-          uploadAction:
-            tool === "edit_file"
-              ? "file.save"
-              : tool === "upload_file"
-                ? "file.upload"
-                : "file.create",
-        }),
-        trashPathFor(deps.toolDeps, principal),
-      ),
+      storage: activityStorage(principal, deps.toolDeps.activity, () => ({
+        source: "mcp",
+        operationId: `${context}:${operationId}:${child++}`,
+        uploadAction:
+          tool === "edit_file"
+            ? "file.save"
+            : tool === "upload_file"
+              ? "file.upload"
+              : "file.create",
+      })),
     };
   registerMcpTools(server, principal, {
     ...deps.toolDeps,
-    // Trash settings are found by the storage they came with, which the wrapper above replaced.
-    trashPath: trashPathFor(deps.toolDeps, auth.principal),
     activityContext: context,
     activityRequestId: operationId,
   });

@@ -74,13 +74,6 @@ export interface McpToolDeps {
   /** Document text extraction for `read_file_text`; `null` without `FDRIVE_INDEXER_URL`. */
   readonly indexerClient: IndexerExtractClient | null;
   readonly clock: () => Date;
-  /**
-   * The storage provider's recycle folder virtual path, when configured.
-   * Threaded into every `resolveScopeContext` call so `virtualPathFor`
-   * excludes trashed files from every tool's results.
-   */
-  readonly trashPath?: string | null;
-  readonly trashPathForStorage?: (storage: Principal["storage"]) => string | null;
   readonly onMutation?: (
     principal: Principal,
     change: {
@@ -112,20 +105,11 @@ async function requireScope(deps: McpToolDeps, principal: Principal): Promise<Sc
     throw new McpToolError("index features are unavailable: the files folder is not indexed");
   }
   const scopes = await deps.scopeResolver.scopesFor(principal.username);
-  const ctx = resolveScopeContext(
-    tokenScopes(principal, scopes),
-    currentTrashPath(deps, principal),
-  );
+  const ctx = resolveScopeContext(tokenScopes(principal, scopes));
   if (ctx === null) {
     throw new McpToolError("index features are unavailable: this token reaches no folder");
   }
   return ctx;
-}
-
-type TrashPathDeps = Pick<McpToolDeps, "trashPath" | "trashPathForStorage">;
-
-function currentTrashPath(deps: TrashPathDeps, principal: Principal): string | null {
-  return deps.trashPathForStorage?.(principal.storage) ?? deps.trashPath ?? null;
 }
 
 /** The common shape every MCP tool returns for one file, before tool-specific extra fields are added. */
@@ -215,7 +199,6 @@ export async function runSearch(deps: McpToolDeps, principal: Principal, args: S
     ? tokenScopes(principal, await deps.scopeResolver.scopesFor(principal.username))
     : [];
   const response = await deps.searchService.search({
-    trashPath: currentTrashPath(deps, principal),
     scopes,
     query: args.query,
     filters,
@@ -341,21 +324,20 @@ export interface ListDirectoryArgs {
  * that was checked.
  */
 export async function runListDirectory(
-  deps: TrashPathDeps & Partial<Pick<McpToolDeps, "publicUrl">>,
+  deps: Partial<Pick<McpToolDeps, "publicUrl">>,
   principal: TokenPrincipal,
   args: ListDirectoryArgs,
 ) {
   const path = normalizePath(args.path ?? "/");
   if (!canBrowsePath(principal, path))
     throw new McpToolError("path is outside this token's allowed folders");
-  const trashPath = currentTrashPath(deps, principal);
-  if (isReservedPath(path, trashPath)) {
+  if (isReservedPath(path)) {
     throw new McpToolError(RESERVED_MESSAGE);
   }
 
   const limit = Math.max(1, Math.min(args.limit ?? 300, 2000));
   const entries = await principal.storage.list(path);
-  const ordinary = entries.filter((entry) => !isReservedPath(entry.path, trashPath));
+  const ordinary = entries.filter((entry) => !isReservedPath(entry.path));
   const visible = ordinary.filter((entry) =>
     entry.kind === "dir"
       ? canBrowsePath(principal, entry.path)
@@ -779,7 +761,7 @@ export async function runCreateFolder(
   args: CreateFolderArgs,
 ) {
   requireMode(principal, "organize");
-  const path = ordinaryPath(deps, principal, args.path);
+  const path = ordinaryPath(principal, args.path);
   const publicUrl = await deps.publicUrl();
   await principal.storage.mkdir(path, { parents: true });
   let warnings: string[] = [];
@@ -816,10 +798,9 @@ export async function runMovePath(
   args: MovePathArgs,
 ) {
   requireMode(principal, "organize");
-  const trashPath = currentTrashPath(deps, principal);
-  const src = ordinaryPath(deps, principal, args.src);
-  const dst = ordinaryPath(deps, principal, args.dst);
-  assertMutablePath(principal, src, trashPath);
+  const src = ordinaryPath(principal, args.src);
+  const dst = ordinaryPath(principal, args.dst);
+  assertMutablePath(principal, src);
   const isDir = (await principal.storage.stat(src)).kind === "dir";
   const publicUrl = await deps.publicUrl();
   await relocatePath(principal.storage, "move", src, dst);
@@ -867,9 +848,8 @@ export async function runRecentMoves(
   const limit = Math.max(1, Math.min(args.limit ?? 50, 500));
   const repo = deps.activity?.repo;
   if (repo === undefined) return { moves: [] };
-  const trashPath = currentTrashPath(deps, principal);
   const listed = (path: string | undefined): path is string =>
-    path !== undefined && canReadPath(principal, path) && !isReservedPath(path, trashPath);
+    path !== undefined && canReadPath(principal, path) && !isReservedPath(path);
 
   const moves: { at: string; src: string; dst: string }[] = [];
   let after: { at: Date; id: string } | undefined;

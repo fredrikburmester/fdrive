@@ -97,12 +97,13 @@ The walkthrough:
 3. **Features**: turn each of the six on or skip it. Search OCR doesn't change files.
    Searchable PDF conversion rewrites PDFs and keeps the originals as its retention settings
    say.
-4. **Trash**: deleted items wait in each user's Trash before they are removed. See
-   [Trash](../docs/TRASH.md).
-5. **Server address** and **Office**: the address everyone opens fdrive at, and viewing and
+4. **Server address** and **Office**: the address everyone opens fdrive at, and viewing and
    editing documents in the browser; editing needs a list of usernames. The bundled editor
    starts on its own. See [Office setup](../docs/OFFICE.md).
-6. **Review**: until you finish, fdrive stays on `/setup`, and a reload keeps your choices.
+5. **Review**: until you finish, fdrive stays on `/setup`, and a reload keeps your choices.
+
+Trash needs no step: deleted items wait in each user's Trash for 30 days, which an
+administrator can change under **System > General**. See [Trash](../docs/TRASH.md).
 
 Add everyone else under **System > Users**. Everything stays editable in
 **System > Features**. Features start off and download models only when needed, and

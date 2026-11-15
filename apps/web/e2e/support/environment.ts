@@ -91,8 +91,8 @@ export interface StartEnvironmentOptions {
    * Overrides the API/web ports this run binds, instead of the shared
    * run's `getApiPort()`/`getWebPort()`. For a spec that needs a second,
    * independently configured stack alongside the shared one started by
-   * `global-setup.ts` (see `trash.spec.ts`, which enables Trash through
-   * onboarding on a fresh installation). Pass two ports from
+   * `global-setup.ts` (see `trash.spec.ts`, which changes how long Trash
+   * keeps items on a fresh installation). Pass two ports from
    * `support/ports.ts#getFreePort` so the second stack never collides with
    * the shared run's own ports.
    */

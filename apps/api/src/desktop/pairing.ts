@@ -52,7 +52,6 @@ export interface DesktopDeps {
   storage: { readonly id: string; name(): Promise<string> };
   principalFor: PrincipalFactory;
   clock: () => Date;
-  trashPathForStorage: (storage: Principal["storage"]) => string | null;
   /**
    * The index rows behind a connection's files, which answer a version check
    * without reading a file whose row provably describes it. Absent when

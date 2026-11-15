@@ -104,7 +104,7 @@ function drive() {
     "/Inbox/sub/c.txt": "c",
     "/Other.txt": "o",
     "/Finance/Receipts/x.pdf": "x",
-    "/.Trash/old.pdf": "old",
+    "/.trash/old.pdf": "old",
   });
 }
 
@@ -192,7 +192,7 @@ describe("createOrganizeService", () => {
     });
 
     it("refuses invalid paths, the drive root and Trash", async () => {
-      const { service } = setup({ mcp: { trashPathForStorage: () => "/.Trash" } });
+      const { service } = setup();
       const principal = principalWith(drive());
 
       const invalid = await startError(service, principal, { paths: ["/Inbox/a.pdf", "/a\0b"] });
@@ -203,21 +203,13 @@ describe("createOrganizeService", () => {
       expect(root.kind).toBe("bad_request");
       expect(root.message).toBe("The drive root cannot be moved.");
 
-      for (const path of ["/.Trash/old.pdf", "/.fdrive-desktop/staging/a.pdf"]) {
+      for (const path of ["/.trash/old.pdf", "/.fdrive-desktop/staging/a.pdf"]) {
         const reserved = await startError(service, principal, { paths: [path] });
         expect(reserved.kind).toBe("bad_request");
         expect(reserved.message).toBe(
           "Items in Trash or fdrive's own folders cannot be organized.",
         );
       }
-    });
-
-    it("uses the configured Trash path when the storage has none of its own", async () => {
-      const { service } = setup({ mcp: { trashPath: "/.Trash" } });
-
-      const error = await startError(service, principalWith(drive()), { paths: ["/.Trash"] });
-
-      expect(error.kind).toBe("bad_request");
     });
 
     it("collapses duplicate selections and items inside selected folders", async () => {
@@ -273,14 +265,11 @@ describe("createOrganizeService", () => {
         toolTurn({ id: "tree", name: "folder_tree", input: { depth: 1 } }),
         submitTurn([
           { path: "/Inbox/a.pdf", destination: "/Finance/Receipts", reason: "A receipt." },
-          { path: "/Inbox/b.pdf", destination: "/.Trash", reason: "Junk." },
+          { path: "/Inbox/b.pdf", destination: "/.trash", reason: "Junk." },
         ]),
       ]);
       const verifyAuthority = vi.fn(async () => true);
-      const { service, onUnexpectedError } = setup({
-        model,
-        mcp: { trashPathForStorage: () => "/.Trash" },
-      });
+      const { service, onUnexpectedError } = setup({ model });
       const principal = principalWith(drive(), { verifyAuthority });
 
       const started = await service.start(principal, {
@@ -348,7 +337,6 @@ describe("createOrganizeService", () => {
       const { service } = setup({
         model,
         mcp: {
-          trashPathForStorage: () => "/.Trash",
           scopeResolver: {
             scopesFor: async () => [{ fsPrefix: "/alice", virtualPrefix: "/" }],
           },

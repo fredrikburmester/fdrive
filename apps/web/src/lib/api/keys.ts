@@ -41,8 +41,6 @@ export const queryKeys = {
     storage: () => ["system", "storage"] as const,
     office: () => ["system", "office"] as const,
     ai: () => ["system", "ai"] as const,
-    /** Keyed by the storage row the settings belong to. */
-    trash: (providerId: string) => ["system", "trash", providerId] as const,
     features: () => ["system", "features"] as const,
     indexer: () => ["system", "indexer"] as const,
     search: () => ["system", "search"] as const,
@@ -86,5 +84,7 @@ export const queryKeys = {
   },
   trash: {
     list: () => ["trash", "list"] as const,
+    /** How long Trash keeps an item, the same for every login. */
+    settings: () => ["trash", "settings"] as const,
   },
 } as const;

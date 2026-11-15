@@ -1,14 +1,14 @@
 import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { OkResponse, ROUTES, TrashListResponse, TrashRestoreResponse } from "@fdrive/contracts";
 import {
-  OkResponse,
-  ROUTES,
-  TrashListResponse,
-  TrashRestoreResponse,
-  TrashStatusResponse,
-} from "@fdrive/contracts";
-import { normalizePath, StorageError, type StorageProvider, withMoveToTrash } from "@fdrive/core";
+  createRecycleFolderTrash,
+  normalizePath,
+  StorageError,
+  type StorageProvider,
+  withMoveToTrash,
+} from "@fdrive/core";
 import { createMemoryRepos } from "@fdrive/db/testing";
 import { createLocalStorage } from "@fdrive/local";
 import type { Logger } from "pino";
@@ -16,7 +16,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { activityFixture } from "../../test/activity-fixture.js";
 import { createApp } from "../app.js";
 import type { Principal } from "../auth/principal.js";
-import { withRecycleFolderTrash } from "../auth/storage-factory.ts";
 import { loadConfig } from "../config.js";
 import { type BusEvent, createEventBus, type EventBus } from "../events/bus.js";
 import {
@@ -41,21 +40,14 @@ const BOB_IDENTITY_ID = "00000000-0000-4000-8000-0000000000b1";
 const ACCOUNT_ID = "00000000-0000-4000-8000-000000000001";
 const CLOCK_ISO = "2024-06-01T00:00:00.000Z";
 const TRASH_PATH = "/.trash";
-const PROVIDER_ID = "123e4567-e89b-42d3-a456-426614174000";
 /** The folder every trashed item lives under. */
 const LAYOUT_ROOT = `${TRASH_PATH}/.fdrive-move-v1`;
 /** A well-formed leaf id of fdrive's Trash layout, for routes that never reach storage. */
 const LEAF_ID = ".fdrive-move-v1/file/p/hello.txt/v/168176641123456789";
 
-function trashSettings(path: string | null, retentionHours: number | null = null) {
-  return {
-    providerId: PROVIDER_ID,
-    revision: 1,
-    enabled: path !== null,
-    path: path ?? TRASH_PATH,
-    retentionHours,
-    strategy: "move",
-  } as const;
+/** `storage` with core's Trash view over it, as the storage factory builds it. */
+function withRecycleFolderTrash(storage: StorageProvider, trashPath: string): StorageProvider {
+  return { ...storage, trash: createRecycleFolderTrash({ storage, trashPath }) };
 }
 
 function createTestLogger(): Logger {
@@ -123,8 +115,6 @@ async function buildHarness(
   opts: {
     username?: string;
     withTrash?: boolean;
-    trashPathOverride?: string | null;
-    retentionHours?: number | null;
     identityId?: string;
     /** What follows items into Trash and out, as folders shared with people do. */
     followers?: PathFollower[];
@@ -164,15 +154,6 @@ async function buildHarness(
     activity: activity.service,
     bus,
     clock,
-    settingsForStorage: () =>
-      trashSettings(
-        opts.trashPathOverride === undefined
-          ? withTrash
-            ? TRASH_PATH
-            : null
-          : opts.trashPathOverride,
-        opts.retentionHours ?? null,
-      ),
     metadata,
   };
 
@@ -202,34 +183,12 @@ interface ErrorJson {
   error: { kind: string; message: string; details?: Record<string, unknown> };
 }
 
-describe("GET /trash/status", () => {
-  it("reports available with the configured path and retention when the identity's storage has a trash", async () => {
-    const { app } = await buildHarness({ retentionHours: 72 });
-
-    const res = await app.request(ROUTES.trash.status);
-    expect(res.status).toBe(200);
-    const body = TrashStatusResponse.parse(await readJson(res));
-    expect(body).toEqual({ available: true, path: TRASH_PATH, retentionHours: 72 });
-  });
-
-  it("reports unavailable with a null path and retention when no trash is configured", async () => {
-    const { app } = await buildHarness({ withTrash: false, trashPathOverride: null });
-
-    const res = await app.request(ROUTES.trash.status);
-    expect(res.status).toBe(200);
-    const body = TrashStatusResponse.parse(await readJson(res));
-    expect(body).toEqual({ available: false, path: null, retentionHours: null });
-  });
-});
-
 describe("GET /trash", () => {
-  it("returns not_found when the identity's storage has no trash", async () => {
-    const { app } = await buildHarness({ withTrash: false, trashPathOverride: null });
+  it("fails as an internal error on storage built without Trash, which no request has", async () => {
+    const { app } = await buildHarness({ withTrash: false });
 
     const res = await app.request(ROUTES.trash.list);
-    expect(res.status).toBe(404);
-    const body = await readJson<ErrorJson>(res);
-    expect(body.error.kind).toBe("not_found");
+    expect(res.status).toBe(500);
   });
 
   it("lists a deleted file and a deleted directory, with parsed originalPath, name, and deletedAt", async () => {
@@ -563,7 +522,6 @@ describe("POST /trash/restore", () => {
       activity: activityFixture(clock).service,
       bus: createEventBus(),
       clock,
-      settingsForStorage: () => trashSettings(TRASH_PATH),
       metadata: createMetadataService(createMemoryRepos()),
     };
     const app = createApp({
@@ -624,7 +582,6 @@ describe("POST /trash/restore", () => {
       activity: activityFixture(clock).service,
       bus: createEventBus(),
       clock,
-      settingsForStorage: () => trashSettings(TRASH_PATH),
       metadata: createMetadataService(createMemoryRepos()),
     };
     const app = createApp({
@@ -650,21 +607,6 @@ describe("POST /trash/restore", () => {
     expect(res.status).toBe(409);
     const body = await readJson<ErrorJson>(res);
     expect(body.error.details).toEqual({ failedId: LEAF_ID });
-  });
-
-  it("returns not_found when the identity's storage has no trash", async () => {
-    const { app } = await buildHarness({ withTrash: false, trashPathOverride: null });
-
-    const res = await app.request(
-      ROUTES.trash.restore,
-      requestedWith({
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ ids: [LEAF_ID] }),
-      }),
-    );
-
-    expect(res.status).toBe(404);
   });
 });
 
@@ -736,21 +678,6 @@ describe("POST /trash/purge", () => {
     );
 
     expect(res.status).toBe(400);
-  });
-
-  it("returns not_found when the identity's storage has no trash", async () => {
-    const { app } = await buildHarness({ withTrash: false, trashPathOverride: null });
-
-    const res = await app.request(
-      ROUTES.trash.purge,
-      requestedWith({
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ ids: [LEAF_ID] }),
-      }),
-    );
-
-    expect(res.status).toBe(404);
   });
 
   it("ends what followed a purged item into Trash, even with a new item where it was", async () => {
@@ -1031,13 +958,6 @@ describe("POST /trash/empty", () => {
 
     expect(res.status).toBe(200);
     expect(await storage.list(LAYOUT_ROOT)).toEqual([]);
-  });
-
-  it("returns not_found when the identity's storage has no trash", async () => {
-    const { app } = await buildHarness({ withTrash: false, trashPathOverride: null });
-
-    const res = await app.request(ROUTES.trash.empty, requestedWith({ method: "POST" }));
-    expect(res.status).toBe(404);
   });
 });
 

@@ -16,21 +16,21 @@ test("Office onboarding saves and resumes its choice before entering files", asy
           revision: features.configuration.revision,
           values: features.configuration.values,
           walkthroughComplete: false,
-          walkthroughStep: 8,
+          walkthroughStep: 7,
         },
       })
     ).ok(),
   ).toBe(true);
   try {
     await page.goto("/setup");
-    await expect(page.getByText("Step 11 of 12 · Office")).toBeVisible();
+    await expect(page.getByText("Step 10 of 11 · Office")).toBeVisible();
     await expect(page.getByRole("button", { name: "Toggle Sidebar" })).toHaveCount(0);
     const toggle = page.getByRole("switch", { name: "Enable ONLYOFFICE" });
     if ((await toggle.getAttribute("aria-checked")) === "false") await toggle.click();
     await page.getByRole("button", { name: "Save and continue" }).click();
     await expect(page.getByText("Ready to use fdrive", { exact: true })).toBeVisible();
     await page.reload();
-    await expect(page.getByText("Step 12 of 12 · Review")).toBeVisible();
+    await expect(page.getByText("Step 11 of 11 · Review")).toBeVisible();
     const saved = (await (await page.request.get(officeUrl)).json()) as SystemOfficeResponse;
     expect(saved.configuration.enabled).toBe(true);
     await page.getByRole("button", { name: "Finish setup" }).click();

@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { StorageError, type StorageProvider } from "@fdrive/core";
 import { createMemoryRepos } from "@fdrive/db/testing";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { createIdentityStorageFactory } from "../auth/storage-factory.js";
 import { createLocalGrantService, type LocalGrantServiceDeps } from "./grants.js";
 import {
@@ -42,7 +42,6 @@ async function fixture(options: Partial<LocalGrantServiceDeps> = {}) {
     repos,
     storageId: row.id,
     storageFor,
-    trashPathFor: async () => "/.trash",
     ...options,
   });
   return { repos, local, row, alice, bob, carol, service, storageFor };
@@ -152,27 +151,6 @@ describe("createLocalGrantService: sharing a folder", () => {
       kind: "bad_request",
       message: "you already have this folder",
     });
-  });
-
-  it("shares a folder named like Trash while Trash is off", async () => {
-    const h = await fixture({ trashPathFor: async () => null });
-    expect(
-      await h.service.create(h.alice.id, { path: "/.trash", username: "bob", access: "read" }),
-    ).toMatchObject({ path: "/.trash" });
-    // A deployment that gives the service no Trash at all.
-    const plain = await fixture();
-    const noTrash = createLocalGrantService({
-      repos: plain.repos,
-      storageId: plain.row.id,
-      storageFor: plain.storageFor,
-    });
-    expect(
-      await noTrash.create(plain.alice.id, {
-        path: "/.trash",
-        username: "bob",
-        access: "read",
-      }),
-    ).toMatchObject({ path: "/.trash" });
   });
 
   it("passes a storage failure other than a missing folder through", async () => {
@@ -305,8 +283,7 @@ describe("createLocalGrantService: changing and ending shares", () => {
   });
 
   it("keeps a share that followed its folder into Trash from the person it is shared with", async () => {
-    const closedFolders = vi.fn(async (): Promise<readonly string[]> => ["/.trash"]);
-    const h = await fixture({ closedFolders });
+    const h = await fixture();
     await h.service.create(h.alice.id, { path: "/Photos/2026", username: "bob", access: "read" });
     await h.service.create(h.alice.id, { path: "/Projects", username: "bob", access: "write" });
     await h.service.create(h.carol.id, { path: "/Projects", username: "bob", access: "read" });
@@ -318,7 +295,6 @@ describe("createLocalGrantService: changing and ending shares", () => {
     expect(await h.service.received("bob")).toEqual([
       { name: "Projects", owner: "carol", path: "/Projects", writable: false },
     ]);
-    expect(closedFolders).toHaveBeenCalled();
     expect((await h.service.list(h.bob.id)).received.map((grant) => grant.name)).toEqual([
       "Projects",
     ]);
@@ -326,13 +302,6 @@ describe("createLocalGrantService: changing and ending shares", () => {
     // Bob's storage agrees: the leaf in fdrive's Trash layout is refused there too.
     const bobs = await h.storageFor(h.bob.id);
     expect((await bobs.list("/Shared with me")).map((entry) => entry.name)).not.toContain("1");
-
-    // Trash turned off: what is still in fdrive's Trash layout stays closed; the rest opens.
-    closedFolders.mockResolvedValue([]);
-    expect((await h.service.received("bob")).map((folder) => folder.name)).toEqual([
-      "loose",
-      "Projects",
-    ]);
   });
 
   it("ignores moves and deletes of a login that is gone", async () => {

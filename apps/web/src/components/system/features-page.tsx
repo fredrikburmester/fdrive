@@ -16,7 +16,6 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Field, FieldDescription, FieldLabel } from "@/components/ui/field";
 import { Switch } from "@/components/ui/switch";
-import { useMe } from "@/lib/api/auth-queries";
 import { describeApiError } from "@/lib/api/errors";
 import { useSystemFeatures, useUpdateFeatures } from "@/lib/api/system-queries";
 import { changeFeature, FEATURE_DESCRIPTIONS } from "@/lib/system/features";
@@ -28,7 +27,6 @@ import { PublicUrlCard, PublicUrlReview } from "./public-url-card";
 import { SetupFrame } from "./setup-frame";
 import { SystemErrorState } from "./system-error-state";
 import { SystemPage } from "./system-page";
-import { TrashReview, TrashSettingsCard } from "./trash-settings-card";
 
 function FeatureCard({
   id,
@@ -89,9 +87,6 @@ function FeatureCard({
 function FeatureEditor({ data }: { data: SystemFeaturesResponse }) {
   const router = useRouter();
   const update = useUpdateFeatures();
-  // Trash belongs to the files folder's storage row, which every login is on.
-  const me = useMe().data;
-  const setupProvider = me ? { id: me.identity.providerId, label: me.storageName } : null;
   const [draft, setDraft] = useState<{ values: FeatureValues; revision: number } | null>(null);
   const [localStep, setLocalStep] = useState<number | null>(null);
   const configuration = data.configuration;
@@ -157,34 +152,16 @@ function FeatureEditor({ data }: { data: SystemFeaturesResponse }) {
         />
       ))}
       {walkthrough ? null : <OfficeFeatureCard disabled={update.isPending} />}
-      {walkthrough && current?.kind === "trash" ? (
-        setupProvider ? (
-          <TrashSettingsCard
-            provider={setupProvider}
-            description="You can change this later under System > General."
-            disabled={update.isPending}
-            onContinue={() => save({ walkthroughStep: 7 })}
-          />
-        ) : (
-          <Button
-            variant="outline"
-            disabled={update.isPending}
-            onClick={() => save({ walkthroughStep: 7 })}
-          >
-            Continue without changing Trash
-          </Button>
-        )
-      ) : null}
       {walkthrough && current?.kind === "publicUrl" ? (
         <PublicUrlCard
           disabled={update.isPending}
-          onContinue={() => save({ walkthroughStep: 8 })}
+          onContinue={() => save({ walkthroughStep: step + 1 })}
         />
       ) : null}
       {walkthrough && current?.kind === "office" ? (
         <OfficeSettingsCard
           disabled={update.isPending}
-          onContinue={() => save({ walkthroughStep: 9 })}
+          onContinue={() => save({ walkthroughStep: step + 1 })}
         />
       ) : null}
       {walkthrough && current?.kind === "review" ? (
@@ -207,7 +184,6 @@ function FeatureEditor({ data }: { data: SystemFeaturesResponse }) {
                 </span>
               </div>
             ))}
-            {setupProvider ? <TrashReview provider={setupProvider} /> : null}
             <PublicUrlReview />
             <OfficeReview />
           </CardContent>

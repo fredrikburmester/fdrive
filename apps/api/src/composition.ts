@@ -1,6 +1,5 @@
 import { withDatabaseWriter } from "@fdrive/backup";
 import { indexerEnabled } from "@fdrive/contracts";
-import { reservedFolders, type StorageProvider } from "@fdrive/core";
 import {
   createActivityExportsRepo,
   createActivityObservationsRepo,
@@ -47,7 +46,7 @@ import {
   seal,
 } from "./auth/index.js";
 import { createPrincipalFactory } from "./auth/principal.ts";
-import { createIdentityStorageFactory, trashSettingsForStorage } from "./auth/storage-factory.ts";
+import { createIdentityStorageFactory } from "./auth/storage-factory.ts";
 import { createBackupModule } from "./backups/module.js";
 import { createRecoveryApp } from "./backups/recovery.js";
 import { registerBackupRoutes } from "./backups/routes.js";
@@ -59,7 +58,6 @@ import { withDesktopMetadata } from "./desktop/metadata.js";
 import { createDesktopRetention } from "./desktop/retention.js";
 import { registerDesktopRoutes } from "./desktop/routes.js";
 import { createDesktopWrites } from "./desktop/writes.js";
-import { ApiHttpError } from "./errors.js";
 import { createEventBus } from "./events/bus.js";
 import { createIndexerListener, createPgNotificationClient } from "./events/indexer-listener.js";
 import { registerEventRoutes } from "./events/routes.js";
@@ -134,6 +132,7 @@ import { registerThumbRoutes } from "./thumbs/routes.js";
 import { createResolveTokenPrincipal } from "./tokens/principal.js";
 import { registerTokenRoutes } from "./tokens/routes.js";
 import { createTokenService } from "./tokens/service.js";
+import { createTrashRetention } from "./trash/retention.js";
 import { registerTrashRoutes } from "./trash/routes.js";
 import { createTrashSettingsService } from "./trash/settings.js";
 import { registerTrashSettingsRoutes } from "./trash/settings-routes.js";
@@ -205,19 +204,9 @@ export async function composeApp(
       new Date(clock().getTime() - 24 * 60 * 60_000),
     ).catch((error: unknown) => logger.warn({ err: error }, "unfinished upload parts not removed"));
   }
-  /** The files folder's row in `app.providers`: Trash settings, Office and the Mac name it. */
+  /** The files folder's row in `app.providers`: Office and the Mac name it. */
   const storageId = await ensureStorageRow(repos);
-  /**
-   * Folders in each user's files no share reaches (`reservedFolders`): their
-   * Trash while it is on and the Mac's bookkeeping, which holds its Trash.
-   * Read per request, like the rest of Trash; `trashSettings` exists by the
-   * time it is asked.
-   */
-  const closedFolders = async (): Promise<readonly string[]> => {
-    const settings = await trashSettings.configuration(storageId);
-    return reservedFolders(settings.enabled ? settings.path : null);
-  };
-  const folder = deploymentFilesFolder(config, repos, { changes, guard, closedFolders });
+  const folder = deploymentFilesFolder(config, repos, { changes, guard });
   const backups = createBackupModule(config);
   await backups.start();
 
@@ -245,10 +234,7 @@ export async function composeApp(
   const eventLog = createSystemEventLog({ repo: repos.systemEvents, logger });
 
   const fetchImpl = globalThis.fetch;
-  const trashSettings = createTrashSettingsService({
-    settings: repos.settings,
-    identities: repos.identities,
-  });
+  const trashSettings = createTrashSettingsService({ settings: repos.settings, eventLog });
   const storage = createStorageService({ storageId, settings: repos.settings, folder, eventLog });
   /**
    * Whether the files folder is indexed: the indexer is configured and a
@@ -257,10 +243,9 @@ export async function composeApp(
    */
   const indexed = async () =>
     config.fdriveIndexerUrl !== undefined && indexerEnabled(await featureValues());
-  /** The same for every login: the storage's name, whether Trash is on, and indexing. */
+  /** The same for every login: the storage's name and whether it is indexed. */
   const installation = async () => ({
     storageName: await storage.name(),
-    trash: (await trashSettings.configuration(storageId)).enabled,
     index: await indexed(),
   });
   const localUserStore = createLocalUserStore({
@@ -295,23 +280,21 @@ export async function composeApp(
   // saved, Office cannot be enabled and MCP links are paths on this origin.
   const publicUrl = createPublicUrlService({ settings: repos.settings });
 
-  /** The installation's Trash settings, kept in memory by their service. */
-  const currentTrash = () => trashSettings.configuration(storageId);
   const storageFactory = createIdentityStorageFactory({
     identities: repos.identities,
     folder,
     clock,
-    resolveTrashSettings: currentTrash,
   });
   // A signed-in request's principal: its session or token query already
   // read the login and admitted its user, so its storage needs no query.
-  const principalFor = createPrincipalFactory({ folder, clock, trashSettings: currentTrash });
-  // Without Trash settings: deletes are real. For fdrive's own bookkeeping
-  // (the Mac's staged files) and Office, which only saves over documents.
+  const principalFor = createPrincipalFactory({ folder, clock });
+  // Deletes are real: for fdrive's own bookkeeping (the Mac's staged files)
+  // and Office, which only saves over documents.
   const storageWithoutTrash = createIdentityStorageFactory({
     identities: repos.identities,
     folder,
     clock,
+    withoutTrash: true,
   });
   const shareRepo = createShareRepo(db);
   const admitActivity = createActivityAdmission({
@@ -344,8 +327,6 @@ export async function composeApp(
     repos,
     storageId,
     storageFor: storageFactory,
-    trashPathFor: (identityId) => trashSettings.pathForIdentity(identityId),
-    closedFolders,
   });
   const scopeResolver = createScopeResolver({
     received: (username) => localGrants.received(username),
@@ -409,17 +390,8 @@ export async function composeApp(
   const officeFiles = createOfficeFileRepo(db);
   const officeMoves = createOfficeMoves({ files: officeFiles, grants: localGrants, clock });
   const followers = [...accessFollowers, officeMoves];
-  /** A login's Trash folder while Trash is on; none for a login removed since. */
-  const trashPathOf = async (identityId: string): Promise<string | null> => {
-    try {
-      return await trashSettings.pathForIdentity(identityId);
-    } catch (error) {
-      if (error instanceof ApiHttpError && error.kind === "unauthorized") return null;
-      throw error;
-    }
-  };
   // A move into the Trash, whoever reports it, leaves metadata where the item was.
-  const metadataService = withFollowers(withTrashMoves(metadataCore, trashPathOf), followers);
+  const metadataService = withFollowers(withTrashMoves(metadataCore), followers);
   const desktopRepo = createDesktopRepo(db);
   const desktopRetention = createDesktopRetention({
     repo: desktopRepo,
@@ -430,14 +402,24 @@ export async function composeApp(
     eventLog,
   });
   const fsMetadata = withFollowers(
-    withTrashMoves(withDesktopMetadata(metadataCore, desktopRepo), trashPathOf),
+    withTrashMoves(withDesktopMetadata(metadataCore, desktopRepo)),
     followers,
   );
+  // Deletes what each Trash kept longer than the installation's retention.
+  const trashRetention = createTrashRetention({
+    identities: repos.identities,
+    storageFor: storageFactory,
+    settings: trashSettings,
+    activity: personalActivity,
+    metadata: fsMetadata,
+    clock,
+    eventLog,
+  });
   // A Mac write moves what grants access with its receipt (`desktop/writes.ts`)
   // and the rest after it. It keeps its own item handles, so this skips the
   // handle registry, whose `onTrashed` would retire the handle of an item the
   // Mac puts in its own Trash.
-  const desktopMetadata = withFollowers(withTrashMoves(metadataCore, trashPathOf), [officeMoves]);
+  const desktopMetadata = withFollowers(withTrashMoves(metadataCore), [officeMoves]);
   const desktopAccess = async (
     identityId: string,
     from: string,
@@ -750,10 +732,6 @@ export async function composeApp(
       }
     },
     clock,
-    trashPathForStorage: (storage) => {
-      const settings = trashSettingsForStorage(storage);
-      return settings?.enabled === true ? settings.path : null;
-    },
   };
   const aiSettings = createAiSettingsService({
     settings: repos.settings,
@@ -783,10 +761,6 @@ export async function composeApp(
       clock,
       metadata: metadataService,
       activity: personalActivity,
-      trashPathForStorage: (storage) => {
-        const settings = trashSettingsForStorage(storage);
-        return settings?.enabled === true ? settings.path : null;
-      },
     },
     clock,
     onUnexpectedError: (error) => logger.warn({ err: error }, "chat reply failed"),
@@ -847,10 +821,6 @@ export async function composeApp(
         changes: createDesktopChanges({
           journal: createChangeJournal(db),
           scopes: scopeResolver.scopesFor,
-          trashPathForStorage: (storage) => {
-            const settings = trashSettingsForStorage(storage);
-            return settings?.enabled === true ? settings.path : null;
-          },
         }),
         writes: createDesktopWrites({
           repo: desktopRepo,
@@ -861,10 +831,6 @@ export async function composeApp(
           bus,
           logger,
           storageForIdentity: storageWithoutTrash,
-          trashPathForStorage: (storage) => {
-            const settings = trashSettingsForStorage(storage);
-            return settings?.enabled === true ? settings.path : null;
-          },
         }),
         apiTokens: repos.apiTokens,
         logins: repos.logins,
@@ -873,10 +839,6 @@ export async function composeApp(
         clock,
         indexedContent: desktopIndexedContent,
         clientIp: (c) => extractClientIp(c, config.fdriveTrustedProxyHops),
-        trashPathForStorage: (storage) => {
-          const settings = trashSettingsForStorage(storage);
-          return settings?.enabled === true ? settings.path : null;
-        },
       });
       registerSharesRoutes(groups, {
         activity: personalActivity,
@@ -885,7 +847,6 @@ export async function composeApp(
           repos,
           shares: shareRepo,
           storageFor: storageFactory,
-          trashPathFor: (identityId) => trashSettings.pathForIdentity(identityId),
           passwords,
           zipLimits: { maxBytes: config.fdriveJobMaxBytes },
           clock,
@@ -925,18 +886,10 @@ export async function composeApp(
         archivePeekMaxBytes: config.fdriveArchivePeekMaxBytes,
         jsonMaxBytes: config.fdriveJsonMaxBytes,
         metadata: fsMetadata,
-        trashPathForStorage: (storage: StorageProvider) => {
-          const settings = trashSettingsForStorage(storage);
-          return settings?.enabled === true ? settings.path : null;
-        },
         folderSize: {
           indexQueries,
           resolver: scopeResolver,
           indexed,
-          trashPathForStorage: (storage: StorageProvider) => {
-            const settings = trashSettingsForStorage(storage);
-            return settings?.enabled === true ? settings.path : null;
-          },
         },
       };
       registerFsRoutes(groups, fsRoutesDeps);
@@ -945,10 +898,9 @@ export async function composeApp(
         activity: personalActivity,
         bus,
         clock,
-        settingsForStorage: trashSettingsForStorage,
         metadata: fsMetadata,
       });
-      registerTrashSettingsRoutes(groups, { service: trashSettings, storageId });
+      registerTrashSettingsRoutes(groups, { service: trashSettings });
       registerPublicUrlRoutes(groups, { service: publicUrl });
       registerOfficeSettingsRoutes(groups, {
         service: officeSettings,
@@ -987,19 +939,11 @@ export async function composeApp(
         indexerConfigured: config.fdriveIndexerUrl !== undefined,
         semanticEnabled: embedClient !== null,
         imageSearchEnabled: imageEmbedClient !== null,
-        trashPathForStorage: (storage) => {
-          const settings = trashSettingsForStorage(storage);
-          return settings?.enabled === true ? settings.path : null;
-        },
       });
       registerPhotoRoutes(groups, {
         indexQueries,
         resolver: scopeResolver,
         indexed,
-        trashPathForStorage: (storage) => {
-          const settings = trashSettingsForStorage(storage);
-          return settings?.enabled === true ? settings.path : null;
-        },
       });
       registerThumbRoutes(groups, {
         enabled: async () =>
@@ -1008,10 +952,6 @@ export async function composeApp(
         indexQueries,
         resolver: scopeResolver,
         thumbsDir: config.fdriveThumbsDir,
-        trashPathForStorage: (storage) => {
-          const settings = trashSettingsForStorage(storage);
-          return settings?.enabled === true ? settings.path : null;
-        },
       });
       registerActivityRoutes(groups, {
         indexerUrl: config.fdriveIndexerUrl,
@@ -1059,6 +999,7 @@ export async function composeApp(
 
   activityMaintenance.start();
   desktopRetention.start();
+  trashRetention.start();
   return {
     app,
     close: async () => {
@@ -1066,6 +1007,7 @@ export async function composeApp(
       await backups.close();
       await activityMaintenance.stop();
       await desktopRetention.stop();
+      await trashRetention.stop();
       if (indexerListener !== null) {
         await indexerListener.stop();
       }

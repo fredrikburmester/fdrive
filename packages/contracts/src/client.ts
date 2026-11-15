@@ -145,8 +145,6 @@ import {
   type TrashRestoreRequest,
   TrashRestoreResponse,
   TrashSettings,
-  type TrashSettingsUpdateRequest,
-  TrashStatusResponse,
 } from "./trash.ts";
 import {
   AdminUser,
@@ -252,9 +250,8 @@ export interface ApiClient {
   cancelChat(id: string): Promise<Chat>;
   /** Applies or declines one pending action card. */
   actOnChat(id: string, actionId: string, req: ChatActionRequest): Promise<Chat>;
-  /** The Trash settings of one storage server; every server keeps its own. */
-  systemTrash(providerId: string): Promise<TrashSettings>;
-  systemUpdateTrash(input: TrashSettingsUpdateRequest): Promise<TrashSettings>;
+  /** Sets how long Trash keeps an item, for the whole installation. */
+  systemUpdateTrash(input: TrashSettings): Promise<TrashSettings>;
   listShares(): Promise<SharesResponse>;
   createShare(input: CreateShareRequest): Promise<ManagedShare>;
   getShare(id: string): Promise<ManagedShare>;
@@ -399,7 +396,7 @@ export interface ApiClient {
   resetFolderViews(): Promise<OkResponse>;
   listRecents(): Promise<RecentsResponse>;
   touchRecent(req: RecentTouchRequest): Promise<OkResponse>;
-  trashStatus(): Promise<TrashStatusResponse>;
+  trashSettings(): Promise<TrashSettings>;
   trashList(): Promise<TrashListResponse>;
   trashRestore(req: TrashRestoreRequest): Promise<TrashRestoreResponse>;
   trashPurge(req: TrashPurgeRequest): Promise<OkResponse>;
@@ -900,10 +897,7 @@ export function createApiClient(options: ApiClientOptions = {}): ApiClient {
     actOnChat(id: string, actionId: string, req: ChatActionRequest): Promise<Chat> {
       return post(chatActionRoute(id, actionId), Chat, { jsonBody: req });
     },
-    systemTrash(providerId: string): Promise<TrashSettings> {
-      return get(ROUTES.system.trash, TrashSettings, { query: { providerId } });
-    },
-    systemUpdateTrash(input: TrashSettingsUpdateRequest): Promise<TrashSettings> {
+    systemUpdateTrash(input: TrashSettings): Promise<TrashSettings> {
       return put(ROUTES.system.trash, TrashSettings, { jsonBody: input });
     },
     systemActivity(): Promise<SystemActivityResponse> {
@@ -1122,8 +1116,8 @@ export function createApiClient(options: ApiClientOptions = {}): ApiClient {
       return post(ROUTES.recents.touch, OkResponse, { jsonBody: req });
     },
 
-    trashStatus(): Promise<TrashStatusResponse> {
-      return get(ROUTES.trash.status, TrashStatusResponse);
+    trashSettings(): Promise<TrashSettings> {
+      return get(ROUTES.trash.settings, TrashSettings);
     },
 
     trashList(): Promise<TrashListResponse> {

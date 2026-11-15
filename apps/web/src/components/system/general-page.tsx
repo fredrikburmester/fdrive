@@ -70,7 +70,7 @@ function StorageCard({ storage }: { storage: SystemStorage }) {
   );
 }
 
-/** The files folder's settings: its name and health, then its Trash. */
+/** The files folder's settings: its name and health. */
 function StorageSettings() {
   const query = useSystemStorage();
   if (query.isError) {
@@ -79,18 +79,14 @@ function StorageSettings() {
   if (query.data === undefined) {
     return <Skeleton className="h-40 w-full" />;
   }
-  return (
-    <>
-      <StorageCard storage={query.data} />
-      <TrashSettingsCard provider={{ id: query.data.id, label: query.data.name }} />
-    </>
-  );
+  return <StorageCard storage={query.data} />;
 }
 
 /**
  * Admin page: `System > General`. The installation-wide settings that are
- * neither a feature nor a sidecar: the address fdrive is reached at, and
- * the files folder (`FDRIVE_STORAGE_ROOT`) with its name and Trash.
+ * neither a feature nor a sidecar: the address fdrive is reached at, the
+ * files folder (`FDRIVE_STORAGE_ROOT`) with its name, and how long Trash
+ * keeps an item.
  */
 export function GeneralPage() {
   const publicUrl = useSystemPublicUrl();
@@ -105,6 +101,7 @@ export function GeneralPage() {
     >
       <PublicUrlCard />
       <StorageSettings />
+      <TrashSettingsCard />
     </SystemPage>
   );
 }

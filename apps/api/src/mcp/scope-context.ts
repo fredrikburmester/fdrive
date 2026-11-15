@@ -13,14 +13,6 @@ import { indexPrefixes, reservedExclusion } from "../search/scopes.ts";
 export interface ScopeContext {
   readonly scopes: readonly Scope[];
   readonly scopePrefixes: readonly ScopePrefix[];
-  /**
-   * The login's Trash folder virtual path, when Trash is on. With it, every
-   * query leaves fdrive's own folders out (`reservedExclusionOf`) and
-   * `virtualPathFor` never maps a row into one, so they never appear in MCP
-   * tool results (`find_files`, `find_duplicates`, `similar_files`,
-   * `folder_overview`, `recent_moves`, ...).
-   */
-  readonly trashPath: string | null;
 }
 
 /**
@@ -29,7 +21,7 @@ export interface ScopeContext {
  * and totals count only what the tool can return.
  */
 export function reservedExclusionOf(ctx: ScopeContext): IndexExclusion {
-  return reservedExclusion(ctx.scopes, ctx.trashPath);
+  return reservedExclusion(ctx.scopes);
 }
 
 /**
@@ -37,21 +29,18 @@ export function reservedExclusionOf(ctx: ScopeContext): IndexExclusion {
  * `ScopeResolver.scopesFor`, narrowed to a token's folders), or `null` when
  * nothing is left of them.
  */
-export function resolveScopeContext(
-  scopes: readonly Scope[],
-  trashPath: string | null,
-): ScopeContext | null {
+export function resolveScopeContext(scopes: readonly Scope[]): ScopeContext | null {
   if (scopes.length === 0) {
     return null;
   }
-  return { scopes, scopePrefixes: indexPrefixes(scopes), trashPath };
+  return { scopes, scopePrefixes: indexPrefixes(scopes) };
 }
 
 /**
  * Maps a row's path in the files folder back to the caller's virtual path,
  * `null` when out of scope, when a more specific scope shadows this exact
  * location (see `roundTripVirtualPath`), or in one of fdrive's own folders
- * (`isReservedPath`, per `ctx.trashPath`), which a lookup by id or exact
+ * (`isReservedPath`), which a lookup by id or exact
  * path does not leave out on its own. Every index-derived candidate must be
  * filtered through this before it can contribute to a tool's result; one
  * that maps is the caller's to see, with no storage read.
@@ -61,7 +50,7 @@ export function virtualPathFor(ctx: ScopeContext, fsPath: string): string | null
   if (virtualPath === null) {
     return null;
   }
-  return isReservedPath(virtualPath, ctx.trashPath) ? null : virtualPath;
+  return isReservedPath(virtualPath) ? null : virtualPath;
 }
 
 /**

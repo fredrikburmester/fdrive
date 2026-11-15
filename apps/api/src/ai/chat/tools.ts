@@ -29,10 +29,6 @@ function shareOf(deps: DriveToolsDeps) {
   return deps.share ?? { contents: true, otherFileNames: true };
 }
 
-function trashPathOf(deps: DriveToolsDeps): string | null {
-  return deps.mcp.trashPathForStorage?.(deps.principal.storage) ?? deps.mcp.trashPath ?? null;
-}
-
 function normalizeArg(path: string): string {
   try {
     return normalizePath(path);
@@ -48,7 +44,7 @@ async function storedArg(deps: DriveToolsDeps, path: string): Promise<string> {
 /** The stored path of a referenced item, or a tool error the model can act on. */
 export async function referencedArg(deps: DriveToolsDeps, raw: string): Promise<string> {
   const path = await storedArg(deps, raw);
-  if (isReservedPath(path, trashPathOf(deps)))
+  if (isReservedPath(path))
     throw new AiToolError("That path is in fdrive's own folders, like the Trash.");
   if (!isWithin(deps.focus.paths, path))
     throw new AiToolError(

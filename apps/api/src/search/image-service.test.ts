@@ -13,11 +13,11 @@ import {
   selectImageHits,
 } from "./image-service.js";
 
-/** What the query leaves out for alice: the Mac app's folder, her own Shared with me, the reserved names and her Trash, if any. */
-function reserved(...trash: string[]) {
+/** fdrive's own folders in alice's home and her own Shared with me, as every query leaves them out. */
+function reserved() {
   return {
     prefixes: [
-      ...trash.map((fsPrefix) => ({ rootId: 1, fsPrefix })),
+      { rootId: 1, fsPrefix: "/alice/.trash" },
       { rootId: 1, fsPrefix: "/alice/.fdrive-desktop" },
       { rootId: 1, fsPrefix: "/alice/Shared with me" },
     ],
@@ -80,7 +80,6 @@ function buildDeps(overrides: Partial<ImageSearchServiceDeps> = {}): ImageSearch
     indexQueries: fakeIndexQueries(),
     imageEmbedClient: fakeImageEmbedClient(),
     resolveHealth: healthyResolver(),
-    trashPath: null,
     clock: () => NOW,
     ...overrides,
   };
@@ -235,17 +234,9 @@ describe("createImageSearchService", () => {
     const searchImages = vi.fn(async () => [makeRow({ path: "alice/cat.jpg" })]);
     const indexQueries = fakeIndexQueries({ searchImages });
 
-    await createImageSearchService(buildDeps({ indexQueries, trashPath: "/.trash" })).search(
-      buildInput(),
-    );
-    await createImageSearchService(buildDeps({ indexQueries, trashPath: "/.trash" })).search(
-      buildInput({ trashPath: "/Bin" }),
-    );
     await createImageSearchService(buildDeps({ indexQueries })).search(buildInput());
 
     expect(searchImages.mock.calls.map((call) => (call as unknown[])[4])).toEqual([
-      { exclude: reserved("/alice/.trash") },
-      { exclude: reserved("/alice/Bin") },
       { exclude: reserved() },
     ]);
   });

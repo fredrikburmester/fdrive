@@ -8,48 +8,33 @@ const ACCOUNT_ID = "account-1";
 
 describe("isMoveIntoTrash", () => {
   it("is a move into the Trash folder, or onto it, from outside it", () => {
-    expect(isMoveIntoTrash("/.trash", "/docs", "/.trash/.fdrive-move-v1/dir/p/docs/v/1")).toBe(
-      true,
-    );
-    expect(isMoveIntoTrash("/.trash", "/docs", "/.trash")).toBe(true);
-    expect(isMoveIntoTrash("/.trash/", "/docs", "/.trash/docs")).toBe(true);
-  });
-
-  it("is never one while Trash is off", () => {
-    expect(isMoveIntoTrash(null, "/docs", "/.trash/.fdrive-move-v1/dir/p/docs/v/1")).toBe(false);
-  });
-
-  it("follows the configured folder, not the default name", () => {
-    expect(isMoveIntoTrash("/Bin", "/docs", "/.trash/docs")).toBe(false);
-    expect(isMoveIntoTrash("/Bin", "/docs", "/Bin/.fdrive-move-v1/dir/p/docs/v/1")).toBe(true);
-    expect(isMoveIntoTrash("/Bin", "/docs", "/Bin-old/docs")).toBe(false);
-    expect(isMoveIntoTrash("/Archive/Bin", "/Archive/docs", "/Archive/Bin/docs")).toBe(true);
-    expect(isMoveIntoTrash("/Archive/Bin", "/docs", "/Archive/docs")).toBe(false);
+    expect(isMoveIntoTrash("/docs", "/.trash/.fdrive-move-v1/dir/p/docs/v/1")).toBe(true);
+    expect(isMoveIntoTrash("/docs", "/.trash")).toBe(true);
+    expect(isMoveIntoTrash("/docs", "/.trash/docs")).toBe(true);
+    expect(isMoveIntoTrash("/docs", "/Bin/.fdrive-move-v1/dir/p/docs/v/1")).toBe(false);
+    expect(isMoveIntoTrash("/docs", "/.trash-old/docs")).toBe(false);
   });
 
   it("is an ordinary move out of the Trash or within it", () => {
-    expect(isMoveIntoTrash("/.trash", "/.trash/.fdrive-move-v1/dir/p/docs/v/1", "/docs")).toBe(
-      false,
-    );
-    expect(isMoveIntoTrash("/.trash", "/.trash/a", "/.trash/b")).toBe(false);
+    expect(isMoveIntoTrash("/.trash/.fdrive-move-v1/dir/p/docs/v/1", "/docs")).toBe(false);
+    expect(isMoveIntoTrash("/.trash/a", "/.trash/b")).toBe(false);
   });
 });
 
 describe("withTrashMoves", () => {
-  function build(trashPath: string | null) {
+  function build() {
     const repos = createMemoryRepos();
     const grants = {
       onMoved: vi.fn(async () => undefined),
       onDeleted: vi.fn(async () => undefined),
     };
     const metadata = createMetadataService(repos);
-    const trashPathFor = vi.fn(async () => trashPath);
-    const wrapped = withFollowers(withTrashMoves(metadata, trashPathFor), [grants]);
-    return { metadata, grants, trashPathFor, wrapped };
+    const wrapped = withFollowers(withTrashMoves(metadata), [grants]);
+    return { metadata, grants, wrapped };
   }
 
   it("keeps tags and favorites where a folder was, and moves its shares with it into the Trash", async () => {
-    const { metadata, grants, trashPathFor, wrapped } = build("/.trash");
+    const { metadata, grants, wrapped } = build();
     const tag = await metadata.createTag(ACCOUNT_ID, { name: "Work", color: null });
     await metadata.setFileTags({ accountId: ACCOUNT_ID, identityId: IDENTITY_ID }, "/docs/a.txt", [
       tag.id,
@@ -59,7 +44,6 @@ describe("withTrashMoves", () => {
 
     await wrapped.onMoved(IDENTITY_ID, "/docs", "/.trash/.fdrive-move-v1/dir/p/docs/v/1", true);
 
-    expect(trashPathFor).toHaveBeenCalledWith(IDENTITY_ID);
     // As when fdrive moves it to Trash itself, which reports the same leaf.
     expect(grants.onMoved.mock.calls).toEqual([
       [IDENTITY_ID, "/docs", "/.trash/.fdrive-move-v1/dir/p/docs/v/1", true],
@@ -72,7 +56,7 @@ describe("withTrashMoves", () => {
   });
 
   it("passes every other move on, including a restore out of the Trash", async () => {
-    const { grants, wrapped } = build("/.trash");
+    const { grants, wrapped } = build();
     await wrapped.onMoved(IDENTITY_ID, "/docs", "/Work/docs", true);
     await wrapped.onMoved(IDENTITY_ID, "/.trash/.fdrive-move-v1/dir/p/docs/v/1", "/docs", true);
     expect(grants.onMoved.mock.calls).toEqual([
@@ -81,18 +65,11 @@ describe("withTrashMoves", () => {
     ]);
   });
 
-  it("passes a move into a folder named like the Trash while Trash is off", async () => {
-    const { grants, wrapped } = build(null);
-    await wrapped.onMoved(IDENTITY_ID, "/docs", "/.trash/docs", true);
-    expect(grants.onMoved).toHaveBeenCalledWith(IDENTITY_ID, "/docs", "/.trash/docs", true);
-  });
-
   it("leaves deletes and trashes as they are", async () => {
-    const { grants, trashPathFor, wrapped } = build("/.trash");
+    const { grants, wrapped } = build();
     await wrapped.onDeleted(IDENTITY_ID, "/docs", true);
     await wrapped.onTrashed(IDENTITY_ID, "/other", true, "/.trash/other");
     expect(grants.onDeleted).toHaveBeenCalledWith(IDENTITY_ID, "/docs", true);
     expect(grants.onMoved).toHaveBeenCalledWith(IDENTITY_ID, "/other", "/.trash/other", true);
-    expect(trashPathFor).not.toHaveBeenCalled();
   });
 });
