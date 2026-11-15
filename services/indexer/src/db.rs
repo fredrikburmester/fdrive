@@ -74,10 +74,21 @@ impl Db {
 pub struct ManifestRow {
     pub size: i64,
     pub mtime_ns: i64,
+    /// The status its retries are decided on (`retry_status`).
     pub status: String,
     pub sha256: Option<String>,
     pub image_embedded: bool,
     pub thumbnail_failed: bool,
+}
+
+/// The status an unchanged row's retry is decided on (`indexer::should_retry_unchanged`): its
+/// `text_status`, but `excluded:image_dir` for an image excluded by its folder, which only OCR
+/// lifts. Other exclusions keep their reason in `error` alone.
+pub fn retry_status(text_status: String, error: Option<&str>) -> String {
+    match error {
+        Some(reason @ "excluded:image_dir") => reason.to_owned(),
+        _ => text_status,
+    }
 }
 
 /// Every row of a root with its content key, whether that key has an image embedding,
@@ -85,7 +96,7 @@ pub struct ManifestRow {
 pub fn scan_manifest(c: &mut Client, root_id: i64) -> Result<HashMap<String, ManifestRow>> {
     let rows = c.query(
         r#"SELECT f.path, f.size::bigint, f.mtime_ns::bigint, f.text_status, f.sha256,
-                  e.content_key IS NOT NULL, p.id IS NOT NULL
+                  e.content_key IS NOT NULL, p.id IS NOT NULL, f.error
            FROM "idx"."files" f
            LEFT JOIN "app"."image_embeddings" e ON e.content_key = f.sha256
            LEFT JOIN "idx"."processing_failures" p ON p.root_id = f.root_id AND p.path = f.path
@@ -101,7 +112,7 @@ pub fn scan_manifest(c: &mut Client, root_id: i64) -> Result<HashMap<String, Man
                 ManifestRow {
                     size: r.get(1),
                     mtime_ns: r.get(2),
-                    status: r.get(3),
+                    status: retry_status(r.get(3), r.get(7)),
                     sha256: r.get(4),
                     image_embedded: r.get(5),
                     thumbnail_failed: r.get(6),
@@ -791,7 +802,7 @@ pub fn scan_baseline(c: &mut Client, root_id: i64) -> Result<(bool, bool)> {
 pub fn subtree_manifest(c: &mut Client, root_id: i64, path: &str) -> Result<HashMap<String, ManifestRow>> {
     let prefix = format!("{path}/");
     let rows = c.query(
-        r#"SELECT path, size::bigint, mtime_ns::bigint, text_status, sha256 FROM "idx"."files"
+        r#"SELECT path, size::bigint, mtime_ns::bigint, text_status, sha256, error FROM "idx"."files"
            WHERE root_id = $1::bigint AND (path = $2 OR starts_with(path, $3))"#,
         &[&root_id, &path, &prefix],
     )?;
@@ -803,7 +814,7 @@ pub fn subtree_manifest(c: &mut Client, root_id: i64, path: &str) -> Result<Hash
                 ManifestRow {
                     size: r.get(1),
                     mtime_ns: r.get(2),
-                    status: r.get(3),
+                    status: retry_status(r.get(3), r.get(5)),
                     sha256: r.get(4),
                     image_embedded: false,
                     thumbnail_failed: false,
