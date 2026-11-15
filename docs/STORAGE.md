@@ -85,6 +85,9 @@ How the files folder implements it:
   publish it with `link`, a real create-if-absent; only `overwrite: true` renames it over a
   taken name. A `durable` upload flushes the file to disk before publishing it and its folder
   after, so it survives a crash once the call returns; the Mac's staged uploads are durable.
+  An upload's `critical` runs only the steps that change what is at its path (creating missing
+  parent folders, publishing) inside the caller's critical section, after the body is staged:
+  the file operations hold the path there, and never while a client's body arrives.
   `stat` reports the inode of a file or folder (`ino`), which a rename keeps.
 - **Uploads in pieces.** The web app sends files over 8 MiB in 8 MiB pieces (`upload` with
   `part`; `/fs/upload` with `part`, `offset` and `final`). Each piece is written into

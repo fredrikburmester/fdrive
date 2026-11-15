@@ -275,6 +275,55 @@ describe("creating files", () => {
     expect(h.storage.dump()).toMatchObject({ "/visitor.txt": "\u0003" });
   });
 
+  it("holds nothing while a body arrives, so other writes to the same path and others go on", async () => {
+    const steps: string[] = [];
+    const storage = createMemoryStorage({});
+    let held = 0;
+    const { access } = recordingAccess(steps);
+    const run = access.run;
+    const counted: AccessFollowers = {
+      ...access,
+      run: async (identityId, paths, work) => {
+        held++;
+        try {
+          return await run(identityId, paths, work);
+        } finally {
+          held--;
+        }
+      },
+    };
+    const files = testFileOperations({ access: counted });
+    const actor = fileActor(principal(storage), { source: "web" });
+    let arrive!: () => void;
+    let reading!: () => void;
+    const started = new Promise<void>((resolve) => {
+      reading = resolve;
+    });
+    const stalled = new ReadableStream<Uint8Array>({
+      async pull(controller) {
+        reading();
+        await new Promise<void>((resolve) => {
+          arrive = resolve;
+        });
+        controller.enqueue(new Uint8Array([1]));
+        controller.close();
+      },
+    });
+    const slow = files.upload(actor, "/same.txt", stalled, {
+      action: "file.save",
+      overwrite: true,
+    });
+    await started;
+    expect(held).toBe(0);
+    await files.upload(actor, "/same.txt", new Uint8Array([2]), { action: "file.create" });
+    await files.upload(actor, "/other.txt", new Uint8Array([3]), { action: "file.create" });
+    await files.move(actor, "/other.txt", "/moved.txt");
+    expect(storage.dump()).toEqual({ "/same.txt": "\u0002", "/moved.txt": "\u0003" });
+    arrive();
+    await slow;
+    expect(storage.dump()).toEqual({ "/same.txt": "\u0001", "/moved.txt": "\u0003" });
+  });
+
   it("only stores a piece before the last, which publishes nothing", async () => {
     const h = harness({});
     const upload = vi.spyOn(h.storage, "upload").mockResolvedValue();

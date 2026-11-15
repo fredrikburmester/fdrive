@@ -88,7 +88,9 @@ Reference for affected code; shared rules live in [AGENTS.md](../AGENTS.md).
 - Office's save path and file operations' transactions each keep a database pool of their own.
   They never wait on each other; sharing one would let slow Office saves hold up Trash moves.
   A file operation holds its connection while its storage call runs, and storage reads the main
-  pool meanwhile, so it cannot share the main pool either.
+  pool meanwhile, so it cannot share the main pool either. That is why no file operation holds
+  one while a client's body arrives: an upload stages its body and holds its path only to
+  publish it (`critical`), so slow or stalled uploads cannot take the pool.
 - The API keeps what every request would read again in memory: that setup is done, the Trash
   retention and the storage name. Only the API writes them, so a test (or
   anything else) that changes the Trash retention or the storage name straight in `app.settings`

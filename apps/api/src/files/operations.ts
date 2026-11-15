@@ -151,6 +151,10 @@ function trashId(leaf: string): string {
  * of Trash. Either way, no link, share with people or Office file stays at a
  * path a successful operation left, and a new item there waits for them to
  * have gone (`TouchedPaths`).
+ *
+ * No transaction or lock is held while a client's body arrives: an upload
+ * stages its body first and holds its path only to publish it
+ * (`StorageProvider.upload`'s `critical`).
  */
 export function createFileOperations(deps: FileOperationsDeps): FileOperations {
   /** Records `mutate` as one command, unless no one records it. */
@@ -248,9 +252,12 @@ export function createFileOperations(deps: FileOperationsDeps): FileOperations {
         actor,
         { action, requested, ...(before ? { before } : {}) },
         () =>
-          deps.access.run(actor.identityId, { creates: [path] }, () =>
-            actor.storage.upload(path, body, storageOptions),
-          ),
+          actor.storage.upload(path, body, {
+            ...storageOptions,
+            // Only the publish holds the path, never the body as it arrives.
+            critical: (work) =>
+              deps.access.run(actor.identityId, { creates: [path] }, () => work()),
+          }),
         async () =>
           (await activityStat(actor.storage, path)) ?? {
             path,

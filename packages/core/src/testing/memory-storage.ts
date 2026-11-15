@@ -283,6 +283,7 @@ export function createMemoryStorage(
       if (opts?.overwrite !== true && fileMap.has(normalized)) throw taken(path);
       if (opts?.mkdirParents !== true && !isDir(parentPath(normalized)))
         throw new StorageError("not_found", `parent not found: ${path}`);
+      // Staged first, outside the caller's critical section.
       const bytes = await readAll(body);
       if (opts?.contentLength !== undefined && bytes.length !== opts.contentLength)
         throw new StorageError("bad_request", `upload ended after ${bytes.length} bytes: ${path}`);
@@ -299,7 +300,13 @@ export function createMemoryStorage(
         if (!part.final) return;
         parts.delete(part.id);
       }
-      putFile(normalized, content, opts?.modifiedAt ?? clock());
+      const critical = opts?.critical ?? (<T>(work: () => Promise<T>) => work());
+      await critical(async () => {
+        // A create-if-absent publish: a name taken meanwhile is refused.
+        if (isDir(normalized)) throw new StorageError("conflict", `a directory exists at ${path}`);
+        if (opts?.overwrite !== true && fileMap.has(normalized)) throw taken(path);
+        putFile(normalized, content, opts?.modifiedAt ?? clock());
+      });
     },
 
     async mkdir(path, opts): Promise<void> {

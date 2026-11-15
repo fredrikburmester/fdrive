@@ -35,8 +35,10 @@ transaction holding the locks of the documents and names it touches until it com
 document's own (its file UUID, the key WOPI lock requests take too) and, for a new name, the
 name's. Saves to one document wait for each other; saves to different documents run side by
 side. Nested lock and registry work stays on the scope's connection. Writes and renames go
-through the file operations like every other change to files. Scope handles cannot escape
-their callback lifetime.
+through the file operations like every other change to files. The document's lock is held
+while a save's body streams in, on purpose; it is document-scoped, on the scopes' own pool,
+and outside the file operations' transaction, which holds the path only for the publish. Scope
+handles cannot escape their callback lifetime.
 
 The scopes and the WOPI lock repository have a pool of their own. A save holds its document's
 lock, and a connection, while its body streams in, and checks admission and records history on

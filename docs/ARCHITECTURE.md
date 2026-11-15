@@ -98,6 +98,8 @@ a restore, a purge), so a refused change leaves the file where it was and fails 
 Trash names its leaf only once the item is there, so a refused change takes the item back out.
 The transaction holds each path the operation vacates, and an operation creating something
 at or below one waits for it, so a new item never appears where a link or share still points.
+Nothing is held while a client's body arrives: an upload stages its body first and holds its
+path only to publish it.
 A Mac write moves what grants access with its receipt instead. Moves made outside fdrive,
 which the indexer's watcher journals, carry metadata along when the API reads the
 [change journal](INDEXER.md#the-apis-reader); index paths must be translated through the

@@ -55,6 +55,7 @@ describe("what grants access fails closed", () => {
             "/Ai/notes.txt": "notes",
             "/AiBin/old.txt": "old",
             "/Race/inside.txt": "inside",
+            "/Stall/kept.txt": "kept",
           },
           bob: {},
         },
@@ -276,7 +277,9 @@ describe("what grants access fails closed", () => {
   });
 
   /** The file operations as `composition.ts` builds them, over this database. */
-  async function fileOperations(): Promise<{ files: FileOperations; alice: Principal }> {
+  async function fileOperations(
+    pool = operations,
+  ): Promise<{ files: FileOperations; alice: Principal }> {
     const repos = createRepos(database.db);
     const storageFor = createIdentityStorageFactory({
       identities: repos.identities,
@@ -289,7 +292,7 @@ describe("what grants access fails closed", () => {
     });
     const files = createFileOperations({
       access: createAccessFollowers({
-        repo: createAccessRepo(operations.db),
+        repo: createAccessRepo(pool.db),
         ownerPath: grants.ownerPath,
         links: createShareMoves({ ownerPath: grants.ownerPath }).resolve,
         usernameOf: async (identityId) =>
@@ -415,5 +418,60 @@ describe("what grants access fails closed", () => {
     await Promise.all([moving, creating]);
     expect(sharedWhenCreated).toEqual(["/Raced"]);
     expect(await entries(id)).toEqual(["inside.txt"]);
+  });
+
+  it("holds no transaction or lock while an upload's body stalls", async () => {
+    // One connection for every file operation: one held by the stalled
+    // upload would stop every write below.
+    const single = createDb(postgres.connectionString, { max: 1, connectionTimeoutMillis: 5_000 });
+    try {
+      const { files, alice: principal } = await fileOperations(single);
+      const actor = {
+        identityId: principal.identityId,
+        storage: principal.storage,
+        recorded: null,
+      };
+      let arrive!: () => void;
+      let reading!: () => void;
+      const started = new Promise<void>((resolve) => {
+        reading = resolve;
+      });
+      const stalled = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode("slow "));
+        },
+        async pull(controller) {
+          reading();
+          await new Promise<void>((resolve) => {
+            arrive = resolve;
+          });
+          controller.enqueue(new TextEncoder().encode("save"));
+          controller.close();
+        },
+      });
+      const slow = files.upload(actor, "/Stall/same.txt", stalled, {
+        action: "file.save",
+        overwrite: true,
+      });
+      await started;
+      // Another write to the same path, and to others, go on while it stalls.
+      await files.upload(actor, "/Stall/same.txt", new TextEncoder().encode("first"), {
+        action: "file.create",
+      });
+      await files.upload(actor, "/Stall/other.txt", new TextEncoder().encode("other"), {
+        action: "file.create",
+      });
+      await files.mkdir(actor, "/Stall/folder");
+      await files.move(actor, "/Stall/kept.txt", "/Stall/folder/kept.txt");
+      const read = async (path: string) =>
+        new Response((await principal.storage.download(path)).body).text();
+      expect(await read("/Stall/same.txt")).toBe("first");
+      arrive();
+      await slow;
+      expect(await read("/Stall/same.txt")).toBe("slow save");
+      expect(await read("/Stall/folder/kept.txt")).toBe("kept");
+    } finally {
+      await single.close();
+    }
   });
 });
