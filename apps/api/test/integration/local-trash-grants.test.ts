@@ -112,7 +112,7 @@ describe("shared folders in their owner's Trash, through the real indexer", () =
   async function login(username: string): Promise<string> {
     const response = await call(ROUTES.auth.login, {
       method: "POST",
-      body: { credential: { username, password: PASSWORD } },
+      body: { username, password: PASSWORD },
     });
     expect(response.status).toBe(200);
     return cookieFrom(response);

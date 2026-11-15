@@ -93,7 +93,7 @@ describe("setup owner on a local folder", () => {
     }
   });
 
-  it("keeps a refused owner setup resumable and lets exactly one owner claim the folder", async () => {
+  it("leaves nothing of a refused owner setup and lets exactly one owner claim the folder", async () => {
     if (postgres === undefined || storage === undefined)
       throw new Error("test fixtures did not start");
     const { logger, messages } = capturingLogger();
@@ -160,7 +160,7 @@ describe("setup owner on a local folder", () => {
       const owner = winner.identity.username;
       expect(["alice", "bob"]).toContain(owner);
 
-      // Only the winner's user remains: the loser's was removed with its claim.
+      // Only the winner's user remains: the loser's transaction wrote nothing.
       const counts = await inspection.db.execute(sql`
         select (select count(*)::int from app.accounts) as accounts,
           (select count(*)::int from app.identities) as identities,
@@ -188,9 +188,7 @@ describe("setup owner on a local folder", () => {
       const login = await composed.app.request("/api/v1/auth/login", {
         method: "POST",
         headers: { "content-type": "application/json", "x-requested-with": "fdrive" },
-        body: JSON.stringify({
-          credential: { username: owner, password: `${owner}-password` },
-        }),
+        body: JSON.stringify({ username: owner, password: `${owner}-password` }),
       });
       expect(login.status).toBe(200);
     } finally {

@@ -4,15 +4,15 @@ import { dirname, join } from "node:path";
 import type { ProviderModule, StorageProvider } from "@fdrive/core";
 import { createMemoryShareRepo } from "@fdrive/db";
 import { createMemoryRepos } from "@fdrive/db/testing";
-import { createLocalModule, type LocalUsers, type SharedGrant } from "@fdrive/local";
+import { createLocalModule, type SharedGrant } from "@fdrive/local";
 import type { Logger } from "pino";
 import { onTestFinished, vi } from "vitest";
 import { activityFixture } from "../../../test/activity-fixture.js";
 import { createApp } from "../../app.ts";
-import { createAuthModule, createLoginLimiter } from "../../auth/index.ts";
+import { createAuthModule, createLoginLimiter, createPasswordCheck } from "../../auth/index.ts";
 import { createIdentityStorageFactory } from "../../auth/storage-factory.ts";
-import { memoryLoginRepo } from "../../auth/test-fixtures/index.ts";
 import { type AppConfig, loadConfig } from "../../config.ts";
+import type { LocalUserStore } from "../../local/users.ts";
 import { createProviderService } from "../../providers/service.ts";
 import { createShareCredentialCodec } from "../credentials.ts";
 import { createShareLimiter } from "../limiter.ts";
@@ -92,7 +92,6 @@ export function sharesHarness(options: SharesHarnessOptions = {}) {
   const now = { value: new Date("2026-09-07T00:00:00Z") };
   const clock = () => now.value;
   const repos = createMemoryRepos();
-  const logins = memoryLoginRepo(repos);
   const master = Buffer.alloc(32, 13);
   const config: AppConfig = {
     ...loadConfig({
@@ -103,7 +102,7 @@ export function sharesHarness(options: SharesHarnessOptions = {}) {
     }),
     ...options.config,
   };
-  const users: LocalUsers = {
+  const users: LocalUserStore = {
     async verify(username, password) {
       const known = SHARE_USERS.find((name) => name === username);
       return known !== undefined && password === `${known}-pass`
@@ -131,6 +130,16 @@ export function sharesHarness(options: SharesHarnessOptions = {}) {
   });
   const seeded = (async () => {
     const row = await repos.providers.ensure({ type: "local", baseUrl: "local" });
+    // Each user comes with their login, as setup and System > Users create them.
+    for (const username of SHARE_USERS) {
+      await repos.logins.createUser({
+        providerId: row.id,
+        username,
+        passwordHash: "checked by the fake store",
+        isAdmin: false,
+        at: clock(),
+      });
+    }
     return repos.providers.update(row.id, { enabled: true, managedByEnv: true });
   })();
   const storageFactory = createIdentityStorageFactory({
@@ -140,13 +149,10 @@ export function sharesHarness(options: SharesHarnessOptions = {}) {
   });
   const auth = createAuthModule({
     repos,
-    logins,
     providers,
-    fetch: fetchImpl,
-    master,
     clock,
     config,
-    limiter: createLoginLimiter({ clock }),
+    checkPassword: createPasswordCheck({ limiter: createLoginLimiter({ clock }), users }),
     storageFactory,
   });
   const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() } as unknown as Logger;
@@ -223,17 +229,11 @@ export function sharesHarness(options: SharesHarnessOptions = {}) {
     if (init.raw instanceof ReadableStream) request.duplex = "half";
     return app.request(path, request);
   }
-  /** Signs in as `username` on the local folder, or on `providerId` with `password`. */
-  async function login(
-    username = "alice",
-    credentials: { providerId?: string; password?: string } = {},
-  ) {
+  /** Signs in as `username`, with `<username>-pass` unless told otherwise. */
+  async function login(username = "alice", password = `${username}-pass`) {
     const res = await request("/api/v1/auth/login", {
       method: "POST",
-      body: {
-        ...(credentials.providerId === undefined ? {} : { providerId: credentials.providerId }),
-        credential: { username, password: credentials.password ?? `${username}-pass` },
-      },
+      body: { username, password },
     });
     if (res.status !== 200) throw new Error(`login failed: ${res.status} ${await res.text()}`);
     return cookieFrom(res);

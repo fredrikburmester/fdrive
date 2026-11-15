@@ -993,7 +993,7 @@ it("ends a stalled run on its deadline and when its worker ownership connection 
   }
 });
 
-it("validates attachment bytes, recovers ordinary quarantine files, and refuses credential and blob reference corruption", async () => {
+it("validates attachment bytes, recovers ordinary quarantine files, and refuses secret and blob reference corruption", async () => {
   const attachments = new AttachmentStore(store, join(directory, "attachments"), secrets);
   await attachments.collect();
   const id = await attachments.upload(
@@ -1039,16 +1039,16 @@ it("validates attachment bytes, recovers ordinary quarantine files, and refuses 
   const header = (await inspectArchive(result.output, key)).header;
   const manifest = emptyManifest(header);
   const head = jsonEntry("header.json", header);
-  const values = required(header.schema["app.credentials"]).map(() => null);
-  const rowEntry = jsonEntry("rows/app.credentials/0.json", values);
-  const badCredentials = await archive([
+  const values = required(header.schema["app.backup_destinations"]).map(() => null);
+  const rowEntry = jsonEntry("rows/app.backup_destinations/0.json", values);
+  const badSecret = await archive([
     head,
     rowEntry,
     jsonEntry("manifest.json", {
       ...manifest,
       tables: {
         ...manifest.tables,
-        "app.credentials": {
+        "app.backup_destinations": {
           rows: 1,
           sha256: createHash("sha256").update(rowEntry.bytes).digest("hex"),
         },
@@ -1058,13 +1058,13 @@ it("validates attachment bytes, recovers ordinary quarantine files, and refuses 
   await expect(
     restoreArchive({
       pool: (await fresh()).pool,
-      file: badCredentials,
+      file: badSecret,
       identity: key,
       stateDirectory: directory,
       secrets,
       reseal: (bytes) => bytes,
     }),
-  ).rejects.toThrow("Invalid encrypted credential");
+  ).rejects.toThrow("Invalid encrypted secret");
   const blob = {
     entry: "blobs/0",
     kind: "attachment",
@@ -1177,24 +1177,8 @@ it("refuses work before exhausting disk space and rejects tampered retained arch
   );
 });
 
-it("reseals stored credentials and destination secrets while discarding credential token caches", async () => {
-  const provider = randomUUID(),
-    account = randomUUID(),
-    identity = randomUUID(),
-    destination = randomUUID();
-  await db.pool.query(
-    "insert into app.providers(id,type,label,base_url) values($1,'webdav','Storage','http://fixture.invalid')",
-    [provider],
-  );
-  await db.pool.query("insert into app.accounts(id) values($1)", [account]);
-  await db.pool.query(
-    "insert into app.identities(id,account_id,provider_id,external_username) values($1,$2,$3,'owner')",
-    [identity, account, provider],
-  );
-  await db.pool.query(
-    "insert into app.credentials(identity_id,ciphertext,key_id,cached_token,cached_token_expires_at) values($1,$2,'master-v1','transient-token',now())",
-    [identity, secrets.seal(Buffer.from("storage credential"), identity)],
-  );
+it("reseals destination secrets under the new master key", async () => {
+  const destination = randomUUID();
   await store.saveDestination({
     id: destination,
     revision: randomUUID(),
@@ -1221,14 +1205,14 @@ it("reseals stored credentials and destination secrets while discarding credenti
       return bytes;
     },
   });
-  expect(contexts).toEqual(expect.arrayContaining([identity, `backup-destination:${destination}`]));
-  const restored = (await target.pool.query("select * from app.credentials")).rows[0];
-  expect(restored.cached_token).toBeNull();
-  expect(restored.cached_token_expires_at).toBeNull();
-  expect(Buffer.from(secrets.open(restored.ciphertext, identity)).toString()).toBe(
-    "storage credential",
-  );
-  expect((await new BackupStore(target.pool).destination(destination))?.enabled).toBe(false);
+  expect(contexts).toEqual(expect.arrayContaining([`backup-destination:${destination}`]));
+  const restored = await new BackupStore(target.pool).destination(destination);
+  expect(
+    Buffer.from(
+      secrets.open(required(restored).secret, `backup-destination:${destination}`),
+    ).toString(),
+  ).toBe("bucket credential");
+  expect(restored?.enabled).toBe(false);
 });
 
 it("publishes worker-created archives with the shared directory owner's permissions", async () => {

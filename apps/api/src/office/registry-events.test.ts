@@ -18,7 +18,6 @@ function localModule(rootName: string) {
     root: "/srv/files",
     indexRoot: rootName,
     users: {
-      verify: async () => ({ result: "invalid" }),
       status: async () => "active",
       shared: async () => [],
     },

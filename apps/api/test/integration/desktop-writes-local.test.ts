@@ -53,11 +53,11 @@ it("publishes on the local folder with no configuration and refuses an out-of-ba
   };
   const base = "/api/v2/desktop";
   const sha = (value: string) => createHash("sha256").update(value).digest("hex");
-  const credential = { username: "alice", password: "alice-password" };
+  const credentials = { username: "alice", password: "alice-password" };
   /** Alice's copy of `path` on disk, read and written outside fdrive. */
   const onDisk = storage.path.bind(null, "alice");
   try {
-    const login = await call("/api/v1/auth/login", { credential });
+    const login = await call("/api/v1/auth/login", credentials);
     expect(login.status).toBe(200);
     cookie = login.headers.get("set-cookie")?.split(";")[0] ?? "";
     const pairResponse = await call(`${base}/pairings`, { deviceName: "Stock write test" });

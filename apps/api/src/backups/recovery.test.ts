@@ -8,17 +8,17 @@ import { captureSnapshot, inspectArchive, providerDestination, readBounded } fro
 import { type ProviderModule, StorageError, type StorageSession } from "@fdrive/core";
 import { createMemoryStorage, type MemoryStorage } from "@fdrive/core/testing";
 import { createDb, migrate } from "@fdrive/db";
-import { SEED_USERS, startPostgres } from "@fdrive/testkit";
+import { startPostgres } from "@fdrive/testkit";
 import { Decrypter, generateIdentity, identityToRecipient } from "age-encryption";
 import { Pool } from "pg";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
-import { open, seal } from "../auth/crypto.js";
+import { open } from "../auth/crypto.js";
 import { type AppConfig, loadConfig } from "../config.js";
 import * as registry from "../providers/registry.js";
 import { fakeProviderModule } from "../providers/test-fixtures/index.ts";
 import { createScryptSharePasswords } from "../shares/passwords.js";
 import { environmentFingerprint, resumeRecovery, runBackupCommand } from "./command.js";
-import { createBackupModule, rawBackupStorage } from "./module.js";
+import { createBackupModule, userStorage } from "./module.js";
 import {
   createRecoveryApp,
   recoveryIdentity,
@@ -43,26 +43,10 @@ let owner: string, identity: string, provider: string;
 const SOURCE_URL = "http://source.invalid";
 /** What the source's storage holds: one server every seed user signs in to. */
 let served: MemoryStorage;
-/**
- * The source installation's storage: a fileserver the seed users sign in to
- * with their passwords, whose sign-in also takes a one-time code, as a
- * storage whose sign-in takes one declares it: backups must never keep it.
- */
-const fileserver: ProviderModule = fakeProviderModule({
-  credentialFields: [
-    { name: "username", label: "Username", kind: "text", required: true, maxLength: 255 },
-    { name: "password", label: "Password", kind: "password", required: true },
-    { name: "otp", label: "One-time code", kind: "otp", required: false, transient: true },
-  ],
-  async authenticate(_instance, credential) {
-    const user = SEED_USERS.find((candidate) => candidate.username === credential.username);
-    if (user === undefined || user.password !== credential.password) {
-      throw new StorageError("unauthorized", "invalid username or password");
-    }
-    return { externalUsername: user.username };
-  },
-  createStorage: () => served,
-});
+/** The source installation's storage: every user's files are `served`. */
+const fileserver: ProviderModule = fakeProviderModule({ createStorage: () => served });
+/** Cheap scrypt: the hashes are real and verify like production ones. */
+const passwords = createScryptSharePasswords({ cost: 1024, blockSize: 8, parallelization: 1 });
 /**
  * What a restored deployment builds for the source's storage row. These
  * installations configure no files folder, so the fileserver stands in for
@@ -115,17 +99,8 @@ beforeEach(async () => {
     [identity, owner, provider],
   );
   await source.pool.query(
-    "insert into app.credentials(identity_id,key_id,ciphertext) values($1,'master-v1',$2)",
-    [
-      identity,
-      Buffer.from(
-        seal(
-          master,
-          Buffer.from(JSON.stringify({ username: "alice", password: "alice-password" })),
-          identity,
-        ),
-      ),
-    ],
+    "insert into app.local_users(username,password_hash) values('alice',$1)",
+    [await passwords.hash("alice-password")],
   );
   await source.pool.query("insert into app.settings(key,value) values('setup.owner.v1',$1)", [
     JSON.stringify({ state: "complete", accountId: owner }),
@@ -291,19 +266,16 @@ it("boots only the isolated recovery API, requires host authorization, and resto
   expect(
     (await target.db.pool.query("select count(*)::int as count from app.sessions")).rows[0].count,
   ).toBe(0);
-  const secret = (await target.db.pool.query("select ciphertext from app.credentials")).rows[0]
-    .ciphertext;
-  expect(
-    Buffer.from(
-      open(Buffer.from(restoredConfig.fdriveMasterKey, "base64"), secret, identity),
-    ).toString(),
-  ).toContain("alice-password");
+  // The owner's password comes back as their user's hash; no copy of it is kept anywhere else.
+  expect((await target.db.pool.query("select username from app.local_users")).rows).toEqual([
+    { username: "alice" },
+  ]);
   const review = {
     snapshotId: inspection.header.id,
     environmentFingerprint: environmentFingerprint(restoredConfig),
     providers: [{ id: provider, baseUrl: SOURCE_URL }],
     ownerIdentityId: identity,
-    credential: { username: "alice", password: "alice-password" },
+    password: "alice-password",
     oldDeploymentStopped: true,
     pathBindingsReviewed: true,
   };
@@ -319,14 +291,13 @@ it("boots only the isolated recovery API, requires host authorization, and resto
       providers: [{ id: provider, baseUrl: "http://other.invalid" }],
     }),
   ).rejects.toThrow("binding changed");
-  // A missing saved credential must not bypass the fresh owner challenge.
-  await target.db.pool.query("delete from app.credentials where identity_id=$1", [identity]);
-  await expect(
-    resumeRecovery(restoredConfig, {
-      ...review,
-      credential: { username: "alice", password: "wrong" },
-    }),
-  ).rejects.toThrow();
+  // The owner's password is checked against their restored user.
+  await expect(resumeRecovery(restoredConfig, { ...review, password: "wrong" })).rejects.toThrow(
+    "password is not right",
+  );
+  expect((await target.db.pool.query("select enabled from app.providers")).rows[0].enabled).toBe(
+    false,
+  );
   await resumeRecovery(restoredConfig, review);
   expect((await target.db.pool.query("select enabled from app.providers")).rows[0].enabled).toBe(
     true,
@@ -402,7 +373,7 @@ it("rehearses a host cutover and rollback: the old pair stays untouched and serv
       environmentFingerprint: outputs.at(-1),
       providers: [{ id: provider, baseUrl: SOURCE_URL }],
       ownerIdentityId: identity,
-      credential: { username: "alice", password: "alice-password" },
+      password: "alice-password",
       oldDeploymentStopped: true,
       pathBindingsReviewed: true,
     }),
@@ -461,7 +432,7 @@ it("rehearses into a new installation identity without any provider contact or p
     sourceInstallationId: inspection.header.installationId,
     snapshotId: inspection.header.id,
     result: "passed",
-    tableCount: 44,
+    tableCount: 43,
     blobCount: 1,
   });
   expect(
@@ -478,7 +449,7 @@ it("rehearses into a new installation identity without any provider contact or p
       environmentFingerprint: environmentFingerprint(restoredConfig),
       providers: [{ id: provider, baseUrl: SOURCE_URL }],
       ownerIdentityId: identity,
-      credential: { password: "test" },
+      password: "test",
       oldDeploymentStopped: true,
       pathBindingsReviewed: true,
     }),
@@ -514,66 +485,61 @@ it("expires bootstrap authorization and keeps a restored installation paused wit
   expect((await paused.app.request("/api/v1/recovery/status")).status).toBe(503);
 });
 
-it("pins provider backup credentials and keeps reserved ciphertext independently recoverable", async () => {
-  const record = await module.destinationRecord({
-    type: "provider",
+it("keeps a files folder destination in the adding owner's files, with no password", async () => {
+  const input = {
+    type: "provider" as const,
     name: "Fileserver",
     providerId: provider,
     prefix: "/docs",
-    credential: { username: "alice", password: "alice-password" },
-  });
+  };
+  const record = await module.destinationRecord(input, "alice");
+  expect(record.config).toMatchObject({ username: "alice" });
   expect(record.config.prefix).toContain("/.fdrive-backups/");
-  const unattended = await module.destinationRecord({
-    type: "provider",
-    name: "Without one-time codes",
-    providerId: provider,
-    prefix: "/docs",
-    credential: { username: "alice", password: "alice-password", otp: "123456" },
-  });
   expect(
     JSON.parse(
-      Buffer.from(
-        open(master, unattended.secret, `backup-destination:${unattended.id}`),
-      ).toString(),
+      Buffer.from(open(master, record.secret, `backup-destination:${record.id}`)).toString(),
     ),
-  ).toEqual({ username: "alice", password: "alice-password" });
+  ).toEqual({});
   await module.engine.testDestination(record);
   const transport = await module.destination({ ...record, enabled: true });
   const file = await secretFile("payload", "encrypted bytes");
   await transport.put("copy.age", file);
   expect((await readBounded(await transport.get("copy.age"))).toString()).toBe("encrypted bytes");
-  await module.destinationRecord({
-    type: "provider",
-    name: "Same directory",
-    providerId: provider,
-    prefix: "/docs",
-    credential: { username: "alice", password: "alice-password" },
+  await module.destinationRecord({ ...input, name: "Same directory" }, "alice");
+  // A user the files folder no longer lets in stops the copies.
+  const refusing = vi.spyOn(registry, "moduleFor").mockReturnValue({
+    ...fileserver,
+    admit: async () => {
+      throw new StorageError("forbidden", "this user may not sign in");
+    },
   });
+  await expect(module.destination(record)).rejects.toMatchObject({ kind: "forbidden" });
+  await expect(module.destinationRecord(input, "alice")).rejects.toMatchObject({
+    kind: "forbidden",
+  });
+  refusing.mockRestore();
   await source.pool.query(
     "update app.providers set base_url='http://changed.invalid' where id=$1",
     [provider],
   );
   await expect(module.destination(record)).rejects.toThrow("provider changed");
   await expect(
-    module.destinationRecord({
-      type: "provider",
-      name: "Missing",
-      providerId: randomUUID(),
-      prefix: "/",
-      credential: {},
-    }),
+    module.destinationRecord({ ...input, name: "Missing", providerId: randomUUID() }, "alice"),
   ).rejects.toThrow("unavailable");
-  const bucket = await module.destinationRecord({
-    type: "s3",
-    name: "Bucket",
-    endpoint: "https://s3.example.invalid",
-    region: "test",
-    bucket: "private",
-    prefix: "backups/",
-    pathStyle: true,
-    accessKeyId: "test",
-    secretAccessKey: "secret",
-  });
+  const bucket = await module.destinationRecord(
+    {
+      type: "s3",
+      name: "Bucket",
+      endpoint: "https://s3.example.invalid",
+      region: "test",
+      bucket: "private",
+      prefix: "backups/",
+      pathStyle: true,
+      accessKeyId: "test",
+      secretAccessKey: "secret",
+    },
+    "alice",
+  );
   expect(bucket.config).not.toHaveProperty("secretAccessKey");
   expect(await module.destination(bucket)).toHaveProperty("put");
   await expect(module.destination({ ...bucket, config: {} })).rejects.toThrow("Invalid bucket");
@@ -619,7 +585,7 @@ it("provides an explicit host-only ownership repair and rejects accidental live 
   await source.pool.query("delete from app.settings where key='setup.owner.v1'");
   await expect(
     runBackupCommand(config, ["claim-owner", "--account", randomUUID()], print),
-  ).rejects.toThrow("no storage identity");
+  ).rejects.toThrow("no login");
   await runBackupCommand(config, ["claim-owner", "--account", owner], print);
   expect(await module.store.owner(owner)).toBe(true);
   await runBackupCommand(config, ["environment"], print);
@@ -659,42 +625,27 @@ it("provides an explicit host-only ownership repair and rejects accidental live 
   );
 });
 
-it("builds storage for the verified identity only", async () => {
-  const real = fileserver;
+it("builds storage in the named user's files, without signing in", async () => {
   let session!: StorageSession;
   const storage = createMemoryStorage();
-  const authenticate = vi.fn(async () => ({ externalUsername: "alice" }));
   const providerModule = {
-    ...real,
-    authenticate,
+    ...fileserver,
     createStorage: (_instance: unknown, value: StorageSession) => {
       session = value;
       return storage;
     },
   };
   const instance = { id: provider, baseUrl: SOURCE_URL, config: {} };
-  const credential = { password: "secret" };
-  expect(await rawBackupStorage(providerModule, instance, credential, "alice")).toBe(storage);
+  expect(userStorage(providerModule, instance, "alice")).toBe(storage);
   expect(session).toEqual({ externalUsername: "alice" });
-  expect(authenticate).toHaveBeenCalledWith(
-    instance,
-    credential,
-    expect.objectContaining({ expectedUsername: "alice" }),
-  );
-  await expect(rawBackupStorage(providerModule, instance, credential, "bob")).rejects.toThrow(
-    "identity changed",
-  );
 });
 
 it("discovers and fetches a completed bucket copy with no database or application key", async () => {
   const { file, inspection } = await snapshot();
-  const record = await module.destinationRecord({
-    type: "provider",
-    name: "Files",
-    providerId: provider,
-    prefix: "/docs",
-    credential: { username: "alice", password: "alice-password" },
-  });
+  const record = await module.destinationRecord(
+    { type: "provider", name: "Files", providerId: provider, prefix: "/docs" },
+    "alice",
+  );
   const destination = await module.destination(record);
   const bytes = await readFile(file);
   const id = inspection.header.id;
@@ -789,7 +740,7 @@ it("discovers and fetches a completed bucket copy with no database or applicatio
       environmentFingerprint: environmentFingerprint(restoredConfig),
       providers: [{ id: provider, baseUrl: SOURCE_URL }],
       ownerIdentityId: identity,
-      credential: { username: "alice", password: "alice-password" },
+      password: "alice-password",
       oldDeploymentStopped: true,
       pathBindingsReviewed: true,
     }),
@@ -872,7 +823,8 @@ it("captures native recovery bytes, preserves quarantined provenance, and report
     expect((await blobs()).coverage.join()).toContain("Native remote recovery is unavailable");
     await source.pool.query("update app.desktop_operations set result=null");
     expect((await blobs()).coverage.join()).not.toContain("Native remote recovery is unavailable");
-    await source.pool.query("delete from app.credentials");
+    // Storage for the login cannot be built: reported, not skipped.
+    vi.mocked(registry.moduleFor).mockReturnValue(null);
     expect((await blobs()).coverage.join()).toContain("Native remote recovery is unavailable");
   } finally {
     client.release();
@@ -915,11 +867,12 @@ it("refuses changed namespaces, recursive source mounts, and unavailable retaine
     name: "Files",
     providerId: provider,
     prefix: "/file",
-    credential: { username: "alice", password: "alice-password" },
   };
-  await expect(module.destinationRecord(input)).rejects.toThrow("existing private directory");
+  await expect(module.destinationRecord(input, "alice")).rejects.toThrow(
+    "existing private directory",
+  );
   await storage.upload("/.fdrive-backups", new Uint8Array([1]));
-  await expect(module.destinationRecord({ ...input, prefix: "/" })).rejects.toThrow(
+  await expect(module.destinationRecord({ ...input, prefix: "/" }, "alice")).rejects.toThrow(
     "namespace is not a directory",
   );
   await storage.deleteFile("/.fdrive-backups");
@@ -928,11 +881,11 @@ it("refuses changed namespaces, recursive source mounts, and unavailable retaine
     if (path === "/") return { kind: "dir", size: 0, modifiedAt: null, contentType: null };
     throw new StorageError("forbidden", "permission denied");
   });
-  await expect(module.destinationRecord({ ...input, prefix: "/" })).rejects.toThrow(
+  await expect(module.destinationRecord({ ...input, prefix: "/" }, "alice")).rejects.toThrow(
     "permission denied",
   );
   stat.mockRestore();
-  const record = await module.destinationRecord({ ...input, prefix: "/" });
+  const record = await module.destinationRecord({ ...input, prefix: "/" }, "alice");
   moduleFor.mockReturnValue(null);
   await expect(module.destination(record)).rejects.toThrow("Unsupported backup provider");
   moduleFor.mockReturnValue({ ...real, createStorage: () => storage });
@@ -975,7 +928,7 @@ it("refuses changed namespaces, recursive source mounts, and unavailable retaine
   }
 });
 
-it("rejects unreviewed ownership and checks every saved identity before resuming", async () => {
+it("rejects unreviewed ownership and a wrong owner password, and resumes only an unchanged restore", async () => {
   const { file, inspection } = await snapshot();
   const target = await fresh();
   const restoredConfig = {
@@ -1004,52 +957,20 @@ it("rejects unreviewed ownership and checks every saved identity before resuming
     environmentFingerprint: environmentFingerprint(restoredConfig),
     providers: [{ id: provider, baseUrl: SOURCE_URL }],
     ownerIdentityId: identity,
-    credential: { username: "alice", password: "alice-password" },
+    password: "alice-password",
     oldDeploymentStopped: true,
     pathBindingsReviewed: true,
   };
   await expect(
     resumeRecovery(restoredConfig, { ...review, ownerIdentityId: randomUUID() }),
   ).rejects.toThrow("original installation owner");
-  const second = randomUUID();
-  const bobAccount = randomUUID();
-  await target.db.pool.query("insert into app.accounts(id,display_name) values($1,'bob')", [
-    bobAccount,
-  ]);
-  await target.db.pool.query(
-    "insert into app.identities(id,account_id,provider_id,external_username) values($1,$2,$3,'bob')",
-    [second, bobAccount, provider],
-  );
-  await target.db.pool.query(
-    "insert into app.credentials(identity_id,key_id,ciphertext) values($1,'master-v1',$2)",
-    [
-      second,
-      Buffer.from(
-        seal(
-          master,
-          Buffer.from(JSON.stringify({ username: "bob", password: "bob-password" })),
-          second,
-        ),
-      ),
-    ],
-  );
-  const real = fileserver;
-  const lookup = vi.spyOn(registry, "moduleFor").mockReturnValue(null);
-  await expect(resumeRecovery(restoredConfig, review)).rejects.toThrow(
-    "Unsupported restored provider",
-  );
-  lookup.mockReturnValue({ ...real, authenticate: async () => ({ externalUsername: "mallory" }) });
-  await expect(resumeRecovery(restoredConfig, review)).rejects.toThrow("owner identity mismatch");
-  lookup.mockReturnValue({
-    ...real,
-    authenticate: async (_instance, credential) => ({
-      externalUsername: credential.username === "alice" ? "alice" : "mallory",
-    }),
-  });
-  await expect(resumeRecovery(restoredConfig, review)).rejects.toThrow(
-    "credential identity mismatch",
-  );
-  lookup.mockReturnValue(real);
+  await expect(
+    resumeRecovery(restoredConfig, { ...review, password: "bob-password" }),
+  ).rejects.toThrow("password is not right");
+  // A disabled owner is not let back in either.
+  await target.db.pool.query("update app.local_users set disabled=true where username='alice'");
+  await expect(resumeRecovery(restoredConfig, review)).rejects.toThrow("password is not right");
+  await target.db.pool.query("update app.local_users set disabled=false where username='alice'");
   const { fdriveBackupStateDir: _state, ...missingStorage } = restoredConfig;
   await expect(resumeRecovery(missingStorage, review)).rejects.toThrow(
     "Persistent backup directory",
@@ -1068,25 +989,25 @@ it("rejects unreviewed ownership and checks every saved identity before resuming
   const savedRestore = (
     await target.db.pool.query("select value from app.settings where key='backup.restore.v1'")
   ).rows[0].value;
-  lookup.mockReturnValue({
-    ...real,
-    authenticate: async (instance, credential, context) => {
-      const authenticated = await real.authenticate(instance, credential, context);
+  // The staged restore changes while the owner is being checked.
+  const owner = backupPackage.BackupStore.prototype.owner;
+  const changing = vi
+    .spyOn(backupPackage.BackupStore.prototype, "owner")
+    .mockImplementationOnce(async function (this: backupPackage.BackupStore, accountId: string) {
       await target.db.pool.query(
         "update app.settings set value=jsonb_set(value,'{snapshotId}',to_jsonb($1::text)) where key='backup.restore.v1'",
         [randomUUID()],
       );
-      return authenticated;
-    },
-  });
+      return owner.call(this, accountId);
+    });
   await expect(resumeRecovery(restoredConfig, review)).rejects.toThrow("Restore state changed");
+  changing.mockRestore();
   expect((await target.db.pool.query("select enabled from app.providers")).rows[0].enabled).toBe(
     false,
   );
   await target.db.pool.query("update app.settings set value=$1 where key='backup.restore.v1'", [
     JSON.stringify(savedRestore),
   ]);
-  lookup.mockReturnValue(real);
   await resumeRecovery(restoredConfig, review);
   expect((await target.db.pool.query("select enabled from app.providers")).rows[0].enabled).toBe(
     true,
@@ -1107,10 +1028,6 @@ it("resumes a local-folder installation by checking the owner against its restor
     local,
     identity,
   ]);
-  await source.pool.query(
-    "insert into app.local_users(username,password_hash) values('alice',$1)",
-    [await createScryptSharePasswords().hash("alice-password")],
-  );
   const { file, inspection } = await snapshot();
   const target = await fresh();
   const restoredConfig = {
@@ -1141,21 +1058,13 @@ it("resumes a local-folder installation by checking the owner against its restor
     // The local folder's row has no URL: it is reviewed by its stored name.
     providers: [{ id: local, baseUrl: "local" }],
     ownerIdentityId: identity,
-    credential: { username: "alice", password: "alice-password" },
+    password: "alice-password",
     oldDeploymentStopped: true,
     pathBindingsReviewed: true,
   };
-  // Without the folder configured there are no local users to check the owner against.
-  const withoutFolder = { ...restoredConfig, fdriveStorageRoot: undefined };
-  await expect(resumeRecovery(withoutFolder, review)).rejects.toThrow(
-    "Unsupported restored provider",
-  );
   await expect(
-    resumeRecovery(restoredConfig, {
-      ...review,
-      credential: { username: "alice", password: "wrong-password" },
-    }),
-  ).rejects.toMatchObject({ kind: "unauthorized" });
+    resumeRecovery(restoredConfig, { ...review, password: "wrong-password" }),
+  ).rejects.toThrow("password is not right");
   expect(
     (await target.db.pool.query("select enabled from app.providers where id=$1", [local])).rows[0]
       .enabled,

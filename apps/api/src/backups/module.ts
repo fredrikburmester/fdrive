@@ -17,13 +17,8 @@ import {
   s3Destination,
 } from "@fdrive/backup";
 import type { BackupDestinationInput } from "@fdrive/contracts";
-import type {
-  ProviderCredential,
-  ProviderInstance,
-  ProviderModule,
-  StorageProvider,
-} from "@fdrive/core";
-import { isStorageError, stripTransientFields } from "@fdrive/core";
+import type { ProviderInstance, ProviderModule, StorageProvider } from "@fdrive/core";
+import { isStorageError } from "@fdrive/core";
 import { Pool } from "pg";
 import { open, parseMasterKey, seal } from "../auth/crypto.js";
 import type { AppConfig } from "../config.js";
@@ -36,17 +31,31 @@ export function masterSecrets(master: Uint8Array): SecretCodec {
     open: (bytes, context) => open(master, bytes, context),
   };
 }
-export async function rawBackupStorage(
+/**
+ * Storage in `username`'s files, built directly: backups read and write a
+ * user's files without signing in, since fdrive keeps no password to sign in
+ * with. The files folder's guard still refuses a folder that is not this
+ * installation's.
+ */
+export function userStorage(
   module: ProviderModule,
   instance: ProviderInstance,
-  credential: ProviderCredential,
-  expectedUsername?: string,
+  username: string,
+): StorageProvider {
+  return module.createStorage(
+    instance,
+    { externalUsername: username },
+    { fetch: globalThis.fetch },
+  );
+}
+/** A destination's storage: only while its user may still use their files. */
+async function destinationStorage(
+  module: ProviderModule,
+  instance: ProviderInstance,
+  username: string,
 ): Promise<StorageProvider> {
-  const context = { fetch: globalThis.fetch, ...(expectedUsername ? { expectedUsername } : {}) };
-  const verified = await module.authenticate(instance, credential, context);
-  if (expectedUsername && verified.externalUsername !== expectedUsername)
-    throw Error("Backup credential identity changed");
-  return module.createStorage(instance, { externalUsername: verified.externalUsername }, context);
+  await module.admit?.(instance, username);
+  return userStorage(module, instance, username);
 }
 export function createBackupModule(config: AppConfig, modules: ProviderModules) {
   const pool = new Pool({ connectionString: config.databaseUrl, max: 6 });
@@ -58,10 +67,10 @@ export function createBackupModule(config: AppConfig, modules: ProviderModules) 
   const directory = config.fdriveBackupStateDir ?? join(config.fdriveTmpDir, "backups-disabled");
   const attachments = new AttachmentStore(store, join(directory, "attachments"), secrets);
   async function destination(record: DestinationRecord): Promise<BackupDestination> {
-    const secret = JSON.parse(
-      Buffer.from(secrets.open(record.secret, `backup-destination:${record.id}`)).toString(),
-    ) as Record<string, string>;
     if (record.type === "s3") {
+      const secret = JSON.parse(
+        Buffer.from(secrets.open(record.secret, `backup-destination:${record.id}`)).toString(),
+      ) as Record<string, string>;
       const { endpoint, region, bucket, prefix, pathStyle } = record.config;
       if (
         typeof endpoint !== "string" ||
@@ -101,10 +110,9 @@ export function createBackupModule(config: AppConfig, modules: ProviderModules) 
     const module = moduleFor(current.type, modules);
     if (!module || typeof record.config.prefix !== "string")
       throw Error("Unsupported backup provider");
-    const storage = await rawBackupStorage(
+    const storage = await destinationStorage(
       module,
       { id: current.id, baseUrl: current.base_url, config: current.config },
-      secret,
       String(record.config.username),
     );
     const root = `/${record.config.prefix.replace(/^\/+|\/+$/g, "")}`;
@@ -112,12 +120,17 @@ export function createBackupModule(config: AppConfig, modules: ProviderModules) 
     if (existing.kind !== "dir") throw Error("Choose an existing private backup directory");
     return providerDestination(storage, record.config.prefix);
   }
+  /**
+   * A destination as it is saved. A folder in the files folder is in the
+   * files of `username`, the owner adding it, and keeps no password.
+   */
   async function destinationRecord(
     input: BackupDestinationInput,
+    username: string,
     id: string = randomUUID(),
   ): Promise<DestinationRecord> {
     let settings: Record<string, unknown>;
-    let credential: Record<string, string>;
+    let credential: Record<string, string> = {};
     const installation = (await store.configuration()).installation_id;
     if (input.type === "s3") {
       const { accessKeyId, secretAccessKey, name: _, type: __, ...rest } = input;
@@ -136,18 +149,7 @@ export function createBackupModule(config: AppConfig, modules: ProviderModules) 
       const module = provider && moduleFor(provider.type, modules);
       if (!module || !provider?.enabled) throw Error("Storage provider is unavailable");
       const instance = { id: provider.id, baseUrl: provider.base_url, config: provider.config };
-      // Scheduled backups sign in unattended, so verify exactly the credential that will be
-      // saved: one-time codes and other transient fields are dropped before the first login.
-      credential = stripTransientFields(module.credentialFields, input.credential);
-      const verified = await module.authenticate(instance, credential, {
-        fetch: globalThis.fetch,
-      });
-      const storage = await rawBackupStorage(
-        module,
-        instance,
-        credential,
-        verified.externalUsername,
-      );
+      const storage = await destinationStorage(module, instance, username);
       const parent = `/${input.prefix.replace(/^\/+|\/+$/g, "")}`;
       if ((await storage.stat(parent)).kind !== "dir")
         throw Error("Choose an existing private directory");
@@ -167,7 +169,7 @@ export function createBackupModule(config: AppConfig, modules: ProviderModules) 
         providerType: provider.type,
         baseUrl: provider.base_url,
         providerConfig: provider.config,
-        username: verified.externalUsername,
+        username,
         prefix: `${input.prefix.replace(/\/+$/, "")}/.fdrive-backups/${installation}`,
       };
     }
@@ -296,25 +298,20 @@ export function createBackupModule(config: AppConfig, modules: ProviderModules) 
           const identity = (
             await client.query<{
               external_username: string;
-              ciphertext: Buffer;
               provider_id: string;
               type: string;
               base_url: string;
               config: Record<string, unknown>;
             }>(
-              "select i.external_username,i.provider_id,c.ciphertext,p.type,p.base_url,p.config from app.identities i join app.credentials c on c.identity_id=i.id join app.providers p on p.id=i.provider_id where i.id=$1",
+              "select i.external_username,i.provider_id,p.type,p.base_url,p.config from app.identities i join app.providers p on p.id=i.provider_id where i.id=$1",
               [identityId],
             )
           ).rows[0];
           const module = identity && moduleFor(identity.type, modules);
-          if (!identity || !module) throw Error("Missing source credential");
-          const credential = JSON.parse(
-            Buffer.from(secrets.open(identity.ciphertext, identityId)).toString(),
-          ) as ProviderCredential;
-          const storage = await rawBackupStorage(
+          if (!identity || !module) throw Error("Missing source login");
+          const storage = userStorage(
             module,
             { id: identity.provider_id, baseUrl: identity.base_url, config: identity.config },
-            credential,
             identity.external_username,
           );
           async function walk(path: string, depth = 0) {

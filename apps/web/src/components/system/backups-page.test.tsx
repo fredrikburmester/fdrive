@@ -42,21 +42,7 @@ vi.mock("@tanstack/react-query", () => ({
 }));
 vi.mock("@/lib/api/auth-queries", () => ({
   useMe: () => ({
-    data: { identity: { id: "identity", providerId: "provider" } },
-  }),
-}));
-vi.mock("@/lib/api/provider-queries", () => ({
-  useProviders: () => ({
-    data: {
-      providers: [
-        {
-          id: "provider",
-          credentialFields: [
-            { name: "password", label: "Your password", kind: "password", required: true },
-          ],
-        },
-      ],
-    },
+    data: { identity: { id: "identity", username: "owner", providerId: "provider" } },
   }),
 }));
 vi.mock("@/lib/api/system-queries", () => ({
@@ -138,7 +124,7 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 async function unlock() {
-  fireEvent.change(screen.getByLabelText("Your current password"), {
+  fireEvent.change(screen.getByLabelText("Current password"), {
     target: { value: "owner-password" },
   });
   fireEvent.click(screen.getByRole("button", { name: "Unlock backups" }));
@@ -148,7 +134,7 @@ it("requires fresh owner authentication before preparing a local or remote backu
   render(<BackupsPage />);
   expect(screen.getByRole("button", { name: "Back up now" })).toHaveProperty("disabled", true);
   await unlock();
-  expect(mocks.client.unlock).toHaveBeenCalledWith({ password: "owner-password" });
+  expect(mocks.client.unlock).toHaveBeenCalledWith("owner-password");
   fireEvent.click(screen.getByRole("button", { name: "Back up now" }));
   await waitFor(() =>
     expect(mocks.client.create).toHaveBeenCalledWith({ destinationIds: [], metadataOnly: false }),

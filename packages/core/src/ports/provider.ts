@@ -8,9 +8,8 @@ export type ProviderFieldKind = "text" | "password" | "otp" | "url";
 
 /**
  * One field of a provider's configuration (set by an administrator when the
- * provider is created) or of its credential (typed by a user at login or
- * link). Drives both the web form and the API's validation, so a provider
- * package never touches either.
+ * provider is created) or of its credential, as `GET /providers` describes
+ * them.
  */
 export interface ProviderField {
   readonly name: string;
@@ -21,10 +20,7 @@ export interface ProviderField {
   readonly help?: string;
   /** Upper bound on the value's length; defaults to 4096. */
   readonly maxLength?: number;
-  /**
-   * True for values that are used once and never stored (a one-time code).
-   * The API strips transient fields before sealing a credential.
-   */
+  /** True for values that are used once and never stored (a one-time code). */
   readonly transient?: boolean;
 }
 
@@ -77,9 +73,6 @@ export interface ProviderInstance {
   readonly config: Readonly<Record<string, unknown>>;
 }
 
-/** A user's credential for one provider, keyed by `credentialFields[].name`. */
-export type ProviderCredential = Readonly<Record<string, string>>;
-
 export interface ProbeResult {
   readonly ok: boolean;
   readonly detail: string;
@@ -89,29 +82,14 @@ export interface ProviderContext {
   readonly fetch: typeof globalThis.fetch;
 }
 
-export interface AuthenticateContext extends ProviderContext {
-  /**
-   * The username fdrive already knows for this identity, when it
-   * re-authenticates an existing login (unlocking backups) rather than a
-   * new one. A module may fill a missing username field from it and must refuse
-   * a credential that names a different user.
-   */
-  readonly expectedUsername?: string;
-}
-
-export interface AuthenticateResult {
-  /** The name stored on the identity; unique per provider. */
-  readonly externalUsername: string;
-}
-
 /** Everything a storage instance needs about the identity it acts for. */
 export interface StorageSession {
   readonly externalUsername: string;
 }
 
 /**
- * A storage backend as a package: everything fdrive needs to configure it,
- * authenticate users against it and read and write files through it. One
+ * A storage backend as a package: everything fdrive needs to configure it
+ * and read and write files through it. fdrive checks passwords itself. One
  * module per provider type, registered once in the API; routes, the web
  * app, the database schema and the indexer never know which module backs an
  * identity.
@@ -141,16 +119,6 @@ export interface ProviderModule {
   indexRootName?(instance: ProviderInstance): string | null;
   /** Checks that `instance` is reachable and looks like this kind of server. */
   probe(instance: ProviderInstance, ctx: ProviderContext): Promise<ProbeResult>;
-  /**
-   * Verifies `credential` against `instance`. Throws `StorageError` of kind
-   * `unauthorized` for a wrong credential, `forbidden` when the server
-   * refuses the user, `upstream_unavailable` when it cannot be reached.
-   */
-  authenticate(
-    instance: ProviderInstance,
-    credential: ProviderCredential,
-    ctx: AuthenticateContext,
-  ): Promise<AuthenticateResult>;
   /**
    * Throws `StorageError` of kind `forbidden` when the backend no longer
    * lets `externalUsername` in, so a login that was disabled after it signed

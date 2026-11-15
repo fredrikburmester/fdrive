@@ -9,6 +9,7 @@ import {
   createShareRepo,
   migrate,
 } from "../../src/index.js";
+import { localUsers } from "../../src/schema/app.js";
 
 it("coordinates desktop identities and operation receipts across independent PostgreSQL pools", {
   timeout: 180_000,
@@ -130,8 +131,11 @@ it("coordinates desktop identities and operation receipts across independent Pos
     expect(kept?.state).toBe("completed");
     expect(kept?.result).toEqual({ receipt: receipts[0] ? "first" : "second" });
     // What grants access to a moved path goes with the receipt, or neither is kept.
-    for (const username of ["alice", "carol"])
-      await repos.localUsers.create({ username, passwordHash: "unused" });
+    // The grant's users only, without the logins creating a user brings: this test has its own.
+    await first.db.insert(localUsers).values([
+      { username: "alice", passwordHash: "unused" },
+      { username: "carol", passwordHash: "unused" },
+    ]);
     const grant = await repos.localGrants.put({
       ownerUsername: "alice",
       path: "/Shared",

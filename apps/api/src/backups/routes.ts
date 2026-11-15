@@ -52,10 +52,11 @@ async function parsed<T>(request: Request, schema: z.ZodType<T>): Promise<T> {
 export function registerBackupRoutes(
   groups: AppRouteGroups,
   module: BackupModule,
+  /** Checks the signed-in owner's own password, as a sign-in does. */
   reauthenticate: (
     accountId: string,
     identityId: string,
-    credential: Record<string, string>,
+    password: string,
     ip: string,
   ) => Promise<void>,
   trustedProxyHops = 1,
@@ -173,13 +174,13 @@ export function registerBackupRoutes(
     fresh.delete(getCookie(c, COOKIE_NAME) as string);
     const body = await parsed(
       c.req.raw,
-      z.object({ credential: z.record(z.string(), z.string().max(4096)) }).strict(),
+      z.object({ password: z.string().min(1).max(1024) }).strict(),
     );
     const principal = c.get("principal");
     await reauthenticate(
       principal.accountId,
       principal.identityId,
-      body.credential,
+      body.password,
       extractClientIp(c, trustedProxyHops),
     );
     for (const [key, expiry] of fresh) if (expiry < Date.now()) fresh.delete(key);
@@ -298,13 +299,17 @@ export function registerBackupRoutes(
     );
   });
   router.post(`${BASE}/destinations`, async (c) => {
-    const record = await module.destinationRecord(await parsed(c.req.raw, BackupDestinationInput));
+    const record = await module.destinationRecord(
+      await parsed(c.req.raw, BackupDestinationInput),
+      c.get("principal").username,
+    );
     await module.engine.testDestination(record);
     return c.json({ id: record.id }, 201);
   });
   router.put(`${BASE}/destinations/:id`, async (c) => {
     const record = await module.destinationRecord(
       await parsed(c.req.raw, BackupDestinationInput),
+      c.get("principal").username,
       id(c.req.param("id")),
     );
     await module.engine.testDestination(record);

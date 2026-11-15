@@ -173,8 +173,7 @@ function build() {
       ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
     });
   }
-  const unlock = () =>
-    request("/unlock", "POST", { credential: { password: "test-owner-password" } });
+  const unlock = () => request("/unlock", "POST", { password: "test-owner-password" });
   return { module, store, engine, app, request, unlock, authenticate, attachment, run };
 }
 beforeEach(async () => {
@@ -204,20 +203,18 @@ it("protects the collection and every sensitive route from non-owners and bearer
 });
 it("requires CSRF and fresh owner authentication, and returns only public backup summaries", async () => {
   expect(
-    (
-      await fixture.request(
-        "/unlock",
-        "POST",
-        { credential: { password: "x" } },
-        { "x-requested-with": "" },
-      )
-    ).status,
+    (await fixture.request("/unlock", "POST", { password: "x" }, { "x-requested-with": "" }))
+      .status,
   ).toBe(403);
+  // The old credential map, or anything beside the password, is refused before any check.
+  for (const body of [{ credential: { password: "x" } }, { password: "x", username: "owner" }])
+    expect((await fixture.request("/unlock", "POST", body)).status).toBe(400);
+  expect(fixture.authenticate).not.toHaveBeenCalled();
   expect((await fixture.unlock()).status).toBe(200);
   expect(fixture.authenticate).toHaveBeenCalledWith(
     account,
     identity,
-    { password: "test-owner-password" },
+    "test-owner-password",
     expect.any(String),
   );
   const body = (await (await fixture.request()).json()) as {
@@ -300,6 +297,12 @@ it("enqueues run actions and validates existing run state", async () => {
   };
   expect((await fixture.request("/destinations", "POST", input)).status).toBe(201);
   expect((await fixture.request(`/destinations/${destinationId}`, "PUT", input)).status).toBe(200);
+  // A destination in the files folder is in the signed-in owner's own files.
+  const files = { type: "provider", name: "Files", providerId: destinationId, prefix: "/Backups" };
+  expect((await fixture.request("/destinations", "POST", files)).status).toBe(201);
+  expect(fixture.module.destinationRecord).toHaveBeenLastCalledWith(files, "owner");
+  expect((await fixture.request(`/destinations/${destinationId}`, "PUT", files)).status).toBe(200);
+  expect(fixture.module.destinationRecord).toHaveBeenLastCalledWith(files, "owner", destinationId);
   expect((await fixture.request(`/destinations/${destinationId}/test`, "POST", {})).status).toBe(
     200,
   );
@@ -378,7 +381,7 @@ it("bounds sensitive sessions and frees expired authorizations", async () => {
         await fixture.request(
           "/unlock",
           "POST",
-          { credential: { password: "test" } },
+          { password: "test" },
           { cookie: `fdrive_session=session-${index}` },
         )
       ).status,

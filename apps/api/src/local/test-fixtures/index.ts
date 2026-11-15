@@ -2,11 +2,11 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import type { ProviderModule } from "@fdrive/core";
-import type { Repos } from "@fdrive/db";
-import { createLocalModule, type LocalUsers } from "@fdrive/local";
+import type { Identity, Repos } from "@fdrive/db";
+import { createLocalModule } from "@fdrive/local";
 import { onTestFinished } from "vitest";
 import { createScryptSharePasswords, type SharePasswords } from "../../shares/passwords.js";
-import { createLocalUserStore } from "../users.js";
+import { createLocalUserStore, type LocalUserStore } from "../users.js";
 
 /** scrypt at a cost tests can afford; the hashes are real and verify like production ones. */
 export const FAST_PASSWORDS: SharePasswords = createScryptSharePasswords({
@@ -49,25 +49,37 @@ export interface SeedLocalUser {
   readonly disabled?: boolean;
 }
 
-/** Adds `users` to `app.local_users` with real (cheap) password hashes. */
+/**
+ * Creates `users`, each with their account and login, with real (cheap)
+ * password hashes. Their logins name the files folder's row, created here
+ * first as the API's `seedFromEnvironment` creates it. Resolves to the logins.
+ */
 export async function seedLocalUsers(
-  repos: Pick<Repos, "localUsers">,
+  repos: Pick<Repos, "localUsers" | "logins" | "providers">,
   users: readonly SeedLocalUser[],
   passwords: SharePasswords = FAST_PASSWORDS,
-): Promise<void> {
+): Promise<Identity[]> {
+  const provider = await repos.providers.ensure({ type: "local", baseUrl: "local" });
+  const logins: Identity[] = [];
   for (const user of users) {
-    await repos.localUsers.create({
-      username: user.username,
-      passwordHash: await passwords.hash(user.password),
-    });
+    logins.push(
+      await repos.logins.createUser({
+        providerId: provider.id,
+        username: user.username,
+        passwordHash: await passwords.hash(user.password),
+        isAdmin: false,
+        at: new Date(),
+      }),
+    );
     if (user.disabled === true) await repos.localUsers.update(user.username, { disabled: true });
   }
+  return logins;
 }
 
 export interface LocalModuleFixture {
   readonly root: string;
-  /** The store the module asks; spy on its methods to shape what the module sees. */
-  readonly users: LocalUsers;
+  /** The store the module and the password check ask; spy on its methods to shape what they see. */
+  readonly users: LocalUserStore;
   readonly module: ProviderModule;
 }
 

@@ -49,7 +49,7 @@ export const DEFAULT_CAPACITY = 10_000;
 /**
  * Default cap on the slots a single group holds. A key only survives the
  * sweep once it has a recorded failure, and a caller that pairs grouped
- * keys with an ungrouped per-group bucket (as `accounts/credentials.ts`
+ * keys with an ungrouped per-group bucket (as `auth/password.ts`
  * does) is cut off after `maxFailures` failures per window, so no honest
  * caller reaches eight live keys. Capping it keeps one address block to 8
  * of the 10 000 default slots: filling the map takes over a thousand

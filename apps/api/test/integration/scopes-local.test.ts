@@ -76,7 +76,6 @@ describe("index scopes over a local folder and Postgres", () => {
       alice: [{ owner: "bob", path: "/Photos", writable: false }],
     };
     const users: LocalUsers = {
-      verify: async () => ({ result: "invalid" }),
       status: async () => "active",
       shared: async (username) => grants[username] ?? [],
     };

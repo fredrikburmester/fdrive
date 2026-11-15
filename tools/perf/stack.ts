@@ -70,7 +70,7 @@ export async function loginToApi(
   const response = await fetch(`${baseUrl}/api/v1/auth/login`, {
     method: "POST",
     headers: { "content-type": "application/json", "x-requested-with": "fdrive" },
-    body: JSON.stringify({ credential: { username, password } }),
+    body: JSON.stringify({ username, password }),
   });
   await response.body?.cancel();
   if (!response.ok) throw Error(`Fixture login failed: ${response.status}`);
@@ -180,7 +180,7 @@ export async function startPerfStack(): Promise<PerfStack> {
     });
     await migrate(db.db);
     const repos = createRepos(db.db);
-    await seedLocalUsers(repos.localUsers, [PERF_USER, FORBIDDEN_USER]);
+    await seedLocalUsers(repos, [PERF_USER, FORBIDDEN_USER]);
     await repos.settings.set(FEATURES_SETTINGS_KEY, SEARCH_FEATURES);
     await command("docker", ["pull", ML_IMAGE]);
     const mlImage = await command("docker", [

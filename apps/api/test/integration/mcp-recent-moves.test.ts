@@ -54,13 +54,13 @@ describe("MCP recent_moves from personal activity", () => {
     const response = await composed.app.request(ROUTES.auth.login, {
       method: "POST",
       headers: { "x-requested-with": "fdrive", "content-type": "application/json" },
-      body: JSON.stringify({ credential: { username, password: `${username}-pass` } }),
+      body: JSON.stringify({ username, password: `${username}-pass` }),
     });
     expect(response.status).toBe(200);
     return response.headers.get("set-cookie")?.split(";")[0] ?? "";
   }
 
-  /** A token for `username`'s login, which must have signed in once. */
+  /** A token for `username`'s login. */
   async function token(username: string, access: ApiTokenAccess): Promise<string> {
     const repos = createRepos(database.db);
     const identity = (await repos.identities.listAll()).find(

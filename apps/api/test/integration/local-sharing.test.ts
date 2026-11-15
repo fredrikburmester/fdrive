@@ -80,7 +80,7 @@ describe("sharing folders between local users", () => {
   async function login(username: string): Promise<string> {
     const response = await call(ROUTES.auth.login, {
       method: "POST",
-      body: { credential: { username, password: `${username}-password` } },
+      body: { username, password: `${username}-password` },
     });
     expect(response.status).toBe(200);
     return cookieFrom(response);

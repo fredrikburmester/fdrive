@@ -26,13 +26,15 @@ it("keeps me and logout working for a login whose provider was disabled", async 
   expect(logout.status).toBe(200);
   expect((await h.call(ROUTES.auth.me, { cookie: alice.cookie })).status).toBe(401);
 
-  // New logins to the disabled provider are still refused.
+  // Signing in again checks only the password; the new session's files fail the same way.
   const again = await h.call(ROUTES.auth.login, {
     method: "POST",
-    body: { credential: { username: "alice", password: "alice-pass" } },
+    body: { username: "alice", password: "alice-pass" },
   });
-  expect(again.status).toBe(503);
-  expect(await again.json()).toMatchObject({ error: { kind: "setup_required" } });
+  expect(again.status).toBe(200);
+  expect(
+    await h.storageFactory(alice.me.identity.id).catch((error: unknown) => error),
+  ).toMatchObject({ kind: "upstream_unavailable" });
 });
 
 /**
