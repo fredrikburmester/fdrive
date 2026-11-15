@@ -1,3 +1,4 @@
+import type { IdentityRepo } from "@fdrive/db";
 import { isLocalUsername } from "@fdrive/local";
 import { ApiHttpError } from "../errors.js";
 import type { LocalUserStore } from "../local/users.js";
@@ -70,5 +71,23 @@ export function createPasswordCheck(deps: {
     }
     deps.limiter.recordSuccess(key);
     return check.username;
+  };
+}
+
+/**
+ * Checks the signed-in login's own password again, through the same check,
+ * as unlocking backups requires. Refuses a login that is gone or belongs to
+ * another account.
+ */
+export function createLoginReauthentication(deps: {
+  readonly identities: Pick<IdentityRepo, "get">;
+  readonly checkPassword: CheckPassword;
+}) {
+  return async (accountId: string, identityId: string, password: string, ip: string) => {
+    const identity = await deps.identities.get(identityId);
+    if (identity === null || identity.accountId !== accountId) {
+      throw new ApiHttpError("unauthorized", "Storage identity changed");
+    }
+    await deps.checkPassword({ username: identity.externalUsername, password, ip });
   };
 }

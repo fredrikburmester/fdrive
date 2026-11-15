@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { createLocalUserService } from "../local/service.js";
 import { createSetupService } from "../setup/service.js";
 import { createLoginLimiter } from "./login-limiter.js";
-import { createPasswordCheck, loginIpKey } from "./password.ts";
+import { createLoginReauthentication, createPasswordCheck, loginIpKey } from "./password.ts";
 import { authHarness } from "./test-fixtures/index.ts";
 
 function store(result: "ok" | "invalid" | "disabled") {
@@ -87,7 +87,13 @@ describe("one password check for every place a password is typed", () => {
         newPassword: "alice-new-pass",
         ip,
       });
-    return { ...h, setup, signIn, changePassword };
+    const unlockBackups = createLoginReauthentication({
+      identities: h.repos.identities,
+      checkPassword: h.checkPassword,
+    });
+    const unlock = (password: string, ip: string) =>
+      unlockBackups(alice.me.account.id, alice.me.identity.id, password, ip);
+    return { ...h, alice, setup, signIn, changePassword, unlock };
   }
 
   it("lets failed sign-ins hold up a password change from the same address", async () => {
@@ -131,13 +137,39 @@ describe("one password check for every place a password is typed", () => {
     });
   });
 
-  it("refuses a disabled user at sign-in and at a password change", async () => {
+  it("lets failed backup unlocks hold up sign-in, and checks only the signed-in login", async () => {
+    const h = await wired();
+    await expect(h.unlock("alice-pass", "203.0.113.6")).resolves.toBeUndefined();
+    for (let n = 0; n < 5; n++)
+      await expect(h.unlock("guess", "203.0.113.6")).rejects.toMatchObject({
+        kind: "unauthorized",
+      });
+    await expect(h.signIn("alice", "alice-pass", "203.0.113.6")).rejects.toMatchObject({
+      kind: "rate_limited",
+    });
+    const reauthenticate = createLoginReauthentication({
+      identities: h.repos.identities,
+      checkPassword: h.checkPassword,
+    });
+    for (const [account, identity] of [
+      ["00000000-0000-4000-8000-000000000001", h.alice.me.identity.id],
+      [h.alice.me.account.id, "00000000-0000-4000-8000-000000000002"],
+    ] as const)
+      await expect(
+        reauthenticate(account, identity, "alice-pass", "203.0.113.7"),
+      ).rejects.toMatchObject({ kind: "unauthorized" });
+  });
+
+  it("refuses a disabled user at sign-in, a password change and a backup unlock", async () => {
     const h = await wired();
     await h.repos.localUsers.update("alice", { disabled: true });
     await expect(h.signIn("alice", "alice-pass", "203.0.113.5")).rejects.toMatchObject({
       kind: "forbidden",
     });
     await expect(h.changePassword("alice-pass", "203.0.113.5")).rejects.toMatchObject({
+      kind: "forbidden",
+    });
+    await expect(h.unlock("alice-pass", "203.0.113.5")).rejects.toMatchObject({
       kind: "forbidden",
     });
   });

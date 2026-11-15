@@ -12,7 +12,7 @@ export { CryptoError, open, parseMasterKey, seal } from "./crypto.js";
 export type { LoginLimiter } from "./login-limiter.js";
 export { createLoginLimiter } from "./login-limiter.js";
 export type { CheckPassword, PasswordCheckInput } from "./password.ts";
-export { createPasswordCheck, loginIpKey } from "./password.ts";
+export { createLoginReauthentication, createPasswordCheck, loginIpKey } from "./password.ts";
 export type { AuthService, LoginInput, LoginResult } from "./service.js";
 export { createAuthService } from "./service.js";
 export {

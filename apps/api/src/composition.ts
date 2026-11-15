@@ -41,6 +41,7 @@ import { createApp } from "./app.js";
 import {
   createAuthModule,
   createLoginLimiter,
+  createLoginReauthentication,
   createPasswordCheck,
   open,
   parseMasterKey,
@@ -904,12 +905,7 @@ export async function composeApp(
       registerBackupRoutes(
         groups,
         backups,
-        async (accountId, identityId, password, ip) => {
-          const identity = await repos.identities.get(identityId);
-          if (!identity || identity.accountId !== accountId)
-            throw new ApiHttpError("unauthorized", "Storage identity changed");
-          await checkPassword({ username: identity.externalUsername, password, ip });
-        },
+        createLoginReauthentication({ identities: repos.identities, checkPassword }),
         config.fdriveTrustedProxyHops,
       );
       registerFeatureAdmission(groups.authed, featureService);
