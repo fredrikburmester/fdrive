@@ -5,7 +5,6 @@ export const DURABLE_TABLES = [
   "app.local_grants",
   "app.accounts",
   "app.identities",
-  "app.credentials",
   "app.api_tokens",
   "app.tags",
   "app.file_tags",

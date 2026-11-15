@@ -186,27 +186,12 @@ export async function restoreArchive(options: RestoreOptions): Promise<Inspectio
       async row(table, columns, values) {
         const row = [...values];
         const position = (name: string) => columns.findIndex((column) => column.name === name);
-        if (
-          ["app.credentials", "app.backup_destinations", "app.backup_attachments"].includes(table)
-        ) {
-          const field = table === "app.credentials" ? "ciphertext" : "secret";
-          const index = position(field);
-          const id =
-            row[
-              position(
-                table === "app.credentials"
-                  ? "identity_id"
-                  : table === "app.backup_attachments"
-                    ? "version_id"
-                    : "id",
-              )
-            ];
+        if (["app.backup_destinations", "app.backup_attachments"].includes(table)) {
+          const index = position("secret");
+          const id = row[position(table === "app.backup_attachments" ? "version_id" : "id")];
           if (index < 0 || !id || !row[index]?.startsWith("\\x"))
-            throw Error("Invalid encrypted credential in backup");
-          const context =
-            table === "app.credentials"
-              ? id
-              : `${table === "app.backup_destinations" ? "backup-destination" : "backup-attachment"}:${id}`;
+            throw Error("Invalid encrypted secret in backup");
+          const context = `${table === "app.backup_destinations" ? "backup-destination" : "backup-attachment"}:${id}`;
           row[index] =
             `\\x${Buffer.from(options.reseal(Buffer.from(row[index].slice(2), "hex"), context, inspected.header.masterKey)).toString("hex")}`;
         }
