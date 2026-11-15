@@ -1,5 +1,6 @@
 import type { EntryStat, StorageProvider } from "@fdrive/core";
 import type { ActivityObservationsRepo } from "@fdrive/db";
+import { activityFacts } from "./service.ts";
 
 /** Whose history an observation goes to: the login's account, and the login. */
 export interface ObservationActor {
@@ -47,12 +48,7 @@ export function createActivityObservations(deps: {
           kind: "moved",
           source: "indexer",
           evidence: "watcher_move",
-          after: {
-            path: destination,
-            kind: next.kind === "dir" ? "dir" : "file",
-            size: next.size,
-            modifiedAt: next.modifiedAt?.toISOString() ?? null,
-          },
+          after: activityFacts(destination, next),
         });
       });
     },
@@ -78,12 +74,7 @@ export function createActivityObservations(deps: {
         kind: "present",
         source: "indexer",
         evidence: "watcher_change",
-        after: {
-          path,
-          kind: stat.kind === "dir" ? "dir" : "file",
-          size: stat.size,
-          modifiedAt: stat.modifiedAt?.toISOString() ?? null,
-        },
+        after: activityFacts(path, stat),
       });
     },
   };

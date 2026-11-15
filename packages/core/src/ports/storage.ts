@@ -1,4 +1,4 @@
-import type { EntryKind, FileEntry } from "../entries.ts";
+import type { FileEntry } from "../entries.ts";
 
 /** One deleted item still recoverable from the Trash folder. */
 export interface TrashEntry {
@@ -19,7 +19,7 @@ export interface TrashListing {
 }
 
 /** A restored entry plus the original path its Trash leaf encodes. */
-export type TrashRestoreResult = FileEntry & {
+export type TrashRestoreResult = EntryStat & {
   readonly originalPath: string;
 };
 
@@ -65,24 +65,29 @@ export interface TrashProvider {
   purge(id: string): Promise<void>;
 }
 
-/** What `StorageProvider.stat` reports for any existing path. */
-export interface EntryStat {
-  readonly kind: EntryKind;
-  readonly size: number;
-  readonly modifiedAt: Date | null;
-  readonly contentType: string | null;
-  /**
-   * The path as storage spells it, when that differs from the path asked
-   * for: a disk that ignores case or how accents are encoded (macOS) finds
-   * "Årsbesked" written with one character or with a combining ring. Absent
-   * when the path asked for is the stored spelling.
-   */
-  readonly path?: string;
+/**
+ * An entry that exists, as storage reports it: `stat` for any path, and each
+ * write for what it made. `path` and `name` are as storage spells them, which
+ * need not be the spelling asked for: a disk that ignores case or how accents
+ * are encoded (macOS) finds "Årsbesked" written with one character or with a
+ * combining ring, but stores one of them, and listings show that one.
+ */
+export interface EntryStat extends FileEntry {
   /**
    * The inode number of what is there, file or folder, without following a
-   * link. Absent where the backend has no inodes.
+   * link; a rename keeps it. `Shared with me`, which no folder on disk
+   * holds, has 0.
    */
-  readonly ino?: bigint;
+  readonly ino: bigint;
+}
+
+/** What `mkdir` made: the folder at its path, and the top of what is new. */
+export interface MadeFolder extends EntryStat {
+  /**
+   * The first folder the call created: the path asked for, a folder above
+   * it with `parents`, or `null` when every folder was already there.
+   */
+  readonly created: string | null;
 }
 
 /**
@@ -108,6 +113,66 @@ export interface ZipProgress {
   readonly total: number;
   /** Bytes of those files read so far. */
   readonly bytes: number;
+}
+
+/** Options for `upload`. */
+export interface UploadOptions {
+  readonly mkdirParents?: boolean;
+  readonly modifiedAt?: Date;
+  /** The body's length; a body of any other length is refused (`bad_request`). */
+  readonly contentLength?: number;
+  /** Replace an existing file; without it a taken name is a `conflict`. */
+  readonly overwrite?: boolean;
+  /**
+   * Flush the file to disk before publishing it, and its name after, so
+   * it survives a crash once the call returns.
+   */
+  readonly durable?: boolean;
+  readonly signal?: AbortSignal;
+  /**
+   * The last piece of a file sent in several calls: the body goes into the
+   * upload's part `id` at `offset`, after the pieces `uploadPart` wrote,
+   * and the whole part is published at `path`. `contentLength` is then the
+   * body's own length.
+   */
+  readonly part?: UploadPart;
+  /**
+   * Runs each step that changes what is at `path` or above it (creating
+   * missing parent folders, publishing the file) inside the caller's
+   * critical section, and nothing else: the body is staged before, outside
+   * it, so a body that arrives slowly, or never, holds nothing the caller
+   * holds. Nothing appears at `path` before the last step.
+   */
+  readonly critical?: <T>(work: () => Promise<T>) => Promise<T>;
+}
+
+/** Where one piece of a file sent in several calls goes. */
+export interface UploadPart {
+  /** The upload's part: 16 lowercase hex digits. */
+  readonly id: string;
+  /** The piece's first byte in the file. */
+  readonly offset: number;
+}
+
+/** Options for `uploadPart`. */
+export interface UploadPartOptions {
+  readonly part: UploadPart;
+  /** Whether the last piece will replace an existing file, as `upload`'s option. */
+  readonly overwrite?: boolean;
+  /** The piece's length; a body of any other length is refused (`bad_request`). */
+  readonly contentLength?: number;
+  readonly signal?: AbortSignal;
+}
+
+/** What `download` opened. */
+export interface Download {
+  readonly status: 200 | 206;
+  readonly body: ReadableStream<Uint8Array>;
+  /** The bytes `body` holds. */
+  readonly contentLength: number;
+  /** For a 206, the range sent: `bytes <first>-<last>/<size>`. */
+  readonly contentRange: string | null;
+  readonly lastModified: Date;
 }
 
 /** Options shared by `move` and `copy`. */
@@ -139,6 +204,8 @@ export interface MoveOptions extends TransferOptions {
  *
  * - `statFile` on a directory throws `StorageError("bad_request")`; on a
  *   missing path `not_found`. `stat` reports either kind.
+ * - `upload`, `mkdir`, `move` and `copy` return the entry they made, as
+ *   `stat` would report it then: callers do not stat it again.
  * - `move`, `copy` and `upload` refuse an existing target with
  *   `StorageError("conflict")` unless asked to replace it (`overwrite:
  *   true`). Callers do not check a target first: the storage refuses it.
@@ -148,8 +215,6 @@ export interface MoveOptions extends TransferOptions {
  *   passes through one, at any segment including the last, with
  *   `StorageError("forbidden")`. Listings show the link itself, as kind
  *   `symlink`; `stat` never reports that kind.
- * - Optional methods are absent, not throwing, when the storage cannot
- *   offer them (the in-memory test storage); the files folder has them all.
  */
 export interface StorageProvider {
   list(path: string): Promise<FileEntry[]>;
@@ -162,29 +227,16 @@ export interface StorageProvider {
    * read the directory without loading its full listing. This is not stat or
    * cached permission: it performs a live authenticated read.
    */
-  probeDirectoryRead?(path: string): Promise<void>;
-
-  /**
-   * Live read proof for the file at `path` that reads none of its content:
-   * whether `download` could open it now. Fails as `download` does:
-   * `not_found` when nothing is there, `bad_request` for anything that is not
-   * a file, `forbidden` when the file may not be read. Absent where only a
-   * download proves it; callers then open `download` and cancel the body.
-   */
-  probeFileRead?(path: string): Promise<void>;
+  probeDirectoryRead(path: string): Promise<void>;
 
   /**
    * The file at `path` as `download` would open it, without reading any of
-   * it: see `ContentStamp`. Fails as `download` does. Absent where the
-   * backend has no inodes or change times.
+   * it: see `ContentStamp`. Fails as `download` does.
    */
-  contentStamp?(path: string): Promise<ContentStamp>;
+  contentStamp(path: string): Promise<ContentStamp>;
 
-  statFile(path: string): Promise<{
-    size: number;
-    modifiedAt: Date | null;
-    contentType: string | null;
-  }>;
+  /** Stats the file at `path`: `bad_request` for anything that is not a file. */
+  statFile(path: string): Promise<EntryStat>;
 
   download(
     path: string,
@@ -194,54 +246,32 @@ export interface StorageProvider {
       ifRange?: string;
       signal?: AbortSignal;
     },
-  ): Promise<{
-    status: 200 | 206;
-    body: ReadableStream<Uint8Array>;
-    contentLength: number | null;
-    contentRange: string | null;
-    contentType: string | null;
-    lastModified: Date | null;
-  }>;
+  ): Promise<Download>;
 
   upload(
     path: string,
     body: ReadableStream<Uint8Array> | Uint8Array,
-    opts?: {
-      mkdirParents?: boolean;
-      modifiedAt?: Date;
-      contentLength?: number;
-      /** Replace an existing file; without it a taken name is a `conflict`. */
-      overwrite?: boolean;
-      /**
-       * Flush the file to disk before publishing it, and its name after, so
-       * it survives a crash once the call returns.
-       */
-      durable?: boolean;
-      signal?: AbortSignal;
-      /**
-       * One piece of a file sent in several calls, in order: the body goes into
-       * the upload's part `id` (16 lowercase hex digits) at `offset`, and only
-       * the call marked `final` publishes the part at `path`. Whatever the part
-       * holds past `offset` is cut off first, so a failed call can be repeated.
-       * `contentLength` is then the body's own length.
-       */
-      part?: { id: string; offset: number; final: boolean };
-      /**
-       * Runs each step that changes what is at `path` or above it (creating
-       * missing parent folders, publishing the file) inside the caller's
-       * critical section, and nothing else: the body is staged before, outside
-       * it, so a body that arrives slowly, or never, holds nothing the caller
-       * holds. Nothing appears at `path` before the last step.
-       */
-      critical?: <T>(work: () => Promise<T>) => Promise<T>;
-    },
+    opts?: UploadOptions,
+  ): Promise<EntryStat>;
+
+  /**
+   * One piece of a file sent in several calls, before the last: the body
+   * goes into the upload's part at `offset`, and nothing appears at `path`
+   * until `upload` sends the last piece. Whatever the part holds past
+   * `offset` is cut off first, so a failed call can be repeated. Refuses
+   * what `upload` would, a taken name included.
+   */
+  uploadPart(
+    path: string,
+    body: ReadableStream<Uint8Array> | Uint8Array,
+    opts: UploadPartOptions,
   ): Promise<void>;
 
-  mkdir(path: string, opts?: { parents?: boolean }): Promise<void>;
+  mkdir(path: string, opts?: { parents?: boolean }): Promise<MadeFolder>;
 
-  move(path: string, target: string, opts?: MoveOptions): Promise<void>;
+  move(path: string, target: string, opts?: MoveOptions): Promise<EntryStat>;
 
-  copy(path: string, target: string, opts?: TransferOptions): Promise<void>;
+  copy(path: string, target: string, opts?: TransferOptions): Promise<EntryStat>;
 
   /** Deletes the file at `path` for good; `trash.put` moves it into Trash instead. */
   deleteFile(path: string): Promise<void>;
@@ -257,11 +287,12 @@ export interface StorageProvider {
    */
   deleteEmptyDir(path: string): Promise<void>;
 
-  /** Absent when the backend cannot keep a client-supplied modification time. */
-  setModifiedAt?(path: string, modifiedAt: Date): Promise<void>;
-
-  /** Absent when the backend has no server-side zip. */
-  zip?(
+  /**
+   * One zip of `paths`: a file under its own name, a folder under its name
+   * with everything in it, and the root as its contents. Each file is read
+   * only as the archive is.
+   */
+  zip(
     paths: readonly string[],
     opts?: {
       signal?: AbortSignal;

@@ -5,7 +5,14 @@ import type {
   OfficeOpenResponse,
   OfficeStatusResponse,
 } from "@fdrive/contracts";
-import { baseName, extensionOf, isStorageError, joinPath, parentPath } from "@fdrive/core";
+import {
+  baseName,
+  extensionOf,
+  isStorageError,
+  joinPath,
+  mimeFromExtension,
+  parentPath,
+} from "@fdrive/core";
 import { officeFileActor, recordOfficeOpen } from "../activity/office.js";
 import { browserActor, callbackFile, requireOfficeEdit } from "./auth.ts";
 import { officeErrorResponse, WopiError } from "./errors.ts";
@@ -141,16 +148,17 @@ async function getContents(
   }
   if (opened.stat.size > config.maxBytes) throw new WopiError(413);
   const result = await opened.actor.storage.download(opened.path, { signal });
-  if (result.contentLength !== null && result.contentLength > max) {
+  if (result.contentLength > max) {
     await result.body.cancel();
     throw new WopiError(raw === null ? 413 : 412);
   }
   const headers = new Headers({
-    "Content-Type": result.contentType ?? "application/octet-stream",
+    "Content-Type":
+      mimeFromExtension(extensionOf(baseName(opened.path))) ?? "application/octet-stream",
+    "Content-Length": String(result.contentLength),
+    "Last-Modified": result.lastModified.toUTCString(),
     "Cache-Control": "no-store",
   });
-  if (result.contentLength !== null) headers.set("Content-Length", String(result.contentLength));
-  if (result.lastModified !== null) headers.set("Last-Modified", result.lastModified.toUTCString());
   return new Response(boundedStream(result.body, max, signal), { headers });
 }
 export function createOfficeService(deps: OfficeDeps) {

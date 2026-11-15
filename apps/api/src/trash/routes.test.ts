@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { OkResponse, ROUTES, TrashListResponse, TrashRestoreResponse } from "@fdrive/contracts";
 import { normalizePath, StorageError, type StorageProvider } from "@fdrive/core";
+import { createMemoryStorage } from "@fdrive/core/testing";
 import { createMemoryRepos } from "@fdrive/db/testing";
 import { createLocalStorage } from "@fdrive/local";
 import type { Logger } from "pino";
@@ -431,28 +432,12 @@ describe("POST /trash/restore", () => {
 
   it("propagates a non-StorageError from trash.restore as an internal error", async () => {
     const boom = new Error("boom");
+    const memory = createMemoryStorage();
+    // The route has no pre-restore check of its own: it goes straight to
+    // `trash.restore`.
     const storage: StorageProvider = {
-      list: () => Promise.reject(new Error("not implemented")),
-      // The route has no pre-restore check of its own: it goes straight to
-      // `trash.restore` below, so statFile here is never actually called.
-      statFile: () => Promise.reject(new StorageError("not_found", "not found")),
-      stat: () => Promise.reject(new StorageError("not_found", "not found")),
-      download: () => Promise.reject(new Error("not implemented")),
-      upload: () => Promise.reject(new Error("not implemented")),
-      mkdir: () => Promise.reject(new Error("not implemented")),
-      move: () => Promise.reject(new Error("not implemented")),
-      copy: () => Promise.reject(new Error("not implemented")),
-      deleteFile: () => Promise.reject(new Error("not implemented")),
-      deleteDir: () => Promise.reject(new Error("not implemented")),
-      deleteEmptyDir: () => Promise.reject(new Error("not implemented")),
-      setModifiedAt: () => Promise.reject(new Error("not implemented")),
-      zip: () => Promise.reject(new Error("not implemented")),
-      trash: {
-        put: () => Promise.reject(new Error("not implemented")),
-        list: () => Promise.reject(new Error("not implemented")),
-        restore: () => Promise.reject(boom),
-        purge: () => Promise.reject(new Error("not implemented")),
-      },
+      ...memory,
+      trash: { ...memory.trash, restore: () => Promise.reject(boom) },
     };
     const principal: Principal = {
       accountId: ACCOUNT_ID,
@@ -490,27 +475,14 @@ describe("POST /trash/restore", () => {
   });
 
   it("attaches failedId even when the underlying StorageError carries no details", async () => {
+    const memory = createMemoryStorage();
+    // The route has no pre-restore check of its own: it goes straight to
+    // `trash.restore`.
     const storage: StorageProvider = {
-      list: () => Promise.reject(new Error("not implemented")),
-      // The route has no pre-restore check of its own: it goes straight to
-      // `trash.restore` below, so statFile here is never actually called.
-      statFile: () => Promise.reject(new StorageError("not_found", "not found")),
-      stat: () => Promise.reject(new StorageError("not_found", "not found")),
-      download: () => Promise.reject(new Error("not implemented")),
-      upload: () => Promise.reject(new Error("not implemented")),
-      mkdir: () => Promise.reject(new Error("not implemented")),
-      move: () => Promise.reject(new Error("not implemented")),
-      copy: () => Promise.reject(new Error("not implemented")),
-      deleteFile: () => Promise.reject(new Error("not implemented")),
-      deleteDir: () => Promise.reject(new Error("not implemented")),
-      deleteEmptyDir: () => Promise.reject(new Error("not implemented")),
-      setModifiedAt: () => Promise.reject(new Error("not implemented")),
-      zip: () => Promise.reject(new Error("not implemented")),
+      ...memory,
       trash: {
-        put: () => Promise.reject(new Error("not implemented")),
-        list: () => Promise.reject(new Error("not implemented")),
+        ...memory.trash,
         restore: () => Promise.reject(new StorageError("conflict", "already exists")),
-        purge: () => Promise.reject(new Error("not implemented")),
       },
     };
     const principal: Principal = {

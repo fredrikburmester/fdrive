@@ -87,7 +87,7 @@ async function collectPath(
 
   const stat = await storage.stat(path);
   if (stat.kind === "file") {
-    out.push({ path, entryName, size: stat.size, modifiedAt: stat.modifiedAt ?? new Date(0) });
+    out.push({ path, entryName, size: stat.size, modifiedAt: stat.modifiedAt });
     return;
   }
 
@@ -131,7 +131,6 @@ async function collectDirectory(
 
 /** A zip from the storage's own zip writer, which reports how far it has got. */
 async function zipArchive(opts: CompressOptions): Promise<Archive> {
-  if (opts.storage.zip === undefined) throw new UnsupportedFormatError("zip");
   const body = await opts.storage.zip(opts.paths, {
     signal: opts.signal,
     onProgress: opts.report,

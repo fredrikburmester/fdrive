@@ -219,8 +219,8 @@ facts schema. Session and credential context is hashed before read aggregation.
    15 seconds.
 2. After the storage call succeeds, the registry update, outcome, subjects, revisions, lineage
    and outbox commit in one transaction. If that commit fails, a durable uncertain intent
-   remains; the storage call is never retried. An upload still succeeds if the later metadata
-   stat fails, with `metadataPending` for placeholder listing metadata.
+   remains; the storage call is never retried. An upload's outcome and response describe the
+   file the upload published, with no stat after it.
 3. Metadata mutations and their before and after snapshots share one transaction. The operation
    is locked before account, identity and registry locks, so stale-intent recovery cannot race
    the metadata commit. Unchanged metadata yields a skipped outcome.

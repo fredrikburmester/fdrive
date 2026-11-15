@@ -2,14 +2,17 @@ import {
   baseName,
   createRecycleFolderTrash,
   type EntryStat,
-  extensionOf,
   type FileEntry,
+  type MadeFolder,
+  makeEntry,
   normalizePath,
   parentPath,
   StorageError,
   type StorageProvider,
   splitSegments,
+  type UploadOptions,
 } from "../index.js";
+import { type StoredZipEntry, storedZip } from "./stored-zip.js";
 
 export interface MemoryStorage extends StorageProvider {
   dump(): Record<string, string>;
@@ -17,14 +20,16 @@ export interface MemoryStorage extends StorageProvider {
 }
 
 export interface MemoryStorageOptions {
-  readonly nullMtimePaths?: readonly string[];
   /** Modification times of new files, and the names of new Trash leaves. */
   readonly clock?: () => Date;
 }
 
+/** Every folder's modification time: the memory storage keeps none. */
+const DIR_TIME = new Date(0);
+
 interface MemFile {
   content: Uint8Array;
-  mtime: Date | null;
+  mtime: Date;
   /** Like a disk's: every publish is a new inode, and every write moves the change time. */
   ino: bigint;
   ctimeNs: bigint;
@@ -48,6 +53,24 @@ function streamOf(bytes: Uint8Array): ReadableStream<Uint8Array> {
   });
 }
 
+/**
+ * What `stat` would report at `path`, for a test that stands in for storage:
+ * an empty file modified at the epoch, unless `fields` says otherwise.
+ */
+export function entryStat(
+  path: string,
+  fields: Partial<Pick<EntryStat, "kind" | "size" | "modifiedAt" | "ino">> = {},
+): EntryStat {
+  const normalized = normalizePath(path);
+  const entry = makeEntry(parentPath(normalized), {
+    name: baseName(normalized),
+    kind: fields.kind ?? "file",
+    size: fields.size ?? 0,
+    modifiedAt: fields.modifiedAt ?? new Date(0),
+  });
+  return { ...entry, ino: fields.ino ?? BigInt(0) };
+}
+
 export function createMemoryStorage(
   files: Record<string, string | Uint8Array> = {},
   options: MemoryStorageOptions = {},
@@ -58,7 +81,6 @@ export function createMemoryStorage(
   const childrenOf = new Map<string, Set<string>>([["/", new Set()]]);
   /** A folder's inode, kept across a move as a disk's rename keeps it. */
   const dirInodes = new Map<string, bigint>();
-  const nullMtimePaths = new Set((options.nullMtimePaths ?? []).map((p) => normalizePath(p)));
   const clock = options.clock ?? (() => new Date(0));
   // BigInt() rather than literals: the web app type-checks this file for an older target.
   let ticks = BigInt(0);
@@ -66,27 +88,33 @@ export function createMemoryStorage(
     ticks += BigInt(1);
     return ticks;
   };
+  dirInodes.set("/", tick());
 
   function isDir(p: string): boolean {
     return childrenOf.has(p);
   }
 
-  function addDir(p: string, ino?: bigint): void {
-    if (childrenOf.has(p)) return;
+  /** Adds the folder at `p` unless it is there; true when it was not. */
+  function addDir(p: string, ino?: bigint): boolean {
+    if (childrenOf.has(p)) return false;
     childrenOf.set(p, new Set());
     dirInodes.set(p, ino ?? tick());
     childrenOf.get(parentPath(p))?.add(p);
+    return true;
   }
 
-  function ensureDirsFor(path: string): void {
+  /** Adds every missing folder down to `path`; returns the first it added. */
+  function ensureDirsFor(path: string): string | null {
     let current = "/";
+    let first: string | null = null;
     for (const segment of splitSegments(path)) {
       current = `${current === "/" ? "" : current}/${segment}`;
-      addDir(current);
+      if (addDir(current)) first ??= current;
     }
+    return first;
   }
 
-  function putFile(path: string, content: Uint8Array, mtime: Date | null): void {
+  function putFile(path: string, content: Uint8Array, mtime: Date): void {
     const normalized = normalizePath(path);
     const parent = parentPath(normalized);
     ensureDirsFor(parent);
@@ -155,7 +183,7 @@ export function createMemoryStorage(
   for (const [path, content] of Object.entries(files)) {
     const bytes = typeof content === "string" ? new TextEncoder().encode(content) : content;
     const normalized = normalizePath(path);
-    putFile(normalized, bytes, nullMtimePaths.has(normalized) ? null : new Date(0));
+    putFile(normalized, bytes, new Date(0));
   }
 
   function requireFile(path: string): { normalized: string; file: MemFile } {
@@ -163,6 +191,73 @@ export function createMemoryStorage(
     const file = fileMap.get(normalized);
     if (!file) throw new StorageError("not_found", `not found: ${path}`);
     return { normalized, file };
+  }
+
+  /** What is at the normalized `path`, or null. */
+  function entryAt(path: string): EntryStat | null {
+    const parent = parentPath(path);
+    const name = baseName(path);
+    const file = fileMap.get(path);
+    if (file !== undefined) {
+      const entry = makeEntry(parent, {
+        name,
+        kind: "file",
+        size: file.content.length,
+        modifiedAt: file.mtime,
+      });
+      return { ...entry, ino: file.ino };
+    }
+    const ino = dirInodes.get(path);
+    if (ino === undefined) return null;
+    return { ...makeEntry(parent, { name, kind: "dir", size: 0, modifiedAt: DIR_TIME }), ino };
+  }
+
+  /** What a write just made at the normalized `path`. */
+  function made(path: string): EntryStat {
+    return entryAt(path) as EntryStat;
+  }
+
+  /** Adds `path` to `entries` as a zip names it under `name`: a folder with everything in it. */
+  function zipEntries(entries: StoredZipEntry[], path: string, name: string): void {
+    const file = fileMap.get(path);
+    if (file !== undefined) {
+      entries.push({ name, content: file.content, modifiedAt: file.mtime });
+      return;
+    }
+    const children = [...(childrenOf.get(path) as Set<string>)];
+    if (children.length === 0 && name.length > 0) entries.push({ name, modifiedAt: DIR_TIME });
+    for (const child of children) {
+      zipEntries(entries, child, name.length > 0 ? `${name}/${baseName(child)}` : baseName(child));
+    }
+  }
+
+  /** Checks an upload's target and reads its body, outside any critical section. */
+  async function staged(
+    path: string,
+    body: ReadableStream<Uint8Array> | Uint8Array,
+    opts: Pick<UploadOptions, "overwrite" | "mkdirParents" | "contentLength"> | undefined,
+  ): Promise<{ normalized: string; bytes: Uint8Array }> {
+    const normalized = normalizePath(path);
+    if (isDir(normalized)) throw new StorageError("conflict", `a directory exists at ${path}`);
+    if (opts?.overwrite !== true && fileMap.has(normalized)) throw taken(path);
+    if (opts?.mkdirParents !== true && !isDir(parentPath(normalized)))
+      throw new StorageError("not_found", `parent not found: ${path}`);
+    const bytes = await readAll(body);
+    if (opts?.contentLength !== undefined && bytes.length !== opts.contentLength)
+      throw new StorageError("bad_request", `upload ended after ${bytes.length} bytes: ${path}`);
+    return { normalized, bytes };
+  }
+
+  /** `bytes` written into upload part `id` at `offset`, cutting off what it held past it. */
+  function writePart(path: string, id: string, offset: number, bytes: Uint8Array): Uint8Array {
+    const held = parts.get(id) ?? new Uint8Array();
+    if (held.length < offset)
+      throw new StorageError("bad_request", `the upload has no byte ${offset}: ${path}`);
+    const content = new Uint8Array(offset + bytes.length);
+    content.set(held.subarray(0, offset));
+    content.set(bytes, offset);
+    parts.set(id, content);
+    return content;
   }
 
   const storage: Omit<MemoryStorage, "trash"> = {
@@ -183,18 +278,8 @@ export function createMemoryStorage(
       const childPaths = childrenOf.get(normalized);
       if (childPaths !== undefined) {
         return [...childPaths].map((childPath) => {
-          const name = baseName(childPath);
-          const file = fileMap.get(childPath);
-          return file !== undefined
-            ? {
-                name,
-                path: childPath,
-                kind: "file",
-                size: file.content.length,
-                modifiedAt: file.mtime ?? new Date(0),
-                ext: extensionOf(name),
-              }
-            : { name, path: childPath, kind: "dir", size: 0, modifiedAt: new Date(0), ext: "" };
+          const { ino: _, ...entry } = made(childPath);
+          return entry;
         });
       }
       if (fileMap.has(normalized)) throw new StorageError("bad_request", "not a directory");
@@ -206,12 +291,10 @@ export function createMemoryStorage(
     },
 
     async contentStamp(path: string) {
-      const s = await storage.stat(path);
-      if (s.kind === "dir") throw new StorageError("bad_request", "is a directory");
-      const { file } = requireFile(path);
+      const { file } = requireFile((await storage.statFile(path)).path);
       return {
         size: file.content.length,
-        mtimeNs: BigInt(file.mtime?.getTime() ?? 0) * BigInt(1_000_000),
+        mtimeNs: BigInt(file.mtime.getTime()) * BigInt(1_000_000),
         ino: file.ino,
         ctimeNs: file.ctimeNs,
       };
@@ -220,32 +303,13 @@ export function createMemoryStorage(
     async statFile(path: string) {
       const s = await storage.stat(path);
       if (s.kind === "dir") throw new StorageError("bad_request", "is a directory");
-      return { size: s.size, modifiedAt: s.modifiedAt, contentType: s.contentType };
+      return s;
     },
 
     async stat(path: string): Promise<EntryStat> {
-      const normalized = normalizePath(path);
-      const file = fileMap.get(normalized);
-      if (file !== undefined) {
-        return {
-          kind: "file",
-          size: file.content.length,
-          modifiedAt: file.mtime,
-          contentType: null,
-          ino: file.ino,
-        };
-      }
-      if (isDir(normalized)) {
-        const ino = dirInodes.get(normalized);
-        return {
-          kind: "dir",
-          size: 0,
-          modifiedAt: null,
-          contentType: null,
-          ...(ino === undefined ? {} : { ino }),
-        };
-      }
-      throw new StorageError("not_found", `not found: ${path}`);
+      const found = entryAt(normalizePath(path));
+      if (found === null) throw new StorageError("not_found", `not found: ${path}`);
+      return found;
     },
 
     async download(path: string, opts) {
@@ -263,7 +327,6 @@ export function createMemoryStorage(
           body: streamOf(slice),
           contentLength: slice.length,
           contentRange: `bytes ${range.start}-${end}/${total}`,
-          contentType: null,
           lastModified: file.mtime,
         };
       }
@@ -272,34 +335,16 @@ export function createMemoryStorage(
         body: streamOf(file.content),
         contentLength: total,
         contentRange: null,
-        contentType: null,
         lastModified: file.mtime,
       };
     },
 
-    async upload(path, body, opts): Promise<void> {
-      const normalized = normalizePath(path);
-      if (isDir(normalized)) throw new StorageError("conflict", `a directory exists at ${path}`);
-      if (opts?.overwrite !== true && fileMap.has(normalized)) throw taken(path);
-      if (opts?.mkdirParents !== true && !isDir(parentPath(normalized)))
-        throw new StorageError("not_found", `parent not found: ${path}`);
+    async upload(path, body, opts): Promise<EntryStat> {
       // Staged first, outside the caller's critical section.
-      const bytes = await readAll(body);
-      if (opts?.contentLength !== undefined && bytes.length !== opts.contentLength)
-        throw new StorageError("bad_request", `upload ended after ${bytes.length} bytes: ${path}`);
+      const { normalized, bytes } = await staged(path, body, opts);
       const part = opts?.part;
-      let content = bytes;
-      if (part !== undefined) {
-        const held = parts.get(part.id) ?? new Uint8Array();
-        if (held.length < part.offset)
-          throw new StorageError("bad_request", `the upload has no byte ${part.offset}: ${path}`);
-        content = new Uint8Array(part.offset + bytes.length);
-        content.set(held.subarray(0, part.offset));
-        content.set(bytes, part.offset);
-        parts.set(part.id, content);
-        if (!part.final) return;
-        parts.delete(part.id);
-      }
+      const content = part === undefined ? bytes : writePart(path, part.id, part.offset, bytes);
+      if (part !== undefined) parts.delete(part.id);
       const critical = opts?.critical ?? (<T>(work: () => Promise<T>) => work());
       await critical(async () => {
         // A create-if-absent publish: a name taken meanwhile is refused.
@@ -307,18 +352,27 @@ export function createMemoryStorage(
         if (opts?.overwrite !== true && fileMap.has(normalized)) throw taken(path);
         putFile(normalized, content, opts?.modifiedAt ?? clock());
       });
+      return made(normalized);
     },
 
-    async mkdir(path, opts): Promise<void> {
+    async uploadPart(path, body, opts): Promise<void> {
+      const { bytes } = await staged(path, body, { ...opts, mkdirParents: true });
+      writePart(path, opts.part.id, opts.part.offset, bytes);
+    },
+
+    async mkdir(path, opts): Promise<MadeFolder> {
       const normalized = normalizePath(path);
       if (fileMap.has(normalized)) throw new StorageError("conflict", `a file exists at ${path}`);
-      if (opts?.parents !== true && !isDir(parentPath(normalized)))
-        throw new StorageError("not_found", `parent not found: ${path}`);
-      ensureDirsFor(parentPath(normalized));
-      addDir(normalized);
+      if (opts?.parents !== true) {
+        if (!isDir(parentPath(normalized)))
+          throw new StorageError("not_found", `parent not found: ${path}`);
+        if (isDir(normalized)) throw taken(path);
+      }
+      const created = ensureDirsFor(normalized);
+      return { ...made(normalized), created };
     },
 
-    async move(path, target, opts): Promise<void> {
+    async move(path, target, opts): Promise<EntryStat> {
       const destination = normalizePath(target);
       const source = normalizePath(path);
       const s = await storage.stat(source);
@@ -331,9 +385,10 @@ export function createMemoryStorage(
         else removeFile(destination);
       }
       renameTree(source, destination);
+      return made(destination);
     },
 
-    async copy(path, target, opts): Promise<void> {
+    async copy(path, target, opts): Promise<EntryStat> {
       const source = normalizePath(path);
       const destination = normalizePath(target);
       if ((!fileMap.has(source) && !isDir(source)) || source === "/")
@@ -344,10 +399,11 @@ export function createMemoryStorage(
       if (file !== undefined) {
         if (isDir(destination)) removeDirTree(destination);
         putFile(destination, file.content, file.mtime);
-        return;
+        return made(destination);
       }
       if (fileMap.has(destination)) removeFile(destination);
       copyTree(source, destination);
+      return made(destination);
     },
 
     async deleteFile(path: string): Promise<void> {
@@ -379,10 +435,25 @@ export function createMemoryStorage(
       removeDirTree(normalized);
     },
 
-    async setModifiedAt(path: string, modifiedAt: Date): Promise<void> {
-      const { file } = requireFile(path);
-      file.mtime = modifiedAt;
-      file.ctimeNs = tick();
+    async zip(paths, opts) {
+      if (opts?.signal?.aborted === true) {
+        throw new DOMException("The operation was aborted.", "AbortError");
+      }
+      const entries: StoredZipEntry[] = [];
+      for (const path of paths) {
+        const found = await storage.stat(path);
+        zipEntries(entries, found.path, found.name);
+      }
+      const files = entries.flatMap((entry) =>
+        entry.content === undefined ? [] : [entry.content],
+      );
+      let bytes = 0;
+      opts?.onProgress?.({ processed: 0, total: files.length, bytes });
+      for (const [index, content] of files.entries()) {
+        bytes += content.length;
+        opts?.onProgress?.({ processed: index + 1, total: files.length, bytes });
+      }
+      return streamOf(storedZip(entries));
     },
   };
 

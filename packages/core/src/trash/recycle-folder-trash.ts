@@ -1,7 +1,6 @@
 import type { FileEntry } from "../entries.ts";
-import { makeEntry } from "../entries.ts";
 import { isStorageError, StorageError } from "../errors.ts";
-import { baseName, normalizePath, parentPath, relativeTo } from "../paths.ts";
+import { normalizePath, parentPath, relativeTo } from "../paths.ts";
 import type {
   EntryStat,
   StorageWithoutTrash,
@@ -206,7 +205,7 @@ async function restoreLeaf(
   if (parsed === null) {
     throw new StorageError("bad_request", `invalid trash id: ${id}`, { details: { id } });
   }
-  const leafStat = await statLeaf(storage, id, leafPath, parsed.kind);
+  await statLeaf(storage, id, leafPath, parsed.kind);
   const resolvedTarget = normalizePath(target ?? parsed.originalPath);
   if (resolvedTarget === trashRoot || isUnderPath(trashRoot, resolvedTarget)) {
     throw new StorageError("bad_request", "cannot restore into the trash folder", {
@@ -215,18 +214,9 @@ async function restoreLeaf(
   }
 
   await storage.mkdir(parentPath(resolvedTarget), { parents: true });
-  await storage.move(leafPath, resolvedTarget, { overwrite: false });
+  const restored = await storage.move(leafPath, resolvedTarget, { overwrite: false });
   await removeEmptyFolders(storage, trashRoot, parentPath(leafPath));
-
-  return {
-    ...makeEntry(parentPath(resolvedTarget), {
-      name: baseName(resolvedTarget),
-      kind: leafStat.kind,
-      size: leafStat.size,
-      modifiedAt: leafStat.modifiedAt ?? new Date(0),
-    }),
-    originalPath: parsed.originalPath,
-  };
+  return { ...restored, originalPath: parsed.originalPath };
 }
 
 /** Deletes a leaf for good, then the folders that leaves empty. A missing leaf is ignored. */

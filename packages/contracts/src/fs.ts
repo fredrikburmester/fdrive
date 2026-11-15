@@ -34,8 +34,6 @@ export const FsEntry = z.object({
   ext: z.string(),
   mime: z.string().nullable(),
   meta: FsEntryMeta.optional(),
-  /** A write committed but its follow-up stat failed. Size/time are placeholders until refresh. */
-  metadataPending: z.boolean().optional(),
 });
 
 export type FsEntry = z.infer<typeof FsEntry>;

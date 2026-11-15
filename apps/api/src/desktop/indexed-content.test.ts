@@ -157,7 +157,7 @@ describe("createIndexedContentLookup", () => {
 describe("version checks answered from the index", () => {
   const signal = new AbortController().signal;
 
-  function fixture(options: { stamps?: boolean; grant?: string[] } = {}) {
+  function fixture(options: { grant?: string[] } = {}) {
     const raw = createMemoryStorage({
       "/docs/a.txt": "alpha",
       "/docs/b.txt": "bravo",
@@ -170,18 +170,14 @@ describe("version checks answered from the index", () => {
         (path, index) => [path, { ...STAMP, ino: BigInt(index + 1) }],
       ),
     );
-    const { contentStamp: _unstamped, ...withoutStamps } = raw;
-    const storage: StorageProvider =
-      options.stamps === false
-        ? withoutStamps
-        : {
-            ...raw,
-            contentStamp: async (path) => {
-              const stamp = stamps.get(path);
-              if (stamp === undefined) throw new Error(`no stamp for ${path}`);
-              return stamp;
-            },
-          };
+    const storage: StorageProvider = {
+      ...raw,
+      contentStamp: async (path) => {
+        const stamp = stamps.get(path);
+        if (stamp === undefined) throw new Error(`no stamp for ${path}`);
+        return stamp;
+      },
+    };
     const download = vi.spyOn(storage, "download");
     const rows = new Map<string, IndexedContent>([
       ["/docs/a.txt", rowFor("alice/docs/a.txt", stamps.get("/docs/a.txt"))],
@@ -259,14 +255,6 @@ describe("version checks answered from the index", () => {
     expect((await none.versions(principal as Principal, ["/docs/a.txt"], signal)).items).toEqual([
       { path: "/docs/a.txt", size: 5, version: sha("alpha") },
     ]);
-  });
-
-  it("hashes everything, asking the index nothing, where storage has no stamps", async () => {
-    const f = fixture({ stamps: false });
-    expect(await f.versions(["/docs/a.txt"])).toEqual([
-      { path: "/docs/a.txt", size: 5, version: sha("alpha") },
-    ]);
-    expect(f.l.scopesFor).not.toHaveBeenCalled();
   });
 
   it("looks up only paths the connection may read, and still refuses the others in turn", async () => {

@@ -5,11 +5,11 @@ import type { OrganizeItem, OrganizeSubmission } from "./agent.ts";
 import { buildProposal } from "./proposal.ts";
 
 function file(path: string): OrganizeItem {
-  return { path, kind: "file", size: 1, modifiedAt: null };
+  return { path, kind: "file", size: 1, modifiedAt: new Date(0) };
 }
 
 function dir(path: string): OrganizeItem {
-  return { path, kind: "dir", size: 0, modifiedAt: null };
+  return { path, kind: "dir", size: 0, modifiedAt: new Date(0) };
 }
 
 function drive() {

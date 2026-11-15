@@ -59,9 +59,7 @@ afterEach(async () => {
   await f.cleanup();
 });
 
-/** The storage's zip, which local storage always has. */
-function zip(paths: readonly string[], opts?: Parameters<NonNullable<typeof f.storage.zip>>[1]) {
-  if (f.storage.zip === undefined) throw new Error("local storage has no zip");
+function zip(paths: readonly string[], opts?: Parameters<typeof f.storage.zip>[1]) {
   return f.storage.zip(paths, opts);
 }
 
@@ -142,7 +140,7 @@ describe("symlinks", () => {
     expect(await kindOf(f.storage.list("/alias"))).toBe("forbidden");
     expect(await kindOf(f.storage.download("/a-link.txt"))).toBe("forbidden");
     expect(await read(f.storage, "/real/a.txt")).toBe("a");
-    expect(await f.storage.stat("/real/a.txt")).not.toHaveProperty("path");
+    expect(await f.storage.stat("/real/a.txt")).toMatchObject({ path: "/real/a.txt" });
   });
 
   it("refuses a link that leads nowhere, and writing over it", async () => {
@@ -186,7 +184,7 @@ describe("upload", () => {
     });
     await f.storage.upload("/b.txt", bytes("b"), { signal });
     expect(await read(f.storage, "/s.txt")).toBe("hello");
-    expect((await f.storage.statFile("/s.txt")).modifiedAt?.getTime()).toBe(at.getTime());
+    expect((await f.storage.statFile("/s.txt")).modifiedAt.getTime()).toBe(at.getTime());
   });
 
   it("stops on an aborted signal and leaves nothing behind", async () => {
@@ -260,12 +258,12 @@ describe("upload", () => {
 
 describe("upload in pieces", () => {
   const id = "0123456789abcdef";
-  const piece = (offset: number, final = false) => ({ part: { id, offset, final } });
+  const piece = (offset: number) => ({ part: { id, offset } });
 
   it("keeps the pieces at the top of the home until the last one publishes them", async () => {
     await f.storage.mkdir("/docs");
-    await f.storage.upload("/docs/f.txt", bytes("hel"), piece(0));
-    await f.storage.upload("/docs/f.txt", streamOf(["lo", " WORLD!"]), {
+    await f.storage.uploadPart("/docs/f.txt", bytes("hel"), piece(0));
+    await f.storage.uploadPart("/docs/f.txt", streamOf(["lo", " WORLD!"]), {
       ...piece(3),
       signal: new AbortController().signal,
     });
@@ -273,23 +271,27 @@ describe("upload in pieces", () => {
     expect(await readdir(join(f.home, "docs"))).toEqual([]);
 
     const at = new Date("2019-03-04T05:06:07Z");
-    await f.storage.upload("/docs/f.txt", streamOf([" world"]), {
-      ...piece(5, true),
+    const published = await f.storage.upload("/docs/f.txt", streamOf([" world"]), {
+      ...piece(5),
       contentLength: 6,
       modifiedAt: at,
     });
+    expect(published).toMatchObject({ path: "/docs/f.txt", size: 11, modifiedAt: at });
     expect(await read(f.storage, "/docs/f.txt")).toBe("hello world");
-    expect((await f.storage.statFile("/docs/f.txt")).modifiedAt?.getTime()).toBe(at.getTime());
     expect(await readdir(f.home)).toEqual(["docs"]);
   });
 
   it("refuses a gap, a part that is not there and a malformed id", async () => {
-    await f.storage.upload("/f.txt", bytes("abc"), piece(0));
-    expect(await kindOf(f.storage.upload("/f.txt", bytes("x"), piece(9)))).toBe("bad_request");
-    const other = { part: { id: "fedcba9876543210", offset: 3, final: true } };
+    await f.storage.uploadPart("/f.txt", bytes("abc"), piece(0));
+    expect(await kindOf(f.storage.uploadPart("/f.txt", bytes("x"), piece(9)))).toBe("bad_request");
+    expect(
+      await kindOf(f.storage.uploadPart("/f.txt", bytes("x"), { ...piece(3), contentLength: 2 })),
+    ).toBe("bad_request");
+    const other = { part: { id: "fedcba9876543210", offset: 3 } };
     expect(await kindOf(f.storage.upload("/f.txt", bytes("x"), other))).toBe("not_found");
-    const malformed = { part: { id: "../../x", offset: 0, final: true } };
+    const malformed = { part: { id: "../../x", offset: 0 } };
     expect(await kindOf(f.storage.upload("/f.txt", bytes("x"), malformed))).toBe("bad_request");
+    expect(await kindOf(f.storage.uploadPart("/f.txt", bytes("x"), malformed))).toBe("bad_request");
     expect(await readdir(f.home)).toEqual([`.fdrive-partial-${id}`]);
   });
 
@@ -298,9 +300,9 @@ describe("upload in pieces", () => {
     await mkdir(join(owner, "shared"), { recursive: true });
     await writeFile(join(owner, "shared", "f.txt"), "old");
     const shared = createLocalStorage({ home: join(owner, "shared"), within: owner });
-    await shared.upload("/f.txt", bytes("ne"), { ...piece(0), overwrite: true });
+    await shared.uploadPart("/f.txt", bytes("ne"), { ...piece(0), overwrite: true });
     expect((await readdir(owner)).sort()).toEqual([`.fdrive-partial-${id}`, "shared"]);
-    await shared.upload("/f.txt", bytes("w"), { ...piece(2, true), overwrite: true });
+    await shared.upload("/f.txt", bytes("w"), { ...piece(2), overwrite: true });
     expect(await readFile(join(owner, "shared", "f.txt"), "utf8")).toBe("new");
     expect(await readdir(owner)).toEqual(["shared"]);
   });
@@ -451,7 +453,7 @@ describe("copy", () => {
     const at = new Date("2018-01-01T00:00:00Z");
     await f.storage.upload("/a.txt", bytes("a"), { modifiedAt: at });
     await f.storage.copy("/a.txt", "/b.txt");
-    expect((await f.storage.statFile("/b.txt")).modifiedAt?.getTime()).toBe(at.getTime());
+    expect((await f.storage.statFile("/b.txt")).modifiedAt.getTime()).toBe(at.getTime());
     expect(await kindOf(f.storage.copy("/a.txt", "/b.txt"))).toBe("conflict");
     expect(await kindOf(f.storage.copy("/a.txt", "/b.txt", { overwrite: false }))).toBe("conflict");
   });
@@ -537,18 +539,7 @@ describe("delete", () => {
 describe("probeDirectoryRead", () => {
   it("refuses a file", async () => {
     await f.storage.upload("/f.txt", bytes("f"));
-    expect(await kindOf(f.storage.probeDirectoryRead?.("/f.txt") ?? Promise.resolve())).toBe(
-      "bad_request",
-    );
-  });
-});
-
-describe("setModifiedAt", () => {
-  it("sets a folder's time too", async () => {
-    await f.storage.mkdir("/dir");
-    const at = new Date("2017-07-07T07:07:07Z");
-    await f.storage.setModifiedAt?.("/dir", at);
-    expect((await lstat(join(f.home, "dir"))).mtime.getTime()).toBe(at.getTime());
+    expect(await kindOf(f.storage.probeDirectoryRead("/f.txt"))).toBe("bad_request");
   });
 });
 

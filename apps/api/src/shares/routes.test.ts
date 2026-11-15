@@ -16,6 +16,8 @@ import type { ThumbFileReader } from "../thumbs/serve.ts";
 import { capByteStream, contentLengthExceeds } from "./routes.ts";
 import { cookieFrom, patchStorage, sharesHarness } from "./test-fixtures/index.ts";
 
+const DOCX = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+
 const base = "/api/v1/shares";
 const pub = (id: string) => `/api/v1/public/shares/${id}`;
 type Harness = ReturnType<typeof sharesHarness>;
@@ -459,6 +461,9 @@ describe("public shares", () => {
     const head = await h.request(`${path}/download`, { method: "HEAD" });
     expect(head.status).toBe(200);
     expect(head.headers.get("content-length")).toBe("10");
+    // Typed by its name, as every download is: storage keeps no content types.
+    expect(head.headers.get("content-type")).toBe(DOCX);
+    expect(head.headers.get("last-modified")).not.toBeNull();
     expect(head.headers.get("accept-ranges")).toBe("bytes");
     expect(head.headers.get("content-disposition")).toContain("a.docx");
     expect(await head.text()).toBe("");
@@ -466,6 +471,8 @@ describe("public shares", () => {
 
     const full = await h.request(`${path}/download`);
     expect(full.status).toBe(200);
+    expect(full.headers.get("content-type")).toBe(DOCX);
+    expect(full.headers.get("last-modified")).toBe(head.headers.get("last-modified"));
     expect(await full.text()).toBe("alice data");
     expect((await metadata(h, id)).usedDownloads).toBe(1);
 

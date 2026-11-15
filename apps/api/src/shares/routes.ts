@@ -14,7 +14,13 @@ import {
   type ThumbSize,
   UpdateShareRequest,
 } from "@fdrive/contracts";
-import { normalizePath, type StorageProvider, toFsPath } from "@fdrive/core";
+import {
+  type Download,
+  extensionOf,
+  mimeFromExtension,
+  normalizePath,
+  toFsPath,
+} from "@fdrive/core";
 import type { IdentityRepo, IndexQueries, ShareRecord } from "@fdrive/db";
 import type { Context } from "hono";
 import { getCookie, setCookie } from "hono/cookie";
@@ -46,8 +52,6 @@ import {
 } from "./credentials.ts";
 import type { ShareLimiter } from "./limiter.ts";
 import { hiddenFromLinks, managedShare, type SharesService, shareCall } from "./service.ts";
-
-type DownloadResult = Awaited<ReturnType<StorageProvider["download"]>>;
 
 export async function publicBody<T>(
   schema: z.ZodType<T>,
@@ -182,18 +186,19 @@ export function shareId(c: Context): string {
 export function attachment(name: string): string {
   return `attachment; filename="download"; filename*=UTF-8''${encodeURIComponent(name.replace(/\p{Cc}/gu, "")).replace(/['()*]/g, (char) => `%${char.charCodeAt(0).toString(16).toUpperCase()}`)}`;
 }
-export function downloadHeaders(result: Omit<DownloadResult, "body">, name: string): Headers {
+/** A shared file's headers, its type from its name. */
+export function downloadHeaders(result: Omit<Download, "body">, name: string): Headers {
   const headers = new Headers({
-    "Content-Type": result.contentType ?? "application/octet-stream",
+    "Content-Type": mimeFromExtension(extensionOf(name)) ?? "application/octet-stream",
     "Content-Disposition": attachment(name),
+    "Content-Length": String(result.contentLength),
+    "Last-Modified": result.lastModified.toUTCString(),
     "Accept-Ranges": "bytes",
   });
-  if (result.contentLength !== null) headers.set("Content-Length", String(result.contentLength));
   if (result.contentRange !== null) headers.set("Content-Range", result.contentRange);
-  if (result.lastModified !== null) headers.set("Last-Modified", result.lastModified.toUTCString());
   return headers;
 }
-export function downloadResponse(result: DownloadResult, name: string): Response {
+export function downloadResponse(result: Download, name: string): Response {
   return new Response(result.body, {
     status: result.status,
     headers: downloadHeaders(result, name),
@@ -531,7 +536,6 @@ export function registerSharesRoutes(
               status: 200,
               contentLength: stat.size,
               contentRange: null,
-              contentType: stat.contentType,
               lastModified: stat.modifiedAt,
             },
             name,

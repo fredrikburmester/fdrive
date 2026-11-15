@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type ContentStamp, StorageError, type StorageProvider } from "@fdrive/core";
@@ -275,7 +275,7 @@ it("moves a folder after something inside it changed", async () => {
   const f = await fixture({ storage });
   const request = await f.move("/Folder", "Renamed");
   await writeFile(join(home, "Folder", "new.txt"), "new");
-  await storage.setModifiedAt?.("/Folder", new Date(0));
+  await utimes(join(home, "Folder"), new Date(0), new Date(0));
   expect((await f.service.commit(f.principal, request.operationId)).item).toMatchObject({
     path: "/Renamed",
   });
@@ -446,16 +446,6 @@ it("publishes a save even when its staging folder cannot be removed", async () =
     expect.objectContaining({ operationId: request.operationId }),
     expect.stringContaining("staging stays"),
   );
-});
-
-it("cannot prove a save on storage that keeps no file stamps", async () => {
-  const { contentStamp: _unused, ...plain } = createMemoryStorage({ "/old.txt": "old" });
-  const f = await fixture({ storage: plain });
-  const request = await f.save("saved");
-  await expect(f.service.commit(f.principal, request.operationId)).rejects.toThrow(
-    "keeps no file stamps",
-  );
-  expect(await f.read("/old.txt")).toBe("old");
 });
 
 it("publishes nothing once the pairing is revoked while a save hashes its base", async () => {

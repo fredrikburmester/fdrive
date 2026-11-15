@@ -1,4 +1,5 @@
 import { StorageError } from "@fdrive/core";
+import { entryStat } from "@fdrive/core/testing";
 import { describe, expect, it, vi } from "vitest";
 import { recordingFileOperations } from "../../test/file-operations.ts";
 import { officeHarness } from "../../test/fixtures/office/harness.ts";
@@ -481,11 +482,9 @@ describe("save-copy collision races", () => {
   it("bounds repeated suggested-name collisions", async () => {
     const h = await officeHarness();
     const opened = await h.open();
-    vi.spyOn(h.storage, "statFile").mockResolvedValue({
-      size: 1,
-      modifiedAt: null,
-      contentType: null,
-    });
+    vi.spyOn(h.storage, "statFile").mockImplementation(async (path) =>
+      entryStat(path, { size: 1 }),
+    );
     const response = await h.callback(opened, {
       method: "POST",
       headers: { "X-WOPI-Override": "PUT_RELATIVE", "X-WOPI-SuggestedTarget": "collision.docx" },
@@ -879,8 +878,9 @@ it("saves different documents side by side and one document's saves in turn", as
   const upload = h.storage.upload.bind(h.storage);
   vi.spyOn(h.storage, "upload").mockImplementation(async (path, body, options) => {
     log.push(`start ${path}`);
-    await upload(path, body, options);
+    const entry = await upload(path, body, options);
     log.push(`end ${path}`);
+    return entry;
   });
   const save = (opened: typeof a, body: string | ReadableStream<Uint8Array>) =>
     h.callback(opened, {

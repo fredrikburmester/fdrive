@@ -35,11 +35,9 @@ it("versions a document from its stamp without reading it", async () => {
   expect(download).not.toHaveBeenCalled();
 });
 
-it("fails as the storage does, and refuses storage without stamps", async () => {
+it("fails as the storage does", async () => {
   const storage = createMemoryStorage({});
   await expect(documentVersion(storage, "/missing.docx")).rejects.toMatchObject({
     kind: "not_found",
   });
-  const { contentStamp: _unstamped, ...unstamped } = storage;
-  await expect(documentVersion(unstamped, "/a.docx")).rejects.toThrow("stamps its files");
 });

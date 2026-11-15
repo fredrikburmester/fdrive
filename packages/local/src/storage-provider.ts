@@ -2,7 +2,6 @@ import { createHash, type Hash, randomBytes } from "node:crypto";
 import type { BigIntStats, Stats } from "node:fs";
 import { constants, createReadStream } from "node:fs";
 import {
-  access,
   copyFile,
   cp,
   link,
@@ -19,29 +18,33 @@ import {
   utimes,
   writeFile,
 } from "node:fs/promises";
-import { basename, dirname, join, sep } from "node:path";
+import { basename, dirname, join, relative, sep } from "node:path";
 import { addAbortSignal, Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { ReadableStream as NodeReadableStream } from "node:stream/web";
 import {
+  baseName,
   createRecycleFolderTrash,
   type EntryKind,
   type EntryStat,
   type FileEntry,
   isPrecompressedEntry,
+  joinPath,
   type MoveOptions,
   makeEntry,
   normalizePath,
+  parentPath,
   StorageError,
   type StorageProvider,
   type StorageWithoutTrash,
   splitSegments,
+  type UploadPart,
   type ZipProgress,
 } from "@fdrive/core";
 import { ZipFile } from "yazl";
 import { type DiskChangeListener, type DiskContent, type MovedStamp, notify } from "./changes.js";
 import { codeOf, mapped, toStorageError } from "./errors.js";
-import { createHome, type Home } from "./home.js";
+import { createHome, type Home, type Location } from "./home.js";
 
 export interface LocalStorageOptions {
   /** The user's home folder, created on first use, or a folder someone shares. */
@@ -165,14 +168,21 @@ function kindOf(info: Stats | BigIntStats): EntryKind {
   return "other";
 }
 
-async function lstatOrNull(path: string): Promise<Stats | null> {
+/** Codes meaning nothing is at a path. */
+const GONE = new Set(["ENOENT", "ENOTDIR"]);
+
+/** What `stats` reads, or null when nothing is there. */
+async function orGone<T>(stats: Promise<T>): Promise<T | null> {
   try {
-    return await lstat(path);
+    return await stats;
   } catch (error) {
-    const code = codeOf(error);
-    if (code === "ENOENT" || code === "ENOTDIR") return null;
+    if (GONE.has(codeOf(error) ?? "")) return null;
     throw error;
   }
+}
+
+function lstatOrNull(path: string): Promise<Stats | null> {
+  return orGone(lstat(path));
 }
 
 /**
@@ -205,6 +215,44 @@ export async function published(
       ctimeNs: info.ctimeNs,
     },
   };
+}
+
+/**
+ * What is at `path`, a storage path, as `info` describes it. Times come from
+ * a bigint stat everywhere, so every report of one file agrees to the
+ * millisecond.
+ */
+export function entryFrom(path: string, info: BigIntStats): EntryStat {
+  const kind = kindOf(info);
+  const size = kind === "file" ? Number(info.size) : 0;
+  const entry = makeEntry(parentPath(path), {
+    name: baseName(path),
+    kind,
+    size,
+    modifiedAt: info.mtime,
+  });
+  return { ...entry, ino: info.ino };
+}
+
+/**
+ * The storage path of `dir`, a folder on the way to `found` (or `found`
+ * itself), spelled as `found` spells it.
+ */
+function pathTo(found: Location, dir: string): string {
+  const below = relative(dir, found.at);
+  const segments = splitSegments(found.path);
+  const depth = segments.length - (below === "" ? 0 : below.split(sep).length);
+  return `/${segments.slice(0, depth).join("/")}`;
+}
+
+/** Refuses a body that is not `contentLength` long. */
+function checkLength(written: number, contentLength: number | undefined, path: string): void {
+  if (contentLength !== undefined && written !== contentLength) {
+    throw new StorageError(
+      "bad_request",
+      `upload ended after ${written} of ${contentLength} bytes: ${path}`,
+    );
+  }
 }
 
 /** Passes bytes through unchanged, adding each chunk to `hash` on the way. */
@@ -260,21 +308,40 @@ export function createLocalStorage(options: LocalStorageOptions): LocalStorage {
    * which every operation then refuses.
    */
   async function describe(dir: string, parent: string, name: string): Promise<FileEntry | null> {
-    const info = await lstatOrNull(join(dir, name));
+    const info = await orGone(lstat(join(dir, name), { bigint: true }));
     if (info === null) return null;
-    const kind = kindOf(info);
-    return makeEntry(parent, {
-      name,
-      kind,
-      size: kind === "file" ? info.size : 0,
-      modifiedAt: info.mtime,
-    });
+    const { ino: _, ...entry } = entryFrom(joinPath(parent, name), info);
+    return entry;
   }
 
   async function clearChildren(dir: string): Promise<void> {
     for (const name of await readdir(dir)) {
       await rm(join(dir, name), { recursive: true, force: true });
     }
+  }
+
+  /**
+   * Where an upload of `path` publishes: refuses the home itself, a folder
+   * there, and a taken name unless the upload replaces it.
+   */
+  async function uploadTarget(path: string, overwrite: boolean): Promise<Location> {
+    if (isTop(path)) throw new StorageError("conflict", `a directory exists at ${path}`);
+    const found = await home.locate(path);
+    const existing = await lstatOrNull(found.at);
+    if (existing?.isDirectory() === true) {
+      throw new StorageError("conflict", `a directory exists at ${path}`);
+    }
+    if (existing !== null && !overwrite) throw taken(path);
+    return found;
+  }
+
+  /** Where a resumable upload's part waits for its pieces. */
+  function partialFor(part: UploadPart): string {
+    const partial = partialIn(partsDir, part.id);
+    if (!PARTIAL.test(basename(partial))) {
+      throw new StorageError("bad_request", `invalid upload part: ${part.id}`);
+    }
+    return partial;
   }
 
   const storage: StorageWithoutTrash = {
@@ -291,18 +358,9 @@ export function createLocalStorage(options: LocalStorageOptions): LocalStorage {
       }),
 
     stat: (path) =>
-      mapped(path, async (): Promise<EntryStat> => {
+      mapped(path, async () => {
         const found = await home.locate(path);
-        const info = await lstat(found.at, { bigint: true });
-        const kind = kindOf(info);
-        return {
-          kind,
-          size: kind === "file" ? Number(info.size) : 0,
-          modifiedAt: info.mtime,
-          contentType: null,
-          ino: info.ino,
-          ...(found.path === normalizePath(path) ? {} : { path: found.path }),
-        };
+        return entryFrom(found.path, await lstat(found.at, { bigint: true }));
       }),
 
     probeDirectoryRead: (path) =>
@@ -317,17 +375,6 @@ export function createLocalStorage(options: LocalStorageOptions): LocalStorage {
         } finally {
           await handle.close();
         }
-      }),
-
-    // The checks `download` makes, in its order, without opening the file:
-    // `access` asks the permission question `open` would. Only metadata is
-    // looked up, which the kernel usually has cached; no content is read.
-    probeFileRead: (path) =>
-      mapped(path, async () => {
-        const at = await entry(path);
-        await access(at, constants.R_OK);
-        const info = await lstat(at);
-        if (!info.isFile()) throw new StorageError("bad_request", `not a file: ${path}`);
       }),
 
     // Opened as `download` opens it, so it fails as a download would and
@@ -352,7 +399,7 @@ export function createLocalStorage(options: LocalStorageOptions): LocalStorage {
     async statFile(path) {
       const info = await storage.stat(path);
       if (info.kind !== "file") throw new StorageError("bad_request", `not a file: ${path}`);
-      return { size: info.size, modifiedAt: info.modifiedAt, contentType: null };
+      return info;
     },
 
     download: (path, opts) =>
@@ -361,9 +408,9 @@ export function createLocalStorage(options: LocalStorageOptions): LocalStorage {
         if (signal?.aborted === true) throw aborted(signal);
         const handle = await open(await entry(path), READ_FLAGS);
         try {
-          const info = await handle.stat();
+          const info = await handle.stat({ bigint: true });
           if (!info.isFile()) throw new StorageError("bad_request", `not a file: ${path}`);
-          const total = info.size;
+          const total = Number(info.size);
           const range = opts?.range;
           const end = range === undefined ? total - 1 : Math.min(range.end ?? total - 1, total - 1);
           const ranged =
@@ -384,7 +431,6 @@ export function createLocalStorage(options: LocalStorageOptions): LocalStorage {
             body: webStream(stream),
             contentLength: length,
             contentRange: ranged ? `bytes ${start}-${end}/${total}` : null,
-            contentType: null,
             lastModified: info.mtime,
           };
         } catch (error) {
@@ -393,36 +439,28 @@ export function createLocalStorage(options: LocalStorageOptions): LocalStorage {
         }
       }),
 
-    upload: (path, body, opts) =>
+    upload: (path, body, opts = {}) =>
       mapped(path, async () => {
-        const signal = opts?.signal;
+        const signal = opts.signal;
         if (signal?.aborted === true) throw aborted(signal);
-        if (isTop(path)) throw new StorageError("conflict", `a directory exists at ${path}`);
-        const target = await entry(path);
+        const overwrite = opts.overwrite === true;
+        const found = await uploadTarget(path, overwrite);
+        const target = found.at;
         const dir = dirname(target);
-        const overwrite = opts?.overwrite === true;
-        const existing = await lstatOrNull(target);
-        if (existing?.isDirectory() === true) {
-          throw new StorageError("conflict", `a directory exists at ${path}`);
-        }
-        if (existing !== null && !overwrite) throw taken(path);
-        const part = opts?.part;
+        const part = opts.part;
         // Only what changes the path or above it runs in the caller's critical
         // section; the body is written beside the target, or into its part,
         // outside it.
-        const critical = opts?.critical ?? (<T>(work: () => Promise<T>) => work());
+        const critical = opts.critical ?? (<T>(work: () => Promise<T>) => work());
         const parents = async () => {
-          if (opts?.mkdirParents === true) await mkdir(dir, { recursive: true });
+          if (opts.mkdirParents === true) await mkdir(dir, { recursive: true });
         };
         // A whole upload is written beside the target, which must be there first.
         if (part === undefined) await critical(parents);
-        const partial = part === undefined ? partialIn(dir) : partialIn(partsDir, part.id);
-        if (!PARTIAL.test(basename(partial))) {
-          throw new StorageError("bad_request", `invalid upload part: ${path}`);
-        }
+        const partial = part === undefined ? partialIn(dir) : partialFor(part);
         // Only a listener needs the digest, so nobody else pays for it.
         const hash = listener === undefined ? undefined : createHash("sha256");
-        let written: Omit<DiskContent, "ctimeNs"> | undefined;
+        let info: BigIntStats;
         try {
           if (part !== undefined) {
             await writePart(partial, part.offset, body, signal);
@@ -443,38 +481,23 @@ export function createLocalStorage(options: LocalStorageOptions): LocalStorage {
                 : pipeline(source, tap, sink));
             }
           }
-          const size = (await stat(partial)).size - (part?.offset ?? 0);
-          if (opts?.contentLength !== undefined && size !== opts.contentLength) {
-            throw new StorageError(
-              "bad_request",
-              `upload ended after ${size} of ${opts.contentLength} bytes: ${path}`,
-            );
-          }
-          // A piece before the last stays in the part for the next one.
-          if (part?.final === false) return;
-          if (opts?.modifiedAt !== undefined) await utimes(partial, new Date(), opts.modifiedAt);
-          if (opts?.durable === true) await flush(partial);
-          if (hash !== undefined) {
-            // A part arrived over several calls, so its digest is read back whole.
-            if (part !== undefined) {
-              for await (const chunk of createReadStream(partial)) hash.update(chunk as Buffer);
-            }
-            // Taken before publishing: whatever is at the name later may be
-            // another writer's file.
-            const info = await stat(partial, { bigint: true });
-            written = {
-              sha256: hash.digest("hex"),
-              size: Number(info.size),
-              mtimeNs: info.mtimeNs,
-              ino: info.ino,
-            };
+          if (opts.modifiedAt !== undefined) await utimes(partial, new Date(), opts.modifiedAt);
+          if (opts.durable === true) await flush(partial);
+          // Taken before publishing: whatever is at the name later may be
+          // another writer's file. Publishing keeps the inode, size and
+          // modification time.
+          info = await stat(partial, { bigint: true });
+          checkLength(Number(info.size) - (part?.offset ?? 0), opts.contentLength, path);
+          // A part arrived over several calls, so its digest is read back whole.
+          if (hash !== undefined && part !== undefined) {
+            for await (const chunk of createReadStream(partial)) hash.update(chunk as Buffer);
           }
           await critical(async () => {
             if (part !== undefined) await parents();
             if (overwrite) await rename(partial, target);
             else await publishNew(partial, target, path);
             if (part !== undefined) await rm(partial, { force: true });
-            if (opts?.durable === true) await flush(dir);
+            if (opts.durable === true) await flush(dir);
           });
         } finally {
           // A part outlives a failed call, so the call can be repeated.
@@ -483,19 +506,41 @@ export function createLocalStorage(options: LocalStorageOptions): LocalStorage {
         notify(listener, {
           kind: "changed",
           path: target,
-          ...(written === undefined ? {} : await published(target, written)),
+          ...(hash === undefined
+            ? {}
+            : await published(target, {
+                sha256: hash.digest("hex"),
+                size: Number(info.size),
+                mtimeNs: info.mtimeNs,
+                ino: info.ino,
+              })),
         });
+        return entryFrom(found.path, info);
+      }),
+
+    uploadPart: (path, body, opts) =>
+      mapped(path, async () => {
+        const signal = opts.signal;
+        if (signal?.aborted === true) throw aborted(signal);
+        await uploadTarget(path, opts.overwrite === true);
+        const partial = partialFor(opts.part);
+        await writePart(partial, opts.part.offset, body, signal);
+        checkLength((await stat(partial)).size - opts.part.offset, opts.contentLength, path);
       }),
 
     mkdir: (path, opts) =>
       mapped(path, async () => {
-        const at = await entry(path);
+        const found = await home.locate(path);
         const parents = opts?.parents === true;
         // With `parents`, the first folder it made, if any; without, it made `at` or threw.
-        const created = parents ? await mkdir(at, { recursive: true }) : await mkdir(at);
-        const first = parents ? created : at;
+        const made = parents ? await mkdir(found.at, { recursive: true }) : await mkdir(found.at);
+        const first = parents ? made : found.at;
         // Search finds folders by name, so a new one is reported even while empty.
         if (first !== undefined) notify(listener, { kind: "changed", path: first });
+        return {
+          ...entryFrom(found.path, await lstat(found.at, { bigint: true })),
+          created: first === undefined ? null : pathTo(found, first),
+        };
       }),
 
     move: (path, target, opts) =>
@@ -510,6 +555,7 @@ export function createLocalStorage(options: LocalStorageOptions): LocalStorage {
           target: to,
           ...(stamp === undefined ? {} : { stamp }),
         });
+        return storage.stat(target);
       }),
 
     copy: (path, target, opts) =>
@@ -519,6 +565,7 @@ export function createLocalStorage(options: LocalStorageOptions): LocalStorage {
         const to = await entry(target);
         await copyEntry(from, to, { path, target }, opts);
         notify(listener, { kind: "changed", path: to });
+        return storage.stat(target);
       }),
 
     deleteFile: (path) =>
@@ -552,13 +599,6 @@ export function createLocalStorage(options: LocalStorageOptions): LocalStorage {
         if (isTop(path)) throw new StorageError("bad_request", `the home stays: ${path}`);
         // `rmdir` refuses a folder that holds anything, whatever arrived in it.
         await rmdir(at);
-        notify(listener, { kind: "changed", path: at });
-      }),
-
-    setModifiedAt: (path, modifiedAt) =>
-      mapped(path, async () => {
-        const at = await entry(path);
-        await utimes(at, (await lstat(at)).atime, modifiedAt);
         notify(listener, { kind: "changed", path: at });
       }),
 

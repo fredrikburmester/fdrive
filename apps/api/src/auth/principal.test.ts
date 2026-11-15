@@ -13,31 +13,7 @@ import {
   type PrincipalVariables,
 } from "./principal";
 
-function notImplemented(): never {
-  throw new Error("not implemented in this fake");
-}
-
-const FAKE_STORAGE: StorageProvider = {
-  list: notImplemented,
-  stat: notImplemented,
-  statFile: notImplemented,
-  download: notImplemented,
-  upload: notImplemented,
-  mkdir: notImplemented,
-  move: notImplemented,
-  copy: notImplemented,
-  deleteFile: notImplemented,
-  deleteDir: notImplemented,
-  deleteEmptyDir: notImplemented,
-  setModifiedAt: notImplemented,
-  zip: notImplemented,
-  trash: {
-    put: notImplemented,
-    list: notImplemented,
-    restore: notImplemented,
-    purge: notImplemented,
-  },
-};
+const FAKE_STORAGE: StorageProvider = createMemoryStorage();
 
 const PRINCIPAL: Principal = {
   accountId: "account-1",
