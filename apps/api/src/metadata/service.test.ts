@@ -327,32 +327,6 @@ describe("createMetadataService: onDeleted", () => {
   });
 });
 
-describe("createMetadataService: onTrashed", () => {
-  it("drops only recents, keeping tags and favorites at the original path", async () => {
-    const { repos, service } = buildService();
-    const account = await repos.accounts.create({ displayName: "Alice" });
-    const tag = await service.createTag(account.id, { name: "Work", color: null });
-    await service.setFileTags({ accountId: account.id, identityId: IDENTITY_ID }, "/a.txt", [
-      tag.id,
-    ]);
-    await service.addFavorite(IDENTITY_ID, "/a.txt", "file");
-    await service.touchRecent(IDENTITY_ID, "/a.txt");
-
-    await service.onTrashed(IDENTITY_ID, "/a.txt", false, "/.trash/a.txt");
-
-    expect(await service.filesForTag(IDENTITY_ID, tag.id)).toEqual(["/a.txt"]);
-    expect((await service.listFavorites(IDENTITY_ID)).map((f) => f.path)).toEqual(["/a.txt"]);
-    expect(await service.listRecents(IDENTITY_ID)).toEqual([]);
-  });
-
-  it("is idempotent: trashing an already-gone path is harmless", async () => {
-    const { service } = buildService();
-    await expect(
-      service.onTrashed(IDENTITY_ID, "/never-existed.txt", false, null),
-    ).resolves.toBeUndefined();
-  });
-});
-
 describe("createMetadataService: onCopied", () => {
   it("does not copy tags or favorites onto the target", async () => {
     const { repos, service } = buildService();
@@ -417,7 +391,7 @@ describe("createMetadataService: AI chat references", () => {
     return { service, identity: identity.id, references };
   }
 
-  it("follows moves and marks trashed and deleted items missing", async () => {
+  it("follows moves and marks deleted items missing", async () => {
     const { service, identity, references } = await withChat();
 
     await service.onMoved(identity, "/a.txt", "/b.txt", false);
@@ -427,10 +401,9 @@ describe("createMetadataService: AI chat references", () => {
       ["/moved/x.txt", false],
     ]);
 
-    await service.onTrashed(identity, "/b.txt", false, null);
     await service.onDeleted(identity, "/moved", true);
     expect(await references()).toEqual([
-      ["/b.txt", true],
+      ["/b.txt", false],
       ["/moved/x.txt", true],
     ]);
   });
@@ -440,12 +413,12 @@ describe("createMetadataService: AI chat references", () => {
     const { aiChats: _aiChats, ...withoutChats } = repos;
     const service = createMetadataService(withoutChats);
     await expect(service.onMoved(IDENTITY_ID, "/a", "/b", false)).resolves.toBeUndefined();
-    await expect(service.onTrashed(IDENTITY_ID, "/b", false, null)).resolves.toBeUndefined();
+    await expect(service.onDeleted(IDENTITY_ID, "/b", false)).resolves.toBeUndefined();
   });
 });
 
 describe("withFollowers", () => {
-  it("tells each follower about moves, deletes and trashes, in order", async () => {
+  it("tells each follower about moves and deletes, in order", async () => {
     const repos = createMemoryRepos();
     const calls: string[] = [];
     const follower = (name: string) => ({
@@ -464,10 +437,6 @@ describe("withFollowers", () => {
 
     await service.onMoved(IDENTITY_ID, "/Projects", "/Work", true);
     await service.onDeleted(IDENTITY_ID, "/Work", true);
-    // A share follows its folder into Trash, where no new folder can take its path.
-    await service.onTrashed(IDENTITY_ID, "/Other", true, "/.trash/leaf");
-    // Where it went is not known: the share ends rather than stay at a path a new folder can take.
-    await service.onTrashed(IDENTITY_ID, "/Lost", true, null);
 
     expect(movePrefix).toHaveBeenCalledTimes(1);
     expect(movePrefix).toHaveBeenCalledWith(IDENTITY_ID, "/Projects", "/Work", true);
@@ -476,10 +445,6 @@ describe("withFollowers", () => {
       `other moved ${IDENTITY_ID} /Projects /Work true`,
       `grants deleted ${IDENTITY_ID} /Work true`,
       `other deleted ${IDENTITY_ID} /Work true`,
-      `grants moved ${IDENTITY_ID} /Other /.trash/leaf true`,
-      `other moved ${IDENTITY_ID} /Other /.trash/leaf true`,
-      `grants deleted ${IDENTITY_ID} /Lost true`,
-      `other deleted ${IDENTITY_ID} /Lost true`,
     ]);
   });
 
@@ -511,12 +476,8 @@ describe("withFollowers", () => {
     const grants = { onMoved: vi.fn(async () => {}), onDeleted: vi.fn(async () => {}) };
     const service = withFollowers(createMetadataService(repos), [grants]);
     await expect(service.onMoved(IDENTITY_ID, "/a", "/b", true)).rejects.toBe(failure);
-    await expect(service.onTrashed(IDENTITY_ID, "/b", true, "/.trash/leaf")).rejects.toBe(failure);
     await expect(service.onDeleted(IDENTITY_ID, "/c", true)).rejects.toBe(failure);
-    expect(grants.onMoved.mock.calls).toEqual([
-      [IDENTITY_ID, "/a", "/b", true],
-      [IDENTITY_ID, "/b", "/.trash/leaf", true],
-    ]);
+    expect(grants.onMoved.mock.calls).toEqual([[IDENTITY_ID, "/a", "/b", true]]);
     expect(grants.onDeleted.mock.calls).toEqual([[IDENTITY_ID, "/c", true]]);
   });
 });

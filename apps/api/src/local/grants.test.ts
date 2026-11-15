@@ -35,7 +35,6 @@ async function fixture(options: Partial<LocalGrantServiceDeps> = {}) {
   const storageFor = createIdentityStorageFactory({
     identities: repos.identities,
     folder: local.folder,
-    clock: () => new Date(),
   });
   if (alice === undefined || bob === undefined || carol === undefined) throw new Error("unseeded");
   const service = createLocalGrantService({

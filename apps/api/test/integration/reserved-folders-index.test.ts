@@ -93,7 +93,6 @@ describe("fdrive's own folders in the index, through the MCP tools", () => {
     const storage = await createIdentityStorageFactory({
       identities: repos.identities,
       folder,
-      clock,
     })(identity.id);
 
     const indexRoot = { id: INDEX_ROOT_ID };

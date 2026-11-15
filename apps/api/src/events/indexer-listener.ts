@@ -125,7 +125,7 @@ export interface IndexerListenerDeps {
   readonly indexQueries: IndexQueries;
   readonly fileTags: FileTagRepo;
   readonly favorites: FavoriteRepo;
-  /** In a deployment `withTrashMoves`: a reported move into the Trash is a trash. */
+  /** Moves into and out of the Trash are moves like any other. */
   readonly metadata: MetadataService;
   readonly bus: EventBus;
   /**

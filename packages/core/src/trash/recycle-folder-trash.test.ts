@@ -9,7 +9,7 @@ import { createRecycleFolderTrash } from "./recycle-folder-trash.ts";
 const TRASH_PATH = "/.trash";
 const NAMESPACE = moveTrashRootPath(TRASH_PATH);
 
-/** A leaf as `withMoveToTrash` writes it: its storage path and its `TrashEntry.id`. */
+/** A leaf as `TrashProvider.put` writes it: its storage path and its `TrashEntry.id`. */
 function leaf(originalPath: string, timestamp: string, kind: "file" | "dir" = "file") {
   const path = moveTrashLeafPath(TRASH_PATH, originalPath, kind, timestamp);
   return { path, id: path.slice(`${TRASH_PATH}/`.length) };
@@ -23,7 +23,7 @@ const DOCS = leaf("/docs", "1000000", "dir");
 function trashFor(storage: ReturnType<typeof createMemoryStorage>, limit?: number) {
   return createRecycleFolderTrash({
     storage,
-    trashPath: TRASH_PATH,
+    clock: () => new Date(0),
     ...(limit === undefined ? {} : { limit }),
   });
 }

@@ -25,7 +25,7 @@ describe("originalFolderLabel", () => {
 
 describe("deleteDialogCopy", () => {
   it("moves to Trash, quoting the single entry's name and when Trash deletes it", () => {
-    expect(deleteDialogCopy(["a.txt"], 30)).toEqual({
+    expect(deleteDialogCopy([{ name: "a.txt" }], 30)).toEqual({
       title: "Move to Trash?",
       description:
         '"a.txt" will be moved to Trash. Items in Trash are deleted permanently after 30 days.',
@@ -35,14 +35,34 @@ describe("deleteDialogCopy", () => {
   });
 
   it("summarizes multiple items by count, and says one day in the singular", () => {
-    expect(deleteDialogCopy(["a.txt", "b.txt"], 1).description).toBe(
+    expect(deleteDialogCopy([{ name: "a.txt" }, { name: "b.txt" }], 1).description).toBe(
       "2 items will be moved to Trash. Items in Trash are deleted permanently after 1 day.",
     );
   });
 
   it("leaves out when Trash deletes items until the setting has loaded", () => {
-    expect(deleteDialogCopy(["a.txt"], undefined).description).toBe(
+    expect(deleteDialogCopy([{ name: "a.txt" }], undefined).description).toBe(
       '"a.txt" will be moved to Trash.',
+    );
+  });
+
+  it("names the owner whose Trash takes what is in a folder shared with the login", () => {
+    expect(deleteDialogCopy([{ name: "a.txt", owner: "alice" }], undefined).description).toBe(
+      '"a.txt" will be moved to alice\'s Trash.',
+    );
+    expect(
+      deleteDialogCopy(
+        [
+          { name: "a.txt", owner: "alice" },
+          { name: "b.txt", owner: "alice" },
+        ],
+        undefined,
+      ).description,
+    ).toBe("2 items will be moved to alice's Trash.");
+    expect(
+      deleteDialogCopy([{ name: "a.txt", owner: "alice" }, { name: "mine.txt" }], 30).description,
+    ).toBe(
+      "2 items will be moved to Trash. Items in folders shared with you go to their owner's Trash. Items in Trash are deleted permanently after 30 days.",
     );
   });
 });

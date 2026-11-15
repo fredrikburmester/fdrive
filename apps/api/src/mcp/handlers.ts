@@ -81,8 +81,7 @@ export interface McpToolDeps {
       path: string;
       target?: string;
       eventPath?: string;
-      moveMetadata?: boolean;
-      /** Where a trashed item went in Trash, when the storage reported it. */
+      /** Where a trashed item went: its leaf in its owner's Trash. */
       trashLeaf?: string;
       isDir: boolean;
     },

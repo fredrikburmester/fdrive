@@ -24,6 +24,12 @@ const FAKE_STORAGE: StorageProvider = {
   deleteEmptyDir: notImplemented,
   setModifiedAt: notImplemented,
   zip: notImplemented,
+  trash: {
+    put: notImplemented,
+    list: notImplemented,
+    restore: notImplemented,
+    purge: notImplemented,
+  },
 };
 
 const FAKE_PRINCIPAL: TokenPrincipal = {

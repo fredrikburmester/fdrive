@@ -184,14 +184,17 @@ export async function appendActivityOutcome(
     });
   }
   if (operation.action === "file.trash" && registry?.file) {
+    const trashLeaf = result.after?.trashLeaf;
+    // Every producer of a trash says where in Trash the item went.
+    if (trashLeaf === undefined) throw new TypeError("a trash's outcome names its Trash leaf");
     await db.insert(activityTrashBindings).values({
       ownerAccountId: operation.ownerAccountId,
       eventId: event.id,
       fileId: registry.file.id,
       identityId: operation.identityId,
       originalPath: operation.requested.path ?? registry.file.path,
-      trashLeaf: result.after?.trashLeaf ?? null,
-      state: result.after?.trashLeaf ? "bound" : "unresolved",
+      trashLeaf,
+      state: "bound",
     });
   }
   for (const copy of registry?.copies ?? []) {

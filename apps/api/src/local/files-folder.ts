@@ -25,6 +25,8 @@ export interface DeploymentFilesFolderOptions {
   readonly changes?: ChangeQueue;
   /** Refuses storage while the folder is not this installation's (`createDeploymentFilesFolderGuard`). */
   readonly guard?: FilesFolderGuard;
+  /** Names each new Trash leaf by the time it was made. */
+  readonly clock?: () => Date;
 }
 
 /**
@@ -37,11 +39,12 @@ export function deploymentFilesFolder(
   repos: Pick<Repos, "localUsers" | "localGrants">,
   options: DeploymentFilesFolderOptions = {},
 ): FilesFolder {
-  const { changes, guard } = options;
+  const { changes, guard, clock } = options;
   return createFilesFolder({
     root: config.fdriveStorageRoot,
     users: createLocalUsers({ repo: repos.localUsers, grants: repos.localGrants }),
     ...(guard === undefined ? {} : { guard }),
+    ...(clock === undefined ? {} : { clock }),
     ...(changes === undefined ? {} : { onIndexChange: (change) => changes.record(change) }),
   });
 }

@@ -5,7 +5,7 @@ import type { IdentityStorageFactory } from "../auth/storage-factory.js";
 import { ApiHttpError } from "../errors.js";
 import type { MetadataService } from "../metadata/service.js";
 import type { SystemEventLog } from "../system/event-log.js";
-import { purgeTrashItem, trashOf } from "./routes.js";
+import { purgeTrashItem } from "./routes.js";
 import type { TrashSettingsService } from "./settings.js";
 
 const DAY_MS = 24 * 60 * 60_000;
@@ -57,7 +57,7 @@ export function createTrashRetention(deps: TrashRetentionDeps) {
         if (error instanceof ApiHttpError && error.kind === "forbidden") continue;
         throw error;
       }
-      const { entries } = await trashOf(principal.storage).list({
+      const { entries } = await principal.storage.trash.list({
         limit: Number.POSITIVE_INFINITY,
       });
       for (const entry of entries) {
