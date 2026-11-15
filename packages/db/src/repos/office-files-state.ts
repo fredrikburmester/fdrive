@@ -1,19 +1,18 @@
 import { randomUUID } from "node:crypto";
 
+/** Where a document lies: its owner's login and the owner's own canonical path (`/a/b.docx`). */
 export interface OfficeFileLocation {
-  readonly providerId: string;
-  readonly rootName: string;
+  readonly identityId: string;
   readonly path: string;
 }
 export interface OfficeFile extends OfficeFileLocation {
   readonly id: string;
   readonly createdAt: Date;
 }
+/** `from` and everything under it moves to `to`, in the same owner's files or another's. */
 export interface OfficeFileMove {
-  readonly providerId: string;
-  readonly rootName: string;
-  readonly from: string;
-  readonly to: string;
+  readonly from: OfficeFileLocation;
+  readonly to: OfficeFileLocation;
   readonly at: Date;
 }
 export interface OfficeFileDelete extends OfficeFileLocation {
@@ -35,50 +34,59 @@ export function validateOfficeId(id: string): void {
     throw new TypeError("Office ID must be a canonical UUID");
   }
 }
-export function validateOfficePath(path: string, allowRoot = false): void {
-  if (allowRoot && path === "") return;
+/** A canonical path below the owner's root: `/a/b`, never `/` itself. */
+export function validateOfficePath(path: string): void {
   if (
+    !path.startsWith("/") ||
     path.includes("\0") ||
     path
+      .slice(1)
       .split("/")
       .some(
         (part) =>
           part === "" || part === "." || part === ".." || Buffer.byteLength(part, "utf8") > 255,
       )
   ) {
-    throw new TypeError("Office path must be canonical and root-relative");
+    throw new TypeError("Office path must be canonical and below the owner's root");
   }
 }
-export function validateOfficeLocation(location: OfficeFileLocation, allowRoot = false): void {
-  validateOfficeId(location.providerId);
-  if (!location.rootName || location.rootName.includes("\0"))
-    throw new TypeError("Invalid office root");
-  validateOfficePath(location.path, allowRoot);
+export function validateOfficeLocation(location: OfficeFileLocation): void {
+  validateOfficeId(location.identityId);
+  validateOfficePath(location.path);
 }
 function validateTime(at: Date): void {
   if (!Number.isFinite(at.getTime())) throw new TypeError("Invalid office timestamp");
 }
 export function officePathMatches(path: string, prefix: string): boolean {
-  return prefix === "" || path === prefix || path.startsWith(`${prefix}/`);
+  return path === prefix || path.startsWith(`${prefix}/`);
+}
+function sameLocation(a: OfficeFileLocation, b: OfficeFileLocation): boolean {
+  return a.identityId === b.identityId && a.path === b.path;
 }
 export function validateOfficeMove(move: OfficeFileMove): void {
-  validateOfficeLocation({ ...move, path: move.from }, true);
-  validateOfficePath(move.to, true);
+  validateOfficeLocation(move.from);
+  validateOfficeLocation(move.to);
   validateTime(move.at);
   if (
-    move.from !== move.to &&
-    (officePathMatches(move.from, move.to) || officePathMatches(move.to, move.from))
+    move.from.identityId === move.to.identityId &&
+    !sameLocation(move.from, move.to) &&
+    (officePathMatches(move.from.path, move.to.path) ||
+      officePathMatches(move.to.path, move.from.path))
   ) {
     throw new TypeError("Office move prefixes must not overlap");
   }
 }
 export function validateOfficeDelete(deletion: OfficeFileDelete): void {
-  validateOfficeLocation(deletion, true);
+  validateOfficeLocation(deletion);
   validateTime(deletion.at);
 }
 /** Input contains the matching source rows; disjoint prefixes avoid update-order dependencies. */
 export function movedOfficeFiles(files: readonly OfficeFile[], move: OfficeFileMove): OfficeFile[] {
-  return files.map((file) => ({ ...file, path: move.to + file.path.slice(move.from.length) }));
+  return files.map((file) => ({
+    ...file,
+    identityId: move.to.identityId,
+    path: move.to.path + file.path.slice(move.from.path.length),
+  }));
 }
 export function escapeOfficeLike(path: string): string {
   return path.replace(/[\\%_]/g, "\\$&");
@@ -92,18 +100,20 @@ export function createMemoryOfficeFileRepo(options: MemoryOfficeFileOptions = {}
   const files = new Map<string, OfficeFile>();
   const id = options.id ?? randomUUID;
   const now = options.now ?? (() => new Date());
+  const under = (file: OfficeFile, prefix: OfficeFileLocation) =>
+    file.identityId === prefix.identityId && officePathMatches(file.path, prefix.path);
   return {
     async ensure(location) {
       validateOfficeLocation(location);
       for (const file of files.values()) {
-        if (
-          file.providerId === location.providerId &&
-          file.rootName === location.rootName &&
-          file.path === location.path
-        )
-          return cloneFile(file);
+        if (sameLocation(file, location)) return cloneFile(file);
       }
-      const file = { ...location, id: id(), createdAt: new Date(now()) };
+      const file = {
+        identityId: location.identityId,
+        path: location.path,
+        id: id(),
+        createdAt: new Date(now()),
+      };
       files.set(file.id, file);
       return cloneFile(file);
     },
@@ -114,28 +124,21 @@ export function createMemoryOfficeFileRepo(options: MemoryOfficeFileOptions = {}
     },
     async movePrefix(move) {
       validateOfficeMove(move);
-      if (move.from === move.to) return;
-      const scoped = [...files.values()].filter(
-        (file) => file.providerId === move.providerId && file.rootName === move.rootName,
-      );
+      if (sameLocation(move.from, move.to)) return;
+      const all = [...files.values()];
       const moved = movedOfficeFiles(
-        scoped.filter((file) => officePathMatches(file.path, move.from)),
+        all.filter((file) => under(file, move.from)),
         move,
       );
       const destinations = new Set(moved.map((file) => file.path));
-      for (const file of scoped) if (destinations.has(file.path)) files.delete(file.id);
+      for (const file of all)
+        if (file.identityId === move.to.identityId && destinations.has(file.path))
+          files.delete(file.id);
       for (const file of moved) files.set(file.id, file);
     },
     async deletePrefix(deletion) {
       validateOfficeDelete(deletion);
-      for (const file of files.values()) {
-        if (
-          file.providerId === deletion.providerId &&
-          file.rootName === deletion.rootName &&
-          officePathMatches(file.path, deletion.path)
-        )
-          files.delete(file.id);
-      }
+      for (const file of files.values()) if (under(file, deletion)) files.delete(file.id);
     },
   };
 }

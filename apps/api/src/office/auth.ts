@@ -1,7 +1,6 @@
 import { isOfficePath } from "@fdrive/contracts";
 import { z } from "zod";
 import { hashSessionId } from "../auth/sessions.js";
-import { roundTripVirtualPath } from "../scoping/round-trip.ts";
 import { WopiError } from "./errors.ts";
 import type { OfficeClaims } from "./tokens.ts";
 import type { BrowserOfficeInput, OfficeActor, OfficeDeps, OpenedFile } from "./types.ts";
@@ -17,14 +16,7 @@ export async function officeActor(
     throw new WopiError(401);
   const identity = await deps.repos.identities.get(identityId);
   if (identity === null) throw new WopiError(401);
-  const location = await deps.location(identity);
-  if (location === null || location.providerId !== identity.providerId) throw new WopiError(401);
-  return {
-    identity,
-    session,
-    scopes: location.scopes,
-    storage: await deps.storageFactory(identity.id, identity.providerId),
-  };
+  return { identity, session, storage: await deps.storageFactory(identity.id) };
 }
 export async function browserActor(
   deps: OfficeDeps,
@@ -40,11 +32,10 @@ export async function callbackFile(
   if (!z.uuid().safeParse(fileId).success || claims.sub !== fileId) throw new WopiError(401);
   const actor = await officeActor(deps, claims.sessionHash, claims.identityId);
   const file = await deps.files.get(fileId);
-  if (file === null || file.providerId !== actor.identity.providerId) throw new WopiError(404);
-  // Round trip, not a plain `toVirtualPath`: a nested scope that shadows
-  // the file's physical location must hide it from this callback too, the
-  // same as any other index/event-derived filesystem reference.
-  const path = roundTripVirtualPath(actor.scopes, file.rootName, `/${file.path}`);
+  if (file === null) throw new WopiError(404);
+  // Where the document lies for this login now: its owner's path, or under
+  // `Shared with me` while a folder holding it is shared with the login.
+  const path = await deps.grants.pathFor(actor.identity.id, file);
   if (path === null) throw new WopiError(404);
   const stat = await actor.storage.statFile(path);
   const editAllowed = await canEditOfficeFile(deps, actor, path);

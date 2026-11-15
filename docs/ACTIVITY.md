@@ -206,9 +206,8 @@ owner/event and identity/file references protect subjects and related rows.
 | `activity_exports` | ID, owner, format, state, filters, snapshot sequence, times, row count, error code. A ready snapshot manifest; bytes stream on demand. |
 | `activity_export_reads` | PK owner/export/window; an immutable copy of each unsealed read window at export time. |
 
-Names, labels and paths in public events are virtual snapshots; indexer and Office
-root-relative inputs pass through the [round trip](../apps/api/src/scoping/round-trip.ts) of
-configured scopes. Only opaque Office and Finder references enter the bridge. Cookies,
+Names, labels and paths in public events are virtual snapshots; indexer root-relative inputs
+pass through the [round trip](../apps/api/src/scoping/round-trip.ts) of configured scopes. Only opaque Office and Finder references enter the bridge. Cookies,
 bearer tokens, passwords, raw host paths, file contents and secret share URLs are excluded by the
 facts schema. Session and credential context is hashed before read aggregation.
 

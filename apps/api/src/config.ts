@@ -2,7 +2,6 @@ import { tmpdir } from "node:os";
 import { isAbsolute } from "node:path";
 import { z } from "zod";
 import { validateOfficeInfrastructure } from "./office/config.ts";
-import { type OfficeEditRule, parseOfficeEditRules } from "./office/edit-policy.ts";
 
 const LOG_LEVELS = ["fatal", "error", "warn", "info", "debug", "trace", "silent"] as const;
 const NODE_ENVS = ["development", "production", "test"] as const;
@@ -32,7 +31,6 @@ export interface AppConfig {
   readonly fdriveTikaUrl?: string | undefined;
 
   readonly fdriveWorkerToken?: string | undefined;
-  readonly fdriveOfficeEditRules?: readonly OfficeEditRule[];
   readonly fdriveOfficeProduct?: "onlyoffice" | "collabora" | undefined;
   readonly fdriveOfficeUrl?: string | undefined;
   readonly fdriveOfficePublicUrl?: string | undefined;
@@ -199,23 +197,6 @@ export function parseIndexRoots(value: string | undefined): IndexRootConfig[] | 
 
 const envSchema = z.object({
   FDRIVE_WORKER_TOKEN: z.preprocess(undefinedWhenEmpty, z.string().min(1).optional()),
-  FDRIVE_OFFICE_EDIT_RULES: z.preprocess(
-    undefinedWhenEmpty,
-    z
-      .string()
-      .optional()
-      .transform((value, ctx) => {
-        try {
-          return parseOfficeEditRules(value);
-        } catch {
-          ctx.addIssue({
-            code: "custom",
-            message: "must be valid bounded Office edit policy JSON",
-          });
-          return z.NEVER;
-        }
-      }),
-  ),
   FDRIVE_OFFICE_PRODUCT: z.preprocess(
     undefinedWhenEmpty,
     z.enum(["onlyoffice", "collabora"]).optional(),
@@ -468,7 +449,6 @@ export function loadConfig(env: Record<string, string | undefined>): AppConfig {
 
   const config: AppConfig = {
     fdriveWorkerToken: parsed.FDRIVE_WORKER_TOKEN,
-    fdriveOfficeEditRules: parsed.FDRIVE_OFFICE_EDIT_RULES,
     fdriveOfficeProduct: parsed.FDRIVE_OFFICE_PRODUCT,
     fdriveOfficeUrl: parsed.FDRIVE_OFFICE_URL,
     fdriveOfficePublicUrl: parsed.FDRIVE_OFFICE_PUBLIC_URL,
