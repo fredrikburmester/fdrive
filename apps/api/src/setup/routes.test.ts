@@ -9,6 +9,7 @@ import { createSetupTokenGuard, type SetupTokenGuard } from "./token.js";
 
 const REQUIRED_ENV = {
   DATABASE_URL: "postgres://localhost/fdrive",
+  FDRIVE_STORAGE_ROOT: "/srv/files",
   FDRIVE_MASTER_KEY: Buffer.alloc(32, 3).toString("base64"),
 };
 
@@ -20,23 +21,15 @@ const ME: MeResponse = {
     providerId: "123e4567-e89b-42d3-a456-426614174000",
     providerType: "local",
     providerLabel: "x",
-    capabilities: {
-      zip: true,
-      setModifiedAt: true,
-      atomicMove: true,
-      trash: false,
-      shares: true,
-      office: true,
-      index: false,
-      shareWithPeople: true,
-    },
   },
   isAdmin: true,
+  trash: false,
+  index: false,
 };
 
 function buildService(overrides: Partial<SetupService> = {}): SetupService {
   return {
-    status: vi.fn().mockResolvedValue({ required: true, storageConfigured: true }),
+    status: vi.fn().mockResolvedValue({ required: true }),
     complete: vi.fn().mockResolvedValue({ sessionId: "session-1", me: ME }),
     ...overrides,
   };
@@ -96,7 +89,7 @@ describe("setup routes: GET /setup/status", () => {
     const res = await app.request("/api/v1/setup/status");
 
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ required: true, storageConfigured: true });
+    expect(await res.json()).toEqual({ required: true });
   });
 });
 
@@ -209,7 +202,7 @@ describe("setup routes: POST /setup/complete", () => {
   it("returns 404 once setup is no longer required", async () => {
     const { app } = buildApp({
       service: buildService({
-        status: vi.fn().mockResolvedValue({ required: false, storageConfigured: true }),
+        status: vi.fn().mockResolvedValue({ required: false }),
       }),
     });
 

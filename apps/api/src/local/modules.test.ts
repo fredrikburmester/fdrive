@@ -43,14 +43,6 @@ describe("journalRoot", () => {
 });
 
 describe("deploymentModules", () => {
-  it("has no storage without a files folder", () => {
-    const modules = deploymentModules(
-      { fdriveStorageRoot: undefined, fdriveIndexRoots: null },
-      createMemoryRepos(),
-    );
-    expect(modules).toEqual({});
-  });
-
   it("serves the files folder over the configured root and the stored users", async () => {
     const repos = createMemoryRepos();
     await seedLocalUsers(repos, [{ username: "alice", password: "alice-pass" }]);

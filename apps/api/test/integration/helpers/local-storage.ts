@@ -29,17 +29,22 @@ export async function localUserRepos(repos: Repos): Promise<LocalUserRepos> {
  * Migrates the database at `connectionString` and creates `seed`'s local
  * users and grants in it, hashed the way sign-in checks them: what setup and
  * System > Users would have done before the suite signs anyone in. Pass a
- * `startLocalStorage` fixture to create the users it was laid out for.
+ * `startLocalStorage` fixture to create the users it was laid out for; the
+ * users named in `admins` get administrator accounts.
  */
-export async function seedLocalUsers(connectionString: string, seed: LocalUserSeed): Promise<void> {
+export async function seedLocalUsers(
+  connectionString: string,
+  seed: LocalUserSeed,
+  admins: readonly string[] = [],
+): Promise<void> {
   const database = createDb(connectionString);
   try {
     await migrate(database.db);
-    await insertLocalUsers(
-      await localUserRepos(createRepos(database.db)),
-      seed,
-      createScryptSharePasswords(),
-    );
+    const repos = createRepos(database.db);
+    await insertLocalUsers(await localUserRepos(repos), seed, createScryptSharePasswords());
+    for (const username of admins) {
+      await repos.logins.updateUser(username, { isAdmin: true, at: new Date() });
+    }
   } finally {
     await database.close();
   }

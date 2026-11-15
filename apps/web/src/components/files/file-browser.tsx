@@ -88,6 +88,7 @@ import {
   EMPTY_SELECTION,
   type SelectionAction,
   type SelectionState,
+  selectionOf,
   selectionReducer,
 } from "@/lib/files/selection";
 import { sortListing } from "@/lib/files/sorting";
@@ -117,7 +118,6 @@ import {
   folderWriteBlock,
 } from "@/lib/grants/paths";
 import { useReceivedGrants } from "@/lib/grants/queries";
-import { capabilitiesFor, selectionOf } from "@/lib/identity/capabilities";
 import { type RunJobRequestDeps, runJobRequest } from "@/lib/jobs/actions";
 import { useJobsStore } from "@/lib/jobs/store";
 import type { JobRequest } from "@/lib/jobs/types";
@@ -199,7 +199,10 @@ export function FileBrowser({
   const queryClient = useQueryClient();
   const { data, isLoading, isFetching, isError, error, refetch } = useListing(path);
   const entries = useMemo(() => data?.entries ?? [], [data]);
-  const capabilities = capabilitiesFor(me);
+  // Before `me` loads, the folder counts as indexed, so thumbnails never
+  // flicker, and Trash as off, since "Move to Trash" must wait for the setting.
+  const trash = me?.trash === true;
+  const indexed = me?.index !== false;
   // Folders others share with this login: what they allow, and the
   // `Shared with me` captions and menu items.
   const received = useReceivedGrants();
@@ -928,7 +931,7 @@ export function FileBrowser({
             detailsOpen={detailsOpen}
             onToggleDetails={() => setDetailsOpen(!detailsOpen)}
             selection={selectionOf(selectedEntries)}
-            indexed={capabilities.index}
+            indexed={indexed}
             onClearSelection={() => dispatchSelection({ type: "clear" })}
             onDuplicateSelection={handleDuplicateSelection}
             onCompressSelection={handleCompressSelection}
@@ -943,7 +946,7 @@ export function FileBrowser({
                 : undefined
             }
             onDownloadSelection={handleDownloadSelection}
-            showThumbnails={showThumbnails && capabilities.index}
+            showThumbnails={showThumbnails && indexed}
             onShowThumbnailsChange={setShowThumbnails}
             writeBlock={writeBlock}
           />
@@ -1021,11 +1024,11 @@ export function FileBrowser({
                 onToggleTag={handleToggleTag}
                 onOpenTagsEditor={handleOpenTagsEditor}
                 onToggleFavorite={handleToggleFavorite}
-                trash={capabilities.trash}
+                trash={trash}
                 received={received}
                 scrollRequest={scrollRequest}
                 onScrollConsumed={handleScrollConsumed}
-                showThumbnails={showThumbnails && capabilities.index}
+                showThumbnails={showThumbnails && indexed}
               />
             ) : viewMode === "grid" ? (
               <FileGrid
@@ -1046,11 +1049,11 @@ export function FileBrowser({
                 onToggleTag={handleToggleTag}
                 onOpenTagsEditor={handleOpenTagsEditor}
                 onToggleFavorite={handleToggleFavorite}
-                trash={capabilities.trash}
+                trash={trash}
                 received={received}
                 scrollRequest={scrollRequest}
                 onScrollConsumed={handleScrollConsumed}
-                thumbnails={capabilities.index}
+                thumbnails={indexed}
                 size={gridSize}
               />
             ) : (
@@ -1076,11 +1079,11 @@ export function FileBrowser({
                 onToggleTag={handleToggleTag}
                 onOpenTagsEditor={handleOpenTagsEditor}
                 onToggleFavorite={handleToggleFavorite}
-                trash={capabilities.trash}
+                trash={trash}
                 received={received}
                 scrollRequest={scrollRequest}
                 onScrollConsumed={handleScrollConsumed}
-                showThumbnails={showThumbnails && capabilities.index}
+                showThumbnails={showThumbnails && indexed}
               />
             )}
           </div>
@@ -1090,7 +1093,7 @@ export function FileBrowser({
           <Inspector
             entries={selectedEntries}
             onClose={() => setDetailsOpen(false)}
-            indexed={capabilities.index}
+            indexed={indexed}
           />
         )}
       </div>
@@ -1156,7 +1159,7 @@ export function FileBrowser({
         }}
         onConfirm={handleDeleteConfirm}
         pending={remove.isPending}
-        trash={trashAvailabilityFor(capabilities)}
+        trash={trashAvailabilityFor({ trash })}
       />
       {destinationPicker !== null && (
         <DestinationPicker

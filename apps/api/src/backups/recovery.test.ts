@@ -80,6 +80,7 @@ beforeEach(async () => {
   source = created.db;
   config = loadConfig({
     DATABASE_URL: created.url,
+    FDRIVE_STORAGE_ROOT: "/srv/files",
     FDRIVE_MASTER_KEY: master.toString("base64"),
     FDRIVE_BACKUP_STATE_DIR: join(directory, "state"),
     FDRIVE_SETUP_TOKEN: "host-recovery-token-for-fixtures-only",

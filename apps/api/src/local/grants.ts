@@ -176,12 +176,10 @@ export function createLocalGrantService(deps: LocalGrantServiceDeps): LocalGrant
 
   return {
     async list(identityId) {
-      const identity = await localLogin(identityId);
-      if (identity === null) return { available: false, owned: [], received: [] };
+      const identity = await requireLogin(identityId);
       const username = identity.externalUsername;
       const named = await reachable(username, identity.providerId);
       return {
-        available: true,
         owned: (await repos.localGrants.listOwned(username)).map(ownedView),
         received: named.map(({ grant: { grant }, name }) => ({
           id: grant.id,

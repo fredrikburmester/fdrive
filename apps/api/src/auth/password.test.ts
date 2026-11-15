@@ -67,7 +67,7 @@ describe("one password check for every place a password is typed", () => {
       authService: h.auth.service,
       logins: h.repos.logins,
       passwords: h.passwords,
-      localProvider: async () => row,
+      storageId: row.id,
     });
     return { ...h, setup };
   }
@@ -79,7 +79,7 @@ describe("one password check for every place a password is typed", () => {
       repos: h.repos,
       checkPassword: h.checkPassword,
       passwords: h.passwords,
-      providerId: async () => (await h.seeded).id,
+      storageId: (await h.seeded).id,
     });
     const alice = await h.login("alice");
     const signIn = (username: string, password: string, ip: string) =>

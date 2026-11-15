@@ -2,16 +2,14 @@ import { describe, expect, it } from "vitest";
 import {
   LOCAL_FOLDER_NOTE,
   providerNameError,
-  STORAGE_MISSING_NOTE,
   STORAGE_UNREACHABLE_NOTE,
   storageRenamePatch,
 } from "./storage";
 
 describe("storage copy", () => {
-  it("names the variable that sets, fixes or adds the folder", () => {
+  it("names the variable that sets or fixes the folder", () => {
     expect(LOCAL_FOLDER_NOTE).toBe("Folder on this server, set by FDRIVE_STORAGE_ROOT.");
     expect(STORAGE_UNREACHABLE_NOTE).toContain("FDRIVE_STORAGE_ROOT");
-    expect(STORAGE_MISSING_NOTE).toContain("FDRIVE_STORAGE_ROOT");
   });
 });
 

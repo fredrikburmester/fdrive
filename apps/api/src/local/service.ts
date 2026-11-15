@@ -52,10 +52,8 @@ export interface LocalUserServiceDeps {
   readonly checkPassword: CheckPassword;
   readonly passwords: SharePasswords;
   readonly clock?: () => Date;
-  /** The local provider's row id, or `null` when the deployment serves no folder. */
-  readonly providerId: () => Promise<string | null>;
-  /** `FDRIVE_ADMIN_USERS`: usernames on the pinned local folder that are always administrators. */
-  readonly environmentAdmins?: readonly string[];
+  /** The files folder's provider row, which every login is on. */
+  readonly storageId: string;
   readonly eventLog?: SystemEventLog;
 }
 
@@ -65,15 +63,7 @@ export function createLocalUserService(deps: LocalUserServiceDeps): LocalUserSer
   const eventLog = deps.eventLog ?? noopSystemEventLog;
   const clock = deps.clock ?? (() => new Date());
 
-  const isDeploymentAdmin = (username: string) => (deps.environmentAdmins ?? []).includes(username);
-
-  async function requireProvider(): Promise<string> {
-    const id = await deps.providerId();
-    if (id === null) {
-      throw new ApiHttpError("unsupported", "this deployment serves no local folder");
-    }
-    return id;
-  }
+  const providerId = deps.storageId;
 
   async function requireUser(username: string): Promise<LocalUser> {
     const user = await repos.localUsers.get(username);
@@ -82,21 +72,19 @@ export function createLocalUserService(deps: LocalUserServiceDeps): LocalUserSer
   }
 
   /** The user's login, which exists from the moment the user does. */
-  async function loginOf(providerId: string, username: string): Promise<Identity> {
+  async function loginOf(username: string): Promise<Identity> {
     const identity = await repos.identities.findByProviderUsername(providerId, username);
     if (identity === null) throw new ApiHttpError("internal", "this user has no login");
     return identity;
   }
 
-  async function view(providerId: string, user: LocalUser, viewer: UserViewer): Promise<AdminUser> {
-    const identity = await loginOf(providerId, user.username);
+  async function view(user: LocalUser, viewer: UserViewer): Promise<AdminUser> {
+    const identity = await loginOf(user.username);
     const account = await repos.accounts.get(identity.accountId);
-    const byDeployment = isDeploymentAdmin(user.username);
     return {
       username: user.username,
       disabled: user.disabled,
-      isAdmin: byDeployment || (account?.isAdmin ?? false),
-      adminByDeployment: byDeployment,
+      isAdmin: account?.isAdmin ?? false,
       isYou: identity.accountId === viewer.accountId,
       createdAt: user.createdAt.toISOString(),
       lastLoginAt: identity.lastLoginAt?.toISOString() ?? null,
@@ -125,17 +113,11 @@ export function createLocalUserService(deps: LocalUserServiceDeps): LocalUserSer
 
   return {
     async list(viewer) {
-      const providerId = await deps.providerId();
-      if (providerId === null) return { available: false, users: [] };
       const users = await repos.localUsers.list();
-      return {
-        available: true,
-        users: await Promise.all(users.map((user) => view(providerId, user, viewer))),
-      };
+      return { users: await Promise.all(users.map((user) => view(user, viewer))) };
     },
 
     async create(input, viewer) {
-      const providerId = await requireProvider();
       try {
         // The user comes with their account and login, so an administrator
         // can make them an administrator before they first sign in.
@@ -154,22 +136,15 @@ export function createLocalUserService(deps: LocalUserServiceDeps): LocalUserSer
       }
       const user = await requireUser(input.username);
       eventLog.record("general", "info", `User added: ${user.username}`);
-      return view(providerId, user, viewer);
+      return view(user, viewer);
     },
 
     async update(username, patch, viewer) {
-      const providerId = await requireProvider();
       const current = await requireUser(username);
-      const identity = await loginOf(providerId, current.username);
+      const identity = await loginOf(current.username);
       const self = identity.accountId === viewer.accountId;
       if (self && (patch.disabled === true || patch.isAdmin === false)) {
         throw new ApiHttpError("forbidden", "you cannot disable yourself or remove your own admin");
-      }
-      if (patch.isAdmin === false && isDeploymentAdmin(current.username)) {
-        throw new ApiHttpError(
-          "forbidden",
-          "FDRIVE_ADMIN_USERS makes this user an administrator; change it in the deployment",
-        );
       }
       const passwordHash =
         patch.password === undefined ? undefined : await deps.passwords.hash(patch.password);
@@ -198,13 +173,12 @@ export function createLocalUserService(deps: LocalUserServiceDeps): LocalUserSer
       if (changes.length > 0) {
         eventLog.record("general", "info", `User ${current.username}: ${changes.join(", ")}`);
       }
-      return view(providerId, updated, viewer);
+      return view(updated, viewer);
     },
 
     async remove(username, viewer) {
-      const providerId = await requireProvider();
       const current = await requireUser(username);
-      const identity = await loginOf(providerId, current.username);
+      const identity = await loginOf(current.username);
       if (identity.accountId === viewer.accountId) {
         throw new ApiHttpError("forbidden", "you cannot remove yourself");
       }
@@ -217,11 +191,8 @@ export function createLocalUserService(deps: LocalUserServiceDeps): LocalUserSer
     },
 
     async changeOwnPassword(input) {
-      const providerId = await requireProvider();
       const identity = await repos.identities.get(input.identityId);
-      if (identity === null || identity.providerId !== providerId) {
-        throw new ApiHttpError("unsupported", "this login's password is not kept by fdrive");
-      }
+      if (identity === null) throw new ApiHttpError("unauthorized", "sign in again");
       try {
         await deps.checkPassword({
           username: identity.externalUsername,

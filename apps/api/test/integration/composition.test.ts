@@ -289,7 +289,7 @@ describe("composeApp", () => {
       expect(await blockedRes.json()).toMatchObject({ error: { kind: "setup_required" } });
 
       const statusRes = await composed.app.request("/api/v1/setup/status");
-      expect(await statusRes.json()).toEqual({ required: true, storageConfigured: true });
+      expect(await statusRes.json()).toEqual({ required: true });
 
       const tokenLine = messages.find((message) => message.startsWith("setup token: "));
       if (tokenLine === undefined) {

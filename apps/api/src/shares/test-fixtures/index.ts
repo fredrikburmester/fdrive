@@ -125,7 +125,6 @@ export function sharesHarness(options: SharesHarnessOptions = {}) {
     repos,
     fetch: fetchImpl,
     clock,
-    environment: { indexRootNames: [] },
     modules: { local: options.local?.(localModule) ?? localModule },
   });
   const seeded = (async () => {
@@ -154,6 +153,7 @@ export function sharesHarness(options: SharesHarnessOptions = {}) {
     config,
     checkPassword: createPasswordCheck({ limiter: createLoginLimiter({ clock }), users }),
     storageFactory,
+    installation: async () => ({ trash: false, index: false }),
   });
   const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() } as unknown as Logger;
   const activity = activityFixture(clock);

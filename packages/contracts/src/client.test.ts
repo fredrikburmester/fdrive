@@ -124,18 +124,10 @@ const VALID_ME = {
     providerId: VALID_UUID,
     providerType: "local",
     providerLabel: "Home",
-    capabilities: {
-      zip: true,
-      setModifiedAt: true,
-      atomicMove: true,
-      trash: false,
-      shares: true,
-      office: true,
-      index: true,
-      shareWithPeople: false,
-    },
   },
   isAdmin: false,
+  trash: false,
+  index: true,
 };
 
 const VALID_ENTRY = {
@@ -740,7 +732,7 @@ describe("createApiClient: thumbUrl", () => {
 
 describe("createApiClient: setup", () => {
   it("gets setup/status", async () => {
-    const status = { required: true, storageConfigured: true };
+    const status = { required: true };
     const { fetchStub, calls } = createStubFetch([jsonResponse(200, status)]);
     const client = createApiClient({ fetch: fetchStub });
 
@@ -762,16 +754,6 @@ describe("createApiClient: setup", () => {
 
 describe("createApiClient: providers", () => {
   const FIELD = { name: "username", label: "Username", kind: "text", required: true };
-  const CAPABILITIES = {
-    zip: true,
-    setModifiedAt: true,
-    atomicMove: true,
-    trash: true,
-    shares: true,
-    office: true,
-    index: true,
-    shareWithPeople: false,
-  };
   const PROVIDER = {
     id: VALID_UUID,
     type: "local",
@@ -780,7 +762,6 @@ describe("createApiClient: providers", () => {
     config: {},
     enabled: true,
     managedByEnv: true,
-    capabilities: CAPABILITIES,
     identityCount: 1,
     reachable: true,
     checkedAt: AT,
@@ -795,7 +776,6 @@ describe("createApiClient: providers", () => {
           type: "local",
           label: "Home",
           credentialFields: [FIELD],
-          capabilities: CAPABILITIES,
         },
       ],
     };
@@ -828,13 +808,12 @@ describe("createApiClient: local users", () => {
     disabled: false,
     isAdmin: false,
     isYou: false,
-    adminByDeployment: false,
     createdAt: AT,
     lastLoginAt: null,
   };
 
   it("lists, adds, updates and removes users", async () => {
-    const list = { available: true, users: [USER] };
+    const list = { users: [USER] };
     const { fetchStub, calls } = createStubFetch([
       jsonResponse(200, list),
       jsonResponse(201, USER),
@@ -866,7 +845,7 @@ describe("createApiClient: local users", () => {
 
   it("rejects a user list that breaks the contract", async () => {
     const { fetchStub } = createStubFetch([
-      jsonResponse(200, { available: true, users: [{ ...USER, createdAt: "yesterday" }] }),
+      jsonResponse(200, { users: [{ ...USER, createdAt: "yesterday" }] }),
     ]);
     const client = createApiClient({ fetch: fetchStub });
     await expect(client.adminUsers()).rejects.toBeInstanceOf(ApiClientError);
@@ -901,7 +880,7 @@ describe("createApiClient: folder shares between users", () => {
   };
 
   it("lists, creates, updates and removes shares and lists people", async () => {
-    const grants = { available: true, owned: [OWNED], received: [RECEIVED] };
+    const grants = { owned: [OWNED], received: [RECEIVED] };
     const people = { usernames: ["bob", "carol"] };
     const { fetchStub, calls } = createStubFetch([
       jsonResponse(200, grants),
@@ -1720,7 +1699,6 @@ it("reads the typed public health route", async () => {
         "ocr",
         "thumbnails",
         "office",
-        "trash",
         "shares",
         "network",
       ].map((name) => [name, { status: "configured", missing: [] }]),

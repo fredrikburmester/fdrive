@@ -44,7 +44,7 @@ export function journalRoot(
 
 /**
  * Every provider module this deployment has: the files folder over
- * `app.local_users` when `FDRIVE_STORAGE_ROOT` is set, else none. The API
+ * `app.local_users`. The API
  * and the backup worker build theirs the same way. With `changes`, every
  * change fdrive makes in the folder is recorded in the change journal, when
  * the indexer reads the folder itself (`journalRoot`). With `guard`, storage
@@ -60,7 +60,6 @@ export function deploymentModules(
   closedFolders?: (providerId: string) => Promise<readonly string[]>,
 ): ProviderModules {
   const root = config.fdriveStorageRoot;
-  if (root === undefined) return createProviderModules();
   const journaled = changes === undefined ? null : journalRoot(config.fdriveIndexRoots, root);
   return createProviderModules({
     local: {

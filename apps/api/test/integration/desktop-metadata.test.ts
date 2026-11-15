@@ -66,13 +66,12 @@ describe("metadata follows the Mac's writes as they commit", () => {
         ],
       }),
     ]);
-    await seedLocalUsers(postgres.connectionString, storage);
+    await seedLocalUsers(postgres.connectionString, storage, ["alice"]);
     composed = await composeApp(
       loadConfig({
         DATABASE_URL: postgres.connectionString,
         FDRIVE_STORAGE_ROOT: storage.root,
         FDRIVE_MASTER_KEY: Buffer.alloc(32, 23).toString("base64"),
-        FDRIVE_ADMIN_USERS: "alice",
         // Configured so the API journals its changes and the indexer listener
         // runs; no indexer does, the last test notifies for it.
         FDRIVE_INDEX_ROOTS: JSON.stringify([

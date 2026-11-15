@@ -11,10 +11,6 @@ export const LOCAL_FOLDER_NOTE = "Folder on this server, set by FDRIVE_STORAGE_R
 export const STORAGE_UNREACHABLE_NOTE =
   "fdrive can't reach this folder. Check that FDRIVE_STORAGE_ROOT exists and is writable.";
 
-/** Said on System > General when the deployment serves no folder at all. */
-export const STORAGE_MISSING_NOTE =
-  "This installation has no files folder. Set FDRIVE_STORAGE_ROOT and restart fdrive.";
-
 /** The storage name's first problem, with the API's trimming and length limits, or `null`. */
 export function providerNameError(label: string): string | null {
   const parsed = ProviderName.safeParse(label);

@@ -13,7 +13,6 @@ import { useAdminProviders, useAdminUpdateProvider } from "@/lib/api/system-quer
 import {
   LOCAL_FOLDER_NOTE,
   providerNameError,
-  STORAGE_MISSING_NOTE,
   STORAGE_UNREACHABLE_NOTE,
   storageRenamePatch,
 } from "@/lib/system/storage";
@@ -85,15 +84,10 @@ function StorageSettings() {
   if (query.data === undefined) {
     return <Skeleton className="h-40 w-full" />;
   }
-  if (query.data.providers.length === 0) {
-    return <SystemSection title="Storage" description={STORAGE_MISSING_NOTE} />;
-  }
   return query.data.providers.map((provider) => (
     <Fragment key={provider.id}>
       <StorageCard provider={provider} />
-      {provider.capabilities.trash ? (
-        <TrashSettingsCard provider={{ id: provider.id, label: provider.label }} />
-      ) : null}
+      <TrashSettingsCard provider={{ id: provider.id, label: provider.label }} />
     </Fragment>
   ));
 }

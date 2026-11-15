@@ -62,10 +62,10 @@ import { LIST_DENSITIES, type ListDensity } from "@/lib/files/density";
 import { dropTargetState, effectFor } from "@/lib/files/dnd-targets";
 import { GRID_SIZES, type GridSize } from "@/lib/files/grid-size";
 import { type BreadcrumbEntry, buildBreadcrumbs } from "@/lib/files/path-url";
+import type { BrowserSelection } from "@/lib/files/selection";
 import type { SortSpec } from "@/lib/files/sorting";
 import { toolbarVisibility } from "@/lib/files/toolbar-visibility";
 import type { ViewMode } from "@/lib/files/view-mode";
-import type { BrowserSelection } from "@/lib/identity/capabilities";
 import { OFFICE_DOCUMENT_LABELS, type OfficeDocumentKind } from "@/lib/office/new-document";
 import { cn } from "@/lib/utils";
 

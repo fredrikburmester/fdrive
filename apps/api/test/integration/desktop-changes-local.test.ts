@@ -33,7 +33,7 @@ it("answers which folders an upload, a move and a delete changed, and detects a 
       carol: {},
     },
   });
-  await seedLocalUsers(postgres.connectionString, storage);
+  await seedLocalUsers(postgres.connectionString, storage, ["alice"]);
   const database = createDb(postgres.connectionString);
   // What the indexer does when it starts: the API journals nothing for a root without a row.
   await database.db.execute(sql`insert into idx.roots (name) values ('files')`);
@@ -44,7 +44,6 @@ it("answers which folders an upload, a move and a delete changed, and detects a 
       { name: "files", storagePath: storage.root, indexerPath: "/srv/files" },
     ]),
     FDRIVE_MASTER_KEY: Buffer.alloc(32, 7).toString("base64"),
-    FDRIVE_ADMIN_USERS: "alice",
   });
   const composed = await composeApp(config, pino({ level: "silent" }), () => new Date());
   const send = (route: string, init: { cookie?: string; bearer?: string; body?: unknown } = {}) =>

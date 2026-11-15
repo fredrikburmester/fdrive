@@ -66,7 +66,6 @@ describe("createProviderService: the files folder", () => {
       // The public view is served without a session: only an admin-set label.
       label: "",
       credentialFields: resolved.module.credentialFields,
-      capabilities: resolved.module.capabilities,
     });
     expect(await h.service.adminView(row)).toMatchObject({
       id: row.id,
@@ -102,46 +101,6 @@ describe("createProviderService: the files folder", () => {
     ).rejects.toMatchObject({ kind: "not_found" });
     vi.spyOn(h.repos.providers, "update").mockRejectedValueOnce(new Error("update failed"));
     await expect(h.service.update(h.row.id, { label: "z" })).rejects.toThrow("update failed");
-  });
-
-  it("is indexed only when the root it is read under is configured", async () => {
-    const indexed = await seeded({ indexRoot: "files", indexRootNames: ["files"] });
-    expect(
-      await indexed.service.capabilitiesFor(await indexed.service.resolve(indexed.row.id)),
-    ).toEqual({
-      zip: true,
-      setModifiedAt: true,
-      atomicMove: true,
-      trash: false,
-      shares: true,
-      office: true,
-      index: true,
-      shareWithPeople: true,
-    });
-    const elsewhere = await seeded({
-      indexRoot: "files",
-      indexRootNames: ["photos"],
-      trashEnabled: async () => true,
-    });
-    expect(
-      await elsewhere.service.capabilitiesFor(await elsewhere.service.resolve(elsewhere.row.id)),
-    ).toMatchObject({ index: false, trash: true });
-    const unindexed = await seeded({ indexRoot: null, indexRootNames: ["files"] });
-    expect(
-      await unindexed.service.capabilitiesFor(await unindexed.service.resolve(unindexed.row.id)),
-    ).toMatchObject({ index: false });
-  });
-
-  it("keeps Trash off for a module without one even when its settings enable it", async () => {
-    const h = await seeded({ trashEnabled: async () => true });
-    const resolved = await h.service.resolve(h.row.id);
-    expect(await h.service.capabilitiesFor(resolved)).toMatchObject({ trash: true });
-    expect(
-      await h.service.capabilitiesFor({
-        ...resolved,
-        module: { ...resolved.module, trash: "none" },
-      }),
-    ).toMatchObject({ trash: false });
   });
 });
 

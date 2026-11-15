@@ -9,7 +9,7 @@ import { createLocalUserService, type LocalUserServiceDeps, type UserViewer } fr
 import { FAST_PASSWORDS, seedLocalUsers } from "./test-fixtures/index.ts";
 import { createLocalUserStore } from "./users.js";
 
-async function fixture(options: { provider?: boolean; environmentAdmins?: string[] } = {}) {
+async function fixture() {
   const repos = createMemoryRepos();
   const row = await seedLocalProvider(repos);
   const store = createLocalUserStore({
@@ -23,10 +23,7 @@ async function fixture(options: { provider?: boolean; environmentAdmins?: string
     repos,
     checkPassword: createPasswordCheck({ limiter, users: store }),
     passwords: FAST_PASSWORDS,
-    providerId: async () => (options.provider === false ? null : row.id),
-    ...(options.environmentAdmins === undefined
-      ? {}
-      : { environmentAdmins: options.environmentAdmins }),
+    storageId: row.id,
     eventLog: { record: (_subsystem, _level, message) => events.push(message) },
   };
   const service = createLocalUserService(deps);
@@ -62,15 +59,13 @@ describe("createLocalUserService: list", () => {
   it("shows every user with their account's flags and last sign-in", async () => {
     const h = await fixture();
     await h.repos.identities.touchLogin(h.alice.id, new Date("2026-09-01T10:00:00Z"));
-    const { available, users } = await h.service.list(h.viewer);
-    expect(available).toBe(true);
+    const { users } = await h.service.list(h.viewer);
     expect(users).toEqual([
       {
         username: "alice",
         disabled: false,
         isAdmin: true,
         isYou: true,
-        adminByDeployment: false,
         createdAt: expect.any(String),
         lastLoginAt: "2026-09-01T10:00:00.000Z",
       },
@@ -80,35 +75,10 @@ describe("createLocalUserService: list", () => {
         disabled: false,
         isAdmin: false,
         isYou: false,
-        adminByDeployment: false,
         createdAt: expect.any(String),
         lastLoginAt: null,
       },
     ]);
-  });
-
-  it("has nothing to manage on a deployment without a local folder", async () => {
-    const h = await fixture({ provider: false });
-    expect(await h.service.list(h.viewer)).toEqual({ available: false, users: [] });
-    await expect(
-      h.service.create({ username: "carol", password: "carol-pass" }, h.viewer),
-    ).rejects.toMatchObject({ kind: "unsupported" });
-  });
-});
-
-describe("createLocalUserService: administrators named by the deployment", () => {
-  it("lists them as administrators and refuses to remove that", async () => {
-    const h = await fixture({ environmentAdmins: ["bob"] });
-    const bob = (await h.service.list(h.viewer)).users.find((user) => user.username === "bob");
-    expect(bob).toMatchObject({ isAdmin: true, adminByDeployment: true });
-    await expect(h.service.update("bob", { isAdmin: false }, h.viewer)).rejects.toMatchObject({
-      kind: "forbidden",
-    });
-    // Anything else about them can still change.
-    expect(await h.service.update("bob", { disabled: true }, h.viewer)).toMatchObject({
-      disabled: true,
-      isAdmin: true,
-    });
   });
 });
 
@@ -235,9 +205,9 @@ describe("createLocalUserService: update", () => {
 });
 
 describe("createLocalUserService: the last administrator", () => {
-  it("cannot be disabled, demoted or removed, even by an administrator the deployment names", async () => {
-    // carol administers through FDRIVE_ADMIN_USERS; alice is the only administrator account.
-    const h = await fixture({ environmentAdmins: ["carol"] });
+  it("cannot be disabled, demoted or removed", async () => {
+    // alice is the only administrator account; carol asks without being one.
+    const h = await fixture();
     const [carol] = await seedLocalUsers(h.repos, [{ username: "carol", password: "carol-pass" }]);
     if (carol === undefined) throw new Error("unseeded");
     const viewer: UserViewer = { accountId: carol.accountId };
@@ -336,25 +306,16 @@ describe("createLocalUserService: changeOwnPassword", () => {
     await expect(change(h, "alice-pass")).rejects.toMatchObject({ kind: "forbidden" });
     expect(await h.store.verify("alice", "alice-new-pass")).toEqual({ result: "invalid" });
 
-    // A login on a WebDAV row left from before the files folder was the only storage.
-    const retired = await h.repos.providers.ensure({ type: "webdav", baseUrl: "http://dav.test" });
-    const retiredAccount = await h.repos.accounts.create({ displayName: "alma" });
-    const retiredLogin = await h.repos.identities.create({
-      accountId: retiredAccount.id,
-      providerId: retired.id,
-      externalUsername: "alma",
-    });
-    for (const identityId of [retiredLogin.id, randomUUID()]) {
-      await expect(
-        h.service.changeOwnPassword({
-          identityId,
-          sessionIdHash: "alice-session",
-          currentPassword: "alice-pass",
-          newPassword: "alice-new-pass",
-          ip: "198.51.100.1",
-        }),
-      ).rejects.toMatchObject({ kind: "unsupported" });
-    }
+    // A login that is gone signs in again.
+    await expect(
+      h.service.changeOwnPassword({
+        identityId: randomUUID(),
+        sessionIdHash: "alice-session",
+        currentPassword: "alice-pass",
+        newPassword: "alice-new-pass",
+        ip: "198.51.100.1",
+      }),
+    ).rejects.toMatchObject({ kind: "unauthorized" });
   });
 
   it("checks the current password behind the login limiter", async () => {

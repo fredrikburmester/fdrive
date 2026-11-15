@@ -48,7 +48,7 @@ Visit **`http://localhost:3000`** and log in with any of the seeded development 
 
 | Username | Password | Role / Setup |
 | :--- | :--- | :--- |
-| **`dev`** | `dev` | **Administrator** (`FDRIVE_ADMIN_USERS`), sample photos, documents, and spreadsheets. |
+| **`dev`** | `dev` | **Administrator** (made one by `pnpm dev:users`), sample photos, documents, and spreadsheets. |
 | **`alice`** | `alice-password` | Standard user with documents and a photo. |
 | **`bob`** | `bob-password` | Standard user with `inbox` and `public` folders. |
 | **`carol`** | `carol-password` | Standard user with one file; share a folder with her to try **Shared with me**. |

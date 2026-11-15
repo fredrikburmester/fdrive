@@ -5,7 +5,6 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { renderHook, waitFor } from "@testing-library/react";
 import { createElement, type ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { allCapabilities } from "@/lib/identity/capabilities";
 import { makeIdentity, makeMe } from "@/test-fixtures/identity";
 
 const setupStatusMock = vi.fn();
@@ -129,7 +128,6 @@ const PROVIDER = {
   reachable: true,
   checkedAt: "2026-01-01T00:00:00.000Z",
   createdAt: "2026-01-01T00:00:00.000Z",
-  capabilities: allCapabilities(true),
 };
 const PROVIDERS_RESPONSE: AdminProvidersResponse = { providers: [PROVIDER] };
 
@@ -168,15 +166,13 @@ beforeEach(() => {
 
 describe("useSetupStatus", () => {
   it("fetches the setup status", async () => {
-    setupStatusMock.mockResolvedValue({ required: true, storageConfigured: true });
+    setupStatusMock.mockResolvedValue({ required: true });
     const { useSetupStatus } = await import("./system-queries.js");
     const queryClient = new QueryClient();
 
     const { result } = renderHook(() => useSetupStatus(), { wrapper: createWrapper(queryClient) });
 
-    await waitFor(() =>
-      expect(result.current.data).toEqual({ required: true, storageConfigured: true }),
-    );
+    await waitFor(() => expect(result.current.data).toEqual({ required: true }));
   });
 });
 
@@ -250,11 +246,10 @@ const USER = {
   disabled: false,
   isAdmin: false,
   isYou: false,
-  adminByDeployment: false,
   createdAt: "2026-01-01T00:00:00.000Z",
   lastLoginAt: null,
 };
-const USERS_RESPONSE = { available: true, users: [USER] };
+const USERS_RESPONSE = { users: [USER] };
 
 describe("local user queries", () => {
   it("fetches the local folder's users", async () => {
@@ -272,7 +267,7 @@ describe("local user queries", () => {
     adminUsersMock.mockResolvedValue(USERS_RESPONSE);
     const { useAdminCreateUser } = await import("./system-queries.js");
     const queryClient = new QueryClient();
-    queryClient.setQueryData(["admin", "users"], { available: true, users: [] });
+    queryClient.setQueryData(["admin", "users"], { users: [] });
 
     const { result } = renderHook(() => useAdminCreateUser(), {
       wrapper: createWrapper(queryClient),
@@ -304,7 +299,7 @@ describe("local user queries", () => {
 
   it("removes a user and refreshes the users and the providers' login counts", async () => {
     adminDeleteUserMock.mockResolvedValue({ ok: true });
-    adminUsersMock.mockResolvedValue({ available: true, users: [] });
+    adminUsersMock.mockResolvedValue({ users: [] });
     adminProvidersMock.mockResolvedValue(PROVIDERS_RESPONSE);
     const { useAdminDeleteUser } = await import("./system-queries.js");
     const queryClient = new QueryClient();

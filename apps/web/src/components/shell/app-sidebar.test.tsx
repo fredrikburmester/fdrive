@@ -25,14 +25,9 @@ vi.mock("@/components/shell/folder-tree", () => ({
   ),
 }));
 
-const ada: MeResponse["identity"] = makeIdentity({ capabilities: { trash: true } });
+const ada: MeResponse["identity"] = makeIdentity();
 
-const me = makeMe({ identity: ada });
-
-/** `me` with its login's capabilities overridden. */
-function withCapabilities(overrides: Partial<MeResponse["identity"]["capabilities"]>) {
-  return { ...me, identity: { ...ada, capabilities: { ...ada.capabilities, ...overrides } } };
-}
+const me = makeMe({ identity: ada, trash: true });
 
 function renderSidebar(account: MeResponse = me) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -40,7 +35,7 @@ function renderSidebar(account: MeResponse = me) {
   client.setQueryData(["favorites", "list"], []);
   client.setQueryData(["recents", "list"], []);
   client.setQueryData(["tags", "list"], []);
-  client.setQueryData(["grants", "list"], { available: true, owned: [], received: [] });
+  client.setQueryData(["grants", "list"], { owned: [], received: [] });
   return render(
     <QueryClientProvider client={client}>
       <SidebarProvider>
@@ -89,7 +84,7 @@ it("links the fdrive wordmark to the root of Files", async () => {
 });
 
 it("hides Trash when the login has none", async () => {
-  renderSidebar(withCapabilities({ trash: false }));
+  renderSidebar({ ...me, trash: false });
   await screen.findByRole("link", { name: "Shares" });
   expect(screen.queryByRole("link", { name: "Trash" })).toBeNull();
 });

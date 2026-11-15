@@ -140,6 +140,7 @@ function build() {
   const app = createApp({
     config: loadConfig({
       DATABASE_URL: "postgres://unused/test",
+      FDRIVE_STORAGE_ROOT: "/srv/files",
       FDRIVE_MASTER_KEY: Buffer.alloc(32, 1).toString("base64"),
     }),
     logger,

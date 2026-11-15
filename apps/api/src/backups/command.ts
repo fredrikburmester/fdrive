@@ -296,17 +296,14 @@ export async function runBackupCommand(
     const users = createDb(config.databaseUrl, { max: 2 });
     // A destination in the files folder is only written while the folder is
     // this installation's, as for the API.
-    const guard =
-      config.fdriveStorageRoot === undefined
-        ? undefined
-        : createDeploymentFilesFolderGuard(
-            config.fdriveStorageRoot,
-            createFilesFolderFacts(users.db),
-            {
-              info: (message) => console.log(message),
-              error: (message) => console.error(message),
-            },
-          );
+    const guard = createDeploymentFilesFolderGuard(
+      config.fdriveStorageRoot,
+      createFilesFolderFacts(users.db),
+      {
+        info: (message) => console.log(message),
+        error: (message) => console.error(message),
+      },
+    );
     const module = createBackupModule(
       { ...config, fdriveBackupWorker: false },
       deploymentModules(config, createRepos(users.db), undefined, guard),

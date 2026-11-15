@@ -19,8 +19,7 @@ in-memory storage. It is an internal boundary, not a plugin system.
 ## Wiring
 
 - `ProviderType` in [contracts](../packages/contracts/src/providers.ts) is `"local"`. The
-  registry holds only the local module, present when `FDRIVE_STORAGE_ROOT` is set. Without it
-  the deployment has no storage and setup refuses to complete with `bad_request`.
+  registry holds only the local module. `FDRIVE_STORAGE_ROOT` is required.
 - The storage is one row in `app.providers`. Startup creates and pins it (`baseUrl` `local`),
   enables it, and unpins and disables any other pinned row. Any other row is left from storage
   fdrive no longer has: disabled, and kept because logins reference it. With no module, those
@@ -38,7 +37,7 @@ in-memory storage. It is an internal boundary, not a plugin system.
 | --- | --- |
 | `type`, `label` | `"local"`, "Local folder" until the row is renamed |
 | `configFields`, `credentialFields` | None; `username` and `password`, as `GET /api/v1/providers` lists them. The login form does not read them |
-| `capabilities` | All eight flags true (below) |
+| `capabilities` | All eight flags true; nothing reads them |
 | `trash` | `"move"`: fdrive moves deletes into the Trash folder (`"none"` would mean no Trash) |
 | `shares` | `"owned"`: fdrive keeps links in `app.shares` and serves them through this storage ([owned.ts](../apps/api/src/shares/owned.ts)) |
 | `deploymentManaged` | True: the row comes from `FDRIVE_STORAGE_ROOT`; the API cannot create, re-address or remove it, so no administrator can point it at another folder, such as the API's own secrets |
@@ -47,24 +46,13 @@ in-memory storage. It is an internal boundary, not a plugin system.
 | `admit` | Refuses a disabled or removed user on every request, not only at sign-in |
 | `createStorage` | The home at `<root>/<username>`, plus `/Shared with me` from `app.local_grants` |
 
-## Capabilities
+## Installation flags
 
-The API combines the module's flags with configuration into each login's
-`IdentitySummary.capabilities` (`capabilitiesFor`). Only `trash` and `index` vary, so the web
-reads only those, through `capabilitiesFor` and `anyLoginCan` in
-[capabilities.ts](../apps/web/src/lib/identity/capabilities.ts). Nothing keys on a type name,
-and the API refuses what a login lacks even when a stale client asks.
-
-| Flag | Meaning | Per login also needs |
-| --- | --- | --- |
-| `zip` | `storage.zip` streams an archive | |
-| `setModifiedAt` | Uploads keep a supplied modification time | |
-| `atomicMove` | `move` is one operation | |
-| `trash` | A Trash folder can exist | Trash on in its settings |
-| `shares` | Share links; equals `shares !== "none"`, checked by a registry test | |
-| `office` | Office can be offered | Office's own runtime and permission checks |
-| `shareWithPeople` | Folders shared between users under `/Shared with me` | |
-| `index` | Search, thumbnails and folder sizes | `indexRootName` naming a root in `FDRIVE_INDEX_ROOTS` ([scoping](SCOPING.md)) |
+`/auth/me` carries two flags the web reads, the same for every login: `trash`, Trash is on in
+its settings for the files folder's row, and `index`, the files folder is read under a root in
+`FDRIVE_INDEX_ROOTS` ([scoping](SCOPING.md)). Everything else is always on: the files folder
+zips, keeps modification times, moves in one step, shares links and folders, and opens in
+Office.
 
 ## StorageProvider
 

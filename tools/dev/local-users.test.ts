@@ -24,6 +24,28 @@ describe("seedLocalUsers", () => {
     expect(await repos.identities.findByProviderUsername(row?.id ?? "", "dev")).not.toBeNull();
   });
 
+  it("makes the users marked as administrators ones, also when they exist", async () => {
+    const repos = createMemoryRepos();
+    const isAdmin = async (username: string) => {
+      const [row] = await repos.providers.list();
+      const login = await repos.identities.findByProviderUsername(row?.id ?? "", username);
+      return (await repos.accounts.get(login?.accountId ?? ""))?.isAdmin;
+    };
+    await seedLocalUsers(repos, [{ username: "dev", password: "dev" }], { hash: async () => "h" });
+    expect(await isAdmin("dev")).toBe(false);
+    const marked = [...users.slice(0, 1), { username: "dev", password: "dev", isAdmin: true }];
+    expect(await seedLocalUsers(repos, marked, { hash: async () => "h" })).toEqual(["alice"]);
+    expect(await isAdmin("dev")).toBe(true);
+    expect(await isAdmin("alice")).toBe(false);
+    const fresh = createMemoryRepos();
+    await seedLocalUsers(fresh, [{ username: "perf", password: "p", isAdmin: true }], {
+      hash: async () => "h",
+    });
+    const [row] = await fresh.providers.list();
+    const login = await fresh.identities.findByProviderUsername(row?.id ?? "", "perf");
+    expect((await fresh.accounts.get(login?.accountId ?? ""))?.isAdmin).toBe(true);
+  });
+
   it("leaves a user that already exists alone", async () => {
     const repos = createMemoryRepos();
     await seedLocalUsers(repos, [{ username: "Alice", password: "kept" }], {

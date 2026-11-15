@@ -28,6 +28,7 @@ const FAKE_STORAGE: StorageProvider = {
 
 const REQUIRED_ENV = {
   DATABASE_URL: "postgres://localhost/fdrive",
+  FDRIVE_STORAGE_ROOT: "/srv/files",
   FDRIVE_MASTER_KEY: Buffer.alloc(32, 7).toString("base64"),
 };
 
@@ -115,7 +116,6 @@ describe("createApp health route", () => {
         thumbnails: { status: "not_configured", missing: ["FDRIVE_THUMBS_DIR"] },
         ocr: { status: "not_configured", missing: ["FDRIVE_OCR_URL"] },
         office: { status: "configured", missing: [] },
-        trash: { status: "configured", missing: [] },
       },
     });
   });

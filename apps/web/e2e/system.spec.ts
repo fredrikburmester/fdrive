@@ -198,7 +198,7 @@ test("alice (admin) can save the indexer's settings even while the indexer sidec
 });
 
 test.describe("bob (not admin)", () => {
-  // bob is not in FDRIVE_ADMIN_USERS, so this spec logs in as bob itself
+  // bob holds no administrator account, so this spec logs in as bob itself
   // rather than reusing the alice storage state the "chromium" project
   // otherwise applies by default.
   test.use({ storageState: { cookies: [], origins: [] } });

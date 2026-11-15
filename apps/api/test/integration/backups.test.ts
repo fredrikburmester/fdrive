@@ -126,6 +126,7 @@ it("recovers durable metadata, exact bigint history, users, ZIPs and bytes into 
     restoreOptions(
       loadConfig({
         DATABASE_URL: container.connectionString,
+        FDRIVE_STORAGE_ROOT: "/srv/files",
         FDRIVE_MASTER_KEY: destinationMaster.toString("base64"),
       }),
       target.pool,
@@ -163,6 +164,7 @@ it("recovers durable metadata, exact bigint history, users, ZIPs and bytes into 
       restoreOptions(
         loadConfig({
           DATABASE_URL: container.connectionString,
+          FDRIVE_STORAGE_ROOT: "/srv/files",
           FDRIVE_MASTER_KEY: destinationMaster.toString("base64"),
         }),
         target.pool,
@@ -283,6 +285,7 @@ it("delivers a large streamed snapshot to a local folder destination that restor
           restoreOptions(
             loadConfig({
               DATABASE_URL: container.connectionString,
+              FDRIVE_STORAGE_ROOT: "/srv/files",
               FDRIVE_MASTER_KEY: destinationMaster.toString("base64"),
             }),
             fresh.pool,

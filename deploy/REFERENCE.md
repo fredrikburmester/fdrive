@@ -142,9 +142,8 @@ fdrive actively monitors its internal subsystems on startup and exposes diagnost
   fails and names what is still pending. It checks startup, not finished indexing or
   account-specific search results.
 
-- **Startup Summary**: At launch, `docker compose logs api` logs the exact status of each subsystem (`search`, `indexer`, `ocr`, `office`, `trash`). If a variable is missing, it explicitly logs `missing=VARIABLE_NAME`.
+- **Startup Summary**: At launch, `docker compose logs api` logs the exact status of each subsystem (`search`, `indexer`, `ocr`, `office`). If a variable is missing, it explicitly logs `missing=VARIABLE_NAME`.
 - **ONLYOFFICE:** the bundled controller is healthy while disabled. Enable in **System > Features**; the document engine starts on demand. Readiness is shown in those settings. See [Office setup](../docs/OFFICE.md).
-- **Trash:** startup health means its integration is available, not enabled. The saved choice is in **System > Features > Trash**; user capability is reported by `/api/v1/trash/status`.
 - **Optional workers:** the `ml` service holds three units (document text extraction, text embeddings, image embeddings) and loads a model only while a feature that needs it is enabled; the Office container runs a small controller that does the same for the document engine. Each reports at `GET /runtime` (per unit under `/extract`, `/text` and `/image` on `ml`; on its own port for Office) with `status` (`preparing`, `ready`, `off`, `failed`; Office also `stopping`), `attempts` and `error`; **System > Features** shows that state per feature. Startup is bounded: after three failed attempts a worker reports `failed` and waits five minutes before trying again (`FDRIVE_RUNTIME_RETRY_AFTER_SECONDS` for Office), so a machine that is briefly out of memory or slow to download a model recovers without an operator restarting anything. Saving features in the UI clears the wait immediately. A worker also distinguishes an API that answers with a document it must reject (stopped after `FDRIVE_RUNTIME_STALE_SECONDS`, default 9) from an API it could not reach at all (`FDRIVE_RUNTIME_UNREACHABLE_SECONDS`, default 60): a loaded host makes the API slow, and stopping a healthy worker for that reloads a model, which loads the host further. Both still fail closed. A `failed` status persisting across several windows means the worker itself cannot start; read that container's logs.
 - **Postgres restarts:** the indexer, OCR worker and API reopen their database connections when postgres goes away, for example after `docker compose up -d --force-recreate db`. While the database is down the indexer's `/health` returns 500 and its container reports unhealthy; both recover on the next probe after postgres accepts connections. No container needs to be restarted by hand.
 - **Health Check Endpoint**: `GET /api/v1/health` is an unauthenticated JSON endpoint returning status (`configured`, `not_configured`, `unreachable`, `failed`) for all services. `failed` means the worker is down and its controller reports why, with the controller's reason in `detail` (for example `worker exceeded bounded startup retries`), so a worker the controller gave up on is distinguishable from a network problem. The same reason appears in the feature's detail line on **System > Features**.
@@ -233,8 +232,8 @@ All services are hardened following security best practices:
 `files` at `/data` in both the API and the indexer. Each user's files are `/data/<username>`.
 
 Users live in fdrive's database, with scrypt password hashes, and are added, reset and
-disabled under **System > Users**. `FDRIVE_ADMIN_USERS` lists usernames that are always
-administrators.
+disabled under **System > Users**, where an administrator makes others administrators. The
+setup owner is the first.
 
 The four containers start as root for one step: each gives its own state directories to
 `FDRIVE_RUN_AS_UID` (default 1000) and then drops to that user for good. The API also gives

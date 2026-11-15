@@ -2,19 +2,14 @@ import { describe, expect, it } from "vitest";
 import { SetupCompleteRequest, SetupStatusResponse } from "./setup";
 
 describe("SetupStatusResponse", () => {
-  it("parses whether setup is required and whether the deployment has a files folder", () => {
-    for (const status of [
-      { required: true, storageConfigured: true },
-      { required: true, storageConfigured: false },
-      { required: false, storageConfigured: true },
-    ]) {
+  it("parses whether setup is required", () => {
+    for (const status of [{ required: true }, { required: false }]) {
       expect(SetupStatusResponse.parse(status)).toEqual(status);
     }
   });
 
   it("rejects a missing field", () => {
-    expect(SetupStatusResponse.safeParse({ required: true }).success).toBe(false);
-    expect(SetupStatusResponse.safeParse({ storageConfigured: true }).success).toBe(false);
+    expect(SetupStatusResponse.safeParse({}).success).toBe(false);
   });
 });
 

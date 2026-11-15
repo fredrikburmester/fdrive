@@ -7,10 +7,10 @@
  * password and state, so running it again changes nothing.
  *
  * Once a local user exists, setup is closed and the setup wizard is skipped:
- * sign in as dev/dev, an administrator through FDRIVE_ADMIN_USERS.
+ * sign in as dev/dev, an administrator.
  */
 import { createDb, createRepos, migrate } from "@fdrive/db";
-import { devUsers } from "./generate-seed.js";
+import { DEV_USER, devUsers } from "./generate-seed.js";
 import { seedLocalUsers } from "./local-users.js";
 
 async function main(env: NodeJS.ProcessEnv): Promise<void> {
@@ -21,7 +21,10 @@ async function main(env: NodeJS.ProcessEnv): Promise<void> {
   const database = createDb(databaseUrl, { max: 2 });
   try {
     await migrate(database.db);
-    const users = devUsers();
+    const users = devUsers().map((user) => ({
+      ...user,
+      isAdmin: user.username === DEV_USER.username,
+    }));
     const created = await seedLocalUsers(createRepos(database.db), users);
     const kept = users.map((user) => user.username).filter((name) => !created.includes(name));
     console.log(

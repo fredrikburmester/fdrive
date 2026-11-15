@@ -3,7 +3,6 @@ import type { AdminProvider } from "@fdrive/contracts";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { allCapabilities } from "@/lib/identity/capabilities";
 
 const mocks = vi.hoisted(() => ({
   providers: vi.fn(),
@@ -49,7 +48,6 @@ const FOLDER: AdminProvider = {
   config: {},
   enabled: true,
   managedByEnv: true,
-  capabilities: allCapabilities(true),
   identityCount: 3,
   reachable: true,
   checkedAt: "2026-01-01T00:00:00.000Z",
@@ -152,25 +150,6 @@ it("says when fdrive cannot reach the folder", () => {
   expect(screen.getByRole("alert").textContent).toBe(
     "fdrive can't reach this folder. Check that FDRIVE_STORAGE_ROOT exists and is writable.",
   );
-});
-
-it("leaves the Trash card out for storage without Trash", () => {
-  withProviders([{ ...FOLDER, capabilities: { ...allCapabilities(true), trash: false } }]);
-  render(<GeneralPage />);
-
-  expect(screen.queryByText(/Trash card/)).toBeNull();
-});
-
-it("tells the operator to set FDRIVE_STORAGE_ROOT when there is no folder", () => {
-  withProviders([]);
-  render(<GeneralPage />);
-
-  expect(
-    screen.getByText(
-      "This installation has no files folder. Set FDRIVE_STORAGE_ROOT and restart fdrive.",
-    ),
-  ).toBeTruthy();
-  expect(screen.queryByLabelText("Name")).toBeNull();
 });
 
 it("shows a placeholder while loading and a retry when the list fails", () => {

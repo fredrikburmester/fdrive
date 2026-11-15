@@ -8,8 +8,6 @@ export interface MemoryProviderServiceOptions {
   readonly eventLog?: SystemEventLog;
   readonly fetch?: typeof globalThis.fetch;
   readonly clock?: () => Date;
-  readonly indexRootNames?: readonly string[];
-  readonly trashEnabled?: (providerId: string) => Promise<boolean>;
   /** The deployment's modules by type; none unless given. */
   readonly modules?: Readonly<Record<string, ProviderModule>>;
 }
@@ -23,8 +21,6 @@ export function memoryProviderService(
     repos,
     fetch: options.fetch ?? globalThis.fetch,
     clock: options.clock ?? (() => new Date()),
-    environment: { indexRootNames: options.indexRootNames ?? [] },
-    ...(options.trashEnabled === undefined ? {} : { trashEnabled: options.trashEnabled }),
     ...(options.eventLog === undefined ? {} : { eventLog: options.eventLog }),
     modules: options.modules ?? {},
   });
