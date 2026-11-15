@@ -13,6 +13,7 @@ use serde_json::Value;
 
 use crate::chunking::PDF_EXTS;
 use crate::events::{Event, to_json};
+use crate::photo::Photo;
 use crate::settings::RawSettings;
 
 pub const SWEEP_BATCH: usize = 5_000;
@@ -82,8 +83,8 @@ pub fn read_schema_version(client: &mut Client) -> Result<Option<i64>> {
 }
 
 /// Wait for the compatible schema, the failure-history, change-journal and folder tables, the
-/// files' stamp columns and the journal's `previous_ctime_ns` before any processing. They came
-/// without a version bump, which OCR waits for too.
+/// files' stamp and photo columns and the journal's `previous_ctime_ns` before any processing.
+/// They came without a version bump, which OCR waits for too.
 pub fn wait_for_schema_version(
     db: &Db,
     expected: i64,
@@ -99,13 +100,13 @@ pub fn wait_for_schema_version(
                 "SELECT to_regclass('idx.processing_failures')::text, to_regclass('idx.changes')::text, \
                  to_regclass('idx.change_cursors')::text, to_regclass('idx.folders')::text, \
                  (SELECT count(*) FROM information_schema.columns WHERE table_schema = 'idx' \
-                  AND ((table_name = 'files' AND column_name IN ('inode', 'ctime_ns')) \
+                  AND ((table_name = 'files' AND column_name IN ('inode', 'ctime_ns', 'taken_at')) \
                    OR (table_name = 'changes' AND column_name = 'previous_ctime_ns')))",
                 &[],
             )?;
             let tables: [Option<String>; 4] = [row.get(0), row.get(1), row.get(2), row.get(3)];
             let stamps: i64 = row.get(4);
-            Ok((version, tables.iter().all(Option::is_some) && stamps == 3))
+            Ok((version, tables.iter().all(Option::is_some) && stamps == 4))
         })?;
         if version == Some(expected) && ready {
             return Ok(version);
@@ -113,12 +114,12 @@ pub fn wait_for_schema_version(
         let seen = version.map_or("None".to_owned(), |v| v.to_string());
         if Instant::now() >= deadline {
             log(&format!(
-                "schema not ready (expected {expected}, last seen: {seen}, requires processing_failures, changes, folders and file stamps); giving up"
+                "schema not ready (expected {expected}, last seen: {seen}, requires processing_failures, changes, folders, file stamps and photos); giving up"
             ));
             return Ok(None);
         }
         log(&format!(
-            "waiting for idx.schema_version = {expected} and the processing_failures, changes, folders and file stamp migrations (last seen: {seen})"
+            "waiting for idx.schema_version = {expected} and the processing_failures, changes, folders, file stamp and photo migrations (last seen: {seen})"
         ));
         sleep(Duration::from_secs(5));
     }
@@ -334,6 +335,25 @@ pub fn set_stamp(
             &mtime_ns,
         ],
     )? == 1)
+}
+
+/// Store a photo's details on its row.
+pub fn set_photo(c: &mut Client, file_id: i64, photo: &Photo) -> Result<()> {
+    c.execute(
+        r#"UPDATE "idx"."files" SET taken_at = $2, camera = $3, width = $4, height = $5,
+             latitude = $6, longitude = $7
+           WHERE id = $1::bigint"#,
+        &[
+            &file_id,
+            &photo.taken_at,
+            &photo.camera,
+            &photo.width,
+            &photo.height,
+            &photo.latitude,
+            &photo.longitude,
+        ],
+    )?;
+    Ok(())
 }
 
 pub fn insert_chunks(c: &mut Client, file_id: i64, pieces: &[String], vectors: &[Option<Vec<f32>>]) -> Result<()> {

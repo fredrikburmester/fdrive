@@ -1,5 +1,5 @@
 {
-  "id": "fe4e7ad5-6ddc-4a71-83cb-a574f0d69eae",
+  "id": "95478e4a-0ec4-4e4e-8de4-8154ea0fe0b9",
   "prevId": "32813ecf-a5a2-44e4-b23e-1135222ce3bf",
   "version": "7",
   "dialect": "postgresql",
@@ -1544,12 +1544,6 @@
           "notNull": true,
           "default": false
         },
-        "storage_limit": {
-          "name": "storage_limit",
-          "type": "bigint",
-          "primaryKey": false,
-          "notNull": false
-        },
         "created_at": {
           "name": "created_at",
           "type": "timestamp with time zone",
@@ -2907,6 +2901,42 @@
         "ctime_ns": {
           "name": "ctime_ns",
           "type": "bigint",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "taken_at": {
+          "name": "taken_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "camera": {
+          "name": "camera",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "width": {
+          "name": "width",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "height": {
+          "name": "height",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "latitude": {
+          "name": "latitude",
+          "type": "double precision",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "longitude": {
+          "name": "longitude",
+          "type": "double precision",
           "primaryKey": false,
           "notNull": false
         }

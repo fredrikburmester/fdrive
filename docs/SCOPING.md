@@ -22,9 +22,9 @@ and activity observations use it. It is unavailable only as `invalid_configurati
 username is not one path segment).
 
 `verifiedIndexScopes(username)` keeps the configured scopes whose root is in
-`FDRIVE_INDEX_ROOTS`, and is `no_roots` when none is. Search, duplicates, thumbnails, folder
-sizes, the Storage page (the home scope alone), extraction, AI tools, MCP and the desktop
-`versions` check use it with their principal's username, never `configuredMappings`.
+`FDRIVE_INDEX_ROOTS`, and is `no_roots` when none is. Search, duplicates, thumbnails, photos,
+folder sizes, the Storage page (the home scope alone), extraction, AI tools, MCP and the
+desktop `versions` check use it with their principal's username, never `configuredMappings`.
 `GET /api/v1/search/status` reports its reason. "Verified" means indexed: nothing compares
 live listings with the index any more.
 

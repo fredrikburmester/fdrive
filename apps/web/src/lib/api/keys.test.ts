@@ -33,6 +33,11 @@ describe("queryKeys", () => {
     expect(queryKeys.storage.usage()).toEqual(["storage", "usage"]);
   });
 
+  it("photo keys separate the timeline from one photo's details", () => {
+    expect(queryKeys.photos.list()).toEqual(["photos", "list"]);
+    expect(queryKeys.photos.details("/a.jpg")).toEqual(["photos", "details", "/a.jpg"]);
+  });
+
   it("account.tokens() builds a stable key", () => {
     expect(queryKeys.account.tokens()).toEqual(["account", "tokens"]);
   });

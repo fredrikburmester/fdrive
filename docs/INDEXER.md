@@ -65,6 +65,11 @@ embedded with the `passage:` prefix by the `ml` service's text unit
 (`intfloat/multilingual-e5-small`, 384 dimensions, the same model filesai used,
 so an imported index needs no re-embedding).
 
+For a file that gets an image thumbnail (below) and is within `THUMB_MAX_MB`, the row also
+holds the photo's EXIF details (`photo.rs`): when it was taken (the camera's clock, no time
+zone), the camera, its size as shown and its GPS coordinates, each null when missing. The API
+serves them to the Info panel and the Photos page; files indexed before this need a reindex.
+
 Additionally, images, the first page of PDFs, and one frame of videos (via
 ffmpeg, at 1 second in, or the first frame for shorter clips) get thumbnails at
 256px and 1024px on the longest side,

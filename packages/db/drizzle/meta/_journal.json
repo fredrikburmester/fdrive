@@ -271,8 +271,15 @@
     {
       "idx": 38,
       "version": "7",
-      "when": 1794733801807,
-      "tag": "0038_local_user_storage_limit",
+      "when": 1794730788743,
+      "tag": "0038_photo_details",
+      "breakpoints": true
+    },
+    {
+      "idx": 39,
+      "version": "7",
+      "when": 1794734347741,
+      "tag": "0039_local_user_storage_limit",
       "breakpoints": true
     }
   ]
