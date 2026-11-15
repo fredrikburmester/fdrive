@@ -63,7 +63,6 @@ const CONFIGURED_FIXTURE: SystemIndexerResponse = {
     ok: true,
     watcher: true,
     embedOk: true,
-    schemaVersion: 1,
   },
   stats: {
     countsByStatus: { excluded: 3, none: 1, error: 1, indexed: 10, no_text: 1 },

@@ -12,7 +12,6 @@ const HEALTH_RAW = {
   ok: true,
   watcher: true,
   embed_ok: true,
-  schema_version: 3,
 };
 
 const STATS_RAW = {
@@ -45,7 +44,6 @@ describe("createIndexerClient: health", () => {
         ok: true,
         watcher: true,
         embedOk: true,
-        schemaVersion: 3,
       },
     });
     expect(fetchStub).toHaveBeenCalledWith(

@@ -31,9 +31,9 @@ export interface SearchRoutesDeps {
   readonly resolver: Pick<ScopeResolver, "scopesFor">;
   /** Whether `FDRIVE_INDEXER_URL` is configured: without the indexer nothing is indexed. */
   readonly indexerConfigured: boolean;
-  /** Whether `FDRIVE_EMBED_URL` is configured; `search/status` reports this directly. */
+  /** Whether `FDRIVE_ML_URL` is configured; `search/status` reports this directly. */
   readonly semanticEnabled: boolean;
-  /** Whether `FDRIVE_IMAGE_EMBED_URL` is configured; `search/status` reports this directly. */
+  /** Whether `FDRIVE_ML_URL` is configured; `search/status` reports this directly. */
   readonly imageSearchEnabled: boolean;
 }
 

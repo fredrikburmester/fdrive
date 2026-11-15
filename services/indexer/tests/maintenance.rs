@@ -877,15 +877,15 @@ fn embed(env: &Env, key: &str, model: &str) {
 }
 
 #[test]
-fn image_rebuild_without_a_unit_or_with_a_failing_guard_does_nothing() {
-    let env = setup_with(common::all_features(), |c| c.image_embed_url.clear());
+fn image_rebuild_with_an_unreachable_unit_or_a_failing_guard_does_nothing() {
+    let env = setup_with(common::all_features(), |c| c.ml_url = fake_ml::closed_url());
     image_row(&env, "a.png", "sha-a", true);
     let (_, snapshot) = image_rebuild(&env.ctx, None, false);
     assert_eq!(
-        (snapshot["total"].as_u64(), snapshot["outcome"].as_str()),
-        (Some(0), Some("completed"))
+        (snapshot["processed"].as_u64(), snapshot["total"].as_u64()),
+        (Some(0), Some(1))
     );
-    assert!(env.ml.seen().is_empty());
+    assert_eq!(env.count("SELECT count(*) FROM app.image_embeddings"), 0);
 
     for health in [
         json!({"status": "ok", "model": "model-a", "dim": 512}),
@@ -1340,17 +1340,6 @@ fn a_skipped_retry_is_not_a_recovery() {
     assert_eq!(retry_file(&env.ctx, "empty.png", "thumbnails"), (true, true));
     let recorded = env.failures();
     assert_eq!((recorded[0].2, recorded[0].3), (1, false));
-}
-
-#[test]
-fn image_rebuild_without_a_unit_returns_before_any_request() {
-    let env = setup_with(common::all_features(), |c| c.image_embed_url.clear());
-    image_row(&env, "a.png", "sha-a", true);
-    let job = job();
-    let rows = vec![("a.png".to_owned(), ".png".to_owned(), "sha-a".to_owned(), 100)];
-    fdrive_indexer::maintenance::rebuild_image_embeddings(&env.ctx, &rows, false, &job);
-    assert_eq!(counts(&job), (0, 0, 0));
-    assert!(env.ml.seen().is_empty());
 }
 
 #[test]

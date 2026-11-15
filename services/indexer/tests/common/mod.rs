@@ -167,9 +167,7 @@ pub fn config(url: &str, root: &std::path::Path, thumbs: &std::path::Path, ml: &
     cfg.database_url = url.to_owned();
     cfg.root = root.to_path_buf();
     cfg.thumbs_dir = thumbs.to_path_buf();
-    cfg.embed_url = format!("{ml}/text");
-    cfg.tika_url = format!("{ml}/extract");
-    cfg.image_embed_url = format!("{ml}/image");
+    cfg.ml_url = ml.to_owned();
     cfg.workers = 2;
     Arc::new(cfg)
 }

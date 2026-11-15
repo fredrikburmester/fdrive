@@ -126,7 +126,7 @@ export function ImageSearchPage() {
                   ? `Reachable. Model ${data.model ?? "unknown"}, dimension ${data.dim ?? "unknown"}.`
                   : status === "unreachable"
                     ? "The image search model is unreachable."
-                    : "Not configured: set FDRIVE_IMAGE_EMBED_URL."
+                    : "Not configured: set FDRIVE_ML_URL."
             }
           >
             <StatusBadge status={status} />

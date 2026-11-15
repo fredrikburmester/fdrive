@@ -39,11 +39,6 @@ Recommended on 2026-11-14 and approved by the owner the same day.
 8. `Shared with me` is a reserved name at the top of each home.
 9. The migration history is squashed last.
 
-## Wave 1: one user, one storage
-
-15. **Workers start after the API; one ML URL.** The `idx.schema_version` waits become a
-    compose dependency on a healthy API. Six ML URLs become `FDRIVE_ML_URL`.
-
 ## Wave 2: Trash, metadata and the journal
 
 17. **Flat Trash layout.** The `p/<segment>` path encoding, made for WebDAV, becomes one folder

@@ -299,7 +299,7 @@ const LONG_TEXT: &str = "Provider-only document with enough text to extract for 
 // ---------------------------------------------------------------------------------------
 
 #[test]
-fn health_reports_schema_watcher_embeddings_and_storage() {
+fn health_reports_watcher_embeddings_and_storage() {
     let env = setup(common::all_features());
     env.state.watcher.store(true, Ordering::SeqCst);
     let (status, body) = get(&env.state, "/health");
@@ -307,21 +307,17 @@ fn health_reports_schema_watcher_embeddings_and_storage() {
     let keys: BTreeSet<&str> = body.as_object().unwrap().keys().map(String::as_str).collect();
     assert_eq!(
         keys,
-        BTreeSet::from(["embed_ok", "features", "ok", "schema_version", "storage", "watcher"])
+        BTreeSet::from(["embed_ok", "features", "ok", "storage", "watcher"])
     );
     assert_eq!(body["ok"], true);
     assert_eq!(body["watcher"], true);
     assert_eq!(body["embed_ok"], true);
-    assert_eq!(body["schema_version"], 2);
     assert_eq!(body["features"], env.ctx.features().as_json());
     assert_eq!(body["storage"], json!({"readable": true, "writable": true}));
     assert_eq!(env.ml.count(fake_ml::TEXT_HEALTH), 1);
 
     // No running watcher reads as false; an unreachable embedding backend is not ok.
-    let unreachable = env.context_with(
-        |c| c.embed_url = format!("{}/text", fake_ml::closed_url()),
-        common::all_features(),
-    );
+    let unreachable = env.context_with(|c| c.ml_url = fake_ml::closed_url(), common::all_features());
     let state = app_state(unreachable, &env.url, None);
     let (status, body) = get(&state, "/health");
     assert_eq!(status, 200);
@@ -334,19 +330,6 @@ fn health_reports_schema_watcher_embeddings_and_storage() {
     let (_, body) = get(&app_state(off, &env.url, None), "/health");
     assert_eq!(body["embed_ok"], false);
     assert_eq!(env.ml.count(fake_ml::TEXT_HEALTH), before);
-}
-
-#[test]
-fn health_is_not_ok_without_the_schema() {
-    let url = common::database();
-    let admin = format!("{}/postgres", url.rsplit_once('/').unwrap().0);
-    let state = app_state(offline_context(), &admin, None);
-    let (status, body) = get(&state, "/health");
-    assert_eq!(status, 200);
-    assert_eq!(body["ok"], false);
-    assert_eq!(body["embed_ok"], false);
-    assert_eq!(body["schema_version"], Value::Null);
-    assert_eq!(body["features"]["values"]["thumbnails"], false);
 }
 
 #[test]
@@ -537,7 +520,7 @@ fn content_extraction_round_trips_documents() {
     );
     let (_, body) = extract_content(&state, "a.docx", b"office".to_vec());
     assert_eq!(body["status"], "indexed");
-    assert_eq!(ml.requests(fake_ml::TIKA)[0].body, b"office");
+    assert_eq!(ml.requests(fake_ml::EXTRACT)[0].body, b"office");
 }
 
 #[test]
@@ -578,7 +561,7 @@ fn content_extraction_bounds_and_admission() {
 fn content_extraction_errors_never_reveal_the_temporary_file() {
     let ml = FakeMl::start();
     let (state, _) = content_state(&ml);
-    ml.fail(fake_ml::TIKA, 500);
+    ml.fail(fake_ml::EXTRACT, 500);
     let (status, body) = extract_content(&state, "a.docx", b"office".to_vec());
     assert_eq!((status, body), (200, json!({"text": null, "status": "error"})));
     let (_, body) = extract_content(&state, "broken.pdf", b"%PDF-1.4 not really".to_vec());
@@ -746,16 +729,6 @@ fn image_embedding_rebuild_runs_end_to_end() {
         .unwrap()
         .get(0);
     assert_eq!(model, "model-a");
-
-    // Without a configured image unit nothing is attempted.
-    let unconfigured = env.context_with(|c| c.image_embed_url.clear(), common::all_features());
-    let state = app_state(unconfigured, &env.url, None);
-    assert!(started(post(&state, "/image-embeddings/rebuild", "{}")));
-    let snapshot = wait(&state.jobs.image_rebuild);
-    assert_eq!(
-        (snapshot["total"].as_u64(), snapshot["outcome"].as_str()),
-        (Some(0), Some("completed"))
-    );
 }
 
 #[test]

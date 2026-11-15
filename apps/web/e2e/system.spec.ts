@@ -42,7 +42,7 @@ test("alice (admin) sees the Search embedding server and OCR as not configured i
   await page.getByRole("link", { name: "Semantic search", exact: true }).click();
   await expect(page).toHaveURL(/\/system\/search$/);
   await expect(page.getByText("Not configured", { exact: true })).toBeVisible();
-  await expect(page.getByText("Not configured: set FDRIVE_EMBED_URL.")).toBeVisible();
+  await expect(page.getByText("Not configured: set FDRIVE_ML_URL.")).toBeVisible();
 
   await page.getByRole("link", { name: "Searchable PDFs" }).click();
   await expect(page).toHaveURL(/\/system\/ocr$/);

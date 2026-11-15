@@ -245,10 +245,6 @@ export const changeEpoch = idxSchema.table(
   (table) => [check("change_epoch_single", sql`${table.single}`)],
 );
 
-export const schemaVersion = idxSchema.table("schema_version", {
-  version: integer("version").primaryKey(),
-});
-
 /** Current unresolved failures plus bounded resolved history, written by processing workers. */
 export const processingFailures = idxSchema.table(
   "processing_failures",

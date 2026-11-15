@@ -35,11 +35,7 @@ const base = loadConfig({
 const full: AppConfig = {
   ...base,
   fdriveIndexerUrl: "http://indexer",
-  fdriveEmbedRuntimeUrl: "http://embed:8099",
-  fdriveImageEmbedRuntimeUrl: "http://image:8013",
-  fdriveTikaRuntimeUrl: "http://tika:9997",
-  fdriveEmbedUrl: "http://embed",
-  fdriveImageEmbedUrl: "http://image",
+  fdriveMlUrl: "http://ml",
   fdriveOcrUrl: "http://ocr",
   fdriveThumbsDir: "/thumbs",
 };
@@ -176,7 +172,7 @@ describe("observed feature status", () => {
     const result = await fixture({
       raw: config,
       fetch: async (input) =>
-        String(input).includes(":8099/")
+        String(input).startsWith("http://ml/text/")
           ? Response.json({ status: "failed", error: "worker exceeded bounded startup retries" })
           : Response.json({
               ok: true,
@@ -200,8 +196,7 @@ describe("observed feature status", () => {
           ...full,
           fdriveIndexerUrl: undefined,
           fdriveOcrUrl: undefined,
-          fdriveEmbedUrl: undefined,
-          fdriveImageEmbedUrl: undefined,
+          fdriveMlUrl: undefined,
         },
       },
       { fetch: async () => new Response("", { status: 503 }) },
@@ -373,39 +368,34 @@ describe("feature event log", () => {
   });
 });
 
-it("uses published dev worker URLs without inventing controller ports or revisions", async () => {
+it("asks each ml unit for its status document, and takes an always-on unit as acknowledged", async () => {
   const seen: string[] = [];
   const { service } = fixture({
     raw: config,
-    config: {
-      ...full,
-      fdriveEmbedRuntimeUrl: undefined,
-      fdriveImageEmbedRuntimeUrl: undefined,
-      fdriveTikaRuntimeUrl: undefined,
-      fdriveEmbedUrl: "http://127.0.0.1:59081",
-      fdriveImageEmbedUrl: "http://127.0.0.1:59012",
-      fdriveTikaUrl: "http://127.0.0.1:59999",
-    },
     fetch: async (url) => {
       const target = String(url);
       seen.push(target);
-      if (target.includes(":59081")) return new Response("");
-      if (target.includes(":59999")) return new Response("Apache Tika");
-      if (target.includes(":59012")) return Response.json({ status: "ok" });
+      // Development's static units report no revision: nothing to acknowledge.
+      if (target.endsWith("/runtime")) return Response.json({ status: "ready", revision: null });
+      if (target === "http://ml/image/health") return Response.json({ status: "ok" });
       return Response.json({ ok: true, features: { revision: 1, values: enabled } });
     },
   });
   expect((await service.status()).statuses.every((status) => status.state === "ready")).toBe(true);
-  expect(seen).toContain("http://127.0.0.1:59012/health");
-  expect(seen).toContain("http://127.0.0.1:59999/version");
-  expect(seen.some((url) => url.endsWith("/runtime"))).toBe(false);
+  for (const url of [
+    "http://ml/text/runtime",
+    "http://ml/image/runtime",
+    "http://ml/image/health",
+    "http://ml/extract/runtime",
+  ])
+    expect(seen).toContain(url);
 });
 
 it("keeps image search preparing while the model loads behind a ready controller", async () => {
   const { service } = fixture({
     raw: config,
     fetch: async (url) => {
-      if (String(url) === "http://image/health") return Response.json({ status: "loading" });
+      if (String(url) === "http://ml/image/health") return Response.json({ status: "loading" });
       return Response.json({ status: "ready", features: { revision: 1, values: enabled } });
     },
   });
@@ -418,7 +408,7 @@ it("waits for a starting controller without misreporting its absent child as fai
   const { service } = fixture({
     raw: config,
     fetch: async (url) => {
-      if (String(url) === "http://image/health") throw new Error("not started yet");
+      if (String(url) === "http://ml/image/health") throw new Error("not started yet");
       return Response.json({ status: "starting", features: { revision: 1, values: enabled } });
     },
   });
