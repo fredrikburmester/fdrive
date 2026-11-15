@@ -53,8 +53,8 @@ listed, and a type filter hides the section, since folders have no type.
 
 Index-backed results cover the files folder, including folders other users share with you,
 and require live read permission. fdrive's own folders (`isReservedPath` in `@fdrive/core`: the
-login's Trash folder, fdrive's Trash layout `.fdrive-move-v1` wherever it lies, the Mac app's
-`/.fdrive-desktop` and `.fdrive-backups`) are left out by every search, image search, MCP and
+login's Trash folder, fdrive's Trash layout `.fdrive-move-v1` wherever it lies and the Mac
+app's `/.fdrive-desktop`) are left out by every search, image search, MCP and
 AI index query, mapped through the login's index scopes, before the query's row limit, so they
 never crowd out live files or count in a total.
 

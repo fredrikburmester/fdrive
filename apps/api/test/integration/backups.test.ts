@@ -1,36 +1,20 @@
 import { randomBytes, randomUUID } from "node:crypto";
-import { createWriteStream } from "node:fs";
-import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Readable } from "node:stream";
-import { pipeline } from "node:stream/promises";
-import { fileURLToPath } from "node:url";
 import {
-  AttachmentStore,
   BackupStore,
   captureSnapshot,
-  digest,
-  discoverBackups,
-  fetchBackup,
-  fileStream,
   inspectArchive,
   localBlobs,
-  probeDestination,
-  providerDestination,
   restoreArchive,
-  verifyDelivery,
 } from "@fdrive/backup";
-import { createDb, createRepos, migrate } from "@fdrive/db";
-import { insertLocalUsers, startLocalStorage, startPostgres } from "@fdrive/testkit";
+import { createDb, migrate } from "@fdrive/db";
+import { startPostgres } from "@fdrive/testkit";
 import { generateIdentity, identityToRecipient } from "age-encryption";
 import { afterAll, beforeAll, expect, it } from "vitest";
-import { open, seal } from "../../src/auth/crypto.js";
 import { restoreOptions } from "../../src/backups/recovery.js";
 import { loadConfig } from "../../src/config.js";
-import { deploymentFilesFolder } from "../../src/local/files-folder.js";
-import { createScryptSharePasswords } from "../../src/shares/passwords.js";
-import { localUserRepos } from "./helpers/local-storage.js";
 
 let source: ReturnType<typeof createDb>;
 let target: ReturnType<typeof createDb>;
@@ -57,7 +41,7 @@ afterAll(async () => {
   await container?.stop();
   if (directory) await rm(directory, { recursive: true, force: true });
 });
-it("recovers durable metadata, exact bigint history, users, ZIPs and bytes into an isolated fresh database", async () => {
+it("recovers durable metadata, exact bigint history, users and recovery files into an isolated fresh database", async () => {
   const provider = randomUUID(),
     account = randomUUID(),
     user = randomUUID();
@@ -82,14 +66,6 @@ it("recovers durable metadata, exact bigint history, users, ZIPs and bytes into 
   );
   const store = new BackupStore(source.pool);
   const config = await store.configuration();
-  const attachments = new AttachmentStore(store, join(directory, "attachments"), {
-    seal: (bytes, aad) => seal(master, bytes, aad),
-    open: (bytes, aad) => open(master, bytes, aad),
-  });
-  await attachments.upload(
-    { label: "Compose", filename: "compose.zip", sourceDate: null, notes: "Restore on fileserver" },
-    Readable.from([Buffer.from("PK\x03\x04opaque zip fixture")]),
-  );
   const recovery = join(directory, "office");
   await mkdir(recovery);
   await writeFile(join(recovery, "accepted.payload"), "office recovery data");
@@ -99,15 +75,7 @@ it("recovers durable metadata, exact bigint history, users, ZIPs and bytes into 
       pool: source.pool,
       masterKey: master.toString("base64"),
       environment: {},
-      async blobs(client) {
-        return {
-          sources: [
-            ...(await store.attachments(client)).map((row) => attachments.source(row)),
-            ...(await localBlobs(recovery, "office")),
-          ],
-          coverage: [],
-        };
-      },
+      blobs: async () => ({ sources: await localBlobs(recovery, "office"), coverage: [] }),
     },
     {
       id: randomUUID(),
@@ -147,17 +115,9 @@ it("recovers durable metadata, exact bigint history, users, ZIPs and bytes into 
   const state = (
     await target.pool.query("select value from app.settings where key='backup.restore.v1'")
   ).rows[0].value;
-  const restoredStore = new BackupStore(target.pool);
-  const row = (await restoredStore.attachments())[0];
-  expect(row).toBeDefined();
-  if (!row) throw Error("Restored attachment missing");
-  const bundles = new AttachmentStore(restoredStore, join(state.stateDirectory, "attachments"), {
-    seal: (bytes, aad) => seal(destinationMaster, bytes, aad),
-    open: (bytes, aad) => open(destinationMaster, bytes, aad),
-  });
-  const chunks = [];
-  for await (const chunk of await bundles.download(row)) chunks.push(chunk);
-  expect(Buffer.concat(chunks).toString()).toContain("opaque zip fixture");
+  expect(await readFile(join(state.stateDirectory, "blobs-0"), "utf8")).toBe(
+    "office recovery data",
+  );
   await expect(
     restoreArchive(
       restoreOptions(
@@ -174,141 +134,3 @@ it("recovers durable metadata, exact bigint history, users, ZIPs and bytes into 
     ),
   ).rejects.toThrow("not empty");
 }, 180_000);
-
-it("delivers a large streamed snapshot to a local folder destination that restores without the source", async () => {
-  const folder = await startLocalStorage({
-    users: [{ username: "alice", password: "alice-password" }],
-    files: {},
-  });
-  const timings: Record<string, Record<string, number>> = {};
-  try {
-    // A local user's own folder as the destination, wired the way the API
-    // builds the files folder from FDRIVE_STORAGE_ROOT.
-    const repos = createRepos(source.db);
-    await insertLocalUsers(await localUserRepos(repos), folder, createScryptSharePasswords());
-    const filesFolder = deploymentFilesFolder(
-      { fdriveStorageRoot: folder.root, fdriveIndexRoots: null },
-      repos,
-    );
-    // 64 MiB of incompressible recovery bytes, streamed from disk rather than held in memory.
-    const recovery = join(directory, "large-recovery");
-    await mkdir(recovery, { recursive: true });
-    await pipeline(
-      Readable.from(
-        (function* () {
-          for (let i = 0; i < 64; i++) yield randomBytes(1024 * 1024);
-        })(),
-      ),
-      createWriteStream(join(recovery, "large.payload")),
-    );
-    const store = new BackupStore(source.pool);
-    const config = await store.configuration();
-    const id = randomUUID();
-    const file = join(directory, `${id}.fdrive.age`);
-    let at = performance.now();
-    const result = await captureSnapshot(
-      {
-        pool: source.pool,
-        masterKey: master.toString("base64"),
-        environment: {},
-        blobs: async () => ({ sources: await localBlobs(recovery, "office"), coverage: [] }),
-      },
-      {
-        id,
-        installationId: config.installation_id,
-        recipient: await identityToRecipient(identity),
-        output: file,
-      },
-    );
-    timings.capture = { captureMs: performance.now() - at, archiveBytes: Number(result.bytes) };
-    expect(Number(result.bytes)).toBeGreaterThan(64 * 1024 * 1024);
-    const local = await digest(fileStream(file));
-    const targets = [{ label: "local", username: "alice" }];
-    for (const target of targets) {
-      // Same wiring as the API's destination factory: storage in the user's own files,
-      // confined to the reserved namespace under a private directory.
-      const storage = filesFolder.storage(target.username);
-      const prefix = `backups/.fdrive-backups/${config.installation_id}`;
-      await storage.mkdir(`/${prefix}`, { parents: true });
-      const destination = providerDestination(storage, prefix);
-      await probeDestination(destination);
-      expect(await destination.list()).toEqual([]);
-      const key = `${id}.fdrive.age`;
-      at = performance.now();
-      await verifyDelivery(destination, key, file);
-      const transferAndReadbackMs = performance.now() - at;
-      const completion = join(directory, `${target.label}-complete.json`);
-      await writeFile(
-        completion,
-        JSON.stringify({
-          format: 1,
-          installationId: config.installation_id,
-          id,
-          createdAt: new Date().toISOString(),
-          key,
-          bytes: String(local.bytes),
-          sha256: local.sha256,
-          versionId: null,
-          coverage: [],
-        }),
-      );
-      await verifyDelivery(destination, `${id}.complete.json`, completion);
-      expect((await discoverBackups(destination)).map((entry) => entry.id)).toEqual([id]);
-      // Recover with fileserver access only: a fresh storage session and no source database.
-      const independent = providerDestination(filesFolder.storage(target.username), prefix);
-      const fetched = join(directory, `${target.label}-fetched.age`);
-      at = performance.now();
-      await fetchBackup(independent, id, fetched);
-      const fetchMs = performance.now() - at;
-      expect(await digest(fileStream(fetched))).toEqual(local);
-      const database = `restore_${target.label.replace(/-/g, "_")}`;
-      await source.pool.query(`create database ${database}`);
-      const url = new URL(container.connectionString);
-      url.pathname = `/${database}`;
-      const fresh = createDb(url.toString());
-      try {
-        await migrate(fresh.db);
-        at = performance.now();
-        const restored = await restoreArchive(
-          restoreOptions(
-            loadConfig({
-              DATABASE_URL: container.connectionString,
-              FDRIVE_STORAGE_ROOT: "/srv/files",
-              FDRIVE_MASTER_KEY: destinationMaster.toString("base64"),
-            }),
-            fresh.pool,
-            fetched,
-            identity,
-            directory,
-          ),
-        );
-        timings[target.label] = {
-          transferAndReadbackMs,
-          fetchMs,
-          restoreMs: performance.now() - at,
-        };
-        expect(restored.header.id).toBe(id);
-        expect(
-          (await fresh.pool.query("select count(*)::int as count from app.providers")).rows[0]
-            .count,
-        ).toBeGreaterThan(0);
-      } finally {
-        await fresh.close();
-      }
-    }
-    const evaluation = fileURLToPath(
-      new URL("../../../../.fdrive-workflow/evaluation/", import.meta.url),
-    );
-    await mkdir(evaluation, { recursive: true });
-    await writeFile(
-      join(evaluation, "backup-destinations.json"),
-      JSON.stringify({ measuredAt: new Date().toISOString(), ...timings }, null, 2),
-    );
-    // The archive is a plain file in alice's home on disk.
-    expect(
-      await readdir(folder.path("alice", `/backups/.fdrive-backups/${config.installation_id}`)),
-    ).toContain(`${id}.fdrive.age`);
-  } finally {
-    await folder.stop();
-  }
-}, 600_000);

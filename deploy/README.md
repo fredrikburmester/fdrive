@@ -53,7 +53,7 @@ in `.env` before the first start:
 FDRIVE_FILES_DIR=/srv/files
 ```
 
-- The api, backup worker and OCR worker mount it read-write and write as `FDRIVE_RUN_AS_UID`;
+- The api and OCR worker mount it read-write and write as `FDRIVE_RUN_AS_UID`;
   the indexer mounts it read-only and reads as the same user. All of them see it at `/data`.
 - Existing files must belong to that user. Check with `ls -ln /srv/files` and set
   `FDRIVE_RUN_AS_UID` to the owner's ID rather than changing ownership. A new, empty folder is
@@ -177,8 +177,7 @@ For more, see `docker compose logs --tail=100 api`, **System** in fdrive and the
 ## Installation backups
 
 The stack includes a backup worker with encrypted storage. In **System → Backups**, set the
-recovery key, schedules and optional S3/B2 or folder destinations. Upload exported external
-configuration ZIPs there to include their saved versions. Keep the recovery key and
+recovery key, schedules and optional S3/B2 destinations. Keep the recovery key and
 destination credentials outside fdrive. User files aren't included, so back up the files
 folder with the host's own tools. See [backups and recovery](../docs/BACKUPS.md), including
 recovery into a new, empty database.

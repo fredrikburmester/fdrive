@@ -7,20 +7,11 @@ import { MOVE_LAYOUT_NAMESPACE } from "./trash/recycle-folder.ts";
  */
 export const DESKTOP_INTERNAL_ROOT = "/.fdrive-desktop";
 
-/** The folder installation backups are written into, under whatever folder a target names. */
-export const BACKUP_FOLDER_NAME = ".fdrive-backups";
-
 /**
  * Folder names that are fdrive's own wherever they lie, compared in any
- * case: its Trash layout, which stays put when Trash is turned off or moved,
- * and backup folders.
+ * case: its Trash layout, which stays put when Trash is turned off or moved.
  */
-export const RESERVED_FOLDER_NAMES: readonly string[] = [MOVE_LAYOUT_NAMESPACE, BACKUP_FOLDER_NAME];
-
-/** True when one of `path`'s segments is a backup folder, in any case. */
-export function isBackupPath(path: string): boolean {
-  return splitSegments(path).some((segment) => segment.toLowerCase() === BACKUP_FOLDER_NAME);
-}
+export const RESERVED_FOLDER_NAMES: readonly string[] = [MOVE_LAYOUT_NAMESPACE];
 
 /**
  * fdrive's own folders at fixed places in a user's files, canonical: the

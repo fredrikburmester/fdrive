@@ -23,18 +23,6 @@ export interface DestinationRecord {
   enabled: boolean;
   tested_at: Date | null;
 }
-export interface AttachmentRecord {
-  id: string;
-  version_id: string;
-  label: string;
-  filename: string;
-  source_date: Date | null;
-  notes: string;
-  uploaded_at: Date;
-  bytes: string;
-  sha256: string;
-  secret: Buffer;
-}
 export interface RunRecord {
   schedule_slot: string | null;
   verification_requested: boolean;
@@ -185,43 +173,6 @@ export class BackupStore {
     );
     if (!removed.rows.length && (await this.destination(id)))
       throw Error("Delete retained backups before removing their destination");
-  }
-  async attachments(client: Pool | PoolClient = this.pool): Promise<AttachmentRecord[]> {
-    return (
-      await client.query<AttachmentRecord>(
-        "select * from app.backup_attachments order by uploaded_at,id",
-      )
-    ).rows;
-  }
-  async attachment(id: string): Promise<AttachmentRecord | null> {
-    return (
-      (
-        await this.pool.query<AttachmentRecord>(
-          "select * from app.backup_attachments where id=$1",
-          [id],
-        )
-      ).rows[0] ?? null
-    );
-  }
-  async saveAttachment(record: AttachmentRecord): Promise<void> {
-    await this.pool.query(
-      "insert into app.backup_attachments(id,version_id,label,filename,source_date,notes,uploaded_at,bytes,sha256,secret) values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) on conflict(id) do update set version_id=excluded.version_id,label=excluded.label,filename=excluded.filename,source_date=excluded.source_date,notes=excluded.notes,uploaded_at=excluded.uploaded_at,bytes=excluded.bytes,sha256=excluded.sha256,secret=excluded.secret",
-      [
-        record.id,
-        record.version_id,
-        record.label,
-        record.filename,
-        record.source_date,
-        record.notes,
-        record.uploaded_at,
-        record.bytes,
-        record.sha256,
-        record.secret,
-      ],
-    );
-  }
-  async deleteAttachment(id: string): Promise<void> {
-    await this.pool.query("delete from app.backup_attachments where id=$1", [id]);
   }
   async queue(
     requestedBy: string | null,

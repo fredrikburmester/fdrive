@@ -54,7 +54,6 @@ describe("public links following their item", () => {
     for (const target of [
       "/.trash/.fdrive-move-v1/Projects",
       "/.fdrive-desktop/x/trash/Projects",
-      "/Stuff/.fdrive-backups/Projects",
       "/Shared with me/Projects",
       "/Projects",
     ]) {

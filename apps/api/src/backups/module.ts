@@ -1,8 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
-import { access, mkdir, realpath } from "node:fs/promises";
+import { mkdir, realpath } from "node:fs/promises";
 import { join } from "node:path";
 import {
-  AttachmentStore,
   type BackupDestination,
   BackupEngine,
   type BackupSource,
@@ -11,40 +10,22 @@ import {
   type DestinationRecord,
   legacyOcrMappings,
   localBlobs,
-  providerDestination,
   type SecretCodec,
   s3Destination,
 } from "@fdrive/backup";
 import type { BackupDestinationInput } from "@fdrive/contracts";
-import { isStorageError, type StorageProvider } from "@fdrive/core";
 import { Pool } from "pg";
 import { open, parseMasterKey, seal } from "../auth/crypto.js";
-import type { StorageSource } from "../auth/storage-factory.js";
 import type { AppConfig } from "../config.js";
 
-/** Envelope codec for backup secrets and attachments under the installation master key. */
+/** Envelope codec for backup destination secrets under the installation master key. */
 export function masterSecrets(master: Uint8Array): SecretCodec {
   return {
     seal: (bytes, context) => seal(master, bytes, context),
     open: (bytes, context) => open(master, bytes, context),
   };
 }
-/**
- * The files folder backups read and write: users' files, built directly,
- * since fdrive keeps no password to sign in with. Its guard still refuses a
- * folder that is not this installation's. `storageId` is its provider row,
- * which a destination in it names.
- */
-export interface BackupFiles {
-  readonly storageId: string;
-  readonly folder: StorageSource;
-}
-export function createBackupModule(config: AppConfig, files: BackupFiles) {
-  /** A destination's storage: only while its user may still use their files. */
-  async function destinationStorage(username: string): Promise<StorageProvider> {
-    await files.folder.admit(username);
-    return files.folder.storage(username);
-  }
+export function createBackupModule(config: AppConfig) {
   const pool = new Pool({ connectionString: config.databaseUrl, max: 6 });
   pool.on("error", () => undefined);
   const gatePool = new Pool({ connectionString: config.databaseUrl, max: 16 });
@@ -52,79 +33,40 @@ export function createBackupModule(config: AppConfig, files: BackupFiles) {
   const store = new BackupStore(pool);
   const secrets = masterSecrets(parseMasterKey(config.fdriveMasterKey));
   const directory = config.fdriveBackupStateDir ?? join(config.fdriveTmpDir, "backups-disabled");
-  const attachments = new AttachmentStore(store, join(directory, "attachments"), secrets);
+  /** A saved bucket's transport, with its keys opened from their sealed record. */
   async function destination(record: DestinationRecord): Promise<BackupDestination> {
-    if (record.type === "s3") {
-      const secret = JSON.parse(
-        Buffer.from(secrets.open(record.secret, `backup-destination:${record.id}`)).toString(),
-      ) as Record<string, string>;
-      const { endpoint, region, bucket, prefix, pathStyle } = record.config;
-      if (
-        typeof endpoint !== "string" ||
-        typeof region !== "string" ||
-        typeof bucket !== "string" ||
-        typeof prefix !== "string" ||
-        typeof secret.accessKeyId !== "string" ||
-        typeof secret.secretAccessKey !== "string"
-      )
-        throw Error("Invalid bucket configuration");
-      return s3Destination({
-        endpoint,
-        region,
-        bucket,
-        prefix,
-        pathStyle: pathStyle === true,
-        accessKeyId: secret.accessKeyId,
-        secretAccessKey: secret.secretAccessKey,
-      });
-    }
-    if (record.config.providerId !== files.storageId) throw Error("Backup provider changed");
-    if (typeof record.config.prefix !== "string") throw Error("Unsupported backup provider");
-    const storage = await destinationStorage(String(record.config.username));
-    const root = `/${record.config.prefix.replace(/^\/+|\/+$/g, "")}`;
-    const existing = await storage.stat(root);
-    if (existing.kind !== "dir") throw Error("Choose an existing private backup directory");
-    return providerDestination(storage, record.config.prefix);
+    const secret = JSON.parse(
+      Buffer.from(secrets.open(record.secret, `backup-destination:${record.id}`)).toString(),
+    ) as Record<string, string>;
+    const { endpoint, region, bucket, prefix, pathStyle } = record.config;
+    if (
+      typeof endpoint !== "string" ||
+      typeof region !== "string" ||
+      typeof bucket !== "string" ||
+      typeof prefix !== "string" ||
+      typeof secret.accessKeyId !== "string" ||
+      typeof secret.secretAccessKey !== "string"
+    )
+      throw Error("Invalid bucket configuration");
+    return s3Destination({
+      endpoint,
+      region,
+      bucket,
+      prefix,
+      pathStyle: pathStyle === true,
+      accessKeyId: secret.accessKeyId,
+      secretAccessKey: secret.secretAccessKey,
+    });
   }
-  /**
-   * A destination as it is saved. A folder in the files folder is in the
-   * files of `username`, the owner adding it, and keeps no password.
-   */
+  /** A bucket as it is saved: its keys sealed, its prefix narrowed to this installation. */
   async function destinationRecord(
     input: BackupDestinationInput,
-    username: string,
     id: string = randomUUID(),
   ): Promise<DestinationRecord> {
-    let settings: Record<string, unknown>;
-    let credential: Record<string, string> = {};
     const installation = (await store.configuration()).installation_id;
-    if (input.type === "s3") {
-      const { accessKeyId, secretAccessKey, name: _, type: __, ...rest } = input;
-      settings = { ...rest, prefix: `${input.prefix.replace(/\/+$/g, "")}/${installation}` };
-      credential = { accessKeyId, secretAccessKey };
-    } else {
-      if (input.providerId !== files.storageId) throw Error("Storage provider is unavailable");
-      const storage = await destinationStorage(username);
-      const parent = `/${input.prefix.replace(/^\/+|\/+$/g, "")}`;
-      if ((await storage.stat(parent)).kind !== "dir")
-        throw Error("Choose an existing private directory");
-      for (const path of [
-        `${parent.replace(/\/$/, "")}/.fdrive-backups`,
-        `${parent.replace(/\/$/, "")}/.fdrive-backups/${installation}`,
-      ]) {
-        const existing = await storage.stat(path).catch((error) => {
-          if (isStorageError(error) && error.kind === "not_found") return null;
-          throw error;
-        });
-        if (!existing) await storage.mkdir(path);
-        else if (existing.kind !== "dir") throw Error("Backup namespace is not a directory");
-      }
-      settings = {
-        providerId: files.storageId,
-        username,
-        prefix: `${input.prefix.replace(/\/+$/, "")}/.fdrive-backups/${installation}`,
-      };
-    }
+    const { accessKeyId, secretAccessKey, name: _, type: __, ...rest } = input;
+    const settings = { ...rest, prefix: `${input.prefix.replace(/\/+$/g, "")}/${installation}` };
+    const credential = { accessKeyId, secretAccessKey };
     return {
       id,
       revision: randomUUID(),
@@ -152,19 +94,9 @@ export function createBackupModule(config: AppConfig, files: BackupFiles) {
       fdriveSetupToken: "[rotate on restore]",
       fdriveWorkerToken: "[rotate on restore]",
     },
-    async blobs(client, metadataOnly) {
+    async blobs(client) {
       const sources: BlobSource[] = [];
       const coverage: string[] = [];
-      await attachments.collect();
-      for (const record of await store.attachments(client)) {
-        try {
-          await access(attachments.path(record.version_id));
-          sources.push(attachments.source(record));
-        } catch {
-          coverage.push(`Configuration attachment missing: ${record.label}`);
-        }
-      }
-      if (metadataOnly) return { sources, coverage };
       for (const mount of mounts) {
         if (directory === mount.path || directory.startsWith(`${mount.path.replace(/\/$/, "")}/`))
           throw Error("Backup output cannot be inside a backup source");
@@ -209,7 +141,6 @@ export function createBackupModule(config: AppConfig, files: BackupFiles) {
           coverage.push("Staged recovery files from the previous restore are unavailable");
         else
           for (const blob of recovered.blobs) {
-            if (blob.kind === "attachment") continue;
             const entry = entries.find((item) => item.path === blob.entry.replace("/", "-"));
             if (entry)
               sources.push({
@@ -232,7 +163,7 @@ export function createBackupModule(config: AppConfig, files: BackupFiles) {
         coverage.push("Retained indexer logs are not mounted for backups");
       if (config.fdriveOfficeUrl && !enabledKinds.has("office"))
         coverage.push(
-          "Office persistent proof keys/configuration are external or unmounted; include an exported configuration bundle",
+          "Office proof keys and configuration are not mounted for backups; back them up with the Office server's own tools",
         );
       return { sources, coverage };
     },
@@ -247,7 +178,6 @@ export function createBackupModule(config: AppConfig, files: BackupFiles) {
     pool,
     gatePool,
     store,
-    attachments,
     engine,
     destination,
     destinationRecord,

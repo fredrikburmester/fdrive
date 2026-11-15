@@ -11,11 +11,10 @@ BYTES_PER_MB = 1024 * 1024
 
 #: fdrive's own folders, compared with each segment of an index path in any case
 #: (`isReservedPath` in `@fdrive/core`): its Trash layout wherever the Trash folder is or
-#: was, `.trash` (its default Trash folder), the Mac app's folder (staged uploads,
-#: replaced versions and its Trash) and backup folders. A PDF in one of them is not
-#: the user's live file, so it is never rewritten. The indexer never walks the last
-#: two, but it does index the Trash.
-RESERVED_FOLDERS: tuple[str, ...] = (".fdrive-move-v1", ".trash", ".fdrive-desktop", ".fdrive-backups")
+#: was, `.trash` (its default Trash folder) and the Mac app's folder (staged uploads,
+#: replaced versions and its Trash). A PDF in one of them is not the user's live file,
+#: so it is never rewritten. The indexer never walks the last, but it does index the Trash.
+RESERVED_FOLDERS: tuple[str, ...] = (".fdrive-move-v1", ".trash", ".fdrive-desktop")
 
 
 def root_relative_key(root: str, rel_path: str) -> str:

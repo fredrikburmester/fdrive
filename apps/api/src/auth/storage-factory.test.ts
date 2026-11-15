@@ -186,3 +186,31 @@ it("refuses a login whose name cannot be a home folder, and passes other failure
   });
   await expect(factory(odd.id)).rejects.toBe(failure);
 });
+
+it("moves, copies, zips and deletes a folder without listing it first", async () => {
+  // Backups no longer write into the files folder, so nothing walks a folder's tree for them
+  // before an operation; a backup folder an old release left there moves with its parent.
+  const memory = createMemoryStorage({
+    "/docs/b.txt": "y",
+    "/docs/.fdrive-backups/install/a.fdrive.age": "x",
+  });
+  const zip = vi.fn(async () => new ReadableStream<Uint8Array>());
+  const list = vi.spyOn(memory, "list");
+  const h = await fixture(Object.assign(memory, { zip }));
+  const factory = createIdentityStorageFactory({
+    identities: h.repos.identities,
+    folder: h.folder,
+    clock: () => new Date(0),
+  });
+  const storage = await factory(h.alice.id);
+  await storage.copy("/docs", "/copy");
+  await storage.move("/copy", "/moved");
+  await storage.zip?.(["/moved"]);
+  await storage.deleteDir("/moved");
+  expect(zip).toHaveBeenCalledExactlyOnceWith(["/moved"]);
+  expect(list).not.toHaveBeenCalled();
+  expect(memory.dump()).toEqual({
+    "/docs/b.txt": "y",
+    "/docs/.fdrive-backups/install/a.fdrive.age": "x",
+  });
+});

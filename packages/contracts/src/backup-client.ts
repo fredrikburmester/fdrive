@@ -1,6 +1,5 @@
 import { z } from "zod";
 import {
-  type BackupAttachmentInput,
   BackupDestinationInput,
   BackupRehearsal,
   type BackupRunInput,
@@ -73,21 +72,6 @@ export function createBackupClient(
       json(`/destinations/${encodeURIComponent(id)}/test`, Ok, "POST", {}),
     removeDestination: (id: string) =>
       request(`/destinations/${encodeURIComponent(id)}`, Ok, "DELETE"),
-    upload: (input: z.infer<typeof BackupAttachmentInput>, body: Blob, id?: string) => {
-      const metadata = btoa(
-        String.fromCharCode(...new TextEncoder().encode(JSON.stringify(input))),
-      );
-      return request(
-        `/attachments${id ? `/${encodeURIComponent(id)}` : ""}`,
-        Accepted,
-        id ? "PUT" : "POST",
-        body,
-        { "Content-Type": "application/zip", "X-Backup-Metadata": metadata },
-      );
-    },
-    removeAttachment: (id: string) =>
-      request(`/attachments/${encodeURIComponent(id)}`, Ok, "DELETE"),
     downloadUrl: (id: string) => `${base}/runs/${encodeURIComponent(id)}/download`,
-    attachmentUrl: (id: string) => `${base}/attachments/${encodeURIComponent(id)}/download`,
   };
 }

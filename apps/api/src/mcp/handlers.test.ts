@@ -61,7 +61,7 @@ const UNINDEXED_ROOT_SCOPE_CONTEXT: ScopeContext = {
 /** What alice's index queries leave out with Trash off: the Mac app's folder and the reserved names. */
 const ALICE_RESERVED = {
   prefixes: [{ rootId: 1, fsPrefix: "/alice/.fdrive-desktop" }],
-  names: [".fdrive-move-v1", ".fdrive-backups"],
+  names: [".fdrive-move-v1"],
 };
 
 function fail(name: string): never {
@@ -1749,7 +1749,7 @@ describe("fdrive's own folders", () => {
       { rootId: 1, fsPrefix: "/alice/.trash" },
       { rootId: 1, fsPrefix: "/alice/.fdrive-desktop" },
     ],
-    names: [".fdrive-move-v1", ".fdrive-backups"],
+    names: [".fdrive-move-v1"],
   };
 
   it("asks every index query to leave them out before its limit", async () => {
@@ -1799,7 +1799,6 @@ describe("fdrive's own folders", () => {
       "alice/.trash/a.txt",
       "alice/.fdrive-desktop/staging/a.txt",
       "alice/old/.fdrive-move-v1/file/p/a.txt/v/1",
-      "alice/nas/.fdrive-backups/a.tar",
     ]) {
       const file = makeFile({ id: 1, path });
       const deps = baseDeps({ indexQueries: stubIndexQueries({ fileByPath: async () => file }) });

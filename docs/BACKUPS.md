@@ -8,8 +8,8 @@ Other administrators and MCP/desktop bearer tokens do not grant backup access.
 ## Configure
 
 The deployment Compose file starts a dedicated `backup` worker. Its persistent `fdrive-backups`
-volume holds encrypted configuration attachments and temporary encrypted download archives.
-The worker reads the OCR originals, retained indexer logs and Office data mounts.
+volume holds temporary encrypted download archives. The worker reads the OCR originals,
+retained indexer logs and Office data mounts; it does not mount the files folder.
 Those source mounts are read-only. The API and worker must use the same database and master
 key and share the backup volume. Upgrade the API, worker and OCR service together.
 
@@ -23,31 +23,25 @@ appear as coverage gaps.
 1. Open System → Backups and confirm your password.
 2. Create and download a recovery key. Paste the saved key to prove it can decrypt a challenge.
    The private key is generated in the browser; scheduled backups use only its public recipient.
-3. Optionally add an S3/B2 destination or a folder in the files folder. Adding it tests
-   create, read and delete permissions using a uniquely named probe. Use a private bucket or
-   directory and dedicated credentials, and keep those credentials outside fdrive too. A files
-   folder destination is a folder in your own files, and fdrive keeps no password for it; if
-   your user is disabled or removed, its copies stop. It sits on the same host as the
-   installation, so copy it off the host with the rest of the files folder.
+3. Optionally add an S3-compatible bucket (AWS S3, Backblaze B2). It is the only kind of
+   destination: a backup on the installation's own disk is not a backup. Adding it tests
+   create, read and delete permissions using a uniquely named probe. Use a private bucket and
+   dedicated credentials, and keep those credentials outside fdrive too.
    A bucket with default Object Lock retention keeps the probe object; fdrive never asks for a
    retention bypass. The destination is saved and the kept object's name and deadline are shown
    on its card and recorded in the event log.
-4. Optionally upload named configuration ZIPs exported from external systems. These are opaque
-   attachments: fdrive never unpacks, executes or applies them. Upload a new version when the
-   external configuration changes. Replacing/removing an active attachment does not alter
-   previously captured backups. Limits: 256 MiB per ZIP, 2 GiB total active attachments.
-5. Choose a schedule and retention, then run a backup. A destination can inherit the installation
+4. Choose a schedule and retention, then run a backup. A destination can inherit the installation
    policy or have its own hourly, daily or weekly policy and IANA timezone. Downtime produces
    one catch-up run; it does not replay every missed interval.
 
 S3 supports a custom endpoint, region, bucket, prefix and path-style addressing, including
 Backblaze B2's S3-compatible endpoints. Enter the endpoint and region belonging to your bucket;
-the B2 preset is an editable example. A files folder destination is bound to the storage row
-and the owner who added it, independent of the current browsing identity. Its archives
-live beneath `<chosen folder>/.fdrive-backups/<installation ID>` in that user's files. fdrive's
-file API hides that namespace and rejects ancestor archive/mutation operations that would
-include it. Host permissions remain the boundary against other tools on the host; encryption
-protects the contents.
+the B2 preset is an editable example.
+
+An earlier release could also copy backups into a folder in the owner's files, beneath
+`<chosen folder>/.fdrive-backups/<installation ID>`. fdrive no longer writes there or hides
+it: such a folder is an ordinary one that the owner sees, can download from, move or delete,
+and that search indexes. Its archives restore with the release that made them.
 
 Copies use one encrypted archive per snapshot. Each transfer is read back in full and checked
 with SHA-256 before a completion marker is published. Multipart failures are aborted; retries
@@ -94,22 +88,26 @@ unclassified application/index table, including tables introduced by a future mi
   AI chats (transcripts and references), share metadata (password hashes included, so links
   restore fully), activity, stable Office/native file IDs and Mac write receipts.
 - Retained index scan/move/event history, OCR rewrite history and processing failures.
-- Exact active configuration ZIP versions, pre-OCR originals and original-file mappings,
-  retained logs and configured external source mounts.
+- Pre-OCR originals and original-file mappings, retained logs and configured external source
+  mounts.
 - Effective deployment configuration, mount identities, migration hashes and database schema
   fingerprint. The source master key is inside the independently encrypted archive so
-  destination secrets and configuration ZIP keys can be resealed on a replacement installation.
+  destination secrets can be resealed on a replacement installation.
 
 Indexes, extracted chunks, thumbnails, embeddings, sessions and WOPI locks are omitted. Original user files (the files folder, Trash included), unsaved external
 editor state and device-only edits require their own backups. Uploads the Mac staged in the files
 folder are transient and never backed up: the Mac sends an unfinished one again, and a restored
 Mac write ends from what the files folder shows, like any interrupted one
-([macOS](MACOS.md#write-configuration-and-recovery)). A configuration ZIP
-protects only the version uploaded.
+([macOS](MACOS.md#write-configuration-and-recovery)).
 
 Database rows are captured in a repeatable-read transaction, using PostgreSQL text values to
-preserve bigint, bytea, JSON and timestamps exactly. An exclusive advisory checkpoint pauses
-cooperating writes, so attachments and OCR publish no new recovery bytes during capture.
+preserve bigint, bytea, JSON and timestamps exactly. Two advisory locks make the capture
+consistent. Every mutating API request holds the snapshot gate (`SNAPSHOT_GATE`) shared, and
+OCR holds the recovery files gate (`BACKUP_GATE`) shared while it writes, restores or deletes
+kept originals. A capture takes both exclusively, so its snapshot sees no request or OCR write
+half done, and lets go of the snapshot gate as soon as the snapshot exists: requests then go
+on, and the snapshot does not see them. It keeps the recovery files gate until it has read
+every recovery file, so OCR changes none of them meanwhile; OCR waits without giving up.
 Local files reject symlinks, inode replacement and mutation during reading; log files capture
 their checkpoint prefix while allowing append. Independently changing user files and external
 writers are not a filesystem snapshot.
@@ -126,19 +124,15 @@ The CLI is available in the API image and built API directory:
 ```sh
 chmod 600 recovery-key.txt destination.json review.json
 node dist/main.js backup inspect --file snapshot.fdrive.age --key-file recovery-key.txt
-node dist/main.js backup extract --file snapshot.fdrive.age --key-file recovery-key.txt \
-  --attachment VERSION_UUID --output new-configuration.zip
 ```
 
-`inspect`, `extract`, `list` and `fetch` do not require the application database, master key,
+`inspect`, `list` and `fetch` do not require the application database, master key,
 login or setup. Their key/destination files must be regular private files, at most 64 KiB.
 Existing output files are never overwritten.
 
 An offline S3 destination file contains `type: "s3"`, `endpoint`, `region`, `bucket`, `prefix`,
 `pathStyle`, `accessKeyId` and `secretAccessKey`. Use the **full installation-specific prefix**
-shown in System → Backups. A files folder destination needs no destination file: its archives are plain files under
-`<files folder>/<username>/<prefix>/`, named `<snapshot ID>.fdrive.age`. Copy one from there
-and pass it to `inspect` or `restore` directly.
+shown in System → Backups.
 
 ```sh
 node dist/main.js backup list --destination-file destination.json
@@ -242,18 +236,24 @@ private recovery key.
 Local observations from `packages/backup/test/integration/benchmark.test.ts` on a developer Mac
 with loopback containers; not performance promises.
 
-| Fixture | Encrypted archive | Capture | Writer pause | Peak RSS (capture / restore) | Fresh restore |
-| --- | --- | --- | --- | --- | --- |
-| Empty installation | 3 KiB | 0.06 s | 0.002 s | 209 / 207 MiB | 0.05 s |
-| 60,000 history rows + 64 MiB recovery file | 65 MiB | 3.3 s | 3.2 s | 347 / 471 MiB | 16.8 s |
+| Fixture | Encrypted archive | Capture | Request pause | OCR pause | Peak RSS (capture / restore) | Fresh restore |
+| --- | --- | --- | --- | --- | --- | --- |
+| Empty installation | 5 KiB | 0.09 s | 0.008 s | 0.08 s | 238 / 239 MiB | 0.05 s |
+| 60,000 history rows + 64 MiB recovery file | 65 MiB | 2.9 s | 0.003 s | 2.9 s | 364 / 496 MiB | 15.4 s |
 
-Index regeneration after restore is separate and depends on file volume.
+Request pause is the longest any mutating request waited while requests ran back to back
+through the capture; 472 of them finished while the large capture was reading. OCR pause is
+how long a recovery file writer waited. Index regeneration after restore is separate and
+depends on file volume.
 
 Limitations these numbers expose:
 
-- Capture holds the exclusive checkpoint for its whole duration, so cooperating writers (native
-  uploads, OCR rewrites, ZIP uploads) wait as long as the capture and give up after 30 seconds.
-  Large recovery collections make captures long; schedule them at quiet hours.
+- A capture starts once the requests and OCR writes already running have finished, and gives up
+  after 30 seconds; requests that arrive meanwhile wait with it. After that, requests wait only
+  for the snapshot.
+- OCR's writes to kept originals wait for the whole capture and do not give up, so large
+  recovery collections hold OCR back for as long as they take to read. Schedule backups at
+  quiet hours.
 - Restore memory grows with history volume (471 MiB for this fixture). Size the recovery host
   accordingly.
 - A real Backblaze B2 bucket has been exercised for probe, delivery with readback, byte
@@ -264,8 +264,8 @@ Limitations these numbers expose:
 node dist/main.js backup resume --review-file review.json
 ```
 
-Resume checks the original owner's password against their restored user, checks the listed
-provider bindings, and publishes verified configuration ZIPs.
+Resume checks the original owner's password against their restored user and checks the listed
+provider bindings.
 Restart the API with `FDRIVE_RESTORE_MODE=false`. Review and re-enable features and schedules
 in System; confirm a recovery key before scheduling again. Reconnect native/MCP clients.
 
@@ -273,5 +273,4 @@ OCR, Office and log recovery bytes remain in the private `restore-UUID` quaranti
 `recovery-manifest.json` maps `blobs-N` files to original kinds, paths and source mount IDs; the
 database's `backup.recovery.v1` setting retains the source environment.
 Reconcile those bytes against the current files folder before applying them. Subsequent backups
-also preserve this quarantine. External configuration ZIPs are restored with their external
-system's own tools. fdrive never applies quarantined bytes automatically.
+also preserve this quarantine. fdrive never applies quarantined bytes automatically.
