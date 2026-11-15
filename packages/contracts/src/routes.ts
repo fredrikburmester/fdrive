@@ -85,6 +85,12 @@ export const ROUTES = {
     /** DELETE: reset every folder pin of the caller's login. */
     all: "/api/v1/folder-views/all",
   },
+  /**
+   * GET: the caller's saved searches, oldest first -> `SavedSearchesResponse`.
+   * POST: save a search -> `SavedSearch` (201).
+   * `:id` DELETE: remove one -> `OkResponse`. A no-op (200) when gone or another account's.
+   */
+  savedSearches: "/api/v1/saved-searches",
   recents: {
     /** GET: the caller's recently opened paths -> `RecentsResponse`. */
     list: "/api/v1/recents",
@@ -303,6 +309,11 @@ export function tagRoute(id: string): string {
 /** GET: every path tagged with `id` -> `TagFilesResponse`. */
 export function tagFilesRoute(id: string): string {
   return `${tagRoute(id)}/files`;
+}
+
+/** DELETE: one saved search by id -> `OkResponse`. */
+export function savedSearchRoute(id: string): string {
+  return `${ROUTES.savedSearches}/${encodeURIComponent(id)}`;
 }
 
 /** Upload request header carrying the file's mtime, in ms since epoch. */

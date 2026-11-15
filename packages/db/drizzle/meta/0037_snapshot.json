@@ -1,5 +1,5 @@
 {
-  "id": "a7f936ee-d95f-46fa-9196-17f0d31e2496",
+  "id": "32813ecf-a5a2-44e4-b23e-1135222ce3bf",
   "prevId": "573996ea-65fa-4a33-ae4e-b782368492bf",
   "version": "7",
   "dialect": "postgresql",
@@ -1820,6 +1820,96 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
+    "app.saved_searches": {
+      "name": "saved_searches",
+      "schema": "app",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "account_id": {
+          "name": "account_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "name": {
+          "name": "name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "query": {
+          "name": "query",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "type": {
+          "name": "type",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "folder": {
+          "name": "folder",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "saved_searches_account_id_idx": {
+          "name": "saved_searches_account_id_idx",
+          "columns": [
+            {
+              "expression": "account_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "created_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "saved_searches_account_id_accounts_id_fk": {
+          "name": "saved_searches_account_id_accounts_id_fk",
+          "tableFrom": "saved_searches",
+          "tableTo": "accounts",
+          "schemaTo": "app",
+          "columnsFrom": ["account_id"],
+          "columnsTo": ["id"],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
     "app.sessions": {
       "name": "sessions",
       "schema": "app",
@@ -2811,42 +2901,6 @@
         "ctime_ns": {
           "name": "ctime_ns",
           "type": "bigint",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "taken_at": {
-          "name": "taken_at",
-          "type": "timestamp",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "camera": {
-          "name": "camera",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "width": {
-          "name": "width",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "height": {
-          "name": "height",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "latitude": {
-          "name": "latitude",
-          "type": "double precision",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "longitude": {
-          "name": "longitude",
-          "type": "double precision",
           "primaryKey": false,
           "notNull": false
         }

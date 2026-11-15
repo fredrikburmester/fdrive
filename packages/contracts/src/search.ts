@@ -66,6 +66,18 @@ export const SearchResponse = z.object({
 
 export type SearchResponse = z.infer<typeof SearchResponse>;
 
+/** The search panel's file type filter; "any" filters nothing. */
+export const SearchTypeFilter = z.enum([
+  "any",
+  "images",
+  "documents",
+  "audio",
+  "video",
+  "archives",
+]);
+
+export type SearchTypeFilter = z.infer<typeof SearchTypeFilter>;
+
 /** Query parameters for `GET /api/v1/search`. Every field arrives as a raw string. */
 export const SearchQuery = z.object({
   q: z.string().min(1, "q must not be empty"),

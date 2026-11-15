@@ -264,8 +264,15 @@
     {
       "idx": 37,
       "version": "7",
-      "when": 1794729802331,
-      "tag": "0037_photo_details",
+      "when": 1794729654241,
+      "tag": "0037_saved_searches",
+      "breakpoints": true
+    },
+    {
+      "idx": 38,
+      "version": "7",
+      "when": 1794730788743,
+      "tag": "0038_photo_details",
       "breakpoints": true
     }
   ]

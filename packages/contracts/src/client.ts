@@ -43,6 +43,7 @@ import {
 import { HealthResponse } from "./health.ts";
 import { JobAccepted, JobStatus, JobsResponse } from "./jobs.ts";
 import {
+  type CreateSavedSearchRequest,
   type CreateTagRequest,
   type FavoriteRequest,
   FavoritesResponse,
@@ -50,6 +51,8 @@ import {
   RecentsResponse,
   type RecentTouchRequest,
   type RemoveFolderViewRequest,
+  SavedSearch,
+  SavedSearchesResponse,
   type SetFileTagsRequest,
   type SetFolderViewRequest,
   Tag,
@@ -90,6 +93,7 @@ import {
   organizeRunRoute,
   publicShareRoute,
   ROUTES,
+  savedSearchRoute,
   shareRoute,
   systemLogsRoute,
   tagFilesRoute,
@@ -382,6 +386,9 @@ export interface ApiClient {
   listFavorites(): Promise<FavoritesResponse>;
   addFavorite(req: FavoriteRequest): Promise<OkResponse>;
   removeFavorite(req: FavoriteRequest): Promise<OkResponse>;
+  listSavedSearches(): Promise<SavedSearchesResponse>;
+  createSavedSearch(req: CreateSavedSearchRequest): Promise<SavedSearch>;
+  deleteSavedSearch(id: string): Promise<OkResponse>;
   getFolderView(path: string): Promise<FolderViewResponse>;
   setFolderView(req: SetFolderViewRequest): Promise<OkResponse>;
   removeFolderView(req: RemoveFolderViewRequest): Promise<OkResponse>;
@@ -1065,6 +1072,18 @@ export function createApiClient(options: ApiClientOptions = {}): ApiClient {
 
     removeFavorite(req: FavoriteRequest): Promise<OkResponse> {
       return del(ROUTES.favorites.base, OkResponse, { jsonBody: req });
+    },
+
+    listSavedSearches(): Promise<SavedSearchesResponse> {
+      return get(ROUTES.savedSearches, SavedSearchesResponse);
+    },
+
+    createSavedSearch(req: CreateSavedSearchRequest): Promise<SavedSearch> {
+      return post(ROUTES.savedSearches, SavedSearch, { jsonBody: req });
+    },
+
+    deleteSavedSearch(id: string): Promise<OkResponse> {
+      return del(savedSearchRoute(id), OkResponse);
     },
 
     getFolderView(path: string): Promise<FolderViewResponse> {

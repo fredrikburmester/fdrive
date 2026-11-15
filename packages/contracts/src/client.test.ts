@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { ApiClientError, buildRequestUrl, createApiClient, toQueryString } from "./client";
+import type { CreateSavedSearchRequest } from "./metadata";
 
 const VALID_UUID = "123e4567-e89b-12d3-a456-426614174000";
 
@@ -1301,6 +1302,35 @@ describe("createApiClient: tags", () => {
     expect(calls[0]?.url).toBe("/api/v1/fs/tags");
     expect(calls[0]?.init.method).toBe("PUT");
     expect(calls[0]?.init.body).toBe(JSON.stringify({ path: "/a.txt", tagIds: ["tag-1"] }));
+  });
+});
+
+describe("createApiClient: saved searches", () => {
+  const request: CreateSavedSearchRequest = {
+    name: "Invoices",
+    query: "invoice",
+    type: "documents",
+    folder: null,
+  };
+  const SAVED = { id: "s/1", ...request };
+
+  it("lists, creates and deletes saved searches", async () => {
+    const { fetchStub, calls } = createStubFetch([
+      jsonResponse(200, { searches: [SAVED] }),
+      jsonResponse(201, SAVED),
+      jsonResponse(200, { ok: true }),
+    ]);
+    const client = createApiClient({ fetch: fetchStub });
+
+    expect(await client.listSavedSearches()).toEqual({ searches: [SAVED] });
+    expect(await client.createSavedSearch(request)).toEqual(SAVED);
+    expect(await client.deleteSavedSearch(SAVED.id)).toEqual({ ok: true });
+    expect(calls.map((call) => [call.init.method, call.url])).toEqual([
+      ["GET", "/api/v1/saved-searches"],
+      ["POST", "/api/v1/saved-searches"],
+      ["DELETE", "/api/v1/saved-searches/s%2F1"],
+    ]);
+    expect(calls[1]?.init.body).toBe(JSON.stringify(request));
   });
 });
 
