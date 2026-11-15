@@ -316,7 +316,9 @@ A new file command needs its action in the contracts and a history test before r
 ## API
 
 Paths are under `/api/v1/activity`. Only browser account sessions read history; MCP, Mac and
-other tokens get no history API. There is no owner parameter: another account's event, file or
+other tokens get no history API. MCP's `recent_moves` tool reads one slice of it directly: the
+token's own login's successful `file.move` events from source `mcp`, inside the token's
+folders. There is no owner parameter: another account's event, file or
 export ID is not found. Live actions probe only the session's own login and recheck read
 access. Responses are uncached.
 

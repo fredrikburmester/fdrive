@@ -42,7 +42,6 @@ function buildConfig(): AppConfig {
     fdriveSetupToken: undefined,
     fdriveIndexerUrl: undefined,
     fdriveOcrUrl: undefined,
-    fdriveMcpWrites: false,
   };
 }
 

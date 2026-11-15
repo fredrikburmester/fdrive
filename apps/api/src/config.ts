@@ -113,13 +113,11 @@ export interface AppConfig {
   readonly fdriveSetupToken: string | undefined;
   /**
    * Base URL of the indexer's internal HTTP API. `undefined` disables the
-   * System > Indexer page and MCP document extraction. Explicit tokens still read UTF-8 directly.
+   * System > Indexer page and MCP document extraction. MCP still reads UTF-8 directly.
    */
   readonly fdriveIndexerUrl: string | undefined;
   /** Base URL of the OCR service's internal HTTP API. `undefined` disables the System > OCR page. */
   readonly fdriveOcrUrl: string | undefined;
-  /** Enables legacy tokens' `create_folder` and `move_path`; explicit tokens use their own grants. */
-  readonly fdriveMcpWrites: boolean;
 }
 
 /** Default cap on the bytes a single archive job may read: 10 GiB. */
@@ -474,10 +472,6 @@ const envSchema = z.object({
         message: "must be an http(s) URL",
       }),
   ),
-  FDRIVE_MCP_WRITES: z.preprocess(
-    (value) => withDefault(value, "false"),
-    z.enum(["true", "false"]).transform((value) => value === "true"),
-  ),
 });
 
 /**
@@ -556,7 +550,6 @@ export function loadConfig(env: Record<string, string | undefined>): AppConfig {
     fdriveSetupToken: parsed.FDRIVE_SETUP_TOKEN,
     fdriveIndexerUrl: parsed.FDRIVE_INDEXER_URL,
     fdriveOcrUrl: parsed.FDRIVE_OCR_URL,
-    fdriveMcpWrites: parsed.FDRIVE_MCP_WRITES,
   };
   validateOfficeInfrastructure(config);
   return config;

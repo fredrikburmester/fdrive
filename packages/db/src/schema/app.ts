@@ -178,7 +178,7 @@ export const apiTokens = appSchema.table(
       .references(() => identities.id, { onDelete: "cascade" }),
     name: text("name").notNull(),
     tokenHash: text("token_hash").notNull().unique(),
-    access: jsonb("access").$type<ApiTokenAccess>(),
+    access: jsonb("access").$type<ApiTokenAccess>().notNull(),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     lastUsedAt: timestamp("last_used_at", { withTimezone: true }),
     expiresAt: timestamp("expires_at", { withTimezone: true }),

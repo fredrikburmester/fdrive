@@ -39,7 +39,7 @@ function toSummary(token: {
   createdAt: Date;
   lastUsedAt: Date | null;
   expiresAt: Date | null;
-  access?: ApiTokenAccess;
+  access: ApiTokenAccess;
 }): ApiTokenSummary {
   return {
     id: token.id,
@@ -47,7 +47,7 @@ function toSummary(token: {
     createdAt: token.createdAt.toISOString(),
     lastUsedAt: token.lastUsedAt?.toISOString() ?? null,
     expiresAt: token.expiresAt?.toISOString() ?? null,
-    ...(token.access === undefined ? {} : { access: token.access }),
+    access: token.access,
   };
 }
 

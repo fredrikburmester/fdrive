@@ -247,6 +247,7 @@ export function activityConditions(accountId: string, options: ActivityListOptio
   const e = activityEvents;
   return and(
     eq(e.ownerAccountId, accountId),
+    options.identityId ? eq(e.identityId, options.identityId) : undefined,
     options.action ? eq(e.action, options.action) : undefined,
     options.source ? eq(e.source, options.source) : undefined,
     options.outcome ? eq(e.outcome, options.outcome) : undefined,

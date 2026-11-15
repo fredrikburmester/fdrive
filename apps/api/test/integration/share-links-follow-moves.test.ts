@@ -78,7 +78,6 @@ describe("public links follow the files they point at", () => {
         DATABASE_URL: postgres.connectionString,
         FDRIVE_STORAGE_ROOT: storage.root,
         FDRIVE_MASTER_KEY: Buffer.alloc(32, 31).toString("base64"),
-        FDRIVE_MCP_WRITES: "true",
         FDRIVE_DESKTOP_STATE_DIR: stateDir,
         // Configured so the indexer listener runs; no indexer does, the tests notify for it.
         FDRIVE_INDEX_ROOTS: JSON.stringify([

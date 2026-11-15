@@ -78,7 +78,6 @@ export type {
   IndexQueries,
   IndexRef,
   IndexStats,
-  MoveRecord,
   RecencyDecay,
   ScopeClause,
   ScopedReadOptions,
