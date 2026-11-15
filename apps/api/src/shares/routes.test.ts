@@ -898,7 +898,6 @@ function makeIndexedFile(overrides: Partial<IndexedFile> = {}): IndexedFile {
     textChars: 0,
     error: null,
     indexedAt: null,
-    deletedAt: null,
     ...overrides,
   };
 }

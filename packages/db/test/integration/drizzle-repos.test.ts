@@ -638,7 +638,7 @@ describe("createFilesFolderFacts", () => {
     expect(row?.installationId).toBe(id);
   });
 
-  it("holds files once there is a user or a live indexed file, not a deleted one", async () => {
+  it("holds files once there is a user or an indexed file", async () => {
     const facts = createFilesFolderFacts(db);
     expect(await facts.holdsFiles()).toBe(false);
 
@@ -654,8 +654,6 @@ describe("createFilesFolderFacts", () => {
       size: 1,
       mtimeNs: 1n,
     };
-    await db.insert(files).values({ ...file, path: "alice/gone.txt", deletedAt: new Date() });
-    expect(await facts.holdsFiles()).toBe(false);
     await db.insert(files).values({ ...file, path: "alice/a.txt" });
     expect(await facts.holdsFiles()).toBe(true);
 

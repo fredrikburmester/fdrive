@@ -543,4 +543,27 @@ describe("migrate", () => {
       expect(added.rows).toEqual([{ id: 2 }]);
     });
   });
+
+  it("deletes the rows the index kept for removed files, with their chunks, and the column", async () => {
+    await withDatabaseBefore("0043_index_hard_delete", async (older) => {
+      await older.execute(sql`
+        insert into idx.files (root_id, path, name, size, mtime_ns, deleted_at) values
+          (1, 'alice/kept.txt', 'kept.txt', 1, 1, null),
+          (1, 'alice/gone.txt', 'gone.txt', 1, 1, now())`);
+      await older.execute(
+        sql`insert into idx.chunks (file_id, idx, text) select id, 0, name from idx.files`,
+      );
+
+      await migrate(older);
+
+      const files = await older.execute(sql`select path from idx.files`);
+      expect(files.rows).toEqual([{ path: "alice/kept.txt" }]);
+      const chunks = await older.execute(sql`select text from idx.chunks`);
+      expect(chunks.rows).toEqual([{ text: "kept.txt" }]);
+      const columns = await older.execute(sql`
+        select column_name from information_schema.columns
+          where table_schema = 'idx' and table_name = 'files' and column_name = 'deleted_at'`);
+      expect(columns.rows).toEqual([]);
+    });
+  });
 });

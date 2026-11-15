@@ -186,11 +186,11 @@ fn journal(env: &Env) -> Vec<(String, String)> {
         .collect()
 }
 
-fn live_paths(env: &Env, ctx: &RootContext) -> Vec<String> {
+fn indexed_paths(env: &Env, ctx: &RootContext) -> Vec<String> {
     let mut paths: Vec<String> = env
         .client()
         .query(
-            r#"SELECT path FROM "idx"."files" WHERE root_id = $1::bigint AND deleted_at IS NULL"#,
+            r#"SELECT path FROM "idx"."files" WHERE root_id = $1::bigint"#,
             &[&ctx.root_id],
         )
         .unwrap()
@@ -574,13 +574,13 @@ fn a_deleted_file_or_folder_loses_its_rows() {
     queue(&env, &ctx, "a.txt", None, None);
     queue(&env, &ctx, "d", None, None);
     drain(&ctx);
-    assert_eq!(live_paths(&env, &ctx), ["a.txt", "d/b.txt", "d/e/c.txt"]);
+    assert_eq!(indexed_paths(&env, &ctx), ["a.txt", "d/b.txt", "d/e/c.txt"]);
     std::fs::remove_file(env.path("a.txt")).unwrap();
     std::fs::remove_dir_all(env.path("d")).unwrap();
     queue(&env, &ctx, "a.txt", None, None);
     queue(&env, &ctx, "d", None, None);
     drain(&ctx);
-    assert!(live_paths(&env, &ctx).is_empty());
+    assert!(indexed_paths(&env, &ctx).is_empty());
     assert_eq!(env.count("idx.chunks"), 0);
     assert_eq!(env.signals(), 5);
 }
@@ -598,7 +598,7 @@ fn a_moved_file_keeps_its_row_without_being_read_again() {
     std::fs::rename(env.path("a.txt"), env.path("b.txt")).unwrap();
     queue(&env, &ctx, "a.txt", Some("b.txt"), None);
     drain(&ctx);
-    assert_eq!(live_paths(&env, &ctx), ["b.txt"]);
+    assert_eq!(indexed_paths(&env, &ctx), ["b.txt"]);
     assert_eq!(env.row(&ctx, "b.txt").sha256, id.sha256);
     assert_eq!(env.status(&ctx, "b.txt"), "indexed");
     assert_eq!(env.ml.count(TEXT_EMBED), embedded);
@@ -639,7 +639,7 @@ fn an_api_rename_carries_the_stamp_and_reads_nothing() {
         (row.sha256.as_deref(), row.stamp),
         (Some(claimed.as_str()), Some(after.stamp))
     );
-    assert_eq!(live_paths(&env, &ctx), ["b.txt"]);
+    assert_eq!(indexed_paths(&env, &ctx), ["b.txt"]);
     assert_eq!(env.signals(), 2);
 }
 
@@ -772,7 +772,7 @@ fn a_move_carries_no_stamp_where_the_row_has_none() {
     queue_move(&env, &ctx, "alice/a.txt", "alice/b.txt", Some(renamed(before, after)));
     drain(&ctx);
     assert_eq!(env.row(&ctx, "alice/b.txt").stamp, None);
-    assert_eq!(live_paths(&env, &ctx), ["alice/b.txt"]);
+    assert_eq!(indexed_paths(&env, &ctx), ["alice/b.txt"]);
 }
 
 #[test]
@@ -791,7 +791,7 @@ fn a_moved_folder_moves_its_rows_and_matches_the_disk() {
     std::fs::rename(env.path("d"), env.path("e")).unwrap();
     queue(&env, &ctx, "d", Some("e"), None);
     drain(&ctx);
-    assert_eq!(live_paths(&env, &ctx), ["e/a.txt", "e/s/b.txt"]);
+    assert_eq!(indexed_paths(&env, &ctx), ["e/a.txt", "e/s/b.txt"]);
 }
 
 #[test]
@@ -805,11 +805,11 @@ fn a_file_moved_out_of_sight_is_deleted_and_one_moved_back_is_indexed() {
     std::fs::rename(env.path("a.txt"), env.path("node_modules/a.txt")).unwrap();
     queue(&env, &ctx, "a.txt", Some("node_modules/a.txt"), None);
     drain(&ctx);
-    assert!(live_paths(&env, &ctx).is_empty());
+    assert!(indexed_paths(&env, &ctx).is_empty());
     std::fs::rename(env.path("node_modules/a.txt"), env.path("b.txt")).unwrap();
     queue(&env, &ctx, "node_modules/a.txt", Some("b.txt"), None);
     drain(&ctx);
-    assert_eq!(live_paths(&env, &ctx), ["b.txt"]);
+    assert_eq!(indexed_paths(&env, &ctx), ["b.txt"]);
 }
 
 #[test]
@@ -822,7 +822,7 @@ fn a_renamed_extension_is_indexed_as_a_new_file() {
     std::fs::rename(env.path("a.txt"), env.path("a.md")).unwrap();
     queue(&env, &ctx, "a.txt", Some("a.md"), None);
     drain(&ctx);
-    assert_eq!(live_paths(&env, &ctx), ["a.md"]);
+    assert_eq!(indexed_paths(&env, &ctx), ["a.md"]);
     assert_eq!(env.signals(), 3);
 }
 
@@ -835,12 +835,12 @@ fn a_folder_is_compared_with_its_rows() {
     env.write("d/.git/c.txt", b"hidden");
     queue(&env, &ctx, "d", None, None);
     drain(&ctx);
-    assert_eq!(live_paths(&env, &ctx), ["d/a.txt", "d/b.txt"]);
+    assert_eq!(indexed_paths(&env, &ctx), ["d/a.txt", "d/b.txt"]);
     std::fs::remove_file(env.path("d/a.txt")).unwrap();
     env.write("d/c.txt", b"three");
     queue(&env, &ctx, "d", None, None);
     drain(&ctx);
-    assert_eq!(live_paths(&env, &ctx), ["d/b.txt", "d/c.txt"]);
+    assert_eq!(indexed_paths(&env, &ctx), ["d/b.txt", "d/c.txt"]);
 }
 
 fn folder_paths(env: &Env, ctx: &RootContext) -> Vec<String> {
@@ -929,7 +929,7 @@ fn a_moved_folder_takes_its_folder_rows_along() {
             ("new/s".to_owned(), "s".to_owned())
         ]
     );
-    assert_eq!(live_paths(&env, &ctx), ["new/s/a.txt"]);
+    assert_eq!(indexed_paths(&env, &ctx), ["new/s/a.txt"]);
 }
 
 #[test]
@@ -953,7 +953,7 @@ fn a_file_replaced_by_a_folder_loses_its_row() {
     env.write("x/inner.txt", b"now a folder");
     queue(&env, &ctx, "x", None, None);
     drain(&ctx);
-    assert_eq!(live_paths(&env, &ctx), ["x/inner.txt"]);
+    assert_eq!(indexed_paths(&env, &ctx), ["x/inner.txt"]);
 }
 
 #[test]
@@ -967,7 +967,7 @@ fn journal_order_holds_across_an_upload_and_a_move() {
     queue(&env, &ctx, "a.txt", None, Some(hint));
     queue(&env, &ctx, "a.txt", Some("b.txt"), None);
     assert_eq!(drain(&ctx), 2);
-    assert_eq!(live_paths(&env, &ctx), ["b.txt"]);
+    assert_eq!(indexed_paths(&env, &ctx), ["b.txt"]);
 }
 
 #[test]
@@ -981,7 +981,7 @@ fn many_uploads_are_indexed_in_parallel_and_drained_in_batches() {
         queue_on(&mut c, &ctx, &format!("u/{i}.txt"), None, None);
     }
     assert_eq!(drain(&ctx), count);
-    assert_eq!(live_paths(&env, &ctx).len(), count);
+    assert_eq!(indexed_paths(&env, &ctx).len(), count);
     assert_eq!(queued(&env, &ctx), 0);
     assert_eq!(ctx.foreground_pending(), 0);
 }
@@ -993,7 +993,7 @@ fn journaled_changes_wait_while_the_folder_has_no_marker() {
     env.write("a.txt", b"one");
     queue(&env, &ctx, "a.txt", None, None);
     drain(&ctx);
-    assert_eq!(live_paths(&env, &ctx), ["a.txt"]);
+    assert_eq!(indexed_paths(&env, &ctx), ["a.txt"]);
 
     let marker = env.path(fdrive_indexer::files_marker::FILES_MARKER);
     let id = std::fs::read_to_string(&marker).unwrap();
@@ -1002,11 +1002,11 @@ fn journaled_changes_wait_while_the_folder_has_no_marker() {
     queue(&env, &ctx, "a.txt", None, None);
     assert_eq!(drain(&ctx), 0);
     assert_eq!(queued(&env, &ctx), 1);
-    assert_eq!(live_paths(&env, &ctx), ["a.txt"]);
+    assert_eq!(indexed_paths(&env, &ctx), ["a.txt"]);
 
     std::fs::write(&marker, id).unwrap();
     assert_eq!(drain(&ctx), 1);
-    assert!(live_paths(&env, &ctx).is_empty());
+    assert!(indexed_paths(&env, &ctx).is_empty());
 }
 
 #[test]
@@ -1017,7 +1017,7 @@ fn while_indexing_is_off_rows_are_passed_over() {
     queue(&env, &ctx, "a.txt", None, None);
     assert_eq!(drain(&ctx), 1);
     assert_eq!(queued(&env, &ctx), 0);
-    assert!(live_paths(&env, &ctx).is_empty());
+    assert!(indexed_paths(&env, &ctx).is_empty());
 }
 
 #[test]
@@ -1029,7 +1029,7 @@ fn malformed_rows_are_skipped() {
     queue(&env, &ctx, "a.txt", Some("/"), None);
     assert_eq!(drain(&ctx), 2);
     assert_eq!(queued(&env, &ctx), 0);
-    assert!(live_paths(&env, &ctx).is_empty());
+    assert!(indexed_paths(&env, &ctx).is_empty());
 }
 
 #[test]
@@ -1054,7 +1054,7 @@ fn a_change_to_something_unreadable_is_left_for_the_scan() {
         renamed: None,
     });
     // Nothing was decided about rows it could not check.
-    assert_eq!(live_paths(&env, &ctx), ["a.txt"]);
+    assert_eq!(indexed_paths(&env, &ctx), ["a.txt"]);
     // Below a root that is not a folder there is nothing at all.
     assert_eq!(entry(&env.path("a.txt"), "x"), Entry::Gone);
 }
@@ -1086,11 +1086,11 @@ fn the_indexer_starts_at_the_end_of_the_journal() {
     assert_eq!(position(&env, &ctx), None);
     assert_eq!(drain(&ctx), 0);
     assert_eq!(position(&env, &ctx), Some(1));
-    assert!(live_paths(&env, &ctx).is_empty());
+    assert!(indexed_paths(&env, &ctx).is_empty());
     queue(&env, &ctx, "after.txt", None, None);
     assert_eq!(drain(&ctx), 1);
     assert_eq!(position(&env, &ctx), Some(2));
-    assert_eq!(live_paths(&env, &ctx), ["after.txt"]);
+    assert_eq!(indexed_paths(&env, &ctx), ["after.txt"]);
 }
 
 #[test]
@@ -1107,7 +1107,7 @@ fn a_restart_resumes_from_the_saved_position() {
     assert_eq!(restarted.position().unwrap(), 1);
     assert_eq!(restarted.drain().unwrap(), 1);
     assert_eq!(restarted.drain().unwrap(), 0);
-    assert_eq!(live_paths(&env, &ctx), ["a.txt", "b.txt"]);
+    assert_eq!(indexed_paths(&env, &ctx), ["a.txt", "b.txt"]);
     assert_eq!(env.signals(), 2);
 }
 
@@ -1123,7 +1123,7 @@ fn rows_the_indexer_wrote_are_passed_over_and_ocr_rows_applied() {
     append(&env, &ctx, "scan", &["found.txt"]);
     append(&env, &ctx, "ocr", &["ocred.pdf"]);
     assert_eq!(drain(&ctx), 3);
-    assert_eq!(live_paths(&env, &ctx), ["ocred.pdf"]);
+    assert_eq!(indexed_paths(&env, &ctx), ["ocred.pdf"]);
     assert_eq!(queued(&env, &ctx), 0);
     assert!(applies(&row("a", None, None, None, None)));
     for (source, applied) in [
@@ -1155,7 +1155,7 @@ fn applying_the_journal_writes_nothing_to_it() {
     std::fs::remove_dir_all(env.path("e")).unwrap();
     queue(&env, &ctx, "e", None, None);
     drain(&ctx);
-    assert_eq!(live_paths(&env, &ctx), ["g/a.txt"]);
+    assert_eq!(indexed_paths(&env, &ctx), ["g/a.txt"]);
     assert_eq!(
         journal(&env),
         [
@@ -1184,7 +1184,7 @@ fn pruned_rows_it_never_read_request_a_scan_and_move_it_to_the_end() {
     assert!(ctx.take_scan_request());
     assert_eq!(position(&env, &ctx), Some(2));
     // The scan covers them; the reader applied nothing.
-    assert!(live_paths(&env, &ctx).is_empty());
+    assert!(indexed_paths(&env, &ctx).is_empty());
     // Read up to the oldest row left: nothing is missing.
     queue(&env, &ctx, "a.txt", None, None);
     env.client()
@@ -1192,7 +1192,7 @@ fn pruned_rows_it_never_read_request_a_scan_and_move_it_to_the_end() {
         .unwrap();
     assert_eq!(drain(&ctx), 1);
     assert!(!ctx.take_scan_request());
-    assert_eq!(live_paths(&env, &ctx), ["a.txt"]);
+    assert_eq!(indexed_paths(&env, &ctx), ["a.txt"]);
 }
 
 #[test]
@@ -1204,7 +1204,7 @@ fn rows_of_another_root_move_the_position_along() {
     db::append_changes(&mut env.client(), other, "other", "api", &[NewChange::path("a.txt")]).unwrap();
     assert_eq!(drain(&ctx), 0);
     assert_eq!(position(&env, &ctx), Some(1));
-    assert!(live_paths(&env, &ctx).is_empty());
+    assert!(indexed_paths(&env, &ctx).is_empty());
     // Nothing new: no write.
     assert_eq!(drain(&ctx), 0);
     assert_eq!(position(&env, &ctx), Some(1));
@@ -1247,7 +1247,7 @@ fn the_loop_wakes_on_a_notification() {
     });
     assert!(queued_later < Duration::from_secs(10), "{queued_later:?}");
     assert_eq!(work.step(Duration::from_millis(10)), 1);
-    assert_eq!(live_paths(&env, &ctx), ["a.txt"]);
+    assert_eq!(indexed_paths(&env, &ctx), ["a.txt"]);
 }
 
 #[test]

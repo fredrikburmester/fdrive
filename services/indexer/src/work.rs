@@ -21,7 +21,7 @@ use crate::db::{self, ChangeRow};
 use crate::failures::describe;
 use crate::indexer::{
     ContentHint, FileStat, Renamed, RootContext, Version, carry_stamp, folder_chain, record_folders, unchanged_in_db,
-    walk_tree, watch_index_with, watch_mark_deleted, watch_rename,
+    walk_tree, watch_delete, watch_index_with, watch_rename,
 };
 use crate::journal::Source;
 use crate::log::log;
@@ -331,7 +331,7 @@ impl Applier {
             Entry::Gone => {
                 self.pool.wait_idle();
                 // A file or a folder: rows at the path and below it.
-                watch_mark_deleted(&self.ctx, path, true);
+                watch_delete(&self.ctx, path, true);
             }
             Entry::Unknown => log(&format!(
                 "[{}] work: cannot read {path}; leaving it to the next scan",

@@ -15,7 +15,7 @@ use crate::config::{Config, ROOT_ID, ROOT_NAME};
 use crate::db::{self, Db};
 use crate::failures::FileResult;
 use crate::indexer::{
-    FileStat, RootContext, scan_once, watch_folder, watch_index, watch_mark_deleted, watch_rename, work_features,
+    FileStat, RootContext, scan_once, watch_delete, watch_folder, watch_index, watch_rename, work_features,
 };
 use crate::journal::{Source, with_source};
 use crate::log::log;
@@ -69,11 +69,11 @@ impl WatchHandler for Handler {
         })
     }
 
-    fn mark_deleted(&self, rel: &str, is_dir: bool) -> usize {
+    fn delete(&self, rel: &str, is_dir: bool) -> usize {
         if !self.0.files_folder_verified() {
             return 0;
         }
-        with_source(Some(Source::Watcher), || watch_mark_deleted(&self.0, rel, is_dir))
+        with_source(Some(Source::Watcher), || watch_delete(&self.0, rel, is_dir))
     }
 
     fn rename(&self, old_rel: &str, new_rel: &str, is_dir: bool) -> usize {
@@ -164,7 +164,7 @@ pub struct RootLoop {
 impl RootLoop {
     /// The loop, its first scan due an interval after the last one that finished.
     /// The scan is due at once when the change journal cannot cover the time since: no
-    /// scan finished, the index has no live rows, or the indexer has no position in the
+    /// scan finished, the index has no file rows, or the indexer has no position in the
     /// journal yet. Runs before the journal's reader starts, since the reader takes a
     /// position on its first look. A gap the reader finds later (rows pruned before it read
     /// them) asks for a scan itself.

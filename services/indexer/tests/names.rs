@@ -12,7 +12,7 @@ use common::root_env::{Env, fv, wait_until};
 use fdrive_indexer::config::{Config, ROOT_ID, ROOT_NAME};
 use fdrive_indexer::db::{self, Db, FolderRow, NewFile};
 use fdrive_indexer::features::FeatureValues;
-use fdrive_indexer::indexer::{RootContext, scan_once, watch_folder, watch_mark_deleted, watch_rename};
+use fdrive_indexer::indexer::{RootContext, scan_once, watch_delete, watch_folder, watch_rename};
 use fdrive_indexer::names::{MAX_PENDING_PATHS, MAX_PLACES, MAX_WORDS, NameHit, NameIndex, NameSearch, Place};
 use fdrive_indexer::server::{AppState, Jobs, router};
 use http_body_util::BodyExt;
@@ -422,7 +422,7 @@ fn follows_what_scans_and_the_watcher_write() {
     assert_eq!(find(&names, ctx.root_id, "raport").0, ["Kurser/Akustik/Rapport.txt"]);
 
     std::fs::remove_file(env.path("Kurser/Akustik/Rapport.txt")).unwrap();
-    watch_mark_deleted(&ctx, "Kurser/Akustik/Rapport.txt", false);
+    watch_delete(&ctx, "Kurser/Akustik/Rapport.txt", false);
     settle(&names);
     assert!(find(&names, ctx.root_id, "rapport").0.is_empty());
 

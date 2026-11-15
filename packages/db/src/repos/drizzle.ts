@@ -1096,11 +1096,7 @@ export function createFilesFolderFacts(db: Db) {
       return row.id;
     },
     async holdsFiles(): Promise<boolean> {
-      const [file] = await db
-        .select({ id: files.id })
-        .from(files)
-        .where(isNull(files.deletedAt))
-        .limit(1);
+      const [file] = await db.select({ id: files.id }).from(files).limit(1);
       if (file !== undefined) return true;
       const [user] = await db.select({ username: localUsers.username }).from(localUsers).limit(1);
       return user !== undefined;

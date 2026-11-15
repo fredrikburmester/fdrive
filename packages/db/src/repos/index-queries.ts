@@ -1,4 +1,4 @@
-import { and, asc, count, desc, eq, inArray, isNotNull, isNull, ne, sql } from "drizzle-orm";
+import { and, asc, count, desc, eq, inArray, isNotNull, ne, sql } from "drizzle-orm";
 import type { Db } from "../index.js";
 import { imageEmbeddings, thumbnails } from "../schema/app.js";
 import { chunks, files, folders } from "../schema/idx.js";
@@ -74,7 +74,6 @@ export interface IndexedFile {
   readonly textChars: number;
   readonly error: string | null;
   readonly indexedAt: Date | null;
-  readonly deletedAt: Date | null;
 }
 
 function toIndexedFile(row: typeof files.$inferSelect): IndexedFile {
@@ -92,7 +91,6 @@ function toIndexedFile(row: typeof files.$inferSelect): IndexedFile {
     textChars: row.textChars,
     error: row.error,
     indexedAt: row.indexedAt,
-    deletedAt: row.deletedAt,
   };
 }
 
@@ -104,7 +102,7 @@ export interface IndexRef {
 }
 
 /**
- * A live file's digest and what stands behind it, see
+ * An indexed file's digest and what stands behind it, see
  * `IndexQueries.contentAt`. `inode` and `ctimeNs` stamp `sha256`: the file
  * the indexer read for it or the API published it as, or null when neither
  * stands behind it (see `idx.files.inode`).
@@ -187,13 +185,13 @@ export interface FilenameOptions extends ScopedReadOptions {
   readonly recency?: RecencyDecay;
 }
 
-/** The total live bytes and file count under one directory, see `IndexQueries.subtreeSize`. */
+/** The total bytes and file count under one directory, see `IndexQueries.subtreeSize`. */
 export interface SubtreeSize {
   readonly bytes: number;
   readonly files: number;
 }
 
-/** The live bytes of one file extension, see `IndexQueries.bytesByExtension`. */
+/** The bytes of one file extension, see `IndexQueries.bytesByExtension`. */
 export interface ExtensionBytes {
   readonly ext: string;
   readonly bytes: number;
@@ -257,7 +255,7 @@ export interface SimilarFile {
   readonly similarity: number;
 }
 
-/** One result from `searchImages`: a live file whose thumbnail's embedding matched, ranked by cosine similarity (1 - distance). */
+/** One result from `searchImages`: a file whose thumbnail's embedding matched, ranked by cosine similarity (1 - distance). */
 export interface ImageSearchHit {
   readonly rootId: number;
   readonly path: string;
@@ -360,11 +358,11 @@ export interface IndexQueries {
   ): Promise<FolderHit[]>;
   /** Loads files by id, in no particular order; missing ids are skipped. */
   filesByIds(ids: readonly number[]): Promise<IndexedFile[]>;
-  /** The (non-deleted) file at exactly `path` in `rootId`, `null` when absent. */
+  /** The file at exactly `path` in `rootId`, `null` when absent. */
   fileByPath(rootId: number, path: string): Promise<IndexedFile | null>;
   /**
-   * The live rows at exactly these `(rootId, path)` pairs, in one query
-   * and no particular order; a pair without a live row is left out. Like
+   * The rows at exactly these `(rootId, path)` pairs, in one query
+   * and no particular order; a pair without a row is left out. Like
    * `fileByPath` it applies no scope of its own: callers map each path
    * through the caller's scopes first.
    */
@@ -391,7 +389,7 @@ export interface IndexQueries {
   /** Aggregate file and chunk counts over a scope. */
   stats(scopePrefixes: readonly ScopePrefix[]): Promise<IndexStats>;
   /**
-   * The total live (non-deleted) bytes and file count under `rootId` at
+   * The total bytes and file count under `rootId` at
    * exactly `relativePrefix` or nested under it (`""` matches the whole
    * root), intersected with `scopePrefixes` so a caller never sees bytes
    * from outside their own scopes. `relativePrefix` is root-relative
@@ -407,7 +405,7 @@ export interface IndexQueries {
     excludedRelativePrefixes?: readonly string[],
   ): Promise<SubtreeSize>;
   /**
-   * The live bytes in scope per file extension (`ext` as the indexer
+   * The bytes in scope per file extension (`ext` as the indexer
    * stores it, `""` for none), in no particular order.
    */
   bytesByExtension(scopePrefixes: readonly ScopePrefix[]): Promise<ExtensionBytes[]>;
@@ -582,7 +580,6 @@ export function createIndexQueries(db: Db): IndexQueries {
           and(
             scopeCondition(scopePrefixes),
             exclusionCondition(options.exclude),
-            isNull(files.deletedAt),
             isNotNull(chunks.embedding),
           ),
         )
@@ -611,7 +608,6 @@ export function createIndexQueries(db: Db): IndexQueries {
           and(
             scopeCondition(scopePrefixes),
             exclusionCondition(options.exclude),
-            isNull(files.deletedAt),
             sql`${chunks.tsv} @@ to_tsquery('simple', ${tsquery})`,
           ),
         )
@@ -663,12 +659,7 @@ export function createIndexQueries(db: Db): IndexQueries {
         })
         .from(files)
         .where(
-          and(
-            scopeCondition(scopePrefixes),
-            exclusionCondition(options.exclude),
-            isNull(files.deletedAt),
-            matchCondition,
-          ),
+          and(scopeCondition(scopePrefixes), exclusionCondition(options.exclude), matchCondition),
         )
         // A word in the name says more than the same word in a folder above
         // it, which every file in that folder shares.
@@ -731,7 +722,7 @@ export function createIndexQueries(db: Db): IndexQueries {
       const rows = await db
         .select()
         .from(files)
-        .where(and(inArray(files.id, ids as number[]), isNull(files.deletedAt)));
+        .where(inArray(files.id, ids as number[]));
       return rows.map(toIndexedFile);
     },
 
@@ -739,7 +730,7 @@ export function createIndexQueries(db: Db): IndexQueries {
       const [row] = await db
         .select()
         .from(files)
-        .where(and(eq(files.rootId, rootId), eq(files.path, path), isNull(files.deletedAt)));
+        .where(and(eq(files.rootId, rootId), eq(files.path, path)));
       return row ? toIndexedFile(row) : null;
     },
 
@@ -760,20 +751,14 @@ export function createIndexQueries(db: Db): IndexQueries {
           ctimeNs: files.ctimeNs,
         })
         .from(files)
-        .where(
-          and(inArray(files.rootId, rootIds), inArray(files.path, paths), isNull(files.deletedAt)),
-        );
+        .where(and(inArray(files.rootId, rootIds), inArray(files.path, paths)));
       // Roots and paths are matched separately above; only the exact pairs asked for count.
       const wanted = new Set(refs.map((ref) => JSON.stringify([ref.rootId, ref.path])));
       return rows.filter((row) => wanted.has(JSON.stringify([row.rootId, row.path])));
     },
 
     async listFiles(scopePrefixes, filter, order, limit, offset = 0) {
-      const conditions = [
-        scopeCondition(scopePrefixes),
-        exclusionCondition(filter.exclude),
-        isNull(files.deletedAt),
-      ];
+      const conditions = [scopeCondition(scopePrefixes), exclusionCondition(filter.exclude)];
       if (filter.nameContains !== undefined) {
         const pattern = `%${escapeLikePattern(filter.nameContains)}%`;
         conditions.push(sql`${files.name} ILIKE ${pattern} ESCAPE '\\'`);
@@ -821,7 +806,6 @@ export function createIndexQueries(db: Db): IndexQueries {
           and(
             scopeCondition(scopePrefixes),
             exclusionCondition(options.exclude),
-            isNull(files.deletedAt),
             eq(files.sha256, sha256),
             ne(files.id, excludeId),
           ),
@@ -839,7 +823,7 @@ export function createIndexQueries(db: Db): IndexQueries {
           bytes: sql<number>`coalesce(sum(${files.size}), 0)`,
         })
         .from(files)
-        .where(and(scope, isNull(files.deletedAt)))
+        .where(scope)
         .groupBy(files.textStatus);
 
       const filesTracked = byStatusRows.reduce((sum, row) => sum + Number(row.files), 0);
@@ -851,7 +835,7 @@ export function createIndexQueries(db: Db): IndexQueries {
         })
         .from(chunks)
         .innerJoin(files, eq(files.id, chunks.fileId))
-        .where(and(scope, isNull(files.deletedAt)));
+        .where(scope);
 
       return {
         filesTracked,
@@ -885,7 +869,6 @@ export function createIndexQueries(db: Db): IndexQueries {
         .where(
           and(
             scopeCondition(scopePrefixes),
-            isNull(files.deletedAt),
             eq(files.rootId, rootId),
             pathCondition,
             ...exclusionConditions,
@@ -899,7 +882,7 @@ export function createIndexQueries(db: Db): IndexQueries {
       const rows = await db
         .select({ ext: files.ext, bytes: sql<number>`coalesce(sum(${files.size}), 0)` })
         .from(files)
-        .where(and(scopeCondition(scopePrefixes), isNull(files.deletedAt)))
+        .where(scopeCondition(scopePrefixes))
         .groupBy(files.ext);
       return rows.map((row) => ({ ext: row.ext, bytes: Number(row.bytes) }));
     },
@@ -948,7 +931,6 @@ export function createIndexQueries(db: Db): IndexQueries {
           and(
             scopeCondition(scopePrefixes),
             exclusionCondition(options.exclude),
-            isNull(files.deletedAt),
             isNotNull(files.sha256),
             sql`${files.size} >= ${minSize}`,
           ),
@@ -987,7 +969,6 @@ export function createIndexQueries(db: Db): IndexQueries {
           and(
             scopeCondition(scopePrefixes),
             exclusionCondition(options.exclude),
-            isNull(files.deletedAt),
             ne(files.id, fileId),
             isNotNull(chunks.embedding),
           ),
@@ -1003,7 +984,7 @@ export function createIndexQueries(db: Db): IndexQueries {
       const rows = await db
         .select()
         .from(files)
-        .where(and(scopeCondition(scopePrefixes), isNull(files.deletedAt)))
+        .where(scopeCondition(scopePrefixes))
         .orderBy(desc(files.mtimeNs))
         .limit(limit);
       return rows.map(toIndexedFile);
@@ -1027,7 +1008,6 @@ export function createIndexQueries(db: Db): IndexQueries {
           and(
             scopeCondition(scopePrefixes),
             exclusionCondition(options.exclude),
-            isNull(files.deletedAt),
             inArray(files.ext, [...exts]),
             after === undefined
               ? undefined
@@ -1049,7 +1029,7 @@ export function createIndexQueries(db: Db): IndexQueries {
           longitude: files.longitude,
         })
         .from(files)
-        .where(and(eq(files.rootId, rootId), eq(files.path, path), isNull(files.deletedAt)));
+        .where(and(eq(files.rootId, rootId), eq(files.path, path)));
       return row ?? null;
     },
 
@@ -1089,7 +1069,6 @@ export function createIndexQueries(db: Db): IndexQueries {
           and(
             scopeCondition(scopePrefixes),
             exclusionCondition(options.exclude),
-            isNull(files.deletedAt),
             eq(imageEmbeddings.model, model),
           ),
         )

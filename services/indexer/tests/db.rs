@@ -49,7 +49,6 @@ fn row(size: i64, mtime_ns: i64, sha: &str, embedded: bool, failed: bool) -> Man
         size,
         mtime_ns,
         status: "pending".to_owned(),
-        deleted: false,
         sha256: Some(sha.to_owned()),
         image_embedded: embedded,
         thumbnail_failed: failed,
@@ -170,7 +169,7 @@ fn folder_rows_follow_deletes_and_renames() {
     let root = ROOT_ID;
     db::sync_folders(&mut c, root, &folders(&["a", "a/b", "a/b/c", "ab", "x", "x/b"]), None).unwrap();
     // A file's delete drops a folder row only at that exact path.
-    db::mark_deleted(&mut c, root, "a/b", false).unwrap();
+    db::delete_paths(&mut c, root, "a/b", false).unwrap();
     let paths = |c: &mut Client| folder_rows(c, root).into_iter().map(|r| r.0).collect::<Vec<_>>();
     assert_eq!(paths(&mut c), ["a", "a/b/c", "ab", "x", "x/b"]);
     db::sync_folders(&mut c, root, &folders(&["a/b"]), None).unwrap();
@@ -192,7 +191,7 @@ fn folder_rows_follow_deletes_and_renames() {
     db::rename_paths(&mut c, root, "ab", "ac", false).unwrap();
     assert_eq!(paths(&mut c), ["ab", "x", "x/b", "x/b/c"]);
     // A folder's delete drops it and everything below it.
-    db::mark_deleted(&mut c, root, "x", true).unwrap();
+    db::delete_paths(&mut c, root, "x", true).unwrap();
     assert_eq!(paths(&mut c), ["ab"]);
 }
 
@@ -250,7 +249,7 @@ fn scan_manifest_flags_only_unresolved_thumbnail_failures_of_its_root() {
 }
 
 #[test]
-fn text_less_pdfs_move_to_ocr_only_when_live() {
+fn text_less_pdfs_of_the_root_move_to_ocr() {
     let (_, mut c) = setup();
     let root = ROOT_ID;
     let other = common::other_root(&mut c, "photos");
@@ -258,13 +257,11 @@ fn text_less_pdfs_move_to_ocr_only_when_live() {
         (root, "scan.pdf", ".pdf", "no_text"),
         (root, "photo.jpg", ".jpg", "no_text"),
         (root, "text.pdf", ".pdf", "indexed"),
-        (root, "gone.pdf", ".pdf", "no_text"),
         (other, "other.pdf", ".pdf", "no_text"),
     ] {
         let id = add(&mut c, r, path, ext, 1, 1, "sha");
         db::update_file_status(&mut c, id, status, 0, None).unwrap();
     }
-    db::mark_deleted(&mut c, root, "gone.pdf", false).unwrap();
     assert_eq!(db::mark_pdfs_skipped_by_ocr(&mut c, root).unwrap(), 1);
     let statuses: HashMap<String, String> = manifest(&mut c, root)
         .into_iter()
@@ -273,7 +270,6 @@ fn text_less_pdfs_move_to_ocr_only_when_live() {
     assert_eq!(statuses["scan.pdf"], "disabled:search_ocr");
     assert_eq!(statuses["photo.jpg"], "no_text");
     assert_eq!(statuses["text.pdf"], "indexed");
-    assert_eq!(statuses["gone.pdf"], "no_text");
     assert_eq!(status(&mut c, other, "other.pdf"), "no_text");
     assert_eq!(db::mark_pdfs_skipped_by_ocr(&mut c, root).unwrap(), 0);
 }
@@ -285,7 +281,6 @@ fn upsert_resets_to_pending_and_drops_chunks() {
     let id = add(&mut c, root, "a.txt", ".txt", 10, 1, "sha1");
     db::insert_chunks(&mut c, id, &["hello".to_owned()], &[None]).unwrap();
     db::update_file_status(&mut c, id, "indexed", 5, Some("old")).unwrap();
-    db::mark_deleted(&mut c, root, "a.txt", false).unwrap();
     assert_eq!(add(&mut c, root, "a.txt", ".txt", 20, 2, "sha2"), id);
     let row = db::file_row(&mut c, root, "a.txt").unwrap().unwrap();
     assert_eq!(
@@ -293,14 +288,54 @@ fn upsert_resets_to_pending_and_drops_chunks() {
             row.size,
             row.mtime_ns,
             row.status.as_str(),
-            row.deleted,
             row.sha256.as_deref(),
             row.error
         ),
-        (20, 2, "pending", false, Some("sha2"), None)
+        (20, 2, "pending", Some("sha2"), None)
     );
     assert_eq!(db::count(&mut c, "idx.chunks").unwrap(), 0);
     assert!(db::file_row(&mut c, root, "missing.txt").unwrap().is_none());
+}
+
+#[test]
+fn a_deleted_files_row_and_its_chunks_are_gone() {
+    let (_, mut c) = setup();
+    let root = ROOT_ID;
+    let gone = add(&mut c, root, "a.txt", ".txt", 10, 1, "sha1");
+    db::insert_chunks(&mut c, gone, &["hello".to_owned()], &[Some(vec![0.1; 384])]).unwrap();
+    let kept = add(&mut c, root, "b.txt", ".txt", 10, 1, "sha2");
+    db::insert_chunks(&mut c, kept, &["world".to_owned()], &[None]).unwrap();
+    assert_eq!(db::delete_paths(&mut c, root, "a.txt", false).unwrap().files, [gone]);
+    assert!(db::file_row(&mut c, root, "a.txt").unwrap().is_none());
+    let chunks: Vec<i64> = c
+        .query(r#"SELECT file_id FROM "idx"."chunks""#, &[])
+        .unwrap()
+        .iter()
+        .map(|r| r.get(0))
+        .collect();
+    assert_eq!(chunks, [kept]);
+    // The same path indexed again is a new row.
+    assert_ne!(add(&mut c, root, "a.txt", ".txt", 10, 1, "sha1"), gone);
+}
+
+#[test]
+fn no_query_reads_a_deleted_at_column() {
+    let (_, mut c) = setup();
+    let column: Option<String> = c
+        .query_opt(
+            "SELECT column_name::text FROM information_schema.columns \
+             WHERE table_schema = 'idx' AND table_name = 'files' AND column_name = 'deleted_at'",
+            &[],
+        )
+        .unwrap()
+        .map(|r| r.get(0));
+    assert_eq!(column, None);
+    let sources = std::fs::read_dir(concat!(env!("CARGO_MANIFEST_DIR"), "/src")).unwrap();
+    for source in sources {
+        let path = source.unwrap().path();
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(!text.contains("deleted_at"), "{} reads deleted_at", path.display());
+    }
 }
 
 fn file(root_id: i64, sha256: &str) -> NewFile<'_> {
@@ -359,7 +394,7 @@ fn a_stamp_is_set_only_on_the_row_that_was_read() {
     assert_eq!(db::file_row(&mut c, root, "a.txt").unwrap().unwrap().stamp, None);
     assert!(db::set_stamp(&mut c, root, "a.txt", "sha1", 10, 1, stamp).unwrap());
     assert_eq!(db::file_row(&mut c, root, "a.txt").unwrap().unwrap().stamp, Some(stamp));
-    db::mark_deleted(&mut c, root, "a.txt", false).unwrap();
+    db::delete_paths(&mut c, root, "a.txt", false).unwrap();
     assert!(!db::set_stamp(&mut c, root, "a.txt", "sha1", 10, 1, stamp).unwrap());
 }
 
@@ -402,25 +437,30 @@ fn indexed_and_error_marks() {
 }
 
 #[test]
-fn mark_deleted_files_and_subtrees() {
+fn delete_paths_deletes_files_and_subtrees() {
     let (_, mut c) = setup();
     let root = ROOT_ID;
-    assert!(db::mark_deleted(&mut c, root, "never.txt", false).unwrap().is_empty());
+    assert!(
+        db::delete_paths(&mut c, root, "never.txt", false)
+            .unwrap()
+            .files
+            .is_empty()
+    );
     let a = add(&mut c, root, "dir/a.txt", ".txt", 1, 1, "s1");
     add(&mut c, root, "dir/b.txt", ".txt", 1, 1, "s2");
     add(&mut c, root, "dir.txt", ".txt", 1, 1, "s3");
     add(&mut c, root, "dirx/c.txt", ".txt", 1, 1, "s4");
     db::insert_chunks(&mut c, a, &["x".to_owned()], &[None]).unwrap();
     // A file delete never touches the subtree of a same-named directory.
-    assert!(db::mark_deleted(&mut c, root, "dir", false).unwrap().is_empty());
-    assert_eq!(db::mark_deleted(&mut c, root, "dir", true).unwrap().len(), 2);
-    let m = manifest(&mut c, root);
-    assert!(m["dir/a.txt"].deleted && m["dir/b.txt"].deleted);
-    assert!(!m["dir.txt"].deleted && !m["dirx/c.txt"].deleted);
+    assert!(db::delete_paths(&mut c, root, "dir", false).unwrap().files.is_empty());
+    assert_eq!(db::delete_paths(&mut c, root, "dir", true).unwrap().files.len(), 2);
+    let mut paths: Vec<String> = manifest(&mut c, root).into_keys().collect();
+    paths.sort();
+    assert_eq!(paths, ["dir.txt", "dirx/c.txt"]);
     assert_eq!(db::count(&mut c, "idx.chunks").unwrap(), 0);
-    // Already deleted rows are not deleted again.
-    assert!(db::mark_deleted(&mut c, root, "dir", true).unwrap().is_empty());
-    assert_eq!(db::mark_deleted(&mut c, root, "dir.txt", false).unwrap().len(), 1);
+    // Rows already gone are not counted again.
+    assert!(db::delete_paths(&mut c, root, "dir", true).unwrap().files.is_empty());
+    assert_eq!(db::delete_paths(&mut c, root, "dir.txt", false).unwrap().files.len(), 1);
 }
 
 #[test]
@@ -429,12 +469,10 @@ fn rename_a_file_over_a_stale_destination() {
     let root = ROOT_ID;
     add(&mut c, root, "old.txt", ".txt", 1, 1, "sha1");
     add(&mut c, root, "new.txt", ".txt", 1, 1, "sha2");
-    db::mark_deleted(&mut c, root, "new.txt", false).unwrap();
     assert_eq!(db::rename_paths(&mut c, root, "old.txt", "new.txt", false).unwrap(), 1);
     let m = manifest(&mut c, root);
     assert_eq!(m.keys().collect::<Vec<_>>(), vec!["new.txt"]);
     assert_eq!(m["new.txt"].sha256.as_deref(), Some("sha1"));
-    assert!(!m["new.txt"].deleted);
     let name: String = c
         .query_one(r#"SELECT name FROM "idx"."files" WHERE path = 'new.txt'"#, &[])
         .unwrap()
@@ -457,16 +495,11 @@ fn rename_a_directory_rekeys_its_subtree() {
     add(&mut c, root, "dirx/c.txt", ".txt", 1, 1, "s3");
     // A stale row where a moved file lands is replaced.
     add(&mut c, root, "moved/a.txt", ".txt", 1, 1, "stale");
-    add(&mut c, root, "dir/gone.txt", ".txt", 1, 1, "s4");
-    db::mark_deleted(&mut c, root, "dir/gone.txt", false).unwrap();
     assert_eq!(db::rename_paths(&mut c, root, "dir", "moved", true).unwrap(), 2);
     let m = manifest(&mut c, root);
     let mut paths: Vec<&String> = m.keys().collect();
     paths.sort();
-    assert_eq!(
-        paths,
-        vec!["dir/gone.txt", "dirx/c.txt", "moved/a.txt", "moved/sub/b.txt"]
-    );
+    assert_eq!(paths, vec!["dirx/c.txt", "moved/a.txt", "moved/sub/b.txt"]);
     assert_eq!(m["moved/a.txt"].sha256.as_deref(), Some("s1"));
 }
 
@@ -505,7 +538,7 @@ fn the_last_scan_counts_only_while_the_journal_covers_the_time_since() {
     // Nothing indexed: a first start, or a cleared or restored index.
     assert_eq!(age(&mut c), None);
     add(&mut c, root, "a.txt", ".txt", 1, 1, "sha");
-    db::mark_deleted(&mut c, root, "a.txt", false).unwrap();
+    db::delete_paths(&mut c, root, "a.txt", false).unwrap();
     assert_eq!(age(&mut c), None);
     add(&mut c, root, "b.txt", ".txt", 1, 1, "sha");
     // No position in the journal: only another consumer, or another root, has one.
@@ -540,7 +573,7 @@ fn scan_lifecycle_and_stats() {
     db::update_file_status(&mut c, f2, "error", 0, Some("boom")).unwrap();
     let f3 = add(&mut c, root, "c.txt", ".txt", 1, 1, "sha3");
     db::update_file_status(&mut c, f3, "error", 0, Some("deleted")).unwrap();
-    db::mark_deleted(&mut c, root, "c.txt", false).unwrap();
+    db::delete_paths(&mut c, root, "c.txt", false).unwrap();
     add(&mut c, root, "d.txt", ".txt", 1, 1, "sha4");
     let (scan_id, started_at) = db::start_scan(&mut c, root).unwrap();
     assert!(scan_id > 0 && started_at <= Utc::now());
@@ -594,9 +627,9 @@ fn sweep_spares_rows_written_after_the_scan_started() {
         .map(str::to_owned)
         .to_vec();
     assert_eq!(db::sweep_vanished(&mut c, root, &vanished, started_at).unwrap(), 2);
-    let m = manifest(&mut c, root);
-    assert!(m["vanished.txt"].deleted && m["old.txt"].deleted);
-    assert!(!m["kept.txt"].deleted && !m["recreated.txt"].deleted);
+    let mut paths: Vec<String> = manifest(&mut c, root).into_keys().collect();
+    paths.sort();
+    assert_eq!(paths, ["kept.txt", "recreated.txt"]);
     assert_eq!(db::count(&mut c, "idx.chunks").unwrap(), 0);
     assert_eq!(db::sweep_vanished(&mut c, root, &vanished, started_at).unwrap(), 0);
     assert_eq!(db::sweep_vanished(&mut c, root, &[], started_at).unwrap(), 0);
@@ -616,7 +649,7 @@ fn sweep_counts_each_row_once_across_batches() {
         &[&(total as i32)],
     )
     .unwrap();
-    db::mark_deleted(&mut c, root, "f1.txt", false).unwrap();
+    db::delete_paths(&mut c, root, "f1.txt", false).unwrap();
     let (_, started_at) = db::start_scan(&mut c, root).unwrap();
     let mut paths: Vec<String> = (1..=total).map(|n| format!("f{n}.txt")).collect();
     // Duplicates and unknown paths count nothing.
@@ -868,7 +901,7 @@ fn media_files_skip_deleted_and_unhashed_rows() {
     add(&mut c, root, "a.png", ".png", 100, 1, "sha1");
     add(&mut c, root, "b.pdf", ".pdf", 200, 1, "sha2");
     add(&mut c, root, "import.png", ".png", 100, 1, "x");
-    db::mark_deleted(&mut c, root, "b.pdf", false).unwrap();
+    db::delete_paths(&mut c, root, "b.pdf", false).unwrap();
     c.batch_execute(r#"UPDATE "idx"."files" SET sha256 = NULL WHERE path = 'import.png'"#)
         .unwrap();
     assert_eq!(
@@ -904,16 +937,14 @@ fn image_embeddings_upsert_replaces_model() {
 fn mark_pending_whole_root_and_subtree() {
     let (_, mut c) = setup();
     let root = ROOT_ID;
-    for path in ["dir/a.txt", "dir", "other.txt", "gone.txt"] {
+    for path in ["dir/a.txt", "dir", "other.txt"] {
         let id = add(&mut c, root, path, ".txt", 1, 1, "sha");
         db::update_file_status(&mut c, id, "indexed", 1, None).unwrap();
     }
-    db::mark_deleted(&mut c, root, "gone.txt", false).unwrap();
     assert_eq!(db::mark_pending(&mut c, root, Some(("dir", "dir/"))).unwrap(), 2);
     assert_eq!(status(&mut c, root, "other.txt"), "indexed");
     assert_eq!(status(&mut c, root, "dir/a.txt"), "pending");
     assert_eq!(db::mark_pending(&mut c, root, None).unwrap(), 3);
-    assert_eq!(status(&mut c, root, "gone.txt"), "indexed");
 }
 
 #[test]
@@ -980,7 +1011,7 @@ fn every_query_reports_a_missing_schema_as_an_error() {
     assert!(db::set_chunk_embeddings(c, &[(1, vec![0.1; 384])]).is_err());
     assert!(db::mark_file_indexed(c, 1, "a").is_err());
     assert!(db::mark_file_error(c, 1, "a", "e").is_err());
-    assert!(db::mark_deleted(c, 1, "a", false).is_err());
+    assert!(db::delete_paths(c, 1, "a", false).is_err());
     assert!(db::rename_paths(c, 1, "a", "b", false).is_err());
     assert!(db::rename_paths(c, 1, "a", "b", true).is_err());
     assert!(db::start_scan(c, 1).is_err());

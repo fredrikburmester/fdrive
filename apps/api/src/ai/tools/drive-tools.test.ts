@@ -569,7 +569,6 @@ describe("read_excerpts", () => {
       textChars: 0,
       error: null,
       indexedAt: null,
-      deletedAt: null,
     };
   }
 

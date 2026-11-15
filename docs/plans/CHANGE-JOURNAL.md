@@ -183,7 +183,7 @@ wait for the app's hourly full check.
 
 ### c) OCR finds PDFs from the index: done
 
-Built on 2026-11-14 ([OCR](../OCR.md#which-pdfs)). The nightly pass reads the live PDFs in
+Built on 2026-11-14 ([OCR](../OCR.md#which-pdfs)). The nightly pass reads the PDFs in
 `idx.files` instead of walking the folder, leaves out fdrive's own folders and every PDF whose
 `sha256` the done-log, `idx.ocr_log`, has a decision for, and checks for a text layer with
 `pdftotext` before it starts `ocrmypdf`. A rewritten or restored PDF is journaled with source

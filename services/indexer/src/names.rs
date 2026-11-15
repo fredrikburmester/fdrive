@@ -1,4 +1,4 @@
-//! The name index: the name of every live file and folder row in a Tantivy index held in
+//! The name index: the name of every file and folder row in a Tantivy index held in
 //! memory, so search finds a name typed with a typo or two. Postgres stays the source of
 //! truth. Each root is built from `idx.files` and `idx.folders` when the indexer starts and
 //! again after every completed scan, and every name row the indexer writes is reported here
@@ -234,15 +234,15 @@ fn add(pending: &mut HashMap<i64, Pending>, touch: Touch) {
 }
 
 const FILES_OF_ROOT: &str =
-    r#"SELECT id::bigint, path, mtime_ns::bigint FROM "idx"."files" WHERE root_id = $1::bigint AND deleted_at IS NULL"#;
+    r#"SELECT id::bigint, path, mtime_ns::bigint FROM "idx"."files" WHERE root_id = $1::bigint"#;
 const FOLDERS_OF_ROOT: &str =
     r#"SELECT id::bigint, path, mtime_ns::bigint FROM "idx"."folders" WHERE root_id = $1::bigint"#;
 const FILES_AT: &str = r#"SELECT id::bigint, path, mtime_ns::bigint FROM "idx"."files"
-    WHERE root_id = $1::bigint AND deleted_at IS NULL AND path = ANY($2::text[])"#;
+    WHERE root_id = $1::bigint AND path = ANY($2::text[])"#;
 const FOLDERS_AT: &str = r#"SELECT id::bigint, path, mtime_ns::bigint FROM "idx"."folders"
     WHERE root_id = $1::bigint AND path = ANY($2::text[])"#;
 const FILES_UNDER: &str = r#"SELECT id::bigint, path, mtime_ns::bigint FROM "idx"."files"
-    WHERE root_id = $1::bigint AND deleted_at IS NULL AND starts_with(path, $2)"#;
+    WHERE root_id = $1::bigint AND starts_with(path, $2)"#;
 const FOLDERS_UNDER: &str = r#"SELECT id::bigint, path, mtime_ns::bigint FROM "idx"."folders"
     WHERE root_id = $1::bigint AND starts_with(path, $2)"#;
 

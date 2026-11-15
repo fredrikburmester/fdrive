@@ -405,8 +405,39 @@ fn watcher_deletes_and_renames_wait_for_the_marker() {
     );
     std::fs::remove_file(env.path(FILES_MARKER)).unwrap();
     assert_eq!(handler.rename("a.txt", "b.txt", false), 0);
-    assert_eq!(handler.mark_deleted("a.txt", false), 0);
-    assert!(!env.row(&ctx, "a.txt").deleted);
+    assert_eq!(handler.delete("a.txt", false), 0);
+    assert!(env.has_row(&ctx, "a.txt"));
+}
+
+/// A rename the kernel pairs by its cookie moves the file's row; a copy and a delete, as a
+/// move over SMB can arrive, deletes the row and indexes the copy as a new file.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_paired_rename_keeps_the_row_and_an_unpaired_move_makes_a_new_one() {
+    let env = Env::new();
+    let mut cfg = env.config();
+    cfg.watch_debounce = Duration::from_millis(100);
+    let ctx = common::root_env::context_with(cfg, fv(false, true, false, false, false), |_| {});
+    let watcher = start_watcher(&ctx).unwrap();
+    let wait = |done: &dyn Fn() -> bool| common::root_env::wait_until(Duration::from_secs(10), done);
+    env.write("a.txt", b"hello");
+    assert!(wait(&|| env.row_id(&ctx, "a.txt").is_some()));
+    let (id, sha) = env.row_id(&ctx, "a.txt").unwrap();
+
+    std::fs::rename(env.path("a.txt"), env.path("b.txt")).unwrap();
+    assert!(wait(&|| env.row_id(&ctx, "b.txt").is_some()));
+    assert_eq!(env.row_id(&ctx, "b.txt"), Some((id, sha.clone())));
+    assert!(!env.has_row(&ctx, "a.txt"));
+
+    std::fs::copy(env.path("b.txt"), env.path("c.txt")).unwrap();
+    std::fs::remove_file(env.path("b.txt")).unwrap();
+    assert!(wait(
+        &|| env.row_id(&ctx, "c.txt").is_some() && !env.has_row(&ctx, "b.txt")
+    ));
+    let (fresh, fresh_sha) = env.row_id(&ctx, "c.txt").unwrap();
+    assert_ne!(fresh, id);
+    assert_eq!(fresh_sha, sha);
+    watcher.stop();
 }
 
 #[test]
@@ -429,8 +460,8 @@ fn watcher_callbacks_index_delete_and_rename() {
         (Some("watch"), Some("completed"), Some(1))
     );
     assert_eq!(handler.rename("a.txt", "b.txt", false), 1);
-    assert_eq!(handler.mark_deleted("b.txt", false), 1);
-    assert_eq!(handler.mark_deleted("b.txt", false), 0);
+    assert_eq!(handler.delete("b.txt", false), 1);
+    assert_eq!(handler.delete("b.txt", false), 0);
     handler.log("watch: a message");
 
     // A failed job reports an error for every feature it was queued for.

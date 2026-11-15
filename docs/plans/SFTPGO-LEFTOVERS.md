@@ -45,8 +45,6 @@ Recommended on 2026-11-14 and approved by the owner the same day.
     per item plus a row.
 19. **One file-operations service.** MCP's activity proxy and its copy of metadata following
     (`composition.ts` `onMutation`) merge with the fs and Trash routes' recorders.
-20. **Delete removed files from the index.** Tombstones are never purged and every scan loads
-    them, for a sha256 relink guess the API no longer makes.
 
 ## Mac
 
