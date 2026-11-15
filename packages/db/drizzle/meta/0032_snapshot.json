@@ -1,5 +1,5 @@
 {
-  "id": "63431564-ea20-401d-b68c-9f6a66392490",
+  "id": "41c097b3-960f-40ef-9e8b-f8743e1af0ed",
   "prevId": "3e8f8470-2d3c-4a99-9cc3-d3835e09761d",
   "version": "7",
   "dialect": "postgresql",
@@ -1665,12 +1665,6 @@
           "notNull": true,
           "default": false
         },
-        "storage_limit": {
-          "name": "storage_limit",
-          "type": "bigint",
-          "primaryKey": false,
-          "notNull": false
-        },
         "created_at": {
           "name": "created_at",
           "type": "timestamp with time zone",
@@ -2646,6 +2640,12 @@
         },
         "ctime_ns": {
           "name": "ctime_ns",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "previous_ctime_ns": {
+          "name": "previous_ctime_ns",
           "type": "bigint",
           "primaryKey": false,
           "notNull": false

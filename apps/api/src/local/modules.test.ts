@@ -201,7 +201,11 @@ describe("deploymentModules", () => {
       expect(new Set(writes.map(([name]) => name))).toEqual(new Set(["files"]));
       expect(writes.flatMap(([, items]) => items)).toEqual([
         { path: "alice/a.txt", content: expect.objectContaining({ size: 1 }) },
-        { path: "alice/a.txt", targetPath: "alice/b.txt" },
+        {
+          path: "alice/a.txt",
+          targetPath: "alice/b.txt",
+          stamp: expect.objectContaining({ size: 1 }),
+        },
       ]);
     });
 

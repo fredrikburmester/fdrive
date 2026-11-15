@@ -30,7 +30,6 @@ function buildConfig(): AppConfig {
     fdriveTrustedProxyHops: 1,
     nodeEnv: "test",
     fdriveTmpDir: "/tmp",
-    fdriveDesktopRetentionDays: 30,
     fdriveJobMaxBytes: 1_000_000_000,
     fdriveJsonMaxBytes: 1_048_576,
     fdriveShareUploadMaxBytes: 1_000_000_000,

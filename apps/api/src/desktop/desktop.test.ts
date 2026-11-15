@@ -201,6 +201,84 @@ async function pairWritable(f: Awaited<ReturnType<typeof fixture>>) {
     });
 }
 
+it("publishes nothing once the pairing is revoked or downgraded while a save hashes its base", async () => {
+  const base = "/api/v2/desktop";
+  const json = { "x-requested-with": "fdrive", "content-type": "application/json" };
+  const sha = (value: string) => createHash("sha256").update(value).digest("hex");
+  for (const change of ["revoked", "downgraded"] as const) {
+    const f = await fixture(true);
+    const created = await f.app.request(`${base}/pairings`, {
+      method: "POST",
+      headers: json,
+      body: JSON.stringify({ deviceName: "Mac" }),
+    });
+    const request = DesktopPairing.parse(await created.json());
+    await f.request(
+      `/pairings/${request.id}/approve`,
+      { access: "full" },
+      { cookie: "fdrive_session=test" },
+    );
+    const polled = await f.app.request(`${base}/pairings/${request.id}/poll`, {
+      method: "POST",
+      headers: json,
+      body: JSON.stringify({ secret: request.secret }),
+    });
+    const token = ((await polled.json()) as { credentials: Array<{ token: string }> })
+      .credentials[0]?.token;
+    if (!token) throw Error("Missing token");
+    const headers = { ...json, authorization: `Bearer ${token}` };
+    const call = (route: string, body?: unknown) =>
+      f.app.request(base + route, {
+        method: body === undefined ? "GET" : "POST",
+        headers,
+        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+      });
+    const entry = (await (await call("/entry?path=/docs/a.txt")).json()) as {
+      id: string;
+      parentId: string;
+      version: { content: string; metadata: string };
+    };
+    const operationId = randomUUID();
+    const prepared = await call("/uploads", {
+      operationId,
+      parentId: entry.parentId,
+      itemId: entry.id,
+      name: "a.txt",
+      base: { ...entry.version, content: sha("alpha") },
+      size: 5,
+      sha256: sha("saved"),
+    });
+    expect(prepared.status).toBe(200);
+    const sent = await f.app.request(`${base}/operations/${operationId}/content`, {
+      method: "PUT",
+      headers: { ...headers, "content-type": "application/octet-stream" },
+      body: "saved",
+    });
+    expect(sent.status).toBe(200);
+    // The token changes while the commit reads the file its save replaces.
+    const [stored] = await f.repos.apiTokens.listByAccount(f.account.id);
+    if (!stored) throw Error("Missing stored token");
+    const findByHash = f.repos.apiTokens.findByHash.bind(f.repos.apiTokens);
+    let changed = false;
+    vi.spyOn(f.repos.apiTokens, "findByHash").mockImplementation(async (hash) => {
+      const found = await findByHash(hash);
+      return changed && found ? { ...found, access: { mode: "read", paths: ["/"] } } : found;
+    });
+    const download = f.storage.download.bind(f.storage);
+    vi.spyOn(f.storage, "download").mockImplementation(async (path, options) => {
+      if (path === "/docs/a.txt" && !changed) {
+        changed = true;
+        if (change === "revoked") await f.repos.apiTokens.delete(stored.id, f.account.id);
+      }
+      return download(path, options);
+    });
+    const commit = await call(`/operations/${operationId}/commit`, {});
+    expect(commit.status, change).toBe(401);
+    expect(changed).toBe(true);
+    expect(await new Response((await download("/docs/a.txt")).body).text()).toBe("alpha");
+  }
+});
+
 it("advertises the change feed where it covers the location and answers it", async () => {
   // Without a feed: nothing advertised, nothing served.
   const plain = await fixture(true);
@@ -281,9 +359,6 @@ async function fixture(writable = false, changes?: DesktopChanges) {
     clock,
     storageFactory: vi.fn(async (id: string) => (id === identity.id ? storage : otherStorage)),
     trashPathForStorage: () => "/.trash",
-    ...(writable
-      ? { publishLock: async <T>(_identityId: string, run: () => Promise<T>) => run() }
-      : {}),
   };
   const principal: Principal = {
     accountId: account.id,
@@ -1163,7 +1238,7 @@ it("expires unconfirmed pairings on its own timer without another request", asyn
   }
 });
 
-it("explains a read-only full grant by every unmet gate", async () => {
+it("explains why a full grant is read-only", async () => {
   const f = await fixture();
   async function reason(
     missing: readonly DesktopWriteGate[] | null,
@@ -1185,13 +1260,6 @@ it("explains a read-only full grant by every unmet gate", async () => {
   }
   expect(await reason(["state_dir"])).toBe(
     "Read-only until an administrator sets FDRIVE_DESKTOP_STATE_DIR on this server.",
-  );
-  expect(await reason(["publish_lock"])).toBe(
-    "Read-only until an administrator configures the desktop publish lock on this server.",
-  );
-  // Both gates unmet: naming only one would promise writes it cannot deliver.
-  expect(await reason(["state_dir", "publish_lock"])).toBe(
-    "Read-only until an administrator sets FDRIVE_DESKTOP_STATE_DIR on this server and configures the desktop publish lock on this server.",
   );
   // A deployment without desktop writes wired says so without guessing at a cause.
   expect(await reason(null)).toBe(

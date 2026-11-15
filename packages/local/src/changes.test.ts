@@ -64,7 +64,14 @@ describe("relativeTo and underRoot", () => {
       path: "a/x",
       target: "a/y",
     });
-    expect(underRoot("/data", { kind: "moved", path: "/data/a/x", target: "/tmp/y" })).toEqual({
+    const stamp = { size: 1, mtimeNs: 2n, ino: 3n, ctimeNs: 4n, previousCtimeNs: 3n };
+    expect(
+      underRoot("/data", { kind: "moved", path: "/data/a/x", target: "/data/a/y", stamp }),
+    ).toEqual({ kind: "moved", path: "a/x", target: "a/y", stamp });
+    // A file that left the root or arrived in it is looked at where it is.
+    expect(
+      underRoot("/data", { kind: "moved", path: "/data/a/x", target: "/tmp/y", stamp }),
+    ).toEqual({
       kind: "changed",
       path: "a/x",
     });
@@ -126,8 +133,11 @@ describe("local storage changes", () => {
     expect(await published(at, written)).toEqual({
       content: { ...written, ctimeNs: info.ctimeNs },
     });
-    // Another writer's file at the name, or none at all: no digest to trust.
+    // Another writer's file at the name, one changed since it was written, or none at all:
+    // no digest to trust.
     expect(await published(at, { ...written, ino: info.ino + 1n })).toEqual({});
+    expect(await published(at, { ...written, size: 2 })).toEqual({});
+    expect(await published(at, { ...written, mtimeNs: info.mtimeNs + 1n })).toEqual({});
     expect(await published(join(root, "missing.txt"), written)).toEqual({});
   });
 
@@ -190,8 +200,10 @@ describe("local storage changes", () => {
     const files = storage();
     await files.mkdir("/dir");
     await files.upload("/dir/a.txt", bytes("a"));
+    const before = await stat(join(home(), "dir", "a.txt"), { bigint: true });
     changes = [];
     await files.move("/dir/a.txt", "/dir/b.txt");
+    const after = await stat(join(home(), "dir", "b.txt"), { bigint: true });
     await files.copy("/dir", "/copy");
     await files.copy("/dir/b.txt", "/c.txt");
     await files.setModifiedAt?.("/c.txt", new Date("2020-01-01T00:00:00Z"));
@@ -200,7 +212,19 @@ describe("local storage changes", () => {
     await files.deleteDir("/");
     await files.mkdir("/again");
     expect(changes).toEqual([
-      { kind: "moved", path: join(home(), "dir", "a.txt"), target: join(home(), "dir", "b.txt") },
+      {
+        kind: "moved",
+        path: join(home(), "dir", "a.txt"),
+        target: join(home(), "dir", "b.txt"),
+        // The file exactly as the rename left it, and its change time just before.
+        stamp: {
+          size: 1,
+          mtimeNs: after.mtimeNs,
+          ino: after.ino,
+          ctimeNs: after.ctimeNs,
+          previousCtimeNs: before.ctimeNs,
+        },
+      },
       { kind: "changed", path: join(home(), "copy") },
       { kind: "changed", path: join(home(), "c.txt") },
       { kind: "changed", path: join(home(), "c.txt") },
@@ -273,16 +297,30 @@ describe("user storage changes", () => {
         path: alice("Projects", "new.txt"),
         content: expect.objectContaining({ sha256: sha256("n"), size: 1 }),
       },
-      { kind: "moved", path: alice("Projects", "new.txt"), target: alice("Projects", "n.txt") },
+      {
+        kind: "moved",
+        path: alice("Projects", "new.txt"),
+        target: alice("Projects", "n.txt"),
+        stamp: expect.objectContaining({ size: 1 }),
+      },
     ]);
   });
 
   it("reports a move or copy between the user's files and a shared folder", async () => {
     const files = bobsFiles();
+    await mkdir(bob("dir"));
     await files.move("/own.txt", `/${SHARED_WITH_ME}/Projects/own.txt`);
+    await files.move("/dir", `/${SHARED_WITH_ME}/Projects/dir`);
     await files.copy(`/${SHARED_WITH_ME}/Projects/brief.txt`, "/brief.txt");
     expect(changes).toEqual([
-      { kind: "moved", path: bob("own.txt"), target: alice("Projects", "own.txt") },
+      {
+        kind: "moved",
+        path: bob("own.txt"),
+        target: alice("Projects", "own.txt"),
+        stamp: expect.objectContaining({ size: 3 }),
+      },
+      // A folder's files keep their change times: it names no stamp.
+      { kind: "moved", path: bob("dir"), target: alice("Projects", "dir") },
       { kind: "changed", path: bob("brief.txt") },
     ]);
   });
@@ -325,7 +363,15 @@ describe("local module index changes", () => {
           content: expect.objectContaining({ sha256: sha256("a") }),
         },
       ],
-      ["files", { kind: "moved", path: "alice/docs/a.txt", target: "alice/docs/b.txt" }],
+      [
+        "files",
+        {
+          kind: "moved",
+          path: "alice/docs/a.txt",
+          target: "alice/docs/b.txt",
+          stamp: expect.objectContaining({ size: 1 }),
+        },
+      ],
       ["files", { kind: "changed", path: "alice/docs/b.txt" }],
     ]);
     await rm(join(link, ".."), { recursive: true, force: true });

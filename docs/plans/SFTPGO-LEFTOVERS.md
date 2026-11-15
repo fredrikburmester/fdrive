@@ -87,9 +87,9 @@ the login limiter (`local/routes.ts`, `local/service.ts`). Folds into 12.
     out through AsyncLocalStorage (`activity/trash.ts`); the Trash path is built in nine places.
     Tags, favorites and folder views stay at a trashed item's path, so a new file there inherits
     them. A grantee deleting in a writable shared folder may send the owner's file to the
-    grantee's Trash (unverified). Retention per decision 3. Office's save path now has its own
-    database pool (#162), and so does the Mac publish lock (personal activity's path locks have a
-    third). When 24 removes the publish lock, those two pools become one or go.
+    grantee's Trash (unverified). Retention per decision 3. Office's save path (#162) and
+    personal activity's path locks each keep a database pool of their own; they never wait on
+    each other, and sharing one would let slow Office saves hold up Trash moves.
 17. **Flat Trash layout.** The `p/<segment>` path encoding, made for WebDAV, becomes one folder
     per item plus a row.
 18. **Live updates and metadata from the journal.** Every fdrive change returns through the
@@ -101,15 +101,11 @@ the login limiter (`local/routes.ts`, `local/service.ts`). Folds into 12.
     (`composition.ts` `onMutation`) merge with the fs and Trash routes' recorders.
 20. **Delete removed files from the index.** Tombstones are never purged and every scan loads
     them, for a sha256 relink guess.
-21. **Reuse the API's file stamp in the indexer.** The watcher re-reads every uploaded or renamed
-    file.
 
 ## Mac
 
 All but 27 are server-only and keep shipped Mac builds working.
 
-24. Detect conflicts from the file stamp; drop the publish lock and its pool, `previous` copies,
-    30-day retention, the 64 GiB reservation and re-hashing on renames.
 25. Stage uploads inside the files folder so a commit can always tell whether it happened; drop
     `FDRIVE_DESKTOP_STATE_DIR`, the `uncertain` state and the unused admin recovery endpoints.
 26. Finder's Trash becomes fdrive's Trash.
