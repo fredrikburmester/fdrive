@@ -77,7 +77,7 @@ function UsageCard({ usage }: { usage: StorageUsageResponse }) {
           </ul>
           <p className="text-xs text-muted-foreground">
             Counted from the search index, Trash included, so recent changes can take a moment to
-            show.
+            show and the limit is approximate.
           </p>
         </CardContent>
       ) : null}

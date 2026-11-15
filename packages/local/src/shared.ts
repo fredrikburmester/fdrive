@@ -119,8 +119,8 @@ export interface UserStorageOptions {
   /**
    * How many more bytes may land in the user's own files (`null`) or in a
    * shared folder's owner's files, or `null` for no limit. With it, an
-   * upload or copy that would put more than that there is refused
-   * (`storage_limit_reached`).
+   * upload, a copy or a move into another owner's files that would put more
+   * than that there is refused (`storage_limit_reached`).
    */
   readonly room?: (folder: SharedFolder | null) => Promise<number | null>;
 }
@@ -228,6 +228,25 @@ export function createUserStorage(options: UserStorageOptions): UserStorage {
   /** How many more bytes may land at `at`, or `null` for no limit. */
   function roomAt(at: Located): Promise<number | null> {
     return options.room?.(at.kind === "mount" ? at.folder : null) ?? Promise.resolve(null);
+  }
+
+  /**
+   * Refuses to put the files at `from` (a file, or a folder and everything
+   * in it) at `to` when the owner of `to` has no room for them: the one check
+   * every copy, and every move into another owner's files, passes.
+   */
+  async function admit(path: string, from: Located, to: Located): Promise<void> {
+    const room = await roomAt(to);
+    if (room === null) return;
+    const bytes = await mapped(path, async () =>
+      bytesAt((await from.storage.home.locate(from.rel)).at),
+    );
+    if (bytes > room) throw limitReached();
+  }
+
+  /** Whose files `at` is in: the user's own (`null`) or a shared folder's owner. */
+  function ownerOf(at: Located): string | null {
+    return at.kind === "mount" ? at.folder.owner : null;
   }
 
   /** The bytes a file at `at` holds, which replacing it frees; 0 for anything else. */
@@ -385,6 +404,8 @@ export function createUserStorage(options: UserStorageOptions): UserStorage {
       }
       const source = (await writable(path)) as Located;
       const destination = (await writable(target)) as Located;
+      // A move within one owner's files adds nothing to them.
+      if (ownerOf(source) !== ownerOf(destination)) await admit(path, source, destination);
       if (source.storage === destination.storage) {
         await source.storage.move(source.rel, destination.rel, opts);
         return;
@@ -403,13 +424,7 @@ export function createUserStorage(options: UserStorageOptions): UserStorage {
       const from = await readable(path);
       if (from.kind === "shelf") throw forbidden(`${SHARED_WITH_ME} cannot be copied: ${path}`);
       const destination = (await writable(target)) as Located;
-      const room = await roomAt(destination);
-      if (room !== null) {
-        const bytes = await mapped(path, async () =>
-          bytesAt((await from.storage.home.locate(from.rel)).at),
-        );
-        if (bytes > room) throw limitReached();
-      }
+      await admit(path, from, destination);
       if (from.storage === destination.storage) {
         await from.storage.copy(from.rel, destination.rel, opts);
         return;

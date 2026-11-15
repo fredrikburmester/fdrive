@@ -185,6 +185,15 @@ describe("storage usage and limits through the API", () => {
     expect((await upload(bob, "/Shared with me/Projects/fits.bin", 400)).status).toBe(201);
     await limit(alice, "alice", 10);
     await refused(upload(bob, "/Shared with me/Projects/too-big.bin", 400));
+    // So does a move into it: bob's 600 bytes would land in alice's files.
+    await refused(
+      call(ROUTES.fs.move, {
+        method: "POST",
+        cookie: bob,
+        body: { path: "/big.mov", target: "/Shared with me/Projects/big.mov" },
+      }),
+    );
+    expect(existsSync(storage.path("bob", "/big.mov"))).toBe(true);
 
     // Bob's Storage page: his own folder only, by kind, with what is in fdrive's Trash
     // counted but not listed.

@@ -370,4 +370,25 @@ describe("createUserStorage with a storage limit", () => {
     expect(await names("/plans")).toEqual(["link", "plan.txt"]);
     expect(await kindOf(storage.copy(`${folder}/missing`, "/x"))).toBe("not_found");
   });
+
+  it("refuses a move into another owner's files they have no room for, and nothing else", async () => {
+    const { room, storage } = limited({ bob: 0, alice: 2 });
+    // own.txt holds 3 bytes; alice has room for 2.
+    expect(await kindOf(storage.move("/own.txt", `${folder}/own.txt`))).toBe(
+      "storage_limit_reached",
+    );
+    expect(await read(storage, "/own.txt")).toBe("own");
+    // Within one owner's files a move adds nothing, so bob's own limit is not asked.
+    room.mockClear();
+    await storage.move("/own.txt", "/kept.txt");
+    await storage.move(`${folder}/brief.txt`, `${folder}/plans/brief.txt`);
+    expect(room).not.toHaveBeenCalled();
+    // Out of alice's files into bob's: brief.txt is 5 bytes and bob has no room.
+    expect(await kindOf(storage.move(`${folder}/plans/brief.txt`, "/brief.txt"))).toBe(
+      "storage_limit_reached",
+    );
+    const roomy = limited({ bob: 10, alice: 10 }).storage;
+    await roomy.move("/kept.txt", `${folder}/kept.txt`);
+    expect(await readFile(alice("Projects", "kept.txt"), "utf8")).toBe("own");
+  });
 });
