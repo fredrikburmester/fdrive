@@ -12,19 +12,21 @@ import {
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
+import type { StorageProvider } from "@fdrive/core";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { bytes, kindOf, zipEntries } from "../test/helpers.js";
-import { createUserStorage, SHARED_WITH_ME, type UserStorage } from "./shared.js";
+import { createUserStorage, SHARED_WITH_ME } from "./shared.js";
 
 // fdrive never follows a symbolic link: a path through one is refused by
 // every operation, however the link got there and wherever it leads.
 
 let root: string;
-let alice: UserStorage;
-let bob: UserStorage;
+let alice: StorageProvider;
+let bob: StorageProvider;
 
 const inAlice = (...parts: string[]) => join(root, "alice", ...parts);
 const SHARED_DOCS = `/${SHARED_WITH_ME}/Docs`;
+const PART = { id: "0123456789abcdef", offset: 0 };
 
 beforeEach(async () => {
   root = await realpath(await mkdtemp(join(tmpdir(), "fdrive-symlinks-")));
@@ -68,17 +70,17 @@ async function snapshot(dir: string): Promise<string[]> {
 }
 
 /** Every storage operation on `path`; `file` is an ordinary file beside it. */
-function operations(storage: UserStorage, path: string, file: string) {
+function operations(storage: StorageProvider, path: string, file: string) {
   return {
     stat: () => storage.stat(path),
     statFile: () => storage.statFile(path),
     list: () => storage.list(path),
     download: () => storage.download(path),
     contentStamp: () => storage.contentStamp(path),
-    probeFileRead: () => storage.probeFileRead(path),
     probeDirectoryRead: () => storage.probeDirectoryRead(path),
     upload: () => storage.upload(path, bytes("x"), { overwrite: true }),
     "upload inside": () => storage.upload(`${path}/new.txt`, bytes("x"), { mkdirParents: true }),
+    uploadPart: () => storage.uploadPart(path, bytes("x"), { part: PART, overwrite: true }),
     mkdir: () => storage.mkdir(path, { parents: true }),
     "mkdir inside": () => storage.mkdir(`${path}/new`, { parents: true }),
     "move from": () => storage.move(path, `${file}-moved`),
@@ -90,7 +92,6 @@ function operations(storage: UserStorage, path: string, file: string) {
     deleteFile: () => storage.deleteFile(path),
     deleteDir: () => storage.deleteDir(path),
     deleteEmptyDir: () => storage.deleteEmptyDir(path),
-    setModifiedAt: () => storage.setModifiedAt(path, new Date(0)),
     zip: () => storage.zip([path]),
   };
 }

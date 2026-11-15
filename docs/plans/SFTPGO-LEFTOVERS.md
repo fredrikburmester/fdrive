@@ -56,9 +56,6 @@ All are server-only and keep shipped Mac builds working.
 
 ## Storage contract
 
-29. Make the optional port members required and delete the fallbacks; drop `contentType`, which
-    is always null (MCP reports `mime: null`); non-null modification times and lengths; writes
-    return the new entry; one conformance suite with no options.
 30. Open files instead of HTTP-shaped downloads: peek parses `Content-Range` with a regex,
     extract copies the zip to a temp folder. The perf
     harness measured downloads through the API at 84% of direct throughput against its 90%

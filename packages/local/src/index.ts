@@ -28,7 +28,7 @@ export {
 } from "./files-marker.js";
 export type { Home } from "./home.js";
 export { createHome } from "./home.js";
-export type { SharedFolder, SharedGrant, UserStorage, UserStorageOptions } from "./shared.js";
+export type { SharedFolder, SharedGrant, UserStorageOptions } from "./shared.js";
 export {
   closedToShares,
   createUserStorage,

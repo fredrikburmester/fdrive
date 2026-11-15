@@ -23,6 +23,7 @@ import {
   type CoreError,
   changeBaseName,
   contentDisposition,
+  type EntryStat,
   extensionOf,
   type FileEntry,
   isInlinePreviewable,
@@ -175,6 +176,12 @@ export async function runStorageCall<T>(fn: () => Promise<T>): Promise<T> {
   }
 }
 
+/** A header's value as a finite number, or `undefined` when absent or not one. */
+function finiteHeader(value: string | undefined): number | undefined {
+  const number = Number(value);
+  return value === undefined || !Number.isFinite(number) ? undefined : number;
+}
+
 export function serializeEntry(entry: FileEntry): FsEntry {
   return {
     name: entry.name,
@@ -192,18 +199,8 @@ export function serializeEntry(entry: FileEntry): FsEntry {
  * spells it: a disk that ignores case or accent encoding (macOS) also finds
  * other spellings, and listings show the stored one.
  */
-export async function statEntry(storage: StorageProvider, path: string): Promise<FileEntry> {
-  const stat = await runStorageCall(() => storage.stat(path));
-  const stored = stat.path ?? path;
-  const name = baseName(stored);
-  return {
-    name,
-    path: stored,
-    kind: stat.kind,
-    size: stat.size,
-    modifiedAt: stat.modifiedAt ?? new Date(0),
-    ext: stat.kind === "dir" ? "" : extensionOf(name),
-  };
+export function statEntry(storage: StorageProvider, path: string): Promise<EntryStat> {
+  return runStorageCall(() => storage.stat(path));
 }
 
 interface DownloadCallOpts {
@@ -298,28 +295,21 @@ async function handleDownload(c: FsContext, deps: FsRoutesDeps): Promise<Respons
   }
 
   const result = outcome.result;
-  const mime =
-    result.contentType ??
-    mimeFromExtension(extensionOf(baseName(path))) ??
-    "application/octet-stream";
+  const mime = mimeFromExtension(extensionOf(baseName(path))) ?? "application/octet-stream";
   const inline = query.inline === "1" && isInlinePreviewable(mime);
   const disposition = contentDisposition(inline ? "inline" : "attachment", baseName(path));
 
   const headers: Record<string, string> = {
     "Content-Type": mime,
+    "Content-Length": String(result.contentLength),
+    "Last-Modified": result.lastModified.toUTCString(),
     "Accept-Ranges": "bytes",
     "Cache-Control": "private, no-store",
     "Content-Disposition": disposition,
     "Content-Security-Policy": "sandbox",
   };
-  if (result.contentLength !== null) {
-    headers["Content-Length"] = String(result.contentLength);
-  }
   if (result.contentRange !== null) {
     headers["Content-Range"] = result.contentRange;
-  }
-  if (result.lastModified !== null) {
-    headers["Last-Modified"] = result.lastModified.toUTCString();
   }
 
   if (c.req.method === "HEAD") {
@@ -394,13 +384,9 @@ export function registerFsRoutes(
     const principal = c.get("principal");
     const body = await parseBody(ZipRequest, c, jsonMaxBytes);
     const paths = body.paths.map((p) => normalizeOrThrow(p));
-    const zip = principal.storage.zip;
-    if (zip === undefined) {
-      throw new ApiHttpError("unsupported", "this storage cannot build zip archives", {
-        capability: "zip",
-      });
-    }
-    const stream = await runStorageCall(() => zip(paths, { signal: c.req.raw.signal }));
+    const stream = await runStorageCall(() =>
+      principal.storage.zip(paths, { signal: c.req.raw.signal }),
+    );
     // `ZipRequest.paths` has `.min(1)`, so `paths[0]` always exists here.
     const firstPath = paths[0] as string;
     const derivedName = baseName(firstPath);
@@ -432,69 +418,38 @@ export function registerFsRoutes(
     // The browser asks before an upload replaces a file (its conflict
     // dialog) and saves over the file it opened; only a new file must not
     // take a name that is already there.
-    const uploadOpts: {
-      mkdirParents?: boolean;
-      modifiedAt?: Date;
-      contentLength?: number;
-      overwrite: boolean;
-      signal?: AbortSignal;
-      part?: { id: string; offset: number; final: boolean };
-    } = { overwrite: query.intent !== "create", signal: c.req.raw.signal };
-    if (query.part !== undefined) {
-      uploadOpts.part = {
-        id: query.part,
-        offset: Number(query.offset ?? 0),
-        final: query.final === "true",
-      };
-    }
-    if (query.mkdirParents !== undefined) {
-      uploadOpts.mkdirParents = query.mkdirParents === "true";
-    }
-    const modifiedAtHeader = c.req.header(MODIFIED_AT_HEADER);
-    if (modifiedAtHeader !== undefined) {
-      const modifiedAtMs = Number(modifiedAtHeader);
-      if (Number.isFinite(modifiedAtMs)) {
-        uploadOpts.modifiedAt = new Date(modifiedAtMs);
-      }
-    }
-    const contentLengthHeader = c.req.header("content-length");
-    if (contentLengthHeader !== undefined) {
-      const contentLength = Number(contentLengthHeader);
-      if (Number.isFinite(contentLength)) {
-        uploadOpts.contentLength = contentLength;
-      }
-    }
+    const overwrite = query.intent !== "create";
+    const signal = c.req.raw.signal;
+    const body = c.req.raw.body ?? new Uint8Array();
+    const contentLength = finiteHeader(c.req.header("content-length"));
+    const sized = contentLength === undefined ? {} : { contentLength };
+    const actor = fileActor(principal, activityRequestContext(c));
+    const part =
+      query.part === undefined ? undefined : { id: query.part, offset: Number(query.offset ?? 0) };
     // A piece before the last only grows the upload's part; the last one
     // publishes the file as one upload, recorded and announced once.
-    const done = await runStorageCall(() =>
-      deps.files.upload(
-        fileActor(principal, activityRequestContext(c)),
-        path,
-        c.req.raw.body ?? new Uint8Array(),
-        { ...uploadOpts, action: `file.${query.intent ?? "upload"}` },
-      ),
-    );
-    if (uploadOpts.part?.final === false) return c.body(null, 204);
-    activityHeaders(c, done.history);
-
-    // The provider accepted the bytes even when the follow-up stat fails, and
-    // repeating the upload would overwrite a file that is already committed.
-    let body: EntryResponse;
-    try {
-      body = EntryResponse.parse(serializeEntry(await statEntry(principal.storage, path)));
-    } catch {
-      body = EntryResponse.parse({
-        name: baseName(path),
-        path,
-        kind: "file",
-        size: uploadOpts.contentLength ?? 0,
-        modifiedAt: (uploadOpts.modifiedAt ?? new Date(0)).toISOString(),
-        ext: extensionOf(baseName(path)),
-        mime: null,
-        metadataPending: true,
-      });
+    if (part !== undefined && query.final !== "true") {
+      await runStorageCall(() =>
+        deps.files.uploadPart(actor, path, body, { part, overwrite, signal, ...sized }),
+      );
+      return c.body(null, 204);
     }
-    return c.json(body, 201);
+    const modifiedAtMs = finiteHeader(c.req.header(MODIFIED_AT_HEADER));
+    const done = await runStorageCall(() =>
+      deps.files.upload(actor, path, body, {
+        action: `file.${query.intent ?? "upload"}`,
+        overwrite,
+        signal,
+        ...sized,
+        ...(part === undefined ? {} : { part }),
+        ...(query.mkdirParents === undefined
+          ? {}
+          : { mkdirParents: query.mkdirParents === "true" }),
+        ...(modifiedAtMs === undefined ? {} : { modifiedAt: new Date(modifiedAtMs) }),
+      }),
+    );
+    activityHeaders(c, done.history);
+    return c.json(EntryResponse.parse(serializeEntry(done.entry)), 201);
   });
 
   authed.post(routePath(ROUTES.fs.mkdir), async (c) => {
@@ -505,8 +460,7 @@ export function registerFsRoutes(
       deps.files.mkdir(fileActor(principal, activityRequestContext(c)), path),
     );
     activityHeaders(c, done.history);
-    const entry = await statEntry(principal.storage, path);
-    const responseBody: EntryResponse = EntryResponse.parse(serializeEntry(entry));
+    const responseBody: EntryResponse = EntryResponse.parse(serializeEntry(done.entry));
     return c.json(responseBody, 201);
   });
 
@@ -522,8 +476,7 @@ export function registerFsRoutes(
       deps.files.move(fileActor(principal, activityRequestContext(c)), path, target, { action }),
     );
     activityHeaders(c, done.history);
-    const entry = await statEntry(principal.storage, target);
-    const responseBody: EntryResponse = EntryResponse.parse(serializeEntry(entry));
+    const responseBody: EntryResponse = EntryResponse.parse(serializeEntry(done.entry));
     return c.json(responseBody);
   }
 
@@ -558,8 +511,7 @@ export function registerFsRoutes(
       deps.files.copy(fileActor(principal, activityRequestContext(c)), path, target),
     );
     activityHeaders(c, done.history);
-    const entry = await statEntry(principal.storage, target);
-    const responseBody: EntryResponse = EntryResponse.parse(serializeEntry(entry));
+    const responseBody: EntryResponse = EntryResponse.parse(serializeEntry(done.entry));
     return c.json(responseBody);
   });
 

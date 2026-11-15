@@ -5,7 +5,7 @@ import type {
   PersonalActivityAction,
   PersonalActivitySource,
 } from "@fdrive/contracts";
-import { isStorageError, type StorageProvider } from "@fdrive/core";
+import { type EntryStat, isStorageError, type StorageProvider } from "@fdrive/core";
 import { ActivityConflict, type ActivityFinish, type ActivityRepo } from "@fdrive/db";
 import type { Principal } from "../auth/principal.js";
 import { ApiHttpError } from "../errors.js";
@@ -26,18 +26,21 @@ export interface ActivityServiceDeps {
   readonly clock: () => Date;
   readonly pending: (operationId: string) => void;
 }
+/** What activity records of `entry`, found at `path`. */
+export function activityFacts(path: string, entry: EntryStat): ActivityFacts {
+  return {
+    path,
+    kind: entry.kind === "dir" ? "dir" : "file",
+    size: entry.size,
+    modifiedAt: entry.modifiedAt.toISOString(),
+  };
+}
 export async function activityStat(
   storage: StorageProvider,
   path: string,
 ): Promise<ActivityFacts | undefined> {
   try {
-    const stat = await storage.stat(path);
-    return {
-      path,
-      kind: stat.kind === "dir" ? "dir" : "file",
-      size: stat.size,
-      modifiedAt: stat.modifiedAt?.toISOString() ?? null,
-    };
+    return activityFacts(path, await storage.stat(path));
   } catch {
     return undefined;
   }

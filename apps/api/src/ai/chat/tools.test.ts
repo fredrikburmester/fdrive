@@ -210,6 +210,7 @@ describe("file_info", () => {
         "kind: file",
         "size: 11 B (11 bytes)",
         "modified: 1970-01-01T00:00:00.000Z",
+        "type: text/plain",
         "tags: Work",
         "favorite: yes",
         "index: done",
@@ -228,7 +229,7 @@ describe("file_info", () => {
     const { run } = setup({ share: { contents: true, otherFileNames: false } });
 
     expect(await run("file_info", { path: "/Inbox" })).toBe(
-      ["/Inbox", "kind: folder", "modified: unknown"].join("\n"),
+      ["/Inbox", "kind: folder", "modified: 1970-01-01T00:00:00.000Z"].join("\n"),
     );
     expect(await run("file_info", { path: "/Inbox/bytes.bin" })).toContain(
       "index: not indexed, so no content hash or copies",

@@ -88,10 +88,7 @@ async function readRangeBytes(
   // A small complete archive may legitimately arrive as 200. Never accept a full
   // response for a suffix or central-directory slice of a larger archive.
   const complete = download.status === 200 && start === 0 && end === total - 1;
-  if (
-    (!validRange && !complete) ||
-    (download.contentLength !== null && download.contentLength !== expected)
-  ) {
+  if ((!validRange && !complete) || download.contentLength !== expected) {
     await download.body.cancel().catch(() => undefined);
     throw new UnreadableArchiveError();
   }

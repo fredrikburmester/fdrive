@@ -37,19 +37,16 @@ import {
   ShareZipTimeoutError,
 } from "./zip-limits.ts";
 
-/** The owner's storage, with the zip a public archive needs. */
-export type ShareStorage = StorageProvider & Required<Pick<StorageProvider, "zip">>;
-
 /** A public share a visitor may use now: its row, and its owner's storage. */
 export interface OpenShare {
   readonly row: PublicShareRecord;
-  readonly storage: ShareStorage;
+  readonly storage: StorageProvider;
 }
 
 export interface SharesDeps {
   readonly shares: ShareRepo;
   /** The owner's storage as every feature gets it: the only way a share reaches bytes. */
-  readonly storageFor: (identityId: string) => Promise<ShareStorage>;
+  readonly storageFor: (identityId: string) => Promise<StorageProvider>;
   /** Stores a visitor's upload the way every change to files is made. */
   readonly files: Pick<FileOperations, "upload">;
   readonly passwords: SharePasswords;
@@ -175,7 +172,7 @@ export function createSharesService(deps: SharesDeps) {
   const zipLimits: ShareZipLimits = { ...DEFAULT_SHARE_ZIP_LIMITS, ...deps.zipLimits };
   const zipSlots = createShareZipSlots(zipLimits.perShare);
 
-  async function storage(identityId: string): Promise<ShareStorage> {
+  async function storage(identityId: string): Promise<StorageProvider> {
     try {
       return await deps.storageFor(identityId);
     } catch {

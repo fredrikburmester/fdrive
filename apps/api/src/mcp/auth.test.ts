@@ -1,4 +1,5 @@
 import type { StorageProvider } from "@fdrive/core";
+import { createMemoryStorage } from "@fdrive/core/testing";
 import { type Context, Hono } from "hono";
 import { describe, expect, it } from "vitest";
 import { createLoginLimiter, DEFAULT_MAX_FAILURES } from "../auth/login-limiter.js";
@@ -6,31 +7,7 @@ import type { TokenPrincipal } from "../tokens/principal.js";
 import { generateApiToken } from "../tokens/token-format.js";
 import { authenticateMcpRequest, type McpAuthResult, parseBearerHeader } from "./auth.js";
 
-function notImplemented(): never {
-  throw new Error("not implemented in this fake");
-}
-
-const FAKE_STORAGE: StorageProvider = {
-  list: notImplemented,
-  stat: notImplemented,
-  statFile: notImplemented,
-  download: notImplemented,
-  upload: notImplemented,
-  mkdir: notImplemented,
-  move: notImplemented,
-  copy: notImplemented,
-  deleteFile: notImplemented,
-  deleteDir: notImplemented,
-  deleteEmptyDir: notImplemented,
-  setModifiedAt: notImplemented,
-  zip: notImplemented,
-  trash: {
-    put: notImplemented,
-    list: notImplemented,
-    restore: notImplemented,
-    purge: notImplemented,
-  },
-};
+const FAKE_STORAGE: StorageProvider = createMemoryStorage();
 
 const FAKE_PRINCIPAL: TokenPrincipal = {
   accountId: "account-1",

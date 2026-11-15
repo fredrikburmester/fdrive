@@ -165,7 +165,7 @@ export function registerDesktopRoutes(
     const auth = await principal(c);
     const result = await files.content(auth.principal, path(c), c.req.raw.signal);
     c.header("Content-Type", "application/octet-stream");
-    if (result.contentLength !== null) c.header("Content-Length", String(result.contentLength));
+    c.header("Content-Length", String(result.contentLength));
     return c.body(
       await activityStream(
         deps.activity,
@@ -249,7 +249,7 @@ export function registerDesktopRoutes(
       const auth = await principal(c, true);
       const result = await writeService().files.content(auth.principal, path(c), c.req.raw.signal);
       c.header("Content-Type", "application/octet-stream");
-      if (result.contentLength !== null) c.header("Content-Length", String(result.contentLength));
+      c.header("Content-Length", String(result.contentLength));
       return c.body(
         await activityStream(
           deps.activity,

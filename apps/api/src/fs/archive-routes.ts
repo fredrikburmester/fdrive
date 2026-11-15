@@ -48,7 +48,6 @@ import {
   parseBody,
   runStorageCall,
   serializeEntry,
-  statEntry,
   toApiHttpError,
 } from "./routes.js";
 
@@ -141,8 +140,7 @@ export function registerArchiveRoutes(
       }),
     );
     activityHeaders(c, done.history);
-    const entry = await statEntry(principal.storage, target);
-    const responseBody = EntryResponse.parse(serializeEntry(entry));
+    const responseBody = EntryResponse.parse(serializeEntry(done.entry));
     return c.json(responseBody);
   });
 
@@ -429,9 +427,9 @@ async function submitJob(
         const actor = fileActor(principal, { source: context.source });
         const storage: Principal["storage"] = {
           ...principal.storage,
-          upload: async (path, body, options) => {
-            await deps.files.upload(actor, path, body, { ...options, action: "file.create" });
-          },
+          upload: async (path, body, options) =>
+            (await deps.files.upload(actor, path, body, { ...options, action: "file.create" }))
+              .entry,
         };
         const activity = deps.activity;
         if (!operation || !activity) return run(ctx, storage);

@@ -49,7 +49,7 @@ async function statItems(principal: Principal, paths: readonly string[], signal:
         const stat = await principal.storage.stat(path);
         items[index] =
           stat.kind === "dir" || stat.kind === "file"
-            ? { path, kind: stat.kind, size: stat.size, modifiedAt: stat.modifiedAt ?? null }
+            ? { path, kind: stat.kind, size: stat.size, modifiedAt: stat.modifiedAt }
             : null;
       } catch (error) {
         if (!isStorageError(error) || error.kind !== "not_found") throw error;

@@ -15,6 +15,7 @@ import {
   SystemSearchResponse,
   SystemThumbnailsResponse,
 } from "@fdrive/contracts";
+import { createMemoryStorage } from "@fdrive/core/testing";
 import type { IndexQueries } from "@fdrive/db";
 import { createMemoryRepos } from "@fdrive/db/testing";
 import { describe, expect, it, vi } from "vitest";
@@ -139,27 +140,7 @@ function buildApp(opts: { isAdmin?: boolean; deps?: Partial<SystemRoutesDeps> })
     accountId: "account-1",
     identityId: "identity-1",
     username: "alice",
-    storage: {
-      list: notImplemented,
-      stat: notImplemented,
-      statFile: notImplemented,
-      download: notImplemented,
-      upload: notImplemented,
-      mkdir: notImplemented,
-      move: notImplemented,
-      copy: notImplemented,
-      deleteFile: notImplemented,
-      deleteDir: notImplemented,
-      deleteEmptyDir: notImplemented,
-      setModifiedAt: notImplemented,
-      zip: notImplemented,
-      trash: {
-        put: notImplemented,
-        list: notImplemented,
-        restore: notImplemented,
-        purge: notImplemented,
-      },
-    },
+    storage: createMemoryStorage(),
     isAdmin: opts.isAdmin ?? true,
   };
 

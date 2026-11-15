@@ -1,7 +1,13 @@
 import { constants } from "node:fs";
 import { access, realpath, stat } from "node:fs/promises";
 import { join } from "node:path";
-import { isStorageError, normalizePath, StorageError, splitSegments } from "@fdrive/core";
+import {
+  isStorageError,
+  normalizePath,
+  StorageError,
+  type StorageProvider,
+  splitSegments,
+} from "@fdrive/core";
 import { type DiskChangeListener, type IndexChange, underRoot } from "./changes.js";
 import type { FilesFolderGuard } from "./files-marker.js";
 import { isLocalUsername } from "./names.js";
@@ -11,7 +17,6 @@ import {
   namedSharedGrants,
   type SharedFolder,
   type SharedGrant,
-  type UserStorage,
 } from "./shared.js";
 
 export { isLocalUsername };
@@ -80,7 +85,7 @@ export interface FilesFolder {
    * `/Shared with me` from what others share with them. Throws `forbidden`
    * for a name that cannot be a home folder.
    */
-  storage(username: string): UserStorage;
+  storage(username: string): StorageProvider;
   /**
    * Throws `forbidden` unless `username` is an active user, so a user
    * disabled after signing in stops at once, and `upstream_unavailable`

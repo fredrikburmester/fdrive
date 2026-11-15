@@ -18,8 +18,6 @@ export async function documentVersion(
   storage: StorageProvider,
   path: string,
 ): Promise<{ version: string; size: number; modifiedAt: Date }> {
-  if (storage.contentStamp === undefined)
-    throw new Error("Office needs storage that stamps its files");
   const stamp = await storage.contentStamp(path);
   return {
     version: deriveFileVersion(stamp),

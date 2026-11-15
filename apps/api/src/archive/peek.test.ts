@@ -1,72 +1,9 @@
 import { StorageError, type StorageProvider } from "@fdrive/core";
-import { createMemoryStorage } from "@fdrive/testkit";
+import { createMemoryStorage, entryStat } from "@fdrive/testkit";
 import * as tar from "tar-stream";
 import { describe, expect, it } from "vitest";
 import { ZipFile } from "yazl";
 import { peekArchive, UnreadableArchiveError, UnsupportedPeekFormatError } from "./peek.js";
-
-/**
- * A `StorageProvider` backed by an in-memory map of path -> bytes, honoring
- * `download`'s `range` option (unlike the shared `memory-storage.ts`
- * fixture, which always returns the whole file): the zip route depends on
- * a real Range read only returning the requested slice.
- */
-function createRangeAwareStorage(files: Record<string, Buffer>): StorageProvider {
-  function notImplemented(): never {
-    throw new Error("not implemented in this fixture");
-  }
-
-  return {
-    list: notImplemented,
-    stat: notImplemented,
-    async statFile(path: string) {
-      const content = files[path];
-      if (content === undefined) {
-        throw new StorageError("not_found", `not found: ${path}`);
-      }
-      return { size: content.length, modifiedAt: null, contentType: null };
-    },
-    async download(path: string, opts?: { range?: { start: number; end?: number } }) {
-      const content = files[path];
-      if (content === undefined) {
-        throw new StorageError("not_found", `not found: ${path}`);
-      }
-      const range = opts?.range;
-      const start = range?.start ?? 0;
-      const end = range?.end ?? content.length - 1;
-      const slice = content.subarray(start, end + 1);
-      const body = new ReadableStream<Uint8Array>({
-        start(controller) {
-          controller.enqueue(slice);
-          controller.close();
-        },
-      });
-      return {
-        status: (range !== undefined ? 206 : 200) as 200 | 206,
-        body,
-        contentLength: slice.length,
-        contentRange: range === undefined ? null : `bytes ${start}-${end}/${content.length}`,
-        contentType: null,
-        lastModified: null,
-      };
-    },
-    upload: notImplemented,
-    mkdir: notImplemented,
-    move: notImplemented,
-    copy: notImplemented,
-    deleteFile: notImplemented,
-    deleteDir: notImplemented,
-    deleteEmptyDir: notImplemented,
-    setModifiedAt: notImplemented,
-    zip: notImplemented,
-    trash: {
-      put: notImplemented,
-      list: notImplemented,
-      restore: notImplemented,
-      purge: notImplemented,
-    },
-  };
-}
 
 async function buildZipBuffer(build: (zipfile: ZipFile) => void): Promise<Buffer> {
   const zipfile = new ZipFile();
@@ -100,14 +37,14 @@ const DEFAULT_MAX_BYTES = 10 * 1024 * 1024;
 
 describe("peekArchive: unsupported and non-archive paths", () => {
   it("throws UnsupportedPeekFormatError for a path with no archive extension", async () => {
-    const storage = createRangeAwareStorage({});
+    const storage = createMemoryStorage({});
     await expect(
       peekArchive({ storage, path: "/notes.txt", maxBytes: DEFAULT_MAX_BYTES }),
     ).rejects.toThrow(UnsupportedPeekFormatError);
   });
 
   it("throws UnsupportedPeekFormatError for a bare .gz (not a listable archive)", async () => {
-    const storage = createRangeAwareStorage({});
+    const storage = createMemoryStorage({});
     await expect(
       peekArchive({ storage, path: "/notes.txt.gz", maxBytes: DEFAULT_MAX_BYTES }),
     ).rejects.toThrow(UnsupportedPeekFormatError);
@@ -121,7 +58,7 @@ describe("peekArchive: zip", () => {
       zipfile.addBuffer(Buffer.from("bravo"), "b.txt", { mtime });
       zipfile.addBuffer(Buffer.from("alpha"), "a.txt", { mtime });
     });
-    const storage = createRangeAwareStorage({ "/archive.zip": zipBytes });
+    const storage = createMemoryStorage({ "/archive.zip": zipBytes });
 
     const result = await peekArchive({
       storage,
@@ -140,7 +77,7 @@ describe("peekArchive: zip", () => {
         zipfile.addBuffer(Buffer.alloc(0), `f${String(i).padStart(5, "0")}.txt`);
       }
     });
-    const storage = createRangeAwareStorage({ "/many.zip": zipBytes });
+    const storage = createMemoryStorage({ "/many.zip": zipBytes });
 
     const result = await peekArchive({ storage, path: "/many.zip", maxBytes: DEFAULT_MAX_BYTES });
 
@@ -152,7 +89,7 @@ describe("peekArchive: zip", () => {
 
   it("returns no entries for an empty zip without a second Range read", async () => {
     const zipBytes = await buildZipBuffer(() => {});
-    const storage = createRangeAwareStorage({ "/empty.zip": zipBytes });
+    const storage = createMemoryStorage({ "/empty.zip": zipBytes });
 
     const result = await peekArchive({ storage, path: "/empty.zip", maxBytes: DEFAULT_MAX_BYTES });
 
@@ -169,21 +106,21 @@ describe("peekArchive: zip", () => {
     expect(eocd).toBeGreaterThan(0);
     const oversized = Buffer.from(zipBytes);
     oversized.writeUInt32LE(0xfffffff0, eocd + 12);
-    const storage = createRangeAwareStorage({ "/huge.zip": oversized });
+    const storage = createMemoryStorage({ "/huge.zip": oversized });
     await expect(
       peekArchive({ storage, path: "/huge.zip", maxBytes: 1024 * 1024 }),
     ).rejects.toBeInstanceOf(UnreadableArchiveError);
   });
 
   it("throws UnreadableArchiveError for an empty file", async () => {
-    const storage = createRangeAwareStorage({ "/empty.zip": Buffer.alloc(0) });
+    const storage = createMemoryStorage({ "/empty.zip": Buffer.alloc(0) });
     await expect(
       peekArchive({ storage, path: "/empty.zip", maxBytes: DEFAULT_MAX_BYTES }),
     ).rejects.toThrow(UnreadableArchiveError);
   });
 
   it("throws UnreadableArchiveError for a file with no valid end-of-central-directory record", async () => {
-    const storage = createRangeAwareStorage({ "/not-a-zip.zip": Buffer.alloc(100) });
+    const storage = createMemoryStorage({ "/not-a-zip.zip": Buffer.alloc(100) });
     await expect(
       peekArchive({ storage, path: "/not-a-zip.zip", maxBytes: DEFAULT_MAX_BYTES }),
     ).rejects.toThrow(UnreadableArchiveError);
@@ -198,7 +135,7 @@ describe("peekArchive: zip", () => {
     buffer.writeUInt16LE(1, eocdOffset + 10); // 1 entry
     buffer.writeUInt32LE(50, eocdOffset + 12); // central directory size
     buffer.writeUInt32LE(0, eocdOffset + 16); // central directory offset
-    const storage = createRangeAwareStorage({ "/corrupt.zip": buffer });
+    const storage = createMemoryStorage({ "/corrupt.zip": buffer });
 
     await expect(
       peekArchive({ storage, path: "/corrupt.zip", maxBytes: DEFAULT_MAX_BYTES }),
@@ -207,7 +144,7 @@ describe("peekArchive: zip", () => {
 
   it("propagates a StorageError from the storage layer unchanged", async () => {
     const storage: StorageProvider = {
-      ...createRangeAwareStorage({}),
+      ...createMemoryStorage({}),
       statFile: async () => {
         throw new StorageError("forbidden", "no access");
       },
@@ -273,16 +210,15 @@ it.each(["ignored", "missing-range", "wrong-range", "wrong-length", "overrun", "
     let reads = 0;
     const total = 1024 * 1024;
     const size = 65536;
-    const storage = createRangeAwareStorage({ "/large.zip": Buffer.alloc(total) });
+    const storage = createMemoryStorage({ "/large.zip": Buffer.alloc(total) });
     storage.download = async () => ({
       status: mode === "ignored" ? 200 : 206,
       contentRange:
         mode === "missing-range"
           ? null
           : `bytes ${mode === "wrong-range" ? 0 : total - size}-${total - 1}/${total}`,
-      contentLength: mode === "wrong-length" ? total : null,
-      contentType: null,
-      lastModified: null,
+      contentLength: mode === "wrong-length" ? total : size,
+      lastModified: new Date(0),
       body: new ReadableStream(
         {
           pull(controller) {
@@ -311,7 +247,7 @@ it.each(["ignored", "missing-range", "wrong-range", "wrong-length", "overrun", "
 
 it("permits a bounded complete 200 response for a small archive", async () => {
   const bytes = await buildZipBuffer((zip) => zip.addBuffer(Buffer.from("ok"), "ok.txt"));
-  const storage = createRangeAwareStorage({ "/small.zip": bytes });
+  const storage = createMemoryStorage({ "/small.zip": bytes });
   const download = storage.download;
   let calls = 0;
   storage.download = async (path, options) => {
@@ -328,13 +264,12 @@ it.each([true, false])(
   "rejects unsafe range replies even if cancel fails (invalid headers=%s)",
   async (invalidHeaders) => {
     const bytes = await buildZipBuffer((zip) => zip.addBuffer(Buffer.from("kept"), "a.txt"));
-    const storage = createRangeAwareStorage({ "/file.zip": bytes });
+    const storage = createMemoryStorage({ "/file.zip": bytes });
     storage.download = async () => ({
       status: invalidHeaders ? 200 : 206,
-      contentLength: null,
+      contentLength: bytes.length,
       contentRange: invalidHeaders ? null : `bytes 0-${bytes.length - 1}/${bytes.length}`,
-      contentType: null,
-      lastModified: null,
+      lastModified: new Date(0),
       body: new ReadableStream<Uint8Array>({
         pull(controller) {
           controller.enqueue(new Uint8Array(bytes.length + 1));
@@ -344,8 +279,7 @@ it.each([true, false])(
         },
       }),
     });
-    if (invalidHeaders)
-      storage.statFile = async () => ({ size: 100_000, modifiedAt: null, contentType: null });
+    if (invalidHeaders) storage.statFile = async (path) => entryStat(path, { size: 100_000 });
     await expect(
       peekArchive({ storage, path: "/file.zip", maxBytes: 1_000_000 }),
     ).rejects.toBeInstanceOf(UnreadableArchiveError);

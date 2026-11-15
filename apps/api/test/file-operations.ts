@@ -124,6 +124,10 @@ export function recordingFileOperations(inner: FileOperations = testFileOperatio
       calls.push(`upload ${path}`);
       return inner.upload(actor, path, body, options);
     },
+    uploadPart(actor, path, body, options) {
+      calls.push(`uploadPart ${path}`);
+      return inner.uploadPart(actor, path, body, options);
+    },
     mkdir(actor, path, options) {
       calls.push(`mkdir ${path}`);
       return inner.mkdir(actor, path, options);

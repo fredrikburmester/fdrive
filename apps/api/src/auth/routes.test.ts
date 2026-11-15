@@ -1,5 +1,6 @@
 import { type ApiError, MeResponse, ROUTES } from "@fdrive/contracts";
 import type { StorageProvider } from "@fdrive/core";
+import { createMemoryStorage } from "@fdrive/core/testing";
 import type { Repos } from "@fdrive/db";
 import { createMemoryRepos } from "@fdrive/db/testing";
 import type { Logger } from "pino";
@@ -16,31 +17,7 @@ import {
 import { createPrincipalFactory } from "./principal";
 import { registerAuthRoutes } from "./routes";
 
-function notImplemented(): never {
-  throw new Error("not implemented in this fake");
-}
-
-const FAKE_STORAGE: StorageProvider = {
-  list: notImplemented,
-  stat: notImplemented,
-  statFile: notImplemented,
-  download: notImplemented,
-  upload: notImplemented,
-  mkdir: notImplemented,
-  move: notImplemented,
-  copy: notImplemented,
-  deleteFile: notImplemented,
-  deleteDir: notImplemented,
-  deleteEmptyDir: notImplemented,
-  setModifiedAt: notImplemented,
-  zip: notImplemented,
-  trash: {
-    put: notImplemented,
-    list: notImplemented,
-    restore: notImplemented,
-    purge: notImplemented,
-  },
-};
+const FAKE_STORAGE: StorageProvider = createMemoryStorage();
 
 const REQUIRED_ENV: Record<string, string> = {
   DATABASE_URL: "postgres://localhost/fdrive",

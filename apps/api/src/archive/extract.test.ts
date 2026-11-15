@@ -451,8 +451,7 @@ describe("extractArchive: tar", () => {
         body,
         contentLength: archive.length,
         contentRange: null,
-        contentType: null,
-        lastModified: null,
+        lastModified: new Date(0),
       }),
     };
     const tmpDir = await tmpDirFor("targz-pax-cap");
@@ -694,10 +693,9 @@ it("cancels the ZIP source and removes its spool when aborted mid-download", asy
   let cancelled = false;
   storage.download = async () => ({
     status: 200,
-    contentLength: null,
+    contentLength: 64,
     contentRange: null,
-    contentType: null,
-    lastModified: null,
+    lastModified: new Date(0),
     body: new ReadableStream({
       start(stream) {
         stream.enqueue(new Uint8Array(32));
@@ -749,10 +747,9 @@ it("propagates a gzip download stream failure and cancels decompression", async 
   await storage.upload("/file.gz", new Uint8Array());
   storage.download = async () => ({
     status: 200,
-    contentLength: null,
+    contentLength: 0,
     contentRange: null,
-    contentType: null,
-    lastModified: null,
+    lastModified: new Date(0),
     body: new ReadableStream({
       pull(controller) {
         controller.error(new Error("upstream disconnected"));

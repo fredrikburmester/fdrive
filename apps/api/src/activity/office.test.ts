@@ -55,8 +55,8 @@ it("attributes Office saves to the authorized session and records Save As as a c
     expect.any(Function),
     expect.any(Function),
   );
-  // The target's facts are read once the bytes are there.
-  expect(await run.mock.calls.at(-1)?.[3]?.(undefined)).toMatchObject({
+  // The target's facts are the file the upload published.
+  expect(await run.mock.calls.at(-1)?.[3]?.(await storage.stat("/b"))).toMatchObject({
     path: "/b",
     kind: "file",
     size: 1,

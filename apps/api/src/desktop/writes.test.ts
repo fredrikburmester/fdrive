@@ -1175,9 +1175,10 @@ it("commits a combined save and rename, and keeps an old name written meanwhile"
   const second = await f.stage("other.txt", "newer", again);
   const move = f.raw.move.bind(f.raw);
   vi.spyOn(f.raw, "move").mockImplementation(async (path, target, options) => {
-    await move(path, target, options);
+    const moved = await move(path, target, options);
     if (target === "/other.txt")
       await f.raw.upload("/old.txt", body("theirs"), { overwrite: true });
+    return moved;
   });
   expect((await service.commit(f.principal, second.operationId)).state).toBe("completed");
   expect(await f.read("/other.txt")).toBe("newer");
@@ -2144,7 +2145,7 @@ it("answers a retry that comes while the commit runs with that commit's outcome"
   f.raw.move = vi.fn(async (path: string, target: string, options?: MoveOptions) => {
     void reached.call();
     await held;
-    await move(path, target, options);
+    return move(path, target, options);
   });
   const commit = f.service.commit(f.principal, save.operationId);
   await reached.made;

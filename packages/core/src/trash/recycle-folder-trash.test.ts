@@ -419,14 +419,6 @@ describe("createRecycleFolderTrash: restore", () => {
     expect(storage.dump()).toEqual({ [A.path]: "link" });
   });
 
-  it("falls back to a zero mtime when the provider reports none", async () => {
-    const storage = createMemoryStorage({ [A.path]: "hello a" }, { nullMtimePaths: [A.path] });
-
-    const restored = await trashFor(storage).restore(A.id);
-
-    expect(restored.modifiedAt).toEqual(new Date(0));
-  });
-
   it("removes the folders the restored leaf leaves empty, up to the namespace", async () => {
     const storage = createMemoryStorage({ [A.path]: "hello a", [TOP.path]: "top" });
 

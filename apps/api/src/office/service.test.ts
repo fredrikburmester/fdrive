@@ -1,5 +1,6 @@
 import { generateKeyPairSync, randomUUID } from "node:crypto";
 import { StorageError } from "@fdrive/core";
+import { entryStat } from "@fdrive/core/testing";
 import { describe, expect, it, vi } from "vitest";
 import { officeHarness, proofKey } from "../../test/fixtures/office/harness.ts";
 import { WopiError } from "./errors.ts";
@@ -301,29 +302,22 @@ describe("WOPI reads", () => {
     // A document past the limit does not open, and an open one is not served.
     await expect(h.open()).rejects.toMatchObject({ status: 413 });
     expect((await h.callback(opened, { contents: true })).status).toBe(413);
-    vi.spyOn(h.storage, "statFile").mockResolvedValue({
-      size: 5,
-      modifiedAt: null,
-      contentType: null,
-    });
+    vi.spyOn(h.storage, "statFile").mockResolvedValue(entryStat("/a.docx", { size: 5 }));
     expect(
       (await h.callback(opened, { contents: true, headers: { "X-WOPI-MaxExpectedSize": "5" } }))
         .status,
     ).toBe(412);
     expect((await h.callback(opened, { contents: true })).status).toBe(413);
   });
-  it("handles absent content metadata and errors inside async GET", async () => {
+  it("types a document by its name, with its length and time, and fails inside async GET", async () => {
     const h = await officeHarness();
     const opened = await h.open();
-    const original = h.storage.download.bind(h.storage);
-    vi.spyOn(h.storage, "download").mockImplementation(async (...args) => ({
-      ...(await original(...args)),
-      contentLength: null,
-      lastModified: null,
-      contentType: "text/plain",
-    }));
     const content = await h.callback(opened, { contents: true });
-    expect(content.headers.get("Content-Type")).toBe("text/plain");
+    expect(content.headers.get("Content-Type")).toBe(
+      "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    );
+    expect(content.headers.get("Content-Length")).toBe("5");
+    expect(content.headers.get("Last-Modified")).toBe(new Date(0).toUTCString());
     expect(await content.text()).toBe("hello");
     vi.spyOn(h.storage, "contentStamp").mockRejectedValue(new Error("private"));
     expect((await h.callback(opened)).status).toBe(500);

@@ -1,16 +1,6 @@
-import { isStorageError, type StorageProvider } from "@fdrive/core";
+import { isStorageError, type StorageProvider, type ZipProgress } from "@fdrive/core";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-
-export interface StorageConformanceOptions {
-  /**
-   * A directory the suite may create everything under, when the provider
-   * cannot offer a clean root per test (a shared real server). Defaults to
-   * a unique directory under "/".
-   */
-  readonly workspace?: string;
-  /** Skips checks that need `probeDirectoryRead`; it is optional on the port. */
-  readonly probe?: boolean;
-}
+import { unzip } from "./unzip.js";
 
 export interface StorageFactoryResult {
   readonly storage: StorageProvider;
@@ -18,7 +8,7 @@ export interface StorageFactoryResult {
   cleanup?(): Promise<void>;
 }
 
-/** Builds a fresh, empty (or at least isolated) storage for one test. */
+/** Builds a fresh, empty storage for one test. */
 export type StorageFactory = () => Promise<StorageFactoryResult> | StorageFactoryResult;
 
 async function text(body: ReadableStream<Uint8Array>): Promise<string> {
@@ -35,40 +25,28 @@ async function kindOf(promise: Promise<unknown>): Promise<string | null> {
 }
 
 /**
- * The behavioural contract every `StorageProvider` implementation must
- * pass. Run it against a provider's fake in its unit tests and against the
- * real backend in its integration tests; the memory storage in this package
- * passes it too, so anything tested on the fake holds for real providers.
- *
- * The suite creates everything it needs under a workspace directory and
- * removes it afterwards, so a shared backend can host many runs.
+ * The behavioural contract every `StorageProvider` passes, every member of
+ * it: the files folder (`@fdrive/local`) and the memory storage, so anything
+ * tested on the fake holds for the files folder. Each test gets a fresh
+ * storage from `factory` and works in a folder of its own.
  */
-export function describeStorageProvider(
-  name: string,
-  factory: StorageFactory,
-  options: StorageConformanceOptions = {},
-): void {
+export function describeStorageProvider(name: string, factory: StorageFactory): void {
   describe(`StorageProvider conformance: ${name}`, () => {
     let storage: StorageProvider;
     let cleanup: (() => Promise<void>) | undefined;
     let root: string;
 
     beforeEach(async () => {
+      // No test may pass by asserting nothing: the suite skips nothing.
+      expect.hasAssertions();
       const result = await factory();
       storage = result.storage;
       cleanup = result.cleanup?.bind(result);
-      root =
-        options.workspace ??
-        `/conformance-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
-      await storage.mkdir(root, { parents: true });
+      root = `/conformance-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+      await storage.mkdir(root);
     });
 
     afterEach(async () => {
-      try {
-        await storage.deleteDir(root);
-      } catch {
-        // A test may already have removed it.
-      }
       await cleanup?.();
     });
 
@@ -103,68 +81,95 @@ export function describeStorageProvider(
       expect(await kindOf(storage.list(`${root}/missing`))).toBe("not_found");
     });
 
-    it("stats files and directories, and statFile refuses a directory", async () => {
-      const file = await seed("s/f.txt", "12345");
-      expect(await storage.statFile(file)).toMatchObject({ size: 5 });
-      expect(await storage.stat(file)).toMatchObject({ kind: "file", size: 5 });
-      expect(await storage.stat(`${root}/s`)).toMatchObject({ kind: "dir" });
+    it("stats files and directories as entries, and statFile refuses a directory", async () => {
+      const file = await seed("s/F.txt", "12345");
+      const stat = await storage.stat(file);
+      expect(stat).toMatchObject({
+        path: file,
+        name: "F.txt",
+        kind: "file",
+        size: 5,
+        ext: ".txt",
+      });
+      expect(stat.modifiedAt).toBeInstanceOf(Date);
+      expect(stat.ino).toBeTypeOf("bigint");
+      expect(await storage.statFile(file)).toEqual(stat);
+      const dir = await storage.stat(`${root}/s`);
+      expect(dir).toMatchObject({ path: `${root}/s`, name: "s", kind: "dir", ext: "" });
+      expect(dir.modifiedAt).toBeInstanceOf(Date);
       expect(await kindOf(storage.statFile(`${root}/s`))).toBe("bad_request");
       expect(await kindOf(storage.statFile(`${root}/nope`))).toBe("not_found");
       expect(await kindOf(storage.stat(`${root}/nope`))).toBe("not_found");
     });
 
-    it("downloads whole files and byte ranges", async () => {
+    it("downloads whole files and byte ranges, with their length and modification time", async () => {
       const file = await seed("d.txt", "hello world");
+      const { modifiedAt } = await storage.stat(file);
       const whole = await storage.download(file);
-      expect(whole.status).toBe(200);
+      expect(whole).toMatchObject({ status: 200, contentLength: 11, contentRange: null });
+      expect(whole.lastModified).toEqual(modifiedAt);
       expect(await text(whole.body)).toBe("hello world");
       const range = await storage.download(file, { range: { start: 6, end: 10 } });
-      expect(range.status).toBe(206);
+      expect(range).toMatchObject({
+        status: 206,
+        contentLength: 5,
+        contentRange: "bytes 6-10/11",
+      });
       expect(await text(range.body)).toBe("world");
-      expect(range.contentRange).toBe("bytes 6-10/11");
       const open = await storage.download(file, { range: { start: 6 } });
       expect(await text(open.body)).toBe("world");
       expect(await kindOf(storage.download(`${root}/nope`))).toBe("not_found");
     });
 
-    it("cancels a download through its signal", async () => {
+    it("cancels a download through its signal, as an abort rather than a storage error", async () => {
       const file = await seed("c.txt", "hello");
       const controller = new AbortController();
       controller.abort();
-      await expect(storage.download(file, { signal: controller.signal })).rejects.toThrow();
+      expect(await kindOf(storage.download(file, { signal: controller.signal }))).toMatch(
+        /^not a StorageError: AbortError/,
+      );
     });
 
-    it("uploads with parents, replaces when asked, and keeps the given mtime when supported", async () => {
+    it("uploads with parents, replaces when asked, keeps the given mtime and reports the file", async () => {
       const path = `${root}/deep/er/file.txt`;
-      await storage.upload(path, new TextEncoder().encode("one"), { mkdirParents: true });
+      const first = await storage.upload(path, new TextEncoder().encode("one"), {
+        mkdirParents: true,
+      });
+      expect(first).toMatchObject({ path, name: "file.txt", kind: "file", size: 3, ext: ".txt" });
+      expect(first).toEqual(await storage.stat(path));
       expect(await text((await storage.download(path)).body)).toBe("one");
       const at = new Date("2020-01-02T03:04:05Z");
-      await storage.upload(path, new TextEncoder().encode("two"), {
+      const second = await storage.upload(path, new TextEncoder().encode("three"), {
         modifiedAt: at,
         overwrite: true,
       });
-      expect(await text((await storage.download(path)).body)).toBe("two");
-      if (storage.setModifiedAt !== undefined) {
-        expect((await storage.statFile(path)).modifiedAt?.getTime()).toBe(at.getTime());
-      }
+      expect(second).toMatchObject({ path, size: 5, modifiedAt: at });
+      expect(second).toEqual(await storage.stat(path));
+      expect(await text((await storage.download(path)).body)).toBe("three");
+      expect(
+        await kindOf(storage.upload(`${root}/short.txt`, new Uint8Array(2), { contentLength: 3 })),
+      ).toBe("bad_request");
+      expect(await kindOf(storage.stat(`${root}/short.txt`))).toBe("not_found");
     });
 
     it("publishes an upload sent in pieces at the last, and takes a piece sent again", async () => {
       const path = `${root}/pieces/file.txt`;
       const encode = (value: string) => new TextEncoder().encode(value);
-      const piece = (offset: number, final = false) => ({
-        mkdirParents: true,
-        part: { id: "0123456789abcdef", offset, final },
-      });
-      await storage.upload(path, encode("hello"), piece(0));
-      await storage.upload(path, encode(" WORLD!"), piece(5));
+      const part = (offset: number) => ({ part: { id: "0123456789abcdef", offset } });
+      await storage.uploadPart(path, encode("hello"), part(0));
+      await storage.uploadPart(path, encode(" WORLD!"), part(5));
       expect(await kindOf(storage.statFile(path))).toBe("not_found");
       // Sent again from its offset, a piece replaces what the last attempt left.
-      await storage.upload(path, encode(" world"), piece(5, true));
+      const published = await storage.upload(path, encode(" world"), {
+        ...part(5),
+        mkdirParents: true,
+      });
+      expect(published).toMatchObject({ path, size: 11 });
       expect(await text((await storage.download(path)).body)).toBe("hello world");
       expect((await storage.list(`${root}/pieces`)).map((entry) => entry.name)).toEqual([
         "file.txt",
       ]);
+      expect(await kindOf(storage.uploadPart(path, encode("x"), part(0)))).toBe("conflict");
     });
 
     it("stages an upload's body outside the caller's critical section and publishes inside it", async () => {
@@ -199,20 +204,35 @@ export function describeStorageProvider(
       expect(await text((await storage.download(path)).body)).toBe("staged");
     });
 
-    it("creates directories, with parents on request", async () => {
-      await storage.mkdir(`${root}/one`);
-      await storage.mkdir(`${root}/two/three`, { parents: true });
-      expect(await storage.stat(`${root}/one`)).toMatchObject({ kind: "dir" });
-      expect(await storage.stat(`${root}/two/three`)).toMatchObject({ kind: "dir" });
+    it("creates directories, with parents on request, and reports the first it created", async () => {
+      expect(await storage.mkdir(`${root}/one`)).toMatchObject({
+        path: `${root}/one`,
+        name: "one",
+        kind: "dir",
+        created: `${root}/one`,
+      });
+      const made = await storage.mkdir(`${root}/two/three`, { parents: true });
+      expect(made).toMatchObject({ path: `${root}/two/three`, created: `${root}/two` });
+      expect(made.ino).toBe((await storage.stat(`${root}/two/three`)).ino);
+      expect(await storage.mkdir(`${root}/two/three`, { parents: true })).toMatchObject({
+        path: `${root}/two/three`,
+        created: null,
+      });
+      expect(await kindOf(storage.mkdir(`${root}/one`))).toBe("conflict");
+      expect(await kindOf(storage.mkdir(`${root}/none/four`))).toBe("not_found");
     });
 
-    it("moves files and whole directories", async () => {
+    it("moves files and whole directories, keeping their inodes, and reports where they went", async () => {
       const file = await seed("m/a.txt", "a");
       await seed("m/sub/b.txt", "b");
-      await storage.move(file, `${root}/m/renamed.txt`);
+      const { ino } = await storage.stat(file);
+      const renamed = await storage.move(file, `${root}/m/renamed.txt`);
+      expect(renamed).toMatchObject({ path: `${root}/m/renamed.txt`, kind: "file", size: 1, ino });
+      expect(renamed).toEqual(await storage.stat(`${root}/m/renamed.txt`));
       expect(await kindOf(storage.statFile(file))).toBe("not_found");
       expect(await text((await storage.download(`${root}/m/renamed.txt`)).body)).toBe("a");
-      await storage.move(`${root}/m`, `${root}/moved`);
+      const folder = await storage.move(`${root}/m`, `${root}/moved`);
+      expect(folder).toMatchObject({ path: `${root}/moved`, name: "moved", kind: "dir" });
       expect(await kindOf(storage.stat(`${root}/m`))).toBe("not_found");
       expect(await text((await storage.download(`${root}/moved/sub/b.txt`)).body)).toBe("b");
       expect(await kindOf(storage.move(`${root}/nope`, `${root}/x`))).toBe("not_found");
@@ -252,13 +272,19 @@ export function describeStorageProvider(
       expect(await kindOf(storage.stat(moved))).toBe("not_found");
     });
 
-    it("copies files and whole directories, leaving the source in place", async () => {
+    it("copies files and whole directories, leaving the source in place, and reports the copy", async () => {
       const file = await seed("c/a.txt", "a");
       await seed("c/sub/b.txt", "b");
-      await storage.copy(file, `${root}/c/copy.txt`);
+      const copy = await storage.copy(file, `${root}/c/copy.txt`);
+      expect(copy).toMatchObject({ path: `${root}/c/copy.txt`, kind: "file", size: 1 });
+      expect(copy).toEqual(await storage.stat(`${root}/c/copy.txt`));
+      expect(copy.ino).not.toBe((await storage.stat(file)).ino);
       expect(await text((await storage.download(file)).body)).toBe("a");
       expect(await text((await storage.download(`${root}/c/copy.txt`)).body)).toBe("a");
-      await storage.copy(`${root}/c`, `${root}/c2`);
+      expect(await storage.copy(`${root}/c`, `${root}/c2`)).toMatchObject({
+        path: `${root}/c2`,
+        kind: "dir",
+      });
       expect(await text((await storage.download(`${root}/c/sub/b.txt`)).body)).toBe("b");
       expect(await text((await storage.download(`${root}/c2/sub/b.txt`)).body)).toBe("b");
     });
@@ -297,45 +323,58 @@ export function describeStorageProvider(
       expect((await storage.list(root)).map((entry) => entry.name)).toContain(`${name}.moved`);
     });
 
-    it("sets a file's modification time when the capability is present", async () => {
-      const file = await seed("t.txt", "t");
-      const at = new Date("2021-05-06T07:08:09Z");
-      if (storage.setModifiedAt === undefined) {
-        return;
-      }
-      await storage.setModifiedAt(file, at);
-      expect((await storage.statFile(file)).modifiedAt?.getTime()).toBe(at.getTime());
-      expect(await kindOf(storage.setModifiedAt(`${root}/nope`, at))).toBe("not_found");
-    });
-
-    it("streams a zip when the capability is present", async () => {
+    it("zips files and folders with everything in them, empty folders included", async () => {
       const file = await seed("z/a.txt", "zip me");
-      if (storage.zip === undefined) {
-        return;
-      }
-      const stream = await storage.zip([file]);
-      const bytes = new Uint8Array(await new Response(stream).arrayBuffer());
-      expect(bytes.length).toBeGreaterThan(4);
-      expect([bytes[0], bytes[1]]).toEqual([0x50, 0x4b]);
+      await seed("z/docs/b.txt", "and me");
+      await storage.mkdir(`${root}/z/docs/empty`);
+      const steps: ZipProgress[] = [];
+      const stream = await storage.zip([`${root}/z/docs`, file], {
+        onProgress: (step) => steps.push(step),
+      });
+      expect(unzip(new Uint8Array(await new Response(stream).arrayBuffer()))).toEqual({
+        "docs/b.txt": "and me",
+        "docs/empty/": "",
+        "a.txt": "zip me",
+      });
+      expect(steps[0]).toEqual({ processed: 0, total: 2, bytes: 0 });
+      expect(steps.at(-1)).toEqual({ processed: 2, total: 2, bytes: 12 });
+      expect(await kindOf(storage.zip([`${root}/z/nope`]))).toBe("not_found");
+      const aborted = new AbortController();
+      aborted.abort();
+      await expect(storage.zip([file], { signal: aborted.signal })).rejects.toThrow();
     });
 
-    it("probes a directory for read access when the method is present", async () => {
-      if (options.probe === false || storage.probeDirectoryRead === undefined) {
-        return;
-      }
-      await seed("p/a.txt", "p");
+    it("zips the root as its contents", async () => {
+      await seed("r.txt", "root");
+      const stream = await storage.zip(["/"]);
+      const names = Object.keys(unzip(new Uint8Array(await new Response(stream).arrayBuffer())));
+      expect(names).toContain(`${root.slice(1)}/r.txt`);
+    });
+
+    it("probes a directory for read access", async () => {
+      const file = await seed("p/a.txt", "p");
       await expect(storage.probeDirectoryRead(`${root}/p`)).resolves.toBeUndefined();
       expect(await kindOf(storage.probeDirectoryRead(`${root}/nope`))).toBe("not_found");
+      expect(await kindOf(storage.probeDirectoryRead(file))).toBe("bad_request");
     });
 
-    it("probes a file for read access as download would when the method is present", async () => {
-      if (storage.probeFileRead === undefined) {
-        return;
-      }
-      const file = await seed("f/a.txt", "f");
-      await expect(storage.probeFileRead(file)).resolves.toBeUndefined();
-      expect(await kindOf(storage.probeFileRead(`${root}/f/nope.txt`))).toBe("not_found");
-      expect(await kindOf(storage.probeFileRead(`${root}/f`))).toBe("bad_request");
+    it("stamps a file without reading it: a rewrite is a new inode, a rename keeps it", async () => {
+      const file = await seed("st/a.txt", "stamp");
+      const stamp = await storage.contentStamp(file);
+      expect(stamp).toMatchObject({ size: 5, ino: (await storage.stat(file)).ino });
+      expect(await storage.contentStamp(file)).toEqual(stamp);
+      const at = new Date("2022-03-04T05:06:07Z");
+      await storage.upload(file, new TextEncoder().encode("again"), {
+        overwrite: true,
+        modifiedAt: at,
+      });
+      const rewritten = await storage.contentStamp(file);
+      expect(rewritten.ino).not.toBe(stamp.ino);
+      expect(rewritten.mtimeNs).toBe(BigInt(at.getTime()) * BigInt(1_000_000));
+      await storage.move(file, `${root}/st/b.txt`);
+      expect((await storage.contentStamp(`${root}/st/b.txt`)).ino).toBe(rewritten.ino);
+      expect(await kindOf(storage.contentStamp(`${root}/st`))).toBe("bad_request");
+      expect(await kindOf(storage.contentStamp(file))).toBe("not_found");
     });
   });
 }

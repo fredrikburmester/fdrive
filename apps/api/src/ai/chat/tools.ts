@@ -1,5 +1,12 @@
 import { createHash } from "node:crypto";
-import { baseName, extensionOf, isReservedPath, normalizePath, parentPath } from "@fdrive/core";
+import {
+  baseName,
+  extensionOf,
+  isReservedPath,
+  mimeFromExtension,
+  normalizePath,
+  parentPath,
+} from "@fdrive/core";
 import { z } from "zod";
 import { boundedBytes, decodeText, MAX_FILE_BYTES } from "../../mcp/content.js";
 import { pageText } from "../../mcp/format.js";
@@ -61,7 +68,7 @@ export async function readBytes(
   signal: AbortSignal,
 ): Promise<{ bytes: Buffer; sha256: string } | null> {
   const result = await deps.principal.storage.download(path, { signal });
-  if (result.contentLength !== null && result.contentLength > limit) {
+  if (result.contentLength > limit) {
     await result.body.cancel();
     return null;
   }
@@ -156,12 +163,13 @@ function fileInfoTool(deps: DriveToolsDeps): AiTool {
       async run(args) {
         const path = await referencedArg(deps, args.path);
         const stat = await deps.principal.storage.stat(path);
+        const mime = mimeFromExtension(stat.ext);
         const lines = [
           `${path}`,
           `kind: ${stat.kind === "dir" ? "folder" : "file"}`,
           ...(stat.kind === "dir" ? [] : [`size: ${formatSize(stat.size)} (${stat.size} bytes)`]),
-          `modified: ${stat.modifiedAt?.toISOString() ?? "unknown"}`,
-          ...(stat.contentType ? [`type: ${stat.contentType}`] : []),
+          `modified: ${stat.modifiedAt.toISOString()}`,
+          ...(mime === null ? [] : [`type: ${mime}`]),
         ];
         const metadata = deps.mcp.metadata;
         if (metadata !== undefined) {
@@ -171,9 +179,9 @@ function fileInfoTool(deps: DriveToolsDeps): AiTool {
               path,
               kind: stat.kind === "dir" ? "dir" : "file",
               size: stat.size,
-              modifiedAt: (stat.modifiedAt ?? deps.mcp.clock()).toISOString(),
+              modifiedAt: stat.modifiedAt.toISOString(),
               ext: extensionOf(baseName(path)),
-              mime: null,
+              mime,
             },
           ]);
           const tagIds = new Set(entry?.meta?.tagIds ?? []);
