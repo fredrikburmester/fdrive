@@ -45,10 +45,10 @@ export const localUsers = appSchema.table(
     /** scrypt, in the share password format: `scrypt$N$r$p$salt$key`. */
     passwordHash: text("password_hash").notNull(),
     disabled: boolean("disabled").notNull().default(false),
-    /** The most bytes their home folder may hold; null for no limit. */
-    storageLimit: bigint("storage_limit", { mode: "number" }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+    /** The most bytes their home folder may hold; null for no limit. */
+    storageLimit: bigint("storage_limit", { mode: "number" }),
   },
   (table) => [uniqueIndex("local_users_username_lower_unique").on(sql`lower(${table.username})`)],
 );
@@ -154,10 +154,10 @@ export const apiTokens = appSchema.table(
       .references(() => identities.id, { onDelete: "cascade" }),
     name: text("name").notNull(),
     tokenHash: text("token_hash").notNull().unique(),
-    access: jsonb("access").$type<ApiTokenAccess>().notNull(),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     lastUsedAt: timestamp("last_used_at", { withTimezone: true }),
     expiresAt: timestamp("expires_at", { withTimezone: true }),
+    access: jsonb("access").$type<ApiTokenAccess>().notNull(),
   },
   (table) => [
     index("api_tokens_account_id_idx").on(table.accountId),
@@ -314,20 +314,20 @@ export const shares = appSchema.table(
       .notNull()
       .references(() => identities.id, { onDelete: "cascade" }),
     name: text("name").notNull(),
-    description: text("description").notNull().default(""),
     scope: text("scope").notNull(),
     paths: text("paths").array().notNull(),
-    /** The link's password, hashed; `null` for an open link. Only the public lookup reads it. */
-    passwordHash: text("password_hash"),
     /** Operator-chosen public page rendering: "auto" | "list" | "gallery" | "download". */
     presentation: text("presentation").notNull().default("auto"),
     expiresAt: timestamp("expires_at", { withTimezone: true }),
-    /** 0 is unlimited. */
-    maxDownloads: integer("max_downloads").notNull().default(0),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
     /** Downloads, previews and archives counted against `maxDownloads`; uploads for a write share. */
     usedDownloads: integer("used_downloads").notNull().default(0),
+    description: text("description").notNull().default(""),
+    /** The link's password, hashed; `null` for an open link. Only the public lookup reads it. */
+    passwordHash: text("password_hash"),
+    /** 0 is unlimited. */
+    maxDownloads: integer("max_downloads").notNull().default(0),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [index("shares_identity_id_idx").on(table.identityId)],
 );
@@ -490,10 +490,6 @@ export const backupRuns = appSchema.table(
   {
     id: uuid("id").primaryKey().defaultRandom(),
     state: text("state").notNull().default("queued"),
-    leaseId: uuid("lease_id"),
-    verificationRequested: boolean("verification_requested").notNull().default(false),
-    verificationError: text("verification_error"),
-    verifiedAt: timestamp("verified_at", { withTimezone: true }),
     requestedBy: uuid("requested_by"),
     scheduleSlot: text("schedule_slot").unique(),
     request: jsonb("request").notNull(),
@@ -506,6 +502,10 @@ export const backupRuns = appSchema.table(
     coverage: jsonb("coverage").notNull().default([]),
     pinned: boolean("pinned").notNull().default(false),
     artifact: text("artifact"),
+    leaseId: uuid("lease_id"),
+    verifiedAt: timestamp("verified_at", { withTimezone: true }),
+    verificationRequested: boolean("verification_requested").notNull().default(false),
+    verificationError: text("verification_error"),
   },
   (table) => [index("backup_runs_created_idx").on(table.createdAt)],
 );
@@ -521,11 +521,11 @@ export const backupDeliveries = appSchema.table(
     name: text("name").notNull(),
     state: text("state").notNull().default("pending"),
     objectKey: text("object_key"),
-    markerVersionId: text("marker_version_id"),
-    retentionUntil: timestamp("retention_until", { withTimezone: true }),
     versionId: text("version_id"),
     verifiedAt: timestamp("verified_at", { withTimezone: true }),
     error: text("error"),
+    markerVersionId: text("marker_version_id"),
+    retentionUntil: timestamp("retention_until", { withTimezone: true }),
   },
   (table) => [
     index("backup_deliveries_run_idx").on(table.runId),

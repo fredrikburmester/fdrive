@@ -17,8 +17,9 @@ import { join } from "node:path";
 import { Readable } from "node:stream";
 import { createGzip } from "node:zlib";
 import { createDb, migrate } from "@fdrive/db";
-import { startPostgres } from "@fdrive/testkit";
+import { migrationsThrough, SQUASHED_MIGRATIONS, startPostgres } from "@fdrive/testkit";
 import { Decrypter, Encrypter, generateIdentity, identityToRecipient } from "age-encryption";
+import { migrate as runMigrations } from "drizzle-orm/node-postgres/migrator";
 import type { Pool } from "pg";
 import tar from "tar-stream";
 import { afterAll, beforeAll, beforeEach, expect, it, vi } from "vitest";
@@ -198,6 +199,82 @@ it("roundtrips all registered tables, recovery files and exact bigint values", a
   const restored = await new BackupStore(rehearsal.pool).configuration();
   expect(restored.restored).toBe(true);
   expect(restored.installation_id).not.toBe(inspection.header.installationId);
+});
+it("restores across a database upgraded from v0.7.0-rc.11 and a new install, both ways", async () => {
+  /** A database v0.7.0-rc.11 left (the squashed history through 0046), not yet upgraded. */
+  async function rc11() {
+    const name = `backup_rc11_${sequence++}`;
+    await control.pool.query(`create database ${name}`);
+    const url = new URL(container.connectionString);
+    url.pathname = `/${name}`;
+    const database = createDb(url.toString());
+    databases.push(database);
+    const migrations = await migrationsThrough(SQUASHED_MIGRATIONS, "0046_trash_items");
+    try {
+      await runMigrations(database.db, { migrationsFolder: migrations });
+    } finally {
+      await rm(migrations, { recursive: true, force: true });
+    }
+    return database;
+  }
+  async function rows(pool: Pool, table: string) {
+    return (await pool.query(`select to_jsonb(t) as row from ${table} t order by 1`)).rows;
+  }
+  async function restore(target: Pool, file: string) {
+    const stage = join(directory, randomUUID());
+    await mkdir(stage);
+    await restoreArchive({
+      pool: target,
+      file,
+      identity: key,
+      stateDirectory: stage,
+      reseal: (bytes) => bytes,
+    });
+  }
+  // The owner's database: Trash rows and a link as rc.11 stored them, then this release's upgrade.
+  const owner = await rc11();
+  const account = randomUUID();
+  const login = randomUUID();
+  await owner.pool.query("insert into app.accounts (id) values ($1)", [account]);
+  await owner.pool.query(
+    "insert into app.identities (id, account_id, username) values ($1, $2, 'alice')",
+    [login, account],
+  );
+  await owner.pool.query(
+    `insert into app.trash_items (identity_id, original_path, name, kind, size, deleted_at) values
+      ($1, '/docs/report.pdf', 'report.pdf', 'file', 1234, '2026-11-14T10:00:00Z'),
+      ($1, '/photos/2024', '2024', 'dir', 0, '2026-11-13T09:00:00Z')`,
+    [login],
+  );
+  await owner.pool.query(
+    "insert into app.shares (identity_id, name, scope, paths) values ($1, 'Report', 'read', array['/docs/report.pdf'])",
+    [login],
+  );
+  await migrate(owner.db);
+  const output = join(directory, `${randomUUID()}.age`);
+  await captureSnapshot(source({ pool: owner.pool }), {
+    id: randomUUID(),
+    installationId: (await new BackupStore(owner.pool).configuration()).installation_id,
+    recipient,
+    output,
+  });
+
+  const installed = await fresh();
+  await restore(installed.pool, output);
+  for (const table of ["app.identities", "app.trash_items", "app.shares"])
+    expect(await rows(installed.pool, table)).toEqual(await rows(owner.pool, table));
+  expect(await rows(installed.pool, "app.trash_items")).toHaveLength(2);
+
+  // A new install's backup restores onto an upgraded database as well.
+  await db.pool.query(
+    "insert into app.system_events(id,subsystem,level,message) values(7,'general','info','Installed')",
+  );
+  const upgraded = await rc11();
+  await migrate(upgraded.db);
+  await restore(upgraded.pool, (await snapshot()).output);
+  expect(await rows(upgraded.pool, "app.system_events")).toEqual(
+    await rows(db.pool, "app.system_events"),
+  );
 });
 it("rejects wrong keys, damaged ciphertext, unknown tables and missing required schema", async () => {
   const file = await snapshot();

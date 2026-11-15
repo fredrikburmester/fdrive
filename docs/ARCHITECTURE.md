@@ -11,7 +11,11 @@ Current implementation reference. Unfinished work belongs in [plans](plans/READM
   authorization, HTTP, events and jobs. The UI uses the typed contracts client.
 - `packages/db` owns Drizzle migrations for PostgreSQL's `app` metadata and `idx` index
   schemas. The indexer and OCR consume those schemas; they do not independently migrate them,
-  and compose starts them once the API, which migrates before it serves, is healthy.
+  and compose starts them once the API, which migrates before it serves, is healthy. History
+  starts at `0000_baseline`, which replaced migrations 0000–0047. A new install runs it; a
+  database v0.7.0-rc.11 or main's edge build left skips it, and `0001_squash_history` gives it
+  the same schema and history. An older database is refused, unchanged, until it has run
+  v0.7.0-rc.11.
 - The indexer scans the files folder, extracts content and builds thumbnails/embeddings.
   The API records each change it makes in the change journal, `idx.changes`, and OCR each
   PDF it rewrites; the indexer reads the journal from its own position and applies them at
@@ -292,5 +296,5 @@ WOPI locks accept opaque text file IDs and have a 30-minute TTL. The Office rout
 resolve and authorize a durable Office file before accessing its lock; the generic
 lock repository therefore has no UUID foreign key. Lock reads/writes prune up to
 100 expired rows using the expiry index and skip rows another transaction holds.
-The five migration-created search indexes are also declared in Drizzle so schema
-comparison preserves them; migration 0005 registers existing indexes idempotently.
+The search indexes (trigram, full text and vector) are declared in Drizzle with the rest of
+the schema, so the baseline migration creates them like any other index.

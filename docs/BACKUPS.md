@@ -128,7 +128,9 @@ writers are not a filesystem snapshot.
 Use the same trusted fdrive release that made the backup, a **new empty database**, a new
 32-byte base64 `FDRIVE_MASTER_KEY`, and a private persistent backup directory. Keep the old
 installation stopped during cutover. The archive contains data, not executable migration SQL.
-Restore compares the installed migration hashes and schema before importing anything.
+Restore compares the installed migration hashes and schema before importing anything. A
+database upgraded from v0.7.0-rc.11 records the same history a new install does, the
+baseline and `0001_squash_history`, so a backup restores from either onto the other.
 
 The CLI is available in the API image and built API directory:
 
