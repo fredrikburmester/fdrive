@@ -70,8 +70,8 @@ Recommended on 2026-11-14 and approved by the owner the same day.
 18. **Live updates and metadata from the journal.** Every fdrive change returns through the
     indexer's `idx_events`; `events/indexer-listener.ts` handles it once per login, sends the
     actor a second live update and moves metadata a second time. With indexing off, grantees get
-    no live updates and metadata ignores SMB moves. Activity observations and Office follow the
-    journal.
+    no live updates and metadata ignores SMB moves (the Office registry follows with metadata).
+    Activity observations follow the journal.
 19. **One file-operations service.** MCP's activity proxy and its copy of metadata following
     (`composition.ts` `onMutation`) merge with the fs and Trash routes' recorders.
 20. **Delete removed files from the index.** Tombstones are never purged and every scan loads
@@ -99,14 +99,11 @@ All are server-only and keep shipped Mac builds working.
 
 31. **Shares.** One module instead of the access-object layers; one range implementation; drop
     `has_password` and rename `views`.
-33. **Office.** Key Office files by owner path; no provider in settings or edit rules; pick
-    editors from fdrive's users.
 34. **Backups.** S3 only; this also removes the guard that lists every moved, deleted or zipped
     folder (`backups/reserved-storage.ts`).
 
 ## Last
 
-36. Collapse the schema: provider columns and rows, `identities.provider_id`,
-    `office_files.provider_id`. Keep the provider row's UUID, which the Mac app compares as
-    `providerId`.
+36. Collapse the schema: provider columns and rows, `identities.provider_id`. Keep the provider
+    row's UUID, which the Mac app compares as `providerId`.
 37. Squash the migrations into one baseline.

@@ -80,3 +80,49 @@ test("Office onboarding saves and resumes its choice before entering files", asy
     ).toBe(true);
   }
 });
+
+test("System > Office chooses editors from fdrive's users", async ({ page }) => {
+  const officeUrl = "/api/v1/system/office";
+  const headers = { "x-requested-with": "fdrive" };
+  const read = async () =>
+    ((await (await page.request.get(officeUrl)).json()) as SystemOfficeResponse).configuration;
+  const office = await read();
+  try {
+    // The page offers its settings while Office is on.
+    expect(
+      (
+        await page.request.put(officeUrl, {
+          headers,
+          data: { ...office, enabled: true, editingEnabled: false, editorUsernames: [] },
+        })
+      ).ok(),
+    ).toBe(true);
+    await page.goto("/system/office");
+    await dismissActivityPanel(page);
+    await page.getByRole("button", { name: "Settings" }).click();
+    await page.getByRole("switch", { name: "Allow document editing" }).click();
+    // Every user is offered, and nothing can be saved until one is chosen.
+    for (const username of ["alice", "bob", "carol"])
+      await expect(page.getByRole("checkbox", { name: username, exact: true })).toBeVisible();
+    await expect(
+      page.getByText("When editing is enabled, choose at least one user."),
+    ).toBeVisible();
+    await page.getByRole("checkbox", { name: "bob", exact: true }).click();
+    await page.getByRole("checkbox", { name: "carol", exact: true }).click();
+    await page.getByRole("button", { name: "Save", exact: true }).click();
+    await expect.poll(async () => (await read()).editorUsernames).toEqual(["bob", "carol"]);
+    // The sheet closes and the page lists the editors.
+    await expect(page.getByRole("checkbox")).toHaveCount(0);
+    await expect(page.getByText("carol", { exact: true })).toBeVisible();
+  } finally {
+    const current = await read();
+    expect(
+      (
+        await page.request.put(officeUrl, {
+          headers,
+          data: { ...office, revision: current.revision },
+        })
+      ).ok(),
+    ).toBe(true);
+  }
+});

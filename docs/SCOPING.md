@@ -18,8 +18,7 @@ folder is read under (`localIndexRoot`): the configured root whose `storagePath`
 ## Configured and indexed scopes
 
 `configuredMappings(identity)` returns the home plus any extra scopes, indexed or not, without
-reading storage. Office, index events, the Office file registry and activity observations use
-it. It is unavailable only as `invalid_configuration` (the username is not one path segment).
+reading storage. Index events and activity observations use it. It is unavailable only as `invalid_configuration` (the username is not one path segment).
 
 `verifiedIndexScopes(identity)` keeps the configured scopes whose root is in
 `FDRIVE_INDEX_ROOTS`, and is `no_roots` when none is. Search, duplicates, thumbnails, folder
@@ -54,8 +53,8 @@ proof.
 
 HTTP and MCP consumers must receive explicit indexed scopes, respect native/API-token
 identity ownership and omit inaccessible paths/content. Bounded aggregates must report
-partial or sampled results honestly. Office callbacks use current configured mappings and
-their own live authorization; an Office UUID does not grant access. Index events must not
+partial or sampled results honestly. Office keys documents by owner and owner's path, not
+by scope, and authorizes each callback itself; an Office UUID does not grant access. Index events must not
 leak paths to unauthorized subscribers.
 
 Regression coverage includes the [resolver](../apps/api/src/scoping/resolver.test.ts),

@@ -72,13 +72,10 @@ describe("Office settings client", () => {
         revision: 0,
         enabled: false,
         editingEnabled: false,
-        editingProviderId: null,
         editorUsernames: [],
       },
       product: "onlyoffice" as const,
       status: "off" as const,
-      activeProviderId: "123e4567-e89b-42d3-a456-426614174000",
-      activeProviderLabel: "Primary",
     };
     const fetchMock = vi.fn<typeof fetch>(async () => Response.json(response));
     const client = createApiClient({ fetch: fetchMock });

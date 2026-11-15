@@ -44,6 +44,14 @@ export interface LocalGrantService {
    */
   ownerPath(identityId: string, path: string): Promise<{ identityId: string; path: string }>;
   /**
+   * The reverse of `ownerPath`: where `owned` (an owner's login and the
+   * owner's path) lies in `identityId`'s files, under `Shared with me` for a
+   * login it is shared with, or `null` when that login cannot reach it. The
+   * owner cannot reach a path of their own that a folder shared with them
+   * hides (`Shared with me/<name>`) either.
+   */
+  pathFor(identityId: string, owned: { identityId: string; path: string }): Promise<string | null>;
+  /**
    * What `onMoved` does, as data a caller applies in its own transaction (a
    * Mac write's receipt): the owner's username and the move, or `null` when
    * no share can follow (a file, or a login that is gone).
@@ -267,6 +275,28 @@ export function createLocalGrantService(deps: LocalGrantServiceDeps): LocalGrant
       const owner = await repos.identities.findByProviderUsername(deps.storageId, folder.owner);
       if (owner === null) throw new Error("the owner of a shared folder has no login");
       return { identityId: owner.id, path: joinPath(folder.path, ...segments.slice(2)) };
+    },
+
+    async pathFor(identityId, owned) {
+      const login = await repos.identities.get(identityId);
+      if (login === null) return null;
+      const folders = await received(login.externalUsername);
+      if (owned.identityId === identityId) {
+        const segments = splitSegments(owned.path);
+        const hidden =
+          segments[0] === SHARED_WITH_ME && folders.some((folder) => folder.name === segments[1]);
+        return hidden ? null : owned.path;
+      }
+      const owner = await repos.identities.get(owned.identityId);
+      if (owner === null) return null;
+      // The most specific folder, when one inside another is shared too.
+      const folder = folders
+        .filter((candidate) => candidate.owner === owner.externalUsername)
+        .filter((candidate) => under(owned.path, candidate.path))
+        .sort((a, b) => b.path.length - a.path.length)[0];
+      if (folder === undefined) return null;
+      const inside = splitSegments(owned.path).slice(splitSegments(folder.path).length);
+      return joinPath(SHELF_PATH, folder.name, ...inside);
     },
 
     grantMove,

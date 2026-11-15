@@ -345,26 +345,27 @@ export const settings = appSchema.table("settings", {
 });
 
 /**
- * Shared office identity survives index clears and user-specific scopes.
- * Rows go with their provider: once a provider row is removed (which
- * requires that no login uses it) nothing can open the documents it named.
+ * The durable ids Office gives documents, keyed by where each lies in its
+ * owner's files: the owner's login and the owner's own path, a canonical
+ * virtual path. A document in a folder shared with someone is its owner's,
+ * so everyone who reaches it opens one id. Rows go with the owner's login.
+ * Deleted rows stay as tombstones (`deleted_at`).
  */
 export const officeFiles = appSchema.table(
   "office_files",
   {
     id: uuid("id").primaryKey().defaultRandom(),
-    providerId: uuid("provider_id")
+    identityId: uuid("identity_id")
       .notNull()
-      .references(() => providers.id, { onDelete: "cascade" }),
-    rootName: text("root_name").notNull(),
+      .references(() => identities.id, { onDelete: "cascade" }),
     path: text("path").notNull(),
     deletedAt: timestamp("deleted_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [
-    index("office_files_provider_id_idx").on(table.providerId),
-    uniqueIndex("office_files_active_location_unique")
-      .on(table.providerId, table.rootName, table.path)
+    index("office_files_identity_id_idx").on(table.identityId),
+    uniqueIndex("office_files_active_path_unique")
+      .on(table.identityId, table.path)
       .where(sql`${table.deletedAt} is null`),
   ],
 );

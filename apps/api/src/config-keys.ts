@@ -366,15 +366,6 @@ export const CONFIG_KEYS: readonly ConfigKeyDef[] = [
     secret: false,
     subsystem: "office",
   },
-  {
-    key: "FDRIVE_OFFICE_EDIT_RULES",
-    description:
-      "Advanced per-identity path restrictions, applied in addition to the saved editor username list. Empty/unset adds no further restriction.",
-    default: null,
-    example: "[]",
-    secret: false,
-    subsystem: "office",
-  },
 ];
 
 /** A subsystem's configuration state, before any liveness probe is applied. */
