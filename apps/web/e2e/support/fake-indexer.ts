@@ -215,14 +215,6 @@ async function handleRequest(
     sendJson(res, 202, { started: true, total: THUMBNAILS_REBUILD_TOTAL });
     return;
   }
-  if (method === "POST" && url === "/extract") {
-    await readBody(req);
-    // Not called by any current fdrive API route (see `docs/INDEXER.md`:
-    // live text preview is not wired up yet); stubbed only so a future
-    // caller gets a well-formed response instead of a 404.
-    sendJson(res, 200, { text: "", truncated: false });
-    return;
-  }
 
   await readBody(req);
   sendJson(res, 404, {

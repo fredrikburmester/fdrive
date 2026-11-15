@@ -254,6 +254,7 @@ describe("signing in", () => {
       identityId: hank.id,
       name: "Token",
       tokenHash: "token",
+      access: { mode: "read", paths: ["/"] },
     });
 
     await first.db.delete(identities).where(eq(identities.id, hank.id));

@@ -215,8 +215,15 @@
     {
       "idx": 30,
       "version": "7",
-      "when": 1794698800228,
-      "tag": "0030_local_passwords",
+      "when": 1794698350539,
+      "tag": "0030_drop_legacy_tokens_and_moves",
+      "breakpoints": true
+    },
+    {
+      "idx": 31,
+      "version": "7",
+      "when": 1794702364702,
+      "tag": "0031_local_passwords",
       "breakpoints": true
     }
   ]

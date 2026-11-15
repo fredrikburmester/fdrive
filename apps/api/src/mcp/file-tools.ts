@@ -2,15 +2,14 @@ import { createHash } from "node:crypto";
 import { extensionOf, isStorageError, parseMoveTrashLeaf, trashLeafPath } from "@fdrive/core";
 import { recordMetadataCommand } from "../activity/metadata.js";
 import { deleteWithActivityReceipt } from "../activity/trash.js";
-import type { Principal } from "../auth/principal.ts";
 import { relocatePath } from "../fs/mutations.ts";
 import { createReadAuthorizer } from "../scoping/read-authorizer.ts";
+import type { TokenPrincipal } from "../tokens/principal.ts";
 import {
   assertMutablePath,
   canReadPath,
   containsPath,
   ordinaryPath,
-  requireExplicitAccess,
   requireMode,
   tokenScopes,
   trashPathFor,
@@ -21,7 +20,7 @@ import { fileUrl, folderUrl } from "./urls.ts";
 
 async function mutationEffects(
   deps: McpToolDeps,
-  principal: Principal,
+  principal: TokenPrincipal,
   change: Parameters<NonNullable<McpToolDeps["onMutation"]>>[1],
 ) {
   try {
@@ -42,7 +41,7 @@ function checkedBytes(bytes: Buffer): Buffer {
 
 export async function createFile(
   deps: McpToolDeps,
-  principal: Principal,
+  principal: TokenPrincipal,
   args: { path: string; text?: string; data?: string },
 ) {
   requireMode(principal, "full");
@@ -74,7 +73,7 @@ export async function createFile(
 const editing = new Map<string, Promise<void>>();
 export async function editFile(
   deps: McpToolDeps,
-  principal: Principal,
+  principal: TokenPrincipal,
   args: { path: string; text: string; expected_sha256: string },
 ) {
   requireMode(principal, "full");
@@ -97,7 +96,7 @@ export async function editFile(
 
 async function editFileUnlocked(
   deps: McpToolDeps,
-  principal: Principal,
+  principal: TokenPrincipal,
   args: { path: string; text: string; expected_sha256: string },
 ) {
   requireMode(principal, "full");
@@ -131,10 +130,9 @@ async function editFileUnlocked(
 
 export async function copyPath(
   deps: McpToolDeps,
-  principal: Principal,
+  principal: TokenPrincipal,
   args: { src: string; dst: string },
 ) {
-  requireExplicitAccess(principal);
   requireMode(principal, "organize");
   const src = ordinaryPath(deps, principal, args.src);
   const dst = ordinaryPath(deps, principal, args.dst);
@@ -159,7 +157,7 @@ export async function copyPath(
   };
 }
 
-function requireTrash(deps: McpToolDeps, principal: Principal) {
+function requireTrash(deps: McpToolDeps, principal: TokenPrincipal) {
   requireMode(principal, "full");
   const path = trashPathFor(deps, principal);
   const trash = principal.storage.trash;
@@ -168,7 +166,7 @@ function requireTrash(deps: McpToolDeps, principal: Principal) {
   return { path, trash };
 }
 
-export async function trashPath(deps: McpToolDeps, principal: Principal, rawPath: string) {
+export async function trashPath(deps: McpToolDeps, principal: TokenPrincipal, rawPath: string) {
   const configured = requireTrash(deps, principal);
   const path = ordinaryPath(deps, principal, rawPath);
   assertMutablePath(principal, path, configured.path);
@@ -188,7 +186,7 @@ export async function trashPath(deps: McpToolDeps, principal: Principal, rawPath
 
 export async function listTrash(
   deps: McpToolDeps,
-  principal: Principal,
+  principal: TokenPrincipal,
   args: { offset?: number | undefined; limit?: number | undefined },
 ) {
   const { trash } = requireTrash(deps, principal);
@@ -209,7 +207,7 @@ export async function listTrash(
 
 export async function restorePath(
   deps: McpToolDeps,
-  principal: Principal,
+  principal: TokenPrincipal,
   args: { id: string; target?: string | undefined },
 ) {
   const { trash, path: trashRoot } = requireTrash(deps, principal);
@@ -254,11 +252,10 @@ function requireMetadata(deps: McpToolDeps) {
 
 export async function fileTags(
   deps: McpToolDeps,
-  principal: Principal,
+  principal: TokenPrincipal,
   rawPath: string,
   names?: string[],
 ) {
-  requireExplicitAccess(principal);
   if (names !== undefined) requireMode(principal, "organize");
   const info = await liveFileInfo(deps, principal, rawPath);
   const metadata = requireMetadata(deps);
@@ -310,10 +307,9 @@ export async function fileTags(
 
 export async function setFavorite(
   deps: McpToolDeps,
-  principal: Principal,
+  principal: TokenPrincipal,
   args: { path: string; favorite: boolean },
 ) {
-  requireExplicitAccess(principal);
   requireMode(principal, "organize");
   const info = await liveFileInfo(deps, principal, args.path);
   const metadata = requireMetadata(deps);
@@ -342,10 +338,9 @@ export async function setFavorite(
 
 export async function searchImages(
   deps: McpToolDeps,
-  principal: Principal,
+  principal: TokenPrincipal,
   args: { query: string; limit?: number | undefined },
 ) {
-  requireExplicitAccess(principal);
   if (deps.imageSearchService === undefined)
     return { query: args.query, hits: [], unavailable: true };
   const identity = await deps.identities.get(principal.identityId);

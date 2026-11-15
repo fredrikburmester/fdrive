@@ -223,10 +223,9 @@ the same limiter, the hash is replaced, and the account's other sessions end.
 
 ## MCP token grants
 
-New personal tokens persist nullable `app.api_tokens.access` JSON with `mode` and normalized
-virtual `paths`. Absent access identifies legacy tokens and preserves their old admission
-rules. A token acts as the login of the session that created it (`api_tokens.identity_id`,
-required, deleted with the login), with Read access unless asked otherwise. Token principal
-resolution validates stored grants and includes them on every request; malformed access fails
-closed.
-See [MCP](MCP.md) for the mode matrix and legacy `FDRIVE_MCP_WRITES` behavior.
+Every personal token persists required `app.api_tokens.access` JSON with `mode` and normalized
+virtual `paths`. A token acts as the login of the session that created it
+(`api_tokens.identity_id`, required, deleted with the login), with Read access unless asked
+otherwise. Token principal resolution validates stored grants and includes them on every
+request; malformed access fails closed.
+See [MCP](MCP.md) for the mode matrix.

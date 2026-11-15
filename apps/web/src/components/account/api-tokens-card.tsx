@@ -88,21 +88,13 @@ export function ApiTokensCard() {
                   <TableRow key={token.id}>
                     <TableCell className="font-medium">{token.name}</TableCell>
                     <TableCell>
-                      {token.access ? (
-                        <>
-                          <div>{TOKEN_ACCESS_LABELS[token.access.mode]}</div>
-                          <div
-                            className="max-w-48 truncate text-xs text-muted-foreground"
-                            title={token.access.paths.join(", ")}
-                          >
-                            {token.access.paths.join(", ")}
-                          </div>
-                        </>
-                      ) : (
-                        <span title="Uses the old index and server write settings. Create a replacement token to choose permissions.">
-                          Legacy
-                        </span>
-                      )}
+                      <div>{TOKEN_ACCESS_LABELS[token.access.mode]}</div>
+                      <div
+                        className="max-w-48 truncate text-xs text-muted-foreground"
+                        title={token.access.paths.join(", ")}
+                      >
+                        {token.access.paths.join(", ")}
+                      </div>
                     </TableCell>
                     <TableCell>{formatShortDate(token.createdAt)}</TableCell>
                     <TableCell>{formatLastUsed(token.lastUsedAt)}</TableCell>

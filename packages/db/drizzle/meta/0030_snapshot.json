@@ -1,5 +1,5 @@
 {
-  "id": "1bb30dd4-0941-4c4d-871f-db2fa74ed601",
+  "id": "bab7d6fd-db1f-4a46-9c08-eddae3c795ae",
   "prevId": "1c3a0237-0f5f-4873-8d0e-d222e061d326",
   "version": "7",
   "dialect": "postgresql",
@@ -348,7 +348,7 @@
           "name": "access",
           "type": "jsonb",
           "primaryKey": false,
-          "notNull": false
+          "notNull": true
         },
         "created_at": {
           "name": "created_at",
@@ -914,6 +914,67 @@
           "columns": ["schedule_slot"]
         }
       },
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "app.credentials": {
+      "name": "credentials",
+      "schema": "app",
+      "columns": {
+        "identity_id": {
+          "name": "identity_id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "ciphertext": {
+          "name": "ciphertext",
+          "type": "bytea",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "key_id": {
+          "name": "key_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "cached_token": {
+          "name": "cached_token",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "cached_token_expires_at": {
+          "name": "cached_token_expires_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "credentials_identity_id_identities_id_fk": {
+          "name": "credentials_identity_id_identities_id_fk",
+          "tableFrom": "credentials",
+          "tableTo": "identities",
+          "schemaTo": "app",
+          "columnsFrom": ["identity_id"],
+          "columnsTo": ["id"],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
       "policies": {},
       "checkConstraints": {},
       "isRLSEnabled": false
@@ -1609,23 +1670,7 @@
           "notNull": false
         }
       },
-      "indexes": {
-        "identities_external_username_lower_unique": {
-          "name": "identities_external_username_lower_unique",
-          "columns": [
-            {
-              "expression": "lower(\"external_username\")",
-              "asc": true,
-              "isExpression": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": true,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
+      "indexes": {},
       "foreignKeys": {
         "identities_account_id_accounts_id_fk": {
           "name": "identities_account_id_accounts_id_fk",
@@ -3316,83 +3361,6 @@
           "columns": ["root_id", "path"]
         }
       },
-      "policies": {},
-      "checkConstraints": {},
-      "isRLSEnabled": false
-    },
-    "idx.moves": {
-      "name": "moves",
-      "schema": "idx",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "bigserial",
-          "primaryKey": true,
-          "notNull": true
-        },
-        "at": {
-          "name": "at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false,
-          "default": "now()"
-        },
-        "root_id": {
-          "name": "root_id",
-          "type": "smallint",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "src": {
-          "name": "src",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "dst": {
-          "name": "dst",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "actor": {
-          "name": "actor",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        }
-      },
-      "indexes": {
-        "moves_root_id_idx": {
-          "name": "moves_root_id_idx",
-          "columns": [
-            {
-              "expression": "root_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
-      "foreignKeys": {
-        "moves_root_id_roots_id_fk": {
-          "name": "moves_root_id_roots_id_fk",
-          "tableFrom": "moves",
-          "tableTo": "roots",
-          "schemaTo": "idx",
-          "columnsFrom": ["root_id"],
-          "columnsTo": ["id"],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
       "policies": {},
       "checkConstraints": {},
       "isRLSEnabled": false

@@ -19,6 +19,7 @@ const RESULT: CreateApiTokenResponse = {
     createdAt: "2026-09-11T10:00:00.000Z",
     lastUsedAt: null,
     expiresAt: "2026-12-10T10:00:00.000Z",
+    access: { mode: "read", paths: ["/"] },
   },
 };
 

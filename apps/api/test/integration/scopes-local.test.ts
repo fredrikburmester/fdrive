@@ -14,19 +14,20 @@ import { startPostgres } from "@fdrive/testkit";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { Principal } from "../../src/auth/principal.ts";
 import { createIdentityStorageFactory } from "../../src/auth/storage-factory.ts";
+import { readFileText } from "../../src/mcp/content.ts";
 import {
+  fileInfoInScope,
   type McpToolDeps,
-  runFileInfo,
   runFindDuplicates,
   runFindFiles,
   runFolderOverview,
-  runReadFileText,
 } from "../../src/mcp/handlers.ts";
-import type { IndexerExtractClient } from "../../src/mcp/indexer-client.ts";
+import { resolveScopeContext } from "../../src/mcp/scope-context.ts";
 import { memoryProviderService } from "../../src/providers/test-fixtures/index.ts";
 import { createReadAuthorizer } from "../../src/scoping/read-authorizer.ts";
 import { createScopeResolver } from "../../src/scoping/resolver.ts";
 import { createSearchService } from "../../src/search/service.ts";
+import type { TokenPrincipal } from "../../src/tokens/principal.ts";
 
 /**
  * Index scoping over a real local folder and a real, migrated Postgres
@@ -197,21 +198,13 @@ describe("index scopes over a local folder and Postgres", () => {
     expect(await search(aliceScopes.scopes, aliceStorage, "stale")).toEqual([]);
     expect(await search(aliceScopes.scopes, aliceStorage, "gone")).toEqual([]);
 
-    const extractCalls: string[] = [];
-    const indexerClient: IndexerExtractClient = {
-      async extract({ root: rootName, path }) {
-        extractCalls.push(`${rootName}:${path}`);
-        return { text: "extracted text", status: "ok" };
-      },
-    };
     const toolDeps: McpToolDeps = {
       indexQueries,
       searchService,
       scopeResolver: resolver,
       identities: repos.identities,
       publicUrl: async () => null,
-      indexerClient,
-      writesEnabled: false,
+      indexerClient: null,
       clock,
     };
     const alicePrincipal: Principal = {
@@ -229,7 +222,16 @@ describe("index scopes over a local folder and Postgres", () => {
       "/report.txt",
     ]);
     // Bob's report has the same content, but it is outside alice's scopes.
-    const info = await runFileInfo(toolDeps, alicePrincipal, { path: "/report.txt" });
+    const ctx = await resolveScopeContext(indexQueries, aliceScopes.scopes, null);
+    if (ctx === null) throw new Error("expected alice's scope context");
+    const info = await fileInfoInScope(
+      toolDeps,
+      ctx,
+      createReadAuthorizer({ storage: aliceStorage }),
+      {
+        path: "/report.txt",
+      },
+    );
     expect(info.identical_copies).toEqual(["/report-copy.txt"]);
     const duplicates = await runFindDuplicates(toolDeps, alicePrincipal, { min_size_mb: 0 });
     expect(duplicates.groups.map((group) => [...group.paths].sort())).toEqual([
@@ -238,12 +240,17 @@ describe("index scopes over a local folder and Postgres", () => {
     const overview = await runFolderOverview(toolDeps, alicePrincipal, {});
     expect(overview.total_files).toBe(3);
 
-    await runReadFileText(toolDeps, alicePrincipal, { path: "/report.txt" });
-    await runReadFileText(toolDeps, alicePrincipal, { path: "/Shared with me/Photos/cat.txt" });
-    expect(extractCalls).toEqual(["files:alice/report.txt", "files:bob/Photos/cat.txt"]);
-    await expect(
-      runReadFileText(toolDeps, alicePrincipal, { path: "/gone.txt" }),
-    ).rejects.toThrow();
-    expect(extractCalls).toHaveLength(2);
+    // MCP reads the bytes through alice's own storage, a shared folder included.
+    const aliceToken: TokenPrincipal = {
+      ...alicePrincipal,
+      tokenAccess: { mode: "read", paths: ["/"] },
+    };
+    expect((await readFileText(toolDeps, aliceToken, { path: "/report.txt" })).text).toBe(
+      "the same report",
+    );
+    expect(
+      (await readFileText(toolDeps, aliceToken, { path: "/Shared with me/Photos/cat.txt" })).text,
+    ).toBe("meow");
+    await expect(readFileText(toolDeps, aliceToken, { path: "/gone.txt" })).rejects.toThrow();
   });
 });

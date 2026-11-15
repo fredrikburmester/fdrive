@@ -437,7 +437,7 @@ function createMemoryApiTokenRepo(ids: () => string): ApiTokenRepo {
         identityId: input.identityId,
         name: input.name,
         tokenHash: input.tokenHash,
-        ...(input.access === undefined ? {} : { access: structuredClone(input.access) }),
+        access: structuredClone(input.access),
         createdAt: new Date(),
         lastUsedAt: null,
         expiresAt: input.expiresAt,

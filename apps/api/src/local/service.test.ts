@@ -271,6 +271,7 @@ describe("createLocalUserService: remove", () => {
       identityId: bob.id,
       name: "laptop",
       tokenHash: "bob-token",
+      access: { mode: "read", paths: ["/"] },
       expiresAt: null,
     });
 

@@ -894,7 +894,7 @@ export function defineReposSuite(name: string, setup: () => Promise<Repos> | Rep
     });
 
     describe("apiTokens", () => {
-      it("persists explicit grants while old tokens retain absent access", async () => {
+      it("persists each token's access level and folders", async () => {
         const { account, identity } = await seedIdentity();
         const access = { mode: "organize" as const, paths: ["/docs", "/team"] };
         const token = await repos.apiTokens.create({
@@ -908,14 +908,6 @@ export function defineReposSuite(name: string, setup: () => Promise<Repos> | Rep
         expect(token.access).toEqual(access);
         expect((await repos.apiTokens.findByHash("scope-hash"))?.access).toEqual(access);
         expect((await repos.apiTokens.listByAccount(account.id))[0]?.access).toEqual(access);
-        const legacy = await repos.apiTokens.create({
-          accountId: account.id,
-          identityId: identity.id,
-          name: "Old",
-          tokenHash: "legacy-hash",
-          expiresAt: null,
-        });
-        expect(legacy).not.toHaveProperty("access");
       });
 
       async function seedIdentity() {
@@ -940,6 +932,7 @@ export function defineReposSuite(name: string, setup: () => Promise<Repos> | Rep
           identityId: identity.id,
           name: "Claude",
           tokenHash: "hash-1",
+          access: { mode: "read", paths: ["/"] },
           expiresAt: null,
         });
 
@@ -961,6 +954,7 @@ export function defineReposSuite(name: string, setup: () => Promise<Repos> | Rep
           identityId: identity.id,
           name: "Raycast",
           tokenHash: "hash-2",
+          access: { mode: "read", paths: ["/"] },
           expiresAt,
         });
 
@@ -974,6 +968,7 @@ export function defineReposSuite(name: string, setup: () => Promise<Repos> | Rep
           identityId: identity.id,
           name: "Claude",
           tokenHash: "hash-3",
+          access: { mode: "read", paths: ["/"] },
           expiresAt: null,
         });
 
@@ -993,6 +988,7 @@ export function defineReposSuite(name: string, setup: () => Promise<Repos> | Rep
           identityId: identity.id,
           name: "Claude",
           tokenHash: "hash-4",
+          access: { mode: "read", paths: ["/"] },
           expiresAt: null,
         });
         await repos.apiTokens.create({
@@ -1000,6 +996,7 @@ export function defineReposSuite(name: string, setup: () => Promise<Repos> | Rep
           identityId: identity.id,
           name: "Raycast",
           tokenHash: "hash-5",
+          access: { mode: "read", paths: ["/"] },
           expiresAt: null,
         });
         const other = await repos.accounts.create({ displayName: "Ivan" });
@@ -1017,6 +1014,7 @@ export function defineReposSuite(name: string, setup: () => Promise<Repos> | Rep
           identityId: identity.id,
           name: "Claude",
           tokenHash: "hash-6",
+          access: { mode: "read", paths: ["/"] },
           expiresAt: null,
         });
         const at = new Date("2026-01-01T00:00:00.000Z");
@@ -1040,6 +1038,7 @@ export function defineReposSuite(name: string, setup: () => Promise<Repos> | Rep
           identityId: identity.id,
           name: "Claude",
           tokenHash: "hash-7",
+          access: { mode: "read", paths: ["/"] },
           expiresAt: null,
         });
 
@@ -1055,6 +1054,7 @@ export function defineReposSuite(name: string, setup: () => Promise<Repos> | Rep
           identityId: identity.id,
           name: "Claude",
           tokenHash: "hash-8",
+          access: { mode: "read", paths: ["/"] },
           expiresAt: null,
         });
         const other = await repos.accounts.create({ displayName: "Judy" });

@@ -85,7 +85,6 @@ describe("composeApp", () => {
       DATABASE_URL: postgres.connectionString,
       FDRIVE_STORAGE_ROOT: storage.root,
       FDRIVE_MASTER_KEY: Buffer.alloc(32, 5).toString("base64"),
-      FDRIVE_MCP_WRITES: "true",
     });
 
     const composed = await composeApp(config, createTestLogger(), () => new Date());

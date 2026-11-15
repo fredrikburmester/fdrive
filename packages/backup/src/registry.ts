@@ -36,7 +36,6 @@ export const DURABLE_TABLES = [
   "app.activity_read_windows",
   "idx.roots",
   "idx.scans",
-  "idx.moves",
   "idx.ocr_log",
   "idx.ocr_runs",
   "idx.processing_failures",
