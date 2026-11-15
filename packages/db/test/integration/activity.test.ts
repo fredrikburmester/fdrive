@@ -105,7 +105,7 @@ it("keeps personal journeys stable, immutable and private across pools", {
     const saved = await run(
       "file.save",
       { path: "/b.txt" },
-      { path: "/b.txt", kind: "file", size: 5, version: "v2" },
+      { path: "/b.txt", kind: "file", size: 5, sha256: "b".repeat(64) },
       { path: "/b.txt", kind: "file", size: 4 },
     );
     expect(saved.fileId).toBe(uploaded.fileId);
@@ -126,6 +126,11 @@ it("keeps personal journeys stable, immutable and private across pools", {
     expect(await b.subjects(bob.id, [uploaded.id])).toEqual([]);
     expect(await b.subjects(alice.id, [])).toEqual([]);
     expect((await b.file(alice.id, uploaded.fileId as string))?.file.path).toBe("/b.txt");
+    // A journey names the login it was recorded under by its username.
+    expect((await b.file(alice.id, uploaded.fileId as string))?.storage).toEqual({
+      identityId: identity.id,
+      label: "alice",
+    });
     expect((await b.list(alice.id, { q: "a_%" })).some((row) => row.id === uploaded.id)).toBe(true);
     expect(await b.list(alice.id, { q: "a_X" })).toEqual([]);
     const page = await b.list(alice.id, {
@@ -304,8 +309,8 @@ it("keeps personal journeys stable, immutable and private across pools", {
       ...actor,
       path: "/never-seen",
       kind: "missing" as const,
-      source: "refresh" as const,
-      evidence: "refresh_comparison" as const,
+      source: "indexer" as const,
+      evidence: "watcher_change" as const,
     };
     expect(await observations.observe(unseen)).toBeNull();
     const observedFile = await run(
@@ -331,8 +336,8 @@ it("keeps personal journeys stable, immutable and private across pools", {
       ...actor,
       path: "/observe.txt",
       kind: "present",
-      source: "refresh",
-      evidence: "refresh_comparison",
+      source: "indexer",
+      evidence: "watcher_change",
       after: { path: "/observe.txt", size: 1, modifiedAt: at.toISOString() },
     });
     expect(recovered?.parentEventId).toBe(missing?.id);
@@ -348,8 +353,8 @@ it("keeps personal journeys stable, immutable and private across pools", {
         ...actor,
         path: "/observe.txt",
         kind: "present",
-        source: "refresh",
-        evidence: "refresh_comparison",
+        source: "indexer",
+        evidence: "watcher_change",
         after: { path: "/observe.txt", size: 1, modifiedAt: at.toISOString() },
       }),
     ).toBeNull();
@@ -375,11 +380,9 @@ it("keeps personal journeys stable, immutable and private across pools", {
       "/external.txt",
     );
     expect(
-      (await observations.children(alice.id, identity.id, "/")).some(
-        (file) => file.id === rediscovered?.fileId,
-      ),
-    ).toBe(true);
-    expect(await observations.children(bob.id, identity.id, "/")).toEqual([]);
+      (await observations.tracked(alice.id, identity.id, "/external.txt")).map((file) => file.id),
+    ).toEqual([rediscovered?.fileId]);
+    expect(await observations.tracked(bob.id, identity.id, "/external.txt")).toEqual([]);
     await observations.observe({
       ...actor,
       path: "/external.txt",
@@ -416,11 +419,11 @@ it("keeps personal journeys stable, immutable and private across pools", {
     ).toBeNull();
     await a.heartbeat(alice.id, deferred.id);
     const unknown = await a.finish(alice.id, deferred.id, { outcome: "unknown" });
-    await run("file.save", { path: "/c.txt" }, { path: "/c.txt", version: "newer" });
+    await run("file.save", { path: "/c.txt" }, { path: "/c.txt", sha256: "c".repeat(64) });
     const latestRevision = (await a.file(alice.id, copied.fileId as string))?.file.revisionId;
     const repaired = await a.finish(alice.id, deferred.id, {
       outcome: "success",
-      after: { path: "/c.txt", version: "old-result" },
+      after: { path: "/c.txt", sha256: "d".repeat(64) },
     });
     expect(repaired.parentEventId).toBe(unknown.id);
     expect((await a.file(alice.id, copied.fileId as string))?.file.revisionId).toBe(latestRevision);
@@ -1031,8 +1034,8 @@ it("keeps personal journeys stable, immutable and private across pools", {
       ...actor,
       path: "/live-clock.txt",
       kind: "present",
-      source: "refresh",
-      evidence: "refresh_comparison",
+      source: "indexer",
+      evidence: "watcher_change",
       after: { path: "/live-clock.txt", size: 1 },
     });
     expect((await defaultExport.create(alice.id, "json", {})).state).toBe("completed");

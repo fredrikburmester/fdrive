@@ -239,6 +239,13 @@
       "when": 1794710196681,
       "tag": "0033_local_passwords",
       "breakpoints": true
+    },
+    {
+      "idx": 34,
+      "version": "7",
+      "when": 1794711575211,
+      "tag": "0034_activity_without_provider_values",
+      "breakpoints": true
     }
   ]
 }

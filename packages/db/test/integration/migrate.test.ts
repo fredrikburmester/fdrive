@@ -2,6 +2,7 @@ import { cp, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { ActivityFacts, PersonalActivityEvidence, PersonalActivitySource } from "@fdrive/contracts";
 import { PostgreSqlContainer, type StartedPostgreSqlContainer } from "@testcontainers/postgresql";
 import { is, sql } from "drizzle-orm";
 import { migrate as runMigrations } from "drizzle-orm/node-postgres/migrator";
@@ -21,6 +22,33 @@ const EXPECTED_TABLES = Object.values(schema as Record<string, unknown>)
     return `${config.schema}.${config.name}`;
   })
   .sort();
+
+/**
+ * Runs `body` against a second database migrated up to, but not including,
+ * migration `tag`, so it can seed rows the way an older release stored them.
+ */
+async function withDatabaseBefore(tag: string, body: (older: Db) => Promise<void>) {
+  const folder = path.join(path.dirname(fileURLToPath(import.meta.url)), "../../drizzle");
+  const migrations = await mkdtemp(path.join(tmpdir(), "fdrive-migrations-"));
+  const name = `before_${tag.slice(0, 4)}`;
+  await db.execute(sql.raw(`create database ${name}`));
+  const uri = new URL(container.getConnectionUri());
+  uri.pathname = `/${name}`;
+  const older = createDb(uri.toString());
+  try {
+    await cp(folder, migrations, { recursive: true });
+    const journal = JSON.parse(await readFile(path.join(folder, "meta/_journal.json"), "utf8"));
+    const last = journal.entries.findIndex((entry: { tag: string }) => entry.tag === tag);
+    if (last < 0) throw new Error(`no migration ${tag}`);
+    journal.entries = journal.entries.slice(0, last);
+    await writeFile(path.join(migrations, "meta/_journal.json"), JSON.stringify(journal));
+    await runMigrations(older.db, { migrationsFolder: migrations });
+    await body(older.db);
+  } finally {
+    await older.close();
+    await rm(migrations, { recursive: true, force: true });
+  }
+}
 
 beforeAll(async () => {
   container = await new PostgreSqlContainer("pgvector/pgvector:pg17")
@@ -206,87 +234,131 @@ describe("migrate", () => {
   });
 
   it("deletes the tokens made before access levels, and only those", async () => {
-    // Migrate a second database up to the migration before the one that drops them.
-    const folder = path.join(path.dirname(fileURLToPath(import.meta.url)), "../../drizzle");
-    const before = await mkdtemp(path.join(tmpdir(), "fdrive-migrations-"));
-    await db.execute(sql`create database before_access_levels`);
-    const uri = new URL(container.getConnectionUri());
-    uri.pathname = "/before_access_levels";
-    const older = createDb(uri.toString());
-    try {
-      await cp(folder, before, { recursive: true });
-      const journal = JSON.parse(await readFile(path.join(folder, "meta/_journal.json"), "utf8"));
-      const last = journal.entries.findIndex(
-        (entry: { tag: string }) => entry.tag === "0030_drop_legacy_tokens_and_moves",
-      );
-      journal.entries = journal.entries.slice(0, last);
-      await writeFile(path.join(before, "meta/_journal.json"), JSON.stringify(journal));
-      await runMigrations(older.db, { migrationsFolder: before });
-
-      const [account] = await older.db.insert(schema.accounts).values({}).returning();
-      const [provider] = await older.db
+    await withDatabaseBefore("0030_drop_legacy_tokens_and_moves", async (older) => {
+      const [account] = await older.insert(schema.accounts).values({}).returning();
+      const [provider] = await older
         .insert(schema.providers)
         .values({ type: "local", baseUrl: "local" })
         .returning();
       if (account === undefined || provider === undefined) throw new Error("expected rows");
-      const [identity] = await older.db
+      const [identity] = await older
         .insert(schema.identities)
         .values({ accountId: account.id, providerId: provider.id, externalUsername: "alice" })
         .returning();
       if (identity === undefined) throw new Error("expected an identity");
       // Its user, so the next migration keeps the login.
-      await older.db.insert(schema.localUsers).values({ username: "alice", passwordHash: "x" });
-      await older.db.execute(sql`
+      await older.insert(schema.localUsers).values({ username: "alice", passwordHash: "x" });
+      await older.execute(sql`
         insert into app.api_tokens (account_id, identity_id, name, token_hash, access) values
           (${account.id}, ${identity.id}, 'Old', 'old-hash', null),
           (${account.id}, ${identity.id}, 'Scoped', 'scoped-hash', '{"mode":"read","paths":["/"]}')
       `);
 
-      await migrate(older.db);
+      await migrate(older);
 
-      const kept = await older.db.execute<{ name: string }>(sql`select name from app.api_tokens`);
+      const kept = await older.execute<{ name: string }>(sql`select name from app.api_tokens`);
       expect(kept.rows.map((row) => row.name)).toEqual(["Scoped"]);
-      const moves = await older.db.execute<{ table: string | null }>(
+      const moves = await older.execute<{ table: string | null }>(
         sql`select to_regclass('idx.moves')::text as table`,
       );
       expect(moves.rows).toEqual([{ table: null }]);
-    } finally {
-      await older.close();
-      await rm(before, { recursive: true, force: true });
-    }
+    });
+  });
+
+  it("leaves personal activity with nothing only remote storage produced, so every event parses", async () => {
+    await withDatabaseBefore("0034_activity_without_provider_values", async (older) => {
+      const [account] = await older.insert(schema.accounts).values({}).returning();
+      const [provider] = await older
+        .insert(schema.providers)
+        .values({ type: "local", baseUrl: "local", label: "Local folder" })
+        .returning();
+      if (account === undefined || provider === undefined) throw new Error("expected rows");
+      const [identity] = await older
+        .insert(schema.identities)
+        .values({ accountId: account.id, providerId: provider.id, externalUsername: "alice" })
+        .returning();
+      if (identity === undefined) throw new Error("expected an identity");
+      const owner = account.id;
+      const file = "00000000-0000-4000-8000-000000000001";
+      const trashed = "00000000-0000-4000-8000-000000000002";
+      const listed = "00000000-0000-4000-8000-000000000003";
+      await older.execute(sql`
+        insert into app.activity_storage_identities (identity_id, provider_id, provider_type, label)
+          values (${identity.id}, ${provider.id}, 'local', 'Local folder')`);
+      await older.execute(sql`
+        insert into app.activity_files (id, identity_id, kind, virtual_path, state)
+          values (${file}, ${identity.id}, 'file', '/a.txt', 'unknown')`);
+      await older.execute(sql`
+        insert into app.activity_events (id, owner_account_id, owner_sequence, actor_account_id,
+          identity_id, file_id, class, action, stage, outcome, source, evidence, sort_at,
+          idempotency_key, before, after)
+        values
+          (${trashed}, ${owner}, 1, ${owner}, ${identity.id}, ${file}, 'action', 'file.trash',
+            'outcome', 'success', 'web', 'server_confirmed', now(), 'trash',
+            '{"path":"/a.txt","trashStrategy":"fdrive_move"}',
+            '{"path":"/a.txt","trashLeaf":"/.trash/a.txt","trashStrategy":"sftpgo_rule"}'),
+          (${listed}, ${owner}, 2, null, ${identity.id}, ${file}, 'observation',
+            'observation.location_missing', 'outcome', 'unknown', 'refresh', 'refresh_comparison',
+            now(), 'listing', '{"path":"/a.txt"}', null)`);
+      await older.execute(sql`
+        insert into app.activity_event_subjects (owner_account_id, event_id, identity_id, file_id,
+          role, subject_ordinal, virtual_path_snapshot)
+          values (${owner}, ${listed}, ${identity.id}, ${file}, 'primary', 0, '/a.txt')`);
+      await older.execute(sql`
+        insert into app.activity_revisions (file_id, identity_id, owner_account_id, event_id,
+          provider_version) values (${file}, ${identity.id}, ${owner}, ${trashed}, 'etag')`);
+      await older.execute(sql`
+        insert into app.activity_observation_state (owner_account_id, identity_id, file_id,
+          prior_generation, discrepancy, evidence_fingerprint, event_id, last_check_at)
+          values (${owner}, ${identity.id}, ${file}, 0, 'observation.location_missing', 'x',
+            ${listed}, now())`);
+
+      await migrate(older);
+
+      const events = await older.execute<{
+        id: string;
+        source: string;
+        evidence: string;
+        before: unknown;
+        after: unknown;
+        detail: unknown;
+      }>(sql`select id, source, evidence, before, after, detail from app.activity_events`);
+      expect(events.rows.map((row) => row.id)).toEqual([trashed]);
+      for (const row of events.rows) {
+        expect(PersonalActivitySource.safeParse(row.source).success).toBe(true);
+        expect(PersonalActivityEvidence.safeParse(row.evidence).success).toBe(true);
+        for (const facts of [row.before, row.after, row.detail])
+          expect(ActivityFacts.nullable().safeParse(facts).success).toBe(true);
+      }
+      expect(events.rows[0]?.after).toEqual({ path: "/a.txt", trashLeaf: "/.trash/a.txt" });
+      const leftovers = await older.execute(sql`
+        select (select count(*) from app.activity_event_subjects)::int as subjects,
+          (select count(*) from app.activity_observation_state)::int as states`);
+      expect(leftovers.rows).toEqual([{ subjects: 0, states: 0 }]);
+      const logins = await older.execute(sql`select * from app.activity_storage_identities`);
+      expect(logins.rows).toEqual([{ identity_id: identity.id, label: "alice" }]);
+      const revisions = await older.execute<{ column: string }>(sql`
+        select column_name as column from information_schema.columns
+        where table_schema = 'app' and table_name = 'activity_revisions'`);
+      expect(revisions.rows.map((row) => row.column)).not.toContain("provider_version");
+    });
   });
 
   it("keeps only logins with a user of the same name, and drops the stored passwords", async () => {
-    // Migrate a second database up to the migration before the one that drops them.
-    const folder = path.join(path.dirname(fileURLToPath(import.meta.url)), "../../drizzle");
-    const before = await mkdtemp(path.join(tmpdir(), "fdrive-migrations-"));
-    await db.execute(sql`create database before_local_passwords`);
-    const uri = new URL(container.getConnectionUri());
-    uri.pathname = "/before_local_passwords";
-    const older = createDb(uri.toString());
-    try {
-      await cp(folder, before, { recursive: true });
-      const journal = JSON.parse(await readFile(path.join(folder, "meta/_journal.json"), "utf8"));
-      const last = journal.entries.findIndex(
-        (entry: { tag: string }) => entry.tag === "0033_local_passwords",
-      );
-      journal.entries = journal.entries.slice(0, last);
-      await writeFile(path.join(before, "meta/_journal.json"), JSON.stringify(journal));
-      await runMigrations(older.db, { migrationsFolder: before });
-
-      const [local] = await older.db
+    await withDatabaseBefore("0033_local_passwords", async (older) => {
+      const [local] = await older
         .insert(schema.providers)
         .values({ type: "local", baseUrl: "local" })
         .returning();
-      const [webdav] = await older.db
+      const [webdav] = await older
         .insert(schema.providers)
         .values({ type: "webdav", baseUrl: "http://dav.invalid", enabled: false })
         .returning();
       if (local === undefined || webdav === undefined) throw new Error("expected rows");
       const login = async (providerId: string, externalUsername: string) => {
-        const [account] = await older.db.insert(schema.accounts).values({}).returning();
+        const [account] = await older.insert(schema.accounts).values({}).returning();
         if (account === undefined) throw new Error("expected an account");
-        await older.db
+        await older
           .insert(schema.identities)
           .values({ accountId: account.id, providerId, externalUsername });
         return account.id;
@@ -295,45 +367,42 @@ describe("migrate", () => {
       await login(local.id, "Bob"); // a removed user's login under another spelling of bob
       await login(webdav.id, "alice-dav"); // a login on storage fdrive no longer has
       for (const username of ["alice", "bob", "carol"])
-        await older.db.insert(schema.localUsers).values({ username, passwordHash: "x" });
+        await older.insert(schema.localUsers).values({ username, passwordHash: "x" });
       // A files folder destination with a sealed password, and a bucket.
-      await older.db.execute(sql`
+      await older.execute(sql`
         insert into app.backup_destinations (id, revision, name, type, config, secret) values
           (gen_random_uuid(), gen_random_uuid(), 'Files', 'provider', '{}', '\\x01'),
           (gen_random_uuid(), gen_random_uuid(), 'Bucket', 's3', '{}', '\\x01')
       `);
-      await older.db.execute(sql`
+      await older.execute(sql`
         insert into app.settings (key, value) values
           ('setup.initialized.v1', 'true'),
           ('setup.owner.v1', ${JSON.stringify({ version: 1, state: "complete", accountId: owner })})
       `);
 
-      await migrate(older.db);
+      await migrate(older);
 
-      const logins = await older.db.execute<{ name: string }>(
+      const logins = await older.execute<{ name: string }>(
         sql`select external_username as name from app.identities order by 1`,
       );
       expect(logins.rows.map((row) => row.name)).toEqual(["alice"]);
       // bob and carol had no login of their own name; alice keeps hers.
-      const users = await older.db.execute<{ name: string }>(
+      const users = await older.execute<{ name: string }>(
         sql`select username as name from app.local_users order by 1`,
       );
       expect(users.rows.map((row) => row.name)).toEqual(["alice"]);
-      const settings = await older.db.execute<{ key: string }>(
+      const settings = await older.execute<{ key: string }>(
         sql`select key from app.settings where key like 'setup.%' order by 1`,
       );
       expect(settings.rows).toEqual([{ key: "setup.owner.v1" }]);
-      const destinations = await older.db.execute<{ type: string }>(
+      const destinations = await older.execute<{ type: string }>(
         sql`select type from app.backup_destinations`,
       );
       expect(destinations.rows).toEqual([{ type: "s3" }]);
-      const credentials = await older.db.execute<{ table: string | null }>(
+      const credentials = await older.execute<{ table: string | null }>(
         sql`select to_regclass('app.credentials')::text as table`,
       );
       expect(credentials.rows).toEqual([{ table: null }]);
-    } finally {
-      await older.close();
-      await rm(before, { recursive: true, force: true });
-    }
+    });
   });
 });
