@@ -8,6 +8,7 @@ import { normalizePath } from "@fdrive/core";
 import type { ShareRecord, ShareRepo } from "@fdrive/db";
 import type { IdentityStorageFactory } from "../auth/storage-factory.ts";
 import { ApiHttpError } from "../errors.ts";
+import type { FileOperations } from "../files/operations.ts";
 import type { PublicShareAccess } from "./access.ts";
 import { shareCall } from "./access.ts";
 import type { ShareCredential } from "./credentials.ts";
@@ -19,6 +20,7 @@ import { createShareZipSlots, type ShareZipLimits } from "./zip-limits.ts";
 export interface OwnedSharesDeps {
   readonly shares: ShareRepo;
   readonly storageFor: IdentityStorageFactory;
+  readonly files: Pick<FileOperations, "upload">;
   readonly passwords: SharePasswords;
   readonly zipLimits: ShareZipLimits;
   readonly clock: () => Date;
@@ -238,8 +240,13 @@ export function createOwnedShares(deps: OwnedSharesDeps) {
       if (row.hasPassword && (credential === undefined || !(await verify(row, credential))))
         throw PASSWORD_REJECTED();
       const store = await storage(row.identityId);
+      // A visitor's upload is the owner's file, but never the owner's history.
+      const visitor = { identityId: row.identityId, storage: store, recorded: null };
       return ownedShareAccess({
         storage: store,
+        upload: async (path, body, options) => {
+          await deps.files.upload(visitor, path, body, { ...options, action: "file.upload" });
+        },
         view: {
           name: row.name,
           scope: row.scope,

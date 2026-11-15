@@ -2,6 +2,7 @@ import { withDatabaseWriter } from "@fdrive/backup";
 import { indexerEnabled } from "@fdrive/contracts";
 import {
   CHANGES_CHANNEL,
+  createAccessRepo,
   createActivityExportsRepo,
   createActivityObservationsRepo,
   createActivityReadsRepo,
@@ -68,6 +69,8 @@ import { registerEventRoutes } from "./events/routes.js";
 import { registerFeatureAdmission } from "./features/admission.js";
 import { registerFeatureRoutes } from "./features/routes.js";
 import { createFeatureService } from "./features/service.js";
+import { createAccessFollowers } from "./files/access.js";
+import { createFileOperations } from "./files/operations.js";
 import { registerFsRoutes } from "./fs/routes.js";
 import { registerVideoRoutes } from "./fs/video-routes.js";
 import { createJobRunner } from "./jobs/runner.js";
@@ -88,8 +91,7 @@ import { createIndexerExtractClient } from "./mcp/indexer-client.js";
 import { registerMcpRoutes } from "./mcp/routes.js";
 import { registerMetadataRoutes } from "./metadata/routes.js";
 import { registerSavedSearchRoutes } from "./metadata/saved-searches.js";
-import { createMetadataService, withFollowers } from "./metadata/service.js";
-import { followIntoTrash } from "./metadata/trash.js";
+import { createMetadataService } from "./metadata/service.js";
 import { extractClientIp } from "./net.js";
 import { configuredOfficeProduct, officeConfig } from "./office/config.ts";
 import { createOfficeEditPolicy } from "./office/edit-policy.ts";
@@ -226,12 +228,14 @@ export async function composeApp(
   const backups = createBackupModule(config);
   await backups.start();
 
-  const activityPathLocks = createDb(config.databaseUrl, {
-    max: 10,
+  // File operations' transactions, on a pool of their own: each holds its
+  // connection while its storage call runs (`createAccessRepo`).
+  const fileOperationPool = createDb(config.databaseUrl, {
+    max: 20,
     connectionTimeoutMillis: 30_000,
-    onError: (error) => logger.warn({ err: error }, "idle activity lock connection error"),
+    onError: (error) => logger.warn({ err: error }, "idle file operation connection error"),
   });
-  const activityRepo = createActivityRepo(db, clock, activityPathLocks.db);
+  const activityRepo = createActivityRepo(db, clock);
   const activityReads = createActivityReadsRepo(db, clock);
   const personalActivity = createActivityService({
     repo: activityRepo,
@@ -376,24 +380,23 @@ export async function composeApp(
 
   // Public links follow the items they name wherever they go, into Trash too.
   const shareMoves = createShareMoves({
-    shares: shareRepo,
     ownerPath: (identityId, path) => localGrants.ownerPath(identityId, path),
   });
-  // Tags, favorites, folder views, recents and chat references. `onMoved` and
-  // `onDeleted` run in the request for moves and deletes made through fdrive,
-  // and from the change journal for those made outside it (over SMB, say).
-  const metadataCore = createMetadataService(repos);
-  // What grants access (folders shared with people, public links) follows
-  // first, in an outer layer, so a failure in tags or favorites never leaves
-  // it at a path a new item could take.
-  const accessFollowers = [localGrants, shareMoves];
-  // Office documents keep their ids wherever their files go, into the Trash
-  // and back out too.
+  // What grants access (folders shared with people, public links, Office
+  // files) changes in one transaction with every file operation's storage
+  // call, and never stays at a path a file left.
+  const access = createAccessFollowers({
+    repo: createAccessRepo(fileOperationPool.db, clock),
+    ownerPath: localGrants.ownerPath,
+    links: shareMoves.resolve,
+    usernameOf: async (identityId) =>
+      (await repos.identities.get(identityId))?.externalUsername ?? null,
+  });
+  // Tags, favorites, folder views, recents and chat references. They follow
+  // fdrive's own moves and deletes after the storage call, best effort, and
+  // those made outside it (over SMB, say) from the change journal.
+  const metadataService = createMetadataService(repos);
   const officeFiles = createOfficeFileRepo(db);
-  const officeMoves = createOfficeMoves({ files: officeFiles, grants: localGrants, clock });
-  const followers = [...accessFollowers, officeMoves];
-  // Into the Trash and back out are moves like any other, whoever makes them.
-  const metadataService = withFollowers(metadataCore, followers);
   const desktopRepo = createDesktopRepo(db);
   const desktopRetention = createDesktopRetention({
     repo: desktopRepo,
@@ -401,21 +404,35 @@ export async function composeApp(
     clock,
     eventLog,
   });
-  const fsMetadata = withFollowers(withDesktopMetadata(metadataCore, desktopRepo), followers);
+  // The one way fdrive changes files, whoever asks: the web, MCP, AI chat,
+  // Office and a link's visitors. The Mac's item handles follow too.
+  const files = createFileOperations({
+    activity: personalActivity,
+    access,
+    metadata: withDesktopMetadata(metadataService, desktopRepo),
+    ownerPath: localGrants.ownerPath,
+    storageFor: storageFactory,
+    logger,
+  });
   // Deletes what each Trash kept longer than the installation's retention.
   const trashRetention = createTrashRetention({
     identities: repos.identities,
     storageFor: storageFactory,
     settings: trashSettings,
-    activity: personalActivity,
-    metadata: fsMetadata,
+    files,
     clock,
     eventLog,
   });
-  // A Mac write moves what grants access with its receipt (`desktop/writes.ts`)
-  // and the rest after it. It keeps its own item handles, so this skips the
-  // handle registry.
-  const desktopMetadata = withFollowers(metadataCore, [officeMoves]);
+  // A Mac write moves what grants access with its receipt (`desktop/writes.ts`),
+  // then Office files and the rest. It keeps its own item handles, so this
+  // skips the handle registry.
+  const officeMoves = createOfficeMoves({ files: officeFiles, grants: localGrants, clock });
+  const desktopMetadata = {
+    async onMoved(identityId: string, from: string, to: string, directory: boolean) {
+      await officeMoves.onMoved(identityId, from, to);
+      await metadataService.onMoved(identityId, from, to, directory);
+    },
+  };
   const desktopAccess = async (
     identityId: string,
     from: string,
@@ -502,6 +519,7 @@ export async function composeApp(
     clock,
     grants: localGrants,
     storageFactory: officeStorage,
+    operations: files,
     metadata: metadataService,
     activity: personalActivity,
   });
@@ -517,8 +535,8 @@ export async function composeApp(
     scopes: (username) => scopeResolver.scopesFor(username),
     bus,
     outside: createOutsideChanges({
-      metadata: metadataCore,
-      followers,
+      metadata: metadataService,
+      access,
       storageFor: storageFactory,
       observations: createActivityObservations({
         repo: createActivityObservationsRepo(db, clock),
@@ -678,37 +696,7 @@ export async function composeApp(
     indexerClient: indexerExtractClient,
     metadata: metadataService,
     imageSearchService,
-    onMutation: async (principal, change) => {
-      if (change.kind === "move") {
-        await fsMetadata.onMoved(
-          principal.identityId,
-          change.path,
-          change.target ?? change.path,
-          change.isDir,
-        );
-      } else if (change.kind === "restore" && change.eventPath !== undefined) {
-        // A restore is a move out of Trash: what followed the item there comes back.
-        await fsMetadata.onMoved(
-          principal.identityId,
-          change.eventPath,
-          change.target ?? change.path,
-          change.isDir,
-        );
-      } else if (change.kind === "trash" && change.trashLeaf !== undefined) {
-        await followIntoTrash(
-          fsMetadata,
-          localGrants.ownerPath,
-          principal.identityId,
-          change.path,
-          {
-            leaf: change.trashLeaf,
-            kind: change.isDir ? "dir" : "file",
-          },
-        );
-      } else if (change.kind === "copy") {
-        fsMetadata.onCopied(principal.identityId, change.path, change.target ?? change.path);
-      }
-    },
+    files,
     clock,
   };
   const aiSettings = createAiSettingsService({
@@ -734,11 +722,7 @@ export async function composeApp(
     modelFor: aiModelFor,
     chats: repos.aiChats,
     mcp: mcpToolDeps,
-    fs: {
-      metadata: metadataService,
-      activity: personalActivity,
-      ownerPath: localGrants.ownerPath,
-    },
+    files,
     clock,
     onUnexpectedError: (error) => logger.warn({ err: error }, "chat reply failed"),
   });
@@ -823,6 +807,7 @@ export async function composeApp(
           repos,
           shares: shareRepo,
           storageFor: storageFactory,
+          files,
           passwords,
           zipLimits: { maxBytes: config.fdriveJobMaxBytes },
           clock,
@@ -865,8 +850,8 @@ export async function composeApp(
         jobMaxBytes: config.fdriveJobMaxBytes,
         archivePeekMaxBytes: config.fdriveArchivePeekMaxBytes,
         jsonMaxBytes: config.fdriveJsonMaxBytes,
-        metadata: fsMetadata,
-        ownerPath: localGrants.ownerPath,
+        files,
+        metadata: metadataService,
         folderSize: {
           indexQueries,
           resolver: scopeResolver,
@@ -875,10 +860,7 @@ export async function composeApp(
       };
       registerFsRoutes(groups, fsRoutesDeps);
       registerVideoRoutes(groups);
-      registerTrashRoutes(groups, {
-        activity: personalActivity,
-        metadata: fsMetadata,
-      });
+      registerTrashRoutes(groups, { activity: personalActivity, files });
       registerTrashSettingsRoutes(groups, { service: trashSettings });
       registerPublicUrlRoutes(groups, { service: publicUrl });
       registerOfficeSettingsRoutes(groups, {
@@ -990,7 +972,7 @@ export async function composeApp(
       await notifications.stop();
       await journalFanout.stop();
       indexedSignal.stop();
-      await activityPathLocks.close();
+      await fileOperationPool.close();
       await officeLocks.close();
       await pool.end();
     },

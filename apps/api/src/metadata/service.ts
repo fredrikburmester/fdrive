@@ -40,16 +40,6 @@ export interface MetadataFolderView {
   readonly sort: FolderViewSort | null;
 }
 
-/**
- * Something else keyed by a login's paths that follows its moves and deletes,
- * and, since it grants access, follows an item into Trash as a move: what
- * is in Trash is never left at a path a new item could take.
- */
-export interface PathFollower {
-  onMoved(identityId: string, oldPath: string, newPath: string, isDir: boolean): Promise<void>;
-  onDeleted(identityId: string, path: string, isDir: boolean): Promise<void>;
-}
-
 export interface MetadataServiceDeps {
   /** AI chat references follow the same moves and deletes; optional for tests that have no chats. */
   readonly aiChats?: Pick<AiChatRepo, "moveReferences" | "markReferencesMissing"> | undefined;
@@ -84,10 +74,13 @@ function toMetadataTag(tag: DbTag): MetadataTag {
 
 /**
  * The metadata use cases shared by the tags, favorites, and recents routes,
- * plus the hooks `fs/routes.ts` calls after a move or delete so tag and
- * favorite and folder-view metadata survives renames made through fdrive itself. Renames and
- * deletes made outside fdrive (rsync, SMB, other writers), which the indexer's
- * watcher journals, reach the same hooks through `events/outside.ts`.
+ * plus the hooks the file operations call after a move or delete
+ * (`files/operations.ts`), so tags, favorites, folder views, recents and AI
+ * chat references survive renames made through fdrive itself. None of it
+ * grants access, so it follows best effort, after what does
+ * (`files/access.ts`). Renames and deletes made outside fdrive (rsync, SMB,
+ * other writers), which the indexer's watcher journals, reach the same hooks
+ * through `events/outside.ts`.
  */
 export interface MetadataService {
   /**
@@ -131,8 +124,8 @@ export interface MetadataService {
   onMoved(identityId: string, oldPath: string, newPath: string, isDir: boolean): Promise<void>;
   /**
    * Atomically drops all path-keyed metadata after a delete made through
-   * fdrive or seen on disk. Into Trash is a move (`followIntoTrash`), and a
-   * purge from it a delete.
+   * fdrive or seen on disk. Into Trash is a move, and a purge from it a
+   * delete.
    */
   onDeleted(identityId: string, path: string, isDir: boolean): Promise<void>;
   /**
@@ -270,30 +263,6 @@ export function createMetadataService(deps: MetadataServiceDeps): MetadataServic
 
     onCopied() {
       // Intentionally empty: see the `onCopied` doc comment above.
-    },
-  };
-}
-
-/**
- * `metadata`, with what grants access (folders shared with people, public
- * links) following every move and delete before anything else: a failure
- * further on (tags, favorites, the Office registry) never leaves access at
- * a path where a new item could appear. Into the Trash and back out are
- * moves. Wrap it around the other layers so it runs first.
- */
-export function withFollowers(
-  metadata: MetadataService,
-  followers: readonly PathFollower[],
-): MetadataService {
-  return {
-    ...metadata,
-    async onMoved(identityId, oldPath, newPath, isDir) {
-      for (const follower of followers) await follower.onMoved(identityId, oldPath, newPath, isDir);
-      await metadata.onMoved(identityId, oldPath, newPath, isDir);
-    },
-    async onDeleted(identityId, path, isDir) {
-      for (const follower of followers) await follower.onDeleted(identityId, path, isDir);
-      await metadata.onDeleted(identityId, path, isDir);
     },
   };
 }

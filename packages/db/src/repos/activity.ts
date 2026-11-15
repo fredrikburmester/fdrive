@@ -274,7 +274,7 @@ export function activityConditions(accountId: string, options: ActivityListOptio
   );
 }
 
-export function createActivityRepo(db: Db, clock: () => Date = () => new Date(), pathLockDb?: Db) {
+export function createActivityRepo(db: Db, clock: () => Date = () => new Date()) {
   async function finishActivity(
     accountId: string,
     id: string,
@@ -399,18 +399,6 @@ export function createActivityRepo(db: Db, clock: () => Date = () => new Date(),
           },
           clock(),
         );
-      });
-    },
-    async withPathLock<T>(identityId: string, path: string, work: () => Promise<T>): Promise<T> {
-      // Hold locks on a separate pool: work commits its intent and outcome using
-      // the main pool, including before provider I/O. Sharing that pool deadlocks
-      // when concurrent lock holders exhaust its connections.
-      if (!pathLockDb) throw new Error("Activity path locks require a dedicated database pool");
-      return pathLockDb.transaction(async (tx) => {
-        await tx.execute(
-          sql`select pg_advisory_xact_lock(hashtextextended(${JSON.stringify(["activity-path", identityId, path])},0))`,
-        );
-        return work();
       });
     },
     async begin(input: ActivityOperationInput) {

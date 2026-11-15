@@ -1,7 +1,10 @@
 import { type Scope, StorageError, type StorageProvider } from "@fdrive/core";
 import type { ActivityListOptions, IndexedFile, IndexQueries } from "@fdrive/db";
+import { createMemoryRepos } from "@fdrive/db/testing";
 import { describe, expect, it, vi } from "vitest";
+import { testFileOperations } from "../../test/file-operations.js";
 import type { Principal } from "../auth/principal.js";
+import { createMetadataService } from "../metadata/service.js";
 import type { SearchService } from "../search/service.js";
 import type { TokenPrincipal } from "../tokens/principal.ts";
 import {
@@ -181,6 +184,7 @@ function makeFile(overrides: Partial<IndexedFile> & { id: number }): IndexedFile
 
 function baseDeps(overrides: Partial<Parameters<typeof runSearch>[0]> = {}) {
   return {
+    files: testFileOperations(),
     indexQueries: stubIndexQueries(),
     searchService: fakeSearchService(),
     scopeResolver: { scopesFor: async () => ALICE_HOME_SCOPES },
@@ -1117,21 +1121,25 @@ describe("runCreateFolder", () => {
     },
   );
 
-  it("needs no index and reports a failed live update as a warning", async () => {
+  it("needs no index, and live updates come from the change journal", async () => {
     const mkdir = vi.fn(async () => undefined);
-    const deps = baseDeps({
-      indexed: async () => false,
-      onMutation: async () => {
-        throw new Error("events unavailable");
-      },
-    });
+    const deps = baseDeps({ indexed: async () => false });
 
     const result = await runCreateFolder(deps, tokenPrincipal(fakeStorage({ mkdir })), {
       path: "/new",
     });
 
     expect(mkdir).toHaveBeenCalledOnce();
-    expect(result.warnings).toEqual([expect.stringContaining("live updates")]);
+    expect(result).toEqual({ created: "/new", url: "https://fdrive.example.com/files/new" });
+  });
+
+  it("refuses without file operations, before touching storage", async () => {
+    const mkdir = vi.fn(async () => undefined);
+    const { files: _files, ...deps } = baseDeps();
+    await expect(
+      runCreateFolder(deps, tokenPrincipal(fakeStorage({ mkdir })), { path: "/new" }),
+    ).rejects.toThrow("file changes are unavailable");
+    expect(mkdir).not.toHaveBeenCalled();
   });
 });
 
@@ -1151,11 +1159,9 @@ describe("runMovePath", () => {
 
   it("reports a completed move with a warning when metadata fails", async () => {
     const move = vi.fn();
-    const deps = baseDeps({
-      onMutation: async () => {
-        throw new Error("metadata unavailable");
-      },
-    });
+    const metadata = createMetadataService(createMemoryRepos());
+    vi.spyOn(metadata, "onMoved").mockRejectedValue(new Error("metadata unavailable"));
+    const deps = baseDeps({ files: testFileOperations({ metadata }) });
     const result = await runMovePath(deps, tokenPrincipal(fakeStorage({ move })), {
       src: "/a",
       dst: "/b",
@@ -1163,39 +1169,38 @@ describe("runMovePath", () => {
     expect(result).toMatchObject({
       moved: "/a",
       to: "/b",
-      warnings: [expect.stringContaining("metadata")],
+      warnings: [expect.stringContaining("could not follow it")],
     });
     expect(move).toHaveBeenCalledOnce();
   });
 
-  it("does not mutate or run the hook for a same-path move", async () => {
+  it("does not mutate or let metadata follow a same-path move", async () => {
     const move = vi.fn();
-    const onMutation = vi.fn();
-    await runMovePath(baseDeps({ onMutation }), tokenPrincipal(fakeStorage({ move })), {
-      src: "/a",
-      dst: "/a",
-    });
+    const metadata = createMetadataService(createMemoryRepos());
+    const onMoved = vi.spyOn(metadata, "onMoved");
+    await runMovePath(
+      baseDeps({ files: testFileOperations({ metadata }) }),
+      tokenPrincipal(fakeStorage({ move })),
+      { src: "/a", dst: "/a" },
+    );
     expect(move).not.toHaveBeenCalled();
-    expect(onMutation).not.toHaveBeenCalled();
+    expect(onMoved).not.toHaveBeenCalled();
   });
 
-  it("uses storage kind for a dotted directory and runs the mutation hook", async () => {
-    const onMutation = vi.fn();
+  it("uses storage kind for a dotted directory and lets its metadata follow", async () => {
+    const metadata = createMetadataService(createMemoryRepos());
+    const onMoved = vi.spyOn(metadata, "onMoved");
     const storage = fakeStorage({
       move: async () => {},
       stat: async () => ({ kind: "dir", size: 0, modifiedAt: null, contentType: null }),
     });
-    const result = await runMovePath(baseDeps({ onMutation }), tokenPrincipal(storage), {
-      src: "/a",
-      dst: "/archive.2026",
-    });
+    const result = await runMovePath(
+      baseDeps({ files: testFileOperations({ metadata }) }),
+      tokenPrincipal(storage),
+      { src: "/a", dst: "/archive.2026" },
+    );
     expect(result.url).toBe("https://fdrive.example.com/files/archive.2026");
-    expect(onMutation).toHaveBeenCalledWith(expect.anything(), {
-      kind: "move",
-      path: "/a",
-      target: "/archive.2026",
-      isDir: true,
-    });
+    expect(onMoved).toHaveBeenCalledWith(expect.any(String), "/a", "/archive.2026", true);
   });
 
   it("refuses a read token", async () => {

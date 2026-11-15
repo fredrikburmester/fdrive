@@ -11,6 +11,7 @@ import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { activityFixture } from "../../test/activity-fixture.js";
+import { testFileOperations } from "../../test/file-operations.js";
 import { createApp } from "../app.js";
 import { createLoginLimiter, DEFAULT_MAX_FAILURES } from "../auth/login-limiter.js";
 import { loadConfig } from "../config.js";
@@ -171,6 +172,7 @@ async function startHarness(mode: "read" | "organize"): Promise<Harness> {
   let readsFail = false;
   const toolDeps: McpToolDeps = {
     activity: activity.service,
+    files: testFileOperations({ activity: activity.service }),
     activityReads: {
       record: async (input: ActivityReadInput) => {
         if (readsFail) throw new Error("read journal offline");

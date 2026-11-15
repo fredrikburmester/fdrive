@@ -11,6 +11,7 @@ import type { McpToolDeps } from "../../src/mcp/handlers.ts";
 import { registerMcpRoutes } from "../../src/mcp/routes.ts";
 import type { TokenPrincipal } from "../../src/tokens/principal.ts";
 import { generateApiToken } from "../../src/tokens/token-format.ts";
+import { testFileOperations } from "../file-operations.ts";
 
 let storage: Awaited<ReturnType<typeof startLocalStorage>>;
 let server: ServerType;
@@ -52,9 +53,17 @@ beforeAll(async () => {
       searchService: {} as McpToolDeps["searchService"],
       publicUrl: async () => "https://fdrive.example.com",
       indexerClient: null,
-      onMutation: async () => {
-        if (metadataFails) throw new Error("injected metadata failure");
-      },
+      // Tags and the rest follow best effort; a failure there is only a warning.
+      files: testFileOperations({
+        metadata: {
+          onMoved: async () => {
+            if (metadataFails) throw new Error("injected metadata failure");
+          },
+          onDeleted: async () => {
+            if (metadataFails) throw new Error("injected metadata failure");
+          },
+        },
+      }),
       clock: () => new Date(),
     },
   });
@@ -95,7 +104,7 @@ it("preserves occupied targets, reports completed writes truthfully, and rejects
   expect(moved.content).toEqual([
     {
       type: "text",
-      text: expect.stringContaining("metadata or live updates could not be updated"),
+      text: expect.stringContaining("could not follow it"),
     },
   ]);
   expect(await new Response((await principal.storage.download("/renamed.txt")).body).text()).toBe(

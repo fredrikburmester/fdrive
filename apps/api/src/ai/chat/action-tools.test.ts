@@ -5,6 +5,7 @@ import { createMemoryStorage } from "@fdrive/core/testing";
 import type { IndexQueries } from "@fdrive/db";
 import { describe, expect, it, vi } from "vitest";
 import { activityFixture } from "../../../test/activity-fixture.js";
+import { recordingFileOperations, testFileOperations } from "../../../test/file-operations.js";
 import type { Principal } from "../../auth/principal.js";
 import type { McpToolDeps } from "../../mcp/handlers.js";
 import { type ActionTool, createChatActionTools, MAX_WRITE_BYTES } from "./action-tools.ts";
@@ -39,6 +40,7 @@ function setup(options: { files?: Record<string, string>; referenced?: string[] 
     clock: () => new Date("2026-09-18T10:00:00.000Z"),
   };
   const activity = activityFixture(() => new Date("2026-09-18T10:00:00.000Z"));
+  const recorded = recordingFileOperations(testFileOperations({ activity: activity.service }));
   const tools = createChatActionTools({
     mcp,
     principal,
@@ -50,9 +52,7 @@ function setup(options: { files?: Record<string, string>; referenced?: string[] 
     },
     indexed: false,
     conversationId: CONVERSATION,
-    fs: {
-      activity: activity.service,
-    },
+    files: recorded.files,
   });
   const tool = (name: string): ActionTool => {
     const found = tools.find((candidate) => candidate.spec.name === name);
@@ -66,12 +66,52 @@ function setup(options: { files?: Record<string, string>; referenced?: string[] 
     proposal: ChatActionProposal,
     edits?: Parameters<ActionTool["apply"]>[1],
   ) => tool(name).apply(proposal, edits, new AbortController().signal);
-  return { storage, tools, tool, verify, apply, activity };
+  return { storage, tools, tool, verify, apply, activity, calls: recorded.calls };
 }
 
 const sha = (text: string) => createHash("sha256").update(text).digest("hex");
 
 describe("createChatActionTools", () => {
+  it("applies every card through the file operations", async () => {
+    const { verify, apply, calls } = setup();
+    await apply(
+      "move_items",
+      await verify("move_items", {
+        summary: "s",
+        moves: [{ path: "/Inbox/a.txt", destination: "/Docs", reason: "r" }],
+      }),
+    );
+    await apply(
+      "rename_items",
+      await verify("rename_items", {
+        summary: "s",
+        renames: [{ path: "/Docs/readme.md", name: "README.md", reason: "r" }],
+      }),
+    );
+    await apply(
+      "trash_items",
+      await verify("trash_items", {
+        summary: "s",
+        items: [{ path: "/Inbox/scan.pdf", reason: "r" }],
+      }),
+    );
+    await apply(
+      "write_text_file",
+      await verify("write_text_file", {
+        summary: "s",
+        path: "/Inbox/notes.md",
+        mode: "create",
+        text: "notes",
+      }),
+    );
+    expect(calls).toEqual([
+      "move /Inbox/a.txt",
+      "move /Docs/readme.md",
+      "trash /Inbox/scan.pdf",
+      "upload /Inbox/notes.md",
+    ]);
+  });
+
   it("always offers trash, since every login has a Trash", () => {
     expect(setup().tools.map((tool) => tool.spec.name)).toEqual([
       "move_items",

@@ -9,6 +9,7 @@ import type {
 } from "@fdrive/db";
 import type { PersonalActivityService } from "../activity/service.js";
 import type { Principal } from "../auth/principal.js";
+import type { FileOperations } from "../files/operations.js";
 import type { LocalGrantService } from "../local/grants.js";
 import type { MetadataService } from "../metadata/service.js";
 import type { DiscoveryCache } from "./protocol/discovery-cache.ts";
@@ -49,7 +50,10 @@ export interface OfficeDeps {
    */
   readonly grants: Pick<LocalGrantService, "ownerPath" | "pathFor">;
   readonly storageFactory: (identityId: string) => StorageProvider | Promise<StorageProvider>;
-  readonly metadata: MetadataService;
+  /** Writes and renames documents the way every change to files is made. */
+  readonly operations: FileOperations;
+  /** Recently opened, which opening a document touches. */
+  readonly metadata: Pick<MetadataService, "touchRecent">;
   /** Optional so office tests and deployments without history keep working.
    * Explicitly `undefined` is allowed so a caller can clear it in a spread. */
   readonly activity?: PersonalActivityService | undefined;

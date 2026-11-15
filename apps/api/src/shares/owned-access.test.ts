@@ -38,6 +38,7 @@ function build(
   const acquire = vi.fn((): (() => void) | null => release);
   const access = ownedShareAccess({
     storage,
+    upload: (path, body, uploadOptions) => storage.upload(path, body, uploadOptions),
     view: {
       name: "Docs",
       scope: "read",

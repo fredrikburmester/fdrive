@@ -42,7 +42,7 @@ async function harness() {
     }),
   });
   const metadata = recorder("metadata");
-  const share = recorder("shares");
+  const share = recorder("access");
   const observations = {
     moved: vi.fn(async (..._args: unknown[]) => undefined),
     absent: vi.fn(async (..._args: unknown[]) => undefined),
@@ -50,7 +50,7 @@ async function harness() {
   };
   const apply = createOutsideChanges({
     metadata: metadata as unknown as MetadataService,
-    followers: [share],
+    access: { moved: share.onMoved, removed: share.onDeleted },
     storageFor: async () => storage,
     observations: observations as unknown as ActivityObservations,
   });
@@ -62,7 +62,7 @@ describe("createOutsideChanges", () => {
     const h = await harness();
     await h.apply(ALICE, seen("/old", "/docs", true));
     expect(h.calls).toEqual([
-      "shares moved id-alice /old -> /docs",
+      "access moved id-alice /old -> /docs",
       "metadata moved id-alice /old -> /docs",
     ]);
     expect(h.observations.moved).toHaveBeenCalledWith(ACTOR, h.storage, "/old", "/docs");
@@ -82,7 +82,7 @@ describe("createOutsideChanges", () => {
   it("drops it for a move out of the login's files, and does nothing for one into them", async () => {
     const h = await harness();
     await h.apply(ALICE, seen("/docs", null, true));
-    expect(h.calls).toEqual(["shares deleted id-alice /docs", "metadata deleted id-alice /docs"]);
+    expect(h.calls).toEqual(["access deleted id-alice /docs", "metadata deleted id-alice /docs"]);
     expect(h.observations.absent).toHaveBeenCalledWith(ACTOR, "/docs", "left_scope");
     await h.apply(ALICE, seen(null, "/docs", true));
     expect(h.calls).toHaveLength(2);
@@ -99,7 +99,7 @@ describe("createOutsideChanges", () => {
     expect(h.calls).toEqual([]);
     await h.apply(ALICE, seen("/docs/gone.txt", null, false));
     expect(h.calls).toEqual([
-      "shares deleted id-alice /docs/gone.txt",
+      "access deleted id-alice /docs/gone.txt",
       "metadata deleted id-alice /docs/gone.txt",
     ]);
     expect(h.observations.absent).toHaveBeenCalledWith(ACTOR, "/docs/gone.txt", "missing");

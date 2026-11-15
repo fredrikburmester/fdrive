@@ -81,7 +81,9 @@ export interface OwnedShareAccessOptions {
    * The owner's storage as the identity storage factory builds it: its
    * `zip` already refuses a tree that holds a backup folder.
    */
-  readonly storage: Pick<StorageProvider, "list" | "statFile" | "download" | "upload" | "zip">;
+  readonly storage: Pick<StorageProvider, "list" | "statFile" | "download" | "zip">;
+  /** Stores a visitor's upload in the owner's storage (`FileOperations.upload`). */
+  readonly upload: StorageProvider["upload"];
   readonly view: ShareView;
   /** Spends one download once it has been served; `false` when the limit or expiry refuses it. */
   readonly consume: () => Promise<boolean>;
@@ -213,7 +215,7 @@ export function ownedShareAccess(opts: OwnedShareAccessOptions): PublicShareAcce
       const target = resolve(`/${name}`);
       await shareCall(() =>
         // A visitor's upload replaces a file of the same name, as it always has.
-        storage.upload(target, body, {
+        opts.upload(target, body, {
           overwrite: true,
           ...(options.contentLength === undefined ? {} : { contentLength: options.contentLength }),
           ...(options.signal === undefined ? {} : { signal: options.signal }),

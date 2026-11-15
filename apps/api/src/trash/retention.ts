@@ -1,11 +1,9 @@
 import type { IdentityRepo } from "@fdrive/db";
-import type { PersonalActivityService } from "../activity/service.js";
 import type { Principal } from "../auth/principal.js";
 import type { IdentityStorageFactory } from "../auth/storage-factory.js";
 import { ApiHttpError } from "../errors.js";
-import type { MetadataService } from "../metadata/service.js";
+import { type FileOperations, fileActor } from "../files/operations.js";
 import type { SystemEventLog } from "../system/event-log.js";
-import { purgeTrashItem } from "./routes.js";
 import type { TrashSettingsService } from "./settings.js";
 
 const DAY_MS = 24 * 60 * 60_000;
@@ -18,8 +16,7 @@ export interface TrashRetentionDeps {
   /** Each login's storage, with its Trash; refuses a disabled or removed user. */
   readonly storageFor: IdentityStorageFactory;
   readonly settings: Pick<TrashSettingsService, "current">;
-  readonly activity: PersonalActivityService;
-  readonly metadata: MetadataService;
+  readonly files: Pick<FileOperations, "purge">;
   readonly clock: () => Date;
   readonly eventLog: Pick<SystemEventLog, "record">;
 }
@@ -27,8 +24,8 @@ export interface TrashRetentionDeps {
 /**
  * Deletes for good what each user's Trash has kept longer than the
  * installation's retention, item by item through the same purge as
- * **Delete permanently** (`purgeTrashItem`), so history, shares and links
- * follow. A user who may not sign in keeps their Trash until they may again.
+ * **Delete permanently** (`FileOperations.purge`), so history, shares and
+ * links follow. A user who may not sign in keeps their Trash until they may again.
  * Runs hourly, the first time an hour after start, so an administrator who
  * upgrades has that long to keep old items longer; a failure defers that
  * item to the next pass.
@@ -64,7 +61,9 @@ export function createTrashRetention(deps: TrashRetentionDeps) {
         if (stopped) break;
         if (entry.deletedAt.getTime() > cutoff) continue;
         try {
-          await purgeTrashItem(deps, principal, entry.id, { source: "api", reason: "retention" });
+          await deps.files.purge(fileActor(principal, { source: "api" }), entry.id, {
+            reason: "retention",
+          });
           results.purged += 1;
         } catch (error) {
           results.deferred += 1;

@@ -4,8 +4,10 @@ import type { Identity } from "@fdrive/db";
 import { createMemoryRepos } from "@fdrive/db/testing";
 import { describe, expect, it, vi } from "vitest";
 import { activityFixture } from "../../test/activity-fixture.js";
+import { testFileOperations } from "../../test/file-operations.js";
 import { ApiHttpError } from "../errors.js";
-import { createMetadataService, withFollowers } from "../metadata/service.js";
+import type { AccessFollowers } from "../files/access.js";
+import { createMetadataService } from "../metadata/service.js";
 import { createTrashRetention } from "./retention.js";
 
 const DAY = 24 * 60 * 60_000;
@@ -47,8 +49,15 @@ function aliceStorage() {
 
 function harness(options: { retentionDays?: number; storageFor?: () => Promise<never> } = {}) {
   const alice = aliceStorage();
+  // What grants access, as links and shares with people end with a purge.
   const follower = { onMoved: vi.fn(async () => {}), onDeleted: vi.fn(async () => {}) };
-  const metadata = withFollowers(createMetadataService(createMemoryRepos()), [follower]);
+  const access: AccessFollowers = {
+    run: (_identityId, _paths, work) =>
+      work({ moved: follower.onMoved, removed: follower.onDeleted }),
+    moved: follower.onMoved,
+    removed: follower.onDeleted,
+  };
+  const metadata = createMetadataService(createMemoryRepos());
   const activity = activityFixture(() => NOW);
   const record = vi.fn();
   const retention = createTrashRetention({
@@ -62,8 +71,7 @@ function harness(options: { retentionDays?: number; storageFor?: () => Promise<n
         return alice.storage;
       }),
     settings: { current: async () => ({ retentionDays: options.retentionDays ?? 30 }) },
-    activity: activity.service,
-    metadata,
+    files: testFileOperations({ activity: activity.service, metadata, access }),
     clock: () => NOW,
     eventLog: { record },
   });

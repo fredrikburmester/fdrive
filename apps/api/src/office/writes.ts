@@ -1,5 +1,5 @@
 import { baseName, extensionOf, isStorageError, joinPath, parentPath } from "@fdrive/core";
-import { recordOfficeAction } from "../activity/office.js";
+import { officeFileActor } from "../activity/office.js";
 import { requireOfficeEdit } from "./auth.ts";
 import { requireMatchingLock, WopiError } from "./errors.ts";
 import { decodeUtf7, lockHeader, requireFilename, suggestedFilename } from "./names.ts";
@@ -54,28 +54,25 @@ async function uploadRequest(
       },
     }),
   );
-  await recordOfficeAction(
-    deps,
-    opened.actor,
-    path === opened.path ? "file.save" : "file.copy",
-    opened.path,
-    path,
-    options.bridgeId,
-    async () => {
-      try {
-        await opened.actor.storage.upload(path, body, {
-          signal,
-          overwrite: options.overwrite,
-          ...(length === null ? {} : { contentLength: Number(length) }),
-        });
-      } catch (error) {
-        // Storage reports a body that failed as its own failure; answer with the body's reason.
-        throw progress.failure ?? error;
-      }
-      return progress.size;
-    },
-    (size) => ({ size }),
-  );
+  try {
+    await deps.operations.upload(
+      officeFileActor(deps, opened.actor, options.bridgeId),
+      path,
+      body,
+      {
+        // Save As reads as a copy of the document the editor opened.
+        ...(path === opened.path
+          ? { action: "file.save" }
+          : { action: "file.copy", from: opened.path }),
+        signal,
+        overwrite: options.overwrite,
+        ...(length === null ? {} : { contentLength: Number(length) }),
+      },
+    );
+  } catch (error) {
+    // Storage reports a body that failed as its own failure; answer with the body's reason.
+    throw progress.failure ?? error;
+  }
 }
 async function putFile(
   deps: OfficeDeps,
@@ -132,40 +129,28 @@ async function renameFile(
       const full = requireFilename(`${name}${ext}`);
       const target = joinPath(parentPath(opened.path), full);
       const response = Response.json({ Name: name });
-      if (target === opened.path) return { source: opened.path, target, response };
+      if (target === opened.path) return response;
       await requireOfficeEdit(deps, opened.actor, target);
       const location = await officeLocation(deps, opened.actor, target);
+      // The document keeps its id: the rename moves it with links and the rest.
       await scope.locks.withFileLock(mutationKey(location), async () => {
-        await recordOfficeAction(
-          deps,
-          opened.actor,
-          "file.rename",
-          opened.path,
-          target,
-          opened.file.id,
-          async () => {
-            try {
-              await opened.actor.storage.move(opened.path, target, { overwrite: false });
-            } catch (error) {
-              if (isStorageError(error) && error.kind === "conflict")
-                throw new WopiError(400, { "X-WOPI-InvalidFileNameError": "Name already exists" });
-              throw error;
-            }
-          },
-        );
-        // Last: from here the registry's lock holds the owner's files until the scope ends.
-        await scope.files.movePrefix({
-          from: { identityId: opened.file.identityId, path: opened.file.path },
-          to: location,
-          at: deps.clock(),
-        });
+        try {
+          await deps.operations.move(
+            officeFileActor(deps, opened.actor, opened.file.id),
+            opened.path,
+            target,
+            { action: "file.rename" },
+          );
+        } catch (error) {
+          if (isStorageError(error) && error.kind === "conflict")
+            throw new WopiError(400, { "X-WOPI-InvalidFileNameError": "Name already exists" });
+          throw error;
+        }
       });
-      return { source: opened.path, target, response };
+      return response;
     }),
   );
-  if (result.target !== result.source)
-    await deps.metadata.onMoved(initial.actor.identity.id, result.source, result.target, false);
-  return result.response;
+  return result;
 }
 async function putRelative(
   deps: OfficeDeps,

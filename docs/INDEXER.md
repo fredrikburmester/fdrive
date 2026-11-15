@@ -383,8 +383,9 @@ writer sends on append, wakes it, and so does each reconnect of its `LISTEN` con
 reads what it missed; it does not poll. For each row it maps both ends through every login's
 scopes (the home plus folders shared with it, one grants query per login per read, no storage
 read) and sends each login that sees an end one live update with the row's position. A row the
-API wrote brings nothing else: the request that made the change moved metadata already. A row
-from the watcher, a scan or OCR first brings path-keyed metadata and personal activity along for
+API wrote brings nothing else: the file operation that made the change moved what grants
+access in its own transaction and the rest right after it
+([file operations](../apps/api/src/files/operations.ts)). A row from the watcher, a scan or OCR first brings path-keyed metadata and personal activity along for
 each login that sees it ([outside.ts](../apps/api/src/events/outside.ts)):
 
 - a move both ends of which a login sees moves its tags, favorites, folder views, recents and

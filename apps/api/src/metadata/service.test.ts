@@ -1,12 +1,7 @@
 import type { FsEntry } from "@fdrive/contracts";
 import { createMemoryRepos } from "@fdrive/db/testing";
-import { describe, expect, it, vi } from "vitest";
-import {
-  createMetadataService,
-  DEFAULT_RECENTS_LIMIT,
-  RECENTS_KEEP,
-  withFollowers,
-} from "./service.js";
+import { describe, expect, it } from "vitest";
+import { createMetadataService, DEFAULT_RECENTS_LIMIT, RECENTS_KEEP } from "./service.js";
 
 function buildService() {
   const repos = createMemoryRepos();
@@ -388,70 +383,5 @@ describe("createMetadataService: AI chat references", () => {
     const service = createMetadataService(withoutChats);
     await expect(service.onMoved(IDENTITY_ID, "/a", "/b", false)).resolves.toBeUndefined();
     await expect(service.onDeleted(IDENTITY_ID, "/b", false)).resolves.toBeUndefined();
-  });
-});
-
-describe("withFollowers", () => {
-  it("tells each follower about moves and deletes, in order", async () => {
-    const repos = createMemoryRepos();
-    const calls: string[] = [];
-    const follower = (name: string) => ({
-      onMoved: vi.fn(async (identity: string, from: string, to: string, isDir: boolean) => {
-        calls.push(`${name} moved ${identity} ${from} ${to} ${isDir}`);
-      }),
-      onDeleted: vi.fn(async (identity: string, path: string, isDir: boolean) => {
-        calls.push(`${name} deleted ${identity} ${path} ${isDir}`);
-      }),
-    });
-    const movePrefix = vi.spyOn(repos.metadataPaths, "movePrefix");
-    const service = withFollowers(createMetadataService(repos), [
-      follower("grants"),
-      follower("other"),
-    ]);
-
-    await service.onMoved(IDENTITY_ID, "/Projects", "/Work", true);
-    await service.onDeleted(IDENTITY_ID, "/Work", true);
-
-    expect(movePrefix).toHaveBeenCalledTimes(1);
-    expect(movePrefix).toHaveBeenCalledWith(IDENTITY_ID, "/Projects", "/Work", true);
-    expect(calls).toEqual([
-      `grants moved ${IDENTITY_ID} /Projects /Work true`,
-      `other moved ${IDENTITY_ID} /Projects /Work true`,
-      `grants deleted ${IDENTITY_ID} /Work true`,
-      `other deleted ${IDENTITY_ID} /Work true`,
-    ]);
-  });
-
-  it("stops at a follower that fails, so the caller sees the failure", async () => {
-    const repos = createMemoryRepos();
-    const failure = new Error("grants unavailable");
-    const after = { onMoved: vi.fn(), onDeleted: vi.fn() };
-    const movePrefix = vi.spyOn(repos.metadataPaths, "movePrefix");
-    const service = withFollowers(createMetadataService(repos), [
-      {
-        onMoved: vi.fn().mockRejectedValue(failure),
-        onDeleted: vi.fn().mockRejectedValue(failure),
-      },
-      after,
-    ]);
-    await expect(service.onMoved(IDENTITY_ID, "/a", "/b", true)).rejects.toBe(failure);
-    await expect(service.onDeleted(IDENTITY_ID, "/b", true)).rejects.toBe(failure);
-    expect(after.onMoved).not.toHaveBeenCalled();
-    expect(after.onDeleted).not.toHaveBeenCalled();
-    expect(movePrefix).not.toHaveBeenCalled();
-  });
-
-  it("moves access before anything else, so a failing tag move never leaves it behind", async () => {
-    const repos = createMemoryRepos();
-    const failure = new Error("tags unavailable");
-    vi.spyOn(repos.metadataPaths, "movePrefix").mockRejectedValue(failure);
-    vi.spyOn(repos.metadataPaths, "deletePrefix").mockRejectedValue(failure);
-    vi.spyOn(repos.recents, "deletePrefix").mockRejectedValue(failure);
-    const grants = { onMoved: vi.fn(async () => {}), onDeleted: vi.fn(async () => {}) };
-    const service = withFollowers(createMetadataService(repos), [grants]);
-    await expect(service.onMoved(IDENTITY_ID, "/a", "/b", true)).rejects.toBe(failure);
-    await expect(service.onDeleted(IDENTITY_ID, "/c", true)).rejects.toBe(failure);
-    expect(grants.onMoved.mock.calls).toEqual([[IDENTITY_ID, "/a", "/b", true]]);
-    expect(grants.onDeleted.mock.calls).toEqual([[IDENTITY_ID, "/c", true]]);
   });
 });

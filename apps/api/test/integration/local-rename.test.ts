@@ -137,7 +137,7 @@ describe("a folder renamed on disk outside fdrive, through the real indexer", ()
       bus,
       outside: createOutsideChanges({
         metadata,
-        followers: [],
+        access: { moved: async () => {}, removed: async () => {} },
         storageFor: async (id) => {
           const storage = storageByIdentityId.get(id);
           if (storage === undefined) throw new Error(`no storage seeded for identity ${id}`);

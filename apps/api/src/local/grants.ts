@@ -52,9 +52,10 @@ export interface LocalGrantService {
    */
   pathFor(identityId: string, owned: { identityId: string; path: string }): Promise<string | null>;
   /**
-   * What `onMoved` does, as data a caller applies in its own transaction (a
-   * Mac write's receipt): the owner's username and the move, or `null` when
-   * no share can follow (a file, or a login that is gone).
+   * What a Mac write's move does to the owner's shares, as data its receipt
+   * applies in its own transaction: the owner's username and the move, or
+   * `null` when no share can follow (a file, or a login that is gone). Every
+   * other move follows through `files/access.ts`.
    */
   grantMove(
     identityId: string,
@@ -62,10 +63,6 @@ export interface LocalGrantService {
     to: string,
     isDir: boolean,
   ): Promise<{ owner: string; from: string; to: string } | null>;
-  /** The owner moved a folder in fdrive: its shares follow. */
-  onMoved(identityId: string, from: string, to: string, isDir: boolean): Promise<void>;
-  /** The owner deleted a folder for good: its shares end. */
-  onDeleted(identityId: string, path: string, isDir: boolean): Promise<void>;
 }
 
 export interface LocalGrantServiceDeps {
@@ -286,17 +283,5 @@ export function createLocalGrantService(deps: LocalGrantServiceDeps): LocalGrant
     },
 
     grantMove,
-
-    async onMoved(identityId, from, to, isDir) {
-      const move = await grantMove(identityId, from, to, isDir);
-      if (move !== null) await repos.localGrants.movePrefix(move.owner, move.from, move.to);
-    },
-
-    async onDeleted(identityId, path, isDir) {
-      if (!isDir) return;
-      const identity = await repos.identities.get(identityId);
-      if (identity === null) return;
-      await repos.localGrants.deletePrefix(identity.externalUsername, path);
-    },
   };
 }

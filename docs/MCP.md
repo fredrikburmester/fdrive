@@ -96,8 +96,10 @@ Creation, moves and copies leave an occupied destination to storage, which refus
 (creation atomically). Editing checks SHA-256 and serializes competing MCP edits within one
 API process; that check is not atomic against other API processes, browser writes or
 writers outside fdrive. Re-read before editing; avoid concurrent external edits.
-Completed storage mutations remain successful if metadata/history updates fail, with warnings
-explaining what was not updated. Do not retry the storage operation merely to repair a warning.
+Writes go through the same file operations as the web, recorded in personal activity the same
+way. A move, Trash or restore whose links and shares with people cannot follow fails and leaves
+the file where it was. Once a write completes, a failure in tags, favorites or the rest of what
+is kept by path is a warning; do not retry the storage operation merely to repair it.
 
 ## MCP and REST vocabulary
 
