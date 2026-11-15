@@ -2432,7 +2432,13 @@ async function sharedFixture() {
   const alice = createUserStorage({
     home: homes.alice,
     shared: async () => [
-      { name: "Projects", dir: join(homes.bob, "Projects"), ownerHome: homes.bob, writable: true },
+      {
+        name: "Projects",
+        owner: "bob",
+        dir: join(homes.bob, "Projects"),
+        ownerHome: homes.bob,
+        writable: true,
+      },
     ],
     clock,
   });
