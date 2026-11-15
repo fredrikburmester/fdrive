@@ -49,11 +49,10 @@ export function recoveryPreview(inspection: Inspection) {
     tables: Object.fromEntries(
       Object.entries(inspection.manifest.tables).map(([table, value]) => [table, value.rows]),
     ),
-    blobs: inspection.manifest.blobs.map(({ kind, path, size, identityId, sourceId }) => ({
+    blobs: inspection.manifest.blobs.map(({ kind, path, size, sourceId }) => ({
       kind,
       path,
       size,
-      identityId,
       sourceId,
     })),
     coverage: inspection.manifest.coverage,

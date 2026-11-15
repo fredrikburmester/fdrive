@@ -29,24 +29,22 @@ case "$caps" in
     ;;
 esac
 
-# True when $1 is mounted read-only, like the desktop state the backup worker
-# only reads: its owner is the API's to fix.
+# True when $1 is mounted read-only: its owner is not this container's to fix.
 read_only_mount() {
   awk -v dir="$1" '$2 == dir { ro = ($4 ~ /^ro(,|$)/) } END { exit !ro }' /proc/self/mounts
 }
 
-for dir in "${FDRIVE_DESKTOP_STATE_DIR:-}" "${FDRIVE_BACKUP_STATE_DIR:-}"; do
-  # Only when the owner is wrong: a new volume, a changed uid, or state an
-  # earlier release wrote as the image's own fdrive user. Walking a large
-  # directory on every start would delay it.
-  if [ -n "$dir" ] && [ -d "$dir" ] && [ "$(stat -c %u "$dir")" != "$uid" ] &&
-    ! read_only_mount "$dir"; then
-    if ! chown -R "$uid:$uid" "$dir"; then
-      echo "cannot make $dir writable for uid $uid" >&2
-      exit 1
-    fi
+# Only when the owner is wrong: a new volume, a changed uid, or state an
+# earlier release wrote as the image's own fdrive user. Walking a large
+# directory on every start would delay it.
+dir=${FDRIVE_BACKUP_STATE_DIR:-}
+if [ -n "$dir" ] && [ -d "$dir" ] && [ "$(stat -c %u "$dir")" != "$uid" ] &&
+  ! read_only_mount "$dir"; then
+  if ! chown -R "$uid:$uid" "$dir"; then
+    echo "cannot make $dir writable for uid $uid" >&2
+    exit 1
   fi
-done
+fi
 
 # The storage folder itself and only while it is empty: Docker creates a
 # missing host directory as root. Files already in it never change owner.

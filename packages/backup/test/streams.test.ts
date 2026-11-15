@@ -29,7 +29,7 @@ it("rejects archive entry writes when the destination errors or closes during ba
 it("preserves empty files and refuses source mutation while a file is being streamed", async () => {
   const path = join(directory, "file");
   await writeFile(path, Buffer.alloc(256 * 1024));
-  const blob = required((await localBlobs(directory, "desktop"))[0]);
+  const blob = required((await localBlobs(directory, "office"))[0]);
   const body = await blob.open();
   let changed = false;
   const reading = (async () => {
@@ -44,11 +44,11 @@ it("preserves empty files and refuses source mutation while a file is being stre
   await rm(path);
   await writeFile(join(directory, "empty"), "");
   expect(
-    (await readBounded(await required((await localBlobs(directory, "desktop"))[0]).open())).length,
+    (await readBounded(await required((await localBlobs(directory, "office"))[0]).open())).length,
   ).toBe(0);
-  await expect(localBlobs(join(directory, "empty"), "desktop")).rejects.toThrow("not a directory");
-  await expect(localBlobs(directory, "desktop", 0)).rejects.toThrow("Too many");
+  await expect(localBlobs(join(directory, "empty"), "office")).rejects.toThrow("not a directory");
+  await expect(localBlobs(directory, "office", 0)).rejects.toThrow("Too many");
   await mkdir(join(directory, "nested"));
   execFileSync("mkfifo", [join(directory, "nested", "pipe")]);
-  await expect(localBlobs(directory, "desktop")).rejects.toThrow("Unsupported");
+  await expect(localBlobs(directory, "office")).rejects.toThrow("Unsupported");
 });
