@@ -10,6 +10,10 @@ pub const TEXT_EXCLUDE_GLOBS_KEY: &str = "indexer.text_exclude_globs";
 pub const OCR_IMAGE_GLOBS_KEY: &str = "indexer.ocr_image_globs";
 pub const TESSERACT_LANGS_KEY: &str = "indexer.tesseract_langs";
 
+/// The most workers a pool runs, as System > Indexing allows. Each one holds a database
+/// connection, and three pools run them (docs/ARCHITECTURE.md, "Database connections").
+pub const MAX_WORKERS: usize = 16;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Settings {
     pub scan_interval_seconds: u64,
@@ -56,7 +60,7 @@ fn parse_str(raw: Option<&Value>, default: &str) -> String {
 pub fn resolve(raw: &RawSettings, defaults: &Settings) -> Settings {
     Settings {
         scan_interval_seconds: parse_int(raw.get(SCAN_INTERVAL_KEY), defaults.scan_interval_seconds),
-        workers: parse_int(raw.get(WORKERS_KEY), defaults.workers as u64) as usize,
+        workers: (parse_int(raw.get(WORKERS_KEY), defaults.workers as u64) as usize).clamp(1, MAX_WORKERS),
         text_exclude_globs: parse_list(raw.get(TEXT_EXCLUDE_GLOBS_KEY), &defaults.text_exclude_globs),
         ocr_image_globs: parse_list(raw.get(OCR_IMAGE_GLOBS_KEY), &defaults.ocr_image_globs),
         tesseract_langs: parse_str(raw.get(TESSERACT_LANGS_KEY), &defaults.tesseract_langs),
@@ -136,6 +140,9 @@ mod tests {
             &base(),
         );
         assert_eq!(s, base());
+        for (asked, runs) in [(json!(0), 1), (json!(64), MAX_WORKERS)] {
+            assert_eq!(resolve(&raw(&[(WORKERS_KEY, asked)]), &base()).workers, runs);
+        }
     }
 
     #[test]

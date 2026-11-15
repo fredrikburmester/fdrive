@@ -43,8 +43,12 @@ let count = 0;
 let owner: string, identity: string, storageId: string;
 /** Cheap scrypt: the hashes are real and verify like production ones. */
 const passwords = createScryptSharePasswords({ cost: 1024, blockSize: 8, parallelization: 1 });
-/** The backup module the API and worker build for the source installation. */
-const backupModule = createBackupModule;
+/** The backup module the API and worker build for the source installation, on a pool of its own. */
+function backupModule(settings: AppConfig) {
+  const database = createDb(settings.databaseUrl);
+  databases.push(database);
+  return createBackupModule(settings, database.pool);
+}
 /** A bucket kept in memory, standing in for S3 where only the copied bytes matter. */
 function memoryBucket(): BackupDestination {
   const objects = new Map<string, Buffer>();
@@ -896,13 +900,11 @@ it("clears expired recovery secrets and reports failed uploads and nonempty-targ
 
 it("reconnects after idle backup database connections are terminated", async () => {
   const expected = await module.store.configuration();
-  for (const pool of [module.pool, module.gatePool]) {
-    const pid = (await pool.query("select pg_backend_pid() as pid")).rows[0].pid;
-    const disconnected = new Promise<void>((resolve) => pool.once("error", () => resolve()));
-    await source.pool.query("select pg_terminate_backend($1)", [pid]);
-    await disconnected;
-    expect((await pool.query("select 1 as ok")).rows[0].ok).toBe(1);
-  }
+  const pid = (await module.pool.query("select pg_backend_pid() as pid")).rows[0].pid;
+  const disconnected = new Promise<void>((resolve) => module.pool.once("error", () => resolve()));
+  await source.pool.query("select pg_terminate_backend($1)", [pid]);
+  await disconnected;
+  expect((await module.pool.query("select 1 as ok")).rows[0].ok).toBe(1);
   expect((await module.store.configuration()).installation_id).toBe(expected.installation_id);
 });
 
