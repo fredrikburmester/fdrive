@@ -13,6 +13,7 @@ import {
   createPasswordCheck,
   type Installation,
 } from "./index";
+import { createPrincipalFactory } from "./principal";
 import { registerAuthRoutes } from "./routes";
 
 function notImplemented(): never {
@@ -91,7 +92,10 @@ async function buildTestApp(opts: {
       limiter: createLoginLimiter({ clock: opts.clockCtl.clock }),
       users: local.users,
     }),
-    storageFactory: async () => FAKE_STORAGE,
+    principalFor: createPrincipalFactory({
+      folder: { storage: () => FAKE_STORAGE },
+      clock: opts.clockCtl.clock,
+    }),
     installation:
       opts.installation ??
       (async () => ({ storageName: "Local folder", trash: false, index: false })),
@@ -599,12 +603,12 @@ describe("auth service: direct edge cases", () => {
     clockCtl = createClock(Date.now());
   });
 
-  it("me() throws internal when the account no longer exists", async () => {
+  it("me() asks a login that no longer exists to sign in again", async () => {
     const { authModule } = await buildTestApp({ clockCtl });
 
     await expect(
-      authModule.service.me("00000000-0000-0000-0000-000000000000", "irrelevant"),
-    ).rejects.toMatchObject({ kind: "internal" });
+      authModule.service.me("00000000-0000-0000-0000-000000000000"),
+    ).rejects.toMatchObject({ kind: "unauthorized" });
   });
 
   it("resolvePrincipal returns null (unauthorized) when the session's login no longer exists", async () => {

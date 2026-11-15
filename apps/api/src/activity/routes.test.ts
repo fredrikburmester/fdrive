@@ -329,7 +329,7 @@ describe("personal activity HTTP boundary", () => {
     expect((await h.request(`/events/${h.event.id}/subjects?cursor=${bad}`)).status).toBe(400);
   });
 
-  it("resolves and live-checks a file's current location while preserving unavailable history", async () => {
+  it("resolves and checks a file's current location while preserving unavailable history", async () => {
     const h = await fixture();
     expect((await (await h.request("/files/resolve?path=/a.txt")).json()).id).toBe(h.fileId);
     expect(h.repo.resolveFile).toHaveBeenLastCalledWith(h.accountId, h.identityId, "/a.txt");
@@ -357,7 +357,7 @@ describe("personal activity HTTP boundary", () => {
     h.setPrincipal({
       storage: {
         ...h.storage,
-        download: async () => {
+        stat: async () => {
           throw Error("offline");
         },
       },
@@ -366,7 +366,7 @@ describe("personal activity HTTP boundary", () => {
     h.setPrincipal({
       storage: {
         ...h.storage,
-        download: async () => {
+        stat: async () => {
           throw new StorageError("forbidden", "denied");
         },
       },

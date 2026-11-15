@@ -1,11 +1,10 @@
 import { type ContentStamp, toFsPath } from "@fdrive/core";
-import type { IdentityRepo, IndexedContent, IndexQueries, IndexRef } from "@fdrive/db";
+import type { IndexedContent, IndexQueries, IndexRef } from "@fdrive/db";
 import type { Principal } from "../auth/principal.js";
 import type { ScopeResolver } from "../scoping/resolver.js";
 import { roundTripVirtualPath } from "../scoping/round-trip.js";
 
 export interface IndexedContentDeps {
-  readonly identities: Pick<IdentityRepo, "get">;
   readonly resolver: Pick<ScopeResolver, "verifiedIndexScopes">;
   readonly index: Pick<IndexQueries, "contentAt">;
 }
@@ -30,9 +29,7 @@ export function createIndexedContentLookup(deps: IndexedContentDeps): IndexedCon
   return async (principal, paths) => {
     const found = new Map<string, IndexedContent>();
     if (paths.length === 0) return found;
-    const identity = await deps.identities.get(principal.identityId);
-    if (identity === null) return found;
-    const verified = await deps.resolver.verifiedIndexScopes(identity);
+    const verified = await deps.resolver.verifiedIndexScopes(principal.username);
     if (!verified.available) return found;
     const wanted = new Map<string, { ref: IndexRef; path: string }>();
     for (const path of paths) {

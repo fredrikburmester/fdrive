@@ -82,8 +82,8 @@ describe("desktop version checks answered from the index", () => {
       storageId: provider.id,
       rootName: "files",
       indexRootNames: ["files"],
-      extraScopes: async (identity, home) => {
-        const shared = await users.shared(identity.externalUsername);
+      extraScopes: async (username, home) => {
+        const shared = await users.shared(username);
         const names = sharedFolderNames(shared);
         return shared.map(
           (grant, index): Scope => ({
@@ -133,7 +133,6 @@ describe("desktop version checks answered from the index", () => {
       clock: () => new Date(),
       trashPathForStorage: () => null,
       indexedContent: createIndexedContentLookup({
-        identities: repos.identities,
         resolver,
         index: createIndexQueries(db),
       }),

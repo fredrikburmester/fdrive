@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DESKTOP_API, DesktopPairing, DesktopPairResult } from "@fdrive/contracts";
 import { StorageError, type StorageProvider } from "@fdrive/core";
+import type { Login } from "@fdrive/db";
 import { createMemoryRepos } from "@fdrive/db/testing";
 import { createLocalStorage, createUserStorage, SHARED_WITH_ME } from "@fdrive/local";
 import { createMemoryStorage } from "@fdrive/testkit";
@@ -11,7 +12,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { activityFixture } from "../../test/activity-fixture.js";
 import { memoryRepo } from "../../test/helpers/desktop-repo.js";
 import { createApp } from "../app.js";
-import type { Principal } from "../auth/principal.js";
+import type { Principal, PrincipalExtras } from "../auth/principal.js";
 import { loadConfig } from "../config.js";
 import { ApiHttpError } from "../errors.js";
 import { createResolveTokenPrincipal } from "../tokens/principal.js";
@@ -327,20 +328,19 @@ async function fixture(writable = false, changes?: DesktopChanges) {
   let now = new Date("2026-09-13T00:00:00Z");
   const clock = () => now;
   const activity = activityFixture(clock);
-  const account = await repos.accounts.create({ displayName: "Alice" });
   const provider = await repos.providers.ensure({ type: "local", baseUrl: "local" });
-  const identity = await repos.identities.create({
-    accountId: account.id,
-    providerId: provider.id,
-    externalUsername: "alice",
-  });
+  const user = (username: string) =>
+    repos.logins.createUser({
+      providerId: provider.id,
+      username,
+      passwordHash: "h",
+      isAdmin: false,
+      at: now,
+    });
+  const identity = await user("alice");
+  const account = { id: identity.accountId };
   // Another person's login, on an account of its own.
-  const bob = await repos.accounts.create({ displayName: "Bob" });
-  const second = await repos.identities.create({
-    accountId: bob.id,
-    providerId: provider.id,
-    externalUsername: "bob",
-  });
+  const second = await user("bob");
   const storage: StorageProvider = createMemoryStorage({
     "/docs/a.txt": "alpha",
     "/.trash/old": "trash",
@@ -351,7 +351,16 @@ async function fixture(writable = false, changes?: DesktopChanges) {
     ...repos,
     storage: { id: provider.id, name: async () => "Family files" },
     clock,
-    storageFactory: vi.fn(async (id: string) => (id === identity.id ? storage : otherStorage)),
+    principalFor: vi.fn(
+      async (login: Login, extras?: PrincipalExtras): Promise<Principal> => ({
+        accountId: login.accountId,
+        identityId: login.identityId,
+        username: login.username,
+        isAdmin: login.isAdmin,
+        storage: login.identityId === identity.id ? storage : otherStorage,
+        ...extras,
+      }),
+    ),
     trashPathForStorage: () => "/.trash",
   };
   const principal: Principal = {
@@ -555,9 +564,6 @@ it("requires the app secret, cancels issued credentials, expires pending request
   const pair = f.pairing.create("Mac", "owner");
   await expect(f.pairing.poll(pair.id, "wrong")).rejects.toMatchObject({ kind: "unauthorized" });
   await expect(f.pairing.cancel(pair.id, "wrong")).rejects.toMatchObject({ kind: "unauthorized" });
-  await expect(
-    f.pairing.approve(pair.id, { ...f.owner, identityId: randomUUID() }, "read"),
-  ).rejects.toMatchObject({ kind: "forbidden" });
   await f.pairing.approve(pair.id, f.owner, "read");
   await expect(f.pairing.approve(pair.id, f.owner, "read")).rejects.toMatchObject({
     kind: "conflict",
@@ -637,8 +643,8 @@ it("revokes only the supplied desktop credential without building storage", asyn
   const credential = await f.connect();
   const other = await f.connect();
   const mcp = await createTokenService(f.deps).create(f.owner, { name: "MCP" });
-  f.deps.storageFactory.mockClear();
-  f.deps.storageFactory.mockRejectedValue(
+  f.deps.principalFor.mockClear();
+  f.deps.principalFor.mockRejectedValue(
     new ApiHttpError("upstream_unavailable", "storage provider unavailable"),
   );
   for (const token of ["", mcp.token, mcp.token.replace("fdr_", "fdd_")]) {
@@ -658,7 +664,7 @@ it("revokes only the supplied desktop credential without building storage", asyn
   expect(
     (await f.repos.apiTokens.listByAccount(f.account.id)).map((token) => token.id).sort(),
   ).toEqual([other.tokenId, mcp.item.id].sort());
-  expect(f.deps.storageFactory).not.toHaveBeenCalled();
+  expect(f.deps.principalFor).not.toHaveBeenCalled();
   // Expiration should not prevent cleanup of a credential whose hash is still stored.
   f.advance(366 * 86_400_000);
   expect(
@@ -666,7 +672,7 @@ it("revokes only the supplied desktop credential without building storage", asyn
   ).toBe(200);
 });
 
-it("passes a failure to build a location's storage on as the error it is", async () => {
+it("refuses the location of a user an administrator disabled since connecting", async () => {
   const f = await fixture();
   const pair = f.pairing.create("Mac", "owner");
   await f.pairing.approve(pair.id, f.owner, "read");
@@ -678,9 +684,7 @@ it("passes a failure to build a location's storage on as the error it is", async
     providerId: f.provider.id,
     displayName: "Family files",
   });
-  f.deps.storageFactory.mockRejectedValue(
-    new ApiHttpError("forbidden", "this user may not sign in"),
-  );
+  await f.repos.localUsers.update("alice", { disabled: true });
   expect(
     (await f.request("/location", undefined, { authorization: `Bearer ${credential.token}` }))
       .status,
@@ -707,18 +711,13 @@ it("bounds one IPv6 subscriber to eight pairing slots and preserves admission fo
   expect(() => f.pairing.create("Mac", "2001:db8:1234:5678::1")).not.toThrow();
 });
 
-it("rolls back a failed issuance and refuses a login that no longer exists", async () => {
+it("rolls back a failed issuance and approves a pairing once", async () => {
   const f = await fixture();
   const pair = f.pairing.create("Mac", "owner");
   await f.pairing.approve(pair.id, f.owner, "read");
-  f.deps.storageFactory.mockRejectedValueOnce(new Error("upstream offline"));
+  f.deps.principalFor.mockRejectedValueOnce(new Error("upstream offline"));
   await expect(f.pairing.poll(pair.id, pair.secret)).rejects.toThrow();
   expect(await f.repos.apiTokens.listByAccount(f.account.id)).toHaveLength(0);
-  await expect(
-    f.pairing.location({ ...f.principal, identityId: randomUUID() }),
-  ).rejects.toMatchObject({
-    kind: "unauthorized",
-  });
   const race = f.pairing.create("Mac", "owner");
   const approvals = await Promise.allSettled(
     [1, 2].map(() => f.pairing.approve(race.id, f.owner, "read")),

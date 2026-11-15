@@ -1,7 +1,7 @@
 import { ApiTokenAccess } from "@fdrive/contracts";
-import type { ApiTokenRepo, IdentityRepo } from "@fdrive/db";
-import type { Principal } from "../auth/principal.js";
-import type { IdentityStorageFactory } from "../auth/storage-factory.ts";
+import type { ApiTokenRepo, LoginRepo } from "@fdrive/db";
+import type { Principal, PrincipalFactory } from "../auth/principal.js";
+import { inactiveLogin } from "../auth/service.js";
 import { hashApiToken, looksLikeApiToken } from "./token-format.js";
 
 /** A principal an API token authenticated: always with the token's access level and folders. */
@@ -11,10 +11,10 @@ export type TokenPrincipal = Principal & { readonly tokenAccess: ApiTokenAccess 
 const TOUCH_INTERVAL_MS = 60_000;
 
 export interface ResolveTokenPrincipalDeps {
-  readonly apiTokens: ApiTokenRepo;
-  readonly identities: IdentityRepo;
+  readonly apiTokens: Pick<ApiTokenRepo, "touch">;
+  readonly logins: Pick<LoginRepo, "byToken">;
   readonly clock: () => Date;
-  readonly storageFactory: IdentityStorageFactory;
+  readonly principalFor: PrincipalFactory;
   /** A separate credential audience; defaults to the existing MCP token format. */
   readonly acceptsToken?: (value: string) => boolean;
 }
@@ -23,8 +23,10 @@ export interface ResolveTokenPrincipalDeps {
  * Builds `resolveTokenPrincipal(bearer)`: maps a bearer value to the
  * `TokenPrincipal` it authenticates as, the login that created it, or `null`
  * when the value is not a recognizable, live, unexpired fdrive token, or its
- * stored access does not parse. Tokens never grant admin access.
- * `lastUsedAt` is touched at most once per `TOUCH_INTERVAL_MS`.
+ * stored access does not parse. The token and its login are read in one
+ * query; a disabled or removed user is refused at once (`forbidden`). Tokens
+ * never grant admin access. `lastUsedAt` is touched at most once per
+ * `TOUCH_INTERVAL_MS`.
  */
 export function createResolveTokenPrincipal(
   deps: ResolveTokenPrincipalDeps,
@@ -34,10 +36,11 @@ export function createResolveTokenPrincipal(
       return null;
     }
 
-    const token = await deps.apiTokens.findByHash(hashApiToken(bearer));
-    if (token === null) {
+    const found = await deps.logins.byToken(hashApiToken(bearer));
+    if (found === null) {
       return null;
     }
+    const { token, login } = found;
     const access = ApiTokenAccess.safeParse(token.access);
     if (!access.success) return null;
 
@@ -45,8 +48,7 @@ export function createResolveTokenPrincipal(
     if (token.expiresAt !== null && token.expiresAt.getTime() <= now.getTime()) {
       return null;
     }
-    const identity = await deps.identities.get(token.identityId);
-    if (identity === null) return null;
+    if (!login.active) throw inactiveLogin();
 
     const shouldTouch =
       token.lastUsedAt === null || now.getTime() - token.lastUsedAt.getTime() >= TOUCH_INTERVAL_MS;
@@ -54,13 +56,10 @@ export function createResolveTokenPrincipal(
       await deps.apiTokens.touch(token.id, now);
     }
 
-    return {
-      accountId: token.accountId,
-      identityId: identity.id,
-      username: identity.externalUsername,
-      storage: await deps.storageFactory(identity.id),
-      isAdmin: false,
-      tokenAccess: access.data,
-    };
+    const principal = await deps.principalFor(
+      { ...login, isAdmin: false },
+      { tokenAccess: access.data },
+    );
+    return principal as TokenPrincipal;
   };
 }

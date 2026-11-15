@@ -551,6 +551,52 @@ export function defineReposSuite(name: string, setup: () => Promise<Repos> | Rep
         });
       });
 
+      it("reads a session's and a token's login with its account and whether its user is active", async () => {
+        const identity = await addUser("Gwen", "h", true);
+        await signIn("gwen", "c".repeat(64));
+        const token = await repos.apiTokens.create({
+          accountId: identity.accountId,
+          identityId: identity.id,
+          name: "laptop",
+          tokenHash: "d".repeat(64),
+          expiresAt: null,
+          access: { mode: "read", paths: ["/"] },
+        });
+        const login = {
+          identityId: identity.id,
+          accountId: identity.accountId,
+          providerId: identity.providerId,
+          username: "Gwen",
+          displayName: "Gwen",
+          isAdmin: true,
+          active: true,
+        };
+
+        expect(await repos.logins.get(identity.id)).toEqual(login);
+        expect(await repos.logins.bySession("c".repeat(64), at)).toMatchObject({
+          session: { idHash: "c".repeat(64), identityId: identity.id },
+          login,
+        });
+        expect(await repos.logins.byToken("d".repeat(64))).toMatchObject({
+          token: { id: token.id, access: { mode: "read", paths: ["/"] } },
+          login,
+        });
+        // An expired session, and hashes nothing has, read as nothing.
+        expect(await repos.logins.bySession("c".repeat(64), new Date("2099-01-02"))).toBeNull();
+        expect(await repos.logins.bySession("e".repeat(64), at)).toBeNull();
+        expect(await repos.logins.byToken("e".repeat(64))).toBeNull();
+        expect(await repos.logins.get("00000000-0000-0000-0000-000000000099")).toBeNull();
+
+        // A disabled or removed user's login is still found, as inactive.
+        await repos.localUsers.update("gwen", { disabled: true });
+        expect((await repos.logins.bySession("c".repeat(64), at))?.login.active).toBe(false);
+        await repos.localUsers.update("gwen", { disabled: false });
+        expect((await repos.logins.byToken("d".repeat(64)))?.login.active).toBe(true);
+        await repos.localUsers.delete("gwen");
+        expect((await repos.logins.byToken("d".repeat(64)))?.login.active).toBe(false);
+        expect((await repos.logins.get(identity.id))?.active).toBe(false);
+      });
+
       it("refuses a sign-in for a name without a login", async () => {
         await expect(signIn("nobody", "b".repeat(64))).rejects.toMatchObject({
           code: "missing_identity",

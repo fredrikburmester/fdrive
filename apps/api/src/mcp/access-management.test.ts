@@ -82,7 +82,6 @@ async function fixture(mode: "read" | "organize" | "full" = "full", paths = ["/a
   };
   const metadata = createMetadataService({ ...repos });
   const deps: McpToolDeps = {
-    identities: repos.identities,
     scopeResolver: {
       verifiedIndexScopes: vi.fn(async () => ({
         available: false as const,

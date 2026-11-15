@@ -18,7 +18,6 @@ import {
   runSimilarFiles,
 } from "../../src/mcp/handlers.ts";
 import { resolveScopeContext } from "../../src/mcp/scope-context.ts";
-import { createReadAuthorizer } from "../../src/scoping/read-authorizer.ts";
 import { createScopeResolver } from "../../src/scoping/resolver.ts";
 import { createSearchService } from "../../src/search/service.ts";
 import type { TokenPrincipal } from "../../src/tokens/principal.ts";
@@ -130,7 +129,6 @@ describe("fdrive's own folders in the index, through the MCP tools", () => {
         rootName: "files",
         indexRootNames: ["files"],
       }),
-      identities: repos.identities,
       publicUrl: async () => null,
       indexerClient: null,
       clock,
@@ -172,13 +170,11 @@ describe("fdrive's own folders in the index, through the MCP tools", () => {
     expect(duplicates).not.toHaveProperty("partial");
 
     // The AI's index-backed file_info.
-    const identity = await deps.identities.get(alice.identityId);
-    const verified = identity && (await deps.scopeResolver.verifiedIndexScopes(identity));
-    if (!verified?.available) throw new Error("expected alice's verified scopes");
+    const verified = await deps.scopeResolver.verifiedIndexScopes(alice.username);
+    if (!verified.available) throw new Error("expected alice's verified scopes");
     const ctx = await resolveScopeContext(deps.indexQueries, verified.scopes, "/.trash");
     if (ctx === null) throw new Error("expected alice's scope context");
-    const authorizer = createReadAuthorizer({ storage: alice.storage });
-    const info = await fileInfoInScope(deps, ctx, authorizer, { path: "/report-a.txt" });
+    const info = await fileInfoInScope(deps, ctx, { path: "/report-a.txt" });
     expect(info.identical_copies).toEqual(["/report-b.txt"]);
     expect(info).not.toHaveProperty("partial");
 

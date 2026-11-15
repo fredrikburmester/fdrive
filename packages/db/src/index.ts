@@ -82,6 +82,7 @@ export {
 } from "./repos/index-queries.js";
 export type {
   LocalUserUpdate,
+  Login,
   LoginErrorCode,
   LoginRepo,
   LoginSessionInput,

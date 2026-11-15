@@ -31,20 +31,48 @@ export function withRecycleFolderTrash(
   return { ...storage, trash: createRecycleFolderTrash({ storage, trashPath }) };
 }
 
-/** Runs `fn`, turning a `StorageError` into the `ApiHttpError` of the same kind. */
-async function asHttp<T>(fn: () => T | Promise<T>): Promise<T> {
-  try {
-    return await fn();
-  } catch (error) {
-    if (isStorageError(error)) throw new ApiHttpError(error.kind, error.message);
-    throw error;
-  }
+/** Turns a `StorageError` into the `ApiHttpError` of the same kind. */
+function asHttp(error: unknown): unknown {
+  return isStorageError(error) ? new ApiHttpError(error.kind, error.message) : error;
 }
 
 /** What the factory needs of the files folder (`FilesFolder`). */
 export interface StorageSource {
   storage(username: string): StorageProvider;
   admit(username: string): Promise<void>;
+}
+
+/**
+ * `username`'s storage: their home in the files folder, with `settings`
+ * (when given) recorded for the request. With
+ * Trash on, the storage gets the move-to-trash wrapper underneath the
+ * recycle folder view. Reads nothing: whoever asks has already admitted the
+ * user. Throws `forbidden` for a name that cannot be a home folder.
+ */
+export function buildUserStorage(
+  folder: Pick<StorageSource, "storage">,
+  clock: () => Date,
+  username: string,
+  settings?: TrashSettings,
+): StorageProvider {
+  let storage: StorageProvider;
+  try {
+    storage = folder.storage(username);
+  } catch (error) {
+    throw asHttp(error);
+  }
+  let result = storage;
+  if (settings?.enabled === true) {
+    const moving = withMoveToTrash({
+      storage,
+      trashPath: settings.path,
+      clock,
+      onRecycled: captureRecycleReceipt,
+    });
+    result = withRecycleFolderTrash(moving, settings.path);
+  }
+  if (settings !== undefined) trashSettingsByStorage.set(result, settings);
+  return result;
 }
 
 export interface CreateStorageFactoryDeps {
@@ -56,12 +84,12 @@ export interface CreateStorageFactoryDeps {
 }
 
 /**
- * Builds the per-request `StorageProvider` for an identity: its home in the
- * files folder, once the folder admits its user (a user disabled since
- * signing in gets `forbidden`). Delayed jobs retain the result; token
- * validation can deny execution but never retarget it. Trash settings are resolved once per request's storage, so
- * runtime changes apply without restart: with Trash on, the storage gets
- * the move-to-trash wrapper underneath the recycle folder view.
+ * Builds an identity's `StorageProvider` outside a signed-in request (a
+ * share link's owner, the indexer's events, Office, the Mac's bookkeeping):
+ * `buildUserStorage`, once the folder admits its user (a disabled or removed
+ * user gets `forbidden`). Delayed jobs retain the result; token validation
+ * can deny execution but never retarget it. A signed-in request has its
+ * storage from its principal instead (`createPrincipalFactory`).
  */
 export function createIdentityStorageFactory(
   deps: CreateStorageFactoryDeps,
@@ -70,20 +98,12 @@ export function createIdentityStorageFactory(
     const identity = await deps.identities.get(identityId);
     if (identity === null) throw new ApiHttpError("unauthorized", "sign in again");
     const username = identity.externalUsername;
-    await asHttp(() => deps.folder.admit(username));
-    const storage = await asHttp(() => deps.folder.storage(username));
-    const settings = await deps.resolveTrashSettings?.(identityId);
-    let result = storage;
-    if (settings?.enabled === true) {
-      const moving = withMoveToTrash({
-        storage,
-        trashPath: settings.path,
-        clock: deps.clock,
-        onRecycled: captureRecycleReceipt,
-      });
-      result = withRecycleFolderTrash(moving, settings.path);
+    try {
+      await deps.folder.admit(username);
+    } catch (error) {
+      throw asHttp(error);
     }
-    if (settings !== undefined) trashSettingsByStorage.set(result, settings);
-    return result;
+    const settings = await deps.resolveTrashSettings?.(identityId);
+    return buildUserStorage(deps.folder, deps.clock, username, settings);
   };
 }

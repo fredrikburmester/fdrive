@@ -1,13 +1,11 @@
 import type { Scope, StorageProvider } from "@fdrive/core";
-import type { Identity, IndexQueries } from "@fdrive/db";
+import type { IndexQueries } from "@fdrive/db";
 import type { Logger } from "pino";
 import { describe, expect, it, vi } from "vitest";
 import { createApp } from "../app.js";
 import type { Principal } from "../auth/principal.js";
 import { loadConfig } from "../config.js";
-import type { ReadAuthorizeResult, ReadAuthorizer } from "../scoping/read-authorizer.ts";
 import type { ScopeResolver } from "../scoping/resolver.ts";
-import { buildIdentity } from "../scoping/test-fixtures/index.ts";
 import { type FolderSizeRoutesDeps, registerFolderSizeRoutes } from "./folder-size.js";
 
 const REQUIRED_ENV = {
@@ -45,30 +43,22 @@ function fakeIndexQueries(
   };
 }
 
-/** Allows every target by default; pass a `ReadAuthorizeResult` to override the outcome. */
-function fakeAuthorizer(result: ReadAuthorizeResult = { allowed: true }): ReadAuthorizer {
-  return { authorize: async () => result };
-}
-
-interface BuildAppOptions extends Partial<Omit<FolderSizeRoutesDeps, "resolver" | "identities">> {
+interface BuildAppOptions extends Partial<Omit<FolderSizeRoutesDeps, "resolver">> {
   readonly scopes?: readonly Scope[] | null;
-  readonly identity?: Identity | null;
-  readonly authorizeResult?: ReadAuthorizeResult;
 }
 
 function buildApp(deps: BuildAppOptions = {}, username = "alice") {
+  // The scope is the permission: sizing a folder reads nothing from storage.
   const storage = {} as StorageProvider;
-  const identity =
-    deps.identity === undefined ? buildIdentity({ externalUsername: username }) : deps.identity;
   const principal: Principal = {
     accountId: "00000000-0000-4000-8000-000000000001",
-    identityId: identity?.id ?? "00000000-0000-4000-8000-0000000000a1",
+    identityId: "00000000-0000-4000-8000-0000000000a1",
     username,
     storage,
     isAdmin: false,
   };
 
-  const { scopes, authorizeResult, ...overrides } = deps;
+  const { scopes, ...overrides } = deps;
   const resolvedScopes = scopes === undefined ? HOME_SCOPES : scopes;
 
   const resolver: Pick<ScopeResolver, "verifiedIndexScopes"> = {
@@ -81,8 +71,6 @@ function buildApp(deps: BuildAppOptions = {}, username = "alice") {
   const fullDeps: FolderSizeRoutesDeps = {
     indexQueries: fakeIndexQueries(),
     resolver,
-    identities: { get: async () => identity },
-    createAuthorizer: () => fakeAuthorizer(authorizeResult),
     ...overrides,
   };
 
@@ -286,53 +274,47 @@ describe("GET /api/v1/fs/folder-size", () => {
     );
   });
 
-  it("live-authorizes nested mappings and omits a mapping that is no longer readable", async () => {
-    const authorize = vi.fn(async ({ path }: { path: string }) =>
-      path === "/shared"
-        ? ({ allowed: false, reason: "denied" } as const)
-        : ({ allowed: true } as const),
-    );
+  it("counts only the mappings the login has now: a revoked share drops out at once", async () => {
     const subtreeSize = vi.fn(async () => ({ bytes: 10, files: 1 }));
-    const app = buildApp({
-      scopes: [
-        { rootName: "home", fsPrefix: "/alice", virtualPrefix: "/" },
-        { rootName: "team", fsPrefix: "/projects/team", virtualPrefix: "/shared" },
-      ],
-      createAuthorizer: () => ({ authorize }),
-      indexQueries: fakeIndexQueries({
-        rootIdsByName: async () => ({ home: 1, team: 2 }),
-        subtreeSize,
+    const home = { rootName: "files", fsPrefix: "/alice", virtualPrefix: "/" };
+    const shared = { rootName: "files", fsPrefix: "/bob/team", virtualPrefix: "/shared" };
+    let scopes: Scope[] = [home, shared];
+    const app = createApp({
+      config: loadConfig(REQUIRED_ENV),
+      logger: createTestLogger(),
+      version: "1.0.0",
+      startedAt: new Date("2024-06-01T00:00:00.000Z"),
+      principalResolver: async () => ({
+        accountId: "00000000-0000-4000-8000-000000000001",
+        identityId: "00000000-0000-4000-8000-0000000000a1",
+        username: "alice",
+        storage: {} as StorageProvider,
+        isAdmin: false,
       }),
+      registerRoutes: (groups) =>
+        registerFolderSizeRoutes(groups, {
+          indexQueries: fakeIndexQueries({
+            rootIdsByName: async () => ({ files: 1 }),
+            subtreeSize,
+          }),
+          resolver: { verifiedIndexScopes: async () => ({ available: true, scopes }) },
+        }),
     });
 
-    const res = await app.request("/api/v1/fs/folder-size?path=/");
-
-    expect(await res.json()).toEqual({ path: "/", bytes: 10, files: 1, indexed: true });
-    expect(authorize).toHaveBeenCalledWith({ path: "/", kind: "dir" });
-    expect(authorize).toHaveBeenCalledWith({ path: "/shared", kind: "dir" });
-    expect(subtreeSize).toHaveBeenCalledTimes(1);
-  });
-
-  it("returns 502 rather than a partial total when a nested mapping read is unavailable", async () => {
-    const authorize = vi.fn(async ({ path }: { path: string }) =>
-      path === "/shared"
-        ? ({ allowed: false, reason: "unavailable" } as const)
-        : ({ allowed: true } as const),
-    );
-    const rootIdsByName = vi.fn(async () => ({ home: 1, team: 2 }));
-    const app = buildApp({
-      scopes: [
-        { rootName: "home", fsPrefix: "/alice", virtualPrefix: "/" },
-        { rootName: "team", fsPrefix: "/projects/team", virtualPrefix: "/shared" },
-      ],
-      createAuthorizer: () => ({ authorize }),
-      indexQueries: fakeIndexQueries({ rootIdsByName }),
+    expect(await (await app.request("/api/v1/fs/folder-size?path=/")).json()).toEqual({
+      path: "/",
+      bytes: 20,
+      files: 2,
+      indexed: true,
     });
-
-    const res = await app.request("/api/v1/fs/folder-size?path=/");
-
-    expect(res.status).toBe(502);
-    expect(rootIdsByName).not.toHaveBeenCalled();
+    scopes = [home];
+    expect(await (await app.request("/api/v1/fs/folder-size?path=/")).json()).toEqual({
+      path: "/",
+      bytes: 10,
+      files: 1,
+      indexed: true,
+    });
+    expect(subtreeSize).toHaveBeenCalledTimes(3);
   });
 
   it("returns 400 for a missing path", async () => {
@@ -349,15 +331,6 @@ describe("GET /api/v1/fs/folder-size", () => {
     const res = await app.request(`/api/v1/fs/folder-size?path=${encodeURIComponent("a\0b")}`);
 
     expect(res.status).toBe(400);
-  });
-
-  it("answers indexed: false when the identity no longer exists", async () => {
-    const app = buildApp({ identity: null });
-
-    const res = await app.request("/api/v1/fs/folder-size?path=/photos");
-
-    expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ path: "/photos", bytes: 0, files: 0, indexed: false });
   });
 
   it("answers indexed: false when the identity's verified scopes are unavailable", async () => {
@@ -407,75 +380,5 @@ describe("GET /api/v1/fs/folder-size", () => {
 
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ path: "/trash/old", bytes: 0, files: 0, indexed: false });
-  });
-
-  it("returns 403 when the live read check denies the folder", async () => {
-    const app = buildApp({ authorizeResult: { allowed: false, reason: "denied" } });
-
-    const res = await app.request("/api/v1/fs/folder-size?path=/photos");
-
-    expect(res.status).toBe(403);
-  });
-
-  it("returns 404 when the live read check reports the folder missing", async () => {
-    const app = buildApp({ authorizeResult: { allowed: false, reason: "missing" } });
-
-    const res = await app.request("/api/v1/fs/folder-size?path=/photos");
-
-    expect(res.status).toBe(404);
-  });
-
-  it("returns 502 when the live read check is unavailable", async () => {
-    const app = buildApp({ authorizeResult: { allowed: false, reason: "unavailable" } });
-
-    const res = await app.request("/api/v1/fs/folder-size?path=/photos");
-
-    expect(res.status).toBe(502);
-  });
-
-  it("checks the live read before ever querying the index", async () => {
-    const rootIdsByName = vi.fn(async () => ({ files: 1 }));
-    const app = buildApp({
-      indexQueries: fakeIndexQueries({ rootIdsByName }),
-      authorizeResult: { allowed: false, reason: "denied" },
-    });
-
-    await app.request("/api/v1/fs/folder-size?path=/photos");
-
-    expect(rootIdsByName).not.toHaveBeenCalled();
-  });
-
-  it("uses the default authorizer built from the caller's own storage when none is injected", async () => {
-    const list = vi.fn(async () => []);
-    const storage = { list, download: fail } as unknown as StorageProvider;
-    const identity = buildIdentity({ externalUsername: "alice" });
-    const principal: Principal = {
-      accountId: "00000000-0000-4000-8000-000000000001",
-      identityId: identity.id,
-      username: "alice",
-      storage,
-      isAdmin: false,
-    };
-    const deps: FolderSizeRoutesDeps = {
-      indexQueries: fakeIndexQueries({
-        rootIdsByName: async () => ({ files: 1 }),
-        subtreeSize: async () => ({ bytes: 0, files: 0 }),
-      }),
-      resolver: { verifiedIndexScopes: async () => ({ available: true, scopes: HOME_SCOPES }) },
-      identities: { get: async () => identity },
-    };
-    const app = createApp({
-      config: loadConfig(REQUIRED_ENV),
-      logger: createTestLogger(),
-      version: "1.0.0",
-      startedAt: new Date("2024-06-01T00:00:00.000Z"),
-      principalResolver: async () => principal,
-      registerRoutes: (groups) => registerFolderSizeRoutes(groups, deps),
-    });
-
-    const res = await app.request("/api/v1/fs/folder-size?path=/photos");
-
-    expect(res.status).toBe(200);
-    expect(list).toHaveBeenCalledWith("/photos");
   });
 });

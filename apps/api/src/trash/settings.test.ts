@@ -107,6 +107,28 @@ describe("Trash settings service", () => {
     ).rejects.toMatchObject({ kind: "bad_request" });
   });
 
+  it("reads the stored row once, and serves what it saved without reading again", async () => {
+    const { service, values } = harness();
+    const key = `trash.configuration.${PROVIDER_A}`;
+    const initial = await service.configuration(PROVIDER_A);
+    // Nothing but this service writes the row; a write behind its back is not seen.
+    values.set(key, { ...initial, enabled: true, revision: 5 });
+    expect(await service.configuration(PROVIDER_A)).toEqual(initial);
+    // Saving reads the row itself, so a stale cache cannot win a compare-and-set.
+    await expect(service.update(PROVIDER_A, { ...initial, enabled: true })).rejects.toMatchObject({
+      kind: "conflict",
+    });
+    expect(await service.configuration(PROVIDER_A)).toMatchObject({ revision: 5, enabled: true });
+    const saved = await service.update(PROVIDER_A, {
+      ...initial,
+      revision: 5,
+      path: "/deleted",
+    });
+    values.delete(key);
+    expect(await service.configuration(PROVIDER_A)).toEqual(saved);
+    expect(await service.pathForIdentity("identity-a")).toBeNull();
+  });
+
   it("refuses an unreadable stored row and a lost compare-and-set race", async () => {
     const { service, values } = harness();
     values.set(`trash.configuration.${PROVIDER_A}`, { providerId: PROVIDER_B, garbage: true });
@@ -126,9 +148,9 @@ describe("Trash settings service", () => {
 
 it("disables a legacy overlong Trash path and permits repairing the stored row", async () => {
   const { service, values } = harness();
-  const initial = await service.configuration(PROVIDER_A);
   values.set(`trash.configuration.${PROVIDER_A}`, {
-    ...initial,
+    providerId: PROVIDER_A,
+    retentionHours: null,
     enabled: true,
     path: `/${"é".repeat(128)}`,
     revision: 3,

@@ -72,23 +72,16 @@ async function fixture() {
   };
 }
 describe("indexer observation evidence", () => {
-  it("suppresses unreadable destinations and pages known descendants on a proved departure", async () => {
+  it("records no absence it cannot prove and pages known descendants on a proved departure", async () => {
     const h = await fixture();
-    await h.storage.upload("/b.txt", new Uint8Array([1]));
-    const download = h.storage.download.bind(h.storage);
-    vi.spyOn(h.storage, "download").mockRejectedValueOnce(new StorageError("forbidden", "denied"));
-    await h.service.watcher(
-      h.identityId,
-      h.event("moved", "physical/alice/a.txt", "physical/alice/b.txt"),
-    );
-    expect(h.repo.observe).not.toHaveBeenCalled();
-    vi.mocked(h.storage.download)
-      .mockImplementationOnce(download)
-      .mockRejectedValueOnce(new StorageError("forbidden", "denied"));
-    await h.service.watcher(
-      h.identityId,
-      h.event("moved", "physical/alice/a.txt", "physical/alice/b.txt"),
-    );
+    // A destination storage cannot read records nothing.
+    vi.spyOn(h.storage, "stat").mockRejectedValueOnce(new StorageError("forbidden", "denied"));
+    await expect(
+      h.service.watcher(
+        h.identityId,
+        h.event("moved", "physical/alice/a.txt", "physical/alice/b.txt"),
+      ),
+    ).rejects.toMatchObject({ kind: "forbidden" });
     expect(h.repo.observe).not.toHaveBeenCalled();
     await h.storage.deleteFile("/a.txt");
     vi.spyOn(h.storage, "list").mockRejectedValueOnce(new StorageError("forbidden", "denied"));

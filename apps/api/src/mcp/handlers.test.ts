@@ -2,8 +2,6 @@ import { type Scope, StorageError, type StorageProvider } from "@fdrive/core";
 import type { ActivityListOptions, IndexedFile, IndexQueries } from "@fdrive/db";
 import { describe, expect, it, vi } from "vitest";
 import type { Principal } from "../auth/principal.js";
-import type { ReadAuthorizeResult, ReadAuthorizer } from "../scoping/read-authorizer.ts";
-import { buildIdentity } from "../scoping/test-fixtures/index.ts";
 import type { SearchService } from "../search/service.js";
 import type { TokenPrincipal } from "../tokens/principal.ts";
 import {
@@ -87,6 +85,7 @@ function stubIndexQueries(overrides: Partial<IndexQueries> = {}): IndexQueries {
     similar: overrides.similar ?? (async () => fail("similar")),
     recentFiles: overrides.recentFiles ?? (async () => fail("recentFiles")),
     thumbnail: overrides.thumbnail ?? (async () => fail("thumbnail")),
+    thumbnailKeys: overrides.thumbnailKeys ?? (async () => fail("thumbnailKeys")),
     deletedRowSha: overrides.deletedRowSha ?? (async () => fail("deletedRowSha")),
     liveRowsBySha: overrides.liveRowsBySha ?? (async () => fail("liveRowsBySha")),
     searchImages: overrides.searchImages ?? (async () => fail("searchImages")),
@@ -110,12 +109,7 @@ function fakeDownloadResult(): Awaited<ReturnType<StorageProvider["download"]>> 
   };
 }
 
-/**
- * A `StorageProvider` whose `list`/`download` succeed by default (so a
- * `run*` wrapper's real `ReadAuthorizer`, built from `principal.storage`,
- * allows everything unless a test deliberately overrides one of these two
- * methods to deny a specific path).
- */
+/** A `StorageProvider` whose `list`/`download` succeed by default. */
 function fakeStorage(overrides: Partial<StorageProvider> = {}): StorageProvider {
   return {
     list: overrides.list ?? (async () => []),
@@ -163,21 +157,6 @@ function tokenPrincipal(
   return { ...fakePrincipal(storage), tokenAccess: { mode, paths } };
 }
 
-/** A `ReadAuthorizer` fake for `*InScope` tests: allows everything except the targets listed in `overrides`, keyed `"<kind>:<path>"`. Records every call so a test can assert exactly what was probed. */
-function fakeAuthorizer(
-  overrides: Record<string, ReadAuthorizeResult> = {},
-): ReadAuthorizer & { readonly calls: readonly string[] } {
-  const calls: string[] = [];
-  return {
-    calls,
-    async authorize(target) {
-      const key = `${target.kind}:${target.path}`;
-      calls.push(key);
-      return overrides[key] ?? { allowed: true };
-    },
-  };
-}
-
 function fakeSearchService(overrides: Partial<SearchService> = {}): SearchService {
   return {
     search: overrides.search ?? (async () => fail("search")),
@@ -210,7 +189,6 @@ function baseDeps(overrides: Partial<Parameters<typeof runSearch>[0]> = {}) {
     scopeResolver: {
       verifiedIndexScopes: async () => ({ available: true as const, scopes: ALICE_HOME_SCOPES }),
     },
-    identities: { get: async () => buildIdentity() },
     publicUrl: async () => "https://fdrive.example.com",
     indexerClient: null,
     clock: () => new Date("2026-01-01T00:00:00.000Z"),
@@ -335,7 +313,6 @@ describe("runSearch", () => {
     await runSearch(deps, fakePrincipal(), { query: "report" });
 
     expect(received?.scopes).toEqual(scopes);
-    expect(received?.authorizer).toBeDefined();
   });
 
   it("passes an empty scope list when the caller's verified scopes are unavailable", async () => {
@@ -362,47 +339,22 @@ describe("runSearch", () => {
 
     expect(received?.scopes).toEqual([]);
   });
-
-  it("passes an empty scope list when the caller's identity no longer exists", async () => {
-    let received: Parameters<SearchService["search"]>[0] | undefined;
-    const deps = baseDeps({
-      identities: { get: async () => null },
-      searchService: fakeSearchService({
-        search: async (input) => {
-          received = input;
-          return {
-            query: input.query,
-            sections: { folders: [], files: [], content: [] },
-            degraded: false,
-            unavailable: true,
-            tookMs: 0,
-          };
-        },
-      }),
-    });
-
-    await runSearch(deps, fakePrincipal(), { query: "report" });
-
-    expect(received?.scopes).toEqual([]);
-  });
 });
 
 describe("requireScope (exercised through every index-backed run* wrapper)", () => {
-  it("resolves scopes using the principal's own identity id, never any other value", async () => {
-    let receivedId: string | undefined;
+  it("resolves scopes from the principal's own username, never any other value", async () => {
+    const verifiedIndexScopes = vi.fn(async (_username: string) => ({
+      available: true as const,
+      scopes: ALICE_HOME_SCOPES,
+    }));
     const deps = baseDeps({
-      identities: {
-        get: async (id) => {
-          receivedId = id;
-          return buildIdentity({ id });
-        },
-      },
+      scopeResolver: { verifiedIndexScopes },
       indexQueries: stubIndexQueries({ listFiles: async () => ({ total: 0, files: [] }) }),
     });
 
-    await runFindFiles(deps, fakePrincipal(undefined, "identity-of-the-bearer-token"), {});
+    await runFindFiles(deps, fakePrincipal(), {});
 
-    expect(receivedId).toBe("identity-of-the-bearer-token");
+    expect(verifiedIndexScopes).toHaveBeenCalledExactlyOnceWith("alice");
   });
 
   it("throws a reason-carrying, path-free error when verified scopes are unavailable", async () => {
@@ -416,11 +368,6 @@ describe("requireScope (exercised through every index-backed run* wrapper)", () 
     );
   });
 
-  it("throws when the identity no longer exists", async () => {
-    const deps = baseDeps({ identities: { get: async () => null } });
-    await expect(runFindFiles(deps, fakePrincipal(), {})).rejects.toThrow(McpToolError);
-  });
-
   it("throws when verified scopes are available but land on no indexed root", async () => {
     const deps = baseDeps({
       scopeResolver: {
@@ -431,25 +378,6 @@ describe("requireScope (exercised through every index-backed run* wrapper)", () 
       },
     });
     await expect(runFindFiles(deps, fakePrincipal(), {})).rejects.toThrow(McpToolError);
-  });
-
-  it("builds a real read authorizer against the principal's own storage, denying a file the storage denies", async () => {
-    const file = makeFile({ id: 1, path: "alice/secret.txt", name: "secret.txt" });
-    const deps = baseDeps({
-      indexQueries: stubIndexQueries({
-        listFiles: async () => ({ total: 1, files: [file] }),
-      }),
-    });
-    const storage = fakeStorage({
-      download: async () => {
-        throw new StorageError("forbidden", "no");
-      },
-    });
-
-    const result = await runFindFiles(deps, fakePrincipal(storage), {});
-
-    expect(result.results).toEqual([]);
-    expect(result.partial).toBe(true);
   });
 });
 
@@ -525,7 +453,7 @@ describe("runFindFiles / findFilesInScope", () => {
   it("throws when path_prefix does not resolve within the scope", async () => {
     const deps = baseDeps();
     await expect(
-      findFilesInScope(deps, NARROW_SCOPE_CONTEXT, fakeAuthorizer(), {
+      findFilesInScope(deps, NARROW_SCOPE_CONTEXT, {
         path_prefix: "/elsewhere",
       }),
     ).rejects.toThrow(/outside this identity's scope/);
@@ -543,35 +471,11 @@ describe("runFindFiles / findFilesInScope", () => {
         }),
       },
       ctx,
-      fakeAuthorizer(),
       {},
     );
 
     expect(result.results).toEqual([]);
     expect(result.total_matches).toBe(0);
-    expect(result.partial).toBe(true);
-  });
-
-  it("excludes exactly the denied file, keeping accessible ones, and reports partial", async () => {
-    const allowed = makeFile({ id: 1, path: "alice/keep.txt", name: "keep.txt" });
-    const denied = makeFile({ id: 2, path: "alice/secret.txt", name: "secret.txt" });
-    const ctx = await aliceScopeContext(stubIndexQueries());
-    const deps = {
-      ...baseDeps(),
-      indexQueries: stubIndexQueries({
-        listFiles: async () => ({ total: 2, files: [allowed, denied] }),
-      }),
-    };
-
-    const result = await findFilesInScope(
-      deps,
-      ctx,
-      fakeAuthorizer({ "file:/secret.txt": { allowed: false, reason: "denied" } }),
-      {},
-    );
-
-    expect(result.results.map((r) => r.path)).toEqual(["/keep.txt"]);
-    expect(result.total_matches).toBe(1);
     expect(result.partial).toBe(true);
   });
 
@@ -583,7 +487,7 @@ describe("runFindFiles / findFilesInScope", () => {
       indexQueries: stubIndexQueries({ listFiles: async () => ({ total: 500, files: [file] }) }),
     };
 
-    const result = await findFilesInScope(deps, ctx, fakeAuthorizer(), { limit: 1 });
+    const result = await findFilesInScope(deps, ctx, { limit: 1 });
 
     expect(result.partial).toBe(true);
   });
@@ -596,7 +500,7 @@ describe("runFindFiles / findFilesInScope", () => {
       indexQueries: stubIndexQueries({ listFiles: async () => ({ total: 1, files: [file] }) }),
     };
 
-    const result = await findFilesInScope(deps, ctx, fakeAuthorizer(), {});
+    const result = await findFilesInScope(deps, ctx, {});
 
     expect(result.results[0]?.path).toBe("/50%-off.pdf");
   });
@@ -740,12 +644,9 @@ describe("fileInfoInScope (the AI's indexed file_info)", () => {
       }),
     });
 
-    const result = await fileInfoInScope(
-      deps,
-      await aliceScopeContext(deps.indexQueries),
-      fakeAuthorizer(),
-      { path: "/a.txt" },
-    );
+    const result = await fileInfoInScope(deps, await aliceScopeContext(deps.indexQueries), {
+      path: "/a.txt",
+    });
 
     expect(result.path).toBe("/a.txt");
     expect(result.identical_copies).toEqual(["/copy/a.txt"]);
@@ -758,12 +659,9 @@ describe("fileInfoInScope (the AI's indexed file_info)", () => {
       indexQueries: stubIndexQueries({ fileByPath: async () => file }),
     });
 
-    const result = await fileInfoInScope(
-      deps,
-      await aliceScopeContext(deps.indexQueries),
-      fakeAuthorizer(),
-      { path: "/a.txt" },
-    );
+    const result = await fileInfoInScope(deps, await aliceScopeContext(deps.indexQueries), {
+      path: "/a.txt",
+    });
 
     expect(result.identical_copies).toEqual([]);
     expect(result.partial).toBeUndefined();
@@ -772,7 +670,7 @@ describe("fileInfoInScope (the AI's indexed file_info)", () => {
   it("throws when the file is not indexed", async () => {
     const deps = baseDeps({ indexQueries: stubIndexQueries({ fileByPath: async () => null }) });
     await expect(
-      fileInfoInScope(deps, await aliceScopeContext(deps.indexQueries), fakeAuthorizer(), {
+      fileInfoInScope(deps, await aliceScopeContext(deps.indexQueries), {
         path: "/a.txt",
       }),
     ).rejects.toThrow(/not indexed/);
@@ -781,14 +679,14 @@ describe("fileInfoInScope (the AI's indexed file_info)", () => {
   it("throws when the path does not resolve within the scope", async () => {
     const deps = baseDeps();
     await expect(
-      fileInfoInScope(deps, NARROW_SCOPE_CONTEXT, fakeAuthorizer(), { path: "/elsewhere" }),
+      fileInfoInScope(deps, NARROW_SCOPE_CONTEXT, { path: "/elsewhere" }),
     ).rejects.toThrow(/outside this identity's scope/);
   });
 
   it("throws when the resolved root has no id in the index yet", async () => {
     const deps = baseDeps();
     await expect(
-      fileInfoInScope(deps, UNINDEXED_ROOT_SCOPE_CONTEXT, fakeAuthorizer(), { path: "/a.txt" }),
+      fileInfoInScope(deps, UNINDEXED_ROOT_SCOPE_CONTEXT, { path: "/a.txt" }),
     ).rejects.toThrow(/not indexed yet/);
   });
 
@@ -799,52 +697,10 @@ describe("fileInfoInScope (the AI's indexed file_info)", () => {
     });
 
     await expect(
-      fileInfoInScope(deps, await aliceScopeContext(deps.indexQueries), fakeAuthorizer(), {
+      fileInfoInScope(deps, await aliceScopeContext(deps.indexQueries), {
         path: "/a.txt",
       }),
     ).rejects.toThrow(/not indexed yet/);
-  });
-
-  it("throws the exact same message when the file exists but a live read check denies it", async () => {
-    const file = makeFile({ id: 1, path: "alice/secret.txt" });
-    const ctx = await aliceScopeContext(stubIndexQueries());
-    const deps = {
-      ...baseDeps(),
-      indexQueries: stubIndexQueries({ fileByPath: async () => file }),
-    };
-
-    await expect(
-      fileInfoInScope(
-        deps,
-        ctx,
-        fakeAuthorizer({ "file:/secret.txt": { allowed: false, reason: "denied" } }),
-        { path: "/secret.txt" },
-      ),
-    ).rejects.toThrow(/not indexed yet/);
-  });
-
-  it("excludes exactly the denied identical copy and reports partial", async () => {
-    const file = makeFile({ id: 1, path: "alice/a.txt", sha256: "abc" });
-    const keepCopy = makeFile({ id: 2, path: "alice/keep.txt", sha256: "abc" });
-    const deniedCopy = makeFile({ id: 3, path: "alice/denied.txt", sha256: "abc" });
-    const ctx = await aliceScopeContext(stubIndexQueries());
-    const deps = {
-      ...baseDeps(),
-      indexQueries: stubIndexQueries({
-        fileByPath: async () => file,
-        filesBySha256: async () => [keepCopy, deniedCopy],
-      }),
-    };
-
-    const result = await fileInfoInScope(
-      deps,
-      ctx,
-      fakeAuthorizer({ "file:/denied.txt": { allowed: false, reason: "denied" } }),
-      { path: "/a.txt" },
-    );
-
-    expect(result.identical_copies).toEqual(["/keep.txt"]);
-    expect(result.partial).toBe(true);
   });
 
   it("caps identical copies at MAX_CANDIDATE_FILES and reports partial", async () => {
@@ -861,7 +717,7 @@ describe("fileInfoInScope (the AI's indexed file_info)", () => {
       }),
     };
 
-    const result = await fileInfoInScope(deps, ctx, fakeAuthorizer(), { path: "/a.txt" });
+    const result = await fileInfoInScope(deps, ctx, { path: "/a.txt" });
 
     expect(result.identical_copies).toHaveLength(MAX_CANDIDATE_FILES);
     expect(result.partial).toBe(true);
@@ -910,7 +766,7 @@ describe("runFindDuplicates / findDuplicatesInScope", () => {
   it("throws when path_prefix does not resolve within the scope", async () => {
     const deps = baseDeps();
     await expect(
-      findDuplicatesInScope(deps, NARROW_SCOPE_CONTEXT, fakeAuthorizer(), {
+      findDuplicatesInScope(deps, NARROW_SCOPE_CONTEXT, {
         path_prefix: "/elsewhere",
       }),
     ).rejects.toThrow(/outside this identity's scope/);
@@ -935,44 +791,13 @@ describe("runFindDuplicates / findDuplicatesInScope", () => {
       }),
     };
 
-    const result = await findDuplicatesInScope(deps, ctx, fakeAuthorizer(), {});
+    const result = await findDuplicatesInScope(deps, ctx, {});
 
     expect(result.groups).toEqual([]);
     expect(result.partial).toBe(true);
   });
 
-  it("drops a group down to fewer than two authorized copies entirely, and reports partial", async () => {
-    const ctx = await aliceScopeContext(stubIndexQueries());
-    const deps = {
-      ...baseDeps(),
-      indexQueries: stubIndexQueries({
-        duplicates: async () => [
-          {
-            sha256: "abc",
-            size: 100,
-            count: 2,
-            files: [
-              { rootId: 1, path: "alice/a.txt" },
-              { rootId: 1, path: "alice/secret.txt" },
-            ],
-          },
-        ],
-      }),
-    };
-
-    const result = await findDuplicatesInScope(
-      deps,
-      ctx,
-      fakeAuthorizer({ "file:/secret.txt": { allowed: false, reason: "denied" } }),
-      {},
-    );
-
-    expect(result.groups).toEqual([]);
-    expect(result.total_groups).toBe(0);
-    expect(result.partial).toBe(true);
-  });
-
-  it("keeps a group with three copies when exactly one is denied, recomputing wasted bytes from survivors only", async () => {
+  it("keeps a group with three copies when exactly one is out of scope, recomputing wasted bytes from survivors only", async () => {
     const ctx = await aliceScopeContext(stubIndexQueries());
     const deps = {
       ...baseDeps(),
@@ -985,19 +810,14 @@ describe("runFindDuplicates / findDuplicatesInScope", () => {
             files: [
               { rootId: 1, path: "alice/a.txt" },
               { rootId: 1, path: "alice/b.txt" },
-              { rootId: 1, path: "alice/secret.txt" },
+              { rootId: 1, path: "bob/secret.txt" },
             ],
           },
         ],
       }),
     };
 
-    const result = await findDuplicatesInScope(
-      deps,
-      ctx,
-      fakeAuthorizer({ "file:/secret.txt": { allowed: false, reason: "denied" } }),
-      {},
-    );
+    const result = await findDuplicatesInScope(deps, ctx, {});
 
     expect(result.groups).toEqual([
       {
@@ -1035,7 +855,7 @@ describe("runFindDuplicates / findDuplicatesInScope", () => {
       }),
     };
 
-    const result = await findDuplicatesInScope(deps, ctx, fakeAuthorizer(), {});
+    const result = await findDuplicatesInScope(deps, ctx, {});
 
     const totalCopies = result.groups.reduce((sum, group) => sum + group.copies, 0);
     expect(totalCopies).toBe(MAX_CANDIDATE_FILES);
@@ -1086,14 +906,14 @@ describe("runSimilarFiles / similarFilesInScope", () => {
   it("throws when the path does not resolve within the scope", async () => {
     const deps = baseDeps();
     await expect(
-      similarFilesInScope(deps, NARROW_SCOPE_CONTEXT, fakeAuthorizer(), { path: "/elsewhere" }),
+      similarFilesInScope(deps, NARROW_SCOPE_CONTEXT, { path: "/elsewhere" }),
     ).rejects.toThrow(/outside this identity's scope/);
   });
 
   it("throws when the resolved root has no id in the index yet", async () => {
     const deps = baseDeps();
     await expect(
-      similarFilesInScope(deps, UNINDEXED_ROOT_SCOPE_CONTEXT, fakeAuthorizer(), {
+      similarFilesInScope(deps, UNINDEXED_ROOT_SCOPE_CONTEXT, {
         path: "/target.md",
       }),
     ).rejects.toThrow(/not indexed yet/);
@@ -1107,30 +927,9 @@ describe("runSimilarFiles / similarFilesInScope", () => {
       indexQueries: stubIndexQueries({ fileByPath: async () => foreignFile }),
     };
 
-    await expect(
-      similarFilesInScope(deps, ctx, fakeAuthorizer(), { path: "/target.md" }),
-    ).rejects.toThrow(/not indexed/);
-  });
-
-  it("throws the same message when the source file itself fails a live read check", async () => {
-    const target = makeFile({ id: 1, path: "alice/target.md" });
-    const ctx = await aliceScopeContext(stubIndexQueries());
-    const deps = {
-      ...baseDeps(),
-      indexQueries: stubIndexQueries({
-        fileByPath: async () => target,
-        similar: async () => fail("similar"),
-      }),
-    };
-
-    await expect(
-      similarFilesInScope(
-        deps,
-        ctx,
-        fakeAuthorizer({ "file:/target.md": { allowed: false, reason: "denied" } }),
-        { path: "/target.md" },
-      ),
-    ).rejects.toThrow(/not indexed/);
+    await expect(similarFilesInScope(deps, ctx, { path: "/target.md" })).rejects.toThrow(
+      /not indexed/,
+    );
   });
 
   it("skips a similar row whose file id is missing from filesByIds", async () => {
@@ -1162,34 +961,6 @@ describe("runSimilarFiles / similarFilesInScope", () => {
     const result = await runSimilarFiles(deps, fakePrincipal(), { path: "/target.md" });
 
     expect(result.results).toEqual([]);
-  });
-
-  it("excludes exactly the denied similar candidate, keeping the rest, and reports partial", async () => {
-    const target = makeFile({ id: 1, path: "alice/target.md" });
-    const keep = makeFile({ id: 2, path: "alice/keep.md" });
-    const denied = makeFile({ id: 3, path: "alice/secret.md" });
-    const ctx = await aliceScopeContext(stubIndexQueries());
-    const deps = {
-      ...baseDeps(),
-      indexQueries: stubIndexQueries({
-        fileByPath: async () => target,
-        similar: async () => [
-          { fileId: 2, similarity: 0.9 },
-          { fileId: 3, similarity: 0.8 },
-        ],
-        filesByIds: async () => [keep, denied],
-      }),
-    };
-
-    const result = await similarFilesInScope(
-      deps,
-      ctx,
-      fakeAuthorizer({ "file:/secret.md": { allowed: false, reason: "denied" } }),
-      { path: "/target.md" },
-    );
-
-    expect(result.results.map((r) => r.path)).toEqual(["/keep.md"]);
-    expect(result.partial).toBe(true);
   });
 });
 
@@ -1231,7 +1002,7 @@ describe("runFolderOverview / folderOverviewInScope", () => {
   it("throws when path_prefix does not resolve within the scope", async () => {
     const deps = baseDeps();
     await expect(
-      folderOverviewInScope(deps, NARROW_SCOPE_CONTEXT, fakeAuthorizer(), {
+      folderOverviewInScope(deps, NARROW_SCOPE_CONTEXT, {
         path_prefix: "/elsewhere",
       }),
     ).rejects.toThrow(/outside this identity's scope/);
@@ -1283,30 +1054,6 @@ describe("runFolderOverview / folderOverviewInScope", () => {
     expect(result.total_bytes).toBe(0);
     expect(result.total_files).toBe(0);
   });
-
-  it("excludes exactly the denied file's bytes from every aggregate, and reports truncated", async () => {
-    const keep = makeFile({ id: 1, path: "alice/docs/keep.pdf", ext: ".pdf", size: 100 });
-    const denied = makeFile({ id: 2, path: "alice/docs/secret.pdf", ext: ".pdf", size: 900 });
-    const ctx = await aliceScopeContext(stubIndexQueries());
-    const deps = {
-      ...baseDeps(),
-      indexQueries: stubIndexQueries({
-        listFiles: async () => ({ total: 2, files: [keep, denied] }),
-      }),
-    };
-
-    const result = await folderOverviewInScope(
-      deps,
-      ctx,
-      fakeAuthorizer({ "file:/docs/secret.pdf": { allowed: false, reason: "denied" } }),
-      {},
-    );
-
-    expect(result.total_files).toBe(1);
-    expect(result.total_bytes).toBe(100);
-    expect(result.folders.find((f) => f.path === "/docs")).toMatchObject({ files: 1, bytes: 100 });
-    expect(result.truncated).toBe(true);
-  });
 });
 
 describe("runIndexStats / indexStatsInScope", () => {
@@ -1314,7 +1061,7 @@ describe("runIndexStats / indexStatsInScope", () => {
     ["organize", true],
     ["read", false],
   ] as const)(
-    "returns stats from authorized files, and writes_enabled for a %s token",
+    "returns stats from the files in scope, and writes_enabled for a %s token",
     async (mode, writesEnabled) => {
       const files = [
         makeFile({ id: 1, path: "alice/a.txt", size: 100, textStatus: "done" }),
@@ -1342,31 +1089,25 @@ describe("runIndexStats / indexStatsInScope", () => {
     },
   );
 
-  it("excludes a denied file from every count and reports partial", async () => {
-    const keep = makeFile({ id: 1, path: "alice/a.txt", size: 100, textStatus: "done" });
-    const denied = makeFile({ id: 2, path: "alice/secret.txt", size: 900, textStatus: "done" });
+  it("leaves a row out of scope out of every count and reports partial", async () => {
+    const files = [
+      makeFile({ id: 1, path: "alice/a.txt", size: 100 }),
+      makeFile({ id: 2, path: "bob/b.txt", size: 50 }),
+    ];
     const ctx = await aliceScopeContext(stubIndexQueries());
-    const deps = {
-      ...baseDeps(),
+    const deps = baseDeps({
       indexQueries: stubIndexQueries({
-        listFiles: async () => ({ total: 2, files: [keep, denied] }),
+        listFiles: async () => ({ total: 2, files }),
         statsForFileIds: async (ids) => {
           expect(ids).toEqual([1]);
           return { chunks: 1, chunksEmbedded: 1 };
         },
       }),
-    };
+    });
 
-    const result = await indexStatsInScope(
-      deps,
-      ctx,
-      fakeAuthorizer({ "file:/secret.txt": { allowed: false, reason: "denied" } }),
-    );
+    const result = await indexStatsInScope(deps, ctx);
 
-    expect(result.files_tracked).toBe(1);
-    expect(result.by_text_status).toEqual([{ status: "done", files: 1, bytes: 100 }]);
-    expect(result.chunks).toBe(1);
-    expect(result.partial).toBe(true);
+    expect(result).toMatchObject({ files_tracked: 1, partial: true });
   });
 });
 
@@ -1776,7 +1517,7 @@ describe("fdrive's own folders", () => {
     await runFindFiles(deps, principal, {});
     await runFolderOverview(deps, principal, {});
     await runIndexStats(deps, principal);
-    await fileInfoInScope(deps, ctx, fakeAuthorizer(), { path: "/target.md" });
+    await fileInfoInScope(deps, ctx, { path: "/target.md" });
     await runFindDuplicates(deps, principal, {});
     await runSimilarFiles(deps, principal, { path: "/target.md" });
 
@@ -1802,9 +1543,9 @@ describe("fdrive's own folders", () => {
     ]) {
       const file = makeFile({ id: 1, path });
       const deps = baseDeps({ indexQueries: stubIndexQueries({ fileByPath: async () => file }) });
-      await expect(
-        fileInfoInScope(deps, ctx, fakeAuthorizer(), { path: `/${path.slice(6)}` }),
-      ).rejects.toThrow("not indexed");
+      await expect(fileInfoInScope(deps, ctx, { path: `/${path.slice(6)}` })).rejects.toThrow(
+        "not indexed",
+      );
     }
   });
 });

@@ -83,7 +83,8 @@ through the storage's own file download, so loading a gallery of thumbnails
 never consumes a share's download limit the way opening or downloading a
 full-size image does. The public route checks a password-protected share's
 password before it serves a thumbnail. Both map index paths to a login's paths
-through [scopes](SCOPING.md) and check each file with a live read first.
+through [scopes](SCOPING.md), which are the permission: neither reads the file. Responses
+are cached privately and revalidated against the file's sha256 `ETag`.
 
 `POST /thumbnails/rebuild` (`maintenance.rs`) is a separate, thumbnail-only
 pass for when the WebP files themselves need regenerating, for example after

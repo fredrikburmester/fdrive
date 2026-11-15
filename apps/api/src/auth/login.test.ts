@@ -105,16 +105,12 @@ describe("the signed-in login", () => {
     const me = await h.call(ROUTES.auth.me, { cookie: a.cookie });
     expect(await me.json()).toEqual(a.me);
   });
-  it("is refused once the login or the account is gone", async () => {
+  it("is refused once the login is gone", async () => {
     const h = authHarness();
-    const a = await h.login();
-    vi.spyOn(h.repos.identities, "get").mockResolvedValueOnce(null);
-    await expect(h.auth.service.me(a.me.account.id, a.me.identity.id)).rejects.toMatchObject({
+    await h.login();
+    await expect(h.auth.service.me("00000000-0000-4000-8000-000000000099")).rejects.toMatchObject({
       kind: "unauthorized",
     });
-    await expect(
-      h.auth.service.me("00000000-0000-4000-8000-000000000099", a.me.identity.id),
-    ).rejects.toMatchObject({ kind: "internal" });
   });
 });
 

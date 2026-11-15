@@ -5,9 +5,8 @@ import { getCookie } from "hono/cookie";
 import type { AppConfig } from "../config.js";
 import { ApiHttpError } from "../errors.js";
 import type { CheckPassword } from "./password.ts";
-import type { Principal } from "./principal.js";
+import type { Principal, PrincipalFactory } from "./principal.js";
 import { COOKIE_NAME, generateSessionId, hashSessionId } from "./sessions.js";
-import type { IdentityStorageFactory } from "./storage-factory.ts";
 
 /** How stale a session's `lastSeenAt` must be before `resolvePrincipal` slides its expiry. */
 const SLIDING_TOUCH_THRESHOLD_MS = 5 * 60 * 1000;
@@ -29,7 +28,7 @@ export interface LoginResult {
 export interface AuthService {
   login(input: LoginInput): Promise<LoginResult>;
   resolvePrincipal(c: Context): Promise<Principal | null>;
-  me(accountId: string, identityId: string): Promise<MeResponse>;
+  me(identityId: string): Promise<MeResponse>;
   logout(sessionId: string): Promise<void>;
 }
 
@@ -41,28 +40,26 @@ export interface CreateAuthServiceDeps {
   readonly clock: () => Date;
   readonly config: AppConfig;
   readonly checkPassword: CheckPassword;
-  readonly storageFactory: IdentityStorageFactory;
+  /** Builds the principal of a session's login once it is admitted. */
+  readonly principalFor: PrincipalFactory;
   /** Read for every `/auth/me`, so a new name or Trash setting applies at once. */
   readonly installation: () => Promise<Installation>;
 }
 
+/** The refusal for a disabled or removed user: signing in again would not help. */
+export function inactiveLogin(): ApiHttpError {
+  return new ApiHttpError("forbidden", "this user may not sign in");
+}
+
 /** Builds the `AuthService`, the API's sign-in and session flow. */
 export function createAuthService(deps: CreateAuthServiceDeps): AuthService {
-  async function me(accountId: string, identityId: string): Promise<MeResponse> {
-    const account = await deps.repos.accounts.get(accountId);
-    if (!account) {
-      throw new ApiHttpError("internal", "account for active session no longer exists");
-    }
-    const identity = await deps.repos.identities.get(identityId);
-    if (identity === null) throw new ApiHttpError("unauthorized", "sign in again");
+  async function me(identityId: string): Promise<MeResponse> {
+    const login = await deps.repos.logins.get(identityId);
+    if (login === null) throw new ApiHttpError("unauthorized", "sign in again");
     return {
-      account: { id: account.id, displayName: account.displayName },
-      identity: {
-        id: identity.id,
-        username: identity.externalUsername,
-        providerId: identity.providerId,
-      },
-      isAdmin: account.isAdmin,
+      account: { id: login.accountId, displayName: login.displayName },
+      identity: { id: login.identityId, username: login.username, providerId: login.providerId },
+      isAdmin: login.isAdmin,
       ...(await deps.installation()),
     };
   }
@@ -95,13 +92,19 @@ export function createAuthService(deps: CreateAuthServiceDeps): AuthService {
       throw new ApiHttpError("internal", "sign-in failed");
     }
     try {
-      return { sessionId: rawSessionId, me: await me(identity.accountId, identity.id) };
+      return { sessionId: rawSessionId, me: await me(identity.id) };
     } catch (error) {
       await deps.repos.sessions.delete(idHash);
       throw error;
     }
   }
 
+  /**
+   * The session cookie's principal, in one query: the live session, its
+   * login and account, and whether its user is still active. A disabled or
+   * removed user is refused at once (`forbidden`), not at their next
+   * sign-in. Sliding the expiry writes at most once every five minutes.
+   */
   async function resolvePrincipal(c: Context): Promise<Principal | null> {
     const rawSessionId = getCookie(c, COOKIE_NAME);
     if (rawSessionId === undefined) {
@@ -110,10 +113,11 @@ export function createAuthService(deps: CreateAuthServiceDeps): AuthService {
 
     const idHash = hashSessionId(rawSessionId);
     const now = deps.clock();
-    const session = await deps.repos.sessions.getByIdHash(idHash, now);
-    if (!session) {
+    const found = await deps.repos.logins.bySession(idHash, now);
+    if (found === null) {
       return null;
     }
+    const { session, login } = found;
     // Sliding expiry keeps an active session alive, but never beyond a fixed
     // age from login: a stolen session id cannot be kept valid indefinitely
     // by periodic use.
@@ -124,6 +128,7 @@ export function createAuthService(deps: CreateAuthServiceDeps): AuthService {
       await deps.repos.sessions.delete(idHash);
       return null;
     }
+    if (!login.active) throw inactiveLogin();
 
     if (now.getTime() - session.lastSeenAt.getTime() > SLIDING_TOUCH_THRESHOLD_MS) {
       await deps.repos.sessions.touch(idHash, {
@@ -131,12 +136,6 @@ export function createAuthService(deps: CreateAuthServiceDeps): AuthService {
         expiresAt: new Date(now.getTime() + deps.config.fdriveSessionTtlDays * MS_PER_DAY),
       });
     }
-
-    const identity = await deps.repos.identities.get(session.identityId);
-    if (identity === null) return null;
-
-    const account = await deps.repos.accounts.get(session.accountId);
-    const isAdmin = account?.isAdmin ?? false;
 
     const verifyAuthority = async (): Promise<boolean> => {
       const at = deps.clock();
@@ -150,16 +149,7 @@ export function createAuthService(deps: CreateAuthServiceDeps): AuthService {
 
     // A files folder fdrive may not use leaves the session working: every
     // storage operation fails with `upstream_unavailable` instead.
-    const storage = await deps.storageFactory(identity.id);
-
-    return {
-      accountId: session.accountId,
-      identityId: identity.id,
-      username: identity.externalUsername,
-      storage,
-      isAdmin,
-      verifyAuthority,
-    };
+    return deps.principalFor(login, { verifyAuthority });
   }
 
   async function logout(sessionId: string): Promise<void> {

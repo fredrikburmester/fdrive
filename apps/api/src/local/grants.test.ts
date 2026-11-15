@@ -97,7 +97,7 @@ describe("createLocalGrantService: sharing a folder", () => {
       "Projects (alice)",
       "Projects (carol)",
     ]);
-    expect(await h.service.received(h.bob)).toEqual([
+    expect(await h.service.received("bob")).toEqual([
       { name: "Projects (alice)", owner: "alice", path: "/Projects", writable: false },
       { name: "Projects (carol)", owner: "carol", path: "/Projects", writable: false },
     ]);
@@ -317,7 +317,7 @@ describe("createLocalGrantService: changing and ending shares", () => {
     await h.service.onMoved(h.alice.id, "/Projects", leaf, true);
     await h.service.onMoved(h.alice.id, "/Photos/2026", "/.trash/loose", true);
 
-    expect(await h.service.received(h.bob)).toEqual([
+    expect(await h.service.received("bob")).toEqual([
       { name: "Projects", owner: "carol", path: "/Projects", writable: false },
     ]);
     expect(closedFolders).toHaveBeenCalled();
@@ -331,7 +331,7 @@ describe("createLocalGrantService: changing and ending shares", () => {
 
     // Trash turned off: what is still in fdrive's Trash layout stays closed; the rest opens.
     closedFolders.mockResolvedValue([]);
-    expect((await h.service.received(h.bob)).map((folder) => folder.name)).toEqual([
+    expect((await h.service.received("bob")).map((folder) => folder.name)).toEqual([
       "loose",
       "Projects",
     ]);

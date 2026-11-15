@@ -1,4 +1,4 @@
-import type { Identity, LocalUser, Session } from "./types.js";
+import type { ApiToken, Identity, LocalUser, Session } from "./types.js";
 
 /**
  * The setting that names the installation's owner, who alone manages
@@ -52,8 +52,33 @@ export interface LocalUserUpdate {
   readonly isAdmin?: boolean;
   readonly at: Date;
 }
+/**
+ * A login as a request acts as it: the login, its account, and whether its
+ * local user may use their files now. Read in one query with whatever
+ * authenticated the request.
+ */
+export interface Login {
+  readonly identityId: string;
+  readonly accountId: string;
+  /** The files folder's row, which every login is on. */
+  readonly providerId: string;
+  readonly username: string;
+  readonly displayName: string | null;
+  readonly isAdmin: boolean;
+  /** False once the user is disabled or removed: their requests are refused. */
+  readonly active: boolean;
+}
 /** The writes that span a local user, their account, their login and their sessions. */
 export interface LoginRepo {
+  /** The login `identityId` names, in one query; `null` when there is none. */
+  get(identityId: string): Promise<Login | null>;
+  /**
+   * The session `idHash` names, unexpired at `now`, and the login it acts as,
+   * in one query; `null` when there is no such live session.
+   */
+  bySession(idHash: string, now: Date): Promise<{ session: Session; login: Login } | null>;
+  /** The API token `tokenHash` names and the login it acts as, in one query. */
+  byToken(tokenHash: string): Promise<{ token: ApiToken; login: Login } | null>;
   /**
    * Creates a local user with an account and a login of the same name, in one
    * transaction. A login a removed user of exactly this name left behind is

@@ -51,8 +51,9 @@ installation setting administrators change on System > General. See
 [authentication](AUTH.md) and [storage](STORAGE.md).
 
 Local users are `app.local_users`: a username unique in any case, a scrypt hash and a disabled
-flag. Setup creates the first one and System > Users the rest; the files folder's `admit`
-refuses a disabled user on every request, not only at sign-in. Folders shared between users
+flag. Setup creates the first one and System > Users the rest; a disabled user is refused on
+every request, not only at sign-in, by the one query that resolves the request
+([authentication](AUTH.md#resolving-a-request)). Folders shared between users
 are `app.local_grants` (owner, folder path, grantee, read or write), served by
 `/api/v1/grants`. The grantee's storage shows each at `/Shared with me/<name>` (the folder's
 name, then `<name> (<owner>)` on a clash), confined to the owner's folder; a read-only grant
@@ -112,9 +113,10 @@ native receipts, read aggregation and Unknown observations are documented in
 
 ## Index authorization
 
-Use [scoping](SCOPING.md) when touching search, thumbnails, metadata events or MCP. Trusted configuration and live read authorization are separate requirements. Index
-scopes come from the provider's index root and the login's username, plus one per folder
-shared with it, never from a path a client sends. A login whose root is not indexed keeps
+Use [scoping](SCOPING.md) when touching search, thumbnails, metadata events or MCP. Index
+scopes come from the files folder's index root and the login's username, plus one per folder
+shared with it, computed for each request and never from a path a client sends; an index row
+they map to is the login's to see, with no storage read. A login whose root is not indexed keeps
 ordinary file operations, including explicitly scoped [MCP file tools](MCP.md).
 
 ## Office and recovery

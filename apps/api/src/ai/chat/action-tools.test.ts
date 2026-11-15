@@ -8,7 +8,6 @@ import { activityFixture } from "../../../test/activity-fixture.js";
 import type { Principal } from "../../auth/principal.js";
 import { type BusEvent, createEventBus } from "../../events/bus.js";
 import type { McpToolDeps } from "../../mcp/handlers.js";
-import { buildIdentity } from "../../scoping/test-fixtures/index.ts";
 import { type ActionTool, createChatActionTools, MAX_WRITE_BYTES } from "./action-tools.ts";
 
 const IDENTITY = "223e4567-e89b-42d3-a456-426614174000";
@@ -41,7 +40,6 @@ function setup(
     scopeResolver: {
       verifiedIndexScopes: async () => ({ available: false, reason: "no_connection" as const }),
     },
-    identities: { get: async () => buildIdentity() },
     publicUrl: async () => null,
     indexerClient: null,
     clock: () => new Date("2026-09-18T10:00:00.000Z"),
