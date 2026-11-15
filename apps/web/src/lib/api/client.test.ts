@@ -42,6 +42,8 @@ it("pins requests and native URLs independently of another tab's cookie selectio
     "/api/v1/thumb?path=%2Fsame&size=256&identity=one",
   );
   expect(tabB.client.downloadUrl("/same")).toContain("identity=two");
+  expect(tabA.client.transcodeUrl("/same.mkv")).toContain("identity=one");
+  expect(tabB.client.subtitlesUrl("/same.srt")).toContain("identity=two");
   const captured = tabA.snapshot();
   tabA.pinIdentity("two");
   await captured.remove([{ path: "/later", kind: "file" }]);

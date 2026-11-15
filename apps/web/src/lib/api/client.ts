@@ -42,6 +42,8 @@ export function createTabApiClient(options: Omit<ApiClientOptions, "identityId">
     },
   });
   client.downloadUrl = (path, opts) => snapshot().downloadUrl(path, opts);
+  client.transcodeUrl = (path) => snapshot().transcodeUrl(path);
+  client.subtitlesUrl = (path) => snapshot().subtitlesUrl(path);
   client.thumbUrl = (path, size) => snapshot().thumbUrl(path, size);
   return {
     client,

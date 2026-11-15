@@ -417,6 +417,18 @@ describe("createApiClient: downloadUrl", () => {
   });
 });
 
+describe("createApiClient: video urls", () => {
+  it("builds transcode and subtitle urls for the scoped identity", () => {
+    const client = createApiClient({ baseUrl: "https://api.test", identityId: VALID_UUID });
+    expect(client.transcodeUrl("/a/b.mkv")).toBe(
+      `https://api.test/api/v1/fs/transcode?path=%2Fa%2Fb.mkv&identity=${VALID_UUID}`,
+    );
+    expect(client.subtitlesUrl("/a/b.en.srt")).toBe(
+      `https://api.test/api/v1/fs/subtitles?path=%2Fa%2Fb.en.srt&identity=${VALID_UUID}`,
+    );
+  });
+});
+
 describe("createApiClient: upload", () => {
   it("puts the body to fs/upload with the path query", async () => {
     const { fetchStub, calls } = createStubFetch([jsonResponse(200, VALID_ENTRY)]);

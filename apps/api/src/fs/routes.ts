@@ -107,7 +107,7 @@ export interface FsRoutesDeps {
 
 export type FsContext = Context<{ Variables: AppVariables & PrincipalVariables }>;
 
-function parseQuery<T>(schema: z.ZodType<T>, query: Record<string, string | undefined>): T {
+export function parseQuery<T>(schema: z.ZodType<T>, query: Record<string, string | undefined>): T {
   const result = schema.safeParse(query);
   if (!result.success) {
     throw new ApiHttpError("bad_request", "invalid query", { issues: result.error.issues });
