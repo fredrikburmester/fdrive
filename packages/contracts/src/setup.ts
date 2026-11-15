@@ -3,13 +3,10 @@ import { LocalPassword, LocalUsername } from "./users.ts";
 
 /**
  * Shape returned by `GET /api/v1/setup/status`. `required` mirrors
- * `AboutResponse.setupRequired`. `storageConfigured` is false when the
- * deployment sets no files folder (`FDRIVE_STORAGE_ROOT`): setup cannot
- * finish until it does.
+ * `AboutResponse.setupRequired`.
  */
 export const SetupStatusResponse = z.object({
   required: z.boolean(),
-  storageConfigured: z.boolean(),
 });
 
 export type SetupStatusResponse = z.infer<typeof SetupStatusResponse>;

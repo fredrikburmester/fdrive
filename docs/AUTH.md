@@ -8,9 +8,8 @@ to it (see [storage port](STORAGE-PROVIDERS.md)). This document describes that
 design as implemented in `apps/api/src/auth/`, `apps/api/src/local/` and
 `apps/api/src/providers/`.
 
-`FDRIVE_ADMIN_USERS` names local usernames: it applies only to logins on the row
-the deployment pins (the files folder). Persisted `accounts.is_admin` grants
-remain account-wide.
+Administrators are the accounts with `accounts.is_admin`: the setup owner, and
+anyone an administrator makes one under System > Users.
 
 ## What is stored, and how it is encrypted
 
@@ -64,8 +63,7 @@ login (never one left behind), and inserts the owner record, which is never
 overwritten (`setup_claimed` if it already exists). A refused setup writes
 nothing, and of two racing setups exactly one owner remains. The owner record
 names who manages [backups](BACKUPS.md). The owner is then signed in through
-the same password check as anyone else. Without `FDRIVE_STORAGE_ROOT` setup
-refuses to complete (`bad_request`).
+the same password check as anyone else.
 
 ## Session cookie
 

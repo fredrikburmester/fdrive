@@ -12,7 +12,12 @@ import {
   writeHomeFiles,
 } from "../../local/test-fixtures/index.ts";
 import { memoryProviderService } from "../../providers/test-fixtures/index.ts";
-import { createAuthModule, createLoginLimiter, createPasswordCheck } from "../index.js";
+import {
+  createAuthModule,
+  createLoginLimiter,
+  createPasswordCheck,
+  type InstallationFlags,
+} from "../index.js";
 import type { PrincipalResolver } from "../principal.js";
 import { createIdentityStorageFactory } from "../storage-factory.ts";
 
@@ -44,6 +49,8 @@ export function authHarness(
     modules?: Readonly<Record<string, ProviderModule>>;
     /** The users the folder has, each signing in with `<username>-pass`; `HARNESS_USERS` by default. */
     users?: readonly string[];
+    /** What `/auth/me` reports for the installation; Trash off and nothing indexed by default. */
+    installation?: () => Promise<InstallationFlags>;
   } = {},
 ) {
   const now = { value: new Date("2026-09-07T00:00:00Z") };
@@ -99,6 +106,7 @@ export function authHarness(
     config,
     checkPassword,
     storageFactory,
+    installation: options.installation ?? (async () => ({ trash: false, index: false })),
   });
   const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() } as unknown as Logger;
   const app = createApp({

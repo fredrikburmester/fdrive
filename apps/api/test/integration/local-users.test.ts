@@ -30,13 +30,12 @@ describe("local users administered through the API", () => {
         files: {},
       }),
     ]);
-    await seedLocalUsers(postgres.connectionString, storage);
+    await seedLocalUsers(postgres.connectionString, storage, ["alice"]);
     composed = await composeApp(
       loadConfig({
         DATABASE_URL: postgres.connectionString,
         FDRIVE_STORAGE_ROOT: storage.root,
         FDRIVE_MASTER_KEY: Buffer.alloc(32, 29).toString("base64"),
-        FDRIVE_ADMIN_USERS: "alice",
       }),
       silentLogger(),
     );
@@ -88,7 +87,6 @@ describe("local users administered through the API", () => {
     const bob = await login("bob", "bob-password");
 
     const listed = await users(alice);
-    expect(listed.available).toBe(true);
     expect(
       listed.users.map(({ username, disabled, isAdmin, isYou }) => ({
         username,
@@ -182,17 +180,6 @@ describe("local users administered through the API", () => {
     expect((await call(user("nobody"), { method: "PATCH", cookie: alice, body: {} })).status).toBe(
       404,
     );
-
-    // dave holds the only administrator account (alice is one through FDRIVE_ADMIN_USERS), so he
-    // can be neither demoted nor removed until someone else holds one.
-    expect(
-      (await call(user("dave"), { method: "PATCH", cookie: alice, body: { isAdmin: false } }))
-        .status,
-    ).toBe(403);
-    expect((await call(user("dave"), { method: "DELETE", cookie: alice })).status).toBe(403);
-    expect(
-      (await call(user("bob"), { method: "PATCH", cookie: alice, body: { isAdmin: true } })).status,
-    ).toBe(200);
 
     // Removing dave signs him out and stops his password; his files stay on disk.
     expect((await call(user("dave"), { method: "DELETE", cookie: alice })).status).toBe(200);

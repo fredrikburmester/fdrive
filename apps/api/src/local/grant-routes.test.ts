@@ -37,6 +37,7 @@ async function harness() {
   const app = createApp({
     config: loadConfig({
       DATABASE_URL: "postgres://localhost/fdrive",
+      FDRIVE_STORAGE_ROOT: "/srv/files",
       FDRIVE_MASTER_KEY: Buffer.alloc(32, 61).toString("base64"),
     }),
     logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() } as never,
@@ -76,7 +77,7 @@ describe("/grants", () => {
     expect(grant).toMatchObject({ path: "/Projects", username: "bob", access: "read" });
 
     const listed = GrantsResponse.parse(await (await h.call(ROUTES.grants.list)).json());
-    expect(listed).toEqual({ available: true, owned: [grant], received: [] });
+    expect(listed).toEqual({ owned: [grant], received: [] });
 
     const changed = await h.call(one(grant.id), { method: "PATCH", body: { access: "write" } });
     expect(OwnedGrant.parse(await changed.json()).access).toBe("write");

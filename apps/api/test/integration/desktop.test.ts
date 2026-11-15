@@ -25,12 +25,11 @@ it("pairs two people's Macs with isolated streaming reads, validators and revoca
     ],
     files: { alice: { "/same.txt": "alpha" }, bob: { "/same.txt": "bravo" } },
   });
-  await seedLocalUsers(postgres.connectionString, storage);
+  await seedLocalUsers(postgres.connectionString, storage, ["alice"]);
   const config = loadConfig({
     DATABASE_URL: postgres.connectionString,
     FDRIVE_STORAGE_ROOT: storage.root,
     FDRIVE_MASTER_KEY: Buffer.alloc(32, 7).toString("base64"),
-    FDRIVE_ADMIN_USERS: "alice",
   });
   const composed = await composeApp(config, pino({ level: "silent" }), () => new Date());
   let cookie = "";

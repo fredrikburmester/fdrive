@@ -40,8 +40,8 @@ turned off or moved. A new item at the old path is not shared. A restore, to the
 another, brings the shares and links back; deleting the item permanently, in fdrive or on the
 host, ends them. Tags and favorites stay at the original path for a restore there.
 
-Reaching System takes an administrator: the setup owner, a user made administrator under
-**System > Users**, or a username in `FDRIVE_ADMIN_USERS`.
+Reaching System takes an administrator: the setup owner, or a user made administrator under
+**System > Users**.
 
 ## Optional retention
 

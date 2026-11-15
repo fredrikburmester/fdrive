@@ -167,6 +167,7 @@ async function fixture({ watcherEnabled = true } = {}) {
   const app = createApp({
     config: loadConfig({
       DATABASE_URL: "postgres://localhost/activity",
+      FDRIVE_STORAGE_ROOT: "/srv/files",
       FDRIVE_MASTER_KEY: Buffer.alloc(32, 7).toString("base64"),
     }),
     logger: { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() } as unknown as Logger,

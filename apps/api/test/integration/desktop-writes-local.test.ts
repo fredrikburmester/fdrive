@@ -22,13 +22,12 @@ it("publishes on the local folder with no configuration and refuses an out-of-ba
 }, async () => {
   const postgres = await startPostgres();
   const storage = await startLocalStorage({ files: {} });
-  await seedLocalUsers(postgres.connectionString, storage);
+  await seedLocalUsers(postgres.connectionString, storage, ["alice"]);
   const stateDir = await mkdtemp(join(tmpdir(), "fdrive-local-writes-"));
   const config = loadConfig({
     DATABASE_URL: postgres.connectionString,
     FDRIVE_STORAGE_ROOT: storage.root,
     FDRIVE_MASTER_KEY: Buffer.alloc(32, 7).toString("base64"),
-    FDRIVE_ADMIN_USERS: "alice",
     FDRIVE_DESKTOP_STATE_DIR: stateDir,
   });
   const composed = await composeApp(config, pino({ level: "silent" }), () => new Date());

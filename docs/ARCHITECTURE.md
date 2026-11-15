@@ -31,10 +31,9 @@ Current implementation reference. Unfinished work belongs in [plans](plans/READM
   writers outside fdrive (OCR, rsync, SMB, Syncthing) may change them. fdrive never creates a
   symbolic link and never follows one: storage refuses a path through a link for every caller,
   and the indexer and OCR skip links. The API reaches it
-  through the internal [storage port](STORAGE-PROVIDERS.md), and every login carries
-  capability flags (`ProviderCapabilities`) that decide what the UI offers and the API
-  accepts. Without `FDRIVE_STORAGE_ROOT` the deployment has no storage and setup refuses to
-  complete.
+  through the internal [storage port](STORAGE-PROVIDERS.md). `FDRIVE_STORAGE_ROOT` is
+  required. Two installation-wide flags on `/auth/me` say what the UI offers: `trash`
+  (Trash is on) and `index` (the files folder is indexed).
 
 ## Accounts and storage
 

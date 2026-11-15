@@ -6,16 +6,8 @@ import type { Logger } from "pino";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createApp } from "../app";
 import { loadConfig } from "../config";
-import {
-  FAST_PASSWORDS,
-  localModuleFixture,
-  seedLocalUsers,
-} from "../local/test-fixtures/index.ts";
-import {
-  fakeProviderModule,
-  memoryProviderService,
-  seedProviderRow,
-} from "../providers/test-fixtures/index.ts";
+import { localModuleFixture, seedLocalUsers } from "../local/test-fixtures/index.ts";
+import { memoryProviderService } from "../providers/test-fixtures/index.ts";
 import { createAuthModule, createLoginLimiter, createPasswordCheck } from "./index";
 import { registerAuthRoutes } from "./routes";
 
@@ -41,6 +33,7 @@ const FAKE_STORAGE: StorageProvider = {
 
 const REQUIRED_ENV: Record<string, string> = {
   DATABASE_URL: "postgres://localhost/fdrive",
+  FDRIVE_STORAGE_ROOT: "/srv/files",
   FDRIVE_MASTER_KEY: Buffer.alloc(32, 11).toString("base64"),
   FDRIVE_SESSION_TTL_DAYS: "30",
   FDRIVE_COOKIE_SECURE: "auto",
@@ -85,6 +78,7 @@ const USERS = [
 async function buildTestApp(opts: {
   clockCtl: ReturnType<typeof createClock>;
   envOverrides?: Record<string, string>;
+  installation?: () => Promise<{ trash: boolean; index: boolean }>;
 }) {
   const repos: Repos = createMemoryRepos();
   const config = loadConfig({ ...REQUIRED_ENV, ...opts.envOverrides });
@@ -106,6 +100,7 @@ async function buildTestApp(opts: {
       users: local.users,
     }),
     storageFactory: async () => FAKE_STORAGE,
+    installation: opts.installation ?? (async () => ({ trash: false, index: false })),
   });
   const app = createApp({
     config,
@@ -685,12 +680,10 @@ describe("auth service: principal.verifyAuthority", () => {
   });
 });
 
-describe("auth: FDRIVE_ADMIN_USERS", () => {
-  it("makes a listed user an administrator on the storage the deployment pins", async () => {
-    const { app } = await buildTestApp({
-      clockCtl: createClock(Date.now()),
-      envOverrides: { FDRIVE_ADMIN_USERS: "alice" },
-    });
+describe("auth: administrators and installation flags", () => {
+  it("names administrators from their account alone", async () => {
+    const { app, repos } = await buildTestApp({ clockCtl: createClock(Date.now()) });
+    await repos.logins.updateUser("alice", { isAdmin: true, at: new Date() });
 
     const alice = await readJson<MeResponse>(
       await login(app, { username: "alice", password: "wonderland" }),
@@ -703,43 +696,20 @@ describe("auth: FDRIVE_ADMIN_USERS", () => {
     expect(bob.isAdmin).toBe(false);
   });
 
-  it("never names an administrator on storage the deployment does not pin", async () => {
-    // The same username on another row is another person.
-    const repos = createMemoryRepos();
-    const config = loadConfig({ ...REQUIRED_ENV, FDRIVE_ADMIN_USERS: "alice" });
-    const row = await seedProviderRow(repos, "http://other.test");
-    const local = localModuleFixture(repos);
-    await repos.logins.createUser({
-      providerId: row.id,
-      username: "alice",
-      passwordHash: await FAST_PASSWORDS.hash("alice-pass"),
-      isAdmin: false,
-      at: new Date(),
+  it("reports whether Trash is on and the files are indexed, read on every request", async () => {
+    let flags = { trash: false, index: true };
+    const { app } = await buildTestApp({
+      clockCtl: createClock(Date.now()),
+      installation: async () => flags,
     });
-    const clockCtl = createClock(Date.now());
-    const authModule = createAuthModule({
-      repos,
-      providers: memoryProviderService(repos, {
-        fetch: offline,
-        clock: clockCtl.clock,
-        modules: { local: fakeProviderModule() },
-      }),
-      clock: clockCtl.clock,
-      config,
-      checkPassword: createPasswordCheck({
-        limiter: createLoginLimiter({ clock: clockCtl.clock }),
-        users: local.users,
-      }),
-      storageFactory: async () => FAKE_STORAGE,
-    });
+    const response = await login(app, { username: "bob", password: "builder" });
+    const signedIn = await readJson<MeResponse>(response);
+    expect({ trash: signedIn.trash, index: signedIn.index }).toEqual({ trash: false, index: true });
 
-    const result = await authModule.service.login({
-      username: "alice",
-      password: "alice-pass",
-      userAgent: null,
-      ip: "127.0.0.1",
-    });
-
-    expect(result.me.isAdmin).toBe(false);
+    flags = { trash: true, index: false };
+    const me = await readJson<MeResponse>(
+      await app.request(ROUTES.auth.me, { headers: { cookie: extractCookie(response) } }),
+    );
+    expect({ trash: me.trash, index: me.index }).toEqual({ trash: true, index: false });
   });
 });

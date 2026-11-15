@@ -15,7 +15,6 @@ export const SUBSYSTEMS = [
   "ocr",
   "thumbnails",
   "office",
-  "trash",
   "shares",
   "network",
 ] as const;
@@ -169,7 +168,7 @@ export const CONFIG_KEYS: readonly ConfigKeyDef[] = [
   {
     key: "FDRIVE_STORAGE_ROOT",
     description:
-      "Folder fdrive serves as its built-in storage, one home per user at <root>/<username>; fdrive keeps the users. Required: without it there is no storage and setup cannot finish.",
+      "Folder fdrive serves as its storage, one home per user at <root>/<username>; fdrive keeps the users. Required.",
     default: null,
     example: "/data",
     secret: false,
@@ -268,15 +267,6 @@ export const CONFIG_KEYS: readonly ConfigKeyDef[] = [
     example: "10737418240",
     secret: false,
     subsystem: "shares",
-  },
-  {
-    key: "FDRIVE_ADMIN_USERS",
-    description:
-      "Comma-separated local usernames always treated as admins, in addition to account records.",
-    default: null,
-    example: "alice,bob",
-    secret: false,
-    subsystem: "core",
   },
   {
     key: "FDRIVE_SETUP_TOKEN",
@@ -438,7 +428,6 @@ export function subsystemsStatus(config: AppConfig): Record<Subsystem, Subsystem
         ? { status: "not_configured", missing: ["FDRIVE_OCR_URL"] }
         : { status: "configured", missing: [] },
     office: { status: "configured", missing: [] },
-    trash: { status: "configured", missing: [] },
   };
 }
 

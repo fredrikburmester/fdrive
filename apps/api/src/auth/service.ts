@@ -35,31 +35,27 @@ export interface AuthService {
   logout(sessionId: string): Promise<void>;
 }
 
+/** What the whole installation offers, the same for every login. */
+export interface InstallationFlags {
+  /** Trash is on: deletes move to the Trash folder. */
+  readonly trash: boolean;
+  /** The files folder is indexed: search, thumbnails and folder sizes apply. */
+  readonly index: boolean;
+}
+
 export interface CreateAuthServiceDeps {
   readonly repos: Repos;
-  readonly providers: Pick<ProviderService, "get" | "capabilitiesFor" | "labelFor">;
+  readonly providers: Pick<ProviderService, "get" | "labelFor">;
   readonly clock: () => Date;
   readonly config: AppConfig;
   readonly checkPassword: CheckPassword;
   readonly storageFactory: IdentityStorageFactory;
-  /** Usernames always treated as admins, in addition to `accounts.is_admin`. */
-  readonly adminUsernames: readonly string[];
+  /** Read for every `/auth/me`, so a Trash setting applies at once. */
+  readonly installation: () => Promise<InstallationFlags>;
 }
 
 /** Builds the `AuthService`, the API's sign-in and session flow. */
 export function createAuthService(deps: CreateAuthServiceDeps): AuthService {
-  async function isEnvironmentAdmin(identity: {
-    providerId: string;
-    externalUsername: string;
-  }): Promise<boolean> {
-    // Only the storage the deployment pins (the local folder) can name an
-    // administrator: the same username on storage an administrator added
-    // later is another person.
-    if (!deps.adminUsernames.includes(identity.externalUsername)) return false;
-    const resolved = await deps.providers.get(identity.providerId);
-    return resolved?.provider.managedByEnv === true;
-  }
-
   /** The login as `/auth/me` shows it; `null` when this deployment has no module for its storage. */
   async function summarize(identity: {
     id: string;
@@ -74,7 +70,6 @@ export function createAuthService(deps: CreateAuthServiceDeps): AuthService {
       providerId: resolved.provider.id,
       providerType: resolved.module.type as IdentitySummary["providerType"],
       providerLabel: deps.providers.labelFor(resolved.provider),
-      capabilities: await deps.providers.capabilitiesFor(resolved),
     };
   }
 
@@ -89,10 +84,13 @@ export function createAuthService(deps: CreateAuthServiceDeps): AuthService {
     if (summary === null) {
       throw new ApiHttpError("unauthorized", "storage provider no longer exists");
     }
+    const { trash, index } = await deps.installation();
     return {
       account: { id: account.id, displayName: account.displayName },
       identity: summary,
-      isAdmin: account.isAdmin || (await isEnvironmentAdmin(identity)),
+      isAdmin: account.isAdmin,
+      trash,
+      index,
     };
   }
 
@@ -165,7 +163,7 @@ export function createAuthService(deps: CreateAuthServiceDeps): AuthService {
     if (identity === null) return null;
 
     const account = await deps.repos.accounts.get(session.accountId);
-    const isAdmin = (account?.isAdmin ?? false) || (await isEnvironmentAdmin(identity));
+    const isAdmin = account?.isAdmin ?? false;
 
     const verifyAuthority = async (): Promise<boolean> => {
       const at = deps.clock();

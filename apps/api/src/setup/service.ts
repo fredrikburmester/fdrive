@@ -1,5 +1,5 @@
 import type { SetupCompleteRequest, SetupStatusResponse } from "@fdrive/contracts";
-import { ConflictError, LoginError, type LoginRepo, type Provider } from "@fdrive/db";
+import { ConflictError, LoginError, type LoginRepo } from "@fdrive/db";
 import type { AuthService, LoginResult } from "../auth/service.js";
 import { ApiHttpError } from "../errors.js";
 import type { SharePasswords } from "../shares/passwords.js";
@@ -19,18 +19,13 @@ export interface CreateSetupServiceDeps {
   readonly logins: Pick<LoginRepo, "setup" | "setupOpen">;
   readonly passwords: Pick<SharePasswords, "hash">;
   readonly clock?: () => Date;
-  /**
-   * The deployment's files folder's pinned provider row. Absent when
-   * `FDRIVE_STORAGE_ROOT` is not set: the deployment has no storage, and
-   * setup cannot finish.
-   */
-  readonly localProvider?: () => Promise<Provider | null>;
+  /** The files folder's provider row, which the owner's login is on. */
+  readonly storageId: string;
 }
 
 /**
  * Builds the `SetupService` backing `/api/v1/setup/*`: reports whether setup
- * is required and whether the deployment has a files folder, and completes
- * setup. Setup is open only on a fresh install (no owner record, user,
+ * is required, and completes setup. Setup is open only on a fresh install (no owner record, user,
  * account or login), so once anyone has used fdrive it never reopens. The
  * owner picks a username and password; one locked transaction checks the
  * install is still fresh, creates them as the first local user, an
@@ -42,23 +37,13 @@ export function createSetupService(deps: CreateSetupServiceDeps): SetupService {
 
   return {
     async status() {
-      return {
-        required: await deps.logins.setupOpen(),
-        storageConfigured: deps.localProvider !== undefined,
-      };
+      return { required: await deps.logins.setupOpen() };
     },
 
     async complete(input) {
-      const provider = (await deps.localProvider?.()) ?? null;
-      if (provider === null) {
-        throw new ApiHttpError(
-          "bad_request",
-          "this deployment has no files folder: set FDRIVE_STORAGE_ROOT and restart fdrive",
-        );
-      }
       try {
         await deps.logins.setup({
-          providerId: provider.id,
+          providerId: deps.storageId,
           username: input.username,
           passwordHash: await deps.passwords.hash(input.password),
           at: clock(),

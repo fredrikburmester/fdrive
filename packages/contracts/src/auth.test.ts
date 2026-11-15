@@ -2,16 +2,6 @@ import { describe, expect, it } from "vitest";
 import { IdentitySummary, LoginRequest, LoginResponse, MeResponse } from "./auth";
 
 const VALID_UUID = "123e4567-e89b-12d3-a456-426614174000";
-const CAPABILITIES = {
-  zip: true,
-  setModifiedAt: true,
-  atomicMove: true,
-  trash: false,
-  shares: true,
-  office: true,
-  index: true,
-  shareWithPeople: false,
-};
 
 describe("LoginRequest", () => {
   it("accepts a username and a password", () => {
@@ -44,7 +34,6 @@ describe("IdentitySummary", () => {
     providerId: VALID_UUID,
     providerType: "local",
     providerLabel: "Local folder",
-    capabilities: CAPABILITIES,
   };
 
   it("parses a valid identity", () => {
@@ -55,10 +44,8 @@ describe("IdentitySummary", () => {
     expect(IdentitySummary.safeParse({ ...valid, id: "not-a-uuid" }).success).toBe(false);
   });
 
-  it("rejects an unknown providerType and missing capabilities", () => {
+  it("rejects an unknown providerType", () => {
     expect(IdentitySummary.safeParse({ ...valid, providerType: "gdrive" }).success).toBe(false);
-    const { capabilities: _drop, ...rest } = valid;
-    expect(IdentitySummary.safeParse(rest).success).toBe(false);
   });
 });
 
@@ -71,18 +58,21 @@ describe("MeResponse", () => {
       providerId: VALID_UUID,
       providerType: "local",
       providerLabel: "Home",
-      capabilities: CAPABILITIES,
     },
     isAdmin: false,
+    trash: true,
+    index: false,
   };
 
   it("parses a valid payload", () => {
     expect(MeResponse.parse(valid)).toEqual(valid);
   });
 
-  it("rejects a missing isAdmin", () => {
-    const { isAdmin: _drop, ...rest } = valid;
-    expect(MeResponse.safeParse(rest).success).toBe(false);
+  it("rejects a missing isAdmin or installation flag", () => {
+    for (const key of ["isAdmin", "trash", "index"] as const) {
+      const { [key]: _drop, ...rest } = valid;
+      expect(MeResponse.safeParse(rest).success, key).toBe(false);
+    }
   });
 
   it("accepts a null displayName", () => {

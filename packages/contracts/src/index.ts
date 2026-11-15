@@ -164,7 +164,6 @@ export {
   AdminProvider,
   AdminProvidersResponse,
   AdminProviderUpdateRequest,
-  ProviderCapabilities,
   ProviderField,
   ProviderFieldKind,
   ProviderFieldValues,

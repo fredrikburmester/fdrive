@@ -74,12 +74,10 @@ describe("createLocalGrantService: sharing a folder", () => {
       createdAt: expect.any(String),
     });
     expect(await h.service.list(h.alice.id)).toEqual({
-      available: true,
       owned: [grant],
       received: [],
     });
     expect(await h.service.list(h.bob.id)).toEqual({
-      available: true,
       owned: [],
       received: [
         {
@@ -329,26 +327,13 @@ describe("createLocalGrantService: who can share", () => {
   it("is unavailable to a login on other storage, which never sees local shares", async () => {
     const h = await fixture();
     await h.service.create(h.alice.id, { path: "/Projects", username: "bob", access: "read" });
-    expect(await h.service.list(h.aliceRetired.id)).toEqual({
-      available: false,
-      owned: [],
-      received: [],
-    });
-    expect(await h.service.received(h.aliceRetired)).toEqual([]);
     const refused = { kind: "unsupported", details: { capability: "grants" } };
+    await expect(h.service.list(h.aliceRetired.id)).rejects.toMatchObject(refused);
+    expect(await h.service.received(h.aliceRetired)).toEqual([]);
     await expect(h.service.people(h.aliceRetired.id)).rejects.toMatchObject(refused);
     await expect(
       h.service.create(h.aliceRetired.id, { path: "/Projects", username: "bob", access: "read" }),
     ).rejects.toMatchObject(refused);
     await expect(h.service.people(randomUUID())).rejects.toMatchObject(refused);
-  });
-
-  it("is unavailable to everyone on a deployment without a local folder", async () => {
-    const h = await fixture({ providerId: async () => null });
-    expect((await h.service.list(h.alice.id)).available).toBe(false);
-    expect(await h.service.received(h.bob)).toEqual([]);
-    const moved = vi.spyOn(h.repos.localGrants, "movePrefix");
-    await h.service.onMoved(h.alice.id, "/a", "/b", true);
-    expect(moved).not.toHaveBeenCalled();
   });
 });

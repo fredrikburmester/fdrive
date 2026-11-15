@@ -3,7 +3,6 @@ import {
   AdminProvider,
   AdminProvidersResponse,
   AdminProviderUpdateRequest,
-  ProviderCapabilities,
   ProviderField,
   ProvidersResponse,
   ProviderType,
@@ -11,16 +10,6 @@ import {
 } from "./providers.ts";
 
 const ID = "123e4567-e89b-42d3-a456-426614174000";
-const CAPABILITIES = {
-  zip: true,
-  setModifiedAt: true,
-  atomicMove: true,
-  trash: false,
-  shares: true,
-  office: true,
-  index: false,
-  shareWithPeople: false,
-};
 const FIELD = { name: "username", label: "Username", kind: "text", required: true };
 
 describe("provider contracts", () => {
@@ -30,12 +19,6 @@ describe("provider contracts", () => {
     for (const type of ["sftpgo", "webdav", "s3", "gdrive"]) {
       expect(ProviderType.safeParse(type).success).toBe(false);
     }
-  });
-
-  it("requires every capability flag", () => {
-    expect(ProviderCapabilities.parse(CAPABILITIES)).toEqual(CAPABILITIES);
-    const { zip: _drop, ...rest } = CAPABILITIES;
-    expect(ProviderCapabilities.safeParse(rest).success).toBe(false);
   });
 
   it("parses fields, public providers and the public list", () => {
@@ -51,11 +34,8 @@ describe("provider contracts", () => {
       type: "local",
       label: "Home",
       credentialFields: [FIELD],
-      capabilities: CAPABILITIES,
     };
     expect(PublicProvider.parse(provider)).toEqual(provider);
-    // The login form relies on the flags to say "files only" before sign-in.
-    expect(PublicProvider.safeParse({ ...provider, capabilities: undefined }).success).toBe(false);
     expect(ProvidersResponse.parse({ providers: [provider] }).providers).toHaveLength(1);
   });
 
@@ -68,7 +48,6 @@ describe("provider contracts", () => {
       config: {},
       enabled: true,
       managedByEnv: true,
-      capabilities: { ...CAPABILITIES, shareWithPeople: true },
       identityCount: 0,
       reachable: true,
       checkedAt: "2026-01-01T00:00:00.000Z",
@@ -78,7 +57,6 @@ describe("provider contracts", () => {
     expect(AdminProvider.safeParse({ ...local, baseUrl: "local" }).success).toBe(false);
     expect(AdminProvider.safeParse({ ...local, baseUrl: "http://dav.test/" }).success).toBe(false);
     expect(AdminProvider.safeParse({ ...local, identityCount: -1 }).success).toBe(false);
-    expect(AdminProvider.safeParse({ ...local, capabilities: undefined }).success).toBe(false);
     expect(AdminProvidersResponse.parse({ providers: [local] })).toEqual({ providers: [local] });
   });
 

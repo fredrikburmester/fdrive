@@ -18,7 +18,7 @@ it("keeps env setup complete and sessions usable after disabling its last provid
     authService: h.auth.service,
     logins: h.repos.logins,
     passwords: h.passwords,
-    localProvider: async () => row,
+    storageId: row.id,
   });
   const app = createApp({
     config: h.config,

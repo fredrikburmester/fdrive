@@ -5,7 +5,7 @@ import type { ProviderService } from "../providers/service.js";
 import type { CheckPassword } from "./password.ts";
 import type { PrincipalResolver } from "./principal.js";
 import { registerAuthRoutes } from "./routes.js";
-import { createAuthService } from "./service.js";
+import { createAuthService, type InstallationFlags } from "./service.js";
 import type { IdentityStorageFactory } from "./storage-factory.ts";
 
 export { CryptoError, open, parseMasterKey, seal } from "./crypto.js";
@@ -13,7 +13,7 @@ export type { LoginLimiter } from "./login-limiter.js";
 export { createLoginLimiter } from "./login-limiter.js";
 export type { CheckPassword, PasswordCheckInput } from "./password.ts";
 export { createLoginReauthentication, createPasswordCheck, loginIpKey } from "./password.ts";
-export type { AuthService, LoginInput, LoginResult } from "./service.js";
+export type { AuthService, InstallationFlags, LoginInput, LoginResult } from "./service.js";
 export { createAuthService } from "./service.js";
 export {
   buildCookie,
@@ -32,11 +32,7 @@ export interface CreateAuthModuleDeps {
   readonly storageFactory: IdentityStorageFactory;
   /** The one password check, behind the login limiter (`createPasswordCheck`). */
   readonly checkPassword: CheckPassword;
-  /**
-   * Usernames always treated as admins, in addition to `accounts.is_admin`.
-   * Defaults to `config.fdriveAdminUsers`.
-   */
-  readonly adminUsernames?: readonly string[];
+  readonly installation: () => Promise<InstallationFlags>;
 }
 
 export interface AuthModule {
@@ -58,7 +54,7 @@ export function createAuthModule(deps: CreateAuthModuleDeps): AuthModule {
     config: deps.config,
     checkPassword: deps.checkPassword,
     storageFactory: deps.storageFactory,
-    adminUsernames: deps.adminUsernames ?? deps.config.fdriveAdminUsers,
+    installation: deps.installation,
   });
 
   return {

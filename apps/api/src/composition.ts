@@ -74,7 +74,7 @@ import { createChangeQueue } from "./local/change-queue.js";
 import { createDeploymentFilesFolderGuard, filesFolderHealth } from "./local/files-folder.js";
 import { registerGrantRoutes } from "./local/grant-routes.js";
 import { createLocalGrantService } from "./local/grants.js";
-import { deploymentModules, journalRoot } from "./local/modules.js";
+import { deploymentModules, journalRoot, localIndexRoot } from "./local/modules.js";
 import { registerLocalUserRoutes } from "./local/routes.js";
 import { createLocalUserService } from "./local/service.js";
 import { createLocalUserStore } from "./local/users.js";
@@ -204,14 +204,15 @@ export async function composeApp(
   });
   // A wrong or empty files folder is refused, not served or read as every
   // file deleted; the verdict is logged once and checked again as it ages.
-  const filesFolder =
-    config.fdriveStorageRoot === undefined
-      ? undefined
-      : createDeploymentFilesFolderGuard(config.fdriveStorageRoot, createFilesFolderFacts(db), {
-          info: (message) => logger.info(message),
-          error: (message) => logger.error(message),
-        });
-  await filesFolder?.verify();
+  const filesFolder = createDeploymentFilesFolderGuard(
+    config.fdriveStorageRoot,
+    createFilesFolderFacts(db),
+    {
+      info: (message) => logger.info(message),
+      error: (message) => logger.error(message),
+    },
+  );
+  await filesFolder.verify();
   /**
    * Folders in each user's files no share reaches (`reservedFolders`): their
    * Trash while it is on and the Mac's bookkeeping, which holds its Trash.
@@ -268,22 +269,19 @@ export async function composeApp(
     fetch: fetchImpl,
     clock,
     eventLog,
-    environment: {
-      indexRootNames: (config.fdriveIndexRoots ?? []).map((root) => root.name),
-    },
-    trashEnabled: async (providerId) => (await trashSettings.configuration(providerId)).enabled,
     modules,
   });
-  /** The local folder's pinned row, or `null` when the deployment serves none. */
-  const localProvider = async () =>
-    modules.local === undefined
-      ? null
-      : ((await providerService.list()).find(
-          (provider) => provider.type === modules.local?.type && provider.managedByEnv,
-        ) ?? null);
   if (!(await repos.settings.get("backup.recovery.v1"))) {
     await providerService.seedFromEnvironment();
   }
+  /** The files folder's provider row, which every login is on. */
+  const storageId = (await repos.providers.ensure({ type: "local", baseUrl: "local" })).id;
+  const indexRootNames = new Set((config.fdriveIndexRoots ?? []).map((root) => root.name));
+  /** The same for every login: whether Trash is on and the files folder is indexed. */
+  const installation = async () => ({
+    trash: (await trashSettings.configuration(storageId)).enabled,
+    index: indexRootNames.has(localIndexRoot(config.fdriveIndexRoots, config.fdriveStorageRoot)),
+  });
   const localUserStore = createLocalUserStore({
     repo: repos.localUsers,
     grants: repos.localGrants,
@@ -297,8 +295,7 @@ export async function composeApp(
     checkPassword,
     passwords,
     clock,
-    providerId: async () => (await localProvider())?.id ?? null,
-    environmentAdmins: config.fdriveAdminUsers,
+    storageId,
     eventLog,
   });
 
@@ -350,6 +347,7 @@ export async function composeApp(
     config,
     checkPassword,
     storageFactory,
+    installation,
   });
 
   // The System pages' client for the indexer's internal HTTP API; `null`
@@ -365,7 +363,7 @@ export async function composeApp(
   // See `docs/SCOPING.md`.
   const localGrants = createLocalGrantService({
     repos,
-    providerId: async () => (await localProvider())?.id ?? null,
+    providerId: async () => storageId,
     storageFor: storageFactory,
     trashPathFor: (identityId) => trashSettings.pathForIdentity(identityId),
     closedFolders,
@@ -604,7 +602,6 @@ export async function composeApp(
   // for once at least one index root is configured; it is otherwise left
   // unstarted so a deployment without an indexer never opens a spare
   // Postgres connection.
-  const indexRootNames = new Set((config.fdriveIndexRoots ?? []).map((root) => root.name));
   const indexerListener =
     config.fdriveIndexRoots === null
       ? null
@@ -662,7 +659,7 @@ export async function composeApp(
     logins: repos.logins,
     passwords,
     clock,
-    ...(modules.local === undefined ? {} : { localProvider }),
+    storageId,
   });
 
   if ((await setupService.status()).required) {
@@ -750,7 +747,7 @@ export async function composeApp(
           ),
     ]);
     return {
-      ...(filesFolder === undefined ? {} : { core: await filesFolderHealth(filesFolder) }),
+      core: await filesFolderHealth(filesFolder),
       ...(indexResult === null ? {} : { index: indexResult.ok }),
       ...(search === null ? {} : { search }),
       ...(imageSearch === null ? {} : { imageSearch }),
@@ -917,9 +914,7 @@ export async function composeApp(
       });
       // The change journal has this API's own changes only for the root it
       // journals under; a location's feed needs every one of its roots there.
-      const journaled = config.fdriveStorageRoot
-        ? journalRoot(config.fdriveIndexRoots, config.fdriveStorageRoot)
-        : null;
+      const journaled = journalRoot(config.fdriveIndexRoots, config.fdriveStorageRoot);
       registerDesktopRoutes(groups, {
         activity: personalActivity,
         changes: createDesktopChanges({

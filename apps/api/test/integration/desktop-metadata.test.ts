@@ -70,7 +70,7 @@ describe("metadata follows the Mac's writes as they commit", () => {
         ],
       }),
     ]);
-    await seedLocalUsers(postgres.connectionString, storage);
+    await seedLocalUsers(postgres.connectionString, storage, ["alice"]);
     stateDir = await mkdtemp(join(tmpdir(), "fdrive-desktop-metadata-"));
     composed = await composeApp(
       loadConfig({
@@ -78,7 +78,6 @@ describe("metadata follows the Mac's writes as they commit", () => {
         FDRIVE_STORAGE_ROOT: storage.root,
         FDRIVE_MASTER_KEY: Buffer.alloc(32, 23).toString("base64"),
         FDRIVE_DESKTOP_STATE_DIR: stateDir,
-        FDRIVE_ADMIN_USERS: "alice",
         // Configured so the API journals its changes and the indexer listener
         // runs; no indexer does, the last test notifies for it.
         FDRIVE_INDEX_ROOTS: JSON.stringify([

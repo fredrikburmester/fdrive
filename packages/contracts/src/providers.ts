@@ -7,31 +7,6 @@ import { z } from "zod";
 export const ProviderType = z.enum(["local"]);
 export type ProviderType = z.infer<typeof ProviderType>;
 
-/**
- * What the signed-in login's storage can do, as the web reads it. Every route
- * that depends on a flag refuses with `unsupported` when it is false, so a
- * stale client cannot bypass the hidden control.
- */
-export const ProviderCapabilities = z.object({
-  /** Download as zip, folder entries in a multi-download. */
-  zip: z.boolean(),
-  /** Uploads keep the file's original modification time. */
-  setModifiedAt: z.boolean(),
-  /** Rename and move are single operations; false means copy then delete. */
-  atomicMove: z.boolean(),
-  /** A recycle folder is available for this login. */
-  trash: z.boolean(),
-  /** This login can create public shares. */
-  shares: z.boolean(),
-  /** Office viewing and editing can apply to this login's files. */
-  office: z.boolean(),
-  /** Folders can be shared with other users of this storage ("Share with people"). */
-  shareWithPeople: z.boolean(),
-  /** Search, thumbnails and folder size can apply to this login. */
-  index: z.boolean(),
-});
-export type ProviderCapabilities = z.infer<typeof ProviderCapabilities>;
-
 export const ProviderFieldKind = z.enum(["text", "password", "otp", "url"]);
 export type ProviderFieldKind = z.infer<typeof ProviderFieldKind>;
 
@@ -62,13 +37,6 @@ export const PublicProvider = z.object({
   type: ProviderType,
   label: z.string(),
   credentialFields: z.array(ProviderField),
-  /**
-   * What the provider's type can do at best, so the form can say before
-   * sign-in which features a storage lacks. A constant of the
-   * type, never of this row: what a login really gets is
-   * `IdentitySummary.capabilities`.
-   */
-  capabilities: ProviderCapabilities,
 });
 export type PublicProvider = z.infer<typeof PublicProvider>;
 
@@ -88,8 +56,6 @@ export const AdminProvider = z.object({
   enabled: z.boolean(),
   /** True when the deployment pins this row (`FDRIVE_STORAGE_ROOT`) and it cannot change here. */
   managedByEnv: z.boolean(),
-  /** What this provider's type can do at best; a login's own flags are `IdentitySummary.capabilities`. */
-  capabilities: ProviderCapabilities,
   /** How many logins across every account use this provider. */
   identityCount: z.number().int().min(0),
   /** Result of probing the endpoint when this view was built. */

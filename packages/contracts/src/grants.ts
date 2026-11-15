@@ -31,12 +31,8 @@ export const ReceivedGrant = z.object({
 });
 export type ReceivedGrant = z.infer<typeof ReceivedGrant>;
 
-/**
- * `GET /api/v1/grants`. `available` is false for a login whose storage
- * cannot share folders between its users (anything but the local folder).
- */
+/** `GET /api/v1/grants`: the folders you share and the ones shared with you. */
 export const GrantsResponse = z.object({
-  available: z.boolean(),
   owned: z.array(OwnedGrant),
   received: z.array(ReceivedGrant),
 });

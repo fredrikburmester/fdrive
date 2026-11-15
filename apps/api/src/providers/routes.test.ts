@@ -16,6 +16,7 @@ import {
 
 const REQUIRED_ENV = {
   DATABASE_URL: "postgres://localhost/fdrive",
+  FDRIVE_STORAGE_ROOT: "/srv/files",
   FDRIVE_MASTER_KEY: Buffer.alloc(32, 4).toString("base64"),
 };
 
@@ -83,7 +84,6 @@ describe("GET /providers", () => {
       "username",
       "password",
     ]);
-    expect(body.providers[0]?.capabilities).toMatchObject({ index: true, shares: true });
     expect(JSON.stringify(body)).not.toContain("a:8080");
   });
 });

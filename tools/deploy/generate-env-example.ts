@@ -26,7 +26,6 @@ const SUBSYSTEMS: readonly Subsystem[] = [
   "thumbnails",
   "ocr",
   "office",
-  "trash",
   "shares",
 ];
 
@@ -39,7 +38,6 @@ const SUBSYSTEM_TITLES: Record<Subsystem, string> = {
   thumbnails: "Thumbnails",
   ocr: "OCR",
   office: "Office editing",
-  trash: "Trash",
   shares: "Shares",
 };
 

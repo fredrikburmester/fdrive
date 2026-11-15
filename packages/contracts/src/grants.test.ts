@@ -33,9 +33,9 @@ describe("grant contracts", () => {
     expect(OwnedGrant.safeParse({ ...owned, id: "nope" }).success).toBe(false);
     expect(ReceivedGrant.parse(received)).toEqual(received);
     expect(ReceivedGrant.safeParse({ ...received, owner: undefined }).success).toBe(false);
-    const list = { available: true, owned: [owned], received: [received] };
+    const list = { owned: [owned], received: [received] };
     expect(GrantsResponse.parse(list)).toEqual(list);
-    expect(GrantsResponse.safeParse({ owned: [], received: [] }).success).toBe(false);
+    expect(GrantsResponse.safeParse({ owned: [] }).success).toBe(false);
   });
 
   it("shares a folder with a valid username and access", () => {

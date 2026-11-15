@@ -6,13 +6,9 @@ import { createSetupService, type SetupCompleteInput } from "./service.js";
 
 /**
  * Setup over the auth harness, so the owner is signed in through the real
- * password check. The folder has no users unless `users` names some. Without
- * `local` the deployment sets no `FDRIVE_STORAGE_ROOT`; with `pinned: false`
- * its row is missing.
+ * password check. The folder has no users unless `users` names some.
  */
-async function harness(
-  options: { local?: boolean; pinned?: boolean; users?: readonly string[] } = {},
-) {
+async function harness(options: { users?: readonly string[] } = {}) {
   const h = authHarness({ users: options.users ?? [] });
   const row = await h.seeded;
   const service = createSetupService({
@@ -20,9 +16,7 @@ async function harness(
     logins: h.repos.logins,
     passwords: h.passwords,
     clock: h.clock,
-    ...(options.local === false
-      ? {}
-      : { localProvider: async () => (options.pinned === false ? null : row) }),
+    storageId: row.id,
   });
   /** What setup left behind: the users, the logins and the owner record. */
   async function state() {
@@ -45,10 +39,10 @@ const INPUT: SetupCompleteInput = {
 describe("createSetupService: status", () => {
   it("is open only on a fresh install", async () => {
     const h = await harness();
-    expect(await h.service.status()).toEqual({ required: true, storageConfigured: true });
+    expect(await h.service.status()).toEqual({ required: true });
     // An owner record alone closes it.
     await h.repos.settings.set(SETUP_OWNER_KEY, { state: "complete", accountId: "account-1" });
-    expect(await h.service.status()).toEqual({ required: false, storageConfigured: true });
+    expect(await h.service.status()).toEqual({ required: false });
 
     // So does a user, with no owner record or an unfinished one, and it stays closed
     // once every user is gone, since their logins remain.
@@ -59,11 +53,6 @@ describe("createSetupService: status", () => {
     await used.repos.localUsers.delete("alice");
     expect((await used.service.status()).required).toBe(false);
     await expect(used.service.complete(INPUT)).rejects.toMatchObject({ kind: "conflict" });
-  });
-
-  it("says when the deployment has no files folder", async () => {
-    const h = await harness({ local: false });
-    expect(await h.service.status()).toEqual({ required: true, storageConfigured: false });
   });
 });
 
@@ -87,18 +76,6 @@ describe("createSetupService: complete", () => {
       await h.repos.sessions.getByIdHash(hashSessionId(result.sessionId), h.clock()),
     ).toMatchObject({ identityId: result.me.identity.id });
     expect((await h.service.status()).required).toBe(false);
-  });
-
-  it("refuses on a deployment without a files folder, or while its row is missing", async () => {
-    for (const options of [{ local: false }, { pinned: false }]) {
-      const h = await harness(options);
-      const before = await h.state();
-      await expect(h.service.complete(INPUT)).rejects.toMatchObject({
-        kind: "bad_request",
-        message: expect.stringContaining("FDRIVE_STORAGE_ROOT"),
-      });
-      expect(await h.state()).toEqual(before);
-    }
   });
 
   it("refuses a folder that has users, with no owner record or an unfinished one", async () => {

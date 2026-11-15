@@ -53,7 +53,6 @@ import {
   SidebarMenuItem,
 } from "@/components/ui/sidebar";
 import { useLogout } from "@/lib/api/auth-queries";
-import { capabilitiesFor } from "@/lib/identity/capabilities";
 import { loginDisplay } from "@/lib/identity/login-display";
 import { SYSTEM_SCOPE_CAPTION } from "@/lib/system/pages";
 
@@ -152,7 +151,7 @@ export function AppSidebar() {
                   <span>Shares</span>
                 </SidebarMenuButton>
               </SidebarMenuItem>
-              {capabilitiesFor(me).trash && (
+              {me?.trash === true && (
                 <SidebarMenuItem>
                   <SidebarMenuButton
                     isActive={isTrashRoute(pathname)}

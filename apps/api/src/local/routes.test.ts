@@ -36,7 +36,7 @@ async function harness(options: { isAdmin?: boolean } = {}) {
       users: store,
     }),
     passwords: FAST_PASSWORDS,
-    providerId: async () => row.id,
+    storageId: row.id,
   });
   const principal: Principal = {
     accountId: account.id,
@@ -48,6 +48,7 @@ async function harness(options: { isAdmin?: boolean } = {}) {
   const app = createApp({
     config: loadConfig({
       DATABASE_URL: "postgres://localhost/fdrive",
+      FDRIVE_STORAGE_ROOT: "/srv/files",
       FDRIVE_MASTER_KEY: Buffer.alloc(32, 52).toString("base64"),
     }),
     logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() } as never,
@@ -87,7 +88,6 @@ describe("/admin/users", () => {
   it("lists, adds, changes and removes users", async () => {
     const h = await harness();
     const list = AdminUsersResponse.parse(await (await h.call(ROUTES.admin.users)).json());
-    expect(list.available).toBe(true);
     expect(list.users.map((user) => [user.username, user.isYou])).toEqual([
       ["alice", true],
       ["bob", false],

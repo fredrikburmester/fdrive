@@ -1,9 +1,4 @@
-import type {
-  AdminProvider,
-  AdminProviderUpdateRequest,
-  ProviderCapabilities,
-  PublicProvider,
-} from "@fdrive/contracts";
+import type { AdminProvider, AdminProviderUpdateRequest, PublicProvider } from "@fdrive/contracts";
 import type { ProviderInstance, ProviderModule } from "@fdrive/core";
 import type { Identity, Provider, ProviderRepo, Repos } from "@fdrive/db";
 import { ApiHttpError } from "../errors.js";
@@ -26,12 +21,6 @@ export interface ProviderServiceDeps {
   readonly fetch: typeof globalThis.fetch;
   readonly clock: () => Date;
   readonly eventLog?: SystemEventLog;
-  /** Which index roots (`FDRIVE_INDEX_ROOTS`) exist for a provider's files to be indexed under. */
-  readonly environment: {
-    readonly indexRootNames: readonly string[];
-  };
-  /** Whether the recycle folder is switched on for a provider (Trash settings). */
-  readonly trashEnabled?: (providerId: string) => Promise<boolean>;
   /**
    * The modules this deployment has, by type (`createProviderModules`): the
    * files folder when `FDRIVE_STORAGE_ROOT` is set, else none.
@@ -57,7 +46,6 @@ export interface ProviderService {
   forIdentity(identityId: string): Promise<IdentityProvider>;
   /** Renames a provider: the label the login page and the admin view show. */
   update(id: string, patch: AdminProviderUpdateRequest): Promise<Provider>;
-  capabilitiesFor(resolved: ResolvedProvider): Promise<ProviderCapabilities>;
   /**
    * The admin-set label, else the module's own name; a row whose module this
    * deployment no longer has falls back to its stored endpoint host.
@@ -134,28 +122,6 @@ export function createProviderService(deps: ProviderServiceDeps): ProviderServic
     return moduleForType(provider.type)?.label ?? hostLabel(provider.baseUrl);
   };
 
-  async function capabilitiesFor(target: ResolvedProvider): Promise<ProviderCapabilities> {
-    const flags = target.module.capabilities;
-    // Indexing is per row: only a provider whose files live under one of the
-    // configured index roots has search, thumbnails and folder sizes.
-    const root = target.module.indexRootName?.(target.instance) ?? null;
-    const hasRoots = root !== null && deps.environment.indexRootNames.includes(root);
-    const trashOn =
-      target.module.trash !== "none" &&
-      flags.trash &&
-      ((await deps.trashEnabled?.(target.provider.id)) ?? false);
-    return {
-      zip: flags.zip,
-      setModifiedAt: flags.setModifiedAt,
-      atomicMove: flags.atomicMove,
-      trash: trashOn,
-      shares: flags.shares,
-      office: flags.office,
-      shareWithPeople: flags.shareWithPeople,
-      index: flags.index && hasRoots,
-    };
-  }
-
   return {
     list: () => repo.list(),
     async enabled() {
@@ -189,7 +155,6 @@ export function createProviderService(deps: ProviderServiceDeps): ProviderServic
       });
       return updated;
     },
-    capabilitiesFor,
     labelFor,
     publicView(provider) {
       const module = moduleForType(provider.type);
@@ -201,7 +166,6 @@ export function createProviderService(deps: ProviderServiceDeps): ProviderServic
         type: module.type as PublicProvider["type"],
         label: provider.label,
         credentialFields: [...module.credentialFields],
-        capabilities: module.capabilities,
       };
     },
     async adminView(provider) {
@@ -222,7 +186,6 @@ export function createProviderService(deps: ProviderServiceDeps): ProviderServic
         config,
         enabled: provider.enabled,
         managedByEnv: provider.managedByEnv,
-        capabilities: module.capabilities,
         identityCount: await deps.repos.identities.countByProvider(provider.id),
         reachable: probe.ok,
         checkedAt: deps.clock().toISOString(),
