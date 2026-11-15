@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DesktopPairing, DesktopWriteEntry, DesktopWritePairResult } from "@fdrive/contracts";
@@ -12,10 +12,10 @@ import { loadConfig } from "../../src/config.js";
 import { seedLocalUsers } from "./helpers/local-storage.ts";
 
 /**
- * The Mac app's write path on the files folder, under fdrive's per-identity
- * publish lock: durable replay, conflict protection, Trash and restore, and
- * receipts that survive a metadata outage and a restart. Another writer is a
- * program changing alice's folder on disk.
+ * The Mac app's write path on the files folder, proven from the file stamp:
+ * durable replay, conflict protection, Trash and restore, and receipts that
+ * survive a metadata outage and a restart. Another writer is a program
+ * changing alice's folder on disk.
  */
 it("publishes complete files with durable replay and conflict protection", async () => {
   const postgres = await startPostgres();
@@ -112,11 +112,15 @@ it("publishes complete files with durable replay and conflict protection", async
     const next = await upload("save.txt", "second", original);
     const saved = (await json(`${base}/operations/${next}/commit`, {})) as {
       item: unknown;
-      recoveryId: string;
+      recoveryId: string | null;
     };
     expect(DesktopWriteEntry.parse(saved.item).id).toBe(original.id);
-    expect(saved.recoveryId).toBe(next);
     expect(await readDisk("/save.txt")).toBe("second");
+    // Nothing of what the save replaced is kept, and its staging folder is gone.
+    expect(saved.recoveryId).toBeNull();
+    expect(
+      await readdir(onDisk(`/.fdrive-desktop/${writable.location.identityId}`)).catch(() => []),
+    ).toEqual([]);
     await json(`${base}/operations/${next}/acknowledge`, {});
     expect(await json(`${base}/operations/${next}`)).toEqual(saved);
     // A stale base may not overwrite a later edit, including identical-length edits.

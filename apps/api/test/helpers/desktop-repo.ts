@@ -130,8 +130,7 @@ export function memoryRepo() {
             (["receiving", "uploading"].includes(value.state) && age(value) > retention.idleMs) ||
             (value.state === "conflict" && age(value) > retention.conflictMs) ||
             (["acknowledged", "cancelled"].includes(value.state) &&
-              age(value) > retention.retainMs &&
-              !value.result?.reclaimedAt),
+              age(value) > retention.retainMs),
         )
         .sort((a, b) => a.updatedAt.getTime() - b.updatedAt.getTime())
         .slice(0, limit)
@@ -144,19 +143,11 @@ export function memoryRepo() {
         .slice(0, limit)
         .map((value) => ({ ...value }));
     },
-    async reclaim(identityId, accountId, id, at) {
+    async forget(identityId, accountId, id) {
       const old = operations.get(identityId + id);
-      if (
-        !old ||
-        old.accountId !== accountId ||
-        !["acknowledged", "cancelled"].includes(old.state) ||
-        old.result?.reclaimedAt
-      )
+      if (!old || old.accountId !== accountId || !["acknowledged", "cancelled"].includes(old.state))
         return false;
-      operations.set(identityId + id, {
-        ...old,
-        result: { ...old.result, reclaimedAt: at.toISOString() },
-      });
+      operations.delete(identityId + id);
       return true;
     },
     async complete(identityId, accountId, id, result, activity, access) {

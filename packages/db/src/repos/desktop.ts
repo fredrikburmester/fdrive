@@ -34,13 +34,13 @@ export interface DesktopAccessMove {
   grants: { owner: string; from: string; to: string } | null;
 }
 export type DesktopOperationRecord = typeof desktopOperations.$inferSelect;
-/** Milliseconds after an operation's last change before the reaper may act on it. */
+/** Milliseconds after an operation's last change before retention acts on it. */
 export interface DesktopRetention {
-  /** `receiving`/`uploading` bodies that never completed. */
+  /** `receiving`/`uploading` bodies that never completed: cancelled. */
   idleMs: number;
-  /** `conflict` operations the app never retried or cancelled. */
+  /** `conflict` operations the app never retried or cancelled: cancelled. */
   conflictMs: number;
-  /** `acknowledged`/`cancelled` operations whose remote backups may be reclaimed. */
+  /** `acknowledged`/`cancelled` operations, which the app is done with: forgotten. */
   retainMs: number;
 }
 export interface DesktopRepo {
@@ -94,12 +94,12 @@ export interface DesktopRepo {
     activity: NativeActivityFacts,
     access?: DesktopAccessMove | null,
   ): Promise<boolean>;
-  /** Operations past their retention window, oldest first. Reclaimed rows are excluded. */
+  /** Operations past their retention window, oldest first. */
   expired(now: Date, retention: DesktopRetention, limit: number): Promise<DesktopOperationRecord[]>;
   /** Commits that never produced a receipt, oldest first, for administrator inspection. */
   uncertain(limit: number): Promise<DesktopOperationRecord[]>;
-  /** Release a finished operation's reservation once its remote and local copies are gone. */
-  reclaim(identityId: string, accountId: string, id: string, at: Date): Promise<boolean>;
+  /** Deletes an `acknowledged` or `cancelled` operation's row; false for any other. */
+  forget(identityId: string, accountId: string, id: string): Promise<boolean>;
 }
 const escaped = (path: string) => path.replace(/[\\%_]/g, (value) => `\\${value}`);
 const live = (identityId: string) =>
@@ -264,26 +264,6 @@ export function createDesktopRepo(db: Db): DesktopRepo {
     },
     async reserve(input) {
       await db.transaction(async (tx) => {
-        await tx.execute(
-          sql`select pg_advisory_xact_lock(hashtextextended('desktop-spool-quota',0))`,
-        );
-        const prior = await tx
-          .select()
-          .from(desktopOperations)
-          .where(op(input.identityId, input.accountId, input.id));
-        if (prior.length) return;
-        const usage = await tx.execute(
-          sql`select count(*) filter (where state not in ('acknowledged','cancelled'))::int as count, coalesce(sum(coalesce((request->>'recoveryBytes')::bigint,0) + case when state='acknowledged' then 0 else coalesce((request->>'size')::bigint,0) end) filter (where result->>'reclaimedAt' is null),0)::text as bytes from ${desktopOperations}`,
-        );
-        const row = usage.rows[0] as { count: number; bytes: string };
-        if (
-          row.count >= 1024 ||
-          Number(row.bytes) +
-            Number(input.request.recoveryBytes ?? 0) +
-            Number(input.request.size ?? 0) >
-            64 * 1024 ** 3
-        )
-          throw Error("Desktop recovery capacity reached");
         const inserted = await tx
           .insert(desktopOperations)
           .values(input)
@@ -348,7 +328,6 @@ export function createDesktopRepo(db: Db): DesktopRepo {
             and(
               inArray(desktopOperations.state, ["acknowledged", "cancelled"]),
               lt(desktopOperations.updatedAt, before(retention.retainMs)),
-              sql`${desktopOperations.result}->>'reclaimedAt' is null`,
             ),
           ),
         )
@@ -363,21 +342,17 @@ export function createDesktopRepo(db: Db): DesktopRepo {
         .orderBy(asc(desktopOperations.updatedAt))
         .limit(limit);
     },
-    async reclaim(identityId, accountId, id, at) {
-      const updated = await db
-        .update(desktopOperations)
-        .set({
-          result: sql`coalesce(${desktopOperations.result}, '{}'::jsonb) || jsonb_build_object('reclaimedAt', ${at.toISOString()}::text)`,
-        })
+    async forget(identityId, accountId, id) {
+      const deleted = await db
+        .delete(desktopOperations)
         .where(
           and(
             op(identityId, accountId, id),
             inArray(desktopOperations.state, ["acknowledged", "cancelled"]),
-            sql`${desktopOperations.result}->>'reclaimedAt' is null`,
           ),
         )
         .returning({ id: desktopOperations.id });
-      return updated.length === 1;
+      return deleted.length === 1;
     },
     async transition(identityId, accountId, id, expected, state, result, attempt) {
       return db.transaction(async (tx) => {

@@ -52,6 +52,39 @@ export async function storedEntry(storage: StorageProvider, path: string): Promi
 }
 
 /**
+ * What the file at `path` is right now (`ContentStamp`). The files folder
+ * always answers; a storage without stamps cannot prove a Mac write.
+ */
+export async function stampOf(storage: StorageProvider, path: string): Promise<ContentStamp> {
+  const read = storage.contentStamp;
+  if (read === undefined) throw Error("This storage keeps no file stamps");
+  return read.call(storage, path);
+}
+
+/** The sha256 and length of the file at `path`, from one full read. */
+export async function digestFile(storage: StorageProvider, path: string, signal?: AbortSignal) {
+  const download = await storage.download(path, signal ? { signal } : undefined);
+  const reader = download.body.getReader();
+  const sha = createHash("sha256");
+  let size = 0;
+  try {
+    for (;;) {
+      signal?.throwIfAborted();
+      const next = await reader.read();
+      if (next.done) break;
+      sha.update(next.value);
+      size += next.value.byteLength;
+    }
+  } finally {
+    await reader.cancel().catch(() => undefined);
+    reader.releaseLock();
+  }
+  if (download.contentLength !== null && size !== download.contentLength)
+    throw new ApiHttpError("upstream_unavailable", "Incomplete content validation");
+  return { sha256: sha.digest("hex"), size };
+}
+
+/**
  * Whether a desktop connection may see the normalized `path` at all: inside
  * its grants (or above one, when `browse`ing towards it), and outside
  * fdrive's own folders (`isReservedPath`: the storage's Trash, `trash`, the
@@ -135,9 +168,7 @@ export function createDesktopFiles(
   async function indexed(principal: Principal, path: string, row: IndexedContent | undefined) {
     if (row === undefined) return null;
     // `indexedRows` finds rows only where storage has stamps.
-    const stamp = (await runStorageCall(async () =>
-      principal.storage.contentStamp?.(path),
-    )) as ContentStamp;
+    const stamp = await runStorageCall(() => stampOf(principal.storage, path));
     const version = indexedVersion(row, stamp);
     return version === null ? null : { path, size: stamp.size, version };
   }
@@ -148,6 +179,21 @@ export function createDesktopFiles(
   return {
     async stat(principal: Principal, raw: string) {
       return entry(principal, authorize(principal, raw, true));
+    },
+    /**
+     * The content version of the file at the normalized `path`, with the stamp
+     * it was proven against: the index row's digest when the stamp shows the
+     * row describes the file now, else one full read. The stamp is taken
+     * before the read, so a write during the read changes the file's stamp
+     * and fails any later comparison with this one.
+     */
+    async proven(principal: Principal, path: string) {
+      const rows = await indexedRows(principal, [path]);
+      const stamp = await runStorageCall(() => stampOf(principal.storage, path));
+      const version =
+        indexedVersion(rows.get(path), stamp) ??
+        (await runStorageCall(() => digestFile(principal.storage, path))).sha256;
+      return { stamp, version };
     },
     async list(principal: Principal, raw: string, tokenKey: string, cursor?: string) {
       const path = authorize(principal, raw, true);
@@ -233,25 +279,10 @@ export function createDesktopFiles(
             results.push(known);
             continue;
           }
-          const result = await runStorageCall(() => principal.storage.download(path, { signal }));
-          const reader = result.body.getReader();
-          const digest = createHash("sha256");
-          let size = 0;
-          try {
-            for (;;) {
-              signal.throwIfAborted();
-              const chunk = await reader.read();
-              if (chunk.done) break;
-              size += chunk.value.byteLength;
-              digest.update(chunk.value);
-            }
-          } finally {
-            await reader.cancel().catch(() => undefined);
-            reader.releaseLock();
-          }
-          if (result.contentLength !== null && size !== result.contentLength)
-            throw new ApiHttpError("upstream_unavailable", "Incomplete content validation");
-          results.push({ path, size, version: digest.digest("hex") });
+          const { sha256, size } = await runStorageCall(() =>
+            digestFile(principal.storage, path, signal),
+          );
+          results.push({ path, size, version: sha256 });
         }
         return { items: results };
       } finally {

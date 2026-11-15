@@ -32,8 +32,10 @@ export {
   type ChangeContent,
   type ChangeInput,
   type ChangeJournal,
+  type ChangeMovedStamp,
   type ChangePage,
   type ChangeSource,
+  type ChangeStamp,
   type ChangeWriter,
   createChangeJournal,
   createChangeWriter,
@@ -47,12 +49,6 @@ export {
   type DesktopRetention,
   type DesktopShareMove,
 } from "./repos/desktop.js";
-export {
-  createDesktopPublishLock,
-  DesktopPublishBusyError,
-  type DesktopPublishLock,
-  type DesktopPublishLockOptions,
-} from "./repos/desktop-publish-lock.js";
 export { createFilesFolderFacts, createRepos } from "./repos/drizzle.js";
 export type {
   ContentHit,
