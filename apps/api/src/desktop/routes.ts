@@ -26,6 +26,7 @@ import { hashApiToken } from "../tokens/token-format.js";
 import type { DesktopChanges } from "./changes.js";
 import { createDesktopFiles } from "./files.js";
 import { createDesktopPairing, type DesktopDeps } from "./pairing.js";
+import { CREDENTIAL_GONE, looksLikeDesktopToken } from "./tokens.js";
 import type { DesktopWrites } from "./writes.js";
 
 export function registerDesktopRoutes(
@@ -61,6 +62,24 @@ export function registerDesktopRoutes(
   }
   /** The caller's own ID for one hydration, distinct from a write's operation ID. */
   const hydrationId = (c: Context) => activityOperationId(c.req.header("x-fdrive-operation-id"));
+  /**
+   * Why a desktop bearer was refused. A well-formed desktop credential this server holds no
+   * row for is gone for good: revoked from the web or the Mac, deleted with its login or
+   * account, or cleared by a restore. Its 401 says so with `credential_gone`, and the Mac
+   * removes that location instead of asking again. Every other refusal (an expired
+   * credential, an unreadable grant, a missing or malformed bearer) stays a plain 401,
+   * which the Mac shows as signed out.
+   */
+  async function refused(bearer: string): Promise<ApiHttpError> {
+    if (
+      looksLikeDesktopToken(bearer) &&
+      (await deps.apiTokens.findByHash(hashApiToken(bearer))) === null
+    )
+      return new ApiHttpError("unauthorized", "This connection no longer exists. Connect again", {
+        code: CREDENTIAL_GONE,
+      });
+    return new ApiHttpError("unauthorized", "Reconnect this location in the Mac app");
+  }
   async function principal(
     c: Context,
     writeProtocol = false,
@@ -68,10 +87,10 @@ export function registerDesktopRoutes(
     c.header("Cache-Control", "no-store");
     const bearer = c.req.header("authorization")?.replace(/^Bearer /, "") ?? "";
     const resolved = await pairing.resolve(bearer);
+    if (!resolved) throw await refused(bearer);
     if (
-      !resolved ||
-      (resolved.tokenAccess?.mode !== "read" &&
-        !(writeProtocol && resolved.tokenAccess?.mode === "full"))
+      resolved.tokenAccess?.mode !== "read" &&
+      !(writeProtocol && resolved.tokenAccess?.mode === "full")
     )
       throw new ApiHttpError("unauthorized", "Reconnect this location in the Mac app");
     const hash = hashApiToken(bearer);

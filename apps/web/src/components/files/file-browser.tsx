@@ -37,7 +37,8 @@ import { DropOverlay, useExternalDrop } from "@/components/upload/drop-overlay";
 import { useUploadFilesContext } from "@/components/upload/upload-provider";
 import { activityGesture } from "@/lib/activity/gestures";
 import { addToChat } from "@/lib/ai/chat-panel";
-import { useAiStatus } from "@/lib/ai/queries";
+import { itemCount, type MoveOutcome, summarizeMoves, undoMoves } from "@/lib/ai/organize";
+import { useAiStatus, useMoveMany } from "@/lib/ai/queries";
 import { useOrganize } from "@/lib/ai/use-organize";
 import { useMe } from "@/lib/api/auth-queries";
 import { describeApiError } from "@/lib/api/errors";
@@ -45,6 +46,7 @@ import { officeStatusQueryOptions, useOfficeStatus } from "@/lib/api/office-quer
 import type { NewFileKind } from "@/lib/editor/new-file";
 import { editHref } from "@/lib/editor/route";
 import { defaultArchiveName, extractDestinationUnder } from "@/lib/files/archive";
+import { takeFileClipboard, writeFileClipboard } from "@/lib/files/clipboard";
 import { apiClient, PageHeader, queryKeys } from "@/lib/files/deps";
 import {
   type AnchorDownloader,
@@ -72,7 +74,6 @@ import {
   useDuplicate,
   useListing,
   useMkdir,
-  useMove,
   useRename,
   useTreeChildren,
 } from "@/lib/files/queries";
@@ -108,6 +109,7 @@ import {
   type TypeAheadBuffer,
   typeAheadMatch,
 } from "@/lib/files/type-ahead";
+import { latestTrashIds, offerUndo, undoLatest } from "@/lib/files/undo";
 import { useGridSize } from "@/lib/files/use-grid-size";
 import { useListDensity } from "@/lib/files/use-list-density";
 import { useRowClickAction } from "@/lib/files/use-row-click";
@@ -132,6 +134,7 @@ import { tagCheckState as computeTagCheckState, toggleTagId } from "@/lib/metada
 import { isOfficePreviewCandidate, officeModesFor, opensInOffice } from "@/lib/office/capabilities";
 import type { OfficeDocumentKind } from "@/lib/office/new-document";
 import { officeHref } from "@/lib/office/route";
+import { isRestoreConflict, useTrashRestore } from "@/lib/trash/queries";
 import { collectInputFiles } from "@/lib/upload/traverse";
 import { BatchRenameDialog } from "./batch-rename-dialog";
 import { CompressDialog, type CompressDialogState } from "./compress-dialog";
@@ -293,9 +296,10 @@ export function FileBrowser({
 
   const mkdir = useMkdir();
   const rename = useRename();
-  const move = useMove();
+  const moveMany = useMoveMany();
   const copy = useCopy();
   const remove = useDelete();
+  const restore = useTrashRestore();
   const duplicate = useDuplicate();
 
   const tagsQuery = useTags();
@@ -351,6 +355,13 @@ export function FileBrowser({
     }
     uploadFiles(files, path, existingNames);
   });
+  const pasteRef = useRef(handlePaste);
+  pasteRef.current = handlePaste;
+  useEffect(() => {
+    const listener = (event: ClipboardEvent) => pasteRef.current(event);
+    document.addEventListener("paste", listener);
+    return () => document.removeEventListener("paste", listener);
+  }, []);
 
   const [scrollRequest, setScrollRequest] = useState<ScrollRequest | null>(null);
   const scrollTokenRef = useRef(0);
@@ -498,9 +509,52 @@ export function FileBrowser({
       toast.error(block);
       return;
     }
-    const mutation = effect === "copy" ? copy : move;
-    for (const source of movablePaths(paths, targetFolderPath)) {
-      mutation.mutate({ path: source, target: joinPath(targetFolderPath, baseName(source)) });
+    const sources = movablePaths(paths, targetFolderPath);
+    if (effect === "move") {
+      void moveInto(sources, targetFolderPath);
+      return;
+    }
+    for (const source of sources) {
+      copy.mutate({ path: source, target: joinPath(targetFolderPath, baseName(source)) });
+    }
+  }
+
+  /** Moves `sources` into `folder` in one request; the toast offers to move them back. */
+  async function moveInto(sources: readonly string[], folder: string) {
+    if (sources.length === 0) return;
+    const items = sources.map((source) => ({
+      path: source,
+      target: joinPath(folder, baseName(source)),
+    }));
+    try {
+      const outcome = summarizeMoves((await moveMany.mutateAsync({ items })).results);
+      for (const failure of outcome.failed) toast.error(failure.message);
+      if (outcome.moved.length > 0)
+        offerUndo(`Moved ${itemCount(outcome.moved.length)}`, () => moveBack(outcome.moved));
+    } catch (error) {
+      toast.error(describeFsError(error, "Could not move."));
+    }
+  }
+
+  async function moveBack(moved: MoveOutcome["moved"]) {
+    const request = undoMoves(moved);
+    if (request === null) return;
+    try {
+      const outcome = summarizeMoves((await moveMany.mutateAsync(request)).results);
+      if (outcome.failed.length > 0)
+        toast.error(`Could not move ${itemCount(outcome.failed.length)} back.`);
+    } catch (error) {
+      toast.error(describeFsError(error, "Could not move back."));
+    }
+  }
+
+  async function restoreFromTrash(paths: readonly string[]) {
+    try {
+      const { entries } = await apiClient.trashList();
+      await restore.mutateAsync({ ids: latestTrashIds(entries, paths) });
+    } catch (error) {
+      // The restore reports every failure but a conflict itself.
+      if (isRestoreConflict(error)) toast.error(describeFsError(error, "Could not restore."));
     }
   }
 
@@ -694,16 +748,33 @@ export function FileBrowser({
   }
 
   function handleRenameSubmit(newName: string) {
-    if (renameTarget === null) {
+    const target = renameTarget;
+    if (target === null) {
       return;
     }
-    rename.mutate({ path: renameTarget.path, newName }, { onSuccess: () => setRenameTarget(null) });
+    rename.mutate(
+      { path: target.path, newName },
+      {
+        onSuccess: (renamed) => {
+          setRenameTarget(null);
+          offerUndo(`Renamed to "${renamed.name}"`, () =>
+            rename.mutateAsync({ path: renamed.path, newName: target.name }),
+          );
+        },
+      },
+    );
   }
 
   function handleDeleteConfirm() {
+    const paths = deleteTargets.map((entry) => entry.path);
     remove.mutate(
       deleteTargets.map((entry) => ({ path: entry.path, kind: deleteItemKind(entry) })),
-      { onSuccess: () => setDeleteTargets([]) },
+      {
+        onSuccess: () => {
+          setDeleteTargets([]);
+          offerUndo(`Moved ${itemCount(paths.length)} to Trash`, () => restoreFromTrash(paths));
+        },
+      },
     );
   }
 
@@ -733,15 +804,18 @@ export function FileBrowser({
       return;
     }
 
-    const mutation = destinationPicker.mode === "move" ? move : copy;
     if (
       movablePaths(destinationPicker.paths, destinationDir).length !==
       destinationPicker.paths.length
     ) {
       return;
     }
-    for (const source of destinationPicker.paths) {
-      mutation.mutate({ path: source, target: joinPath(destinationDir, baseName(source)) });
+    if (destinationPicker.mode === "move") {
+      void moveInto(destinationPicker.paths, destinationDir);
+    } else {
+      for (const source of destinationPicker.paths) {
+        copy.mutate({ path: source, target: joinPath(destinationDir, baseName(source)) });
+      }
     }
     setDestinationPicker(null);
   }
@@ -786,6 +860,31 @@ export function FileBrowser({
       return;
     }
     uploadFiles(collectInputFiles(collected), path, existingNames);
+  }
+
+  /**
+   * Pastes into this folder from anywhere on the page but a text field: files on the system
+   * clipboard upload, otherwise what ⌘C or ⌘X put on fdrive's own clipboard is copied or moved.
+   */
+  function handlePaste(event: ClipboardEvent) {
+    const target = event.target;
+    if (
+      target instanceof HTMLElement &&
+      (target.isContentEditable || target.closest("input, textarea, select") !== null)
+    ) {
+      return;
+    }
+    const files = collectInputFiles(event.clipboardData?.files ?? []);
+    if (files.length > 0) {
+      event.preventDefault();
+      if (writeBlock !== null) toast.error(writeBlock);
+      else uploadFiles(files, path, existingNames);
+      return;
+    }
+    const clipboard = takeFileClipboard();
+    if (clipboard !== null) {
+      handleInternalDrop([...clipboard.paths], path, clipboard.mode === "cut" ? "move" : "copy");
+    }
   }
 
   function handleKeyDown(event: ReactKeyboardEvent<HTMLDivElement>) {
@@ -866,6 +965,18 @@ export function FileBrowser({
       }
       case "selectAll":
         dispatchSelection({ type: "selectAll" });
+        break;
+      case "copy":
+      case "cut":
+        if (selectedEntries.length > 0) {
+          writeFileClipboard({
+            mode: action.type,
+            paths: selectedEntries.map((entry) => entry.path),
+          });
+        }
+        break;
+      case "undo":
+        void undoLatest();
         break;
       case "clear":
         dispatchSelection({ type: "clear" });
@@ -1189,7 +1300,7 @@ export function FileBrowser({
           onConfirm={handleDestinationConfirm}
           pending={
             destinationPicker.mode === "move"
-              ? move.isPending
+              ? moveMany.isPending
               : destinationPicker.mode === "copy"
                 ? copy.isPending
                 : false

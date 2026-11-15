@@ -32,6 +32,10 @@ export const ROUTES = {
     stat: "/api/v1/fs/stat",
     /** GET or HEAD: stream (or probe) file contents. */
     download: "/api/v1/fs/download",
+    /** GET: a video transcoded on the fly to H.264/AAC fragmented MP4, for browsers that cannot play it. */
+    transcode: "/api/v1/fs/transcode",
+    /** GET: a `.srt` or `.vtt` subtitle file as WebVTT. */
+    subtitles: "/api/v1/fs/subtitles",
     /** POST: stream a zip of the given paths. */
     zip: "/api/v1/fs/zip",
     /** PUT: stream a file's contents to `path`. */

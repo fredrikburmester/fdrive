@@ -77,6 +77,12 @@ How the files folder implements it:
   taken name. A `durable` upload flushes the file to disk before publishing it and its folder
   after, so it survives a crash once the call returns; the Mac's staged uploads are durable.
   `stat` reports the inode of a file or folder (`ino`), which a rename keeps.
+- **Uploads in pieces.** The web app sends files over 8 MiB in 8 MiB pieces (`upload` with
+  `part`; `/fs/upload` with `part`, `offset` and `final`). Each piece is written into
+  `.fdrive-partial-<part>` at the top of the home (the owner's home for a shared folder), cut
+  back to its offset first so a failed piece can be sent again, and the last piece publishes it
+  as above. Every piece is checked like an upload; at startup the API removes parts older than
+  a day.
 - **Copies** keep modification times. A link inside a copied folder is copied as the link it
   is, its target text unchanged, as a move takes it along: never followed, never its target.
 - **Moves** are one `rename`, also between a user's files and a writable shared folder. The

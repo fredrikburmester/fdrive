@@ -291,6 +291,10 @@ export interface ApiClient {
   remove(items: DeleteRequest["items"]): Promise<OkResponse>;
   zip(paths: string[], name?: string): Promise<Response>;
   downloadUrl(path: string, opts?: { inline?: boolean }): string;
+  /** The video at `path` as H.264/AAC fragmented MP4, transcoded as it plays. */
+  transcodeUrl(path: string): string;
+  /** The `.srt` or `.vtt` file at `path` as WebVTT, for a `<track>`. */
+  subtitlesUrl(path: string): string;
   upload(path: string, body: UploadBody, opts?: ApiClientUploadOptions): Promise<FsEntry>;
   duplicate(path: string): Promise<FsEntry>;
   compress(req: CompressRequest): Promise<JobAccepted>;
@@ -684,6 +688,14 @@ export function createApiClient(options: ApiClientOptions = {}): ApiClient {
         path,
         inline: opts?.inline === true ? "1" : undefined,
       });
+    },
+
+    transcodeUrl(path: string): string {
+      return buildRequestUrl(ctx.baseUrl, ROUTES.fs.transcode, { path });
+    },
+
+    subtitlesUrl(path: string): string {
+      return buildRequestUrl(ctx.baseUrl, ROUTES.fs.subtitles, { path });
     },
 
     upload(path: string, body: UploadBody, opts?: ApiClientUploadOptions): Promise<FsEntry> {

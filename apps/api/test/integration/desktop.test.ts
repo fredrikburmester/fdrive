@@ -81,6 +81,7 @@ it("pairs two people's Macs with isolated streaming reads, validators and revoca
     expect(bobLogin.status).toBe(200);
     cookie = bobLogin.headers.get("set-cookie")?.split(";")[0] ?? "";
     const b = await pairMac("Bob's Mac");
+    const bOther = await pairMac("Bob's other Mac");
     expect(b.location.identityId).not.toBe(a.location.identityId);
     // A rename of the storage reaches both logins, existing credentials and new pairings.
     cookie = aliceCookie;
@@ -181,14 +182,15 @@ it("pairs two people's Macs with isolated streaming reads, validators and revoca
         )
       ).status,
     ).toBe(200);
-    expect(
-      (
-        await request(`${DESKTOP_API}/content?path=/same.txt`, undefined, {
-          authorization: `Bearer ${a.token}`,
-          cookie: "",
-        })
-      ).status,
-    ).toBe(401);
+    const revoked = await request(`${DESKTOP_API}/content?path=/same.txt`, undefined, {
+      authorization: `Bearer ${a.token}`,
+      cookie: "",
+    });
+    expect(revoked.status).toBe(401);
+    // The Mac removes a location whose credential is gone, rather than asking again.
+    expect(await revoked.json()).toMatchObject({
+      error: { kind: "unauthorized", details: { code: "credential_gone" } },
+    });
     expect(
       await (
         await request(`${DESKTOP_API}/content?path=/same.txt`, undefined, {
@@ -200,12 +202,24 @@ it("pairs two people's Macs with isolated streaming reads, validators and revoca
     // Bob is disabled outside the web, straight in the database.
     const database = createDb(postgres.connectionString);
     await database.pool.query("update app.local_users set disabled = true where username = 'bob'");
-    await database.close();
     // A credential whose login the folder no longer admits can still disconnect.
     const desktopHeaders = { authorization: `Bearer ${b.token}`, cookie: "" };
     expect((await request(`${DESKTOP_API}/location`, undefined, desktopHeaders)).status).toBe(403);
     expect((await request(`${DESKTOP_API}/disconnect`, {}, desktopHeaders)).status).toBe(200);
     expect((await request(`${DESKTOP_API}/disconnect`, {}, desktopHeaders)).status).toBe(401);
+    // A deleted login takes its credentials with it, as migration 0033 deleted logins on
+    // storage fdrive no longer serves; the Mac hears that the credential is gone.
+    const otherHeaders = { authorization: `Bearer ${bOther.token}`, cookie: "" };
+    expect((await request(`${DESKTOP_API}/location`, undefined, otherHeaders)).status).toBe(403);
+    await database.pool.query("delete from app.identities where id = $1", [
+      bOther.location.identityId,
+    ]);
+    await database.close();
+    const deleted = await request(`${DESKTOP_API}/location`, undefined, otherHeaders);
+    expect(deleted.status).toBe(401);
+    expect(await deleted.json()).toMatchObject({
+      error: { kind: "unauthorized", details: { code: "credential_gone" } },
+    });
   } finally {
     await composed.close();
     await storage.stop();
