@@ -372,7 +372,7 @@ describe("composeApp", () => {
       expect(messages).toContain(
         "subsystem=index status=not configured missing=FDRIVE_INDEXER_URL",
       );
-      expect(messages).toContain("subsystem=search status=not configured missing=FDRIVE_EMBED_URL");
+      expect(messages).toContain("subsystem=search status=not configured missing=FDRIVE_ML_URL");
       expect(messages.some((message) => message.startsWith("subsystem=network bind hint"))).toBe(
         true,
       );

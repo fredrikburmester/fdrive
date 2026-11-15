@@ -257,7 +257,7 @@ pub fn build_extractor(name: &str, cfg: &Config, settings: &Settings) -> Extract
         plain_text_cap: cfg.plain_text_cap,
         tesseract_langs: settings.tesseract_langs.clone(),
         ocr_image_globs: Globs::new(&settings.ocr_image_globs),
-        tika_url: cfg.tika_url.clone(),
+        extract_url: cfg.extract_url(),
     }
 }
 
@@ -404,7 +404,7 @@ impl RootContext {
         {
             return Some(health.clone());
         }
-        let health = image_embed::health(&self.cfg.image_embed_url, Duration::from_secs(5))
+        let health = image_embed::health(&self.cfg.image_url(), Duration::from_secs(5))
             .or_else(|| cached.map(|(_, health)| health));
         *lock(&self.image_health) = health
             .clone()
@@ -882,7 +882,7 @@ pub fn process_stages(
             status = "partial".to_owned();
             empty()
         } else if features.semantic_search {
-            match embed_passages(&pieces, &ctx.cfg.embed_url, ctx.cfg.embed_batch) {
+            match embed_passages(&pieces, &ctx.cfg.text_url(), ctx.cfg.embed_batch) {
                 Ok(vectors) => {
                     note_embed_recovery(ctx);
                     vectors.into_iter().map(Some).collect()
@@ -1095,7 +1095,7 @@ fn current_text_stage() -> Option<Arc<Stage>> {
 }
 
 /// Embed a file's thumbnail, on the current stage when there is one. True when it is done
-/// or waiting on an absent unit.
+/// or waiting on an unavailable unit.
 pub fn process_image_embedding(ctx: &Arc<RootContext>, rel_path: &str, sha: &str) -> bool {
     let stage = STAGE.with(|s| s.borrow().clone());
     if let Some(stage) = stage
@@ -1108,7 +1108,7 @@ pub fn process_image_embedding(ctx: &Arc<RootContext>, rel_path: &str, sha: &str
     let mut errors = Vec::new();
     match embed_thumbnail(ctx, sha, &mut errors) {
         Ok(ok) => {
-            let waiting = !ok && (ctx.image_embed_backoff.paused() || ctx.cfg.image_embed_url.is_empty());
+            let waiting = !ok && ctx.image_embed_backoff.paused();
             if !ok && errors.is_empty() && !waiting {
                 errors.push("Thumbnail unavailable: generate a preview before retrying image search".to_owned());
             }
@@ -1133,10 +1133,9 @@ pub fn process_image_embedding(ctx: &Arc<RootContext>, rel_path: &str, sha: &str
 }
 
 /// Embed the 256 px thumbnail under `sha` unless the configured model already has a row.
-/// False (without error) when unconfigured, paused, unhealthy, or there is no thumbnail.
+/// False (without error) when paused, unhealthy, or there is no thumbnail.
 pub fn embed_thumbnail(ctx: &RootContext, sha: &str, errors: &mut Vec<String>) -> Result<bool> {
-    let url = &ctx.cfg.image_embed_url;
-    if url.is_empty() || ctx.image_embed_backoff.paused() {
+    if ctx.image_embed_backoff.paused() {
         return Ok(false);
     }
     let health = ctx.image_embed_status();
@@ -1162,7 +1161,8 @@ pub fn embed_thumbnail(ctx: &RootContext, sha: &str, errors: &mut Vec<String>) -
             return Ok(false);
         }
     };
-    let (vectors, model) = match image_embed::embed_images(&[data], url, ctx.cfg.image_embed_batch_size) {
+    let url = ctx.cfg.image_url();
+    let (vectors, model) = match image_embed::embed_images(&[data], &url, ctx.cfg.image_embed_batch_size) {
         Ok(result) => result,
         Err(e) if is_outage(&e) => {
             if ctx.image_embed_backoff.note_failure() {
@@ -1416,7 +1416,7 @@ pub fn embed_chunks(ctx: &RootContext, rel_path: &str, expected_sha: Option<&str
         .with(|c| db::chunks_missing_embeddings(c, ctx.root_id, rel_path))?;
     if !rows.is_empty() {
         let texts: Vec<String> = rows.iter().map(|(_, t)| t.clone()).collect();
-        let vectors = match embed_passages(&texts, &ctx.cfg.embed_url, ctx.cfg.embed_batch) {
+        let vectors = match embed_passages(&texts, &ctx.cfg.text_url(), ctx.cfg.embed_batch) {
             Ok(vectors) => vectors,
             Err(e) if is_outage(&e) => {
                 note_embed_outage(ctx, &e);
@@ -1561,7 +1561,8 @@ fn scan_inner(ctx: &Arc<RootContext>, operations: &HashMap<String, Op>) -> ScanR
         media_backfill_errors: AtomicI64::new(0),
     });
     let image_op = operations.get("imageSearch").cloned();
-    let stage = (image_op.is_some() && !ctx.cfg.image_embed_url.is_empty())
+    let stage = image_op
+        .is_some()
         .then(|| ImageStage::start(Arc::clone(ctx), &format!("image-embed-{}", ctx.name)));
 
     let workers = ctx.settings().workers.max(1);
@@ -1855,7 +1856,7 @@ pub fn watch_index_with(
     }
     let _foreground = ctx.foreground();
     // Inline embedding paced every watcher worker at the model's speed.
-    let stage = (features.image_search && !ctx.cfg.image_embed_url.is_empty()).then(|| ctx.watch_image_stage());
+    let stage = features.image_search.then(|| ctx.watch_image_stage());
     let text = features.semantic_search.then(|| ctx.watch_text_stage());
     let (status, observed) = attempt(HashMap::new(), || {
         with_stage(stage, || {

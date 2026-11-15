@@ -14,7 +14,7 @@ const EmbedInfoRaw = z.object({
 });
 
 export interface FetchEmbedStatusDeps extends SidecarRequestDeps {
-  /** The TEI base URL (`FDRIVE_EMBED_URL`). `undefined` when semantic search is not configured. */
+  /** The ml service's text unit (`FDRIVE_ML_URL`). `undefined` when it is not configured. */
   readonly baseUrl: string | undefined;
 }
 
@@ -38,7 +38,7 @@ async function probeOk(baseUrl: string, path: string, deps: SidecarRequestDeps):
 
 /**
  * Reports the TEI embedding server's reachability and model info for the
- * System > Search page. `configured` mirrors whether `FDRIVE_EMBED_URL` is
+ * System > Search page. `configured` mirrors whether `FDRIVE_ML_URL` is
  * set; `healthy` comes from `GET /health` (status only, body ignored) and
  * the model fields from `GET /info`, both best-effort (a failure just
  * leaves `healthy: false` and the model fields absent, never throws).

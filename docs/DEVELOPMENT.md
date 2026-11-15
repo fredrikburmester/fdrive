@@ -133,8 +133,11 @@ when they are missing; after changing ports in a configured checkout, edit them
 or run `pnpm dev:env:reset`, which writes them again.
 
 The dev stack keeps every unit of the ml service on (`FDRIVE_ML_STATIC_UNITS`), and
-`FDRIVE_EMBED_URL`, `FDRIVE_IMAGE_EMBED_URL` and `FDRIVE_TIKA_URL` point at its `/text`,
-`/image` and `/extract` prefixes on the published port. Production compose also supplies
-`FDRIVE_EMBED_RUNTIME_URL`, `FDRIVE_IMAGE_EMBED_RUNTIME_URL` and `FDRIVE_TIKA_RUNTIME_URL`,
-where the server follows the owner's feature settings and must acknowledge their revision.
-Units that are always on have no configuration revision.
+`FDRIVE_ML_URL` points at it on the published port; the API reaches its `/text`, `/image` and
+`/extract` units below it and reads each unit's `/runtime` status. In production the server
+follows the owner's feature settings and must acknowledge their revision; units that are always
+on have no configuration revision.
+
+`pnpm dev:env` migrates the database (through `pnpm dev:users`), so the index profile's indexer
+and OCR start against the schema. In production compose they start only once the API, which
+migrates before it serves, is healthy.

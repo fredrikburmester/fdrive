@@ -64,7 +64,6 @@ export const OMITTED_TABLES = {
   // Names the journal's positions. A restore must get a new one, so a Mac
   // app's position from before it reads as unknown rather than as a later one.
   "idx.change_epoch": "transient",
-  "idx.schema_version": "migration",
   // Its one row, the files folder's, comes from a migration.
   "idx.roots": "migration",
 } as const;

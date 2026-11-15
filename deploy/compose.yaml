@@ -75,10 +75,10 @@ services:
     environment: &api-environment
       # Fixed by this compose topology, not operator-configurable through
       # .env: secrets, and sidecar addresses only reachable inside the
-      # compose network. FDRIVE_THUMBS_DIR, FDRIVE_OCR_URL, FDRIVE_INDEXER_URL,
-      # FDRIVE_EMBED_URL, and FDRIVE_IMAGE_EMBED_URL point to
-      # managed worker processes are always present but start no processing
-      # or model loading until the owner enables a feature in the walkthrough.
+      # compose network. FDRIVE_THUMBS_DIR, FDRIVE_OCR_URL, FDRIVE_INDEXER_URL
+      # and FDRIVE_ML_URL point to managed workers, which are always present
+      # but start no processing or model loading until the owner enables a
+      # feature in the walkthrough.
       FDRIVE_THUMBS_DIR: /thumbs
       FDRIVE_BACKUP_STATE_DIR: /var/lib/fdrive/backups
       FDRIVE_BACKUP_WORKER: "false"
@@ -96,14 +96,9 @@ services:
       NODE_ENV: production
       FDRIVE_OCR_URL: http://ocr:8011
       FDRIVE_INDEXER_URL: http://indexer:8010
-      # The ml service answers for all three under its own path prefixes, and
-      # each prefix also serves the status document the *_RUNTIME_URL names.
-      FDRIVE_EMBED_URL: http://ml:8080/text
-      FDRIVE_IMAGE_EMBED_URL: http://ml:8080/image
-      FDRIVE_EMBED_RUNTIME_URL: ${FDRIVE_EMBED_RUNTIME_URL:-http://ml:8080/text}
-      FDRIVE_IMAGE_EMBED_RUNTIME_URL: ${FDRIVE_IMAGE_EMBED_RUNTIME_URL:-http://ml:8080/image}
-      FDRIVE_TIKA_RUNTIME_URL: ${FDRIVE_TIKA_RUNTIME_URL:-http://ml:8080/extract}
-      FDRIVE_TIKA_URL: ${FDRIVE_TIKA_URL:-http://ml:8080/extract}
+      # The ml service serves its text, image and extract units below this,
+      # each with its own status document.
+      FDRIVE_ML_URL: http://ml:8080
 
       # ONLYOFFICE is bundled in this stack. The owner enables it and chooses
       # the browser-facing origin in onboarding. Keep these defaults: the
@@ -223,12 +218,8 @@ services:
       FDRIVE_RUN_AS_UID: ${FDRIVE_RUN_AS_UID:-1000}
       DATABASE_URL: postgres://fdrive:${POSTGRES_PASSWORD}@db:5432/fdrive
       # Document extraction, text embeddings and image embeddings are the
-      # three units of the ml service.
-      TIKA_URL: http://ml:8080/extract
-      EMBED_URL: http://ml:8080/text
-      # Optional, like OCR: unset means the indexer never embeds
-      # thumbnails and image search reports not_configured.
-      IMAGE_EMBED_URL: http://ml:8080/image
+      # three units of the ml service, below this.
+      ML_URL: http://ml:8080
       THUMBS_DIR: /thumbs
       INDEXER_PORT: "8010"
       INDEXER_LOG_DIR: /logs
@@ -244,8 +235,10 @@ services:
       - ${FDRIVE_FILES_DIR:-${FDRIVE_DATA_DIR:-./data}/files}:/data:ro
       - fdrive-thumbs:/thumbs
       - fdrive-indexer-logs:/logs
+    # The api migrates the database before it serves, so the indexer starts
+    # against the schema it expects.
     depends_on:
-      db:
+      api:
         condition: service_healthy
     mem_limit: ${FDRIVE_INDEXER_MEMORY:-0}
     cpus: ${FDRIVE_INDEXER_CPUS:-0}
@@ -282,8 +275,9 @@ services:
     volumes:
       - ${FDRIVE_FILES_DIR:-${FDRIVE_DATA_DIR:-./data}/files}:/data
       - ${FDRIVE_DATA_DIR:-./data}/ocr:/state
+    # Like the indexer: after the api has migrated the database.
     depends_on:
-      db:
+      api:
         condition: service_healthy
     mem_limit: ${FDRIVE_OCR_MEMORY:-0}
     cpus: ${FDRIVE_OCR_CPUS:-0}

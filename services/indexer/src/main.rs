@@ -1,30 +1,21 @@
-//! `fdrive-indexer`: wait for the schema, start the root loop, and serve the internal API.
+//! `fdrive-indexer`: start the root loop and serve the internal API. Compose starts it after
+//! the API is healthy, and the API runs every migration before it serves.
 
 use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 
 use fdrive_indexer::config::Config;
-use fdrive_indexer::db::{self, Db};
+use fdrive_indexer::db::Db;
 use fdrive_indexer::extract::ContentExtractor;
 use fdrive_indexer::log::log;
 use fdrive_indexer::names::NameIndex;
-use fdrive_indexer::runner::{EXPECTED_SCHEMA_VERSION, RootLoop, build_context, refresh_settings, run_root};
+use fdrive_indexer::runner::{RootLoop, build_context, refresh_settings, run_root};
 use fdrive_indexer::server::{AppState, Jobs, Wake, router};
 use fdrive_indexer::work::run_work;
 
 fn main() -> Result<(), String> {
     let cfg = Arc::new(Config::from_env()?);
-    let db = Db::new(&cfg.database_url);
-    log(&format!(
-        "waiting for idx.schema_version = {EXPECTED_SCHEMA_VERSION} (timeout {}s)",
-        cfg.schema_wait.as_secs()
-    ));
-    let version = db::wait_for_schema_version(&db, EXPECTED_SCHEMA_VERSION, cfg.schema_wait, &log, &std::thread::sleep)
-        .map_err(|e| e.to_string())?;
-    let Some(version) = version else { std::process::exit(1) };
-    log(&format!("schema ready at version {version}"));
-
     let ctx = build_context(&cfg).map_err(|e| e.to_string())?;
     // Built from the tables in the background; until then search finds names without typos.
     let names = NameIndex::start(Db::new(&cfg.database_url), &[ctx.root_id]).map_err(|e| e.to_string())?;
@@ -63,7 +54,7 @@ fn main() -> Result<(), String> {
             cfg.max_pdf_pages,
             cfg.plain_text_cap,
             &settings.tesseract_langs,
-            &cfg.tika_url,
+            &cfg.extract_url(),
         ))),
         jobs: Jobs::default(),
         failure_retry_feature: Mutex::new("thumbnails".to_owned()),

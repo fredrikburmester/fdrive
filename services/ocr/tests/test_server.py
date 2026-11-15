@@ -45,7 +45,6 @@ def _set_pdf_ocr(state: server.ServerState) -> None:
 def _make_state(
     postgres_dsn: str,
     tmp_path: Path,
-    schema_ready: bool = True,
     root: Path | None = None,
     include_globs: tuple[str, ...] = (),
 ) -> server.ServerState:
@@ -58,7 +57,6 @@ def _make_state(
         jobs=2,
         run_lock=server.RunLock(),
         now=lambda: FIXED_NOW,
-        schema_ready=lambda: schema_ready,
         log=lambda _msg: None,
         include_globs=include_globs,
     )
@@ -106,13 +104,6 @@ def test_health_ok_and_not_running(postgres_dsn: str, tmp_path: Path) -> None:
     assert resp.json()["running"] is False
     assert resp.json()["features"]["revision"] == 0
     assert resp.json()["storage"] == {"readable": True, "writable": True}
-
-
-def test_health_not_ok_when_schema_not_ready(postgres_dsn: str, tmp_path: Path) -> None:
-    state = _make_state(postgres_dsn, tmp_path, schema_ready=False)
-    client = TestClient(server.create_app(state))
-    resp = client.get("/health")
-    assert resp.json()["ok"] is False
 
 
 def test_storage_diagnostics_reports_a_missing_or_readable_folder(tmp_path: Path) -> None:

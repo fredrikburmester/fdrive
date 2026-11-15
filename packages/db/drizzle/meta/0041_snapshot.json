@@ -1,5 +1,5 @@
 {
-  "id": "af760e89-444c-44e8-9f23-602e07499f16",
+  "id": "094adee4-bf1b-458d-b15b-ef23a2bb904e",
   "prevId": "5008baf0-b6e3-4dbf-9cc6-baa0d7f25bea",
   "version": "7",
   "dialect": "postgresql",
@@ -1543,12 +1543,6 @@
           "primaryKey": false,
           "notNull": true,
           "default": false
-        },
-        "storage_limit": {
-          "name": "storage_limit",
-          "type": "bigint",
-          "primaryKey": false,
-          "notNull": false
         },
         "created_at": {
           "name": "created_at",
@@ -3580,25 +3574,6 @@
           "onUpdate": "no action"
         }
       },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "policies": {},
-      "checkConstraints": {},
-      "isRLSEnabled": false
-    },
-    "idx.schema_version": {
-      "name": "schema_version",
-      "schema": "idx",
-      "columns": {
-        "version": {
-          "name": "version",
-          "type": "integer",
-          "primaryKey": true,
-          "notNull": true
-        }
-      },
-      "indexes": {},
-      "foreignKeys": {},
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
       "policies": {},

@@ -3,7 +3,7 @@
 
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
@@ -67,61 +67,6 @@ impl Db {
             CONNECTIONS.with(|c| c.borrow_mut().insert(self.url.clone(), client));
         }
         result
-    }
-}
-
-pub fn read_schema_version(client: &mut Client) -> Result<Option<i64>> {
-    let row = client.query_opt(
-        r#"SELECT version::bigint FROM "idx"."schema_version" ORDER BY version DESC LIMIT 1"#,
-        &[],
-    );
-    match row {
-        Ok(row) => Ok(row.map(|r| r.get(0))),
-        Err(error) if error.is_closed() || error.as_db_error().is_none() => Err(error.into()),
-        Err(_) => Ok(None),
-    }
-}
-
-/// Wait for the compatible schema, the failure-history, change-journal and folder tables, the
-/// files' stamp and photo columns and the journal's `previous_ctime_ns` before any processing.
-/// They came without a version bump, which OCR waits for too.
-pub fn wait_for_schema_version(
-    db: &Db,
-    expected: i64,
-    timeout: Duration,
-    log: &dyn Fn(&str),
-    sleep: &dyn Fn(Duration),
-) -> Result<Option<i64>> {
-    let deadline = Instant::now() + timeout;
-    loop {
-        let (version, ready) = db.with(|c| {
-            let version = read_schema_version(c)?;
-            let row = c.query_one(
-                "SELECT to_regclass('idx.processing_failures')::text, to_regclass('idx.changes')::text, \
-                 to_regclass('idx.change_cursors')::text, to_regclass('idx.folders')::text, \
-                 (SELECT count(*) FROM information_schema.columns WHERE table_schema = 'idx' \
-                  AND ((table_name = 'files' AND column_name IN ('inode', 'ctime_ns', 'taken_at')) \
-                   OR (table_name = 'changes' AND column_name = 'previous_ctime_ns')))",
-                &[],
-            )?;
-            let tables: [Option<String>; 4] = [row.get(0), row.get(1), row.get(2), row.get(3)];
-            let stamps: i64 = row.get(4);
-            Ok((version, tables.iter().all(Option::is_some) && stamps == 4))
-        })?;
-        if version == Some(expected) && ready {
-            return Ok(version);
-        }
-        let seen = version.map_or("None".to_owned(), |v| v.to_string());
-        if Instant::now() >= deadline {
-            log(&format!(
-                "schema not ready (expected {expected}, last seen: {seen}, requires processing_failures, changes, folders, file stamps and photos); giving up"
-            ));
-            return Ok(None);
-        }
-        log(&format!(
-            "waiting for idx.schema_version = {expected} and the processing_failures, changes, folders, file stamp and photo migrations (last seen: {seen})"
-        ));
-        sleep(Duration::from_secs(5));
     }
 }
 

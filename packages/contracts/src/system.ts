@@ -20,7 +20,6 @@ export const IndexerHealth = z.object({
   /** Whether the file watcher is running on the files folder. */
   watcher: z.boolean(),
   embedOk: z.boolean(),
-  schemaVersion: z.number().int().nullable(),
 });
 
 export type IndexerHealth = z.infer<typeof IndexerHealth>;
@@ -284,7 +283,7 @@ export type SystemReembedResponse = z.infer<typeof SystemReembedResponse>;
 
 /**
  * Response for `GET /api/v1/system/image-search`. `configured` is false when
- * `FDRIVE_IMAGE_EMBED_URL` is unset. `model`/`dim` mirror the sidecar's own
+ * `FDRIVE_ML_URL` is unset. `model`/`dim` mirror the sidecar's own
  * `/health` (present only when reachable). `embedded`/`embeddedModel` are
  * mirrored from `IndexQueries.imageEmbeddingStats`; `embeddedModel` is `null`
  * when no thumbnail has been embedded yet. `rebuild`/`clear` mirror the
