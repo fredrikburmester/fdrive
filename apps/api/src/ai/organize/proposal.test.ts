@@ -287,7 +287,8 @@ describe("buildProposal", () => {
       ...memory,
       stat: async (path) => {
         if (path === "/Private") throw new StorageError("forbidden", "denied");
-        if (path === "/Finance/Receipts/c.pdf") throw new StorageError("rate_limited", "slow down");
+        if (path === "/Finance/Receipts/c.pdf")
+          throw new StorageError("upstream_unavailable", "slow down");
         return memory.stat(path);
       },
     };

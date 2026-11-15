@@ -13,7 +13,6 @@ import { z } from "zod";
 import type { Principal } from "../../auth/principal.js";
 import { type McpToolDeps, runSearch, runSimilarFiles } from "../../mcp/handlers.js";
 import { resolveScopeContext, type ScopeContext, virtualPathFor } from "../../mcp/scope-context.js";
-import { createReadAuthorizer, type ReadAuthorizer } from "../../scoping/read-authorizer.js";
 import { toIndexRelativePath } from "../../search/scopes.js";
 import { createPathLocator } from "./stored-paths.ts";
 import { type AiTool, AiToolError, defineTool, formatSize } from "./tool.ts";
@@ -283,13 +282,12 @@ function listFolderTool(deps: DriveToolsDeps): AiTool {
 
 export interface IndexScope {
   readonly ctx: ScopeContext;
-  readonly authorizer: ReadAuthorizer;
 }
 
 export interface IndexLookup {
   /** The identity's verified index scope, resolved once; `null` when the index cannot be used. */
   scope(): Promise<IndexScope | null>;
-  /** The index row for a stored path that round-trips and passes a live read check, else `null`. */
+  /** The index row for a stored path that round-trips, else `null`. */
   file(path: string): Promise<{ file: IndexedFile; scope: IndexScope } | null>;
 }
 
@@ -300,24 +298,23 @@ export function createIndexLookup(deps: DriveToolsDeps): IndexLookup {
     scope() {
       if (scope === undefined)
         scope = (async (): Promise<IndexScope | null> => {
-          const identity = await deps.mcp.identities.get(deps.principal.identityId);
-          const verified =
-            identity === null ? null : await deps.mcp.scopeResolver.verifiedIndexScopes(identity);
-          if (verified === null || !verified.available) return null;
+          const verified = await deps.mcp.scopeResolver.verifiedIndexScopes(
+            deps.principal.username,
+          );
+          if (!verified.available) return null;
           const ctx = await resolveScopeContext(
             deps.mcp.indexQueries,
             verified.scopes,
             trashPathOf(deps),
           );
-          if (ctx === null) return null;
-          return { ctx, authorizer: createReadAuthorizer({ storage: deps.principal.storage }) };
+          return ctx === null ? null : { ctx };
         })();
       return scope;
     },
     async file(path) {
       const resolved = await lookup.scope();
       if (resolved === null) return null;
-      const { ctx, authorizer } = resolved;
+      const { ctx } = resolved;
       const fsPath = toFsPath(ctx.scopes, path);
       const rootId = fsPath === null ? undefined : ctx.rootIdByName.get(fsPath.rootName);
       const file =
@@ -325,7 +322,6 @@ export function createIndexLookup(deps: DriveToolsDeps): IndexLookup {
           ? null
           : await deps.mcp.indexQueries.fileByPath(rootId, toIndexRelativePath(fsPath.fsPath));
       if (file === null || virtualPathFor(ctx, file.rootId, file.path) !== path) return null;
-      if (!(await authorizer.authorize({ path, kind: "file" })).allowed) return null;
       return { file, scope: resolved };
     },
   };

@@ -15,8 +15,8 @@ export interface DesktopChangesDeps {
   readonly journal: Pick<ChangeJournal, "read" | "end" | "epoch">;
   /** Every index root the indexer has created, by name. */
   readonly rootIds: () => Promise<Readonly<Record<string, number>>>;
-  /** The identity's verified index scopes, or `null` when the identity is gone. */
-  readonly scopes: (identityId: string) => Promise<VerifiedIndexScopesResult | null>;
+  /** The login's verified index scopes, by its username. */
+  readonly scopes: (username: string) => Promise<VerifiedIndexScopesResult>;
   /**
    * The roots this API journals its own changes under. Changes made through
    * fdrive reach the journal only for these, so a feed over any other root
@@ -114,8 +114,8 @@ export function createDesktopChanges(deps: DesktopChangesDeps) {
 
   /** The location's feed, or `null` when the journal cannot see all of its changes. */
   async function feed(principal: Principal): Promise<Feed | null> {
-    const verified = await deps.scopes(principal.identityId);
-    if (verified === null || !verified.available) return null;
+    const verified = await deps.scopes(principal.username);
+    if (!verified.available) return null;
     const roots = [...new Set(verified.scopes.map((scope) => scope.rootName))].sort();
     if (!roots.every((root) => deps.journaledRoots.has(root))) return null;
     const ids = await deps.rootIds();

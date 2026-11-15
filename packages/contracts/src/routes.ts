@@ -128,7 +128,7 @@ export const ROUTES = {
     clientEvents: "/api/v1/activity/client-events",
     /** GET: the history ID for one `path` of the caller's login -> `{ id }`. 404 before anything is recorded. */
     resolveFile: "/api/v1/activity/files/resolve",
-    /** GET: one file's journey -> `ActivityFileResponse`. `/:id/events`, `/:id/lineage`, `/:id/revisions` and `POST /:id/recheck` hang off it. */
+    /** GET: one file's journey -> `ActivityFileResponse`. `/:id/events`, `/:id/lineage` and `/:id/revisions` hang off it. */
     files: "/api/v1/activity/files",
     /** GET: `/:id/events` for one batch -> `PersonalActivityResponse` with a `batchSummary`. */
     batches: "/api/v1/activity/batches",
@@ -147,10 +147,8 @@ export const ROUTES = {
     /** GET: the caller's recent chats -> `ChatListResponse`. POST: start a chat -> `Chat` (201). */
     chats: "/api/v1/ai/chats",
   },
-  /** GET: version and configured providers -> `AboutResponse`. */
+  /** GET: version and whether setup is required -> `AboutResponse`. */
   about: "/api/v1/about",
-  /** GET, public: the enabled providers and their credential forms -> `ProvidersResponse`. */
-  providers: "/api/v1/providers",
   setup: {
     /** GET, public: whether setup is required -> `SetupStatusResponse`. */
     status: "/api/v1/setup/status",
@@ -158,8 +156,6 @@ export const ROUTES = {
     complete: "/api/v1/setup/complete",
   },
   admin: {
-    /** GET, admin only: the storage (the files folder) -> `AdminProvidersResponse`. */
-    providers: "/api/v1/admin/providers",
     /** GET, admin only: the local users -> `AdminUsersResponse`; POST: add one -> `AdminUser`. */
     users: "/api/v1/admin/users",
   },
@@ -174,6 +170,8 @@ export const ROUTES = {
     features: "/api/v1/system/features",
     /** GET/PUT, admin only: the address everyone opens fdrive at -> `PublicUrlSettings`. */
     publicUrl: "/api/v1/system/public-url",
+    /** GET/PATCH, admin only: the files folder's name and health -> `SystemStorage`. */
+    storage: "/api/v1/system/storage",
     /** GET/PUT, admin only: Office activation and editing permission. */
     office: "/api/v1/system/office",
     /** GET/PUT, admin only: the AI provider, model and key -> `SystemAiResponse`. */
@@ -245,11 +243,6 @@ export function grantRoute(id: string): string {
 /** `PATCH`/`DELETE`, admin only: one local user -> `AdminUser` / `OkResponse`. */
 export function adminUserRoute(username: string): string {
   return `${ROUTES.admin.users}/${encodeURIComponent(username)}`;
-}
-
-/** `PATCH`/`DELETE`, admin only: one configured provider. */
-export function adminProviderRoute(id: string): string {
-  return `${ROUTES.admin.providers}/${encodeURIComponent(id)}`;
 }
 
 /** GET: one job -> `JobStatus`. 404 for a job that belongs to another identity. */

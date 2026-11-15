@@ -17,9 +17,11 @@ describe("createChangeQueue", () => {
     const { writes, write } = recorder();
     const queue = createChangeQueue({ write, onError: vi.fn() });
     const content = { sha256: "c".repeat(64), size: 4, mtimeNs: 9n, ino: 3n, ctimeNs: 10n };
+    const stamp = { size: 4, mtimeNs: 9n, ino: 3n, ctimeNs: 12n, previousCtimeNs: 10n };
     queue.record("files", { kind: "changed", path: "alice/a.txt", content });
     queue.record("photos", { kind: "changed", path: "b.jpg" });
-    queue.record("files", { kind: "moved", path: "alice/a.txt", target: "alice/b.txt" });
+    queue.record("files", { kind: "moved", path: "alice/a.txt", target: "alice/b.txt", stamp });
+    queue.record("files", { kind: "moved", path: "alice/d", target: "alice/e" });
     expect(write).not.toHaveBeenCalled();
     await vi.waitFor(() => expect(write).toHaveBeenCalledTimes(2));
     expect(writes).toEqual([
@@ -27,7 +29,8 @@ describe("createChangeQueue", () => {
         "files",
         [
           { path: "alice/a.txt", content },
-          { path: "alice/a.txt", targetPath: "alice/b.txt" },
+          { path: "alice/a.txt", targetPath: "alice/b.txt", stamp },
+          { path: "alice/d", targetPath: "alice/e" },
         ],
       ],
       ["photos", [{ path: "b.jpg" }]],

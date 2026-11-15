@@ -20,11 +20,12 @@ import { createMetadataService } from "./service.js";
 
 const REQUIRED_ENV = {
   DATABASE_URL: "postgres://localhost/fdrive",
+  FDRIVE_STORAGE_ROOT: "/srv/files",
   FDRIVE_MASTER_KEY: Buffer.alloc(32, 7).toString("base64"),
 };
 
 /** Setup is complete, so the setup gate lets every route through. */
-const READY = async () => ({ required: false, providers: [] });
+const READY = async () => false;
 
 const ACCOUNT_ID = "00000000-0000-4000-8000-000000000001";
 const ALICE_IDENTITY_ID = "00000000-0000-4000-8000-0000000000a1";
@@ -131,7 +132,7 @@ async function buildHarness(withActivity = false) {
     startedAt: new Date(CLOCK_ISO),
     clock,
     principalResolver: async () => principal,
-    connectionStatus: READY,
+    setupRequired: READY,
     registerRoutes: (groups) => {
       registerFsRoutes(groups, {
         bus,
@@ -148,7 +149,6 @@ async function buildHarness(withActivity = false) {
           resolver: {
             verifiedIndexScopes: async () => ({ available: false, reason: "no_roots" }),
           },
-          identities: { get: async () => null },
         },
       });
       registerMetadataRoutes(groups, {
@@ -620,7 +620,7 @@ describe("tag CRUD: error mapping", () => {
       startedAt: new Date(CLOCK_ISO),
       clock,
       principalResolver: async () => principal,
-      connectionStatus: READY,
+      setupRequired: READY,
       registerRoutes: (groups) => registerMetadataRoutes(groups, { metadata }),
     });
   }

@@ -4,7 +4,6 @@ import {
   accounts,
   apiTokens,
   backupConfiguration,
-  credentials,
   favorites,
   fileTags,
   folderViews,
@@ -20,16 +19,16 @@ import {
 } from "../schema/app.js";
 import { files } from "../schema/idx.js";
 import { createAiChatRepo } from "./ai-chats.js";
+import { createLoginRepo } from "./logins.js";
 import { validateCanonicalUuid } from "./logins-types.js";
 import { selectPathChunks } from "./path-chunks.js";
+import { isUniqueViolation } from "./pg-errors.js";
 import { createSystemEventRepo } from "./system-events.js";
 import type {
   Account,
   AccountRepo,
   ApiToken,
   ApiTokenRepo,
-  Credential,
-  CredentialRepo,
   Favorite,
   FavoriteKind,
   FavoriteRepo,
@@ -72,33 +71,6 @@ async function lockMetadataIdentity(db: SqlExecutor, identityId: string): Promis
   `);
 }
 
-/** The Postgres SQLSTATE for a unique-constraint violation. */
-const UNIQUE_VIOLATION_CODE = "23505";
-
-function hasCode(error: unknown, code: string): boolean {
-  return (
-    typeof error === "object" &&
-    error !== null &&
-    "code" in error &&
-    (error as { code?: unknown }).code === code
-  );
-}
-
-/**
- * True when `error` is a Postgres unique-constraint violation. node-postgres
- * throws the raw driver error with `.code` set directly, but Drizzle wraps
- * it in its own `DrizzleQueryError` with the driver error attached as
- * `.cause`, so both shapes are checked.
- */
-function isUniqueViolation(error: unknown): boolean {
-  if (hasCode(error, UNIQUE_VIOLATION_CODE)) {
-    return true;
-  }
-  const cause =
-    typeof error === "object" && error !== null ? (error as { cause?: unknown }).cause : undefined;
-  return hasCode(cause, UNIQUE_VIOLATION_CODE);
-}
-
 function toProvider(row: typeof providers.$inferSelect): Provider {
   return {
     id: row.id,
@@ -129,17 +101,6 @@ function toIdentity(row: typeof identities.$inferSelect): Identity {
     externalUsername: row.externalUsername,
     createdAt: row.createdAt,
     lastLoginAt: row.lastLoginAt,
-  };
-}
-
-function toCredential(row: typeof credentials.$inferSelect): Credential {
-  return {
-    identityId: row.identityId,
-    ciphertext: new Uint8Array(row.ciphertext),
-    keyId: row.keyId,
-    cachedToken: row.cachedToken,
-    cachedTokenExpiresAt: row.cachedTokenExpiresAt,
-    updatedAt: row.updatedAt,
   };
 }
 
@@ -311,45 +272,6 @@ function createIdentityRepo(db: Db): IdentityRepo {
     async listAll() {
       const rows = await db.select().from(identities);
       return rows.map(toIdentity);
-    },
-  };
-}
-
-function createCredentialRepo(db: Db): CredentialRepo {
-  return {
-    async put(input) {
-      await db
-        .insert(credentials)
-        .values({
-          identityId: input.identityId,
-          ciphertext: Buffer.from(input.ciphertext),
-          keyId: input.keyId,
-        })
-        .onConflictDoUpdate({
-          target: credentials.identityId,
-          set: {
-            ciphertext: Buffer.from(input.ciphertext),
-            keyId: input.keyId,
-            updatedAt: new Date(),
-          },
-        });
-    },
-    async get(identityId) {
-      const [row] = await db
-        .select()
-        .from(credentials)
-        .where(eq(credentials.identityId, identityId));
-      return row ? toCredential(row) : null;
-    },
-    async setCachedToken(identityId, token) {
-      await db
-        .update(credentials)
-        .set({
-          cachedToken: token?.sealed ?? null,
-          cachedTokenExpiresAt: token?.expiresAt ?? null,
-          updatedAt: new Date(),
-        })
-        .where(eq(credentials.identityId, identityId));
     },
   };
 }
@@ -1046,19 +968,6 @@ export function createLocalUserRepo(db: Db): LocalUserRepo {
       const [row] = await db.select({ value: count() }).from(localUsers);
       return row?.value ?? 0;
     },
-    async create(input) {
-      try {
-        const [row] = await db
-          .insert(localUsers)
-          .values({ username: input.username, passwordHash: input.passwordHash })
-          .returning();
-        if (row === undefined) throw new Error("local user insert returned no row");
-        return toLocalUser(row);
-      } catch (error) {
-        if (isUniqueViolation(error)) throw new ConflictError("username already exists");
-        throw error;
-      }
-    },
     async update(username, patch) {
       const [row] = await db
         .update(localUsers)
@@ -1204,7 +1113,7 @@ export function createRepos(db: Db): Repos {
     localGrants: createLocalGrantRepo(db),
     accounts: createAccountRepo(db),
     identities: createIdentityRepo(db),
-    credentials: createCredentialRepo(db),
+    logins: createLoginRepo(db),
     sessions: createSessionRepo(db),
     settings: createSettingsRepo(db),
     apiTokens: createApiTokenRepo(db),

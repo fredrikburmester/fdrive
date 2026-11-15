@@ -30,6 +30,5 @@ export {
   selectionReducer,
 } from "@/lib/files/selection";
 export { readJson, type StorageLike, writeJson } from "@/lib/files/storage";
-export { capabilitiesFor } from "@/lib/identity/capabilities";
 export { trashAvailabilityFor } from "@/lib/trash/format";
 export type { ApiClient };

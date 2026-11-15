@@ -50,7 +50,6 @@ export {
 export { IdentitySummary, LoginRequest, LoginResponse, MeResponse } from "./auth.ts";
 export { createBackupClient } from "./backup-client.ts";
 export {
-  BackupAttachmentInput,
   BackupDestinationInput,
   BackupEstimateJob,
   BackupRecoveryStatus,
@@ -164,19 +163,6 @@ export {
 export * from "./personal-activity.ts";
 export * from "./processing-failures.ts";
 export {
-  AdminProvider,
-  AdminProvidersResponse,
-  AdminProviderUpdateRequest,
-  ProviderCapabilities,
-  ProviderField,
-  ProviderFieldKind,
-  ProviderFieldValues,
-  ProviderName,
-  ProvidersResponse,
-  ProviderType,
-  PublicProvider,
-} from "./providers.ts";
-export {
   HttpOrigin,
   PUBLIC_URL_SETTINGS_KEY,
   PublicUrlSettings,
@@ -185,7 +171,6 @@ export {
 export type { Routes } from "./routes.ts";
 export {
   accountTokenRoute,
-  adminProviderRoute,
   adminUserRoute,
   chatActionRoute,
   chatCancelRoute,
@@ -225,6 +210,13 @@ export {
   SetupStatusResponse,
 } from "./setup.ts";
 export * from "./shares.ts";
+export {
+  DEFAULT_STORAGE_NAME,
+  STORAGE_NAME_SETTINGS_KEY,
+  StorageName,
+  SystemStorage,
+  SystemStorageUpdateRequest,
+} from "./storage.ts";
 export {
   ImageEmbeddingClearJob,
   ImageEmbeddingRebuildJob,
@@ -290,7 +282,6 @@ export {
 export {
   isValidPath,
   SystemTrashQuery,
-  TrashConfiguration,
   TrashEntry,
   TrashListResponse,
   TrashPurgeRequest,
@@ -299,6 +290,5 @@ export {
   TrashSettings,
   TrashSettingsUpdateRequest,
   TrashStatusResponse,
-  TrashStrategy,
 } from "./trash.ts";
 export * from "./users.ts";

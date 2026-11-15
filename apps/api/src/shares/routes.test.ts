@@ -5,7 +5,7 @@ import {
   ShareEntriesResponse,
   SharesResponse,
 } from "@fdrive/contracts";
-import { type ProviderModule, StorageError } from "@fdrive/core";
+import { StorageError } from "@fdrive/core";
 import type { IndexedFile, IndexQueries } from "@fdrive/db";
 import { describe, expect, it, vi } from "vitest";
 import type { ScopeResolver } from "../scoping/resolver.ts";
@@ -89,10 +89,9 @@ describe("share management", () => {
     expect(h.read("/a.docx")).toBe("alice data");
   });
 
-  it("refuses the Trash and backup folders, missing paths, colliding names and a file to upload into", async () => {
+  it("refuses fdrive's own folders, missing paths, colliding names and a file to upload into", async () => {
     const h = sharesHarness({ trashPath: "/.trash" });
     h.write("/.trash/old.txt", "gone");
-    h.write("/.fdrive-backups/b", "backup");
     h.write("/.fdrive-desktop/mac/trash/old.txt", "the Mac's Trash");
     h.write("/one/report.txt", "one");
     h.write("/two/Report.txt", "two");
@@ -102,7 +101,6 @@ describe("share management", () => {
     for (const paths of [
       ["/.trash"],
       ["/.trash/old.txt"],
-      ["/.fdrive-backups/b"],
       ["/.fdrive-desktop/mac/trash/old.txt"],
       ["/a.docx", "/.trash"],
     ])
@@ -240,38 +238,6 @@ describe("share management", () => {
     expect(ManagedShare.parse(await (await h.request(path, { cookie })).json()).maxDownloads).toBe(
       2_147_483_647,
     );
-  });
-
-  it("answers for storage that no longer shares, or cannot be reached, without a share", async () => {
-    let strategy: ProviderModule["shares"] = "owned";
-    const h = sharesHarness({
-      local: (module) => ({
-        ...module,
-        get shares() {
-          return strategy;
-        },
-      }),
-    });
-    const cookie = await h.login();
-    const { id } = await h.create(cookie);
-    strategy = "none";
-    for (const response of [
-      await h.request(base, { cookie }),
-      await h.request(`${base}/${id}`, { cookie }),
-      await h.request(pub(id)),
-      await h.request(`${pub(id)}/download`),
-    ]) {
-      expect(response.status).toBe(400);
-      expect(await error(response)).toMatchObject({
-        kind: "unsupported",
-        details: { capability: "shares" },
-      });
-    }
-    strategy = "owned";
-    vi.spyOn(h.providers, "forIdentity").mockRejectedValue(new Error("private detail"));
-    const unreachable = await h.request(pub(id));
-    expect(unreachable.status).toBe(502);
-    expect(await unreachable.text()).not.toContain("private detail");
   });
 
   it("records share create, update and revoke per account without copying any secret", async () => {
@@ -565,7 +531,6 @@ describe("public shares", () => {
     const h = sharesHarness({ trashPath: "/.trash" });
     h.write("/folder/a.txt", "content");
     h.write("/.trash/old.txt", "gone");
-    h.write("/.fdrive-backups/b", "backup");
     h.write("/.fdrive-desktop/mac/trash/old.txt", "the Mac's Trash");
     const cookie = await h.login();
     const { id } = await h.create(cookie, { paths: ["/"] });
@@ -578,12 +543,7 @@ describe("public shares", () => {
     ]);
     expect(await names(await h.request(`${path}/entries?path=/folder`))).toEqual(["a.txt"]);
     expect(await (await h.request(`${path}/download?path=/folder/a.txt`)).text()).toBe("content");
-    for (const hidden of [
-      "/.trash/old.txt",
-      "/.fdrive-backups/b",
-      "/.fdrive-desktop/mac/trash/old.txt",
-      "/nope",
-    ])
+    for (const hidden of ["/.trash/old.txt", "/.fdrive-desktop/mac/trash/old.txt", "/nope"])
       expect((await h.request(`${path}/download?path=${hidden}`)).status, hidden).toBe(404);
     expect((await h.request(`${path}/entries?path=/.trash`)).status).toBe(404);
     // A link that followed its item into the Trash is not found until it comes back out.

@@ -57,7 +57,6 @@ describe("serverApiClient", () => {
     const body = {
       version: "development",
       uptimeSeconds: 1,
-      providers: [{ type: "local", label: "Local folder" }],
       setupRequired: false,
     };
     const fetchImpl = vi

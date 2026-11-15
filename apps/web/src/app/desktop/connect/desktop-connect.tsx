@@ -63,7 +63,7 @@ export function DesktopConnect({
                 {request.data.code}
               </p>
               <div className="min-w-0 break-words rounded-lg border p-3 text-sm">
-                <p>{identity.providerLabel}</p>
+                <p>{me.data.storageName}</p>
                 <p className="text-muted-foreground">{identity.username}</p>
               </div>
               {request.data.supportsWrites && (

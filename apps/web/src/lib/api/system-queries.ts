@@ -1,7 +1,6 @@
 "use client";
 
 import type {
-  AdminProviderUpdateRequest,
   AdminUserCreateRequest,
   AdminUserUpdateRequest,
   FeaturesUpdateRequest,
@@ -14,6 +13,7 @@ import type {
   OcrSettingsUpdateRequest,
   SetupCompleteRequest,
   SystemActivityId,
+  SystemStorageUpdateRequest,
 } from "@fdrive/contracts";
 import {
   keepPreviousData,
@@ -74,16 +74,15 @@ export function useSetupComplete() {
       apiClient.setupComplete(token, request),
     onSuccess: (me) => {
       queryClient.setQueryData(queryKeys.auth.me(), me);
-      void queryClient.invalidateQueries({ queryKey: queryKeys.providers.list() });
     },
   });
 }
 
-/** The files folder's storage row (name, reachability, Trash) for System > General. */
-export function useAdminProviders() {
+/** The files folder's name and health for System > General. */
+export function useSystemStorage() {
   return useQuery({
-    queryKey: queryKeys.admin.providers(),
-    queryFn: () => apiClient.adminProviders(),
+    queryKey: queryKeys.system.storage(),
+    queryFn: () => apiClient.systemStorage(),
   });
 }
 
@@ -109,21 +108,19 @@ function useInvalidatingMutation<TInput, TOutput>(
 }
 
 /**
- * Renames the storage and refreshes everywhere the name shows: the admin
- * view, the login page's list and the signed-in account's logins.
+ * Renames the storage and refreshes everywhere the name shows: System >
+ * General and the sidebar, through `/auth/me`.
  */
-export const useAdminUpdateProvider = () =>
+export const useUpdateSystemStorage = () =>
   useInvalidatingMutation(
     "general",
     false,
-    ({ id, patch }: { id: string; patch: AdminProviderUpdateRequest }) =>
-      apiClient.adminUpdateProvider(id, patch),
-    queryKeys.admin.providers(),
-    queryKeys.providers.list(),
+    (input: SystemStorageUpdateRequest) => apiClient.systemUpdateStorage(input),
+    queryKeys.system.storage(),
     queryKeys.auth.me(),
   );
 
-/** The files folder's users for System > Users; `available` is false without a folder. */
+/** The files folder's users for System > Users. */
 export function useAdminUsers() {
   return useQuery({
     queryKey: queryKeys.admin.users(),
@@ -150,17 +147,13 @@ export const useAdminUpdateUser = () =>
     queryKeys.admin.users(),
   );
 
-/**
- * Removes a local user and their login; their files stay in the folder. The
- * provider list is refreshed too, since its login counts include theirs.
- */
+/** Removes a local user and their login; their files stay in the folder. */
 export const useAdminDeleteUser = () =>
   useInvalidatingMutation(
     "users",
     false,
     (username: string) => apiClient.adminDeleteUser(username),
     queryKeys.admin.users(),
-    queryKeys.admin.providers(),
   );
 
 /** Indexer health, stats, and settings for `System > Indexer`. Polls every 5s while mounted. */

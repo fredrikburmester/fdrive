@@ -1,7 +1,4 @@
 import { randomUUID } from "node:crypto";
-import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import {
   DesktopPairing,
   DesktopWriteEntry,
@@ -38,7 +35,6 @@ describe("metadata follows the Mac's writes as they commit", () => {
   let composed: Awaited<ReturnType<typeof composeApp>>;
   let database: ReturnType<typeof createDb>;
   let repos: Repos;
-  let stateDir: string;
   let alice: string;
   let bob: string;
   let identityId: string;
@@ -70,15 +66,12 @@ describe("metadata follows the Mac's writes as they commit", () => {
         ],
       }),
     ]);
-    await seedLocalUsers(postgres.connectionString, storage);
-    stateDir = await mkdtemp(join(tmpdir(), "fdrive-desktop-metadata-"));
+    await seedLocalUsers(postgres.connectionString, storage, ["alice"]);
     composed = await composeApp(
       loadConfig({
         DATABASE_URL: postgres.connectionString,
         FDRIVE_STORAGE_ROOT: storage.root,
         FDRIVE_MASTER_KEY: Buffer.alloc(32, 23).toString("base64"),
-        FDRIVE_DESKTOP_STATE_DIR: stateDir,
-        FDRIVE_ADMIN_USERS: "alice",
         // Configured so the API journals its changes and the indexer listener
         // runs; no indexer does, the last test notifies for it.
         FDRIVE_INDEX_ROOTS: JSON.stringify([
@@ -106,7 +99,6 @@ describe("metadata follows the Mac's writes as they commit", () => {
     await database?.close();
     await storage?.stop();
     await postgres?.stop();
-    if (stateDir) await rm(stateDir, { recursive: true, force: true });
   }, 180_000);
 
   async function call(
@@ -134,7 +126,7 @@ describe("metadata follows the Mac's writes as they commit", () => {
 
   async function login(username: string): Promise<string> {
     const response = await call(ROUTES.auth.login, {
-      body: { credential: { username, password: `${username}-pass` } },
+      body: { username, password: `${username}-pass` },
     });
     expect(response.status).toBe(200);
     return cookieFrom(response);
@@ -297,7 +289,7 @@ describe("metadata follows the Mac's writes as they commit", () => {
     expect(await sharedWithBob()).toContain("Binned");
   });
 
-  it("leaves a commit unconfirmed when sharing cannot move, and resolving it moves sharing", async () => {
+  it("never reports a commit whose sharing cannot move, and the Mac's retry moves it", async () => {
     const doc = await link("/Locked/doc.txt");
     const folder = await stat("/Locked");
     await database.pool.query(
@@ -306,38 +298,35 @@ describe("metadata follows the Mac's writes as they commit", () => {
     await database.pool.query(
       "CREATE TRIGGER refuse_locked_grant BEFORE UPDATE ON app.local_grants FOR EACH ROW EXECUTE FUNCTION app.refuse_locked_grant()",
     );
-    const operationId = randomUUID();
+    const move = {
+      operationId: randomUUID(),
+      itemId: folder.id,
+      parentId: "root",
+      name: "Unlocked",
+      base: folder.version,
+    };
     try {
-      await ok(
-        call(`${base}/moves`, {
-          headers,
-          body: {
-            operationId,
-            itemId: folder.id,
-            parentId: "root",
-            name: "Unlocked",
-            base: folder.version,
-          },
-        }),
-      );
-      const commit = await call(`${base}/operations/${operationId}/commit`, { headers, body: {} });
-      // Never success: the receipt and the link's move went with the grant's.
-      expect(commit.status).toBe(409);
-      expect(await commit.json()).toMatchObject({
-        error: { details: { code: "operation_uncertain" } },
+      await ok(call(`${base}/moves`, { headers, body: move }));
+      const commit = await call(`${base}/operations/${move.operationId}/commit`, {
+        headers,
+        body: {},
       });
+      // Never success: the receipt and the link's move went with the grant's.
+      // A server error is one the Mac retries on its own.
+      expect(commit.status).toBe(500);
       expect(await linkPaths(doc)).toEqual(["/Locked/doc.txt"]);
       expect(await grantPaths()).toContain("/Locked");
+      // Retried while sharing still cannot move, it is still never success.
+      expect((await call(`${base}/moves`, { headers, body: move })).status).toBe(500);
     } finally {
       await database.pool.query("DROP TRIGGER refuse_locked_grant ON app.local_grants");
       await database.pool.query("DROP FUNCTION app.refuse_locked_grant()");
     }
-    // An administrator finds the folder moved and resolves it as published.
-    const resolved = await call(`/api/v1/desktop/recovery/${identityId}/${operationId}/resolve`, {
-      cookie: alice,
-      body: { outcome: "published" },
+    // The Mac's retry starts with the same request; disk shows the folder moved.
+    expect(await ok(call(`${base}/moves`, { headers, body: move }))).toMatchObject({
+      state: "completed",
+      item: { id: folder.id, path: "/Unlocked" },
     });
-    expect(resolved.status, await resolved.clone().text()).toBe(200);
     expect(await linkPaths(doc)).toEqual(["/Unlocked/doc.txt"]);
     expect(await grantPaths()).toContain("/Unlocked");
     expect(await grantPaths()).not.toContain("/Locked");

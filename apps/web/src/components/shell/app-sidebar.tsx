@@ -3,6 +3,7 @@
 import {
   ChevronsUpDown,
   Clock3,
+  HardDrive,
   Info,
   Link2,
   LogOut,
@@ -16,7 +17,6 @@ import type { Route } from "next";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useTheme } from "next-themes";
-import { ProviderIcon } from "@/components/identity/provider-icon";
 import { FavoritesSection } from "@/components/shell/favorites-section";
 import { FolderTree } from "@/components/shell/folder-tree";
 import { useShellMe } from "@/components/shell/page-header";
@@ -54,8 +54,6 @@ import {
   SidebarMenuItem,
 } from "@/components/ui/sidebar";
 import { useLogout } from "@/lib/api/auth-queries";
-import { capabilitiesFor } from "@/lib/identity/capabilities";
-import { loginDisplay } from "@/lib/identity/login-display";
 import { SYSTEM_SCOPE_CAPTION } from "@/lib/system/pages";
 
 const THEME_OPTIONS = [
@@ -96,8 +94,7 @@ export function AppSidebar() {
   const logout = useLogout();
   const pathname = usePathname();
 
-  const identity = me?.identity;
-  const login = identity ? loginDisplay(identity) : undefined;
+  const username = me?.identity.username;
 
   return (
     <Sidebar className="border-r border-sidebar-border backdrop-blur-xl">
@@ -154,7 +151,7 @@ export function AppSidebar() {
                   <span>Shares</span>
                 </SidebarMenuButton>
               </SidebarMenuItem>
-              {capabilitiesFor(me).trash && (
+              {me?.trash === true && (
                 <SidebarMenuItem>
                   <SidebarMenuButton
                     isActive={isTrashRoute(pathname)}
@@ -188,13 +185,13 @@ export function AppSidebar() {
             render={
               <SidebarMenuButton size="lg">
                 <Avatar className="size-6">
-                  <AvatarFallback>{login ? avatarInitials(login.title) : "?"}</AvatarFallback>
+                  <AvatarFallback>{username ? avatarInitials(username) : "?"}</AvatarFallback>
                 </Avatar>
                 <div className="flex min-w-0 flex-1 flex-col text-left leading-tight">
-                  <span className="truncate text-sm font-medium">{login?.title ?? "..."}</span>
+                  <span className="truncate text-sm font-medium">{username ?? "..."}</span>
                   <span className="flex items-center gap-1 truncate text-xs text-muted-foreground">
-                    {identity && <ProviderIcon type={identity.providerType} />}
-                    <span className="truncate">{login?.detail ?? ""}</span>
+                    {me && <HardDrive aria-hidden className="size-3.5 shrink-0" />}
+                    <span className="truncate">{me?.storageName ?? ""}</span>
                   </span>
                 </div>
                 <ChevronsUpDown className="ml-auto size-4 text-muted-foreground" />
@@ -203,7 +200,7 @@ export function AppSidebar() {
           />
           <DropdownMenuContent align="start" className="w-56">
             <DropdownMenuGroup>
-              <DropdownMenuLabel>{login?.title ?? "Account"}</DropdownMenuLabel>
+              <DropdownMenuLabel>{username ?? "Account"}</DropdownMenuLabel>
               <DropdownMenuSub>
                 <DropdownMenuSubTrigger>
                   <Monitor />

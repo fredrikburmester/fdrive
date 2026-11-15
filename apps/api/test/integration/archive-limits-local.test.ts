@@ -42,7 +42,7 @@ describe("archive expansion limits against a local folder", () => {
     const login = await composed.app.request("/api/v1/auth/login", {
       method: "POST",
       headers: { "x-requested-with": "fdrive", "content-type": "application/json" },
-      body: JSON.stringify({ credential: { username: "alice", password: "alice-pass" } }),
+      body: JSON.stringify({ username: "alice", password: "alice-pass" }),
     });
     expect(login.status).toBe(200);
     cookie = login.headers.get("set-cookie")?.split(";")[0] ?? "";

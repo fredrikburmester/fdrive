@@ -1,11 +1,10 @@
 import { type ContentStamp, toFsPath } from "@fdrive/core";
-import type { IdentityRepo, IndexedContent, IndexQueries, IndexRef } from "@fdrive/db";
+import type { IndexedContent, IndexQueries, IndexRef } from "@fdrive/db";
 import type { Principal } from "../auth/principal.js";
 import type { ScopeResolver } from "../scoping/resolver.js";
 import { roundTripVirtualPath } from "../scoping/round-trip.js";
 
 export interface IndexedContentDeps {
-  readonly identities: Pick<IdentityRepo, "get">;
   readonly resolver: Pick<ScopeResolver, "verifiedIndexScopes">;
   readonly index: Pick<IndexQueries, "contentAt">;
 }
@@ -30,9 +29,7 @@ export function createIndexedContentLookup(deps: IndexedContentDeps): IndexedCon
   return async (principal, paths) => {
     const found = new Map<string, IndexedContent>();
     if (paths.length === 0) return found;
-    const identity = await deps.identities.get(principal.identityId);
-    if (identity === null) return found;
-    const verified = await deps.resolver.verifiedIndexScopes(identity);
+    const verified = await deps.resolver.verifiedIndexScopes(principal.username);
     if (!verified.available) return found;
     const wanted = new Map<string, { ref: IndexRef; path: string }>();
     for (const path of paths) {
@@ -56,12 +53,12 @@ export function createIndexedContentLookup(deps: IndexedContentDeps): IndexedCon
 
 /**
  * The indexed digest, when `row` provably describes the bytes of the file
- * `stamp` was just read from: the indexer's own read stamped the row (see
- * `idx.files.inode`), and the file still has that inode and change time as
- * well as the row's size and modification time. A client can set a
- * modification time but neither of the other two, and any write moves the
- * change time on, so size and time alone never pass. Null otherwise: the
- * caller hashes the file.
+ * `stamp` was just read from: the row is stamped (see `idx.files.inode`:
+ * the indexer hashed those bytes itself, or the API hashed them as it wrote
+ * them), and the file still has that inode and change time as well as the
+ * row's size and modification time. A client can set a modification time but
+ * neither of the other two, and any write moves the change time on, so size
+ * and time alone never pass. Null otherwise: the caller hashes the file.
  */
 export function indexedVersion(
   row: IndexedContent | undefined,

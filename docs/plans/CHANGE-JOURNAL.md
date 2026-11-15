@@ -2,7 +2,7 @@
 
 Started 2026-11-14. fdrive owns every write to the files folder, so one durable, numbered record
 of file changes can replace the separate ways each part of fdrive finds them today. Builds on
-[how changes arrive](../INDEXER.md#how-changes-arrive) and the [storage port](../STORAGE-PROVIDERS.md).
+[how changes arrive](../INDEXER.md#how-changes-arrive) and the [storage port](../STORAGE.md).
 
 ## Outcome
 
@@ -35,7 +35,8 @@ Migration `0024_change_journal` drops `idx.work` and adds two tables
 | `path` | Root-relative, `/`-separated, no leading slash (`alice/docs/a.pdf`), as `idx.files.path`. |
 | `target_path` | Set for a move: `path` moved to `target_path`. Without it: look at `path` again (a file, a folder, or nothing any more). |
 | `source` | `api`, `watcher`, `scan` or `ocr`, checked by a constraint. |
-| `sha256`, `size`, `mtime_ns`, `inode`, `ctime_ns` | An upload's content hint, as `idx.work` had it: the API's digest and the file it published. Only `api` rows carry one. |
+| `sha256`, `size`, `mtime_ns`, `inode`, `ctime_ns` | An upload's content hint, as `idx.work` had it: the API's digest and the file exactly as published. A file move's row carries the four besides the digest: the file exactly as the rename left it. Only `api` rows carry either. |
+| `previous_ctime_ns` | A file move's: the file's change time just before the rename (migration `0032_change_previous_ctime`), so the indexer can carry its [stamp](../INDEXER.md#stamps) across. |
 | `created_at` | When the writing transaction started. Pruning uses it. |
 
 Indexes: `(root_id, id)` for reading a root from a position, `(created_at)` for pruning.

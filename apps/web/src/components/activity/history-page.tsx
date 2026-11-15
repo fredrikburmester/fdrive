@@ -469,12 +469,7 @@ export function HistoryPage({ fileId, batchId }: { fileId?: string; batchId?: st
           </p>
         )}
         <p className="text-xs text-muted-foreground">
-          {first?.coverage.observations === "watcher_and_refresh"
-            ? "Changes made outside fdrive appear when the storage watcher or a refresh detects them."
-            : first?.coverage.observations === "refresh"
-              ? "This storage has no watcher, so changes made outside fdrive appear only when a refresh detects them."
-              : "Changes made outside fdrive are not detected here."}{" "}
-          Watcher gaps, unavailable storage and cached native opens can leave gaps in the journey.
+          Changes made outside fdrive appear once the indexer notices them.
         </p>
       </main>
     </>
@@ -482,21 +477,6 @@ export function HistoryPage({ fileId, batchId }: { fileId?: string; batchId?: st
 }
 function JourneySummary({ fileId }: { fileId: string }) {
   const summary = useActivityFile(fileId);
-  const [checking, setChecking] = useState(false);
-  async function recheck() {
-    setChecking(true);
-    try {
-      const result = (await activityRequest(`/files/${fileId}/recheck`, { method: "POST" })) as {
-        checked: boolean;
-      };
-      if (!result.checked) toast.error("Could not check this location right now");
-      await summary.refetch();
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Could not recheck file");
-    } finally {
-      setChecking(false);
-    }
-  }
   if (summary.isPending) return <p role="status">Finding the current location…</p>;
   if (summary.isError) return <p role="alert">{summary.error.message}</p>;
   const file = summary.data;
@@ -513,14 +493,6 @@ function JourneySummary({ fileId }: { fileId: string }) {
         {file.label && `${file.label} · `}Revision records describe changes; earlier file contents
         are not stored.
       </p>
-      <Button
-        variant="ghost"
-        className="mt-2 min-h-11"
-        disabled={checking}
-        onClick={() => void recheck()}
-      >
-        {checking ? "Checking…" : "Recheck location"}
-      </Button>
     </div>
   );
 }

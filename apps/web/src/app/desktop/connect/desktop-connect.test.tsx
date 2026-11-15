@@ -11,12 +11,13 @@ afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
 });
-const identity = makeIdentity({ providerLabel: "Personal", username: "alice" });
+const identity = makeIdentity({ username: "alice" });
+const me = makeMe({ identity, storageName: "Personal" });
 function mount(client = new QueryClient({ defaultOptions: { queries: { retry: false } } })) {
-  vi.spyOn(apiClient, "me").mockResolvedValue(makeMe({ identity }));
+  vi.spyOn(apiClient, "me").mockResolvedValue(me);
   render(
     <QueryClientProvider client={client}>
-      <DesktopConnect requestId="request" initialMe={makeMe({ identity })} />
+      <DesktopConnect requestId="request" initialMe={me} />
     </QueryClientProvider>,
   );
   return client;
@@ -74,9 +75,7 @@ it("refreshes the login's names in an open approval screen as plain text", async
   pairing();
   const client = mount();
   await screen.findByText("Personal");
-  vi.spyOn(apiClient, "me").mockResolvedValue(
-    makeMe({ identity: { ...identity, providerLabel: "<b>Home storage</b>" } }),
-  );
+  vi.spyOn(apiClient, "me").mockResolvedValue({ ...me, storageName: "<b>Home storage</b>" });
   await client.invalidateQueries({ queryKey: ["auth", "me"] });
   await waitFor(() => expect(screen.getByText("<b>Home storage</b>")).toBeDefined());
   expect(document.querySelector("b")).toBeNull();

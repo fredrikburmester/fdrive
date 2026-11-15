@@ -24,12 +24,12 @@ export interface RegisterSetupRoutesDeps {
 }
 
 /**
- * The limiter key setup endpoints share, distinct from login's own
- * `${block}|${provider}|${username}` keys. It is keyed on the address block
+ * The limiter key setup endpoints share, distinct from the password check's
+ * own `${block}|${username}` keys. It is keyed on the address block
  * (`addressBlock`), as those are: an IPv6 caller sources from anywhere in
  * its /64, so a raw address would hand it a fresh setup allowance per
- * attempt and an unbounded supply of slots in the one limiter map login,
- * identity re-authentication and setup all share. It is passed ungrouped,
+ * attempt and an unbounded supply of slots in the one limiter map every
+ * password check and setup share. It is passed ungrouped,
  * like `loginIpKey`: one block yields exactly one of these keys, so a group
  * budget could never bind on it, and spending one of the block's grouped
  * slots would only shrink the budget its username keys have.

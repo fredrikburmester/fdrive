@@ -76,16 +76,9 @@ import {
   type RetryProcessingFailuresRequest,
   RetryProcessingFailuresResponse,
 } from "./processing-failures.ts";
-import {
-  AdminProvider,
-  AdminProvidersResponse,
-  type AdminProviderUpdateRequest,
-  ProvidersResponse,
-} from "./providers.ts";
 import { PublicUrlSettings, type PublicUrlUpdateRequest } from "./public-url.ts";
 import {
   accountTokenRoute,
-  adminProviderRoute,
   adminUserRoute,
   chatActionRoute,
   chatCancelRoute,
@@ -115,6 +108,7 @@ import {
   SharesResponse,
   type UpdateShareRequest,
 } from "./shares.ts";
+import { SystemStorage, type SystemStorageUpdateRequest } from "./storage.ts";
 import {
   IndexerActionResponse,
   type IndexerClearRequest,
@@ -231,6 +225,10 @@ export interface ApiClient {
   systemUpdateFeatures(input: FeaturesUpdateRequest): Promise<SystemFeaturesResponse>;
   systemPublicUrl(): Promise<PublicUrlSettings>;
   systemUpdatePublicUrl(input: PublicUrlUpdateRequest): Promise<PublicUrlSettings>;
+  /** Admin only: the files folder's name and health. */
+  systemStorage(): Promise<SystemStorage>;
+  /** Admin only: renames the storage. */
+  systemUpdateStorage(input: SystemStorageUpdateRequest): Promise<SystemStorage>;
   systemOffice(): Promise<SystemOfficeResponse>;
   systemUpdateOffice(input: OfficeSettingsUpdateRequest): Promise<SystemOfficeResponse>;
   systemAi(): Promise<SystemAiResponse>;
@@ -314,10 +312,6 @@ export interface ApiClient {
   thumbUrl(path: string, size: ThumbSize): string;
   setupStatus(): Promise<SetupStatusResponse>;
   setupComplete(setupToken: string, req: SetupCompleteRequest): Promise<MeResponse>;
-  /** Public: the enabled providers with their credential forms, for the login page. */
-  providers(): Promise<ProvidersResponse>;
-  adminProviders(): Promise<AdminProvidersResponse>;
-  adminUpdateProvider(id: string, patch: AdminProviderUpdateRequest): Promise<AdminProvider>;
   adminUsers(): Promise<AdminUsersResponse>;
   adminCreateUser(req: AdminUserCreateRequest): Promise<AdminUser>;
   adminUpdateUser(username: string, patch: AdminUserUpdateRequest): Promise<AdminUser>;
@@ -798,10 +792,6 @@ export function createApiClient(options: ApiClientOptions = {}): ApiClient {
       });
     },
 
-    providers: () => get(ROUTES.providers, ProvidersResponse),
-    adminProviders: () => get(ROUTES.admin.providers, AdminProvidersResponse),
-    adminUpdateProvider: (id: string, input: AdminProviderUpdateRequest) =>
-      patch(adminProviderRoute(id), AdminProvider, { jsonBody: input }),
     adminUsers: () => get(ROUTES.admin.users, AdminUsersResponse),
     adminCreateUser: (req: AdminUserCreateRequest) =>
       post(ROUTES.admin.users, AdminUser, { jsonBody: req }),
@@ -827,6 +817,12 @@ export function createApiClient(options: ApiClientOptions = {}): ApiClient {
     },
     systemUpdatePublicUrl(input: PublicUrlUpdateRequest): Promise<PublicUrlSettings> {
       return put(ROUTES.system.publicUrl, PublicUrlSettings, { jsonBody: input });
+    },
+    systemStorage(): Promise<SystemStorage> {
+      return get(ROUTES.system.storage, SystemStorage);
+    },
+    systemUpdateStorage(input: SystemStorageUpdateRequest): Promise<SystemStorage> {
+      return patch(ROUTES.system.storage, SystemStorage, { jsonBody: input });
     },
     systemOffice(): Promise<SystemOfficeResponse> {
       return get(ROUTES.system.office, SystemOfficeResponse);

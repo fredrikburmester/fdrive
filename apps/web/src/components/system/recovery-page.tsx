@@ -70,8 +70,7 @@ export function RecoveryPage() {
       </header>
       <p className="rounded-lg border p-4 text-sm">
         Start the API with restore mode enabled and a new empty database. Use the host recovery
-        token to continue. Original files and live fileserver configuration require separate
-        backups.
+        token to continue. The files folder requires its own backup.
       </p>
       {(error || job?.error) && (
         <p role="alert" className="break-words text-sm text-destructive">
@@ -200,7 +199,7 @@ export function RecoveryPage() {
             >
               <p className="text-sm">
                 Providers, schedules and workers stay paused. Tokens are revoked. The restore never
-                overwrites live files on your fileserver.
+                overwrites files in the files folder.
               </p>
               <Label htmlFor={`${id}-confirm`}>Paste the snapshot ID to confirm this restore</Label>
               <Input

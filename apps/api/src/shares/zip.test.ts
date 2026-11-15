@@ -139,7 +139,7 @@ describe("archive downloads of a public share", () => {
     );
   });
 
-  it("never carries the Trash or a backup folder into an archive", async () => {
+  it("never carries the Trash into an archive, and zips an old backup folder like any other", async () => {
     const h = sharesHarness({ trashPath: "/.trash" });
     h.write("/.trash/old.txt", "gone");
     h.write("/folder/.fdrive-backups/b", "backup");
@@ -150,11 +150,12 @@ describe("archive downloads of a public share", () => {
     const refused = await h.request(`${pub(home.id)}/archive`);
     expect(refused.status).toBe(403);
     expect((await error(refused)).message).toContain("Trash");
-    // A backup folder anywhere inside is refused by the owner's storage.
-    const folder = await h.create(cookie, { paths: ["/folder"] });
-    expect((await h.request(`${pub(folder.id)}/archive`)).status).toBe(403);
     expect(await used(h, home.id)).toBe(0);
-    expect(await used(h, folder.id)).toBe(0);
+    // Backups no longer go into the files folder: what one left there is the owner's.
+    const folder = await h.create(cookie, { paths: ["/folder"] });
+    expect(await unzip(await h.request(`${pub(folder.id)}/archive`))).toEqual({
+      "folder/.fdrive-backups/b": "backup",
+    });
     // A folder beside the Trash is unaffected.
     const clean = await h.create(cookie, { paths: ["/clean"] });
     expect(await unzip(await h.request(`${pub(clean.id)}/archive`))).toEqual({

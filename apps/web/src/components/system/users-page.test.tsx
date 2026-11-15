@@ -9,7 +9,6 @@ const ME: AdminUser = {
   disabled: false,
   isAdmin: true,
   isYou: true,
-  adminByDeployment: false,
   createdAt: "2026-01-01T00:00:00.000Z",
   lastLoginAt: "2026-11-10T09:00:00.000Z",
 };
@@ -18,7 +17,6 @@ const GRACE: AdminUser = {
   disabled: false,
   isAdmin: false,
   isYou: false,
-  adminByDeployment: false,
   createdAt: "2026-02-03T00:00:00.000Z",
   lastLoginAt: null,
 };
@@ -38,7 +36,7 @@ const mutation = (): Mutation => ({
 
 const mocks = vi.hoisted(() => ({
   list: {
-    data: undefined as { available: boolean; users: AdminUser[] } | undefined,
+    data: undefined as { users: AdminUser[] } | undefined,
     isLoading: false,
     isError: false,
     error: null as unknown,
@@ -76,8 +74,8 @@ vi.mock("@/lib/api/system-queries", () => ({
 
 const { UsersPage } = await import("./users-page");
 
-function renderPage(users: AdminUser[], available = true) {
-  mocks.list.data = { available, users };
+function renderPage(users: AdminUser[]) {
+  mocks.list.data = { users };
   return render(<UsersPage />);
 }
 
@@ -145,25 +143,13 @@ describe("the list", () => {
     expect(screen.queryByText(/You can't disable/)).toBeNull();
   });
 
-  it("explains a deployment without a files folder instead of an empty list", () => {
-    renderPage([], false);
-
-    expect(screen.getByText("No files folder")).toBeTruthy();
-    expect(screen.getByText(/Set FDRIVE_STORAGE_ROOT and restart fdrive\./)).toBeTruthy();
-    expect(screen.queryByText(/System > Storage/)).toBeNull();
-    expect(screen.queryByRole("table")).toBeNull();
-    expect((screen.getByRole("button", { name: "Add user" }) as HTMLButtonElement).disabled).toBe(
-      true,
-    );
-  });
-
-  it("treats a 403 as a refusal, not a deployment without users", () => {
+  it("treats a 403 as a refusal, not an empty list", () => {
     mocks.list.isError = true;
     mocks.list.error = new ApiClientError("forbidden", "admin only", 403);
     render(<UsersPage />);
 
     expect(screen.getByText("Administrators only")).toBeTruthy();
-    expect(screen.queryByText("No files folder")).toBeNull();
+    expect(screen.queryByRole("table")).toBeNull();
     expect(screen.queryByRole("alert")).toBeNull();
   });
 
@@ -299,7 +285,7 @@ describe("row actions", () => {
     );
     expect(mocks.success).toHaveBeenCalledWith("Disabled grace and signed them out.");
 
-    mocks.list.data = { available: true, users: [ME, { ...GRACE, disabled: true }] };
+    mocks.list.data = { users: [ME, { ...GRACE, disabled: true }] };
     view.rerender(<UsersPage />);
     await openRowMenu("grace");
     fireEvent.click(await screen.findByRole("menuitem", { name: "Enable" }));
@@ -322,7 +308,7 @@ describe("row actions", () => {
     );
     expect(mocks.success).toHaveBeenCalledWith("grace is now an administrator.");
 
-    mocks.list.data = { available: true, users: [ME, { ...GRACE, isAdmin: true }] };
+    mocks.list.data = { users: [ME, { ...GRACE, isAdmin: true }] };
     view.rerender(<UsersPage />);
     await openRowMenu("grace");
     fireEvent.click(await screen.findByRole("menuitem", { name: "Remove administrator" }));
@@ -331,16 +317,6 @@ describe("row actions", () => {
       expect.anything(),
     );
     expect(mocks.success).toHaveBeenLastCalledWith("grace is no longer an administrator.");
-  });
-
-  it("leaves the administrator a deployment names as one", async () => {
-    renderPage([ME, { ...GRACE, isAdmin: true, adminByDeployment: true }]);
-    expect(
-      screen.getByTitle("An administrator through FDRIVE_ADMIN_USERS in the deployment."),
-    ).toBeTruthy();
-    await openRowMenu("grace");
-    const item = await screen.findByRole("menuitem", { name: "Remove administrator" });
-    expect(item.getAttribute("aria-disabled") ?? item.getAttribute("data-disabled")).not.toBeNull();
   });
 
   it("reports a refused change", async () => {

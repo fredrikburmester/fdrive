@@ -68,9 +68,7 @@ async function statItems(principal: Principal, paths: readonly string[], signal:
  */
 export function createOrganizeService(deps: OrganizeServiceDeps): OrganizeService {
   async function indexedFor(principal: Principal): Promise<boolean> {
-    const identity = await deps.mcp.identities.get(principal.identityId);
-    if (identity === null) return false;
-    return (await deps.mcp.scopeResolver.verifiedIndexScopes(identity)).available;
+    return (await deps.mcp.scopeResolver.verifiedIndexScopes(principal.username)).available;
   }
 
   return {

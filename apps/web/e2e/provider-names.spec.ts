@@ -7,13 +7,12 @@ import { getFreePort } from "./support/ports.js";
 
 test.use({ storageState: { cookies: [], origins: [] } });
 
-test("a storage rename on System > General reaches the login page, logins and Mac approval", async ({
+test("a storage rename on System > General reaches logins and Mac approval, not the login page", async ({
   page,
   browser,
 }) => {
   test.setTimeout(300_000);
-  // Its own stack: a name, once given, cannot be taken back to none, and the
-  // shared run's login page must keep naming the product alone.
+  // Its own stack: a name, once given, cannot be taken back to none.
   const env = await startEnvironment({
     apiPort: await getFreePort(E2E_HOST),
     webPort: await getFreePort(E2E_HOST),
@@ -60,21 +59,20 @@ test("a storage rename on System > General reaches the login page, logins and Ma
     await page.goto(url("/system/general"));
     await dismissActivityPanel(page);
     const name = page.getByLabel("Name", { exact: true });
-    await expect(page.getByText("Shown on the login page and in Finder.")).toBeVisible();
+    await expect(page.getByText("Shown under each username and in Finder.")).toBeVisible();
     await expect(page.getByRole("button", { name: "Save name" })).toBeDisabled();
     await name.fill("   ");
     await expect(page.getByText("Enter a name for this storage.")).toBeVisible();
     await expect(page.getByRole("button", { name: "Save name" })).toBeDisabled();
     await name.fill("  Home storage  ");
     const patch = page.waitForRequest(
-      (request) =>
-        request.url().endsWith(`/admin/providers/${providerId}`) && request.method() === "PATCH",
+      (request) => request.url().endsWith("/system/storage") && request.method() === "PATCH",
     );
     const refreshedMe = page.waitForResponse(
       (response) => response.url().endsWith("/auth/me") && response.status() === 200,
     );
     await page.getByRole("button", { name: "Save name" }).click();
-    expect((await patch).postDataJSON()).toEqual({ label: "Home storage" });
+    expect((await patch).postDataJSON()).toEqual({ name: "Home storage" });
     await refreshedMe;
     await expect(name).toHaveValue("Home storage");
     await expect(page.getByRole("button", { name: "Save name" })).toBeDisabled();
@@ -112,16 +110,15 @@ test("a storage rename on System > General reaches the login page, logins and Ma
       page.locator('[data-sidebar="footer"]').getByText("Home storage", { exact: true }),
     ).toBeVisible();
     const after = MeResponse.parse(await (await page.request.get(url("/api/v1/auth/me"))).json());
-    expect(after).toEqual({
-      ...before,
-      identity: { ...before.identity, providerLabel: "Home storage" },
-    });
+    expect(after).toEqual({ ...before, storageName: "Home storage" });
 
+    // The login page names the product alone: it asks for a username and password only.
     const login = await anonymous.newPage();
     await login.goto(url("/login"));
     await expect(
-      login.getByText("Sign in with your fdrive account on Home storage", { exact: true }),
+      login.getByText("Sign in with your fdrive account", { exact: true }),
     ).toBeVisible();
+    await expect(login.getByText(/Home storage/)).toHaveCount(0);
     await expect(login.getByLabel("Server")).toHaveCount(0);
     await expect(login.getByLabel("Username", { exact: true })).toBeVisible();
   } finally {

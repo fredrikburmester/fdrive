@@ -66,22 +66,8 @@ describe("before the setup status answers", () => {
   });
 });
 
-describe("without the files folder", () => {
-  it("asks for FDRIVE_STORAGE_ROOT instead of the form, and checks again", () => {
-    renderWizard({ required: true, storageConfigured: false });
-
-    expect(screen.getByText("Choose where fdrive keeps files")).toBeTruthy();
-    expect(screen.getByText("FDRIVE_STORAGE_ROOT")).toBeTruthy();
-    expect(screen.getByText(/restart fdrive, then check again\./)).toBeTruthy();
-    expect(screen.queryByLabelText("Setup token")).toBeNull();
-    expect(screen.queryByText(/^Step /)).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "Try again" }));
-    expect(mocks.status.refetch).toHaveBeenCalled();
-  });
-});
-
-describe("with the files folder", () => {
-  const LOCAL: SetupStatusResponse = { required: true, storageConfigured: true };
+describe("setup steps", () => {
+  const LOCAL: SetupStatusResponse = { required: true };
 
   it("claims with the token, creates the owner's account and continues to features", () => {
     mocks.complete.mutate.mockImplementation((_input, options) => options.onSuccess());

@@ -18,19 +18,18 @@ const row = (identityId: string, paths: string[]): ShareInsertInput => ({
   at: new Date("2026-11-14T00:00:00Z"),
 });
 
-function harness(ownerPath?: (identityId: string, path: string) => Promise<OwnedPath | null>) {
+function harness(ownerPath?: (identityId: string, path: string) => Promise<OwnedPath>) {
   const shares = createMemoryShareRepo();
   const moves = createShareMoves({ shares, ...(ownerPath === undefined ? {} : { ownerPath }) });
   const paths = async (id: string) => (await shares.get(id))?.paths;
   return { shares, moves, paths };
 }
 
-/** bob sees alice's `/Team` at `/Shared with me/Team`; `Gone`'s owner has no login. */
-const shelf = async (identityId: string, path: string): Promise<OwnedPath | null> => {
+/** bob sees alice's `/Team` at `/Shared with me/Team`. */
+const shelf = async (identityId: string, path: string): Promise<OwnedPath> => {
   const team = "/Shared with me/Team";
   if (identityId === bob && (path === team || path.startsWith(`${team}/`)))
     return { identityId: alice, path: `/Team${path.slice(team.length)}` };
-  if (identityId === bob && path.startsWith("/Shared with me/Gone/")) return null;
   return { identityId, path };
 };
 
@@ -55,7 +54,6 @@ describe("public links following their item", () => {
     for (const target of [
       "/.trash/.fdrive-move-v1/Projects",
       "/.fdrive-desktop/x/trash/Projects",
-      "/Stuff/.fdrive-backups/Projects",
       "/Shared with me/Projects",
       "/Projects",
     ]) {
@@ -106,9 +104,6 @@ describe("public links following their item", () => {
     // bob trashing alice's file into his own Trash takes it from her links.
     await moves.onMoved(bob, "/Shared with me/Team/old/brief.txt", "/.trash/leaf", false);
     expect(await shares.get(aliceLink.id)).toBeNull();
-    // A folder whose owner has no login here has no links to follow or drop.
-    expect(await moves.resolve(bob, "/Shared with me/Gone/a", "/Shared with me/Gone/b")).toBeNull();
-    await moves.onDeleted(bob, "/Shared with me/Gone/a", true);
   });
 
   it("never moves or drops the root of anyone's files", async () => {

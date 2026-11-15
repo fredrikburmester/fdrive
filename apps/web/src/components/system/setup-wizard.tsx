@@ -59,19 +59,6 @@ export function SetupWizard() {
       </SetupFrame>
     );
   }
-  if (!status.data.storageConfigured) {
-    return (
-      <SetupFrame description="Choose where fdrive keeps files">
-        <SetupRetry onRetry={() => void status.refetch()}>
-          <p className="text-sm text-muted-foreground">
-            fdrive keeps everyone's files in a folder on this server. Set{" "}
-            <code className="font-mono text-foreground">FDRIVE_STORAGE_ROOT</code> to that folder in
-            the deployment, restart fdrive, then check again.
-          </p>
-        </SetupRetry>
-      </SetupFrame>
-    );
-  }
   return <SetupSteps onClaimed={() => setClaimed(true)} />;
 }
 

@@ -3,7 +3,6 @@ import type { Repos, ShareRecord, ShareRepo } from "@fdrive/db";
 import type { AccountRequestContext } from "../auth/account-context.ts";
 import type { IdentityStorageFactory } from "../auth/storage-factory.ts";
 import { ApiHttpError } from "../errors.ts";
-import type { ProviderService } from "../providers/service.ts";
 import type { PublicShareAccess } from "./access.ts";
 import type { ShareCredential } from "./credentials.ts";
 import type { PublicThumbTarget } from "./limits.ts";
@@ -14,7 +13,6 @@ import { DEFAULT_SHARE_ZIP_LIMITS, type ShareZipLimits } from "./zip-limits.ts";
 export interface SharesDeps {
   repos: Repos;
   shares: ShareRepo;
-  providers: Pick<ProviderService, "forIdentity">;
   /** The owner's storage as every feature gets it: the only way a share reaches bytes. */
   storageFor: IdentityStorageFactory;
   /** The owner's Trash folder while Trash is on: never shared and never listed through a share. */
@@ -28,8 +26,7 @@ export interface SharesDeps {
 /**
  * Public links: rows in `app.shares` that fdrive serves through the owner's
  * storage. This layer decides who may act on a share, the owner's session
- * for management and the owner's module for everything, and leaves what a
- * share is to `createOwnedShares`.
+ * for management, and leaves what a share is to `createOwnedShares`.
  */
 export function createSharesService(deps: SharesDeps) {
   const owned = createOwnedShares({
@@ -40,33 +37,19 @@ export function createSharesService(deps: SharesDeps) {
     zipLimits: { ...DEFAULT_SHARE_ZIP_LIMITS, ...deps.zipLimits },
     clock: deps.clock,
   });
-  /**
-   * Checks that `identityId` still exists and that its storage serves
-   * shares: the module's share strategy decides, never its type, and `none`
-   * is refused with the capability the web reads to state the limit.
-   */
+  /** Checks that the share's owner, `identityId`, still exists. */
   async function owner(identityId: string): Promise<void> {
     if ((await deps.repos.identities.get(identityId)) === null)
       throw new ApiHttpError("not_found", "Share unavailable");
-    let strategy: string;
-    try {
-      strategy = (await deps.providers.forIdentity(identityId)).module.shares;
-    } catch {
-      throw new ApiHttpError("upstream_unavailable", "Share storage unavailable");
-    }
-    if (strategy !== "owned")
-      throw new ApiHttpError("unsupported", "Sharing is not available for this storage", {
-        capability: "shares",
-      });
   }
-  /** The share the caller's login owns, once its storage still shares. */
+  /** The share the caller's login owns. */
   async function managed(input: AccountRequestContext, id: string): Promise<ShareRecord> {
     await owner(input.principal.identityId);
     const row = await deps.shares.getOwned(input.principal.identityId, id);
     if (row === null) throw new ApiHttpError("not_found", "Share unavailable");
     return row;
   }
-  /** A public row, once its owner's storage still shares. */
+  /** A public row whose owner still exists. */
   async function loadPublic(id: string): Promise<ShareRecord> {
     const row = await deps.shares.get(id);
     if (row === null) throw new ApiHttpError("not_found", "Share unavailable");

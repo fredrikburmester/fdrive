@@ -1,50 +1,28 @@
 "use client";
 
-import type { PublicProvider } from "@fdrive/contracts";
 import type { Route } from "next";
 import { type FormEvent, useState } from "react";
-import { ProviderFieldInputs } from "@/components/identity/provider-fields";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Field, FieldError, FieldGroup } from "@/components/ui/field";
+import { Field, FieldError, FieldGroup, FieldLabel } from "@/components/ui/field";
+import { Input } from "@/components/ui/input";
 import { useLogin } from "@/lib/api/auth-queries";
 import { describeCredentialError } from "@/lib/api/errors";
-import {
-  buildCredential,
-  credentialComplete,
-  credentialFieldsFor,
-  loginSubtitle,
-} from "@/lib/auth/login-model";
 
 export interface LoginFormProps {
   readonly destination?: Route;
-  /** The enabled storage, resolved server-side by the page; empty when the API was unreachable. */
-  readonly providers: readonly PublicProvider[];
 }
 
-const EMPTY_VALUES: Readonly<Record<string, string>> = {};
-const NONE_REVEALED: ReadonlySet<string> = new Set();
-
-/**
- * The login form: the storage's credential fields, rendered from the API's
- * own field list, under a subtitle that names the storage. Without the list
- * (the API could not be reached while rendering the page) the default
- * username and password fields render and the server picks its storage.
- */
-export function LoginForm({ providers, destination }: LoginFormProps) {
-  const [values, setValues] = useState(EMPTY_VALUES);
-  const [revealed, setRevealed] = useState(NONE_REVEALED);
+/** The login form: an fdrive account's username and password. */
+export function LoginForm({ destination }: LoginFormProps) {
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
   const login = useLogin(destination);
-  const [provider] = providers;
-  const fields = credentialFieldsFor(provider);
 
   function handleSubmit(event: FormEvent<HTMLFormElement>): void {
     event.preventDefault();
-    if (!credentialComplete(fields, values)) return;
-    login.mutate({
-      ...(provider === undefined ? {} : { providerId: provider.id }),
-      credential: buildCredential(fields, values),
-    });
+    if (username.length === 0 || password.length === 0) return;
+    login.mutate({ username, password });
   }
 
   return (
@@ -53,22 +31,39 @@ export function LoginForm({ providers, destination }: LoginFormProps) {
         <CardHeader className="items-center gap-1 text-center">
           <span className="text-lg font-semibold tracking-tight">fdrive</span>
           <CardTitle>Sign in</CardTitle>
-          <CardDescription>{loginSubtitle(provider)}</CardDescription>
+          <CardDescription>Sign in with your fdrive account</CardDescription>
         </CardHeader>
         <CardContent>
           <form onSubmit={handleSubmit}>
             <FieldGroup>
-              <ProviderFieldInputs
-                fields={fields}
-                values={values}
-                onChange={(name, value) => setValues((prev) => ({ ...prev, [name]: value }))}
-                idPrefix="login"
-                autoFocus
-                revealOptionalCode
-                revealed={revealed}
-                onReveal={(name) => setRevealed((prev) => new Set(prev).add(name))}
-                disabled={login.isPending}
-              />
+              <Field>
+                <FieldLabel htmlFor="login-username">Username</FieldLabel>
+                <Input
+                  id="login-username"
+                  name="username"
+                  autoComplete="username"
+                  autoFocus
+                  required
+                  maxLength={255}
+                  value={username}
+                  disabled={login.isPending}
+                  onChange={(event) => setUsername(event.target.value)}
+                />
+              </Field>
+              <Field>
+                <FieldLabel htmlFor="login-password">Password</FieldLabel>
+                <Input
+                  id="login-password"
+                  name="password"
+                  type="password"
+                  autoComplete="current-password"
+                  required
+                  maxLength={1024}
+                  value={password}
+                  disabled={login.isPending}
+                  onChange={(event) => setPassword(event.target.value)}
+                />
+              </Field>
               {login.isError ? (
                 <FieldError>{describeCredentialError(login.error)}</FieldError>
               ) : null}
