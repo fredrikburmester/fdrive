@@ -131,7 +131,8 @@ Trash is a storage capability, not application-owned snapshot history; see [Tras
   begins disabled; the ml service and the Office controller expose starting, ready and failed
   states.
 - System pages are installation-wide and independent of the signed-in login, and every page
-  header says so. System > General holds the files folder's name, reachability and Trash.
+  header says so. System > General holds the server address and the files folder's name,
+  health and Trash.
 - The admin sidebar shows live processing activity and percentages only for fixed workloads.
   Lightweight worker snapshots and one shared poll drive it; see [System activity](SYSTEM-ACTIVITY.md).
 - Search combines text/filename and available visual results, with separate failure states.
