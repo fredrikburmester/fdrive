@@ -14,36 +14,26 @@ const CAPABILITIES = {
 };
 
 describe("LoginRequest", () => {
-  it("accepts a credential without a provider id", () => {
-    const result = LoginRequest.safeParse({ credential: { username: "alice", password: "pw" } });
-    expect(result.success).toBe(true);
+  it("accepts a username and a password", () => {
+    expect(LoginRequest.safeParse({ username: "Alice", password: "pw" }).success).toBe(true);
   });
 
-  it("accepts a provider id and any string fields", () => {
-    const result = LoginRequest.safeParse({
-      providerId: VALID_UUID,
-      credential: { username: "alice", password: "hunter2", otp: "123456" },
-    });
-    expect(result.success).toBe(true);
-  });
-
-  it("rejects a non-canonical provider id", () => {
-    expect(
-      LoginRequest.safeParse({ providerId: VALID_UUID.toUpperCase(), credential: {} }).success,
-    ).toBe(false);
-  });
-
-  it("rejects a non-string field value, an overlong value and unknown top-level keys", () => {
-    expect(LoginRequest.safeParse({ credential: { username: 1 } }).success).toBe(false);
-    expect(LoginRequest.safeParse({ credential: { password: "x".repeat(4097) } }).success).toBe(
+  it("rejects blank or overlong values, a missing field and anything else", () => {
+    expect(LoginRequest.safeParse({ username: "", password: "pw" }).success).toBe(false);
+    expect(LoginRequest.safeParse({ username: "alice", password: "" }).success).toBe(false);
+    expect(LoginRequest.safeParse({ username: "a".repeat(256), password: "pw" }).success).toBe(
       false,
     );
-    expect(LoginRequest.safeParse({ credential: {}, username: "alice" }).success).toBe(false);
-    expect(LoginRequest.safeParse({ providerId: "nope", credential: {} }).success).toBe(false);
-  });
-
-  it("rejects a missing credential", () => {
-    expect(LoginRequest.safeParse({}).success).toBe(false);
+    expect(LoginRequest.safeParse({ username: "alice", password: "x".repeat(1025) }).success).toBe(
+      false,
+    );
+    expect(LoginRequest.safeParse({ username: "alice" }).success).toBe(false);
+    expect(
+      LoginRequest.safeParse({ username: "alice", password: "pw", otp: "123456" }).success,
+    ).toBe(false);
+    expect(
+      LoginRequest.safeParse({ credential: { username: "alice", password: "pw" } }).success,
+    ).toBe(false);
   });
 });
 

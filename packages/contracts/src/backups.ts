@@ -57,13 +57,13 @@ export const BackupDestinationInput = z.discriminatedUnion("type", [
       secretAccessKey: z.string().min(1).max(2000),
     })
     .strict(),
+  // A folder in the files of the owner who adds it; no password is kept.
   z
     .object({
       type: z.literal("provider"),
       name: z.string().trim().min(1).max(120),
       providerId: z.uuid(),
       prefix,
-      credential: z.record(z.string(), z.string().max(4096)),
     })
     .strict(),
 ]);

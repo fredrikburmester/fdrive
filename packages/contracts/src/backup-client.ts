@@ -48,7 +48,7 @@ export function createBackupClient(
     estimate: () => json("/estimate", Accepted, "POST", {}),
     recordRehearsal: (report: BackupRehearsal) =>
       json("/rehearsal", Ok, "POST", BackupRehearsal.parse(report)),
-    unlock: (credential: Record<string, string>) => json("/unlock", Ok, "POST", { credential }),
+    unlock: (password: string) => json("/unlock", Ok, "POST", { password }),
     key: (recipient: string) =>
       json("/key", z.object({ challenge: z.string() }), "POST", { recipient }),
     confirm: (proof: string) => json("/key/confirm", Ok, "POST", { proof }),
