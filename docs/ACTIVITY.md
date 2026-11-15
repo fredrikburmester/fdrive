@@ -246,7 +246,7 @@ tracks; nobody else's new files are added. They come from the change journal's r
 indexer's watcher, a scan or OCR wrote: the API's reader of the journal
 ([the API's reader](INDEXER.md#the-apis-reader), [outside.ts](../apps/api/src/events/outside.ts),
 [observations.ts](../apps/api/src/activity/observations.ts)) maps both ends of each row through
-the login's configured scopes. Rows fdrive wrote itself are its own actions, recorded already.
+the login's scopes. Rows fdrive wrote itself are its own actions, recorded already.
 Listings and other reads never compare anything with history.
 
 - A move to a readable destination records `observation.location_changed` (`watcher_move`)

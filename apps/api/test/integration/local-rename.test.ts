@@ -132,13 +132,8 @@ describe("a folder renamed on disk outside fdrive, through the real indexer", ()
     const logger = { warn: (_data: unknown, message: string) => warnings.push(message) };
     const fanout = createJournalFanout({
       journal: createChangeJournal(db),
-      root: "files",
       identities: repos.identities,
-      scopes: async (username) => ({
-        available: true,
-        providerId: provider.id,
-        scopes: [{ rootName: "files", fsPrefix: `/${username}`, virtualPrefix: "/" }],
-      }),
+      scopes: async (username) => [{ fsPrefix: `/${username}`, virtualPrefix: "/" }],
       bus,
       outside: createOutsideChanges({
         metadata,

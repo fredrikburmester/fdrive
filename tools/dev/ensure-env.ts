@@ -113,9 +113,6 @@ export function buildApiEnv(
     FDRIVE_MASTER_KEY: masterKey,
     FDRIVE_COOKIE_SECURE: "false",
     FDRIVE_STORAGE_ROOT: storageRoot,
-    FDRIVE_INDEX_ROOTS: JSON.stringify([
-      { name: "files", storagePath: storageRoot, indexerPath: "/data" },
-    ]),
     FDRIVE_EMBED_URL: `${ml}/text`,
     FDRIVE_IMAGE_EMBED_URL: `${ml}/image`,
     FDRIVE_TIKA_URL: `${ml}/extract`,

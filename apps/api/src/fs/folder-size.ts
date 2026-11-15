@@ -3,16 +3,18 @@ import {
   type CoreError,
   isAtOrUnder,
   isUnderPath,
+  isWithin,
   joinPath,
   normalizePath,
   type Scope,
   TRASH_PATH,
 } from "@fdrive/core";
-import type { IndexQueries } from "@fdrive/db";
+import { INDEX_ROOT_ID, type IndexQueries } from "@fdrive/db";
+import { SHARED_WITH_ME } from "@fdrive/local";
 import type { AppHono, AuthedHono } from "../app.js";
 import { ApiHttpError } from "../errors.js";
 import type { ScopeResolver } from "../scoping/resolver.ts";
-import { toIndexRelativePath } from "../search/scopes.js";
+import { indexPrefixes, toIndexRelativePath } from "../search/scopes.js";
 
 const API_PREFIX = "/api/v1";
 
@@ -22,8 +24,10 @@ function routePath(fullPath: string): string {
 }
 
 export interface FolderSizeRoutesDeps {
-  readonly indexQueries: Pick<IndexQueries, "rootIdsByName" | "subtreeSize">;
-  readonly resolver: Pick<ScopeResolver, "verifiedIndexScopes">;
+  readonly indexQueries: Pick<IndexQueries, "subtreeSize">;
+  readonly resolver: Pick<ScopeResolver, "scopesFor">;
+  /** Whether the files folder is indexed now: sizes come from the index. */
+  readonly indexed: () => Promise<boolean>;
 }
 
 const NOT_INDEXED: Omit<FolderSizeResponse, "path"> = {
@@ -31,6 +35,9 @@ const NOT_INDEXED: Omit<FolderSizeResponse, "path"> = {
   files: 0,
   indexed: false,
 };
+
+/** `Shared with me`: in the home it is a reserved name, so the home's own folder of that name is never counted. */
+const SHELF = `/${SHARED_WITH_ME}`;
 
 interface SizeRegion {
   readonly scope: Scope;
@@ -66,7 +73,8 @@ function outermostBoundaries(paths: readonly string[]): string[] {
 
 /**
  * Partitions a requested virtual subtree into its physical mapping regions,
- * leaving out the Trash, which a folder's size never counts.
+ * leaving out the Trash, which a folder's size never counts, and the home's
+ * own `Shared with me`, which stays out of sight.
  */
 function sizeRegions(scopes: readonly Scope[], path: string): SizeRegion[] {
   const owner = containingScope(scopes, path);
@@ -77,13 +85,19 @@ function sizeRegions(scopes: readonly Scope[], path: string): SizeRegion[] {
     ...scopes
       .filter((scope) => isUnderPath(path, scope.virtualPrefix))
       .map((scope) => ({ scope, virtualPrefix: scope.virtualPrefix })),
-  ].filter((region) => !isAtOrUnder(TRASH_PATH, region.virtualPrefix));
+  ].filter(
+    (region) =>
+      !(region.scope.virtualPrefix === "/" && isWithin(SHELF, region.virtualPrefix)) &&
+      !isAtOrUnder(TRASH_PATH, region.virtualPrefix),
+  );
 
   return regionScopes.map((region) => {
     const boundaries = scopes
       .filter((scope) => isUnderPath(region.virtualPrefix, scope.virtualPrefix))
       .map((scope) => scope.virtualPrefix);
     if (isUnderPath(region.virtualPrefix, TRASH_PATH)) boundaries.push(TRASH_PATH);
+    if (region.scope.virtualPrefix === "/" && isUnderPath(region.virtualPrefix, SHELF))
+      boundaries.push(SHELF);
 
     return {
       ...region,
@@ -97,15 +111,15 @@ function sizeRegions(scopes: readonly Scope[], path: string): SizeRegion[] {
 
 /**
  * Registers `GET /fs/folder-size?path=`: resolves the virtual `path` to its
- * physical regions via the caller's *verified* index scopes, resolved for
- * this request, and adds up what the index holds there. The scopes are the
- * permission: no storage is read. Each physical aggregate excludes the
- * trees shadowed by more-specific mappings and configured trash; separately
- * mapped roots (folders shared with the caller) are added back.
+ * physical regions via the caller's scopes, resolved for this request, and
+ * adds up what the index holds there. The scopes are the permission: no
+ * storage is read. Each physical aggregate excludes the trees shadowed by
+ * more-specific mappings, the home's own `Shared with me` and the Trash;
+ * folders shared with the caller are added back.
  *
  * Answers `200 { indexed: false, bytes: 0, files: 0 }` (never an error) for
- * a folder that is out of scope, not covered by any indexed root, or the
- * trash folder: none of those is information worth surfacing as a 4xx to a
+ * a folder that is out of scope, the trash folder, or any folder while the
+ * files folder is not indexed: none of those is information worth surfacing as a 4xx to a
  * caller who otherwise still has read access, and each is indistinguishable
  * from "this folder was simply never indexed" from the caller's point of
  * view. A folder gone from disk since it was indexed is sized from what the
@@ -136,37 +150,23 @@ export function registerFolderSizeRoutes(
     const principal = c.get("principal");
     // The Trash is answered as not indexed, as listings hide it and search leaves it out.
     if (isAtOrUnder(TRASH_PATH, path)) return notIndexed();
-    const verified = await deps.resolver.verifiedIndexScopes(principal.username);
-    if (!verified.available) {
+    if (!(await deps.indexed())) {
       return notIndexed();
     }
-
-    const regions = sizeRegions(verified.scopes, path);
+    const scopes = await deps.resolver.scopesFor(principal.username);
+    const regions = sizeRegions(scopes, path);
     if (regions.length === 0) {
       return notIndexed();
     }
 
-    const rootIds = await deps.indexQueries.rootIdsByName();
-    const indexedRegions = regions.flatMap((region) => {
-      const rootId = rootIds[region.scope.rootName];
-      return rootId === undefined ? [] : [{ ...region, rootId }];
-    });
-    if (indexedRegions.length === 0) {
-      return notIndexed();
-    }
-
-    const scopePrefixes = verified.scopes.flatMap((scope) => {
-      const scopeRootId = rootIds[scope.rootName];
-      return scopeRootId === undefined ? [] : [{ rootId: scopeRootId, fsPrefix: scope.fsPrefix }];
-    });
-
+    const scopePrefixes = indexPrefixes(scopes);
     const sizes = await Promise.all(
-      indexedRegions.map((region) =>
+      regions.map((region) =>
         region.excludedRelativePrefixes.length === 0
-          ? deps.indexQueries.subtreeSize(scopePrefixes, region.rootId, region.relativePrefix)
+          ? deps.indexQueries.subtreeSize(scopePrefixes, INDEX_ROOT_ID, region.relativePrefix)
           : deps.indexQueries.subtreeSize(
               scopePrefixes,
-              region.rootId,
+              INDEX_ROOT_ID,
               region.relativePrefix,
               region.excludedRelativePrefixes,
             ),

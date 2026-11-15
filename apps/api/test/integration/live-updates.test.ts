@@ -6,7 +6,6 @@ import {
   createOfficeFileRepo,
   createRepos,
   type Repos,
-  schema,
 } from "@fdrive/db";
 import { startLocalStorage, startPostgres } from "@fdrive/testkit";
 import { sql } from "drizzle-orm";
@@ -29,7 +28,7 @@ interface Frame {
  * Live updates come from the change journal alone: the API records each
  * change it makes and reads the journal back, so a change reaches every
  * person who can see it once, the people a folder is shared with included,
- * with no indexer running and every processing feature off. A browser that
+ * with no indexer configured and every processing feature off. A browser that
  * reconnects resumes from its last event, or is told to resync. A change made
  * outside fdrive, which only the indexer's watcher journals, brings what is
  * kept by path along; fdrive's own changes bring it along in the request.
@@ -72,16 +71,11 @@ describe("live updates from the change journal", () => {
     await seedLocalUsers(postgres.connectionString, storage);
     database = createDb(postgres.connectionString);
     repos = createRepos(database.db);
-    // The root the indexer would create; nothing indexes, and every feature is off.
-    await database.db.insert(schema.roots).values({ name: "files" });
     composed = await composeApp(
       loadConfig({
         DATABASE_URL: postgres.connectionString,
         FDRIVE_STORAGE_ROOT: storage.root,
         FDRIVE_MASTER_KEY: Buffer.alloc(32, 53).toString("base64"),
-        FDRIVE_INDEX_ROOTS: JSON.stringify([
-          { name: "files", storagePath: storage.root, indexerPath: "/roots/files" },
-        ]),
       }),
       silentLogger(),
     );
@@ -312,7 +306,7 @@ describe("live updates from the change journal", () => {
 
     // Renamed on the disk, as over SMB; the indexer's watcher journals it.
     await rename(storage.path("alice", "/Team"), storage.path("alice", "/Squad"));
-    await createChangeJournal(database.db).append("files", "watcher", [
+    await createChangeJournal(database.db).append("watcher", [
       { path: "alice/Team", targetPath: "alice/Squad" },
     ]);
     await caughtUp();

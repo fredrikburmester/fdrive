@@ -25,10 +25,18 @@ pub const SKIP_DIRS: &[&str] = &[
     ".git",
 ];
 
+/// The files folder, the one root the indexer serves.
+pub const ROOT_NAME: &str = "files";
+/// The files root's `idx.roots` id, seeded by a migration (`index_root_files`).
+pub const ROOT_ID: i64 = 1;
+/// Where the files folder is mounted.
+pub const ROOT_PATH: &str = "/data";
+
 #[derive(Debug, Clone)]
 pub struct Config {
     pub database_url: String,
-    pub roots: Vec<(String, PathBuf)>,
+    /// The files folder: `ROOT_PATH`, never read from the environment.
+    pub root: PathBuf,
     pub tika_url: String,
     pub embed_url: String,
     pub embed_batch: usize,
@@ -52,17 +60,6 @@ pub struct Config {
     pub indexer_port: u16,
     pub schema_wait: Duration,
     pub settings_refresh: Duration,
-}
-
-/// `"files=/data,photos=/roots/photos"`, skipping malformed pairs.
-pub fn parse_roots(raw: &str) -> Vec<(String, PathBuf)> {
-    raw.split(',')
-        .filter_map(|pair| {
-            let (name, path) = pair.trim().split_once('=')?;
-            let (name, path) = (name.trim(), path.trim());
-            (!name.is_empty() && !path.is_empty()).then(|| (name.to_owned(), PathBuf::from(path)))
-        })
-        .collect()
 }
 
 impl Config {
@@ -98,7 +95,7 @@ impl Config {
             .map_err(|_| format!("WATCH_DEBOUNCE_SECONDS must be a number, not '{debounce}'"))?;
         Ok(Self {
             database_url: text("DATABASE_URL", "postgres://fdrive:fdrive@db:5432/fdrive"),
-            roots: parse_roots(&text("INDEX_ROOTS", "")),
+            root: PathBuf::from(ROOT_PATH),
             tika_url: text("TIKA_URL", "http://tika:9998").trim_end_matches('/').to_owned(),
             embed_url: text("EMBED_URL", "http://embed:80").trim_end_matches('/').to_owned(),
             embed_batch: number("EMBED_BATCH", 16)?.max(1) as usize,
@@ -125,7 +122,7 @@ impl Config {
         })
     }
 
-    /// Feature admission is separate; once search OCR is on, an unset scope covers every root.
+    /// Feature admission is separate; once search OCR is on, an unset scope covers the whole root.
     pub fn default_settings(&self) -> Settings {
         Settings {
             scan_interval_seconds: self.scan_interval,
@@ -149,19 +146,9 @@ mod tests {
     }
 
     #[test]
-    fn roots_skip_malformed_pairs() {
-        assert_eq!(
-            parse_roots("a=/x,,broken,=novalue,noeq=, b = /y "),
-            vec![
-                ("a".to_owned(), PathBuf::from("/x")),
-                ("b".to_owned(), PathBuf::from("/y"))
-            ]
-        );
-    }
-
-    #[test]
     fn defaults_and_overrides() {
         let c = config(&[]).unwrap();
+        assert_eq!(c.root, PathBuf::from(ROOT_PATH));
         assert!(c.watch);
         assert_eq!(c.chunk_chars, 1200);
         assert_eq!(c.indexer_port, 8010);

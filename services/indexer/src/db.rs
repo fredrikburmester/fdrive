@@ -124,14 +124,6 @@ pub fn wait_for_schema_version(
     }
 }
 
-pub fn upsert_root(c: &mut Client, name: &str) -> Result<i64> {
-    let row = c.query_one(
-        r#"INSERT INTO "idx"."roots" (name) VALUES ($1) ON CONFLICT (name) DO UPDATE SET name = EXCLUDED.name RETURNING id::bigint"#,
-        &[&name],
-    )?;
-    Ok(row.get(0))
-}
-
 /// One `idx.files` row as a scan sees it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ManifestRow {
@@ -624,7 +616,8 @@ pub fn media_files(c: &mut Client, root_id: i64) -> Result<Vec<(String, String, 
     .collect())
 }
 
-pub fn root_stats(c: &mut Client, root: &str, root_id: i64) -> Result<Value> {
+/// The root's live file counts by `text_status`, its chunk counts and its last scan.
+pub fn root_stats(c: &mut Client, root_id: i64) -> Result<serde_json::Map<String, Value>> {
     let counts: serde_json::Map<String, Value> = c
         .query(
             r#"SELECT text_status, count(*) FROM "idx"."files" WHERE root_id = $1::bigint AND deleted_at IS NULL GROUP BY text_status"#,
@@ -652,10 +645,12 @@ pub fn root_stats(c: &mut Client, root: &str, root_id: i64) -> Result<Value> {
             "files_deleted": r.get::<_, i64>(4), "errors": r.get::<_, i64>(5),
         })
     });
-    Ok(serde_json::json!({
-        "root": root, "counts_by_status": counts, "chunks": chunks.get::<_, i64>(0),
-        "chunks_embedded": chunks.get::<_, i64>(1), "last_scan": last_scan,
-    }))
+    Ok(serde_json::Map::from_iter([
+        ("counts_by_status".to_owned(), Value::Object(counts)),
+        ("chunks".to_owned(), Value::from(chunks.get::<_, i64>(0))),
+        ("chunks_embedded".to_owned(), Value::from(chunks.get::<_, i64>(1))),
+        ("last_scan".to_owned(), last_scan.unwrap_or(Value::Null)),
+    ]))
 }
 
 pub fn errors_sample(c: &mut Client, root_id: i64, limit: i64) -> Result<Vec<Value>> {

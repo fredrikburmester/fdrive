@@ -9,7 +9,9 @@ use std::time::Duration;
 use axum::body::Body;
 use axum::http::{Method, Request};
 use common::root_env::{Env, fv, wait_until};
+use fdrive_indexer::config::{Config, ROOT_ID, ROOT_NAME};
 use fdrive_indexer::db::{self, Db, FolderRow, NewFile};
+use fdrive_indexer::features::FeatureValues;
 use fdrive_indexer::indexer::{RootContext, scan_once, watch_folder, watch_mark_deleted, watch_rename};
 use fdrive_indexer::names::{MAX_PENDING_PATHS, MAX_PLACES, MAX_WORDS, NameHit, NameIndex, NameSearch, Place};
 use fdrive_indexer::server::{AppState, Jobs, router};
@@ -26,10 +28,6 @@ fn now_ns() -> i64 {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
         .as_nanos() as i64
-}
-
-fn root(url: &str) -> i64 {
-    db::upsert_root(&mut common::connect(url), "r").unwrap()
 }
 
 fn file(url: &str, root_id: i64, path: &str, age_days: i64) -> i64 {
@@ -108,7 +106,7 @@ fn nfd(text: &str) -> String {
 #[test]
 fn finds_names_typed_with_typos() {
     let url = common::database();
-    let root_id = root(&url);
+    let root_id = ROOT_ID;
     folders(
         &url,
         root_id,
@@ -151,7 +149,7 @@ fn finds_names_typed_with_typos() {
 #[test]
 fn ranks_fewer_typos_first_then_newer() {
     let url = common::database();
-    let root_id = root(&url);
+    let root_id = ROOT_ID;
     folders(
         &url,
         root_id,
@@ -167,8 +165,8 @@ fn ranks_fewer_typos_first_then_newer() {
 #[test]
 fn searches_only_inside_the_scopes_and_outside_the_exclusions() {
     let url = common::database();
-    let root_id = root(&url);
-    let other = db::upsert_root(&mut common::connect(&url), "other").unwrap();
+    let root_id = ROOT_ID;
+    let other = common::other_root(&mut common::connect(&url), "other");
     folders(
         &url,
         root_id,
@@ -216,7 +214,7 @@ fn searches_only_inside_the_scopes_and_outside_the_exclusions() {
 #[test]
 fn leaves_out_folders_named_like_fdrives_own_wherever_they_lie() {
     let url = common::database();
-    let root_id = root(&url);
+    let root_id = ROOT_ID;
     folders(
         &url,
         root_id,
@@ -262,7 +260,7 @@ fn leaves_out_folders_named_like_fdrives_own_wherever_they_lie() {
 #[test]
 fn answers_with_nothing_for_an_empty_query_or_no_room() {
     let url = common::database();
-    let root_id = root(&url);
+    let root_id = ROOT_ID;
     folders(&url, root_id, &[("Budget", 1)]);
     file(&url, root_id, "Budget.txt", 1);
     let names = start(&url, &[root_id]);
@@ -285,7 +283,7 @@ fn answers_with_nothing_for_an_empty_query_or_no_room() {
 #[test]
 fn follows_the_rows_it_is_told_about() {
     let url = common::database();
-    let root_id = root(&url);
+    let root_id = ROOT_ID;
     folders(&url, root_id, &[("Projects", 1), ("Projects/Kvartalsrapport", 1)]);
     file(&url, root_id, "Projects/Kvartalsrapport/Q1.pdf", 1);
     let names = start(&url, &[root_id]);
@@ -336,7 +334,7 @@ fn follows_the_rows_it_is_told_about() {
 #[test]
 fn rebuilds_a_root_when_more_changes_wait_than_it_reads_one_by_one() {
     let url = common::database();
-    let root_id = root(&url);
+    let root_id = ROOT_ID;
     let names = start(&url, &[root_id]);
     let paths: Vec<String> = (0..=MAX_PENDING_PATHS).map(|i| format!("Mapp {i}")).collect();
     let rows: Vec<FolderRow> = paths
@@ -445,10 +443,19 @@ fn follows_what_scans_and_the_watcher_write() {
 // ---------------------------------------------------------------------------------------
 
 fn app(url: &str, names: Option<Arc<NameIndex>>) -> Arc<AppState> {
+    let mut cfg = Config::from_vars(|_| None).unwrap();
+    cfg.database_url = url.to_owned();
+    let context = Arc::new(RootContext::new(
+        ROOT_NAME,
+        ROOT_ID,
+        cfg.root.clone(),
+        Arc::new(cfg),
+        common::features(FeatureValues::default()),
+    ));
     Arc::new(AppState {
-        contexts: vec![],
-        watchers: Arc::default(),
-        wakes: std::collections::HashMap::new(),
+        context,
+        watcher: Arc::default(),
+        wake: Arc::default(),
         db: Db::new(url),
         content: None,
         jobs: Jobs::default(),
@@ -480,7 +487,7 @@ fn post(state: &Arc<AppState>, body: &str) -> (u16, Value) {
 #[test]
 fn serves_searches_once_the_index_is_ready() {
     let url = common::database();
-    let root_id = root(&url);
+    let root_id = ROOT_ID;
     folders(&url, root_id, &[("alice/Mikrolärande", 2)]);
     let names = start(&url, &[root_id]);
     let state = app(&url, Some(names));

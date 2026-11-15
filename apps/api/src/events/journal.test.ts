@@ -23,22 +23,15 @@ function row(
   targetPath: string | null = null,
   source: ChangeSource = "api",
 ): Change {
-  return { position, root: "files", path, targetPath, source, content: null, createdAt: AT };
+  return { position, path, targetPath, source, content: null, createdAt: AT };
 }
 
-const home = (username: string): Scope => ({
-  rootName: "files",
-  fsPrefix: `/${username}`,
-  virtualPrefix: "/",
-});
+const home = (username: string): Scope => ({ fsPrefix: `/${username}`, virtualPrefix: "/" });
 
 /** alice owns `Project` and shares it with bob; carol shares nothing with anyone. */
 const SCOPES: Record<string, Scope[]> = {
   alice: [home("alice")],
-  bob: [
-    home("bob"),
-    { rootName: "files", fsPrefix: "/alice/Project", virtualPrefix: "/Shared with me/Project" },
-  ],
+  bob: [home("bob"), { fsPrefix: "/alice/Project", virtualPrefix: "/Shared with me/Project" }],
   carol: [home("carol")],
 };
 
@@ -54,7 +47,7 @@ const identity = (username: string): Identity => ({
 function fakeJournal(rows: Change[]) {
   const state = { oldest: 1, saved: new Map<string, number>(), reads: 0, failReads: 0 };
   const journal: JournalFanoutDeps["journal"] = {
-    async read(_root, after, limit) {
+    async read(after, limit) {
       state.reads += 1;
       if (state.failReads > 0) {
         state.failReads -= 1;
@@ -67,9 +60,9 @@ function fakeJournal(rows: Change[]) {
     },
     end: async () => rows.at(-1)?.position ?? 0,
     epoch: async () => EPOCH,
-    cursor: async (consumer, root) => state.saved.get(`${consumer}:${root}`) ?? null,
-    async saveCursor(consumer, root, position) {
-      state.saved.set(`${consumer}:${root}`, position);
+    cursor: async (consumer) => state.saved.get(consumer) ?? null,
+    async saveCursor(consumer, position) {
+      state.saved.set(consumer, position);
     },
   };
   return { journal, state };
@@ -80,8 +73,7 @@ function harness(
   overrides: Partial<JournalFanoutDeps> & { cursor?: number } = {},
 ) {
   const { journal, state } = fakeJournal(rows);
-  if (overrides.cursor !== undefined)
-    state.saved.set(`${JOURNAL_CONSUMER}:files`, overrides.cursor);
+  if (overrides.cursor !== undefined) state.saved.set(JOURNAL_CONSUMER, overrides.cursor);
   const bus = createEventBus();
   const published: BusEvent[] = [];
   for (const username of Object.keys(SCOPES))
@@ -90,12 +82,12 @@ function harness(
   const warnings: string[] = [];
   const fanout = createJournalFanout({
     journal,
-    root: "files",
     identities: { listAll: async () => Object.keys(SCOPES).map(identity) },
-    scopes: async (username) =>
-      SCOPES[username] === undefined
-        ? { available: false, reason: "invalid_configuration" }
-        : { available: true, providerId: "provider", scopes: SCOPES[username] },
+    scopes: async (username) => {
+      const scopes = SCOPES[username];
+      if (scopes === undefined) throw new Error("this login has no valid home folder");
+      return scopes;
+    },
     bus,
     outside,
     logger: { warn: (_data, message) => warnings.push(message) },
@@ -158,7 +150,7 @@ describe("createJournalFanout", () => {
       "alice: change /notes.txt @2",
     ]);
     expect(h.fanout.position()).toBe(3);
-    expect(h.state.saved.get(`${JOURNAL_CONSUMER}:files`)).toBe(3);
+    expect(h.state.saved.get(JOURNAL_CONSUMER)).toBe(3);
     expect(h.outside).not.toHaveBeenCalled();
   });
 
@@ -200,9 +192,9 @@ describe("createJournalFanout", () => {
     const saved: number[] = [];
     const h = harness([], { cursor: 0, pageSize: 2 });
     const save = h.journal.saveCursor;
-    h.journal.saveCursor = async (consumer, root, position) => {
+    h.journal.saveCursor = async (consumer, position) => {
       saved.push(position);
-      await save(consumer, root, position);
+      await save(consumer, position);
     };
     h.rows.push(row(1, "alice/1"), row(2, "alice/2"), row(3, "alice/3"));
     await h.fanout.start();
@@ -218,7 +210,7 @@ describe("createJournalFanout", () => {
     await tick();
     expect(h.published).toEqual([]);
     expect(h.fanout.position()).toBe(5);
-    expect(h.state.saved.get(`${JOURNAL_CONSUMER}:files`)).toBe(5);
+    expect(h.state.saved.get(JOURNAL_CONSUMER)).toBe(5);
     expect(h.warnings).toEqual(["journal: rows after the API's position were pruned"]);
   });
 
@@ -282,7 +274,7 @@ describe("createJournalFanout", () => {
     await h.fanout.start();
     await tick();
     expect(h.fanout.position()).toBe(1);
-    expect(h.state.saved.get(`${JOURNAL_CONSUMER}:files`)).toBe(0);
+    expect(h.state.saved.get(JOURNAL_CONSUMER)).toBe(0);
   });
 
   it("skips a login whose scopes are unavailable", async () => {
@@ -329,7 +321,8 @@ describe("replay", () => {
       sent: ["change /Shared with me/Project/a @1", "change /Shared with me/Project/b @3"],
     });
     expect(await replayed(h, "bob", 3, 3)).toEqual({ ok: true, sent: [] });
-    expect(await replayed(h, "nobody", 0, 4)).toEqual({ ok: true, sent: [] });
+    // A login without a home folder has no scopes: its browser resyncs.
+    expect(await replayed(h, "nobody", 0, 4)).toEqual({ ok: false, sent: [] });
   });
 
   it("says when the rows are gone or cannot be read", async () => {

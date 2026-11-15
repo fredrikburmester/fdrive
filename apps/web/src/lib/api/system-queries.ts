@@ -174,7 +174,7 @@ export const useUpdateIndexerSettings = () =>
     queryKeys.system.indexer(),
   );
 
-/** Marks a root (or one path within it) pending on the indexer. */
+/** Marks the files folder (or one path in it) pending on the indexer. */
 export const useReindex = () =>
   useInvalidatingMutation(
     "textSearch",
@@ -183,7 +183,7 @@ export const useReindex = () =>
     queryKeys.system.indexer(),
   );
 
-/** Starts a background preview rebuild for all roots or one selected scope. */
+/** Starts a background preview rebuild for everything or one path. */
 export function useRebuildIndexerThumbnails() {
   const queryClient = useQueryClient();
 
@@ -209,7 +209,7 @@ export function useSystemSearch() {
   });
 }
 
-/** Triggers a full re-extraction and re-embed of every configured root. */
+/** Triggers a full re-extraction and re-embed of every file. */
 export const useReembed = () =>
   useInvalidatingMutation(
     "semanticSearch",

@@ -9,7 +9,7 @@ import {
   publicShareRoute,
   ROUTES,
 } from "@fdrive/contracts";
-import { createChangeJournal, createDb, createRepos, schema } from "@fdrive/db";
+import { createChangeJournal, createDb, createRepos } from "@fdrive/db";
 import { startLocalStorage, startPostgres } from "@fdrive/testkit";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { composeApp } from "../../src/composition.js";
@@ -74,10 +74,6 @@ describe("public links follow the files they point at", () => {
         DATABASE_URL: postgres.connectionString,
         FDRIVE_STORAGE_ROOT: storage.root,
         FDRIVE_MASTER_KEY: Buffer.alloc(32, 31).toString("base64"),
-        // The files folder is indexed; no indexer runs, so the tests journal what its watcher would.
-        FDRIVE_INDEX_ROOTS: JSON.stringify([
-          { name: "files", storagePath: storage.root, indexerPath: "/roots/files" },
-        ]),
       }),
       silentLogger(),
     );
@@ -357,10 +353,9 @@ describe("public links follow the files they point at", () => {
     const seen = await link(alice, "/Outside/seen.txt");
     const binned = await link(alice, "/OutsideTrash");
     const gone = await link(alice, "/Gone/x.txt");
-    await database.db.insert(schema.roots).values({ name: "files" }).onConflictDoNothing();
     const onDisk = (path: string) => storage.path("alice", path);
     const journal = (path: string, target: string | null = null) =>
-      createChangeJournal(database.db).append("files", "watcher", [
+      createChangeJournal(database.db).append("watcher", [
         target === null
           ? { path: `alice/${path}` }
           : { path: `alice/${path}`, targetPath: `alice/${target}` },

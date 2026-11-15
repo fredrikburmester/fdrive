@@ -5,9 +5,7 @@ import type { EmbedClient } from "./embeddings.js";
 import type { NameIndexClient, NameIndexHit, NameIndexHits } from "./name-index.js";
 import { createSearchService, type SearchServiceDeps, type SearchServiceInput } from "./service.js";
 
-const HOME_SCOPES: readonly Scope[] = [
-  { rootName: "files", fsPrefix: "/alice", virtualPrefix: "/" },
-];
+const HOME_SCOPES: readonly Scope[] = [{ fsPrefix: "/alice", virtualPrefix: "/" }];
 const NOW = new Date("2026-03-01T00:00:00.000Z");
 
 function fail(name: string): never {
@@ -25,7 +23,6 @@ function fakeIndexQueries(overrides: Partial<IndexQueries> = {}): IndexQueries {
     contentAt: overrides.contentAt ?? (async () => fail("contentAt")),
     listFiles: overrides.listFiles ?? (async () => fail("listFiles")),
     filesBySha256: overrides.filesBySha256 ?? (async () => fail("filesBySha256")),
-    rootIdsByName: overrides.rootIdsByName ?? (async () => fail("rootIdsByName")),
     stats: overrides.stats ?? (async () => fail("stats")),
     statsForFileIds: overrides.statsForFileIds ?? (async () => fail("statsForFileIds")),
     fileTextPrefix: overrides.fileTextPrefix ?? (async () => fail("fileTextPrefix")),
@@ -76,7 +73,6 @@ function makeFolder(path: string, ageDays = 0, rootId = 1): FolderHit {
 /** Index queries where nothing but `folders` finds anything. */
 function folderOnlyQueries(rows: readonly FolderHit[], overrides: Partial<IndexQueries> = {}) {
   return fakeIndexQueries({
-    rootIdsByName: async () => ({ files: 1 }),
     semantic: async () => [],
     fulltext: async () => [],
     filename: async () => [],
@@ -97,13 +93,13 @@ function buildDeps(overrides: Partial<SearchServiceDeps> = {}): SearchServiceDep
 
 const NO_FILTERS = { exts: null, folder: null, after: null, before: null };
 
-/** What every query leaves out for alice: the Mac app's folder, the reserved names and her Trash, if any. */
-/** fdrive's own folders in alice's home, as every query leaves them out. */
+/** fdrive's own folders in alice's home and her own Shared with me, as every query leaves them out. */
 function reserved() {
   return {
     prefixes: [
       { rootId: 1, fsPrefix: "/alice/.trash" },
       { rootId: 1, fsPrefix: "/alice/.fdrive-desktop" },
+      { rootId: 1, fsPrefix: "/alice/Shared with me" },
     ],
     names: [".fdrive-move-v1"],
   };
@@ -145,21 +141,11 @@ describe("createSearchService: search - unavailable", () => {
       tookMs: 0,
     });
   });
-
-  it("is unavailable when none of the scopes' roots have a matching row in the index", async () => {
-    const indexQueries = fakeIndexQueries({ rootIdsByName: async () => ({}) });
-    const service = createSearchService(buildDeps({ indexQueries }));
-
-    const result = await service.search(baseInput());
-
-    expect(result.unavailable).toBe(true);
-  });
 });
 
 describe("createSearchService: search - degraded", () => {
   function depsWithNoMatches(overrides: Partial<SearchServiceDeps> = {}) {
     const indexQueries = fakeIndexQueries({
-      rootIdsByName: async () => ({ files: 1 }),
       semantic: async () => [],
       fulltext: async () => [],
       filename: async () => [],
@@ -195,7 +181,6 @@ describe("createSearchService: search - degraded", () => {
   it("is not degraded when the embed client returns a vector", async () => {
     const embedClient: EmbedClient = { embed: async () => [0.1, 0.2] };
     const indexQueries = fakeIndexQueries({
-      rootIdsByName: async () => ({ files: 1 }),
       semantic: async () => [],
       fulltext: async () => [],
       filename: async () => [],
@@ -214,7 +199,6 @@ describe("createSearchService: search - degraded", () => {
 
   it("reports partial when the underlying fanout was cut, even with no matches to show", async () => {
     const indexQueries = fakeIndexQueries({
-      rootIdsByName: async () => ({ files: 1 }),
       semantic: async () => [],
       fulltext: async () => Array.from({ length: 60 }, (_, i) => ({ fileId: i, snippet: "x" })),
       filename: async () => [],
@@ -247,7 +231,6 @@ describe("createSearchService: search - query concurrency", () => {
     });
     const semantic = vi.fn(async () => []);
     const indexQueries = fakeIndexQueries({
-      rootIdsByName: async () => ({ files: 1 }),
       semantic,
       fulltext,
       filename,
@@ -292,7 +275,6 @@ describe("createSearchService: search - ranking", () => {
       mtimeNs: daysAgoNs(0),
     });
     const indexQueries = fakeIndexQueries({
-      rootIdsByName: async () => ({ files: 1 }),
       semantic: async () => [{ fileId: 2, snippet: "create a project plan" }],
       fulltext: async () => [{ fileId: 2, snippet: "create a project plan" }],
       filename: async () => [
@@ -322,7 +304,6 @@ describe("createSearchService: search - ranking", () => {
       mtimeNs: daysAgoNs(3),
     });
     const indexQueries = fakeIndexQueries({
-      rootIdsByName: async () => ({ files: 1 }),
       semantic: async () => [],
       fulltext: async () => [],
       filename: async () => [
@@ -345,7 +326,6 @@ describe("createSearchService: search - ranking", () => {
     const old = makeFile({ id: 1, path: "alice/old.md", name: "old.md", mtimeNs: daysAgoNs(2000) });
     const recent = makeFile({ id: 2, path: "alice/new.md", name: "new.md", mtimeNs: daysAgoNs(1) });
     const indexQueries = fakeIndexQueries({
-      rootIdsByName: async () => ({ files: 1 }),
       semantic: async () => [],
       fulltext: async () => [
         { fileId: 1, snippet: "the budget for 2020" },
@@ -377,7 +357,6 @@ describe("createSearchService: search - ranking", () => {
       mtimeNs: daysAgoNs(0),
     });
     const indexQueries = fakeIndexQueries({
-      rootIdsByName: async () => ({ files: 1 }),
       semantic: async () => [],
       fulltext: async () => [{ fileId: 2, snippet: "see the budget" }],
       filename: async () => [{ fileId: 1, hits: 1, similarity: 1 }],
@@ -396,7 +375,6 @@ describe("createSearchService: search - ranking", () => {
     );
     const mention = makeFile({ id: 3, path: "alice/notes.md", name: "notes.md", ext: ".md" });
     const indexQueries = fakeIndexQueries({
-      rootIdsByName: async () => ({ files: 1 }),
       semantic: async () => [],
       fulltext: async () => [{ fileId: 3, snippet: "see the budget" }],
       filename: async () => named.map((file) => ({ fileId: file.id, hits: 1, similarity: 1 })),
@@ -414,7 +392,6 @@ describe("createSearchService: search - ranking", () => {
     const fulltext = vi.fn<IndexQueries["fulltext"]>(async () => []);
     const filename = vi.fn<IndexQueries["filename"]>(async () => []);
     const indexQueries = fakeIndexQueries({
-      rootIdsByName: async () => ({ files: 1 }),
       fulltext,
       filename,
     });
@@ -436,7 +413,6 @@ describe("createSearchService: search - hits", () => {
   it("maps a filename-only hit to a virtual path, with an empty snippet list", async () => {
     const file = makeFile({ id: 10, path: "alice/report.pdf", name: "report.pdf", ext: ".pdf" });
     const indexQueries = fakeIndexQueries({
-      rootIdsByName: async () => ({ files: 1 }),
       semantic: async () => [],
       fulltext: async () => [],
       filename: async () => [{ fileId: 10, hits: 1, similarity: 0.8 }],
@@ -461,7 +437,6 @@ describe("createSearchService: search - hits", () => {
     const file = makeFile({ id: 20, path: "alice/notes.md", name: "notes.md", ext: ".md" });
     const contentHits: ContentHit[] = [{ fileId: 20, snippet: "the readme explains setup" }];
     const indexQueries = fakeIndexQueries({
-      rootIdsByName: async () => ({ files: 1 }),
       semantic: async () => [],
       fulltext: async () => contentHits,
       filename: async () => [],
@@ -482,7 +457,6 @@ describe("createSearchService: search - hits", () => {
     const file = makeFile({ id: 30, path: "alice/report.pdf", name: "report.pdf" });
     const embedClient: EmbedClient = { embed: async () => [0.1] };
     const indexQueries = fakeIndexQueries({
-      rootIdsByName: async () => ({ files: 1 }),
       semantic: async () => [{ fileId: 30, snippet: "report contents" }],
       fulltext: async () => [],
       filename: async () => [{ fileId: 30, hits: 1, similarity: 0.5 }],
@@ -501,10 +475,9 @@ describe("createSearchService: search - hits", () => {
     expect(result.sections.files[0]?.score).toBeCloseTo(expectedScore, 10);
   });
 
-  it("drops a file whose root is not in the configured roots map", async () => {
-    const file = makeFile({ id: 40, rootId: 99, path: "alice/x.txt" });
+  it("drops a file outside the caller's scopes", async () => {
+    const file = makeFile({ id: 40, path: "bob/x.txt" });
     const indexQueries = fakeIndexQueries({
-      rootIdsByName: async () => ({ files: 1 }),
       semantic: async () => [],
       fulltext: async () => [],
       filename: async () => [{ fileId: 40, hits: 1, similarity: 0.5 }],
@@ -520,7 +493,6 @@ describe("createSearchService: search - hits", () => {
   it("drops a hit that fails the search filters", async () => {
     const file = makeFile({ id: 50, path: "alice/report.pdf", ext: ".pdf" });
     const indexQueries = fakeIndexQueries({
-      rootIdsByName: async () => ({ files: 1 }),
       semantic: async () => [],
       fulltext: async () => [],
       filename: async () => [{ fileId: 50, hits: 1, similarity: 0.5 }],
@@ -540,12 +512,11 @@ describe("createSearchService: search - hits", () => {
     // still filed under "alice/shared/x.txt" must never surface through
     // the home scope once the more specific override exists.
     const scopes: readonly Scope[] = [
-      { rootName: "files", fsPrefix: "/alice", virtualPrefix: "/" },
-      { rootName: "files", fsPrefix: "/team", virtualPrefix: "/shared" },
+      { fsPrefix: "/alice", virtualPrefix: "/" },
+      { fsPrefix: "/team", virtualPrefix: "/shared" },
     ];
     const file = makeFile({ id: 53, path: "alice/shared/x.txt", name: "x.txt" });
     const indexQueries = fakeIndexQueries({
-      rootIdsByName: async () => ({ files: 1 }),
       semantic: async () => [],
       fulltext: async () => [],
       filename: async () => [{ fileId: 53, hits: 1, similarity: 0.5 }],
@@ -566,7 +537,6 @@ describe("createSearchService: search - hits", () => {
       similarity: 1 - i * 0.1,
     }));
     const indexQueries = fakeIndexQueries({
-      rootIdsByName: async () => ({ files: 1 }),
       semantic: async () => [],
       fulltext: async () => [],
       filename: async () => filenameHits,
@@ -585,7 +555,6 @@ describe("createSearchService: search - hits", () => {
     );
     const contentHits: ContentHit[] = files.map((f) => ({ fileId: f.id, snippet: "readme text" }));
     const indexQueries = fakeIndexQueries({
-      rootIdsByName: async () => ({ files: 1 }),
       semantic: async () => [],
       fulltext: async () => contentHits,
       filename: async () => [],
@@ -602,7 +571,6 @@ describe("createSearchService: search - hits", () => {
     const file = makeFile({ id: 60, sha256: "abc123" });
     const thumbnailKeys = vi.fn(async () => new Set(["abc123"]));
     const indexQueries = fakeIndexQueries({
-      rootIdsByName: async () => ({ files: 1 }),
       semantic: async () => [],
       fulltext: async () => [],
       filename: async () => [{ fileId: 60, hits: 1, similarity: 0.5 }],
@@ -629,7 +597,6 @@ describe("createSearchService: search - hits", () => {
     const filesByIds = vi.fn(async () => files);
     const thumbnailKeys = vi.fn(async () => new Set(["k0", "k2"]));
     const indexQueries = fakeIndexQueries({
-      rootIdsByName: async () => ({ files: 1 }),
       semantic: async () => [],
       fulltext: async () => [],
       filename: async () =>
@@ -658,7 +625,6 @@ describe("createSearchService: search - hits", () => {
     const elsewhere = makeFile({ id: 99, path: "bob/readme.txt", name: "readme.txt" });
     const files = [elsewhere, ...shown];
     const indexQueries = fakeIndexQueries({
-      rootIdsByName: async () => ({ files: 1 }),
       semantic: async () => [],
       fulltext: async () => [],
       filename: async () =>
@@ -677,7 +643,6 @@ describe("createSearchService: search - hits", () => {
     const file = makeFile({ id: 61, sha256: "abc123" });
     const thumbnailKeys = vi.fn(async () => new Set(["abc123"]));
     const indexQueries = fakeIndexQueries({
-      rootIdsByName: async () => ({ files: 1 }),
       semantic: async () => [],
       fulltext: async () => [],
       filename: async () => [{ fileId: 61, hits: 1, similarity: 0.5 }],
@@ -696,7 +661,6 @@ describe("createSearchService: search - hits", () => {
     const file = makeFile({ id: 62, sha256: null });
     const thumbnailKeys = vi.fn(async () => new Set<string>());
     const indexQueries = fakeIndexQueries({
-      rootIdsByName: async () => ({ files: 1 }),
       semantic: async () => [],
       fulltext: async () => [],
       filename: async () => [{ fileId: 62, hits: 1, similarity: 0.5 }],
@@ -869,7 +833,6 @@ describe("createSearchService: search - hits", () => {
     const filename = vi.fn(async () => []);
     const folders = vi.fn(async () => []);
     const indexQueries = fakeIndexQueries({
-      rootIdsByName: async () => ({ files: 1 }),
       semantic,
       fulltext,
       filename,
@@ -906,7 +869,6 @@ describe("createSearchService: search - hits", () => {
 
   it("skips a filename hit whose file id is not returned by filesByIds", async () => {
     const indexQueries = fakeIndexQueries({
-      rootIdsByName: async () => ({ files: 1 }),
       semantic: async () => [],
       fulltext: async () => [],
       filename: async () => [{ fileId: 999, hits: 1, similarity: 0.5 }],
@@ -926,7 +888,6 @@ describe("createSearchService: search - hits", () => {
     const fulltext = vi.fn(async () => []);
     const filename = vi.fn(async () => []);
     const indexQueries = fakeIndexQueries({
-      rootIdsByName: async () => ({ files: 1 }),
       semantic: async () => [{ fileId: 80, snippet: "hit" }],
       fulltext,
       filename,
@@ -951,7 +912,6 @@ describe("createSearchService: search - hits", () => {
       return at;
     };
     const indexQueries = fakeIndexQueries({
-      rootIdsByName: async () => ({ files: 1 }),
       semantic: async () => [],
       fulltext: async () => [],
       filename: async () => [],
@@ -1020,7 +980,6 @@ describe("createSearchService: search - typos", () => {
     });
     const filesByIds = vi.fn(async () => [typed, typo, content]);
     const indexQueries = fakeIndexQueries({
-      rootIdsByName: async () => ({ files: 1 }),
       semantic: async () => [],
       fulltext: async () => [{ fileId: 3, snippet: "microlär" }],
       filename: async () => [{ fileId: 1, hits: 1, similarity: 0.5 }],

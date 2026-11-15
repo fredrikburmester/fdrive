@@ -411,13 +411,11 @@ for pairing and listing snapshots or a shared transient store.
 ### Change feed
 
 `GET /api/v2/desktop/changes` reads fdrive's change journal (`idx.changes`, see the
-[change journal plan](plans/CHANGE-JOURNAL.md)) for one location. A location has a feed, and
-its v2 `location` says `changeFeed: true`, when its login's index root is indexed
-(`FDRIVE_INDEX_ROOTS`), this API journals its own changes under that root (the root's
-`storagePath` is the files folder) and the indexer has created the root. Otherwise the route
-answers 404 and the app uses folder checks. Older apps ignore the key and keep using checks.
+[change journal plan](plans/CHANGE-JOURNAL.md)) for one location. Every location has a feed,
+and its v2 `location` says `changeFeed: true`: the API journals every change it makes from its
+first start. Older apps ignore the key and keep using checks.
 
-Rows are read under the location's verified index scopes ([scoping](SCOPING.md)): each end of a
+Rows are read under the location's scopes ([scoping](SCOPING.md)): each end of a
 row, its path and a move's target, is mapped from the root-relative path with the round trip
 index reads use, so folders shared with the login appear under `/Shared with me`, a path no scope
 covers or one a shared folder shadows is dropped, and so is anything the location's listings
@@ -429,8 +427,8 @@ changed path are left out, and each appears once.
 
 The anchor is opaque to the app: `v1.<epoch>.<fingerprint>.<position>`. The epoch is a random id
 in `idx.change_epoch`, which backups never include, so a restore, after which positions start
-again at 1, gets a new one. The fingerprint covers the location's scopes and their roots' ids,
-so sharing or unsharing a folder, or a root created again, changes it. A mismatch of either, an
+again at 1, gets a new one. The fingerprint covers the location's scopes, so sharing or unsharing
+a folder changes it. A mismatch of either, an
 unreadable anchor, one past the journal's end and a gap (rows after it were pruned, past 30
 days) answer `resync` with an anchor at the journal's end, as does a request without one, so a
 new app starts from now after one full check. An answer covers up to 1,000 rows; with `more`,

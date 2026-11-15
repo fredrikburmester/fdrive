@@ -25,12 +25,6 @@ const repoRoot = resolve(webDir, "..", "..");
 
 const SERVER_READY_TIMEOUT_MS = 90_000;
 
-/**
- * The index root the local folder is read under (`FDRIVE_INDEX_ROOTS`):
- * `<root>/<username>` homes are indexed as `<username>/...` paths below it.
- */
-export const INDEX_ROOT_NAME = "files";
-
 /** Whether to run the web app via `next dev` instead of a production build, for faster local iteration. */
 function isDevServerMode(): boolean {
   return process.env.E2E_DEV === "1";
@@ -75,8 +69,6 @@ export interface StartEnvironmentOptions {
    * folder with no users, so `/setup` creates the first. Defaults to `true`.
    */
   readonly createUsers?: boolean;
-  /** Configures `FDRIVE_INDEX_ROOTS` with the local folder as the `files` root, so search is available. */
-  readonly indexRoot?: boolean;
   /** Fixture-only preparation of the local folder before the API starts. */
   readonly prepareStorage?: (storage: LocalStorageFixture) => Promise<void>;
   /**
@@ -280,17 +272,6 @@ export async function startEnvironment(
           NODE_ENV: "test",
           DATABASE_URL: postgres.connectionString,
           FDRIVE_STORAGE_ROOT: storage.root,
-          ...(options.indexRoot === true
-            ? {
-                FDRIVE_INDEX_ROOTS: JSON.stringify([
-                  {
-                    name: INDEX_ROOT_NAME,
-                    storagePath: storage.root,
-                    indexerPath: `/roots/${INDEX_ROOT_NAME}`,
-                  },
-                ]),
-              }
-            : {}),
           FDRIVE_MASTER_KEY: masterKey,
           FDRIVE_COOKIE_SECURE: "false",
           // Makes `System > Thumbnails` render as configured (see

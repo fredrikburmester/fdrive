@@ -71,14 +71,8 @@ export function intersectScopes(scopes: readonly Scope[], paths: readonly string
       if (prefix === null) continue;
       const local = toFsPath([scope], prefix);
       const actual = toFsPath(scopes, prefix);
-      if (
-        local === null ||
-        actual === null ||
-        local.rootName !== actual.rootName ||
-        local.fsPath !== actual.fsPath
-      )
-        continue;
-      const narrowed = { rootName: local.rootName, fsPrefix: local.fsPath, virtualPrefix: prefix };
+      if (local === null || local !== actual) continue;
+      const narrowed = { fsPrefix: local, virtualPrefix: prefix };
       result.set(JSON.stringify(narrowed), narrowed);
     }
   }
@@ -86,8 +80,8 @@ export function intersectScopes(scopes: readonly Scope[], paths: readonly string
 }
 
 /**
- * A token's verified scopes narrowed to its folders. A session principal (the
- * AI's tools) carries no grants and keeps every verified scope.
+ * A token's scopes narrowed to its folders. A session principal (the AI's
+ * tools) carries no grants and keeps every scope.
  */
 export function tokenScopes(principal: Principal, scopes: readonly Scope[]): readonly Scope[] {
   return principal.tokenAccess === undefined

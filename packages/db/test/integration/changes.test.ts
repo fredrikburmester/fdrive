@@ -18,7 +18,7 @@ let close: () => Promise<void>;
 let journal: ChangeJournal;
 
 interface ChangeRow extends Record<string, unknown> {
-  root: string;
+  root_id: number;
   path: string;
   target_path: string | null;
   source: string;
@@ -32,9 +32,9 @@ interface ChangeRow extends Record<string, unknown> {
 
 async function rows(): Promise<ChangeRow[]> {
   const result = await db.execute<ChangeRow>(sql`
-    select r.name as root, c.path, c.target_path, c.source, c.sha256, c.size::text,
+    select c.root_id, c.path, c.target_path, c.source, c.sha256, c.size::text,
       c.mtime_ns::text, c.inode::text, c.ctime_ns::text, c.previous_ctime_ns::text
-    from idx.changes c join idx.roots r on r.id = c.root_id order by c.id`);
+    from idx.changes c order by c.id`);
   return result.rows;
 }
 
@@ -63,15 +63,12 @@ afterAll(async () => {
 }, 180_000);
 
 beforeEach(async () => {
-  await db.execute(
-    sql`truncate table idx.changes, idx.change_cursors, idx.roots restart identity cascade`,
-  );
+  await db.execute(sql`truncate table idx.changes, idx.change_cursors restart identity`);
 });
 
 describe("append", () => {
-  it("adds rows under the named root in order, with their source and an upload's content", async () => {
-    await db.execute(sql`insert into idx.roots (name) values ('other'), ('files')`);
-    await journal.append("files", "api", [
+  it("adds rows under the files root in order, with their source and an upload's content", async () => {
+    await journal.append("api", [
       {
         path: "alice/a.pdf",
         content: {
@@ -90,7 +87,7 @@ describe("append", () => {
         stamp: { size: 7, mtimeNs: 5n, ino: 2n ** 64n - 6n, ctimeNs: 6n, previousCtimeNs: 4n },
       },
     ]);
-    await journal.append("files", "scan", [{ path: "alice/gone.txt" }]);
+    await journal.append("scan", [{ path: "alice/gone.txt" }]);
     const none = {
       sha256: null,
       size: null,
@@ -101,7 +98,7 @@ describe("append", () => {
     };
     expect(await rows()).toEqual([
       {
-        root: "files",
+        root_id: 1,
         path: "alice/a.pdf",
         target_path: null,
         source: "api",
@@ -112,10 +109,10 @@ describe("append", () => {
         ctime_ns: "1700000001000000001",
         previous_ctime_ns: null,
       },
-      { root: "files", path: "alice/old", target_path: "alice/new", source: "api", ...none },
+      { root_id: 1, path: "alice/old", target_path: "alice/new", source: "api", ...none },
       // A moved file as the rename left it, and its change time before: no digest.
       {
-        root: "files",
+        root_id: 1,
         path: "alice/b.pdf",
         target_path: "alice/c.pdf",
         source: "api",
@@ -126,19 +123,16 @@ describe("append", () => {
         ctime_ns: "6",
         previous_ctime_ns: "4",
       },
-      { root: "files", path: "alice/gone.txt", target_path: null, source: "scan", ...none },
+      { root_id: 1, path: "alice/gone.txt", target_path: null, source: "scan", ...none },
     ]);
   });
 
-  it("writes nothing for a root the indexer has not created, or for no items", async () => {
-    await journal.append("files", "api", [{ path: "alice/a.pdf" }]);
-    await db.execute(sql`insert into idx.roots (name) values ('files')`);
-    await journal.append("files", "api", []);
+  it("writes nothing for no items", async () => {
+    await journal.append("api", []);
     expect(await rows()).toEqual([]);
   });
 
   it("refuses a source the journal does not know", async () => {
-    await db.execute(sql`insert into idx.roots (name) values ('files')`);
     await expect(
       db.execute(
         sql`insert into idx.changes (root_id, path, source) values (1, 'alice/a.txt', 'web')`,
@@ -147,7 +141,6 @@ describe("append", () => {
   });
 
   it("wakes listeners with the root's name once the rows are committed", async () => {
-    await db.execute(sql`insert into idx.roots (name) values ('files')`);
     const listener = new Client({ connectionString: container.getConnectionUri() });
     await listener.connect();
     try {
@@ -157,7 +150,7 @@ describe("append", () => {
           resolve({ channel: message.channel, payload: message.payload }),
         );
       });
-      await journal.append("files", "api", [{ path: "alice/a.txt" }]);
+      await journal.append("api", [{ path: "alice/a.txt" }]);
       expect(await notified).toEqual({ channel: "idx_changes", payload: "files" });
       expect(await rows()).toHaveLength(1);
     } finally {
@@ -166,14 +159,13 @@ describe("append", () => {
   });
 
   it("waits for a writer that holds the journal's lock, so positions commit in order", async () => {
-    await db.execute(sql`insert into idx.roots (name) values ('files')`);
     const other = new Client({ connectionString: container.getConnectionUri() });
     await other.connect();
     try {
       await other.query("begin");
       await other.query("select pg_advisory_xact_lock(hashtextextended('idx.changes', 0))");
       let done = false;
-      const appended = journal.append("files", "api", [{ path: "alice/a.txt" }]).then(() => {
+      const appended = journal.append("api", [{ path: "alice/a.txt" }]).then(() => {
         done = true;
       });
       await new Promise((resolve) => setTimeout(resolve, 300));
@@ -185,22 +177,11 @@ describe("append", () => {
       await other.end();
     }
   });
-
-  it("goes with its root, cursors included", async () => {
-    await db.execute(sql`insert into idx.roots (name) values ('files')`);
-    await journal.append("files", "api", [{ path: "alice/a.txt" }]);
-    await journal.saveCursor("indexer", "files", 1);
-    await db.execute(sql`delete from idx.roots where name = 'files'`);
-    expect(await rows()).toEqual([]);
-    const cursors = await db.execute(sql`select * from idx.change_cursors`);
-    expect(cursors.rows).toEqual([]);
-  });
 });
 
 describe("prune", () => {
   it("drops rows older than 30 days as a prefix and keeps the newest row", async () => {
-    await db.execute(sql`insert into idx.roots (name) values ('files')`);
-    await journal.append("files", "api", [
+    await journal.append("api", [
       { path: "alice/1.txt" },
       { path: "alice/2.txt" },
       { path: "alice/3.txt" },
@@ -214,35 +195,32 @@ describe("prune", () => {
     await age("alice/3.txt", "40 days");
     expect(await journal.prune()).toBe(0);
     expect(await paths()).toEqual(["alice/3.txt"]);
-    await journal.append("files", "api", [{ path: "alice/4.txt" }]);
+    await journal.append("api", [{ path: "alice/4.txt" }]);
     expect(await journal.prune()).toBe(1);
     expect(await paths()).toEqual(["alice/4.txt"]);
   });
 
   it("drops nothing from an empty or young journal", async () => {
     expect(await journal.prune()).toBe(0);
-    await db.execute(sql`insert into idx.roots (name) values ('files')`);
-    await journal.append("files", "api", [{ path: "alice/a.txt" }, { path: "alice/b.txt" }]);
+    await journal.append("api", [{ path: "alice/a.txt" }, { path: "alice/b.txt" }]);
     expect(await journal.prune()).toBe(0);
     expect(await paths()).toEqual(["alice/a.txt", "alice/b.txt"]);
   });
 
   it("runs before each write of a source's writer", async () => {
-    await db.execute(sql`insert into idx.roots (name) values ('files')`);
     const write = createChangeWriter(db, "api");
-    await write("files", [{ path: "alice/stale.txt" }, { path: "alice/recent.txt" }]);
+    await write([{ path: "alice/stale.txt" }, { path: "alice/recent.txt" }]);
     await age("alice/stale.txt", "31 days");
-    await write("files", []);
+    await write([]);
     expect(await paths()).toEqual(["alice/stale.txt", "alice/recent.txt"]);
-    await write("files", [{ path: "alice/new.txt" }]);
+    await write([{ path: "alice/new.txt" }]);
     expect(await paths()).toEqual(["alice/recent.txt", "alice/new.txt"]);
   });
 });
 
 describe("read", () => {
-  it("returns a root's rows after a position, oldest first, up to a limit", async () => {
-    await db.execute(sql`insert into idx.roots (name) values ('files'), ('other')`);
-    await journal.append("files", "api", [
+  it("returns the rows after a position, oldest first, up to a limit", async () => {
+    await journal.append("api", [
       {
         path: "alice/a.pdf",
         content: {
@@ -254,16 +232,14 @@ describe("read", () => {
         },
       },
     ]);
-    await journal.append("other", "watcher", [{ path: "p.jpg" }]);
-    await journal.append("files", "scan", [{ path: "alice/old", targetPath: "alice/new" }]);
-    await journal.append("files", "ocr", [{ path: "alice/b.pdf" }]);
+    await journal.append("scan", [{ path: "alice/old", targetPath: "alice/new" }]);
+    await journal.append("ocr", [{ path: "alice/b.pdf" }]);
 
-    const page = await journal.read("files", 0, 2);
+    const page = await journal.read(0, 2);
     expect(page.gap).toBe(false);
     expect(page.changes.map(({ createdAt, ...change }) => change)).toEqual([
       {
         position: 1,
-        root: "files",
         path: "alice/a.pdf",
         targetPath: null,
         source: "api",
@@ -276,8 +252,7 @@ describe("read", () => {
         },
       },
       {
-        position: 3,
-        root: "files",
+        position: 2,
         path: "alice/old",
         targetPath: "alice/new",
         source: "scan",
@@ -285,26 +260,12 @@ describe("read", () => {
       },
     ]);
     expect(page.changes[0]?.createdAt).toBeInstanceOf(Date);
-    const rest = await journal.read("files", 3, 10);
-    expect(rest.changes.map((change) => [change.position, change.source])).toEqual([[4, "ocr"]]);
-    expect((await journal.read("files", 4, 10)).changes).toEqual([]);
-    expect(await journal.read("nowhere", 0, 10)).toEqual({ gap: false, changes: [] });
-    // Several roots read as one, in position order, each row naming its root.
-    expect(
-      (await journal.read(["other", "files"], 1, 10)).changes.map((change) => [
-        change.position,
-        change.root,
-      ]),
-    ).toEqual([
-      [2, "other"],
-      [3, "files"],
-      [4, "files"],
-    ]);
-    expect(await journal.read([], 0, 10)).toEqual({ gap: false, changes: [] });
+    const rest = await journal.read(2, 10);
+    expect(rest.changes.map((change) => [change.position, change.source])).toEqual([[3, "ocr"]]);
+    expect((await journal.read(3, 10)).changes).toEqual([]);
   });
 
   it("returns no content for a hint missing any of its columns", async () => {
-    await db.execute(sql`insert into idx.roots (name) values ('files')`);
     const columns = ["sha256", "size", "mtime_ns", "inode", "ctime_ns"];
     for (const missing of columns) {
       const values = columns.map((column) =>
@@ -315,27 +276,26 @@ describe("read", () => {
           values (1, 'alice/${missing}.pdf', 'api', ${values.join(", ")})`),
       );
     }
-    const page = await journal.read("files", 0, 10);
+    const page = await journal.read(0, 10);
     expect(page.changes.map((change) => [change.path, change.content])).toEqual(
       columns.map((missing) => [`alice/${missing}.pdf`, null]),
     );
   });
 
   it("reports a gap once rows after the position were pruned, and none before", async () => {
-    await db.execute(sql`insert into idx.roots (name) values ('files')`);
-    await journal.append("files", "api", [
+    await journal.append("api", [
       { path: "alice/1.txt" },
       { path: "alice/2.txt" },
       { path: "alice/3.txt" },
     ]);
-    expect((await journal.read("files", 0, 10)).gap).toBe(false);
+    expect((await journal.read(0, 10)).gap).toBe(false);
     await age("alice/1.txt", "31 days");
     await journal.prune();
     // Position 1 was pruned: a consumer that had read it lost nothing.
-    expect((await journal.read("files", 1, 10)).gap).toBe(false);
-    expect((await journal.read("files", 0, 10)).gap).toBe(true);
+    expect((await journal.read(1, 10)).gap).toBe(false);
+    expect((await journal.read(0, 10)).gap).toBe(true);
     // The surviving rows still come back with the gap.
-    expect((await journal.read("files", 0, 10)).changes.map((change) => change.path)).toEqual([
+    expect((await journal.read(0, 10)).changes.map((change) => change.path)).toEqual([
       "alice/2.txt",
       "alice/3.txt",
     ]);
@@ -362,28 +322,21 @@ describe("epoch", () => {
 });
 
 describe("positions and cursors", () => {
-  it("ends at the newest position over every root, 0 when nothing was written", async () => {
+  it("ends at the newest position, 0 when nothing was written", async () => {
     expect(await journal.end()).toBe(0);
-    await db.execute(sql`insert into idx.roots (name) values ('files'), ('other')`);
-    await journal.append("files", "api", [{ path: "a" }, { path: "b" }]);
-    await journal.append("other", "api", [{ path: "c" }]);
+    await journal.append("api", [{ path: "a" }, { path: "b" }]);
+    await journal.append("api", [{ path: "c" }]);
     expect(await journal.end()).toBe(3);
   });
 
-  it("saves and reads a position per consumer and root", async () => {
-    await db.execute(sql`insert into idx.roots (name) values ('files'), ('other')`);
-    expect(await journal.cursor("indexer", "files")).toBeNull();
-    await journal.saveCursor("indexer", "files", 7);
-    await journal.saveCursor("indexer", "other", 2);
-    await journal.saveCursor("web", "files", 5);
-    await journal.saveCursor("indexer", "files", 9);
-    expect(await journal.cursor("indexer", "files")).toBe(9);
-    expect(await journal.cursor("indexer", "other")).toBe(2);
-    expect(await journal.cursor("web", "files")).toBe(5);
-    expect(await journal.cursor("web", "other")).toBeNull();
-    // A root the indexer has not created has no position to keep.
-    await journal.saveCursor("indexer", "nowhere", 3);
-    expect(await journal.cursor("indexer", "nowhere")).toBeNull();
+  it("saves and reads a position per consumer", async () => {
+    expect(await journal.cursor("indexer")).toBeNull();
+    await journal.saveCursor("indexer", 7);
+    await journal.saveCursor("web", 5);
+    await journal.saveCursor("indexer", 9);
+    expect(await journal.cursor("indexer")).toBe(9);
+    expect(await journal.cursor("web")).toBe(5);
+    expect(await journal.cursor("mac")).toBeNull();
     const updated = await db.execute<{ fresh: boolean }>(
       sql`select bool_and(updated_at > now() - interval '1 minute') as fresh from idx.change_cursors`,
     );

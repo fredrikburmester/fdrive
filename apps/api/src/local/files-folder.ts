@@ -1,4 +1,3 @@
-import { resolve } from "node:path";
 import type { Repos } from "@fdrive/db";
 import {
   createFilesFolder,
@@ -8,45 +7,9 @@ import {
   type FilesFolderFacts,
   type FilesFolderGuard,
 } from "@fdrive/local";
-import type { AppConfig, IndexRootConfig } from "../config.js";
+import type { AppConfig } from "../config.js";
 import type { ChangeQueue } from "./change-queue.js";
 import { createLocalUsers } from "./users.js";
-
-/** The index root name the local folder has when no configured root names it. */
-export const LOCAL_INDEX_ROOT = "files";
-
-/**
- * The index root the local folder is read under: the configured root whose
- * `storagePath` is the folder, else the only root there is, else `files`.
- * A name is needed even when nothing is indexed: Office keys its documents
- * by root and path. Search and thumbnails still need the root configured
- * (`FDRIVE_INDEX_ROOTS`), so a default name enables nothing by itself.
- */
-export function localIndexRoot(
-  roots: readonly IndexRootConfig[] | null,
-  storageRoot: string,
-): string {
-  if (roots === null) return LOCAL_INDEX_ROOT;
-  const folder = resolve(storageRoot);
-  const named = roots.find((root) => resolve(root.storagePath) === folder);
-  if (named !== undefined) return named.name;
-  return roots.length === 1 ? (roots[0] as IndexRootConfig).name : LOCAL_INDEX_ROOT;
-}
-
-/**
- * The index root the indexer reads the files folder itself under, and so
- * the root fdrive's changes are journaled under: the configured root whose
- * `storagePath` is the folder, or `null`. Unlike `localIndexRoot` it never
- * guesses, since changes reported under a root that names another folder
- * would carry paths the indexer cannot find.
- */
-export function journalRoot(
-  roots: readonly IndexRootConfig[] | null,
-  storageRoot: string,
-): string | null {
-  const folder = resolve(storageRoot);
-  return roots?.find((root) => resolve(root.storagePath) === folder)?.name ?? null;
-}
 
 /**
  * The files folder's row in `app.providers`, created on the first start and
@@ -58,7 +21,7 @@ export async function ensureStorageRow(repos: Pick<Repos, "providers">): Promise
 }
 
 export interface DeploymentFilesFolderOptions {
-  /** Records every change fdrive makes in the change journal, when the indexer reads the folder itself. */
+  /** Records every change fdrive makes in the change journal. */
   readonly changes?: ChangeQueue;
   /** Refuses storage while the folder is not this installation's (`createDeploymentFilesFolderGuard`). */
   readonly guard?: FilesFolderGuard;
@@ -72,23 +35,17 @@ export interface DeploymentFilesFolderOptions {
  * way.
  */
 export function deploymentFilesFolder(
-  config: Pick<AppConfig, "fdriveStorageRoot" | "fdriveIndexRoots">,
+  config: Pick<AppConfig, "fdriveStorageRoot">,
   repos: Pick<Repos, "localUsers" | "localGrants">,
   options: DeploymentFilesFolderOptions = {},
 ): FilesFolder {
-  const root = config.fdriveStorageRoot;
   const { changes, guard, clock } = options;
-  const journaled = changes === undefined ? null : journalRoot(config.fdriveIndexRoots, root);
   return createFilesFolder({
-    root,
+    root: config.fdriveStorageRoot,
     users: createLocalUsers({ repo: repos.localUsers, grants: repos.localGrants }),
-    // When `journaled` names a root, this is the same one: it matches first.
-    indexRoot: localIndexRoot(config.fdriveIndexRoots, root),
     ...(guard === undefined ? {} : { guard }),
     ...(clock === undefined ? {} : { clock }),
-    ...(journaled === null || changes === undefined
-      ? {}
-      : { onIndexChange: (name, change) => changes.record(name, change) }),
+    ...(changes === undefined ? {} : { onIndexChange: (change) => changes.record(change) }),
   });
 }
 

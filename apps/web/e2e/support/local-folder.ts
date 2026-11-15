@@ -1,6 +1,5 @@
 import { join } from "node:path";
 import { Client } from "pg";
-import { INDEX_ROOT_NAME } from "./environment.js";
 
 function fromEnv(name: string): string {
   const value = process.env[name];
@@ -33,12 +32,12 @@ export async function journalOutsideChange(username: string, virtualPath: string
   try {
     await client.query("begin");
     await client.query("select pg_advisory_xact_lock(hashtextextended('idx.changes', 0))");
+    // The files folder is index root 1, which a migration seeds.
     await client.query(
-      `insert into idx.changes (root_id, path, source)
-       select id, $2, 'watcher' from idx.roots where name = $1`,
-      [INDEX_ROOT_NAME, `${username}${virtualPath}`],
+      "insert into idx.changes (root_id, path, source) values (1, $1, 'watcher')",
+      [`${username}${virtualPath}`],
     );
-    await client.query("select pg_notify('idx_changes', $1)", [INDEX_ROOT_NAME]);
+    await client.query("select pg_notify('idx_changes', 'files')");
     await client.query("commit");
   } finally {
     await client.end();

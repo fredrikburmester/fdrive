@@ -172,11 +172,12 @@ export function sharesHarness(options: SharesHarnessOptions = {}) {
         limiter,
         config,
         indexQueries: {
-          rootIdsByName: async () => ({}),
           fileByPath: async () => null,
           thumbnail: async () => null,
         },
-        resolver: { verifiedIndexScopes: async () => ({ available: false, reason: "no_roots" }) },
+        resolver: {
+          scopesFor: async (username) => [{ fsPrefix: `/${username}`, virtualPrefix: "/" }],
+        },
         identities: repos.identities,
         thumbsDir: undefined,
         ...options.routes,

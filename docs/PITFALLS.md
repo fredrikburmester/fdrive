@@ -80,7 +80,7 @@ Reference for affected code; shared rules live in [AGENTS.md](../AGENTS.md).
   database pool of their own. They never wait on each other; sharing one would let slow Office
   saves hold up Trash moves.
 - The API keeps what every request would read again in memory: that setup is done, the Trash
-  retention, the storage name and the index root ids. Only the API writes them, so a test (or
+  retention and the storage name. Only the API writes them, so a test (or
   anything else) that changes the Trash retention or the storage name straight in `app.settings`
   goes unseen until a restart; change them through their routes.
 - Storage compares names byte for byte, and accents come in two encodings: macOS stores "ö" as

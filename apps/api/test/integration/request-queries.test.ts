@@ -3,7 +3,7 @@ import { appendFile, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { FEATURES_SETTINGS_KEY, type SearchResponse } from "@fdrive/contracts";
-import { createDb, createRepos, schema } from "@fdrive/db";
+import { createDb, createRepos, INDEX_ROOT_ID, schema } from "@fdrive/db";
 import { startLocalStorage, startPostgres } from "@fdrive/testkit";
 import pg from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -74,8 +74,7 @@ describe("queries per request", () => {
         },
         walkthroughComplete: true,
       });
-      const [root] = await database.db.insert(schema.roots).values({ name: "files" }).returning();
-      if (root === undefined) throw new Error("expected the files root");
+      const root = { id: INDEX_ROOT_ID };
       const mtimeNs = BigInt(Date.now()) * 1_000_000n;
       const rows: [string, string][] = [
         ["bob/photo.jpg", sha(1000)],
@@ -121,11 +120,11 @@ describe("queries per request", () => {
     const config = loadConfig({
       DATABASE_URL: postgres.connectionString,
       FDRIVE_STORAGE_ROOT: storage.root,
-      FDRIVE_INDEX_ROOTS: JSON.stringify([
-        { name: "files", storagePath: storage.root, indexerPath: "/srv/files" },
-      ]),
       FDRIVE_THUMBS_DIR: thumbs,
       FDRIVE_MASTER_KEY: Buffer.alloc(32, 9).toString("base64"),
+      // Search and thumbnails need the indexer configured; nothing answers here,
+      // so search runs without the name index.
+      FDRIVE_INDEXER_URL: "http://127.0.0.1:9",
     });
     composed = await composeApp(config, silentLogger(), () => new Date());
     for (const username of ["alice", "bob", "carol"]) {
@@ -187,13 +186,14 @@ describe("queries per request", () => {
 
   it("resolves a signed-in request in one query and keeps index results to a few", async () => {
     // One statement resolves the request; the rest are the handler's own: the
-    // login for /auth/me; the shares `/Shared with me` lists, tags and
+    // login and the feature settings (whether the files folder is indexed)
+    // for /auth/me; the shares `/Shared with me` lists, tags and
     // favorites for a listing; the grants, feature settings, the three
     // index queries, the hits and one thumbnail lookup for search; the
     // grants, feature settings, the file and its thumbnail for a tile.
     // On main before this change: 12, 12, 30, 15 and 17.
     const budgets = {
-      "/api/v1/auth/me": 2,
+      "/api/v1/auth/me": 3,
       "/api/v1/fs/list?path=/": 4,
       "/api/v1/search?q=report&limit=20": 8,
       [thumb("/photo.jpg")]: 5,

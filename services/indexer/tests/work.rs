@@ -1199,7 +1199,7 @@ fn pruned_rows_it_never_read_request_a_scan_and_move_it_to_the_end() {
 fn rows_of_another_root_move_the_position_along() {
     let env = Env::new();
     let ctx = ctx(&env, text_on());
-    let other = db::upsert_root(&mut env.client(), "other").unwrap();
+    let other = common::other_root(&mut env.client(), "other");
     env.write("a.txt", b"one");
     db::append_changes(&mut env.client(), other, "other", "api", &[NewChange::path("a.txt")]).unwrap();
     assert_eq!(drain(&ctx), 0);

@@ -41,11 +41,8 @@ Recommended on 2026-11-14 and approved by the owner the same day.
 
 ## Wave 1: one user, one storage
 
-15. **One files index root.** `FDRIVE_INDEX_ROOTS` and `INDEX_ROOTS` map several roots with
-    separate API and indexer paths; the API guesses the root name and journals nothing until the
-    indexer creates the root row; three System pages have root pickers; indexer routes take a
-    root. Two scope resolvers become one. The `idx.schema_version` waits become a compose
-    dependency on a healthy API. Six ML URLs become `FDRIVE_ML_URL`.
+15. **Workers start after the API; one ML URL.** The `idx.schema_version` waits become a
+    compose dependency on a healthy API. Six ML URLs become `FDRIVE_ML_URL`.
 
 ## Wave 2: Trash, metadata and the journal
 

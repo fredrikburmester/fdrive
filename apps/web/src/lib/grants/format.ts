@@ -79,6 +79,10 @@ const SHARED_REFUSALS: readonly (readonly [prefix: string, text: string])[] = [
     "Only folders others share with you go in Shared with me.",
   ],
   ["Shared with me cannot be copied", "Shared with me can't be copied. Copy a folder inside it."],
+  [
+    "Shared with me is reserved",
+    "The name Shared with me is reserved for folders others share with you.",
+  ],
 ];
 
 /**

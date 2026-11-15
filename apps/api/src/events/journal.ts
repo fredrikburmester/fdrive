@@ -2,7 +2,6 @@ import type { FsEvent } from "@fdrive/contracts";
 import type { Scope } from "@fdrive/core";
 import type { Change, ChangeJournal, Identity } from "@fdrive/db";
 import { roundTripVirtualPath } from "../scoping/round-trip.ts";
-import type { ConfiguredMappingsResult } from "../scoping/types.ts";
 import type { EventBus } from "./bus.ts";
 
 /** The API's name in `idx.change_cursors`. */
@@ -32,11 +31,9 @@ export interface SeenChange {
 
 /** `change` as `scopes` see it, or `null` when they reach neither end. */
 export function seenBy(scopes: readonly Scope[], change: Change): SeenChange | null {
-  const path = roundTripVirtualPath(scopes, change.root, `/${change.path}`);
+  const path = roundTripVirtualPath(scopes, `/${change.path}`);
   const target =
-    change.targetPath === null
-      ? null
-      : roundTripVirtualPath(scopes, change.root, `/${change.targetPath}`);
+    change.targetPath === null ? null : roundTripVirtualPath(scopes, `/${change.targetPath}`);
   return path === null && target === null ? null : { change, path, target };
 }
 
@@ -58,11 +55,13 @@ export interface JournalLogger {
 
 export interface JournalFanoutDeps {
   readonly journal: Pick<ChangeJournal, "read" | "end" | "epoch" | "cursor" | "saveCursor">;
-  /** The index root the files folder is read under, the only one logins' scopes reach. */
-  readonly root: string;
   readonly identities: { listAll(): Promise<readonly Identity[]> };
-  /** A login's scopes by its username: its home and the folders shared with it, no storage read. */
-  readonly scopes: (username: string) => Promise<ConfiguredMappingsResult>;
+  /**
+   * A login's scopes by its username (`ScopeResolver.scopesFor`): its home and
+   * the folders shared with it, no storage read. Throws for a username that
+   * cannot name a home folder.
+   */
+  readonly scopes: (username: string) => Promise<readonly Scope[]>;
   readonly bus: EventBus;
   /**
    * Brings path-keyed metadata and personal activity along with a change
@@ -105,8 +104,8 @@ export interface JournalFanout {
 
 /**
  * The API's one reader of the change journal (`idx.changes`), and the only
- * way it learns of file changes. It follows the files folder's root from
- * its own position in `idx.change_cursors`, maps each row once through every
+ * way it learns of file changes. It follows the journal from its own
+ * position in `idx.change_cursors`, maps each row once through every
  * login's scopes and publishes one `fs` event per login that sees it, so
  * each change reaches each person once, the people a folder is shared with
  * included. A row fdrive did not write also goes through `outside` first.
@@ -129,13 +128,14 @@ export function createJournalFanout(deps: JournalFanoutDeps): JournalFanout {
   async function loginsNow(): Promise<Login[]> {
     const logins: Login[] = [];
     for (const identity of await deps.identities.listAll()) {
-      const scopes = await deps.scopes(identity.externalUsername);
-      if (!scopes.available) continue;
+      // A login whose username cannot name a folder has no files to see.
+      const scopes = await deps.scopes(identity.externalUsername).catch(() => null);
+      if (scopes === null) continue;
       logins.push({
         id: identity.id,
         accountId: identity.accountId,
         username: identity.externalUsername,
-        scopes: scopes.scopes,
+        scopes,
       });
     }
     return logins;
@@ -166,13 +166,13 @@ export function createJournalFanout(deps: JournalFanoutDeps): JournalFanout {
 
   async function drain(): Promise<void> {
     for (;;) {
-      const page = await deps.journal.read(deps.root, position, pageSize);
+      const page = await deps.journal.read(position, pageSize);
       if (page.gap) {
         // Down longer than the journal keeps rows: what came before is lost to
         // metadata, and browsers resync on their own.
         deps.logger.warn({ position }, "journal: rows after the API's position were pruned");
         position = await deps.journal.end();
-        await deps.journal.saveCursor(JOURNAL_CONSUMER, deps.root, position);
+        await deps.journal.saveCursor(JOURNAL_CONSUMER, position);
         continue;
       }
       if (page.changes.length === 0) return;
@@ -181,7 +181,7 @@ export function createJournalFanout(deps: JournalFanoutDeps): JournalFanout {
         if (stopped) return;
         await apply(change, logins);
       }
-      await deps.journal.saveCursor(JOURNAL_CONSUMER, deps.root, position);
+      await deps.journal.saveCursor(JOURNAL_CONSUMER, position);
       if (page.changes.length < pageSize) return;
     }
   }
@@ -219,8 +219,7 @@ export function createJournalFanout(deps: JournalFanoutDeps): JournalFanout {
   return {
     async start() {
       epoch = await deps.journal.epoch();
-      position =
-        (await deps.journal.cursor(JOURNAL_CONSUMER, deps.root)) ?? (await deps.journal.end());
+      position = (await deps.journal.cursor(JOURNAL_CONSUMER)) ?? (await deps.journal.end());
       started = true;
       wake();
     },
@@ -238,12 +237,12 @@ export function createJournalFanout(deps: JournalFanoutDeps): JournalFanout {
         const scopes = await deps.scopes(username);
         let from = after;
         while (from < upTo) {
-          const page = await deps.journal.read(deps.root, from, pageSize);
+          const page = await deps.journal.read(from, pageSize);
           if (page.gap) return false;
           if (page.changes.length === 0) break;
           for (const change of page.changes) {
             if (change.position > upTo) return true;
-            const seen = scopes.available ? seenBy(scopes.scopes, change) : null;
+            const seen = seenBy(scopes, change);
             if (seen !== null) send(fsEventFor(seen), change.position);
             from = change.position;
           }

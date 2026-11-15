@@ -36,12 +36,10 @@ function buildJobRunner(): JobRunner {
 function fakeFolderSizeDeps() {
   return {
     indexQueries: {
-      rootIdsByName: async () => ({}),
       subtreeSize: async () => ({ bytes: 0, files: 0 }),
     },
-    resolver: {
-      verifiedIndexScopes: async () => ({ available: false as const, reason: "no_roots" as const }),
-    },
+    resolver: { scopesFor: async () => [] },
+    indexed: async () => false,
     identities: { get: async () => null },
   };
 }

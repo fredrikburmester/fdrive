@@ -11,7 +11,7 @@ Current implementation reference. Unfinished work belongs in [plans](plans/READM
   authorization, HTTP, events and jobs. The UI uses the typed contracts client.
 - `packages/db` owns Drizzle migrations for PostgreSQL's `app` metadata and `idx` index
   schemas. The indexer and OCR consume those schemas; they do not independently migrate them.
-- The indexer scans mounted roots, extracts content and builds thumbnails/embeddings.
+- The indexer scans the files folder, extracts content and builds thumbnails/embeddings.
   The API records each change it makes in the change journal, `idx.changes`, and OCR each
   PDF it rewrites; the indexer reads the journal from its own position and applies them at
   once. Its file watcher and periodic scan cover changes made outside fdrive and journal them
@@ -60,7 +60,9 @@ every request, not only at sign-in, by the one query that resolves the request
 ([authentication](AUTH.md#resolving-a-request)). Folders shared between users
 are `app.local_grants` (owner, folder path, grantee, read or write), served by
 `/api/v1/grants`. The grantee's storage shows each at `/Shared with me/<name>` (the folder's
-name, then `<name> (<owner>)` on a clash), confined to the owner's folder; a read-only grant
+name, then `<name> (<owner>)` on a clash), confined to the owner's folder; `Shared with me` is
+a reserved name at the top of every home, and a real folder of that name stays on disk out of
+sight ([storage](STORAGE.md#wiring)); a read-only grant
 refuses every change, and the grantee cannot rename, move or delete `Shared with me` or the
 shared folders themselves. A move between a user's files and a writable shared folder is one
 rename. Grants follow the owner's moves and deletes, made through fdrive or journaled by the
@@ -120,11 +122,12 @@ native receipts, read aggregation and Unknown observations are documented in
 
 ## Index authorization
 
-Use [scoping](SCOPING.md) when touching search, thumbnails, metadata events or MCP. Index
-scopes come from the files folder's index root and the login's username, plus one per folder
-shared with it, computed for each request and never from a path a client sends; an index row
-they map to is the login's to see, with no storage read. A login whose root is not indexed keeps
-ordinary file operations, including explicitly scoped [MCP file tools](MCP.md).
+Use [scoping](SCOPING.md) when touching search, thumbnails, metadata events or MCP. A login's
+scopes are its home in the files folder plus one per folder shared with it (`scopesFor`),
+computed for each request and never from a path a client sends; an index row they map to is the
+login's to see, with no storage read. The index has one root, the files folder, seeded as
+`idx.roots` row 1. While the files folder is not indexed, logins keep ordinary file operations,
+including explicitly scoped [MCP file tools](MCP.md).
 
 ## Office and recovery
 

@@ -7,6 +7,7 @@ use std::collections::HashMap;
 use std::time::Duration;
 
 use chrono::Utc;
+use fdrive_indexer::config::{ROOT_ID, ROOT_NAME};
 use fdrive_indexer::db::{self, Db, ManifestRow, NewFile, Stamp, StampUpdate};
 use postgres::Client;
 use postgres::fallible_iterator::FallibleIterator;
@@ -103,14 +104,6 @@ fn a_thread_connection_is_reopened_after_postgres_drops_it() {
     };
     assert!(unreachable.with(|_| Ok(())).is_err());
     assert_eq!(Db::new("x").retries, 30);
-}
-
-#[test]
-fn upsert_root_is_idempotent_per_name() {
-    let (_, mut c) = setup();
-    let a = db::upsert_root(&mut c, "files").unwrap();
-    assert_eq!(db::upsert_root(&mut c, "files").unwrap(), a);
-    assert_ne!(db::upsert_root(&mut c, "photos").unwrap(), a);
 }
 
 #[test]
@@ -293,7 +286,7 @@ fn folders(paths: &[&str]) -> Vec<db::FolderRow> {
 #[test]
 fn folder_rows_are_written_updated_and_swept_under_a_folder() {
     let (_, mut c) = setup();
-    let root = db::upsert_root(&mut c, "r").unwrap();
+    let root = ROOT_ID;
     // A path found twice is written once.
     db::sync_folders(&mut c, root, &folders(&["a", "a/b", "a/b/c", "ab", "z", "a"]), None).unwrap();
     assert_eq!(folder_rows(&mut c, root).len(), 5);
@@ -322,7 +315,7 @@ fn folder_rows_are_written_updated_and_swept_under_a_folder() {
     );
     assert_eq!(folder_rows(&mut c, root), [("a".to_owned(), "a".to_owned(), 7)]);
     // Another root's rows are never touched.
-    let other = db::upsert_root(&mut c, "other").unwrap();
+    let other = common::other_root(&mut c, "other");
     db::sync_folders(&mut c, other, &folders(&["a"]), None).unwrap();
     let started = db::now(&mut c).unwrap();
     db::sync_folders(&mut c, root, &[], Some(("", started))).unwrap();
@@ -333,7 +326,7 @@ fn folder_rows_are_written_updated_and_swept_under_a_folder() {
 #[test]
 fn folder_rows_follow_deletes_and_renames() {
     let (_, mut c) = setup();
-    let root = db::upsert_root(&mut c, "r").unwrap();
+    let root = ROOT_ID;
     db::sync_folders(&mut c, root, &folders(&["a", "a/b", "a/b/c", "ab", "x", "x/b"]), None).unwrap();
     // A file's delete drops a folder row only at that exact path.
     db::mark_deleted(&mut c, root, "a/b", false).unwrap();
@@ -398,8 +391,8 @@ fn schema_wait_reports_a_missing_database() {
 #[test]
 fn scan_manifest_shares_embeddings_by_content_key() {
     let (_, mut c) = setup();
-    let root = db::upsert_root(&mut c, "files").unwrap();
-    let other = db::upsert_root(&mut c, "photos").unwrap();
+    let root = ROOT_ID;
+    let other = common::other_root(&mut c, "photos");
     add(&mut c, root, "embedded.jpg", ".jpg", 10, 1, "sha-embedded");
     add(&mut c, root, "copy.jpg", ".jpg", 10, 2, "sha-embedded");
     add(&mut c, root, "plain.jpg", ".jpg", 20, 3, "sha-plain");
@@ -419,8 +412,8 @@ fn scan_manifest_shares_embeddings_by_content_key() {
 #[test]
 fn scan_manifest_flags_only_unresolved_thumbnail_failures_of_its_root() {
     let (_, mut c) = setup();
-    let root = db::upsert_root(&mut c, "files").unwrap();
-    let other = db::upsert_root(&mut c, "photos").unwrap();
+    let root = ROOT_ID;
+    let other = common::other_root(&mut c, "photos");
     for path in ["failed.jpg", "resolved.jpg", "embedding.jpg", "elsewhere.jpg"] {
         add(&mut c, root, path, ".jpg", 1, 1, &format!("sha-{path}"));
     }
@@ -451,8 +444,8 @@ fn scan_manifest_flags_only_unresolved_thumbnail_failures_of_its_root() {
 #[test]
 fn text_less_pdfs_move_to_ocr_only_when_live() {
     let (_, mut c) = setup();
-    let root = db::upsert_root(&mut c, "files").unwrap();
-    let other = db::upsert_root(&mut c, "photos").unwrap();
+    let root = ROOT_ID;
+    let other = common::other_root(&mut c, "photos");
     for (r, path, ext, status) in [
         (root, "scan.pdf", ".pdf", "no_text"),
         (root, "photo.jpg", ".jpg", "no_text"),
@@ -480,7 +473,7 @@ fn text_less_pdfs_move_to_ocr_only_when_live() {
 #[test]
 fn upsert_resets_to_pending_and_drops_chunks() {
     let (_, mut c) = setup();
-    let root = db::upsert_root(&mut c, "files").unwrap();
+    let root = ROOT_ID;
     let id = add(&mut c, root, "a.txt", ".txt", 10, 1, "sha1");
     db::insert_chunks(&mut c, id, &["hello".to_owned()], &[None]).unwrap();
     db::update_file_status(&mut c, id, "indexed", 5, Some("old")).unwrap();
@@ -518,7 +511,7 @@ fn file(root_id: i64, sha256: &str) -> NewFile<'_> {
 #[test]
 fn a_row_keeps_its_stamp_only_while_its_digest_does() {
     let (_, mut c) = setup();
-    let root = db::upsert_root(&mut c, "files").unwrap();
+    let root = ROOT_ID;
     let stamp = Stamp {
         inode: -3,
         ctime_ns: 1_800_000_000_000_000_007,
@@ -548,7 +541,7 @@ fn a_row_keeps_its_stamp_only_while_its_digest_does() {
 #[test]
 fn a_stamp_is_set_only_on_the_row_that_was_read() {
     let (_, mut c) = setup();
-    let root = db::upsert_root(&mut c, "files").unwrap();
+    let root = ROOT_ID;
     let stamp = Stamp { inode: 9, ctime_ns: 5 };
     db::upsert_file(&mut c, &file(root, "sha1")).unwrap();
     for (sha, size, mtime) in [("sha2", 10, 1), ("sha1", 11, 1), ("sha1", 10, 2)] {
@@ -565,7 +558,7 @@ fn a_stamp_is_set_only_on_the_row_that_was_read() {
 #[test]
 fn chunks_and_embeddings() {
     let (_, mut c) = setup();
-    let root = db::upsert_root(&mut c, "files").unwrap();
+    let root = ROOT_ID;
     let id = add(&mut c, root, "a.txt", ".txt", 10, 1, "sha1");
     db::insert_chunks(&mut c, id, &[], &[]).unwrap();
     db::insert_chunks(
@@ -589,7 +582,7 @@ fn chunks_and_embeddings() {
 #[test]
 fn indexed_and_error_marks() {
     let (_, mut c) = setup();
-    let root = db::upsert_root(&mut c, "files").unwrap();
+    let root = ROOT_ID;
     let id = add(&mut c, root, "a.txt", ".txt", 10, 1, "sha1");
     db::update_file_status(&mut c, id, "partial", 5, Some("embed:X")).unwrap();
     db::mark_file_indexed(&mut c, root, "a.txt").unwrap();
@@ -603,7 +596,7 @@ fn indexed_and_error_marks() {
 #[test]
 fn mark_deleted_files_and_subtrees() {
     let (_, mut c) = setup();
-    let root = db::upsert_root(&mut c, "files").unwrap();
+    let root = ROOT_ID;
     assert!(db::mark_deleted(&mut c, root, "never.txt", false).unwrap().is_empty());
     let a = add(&mut c, root, "dir/a.txt", ".txt", 1, 1, "s1");
     add(&mut c, root, "dir/b.txt", ".txt", 1, 1, "s2");
@@ -625,7 +618,7 @@ fn mark_deleted_files_and_subtrees() {
 #[test]
 fn rename_a_file_over_a_stale_destination() {
     let (_, mut c) = setup();
-    let root = db::upsert_root(&mut c, "files").unwrap();
+    let root = ROOT_ID;
     add(&mut c, root, "old.txt", ".txt", 1, 1, "sha1");
     add(&mut c, root, "new.txt", ".txt", 1, 1, "sha2");
     db::mark_deleted(&mut c, root, "new.txt", false).unwrap();
@@ -650,7 +643,7 @@ fn rename_a_file_over_a_stale_destination() {
 #[test]
 fn rename_a_directory_rekeys_its_subtree() {
     let (_, mut c) = setup();
-    let root = db::upsert_root(&mut c, "files").unwrap();
+    let root = ROOT_ID;
     add(&mut c, root, "dir/a.txt", ".txt", 1, 1, "s1");
     add(&mut c, root, "dir/sub/b.txt", ".txt", 1, 1, "s2");
     add(&mut c, root, "dirx/c.txt", ".txt", 1, 1, "s3");
@@ -690,8 +683,8 @@ fn the_indexed_signal_names_only_its_root_and_is_never_stored() {
 #[test]
 fn the_last_scan_counts_only_while_the_journal_covers_the_time_since() {
     let (_, mut c) = setup();
-    let root = db::upsert_root(&mut c, "files").unwrap();
-    let other = db::upsert_root(&mut c, "other").unwrap();
+    let root = ROOT_ID;
+    let other = common::other_root(&mut c, "other");
     let age = |c: &mut Client| db::last_scan_age(c, root, "indexer").unwrap();
     let finish = |c: &mut Client, root: i64| {
         let (scan, _) = db::start_scan(c, root).unwrap();
@@ -726,11 +719,11 @@ fn the_last_scan_counts_only_while_the_journal_covers_the_time_since() {
 #[test]
 fn scan_lifecycle_and_stats() {
     let (_, mut c) = setup();
-    let root = db::upsert_root(&mut c, "files").unwrap();
-    let empty = db::root_stats(&mut c, "files", root).unwrap();
+    let root = ROOT_ID;
+    let empty = db::root_stats(&mut c, root).unwrap();
     assert_eq!(
-        empty,
-        serde_json::json!({"root": "files", "counts_by_status": {}, "chunks": 0, "chunks_embedded": 0, "last_scan": null})
+        serde_json::Value::Object(empty),
+        serde_json::json!({"counts_by_status": {}, "chunks": 0, "chunks_embedded": 0, "last_scan": null})
     );
     let f1 = add(&mut c, root, "a.txt", ".txt", 1, 1, "sha1");
     db::update_file_status(&mut c, f1, "indexed", 10, None).unwrap();
@@ -743,10 +736,10 @@ fn scan_lifecycle_and_stats() {
     add(&mut c, root, "d.txt", ".txt", 1, 1, "sha4");
     let (scan_id, started_at) = db::start_scan(&mut c, root).unwrap();
     assert!(scan_id > 0 && started_at <= Utc::now());
-    let unfinished = db::root_stats(&mut c, "files", root).unwrap();
+    let unfinished = db::root_stats(&mut c, root).unwrap();
     assert!(unfinished["last_scan"]["finished_at"].is_null());
     db::finish_scan(&mut c, scan_id, 5, 2, 1, 0).unwrap();
-    let stats = db::root_stats(&mut c, "files", root).unwrap();
+    let stats = db::root_stats(&mut c, root).unwrap();
     assert_eq!(
         stats["counts_by_status"],
         serde_json::json!({"indexed": 1, "error": 1, "pending": 1})
@@ -778,7 +771,7 @@ fn scan_lifecycle_and_stats() {
 #[test]
 fn sweep_spares_rows_written_after_the_scan_started() {
     let (_, mut c) = setup();
-    let root = db::upsert_root(&mut c, "files").unwrap();
+    let root = ROOT_ID;
     add(&mut c, root, "kept.txt", ".txt", 1, 1, "s1");
     let gone = add(&mut c, root, "vanished.txt", ".txt", 1, 1, "s2");
     db::insert_chunks(&mut c, gone, &["gone text".into()], &[None]).unwrap();
@@ -804,7 +797,7 @@ fn sweep_spares_rows_written_after_the_scan_started() {
 #[test]
 fn sweep_counts_each_row_once_across_batches() {
     let (_, mut c) = setup();
-    let root = db::upsert_root(&mut c, "files").unwrap();
+    let root = ROOT_ID;
     let total = db::SWEEP_BATCH + 2;
     c.execute(
         &format!(
@@ -830,7 +823,7 @@ fn sweep_counts_each_row_once_across_batches() {
 #[test]
 fn a_sweep_names_the_paths_it_deleted() {
     let (_, mut c) = setup();
-    let root = db::upsert_root(&mut c, "files").unwrap();
+    let root = ROOT_ID;
     add(&mut c, root, "b.txt", ".txt", 1, 1, "s1");
     add(&mut c, root, "a.txt", ".txt", 1, 1, "s2");
     add(&mut c, root, "kept.txt", ".txt", 1, 1, "s3");
@@ -851,7 +844,7 @@ fn a_sweep_names_the_paths_it_deleted() {
 #[test]
 fn deletes_and_moves_count_folder_rows_too() {
     let (_, mut c) = setup();
-    let root = db::upsert_root(&mut c, "r").unwrap();
+    let root = ROOT_ID;
     db::sync_folders(&mut c, root, &folders(&["empty", "empty/inner", "full"]), None).unwrap();
     add(&mut c, root, "full/a.txt", ".txt", 1, 1, "s1");
     assert_eq!(
@@ -883,7 +876,7 @@ fn deletes_and_moves_count_folder_rows_too() {
 #[test]
 fn folder_sync_names_the_folders_it_added_and_dropped() {
     let (_, mut c) = setup();
-    let root = db::upsert_root(&mut c, "r").unwrap();
+    let root = ROOT_ID;
     let changes = db::sync_folders_changes(&mut c, root, &folders(&["b", "a", "a/x", "a"]), None).unwrap();
     assert_eq!(changes.added, ["a", "a/x", "b"]);
     assert!(changes.dropped.is_empty());
@@ -920,11 +913,11 @@ fn journal_rows(c: &mut Client, root: i64) -> Vec<(i64, String, Option<String>, 
 #[test]
 fn the_journal_appends_in_order_and_reads_by_position() {
     let (_, mut c) = setup();
-    let root = db::upsert_root(&mut c, "r").unwrap();
-    let other = db::upsert_root(&mut c, "other").unwrap();
+    let root = ROOT_ID;
+    let other = common::other_root(&mut c, "other");
     assert_eq!(db::journal_bounds(&mut c).unwrap(), (None, 0));
     // Nothing to write is no transaction at all.
-    db::append_changes(&mut c, root, "r", "api", &[]).unwrap();
+    db::append_changes(&mut c, root, ROOT_NAME, "api", &[]).unwrap();
     let upload = db::NewChange {
         sha256: Some("ab".repeat(32)),
         size: Some(3),
@@ -936,13 +929,13 @@ fn the_journal_appends_in_order_and_reads_by_position() {
     db::append_changes(
         &mut c,
         root,
-        "r",
+        ROOT_NAME,
         "api",
         &[upload, db::NewChange::moved("a.txt", "b.txt")],
     )
     .unwrap();
     db::append_changes(&mut c, other, "other", "watcher", &[db::NewChange::path("x")]).unwrap();
-    db::append_changes(&mut c, root, "r", "scan", &[db::NewChange::path("c")]).unwrap();
+    db::append_changes(&mut c, root, ROOT_NAME, "scan", &[db::NewChange::path("c")]).unwrap();
     assert_eq!(
         journal_rows(&mut c, root),
         [
@@ -965,16 +958,16 @@ fn the_journal_appends_in_order_and_reads_by_position() {
     assert_eq!(db::changes_after(&mut c, root, 2, 10).unwrap().len(), 1);
     assert_eq!(db::journal_bounds(&mut c).unwrap(), (Some(1), 4));
     // A source the journal does not know is refused, and nothing of the batch is written.
-    assert!(db::append_changes(&mut c, root, "r", "web", &[db::NewChange::path("d")]).is_err());
+    assert!(db::append_changes(&mut c, root, ROOT_NAME, "web", &[db::NewChange::path("d")]).is_err());
     assert_eq!(db::journal_bounds(&mut c).unwrap().1, 4);
 }
 
 #[test]
 fn a_large_append_is_written_in_order_across_statements() {
     let (_, mut c) = setup();
-    let root = db::upsert_root(&mut c, "r").unwrap();
+    let root = ROOT_ID;
     let changes: Vec<db::NewChange> = (0..2_005).map(|i| db::NewChange::path(&format!("f{i}"))).collect();
-    db::append_changes(&mut c, root, "r", "scan", &changes).unwrap();
+    db::append_changes(&mut c, root, ROOT_NAME, "scan", &changes).unwrap();
     let rows = db::changes_after(&mut c, root, 0, 3_000).unwrap();
     assert_eq!(rows.len(), 2_005);
     assert!(rows.iter().enumerate().all(|(i, r)| r.path == format!("f{i}")));
@@ -983,24 +976,24 @@ fn a_large_append_is_written_in_order_across_statements() {
 #[test]
 fn an_append_notifies_the_root_on_commit() {
     let (url, mut c) = setup();
-    let root = db::upsert_root(&mut c, "r").unwrap();
+    let root = ROOT_ID;
     let mut listener = common::connect(&url);
     listener.batch_execute("LISTEN idx_changes").unwrap();
-    db::append_changes(&mut c, root, "r", "watcher", &[db::NewChange::path("a")]).unwrap();
+    db::append_changes(&mut c, root, ROOT_NAME, "watcher", &[db::NewChange::path("a")]).unwrap();
     let mut notifications = listener.notifications();
     let note = notifications
         .timeout_iter(Duration::from_secs(5))
         .next()
         .unwrap()
         .unwrap();
-    assert_eq!((note.channel(), note.payload()), ("idx_changes", "r"));
+    assert_eq!((note.channel(), note.payload()), ("idx_changes", ROOT_NAME));
 }
 
 #[test]
 fn cursors_are_kept_per_consumer_and_root() {
     let (_, mut c) = setup();
-    let root = db::upsert_root(&mut c, "r").unwrap();
-    let other = db::upsert_root(&mut c, "other").unwrap();
+    let root = ROOT_ID;
+    let other = common::other_root(&mut c, "other");
     assert_eq!(db::change_cursor(&mut c, "indexer", root).unwrap(), None);
     db::save_change_cursor(&mut c, "indexer", root, 4).unwrap();
     db::save_change_cursor(&mut c, "indexer", other, 2).unwrap();
@@ -1014,14 +1007,14 @@ fn cursors_are_kept_per_consumer_and_root() {
 #[test]
 fn a_scan_baseline_needs_a_finished_scan_and_folder_rows() {
     let (_, mut c) = setup();
-    let root = db::upsert_root(&mut c, "r").unwrap();
+    let root = ROOT_ID;
     assert_eq!(db::scan_baseline(&mut c, root).unwrap(), (false, false));
     let (scan, _) = db::start_scan(&mut c, root).unwrap();
     assert_eq!(db::scan_baseline(&mut c, root).unwrap(), (false, false));
     db::finish_scan(&mut c, scan, 0, 0, 0, 0).unwrap();
     db::sync_folders(&mut c, root, &folders(&["a"]), None).unwrap();
     assert_eq!(db::scan_baseline(&mut c, root).unwrap(), (true, true));
-    let other = db::upsert_root(&mut c, "other").unwrap();
+    let other = common::other_root(&mut c, "other");
     assert_eq!(db::scan_baseline(&mut c, other).unwrap(), (false, false));
 }
 
@@ -1062,7 +1055,7 @@ fn thumbnails_upsert_by_key_and_size() {
 #[test]
 fn media_files_skip_deleted_and_unhashed_rows() {
     let (_, mut c) = setup();
-    let root = db::upsert_root(&mut c, "files").unwrap();
+    let root = ROOT_ID;
     assert!(db::media_files(&mut c, root).unwrap().is_empty());
     add(&mut c, root, "a.png", ".png", 100, 1, "sha1");
     add(&mut c, root, "b.pdf", ".pdf", 200, 1, "sha2");
@@ -1102,7 +1095,7 @@ fn image_embeddings_upsert_replaces_model() {
 #[test]
 fn mark_pending_whole_root_and_subtree() {
     let (_, mut c) = setup();
-    let root = db::upsert_root(&mut c, "files").unwrap();
+    let root = ROOT_ID;
     for path in ["dir/a.txt", "dir", "other.txt", "gone.txt"] {
         let id = add(&mut c, root, path, ".txt", 1, 1, "sha");
         db::update_file_status(&mut c, id, "indexed", 1, None).unwrap();
@@ -1123,8 +1116,8 @@ fn mark_pending_treats_the_prefix_literally() {
         ("slash\\", "slash\\/child.txt", "slash/child.txt"),
     ] {
         let (_, mut c) = setup();
-        let root = db::upsert_root(&mut c, "files").unwrap();
-        let other = db::upsert_root(&mut c, "photos").unwrap();
+        let root = ROOT_ID;
+        let other = common::other_root(&mut c, "photos");
         for (r, path) in [(root, selected), (root, sibling), (other, selected)] {
             let id = add(&mut c, r, path, ".txt", 1, 1, "sha");
             db::update_file_status(&mut c, id, "indexed", 1, None).unwrap();
@@ -1168,7 +1161,6 @@ fn every_query_reports_a_missing_schema_as_an_error() {
         mime: None,
     };
     let c = &mut c;
-    assert!(db::upsert_root(c, "r").is_err());
     assert!(db::scan_manifest(c, 1).is_err());
     assert!(db::pending_count(c, 1).is_err());
     assert!(db::file_row(c, 1, "a").is_err());
@@ -1204,7 +1196,7 @@ fn every_query_reports_a_missing_schema_as_an_error() {
     assert!(db::file_content_key(c, 1, "a").is_err());
     assert!(db::upsert_image_embedding(c, "k", "m", &[0.1; 1024]).is_err());
     assert!(db::media_files(c, 1).is_err());
-    assert!(db::root_stats(c, "r", 1).is_err());
+    assert!(db::root_stats(c, 1).is_err());
     assert!(db::errors_sample(c, 1, 20).is_err());
     assert!(db::mark_pending(c, 1, None).is_err());
     assert!(db::mark_pending(c, 1, Some(("a", "a/"))).is_err());

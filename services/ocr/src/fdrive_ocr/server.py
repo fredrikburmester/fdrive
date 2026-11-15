@@ -44,19 +44,16 @@ from .settings import Settings, resolve_settings
 from .stats import shape_health, shape_stats
 
 
-def storage_diagnostics(targets: list[RootTarget]) -> dict[str, dict[str, bool]]:
-    """Bounded, non-mutating mount probe. OCR needs a writable mounted root."""
-    result: dict[str, dict[str, bool]] = {}
-    for target in targets:
-        readable = False
-        try:
-            with os.scandir(target.abs_path) as entries:
-                next(entries, None)
-            readable = os.access(target.abs_path, os.R_OK)
-        except OSError:
-            pass
-        result[target.name] = {"readable": readable, "writable": os.access(target.abs_path, os.W_OK)}
-    return result
+def storage_diagnostics(path: str) -> dict[str, bool]:
+    """Bounded, non-mutating mount probe. OCR needs the files folder mounted writable."""
+    readable = False
+    try:
+        with os.scandir(path) as entries:
+            next(entries, None)
+        readable = os.access(path, os.R_OK)
+    except OSError:
+        pass
+    return {"readable": readable, "writable": os.access(path, os.W_OK)}
 
 
 class RunLock:
@@ -129,7 +126,7 @@ class RunLock:
 @dataclass
 class ServerState:
     conn_factory: Callable[[], psycopg.Connection]
-    targets: list[RootTarget]
+    target: RootTarget
     state_dir: str
     default_settings: Settings
     timeout_seconds: int
@@ -158,7 +155,7 @@ async def health(request: Request) -> JSONResponse:
         state.run_lock.running,
         {"revision": features.revision, "values": features.values.as_json()},
     )
-    body["storage"] = storage_diagnostics(state.targets)
+    body["storage"] = storage_diagnostics(state.target.abs_path)
     return JSONResponse(body)
 
 
@@ -220,7 +217,7 @@ async def trigger_run(request: Request) -> JSONResponse:
             settings = resolve_settings(raw, state.default_settings)
             run_pass(
                 conn,
-                state.targets,
+                state.target,
                 settings,
                 state.state_dir,
                 state.timeout_seconds,
@@ -298,7 +295,7 @@ async def originals(request: Request) -> JSONResponse:
     query = request.query_params.get("query", "")
     conn = state.conn_factory()
     try:
-        items, total = list_originals(conn, state.state_dir, state.targets, state.originals, query, offset, limit)
+        items, total = list_originals(conn, state.state_dir, state.target, state.originals, query, offset, limit)
     finally:
         conn.close()
     return JSONResponse(
@@ -329,7 +326,7 @@ async def restore(request: Request) -> JSONResponse:
         conn = state.conn_factory()
         try:
             return restore_original(
-                conn, state.state_dir, state.targets, state.originals, original_id,
+                conn, state.state_dir, state.target, state.originals, original_id,
                 body.get("allow_recreate") is True, body.get("allow_overwrite_changed") is True, state.log,
             )
         finally:

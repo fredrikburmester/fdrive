@@ -17,9 +17,7 @@ const REQUIRED_ENV = {
   FDRIVE_MASTER_KEY: Buffer.alloc(32, 7).toString("base64"),
 };
 
-const HOME_SCOPES: readonly Scope[] = [
-  { rootName: "files", fsPrefix: "/alice", virtualPrefix: "/" },
-];
+const HOME_SCOPES: readonly Scope[] = [{ fsPrefix: "/alice", virtualPrefix: "/" }];
 
 function createTestLogger(): Logger {
   const logger = {
@@ -48,7 +46,6 @@ function fakeIndexQueries(overrides: Partial<IndexQueries> = {}): IndexQueries {
     contentAt: overrides.contentAt ?? (async () => fail("contentAt")),
     listFiles: overrides.listFiles ?? (async () => fail("listFiles")),
     filesBySha256: overrides.filesBySha256 ?? (async () => fail("filesBySha256")),
-    rootIdsByName: overrides.rootIdsByName ?? (async () => fail("rootIdsByName")),
     stats: overrides.stats ?? (async () => fail("stats")),
     statsForFileIds: overrides.statsForFileIds ?? (async () => fail("statsForFileIds")),
     fileTextPrefix: overrides.fileTextPrefix ?? (async () => fail("fileTextPrefix")),
@@ -120,11 +117,8 @@ function buildApp(deps: BuildAppOptions = {}, username = "alice") {
   const { useRealFileReader, scopes, ...overrides } = deps;
   const resolvedScopes = scopes === undefined ? HOME_SCOPES : scopes;
 
-  const resolver: Pick<ScopeResolver, "verifiedIndexScopes"> = {
-    verifiedIndexScopes: async () =>
-      resolvedScopes === null
-        ? { available: false, reason: "no_roots" }
-        : { available: true, scopes: resolvedScopes },
+  const resolver: Pick<ScopeResolver, "scopesFor"> = {
+    scopesFor: async () => resolvedScopes ?? [],
   };
 
   const fullDeps: ThumbRoutesDeps = {
@@ -169,7 +163,6 @@ describe("GET /api/v1/thumb: real file reader", () => {
       thumbsDir: dir,
       useRealFileReader: true,
       indexQueries: fakeIndexQueries({
-        rootIdsByName: async () => ({ files: 1 }),
         fileByPath: async () => makeFile(),
         thumbnail: async () => ({ storagePath }),
       }),
@@ -186,7 +179,6 @@ describe("GET /api/v1/thumb", () => {
   it("streams a thumbnail with the expected headers", async () => {
     const app = buildApp({
       indexQueries: fakeIndexQueries({
-        rootIdsByName: async () => ({ files: 1 }),
         fileByPath: async () => makeFile(),
         thumbnail: async () => ({ storagePath: "ab/abc123.256.webp" }),
       }),
@@ -206,7 +198,6 @@ describe("GET /api/v1/thumb", () => {
     const readStream = vi.fn(fakeFileReader().readStream);
     const app = buildApp({
       indexQueries: fakeIndexQueries({
-        rootIdsByName: async () => ({ files: 1 }),
         fileByPath: async () => makeFile(),
         thumbnail: async () => ({ storagePath: "ab/abc123.256.webp" }),
       }),
@@ -232,7 +223,7 @@ describe("GET /api/v1/thumb", () => {
   it("returns 404 for fdrive's own folders, which nothing lists", async () => {
     const fileByPath = vi.fn(async () => makeFile());
     const app = buildApp({
-      indexQueries: fakeIndexQueries({ rootIdsByName: async () => ({ files: 1 }), fileByPath }),
+      indexQueries: fakeIndexQueries({ fileByPath }),
     });
 
     for (const path of [
@@ -249,12 +240,12 @@ describe("GET /api/v1/thumb", () => {
   it("returns 404 for a path in the folder a shared folder shadows", async () => {
     const fileByPath = vi.fn(async () => makeFile());
     const app = buildApp({
-      indexQueries: fakeIndexQueries({ rootIdsByName: async () => ({ files: 1 }), fileByPath }),
+      indexQueries: fakeIndexQueries({ fileByPath }),
       // bob's home holds a folder at alice's mount point: it maps to alice's
       // folder going in, so a path there never reaches bob's own copy.
       scopes: [
-        { rootName: "files", fsPrefix: "/bob", virtualPrefix: "/" },
-        { rootName: "files", fsPrefix: "/bob/Shared with me/docs", virtualPrefix: "/Inbox" },
+        { fsPrefix: "/bob", virtualPrefix: "/" },
+        { fsPrefix: "/bob/Shared with me/docs", virtualPrefix: "/Inbox" },
       ],
     });
 
@@ -306,19 +297,9 @@ describe("GET /api/v1/thumb", () => {
     expect(res.status).toBe(404);
   });
 
-  it("returns 404 when the path cannot be resolved to a configured root", async () => {
-    const app = buildApp({
-      indexQueries: fakeIndexQueries({ rootIdsByName: async () => ({}) }),
-    });
-
-    const res = await app.request("/api/v1/thumb?path=/photo.jpg&size=256");
-
-    expect(res.status).toBe(404);
-  });
-
   it("returns 404 when no verified scope covers the requested path", async () => {
     const app = buildApp({
-      scopes: [{ rootName: "files", fsPrefix: "/alice", virtualPrefix: "/photos" }],
+      scopes: [{ fsPrefix: "/alice", virtualPrefix: "/photos" }],
     });
 
     const res = await app.request("/api/v1/thumb?path=/videos/clip.jpg&size=256");
@@ -329,7 +310,6 @@ describe("GET /api/v1/thumb", () => {
   it("returns 404 when the file is not indexed", async () => {
     const app = buildApp({
       indexQueries: fakeIndexQueries({
-        rootIdsByName: async () => ({ files: 1 }),
         fileByPath: async () => null,
       }),
     });
@@ -342,7 +322,6 @@ describe("GET /api/v1/thumb", () => {
   it("returns 404 when the indexed file has no sha256", async () => {
     const app = buildApp({
       indexQueries: fakeIndexQueries({
-        rootIdsByName: async () => ({ files: 1 }),
         fileByPath: async () => makeFile({ sha256: null }),
       }),
     });
@@ -355,7 +334,6 @@ describe("GET /api/v1/thumb", () => {
   it("returns 404 when no thumbnail has been generated for that size", async () => {
     const app = buildApp({
       indexQueries: fakeIndexQueries({
-        rootIdsByName: async () => ({ files: 1 }),
         fileByPath: async () => makeFile(),
         thumbnail: async () => null,
       }),
@@ -369,7 +347,6 @@ describe("GET /api/v1/thumb", () => {
   it("returns 404 when the cached thumbnail file is missing from disk", async () => {
     const app = buildApp({
       indexQueries: fakeIndexQueries({
-        rootIdsByName: async () => ({ files: 1 }),
         fileByPath: async () => makeFile(),
         thumbnail: async () => ({ storagePath: "ab/abc123.256.webp" }),
       }),
@@ -390,11 +367,10 @@ describe("GET /api/v1/thumb", () => {
     const app = buildApp(
       {
         indexQueries: fakeIndexQueries({
-          rootIdsByName: async () => ({ files: 1 }),
           fileByPath,
           thumbnail: async () => ({ storagePath: "ab/abc123.256.webp" }),
         }),
-        scopes: [{ rootName: "files", fsPrefix: "/bob", virtualPrefix: "/" }],
+        scopes: [{ fsPrefix: "/bob", virtualPrefix: "/" }],
       },
       "bob",
     );

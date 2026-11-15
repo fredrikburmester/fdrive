@@ -18,18 +18,11 @@ import {
   type SearchFilters,
   toPrefixTsQuery,
 } from "@fdrive/core";
-import type {
-  ContentHit,
-  FilenameHit,
-  FolderHit,
-  IndexedFile,
-  IndexQueries,
-  ScopePrefix,
-} from "@fdrive/db";
+import type { ContentHit, FilenameHit, FolderHit, IndexedFile, IndexQueries } from "@fdrive/db";
 import { roundTripVirtualPath } from "../scoping/round-trip.ts";
 import type { EmbedClient } from "./embeddings.js";
 import type { NameIndexClient, NameIndexHit, NameIndexHits } from "./name-index.js";
-import { dateFromMtimeNs, reservedExclusion } from "./scopes.js";
+import { dateFromMtimeNs, indexPrefixes, reservedExclusion } from "./scopes.js";
 
 /** How many rows each of the three underlying signals fans out to, matching filesai's `LIMIT 60`. */
 const CONTENT_FANOUT_LIMIT = 60;
@@ -64,10 +57,9 @@ export interface SearchServiceDeps {
 
 export interface SearchServiceInput {
   /**
-   * The identity's verified index scopes, resolved once at the request
-   * boundary (`ScopeResolver.verifiedIndexScopes`). Empty means index-backed
-   * search is unavailable for this caller; this is never a caller-supplied
-   * value.
+   * The identity's scopes, resolved once at the request boundary
+   * (`ScopeResolver.scopesFor`). Empty means index-backed search is
+   * unavailable for this caller; this is never a caller-supplied value.
    */
   readonly scopes: readonly Scope[];
   readonly query: string;
@@ -106,7 +98,7 @@ interface RankFoldersInput {
   readonly filters: SearchFilters;
   readonly now: Date;
   /** Resolves an indexed path to its caller-visible virtual path, `null` when it is out of scope. */
-  readonly virtualPathFor: (rootId: number, path: string) => string | null;
+  readonly virtualPathFor: (path: string) => string | null;
 }
 
 interface FolderCandidate {
@@ -129,7 +121,7 @@ interface FolderCandidate {
 function rankFolders(input: RankFoldersInput): FsEntry[] {
   const candidates = new Map<string, FolderCandidate>();
   const consider = (row: FolderHit, fromNameIndex: boolean) => {
-    const path = input.virtualPathFor(row.rootId, row.path);
+    const path = input.virtualPathFor(row.path);
     if (path === null || path === "/" || path === input.filters.folder || candidates.has(path)) {
       return;
     }
@@ -202,34 +194,15 @@ export function createSearchService(deps: SearchServiceDeps): SearchService {
         return emptyResponse(input.query, tookMs(), { degraded: false, unavailable: true });
       }
 
-      const rootIds = await deps.indexQueries.rootIdsByName();
-      const rootNameById = new Map<number, string>();
-      for (const [name, id] of Object.entries(rootIds)) {
-        rootNameById.set(id, name);
-      }
+      const prefixes = indexPrefixes(input.scopes);
+      const exclude = reservedExclusion(input.scopes);
 
-      const prefixes: ScopePrefix[] = [];
-      for (const scope of input.scopes) {
-        const rootId = rootIds[scope.rootName];
-        if (rootId !== undefined) {
-          prefixes.push({ rootId, fsPrefix: scope.fsPrefix });
-        }
-      }
-      if (prefixes.length === 0) {
-        return emptyResponse(input.query, tookMs(), { degraded: false, unavailable: true });
-      }
-      const exclude = reservedExclusion(input.scopes, rootIds);
-
-      function pathFor(rootId: number, path: string): string | null {
-        const rootName = rootNameById.get(rootId);
-        if (rootName === undefined) {
-          return null;
-        }
-        return roundTripVirtualPath(input.scopes, rootName, path);
+      function pathFor(path: string): string | null {
+        return roundTripVirtualPath(input.scopes, path);
       }
 
       function virtualPathFor(file: IndexedFile): string | null {
-        return pathFor(file.rootId, file.path);
+        return pathFor(file.path);
       }
 
       const words = queryWords(input.query);

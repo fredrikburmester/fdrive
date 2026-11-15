@@ -56,9 +56,9 @@ export type PathQuery = z.infer<typeof PathQuery>;
 /**
  * A directory's total size as computed from the index alone: `bytes` and
  * `files` sum every indexed file under `path` (intersected with the
- * caller's verified index scope), and `indexed` is `false` whenever that
- * total is unavailable (the folder is out of scope, not covered by any
- * indexed root, or the caller cannot currently read it), in which case
+ * caller's scopes), and `indexed` is `false` whenever that total is
+ * unavailable (the folder is out of scope, the files folder is not indexed,
+ * or the caller cannot currently read it), in which case
  * `bytes` and `files` are both `0`.
  */
 export const FolderSizeResponse = z.object({

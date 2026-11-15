@@ -12,6 +12,7 @@ use common::root_env::{
     Env, OFF, context_with, fake_sha, fv, jpeg, jpeg_with_exif, manual_clock, pdf, png, tesseract_available, wait_until,
 };
 use fdrive_indexer::backoff::Backoff;
+use fdrive_indexer::config::{ROOT_ID, ROOT_NAME};
 use fdrive_indexer::db::{self, ManifestRow};
 use fdrive_indexer::features::FeatureConfiguration;
 use fdrive_indexer::files_marker::FILES_MARKER;
@@ -307,8 +308,8 @@ fn exclusions_apply_until_their_limit_or_rule_changes() {
     }
     assert!(!exclusion_still_applies(&ctx, "notes.txt", over));
     let mut settings = ctx.settings();
-    settings.text_exclude_globs = vec!["r/private/*".to_owned()];
-    settings.ocr_image_globs = vec!["r/scans/*".to_owned()];
+    settings.text_exclude_globs = vec!["files/private/*".to_owned()];
+    settings.ocr_image_globs = vec!["files/scans/*".to_owned()];
     assert_eq!(
         ctx.set_settings(settings.clone()),
         vec!["text_exclude_globs", "ocr_image_globs"]
@@ -317,7 +318,7 @@ fn exclusions_apply_until_their_limit_or_rule_changes() {
     assert!(exclusion_still_applies(&ctx, "private/notes.txt", 1));
     assert!(exclusion_still_applies(&ctx, "photos/a.png", 1));
     assert!(!exclusion_still_applies(&ctx, "scans/a.png", 1));
-    assert_eq!(ctx.extractor().ocr_image_globs.patterns(), ["r/scans/*"]);
+    assert_eq!(ctx.extractor().ocr_image_globs.patterns(), ["files/scans/*"]);
 }
 
 // -- process_file --------------------------------------------------------------------------
@@ -491,7 +492,7 @@ fn excluded_text_stays_quiet_until_the_rule_is_removed() {
     let env = Env::new();
     let ctx = env.ctx(fv(false, true, false, false, false));
     let mut settings: Settings = ctx.settings();
-    settings.text_exclude_globs = vec!["r/*.txt".to_owned()];
+    settings.text_exclude_globs = vec!["files/*.txt".to_owned()];
     ctx.set_settings(settings.clone());
     let (path, stat) = env.write("a.txt", b"excluded");
     assert!(process_file(&ctx, &path, "a.txt", stat).unwrap());
@@ -588,8 +589,13 @@ fn a_scan_deletes_nothing_from_a_folder_without_this_installations_marker() {
 fn the_marker_verdict_is_reused_and_survives_a_database_outage() {
     let env = Env::new();
     let cfg = Arc::new(env.config());
-    let root_id = db::upsert_root(&mut env.client(), "r").unwrap();
-    let mut ctx = indexer::RootContext::new("r", root_id, env.root.clone(), Arc::clone(&cfg), common::features(OFF));
+    let mut ctx = indexer::RootContext::new(
+        ROOT_NAME,
+        ROOT_ID,
+        env.root.clone(),
+        Arc::clone(&cfg),
+        common::features(OFF),
+    );
     ctx.files_folder_recheck = Duration::from_secs(3600);
     assert!(!ctx.files_folder_verified(), "no installation id recorded yet");
     common::mark_files_folder(&env.url, &env.root);
@@ -602,7 +608,7 @@ fn the_marker_verdict_is_reused_and_survives_a_database_outage() {
     };
     assert!(ctx.files_folder_verified(), "an outage keeps the last verdict");
 
-    let mut offline = indexer::RootContext::new("r", root_id, env.root.clone(), cfg, common::features(OFF));
+    let mut offline = indexer::RootContext::new(ROOT_NAME, ROOT_ID, env.root.clone(), cfg, common::features(OFF));
     offline.db = db::Db {
         url: "postgres://nobody@127.0.0.1:1/nope".to_owned(),
         retries: 1,

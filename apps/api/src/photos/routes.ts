@@ -7,12 +7,17 @@ import {
   ROUTES,
 } from "@fdrive/contracts";
 import { baseName, type CoreError, normalizePath, toFsPath } from "@fdrive/core";
-import type { IndexQueries, PhotoCursor } from "@fdrive/db";
+import { INDEX_ROOT_ID, type IndexQueries, type PhotoCursor } from "@fdrive/db";
 import type { AppHono, AuthedHono } from "../app.js";
 import { ApiHttpError } from "../errors.js";
 import type { ScopeResolver } from "../scoping/resolver.ts";
 import { roundTripVirtualPath } from "../scoping/round-trip.ts";
-import { dateFromMtimeNs, reservedExclusion, toIndexRelativePath } from "../search/scopes.js";
+import {
+  dateFromMtimeNs,
+  indexPrefixes,
+  reservedExclusion,
+  toIndexRelativePath,
+} from "../search/scopes.js";
 
 const API_PREFIX = "/api/v1";
 
@@ -29,8 +34,10 @@ const IMAGE_EXTS = [...IMAGE_EXTENSIONS];
 const CURSOR = /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6})_(\d+)$/;
 
 export interface PhotoRoutesDeps {
-  readonly indexQueries: Pick<IndexQueries, "rootIdsByName" | "photos" | "photoDetails">;
-  readonly resolver: Pick<ScopeResolver, "verifiedIndexScopes">;
+  readonly indexQueries: Pick<IndexQueries, "photos" | "photoDetails">;
+  readonly resolver: Pick<ScopeResolver, "scopesFor">;
+  /** Whether the files folder is indexed: an indexer is configured and a feature uses it. */
+  readonly indexed: () => Promise<boolean>;
 }
 
 function parseCursor(raw: string | undefined): PhotoCursor | undefined {
@@ -44,16 +51,15 @@ function parseCursor(raw: string | undefined): PhotoCursor | undefined {
   return { at: match[1], id: Number(match[2]) };
 }
 
-/** The caller's verified index scopes, or `null` when it has none. */
+/** The caller's scopes, or `null` while the files folder is not indexed. */
 async function scopesOf(deps: PhotoRoutesDeps, username: string) {
-  const verified = await deps.resolver.verifiedIndexScopes(username);
-  return verified.available ? verified.scopes : null;
+  return (await deps.indexed()) ? deps.resolver.scopesFor(username) : null;
 }
 
 /**
  * Registers `GET /photos`, every image the caller can read, newest first by when it was
  * taken (or modified, without EXIF), a page at a time; and `GET /photos/details?path=`,
- * one image's EXIF details. Both read the index through the caller's verified scopes, which
+ * one image's EXIF details. Both read the index through the caller's scopes, which
  * are the permission, and leave fdrive's own folders out, as search does.
  */
 export function registerPhotoRoutes(
@@ -69,20 +75,18 @@ export function registerPhotoRoutes(
     if (scopes === null) {
       return c.json(PhotosResponse.parse({ photos: [], nextCursor: null }));
     }
-    const rootIds = await deps.indexQueries.rootIdsByName();
-    const rootNames = new Map(Object.entries(rootIds).map(([name, id]) => [id, name]));
-    const prefixes = scopes.flatMap((scope) => {
-      const rootId = rootIds[scope.rootName];
-      return rootId === undefined ? [] : [{ rootId, fsPrefix: scope.fsPrefix }];
-    });
-    const rows = await deps.indexQueries.photos(prefixes, IMAGE_EXTS, PHOTOS_PAGE_SIZE, {
-      exclude: reservedExclusion(scopes, rootIds),
-      ...(after === undefined ? {} : { after }),
-    });
+    const rows = await deps.indexQueries.photos(
+      indexPrefixes(scopes),
+      IMAGE_EXTS,
+      PHOTOS_PAGE_SIZE,
+      {
+        exclude: reservedExclusion(scopes),
+        ...(after === undefined ? {} : { after }),
+      },
+    );
 
     const mapped = rows.map((row): PhotoItem | null => {
-      const rootName = rootNames.get(row.rootId);
-      const path = rootName === undefined ? null : roundTripVirtualPath(scopes, rootName, row.path);
+      const path = roundTripVirtualPath(scopes, row.path);
       if (path === null) {
         return null;
       }
@@ -119,15 +123,14 @@ export function registerPhotoRoutes(
     const notFound = () => new ApiHttpError("not_found", "no photo details");
     const principal = c.get("principal");
     const scopes = await scopesOf(deps, principal.username);
-    const resolved = scopes === null ? null : toFsPath(scopes, path);
-    const rootId =
-      resolved === null ? undefined : (await deps.indexQueries.rootIdsByName())[resolved.rootName];
-    if (resolved === null || rootId === undefined) {
+    const fsPath = scopes === null ? null : toFsPath(scopes, path);
+    // A path a shared folder shadows, or one in the home's own `Shared with me`, has no details.
+    if (scopes === null || fsPath === null || roundTripVirtualPath(scopes, fsPath) !== path) {
       throw notFound();
     }
     const details = await deps.indexQueries.photoDetails(
-      rootId,
-      toIndexRelativePath(resolved.fsPath),
+      INDEX_ROOT_ID,
+      toIndexRelativePath(fsPath),
     );
     if (details === null) {
       throw notFound();

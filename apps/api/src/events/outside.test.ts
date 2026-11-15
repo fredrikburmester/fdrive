@@ -19,7 +19,6 @@ const ACTOR = { accountId: "account-alice", identityId: "id-alice" };
 function seen(path: string | null, target: string | null, move: boolean): SeenChange {
   const change: Change = {
     position: 1,
-    root: "files",
     path: "alice/x",
     targetPath: move ? "alice/y" : null,
     source: "watcher",
