@@ -1,8 +1,8 @@
-import type { TrashSettings } from "@fdrive/contracts";
 import {
   createRecycleFolderTrash,
   isStorageError,
   type StorageProvider,
+  TRASH_PATH,
   withMoveToTrash,
 } from "@fdrive/core";
 import type { IdentityRepo } from "@fdrive/db";
@@ -10,26 +10,6 @@ import { captureRecycleReceipt } from "../activity/trash.js";
 import { ApiHttpError } from "../errors.js";
 
 export type IdentityStorageFactory = (identityId: string) => Promise<StorageProvider>;
-
-const trashSettingsByStorage = new WeakMap<StorageProvider, TrashSettings>();
-
-/** Returns the provider-bound Trash revision captured with this request's storage. */
-export function trashSettingsForStorage(storage: StorageProvider): TrashSettings | null {
-  return trashSettingsByStorage.get(storage) ?? null;
-}
-
-/**
- * Extends `storage` with a `trash` provider built on top of its own
- * list/stat/move/mkdir/deleteFile/deleteDir/deleteEmptyDir, reading the leaves
- * `withMoveToTrash` writes under `trashPath`. Spreads `storage` into a new
- * object so the original provider is left untouched.
- */
-export function withRecycleFolderTrash(
-  storage: StorageProvider,
-  trashPath: string,
-): StorageProvider {
-  return { ...storage, trash: createRecycleFolderTrash({ storage, trashPath }) };
-}
 
 /** Turns a `StorageError` into the `ApiHttpError` of the same kind. */
 function asHttp(error: unknown): unknown {
@@ -43,17 +23,18 @@ export interface StorageSource {
 }
 
 /**
- * `username`'s storage: their home in the files folder, with `settings`
- * (when given) recorded for the request. With
- * Trash on, the storage gets the move-to-trash wrapper underneath the
- * recycle folder view. Reads nothing: whoever asks has already admitted the
- * user. Throws `forbidden` for a name that cannot be a home folder.
+ * `username`'s storage: their home in the files folder, whose deletes move
+ * into their Trash at `TRASH_PATH` (`withMoveToTrash`), with the Trash view
+ * over it (`createRecycleFolderTrash`). With `trash` false deletes are
+ * real, for fdrive's own bookkeeping. Reads nothing: whoever asks has
+ * already admitted the user. Throws `forbidden` for a name that cannot be a
+ * home folder.
  */
 export function buildUserStorage(
   folder: Pick<StorageSource, "storage">,
   clock: () => Date,
   username: string,
-  settings?: TrashSettings,
+  trash = true,
 ): StorageProvider {
   let storage: StorageProvider;
   try {
@@ -61,26 +42,25 @@ export function buildUserStorage(
   } catch (error) {
     throw asHttp(error);
   }
-  let result = storage;
-  if (settings?.enabled === true) {
-    const moving = withMoveToTrash({
-      storage,
-      trashPath: settings.path,
-      clock,
-      onRecycled: captureRecycleReceipt,
-    });
-    result = withRecycleFolderTrash(moving, settings.path);
-  }
-  if (settings !== undefined) trashSettingsByStorage.set(result, settings);
-  return result;
+  if (!trash) return storage;
+  const moving = withMoveToTrash({
+    storage,
+    trashPath: TRASH_PATH,
+    clock,
+    onRecycled: captureRecycleReceipt,
+  });
+  return { ...moving, trash: createRecycleFolderTrash({ storage: moving, trashPath: TRASH_PATH }) };
 }
 
 export interface CreateStorageFactoryDeps {
   readonly identities: Pick<IdentityRepo, "get">;
   readonly folder: StorageSource;
   readonly clock: () => Date;
-  /** With it, deletes move into the Trash folder while Trash is on. */
-  readonly resolveTrashSettings?: (identityId: string) => Promise<TrashSettings>;
+  /**
+   * Deletes are real instead of moving into Trash: for fdrive's own
+   * bookkeeping (the Mac's staged files) and Trash's own retention.
+   */
+  readonly withoutTrash?: boolean;
 }
 
 /**
@@ -103,7 +83,6 @@ export function createIdentityStorageFactory(
     } catch (error) {
       throw asHttp(error);
     }
-    const settings = await deps.resolveTrashSettings?.(identityId);
-    return buildUserStorage(deps.folder, deps.clock, username, settings);
+    return buildUserStorage(deps.folder, deps.clock, username, deps.withoutTrash !== true);
   };
 }

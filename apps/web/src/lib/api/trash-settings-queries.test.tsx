@@ -6,38 +6,25 @@ import { expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({ get: vi.fn(), put: vi.fn() }));
 vi.mock("./client", () => ({
-  apiClient: { systemTrash: mocks.get, systemUpdateTrash: mocks.put },
+  apiClient: { trashSettings: mocks.get, systemUpdateTrash: mocks.put },
 }));
 
-import { useSystemTrash, useUpdateTrashSettings } from "./trash-settings-queries";
+import { useTrashSettings, useUpdateTrashSettings } from "./trash-settings-queries";
 
-it("loads settings and refreshes affected views after a live change", async () => {
-  const data = {
-    providerId: "provider",
-    revision: 0,
-    enabled: false,
-    path: "/.trash",
-    retentionHours: null,
-    strategy: "move" as const,
-  };
-  const updated = { ...data, revision: 1, enabled: true };
-  mocks.get.mockResolvedValue(data);
-  mocks.put.mockResolvedValue(updated);
+it("reads how long Trash keeps an item and keeps what an administrator saves", async () => {
+  mocks.get.mockResolvedValue({ retentionDays: 30 });
+  mocks.put.mockResolvedValue({ retentionDays: 7 });
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  const invalidate = vi.spyOn(client, "invalidateQueries");
   const wrapper = ({ children }: { children: ReactNode }) => (
     <QueryClientProvider client={client}>{children}</QueryClientProvider>
   );
-  const query = renderHook(() => useSystemTrash("provider"), { wrapper });
-  await waitFor(() => expect(query.result.current.data).toEqual(data));
-  expect(mocks.get).toHaveBeenCalledWith("provider");
+  const query = renderHook(() => useTrashSettings(), { wrapper });
+  await waitFor(() => expect(query.result.current.data).toEqual({ retentionDays: 30 }));
   const mutation = renderHook(() => useUpdateTrashSettings(), { wrapper });
   await act(async () => {
-    await mutation.result.current.mutateAsync(updated);
+    await mutation.result.current.mutateAsync({ retentionDays: 7 });
   });
-  expect(mocks.put).toHaveBeenCalledWith(updated);
-  expect(client.getQueryData(["system", "trash", "provider"])).toEqual(updated);
-  for (const key of ["trash", "fs", "search"])
-    expect(invalidate).toHaveBeenCalledWith({ queryKey: [key] });
+  expect(mocks.put).toHaveBeenCalledWith({ retentionDays: 7 });
+  expect(client.getQueryData(["trash", "settings"])).toEqual({ retentionDays: 7 });
   client.clear();
 });

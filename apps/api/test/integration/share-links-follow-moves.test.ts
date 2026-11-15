@@ -8,7 +8,6 @@ import {
   ManagedShare,
   publicShareRoute,
   ROUTES,
-  TrashSettings,
 } from "@fdrive/contracts";
 import { createDb, createRepos, schema } from "@fdrive/db";
 import { startLocalStorage, startPostgres } from "@fdrive/testkit";
@@ -85,7 +84,6 @@ describe("public links follow the files they point at", () => {
     database = createDb(postgres.connectionString);
     alice = await login("alice");
     bob = await login("bob");
-    await setTrash(true, "/.trash");
   }, 180_000);
 
   afterAll(async () => {
@@ -94,25 +92,6 @@ describe("public links follow the files they point at", () => {
     await storage?.stop();
     await postgres?.stop();
   }, 180_000);
-
-  /**
-   * Sets the files folder's Trash through System > General, as alice, an
-   * administrator: the API keeps the settings it saves in memory.
-   */
-  async function setTrash(enabled: boolean, path: string): Promise<void> {
-    const repos = createRepos(database.db);
-    const provider = await repos.providers.ensure({ type: "local", baseUrl: "local" });
-    const current = TrashSettings.parse(
-      await ok(call(`${ROUTES.system.trash}?providerId=${provider.id}`, { cookie: alice })),
-    );
-    await ok(
-      call(ROUTES.system.trash, {
-        method: "PUT",
-        cookie: alice,
-        body: { ...current, enabled, path, retentionHours: null },
-      }),
-    );
-  }
 
   async function call(
     path: string,
@@ -255,15 +234,8 @@ describe("public links follow the files they point at", () => {
     // Something new of the same name is not what the link was made for.
     await put(alice, "/Binned/new.txt", "never shared");
     expect(await served(id, "/new.txt")).toEqual([404, 404, 404]);
-    // In the Trash it stays refused, whatever Trash is set to later.
-    try {
-      await setTrash(false, "/.trash");
-      expect(await served(id, "/inside.txt")).toEqual([404, 404, 404]);
-      await setTrash(true, "/.bin");
-      expect(await served(id, "/inside.txt")).toEqual([404, 404, 404]);
-    } finally {
-      await setTrash(true, "/.trash");
-    }
+    // In the Trash it stays refused.
+    expect(await served(id, "/inside.txt")).toEqual([404, 404, 404]);
 
     // Restored to its place, once that is free again, the link works again.
     await move(alice, "/Binned", "/NotBinned");

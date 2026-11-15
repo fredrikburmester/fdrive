@@ -33,7 +33,7 @@ export interface AuthService {
 }
 
 /** What `/auth/me` reports about the whole installation, the same for every login. */
-export type Installation = Pick<MeResponse, "storageName" | "trash" | "index">;
+export type Installation = Pick<MeResponse, "storageName" | "index">;
 
 export interface CreateAuthServiceDeps {
   readonly repos: Repos;
@@ -42,7 +42,7 @@ export interface CreateAuthServiceDeps {
   readonly checkPassword: CheckPassword;
   /** Builds the principal of a session's login once it is admitted. */
   readonly principalFor: PrincipalFactory;
-  /** Read for every `/auth/me`, so a new name or Trash setting applies at once. */
+  /** Read for every `/auth/me`, so a new name applies at once. */
   readonly installation: () => Promise<Installation>;
 }
 

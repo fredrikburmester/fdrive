@@ -91,22 +91,16 @@ describe("Office settings client", () => {
 });
 
 describe("Trash settings client", () => {
-  it("reads and updates provider-bound settings", async () => {
-    const settings = {
-      providerId: "123e4567-e89b-42d3-a456-426614174000",
-      revision: 0,
-      enabled: false,
-      path: "/.trash",
-      retentionHours: null,
-    } as const;
+  it("reads and updates how long Trash keeps an item", async () => {
+    const settings = { retentionDays: 30 } as const;
     const fetchMock = vi.fn<typeof fetch>(async () => Response.json(settings));
     const client = createApiClient({ fetch: fetchMock });
 
-    expect(await client.systemTrash(settings.providerId)).toEqual(settings);
+    expect(await client.trashSettings()).toEqual(settings);
     expect(await client.systemUpdateTrash(settings)).toEqual(settings);
     expect(fetchMock.mock.calls.map(([, init]) => init?.method)).toEqual(["GET", "PUT"]);
     expect(fetchMock.mock.calls.map(([url]) => String(url))).toEqual([
-      `/api/v1/system/trash?providerId=${settings.providerId}`,
+      "/api/v1/trash/settings",
       "/api/v1/system/trash",
     ]);
   });
@@ -122,7 +116,6 @@ const VALID_ME = {
   },
   isAdmin: false,
   storageName: "Home",
-  trash: false,
   index: true,
 };
 
@@ -1436,21 +1429,6 @@ describe("createApiClient: trash", () => {
     size: 7,
     deletedAt: AT,
   };
-
-  it("gets trash/status", async () => {
-    const { fetchStub, calls } = createStubFetch([
-      jsonResponse(200, { available: true, path: "/.trash", retentionHours: null }),
-    ]);
-    const client = createApiClient({ fetch: fetchStub });
-
-    expect(await client.trashStatus()).toEqual({
-      available: true,
-      path: "/.trash",
-      retentionHours: null,
-    });
-    expect(calls[0]?.url).toBe("/api/v1/trash/status");
-    expect(calls[0]?.init.method).toBe("GET");
-  });
 
   it("gets trash and returns entries and truncated", async () => {
     const { fetchStub, calls } = createStubFetch([

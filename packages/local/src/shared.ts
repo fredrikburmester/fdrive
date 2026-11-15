@@ -1,7 +1,7 @@
 import { basename } from "node:path";
 import {
   type FileEntry,
-  isInMoveTrashLayout,
+  isReservedPath,
   makeEntry,
   normalizePath,
   StorageError,
@@ -67,18 +67,13 @@ export function sharedFolderNames(grants: readonly SharedGrant[]): string[] {
 
 /**
  * True when no share reaches a folder at `path` in its owner's files: one of
- * `folders` (their Trash while it is on, fdrive's own bookkeeping) or inside
- * one, or anywhere inside fdrive's Trash layout, which stays put when Trash
- * is turned off or moved. A share follows its folder into Trash, and is
- * refused there until a restore brings it back or a purge ends it.
+ * fdrive's own folders (`isReservedPath`: the Trash, the Mac app's folder,
+ * the Trash layout wherever it lies) or anything inside one. A share follows
+ * its folder into Trash, and is refused there until a restore brings it back
+ * or a purge ends it.
  */
-export function closedToShares(path: string, folders: readonly string[]): boolean {
-  const target = normalizePath(path);
-  if (isInMoveTrashLayout(target)) return true;
-  return folders.some((folder) => {
-    const closed = normalizePath(folder);
-    return closed === "/" || target === closed || target.startsWith(`${closed}/`);
-  });
+export function closedToShares(path: string): boolean {
+  return isReservedPath(path);
 }
 
 /** A user's storage: every optional `StorageProvider` operation is there. */

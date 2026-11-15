@@ -23,13 +23,13 @@ filesystem details and lets tests run on an in-memory storage. fdrive checks pas
   one the API can read, write and enter.
 - The files folder is one row in `app.providers` (`type` and `base_url` `local`). Startup
   ensures it and keeps its id (`ensureStorageRow`); every login names it. The id never
-  changes: the Mac app compares it as each location's `providerId`, and Trash settings and
-  Office documents name it. Rows left from storage fdrive no longer has stay until the schema
+  changes: the Mac app compares it as each location's `providerId`, and Office documents name
+  it. Rows left from storage fdrive no longer has stay until the schema
   is collapsed; nothing reads them.
 - A signed-in request's storage is built on first use from the username its session or token
   query read, already admitted ([authentication](AUTH.md#resolving-a-request)); outside a
   request the storage factory finds the identity and runs `admit` first. Either way it adds
-  the Trash wrappers when Trash is on.
+  the Trash wrappers.
 - The storage's name is the installation setting `storage.name` ("Local folder" until an
   administrator renames it), trimmed, 1 to 120 characters. It shows under each username in the
   sidebar and as the Mac location's `displayName`. `GET /api/v1/system/storage` returns the
@@ -39,11 +39,10 @@ filesystem details and lets tests run on an in-memory storage. fdrive checks pas
 
 ## Installation flags
 
-`/auth/me` carries the storage name and two flags the web reads, the same for every login:
-`trash`, Trash is on in its settings for the files folder's row, and `index`, the files folder
-is read under a root in `FDRIVE_INDEX_ROOTS` ([scoping](SCOPING.md)). Everything else is always
-on: the files folder zips, keeps modification times, moves in one step, shares links and
-folders, and opens in Office.
+`/auth/me` carries the storage name and one flag the web reads, the same for every login:
+`index`, the files folder is read under a root in `FDRIVE_INDEX_ROOTS` ([scoping](SCOPING.md)).
+Everything else is always on: the files folder zips, keeps modification times, moves in one
+step, shares links and folders, opens in Office, and has a Trash.
 
 ## StorageProvider
 
@@ -106,9 +105,11 @@ How the files folder implements it:
   and bytes read once every file is counted (`onProgress`). Compressing to zip
   (`/fs/compress`) streams this zip straight into an upload of the archive.
 - **Trash.** The storage factory wraps the storage with core's `withMoveToTrash` and
-  `createRecycleFolderTrash`; deleted items live in `<trash folder>/.fdrive-move-v1`. Settings
-  are `trash.configuration.<providerId>` in `app.settings`, disabled at `/.trash` by default,
-  read and written through `/api/v1/system/trash?providerId=` ([Trash](TRASH.md)).
+  `createRecycleFolderTrash` at `TRASH_PATH`, `/.trash`; deleted items live in
+  `/.trash/.fdrive-move-v1`. Its one setting, how many days it keeps an item, is
+  `trash.retentionDays` in `app.settings`, read at `/api/v1/trash/settings` and written at
+  `/api/v1/system/trash`; the API's hourly retention deletes what is older
+  ([Trash](TRASH.md)).
 - **Ownership.** The API writes as `FDRIVE_RUN_AS_UID`, the uid the indexer and OCR use.
 - **The folder's marker.** With a `guard` ([files-marker.ts](../packages/local/src/files-marker.ts)),
   the files folder serves files only while its `.fdrive-files` names this installation

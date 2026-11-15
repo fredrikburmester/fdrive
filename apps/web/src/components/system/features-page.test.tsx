@@ -34,38 +34,6 @@ vi.mock("./public-url-card", () => ({
   ),
   PublicUrlReview: () => <span>Address review</span>,
 }));
-vi.mock("./trash-settings-card", () => ({
-  TrashSettingsCard: ({
-    onContinue,
-    provider,
-    description,
-  }: {
-    onContinue?: () => void;
-    provider: { label: string };
-    description?: string;
-  }) => (
-    <>
-      <span>Trash for {provider.label}</span>
-      <span>{description}</span>
-      <button type="button" onClick={onContinue}>
-        Trash settings
-      </button>
-    </>
-  ),
-  TrashReview: ({ provider }: { provider: { label: string } }) => (
-    <span>Trash review for {provider.label}</span>
-  ),
-}));
-vi.mock("@/lib/api/auth-queries", () => ({
-  useMe: () => ({
-    data: {
-      account: { id: "a", displayName: null },
-      isAdmin: true,
-      storageName: "Primary",
-      identity: { id: "i", providerId: "p" },
-    },
-  }),
-}));
 vi.mock("./system-page", () => ({
   SystemPage: ({ children }: { children: ReactNode }) => <div>{children}</div>,
 }));
@@ -145,7 +113,7 @@ describe("feature walkthrough", () => {
       expect.anything(),
     );
     view.unmount();
-    mount(9);
+    mount(8);
     mocks.mutate.mockImplementationOnce((_input: unknown, options: { onSuccess: () => void }) =>
       options.onSuccess(),
     );
@@ -160,7 +128,7 @@ describe("feature walkthrough", () => {
   it("resumes the saved feature step and persists its required dependency", () => {
     mount(2);
 
-    expect(screen.getByText("Step 5 of 12 · Search OCR")).toBeTruthy();
+    expect(screen.getByText("Step 5 of 11 · Search OCR")).toBeTruthy();
     fireEvent.click(screen.getByRole("switch", { name: "Enable search ocr" }));
     fireEvent.click(screen.getByRole("button", { name: "Save and continue" }));
 
@@ -176,7 +144,6 @@ describe("feature walkthrough", () => {
     mount(6, true);
     expect(screen.getAllByRole("switch")).toHaveLength(6);
     expect(screen.getByText("Office feature card")).toBeTruthy();
-    expect(screen.queryByRole("button", { name: "Trash settings" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Address settings" })).toBeNull();
     expect(screen.getByRole("link", { name: "Open Thumbnails" }).getAttribute("href")).toBe(
       "/system/thumbnails",
@@ -197,39 +164,29 @@ describe("feature walkthrough", () => {
     expect(screen.queryByText("Office feature card")).toBeNull();
   });
 
-  it("includes Trash before review without changing processing settings", () => {
+  it("asks for the server address after the features, with no Trash step, and before Office", () => {
     mount(6);
-    expect(screen.getByText("Step 9 of 12 · Trash")).toBeTruthy();
-    expect(screen.getByText("Trash for Primary")).toBeTruthy();
-    expect(screen.getByText("You can change this later under System > General.")).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "Trash settings" }));
+    expect(screen.getByText("Step 9 of 11 · Server address")).toBeTruthy();
+    expect(screen.queryByText(/Trash/)).toBeNull();
+    expect(screen.queryByRole("button", { name: "Save and continue" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Address settings" }));
     expect(mocks.mutate).toHaveBeenCalledWith(
       expect.objectContaining({ walkthroughStep: 7, values: off }),
       expect.anything(),
     );
   });
-  it("asks for the server address after Trash and before Office", () => {
+  it("includes Office after the address and before review", () => {
     mount(7);
-    expect(screen.getByText("Step 10 of 12 · Server address")).toBeTruthy();
-    expect(screen.queryByRole("button", { name: "Save and continue" })).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "Address settings" }));
+    expect(screen.getByText("Step 10 of 11 · Office")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Office settings" }));
     expect(mocks.mutate).toHaveBeenCalledWith(
       expect.objectContaining({ walkthroughStep: 8, values: off }),
       expect.anything(),
     );
   });
-  it("includes Office after the address and before review", () => {
-    mount(8);
-    expect(screen.getByText("Step 11 of 12 · Office")).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "Office settings" }));
-    expect(mocks.mutate).toHaveBeenCalledWith(
-      expect.objectContaining({ walkthroughStep: 9, values: off }),
-      expect.anything(),
-    );
-  });
   it("reviews the address alongside the other choices", () => {
-    mount(9);
-    expect(screen.getByText("Step 12 of 12 · Review")).toBeTruthy();
+    mount(8);
+    expect(screen.getByText("Step 11 of 11 · Review")).toBeTruthy();
     expect(screen.getByText("Address review")).toBeTruthy();
     expect(screen.getByText(/later under System: Features and General\./)).toBeTruthy();
   });

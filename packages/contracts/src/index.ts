@@ -281,15 +281,14 @@ export {
   CreateApiTokenResponse,
 } from "./tokens.ts";
 export {
+  DEFAULT_TRASH_RETENTION_DAYS,
   isValidPath,
-  SystemTrashQuery,
+  TRASH_RETENTION_SETTINGS_KEY,
   TrashEntry,
   TrashListResponse,
   TrashPurgeRequest,
   TrashRestoreRequest,
   TrashRestoreResponse,
   TrashSettings,
-  TrashSettingsUpdateRequest,
-  TrashStatusResponse,
 } from "./trash.ts";
 export * from "./users.ts";

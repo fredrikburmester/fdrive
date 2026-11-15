@@ -90,7 +90,7 @@ describe("share management", () => {
   });
 
   it("refuses fdrive's own folders, missing paths, colliding names and a file to upload into", async () => {
-    const h = sharesHarness({ trashPath: "/.trash" });
+    const h = sharesHarness();
     h.write("/.trash/old.txt", "gone");
     h.write("/.fdrive-desktop/mac/trash/old.txt", "the Mac's Trash");
     h.write("/one/report.txt", "one");
@@ -528,7 +528,7 @@ describe("public shares", () => {
   });
 
   it("lists a directory share without the hidden folders and serves its children", async () => {
-    const h = sharesHarness({ trashPath: "/.trash" });
+    const h = sharesHarness();
     h.write("/folder/a.txt", "content");
     h.write("/.trash/old.txt", "gone");
     h.write("/.fdrive-desktop/mac/trash/old.txt", "the Mac's Trash");

@@ -21,7 +21,9 @@ test("alice (admin) finds the files folder and its Trash on System > General, wi
   // The e2e folder is healthy, so no health line competes for attention.
   await expect(card.getByText("Unavailable")).toHaveCount(0);
   await expect(card.getByRole("alert")).toHaveCount(0);
-  await expect(page.getByRole("switch", { name: "Enable Trash" })).toBeVisible();
+  // Trash is always on: its one setting is how long it keeps items.
+  await expect(page.getByLabel("Days in Trash")).toBeVisible();
+  await expect(page.getByRole("switch", { name: "Enable Trash" })).toHaveCount(0);
   for (const name of [/^Add provider/, /^Remove /, /^Test /, /^Edit /]) {
     await expect(page.getByRole("button", { name })).toHaveCount(0);
   }

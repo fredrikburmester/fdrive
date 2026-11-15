@@ -72,7 +72,6 @@ interface Setup {
   /** A second API process sharing the database but nothing in memory. */
   restart(): ChatService;
   /** Whether the login's Trash is configured; can be switched off mid-test. */
-  readonly trash: { enabled: boolean };
 }
 
 async function setup(
@@ -132,9 +131,7 @@ async function setup(
     indexerClient: null,
     clock: () => new Date("2026-09-18T10:00:00.000Z"),
     metadata: createMetadataService(repos),
-    ...(options.trash ? { trashPathForStorage: () => (trash.enabled ? "/.Trash" : null) } : {}),
   };
-  const trash = { enabled: true };
   void HOME_SCOPES;
   const unexpected = vi.fn();
   let counter = 0;
@@ -166,7 +163,6 @@ async function setup(
     script,
     unexpected,
     restart: build,
-    trash,
   };
 }
 
@@ -278,6 +274,7 @@ describe("chat service", () => {
       "file_info",
       "move_items",
       "rename_items",
+      "trash_items",
       "write_text_file",
     ]);
   });
@@ -301,7 +298,7 @@ describe("chat service", () => {
     const trashed = await setup({ trash: true });
     const t = await trashed.service.create(trashed.principal, {});
     await expect(
-      trashed.service.send(trashed.principal, t.id, { text: "x", references: ["/.Trash/x"] }),
+      trashed.service.send(trashed.principal, t.id, { text: "x", references: ["/.trash/x"] }),
     ).rejects.toMatchObject({
       kind: "bad_request",
       message: "Items in Trash or fdrive's own folders cannot be referenced.",
@@ -391,10 +388,10 @@ describe("chat service", () => {
   it("gives the model no open folder that is missing, a file or in Trash, and stores its spelling", async () => {
     const t = await setup({
       trash: true,
-      files: { "/A\u030Arsbesked/x.txt": "x", "/.Trash/old/y.txt": "y", "/z.txt": "z" },
+      files: { "/A\u030Arsbesked/x.txt": "x", "/.trash/old/y.txt": "y", "/z.txt": "z" },
     });
     const chat = await t.service.create(t.principal, {});
-    for (const location of ["/Nope", "/z.txt", "/.Trash/old"]) {
+    for (const location of ["/Nope", "/z.txt", "/.trash/old"]) {
       t.script.queue.push(text("ok"));
       await t.service.send(t.principal, chat.id, { text: "Hi", location });
       await t.service.settled(chat.id);
@@ -491,7 +488,7 @@ describe("chat service", () => {
     ).rejects.toMatchObject({ kind: "not_found" });
   });
 
-  it("does not offer trash without a configured Trash, and tells the model when declined", async () => {
+  it("tells the model when the person declines a card", async () => {
     s.script.queue.push(
       call("c1", "move_items", {
         summary: "File it.",
@@ -501,7 +498,7 @@ describe("chat service", () => {
     );
     const chat = await chatWith(s, "Move it", ["/Inbox/a.txt"]);
     await s.service.settled(chat.id);
-    expect(s.script.starts[0]?.tools.map((tool) => tool.name)).not.toContain("trash_items");
+    expect(s.script.starts[0]?.tools.map((tool) => tool.name)).toContain("trash_items");
     const card = lastParts(await s.service.get(s.principal, chat.id))[0];
     if (card?.kind !== "action") throw new Error("expected a card");
     expect(card.proposal).toMatchObject({
@@ -837,7 +834,7 @@ describe("chat service", () => {
     ).rejects.toMatchObject({ kind: "forbidden" });
   });
 
-  it("declines stored cards on a new message after a restart, and refuses a card whose tool is gone", async () => {
+  it("declines stored cards on a new message after a restart", async () => {
     const t = await setup({ trash: true });
     t.script.queue.push(
       call("c1", "trash_items", { summary: "s", items: [{ path: "/Inbox/a.txt", reason: "r" }] }),
@@ -848,14 +845,6 @@ describe("chat service", () => {
     if (card?.kind !== "action") throw new Error("expected a card");
 
     const restarted = t.restart();
-    t.trash.enabled = false;
-    await expect(
-      restarted.act(t.principal, chat.id, card.id, { decision: "apply" }),
-    ).rejects.toMatchObject({
-      kind: "conflict",
-      message: "That action is no longer available for this login.",
-    });
-
     t.script.queue.push(text("Ok."));
     await restarted.send(t.principal, chat.id, { text: "Forget it" });
     await restarted.settled(chat.id);

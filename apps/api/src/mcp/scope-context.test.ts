@@ -18,7 +18,6 @@ describe("resolveScopeContext", () => {
     const ctx = await resolveScopeContext(
       stubIndexQueries(async () => ({ files: 1 })),
       [],
-      null,
     );
     expect(ctx).toBeNull();
   });
@@ -27,7 +26,6 @@ describe("resolveScopeContext", () => {
     const ctx = await resolveScopeContext(
       stubIndexQueries(async () => ({})),
       ALICE_HOME_SCOPES,
-      null,
     );
     expect(ctx).toBeNull();
   });
@@ -36,7 +34,6 @@ describe("resolveScopeContext", () => {
     const ctx = await resolveScopeContext(
       stubIndexQueries(async () => ({ files: 1 })),
       ALICE_HOME_SCOPES,
-      null,
     );
 
     expect(ctx).not.toBeNull();
@@ -51,7 +48,6 @@ describe("resolveScopeContext", () => {
     const ctx = await resolveScopeContext(
       stubIndexQueries(async () => ({ files: 1 })),
       scopes,
-      null,
     );
 
     expect(ctx?.scopePrefixes).toEqual([{ rootId: 1, fsPrefix: "/alice" }]);
@@ -63,7 +59,6 @@ describe("virtualPathFor", () => {
     const ctx = await resolveScopeContext(
       stubIndexQueries(async () => ({ files: 1 })),
       ALICE_HOME_SCOPES,
-      null,
     );
     if (ctx === null) {
       throw new Error("expected a scope context");
@@ -76,7 +71,6 @@ describe("virtualPathFor", () => {
     const ctx = await resolveScopeContext(
       stubIndexQueries(async () => ({ files: 1 })),
       ALICE_HOME_SCOPES,
-      null,
     );
     if (ctx === null) {
       throw new Error("expected a scope context");
@@ -89,7 +83,6 @@ describe("virtualPathFor", () => {
     const ctx = await resolveScopeContext(
       stubIndexQueries(async () => ({ files: 1 })),
       ALICE_HOME_SCOPES,
-      null,
     );
     if (ctx === null) {
       throw new Error("expected a scope context");
@@ -106,7 +99,6 @@ describe("virtualPathFor", () => {
     const ctx = await resolveScopeContext(
       stubIndexQueries(async () => ({ files: 1 })),
       scopes,
-      null,
     );
     if (ctx === null) {
       throw new Error("expected a scope context");
@@ -119,11 +111,10 @@ describe("virtualPathFor", () => {
     expect(virtualPathFor(ctx, 1, "alice/vshared/x.txt")).toBeNull();
   });
 
-  it("returns null for a path nested under the configured trash path", async () => {
+  it("returns null for a path in the Trash", async () => {
     const ctx = await resolveScopeContext(
       stubIndexQueries(async () => ({ files: 1 })),
       ALICE_HOME_SCOPES,
-      "/.trash",
     );
     if (ctx === null) {
       throw new Error("expected a scope context");
@@ -132,11 +123,10 @@ describe("virtualPathFor", () => {
     expect(virtualPathFor(ctx, 1, "alice/.trash/report.pdf/168176641123456789")).toBeNull();
   });
 
-  it("returns null for a path equal to the configured trash path itself", async () => {
+  it("returns null for the Trash itself", async () => {
     const ctx = await resolveScopeContext(
       stubIndexQueries(async () => ({ files: 1 })),
       ALICE_HOME_SCOPES,
-      "/.trash",
     );
     if (ctx === null) {
       throw new Error("expected a scope context");
@@ -145,11 +135,10 @@ describe("virtualPathFor", () => {
     expect(virtualPathFor(ctx, 1, "alice/.trash")).toBeNull();
   });
 
-  it("still maps a path outside the trash when a trashPath is configured", async () => {
+  it("still maps a path outside the Trash", async () => {
     const ctx = await resolveScopeContext(
       stubIndexQueries(async () => ({ files: 1 })),
       ALICE_HOME_SCOPES,
-      "/.trash",
     );
     if (ctx === null) {
       throw new Error("expected a scope context");
@@ -164,7 +153,6 @@ describe("narrowScopePrefixes", () => {
     const ctx = await resolveScopeContext(
       stubIndexQueries(async () => ({ files: 1 })),
       ALICE_HOME_SCOPES,
-      null,
     );
     if (ctx === null) {
       throw new Error("expected a scope context");
@@ -188,7 +176,6 @@ describe("narrowScopePrefixes", () => {
       scopePrefixes: [{ rootId: 1, fsPrefix: "/alice" }],
       rootNameById: new Map([[1, "files"]]),
       rootIdByName: new Map([["files", 1]]),
-      trashPath: null,
     };
 
     expect(narrowScopePrefixes(narrowScope, "/elsewhere")).toBeNull();

@@ -61,7 +61,6 @@ async function openMenu(
   render(
     <FileContextMenu
       entry={target}
-      trash
       received={[TRIP, BUDGET]}
       {...(options.selection === undefined ? {} : { selection: options.selection })}
       onAction={options.onAction ?? vi.fn()}

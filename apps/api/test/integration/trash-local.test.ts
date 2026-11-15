@@ -7,14 +7,12 @@ import {
   ROUTES,
   TrashListResponse,
   TrashRestoreResponse,
-  TrashStatusResponse,
+  TrashSettings,
 } from "@fdrive/contracts";
-import { createDb, createRepos } from "@fdrive/db";
 import { startLocalStorage, startPostgres } from "@fdrive/testkit";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { composeApp } from "../../src/composition.js";
 import { loadConfig } from "../../src/config.js";
-import { trashSettingsKey } from "../../src/trash/settings.js";
 import { seedLocalUsers, silentLogger } from "./helpers/local-storage.ts";
 
 const TRASH_PATH = "/.trash";
@@ -26,14 +24,13 @@ const cookieFrom = (response: Response) => response.headers.get("set-cookie")?.s
  * `fs/list` interactions with a trash, against a real local folder, whose
  * Trash is fdrive's own: a delete moves the item into the recycle folder
  * (`<home>/.trash/.fdrive-move-v1`). Follows `accounts-local.test.ts`'s
- * composition pattern: one Postgres, one local folder, one composed app with
- * provider-bound Trash settings persisted, and plain `app.request` calls per user.
+ * composition pattern: one Postgres, one local folder, one composed app,
+ * and plain `app.request` calls per user.
  */
 describe("trash against real PostgreSQL and a local folder", () => {
   let postgres: Awaited<ReturnType<typeof startPostgres>>;
   let storage: Awaited<ReturnType<typeof startLocalStorage>>;
   let composed: Awaited<ReturnType<typeof composeApp>>;
-  let database: ReturnType<typeof createDb>;
 
   beforeAll(async () => {
     [postgres, storage] = await Promise.all([
@@ -50,21 +47,10 @@ describe("trash against real PostgreSQL and a local folder", () => {
       FDRIVE_MASTER_KEY: Buffer.alloc(32, 9).toString("base64"),
     });
     composed = await composeApp(config, silentLogger());
-    database = createDb(postgres.connectionString);
-    const repos = createRepos(database.db);
-    const provider = await repos.providers.ensure({ type: "local", baseUrl: "local" });
-    await repos.settings.set(trashSettingsKey(provider.id), {
-      providerId: provider.id,
-      revision: 1,
-      enabled: true,
-      path: TRASH_PATH,
-      retentionHours: 72,
-    });
   }, 180000);
 
   afterAll(async () => {
     await composed?.close();
-    await database?.close();
     await storage?.stop();
     await postgres?.stop();
   }, 180000);
@@ -137,11 +123,11 @@ describe("trash against real PostgreSQL and a local folder", () => {
     const alice = await login("alice");
     const aliceCookie = alice.cookie;
 
-    // 1. trash status is available with the configured path and retention.
-    const status = TrashStatusResponse.parse(
-      await (await call(ROUTES.trash.status, { cookie: aliceCookie })).json(),
+    // 1. Trash is always on, keeping items 30 days until an administrator changes it.
+    const settings = TrashSettings.parse(
+      await (await call(ROUTES.trash.settings, { cookie: aliceCookie })).json(),
     );
-    expect(status).toEqual({ available: true, path: TRASH_PATH, retentionHours: 72 });
+    expect(settings).toEqual({ retentionDays: 30 });
 
     // 2. delete files whose names contain spaces, Unicode, and a literal
     // "%20" (not a URL-encoded space), the last from inside a folder, then

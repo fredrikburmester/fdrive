@@ -1,4 +1,3 @@
-import type { TrashSettings } from "@fdrive/contracts";
 import { moveTrashLeafPath, type StorageProvider } from "@fdrive/core";
 import { createMemoryRepos } from "@fdrive/db/testing";
 import type { FilesFolder } from "@fdrive/local";
@@ -6,19 +5,7 @@ import { createMemoryStorage } from "@fdrive/testkit";
 import { expect, it, vi } from "vitest";
 import { ApiHttpError } from "../errors.js";
 import { filesFolderFixture, seedLocalUsers } from "../local/test-fixtures/index.ts";
-import {
-  createIdentityStorageFactory,
-  trashSettingsForStorage,
-  withRecycleFolderTrash,
-} from "./storage-factory.ts";
-
-const TRASH_SETTINGS: TrashSettings = {
-  providerId: "123e4567-e89b-42d3-a456-426614174000",
-  revision: 1,
-  enabled: true,
-  path: "/.trash",
-  retentionHours: null,
-};
+import { createIdentityStorageFactory } from "./storage-factory.ts";
 
 /** Alice's login over a files folder whose storage is `storage` for every user. */
 async function fixture(storage: StorageProvider = createMemoryStorage()) {
@@ -43,8 +30,7 @@ it("builds the login's own storage, once per call, for delayed reads and writes"
   expect(h.folder.admit).toHaveBeenCalledExactlyOnceWith("alice");
   expect(h.folder.storage).toHaveBeenCalledExactlyOnceWith("alice");
   expect(await storage.list("/")).toEqual([]);
-  expect(storage.trash).toBeUndefined();
-  expect(trashSettingsForStorage(storage)).toBeNull();
+  expect(storage.trash).toBeDefined();
 });
 
 it("asks a login that is gone to sign in again", async () => {
@@ -60,7 +46,7 @@ it("asks a login that is gone to sign in again", async () => {
   expect(h.folder.storage).not.toHaveBeenCalled();
 });
 
-it("moves deletes into the recycle folder while Trash is on", async () => {
+it("always moves deletes into the Trash at /.trash", async () => {
   const memory = createMemoryStorage({ "/docs/a.txt": "x" });
   const h = await fixture(memory);
   const at = new Date("2026-09-10T12:00:00Z");
@@ -68,7 +54,6 @@ it("moves deletes into the recycle folder while Trash is on", async () => {
     identities: h.repos.identities,
     folder: h.folder,
     clock: () => at,
-    resolveTrashSettings: async () => TRASH_SETTINGS,
   });
   const storage = await factory(h.alice.id);
   await storage.deleteFile("/docs/a.txt");
@@ -82,45 +67,19 @@ it("moves deletes into the recycle folder while Trash is on", async () => {
   expect(memory.dump()).toEqual({});
 });
 
-it("adds no trash while Trash is off, and keeps the revision it read", async () => {
-  const h = await fixture();
+it("deletes for good, with no Trash view, when built without Trash", async () => {
+  const memory = createMemoryStorage({ "/.fdrive-desktop/staged.txt": "x" });
+  const h = await fixture(memory);
   const factory = createIdentityStorageFactory({
     identities: h.repos.identities,
     folder: h.folder,
     clock: () => new Date(0),
-    resolveTrashSettings: async () => ({ ...TRASH_SETTINGS, enabled: false }),
+    withoutTrash: true,
   });
   const storage = await factory(h.alice.id);
   expect(storage.trash).toBeUndefined();
-  expect(trashSettingsForStorage(storage)).toMatchObject({ revision: 1, enabled: false });
-});
-
-it("keeps a coherent Trash revision per storage while new requests see updates", async () => {
-  const h = await fixture();
-  let settings = TRASH_SETTINGS;
-  const factory = createIdentityStorageFactory({
-    identities: h.repos.identities,
-    folder: h.folder,
-    clock: () => new Date(0),
-    resolveTrashSettings: async () => settings,
-  });
-
-  const first = await factory(h.alice.id);
-  settings = { ...settings, revision: 2, path: "/deleted" };
-  const second = await factory(h.alice.id);
-
-  expect(trashSettingsForStorage(first)).toMatchObject({ revision: 1, path: "/.trash" });
-  expect(trashSettingsForStorage(second)).toMatchObject({ revision: 2, path: "/deleted" });
-  expect(first.trash).toBeDefined();
-  expect(second.trash).toBeDefined();
-});
-
-it("withRecycleFolderTrash spreads the original provider and adds trash without mutating it", () => {
-  const storage = createMemoryStorage();
-  const withTrash = withRecycleFolderTrash(storage, "/.trash");
-  expect(withTrash.trash).toBeDefined();
-  expect(storage.trash).toBeUndefined();
-  expect(withTrash.list).toBe(storage.list);
+  await storage.deleteFile("/.fdrive-desktop/staged.txt");
+  expect(memory.dump()).toEqual({});
 });
 
 it("asks the files folder to admit the login before building any storage", async () => {
@@ -209,8 +168,11 @@ it("moves, copies, zips and deletes a folder without listing it first", async ()
   await storage.deleteDir("/moved");
   expect(zip).toHaveBeenCalledExactlyOnceWith(["/moved"]);
   expect(list).not.toHaveBeenCalled();
+  const binned = moveTrashLeafPath("/.trash", "/moved", "dir", "0");
   expect(memory.dump()).toEqual({
     "/docs/b.txt": "y",
     "/docs/.fdrive-backups/install/a.fdrive.age": "x",
+    [`${binned}/b.txt`]: "y",
+    [`${binned}/.fdrive-backups/install/a.fdrive.age`]: "x",
   });
 });

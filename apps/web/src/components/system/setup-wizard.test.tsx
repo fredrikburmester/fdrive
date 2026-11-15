@@ -73,11 +73,11 @@ describe("setup steps", () => {
     mocks.complete.mutate.mockImplementation((_input, options) => options.onSuccess());
     renderWizard(LOCAL);
 
-    expect(screen.getByText("Step 1 of 12")).toBeTruthy();
+    expect(screen.getByText("Step 1 of 11")).toBeTruthy();
     expect(screen.queryByRole("tab", { name: "Storage" })).toBeNull();
     claim();
     expect(screen.getByText("Create your account")).toBeTruthy();
-    expect(screen.getByText("Step 2 of 12")).toBeTruthy();
+    expect(screen.getByText("Step 2 of 11")).toBeTruthy();
 
     type("Username", "  ada  ");
     type("Password", "analytical-engine");
