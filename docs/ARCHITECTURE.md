@@ -157,6 +157,58 @@ Office uses durable file UUIDs keyed by owner and owner's path, session-bound to
 verification and explicit edit admission. See [Office implementation](OFFICE-DEVELOPMENT.md) and [setup](OFFICE.md).
 Trash is a storage capability, not application-owned snapshot history; see [Trash](TRASH.md).
 
+## Database connections
+
+The API keeps four pools ([pools.ts](../apps/api/src/pools.ts)), and a request takes them in
+this order:
+
+1. **Write gate**: each mutating request holds the backups' snapshot gate, shared, from start
+   to end, an upload's body included, so no capture's snapshot sees half a write. Used only
+   while backups are configured.
+2. **Office**: a save holds its document's lock, and a connection, while its body arrives.
+3. **File operations**: a file operation's transaction holds the paths it changes while its
+   storage call runs (a rename, a mkdir, an upload's publish, a whole copy).
+4. **Main**: everything else, backups included.
+
+Work holding a connection from one pool waits only for a connection from a pool after it, never
+from its own or one before it. A write holds the gate while it saves an Office document, the
+save holds its Office connection while its file operation publishes, the file operation holds
+its connection while storage reads the main pool, and main pool work waits for no other pool. A
+cycle of waits needs a holder that waits for its own pool or an earlier one, so none forms
+however full the pools are; their sizes only set how much runs at once. Locks keep to the same
+pools: a request waits for a document's lock with an Office connection, for a path's with a
+file operations one and for the gate with a write gate one. One kind of wait falls outside
+this. A file operation or Office save can hold rows and locks that main pool work also takes (a
+link's row, the Office registry's lock), and main pool work then waits until that transaction
+commits. Every pool but the gate gives up on a connection after 30 seconds, so a cycle there
+ends in a failed request, not a stuck API. The gate waits as long as the writes before it take:
+a write waiting for it holds nothing yet. `connection-pools.test.ts` fills each pool with
+waiting work and checks the rest of the API still answers and everything completes; with any of
+the three on the main pool, it fails.
+
+The most connections each process opens at once, from `CONNECTION_BUDGET`. A test keeps the
+total within Postgres's `max_connections`, which [compose](../deploy/compose.yaml) sets to
+200, and checks the indexer's and OCR's numbers against their code.
+
+| Process | Holder | At most |
+| --- | --- | --- |
+| API | write gate pool | 16 |
+| API | Office pool | 10 |
+| API | file operations pool | 10 |
+| API | main pool | 10 |
+| API | the change journal's `LISTEN` | 1 |
+| Backup worker | its pool: its lock, a capture and their bookkeeping | 6 |
+| Indexer | one per thread that reads the database: three pools of up to 16 workers (scan, journal, watcher; `MAX_WORKERS`), ten threads of its own and eight HTTP handler threads (`HTTP_BLOCKING_THREADS`) | 66 |
+| OCR | a pass, the settings poll, one request on the event loop and two restores or deletes of kept originals (`ORIGINALS_AT_ONCE`) | 5 |
+| Operator | `psql`, the backup commands | 10 |
+| **Total** | of 200, 3 kept for superusers | **134** |
+
+The API's and the worker's pools connect on first use and close idle connections after 10
+seconds, so a quiet installation holds far fewer; the indexer keeps each thread's. The API's
+are named `fdrive api <pool>` and the worker's `fdrive backup worker` in `pg_stat_activity`. A
+capture taking its snapshot waits for running writes on one connection of its own pool: the
+worker's, or main when the API runs the worker itself (`FDRIVE_BACKUP_WORKER`).
+
 ## UI and runtime decisions
 
 - Feature activation is persisted through onboarding/System settings. Optional processing
