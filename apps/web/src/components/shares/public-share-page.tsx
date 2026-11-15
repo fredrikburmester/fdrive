@@ -1,6 +1,7 @@
 "use client";
 
 import type { PublicShare, ShareEntriesResponse } from "@fdrive/contracts";
+import { isPeekableArchiveName } from "@fdrive/core";
 import { useQueryClient } from "@tanstack/react-query";
 import { File, Folder, Link2, LinkIcon, RefreshCw } from "lucide-react";
 import type { Route } from "next";
@@ -30,7 +31,6 @@ import {
 import { isLink, LINK_TITLE } from "@/lib/files/links";
 import { type PublicShareClient, publicShareClient } from "@/lib/shares/client";
 import { appendShareName, publicShareHref, shareBreadcrumbs } from "@/lib/shares/paths";
-import { canPeekArchive } from "@/lib/shares/peek";
 import {
   galleryEntries,
   resolveEntriesPresentation,
@@ -63,11 +63,27 @@ function ZipDownloadCard({ id, client }: { id: string; client: PublicShareClient
   );
 }
 
+/**
+ * The URL a preview of one shared file reads. Audio and video stream in many Range reads, so
+ * they are opened through the share first, counted once, and read with the token it returns;
+ * anything else is one plain download, counted as it is. Called from a click, never an effect,
+ * so React's development double effects never open two.
+ */
+async function previewUrl(
+  client: PublicShareClient,
+  id: string,
+  path: string,
+  kind: SelectedPreview["kind"],
+): Promise<string> {
+  if (kind !== "audio" && kind !== "video") return client.shareDownloadUrl(id, path);
+  const { token } = await client.sharePreview(id, path);
+  return client.shareDownloadUrl(id, path, token);
+}
+
 function DirectoryListing({
   id,
   path,
   presentation,
-  downloadLimited,
   listing,
   client,
   onPreview,
@@ -76,8 +92,6 @@ function DirectoryListing({
   id: string;
   path: string;
   presentation: PublicShare["presentation"];
-  /** Whether the share has a download limit; previews are never rendered for a limited link. */
-  downloadLimited: boolean;
   listing: ReturnType<typeof useShareEntries>;
   client: PublicShareClient;
   onPreview: (name: string, path: string, size: number) => void;
@@ -90,9 +104,7 @@ function DirectoryListing({
         Loading shared files…
       </p>
     );
-  const resolved = resolveEntriesPresentation(presentation, listing.data.items, {
-    downloadLimited,
-  });
+  const resolved = resolveEntriesPresentation(presentation, listing.data.items);
   if (resolved === "download") return <ZipDownloadCard id={id} client={client} />;
   if (resolved === "gallery")
     return (
@@ -110,7 +122,6 @@ function DirectoryListing({
       id={id}
       path={path}
       entries={listing.data.items}
-      downloadLimited={downloadLimited}
       onPreview={onPreview}
       onPeek={onPeek}
     />
@@ -124,6 +135,9 @@ interface SelectedPreview {
   generation: number;
   folder: string;
   size?: number | undefined;
+  /** The URL the opened preview reads, once the share has counted it. */
+  url: string | null;
+  error: string | null;
 }
 
 interface SelectedPeek {
@@ -163,7 +177,28 @@ function SharedContents({
   const [peek, setPeek] = useState<SelectedPeek | null>(null);
   function previewFile(name: string, filePath: string, size?: number) {
     const kind = publicPreviewKind(name, size);
-    if (kind !== "none") setPreview({ name, path: filePath, kind, generation, folder: path, size });
+    if (kind === "none") return;
+    const selected: SelectedPreview = {
+      name,
+      path: filePath,
+      kind,
+      generation,
+      folder: path,
+      size,
+      url: null,
+      error: null,
+    };
+    setPreview(selected);
+    const settle = (opened: Pick<SelectedPreview, "url" | "error">) =>
+      setPreview((current) => (current === selected ? { ...selected, ...opened } : current));
+    previewUrl(client, id, filePath, kind).then(
+      (url) => settle({ url, error: null }),
+      (cause: unknown) =>
+        settle({
+          url: null,
+          error: cause instanceof Error ? cause.message : "Could not open this preview.",
+        }),
+    );
   }
   function peekArchive(name: string, filePath: string, size?: number) {
     setPeek({ name, path: filePath, size, generation, folder: path });
@@ -178,9 +213,7 @@ function SharedContents({
     );
   if (!enabled)
     return <p className="text-sm text-muted-foreground">Enter the share password to continue.</p>;
-  const singleFilePresentation = resolveSingleFilePresentation(share.presentation, share.fileName, {
-    downloadLimited: share.maxDownloads > 0,
-  });
+  const singleFilePresentation = resolveSingleFilePresentation(share.presentation, share.fileName);
   return (
     <div className="space-y-5">
       {share.layout === "directory" ? (
@@ -212,7 +245,6 @@ function SharedContents({
             id={id}
             path={path}
             presentation={share.presentation}
-            downloadLimited={share.maxDownloads > 0}
             listing={listing}
             client={client}
             onPreview={previewFile}
@@ -234,19 +266,16 @@ function SharedContents({
             <span className="truncate font-medium">{share.fileName ?? "Shared file"}</span>
           </div>
           <div className="flex flex-wrap gap-2">
-            {share.maxDownloads === 0 &&
-              share.fileName &&
-              publicPreviewKind(share.fileName) !== "none" && (
-                <Button variant="outline" onClick={() => previewFile(share.fileName ?? "", "/")}>
-                  Preview
-                </Button>
-              )}
-            {share.fileName &&
-              canPeekArchive(share.fileName, { downloadLimited: share.maxDownloads > 0 }) && (
-                <Button variant="outline" onClick={() => peekArchive(share.fileName ?? "", "/")}>
-                  Peek
-                </Button>
-              )}
+            {share.fileName && publicPreviewKind(share.fileName) !== "none" && (
+              <Button variant="outline" onClick={() => previewFile(share.fileName ?? "", "/")}>
+                Preview
+              </Button>
+            )}
+            {share.fileName && isPeekableArchiveName(share.fileName) && (
+              <Button variant="outline" onClick={() => peekArchive(share.fileName ?? "", "/")}>
+                Peek
+              </Button>
+            )}
             <NativeShareDownload href={client.shareDownloadUrl(id)} />
           </div>
         </div>
@@ -254,7 +283,8 @@ function SharedContents({
       {preview?.generation === generation && preview.folder === path && (
         <PublicPreview
           key={`${generation}:${preview.path}`}
-          url={client.shareDownloadUrl(id, preview.path)}
+          url={preview.url}
+          error={preview.error}
           name={preview.name}
           kind={preview.kind}
           thumbUrl={client.shareThumbUrl(id, preview.path, 1024)}
@@ -281,14 +311,12 @@ function SharedEntries({
   id,
   path,
   entries,
-  downloadLimited,
   onPreview,
   onPeek,
 }: {
   id: string;
   path: string;
   entries: ShareEntriesResponse["items"];
-  downloadLimited: boolean;
   onPreview: (name: string, path: string, size: number) => void;
   onPeek: (name: string, path: string, size: number) => void;
 }) {
@@ -355,7 +383,7 @@ function SharedEntries({
               </TableCell>
               <TableCell>
                 <div className="flex justify-end gap-2">
-                  {!downloadLimited && kind !== "none" && (
+                  {kind !== "none" && (
                     <Button
                       variant="outline"
                       size="sm"
@@ -364,7 +392,7 @@ function SharedEntries({
                       Preview
                     </Button>
                   )}
-                  {entry.kind === "file" && canPeekArchive(entry.name, { downloadLimited }) && (
+                  {entry.kind === "file" && isPeekableArchiveName(entry.name) && (
                     <Button
                       variant="outline"
                       size="sm"

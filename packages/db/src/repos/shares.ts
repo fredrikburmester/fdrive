@@ -27,11 +27,13 @@ import {
   validateSharePathChange,
 } from "./shares-state.js";
 
-// The record projection: every column but the password hash, which only
-// `passwordHash` reads, so no listing or public lookup can carry it.
-const { passwordHash: _passwordHash, ...recordColumns } = getTableColumns(shares);
+// The owner's projection: every column but the password hash, and whether
+// there is one. Only the public lookup (`get`) reads the hash itself.
+const { passwordHash, ...columns } = getTableColumns(shares);
+const recordColumns = { ...columns, hasPassword: sql<boolean>`${passwordHash} is not null` };
+const publicColumns = { ...recordColumns, passwordHash };
 
-type RecordRow = Omit<typeof shares.$inferSelect, "passwordHash">;
+type RecordRow = Omit<typeof shares.$inferSelect, "passwordHash"> & { hasPassword: boolean };
 
 /**
  * `ShareRepo.movePrefix` as one statement on `db`, so a caller already in a
@@ -112,7 +114,7 @@ export async function deleteSharePrefix(
   `);
 }
 
-function toShareRecord(row: RecordRow): ShareRecord {
+function toShareRecord<T extends RecordRow>(row: T): T & ShareRecord {
   return {
     ...row,
     scope: parseShareScope(row.scope),
@@ -128,7 +130,6 @@ export function createShareRepo(db: Db): ShareRepo {
         .values({
           ...shareEditableValues(input),
           identityId: input.identityId,
-          hasPassword: input.passwordHash !== null,
           passwordHash: input.passwordHash,
           createdAt: input.at,
           updatedAt: input.at,
@@ -144,9 +145,7 @@ export function createShareRepo(db: Db): ShareRepo {
         .set({
           ...shareEditableValues(input),
           updatedAt: input.at,
-          ...(input.passwordHash === undefined
-            ? {}
-            : { passwordHash: input.passwordHash, hasPassword: input.passwordHash !== null }),
+          ...(input.passwordHash === undefined ? {} : { passwordHash: input.passwordHash }),
         })
         .where(and(eq(shares.identityId, identityId), eq(shares.id, id)))
         .returning(recordColumns);
@@ -154,7 +153,7 @@ export function createShareRepo(db: Db): ShareRepo {
     },
     async get(id) {
       validateShareId(id);
-      const [row] = await db.select(recordColumns).from(shares).where(eq(shares.id, id));
+      const [row] = await db.select(publicColumns).from(shares).where(eq(shares.id, id));
       return row ? toShareRecord(row) : null;
     },
     async getOwned(identityId, id) {
@@ -191,25 +190,17 @@ export function createShareRepo(db: Db): ShareRepo {
       validateSharePathChange(identityId, path);
       await db.transaction((tx) => deleteSharePrefix(tx, identityId, path, isDir));
     },
-    async passwordHash(id) {
-      validateShareId(id);
-      const [row] = await db
-        .select({ passwordHash: shares.passwordHash })
-        .from(shares)
-        .where(eq(shares.id, id));
-      return row?.passwordHash ?? null;
-    },
     async consume(id, now) {
       validateShareId(id);
       // One statement: the row lock serializes concurrent downloads and the
       // limit is re-checked against the row each one leaves behind.
       const [row] = await db
         .update(shares)
-        .set({ views: sql`${shares.views} + 1` })
+        .set({ usedDownloads: sql`${shares.usedDownloads} + 1` })
         .where(
           and(
             eq(shares.id, id),
-            or(eq(shares.maxDownloads, 0), lt(shares.views, shares.maxDownloads)),
+            or(eq(shares.maxDownloads, 0), lt(shares.usedDownloads, shares.maxDownloads)),
             or(isNull(shares.expiresAt), gt(shares.expiresAt, now)),
           ),
         )

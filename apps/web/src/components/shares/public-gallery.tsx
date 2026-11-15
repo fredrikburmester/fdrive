@@ -59,22 +59,18 @@ function LightboxAction({
   );
 }
 
-/** A grid tile: a thumbnail by default, falling back per-tile to the full download URL when
- * the thumbnail 404s (the file is not indexed, or the deployment has no index profile). HEIC
- * and camera raw files fall back to an icon instead: the browser cannot render the original. */
+/** A grid tile: the image's thumbnail, never counted, or an icon when it has none. A tile never
+ * fetches the original: that is a download, and would spend a limited link once per tile. */
 function GalleryTile({
   image,
   thumbUrl,
-  downloadUrl,
   onOpen,
 }: {
   image: GalleryImage;
   thumbUrl: (path: string, size: ThumbSize) => string;
-  downloadUrl: (path: string) => string;
   onOpen: () => void;
 }) {
   const [thumbFailed, setThumbFailed] = useState(false);
-  const thumbnailOnly = isHeicExt(extensionOf(image.name)) || isRawExt(extensionOf(image.name));
 
   return (
     <button
@@ -83,14 +79,14 @@ function GalleryTile({
       className="group relative aspect-square overflow-hidden rounded-lg border bg-muted focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
       onClick={onOpen}
     >
-      {thumbFailed && thumbnailOnly ? (
+      {thumbFailed ? (
         <span className="flex h-full w-full items-center justify-center">
           <ImageIcon className="size-8 text-muted-foreground" />
         </span>
       ) : (
         /* biome-ignore lint/performance/noImgElement: the public share page has no Next.js image loader for arbitrary API-served URLs */
         <img
-          src={thumbFailed ? downloadUrl(image.path) : thumbUrl(image.path, 256)}
+          src={thumbUrl(image.path, 256)}
           alt={image.name}
           loading="lazy"
           decoding="async"
@@ -226,7 +222,8 @@ function Lightbox({
 /**
  * Bounded image grid for the public share page. Tiles show a thumbnail (`thumbUrl`, never
  * counted as a download) with `loading="lazy"`; a tap opens the full-page lightbox on the
- * full-size image (`downloadUrl`), with previous/next, a per-image download, and Escape or the
+ * full-size image (`downloadUrl`, one counted download per image shown: the document keeps a
+ * loaded image, so its own `<img>` and a step back reuse it), with previous/next, a per-image download, and Escape or the
  * close button to return to the grid. The neighbouring full-size images are preloaded whenever
  * the open index changes, so stepping through the lightbox rarely shows a blank frame.
  */
@@ -273,7 +270,6 @@ export function PublicGallery({
             key={image.path}
             image={image}
             thumbUrl={thumbUrl}
-            downloadUrl={downloadUrl}
             onOpen={() => setOpenIndex(index)}
           />
         ))}

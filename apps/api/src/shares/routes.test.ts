@@ -3,11 +3,14 @@ import {
   ManagedShare,
   PublicShare,
   ShareEntriesResponse,
+  SharePreviewResponse,
   SharesResponse,
+  ShareUploadResponse,
 } from "@fdrive/contracts";
 import { StorageError } from "@fdrive/core";
 import type { IndexedFile, IndexQueries } from "@fdrive/db";
 import { describe, expect, it, vi } from "vitest";
+import { resolveDownload } from "../fs/routes.ts";
 import type { ScopeResolver } from "../scoping/resolver.ts";
 import type { ThumbFileReader } from "../thumbs/serve.ts";
 import { capByteStream, contentLengthExceeds } from "./routes.ts";
@@ -441,40 +444,6 @@ describe("public shares", () => {
     expect(cleared.headers.get("set-cookie")).toContain("Max-Age=0");
   });
 
-  it("keeps a link carried over from SFTPGo locked to every password until its owner sets one", async () => {
-    const h = sharesHarness();
-    const cookie = await h.login();
-    const { id } = await h.create(cookie, { password: "secret" });
-    const row = await h.shares.get(id);
-    if (row === null) throw new Error("missing row");
-    // What the migration wrote for a protected SFTPGo link, whose password SFTPGo kept.
-    await h.shares.updateOwned(row.identityId, id, {
-      ...row,
-      passwordHash: "locked$sftpgo",
-      at: h.clock(),
-    });
-    for (const password of ["secret", "", "locked$sftpgo", "sftpgo"])
-      expect(
-        (await h.request(`${pub(id)}/credentials`, { method: "POST", body: { password } })).status,
-        password,
-      ).toBe(401);
-    expect(await metadata(h, id)).toMatchObject({ hasPassword: true, name: "" });
-    expect((await h.request(`${pub(id)}/download`)).status).toBe(401);
-    expect(
-      ManagedShare.parse(await (await h.request(`${base}/${id}`, { cookie })).json()).hasPassword,
-    ).toBe(true);
-    // A rename keeps the lock; a new password lifts it.
-    await h.request(`${base}/${id}`, { cookie, method: "PATCH", body: { name: "Renamed" } });
-    expect(await h.shares.passwordHash(id)).toBe("locked$sftpgo");
-    await h.request(`${base}/${id}`, { cookie, method: "PATCH", body: { password: "fresh" } });
-    const envelope = cookieFrom(
-      await h.request(`${pub(id)}/credentials`, { method: "POST", body: { password: "fresh" } }),
-    );
-    expect(await (await h.request(`${pub(id)}/download`, { cookie: envelope })).text()).toBe(
-      "alice data",
-    );
-  });
-
   it("serves a single file with HEAD, ranges, a 416, and the download limit", async () => {
     const h = sharesHarness();
     const cookie = await h.login();
@@ -525,6 +494,223 @@ describe("public shares", () => {
     expect(refused.status).toBe(403);
     expect((await error(refused)).details).toEqual({ reason: "limit" });
     expect((await metadata(h, id)).unavailableReason).toBe("limit");
+  });
+
+  it("answers Range and If-Range exactly as the fs download route does", async () => {
+    const h = sharesHarness();
+    const cookie = await h.login();
+    const { id } = await h.create(cookie, { maxDownloads: 100 });
+    const row = await h.shares.get(id);
+    if (row === null) throw new Error("missing row");
+    const storage = await h.storageFactory(row.identityId);
+    const modified = (await storage.statFile("/a.docx")).modifiedAt;
+    if (modified === null) throw new Error("missing modification time");
+    const earlier = new Date(modified.getTime() - 60_000).toUTCString();
+    const cases: [string | null, string | undefined][] = [
+      [null, undefined],
+      ["bytes=0-4", undefined],
+      ["bytes=6-", undefined],
+      ["bytes=-4", undefined],
+      ["bytes=2-99", undefined],
+      ["bytes=0-1,6-7", "stale-validator"],
+      ["bytes=20-", undefined],
+      ["bytes=4-2", undefined],
+      ["bytes=-0", undefined],
+      ["bytes=4-2,6-7", undefined],
+      ["bytes=0-9007199254740993", undefined],
+      ["nonsense", undefined],
+      ["bytes=0-4", '"an-etag"'],
+      ["bytes=0-4", modified.toUTCString()],
+      ["bytes=0-4", earlier],
+    ];
+    let served = 0;
+    for (const [range, ifRange] of cases) {
+      const label = `${range} / ${ifRange}`;
+      const expected = await resolveDownload(
+        storage,
+        "/a.docx",
+        range,
+        ifRange,
+        new AbortController().signal,
+      );
+      const response = await h.request(`${pub(id)}/download`, {
+        headers: {
+          ...(range === null ? {} : { range }),
+          ...(ifRange === undefined ? {} : { "if-range": ifRange }),
+        },
+      });
+      if (expected.kind === "range-not-satisfiable") {
+        expect(response.status, label).toBe(416);
+        expect(response.headers.get("content-range"), label).toBe(`bytes */${expected.size}`);
+        continue;
+      }
+      served++;
+      expect(response.status, label).toBe(expected.result.status);
+      expect(response.headers.get("content-range"), label).toBe(expected.result.contentRange);
+      expect(response.headers.get("content-length"), label).toBe(
+        String(expected.result.contentLength),
+      );
+      expect(await response.text(), label).toBe(await new Response(expected.result.body).text());
+    }
+    // Every answered request counts once; a 416 never does.
+    expect((await metadata(h, id)).usedDownloads).toBe(served);
+  });
+
+  it("counts a limited link's preview once, up front, however many Range reads it takes", async () => {
+    const h = sharesHarness();
+    h.write("/clips/clip.mp4", "0123456789");
+    h.write("/clips/other.mp4", "other");
+    const cookie = await h.login();
+    const { id } = await h.create(cookie, { paths: ["/clips"], maxDownloads: 1 });
+    const opened = await h.request(`${pub(id)}/preview?path=/clip.mp4`, { method: "POST" });
+    expect(opened.status).toBe(200);
+    const visitor = cookieFrom(opened);
+    expect(visitor).toMatch(/^fdrive-share-visitor=/);
+    expect(opened.headers.get("set-cookie")).toContain("HttpOnly");
+    const { token } = SharePreviewResponse.parse(await opened.json());
+    expect((await metadata(h, id)).usedDownloads).toBe(1);
+    const url = `${pub(id)}/download?path=/clip.mp4&preview=${token}`;
+    for (const range of ["bytes=0-", "bytes=0-3", "bytes=4-", "bytes=-2"]) {
+      const read = await h.request(url, { cookie: visitor, headers: { range } });
+      expect(read.status, range).toBe(206);
+      await read.arrayBuffer();
+    }
+    expect(await (await h.request(url, { cookie: visitor })).text()).toBe("0123456789");
+    expect((await metadata(h, id)).usedDownloads).toBe(1);
+    // The link is spent now: a plain download and another preview are refused.
+    const spent = await h.request(`${pub(id)}/download?path=/clip.mp4`, { cookie: visitor });
+    expect(spent.status).toBe(403);
+    expect((await error(spent)).details).toEqual({ reason: "limit" });
+    const again = await h.request(`${pub(id)}/preview?path=/other.mp4`, {
+      method: "POST",
+      cookie: visitor,
+    });
+    expect(again.status).toBe(403);
+    expect((await error(again)).details).toEqual({ reason: "limit" });
+    expect((await metadata(h, id)).usedDownloads).toBe(1);
+  });
+
+  it("refuses a preview token from another visitor, for another file, or once it expired", async () => {
+    const h = sharesHarness();
+    h.write("/clips/clip.mp4", "0123456789");
+    h.write("/clips/other.mp4", "other");
+    const cookie = await h.login();
+    const { id } = await h.create(cookie, { paths: ["/clips"] });
+    const open = async (path: string, cookie?: string) => {
+      const response = await h.request(`${pub(id)}/preview?path=${path}`, {
+        method: "POST",
+        ...(cookie === undefined ? {} : { cookie }),
+      });
+      expect(response.status).toBe(200);
+      const { token } = SharePreviewResponse.parse(await response.json());
+      return { token, visitor: cookie ?? cookieFrom(response) };
+    };
+    const mine = await open("/clip.mp4");
+    // A second preview in the same browser keeps its visitor.
+    const kept = await h.request(`${pub(id)}/preview?path=/other.mp4`, {
+      method: "POST",
+      cookie: mine.visitor,
+    });
+    expect(kept.headers.get("set-cookie")).toBeNull();
+    const theirs = await open("/clip.mp4");
+    expect(theirs.visitor).not.toBe(mine.visitor);
+    const read = (path: string, token: string, cookie?: string) =>
+      h.request(`${pub(id)}/download?path=${path}&preview=${token}`, {
+        ...(cookie === undefined ? {} : { cookie }),
+      });
+    expect((await read("/clip.mp4", mine.token, mine.visitor)).status).toBe(200);
+    const flipped = `${mine.token.slice(0, -1)}${mine.token.endsWith("A") ? "B" : "A"}`;
+    for (const [label, response] of [
+      ["no visitor", await read("/clip.mp4", mine.token)],
+      ["another visitor", await read("/clip.mp4", mine.token, theirs.visitor)],
+      ["another file", await read("/other.mp4", mine.token, mine.visitor)],
+      ["a forged token", await read("/clip.mp4", flipped, mine.visitor)],
+    ] as const) {
+      expect(response.status, label).toBe(403);
+      expect((await error(response)).message, label).toContain("preview has ended");
+    }
+    h.now.value = new Date(h.clock().getTime() + 301_000);
+    expect((await read("/clip.mp4", mine.token, mine.visitor)).status).toBe(403);
+    // Three opens counted; no refused read was.
+    expect((await metadata(h, id)).usedDownloads).toBe(3);
+  });
+
+  it("opens previews only for the audio and video a viewer streams", async () => {
+    const h = sharesHarness();
+    for (const name of ["notes.txt", "photo.jpg", "paper.pdf", "song.mp3"])
+      h.write(`/media/${name}`, "bytes");
+    const cookie = await h.login();
+    const { id } = await h.create(cookie, { paths: ["/media"], maxDownloads: 5 });
+    for (const name of ["notes.txt", "photo.jpg", "paper.pdf"]) {
+      const refused = await h.request(`${pub(id)}/preview?path=/${name}`, { method: "POST" });
+      expect(refused.status, name).toBe(400);
+      expect(refused.headers.get("set-cookie"), name).toBeNull();
+    }
+    expect((await metadata(h, id)).usedDownloads).toBe(0);
+    expect((await h.request(`${pub(id)}/preview?path=/song.mp3`, { method: "POST" })).status).toBe(
+      200,
+    );
+    expect((await metadata(h, id)).usedDownloads).toBe(1);
+  });
+
+  it("counts every full download that carries no preview token, even after a preview", async () => {
+    const h = sharesHarness();
+    h.write("/clips/clip.mp4", "0123456789");
+    const cookie = await h.login();
+    const { id } = await h.create(cookie, { paths: ["/clips"] });
+    const opened = await h.request(`${pub(id)}/preview?path=/clip.mp4`, { method: "POST" });
+    const visitor = cookieFrom(opened);
+    for (let count = 2; count <= 4; count++) {
+      const full = await h.request(`${pub(id)}/download?path=/clip.mp4`, { cookie: visitor });
+      expect(await full.text()).toBe("0123456789");
+      expect((await metadata(h, id)).usedDownloads).toBe(count);
+    }
+    const head = await h.request(`${pub(id)}/download?path=/clip.mp4`, { method: "HEAD" });
+    expect(head.status).toBe(200);
+    expect((await metadata(h, id)).usedDownloads).toBe(4);
+  });
+
+  it("reads a protected link's row, hash included, once per request", async () => {
+    const h = sharesHarness();
+    const cookie = await h.login();
+    const { id } = await h.create(cookie, { password: "secret" });
+    // The limiter classifies a link once a minute; after that only the request reads it.
+    expect((await h.request(pub(id))).status).toBe(200);
+    const get = vi.spyOn(h.shares, "get");
+    const verify = vi.spyOn(h.passwords, "verify");
+    const envelope = cookieFrom(
+      await h.request(`${pub(id)}/credentials`, { method: "POST", body: { password: "secret" } }),
+    );
+    expect(get).toHaveBeenCalledTimes(1);
+    for (const suffix of ["", "/download"]) {
+      get.mockClear();
+      const response = await h.request(`${pub(id)}${suffix}`, { cookie: envelope });
+      expect(response.status, suffix).toBe(200);
+      await response.arrayBuffer();
+      expect(get, suffix).toHaveBeenCalledTimes(1);
+    }
+    // The password was checked when the cookie was issued, never again.
+    expect(verify).toHaveBeenCalledTimes(1);
+  });
+
+  it("never replaces a file on upload: a clash lands on the next free numbered name", async () => {
+    const h = sharesHarness();
+    h.write("/inbox/photo.jpg", "original");
+    const cookie = await h.login();
+    const { id } = await h.create(cookie, { paths: ["/inbox"], scope: "write" });
+    for (const [raw, name] of [
+      ["second", "photo (2).jpg"],
+      ["third", "photo (3).jpg"],
+    ] as const) {
+      const response = await h.request(`${pub(id)}/upload?path=/photo.jpg`, { method: "PUT", raw });
+      expect(response.status).toBe(200);
+      expect(ShareUploadResponse.parse(await response.json())).toEqual({ name });
+      expect(h.read(`/inbox/${name}`)).toBe(raw);
+    }
+    expect(h.read("/inbox/photo.jpg")).toBe("original");
+    const fresh = await h.request(`${pub(id)}/upload?path=/new.txt`, { method: "PUT", raw: "x" });
+    expect(await fresh.json()).toEqual({ name: "new.txt" });
+    expect((await metadata(h, id)).usedDownloads).toBe(3);
   });
 
   it("lists a directory share without the hidden folders and serves its children", async () => {
@@ -641,7 +827,7 @@ describe("public shares", () => {
     expect((await error(refused)).details).toEqual({ reason: "expired" });
   });
 
-  it("rejects traversal, malformed ranges, CSRF, credentials and rate abuse without data access", async () => {
+  it("rejects traversal, CSRF, credentials and rate abuse without data access", async () => {
     const h = sharesHarness();
     const cookie = await h.login();
     const { id } = await h.create(cookie);
@@ -651,15 +837,6 @@ describe("public shares", () => {
         400,
       );
     expect((await h.request(`${path}/download?path=/a&path=/b`)).status).toBe(400);
-    for (const range of [
-      "bytes=4-2,6-7",
-      "bytes=-0",
-      "bytes=4-2",
-      "bytes=9007199254740993-",
-      "bytes=0-9007199254740993",
-      "nonsense",
-    ])
-      expect((await h.request(`${path}/download`, { headers: { range } })).status, range).toBe(400);
     expect((await h.request(`${path}/upload?path=/folder/a`, { method: "PUT" })).status).toBe(400);
     expect((await h.request("/api/v1/public/shares/bad")).status).toBe(400);
     expect((await h.request(`${path}/credentials`, { method: "POST", raw: "oops" })).status).toBe(
@@ -1101,9 +1278,9 @@ describe("GET /public/shares/:id/thumb", () => {
     const h = thumbsHarness();
     const cookie = await h.login();
     const { id } = await h.create(cookie);
-    const load = h.service.publicThumbTarget.bind(h.service);
-    const target = vi.spyOn(h.service, "publicThumbTarget");
-    target.mockRejectedValueOnce(new Error("storage down"));
+    const load = h.service.load.bind(h.service);
+    const target = vi.spyOn(h.service, "load");
+    target.mockRejectedValueOnce(new Error("database down"));
     expect((await h.request(thumb(id))).status).toBe(404);
     // The owner disappears between loading the share and resolving its index.
     let gone = false;

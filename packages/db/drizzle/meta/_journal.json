@@ -309,6 +309,13 @@
       "when": 1794745776106,
       "tag": "0043_index_hard_delete",
       "breakpoints": true
+    },
+    {
+      "idx": 44,
+      "version": "7",
+      "when": 1794749312599,
+      "tag": "0044_share_columns",
+      "breakpoints": true
     }
   ]
 }

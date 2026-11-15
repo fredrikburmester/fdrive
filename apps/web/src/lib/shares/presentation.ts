@@ -28,22 +28,12 @@ export function galleryEntries<T extends PresentationEntry>(entries: readonly T[
  * `gallery` choice still needs at least one image to render a grid; otherwise it falls back to
  * `list` so the folder is never shown as an empty gallery.
  */
-export interface PresentationOptions {
-  /**
-   * True when the share carries a download limit. Every gallery tile is a real download
-   * through the public route and fdrive counts each one against that limit, so a limited
-   * link is never shown as a gallery: previews would silently exhaust it.
-   */
-  readonly downloadLimited?: boolean;
-}
-
 export function resolveEntriesPresentation(
   presentation: SharePresentation,
   entries: readonly PresentationEntry[],
-  options: PresentationOptions = {},
 ): ResolvedPresentation {
   if (presentation === "download") return "download";
-  if (presentation === "list" || options.downloadLimited === true) return "list";
+  if (presentation === "list") return "list";
   if (presentation === "gallery")
     return entries.some((entry) => isImageEntry(entry)) ? "gallery" : "list";
   return allImageEntries(entries) ? "gallery" : "list";
@@ -58,10 +48,8 @@ export function resolveEntriesPresentation(
 export function resolveSingleFilePresentation(
   presentation: SharePresentation,
   fileName: string | null,
-  options: PresentationOptions = {},
 ): ResolvedPresentation {
   const image = fileName !== null && isImageFileName(fileName);
-  if (options.downloadLimited === true) return "download";
   if (image && (presentation === "gallery" || presentation === "auto")) return "gallery";
   return "download";
 }

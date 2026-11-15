@@ -146,16 +146,17 @@ describe("memory share repository: owned rows", () => {
     expect(open).toMatchObject({
       identityId,
       hasPassword: false,
-      views: 0,
+      usedDownloads: 0,
       createdAt: at,
       updatedAt: at,
     });
     expect(open.id).not.toBe(locked.id);
     expect(locked.hasPassword).toBe(true);
     expect(locked).not.toHaveProperty("passwordHash");
-    expect(await repo.get(locked.id)).not.toHaveProperty("passwordHash");
-    expect(await repo.passwordHash(open.id)).toBeNull();
-    expect(await repo.passwordHash(locked.id)).toBe("hash-1");
+    expect((await repo.listOwned(identityId))[0]).not.toHaveProperty("passwordHash");
+    // Only the public lookup carries the hash, to verify a visitor against.
+    expect((await repo.get(open.id))?.passwordHash).toBeNull();
+    expect(await repo.get(locked.id)).toEqual({ ...locked, passwordHash: "hash-1" });
     expect(await repo.listOwned(identityId)).toHaveLength(2);
   });
   it("updates rows, keeping, replacing or removing the password", async () => {
@@ -163,41 +164,44 @@ describe("memory share repository: owned rows", () => {
     const row = await repo.insert({ ...owned, passwordHash: "hash-1" });
     const kept = await repo.updateOwned(identityId, row.id, { ...ownedUpdate, name: "Renamed" });
     expect(kept).toEqual({ ...row, name: "Renamed", updatedAt: later });
-    expect(await repo.passwordHash(row.id)).toBe("hash-1");
+    expect((await repo.get(row.id))?.passwordHash).toBe("hash-1");
     const replaced = await repo.updateOwned(identityId, row.id, {
       ...ownedUpdate,
       passwordHash: "hash-2",
     });
     expect(replaced?.hasPassword).toBe(true);
-    expect(await repo.passwordHash(row.id)).toBe("hash-2");
+    expect((await repo.get(row.id))?.passwordHash).toBe("hash-2");
     const removed = await repo.updateOwned(identityId, row.id, {
       ...ownedUpdate,
       passwordHash: null,
     });
     expect(removed?.hasPassword).toBe(false);
-    expect(await repo.passwordHash(row.id)).toBeNull();
+    expect((await repo.get(row.id))?.passwordHash).toBeNull();
     expect(await repo.updateOwned(otherIdentity, row.id, ownedUpdate)).toBeNull();
     expect(await repo.updateOwned(identityId, otherIdentity, ownedUpdate)).toBeNull();
     expect(await repo.removeOwned(identityId, row.id)).toBe(true);
-    expect(await repo.passwordHash(row.id)).toBeNull();
+    expect(await repo.get(row.id)).toBeNull();
   });
   it("consumes downloads only while the limit and expiry allow", async () => {
     const repo = createMemoryShareRepo();
     const limited = await repo.insert({ ...owned, maxDownloads: 2 });
-    expect((await repo.consume(limited.id, at))?.views).toBe(1);
-    expect((await repo.consume(limited.id, at))?.views).toBe(2);
+    expect((await repo.consume(limited.id, at))?.usedDownloads).toBe(1);
+    expect((await repo.consume(limited.id, at))?.usedDownloads).toBe(2);
     expect(await repo.consume(limited.id, at)).toBeNull();
-    expect((await repo.get(limited.id))?.views).toBe(2);
+    expect((await repo.get(limited.id))?.usedDownloads).toBe(2);
     const unlimited = await repo.insert(owned);
-    for (let i = 1; i <= 3; i++) expect((await repo.consume(unlimited.id, at))?.views).toBe(i);
+    for (let i = 1; i <= 3; i++)
+      expect((await repo.consume(unlimited.id, at))?.usedDownloads).toBe(i);
     const expiring = await repo.insert({ ...owned, expiresAt: later });
-    expect((await repo.consume(expiring.id, at))?.views).toBe(1);
+    expect((await repo.consume(expiring.id, at))?.usedDownloads).toBe(1);
     expect(await repo.consume(expiring.id, later)).toBeNull();
     expect(await repo.consume(otherIdentity, at)).toBeNull();
-    expect(shareAdmitsDownload({ expiresAt: null, maxDownloads: 0, views: 5 }, at)).toBe(true);
+    expect(shareAdmitsDownload({ expiresAt: null, maxDownloads: 0, usedDownloads: 5 }, at)).toBe(
+      true,
+    );
     await expect(repo.consume("bad", at)).rejects.toThrow(TypeError);
     await expect(repo.consume(limited.id, new Date(Number.NaN))).rejects.toThrow(TypeError);
-    await expect(repo.passwordHash("bad")).rejects.toThrow(TypeError);
+    await expect(repo.get("bad")).rejects.toThrow(TypeError);
     await expect(repo.insert({ ...owned, identityId: "bad" })).rejects.toThrow(TypeError);
     await expect(repo.updateOwned(identityId, "bad", ownedUpdate)).rejects.toThrow(TypeError);
   });
@@ -217,7 +221,7 @@ describe("memory share repository", () => {
     expect(await repo.removeOwned(identityId, first.id)).toBe(true);
     expect(await repo.removeOwned(identityId, first.id)).toBe(false);
     expect(await repo.get(first.id)).toBeNull();
-    expect(await repo.get(second.id)).toEqual(second);
+    expect(await repo.getOwned(otherIdentity, second.id)).toEqual(second);
   });
   it("copies mutable inputs and returned rows and stores no extra runtime fields", async () => {
     const repo = createMemoryShareRepo({ id: () => identityId });
@@ -247,12 +251,12 @@ describe("memory share repository", () => {
     (row.paths as string[]).push("/tampered");
     row.createdAt.setFullYear(2000);
     row.expiresAt?.setFullYear(2000);
-    expect(await repo.get(row.id)).toEqual(expected);
+    expect(await repo.getOwned(identityId, row.id)).toEqual(expected);
     const fetched = await repo.getOwned(identityId, row.id);
     fetched?.createdAt.setFullYear(2000);
     const listed = await repo.listOwned(identityId);
     listed[0]?.createdAt.setFullYear(2000);
-    expect(await repo.get(row.id)).toEqual(expected);
+    expect(await repo.getOwned(identityId, row.id)).toEqual(expected);
   });
   it("orders newest first with ascending UUID ties and enforces bounded list defaults", async () => {
     let sequence = 0;
@@ -330,10 +334,13 @@ describe("share paths following a move", () => {
     await repo.deletePrefix(identityId, "/docs", false);
     expect((await repo.get(many.id))?.paths).toEqual(["/docs/a.txt", "/docsx/b.txt", "/c"]);
     expect(await repo.get(only.id)).toBeNull();
-    expect(await repo.passwordHash(only.id)).toBeNull();
     await repo.deletePrefix(identityId, "/docs", true);
-    expect(await repo.get(many.id)).toEqual({ ...many, paths: ["/docsx/b.txt", "/c"] });
-    expect(await repo.get(foreign.id)).toEqual(foreign);
+    expect(await repo.get(many.id)).toEqual({
+      ...many,
+      paths: ["/docsx/b.txt", "/c"],
+      passwordHash: null,
+    });
+    expect(await repo.get(foreign.id)).toEqual({ ...foreign, passwordHash: null });
     await repo.deletePrefix(identityId, "/nothing", true);
     expect((await repo.get(many.id))?.paths).toEqual(["/docsx/b.txt", "/c"]);
     await expect(repo.deletePrefix(identityId, "/", true)).rejects.toThrow(TypeError);
@@ -348,14 +355,17 @@ describe("share paths following a move", () => {
     const untouched = await repo.insert({ ...owned, paths: ["/elsewhere"] });
     const foreign = await repo.insert({ ...owned, identityId: otherIdentity, paths: ["/docs"] });
     await repo.movePrefix(identityId, "/docs", "/archive/docs", true);
-    expect(await repo.get(folder.id)).toEqual({ ...folder, paths: ["/archive/docs"] });
+    expect(await repo.getOwned(identityId, folder.id)).toEqual({
+      ...folder,
+      paths: ["/archive/docs"],
+    });
     expect((await repo.get(many.id))?.paths).toEqual([
       "/archive/docs/a.txt",
       "/docsx/b.txt",
       "/other",
     ]);
-    expect(await repo.get(untouched.id)).toEqual(untouched);
-    expect(await repo.get(foreign.id)).toEqual(foreign);
+    expect(await repo.getOwned(identityId, untouched.id)).toEqual(untouched);
+    expect(await repo.getOwned(otherIdentity, foreign.id)).toEqual(foreign);
     await repo.movePrefix(identityId, "/other", "/other", true);
     await repo.movePrefix(identityId, "/archive/docs/a.txt", "/a.txt", false);
     expect((await repo.get(many.id))?.paths).toEqual(["/a.txt", "/docsx/b.txt", "/other"]);

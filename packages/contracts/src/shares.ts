@@ -60,7 +60,7 @@ export const ManagedShare = z.object({
   hasPassword: z.boolean(),
   expiresAt: z.iso.datetime().nullable(),
   maxDownloads: z.number().int().min(0),
-  /** Consumed provider transfer tokens: downloads/previews for read shares, uploads for write shares. */
+  /** Downloads, previews and peeks of a read share, uploads of a write share. */
   usedDownloads: z.number().int().min(0),
   createdAt: z.iso.datetime(),
   updatedAt: z.iso.datetime(),
@@ -80,7 +80,7 @@ export const PublicShare = z.object({
   credentialPresent: z.boolean(),
   expiresAt: z.iso.datetime().nullable(),
   maxDownloads: z.number().int().min(0),
-  /** Consumed provider transfer tokens: downloads/previews for read shares, uploads for write shares. */
+  /** Downloads, previews and peeks of a read share, uploads of a write share. */
   usedDownloads: z.number().int().min(0),
   unavailableReason: z.enum(["expired", "limit"]).nullable(),
 });
@@ -98,6 +98,17 @@ export type ShareEntriesResponse = z.infer<typeof ShareEntriesResponse>;
 export const ShareUploadPath = SharePath.refine(
   (value) => value !== "/" && !value.slice(1).includes("/"),
 );
+/** Where a visitor's upload landed: its own name, or the next free numbered one. */
+export const ShareUploadResponse = z.object({ name: z.string() });
+export type ShareUploadResponse = z.infer<typeof ShareUploadResponse>;
+/**
+ * A preview of shared audio or video, opened through the link and counted
+ * as one download. For a few minutes the token lets the download URL serve
+ * that one file's Range reads to the visitor who opened it, without
+ * counting again.
+ */
+export const SharePreviewResponse = z.object({ token: z.string() });
+export type SharePreviewResponse = z.infer<typeof SharePreviewResponse>;
 
 /**
  * Camera raw extensions the indexer thumbnails (from the camera's embedded JPEG preview).
@@ -140,6 +151,41 @@ export const IMAGE_EXTENSIONS: ReadonlySet<string> = new Set([
   ".webp",
   ...RAW_IMAGE_EXTENSIONS,
 ]);
+
+/** Video the viewers play, by extension. */
+export const VIDEO_EXTENSIONS: ReadonlySet<string> = new Set([
+  ".mp4",
+  ".webm",
+  ".mov",
+  ".mkv",
+  ".avi",
+  ".m4v",
+  ".wmv",
+  ".flv",
+]);
+
+/** Audio the viewers play, by extension. */
+export const AUDIO_EXTENSIONS: ReadonlySet<string> = new Set([
+  ".mp3",
+  ".wav",
+  ".ogg",
+  ".flac",
+  ".m4a",
+  ".aac",
+  ".opus",
+]);
+
+/**
+ * True when a public share previews `name` by streaming it in Range reads
+ * (audio and video): the only files a preview opens. Everything else the
+ * page previews is one counted download.
+ */
+export function isStreamedPreviewName(name: string): boolean {
+  const dot = name.lastIndexOf(".");
+  if (dot < 0) return false;
+  const ext = name.slice(dot).toLowerCase();
+  return VIDEO_EXTENSIONS.has(ext) || AUDIO_EXTENSIONS.has(ext);
+}
 
 /** True when `name`'s extension (case-insensitive) is one the public gallery treats as an image. */
 export function isImageFileName(name: string): boolean {

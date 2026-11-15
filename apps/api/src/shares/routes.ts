@@ -1,29 +1,27 @@
 import {
   ArchiveEntriesResponse,
   CreateShareRequest,
+  type ManagedShare,
   PUBLIC_SHARE_SUFFIXES,
   ROUTES,
   ShareCredentialsRequest,
   ShareId,
   SharePath,
+  type SharePreviewResponse,
   ShareUploadPath,
+  type ShareUploadResponse,
   THUMB_SIZES,
   type ThumbSize,
   UpdateShareRequest,
 } from "@fdrive/contracts";
-import { normalizePath, toFsPath } from "@fdrive/core";
-import type { IdentityRepo, IndexQueries } from "@fdrive/db";
+import { normalizePath, type StorageProvider, toFsPath } from "@fdrive/core";
+import type { IdentityRepo, IndexQueries, ShareRecord } from "@fdrive/db";
 import type { Context } from "hono";
 import { getCookie, setCookie } from "hono/cookie";
 import type { z } from "zod";
 import { recordFsAction } from "../activity/fs-context.js";
 import type { PersonalActivityService } from "../activity/service.js";
 import type { AppHono, AuthedHono } from "../app.ts";
-import {
-  peekArchive,
-  UnreadableArchiveError,
-  UnsupportedPeekFormatError,
-} from "../archive/peek.ts";
 import { accountContext } from "../auth/account-context.ts";
 import { withoutApiV1Prefix } from "../auth/routes.ts";
 import { cookieSecureFor } from "../auth/sessions.ts";
@@ -39,21 +37,17 @@ import {
   type ThumbFileReader,
 } from "../thumbs/serve.ts";
 import {
-  parseShareRange,
-  RangeNotSatisfiableError,
-  type ShareByteRange,
-  type ShareDownloadOptions,
-  type ShareDownloadResult,
-  shareCall,
-} from "./access.ts";
-import {
+  newShareVisitor,
   SHARE_CREDENTIAL_COOKIE,
   SHARE_CREDENTIAL_SECONDS,
+  SHARE_VISITOR_COOKIE,
   type ShareCredentialCodec,
+  shareVisitor,
 } from "./credentials.ts";
 import type { ShareLimiter } from "./limiter.ts";
-import { hiddenFromLinks } from "./owned-access.ts";
-import type { SharesService } from "./service.ts";
+import { hiddenFromLinks, managedShare, type SharesService, shareCall } from "./service.ts";
+
+type DownloadResult = Awaited<ReturnType<StorageProvider["download"]>>;
 
 export async function publicBody<T>(
   schema: z.ZodType<T>,
@@ -185,29 +179,10 @@ export function shareId(c: Context): string {
   if (!id.success) throw new ApiHttpError("bad_request", "Invalid share ID");
   return id.data;
 }
-/**
- * The download options a public request asks for. A well-formed multi-range
- * header is ignored as a whole, `If-Range` included, and the complete file
- * is sent; a malformed range is `bad_request`.
- */
-export function publicDownloadOptions(c: Context): ShareDownloadOptions {
-  const options: { range?: ShareByteRange; ifRange?: string; signal: AbortSignal } = {
-    signal: c.req.raw.signal,
-  };
-  const header = c.req.header("range");
-  if (header !== undefined) {
-    const range = parseShareRange(header);
-    if (range === null) return options;
-    options.range = range;
-  }
-  const ifRange = c.req.header("if-range");
-  if (ifRange !== undefined) options.ifRange = ifRange;
-  return options;
-}
 export function attachment(name: string): string {
   return `attachment; filename="download"; filename*=UTF-8''${encodeURIComponent(name.replace(/\p{Cc}/gu, "")).replace(/['()*]/g, (char) => `%${char.charCodeAt(0).toString(16).toUpperCase()}`)}`;
 }
-export function downloadHeaders(result: Omit<ShareDownloadResult, "body">, name: string): Headers {
+export function downloadHeaders(result: Omit<DownloadResult, "body">, name: string): Headers {
   const headers = new Headers({
     "Content-Type": result.contentType ?? "application/octet-stream",
     "Content-Disposition": attachment(name),
@@ -218,15 +193,32 @@ export function downloadHeaders(result: Omit<ShareDownloadResult, "body">, name:
   if (result.lastModified !== null) headers.set("Last-Modified", result.lastModified.toUTCString());
   return headers;
 }
-export function downloadResponse(result: ShareDownloadResult, name: string): Response {
+export function downloadResponse(result: DownloadResult, name: string): Response {
   return new Response(result.body, {
     status: result.status,
     headers: downloadHeaders(result, name),
   });
 }
-/** The 416 for a range the file cannot satisfy, naming its size. */
-export function rangeNotSatisfiable(size: number): Response {
-  return new Response(null, { status: 416, headers: { "Content-Range": `bytes */${size}` } });
+/** The 416 for a range the file cannot satisfy, naming its size when known, as the fs route does. */
+export function rangeNotSatisfiable(size: number | null): Response {
+  return new Response(null, {
+    status: 416,
+    headers: size === null ? {} : { "Content-Range": `bytes */${size}` },
+  });
+}
+/** What history records of a share: never its password or its secret URL. */
+function shareFacts(
+  share: Pick<ShareRecord | ManagedShare, "paths" | "scope"> & {
+    readonly expiresAt: Date | string | null;
+  },
+) {
+  const expiresAt =
+    share.expiresAt instanceof Date ? share.expiresAt.toISOString() : share.expiresAt;
+  return {
+    ...(share.paths[0] ? { path: share.paths[0] } : {}),
+    permissions: [share.scope],
+    expiresAt,
+  };
 }
 export function registerSharesRoutes(
   groups: { public: AppHono; authed: AuthedHono },
@@ -249,12 +241,11 @@ export function registerSharesRoutes(
   const base = withoutApiV1Prefix(ROUTES.shares);
   const pub = `${withoutApiV1Prefix(ROUTES.publicShares)}/:id`;
   const thumbFileReader = deps.fileReader ?? createNodeThumbFileReader();
-  groups.authed.get(base, (c) =>
-    shareCall(async () => c.json(await deps.service.list(accountContext(c)))),
-  );
+  const owner = (c: Parameters<typeof accountContext>[0]) => accountContext(c).principal.identityId;
+  groups.authed.get(base, (c) => shareCall(async () => c.json(await deps.service.list(owner(c)))));
   groups.authed.post(base, (c) =>
     shareCall(async () => {
-      const input = accountContext(c);
+      const identityId = owner(c);
       const body = await publicBody(CreateShareRequest, c, 32 * 1024 * 1024);
       return c.json(
         await recordFsAction(
@@ -267,78 +258,57 @@ export function registerSharesRoutes(
               permissions: [body.scope],
               expiresAt: body.expiresAt ?? null,
             },
-            subjects: body.paths.map((path) => ({ path, identityId: input.principal.identityId })),
+            subjects: body.paths.map((path) => ({ path, identityId })),
           },
-          () => deps.service.create(input, body),
-          (share) => ({
-            shareId: share.id,
-            ...(share.paths[0] ? { path: share.paths[0] } : {}),
-            permissions: [share.scope],
-            expiresAt: share.expiresAt,
-          }),
+          () => deps.service.create(identityId, body),
+          (share) => ({ shareId: share.id, ...shareFacts(share) }),
         ),
         201,
       );
     }),
   );
   groups.authed.get(`${base}/:id`, (c) =>
-    shareCall(async () => c.json(await deps.service.get(accountContext(c), shareId(c)))),
+    shareCall(async () => c.json(managedShare(await deps.service.owned(owner(c), shareId(c))))),
   );
+  // The share is read once; history's before is that row, its after what the change returned.
   groups.authed.patch(`${base}/:id`, (c) =>
     shareCall(async () => {
-      const input = accountContext(c);
-      const previous = await deps.service.activitySnapshot(input, shareId(c));
+      const identityId = owner(c);
+      const row = await deps.service.owned(identityId, shareId(c));
       const patch = await publicBody(UpdateShareRequest, c, 32 * 1024 * 1024);
       const updated = await recordFsAction(
         deps.activity,
         c,
         {
           action: "share.update",
-          requested: {
-            ...(previous.paths[0] ? { path: previous.paths[0] } : {}),
-            shareId: previous.id,
-          },
-          before: {
-            ...(previous.paths[0] ? { path: previous.paths[0] } : {}),
-            permissions: [previous.scope],
-            expiresAt: previous.expiresAt,
-          },
-          subjects: [...new Set([...previous.paths, ...(patch.paths ?? [])])].map((path) => ({
+          requested: { ...(row.paths[0] ? { path: row.paths[0] } : {}), shareId: row.id },
+          before: shareFacts(row),
+          subjects: [...new Set([...row.paths, ...(patch.paths ?? [])])].map((path) => ({
             path,
-            identityId: input.principal.identityId,
+            identityId,
           })),
         },
-        () => deps.service.update(input, shareId(c), patch),
-        (share) => ({
-          shareId: share.id,
-          ...(share.paths[0] ? { path: share.paths[0] } : {}),
-          permissions: [share.scope],
-          expiresAt: share.expiresAt,
-        }),
+        () => deps.service.update(row, patch),
+        (share) => ({ shareId: share.id, ...shareFacts(share) }),
       );
       return c.json(updated);
     }),
   );
   groups.authed.delete(`${base}/:id`, (c) =>
     shareCall(async () => {
-      const input = accountContext(c);
-      const previous = await deps.service.activitySnapshot(input, shareId(c));
+      const identityId = owner(c);
+      const row = await deps.service.owned(identityId, shareId(c));
+      const { path: _path, ...before } = shareFacts(row);
       await recordFsAction(
         deps.activity,
         c,
         {
           action: "share.revoke",
-          requested: {
-            shareId: previous.id,
-            ...(previous.paths[0] ? { path: previous.paths[0] } : {}),
-          },
-          before: { permissions: [previous.scope], expiresAt: previous.expiresAt },
-          subjects: previous.paths.map((path) => ({
-            path,
-            identityId: input.principal.identityId,
-          })),
+          requested: { shareId: row.id, ...(row.paths[0] ? { path: row.paths[0] } : {}) },
+          before,
+          subjects: row.paths.map((path) => ({ path, identityId })),
         },
-        () => deps.service.remove(input, shareId(c)),
+        () => deps.service.remove(row),
       );
       return c.json({ ok: true });
     }),
@@ -350,7 +320,7 @@ export function registerSharesRoutes(
         extractClientIp(c, deps.config.fdriveTrustedProxyHops),
         id,
         c.req.method === "POST" && c.req.path.endsWith("/credentials"),
-        () => shareCall(() => deps.service.publicShareExists(id)),
+        () => shareCall(() => deps.service.exists(id)),
       ))
     )
       throw new ApiHttpError("rate_limited", "Too many share requests");
@@ -370,8 +340,8 @@ export function registerSharesRoutes(
   function credential(c: Context) {
     return deps.codec.decode(shareId(c), getCookie(c, SHARE_CREDENTIAL_COOKIE));
   }
-  function credentialCookie(c: Context, value: string, maxAge: number) {
-    setCookie(c, SHARE_CREDENTIAL_COOKIE, value, {
+  function shareCookie(c: Context, name: string, value: string, maxAge: number) {
+    setCookie(c, name, value, {
       path: `${ROUTES.publicShares}/${shareId(c)}`,
       httpOnly: true,
       sameSite: "Lax",
@@ -379,15 +349,37 @@ export function registerSharesRoutes(
       maxAge,
     });
   }
+  function credentialCookie(c: Context, value: string, maxAge: number) {
+    shareCookie(c, SHARE_CREDENTIAL_COOKIE, value, maxAge);
+  }
+  /** This browser's visitor name for the share, if it has one. */
+  function visitor(c: Context): string | undefined {
+    return shareVisitor(getCookie(c, SHARE_VISITOR_COOKIE));
+  }
+  /** This browser's visitor name for the share, given one on its first preview. */
+  function visitorGiven(c: Context): string {
+    const known = visitor(c);
+    if (known !== undefined) return known;
+    const given = newShareVisitor();
+    shareCookie(c, SHARE_VISITOR_COOKIE, given, SHARE_CREDENTIAL_SECONDS);
+    return given;
+  }
+  /** The share for this request, read once, as the visitor may use it for `scope`. */
+  async function authorized(c: Context, scope: "read" | "write", counted = false) {
+    const row = await deps.service.load(shareId(c));
+    return deps.service.authorize(row, credential(c), scope, counted);
+  }
   groups.public.get(pub, (c) =>
-    shareCall(async () => c.json(await deps.service.publicMetadata(shareId(c), credential(c)))),
+    shareCall(async () =>
+      c.json(await deps.service.metadata(await deps.service.load(shareId(c)), credential(c))),
+    ),
   );
   groups.public.post(`${pub}${PUBLIC_SHARE_SUFFIXES.credentials}`, (c) =>
     shareCall(async () => {
       const id = shareId(c);
       const body = await publicBody(ShareCredentialsRequest, c);
-      const credential = await deps.service.credential(id, body.password);
-      credentialCookie(c, deps.codec.encode(id, credential), SHARE_CREDENTIAL_SECONDS);
+      const issued = await deps.service.credential(await deps.service.load(id), body.password);
+      credentialCookie(c, deps.codec.encode(id, issued), SHARE_CREDENTIAL_SECONDS);
       return c.json({ ok: true });
     }),
   );
@@ -398,10 +390,7 @@ export function registerSharesRoutes(
   groups.public.get(`${pub}${PUBLIC_SHARE_SUFFIXES.entries}`, (c) =>
     shareCall(async () => {
       const path = publicPath(c);
-      const access = await deps.service.publicAccess(shareId(c), credential(c), "read");
-      if (access.view.paths.length !== 1)
-        throw new ApiHttpError("bad_request", "This share is an archive");
-      const entries = await access.list(path);
+      const entries = await deps.service.entries(await authorized(c, "read"), path);
       return c.json({
         items: entries.map((entry) => ({
           name: entry.name,
@@ -412,50 +401,14 @@ export function registerSharesRoutes(
       });
     }),
   );
+  // A peek is one open, counted once however many reads it takes.
   groups.public.get(`${pub}${PUBLIC_SHARE_SUFFIXES.archiveEntries}`, (c) =>
     shareCall(async () => {
       const path = publicPath(c);
-      const access = await deps.service.publicAccess(shareId(c), credential(c), "read");
-      // A limited link never peeks: every Range read the port issues is a
-      // real download that would consume the link's own budget, the same
-      // reasoning as the gallery refusing a limited link. An archive-of-many
-      // share (`paths.length !== 1`) has no single archive file to peek
-      // either. Both answer the same plain 403, never distinguishing why,
-      // matching every other share-authorization failure on this route group.
-      if (access.view.maxDownloads > 0 || access.view.paths.length !== 1) {
-        throw new ApiHttpError("forbidden", "This share cannot be peeked");
-      }
-      const isSingleFile = path === "/";
-      // `peekArchive` detects the archive format from its path's extension.
-      // A single-file share's request path is always `/` (it names the
-      // share, not the file), so the actual name with its extension comes
-      // from the share's own shared path instead; the port reads the share
-      // at `/` as every other public route does.
-      const extensionPath = isSingleFile ? (access.view.paths[0] ?? path) : path;
-      const at = (archive: string) => (isSingleFile ? "/" : archive);
-      let result: Awaited<ReturnType<typeof peekArchive>>;
-      try {
-        result = await peekArchive({
-          storage: {
-            statFile: (archive) => access.statFile(at(archive)),
-            download: (archive, options) => access.download(at(archive), options),
-          },
-          path: extensionPath,
-          maxBytes: deps.config.fdriveArchivePeekMaxBytes ?? DEFAULT_ARCHIVE_PEEK_MAX_BYTES,
-          signal: c.req.raw.signal,
-        });
-      } catch (error) {
-        // The access object has already mapped the storage's failures to
-        // `ApiHttpError`; only the peek's own verdicts on the archive are
-        // left to translate.
-        if (
-          error instanceof UnsupportedPeekFormatError ||
-          error instanceof UnreadableArchiveError
-        ) {
-          throw new ApiHttpError("bad_request", error.message);
-        }
-        throw error;
-      }
+      const result = await deps.service.peek(await authorized(c, "read"), path, {
+        maxBytes: deps.config.fdriveArchivePeekMaxBytes ?? DEFAULT_ARCHIVE_PEEK_MAX_BYTES,
+        signal: c.req.raw.signal,
+      });
       const responseBody: ArchiveEntriesResponse = ArchiveEntriesResponse.parse({
         format: result.format,
         entries: result.entries.map((entry) => ({
@@ -486,19 +439,12 @@ export function registerSharesRoutes(
     const query = publicThumbQuery(c);
     if (query === null) throw THUMB_NOT_FOUND();
 
-    let target: Awaited<ReturnType<SharesService["publicThumbTarget"]>>;
-    try {
-      target = await deps.service.publicThumbTarget(shareId(c), credential(c));
-    } catch {
-      throw THUMB_NOT_FOUND();
-    }
-    const sharedRoot = target.paths[0];
+    const row = await deps.service.load(shareId(c)).catch(() => null);
+    const sharedRoot = row?.paths[0];
     if (
-      target.scope !== "read" ||
-      target.unavailableReason !== null ||
-      !target.unlocked ||
-      target.paths.length !== 1 ||
-      sharedRoot === undefined
+      row === null ||
+      sharedRoot === undefined ||
+      !deps.service.showsThumbnails(row, credential(c))
     )
       throw THUMB_NOT_FOUND();
 
@@ -511,7 +457,7 @@ export function registerSharesRoutes(
       hidden = true;
     }
     if (hidden) throw THUMB_NOT_FOUND();
-    const identity = await deps.identities.get(target.identityId);
+    const identity = await deps.identities.get(row.identityId);
     if (identity === null) throw THUMB_NOT_FOUND();
     const scopes = await deps.resolver.scopesFor(identity.externalUsername);
     // `toFsPath` normalizes, and `normalizePath` throws for a segment over
@@ -542,6 +488,20 @@ export function registerSharesRoutes(
     response.headers.set("Cache-Control", "private, max-age=60");
     return response;
   });
+  // Opens a preview of audio or video, counted here, up front, and refused
+  // once the link has nothing left. For a few minutes the returned token lets
+  // the download URL serve that one file's Range reads to this browser (its
+  // visitor cookie) without counting again; no one else, no other file.
+  groups.public.post(`${pub}${PUBLIC_SHARE_SUFFIXES.preview}`, (c) =>
+    shareCall(async () => {
+      const path = publicPath(c);
+      await deps.service.preview(await authorized(c, "read"), path);
+      const response: SharePreviewResponse = {
+        token: deps.codec.previewToken(shareId(c), path, visitorGiven(c)),
+      };
+      return c.json(response);
+    }),
+  );
   // HEAD is registered on its own rather than left to Hono's HEAD-as-GET
   // fallback, which would drop the body without cancelling the stream and
   // leave the file open until it drained. It answers from a stat: no stream
@@ -549,16 +509,21 @@ export function registerSharesRoutes(
   const download = (c: Context) =>
     shareCall(async () => {
       const path = publicPath(c);
-      const options = publicDownloadOptions(c);
-      const access = await deps.service.publicAccess(shareId(c), credential(c), "read");
-      if (access.view.paths.length !== 1)
-        throw new ApiHttpError("bad_request", "Use the archive download for this share");
+      const preview = new URL(c.req.url).searchParams.get("preview");
+      const previewed = preview !== null;
+      const by = visitor(c);
+      if (
+        preview !== null &&
+        (by === undefined || !deps.codec.previewed(shareId(c), path, by, preview))
+      )
+        throw new ApiHttpError("forbidden", "This preview has ended. Open it again.");
+      const share = await authorized(c, "read", previewed);
       const name =
         path === "/"
-          ? access.view.paths[0]?.split("/").at(-1) || "download"
+          ? share.row.paths[0]?.split("/").at(-1) || "download"
           : path.slice(path.lastIndexOf("/") + 1);
       if (c.req.method === "HEAD") {
-        const stat = await access.statFile(path);
+        const stat = await deps.service.stat(share, path);
         return new Response(null, {
           status: 200,
           headers: downloadHeaders(
@@ -573,14 +538,14 @@ export function registerSharesRoutes(
           ),
         });
       }
-      let result: ShareDownloadResult;
-      try {
-        result = await access.download(path, options);
-      } catch (error) {
-        if (error instanceof RangeNotSatisfiableError) return rangeNotSatisfiable(error.size);
-        throw error;
-      }
-      return downloadResponse(result, name);
+      const outcome = await deps.service.download(share, path, {
+        range: c.req.header("range") ?? null,
+        ifRange: c.req.header("if-range"),
+        signal: c.req.raw.signal,
+        counted: previewed,
+      });
+      if (outcome.kind === "range-not-satisfiable") return rangeNotSatisfiable(outcome.size);
+      return downloadResponse(outcome.result, name);
     });
   groups.public.get(`${pub}${PUBLIC_SHARE_SUFFIXES.download}`, download);
   groups.public.on("HEAD", `${pub}${PUBLIC_SHARE_SUFFIXES.download}`, download);
@@ -589,13 +554,13 @@ export function registerSharesRoutes(
   // unread stream timed out. It checks access and opens nothing.
   const archive = (c: Context) =>
     shareCall(async () => {
-      const access = await deps.service.publicAccess(shareId(c), credential(c), "read");
+      const share = await authorized(c, "read");
       const headers = {
         "Content-Type": "application/zip",
-        "Content-Disposition": attachment(`${access.view.name}.zip`),
+        "Content-Disposition": attachment(`${share.row.name}.zip`),
       };
       if (c.req.method === "HEAD") return new Response(null, { headers });
-      return new Response(await access.zip({ signal: c.req.raw.signal }), { headers });
+      return new Response(await deps.service.zip(share, c.req.raw.signal), { headers });
     });
   groups.public.get(`${pub}${PUBLIC_SHARE_SUFFIXES.archive}`, archive);
   groups.public.on("HEAD", `${pub}${PUBLIC_SHARE_SUFFIXES.archive}`, archive);
@@ -605,21 +570,24 @@ export function registerSharesRoutes(
       const maxBytes = deps.config.fdriveShareUploadMaxBytes;
       if (contentLengthExceeds(c.req.header("content-length"), maxBytes))
         throw new ApiHttpError("payload_too_large", "Share upload is too large");
-      const access = await deps.service.publicAccess(shareId(c), credential(c), "write");
-      if (access.view.paths.length !== 1)
-        throw new ApiHttpError("bad_request", "Invalid upload share");
+      const share = await authorized(c, "write");
       const cap = c.req.raw.body === null ? null : capByteStream(c.req.raw.body, maxBytes);
+      let name: string;
       try {
-        await access.upload(path.slice(1), cap?.stream ?? new Uint8Array(), {
-          signal: c.req.raw.signal,
-        });
+        name = await deps.service.upload(
+          share,
+          path.slice(1),
+          cap?.stream ?? new Uint8Array(),
+          c.req.raw.signal,
+        );
       } catch (error) {
         if (cap?.exceeded() === true) {
           throw new ApiHttpError("payload_too_large", "Share upload is too large");
         }
         throw error;
       }
-      return c.json({ ok: true });
+      const response: ShareUploadResponse = { name };
+      return c.json(response);
     }),
   );
 }

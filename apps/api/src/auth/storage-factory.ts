@@ -9,9 +9,9 @@ function asHttp(error: unknown): unknown {
   return isStorageError(error) ? new ApiHttpError(error.kind, error.message) : error;
 }
 
-/** What the factory needs of the files folder (`FilesFolder`). */
-export interface StorageSource {
-  storage(username: string): StorageProvider;
+/** What the factory needs of the files folder (`FilesFolder`), whose storage is `S`. */
+export interface StorageSource<S extends StorageProvider = StorageProvider> {
+  storage(username: string): S;
   admit(username: string): Promise<void>;
 }
 
@@ -20,10 +20,10 @@ export interface StorageSource {
  * Reads nothing: whoever asks has already admitted the user. Throws
  * `forbidden` for a name that cannot be a home folder.
  */
-export function buildUserStorage(
-  folder: Pick<StorageSource, "storage">,
+export function buildUserStorage<S extends StorageProvider>(
+  folder: Pick<StorageSource<S>, "storage">,
   username: string,
-): StorageProvider {
+): S {
   try {
     return folder.storage(username);
   } catch (error) {
@@ -31,9 +31,9 @@ export function buildUserStorage(
   }
 }
 
-export interface CreateStorageFactoryDeps {
+export interface CreateStorageFactoryDeps<S extends StorageProvider = StorageProvider> {
   readonly identities: Pick<IdentityRepo, "get">;
-  readonly folder: StorageSource;
+  readonly folder: StorageSource<S>;
 }
 
 /**
@@ -45,9 +45,9 @@ export interface CreateStorageFactoryDeps {
  * signed-in request has its storage from its principal instead
  * (`createPrincipalFactory`).
  */
-export function createIdentityStorageFactory(
-  deps: CreateStorageFactoryDeps,
-): IdentityStorageFactory {
+export function createIdentityStorageFactory<S extends StorageProvider>(
+  deps: CreateStorageFactoryDeps<S>,
+): (identityId: string) => Promise<S> {
   return async (identityId) => {
     const identity = await deps.identities.get(identityId);
     if (identity === null) throw new ApiHttpError("unauthorized", "sign in again");

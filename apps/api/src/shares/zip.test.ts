@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { ApiError, PublicShare, ShareEntriesResponse } from "@fdrive/contracts";
 import { describe, expect, it, vi } from "vitest";
 import * as yauzl from "yauzl";
-import { cookieFrom, patchStorage, sharesHarness } from "./test-fixtures/index.ts";
+import { cookieFrom, sharesHarness } from "./test-fixtures/index.ts";
 
 const pub = (id: string) => `/api/v1/public/shares/${id}`;
 type Harness = ReturnType<typeof sharesHarness>;
@@ -188,20 +188,7 @@ describe("archive downloads of a public share", () => {
     });
     expect((await h.request(`${pub(id)}/archive`)).status).toBe(404);
     expect((await h.request(pub(id))).status).toBe(404);
-    expect((await h.shares.get(id))?.views).toBe(0);
-  });
-
-  it("is unsupported on storage without a zip", async () => {
-    const h = sharesHarness({ local: patchStorage(({ zip: _zip, ...storage }) => storage) });
-    h.write("/folder/a.txt", "alpha");
-    const cookie = await h.login();
-    const { id } = await h.create(cookie, { paths: ["/folder"] });
-    const refused = await h.request(`${pub(id)}/archive`);
-    expect(refused.status).toBe(400);
-    expect(await error(refused)).toMatchObject({
-      kind: "unsupported",
-      details: { capability: "zip" },
-    });
+    expect((await h.shares.get(id))?.usedDownloads).toBe(0);
   });
 
   it("holds each share to its concurrent archives, and frees a slot when one ends", async () => {

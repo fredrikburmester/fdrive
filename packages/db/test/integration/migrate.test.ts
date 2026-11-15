@@ -566,4 +566,41 @@ describe("migrate", () => {
       expect(columns.rows).toEqual([]);
     });
   });
+
+  it("deletes links locked when SFTPGo kept their passwords, and keeps the count as used_downloads", async () => {
+    await withDatabaseBefore("0044_share_columns", async (older) => {
+      const [account] = await older.insert(schema.accounts).values({}).returning();
+      const [provider] = await older
+        .insert(schema.providers)
+        .values({ type: "local", baseUrl: "local" })
+        .returning();
+      if (account === undefined || provider === undefined) throw new Error("expected rows");
+      const [identity] = await older
+        .insert(schema.identities)
+        .values({ accountId: account.id, providerId: provider.id, externalUsername: "alice" })
+        .returning();
+      if (identity === undefined) throw new Error("expected an identity");
+      await older.execute(sql`
+        insert into app.shares (identity_id, name, scope, paths, has_password, password_hash, views)
+        values
+          (${identity.id}, 'open', 'read', array['/a'], false, null, 3),
+          (${identity.id}, 'protected', 'read', array['/b'], true, 'scrypt$1$8$1$AA$AA', 1),
+          (${identity.id}, 'locked', 'read', array['/c'], true, 'locked$sftpgo', 0)`);
+
+      await migrate(older);
+
+      const links = await older.execute(sql`
+        select name, used_downloads, password_hash is not null as protected
+          from app.shares order by name`);
+      expect(links.rows).toEqual([
+        { name: "open", used_downloads: 3, protected: false },
+        { name: "protected", used_downloads: 1, protected: true },
+      ]);
+      const columns = await older.execute(sql`
+        select column_name from information_schema.columns
+          where table_schema = 'app' and table_name = 'shares'
+            and column_name in ('has_password', 'views')`);
+      expect(columns.rows).toEqual([]);
+    });
+  });
 });

@@ -36,7 +36,7 @@ filesystem details and lets tests run on an in-memory storage. fdrive checks pas
   sidebar and as the Mac location's `displayName`. `GET /api/v1/system/storage` returns the
   row's id, the name and the folder's health; `PATCH` renames it. System > General shows both.
 - Share links are fdrive's own: it keeps them in `app.shares` and serves them through the
-  owner's storage ([owned.ts](../apps/api/src/shares/owned.ts)).
+  owner's storage ([shares](../apps/api/src/shares/service.ts)).
 - `Shared with me` is a reserved name at the top of every home: the path always means the
   folders others share with the user, listed only while something is shared, and nothing can be
   created, uploaded, moved, copied or renamed to it. A real folder of that name, made before
