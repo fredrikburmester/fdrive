@@ -11,7 +11,9 @@ import { createLocalUserStore } from "./users.js";
 
 const MASTER = new Uint8Array(Buffer.alloc(32, 31));
 
-async function fixture(options: { provider?: boolean; environmentAdmins?: string[] } = {}) {
+async function fixture(
+  options: { provider?: boolean; environmentAdmins?: string[]; usage?: boolean } = {},
+) {
   const repos = createMemoryRepos();
   const row = await seedLocalProvider(repos);
   const store = createLocalUserStore({
@@ -30,6 +32,9 @@ async function fixture(options: { provider?: boolean; environmentAdmins?: string
       ? {}
       : { environmentAdmins: options.environmentAdmins }),
     eventLog: { record: (_subsystem, _level, message) => events.push(message) },
+    ...(options.usage === true
+      ? { usage: async (username: string) => (username === "alice" ? 1_000 : null) }
+      : {}),
   };
   const service = createLocalUserService(deps);
   await seedLocalUsers(repos, [
@@ -80,6 +85,8 @@ describe("createLocalUserService: list", () => {
         adminByDeployment: false,
         createdAt: expect.any(String),
         lastLoginAt: "2026-09-01T10:00:00.000Z",
+        storageUsed: null,
+        storageLimit: null,
       },
       // Bob has never signed in, so he has no login or account yet.
       {
@@ -90,7 +97,25 @@ describe("createLocalUserService: list", () => {
         adminByDeployment: false,
         createdAt: expect.any(String),
         lastLoginAt: null,
+        storageUsed: null,
+        storageLimit: null,
       },
+    ]);
+  });
+
+  it("shows what each user's folder holds and their storage limit", async () => {
+    const h = await fixture({ usage: true });
+    await h.service.update("bob", { storageLimit: 5_000 }, h.viewer);
+    const { users } = await h.service.list(h.viewer);
+    expect(
+      users.map(({ username, storageUsed, storageLimit }) => ({
+        username,
+        storageUsed,
+        storageLimit,
+      })),
+    ).toEqual([
+      { username: "alice", storageUsed: 1_000, storageLimit: null },
+      { username: "bob", storageUsed: null, storageLimit: 5_000 },
     ]);
   });
 
@@ -226,6 +251,28 @@ describe("createLocalUserService: update", () => {
     await expect(h.service.update("nobody", { disabled: true }, h.viewer)).rejects.toMatchObject({
       kind: "not_found",
     });
+  });
+});
+
+describe("createLocalUserService: storage limit", () => {
+  it("sets and clears a user's storage limit, their own included, and records each change", async () => {
+    const h = await fixture();
+    expect(await h.service.update("bob", { storageLimit: 2_048 }, h.viewer)).toMatchObject({
+      storageLimit: 2_048,
+    });
+    expect((await h.repos.localUsers.get("bob"))?.storageLimit).toBe(2_048);
+    expect(await h.service.update("alice", { storageLimit: 10 }, h.viewer)).toMatchObject({
+      storageLimit: 10,
+      isYou: true,
+    });
+    expect(await h.service.update("bob", { storageLimit: null }, h.viewer)).toMatchObject({
+      storageLimit: null,
+    });
+    expect(h.events).toEqual([
+      "User bob: storage limit 2048 bytes",
+      "User alice: storage limit 10 bytes",
+      "User bob: no storage limit",
+    ]);
   });
 });
 

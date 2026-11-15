@@ -120,6 +120,8 @@ import { createShareMoves } from "./shares/moves.ts";
 import { createScryptSharePasswords } from "./shares/passwords.js";
 import { registerSharesRoutes } from "./shares/routes.ts";
 import { createSharesService } from "./shares/service.ts";
+import { registerStorageRoutes } from "./storage/routes.js";
+import { createHomeUsage } from "./storage/usage.js";
 import { registerActivityRoutes } from "./system/activity.js";
 import { createCachedProbe } from "./system/cached-probe.js";
 import { fetchEmbedStatus } from "./system/embed-status.js";
@@ -224,9 +226,13 @@ export async function composeApp(
     const settings = await trashSettings.configuration(providerId);
     return reservedFolders(settings.enabled ? settings.path : null);
   };
+  const indexQueries = createIndexQueries(db);
+  // What each user's folder holds, as the index counts it: storage limits
+  // refuse a write its owner has no room for.
+  const homeUsage = createHomeUsage(config, indexQueries);
   const modules =
     deps.modules ??
-    deploymentModules(config, repos, passwords, changes, filesFolder, closedFolders);
+    deploymentModules(config, repos, passwords, changes, filesFolder, closedFolders, homeUsage);
   const backups = createBackupModule(config, modules);
   await backups.start();
 
@@ -300,6 +306,7 @@ export async function composeApp(
     providerId: async () => (await localProvider())?.id ?? null,
     environmentAdmins: config.fdriveAdminUsers,
     eventLog,
+    usage: homeUsage,
   });
 
   const featureService = createFeatureService({
@@ -393,7 +400,6 @@ export async function composeApp(
   // (`FDRIVE_INDEX_ROOTS`); the search route itself degrades to
   // `{ unavailable: true }` rather than erroring when the caller's
   // verified index scopes are unavailable for any reason.
-  const indexQueries = createIndexQueries(db);
   const activityObservations = createActivityObservations({
     repo: createActivityObservationsRepo(db, clock),
     identities: repos.identities,
@@ -1058,6 +1064,16 @@ export async function composeApp(
       });
       registerProviderRoutes(groups, { service: providerService });
       registerLocalUserRoutes(groups, { service: localUsers });
+      registerStorageRoutes(groups, {
+        identities: repos.identities,
+        resolver: scopeResolver,
+        indexQueries,
+        localUsers: repos.localUsers,
+        trashPathForStorage: (storage) => {
+          const settings = trashSettingsForStorage(storage);
+          return settings?.enabled === true ? settings.path : null;
+        },
+      });
       registerGrantRoutes(groups, { service: localGrants });
       // Built as a local variable (not a fresh object literal at the call
       // site below) so `archivePeekMaxBytes` (not part of `FsRoutesDeps`

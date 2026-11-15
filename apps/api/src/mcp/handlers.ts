@@ -197,7 +197,7 @@ function fileSummaryFor(
 }
 
 /** The outcome of authorizing a bounded batch of `IndexedFile` candidates: only the accessible ones, plus their virtual paths and whether anything was left out. */
-interface AuthorizedFiles {
+export interface AuthorizedFiles {
   readonly files: readonly IndexedFile[];
   readonly virtualPaths: ReadonlyMap<number, string>;
   readonly partial: boolean;
@@ -212,7 +212,7 @@ interface AuthorizedFiles {
  * (shadowed, denied, or an unavailable probe), so a caller can report that
  * truthfully rather than presenting the accessible subset as exhaustive.
  */
-async function authorizeIndexedFiles(
+export async function authorizeIndexedFiles(
   ctx: ScopeContext,
   authorizer: ReadAuthorizer,
   candidates: readonly IndexedFile[],

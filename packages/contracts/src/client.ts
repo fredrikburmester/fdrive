@@ -117,6 +117,7 @@ import {
   SharesResponse,
   type UpdateShareRequest,
 } from "./shares.ts";
+import { StorageUsageResponse } from "./storage.ts";
 import {
   IndexerActionResponse,
   type IndexerClearRequest,
@@ -315,6 +316,8 @@ export interface ApiClient {
   archiveEntries(path: string): Promise<ArchiveEntriesResponse>;
   /** A directory's total size, computed from the index only. */
   folderSize(path: string): Promise<FolderSizeResponse>;
+  /** The signed-in login's own folder: bytes used, its limit, kinds and largest files, from the index. */
+  storageUsage(): Promise<StorageUsageResponse>;
   jobs(): Promise<JobStatus[]>;
   job(id: string): Promise<JobStatus>;
   cancelJob(id: string): Promise<JobStatus>;
@@ -764,6 +767,10 @@ export function createApiClient(options: ApiClientOptions = {}): ApiClient {
 
     folderSize(path: string): Promise<FolderSizeResponse> {
       return get(ROUTES.fs.folderSize, FolderSizeResponse, { query: { path } });
+    },
+
+    storageUsage(): Promise<StorageUsageResponse> {
+      return get(ROUTES.storage, StorageUsageResponse);
     },
 
     async jobs(): Promise<JobStatus[]> {

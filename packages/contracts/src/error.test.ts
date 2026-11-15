@@ -11,6 +11,7 @@ describe("ApiErrorKind", () => {
       "not_found",
       "conflict",
       "payload_too_large",
+      "storage_limit_reached",
       "rate_limited",
       "internal",
       "upstream_unavailable",
@@ -96,6 +97,7 @@ describe("statusForKind", () => {
     expect(statusForKind("not_found")).toBe(404);
     expect(statusForKind("conflict")).toBe(409);
     expect(statusForKind("payload_too_large")).toBe(413);
+    expect(statusForKind("storage_limit_reached")).toBe(507);
     expect(statusForKind("rate_limited")).toBe(429);
     expect(statusForKind("internal")).toBe(500);
     expect(statusForKind("upstream_unavailable")).toBe(502);

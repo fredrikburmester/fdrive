@@ -1002,6 +1002,7 @@ function toLocalUser(row: typeof localUsers.$inferSelect): LocalUser {
     username: row.username,
     passwordHash: row.passwordHash,
     disabled: row.disabled,
+    storageLimit: row.storageLimit,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };
@@ -1043,6 +1044,7 @@ export function createLocalUserRepo(db: Db): LocalUserRepo {
         .set({
           ...(patch.passwordHash !== undefined ? { passwordHash: patch.passwordHash } : {}),
           ...(patch.disabled !== undefined ? { disabled: patch.disabled } : {}),
+          ...(patch.storageLimit !== undefined ? { storageLimit: patch.storageLimit } : {}),
           updatedAt: sql`now()`,
         })
         .where(sameName(username))

@@ -46,6 +46,7 @@ export type StorageErrorKind =
   | "forbidden"
   | "conflict"
   | "payload_too_large"
+  | "storage_limit_reached"
   | "rate_limited"
   | "bad_request"
   | "upstream_unavailable"

@@ -97,6 +97,13 @@ How the files folder implements it:
 - **Atomic publish.** Uploads and file copies write a temporary file beside the target and
   publish it with `link`, a real create-if-absent; only `overwrite: true` renames it over a
   taken name.
+- **Storage limits.** A user may have a limit (`app.local_users.storage_limit`, set in
+  System > Users). Every upload and copy passes through the user's storage, which asks
+  `LocalUsers.room` how much more the owner of the folder it lands in may hold: their limit
+  less what the index counts in their home, Trash included. An upload is cut off once it
+  passes that (a replaced file's bytes count as freed) and a copy is refused when its files
+  are larger, both with `storage_limit_reached` (HTTP 507). Moves add nothing and are not
+  checked.
 - **Copies** keep modification times. A link inside a copied folder is copied as the link it
   is, its target text unchanged, as a move takes it along: never followed, never its target.
 - **Moves** are one `rename`, also between a user's files and a writable shared folder. The

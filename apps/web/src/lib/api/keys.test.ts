@@ -33,6 +33,10 @@ describe("queryKeys", () => {
     expect(queryKeys.fs.folderSize("/photos")).toEqual(["fs", "folder-size", "/photos"]);
   });
 
+  it("storage.usage() builds a stable key", () => {
+    expect(queryKeys.storage.usage()).toEqual(["storage", "usage"]);
+  });
+
   it("account.tokens() builds a stable key", () => {
     expect(queryKeys.account.tokens()).toEqual(["account", "tokens"]);
   });

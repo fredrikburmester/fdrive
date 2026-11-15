@@ -71,6 +71,30 @@ describe("deploymentModules", () => {
     ).toEqual({ externalUsername: "alice" });
   });
 
+  it("refuses a write over a user's storage limit, counted from their folder's usage", async () => {
+    const repos = createMemoryRepos();
+    await seedLocalUsers(repos, [{ username: "alice", password: "alice-pass" }]);
+    await repos.localUsers.update("alice", { storageLimit: 10 });
+    const usage = vi.fn(async () => 8);
+    const local = deploymentModules(
+      { fdriveStorageRoot: temporaryStorageRoot(), fdriveIndexRoots: null },
+      repos,
+      FAST_PASSWORDS,
+      undefined,
+      undefined,
+      undefined,
+      usage,
+    ).local;
+    if (local === undefined) throw new Error("no local module");
+    const instance = { id: "row", baseUrl: "local", config: {} };
+    const alice = local.createStorage(instance, { externalUsername: "alice" }, { fetch });
+    await alice.upload("/two.txt", new TextEncoder().encode("ok"));
+    await expect(alice.upload("/three.txt", new TextEncoder().encode("abc"))).rejects.toMatchObject(
+      { kind: "storage_limit_reached" },
+    );
+    expect(usage).toHaveBeenCalledWith("alice");
+  });
+
   it("refuses a share in a folder the deployment closes to shares", async () => {
     const repos = createMemoryRepos();
     await seedLocalUsers(repos, [

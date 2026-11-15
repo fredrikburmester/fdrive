@@ -12,6 +12,8 @@ const ME: AdminUser = {
   adminByDeployment: false,
   createdAt: "2026-01-01T00:00:00.000Z",
   lastLoginAt: "2026-11-10T09:00:00.000Z",
+  storageUsed: 1536,
+  storageLimit: null,
 };
 const GRACE: AdminUser = {
   username: "grace",
@@ -21,6 +23,8 @@ const GRACE: AdminUser = {
   adminByDeployment: false,
   createdAt: "2026-02-03T00:00:00.000Z",
   lastLoginAt: null,
+  storageUsed: null,
+  storageLimit: 2 * 1024 ** 3,
 };
 
 type Mutation = {
@@ -128,6 +132,18 @@ describe("the list", () => {
     expect(within(grace).queryByText("Admin")).toBeNull();
     expect(within(grace).getByText("Never")).toBeTruthy();
     expect(within(grace).getByText("2026-02-03")).toBeTruthy();
+  });
+
+  it("shows what each user's folder holds, against their limit when they have one", () => {
+    renderPage([ME, GRACE, { ...GRACE, username: "linus", storageUsed: 1024 ** 3 }]);
+
+    expect((screen.getByText("ada").closest("tr") as HTMLElement).textContent).toContain("1.5 KB");
+    expect((screen.getByText("grace").closest("tr") as HTMLElement).textContent).toContain(
+      "Not indexed of 2.0 GB",
+    );
+    expect((screen.getByText("linus").closest("tr") as HTMLElement).textContent).toContain(
+      "1.0 GB of 2.0 GB",
+    );
   });
 
   it("offers no actions on the administrator's own row and says why", () => {
@@ -282,6 +298,57 @@ describe("row actions", () => {
     fireEvent.submit(within(dialog).getByLabelText("New password").closest("form") as HTMLElement);
 
     expect(mocks.update.mutate).not.toHaveBeenCalled();
+    expect(within(dialog).getByText("That item could not be found.")).toBeTruthy();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("sets a storage limit in GB, and clears it", async () => {
+    settle(mocks.update);
+    renderPage([ME, GRACE]);
+
+    await openRowMenu("grace");
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Storage limit" }));
+    let dialog = screen.getByRole("dialog");
+    expect(within(dialog).getByText("Storage limit for grace")).toBeTruthy();
+    const limit = within(dialog).getByLabelText("Limit in GB") as HTMLInputElement;
+    expect(limit.value).toBe("2");
+    fireEvent.change(limit, { target: { value: "2.5" } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Save" }));
+    expect(mocks.update.mutate).toHaveBeenLastCalledWith(
+      { username: "grace", patch: { storageLimit: 2.5 * 1024 ** 3 } },
+      expect.anything(),
+    );
+    expect(mocks.success).toHaveBeenLastCalledWith("Set the storage limit of grace.");
+    expect(screen.queryByRole("dialog")).toBeNull();
+
+    await openRowMenu("grace");
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Storage limit" }));
+    dialog = screen.getByRole("dialog");
+    fireEvent.change(within(dialog).getByLabelText("Limit in GB"), { target: { value: " " } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Save" }));
+    expect(mocks.update.mutate).toHaveBeenLastCalledWith(
+      { username: "grace", patch: { storageLimit: null } },
+      expect.anything(),
+    );
+    expect(mocks.success).toHaveBeenLastCalledWith("grace has no storage limit.");
+  });
+
+  it("keeps a limit of zero or less from being sent, and shows a refusal", async () => {
+    mocks.update.isError = true;
+    mocks.update.error = new ApiClientError("not_found", "no such user", 404);
+    renderPage([ME, { ...GRACE, storageLimit: null }]);
+
+    await openRowMenu("grace");
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Storage limit" }));
+    const dialog = screen.getByRole("dialog");
+    const limit = within(dialog).getByLabelText("Limit in GB") as HTMLInputElement;
+    expect(limit.value).toBe("");
+    fireEvent.change(limit, { target: { value: "0" } });
+    fireEvent.submit(limit.closest("form") as HTMLElement);
+
+    expect(mocks.update.mutate).not.toHaveBeenCalled();
+    expect(within(dialog).getByText("Enter a size above zero.")).toBeTruthy();
     expect(within(dialog).getByText("That item could not be found.")).toBeTruthy();
     fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
     expect(screen.queryByRole("dialog")).toBeNull();

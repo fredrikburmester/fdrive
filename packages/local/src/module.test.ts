@@ -218,6 +218,25 @@ describe("createLocalModule", () => {
     expect(await kindOf(bob.upload(`/${SHARED_WITH_ME}/Projects/x`, bytes("x")))).toBe("forbidden");
   });
 
+  it("counts each write against the owner of the folder it lands in", async () => {
+    const room = vi.fn(async (username: string) => (username === "alice" ? 100 : 0));
+    const module = createLocalModule({
+      root,
+      users: {
+        ...users("ok", "active", [{ owner: "alice", path: "/Projects", writable: true }]),
+        room,
+      },
+    });
+    const alice = module.createStorage(instance, session("alice"), ctx);
+    await alice.upload("/Projects/plan.txt", bytes("plan"), { mkdirParents: true });
+    expect(room).toHaveBeenLastCalledWith("alice");
+    const bob = module.createStorage(instance, session("bob"), ctx);
+    expect(await kindOf(bob.upload("/note.txt", bytes("note")))).toBe("storage_limit_reached");
+    expect(room).toHaveBeenLastCalledWith("bob");
+    await bob.upload(`/${SHARED_WITH_ME}/Projects/note.txt`, bytes("note"));
+    expect(room).toHaveBeenLastCalledWith("alice");
+  });
+
   it("refuses a folder shared from its owner's Trash, on, off or renamed since", async () => {
     const closedFolders = vi.fn(async (): Promise<readonly string[]> => ["/Bin"]);
     const module = createLocalModule({

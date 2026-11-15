@@ -96,6 +96,7 @@ function stubIndexQueries(overrides: Partial<IndexQueries> = {}): IndexQueries {
     searchImages: overrides.searchImages ?? (async () => fail("searchImages")),
     imageEmbeddingStats: overrides.imageEmbeddingStats ?? (async () => fail("imageEmbeddingStats")),
     subtreeSize: overrides.subtreeSize ?? (async () => fail("subtreeSize")),
+    bytesByExtension: overrides.bytesByExtension ?? (async () => fail("bytesByExtension")),
   };
 }
 

@@ -20,9 +20,11 @@ function apiFailure(error: unknown): never {
             ? "conflict"
             : response.status === 413
               ? "payload_too_large"
-              : response.status === 400
-                ? "bad_request"
-                : "upstream_unavailable";
+              : response.status === 507
+                ? "storage_limit_reached"
+                : response.status === 400
+                  ? "bad_request"
+                  : "upstream_unavailable";
   throw new ApiHttpError(kind, "Office operation could not be completed");
 }
 export function registerOfficeRoutes(

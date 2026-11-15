@@ -251,7 +251,13 @@ describe("user storage changes", () => {
     return createUserStorage({
       home: bob(),
       shared: async () => [
-        { name: "Projects", dir: alice("Projects"), ownerHome: alice(), writable: true },
+        {
+          name: "Projects",
+          dir: alice("Projects"),
+          owner: "alice",
+          ownerHome: alice(),
+          writable: true,
+        },
       ],
       onChange: listen,
     });

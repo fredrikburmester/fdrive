@@ -164,6 +164,7 @@ function createMemoryLocalUserRepo(): LocalUserRepo {
         username: input.username,
         passwordHash: input.passwordHash,
         disabled: false,
+        storageLimit: null,
         createdAt: now,
         updatedAt: now,
       };

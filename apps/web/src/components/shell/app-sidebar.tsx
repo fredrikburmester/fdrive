@@ -3,6 +3,7 @@
 import {
   ChevronsUpDown,
   Clock3,
+  HardDrive,
   Info,
   Link2,
   LogOut,
@@ -90,6 +91,7 @@ export function isTrashRoute(pathname: string | null): boolean {
 const FILES_ROUTE = "/files" as unknown as Route;
 const TRASH_ROUTE = "/trash" as Route;
 const ACCOUNT_ROUTE = "/account" as Route;
+const STORAGE_ROUTE = "/storage" as Route;
 
 export function AppSidebar() {
   const { data: me } = useShellMe();
@@ -262,6 +264,10 @@ export function AppSidebar() {
               <DropdownMenuItem render={<Link href={ACCOUNT_ROUTE} />}>
                 <UserRound />
                 Account
+              </DropdownMenuItem>
+              <DropdownMenuItem render={<Link href={STORAGE_ROUTE} />}>
+                <HardDrive />
+                Storage
               </DropdownMenuItem>
               <DropdownMenuItem render={<Link href={"/about" as Route} />}>
                 <Info />

@@ -44,7 +44,7 @@ beforeEach(async () => {
   bob = createUserStorage({
     home: join(root, "bob"),
     shared: async () => [
-      { name: "Docs", dir: inAlice("docs"), ownerHome: inAlice(), writable: true },
+      { name: "Docs", dir: inAlice("docs"), owner: "alice", ownerHome: inAlice(), writable: true },
     ],
   });
 });
@@ -164,9 +164,27 @@ describe("a shared folder whose own path passes through a symlink", () => {
     const shelf = createUserStorage({
       home: join(root, "bob"),
       shared: async () => [
-        { name: "Alias", dir: inAlice("alias"), ownerHome: inAlice(), writable: true },
-        { name: "Sub", dir: inAlice("alias", "sub"), ownerHome: inAlice(), writable: true },
-        { name: "Trash", dir: inAlice("docs", "trash"), ownerHome: inAlice(), writable: true },
+        {
+          name: "Alias",
+          dir: inAlice("alias"),
+          owner: "alice",
+          ownerHome: inAlice(),
+          writable: true,
+        },
+        {
+          name: "Sub",
+          dir: inAlice("alias", "sub"),
+          owner: "alice",
+          ownerHome: inAlice(),
+          writable: true,
+        },
+        {
+          name: "Trash",
+          dir: inAlice("docs", "trash"),
+          owner: "alice",
+          ownerHome: inAlice(),
+          writable: true,
+        },
       ],
     });
     for (const name of ["Alias", "Sub", "Trash"]) {

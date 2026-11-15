@@ -93,6 +93,8 @@ export const ROUTES = {
     /** POST: record a path as opened now -> `OkResponse`. */
     touch: "/api/v1/recents/touch",
   },
+  /** GET: how much the signed-in login's own folder holds -> `StorageUsageResponse`. */
+  storage: "/api/v1/storage",
   search: {
     /** GET: hybrid search (semantic + full-text + filename) -> `SearchResponse`. 400 for an empty `q`. */
     query: "/api/v1/search",

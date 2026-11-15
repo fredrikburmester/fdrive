@@ -175,6 +175,7 @@ describe("ownedShareAccess", () => {
       });
     expect(await kindOf(failing("not_found"))).toBe("not_found");
     expect(await kindOf(failing("bad_request"))).toBe("bad_request");
+    expect(await kindOf(failing("storage_limit_reached"))).toBe("storage_limit_reached");
     for (const kind of [
       "forbidden",
       "unauthorized",

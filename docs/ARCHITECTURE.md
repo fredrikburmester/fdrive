@@ -49,8 +49,8 @@ sealed in `app.credentials`, bound to its identity, so a later sign-in can tell 
 changed. The files folder's row comes from the deployment (`deploymentManaged`); administrators
 can only rename it. See [authentication](AUTH.md) and [storage port](STORAGE-PROVIDERS.md).
 
-Local users are `app.local_users`: a username unique in any case, a scrypt hash and a disabled
-flag. Setup creates the first one and System > Users the rest; the local module's `admit`
+Local users are `app.local_users`: a username unique in any case, a scrypt hash, a disabled
+flag and an optional storage limit ([storage port](STORAGE-PROVIDERS.md)). Setup creates the first one and System > Users the rest; the local module's `admit`
 refuses a disabled user on every request, not only at sign-in. Folders shared between users
 are `app.local_grants` (owner, folder path, grantee, read or write), served by
 `/api/v1/grants`. The grantee's storage shows each at `/Shared with me/<name>` (the folder's

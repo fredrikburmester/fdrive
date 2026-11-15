@@ -4,6 +4,7 @@ import type { FilesFolderGuard } from "@fdrive/local";
 import type { AppConfig, IndexRootConfig } from "../config.js";
 import { createProviderModules, type ProviderModules } from "../providers/registry.js";
 import { createScryptSharePasswords, type SharePasswords } from "../shares/passwords.js";
+import type { HomeUsage } from "../storage/usage.js";
 import type { ChangeQueue } from "./change-queue.js";
 import { createLocalUserStore } from "./users.js";
 
@@ -52,6 +53,8 @@ export function journalRoot(
  * is refused while the folder is not this installation's
  * (`createDeploymentFilesFolderGuard`). With `closedFolders`, a folder shared
  * from inside its owner's Trash is refused to the person it is shared with.
+ * With `usage`, a write its folder's owner has no room for under their
+ * storage limit is refused.
  */
 export function deploymentModules(
   config: Pick<AppConfig, "fdriveStorageRoot" | "fdriveIndexRoots">,
@@ -60,6 +63,7 @@ export function deploymentModules(
   changes?: ChangeQueue,
   guard?: FilesFolderGuard,
   closedFolders?: (providerId: string) => Promise<readonly string[]>,
+  usage?: HomeUsage,
 ): ProviderModules {
   const root = config.fdriveStorageRoot;
   if (root === undefined) return createProviderModules();
@@ -67,7 +71,12 @@ export function deploymentModules(
   return createProviderModules({
     local: {
       root,
-      users: createLocalUserStore({ repo: repos.localUsers, grants: repos.localGrants, passwords }),
+      users: createLocalUserStore({
+        repo: repos.localUsers,
+        grants: repos.localGrants,
+        passwords,
+        ...(usage === undefined ? {} : { usage }),
+      }),
       // When `journaled` names a root, this is the same one: it matches first.
       indexRoot: localIndexRoot(config.fdriveIndexRoots, root),
       ...(guard === undefined ? {} : { guard }),

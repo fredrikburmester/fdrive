@@ -67,6 +67,7 @@ function stubIndexQueries(): IndexQueries {
     searchImages: async () => [],
     imageEmbeddingStats: async () => ({ total: 0, model: null }),
     subtreeSize: async () => fail("subtreeSize"),
+    bytesByExtension: async () => fail("bytesByExtension"),
   };
 }
 

@@ -9,6 +9,7 @@ import type { LocalUsers } from "@fdrive/local";
 import { KEY_ID, seal } from "../auth/crypto.js";
 import { ApiHttpError } from "../errors.js";
 import type { SharePasswords } from "../shares/passwords.js";
+import type { HomeUsage } from "../storage/usage.js";
 import { noopSystemEventLog, type SystemEventLog } from "../system/event-log.js";
 
 /** Who is asking: the administrator's account, and their session when they act on themselves. */
@@ -58,6 +59,8 @@ export interface LocalUserServiceDeps {
   /** `FDRIVE_ADMIN_USERS`: usernames on the pinned local folder that are always administrators. */
   readonly environmentAdmins?: readonly string[];
   readonly eventLog?: SystemEventLog;
+  /** What each user's folder holds, shown beside their storage limit. */
+  readonly usage?: HomeUsage;
 }
 
 /** Local user administration over `app.local_users` and the logins that name them. */
@@ -105,6 +108,8 @@ export function createLocalUserService(deps: LocalUserServiceDeps): LocalUserSer
       isYou: account !== null && account.id === viewer.accountId,
       createdAt: user.createdAt.toISOString(),
       lastLoginAt: identity?.lastLoginAt?.toISOString() ?? null,
+      storageUsed: (await deps.usage?.(user.username)) ?? null,
+      storageLimit: user.storageLimit,
     };
   }
 
@@ -169,6 +174,7 @@ export function createLocalUserService(deps: LocalUserServiceDeps): LocalUserSer
             ? {}
             : { passwordHash: await deps.passwords.hash(patch.password) }),
           ...(patch.disabled === undefined ? {} : { disabled: patch.disabled }),
+          ...(patch.storageLimit === undefined ? {} : { storageLimit: patch.storageLimit }),
         })) ?? current;
       if (patch.isAdmin !== undefined)
         await repos.accounts.setAdmin(identity.accountId, patch.isAdmin);
@@ -182,6 +188,13 @@ export function createLocalUserService(deps: LocalUserServiceDeps): LocalUserSer
         ...(patch.isAdmin === undefined
           ? []
           : [patch.isAdmin ? "made an administrator" : "no longer an administrator"]),
+        ...(patch.storageLimit === undefined
+          ? []
+          : [
+              patch.storageLimit === null
+                ? "no storage limit"
+                : `storage limit ${patch.storageLimit} bytes`,
+            ]),
       ];
       if (changes.length > 0) {
         eventLog.record("general", "info", `User ${current.username}: ${changes.join(", ")}`);
