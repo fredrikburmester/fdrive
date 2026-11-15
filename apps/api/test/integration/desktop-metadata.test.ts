@@ -323,7 +323,9 @@ describe("metadata follows the Mac's writes as they commit", () => {
       const commit = await call(`${base}/operations/${operationId}/commit`, { headers, body: {} });
       // Never success: the receipt and the link's move went with the grant's.
       expect(commit.status).toBe(409);
-      expect(await commit.json()).toMatchObject({ details: { code: "operation_uncertain" } });
+      expect(await commit.json()).toMatchObject({
+        error: { details: { code: "operation_uncertain" } },
+      });
       expect(await linkPaths(doc)).toEqual(["/Locked/doc.txt"]);
       expect(await grantPaths()).toContain("/Locked");
     } finally {
