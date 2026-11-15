@@ -62,7 +62,7 @@ function collectingReport(): {
 }
 
 async function bytesOf(storage: StorageProvider, path: string): Promise<Buffer> {
-  return Buffer.from(await new Response((await storage.download(path)).body).arrayBuffer());
+  return Buffer.from(await new Response((await storage.open(path)).stream()).arrayBuffer());
 }
 
 async function zipEntries(
@@ -94,7 +94,6 @@ async function extracted(storage: StorageProvider, archivePath: string) {
     storage: out,
     archivePath,
     destination: "/out",
-    tmpDir: await tempDir("extract"),
     signal: new AbortController().signal,
     report: () => {},
     maxBytes: 10 * 1024 * 1024,
@@ -104,7 +103,7 @@ async function extracted(storage: StorageProvider, archivePath: string) {
   return files;
 }
 
-/** Downloads that stall after one chunk and record whether they were cancelled. */
+/** Files whose streams stall after one chunk and record whether they were cancelled. */
 function stallingDownloads(memory: StorageProvider): {
   storage: StorageProvider;
   delivered: () => boolean;
@@ -115,19 +114,20 @@ function stallingDownloads(memory: StorageProvider): {
   return {
     storage: {
       ...memory,
-      download: async (...args) => ({
-        ...(await memory.download(...args)),
-        body: new ReadableStream<Uint8Array>({
-          pull(stream) {
-            if (!delivered) {
-              delivered = true;
-              stream.enqueue(new Uint8Array(4096));
-            }
-          },
-          cancel() {
-            cancelled = true;
-          },
-        }),
+      open: async (path) => ({
+        ...(await memory.open(path)),
+        stream: () =>
+          new ReadableStream<Uint8Array>({
+            pull(stream) {
+              if (!delivered) {
+                delivered = true;
+                stream.enqueue(new Uint8Array(4096));
+              }
+            },
+            cancel() {
+              cancelled = true;
+            },
+          }),
       }),
     },
     delivered: () => delivered,
@@ -369,22 +369,23 @@ describe("compress to tar", () => {
       });
     });
 
-    it(`${format} reports a failed download or body as itself and writes nothing`, async () => {
+    it(`${format} reports a failed open or read as itself and writes nothing`, async () => {
       for (const bodyError of [false, true]) {
         const memory = createMemoryStorage({ "/large.txt": "x".repeat(65536) });
         const failure = new StorageError("upstream_unavailable", "broken upstream");
         const storage: StorageProvider = {
           ...memory,
-          download: async (...args) => {
+          open: async (path) => {
             if (!bodyError) throw failure;
             return {
-              ...(await memory.download(...args)),
-              body: new ReadableStream<Uint8Array>({
-                start(stream) {
-                  stream.enqueue(new Uint8Array(4096));
-                  stream.error(failure);
-                },
-              }),
+              ...(await memory.open(path)),
+              stream: () =>
+                new ReadableStream<Uint8Array>({
+                  start(stream) {
+                    stream.enqueue(new Uint8Array(4096));
+                    stream.error(failure);
+                  },
+                }),
             };
           },
         };

@@ -158,13 +158,14 @@ async function tarArchive(opts: CompressOptions, compression: "gzip" | "zstd"): 
     let bytes = 0;
     for (const file of files) {
       throwIfAborted(signal);
-      const download = await opts.storage.download(file.path, { signal });
+      const opened = await opts.storage.open(file.path);
       const counted = countingTransform((n) => {
         bytes += n;
         opts.report({ bytes });
       });
-      const entry = pack.entry({ name: file.entryName, size: file.size, mtime: file.modifiedAt });
-      await pipelineAsync(nodeReadableFromWeb(download.body), counted, entry, { signal });
+      // The size it opened at, which is what it reads.
+      const entry = pack.entry({ name: file.entryName, size: opened.size, mtime: file.modifiedAt });
+      await pipelineAsync(nodeReadableFromWeb(opened.stream()), counted, entry, { signal });
       processed += 1;
       opts.report({ processed, total: files.length, bytes });
     }

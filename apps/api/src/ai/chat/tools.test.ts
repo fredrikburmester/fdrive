@@ -287,34 +287,14 @@ describe("duplicates_of", () => {
 });
 
 describe("readBytes", () => {
-  function storageWith(contentLength: number | null, bytes: Uint8Array) {
-    return {
-      download: async () => ({
-        contentLength,
-        body: new ReadableStream<Uint8Array>({
-          start(controller) {
-            controller.enqueue(bytes);
-            controller.close();
-          },
-        }),
-      }),
-    } as unknown as StorageProvider;
-  }
-  const deps = (storage: StorageProvider) =>
-    ({ principal: { storage } }) as unknown as Parameters<typeof readBytes>[0];
+  const deps = (files: Record<string, Uint8Array>) =>
+    ({ principal: { storage: createMemoryStorage(files) } }) as unknown as Parameters<
+      typeof readBytes
+    >[0];
 
-  it("gives up on files the provider reports as too large, or that turn out too large", async () => {
-    const signal = new AbortController().signal;
-    expect(await readBytes(deps(storageWith(20, new Uint8Array(20))), "/x", 10, signal)).toBeNull();
-    expect(
-      await readBytes(deps(storageWith(null, new Uint8Array(20))), "/x", 10, signal),
-    ).toBeNull();
-    const read = await readBytes(
-      deps(storageWith(null, new Uint8Array([104, 105]))),
-      "/x",
-      10,
-      signal,
-    );
+  it("gives up on a file past the byte cap, and reads one within it whole", async () => {
+    expect(await readBytes(deps({ "/x": new Uint8Array(20) }), "/x", 10)).toBeNull();
+    const read = await readBytes(deps({ "/x": new Uint8Array([104, 105]) }), "/x", 10);
     expect(read?.bytes.toString()).toBe("hi");
   });
 });

@@ -67,7 +67,6 @@ export interface OpenedFile {
   readonly actor: OfficeActor;
   readonly file: OfficeFile;
   readonly path: string;
-  readonly stat: Awaited<ReturnType<StorageProvider["statFile"]>>;
   readonly mode: "view" | "edit";
   readonly editAllowed: boolean;
 }

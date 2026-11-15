@@ -40,7 +40,7 @@ it("attributes Office saves to the authorized session and records Save As as a c
     action: "file.copy",
     from: "/a",
   });
-  expect(await new Response((await storage.download("/b")).body).arrayBuffer()).toEqual(
+  expect(await new Response((await storage.open("/b")).stream()).arrayBuffer()).toEqual(
     new Uint8Array([7]).buffer,
   );
   expect(run).toHaveBeenCalledWith(

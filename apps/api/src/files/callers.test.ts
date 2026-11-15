@@ -54,7 +54,6 @@ function webHarness(files: (activity: Activity) => FileOperations) {
         activity: activity.service,
         files: files(activity),
         jobRunner: createJobRunner({ clock: CLOCK, bus: createEventBus() }),
-        tmpDir: "/tmp",
         jobMaxBytes: 1_000_000,
         folderSize: {
           indexQueries: { subtreeSize: async () => ({ bytes: 0, files: 0 }) },

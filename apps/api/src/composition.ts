@@ -854,7 +854,6 @@ export async function composeApp(
       const fsRoutesDeps = {
         activity: personalActivity,
         jobRunner,
-        tmpDir: config.fdriveTmpDir,
         jobMaxBytes: config.fdriveJobMaxBytes,
         archivePeekMaxBytes: config.fdriveArchivePeekMaxBytes,
         jsonMaxBytes: config.fdriveJsonMaxBytes,

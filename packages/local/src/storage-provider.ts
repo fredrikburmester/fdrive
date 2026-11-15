@@ -4,6 +4,7 @@ import { constants, createReadStream } from "node:fs";
 import {
   copyFile,
   cp,
+  type FileHandle,
   link,
   lstat,
   mkdir,
@@ -33,6 +34,7 @@ import {
   type MoveOptions,
   makeEntry,
   normalizePath,
+  type OpenFile,
   parentPath,
   StorageError,
   type StorageProvider,
@@ -265,20 +267,70 @@ function hashing(hash: Hash): Transform {
   });
 }
 
-function webStream(stream: Readable): ReadableStream<Uint8Array> {
-  return Readable.toWeb(stream) as unknown as ReadableStream<Uint8Array>;
+/**
+ * How much of a file a stream reads at a time: few enough reads that a
+ * large download costs little more than the disk and the socket.
+ */
+const STREAM_CHUNK = 1024 * 1024;
+
+/** Reads up to `length` bytes at `position` into a new buffer: fewer only at the end of the file. */
+async function readAt(handle: FileHandle, position: number, length: number): Promise<Buffer> {
+  const buffer = Buffer.allocUnsafe(length);
+  let filled = 0;
+  while (filled < length) {
+    const { bytesRead } = await handle.read(buffer, filled, length - filled, position + filled);
+    if (bytesRead === 0) break;
+    filled += bytesRead;
+  }
+  return buffer.subarray(0, filled);
 }
 
 /**
- * Whether a range request still applies under `ifRange`. fdrive sends no
- * ETag for this storage, only `Last-Modified`, so an entity tag never
- * matches and a date matches when it names the file's current second.
+ * The file `handle` opened at `path`, as `info` describes it: reads stop at
+ * the size it had then, and its stream closes it once it ends, fails or is
+ * cancelled.
  */
-function rangeApplies(ifRange: string | undefined, modifiedAt: Date): boolean {
-  if (ifRange === undefined) return true;
-  if (ifRange.startsWith('"') || ifRange.startsWith("W/")) return false;
-  const date = Date.parse(ifRange);
-  return !Number.isNaN(date) && Math.floor(date / 1000) === Math.floor(modifiedAt.getTime() / 1000);
+function openFile(handle: FileHandle, info: BigIntStats, path: string): OpenFile {
+  const size = Number(info.size);
+  let closing: Promise<void> | undefined;
+  const close = () => {
+    closing ??= handle.close();
+    return closing;
+  };
+  /** At most `length` bytes from `position`, none past `size`. */
+  const within = (position: number, length: number) =>
+    Math.max(0, Math.min(length, size - position));
+  return {
+    size,
+    modifiedAt: info.mtime,
+    read: (position, length) =>
+      mapped(path, () => readAt(handle, position, within(position, length))),
+    stream(start = 0, end = size - 1) {
+      let position = start;
+      return new ReadableStream<Uint8Array>({
+        async pull(controller) {
+          try {
+            const chunk = await readAt(
+              handle,
+              position,
+              within(position, Math.min(STREAM_CHUNK, end + 1 - position)),
+            );
+            position += chunk.length;
+            if (chunk.length > 0) controller.enqueue(chunk);
+            if (chunk.length === 0 || position > end) {
+              await close();
+              controller.close();
+            }
+          } catch (error) {
+            await close();
+            throw toStorageError(error, path);
+          }
+        },
+        cancel: close,
+      });
+    },
+    close,
+  };
 }
 
 /**
@@ -377,8 +429,8 @@ export function createLocalStorage(options: LocalStorageOptions): LocalStorage {
         }
       }),
 
-    // Opened as `download` opens it, so it fails as a download would and
-    // describes the file a download would read; none of it is read.
+    // Opened as `open` opens it, so it fails as `open` would and describes
+    // the file `open` would read; none of it is read.
     contentStamp: (path) =>
       mapped(path, async () => {
         const handle = await open(await entry(path), READ_FLAGS);
@@ -402,37 +454,13 @@ export function createLocalStorage(options: LocalStorageOptions): LocalStorage {
       return info;
     },
 
-    download: (path, opts) =>
+    open: (path) =>
       mapped(path, async () => {
-        const signal = opts?.signal;
-        if (signal?.aborted === true) throw aborted(signal);
         const handle = await open(await entry(path), READ_FLAGS);
         try {
           const info = await handle.stat({ bigint: true });
           if (!info.isFile()) throw new StorageError("bad_request", `not a file: ${path}`);
-          const total = Number(info.size);
-          const range = opts?.range;
-          const end = range === undefined ? total - 1 : Math.min(range.end ?? total - 1, total - 1);
-          const ranged =
-            range !== undefined &&
-            range.start < total &&
-            end >= range.start &&
-            rangeApplies(opts?.ifRange, info.mtime);
-          const start = ranged ? range.start : 0;
-          const length = ranged ? end - start + 1 : total;
-          const stream =
-            length === 0
-              ? Readable.from([])
-              : handle.createReadStream({ start, end: start + length - 1 });
-          if (length === 0) await handle.close();
-          if (signal !== undefined) addAbortSignal(signal, stream);
-          return {
-            status: ranged ? 206 : 200,
-            body: webStream(stream),
-            contentLength: length,
-            contentRange: ranged ? `bytes ${start}-${end}/${total}` : null,
-            lastModified: info.mtime,
-          };
+          return openFile(handle, info, path);
         } catch (error) {
           await handle.close();
           throw error;

@@ -1038,13 +1038,13 @@ export function createDesktopWrites(deps: DesktopWriteDeps) {
     capabilities,
     decorate,
     files: {
-      async content(principal: Principal, path: string, signal: AbortSignal) {
-        if (!isUnderPath(DESKTOP_TRASH, path)) return files.content(principal, path, signal);
+      async content(principal: Principal, path: string) {
+        if (!isUnderPath(DESKTOP_TRASH, path)) return files.content(principal, path);
         const physical = await inUserTrash(principal, path);
         const entry = await trashedEntry(principal, physical);
         if (entry.kind !== "file")
           throw new ApiHttpError("bad_request", "Only files can be downloaded");
-        return runStorageCall(() => principal.storage.download(physical, { signal }));
+        return runStorageCall(() => principal.storage.open(physical));
       },
       async versions(principal: Principal, paths: string[], signal: AbortSignal) {
         // Every file outside Trash in one call, so their index rows come in one lookup.

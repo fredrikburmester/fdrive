@@ -75,7 +75,7 @@ function operations(storage: StorageProvider, path: string, file: string) {
     stat: () => storage.stat(path),
     statFile: () => storage.statFile(path),
     list: () => storage.list(path),
-    download: () => storage.download(path),
+    open: () => storage.open(path),
     contentStamp: () => storage.contentStamp(path),
     probeDirectoryRead: () => storage.probeDirectoryRead(path),
     upload: () => storage.upload(path, bytes("x"), { overwrite: true }),

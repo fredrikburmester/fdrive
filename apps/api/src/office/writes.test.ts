@@ -118,7 +118,7 @@ describe("PutFile", () => {
     });
     expect(response.status).toBe(200);
     expect(response.headers.get("X-WOPI-ItemVersion")).toBeTruthy();
-    expect(await new Response((await h.storage.download("/a.docx")).body).text()).toBe("new");
+    expect(await new Response((await h.storage.open("/a.docx")).stream()).text()).toBe("new");
   });
   it("allows an empty unlocked target but forbids view writes", async () => {
     const h = await officeHarness();
@@ -246,7 +246,7 @@ describe("PutRelative", () => {
     const id = target.pathname.split("/").at(-1) ?? "";
     const token = target.searchParams.get("access_token") ?? "";
     expect((await h.app.request(h.signedRequest(id, token))).status).toBe(200);
-    expect(await new Response((await h.storage.download("/a.docx")).body).text()).toBe("hello");
+    expect(await new Response((await h.storage.open("/a.docx")).stream()).text()).toBe("hello");
   });
   it("sanitizes suggested names and decodes UTF7", async () => {
     const h = await officeHarness();
@@ -530,7 +530,7 @@ it("refuses a chunked oversized save without touching the document", async () =>
     }),
   });
   expect(response.status).toBe(413);
-  expect(await new Response((await h.storage.download("/a.docx")).body).text()).toBe("hello");
+  expect(await new Response((await h.storage.open("/a.docx")).stream()).text()).toBe("hello");
 });
 
 it("keeps lock work on the scope, ensures on its own and moves the document with its file", async () => {
@@ -633,7 +633,7 @@ it("saves a queued PUT to the current registry path after an earlier rename", as
   release.resolve();
   expect((await renamed).status).toBe(200);
   expect((await saved).status).toBe(200);
-  expect(await new Response((await h.storage.download("/renamed.docx")).body).text()).toBe(
+  expect(await new Response((await h.storage.open("/renamed.docx")).stream()).text()).toBe(
     "queued edit",
   );
   await expect(h.storage.statFile("/a.docx")).rejects.toThrow();
@@ -713,7 +713,7 @@ it.each(["RENAME_FILE", "PUT_RELATIVE"])(
     });
     expect(response.status).toBe(200);
     const target = override === "RENAME_FILE" ? "/folder/final.DOCX" : "/folder/copy.docx";
-    expect(await new Response((await h.storage.download(target)).body).text()).toBe(
+    expect(await new Response((await h.storage.open(target)).stream()).text()).toBe(
       override === "RENAME_FILE" ? "hello" : "copied",
     );
     await expect(h.storage.statFile("/a.docx")).rejects.toThrow();
@@ -864,7 +864,7 @@ describe("editor writes in personal history", () => {
       ).status,
     ).toBe(403);
     expect(h.activity.operations.map((row) => row.action)).toEqual(["file.open"]);
-    expect(await new Response((await h.storage.download("/a.docx")).body).text()).toBe("hello");
+    expect(await new Response((await h.storage.open("/a.docx")).stream()).text()).toBe("hello");
   });
 });
 
@@ -912,5 +912,5 @@ it("saves different documents side by side and one document's saves in turn", as
   expect((await first).status).toBe(200);
   expect((await second).status).toBe(200);
   expect(log.slice(3)).toEqual(["end /a.docx", "start /a.docx", "end /a.docx"]);
-  expect(await new Response((await h.storage.download("/a.docx")).body).text()).toBe("second");
+  expect(await new Response((await h.storage.open("/a.docx")).stream()).text()).toBe("second");
 });

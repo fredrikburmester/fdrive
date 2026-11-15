@@ -89,7 +89,7 @@ describe("createUserStorage", () => {
     const alone = createUserStorage({ home: join(root, "bob"), shared: async () => [] });
     expect((await alone.list("/")).map((entry) => entry.name)).toEqual(["own.txt"]);
     expect(await alone.list(`/${SHARED_WITH_ME}`)).toEqual([]);
-    expect(await kindOf(alone.download(`/${SHARED_WITH_ME}/mine.txt`))).toBe("not_found");
+    expect(await kindOf(alone.open(`/${SHARED_WITH_ME}/mine.txt`))).toBe("not_found");
     for (const change of [
       alone.upload(`/${SHARED_WITH_ME}/new.txt`, bytes("x")),
       alone.mkdir(`/${SHARED_WITH_ME}`),
@@ -168,7 +168,7 @@ describe("createUserStorage", () => {
     expect(await kindOf(bob.list(`/${SHARED_WITH_ME}/Nope`))).toBe("not_found");
     expect(await kindOf(bob.stat(`/${SHARED_WITH_ME}/Nope/x`))).toBe("not_found");
     expect(await kindOf(bob.statFile(`/${SHARED_WITH_ME}`))).toBe("bad_request");
-    expect(await kindOf(bob.download(`/${SHARED_WITH_ME}`))).toBe("bad_request");
+    expect(await kindOf(bob.open(`/${SHARED_WITH_ME}`))).toBe("bad_request");
   });
 
   it("refuses a shared folder its owner replaced with a link", async () => {
@@ -196,9 +196,7 @@ describe("createUserStorage", () => {
       ],
     });
     expect(await kindOf(linked.list(`/${SHARED_WITH_ME}/Linked`))).toBe("forbidden");
-    expect(await kindOf(linked.download(`/${SHARED_WITH_ME}/Linked/private.txt`))).toBe(
-      "forbidden",
-    );
+    expect(await kindOf(linked.open(`/${SHARED_WITH_ME}/Linked/private.txt`))).toBe("forbidden");
     expect(await kindOf(linked.list(`/${SHARED_WITH_ME}/Bin link`))).toBe("forbidden");
     expect((await linked.list(`/${SHARED_WITH_ME}`)).map((entry) => entry.name)).toEqual([]);
   });
@@ -206,10 +204,8 @@ describe("createUserStorage", () => {
   it("keeps a shared folder's links unfollowed, even to its own files", async () => {
     await symlink(alice("secret.txt"), alice("Projects", "leak.txt"));
     await symlink(alice("Projects", "brief.txt"), alice("Projects", "brief-link.txt"));
-    expect(await kindOf(bob.download(`/${SHARED_WITH_ME}/Projects/leak.txt`))).toBe("forbidden");
-    expect(await kindOf(bob.download(`/${SHARED_WITH_ME}/Projects/brief-link.txt`))).toBe(
-      "forbidden",
-    );
+    expect(await kindOf(bob.open(`/${SHARED_WITH_ME}/Projects/leak.txt`))).toBe("forbidden");
+    expect(await kindOf(bob.open(`/${SHARED_WITH_ME}/Projects/brief-link.txt`))).toBe("forbidden");
   });
 
   it("writes into a writable shared folder on its owner's disk", async () => {

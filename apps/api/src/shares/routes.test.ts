@@ -10,7 +10,12 @@ import {
 import { StorageError } from "@fdrive/core";
 import type { IndexedFile, IndexQueries } from "@fdrive/db";
 import { describe, expect, it, vi } from "vitest";
-import { resolveDownload } from "../fs/routes.ts";
+import {
+  expectRangeAnswer,
+  RANGE_FILE,
+  rangeCases,
+  rangeHeaders,
+} from "../../test/fixtures/range-cases.ts";
 import type { ScopeResolver } from "../scoping/resolver.ts";
 import type { ThumbFileReader } from "../thumbs/serve.ts";
 import { capByteStream, contentLengthExceeds } from "./routes.ts";
@@ -503,63 +508,23 @@ describe("public shares", () => {
     expect((await metadata(h, id)).unavailableReason).toBe("limit");
   });
 
-  it("answers Range and If-Range exactly as the fs download route does", async () => {
+  it("answers every Range and If-Range as every file route does, and counts only bytes sent", async () => {
     const h = sharesHarness();
+    h.write("/r.txt", RANGE_FILE);
     const cookie = await h.login();
-    const { id } = await h.create(cookie, { maxDownloads: 100 });
+    const { id } = await h.create(cookie, { paths: ["/r.txt"], maxDownloads: 100 });
     const row = await h.shares.get(id);
     if (row === null) throw new Error("missing row");
     const storage = await h.storageFactory(row.identityId);
-    const modified = (await storage.statFile("/a.docx")).modifiedAt;
-    if (modified === null) throw new Error("missing modification time");
-    const earlier = new Date(modified.getTime() - 60_000).toUTCString();
-    const cases: [string | null, string | undefined][] = [
-      [null, undefined],
-      ["bytes=0-4", undefined],
-      ["bytes=6-", undefined],
-      ["bytes=-4", undefined],
-      ["bytes=2-99", undefined],
-      ["bytes=0-1,6-7", "stale-validator"],
-      ["bytes=20-", undefined],
-      ["bytes=4-2", undefined],
-      ["bytes=-0", undefined],
-      ["bytes=4-2,6-7", undefined],
-      ["bytes=0-9007199254740993", undefined],
-      ["nonsense", undefined],
-      ["bytes=0-4", '"an-etag"'],
-      ["bytes=0-4", modified.toUTCString()],
-      ["bytes=0-4", earlier],
-    ];
-    let served = 0;
-    for (const [range, ifRange] of cases) {
-      const label = `${range} / ${ifRange}`;
-      const expected = await resolveDownload(
-        storage,
-        "/a.docx",
-        range,
-        ifRange,
-        new AbortController().signal,
+    const cases = rangeCases((await storage.statFile("/r.txt")).modifiedAt);
+    for (const item of cases) {
+      await expectRangeAnswer(
+        await h.request(`${pub(id)}/download`, { headers: rangeHeaders(item) }),
+        item,
       );
-      const response = await h.request(`${pub(id)}/download`, {
-        headers: {
-          ...(range === null ? {} : { range }),
-          ...(ifRange === undefined ? {} : { "if-range": ifRange }),
-        },
-      });
-      if (expected.kind === "range-not-satisfiable") {
-        expect(response.status, label).toBe(416);
-        expect(response.headers.get("content-range"), label).toBe(`bytes */${expected.size}`);
-        continue;
-      }
-      served++;
-      expect(response.status, label).toBe(expected.result.status);
-      expect(response.headers.get("content-range"), label).toBe(expected.result.contentRange);
-      expect(response.headers.get("content-length"), label).toBe(
-        String(expected.result.contentLength),
-      );
-      expect(await response.text(), label).toBe(await new Response(expected.result.body).text());
     }
     // Every answered request counts once; a 416 never does.
+    const served = cases.filter((item) => item.status !== 416).length;
     expect((await metadata(h, id)).usedDownloads).toBe(served);
   });
 
@@ -899,7 +864,7 @@ describe("public shares", () => {
     const h = sharesHarness({
       local: patchStorage((storage) => ({
         ...storage,
-        download: async () => {
+        open: async () => {
           throw new StorageError("forbidden", "AccessDenied: the owner's key was refused");
         },
       })),

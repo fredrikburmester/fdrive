@@ -99,7 +99,7 @@ describe("desktop version checks answered from the index", () => {
       folder,
     });
     const storage: StorageProvider = { ...(await storageFactory(alice.id)) };
-    const download = vi.spyOn(storage, "download");
+    const opened = vi.spyOn(storage, "open");
 
     // What the indexer records after reading each file once it had settled.
     const indexRoot = { id: INDEX_ROOT_ID };
@@ -150,7 +150,7 @@ describe("desktop version checks answered from the index", () => {
       { path: "/report.txt", size: 10, version: CLAIMED },
       { path: shared, size: 4, version: CLAIMED },
     ]);
-    expect(download).not.toHaveBeenCalled();
+    expect(opened).not.toHaveBeenCalled();
 
     // Other bytes of the same length, with the old modification time put back: only the
     // change time tells, and the file is read.
@@ -160,11 +160,11 @@ describe("desktop version checks answered from the index", () => {
       { path: "/report.txt", size: 10, version: sha("the ripost") },
       { path: shared, size: 4, version: CLAIMED },
     ]);
-    expect(download).toHaveBeenCalledTimes(1);
+    expect(opened).toHaveBeenCalledTimes(1);
 
     // Without its row, the file is read.
     await db.delete(schema.files).where(eq(schema.files.id, cat));
     expect(await versions([shared])).toEqual([{ path: shared, size: 4, version: sha("meow") }]);
-    expect(download).toHaveBeenCalledTimes(2);
+    expect(opened).toHaveBeenCalledTimes(2);
   });
 });

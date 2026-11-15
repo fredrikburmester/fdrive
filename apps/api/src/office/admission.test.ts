@@ -184,7 +184,7 @@ it.each(["PUT", "PUT_RELATIVE"])(
     release?.();
     expect((await response).status).toBe(403);
     expect(upload).toHaveBeenCalledOnce();
-    expect(await new Response((await h.storage.download("/a.docx")).body).text()).toBe("hello");
+    expect(await new Response((await h.storage.open("/a.docx")).stream()).text()).toBe("hello");
     await expect(h.storage.statFile("/copy.docx")).rejects.toMatchObject({ kind: "not_found" });
   },
 );

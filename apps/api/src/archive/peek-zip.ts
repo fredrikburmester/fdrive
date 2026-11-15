@@ -4,7 +4,7 @@ import { buildPeekEntry, type PeekEntry } from "./peek-entry.js";
 /**
  * A zip's central directory, located from its end-of-central-directory
  * record: where it starts and how many bytes it spans. `size` and `offset`
- * are the only fields the route needs (to issue its second Range read and
+ * are the only fields the route needs (to issue its second read and
  * to know how many bytes to expect back).
  */
 export interface ZipCentralDirectoryLocation {
@@ -63,7 +63,7 @@ function findEocdSignature(tail: Buffer): number | null {
  * `null` when no EOCD signature is found, the record itself is truncated,
  * or a ZIP64 record is indicated but does not fall entirely inside `tail`:
  * this function never issues a second read to fetch it, matching the
- * route's fixed two-Range-read budget.
+ * route's fixed budget of two reads.
  */
 export function locateZipCentralDirectory(
   tail: Buffer,
@@ -146,7 +146,7 @@ function readZip64UncompressedSize(extra: Buffer, fallback: number): number {
 
 /**
  * Parses every central directory file header in `buffer` (exactly the
- * bytes the route's second Range read fetched, i.e. no leading or trailing
+ * bytes the route's second read fetched, i.e. no leading or trailing
  * bytes outside the central directory itself) into `PeekEntry` values:
  * decodes each name per its UTF-8 general-purpose flag, reads its real
  * size from the ZIP64 extra field when the fixed field overflowed, and

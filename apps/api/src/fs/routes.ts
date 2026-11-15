@@ -31,7 +31,6 @@ import {
   isStorageError,
   mimeFromExtension,
   normalizePath,
-  parseRangeHeader,
   type StorageError,
   type StorageProvider,
 } from "@fdrive/core";
@@ -49,6 +48,7 @@ import type { JobRunner } from "../jobs/runner.js";
 import type { MetadataService } from "../metadata/service.js";
 import { registerArchiveRoutes } from "./archive-routes.js";
 import { type FolderSizeRoutesDeps, registerFolderSizeRoutes } from "./folder-size.js";
+import { sendFile } from "./send-file.js";
 
 const API_PREFIX = "/api/v1";
 
@@ -63,8 +63,6 @@ export interface FsRoutesDeps {
   /** Every change these routes make to files, and what follows it. */
   readonly files: FileOperations;
   readonly jobRunner: JobRunner;
-  /** Directory archive jobs spool temp files into. */
-  readonly tmpDir: string;
   /** Total bytes a single extract job may read before it fails. */
   readonly jobMaxBytes: number;
   /**
@@ -203,134 +201,34 @@ export function statEntry(storage: StorageProvider, path: string): Promise<Entry
   return runStorageCall(() => storage.stat(path));
 }
 
-interface DownloadCallOpts {
-  range?: { start: number; end?: number };
-  signal?: AbortSignal;
-  ifRange?: string;
-}
-
-function buildDownloadOpts(
-  ifRangeHeader: string | undefined,
-  signal: AbortSignal,
-  range?: { start: number; end?: number },
-): DownloadCallOpts {
-  const opts: DownloadCallOpts = { signal };
-  if (ifRangeHeader !== undefined) {
-    opts.ifRange = ifRangeHeader;
-  }
-  if (range !== undefined) {
-    opts.range = range;
-  }
-  return opts;
-}
-
-type DownloadResult = Awaited<ReturnType<StorageProvider["download"]>>;
-
-export type DownloadOutcome =
-  | { kind: "stream"; result: DownloadResult }
-  | { kind: "range-not-satisfiable"; size: number | null };
-
-/**
- * Resolves a download request (`/fs/download`, a public share's) into
- * either a stream to return, or a "range not satisfiable" outcome (416).
- * When a `Range` header is present, opportunistically stats the file first
- * to know its size (used to validate the range and, on an invalid range,
- * to report it in the 416's `Content-Range`); a failed stat here is not
- * surfaced, since the subsequent `download` call below will raise the real
- * error itself. Storage errors are left to the caller to map.
- */
-export async function resolveDownload(
-  storage: StorageProvider,
-  path: string,
-  rangeHeader: string | null,
-  ifRangeHeader: string | undefined,
-  signal: AbortSignal,
-): Promise<DownloadOutcome> {
-  if (rangeHeader === null) {
-    const result = await storage.download(path, buildDownloadOpts(ifRangeHeader, signal));
-    return { kind: "stream", result };
-  }
-
-  let knownSize: number | null = null;
-  try {
-    knownSize = (await storage.statFile(path)).size;
-  } catch {
-    knownSize = null;
-  }
-
-  const parsed = parseRangeHeader(rangeHeader, knownSize);
-  if (parsed.kind === "invalid") {
-    return { kind: "range-not-satisfiable", size: knownSize };
-  }
-  if (parsed.kind === "multiple") {
-    const result = await storage.download(path, { signal });
-    return { kind: "stream", result };
-  }
-
-  // `rangeHeader` is non-null here, so `parseRangeHeader` cannot have
-  // returned its "none" variant (that only happens for a null header), and
-  // the unsupported multi-range case returned the complete response above.
-  const single = parsed as Extract<typeof parsed, { kind: "single" }>;
-  const range =
-    single.end !== undefined ? { start: single.start, end: single.end } : { start: single.start };
-  const result = await storage.download(path, buildDownloadOpts(ifRangeHeader, signal, range));
-  return { kind: "stream", result };
-}
-
 async function handleDownload(c: FsContext, deps: FsRoutesDeps): Promise<Response> {
   const principal = c.get("principal");
   const query = parseQuery(DownloadQuery, c.req.query());
   const path = normalizeOrThrow(query.path);
-  const rangeHeader = c.req.header("range") ?? null;
-  const ifRangeHeader = c.req.header("if-range");
-
-  const outcome = await runStorageCall(() =>
-    resolveDownload(principal.storage, path, rangeHeader, ifRangeHeader, c.req.raw.signal),
-  );
-
-  if (outcome.kind === "range-not-satisfiable") {
-    const headers: Record<string, string> =
-      outcome.size !== null ? { "Content-Range": `bytes */${outcome.size}` } : {};
-    return c.body(null, 416, headers);
-  }
-
-  const result = outcome.result;
+  const file = await runStorageCall(() => principal.storage.open(path));
   const mime = mimeFromExtension(extensionOf(baseName(path))) ?? "application/octet-stream";
   const inline = query.inline === "1" && isInlinePreviewable(mime);
-  const disposition = contentDisposition(inline ? "inline" : "attachment", baseName(path));
-
-  const headers: Record<string, string> = {
+  const headers = {
     "Content-Type": mime,
-    "Content-Length": String(result.contentLength),
-    "Last-Modified": result.lastModified.toUTCString(),
-    "Accept-Ranges": "bytes",
     "Cache-Control": "private, no-store",
-    "Content-Disposition": disposition,
+    "Content-Disposition": contentDisposition(inline ? "inline" : "attachment", baseName(path)),
     "Content-Security-Policy": "sandbox",
   };
-  if (result.contentRange !== null) {
-    headers["Content-Range"] = result.contentRange;
-  }
-
-  if (c.req.method === "HEAD") {
-    await result.body.cancel();
-    return c.body(null, result.status, headers);
-  }
-
   // Inline bytes back a preview the browser decides to fetch; the explicit
   // preview gesture is reported separately. Anything served as an attachment
   // is bytes the person asked for, and only reaching EOF proves they were
   // delivered.
+  if (inline) return sendFile(c.req.raw, file, headers);
   const context = activityRequestContext(c);
-  const body = inline
-    ? result.body
-    : await activityStream(deps.activity, principal, path, "file.download", result.body, {
+  return sendFile(c.req.raw, file, headers, {
+    body: (bytes, sent) =>
+      activityStream(deps.activity, principal, path, "file.download", bytes, {
         ...(context.producerOperationId ? { requestId: context.producerOperationId } : {}),
         source: context.source === "api" ? "api" : "web",
-        partial: result.status === 206,
-        expectedBytes: result.contentLength,
-      });
-  return c.body(body, result.status, headers);
+        partial: sent.partial,
+        expectedBytes: sent.length,
+      }),
+  });
 }
 
 /**
