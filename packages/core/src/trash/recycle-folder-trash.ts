@@ -39,23 +39,46 @@ function leafNameFor(at: Date): string {
 
 /**
  * Moves the file or folder at `path` in `storage` into its Trash at
- * `TRASH_PATH`, at the leaf `moveTrashLeafPath` builds for `at`. The move
- * refuses a taken leaf (`overwrite: false`), so an item never replaces an
- * earlier one. The root and fdrive's own folders, Trash included, are
- * refused: deleting inside Trash is a permanent delete.
+ * `TRASH_PATH`, at the leaf `moveTrashLeafPath` builds for `originalPath`
+ * and `at`. The move refuses a taken leaf (`overwrite: false`), so an item
+ * never replaces an earlier one. The root and fdrive's own folders, Trash
+ * included, are refused as the original path: deleting inside Trash is a
+ * permanent delete.
  */
-async function moveIntoTrash(storage: Storage, path: string, at: Date): Promise<TrashedItem> {
-  const normalized = normalizePath(path);
-  if (normalized === "/" || isReservedPath(normalized)) {
-    throw new StorageError("bad_request", `fdrive's own folders cannot go to Trash: ${path}`, {
-      details: { path },
+async function moveIntoTrash(
+  storage: Storage,
+  path: string,
+  at: Date,
+  originalPath = path,
+): Promise<TrashedItem> {
+  const original = normalizePath(originalPath);
+  if (original === "/" || isReservedPath(original)) {
+    throw new StorageError("bad_request", `fdrive's own folders cannot go to Trash: ${original}`, {
+      details: { path: original },
     });
   }
+  const normalized = normalizePath(path);
   const kind = (await storage.stat(normalized)).kind === "dir" ? "dir" : "file";
-  const leaf = moveTrashLeafPath(TRASH_PATH, normalized, kind, leafNameFor(at));
+  const leaf = moveTrashLeafPath(TRASH_PATH, original, kind, leafNameFor(at));
   await storage.mkdir(parentPath(leaf), { parents: true });
   await storage.move(normalized, leaf, { overwrite: false });
   return { leaf, kind };
+}
+
+/**
+ * Moves what fdrive kept at `path`, in one of its own folders, into
+ * `storage`'s Trash as an item deleted from `originalPath` at `at`, so Trash
+ * lists, restores and expires it like any other. FDrive for Mac kept a Trash
+ * of its own before Finder's Trash became fdrive's; its items come over this
+ * way.
+ */
+export function adoptIntoTrash(
+  storage: StorageWithoutTrash,
+  path: string,
+  originalPath: string,
+  at: Date,
+): Promise<TrashedItem> {
+  return moveIntoTrash(storage, path, at, originalPath);
 }
 
 function checkAborted(signal: AbortSignal | undefined): void {

@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { and, asc, eq, inArray, isNull, like, lt, or, sql } from "drizzle-orm";
+import { and, asc, eq, inArray, isNotNull, isNull, like, lt, or, sql } from "drizzle-orm";
 import type { Db } from "../index.js";
 import { desktopItems, desktopOperations } from "../schema/app.js";
 import {
@@ -62,6 +62,12 @@ export interface DesktopRepo {
   ): Promise<DesktopItemRecord>;
   move(identityId: string, from: string, to: string): Promise<void>;
   remove(identityId: string, path: string): Promise<void>;
+  /**
+   * What the Mac's own Trash held, before Finder's Trash became fdrive's: the
+   * items at the top of `/.fdrive-desktop/<identity>/trash`, each with the
+   * path it was deleted from, for every identity.
+   */
+  oldTrash(): Promise<(DesktopItemRecord & { originalPath: string })[]>;
   reserve(
     input: Pick<
       DesktopOperationRecord,
@@ -259,6 +265,18 @@ export function createDesktopRepo(db: Db): DesktopRepo {
           .set({ deletedAt: new Date() })
           .where(and(live(identityId), prefix(path)));
       });
+    },
+    async oldTrash() {
+      return (await db
+        .select()
+        .from(desktopItems)
+        .where(
+          and(
+            isNull(desktopItems.deletedAt),
+            isNotNull(desktopItems.originalPath),
+            like(desktopItems.path, "/.fdrive-desktop/%"),
+          ),
+        )) as (DesktopItemRecord & { originalPath: string })[];
     },
     async reserve(input) {
       await db.transaction(async (tx) => {

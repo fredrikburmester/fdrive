@@ -38,7 +38,8 @@ Opening a package can read multiple files. The extension supplies generic file t
 No app search or remote search is implemented; macOS may index metadata it already knows.
 
 Read-only locations display **Locked** in TextEdit. Writable locations support file saves,
-new files/folders, rename, moves and recoverable Finder Trash within the location.
+new files/folders, rename, moves and Finder's Trash, which is the user's fdrive
+[Trash](#trash).
 See [write configuration and recovery](#write-configuration-and-recovery) before enabling writes.
 
 The app appears in the Dock and Command-Tab while its locations window is open, including
@@ -229,7 +230,9 @@ operation still `committing` with no commit running reads the outcome: the targe
 recorded inode, so the write was published and its receipt is kept now; the staging file (or the
 source) still holds it, so nothing was published and the operation is `ready` to commit again;
 neither holds it, because someone replaced or moved the item since, so it is a `conflict`, which
-the Mac app already handles, and nothing is overwritten. Every Mac retry starts with the same
+the Mac app already handles, and nothing is overwritten. A move to Trash records whose Trash
+takes the item instead of where it goes, since Trash picks the place; its retry finds the item
+there by the path it was deleted from and its inode. Every Mac retry starts with the same
 prepare request, so that is where an interrupted commit ends. A staged body that is gone is
 asked for again (the operation returns to `receiving`).
 
@@ -244,11 +247,11 @@ never republishes the file; acknowledging only marks the operation done.
 **Metadata.** Once the receipt is kept, the commit brings the rest of path-keyed metadata along
 through the service web writes use, as web writes do right after their storage call
 ([writes.ts](../apps/api/src/desktop/writes.ts), `follow`): tags, favorites, folder
-views, recents, AI chat references and Office files follow a move. Into the Mac's Trash and
-back out is a move too: everything follows the item into `/.fdrive-desktop/<identity>/trash`,
-which no list, link or share reaches, so nothing new at its old path inherits it, and comes back
-with a restore, as for fdrive's Trash. The Mac's item handles are the commit's own; this step
-never touches them. A new write never waits for an earlier one's metadata.
+views, recents, AI chat references and Office files follow a move. Into Trash and back out is a
+move too, as on the web: everything follows the item into Trash, which no list, link or share
+reaches, so nothing new at its old path inherits it, and comes back with a restore. The Mac's
+item handles are the commit's own; this step never touches them. A new write never waits for an
+earlier one's metadata.
 
 None of that step grants access, so a failure there is logged and never fails the commit: the
 file is published and its receipt answers, and what could not follow stays where it was. The web
@@ -280,16 +283,6 @@ three times before the error stands. `failOnConflict` retains the local edit wit
 **Show recovery files** opens pending contents and a readable operation/error list. Never erase
 that directory to clear a synchronization error.
 
-Finder **Move to Trash** reparents through the native Trash container. In the app's location
-menu, **Restore from Trash…** lists retained files and folders. **Restore** returns an item to
-the top level of that location; move it into another folder afterwards if needed. Recovery
-names include a short ID while keeping
-the file extension; restore removes that suffix and refuses an occupied destination. Files,
-nested folders and empty folders retain their server handles. Trash survives disconnect and
-reconnect because the server retains its original-path mapping. Finder **Put Back** is not
-available. Permanent-delete callbacks reject the request and ask macOS to restore the local
-item; no desktop purge endpoint exists, even if Finder displays Delete Immediately or Empty.
-
 Moving a folder into its own descendant is refused natively before any pending record exists
 and again by the server at commit. A system reimport (`mayAlreadyExist`) acknowledges an
 existing remote item of the same name and kind when the local bytes match its verified
@@ -298,9 +291,41 @@ absent bytes never replace remote content.
 Catalog v3 preserves existing local IDs, tracks server handles, pending writes and both sides
 of parent changes. Acknowledged folder moves retain cached descendants. Refresh skips pending
 items. Own saves retain the editor's timestamp independently of canonical remote versions.
-Native permanent deletion, general safe-save temporary-file cleanup, symlinks, atomic package
-writes, resource forks and cross-domain move guarantees are not supported. The complete
+General safe-save temporary-file cleanup, symlinks, atomic package writes, resource forks and
+cross-domain move guarantees are not supported. The complete
 [write acceptance plan](plans/MACOS-WRITES.md) remains open.
+
+### Trash
+
+A location's Trash in Finder is its user's fdrive [Trash](TRASH.md): what Finder trashes the web
+app's Trash page lists, what the web deletes Finder's Trash shows, and **Days in Trash** deletes
+each item for good, whoever deleted it. Finder names each item with a short ID that keeps it
+apart from others of the same name, and keeps its extension: `notes (deleted 1a2b3c4d).txt`.
+An item keeps its handle into Trash and back out, and so keeps its downloaded contents.
+
+- **Move to Trash** moves the item to Trash (`trash.put`). In a folder shared with you it goes to
+  its owner's Trash, as on the web: Finder's Trash shows it until its next refresh, then only the
+  owner has it.
+- **Delete Immediately**, or an app deleting a file in the location, also moves it to Trash
+  rather than deleting it, so it stays recoverable for Days in Trash: Finder shows it in Trash.
+- **Empty Trash**, or deleting an item in Finder's Trash, deletes it for good (`POST /purges`),
+  as **Delete permanently** does on the web. Only a whole item in Trash is deleted that way;
+  deleting something inside a trashed folder is refused.
+- **Restore from Trash…** in the app's location menu lists Trash, and **Restore** returns an
+  item to the top level of the location; dragging an item out of Finder's Trash restores it
+  where it is dropped. A restore takes back the item's own name and refuses an occupied
+  destination. Finder **Put Back** is not available.
+
+A delete Finder asks for never fails in a way macOS retries: one that would take a write this
+Mac has not finished along, one the server refuses, and one made offline put the item back, in
+Trash or where it was (File Provider's rejected deletion, with the item as it now stands). A
+move to Trash, Finder's or a delete's, waits for every write inside the item, a new item's too.
+FDrive for Mac 0.5 and earlier refuse every permanent delete in the app itself, without asking
+the server, and macOS retries those deletes until the app is updated.
+
+Earlier servers kept a separate Mac Trash in `/.fdrive-desktop/<identity>/trash`. When the API
+starts, it moves what that Trash still holds into each user's Trash, as deleted then; see
+[upgrading](TRASH.md#upgrading-from-a-trash-with-settings).
 
 ## Build and verify
 
@@ -382,6 +407,7 @@ Desktop protocol v1 lives at `/api/v1/desktop`; contracts are in
 | `GET /entry?path=` | Current entry, from one stat; a path through a symbolic link is refused |
 | `GET /content?path=` | Original streamed bytes; no MCP size cap |
 | `POST /versions` | Content versions (sha256) of up to 16 authorized files for cache validation, from the index where it provably holds them |
+| `POST /purges` | Protocol 2, full access: `{ itemId }` deletes a whole item in the user's own Trash for good; an item gone already answers `ok`, anything else 409 |
 | `POST /disconnect` | Revoke this bearer only |
 
 Every route refuses a bearer it does not accept with 401. For a well-formed desktop credential the

@@ -13,13 +13,18 @@ import type {
   DesktopWriteEntry,
 } from "@fdrive/contracts";
 import {
+  baseName,
   type ContentStamp,
   isStorageError,
   isUnderPath,
   normalizePath,
   parentPath,
+  parseMoveTrashLeaf,
+  relativeTo,
   StorageError,
   type StorageProvider,
+  TRASH_PATH,
+  trashLeafPath,
 } from "@fdrive/core";
 import type {
   DesktopAccessMove,
@@ -32,6 +37,7 @@ import type { Principal } from "../auth/principal.js";
 import { ApiHttpError } from "../errors.js";
 import { runStorageCall } from "../fs/routes.js";
 import type { MetadataService } from "../metadata/service.js";
+import { followIntoTrash, type OwnerPath } from "../metadata/trash.js";
 import {
   createDesktopFiles,
   DESKTOP_INTERNAL_ROOT,
@@ -59,13 +65,55 @@ const ALL_WRITES: DesktopWriteCapabilities = {
   trash: true,
   restore: true,
 };
+/**
+ * Its user's Trash as the Mac sees it, each item named by its handle:
+ * `<this>/<handle>` for an item, then paths inside it. Shipped Mac apps
+ * list, read and restore it here.
+ */
 export const DESKTOP_TRASH = `${DESKTOP_INTERNAL_ROOT}/trash`;
+/** The most items the Mac's Trash lists. */
+const TRASH_LIMIT = 100_000;
+/** Whether `path` lies in its user's Trash: an item there, or something inside one. */
+const inTrash = (path: string) => isUnderPath(TRASH_PATH, path);
+/** The Trash item `path` is or lies in (the leaf `trash.put` made), or null outside Trash. */
+function leafOf(path: string): string | null {
+  if (!inTrash(path)) return null;
+  const segments = path.split("/");
+  for (let end = 3; end <= segments.length; end++) {
+    const prefix = segments.slice(0, end).join("/");
+    if (parseMoveTrashLeaf(TRASH_PATH, prefix)) return prefix;
+  }
+  return null;
+}
+/** The path a Trash item's leaf was deleted from. */
+const deletedFrom = (leaf: string) =>
+  (parseMoveTrashLeaf(TRASH_PATH, leaf) as { originalPath: string }).originalPath;
+/** Where something in Trash was before it went there, or null outside Trash. */
+function originalOf(path: string) {
+  const leaf = leafOf(path);
+  return leaf === null ? null : deletedFrom(leaf) + path.slice(leaf.length);
+}
+/**
+ * A Trash item's name in the Mac's Trash, unique there by its handle, with
+ * its extension kept for Finder and Quick Look. A restore under this name
+ * takes back the original one.
+ */
+function trashName(name: string, id: string) {
+  const dot = name.lastIndexOf(".");
+  // Bound by UTF-8 bytes and retain the extension for Finder/Quick Look.
+  const extensionChars = [...(dot > 0 ? name.slice(dot) : "")];
+  while (Buffer.byteLength(extensionChars.join("")) > 64) extensionChars.pop();
+  const suffix = ` (deleted ${id.slice(0, 8)})${extensionChars.join("")}`;
+  const stem = [...(dot > 0 ? name.slice(0, dot) : name)];
+  while (Buffer.byteLength(stem.join("") + suffix) > 255) stem.pop();
+  return stem.join("") + suffix;
+}
 type Request =
   | (DesktopUploadRequest & { kind: "upload" })
   | (DesktopFolderRequest & { kind: "folder" })
   | (DesktopMoveRequest & { kind: "move" });
 /** The item a write changes, as its commit found it. */
-type Source = Pick<DesktopItemRecord, "id" | "path" | "originalPath" | "kind">;
+type Source = Pick<DesktopItemRecord, "id" | "path" | "kind">;
 /**
  * What a commit publishes, recorded on its operation right before the one
  * storage call that publishes it, so whoever finds the operation still
@@ -74,11 +122,18 @@ type Source = Pick<DesktopItemRecord, "id" | "path" | "originalPath" | "kind">;
 interface Publication {
   /** The staged upload or folder, or the item a move takes. */
   readonly from: string;
-  readonly to: string;
+  /** Null for a move to Trash, whose leaf Trash picks. */
+  readonly to: string | null;
   /** The inode at `from`, which publishing takes to `to`, in decimal. */
   readonly inode: string;
   /** Null for a new item. */
   readonly source: Source | null;
+  /**
+   * For a move to Trash: where the item lies in its owner's files, whose
+   * Trash takes it. That is this login's own, or, in a folder shared with
+   * it, the owner's.
+   */
+  readonly owner?: { readonly identityId: string; readonly path: string };
 }
 export interface DesktopWriteDeps extends Pick<DesktopDeps, "clock" | "indexedContent"> {
   repo: DesktopRepo;
@@ -101,7 +156,18 @@ export interface DesktopWriteDeps extends Pick<DesktopDeps, "clock" | "indexedCo
    * commit keeps the Mac's item handles itself. Absent in fixtures that do
    * not exercise metadata.
    */
-  metadata?: Pick<MetadataService, "onMoved">;
+  metadata?: Pick<MetadataService, "onMoved" | "onDeleted">;
+  /**
+   * Where a path lies in its owner's files (`LocalGrantService.ownerPath`), so
+   * a move to Trash in a folder shared with the login is followed into its
+   * owner's Trash. Absent in fixtures, where every path is the login's own.
+   */
+  ownerPath?: OwnerPath;
+  /**
+   * Deletes the item `id` in a user's Trash for good, the way Delete
+   * permanently does (`purgeTrashItem`).
+   */
+  purge: (principal: Principal, id: string) => Promise<void>;
   /** Hears metadata that could not follow a published write, and bookkeeping left behind. */
   logger?: { warn(obj: Record<string, unknown>, msg: string): void };
 }
@@ -142,18 +208,6 @@ async function entryAt(storage: StorageProvider, path: string) {
   }
 }
 /**
- * Where a recorded publication stands, from disk alone: `to` holds its
- * inode (published), `from` still does (not published), or neither, when
- * something else has happened to it since (lost).
- */
-async function whereIs(storage: StorageProvider, publication: Publication) {
-  const inode = BigInt(publication.inode);
-  if ((await entryAt(storage, publication.to))?.ino === inode) return "published";
-  if ((await entryAt(storage, publication.from))?.ino === inode) return "pending";
-  return "lost";
-}
-
-/**
  * Mac writes. An upload is staged in its owner's files and a commit
  * publishes it with one `rename` (or a `link`, for a new name), so whether
  * a commit published is always on disk: a commit records what it is about
@@ -167,18 +221,35 @@ export function createDesktopWrites(deps: DesktopWriteDeps) {
   /** The commit or settlement under way in this process, per operation. */
   const running = new Map<string, Promise<unknown>>();
   const repo = deps.repo;
-  const trashRoot = (p: Principal) => `${DESKTOP_INTERNAL_ROOT}/${p.identityId}/trash`;
-  const inTrash = (p: Principal, path: string) => isUnderPath(trashRoot(p), path);
-  function trashName(item: DesktopItemRecord) {
-    const name = item.originalPath?.split("/").at(-1) ?? item.path.split("/").at(-1) ?? item.id;
-    const dot = name.lastIndexOf(".");
-    // Bound by UTF-8 bytes and retain the extension for Finder/Quick Look.
-    const extensionChars = [...(dot > 0 ? name.slice(dot) : "")];
-    while (Buffer.byteLength(extensionChars.join("")) > 64) extensionChars.pop();
-    const suffix = ` (deleted ${item.id.slice(0, 8)})${extensionChars.join("")}`;
-    const stem = [...(dot > 0 ? name.slice(0, dot) : name)];
-    while (Buffer.byteLength(stem.join("") + suffix) > 255) stem.pop();
-    return stem.join("") + suffix;
+  const ownerPath: OwnerPath =
+    deps.ownerPath ?? (async (identityId: string, path: string) => ({ identityId, path }));
+  /**
+   * Where a recorded publication stands, from disk alone: `to` holds its
+   * inode (published there), `from` still does (not published), or neither,
+   * when something else has happened to it since (lost). A move to Trash,
+   * whose leaf Trash picked, is published at the leaf in its owner's Trash
+   * that was deleted from the item's place there and holds the inode.
+   */
+  async function whereIs(
+    principal: Principal,
+    publication: Publication,
+  ): Promise<{ at: "published"; to: string } | { at: "pending" | "lost" }> {
+    const inode = BigInt(publication.inode);
+    const holds = async (storage: StorageProvider, path: string) =>
+      (await entryAt(storage, path))?.ino === inode;
+    const { from, to, owner } = publication;
+    if (to !== null && (await holds(principal.storage, to))) return { at: "published", to };
+    if (await holds(principal.storage, from)) return { at: "pending" };
+    if (to === null && owner) {
+      const storage = await deps.storageForIdentity(owner.identityId);
+      const { entries } = await storage.trash.list({ limit: Number.POSITIVE_INFINITY });
+      for (const entry of entries) {
+        const leaf = trashLeafPath(TRASH_PATH, entry.id);
+        if (entry.originalPath === owner.path && (await holds(storage, leaf)))
+          return { at: "published", to: leaf };
+      }
+    }
+    return { at: "lost" };
   }
   /** Writes need a grant of full access, and nothing else. */
   function capabilities(principal: Principal): DesktopWriteCapabilities {
@@ -241,14 +312,14 @@ export function createDesktopWrites(deps: DesktopWriteDeps) {
     if (!(await granted(principal))) revoked();
   }
   async function record(principal: Principal, id: string) {
-    if (id === "trash") return repo.ensure(principal.identityId, trashRoot(principal), "dir");
+    if (id === "trash") throw new ApiHttpError("bad_request", "Trash itself cannot change");
     const result =
       id === "root"
         ? await repo.ensure(principal.identityId, "/", "dir")
         : await repo.item(principal.identityId, id);
     if (!result) throw new ApiHttpError("not_found", "Item no longer exists");
-    await (inTrash(principal, result.path)
-      ? trashEntry(principal, result.path)
+    await (inTrash(result.path)
+      ? trashedEntry(principal, result.path)
       : files.stat(principal, result.path));
     return result;
   }
@@ -259,32 +330,70 @@ export function createDesktopWrites(deps: DesktopWriteDeps) {
   ): Promise<DesktopWriteEntry> {
     return (await decorateMany(principal, [entry], content))[0] as DesktopWriteEntry;
   }
-  /** Registers the entries and their parents in one registry call, parents first. */
+  /**
+   * Registers the entries and their parents in one registry call, and
+   * presents them. Something in Trash is shown in the Mac's Trash, under the
+   * handle of the Trash item it is or lies in; a Trash item's parent is
+   * Trash itself.
+   */
   async function decorateMany(
     principal: Principal,
     entries: readonly DesktopEntry[],
     content?: string,
   ): Promise<DesktopWriteEntry[]> {
-    const rows = await repo.ensureMany(principal.identityId, [
-      ...entries.map(({ path, kind }) => ({ path, kind })),
-      ...entries.map(({ path }) => ({ path: path === "/" ? path : parentPath(path), kind: "dir" })),
-    ]);
-    return entries.map((entry, index) =>
-      present(
+    const parent = (path: string) => (path === "/" ? path : parentPath(path));
+    const rows = new Map(
+      (
+        await repo.ensureMany(
+          principal.identityId,
+          entries.flatMap(({ path, kind }) => {
+            const leaf = leafOf(path);
+            if (leaf === path) return [{ path, kind }];
+            return [
+              { path, kind },
+              { path: parent(path), kind: "dir" },
+              ...(leaf ? [{ path: leaf, kind: "dir" }] : []),
+            ];
+          }),
+        )
+      ).map((row) => [row.path, row]),
+    );
+    const row = (path: string) => rows.get(path) as DesktopItemRecord;
+    return entries.map((entry) => {
+      const item = row(entry.path);
+      const leaf = leafOf(entry.path);
+      if (leaf === entry.path)
+        return present(principal, entry, item, "trash", content, {
+          path: `${DESKTOP_TRASH}/${item.id}`,
+          name: trashName(baseName(deletedFrom(leaf)), item.id),
+        });
+      const above = row(parent(entry.path));
+      return present(
         principal,
         entry,
-        rows[index] as DesktopItemRecord,
-        rows[entries.length + index] as DesktopItemRecord,
+        item,
+        above.path === "/" ? "root" : above.id,
         content,
-      ),
-    );
+        leaf
+          ? {
+              path: `${DESKTOP_TRASH}/${row(leaf).id}${entry.path.slice(leaf.length)}`,
+              name: entry.name,
+            }
+          : undefined,
+      );
+    });
   }
+  /**
+   * The registry's item as the Mac sees it. `shown` is its place in the
+   * Mac's Trash, for something in Trash.
+   */
   function present(
     principal: Principal,
     entry: DesktopEntry,
-    item: DesktopItemRecord,
-    parent: DesktopItemRecord,
+    item: Pick<DesktopItemRecord, "id" | "metadataVersion">,
+    parentId: string,
     content?: string,
+    shown?: { path: string; name: string },
   ): DesktopWriteEntry {
     const metadata = hash([
       item.metadataVersion,
@@ -295,18 +404,12 @@ export function createDesktopWrites(deps: DesktopWriteDeps) {
       // which says nothing about the folder a Finder rename moves.
       entry.kind === "dir" ? null : entry.modifiedAt,
     ]);
-    const trashed = inTrash(principal, entry.path);
+    const trashed = shown !== undefined;
     return {
       ...entry,
-      ...(trashed
-        ? {
-            path: DESKTOP_TRASH + entry.path.slice(trashRoot(principal).length),
-            name: item.originalPath ? trashName(item) : entry.name,
-          }
-        : {}),
+      ...shown,
       id: entry.path === "/" ? "root" : item.id,
-      parentId:
-        parent.path === "/" ? "root" : parent.path === trashRoot(principal) ? "trash" : parent.id,
+      parentId,
       version: { content: content ?? `unverified:${metadata}`, metadata },
       capabilities: entry.readable
         ? trashed
@@ -320,20 +423,43 @@ export function createDesktopWrites(deps: DesktopWriteDeps) {
       trashed,
     };
   }
-  async function trashEntry(principal: Principal, path: string): Promise<DesktopEntry> {
-    const root = trashRoot(principal);
-    if (!isUnderPath(root, path)) throw new ApiHttpError("forbidden", "Invalid recovery path");
-    const top = `${root}/${path.slice(root.length + 1).split("/")[0]}`;
-    const item = await repo.at(principal.identityId, top);
-    const originalPath = item?.originalPath;
-    if (
-      !originalPath ||
-      !principal.tokenAccess?.paths.some(
-        (grant) => grant === originalPath || isUnderPath(grant, originalPath),
-      )
-    )
+  /** Whether this connection's grants reach `path`. */
+  const reaches = (principal: Principal, path: string) =>
+    principal.tokenAccess?.paths.some((root) => root === path || isUnderPath(root, path)) === true;
+  /** The entry at `path` in its user's Trash, where this connection reaches where it was. */
+  async function trashedEntry(principal: Principal, path: string): Promise<DesktopEntry> {
+    const original = originalOf(path);
+    if (original === null) throw new ApiHttpError("not_found", "Item no longer exists");
+    if (!reaches(principal, original))
       throw new ApiHttpError("forbidden", "This connection cannot access the trashed item");
     return storedEntry(principal.storage, path);
+  }
+  /** The path in its user's Trash that a path in the Mac's Trash names. */
+  async function inUserTrash(principal: Principal, path: string) {
+    const [handle = "", ...rest] = path.slice(DESKTOP_TRASH.length + 1).split("/");
+    const item = UUID.test(handle) ? await repo.item(principal.identityId, handle) : null;
+    if (!item || leafOf(item.path) !== item.path)
+      throw new ApiHttpError("not_found", "Item no longer exists");
+    return [item.path, ...rest].join("/");
+  }
+  /** Every item in the user's own Trash this connection reaches, newest first. */
+  async function trashListing(principal: Principal) {
+    const listing = await runStorageCall(() =>
+      principal.storage.trash.list({ limit: TRASH_LIMIT }),
+    );
+    if (listing.truncated) throw new ApiHttpError("rate_limited", "Trash listing capacity reached");
+    const entries: DesktopEntry[] = [];
+    for (const item of listing.entries) {
+      if (!reaches(principal, item.originalPath)) continue;
+      try {
+        entries.push(await storedEntry(principal.storage, trashLeafPath(TRASH_PATH, item.id)));
+      } catch (error) {
+        // Restored or deleted since the listing, or unreadable.
+        if (!(error instanceof ApiHttpError && ["not_found", "forbidden"].includes(error.kind)))
+          throw error;
+      }
+    }
+    return decorateMany(principal, entries);
   }
   async function checkFolder(
     principal: Principal,
@@ -356,11 +482,12 @@ export function createDesktopWrites(deps: DesktopWriteDeps) {
       );
       const parent = rows.get(listing.path);
       if (parent?.kind !== "dir") return "changed";
+      const parentId = parent.path === "/" ? "root" : parent.id;
       const entries: DesktopWriteEntry[] = [];
       for (const entry of listing.entries) {
         const item = rows.get(entry.path);
         if (item?.kind !== entry.kind) return "changed";
-        entries.push(present(principal, entry, item, parent));
+        entries.push(present(principal, entry, item, parentId));
       }
       return listingToken(entries) === folder.token ? "unchanged" : "changed";
     } catch (error) {
@@ -368,10 +495,6 @@ export function createDesktopWrites(deps: DesktopWriteDeps) {
       if (error instanceof ApiHttpError && error.kind === "forbidden") return "forbidden";
       throw error;
     }
-  }
-  function physicalTrashPath(principal: Principal, path: string) {
-    if (!isUnderPath(DESKTOP_TRASH, path)) return null;
-    return trashRoot(principal) + path.slice(DESKTOP_TRASH.length);
   }
   async function unoccupied(
     principal: Principal,
@@ -420,16 +543,12 @@ export function createDesktopWrites(deps: DesktopWriteDeps) {
     save: boolean,
   ): Promise<ContentStamp | null> {
     if (item.path === "/") throw new ApiHttpError("forbidden", "Cannot change the root folder");
-    if (
-      !inTrash(principal, item.path) &&
-      !principal.tokenAccess?.paths.some(
-        (root) => root === item.path || isUnderPath(root, item.path),
-      )
-    )
-      throw new ApiHttpError("forbidden", "Source is outside this connection's grants");
-    const live = inTrash(principal, item.path)
-      ? await trashEntry(principal, item.path)
-      : await files.stat(principal, item.path);
+    const live = inTrash(item.path)
+      ? await trashedEntry(principal, item.path)
+      : reaches(principal, item.path)
+        ? await files.stat(principal, item.path)
+        : null;
+    if (!live) throw new ApiHttpError("forbidden", "Source is outside this connection's grants");
     const current = await decorate(principal, live);
     if (current.version.metadata !== base.metadata)
       fail("version_conflict", "This item changed remotely. Your pending copy is preserved.");
@@ -439,20 +558,20 @@ export function createDesktopWrites(deps: DesktopWriteDeps) {
     if (version !== base.content) fail("version_conflict", CHANGED);
     return stamp;
   }
-  /** What the receipt's history records about a published write. */
+  /** What the receipt's history records about a published write; `to` is a leaf for a trash. */
   function activityFacts(
-    principal: Principal,
     request: Request,
     source: Source | null,
     target: string,
     trashing: boolean,
   ): NativeActivityFacts {
+    const restored = source !== null && inTrash(source.path);
     return {
-      from: source?.originalPath ?? source?.path ?? null,
-      to: trashing ? DESKTOP_TRASH + target.slice(trashRoot(principal).length) : target,
+      from: source ? (originalOf(source.path) ?? source.path) : null,
+      to: target,
       directory: request.kind === "folder" || source?.kind === "dir",
       trash: trashing,
-      ...(source?.originalPath && !trashing ? { restored: true } : {}),
+      ...(restored ? { restored } : {}),
     };
   }
   /**
@@ -460,9 +579,9 @@ export function createDesktopWrites(deps: DesktopWriteDeps) {
    * and its receipt (with what grants access) kept, the way web writes do
    * right after their storage call (`fs/routes.ts`): tags, favorites, folder
    * views, recents, AI chat references and Office files follow a move, into
-   * the Mac's Trash and back out too, as they follow an item into fdrive's
-   * Trash, so nothing new at the old path inherits them. The web hears of
-   * the write from the change journal, as of every other.
+   * Trash and back out too (`followIntoTrash`), so nothing new at the old
+   * path inherits them. The web hears of the write from the change journal,
+   * as of every other.
    *
    * None of this grants access, so a failure is logged rather than failing
    * the commit, whose file is already published; what could not follow stays
@@ -473,11 +592,17 @@ export function createDesktopWrites(deps: DesktopWriteDeps) {
     request: Request,
     source: Source | null,
     target: string,
+    owner: { identityId: string; path: string } | null,
   ) {
     const { identityId } = principal;
     const directory = request.kind === "folder" || source?.kind === "dir";
     try {
-      if (source && source.path !== target)
+      if (source && owner && deps.metadata)
+        await followIntoTrash(deps.metadata, async () => owner, identityId, source.path, {
+          leaf: target,
+          kind: directory ? "dir" : "file",
+        });
+      else if (source && source.path !== target)
         await deps.metadata?.onMoved(identityId, source.path, target, directory);
     } catch (error) {
       deps.logger?.warn(
@@ -569,33 +694,51 @@ export function createDesktopWrites(deps: DesktopWriteDeps) {
     principal: Principal,
     op: DesktopOperationRecord,
     publication: Publication,
+    to: string,
   ): Promise<DesktopOperationResult> {
     const request = op.request as Request;
-    const trashing = request.parentId === "trash";
     const { identityId, accountId } = principal;
-    const { source, to } = publication;
+    const { source } = publication;
+    const owner = publication.owner ?? null;
     let receipt: DesktopOperationResult;
     try {
-      if (source) await repo.move(identityId, source.path, to);
-      if (source && (trashing || inTrash(principal, source.path)))
-        await repo.update(identityId, source.id, { originalPath: trashing ? source.path : null });
-      const entry = trashing ? await trashEntry(principal, to) : await files.stat(principal, to);
-      receipt = {
-        operationId: op.id,
-        state: "completed",
-        item: await decorate(
+      let item: DesktopWriteEntry;
+      if (source && owner && owner.identityId !== identityId) {
+        // It left this login's files as a deleted item does, so its handle
+        // retires. Finder's Trash shows it until it lists Trash again.
+        const entry = await storedEntry(await deps.storageForIdentity(owner.identityId), to);
+        await repo.remove(identityId, source.path);
+        item = present(
+          principal,
+          entry,
+          { id: source.id, metadataVersion: op.id },
+          "trash",
+          undefined,
+          {
+            path: `${DESKTOP_TRASH}/${source.id}`,
+            name: trashName(baseName(source.path), source.id),
+          },
+        );
+      } else {
+        // The handle follows the item, into Trash and back out too.
+        if (source) await repo.move(identityId, source.path, to);
+        const entry = inTrash(to)
+          ? await trashedEntry(principal, to)
+          : await files.stat(principal, to);
+        item = await decorate(
           principal,
           entry,
           request.kind === "upload" ? request.sha256 : undefined,
-        ),
-        recoveryId: null,
-      };
-      // For a restore, what followed the item into the Mac's Trash.
+        );
+      }
+      receipt = { operationId: op.id, state: "completed", item, recoveryId: null };
+      // What grants access follows the item in its owner's files: into Trash, and back out with a restore.
+      const from = owner ?? (source ? { identityId, path: source.path } : null);
       const access =
-        source && deps.access && source.path !== to
-          ? await deps.access(identityId, source.path, to, source.kind === "dir")
+        from && deps.access && from.path !== to
+          ? await deps.access(from.identityId, from.path, to, source?.kind === "dir")
           : null;
-      const facts = activityFacts(principal, request, source, to, trashing);
+      const facts = activityFacts(request, source, to, owner !== null);
       if (!(await repo.complete(identityId, accountId, op.id, receipt, facts, access))) {
         // Another settlement kept it first.
         const current = await operation(principal, op.id);
@@ -614,7 +757,7 @@ export function createDesktopWrites(deps: DesktopWriteDeps) {
       );
     }
     await discard(principal, op.id);
-    await follow(principal, request, source, to);
+    await follow(principal, request, source, to, owner);
     return receipt;
   }
   /**
@@ -626,14 +769,15 @@ export function createDesktopWrites(deps: DesktopWriteDeps) {
    */
   async function settle(principal: Principal, op: DesktopOperationRecord) {
     const publication = op.result?.publication as Publication | undefined;
-    const where = publication ? await whereIs(principal.storage, publication) : "pending";
-    if (where === "published") await finish(principal, op, publication as Publication);
+    const where = publication ? await whereIs(principal, publication) : null;
+    if (publication && where?.at === "published")
+      await finish(principal, op, publication, where.to);
     else
       await transition(
         principal,
         op.id,
         "committing",
-        where === "lost" ? "conflict" : "ready",
+        where?.at === "lost" ? "conflict" : "ready",
         settled(op.result),
       );
     return operation(principal, op.id);
@@ -671,8 +815,9 @@ export function createDesktopWrites(deps: DesktopWriteDeps) {
    * and makes the one storage call that publishes: a rename over the
    * original for a save in place, a link for a new name (a real
    * create-if-absent, so of two creates racing for a name one gets
-   * `name_collision`), a rename for a move or a new folder. Then it keeps
-   * the receipt (`finish`).
+   * `name_collision`), a rename for a move or a new folder, `trash.put` for
+   * a move to Trash and `trash.restore` for one back out. Then it keeps the
+   * receipt (`finish`).
    *
    * A failure before that call leaves the operation `ready` (or a
    * `conflict`). Once the call is made, disk tells what happened: published,
@@ -689,29 +834,35 @@ export function createDesktopWrites(deps: DesktopWriteDeps) {
     let publication: Publication;
     let witness: ContentStamp | null;
     try {
-      const parent = await record(principal, request.parentId);
       const source =
         "itemId" in request && request.itemId ? await record(principal, request.itemId) : undefined;
-      if (trashing && (request.kind !== "move" || !source || inTrash(principal, source.path)))
+      if (trashing && (request.kind !== "move" || !source || inTrash(source.path)))
         throw new ApiHttpError("bad_request", "Only existing items can be moved to Trash");
-      if (request.kind === "upload" && source && inTrash(principal, source.path))
+      if (request.kind === "upload" && source && inTrash(source.path))
         throw new ApiHttpError("forbidden", "Restore this item before editing it");
       if (request.kind === "upload" && source && source.kind !== "file")
         throw new ApiHttpError("bad_request", "Only regular files can be replaced");
+      // A Trash item restored under its name in the Mac's Trash takes back its own.
       const name =
-        source?.originalPath && request.name === trashName(source)
-          ? (source.originalPath.split("/").at(-1) as string)
+        source &&
+        leafOf(source.path) === source.path &&
+        request.name === trashName(baseName(deletedFrom(source.path)), source.id)
+          ? baseName(deletedFrom(source.path))
           : request.name;
-      const target =
-        trashing && source
-          ? `${trashRoot(principal)}/${source.id}`
-          : await unoccupied(principal, parent, name, source?.path);
+      const target = trashing
+        ? null
+        : await unoccupied(
+            principal,
+            await record(principal, request.parentId),
+            name,
+            source?.path,
+          );
       // What the source must still be when it is published over or moved.
       witness =
         source && "base" in request && request.base
           ? await checkBase(principal, source, request.base, request.kind === "upload")
           : null;
-      if (source && isUnderPath(source.path, target))
+      if (source && target && isUnderPath(source.path, target))
         throw new ApiHttpError("bad_request", "Cannot move a folder into itself");
       const incoming = incomingPath(principal.identityId, id);
       let from: string;
@@ -738,14 +889,10 @@ export function createDesktopWrites(deps: DesktopWriteDeps) {
         from,
         to: target,
         inode: staged.ino.toString(),
-        source: source
-          ? {
-              id: source.id,
-              path: source.path,
-              originalPath: source.originalPath,
-              kind: source.kind,
-            }
-          : null,
+        source: source ? { id: source.id, path: source.path, kind: source.kind } : null,
+        ...(trashing && source
+          ? { owner: await ownerPath(principal.identityId, source.path) }
+          : {}),
       };
       if (
         !(await transition(principal, id, "committing", "committing", {
@@ -755,8 +902,6 @@ export function createDesktopWrites(deps: DesktopWriteDeps) {
       )
         throw Error("Operation changed while committing");
       if (from !== target) {
-        if (trashing)
-          await runStorageCall(() => storage.mkdir(trashRoot(principal), { parents: true }));
         // Right before publishing: the token, and the source as the base proved it.
         await stillGranted(principal);
         if (source && witness)
@@ -775,9 +920,14 @@ export function createDesktopWrites(deps: DesktopWriteDeps) {
       if (error instanceof StorageError) throw new ApiHttpError(error.kind, error.message);
       throw error;
     }
-    const { from, to, source } = publication;
-    if (from !== to) {
-      try {
+    const { from, source } = publication;
+    let to = publication.to;
+    try {
+      if (to === null) to = (await storage.trash.put(from)).leaf;
+      else if (leafOf(from) === from)
+        await storage.trash.restore(relativeTo(TRASH_PATH, from) as string, { target: to });
+      // A move onto itself publishes nothing.
+      else if (from !== to)
         await storage.move(
           from,
           to,
@@ -785,33 +935,33 @@ export function createDesktopWrites(deps: DesktopWriteDeps) {
             ? { overwrite: false }
             : { overwrite: source?.path === to, publish: true },
         );
-      } catch (error) {
-        // Storage refuses a taken name before writing anything.
-        if (isStorageError(error) && error.kind === "conflict") {
-          await transition(principal, id, "committing", "conflict", settled(op.result));
-          fail("name_collision", COLLISION);
-        }
-        const where = await whereIs(storage, publication).catch(() => null);
-        // Still `committing`: the app's retry reads the outcome (`settle`).
-        if (where === null)
-          throw new ApiHttpError("internal", "This write could not be confirmed yet. Retry it.");
-        if (where !== "published") {
-          await transition(
-            principal,
-            id,
-            "committing",
-            where === "lost" ? "conflict" : "ready",
-            settled(op.result),
-          );
-          if (where === "lost") fail("version_conflict", CHANGED);
-          if (error instanceof StorageError) throw new ApiHttpError(error.kind, error.message);
-          throw error;
-        }
+    } catch (error) {
+      // Storage refuses a taken name before writing anything.
+      if (isStorageError(error) && error.kind === "conflict") {
+        await transition(principal, id, "committing", "conflict", settled(op.result));
+        fail("name_collision", COLLISION);
       }
+      const where = await whereIs(principal, publication).catch(() => null);
+      // Still `committing`: the app's retry reads the outcome (`settle`).
+      if (where === null)
+        throw new ApiHttpError("internal", "This write could not be confirmed yet. Retry it.");
+      if (where.at !== "published") {
+        await transition(
+          principal,
+          id,
+          "committing",
+          where.at === "lost" ? "conflict" : "ready",
+          settled(op.result),
+        );
+        if (where.at === "lost") fail("version_conflict", CHANGED);
+        if (error instanceof StorageError) throw new ApiHttpError(error.kind, error.message);
+        throw error;
+      }
+      to = where.to;
     }
     if (request.kind === "upload" && source && witness && source.path !== to)
       await retire(principal, source.path, witness, id);
-    return finish(principal, op, publication);
+    return finish(principal, op, publication, to);
   }
   async function prepare(principal: Principal, request: Request) {
     authority(principal);
@@ -841,11 +991,17 @@ export function createDesktopWrites(deps: DesktopWriteDeps) {
       if (!!request.itemId !== !!request.base)
         throw new ApiHttpError("bad_request", "Updates require an item and base version");
     }
-    const parent = await record(principal, request.parentId);
+    const trashing = request.parentId === "trash";
+    if (trashing && request.kind !== "move")
+      throw new ApiHttpError("bad_request", "Only existing items can be moved to Trash");
+    const parent = trashing ? null : await record(principal, request.parentId);
     const source =
       "itemId" in request && request.itemId ? await record(principal, request.itemId) : undefined;
-    if (request.kind === "upload" && source && inTrash(principal, source.path))
+    if (request.kind === "upload" && source && inTrash(source.path))
       throw new ApiHttpError("forbidden", "Restore this item before editing it");
+    const target = parent
+      ? `${parent.path === "/" ? "" : parent.path}/${request.name}`
+      : TRASH_PATH;
     const op = await repo.reserve({
       id: request.operationId,
       identityId: principal.identityId,
@@ -856,8 +1012,8 @@ export function createDesktopWrites(deps: DesktopWriteDeps) {
       // re-derives the final action from the facts its receipt records.
       request: {
         ...request,
-        activityPath: source?.path ?? `${parent.path === "/" ? "" : parent.path}/${request.name}`,
-        activityTarget: `${parent.path === "/" ? "" : parent.path}/${request.name}`,
+        activityPath: source?.path ?? target,
+        activityTarget: target,
         activityKind: source?.kind === "dir" || request.kind === "folder" ? "dir" : "file",
         activityAction:
           request.kind === "folder"
@@ -866,11 +1022,11 @@ export function createDesktopWrites(deps: DesktopWriteDeps) {
               ? source
                 ? "file.save"
                 : "file.create"
-              : request.parentId === "trash"
+              : trashing
                 ? "file.trash"
-                : source?.originalPath
+                : source && inTrash(source.path)
                   ? "file.restore"
-                  : source && parentPath(source.path) === parent.path
+                  : source && parentPath(source.path) === parent?.path
                     ? "file.rename"
                     : "file.move",
       },
@@ -885,29 +1041,29 @@ export function createDesktopWrites(deps: DesktopWriteDeps) {
     decorate,
     files: {
       async content(principal: Principal, path: string, signal: AbortSignal) {
-        const physical = physicalTrashPath(principal, path);
-        if (!physical) return files.content(principal, path, signal);
-        const entry = await trashEntry(principal, physical);
+        if (!isUnderPath(DESKTOP_TRASH, path)) return files.content(principal, path, signal);
+        const physical = await inUserTrash(principal, path);
+        const entry = await trashedEntry(principal, physical);
         if (entry.kind !== "file")
           throw new ApiHttpError("bad_request", "Only files can be downloaded");
         return runStorageCall(() => principal.storage.download(physical, { signal }));
       },
       async versions(principal: Principal, paths: string[], signal: AbortSignal) {
         // Every file outside Trash in one call, so their index rows come in one lookup.
-        const live = paths.filter((path) => !physicalTrashPath(principal, path));
+        const live = paths.filter((path) => !isUnderPath(DESKTOP_TRASH, path));
         const answered =
           live.length === 0 ? [] : (await files.versions(principal, live, signal)).items;
         if (live.length === paths.length) return { items: answered };
         const outside = answered.values();
         const items = [];
         for (const path of paths) {
-          const physical = physicalTrashPath(principal, path);
           // `files.versions` answered every path outside Trash, in order.
-          if (!physical) {
+          if (!isUnderPath(DESKTOP_TRASH, path)) {
             items.push(outside.next().value as (typeof answered)[number]);
             continue;
           }
-          const entry = await trashEntry(principal, physical);
+          const physical = await inUserTrash(principal, path);
+          const entry = await trashedEntry(principal, physical);
           if (entry.kind !== "file")
             throw new ApiHttpError("bad_request", "Only files have content versions");
           const value = await runStorageCall(() => digestFile(principal.storage, physical, signal));
@@ -917,24 +1073,23 @@ export function createDesktopWrites(deps: DesktopWriteDeps) {
       },
     },
     async list(principal: Principal, path: string, tokenKey: string, cursor?: string) {
-      const physical = physicalTrashPath(principal, path);
-      if (path === DESKTOP_TRASH || physical) {
+      if (path === DESKTOP_TRASH || isUnderPath(DESKTOP_TRASH, path)) {
         if (cursor) throw new ApiHttpError("conflict", "Refresh Trash to restart the listing");
-        if (physical) await trashEntry(principal, physical);
-        const items = physical
-          ? await runStorageCall(() => principal.storage.list(physical))
-          : await repo.children(principal.identityId, trashRoot(principal));
-        if (items.length > 100_000)
+        if (path === DESKTOP_TRASH)
+          return { entries: await trashListing(principal), nextCursor: null };
+        const physical = await inUserTrash(principal, path);
+        await trashedEntry(principal, physical);
+        const items = await runStorageCall(() => principal.storage.list(physical));
+        if (items.length > TRASH_LIMIT)
           throw new ApiHttpError("rate_limited", "Trash listing capacity reached");
-        const entries: DesktopEntry[] = [];
-        for (const item of items) {
-          try {
-            entries.push(await trashEntry(principal, item.path));
-          } catch (error) {
-            if (!(error instanceof ApiHttpError && ["not_found", "forbidden"].includes(error.kind)))
-              throw error;
-          }
-        }
+        const entries = items.map((item) => ({
+          path: normalizePath(item.path),
+          name: item.name,
+          kind: item.kind,
+          size: item.size,
+          modifiedAt: item.modifiedAt.toISOString(),
+          readable: item.kind === "file" || item.kind === "dir",
+        }));
         return { entries: await decorateMany(principal, entries), nextCursor: null };
       }
       const result = await files.list(principal, path, tokenKey, cursor);
@@ -977,13 +1132,30 @@ export function createDesktopWrites(deps: DesktopWriteDeps) {
           capabilities: NO_WRITES,
           trashed: true,
         };
-      const physical = physicalTrashPath(principal, path);
       return decorate(
         principal,
-        physical ? await trashEntry(principal, physical) : await files.stat(principal, path),
+        isUnderPath(DESKTOP_TRASH, path)
+          ? await trashedEntry(principal, await inUserTrash(principal, path))
+          : await files.stat(principal, path),
       );
     },
     prepare,
+    /**
+     * Deletes an item in the user's own Trash for good, as Empty Trash does
+     * (`purgeTrashItem`): Finder's Empty Trash, or a delete in its Trash. An
+     * item gone already is done; anything else, a live item or something
+     * inside a Trash item, is refused.
+     */
+    async purge(principal: Principal, itemId: string) {
+      authority(principal);
+      const item = await repo.item(principal.identityId, itemId);
+      if (!item) return;
+      if (leafOf(item.path) !== item.path)
+        throw new ApiHttpError("conflict", "Only items in Trash can be deleted permanently");
+      if (!reaches(principal, deletedFrom(item.path)))
+        throw new ApiHttpError("forbidden", "This connection cannot access the trashed item");
+      await deps.purge(principal, relativeTo(TRASH_PATH, item.path) as string);
+    },
     async status(principal: Principal, id: string) {
       return status(await operation(principal, id));
     },

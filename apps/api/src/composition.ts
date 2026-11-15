@@ -139,7 +139,7 @@ import { createResolveTokenPrincipal } from "./tokens/principal.js";
 import { registerTokenRoutes } from "./tokens/routes.js";
 import { createTokenService } from "./tokens/service.js";
 import { createTrashRetention } from "./trash/retention.js";
-import { registerTrashRoutes } from "./trash/routes.js";
+import { purgeTrashItem, registerTrashRoutes } from "./trash/routes.js";
 import { createTrashSettingsService } from "./trash/settings.js";
 import { registerTrashSettingsRoutes } from "./trash/settings-routes.js";
 import { readBuild } from "./version.js";
@@ -395,13 +395,14 @@ export async function composeApp(
   // Into the Trash and back out are moves like any other, whoever makes them.
   const metadataService = withFollowers(metadataCore, followers);
   const desktopRepo = createDesktopRepo(db);
+  const fsMetadata = withFollowers(withDesktopMetadata(metadataCore, desktopRepo), followers);
   const desktopRetention = createDesktopRetention({
     repo: desktopRepo,
     storageForIdentity: storageFactory,
+    metadata: fsMetadata,
     clock,
     eventLog,
   });
-  const fsMetadata = withFollowers(withDesktopMetadata(metadataCore, desktopRepo), followers);
   // Deletes what each Trash kept longer than the installation's retention.
   const trashRetention = createTrashRetention({
     identities: repos.identities,
@@ -805,6 +806,12 @@ export async function composeApp(
           clock,
           access: desktopAccess,
           metadata: desktopMetadata,
+          ownerPath: localGrants.ownerPath,
+          // Finder's Empty Trash deletes for good, as the web's does.
+          purge: (principal, id) =>
+            purgeTrashItem({ activity: personalActivity, metadata: fsMetadata }, principal, id, {
+              source: "native",
+            }),
           logger,
           storageForIdentity: storageFactory,
         }),

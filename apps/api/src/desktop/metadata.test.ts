@@ -9,21 +9,19 @@ it("updates stable desktop handles with shared metadata mutations", async () => 
   } as unknown as MetadataService;
   const desktop = { move: vi.fn(), remove: vi.fn() };
   const service = withDesktopMetadata(metadata, desktop);
+  const leaf = "/.trash/.fdrive-move-v1/file/p/binned/v/1";
   await service.onMoved("identity", "/before", "/after", true);
   await service.onDeleted("identity", "/gone", false);
-  // Into Trash, which the Mac never reaches, an item is gone for it: its handle retires.
-  await service.onMoved("identity", "/binned", "/.trash/.fdrive-move-v1/file/p/binned/v/1", false);
-  expect(desktop.move.mock.calls).toEqual([["identity", "/before", "/after"]]);
-  expect(desktop.remove.mock.calls).toEqual([
-    ["identity", "/gone"],
-    ["identity", "/binned"],
+  // Into Trash and back out an item keeps its handle; the Mac finds it in its Trash.
+  await service.onMoved("identity", "/binned", leaf, false);
+  await service.onMoved("identity", leaf, "/restored", false);
+  expect(desktop.move.mock.calls).toEqual([
+    ["identity", "/before", "/after"],
+    ["identity", "/binned", leaf],
+    ["identity", leaf, "/restored"],
   ]);
+  expect(desktop.remove.mock.calls).toEqual([["identity", "/gone"]]);
   expect(metadata.onMoved).toHaveBeenCalledWith("identity", "/before", "/after", true);
-  expect(metadata.onMoved).toHaveBeenCalledWith(
-    "identity",
-    "/binned",
-    "/.trash/.fdrive-move-v1/file/p/binned/v/1",
-    false,
-  );
+  expect(metadata.onMoved).toHaveBeenCalledWith("identity", "/binned", leaf, false);
   expect(metadata.onDeleted).toHaveBeenCalledWith("identity", "/gone", false);
 });
