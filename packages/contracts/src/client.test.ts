@@ -111,7 +111,6 @@ const VALID_ME = {
   identity: {
     id: VALID_UUID,
     username: "alice",
-    providerId: VALID_UUID,
   },
   isAdmin: false,
   storageName: "Home",
@@ -814,7 +813,7 @@ describe("createApiClient: setup", () => {
 });
 
 describe("createApiClient: storage", () => {
-  const STORAGE = { id: VALID_UUID, name: "Home", healthy: true, detail: "ok" };
+  const STORAGE = { name: "Home", healthy: true, detail: "ok" };
 
   it("gets and renames the storage", async () => {
     const { fetchStub, calls } = createStubFetch([

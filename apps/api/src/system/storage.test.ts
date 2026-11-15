@@ -9,8 +9,6 @@ import { loadConfig } from "../config.js";
 import { createStorageService } from "./storage.js";
 import { registerStorageRoutes } from "./storage-routes.js";
 
-const STORAGE_ID = "123e4567-e89b-42d3-a456-426614174000";
-
 function harness(health = { ok: true, detail: "The storage root is a writable folder" }) {
   const values = new Map<string, unknown>();
   const settings: Pick<SettingsRepo, "get" | "set"> = {
@@ -21,7 +19,6 @@ function harness(health = { ok: true, detail: "The storage root is a writable fo
   };
   const events: string[] = [];
   const service = createStorageService({
-    storageId: STORAGE_ID,
     settings,
     folder: { health: async () => health },
     eventLog: { record: (_subsystem, _level, message) => events.push(message) },
@@ -59,7 +56,6 @@ describe("storage service", () => {
     const h = harness();
     expect(await h.service.name()).toBe(DEFAULT_STORAGE_NAME);
     expect(await h.service.rename("  Family files  ")).toEqual({
-      id: STORAGE_ID,
       name: "Family files",
       healthy: true,
       detail: "The storage root is a writable folder",
@@ -86,7 +82,7 @@ describe("storage routes", () => {
   it("reads and renames the storage for an administrator", async () => {
     const app = buildApp(true);
     const initial = SystemStorage.parse(await (await app.request(ROUTES.system.storage)).json());
-    expect(initial).toMatchObject({ id: STORAGE_ID, name: DEFAULT_STORAGE_NAME, healthy: true });
+    expect(initial).toMatchObject({ name: DEFAULT_STORAGE_NAME, healthy: true });
     const renamed = await app.request(ROUTES.system.storage, {
       method: "PATCH",
       headers,

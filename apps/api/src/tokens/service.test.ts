@@ -9,12 +9,10 @@ let usernameCounter = 0;
 
 async function seedAccountWithIdentity(repos: ReturnType<typeof createMemoryRepos>) {
   const username = `alice-${++usernameCounter}`;
-  const provider = await repos.providers.ensure({ type: "local", baseUrl: "http://dav.test" });
   const account = await repos.accounts.create({ displayName: "Alice" });
   const identity = await repos.identities.create({
     accountId: account.id,
-    providerId: provider.id,
-    externalUsername: username,
+    username,
   });
   return { account, identity, owner: { accountId: account.id, identityId: identity.id } };
 }

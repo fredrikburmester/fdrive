@@ -159,18 +159,15 @@ describe("createMetadataService: folder views", () => {
 
   it("resets every view of the login without touching another login's", async () => {
     const { repos, service } = buildService();
-    const provider = await repos.providers.ensure({ type: "test", baseUrl: "http://test" });
     const account = await repos.accounts.create({ displayName: "Alice" });
     const otherAccount = await repos.accounts.create({ displayName: "Bob" });
     const alice = await repos.identities.create({
       accountId: account.id,
-      providerId: provider.id,
-      externalUsername: "alice",
+      username: "alice",
     });
     const other = await repos.identities.create({
       accountId: otherAccount.id,
-      providerId: provider.id,
-      externalUsername: "bob",
+      username: "bob",
     });
     await Promise.all([
       service.setFolderView(alice.id, "/one", { mode: "list" }),
@@ -343,11 +340,9 @@ describe("createMetadataService: AI chat references", () => {
     const repos = createMemoryRepos();
     const service = createMetadataService(repos);
     const account = await repos.accounts.create({ displayName: "Alice" });
-    const provider = await repos.providers.ensure({ type: "local", baseUrl: "http://a" });
     const identity = await repos.identities.create({
       accountId: account.id,
-      providerId: provider.id,
-      externalUsername: "alice",
+      username: "alice",
     });
     const chat = await repos.aiChats.create({
       identityId: identity.id,

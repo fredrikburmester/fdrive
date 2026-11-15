@@ -78,7 +78,7 @@ import { createChangeQueue } from "./local/change-queue.js";
 import {
   createDeploymentFilesFolderGuard,
   deploymentFilesFolder,
-  ensureStorageRow,
+  ensureStorageId,
   filesFolderHealth,
 } from "./local/files-folder.js";
 import { registerGrantRoutes } from "./local/grant-routes.js";
@@ -157,7 +157,7 @@ const HEALTH_PROBE_TTL_MS = 15_000;
 /**
  * Wires every fdrive API dependency together: the Postgres pool and repos
  * (running pending migrations first), the files folder (`FDRIVE_STORAGE_ROOT`)
- * and its row in `app.providers`, the event bus, the login rate limiter, the
+ * and its id, the event bus, the login rate limiter, the
  * auth module, the setup module (logging the one-time setup token while
  * setup is required), and every route group. Returns the resulting `Hono`
  * app plus a `close` that ends the database pool.
@@ -212,8 +212,8 @@ export async function composeApp(
       new Date(clock().getTime() - 24 * 60 * 60_000),
     ).catch((error: unknown) => logger.warn({ err: error }, "unfinished upload parts not removed"));
   }
-  /** The files folder's row in `app.providers`: Office and the Mac name it. */
-  const storageId = await ensureStorageRow(repos);
+  /** The files folder's id, which the Mac compares as each location's `providerId`. */
+  const storageId = await ensureStorageId(repos.settings);
   const indexQueries = createIndexQueries(db);
   // What each user's folder holds, as the index counts it: storage limits
   // refuse a write its owner has no room for. Asked only once a request runs,
@@ -255,7 +255,7 @@ export async function composeApp(
 
   const fetchImpl = globalThis.fetch;
   const trashSettings = createTrashSettingsService({ settings: repos.settings, eventLog });
-  const storage = createStorageService({ storageId, settings: repos.settings, folder, eventLog });
+  const storage = createStorageService({ settings: repos.settings, folder, eventLog });
   /**
    * Whether the files folder is indexed: the indexer is configured and a
    * feature that needs it is on. Search, thumbnails, folder sizes, MCP's
@@ -281,7 +281,6 @@ export async function composeApp(
     checkPassword,
     passwords,
     clock,
-    storageId,
     eventLog,
     usage: homeUsage,
   });
@@ -332,11 +331,7 @@ export async function composeApp(
   // The single source of truth for what every identity may read from the
   // index: each login's home is `<username>` in the files folder, plus the
   // folders shared with it. See `docs/SCOPING.md`.
-  const localGrants = createLocalGrantService({
-    repos,
-    storageId,
-    storageFor: storageFactory,
-  });
+  const localGrants = createLocalGrantService({ repos, storageFor: storageFactory });
   const scopeResolver = createScopeResolver({
     received: (username) => localGrants.received(username),
   });
@@ -389,8 +384,7 @@ export async function composeApp(
     repo: createAccessRepo(fileOperationPool.db, clock),
     ownerPath: localGrants.ownerPath,
     links: shareMoves.resolve,
-    usernameOf: async (identityId) =>
-      (await repos.identities.get(identityId))?.externalUsername ?? null,
+    usernameOf: async (identityId) => (await repos.identities.get(identityId))?.username ?? null,
   });
   // Tags, favorites, folder views, recents and chat references. They follow
   // fdrive's own moves and deletes after the storage call, best effort, and
@@ -599,7 +593,6 @@ export async function composeApp(
     logins: repos.logins,
     passwords,
     clock,
-    storageId,
   });
 
   if ((await setupService.status()).required) {

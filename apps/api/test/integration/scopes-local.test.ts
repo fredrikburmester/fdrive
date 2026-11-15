@@ -85,15 +85,13 @@ describe("index scopes over a local folder and Postgres", () => {
       shared: async (username) => grants[username] ?? [],
     };
     const folder = createFilesFolder({ root, users });
-    const row = await repos.providers.ensure({ type: "local", baseUrl: "local" });
 
     const identities = await Promise.all(
       ["alice", "bob"].map(async (username) => {
         const account = await repos.accounts.create({ displayName: username });
         const identity = await repos.identities.create({
           accountId: account.id,
-          providerId: row.id,
-          externalUsername: username,
+          username,
         });
         return { account, identity };
       }),

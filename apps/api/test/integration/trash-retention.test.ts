@@ -153,7 +153,7 @@ describe("Trash retention against real PostgreSQL and a local folder", () => {
           ownerPath,
           links: createShareMoves({ ownerPath }).resolve,
           usernameOf: async (identityId) =>
-            (await repos.identities.get(identityId))?.externalUsername ?? null,
+            (await repos.identities.get(identityId))?.username ?? null,
         }),
         metadata: createMetadataService(repos),
         ownerPath,

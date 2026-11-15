@@ -3,11 +3,7 @@ import { join } from "node:path";
 import { createMemoryRepos } from "@fdrive/db/testing";
 import { expect, it } from "vitest";
 import { createIdentityStorageFactory } from "../auth/storage-factory.ts";
-import {
-  filesFolderFixture,
-  seedLocalUsers,
-  seedStorageRow,
-} from "../local/test-fixtures/index.ts";
+import { filesFolderFixture, seedLocalUsers } from "../local/test-fixtures/index.ts";
 import { createOfficeStorageFactory } from "./storage.ts";
 
 /** Alice's login over a temporary files folder holding `/a.docx`. */
@@ -16,7 +12,6 @@ async function fixture() {
   const local = filesFolderFixture(repos);
   await mkdir(join(local.root, "alice"));
   await writeFile(join(local.root, "alice", "a.docx"), "hello");
-  await seedStorageRow(repos);
   const [identity] = await seedLocalUsers(repos, [{ username: "alice", password: "alice-pass" }]);
   if (identity === undefined) throw new Error("unseeded");
   const factory = createOfficeStorageFactory(

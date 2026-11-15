@@ -89,11 +89,9 @@ it("refuses a login whose name cannot be a home folder, and passes other failure
   const repos = createMemoryRepos();
   const local = filesFolderFixture(repos);
   const account = await repos.accounts.create({ displayName: null });
-  const row = await repos.providers.ensure({ type: "local", baseUrl: "local" });
   const odd = await repos.identities.create({
     accountId: account.id,
-    providerId: row.id,
-    externalUsername: "..",
+    username: "..",
   });
   const admitted: Pick<FilesFolder, "storage" | "admit"> = {
     storage: local.folder.storage,

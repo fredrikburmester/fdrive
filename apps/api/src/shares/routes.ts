@@ -459,7 +459,7 @@ export function registerSharesRoutes(
     if (hidden) throw THUMB_NOT_FOUND();
     const identity = await deps.identities.get(row.identityId);
     if (identity === null) throw THUMB_NOT_FOUND();
-    const scopes = await deps.resolver.scopesFor(identity.externalUsername);
+    const scopes = await deps.resolver.scopesFor(identity.username);
     // `toFsPath` normalizes, and `normalizePath` throws for a segment over
     // 255 UTF-8 bytes, which `SharePath` (a 4096-character total bound with
     // no per-segment limit) happily allows through. Catch it here so an

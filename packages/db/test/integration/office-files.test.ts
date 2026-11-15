@@ -8,7 +8,7 @@ import {
   migrate,
   type OfficeFileRepo,
 } from "../../src/index.js";
-import { accounts, identities, officeFiles, providers } from "../../src/schema/app.js";
+import { accounts, identities, officeFiles } from "../../src/schema/app.js";
 import { files as indexedFiles, roots } from "../../src/schema/idx.js";
 
 let container: StartedPostgreSqlContainer | undefined;
@@ -35,20 +35,13 @@ beforeAll(async () => {
   first = createDb(container.getConnectionUri());
   second = createDb(container.getConnectionUri());
   await migrate(first.db);
-  const [provider] = await first.db
-    .insert(providers)
-    .values({ type: "local", baseUrl: "local" })
-    .returning();
-  if (!provider) throw new Error("Missing provider");
   for (const [id, username] of [
     [owner, "alice"],
     [other, "bob"],
   ] as const) {
     const [account] = await first.db.insert(accounts).values({ displayName: username }).returning();
     if (!account) throw new Error("Missing account");
-    await first.db
-      .insert(identities)
-      .values({ id, accountId: account.id, providerId: provider.id, externalUsername: username });
+    await first.db.insert(identities).values({ id, accountId: account.id, username });
   }
   a = createOfficeFileRepo(first.db);
   b = createOfficeFileRepo(second.db);
@@ -139,13 +132,11 @@ describe("Postgres office registry", () => {
     expect(await a.get(file.id)).toBeNull();
     expect(await a.get(kept.id)).toEqual(kept);
     const [account] = await first.db.insert(accounts).values({ displayName: "bob" }).returning();
-    const [provider] = await first.db.select().from(providers);
-    if (!account || !provider) throw new Error("Missing rows");
+    if (!account) throw new Error("Missing rows");
     await first.db.insert(identities).values({
       id: other,
       accountId: account.id,
-      providerId: provider.id,
-      externalUsername: "bob",
+      username: "bob",
     });
   });
   it("rolls back replacement tombstones if the subsequent path update fails", async () => {

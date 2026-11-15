@@ -5,12 +5,7 @@ import { describe, expect, it } from "vitest";
 import { memoryAccessRepo, testAccessFollowers } from "../../test/file-operations.js";
 import { createIdentityStorageFactory } from "../auth/storage-factory.js";
 import { createLocalGrantService, type LocalGrantServiceDeps } from "./grants.js";
-import {
-  filesFolderFixture,
-  seedLocalUsers,
-  seedStorageRow,
-  writeHomeFiles,
-} from "./test-fixtures/index.ts";
+import { filesFolderFixture, seedLocalUsers, writeHomeFiles } from "./test-fixtures/index.ts";
 
 /**
  * Alice, Bob and Carol (Dave disabled), with folders in Alice's and Carol's
@@ -32,7 +27,6 @@ async function fixture(options: Partial<LocalGrantServiceDeps> = {}) {
     "/.trash/old/file.txt": "old",
   });
   writeHomeFiles(local.root, "carol", { "/Projects/carol.txt": "carol" });
-  const row = await seedStorageRow(repos);
   const storageFor = createIdentityStorageFactory({
     identities: repos.identities,
     folder: local.folder,
@@ -40,17 +34,15 @@ async function fixture(options: Partial<LocalGrantServiceDeps> = {}) {
   if (alice === undefined || bob === undefined || carol === undefined) throw new Error("unseeded");
   const service = createLocalGrantService({
     repos,
-    storageId: row.id,
     storageFor,
     ...options,
   });
   // Shares follow moves and deletes the way every file operation follows them.
   const access = testAccessFollowers(memoryAccessRepo({ grants: repos.localGrants }), {
     ownerPath: service.ownerPath,
-    usernameOf: async (identityId) =>
-      (await repos.identities.get(identityId))?.externalUsername ?? null,
+    usernameOf: async (identityId) => (await repos.identities.get(identityId))?.username ?? null,
   });
-  return { repos, local, row, alice, bob, carol, service, storageFor, access };
+  return { repos, local, alice, bob, carol, service, storageFor, access };
 }
 
 const RESERVED = "fdrive's own folders, like Trash, cannot be shared";

@@ -42,23 +42,22 @@ afterAll(async () => {
   if (directory) await rm(directory, { recursive: true, force: true });
 });
 it("recovers durable metadata, exact bigint history, users and recovery files into an isolated fresh database", async () => {
-  const provider = randomUUID(),
+  const storageId = randomUUID(),
     account = randomUUID(),
     user = randomUUID();
-  await source.pool.query(
-    "insert into app.providers(id,type,label,base_url,config) values($1,'local','Test','local','{}')",
-    [provider],
-  );
   await source.pool.query("insert into app.accounts(id) values($1)", [account]);
   await source.pool.query(
-    "insert into app.identities(id,account_id,provider_id,external_username) values($1,$2,$3,'owner')",
-    [user, account, provider],
+    "insert into app.identities(id,account_id,username) values($1,$2,'owner')",
+    [user, account],
   );
   await source.pool.query(
     "insert into app.local_users(username,password_hash) values('owner','scrypt$fixture')",
   );
   await source.pool.query("insert into app.settings(key,value) values('setup.owner.v1',$1)", [
     JSON.stringify({ state: "complete", accountId: account }),
+  ]);
+  await source.pool.query("insert into app.settings(key,value) values('storage.id',$1)", [
+    JSON.stringify({ id: storageId }),
   ]);
   await source.pool.query(
     "insert into idx.scans(id,root_id,started_at) values(9007199254740993,1,now())",
@@ -105,9 +104,10 @@ it("recovers durable metadata, exact bigint history, users and recovery files in
   expect((await target.pool.query("select id::text from idx.scans")).rows[0].id).toBe(
     "9007199254740993",
   );
-  expect((await target.pool.query("select enabled from app.providers")).rows[0].enabled).toBe(
-    false,
-  );
+  // The files folder keeps its id, so paired Macs still recognise their locations.
+  expect(
+    (await target.pool.query("select value from app.settings where key='storage.id'")).rows,
+  ).toEqual([{ value: { id: storageId } }]);
   expect(
     (await target.pool.query("select username,password_hash from app.local_users")).rows,
   ).toEqual([{ username: "owner", password_hash: "scrypt$fixture" }]);

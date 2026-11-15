@@ -125,14 +125,12 @@ describe("setup owner on a local folder", () => {
         select (select count(*)::int from app.accounts) as accounts,
           (select count(*)::int from app.identities) as identities,
           (select count(*)::int from app.sessions) as sessions,
-          (select count(*)::int from app.providers) as providers,
           (select count(*)::int from app.local_users) as users
       `);
       expect(counts.rows[0]).toEqual({
         accounts: 1,
         identities: 1,
         sessions: 1,
-        providers: 1,
         users: 1,
       });
       const users = await inspection.db.execute(sql`select username from app.local_users`);

@@ -15,17 +15,14 @@ import {
   apiTokens,
   identities,
   localUsers,
-  providers,
   sessions,
   settings,
 } from "../../src/schema/app.js";
 
-const providerId = "00000000-0000-0000-0000-000000000001";
 const at = new Date("2026-09-07T01:00:00Z");
 const later = new Date(at.getTime() + 1000);
 const expiry = new Date(at.getTime() + 60000);
 const user = (username: string) => ({
-  providerId,
   username,
   passwordHash: "scrypt$h",
   isAdmin: false,
@@ -51,7 +48,6 @@ beforeAll(async () => {
   first = createDb(container.getConnectionUri());
   second = createDb(container.getConnectionUri());
   await migrate(first.db);
-  await first.db.insert(providers).values({ id: providerId, type: "local", baseUrl: "local" });
   a = createRepos(first.db).logins;
   b = createRepos(second.db).logins;
 });
@@ -76,7 +72,7 @@ describe("creating users", () => {
   it("writes the user, the account and the login with the caller's time", async () => {
     const identity = await a.createUser({ ...user("alice"), isAdmin: true });
 
-    expect(identity).toMatchObject({ externalUsername: "alice", providerId, createdAt: at });
+    expect(identity).toMatchObject({ username: "alice", createdAt: at });
     const [account] = await first.db
       .select()
       .from(accounts)
@@ -169,7 +165,7 @@ describe("setup", () => {
       reason: { code: "setup_claimed" },
     });
     const after = await snapshot();
-    expect(after.users.map((row) => row.username)).toEqual([won[0]?.externalUsername]);
+    expect(after.users.map((row) => row.username)).toEqual([won[0]?.username]);
     expect(after.accounts).toEqual([expect.objectContaining({ isAdmin: true })]);
     expect(after.identities).toHaveLength(1);
     expect(after.settings).toEqual([

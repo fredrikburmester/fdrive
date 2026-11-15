@@ -51,7 +51,7 @@ export function createIdentityStorageFactory<S extends StorageProvider>(
   return async (identityId) => {
     const identity = await deps.identities.get(identityId);
     if (identity === null) throw new ApiHttpError("unauthorized", "sign in again");
-    const username = identity.externalUsername;
+    const username = identity.username;
     try {
       await deps.folder.admit(username);
     } catch (error) {

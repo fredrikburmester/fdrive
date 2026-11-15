@@ -566,12 +566,10 @@ describe("folder views", () => {
 
   it("resets every pin of the calling login and leaves another login's", async () => {
     const { app, repos, metadata } = await buildHarness();
-    const provider = await repos.providers.ensure({ type: "test", baseUrl: "http://test" });
     const other = await repos.accounts.create({ displayName: "bob" });
     const bob = await repos.identities.create({
       accountId: other.id,
-      providerId: provider.id,
-      externalUsername: "bob",
+      username: "bob",
     });
     await Promise.all([
       metadata.setFolderView(ALICE_IDENTITY_ID, "/one", { mode: "grid" }),

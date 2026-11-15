@@ -39,7 +39,7 @@ remain outside this release's scope. The development app targets macOS 26+, Appl
   A 2 GiB zero-filled file passed a live File Provider download and full-byte hash check;
   peak memory and additional content types still need a broader rehearsal.
 - Test offline cached files/listings, uncached content, permission revocation, token expiry,
-  a disabled user and provider disable in Finder; one failed location must leave another usable.
+  and a disabled user in Finder; one failed location must leave another usable.
 - Repeat external create/overwrite/rename/move/delete in the files folder while connected and
   disconnected, including same-size/same-mtime replacements and folders with cached children.
   Path-only backends cannot identify every change missed between observations; do not claim

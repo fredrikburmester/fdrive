@@ -3,19 +3,13 @@ import { insertLocalUsers, type LocalUserRepos, type LocalUserSeed } from "@fdri
 import type { Logger } from "pino";
 import { createScryptSharePasswords } from "../../../src/shares/passwords.js";
 
-/**
- * `insertLocalUsers`' repos over `repos`: each user comes with their account
- * and login on the files folder's row, created here as the API's
- * `ensureStorageRow` creates it, which finds it again when it starts.
- */
-export async function localUserRepos(repos: Repos): Promise<LocalUserRepos> {
-  const provider = await repos.providers.ensure({ type: "local", baseUrl: "local" });
+/** `insertLocalUsers`' repos over `repos`: each user comes with their account and login. */
+export function localUserRepos(repos: Repos): LocalUserRepos {
   return {
     localUsers: {
       create: (user) =>
         repos.logins.createUser({
           ...user,
-          providerId: provider.id,
           isAdmin: false,
           at: new Date(),
         }),
@@ -41,7 +35,7 @@ export async function seedLocalUsers(
   try {
     await migrate(database.db);
     const repos = createRepos(database.db);
-    await insertLocalUsers(await localUserRepos(repos), seed, createScryptSharePasswords());
+    await insertLocalUsers(localUserRepos(repos), seed, createScryptSharePasswords());
     for (const username of admins) {
       await repos.logins.updateUser(username, { isAdmin: true, at: new Date() });
     }

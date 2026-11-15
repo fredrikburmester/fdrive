@@ -58,7 +58,7 @@ export function createAuthService(deps: CreateAuthServiceDeps): AuthService {
     if (login === null) throw new ApiHttpError("unauthorized", "sign in again");
     return {
       account: { id: login.accountId, displayName: login.displayName },
-      identity: { id: login.identityId, username: login.username, providerId: login.providerId },
+      identity: { id: login.identityId, username: login.username },
       isAdmin: login.isAdmin,
       ...(await deps.installation()),
     };

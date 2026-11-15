@@ -16,7 +16,7 @@ migrations, compatibility shims or configuration aliases; a full reindex is acce
 ## Order
 
 - Groups that add a migration run one at a time and need `pnpm test:integration`.
-- 36 and 37 last.
+- 37 last.
 
 ## Decisions
 
@@ -50,6 +50,9 @@ Recommended on 2026-11-14 and approved by the owner the same day.
 All are server-only and keep shipped Mac builds working.
 
 28. Optional: drop `/checks` now that the change feed exists, after measuring the hourly pass.
+38. Drop `desktop_items.original_path` and the `trashName` handling with the start-up move of
+    the Mac's old Trash (`adoptOldTrash` in `desktop/retention.ts`), once the owner's server
+    has run it.
 
 ## Storage contract
 
@@ -64,8 +67,4 @@ All are server-only and keep shipped Mac builds working.
 
 ## Last
 
-36. Collapse the schema: provider columns and rows, `identities.provider_id`. Keep the provider
-    row's UUID, which the Mac app compares as `providerId`. `desktop_items.original_path` goes
-    with the start-up move of the Mac's old Trash (`adoptOldTrash` in `desktop/retention.ts`)
-    once the owner's server has run it.
 37. Squash the migrations into one baseline.

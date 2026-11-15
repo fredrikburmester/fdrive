@@ -12,7 +12,7 @@ import {
   type OfficeWriteContext,
   type OfficeWriteScope,
 } from "../../src/index.js";
-import { accounts, identities, officeFiles, providers, wopiLocks } from "../../src/schema/app.js";
+import { accounts, identities, officeFiles, wopiLocks } from "../../src/schema/app.js";
 
 const owner = "00000000-0000-0000-0000-000000000001";
 const otherOwner = "00000000-0000-0000-0000-000000000002";
@@ -45,20 +45,13 @@ beforeAll(async () => {
   second = createDb(url.toString(), { max: 2 });
   observer = createDb(url.toString(), { max: 1 });
   await migrate(first.db);
-  const [provider] = await first.db
-    .insert(providers)
-    .values({ type: "local", baseUrl: "local" })
-    .returning();
-  if (!provider) throw new Error("Missing provider");
   for (const [id, username] of [
     [owner, "alice"],
     [otherOwner, "bob"],
   ] as const) {
     const [account] = await first.db.insert(accounts).values({ displayName: username }).returning();
     if (!account) throw new Error("Missing account");
-    await first.db
-      .insert(identities)
-      .values({ id, accountId: account.id, providerId: provider.id, externalUsername: username });
+    await first.db.insert(identities).values({ id, accountId: account.id, username });
   }
   write = createOfficeWriteScope(first.db);
   writeOther = createOfficeWriteScope(second.db);

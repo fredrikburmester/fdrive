@@ -31,11 +31,9 @@ it("applies what grants access in the file operation's transaction, and holds it
     await migrate(main.db);
     const repos = createRepos(main.db);
     const account = await repos.accounts.create({ displayName: "Alice" });
-    const provider = await repos.providers.ensure({ type: "local", baseUrl: "local" });
     const alice = await repos.identities.create({
       accountId: account.id,
-      providerId: provider.id,
-      externalUsername: "alice",
+      username: "alice",
     });
     await main.db.insert(localUsers).values([
       { username: "alice", passwordHash: "unused" },

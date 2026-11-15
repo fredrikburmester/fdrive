@@ -11,7 +11,7 @@ filesystem details and lets tests run on an in-memory storage. fdrive checks pas
 | --- | --- |
 | File operations, streams and optional members | [storage port](../packages/core/src/ports/storage.ts) |
 | The files folder and its storage | [files folder](../packages/local/src/files-folder.ts), [home storage](../packages/local/src/storage-provider.ts), [shared folders](../packages/local/src/shared.ts) |
-| The deployment's folder and its row | [files folder](../apps/api/src/local/files-folder.ts) |
+| The deployment's folder and its id | [files folder](../apps/api/src/local/files-folder.ts) |
 | Per-request storage | [storage factory](../apps/api/src/auth/storage-factory.ts) |
 | Trash | [Trash](../packages/core/src/trash/recycle-folder-trash.ts), [shared folders](../packages/local/src/shared.ts) |
 | Name and health | [storage service](../apps/api/src/system/storage.ts) |
@@ -23,18 +23,18 @@ filesystem details and lets tests run on an in-memory storage. fdrive checks pas
   ([shared folders](../packages/local/src/shared.ts));
   `admit(username)`, which refuses a disabled or removed user; and `health()`, whether the folder is this installation's (its marker, below) and
   one the API can read, write and enter.
-- The files folder is one row in `app.providers` (`type` and `base_url` `local`). Startup
-  ensures it and keeps its id (`ensureStorageRow`); every login names it. The id never
-  changes: the Mac app compares it as each location's `providerId`, and Office documents name
-  it. Rows left from storage fdrive no longer has stay until the schema
-  is collapsed; nothing reads them.
+- The files folder's id is the installation setting `storage.id`, created on the first start
+  (`ensureStorageId`) and never changed: the Mac app compares it as each location's
+  `providerId`, so a new one would have every Mac paired again. Migration 0045 carried it over
+  from the files folder's old row in `app.providers`, and backups restore it with the other
+  settings.
 - A signed-in request's storage is built on first use from the username its session or token
   query read, already admitted ([authentication](AUTH.md#resolving-a-request)); outside a
   request the storage factory finds the identity and runs `admit` first.
 - The storage's name is the installation setting `storage.name` ("Local folder" until an
   administrator renames it), trimmed, 1 to 120 characters. It shows under each username in the
   sidebar and as the Mac location's `displayName`. `GET /api/v1/system/storage` returns the
-  row's id, the name and the folder's health; `PATCH` renames it. System > General shows both.
+  name and the folder's health; `PATCH` renames it. System > General shows both.
 - Share links are fdrive's own: it keeps them in `app.shares` and serves them through the
   owner's storage ([shares](../apps/api/src/shares/service.ts)).
 - `Shared with me` is a reserved name at the top of every home: the path always means the

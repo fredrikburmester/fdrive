@@ -122,18 +122,15 @@ export function sharesHarness(options: SharesHarnessOptions = {}) {
   const filesFolder = createFilesFolder({ root, users });
   const folder = options.local?.(filesFolder) ?? filesFolder;
   const seeded = (async () => {
-    const row = await repos.providers.ensure({ type: "local", baseUrl: "local" });
     // Each user comes with their login, as setup and System > Users create them.
     for (const username of SHARE_USERS) {
       await repos.logins.createUser({
-        providerId: row.id,
         username,
         passwordHash: "checked by the fake store",
         isAdmin: false,
         at: clock(),
       });
     }
-    return row;
   })();
   const storageFactory = createIdentityStorageFactory({ identities: repos.identities, folder });
   const auth = createAuthModule({

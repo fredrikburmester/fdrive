@@ -106,7 +106,6 @@ export type {
 export {
   LoginError,
   SETUP_OWNER_KEY,
-  validateCanonicalUuid,
   validateNewLocalUser,
   validateSessionIdHash,
   validateSignIn,
@@ -179,8 +178,6 @@ export type {
   LocalUserPatch,
   LocalUserRepo,
   MetadataPathRepo,
-  Provider,
-  ProviderRepo,
   Recent,
   RecentRepo,
   Repos,

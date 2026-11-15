@@ -50,6 +50,37 @@ async function withDatabaseBefore(tag: string, body: (older: Db) => Promise<void
   }
 }
 
+/**
+ * A login as releases before 0045 stored it, on a row in `app.providers` (the
+ * files folder's unless `provider` names another), in SQL since the schema
+ * no longer has those columns.
+ */
+async function olderLogin(
+  older: Db,
+  username: string,
+  provider: { readonly type: string; readonly baseUrl: string } = {
+    type: "local",
+    baseUrl: "local",
+  },
+): Promise<{ accountId: string; identityId: string; providerId: string }> {
+  const result = await older.execute<{
+    account_id: string;
+    identity_id: string;
+    provider_id: string;
+  }>(sql`
+    with provider as (
+      insert into app.providers (type, base_url) values (${provider.type}, ${provider.baseUrl})
+      on conflict (type, base_url) do update set base_url = excluded.base_url
+      returning id
+    ), account as (insert into app.accounts default values returning id)
+    insert into app.identities (account_id, provider_id, external_username)
+    select account.id, provider.id, ${username} from account, provider
+    returning account_id, id as identity_id, provider_id`);
+  const [row] = result.rows;
+  if (row === undefined) throw new Error("expected a login");
+  return { accountId: row.account_id, identityId: row.identity_id, providerId: row.provider_id };
+}
+
 beforeAll(async () => {
   container = await new PostgreSqlContainer("pgvector/pgvector:pg17")
     .withDatabase("fdrive_test")
@@ -74,6 +105,10 @@ describe("migrate", () => {
     // The files folder's index root is there before anything indexes it.
     const roots = await db.execute(sql`select id, name from idx.roots`);
     expect(roots.rows).toEqual([{ id: 1, name: "files" }]);
+    // No setting either: the API creates the storage id when it first starts,
+    // and a restore needs every backed-up table empty.
+    const settings = await db.execute(sql`select key from app.settings`);
+    expect(settings.rows).toEqual([]);
   });
 
   it("covers every app foreign key with an unconditional leading-column index", async () => {
@@ -238,17 +273,7 @@ describe("migrate", () => {
 
   it("deletes the tokens made before access levels, and only those", async () => {
     await withDatabaseBefore("0030_drop_legacy_tokens_and_moves", async (older) => {
-      const [account] = await older.insert(schema.accounts).values({}).returning();
-      const [provider] = await older
-        .insert(schema.providers)
-        .values({ type: "local", baseUrl: "local" })
-        .returning();
-      if (account === undefined || provider === undefined) throw new Error("expected rows");
-      const [identity] = await older
-        .insert(schema.identities)
-        .values({ accountId: account.id, providerId: provider.id, externalUsername: "alice" })
-        .returning();
-      if (identity === undefined) throw new Error("expected an identity");
+      const alice = await olderLogin(older, "alice");
       // Its user, so the next migration keeps the login. In SQL, as the schema has
       // columns since that this database does not.
       await older.execute(
@@ -256,8 +281,8 @@ describe("migrate", () => {
       );
       await older.execute(sql`
         insert into app.api_tokens (account_id, identity_id, name, token_hash, access) values
-          (${account.id}, ${identity.id}, 'Old', 'old-hash', null),
-          (${account.id}, ${identity.id}, 'Scoped', 'scoped-hash', '{"mode":"read","paths":["/"]}')
+          (${alice.accountId}, ${alice.identityId}, 'Old', 'old-hash', null),
+          (${alice.accountId}, ${alice.identityId}, 'Scoped', 'scoped-hash', '{"mode":"read","paths":["/"]}')
       `);
 
       await migrate(older);
@@ -273,18 +298,10 @@ describe("migrate", () => {
 
   it("leaves personal activity with nothing only remote storage produced, so every event parses", async () => {
     await withDatabaseBefore("0034_activity_without_provider_values", async (older) => {
-      const [account] = await older.insert(schema.accounts).values({}).returning();
-      const [provider] = await older
-        .insert(schema.providers)
-        .values({ type: "local", baseUrl: "local", label: "Local folder" })
-        .returning();
-      if (account === undefined || provider === undefined) throw new Error("expected rows");
-      const [identity] = await older
-        .insert(schema.identities)
-        .values({ accountId: account.id, providerId: provider.id, externalUsername: "alice" })
-        .returning();
-      if (identity === undefined) throw new Error("expected an identity");
-      const owner = account.id;
+      const alice = await olderLogin(older, "alice");
+      const identity = { id: alice.identityId };
+      const provider = { id: alice.providerId };
+      const owner = alice.accountId;
       const file = "00000000-0000-4000-8000-000000000001";
       const trashed = "00000000-0000-4000-8000-000000000002";
       const listed = "00000000-0000-4000-8000-000000000003";
@@ -352,26 +369,10 @@ describe("migrate", () => {
 
   it("keeps only logins with a user of the same name, and drops the stored passwords", async () => {
     await withDatabaseBefore("0033_local_passwords", async (older) => {
-      const [local] = await older
-        .insert(schema.providers)
-        .values({ type: "local", baseUrl: "local" })
-        .returning();
-      const [webdav] = await older
-        .insert(schema.providers)
-        .values({ type: "webdav", baseUrl: "http://dav.invalid", enabled: false })
-        .returning();
-      if (local === undefined || webdav === undefined) throw new Error("expected rows");
-      const login = async (providerId: string, externalUsername: string) => {
-        const [account] = await older.insert(schema.accounts).values({}).returning();
-        if (account === undefined) throw new Error("expected an account");
-        await older
-          .insert(schema.identities)
-          .values({ accountId: account.id, providerId, externalUsername });
-        return account.id;
-      };
-      const owner = await login(local.id, "alice");
-      await login(local.id, "Bob"); // a removed user's login under another spelling of bob
-      await login(webdav.id, "alice-dav"); // a login on storage fdrive no longer has
+      const owner = (await olderLogin(older, "alice")).accountId;
+      await olderLogin(older, "Bob"); // a removed user's login under another spelling of bob
+      // A login on storage fdrive no longer has.
+      await olderLogin(older, "alice-dav", { type: "webdav", baseUrl: "http://dav.invalid" });
       for (const username of ["alice", "bob", "carol"])
         await older.execute(
           sql`insert into app.local_users (username, password_hash) values (${username}, 'x')`,
@@ -391,7 +392,7 @@ describe("migrate", () => {
       await migrate(older);
 
       const logins = await older.execute<{ name: string }>(
-        sql`select external_username as name from app.identities order by 1`,
+        sql`select username as name from app.identities order by 1`,
       );
       expect(logins.rows.map((row) => row.name)).toEqual(["alice"]);
       // bob and carol had no login of their own name; alice keeps hers.
@@ -416,18 +417,10 @@ describe("migrate", () => {
 
   it("keeps the Trash bindings that know their leaf, drops the rest, and the old Trash settings", async () => {
     await withDatabaseBefore("0039_trash_leaf_required", async (older) => {
-      const [account] = await older.insert(schema.accounts).values({}).returning();
-      const [provider] = await older
-        .insert(schema.providers)
-        .values({ type: "local", baseUrl: "local" })
-        .returning();
-      if (account === undefined || provider === undefined) throw new Error("expected rows");
-      const [identity] = await older
-        .insert(schema.identities)
-        .values({ accountId: account.id, providerId: provider.id, externalUsername: "alice" })
-        .returning();
-      if (identity === undefined) throw new Error("expected an identity");
-      const owner = account.id;
+      const alice = await olderLogin(older, "alice");
+      const identity = { id: alice.identityId };
+      const provider = { id: alice.providerId };
+      const owner = alice.accountId;
       const bound = "00000000-0000-4000-8000-000000000021";
       const unresolved = "00000000-0000-4000-8000-000000000022";
       const file = "00000000-0000-4000-8000-000000000023";
@@ -470,7 +463,7 @@ describe("migrate", () => {
             values (${file}, ${identity.id}, ${owner}, ${unresolved}, '/a.txt', null, 'bound')`),
       ).rejects.toThrow();
       const settings = await older.execute(sql`select key from app.settings order by key`);
-      expect(settings.rows).toEqual([{ key: "storage.name" }]);
+      expect(settings.rows).toEqual([{ key: "storage.id" }, { key: "storage.name" }]);
     });
   });
 
@@ -569,17 +562,7 @@ describe("migrate", () => {
 
   it("deletes links locked when SFTPGo kept their passwords, and keeps the count as used_downloads", async () => {
     await withDatabaseBefore("0044_share_columns", async (older) => {
-      const [account] = await older.insert(schema.accounts).values({}).returning();
-      const [provider] = await older
-        .insert(schema.providers)
-        .values({ type: "local", baseUrl: "local" })
-        .returning();
-      if (account === undefined || provider === undefined) throw new Error("expected rows");
-      const [identity] = await older
-        .insert(schema.identities)
-        .values({ accountId: account.id, providerId: provider.id, externalUsername: "alice" })
-        .returning();
-      if (identity === undefined) throw new Error("expected an identity");
+      const identity = { id: (await olderLogin(older, "alice")).identityId };
       await older.execute(sql`
         insert into app.shares (identity_id, name, scope, paths, has_password, password_hash, views)
         values
@@ -601,6 +584,40 @@ describe("migrate", () => {
           where table_schema = 'app' and table_name = 'shares'
             and column_name in ('has_password', 'views')`);
       expect(columns.rows).toEqual([]);
+    });
+  });
+
+  it("keeps the files folder's id, which the Mac compares as providerId, and drops the provider rows", async () => {
+    await withDatabaseBefore("0045_drop_providers", async (older) => {
+      const alice = await olderLogin(older, "alice");
+      const bob = await olderLogin(older, "Bob");
+      expect(bob.providerId).toBe(alice.providerId);
+
+      await migrate(older);
+
+      const stored = await older.execute(
+        sql`select value from app.settings where key = 'storage.id'`,
+      );
+      expect(stored.rows).toEqual([{ value: { id: alice.providerId } }]);
+      const logins = await older.execute(
+        sql`select id, account_id, username from app.identities order by lower(username)`,
+      );
+      expect(logins.rows).toEqual([
+        { id: alice.identityId, account_id: alice.accountId, username: "alice" },
+        { id: bob.identityId, account_id: bob.accountId, username: "Bob" },
+      ]);
+      const gone = await older.execute(sql`
+        select to_regclass('app.providers')::text as table,
+          (select count(*) from information_schema.columns
+            where table_schema = 'app' and table_name = 'identities'
+              and column_name in ('provider_id', 'external_username'))::int as columns`);
+      expect(gone.rows).toEqual([{ table: null, columns: 0 }]);
+      // A login's name stays unique in any case.
+      await expect(
+        older.execute(sql`
+          with account as (insert into app.accounts default values returning id)
+          insert into app.identities (account_id, username) select id, 'ALICE' from account`),
+      ).rejects.toThrow();
     });
   });
 });

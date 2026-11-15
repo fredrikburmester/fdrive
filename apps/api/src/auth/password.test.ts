@@ -62,12 +62,11 @@ describe("one password check for every place a password is typed", () => {
   /** Sign-in, setup and password change wired over one check, as composition wires them. */
   async function wired(users?: readonly string[]) {
     const h = authHarness(users === undefined ? {} : { users });
-    const row = await h.seeded;
+    await h.seeded;
     const setup = createSetupService({
       authService: h.auth.service,
       logins: h.repos.logins,
       passwords: h.passwords,
-      storageId: row.id,
     });
     return { ...h, setup };
   }
@@ -79,7 +78,6 @@ describe("one password check for every place a password is typed", () => {
       repos: h.repos,
       checkPassword: h.checkPassword,
       passwords: h.passwords,
-      storageId: (await h.seeded).id,
     });
     const alice = await h.login("alice");
     const signIn = (username: string, password: string, ip: string) =>

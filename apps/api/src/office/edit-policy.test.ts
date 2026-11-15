@@ -4,7 +4,7 @@ import { createOfficeEditPolicy } from "./edit-policy.ts";
 import type { OfficeActor } from "./types.ts";
 
 function actor(username: string): OfficeActor {
-  return { identity: { externalUsername: username } } as OfficeActor;
+  return { identity: { username } } as OfficeActor;
 }
 
 function policy(settings: Partial<OfficeSettings> = {}, readOnly = async () => false) {
@@ -47,10 +47,7 @@ it("keeps a folder shared to view only read-only for an editor", async () => {
   });
   expect(await canEdit(actor("alice"), "/Shared with me/Team/a.docx")).toBe(false);
   expect(await canEdit(actor("alice"), "/Shared with me/Other/a.docx")).toBe(true);
-  expect(readOnly).toHaveBeenCalledWith(
-    { externalUsername: "alice" },
-    "/Shared with me/Team/a.docx",
-  );
+  expect(readOnly).toHaveBeenCalledWith({ username: "alice" }, "/Shared with me/Team/a.docx");
 });
 
 it("refuses a noncanonical path before reading settings", async () => {

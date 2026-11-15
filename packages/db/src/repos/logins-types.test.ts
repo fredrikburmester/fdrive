@@ -3,16 +3,13 @@ import {
   LoginError,
   type NewLocalUser,
   type SignInInput,
-  validateCanonicalUuid,
   validateNewLocalUser,
   validateSessionIdHash,
   validateSignIn,
 } from "./logins-types.js";
 
-const id = "00000000-0000-0000-0000-000000000001";
 const at = new Date("2026-09-06T12:00:00Z");
 const user: NewLocalUser = {
-  providerId: id,
   username: "alice",
   passwordHash: "scrypt$hash",
   isAdmin: false,
@@ -37,8 +34,7 @@ describe("login validation", () => {
     expect(error.code).toBe("setup_claimed");
     expect(error.message).toBe("setup_claimed");
   });
-  it("accepts strict identifiers, username and metadata boundaries", () => {
-    expect(() => validateCanonicalUuid(id)).not.toThrow();
+  it("accepts username and metadata boundaries", () => {
     expect(() => validateNewLocalUser(user)).not.toThrow();
     expect(() => validateSignIn(signIn)).not.toThrow();
     expect(() => validateSignIn({ ...signIn, username: "é".repeat(255) })).not.toThrow();
@@ -50,11 +46,7 @@ describe("login validation", () => {
     ).not.toThrow();
     expect(() => validateSessionIdHash("0".repeat(64))).not.toThrow();
   });
-  it("rejects invalid IDs, timestamps and session hashes", () => {
-    for (const bad of ["", "a", id.toUpperCase().replace("1", "A"), "1".repeat(36)]) {
-      expect(() => validateCanonicalUuid(bad)).toThrow(TypeError);
-    }
-    expect(() => validateNewLocalUser({ ...user, providerId: "bad" })).toThrow(TypeError);
+  it("rejects invalid timestamps and session hashes", () => {
     expect(() => validateNewLocalUser({ ...user, at: new Date(Number.NaN) })).toThrow(TypeError);
     expect(() => validateSignIn({ ...signIn, at: "bad" } as unknown as SignInInput)).toThrow(
       TypeError,

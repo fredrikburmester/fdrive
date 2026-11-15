@@ -11,7 +11,7 @@ import { composeApp } from "../../src/composition.js";
 import { loadConfig } from "../../src/config.js";
 import { createAccessFollowers } from "../../src/files/access.js";
 import { createFileOperations, type FileOperations } from "../../src/files/operations.js";
-import { deploymentFilesFolder, ensureStorageRow } from "../../src/local/files-folder.js";
+import { deploymentFilesFolder } from "../../src/local/files-folder.js";
 import { createLocalGrantService } from "../../src/local/grants.js";
 import type { McpToolDeps } from "../../src/mcp/handlers.js";
 import { createMetadataService } from "../../src/metadata/service.js";
@@ -225,9 +225,7 @@ describe("what grants access fails closed", () => {
     const moved = await link("/Mcp/report.txt");
     const binned = await link("/McpBin");
     const repos = createRepos(database.db);
-    const identity = (await repos.identities.listAll()).find(
-      (row) => row.externalUsername === "alice",
-    );
+    const identity = (await repos.identities.listAll()).find((row) => row.username === "alice");
     if (identity === undefined) throw new Error("expected alice's login");
     const token = generateApiToken();
     await repos.apiTokens.create({
@@ -285,26 +283,20 @@ describe("what grants access fails closed", () => {
       identities: repos.identities,
       folder: deploymentFilesFolder(config, repos),
     });
-    const grants = createLocalGrantService({
-      repos,
-      storageId: await ensureStorageRow(repos),
-      storageFor,
-    });
+    const grants = createLocalGrantService({ repos, storageFor });
     const files = createFileOperations({
       access: createAccessFollowers({
         repo: createAccessRepo(pool.db),
         ownerPath: grants.ownerPath,
         links: createShareMoves({ ownerPath: grants.ownerPath }).resolve,
         usernameOf: async (identityId) =>
-          (await repos.identities.get(identityId))?.externalUsername ?? null,
+          (await repos.identities.get(identityId))?.username ?? null,
       }),
       metadata: createMetadataService(repos),
       ownerPath: grants.ownerPath,
       storageFor,
     });
-    const identity = (await repos.identities.listAll()).find(
-      (row) => row.externalUsername === "alice",
-    );
+    const identity = (await repos.identities.listAll()).find((row) => row.username === "alice");
     if (identity === undefined) throw new Error("expected alice's login");
     return {
       files,

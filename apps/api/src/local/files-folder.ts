@@ -1,4 +1,5 @@
-import type { Repos } from "@fdrive/db";
+import { randomUUID } from "node:crypto";
+import type { Repos, SettingsRepo } from "@fdrive/db";
 import {
   createFilesFolder,
   createFilesFolderGuard,
@@ -7,18 +8,28 @@ import {
   type FilesFolderFacts,
   type FilesFolderGuard,
 } from "@fdrive/local";
+import { z } from "zod";
 import type { AppConfig } from "../config.js";
 import type { HomeUsage } from "../storage/usage.js";
 import type { ChangeQueue } from "./change-queue.js";
 import { createLocalUsers } from "./users.js";
 
+/** The `app.settings` key of the files folder's id. */
+export const STORAGE_ID_SETTINGS_KEY = "storage.id";
+
+const StoredId = z.object({ id: z.uuid() });
+
 /**
- * The files folder's row in `app.providers`, created on the first start and
- * found again on every later one. Its id never changes: the Mac app compares
- * it as each location's `providerId`, and Office names it.
+ * The files folder's id, created on the first start and read on every later
+ * one. It never changes: the Mac app compares it as each location's
+ * `providerId`, and a new one would have every Mac paired again. A server
+ * from before migration 0045 keeps the id of its old `app.providers` row.
  */
-export async function ensureStorageRow(repos: Pick<Repos, "providers">): Promise<string> {
-  return (await repos.providers.ensure({ type: "local", baseUrl: "local" })).id;
+export async function ensureStorageId(
+  settings: Pick<SettingsRepo, "get" | "compareAndSet">,
+): Promise<string> {
+  await settings.compareAndSet(STORAGE_ID_SETTINGS_KEY, null, { id: randomUUID() });
+  return StoredId.parse(await settings.get(STORAGE_ID_SETTINGS_KEY)).id;
 }
 
 export interface DeploymentFilesFolderOptions {

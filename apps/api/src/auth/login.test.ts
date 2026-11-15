@@ -89,12 +89,11 @@ describe("signing in", () => {
 describe("the signed-in login", () => {
   it("is the account's one login on the files folder, with the installation's name and index flag", async () => {
     const h = authHarness();
-    const row = await h.seeded;
+    await h.seeded;
     const a = await h.login();
     expect(a.me.identity).toEqual({
       id: expect.any(String),
       username: "alice",
-      providerId: row.id,
     });
     expect(a.me).toMatchObject({
       isAdmin: false,

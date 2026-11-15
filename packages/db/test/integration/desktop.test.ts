@@ -21,20 +21,14 @@ it("coordinates desktop identities and operation receipts across independent Pos
     await migrate(first.db);
     const repos = createRepos(first.db);
     const account = await repos.accounts.create({ displayName: "Desktop" });
-    const provider = await repos.providers.ensure({
-      type: "local",
-      baseUrl: "http://desktop.test/dav",
-    });
     const identity = await repos.identities.create({
       accountId: account.id,
-      providerId: provider.id,
-      externalUsername: "alice",
+      username: "alice",
     });
     const bob = await repos.accounts.create({ displayName: "Bob" });
     const other = await repos.identities.create({
       accountId: bob.id,
-      providerId: provider.id,
-      externalUsername: "bob",
+      username: "bob",
     });
     const a = createDesktopRepo(first.db),
       b = createDesktopRepo(second.db);
@@ -248,20 +242,14 @@ it("registers many desktop paths at once, parents first, without the lock when a
     await migrate(first.db);
     const repos = createRepos(first.db);
     const account = await repos.accounts.create({ displayName: "Desktop" });
-    const provider = await repos.providers.ensure({
-      type: "local",
-      baseUrl: "http://desktop.test/dav",
-    });
     const identity = await repos.identities.create({
       accountId: account.id,
-      providerId: provider.id,
-      externalUsername: "alice",
+      username: "alice",
     });
     const bob = await repos.accounts.create({ displayName: "Bob" });
     const other = await repos.identities.create({
       accountId: bob.id,
-      providerId: provider.id,
-      externalUsername: "bob",
+      username: "bob",
     });
     const a = createDesktopRepo(first.db),
       b = createDesktopRepo(second.db);

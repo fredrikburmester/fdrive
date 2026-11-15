@@ -62,18 +62,15 @@ describe("a folder renamed on disk outside fdrive, through the real indexer", ()
     const { db } = connection;
     const repos = createRepos(db);
     const metadata = createMetadataService(repos);
-    const provider = await repos.providers.ensure({ type: "local", baseUrl: "local" });
     const alice = await repos.accounts.create({ displayName: "Alice" });
     const other = await repos.accounts.create({ displayName: "Alice Other" });
     const identity = await repos.identities.create({
       accountId: alice.id,
-      providerId: provider.id,
-      externalUsername: "alice",
+      username: "alice",
     });
     const otherIdentity = await repos.identities.create({
       accountId: other.id,
-      providerId: provider.id,
-      externalUsername: "alice-other",
+      username: "alice-other",
     });
     const tag = await metadata.createTag(alice.id, { name: "Work", color: null });
     const otherTag = await metadata.createTag(other.id, { name: "Private", color: null });

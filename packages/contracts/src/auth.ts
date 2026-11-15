@@ -15,8 +15,6 @@ export type LoginRequest = z.infer<typeof LoginRequest>;
 export const IdentitySummary = z.object({
   id: z.uuid(),
   username: z.string(),
-  /** The files folder's row, which every login is on; Trash settings and Office still name it. */
-  providerId: z.uuid(),
 });
 
 export type IdentitySummary = z.infer<typeof IdentitySummary>;

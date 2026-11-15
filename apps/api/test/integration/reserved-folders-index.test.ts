@@ -83,12 +83,10 @@ describe("fdrive's own folders in the index, through the MCP tools", () => {
       shared: async () => [],
     };
     const folder = createFilesFolder({ root, users });
-    const provider = await repos.providers.ensure({ type: "local", baseUrl: "local" });
     const account = await repos.accounts.create({ displayName: "alice" });
     const identity = await repos.identities.create({
       accountId: account.id,
-      providerId: provider.id,
-      externalUsername: "alice",
+      username: "alice",
     });
     const storage = await createIdentityStorageFactory({
       identities: repos.identities,

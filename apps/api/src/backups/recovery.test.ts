@@ -40,9 +40,7 @@ const master = randomBytes(32);
 const databases: ReturnType<typeof createDb>[] = [];
 const closers: (() => Promise<void>)[] = [];
 let count = 0;
-let owner: string, identity: string, provider: string;
-/** The stored address of the source installation's storage row. */
-const SOURCE_URL = "http://source.invalid";
+let owner: string, identity: string, storageId: string;
 /** Cheap scrypt: the hashes are real and verify like production ones. */
 const passwords = createScryptSharePasswords({ cost: 1024, blockSize: 8, parallelization: 1 });
 /** The backup module the API and worker build for the source installation. */
@@ -96,17 +94,13 @@ beforeEach(async () => {
   });
   owner = randomUUID();
   identity = randomUUID();
-  provider = randomUUID();
+  storageId = randomUUID();
   module = backupModule(config);
   await module.start();
-  await source.pool.query(
-    "insert into app.providers(id,type,label,base_url,config) values($1,'local','Files',$2,'{}')",
-    [provider, SOURCE_URL],
-  );
   await source.pool.query("insert into app.accounts(id) values($1)", [owner]);
   await source.pool.query(
-    "insert into app.identities(id,account_id,provider_id,external_username) values($1,$2,$3,'alice')",
-    [identity, owner, provider],
+    "insert into app.identities(id,account_id,username) values($1,$2,'alice')",
+    [identity, owner],
   );
   await source.pool.query(
     "insert into app.local_users(username,password_hash) values('alice',$1)",
@@ -115,7 +109,14 @@ beforeEach(async () => {
   await source.pool.query("insert into app.settings(key,value) values('setup.owner.v1',$1)", [
     JSON.stringify({ state: "complete", accountId: owner }),
   ]);
+  await source.pool.query("insert into app.settings(key,value) values('storage.id',$1)", [
+    JSON.stringify({ id: storageId }),
+  ]);
 });
+/** The files folder's id in `pool`'s database, which paired Macs compare as `providerId`. */
+async function storageIdIn(pool: Pool): Promise<unknown> {
+  return (await pool.query("select value from app.settings where key='storage.id'")).rows;
+}
 afterEach(async () => {
   vi.useRealTimers();
   vi.unstubAllGlobals();
@@ -246,9 +247,8 @@ it("boots only the isolated recovery API, requires host authorization, and resto
   await vi.waitFor(async () => expect((await status()).job.state).toBe("restored"), {
     timeout: 10_000,
   });
-  expect((await target.db.pool.query("select enabled from app.providers")).rows[0].enabled).toBe(
-    false,
-  );
+  // The files folder keeps its id, so paired Macs still recognise their locations.
+  expect(await storageIdIn(target.db.pool)).toEqual([{ value: { id: storageId } }]);
   expect(
     (await target.db.pool.query("select count(*)::int as count from app.sessions")).rows[0].count,
   ).toBe(0);
@@ -259,7 +259,6 @@ it("boots only the isolated recovery API, requires host authorization, and resto
   const review = {
     snapshotId: inspection.header.id,
     environmentFingerprint: environmentFingerprint(restoredConfig),
-    providers: [{ id: provider, baseUrl: SOURCE_URL }],
     ownerIdentityId: identity,
     password: "alice-password",
     oldDeploymentStopped: true,
@@ -271,23 +270,15 @@ it("boots only the isolated recovery API, requires host authorization, and resto
   await expect(
     resumeRecovery(restoredConfig, { ...review, environmentFingerprint: "0".repeat(64) }),
   ).rejects.toThrow("environment changed");
-  await expect(
-    resumeRecovery(restoredConfig, {
-      ...review,
-      providers: [{ id: provider, baseUrl: "http://other.invalid" }],
-    }),
-  ).rejects.toThrow("binding changed");
   // The owner's password is checked against their restored user.
   await expect(resumeRecovery(restoredConfig, { ...review, password: "wrong" })).rejects.toThrow(
     "password is not right",
   );
-  expect((await target.db.pool.query("select enabled from app.providers")).rows[0].enabled).toBe(
-    false,
-  );
+  // A review file from before the files folder lost its row is refused, not half read.
+  await expect(
+    resumeRecovery(restoredConfig, { ...review, providers: [{ id: storageId, baseUrl: "local" }] }),
+  ).rejects.toThrow();
   await resumeRecovery(restoredConfig, review);
-  expect((await target.db.pool.query("select enabled from app.providers")).rows[0].enabled).toBe(
-    true,
-  );
   expect(
     (
       await target.db.pool.query(
@@ -311,7 +302,7 @@ it("rehearses a host cutover and rollback: the old pair stays untouched and serv
   const rows = async (pool: Pool) => ({
     events: (await pool.query("select count(*)::int as count from app.system_events")).rows[0]
       .count as number,
-    providers: (await pool.query("select id,enabled from app.providers order by id")).rows,
+    storageId: await storageIdIn(pool),
     staged: (
       await pool.query(
         "select count(*)::int as count from app.settings where key='backup.restore.v1'",
@@ -344,7 +335,7 @@ it("rehearses a host cutover and rollback: the old pair stays untouched and serv
     stateDirectory,
   ]);
   expect(outputs.at(-1)).toContain("All services remain paused");
-  expect((await rows(target.db.pool)).providers.every((row) => row.enabled === false)).toBe(true);
+  expect((await rows(target.db.pool)).storageId).toEqual(before.storageId);
   expect(await rows(source.pool)).toEqual(before);
   // 2. Cut over: fingerprint the new environment, review, resume in the new pair only.
   await cli(["environment"]);
@@ -353,7 +344,6 @@ it("rehearses a host cutover and rollback: the old pair stays untouched and serv
     JSON.stringify({
       snapshotId: inspection.header.id,
       environmentFingerprint: outputs.at(-1),
-      providers: [{ id: provider, baseUrl: SOURCE_URL }],
       ownerIdentityId: identity,
       password: "alice-password",
       oldDeploymentStopped: true,
@@ -362,7 +352,7 @@ it("rehearses a host cutover and rollback: the old pair stays untouched and serv
   );
   await cli(["resume", "--review-file", review]);
   expect(outputs.at(-1)).toContain("Restart API with FDRIVE_RESTORE_MODE=false");
-  expect((await rows(target.db.pool)).providers.every((row) => row.enabled === true)).toBe(true);
+  expect((await rows(target.db.pool)).storageId).toEqual(before.storageId);
   // 3. Roll back: the old database, master key and state directory still serve as before.
   expect(await rows(source.pool)).toEqual(before);
   const rolledBack = backupModule(config);
@@ -409,7 +399,7 @@ it("rehearses into a new installation identity without any provider contact or p
     sourceInstallationId: inspection.header.installationId,
     snapshotId: inspection.header.id,
     result: "passed",
-    tableCount: 42,
+    tableCount: 41,
     blobCount: 1,
   });
   expect(
@@ -424,7 +414,6 @@ it("rehearses into a new installation identity without any provider contact or p
     resumeRecovery(restoredConfig, {
       snapshotId: inspection.header.id,
       environmentFingerprint: environmentFingerprint(restoredConfig),
-      providers: [{ id: provider, baseUrl: SOURCE_URL }],
       ownerIdentityId: identity,
       password: "test",
       oldDeploymentStopped: true,
@@ -432,7 +421,6 @@ it("rehearses into a new installation identity without any provider contact or p
     }),
   ).rejects.toThrow("Rehearsal installations cannot resume");
   expect(fetch).not.toHaveBeenCalled();
-  expect((await source.pool.query("select enabled from app.providers")).rows[0].enabled).toBe(true);
 });
 
 it("expires bootstrap authorization and keeps a restored installation paused without normal services", async () => {
@@ -616,7 +604,7 @@ it("discovers and fetches a completed bucket copy with no database or applicatio
   // A destination file names a bucket and nothing else.
   for (const other of [
     { ...bucket, type: "local" },
-    { type: "webdav", id: provider, baseUrl: SOURCE_URL, config: {}, prefix: "/", credential: {} },
+    { type: "webdav", id: storageId, baseUrl: "http://dav.invalid", prefix: "/", credential: {} },
   ]) {
     const file = await secretFile("other-destination.json", JSON.stringify(other));
     await expect(
@@ -665,7 +653,6 @@ it("discovers and fetches a completed bucket copy with no database or applicatio
     JSON.stringify({
       snapshotId: id,
       environmentFingerprint: environmentFingerprint(restoredConfig),
-      providers: [{ id: provider, baseUrl: SOURCE_URL }],
       ownerIdentityId: identity,
       password: "alice-password",
       oldDeploymentStopped: true,
@@ -792,7 +779,6 @@ it("rejects unreviewed ownership and a wrong owner password, and resumes only an
   const review = {
     snapshotId: inspection.header.id,
     environmentFingerprint: environmentFingerprint(restoredConfig),
-    providers: [{ id: provider, baseUrl: SOURCE_URL }],
     ownerIdentityId: identity,
     password: "alice-password",
     oldDeploymentStopped: true,
@@ -824,76 +810,17 @@ it("rejects unreviewed ownership and a wrong owner password, and resumes only an
     });
   await expect(resumeRecovery(restoredConfig, review)).rejects.toThrow("Restore state changed");
   changing.mockRestore();
-  expect((await target.db.pool.query("select enabled from app.providers")).rows[0].enabled).toBe(
-    false,
-  );
   await target.db.pool.query("update app.settings set value=$1 where key='backup.restore.v1'", [
     JSON.stringify(savedRestore),
   ]);
   await resumeRecovery(restoredConfig, review);
-  expect((await target.db.pool.query("select enabled from app.providers")).rows[0].enabled).toBe(
-    true,
-  );
-});
-
-it("resumes a local-folder installation by checking the owner against its restored users", async () => {
-  const root = join(directory, "storage");
-  await mkdir(join(root, "alice"), { recursive: true });
-  const local = randomUUID();
-  await source.pool.query(
-    "insert into app.providers(id,type,label,base_url,config,managed_by_env) values($1,'local','','local','{}',true)",
-    [local],
-  );
-  await source.pool.query("update app.identities set provider_id=$1 where id=$2", [
-    local,
-    identity,
-  ]);
-  const { file, inspection } = await snapshot();
-  const target = await fresh();
-  const restoredConfig = {
-    ...config,
-    databaseUrl: target.url,
-    fdriveStorageRoot: root,
-    fdriveBackupStateDir: join(directory, "restored-local"),
-  };
-  const keyFile = await secretFile("local-key", key);
-  await runBackupCommand(
-    restoredConfig,
-    [
-      "restore",
-      "--file",
-      file,
-      "--key-file",
-      keyFile,
-      "--snapshot",
-      inspection.header.id,
-      "--state-dir",
-      restoredConfig.fdriveBackupStateDir,
-    ],
-    () => {},
-  );
-  const review = {
-    snapshotId: inspection.header.id,
-    environmentFingerprint: environmentFingerprint(restoredConfig),
-    // The local folder's row has no URL: it is reviewed by its stored name.
-    providers: [{ id: local, baseUrl: "local" }],
-    ownerIdentityId: identity,
-    password: "alice-password",
-    oldDeploymentStopped: true,
-    pathBindingsReviewed: true,
-  };
-  await expect(
-    resumeRecovery(restoredConfig, { ...review, password: "wrong-password" }),
-  ).rejects.toThrow("password is not right");
   expect(
-    (await target.db.pool.query("select enabled from app.providers where id=$1", [local])).rows[0]
-      .enabled,
-  ).toBe(false);
-  await resumeRecovery(restoredConfig, review);
-  expect(
-    (await target.db.pool.query("select enabled from app.providers where id=$1", [local])).rows[0]
-      .enabled,
-  ).toBe(true);
+    (
+      await target.db.pool.query(
+        "select count(*)::int as count from app.settings where key='backup.restore.v1'",
+      )
+    ).rows[0].count,
+  ).toBe(0);
 });
 
 it("clears expired recovery secrets and reports failed uploads and nonempty-target imports", async () => {

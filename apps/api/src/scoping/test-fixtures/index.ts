@@ -6,8 +6,7 @@ export function buildIdentity(overrides: Partial<Identity> = {}): Identity {
   return {
     id: "identity-1",
     accountId: "account-1",
-    providerId: "provider-1",
-    externalUsername: "alice",
+    username: "alice",
     createdAt: new Date("2024-01-01T00:00:00Z"),
     lastLoginAt: null,
     ...overrides,

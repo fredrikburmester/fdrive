@@ -9,7 +9,6 @@ import {
   FAST_PASSWORDS,
   filesFolderFixture,
   seedLocalUsers,
-  seedStorageRow,
   writeHomeFiles,
 } from "../../local/test-fixtures/index.ts";
 import {
@@ -66,13 +65,10 @@ export function authHarness(
   // `users.verify` or `users.status` to shape what they see exactly as
   // production would.
   const folder = options.folder?.(local.folder) ?? local.folder;
-  const seeded = (async () => {
-    await seedLocalUsers(
-      repos,
-      usernames.map((username) => ({ username, password: `${username}-pass` })),
-    );
-    return seedStorageRow(repos);
-  })();
+  const seeded = seedLocalUsers(
+    repos,
+    usernames.map((username) => ({ username, password: `${username}-pass` })),
+  );
   const limiter = createLoginLimiter({ clock });
   const checkPassword = createPasswordCheck({ limiter, users: local.users });
   const storageFactory = createIdentityStorageFactory({ identities: repos.identities, folder });
@@ -140,7 +136,7 @@ export function authHarness(
     /** What the files folder asks about users; spy on it to shape sign-ins. */
     users: local.users,
     passwords: FAST_PASSWORDS,
-    /** Resolves to the local folder's row once it and the users exist; `call` and `login` await it. */
+    /** Resolves to the users' logins once they exist; `call` and `login` await it. */
     seeded,
     limiter,
     checkPassword,

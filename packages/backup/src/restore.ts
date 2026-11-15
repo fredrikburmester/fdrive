@@ -217,7 +217,6 @@ export async function restoreArchive(options: RestoreOptions): Promise<Inspectio
     await client.query(
       `update app.settings set value=jsonb_set(jsonb_set(value, '{enabled}', 'false'), '{editingEnabled}', 'false') where key='office.configuration'`,
     );
-    await client.query("update app.providers set enabled = false");
     await client.query(
       "update app.backup_configuration set restored = true, schedule = jsonb_set(schedule, '{frequency}', '\"manual\"'), next_run_at = null, challenge_hash = null, challenge_expires_at = null",
     );

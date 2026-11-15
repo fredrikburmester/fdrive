@@ -97,7 +97,7 @@ async function checkFileInfo(config: OfficeConfig, opened: OpenedFile): Promise<
     BaseFileName: baseName(path),
     OwnerId: file.identityId,
     UserId: actor.identity.id,
-    UserFriendlyName: actor.identity.externalUsername,
+    UserFriendlyName: actor.identity.username,
     Size: content.size,
     Version: content.version,
     // ONLYOFFICE prefers this optional timestamp over Version for its view cache key.

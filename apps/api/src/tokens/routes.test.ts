@@ -41,12 +41,10 @@ const FAKE_STORAGE: StorageProvider = {
 
 async function buildApp(clock: () => Date = () => new Date("2026-01-01T00:00:00.000Z")) {
   const repos = createMemoryRepos();
-  const provider = await repos.providers.ensure({ type: "local", baseUrl: "http://dav.test" });
   const account = await repos.accounts.create({ displayName: "Alice" });
   const identity = await repos.identities.create({
     accountId: account.id,
-    providerId: provider.id,
-    externalUsername: "alice",
+    username: "alice",
   });
 
   const service = createTokenService({

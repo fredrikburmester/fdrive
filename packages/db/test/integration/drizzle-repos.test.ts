@@ -56,7 +56,6 @@ defineReposSuite("drizzle", async () => {
       app.tags,
       app.identities,
       app.accounts,
-      app.providers,
       app.settings,
       app.system_events
     cascade
@@ -127,23 +126,17 @@ describe("metadata prefix operations", () => {
         app.recents,
         app.tags,
         app.identities,
-        app.accounts,
-        app.providers
+        app.accounts
       cascade
     `);
   });
 
   async function createIdentity(label: string) {
     const repos = createRepos(db);
-    const provider = await repos.providers.ensure({
-      type: "local",
-      baseUrl: `http://prefix-${label}`,
-    });
     const account = await repos.accounts.create({ displayName: label });
     const identity = await repos.identities.create({
       accountId: account.id,
-      providerId: provider.id,
-      externalUsername: label,
+      username: label,
     });
     return { account, identity, repos };
   }
@@ -525,23 +518,17 @@ describe("metadata lookups for oversized directory listings", () => {
         app.favorites,
         app.tags,
         app.identities,
-        app.accounts,
-        app.providers
+        app.accounts
       cascade
     `);
   });
 
   async function seedListing() {
     const repos = createRepos(db);
-    const provider = await repos.providers.ensure({
-      type: "local",
-      baseUrl: "http://oversized",
-    });
     const account = await repos.accounts.create({ displayName: "oversized" });
     const identity = await repos.identities.create({
       accountId: account.id,
-      providerId: provider.id,
-      externalUsername: "oversized",
+      username: "oversized",
     });
     const work = await repos.tags.create(account.id, { name: "Work", color: null });
     const personal = await repos.tags.create(account.id, { name: "Personal", color: null });

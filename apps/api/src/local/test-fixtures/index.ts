@@ -1,7 +1,7 @@
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import type { Identity, Provider, Repos } from "@fdrive/db";
+import type { Identity, Repos } from "@fdrive/db";
 import { createFilesFolder, type FilesFolder } from "@fdrive/local";
 import { onTestFinished } from "vitest";
 import { createScryptSharePasswords, type SharePasswords } from "../../shares/passwords.js";
@@ -48,27 +48,19 @@ export interface SeedLocalUser {
   readonly disabled?: boolean;
 }
 
-/** The files folder's row in `app.providers`, as the API ensures it at startup. */
-export function seedStorageRow(repos: Pick<Repos, "providers">): Promise<Provider> {
-  return repos.providers.ensure({ type: "local", baseUrl: "local" });
-}
-
 /**
  * Creates `users`, each with their account and login, with real (cheap)
- * password hashes. Their logins name the files folder's row, created here
- * first as the API creates it at startup. Resolves to the logins.
+ * password hashes. Resolves to the logins.
  */
 export async function seedLocalUsers(
-  repos: Pick<Repos, "localUsers" | "logins" | "providers">,
+  repos: Pick<Repos, "localUsers" | "logins">,
   users: readonly SeedLocalUser[],
   passwords: SharePasswords = FAST_PASSWORDS,
 ): Promise<Identity[]> {
-  const provider = await seedStorageRow(repos);
   const logins: Identity[] = [];
   for (const user of users) {
     logins.push(
       await repos.logins.createUser({
-        providerId: provider.id,
         username: user.username,
         passwordHash: await passwords.hash(user.password),
         isAdmin: false,

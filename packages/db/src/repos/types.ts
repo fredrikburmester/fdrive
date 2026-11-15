@@ -1,50 +1,6 @@
 import type { SearchTypeFilter } from "@fdrive/contracts";
 import type { LoginRepo } from "./logins-types.js";
 
-/** A storage backend instance: the files folder. */
-export interface Provider {
-  readonly id: string;
-  readonly type: string;
-  readonly baseUrl: string;
-  /** Shown to users; empty means "use the endpoint host". */
-  readonly label: string;
-  /** The provider module's configuration values, validated by the module. */
-  readonly config: Readonly<Record<string, unknown>>;
-  readonly enabled: boolean;
-  /** The endpoint is pinned by environment and cannot be changed at runtime. */
-  readonly managedByEnv: boolean;
-  readonly createdAt: Date;
-}
-
-export interface ProviderPatch {
-  readonly label?: string;
-  readonly baseUrl?: string;
-  readonly config?: Readonly<Record<string, unknown>>;
-  readonly enabled?: boolean;
-  readonly managedByEnv?: boolean;
-}
-
-export interface ProviderRepo {
-  get(id: string): Promise<Provider | null>;
-  /** Every provider, oldest first. */
-  list(): Promise<Provider[]>;
-  /**
-   * Finds the provider for (type, baseUrl), creating it when it does not
-   * exist yet. Idempotent: repeated calls with the same input always
-   * return the same row, and never change an existing row's other fields.
-   */
-  ensure(input: { type: string; baseUrl: string }): Promise<Provider>;
-  /** Atomic insert-only creation; duplicate endpoint throws ConflictError. */
-  create(input: { type: string; baseUrl: string } & ProviderPatch): Promise<Provider>;
-  /** Applies `patch` and returns the row, or `null` when no such provider exists. */
-  update(id: string, patch: ProviderPatch): Promise<Provider | null>;
-  /**
-   * Deletes the provider. Throws `ConflictError` while identities still
-   * reference it; a no-op when it does not exist.
-   */
-  delete(id: string): Promise<void>;
-}
-
 /** A user of the built-in local storage, which fdrive owns. */
 export interface LocalUser {
   readonly username: string;
@@ -127,27 +83,21 @@ export interface AccountRepo {
   setAdmin(id: string, isAdmin: boolean): Promise<void>;
 }
 
-/** A login on a provider. Belongs to exactly one account. */
+/** A login, named after its local user. Belongs to exactly one account. */
 export interface Identity {
   readonly id: string;
   readonly accountId: string;
-  readonly providerId: string;
-  readonly externalUsername: string;
+  readonly username: string;
   readonly createdAt: Date;
   readonly lastLoginAt: Date | null;
 }
 
 export interface IdentityRepo {
-  findByProviderUsername(providerId: string, username: string): Promise<Identity | null>;
-  create(input: {
-    accountId: string;
-    providerId: string;
-    externalUsername: string;
-  }): Promise<Identity>;
+  /** The login named exactly `username`. */
+  findByUsername(username: string): Promise<Identity | null>;
+  create(input: { accountId: string; username: string }): Promise<Identity>;
   get(id: string): Promise<Identity | null>;
   touchLogin(id: string, at: Date): Promise<void>;
-  /** How many identities reference `providerId`. */
-  countByProvider(providerId: string): Promise<number>;
   /**
    * Every identity across every account. Used by the indexer event listener
    * to resolve which identities a filesystem change under a given root and
@@ -547,7 +497,6 @@ export interface SystemEventRepo {
 
 /** The full set of app-schema repositories, bundled for convenient wiring. */
 export interface Repos {
-  readonly providers: ProviderRepo;
   readonly localUsers: LocalUserRepo;
   readonly localGrants: LocalGrantRepo;
   readonly accounts: AccountRepo;

@@ -82,7 +82,7 @@ describe("metadata follows the Mac's writes as they commit", () => {
     bob = await login("bob");
     headers = await pairMac(alice);
     const owner = (await repos.identities.listAll()).find(
-      (identity) => identity.externalUsername === "alice",
+      (identity) => identity.username === "alice",
     );
     if (owner === undefined) throw new Error("alice has no login");
     identityId = owner.id;

@@ -64,7 +64,7 @@ export function recoveryIdentity(text: string): string {
   if (!key || key.length > 1000) throw Error("Recovery kit does not contain an age identity");
   return key;
 }
-/** Deliberately separate from normal composition: no providers, sessions, outboxes or workers. */
+/** Deliberately separate from normal composition: no storage, sessions, outboxes or workers. */
 export function createRecoveryApp(
   config: AppConfig,
   pool: Pool,

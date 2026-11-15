@@ -17,8 +17,7 @@ function identity(id: string, username: string): Identity {
   return {
     id,
     accountId: `${id}-account`,
-    providerId: "provider",
-    externalUsername: username,
+    username,
     createdAt: NOW,
     lastLoginAt: null,
   };

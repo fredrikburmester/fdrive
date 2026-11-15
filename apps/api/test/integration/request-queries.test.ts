@@ -103,12 +103,12 @@ describe("queries per request", () => {
           rows.map(([, key]) => ({ contentKey: key, size: 256, storagePath: "aa/thumb.webp" })),
         );
       for (const identity of await repos.identities.listAll()) {
-        bearers[identity.externalUsername] = generateApiToken();
+        bearers[identity.username] = generateApiToken();
         await repos.apiTokens.create({
           accountId: identity.accountId,
           identityId: identity.id,
           name: "query counts",
-          tokenHash: hashApiToken(bearers[identity.externalUsername] ?? ""),
+          tokenHash: hashApiToken(bearers[identity.username] ?? ""),
           expiresAt: null,
           access: { mode: "read", paths: ["/"] },
         });

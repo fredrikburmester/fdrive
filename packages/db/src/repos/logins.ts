@@ -41,7 +41,7 @@ async function enabledAdmins(tx: Transaction): Promise<number> {
   const result = await tx.execute<{ count: number }>(sql`
     select count(*)::int as count
     from ${localUsers}
-    join ${identities} on ${identities.externalUsername} = ${localUsers.username}
+    join ${identities} on ${identities.username} = ${localUsers.username}
     join ${accounts} on ${accounts.id} = ${identities.accountId}
     where ${accounts.isAdmin} and not ${localUsers.disabled}
   `);
@@ -71,8 +71,7 @@ async function insertAccountAndLogin(tx: Transaction, input: NewLocalUser): Prom
     .insert(identities)
     .values({
       accountId: account.id,
-      providerId: input.providerId,
-      externalUsername: input.username,
+      username: input.username,
       createdAt: input.at,
     })
     .returning();
@@ -94,7 +93,7 @@ async function userWithLogin(
     .select({ login: identities, isAdmin: accounts.isAdmin })
     .from(identities)
     .innerJoin(accounts, eq(accounts.id, identities.accountId))
-    .where(eq(identities.externalUsername, user.username));
+    .where(eq(identities.username, user.username));
   if (row === undefined) throw new LoginError("missing_identity");
   return { user, login: row.login, isAdmin: row.isAdmin };
 }
@@ -106,14 +105,13 @@ async function userWithLogin(
 const loginColumns = {
   identityId: identities.id,
   accountId: identities.accountId,
-  providerId: identities.providerId,
-  username: identities.externalUsername,
+  username: identities.username,
   displayName: accounts.displayName,
   isAdmin: accounts.isAdmin,
   active: sql<boolean>`coalesce(not ${localUsers.disabled}, false)`,
 };
 const toAccount = eq(accounts.id, identities.accountId);
-const toUser = eq(localUsers.username, identities.externalUsername);
+const toUser = eq(localUsers.username, identities.username);
 
 /** A name taken in any case, by a user or by a login a removed user left, is a conflict. */
 async function creating<T>(run: () => Promise<T>): Promise<T> {
@@ -168,7 +166,7 @@ export function createLoginRepo(db: Db): LoginRepo {
           const [left] = await tx
             .select()
             .from(identities)
-            .where(eq(identities.externalUsername, input.username));
+            .where(eq(identities.username, input.username));
           if (left === undefined) return insertAccountAndLogin(tx, input);
           await tx
             .update(accounts)
@@ -257,7 +255,7 @@ export function createLoginRepo(db: Db): LoginRepo {
         const [identity] = await tx
           .update(identities)
           .set({ lastLoginAt: input.at })
-          .where(sql`lower(${identities.externalUsername}) = lower(${input.username})`)
+          .where(sql`lower(${identities.username}) = lower(${input.username})`)
           .returning();
         if (identity === undefined) throw new LoginError("missing_identity");
         const [session] = await tx

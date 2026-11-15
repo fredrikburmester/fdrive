@@ -59,14 +59,9 @@ async function fixture(mode: "read" | "organize" | "full" = "full", paths = ["/a
   const storage = base;
   const repos = createMemoryRepos();
   const account = await repos.accounts.create({ displayName: "Alice" });
-  const provider = await repos.providers.ensure({
-    type: "local",
-    baseUrl: "https://storage.invalid",
-  });
   const identity = await repos.identities.create({
     accountId: account.id,
-    providerId: provider.id,
-    externalUsername: "alice",
+    username: "alice",
   });
   const principal: TokenPrincipal = {
     accountId: account.id,

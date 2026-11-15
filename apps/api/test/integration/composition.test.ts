@@ -9,6 +9,8 @@ import { loadConfig } from "../../src/config.js";
 import { generateApiToken, hashApiToken } from "../../src/tokens/token-format.js";
 import { seedLocalUsers } from "./helpers/local-storage.ts";
 
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+
 function createTestLogger(): Logger {
   const noop = () => undefined;
   return {
@@ -90,15 +92,13 @@ describe("composeApp", () => {
     const composed = await composeApp(config, createTestLogger(), () => new Date());
 
     try {
-      // Migrations ran: the app schema's `providers` table exists.
+      // Migrations ran, and the first start gave the files folder its id.
       const { db, close } = createDb(postgres.connectionString);
       try {
         const result = await db.execute(sql`
-          select 1
-          from information_schema.tables
-          where table_schema = 'app' and table_name = 'providers'
+          select value from app.settings where key = 'storage.id'
         `);
-        expect(result.rows).toHaveLength(1);
+        expect(result.rows).toEqual([{ value: { id: expect.stringMatching(UUID) } }]);
       } finally {
         await close();
       }
@@ -125,9 +125,7 @@ describe("composeApp", () => {
       const storageDb = createDb(postgres.connectionString);
       try {
         const repos = createRepos(storageDb.db);
-        const identity = (await repos.identities.listAll()).find(
-          (row) => row.externalUsername === "alice",
-        );
+        const identity = (await repos.identities.listAll()).find((row) => row.username === "alice");
         if (!identity) throw new Error("Alice's identity is missing");
         const token = generateApiToken();
         await repos.apiTokens.create({

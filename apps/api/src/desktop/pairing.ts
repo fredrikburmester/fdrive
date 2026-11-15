@@ -46,8 +46,8 @@ export interface DesktopDeps {
   /** Reads a credential's token and login in one query. */
   logins: Pick<LoginRepo, "byToken">;
   /**
-   * The files folder's provider row, which the Mac compares as a location's
-   * `providerId`, and the installation's storage name, its `displayName`.
+   * The files folder's id (`ensureStorageId`), which the Mac compares as a
+   * location's `providerId`, and the installation's storage name, its `displayName`.
    */
   storage: { readonly id: string; name(): Promise<string> };
   principalFor: PrincipalFactory;

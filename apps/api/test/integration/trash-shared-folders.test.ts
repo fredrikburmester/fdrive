@@ -117,7 +117,7 @@ describe("Trash and folders shared with people, against real PostgreSQL and a lo
 
     // The grantee's history has the trash, at the path they deleted.
     const history = await database.db.execute<{ username: string; path: string; leaf: string }>(sql`
-      select i.external_username as username, e.after ->> 'path' as path,
+      select i.username, e.after ->> 'path' as path,
         e.after ->> 'trashLeaf' as leaf
       from app.activity_events e join app.identities i on i.id = e.identity_id
       where e.action = 'file.trash' and e.stage = 'outcome'`);
@@ -140,7 +140,7 @@ describe("Trash and folders shared with people, against real PostgreSQL and a lo
     expect(existsSync(storage.path("alice", "/Team/plan.txt"))).toBe(true);
     expect(await favorites(alice)).toEqual(["/Team/plan.txt"]);
     const restoredBy = await database.db.execute<{ username: string }>(sql`
-      select i.external_username as username from app.activity_events e
+      select i.username from app.activity_events e
         join app.identities i on i.id = e.identity_id
       where e.action = 'file.restore' and e.stage = 'outcome'`);
     expect(restoredBy.rows).toEqual([{ username: "alice" }]);

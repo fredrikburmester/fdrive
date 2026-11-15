@@ -15,8 +15,6 @@ export const DEFAULT_STORAGE_NAME = "Local folder";
 
 /** `GET /api/v1/system/storage`: the files folder as System > General shows it. */
 export const SystemStorage = z.object({
-  /** The files folder's row in `app.providers`, which Trash settings and Office name. */
-  id: z.uuid(),
   name: z.string(),
   /** Whether fdrive can use the folder now: this installation's, readable, writable and enterable. */
   healthy: z.boolean(),
