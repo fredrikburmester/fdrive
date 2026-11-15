@@ -4,20 +4,23 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Readable } from "node:stream";
 import * as backupPackage from "@fdrive/backup";
-import { captureSnapshot, inspectArchive, providerDestination, readBounded } from "@fdrive/backup";
-import { StorageError } from "@fdrive/core";
-import { createMemoryStorage, type MemoryStorage } from "@fdrive/core/testing";
+import {
+  type BackupDestination,
+  captureSnapshot,
+  inspectArchive,
+  localBlobs,
+  readBounded,
+} from "@fdrive/backup";
 import { createDb, migrate } from "@fdrive/db";
 import { startPostgres } from "@fdrive/testkit";
 import { Decrypter, generateIdentity, identityToRecipient } from "age-encryption";
 import { Pool } from "pg";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { open } from "../auth/crypto.js";
-import type { StorageSource } from "../auth/storage-factory.js";
 import { type AppConfig, loadConfig } from "../config.js";
 import { createScryptSharePasswords } from "../shares/passwords.js";
 import { environmentFingerprint, resumeRecovery, runBackupCommand } from "./command.js";
-import { createBackupModule } from "./module.js";
+import { createBackupModule, masterSecrets } from "./module.js";
 import {
   createRecoveryApp,
   recoveryIdentity,
@@ -40,23 +43,29 @@ let count = 0;
 let owner: string, identity: string, provider: string;
 /** The stored address of the source installation's storage row. */
 const SOURCE_URL = "http://source.invalid";
-/** What the source's files folder holds: every seed user's files. */
-let served: MemoryStorage;
-/** The source installation's files folder: every user's files are `served`. */
-const fileserver: StorageSource = { storage: () => served, admit: async () => undefined };
-/** The files folder backups use now; a test may swap it for another. */
-let current: StorageSource = fileserver;
 /** Cheap scrypt: the hashes are real and verify like production ones. */
 const passwords = createScryptSharePasswords({ cost: 1024, blockSize: 8, parallelization: 1 });
 /** The backup module the API and worker build for the source installation. */
-function backupModule(settings: AppConfig) {
-  return createBackupModule(settings, {
-    storageId: provider,
-    folder: {
-      storage: (username) => current.storage(username),
-      admit: (username) => current.admit(username),
+const backupModule = createBackupModule;
+/** A bucket kept in memory, standing in for S3 where only the copied bytes matter. */
+function memoryBucket(): BackupDestination {
+  const objects = new Map<string, Buffer>();
+  return {
+    information: async (name) => (objects.has(name) ? {} : null),
+    async put(name, file) {
+      objects.set(name, await readFile(file));
+      return {};
     },
-  });
+    async get(name) {
+      const bytes = objects.get(name);
+      if (!bytes) throw Error("No such object");
+      return Readable.from([bytes]);
+    },
+    list: async () => [...objects.keys()],
+    async remove(name) {
+      objects.delete(name);
+    },
+  };
 }
 async function fresh() {
   const name = `backup_api_${count++}`;
@@ -88,7 +97,6 @@ beforeEach(async () => {
   owner = randomUUID();
   identity = randomUUID();
   provider = randomUUID();
-  current = fileserver;
   module = backupModule(config);
   await module.start();
   await source.pool.query(
@@ -107,7 +115,6 @@ beforeEach(async () => {
   await source.pool.query("insert into app.settings(key,value) values('setup.owner.v1',$1)", [
     JSON.stringify({ state: "complete", accountId: owner }),
   ]);
-  served = createMemoryStorage({ "/docs/readme": "source document" });
 });
 afterEach(async () => {
   vi.useRealTimers();
@@ -122,23 +129,23 @@ afterAll(async () => {
   await control.close();
   await container.stop();
 });
+/** A backup of the source installation with one Office recovery file. */
 async function snapshot() {
-  await module.attachments.upload(
-    {
-      label: "Fileserver",
-      filename: "server.zip",
-      sourceDate: null,
-      notes: "Use fileserver import",
-    },
-    Readable.from([Buffer.from("PK opaque config")]),
-  );
+  const recovery = join(directory, "office");
+  await mkdir(recovery, { recursive: true });
+  await writeFile(join(recovery, "proof.key"), "office proof key");
   const output = join(directory, `${randomUUID()}.age`);
-  await captureSnapshot(module.engine.options.source, {
-    id: randomUUID(),
-    installationId: (await module.store.configuration()).installation_id,
-    recipient,
-    output,
-  });
+  const source = module.engine.options.source;
+  const blobs = async () => ({ sources: await localBlobs(recovery, "office"), coverage: [] });
+  await captureSnapshot(
+    { ...source, blobs },
+    {
+      id: randomUUID(),
+      installationId: (await module.store.configuration()).installation_id,
+      recipient,
+      output,
+    },
+  );
   return { file: output, inspection: await inspectArchive(output, key) };
 }
 async function secretFile(name: string, text: string) {
@@ -147,7 +154,7 @@ async function secretFile(name: string, text: string) {
   return file;
 }
 
-it("inspects and extracts encrypted backups without evaluating database configuration", async () => {
+it("inspects encrypted backups without evaluating database configuration", async () => {
   const { file, inspection } = await snapshot();
   const keyFile = await secretFile("key", `# Recovery kit\n${key}\n`);
   const output: string[] = [];
@@ -159,28 +166,9 @@ it("inspects and extracts encrypted backups without evaluating database configur
   );
   expect(output.join()).not.toContain(master.toString("base64"));
   expect(JSON.parse(output[0] ?? "").id).toBe(inspection.header.id);
-  const version = inspection.manifest.blobs.find((blob) => blob.kind === "attachment")?.path;
-  if (!version) throw Error("Missing attachment");
-  const extracted = join(directory, "export.zip");
-  await runBackupCommand(
-    unavailable,
-    [
-      "extract",
-      "--file",
-      file,
-      "--key-file",
-      keyFile,
-      "--attachment",
-      version,
-      "--output",
-      extracted,
-    ],
-    (value) => output.push(value),
-  );
-  expect(await readFile(extracted, "utf8")).toBe("PK opaque config");
-  await expect(
-    runBackupCommand(unavailable, ["extract", "--file", file, "--key-file", keyFile]),
-  ).rejects.toThrow("Choose --attachment");
+  expect(JSON.parse(output[0] ?? "").blobs).toEqual([
+    { kind: "office", path: "proof.key", size: 16 },
+  ]);
   await expect(runBackupCommand(unavailable, ["inspect"])).rejects.toThrow("Supply --file");
   await chmod(keyFile, 0o644);
   await expect(
@@ -307,17 +295,13 @@ it("boots only the isolated recovery API, requires host authorization, and resto
       )
     ).rows[0].count,
   ).toBe(0);
-  const resumed = backupModule(restoredConfig);
-  try {
-    const rows = await resumed.store.attachments();
-    const row = rows[0];
-    if (!row) throw Error("Missing restored ZIP");
-    expect((await readBounded(await resumed.attachments.download(row))).toString()).toBe(
-      "PK opaque config",
-    );
-  } finally {
-    await resumed.close();
-  }
+  // Recovery files stay quarantined for the operator; resume publishes nothing.
+  const recovered = (
+    await target.db.pool.query("select value from app.settings where key='backup.recovery.v1'")
+  ).rows[0].value;
+  expect(await readFile(join(recovered.stateDirectory, "blobs-0"), "utf8")).toBe(
+    "office proof key",
+  );
   await expect(resumeRecovery(restoredConfig, review)).rejects.toThrow("No matching");
 });
 
@@ -388,11 +372,6 @@ it("rehearses a host cutover and rollback: the old pair stays untouched and serv
       installation_id: installation,
       restored: false,
     });
-    const row = (await rolledBack.store.attachments())[0];
-    if (!row) throw Error("Old installation lost its ZIP");
-    expect((await readBounded(await rolledBack.attachments.download(row))).toString()).toBe(
-      "PK opaque config",
-    );
   } finally {
     await rolledBack.close();
   }
@@ -430,7 +409,7 @@ it("rehearses into a new installation identity without any provider contact or p
     sourceInstallationId: inspection.header.installationId,
     snapshotId: inspection.header.id,
     result: "passed",
-    tableCount: 43,
+    tableCount: 42,
     blobCount: 1,
   });
   expect(
@@ -483,60 +462,26 @@ it("expires bootstrap authorization and keeps a restored installation paused wit
   expect((await paused.app.request("/api/v1/recovery/status")).status).toBe(503);
 });
 
-it("keeps a files folder destination in the adding owner's files, with no password", async () => {
-  const input = {
-    type: "provider" as const,
-    name: "Fileserver",
-    providerId: provider,
-    prefix: "/docs",
-  };
-  const record = await module.destinationRecord(input, "alice");
-  expect(record.config).toMatchObject({ username: "alice" });
-  expect(record.config.prefix).toContain("/.fdrive-backups/");
+it("saves a bucket with its keys sealed and its prefix narrowed to this installation", async () => {
+  const installation = (await module.store.configuration()).installation_id;
+  const bucket = await module.destinationRecord({
+    type: "s3",
+    name: "Bucket",
+    endpoint: "https://s3.example.invalid",
+    region: "test",
+    bucket: "private",
+    prefix: "backups/",
+    pathStyle: true,
+    accessKeyId: "test",
+    secretAccessKey: "secret",
+  });
+  expect(bucket.config).toMatchObject({ bucket: "private", prefix: `backups/${installation}` });
+  expect(bucket.config).not.toHaveProperty("secretAccessKey");
   expect(
     JSON.parse(
-      Buffer.from(open(master, record.secret, `backup-destination:${record.id}`)).toString(),
+      Buffer.from(open(master, bucket.secret, `backup-destination:${bucket.id}`)).toString(),
     ),
-  ).toEqual({});
-  await module.engine.testDestination(record);
-  const transport = await module.destination({ ...record, enabled: true });
-  const file = await secretFile("payload", "encrypted bytes");
-  await transport.put("copy.age", file);
-  expect((await readBounded(await transport.get("copy.age"))).toString()).toBe("encrypted bytes");
-  await module.destinationRecord({ ...input, name: "Same directory" }, "alice");
-  // A user the files folder no longer lets in stops the copies.
-  current = {
-    ...fileserver,
-    admit: async () => {
-      throw new StorageError("forbidden", "this user may not sign in");
-    },
-  };
-  await expect(module.destination(record)).rejects.toMatchObject({ kind: "forbidden" });
-  await expect(module.destinationRecord(input, "alice")).rejects.toMatchObject({
-    kind: "forbidden",
-  });
-  current = fileserver;
-  await expect(
-    module.destination({ ...record, config: { ...record.config, providerId: randomUUID() } }),
-  ).rejects.toThrow("provider changed");
-  await expect(
-    module.destinationRecord({ ...input, name: "Missing", providerId: randomUUID() }, "alice"),
-  ).rejects.toThrow("unavailable");
-  const bucket = await module.destinationRecord(
-    {
-      type: "s3",
-      name: "Bucket",
-      endpoint: "https://s3.example.invalid",
-      region: "test",
-      bucket: "private",
-      prefix: "backups/",
-      pathStyle: true,
-      accessKeyId: "test",
-      secretAccessKey: "secret",
-    },
-    "alice",
-  );
-  expect(bucket.config).not.toHaveProperty("secretAccessKey");
+  ).toEqual({ accessKeyId: "test", secretAccessKey: "secret" });
   expect(await module.destination(bucket)).toHaveProperty("put");
   await expect(module.destination({ ...bucket, config: {} })).rejects.toThrow("Invalid bucket");
 });
@@ -563,7 +508,7 @@ it("records missing source coverage and preserves mount identities and staged re
       expect(result.sources[0]?.sourceId).toHaveLength(64);
       expect(result.coverage.join()).toContain("Required logs source");
       expect(result.coverage.join()).toContain("OCR original storage");
-      expect(result.coverage.join()).toContain("Office persistent");
+      expect(result.coverage.join()).toContain("Office proof keys");
     } finally {
       client.release();
     }
@@ -613,8 +558,14 @@ it("provides an explicit host-only ownership repair and rejects accidental live 
     ),
   ).rejects.toThrow("new empty database");
   const options = restoreOptions(config, source.pool, file, key, directory);
-  const sealed = options.secrets.seal(Buffer.from("test"), "context");
-  expect(Buffer.from(options.secrets.open(sealed, "context")).toString()).toBe("test");
+  // Destination secrets are resealed from the source's master key to this installation's.
+  const secrets = masterSecrets(master);
+  const resealed = options.reseal(
+    secrets.seal(Buffer.from("test"), "context"),
+    "context",
+    master.toString("base64"),
+  );
+  expect(Buffer.from(secrets.open(resealed, "context")).toString()).toBe("test");
   const decrypted = new Decrypter();
   decrypted.addIdentity(key);
   const challenge = await module.engine.challenge(recipient);
@@ -623,25 +574,9 @@ it("provides an explicit host-only ownership repair and rejects accidental live 
   );
 });
 
-it("builds storage in the named user's files, without signing in", async () => {
-  const storage = vi.fn((_username: string) => served);
-  current = { storage, admit: async () => undefined };
-  const record = await module.destinationRecord(
-    { type: "provider", name: "Files", providerId: provider, prefix: "/docs" },
-    "alice",
-  );
-  await module.destination(record);
-  expect(storage).toHaveBeenCalledWith("alice");
-  expect(storage.mock.calls.every(([username]) => username === "alice")).toBe(true);
-});
-
 it("discovers and fetches a completed bucket copy with no database or application key", async () => {
   const { file, inspection } = await snapshot();
-  const record = await module.destinationRecord(
-    { type: "provider", name: "Files", providerId: provider, prefix: "/docs" },
-    "alice",
-  );
-  const destination = await module.destination(record);
+  const destination = memoryBucket();
   const bytes = await readFile(file);
   const id = inspection.header.id;
   await destination.put(`${id}.fdrive.age`, file);
@@ -672,16 +607,13 @@ it("discovers and fetches a completed bucket copy with no database or applicatio
   };
   const location = await secretFile("destination.json", JSON.stringify(bucket));
   // The bucket's own client is the backup package's; here the bucket holds what the copy above put.
-  const bucketDestination = vi
-    .spyOn(backupPackage, "s3Destination")
-    .mockReturnValue(providerDestination(served, String(record.config.prefix)));
+  const bucketDestination = vi.spyOn(backupPackage, "s3Destination").mockReturnValue(destination);
   const unavailable = () => {
     throw Error("No application environment");
   };
   const output: string[] = [];
   await expect(runBackupCommand(unavailable, ["list"])).rejects.toThrow("destination JSON");
-  // Offline there are no users to sign in with: a copy in the files folder is read from disk,
-  // so a destination file names a bucket and nothing else.
+  // A destination file names a bucket and nothing else.
   for (const other of [
     { ...bucket, type: "local" },
     { type: "webdav", id: provider, baseUrl: SOURCE_URL, config: {}, prefix: "/", credential: {} },
@@ -764,7 +696,6 @@ it("never captures what the Mac staged, and preserves quarantined provenance", a
         stateDirectory: staged,
         blobs: [
           { kind: "office", entry: "blobs/old", path: "/old", size: 14, sourceId: "source-a" },
-          { kind: "attachment", entry: "ignored", path: "old", size: 0 },
           { kind: "ocr", entry: "blobs/missing", path: "original", size: 1 },
         ],
       }),
@@ -807,43 +738,7 @@ it("keeps the worker dormant during restore and releases process listeners on sh
   }
 });
 
-it("refuses changed namespaces, recursive source mounts, and unavailable retained ZIPs", async () => {
-  const storage = createMemoryStorage({ "/file": "ordinary" });
-  current = { ...fileserver, storage: () => storage };
-  const input = {
-    type: "provider" as const,
-    name: "Files",
-    providerId: provider,
-    prefix: "/file",
-  };
-  await expect(module.destinationRecord(input, "alice")).rejects.toThrow(
-    "existing private directory",
-  );
-  await storage.upload("/.fdrive-backups", new Uint8Array([1]));
-  await expect(module.destinationRecord({ ...input, prefix: "/" }, "alice")).rejects.toThrow(
-    "namespace is not a directory",
-  );
-  await storage.deleteFile("/.fdrive-backups");
-  const stat = vi.spyOn(storage, "stat");
-  stat.mockImplementation(async (path) => {
-    if (path === "/") return { kind: "dir", size: 0, modifiedAt: null, contentType: null };
-    throw new StorageError("forbidden", "permission denied");
-  });
-  await expect(module.destinationRecord({ ...input, prefix: "/" }, "alice")).rejects.toThrow(
-    "permission denied",
-  );
-  stat.mockRestore();
-  const record = await module.destinationRecord({ ...input, prefix: "/" }, "alice");
-  await expect(
-    module.destination({ ...record, config: { ...record.config, prefix: 1 } }),
-  ).rejects.toThrow("Unsupported backup provider");
-  await storage.deleteDir(String(record.config.prefix));
-  await storage.upload(String(record.config.prefix), new Uint8Array([1]));
-  await expect(module.destination(record)).rejects.toThrow("existing private backup directory");
-  const { inspection } = await snapshot();
-  const version = inspection.manifest.blobs.find((blob) => blob.kind === "attachment")?.path;
-  if (!version) throw Error("No attachment");
-  await rm(module.attachments.path(version));
+it("refuses recursive and overlapping source mounts", async () => {
   const client = await source.pool.connect();
   const configured = backupModule({
     ...config,
@@ -857,12 +752,6 @@ it("refuses changed namespaces, recursive source mounts, and unavailable retaine
     fdriveIndexerUrl: "http://indexer.invalid",
   });
   try {
-    expect((await module.engine.options.source.blobs(client)).coverage.join()).toContain(
-      "Configuration attachment missing",
-    );
-    expect((await configured.engine.options.source.blobs(client, true)).coverage.join()).toContain(
-      "Configuration attachment missing",
-    );
     await expect(configured.engine.options.source.blobs(client)).rejects.toThrow(
       "output cannot be inside",
     );
@@ -919,21 +808,6 @@ it("rejects unreviewed ownership and a wrong owner password, and resumes only an
   await target.db.pool.query("update app.local_users set disabled=true where username='alice'");
   await expect(resumeRecovery(restoredConfig, review)).rejects.toThrow("password is not right");
   await target.db.pool.query("update app.local_users set disabled=false where username='alice'");
-  const { fdriveBackupStateDir: _state, ...missingStorage } = restoredConfig;
-  await expect(resumeRecovery(missingStorage, review)).rejects.toThrow(
-    "Persistent backup directory",
-  );
-  const version = (await target.db.pool.query("select version_id from app.backup_attachments"))
-    .rows[0].version_id;
-  const attachmentTarget = join(
-    restoredConfig.fdriveBackupStateDir,
-    "attachments",
-    `${version}.age`,
-  );
-  await mkdir(join(restoredConfig.fdriveBackupStateDir, "attachments"), { recursive: true });
-  await symlink(keyFile, attachmentTarget);
-  await expect(resumeRecovery(restoredConfig, review)).rejects.toThrow("not a regular file");
-  await rm(attachmentTarget);
   const savedRestore = (
     await target.db.pool.query("select value from app.settings where key='backup.restore.v1'")
   ).rows[0].value;

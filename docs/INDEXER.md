@@ -30,8 +30,8 @@ Every regular file under a configured root, except:
 - Names in `SKIP_NAMES` (`.DS_Store`, `Thumbs.db`, `desktop.ini`, `.localized`),
   AppleDouble sidecars (`._*`) and uploads local storage is still writing
   (`.fdrive-partial-<16 hex>`, renamed to the real name once complete).
-- Directories in `SKIP_DIRS` (`.fdrive-backups`, `.fdrive-desktop`, `@eaDir`, `.Trash`,
-  `.Trashes`, `node_modules`, `.git`), wherever they lie. `.fdrive-desktop` is the Mac app's
+- Directories in `SKIP_DIRS` (`.fdrive-desktop`, `@eaDir`, `.Trash`, `.Trashes`,
+  `node_modules`, `.git`), wherever they lie. `.fdrive-desktop` is the Mac app's
   folder (staged uploads, the versions its writes replace and its Trash), so none of it is
   indexed or journaled; the next scan sweeps rows indexed there before. fdrive's own Trash is
   indexed, so moving an item into and out of it stays a rename that keeps its thumbnails and

@@ -6,7 +6,7 @@ export interface SecretCodec {
   open(bytes: Uint8Array, context: string): Uint8Array;
 }
 export interface BlobSource {
-  kind: "attachment" | "ocr" | "logs" | "office";
+  kind: "ocr" | "logs" | "office";
   path: string;
   size: number;
   sourceId?: string | undefined;
@@ -43,11 +43,8 @@ export interface BackupSource {
   pool: Pool;
   masterKey: string;
   environment: Record<string, unknown>;
-  /** Called under the exclusive checkpoint and the database snapshot. */
-  blobs(
-    client: PoolClient,
-    metadataOnly?: boolean,
-  ): Promise<{ sources: BlobSource[]; coverage: string[] }>;
+  /** Called under the database snapshot, while the recovery files gate is held exclusively. */
+  blobs(client: PoolClient): Promise<{ sources: BlobSource[]; coverage: string[] }>;
 }
 export interface ObjectInformation {
   versionId?: string;

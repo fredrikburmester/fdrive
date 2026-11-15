@@ -82,7 +82,8 @@ fn walk_skips_junk_and_sorts_directories() {
         ("node_modules/x.txt", "x"),
         (".git/config", "x"),
         ("alice/.fdrive-desktop/staging/s.txt", "staged"),
-        ("alice/.fdrive-backups/install/b.tar", "backup"),
+        // Backups no longer go into the files folder; one an old release left is the user's.
+        ("alice/.fdrive-backups/install/b.age", "backup"),
         ("sub/c.txt", "c"),
         ("sub/deeper/d.txt", "d"),
         ("Zed/e.txt", "e"),
@@ -109,6 +110,7 @@ fn walk_skips_junk_and_sorts_directories() {
         vec![
             "A.txt",
             "b.txt",
+            "alice/.fdrive-backups/install/b.age",
             "sub/.fdrive-partial-0123456789abcdef.docx",
             "sub/c.txt",
             "sub/deeper/d.txt",

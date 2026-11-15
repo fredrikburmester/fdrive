@@ -23,7 +23,7 @@ export const HeaderSchema = z
 export const BlobSchema = z
   .object({
     entry: z.string().regex(/^blobs\/\d+$/),
-    kind: z.enum(["attachment", "ocr", "logs", "office"]),
+    kind: z.enum(["ocr", "logs", "office"]),
     path: z.string().max(8192),
     size: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),
     sha256: z.string().regex(/^[a-f0-9]{64}$/),

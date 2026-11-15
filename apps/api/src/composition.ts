@@ -1,4 +1,4 @@
-import { withBackupWriter } from "@fdrive/backup";
+import { withDatabaseWriter } from "@fdrive/backup";
 import { reservedFolders, type StorageProvider } from "@fdrive/core";
 import {
   createActivityExportsRepo,
@@ -210,7 +210,7 @@ export async function composeApp(
     return reservedFolders(settings.enabled ? settings.path : null);
   };
   const folder = deploymentFilesFolder(config, repos, { changes, guard, closedFolders });
-  const backups = createBackupModule(config, { storageId, folder });
+  const backups = createBackupModule(config);
   await backups.start();
 
   const activityPathLocks = createDb(config.databaseUrl, {
@@ -808,7 +808,7 @@ export async function composeApp(
               path.includes("/internal/")
             )
               return work();
-            await withBackupWriter(backups.gatePool, work);
+            await withDatabaseWriter(backups.gatePool, work);
           },
         }
       : {}),

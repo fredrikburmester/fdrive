@@ -71,11 +71,10 @@ owner's Trash, in fdrive's Trash layout or in the Mac's `/.fdrive-desktop` (`clo
 
 fdrive keeps its own places inside each user's files, and one rule in `@fdrive/core` names them
 (`isReservedPath`): the Trash folder while Trash is on and the Mac's `/.fdrive-desktop`
-(`reservedFolders`), plus fdrive's Trash layout (`.fdrive-move-v1`) and backup folders
-(`.fdrive-backups`) wherever they lie. Listings, the Mac, search, MCP and AI never show them;
-index queries leave them out in SQL before their limit. The indexer never walks
-`/.fdrive-desktop` or backup folders; it does index the Trash, so moves into and out of it stay
-renames. OCR takes its PDFs from the index and leaves out all of these. Where a consumer differs it says so: links also never reach
+(`reservedFolders`), plus fdrive's Trash layout (`.fdrive-move-v1`) wherever it lies.
+Listings, the Mac, search, MCP and AI never show them; index queries leave them out in SQL
+before their limit. The indexer never walks `/.fdrive-desktop`; it does index the Trash, so
+moves into and out of it stay renames. OCR takes its PDFs from the index and leaves out all of these. Where a consumer differs it says so: links also never reach
 `/Shared with me`.
 
 Metadata uses identity plus canonical virtual path. Application moves and indexer events
@@ -84,7 +83,7 @@ or content hash alone never grants another identity access. Public share links a
 own: fdrive keeps the share in `app.shares` and serves it through the owner's storage, which
 the share reaches only through
 the identity storage factory, only inside its paths, and only for the operations its scope
-allows. Trash, backup folders, `/Shared with me` and the Mac's `/.fdrive-desktop` (which
+allows. Trash, `/Shared with me` and the Mac's `/.fdrive-desktop` (which
 holds its Trash) are never reachable through a link. A link follows the item it names
 wherever it moves, so it never stays at a path where something new could appear: on every
 route other path-keyed metadata follows, through the Trash and its restores, the Mac's

@@ -7,7 +7,6 @@ import {
 } from "@fdrive/core";
 import type { IdentityRepo } from "@fdrive/db";
 import { captureRecycleReceipt } from "../activity/trash.js";
-import { withoutBackupPaths } from "../backups/reserved-storage.js";
 import { ApiHttpError } from "../errors.js";
 
 export type IdentityStorageFactory = (identityId: string) => Promise<StorageProvider>;
@@ -44,8 +43,8 @@ export interface StorageSource {
 }
 
 /**
- * `username`'s storage: their home in the files folder, without the backup
- * namespace, and with `settings` (when given) recorded for the request. With
+ * `username`'s storage: their home in the files folder, with `settings`
+ * (when given) recorded for the request. With
  * Trash on, the storage gets the move-to-trash wrapper underneath the
  * recycle folder view. Reads nothing: whoever asks has already admitted the
  * user. Throws `forbidden` for a name that cannot be a home folder.
@@ -58,7 +57,7 @@ export function buildUserStorage(
 ): StorageProvider {
   let storage: StorageProvider;
   try {
-    storage = withoutBackupPaths(folder.storage(username));
+    storage = folder.storage(username);
   } catch (error) {
     throw asHttp(error);
   }

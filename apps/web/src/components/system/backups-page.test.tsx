@@ -14,9 +14,6 @@ const mocks = vi.hoisted(() => ({
     key: vi.fn(),
     confirm: vi.fn(),
     create: vi.fn(),
-    upload: vi.fn(),
-    removeAttachment: vi.fn(),
-    attachmentUrl: vi.fn(),
     downloadUrl: vi.fn(),
     destination: vi.fn(),
     testDestination: vi.fn(),
@@ -44,9 +41,6 @@ vi.mock("@/lib/api/auth-queries", () => ({
   useMe: () => ({
     data: { identity: { id: "identity", username: "owner", providerId: "provider" } },
   }),
-}));
-vi.mock("@/lib/api/system-queries", () => ({
-  useSystemStorage: () => ({ data: { id: "provider", name: "Fileserver" } }),
 }));
 vi.mock("./system-page", () => ({
   SystemPage: ({
@@ -95,7 +89,6 @@ function data(): BackupsResponse {
     nextRunAt: null,
     restored: false,
     destinations: [],
-    attachments: [],
     runs: [],
   };
 }
@@ -110,7 +103,6 @@ beforeEach(() => {
     dataUpdatedAt: 0,
   }));
   mocks.client.key.mockResolvedValue({ challenge: btoa("encrypted") });
-  mocks.client.attachmentUrl.mockReturnValue("/zip");
   mocks.client.downloadUrl.mockReturnValue("/backup");
   Object.defineProperty(URL, "createObjectURL", {
     configurable: true,
@@ -141,7 +133,7 @@ it("requires fresh owner authentication before preparing a local or remote backu
   );
   fireEvent.click(screen.getByRole("button", { name: "Prepare local download" }));
   await waitFor(() => expect(mocks.client.create).toHaveBeenCalledTimes(2));
-  fireEvent.click(screen.getByRole("button", { name: "Database and ZIPs only" }));
+  fireEvent.click(screen.getByRole("button", { name: "Database only" }));
   await screen.findByRole("alertdialog");
   fireEvent.click(screen.getByRole("button", { name: "Confirm" }));
   await waitFor(() =>
@@ -253,67 +245,38 @@ it("creates a private recovery kit and confirms the key without submitting it to
   fireEvent.click(screen.getByRole("button", { name: "Confirm saved key" }));
   await waitFor(() => expect(mocks.client.confirm).toHaveBeenCalledWith("proof"));
 });
-it("uploads opaque ZIPs with their source dates and notes", async () => {
+it("adds a bucket as the only kind of destination and offers no configuration ZIPs", async () => {
   render(<BackupsPage />);
   await unlock();
-  fireEvent.change(screen.getByLabelText("Bundle name"), {
-    target: { value: "Fileserver configuration" },
-  });
-  fireEvent.change(screen.getByLabelText("Configuration source date (optional)"), {
-    target: { value: "2026-09-01" },
-  });
-  fireEvent.change(screen.getByLabelText("Restore notes (optional)"), {
-    target: { value: "Import using fileserver tools" },
-  });
-  const file = new File(["opaque ZIP"], "server.zip", { type: "application/zip" });
-  fireEvent.change(screen.getByLabelText("Configuration ZIP"), { target: { files: [file] } });
-  const form = screen.getByRole("button", { name: "Upload configuration ZIP" }).closest("form");
-  if (!form) throw Error("Upload form missing");
+  expect(screen.queryByText("Additional configuration files")).toBeNull();
+  expect(screen.queryByLabelText("Configuration ZIP")).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "Add destination" }));
+  expect(screen.queryByLabelText("Destination type")).toBeNull();
+  expect(screen.queryByLabelText("Private backup directory")).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "Backblaze B2" }));
+  for (const [label, value] of [
+    ["Name", "Offsite"],
+    ["Bucket", "private-backups"],
+    ["Access key ID", "key-id"],
+    ["Secret access key", "secret-key"],
+  ] as const)
+    fireEvent.change(screen.getByLabelText(label), { target: { value } });
+  const form = screen.getByRole("button", { name: "Test and save" }).closest("form");
+  if (!form) throw Error("Destination form missing");
   fireEvent.submit(form);
   await waitFor(() =>
-    expect(mocks.client.upload).toHaveBeenCalledWith(
-      {
-        label: "Fileserver configuration",
-        filename: "server.zip",
-        sourceDate: "2026-09-01T00:00:00.000Z",
-        notes: "Import using fileserver tools",
-      },
-      file,
-      undefined,
-    ),
+    expect(mocks.client.destination).toHaveBeenCalledWith({
+      type: "s3",
+      name: "Offsite",
+      endpoint: "https://s3.us-west-004.backblazeb2.com",
+      region: "us-west-004",
+      bucket: "private-backups",
+      prefix: "fdrive-backups",
+      pathStyle: false,
+      accessKeyId: "key-id",
+      secretAccessKey: "secret-key",
+    }),
   );
-});
-it("keeps captured ZIP history separate from active replacement and removal", async () => {
-  state.attachments = [
-    {
-      id: "bundle",
-      versionId: "version",
-      label: "Router",
-      filename: "router.zip",
-      sourceDate: "2026-09-01Z",
-      uploadedAt: "2026-09-14Z",
-      notes: "Restore notes",
-      bytes: "3",
-      sha256: "digest",
-    },
-  ];
-  render(<BackupsPage />);
-  await unlock();
-  expect(screen.getByRole("button", { name: "Download ZIP" })).toHaveProperty(
-    "href",
-    expect.stringContaining("/zip"),
-  );
-  fireEvent.click(screen.getByRole("button", { name: "Replace" }));
-  expect(screen.getByLabelText("Bundle name")).toHaveProperty("value", "Router");
-  expect(screen.getByRole("button", { name: "Replace configuration ZIP" })).toHaveProperty(
-    "disabled",
-    true,
-  );
-  fireEvent.click(screen.getByRole("button", { name: "Remove" }));
-  await screen.findByRole("alertdialog");
-  expect(screen.getByText(/Existing backups keep/)).not.toBeNull();
-  fireEvent.click(screen.getByRole("button", { name: "Confirm" }));
-  await waitFor(() => expect(mocks.client.removeAttachment).toHaveBeenCalledWith("bundle"));
 });
 it("saves schedules and shows failure states without claiming restore verification", async () => {
   state.runs = [

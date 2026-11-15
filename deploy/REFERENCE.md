@@ -229,7 +229,7 @@ All services are hardened following security best practices:
 ## Files folder and permissions
 
 `FDRIVE_FILES_DIR` on the host (default `files` inside `FDRIVE_DATA_DIR`) is mounted at
-`/data` read-write in the `api`, `backup` and `ocr` containers and read-only in the
+`/data` read-write in the `api` and `ocr` containers and read-only in the
 `indexer`. Compose fixes the rest: `FDRIVE_STORAGE_ROOT=/data`, and one indexed root named
 `files` at `/data` in both the API and the indexer. Each user's files are `/data/<username>`.
 
@@ -241,8 +241,7 @@ The four containers start as root for one step: each gives its own state directo
 `FDRIVE_RUN_AS_UID` (default 1000) and then drops to that user for good. The API also gives
 a new, empty files folder to that user, but never changes the owner of files already there,
 and logs `cannot write /data` when that user can't write it. The backup worker keeps one capability after the drop, reading any file,
-because the state it backs up belongs to other services; it writes as the same user, so a
-backup in someone's folder belongs to them. Check the user each process runs as:
+because the state it backs up belongs to other services. Check the user each process runs as:
 
 ```sh
 docker compose exec -T api stat -c %u:%g /proc/1
@@ -267,9 +266,9 @@ indexed files yet. It refuses a folder that is empty while fdrive has users or i
 or whose marker names another installation: Compose mounts an empty `./data/files` when
 `FDRIVE_FILES_DIR` is unset, and reading that as every file deleted would empty search.
 
-While refused, file routes and backups to a folder destination fail with the reason, `core`
-in `GET /api/v1/health` reports `failed` with it in `detail`, `wait-ready.ts` keeps waiting,
-and the indexer neither scans, watches nor applies queued changes. The API and indexer check
+While refused, file routes fail with the reason, `core` in `GET /api/v1/health` reports
+`failed` with it in `detail`, `wait-ready.ts` keeps waiting, and the indexer neither scans,
+watches nor applies queued changes. The API and indexer check
 again every few seconds, so fixing `FDRIVE_FILES_DIR` and running `docker compose up -d` is
 enough. To adopt a folder fdrive refuses, create an empty `.fdrive-files` in it; to take over
 another installation's folder, delete its marker.

@@ -10,7 +10,6 @@ import {
   limitBytes,
   readBounded,
   restoreArchive,
-  type SecretCodec,
 } from "@fdrive/backup";
 import { Hono } from "hono";
 import type { Pool } from "pg";
@@ -27,16 +26,11 @@ export function restoreOptions(
   stateDirectory: string,
 ) {
   const master = parseMasterKey(config.fdriveMasterKey);
-  const secrets: SecretCodec = {
-    open: (bytes, context) => open(master, bytes, context),
-    seal: (bytes, context) => seal(master, bytes, context),
-  };
   return {
     pool,
     file,
     identity,
     stateDirectory,
-    secrets,
     reseal: (bytes: Uint8Array, context: string, source: string) =>
       seal(master, open(parseMasterKey(source), bytes, context), context),
   };
@@ -57,9 +51,8 @@ export function recoveryPreview(inspection: Inspection) {
     })),
     coverage: inspection.manifest.coverage,
     dependencies: [
-      "Ordinary files and live fileserver configuration require separate backups.",
+      "The files folder requires its own backup.",
       "External editor sessions and device-only changes are outside this backup.",
-      "Uploaded ZIPs preserve their uploaded version; restore them using the external system's procedure.",
     ],
   };
 }

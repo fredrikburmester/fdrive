@@ -28,8 +28,8 @@ filesystem details and lets tests run on an in-memory storage. fdrive checks pas
   is collapsed; nothing reads them.
 - A signed-in request's storage is built on first use from the username its session or token
   query read, already admitted ([authentication](AUTH.md#resolving-a-request)); outside a
-  request the storage factory finds the identity and runs `admit` first. Either way it hides
-  the backup namespace (`withoutBackupPaths`) and adds the Trash wrappers when Trash is on.
+  request the storage factory finds the identity and runs `admit` first. Either way it adds
+  the Trash wrappers when Trash is on.
 - The storage's name is the installation setting `storage.name` ("Local folder" until an
   administrator renames it), trimmed, 1 to 120 characters. It shows under each username in the
   sidebar and as the Mac location's `displayName`. `GET /api/v1/system/storage` returns the
