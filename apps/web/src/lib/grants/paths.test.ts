@@ -6,6 +6,7 @@ import {
   entryRestrictions,
   firstLockedReason,
   folderWriteBlock,
+  goesToOwnTrash,
   isPinnedSharedPath,
   isUnderSharedWithMe,
   lockedReason,
@@ -52,6 +53,15 @@ describe("Shared with me paths", () => {
     expect(receivedGrantFor("/Shared with me/Trip/day 1/a.jpg", RECEIVED)).toBe(VIEW);
     expect(receivedGrantFor("/Shared with me/Tripod", RECEIVED)).toBeUndefined();
     expect(receivedGrantFor("/Photos", RECEIVED)).toBeUndefined();
+  });
+});
+
+describe("goesToOwnTrash", () => {
+  it("is true only when nothing lies in a folder shared with the login", () => {
+    expect(goesToOwnTrash(["/Photos", "/a.txt"], RECEIVED)).toBe(true);
+    expect(goesToOwnTrash(["/Shared with me/Tripod"], RECEIVED)).toBe(true);
+    expect(goesToOwnTrash(["/a.txt", "/Shared with me/Budget/plan.txt"], RECEIVED)).toBe(false);
+    expect(goesToOwnTrash(["/Shared with me/Budget/plan.txt"], [])).toBe(true);
   });
 });
 

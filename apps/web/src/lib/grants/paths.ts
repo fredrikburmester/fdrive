@@ -32,6 +32,17 @@ export function receivedGrantFor(
 }
 
 /**
+ * Whether a delete of `paths` goes only to this login's own Trash, where Undo can restore it:
+ * nothing lies in a folder shared with it, whose items go to their owner's Trash.
+ */
+export function goesToOwnTrash(
+  paths: readonly string[],
+  received: readonly ReceivedGrant[],
+): boolean {
+  return paths.every((path) => receivedGrantFor(path, received) === undefined);
+}
+
+/**
  * Whether "Share with people" applies: a folder of this login's own, never
  * all of its files and never something already shared with it.
  */

@@ -118,6 +118,7 @@ import {
   entryRestrictions,
   firstLockedReason,
   folderWriteBlock,
+  goesToOwnTrash,
 } from "@/lib/grants/paths";
 import { useReceivedGrants } from "@/lib/grants/queries";
 import { type RunJobRequestDeps, runJobRequest } from "@/lib/jobs/actions";
@@ -772,7 +773,11 @@ export function FileBrowser({
       {
         onSuccess: () => {
           setDeleteTargets([]);
-          offerUndo(`Moved ${itemCount(paths.length)} to Trash`, () => restoreFromTrash(paths));
+          const message = `Moved ${itemCount(paths.length)} to Trash`;
+          // Undo restores from the login's own Trash; an item in a folder shared
+          // with it went to its owner's, which only the owner restores from.
+          if (goesToOwnTrash(paths, received)) offerUndo(message, () => restoreFromTrash(paths));
+          else toast.success(message);
         },
       },
     );
