@@ -10,23 +10,22 @@ import { createSetupService, type SetupCompleteInput } from "./service.js";
  */
 async function harness(options: { users?: readonly string[] } = {}) {
   const h = authHarness({ users: options.users ?? [] });
-  const row = await h.seeded;
+  await h.seeded;
   const service = createSetupService({
     authService: h.auth.service,
     logins: h.repos.logins,
     passwords: h.passwords,
     clock: h.clock,
-    storageId: row.id,
   });
   /** What setup left behind: the users, the logins and the owner record. */
   async function state() {
     return {
       users: (await h.repos.localUsers.list()).map((user) => user.username),
-      logins: (await h.repos.identities.listAll()).map((login) => login.externalUsername),
+      logins: (await h.repos.identities.listAll()).map((login) => login.username),
       owner: await h.repos.settings.get(SETUP_OWNER_KEY),
     };
   }
-  return { ...h, row, service, state };
+  return { ...h, service, state };
 }
 
 const INPUT: SetupCompleteInput = {
@@ -64,7 +63,7 @@ describe("createSetupService: complete", () => {
     const result = await h.service.complete(INPUT);
 
     expect(result.me).toMatchObject({ identity: { username: "owner" }, isAdmin: true });
-    const login = await h.repos.identities.findByProviderUsername(h.row.id, "owner");
+    const login = await h.repos.identities.findByUsername("owner");
     expect(login?.id).toBe(result.me.identity.id);
     expect(await h.repos.settings.get(SETUP_OWNER_KEY)).toEqual({
       state: "complete",

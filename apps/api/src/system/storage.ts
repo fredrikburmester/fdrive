@@ -21,8 +21,6 @@ export interface StorageService {
 }
 
 export function createStorageService(deps: {
-  /** The files folder's provider row. */
-  storageId: string;
   settings: Pick<SettingsRepo, "get" | "set">;
   folder: Pick<FilesFolder, "health">;
   eventLog?: SystemEventLog;
@@ -41,7 +39,7 @@ export function createStorageService(deps: {
 
   async function view(): Promise<SystemStorage> {
     const [named, health] = await Promise.all([name(), deps.folder.health()]);
-    return { id: deps.storageId, name: named, healthy: health.ok, detail: health.detail };
+    return { name: named, healthy: health.ok, detail: health.detail };
   }
 
   return {

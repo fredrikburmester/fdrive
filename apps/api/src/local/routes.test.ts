@@ -10,12 +10,11 @@ import { COOKIE_NAME, hashSessionId } from "../auth/sessions.js";
 import { loadConfig } from "../config.js";
 import { registerLocalUserRoutes } from "./routes.js";
 import { createLocalUserService } from "./service.js";
-import { FAST_PASSWORDS, seedLocalUsers, seedStorageRow } from "./test-fixtures/index.ts";
+import { FAST_PASSWORDS, seedLocalUsers } from "./test-fixtures/index.ts";
 import { createLocalUserStore } from "./users.js";
 
 async function harness(options: { isAdmin?: boolean } = {}) {
   const repos = createMemoryRepos();
-  const row = await seedStorageRow(repos);
   const [identity] = await seedLocalUsers(repos, [
     { username: "alice", password: "alice-pass" },
     { username: "bob", password: "bob-pass" },
@@ -35,7 +34,6 @@ async function harness(options: { isAdmin?: boolean } = {}) {
       users: store,
     }),
     passwords: FAST_PASSWORDS,
-    storageId: row.id,
   });
   const principal: Principal = {
     accountId: account.id,

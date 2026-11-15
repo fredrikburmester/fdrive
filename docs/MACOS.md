@@ -135,7 +135,8 @@ remove anything.
 The app shows the storage's name (`displayName`, the installation's storage name from System >
 General) with the username and fdrive host beneath. Refresh reads current display
 metadata from the existing fdrive server and first verifies account, identity and provider IDs.
-The provider ID is the files folder's row in `app.providers`, which never changes.
+The provider ID is the files folder's id, the installation setting `storage.id`, which never
+changes ([storage](STORAGE.md#wiring)).
 It applies only the name and username, preserving the saved server, grants, expiry, domain ID,
 Keychain token and SQLite catalog. A failed or offline refresh retains the last saved name.
 The root item's metadata version changes when its title changes; cached child items survive.

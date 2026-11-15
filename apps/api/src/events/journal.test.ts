@@ -38,8 +38,7 @@ const SCOPES: Record<string, Scope[]> = {
 const identity = (username: string): Identity => ({
   id: `id-${username}`,
   accountId: `account-${username}`,
-  providerId: "provider",
-  externalUsername: username,
+  username,
   createdAt: AT,
   lastLoginAt: null,
 });

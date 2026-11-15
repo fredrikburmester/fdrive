@@ -5,12 +5,11 @@ import { describe, expect, it, vi } from "vitest";
 import { createLoginLimiter } from "../auth/login-limiter.js";
 import { createPasswordCheck } from "../auth/password.ts";
 import { createLocalUserService, type LocalUserServiceDeps, type UserViewer } from "./service.js";
-import { FAST_PASSWORDS, seedLocalUsers, seedStorageRow } from "./test-fixtures/index.ts";
+import { FAST_PASSWORDS, seedLocalUsers } from "./test-fixtures/index.ts";
 import { createLocalUserStore } from "./users.js";
 
 async function fixture(options: { usage?: boolean } = {}) {
   const repos = createMemoryRepos();
-  const row = await seedStorageRow(repos);
   const store = createLocalUserStore({
     repo: repos.localUsers,
     grants: repos.localGrants,
@@ -22,7 +21,6 @@ async function fixture(options: { usage?: boolean } = {}) {
     repos,
     checkPassword: createPasswordCheck({ limiter, users: store }),
     passwords: FAST_PASSWORDS,
-    storageId: row.id,
     eventLog: { record: (_subsystem, _level, message) => events.push(message) },
     ...(options.usage === true
       ? { usage: async (username: string) => (username === "alice" ? 1_000 : null) }
@@ -36,7 +34,7 @@ async function fixture(options: { usage?: boolean } = {}) {
   if (alice === undefined || bob === undefined) throw new Error("unseeded");
   await repos.accounts.setAdmin(alice.accountId, true);
   const viewer: UserViewer = { accountId: alice.accountId, sessionIdHash: "alice-session" };
-  return { repos, row, store, limiter, events, deps, service, alice, bob, viewer };
+  return { repos, store, limiter, events, deps, service, alice, bob, viewer };
 }
 
 async function sessionFor(
@@ -116,7 +114,7 @@ describe("createLocalUserService: create", () => {
       result: "ok",
       username: "carol",
     });
-    const identity = await h.repos.identities.findByProviderUsername(h.row.id, "carol");
+    const identity = await h.repos.identities.findByUsername("carol");
     expect(identity).not.toBeNull();
     expect((await h.repos.accounts.get(identity?.accountId ?? ""))?.isAdmin).toBe(true);
     const dave = await h.service.create({ username: "dave", password: "dave-pass" }, h.viewer);
@@ -145,7 +143,7 @@ describe("createLocalUserService: create", () => {
       h.viewer,
     );
     expect(again).toMatchObject({ username: "bob", isAdmin: true });
-    expect((await h.repos.identities.findByProviderUsername(h.row.id, "bob"))?.id).toBe(h.bob.id);
+    expect((await h.repos.identities.findByUsername("bob"))?.id).toBe(h.bob.id);
     // Another spelling is another home folder on a case-sensitive disk: refused.
     await h.service.remove("bob", h.viewer);
     await expect(

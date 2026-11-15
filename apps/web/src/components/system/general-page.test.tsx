@@ -37,7 +37,6 @@ vi.mock("@/lib/api/system-queries", () => ({
 const { GeneralPage } = await import("./general-page");
 
 const FOLDER: SystemStorage = {
-  id: "00000000-0000-4000-8000-00000000000a",
   name: "Local folder",
   healthy: true,
   detail: "The storage root is a writable folder",

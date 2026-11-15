@@ -9,11 +9,11 @@ describe("createMemoryRepos ids option", () => {
     let counter = 0;
     const repos = createMemoryRepos({ ids: () => `id-${++counter}` });
 
-    const provider = await repos.providers.ensure({ type: "local", baseUrl: "http://x" });
     const account = await repos.accounts.create({ displayName: null });
+    const identity = await repos.identities.create({ accountId: account.id, username: "x" });
 
-    expect(provider.id).toBe("id-1");
-    expect(account.id).toBe("id-2");
+    expect(account.id).toBe("id-1");
+    expect(identity.id).toBe("id-2");
   });
 });
 

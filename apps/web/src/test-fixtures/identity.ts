@@ -4,7 +4,6 @@ export function makeIdentity(overrides: Partial<IdentitySummary> = {}): Identity
   return {
     id: "one",
     username: "ada",
-    providerId: "00000000-0000-4000-8000-000000000009",
     ...overrides,
   };
 }

@@ -38,10 +38,12 @@ test.describe("installation backups", () => {
     ).json()) as { account: { id: string } };
     const db = new Client({ connectionString: environment.databaseUrl });
     await db.connect();
+    let storageId: unknown;
     try {
       await db.query("insert into app.settings(key,value) values('setup.owner.v1',$1)", [
         JSON.stringify({ state: "complete", accountId: me.account.id }),
       ]);
+      storageId = (await db.query("select value from app.settings where key='storage.id'")).rows;
     } finally {
       await db.end();
     }
@@ -237,10 +239,10 @@ test.describe("installation backups", () => {
           (await restoredDb.query("select restored from app.backup_configuration")).rows[0]
             .restored,
         ).toBe(true);
+        // The files folder keeps its id, so paired Macs still recognise their locations.
         expect(
-          (await restoredDb.query("select bool_and(not enabled) as paused from app.providers"))
-            .rows[0].paused,
-        ).toBe(true);
+          (await restoredDb.query("select value from app.settings where key='storage.id'")).rows,
+        ).toEqual(storageId);
       } finally {
         await restoredDb.end();
       }

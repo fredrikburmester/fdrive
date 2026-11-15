@@ -43,9 +43,7 @@ const principalFor: PrincipalFactory = async (login, extras) => ({
 
 /** Alice, an administrator: a local user with her account and login. */
 async function seedAccountWithIdentity(repos: ReturnType<typeof createMemoryRepos>) {
-  const provider = await repos.providers.ensure({ type: "local", baseUrl: "local" });
   const identity = await repos.logins.createUser({
-    providerId: provider.id,
     username: "alice",
     passwordHash: "h",
     isAdmin: true,

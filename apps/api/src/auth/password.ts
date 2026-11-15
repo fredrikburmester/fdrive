@@ -88,6 +88,6 @@ export function createLoginReauthentication(deps: {
     if (identity === null || identity.accountId !== accountId) {
       throw new ApiHttpError("unauthorized", "Storage identity changed");
     }
-    await deps.checkPassword({ username: identity.externalUsername, password, ip });
+    await deps.checkPassword({ username: identity.username, password, ip });
   };
 }

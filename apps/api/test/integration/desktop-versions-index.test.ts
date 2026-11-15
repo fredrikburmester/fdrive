@@ -78,12 +78,10 @@ describe("desktop version checks answered from the index", () => {
       shared: async (username) => grants[username] ?? [],
     };
     const folder = createFilesFolder({ root, users });
-    const provider = await repos.providers.ensure({ type: "local", baseUrl: "local" });
     const account = await repos.accounts.create({ displayName: "alice" });
     const alice = await repos.identities.create({
       accountId: account.id,
-      providerId: provider.id,
-      externalUsername: "alice",
+      username: "alice",
     });
     const resolver = createScopeResolver({
       received: async (username) => {

@@ -30,7 +30,7 @@ delete/recreate, particularly with identical bytes.
 - Reboot, extension/API crash, low disk, large transfer and cross-domain cases below.
   Cross-domain copies can download then upload; advertise no atomic cross-domain move.
   Prove source preservation when the destination upload fails.
-- Pending-aware Remove under callback races, expired credentials and revoked providers.
+- Pending-aware Remove under callback races, expired credentials and disabled users.
   Preserve/export unsynchronized content before removing a domain; never infer an empty
   journal from the framework's bounded pending-set enumeration alone.
 - Upgrade the installed read-only app and existing catalogs without duplicate domains,
@@ -58,7 +58,7 @@ Do not promise support for arbitrary package documents or live databases.
   before native completion. Retry after extension/API restart and token rotation. No duplicate
   creates, wrong-target mutation, partial original or unverified destructive replay.
 - Offline save/new-file/new-folder chains, network flapping, quota/low disk, denied parent,
-  token expiry/revocation, provider disable, reconnect and Remove with pending work. Other
+  token expiry/revocation, a disabled user, reconnect and Remove with pending work. Other
   locations continue working; failures explain how to recover.
 - Upload a representative multi-gigabyte file; verify full-byte hash, bounded memory, progress,
   cancellation and staging cleanup. Refresh racing an upload never replaces its base or loses

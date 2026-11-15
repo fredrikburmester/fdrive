@@ -31,7 +31,6 @@ describe("IdentitySummary", () => {
   const valid = {
     id: VALID_UUID,
     username: "alice",
-    providerId: VALID_UUID,
   };
 
   it("parses a valid identity", () => {
@@ -42,8 +41,8 @@ describe("IdentitySummary", () => {
     expect(IdentitySummary.safeParse({ ...valid, id: "not-a-uuid" }).success).toBe(false);
   });
 
-  it("names no storage type or label", () => {
-    expect(IdentitySummary.parse({ ...valid, providerType: "local" })).toEqual(valid);
+  it("names no storage", () => {
+    expect(IdentitySummary.parse({ ...valid, providerId: VALID_UUID })).toEqual(valid);
   });
 });
 
@@ -53,7 +52,6 @@ describe("MeResponse", () => {
     identity: {
       id: VALID_UUID,
       username: "alice",
-      providerId: VALID_UUID,
     },
     isAdmin: false,
     storageName: "Home",

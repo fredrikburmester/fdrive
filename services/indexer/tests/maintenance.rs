@@ -307,9 +307,8 @@ fn index_clear_scope_is_literal_and_keeps_everything_else() {
     env.client()
         .batch_execute(
             "WITH a AS (INSERT INTO app.accounts DEFAULT VALUES RETURNING id), \
-             p AS (INSERT INTO app.providers(type, base_url) VALUES ('local', 'http://clear.test') RETURNING id), \
-             i AS (INSERT INTO app.identities(account_id, provider_id, external_username) \
-                   SELECT a.id, p.id, 'one' FROM a, p RETURNING id), \
+             i AS (INSERT INTO app.identities(account_id, username) \
+                   SELECT a.id, 'one' FROM a RETURNING id), \
              t AS (INSERT INTO app.tags(account_id, name, color) SELECT id, 'Keep', 'blue' FROM a RETURNING id), \
              ft AS (INSERT INTO app.file_tags(identity_id, path, tag_id) SELECT i.id, 'dir_%/a', t.id FROM i, t), \
              f AS (INSERT INTO app.favorites(identity_id, path) SELECT id, 'dir_%/a' FROM i) \

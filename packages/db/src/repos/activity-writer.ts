@@ -19,13 +19,13 @@ import { requireActivityRow } from "./activity-types.js";
 /** Lock ordering: live identity, file registry, then account stream at append. */
 export async function captureActivityIdentity(db: ActivityDb, actor: ActivityActor): Promise<void> {
   const result = await db.execute(
-    sql`select account_id, external_username from app.identities where id = ${actor.identityId} for update`,
+    sql`select account_id, username from app.identities where id = ${actor.identityId} for update`,
   );
   const row = result.rows[0];
   if (!row || row.account_id !== actor.accountId) throw new Error("Identity ownership changed");
   await db
     .insert(activityStorageIdentities)
-    .values({ identityId: actor.identityId, label: String(row.external_username) })
+    .values({ identityId: actor.identityId, label: String(row.username) })
     .onConflictDoNothing();
 }
 

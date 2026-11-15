@@ -10,9 +10,8 @@ import {
   type ShareOwnedUpdate,
   type ShareRepo,
 } from "../../src/index.js";
-import { accounts, identities, providers, shares } from "../../src/schema/app.js";
+import { accounts, identities, shares } from "../../src/schema/app.js";
 
-const providerId = "00000000-0000-0000-0000-000000000001";
 const accountId = "00000000-0000-0000-0000-000000000011";
 const targetAccountId = "00000000-0000-0000-0000-000000000012";
 const identityId = "00000000-0000-0000-0000-000000000021";
@@ -65,7 +64,6 @@ beforeAll(async () => {
     });
   }
   await migrate(first.db);
-  await first.db.insert(providers).values({ id: providerId, type: "local", baseUrl: "local" });
   a = createShareRepo(first.db);
   b = createShareRepo(second.db);
 });
@@ -82,8 +80,8 @@ beforeEach(async () => {
   await first.db.execute(sql`truncate app.accounts cascade`);
   await first.db.insert(accounts).values([{ id: accountId }, { id: targetAccountId }]);
   await first.db.insert(identities).values([
-    { id: identityId, accountId, providerId, externalUsername: "alice" },
-    { id: otherIdentity, accountId: targetAccountId, providerId, externalUsername: "bob" },
+    { id: identityId, accountId, username: "alice" },
+    { id: otherIdentity, accountId: targetAccountId, username: "bob" },
   ]);
 });
 

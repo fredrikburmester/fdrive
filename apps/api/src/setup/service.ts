@@ -19,8 +19,6 @@ export interface CreateSetupServiceDeps {
   readonly logins: Pick<LoginRepo, "setup" | "setupOpen">;
   readonly passwords: Pick<SharePasswords, "hash">;
   readonly clock?: () => Date;
-  /** The files folder's provider row, which the owner's login is on. */
-  readonly storageId: string;
 }
 
 /**
@@ -43,7 +41,6 @@ export function createSetupService(deps: CreateSetupServiceDeps): SetupService {
     async complete(input) {
       try {
         await deps.logins.setup({
-          providerId: deps.storageId,
           username: input.username,
           passwordHash: await deps.passwords.hash(input.password),
           at: clock(),

@@ -1,5 +1,6 @@
 import { DESKTOP_API, DesktopPairResult, MeResponse } from "@fdrive/contracts";
 import { expect, test } from "@playwright/test";
+import { Client } from "pg";
 import { dismissActivityPanel } from "./support/activity.js";
 import { startEnvironment } from "./support/environment.js";
 import { E2E_HOST } from "./support/paths.js";
@@ -44,7 +45,14 @@ test("a storage rename on System > General reaches logins and Mac approval, not 
     ).toBe(true);
 
     const before = MeResponse.parse(await (await page.request.get(url("/api/v1/auth/me"))).json());
-    const providerId = before.identity.providerId;
+    // The files folder's id, which every Mac location names as its `providerId`.
+    const db = new Client({ connectionString: env.databaseUrl });
+    await db.connect();
+    const providerId = await db
+      .query("select value->>'id' as id from app.settings where key = 'storage.id'")
+      .then((result) => result.rows[0]?.id)
+      .finally(() => db.end());
+    expect(providerId).toEqual(expect.any(String));
     const pair = await (
       await page.request.post(url(`${DESKTOP_API}/pairings`), {
         headers,

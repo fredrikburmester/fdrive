@@ -28,8 +28,6 @@ export interface LoginSessionInput {
 }
 /** A local user to create, with the account and login that come with it. */
 export interface NewLocalUser {
-  /** The files folder's provider row, which every login names. */
-  readonly providerId: string;
   readonly username: string;
   readonly passwordHash: string;
   readonly isAdmin: boolean;
@@ -62,8 +60,6 @@ export interface LocalUserUpdate {
 export interface Login {
   readonly identityId: string;
   readonly accountId: string;
-  /** The files folder's row, which every login is on. */
-  readonly providerId: string;
   readonly username: string;
   readonly displayName: string | null;
   readonly isAdmin: boolean;
@@ -119,10 +115,6 @@ export interface LoginRepo {
    */
   signIn(input: SignInInput): Promise<SignInResult>;
 }
-export function validateCanonicalUuid(id: string): void {
-  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(id))
-    throw new TypeError("Expected canonical UUID");
-}
 function validateTime(at: Date): void {
   if (!(at instanceof Date) || !Number.isFinite(at.getTime()))
     throw new TypeError("Invalid timestamp");
@@ -145,7 +137,6 @@ function validateSessionText(value: string | null, max: number): void {
 }
 export function validateNewLocalUser(input: Omit<NewLocalUser, "isAdmin">): void {
   validateTime(input.at);
-  validateCanonicalUuid(input.providerId);
   validateUsername(input.username);
   if (typeof input.passwordHash !== "string" || input.passwordHash.length === 0)
     throw new TypeError("Invalid password hash");

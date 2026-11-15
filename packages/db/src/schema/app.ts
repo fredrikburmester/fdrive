@@ -31,24 +31,6 @@ const bytea = customType<{ data: Buffer }>({
 
 export const appSchema = pgSchema("app");
 
-export const providers = appSchema.table(
-  "providers",
-  {
-    id: uuid("id").primaryKey().defaultRandom(),
-    type: text("type").notNull(),
-    baseUrl: text("base_url").notNull(),
-    /** Shown to users on the login page. Defaults to the endpoint host. */
-    label: text("label").notNull().default(""),
-    /** The provider module's `configFields` values. */
-    config: jsonb("config").$type<Record<string, unknown>>().notNull().default({}),
-    enabled: boolean("enabled").notNull().default(true),
-    /** True when the deployment pins this row (`FDRIVE_STORAGE_ROOT`) and it cannot change at runtime. */
-    managedByEnv: boolean("managed_by_env").notNull().default(false),
-    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-  },
-  (table) => [unique("providers_type_base_url_unique").on(table.type, table.baseUrl)],
-);
-
 /**
  * The users of the built-in local storage, which fdrive owns: one row per
  * home folder `<FDRIVE_STORAGE_ROOT>/<username>`. Names are unique without
@@ -110,6 +92,12 @@ export const accounts = appSchema.table("accounts", {
   isAdmin: boolean("is_admin").notNull().default(false),
 });
 
+/**
+ * A login: what sessions, tokens, tags, shares and activity belong to. Each
+ * local user has one of the same name from the moment they exist; a removed
+ * user's login stays with what belongs to it, so `username` names its user
+ * without a foreign key.
+ */
 export const identities = appSchema.table(
   "identities",
   {
@@ -117,25 +105,17 @@ export const identities = appSchema.table(
     accountId: uuid("account_id")
       .notNull()
       .references(() => accounts.id, { onDelete: "cascade" }),
-    providerId: uuid("provider_id")
-      .notNull()
-      .references(() => providers.id),
-    externalUsername: text("external_username").notNull(),
+    /** Its local user's name, exactly as `local_users` spells it. */
+    username: text("username").notNull(),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     lastLoginAt: timestamp("last_login_at", { withTimezone: true }),
   },
   (table) => [
-    unique("identities_provider_id_external_username_unique").on(
-      table.providerId,
-      table.externalUsername,
-    ),
     // One login per account.
     unique("identities_account_id_unique").on(table.accountId),
     // A login is its local user's: unique in any case, as `local_users` is,
     // so a sign-in finds it however its name is typed.
-    uniqueIndex("identities_external_username_lower_unique").on(
-      sql`lower(${table.externalUsername})`,
-    ),
+    uniqueIndex("identities_username_lower_unique").on(sql`lower(${table.username})`),
   ],
 );
 

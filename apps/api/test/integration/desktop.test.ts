@@ -25,6 +25,13 @@ it("pairs two people's Macs with isolated streaming reads, validators and revoca
     files: { alice: { "/same.txt": "alpha" }, bob: { "/same.txt": "bravo" } },
   });
   await seedLocalUsers(postgres.connectionString, storage, ["alice"]);
+  // An upgraded server: migration 0044 kept its files folder's old row id as the storage id.
+  const storageId = "4f1f5e8e-5a1f-4b7e-9d0c-6f1d2a3b4c5d";
+  const seeding = createDb(postgres.connectionString);
+  await seeding.pool.query("insert into app.settings (key, value) values ('storage.id', $1)", [
+    JSON.stringify({ id: storageId }),
+  ]);
+  await seeding.close();
   const config = loadConfig({
     DATABASE_URL: postgres.connectionString,
     FDRIVE_STORAGE_ROOT: storage.root,
@@ -73,6 +80,8 @@ it("pairs two people's Macs with isolated streaming reads, validators and revoca
     }
     const a = await pairMac("Alice's Mac");
     expect(a.location.identityId).toBe(me.identity.id);
+    // The Mac compares it with the location it saved, so it must not change.
+    expect(a.location.providerId).toBe(storageId);
     // Bob pairs his own Mac from his own browser session.
     const bobLogin = await request("/api/v1/auth/login", {
       username: "bob",
@@ -83,11 +92,11 @@ it("pairs two people's Macs with isolated streaming reads, validators and revoca
     const b = await pairMac("Bob's Mac");
     const bOther = await pairMac("Bob's other Mac");
     expect(b.location.identityId).not.toBe(a.location.identityId);
+    expect(b.location.providerId).toBe(storageId);
     // A rename of the storage reaches both logins, existing credentials and new pairings.
     cookie = aliceCookie;
     const before = SystemStorage.parse(await (await request("/api/v1/system/storage")).json());
     expect(before).toMatchObject({
-      id: a.location.providerId,
       name: "Local folder",
       healthy: true,
     });

@@ -347,10 +347,10 @@ async function fixture(writable = false, changes?: DesktopChanges) {
   let now = new Date("2026-09-13T00:00:00Z");
   const clock = () => now;
   const activity = activityFixture(clock);
-  const provider = await repos.providers.ensure({ type: "local", baseUrl: "local" });
+  // The files folder's id, which every location names as its `providerId`.
+  const storageId = "00000000-0000-4000-8000-0000000000aa";
   const user = (username: string) =>
     repos.logins.createUser({
-      providerId: provider.id,
       username,
       passwordHash: "h",
       isAdmin: false,
@@ -368,7 +368,7 @@ async function fixture(writable = false, changes?: DesktopChanges) {
   const otherStorage = createMemoryStorage({ "/docs/a.txt": "bravo" });
   const deps = {
     ...repos,
-    storage: { id: provider.id, name: async () => "Family files" },
+    storage: { id: storageId, name: async () => "Family files" },
     clock,
     principalFor: vi.fn(
       async (login: Login, extras?: PrincipalExtras): Promise<Principal> => ({
@@ -442,7 +442,7 @@ async function fixture(writable = false, changes?: DesktopChanges) {
     deps,
     activity,
     account,
-    provider,
+    storageId,
     identity,
     second,
     owner,
@@ -744,7 +744,7 @@ it("refuses the location of a user an administrator disabled since connecting", 
   const credential = result.credentials[0];
   if (!credential) throw new Error("Expected a location");
   expect(credential.location).toMatchObject({
-    providerId: f.provider.id,
+    providerId: f.storageId,
     displayName: "Family files",
   });
   await f.repos.localUsers.update("alice", { disabled: true });

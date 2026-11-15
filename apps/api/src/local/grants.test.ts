@@ -4,12 +4,7 @@ import { createMemoryRepos } from "@fdrive/db/testing";
 import { describe, expect, it } from "vitest";
 import { createIdentityStorageFactory } from "../auth/storage-factory.js";
 import { createLocalGrantService, type LocalGrantServiceDeps } from "./grants.js";
-import {
-  filesFolderFixture,
-  seedLocalUsers,
-  seedStorageRow,
-  writeHomeFiles,
-} from "./test-fixtures/index.ts";
+import { filesFolderFixture, seedLocalUsers, writeHomeFiles } from "./test-fixtures/index.ts";
 
 /**
  * Alice, Bob and Carol (Dave disabled), with folders in Alice's and Carol's
@@ -31,7 +26,6 @@ async function fixture(options: Partial<LocalGrantServiceDeps> = {}) {
     "/.trash/old/file.txt": "old",
   });
   writeHomeFiles(local.root, "carol", { "/Projects/carol.txt": "carol" });
-  const row = await seedStorageRow(repos);
   const storageFor = createIdentityStorageFactory({
     identities: repos.identities,
     folder: local.folder,
@@ -39,11 +33,10 @@ async function fixture(options: Partial<LocalGrantServiceDeps> = {}) {
   if (alice === undefined || bob === undefined || carol === undefined) throw new Error("unseeded");
   const service = createLocalGrantService({
     repos,
-    storageId: row.id,
     storageFor,
     ...options,
   });
-  return { repos, local, row, alice, bob, carol, service, storageFor };
+  return { repos, local, alice, bob, carol, service, storageFor };
 }
 
 const RESERVED = "fdrive's own folders, like Trash, cannot be shared";

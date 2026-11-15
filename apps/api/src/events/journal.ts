@@ -129,12 +129,12 @@ export function createJournalFanout(deps: JournalFanoutDeps): JournalFanout {
     const logins: Login[] = [];
     for (const identity of await deps.identities.listAll()) {
       // A login whose username cannot name a folder has no files to see.
-      const scopes = await deps.scopes(identity.externalUsername).catch(() => null);
+      const scopes = await deps.scopes(identity.username).catch(() => null);
       if (scopes === null) continue;
       logins.push({
         id: identity.id,
         accountId: identity.accountId,
-        username: identity.externalUsername,
+        username: identity.username,
         scopes,
       });
     }

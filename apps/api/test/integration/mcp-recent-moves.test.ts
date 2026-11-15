@@ -63,9 +63,7 @@ describe("MCP recent_moves from personal activity", () => {
   /** A token for `username`'s login. */
   async function token(username: string, access: ApiTokenAccess): Promise<string> {
     const repos = createRepos(database.db);
-    const identity = (await repos.identities.listAll()).find(
-      (row) => row.externalUsername === username,
-    );
+    const identity = (await repos.identities.listAll()).find((row) => row.username === username);
     if (identity === undefined) throw new Error(`expected ${username}'s login`);
     const raw = generateApiToken();
     await repos.apiTokens.create({

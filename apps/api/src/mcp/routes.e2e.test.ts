@@ -121,9 +121,7 @@ async function startHarness(mode: "read" | "organize"): Promise<Harness> {
   const storage = createLocalStorage({ home: join(root, "alice") });
 
   const repos = createMemoryRepos();
-  const provider = await repos.providers.ensure({ type: "local", baseUrl: "local" });
   const identity = await repos.logins.createUser({
-    providerId: provider.id,
     username: "alice",
     passwordHash: "h",
     isAdmin: false,

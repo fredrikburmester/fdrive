@@ -16,7 +16,7 @@ export function createOfficeEditPolicy(deps: {
     if (!isOfficePath(path)) return false;
     const settings = await deps.settings();
     if (!settings.enabled || !settings.editingEnabled) return false;
-    if (!settings.editorUsernames.includes(actor.identity.externalUsername)) return false;
+    if (!settings.editorUsernames.includes(actor.identity.username)) return false;
     return !(await deps.grants.isReadOnly(actor.identity, path));
   };
 }

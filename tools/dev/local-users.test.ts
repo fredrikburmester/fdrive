@@ -19,16 +19,13 @@ describe("seedLocalUsers", () => {
     expect(await passwords.verify("dev", dev?.passwordHash ?? null)).toBe(true);
     expect(await passwords.verify("alice-password", dev?.passwordHash ?? null)).toBe(false);
     expect(dev?.disabled).toBe(false);
-    const [row] = await repos.providers.list();
-    expect(row).toMatchObject({ type: "local", baseUrl: "local" });
-    expect(await repos.identities.findByProviderUsername(row?.id ?? "", "dev")).not.toBeNull();
+    expect(await repos.identities.findByUsername("dev")).not.toBeNull();
   });
 
   it("makes the users marked as administrators ones, also when they exist", async () => {
     const repos = createMemoryRepos();
     const isAdmin = async (username: string) => {
-      const [row] = await repos.providers.list();
-      const login = await repos.identities.findByProviderUsername(row?.id ?? "", username);
+      const login = await repos.identities.findByUsername(username);
       return (await repos.accounts.get(login?.accountId ?? ""))?.isAdmin;
     };
     await seedLocalUsers(repos, [{ username: "dev", password: "dev" }], { hash: async () => "h" });
@@ -41,8 +38,7 @@ describe("seedLocalUsers", () => {
     await seedLocalUsers(fresh, [{ username: "perf", password: "p", isAdmin: true }], {
       hash: async () => "h",
     });
-    const [row] = await fresh.providers.list();
-    const login = await fresh.identities.findByProviderUsername(row?.id ?? "", "perf");
+    const login = await fresh.identities.findByUsername("perf");
     expect((await fresh.accounts.get(login?.accountId ?? ""))?.isAdmin).toBe(true);
   });
 
@@ -58,7 +54,7 @@ describe("seedLocalUsers", () => {
 
   it("treats a user created concurrently as present, and rethrows anything else", async () => {
     const repos = createMemoryRepos();
-    const racing: Pick<Repos, "localUsers" | "logins" | "providers"> = {
+    const racing: Pick<Repos, "localUsers" | "logins"> = {
       ...repos,
       logins: {
         ...repos.logins,
@@ -68,7 +64,7 @@ describe("seedLocalUsers", () => {
       },
     };
     expect(await seedLocalUsers(racing, users, { hash: async () => "h" })).toEqual([]);
-    const broken: Pick<Repos, "localUsers" | "logins" | "providers"> = {
+    const broken: Pick<Repos, "localUsers" | "logins"> = {
       ...repos,
       logins: {
         ...repos.logins,

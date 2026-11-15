@@ -6,13 +6,12 @@ import {
   SystemStorageUpdateRequest,
 } from "./storage.ts";
 
-const ID = "123e4567-e89b-42d3-a456-426614174000";
-
 describe("storage contracts", () => {
   it("reads the storage's name and health", () => {
-    const storage = { id: ID, name: DEFAULT_STORAGE_NAME, healthy: false, detail: "no marker" };
+    const storage = { name: DEFAULT_STORAGE_NAME, healthy: false, detail: "no marker" };
     expect(SystemStorage.parse(storage)).toEqual(storage);
-    expect(SystemStorage.safeParse({ ...storage, id: "local" }).success).toBe(false);
+    // The files folder has no id of its own on System > General.
+    expect(SystemStorage.parse({ ...storage, id: "local" })).toEqual(storage);
     expect(SystemStorage.safeParse({ ...storage, healthy: undefined }).success).toBe(false);
   });
 

@@ -9,13 +9,11 @@ import { loadConfig } from "../config.js";
 import { createOfficeSettingsService } from "./settings.js";
 import { registerOfficeSettingsRoutes } from "./settings-routes.js";
 
-const PROVIDER_ID = "123e4567-e89b-42d3-a456-426614174000";
 const IDENTITY_ID = "223e4567-e89b-42d3-a456-426614174000";
 const identity: Identity = {
   id: IDENTITY_ID,
   accountId: "323e4567-e89b-42d3-a456-426614174000",
-  providerId: PROVIDER_ID,
-  externalUsername: "alice",
+  username: "alice",
   createdAt: new Date(0),
   lastLoginAt: null,
 };
@@ -40,7 +38,7 @@ function buildApp(isAdmin: boolean, workerToken = "worker-secret") {
   const principal: Principal = {
     accountId: identity.accountId,
     identityId: identity.id,
-    username: identity.externalUsername,
+    username: identity.username,
     storage: {} as StorageProvider,
     isAdmin,
   };

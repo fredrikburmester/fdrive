@@ -49,7 +49,7 @@ export function createTrashRetention(deps: TrashRetentionDeps) {
         principal = {
           accountId: identity.accountId,
           identityId: identity.id,
-          username: identity.externalUsername,
+          username: identity.username,
           storage: await deps.storageFor(identity.id),
           isAdmin: false,
         };

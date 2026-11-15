@@ -2,10 +2,10 @@
 
 A user signs in with `{ username, password }`, and fdrive checks the password
 against the scrypt hash in `app.local_users` (see [Local users](#local-users)).
-fdrive keeps no other copy of any password. The files folder is one row in
-`app.providers`, created from `FDRIVE_STORAGE_ROOT`, and every identity is bound
-to it (see [storage](STORAGE.md)). This document describes that
-design as implemented in `apps/api/src/auth/` and `apps/api/src/local/`.
+fdrive keeps no other copy of any password. Every login reaches the one files
+folder, `FDRIVE_STORAGE_ROOT` (see [storage](STORAGE.md)). This document
+describes that design as implemented in `apps/api/src/auth/` and
+`apps/api/src/local/`.
 
 Administrators are the accounts with `accounts.is_admin`: the setup owner, and
 anyone an administrator makes one under System > Users.

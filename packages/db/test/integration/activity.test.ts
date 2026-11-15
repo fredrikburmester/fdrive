@@ -35,14 +35,9 @@ it("keeps personal journeys stable, immutable and private across pools", {
     const repos = createRepos(first.db);
     const alice = await repos.accounts.create({ displayName: "Alice" });
     const bob = await repos.accounts.create({ displayName: "Bob" });
-    const provider = await repos.providers.ensure({
-      type: "local",
-      baseUrl: "http://activity.test",
-    });
     const identity = await repos.identities.create({
       accountId: alice.id,
-      providerId: provider.id,
-      externalUsername: "alice",
+      username: "alice",
     });
     let at = new Date("2026-09-14T10:00:00.000Z");
     const a = createActivityRepo(first.db, () => at, firstLocks.db),
@@ -1242,14 +1237,9 @@ it("preserves folder journeys, fences descendant observations, leases queued wor
     await migrate(main.db);
     const repos = createRepos(main.db);
     const account = await repos.accounts.create({ displayName: "Activity regressions" });
-    const provider = await repos.providers.ensure({
-      type: "local",
-      baseUrl: "http://regressions.test",
-    });
     const identity = await repos.identities.create({
       accountId: account.id,
-      providerId: provider.id,
-      externalUsername: "alice",
+      username: "alice",
     });
     const actor = { accountId: account.id, identityId: identity.id };
     let now = new Date("2026-09-20T12:00:00Z");

@@ -232,7 +232,6 @@ describe("createPrincipalFactory", () => {
   const login = {
     identityId: "identity-1",
     accountId: "account-1",
-    providerId: "provider-1",
     username: "alice",
     displayName: "Alice",
     isAdmin: true,

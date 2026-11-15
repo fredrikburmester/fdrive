@@ -309,6 +309,13 @@
       "when": 1794745776106,
       "tag": "0043_index_hard_delete",
       "breakpoints": true
+    },
+    {
+      "idx": 44,
+      "version": "7",
+      "when": 1794748957536,
+      "tag": "0044_drop_providers",
+      "breakpoints": true
     }
   ]
 }

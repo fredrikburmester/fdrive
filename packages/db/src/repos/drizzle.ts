@@ -10,7 +10,6 @@ import {
   identities,
   localGrants,
   localUsers,
-  providers,
   recents,
   savedSearches,
   sessions,
@@ -20,7 +19,6 @@ import {
 import { files } from "../schema/idx.js";
 import { createAiChatRepo } from "./ai-chats.js";
 import { createLoginRepo } from "./logins.js";
-import { validateCanonicalUuid } from "./logins-types.js";
 import { selectPathChunks } from "./path-chunks.js";
 import { isUniqueViolation } from "./pg-errors.js";
 import { createSystemEventRepo } from "./system-events.js";
@@ -45,8 +43,6 @@ import type {
   LocalUser,
   LocalUserRepo,
   MetadataPathRepo,
-  Provider,
-  ProviderRepo,
   Recent,
   RecentRepo,
   Repos,
@@ -71,19 +67,6 @@ async function lockMetadataIdentity(db: SqlExecutor, identityId: string): Promis
   `);
 }
 
-function toProvider(row: typeof providers.$inferSelect): Provider {
-  return {
-    id: row.id,
-    type: row.type,
-    baseUrl: row.baseUrl,
-    label: row.label,
-    config: row.config,
-    enabled: row.enabled,
-    managedByEnv: row.managedByEnv,
-    createdAt: row.createdAt,
-  };
-}
-
 function toAccount(row: typeof accounts.$inferSelect): Account {
   return {
     id: row.id,
@@ -97,8 +80,7 @@ function toIdentity(row: typeof identities.$inferSelect): Identity {
   return {
     id: row.id,
     accountId: row.accountId,
-    providerId: row.providerId,
-    externalUsername: row.externalUsername,
+    username: row.username,
     createdAt: row.createdAt,
     lastLoginAt: row.lastLoginAt,
   };
@@ -114,97 +96,6 @@ function toSession(row: typeof sessions.$inferSelect): Session {
     lastSeenAt: row.lastSeenAt,
     userAgent: row.userAgent,
     ip: row.ip,
-  };
-}
-
-function createProviderRepo(db: Db): ProviderRepo {
-  return {
-    async create(input) {
-      const [row] = await db
-        .insert(providers)
-        .values({ ...input, config: { ...input.config } })
-        .onConflictDoNothing({ target: [providers.type, providers.baseUrl] })
-        .returning();
-      if (!row) throw new ConflictError("provider endpoint already exists");
-      return toProvider(row);
-    },
-    async get(id) {
-      validateCanonicalUuid(id);
-      const [row] = await db.select().from(providers).where(eq(providers.id, id));
-      return row ? toProvider(row) : null;
-    },
-    async list() {
-      const rows = await db.select().from(providers).orderBy(providers.createdAt, providers.id);
-      return rows.map(toProvider);
-    },
-    async update(id, patch) {
-      validateCanonicalUuid(id);
-      return db
-        .transaction(async (tx) => {
-          const [current] = await tx
-            .select()
-            .from(providers)
-            .where(eq(providers.id, id))
-            .for("update");
-          if (!current) return null;
-          if (patch.baseUrl !== undefined && patch.baseUrl !== current.baseUrl) {
-            const [used] = await tx
-              .select({ count: sql<number>`count(*)::int` })
-              .from(identities)
-              .where(eq(identities.providerId, id));
-            if ((used?.count ?? 0) > 0)
-              throw new ConflictError("provider is still used by identities");
-          }
-          const set = {
-            ...(patch.label !== undefined ? { label: patch.label } : {}),
-            ...(patch.baseUrl !== undefined ? { baseUrl: patch.baseUrl } : {}),
-            ...(patch.config !== undefined ? { config: { ...patch.config } } : {}),
-            ...(patch.enabled !== undefined ? { enabled: patch.enabled } : {}),
-            ...(patch.managedByEnv !== undefined ? { managedByEnv: patch.managedByEnv } : {}),
-          };
-          if (Object.keys(set).length === 0) {
-            const [row] = await tx.select().from(providers).where(eq(providers.id, id));
-            return row ? toProvider(row) : null;
-          }
-          const [row] = await tx.update(providers).set(set).where(eq(providers.id, id)).returning();
-          return row ? toProvider(row) : null;
-        })
-        .catch((error: unknown) => {
-          if (isUniqueViolation(error)) throw new ConflictError("provider endpoint already exists");
-          throw error;
-        });
-    },
-    async delete(id) {
-      validateCanonicalUuid(id);
-      await db.transaction(async (tx) => {
-        const [current] = await tx
-          .select()
-          .from(providers)
-          .where(eq(providers.id, id))
-          .for("update");
-        if (!current) return;
-        const [used] = await tx
-          .select({ count: sql<number>`count(*)::int` })
-          .from(identities)
-          .where(eq(identities.providerId, id));
-        if ((used?.count ?? 0) > 0) throw new ConflictError("provider is still used by identities");
-        await tx.delete(providers).where(eq(providers.id, id));
-      });
-    },
-    async ensure(input) {
-      const [row] = await db
-        .insert(providers)
-        .values({ type: input.type, baseUrl: input.baseUrl })
-        .onConflictDoUpdate({
-          target: [providers.type, providers.baseUrl],
-          set: { baseUrl: sql`excluded.base_url` },
-        })
-        .returning();
-      if (!row) {
-        throw new Error("providers.ensure: insert returned no row");
-      }
-      return toProvider(row);
-    },
   };
 }
 
@@ -232,23 +123,14 @@ function createAccountRepo(db: Db): AccountRepo {
 
 function createIdentityRepo(db: Db): IdentityRepo {
   return {
-    async findByProviderUsername(providerId, username) {
-      const [row] = await db
-        .select()
-        .from(identities)
-        .where(
-          and(eq(identities.providerId, providerId), eq(identities.externalUsername, username)),
-        );
+    async findByUsername(username) {
+      const [row] = await db.select().from(identities).where(eq(identities.username, username));
       return row ? toIdentity(row) : null;
     },
     async create(input) {
       const [row] = await db
         .insert(identities)
-        .values({
-          accountId: input.accountId,
-          providerId: input.providerId,
-          externalUsername: input.externalUsername,
-        })
+        .values({ accountId: input.accountId, username: input.username })
         .returning();
       if (!row) {
         throw new Error("identities.create: insert returned no row");
@@ -258,13 +140,6 @@ function createIdentityRepo(db: Db): IdentityRepo {
     async get(id) {
       const [row] = await db.select().from(identities).where(eq(identities.id, id));
       return row ? toIdentity(row) : null;
-    },
-    async countByProvider(providerId) {
-      const [row] = await db
-        .select({ count: sql<number>`count(*)::int` })
-        .from(identities)
-        .where(eq(identities.providerId, providerId));
-      return row?.count ?? 0;
     },
     async touchLogin(id, at) {
       await db.update(identities).set({ lastLoginAt: at }).where(eq(identities.id, id));
@@ -1106,7 +981,6 @@ export function createFilesFolderFacts(db: Db) {
 
 export function createRepos(db: Db): Repos {
   return {
-    providers: createProviderRepo(db),
     localUsers: createLocalUserRepo(db),
     localGrants: createLocalGrantRepo(db),
     accounts: createAccountRepo(db),

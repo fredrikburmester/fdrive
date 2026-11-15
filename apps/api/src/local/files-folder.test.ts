@@ -8,7 +8,9 @@ import { createChangeQueue } from "./change-queue.js";
 import {
   createDeploymentFilesFolderGuard,
   deploymentFilesFolder,
+  ensureStorageId,
   filesFolderHealth,
+  STORAGE_ID_SETTINGS_KEY,
 } from "./files-folder.js";
 import { seedLocalUsers, temporaryStorageRoot } from "./test-fixtures/index.ts";
 
@@ -21,6 +23,22 @@ function facts(holds: boolean) {
 function log() {
   return { info: vi.fn(), error: vi.fn() };
 }
+
+describe("ensureStorageId", () => {
+  it("gives a fresh install an id on its first start and the same one on every later start", async () => {
+    const { settings } = createMemoryRepos();
+    const id = await ensureStorageId(settings);
+    expect(id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+    expect(await settings.get(STORAGE_ID_SETTINGS_KEY)).toEqual({ id });
+    await expect(ensureStorageId(settings)).resolves.toBe(id);
+  });
+
+  it("keeps the id an upgrade carried over from the files folder's old row", async () => {
+    const { settings } = createMemoryRepos();
+    await settings.set(STORAGE_ID_SETTINGS_KEY, { id: ID });
+    await expect(ensureStorageId(settings)).resolves.toBe(ID);
+  });
+});
 
 describe("createDeploymentFilesFolderGuard", () => {
   it("logs an adoption once, then a verified folder, and reports it healthy", async () => {

@@ -46,14 +46,16 @@ default with explicitly granted writes on qualified storage. Each domain binds o
 server/account/storage identity. Its versioned desktop API uses separate identity-bound
 credentials; MCP tokens cannot retarget these domains.
 
-The files folder is one row in `app.providers`; an identity is a login on that row, and an
-account has exactly one (`identities.account_id` is unique). A session and an API token act as
-that login (`sessions.identity_id`, `api_tokens.identity_id`), and deleting the login ends
-them. Every local user has a login of the same name from the moment the user exists, and
-sign-in finds it by name in any case; passwords live only as scrypt hashes in
-`app.local_users`. The files folder's row comes from the deployment; its name is an
-installation setting administrators change on System > General. See
-[authentication](AUTH.md) and [storage](STORAGE.md).
+An identity is a login (`app.identities`), and an account has exactly one
+(`identities.account_id` is unique). A session and an API token act as that login
+(`sessions.identity_id`, `api_tokens.identity_id`), and deleting the login ends them. Every
+local user has a login of the same name (`identities.username`, unique in any case) from the
+moment the user exists, and sign-in finds it by name in any case; passwords live only as
+scrypt hashes in `app.local_users`. A removed user's login stays with its tags, shares and
+activity, so the two tables join by name rather than by a foreign key. The files folder comes
+from the deployment; its name and its id, which the Mac compares as `providerId`, are
+installation settings (`storage.name`, `storage.id`), and administrators change the name on
+System > General. See [authentication](AUTH.md) and [storage](STORAGE.md).
 
 Local users are `app.local_users`: a username unique in any case, a scrypt hash, a disabled
 flag and an optional storage limit ([storage](STORAGE.md#storageprovider)). Setup creates the

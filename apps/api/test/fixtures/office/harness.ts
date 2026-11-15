@@ -35,7 +35,6 @@ export async function officeHarness(
   const repos = createMemoryRepos();
   const now = { value: new Date("2026-09-06T00:00:00Z") };
   const clock = () => now.value;
-  const provider = await repos.providers.ensure({ type: "local", baseUrl: "local" });
   const storage =
     options.storage ??
     createMemoryStorage({
@@ -55,8 +54,7 @@ export async function officeHarness(
     const account = await repos.accounts.create({ displayName: username });
     const identity = await repos.identities.create({
       accountId: account.id,
-      providerId: provider.id,
-      externalUsername: username,
+      username,
     });
     const sessionId = `session-${username}`;
     const session = await repos.sessions.create({
@@ -125,7 +123,7 @@ export async function officeHarness(
   const locks = createMemoryWopiLockRepo();
   const activity = activityFixture(clock);
   const deps: OfficeDeps = {
-    canEdit: async (actor) => ["alice", "bob"].includes(actor.identity.externalUsername),
+    canEdit: async (actor) => ["alice", "bob"].includes(actor.identity.username),
     withWriteScope: (callback) => callback({ files, locks }),
     config,
     discovery: cache,
@@ -143,7 +141,7 @@ export async function officeHarness(
     },
     storageFactory: (id: string) =>
       options.storageForUser?.(
-        users.find((user) => user.identity.id === id)?.identity.externalUsername ?? "alice",
+        users.find((user) => user.identity.id === id)?.identity.username ?? "alice",
       ) ?? storage,
     metadata: createMetadataService(repos),
     activity: activity.service,
@@ -228,7 +226,6 @@ export async function officeHarness(
     locks,
     storage,
     repos,
-    provider,
     now,
     clock,
     alice,

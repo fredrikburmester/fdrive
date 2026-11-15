@@ -53,8 +53,6 @@ export interface LocalUserServiceDeps {
   readonly checkPassword: CheckPassword;
   readonly passwords: SharePasswords;
   readonly clock?: () => Date;
-  /** The files folder's provider row, which every login is on. */
-  readonly storageId: string;
   readonly eventLog?: SystemEventLog;
   /** What each user's folder holds, shown beside their storage limit. */
   readonly usage?: HomeUsage;
@@ -66,8 +64,6 @@ export function createLocalUserService(deps: LocalUserServiceDeps): LocalUserSer
   const eventLog = deps.eventLog ?? noopSystemEventLog;
   const clock = deps.clock ?? (() => new Date());
 
-  const providerId = deps.storageId;
-
   async function requireUser(username: string): Promise<LocalUser> {
     const user = await repos.localUsers.get(username);
     if (user === null) throw new ApiHttpError("not_found", "no such user");
@@ -76,7 +72,7 @@ export function createLocalUserService(deps: LocalUserServiceDeps): LocalUserSer
 
   /** The user's login, which exists from the moment the user does. */
   async function loginOf(username: string): Promise<Identity> {
-    const identity = await repos.identities.findByProviderUsername(providerId, username);
+    const identity = await repos.identities.findByUsername(username);
     if (identity === null) throw new ApiHttpError("internal", "this user has no login");
     return identity;
   }
@@ -127,7 +123,6 @@ export function createLocalUserService(deps: LocalUserServiceDeps): LocalUserSer
         // The user comes with their account and login, so an administrator
         // can make them an administrator before they first sign in.
         await repos.logins.createUser({
-          providerId,
           username: input.username,
           passwordHash: await deps.passwords.hash(input.password),
           isAdmin: input.isAdmin === true,
@@ -208,7 +203,7 @@ export function createLocalUserService(deps: LocalUserServiceDeps): LocalUserSer
       if (identity === null) throw new ApiHttpError("unauthorized", "sign in again");
       try {
         await deps.checkPassword({
-          username: identity.externalUsername,
+          username: identity.username,
           password: input.currentPassword,
           ip: input.ip,
         });
@@ -219,7 +214,7 @@ export function createLocalUserService(deps: LocalUserServiceDeps): LocalUserSer
         }
         throw error;
       }
-      await repos.localUsers.update(identity.externalUsername, {
+      await repos.localUsers.update(identity.username, {
         passwordHash: await deps.passwords.hash(input.newPassword),
       });
       await repos.sessions.deleteByAccount(identity.accountId, input.sessionIdHash);

@@ -81,17 +81,14 @@ async function setup(
 ): Promise<Setup> {
   const repos = createMemoryRepos();
   const account = await repos.accounts.create({ displayName: null });
-  const provider = await repos.providers.ensure({ type: "local", baseUrl: "http://a" });
   const identity = await repos.identities.create({
     accountId: account.id,
-    providerId: provider.id,
-    externalUsername: "alice",
+    username: "alice",
   });
   const bobAccount = await repos.accounts.create({ displayName: null });
   const bob = await repos.identities.create({
     accountId: bobAccount.id,
-    providerId: provider.id,
-    externalUsername: "bob",
+    username: "bob",
   });
   const base = createMemoryStorage(
     options.files ?? {

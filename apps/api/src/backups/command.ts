@@ -43,8 +43,6 @@ const Review = z
   .object({
     snapshotId: z.uuid(),
     environmentFingerprint: z.string().length(64),
-    // The local folder's row has no URL; it is stored as its type name.
-    providers: z.array(z.object({ id: z.uuid(), baseUrl: z.string().min(1) }).strict()).min(1),
     ownerIdentityId: z.uuid(),
     /** The owner's password, checked against their restored user. */
     password: z.string().min(1).max(1024),
@@ -69,36 +67,20 @@ export async function resumeRecovery(config: AppConfig, review: unknown): Promis
     if (saved.mode === "rehearsal")
       throw Error("Rehearsal installations cannot resume the source installation");
     const owner = (
-      await database.pool.query<{
-        id: string;
-        account_id: string;
-        external_username: string;
-        provider_id: string;
-      }>("select * from app.identities where id=$1", [input.ownerIdentityId])
+      await database.pool.query<{ account_id: string; username: string }>(
+        "select account_id, username from app.identities where id=$1",
+        [input.ownerIdentityId],
+      )
     ).rows[0];
-    if (
-      !owner ||
-      !(await store.owner(owner.account_id)) ||
-      !input.providers.some((provider) => provider.id === owner.provider_id)
-    )
+    if (!owner || !(await store.owner(owner.account_id)))
       throw Error("Confirm the original installation owner");
     const users = createLocalUserStore({
       repo: repos.localUsers,
       grants: repos.localGrants,
       passwords: createScryptSharePasswords(),
     });
-    if ((await users.verify(owner.external_username, input.password)).result !== "ok")
+    if ((await users.verify(owner.username, input.password)).result !== "ok")
       throw Error("The original owner's password is not right");
-    for (const expected of input.providers) {
-      const provider = (
-        await database.pool.query<{ base_url: string }>(
-          "select base_url from app.providers where id=$1",
-          [expected.id],
-        )
-      ).rows[0];
-      if (!provider || provider.base_url !== expected.baseUrl)
-        throw Error("Provider binding changed; review source and destination before resuming");
-    }
     // Recovery files (OCR, Office, logs) stay quarantined in the recorded staging directory
     // for explicit operator reconciliation; nothing is published into normal app storage.
     const client = await database.pool.connect();
@@ -110,9 +92,6 @@ export async function resumeRecovery(config: AppConfig, review: unknown): Promis
         )
       ).rows[0];
       if (locked?.value.snapshotId !== saved.snapshotId) throw Error("Restore state changed");
-      await client.query("update app.providers set enabled=true where id=any($1::uuid[])", [
-        input.providers.map((provider) => provider.id),
-      ]);
       await client.query(
         "update app.backup_configuration set restored=false,confirmed=false,next_run_at=null where id=1",
       );
@@ -202,7 +181,7 @@ export async function runBackupCommand(
           JSON.stringify(
             (
               await database.pool.query(
-                "select a.id,i.external_username,i.provider_id from app.accounts a join app.identities i on i.account_id=a.id order by a.id",
+                "select a.id,i.username from app.accounts a join app.identities i on i.account_id=a.id order by a.id",
               )
             ).rows,
             null,

@@ -7,7 +7,6 @@ import {
   type NewLocalUser,
   SETUP_OWNER_KEY,
   type SetupOwner,
-  validateCanonicalUuid,
   validateNewLocalUser,
   validateSignIn,
 } from "../repos/logins-types.js";
@@ -34,8 +33,6 @@ import type {
   LocalUser,
   LocalUserRepo,
   MetadataPathRepo,
-  Provider,
-  ProviderRepo,
   Recent,
   RecentRepo,
   Repos,
@@ -54,101 +51,6 @@ import { ConflictError, levelsAtLeast } from "../repos/types.js";
 export interface CreateMemoryReposOptions {
   /** Id generator, defaults to `crypto.randomUUID`. Override for deterministic tests. */
   readonly ids?: () => string;
-}
-
-function createMemoryProviderRepo(
-  ids: () => string,
-  identityCount: (providerId: string) => number,
-): ProviderRepo {
-  const byId = new Map<string, Provider>();
-  const keyOf = (type: string, baseUrl: string) => `${type}\0${baseUrl}`;
-
-  return {
-    async get(id) {
-      validateCanonicalUuid(id);
-      return byId.get(id) ?? null;
-    },
-    async list() {
-      return [...byId.values()];
-    },
-    async create(input) {
-      for (const provider of byId.values()) {
-        if (keyOf(provider.type, provider.baseUrl) === keyOf(input.type, input.baseUrl))
-          throw new ConflictError("provider endpoint already exists");
-      }
-      const provider: Provider = {
-        id: ids(),
-        type: input.type,
-        baseUrl: input.baseUrl,
-        label: input.label ?? "",
-        config: { ...input.config },
-        enabled: input.enabled ?? true,
-        managedByEnv: input.managedByEnv ?? false,
-        createdAt: new Date(),
-      };
-      byId.set(provider.id, provider);
-      return provider;
-    },
-    async ensure(input) {
-      for (const provider of byId.values()) {
-        if (keyOf(provider.type, provider.baseUrl) === keyOf(input.type, input.baseUrl)) {
-          return provider;
-        }
-      }
-      const provider: Provider = {
-        id: ids(),
-        type: input.type,
-        baseUrl: input.baseUrl,
-        label: "",
-        config: {},
-        enabled: true,
-        managedByEnv: false,
-        createdAt: new Date(),
-      };
-      byId.set(provider.id, provider);
-      return provider;
-    },
-    async update(id, patch) {
-      validateCanonicalUuid(id);
-      const existing = byId.get(id);
-      if (!existing) {
-        return null;
-      }
-      if (
-        patch.baseUrl !== undefined &&
-        patch.baseUrl !== existing.baseUrl &&
-        identityCount(id) > 0
-      ) {
-        throw new ConflictError("provider is still used by identities");
-      }
-      if (
-        [...byId.values()].some(
-          (row) =>
-            row.id !== id &&
-            keyOf(row.type, row.baseUrl) ===
-              keyOf(existing.type, patch.baseUrl ?? existing.baseUrl),
-        )
-      )
-        throw new ConflictError("provider endpoint already exists");
-      const next: Provider = {
-        ...existing,
-        ...(patch.label !== undefined ? { label: patch.label } : {}),
-        ...(patch.baseUrl !== undefined ? { baseUrl: patch.baseUrl } : {}),
-        ...(patch.config !== undefined ? { config: { ...patch.config } } : {}),
-        ...(patch.enabled !== undefined ? { enabled: patch.enabled } : {}),
-        ...(patch.managedByEnv !== undefined ? { managedByEnv: patch.managedByEnv } : {}),
-      };
-      byId.set(id, next);
-      return next;
-    },
-    async delete(id) {
-      validateCanonicalUuid(id);
-      if (identityCount(id) > 0) {
-        throw new ConflictError("provider is still used by identities");
-      }
-      byId.delete(id);
-    },
-  };
 }
 
 function createMemoryLocalUserRepo(): LocalUserRepo & {
@@ -288,7 +190,6 @@ function createMemoryAccountRepo(ids: () => string): AccountRepo & {
 }
 
 function createMemoryIdentityRepo(ids: () => string): IdentityRepo & {
-  countByProviderSync(providerId: string): number;
   /** The login named `username` in any case, as the database's unique index finds it. */
   byName(username: string): Identity | null;
 } {
@@ -297,30 +198,21 @@ function createMemoryIdentityRepo(ids: () => string): IdentityRepo & {
   function byName(username: string): Identity | null {
     const name = username.toLowerCase();
     for (const identity of byId.values()) {
-      if (identity.externalUsername.toLowerCase() === name) return identity;
-    }
-    return null;
-  }
-
-  function findByProviderUsername(providerId: string, username: string): Identity | null {
-    for (const identity of byId.values()) {
-      if (identity.providerId === providerId && identity.externalUsername === username) {
-        return identity;
-      }
+      if (identity.username.toLowerCase() === name) return identity;
     }
     return null;
   }
 
   return {
-    async findByProviderUsername(providerId, username) {
-      return findByProviderUsername(providerId, username);
+    async findByUsername(username) {
+      return [...byId.values()].find((identity) => identity.username === username) ?? null;
     },
     byName,
     async create(input) {
       // Unique in any case, as the database's index on the login's name is.
-      const existing = byName(input.externalUsername);
+      const existing = byName(input.username);
       if (existing) {
-        throw new Error(`a login named ${input.externalUsername} already exists`);
+        throw new Error(`a login named ${input.username} already exists`);
       }
       // One login per account, as the database's unique constraint enforces.
       if (Array.from(byId.values()).some((identity) => identity.accountId === input.accountId)) {
@@ -329,8 +221,7 @@ function createMemoryIdentityRepo(ids: () => string): IdentityRepo & {
       const identity: Identity = {
         id: ids(),
         accountId: input.accountId,
-        providerId: input.providerId,
-        externalUsername: input.externalUsername,
+        username: input.username,
         createdAt: new Date(),
         lastLoginAt: null,
       };
@@ -339,14 +230,6 @@ function createMemoryIdentityRepo(ids: () => string): IdentityRepo & {
     },
     async get(id) {
       return byId.get(id) ?? null;
-    },
-    countByProviderSync(providerId) {
-      return Array.from(byId.values()).filter((identity) => identity.providerId === providerId)
-        .length;
-    },
-    async countByProvider(providerId) {
-      return Array.from(byId.values()).filter((identity) => identity.providerId === providerId)
-        .length;
     },
     async touchLogin(id, at) {
       const existing = byId.get(id);
@@ -1235,15 +1118,14 @@ function createMemoryLoginRepo(repos: {
     if (identity === null) return null;
     const account = await repos.accounts.get(identity.accountId);
     if (account === null) return null;
-    const user = await repos.localUsers.get(identity.externalUsername);
+    const user = await repos.localUsers.get(identity.username);
     return {
       identityId: identity.id,
       accountId: identity.accountId,
-      providerId: identity.providerId,
-      username: identity.externalUsername,
+      username: identity.username,
       displayName: account.displayName,
       isAdmin: account.isAdmin,
-      active: user !== null && user.username === identity.externalUsername && !user.disabled,
+      active: user !== null && user.username === identity.username && !user.disabled,
     };
   }
 
@@ -1259,7 +1141,7 @@ function createMemoryLoginRepo(repos: {
     const left = repos.identities.byName(username);
     if (
       (await repos.localUsers.get(username)) !== null ||
-      (left !== null && left.externalUsername !== username)
+      (left !== null && left.username !== username)
     )
       throw new ConflictError("username already exists");
     return left;
@@ -1277,11 +1159,7 @@ function createMemoryLoginRepo(repos: {
     }
     const account = await repos.accounts.create({ displayName: input.username });
     await repos.accounts.setAdmin(account.id, input.isAdmin);
-    return repos.identities.create({
-      accountId: account.id,
-      providerId: input.providerId,
-      externalUsername: input.username,
-    });
+    return repos.identities.create({ accountId: account.id, username: input.username });
   }
 
   /** A fresh install: no owner record, no user, no account and no login. */
@@ -1299,7 +1177,7 @@ function createMemoryLoginRepo(repos: {
     const user = await repos.localUsers.get(username);
     if (user === null) return null;
     const login = repos.identities.byName(user.username);
-    if (login === null || login.externalUsername !== user.username)
+    if (login === null || login.username !== user.username)
       throw new LoginError("missing_identity");
     const isAdmin = (await repos.accounts.get(login.accountId))?.isAdmin === true;
     return { user, login, isAdmin };
@@ -1309,7 +1187,7 @@ function createMemoryLoginRepo(repos: {
     let count = 0;
     for (const user of await repos.localUsers.list()) {
       const login = repos.identities.byName(user.username);
-      if (user.disabled || login === null || login.externalUsername !== user.username) continue;
+      if (user.disabled || login === null || login.username !== user.username) continue;
       if ((await repos.accounts.get(login.accountId))?.isAdmin === true) count += 1;
     }
     return count;
@@ -1409,9 +1287,6 @@ export function createMemoryRepos(opts: CreateMemoryReposOptions = {}): Repos {
   const apiTokens = createMemoryApiTokenRepo(ids);
 
   return {
-    providers: createMemoryProviderRepo(ids, (providerId) =>
-      identities.countByProviderSync(providerId),
-    ),
     localUsers,
     localGrants: createMemoryLocalGrantRepo(ids, localUsers),
     accounts,

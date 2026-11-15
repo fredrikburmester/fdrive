@@ -10,8 +10,7 @@ import { createScryptSharePasswords } from "../../../api/src/shares/passwords.ts
 /**
  * Local users, their accounts and logins, and their grants written with
  * plain SQL: the web app does not depend on `@fdrive/db`, and these are the
- * same rows its repos would write. A user and their login are one statement,
- * on the files folder's row the API created when it started.
+ * same rows its repos would write. A user and their login are one statement.
  */
 function sqlRepos(client: Client): LocalUserRepos {
   return {
@@ -23,9 +22,7 @@ function sqlRepos(client: Client): LocalUserRepos {
            ), account as (
              insert into app.accounts (display_name) select username from created returning id
            )
-           insert into app.identities (account_id, provider_id, external_username)
-           select account.id, providers.id, $1 from account, app.providers
-           where providers.type = 'local'`,
+           insert into app.identities (account_id, username) select account.id, $1 from account`,
           [username, passwordHash],
         ),
       update: (username, { disabled }) =>
@@ -66,7 +63,7 @@ export async function createE2eLocalUsers(
     if (owner !== undefined) {
       await client.query(
         `update app.accounts set is_admin = true
-         where id = (select account_id from app.identities where external_username = $1)`,
+         where id = (select account_id from app.identities where username = $1)`,
         [owner.username],
       );
     }

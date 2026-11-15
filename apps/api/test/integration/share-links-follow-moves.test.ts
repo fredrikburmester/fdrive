@@ -294,9 +294,7 @@ describe("public links follow the files they point at", () => {
   it("follows moves, trashes and restores made through MCP", async () => {
     const id = await link(alice, "/Mcp/report.txt");
     const repos = createRepos(database.db);
-    const identity = (await repos.identities.listAll()).find(
-      (row) => row.externalUsername === "alice",
-    );
+    const identity = (await repos.identities.listAll()).find((row) => row.username === "alice");
     if (identity === undefined) throw new Error("expected alice's login");
     const token = generateApiToken();
     await repos.apiTokens.create({

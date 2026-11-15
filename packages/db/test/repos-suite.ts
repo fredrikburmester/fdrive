@@ -18,171 +18,9 @@ export function defineReposSuite(name: string, setup: () => Promise<Repos> | Rep
       repos = await setup();
     });
 
-    describe("providers", () => {
-      it("atomically creates one provider with final fields and never overwrites it", async () => {
-        const results = await Promise.allSettled(
-          ["first", "second"].map((label) =>
-            repos.providers.create({
-              type: "local",
-              baseUrl: "http://race",
-              label,
-              enabled: false,
-              config: { root: label },
-            }),
-          ),
-        );
-        expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
-        const loser = results.find((result) => result.status === "rejected");
-        expect(loser).toMatchObject({ reason: expect.any(ConflictError) });
-        const winner = results.find((result) => result.status === "fulfilled");
-        if (winner?.status !== "fulfilled") throw new Error("missing winner");
-        expect(await repos.providers.list()).toEqual([winner.value]);
-        expect(winner.value).toMatchObject({
-          enabled: false,
-          config: { root: winner.value.label },
-        });
-      });
-
-      it("reports racing readdresses as conflicts and preserves the losing row", async () => {
-        const rows = await Promise.all(
-          ["a", "b"].map((host) =>
-            repos.providers.ensure({ type: "local", baseUrl: `http://${host}` }),
-          ),
-        );
-        const results = await Promise.allSettled(
-          rows.map((row) => repos.providers.update(row.id, { baseUrl: "http://shared" })),
-        );
-        expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
-        expect(results.find((result) => result.status === "rejected")).toMatchObject({
-          reason: expect.any(ConflictError),
-        });
-        expect(
-          (await repos.providers.list()).filter((row) => row.baseUrl === "http://shared"),
-        ).toHaveLength(1);
-      });
-
-      it("looks up a provider by canonical UUID and rejects invalid IDs", async () => {
-        const provider = await repos.providers.ensure({
-          type: "local",
-          baseUrl: "http://provider",
-        });
-        expect(await repos.providers.get(provider.id)).toEqual(provider);
-        expect(await repos.providers.get("00000000-0000-0000-0000-000000000099")).toBeNull();
-        await expect(repos.providers.get("bad")).rejects.toThrow(TypeError);
-      });
-      it("creates a provider on first ensure", async () => {
-        const provider = await repos.providers.ensure({
-          type: "local",
-          baseUrl: "http://dav.test:8080",
-        });
-
-        expect(provider.type).toBe("local");
-        expect(provider.baseUrl).toBe("http://dav.test:8080");
-        expect(provider.id).toEqual(expect.any(String));
-        expect(provider.createdAt).toBeInstanceOf(Date);
-      });
-
-      it("is idempotent for the same (type, baseUrl)", async () => {
-        const first = await repos.providers.ensure({
-          type: "local",
-          baseUrl: "http://dav.test:8080",
-        });
-        const second = await repos.providers.ensure({
-          type: "local",
-          baseUrl: "http://dav.test:8080",
-        });
-
-        expect(second.id).toBe(first.id);
-        expect(second.createdAt).toEqual(first.createdAt);
-      });
-
-      it("creates a distinct provider for a different baseUrl", async () => {
-        const first = await repos.providers.ensure({
-          type: "local",
-          baseUrl: "http://dav-a:8080",
-        });
-        const second = await repos.providers.ensure({
-          type: "local",
-          baseUrl: "http://dav-b:8080",
-        });
-
-        expect(second.id).not.toBe(first.id);
-      });
-
-      it("creates a distinct provider for a different type", async () => {
-        const first = await repos.providers.ensure({
-          type: "local",
-          baseUrl: "http://same:8080",
-        });
-        const second = await repos.providers.ensure({
-          type: "other",
-          baseUrl: "http://same:8080",
-        });
-
-        expect(second.id).not.toBe(first.id);
-      });
-
-      it("defaults label, config, enabled and managedByEnv, and lists oldest first", async () => {
-        const first = await repos.providers.ensure({ type: "local", baseUrl: "http://a" });
-        const second = await repos.providers.ensure({ type: "local", baseUrl: "http://b" });
-        expect(first).toMatchObject({ label: "", config: {}, enabled: true, managedByEnv: false });
-        expect((await repos.providers.list()).map((row) => row.id)).toEqual([first.id, second.id]);
-      });
-
-      it("updates fields without touching the rest and keeps ensure from resetting them", async () => {
-        const provider = await repos.providers.ensure({ type: "local", baseUrl: "http://a" });
-        const updated = await repos.providers.update(provider.id, {
-          label: "Home",
-          config: { region: "eu-north-1" },
-          enabled: false,
-          managedByEnv: true,
-        });
-        expect(updated).toMatchObject({
-          id: provider.id,
-          label: "Home",
-          config: { region: "eu-north-1" },
-          enabled: false,
-          managedByEnv: true,
-        });
-        expect(await repos.providers.update(provider.id, {})).toEqual(updated);
-        expect(await repos.providers.update(provider.id, { baseUrl: "http://c" })).toMatchObject({
-          baseUrl: "http://c",
-          label: "Home",
-        });
-        expect(await repos.providers.ensure({ type: "local", baseUrl: "http://c" })).toMatchObject({
-          id: provider.id,
-          label: "Home",
-          enabled: false,
-        });
-        expect(
-          await repos.providers.update("00000000-0000-0000-0000-000000000099", { label: "x" }),
-        ).toBeNull();
-      });
-
-      it("deletes an unused provider and refuses one that identities use", async () => {
-        const unused = await repos.providers.ensure({ type: "local", baseUrl: "http://unused" });
-        const used = await repos.providers.ensure({ type: "local", baseUrl: "http://used" });
-        const account = await repos.accounts.create({ displayName: null });
-        await repos.identities.create({
-          accountId: account.id,
-          providerId: used.id,
-          externalUsername: "alice",
-        });
-        expect(await repos.identities.countByProvider(used.id)).toBe(1);
-        expect(await repos.identities.countByProvider(unused.id)).toBe(0);
-        await repos.providers.delete(unused.id);
-        expect(await repos.providers.get(unused.id)).toBeNull();
-        await expect(repos.providers.delete(used.id)).rejects.toThrow(ConflictError);
-        await repos.providers.delete("00000000-0000-0000-0000-000000000099");
-        expect(await repos.providers.get(used.id)).not.toBeNull();
-      });
-    });
-
     /** Creates `username` the one way users are created: with an account and a login. */
     async function addUser(username: string, passwordHash = "h", isAdmin = false) {
-      const provider = await repos.providers.ensure({ type: "local", baseUrl: "local" });
       return repos.logins.createUser({
-        providerId: provider.id,
         username,
         passwordHash,
         isAdmin,
@@ -349,74 +187,64 @@ export function defineReposSuite(name: string, setup: () => Promise<Repos> | Rep
     });
 
     describe("identities", () => {
-      async function seedProviderAndAccount() {
-        const provider = await repos.providers.ensure({
-          type: "local",
-          baseUrl: "http://dav.test:8080",
-        });
+      async function seedAccount() {
         const account = await repos.accounts.create({ displayName: "Carol" });
-        return { provider, account };
+        return { account };
       }
 
       it("creates an identity", async () => {
-        const { provider, account } = await seedProviderAndAccount();
+        const { account } = await seedAccount();
 
         const identity = await repos.identities.create({
           accountId: account.id,
-          providerId: provider.id,
-          externalUsername: "carol",
+          username: "carol",
         });
 
         expect(identity.accountId).toBe(account.id);
-        expect(identity.providerId).toBe(provider.id);
-        expect(identity.externalUsername).toBe("carol");
+        expect(identity.username).toBe("carol");
         expect(identity.lastLoginAt).toBeNull();
       });
 
-      it("finds an identity by provider and username", async () => {
-        const { provider, account } = await seedProviderAndAccount();
+      it("finds an identity by its exact username", async () => {
+        const { account } = await seedAccount();
         const created = await repos.identities.create({
           accountId: account.id,
-          providerId: provider.id,
-          externalUsername: "carol",
+          username: "carol",
         });
 
-        const found = await repos.identities.findByProviderUsername(provider.id, "carol");
+        const found = await repos.identities.findByUsername("carol");
 
         expect(found).toEqual(created);
+        expect(await repos.identities.findByUsername("Carol")).toBeNull();
       });
 
-      it("returns null when no identity matches provider and username", async () => {
-        const { provider } = await seedProviderAndAccount();
-
-        const found = await repos.identities.findByProviderUsername(provider.id, "nobody");
+      it("returns null when no identity has the username", async () => {
+        const found = await repos.identities.findByUsername("nobody");
 
         expect(found).toBeNull();
       });
 
-      it("rejects a duplicate (providerId, externalUsername) pair", async () => {
-        const { provider, account } = await seedProviderAndAccount();
+      it("rejects a username another login has in any case", async () => {
+        const { account } = await seedAccount();
         await repos.identities.create({
           accountId: account.id,
-          providerId: provider.id,
-          externalUsername: "carol",
+          username: "carol",
         });
+        const other = await repos.accounts.create({ displayName: "Other" });
 
         await expect(
           repos.identities.create({
-            accountId: account.id,
-            providerId: provider.id,
-            externalUsername: "carol",
+            accountId: other.id,
+            username: "Carol",
           }),
         ).rejects.toThrow();
       });
 
       it("gets an identity by id, and null when missing", async () => {
-        const { provider, account } = await seedProviderAndAccount();
+        const { account } = await seedAccount();
         const created = await repos.identities.create({
           accountId: account.id,
-          providerId: provider.id,
-          externalUsername: "carol",
+          username: "carol",
         });
 
         expect(await repos.identities.get(created.id)).toEqual(created);
@@ -424,28 +252,25 @@ export function defineReposSuite(name: string, setup: () => Promise<Repos> | Rep
       });
 
       it("rejects a second login for an account", async () => {
-        const { provider, account } = await seedProviderAndAccount();
+        const { account } = await seedAccount();
         await repos.identities.create({
           accountId: account.id,
-          providerId: provider.id,
-          externalUsername: "carol",
+          username: "carol",
         });
 
         await expect(
           repos.identities.create({
             accountId: account.id,
-            providerId: provider.id,
-            externalUsername: "carol2",
+            username: "carol2",
           }),
         ).rejects.toThrow();
       });
 
       it("touches the login time", async () => {
-        const { provider, account } = await seedProviderAndAccount();
+        const { account } = await seedAccount();
         const created = await repos.identities.create({
           accountId: account.id,
-          providerId: provider.id,
-          externalUsername: "carol",
+          username: "carol",
         });
         const at = new Date("2026-01-01T00:00:00.000Z");
 
@@ -462,17 +287,15 @@ export function defineReposSuite(name: string, setup: () => Promise<Repos> | Rep
       });
 
       it("listAll returns every identity across every account", async () => {
-        const { provider, account } = await seedProviderAndAccount();
+        const { account } = await seedAccount();
         const first = await repos.identities.create({
           accountId: account.id,
-          providerId: provider.id,
-          externalUsername: "carol",
+          username: "carol",
         });
         const otherAccount = await repos.accounts.create({ displayName: "Dave" });
         const second = await repos.identities.create({
           accountId: otherAccount.id,
-          providerId: provider.id,
-          externalUsername: "dave",
+          username: "dave",
         });
 
         const all = await repos.identities.listAll();
@@ -504,7 +327,7 @@ export function defineReposSuite(name: string, setup: () => Promise<Repos> | Rep
       it("creates a user with an account and a login of the same name", async () => {
         const identity = await addUser("Carol", "hash", true);
 
-        expect(identity).toMatchObject({ externalUsername: "Carol", lastLoginAt: null });
+        expect(identity).toMatchObject({ username: "Carol", lastLoginAt: null });
         expect(await repos.localUsers.get("carol")).toMatchObject({
           username: "Carol",
           passwordHash: "hash",
@@ -513,9 +336,7 @@ export function defineReposSuite(name: string, setup: () => Promise<Repos> | Rep
           displayName: "Carol",
           isAdmin: true,
         });
-        expect(await repos.identities.findByProviderUsername(identity.providerId, "Carol")).toEqual(
-          identity,
-        );
+        expect(await repos.identities.findByUsername("Carol")).toEqual(identity);
       });
 
       it("refuses a name taken in any case, and leaves nothing of the refused user", async () => {
@@ -523,9 +344,9 @@ export function defineReposSuite(name: string, setup: () => Promise<Repos> | Rep
 
         await expect(addUser("DAVE")).rejects.toBeInstanceOf(ConflictError);
         expect((await repos.localUsers.list()).map((user) => user.username)).toEqual(["dave"]);
-        expect(
-          (await repos.identities.listAll()).map((identity) => identity.externalUsername),
-        ).toEqual(["dave"]);
+        expect((await repos.identities.listAll()).map((identity) => identity.username)).toEqual([
+          "dave",
+        ]);
       });
 
       it("gives a removed user's login back to the same name, and to no other spelling", async () => {
@@ -572,7 +393,6 @@ export function defineReposSuite(name: string, setup: () => Promise<Repos> | Rep
         const login = {
           identityId: identity.id,
           accountId: identity.accountId,
-          providerId: identity.providerId,
           username: "Gwen",
           displayName: "Gwen",
           isAdmin: true,
@@ -611,10 +431,7 @@ export function defineReposSuite(name: string, setup: () => Promise<Repos> | Rep
       });
 
       it("sets the owner up as an administrator and records them", async () => {
-        const provider = await repos.providers.ensure({ type: "local", baseUrl: "local" });
-
         const identity = await repos.logins.setup({
-          providerId: provider.id,
           username: "gail",
           passwordHash: "h",
           at,
@@ -626,9 +443,7 @@ export function defineReposSuite(name: string, setup: () => Promise<Repos> | Rep
       });
 
       it("allows setup once on a fresh database, and leaves nothing of a refused one", async () => {
-        const provider = await repos.providers.ensure({ type: "local", baseUrl: "local" });
-        const setup = (username: string) =>
-          repos.logins.setup({ providerId: provider.id, username, passwordHash: "h", at });
+        const setup = (username: string) => repos.logins.setup({ username, passwordHash: "h", at });
         const first = await setup("hal");
 
         await expect(setup("ida")).rejects.toMatchObject({ code: "setup_claimed" });
@@ -639,10 +454,8 @@ export function defineReposSuite(name: string, setup: () => Promise<Repos> | Rep
       });
 
       it("refuses setup on anything but a fresh install, and never overwrites an owner", async () => {
-        const provider = await repos.providers.ensure({ type: "local", baseUrl: "local" });
         const setup = () =>
           repos.logins.setup({
-            providerId: provider.id,
             username: "mallory",
             passwordHash: "h",
             at,
@@ -661,10 +474,8 @@ export function defineReposSuite(name: string, setup: () => Promise<Repos> | Rep
       });
 
       it("keeps setup closed once anyone has used the installation, even with every user gone", async () => {
-        const provider = await repos.providers.ensure({ type: "local", baseUrl: "local" });
         const setup = () =>
           repos.logins.setup({
-            providerId: provider.id,
             username: "mallory",
             passwordHash: "h",
             at,
@@ -677,9 +488,9 @@ export function defineReposSuite(name: string, setup: () => Promise<Repos> | Rep
         expect(await repos.logins.setupOpen()).toBe(false);
         await expect(setup()).rejects.toMatchObject({ code: "setup_claimed" });
         expect(await repos.localUsers.list()).toEqual([]);
-        expect(
-          (await repos.identities.listAll()).map((identity) => identity.externalUsername),
-        ).toEqual(["dave"]);
+        expect((await repos.identities.listAll()).map((identity) => identity.username)).toEqual([
+          "dave",
+        ]);
       });
 
       it("keeps setup closed for an account alone, with no user or login", async () => {
@@ -688,11 +499,8 @@ export function defineReposSuite(name: string, setup: () => Promise<Repos> | Rep
       });
 
       it("lets exactly one of two racing setups own the installation", async () => {
-        const provider = await repos.providers.ensure({ type: "local", baseUrl: "local" });
         const results = await Promise.allSettled(
-          ["jan", "kim"].map((username) =>
-            repos.logins.setup({ providerId: provider.id, username, passwordHash: "h", at }),
-          ),
+          ["jan", "kim"].map((username) => repos.logins.setup({ username, passwordHash: "h", at })),
         );
 
         const won = results.flatMap((result) => (result.status === "fulfilled" ? [result] : []));
@@ -702,7 +510,7 @@ export function defineReposSuite(name: string, setup: () => Promise<Repos> | Rep
         });
         const winner = won[0]?.value;
         expect((await repos.localUsers.list()).map((user) => user.username)).toEqual([
-          winner?.externalUsername,
+          winner?.username,
         ]);
         expect(await owner()).toEqual({ state: "complete", accountId: winner?.accountId });
       });
@@ -730,7 +538,7 @@ export function defineReposSuite(name: string, setup: () => Promise<Repos> | Rep
         await expect(repos.logins.removeUser("ann")).rejects.toMatchObject(last);
         await repos.logins.updateUser("ben", { disabled: false, at });
         const removed = await repos.logins.removeUser("ann");
-        expect(removed?.externalUsername).toBe("ann");
+        expect(removed?.username).toBe("ann");
         expect(await repos.localUsers.get("ann")).toBeNull();
         expect((await repos.accounts.get(removed?.accountId ?? ""))?.isAdmin).toBe(false);
         expect(await repos.logins.updateUser("nobody", { disabled: true, at })).toBeNull();
@@ -755,15 +563,10 @@ export function defineReposSuite(name: string, setup: () => Promise<Repos> | Rep
     describe("sessions", () => {
       /** An account and its one login: a session always acts as one. */
       async function seedAccount() {
-        const provider = await repos.providers.ensure({
-          type: "local",
-          baseUrl: "http://dav.test:8080",
-        });
         const account = await repos.accounts.create({ displayName: "Frank" });
         const identity = await repos.identities.create({
           accountId: account.id,
-          providerId: provider.id,
-          externalUsername: `frank-${randomUUID()}`,
+          username: `frank-${randomUUID()}`,
         });
         return { id: account.id, identityId: identity.id };
       }
@@ -964,15 +767,10 @@ export function defineReposSuite(name: string, setup: () => Promise<Repos> | Rep
       });
 
       async function seedIdentity() {
-        const provider = await repos.providers.ensure({
-          type: "local",
-          baseUrl: "http://dav.test:8080",
-        });
         const account = await repos.accounts.create({ displayName: "Heidi" });
         const identity = await repos.identities.create({
           accountId: account.id,
-          providerId: provider.id,
-          externalUsername: "heidi",
+          username: "heidi",
         });
         return { account, identity };
       }
@@ -1336,15 +1134,10 @@ export function defineReposSuite(name: string, setup: () => Promise<Repos> | Rep
 
     describe("fileTags", () => {
       async function seedIdentityAndTags() {
-        const provider = await repos.providers.ensure({
-          type: "local",
-          baseUrl: "http://dav.test:8080",
-        });
         const account = await repos.accounts.create({ displayName: "Liam" });
         const identity = await repos.identities.create({
           accountId: account.id,
-          providerId: provider.id,
-          externalUsername: "liam",
+          username: "liam",
         });
         const work = await repos.tags.create(account.id, { name: "Work", color: null });
         const personal = await repos.tags.create(account.id, { name: "Personal", color: null });
@@ -1503,15 +1296,10 @@ export function defineReposSuite(name: string, setup: () => Promise<Repos> | Rep
 
     describe("favorites", () => {
       async function seedIdentity() {
-        const provider = await repos.providers.ensure({
-          type: "local",
-          baseUrl: "http://dav.test:8080",
-        });
         const account = await repos.accounts.create({ displayName: "Mona" });
         return repos.identities.create({
           accountId: account.id,
-          providerId: provider.id,
-          externalUsername: "mona",
+          username: "mona",
         });
       }
 
@@ -1637,15 +1425,10 @@ export function defineReposSuite(name: string, setup: () => Promise<Repos> | Rep
 
     describe("folderViews", () => {
       async function seedIdentity(username = "nora") {
-        const provider = await repos.providers.ensure({
-          type: "local",
-          baseUrl: "http://dav.test:8080",
-        });
         const account = await repos.accounts.create({ displayName: "Nora" });
         return repos.identities.create({
           accountId: account.id,
-          providerId: provider.id,
-          externalUsername: username,
+          username: username,
         });
       }
 
@@ -1761,15 +1544,10 @@ export function defineReposSuite(name: string, setup: () => Promise<Repos> | Rep
 
     describe("recents", () => {
       async function seedIdentity() {
-        const provider = await repos.providers.ensure({
-          type: "local",
-          baseUrl: "http://dav.test:8080",
-        });
         const account = await repos.accounts.create({ displayName: "Nora" });
         return repos.identities.create({
           accountId: account.id,
-          providerId: provider.id,
-          externalUsername: "nora",
+          username: "nora",
         });
       }
 
@@ -1969,20 +1747,17 @@ export function defineReposSuite(name: string, setup: () => Promise<Repos> | Rep
 
       beforeEach(async () => {
         const account = await repos.accounts.create({ displayName: null });
-        const provider = await repos.providers.ensure({ type: "local", baseUrl: "http://a" });
         identity = (
           await repos.identities.create({
             accountId: account.id,
-            providerId: provider.id,
-            externalUsername: "alice",
+            username: "alice",
           })
         ).id;
         const bob = await repos.accounts.create({ displayName: null });
         other = (
           await repos.identities.create({
             accountId: bob.id,
-            providerId: provider.id,
-            externalUsername: "bob",
+            username: "bob",
           })
         ).id;
       });

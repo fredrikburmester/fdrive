@@ -114,7 +114,6 @@ describe("feature queries", () => {
 });
 
 const STORAGE: SystemStorage = {
-  id: "00000000-0000-4000-8000-000000000009",
   name: "Local folder",
   healthy: true,
   detail: "The storage root is a writable folder",

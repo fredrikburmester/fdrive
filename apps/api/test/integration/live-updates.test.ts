@@ -201,8 +201,7 @@ describe("live updates from the change journal", () => {
   }
 
   const identityOf = async (username: string) => {
-    const provider = await repos.providers.ensure({ type: "local", baseUrl: "local" });
-    const login = await repos.identities.findByProviderUsername(provider.id, username);
+    const login = await repos.identities.findByUsername(username);
     if (login === null) throw new Error(`no login for ${username}`);
     return { identityId: login.id, accountId: login.accountId };
   };

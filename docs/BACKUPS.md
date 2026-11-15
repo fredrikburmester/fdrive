@@ -83,8 +83,9 @@ newest configuration and history are still protected while coverage stays report
 The explicit table registry is in `packages/backup/src/registry.ts`. A capture fails on an
 unclassified application/index table, including tables introduced by a future migration.
 
-- Accounts, identities, providers, local users (password hashes included) and the folders
-  they share with each other, settings, tags, favorites, folder views, recents,
+- Accounts, logins, local users (password hashes included) and the folders they share with
+  each other, settings (the files folder's id among them, so paired Macs still recognise their
+  locations after a restore), tags, favorites, folder views, recents,
   AI chats (transcripts and references), share metadata (password hashes included, so links
   restore fully), activity, stable Office/native file IDs and Mac write receipts.
 - Retained index scan/move/event history, OCR rewrite history and processing failures.
@@ -146,12 +147,12 @@ For browser recovery, set `FDRIVE_RESTORE_MODE=true` and a host-generated
 `FDRIVE_SETUP_TOKEN` of at least 24 characters, then open `/restore`. The token expires one
 hour after API startup. Upload the encrypted archive, provide the private recovery key,
 inspect the inventory, and type its snapshot ID to stage the restore. In this mode the API
-does not compose normal providers, auth, feature services, outboxes or backup workers. Deploy
+does not compose storage, auth, feature services, outboxes or backup workers. Deploy
 the web and API behind HTTPS before submitting a recovery key remotely.
 
 Both paths validate every archive entry and checksum before import. Paths from an archive
 are never used as extraction paths. Destination secrets are resealed under the new master key.
-All providers/features/schedules start disabled, browser sessions are absent, API tokens are
+All features and schedules start disabled, browser sessions are absent, API tokens are
 revoked and unfinished scans become interrupted history.
 Captures enforce the same format limits as restore: 4 MiB per database row/header, 100,000 recovery files, 64 MiB manifest and 1 TiB uncompressed archive. Oversized captures fail before publication. Existing archive files are never replaced.
 
@@ -165,7 +166,6 @@ mounts, root names and Office/public URLs. Create a private review file:
 {
   "snapshotId": "SNAPSHOT_UUID",
   "environmentFingerprint": "SHA256_FROM_BACKUP_ENVIRONMENT",
-  "providers": [{ "id": "ORIGINAL_PROVIDER_UUID", "baseUrl": "local" }],
   "ownerIdentityId": "ORIGINAL_OWNER_IDENTITY_UUID",
   "password": "OWNER_PASSWORD",
   "oldDeploymentStopped": true,
@@ -181,24 +181,24 @@ Resume refuses a review file without both flags set to `true`.
 
 Tags, favourites, folder views and recents are bound to an identity and a path. A snapshot
 cannot prove that a path still names the same file: a files folder that kept changing may have
-deleted, replaced or reused it. While the restore is paused every provider is disabled, so
+deleted, replaced or reused it. While the restore is paused the API serves only recovery, so
 restored annotations are inactive. Before setting `pathBindingsReviewed`:
 
 1. List what was restored per identity, read-only:
 
    ```sql
-   select i.id, i.external_username, p.base_url,
+   select i.id, i.username,
           (select count(*) from app.file_tags t where t.identity_id = i.id) as tags,
           (select count(*) from app.favorites f where f.identity_id = i.id) as favorites,
           (select count(*) from app.folder_views v where v.identity_id = i.id) as folder_views,
           (select count(*) from app.recents r where r.identity_id = i.id) as recents
-   from app.identities i join app.providers p on p.id = i.provider_id;
+   from app.identities i;
    ```
 
 2. Compare the annotated paths (`select path from app.file_tags where identity_id = ...`, and
    the same for the other three tables) with the current files folder on the host. A freshly
    rebuilt index must not be used to infer continuity.
-3. Delete rows whose path is gone or was reused, or leave the provider disabled until the
+3. Delete rows whose path is gone or was reused, or leave the restore paused until the
    owner decides. Keep the archive: it remains the evidence for any row you remove.
 4. Only then set `pathBindingsReviewed: true`. A checked flag alone does not make an ambiguous
    association correct.
@@ -225,7 +225,7 @@ rehearsed by `apps/api/src/backups/recovery.test.ts` (“rehearses a host cutove
 
 `backup rehearse` takes the same arguments as `backup restore` but restores into a distinct
 installation identity that can never resume the source installation's ownership, contacts no
-provider, and prints a JSON report. Run it monthly against an empty database on a host without
+outside service, and prints a JSON report. Run it monthly against an empty database on a host without
 access to production storage, review the result, then upload the report under
 System → Backups → Restore rehearsal. Uploading records your review; it is not an automatic
 restore-success claim, and routine “Verify bytes” checks cannot decrypt anything without your
@@ -264,8 +264,7 @@ Limitations these numbers expose:
 node dist/main.js backup resume --review-file review.json
 ```
 
-Resume checks the original owner's password against their restored user and checks the listed
-provider bindings.
+Resume checks the original owner's password against their restored user.
 Restart the API with `FDRIVE_RESTORE_MODE=false`. Review and re-enable features and schedules
 in System; confirm a recovery key before scheduling again. Reconnect native/MCP clients.
 
