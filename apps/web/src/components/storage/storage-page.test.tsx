@@ -20,12 +20,7 @@ vi.mock("@/components/shell/page-header", () => ({ PageHeader: () => null }));
 vi.mock("@/lib/storage/queries", () => ({ useStorageUsage: () => mocks.query }));
 vi.mock("@/lib/files/queries", () => ({ useDelete: () => mocks.remove }));
 vi.mock("@/lib/api/auth-queries", () => ({
-  useMe: () => ({
-    data: {
-      activeIdentityId: "i1",
-      identities: [{ id: "i1", capabilities: { trash: mocks.trash, index: true } }],
-    },
-  }),
+  useMe: () => ({ data: { identity: { capabilities: { trash: mocks.trash, index: true } } } }),
 }));
 
 const { StoragePage } = await import("./storage-page");
