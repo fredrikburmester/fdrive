@@ -8,7 +8,6 @@ export type * from "./ports/clock.ts";
 export type * from "./ports/ids.ts";
 export type * from "./ports/provider.ts";
 export type * from "./ports/storage.ts";
-export * from "./provider-fields.ts";
 export * from "./reserved-paths.ts";
 export * from "./scope.ts";
 export * from "./search/index.ts";
