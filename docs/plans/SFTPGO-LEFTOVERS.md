@@ -60,15 +60,10 @@ All are server-only and keep shipped Mac builds working.
     is always null (MCP reports `mime: null`); non-null modification times and lengths; writes
     return the new entry; one conformance suite with no options.
 30. Open files instead of HTTP-shaped downloads: peek parses `Content-Range` with a regex,
-    extract copies the zip to a temp folder, shares have a second range implementation. The perf
+    extract copies the zip to a temp folder. The perf
     harness measured downloads through the API at 84% of direct throughput against its 90%
     budget, on a heavily loaded machine; rerun `pnpm perf:strict` on a quiet one before acting
     on that.
-
-## Shares
-
-31. **Shares.** One module instead of the access-object layers; one range implementation; drop
-    `has_password` and rename `views`.
 
 ## Last
 

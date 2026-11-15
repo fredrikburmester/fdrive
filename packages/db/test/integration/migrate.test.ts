@@ -51,7 +51,7 @@ async function withDatabaseBefore(tag: string, body: (older: Db) => Promise<void
 }
 
 /**
- * A login as releases before 0044 stored it, on a row in `app.providers` (the
+ * A login as releases before 0045 stored it, on a row in `app.providers` (the
  * files folder's unless `provider` names another), in SQL since the schema
  * no longer has those columns.
  */
@@ -560,8 +560,35 @@ describe("migrate", () => {
     });
   });
 
+  it("deletes links locked when SFTPGo kept their passwords, and keeps the count as used_downloads", async () => {
+    await withDatabaseBefore("0044_share_columns", async (older) => {
+      const identity = { id: (await olderLogin(older, "alice")).identityId };
+      await older.execute(sql`
+        insert into app.shares (identity_id, name, scope, paths, has_password, password_hash, views)
+        values
+          (${identity.id}, 'open', 'read', array['/a'], false, null, 3),
+          (${identity.id}, 'protected', 'read', array['/b'], true, 'scrypt$1$8$1$AA$AA', 1),
+          (${identity.id}, 'locked', 'read', array['/c'], true, 'locked$sftpgo', 0)`);
+
+      await migrate(older);
+
+      const links = await older.execute(sql`
+        select name, used_downloads, password_hash is not null as protected
+          from app.shares order by name`);
+      expect(links.rows).toEqual([
+        { name: "open", used_downloads: 3, protected: false },
+        { name: "protected", used_downloads: 1, protected: true },
+      ]);
+      const columns = await older.execute(sql`
+        select column_name from information_schema.columns
+          where table_schema = 'app' and table_name = 'shares'
+            and column_name in ('has_password', 'views')`);
+      expect(columns.rows).toEqual([]);
+    });
+  });
+
   it("keeps the files folder's id, which the Mac compares as providerId, and drops the provider rows", async () => {
-    await withDatabaseBefore("0044_drop_providers", async (older) => {
+    await withDatabaseBefore("0045_drop_providers", async (older) => {
       const alice = await olderLogin(older, "alice");
       const bob = await olderLogin(older, "Bob");
       expect(bob.providerId).toBe(alice.providerId);

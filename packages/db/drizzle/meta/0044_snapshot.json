@@ -1,5 +1,5 @@
 {
-  "id": "c5d3842a-f73f-43c2-afcd-786738701d84",
+  "id": "6e9aab8e-6112-45fe-afa6-261e9c2a6f96",
   "prevId": "6cb01f35-8cae-4acb-8580-eb898c1abd13",
   "version": "7",
   "dialect": "postgresql",
@@ -1285,8 +1285,14 @@
           "primaryKey": false,
           "notNull": true
         },
-        "username": {
-          "name": "username",
+        "provider_id": {
+          "name": "provider_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "external_username": {
+          "name": "external_username",
           "type": "text",
           "primaryKey": false,
           "notNull": true
@@ -1306,11 +1312,11 @@
         }
       },
       "indexes": {
-        "identities_username_lower_unique": {
-          "name": "identities_username_lower_unique",
+        "identities_external_username_lower_unique": {
+          "name": "identities_external_username_lower_unique",
           "columns": [
             {
-              "expression": "lower(\"username\")",
+              "expression": "lower(\"external_username\")",
               "asc": true,
               "isExpression": true,
               "nulls": "last"
@@ -1332,10 +1338,25 @@
           "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
+        },
+        "identities_provider_id_providers_id_fk": {
+          "name": "identities_provider_id_providers_id_fk",
+          "tableFrom": "identities",
+          "tableTo": "providers",
+          "schemaTo": "app",
+          "columnsFrom": ["provider_id"],
+          "columnsTo": ["id"],
+          "onDelete": "no action",
+          "onUpdate": "no action"
         }
       },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {
+        "identities_provider_id_external_username_unique": {
+          "name": "identities_provider_id_external_username_unique",
+          "nullsNotDistinct": false,
+          "columns": ["provider_id", "external_username"]
+        },
         "identities_account_id_unique": {
           "name": "identities_account_id_unique",
           "nullsNotDistinct": false,
@@ -1658,6 +1679,79 @@
       },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "app.providers": {
+      "name": "providers",
+      "schema": "app",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "type": {
+          "name": "type",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "base_url": {
+          "name": "base_url",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "label": {
+          "name": "label",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "''"
+        },
+        "config": {
+          "name": "config",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'{}'::jsonb"
+        },
+        "enabled": {
+          "name": "enabled",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": true
+        },
+        "managed_by_env": {
+          "name": "managed_by_env",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "providers_type_base_url_unique": {
+          "name": "providers_type_base_url_unique",
+          "nullsNotDistinct": false,
+          "columns": ["type", "base_url"]
+        }
+      },
       "policies": {},
       "checkConstraints": {},
       "isRLSEnabled": false
@@ -2026,13 +2120,6 @@
           "primaryKey": false,
           "notNull": true
         },
-        "has_password": {
-          "name": "has_password",
-          "type": "boolean",
-          "primaryKey": false,
-          "notNull": true,
-          "default": false
-        },
         "password_hash": {
           "name": "password_hash",
           "type": "text",
@@ -2073,8 +2160,8 @@
           "notNull": true,
           "default": "now()"
         },
-        "views": {
-          "name": "views",
+        "used_downloads": {
+          "name": "used_downloads",
           "type": "integer",
           "primaryKey": false,
           "notNull": true,
@@ -2113,12 +2200,7 @@
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
       "policies": {},
-      "checkConstraints": {
-        "shares_password_hash_kind": {
-          "name": "shares_password_hash_kind",
-          "value": "\"app\".\"shares\".\"has_password\" = (\"app\".\"shares\".\"password_hash\" is not null)"
-        }
-      },
+      "checkConstraints": {},
       "isRLSEnabled": false
     },
     "app.system_events": {

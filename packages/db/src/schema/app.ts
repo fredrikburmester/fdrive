@@ -317,8 +317,7 @@ export const shares = appSchema.table(
     description: text("description").notNull().default(""),
     scope: text("scope").notNull(),
     paths: text("paths").array().notNull(),
-    hasPassword: boolean("has_password").notNull().default(false),
-    /** An owned share's password, hashed; never selected into a share record. */
+    /** The link's password, hashed; `null` for an open link. Only the public lookup reads it. */
     passwordHash: text("password_hash"),
     /** Operator-chosen public page rendering: "auto" | "list" | "gallery" | "download". */
     presentation: text("presentation").notNull().default("auto"),
@@ -327,16 +326,10 @@ export const shares = appSchema.table(
     maxDownloads: integer("max_downloads").notNull().default(0),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
-    /** Legacy name: how many times the link has been used (downloads, or uploads for a write share). */
-    views: integer("views").notNull().default(0),
+    /** Downloads, previews and archives counted against `maxDownloads`; uploads for a write share. */
+    usedDownloads: integer("used_downloads").notNull().default(0),
   },
-  (table) => [
-    index("shares_identity_id_idx").on(table.identityId),
-    check(
-      "shares_password_hash_kind",
-      sql`${table.hasPassword} = (${table.passwordHash} is not null)`,
-    ),
-  ],
+  (table) => [index("shares_identity_id_idx").on(table.identityId)],
 );
 
 export const settings = appSchema.table("settings", {

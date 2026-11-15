@@ -25,7 +25,7 @@ it("pairs two people's Macs with isolated streaming reads, validators and revoca
     files: { alice: { "/same.txt": "alpha" }, bob: { "/same.txt": "bravo" } },
   });
   await seedLocalUsers(postgres.connectionString, storage, ["alice"]);
-  // An upgraded server: migration 0044 kept its files folder's old row id as the storage id.
+  // An upgraded server: migration 0045 kept its files folder's old row id as the storage id.
   const storageId = "4f1f5e8e-5a1f-4b7e-9d0c-6f1d2a3b4c5d";
   const seeding = createDb(postgres.connectionString);
   await seeding.pool.query("insert into app.settings (key, value) values ('storage.id', $1)", [

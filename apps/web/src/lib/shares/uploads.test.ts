@@ -1,6 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ProgressEventLike, XhrLike } from "@/lib/upload/xhr";
-import { createShareUploadQueue, publicUploadError, validatePublicUploadFiles } from "./uploads";
+import {
+  createShareUploadQueue,
+  publicUploadError,
+  publicUploadName,
+  validatePublicUploadFiles,
+} from "./uploads";
 
 class FakeXhr implements XhrLike {
   status = 0;
@@ -99,6 +104,9 @@ describe("public share uploads", () => {
     expect(publicUploadError("bad", 403)).toContain("Upload denied");
     expect(publicUploadError("x".repeat(8193), 500)).toContain("upload failed");
     expect(() => createShareUploadQueue("bad")).toThrow();
+    expect(publicUploadName(JSON.stringify({ name: "a (2).txt" }))).toBe("a (2).txt");
+    for (const body of ["{}", "nope", JSON.stringify({ name: 3 })])
+      expect(publicUploadName(body)).toBeNull();
   });
   it("captures capability-only URLs, streams progress and starts queued files after completion", async () => {
     const { queue, xhr, requests } = harness();
@@ -121,10 +129,12 @@ describe("public share uploads", () => {
     await vi.waitFor(() => expect(requests).toHaveLength(2));
     xhr(1).emitProgress({ lengthComputable: false, loaded: 0, total: 0 });
     expect(queue.getSnapshot()[1]?.progress).toBe(0);
-    xhr(1).finishWith(200, "{}");
+    xhr(1).finishWith(200, JSON.stringify({ name: "empty (2).txt" }));
     await vi.waitFor(() =>
       expect(queue.getSnapshot().every((item) => item.status === "done")).toBe(true),
     );
+    // A clash landed on a numbered name, which the visitor is shown.
+    expect(queue.getSnapshot().map((item) => item.savedAs)).toEqual([null, "empty (2).txt"]);
     queue.cancel("1");
     queue.cancel("unknown");
     expect(queue.getSnapshot()[0]?.status).toBe("done");
