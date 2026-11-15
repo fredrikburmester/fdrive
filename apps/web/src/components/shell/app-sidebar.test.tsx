@@ -28,7 +28,7 @@ vi.mock("@/components/shell/folder-tree", () => ({
 
 const ada: MeResponse["identity"] = makeIdentity();
 
-const me = makeMe({ identity: ada, trash: true });
+const me = makeMe({ identity: ada });
 
 function renderSidebar(account: MeResponse = me) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -94,13 +94,7 @@ it("links the fdrive wordmark to the root of Files", async () => {
   expect(wordmark.getAttribute("href")).toBe("/files");
 });
 
-it("hides Trash when the login has none", async () => {
-  renderSidebar({ ...me, trash: false });
-  await screen.findByRole("link", { name: "Shares" });
-  expect(screen.queryByRole("link", { name: "Trash" })).toBeNull();
-});
-
-it("shows Trash when the login has it, and names the signed-in login and its storage", async () => {
+it("always shows Trash, and names the signed-in login and its storage", async () => {
   renderSidebar();
   await screen.findByRole("link", { name: "Shares" });
   expect(screen.getByRole("link", { name: "Trash" })).toBeTruthy();

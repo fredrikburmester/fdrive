@@ -66,13 +66,13 @@ describe("deploymentFilesFolder", () => {
     await expect(folder.admit("nobody")).rejects.toMatchObject({ kind: "forbidden" });
   });
 
-  it("refuses a share in a folder the deployment closes to shares", async () => {
+  it("refuses a share in the owner's Trash", async () => {
     const repos = createMemoryRepos();
     await seedLocalUsers(repos, [
       { username: "alice", password: "alice-pass" },
       { username: "bob", password: "bob-pass" },
     ]);
-    for (const path of ["/Bin/old", "/Projects"]) {
+    for (const path of ["/.trash/old", "/Projects"]) {
       await repos.localGrants.put({
         ownerUsername: "alice",
         path,
@@ -80,16 +80,12 @@ describe("deploymentFilesFolder", () => {
         access: "read",
       });
     }
-    const closedFolders = vi.fn(async () => ["/Bin"]);
-    const folder = deploymentFilesFolder({ fdriveStorageRoot: temporaryStorageRoot() }, repos, {
-      closedFolders,
-    });
+    const folder = deploymentFilesFolder({ fdriveStorageRoot: temporaryStorageRoot() }, repos);
     const alice = folder.storage("alice");
-    await alice.mkdir("/Bin/old", { parents: true });
+    await alice.mkdir("/.trash/old", { parents: true });
     await alice.mkdir("/Projects");
     const bob = folder.storage("bob");
     expect((await bob.list("/Shared with me")).map((entry) => entry.name)).toEqual(["Projects"]);
-    expect(closedFolders).toHaveBeenCalled();
   });
 
   it("refuses storage in a folder its guard refuses", async () => {

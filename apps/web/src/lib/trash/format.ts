@@ -10,21 +10,6 @@ export function originalFolderLabel(originalPath: string): string {
   return isRoot(parent) ? "Home" : parent;
 }
 
-export interface TrashAvailability {
-  readonly available: boolean;
-}
-
-/**
- * What the delete confirmation should promise. The login's `trash`
- * capability decides between "Move to Trash" and a permanent delete, the
- * same source the row menu labels read, so the two never disagree.
- */
-export function trashAvailabilityFor(capabilities: {
-  readonly trash: boolean;
-}): TrashAvailability | null {
-  return capabilities.trash ? { available: true } : null;
-}
-
 export interface DeleteDialogCopy {
   readonly title: string;
   readonly description: string;
@@ -33,36 +18,43 @@ export interface DeleteDialogCopy {
   readonly pendingLabel: string;
 }
 
+/** "1 day" or "N days". */
+export function dayCountLabel(days: number): string {
+  return `${days} ${days === 1 ? "day" : "days"}`;
+}
+
 /**
- * The delete confirmation dialog's title, body, and confirm button labels:
- * "Move to Trash" copy when the active identity's storage exposes a trash,
- * otherwise the permanent-delete copy. `names` is the list of entries being
- * acted on, in display order; a single entry is quoted by name, more than
- * one is summarized by count. `pendingLabel` replaces `confirmLabel` while
- * the request runs, which can be a while for a large folder or selection.
+ * When Trash deletes what it holds, for the Trash page and the delete
+ * dialog, or `null` until the setting has loaded.
+ */
+export function retentionNote(retentionDays: number | undefined): string | null {
+  return retentionDays === undefined
+    ? null
+    : `Items in Trash are deleted permanently after ${dayCountLabel(retentionDays)}.`;
+}
+
+/**
+ * The delete confirmation dialog's title, body, and confirm button labels.
+ * Every delete moves to Trash, which keeps an item `retentionDays` (when
+ * known) before deleting it permanently. `names` is the list of entries
+ * being acted on, in display order; a single entry is quoted by name, more
+ * than one is summarized by count. `pendingLabel` replaces `confirmLabel`
+ * while the request runs, which can be a while for a large folder or
+ * selection.
  */
 export function deleteDialogCopy(
   names: readonly string[],
-  trash: TrashAvailability | null | undefined,
+  retentionDays: number | undefined,
 ): DeleteDialogCopy {
   const count = names.length;
   const first = names[0];
   const subject = count === 1 && first !== undefined ? `"${first}"` : `${count} items`;
-
-  if (trash?.available === true) {
-    return {
-      title: "Move to Trash?",
-      description: `${subject} will be moved to Trash.`,
-      confirmLabel: "Move to Trash",
-      pendingLabel: "Moving to Trash…",
-    };
-  }
-
+  const note = retentionNote(retentionDays);
   return {
-    title: `Delete ${count === 1 ? "item" : "items"}?`,
-    description: `${subject} will be permanently deleted. This cannot be undone.`,
-    confirmLabel: "Delete",
-    pendingLabel: "Deleting…",
+    title: "Move to Trash?",
+    description: `${subject} will be moved to Trash.${note === null ? "" : ` ${note}`}`,
+    confirmLabel: "Move to Trash",
+    pendingLabel: "Moving to Trash…",
   };
 }
 

@@ -19,40 +19,18 @@ export function isValidPath(path: string): boolean {
     .every((segment) => isValidEntryName(segment));
 }
 
-const TrashPath = z.string().refine((value) => value !== "/" && isValidPath(value), {
-  message: "path must be a normalized absolute directory other than the root",
-});
+/** The `app.settings` key of how long Trash keeps an item; unset means `DEFAULT_TRASH_RETENTION_DAYS`. */
+export const TRASH_RETENTION_SETTINGS_KEY = "trash.retentionDays";
 
-/**
- * Trash configuration for the files folder's provider row: stored under
- * `trash.configuration.<providerId>` and sent as is by the settings routes.
- */
+/** How many days Trash keeps an item until an administrator changes it. */
+export const DEFAULT_TRASH_RETENTION_DAYS = 30;
+
+/** Trash is always on; this is its one installation setting. */
 export const TrashSettings = z.strictObject({
-  providerId: z.uuid(),
-  revision: z.number().int().nonnegative(),
-  enabled: z.boolean(),
-  path: TrashPath,
-  retentionHours: z.number().int().positive().nullable(),
+  /** Days an item stays in Trash before fdrive deletes it permanently. */
+  retentionDays: z.number().int().min(1).max(3650),
 });
 export type TrashSettings = z.infer<typeof TrashSettings>;
-
-export const TrashSettingsUpdateRequest = TrashSettings;
-export type TrashSettingsUpdateRequest = z.infer<typeof TrashSettingsUpdateRequest>;
-
-/** `GET /api/v1/system/trash` names the storage server whose Trash it reads. */
-export const SystemTrashQuery = z.object({ providerId: z.uuid() });
-export type SystemTrashQuery = z.infer<typeof SystemTrashQuery>;
-
-/** Whether the active identity's storage provider exposes a trash, and its configuration. */
-export const TrashStatusResponse = z.object({
-  available: z.boolean(),
-  /** The provider's trash path, when available. */
-  path: z.string().nullable(),
-  /** Informational only: fdrive never enforces retention itself. */
-  retentionHours: z.number().int().positive().nullable(),
-});
-
-export type TrashStatusResponse = z.infer<typeof TrashStatusResponse>;
 
 /** One deleted item still recoverable from the trash. */
 export const TrashEntry = z.object({

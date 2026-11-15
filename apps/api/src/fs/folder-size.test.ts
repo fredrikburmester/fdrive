@@ -127,31 +127,29 @@ describe("GET /api/v1/fs/folder-size", () => {
 
     await app.request("/api/v1/fs/folder-size?path=/");
 
-    // The home's own `Shared with me` is a reserved name, never counted.
+    // Neither the Trash nor the home's own `Shared with me` is counted.
     expect(subtreeSize).toHaveBeenCalledWith([{ rootId: 1, fsPrefix: "/" }], 1, "", [
+      ".trash",
       "Shared with me",
     ]);
   });
 
-  it("excludes configured trash nested below the requested parent", async () => {
+  it("leaves the Trash out of the size of the files that hold it", async () => {
     const subtreeSize = vi.fn(async () => ({ bytes: 10, files: 1 }));
     const app = buildApp({
-      trashPathForStorage: () => "/photos/.trash",
       indexQueries: fakeIndexQueries({
         subtreeSize,
       }),
     });
 
-    const res = await app.request("/api/v1/fs/folder-size?path=/photos");
+    const res = await app.request("/api/v1/fs/folder-size?path=/");
 
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ path: "/photos", bytes: 10, files: 1, indexed: true });
-    expect(subtreeSize).toHaveBeenCalledWith(
-      [{ rootId: 1, fsPrefix: "/alice" }],
-      1,
-      "alice/photos",
-      ["alice/photos/.trash"],
-    );
+    expect(await res.json()).toEqual({ path: "/", bytes: 10, files: 1, indexed: true });
+    expect(subtreeSize).toHaveBeenCalledWith([{ rootId: 1, fsPrefix: "/alice" }], 1, "alice", [
+      "alice/.trash",
+      "alice/Shared with me",
+    ]);
   });
 
   it("adds folders shared with the login while leaving out the home's own Shared with me", async () => {
@@ -171,7 +169,10 @@ describe("GET /api/v1/fs/folder-size", () => {
     const res = await app.request("/api/v1/fs/folder-size?path=/");
 
     expect(await res.json()).toEqual({ path: "/", bytes: 140, files: 5, indexed: true });
-    expect(subtreeSize).toHaveBeenNthCalledWith(1, prefixes, 1, "alice", ["alice/Shared with me"]);
+    expect(subtreeSize).toHaveBeenNthCalledWith(1, prefixes, 1, "alice", [
+      "alice/.trash",
+      "alice/Shared with me",
+    ]);
     expect(subtreeSize).toHaveBeenNthCalledWith(2, prefixes, 1, "bob/team");
 
     // `Shared with me` itself holds only the shared folders.
@@ -224,44 +225,6 @@ describe("GET /api/v1/fs/folder-size", () => {
       ],
       1,
       "pool/trips",
-    );
-  });
-
-  it("excludes trash inside a mapped root and avoids overlapping parent exclusions", async () => {
-    const subtreeSize = vi.fn(async () => ({ bytes: 5, files: 1 }));
-    const app = buildApp({
-      scopes: [
-        { fsPrefix: "/alice", virtualPrefix: "/" },
-        { fsPrefix: "/pool/team", virtualPrefix: "/Shared with me/team" },
-      ],
-      trashPathForStorage: () => "/Shared with me/team/.trash",
-      indexQueries: fakeIndexQueries({
-        subtreeSize,
-      }),
-    });
-
-    const res = await app.request("/api/v1/fs/folder-size?path=/");
-
-    expect(await res.json()).toEqual({ path: "/", bytes: 10, files: 2, indexed: true });
-    expect(subtreeSize).toHaveBeenNthCalledWith(
-      1,
-      [
-        { rootId: 1, fsPrefix: "/alice" },
-        { rootId: 1, fsPrefix: "/pool/team" },
-      ],
-      1,
-      "alice",
-      ["alice/Shared with me"],
-    );
-    expect(subtreeSize).toHaveBeenNthCalledWith(
-      2,
-      [
-        { rootId: 1, fsPrefix: "/alice" },
-        { rootId: 1, fsPrefix: "/pool/team" },
-      ],
-      1,
-      "pool/team",
-      ["pool/team/.trash"],
     );
   });
 
@@ -345,20 +308,20 @@ describe("GET /api/v1/fs/folder-size", () => {
   });
 
   it("answers indexed: false for the trash folder itself", async () => {
-    const app = buildApp({ trashPathForStorage: () => "/trash" });
+    const app = buildApp();
 
-    const res = await app.request("/api/v1/fs/folder-size?path=/trash");
+    const res = await app.request("/api/v1/fs/folder-size?path=/.trash");
 
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ path: "/trash", bytes: 0, files: 0, indexed: false });
+    expect(await res.json()).toEqual({ path: "/.trash", bytes: 0, files: 0, indexed: false });
   });
 
   it("answers indexed: false for a folder nested under trash", async () => {
-    const app = buildApp({ trashPathForStorage: () => "/trash" });
+    const app = buildApp();
 
-    const res = await app.request("/api/v1/fs/folder-size?path=/trash/old");
+    const res = await app.request("/api/v1/fs/folder-size?path=/.trash/old");
 
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ path: "/trash/old", bytes: 0, files: 0, indexed: false });
+    expect(await res.json()).toEqual({ path: "/.trash/old", bytes: 0, files: 0, indexed: false });
   });
 });

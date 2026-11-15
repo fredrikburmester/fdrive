@@ -357,7 +357,6 @@ async function fixture(writable = false, changes?: DesktopChanges) {
         ...extras,
       }),
     ),
-    trashPathForStorage: () => "/.trash",
   };
   const principal: Principal = {
     accountId: account.id,

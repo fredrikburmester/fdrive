@@ -97,8 +97,7 @@ async function buildTestApp(opts: {
       clock: opts.clockCtl.clock,
     }),
     installation:
-      opts.installation ??
-      (async () => ({ storageName: "Local folder", trash: false, index: false })),
+      opts.installation ?? (async () => ({ storageName: "Local folder", index: false })),
   });
   const app = createApp({
     config,
@@ -695,8 +694,8 @@ describe("auth: administrators and installation flags", () => {
     expect(bob.isAdmin).toBe(false);
   });
 
-  it("reports the storage name, Trash and indexing, read on every request", async () => {
-    let flags = { storageName: "Local folder", trash: false, index: true };
+  it("reports the storage name and indexing, read on every request", async () => {
+    let flags = { storageName: "Local folder", index: true };
     const { app } = await buildTestApp({
       clockCtl: createClock(Date.now()),
       installation: async () => flags,
@@ -705,7 +704,7 @@ describe("auth: administrators and installation flags", () => {
     const signedIn = await readJson<MeResponse>(response);
     expect(signedIn).toMatchObject(flags);
 
-    flags = { storageName: "Family files", trash: true, index: false };
+    flags = { storageName: "Family files", index: false };
     const me = await readJson<MeResponse>(
       await app.request(ROUTES.auth.me, { headers: { cookie: extractCookie(response) } }),
     );

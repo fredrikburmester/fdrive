@@ -48,7 +48,7 @@ async function error(response: Response) {
 
 describe("archive downloads of a public share", () => {
   it("zips a folder share as one download, and answers HEAD without spending one", async () => {
-    const h = sharesHarness({ trashPath: "/.trash" });
+    const h = sharesHarness();
     h.write("/folder/a.txt", "alpha");
     h.write("/folder/sub/b.txt", "bravo");
     h.write("/.trash/old.txt", "gone");
@@ -70,7 +70,7 @@ describe("archive downloads of a public share", () => {
   });
 
   it("never reaches the Trash through a symbolic link in the shared folder", async () => {
-    const h = sharesHarness({ trashPath: "/.trash" });
+    const h = sharesHarness();
     h.write("/folder/a.txt", "alpha");
     h.write("/.trash/old.txt", "gone");
     h.write("/.fdrive-desktop/mac/secret.txt", "the Mac's");
@@ -140,7 +140,7 @@ describe("archive downloads of a public share", () => {
   });
 
   it("never carries the Trash into an archive, and zips an old backup folder like any other", async () => {
-    const h = sharesHarness({ trashPath: "/.trash" });
+    const h = sharesHarness();
     h.write("/.trash/old.txt", "gone");
     h.write("/folder/.fdrive-backups/b", "backup");
     h.write("/clean/a.txt", "alpha");
@@ -164,7 +164,7 @@ describe("archive downloads of a public share", () => {
   });
 
   it("refuses a carried-over share whose paths are hidden now or would collide", async () => {
-    const h = sharesHarness({ trashPath: "/.trash" });
+    const h = sharesHarness();
     h.write("/.trash/old.txt", "gone");
     h.write("/one/report.txt", "one");
     h.write("/two/report.txt", "two");

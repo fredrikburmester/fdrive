@@ -74,14 +74,6 @@ describe("queries per request", () => {
         },
         walkthroughComplete: true,
       });
-      const provider = await repos.providers.ensure({ type: "local", baseUrl: "local" });
-      await repos.settings.set(`trash.configuration.${provider.id}`, {
-        providerId: provider.id,
-        revision: 1,
-        enabled: true,
-        path: "/.trash",
-        retentionHours: null,
-      });
       const root = { id: INDEX_ROOT_ID };
       const mtimeNs = BigInt(Date.now()) * 1_000_000n;
       const rows: [string, string][] = [

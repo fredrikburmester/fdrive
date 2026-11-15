@@ -3,7 +3,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import type { TokenPrincipal } from "../tokens/principal.ts";
-import { canOrganize, trashPathFor } from "./access.ts";
+import { canOrganize } from "./access.ts";
 import { liveFileInfo, MAX_FILE_BYTES, readFile, readFileText, readStoredFile } from "./content.ts";
 import {
   copyPath,
@@ -153,8 +153,6 @@ export function registerMcpTools(
           ? { available: true }
           : { available: false, reason: "the files folder is not indexed" },
         document_extraction_configured: deps.indexerClient !== null,
-        trash_configured:
-          trashPathFor(deps, principal) !== null && principal.storage.trash !== undefined,
         max_file_bytes: MAX_FILE_BYTES,
         edit_concurrency:
           "SHA-256 is checked before writing. Provider contracts cannot guarantee atomic updates against other clients.",
@@ -525,7 +523,6 @@ export function registerMcpTools(
     },
     wrap((args) => editFile(deps, principal, args)),
   );
-  if (trashPathFor(deps, principal) === null || principal.storage.trash === undefined) return;
   register(
     "trash_path",
     {
@@ -547,7 +544,7 @@ export function registerMcpTools(
         limit: z.number().int().min(1).max(500).optional(),
       },
     },
-    wrap((args) => listTrash(deps, principal, args)),
+    wrap((args) => listTrash(principal, args)),
   );
   register(
     "restore_path",

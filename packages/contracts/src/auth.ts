@@ -35,8 +35,6 @@ export const MeResponse = z.object({
   isAdmin: z.boolean(),
   /** The installation's storage name, shown under the username. */
   storageName: z.string(),
-  /** Trash is on for the installation: deletes move to the Trash folder. */
-  trash: z.boolean(),
   /**
    * The files folder is indexed (the indexer is configured and a feature
    * that needs it is on): search, thumbnails and folder sizes apply.

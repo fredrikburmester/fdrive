@@ -1,11 +1,5 @@
 import { ROUTES, ThumbQuery, type ThumbSize } from "@fdrive/contracts";
-import {
-  type CoreError,
-  isReservedPath,
-  normalizePath,
-  type StorageProvider,
-  toFsPath,
-} from "@fdrive/core";
+import { type CoreError, isReservedPath, normalizePath, toFsPath } from "@fdrive/core";
 import type { IndexQueries } from "@fdrive/db";
 import type { AppHono, AuthedHono } from "../app.js";
 import { ApiHttpError } from "../errors.js";
@@ -35,8 +29,6 @@ export interface ThumbRoutesDeps {
   /** The directory the indexer writes thumbnails into. `undefined` disables the route entirely. */
   readonly thumbsDir: string | undefined;
   readonly fileReader?: ThumbFileReader;
-  /** The login's Trash folder while Trash is on, from the request's storage. */
-  readonly trashPathForStorage?: (storage: StorageProvider) => string | null;
 }
 
 /**
@@ -81,7 +73,7 @@ export function registerThumbRoutes(
     }
 
     const principal = c.get("principal");
-    if (isReservedPath(path, deps.trashPathForStorage?.(principal.storage) ?? null)) {
+    if (isReservedPath(path)) {
       throw THUMB_NOT_FOUND();
     }
     const scopes = await deps.resolver.scopesFor(principal.username);

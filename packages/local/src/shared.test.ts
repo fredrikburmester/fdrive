@@ -55,17 +55,15 @@ describe("sharedFolderNames", () => {
 });
 
 describe("closedToShares", () => {
-  it("closes the folders given and fdrive's Trash layout wherever it is", () => {
-    const closed = ["/.trash", "/.fdrive-desktop"];
-    expect(closedToShares("/.trash", closed)).toBe(true);
-    expect(closedToShares("/.trash/.fdrive-move-v1/dir/p/Old/v/1", closed)).toBe(true);
-    expect(closedToShares("/.fdrive-desktop/id/trash/Old", closed)).toBe(true);
-    // Trash turned off or moved: what is still in the old one stays closed.
-    expect(closedToShares("/.trash/.fdrive-move-v1/dir/p/Old/v/1/sub", [])).toBe(true);
-    expect(closedToShares("/Bin/.fdrive-move-v1/dir/p/Old/v/1", ["/.trash"])).toBe(true);
-    expect(closedToShares("/.trash/Old", [])).toBe(false);
-    expect(closedToShares("/.trashy/Old", closed)).toBe(false);
-    expect(closedToShares("/Projects", closed)).toBe(false);
+  it("closes fdrive's own folders and its Trash layout wherever it is", () => {
+    expect(closedToShares("/.trash")).toBe(true);
+    expect(closedToShares("/.trash/Old")).toBe(true);
+    expect(closedToShares("/.trash/.fdrive-move-v1/dir/p/Old/v/1")).toBe(true);
+    expect(closedToShares("/.fdrive-desktop/id/trash/Old")).toBe(true);
+    // A Trash an earlier version kept elsewhere: what is still in it stays closed.
+    expect(closedToShares("/Bin/.fdrive-move-v1/dir/p/Old/v/1")).toBe(true);
+    expect(closedToShares("/.trashy/Old")).toBe(false);
+    expect(closedToShares("/Projects")).toBe(false);
   });
 });
 

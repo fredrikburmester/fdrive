@@ -88,7 +88,6 @@ function buildDeps(overrides: Partial<SearchServiceDeps> = {}): SearchServiceDep
     indexQueries: fakeIndexQueries(),
     embedClient: null,
     thumbsEnabled: false,
-    trashPath: null,
     clock: () => NOW,
     ...overrides,
   };
@@ -96,11 +95,11 @@ function buildDeps(overrides: Partial<SearchServiceDeps> = {}): SearchServiceDep
 
 const NO_FILTERS = { exts: null, folder: null, after: null, before: null };
 
-/** What every query leaves out for alice: the Mac app's folder, her own Shared with me, the reserved names and her Trash, if any. */
-function reserved(...trash: string[]) {
+/** fdrive's own folders in alice's home and her own Shared with me, as every query leaves them out. */
+function reserved() {
   return {
     prefixes: [
-      ...trash.map((fsPrefix) => ({ rootId: 1, fsPrefix })),
+      { rootId: 1, fsPrefix: "/alice/.trash" },
       { rootId: 1, fsPrefix: "/alice/.fdrive-desktop" },
       { rootId: 1, fsPrefix: "/alice/Shared with me" },
     ],
@@ -842,13 +841,11 @@ describe("createSearchService: search - hits", () => {
       folders,
     });
     const embedClient: EmbedClient = { embed: async () => [0.1] };
-    const service = createSearchService(
-      buildDeps({ indexQueries, embedClient, trashPath: "/.trash" }),
-    );
+    const service = createSearchService(buildDeps({ indexQueries, embedClient }));
 
     await service.search(baseInput());
 
-    const exclude = reserved("/alice/.trash");
+    const exclude = reserved();
     expect(semantic).toHaveBeenCalledWith(expect.anything(), [0.1], 60, { exclude });
     expect(fulltext).toHaveBeenCalledWith(
       expect.anything(),
@@ -870,25 +867,6 @@ describe("createSearchService: search - hits", () => {
       50,
       expect.objectContaining({ exclude }),
     );
-  });
-
-  it("uses the request's Trash over the default, and leaves out only the rest without one", async () => {
-    const filename = vi.fn(async () => []);
-    const indexQueries = fakeIndexQueries({
-      semantic: async () => [],
-      fulltext: async () => [],
-      filename,
-    });
-
-    await createSearchService(buildDeps({ indexQueries, trashPath: "/.trash" })).search(
-      baseInput({ trashPath: "/Bin" }),
-    );
-    await createSearchService(buildDeps({ indexQueries })).search(baseInput());
-
-    expect(filename.mock.calls.map((call) => (call as unknown[])[4])).toEqual([
-      expect.objectContaining({ exclude: reserved("/alice/Bin") }),
-      expect.objectContaining({ exclude: reserved() }),
-    ]);
   });
 
   it("skips a filename hit whose file id is not returned by filesByIds", async () => {
@@ -1039,7 +1017,6 @@ describe("createSearchService: search - typos", () => {
       buildDeps({
         indexQueries: folderOnlyQueries([]),
         nameIndex: names,
-        trashPath: "/.trash",
       }),
     );
 
@@ -1051,7 +1028,7 @@ describe("createSearchService: search - typos", () => {
     expect(names.search).toHaveBeenNthCalledWith(1, {
       query: "Microlär",
       scopes: [{ rootId: 1, fsPrefix: "/alice" }],
-      exclude: reserved("/alice/.trash"),
+      exclude: reserved(),
       files: 25,
       folders: 50,
     });

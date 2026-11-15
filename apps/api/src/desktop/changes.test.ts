@@ -176,7 +176,6 @@ function feed(overrides: Partial<DesktopChangesDeps> = {}) {
   const changes = createDesktopChanges({
     journal: log.fake,
     scopes: async () => current,
-    trashPathForStorage: () => "/.trash",
     ...overrides,
   });
   return {

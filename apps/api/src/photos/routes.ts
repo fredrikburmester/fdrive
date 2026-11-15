@@ -6,13 +6,7 @@ import {
   PhotosResponse,
   ROUTES,
 } from "@fdrive/contracts";
-import {
-  baseName,
-  type CoreError,
-  normalizePath,
-  type StorageProvider,
-  toFsPath,
-} from "@fdrive/core";
+import { baseName, type CoreError, normalizePath, toFsPath } from "@fdrive/core";
 import { INDEX_ROOT_ID, type IndexQueries, type PhotoCursor } from "@fdrive/db";
 import type { AppHono, AuthedHono } from "../app.js";
 import { ApiHttpError } from "../errors.js";
@@ -44,7 +38,6 @@ export interface PhotoRoutesDeps {
   readonly resolver: Pick<ScopeResolver, "scopesFor">;
   /** Whether the files folder is indexed: an indexer is configured and a feature uses it. */
   readonly indexed: () => Promise<boolean>;
-  readonly trashPathForStorage?: (storage: StorageProvider) => string | null;
 }
 
 function parseCursor(raw: string | undefined): PhotoCursor | undefined {
@@ -82,13 +75,12 @@ export function registerPhotoRoutes(
     if (scopes === null) {
       return c.json(PhotosResponse.parse({ photos: [], nextCursor: null }));
     }
-    const trashPath = deps.trashPathForStorage?.(principal.storage) ?? null;
     const rows = await deps.indexQueries.photos(
       indexPrefixes(scopes),
       IMAGE_EXTS,
       PHOTOS_PAGE_SIZE,
       {
-        exclude: reservedExclusion(scopes, trashPath),
+        exclude: reservedExclusion(scopes),
         ...(after === undefined ? {} : { after }),
       },
     );

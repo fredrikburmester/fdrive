@@ -52,20 +52,10 @@ export interface SearchServiceDeps {
   readonly nameIndex?: NameIndexClient | null;
   /** Whether `FDRIVE_THUMBS_DIR` is configured; when false, every hit reports `hasThumbnail: false`. */
   readonly thumbsEnabled: boolean;
-  /**
-   * The login's Trash folder virtual path, when Trash is on. Every query
-   * leaves out fdrive's own folders (`isReservedPath`: the Trash, its layout
-   * wherever it lies, the Mac app's folder, backups) before its limit, so
-   * they never appear in search hits, folder grouping, or counts, and never
-   * take a place in the fanout. A test/default value; production passes a
-   * request snapshot in `SearchServiceInput`.
-   */
-  readonly trashPath?: string | null;
   readonly clock: () => Date;
 }
 
 export interface SearchServiceInput {
-  readonly trashPath?: string | null;
   /**
    * The identity's scopes, resolved once at the request boundary
    * (`ScopeResolver.scopesFor`). Empty means index-backed search is
@@ -196,7 +186,6 @@ function folderHit(hit: NameIndexHit): FolderHit {
 export function createSearchService(deps: SearchServiceDeps): SearchService {
   return {
     async search(input: SearchServiceInput): Promise<SearchResponse> {
-      const trashPath = input.trashPath ?? deps.trashPath ?? null;
       const startedAt = deps.clock();
       const tookMs = () => elapsedMs(deps.clock, startedAt);
       const features = await deps.features?.();
@@ -206,7 +195,7 @@ export function createSearchService(deps: SearchServiceDeps): SearchService {
       }
 
       const prefixes = indexPrefixes(input.scopes);
-      const exclude = reservedExclusion(input.scopes, trashPath);
+      const exclude = reservedExclusion(input.scopes);
 
       function pathFor(path: string): string | null {
         return roundTripVirtualPath(input.scopes, path);

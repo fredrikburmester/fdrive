@@ -36,35 +36,18 @@ export function requireMode(principal: TokenPrincipal, mode: "organize" | "full"
   if (!allowed) throw new Error(`this token does not allow ${mode} operations`);
 }
 
-export interface TrashAccessDeps {
-  readonly trashPath?: string | null;
-  readonly trashPathForStorage?: (storage: Principal["storage"]) => string | null;
-}
-
-export function trashPathFor(deps: TrashAccessDeps, principal: Principal): string | null {
-  return deps.trashPathForStorage?.(principal.storage) ?? deps.trashPath ?? null;
-}
-
 /** Why a tool refuses a path in one of fdrive's own folders (`isReservedPath`). */
 export const RESERVED_MESSAGE = "path is in the Trash or another of fdrive's own folders";
 
 /** A token path outside fdrive's own folders (`isReservedPath`), which ordinary tools never touch. */
-export function ordinaryPath(
-  deps: TrashAccessDeps,
-  principal: TokenPrincipal,
-  rawPath: string,
-): string {
+export function ordinaryPath(principal: TokenPrincipal, rawPath: string): string {
   const path = assertTokenPath(principal, rawPath);
-  if (isReservedPath(path, trashPathFor(deps, principal))) throw new Error(RESERVED_MESSAGE);
+  if (isReservedPath(path)) throw new Error(RESERVED_MESSAGE);
   return path;
 }
 
 /** Prevents moving/deleting a grant root and thereby invalidating or retargeting the grant. */
-export function assertMutablePath(
-  principal: TokenPrincipal,
-  path: string,
-  trashPath: string | null,
-): void {
+export function assertMutablePath(principal: TokenPrincipal, path: string): void {
   assertTokenPath(principal, path);
   if (
     path === "/" ||
@@ -72,8 +55,6 @@ export function assertMutablePath(
   ) {
     throw new Error("cannot move or delete an allowed folder root");
   }
-  if (trashPath !== null && containsPath(path, trashPath))
-    throw new Error("cannot move or delete a folder containing Trash");
 }
 
 /** Intersects virtual grants without removing the original mappings' shadow boundaries. */

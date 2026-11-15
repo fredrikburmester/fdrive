@@ -68,10 +68,6 @@ function sharingOf(deps: DriveToolsDeps): OrganizeSharing {
 /** Why a folder tool refuses one of fdrive's own folders (`isReservedPath`), which it never opens or shows. */
 const RESERVED_FOLDER = "That folder is fdrive's own, like the Trash.";
 
-function trashPathOf(deps: DriveToolsDeps): string | null {
-  return deps.mcp.trashPathForStorage?.(deps.principal.storage) ?? deps.mcp.trashPath ?? null;
-}
-
 function normalizeArg(path: string): string {
   try {
     return normalizePath(path);
@@ -144,8 +140,7 @@ function folderTreeTool(deps: DriveToolsDeps): AiTool {
       activity: (args) => `Looked through ${args.path}`,
       async run(args, signal) {
         const root = await storedArg(deps, args.path);
-        const trashPath = trashPathOf(deps);
-        if (isReservedPath(root, trashPath)) throw new AiToolError(RESERVED_FOLDER);
+        if (isReservedPath(root)) throw new AiToolError(RESERVED_FOLDER);
         const listings = new Map<string, FileEntry[] | string>();
         let frontier = isClosed(focus, root) ? [] : [root];
         let budget = TREE_LISTING_BUDGET;
@@ -170,7 +165,7 @@ function folderTreeTool(deps: DriveToolsDeps): AiTool {
                   .filter(
                     (entry) =>
                       entry.kind === "dir" &&
-                      !isReservedPath(entry.path, trashPath) &&
+                      !isReservedPath(entry.path) &&
                       !isClosed(focus, entry.path),
                   )
                   .map((entry) => entry.path)
@@ -198,7 +193,7 @@ function folderTreeTool(deps: DriveToolsDeps): AiTool {
             return;
           }
           const dirs = entries
-            .filter((entry) => entry.kind === "dir" && !isReservedPath(entry.path, trashPath))
+            .filter((entry) => entry.kind === "dir" && !isReservedPath(entry.path))
             .sort((a, b) => a.name.localeCompare(b.name));
           const files = entries.filter((entry) => entry.kind !== "dir");
           // Without other file names, only files in the focus are named; the count still covers every file.
@@ -245,10 +240,9 @@ function listFolderTool(deps: DriveToolsDeps): AiTool {
       activity: (args) => `Opened ${args.path}`,
       async run(args) {
         const path = await storedArg(deps, args.path);
-        const trashPath = trashPathOf(deps);
-        if (isReservedPath(path, trashPath)) throw new AiToolError(RESERVED_FOLDER);
+        if (isReservedPath(path)) throw new AiToolError(RESERVED_FOLDER);
         const all = (await deps.principal.storage.list(path)).filter(
-          (entry) => !isReservedPath(entry.path, trashPath),
+          (entry) => !isReservedPath(entry.path),
         );
         const withheld = otherFileNames
           ? 0
@@ -300,7 +294,7 @@ export function createIndexLookup(deps: DriveToolsDeps): IndexLookup {
         scope = (async (): Promise<IndexScope | null> => {
           if (!(await deps.mcp.indexed())) return null;
           const scopes = await deps.mcp.scopeResolver.scopesFor(deps.principal.username);
-          const ctx = resolveScopeContext(scopes, trashPathOf(deps));
+          const ctx = resolveScopeContext(scopes);
           return ctx === null ? null : { ctx };
         })();
       return scope;

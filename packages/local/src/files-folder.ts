@@ -51,13 +51,6 @@ export interface FilesFolderOptions {
    * it.
    */
   readonly guard?: FilesFolderGuard;
-  /**
-   * Folders in each user's files, as paths in them, that no share reaches:
-   * their Trash while it is on and fdrive's own bookkeeping. A folder shared
-   * from inside one, or from anywhere in fdrive's Trash layout
-   * (`closedToShares`), is refused to the person it is shared with.
-   */
-  readonly closedFolders?: () => Promise<readonly string[]>;
 }
 
 /** Whether fdrive can use the files folder now, and what was found. */
@@ -168,10 +161,9 @@ export function createFilesFolder(options: FilesFolderOptions): FilesFolder {
         home: join(options.root, username),
         shared: async () => {
           const grants = await options.users.shared(username);
-          const closed = grants.length === 0 ? [] : ((await options.closedFolders?.()) ?? []);
           // Named before any is left out, as the API names them, so names never disagree.
           return namedSharedGrants(username, grants)
-            .filter(({ grant }) => !closedToShares(grant.path, closed))
+            .filter(({ grant }) => !closedToShares(grant.path))
             .map(({ grant, name }) => ({
               name,
               dir: inHome(grant.owner, grant.path),

@@ -87,7 +87,7 @@ describe("signing in", () => {
 });
 
 describe("the signed-in login", () => {
-  it("is the account's one login on the files folder, with the installation's name and flags", async () => {
+  it("is the account's one login on the files folder, with the installation's name and index flag", async () => {
     const h = authHarness();
     const row = await h.seeded;
     const a = await h.login();
@@ -99,7 +99,6 @@ describe("the signed-in login", () => {
     expect(a.me).toMatchObject({
       isAdmin: false,
       storageName: "Local folder",
-      trash: false,
       index: false,
     });
     const me = await h.call(ROUTES.auth.me, { cookie: a.cookie });

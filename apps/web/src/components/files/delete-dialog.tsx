@@ -12,7 +12,8 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { deleteDialogCopy, type TrashAvailability } from "@/lib/trash/format";
+import { useTrashSettings } from "@/lib/api/trash-settings-queries";
+import { deleteDialogCopy } from "@/lib/trash/format";
 
 export interface DeleteDialogProps {
   entries: readonly FsEntry[];
@@ -25,29 +26,24 @@ export interface DeleteDialogProps {
    * as a large folder or selection; the request itself cannot be cancelled.
    */
   pending?: boolean;
-  /**
-   * Whether the active identity's storage provider exposes a trash. `null`
-   * (the default) and `{ available: false }` both render the permanent
-   * "Delete" copy; `{ available: true }` renders the non-destructive "Move
-   * to Trash" copy.
-   */
-  trash?: TrashAvailability | null;
 }
 
-/** Confirms deleting (or, with a trash configured, moving to Trash) one or more entries. */
+/**
+ * Confirms moving one or more entries to Trash, saying how long Trash keeps
+ * them once that setting has loaded.
+ */
 export function DeleteDialog({
   entries,
   onOpenChange,
   onConfirm,
   pending = false,
-  trash = null,
 }: DeleteDialogProps) {
   const count = entries.length;
+  const retentionDays = useTrashSettings().data?.retentionDays;
   const copy = deleteDialogCopy(
     entries.map((entry) => entry.name),
-    trash,
+    retentionDays,
   );
-  const movingToTrash = trash?.available === true;
 
   return (
     <AlertDialog
@@ -67,7 +63,6 @@ export function DeleteDialog({
         <AlertDialogFooter>
           <AlertDialogCancel disabled={pending}>Cancel</AlertDialogCancel>
           <AlertDialogAction
-            variant={movingToTrash ? "default" : "destructive"}
             disabled={pending}
             aria-busy={pending}
             onClick={() => {

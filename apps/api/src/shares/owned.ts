@@ -12,19 +12,13 @@ import type { PublicShareAccess } from "./access.ts";
 import { shareCall } from "./access.ts";
 import type { ShareCredential } from "./credentials.ts";
 import { type PublicThumbTarget, type ShareLimits, unavailableReason } from "./limits.ts";
-import {
-  archiveConflict,
-  hiddenFromLinks,
-  ownedShareAccess,
-  restrictedRoots as restrictedFor,
-} from "./owned-access.ts";
+import { archiveConflict, hiddenFromLinks, ownedShareAccess } from "./owned-access.ts";
 import type { SharePasswords } from "./passwords.ts";
 import { createShareZipSlots, type ShareZipLimits } from "./zip-limits.ts";
 
 export interface OwnedSharesDeps {
   readonly shares: ShareRepo;
   readonly storageFor: IdentityStorageFactory;
-  readonly trashPathFor: (identityId: string) => Promise<string | null>;
   readonly passwords: SharePasswords;
   readonly zipLimits: ShareZipLimits;
   readonly clock: () => Date;
@@ -75,17 +69,12 @@ export function createOwnedShares(deps: OwnedSharesDeps) {
       throw new ApiHttpError("upstream_unavailable", "Share storage unavailable");
     }
   }
-  /** The folders no link of `identityId`'s may reach (`restrictedRoots`). */
-  async function restrictedRoots(identityId: string): Promise<string[]> {
-    return restrictedFor(await deps.trashPathFor(identityId));
-  }
   /**
    * Every shared path, canonical and outside the restricted and backup
    * folders; several must be able to share one archive, the only way they
    * are served.
    */
-  async function admittedPaths(identityId: string, paths: readonly string[]): Promise<string[]> {
-    const restricted = await restrictedRoots(identityId);
+  async function admittedPaths(paths: readonly string[]): Promise<string[]> {
     const admitted = paths.map((path) => {
       let canonical: string;
       try {
@@ -93,7 +82,7 @@ export function createOwnedShares(deps: OwnedSharesDeps) {
       } catch {
         throw new ApiHttpError("bad_request", "Invalid shared path");
       }
-      if (hiddenFromLinks(canonical, restricted))
+      if (hiddenFromLinks(canonical))
         throw new ApiHttpError(
           "forbidden",
           "The Trash, backup folders and folders shared with you can't be shared",
@@ -118,8 +107,7 @@ export function createOwnedShares(deps: OwnedSharesDeps) {
     scope: ShareRecord["scope"],
     paths: readonly string[],
   ): Promise<PublicShare["layout"]> {
-    const restricted = await restrictedRoots(identityId);
-    if (paths.some((shared) => hiddenFromLinks(shared, restricted)))
+    if (paths.some((shared) => hiddenFromLinks(shared)))
       throw new ApiHttpError("not_found", "Share unavailable");
     const path = paths[0];
     if (path === undefined || paths.length !== 1) return "archive";
@@ -138,7 +126,7 @@ export function createOwnedShares(deps: OwnedSharesDeps) {
   return {
     managedShare: ownedManagedShare,
     async create(identityId: string, body: CreateShareRequest): Promise<ManagedShare> {
-      const paths = await admittedPaths(identityId, body.paths);
+      const paths = await admittedPaths(body.paths);
       await layout(identityId, body.scope, paths);
       const passwordHash =
         body.password === undefined || body.password === ""
@@ -170,7 +158,7 @@ export function createOwnedShares(deps: OwnedSharesDeps) {
         presentation: row.presentation,
       };
       const merged = CreateShareRequest.parse({ ...base, ...patch });
-      const paths = await admittedPaths(row.identityId, merged.paths);
+      const paths = await admittedPaths(merged.paths);
       // An empty password removes it; an absent one keeps what is stored.
       const passwordHash =
         merged.password === undefined
@@ -249,10 +237,7 @@ export function createOwnedShares(deps: OwnedSharesDeps) {
         );
       if (row.hasPassword && (credential === undefined || !(await verify(row, credential))))
         throw PASSWORD_REJECTED();
-      const [store, restricted] = await Promise.all([
-        storage(row.identityId),
-        restrictedRoots(row.identityId),
-      ]);
+      const store = await storage(row.identityId);
       return ownedShareAccess({
         storage: store,
         view: {
@@ -262,7 +247,6 @@ export function createOwnedShares(deps: OwnedSharesDeps) {
           hasPassword: row.hasPassword,
           maxDownloads: row.maxDownloads,
         },
-        restricted,
         consume: async () => (await deps.shares.consume(row.id, deps.clock())) !== null,
         zip: { limits: deps.zipLimits, acquire: () => zipSlots.acquire(row.id) },
       });
@@ -277,7 +261,6 @@ export function createOwnedShares(deps: OwnedSharesDeps) {
         paths: [...row.paths],
         unavailableReason: unavailableReason(ownedLimits(row), deps.clock()),
         unlocked: !row.hasPassword || (credential !== undefined && (await verify(row, credential))),
-        restricted: await restrictedRoots(row.identityId),
       };
     },
   };

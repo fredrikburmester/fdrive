@@ -1,5 +1,11 @@
 import { createHash } from "node:crypto";
-import { extensionOf, isStorageError, parseMoveTrashLeaf, trashLeafPath } from "@fdrive/core";
+import {
+  extensionOf,
+  isStorageError,
+  parseMoveTrashLeaf,
+  TRASH_PATH,
+  trashLeafPath,
+} from "@fdrive/core";
 import { recordMetadataCommand } from "../activity/metadata.js";
 import { deleteWithActivityReceipt } from "../activity/trash.js";
 import { relocatePath } from "../fs/mutations.ts";
@@ -11,7 +17,6 @@ import {
   ordinaryPath,
   requireMode,
   tokenScopes,
-  trashPathFor,
 } from "./access.ts";
 import { decodeText, liveFileInfo, MAX_FILE_BYTES, readStoredFile } from "./content.ts";
 import type { McpToolDeps } from "./handlers.ts";
@@ -44,7 +49,7 @@ export async function createFile(
   args: { path: string; text?: string; data?: string },
 ) {
   requireMode(principal, "full");
-  const path = ordinaryPath(deps, principal, args.path);
+  const path = ordinaryPath(principal, args.path);
   const bytes = checkedBytes(
     args.text !== undefined
       ? Buffer.from(args.text, "utf8")
@@ -76,7 +81,7 @@ export async function editFile(
   args: { path: string; text: string; expected_sha256: string },
 ) {
   requireMode(principal, "full");
-  const path = ordinaryPath(deps, principal, args.path);
+  const path = ordinaryPath(principal, args.path);
   const key = JSON.stringify([principal.identityId, path]);
   const prior = editing.get(key) ?? Promise.resolve();
   let release = () => {};
@@ -133,11 +138,9 @@ export async function copyPath(
   args: { src: string; dst: string },
 ) {
   requireMode(principal, "organize");
-  const src = ordinaryPath(deps, principal, args.src);
-  const dst = ordinaryPath(deps, principal, args.dst);
-  const trashPath = trashPathFor(deps, principal);
-  if (trashPath !== null && containsPath(src, trashPath))
-    throw new Error("cannot copy a folder containing Trash");
+  const src = ordinaryPath(principal, args.src);
+  const dst = ordinaryPath(principal, args.dst);
+  if (containsPath(src, TRASH_PATH)) throw new Error("cannot copy a folder containing Trash");
   const stat = await principal.storage.stat(src);
   const publicUrl = await deps.publicUrl();
   await relocatePath(principal.storage, "copy", src, dst);
@@ -156,19 +159,17 @@ export async function copyPath(
   };
 }
 
-function requireTrash(deps: McpToolDeps, principal: TokenPrincipal) {
+function requireTrash(principal: TokenPrincipal) {
   requireMode(principal, "full");
-  const path = trashPathFor(deps, principal);
   const trash = principal.storage.trash;
-  if (path === null || trash === undefined)
-    throw new Error("Trash is not configured for this login; no file was deleted");
-  return { path, trash };
+  if (trash === undefined) throw new Error("this storage has no Trash; no file was deleted");
+  return trash;
 }
 
 export async function trashPath(deps: McpToolDeps, principal: TokenPrincipal, rawPath: string) {
-  const configured = requireTrash(deps, principal);
-  const path = ordinaryPath(deps, principal, rawPath);
-  assertMutablePath(principal, path, configured.path);
+  requireTrash(principal);
+  const path = ordinaryPath(principal, rawPath);
+  assertMutablePath(principal, path);
   const stat = await principal.storage.stat(path);
   const kind = stat.kind === "dir" ? "dir" : "file";
   const { trashLeaf } = await deleteWithActivityReceipt(principal.storage, path, kind);
@@ -184,11 +185,10 @@ export async function trashPath(deps: McpToolDeps, principal: TokenPrincipal, ra
 }
 
 export async function listTrash(
-  deps: McpToolDeps,
   principal: TokenPrincipal,
   args: { offset?: number | undefined; limit?: number | undefined },
 ) {
-  const { trash } = requireTrash(deps, principal);
+  const trash = requireTrash(principal);
   const listing = await trash.list({ limit: 10_000 });
   const entries = listing.entries
     .filter((entry) => canReadPath(principal, entry.originalPath))
@@ -209,12 +209,12 @@ export async function restorePath(
   principal: TokenPrincipal,
   args: { id: string; target?: string | undefined },
 ) {
-  const { trash, path: trashRoot } = requireTrash(deps, principal);
+  const trash = requireTrash(principal);
   // The id is the leaf's path, which names where the item came from.
-  const leaf = parseMoveTrashLeaf(trashRoot, trashLeafPath(trashRoot, args.id));
+  const leaf = parseMoveTrashLeaf(TRASH_PATH, trashLeafPath(TRASH_PATH, args.id));
   if (leaf === null) throw new Error("not a Trash item id");
-  const original = ordinaryPath(deps, principal, leaf.originalPath);
-  const target = ordinaryPath(deps, principal, args.target ?? original);
+  const original = ordinaryPath(principal, leaf.originalPath);
+  const target = ordinaryPath(principal, args.target ?? original);
   const publicUrl = await deps.publicUrl();
   const result = await trash.restore(args.id, { target });
   let moveMetadata = false;
@@ -231,7 +231,7 @@ export async function restorePath(
     kind: "restore",
     path: original,
     target: result.path,
-    eventPath: trashLeafPath(trashRoot, args.id),
+    eventPath: trashLeafPath(TRASH_PATH, args.id),
     moveMetadata,
     isDir: result.kind === "dir",
   });
@@ -349,7 +349,6 @@ export async function searchImages(
     query: args.query,
     limit: args.limit ?? 20,
     scopes,
-    trashPath: trashPathFor(deps, principal),
   });
   const publicUrl = await deps.publicUrl();
   return {

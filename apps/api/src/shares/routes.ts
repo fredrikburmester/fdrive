@@ -506,7 +506,7 @@ export function registerSharesRoutes(
     // The index covers the Trash and folders shared in too, so their thumbnails are refused here.
     let hidden: boolean;
     try {
-      hidden = hiddenFromLinks(normalizePath(virtualPath), target.restricted);
+      hidden = hiddenFromLinks(normalizePath(virtualPath));
     } catch {
       hidden = true;
     }

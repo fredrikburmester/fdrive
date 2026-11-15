@@ -320,13 +320,13 @@ describe("folder_tree", () => {
 
   it("hides fdrive's own folders from the tree and refuses to start inside one", async () => {
     const storage = createMemoryStorage({
-      "/.Trash/old.txt": "x",
+      "/.trash/old.txt": "x",
       "/.fdrive-desktop/staging/s.txt": "x",
       "/Docs/a.txt": "x",
       "/Docs/old/.fdrive-move-v1/file/b.txt": "x",
     });
     const list = vi.spyOn(storage, "list");
-    const { tool } = toolsFor({ storage, mcp: { trashPathForStorage: () => "/.Trash" } });
+    const { tool } = toolsFor({ storage });
 
     expect(await runTool(tool("folder_tree"), { depth: 3 })).toBe(
       [
@@ -336,37 +336,16 @@ describe("folder_tree", () => {
       ].join("\n"),
     );
     const listed = list.mock.calls.map(([path]) => path);
-    expect(listed).not.toContain("/.Trash");
+    expect(listed).not.toContain("/.trash");
     expect(listed).not.toContain("/.fdrive-desktop");
-    await expect(runTool(tool("folder_tree"), { path: "/.Trash" })).rejects.toThrow(
+    await expect(runTool(tool("folder_tree"), { path: "/.trash" })).rejects.toThrow(
       new AiToolError("That folder is fdrive's own, like the Trash."),
     );
     await expect(runTool(tool("folder_tree"), { path: "/.fdrive-desktop" })).rejects.toThrow(
       new AiToolError("That folder is fdrive's own, like the Trash."),
     );
-    await expect(runTool(tool("folder_tree"), { path: "/.Trash/nested" })).rejects.toBeInstanceOf(
+    await expect(runTool(tool("folder_tree"), { path: "/.trash/nested" })).rejects.toBeInstanceOf(
       AiToolError,
-    );
-  });
-
-  it("falls back to the configured Trash path when the storage has none of its own", async () => {
-    const storage = createMemoryStorage({ "/.Trash/old.txt": "x" });
-    const { tool } = toolsFor({
-      storage,
-      mcp: { trashPathForStorage: () => null, trashPath: "/.Trash" },
-    });
-
-    await expect(runTool(tool("folder_tree"), { path: "/.Trash" })).rejects.toThrow(
-      "That folder is fdrive's own, like the Trash.",
-    );
-  });
-
-  it("opens a folder named like Trash when no Trash is configured", async () => {
-    const storage = createMemoryStorage({ "/.Trash/old.txt": "x" });
-    const { tool } = toolsFor({ storage });
-
-    expect(await runTool(tool("folder_tree"), { path: "/.Trash" })).toBe(
-      "/.Trash/ 0 folders, 1 files: old.txt",
     );
   });
 
@@ -502,17 +481,17 @@ describe("list_folder", () => {
 
   it("leaves fdrive's own folders out and refuses to list one", async () => {
     const storage = createMemoryStorage({
-      "/.Trash/old.txt": "x",
+      "/.trash/old.txt": "x",
       "/.fdrive-desktop/staging/s.txt": "x",
       "/Docs/a.txt": "x",
       "/top.txt": "x",
     });
-    const { tool } = toolsFor({ storage, mcp: { trashPath: "/.Trash" } });
+    const { tool } = toolsFor({ storage });
 
     expect(await runTool(tool("list_folder"), { path: "/" })).toBe(
       ["/: 2 entries", "Docs/", "top.txt (1 B, 1970-01-01)"].join("\n"),
     );
-    for (const path of ["/.Trash/x", "/.fdrive-desktop/staging"])
+    for (const path of ["/.trash/x", "/.fdrive-desktop/staging"])
       await expect(runTool(tool("list_folder"), { path })).rejects.toThrow(
         new AiToolError("That folder is fdrive's own, like the Trash."),
       );
