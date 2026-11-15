@@ -30,35 +30,26 @@ import type { ScopeContext } from "./scope-context.js";
 import { resolveScopeContext } from "./scope-context.js";
 
 /** The verified home scope of an identity whose home is "/alice", mapped as the whole root. */
-const ALICE_HOME_SCOPES: readonly Scope[] = [
-  { rootName: "files", fsPrefix: "/alice", virtualPrefix: "/" },
-];
+const ALICE_HOME_SCOPES: readonly Scope[] = [{ fsPrefix: "/alice", virtualPrefix: "/" }];
 
 /** A scope covering only "/only", used to exercise the "outside this identity's scope" branches directly. */
-const NARROW_SCOPES: readonly Scope[] = [
-  { rootName: "files", fsPrefix: "/alice", virtualPrefix: "/only" },
-];
+const NARROW_SCOPES: readonly Scope[] = [{ fsPrefix: "/alice", virtualPrefix: "/only" }];
 
 const NARROW_SCOPE_CONTEXT: ScopeContext = {
   scopes: NARROW_SCOPES,
   scopePrefixes: [{ rootId: 1, fsPrefix: "/alice" }],
-  rootNameById: new Map([[1, "files"]]),
-  rootIdByName: new Map([["files", 1]]),
   trashPath: null,
 };
 
-/** Like `NARROW_SCOPE_CONTEXT`, but with a root name that has no id yet, to exercise the "root not indexed" branch. */
-const UNINDEXED_ROOT_SCOPE_CONTEXT: ScopeContext = {
-  scopes: [{ rootName: "files", fsPrefix: "/alice", virtualPrefix: "/" }],
-  scopePrefixes: [],
-  rootNameById: new Map(),
-  rootIdByName: new Map(),
-  trashPath: null,
-};
-
-/** What alice's index queries leave out with Trash off: the Mac app's folder and the reserved names. */
+/**
+ * What alice's index queries leave out with Trash off: the Mac app's folder,
+ * her own `Shared with me` and the reserved names.
+ */
 const ALICE_RESERVED = {
-  prefixes: [{ rootId: 1, fsPrefix: "/alice/.fdrive-desktop" }],
+  prefixes: [
+    { rootId: 1, fsPrefix: "/alice/.fdrive-desktop" },
+    { rootId: 1, fsPrefix: "/alice/Shared with me" },
+  ],
   names: [".fdrive-move-v1"],
 };
 
@@ -77,7 +68,6 @@ function stubIndexQueries(overrides: Partial<IndexQueries> = {}): IndexQueries {
     contentAt: overrides.contentAt ?? (async () => fail("contentAt")),
     listFiles: overrides.listFiles ?? (async () => fail("listFiles")),
     filesBySha256: overrides.filesBySha256 ?? (async () => fail("filesBySha256")),
-    rootIdsByName: overrides.rootIdsByName ?? (async () => ({ files: 1 })),
     stats: overrides.stats ?? (async () => fail("stats")),
     statsForFileIds: overrides.statsForFileIds ?? (async () => fail("statsForFileIds")),
     fileTextPrefix: overrides.fileTextPrefix ?? (async () => fail("fileTextPrefix")),
@@ -186,9 +176,8 @@ function baseDeps(overrides: Partial<Parameters<typeof runSearch>[0]> = {}) {
   return {
     indexQueries: stubIndexQueries(),
     searchService: fakeSearchService(),
-    scopeResolver: {
-      verifiedIndexScopes: async () => ({ available: true as const, scopes: ALICE_HOME_SCOPES }),
-    },
+    scopeResolver: { scopesFor: async () => ALICE_HOME_SCOPES },
+    indexed: async () => true,
     publicUrl: async () => "https://fdrive.example.com",
     indexerClient: null,
     clock: () => new Date("2026-01-01T00:00:00.000Z"),
@@ -197,8 +186,8 @@ function baseDeps(overrides: Partial<Parameters<typeof runSearch>[0]> = {}) {
   };
 }
 
-async function aliceScopeContext(indexQueries: Pick<IndexQueries, "rootIdsByName">) {
-  const ctx = await resolveScopeContext(indexQueries, ALICE_HOME_SCOPES, null);
+function aliceScopeContext() {
+  const ctx = resolveScopeContext(ALICE_HOME_SCOPES, null);
   if (ctx === null) {
     throw new Error("expected a scope context");
   }
@@ -290,12 +279,10 @@ describe("runSearch", () => {
   });
 
   it("passes the identity's verified scopes to the search service", async () => {
-    const scopes: readonly Scope[] = [
-      { rootName: "files", fsPrefix: "/alice", virtualPrefix: "/" },
-    ];
+    const scopes: readonly Scope[] = [{ fsPrefix: "/alice", virtualPrefix: "/" }];
     let received: Parameters<SearchService["search"]>[0] | undefined;
     const deps = baseDeps({
-      scopeResolver: { verifiedIndexScopes: async () => ({ available: true, scopes }) },
+      scopeResolver: { scopesFor: async () => scopes },
       searchService: fakeSearchService({
         search: async (input) => {
           received = input;
@@ -315,12 +302,10 @@ describe("runSearch", () => {
     expect(received?.scopes).toEqual(scopes);
   });
 
-  it("passes an empty scope list when the caller's verified scopes are unavailable", async () => {
+  it("passes an empty scope list while the files folder is not indexed", async () => {
     let received: Parameters<SearchService["search"]>[0] | undefined;
     const deps = baseDeps({
-      scopeResolver: {
-        verifiedIndexScopes: async () => ({ available: false, reason: "no_roots" }),
-      },
+      indexed: async () => false,
       searchService: fakeSearchService({
         search: async (input) => {
           received = input;
@@ -343,41 +328,29 @@ describe("runSearch", () => {
 
 describe("requireScope (exercised through every index-backed run* wrapper)", () => {
   it("resolves scopes from the principal's own username, never any other value", async () => {
-    const verifiedIndexScopes = vi.fn(async (_username: string) => ({
-      available: true as const,
-      scopes: ALICE_HOME_SCOPES,
-    }));
+    const scopesFor = vi.fn(async (_username: string) => ALICE_HOME_SCOPES);
     const deps = baseDeps({
-      scopeResolver: { verifiedIndexScopes },
+      scopeResolver: { scopesFor },
       indexQueries: stubIndexQueries({ listFiles: async () => ({ total: 0, files: [] }) }),
     });
 
     await runFindFiles(deps, fakePrincipal(), {});
 
-    expect(verifiedIndexScopes).toHaveBeenCalledExactlyOnceWith("alice");
+    expect(scopesFor).toHaveBeenCalledExactlyOnceWith("alice");
   });
 
-  it("throws a reason-carrying, path-free error when verified scopes are unavailable", async () => {
-    const deps = baseDeps({
-      scopeResolver: {
-        verifiedIndexScopes: async () => ({ available: false, reason: "no_roots" }),
-      },
-    });
+  it("throws a path-free error while the files folder is not indexed", async () => {
+    const scopesFor = vi.fn(async () => ALICE_HOME_SCOPES);
+    const deps = baseDeps({ indexed: async () => false, scopeResolver: { scopesFor } });
     await expect(runFindFiles(deps, fakePrincipal(), {})).rejects.toThrow(
-      /unavailable for this identity \(no_roots\)/,
+      /the files folder is not indexed/,
     );
+    expect(scopesFor).not.toHaveBeenCalled();
   });
 
-  it("throws when verified scopes are available but land on no indexed root", async () => {
-    const deps = baseDeps({
-      scopeResolver: {
-        verifiedIndexScopes: async () => ({
-          available: true,
-          scopes: [{ rootName: "unindexed-root", fsPrefix: "/alice", virtualPrefix: "/" }],
-        }),
-      },
-    });
-    await expect(runFindFiles(deps, fakePrincipal(), {})).rejects.toThrow(McpToolError);
+  it("throws when no scope is left", async () => {
+    const deps = baseDeps({ scopeResolver: { scopesFor: async () => [] } });
+    await expect(runFindFiles(deps, fakePrincipal(), {})).rejects.toThrow(/reaches no folder/);
   });
 });
 
@@ -443,9 +416,7 @@ describe("runFindFiles / findFilesInScope", () => {
 
   it("throws when the index is unavailable", async () => {
     const deps = baseDeps({
-      scopeResolver: {
-        verifiedIndexScopes: async () => ({ available: false, reason: "no_roots" }),
-      },
+      indexed: async () => false,
     });
     await expect(runFindFiles(deps, fakePrincipal(), {})).rejects.toThrow(McpToolError);
   });
@@ -461,7 +432,7 @@ describe("runFindFiles / findFilesInScope", () => {
 
   it("filters out a result file that maps to no virtual path in scope", async () => {
     const outOfScope = makeFile({ id: 1, rootId: 999, path: "bob/a.txt" });
-    const ctx = await aliceScopeContext(stubIndexQueries());
+    const ctx = aliceScopeContext();
 
     const result = await findFilesInScope(
       {
@@ -481,7 +452,7 @@ describe("runFindFiles / findFilesInScope", () => {
 
   it("reports partial when the underlying SQL total exceeds what was fetched", async () => {
     const file = makeFile({ id: 1, path: "alice/a.txt" });
-    const ctx = await aliceScopeContext(stubIndexQueries());
+    const ctx = aliceScopeContext();
     const deps = {
       ...baseDeps(),
       indexQueries: stubIndexQueries({ listFiles: async () => ({ total: 500, files: [file] }) }),
@@ -494,7 +465,7 @@ describe("runFindFiles / findFilesInScope", () => {
 
   it("handles a literal percent sign in a file's virtual path without corrupting the result", async () => {
     const file = makeFile({ id: 1, path: "alice/50%-off.pdf", name: "50%-off.pdf" });
-    const ctx = await aliceScopeContext(stubIndexQueries());
+    const ctx = aliceScopeContext();
     const deps = {
       ...baseDeps(),
       indexQueries: stubIndexQueries({ listFiles: async () => ({ total: 1, files: [file] }) }),
@@ -644,7 +615,7 @@ describe("fileInfoInScope (the AI's indexed file_info)", () => {
       }),
     });
 
-    const result = await fileInfoInScope(deps, await aliceScopeContext(deps.indexQueries), {
+    const result = await fileInfoInScope(deps, aliceScopeContext(), {
       path: "/a.txt",
     });
 
@@ -659,7 +630,7 @@ describe("fileInfoInScope (the AI's indexed file_info)", () => {
       indexQueries: stubIndexQueries({ fileByPath: async () => file }),
     });
 
-    const result = await fileInfoInScope(deps, await aliceScopeContext(deps.indexQueries), {
+    const result = await fileInfoInScope(deps, aliceScopeContext(), {
       path: "/a.txt",
     });
 
@@ -670,7 +641,7 @@ describe("fileInfoInScope (the AI's indexed file_info)", () => {
   it("throws when the file is not indexed", async () => {
     const deps = baseDeps({ indexQueries: stubIndexQueries({ fileByPath: async () => null }) });
     await expect(
-      fileInfoInScope(deps, await aliceScopeContext(deps.indexQueries), {
+      fileInfoInScope(deps, aliceScopeContext(), {
         path: "/a.txt",
       }),
     ).rejects.toThrow(/not indexed/);
@@ -683,21 +654,14 @@ describe("fileInfoInScope (the AI's indexed file_info)", () => {
     ).rejects.toThrow(/outside this identity's scope/);
   });
 
-  it("throws when the resolved root has no id in the index yet", async () => {
-    const deps = baseDeps();
-    await expect(
-      fileInfoInScope(deps, UNINDEXED_ROOT_SCOPE_CONTEXT, { path: "/a.txt" }),
-    ).rejects.toThrow(/not indexed yet/);
-  });
-
   it("throws when the found file maps to no virtual path in scope", async () => {
-    const foreignFile = makeFile({ id: 1, rootId: 999, path: "alice/a.txt" });
+    const foreignFile = makeFile({ id: 1, path: "bob/a.txt" });
     const deps = baseDeps({
       indexQueries: stubIndexQueries({ fileByPath: async () => foreignFile }),
     });
 
     await expect(
-      fileInfoInScope(deps, await aliceScopeContext(deps.indexQueries), {
+      fileInfoInScope(deps, aliceScopeContext(), {
         path: "/a.txt",
       }),
     ).rejects.toThrow(/not indexed yet/);
@@ -708,7 +672,7 @@ describe("fileInfoInScope (the AI's indexed file_info)", () => {
     const copies = Array.from({ length: MAX_CANDIDATE_FILES + 1 }, (_, i) =>
       makeFile({ id: i + 2, path: `alice/copy-${i}.txt`, sha256: "abc" }),
     );
-    const ctx = await aliceScopeContext(stubIndexQueries());
+    const ctx = aliceScopeContext();
     const deps = {
       ...baseDeps(),
       indexQueries: stubIndexQueries({
@@ -773,7 +737,7 @@ describe("runFindDuplicates / findDuplicatesInScope", () => {
   });
 
   it("drops a group entirely when every one of its locations maps to no virtual path in scope", async () => {
-    const ctx = await aliceScopeContext(stubIndexQueries());
+    const ctx = aliceScopeContext();
     const deps = {
       ...baseDeps(),
       indexQueries: stubIndexQueries({
@@ -798,7 +762,7 @@ describe("runFindDuplicates / findDuplicatesInScope", () => {
   });
 
   it("keeps a group with three copies when exactly one is out of scope, recomputing wasted bytes from survivors only", async () => {
-    const ctx = await aliceScopeContext(stubIndexQueries());
+    const ctx = aliceScopeContext();
     const deps = {
       ...baseDeps(),
       indexQueries: stubIndexQueries({
@@ -832,7 +796,7 @@ describe("runFindDuplicates / findDuplicatesInScope", () => {
   });
 
   it("caps the total examined locations across every group at MAX_CANDIDATE_FILES", async () => {
-    const ctx = await aliceScopeContext(stubIndexQueries());
+    const ctx = aliceScopeContext();
     const bigGroupFiles = Array.from({ length: 1500 }, (_, i) => ({
       rootId: 1,
       path: `alice/g2-${i}.txt`,
@@ -910,18 +874,9 @@ describe("runSimilarFiles / similarFilesInScope", () => {
     ).rejects.toThrow(/outside this identity's scope/);
   });
 
-  it("throws when the resolved root has no id in the index yet", async () => {
-    const deps = baseDeps();
-    await expect(
-      similarFilesInScope(deps, UNINDEXED_ROOT_SCOPE_CONTEXT, {
-        path: "/target.md",
-      }),
-    ).rejects.toThrow(/not indexed yet/);
-  });
-
   it("throws the same message when the indexed file itself belongs to a different root", async () => {
     const foreignFile = makeFile({ id: 1, rootId: 999, path: "bob/target.md" });
-    const ctx = await aliceScopeContext(stubIndexQueries());
+    const ctx = aliceScopeContext();
     const deps = {
       ...baseDeps(),
       indexQueries: stubIndexQueries({ fileByPath: async () => foreignFile }),
@@ -1094,7 +1049,7 @@ describe("runIndexStats / indexStatsInScope", () => {
       makeFile({ id: 1, path: "alice/a.txt", size: 100 }),
       makeFile({ id: 2, path: "bob/b.txt", size: 50 }),
     ];
-    const ctx = await aliceScopeContext(stubIndexQueries());
+    const ctx = aliceScopeContext();
     const deps = baseDeps({
       indexQueries: stubIndexQueries({
         listFiles: async () => ({ total: 2, files }),
@@ -1189,9 +1144,7 @@ describe("runCreateFolder", () => {
   it("needs no index and reports a failed live update as a warning", async () => {
     const mkdir = vi.fn(async () => undefined);
     const deps = baseDeps({
-      scopeResolver: {
-        verifiedIndexScopes: async () => ({ available: false, reason: "no_roots" }),
-      },
+      indexed: async () => false,
       onMutation: async () => {
         throw new Error("events unavailable");
       },
@@ -1283,9 +1236,7 @@ describe("runMovePath", () => {
   it("moves without any index", async () => {
     const move = vi.fn(async () => undefined);
     const deps = baseDeps({
-      scopeResolver: {
-        verifiedIndexScopes: async () => ({ available: false, reason: "no_roots" }),
-      },
+      indexed: async () => false,
     });
 
     const result = await runMovePath(deps, tokenPrincipal(fakeStorage({ move })), {
@@ -1489,6 +1440,7 @@ describe("fdrive's own folders", () => {
     prefixes: [
       { rootId: 1, fsPrefix: "/alice/.trash" },
       { rootId: 1, fsPrefix: "/alice/.fdrive-desktop" },
+      { rootId: 1, fsPrefix: "/alice/Shared with me" },
     ],
     names: [".fdrive-move-v1"],
   };
@@ -1511,7 +1463,7 @@ describe("fdrive's own folders", () => {
       }),
     });
     const principal = tokenPrincipal();
-    const ctx = await resolveScopeContext(deps.indexQueries, ALICE_HOME_SCOPES, "/.trash");
+    const ctx = resolveScopeContext(ALICE_HOME_SCOPES, "/.trash");
     if (ctx === null) throw new Error("expected a scope context");
 
     await runFindFiles(deps, principal, {});
@@ -1534,7 +1486,7 @@ describe("fdrive's own folders", () => {
   });
 
   it("never maps an index row into one, even one a lookup by path finds", async () => {
-    const ctx = await resolveScopeContext(stubIndexQueries(), ALICE_HOME_SCOPES, "/.trash");
+    const ctx = resolveScopeContext(ALICE_HOME_SCOPES, "/.trash");
     if (ctx === null) throw new Error("expected a scope context");
     for (const path of [
       "alice/.trash/a.txt",

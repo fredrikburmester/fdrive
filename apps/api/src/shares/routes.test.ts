@@ -903,13 +903,13 @@ function makeIndexedFile(overrides: Partial<IndexedFile> = {}): IndexedFile {
   };
 }
 
-const ALICE_HOME_SCOPES = [{ rootName: "files", fsPrefix: "/alice", virtualPrefix: "/" }];
+const ALICE_HOME_SCOPES = [{ fsPrefix: "/alice", virtualPrefix: "/" }];
 
 /** A shares app whose public thumb route has an index and a thumbnail cache. */
 function thumbsHarness(
   overrides: {
-    indexQueries?: Partial<Pick<IndexQueries, "rootIdsByName" | "fileByPath" | "thumbnail">>;
-    resolver?: Pick<ScopeResolver, "verifiedIndexScopes">;
+    indexQueries?: Partial<Pick<IndexQueries, "fileByPath" | "thumbnail">>;
+    resolver?: Pick<ScopeResolver, "scopesFor">;
     /** `null` disables the route (the default is `"/thumbs"`). */
     thumbsDir?: string | null;
     fileReader?: Partial<ThumbFileReader>;
@@ -920,13 +920,12 @@ function thumbsHarness(
   return sharesHarness({
     routes: {
       indexQueries: {
-        rootIdsByName: async () => ({ files: 1 }),
         fileByPath: async () => makeIndexedFile(),
         thumbnail: async () => ({ storagePath: "ab/abc123.256.webp" }),
         ...overrides.indexQueries,
       },
       resolver: overrides.resolver ?? {
-        verifiedIndexScopes: async () => ({ available: true, scopes: ALICE_HOME_SCOPES }),
+        scopesFor: async () => ALICE_HOME_SCOPES,
       },
       thumbsDir,
       fileReader: {
@@ -1081,7 +1080,6 @@ describe("GET /public/shares/:id/thumb", () => {
       { indexQueries: { fileByPath: async () => null } },
       { indexQueries: { fileByPath: async () => makeIndexedFile({ sha256: null }) } },
       { indexQueries: { thumbnail: async () => null } },
-      { indexQueries: { rootIdsByName: async () => ({}) } },
       {
         fileReader: {
           stat: async () => {
@@ -1089,8 +1087,7 @@ describe("GET /public/shares/:id/thumb", () => {
           },
         },
       },
-      { resolver: { verifiedIndexScopes: async () => ({ available: false, reason: "no_roots" }) } },
-      { resolver: { verifiedIndexScopes: async () => ({ available: true, scopes: [] }) } },
+      { resolver: { scopesFor: async () => [] } },
     ];
     for (const [index, overrides] of cases.entries()) {
       const h = thumbsHarness(overrides);

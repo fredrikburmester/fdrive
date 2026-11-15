@@ -12,7 +12,7 @@ import pytest
 from conftest import index_pdfs
 
 from fdrive_ocr import db, restore, runner
-from fdrive_ocr.runner import RootTarget
+from fdrive_ocr.runner import FILES_ROOT_ID, FILES_ROOT_NAME, RootTarget
 from fdrive_ocr.settings import default_settings
 
 ORIGINAL = b"OK\nthe first original scan\n"
@@ -26,7 +26,7 @@ def kept_original(db_conn: psycopg.Connection, tmp_path: Path) -> KeptOriginal:
     source = root / "scan.pdf"
     source.write_bytes(ORIGINAL)
     os.utime(source, ns=(1_750_000_000_000_000_000,) * 2)
-    target = RootTarget("review", db.upsert_root(db_conn, "review"), str(root))
+    target = RootTarget(FILES_ROOT_NAME, FILES_ROOT_ID, str(root))
     state = str(tmp_path / "state")
     run_pass(db_conn, target, state)
     return target, state, restore.scan_originals(state)[0].id, source
@@ -35,13 +35,13 @@ def kept_original(db_conn: psycopg.Connection, tmp_path: Path) -> KeptOriginal:
 def run_pass(conn: psycopg.Connection, target: RootTarget, state: str) -> runner.RunTotals:
     """A pass after the indexer has read the folder."""
     index_pdfs(conn, target.root_id, target.abs_path)
-    return runner.run_pass(conn, [target], default_settings(), state, 30, 1, lambda _: None)
+    return runner.run_pass(conn, target, default_settings(), state, 30, 1, lambda _: None)
 
 
 def put_back(conn: psycopg.Connection, original: KeptOriginal, allow: bool = False) -> restore.RestoreOutcome:
     target, state, original_id, _source = original
     return restore.restore_original(
-        conn, state, [target], restore.OriginalsIndex(), original_id, allow, allow, lambda _: None,
+        conn, state, target, restore.OriginalsIndex(), original_id, allow, allow, lambda _: None,
     )
 
 
@@ -93,7 +93,7 @@ def test_older_original_requires_consent_for_a_later_ocred_revision(
     os.utime(source, ns=(1_750_000_001_000_000_000,) * 2)
     run_pass(db_conn, target, state)
     before = source.read_bytes()
-    listed, _ = restore.list_originals(db_conn, state, [target], restore.OriginalsIndex())
+    listed, _ = restore.list_originals(db_conn, state, target, restore.OriginalsIndex())
     assert next(item for item in listed if item.id == original_id).state == "changed"
     assert {item.state for item in listed} == {"ocred", "changed"}
     outcome = put_back(db_conn, kept_original)
@@ -121,7 +121,7 @@ def test_a_pass_does_not_undo_a_restore_made_after_it_listed_its_candidates(
         return candidates
 
     monkeypatch.setattr(runner.db, "pdf_candidates", restore_after_listing)
-    totals = runner.run_pass(db_conn, [target], default_settings(), state, 30, 1, lambda _: None)
+    totals = runner.run_pass(db_conn, target, default_settings(), state, 30, 1, lambda _: None)
     assert (totals.seen, totals.ocred) == (1, 0)
     assert source.read_bytes() == ORIGINAL
 

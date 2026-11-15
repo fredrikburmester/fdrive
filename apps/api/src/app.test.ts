@@ -106,7 +106,7 @@ describe("createApp health route", () => {
         shares: { status: "configured", missing: [] },
         index: {
           status: "not_configured",
-          missing: ["FDRIVE_INDEX_ROOTS", "FDRIVE_INDEXER_URL"],
+          missing: ["FDRIVE_INDEXER_URL"],
         },
         search: { status: "not_configured", missing: ["FDRIVE_EMBED_URL"] },
         imageSearch: { status: "not_configured", missing: ["FDRIVE_IMAGE_EMBED_URL"] },

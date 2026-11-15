@@ -92,7 +92,6 @@ export default async function setup(): Promise<() => Promise<void>> {
     environment = await startEnvironment({
       apiEntrypoint: "test/fixtures/office/e2e-server.ts",
       storage: OFFICE_STORAGE,
-      indexRoot: true,
       prepareStorage: async (storage) => {
         await mkdir(storage.path("alice", `/${OFFICE_TEAM_FOLDER}`), { recursive: true });
       },

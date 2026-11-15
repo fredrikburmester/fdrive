@@ -10,29 +10,23 @@ function jsonResponse(status: number, body: unknown): Response {
 
 const HEALTH_RAW = {
   ok: true,
-  roots: ["files"],
-  watcher: { files: true },
+  watcher: true,
   embed_ok: true,
   schema_version: 3,
 };
 
 const STATS_RAW = {
-  roots: [
-    {
-      root: "files",
-      counts_by_status: { indexed: 5, pending: 1 },
-      chunks: 20,
-      chunks_embedded: 18,
-      last_scan: {
-        started_at: "2026-01-01T00:00:00.000Z",
-        finished_at: "2026-01-01T00:05:00.000Z",
-        files_seen: 6,
-        files_changed: 2,
-        files_deleted: 0,
-        errors: 0,
-      },
-    },
-  ],
+  counts_by_status: { indexed: 5, pending: 1 },
+  chunks: 20,
+  chunks_embedded: 18,
+  last_scan: {
+    started_at: "2026-01-01T00:00:00.000Z",
+    finished_at: "2026-01-01T00:05:00.000Z",
+    files_seen: 6,
+    files_changed: 2,
+    files_deleted: 0,
+    errors: 0,
+  },
   thumbnails: 4,
   queue_depth: 1,
   errors_sample: [{ path: "a.pdf", error: "boom" }],
@@ -49,8 +43,7 @@ describe("createIndexerClient: health", () => {
       ok: true,
       data: {
         ok: true,
-        roots: ["files"],
-        watcher: { files: true },
+        watcher: true,
         embedOk: true,
         schemaVersion: 3,
       },
@@ -74,7 +67,7 @@ describe("createIndexerClient: health", () => {
 });
 
 describe("createIndexerClient: stats", () => {
-  it("maps the raw stats payload, including a root's last scan", async () => {
+  it("maps the raw stats payload, including the last scan", async () => {
     const fetchStub = vi.fn().mockResolvedValue(jsonResponse(200, STATS_RAW));
     const client = createIndexerClient({ baseUrl: "http://indexer:8010", fetch: fetchStub });
 
@@ -83,22 +76,17 @@ describe("createIndexerClient: stats", () => {
     expect(result).toEqual({
       ok: true,
       data: {
-        roots: [
-          {
-            root: "files",
-            countsByStatus: { indexed: 5, pending: 1 },
-            chunks: 20,
-            chunksEmbedded: 18,
-            lastScan: {
-              startedAt: "2026-01-01T00:00:00.000Z",
-              finishedAt: "2026-01-01T00:05:00.000Z",
-              filesSeen: 6,
-              filesChanged: 2,
-              filesDeleted: 0,
-              errors: 0,
-            },
-          },
-        ],
+        countsByStatus: { indexed: 5, pending: 1 },
+        chunks: 20,
+        chunksEmbedded: 18,
+        lastScan: {
+          startedAt: "2026-01-01T00:00:00.000Z",
+          finishedAt: "2026-01-01T00:05:00.000Z",
+          filesSeen: 6,
+          filesChanged: 2,
+          filesDeleted: 0,
+          errors: 0,
+        },
         thumbnails: 4,
         queueDepth: 1,
         errorsSample: [{ path: "a.pdf", error: "boom" }],
@@ -192,15 +180,10 @@ describe("createIndexerClient: stats", () => {
   it("maps a null last_scan through to a null lastScan", async () => {
     const fetchStub = vi.fn().mockResolvedValue(
       jsonResponse(200, {
-        roots: [
-          {
-            root: "files",
-            counts_by_status: {},
-            chunks: 0,
-            chunks_embedded: 0,
-            last_scan: null,
-          },
-        ],
+        counts_by_status: {},
+        chunks: 0,
+        chunks_embedded: 0,
+        last_scan: null,
         thumbnails: 0,
         queue_depth: 0,
         errors_sample: [],
@@ -211,40 +194,40 @@ describe("createIndexerClient: stats", () => {
     const result = await client.stats();
 
     expect(result.ok).toBe(true);
-    expect(result.ok && result.data.roots[0]?.lastScan).toBeNull();
+    expect(result.ok && result.data.lastScan).toBeNull();
   });
 });
 
 describe("createIndexerClient: reindex", () => {
-  it("posts { root } and maps count to marked", async () => {
+  it("posts an empty body for the whole files folder and maps count to marked", async () => {
     const fetchStub = vi.fn().mockResolvedValue(jsonResponse(200, { count: 12 }));
     const client = createIndexerClient({ baseUrl: "http://indexer:8010", fetch: fetchStub });
 
-    const result = await client.reindex("files");
+    const result = await client.reindex();
 
     expect(result).toEqual({ ok: true, data: { marked: 12 } });
     const [, init] = fetchStub.mock.calls[0] as [string, RequestInit];
-    expect(JSON.parse(String(init.body))).toEqual({ root: "files" });
+    expect(JSON.parse(String(init.body))).toEqual({});
   });
 
-  it("posts { root, path } when a path is given", async () => {
+  it("posts { path } when a path is given", async () => {
     const fetchStub = vi.fn().mockResolvedValue(jsonResponse(200, { count: 1 }));
     const client = createIndexerClient({ baseUrl: "http://indexer:8010", fetch: fetchStub });
 
-    await client.reindex("files", "folder/sub");
+    await client.reindex("folder/sub");
 
     const [, init] = fetchStub.mock.calls[0] as [string, RequestInit];
-    expect(JSON.parse(String(init.body))).toEqual({ root: "files", path: "folder/sub" });
+    expect(JSON.parse(String(init.body))).toEqual({ path: "folder/sub" });
   });
 
-  it("posts { root, thumbnails: true } when a thumbnail rebuild is also requested", async () => {
+  it("posts { thumbnails: true } when a thumbnail rebuild is also requested", async () => {
     const fetchStub = vi.fn().mockResolvedValue(jsonResponse(200, { count: 1 }));
     const client = createIndexerClient({ baseUrl: "http://indexer:8010", fetch: fetchStub });
 
-    await client.reindex("files", undefined, true);
+    await client.reindex(undefined, true);
 
     const [, init] = fetchStub.mock.calls[0] as [string, RequestInit];
-    expect(JSON.parse(String(init.body))).toEqual({ root: "files", thumbnails: true });
+    expect(JSON.parse(String(init.body))).toEqual({ thumbnails: true });
   });
 });
 
@@ -260,14 +243,14 @@ describe("createIndexerClient: thumbnailsRebuild", () => {
     expect(JSON.parse(String(init.body))).toEqual({});
   });
 
-  it("scopes the request to a root, path, and force when given", async () => {
+  it("scopes the request to a path, and force when given", async () => {
     const fetchStub = vi.fn().mockResolvedValue(jsonResponse(202, { started: true, total: 5 }));
     const client = createIndexerClient({ baseUrl: "http://indexer:8010", fetch: fetchStub });
 
-    await client.thumbnailsRebuild({ root: "files", path: "folder", force: true });
+    await client.thumbnailsRebuild({ path: "folder", force: true });
 
     const [, init] = fetchStub.mock.calls[0] as [string, RequestInit];
-    expect(JSON.parse(String(init.body))).toEqual({ root: "files", path: "folder", force: true });
+    expect(JSON.parse(String(init.body))).toEqual({ path: "folder", force: true });
   });
 
   it("carries the sidecar's status through on failure (e.g. 409 already running)", async () => {
@@ -302,14 +285,14 @@ describe("createIndexerClient: imageEmbeddingsRebuild", () => {
     expect(JSON.parse(String(init.body))).toEqual({});
   });
 
-  it("scopes the request to a root, path, and force when given", async () => {
+  it("scopes the request to a path, and force when given", async () => {
     const fetchStub = vi.fn().mockResolvedValue(jsonResponse(202, { started: true, total: 3 }));
     const client = createIndexerClient({ baseUrl: "http://indexer:8010", fetch: fetchStub });
 
-    await client.imageEmbeddingsRebuild({ root: "files", path: "folder", force: true });
+    await client.imageEmbeddingsRebuild({ path: "folder", force: true });
 
     const [, init] = fetchStub.mock.calls[0] as [string, RequestInit];
-    expect(JSON.parse(String(init.body))).toEqual({ root: "files", path: "folder", force: true });
+    expect(JSON.parse(String(init.body))).toEqual({ path: "folder", force: true });
   });
 
   it("carries the sidecar's status through on failure (e.g. 409 already running)", async () => {
@@ -344,18 +327,15 @@ describe("createIndexerClient: clearImageEmbeddings", () => {
 });
 
 describe("createIndexerClient: clear", () => {
-  it.each([undefined, {}, { root: "files" }, { root: "files", path: "/a.pdf" }])(
-    "posts index scope %j",
-    async (options) => {
-      const fetchStub = vi.fn().mockResolvedValue(jsonResponse(202, { started: true }));
-      const client = createIndexerClient({ baseUrl: "http://indexer:8010", fetch: fetchStub });
-      expect(await client.clearIndex(options)).toEqual({ ok: true, data: { started: true } });
-      expect(fetchStub).toHaveBeenCalledWith(
-        "http://indexer:8010/index/clear",
-        expect.objectContaining({ method: "POST", body: JSON.stringify(options ?? {}) }),
-      );
-    },
-  );
+  it.each([undefined, {}, { path: "/a.pdf" }])("posts index scope %j", async (options) => {
+    const fetchStub = vi.fn().mockResolvedValue(jsonResponse(202, { started: true }));
+    const client = createIndexerClient({ baseUrl: "http://indexer:8010", fetch: fetchStub });
+    expect(await client.clearIndex(options)).toEqual({ ok: true, data: { started: true } });
+    expect(fetchStub).toHaveBeenCalledWith(
+      "http://indexer:8010/index/clear",
+      expect.objectContaining({ method: "POST", body: JSON.stringify(options ?? {}) }),
+    );
+  });
 
   it("posts an empty global thumbnail clear", async () => {
     const fetchStub = vi.fn().mockResolvedValue(jsonResponse(202, { started: true }));

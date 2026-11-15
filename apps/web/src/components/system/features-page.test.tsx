@@ -79,12 +79,7 @@ const off = {
   imageSearch: false,
   pdfOcr: false,
 };
-function mount(
-  step: number,
-  complete = false,
-  roots: SystemFeaturesResponse["roots"] = [],
-  values = off,
-) {
+function mount(step: number, complete = false, values = off) {
   const data: SystemFeaturesResponse = {
     configuration: {
       version: 1,
@@ -95,7 +90,6 @@ function mount(
     },
     source: "settings",
     statuses: [],
-    roots,
   };
   mocks.query.mockReturnValue({ data, dataUpdatedAt: 1 });
   mocks.update.mockReturnValue({
@@ -241,19 +235,7 @@ describe("feature walkthrough", () => {
   });
 
   it("does not ask for storage configuration even when processing has been enabled", () => {
-    mount(
-      1,
-      false,
-      [
-        {
-          name: "files",
-          storagePath: "/data",
-          indexerPath: "/roots/files",
-          processing: { indexReadable: true, pdfReadable: false, pdfWritable: false },
-        },
-      ],
-      { ...off, thumbnails: true },
-    );
+    mount(1, false, { ...off, thumbnails: true });
     expect(screen.queryByText("Advanced storage settings")).toBeNull();
     expect(screen.queryByText(/Map your account/)).toBeNull();
     expect(screen.queryByText(/Storage mapping/)).toBeNull();

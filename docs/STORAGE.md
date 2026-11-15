@@ -11,14 +11,15 @@ filesystem details and lets tests run on an in-memory storage. fdrive checks pas
 | --- | --- |
 | File operations, streams and optional members | [storage port](../packages/core/src/ports/storage.ts) |
 | The files folder and its storage | [files folder](../packages/local/src/files-folder.ts), [home storage](../packages/local/src/storage-provider.ts), [shared folders](../packages/local/src/shared.ts) |
-| The deployment's folder, its row and index root | [files folder](../apps/api/src/local/files-folder.ts) |
+| The deployment's folder and its row | [files folder](../apps/api/src/local/files-folder.ts) |
 | Per-request storage and Trash | [storage factory](../apps/api/src/auth/storage-factory.ts) |
 | Name and health | [storage service](../apps/api/src/system/storage.ts) |
 
 ## Wiring
 
 - `FDRIVE_STORAGE_ROOT` is required. `createFilesFolder` returns three functions:
-  `storage(username)`, the user's home plus `/Shared with me` from `app.local_grants`;
+  `storage(username)`, the user's home plus `/Shared with me` from `app.local_grants`
+  ([shared folders](../packages/local/src/shared.ts));
   `admit(username)`, which refuses a disabled or removed user; and `health()`, whether the folder is this installation's (its marker, below) and
   one the API can read, write and enter.
 - The files folder is one row in `app.providers` (`type` and `base_url` `local`). Startup
@@ -36,12 +37,19 @@ filesystem details and lets tests run on an in-memory storage. fdrive checks pas
   row's id, the name and the folder's health; `PATCH` renames it. System > General shows both.
 - Share links are fdrive's own: it keeps them in `app.shares` and serves them through the
   owner's storage ([owned.ts](../apps/api/src/shares/owned.ts)).
+- `Shared with me` is a reserved name at the top of every home: the path always means the
+  folders others share with the user, listed only while something is shared, and nothing can be
+  created, uploaded, moved, copied or renamed to it. A real folder of that name, made before
+  the name was reserved or outside fdrive, stays on disk untouched and out of sight: listings,
+  the index and folder sizes leave it out ([scoping](SCOPING.md#shared-folders-and-shared-with-me)).
+  Rename it on the host to see it again.
 
 ## Installation flags
 
 `/auth/me` carries the storage name and two flags the web reads, the same for every login:
 `trash`, Trash is on in its settings for the files folder's row, and `index`, the files folder
-is read under a root in `FDRIVE_INDEX_ROOTS` ([scoping](SCOPING.md)). Everything else is always
+is indexed: `FDRIVE_INDEXER_URL` is set and thumbnails, full-text or image search is on
+([scoping](SCOPING.md)). Everything else is always
 on: the files folder zips, keeps modification times, moves in one step, shares links and
 folders, and opens in Office.
 
@@ -131,12 +139,11 @@ How the files folder implements it:
   renamed in place carries its stamp exactly as the rename left it and its change time just
   before (`MovedStamp`); a folder, a file copied to another filesystem, or one that changed
   between the two stats, carries none.
-  Hashing runs only while something listens. The files folder turns these into paths under the index root (`onIndexChange`), and the
-  API records them in the change journal, `idx.changes`, with source `api`
-  (`createChangeQueue`, `createChangeWriter`) only when a configured root's `storagePath` is
-  the files folder itself (`journalRoot`). A failed write is logged, never failing the
-  request; see [how changes arrive](INDEXER.md#how-changes-arrive) and the
-  [change journal](plans/CHANGE-JOURNAL.md).
+  Hashing runs only while something listens. The files folder turns these into paths relative
+  to it (`onIndexChange`), and the API records them in the change journal, `idx.changes`, with
+  source `api` (`createChangeQueue`, `createChangeWriter`), from its first start. A failed write
+  is logged, never failing the request; see [how changes arrive](INDEXER.md#how-changes-arrive)
+  and the [change journal](plans/CHANGE-JOURNAL.md).
 
 ## Tests
 

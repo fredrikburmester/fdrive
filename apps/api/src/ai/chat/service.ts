@@ -143,10 +143,6 @@ export function createChatService(deps: ChatServiceDeps): ChatService {
   const live = deps.live ?? createLiveChats({ clock: deps.clock });
   const turns = new Map<string, Promise<void>>();
 
-  async function indexedFor(principal: Principal): Promise<boolean> {
-    return (await deps.mcp.scopeResolver.verifiedIndexScopes(principal.username)).available;
-  }
-
   function trashPathOf(principal: Principal): string | null {
     return deps.mcp.trashPathForStorage?.(principal.storage) ?? deps.mcp.trashPath ?? null;
   }
@@ -241,7 +237,7 @@ export function createChatService(deps: ChatServiceDeps): ChatService {
       mcp: deps.mcp,
       principal,
       focus,
-      indexed: await indexedFor(principal),
+      indexed: await deps.mcp.indexed(),
       share: chat.share,
     };
     const tools: AiTool[] = [

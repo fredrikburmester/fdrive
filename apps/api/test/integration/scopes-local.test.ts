@@ -1,8 +1,15 @@
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { joinPath, parseSearchFilters, type Scope } from "@fdrive/core";
-import { createDb, createIndexQueries, createRepos, migrate, schema } from "@fdrive/db";
+import { parseSearchFilters, type Scope } from "@fdrive/core";
+import {
+  createDb,
+  createIndexQueries,
+  createRepos,
+  INDEX_ROOT_ID,
+  migrate,
+  schema,
+} from "@fdrive/db";
 import {
   createFilesFolder,
   type LocalUsers,
@@ -77,7 +84,7 @@ describe("index scopes over a local folder and Postgres", () => {
       status: async () => "active",
       shared: async (username) => grants[username] ?? [],
     };
-    const folder = createFilesFolder({ root, users, indexRoot: "files" });
+    const folder = createFilesFolder({ root, users });
     const row = await repos.providers.ensure({ type: "local", baseUrl: "local" });
 
     const identities = await Promise.all(
@@ -101,39 +108,26 @@ describe("index scopes over a local folder and Postgres", () => {
     });
 
     const resolver = createScopeResolver({
-      storageId: row.id,
-      rootName: "files",
-      indexRootNames: ["files"],
-      extraScopes: async (username, home) => {
+      received: async (username) => {
         const shared = await users.shared(username);
         const names = sharedFolderNames(shared);
-        return shared.map(
-          (grant, index): Scope => ({
-            rootName: home.rootName,
-            fsPrefix: joinPath("/", grant.owner, grant.path),
-            virtualPrefix: joinPath("/", SHARED_WITH_ME, names[index] ?? grant.owner),
-          }),
-        );
+        return shared.map((grant, index) => ({
+          owner: grant.owner,
+          path: grant.path,
+          name: names[index] ?? grant.owner,
+        }));
       },
     });
 
-    const aliceScopes = await resolver.verifiedIndexScopes("alice");
-    const bobScopes = await resolver.verifiedIndexScopes("bob");
-    expect(aliceScopes).toEqual({
-      available: true,
-      scopes: [
-        { rootName: "files", fsPrefix: "/alice", virtualPrefix: "/" },
-        { rootName: "files", fsPrefix: "/bob/Photos", virtualPrefix: "/Shared with me/Photos" },
-      ],
-    });
-    expect(bobScopes).toEqual({
-      available: true,
-      scopes: [{ rootName: "files", fsPrefix: "/bob", virtualPrefix: "/" }],
-    });
-    if (!aliceScopes.available || !bobScopes.available) throw new Error("expected scopes");
+    const aliceScopes = await resolver.scopesFor("alice");
+    const bobScopes = await resolver.scopesFor("bob");
+    expect(aliceScopes).toEqual([
+      { fsPrefix: "/alice", virtualPrefix: "/" },
+      { fsPrefix: "/bob/Photos", virtualPrefix: "/Shared with me/Photos" },
+    ]);
+    expect(bobScopes).toEqual([{ fsPrefix: "/bob", virtualPrefix: "/" }]);
 
-    const [indexRoot] = await db.insert(schema.roots).values({ name: "files" }).returning();
-    if (indexRoot === undefined) throw new Error("expected the root insert to return a row");
+    const indexRoot = { id: INDEX_ROOT_ID };
     const SHA = "a".repeat(64);
     const mtimeNs = BigInt(Date.now()) * 1_000_000n;
     const row_ = (path: string, size: number, sha256: string | null = SHA) => ({
@@ -175,21 +169,22 @@ describe("index scopes over a local folder and Postgres", () => {
     }
 
     // Same virtual names in two homes: each login finds only its own.
-    expect(await search(aliceScopes.scopes, "report")).toEqual(["/report-copy.txt", "/report.txt"]);
-    expect(await search(bobScopes.scopes, "report")).toEqual(["/report.txt"]);
+    expect(await search(aliceScopes, "report")).toEqual(["/report-copy.txt", "/report.txt"]);
+    expect(await search(bobScopes, "report")).toEqual(["/report.txt"]);
     // The shared folder appears under alice's mount, and under bob's own path for bob.
-    expect(await search(aliceScopes.scopes, "cat")).toEqual(["/Shared with me/Photos/cat.txt"]);
-    expect(await search(bobScopes.scopes, "cat")).toEqual(["/Photos/cat.txt"]);
+    expect(await search(aliceScopes, "cat")).toEqual(["/Shared with me/Photos/cat.txt"]);
+    expect(await search(bobScopes, "cat")).toEqual(["/Photos/cat.txt"]);
     // The physical folder the mount shadows never surfaces.
-    expect(await search(aliceScopes.scopes, "stale")).toEqual([]);
+    expect(await search(aliceScopes, "stale")).toEqual([]);
     // The scope is the permission: a file gone from disk is listed until the
     // next index pass, and opening it answers not found (below).
-    expect(await search(aliceScopes.scopes, "gone")).toEqual(["/gone.txt"]);
+    expect(await search(aliceScopes, "gone")).toEqual(["/gone.txt"]);
 
     const toolDeps: McpToolDeps = {
       indexQueries,
       searchService,
       scopeResolver: resolver,
+      indexed: async () => true,
       publicUrl: async () => null,
       indexerClient: null,
       clock,
@@ -210,7 +205,7 @@ describe("index scopes over a local folder and Postgres", () => {
       "/report.txt",
     ]);
     // Bob's report has the same content, but it is outside alice's scopes.
-    const ctx = await resolveScopeContext(indexQueries, aliceScopes.scopes, null);
+    const ctx = resolveScopeContext(aliceScopes, null);
     if (ctx === null) throw new Error("expected alice's scope context");
     const info = await fileInfoInScope(toolDeps, ctx, { path: "/report.txt" });
     expect(info.identical_copies).toEqual(["/report-copy.txt"]);

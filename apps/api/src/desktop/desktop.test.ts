@@ -282,19 +282,18 @@ it("publishes nothing once the pairing is revoked or downgraded while a save has
   }
 });
 
-it("advertises the change feed where it covers the location and answers it", async () => {
+it("advertises the change feed and answers it", async () => {
   // Without a feed: nothing advertised, nothing served.
   const plain = await fixture(true);
   const plainCall = await pairWritable(plain);
   expect(await (await plainCall("/location")).json()).not.toHaveProperty("changeFeed");
   expect((await plainCall("/changes")).status).toBe(404);
 
-  let available = true;
   const read = vi.fn(async (_principal: Principal, since: string | undefined) => ({
     status: "resync" as const,
     anchor: since ?? "v1.start",
   }));
-  const f = await fixture(true, { available: async () => available, read });
+  const f = await fixture(true, { read });
   const call = await pairWritable(f);
   expect(await (await call("/location")).json()).toMatchObject({
     listingChecks: true,
@@ -312,9 +311,6 @@ it("advertises the change feed where it covers the location and answers it", asy
   for (const since of ["", "a".repeat(257)])
     expect((await call(`/changes?since=${since}`)).status).toBe(400);
   expect((await call("/changes", false)).status).toBe(401);
-  // A location the journal cannot cover keeps folder checks only.
-  available = false;
-  expect(await (await call("/location")).json()).not.toHaveProperty("changeFeed");
 });
 
 const desktopDirectories: string[] = [];

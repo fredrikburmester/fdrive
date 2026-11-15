@@ -6,37 +6,30 @@ Current implementation: [resolver](../apps/api/src/scoping/resolver.ts),
 
 ## Scopes
 
-A scope `{rootName, fsPrefix, virtualPrefix}` maps part of an index root onto part of one
-login's files. Mapping is segment-aware and must round-trip.
+A scope `{fsPrefix, virtualPrefix}` maps part of the files folder onto part of one login's
+files. Mapping is segment-aware and must round-trip. The index has one root, the files folder
+(`idx.roots` row 1, `files`), and its paths are relative to it.
 
-Every login's home is `<root>/<username>`, shown at `/`: the scope
-`{rootName: root, fsPrefix: "/<username>", virtualPrefix: "/"}`. The root is the one the files
-folder is read under (`localIndexRoot`): the configured root whose `storagePath` is
-`FDRIVE_STORAGE_ROOT`, or the only root there is, or `files`. Nothing is configured per login.
+`scopesFor(username)` returns every scope of a login: its home, `/<username>` shown at `/`,
+then one scope per folder shared with it, `/<owner>/<path>` shown at `/Shared with me/<name>`.
+It runs one grants query and reads neither storage nor the index. A username that cannot be
+one path segment is refused. Search, duplicates, thumbnails, folder sizes, extraction, AI tools,
+MCP, index events, activity observations, the desktop change feed and its `versions` check all
+use it with their principal's username.
 
-## Configured and indexed scopes
+Whether index-backed features apply at all is separate: the files folder is indexed while
+`FDRIVE_INDEXER_URL` is set and a feature that needs the indexer (thumbnails, full-text or image
+search) is on. `GET /api/v1/search/status` reports `not_indexed` without an indexer.
 
-`configuredMappings(username)` returns the home plus one scope per folder shared with the
-login, indexed or not: one grants query, reading neither storage nor the indexer. Index events
-and activity observations use it. It is unavailable only as `invalid_configuration` (the
-username is not one path segment).
+## Shared folders and `Shared with me`
 
-`verifiedIndexScopes(username)` keeps the configured scopes whose root is in
-`FDRIVE_INDEX_ROOTS`, and is `no_roots` when none is. Search, duplicates, thumbnails, folder
-sizes, extraction, AI tools, MCP and the desktop `versions` check use it with their
-principal's username, never `configuredMappings`.
-`GET /api/v1/search/status` reports its reason. "Verified" means indexed: nothing compares
-live listings with the index any more.
-
-## Extra scopes
-
-The resolver's optional `extraScopes(username, home)` appends scopes after the home, for
-folders mounted inside a login's files, such as another user's folder at
-`/Shared with me/<name>` mapped to `/<owner>/<path>` on the same root. Extra scopes must be
-canonical and never claim `/`. A nested scope shadows the home's own folder at that path:
-the scope helpers pick the longest prefix in both directions, and `roundTripVirtualPath`
-drops any index row whose path does not map back to where it came from, so a file in the
-shadowed physical folder never surfaces under the mount.
+A scope nested inside the home shadows the home's own folder at that path: the scope helpers
+pick the longest prefix in both directions, and `roundTripVirtualPath` drops any index row
+whose path does not map back to where it came from. `Shared with me` is a reserved name at the
+top of each home, so the round trip also drops every row of the home's own folder of that name,
+shared or not, and index queries leave that folder out before their limit
+(`reservedExclusion`). A real folder named `Shared with me` stays on disk, untouched and out of
+sight; see [storage](STORAGE.md#wiring).
 
 ## The scope is the permission
 
@@ -55,9 +48,9 @@ until live updates come from the [change journal](plans/CHANGE-JOURNAL.md).
 
 ## Consumers and tests
 
-HTTP and MCP consumers must receive explicit indexed scopes, respect native/API-token
-identity ownership and omit paths outside them. Bounded aggregates must report partial or
-sampled results honestly. Office keys documents by owner and owner's path, not by scope, and
+HTTP and MCP consumers must use the login's scopes, respect native/API-token identity
+ownership and omit paths outside them. Bounded aggregates must report partial or sampled
+results honestly. Office keys documents by owner and owner's path, not by scope, and
 authorizes each callback itself; an Office UUID does not grant access. Index events must not
 leak paths to unauthorized subscribers.
 
@@ -71,10 +64,10 @@ and the MCP tools) and [queries per request](../apps/api/test/integration/reques
 ## MCP folder grants
 
 Explicit MCP token grants narrow virtual paths independently of indexing. Provider operations
-check these grants directly; index-backed operations intersect them with indexed scopes and
+check these grants directly; index-backed operations intersect them with the login's scopes and
 retain nested scope shadow boundaries.
 Ancestor browsing exposes only the chains to granted roots. fdrive's own folders (Trash, the
 Mac app's folder, the Trash layout and backups; `isReservedPath`) remain excluded from ordinary
 tools, and index queries leave them out before their limit; restore admits both original and
 destination paths. Every MCP token has explicit grants; the AI's tools pass the session's
-login, which keeps every verified scope.
+login, which keeps every scope.

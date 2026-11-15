@@ -5,10 +5,10 @@ import { useQuery } from "@tanstack/react-query";
 import { apiClient } from "./deps";
 import { chipsToQueryParams, type SearchChipState } from "./filters";
 
-/** Delay between retries while the indexer registers the files folder after deployment. */
+/** Delay between retries while the indexer starts after deployment. */
 export const SEARCH_STARTUP_RETRY_MS = 5_000;
 
-/** True for a scope failure the status names: configuration, which waiting does not fix. */
+/** True for a failure the status names: configuration, which waiting does not fix. */
 export function isPermanentSearchStatus(status: SearchStatusResponse | undefined): boolean {
   return status?.available === false && status.reason !== undefined;
 }
@@ -18,7 +18,7 @@ export function isPermanentSearchStatus(status: SearchStatusResponse | undefined
  * that, so the copy says what search needs instead.
  */
 export function isSearchUnsupported(status: SearchStatusResponse | undefined): boolean {
-  return status?.available === false && status.reason === "no_roots";
+  return status?.available === false && status.reason === "not_indexed";
 }
 
 /** The search button's tooltip for a permanent failure: short, and about the index when that is the cause. */
@@ -35,8 +35,8 @@ export function searchUnavailableMessage(status: SearchStatusResponse | undefine
 
 /**
  * Retries an unavailable result unless the status already identifies a
- * permanent scope failure. A healthy status can still precede index root
- * registration, so an unavailable result remains retryable in that case.
+ * permanent failure. A healthy status can still precede the indexer's
+ * start, so an unavailable result remains retryable in that case.
  */
 export function shouldRetryUnavailableResult(
   response: Pick<SearchResponse | ImageSearchResponse, "unavailable"> | undefined,

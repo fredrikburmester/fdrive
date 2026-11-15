@@ -97,7 +97,7 @@ describe("search startup retry decisions", () => {
         available: false,
         semantic: false,
         images: false,
-        reason: "no_roots",
+        reason: "not_indexed",
       }),
     ).toBe(true);
     expect(isPermanentSearchStatus({ available: false, semantic: false, images: false })).toBe(
@@ -117,14 +117,9 @@ describe("search startup retry decisions", () => {
       available: false,
       semantic: false,
       images: false,
-      reason: "no_roots",
+      reason: "not_indexed",
     };
-    const other: SearchStatusResponse = {
-      available: false,
-      semantic: false,
-      images: false,
-      reason: "invalid_configuration",
-    };
+    const other: SearchStatusResponse = { available: false, semantic: false, images: false };
 
     expect(isSearchUnsupported(status)).toBe(true);
     expect(searchUnavailableMessage(status)).toBe(
@@ -154,7 +149,7 @@ describe("search startup retry decisions", () => {
         available: false,
         semantic: false,
         images: false,
-        reason: "invalid_configuration",
+        reason: "not_indexed",
       }),
     ).toBe(false);
     expect(shouldRetryUnavailableResult({ unavailable: false }, undefined)).toBe(false);

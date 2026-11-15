@@ -128,17 +128,12 @@ describe("a folder renamed on disk outside fdrive, through the real indexer", ()
       favorites: repos.favorites,
       metadata,
       bus,
-      configuredMappingsFor: async (id) => ({
-        available: true,
-        providerId: id.providerId,
-        scopes: [{ rootName: "files", fsPrefix: `/${id.externalUsername}`, virtualPrefix: "/" }],
-      }),
+      scopesFor: async (id) => [{ fsPrefix: `/${id.externalUsername}`, virtualPrefix: "/" }],
       storageForIdentity: async (id) => {
         const storage = storageByIdentityId.get(id);
         if (storage === undefined) throw new Error(`no storage seeded for identity ${id}`);
         return storage;
       },
-      indexRootNames: new Set(["files"]),
       clock: () => new Date(),
       logger: { warn: (_data, message) => warnings.push(message) },
     });

@@ -1,5 +1,6 @@
 import { RESERVED_FOLDER_NAMES, reservedFolders, type Scope, toFsPath } from "@fdrive/core";
-import type { IndexExclusion, IndexQueries, ScopePrefix } from "@fdrive/db";
+import { INDEX_ROOT_ID, type IndexExclusion, type ScopePrefix } from "@fdrive/db";
+import { SHARED_WITH_ME } from "@fdrive/local";
 
 /**
  * Converts `mtimeNs` (nanoseconds since epoch, as the indexer stores it) to
@@ -18,45 +19,27 @@ export function toIndexRelativePath(fsPath: string): string {
   return fsPath === "/" ? "" : fsPath.replace(/^\/+/, "");
 }
 
+/** `scopes` as the index queries take them: prefixes in the files folder's root. */
+export function indexPrefixes(scopes: readonly Scope[]): ScopePrefix[] {
+  return scopes.map((scope) => ({ rootId: INDEX_ROOT_ID, fsPrefix: scope.fsPrefix }));
+}
+
 /**
  * fdrive's own folders (`isReservedPath`) as the index keeps them, for a
  * query over `scopes` to leave out before its limit: the folders
- * `reservedFolders` names, mapped through the same scopes, and the folder
- * names reserved wherever they lie. A folder no indexed root holds is left
- * out of the prefixes; there is nothing of it to find.
+ * `reservedFolders` names and the home's own `Shared with me` (a reserved
+ * name, out of sight; `roundTripVirtualPath`), mapped through the same
+ * scopes, and the folder names reserved wherever they lie.
  */
 export function reservedExclusion(
   scopes: readonly Scope[],
   trashPath: string | null,
-  rootIds: Readonly<Record<string, number>>,
 ): IndexExclusion {
-  const prefixes = reservedFolders(trashPath).flatMap((folder): ScopePrefix[] => {
-    const located = toFsPath(scopes, folder);
-    const rootId = located === null ? undefined : rootIds[located.rootName];
-    return located === null || rootId === undefined ? [] : [{ rootId, fsPrefix: located.fsPath }];
-  });
-  return { prefixes, names: RESERVED_FOLDER_NAMES };
-}
-
-/**
- * `queries` with `rootIdsByName` kept in memory once it names every root in
- * `names`. A root's id never changes once the indexer created its row, and
- * no root is ever deleted, so only a root not created yet is asked for
- * again.
- */
-export function withCachedRootIds<T extends Pick<IndexQueries, "rootIdsByName">>(
-  queries: T,
-  names: Iterable<string>,
-): T {
-  const wanted = [...names];
-  let known: Record<string, number> | undefined;
-  return {
-    ...queries,
-    async rootIdsByName() {
-      if (known !== undefined) return known;
-      const ids = await queries.rootIdsByName();
-      if (wanted.every((name) => ids[name] !== undefined)) known = ids;
-      return ids;
+  const prefixes = [...reservedFolders(trashPath), `/${SHARED_WITH_ME}`].flatMap(
+    (folder): ScopePrefix[] => {
+      const fsPrefix = toFsPath(scopes, folder);
+      return fsPrefix === null ? [] : [{ rootId: INDEX_ROOT_ID, fsPrefix }];
     },
-  };
+  );
+  return { prefixes, names: RESERVED_FOLDER_NAMES };
 }

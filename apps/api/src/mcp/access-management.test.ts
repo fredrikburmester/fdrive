@@ -82,12 +82,8 @@ async function fixture(mode: "read" | "organize" | "full" = "full", paths = ["/a
   };
   const metadata = createMetadataService({ ...repos });
   const deps: McpToolDeps = {
-    scopeResolver: {
-      verifiedIndexScopes: vi.fn(async () => ({
-        available: false as const,
-        reason: "no_connection" as const,
-      })),
-    },
+    scopeResolver: { scopesFor: async () => [] },
+    indexed: vi.fn(async () => false),
     indexQueries: {} as McpToolDeps["indexQueries"],
     searchService: {} as McpToolDeps["searchService"],
     publicUrl: async () => "https://drive.example",
@@ -154,16 +150,16 @@ it("enforces normalized grants, ancestor browsing and protected roots", async ()
 
 it("intersects index mappings while retaining aliases and nested shadow boundaries", async () => {
   const scopes = [
-    { rootName: "home", fsPrefix: "/alice", virtualPrefix: "/" },
-    { rootName: "team", fsPrefix: "/docs", virtualPrefix: "/allowed/team" },
+    { fsPrefix: "/alice", virtualPrefix: "/" },
+    { fsPrefix: "/docs", virtualPrefix: "/allowed/team" },
   ] as const;
   expect(intersectScopes(scopes, ["/allowed", "/allowed/team/sub", "/allowed"])).toEqual([
-    { rootName: "home", fsPrefix: "/alice/allowed", virtualPrefix: "/allowed" },
+    { fsPrefix: "/alice/allowed", virtualPrefix: "/allowed" },
     scopes[1],
-    { rootName: "team", fsPrefix: "/docs/sub", virtualPrefix: "/allowed/team/sub" },
+    { fsPrefix: "/docs/sub", virtualPrefix: "/allowed/team/sub" },
   ]);
   expect(intersectScopes(scopes, ["/allowed/team/sub"])).toEqual([
-    { rootName: "team", fsPrefix: "/docs/sub", virtualPrefix: "/allowed/team/sub" },
+    { fsPrefix: "/docs/sub", virtualPrefix: "/allowed/team/sub" },
   ]);
   expect(intersectScopes([scopes[1]], ["/other"])).toEqual([]);
   const { principal } = await fixture("organize");
@@ -191,7 +187,7 @@ it("reads provider-backed text, bytes and metadata without index access, includi
     kind: "dir",
     url: "https://drive.example/files/allowed/version.1",
   });
-  expect(deps.scopeResolver.verifiedIndexScopes).not.toHaveBeenCalled();
+  expect(deps.indexed).not.toHaveBeenCalled();
   const first = await runListDirectory(deps, principal, { path: "/allowed", limit: 1 });
   expect(first.next_offset).toBe(1);
   expect(
@@ -629,20 +625,13 @@ it("handles cancellation, unavailable metadata and post-restore failures without
   expect(await base.stat("/allowed/recovered.txt")).toMatchObject({ kind: "file" });
 });
 
-it("keeps capabilities available when index mapping fails", async () => {
+it("keeps capabilities available while the files folder is not indexed", async () => {
   const { principal, deps } = await fixture("read");
-  const { client, close } = await connected(principal, {
-    ...deps,
-    scopeResolver: {
-      verifiedIndexScopes: async () => {
-        throw new Error("indexer unreachable");
-      },
-    },
-  });
+  const { client, close } = await connected(principal, deps);
   try {
     const response = await client.callTool({ name: "capabilities", arguments: {} });
     expect(response.isError).not.toBe(true);
-    expect(JSON.stringify(response.content)).toContain("index mapping unavailable");
+    expect(JSON.stringify(response.content)).toContain("the files folder is not indexed");
   } finally {
     await close();
   }
@@ -667,12 +656,13 @@ it("pages multiple Trash entries and reuses existing tag names without creating 
 
 it("passes only the token’s mapped folders to indexed text and image search", async () => {
   const { principal, deps } = await fixture("read", ["/allowed/version.1"]);
-  const scopes = [{ rootName: "disk", fsPrefix: "/alice", virtualPrefix: "/" }];
+  const scopes = [{ fsPrefix: "/alice", virtualPrefix: "/" }];
   const search = vi.fn(async () => ({ sections: { files: [] }, unavailable: false }));
   const images = vi.fn(async () => ({ query: "q", hits: [], tookMs: 0, unavailable: false }));
   const indexed: McpToolDeps = {
     ...deps,
-    scopeResolver: { verifiedIndexScopes: async () => ({ available: true, scopes }) },
+    scopeResolver: { scopesFor: async () => scopes },
+    indexed: async () => true,
     searchService: { search } as unknown as McpToolDeps["searchService"],
     imageSearchService: { search: images },
   };
@@ -683,7 +673,6 @@ it("passes only the token’s mapped folders to indexed text and image search", 
       expect.objectContaining({
         scopes: [
           {
-            rootName: "disk",
             fsPrefix: "/alice/allowed/version.1",
             virtualPrefix: "/allowed/version.1",
           },

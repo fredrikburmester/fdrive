@@ -33,7 +33,6 @@ export function environmentFingerprint(config: AppConfig): string {
   return createHash("sha256")
     .update(
       JSON.stringify({
-        roots: config.fdriveIndexRoots,
         publicUrl: config.fdriveOfficePublicUrl,
         sources: config.fdriveBackupSources,
       }),

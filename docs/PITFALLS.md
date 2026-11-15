@@ -73,7 +73,7 @@ Reference for affected code; shared rules live in [AGENTS.md](../AGENTS.md).
   reclaimed into their owner's Trash. Delete fdrive's bookkeeping, such as the Mac's staged
   uploads, through storage built without Trash settings.
 - The API keeps what every request would read again in memory: that setup is done, the Trash
-  settings, the storage name and the index root ids. Only the API writes them, so a test (or
+  settings and the storage name. Only the API writes them, so a test (or
   anything else) that changes Trash settings or the storage name straight in `app.settings`
   goes unseen until a restart; change them through their routes.
 - Storage compares names byte for byte, and accents come in two encodings: macOS stores "ö" as

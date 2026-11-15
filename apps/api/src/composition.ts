@@ -1,4 +1,5 @@
 import { withDatabaseWriter } from "@fdrive/backup";
+import { indexerEnabled } from "@fdrive/contracts";
 import { reservedFolders, type StorageProvider } from "@fdrive/core";
 import {
   createActivityExportsRepo,
@@ -20,7 +21,7 @@ import {
   type DesktopAccessMove,
   migrate,
 } from "@fdrive/db";
-import { removeStaleParts, SHARED_WITH_ME } from "@fdrive/local";
+import { removeStaleParts } from "@fdrive/local";
 import type { Logger } from "pino";
 import { createActivityAdmission } from "./activity/admission.ts";
 import { registerActivityExports } from "./activity/exports.ts";
@@ -73,8 +74,6 @@ import {
   deploymentFilesFolder,
   ensureStorageRow,
   filesFolderHealth,
-  journalRoot,
-  localIndexRoot,
 } from "./local/files-folder.js";
 import { registerGrantRoutes } from "./local/grant-routes.js";
 import { createLocalGrantService } from "./local/grants.js";
@@ -105,7 +104,6 @@ import { createImageEmbedClient } from "./search/image-embed-client.js";
 import { createImageSearchService } from "./search/image-service.js";
 import { createNameIndexClient } from "./search/name-index.js";
 import { registerSearchRoutes } from "./search/routes.js";
-import { withCachedRootIds } from "./search/scopes.ts";
 import { createSearchService } from "./search/service.js";
 import { registerSetupRoutes } from "./setup/routes.js";
 import { createSetupService } from "./setup/service.js";
@@ -250,14 +248,18 @@ export async function composeApp(
     identities: repos.identities,
   });
   const storage = createStorageService({ storageId, settings: repos.settings, folder, eventLog });
-  const indexRootNames = new Set((config.fdriveIndexRoots ?? []).map((root) => root.name));
-  /** The index root the files folder is read under; indexed only when it is configured. */
-  const rootName = localIndexRoot(config.fdriveIndexRoots, config.fdriveStorageRoot);
+  /**
+   * Whether the files folder is indexed: the indexer is configured and a
+   * feature that needs it is on. Search, thumbnails, folder sizes, MCP's
+   * index tools and the AI's index lookups apply only then.
+   */
+  const indexed = async () =>
+    config.fdriveIndexerUrl !== undefined && indexerEnabled(await featureValues());
   /** The same for every login: the storage's name, whether Trash is on, and indexing. */
   const installation = async () => ({
     storageName: await storage.name(),
     trash: (await trashSettings.configuration(storageId)).enabled,
-    index: indexRootNames.has(rootName),
+    index: await indexed(),
   });
   const localUserStore = createLocalUserStore({
     repo: repos.localUsers,
@@ -334,9 +336,8 @@ export async function composeApp(
       : createIndexerClient({ baseUrl: config.fdriveIndexerUrl, fetch: fetchImpl });
 
   // The single source of truth for what every identity may read from the
-  // index: each login's home is `<root>/<username>` on its provider's index
-  // root, and index-backed features get it only when that root is indexed.
-  // See `docs/SCOPING.md`.
+  // index: each login's home is `<username>` in the files folder, plus the
+  // folders shared with it. See `docs/SCOPING.md`.
   const localGrants = createLocalGrantService({
     repos,
     storageId,
@@ -345,24 +346,12 @@ export async function composeApp(
     closedFolders,
   });
   const scopeResolver = createScopeResolver({
-    storageId,
-    rootName,
-    indexRootNames,
-    // Folders others share with a local login are indexed where their owner
-    // keeps them; the login sees them under `Shared with me`.
-    extraScopes: async (username, home) =>
-      (await localGrants.received(username)).map((folder) => ({
-        rootName: home.rootName,
-        fsPrefix: `/${folder.owner}${folder.path === "/" ? "" : folder.path}`,
-        virtualPrefix: `/${SHARED_WITH_ME}/${folder.name}`,
-      })),
+    received: (username) => localGrants.received(username),
   });
 
-  // Search: available only once at least one index root is configured
-  // (`FDRIVE_INDEX_ROOTS`); the search route itself degrades to
-  // `{ unavailable: true }` rather than erroring when the caller's
-  // verified index scopes are unavailable for any reason.
-  const indexQueries = withCachedRootIds(createIndexQueries(db), indexRootNames);
+  // Search degrades to `{ unavailable: true }` rather than erroring while
+  // the files folder is not indexed.
+  const indexQueries = createIndexQueries(db);
   const embedClient =
     config.fdriveEmbedUrl === undefined
       ? null
@@ -539,9 +528,8 @@ export async function composeApp(
   });
 
   // The indexer's `LISTEN idx_events` connection only has anything to listen
-  // for once at least one index root is configured; it is otherwise left
-  // unstarted so a deployment without an indexer never opens a spare
-  // Postgres connection.
+  // for with an indexer; it is otherwise left unstarted so a deployment
+  // without one never opens a spare Postgres connection.
   // The indexer's notifications are the only way personal activity notices a
   // change made outside fdrive.
   const activityObservations = createActivityObservations({
@@ -551,7 +539,7 @@ export async function composeApp(
     resolver: scopeResolver,
   });
   const indexerListener =
-    config.fdriveIndexRoots === null
+    config.fdriveIndexerUrl === undefined
       ? null
       : createIndexerListener({
           createClient: () => createPgNotificationClient(config.databaseUrl),
@@ -564,10 +552,8 @@ export async function composeApp(
           activityTracks: activityObservations.tracks,
           onActivityRelink: activityObservations.relink,
           bus,
-          configuredMappingsFor: (identity) =>
-            scopeResolver.configuredMappings(identity.externalUsername),
+          scopesFor: (identity) => scopeResolver.scopesFor(identity.externalUsername),
           storageForIdentity: (identityId) => storageFactory(identityId),
-          indexRootNames,
           clock,
           logger,
         });
@@ -716,6 +702,7 @@ export async function composeApp(
     indexQueries,
     searchService,
     scopeResolver,
+    indexed,
     publicUrl: () => publicUrl.current(),
     indexerClient: indexerExtractClient,
     metadata: metadataService,
@@ -853,16 +840,11 @@ export async function composeApp(
         resolver: scopeResolver,
         index: indexQueries,
       });
-      // The change journal has this API's own changes only for the root it
-      // journals under; a location's feed needs every one of its roots there.
-      const journaled = journalRoot(config.fdriveIndexRoots, config.fdriveStorageRoot);
       registerDesktopRoutes(groups, {
         activity: personalActivity,
         changes: createDesktopChanges({
           journal: createChangeJournal(db),
-          rootIds: () => indexQueries.rootIdsByName(),
-          scopes: scopeResolver.verifiedIndexScopes,
-          journaledRoots: new Set(journaled === null ? [] : [journaled]),
+          scopes: scopeResolver.scopesFor,
           trashPathForStorage: (storage) => {
             const settings = trashSettingsForStorage(storage);
             return settings?.enabled === true ? settings.path : null;
@@ -948,6 +930,7 @@ export async function composeApp(
         folderSize: {
           indexQueries,
           resolver: scopeResolver,
+          indexed,
           trashPathForStorage: (storage: StorageProvider) => {
             const settings = trashSettingsForStorage(storage);
             return settings?.enabled === true ? settings.path : null;
@@ -998,6 +981,7 @@ export async function composeApp(
         searchService,
         imageSearchService,
         resolver: scopeResolver,
+        indexerConfigured: config.fdriveIndexerUrl !== undefined,
         semanticEnabled: embedClient !== null,
         imageSearchEnabled: imageEmbedClient !== null,
         trashPathForStorage: (storage) => {
@@ -1040,7 +1024,6 @@ export async function composeApp(
         embedUrl: config.fdriveEmbedUrl,
         imageEmbedClient,
         thumbsDir: config.fdriveThumbsDir,
-        indexRootNames: Array.from(indexRootNames),
         fetch: fetchImpl,
       });
       registerTokenRoutes(groups, { service: tokenService });

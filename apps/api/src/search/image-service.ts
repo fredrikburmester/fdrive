@@ -1,10 +1,10 @@
 import type { ImageSearchHit, ImageSearchResponse } from "@fdrive/contracts";
 import { baseName, extensionOf, mimeFromExtension, type Scope } from "@fdrive/core";
-import type { IndexQueries, ScopePrefix } from "@fdrive/db";
+import type { IndexQueries } from "@fdrive/db";
 import { roundTripVirtualPath } from "../scoping/round-trip.ts";
 import type { SidecarResult } from "../system/sidecar-client.js";
 import type { ImageEmbedClient, ImageEmbedHealthInfo } from "./image-embed-client.js";
-import { reservedExclusion } from "./scopes.js";
+import { indexPrefixes, reservedExclusion } from "./scopes.js";
 
 /**
  * Rows fanned out from `IndexQueries.searchImages` before ranking. Matches
@@ -52,7 +52,7 @@ export function selectImageHits<T extends { readonly score: number }>(
 
 export interface ImageSearchServiceDeps {
   readonly enabled?: () => Promise<boolean>;
-  readonly indexQueries: Pick<IndexQueries, "searchImages" | "rootIdsByName">;
+  readonly indexQueries: Pick<IndexQueries, "searchImages">;
   /** `null` when `FDRIVE_IMAGE_EMBED_URL` is not configured; image search never runs then. */
   readonly imageEmbedClient: ImageEmbedClient | null;
   /**
@@ -134,41 +134,22 @@ export function createImageSearchService(deps: ImageSearchServiceDeps): ImageSea
         return unavailableResponse(input.query, tookMs());
       }
 
-      const rootIds = await deps.indexQueries.rootIdsByName();
-      const rootNameById = new Map<number, string>();
-      for (const [name, id] of Object.entries(rootIds)) {
-        rootNameById.set(id, name);
-      }
-
-      const prefixes: ScopePrefix[] = [];
-      for (const scope of input.scopes) {
-        const rootId = rootIds[scope.rootName];
-        if (rootId !== undefined) {
-          prefixes.push({ rootId, fsPrefix: scope.fsPrefix });
-        }
-      }
-      if (prefixes.length === 0) {
-        return unavailableResponse(input.query, tookMs());
-      }
-
       const embedded = await deps.imageEmbedClient.embedText(input.query);
       if (embedded === null) {
         return unavailableResponse(input.query, tookMs());
       }
 
       const rows = await deps.indexQueries.searchImages(
-        prefixes,
+        indexPrefixes(input.scopes),
         embedded.vector,
         health.data.model,
         IMAGE_SEARCH_FANOUT_LIMIT,
-        { exclude: reservedExclusion(input.scopes, trashPath, rootIds) },
+        { exclude: reservedExclusion(input.scopes, trashPath) },
       );
       const fanoutCut = rows.length >= IMAGE_SEARCH_FANOUT_LIMIT;
 
       const visible = rows.flatMap((row) => {
-        const rootName = rootNameById.get(row.rootId);
-        const path =
-          rootName === undefined ? null : roundTripVirtualPath(input.scopes, rootName, row.path);
+        const path = roundTripVirtualPath(input.scopes, row.path);
         return path === null ? [] : [{ ...row, path }];
       });
       const hits = selectImageHits(visible, input.limit).map((row): ImageSearchHit => {

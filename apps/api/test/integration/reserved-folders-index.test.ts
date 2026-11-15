@@ -1,7 +1,14 @@
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { createDb, createIndexQueries, createRepos, migrate, schema } from "@fdrive/db";
+import {
+  createDb,
+  createIndexQueries,
+  createRepos,
+  INDEX_ROOT_ID,
+  migrate,
+  schema,
+} from "@fdrive/db";
 import { createFilesFolder, type LocalUsers } from "@fdrive/local";
 import { startPostgres } from "@fdrive/testkit";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -75,7 +82,7 @@ describe("fdrive's own folders in the index, through the MCP tools", () => {
       status: async () => "active",
       shared: async () => [],
     };
-    const folder = createFilesFolder({ root, users, indexRoot: "files" });
+    const folder = createFilesFolder({ root, users });
     const provider = await repos.providers.ensure({ type: "local", baseUrl: "local" });
     const account = await repos.accounts.create({ displayName: "alice" });
     const identity = await repos.identities.create({
@@ -89,8 +96,7 @@ describe("fdrive's own folders in the index, through the MCP tools", () => {
       clock,
     })(identity.id);
 
-    const [indexRoot] = await db.insert(schema.roots).values({ name: "files" }).returning();
-    if (indexRoot === undefined) throw new Error("expected the root insert to return a row");
+    const indexRoot = { id: INDEX_ROOT_ID };
     const rows = await db
       .insert(schema.files)
       .values(
@@ -124,11 +130,8 @@ describe("fdrive's own folders in the index, through the MCP tools", () => {
         thumbsEnabled: false,
         clock,
       }),
-      scopeResolver: createScopeResolver({
-        storageId: provider.id,
-        rootName: "files",
-        indexRootNames: ["files"],
-      }),
+      scopeResolver: createScopeResolver({ received: async () => [] }),
+      indexed: async () => true,
       publicUrl: async () => null,
       indexerClient: null,
       clock,
@@ -170,9 +173,8 @@ describe("fdrive's own folders in the index, through the MCP tools", () => {
     expect(duplicates).not.toHaveProperty("partial");
 
     // The AI's index-backed file_info.
-    const verified = await deps.scopeResolver.verifiedIndexScopes(alice.username);
-    if (!verified.available) throw new Error("expected alice's verified scopes");
-    const ctx = await resolveScopeContext(deps.indexQueries, verified.scopes, "/.trash");
+    const scopes = await deps.scopeResolver.scopesFor(alice.username);
+    const ctx = resolveScopeContext(scopes, "/.trash");
     if (ctx === null) throw new Error("expected alice's scope context");
     const info = await fileInfoInScope(deps, ctx, { path: "/report-a.txt" });
     expect(info.identical_copies).toEqual(["/report-b.txt"]);

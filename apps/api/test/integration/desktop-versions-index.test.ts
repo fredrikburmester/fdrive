@@ -2,8 +2,15 @@ import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, rm, stat, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { joinPath, type Scope, type StorageProvider } from "@fdrive/core";
-import { createDb, createIndexQueries, createRepos, migrate, schema } from "@fdrive/db";
+import type { StorageProvider } from "@fdrive/core";
+import {
+  createDb,
+  createIndexQueries,
+  createRepos,
+  INDEX_ROOT_ID,
+  migrate,
+  schema,
+} from "@fdrive/db";
 import {
   createFilesFolder,
   type LocalUsers,
@@ -70,7 +77,7 @@ describe("desktop version checks answered from the index", () => {
       status: async () => "active",
       shared: async (username) => grants[username] ?? [],
     };
-    const folder = createFilesFolder({ root, users, indexRoot: "files" });
+    const folder = createFilesFolder({ root, users });
     const provider = await repos.providers.ensure({ type: "local", baseUrl: "local" });
     const account = await repos.accounts.create({ displayName: "alice" });
     const alice = await repos.identities.create({
@@ -79,19 +86,14 @@ describe("desktop version checks answered from the index", () => {
       externalUsername: "alice",
     });
     const resolver = createScopeResolver({
-      storageId: provider.id,
-      rootName: "files",
-      indexRootNames: ["files"],
-      extraScopes: async (username, home) => {
+      received: async (username) => {
         const shared = await users.shared(username);
         const names = sharedFolderNames(shared);
-        return shared.map(
-          (grant, index): Scope => ({
-            rootName: home.rootName,
-            fsPrefix: joinPath("/", grant.owner, grant.path),
-            virtualPrefix: joinPath("/", SHARED_WITH_ME, names[index] ?? grant.owner),
-          }),
-        );
+        return shared.map((grant, index) => ({
+          owner: grant.owner,
+          path: grant.path,
+          name: names[index] ?? grant.owner,
+        }));
       },
     });
     const storageFactory = createIdentityStorageFactory({
@@ -103,8 +105,7 @@ describe("desktop version checks answered from the index", () => {
     const download = vi.spyOn(storage, "download");
 
     // What the indexer records after reading each file once it had settled.
-    const [indexRoot] = await db.insert(schema.roots).values({ name: "files" }).returning();
-    if (indexRoot === undefined) throw new Error("expected the root insert to return a row");
+    const indexRoot = { id: INDEX_ROOT_ID };
     const rootId = indexRoot.id;
     async function indexed(path: string) {
       const info = await stat(join(root, path), { bigint: true });

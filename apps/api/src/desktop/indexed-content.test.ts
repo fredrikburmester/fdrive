@@ -4,7 +4,6 @@ import type { IndexedContent, IndexRef } from "@fdrive/db";
 import { createMemoryStorage } from "@fdrive/testkit";
 import { describe, expect, it, vi } from "vitest";
 import type { Principal } from "../auth/principal.js";
-import type { VerifiedIndexScopesResult } from "../scoping/types.js";
 import { createDesktopFiles } from "./files.js";
 import { createIndexedContentLookup, indexedVersion } from "./indexed-content.js";
 
@@ -20,7 +19,7 @@ const STAMP: ContentStamp = {
 /** The row the indexer records after reading the file `STAMP` describes. */
 function rowFor(path: string, stamp = STAMP, sha256: string | null = CLAIMED): IndexedContent {
   return {
-    rootName: "files",
+    rootId: 1,
     path,
     size: stamp.size,
     mtimeNs: stamp.mtimeNs,
@@ -66,34 +65,30 @@ describe("indexedVersion", () => {
   });
 });
 
-const HOME: Scope = { rootName: "files", fsPrefix: "/alice", virtualPrefix: "/" };
+const HOME: Scope = { fsPrefix: "/alice", virtualPrefix: "/" };
 const SHARED: Scope = {
-  rootName: "files",
   fsPrefix: "/bob/Photos",
   virtualPrefix: "/Shared with me/Photos",
 };
 /** A second share inside the first: its files have one place, under its own name. */
 const NESTED: Scope = {
-  rootName: "files",
   fsPrefix: "/bob/Photos/2024",
   virtualPrefix: "/Shared with me/2024",
 };
 
 function lookup(
   rows: readonly IndexedContent[],
-  scopes: VerifiedIndexScopesResult = { available: true, scopes: [HOME, SHARED, NESTED] },
+  scopes: readonly Scope[] = [HOME, SHARED, NESTED],
 ) {
   const contentAt = vi.fn(async (refs: readonly IndexRef[]) =>
-    rows.filter((row) =>
-      refs.some((ref) => ref.rootName === row.rootName && ref.path === row.path),
-    ),
+    rows.filter((row) => refs.some((ref) => ref.rootId === row.rootId && ref.path === row.path)),
   );
-  const verifiedIndexScopes = vi.fn(async (_username: string) => scopes);
+  const scopesFor = vi.fn(async (_username: string) => scopes);
   return {
     contentAt,
-    verifiedIndexScopes,
+    scopesFor,
     find: createIndexedContentLookup({
-      resolver: { verifiedIndexScopes },
+      resolver: { scopesFor },
       index: { contentAt },
     }),
   };
@@ -102,7 +97,7 @@ function lookup(
 const PRINCIPAL = { identityId: "identity", username: "alice" } as Principal;
 
 describe("createIndexedContentLookup", () => {
-  it("maps each path through the verified scopes, shared folders included, in one query", async () => {
+  it("maps each path through the login's scopes, shared folders included, in one query", async () => {
     const l = lookup([
       rowFor("alice/docs/a.txt"),
       rowFor("bob/Photos/cat.jpg"),
@@ -121,10 +116,10 @@ describe("createIndexedContentLookup", () => {
     ]);
     expect(l.contentAt).toHaveBeenCalledTimes(1);
     expect(l.contentAt.mock.calls[0]?.[0]).toEqual([
-      { rootName: "files", path: "alice/docs/a.txt" },
-      { rootName: "files", path: "bob/Photos/cat.jpg" },
-      { rootName: "files", path: "bob/Photos/2024/x.jpg" },
-      { rootName: "files", path: "alice/docs/missing.txt" },
+      { rootId: 1, path: "alice/docs/a.txt" },
+      { rootId: 1, path: "bob/Photos/cat.jpg" },
+      { rootId: 1, path: "bob/Photos/2024/x.jpg" },
+      { rootId: 1, path: "alice/docs/missing.txt" },
     ]);
     expect([...found.keys()].sort()).toEqual([
       "/Shared with me/2024/x.jpg",
@@ -135,32 +130,25 @@ describe("createIndexedContentLookup", () => {
   });
 
   it("never reaches a row outside the identity's own scopes", async () => {
-    const l = lookup([rowFor("bob/secret.txt")], { available: true, scopes: [HOME] });
-    // Every path lands in alice's home; `..` cannot climb out of a normalized path.
+    const l = lookup([rowFor("bob/secret.txt")], [HOME]);
+    // Every path lands in alice's home, whose own `Shared with me` stays out
+    // of sight; `..` cannot climb out of a normalized path.
     const found = await l.find(PRINCIPAL, ["/secret.txt", "/Shared with me/Photos/cat.jpg"]);
     expect(found.size).toBe(0);
-    expect(l.contentAt.mock.calls[0]?.[0]).toEqual([
-      { rootName: "files", path: "alice/secret.txt" },
-      { rootName: "files", path: "alice/Shared with me/Photos/cat.jpg" },
-    ]);
+    expect(l.contentAt.mock.calls[0]?.[0]).toEqual([{ rootId: 1, path: "alice/secret.txt" }]);
   });
 
-  it("asks nothing when the login has no indexed scope or asks for nothing", async () => {
-    const unindexed = lookup([], { available: false, reason: "no_roots" });
-    expect((await unindexed.find(PRINCIPAL, ["/docs/a.txt"])).size).toBe(0);
-    expect(unindexed.verifiedIndexScopes).toHaveBeenCalledWith("alice");
-    expect(unindexed.contentAt).not.toHaveBeenCalled();
-
+  it("asks nothing for nothing, or for paths no scope maps back", async () => {
     const idle = lookup([]);
     expect((await idle.find(PRINCIPAL, [])).size).toBe(0);
-    expect(idle.verifiedIndexScopes).not.toHaveBeenCalled();
+    expect(idle.scopesFor).not.toHaveBeenCalled();
 
     const shadowedOnly = lookup([]);
     await shadowedOnly.find(PRINCIPAL, ["/Shared with me/Photos/2024/x.jpg"]);
     expect(shadowedOnly.contentAt).not.toHaveBeenCalled();
 
-    // Only a shared folder's root is indexed: the home's files map nowhere.
-    const sharedOnly = lookup([], { available: true, scopes: [SHARED] });
+    // Without the home among its scopes, the home's files map nowhere.
+    const sharedOnly = lookup([], [SHARED]);
     await sharedOnly.find(PRINCIPAL, ["/docs/a.txt"]);
     expect(sharedOnly.contentAt).not.toHaveBeenCalled();
   });
@@ -281,7 +269,7 @@ describe("version checks answered from the index", () => {
     expect(await f.versions(["/docs/a.txt"])).toEqual([
       { path: "/docs/a.txt", size: 5, version: sha("alpha") },
     ]);
-    expect(f.l.verifiedIndexScopes).not.toHaveBeenCalled();
+    expect(f.l.scopesFor).not.toHaveBeenCalled();
   });
 
   it("looks up only paths the connection may read, and still refuses the others in turn", async () => {
@@ -289,9 +277,7 @@ describe("version checks answered from the index", () => {
     await expect(f.versions(["/docs/a.txt", "/hidden/c.txt", "\0"])).rejects.toMatchObject({
       kind: "forbidden",
     });
-    expect(f.l.contentAt.mock.calls[0]?.[0]).toEqual([
-      { rootName: "files", path: "alice/docs/a.txt" },
-    ]);
+    expect(f.l.contentAt.mock.calls[0]?.[0]).toEqual([{ rootId: 1, path: "alice/docs/a.txt" }]);
     expect(f.download).not.toHaveBeenCalled();
   });
 

@@ -23,6 +23,11 @@ export const FeatureValues = z
   .strict();
 export type FeatureValues = z.infer<typeof FeatureValues>;
 
+/** Whether the selection needs the indexer: thumbnails, full-text search or image search. */
+export function indexerEnabled(values: FeatureValues): boolean {
+  return values.thumbnails || values.textSearch || values.imageSearch;
+}
+
 export const FeatureConfiguration = z.object({
   version: z.literal(1),
   revision: z.number().int().nonnegative(),
@@ -63,20 +68,6 @@ export const SystemFeaturesResponse = z.object({
   configuration: FeatureConfiguration,
   source: z.enum(["default", "settings"]),
   statuses: z.array(FeatureStatus),
-  roots: z.array(
-    z.object({
-      name: z.string(),
-      storagePath: z.string(),
-      indexerPath: z.string(),
-      processing: z
-        .object({
-          indexReadable: z.boolean().nullable(),
-          pdfReadable: z.boolean().nullable(),
-          pdfWritable: z.boolean().nullable(),
-        })
-        .optional(),
-    }),
-  ),
 });
 export type SystemFeaturesResponse = z.infer<typeof SystemFeaturesResponse>;
 

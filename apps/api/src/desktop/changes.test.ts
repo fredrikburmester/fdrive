@@ -3,13 +3,10 @@ import type { Change, ChangeJournal, ChangePage } from "@fdrive/db";
 import { createMemoryStorage } from "@fdrive/testkit";
 import { describe, expect, it } from "vitest";
 import type { Principal } from "../auth/principal.js";
-import { ApiHttpError } from "../errors.js";
-import type { VerifiedIndexScopesResult } from "../scoping/types.js";
 import { changedPaths, createDesktopChanges, type DesktopChangesDeps } from "./changes.js";
 
-const home: Scope = { rootName: "files", fsPrefix: "/alice", virtualPrefix: "/" };
+const home: Scope = { fsPrefix: "/alice", virtualPrefix: "/" };
 const shared: Scope = {
-  rootName: "files",
   fsPrefix: "/bob/Photos",
   virtualPrefix: "/Shared with me/Photos",
 };
@@ -20,8 +17,8 @@ const visible = (path: string) =>
     (hidden) => path === hidden || path.startsWith(`${hidden}/`),
   );
 
-function row(path: string, targetPath: string | null = null, root = "files") {
-  return { root, path, targetPath };
+function row(path: string, targetPath: string | null = null) {
+  return { path, targetPath };
 }
 
 describe("changedPaths", () => {
@@ -62,14 +59,13 @@ describe("changedPaths", () => {
     });
   });
 
-  it("drops what the location cannot list: other homes, other roots, Trash and fdrive's own folder", () => {
+  it("drops what the location cannot list: other homes, Trash and fdrive's own folder", () => {
     expect(
       changedPaths(
         [
           row("bob/private.txt"),
           row("bob"),
           row("carol/Photos/x.jpg"),
-          row("alice/a.txt", null, "photos"),
           row("alice/.trash/.fdrive-move-v1/a.txt"),
           row("alice/.fdrive-desktop/trash/x"),
         ],
@@ -137,7 +133,7 @@ const principal: Principal = {
 };
 
 /** An in-memory journal over `rows`, whose oldest rows `prune` drops. */
-function journal(rows: Array<Pick<Change, "root" | "path" | "targetPath">>) {
+function journal(rows: Array<Pick<Change, "path" | "targetPath">>) {
   const state = {
     epoch: "11111111-2222-4333-8444-555555555555",
     rows: rows.map((change, index) => ({ ...change, position: index + 1 })),
@@ -149,13 +145,12 @@ function journal(rows: Array<Pick<Change, "root" | "path" | "targetPath">>) {
     async end() {
       return state.rows.at(-1)?.position ?? 0;
     },
-    async read(root, after, limit): Promise<ChangePage> {
-      const names = typeof root === "string" ? [root] : root;
+    async read(after, limit): Promise<ChangePage> {
       const oldest = state.rows[0]?.position;
       return {
         gap: oldest !== undefined && after < oldest - 1,
         changes: state.rows
-          .filter((change) => names.includes(change.root) && change.position > after)
+          .filter((change) => change.position > after)
           .slice(0, limit)
           .map((change) => ({
             ...change,
@@ -169,32 +164,26 @@ function journal(rows: Array<Pick<Change, "root" | "path" | "targetPath">>) {
   return {
     state,
     fake,
-    append(path: string, targetPath: string | null = null, root = "files") {
-      state.rows.push({ root, path, targetPath, position: (state.rows.at(-1)?.position ?? 0) + 1 });
+    append(path: string, targetPath: string | null = null) {
+      state.rows.push({ path, targetPath, position: (state.rows.at(-1)?.position ?? 0) + 1 });
     },
   };
 }
 
 function feed(overrides: Partial<DesktopChangesDeps> = {}) {
   const log = journal([row("alice/old.txt")]);
-  let verified: VerifiedIndexScopesResult = { available: true, scopes };
-  let roots: Record<string, number> = { files: 1 };
+  let current: readonly Scope[] = scopes;
   const changes = createDesktopChanges({
     journal: log.fake,
-    rootIds: async () => roots,
-    scopes: async () => verified,
-    journaledRoots: new Set(["files"]),
+    scopes: async () => current,
     trashPathForStorage: () => "/.trash",
     ...overrides,
   });
   return {
     log,
     changes,
-    setScopes(next: VerifiedIndexScopesResult) {
-      verified = next;
-    },
-    setRoots(next: Record<string, number>) {
-      roots = next;
+    setScopes(next: readonly Scope[]) {
+      current = next;
     },
   };
 }
@@ -231,9 +220,9 @@ describe("createDesktopChanges", () => {
       more: false,
     });
     expect(next.anchor).toMatch(/\.4$/);
-    // Rows of another root still move the anchor to the end, so a quiet
-    // location never falls behind what the journal keeps.
-    log.append("x/y", null, "photos");
+    // Rows the location cannot see still move the anchor to the end, so a
+    // quiet location never falls behind what the journal keeps.
+    log.append("carol/y");
     expect((await settled(changes, next.anchor)).anchor).toMatch(/\.5$/);
   });
 
@@ -253,7 +242,7 @@ describe("createDesktopChanges", () => {
   });
 
   it("answers resync for an anchor it cannot vouch for", async () => {
-    const { changes, log, setScopes, setRoots } = feed();
+    const { changes, log, setScopes } = feed();
     const start = (await changes.read(principal, undefined)).anchor;
     const resync = async (since: string | undefined) =>
       expect((await changes.read(principal, since)).status).toBe("resync");
@@ -273,12 +262,8 @@ describe("createDesktopChanges", () => {
     const restored = (await changes.read(principal, undefined)).anchor;
     expect((await changes.read(principal, restored)).status).toBe("changes");
     // A folder shared or unshared changes what the location sees.
-    setScopes({ available: true, scopes: [home] });
+    setScopes([home]);
     await resync(restored);
-    const unshared = (await changes.read(principal, undefined)).anchor;
-    // The root made again under a new id lost every change in between.
-    setRoots({ files: 2 });
-    await resync(unshared);
     // Rows after the anchor were pruned: a gap.
     const current = (await changes.read(principal, undefined)).anchor;
     log.append("alice/a.txt");
@@ -288,26 +273,5 @@ describe("createDesktopChanges", () => {
       status: "resync",
       anchor: current.replace(/\.1$/, ".3"),
     });
-  });
-
-  it("has no feed where the journal cannot see every change of the location", async () => {
-    const unavailable = async (
-      setup: (f: ReturnType<typeof feed>) => void,
-      overrides: Partial<DesktopChangesDeps> = {},
-    ) => {
-      const f = feed(overrides);
-      setup(f);
-      expect(await f.changes.available(principal)).toBe(false);
-      await expect(f.changes.read(principal, undefined)).rejects.toSatisfy(
-        (error) => error instanceof ApiHttpError && error.kind === "not_found",
-      );
-    };
-    expect(await feed().changes.available(principal)).toBe(true);
-    // The login's root is not indexed.
-    await unavailable((f) => f.setScopes({ available: false, reason: "no_roots" }));
-    // This API does not journal its changes under that root.
-    await unavailable(() => undefined, { journaledRoots: new Set(["photos"]) });
-    // The indexer has not created the root yet, so nothing is journaled under it.
-    await unavailable((f) => f.setRoots({}));
   });
 });

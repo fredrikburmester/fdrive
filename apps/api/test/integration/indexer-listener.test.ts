@@ -1,4 +1,4 @@
-import { createDb, createIndexQueries, createRepos, migrate, schema } from "@fdrive/db";
+import { createDb, createIndexQueries, createRepos, migrate } from "@fdrive/db";
 import { createMemoryStorage, startPostgres } from "@fdrive/testkit";
 import { sql } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -53,8 +53,6 @@ describe("indexer listener (real Postgres LISTEN/NOTIFY)", () => {
       const tag = await repos.tags.create(account.id, { name: "Work", color: null });
       await repos.fileTags.setTags(identity.id, "/a.txt", [tag.id]);
 
-      await db.insert(schema.roots).values({ name: "files" });
-
       const metadata = createMetadataService(repos);
       const bus = createEventBus();
       const received: BusEvent[] = [];
@@ -69,13 +67,8 @@ describe("indexer listener (real Postgres LISTEN/NOTIFY)", () => {
         favorites: repos.favorites,
         metadata,
         bus,
-        configuredMappingsFor: async (id) => ({
-          available: true,
-          providerId: id.providerId,
-          scopes: [{ rootName: "files", fsPrefix: `/${id.externalUsername}`, virtualPrefix: "/" }],
-        }),
+        scopesFor: async (id) => [{ fsPrefix: `/${id.externalUsername}`, virtualPrefix: "/" }],
         storageForIdentity: async () => storage,
-        indexRootNames: new Set(["files"]),
         clock: () => new Date(),
         logger: createSilentLogger(),
       });

@@ -9,9 +9,6 @@ import {
   createDeploymentFilesFolderGuard,
   deploymentFilesFolder,
   filesFolderHealth,
-  journalRoot,
-  LOCAL_INDEX_ROOT,
-  localIndexRoot,
 } from "./files-folder.js";
 import { seedLocalUsers, temporaryStorageRoot } from "./test-fixtures/index.ts";
 
@@ -58,50 +55,12 @@ describe("createDeploymentFilesFolderGuard", () => {
   });
 });
 
-const root = (name: string, storagePath: string) => ({
-  name,
-  storagePath,
-  indexerPath: `/roots/${name}`,
-});
-
-describe("localIndexRoot", () => {
-  it("is the root whose storage path is the folder, however the path is spelled", () => {
-    const roots = [root("photos", "/media"), root("files", "/data/")];
-    expect(localIndexRoot(roots, "/data")).toBe("files");
-    expect(localIndexRoot(roots, "/srv/../data")).toBe("files");
-  });
-
-  it("falls back to the only root there is", () => {
-    expect(localIndexRoot([root("files", "/elsewhere")], "/data")).toBe("files");
-  });
-
-  it("is files when nothing is indexed or several roots name other folders", () => {
-    // Office keys documents by root, so the folder always has a name.
-    expect(LOCAL_INDEX_ROOT).toBe("files");
-    expect(localIndexRoot(null, "/data")).toBe(LOCAL_INDEX_ROOT);
-    expect(localIndexRoot([root("a", "/a"), root("b", "/b")], "/data")).toBe(LOCAL_INDEX_ROOT);
-  });
-});
-
-describe("journalRoot", () => {
-  it("is only a root that names the folder itself", () => {
-    expect(journalRoot([root("photos", "/media"), root("files", "/data/")], "/srv/../data")).toBe(
-      "files",
-    );
-    expect(journalRoot([root("files", "/elsewhere")], "/data")).toBeNull();
-    expect(journalRoot(null, "/data")).toBeNull();
-  });
-});
-
 describe("deploymentFilesFolder", () => {
   it("serves the files folder over the stored users", async () => {
     const repos = createMemoryRepos();
     await seedLocalUsers(repos, [{ username: "alice", password: "alice-pass" }]);
     const storageRoot = temporaryStorageRoot();
-    const folder = deploymentFilesFolder(
-      { fdriveStorageRoot: storageRoot, fdriveIndexRoots: [root("files", storageRoot)] },
-      repos,
-    );
+    const folder = deploymentFilesFolder({ fdriveStorageRoot: storageRoot }, repos);
     expect(await folder.health()).toMatchObject({ ok: true });
     await expect(folder.admit("alice")).resolves.toBeUndefined();
     await expect(folder.admit("nobody")).rejects.toMatchObject({ kind: "forbidden" });
@@ -122,11 +81,9 @@ describe("deploymentFilesFolder", () => {
       });
     }
     const closedFolders = vi.fn(async () => ["/Bin"]);
-    const folder = deploymentFilesFolder(
-      { fdriveStorageRoot: temporaryStorageRoot(), fdriveIndexRoots: null },
-      repos,
-      { closedFolders },
-    );
+    const folder = deploymentFilesFolder({ fdriveStorageRoot: temporaryStorageRoot() }, repos, {
+      closedFolders,
+    });
     const alice = folder.storage("alice");
     await alice.mkdir("/Bin/old", { parents: true });
     await alice.mkdir("/Projects");
@@ -141,11 +98,9 @@ describe("deploymentFilesFolder", () => {
       root: storageRoot,
       facts: { installationId: async () => "id", holdsFiles: async () => true },
     });
-    const folder = deploymentFilesFolder(
-      { fdriveStorageRoot: storageRoot, fdriveIndexRoots: null },
-      createMemoryRepos(),
-      { guard },
-    );
+    const folder = deploymentFilesFolder({ fdriveStorageRoot: storageRoot }, createMemoryRepos(), {
+      guard,
+    });
     await expect(folder.storage("alice").list("/")).rejects.toMatchObject({
       kind: "upstream_unavailable",
       message: FILES_FOLDER_REASONS.empty,
@@ -155,32 +110,33 @@ describe("deploymentFilesFolder", () => {
 
   describe("with a change queue", () => {
     function queue() {
-      const writes: [string, ChangeInput[]][] = [];
+      const writes: ChangeInput[][] = [];
       const changes = createChangeQueue({
-        write: async (name, items) => {
-          writes.push([name, [...items]]);
+        write: async (items) => {
+          writes.push([...items]);
         },
         onError: vi.fn(),
       });
       return { writes, changes };
     }
 
-    it("records the changes fdrive makes in an indexed files folder", async () => {
+    it("records the changes fdrive makes, by their path in the files folder", async () => {
       const storageRoot = temporaryStorageRoot();
       const { writes, changes } = queue();
       const storage = deploymentFilesFolder(
-        { fdriveStorageRoot: storageRoot, fdriveIndexRoots: [root("files", storageRoot)] },
+        { fdriveStorageRoot: storageRoot },
         createMemoryRepos(),
-        { changes },
+        {
+          changes,
+        },
       ).storage("alice");
       await storage.upload("/a.txt", new TextEncoder().encode("a"));
       await storage.move("/a.txt", "/b.txt");
       await vi.waitFor(async () => {
         await changes.flush();
-        expect(writes.flatMap(([, items]) => items)).toHaveLength(2);
+        expect(writes.flat()).toHaveLength(2);
       });
-      expect(new Set(writes.map(([name]) => name))).toEqual(new Set(["files"]));
-      expect(writes.flatMap(([, items]) => items)).toEqual([
+      expect(writes.flat()).toEqual([
         { path: "alice/a.txt", content: expect.objectContaining({ size: 1 }) },
         {
           path: "alice/a.txt",
@@ -188,20 +144,6 @@ describe("deploymentFilesFolder", () => {
           stamp: expect.objectContaining({ size: 1 }),
         },
       ]);
-    });
-
-    it("records nothing when no root is the files folder itself", async () => {
-      const storageRoot = temporaryStorageRoot();
-      const { writes, changes } = queue();
-      const storage = deploymentFilesFolder(
-        { fdriveStorageRoot: storageRoot, fdriveIndexRoots: [root("files", "/elsewhere")] },
-        createMemoryRepos(),
-        { changes },
-      ).storage("alice");
-      await storage.upload("/a.txt", new TextEncoder().encode("a"));
-      await new Promise((resolve) => setImmediate(resolve));
-      await changes.flush();
-      expect(writes).toEqual([]);
     });
   });
 });

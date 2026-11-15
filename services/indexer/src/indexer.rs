@@ -1179,7 +1179,7 @@ type StageWork = fn(&Arc<RootContext>, &str, &str, &str) -> Outcome;
 
 /// Runs one model-bound step for files on a thread of its own, so workers never wait for
 /// the model. Each scan owns an image stage; watcher and queued changes share one image
-/// stage and one text stage per root for the life of the process.
+/// stage and one text stage for the life of the process.
 pub struct Stage {
     sender: Mutex<Option<crossbeam_channel::Sender<StageItem>>>,
     abandoned: Arc<AtomicBool>,

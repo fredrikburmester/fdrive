@@ -145,7 +145,7 @@ describe("SearchStatusResponse", () => {
         available: false,
         semantic: false,
         images: false,
-        reason: "no_roots",
+        reason: "not_indexed",
       }).success,
     ).toBe(true);
   });

@@ -238,8 +238,8 @@ export function registerSharesRoutes(
     codec: ShareCredentialCodec;
     limiter: ShareLimiter;
     config: AppConfig;
-    indexQueries: Pick<IndexQueries, "rootIdsByName" | "fileByPath" | "thumbnail">;
-    resolver: Pick<ScopeResolver, "verifiedIndexScopes">;
+    indexQueries: Pick<IndexQueries, "fileByPath" | "thumbnail">;
+    resolver: Pick<ScopeResolver, "scopesFor">;
     identities: Pick<IdentityRepo, "get">;
     /** The directory the indexer writes thumbnails into. `undefined` disables `/thumb` entirely. */
     thumbsDir: string | undefined;
@@ -513,25 +513,24 @@ export function registerSharesRoutes(
     if (hidden) throw THUMB_NOT_FOUND();
     const identity = await deps.identities.get(target.identityId);
     if (identity === null) throw THUMB_NOT_FOUND();
-    const verifiedScopes = await deps.resolver.verifiedIndexScopes(identity.externalUsername);
-    if (!verifiedScopes.available) throw THUMB_NOT_FOUND();
+    const scopes = await deps.resolver.scopesFor(identity.externalUsername);
     // `toFsPath` normalizes, and `normalizePath` throws for a segment over
     // 255 UTF-8 bytes, which `SharePath` (a 4096-character total bound with
     // no per-segment limit) happily allows through. Catch it here so an
     // over-long segment is the same bare 404 as everything else rather than
     // an unhandled 500 that tells the caller its path was the odd one out.
-    let resolved: ReturnType<typeof toFsPath>;
+    let fsPath: string | null;
     try {
-      resolved = toFsPath(verifiedScopes.scopes, virtualPath);
+      fsPath = toFsPath(scopes, virtualPath);
     } catch {
       throw THUMB_NOT_FOUND();
     }
-    if (resolved === null) throw THUMB_NOT_FOUND();
+    if (fsPath === null) throw THUMB_NOT_FOUND();
 
     const response = await serveThumb(
       c,
       { indexQueries: deps.indexQueries, thumbsDir: deps.thumbsDir, fileReader: thumbFileReader },
-      { rootName: resolved.rootName, fsPath: resolved.fsPath, size: query.size },
+      { fsPath, size: query.size },
     );
     // Overrides the tail's `private, no-store` (right for the authed route,
     // where a permission change must never be served stale) with a short

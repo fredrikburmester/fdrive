@@ -79,6 +79,7 @@ export {
   FeatureStatus,
   FeaturesUpdateRequest,
   FeatureValues,
+  indexerEnabled,
   SystemFeaturesResponse,
   WORKER_TOKEN_HEADER,
 } from "./features.ts";
@@ -190,7 +191,6 @@ export {
   tagFilesRoute,
   tagRoute,
 } from "./routes.ts";
-export { IdentityScopeReason } from "./scopes.ts";
 export {
   ImageSearchHit,
   ImageSearchQuery,
@@ -228,7 +228,6 @@ export {
   IndexerHealth,
   IndexerLastScan,
   IndexerReindexRequest,
-  IndexerRootStats,
   IndexerSettingsResponse,
   IndexerSettingsSources,
   IndexerSettingsUpdateRequest,

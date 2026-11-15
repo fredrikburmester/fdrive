@@ -40,8 +40,8 @@ interface Pair {
 export interface DesktopDeps {
   /** What a grant may write; absent when desktop writes are not wired. */
   writeCapabilities?: (principal: Principal) => DesktopWriteCapabilities;
-  /** Whether the change feed covers this location; absent when the server has none. */
-  changeFeed?: (principal: Principal) => Promise<boolean>;
+  /** Whether the server has the change feed, which covers every location. */
+  changeFeed?: boolean;
   apiTokens: ApiTokenRepo;
   /** Reads a credential's token and login in one query. */
   logins: Pick<LoginRepo, "byToken">;
@@ -125,7 +125,7 @@ export function createDesktopPairing(deps: DesktopDeps) {
       maxUploadBytes: DESKTOP_MAX_UPLOAD_BYTES,
       // Folder checks are served by the same write service that reports capabilities.
       ...(deps.writeCapabilities ? { listingChecks: true as const } : {}),
-      ...((await deps.changeFeed?.(principal)) ? { changeFeed: true as const } : {}),
+      ...(deps.changeFeed === true ? { changeFeed: true as const } : {}),
     };
   }
   /**

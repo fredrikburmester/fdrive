@@ -143,18 +143,15 @@ export function registerMcpTools(
       inputSchema: {},
     },
     wrap(async () => {
-      let index: { available: boolean; reason?: string };
-      try {
-        index = await deps.scopeResolver.verifiedIndexScopes(principal.username);
-      } catch {
-        index = { available: false, reason: "index mapping unavailable" };
-      }
+      const indexed = await deps.indexed();
       return {
         identity_id: principal.identityId,
         access: principal.tokenAccess,
         organize,
         full_management: principal.tokenAccess.mode === "full",
-        index: { available: index.available, ...(index.reason ? { reason: index.reason } : {}) },
+        index: indexed
+          ? { available: true }
+          : { available: false, reason: "the files folder is not indexed" },
         document_extraction_configured: deps.indexerClient !== null,
         trash_configured:
           trashPathFor(deps, principal) !== null && principal.storage.trash !== undefined,

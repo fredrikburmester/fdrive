@@ -242,11 +242,11 @@ a login keeps its identity snapshot and disables live file actions.
 ## How observations arise
 
 Changes made outside fdrive reach history only as observations of files the owner already
-tracks; nobody else's new files are added. They come from the indexer: with index roots
-configured, the API listens to its `idx_events` notifications
+tracks; nobody else's new files are added. They come from the indexer: with
+`FDRIVE_INDEXER_URL` set, the API listens to its `idx_events` notifications
 ([indexer listener](../apps/api/src/events/indexer-listener.ts),
-[observations.ts](../apps/api/src/activity/observations.ts)) and maps each root-relative path
-through the login's configured scopes. Listings and other reads never compare anything with
+[observations.ts](../apps/api/src/activity/observations.ts)) and maps each path in the files
+folder through the login's scopes. Listings and other reads never compare anything with
 history.
 
 - `moved` to a readable destination records `observation.location_changed` (`watcher_move`)
@@ -345,7 +345,7 @@ and `x-fdrive-batch-id`.
 | System settings, maintenance, indexing and OCR | Stay in the administrator log and worker logs; never a user's save. An unexpected change to a tracked file can still be an observation. |
 | Public share recipients | Their downloads and uploads are never attributed to the link's owner. A resulting change can be an observation for a tracked file. |
 | Cached or offline opens on the Mac | Not observable. Mac downloads (`file.materialize`) and writes are recorded. |
-| No index roots, or a gap in notifications | Nothing observes outside changes; fdrive's own actions are still recorded. `LISTEN` is not a durable replay log, and a same-size, same-time change without other evidence is not seen. |
+| No indexer, or a gap in notifications | Nothing observes outside changes; fdrive's own actions are still recorded. `LISTEN` is not a durable replay log, and a same-size, same-time change without other evidence is not seen. |
 | Commands that do not exist yet | Get their action and history test when they ship. |
 
 ## Tests

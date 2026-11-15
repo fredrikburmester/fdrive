@@ -10,7 +10,7 @@ import {
   ROUTES,
   TrashSettings,
 } from "@fdrive/contracts";
-import { createDb, createRepos, schema } from "@fdrive/db";
+import { createDb, createRepos } from "@fdrive/db";
 import { startLocalStorage, startPostgres } from "@fdrive/testkit";
 import { sql } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
@@ -76,9 +76,7 @@ describe("public links follow the files they point at", () => {
         FDRIVE_STORAGE_ROOT: storage.root,
         FDRIVE_MASTER_KEY: Buffer.alloc(32, 31).toString("base64"),
         // Configured so the indexer listener runs; no indexer does, the tests notify for it.
-        FDRIVE_INDEX_ROOTS: JSON.stringify([
-          { name: "files", storagePath: storage.root, indexerPath: "/roots/files" },
-        ]),
+        FDRIVE_INDEXER_URL: "http://127.0.0.1:9",
       }),
       silentLogger(),
     );
@@ -385,7 +383,6 @@ describe("public links follow the files they point at", () => {
     const seen = await link(alice, "/Outside/seen.txt");
     const binned = await link(alice, "/OutsideTrash");
     const gone = await link(alice, "/Gone/x.txt");
-    await database.db.insert(schema.roots).values({ name: "files" }).onConflictDoNothing();
     const onDisk = (path: string) => storage.path("alice", path);
     const notify = (kind: string, path: string, target: string | null = null) =>
       database.db.execute(

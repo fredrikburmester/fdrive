@@ -21,9 +21,7 @@ vi.mock("../../mcp/handlers.js", async (importOriginal) => ({
   runSimilarFiles: vi.fn(),
 }));
 
-const HOME_SCOPES: readonly Scope[] = [
-  { rootName: "files", fsPrefix: "/alice", virtualPrefix: "/" },
-];
+const HOME_SCOPES: readonly Scope[] = [{ fsPrefix: "/alice", virtualPrefix: "/" }];
 
 function principalWith(storage: StorageProvider): Principal {
   return {
@@ -37,11 +35,12 @@ function principalWith(storage: StorageProvider): Principal {
 
 function mcpDeps(overrides: Partial<McpToolDeps> = {}): McpToolDeps {
   return {
-    indexQueries: { rootIdsByName: async () => ({ files: 1 }) } as unknown as IndexQueries,
+    indexQueries: {} as unknown as IndexQueries,
     searchService: { search: async () => Promise.reject(new Error("unexpected search")) },
     scopeResolver: {
-      verifiedIndexScopes: async () => ({ available: true, scopes: HOME_SCOPES }),
+      scopesFor: async () => HOME_SCOPES,
     },
+    indexed: async () => true,
     publicUrl: async () => null,
     indexerClient: null,
     clock: () => new Date("2026-01-01T00:00:00.000Z"),
@@ -561,8 +560,8 @@ describe("list_folder", () => {
 describe("read_excerpts", () => {
   /** "/Inbox" maps onto alice's indexed home; "/Archive" onto a root the index has not seen. */
   const EXCERPT_SCOPES: readonly Scope[] = [
-    { rootName: "files", fsPrefix: "/alice", virtualPrefix: "/Inbox" },
-    { rootName: "archive", fsPrefix: "/", virtualPrefix: "/Archive" },
+    { fsPrefix: "/alice", virtualPrefix: "/Inbox" },
+    { fsPrefix: "/", virtualPrefix: "/Archive" },
   ];
 
   const SELECTED = [
@@ -625,24 +624,20 @@ describe("read_excerpts", () => {
       expect(chars).toBe(EXCERPT_CHARS);
       return TEXT[id] ?? "";
     });
-    const verifiedIndexScopes = vi.fn(async (_username: string) => ({
-      available: true as const,
-      scopes: EXCERPT_SCOPES,
-    }));
+    const scopesFor = vi.fn(async (_username: string) => EXCERPT_SCOPES);
     const setup = toolsFor({
       storage,
       selected: SELECTED,
       mcp: {
         indexQueries: {
-          rootIdsByName: async () => ({ files: 1 }),
           fileByPath,
           fileTextPrefix,
         } as unknown as IndexQueries,
-        scopeResolver: { verifiedIndexScopes },
+        scopeResolver: { scopesFor },
         ...overrides,
       },
     });
-    return { ...setup, fileByPath, fileTextPrefix, verifiedIndexScopes };
+    return { ...setup, fileByPath, fileTextPrefix, scopesFor };
   }
 
   it("accepts between 1 and 25 paths and describes what it reads", () => {
@@ -684,12 +679,11 @@ describe("read_excerpts", () => {
       selected: [stored],
       mcp: {
         indexQueries: {
-          rootIdsByName: async () => ({ files: 1 }),
           fileByPath,
           fileTextPrefix: async () => "Protokoll",
         } as unknown as IndexQueries,
         scopeResolver: {
-          verifiedIndexScopes: async () => ({ available: true, scopes: EXCERPT_SCOPES }),
+          scopesFor: async () => EXCERPT_SCOPES,
         },
       },
     });
@@ -743,31 +737,28 @@ describe("read_excerpts", () => {
   });
 
   it("resolves the login's scope once across calls", async () => {
-    const { tool, verifiedIndexScopes } = excerptSetup();
+    const { tool, scopesFor } = excerptSetup();
     const readExcerpts = tool("read_excerpts");
 
     await runTool(readExcerpts, { paths: ["/Inbox/scan.pdf"] });
     await runTool(readExcerpts, { paths: ["/Inbox/blank.pdf"] });
 
-    expect(verifiedIndexScopes).toHaveBeenCalledTimes(1);
+    expect(scopesFor).toHaveBeenCalledTimes(1);
   });
 
   const UNAVAILABLE = "Extracted text is not available for this drive.";
 
   it("is not available when the identity's index scopes are unverified", async () => {
     const { tool } = excerptSetup({
-      scopeResolver: {
-        verifiedIndexScopes: async () => ({ available: false, reason: "no_roots" }),
-      },
+      scopeResolver: { scopesFor: async () => [] },
+      indexed: async () => false,
     });
 
     expect(await runTool(tool("read_excerpts"), { paths: ["/Inbox/scan.pdf"] })).toBe(UNAVAILABLE);
   });
 
-  it("is not available when none of the scopes land on an indexed root", async () => {
-    const { tool } = excerptSetup({
-      indexQueries: { rootIdsByName: async () => ({}) } as unknown as IndexQueries,
-    });
+  it("is not available when no scope is left", async () => {
+    const { tool } = excerptSetup({ scopeResolver: { scopesFor: async () => [] } });
 
     expect(await runTool(tool("read_excerpts"), { paths: ["/Inbox/scan.pdf"] })).toBe(UNAVAILABLE);
   });

@@ -75,11 +75,10 @@ function submitTurn(moves: { path: string; destination: string; reason: string }
 
 function mcpDeps(overrides: Partial<McpToolDeps> = {}): McpToolDeps {
   return {
-    indexQueries: { rootIdsByName: async () => ({}) } as unknown as IndexQueries,
+    indexQueries: {} as IndexQueries,
     searchService: { search: async () => Promise.reject(new Error("unexpected search")) },
-    scopeResolver: {
-      verifiedIndexScopes: async () => ({ available: false, reason: "no_roots" }),
-    },
+    scopeResolver: { scopesFor: async () => [] },
+    indexed: async () => false,
     publicUrl: async () => null,
     indexerClient: null,
     clock: () => new Date("2026-01-01T00:00:00.000Z"),
@@ -351,11 +350,9 @@ describe("createOrganizeService", () => {
         mcp: {
           trashPathForStorage: () => "/.Trash",
           scopeResolver: {
-            verifiedIndexScopes: async () => ({
-              available: true,
-              scopes: [{ rootName: "files", fsPrefix: "/alice", virtualPrefix: "/" }],
-            }),
+            scopesFor: async () => [{ fsPrefix: "/alice", virtualPrefix: "/" }],
           },
+          indexed: async () => true,
         },
       });
       const principal = principalWith(drive());
@@ -389,17 +386,15 @@ describe("createOrganizeService", () => {
       });
     });
 
-    it("offers the index-backed tools when the identity's index scopes are verified", async () => {
+    it("offers the index-backed tools while the files folder is indexed", async () => {
       const { model, starts } = fakeModel([submitTurn([])]);
       const { service } = setup({
         model,
         mcp: {
           scopeResolver: {
-            verifiedIndexScopes: async () => ({
-              available: true,
-              scopes: [{ rootName: "files", fsPrefix: "/alice", virtualPrefix: "/" }],
-            }),
+            scopesFor: async () => [{ fsPrefix: "/alice", virtualPrefix: "/" }],
           },
+          indexed: async () => true,
         },
       });
       const principal = principalWith(drive());

@@ -267,6 +267,13 @@
       "when": 1794729654241,
       "tag": "0037_saved_searches",
       "breakpoints": true
+    },
+    {
+      "idx": 38,
+      "version": "7",
+      "when": 1794732839291,
+      "tag": "0038_index_root_files",
+      "breakpoints": true
     }
   ]
 }

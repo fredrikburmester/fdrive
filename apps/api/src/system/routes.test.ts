@@ -47,7 +47,6 @@ function fakeIndexQueries(overrides: Partial<IndexQueries> = {}): IndexQueries {
     contentAt: notImplemented,
     listFiles: notImplemented,
     filesBySha256: notImplemented,
-    rootIdsByName: async () => ({}),
     stats: async () => ({ filesTracked: 0, byTextStatus: [], chunks: 0, chunksEmbedded: 0 }),
     statsForFileIds: async () => ({ chunks: 0, chunksEmbedded: 0 }),
     fileTextPrefix: async () => "",
@@ -131,7 +130,6 @@ function buildApp(opts: { isAdmin?: boolean; deps?: Partial<SystemRoutesDeps> })
     embedUrl: undefined,
     imageEmbedClient: null,
     thumbsDir: undefined,
-    indexRootNames: [],
     fetch: vi.fn() as unknown as typeof globalThis.fetch,
     ...opts.deps,
   };
@@ -206,12 +204,19 @@ describe("GET /system/indexer", () => {
   it("reports configured and reachable with health and stats when both succeed", async () => {
     const health = {
       ok: true,
-      roots: ["files"],
-      watcher: { files: true },
+      watcher: true,
       embedOk: true,
       schemaVersion: 1,
     };
-    const stats = { roots: [], thumbnails: 0, queueDepth: 0, errorsSample: [] };
+    const stats = {
+      countsByStatus: {},
+      chunks: 0,
+      chunksEmbedded: 0,
+      lastScan: null,
+      thumbnails: 0,
+      queueDepth: 0,
+      errorsSample: [],
+    };
     const indexerClient = fakeIndexerClient({
       health: async () => ({ ok: true, data: health }),
       stats: async () => ({ ok: true, data: stats }),
@@ -241,7 +246,15 @@ describe("GET /system/indexer", () => {
   });
 
   it("reports reachable when only one of health/stats succeeds", async () => {
-    const stats = { roots: [], thumbnails: 0, queueDepth: 0, errorsSample: [] };
+    const stats = {
+      countsByStatus: {},
+      chunks: 0,
+      chunksEmbedded: 0,
+      lastScan: null,
+      thumbnails: 0,
+      queueDepth: 0,
+      errorsSample: [],
+    };
     const indexerClient = fakeIndexerClient({
       stats: async () => ({ ok: true, data: stats }),
     });
@@ -330,7 +343,7 @@ describe("POST /system/indexer/reindex", () => {
     const res = await app.request("/api/v1/system/indexer/reindex", {
       method: "POST",
       headers: { "content-type": "application/json", "x-requested-with": "fdrive" },
-      body: JSON.stringify({}),
+      body: JSON.stringify({ path: "" }),
     });
 
     expect(res.status).toBe(400);
@@ -362,8 +375,7 @@ describe("POST /system/indexer/reindex", () => {
 
   it("returns marked on success", async () => {
     const indexerClient = fakeIndexerClient({
-      reindex: async (root, path) => {
-        expect(root).toBe("files");
+      reindex: async (path) => {
         expect(path).toBe("folder");
         return { ok: true, data: { marked: 3 } };
       },
@@ -373,7 +385,7 @@ describe("POST /system/indexer/reindex", () => {
     const res = await app.request("/api/v1/system/indexer/reindex", {
       method: "POST",
       headers: { "content-type": "application/json", "x-requested-with": "fdrive" },
-      body: JSON.stringify({ root: "files", path: "folder" }),
+      body: JSON.stringify({ path: "folder" }),
     });
     const body = IndexerActionResponse.parse(await res.json());
 
@@ -400,7 +412,7 @@ describe("POST /system/indexer/thumbnails/rebuild", () => {
     const res = await app.request("/api/v1/system/indexer/thumbnails/rebuild", {
       method: "POST",
       headers: { "content-type": "application/json", "x-requested-with": "fdrive" },
-      body: JSON.stringify({ root: 5 }),
+      body: JSON.stringify({ path: 5 }),
     });
 
     expect(res.status).toBe(400);
@@ -436,10 +448,10 @@ describe("POST /system/indexer/thumbnails/rebuild", () => {
     expect(body).toEqual({ started: true, total: 40 });
   });
 
-  it("forwards root, path, and force", async () => {
+  it("forwards path and force", async () => {
     const indexerClient = fakeIndexerClient({
       thumbnailsRebuild: async (options) => {
-        expect(options).toEqual({ root: "files", path: "folder", force: true });
+        expect(options).toEqual({ path: "folder", force: true });
         return { ok: true, data: { started: true, total: 2 } };
       },
     });
@@ -448,7 +460,7 @@ describe("POST /system/indexer/thumbnails/rebuild", () => {
     const res = await app.request("/api/v1/system/indexer/thumbnails/rebuild", {
       method: "POST",
       headers: { "content-type": "application/json", "x-requested-with": "fdrive" },
-      body: JSON.stringify({ root: "files", path: "folder", force: true }),
+      body: JSON.stringify({ path: "folder", force: true }),
     });
 
     expect(res.status).toBe(202);
@@ -477,25 +489,20 @@ describe("POST /system/indexer/thumbnails/rebuild", () => {
 });
 
 describe("GET /system/search", () => {
-  it("reports not configured when there are no index roots", async () => {
+  it("reports not configured without an indexer", async () => {
     const { app } = buildApp({});
 
     const res = await app.request("/api/v1/system/search");
     const body = SystemSearchResponse.parse(await res.json());
 
     expect(body.configured).toBe(false);
-    expect(body.roots).toEqual([]);
     expect(body.semantic).toEqual({ configured: false, healthy: false });
   });
 
-  it("reports index totals scoped to every configured root with fsPrefix /", async () => {
+  it("reports index totals over the whole files folder", async () => {
     const indexQueries = fakeIndexQueries({
-      rootIdsByName: async () => ({ files: 1, photos: 2 }),
       stats: async (scopePrefixes) => {
-        expect(scopePrefixes).toEqual([
-          { rootId: 1, fsPrefix: "/" },
-          { rootId: 2, fsPrefix: "/" },
-        ]);
+        expect(scopePrefixes).toEqual([{ rootId: 1, fsPrefix: "/" }]);
         return {
           filesTracked: 10,
           byTextStatus: [
@@ -508,28 +515,13 @@ describe("GET /system/search", () => {
         };
       },
     });
-    const { app } = buildApp({ deps: { indexQueries, indexRootNames: ["files", "photos"] } });
+    const { app } = buildApp({ deps: { indexQueries, indexerClient: fakeIndexerClient() } });
 
     const res = await app.request("/api/v1/system/search");
     const body = SystemSearchResponse.parse(await res.json());
 
     expect(body.configured).toBe(true);
-    expect(body.roots).toEqual(["files", "photos"]);
     expect(body.index).toEqual({ files: 10, withText: 7, chunks: 40, embedded: 35 });
-  });
-
-  it("skips a root name with no matching root id", async () => {
-    const indexQueries = fakeIndexQueries({
-      rootIdsByName: async () => ({}),
-      stats: async (scopePrefixes) => {
-        expect(scopePrefixes).toEqual([]);
-        return { filesTracked: 0, byTextStatus: [], chunks: 0, chunksEmbedded: 0 };
-      },
-    });
-    const { app } = buildApp({ deps: { indexQueries, indexRootNames: ["files"] } });
-
-    const res = await app.request("/api/v1/system/search");
-    expect(res.status).toBe(200);
   });
 
   it("reports semantic status from the embedding server", async () => {
@@ -651,7 +643,10 @@ describe("GET /system/image-search", () => {
       stats: async () => ({
         ok: true,
         data: {
-          roots: [],
+          countsByStatus: {},
+          chunks: 0,
+          chunksEmbedded: 0,
+          lastScan: null,
           thumbnails: 0,
           queueDepth: 0,
           errorsSample: [],
@@ -698,7 +693,7 @@ describe("POST /system/image-search/rebuild", () => {
     const res = await app.request("/api/v1/system/image-search/rebuild", {
       method: "POST",
       headers: { "content-type": "application/json", "x-requested-with": "fdrive" },
-      body: JSON.stringify({ root: 5 }),
+      body: JSON.stringify({ path: 5 }),
     });
 
     expect(res.status).toBe(400);
@@ -707,7 +702,7 @@ describe("POST /system/image-search/rebuild", () => {
   it("returns started and total on success, forwarding options", async () => {
     const indexerClient = fakeIndexerClient({
       imageEmbeddingsRebuild: async (options) => {
-        expect(options).toEqual({ root: "files", force: true });
+        expect(options).toEqual({ force: true });
         return { ok: true, data: { started: true, total: 7 } };
       },
     });
@@ -716,7 +711,7 @@ describe("POST /system/image-search/rebuild", () => {
     const res = await app.request("/api/v1/system/image-search/rebuild", {
       method: "POST",
       headers: { "content-type": "application/json", "x-requested-with": "fdrive" },
-      body: JSON.stringify({ root: "files", force: true }),
+      body: JSON.stringify({ force: true }),
     });
     const body = IndexerThumbnailsRebuildResponse.parse(await res.json());
 
@@ -806,7 +801,7 @@ describe("POST /system/image-search/clear", () => {
 
 describe("POST /system/search/reembed", () => {
   it("400s when the indexer is not configured", async () => {
-    const { app } = buildApp({ deps: { indexRootNames: ["files"] } });
+    const { app } = buildApp({});
 
     const res = await app.request("/api/v1/system/search/reembed", {
       method: "POST",
@@ -816,28 +811,9 @@ describe("POST /system/search/reembed", () => {
     expect(res.status).toBe(400);
   });
 
-  it("400s when there are no index roots", async () => {
-    const { app } = buildApp({ deps: { indexerClient: fakeIndexerClient() } });
-
-    const res = await app.request("/api/v1/system/search/reembed", {
-      method: "POST",
-      headers: { "x-requested-with": "fdrive" },
-    });
-
-    expect(res.status).toBe(400);
-  });
-
-  it("sums marked across every root", async () => {
-    const seenRoots: string[] = [];
-    const indexerClient = fakeIndexerClient({
-      reindex: async (root) => {
-        seenRoots.push(root);
-        return { ok: true, data: { marked: root === "files" ? 3 : 5 } };
-      },
-    });
-    const { app } = buildApp({
-      deps: { indexerClient, indexRootNames: ["files", "photos"] },
-    });
+  it("marks the whole files folder", async () => {
+    const reindex = vi.fn(async () => ({ ok: true as const, data: { marked: 8 } }));
+    const { app } = buildApp({ deps: { indexerClient: fakeIndexerClient({ reindex }) } });
 
     const res = await app.request("/api/v1/system/search/reembed", {
       method: "POST",
@@ -846,20 +822,15 @@ describe("POST /system/search/reembed", () => {
     const body = SystemReembedResponse.parse(await res.json());
 
     expect(res.status).toBe(200);
-    expect(body).toEqual({ marked: 8, roots: ["files", "photos"] });
-    expect(seenRoots).toEqual(["files", "photos"]);
+    expect(body).toEqual({ marked: 8 });
+    expect(reindex).toHaveBeenCalledExactlyOnceWith();
   });
 
-  it("502s as soon as one root fails", async () => {
+  it("502s when the indexer fails", async () => {
     const indexerClient = fakeIndexerClient({
-      reindex: async (root) =>
-        root === "files"
-          ? { ok: true, data: { marked: 1 } }
-          : { ok: false, reason: "unreachable", detail: "boom" },
+      reindex: async () => ({ ok: false, reason: "unreachable", detail: "boom" }),
     });
-    const { app } = buildApp({
-      deps: { indexerClient, indexRootNames: ["files", "photos"] },
-    });
+    const { app } = buildApp({ deps: { indexerClient } });
 
     const res = await app.request("/api/v1/system/search/reembed", {
       method: "POST",
@@ -1179,8 +1150,8 @@ describe.each([
   ["target_parent_missing", /folder that held that file no longer exists/],
   ["corrupt", /no longer matches its checksum/],
   ["unresolved", /could not be recovered/],
-  ["unknown_root", /index root the OCR service is not configured for/],
-  ["invalid_path", /source path outside its index root/],
+  ["unknown_root", /a folder other than the files folder/],
+  ["invalid_path", /source path outside the files folder/],
   ["something_new", /refused that restore: something_new/],
 ])("a %s refusal", (reason, expected) => {
   it("is reported as a 409 an administrator can act on", async () => {
@@ -1401,29 +1372,35 @@ describe.each([
     expect(action).toHaveBeenCalledWith(...(area === "indexer" ? [{}] : []));
   });
 
-  it.each(["{", " ", "null", "[]", '"oops"', '{"root":2}', '{"path":"/"}', '{"unexpected":true}'])(
-    "rejects invalid body %s without clearing",
-    async (body) => {
-      const action = vi.fn();
-      const { app } = buildApp({
-        deps: { indexerClient: fakeIndexerClient({ [method]: action }) },
-      });
-      expect(
-        (
-          await app.request(url, {
-            method: "POST",
-            headers: { "content-type": "application/json", "x-requested-with": "fdrive" },
-            body,
-          })
-        ).status,
-      ).toBe(400);
-      expect(action).not.toHaveBeenCalled();
-    },
-  );
+  it.each([
+    "{",
+    " ",
+    "null",
+    "[]",
+    '"oops"',
+    '{"root":"files"}',
+    '{"path":""}',
+    '{"unexpected":true}',
+  ])("rejects invalid body %s without clearing", async (body) => {
+    const action = vi.fn();
+    const { app } = buildApp({
+      deps: { indexerClient: fakeIndexerClient({ [method]: action }) },
+    });
+    expect(
+      (
+        await app.request(url, {
+          method: "POST",
+          headers: { "content-type": "application/json", "x-requested-with": "fdrive" },
+          body,
+        })
+      ).status,
+    ).toBe(400);
+    expect(action).not.toHaveBeenCalled();
+  });
 
   it.each([
     [400, 400],
-    [404, 404],
+    [404, 502],
     [409, 409],
     [500, 502],
     [undefined, 502],
@@ -1448,23 +1425,22 @@ describe.each([
 });
 
 describe("clear scoping", () => {
-  it.each([
-    { root: "files" },
-    { root: "files", path: "/" },
-    { root: "files", path: "/folder/file.pdf" },
-  ])("forwards index scope %j", async (scope) => {
-    const clearIndex = vi.fn().mockResolvedValue({ ok: true, data: { started: true } });
-    const { app } = buildApp({ deps: { indexerClient: fakeIndexerClient({ clearIndex }) } });
-    const res = await app.request("/api/v1/system/indexer/clear", {
-      method: "POST",
-      headers: { "content-type": "application/json", "x-requested-with": "fdrive" },
-      body: JSON.stringify(scope),
-    });
-    expect(res.status).toBe(202);
-    expect(clearIndex).toHaveBeenCalledWith(scope);
-  });
+  it.each([{}, { path: "/" }, { path: "/folder/file.pdf" }])(
+    "forwards index scope %j",
+    async (scope) => {
+      const clearIndex = vi.fn().mockResolvedValue({ ok: true, data: { started: true } });
+      const { app } = buildApp({ deps: { indexerClient: fakeIndexerClient({ clearIndex }) } });
+      const res = await app.request("/api/v1/system/indexer/clear", {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-requested-with": "fdrive" },
+        body: JSON.stringify(scope),
+      });
+      expect(res.status).toBe(202);
+      expect(clearIndex).toHaveBeenCalledWith(scope);
+    },
+  );
 
-  it.each([{ root: "" }, { root: "r", path: "../file" }, { root: "r", path: "a/../file" }])(
+  it.each([{ root: "files" }, { path: "../file" }, { path: "a/../file" }])(
     "rejects unsafe index scope %j",
     async (scope) => {
       const clearIndex = vi.fn();
@@ -1507,7 +1483,10 @@ describe("clear scoping", () => {
       finishedAt: "2026-09-06T18:21:29+00:00",
     };
     const stats = {
-      roots: [],
+      countsByStatus: {},
+      chunks: 0,
+      chunksEmbedded: 0,
+      lastScan: null,
       thumbnails: 1,
       queueDepth: 0,
       errorsSample: [],
@@ -1691,7 +1670,7 @@ describe("system routes: recorded events", () => {
     });
     const ocrClient = fakeOcrClient({ run: async () => ({ ok: true, data: { started: true } }) });
     const { app, recorded } = buildApp({
-      deps: { indexerClient, ocrClient, indexRootNames: ["files"] },
+      deps: { indexerClient, ocrClient },
     });
     const post = (path: string, body?: unknown) =>
       app.request(path, {
@@ -1700,7 +1679,7 @@ describe("system routes: recorded events", () => {
         ...(body === undefined ? {} : { body: JSON.stringify(body) }),
       });
 
-    await post("/api/v1/system/indexer/reindex", { root: "files" });
+    await post("/api/v1/system/indexer/reindex", { path: "docs" });
     await post("/api/v1/system/thumbnails/rebuild");
     await post("/api/v1/system/indexer/thumbnails/rebuild", {});
     await post("/api/v1/system/image-search/rebuild", {});
@@ -1721,8 +1700,8 @@ describe("system routes: recorded events", () => {
       ["thumbnails", "warn", "Thumbnail clear requested"],
       ["image-search", "warn", "Image embedding clear requested"],
     ]);
-    expect(recorded[0]?.data).toEqual({ root: "files" });
-    expect(recorded[5]?.data).toEqual({ roots: ["files"] });
+    expect(recorded[0]?.data).toEqual({ path: "docs" });
+    expect(recorded[5]?.data).toBeUndefined();
   });
 
   it("records an error for every sidecar action that fails", async () => {
@@ -1741,7 +1720,7 @@ describe("system routes: recorded events", () => {
     });
     const ocrClient = fakeOcrClient({ run: async () => failure });
     const { app, recorded } = buildApp({
-      deps: { indexerClient, ocrClient, indexRootNames: ["files"] },
+      deps: { indexerClient, ocrClient },
     });
     const post = (path: string, body?: unknown) =>
       app.request(path, {
@@ -1750,7 +1729,7 @@ describe("system routes: recorded events", () => {
         ...(body === undefined ? {} : { body: JSON.stringify(body) }),
       });
 
-    await post("/api/v1/system/indexer/reindex", { root: "files" });
+    await post("/api/v1/system/indexer/reindex", { path: "docs" });
     await post("/api/v1/system/thumbnails/rebuild");
     await post("/api/v1/system/indexer/thumbnails/rebuild", {});
     await post("/api/v1/system/image-search/rebuild", {});
@@ -1796,7 +1775,6 @@ it.each(["indexer/reindex", "search/reembed", "ocr/run"])(
     } as const;
     const { app } = buildApp({
       deps: {
-        indexRootNames: ["files"],
         indexerClient: fakeIndexerClient({ reindex: async () => failure }),
         ocrClient: fakeOcrClient({
           health: async () => failure,

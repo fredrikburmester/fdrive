@@ -6,6 +6,7 @@ import {
   type FeatureStatus,
   type FeaturesUpdateRequest,
   type FeatureValues,
+  indexerEnabled,
   type SystemFeaturesResponse,
   type SystemLogSubsystem,
 } from "@fdrive/contracts";
@@ -225,13 +226,10 @@ export function createFeatureService(deps: {
     async status() {
       const { raw, configuration } = await read();
       const values = configuration.values;
-      const roots = config.fdriveIndexRoots ?? [];
-      const checkStorage = roots.length > 0;
-      const needsIndex = values.thumbnails || values.textSearch || values.imageSearch;
       const observeDisabled = raw !== null;
       const [indexer, ocr, embed, image, tika, imageHealth] = await Promise.all([
-        needsIndex || observeDisabled || checkStorage ? observe(config.fdriveIndexerUrl) : null,
-        values.pdfOcr || observeDisabled || checkStorage ? observe(config.fdriveOcrUrl) : null,
+        indexerEnabled(values) || observeDisabled ? observe(config.fdriveIndexerUrl) : null,
+        values.pdfOcr || observeDisabled ? observe(config.fdriveOcrUrl) : null,
         values.semanticSearch || observeDisabled
           ? observe(
               config.fdriveEmbedRuntimeUrl ?? config.fdriveEmbedUrl,
@@ -280,28 +278,18 @@ export function createFeatureService(deps: {
               : "Disabled. Existing index and cache data are retained.",
           };
         }
-        if (roots.length === 0)
-          return {
-            id,
-            state: "blocked",
-            detail: "No local storage is mounted for processing. File browsing remains available.",
-          };
         const storage = id === "pdfOcr" ? ocr?.storage : indexer?.storage;
         if (
           storage !== undefined &&
-          roots.some(
-            (root) =>
-              record(storage[root.name]).readable !== true ||
-              (id === "pdfOcr" && record(storage[root.name]).writable !== true),
-          )
+          (storage.readable !== true || (id === "pdfOcr" && storage.writable !== true))
         ) {
           return {
             id,
             state: "blocked",
             detail:
               id === "pdfOcr"
-                ? "The OCR worker needs readable and writable access to every configured root."
-                : "The indexer cannot read every configured root. Check the deployment mount and permissions.",
+                ? "The OCR worker needs to read and write the files folder. Check its mount and permissions."
+                : "The indexer cannot read the files folder. Check its mount and permissions.",
           };
         }
         const workers =
@@ -360,24 +348,7 @@ export function createFeatureService(deps: {
           detail: "Worker is ready. Existing files may still be processing.",
         };
       });
-      return {
-        configuration,
-        source: raw === null ? "default" : "settings",
-        statuses,
-        roots: roots.map((root) => {
-          const indexStorage = record(indexer?.storage?.[root.name]);
-          const pdfStorage = record(ocr?.storage?.[root.name]);
-          return {
-            ...root,
-            processing: {
-              indexReadable:
-                typeof indexStorage.readable === "boolean" ? indexStorage.readable : null,
-              pdfReadable: typeof pdfStorage.readable === "boolean" ? pdfStorage.readable : null,
-              pdfWritable: typeof pdfStorage.writable === "boolean" ? pdfStorage.writable : null,
-            },
-          };
-        }),
-      };
+      return { configuration, source: raw === null ? "default" : "settings", statuses };
     },
   };
 }

@@ -24,9 +24,6 @@ const REQUIRED_ENV = {
 function loadFullyConfiguredEnv(): AppConfig {
   return loadConfig({
     ...REQUIRED_ENV,
-    FDRIVE_INDEX_ROOTS: JSON.stringify([
-      { name: "files", storagePath: "/data", indexerPath: "/data" },
-    ]),
     FDRIVE_INDEXER_URL: "http://indexer:8010",
     FDRIVE_EMBED_URL: "http://embed:80",
     FDRIVE_IMAGE_EMBED_URL: "http://image-embed:8012",
@@ -86,7 +83,7 @@ describe("subsystemsStatus", () => {
     expect(statuses.shares).toEqual({ status: "configured", missing: [] });
     expect(statuses.index).toEqual({
       status: "not_configured",
-      missing: ["FDRIVE_INDEX_ROOTS", "FDRIVE_INDEXER_URL"],
+      missing: ["FDRIVE_INDEXER_URL"],
     });
     expect(statuses.search).toEqual({
       status: "not_configured",
@@ -104,26 +101,9 @@ describe("subsystemsStatus", () => {
     expect(statuses.office).toEqual({ status: "configured", missing: [] });
   });
 
-  it("reports index as configured only once both FDRIVE_INDEX_ROOTS and FDRIVE_INDEXER_URL are set", () => {
-    const rootsOnly = loadConfig({
-      ...REQUIRED_ENV,
-      FDRIVE_INDEX_ROOTS: JSON.stringify([
-        { name: "files", storagePath: "/data", indexerPath: "/data" },
-      ]),
-    });
-    expect(subsystemsStatus(rootsOnly).index).toEqual({
-      status: "not_configured",
-      missing: ["FDRIVE_INDEXER_URL"],
-    });
-
-    const both = loadConfig({
-      ...REQUIRED_ENV,
-      FDRIVE_INDEX_ROOTS: JSON.stringify([
-        { name: "files", storagePath: "/data", indexerPath: "/data" },
-      ]),
-      FDRIVE_INDEXER_URL: "http://indexer:8010",
-    });
-    expect(subsystemsStatus(both).index).toEqual({ status: "configured", missing: [] });
+  it("reports index as configured once FDRIVE_INDEXER_URL is set", () => {
+    const configured = loadConfig({ ...REQUIRED_ENV, FDRIVE_INDEXER_URL: "http://indexer:8010" });
+    expect(subsystemsStatus(configured).index).toEqual({ status: "configured", missing: [] });
   });
 
   it("reports every subsystem as configured once fully configured", () => {
@@ -189,9 +169,7 @@ describe("startupSummaryLines", () => {
     const lines = startupSummaryLines(baseConfig());
 
     expect(lines).toContain("subsystem=core status=configured");
-    expect(lines).toContain(
-      "subsystem=index status=not configured missing=FDRIVE_INDEX_ROOTS,FDRIVE_INDEXER_URL",
-    );
+    expect(lines).toContain("subsystem=index status=not configured missing=FDRIVE_INDEXER_URL");
     expect(lines).toContain("subsystem=search status=not configured missing=FDRIVE_EMBED_URL");
     expect(lines.some((line) => line.startsWith("subsystem=network bind hint"))).toBe(true);
     expect(lines).toHaveLength(SUBSYSTEMS.length + 1);

@@ -28,7 +28,9 @@ export interface SearchRoutesDeps {
   }>;
   readonly searchService: SearchService;
   readonly imageSearchService: ImageSearchService;
-  readonly resolver: Pick<ScopeResolver, "verifiedIndexScopes">;
+  readonly resolver: Pick<ScopeResolver, "scopesFor">;
+  /** Whether `FDRIVE_INDEXER_URL` is configured: without the indexer nothing is indexed. */
+  readonly indexerConfigured: boolean;
   /** Whether `FDRIVE_EMBED_URL` is configured; `search/status` reports this directly. */
   readonly semanticEnabled: boolean;
   /** Whether `FDRIVE_IMAGE_EMBED_URL` is configured; `search/status` reports this directly. */
@@ -61,11 +63,11 @@ export function parseSearchLimit(raw: string | undefined): number {
  * Registers `GET /search` (hybrid search, scoped to the caller's identity)
  * and `GET /search/status` on the authed group. `q` is required (400 for an
  * empty value, enforced by `SearchQuery`'s schema); every other filter is
- * optional. Both routes resolve the caller's *verified* index scopes fresh
- * on every request (never cached client-side, never a caller-supplied
- * override); when unavailable, `search` still responds 200 with
- * `unavailable: true` rather than an error, so the web UI can disable the
- * search entry point instead of showing a failure.
+ * optional. Both routes resolve the caller's scopes fresh on every request
+ * (never cached client-side, never a caller-supplied override); when search
+ * is unavailable, `search` still responds 200 with `unavailable: true`
+ * rather than an error, so the web UI can disable the search entry point
+ * instead of showing a failure.
  */
 export function registerSearchRoutes(
   groups: { public: AppHono; authed: AuthedHono },
@@ -82,12 +84,10 @@ export function registerSearchRoutes(
     const filters = parseSearchFilters(result.data);
     const limit = parseSearchLimit(result.data.limit);
 
-    const verified = await deps.resolver.verifiedIndexScopes(principal.username);
-
     const trashPath = deps.trashPathForStorage?.(principal.storage);
     const response = await deps.searchService.search({
       ...(trashPath === undefined ? {} : { trashPath }),
-      scopes: verified.available ? verified.scopes : [],
+      scopes: deps.indexerConfigured ? await deps.resolver.scopesFor(principal.username) : [],
       query: result.data.q,
       filters,
       limit,
@@ -106,12 +106,13 @@ export function registerSearchRoutes(
     const limit = parseSearchLimit(result.data.limit);
     const features = await deps.features?.();
 
-    const verified = await deps.resolver.verifiedIndexScopes(principal.username);
-
     const trashPath = deps.trashPathForStorage?.(principal.storage);
     const response = await deps.imageSearchService.search({
       ...(trashPath === undefined ? {} : { trashPath }),
-      scopes: verified.available && features?.imageSearch !== false ? verified.scopes : [],
+      scopes:
+        deps.indexerConfigured && features?.imageSearch !== false
+          ? await deps.resolver.scopesFor(principal.username)
+          : [],
       query: result.data.q,
       limit,
     });
@@ -122,15 +123,13 @@ export function registerSearchRoutes(
 
   authed.get(routePath(ROUTES.search.status), async (c) => {
     const features = await deps.features?.();
-    const principal = c.get("principal");
-    const verified = await deps.resolver.verifiedIndexScopes(principal.username);
     const body: SearchStatusResponse = {
       available:
-        verified.available &&
+        deps.indexerConfigured &&
         (features === undefined || features.textSearch || features.imageSearch),
       semantic: deps.semanticEnabled && features?.semanticSearch !== false,
       images: deps.imageSearchEnabled && features?.imageSearch !== false,
-      ...(verified.available ? {} : { reason: verified.reason }),
+      ...(deps.indexerConfigured ? {} : { reason: "not_indexed" as const }),
     };
     return c.json(body);
   });

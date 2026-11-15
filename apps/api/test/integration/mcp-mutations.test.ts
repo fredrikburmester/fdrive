@@ -47,18 +47,9 @@ beforeAll(async () => {
     limiter: createLoginLimiter({ clock: () => new Date() }),
     clientIp: () => "127.0.0.1",
     toolDeps: {
-      scopeResolver: {
-        verifiedIndexScopes: async () =>
-          indexAvailable
-            ? {
-                available: true,
-                scopes: [{ rootName: "files", fsPrefix: "/alice", virtualPrefix: "/" }],
-              }
-            : { available: false, reason: "no_roots" },
-      },
-      indexQueries: {
-        rootIdsByName: async () => ({ files: 1 }),
-      } as unknown as McpToolDeps["indexQueries"],
+      scopeResolver: { scopesFor: async () => [{ fsPrefix: "/alice", virtualPrefix: "/" }] },
+      indexed: async () => indexAvailable,
+      indexQueries: {} as unknown as McpToolDeps["indexQueries"],
       searchService: {} as McpToolDeps["searchService"],
       publicUrl: async () => "https://fdrive.example.com",
       indexerClient: null,

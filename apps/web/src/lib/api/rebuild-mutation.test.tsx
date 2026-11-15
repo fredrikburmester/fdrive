@@ -32,9 +32,9 @@ describe("useRebuildIndexerThumbnails", () => {
       wrapper: createWrapper(queryClient),
     });
 
-    result.current.mutate({ root: "files" });
+    result.current.mutate({ path: "alice" });
 
-    await waitFor(() => expect(rebuildMock).toHaveBeenCalledWith({ root: "files" }));
+    await waitFor(() => expect(rebuildMock).toHaveBeenCalledWith({ path: "alice" }));
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
     expect(invalidate).toHaveBeenCalledWith({ queryKey: ["system", "indexer"] });
     expect(invalidate).toHaveBeenCalledWith({ queryKey: ["system", "thumbnails"] });

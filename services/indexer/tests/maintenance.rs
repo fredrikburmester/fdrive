@@ -10,7 +10,7 @@ use std::sync::atomic::AtomicBool;
 use std::time::{Duration, Instant};
 
 use common::fake_ml::{self, FakeMl};
-use fdrive_indexer::config::Config;
+use fdrive_indexer::config::{Config, ROOT_ID, ROOT_NAME};
 use fdrive_indexer::db::{self, NewFile};
 use fdrive_indexer::failures;
 use fdrive_indexer::features::FeatureValues;
@@ -128,18 +128,6 @@ impl Env {
             .collect()
     }
 
-    /// A second root, sharing this database and config.
-    fn other_root(&self, name: &str) -> Arc<RootContext> {
-        let root_id = db::upsert_root(&mut self.client(), name).unwrap();
-        Arc::new(RootContext::new(
-            name,
-            root_id,
-            self.root.clone(),
-            Arc::clone(&self.cfg),
-            common::features(common::all_features()),
-        ))
-    }
-
     /// A context on this root that cannot reach any database.
     fn offline(&self) -> Arc<RootContext> {
         let mut cfg = (*self.cfg).clone();
@@ -148,8 +136,8 @@ impl Env {
             fake_ml::closed_url().trim_start_matches("http://")
         );
         let mut ctx = RootContext::new(
-            "r",
-            1,
+            ROOT_NAME,
+            ROOT_ID,
             self.root.clone(),
             Arc::new(cfg),
             common::features(common::all_features()),
@@ -300,7 +288,6 @@ fn chmod(path: &Path, mode: u32) {
 #[test]
 fn index_clear_scope_is_literal_and_keeps_everything_else() {
     let env = setup(common::all_features());
-    let other = env.other_root("two");
     for path in ["dir_%", "dir_%/a", "dir_Z/a", "dir_%extra/a", "keep"] {
         let id = upsert(&env.ctx, path, "sha", 1);
         env.ctx
@@ -308,7 +295,6 @@ fn index_clear_scope_is_literal_and_keeps_everything_else() {
             .with(|c| db::insert_chunks(c, id, &["hello".to_owned()], &[Some(vec![0.1; 384])]))
             .unwrap();
     }
-    upsert(&other, "dir_%/a", "sha", 1);
     env.ctx
         .db
         .with(|c| {
@@ -332,13 +318,11 @@ fn index_clear_scope_is_literal_and_keeps_everything_else() {
         .unwrap();
 
     let job = job();
-    clear_index(&[Arc::clone(&env.ctx)], Some("dir_%"), &job).unwrap();
+    clear_index(&env.ctx, Some("dir_%"), &job).unwrap();
     assert_eq!(env.paths(&env.ctx), ["dir_%extra/a", "dir_Z/a", "keep"]);
-    assert_eq!(env.paths(&other), ["dir_%/a"]);
     assert_eq!(counts(&job), (2, 2, 0));
     for (table, expected) in [
         ("idx.chunks", 3),
-        ("idx.roots", 2),
         ("idx.scans", 1),
         ("app.thumbnails", 1),
         ("app.file_tags", 1),
@@ -356,7 +340,7 @@ fn index_clear_scope_is_literal_and_keeps_everything_else() {
     assert_eq!(std::fs::read_to_string(env.root.join("original")).unwrap(), "safe");
 
     // An exact file scope clears that file only.
-    clear_index(&[Arc::clone(&env.ctx)], Some("keep"), &job).unwrap();
+    clear_index(&env.ctx, Some("keep"), &job).unwrap();
     assert_eq!(env.paths(&env.ctx), ["dir_%extra/a", "dir_Z/a"]);
 }
 
@@ -381,7 +365,7 @@ fn index_clear_batches_counts_failures_and_keeps_a_fixed_inventory() {
         )
         .unwrap();
     let job = job();
-    clear_index(&[Arc::clone(&env.ctx)], None, &job).unwrap();
+    clear_index(&env.ctx, None, &job).unwrap();
     assert_eq!(counts(&job), (260, 260, 1));
     assert_eq!(
         env.paths(&env.ctx),
@@ -398,7 +382,7 @@ fn index_clear_waits_for_the_path_lock() {
     let guard = env.ctx.path_locks.get("file.txt");
     let clearer = {
         let (ctx, job) = (Arc::clone(&env.ctx), Arc::clone(&job));
-        std::thread::spawn(move || clear_index(&[ctx], None, &job).unwrap())
+        std::thread::spawn(move || clear_index(&ctx, None, &job).unwrap())
     };
     let deadline = Instant::now() + Duration::from_secs(60);
     while job.snapshot()["total"] != 1 {
@@ -417,7 +401,7 @@ fn index_clear_waits_for_the_path_lock() {
 #[test]
 fn clears_report_an_unreachable_database_or_a_linked_cache() {
     let env = setup(common::all_features());
-    let offline = [env.offline()];
+    let offline = env.offline();
     let job = job();
     assert!(clear_index(&offline, None, &job).is_err());
     assert!(clear_image_embeddings(&offline, &job).is_err());
@@ -428,13 +412,13 @@ fn clears_report_an_unreachable_database_or_a_linked_cache() {
     symlink(&env.thumbs, env.base.join("linked")).unwrap();
     cfg.thumbs_dir = env.base.join("linked");
     let linked = RootContext::new(
-        "r",
-        env.ctx.root_id,
+        ROOT_NAME,
+        ROOT_ID,
         env.root.clone(),
         Arc::new(cfg),
         common::features(common::all_features()),
     );
-    assert!(clear_thumbnails(&[Arc::new(linked)], &job).is_err());
+    assert!(clear_thumbnails(&linked, &job).is_err());
 }
 
 // ---------------------------------------------------------------------------------------
@@ -477,7 +461,7 @@ fn thumbnail_clear_removes_manifest_previews_and_orphans_only() {
     upsert(&env.ctx, "original", "sha", 1);
 
     let job = job();
-    clear_thumbnails(&[Arc::clone(&env.ctx)], &job).unwrap();
+    clear_thumbnails(&env.ctx, &job).unwrap();
     assert_eq!(
         counts(&job),
         (4, 4, 1),
@@ -492,7 +476,7 @@ fn thumbnail_clear_removes_manifest_previews_and_orphans_only() {
     assert_eq!(env.paths(&env.ctx), ["original"]);
 
     std::fs::remove_file(cache.join("symlink")).unwrap();
-    clear_thumbnails(&[Arc::clone(&env.ctx)], &job).unwrap();
+    clear_thumbnails(&env.ctx, &job).unwrap();
     assert!(thumbnail_keys(&env).is_empty());
 }
 
@@ -510,15 +494,15 @@ fn a_failed_manifest_removal_is_not_counted_again_as_an_orphan() {
     add_thumbnail(&env, "fail", &rel);
     chmod(&shard, 0o555);
     let job = job();
-    clear_thumbnails(&[Arc::clone(&env.ctx)], &job).unwrap();
+    clear_thumbnails(&env.ctx, &job).unwrap();
     assert_eq!(counts(&job), (1, 1, 1));
     assert_eq!(env.thumbnails(), 1);
 
     env.client().batch_execute("DELETE FROM app.thumbnails").unwrap();
-    clear_thumbnails(&[Arc::clone(&env.ctx)], &job).unwrap();
+    clear_thumbnails(&env.ctx, &job).unwrap();
     assert_eq!(counts(&job), (2, 2, 2), "now an unlisted orphan, still read-only");
     chmod(&shard, 0o755);
-    clear_thumbnails(&[Arc::clone(&env.ctx)], &job).unwrap();
+    clear_thumbnails(&env.ctx, &job).unwrap();
     assert!(!env.thumbs.join(&rel).exists());
     assert_eq!(counts(&job), (3, 3, 2));
 }
@@ -536,7 +520,7 @@ fn an_unreadable_shard_is_counted_once() {
     }
     chmod(&env.thumbs.join("ab"), 0o000);
     let job = job();
-    let result = clear_thumbnails(&[Arc::clone(&env.ctx)], &job);
+    let result = clear_thumbnails(&env.ctx, &job);
     chmod(&env.thumbs.join("ab"), 0o755);
     result.unwrap();
     assert_eq!(counts(&job), (2, 2, 1));
@@ -544,14 +528,12 @@ fn an_unreadable_shard_is_counted_once() {
 }
 
 #[test]
-fn thumbnail_clear_without_a_cache_or_contexts() {
+fn thumbnail_clear_without_a_cache() {
     let env = setup(common::all_features());
     add_thumbnail(&env, "gone", "aa/gone.webp");
     let job = job();
-    clear_thumbnails(&[], &job).unwrap();
-    assert_eq!(env.thumbnails(), 1);
     assert!(!env.thumbs.exists());
-    clear_thumbnails(&[Arc::clone(&env.ctx)], &job).unwrap();
+    clear_thumbnails(&env.ctx, &job).unwrap();
     assert_eq!(env.thumbnails(), 0);
     assert_eq!(counts(&job), (1, 1, 0));
 }
@@ -571,7 +553,7 @@ fn thumbnail_clear_batches_over_a_fixed_inventory() {
         )
         .unwrap();
     let job = job();
-    clear_thumbnails(&[Arc::clone(&env.ctx)], &job).unwrap();
+    clear_thumbnails(&env.ctx, &job).unwrap();
     assert_eq!(counts(&job), (260, 260, 0));
     assert_eq!(
         thumbnail_keys(&env),
@@ -588,7 +570,7 @@ fn thumbnail_clear_batches_over_a_fixed_inventory() {
 fn image_embedding_clear_batches_counts_failures_and_keeps_a_fixed_inventory() {
     let env = setup(common::all_features());
     let job = job();
-    clear_image_embeddings(&[Arc::clone(&env.ctx)], &job).unwrap();
+    clear_image_embeddings(&env.ctx, &job).unwrap();
     assert_eq!(counts(&job), (0, 0, 0), "an empty table is a no-op");
     env.client()
         .batch_execute(
@@ -606,9 +588,7 @@ fn image_embedding_clear_batches_counts_failures_and_keeps_a_fixed_inventory() {
                WHEN (OLD.content_key = 'k0001') EXECUTE FUNCTION public.add_late();",
         )
         .unwrap();
-    clear_image_embeddings(&[], &job).unwrap();
-    assert_eq!(env.count("SELECT count(*) FROM app.image_embeddings"), 260);
-    clear_image_embeddings(&[Arc::clone(&env.ctx)], &job).unwrap();
+    clear_image_embeddings(&env.ctx, &job).unwrap();
     assert_eq!(counts(&job), (260, 260, 1));
     let keys: Vec<String> = env
         .client()
@@ -653,11 +633,11 @@ fn discovery_failures_finish_every_job_as_failed() {
     let env = setup(common::all_features());
     let offline = env.offline();
     let job = job();
-    assert!(start_thumbnail_rebuild(&job, vec![Arc::clone(&offline)], None, false));
+    assert!(start_thumbnail_rebuild(&job, Arc::clone(&offline), None, false));
     assert_eq!(wait(&job)["outcome"], "failed");
-    assert!(start_image_rebuild(&job, vec![Arc::clone(&offline)], None, false));
+    assert!(start_image_rebuild(&job, Arc::clone(&offline), None, false));
     assert_eq!(wait(&job)["outcome"], "failed");
-    assert!(start_retry(&job, vec![offline], "thumbnails".to_owned(), None));
+    assert!(start_retry(&job, offline, "thumbnails".to_owned(), None));
     let snapshot = wait(&job);
     assert_eq!(
         (snapshot["outcome"].as_str(), snapshot["errors"].as_u64()),
@@ -673,7 +653,7 @@ fn rebuild(env: &Env, path: Option<&str>, force: bool) -> (Arc<Job>, Value) {
     let job = job();
     assert!(start_thumbnail_rebuild(
         &job,
-        vec![Arc::clone(&env.ctx)],
+        Arc::clone(&env.ctx),
         path.map(str::to_owned),
         force
     ));
@@ -812,8 +792,8 @@ fn thumbnail_rebuild_stops_once_thumbnails_are_disabled() {
     let env = setup(values(true, true, false, false));
     common::save_features(&env.url, values(true, true, false, false));
     let mut ctx = RootContext::new(
-        "r",
-        env.ctx.root_id,
+        ROOT_NAME,
+        ROOT_ID,
         env.root.clone(),
         Arc::clone(&env.cfg),
         common::features(values(true, true, false, false)),
@@ -834,7 +814,7 @@ fn thumbnail_rebuild_stops_once_thumbnails_are_disabled() {
         ))
         .unwrap();
     let job = job();
-    assert!(start_thumbnail_rebuild(&job, vec![Arc::clone(&ctx)], None, false));
+    assert!(start_thumbnail_rebuild(&job, Arc::clone(&ctx), None, false));
     let snapshot = wait(&job);
     assert_eq!(
         (
@@ -847,8 +827,8 @@ fn thumbnail_rebuild_stops_once_thumbnails_are_disabled() {
     assert!(!ctx.values().thumbnails);
     assert_eq!(env.thumbnails(), 2);
 
-    // A root whose thumbnails are already off is skipped entirely.
-    assert!(start_thumbnail_rebuild(&job, vec![ctx], None, false));
+    // With thumbnails already off the pass does nothing.
+    assert!(start_thumbnail_rebuild(&job, ctx, None, false));
     assert_eq!(wait(&job)["processed"], 0);
 }
 
@@ -874,7 +854,7 @@ fn image_rebuild(ctx: &Arc<RootContext>, path: Option<&str>, force: bool) -> (Ar
     let job = job();
     assert!(start_image_rebuild(
         &job,
-        vec![Arc::clone(ctx)],
+        Arc::clone(ctx),
         path.map(str::to_owned),
         force
     ));
@@ -1060,7 +1040,7 @@ fn image_rebuild_counts_shared_content_as_skipped() {
 }
 
 #[test]
-fn image_rebuild_skips_a_root_with_image_search_off() {
+fn image_rebuild_does_nothing_with_image_search_off() {
     let env = setup(values(true, true, false, false));
     image_row(&env, "a.png", "sha-a", true);
     let (_, snapshot) = image_rebuild(&env.ctx, None, false);
@@ -1198,7 +1178,7 @@ fn retry_runs_a_fixed_inventory_once_admitted() {
     report_failure(&env.ctx, "missing.png", "imageSearch", "FileNotFoundError: missing");
     let admission = Arc::new(AtomicBool::new(false));
     let (job, other) = (Job::new(Arc::clone(&admission)), Job::new(Arc::clone(&admission)));
-    let retry = |id: Option<i64>| start_retry(&job, vec![Arc::clone(&env.ctx)], "imageSearch".to_owned(), id);
+    let retry = |id: Option<i64>| start_retry(&job, Arc::clone(&env.ctx), "imageSearch".to_owned(), id);
     assert!(other.try_start(0));
     assert!(!retry(None));
     other.finish();
@@ -1255,12 +1235,7 @@ fn retry_skips_failures_resolved_meanwhile_and_stops_when_disabled() {
         )
         .unwrap();
     let job = job();
-    assert!(start_retry(
-        &job,
-        vec![Arc::clone(&env.ctx)],
-        "imageSearch".to_owned(),
-        None
-    ));
+    assert!(start_retry(&job, Arc::clone(&env.ctx), "imageSearch".to_owned(), None));
     let snapshot = wait(&job);
     assert_eq!(
         (
@@ -1277,12 +1252,7 @@ fn retry_skips_failures_resolved_meanwhile_and_stops_when_disabled() {
     report_failure(&env.ctx, "a.png", "imageSearch", "Error: again");
     env.ctx
         .set_features(common::features(values(true, false, false, false)));
-    assert!(start_retry(
-        &job,
-        vec![Arc::clone(&env.ctx)],
-        "imageSearch".to_owned(),
-        None
-    ));
+    assert!(start_retry(&job, Arc::clone(&env.ctx), "imageSearch".to_owned(), None));
     let snapshot = wait(&job);
     assert_eq!(
         (
@@ -1388,8 +1358,8 @@ fn image_rebuild_stops_once_image_search_is_disabled() {
     let env = setup_with(common::all_features(), |c| c.image_embed_batch_size = 1);
     common::save_features(&env.url, common::all_features());
     let mut ctx = RootContext::new(
-        "r",
-        env.ctx.root_id,
+        ROOT_NAME,
+        ROOT_ID,
         env.root.clone(),
         Arc::clone(&env.cfg),
         common::features(common::all_features()),

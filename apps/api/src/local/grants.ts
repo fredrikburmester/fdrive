@@ -47,8 +47,8 @@ export interface LocalGrantService {
    * The reverse of `ownerPath`: where `owned` (an owner's login and the
    * owner's path) lies in `identityId`'s files, under `Shared with me` for a
    * login it is shared with, or `null` when that login cannot reach it. The
-   * owner cannot reach a path of their own that a folder shared with them
-   * hides (`Shared with me/<name>`) either.
+   * owner cannot reach a path of their own in `Shared with me` either: the
+   * name is reserved, and a real folder of that name stays out of sight.
    */
   pathFor(identityId: string, owned: { identityId: string; path: string }): Promise<string | null>;
   /**
@@ -269,7 +269,7 @@ export function createLocalGrantService(deps: LocalGrantServiceDeps): LocalGrant
       const folder = (await received(identity.externalUsername)).find(
         (candidate) => candidate.name === segments[1],
       );
-      // No such shared folder: an ordinary folder of that name, or nothing.
+      // No such shared folder: nothing is there.
       if (folder === undefined) return own;
       // A grant goes with its owner's user, whose login exists as long as they do.
       const owner = await repos.identities.findByProviderUsername(deps.storageId, folder.owner);
@@ -280,17 +280,13 @@ export function createLocalGrantService(deps: LocalGrantServiceDeps): LocalGrant
     async pathFor(identityId, owned) {
       const login = await repos.identities.get(identityId);
       if (login === null) return null;
-      const folders = await received(login.externalUsername);
       if (owned.identityId === identityId) {
-        const segments = splitSegments(owned.path);
-        const hidden =
-          segments[0] === SHARED_WITH_ME && folders.some((folder) => folder.name === segments[1]);
-        return hidden ? null : owned.path;
+        return splitSegments(owned.path)[0] === SHARED_WITH_ME ? null : owned.path;
       }
       const owner = await repos.identities.get(owned.identityId);
       if (owner === null) return null;
       // The most specific folder, when one inside another is shared too.
-      const folder = folders
+      const folder = (await received(login.externalUsername))
         .filter((candidate) => candidate.owner === owner.externalUsername)
         .filter((candidate) => under(owned.path, candidate.path))
         .sort((a, b) => b.path.length - a.path.length)[0];

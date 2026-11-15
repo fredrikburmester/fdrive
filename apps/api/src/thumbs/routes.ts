@@ -31,7 +31,7 @@ function routePath(fullPath: string): string {
 export interface ThumbRoutesDeps {
   readonly enabled?: () => Promise<boolean>;
   readonly indexQueries: IndexQueries;
-  readonly resolver: Pick<ScopeResolver, "verifiedIndexScopes">;
+  readonly resolver: Pick<ScopeResolver, "scopesFor">;
   /** The directory the indexer writes thumbnails into. `undefined` disables the route entirely. */
   readonly thumbsDir: string | undefined;
   readonly fileReader?: ThumbFileReader;
@@ -41,7 +41,7 @@ export interface ThumbRoutesDeps {
 
 /**
  * Registers `GET /thumb?path=&size=256|1024`: maps the virtual `path`
- * through the caller's *verified* index scopes, resolved for this request
+ * through the caller's scopes, resolved for this request
  * (a revoked share stops at once), and serves the cached WebP through the
  * tail shared with the public share thumb route (`./serve.ts`): the file's
  * sha256 in the index, its cached thumbnail for `size`, and the file on
@@ -84,23 +84,16 @@ export function registerThumbRoutes(
     if (isReservedPath(path, deps.trashPathForStorage?.(principal.storage) ?? null)) {
       throw THUMB_NOT_FOUND();
     }
-    const verified = await deps.resolver.verifiedIndexScopes(principal.username);
-    if (!verified.available) {
-      throw THUMB_NOT_FOUND();
-    }
-
-    const resolved = toFsPath(verified.scopes, path);
-    if (
-      resolved === null ||
-      roundTripVirtualPath(verified.scopes, resolved.rootName, resolved.fsPath) !== path
-    ) {
+    const scopes = await deps.resolver.scopesFor(principal.username);
+    const fsPath = toFsPath(scopes, path);
+    if (fsPath === null || roundTripVirtualPath(scopes, fsPath) !== path) {
       throw THUMB_NOT_FOUND();
     }
 
     return serveThumb(
       c,
       { indexQueries: deps.indexQueries, thumbsDir: deps.thumbsDir, fileReader },
-      { rootName: resolved.rootName, fsPath: resolved.fsPath, size },
+      { fsPath, size },
     );
   });
 }

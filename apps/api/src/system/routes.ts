@@ -26,7 +26,12 @@ import {
   type SystemSearchResponse,
   type SystemThumbnailsResponse,
 } from "@fdrive/contracts";
-import type { IndexQueries, SettingsRepo, SystemEventRepo } from "@fdrive/db";
+import {
+  INDEX_ROOT_ID,
+  type IndexQueries,
+  type SettingsRepo,
+  type SystemEventRepo,
+} from "@fdrive/db";
 import { z } from "zod";
 import type { AuthedHono } from "../app.js";
 import { createRequireAdmin } from "../auth/principal.js";
@@ -75,8 +80,6 @@ export interface SystemRoutesDeps {
   readonly imageEmbedClient: ImageEmbedClient | null;
   /** `FDRIVE_THUMBS_DIR`, `undefined` when thumbnails are not configured. */
   readonly thumbsDir: string | undefined;
-  /** Every configured index root's name (`FDRIVE_INDEX_ROOTS`). */
-  readonly indexRootNames: readonly string[];
   readonly fetch: typeof globalThis.fetch;
   /** Overridable for tests; defaults to the real filesystem walk. */
   readonly walkThumbnailBytes?: typeof defaultWalkThumbnailBytes;
@@ -116,9 +119,9 @@ function restoreRefusalMessage(refusal: OcrRefusal): string {
     case "unresolved":
       return "The source path of that original could not be recovered. Download it and put it back by hand.";
     case "unknown_root":
-      return `That original belongs to an index root the OCR service is not configured for${where}.`;
+      return `That original belongs to a folder other than the files folder${where}.`;
     case "invalid_path":
-      return "That original records a source path outside its index root and was refused.";
+      return "That original records a source path outside the files folder and was refused.";
     default:
       return `The OCR service refused that restore: ${refusal.reason}.`;
   }
@@ -144,9 +147,6 @@ function throwForThumbnailsRebuildFailure(result: {
 function throwForClearFailure(result: { reason: string; detail: string; status?: number }): never {
   if (result.status === 400) {
     throw new ApiHttpError("bad_request", "invalid clear request");
-  }
-  if (result.status === 404) {
-    throw new ApiHttpError("not_found", "unknown index root");
   }
   if (result.status === 409) {
     throw new ApiHttpError("conflict", "a clear or thumbnail rebuild is already running");
@@ -251,15 +251,10 @@ export function registerSystemRoutes(groups: { authed: AuthedHono }, deps: Syste
     }
 
     const target = {
-      ...(parsed.data.root === undefined ? {} : { root: parsed.data.root }),
       ...(parsed.data.path === undefined ? {} : { path: parsed.data.path }),
       ...(parsed.data.thumbnails === undefined ? {} : { thumbnails: parsed.data.thumbnails }),
     };
-    const result = await deps.indexerClient.reindex(
-      parsed.data.root,
-      parsed.data.path,
-      parsed.data.thumbnails,
-    );
+    const result = await deps.indexerClient.reindex(parsed.data.path, parsed.data.thumbnails);
     if (!result.ok) {
       deps.eventLog.record("indexer", "error", `Reindex failed: ${result.detail}`, target);
       throw new ApiHttpError(
@@ -345,24 +340,15 @@ export function registerSystemRoutes(groups: { authed: AuthedHono }, deps: Syste
   });
 
   authed.get(withoutApiV1Prefix(ROUTES.system.search), requireAdmin, async (c) => {
-    const configured = deps.indexRootNames.length > 0;
     const semantic = await fetchEmbedStatus({ baseUrl: deps.embedUrl, fetch: deps.fetch });
-
-    const rootIds = await deps.indexQueries.rootIdsByName();
-    const prefixes = deps.indexRootNames
-      .map((name) => rootIds[name])
-      .filter((rootId): rootId is number => rootId !== undefined)
-      .map((rootId) => ({ rootId, fsPrefix: "/" }));
-
-    const stats = await deps.indexQueries.stats(prefixes);
+    const stats = await deps.indexQueries.stats([{ rootId: INDEX_ROOT_ID, fsPrefix: "/" }]);
     const withText = stats.byTextStatus
       .filter((row) => TEXT_STATUSES_WITH_TEXT.has(row.status))
       .reduce((sum, row) => sum + row.files, 0);
 
     const body: SystemSearchResponse = {
-      configured,
+      configured: deps.indexerClient !== null,
       semantic,
-      roots: [...deps.indexRootNames],
       index: {
         files: stats.filesTracked,
         withText,
@@ -377,28 +363,17 @@ export function registerSystemRoutes(groups: { authed: AuthedHono }, deps: Syste
     if (deps.indexerClient === null) {
       throw new ApiHttpError("bad_request", "the indexer is not configured");
     }
-    if (deps.indexRootNames.length === 0) {
-      throw new ApiHttpError("bad_request", "no index roots are configured");
+    const result = await deps.indexerClient.reindex();
+    if (!result.ok) {
+      deps.eventLog.record("search", "error", `Reembed failed: ${result.detail}`);
+      throw new ApiHttpError(
+        result.status === 409 ? "conflict" : "upstream_unavailable",
+        sidecarErrorMessage("the indexer", result),
+      );
     }
+    deps.eventLog.record("search", "info", "Reembed requested");
 
-    const indexerClient = deps.indexerClient;
-    let marked = 0;
-    for (const root of deps.indexRootNames) {
-      const result = await indexerClient.reindex(root);
-      if (!result.ok) {
-        deps.eventLog.record("search", "error", `Reembed failed: ${result.detail}`, { root });
-        throw new ApiHttpError(
-          result.status === 409 ? "conflict" : "upstream_unavailable",
-          sidecarErrorMessage(`the indexer (root "${root}")`, result),
-        );
-      }
-      marked += result.data.marked;
-    }
-    deps.eventLog.record("search", "info", "Reembed requested", {
-      roots: [...deps.indexRootNames],
-    });
-
-    const body: SystemReembedResponse = { marked, roots: [...deps.indexRootNames] };
+    const body: SystemReembedResponse = { marked: result.data.marked };
     return c.json(body);
   });
 
