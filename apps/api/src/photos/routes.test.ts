@@ -1,16 +1,16 @@
 import { PhotosResponse } from "@fdrive/contracts";
-import { type Scope, StorageError, type StorageProvider } from "@fdrive/core";
+import type { Scope, StorageProvider } from "@fdrive/core";
 import type { PhotoDetails, PhotoOptions, PhotoRow } from "@fdrive/db";
 import type { Logger } from "pino";
 import { describe, expect, it, vi } from "vitest";
 import { createApp } from "../app.js";
 import type { Principal } from "../auth/principal.js";
 import { loadConfig } from "../config.js";
-import { buildIdentity } from "../scoping/test-fixtures/index.ts";
 import { PHOTOS_PAGE_SIZE, type PhotoRoutesDeps, registerPhotoRoutes } from "./routes.js";
 
 const REQUIRED_ENV = {
   DATABASE_URL: "postgres://localhost/fdrive",
+  FDRIVE_STORAGE_ROOT: "/srv/files",
   FDRIVE_MASTER_KEY: Buffer.alloc(32, 7).toString("base64"),
 };
 
@@ -44,27 +44,17 @@ function row(id: number, path: string, overrides: Partial<PhotoRow> = {}): Photo
 
 interface BuildOptions {
   readonly scopes?: readonly Scope[] | null;
-  readonly unreadable?: readonly string[];
   readonly rows?: readonly PhotoRow[];
   readonly details?: PhotoDetails | null;
   readonly trashPath?: string;
 }
 
 function buildApp(options: BuildOptions = {}) {
-  const unreadable = new Set(options.unreadable ?? []);
-  const storage = {
-    probeFileRead: async (path: string) => {
-      if (unreadable.has(path)) {
-        throw new StorageError("forbidden", "no");
-      }
-    },
-  } as unknown as StorageProvider;
-  const identity = buildIdentity({ externalUsername: "alice" });
   const principal: Principal = {
     accountId: "00000000-0000-4000-8000-000000000001",
-    identityId: identity.id,
+    identityId: "00000000-0000-4000-8000-0000000000a1",
     username: "alice",
-    storage,
+    storage: {} as StorageProvider,
     isAdmin: false,
   };
   const scopes = options.scopes === undefined ? SCOPES : options.scopes;
@@ -82,7 +72,6 @@ function buildApp(options: BuildOptions = {}) {
       verifiedIndexScopes: async () =>
         scopes === null ? { available: false, reason: "no_roots" } : { available: true, scopes },
     },
-    identities: { get: async () => identity },
     trashPathForStorage: () => options.trashPath ?? null,
   };
   const app = createApp({
@@ -104,14 +93,12 @@ function buildApp(options: BuildOptions = {}) {
 }
 
 describe("GET /api/v1/photos", () => {
-  it("shows the images the caller can read at their own paths, and reads the next page after a cursor", async () => {
+  it("shows the images in the caller's scopes at their own paths, and reads the next page after a cursor", async () => {
     const { app, photos } = buildApp({
-      unreadable: ["/locked.jpg"],
       trashPath: "/.Trash",
       rows: [
         row(1, "alice/a.jpg", { takenAt: "2024-05-01T14:03:09", at: "2024-05-01T14:03:09.000000" }),
         row(2, "bob/Trips/b.heic"),
-        row(3, "alice/locked.jpg"),
         // Shadowed by the shared folder mounted at the same place in Alice's files.
         row(4, "alice/Shared with me/Trips/c.jpg"),
         row(5, "carol/d.jpg", { rootId: 9 }),
@@ -184,7 +171,7 @@ describe("GET /api/v1/photos", () => {
 });
 
 describe("GET /api/v1/photos/details", () => {
-  it("answers a readable file's details from its index row", async () => {
+  it("answers an in-scope file's details from its index row", async () => {
     const { app, photoDetails } = buildApp();
 
     const res = await app.request("/api/v1/photos/details?path=/Shared%20with%20me/Trips/b.jpg");
@@ -194,15 +181,12 @@ describe("GET /api/v1/photos/details", () => {
     expect(photoDetails).toHaveBeenCalledWith(1, "bob/Trips/b.jpg");
   });
 
-  it("is not found when the file cannot be read, is out of scope or not indexed", async () => {
-    const unreadable = buildApp({ unreadable: ["/a.jpg"] });
-    expect((await unreadable.app.request("/api/v1/photos/details?path=/a.jpg")).status).toBe(404);
-    expect(unreadable.photoDetails).not.toHaveBeenCalled();
-
+  it("is not found when the file is out of scope or not indexed", async () => {
     const outOfScope = buildApp({
       scopes: [{ rootName: "other", fsPrefix: "/alice", virtualPrefix: "/" }],
     });
     expect((await outOfScope.app.request("/api/v1/photos/details?path=/a.jpg")).status).toBe(404);
+    expect(outOfScope.photoDetails).not.toHaveBeenCalled();
 
     const unindexed = buildApp({ scopes: null });
     expect((await unindexed.app.request("/api/v1/photos/details?path=/a.jpg")).status).toBe(404);

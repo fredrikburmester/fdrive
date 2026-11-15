@@ -1000,7 +1000,6 @@ export async function composeApp(
       registerPhotoRoutes(groups, {
         indexQueries,
         resolver: scopeResolver,
-        identities: repos.identities,
         trashPathForStorage: (storage) => {
           const settings = trashSettingsForStorage(storage);
           return settings?.enabled === true ? settings.path : null;
