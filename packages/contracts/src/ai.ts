@@ -33,6 +33,13 @@ export const AiSettings = z.object({
   /** Required for `openai_compatible`, e.g. `http://ollama:11434/v1`; always `null` for `anthropic`. */
   baseUrl: HttpUrl.nullable(),
   hasApiKey: z.boolean(),
+  /**
+   * Whether TypeSafe's Jev model assists Organize: a quick pass before the run
+   * marking which names say little, and a second opinion on every suggestion
+   * after it. Needs its own key; the provider above still does the organizing.
+   */
+  assist: z.boolean(),
+  hasAssistKey: z.boolean(),
 });
 
 export type AiSettings = z.infer<typeof AiSettings>;
@@ -51,6 +58,9 @@ export const AiSettingsUpdateRequest = z
      * so a key is never forwarded to an address it was not entered for.
      */
     apiKey: z.string().trim().min(1).max(4096).nullable().optional(),
+    assist: z.boolean(),
+    /** Omit to keep the saved TypeSafe key, `null` to remove it, or a new key. */
+    assistApiKey: z.string().trim().min(1).max(4096).nullable().optional(),
   })
   .refine((value) => value.provider !== "openai_compatible" || value.baseUrl !== null, {
     message: "an OpenAI-compatible provider needs a base URL",
@@ -83,6 +93,8 @@ export const AiStatusResponse = z.object({
   provider: AiProvider.nullable(),
   organize: z.boolean(),
   chat: z.boolean(),
+  /** Whether an organize run also sends names and folder names to TypeSafe. */
+  assist: z.boolean(),
 });
 
 export type AiStatusResponse = z.infer<typeof AiStatusResponse>;
@@ -134,6 +146,13 @@ export const OrganizeSuggestion = z.object({
   newFolder: z.boolean(),
   /** Something already exists at `target`, or another suggestion claims it; applying would fail. */
   conflict: z.boolean(),
+  /**
+   * The assist judged this destination a poor fit for the item. Absent when
+   * the assist is off or could not be reached, so it never turns an
+   * unavailable second opinion into a warning. Starts the suggestion
+   * unchecked in the review; nothing else about the move changes.
+   */
+  uncertain: z.boolean().optional(),
 });
 
 export type OrganizeSuggestion = z.infer<typeof OrganizeSuggestion>;

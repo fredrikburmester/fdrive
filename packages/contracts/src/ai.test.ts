@@ -20,6 +20,7 @@ const update = {
   revision: 0,
   organize: true,
   chat: true,
+  assist: false,
   provider: "anthropic",
   model: "claude-opus-5",
   baseUrl: null,
@@ -64,17 +65,30 @@ describe("AiSettingsUpdateRequest", () => {
     ).toBe(false);
     expect(AiSettingsUpdateRequest.safeParse({ ...update, hasApiKey: true }).success).toBe(false);
   });
+
+  it("carries the TypeSafe key separately, and needs the assist flag", () => {
+    expect(
+      AiSettingsUpdateRequest.parse({ ...update, assistApiKey: "  ts-1  " }).assistApiKey,
+    ).toBe("ts-1");
+    expect(
+      AiSettingsUpdateRequest.parse({ ...update, assistApiKey: null }).assistApiKey,
+    ).toBeNull();
+    expect(AiSettingsUpdateRequest.parse(update).assistApiKey).toBeUndefined();
+    expect(AiSettingsUpdateRequest.safeParse({ ...update, assistApiKey: " " }).success).toBe(false);
+    const { assist: _assist, ...withoutAssist } = update;
+    expect(AiSettingsUpdateRequest.safeParse(withoutAssist).success).toBe(false);
+  });
 });
 
 describe("AI responses", () => {
   it("never carries a key, only whether one is saved", () => {
-    const settings = { ...update, hasApiKey: true };
-    expect(AiSettings.parse({ ...settings, apiKey: "secret" })).toEqual(settings);
-    expect(AiStatusResponse.parse({ provider: null, organize: false, chat: false })).toEqual({
-      provider: null,
-      organize: false,
-      chat: false,
-    });
+    const settings = { ...update, hasApiKey: true, hasAssistKey: true };
+    expect(AiSettings.parse({ ...settings, apiKey: "secret", assistApiKey: "secret" })).toEqual(
+      settings,
+    );
+    expect(
+      AiStatusResponse.parse({ provider: null, organize: false, chat: false, assist: false }),
+    ).toEqual({ provider: null, organize: false, chat: false, assist: false });
     expect(DEFAULT_AI_MODEL.anthropic).toBe("claude-opus-5");
   });
 });

@@ -50,6 +50,12 @@ describe("withDestination", () => {
     expect(withDestination(original, "/")).toMatchObject({ target: "/a.pdf" });
     expect(withDestination(original, "/Finance/New")).toBe(original);
   });
+
+  it("drops the assist's doubt, since the person chose the new folder themselves", () => {
+    const doubted = suggestion("/inbox/a.pdf", "/Photos", { uncertain: true });
+
+    expect(withDestination(doubted, "/Finance")).not.toHaveProperty("uncertain");
+  });
 });
 
 describe("groupSuggestions", () => {
@@ -82,6 +88,20 @@ describe("checked moves", () => {
 
   it("starts with every suggestion checked except conflicts", () => {
     expect([...initiallyChecked(proposal)]).toEqual(["/inbox/a.pdf"]);
+  });
+
+  it("also leaves the destinations the assist doubted unchecked", () => {
+    const doubted: OrganizeProposal = {
+      summary: "",
+      suggestions: [
+        suggestion("/inbox/a.pdf", "/Finance"),
+        suggestion("/inbox/b.pdf", "/Photos", { uncertain: true }),
+        suggestion("/inbox/c.pdf", "/Docs", { uncertain: false }),
+      ],
+      unchanged: [],
+    };
+
+    expect([...initiallyChecked(doubted)]).toEqual(["/inbox/a.pdf", "/inbox/c.pdf"]);
   });
 
   it("builds a request that creates folders, or nothing when none are checked", () => {

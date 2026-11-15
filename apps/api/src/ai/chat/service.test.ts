@@ -20,6 +20,8 @@ const CONFIG: ResolvedAiConfig = {
   apiKey: "sk",
   organize: true,
   chat: true,
+  assist: false,
+  assistApiKey: null,
 };
 const HOME_SCOPES: readonly Scope[] = [
   { rootName: "files", fsPrefix: "/alice", virtualPrefix: "/" },

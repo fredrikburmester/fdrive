@@ -17,6 +17,12 @@ export interface AiDraft {
   readonly apiKey: string;
   /** Remove the saved key on save. */
   readonly clearKey: boolean;
+  /** Whether TypeSafe assists Organize. */
+  readonly assist: boolean;
+  /** A new TypeSafe key to save; empty keeps the saved one. */
+  readonly assistApiKey: string;
+  /** Remove the saved TypeSafe key on save. */
+  readonly clearAssistKey: boolean;
 }
 
 export const AI_PROVIDER_LABELS: Record<AiProvider, string> = {
@@ -33,6 +39,9 @@ export function draftFrom(settings: AiSettings): AiDraft {
     baseUrl: settings.baseUrl ?? "",
     apiKey: "",
     clearKey: false,
+    assist: settings.assist,
+    assistApiKey: "",
+    clearAssistKey: false,
   };
 }
 
@@ -62,6 +71,12 @@ function keyAfterSave(draft: AiDraft, saved: AiSettings): boolean {
   return saved.hasApiKey && !draft.clearKey && sameAddress(draft, saved);
 }
 
+/** Whether a TypeSafe key will be available after saving. It has one address, so it is never dropped by an edit. */
+function assistKeyAfterSave(draft: AiDraft, saved: AiSettings): boolean {
+  if (draft.assistApiKey.trim() !== "") return true;
+  return saved.hasAssistKey && !draft.clearAssistKey;
+}
+
 export type AiDraftResult =
   | { readonly ok: true; readonly request: AiSettingsUpdateRequest }
   | { readonly ok: false; readonly errors: readonly string[] };
@@ -79,8 +94,11 @@ export function requestFrom(draft: AiDraft, saved: AiSettings): AiDraftResult {
     !keyAfterSave(draft, saved)
   )
     errors.push("Enter an Anthropic API key to turn Organize or Chat on.");
+  if (draft.assist && !assistKeyAfterSave(draft, saved))
+    errors.push("Enter a TypeSafe API key to turn the assist on.");
   if (errors.length > 0) return { ok: false, errors };
   const apiKey = draft.apiKey.trim();
+  const assistApiKey = draft.assistApiKey.trim();
   return {
     ok: true,
     request: {
@@ -91,6 +109,12 @@ export function requestFrom(draft: AiDraft, saved: AiSettings): AiDraftResult {
       model,
       baseUrl: draft.provider === "anthropic" ? null : baseUrl,
       ...(apiKey !== "" ? { apiKey } : draft.clearKey ? { apiKey: null } : {}),
+      assist: draft.assist,
+      ...(assistApiKey !== ""
+        ? { assistApiKey }
+        : draft.clearAssistKey
+          ? { assistApiKey: null }
+          : {}),
     },
   };
 }

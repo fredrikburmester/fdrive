@@ -32,6 +32,8 @@ describe("createAiModel", () => {
       apiKey: "sk-ant-1",
       organize: true,
       chat: true,
+      assist: false,
+      assistApiKey: null,
     });
 
     expect(await model.ping(new AbortController().signal)).toEqual({
@@ -51,6 +53,8 @@ describe("createAiModel", () => {
       apiKey: null,
       organize: true,
       chat: true,
+      assist: false,
+      assistApiKey: null,
     });
     expect(model.ping).toBeTypeOf("function");
   });
@@ -65,6 +69,8 @@ describe("createAiModel", () => {
         apiKey: "sk-local",
         organize: true,
         chat: true,
+        assist: false,
+        assistApiKey: null,
       },
       { fetch: fetchImpl },
     );
@@ -90,6 +96,8 @@ describe("createAiModel", () => {
       apiKey: null,
       organize: true,
       chat: true,
+      assist: false,
+      assistApiKey: null,
     });
 
     expect((await model.ping(new AbortController().signal)).ok).toBe(false);

@@ -23,6 +23,8 @@ interface StoredRow {
   model: string;
   baseUrl: string | null;
   apiKey: string | null;
+  assist?: boolean;
+  assistApiKey?: string | null;
 }
 
 function sealKey(key: string, context: string, master: Uint8Array = MASTER): string {
@@ -58,6 +60,7 @@ function anthropicUpdate(
     revision: 0,
     organize: false,
     chat: false,
+    assist: false,
     provider: "anthropic",
     model: "claude-opus-5",
     baseUrl: null,
@@ -70,6 +73,7 @@ function ollamaUpdate(overrides: Partial<AiSettingsUpdateRequest> = {}): AiSetti
     revision: 0,
     organize: true,
     chat: true,
+    assist: false,
     provider: "openai_compatible",
     model: "llama3",
     baseUrl: OLLAMA,
@@ -111,6 +115,8 @@ describe("AI settings service", () => {
       model: DEFAULT_AI_MODEL.anthropic,
       baseUrl: null,
       hasApiKey: false,
+      assist: false,
+      hasAssistKey: false,
     });
     expect(await service.resolved()).toBeNull();
     expect(await service.saved()).toBeNull();
@@ -127,6 +133,8 @@ describe("AI settings service", () => {
       model: "claude-opus-5",
       baseUrl: null,
       hasApiKey: true,
+      assist: false,
+      hasAssistKey: false,
     });
     expect(JSON.stringify(view)).not.toContain("sk-ant-1");
     expect(settings.compareAndSet).toHaveBeenCalledWith(AI_SETTINGS_KEY, null, row());
@@ -139,6 +147,8 @@ describe("AI settings service", () => {
       apiKey: "sk-ant-1",
       organize: true,
       chat: false,
+      assist: false,
+      assistApiKey: null,
     });
   });
 
@@ -206,6 +216,8 @@ describe("AI settings service", () => {
         apiKey: null,
         organize: true,
         chat: true,
+        assist: false,
+        assistApiKey: null,
       });
     });
 
@@ -270,6 +282,8 @@ describe("AI settings service", () => {
         apiKey: "sk-ant-1",
         organize: false,
         chat: false,
+        assist: false,
+        assistApiKey: null,
       });
     });
 
@@ -307,6 +321,8 @@ describe("AI settings service", () => {
         apiKey: null,
         organize: true,
         chat: true,
+        assist: false,
+        assistApiKey: null,
       });
     });
 
@@ -333,6 +349,8 @@ describe("AI settings service", () => {
         apiKey: null,
         organize: true,
         chat: true,
+        assist: false,
+        assistApiKey: null,
       });
     });
 
@@ -362,6 +380,8 @@ describe("AI settings service", () => {
           model: "llama3",
           chat: true,
           apiKeyChanged: true,
+          assist: false,
+          assistKeyChanged: false,
         },
       ],
       [
@@ -374,6 +394,8 @@ describe("AI settings service", () => {
           model: "llama3",
           chat: true,
           apiKeyChanged: false,
+          assist: false,
+          assistKeyChanged: false,
         },
       ],
       [
@@ -386,9 +408,93 @@ describe("AI settings service", () => {
           model: "llama3",
           chat: true,
           apiKeyChanged: true,
+          assist: false,
+          assistKeyChanged: false,
         },
       ],
     ]);
     expect(JSON.stringify(eventLog.record.mock.calls)).not.toContain("sk-local");
+  });
+
+  describe("the TypeSafe assist key", () => {
+    it("seals it under its own context, so the provider key never opens it", async () => {
+      const { service, row } = setup();
+
+      await service.update(anthropicUpdate({ apiKey: "sk-ant-1", assistApiKey: "ts-1" }));
+
+      const sealed = row()?.assistApiKey ?? "";
+      expect(openKey(sealed, "ai-assist-key:typesafe")).toBe("ts-1");
+      expect(() => openKey(sealed, "ai-api-key:anthropic:")).toThrow();
+      expect(await service.configuration()).toMatchObject({ hasAssistKey: true, assist: false });
+    });
+
+    it("survives a provider change that drops the provider's own key", async () => {
+      const { service } = setup();
+      await service.update(anthropicUpdate({ apiKey: "sk-ant-1", assistApiKey: "ts-1" }));
+
+      const view = await service.update(ollamaUpdate({ revision: 1 }));
+
+      expect(view).toMatchObject({ hasApiKey: false, hasAssistKey: true });
+      expect(await service.resolved()).toMatchObject({ assistApiKey: "ts-1" });
+    });
+
+    it("clears it when null is sent", async () => {
+      const { service, row } = setup();
+      await service.update(anthropicUpdate({ apiKey: "sk-ant-1", assistApiKey: "ts-1" }));
+
+      const view = await service.update(
+        anthropicUpdate({ revision: 1, apiKey: "sk-ant-1", assistApiKey: null }),
+      );
+
+      expect(view.hasAssistKey).toBe(false);
+      expect(row()?.assistApiKey).toBeNull();
+    });
+
+    it("refuses to turn the assist on without one", async () => {
+      const { service, settings } = setup();
+
+      const error = await rejection(
+        service.update(anthropicUpdate({ apiKey: "sk-ant-1", assist: true })),
+      );
+
+      expect(error.kind).toBe("bad_request");
+      expect(error.message).toBe("Enter a TypeSafe API key before turning the assist on.");
+      expect(settings.compareAndSet).not.toHaveBeenCalled();
+    });
+
+    it("treats a key that no longer opens as missing", async () => {
+      const { service } = setup({
+        initial: {
+          revision: 1,
+          organize: true,
+          chat: false,
+          provider: "anthropic",
+          model: DEFAULT_AI_MODEL.anthropic,
+          baseUrl: null,
+          apiKey: sealKey("sk-ant-1", "ai-api-key:anthropic:"),
+          assist: true,
+          assistApiKey: sealKey("ts-1", "ai-assist-key:typesafe", OTHER_MASTER),
+        },
+      });
+
+      expect(await service.configuration()).toMatchObject({ assist: true, hasAssistKey: false });
+      expect(await service.resolved()).toMatchObject({ assist: true, assistApiKey: null });
+    });
+
+    it("defaults to off for rows saved before the assist existed", async () => {
+      const { service } = setup({
+        initial: {
+          revision: 1,
+          organize: true,
+          chat: true,
+          provider: "anthropic",
+          model: DEFAULT_AI_MODEL.anthropic,
+          baseUrl: null,
+          apiKey: sealKey("sk-ant-1", "ai-api-key:anthropic:"),
+        },
+      });
+
+      expect(await service.configuration()).toMatchObject({ assist: false, hasAssistKey: false });
+    });
   });
 });

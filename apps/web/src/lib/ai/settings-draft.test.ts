@@ -17,6 +17,8 @@ const anthropic: AiSettings = {
   model: "claude-opus-5",
   baseUrl: null,
   hasApiKey: true,
+  assist: false,
+  hasAssistKey: false,
 };
 
 const ollama: AiSettings = {
@@ -27,6 +29,8 @@ const ollama: AiSettings = {
   model: "qwen3:32b",
   baseUrl: "http://ollama:11434/v1",
   hasApiKey: false,
+  assist: false,
+  hasAssistKey: false,
 };
 
 describe("draftFrom and isDirty", () => {
@@ -40,6 +44,9 @@ describe("draftFrom and isDirty", () => {
       baseUrl: "http://ollama:11434/v1",
       apiKey: "",
       clearKey: false,
+      assist: false,
+      assistApiKey: "",
+      clearAssistKey: false,
     });
     expect(draftFrom(anthropic).baseUrl).toBe("");
     expect(isDirty(draft, ollama)).toBe(false);
@@ -78,6 +85,7 @@ describe("requestFrom", () => {
           provider: "anthropic",
           model: "claude-sonnet-5",
           baseUrl: null,
+          assist: false,
         },
       },
     );
@@ -93,6 +101,46 @@ describe("requestFrom", () => {
     ).toMatchObject({
       request: { apiKey: null },
     });
+  });
+
+  it("sends the TypeSafe key separately from the provider's", () => {
+    const draft = draftFrom(anthropic);
+
+    expect(
+      requestFrom({ ...draft, assistApiKey: " ts-1 ", assist: true }, anthropic),
+    ).toMatchObject({ request: { assist: true, assistApiKey: "ts-1" } });
+    expect(requestFrom({ ...draft, assist: false, clearAssistKey: true }, anthropic)).toMatchObject(
+      { request: { assist: false, assistApiKey: null } },
+    );
+  });
+
+  it("refuses to turn the assist on without a key, and allows it with a saved one", () => {
+    const draft = draftFrom(anthropic);
+
+    expect(requestFrom({ ...draft, assist: true }, anthropic)).toEqual({
+      ok: false,
+      errors: ["Enter a TypeSafe API key to turn the assist on."],
+    });
+
+    const saved: AiSettings = { ...anthropic, hasAssistKey: true };
+    expect(requestFrom({ ...draftFrom(saved), assist: true }, saved)).toMatchObject({ ok: true });
+    expect(
+      requestFrom({ ...draftFrom(saved), assist: true, clearAssistKey: true }, saved),
+    ).toMatchObject({ ok: false });
+  });
+
+  it("keeps the TypeSafe key through a provider change that drops the provider's", () => {
+    const saved: AiSettings = { ...anthropic, assist: true, hasAssistKey: true };
+    const moved = withProvider(draftFrom(saved), "openai_compatible");
+
+    // An OpenAI-compatible server names its own model, so the switch leaves it blank.
+    const result = requestFrom(
+      { ...moved, model: "qwen3:32b", baseUrl: "http://ollama:11434/v1" },
+      saved,
+    );
+
+    expect(result).toMatchObject({ ok: true, request: { assist: true } });
+    expect(result.ok && "assistApiKey" in result.request).toBe(false);
   });
 
   it("explains what blocks saving", () => {
@@ -119,6 +167,7 @@ describe("requestFrom", () => {
     ).toEqual({
       ok: true,
       request: {
+        assist: false,
         revision: 1,
         organize: true,
         chat: true,

@@ -102,6 +102,8 @@ export interface OrganizeSheetProps {
   /** The session to show; the sheet is open while it has one that is open. */
   organize: OrganizeController;
   provider: AiProvider | null;
+  /** Whether TypeSafe also sees the names, so the sheet can say so. */
+  assist: boolean;
   /** Called with the new paths once items moved, so the browser can update its selection. */
   onMoved?: (targets: readonly string[]) => void;
 }
@@ -112,7 +114,7 @@ export interface OrganizeSheetProps {
  * checked. A toast offers to undo the moves. Closing the sheet keeps a run
  * or a review going; the session it shows lives in `useOrganize`.
  */
-export function OrganizeSheet({ organize, provider, onMoved }: OrganizeSheetProps) {
+export function OrganizeSheet({ organize, provider, assist, onMoved }: OrganizeSheetProps) {
   const moveMany = useMoveMany();
   const { session } = organize;
 
@@ -163,6 +165,7 @@ export function OrganizeSheet({ organize, provider, onMoved }: OrganizeSheetProp
             session={session}
             organize={organize}
             provider={provider}
+            assist={assist}
             applying={moveMany.isPending}
             onApply={apply}
           />
@@ -176,11 +179,12 @@ interface BodyProps {
   session: OrganizeSession;
   organize: OrganizeController;
   provider: AiProvider | null;
+  assist: boolean;
   applying: boolean;
   onApply: (request: MoveManyRequest) => Promise<MoveOutcome | null>;
 }
 
-function OrganizeSheetBody({ session, organize, provider, applying, onApply }: BodyProps) {
+function OrganizeSheetBody({ session, organize, provider, assist, applying, onApply }: BodyProps) {
   const { entries, instructions, share, runId } = session;
   const { run, running } = organize;
   const state = run?.state;
@@ -259,6 +263,9 @@ function OrganizeSheetBody({ session, organize, provider, applying, onApply }: B
                     <FieldDescription>
                       The selected items' names, sizes and dates, and the names of folders the
                       assistant looks through, are always sent to {providerLabel(provider)}.
+                      {assist
+                        ? " Those names, and the folders they would move to, also go to TypeSafe, which reads them before and after the run. It never sees file contents."
+                        : ""}
                     </FieldDescription>
                   </Field>
                 </FieldGroup>
@@ -522,6 +529,11 @@ function Review({
                               {suggestion.conflict && failure === undefined ? (
                                 <p className="text-xs text-destructive">
                                   Something with this name is already there.
+                                </p>
+                              ) : null}
+                              {suggestion.uncertain === true && failure === undefined ? (
+                                <p className="text-xs text-muted-foreground">
+                                  A second look was not sure this belongs here.
                                 </p>
                               ) : null}
                               {failure !== undefined ? (
