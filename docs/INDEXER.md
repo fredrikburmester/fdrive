@@ -208,7 +208,7 @@ with its own rules.
 
 Three paths lead to the same per-file processing, fastest first. Every change ends up in the
 change journal, `idx.changes`: one numbered record of file changes that other parts of fdrive
-read from their own position (see the [change journal plan](plans/CHANGE-JOURNAL.md)).
+read from their own position (see [the change journal](#the-change-journal)).
 
 1. **The change journal.** fdrive's API writes the files folder, apart from OCR and the
    host's own tools. After each change it makes (an upload, a move or rename, a copy, a
@@ -247,9 +247,8 @@ read from their own position (see the [change journal plan](plans/CHANGE-JOURNAL
    position it scans at start (below), which covers what came before. It passes over
    `watcher` and `scan` rows, which it wrote itself after applying them, and applies `api`
    and `ocr` rows. While indexing is off its position moves past rows without applying them
-   (turning it on starts a scan). The API drops rows older than 30 days; when rows after the
-   indexer's position were dropped before it read them, it scans the root and continues from
-   the end.
+   (turning it on starts a scan). When rows after its position were pruned before it read
+   them ([gaps](#retention-and-gaps)), it scans the root and continues from the end.
 2. **The watcher** (inotify, Linux only) sees changes made on the disk directly, for
    example over SMB, after a 2-second debounce. It sees fdrive's own changes too; whichever
    comes second finds the row current and does nothing, apart from stamping it when the
@@ -385,6 +384,77 @@ A scan deletes the rows its completed walk did not find, and their chunks with t
 compares the walk with the rows it read at the start and deletes the difference in batches,
 so a tree with no deletions writes nothing. Rows the watcher or a worker wrote after the scan
 started are left alone. Removed files leave no row behind: the index holds what is on disk.
+
+## The change journal
+
+`idx.changes` is one numbered record of every change to the files folder
+([schema](../packages/db/src/schema/idx.ts), [repository](../packages/db/src/repos/changes.ts)).
+Each part of fdrive that reacts to changes reads it from its own position: the indexer
+([how changes arrive](#how-changes-arrive)), the API ([below](#the-apis-reader)) and the Mac
+app's [change feed](MACOS.md#change-feed). A row says where to look again, not what the file now
+is; a reader reads the disk or the index for that. Rows stay small, and a reader that falls
+behind resyncs from what is there now.
+
+| Column | Meaning |
+| --- | --- |
+| `id` | The position, from one sequence. Rows are read in this order. |
+| `root_id` | The index root. |
+| `path` | Root-relative, `/`-separated, no leading slash (`alice/docs/a.pdf`), as `idx.files.path`. |
+| `target_path` | Set for a move: `path` moved there. Without it, look at `path` again: a file, a folder, or nothing any more. |
+| `source` | `api`, `watcher`, `scan` or `ocr`, checked by a constraint. |
+| `sha256`, `size`, `mtime_ns`, `inode`, `ctime_ns` | An upload's content hint; a file move's row has all but the digest ([stamps](#stamps)). Only `api` rows carry them. |
+| `previous_ctime_ns` | A file move's: the file's change time just before the rename. |
+| `created_at` | When the writing transaction started. Pruning uses it. |
+
+`idx.change_cursors` holds each reader's position per root (consumers `indexer` and `api`).
+`idx.change_epoch` holds one random `epoch`, created the first time a reader asks. A reader that
+hands positions to clients outside the database (the Mac feed's anchors, browsers' event ids)
+qualifies them with it, since positions start again at 1 after a restore.
+
+### Writing the journal
+
+- **Ordered commits.** A writer appends in one transaction that first takes
+  `pg_advisory_xact_lock(hashtextextended('idx.changes', 0))`, then inserts, then sends
+  `pg_notify('idx_changes', <root name>)`, which Postgres delivers on commit. Rows therefore
+  commit in position order: a reader that sees position N has seen every row below it, and
+  reading `id > position` never skips a row that committed late. `createChangeJournal`,
+  `db::append_changes` in the indexer and `journal_change` in OCR all take the lock; any new
+  writer must.
+- **Never fail the caller.** A row is a hint, so a failed write is logged and the change that
+  caused it goes on; the watcher or the next scan finds it.
+- **The API** records its changes per tick and writes them at most 1,000 rows per transaction,
+  one write after another, so rows keep the order the changes happened in
+  ([change queue](../apps/api/src/local/change-queue.ts)).
+- **The indexer** journals a change under the source of the thread that applied it,
+  `watcher` or `scan` (`journal::with_source`). The journal's reader, maintenance passes and
+  retries run without one and write nothing, so applying a row never writes another.
+
+### Retention and gaps
+
+- The API's writer drops rows older than 30 days (`CHANGES_RETENTION`) before it appends. A
+  month covers a Mac that was off for a holiday or a reader that was down for long; rows are
+  about 150 bytes, so even a busy month stays in the tens of megabytes.
+- Pruning drops a prefix of positions and never the newest row, so once anything was written,
+  the oldest row left shows what is gone.
+- A reader at position P has missed rows when `P < oldest - 1`. The test can report a gap that
+  is not there (a position whose transaction rolled back) but never misses one. `read` looks
+  up `oldest` after the rows, so a prune between the two cannot hide a gap.
+- On a gap a reader rebuilds from what is there now and continues from the newest position: the
+  indexer scans the root, the API's reader skips to the end, and browsers and the Mac feed get
+  `resync`.
+
+All three tables are `transient` in [the backup registry](../packages/backup/src/registry.ts):
+a restore rebuilds the index from the disk, so no reader could resume from a position taken
+before it, and a month of rows would grow every backup for nothing. After a restore positions
+start again at 1 under a new epoch, and the indexer starts at the end.
+
+### Rules for every reader
+
+- Read rows with `id > position`, in order, and save the position after acting on them.
+- Treat a row as "look here again" and act on what is there now. The same change can appear
+  twice, from the API and from the watcher, so duplicates must be harmless.
+- Check for a gap on every read and resync when there is one.
+- Start a new reader at the newest position; what came before is in the current state.
 
 ## The API's reader
 

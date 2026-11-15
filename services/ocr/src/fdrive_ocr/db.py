@@ -119,7 +119,7 @@ def record_ocr_log(
 CHANGES_CHANNEL = "idx_changes"
 
 #: Taken before inserting into the journal and held until commit, by every writer in every
-#: language, so positions commit in order (docs/plans/CHANGE-JOURNAL.md).
+#: language, so positions commit in order (docs/INDEXER.md#the-change-journal).
 JOURNAL_LOCK = "SELECT pg_advisory_xact_lock(hashtextextended('idx.changes', 0))"
 
 

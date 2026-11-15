@@ -94,7 +94,7 @@ export function changedPaths(
  * scopes do (a folder shared or unshared), and either answers `resync`, as do an unreadable anchor, one past
  * the journal's end and a gap. Without an anchor the answer is a `resync`
  * from the journal's end, so a new client checks its folders once and goes
- * on from there. See docs/MACOS.md and docs/plans/CHANGE-JOURNAL.md.
+ * on from there. See docs/MACOS.md#change-feed and docs/INDEXER.md#the-change-journal.
  */
 export function createDesktopChanges(deps: DesktopChangesDeps) {
   const pageSize = deps.pageSize ?? DESKTOP_CHANGES_PAGE;

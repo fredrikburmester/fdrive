@@ -43,9 +43,9 @@ refuses one without the other (`FeaturesUpdateRequest`), switching Searchable PD
 full-text search on, and switching full-text search off switches Searchable PDFs off.
 
 New PDFs wait for the next pass, as they did when the service walked the folder. It does not
-follow the [change journal](plans/CHANGE-JOURNAL.md): a journal row for an upload is written
-before the indexer has read the file, so OCR would have to wait for the index anyway, and the
-schedule exists to keep this CPU-heavy work at night.
+follow the [change journal](INDEXER.md#the-change-journal): a journal row for an upload is
+written before the indexer has read the file, so OCR would have to wait for the index anyway,
+and the schedule exists to keep this CPU-heavy work at night.
 
 ### Deciding
 
@@ -111,9 +111,9 @@ again to find the new text layer. After each replace, and after each restore (se
 change journal, `idx.changes`, with source `ocr`, and sends `NOTIFY idx_changes` with the
 root's name. It does so in one transaction that first takes the journal's advisory lock, as
 the API does for its own changes (see [how changes arrive](INDEXER.md#how-changes-arrive) and
-the [change journal](plans/CHANGE-JOURNAL.md)), so the indexer reads the file as soon as it
-is notified rather than when its watcher (unreliable on some mounts) or its scan (hourly by
-default) gets to it. The row has no content hint, since the bytes are new. The write is
+the [change journal](INDEXER.md#the-change-journal)), so the indexer reads the file as soon
+as it is notified rather than when its watcher (unreliable on some mounts) or its scan (hourly
+by default) gets to it. The row has no content hint, since the bytes are new. The write is
 `db.journal_change`. A failure is logged as `could not tell the indexer about <path>` and
 never fails the file or the restore: the watcher and the scan still find it. Nothing is
 journaled for a PDF left untouched.
