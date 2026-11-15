@@ -41,7 +41,6 @@ services:
     profiles: [index]
     environment:
       DATABASE_URL: postgres://fdrive:fdrive-dev@db:5432/fdrive
-      INDEX_ROOTS: files=/data
       # The three units of the ml service below.
       TIKA_URL: http://ml:8080/extract
       EMBED_URL: http://ml:8080/text
@@ -98,7 +97,6 @@ services:
     profiles: [index]
     environment:
       DATABASE_URL: postgres://fdrive:fdrive-dev@db:5432/fdrive
-      INDEX_ROOTS: files=/data
       OCR_PORT: "8011"
       STATE_DIR: /state
       OCR_RUN_ON_START: "false"

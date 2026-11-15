@@ -54,7 +54,6 @@ function stubIndexQueries(): IndexQueries {
     contentAt: async () => [],
     listFiles: async () => ({ total: 0, files: [] }),
     filesBySha256: async () => fail("filesBySha256"),
-    rootIdsByName: async () => ({ files: 1 }),
     stats: async () => ({ filesTracked: 0, byTextStatus: [], chunks: 0, chunksEmbedded: 0 }),
     statsForFileIds: async () => ({ chunks: 0, chunksEmbedded: 0 }),
     fileTextPrefix: async () => "",
@@ -183,11 +182,9 @@ async function startHarness(mode: "read" | "organize"): Promise<Harness> {
     indexQueries: stubIndexQueries(),
     searchService: stubSearchService(),
     scopeResolver: {
-      verifiedIndexScopes: async () => ({
-        available: true,
-        scopes: [{ rootName: "files", fsPrefix: "/alice", virtualPrefix: "/" }],
-      }),
+      scopesFor: async () => [{ fsPrefix: "/alice", virtualPrefix: "/" }],
     },
+    indexed: async () => true,
     publicUrl: async () => "https://fdrive.example.com",
     indexerClient: createIndexerExtractClient({
       baseUrl: "http://indexer.test",

@@ -17,8 +17,8 @@ export type SettingSource = z.infer<typeof SettingSource>;
 /** Shape of `GET /api/v1/system/indexer`'s `health` field, mirrored from the indexer's `GET /health`. */
 export const IndexerHealth = z.object({
   ok: z.boolean(),
-  roots: z.array(z.string()),
-  watcher: z.record(z.string(), z.boolean()),
+  /** Whether the file watcher is running on the files folder. */
+  watcher: z.boolean(),
   embedOk: z.boolean(),
   schemaVersion: z.number().int().nullable(),
 });
@@ -26,7 +26,7 @@ export const IndexerHealth = z.object({
 export type IndexerHealth = z.infer<typeof IndexerHealth>;
 
 /**
- * One root's most recent completed scan, mirrored from the indexer's
+ * The most recent completed scan, mirrored from the indexer's
  * `idx.scans`. The indexer is Python and emits `datetime.isoformat()`, which
  * renders UTC as a `+00:00` offset rather than a `Z` suffix, so both
  * timestamps must accept an explicit offset.
@@ -41,17 +41,6 @@ export const IndexerLastScan = z.object({
 });
 
 export type IndexerLastScan = z.infer<typeof IndexerLastScan>;
-
-/** Per-root counts, mirrored from one entry of the indexer's `GET /stats`'s `roots` array. */
-export const IndexerRootStats = z.object({
-  root: z.string(),
-  countsByStatus: z.record(z.string(), z.number().int()),
-  chunks: z.number().int(),
-  chunksEmbedded: z.number().int(),
-  lastScan: IndexerLastScan.nullable(),
-});
-
-export type IndexerRootStats = z.infer<typeof IndexerRootStats>;
 
 /** One recent extraction failure, mirrored from the indexer's `errors_sample`. */
 export const IndexerErrorSample = z.object({
@@ -102,21 +91,15 @@ export const ImageEmbeddingClearJob = IndexerThumbnailRebuildJob;
 
 export type ImageEmbeddingClearJob = z.infer<typeof ImageEmbeddingClearJob>;
 
-/** Clear all roots, one root, or an exact file or directory subtree. */
-export const IndexerClearRequest = z
-  .strictObject({
-    root: z.string().min(1).regex(/\S/).optional(),
-    path: z
-      .string()
-      .min(1)
-      .regex(/\S/)
-      .refine((value) => !/(^|\/)\.\.(\/|$)|[\\\0]/.test(value), "invalid path")
-      .optional(),
-  })
-  .refine((value) => value.path === undefined || value.root !== undefined, {
-    message: "path requires root",
-    path: ["path"],
-  });
+/** Clear the whole index, or an exact file or directory subtree of the files folder. */
+export const IndexerClearRequest = z.strictObject({
+  path: z
+    .string()
+    .min(1)
+    .regex(/\S/)
+    .refine((value) => !/(^|\/)\.\.(\/|$)|[\\\0]/.test(value), "invalid path")
+    .optional(),
+});
 
 export type IndexerClearRequest = z.infer<typeof IndexerClearRequest>;
 
@@ -127,7 +110,11 @@ export type IndexerClearResponse = z.infer<typeof IndexerClearResponse>;
 
 /** Shape of `GET /api/v1/system/indexer`'s `stats` field, mirrored from the indexer's `GET /stats`. */
 export const IndexerStats = z.object({
-  roots: z.array(IndexerRootStats),
+  /** Files by `text_status`. */
+  countsByStatus: z.record(z.string(), z.number().int()),
+  chunks: z.number().int(),
+  chunksEmbedded: z.number().int(),
+  lastScan: IndexerLastScan.nullable(),
   thumbnails: z.number().int(),
   queueDepth: z.number().int(),
   errorsSample: z.array(IndexerErrorSample),
@@ -201,13 +188,12 @@ export type IndexerSettingsUpdateRequest = z.infer<typeof IndexerSettingsUpdateR
 
 /**
  * Body for `POST /api/v1/system/indexer/reindex`. `path` omitted marks the
- * whole root. `thumbnails: true` also starts a thumbnail-rebuild pass (see
+ * whole files folder. `thumbnails: true` also starts a thumbnail-rebuild pass (see
  * `IndexerThumbnailsRebuildRequest`) over the same scope after marking rows
  * pending; unlike the reindex itself, this is best-effort and not reported
  * back (it is silently skipped if a rebuild is already running).
  */
 export const IndexerReindexRequest = z.object({
-  root: z.string().min(1),
   path: z.string().min(1).optional(),
   thumbnails: z.boolean().optional(),
 });
@@ -223,16 +209,15 @@ export type IndexerActionResponse = z.infer<typeof IndexerActionResponse>;
 
 /**
  * Body for `POST /api/v1/system/indexer/thumbnails/rebuild` (and the legacy
- * `POST /api/v1/system/thumbnails/rebuild`, which always omits all three).
- * `root` omitted rebuilds every configured root; `path` omitted rebuilds the
- * whole root (a single file or directory subtree otherwise). `force: true`
+ * `POST /api/v1/system/thumbnails/rebuild`, which always omits both).
+ * `path` omitted rebuilds the whole files folder (a single file or directory
+ * subtree otherwise). `force: true`
  * deletes and rewrites thumbnails that already exist; without it, only
  * thumbnails missing on disk are generated. This is thumbnail-only: unlike
  * `IndexerReindexRequest`, text extraction, chunking, and embeddings are
  * never touched.
  */
 export const IndexerThumbnailsRebuildRequest = z.object({
-  root: z.string().min(1).optional(),
   path: z.string().min(1).optional(),
   force: z.boolean().optional(),
 });
@@ -267,7 +252,7 @@ export const SemanticStatus = z.object({
 
 export type SemanticStatus = z.infer<typeof SemanticStatus>;
 
-/** Aggregate index totals across every configured root, admin-wide (not identity-scoped). */
+/** Aggregate index totals, admin-wide (not identity-scoped). */
 export const SystemIndexTotals = z.object({
   files: z.number().int(),
   withText: z.number().int(),
@@ -281,7 +266,6 @@ export type SystemIndexTotals = z.infer<typeof SystemIndexTotals>;
 export const SystemSearchResponse = z.object({
   configured: z.boolean(),
   semantic: SemanticStatus,
-  roots: z.array(z.string()),
   index: SystemIndexTotals,
 });
 
@@ -289,13 +273,11 @@ export type SystemSearchResponse = z.infer<typeof SystemSearchResponse>;
 
 /**
  * Response for `POST /api/v1/system/search/reembed`. Today this proxies a
- * full re-extraction (the indexer's `/reindex` with no `path`, once per
- * root) rather than a narrower re-embed-only pass; `marked` sums every
- * root's marked-file count.
+ * full re-extraction (the indexer's `/reindex` with no `path`) rather than a
+ * narrower re-embed-only pass; `marked` is the marked-file count.
  */
 export const SystemReembedResponse = z.object({
   marked: z.number().int(),
-  roots: z.array(z.string()),
 });
 
 export type SystemReembedResponse = z.infer<typeof SystemReembedResponse>;

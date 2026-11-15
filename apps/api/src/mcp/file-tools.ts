@@ -316,11 +316,13 @@ export async function searchImages(
 ) {
   if (deps.imageSearchService === undefined)
     return { query: args.query, hits: [], unavailable: true };
-  const verified = await deps.scopeResolver.verifiedIndexScopes(principal.username);
+  const scopes = (await deps.indexed())
+    ? tokenScopes(principal, await deps.scopeResolver.scopesFor(principal.username))
+    : [];
   const response = await deps.imageSearchService.search({
     query: args.query,
     limit: args.limit ?? 20,
-    scopes: verified.available ? tokenScopes(principal, verified.scopes) : [],
+    scopes,
   });
   const publicUrl = await deps.publicUrl();
   return {

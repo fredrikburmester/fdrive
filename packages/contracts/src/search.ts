@@ -1,6 +1,5 @@
 import { z } from "zod";
 import { EntryKind, FsEntry } from "./fs.ts";
-import { IdentityScopeReason } from "./scopes.ts";
 
 /** A `[start, end)` character range to highlight within a snippet's text. */
 export const SearchHighlightRange = z.object({
@@ -46,9 +45,8 @@ export type SearchSections = z.infer<typeof SearchSections>;
 /**
  * The response to `GET /api/v1/search`. `degraded` is true when semantic
  * search could not run (the embedding service is unreachable) and results
- * are keyword-only. `unavailable` is true when the caller has no
- * index-backed scope at all (no configured index roots, or the identity's
- * home is not on one); `sections` is empty in that case. `partial`, when
+ * are keyword-only. `unavailable` is true when the files folder is not
+ * indexed or full-text search is off; `sections` is empty in that case. `partial`, when
  * present and true, means the response omits some matches that could not
  * be confirmed accessible (a live permission check reported "unavailable"
  * rather than granted or denied) or that the bounded internal fanout was
@@ -95,10 +93,10 @@ export const SearchStatusResponse = z.object({
   available: z.boolean(),
   semantic: z.boolean(),
   /**
-   * Why the active identity cannot use its index-backed scope. Omitted when
-   * the scope is available, including when search itself is turned off.
+   * `not_indexed` when no indexer is configured, which no waiting fixes.
+   * Omitted otherwise, including when search itself is turned off.
    */
-  reason: IdentityScopeReason.optional(),
+  reason: z.literal("not_indexed").optional(),
   /** Whether image-content search is on. */
   images: z.boolean(),
 });
@@ -125,7 +123,7 @@ export type ImageSearchHit = z.infer<typeof ImageSearchHit>;
 
 /**
  * The response to `GET /api/v1/search/images`. `unavailable` is true when
- * the caller has no verified index scope, image search is not configured, or
+ * the files folder is not indexed, image search is not configured, or
  * the sidecar did not return an embedding for the query (a text-embed
  * failure is not "degraded"; there is no keyword fallback for images).
  * `partial`, when present and true, means the bounded internal fanout was

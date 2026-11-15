@@ -16,8 +16,8 @@ const REQUIRED_ENV = {
 
 /** Alice's home, and Bob's `Trips` shared with her over her own `/Shared with me/Trips`. */
 const SCOPES: readonly Scope[] = [
-  { rootName: "files", fsPrefix: "/alice", virtualPrefix: "/" },
-  { rootName: "files", fsPrefix: "/bob/Trips", virtualPrefix: "/Shared with me/Trips" },
+  { fsPrefix: "/alice", virtualPrefix: "/" },
+  { fsPrefix: "/bob/Trips", virtualPrefix: "/Shared with me/Trips" },
 ];
 
 const DETAILS: PhotoDetails = {
@@ -66,11 +66,9 @@ function buildApp(options: BuildOptions = {}) {
     options.details === undefined ? DETAILS : options.details,
   );
   const deps: PhotoRoutesDeps = {
-    indexQueries: { rootIdsByName: async () => ({ files: 1 }), photos, photoDetails },
-    resolver: {
-      verifiedIndexScopes: async () =>
-        scopes === null ? { available: false, reason: "no_roots" } : { available: true, scopes },
-    },
+    indexQueries: { photos, photoDetails },
+    resolver: { scopesFor: async () => scopes ?? [] },
+    indexed: async () => scopes !== null,
   };
   const app = createApp({
     config: loadConfig(REQUIRED_ENV),
@@ -98,7 +96,8 @@ describe("GET /api/v1/photos", () => {
         row(2, "bob/Trips/b.heic"),
         // Shadowed by the shared folder mounted at the same place in Alice's files.
         row(4, "alice/Shared with me/Trips/c.jpg"),
-        row(5, "carol/d.jpg", { rootId: 9 }),
+        // Nobody shared Carol's files with Alice.
+        row(5, "carol/d.jpg"),
       ],
     });
 
@@ -132,6 +131,10 @@ describe("GET /api/v1/photos", () => {
     expect(exts).toEqual(expect.arrayContaining([".jpg", ".heic", ".arw"]));
     expect(limit).toBe(PHOTOS_PAGE_SIZE);
     expect(opts?.exclude?.prefixes).toContainEqual({ rootId: 1, fsPrefix: "/alice/.trash" });
+    expect(opts?.exclude?.prefixes).toContainEqual({
+      rootId: 1,
+      fsPrefix: "/alice/Shared with me",
+    });
     expect(opts?.after).toBeUndefined();
 
     await app.request("/api/v1/photos?cursor=2024-05-01T14:00:00.000000_42");
@@ -150,7 +153,7 @@ describe("GET /api/v1/photos", () => {
     expect(body.nextCursor).toBe(`2024-05-01T14:00:00.000000_${PHOTOS_PAGE_SIZE}`);
   });
 
-  it("is empty without an indexed scope", async () => {
+  it("is empty while the files folder is not indexed", async () => {
     const { app, photos } = buildApp({ scopes: null });
 
     expect(await (await app.request("/api/v1/photos")).json()).toEqual({
@@ -178,12 +181,16 @@ describe("GET /api/v1/photos/details", () => {
     expect(photoDetails).toHaveBeenCalledWith(1, "bob/Trips/b.jpg");
   });
 
-  it("is not found when the file is out of scope or not indexed", async () => {
-    const outOfScope = buildApp({
-      scopes: [{ rootName: "other", fsPrefix: "/alice", virtualPrefix: "/" }],
-    });
+  it("is not found when the file is out of scope, out of sight or not indexed", async () => {
+    const outOfScope = buildApp({ scopes: [] });
     expect((await outOfScope.app.request("/api/v1/photos/details?path=/a.jpg")).status).toBe(404);
     expect(outOfScope.photoDetails).not.toHaveBeenCalled();
+
+    // Alice's own folder named `Shared with me` stays out of sight.
+    const ownShelf = buildApp();
+    const hidden = "/api/v1/photos/details?path=/Shared%20with%20me/Mine/a.jpg";
+    expect((await ownShelf.app.request(hidden)).status).toBe(404);
+    expect(ownShelf.photoDetails).not.toHaveBeenCalled();
 
     const unindexed = buildApp({ scopes: null });
     expect((await unindexed.app.request("/api/v1/photos/details?path=/a.jpg")).status).toBe(404);

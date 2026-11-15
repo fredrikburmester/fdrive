@@ -20,7 +20,7 @@ afterEach(async () => {
 
 /** The row the indexer records after reading the file `stamp` describes. */
 const rowFor = (stamp: ContentStamp, sha256: string): IndexedContent => ({
-  rootName: "files",
+  rootId: 1,
   path: "old.txt",
   size: stamp.size,
   mtimeNs: stamp.mtimeNs,

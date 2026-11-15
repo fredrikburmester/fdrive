@@ -65,9 +65,7 @@ describe("shared folders in their owner's Trash, through the real indexer", () =
         DATABASE_URL: stack.connectionString,
         FDRIVE_STORAGE_ROOT: stack.folder.root,
         FDRIVE_MASTER_KEY: Buffer.alloc(32, 41).toString("base64"),
-        FDRIVE_INDEX_ROOTS: JSON.stringify([
-          { name: "files", storagePath: stack.folder.root, indexerPath: "/roots/files" },
-        ]),
+        FDRIVE_INDEXER_URL: await stack.indexerUrl(),
       }),
       silentLogger(),
     );
@@ -210,7 +208,7 @@ describe("shared folders in their owner's Trash, through the real indexer", () =
     const change = await action();
     await stack.seen(change.path, false);
     await stack.seen(change.target, true);
-    index.record("files", change);
+    index.record(change);
     await index.flush();
     const from = change.path.slice("alice".length);
     await expect
@@ -354,7 +352,7 @@ describe("shared folders in their owner's Trash, through the real indexer", () =
       expect(await shelf(other)).toEqual([]);
       expect(await shared(alice, "docs-other")).toEqual([virtual(trashed.target)]);
       await stack.seen(trashed.target, false);
-      index.record("files", { kind: "changed", path: trashed.target });
+      index.record({ kind: "changed", path: trashed.target });
       await index.flush();
       await expect
         .poll(() => shared(alice, "docs-other"), { timeout: 30_000, interval: 100 })

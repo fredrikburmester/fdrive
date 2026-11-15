@@ -39,18 +39,11 @@ export interface FilesFolderOptions {
   readonly root: string;
   readonly users: LocalUsers;
   /**
-   * The name of the index root the indexer reads `root` under, or `null`
-   * when this deployment does not index it.
+   * Hears every change fdrive makes under `root`, by its path relative to
+   * `root`, the path the indexer reads it under, so it can index the change
+   * at once.
    */
-  readonly indexRoot?: string | null;
-  /**
-   * Hears every change fdrive makes under `root`, by the path the indexer
-   * reads it under `indexRoot`, so it can index the change at once. Only
-   * set it when the indexer reads `root` itself (not a folder above or
-   * below it), or the paths will not match. Never called without
-   * `indexRoot`.
-   */
-  readonly onIndexChange?: (root: string, change: IndexChange) => void;
+  readonly onIndexChange?: (change: IndexChange) => void;
   /**
    * Whether `root` is this installation's files folder. With it, every
    * storage operation is refused (`upstream_unavailable`) while the folder
@@ -110,16 +103,15 @@ export async function probeRoot(root: string): Promise<FilesFolderHealth> {
 }
 
 /**
- * Turns the absolute paths storage reports into ones under the index root
- * `name`. Paths are real (links resolved), so they are compared with the
- * root's real path, resolved once it is first needed. A change outside the
- * root, or one made while the root cannot be resolved, is left to the
- * indexer's own watcher and scans.
+ * Turns the absolute paths storage reports into ones relative to the files
+ * folder `root`. Paths are real (links resolved), so they are compared with
+ * the folder's real path, resolved once it is first needed. A change outside
+ * it, or one made while it cannot be resolved, is left to the indexer's own
+ * watcher and scans.
  */
 export function createIndexListener(
   root: string,
-  name: string,
-  hear: (root: string, change: IndexChange) => void,
+  hear: (change: IndexChange) => void,
   resolve: (path: string) => Promise<string> = realpath,
 ): DiskChangeListener {
   let real: Promise<string> | undefined;
@@ -138,18 +130,16 @@ export function createIndexListener(
     void resolved()
       .then((at) => {
         const mapped = underRoot(at, change);
-        if (mapped !== null) hear(name, mapped);
+        if (mapped !== null) hear(mapped);
       })
       .catch(() => undefined);
   };
 }
 
 export function createFilesFolder(options: FilesFolderOptions): FilesFolder {
-  const { indexRoot, onIndexChange, guard } = options;
+  const { onIndexChange, guard } = options;
   const onChange =
-    indexRoot === undefined || indexRoot === null || onIndexChange === undefined
-      ? undefined
-      : createIndexListener(options.root, indexRoot, onIndexChange);
+    onIndexChange === undefined ? undefined : createIndexListener(options.root, onIndexChange);
   const ready =
     guard === undefined
       ? undefined

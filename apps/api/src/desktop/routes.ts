@@ -53,7 +53,7 @@ export function registerDesktopRoutes(
     ...(writes
       ? { writeCapabilities: (principal: Principal) => writes.capabilities(principal) }
       : {}),
-    ...(changes ? { changeFeed: (principal: Principal) => changes.available(principal) } : {}),
+    ...(changes ? { changeFeed: true } : {}),
   });
   const files = createDesktopFiles(deps);
   function path(c: Context) {

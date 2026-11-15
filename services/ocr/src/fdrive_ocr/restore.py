@@ -306,7 +306,7 @@ def resolve_target_path(root_abs: str, rel_path: str) -> str | None:
 def list_originals(
     conn: psycopg.Connection,
     state_dir: str,
-    targets: list[RootTarget],
+    target: RootTarget,
     index: OriginalsIndex,
     query: str = "",
     offset: int = 0,
@@ -334,28 +334,17 @@ def list_originals(
     if backfilled:
         index.invalidate()
 
-    targets_by_name = {target.name: target for target in targets}
-    paths_by_root: dict[str, list[str]] = {}
-    for _entry, mapping in resolved:
-        if mapping is not None and mapping.root in targets_by_name:
-            paths_by_root.setdefault(mapping.root, []).append(mapping.path)
-    ocred: dict[str, dict[str, frozenset[tuple[int, int]]]] = {
-        root: db.ocred_keys_for_paths(conn, targets_by_name[root].root_id, paths)
-        for root, paths in paths_by_root.items()
-    }
+    paths = [mapping.path for _entry, mapping in resolved if mapping is not None and mapping.root == target.name]
+    ocred = db.ocred_keys_for_paths(conn, target.root_id, paths)
 
     listed: list[ListedOriginal] = []
     for entry, mapping in resolved:
         state: str | None = None
-        if mapping is not None:
-            target = targets_by_name.get(mapping.root)
-            abs_path = None if target is None else resolve_target_path(target.abs_path, mapping.path)
+        if mapping is not None and mapping.root == target.name:
+            abs_path = resolve_target_path(target.abs_path, mapping.path)
             if abs_path is not None:
                 state = classify_state(
-                    _target_stat(abs_path),
-                    mapping.size,
-                    mapping.mtime_ns,
-                    ocred.get(mapping.root, {}).get(mapping.path, frozenset()),
+                    _target_stat(abs_path), mapping.size, mapping.mtime_ns, ocred.get(mapping.path, frozenset())
                 )
         listed.append(
             ListedOriginal(
@@ -426,7 +415,7 @@ def _file_version(info: os.stat_result | None) -> tuple[int, ...] | None:
 def restore_original(
     conn: psycopg.Connection,
     state_dir: str,
-    targets: list[RootTarget],
+    target: RootTarget,
     index: OriginalsIndex,
     original_id: str,
     allow_recreate: bool,
@@ -460,8 +449,7 @@ def restore_original(
     if mapping is None:
         return RestoreOutcome(False, REASON_UNRESOLVED)
 
-    target = next((item for item in targets if item.name == mapping.root), None)
-    if target is None:
+    if mapping.root != target.name:
         return RestoreOutcome(False, REASON_UNKNOWN_ROOT, root=mapping.root, path=mapping.path)
     with db.ocr_file_lock(conn, target.root_id, mapping.path), db.backup_checkpoint(conn):
         abs_path = resolve_target_path(target.abs_path, mapping.path)

@@ -15,7 +15,7 @@ export function createActivityObservations(deps: {
   repo: ActivityObservationsRepo;
   identities: IdentityRepo;
   storageFactory: IdentityStorageFactory;
-  resolver: Pick<ScopeResolver, "configuredMappings">;
+  resolver: Pick<ScopeResolver, "scopesFor">;
 }) {
   async function observeAbsentSubtree(
     actor: { accountId: string; identityId: string },
@@ -61,15 +61,12 @@ export function createActivityObservations(deps: {
     async watcher(identityId: string, event: IndexerEventPayload) {
       const identity = await deps.identities.get(identityId);
       if (!identity) return;
-      const mappings = await deps.resolver.configuredMappings(identity.externalUsername);
-      if (!mappings.available) return;
-      const path = roundTripVirtualPath(mappings.scopes, event.root, event.path);
+      const scopes = await deps.resolver.scopesFor(identity.externalUsername);
+      const path = roundTripVirtualPath(scopes, event.path);
       if (!path) return;
       const storage = await deps.storageFactory(identityId);
       const actor = { accountId: identity.accountId, identityId };
-      const target = event.target_path
-        ? roundTripVirtualPath(mappings.scopes, event.root, event.target_path)
-        : null;
+      const target = event.target_path ? roundTripVirtualPath(scopes, event.target_path) : null;
       if (event.kind === "moved" && target) {
         const stat = await storage.stat(target);
         let cursor: string | undefined;

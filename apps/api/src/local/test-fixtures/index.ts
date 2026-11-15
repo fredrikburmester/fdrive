@@ -90,7 +90,7 @@ export interface FilesFolderFixture {
 /** The files folder over `root` (a fresh temporary folder by default) and the repos' users. */
 export function filesFolderFixture(
   repos: Pick<Repos, "localUsers" | "localGrants">,
-  options: { root?: string; indexRoot?: string | null; passwords?: SharePasswords } = {},
+  options: { root?: string; passwords?: SharePasswords } = {},
 ): FilesFolderFixture {
   const root = options.root ?? temporaryStorageRoot();
   const users = createLocalUserStore({
@@ -101,6 +101,6 @@ export function filesFolderFixture(
   return {
     root,
     users,
-    folder: createFilesFolder({ root, users, indexRoot: options.indexRoot ?? null }),
+    folder: createFilesFolder({ root, users }),
   };
 }

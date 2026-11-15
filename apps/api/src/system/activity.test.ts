@@ -43,7 +43,6 @@ const features: SystemFeaturesResponse = {
     state: id === "thumbnails" ? "ready" : "off",
     detail: "",
   })),
-  roots: [],
 };
 const office: SystemOfficeResponse = {
   configuration: {

@@ -1,7 +1,7 @@
-//! `fdrive-indexer`: wait for the schema, start one loop per root, and serve the internal API.
+//! `fdrive-indexer`: wait for the schema, start the root loop, and serve the internal API.
 
-use std::collections::HashMap;
 use std::net::{Ipv4Addr, SocketAddr};
+use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 
 use fdrive_indexer::config::Config;
@@ -25,44 +25,36 @@ fn main() -> Result<(), String> {
     let Some(version) = version else { std::process::exit(1) };
     log(&format!("schema ready at version {version}"));
 
-    let mut contexts = Vec::new();
-    for (name, path) in &cfg.roots {
-        contexts.push(build_context(&cfg, name, path).map_err(|e| e.to_string())?);
-    }
+    let ctx = build_context(&cfg).map_err(|e| e.to_string())?;
     // Built from the tables in the background; until then search finds names without typos.
-    let root_ids: Vec<i64> = contexts.iter().map(|ctx| ctx.root_id).collect();
-    let names = NameIndex::start(Db::new(&cfg.database_url), &root_ids).map_err(|e| e.to_string())?;
-    for ctx in &contexts {
-        let _ = ctx.names.set(Arc::clone(&names));
+    let names = NameIndex::start(Db::new(&cfg.database_url), &[ctx.root_id]).map_err(|e| e.to_string())?;
+    let _ = ctx.names.set(Arc::clone(&names));
+    if let Err(e) = refresh_settings(&ctx) {
+        log(&format!("[{}] settings unavailable: {e}", ctx.name));
     }
-    let watchers = Arc::new(Mutex::new(HashMap::new()));
-    let mut wakes = HashMap::new();
-    for ctx in &contexts {
-        if let Err(e) = refresh_settings(ctx) {
-            log(&format!("[{}] settings unavailable: {e}", ctx.name));
-        }
-        // Decided before the journal's reader takes its first position.
-        let root = RootLoop::new(ctx).map_err(|e| e.to_string())?;
-        let wake = Arc::new(Wake::default());
-        wakes.insert(ctx.name.clone(), Arc::clone(&wake));
-        // Changes the API queues are applied beside the scan loop, never behind a scan.
-        let queued = Arc::clone(ctx);
+    // Decided before the journal's reader takes its first position.
+    let root = RootLoop::new(&ctx).map_err(|e| e.to_string())?;
+    let watcher = Arc::new(AtomicBool::new(false));
+    let wake = Arc::new(Wake::default());
+    // Changes the API queues are applied beside the scan loop, never behind a scan.
+    let queued = Arc::clone(&ctx);
+    std::thread::Builder::new()
+        .name("work-files".to_owned())
+        .spawn(move || run_work(queued))
+        .map_err(|e| e.to_string())?;
+    {
+        let (ctx, watcher, wake) = (Arc::clone(&ctx), Arc::clone(&watcher), Arc::clone(&wake));
         std::thread::Builder::new()
-            .name(format!("work-{}", queued.name))
-            .spawn(move || run_work(queued))
-            .map_err(|e| e.to_string())?;
-        let (ctx, watchers) = (Arc::clone(ctx), Arc::clone(&watchers));
-        std::thread::Builder::new()
-            .name(format!("root-{}", ctx.name))
-            .spawn(move || run_root(root, &ctx, &watchers, &wake))
+            .name("root-files".to_owned())
+            .spawn(move || run_root(root, &ctx, &watcher, &wake))
             .map_err(|e| e.to_string())?;
     }
 
     let settings = cfg.default_settings();
     let state = Arc::new(AppState {
-        contexts,
-        watchers,
-        wakes,
+        context: ctx,
+        watcher,
+        wake,
         db: Db {
             url: cfg.database_url.clone(),
             retries: 1,
@@ -78,8 +70,7 @@ fn main() -> Result<(), String> {
         instance_id: uuid::Uuid::new_v4().to_string(),
         names: Some(names),
     });
-    let names: Vec<&str> = cfg.roots.iter().map(|(name, _)| name.as_str()).collect();
-    log(&format!("indexer up. roots={names:?} port={}", cfg.indexer_port));
+    log(&format!("indexer up. port={}", cfg.indexer_port));
 
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()

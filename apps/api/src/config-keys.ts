@@ -270,18 +270,9 @@ export const CONFIG_KEYS: readonly ConfigKeyDef[] = [
     subsystem: "core",
   },
   {
-    key: "FDRIVE_INDEX_ROOTS",
-    description:
-      "JSON array of { name, storagePath, indexerPath } mapping every indexed root; storagePath is the folder's path in the API (FDRIVE_STORAGE_ROOT), indexerPath its path in the indexer. Unset disables search, thumbnails, and the Indexer page's per-root data.",
-    default: null,
-    example: '[{"name":"files","storagePath":"/data","indexerPath":"/data"}]',
-    secret: false,
-    subsystem: "index",
-  },
-  {
     key: "FDRIVE_INDEXER_URL",
     description:
-      "Base URL of the indexer's internal HTTP API. Unset disables the System > Indexer page and MCP document extraction. MCP can still read UTF-8 files directly.",
+      "Base URL of the indexer's internal HTTP API. Unset disables search, thumbnails, folder sizes, the System > Indexer page and MCP document extraction. MCP can still read UTF-8 files directly.",
     default: null,
     example: "http://indexer:8010",
     secret: false,
@@ -382,18 +373,14 @@ export interface SubsystemStatus {
  * on top for subsystems where one exists.
  */
 export function subsystemsStatus(config: AppConfig): Record<Subsystem, SubsystemStatus> {
-  const indexMissing: string[] = [];
-  if (config.fdriveIndexRoots === null) indexMissing.push("FDRIVE_INDEX_ROOTS");
-  if (config.fdriveIndexerUrl === undefined) indexMissing.push("FDRIVE_INDEXER_URL");
-
   return {
     core: { status: "configured", missing: [] },
     network: { status: "configured", missing: [] },
     shares: { status: "configured", missing: [] },
     index:
-      indexMissing.length === 0
-        ? { status: "configured", missing: [] }
-        : { status: "not_configured", missing: indexMissing },
+      config.fdriveIndexerUrl === undefined
+        ? { status: "not_configured", missing: ["FDRIVE_INDEXER_URL"] }
+        : { status: "configured", missing: [] },
     search:
       config.fdriveEmbedUrl === undefined
         ? { status: "not_configured", missing: ["FDRIVE_EMBED_URL"] }

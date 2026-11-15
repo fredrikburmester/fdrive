@@ -26,7 +26,7 @@ beforeEach(() => {
   vi.mocked(findFilesInScope).mockReset();
 });
 
-const SCOPES: readonly Scope[] = [{ rootName: "files", fsPrefix: "/alice", virtualPrefix: "/" }];
+const SCOPES: readonly Scope[] = [{ fsPrefix: "/alice", virtualPrefix: "/" }];
 
 function indexedFile(id: number, path: string, extra: Partial<IndexedFile> = {}): IndexedFile {
   return {
@@ -82,17 +82,12 @@ function setup(
   );
   const mcp: McpToolDeps = {
     indexQueries: {
-      rootIdsByName: async () => ({ files: 1 }),
       fileByPath: async (_rootId: number, path: string) => FILES[path] ?? null,
       fileTextPrefix,
     } as unknown as IndexQueries,
     searchService: { search: async () => Promise.reject(new Error("unexpected")) },
-    scopeResolver: {
-      verifiedIndexScopes: async () =>
-        options.indexed === false
-          ? ({ available: false, reason: "no_connection" } as const)
-          : ({ available: true, scopes: SCOPES } as const),
-    },
+    scopeResolver: { scopesFor: async () => SCOPES },
+    indexed: async () => options.indexed !== false,
     publicUrl: async () => null,
     indexerClient: null,
     clock: () => new Date("2026-09-18T10:00:00.000Z"),

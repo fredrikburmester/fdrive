@@ -2,57 +2,50 @@ import type { Scope } from "@fdrive/core";
 import { describe, expect, it } from "vitest";
 import { roundTripVirtualPath } from "./round-trip.ts";
 
-const home: Scope = { rootName: "files", fsPrefix: "/alice", virtualPrefix: "/" };
-const sharedScope: Scope = {
-  rootName: "files",
-  fsPrefix: "/pool/team",
-  virtualPrefix: "/shared",
-};
+const home: Scope = { fsPrefix: "/alice", virtualPrefix: "/" };
+const shared: Scope = { fsPrefix: "/bob/team", virtualPrefix: "/Shared with me/team" };
 
 describe("roundTripVirtualPath", () => {
   it("returns the virtual path for a plain home-scope file", () => {
-    expect(roundTripVirtualPath([home], "files", "/alice/report.pdf")).toBe("/report.pdf");
+    expect(roundTripVirtualPath([home], "/alice/report.pdf")).toBe("/report.pdf");
   });
 
-  it("returns null when no scope covers the filesystem path", () => {
-    expect(roundTripVirtualPath([home], "files", "/bob/report.pdf")).toBeNull();
+  it("returns null when no scope covers the path", () => {
+    expect(roundTripVirtualPath([home], "/bob/report.pdf")).toBeNull();
   });
 
-  it("returns null when the root does not match", () => {
-    expect(roundTripVirtualPath([home], "other-root", "/alice/report.pdf")).toBeNull();
-  });
-
-  it("resolves through a nested scope for its own subtree", () => {
-    expect(roundTripVirtualPath([home, sharedScope], "files", "/pool/team/x.txt")).toBe(
-      "/shared/x.txt",
+  it("resolves through a shared folder for its own subtree", () => {
+    expect(roundTripVirtualPath([home, shared], "/bob/team/a/b.txt")).toBe(
+      "/Shared with me/team/a/b.txt",
     );
   });
 
-  it("filters out a home-root file shadowed by a more specific scope", () => {
-    // /alice/shared/secret.txt lives under home's fsPrefix, but the /shared
-    // virtual name is claimed by a different, more specific scope whose
-    // own fsPrefix is /pool/team. The round trip must not land back on
-    // /alice/shared/secret.txt, so this must be filtered out entirely.
+  it("filters out a home file a shared folder shadows", () => {
+    // /alice/Shared with me/team/secret.txt maps to the virtual path a shared
+    // folder claims, which leads back to /bob/team instead.
     expect(
-      roundTripVirtualPath([home, sharedScope], "files", "/alice/shared/secret.txt"),
+      roundTripVirtualPath([home, shared], "/alice/Shared with me/team/secret.txt"),
     ).toBeNull();
   });
 
-  it("round trips the nested scope's own root name and path exactly", () => {
-    const virtualPath = roundTripVirtualPath([home, sharedScope], "files", "/pool/team/a/b");
-    expect(virtualPath).toBe("/shared/a/b");
+  it("keeps the home's own Shared with me out of sight, shared or not", () => {
+    for (const scopes of [[home], [home, shared]]) {
+      expect(roundTripVirtualPath(scopes, "/alice/Shared with me")).toBeNull();
+      expect(roundTripVirtualPath(scopes, "/alice/Shared with me/mine.txt")).toBeNull();
+      expect(roundTripVirtualPath(scopes, "/alice/Shared with me/other/a.txt")).toBeNull();
+    }
+    expect(roundTripVirtualPath([home], "/alice/Shared with meet/a.txt")).toBe(
+      "/Shared with meet/a.txt",
+    );
   });
 
-  it("filters out a path that round trips to a different root entirely", () => {
-    // A file physically at /alice/shared/x on root "files" maps to the
-    // virtual path "/shared/x" through the home scope, but that virtual
-    // path resolves back to the *other* root through the nested scope. The
-    // round trip must be rejected on the root mismatch, not only the path.
-    const crossRootScope: Scope = {
-      rootName: "other-root",
-      fsPrefix: "/b",
-      virtualPrefix: "/shared",
-    };
-    expect(roundTripVirtualPath([home, crossRootScope], "files", "/alice/shared/x")).toBeNull();
+  it("maps a folder shared inside another shared folder through the inner one", () => {
+    const outer: Scope = { fsPrefix: "/bob", virtualPrefix: "/Shared with me/bob" };
+    expect(roundTripVirtualPath([home, outer, shared], "/bob/team/x")).toBe(
+      "/Shared with me/team/x",
+    );
+    expect(roundTripVirtualPath([home, outer, shared], "/bob/other")).toBe(
+      "/Shared with me/bob/other",
+    );
   });
 });

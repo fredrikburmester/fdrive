@@ -1,13 +1,19 @@
 import type { FsEvent } from "@fdrive/contracts";
 import { isStorageError, type Scope, type StorageProvider } from "@fdrive/core";
-import type { FavoriteRepo, FileTagRepo, Identity, IdentityRepo, IndexQueries } from "@fdrive/db";
+import {
+  type FavoriteRepo,
+  type FileTagRepo,
+  type Identity,
+  type IdentityRepo,
+  INDEX_ROOT_ID,
+  type IndexQueries,
+} from "@fdrive/db";
 import { Client } from "pg";
 import { z } from "zod";
 import type { MetadataService } from "../metadata/service.js";
 import { hasTrackedMetadata } from "../metadata/service.js";
 import { createReadAuthorizer, type ReadAuthorizer } from "../scoping/read-authorizer.ts";
 import { roundTripVirtualPath } from "../scoping/round-trip.ts";
-import type { ConfiguredMappingsResult } from "../scoping/types.ts";
 import type { EventBus } from "./bus.js";
 
 /** The `LISTEN`/`NOTIFY` channel the indexer publishes change events on. */
@@ -20,13 +26,12 @@ const IndexerEventKind = z.enum(["created", "changed", "deleted", "moved"]);
 
 /**
  * The NOTIFY payload the indexer publishes on `idx_events`
- * (`services/indexer/src/events.rs`): `root` is the
- * configured root's name, `path`/`target_path` are root-relative without a
- * leading slash.
+ * (`services/indexer/src/events.rs`): `path`/`target_path` are relative to
+ * the files folder, without a leading slash. Its `root` names the files
+ * folder's root, the only one, so it is not read.
  */
 export const IndexerEventPayload = z.object({
   kind: IndexerEventKind,
-  root: z.string(),
   path: z.string(),
   target_path: z.string().nullable(),
   at: z.string(),
@@ -124,15 +129,12 @@ export interface IndexerListenerDeps {
   readonly metadata: MetadataService;
   readonly bus: EventBus;
   /**
-   * Resolves an identity's trusted scopes (`ScopeResolver.configuredMappings`),
-   * the same mapping metadata-event routing uses. This listener
-   * keeps only those on `indexRootNames` itself, and every destination
+   * An identity's scopes (`ScopeResolver.scopesFor`). Every destination
    * still passes a live read check before it is published.
    */
-  readonly configuredMappingsFor: (identity: Identity) => Promise<ConfiguredMappingsResult>;
+  readonly scopesFor: (identity: Identity) => Promise<readonly Scope[]>;
   /** Builds the identity-bound storage a live-read check runs against. */
   readonly storageForIdentity: (identityId: string) => Promise<StorageProvider>;
-  readonly indexRootNames: ReadonlySet<string>;
   readonly clock: () => Date;
   readonly logger: IndexerListenerLogger;
   readonly channel?: string;
@@ -157,7 +159,6 @@ interface IdentityScopeEntry {
 interface ScopeCache {
   readonly expiresAt: number;
   readonly entries: readonly IdentityScopeEntry[];
-  readonly rootIdByName: ReadonlyMap<string, number>;
 }
 
 function publish(
@@ -180,25 +181,14 @@ function publish(
 }
 
 async function buildScopeCache(
-  deps: Pick<
-    IndexerListenerDeps,
-    "identities" | "indexQueries" | "configuredMappingsFor" | "indexRootNames"
-  >,
-): Promise<{ entries: IdentityScopeEntry[]; rootIdByName: Map<string, number> }> {
+  deps: Pick<IndexerListenerDeps, "identities" | "scopesFor">,
+): Promise<IdentityScopeEntry[]> {
   const identities = await deps.identities.listAll();
   const entries: IdentityScopeEntry[] = [];
   for (const identity of identities as Identity[]) {
-    const configured = await deps.configuredMappingsFor(identity);
-    if (!configured.available) {
-      continue;
-    }
-    const scopes = configured.scopes.filter((scope) => deps.indexRootNames.has(scope.rootName));
-    if (scopes.length > 0) {
-      entries.push({ identityId: identity.id, scopes });
-    }
+    entries.push({ identityId: identity.id, scopes: await deps.scopesFor(identity) });
   }
-  const rootIds = await deps.indexQueries.rootIdsByName();
-  return { entries, rootIdByName: new Map(Object.entries(rootIds)) };
+  return entries;
 }
 
 type LiveCheckDeps = Pick<IndexerListenerDeps, "storageForIdentity" | "createAuthorizer">;
@@ -271,7 +261,7 @@ async function handleCreatedOrChanged(
   identityId: string,
   event: IndexerEventPayload,
 ): Promise<void> {
-  const virtualPath = roundTripVirtualPath(scopes, event.root, event.path);
+  const virtualPath = roundTripVirtualPath(scopes, event.path);
   if (virtualPath === null) {
     return;
   }
@@ -290,8 +280,8 @@ async function handleCreatedOrChanged(
 
 /**
  * Handles a `deleted` event for one identity. When the deleted path carried
- * tags or a favorite, checks for exactly one live file elsewhere in the same
- * root and scope with the same sha256 (mechanism 4 in the plan) and, if
+ * tags or a favorite, checks for exactly one live file elsewhere in the
+ * login's scopes with the same sha256 (mechanism 4 in the plan) and, if
  * found, relinks the metadata as a move instead of dropping it. Metadata
  * continuity always applies once a unique relink candidate exists; the
  * relink is only ever *announced* to the browser as a move (revealing the
@@ -311,38 +301,34 @@ async function handleDeleted(
       | "onActivityRelink"
     >,
   scopes: readonly Scope[],
-  rootIdByName: ReadonlyMap<string, number>,
   identityId: string,
   event: IndexerEventPayload,
 ): Promise<void> {
-  const virtualPath = roundTripVirtualPath(scopes, event.root, event.path);
+  const virtualPath = roundTripVirtualPath(scopes, event.path);
   if (virtualPath === null) {
     return;
   }
 
-  const rootId = rootIdByName.get(event.root);
-  if (rootId !== undefined) {
-    const tracked =
-      (await hasTrackedMetadata(deps, identityId, virtualPath)) ||
-      (await deps.activityTracks?.(identityId, virtualPath));
-    if (tracked) {
-      const sha256 = await deps.indexQueries.deletedRowSha(rootId, event.path);
-      if (sha256 !== null) {
-        const liveRows = await deps.indexQueries.liveRowsBySha(rootId, sha256);
-        const candidates = liveRows
-          .map((row) => roundTripVirtualPath(scopes, event.root, row.path))
-          .filter((path): path is string => path !== null);
-        if (candidates.length === 1) {
-          const newVirtualPath = candidates[0] as string;
-          await deps.metadata.onMoved(identityId, virtualPath, newVirtualPath, false);
-          if (await isLiveReadable(deps, identityId, newVirtualPath)) {
-            await deps.onActivityRelink?.(identityId, virtualPath, newVirtualPath);
-            publish(deps.bus, identityId, "move", [virtualPath], [newVirtualPath], event.at);
-          } else {
-            publish(deps.bus, identityId, "delete", [virtualPath], undefined, event.at);
-          }
-          return;
+  const tracked =
+    (await hasTrackedMetadata(deps, identityId, virtualPath)) ||
+    (await deps.activityTracks?.(identityId, virtualPath));
+  if (tracked) {
+    const sha256 = await deps.indexQueries.deletedRowSha(INDEX_ROOT_ID, event.path);
+    if (sha256 !== null) {
+      const liveRows = await deps.indexQueries.liveRowsBySha(INDEX_ROOT_ID, sha256);
+      const candidates = liveRows
+        .map((row) => roundTripVirtualPath(scopes, row.path))
+        .filter((path): path is string => path !== null);
+      if (candidates.length === 1) {
+        const newVirtualPath = candidates[0] as string;
+        await deps.metadata.onMoved(identityId, virtualPath, newVirtualPath, false);
+        if (await isLiveReadable(deps, identityId, newVirtualPath)) {
+          await deps.onActivityRelink?.(identityId, virtualPath, newVirtualPath);
+          publish(deps.bus, identityId, "move", [virtualPath], [newVirtualPath], event.at);
+        } else {
+          publish(deps.bus, identityId, "delete", [virtualPath], undefined, event.at);
         }
+        return;
       }
     }
   }
@@ -376,8 +362,8 @@ async function handleMoved(
     return;
   }
 
-  const srcVirtualPath = roundTripVirtualPath(scopes, event.root, event.path);
-  const targetVirtualPath = roundTripVirtualPath(scopes, event.root, event.target_path);
+  const srcVirtualPath = roundTripVirtualPath(scopes, event.path);
+  const targetVirtualPath = roundTripVirtualPath(scopes, event.target_path);
 
   if (srcVirtualPath !== null && targetVirtualPath !== null) {
     await deps.metadata.onMoved(identityId, srcVirtualPath, targetVirtualPath, true);
@@ -406,7 +392,6 @@ export async function handleEventForIdentity(
       "bus" | "metadata" | "fileTags" | "favorites" | "indexQueries" | "logger"
     >,
   scopes: readonly Scope[],
-  rootIdByName: ReadonlyMap<string, number>,
   identityId: string,
   event: IndexerEventPayload,
 ): Promise<void> {
@@ -415,7 +400,7 @@ export async function handleEventForIdentity(
     return;
   }
   if (event.kind === "deleted") {
-    await handleDeleted(deps, scopes, rootIdByName, identityId, event);
+    await handleDeleted(deps, scopes, identityId, event);
     return;
   }
   await handleMoved(deps, scopes, identityId, event);
@@ -424,9 +409,9 @@ export async function handleEventForIdentity(
 /**
  * Builds the indexer event listener: a `LISTEN idx_events` connection that
  * reconnects with backoff on error, resolves every affected identity per
- * event (caching identities and their configured scopes for
+ * event (caching identities and their scopes for
  * `scopeCacheTtlMs`, default 60s), and drives metadata rename tracking plus
- * SSE change events. Gate construction on `FDRIVE_INDEX_ROOTS` being
+ * SSE change events. Gate construction on `FDRIVE_INDEXER_URL` being
  * configured; there is nothing to listen for otherwise.
  */
 export function createIndexerListener(deps: IndexerListenerDeps): IndexerListener {
@@ -456,8 +441,10 @@ export function createIndexerListener(deps: IndexerListenerDeps): IndexerListene
     if (cache !== null && cache.expiresAt > now) {
       return cache;
     }
-    const built = await buildScopeCache(deps);
-    const fresh: ScopeCache = { expiresAt: now + scopeCacheTtlMs, ...built };
+    const fresh: ScopeCache = {
+      expiresAt: now + scopeCacheTtlMs,
+      entries: await buildScopeCache(deps),
+    };
     cache = fresh;
     return fresh;
   }
@@ -479,14 +466,14 @@ export function createIndexerListener(deps: IndexerListenerDeps): IndexerListene
       return;
     }
     const event = result.data;
-    const { entries, rootIdByName } = await getCache();
+    const { entries } = await getCache();
     for (const entry of entries) {
       try {
         await deps.onActivityEvent?.(entry.identityId, event);
       } catch (error) {
         deps.logger.warn({ error }, "indexer-listener: activity comparison deferred");
       }
-      await handleEventForIdentity(deps, entry.scopes, rootIdByName, entry.identityId, event);
+      await handleEventForIdentity(deps, entry.scopes, entry.identityId, event);
     }
   }
 

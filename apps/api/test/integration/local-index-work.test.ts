@@ -1,6 +1,13 @@
 import { createHash } from "node:crypto";
 import type { StorageProvider } from "@fdrive/core";
-import { createChangeWriter, createDb, createIndexQueries, createRepos, migrate } from "@fdrive/db";
+import {
+  createChangeWriter,
+  createDb,
+  createIndexQueries,
+  createRepos,
+  INDEX_ROOT_ID,
+  migrate,
+} from "@fdrive/db";
 import { createFilesFolder, type IndexChange, type LocalUsers } from "@fdrive/local";
 import { sql } from "drizzle-orm";
 import { Client } from "pg";
@@ -67,8 +74,7 @@ describe("changes fdrive makes, through the real indexer with its watcher off", 
     storage = createFilesFolder({
       root: stack.folder.root,
       users,
-      indexRoot: "files",
-      onIndexChange: (root, change) => queue.record(root, change),
+      onIndexChange: (change) => queue.record(change),
     }).storage("alice");
   }, 720_000);
 
@@ -103,7 +109,7 @@ describe("changes fdrive makes, through the real indexer with its watcher off", 
   async function settle(change: IndexChange, paths: Record<string, boolean>): Promise<void> {
     await queue.flush();
     for (const [path, present] of Object.entries(paths)) await stack.seen(path, present);
-    queue.record("files", change);
+    queue.record(change);
     await queue.flush();
   }
 
@@ -194,8 +200,7 @@ describe("changes fdrive makes, through the real indexer with its watcher off", 
   it("records a new folder, empty or not, so search finds it by name within seconds", async () => {
     const scans = await count("idx.scans");
     const queries = createIndexQueries(connection.db);
-    const roots = await queries.rootIdsByName();
-    const scope = [{ rootId: roots.files ?? -1, fsPrefix: "/alice" }];
+    const scope = [{ rootId: INDEX_ROOT_ID, fsPrefix: "/alice" }];
     const found = async () =>
       (await queries.folders(scope, ["microlä"], "Microlä", 10)).map((row) =>
         row.path.normalize("NFC"),
@@ -227,7 +232,6 @@ describe("changes fdrive makes, through the real indexer with its watcher off", 
   });
 
   it("finds a new folder by a name typed with a typo, and follows it when it moves", async () => {
-    const roots = await createIndexQueries(connection.db).rootIdsByName();
     const names = createNameIndexClient({
       baseUrl: await stack.indexerUrl(),
       fetch: globalThis.fetch,
@@ -235,7 +239,7 @@ describe("changes fdrive makes, through the real indexer with its watcher off", 
     const found = async () => {
       const hits = await names.search({
         query: "Microlär",
-        scopes: [{ rootId: roots.files ?? -1, fsPrefix: "/alice" }],
+        scopes: [{ rootId: INDEX_ROOT_ID, fsPrefix: "/alice" }],
         exclude: { prefixes: [], names: [] },
         files: 5,
         folders: 5,
