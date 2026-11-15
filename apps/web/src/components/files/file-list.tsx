@@ -7,7 +7,7 @@ import type { DragEvent, MouseEvent as ReactMouseEvent } from "react";
 import { useEffect, useRef, useState } from "react";
 import { TagDots } from "@/components/metadata/tag-dots";
 import { Checkbox } from "@/components/ui/checkbox";
-import { endDragSession, getActiveDragPaths, startDragSession } from "@/lib/dnd";
+import { endDragSession, getActiveDragPaths, startDragSession, writeDownloadUrl } from "@/lib/dnd";
 import { isBackgroundClick } from "@/lib/files/background-click";
 import { DEFAULT_LIST_DENSITY, type ListDensity, ROW_HEIGHTS } from "@/lib/files/density";
 import {
@@ -19,10 +19,9 @@ import {
 import { dropTargetState, effectFor } from "@/lib/files/dnd-targets";
 import { isLink, LINK_TITLE } from "@/lib/files/links";
 import { findRevealIndex, type ScrollRequest } from "@/lib/files/reveal";
-import { contextEntries } from "@/lib/files/selection";
+import { contextEntries, selectionOf } from "@/lib/files/selection";
 import { wantsThumbnail } from "@/lib/files/thumbnail";
 import { sharedFolderCaption } from "@/lib/grants/format";
-import { selectionOf } from "@/lib/identity/capabilities";
 import { tagCheckState as computeTagCheckState } from "@/lib/metadata/tag-set";
 import { useFormatters } from "@/lib/use-format-preferences";
 import { cn } from "@/lib/utils";
@@ -256,6 +255,12 @@ export function FileList({
   function handleDragStart(event: DragEvent<HTMLDivElement>, entry: FsEntry) {
     const paths = getDragPaths(entry);
     writeDraggedPaths(event.dataTransfer, paths);
+    writeDownloadUrl(
+      event.dataTransfer,
+      paths,
+      entry,
+      new URL(apiClient.downloadUrl(entry.path), window.location.href).href,
+    );
     event.dataTransfer.effectAllowed = "copyMove";
     startDragSession(paths);
     const dragImage = createDragImageElement(document, entry.name, paths.length);

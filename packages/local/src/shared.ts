@@ -116,6 +116,8 @@ export interface UserStorageOptions {
   readonly shared: () => Promise<readonly SharedFolder[]>;
   /** Hears every change made on disk, in the user's own files and in shared folders. */
   readonly onChange?: DiskChangeListener;
+  /** Throws when the folder may not be used now; asked before every operation. */
+  readonly ready?: () => Promise<void>;
   /**
    * How many more bytes may land in the user's own files (`null`) or in a
    * shared folder's owner's files, or `null` for no limit. With it, an
@@ -208,6 +210,7 @@ export function createUserStorage(options: UserStorageOptions): UserStorage {
   }
 
   async function place(path: string): Promise<Place> {
+    await options.ready?.();
     const normalized = normalizePath(path);
     const segments = splitSegments(normalized);
     if (segments[0] !== SHARED_WITH_ME) return { kind: "own", storage: own, rel: normalized };
@@ -385,7 +388,10 @@ export function createUserStorage(options: UserStorageOptions): UserStorage {
       const at = (await writable(path)) as Located;
       const room = await roomAt(at);
       if (room === null) return at.storage.upload(at.rel, body, opts);
-      const max = room + (opts?.overwrite === true ? await replaced(at) : 0);
+      // A file being replaced frees its bytes; a piece of an upload sent in
+      // pieces shares the room with the pieces before it, which wait unindexed.
+      const max =
+        room + (opts?.overwrite === true ? await replaced(at) : 0) - (opts?.part?.offset ?? 0);
       if (max < 0) throw limitReached();
       return at.storage.upload(at.rel, capped(body, max), opts);
     },

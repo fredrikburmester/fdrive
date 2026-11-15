@@ -46,7 +46,6 @@ function data(): BackupsResponse {
     restored: false,
     workerSeenAt: new Date().toISOString(),
     destinations: [],
-    attachments: [],
     runs: [],
   };
 }
@@ -84,9 +83,9 @@ it("shows overdue and failed destinations separately from another full copy and 
     },
     {
       id: "paused",
-      name: "Fileserver",
-      type: "provider",
-      location: "private",
+      name: "Second bucket",
+      type: "s3",
+      location: "second/fdrive",
       enabled: false,
       testedAt: null,
       retainedProbe: null,
@@ -103,7 +102,7 @@ it("shows overdue and failed destinations separately from another full copy and 
   expect(screen.getByText("Delivery overdue by more than 15 minutes.")).toBeTruthy();
   expect(screen.getByText(/worker has not checked/)).toBeTruthy();
   expect(screen.getByText(/latest attempt did not complete/)).toBeTruthy();
-  expect(screen.getByText("Fileserver · paused")).toBeTruthy();
+  expect(screen.getByText("Second bucket · paused")).toBeTruthy();
   fireEvent.click(screen.getByRole("button", { name: "Estimate backup size" }));
   await waitFor(() => expect(client.estimate).toHaveBeenCalledOnce());
 });

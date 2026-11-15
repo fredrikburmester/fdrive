@@ -1,9 +1,4 @@
-import {
-  TrashConfiguration,
-  TrashSettings,
-  type TrashSettingsUpdateRequest,
-  type TrashStrategy,
-} from "@fdrive/contracts";
+import { TrashSettings, type TrashSettingsUpdateRequest } from "@fdrive/contracts";
 import type { IdentityRepo, SettingsRepo } from "@fdrive/db";
 import { ApiHttpError } from "../errors.js";
 
@@ -17,18 +12,17 @@ export interface TrashSettingsService {
   update(providerId: string, input: TrashSettingsUpdateRequest): Promise<TrashSettings>;
 }
 
+/**
+ * Trash settings per storage row. Every request reads them, so the value is
+ * kept in memory once read and replaced when this service saves a new one:
+ * fdrive runs one API process, and nothing else writes them.
+ */
 export function createTrashSettingsService(deps: {
   settings: Pick<SettingsRepo, "get" | "compareAndSet">;
   identities: Pick<IdentityRepo, "get">;
-  /**
-   * The provider module's Trash strategy for a row: `move` (fdrive moves
-   * deletes into Trash) or `none`. Only the stored configuration is
-   * persisted; the strategy is read fresh so a module change never leaves a
-   * stale value behind.
-   */
-  strategyFor: (providerId: string) => Promise<TrashStrategy>;
 }): TrashSettingsService {
-  function defaults(providerId: string): TrashConfiguration {
+  const cached = new Map<string, TrashSettings>();
+  function defaults(providerId: string): TrashSettings {
     return {
       providerId,
       revision: 0,
@@ -40,11 +34,10 @@ export function createTrashSettingsService(deps: {
 
   async function read(providerId: string): Promise<{ raw: unknown | null; value: TrashSettings }> {
     const raw = await deps.settings.get<unknown>(trashSettingsKey(providerId));
-    const strategy = await deps.strategyFor(providerId);
-    if (raw === null) return { raw, value: { ...defaults(providerId), strategy } };
+    if (raw === null) return { raw, value: defaults(providerId) };
     // A row an older version saved may carry keys this one no longer stores;
     // reading drops them, and the next save writes the row without them.
-    const stored = TrashConfiguration.strip();
+    const stored = TrashSettings.strip();
     let parsed = stored.safeParse(raw);
     if (!parsed.success && typeof raw === "object") {
       // Older versions accepted overlong UTF-8 path segments. Disable that configuration
@@ -53,13 +46,7 @@ export function createTrashSettingsService(deps: {
     }
     if (!parsed.success || parsed.data.providerId !== providerId)
       throw new ApiHttpError("internal", "Stored Trash configuration is invalid.");
-    // A stored row that predates a module change may be enabled for a
-    // strategy that no longer allows it; the strategy wins.
-    const value = TrashSettings.safeParse({ ...parsed.data, strategy });
-    return {
-      raw,
-      value: value.success ? value.data : { ...parsed.data, strategy, enabled: false },
-    };
+    return { raw, value: parsed.data };
   }
 
   async function providerIdForIdentity(identityId: string): Promise<string> {
@@ -68,14 +55,20 @@ export function createTrashSettingsService(deps: {
     return identity.providerId;
   }
 
+  async function configuration(providerId: string): Promise<TrashSettings> {
+    const known = cached.get(providerId);
+    if (known !== undefined) return known;
+    const { value } = await read(providerId);
+    cached.set(providerId, value);
+    return value;
+  }
+
   async function forIdentity(identityId: string): Promise<TrashSettings> {
-    return (await read(await providerIdForIdentity(identityId))).value;
+    return configuration(await providerIdForIdentity(identityId));
   }
 
   return {
-    async configuration(providerId) {
-      return (await read(providerId)).value;
-    },
+    configuration,
     forIdentity,
     async pathForIdentity(identityId) {
       const value = await forIdentity(identityId);
@@ -88,11 +81,7 @@ export function createTrashSettingsService(deps: {
           "These Trash settings belong to another storage server. Reload and try again.",
         );
       const current = await read(providerId);
-      if (input.strategy !== current.value.strategy)
-        throw new ApiHttpError(
-          "conflict",
-          "The storage provider's Trash strategy changed. Reload Trash settings and try again.",
-        );
+      cached.set(providerId, current.value);
       if (input.revision !== current.value.revision)
         throw new ApiHttpError(
           "conflict",
@@ -103,19 +92,17 @@ export function createTrashSettingsService(deps: {
         throw new ApiHttpError("bad_request", "Invalid Trash settings.", {
           issues: next.error.issues,
         });
-      const { strategy, ...stored } = next.data;
       if (
-        !(await deps.settings.compareAndSet(
-          trashSettingsKey(providerId),
-          current.raw,
-          TrashConfiguration.parse(stored),
-        ))
-      )
+        !(await deps.settings.compareAndSet(trashSettingsKey(providerId), current.raw, next.data))
+      ) {
+        cached.delete(providerId);
         throw new ApiHttpError(
           "conflict",
           "Trash settings changed in another session. Reload and try again.",
         );
-      return { ...stored, strategy };
+      }
+      cached.set(providerId, next.data);
+      return next.data;
     },
   };
 }

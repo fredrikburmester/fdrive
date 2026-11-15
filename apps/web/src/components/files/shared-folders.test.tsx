@@ -2,7 +2,7 @@
 import type { FsEntry, ReceivedGrant } from "@fdrive/contracts";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { NO_SELECTION } from "@/lib/identity/capabilities";
+import { NO_SELECTION } from "@/lib/files/selection";
 import { FileContextMenu, type RowContextAction } from "./file-context-menu";
 import { FilesToolbarActions } from "./toolbar";
 

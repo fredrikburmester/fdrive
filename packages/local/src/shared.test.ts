@@ -328,6 +328,23 @@ describe("createUserStorage with a storage limit", () => {
     expect(await read(storage, "/fits.txt")).toBe("12345");
   });
 
+  it("counts the pieces an upload sent in pieces has already written against the room", async () => {
+    const { storage } = limited({ bob: 6 });
+    const piece = (offset: number, final = false) => ({
+      part: { id: "0123456789abcdef", offset, final },
+    });
+    await storage.upload("/pieces.txt", bytes("1234"), piece(0));
+    // Four bytes are already in the part, so a piece of three is one too many.
+    expect(await kindOf(storage.upload("/pieces.txt", bytes("567"), piece(4, true)))).toBe(
+      "storage_limit_reached",
+    );
+    expect(await kindOf(storage.upload("/pieces.txt", bytes("x"), piece(7, true)))).toBe(
+      "storage_limit_reached",
+    );
+    await storage.upload("/pieces.txt", bytes("56"), piece(4, true));
+    expect(await read(storage, "/pieces.txt")).toBe("123456");
+  });
+
   it("refuses every write once its owner is over the limit, but not where there is none", async () => {
     expect(await kindOf(limited({ bob: -1 }).storage.upload("/empty.txt", bytes("")))).toBe(
       "storage_limit_reached",

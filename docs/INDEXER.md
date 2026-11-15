@@ -30,8 +30,8 @@ Every regular file under a configured root, except:
 - Names in `SKIP_NAMES` (`.DS_Store`, `Thumbs.db`, `desktop.ini`, `.localized`),
   AppleDouble sidecars (`._*`) and uploads local storage is still writing
   (`.fdrive-partial-<16 hex>`, renamed to the real name once complete).
-- Directories in `SKIP_DIRS` (`.fdrive-backups`, `.fdrive-desktop`, `@eaDir`, `.Trash`,
-  `.Trashes`, `node_modules`, `.git`), wherever they lie. `.fdrive-desktop` is the Mac app's
+- Directories in `SKIP_DIRS` (`.fdrive-desktop`, `@eaDir`, `.Trash`, `.Trashes`,
+  `node_modules`, `.git`), wherever they lie. `.fdrive-desktop` is the Mac app's
   folder (staged uploads, the versions its writes replace and its Trash), so none of it is
   indexed or journaled; the next scan sweeps rows indexed there before. fdrive's own Trash is
   indexed, so moving an item into and out of it stays a rename that keeps its thumbnails and
@@ -83,7 +83,8 @@ through the storage's own file download, so loading a gallery of thumbnails
 never consumes a share's download limit the way opening or downloading a
 full-size image does. The public route checks a password-protected share's
 password before it serves a thumbnail. Both map index paths to a login's paths
-through [scopes](SCOPING.md) and check each file with a live read first.
+through [scopes](SCOPING.md), which are the permission: neither reads the file. Responses
+are cached privately and revalidated against the file's sha256 `ETag`.
 
 `POST /thumbnails/rebuild` (`maintenance.rs`) is a separate, thumbnail-only
 pass for when the WebP files themselves need regenerating, for example after

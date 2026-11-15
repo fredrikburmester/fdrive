@@ -35,8 +35,9 @@ RUN pnpm deploy --filter @fdrive/api --prod --legacy /out
 
 FROM node:24-alpine@sha256:e67514e5d0f6c46656005e1b693b2ec9d52e80b641307de684d4a015ba7a4eaf AS runtime
 
-# setpriv lets docker-entrypoint.sh drop from root to FDRIVE_RUN_AS_UID.
-RUN apk add --no-cache setpriv && addgroup -S fdrive && adduser -S fdrive -G fdrive
+# setpriv lets docker-entrypoint.sh drop from root to FDRIVE_RUN_AS_UID; ffmpeg plays
+# videos browsers cannot (`GET /fs/transcode`).
+RUN apk add --no-cache setpriv ffmpeg && addgroup -S fdrive && adduser -S fdrive -G fdrive
 
 WORKDIR /app
 ENV NODE_ENV=production
@@ -56,7 +57,7 @@ ARG FDRIVE_BUILD_VERSION=
 RUN printf '%s' "$FDRIVE_BUILD_VERSION" > build-version
 LABEL org.opencontainers.image.version=$FDRIVE_BUILD_VERSION
 
-RUN mkdir -p /var/lib/fdrive/desktop /var/lib/fdrive/backups && chown fdrive:fdrive /var/lib/fdrive/desktop /var/lib/fdrive/backups
+RUN mkdir -p /var/lib/fdrive/backups && chown fdrive:fdrive /var/lib/fdrive/backups
 
 # deploy/compose.yaml starts the container as root with FDRIVE_RUN_AS_UID set:
 # the entrypoint gives the state directories to that uid and drops to it

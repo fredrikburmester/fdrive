@@ -1,11 +1,10 @@
 import { ROUTES, StorageKind, StorageUsageResponse } from "@fdrive/contracts";
 import { mimeFromExtension, type StorageProvider } from "@fdrive/core";
-import type { IdentityRepo, IndexQueries, LocalUserRepo } from "@fdrive/db";
+import type { IndexQueries, LocalUserRepo } from "@fdrive/db";
 import type { AuthedHono } from "../app.js";
 import { withoutApiV1Prefix } from "../auth/routes.js";
-import { authorizeDuplicateGroups, authorizeIndexedFiles } from "../mcp/handlers.js";
-import { reservedExclusionOf, resolveScopeContext } from "../mcp/scope-context.js";
-import { createReadAuthorizer } from "../scoping/read-authorizer.js";
+import { visibleDuplicateGroups } from "../mcp/handlers.js";
+import { reservedExclusionOf, resolveScopeContext, virtualPathFor } from "../mcp/scope-context.js";
 import type { ScopeResolver } from "../scoping/resolver.js";
 import { dateFromMtimeNs } from "../search/scopes.js";
 
@@ -27,8 +26,7 @@ export function storageKind(ext: string): StorageKind {
   return DOCUMENT_MIME.test(mime) ? "documents" : "other";
 }
 
-export interface StorageRoutesDeps {
-  readonly identities: Pick<IdentityRepo, "get">;
+export interface StorageUsageRoutesDeps {
   readonly resolver: Pick<ScopeResolver, "verifiedIndexScopes">;
   readonly indexQueries: Pick<
     IndexQueries,
@@ -43,31 +41,27 @@ export interface StorageRoutesDeps {
  * by kind, against its storage limit, its largest files and its identical
  * files (same size and content hash, empty files left out). Everything
  * comes from the index over the home's verified scope alone, never a folder
- * someone shares with the login; each listed file passes a live read check
- * and fdrive's own folders are left out of the list, though their bytes count.
+ * someone shares with the login; the scope is the permission, so no storage
+ * is read. fdrive's own folders are left out of the list, though their bytes
+ * count.
  */
-export function registerStorageRoutes(
+export function registerStorageUsageRoutes(
   groups: { authed: AuthedHono },
-  deps: StorageRoutesDeps,
+  deps: StorageUsageRoutesDeps,
 ): void {
   groups.authed.get(withoutApiV1Prefix(ROUTES.storage), async (c) => {
     const principal = c.get("principal");
-    const identity = await deps.identities.get(principal.identityId);
-    const verified = identity === null ? null : await deps.resolver.verifiedIndexScopes(identity);
+    const verified = await deps.resolver.verifiedIndexScopes(principal.username);
     // Only the login's own home: never a folder someone shares with it.
-    const home =
-      verified?.available === true
-        ? verified.scopes.filter((scope) => scope.virtualPrefix === "/")
-        : [];
+    const home = verified.available
+      ? verified.scopes.filter((scope) => scope.virtualPrefix === "/")
+      : [];
     const ctx = await resolveScopeContext(
       deps.indexQueries,
       home,
       deps.trashPathForStorage(principal.storage),
     );
-    const limit =
-      identity === null
-        ? null
-        : ((await deps.localUsers.get(identity.externalUsername))?.storageLimit ?? null);
+    const limit = (await deps.localUsers.get(principal.username))?.storageLimit ?? null;
     const bytes = Object.fromEntries(StorageKind.options.map((kind) => [kind, 0])) as Record<
       StorageKind,
       number
@@ -93,9 +87,12 @@ export function registerStorageRoutes(
       deps.indexQueries.duplicates(ctx.scopePrefixes, 1, DUPLICATE_GROUPS, { exclude }),
     ]);
     for (const { ext, bytes: total } of extensions) bytes[storageKind(ext)] += total;
-    const authorizer = createReadAuthorizer({ storage: principal.storage });
-    const { files, virtualPaths } = await authorizeIndexedFiles(ctx, authorizer, candidates.files);
-    const duplicates = await authorizeDuplicateGroups(ctx, authorizer, groups);
+    const largest = candidates.files.flatMap((file) => {
+      const path = virtualPathFor(ctx, file.rootId, file.path);
+      return path === null
+        ? []
+        : [{ path, size: file.size, modifiedAt: dateFromMtimeNs(file.mtimeNs).toISOString() }];
+    });
 
     return c.json(
       StorageUsageResponse.parse({
@@ -103,12 +100,8 @@ export function registerStorageRoutes(
         used: extensions.reduce((sum, row) => sum + row.bytes, 0),
         limit,
         kinds: kinds(),
-        largest: files.map((file) => ({
-          path: virtualPaths.get(file.id),
-          size: file.size,
-          modifiedAt: dateFromMtimeNs(file.mtimeNs).toISOString(),
-        })),
-        duplicates: duplicates.groups.map((group) => ({
+        largest,
+        duplicates: visibleDuplicateGroups(ctx, groups).groups.map((group) => ({
           size: group.size_bytes,
           paths: group.paths,
         })),

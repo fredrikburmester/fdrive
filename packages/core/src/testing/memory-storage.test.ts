@@ -30,6 +30,21 @@ describe("createMemoryStorage extras", () => {
     expect(storage.dump()).toEqual({ "/s.txt": "stream" });
   });
 
+  it("publishes an upload sent in pieces only at the last, refusing a gap", async () => {
+    const storage = createMemoryStorage();
+    const encode = (value: string) => new TextEncoder().encode(value);
+    const piece = (offset: number, final = false) => ({
+      part: { id: "0123456789abcdef", offset, final },
+    });
+    await storage.upload("/p.txt", encode("hel"), piece(0));
+    await expect(storage.upload("/p.txt", encode("?"), piece(9))).rejects.toMatchObject({
+      kind: "bad_request",
+    });
+    expect(storage.dump()).toEqual({});
+    await storage.upload("/p.txt", encode("lo"), piece(3, true));
+    expect(storage.dump()).toEqual({ "/p.txt": "hello" });
+  });
+
   it("refuses uploads over directories, unknown parents and, on request, existing files", async () => {
     const storage = createMemoryStorage({ "/x/y.txt": "y" });
     await expect(storage.upload("/x", new Uint8Array())).rejects.toMatchObject({
@@ -157,4 +172,25 @@ it("stamps files as a disk does: every write moves the stamp, reads leave it", a
     storage.upload("/short.txt", new TextEncoder().encode("ab"), { contentLength: 3 }),
   ).rejects.toMatchObject({ kind: "bad_request" });
   await expect(storage.statFile("/short.txt")).rejects.toMatchObject({ kind: "not_found" });
+});
+
+it("renames as a disk does: files and folders keep their inodes, copies get new ones", async () => {
+  const storage = createMemoryStorage({ "/a/b/c.txt": "c", "/d.txt": "d" });
+  const folder = (await storage.stat("/a")).ino;
+  const file = (await storage.stat("/a/b/c.txt")).ino;
+  expect(folder).toBeTypeOf("bigint");
+  await storage.move("/a", "/moved");
+  expect((await storage.stat("/moved")).ino).toBe(folder);
+  expect((await storage.stat("/moved/b/c.txt")).ino).toBe(file);
+  await storage.copy("/moved", "/copied");
+  expect(storage.dump()["/copied/b/c.txt"]).toBe("c");
+  expect((await storage.stat("/copied/b/c.txt")).ino).not.toBe(file);
+  await expect(storage.move("/moved", "/moved/b/inside")).rejects.toMatchObject({
+    kind: "bad_request",
+  });
+  const before = await storage.contentStamp?.("/d.txt");
+  await storage.move("/d.txt", "/e.txt");
+  const after = await storage.contentStamp?.("/e.txt");
+  expect(after?.ino).toBe(before?.ino);
+  expect(after?.ctimeNs).not.toBe(before?.ctimeNs);
 });

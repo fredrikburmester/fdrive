@@ -123,7 +123,7 @@ describe("search startup retry decisions", () => {
       available: false,
       semantic: false,
       images: false,
-      reason: "provider_mismatch",
+      reason: "invalid_configuration",
     };
 
     expect(isSearchUnsupported(status)).toBe(true);

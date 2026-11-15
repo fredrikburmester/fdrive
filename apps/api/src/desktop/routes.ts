@@ -10,8 +10,6 @@ import {
   DesktopPairRequest,
   DesktopPairSecret,
   DesktopPath,
-  DesktopRecoveryResolution,
-  DesktopRecoveryResponse,
   DesktopUploadRequest,
   DesktopVersionRequest,
 } from "@fdrive/contracts";
@@ -21,13 +19,14 @@ import type { PersonalActivityService } from "../activity/service.js";
 import { activityStream } from "../activity/streams.js";
 import type { AppHono, AuthedHono } from "../app.js";
 import { accountContext } from "../auth/account-context.ts";
-import { createRequireAdmin, type Principal } from "../auth/principal.js";
+import type { Principal } from "../auth/principal.js";
 import { ApiHttpError } from "../errors.js";
 import { parseBody } from "../fs/routes.js";
 import { hashApiToken } from "../tokens/token-format.js";
 import type { DesktopChanges } from "./changes.js";
 import { createDesktopFiles } from "./files.js";
 import { createDesktopPairing, type DesktopDeps } from "./pairing.js";
+import { CREDENTIAL_GONE, looksLikeDesktopToken } from "./tokens.js";
 import type { DesktopWrites } from "./writes.js";
 
 export function registerDesktopRoutes(
@@ -47,41 +46,11 @@ export function registerDesktopRoutes(
     if (!deps.writes) throw new ApiHttpError("not_found", "Desktop writes are unavailable");
     return deps.writes;
   };
-  groups.authed.get(`${base}/recovery`, createRequireAdmin(), async (c) => {
-    c.header("Cache-Control", "no-store");
-    if (!writes) throw new ApiHttpError("upstream_unavailable", "Recovery status is unavailable");
-    return c.json(
-      DesktopRecoveryResponse.parse({ uncertain: await writes.uncertain(deps.clock()) }),
-    );
-  });
-  groups.authed.post(
-    `${base}/recovery/:identityId/:operationId/resolve`,
-    createRequireAdmin(),
-    async (c) => {
-      c.header("Cache-Control", "no-store");
-      const body = await parseBody(DesktopRecoveryResolution, c);
-      const identityId = CanonicalUuid.safeParse(c.req.param("identityId"));
-      const operationId = CanonicalUuid.safeParse(c.req.param("operationId"));
-      if (!identityId.success || !operationId.success)
-        throw new ApiHttpError("bad_request", "Invalid recovery reference");
-      const identity = await deps.identities.get(identityId.data);
-      if (!identity) throw new ApiHttpError("not_found", "Storage login no longer exists");
-      return c.json(
-        await writeService().resolve(
-          identity.id,
-          identity.accountId,
-          operationId.data,
-          body.outcome,
-          deps.clock(),
-        ),
-      );
-    },
-  );
   const changes = deps.changes;
   const pairing = createDesktopPairing({
     ...deps,
     ...(writes
-      ? { writeAvailability: async (principal: Principal) => writes.availability(principal) }
+      ? { writeCapabilities: (principal: Principal) => writes.capabilities(principal) }
       : {}),
     ...(changes ? { changeFeed: (principal: Principal) => changes.available(principal) } : {}),
   });
@@ -94,20 +63,22 @@ export function registerDesktopRoutes(
   /** The caller's own ID for one hydration, distinct from a write's operation ID. */
   const hydrationId = (c: Context) => activityOperationId(c.req.header("x-fdrive-operation-id"));
   /**
-   * The token's principal. A location whose storage is gone (its provider
-   * disabled or of a type this release no longer has) cannot build storage;
-   * it answers like `location()` does for it, so the Mac app asks to sign in
-   * again instead of reporting a server error.
+   * Why a desktop bearer was refused. A well-formed desktop credential this server holds no
+   * row for is gone for good: revoked from the web or the Mac, deleted with its login or
+   * account, or cleared by a restore. Its 401 says so with `credential_gone`, and the Mac
+   * removes that location instead of asking again. Every other refusal (an expired
+   * credential, an unreadable grant, a missing or malformed bearer) stays a plain 401,
+   * which the Mac shows as signed out.
    */
-  async function resolveLocation(bearer: string) {
-    try {
-      return await pairing.resolve(bearer);
-    } catch (error) {
-      if (error instanceof ApiHttpError && error.kind === "upstream_unavailable") {
-        throw new ApiHttpError("unauthorized", "Storage login is no longer available");
-      }
-      throw error;
-    }
+  async function refused(bearer: string): Promise<ApiHttpError> {
+    if (
+      looksLikeDesktopToken(bearer) &&
+      (await deps.apiTokens.findByHash(hashApiToken(bearer))) === null
+    )
+      return new ApiHttpError("unauthorized", "This connection no longer exists. Connect again", {
+        code: CREDENTIAL_GONE,
+      });
+    return new ApiHttpError("unauthorized", "Reconnect this location in the Mac app");
   }
   async function principal(
     c: Context,
@@ -115,11 +86,11 @@ export function registerDesktopRoutes(
   ): Promise<{ bearer: string; principal: Principal }> {
     c.header("Cache-Control", "no-store");
     const bearer = c.req.header("authorization")?.replace(/^Bearer /, "") ?? "";
-    const resolved = await resolveLocation(bearer);
+    const resolved = await pairing.resolve(bearer);
+    if (!resolved) throw await refused(bearer);
     if (
-      !resolved ||
-      (resolved.tokenAccess?.mode !== "read" &&
-        !(writeProtocol && resolved.tokenAccess?.mode === "full"))
+      resolved.tokenAccess?.mode !== "read" &&
+      !(writeProtocol && resolved.tokenAccess?.mode === "full")
     )
       throw new ApiHttpError("unauthorized", "Reconnect this location in the Mac app");
     const hash = hashApiToken(bearer);

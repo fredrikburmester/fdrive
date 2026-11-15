@@ -33,7 +33,6 @@ import { useMe } from "@/lib/api/auth-queries";
 import { describeApiError } from "@/lib/api/errors";
 import { queryKeys } from "@/lib/api/keys";
 import { useDelete } from "@/lib/files/queries";
-import { capabilitiesFor } from "@/lib/identity/capabilities";
 import { revealHref } from "@/lib/search/reveal";
 import { useStorageUsage } from "@/lib/storage/queries";
 import { trashAvailabilityFor } from "@/lib/trash/format";
@@ -171,21 +170,30 @@ function entryAt(path: string): FsEntry {
   };
 }
 
-/** Groups of identical files, each copy with a way to it and to Trash. */
-function DuplicatesCard({ groups }: { groups: readonly StorageDuplicates[] }) {
+/**
+ * Groups of identical files, each copy with a way to it and to Trash. A copy
+ * removed here leaves at once, before the index catches up.
+ */
+function DuplicatesCard({ groups: indexed }: { groups: readonly StorageDuplicates[] }) {
   const { formatBytes } = useFormatters();
   const { data: me } = useMe();
   const queryClient = useQueryClient();
   const remove = useDelete();
   const [removing, setRemoving] = useState<string | null>(null);
-  const trash = trashAvailabilityFor(capabilitiesFor(me));
+  const [removed, setRemoved] = useState<ReadonlySet<string>>(new Set());
+  const trash = trashAvailabilityFor({ trash: me?.trash === true });
   const label = trash === null ? "Delete" : "Move to Trash";
+  const groups = indexed
+    .map((group) => ({ ...group, paths: group.paths.filter((path) => !removed.has(path)) }))
+    .filter((group) => group.paths.length > 1);
 
   function confirm() {
     if (removing === null) return;
-    remove.mutate([{ path: removing, kind: "file" }], {
+    const path = removing;
+    remove.mutate([{ path, kind: "file" }], {
       onSuccess: () => {
         setRemoving(null);
+        setRemoved((before) => new Set([...before, path]));
         void queryClient.invalidateQueries({ queryKey: queryKeys.storage.usage() });
       },
     });

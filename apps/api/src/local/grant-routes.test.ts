@@ -6,29 +6,24 @@ import { describe, expect, it, vi } from "vitest";
 import { createApp } from "../app.js";
 import type { Principal } from "../auth/principal.js";
 import { loadConfig } from "../config.js";
-import { seedLocalProvider } from "../providers/test-fixtures/index.ts";
 import { registerGrantRoutes } from "./grant-routes.js";
 import { createLocalGrantService } from "./grants.js";
-import { seedLocalUsers } from "./test-fixtures/index.ts";
+import { seedLocalUsers, seedStorageRow } from "./test-fixtures/index.ts";
 
 async function harness() {
   const repos = createMemoryRepos();
-  const row = await seedLocalProvider(repos);
-  await seedLocalUsers(repos, [
+  const row = await seedStorageRow(repos);
+  const [identity] = await seedLocalUsers(repos, [
     { username: "alice", password: "alice-pass" },
     { username: "bob", password: "bob-pass" },
   ]);
-  const account = await repos.accounts.create({ displayName: "alice" });
-  const identity = await repos.identities.create({
-    accountId: account.id,
-    providerId: row.id,
-    externalUsername: "alice",
-  });
+  if (identity === undefined) throw new Error("unseeded");
+  const account = { id: identity.accountId };
   // Alice's files: one folder to share.
   const storage = createMemoryStorage({ "/Projects/plan.txt": "plan" });
   const service = createLocalGrantService({
     repos,
-    providerId: async () => row.id,
+    storageId: row.id,
     storageFor: async () => storage,
   });
   const principal: Principal = {
@@ -41,6 +36,7 @@ async function harness() {
   const app = createApp({
     config: loadConfig({
       DATABASE_URL: "postgres://localhost/fdrive",
+      FDRIVE_STORAGE_ROOT: "/srv/files",
       FDRIVE_MASTER_KEY: Buffer.alloc(32, 61).toString("base64"),
     }),
     logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() } as never,
@@ -80,7 +76,7 @@ describe("/grants", () => {
     expect(grant).toMatchObject({ path: "/Projects", username: "bob", access: "read" });
 
     const listed = GrantsResponse.parse(await (await h.call(ROUTES.grants.list)).json());
-    expect(listed).toEqual({ available: true, owned: [grant], received: [] });
+    expect(listed).toEqual({ owned: [grant], received: [] });
 
     const changed = await h.call(one(grant.id), { method: "PATCH", body: { access: "write" } });
     expect(OwnedGrant.parse(await changed.json()).access).toBe("write");

@@ -1,3 +1,6 @@
+import type { SearchTypeFilter } from "@fdrive/contracts";
+import type { LoginRepo } from "./logins-types.js";
+
 /** A storage backend instance: the files folder. */
 export interface Provider {
   readonly id: string;
@@ -65,8 +68,6 @@ export interface LocalUserRepo {
   /** Every user, by name. */
   list(): Promise<LocalUser[]>;
   count(): Promise<number>;
-  /** Throws `ConflictError` when the name is taken in any case. */
-  create(input: { username: string; passwordHash: string }): Promise<LocalUser>;
   /** Applies `patch`; `null` when no such user exists. */
   update(username: string, patch: LocalUserPatch): Promise<LocalUser | null>;
   /** A no-op when the user does not exist. */
@@ -154,29 +155,6 @@ export interface IdentityRepo {
    * time the way a request is.
    */
   listAll(): Promise<Identity[]>;
-}
-
-/**
- * The envelope-encrypted credential an identity last signed in with. The
- * cached token columns held a sealed upstream token for storage that minted
- * one; no storage does any more, so they stay empty.
- */
-export interface Credential {
-  readonly identityId: string;
-  readonly ciphertext: Uint8Array;
-  readonly keyId: string;
-  readonly cachedToken: string | null;
-  readonly cachedTokenExpiresAt: Date | null;
-  readonly updatedAt: Date;
-}
-
-export interface CredentialRepo {
-  put(input: { identityId: string; ciphertext: Uint8Array; keyId: string }): Promise<void>;
-  get(identityId: string): Promise<Credential | null>;
-  setCachedToken(
-    identityId: string,
-    token: { sealed: string; expiresAt: Date } | null,
-  ): Promise<void>;
 }
 
 /** An opaque server-side session. The cookie carries the raw id; only its hash is stored. */
@@ -400,6 +378,24 @@ export interface RecentRepo {
   prune(identityId: string, keep: number): Promise<void>;
 }
 
+/** A search an account saved from the search panel. */
+export interface SavedSearch {
+  readonly id: string;
+  readonly name: string;
+  readonly query: string;
+  readonly type: SearchTypeFilter;
+  /** The folder "This folder only" searched; null searches everything. */
+  readonly folder: string | null;
+}
+
+export interface SavedSearchRepo {
+  /** The account's saved searches, oldest first. */
+  list(accountId: string): Promise<SavedSearch[]>;
+  create(accountId: string, input: Omit<SavedSearch, "id">): Promise<SavedSearch>;
+  /** Deletes the search, scoped to `accountId`. A no-op when not found. */
+  delete(id: string, accountId: string): Promise<void>;
+}
+
 /**
  * Coordinates path changes across every metadata table. Implementations must
  * apply each operation atomically: callers either observe all metadata moved
@@ -556,7 +552,8 @@ export interface Repos {
   readonly localGrants: LocalGrantRepo;
   readonly accounts: AccountRepo;
   readonly identities: IdentityRepo;
-  readonly credentials: CredentialRepo;
+  /** Writes that span users, accounts, logins and sessions; the only way to create a user. */
+  readonly logins: LoginRepo;
   readonly sessions: SessionRepo;
   readonly settings: SettingsRepo;
   readonly apiTokens: ApiTokenRepo;
@@ -565,6 +562,7 @@ export interface Repos {
   readonly favorites: FavoriteRepo;
   readonly folderViews: FolderViewRepo;
   readonly recents: RecentRepo;
+  readonly savedSearches: SavedSearchRepo;
   readonly metadataPaths: MetadataPathRepo;
   readonly systemEvents: SystemEventRepo;
   readonly aiChats: AiChatRepo;

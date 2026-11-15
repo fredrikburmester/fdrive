@@ -9,6 +9,7 @@ import {
   createShareRepo,
   migrate,
 } from "../../src/index.js";
+import { localUsers } from "../../src/schema/app.js";
 
 it("coordinates desktop identities and operation receipts across independent PostgreSQL pools", {
   timeout: 180_000,
@@ -130,8 +131,11 @@ it("coordinates desktop identities and operation receipts across independent Pos
     expect(kept?.state).toBe("completed");
     expect(kept?.result).toEqual({ receipt: receipts[0] ? "first" : "second" });
     // What grants access to a moved path goes with the receipt, or neither is kept.
-    for (const username of ["alice", "carol"])
-      await repos.localUsers.create({ username, passwordHash: "unused" });
+    // The grant's users only, without the logins creating a user brings: this test has its own.
+    await first.db.insert(localUsers).values([
+      { username: "alice", passwordHash: "unused" },
+      { username: "carol", passwordHash: "unused" },
+    ]);
     const grant = await repos.localGrants.put({
       ownerUsername: "alice",
       path: "/Shared",
@@ -198,13 +202,11 @@ it("coordinates desktop identities and operation receipts across independent Pos
     const conflict = await seed("conflict");
     const acknowledged = await seed("acknowledged");
     const cancelled = await seed("cancelled");
-    const uncertain = await seed("uncertain");
-    const committing = await seed("committing");
+    // A ready or committing operation may still publish what it staged.
+    await seed("ready");
+    await seed("committing");
     expect((await a.expired(now, retention, 10)).map((op) => op.id).sort()).toEqual(
       [idle, conflict, acknowledged, cancelled].sort(),
-    );
-    expect((await b.uncertain(10)).map((op) => op.id).sort()).toEqual(
-      [uncertain, committing].sort(),
     );
     expect(fresh).toBeTruthy();
     expect(await a.forget(identity.id, account.id, idle)).toBe(false);

@@ -1,15 +1,18 @@
-import type { StorageProvider } from "@fdrive/core";
+import { StorageError, type StorageProvider } from "@fdrive/core";
+import { createMemoryStorage } from "@fdrive/testkit";
 import { Hono } from "hono";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { ApiHttpError } from "../errors";
 import {
   createCsrfGuard,
+  createPrincipalFactory,
   createRequireAdmin,
   createRequireAuth,
   type Principal,
   type PrincipalResolver,
   type PrincipalVariables,
 } from "./principal";
+import { trashSettingsForStorage } from "./storage-factory";
 
 function notImplemented(): never {
   throw new Error("not implemented in this fake");
@@ -217,5 +220,64 @@ describe("createCsrfGuard", () => {
     const res = await app.request("/action", { method: "HEAD" });
 
     expect(res.status).toBe(200);
+  });
+});
+
+describe("createPrincipalFactory", () => {
+  const login = {
+    identityId: "identity-1",
+    accountId: "account-1",
+    providerId: "provider-1",
+    username: "alice",
+    displayName: "Alice",
+    isAdmin: true,
+    active: true,
+  };
+  const trash = {
+    providerId: "123e4567-e89b-42d3-a456-426614174000",
+    revision: 1,
+    enabled: true,
+    path: "/.trash",
+    retentionHours: null,
+  };
+
+  it("builds no storage for a request that touches no files, and one for one that does", async () => {
+    const storage = vi.fn(() => createMemoryStorage({ "/a.txt": "a" }));
+    const trashSettings = vi.fn(async () => trash);
+    const principalFor = createPrincipalFactory({
+      folder: { storage },
+      clock: () => new Date(0),
+      trashSettings,
+    });
+
+    const idle = await principalFor(login);
+    expect(idle).toMatchObject({
+      accountId: "account-1",
+      identityId: "identity-1",
+      username: "alice",
+      isAdmin: true,
+    });
+    expect(storage).not.toHaveBeenCalled();
+
+    const busy = await principalFor(login, { tokenAccess: { mode: "read", paths: ["/"] } });
+    expect(busy.tokenAccess).toEqual({ mode: "read", paths: ["/"] });
+    expect(busy.storage).toBe(busy.storage);
+    expect(storage).toHaveBeenCalledExactlyOnceWith("alice");
+    expect(trashSettingsForStorage(busy.storage)).toEqual(trash);
+    expect(busy.storage.trash).toBeDefined();
+    expect(trashSettings).toHaveBeenCalledTimes(2);
+  });
+
+  it("refuses a login whose name cannot be a home folder when its storage is first used", async () => {
+    const principalFor = createPrincipalFactory({
+      folder: {
+        storage: () => {
+          throw new StorageError("forbidden", "this login has no valid home folder");
+        },
+      },
+      clock: () => new Date(0),
+    });
+    const principal = await principalFor({ ...login, username: ".." });
+    expect(() => principal.storage).toThrow(ApiHttpError);
   });
 });

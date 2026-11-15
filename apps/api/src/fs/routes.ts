@@ -68,8 +68,6 @@ function routePath(fullPath: string): string {
 }
 
 export interface FsRoutesDeps {
-  /** Compares a complete authorized listing against tracked history. */
-  readonly activityObservations?: import("../activity/observations.js").ActivityObservations;
   /** Absent in fixtures that do not exercise personal history; every route works without it. */
   readonly activity?: PersonalActivityService;
   readonly bus: EventBus;
@@ -107,7 +105,7 @@ export interface FsRoutesDeps {
 
 export type FsContext = Context<{ Variables: AppVariables & PrincipalVariables }>;
 
-function parseQuery<T>(schema: z.ZodType<T>, query: Record<string, string | undefined>): T {
+export function parseQuery<T>(schema: z.ZodType<T>, query: Record<string, string | undefined>): T {
   const result = schema.safeParse(query);
   if (!result.success) {
     throw new ApiHttpError("bad_request", "invalid query", { issues: result.error.issues });
@@ -180,10 +178,9 @@ export function normalizeOrThrow(path: string): string {
   }
 }
 
-/** Maps a `StorageError` to the `ApiHttpError` of the matching kind ("unauthorized" becomes "reauth_required"). */
+/** Maps a `StorageError` to the `ApiHttpError` of the same kind. */
 export function toApiHttpError(error: StorageError): ApiHttpError {
-  const kind = error.kind === "unauthorized" ? "reauth_required" : error.kind;
-  return new ApiHttpError(kind, error.message, error.details);
+  return new ApiHttpError(error.kind, error.message, error.details);
 }
 
 /** Runs `fn`, mapping any `StorageError` it throws into the matching `ApiHttpError`. */
@@ -616,12 +613,6 @@ export function registerFsRoutes(
     const query = parseQuery(PathQuery, c.req.query());
     const path = normalizeOrThrow(query.path);
     const entries = await runStorageCall(() => principal.storage.list(path));
-    // A complete authorized listing is a refresh input for changes made
-    // outside fdrive. It suggests differences; only a live check can
-    // establish one.
-    // Comparison runs beside the response: it probes the provider, and a
-    // listing is not worth slowing down to notice an outside change sooner.
-    void deps.activityObservations?.refresh(principal, path, entries);
     const trashPath = deps.trashPathForStorage?.(principal.storage) ?? null;
     // fdrive's own folders (the Trash, the Mac app's folder) are not the
     // user's, so the tree does not show them.
@@ -700,7 +691,15 @@ export function registerFsRoutes(
       contentLength?: number;
       overwrite: boolean;
       signal?: AbortSignal;
+      part?: { id: string; offset: number; final: boolean };
     } = { overwrite: query.intent !== "create", signal: c.req.raw.signal };
+    if (query.part !== undefined) {
+      uploadOpts.part = {
+        id: query.part,
+        offset: Number(query.offset ?? 0),
+        final: query.final === "true",
+      };
+    }
     if (query.mkdirParents !== undefined) {
       uploadOpts.mkdirParents = query.mkdirParents === "true";
     }
@@ -717,6 +716,14 @@ export function registerFsRoutes(
       if (Number.isFinite(contentLength)) {
         uploadOpts.contentLength = contentLength;
       }
+    }
+    // A piece before the last only grows the upload's part; the last one
+    // publishes the file as one upload, recorded and announced once.
+    if (uploadOpts.part?.final === false) {
+      await runStorageCall(() =>
+        principal.storage.upload(path, c.req.raw.body ?? new Uint8Array(), uploadOpts),
+      );
+      return c.body(null, 204);
     }
 
     const before = deps.activity ? await activityStat(principal.storage, path) : undefined;

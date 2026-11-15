@@ -20,7 +20,7 @@ vi.mock("@/components/shell/page-header", () => ({ PageHeader: () => null }));
 vi.mock("@/lib/storage/queries", () => ({ useStorageUsage: () => mocks.query }));
 vi.mock("@/lib/files/queries", () => ({ useDelete: () => mocks.remove }));
 vi.mock("@/lib/api/auth-queries", () => ({
-  useMe: () => ({ data: { identity: { capabilities: { trash: mocks.trash, index: true } } } }),
+  useMe: () => ({ data: { trash: mocks.trash, index: true } }),
 }));
 
 const { StoragePage } = await import("./storage-page");
@@ -123,6 +123,9 @@ describe("StoragePage", () => {
     fireEvent.click(screen.getByRole("button", { name: "Move y.txt to Trash" }));
     const dialog = screen.getByRole("alertdialog");
     expect(within(dialog).getByText('"y.txt" will be moved to Trash.')).toBeTruthy();
+    mocks.remove.mutate.mockImplementationOnce(
+      (_entries: unknown, options: { onSuccess: () => void }) => options.onSuccess(),
+    );
     fireEvent.click(within(dialog).getByRole("button", { name: "Move to Trash" }));
 
     expect(mocks.remove.mutate).toHaveBeenCalledWith(
@@ -130,6 +133,9 @@ describe("StoragePage", () => {
       expect.anything(),
     );
     expect(invalidate).toHaveBeenCalledWith({ queryKey: ["storage", "usage"] });
+    // One copy left: that group goes at once, before the index catches up.
+    expect(screen.queryByText(/^2 copies, 10 B/)).toBeNull();
+    expect(screen.getByText(/^3 copies, 2\.0 MB/)).toBeTruthy();
   });
 
   it("says a copy is deleted for good where the login has no Trash, and keeps it on cancel", () => {

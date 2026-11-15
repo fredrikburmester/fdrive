@@ -48,10 +48,10 @@ export interface RunningEnvironment {
   readonly databaseUrl: string;
   /**
    * The local folder the API serves (`FDRIVE_STORAGE_ROOT`), one home per
-   * user at `<root>/<username>`; `undefined` when `options.storage` is
-   * `false`. Specs read and change files here directly, as the host would.
+   * user at `<root>/<username>`. Specs read and change files here directly,
+   * as the host would.
    */
-  readonly storageRoot: string | undefined;
+  readonly storageRoot: string;
   /** This run's actual API and web base URLs: equal to `getApiBaseUrl()`/
    * `getWebBaseUrl()` for the default, shared environment, but reflect
    * `options.apiPort`/`options.webPort` for a second, independent
@@ -66,10 +66,9 @@ export interface StartEnvironmentOptions {
   readonly apiEntrypoint?: string;
   /**
    * The local folder's users, files and grants. Defaults to the whole e2e
-   * seed (`support/e2e-seed.ts`). `false` serves no local folder, so setup
-   * asks the operator to set `FDRIVE_STORAGE_ROOT` instead.
+   * seed (`support/e2e-seed.ts`).
    */
-  readonly storage?: LocalStorageSeed | false;
+  readonly storage?: LocalStorageSeed;
   /**
    * Creates the folder's users and grants in the database once the API has
    * migrated it, as setup and System > Users would. `false` leaves the
@@ -250,23 +249,20 @@ export async function startEnvironment(
     const postgres = await startPostgres();
     stopFns.push(() => postgres.stop());
 
-    const seed = options.storage === undefined ? E2E_STORAGE_SEED : options.storage;
-    const storage =
-      seed === false
-        ? undefined
-        : await startLocalStorage({
-            users: seed.users,
-            files: seed.files,
-            grants: seed.grants ?? [],
-          });
-    if (storage !== undefined) {
-      stopFns.push(() => storage.stop());
-      await options.prepareStorage?.(storage);
-    }
+    const seed = options.storage ?? E2E_STORAGE_SEED;
+    const storage = await startLocalStorage({
+      users: seed.users,
+      files: seed.files,
+      grants: seed.grants ?? [],
+    });
+    stopFns.push(() => storage.stop());
+    await options.prepareStorage?.(storage);
     const shared = options.skipStatePersist !== true;
-    if (shared && storage !== undefined) {
-      // Workers inherit the setup process's env: specs change files on disk here.
+    if (shared) {
+      // Workers inherit the setup process's env: specs change files on disk
+      // here, and report those changes the way the indexer's watcher would.
       process.env.E2E_STORAGE_ROOT = storage.root;
+      process.env.E2E_DATABASE_URL = postgres.connectionString;
     }
 
     const masterKey = randomBytes(32).toString("base64");
@@ -283,9 +279,8 @@ export async function startEnvironment(
           LOG_LEVEL: "warn",
           NODE_ENV: "test",
           DATABASE_URL: postgres.connectionString,
-          // Empty (no local folder) reads as unset, whatever the parent env holds.
-          FDRIVE_STORAGE_ROOT: storage?.root ?? "",
-          ...(options.indexRoot === true && storage !== undefined
+          FDRIVE_STORAGE_ROOT: storage.root,
+          ...(options.indexRoot === true
             ? {
                 FDRIVE_INDEX_ROOTS: JSON.stringify([
                   {
@@ -298,10 +293,6 @@ export async function startEnvironment(
             : {}),
           FDRIVE_MASTER_KEY: masterKey,
           FDRIVE_COOKIE_SECURE: "false",
-          // alice is the e2e suite's always-admin user (system.spec.ts),
-          // so the System sidebar section and its admin-only routes have
-          // someone to exercise them without a `/setup` run in every spec.
-          FDRIVE_ADMIN_USERS: "alice",
           // Makes `System > Thumbnails` render as configured (see
           // `system.spec.ts`): no spec relies on real thumbnail files
           // existing under it, so the OS temp directory is enough. Never
@@ -325,7 +316,7 @@ export async function startEnvironment(
       );
     }
     // The API has migrated the database by now, so its users can be created.
-    if (storage !== undefined && options.createUsers !== false) {
+    if (options.createUsers !== false) {
       await createE2eLocalUsers(postgres.connectionString, {
         users: storage.users,
         grants: storage.grants,
@@ -441,7 +432,7 @@ export async function startEnvironment(
 
     return {
       databaseUrl: postgres.connectionString,
-      storageRoot: storage?.root,
+      storageRoot: storage.root,
       apiBaseUrl,
       webBaseUrl,
       stop: stopAll,

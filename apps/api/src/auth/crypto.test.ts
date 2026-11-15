@@ -1,15 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { CryptoError, KEY_ID, open, parseMasterKey, seal } from "./crypto";
+import { CryptoError, open, parseMasterKey, seal } from "./crypto";
 
 const MASTER = parseMasterKey(Buffer.alloc(32, 7).toString("base64"));
 const OTHER_MASTER = parseMasterKey(Buffer.alloc(32, 42).toString("base64"));
 const AAD = "identity-1";
-
-describe("KEY_ID", () => {
-  it("is the fixed master-v1 label", () => {
-    expect(KEY_ID).toBe("master-v1");
-  });
-});
 
 describe("parseMasterKey", () => {
   it("decodes valid base64 to a 32-byte key", () => {

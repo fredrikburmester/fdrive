@@ -1,5 +1,5 @@
 {
-  "id": "56be8219-b75f-4bb4-bd60-ef125da27f0d",
+  "id": "47236199-b32e-480c-909a-2a1e0b074a91",
   "prevId": "41c097b3-960f-40ef-9e8b-f8743e1af0ed",
   "version": "7",
   "dialect": "postgresql",
@@ -918,67 +918,6 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
-    "app.credentials": {
-      "name": "credentials",
-      "schema": "app",
-      "columns": {
-        "identity_id": {
-          "name": "identity_id",
-          "type": "uuid",
-          "primaryKey": true,
-          "notNull": true
-        },
-        "ciphertext": {
-          "name": "ciphertext",
-          "type": "bytea",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "key_id": {
-          "name": "key_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "cached_token": {
-          "name": "cached_token",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "cached_token_expires_at": {
-          "name": "cached_token_expires_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "updated_at": {
-          "name": "updated_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        }
-      },
-      "indexes": {},
-      "foreignKeys": {
-        "credentials_identity_id_identities_id_fk": {
-          "name": "credentials_identity_id_identities_id_fk",
-          "tableFrom": "credentials",
-          "tableTo": "identities",
-          "schemaTo": "app",
-          "columnsFrom": ["identity_id"],
-          "columnsTo": ["id"],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "policies": {},
-      "checkConstraints": {},
-      "isRLSEnabled": false
-    },
     "app.desktop_items": {
       "name": "desktop_items",
       "schema": "app",
@@ -1448,7 +1387,23 @@
           "notNull": false
         }
       },
-      "indexes": {},
+      "indexes": {
+        "identities_external_username_lower_unique": {
+          "name": "identities_external_username_lower_unique",
+          "columns": [
+            {
+              "expression": "lower(\"external_username\")",
+              "asc": true,
+              "isExpression": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
       "foreignKeys": {
         "identities_account_id_accounts_id_fk": {
           "name": "identities_account_id_accounts_id_fk",
@@ -1664,12 +1619,6 @@
           "primaryKey": false,
           "notNull": true,
           "default": false
-        },
-        "storage_limit": {
-          "name": "storage_limit",
-          "type": "bigint",
-          "primaryKey": false,
-          "notNull": false
         },
         "created_at": {
           "name": "created_at",

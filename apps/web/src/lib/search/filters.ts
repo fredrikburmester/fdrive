@@ -1,5 +1,7 @@
+import type { SearchTypeFilter } from "@fdrive/contracts";
+
 /** The "Type" filter chip in the search panel. "any" sends no `ext` filter at all. */
-export type SearchTypeFilter = "any" | "images" | "documents" | "audio" | "video" | "archives";
+export type { SearchTypeFilter };
 
 export const SEARCH_TYPE_FILTERS: readonly SearchTypeFilter[] = [
   "any",

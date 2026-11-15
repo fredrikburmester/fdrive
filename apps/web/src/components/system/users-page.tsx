@@ -336,18 +336,7 @@ function UserRow({ user, onResetPassword, onStorageLimit, onRemove }: UserRowPro
         <div className="flex flex-wrap items-center gap-1.5">
           <span className="font-medium">{user.username}</span>
           {user.isYou ? <Badge variant="outline">You</Badge> : null}
-          {user.isAdmin ? (
-            <Badge
-              variant="secondary"
-              title={
-                user.adminByDeployment
-                  ? "An administrator through FDRIVE_ADMIN_USERS in the deployment."
-                  : undefined
-              }
-            >
-              Admin
-            </Badge>
-          ) : null}
+          {user.isAdmin ? <Badge variant="secondary">Admin</Badge> : null}
           {user.disabled ? <Badge variant="destructive">Disabled</Badge> : null}
         </div>
       </TableCell>
@@ -395,7 +384,6 @@ function UserRow({ user, onResetPassword, onStorageLimit, onRemove }: UserRowPro
                 {user.disabled ? "Enable" : "Disable"}
               </DropdownMenuItem>
               <DropdownMenuItem
-                disabled={user.adminByDeployment}
                 onClick={() =>
                   change(
                     { isAdmin: !user.isAdmin },
@@ -425,8 +413,7 @@ function UserRow({ user, onResetPassword, onStorageLimit, onRemove }: UserRowPro
  * them, reset a password, set a storage limit, disable or enable, change the
  * administrator flag, or remove them. Their own row offers none of that to
  * the administrator, as the API refuses most of it; their password changes
- * on the Account page. Without a local folder there are no users here to
- * manage.
+ * on the Account page.
  */
 export function UsersPage() {
   const { data, isLoading, isError, error, dataUpdatedAt } = useAdminUsers();
@@ -436,7 +423,6 @@ export function UsersPage() {
   const [limiting, setLimiting] = useState<AdminUser | null>(null);
   const [removing, setRemoving] = useState<AdminUser | null>(null);
   const users = data?.users ?? [];
-  const available = data?.available === true;
   // A non-administrator's session gets 403: a refusal, not an empty list.
   const forbidden = error instanceof ApiClientError && error.kind === "forbidden";
 
@@ -456,7 +442,12 @@ export function UsersPage() {
       description="People who sign in to this server's local folder, each with a folder of their own."
       lastUpdated={dataUpdatedAt > 0 ? new Date(dataUpdatedAt) : null}
       actions={
-        <Button type="button" size="sm" disabled={!available} onClick={() => setAdding(true)}>
+        <Button
+          type="button"
+          size="sm"
+          disabled={data === undefined}
+          onClick={() => setAdding(true)}
+        >
           <UserPlus />
           Add user
         </Button>
@@ -473,13 +464,7 @@ export function UsersPage() {
           {describeApiError(error)}
         </p>
       ) : null}
-      {data !== undefined && !available ? (
-        <SystemSection
-          title="No files folder"
-          description="This installation serves no files folder, so it has no users yet. Set FDRIVE_STORAGE_ROOT and restart fdrive."
-        />
-      ) : null}
-      {available ? (
+      {data !== undefined ? (
         <SystemSection
           title={users.length === 1 ? "1 user" : `${users.length} users`}
           description="Removing a user, resetting their password or disabling them signs them out everywhere."

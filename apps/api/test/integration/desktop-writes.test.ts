@@ -1,7 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { DesktopPairing, DesktopWriteEntry, DesktopWritePairResult } from "@fdrive/contracts";
 import { createDb, createRepos } from "@fdrive/db";
 import { startLocalStorage, startPostgres } from "@fdrive/testkit";
@@ -20,14 +18,11 @@ import { seedLocalUsers } from "./helpers/local-storage.ts";
 it("publishes complete files with durable replay and conflict protection", async () => {
   const postgres = await startPostgres();
   const storage = await startLocalStorage({ files: {} });
-  await seedLocalUsers(postgres.connectionString, storage);
-  const stateDir = await mkdtemp(join(tmpdir(), "fdrive-desktop-test-"));
+  await seedLocalUsers(postgres.connectionString, storage, ["alice"]);
   const config = loadConfig({
     DATABASE_URL: postgres.connectionString,
     FDRIVE_STORAGE_ROOT: storage.root,
     FDRIVE_MASTER_KEY: Buffer.alloc(32, 7).toString("base64"),
-    FDRIVE_ADMIN_USERS: "alice",
-    FDRIVE_DESKTOP_STATE_DIR: stateDir,
   });
   let composed = await composeApp(config, pino({ level: "silent" }));
   let cookie = "";
@@ -56,7 +51,8 @@ it("publishes complete files with durable replay and conflict protection", async
   const readDisk = (path: string) => readFile(onDisk(path), "utf8");
   try {
     const login = await call("/api/v1/auth/login", {
-      credential: { username: "alice", password: "alice-password" },
+      username: "alice",
+      password: "alice-password",
     });
     expect(login.status).toBe(200);
     cookie = login.headers.get("set-cookie")?.split(";")[0] ?? "";
@@ -103,8 +99,10 @@ it("publishes complete files with durable replay and conflict protection", async
       return operationId;
     };
     const id = await upload("save.txt", "first");
-    // Incoming content is invisible until the explicit commit.
+    // Incoming content is staged in the files folder, invisible until the explicit commit.
     await expect(readDisk("/save.txt")).rejects.toMatchObject({ code: "ENOENT" });
+    const incoming = `/.fdrive-desktop/${writable.location.identityId}/incoming`;
+    expect(await readdir(onDisk(`${incoming}/${id}`))).toHaveLength(1);
     const result = (await json(`${base}/operations/${id}/commit`, {})) as { item: unknown };
     const original = DesktopWriteEntry.parse(result.item);
     expect(await readDisk("/save.txt")).toBe("first");
@@ -116,11 +114,9 @@ it("publishes complete files with durable replay and conflict protection", async
     };
     expect(DesktopWriteEntry.parse(saved.item).id).toBe(original.id);
     expect(await readDisk("/save.txt")).toBe("second");
-    // Nothing of what the save replaced is kept, and its staging folder is gone.
+    // Nothing of what the save replaced is kept, and what it staged is gone.
     expect(saved.recoveryId).toBeNull();
-    expect(
-      await readdir(onDisk(`/.fdrive-desktop/${writable.location.identityId}`)).catch(() => []),
-    ).toEqual([]);
+    expect(await readdir(onDisk(incoming))).toEqual([]);
     await json(`${base}/operations/${next}/acknowledge`, {});
     expect(await json(`${base}/operations/${next}`)).toEqual(saved);
     // A stale base may not overwrite a later edit, including identical-length edits.
@@ -276,6 +272,5 @@ it("publishes complete files with durable replay and conflict protection", async
     await composed.close();
     await storage.stop();
     await postgres.stop();
-    await rm(stateDir, { recursive: true, force: true });
   }
 }, 600_000);

@@ -71,7 +71,7 @@ export interface ActivityFinish {
   readonly detail?: ActivityFacts;
   readonly errorCode?: string;
   readonly at?: Date;
-  readonly bridge?: { namespace: "office" | "desktop" | "provider"; externalId: string };
+  readonly bridge?: { namespace: "office" | "desktop"; externalId: string };
 }
 export interface ActivityListOptions {
   /** Only events of this login, for a reader that acts as one (an MCP token). */

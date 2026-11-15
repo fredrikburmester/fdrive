@@ -1,134 +1,265 @@
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, gt, sql } from "drizzle-orm";
 import type { Db } from "../index.js";
-import { accounts, credentials, identities, providers, sessions, settings } from "../schema/app.js";
+import { accounts, apiTokens, identities, localUsers, sessions, settings } from "../schema/app.js";
 import {
   LoginError,
   type LoginRepo,
-  type LoginVerifiedInput,
-  validateLoginVerified,
-  validateSealedIdentityCredential,
+  type NewLocalUser,
+  SETUP_OWNER_KEY,
+  type SetupOwner,
+  validateNewLocalUser,
+  validateSignIn,
 } from "./logins-types.js";
-import type { Identity } from "./types.js";
+import { isUniqueViolation } from "./pg-errors.js";
+import { ConflictError, type Identity, type LocalUser } from "./types.js";
 
 type Transaction = Parameters<Parameters<Db["transaction"]>[0]>[0];
+type Executor = Pick<Db, "execute">;
 
-async function lockVerifiedProvider(tx: Transaction, input: LoginVerifiedInput): Promise<void> {
-  const [provider] = await tx
-    .select()
-    .from(providers)
-    .where(eq(providers.id, input.providerId))
-    .for("share");
-  if (!provider) throw new LoginError("missing_provider");
-  const expected = input.verifiedProvider;
-  if (
-    expected !== undefined &&
-    (provider.type !== expected.type ||
-      provider.baseUrl !== expected.baseUrl ||
-      (!provider.enabled && !expected.allowDisabled))
-  ) {
-    throw new LoginError("invalid_session");
-  }
+/**
+ * Serializes every write that creates users or could leave fdrive without an
+ * administrator: setup, adding a user, and disabling, demoting or removing
+ * one. Held until the transaction ends.
+ */
+async function lockUsers(tx: Transaction): Promise<void> {
+  await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended('fdrive.users', 0))`);
 }
 
-/** Serializes sign-ins of one username, so a first sign-in creates one account. */
-async function lockLogin(tx: Transaction, providerId: string, username: string): Promise<void> {
-  const key = JSON.stringify(["login", providerId, username]);
-  await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${key}, 0))`);
+/** A fresh install: no owner record, no user, no account and no login. */
+async function isFresh(db: Executor): Promise<boolean> {
+  const result = await db.execute<{ fresh: boolean }>(sql`
+    select not exists (select 1 from ${settings} where ${settings.key} = ${SETUP_OWNER_KEY})
+      and not exists (select 1 from ${localUsers})
+      and not exists (select 1 from ${accounts})
+      and not exists (select 1 from ${identities}) as fresh
+  `);
+  return result.rows[0]?.fresh === true;
 }
 
-async function storeCredential(
+/** How many users may administer fdrive: enabled, with an administrator account. */
+async function enabledAdmins(tx: Transaction): Promise<number> {
+  const result = await tx.execute<{ count: number }>(sql`
+    select count(*)::int as count
+    from ${localUsers}
+    join ${identities} on ${identities.externalUsername} = ${localUsers.username}
+    join ${accounts} on ${accounts.id} = ${identities.accountId}
+    where ${accounts.isAdmin} and not ${localUsers.disabled}
+  `);
+  return result.rows[0]?.count ?? 0;
+}
+
+async function insertLocalUser(
   tx: Transaction,
-  identityId: string,
-  input: Pick<LoginVerifiedInput, "at" | "sealCredential">,
+  input: Omit<NewLocalUser, "isAdmin">,
 ): Promise<void> {
-  const sealed = input.sealCredential(identityId);
-  validateSealedIdentityCredential(sealed);
-  const values = {
-    identityId,
-    ciphertext: Buffer.from(sealed.ciphertext),
-    keyId: sealed.keyId,
-    cachedToken: null,
-    cachedTokenExpiresAt: null,
+  await tx.insert(localUsers).values({
+    username: input.username,
+    passwordHash: input.passwordHash,
+    createdAt: input.at,
     updatedAt: input.at,
-  };
-  await tx
-    .insert(credentials)
-    .values(values)
-    .onConflictDoUpdate({ target: credentials.identityId, set: values });
+  });
+}
+
+/** A new account and login for `input`'s user, never one left behind. */
+async function insertAccountAndLogin(tx: Transaction, input: NewLocalUser): Promise<Identity> {
+  const [account] = await tx
+    .insert(accounts)
+    .values({ displayName: input.username, isAdmin: input.isAdmin, createdAt: input.at })
+    .returning();
+  if (account === undefined) throw new Error("account insert returned no row");
+  const [identity] = await tx
+    .insert(identities)
+    .values({
+      accountId: account.id,
+      providerId: input.providerId,
+      externalUsername: input.username,
+      createdAt: input.at,
+    })
+    .returning();
+  if (identity === undefined) throw new Error("login insert returned no row");
+  return identity;
+}
+
+/** The user (matched in any case), their login and whether their account is an administrator's. */
+async function userWithLogin(
+  tx: Transaction,
+  username: string,
+): Promise<{ user: LocalUser; login: Identity; isAdmin: boolean } | null> {
+  const [user] = await tx
+    .select()
+    .from(localUsers)
+    .where(sql`lower(${localUsers.username}) = lower(${username})`);
+  if (user === undefined) return null;
+  const [row] = await tx
+    .select({ login: identities, isAdmin: accounts.isAdmin })
+    .from(identities)
+    .innerJoin(accounts, eq(accounts.id, identities.accountId))
+    .where(eq(identities.externalUsername, user.username));
+  if (row === undefined) throw new LoginError("missing_identity");
+  return { user, login: row.login, isAdmin: row.isAdmin };
+}
+
+/**
+ * A login's columns, for a query that joins `identities` and `accounts` and
+ * left joins the login's `local_users` row: a removed user has none.
+ */
+const loginColumns = {
+  identityId: identities.id,
+  accountId: identities.accountId,
+  providerId: identities.providerId,
+  username: identities.externalUsername,
+  displayName: accounts.displayName,
+  isAdmin: accounts.isAdmin,
+  active: sql<boolean>`coalesce(not ${localUsers.disabled}, false)`,
+};
+const toAccount = eq(accounts.id, identities.accountId);
+const toUser = eq(localUsers.username, identities.externalUsername);
+
+/** A name taken in any case, by a user or by a login a removed user left, is a conflict. */
+async function creating<T>(run: () => Promise<T>): Promise<T> {
+  try {
+    return await run();
+  } catch (error) {
+    if (isUniqueViolation(error)) throw new ConflictError("username already exists");
+    throw error;
+  }
 }
 
 export function createLoginRepo(db: Db): LoginRepo {
   return {
-    async loginVerified(input) {
-      validateLoginVerified(input);
-      return db.transaction(async (tx) => {
-        await lockLogin(tx, input.providerId, input.username);
-        await lockVerifiedProvider(tx, input);
-        const [existing] = await tx
-          .select()
-          .from(identities)
-          .where(
-            and(
-              eq(identities.providerId, input.providerId),
-              eq(identities.externalUsername, input.username),
-            ),
-          );
-        let identity: Identity;
-        if (existing) {
-          const [updated] = await tx
-            .update(identities)
-            .set({ lastLoginAt: input.at })
-            .where(eq(identities.id, existing.id))
-            .returning();
-          if (!updated) throw new LoginError("missing_identity");
-          identity = updated;
-          const [currentCredential] = await tx
+    async get(identityId) {
+      const [row] = await db
+        .select(loginColumns)
+        .from(identities)
+        .innerJoin(accounts, toAccount)
+        .leftJoin(localUsers, toUser)
+        .where(eq(identities.id, identityId));
+      return row ?? null;
+    },
+
+    async bySession(idHash, now) {
+      const [row] = await db
+        .select({ session: sessions, login: loginColumns })
+        .from(sessions)
+        .innerJoin(identities, eq(identities.id, sessions.identityId))
+        .innerJoin(accounts, toAccount)
+        .leftJoin(localUsers, toUser)
+        .where(and(eq(sessions.idHash, idHash), gt(sessions.expiresAt, now)));
+      return row ?? null;
+    },
+
+    async byToken(tokenHash) {
+      const [row] = await db
+        .select({ token: apiTokens, login: loginColumns })
+        .from(apiTokens)
+        .innerJoin(identities, eq(identities.id, apiTokens.identityId))
+        .innerJoin(accounts, toAccount)
+        .leftJoin(localUsers, toUser)
+        .where(eq(apiTokens.tokenHash, tokenHash));
+      return row ?? null;
+    },
+
+    async createUser(input) {
+      validateNewLocalUser(input);
+      return creating(() =>
+        db.transaction(async (tx) => {
+          await lockUsers(tx);
+          await insertLocalUser(tx, input);
+          const [left] = await tx
             .select()
-            .from(credentials)
-            .where(eq(credentials.identityId, identity.id));
-          const revoke =
-            input.compareCredential?.(identity.id, currentCredential ?? null) ??
-            input.revokeOtherSessions;
-          if (revoke === true)
-            await tx.delete(sessions).where(eq(sessions.accountId, identity.accountId));
-        } else {
-          const [account] = await tx
-            .insert(accounts)
-            .values({ displayName: input.username, isAdmin: false, createdAt: input.at })
-            .returning();
-          if (!account) throw new LoginError("missing_account");
-          const [created] = await tx
-            .insert(identities)
-            .values({
-              accountId: account.id,
-              providerId: input.providerId,
-              externalUsername: input.username,
-              createdAt: input.at,
-              lastLoginAt: input.at,
-            })
-            .returning();
-          if (!created) throw new LoginError("missing_identity");
-          identity = created;
-        }
-        if (input.setupClaim !== undefined) {
-          const desired = {
-            version: 1,
-            state: "claiming",
-            accountId: identity.accountId,
-            baseUrl: input.setupClaim.baseUrl,
-          };
-          const [claim] = await tx
+            .from(identities)
+            .where(eq(identities.externalUsername, input.username));
+          if (left === undefined) return insertAccountAndLogin(tx, input);
+          await tx
+            .update(accounts)
+            .set({ isAdmin: input.isAdmin })
+            .where(eq(accounts.id, left.accountId));
+          return left;
+        }),
+      );
+    },
+
+    async setup(input) {
+      validateNewLocalUser(input);
+      return creating(() =>
+        db.transaction(async (tx) => {
+          await lockUsers(tx);
+          if (!(await isFresh(tx))) throw new LoginError("setup_claimed");
+          await insertLocalUser(tx, input);
+          const identity = await insertAccountAndLogin(tx, { ...input, isAdmin: true });
+          const owner: SetupOwner = { state: "complete", accountId: identity.accountId };
+          const [claimed] = await tx
             .insert(settings)
-            .values({ key: input.setupClaim.key, value: desired })
-            .onConflictDoUpdate({
-              target: settings.key,
-              set: { value: desired },
-              setWhere: sql`${settings.value} = ${JSON.stringify(desired)}::jsonb`,
-            })
+            .values({ key: SETUP_OWNER_KEY, value: owner })
+            .onConflictDoNothing()
             .returning();
-          if (!claim) throw new LoginError("setup_claimed");
+          if (claimed === undefined) throw new LoginError("setup_claimed");
+          return identity;
+        }),
+      );
+    },
+
+    setupOpen() {
+      return isFresh(db);
+    },
+
+    async updateUser(username, patch) {
+      return db.transaction(async (tx) => {
+        await lockUsers(tx);
+        const found = await userWithLogin(tx, username);
+        if (found === null) return null;
+        const wasAdmin = found.isAdmin && !found.user.disabled;
+        const staysAdmin =
+          (patch.isAdmin ?? found.isAdmin) && !(patch.disabled ?? found.user.disabled);
+        if (wasAdmin && !staysAdmin && (await enabledAdmins(tx)) <= 1) {
+          throw new LoginError("last_admin");
         }
-        await storeCredential(tx, identity.id, input);
+        const [updated] = await tx
+          .update(localUsers)
+          .set({
+            ...(patch.passwordHash === undefined ? {} : { passwordHash: patch.passwordHash }),
+            ...(patch.disabled === undefined ? {} : { disabled: patch.disabled }),
+            ...(patch.storageLimit === undefined ? {} : { storageLimit: patch.storageLimit }),
+            updatedAt: patch.at,
+          })
+          .where(eq(localUsers.username, found.user.username))
+          .returning();
+        if (patch.isAdmin !== undefined) {
+          await tx
+            .update(accounts)
+            .set({ isAdmin: patch.isAdmin })
+            .where(eq(accounts.id, found.login.accountId));
+        }
+        return { user: updated ?? found.user, login: found.login };
+      });
+    },
+
+    async removeUser(username) {
+      return db.transaction(async (tx) => {
+        await lockUsers(tx);
+        const found = await userWithLogin(tx, username);
+        if (found === null) return null;
+        if (found.isAdmin && !found.user.disabled && (await enabledAdmins(tx)) <= 1) {
+          throw new LoginError("last_admin");
+        }
+        await tx.delete(localUsers).where(eq(localUsers.username, found.user.username));
+        await tx
+          .update(accounts)
+          .set({ isAdmin: false })
+          .where(eq(accounts.id, found.login.accountId));
+        return found.login;
+      });
+    },
+
+    async signIn(input) {
+      validateSignIn(input);
+      return db.transaction(async (tx) => {
+        const [identity] = await tx
+          .update(identities)
+          .set({ lastLoginAt: input.at })
+          .where(sql`lower(${identities.externalUsername}) = lower(${input.username})`)
+          .returning();
+        if (identity === undefined) throw new LoginError("missing_identity");
         const [session] = await tx
           .insert(sessions)
           .values({
@@ -139,7 +270,7 @@ export function createLoginRepo(db: Db): LoginRepo {
             lastSeenAt: input.at,
           })
           .returning();
-        if (!session) throw new LoginError("invalid_session");
+        if (session === undefined) throw new Error("session insert returned no row");
         return { identity, session };
       });
     },

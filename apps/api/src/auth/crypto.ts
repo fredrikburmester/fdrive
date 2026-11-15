@@ -1,8 +1,5 @@
 import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
 
-/** The credential key id fdrive currently seals every secret under. */
-export const KEY_ID = "master-v1";
-
 const VERSION = 0x01;
 const WRAP_IV_LENGTH = 12;
 const WRAPPED_KEY_LENGTH = 32;
@@ -38,9 +35,10 @@ export function parseMasterKey(base64: string): Uint8Array {
 
 /**
  * Envelope-encrypts `plaintext` under a fresh random 32-byte data key,
- * itself wrapped with AES-256-GCM under `master`. `aad` (the identity id)
- * authenticates both layers, so a sealed blob cannot be unsealed under a
- * different identity even with the right master key.
+ * itself wrapped with AES-256-GCM under `master`. `aad` (what the secret
+ * belongs to, such as `backup-destination:<id>`) authenticates both layers,
+ * so a sealed blob cannot be unsealed for anything else even with the right
+ * master key.
  *
  * Wire format: `0x01 | wrapIv(12) | wrappedKey(32) | wrapTag(16) | iv(12) |
  * tag(16) | ciphertext`.

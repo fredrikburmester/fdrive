@@ -9,32 +9,31 @@ const mocks = vi.hoisted(() => ({
   mutate: vi.fn(),
   refetch: vi.fn(),
   reset: vi.fn(),
+  users: vi.fn(),
 }));
 vi.mock("@/lib/api/office-settings-queries", () => ({
   useSystemOffice: () => mocks.query(),
   useUpdateOfficeSettings: () => mocks.update(),
 }));
 vi.mock("@/lib/api/public-url-queries", () => ({ useSystemPublicUrl: () => mocks.address() }));
+vi.mock("@/lib/api/system-queries", () => ({ useAdminUsers: () => mocks.users() }));
 
 const { OfficeFeatureCard } = await import("./office-feature-card");
 
-const providerId = "123e4567-e89b-42d3-a456-426614174000";
 const configuration = {
   revision: 2,
   enabled: false,
-  editingProviderId: null,
   editorUsernames: [],
   editingEnabled: false,
 };
 
 beforeEach(() => {
   mocks.address.mockReturnValue({ data: { revision: 1, url: "https://files.example" } });
+  mocks.users.mockReturnValue({ data: { users: [{ username: "alice" }] } });
   mocks.query.mockReturnValue({
     data: {
       configuration,
       product: "onlyoffice",
-      activeProviderId: providerId,
-      activeProviderLabel: "Primary",
       status: "off",
     },
     refetch: mocks.refetch,
@@ -75,15 +74,12 @@ it("turns Office off without touching the saved editor grants", () => {
     ...configuration,
     enabled: true,
     editingEnabled: true,
-    editingProviderId: providerId,
     editorUsernames: ["alice"],
   };
   mocks.query.mockReturnValue({
     data: {
       configuration: enabled,
       product: "onlyoffice",
-      activeProviderId: providerId,
-      activeProviderLabel: "Primary",
       status: "ready",
     },
     refetch: mocks.refetch,
@@ -115,5 +111,5 @@ it("keeps editor management off this card", () => {
   fireEvent.click(screen.getByRole("switch", { name: "Enable ONLYOFFICE" }));
 
   expect(screen.queryByRole("switch", { name: "Allow document editing" })).toBeNull();
-  expect(screen.queryByLabelText("Users allowed to edit")).toBeNull();
+  expect(screen.queryByRole("checkbox")).toBeNull();
 });

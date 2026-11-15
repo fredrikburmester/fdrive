@@ -27,17 +27,6 @@ public struct APIClient: Sendable {
     public let protocolVersion: Int
     private let token: String?
     private let session: URLSession
-    /// How long a commit may go without a byte from the server before it is abandoned.
-    ///
-    /// The session's own sixty seconds fits metadata calls, which answer at once. A
-    /// commit does not: the server replies only once the write is published, and on
-    /// storage without a rename publishing a folder copies every object under it.
-    /// That runs for as long as the folder is large, and sends nothing meanwhile, so
-    /// sixty seconds of silence is the normal case rather than a failure. Hold the
-    /// connection to the session's resource limit instead and let the two things that
-    /// can actually judge the move end it early: the progress poll, which says whether
-    /// the server is still working, and Finder's cancel.
-    static let commitTimeout: TimeInterval = 86_400
     public init(server: URL, token: String? = nil, session: URLSession? = nil, protocolVersion: Int = 1) throws {
         self.server = try Self.normalizeServer(server)
         self.token = token
@@ -86,7 +75,6 @@ public struct APIClient: Sendable {
             case "version_conflict": throw DriveError.writeConflict(message ?? "This item changed remotely. Your pending copy is preserved.")
             case "name_collision": throw DriveError.nameCollision(message ?? "An item with this name already exists. Your pending copy is preserved.")
             case "operation_uncertain": throw DriveError.writeUncertain
-            case "operation_cancelled": throw DriveError.cancelled
             case "quota_exceeded": throw DriveError.quota
             case "unsupported", "permission_denied": throw DriveError.permission
             default: break
@@ -94,6 +82,10 @@ public struct APIClient: Sendable {
         }
         switch response.statusCode {
         case 200..<300: return
+        // Only this code says the server no longer holds the credential; any other 401
+        // (expired, or a server too old to say) leaves it to the person to reconnect.
+        case 401 where (error?["details"] as? [String: Any])?["code"] as? String == "credential_gone":
+            throw DriveError.credentialGone
         case 401: throw DriveError.authentication
         // A denied path is not an expired login; reconnecting cannot repair it.
         case 403: throw writing ? DriveError.permission : DriveError.forbidden
@@ -220,7 +212,7 @@ public struct APIClient: Sendable {
     /// 404 from a host that no longer serves fdrive at all — and the caller says so.
     public func revokeAccess() async -> Bool {
         do { try await disconnect(); return true }
-        catch DriveError.authentication { return true }
+        catch DriveError.authentication, DriveError.credentialGone { return true }
         catch { return false }
     }
     public func prepareWrite(_ operation: WriteRequest, route: String) async throws -> WriteResult {
@@ -235,16 +227,15 @@ public struct APIClient: Sendable {
         return try JSONDecoder().decode(WriteResult.self, from: data)
     }
     public func commitWrite(_ id: String) async throws -> WriteResult {
-        try await send("operations/\(id)/commit", body: Data("{}".utf8), writing: true, timeout: Self.commitTimeout)
-    }
-    public func writeStatus(_ id: String) async throws -> WriteResult {
-        try await send("operations/\(id)")
+        try await send("operations/\(id)/commit", body: Data("{}".utf8), writing: true)
     }
     public func acknowledgeWrite(_ id: String) async throws {
         let _: WriteResult = try await send("operations/\(id)/acknowledge", body: Data("{}".utf8), writing: true)
     }
-    public func cancelWrite(_ id: String) async throws {
-        let _: WriteResult = try await send("operations/\(id)/cancel", body: Data("{}".utf8), writing: true)
+    /// The server answers `cancelled` only for an operation that can no longer publish,
+    /// and refuses (409) one it is committing or has committed.
+    public func cancelWrite(_ id: String) async throws -> WriteResult {
+        try await send("operations/\(id)/cancel", body: Data("{}".utf8), writing: true)
     }
     public func download(_ path: String, to directory: URL, progress: Progress) async throws -> (URL, String, Int64) {
         let delegate = TransferDelegate(progress: progress)

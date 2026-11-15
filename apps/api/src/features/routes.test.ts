@@ -42,16 +42,14 @@ function fixture({
   const app = createApp({
     config: loadConfig({
       DATABASE_URL: "postgres://localhost/fdrive",
+      FDRIVE_STORAGE_ROOT: "/srv/files",
       FDRIVE_MASTER_KEY: Buffer.alloc(32, 1).toString("base64"),
     }),
     logger: { info: vi.fn(), error: vi.fn(), warn: vi.fn() } as unknown as Logger,
     version: "1",
     startedAt: new Date(),
     principalResolver: async () => principal,
-    connectionStatus: async () => ({
-      required: setupRequired,
-      providers: setupRequired ? [] : [{ type: "local", host: "Local folder" }],
-    }),
+    setupRequired: async () => setupRequired,
     registerRoutes(groups) {
       registerFeatureAdmission(groups.authed, service);
       registerFeatureRoutes(groups, { service, workerToken });

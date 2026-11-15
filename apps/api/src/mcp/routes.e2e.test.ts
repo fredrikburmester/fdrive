@@ -25,6 +25,7 @@ import { registerMcpRoutes } from "./routes.js";
 
 const REQUIRED_ENV = {
   DATABASE_URL: "postgres://localhost/fdrive",
+  FDRIVE_STORAGE_ROOT: "/srv/files",
   FDRIVE_MASTER_KEY: Buffer.alloc(32, 7).toString("base64"),
 };
 
@@ -61,6 +62,7 @@ function stubIndexQueries(): IndexQueries {
     similar: async () => fail("similar"),
     recentFiles: async () => fail("recentFiles"),
     thumbnail: async () => fail("thumbnail"),
+    thumbnailKeys: async () => fail("thumbnailKeys"),
     deletedRowSha: async () => null,
     liveRowsBySha: async () => [],
     searchImages: async () => [],
@@ -121,12 +123,14 @@ async function startHarness(mode: "read" | "organize"): Promise<Harness> {
 
   const repos = createMemoryRepos();
   const provider = await repos.providers.ensure({ type: "local", baseUrl: "local" });
-  const account = await repos.accounts.create({ displayName: "Alice" });
-  const identity = await repos.identities.create({
-    accountId: account.id,
+  const identity = await repos.logins.createUser({
     providerId: provider.id,
-    externalUsername: "alice",
+    username: "alice",
+    passwordHash: "h",
+    isAdmin: false,
+    at: new Date("2026-01-01T00:00:00.000Z"),
   });
+  const account = { id: identity.accountId };
 
   const rawToken = generateApiToken();
   await repos.apiTokens.create({
@@ -140,9 +144,16 @@ async function startHarness(mode: "read" | "organize"): Promise<Harness> {
 
   const resolveToken = createResolveTokenPrincipal({
     apiTokens: repos.apiTokens,
-    identities: repos.identities,
+    logins: repos.logins,
     clock: () => new Date("2026-01-01T00:00:00.000Z"),
-    storageFactory: async () => storage,
+    principalFor: async (login, extras) => ({
+      accountId: login.accountId,
+      identityId: login.identityId,
+      username: login.username,
+      isAdmin: login.isAdmin,
+      storage,
+      ...extras,
+    }),
   });
 
   const indexerFetch = (async (input: unknown) => {
@@ -176,7 +187,6 @@ async function startHarness(mode: "read" | "organize"): Promise<Harness> {
         scopes: [{ rootName: "files", fsPrefix: "/alice", virtualPrefix: "/" }],
       }),
     },
-    identities: repos.identities,
     publicUrl: async () => "https://fdrive.example.com",
     indexerClient: createIndexerExtractClient({
       baseUrl: "http://indexer.test",
@@ -198,10 +208,7 @@ async function startHarness(mode: "read" | "organize"): Promise<Harness> {
     } as never,
     version: "1.0.0",
     startedAt: new Date(0),
-    connectionStatus: async () => ({
-      required: false,
-      providers: [{ type: "local", host: "local" }],
-    }),
+    setupRequired: async () => false,
   });
   registerMcpRoutes(app, {
     resolveToken,

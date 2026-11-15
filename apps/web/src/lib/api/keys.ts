@@ -31,17 +31,13 @@ export const queryKeys = {
   setup: {
     status: () => ["setup", "status"] as const,
   },
-  providers: {
-    /** The enabled providers and their credential forms (public). */
-    list: () => ["providers"] as const,
-  },
   admin: {
-    providers: () => ["admin", "providers"] as const,
     users: () => ["admin", "users"] as const,
   },
   system: {
     activity: () => ["system", "activity"] as const,
     publicUrl: () => ["system", "public-url"] as const,
+    storage: () => ["system", "storage"] as const,
     office: () => ["system", "office"] as const,
     ai: () => ["system", "ai"] as const,
     /** Keyed by the storage row the settings belong to. */
@@ -65,6 +61,9 @@ export const queryKeys = {
   },
   favorites: {
     list: () => ["favorites", "list"] as const,
+  },
+  savedSearches: {
+    list: () => ["saved-searches", "list"] as const,
   },
   recents: {
     list: () => ["recents", "list"] as const,

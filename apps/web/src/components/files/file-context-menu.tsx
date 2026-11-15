@@ -34,8 +34,8 @@ import {
   ContextMenuSubTrigger,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
+import { type BrowserSelection, selectionOf } from "@/lib/files/selection";
 import { entryRestrictions } from "@/lib/grants/paths";
-import { type BrowserSelection, selectionOf } from "@/lib/identity/capabilities";
 import { tagDotClassName } from "@/lib/metadata/colors";
 import type { TagCheckState } from "@/lib/metadata/tag-set";
 import { OFFICE_MODE_LABELS, officeModesFor } from "@/lib/office/capabilities";
