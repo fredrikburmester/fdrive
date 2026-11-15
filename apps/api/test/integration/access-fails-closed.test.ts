@@ -1,6 +1,12 @@
 import { GrantsResponse, ManagedShare, publicShareRoute, ROUTES } from "@fdrive/contracts";
 import type { IndexQueries } from "@fdrive/db";
-import { createAccessRepo, createDb, createRepos, createShareRepo } from "@fdrive/db";
+import {
+  createAccessRepo,
+  createDb,
+  createRepos,
+  createShareRepo,
+  createTrashItemRepo,
+} from "@fdrive/db";
 import { startLocalStorage, startPostgres } from "@fdrive/testkit";
 import { sql } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -17,6 +23,7 @@ import type { McpToolDeps } from "../../src/mcp/handlers.js";
 import { createMetadataService } from "../../src/metadata/service.js";
 import { createShareMoves } from "../../src/shares/moves.js";
 import { generateApiToken, hashApiToken } from "../../src/tokens/token-format.js";
+import { createTrashItems } from "../../src/trash/items.js";
 import { seedLocalUsers, silentLogger } from "./helpers/local-storage.ts";
 
 const cookieFrom = (response: Response) => response.headers.get("set-cookie")?.split(";")[0] ?? "";
@@ -209,7 +216,7 @@ describe("what grants access fails closed", () => {
     expect(shelf.entries.map((entry) => entry.name)).toEqual(["Work"]);
   });
 
-  it("takes an item back out of Trash when the database refuses to move its link there", async () => {
+  it("leaves an item where it was when the database refuses to move its link into Trash", async () => {
     const id = await link("/Docs");
     const refused = await refusing(() =>
       call(ROUTES.fs.delete, { cookie: alice, body: { items: [{ path: "/Docs", kind: "dir" }] } }),
@@ -284,17 +291,21 @@ describe("what grants access fails closed", () => {
       folder: deploymentFilesFolder(config, repos),
     });
     const grants = createLocalGrantService({ repos, storageFor });
+    const access = createAccessFollowers({
+      repo: createAccessRepo(pool.db),
+      ownerPath: grants.ownerPath,
+      links: createShareMoves({ ownerPath: grants.ownerPath }).resolve,
+      usernameOf: async (identityId) => (await repos.identities.get(identityId))?.username ?? null,
+    });
     const files = createFileOperations({
-      access: createAccessFollowers({
-        repo: createAccessRepo(pool.db),
-        ownerPath: grants.ownerPath,
-        links: createShareMoves({ ownerPath: grants.ownerPath }).resolve,
-        usernameOf: async (identityId) =>
-          (await repos.identities.get(identityId))?.username ?? null,
-      }),
+      access,
       metadata: createMetadataService(repos),
       ownerPath: grants.ownerPath,
-      storageFor,
+      trash: createTrashItems({
+        repo: createTrashItemRepo(database.db),
+        access,
+        homeOf: storageFor,
+      }),
     });
     const identity = (await repos.identities.listAll()).find((row) => row.username === "alice");
     if (identity === undefined) throw new Error("expected alice's login");

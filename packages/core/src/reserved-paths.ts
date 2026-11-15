@@ -1,5 +1,4 @@
 import { normalizePath, splitSegments } from "./paths.ts";
-import { MOVE_LAYOUT_NAMESPACE } from "./trash/recycle-folder.ts";
 
 /** fdrive's Trash, always at the top of each user's files. */
 export const TRASH_PATH = "/.trash";
@@ -11,10 +10,19 @@ export const TRASH_PATH = "/.trash";
 export const DESKTOP_INTERNAL_ROOT = "/.fdrive-desktop";
 
 /**
- * Folder names that are fdrive's own wherever they lie, compared in any
- * case: its Trash layout, which stays fdrive's wherever it was left.
+ * The folder Trash kept its items in before each had a folder of its own,
+ * `<trash>/.fdrive-move-v1/<kind>/p/<segment>/…/v/<timestamp>`. The API moves
+ * what `/.trash` still holds there into Trash when it starts; an earlier
+ * Trash folder elsewhere may have left one too. It stays reserved until that
+ * start-up move goes.
  */
-export const RESERVED_FOLDER_NAMES: readonly string[] = [MOVE_LAYOUT_NAMESPACE];
+export const OLD_TRASH_LAYOUT = ".fdrive-move-v1";
+
+/**
+ * Folder names that are fdrive's own wherever they lie, compared in any
+ * case: Trash's old layout, which stays fdrive's wherever it was left.
+ */
+export const RESERVED_FOLDER_NAMES: readonly string[] = [OLD_TRASH_LAYOUT];
 
 /** fdrive's own folders at fixed places in a user's files: the Trash and the Mac app's folder. */
 export const RESERVED_FOLDERS: readonly string[] = [TRASH_PATH, DESKTOP_INTERNAL_ROOT];

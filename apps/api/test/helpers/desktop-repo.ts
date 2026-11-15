@@ -6,8 +6,10 @@ import type {
   DesktopRepo,
   NativeActivityFacts,
 } from "@fdrive/db";
+import { type MemoryTrashItemRepo, memoryTrashItemRepo } from "../trash-items.js";
 
-export function memoryRepo() {
+/** `DesktopRepo` in memory; a receipt's Trash change lands in `trash`, Trash's rows. */
+export function memoryRepo(trash: MemoryTrashItemRepo = memoryTrashItemRepo()) {
   const items = new Map<string, DesktopItemRecord>();
   const operations = new Map<string, DesktopOperationRecord>();
   /** What each completed receipt recorded for history, by operation ID. */
@@ -151,7 +153,7 @@ export function memoryRepo() {
       operations.delete(identityId + id);
       return true;
     },
-    async complete(identityId, accountId, id, result, activity, access) {
+    async complete(identityId, accountId, id, result, activity, access, change) {
       const done = await repo.transition(
         identityId,
         accountId,
@@ -162,8 +164,14 @@ export function memoryRepo() {
       );
       if (done) completed.set(id, activity);
       if (done && access) moved.set(id, access);
+      if (done && change) {
+        const tx = trash.transaction();
+        if ("entered" in change) await tx.changes.entered(change.entered, change.leaf);
+        else await tx.changes.left(change.left);
+        tx.commit();
+      }
       return done;
     },
   };
-  return { repo, items, operations, completed, moved };
+  return { repo, items, operations, completed, moved, trash };
 }

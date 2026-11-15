@@ -275,7 +275,7 @@ describe("metadata follows the Mac's writes as they commit", () => {
       await ok(call(ROUTES.trash.list, { cookie: alice })),
     ).entries;
     expect(inTrash?.originalPath).toBe("/Binned");
-    const binned = `/.trash/${inTrash?.id}`;
+    const binned = `/.trash/${inTrash?.id}/${inTrash?.name}`;
     expect(await repos.fileTags.pathsForTag(identityId, tag.id)).toEqual([`${binned}/inside.txt`]);
     expect((await repos.recents.list(identityId, 10)).map((recent) => recent.path)).not.toContain(
       "/Binned/inside.txt",

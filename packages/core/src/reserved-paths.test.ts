@@ -41,7 +41,7 @@ describe("isReservedPath", () => {
     expect(isReservedPath("/docs/.fdrive-desktop/x")).toBe(false);
   });
 
-  it("covers fdrive's Trash layout wherever it lies, in any case", () => {
+  it("covers Trash's old layout wherever it lies, in any case", () => {
     expect(isReservedPath("/old-trash/.fdrive-move-v1/file/p/a/v/1")).toBe(true);
     expect(isReservedPath("/x/.FDRIVE-MOVE-V1")).toBe(true);
     for (const name of RESERVED_FOLDER_NAMES) {

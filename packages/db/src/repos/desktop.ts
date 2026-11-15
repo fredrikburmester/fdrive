@@ -10,6 +10,7 @@ import {
 } from "./activity-native.js";
 import { moveLocalGrantPrefix } from "./drizzle.js";
 import { deleteSharePrefix, moveSharePrefix } from "./shares.js";
+import { trashItemChanges } from "./trash-items.js";
 
 export type DesktopItemRecord = typeof desktopItems.$inferSelect;
 /**
@@ -33,6 +34,13 @@ export interface DesktopAccessMove {
   /** Folders their owner, a local username, shares with people (`LocalGrantRepo.movePrefix`). */
   grants: { owner: string; from: string; to: string } | null;
 }
+/**
+ * What a Mac write does to Trash's rows, kept with its receipt: the item it
+ * moved into Trash arrives at `leaf`, or the item it restored leaves.
+ */
+export type DesktopTrashChange =
+  | { readonly entered: string; readonly leaf: string }
+  | { readonly left: string };
 export type DesktopOperationRecord = typeof desktopOperations.$inferSelect;
 /** Milliseconds after an operation's last change before retention acts on it. */
 export interface DesktopRetention {
@@ -89,8 +97,9 @@ export interface DesktopRepo {
     attempt?: string,
   ): Promise<boolean>;
   /**
-   * Commit the publication receipt, its personal history and what grants
-   * access to the moved path together: none of it is kept unless all is.
+   * Commit the publication receipt, its personal history, what grants
+   * access to the moved path and Trash's row together: none of it is kept
+   * unless all is.
    */
   complete(
     identityId: string,
@@ -99,6 +108,7 @@ export interface DesktopRepo {
     result: Record<string, unknown>,
     activity: NativeActivityFacts,
     access?: DesktopAccessMove | null,
+    trash?: DesktopTrashChange,
   ): Promise<boolean>;
   /** Operations past their retention window, oldest first. */
   expired(now: Date, retention: DesktopRetention, limit: number): Promise<DesktopOperationRecord[]>;
@@ -301,7 +311,7 @@ export function createDesktopRepo(db: Db): DesktopRepo {
         )[0] ?? null
       );
     },
-    async complete(identityId, accountId, id, result, activity, access) {
+    async complete(identityId, accountId, id, result, activity, access, trash) {
       return db.transaction(async (tx) => {
         const updated = await tx
           .update(desktopOperations)
@@ -322,6 +332,12 @@ export function createDesktopRepo(db: Db): DesktopRepo {
           );
         if (access?.grants)
           await moveLocalGrantPrefix(tx, access.grants.owner, access.grants.from, access.grants.to);
+        if (trash !== undefined) {
+          const changes = trashItemChanges(tx);
+          // Settled already when it was: a start after a crash found it in Trash.
+          if ("entered" in trash) await changes.entered(trash.entered, trash.leaf);
+          else await changes.left(trash.left);
+        }
         await appendNativeActivity(tx, updated[0] as DesktopOperationRecord, result, activity);
         return true;
       });

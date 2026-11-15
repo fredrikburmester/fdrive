@@ -1,4 +1,4 @@
-import { StorageError, type StorageProvider, TRASH_PATH } from "@fdrive/core";
+import { StorageError, type StorageProvider, trashItemOf, trashItemPath } from "@fdrive/core";
 import { createMemoryStorage } from "@fdrive/core/testing";
 import { createMemoryRepos } from "@fdrive/db/testing";
 import { describe, expect, it, vi } from "vitest";
@@ -9,6 +9,7 @@ import {
   testFileOperations,
 } from "../../test/file-operations.js";
 import { recordingGate } from "../../test/recording-gate.js";
+import { type MemoryTrashItemRepo, memoryTrashItemRepo } from "../../test/trash-items.js";
 import type { Principal } from "../auth/principal.js";
 import type { WriteGate } from "../backups/write-gate.js";
 import { ApiHttpError } from "../errors.js";
@@ -27,8 +28,14 @@ function principal(storage: StorageProvider): Principal {
 /**
  * Access followers that note each step in `steps`, and fail `moved` or
  * `removed` when asked to, as a database that refuses the statement does.
+ * Trash's rows change in `trash` as a transaction would change them: only
+ * once `work` succeeded.
  */
-function recordingAccess(steps: string[], fail: { moved?: Error; removed?: Error } = {}) {
+function recordingAccess(
+  steps: string[],
+  fail: { moved?: Error; removed?: Error } = {},
+  trash: MemoryTrashItemRepo = memoryTrashItemRepo(),
+) {
   const follow = {
     moved: vi.fn(async (identityId: string, from: string, to: string, directory: boolean) => {
       steps.push(
@@ -46,7 +53,24 @@ function recordingAccess(steps: string[], fail: { moved?: Error; removed?: Error
       _identityId: string,
       _paths: TouchedPaths,
       work: (step: AccessFollow) => Promise<unknown>,
-    ) => work(follow),
+    ) => {
+      const transaction = trash.transaction();
+      const value = await work({
+        ...follow,
+        trash: {
+          async entered(id, leaf) {
+            steps.push(`trash entered ${id}`);
+            return transaction.changes.entered(id, leaf);
+          },
+          async left(id) {
+            steps.push(`trash left ${id}`);
+            await transaction.changes.left(id);
+          },
+        },
+      });
+      transaction.commit();
+      return value;
+    },
   );
   const access: AccessFollowers = {
     run: run as AccessFollowers["run"],
@@ -70,10 +94,12 @@ function tracedStorage(files: Record<string, string>, steps: string[]) {
 function harness(
   files: Record<string, string>,
   fail: { moved?: Error; removed?: Error } = {},
+  homeOf?: (identityId: string) => Promise<StorageProvider>,
   gate?: (steps: string[]) => WriteGate,
 ) {
   const steps: string[] = [];
   const storage = tracedStorage(files, steps);
+  const trash = memoryTrashItemRepo();
   const activity = activityFixture(CLOCK);
   const metadata = createMetadataService(createMemoryRepos());
   vi.spyOn(metadata, "onMoved").mockImplementation(async (_id, from, to) => {
@@ -82,18 +108,38 @@ function harness(
   vi.spyOn(metadata, "onDeleted").mockImplementation(async (_id, path) => {
     steps.push(`metadata deleted ${path}`);
   });
-  const { access, follow, run } = recordingAccess(steps, fail);
-  const logger = { error: vi.fn() };
+  const { access, follow, run } = recordingAccess(steps, fail, trash);
+  const logger = { warn: vi.fn() };
   const files_ = testFileOperations({
     activity: activity.service,
     access,
     metadata,
     logger,
-    storageFor: async () => storage,
+    clock: CLOCK,
+    trashRepo: trash,
+    homeOf: homeOf ?? (async () => storage),
     ...(gate ? { gate: gate(steps) } : {}),
   });
   const actor: FileActor = fileActor(principal(storage), { source: "web" });
-  return { steps, storage, activity, metadata, follow, run, files: files_, actor, logger };
+  /** The one item Alice's Trash lists. */
+  const listed = async () => {
+    const { items } = await trash.list(ALICE, 10);
+    expect(items).toHaveLength(1);
+    return items[0] as NonNullable<(typeof items)[0]>;
+  };
+  return {
+    steps,
+    storage,
+    activity,
+    metadata,
+    follow,
+    run,
+    files: files_,
+    actor,
+    logger,
+    trash,
+    listed,
+  };
 }
 
 describe("moving fails closed", () => {
@@ -160,61 +206,119 @@ describe("moving fails closed", () => {
 });
 
 describe("Trash fails closed", () => {
-  it("moves what grants access to the leaf Trash names, then the rest", async () => {
+  it("moves what grants access to the item's place in Trash, keeps its row, then moves it there", async () => {
     const h = harness({ "/a.txt": "a" });
     const { item } = await h.files.trash(h.actor, "/a.txt");
-    expect(item).toEqual({ leaf: "/.trash/.fdrive-move-v1/file/p/a.txt/v/0", kind: "file" });
+    const row = await h.listed();
+    expect(row).toEqual({
+      id: expect.any(String),
+      identityId: ALICE,
+      originalPath: "/a.txt",
+      name: "a.txt",
+      kind: "file",
+      size: 1,
+      deletedAt: CLOCK(),
+    });
+    expect(item).toEqual({ leaf: trashItemPath(row.id, "a.txt"), kind: "file" });
     expect(h.steps).toEqual([
-      `storage move /a.txt -> ${item.leaf}`,
       `access moved alice /a.txt -> ${item.leaf} false`,
+      `trash entered ${row.id}`,
+      `storage move /a.txt -> ${item.leaf}`,
       `metadata moved /a.txt -> ${item.leaf}`,
     ]);
+    expect(h.run).toHaveBeenCalledWith(ALICE, { vacates: ["/a.txt"] }, expect.any(Function));
+    expect(h.storage.dump()).toEqual({ [item.leaf]: "a" });
     expect(h.activity.outcomes.at(-1)).toMatchObject({
       action: "file.trash",
       after: { path: "/a.txt", kind: "file", trashLeaf: item.leaf },
     });
   });
 
-  it("takes the item back out of Trash when what grants access cannot follow it there", async () => {
+  it("keeps a folder's row with no size of its own", async () => {
+    const h = harness({ "/dir/a.txt": "abc" });
+    await h.files.trash(h.actor, "/dir");
+    expect(await h.listed()).toMatchObject({ originalPath: "/dir", kind: "dir", size: 0 });
+  });
+
+  it("leaves the file where it was, and nothing in Trash, when what grants access cannot follow it there", async () => {
     const h = harness({ "/a.txt": "a" }, { moved: new Error("database refused") });
     await expect(h.files.trash(h.actor, "/a.txt")).rejects.toThrow("database refused");
     expect(h.storage.dump()).toEqual({ "/a.txt": "a" });
-    expect(h.steps).not.toContain(expect.stringContaining("metadata"));
-    expect(h.logger.error).not.toHaveBeenCalled();
+    expect(h.steps).toEqual([
+      expect.stringMatching(
+        /^access moved alice \/a\.txt -> \/\.trash\/[0-9a-f-]{36}\/a\.txt false$/,
+      ),
+    ]);
+    // The row written before it moved is settled away: the item never went.
+    expect(h.trash.rows.size).toBe(0);
+    expect(h.storage.dirs().filter((dir) => dir.startsWith("/.trash"))).toEqual([]);
+    expect(h.logger.warn).not.toHaveBeenCalled();
+    expect(h.activity.outcomes.at(-1)).toMatchObject({ action: "file.trash", outcome: "unknown" });
   });
 
-  it("says so loudly when it cannot take the item back", async () => {
-    const h = harness({ "/a.txt": "a" }, { moved: new Error("database refused") });
-    vi.spyOn(h.storage.trash, "restore").mockRejectedValueOnce(
-      new StorageError("conflict", "taken"),
-    );
+  it("refuses what is not there before writing any row", async () => {
+    const h = harness({});
+    await expect(h.files.trash(h.actor, "/missing.txt")).rejects.toMatchObject({
+      kind: "not_found",
+    });
+    expect(h.trash.rows.size).toBe(0);
+    expect(h.run).not.toHaveBeenCalled();
+  });
+
+  it("keeps a row on its way, out of the listing, when even settling a failed delete fails", async () => {
+    const h = harness({ "/a.txt": "a" }, { moved: new Error("database refused") }, async () => {
+      throw new Error("files folder offline");
+    });
     await expect(h.files.trash(h.actor, "/a.txt")).rejects.toThrow("database refused");
-    expect(h.logger.error).toHaveBeenCalledWith(
+    expect(h.storage.dump()).toEqual({ "/a.txt": "a" });
+    expect((await h.trash.pending()).map((item) => item.movingFrom)).toEqual(["/a.txt"]);
+    expect((await h.trash.list(ALICE, 10)).items).toEqual([]);
+    expect(h.logger.warn).toHaveBeenCalledWith(
       expect.objectContaining({ path: "/a.txt" }),
-      expect.stringContaining("could not follow it"),
+      expect.stringContaining("next start"),
     );
   });
 
-  it("puts an item in a folder shared with the login in its owner's Trash, with the owner's records", async () => {
+  it("lets an item that reached Trash arrive although its transaction failed after the rename", async () => {
+    const h = harness({ "/a.txt": "a" });
+    const run = h.run.getMockImplementation();
+    // The commit after the rename fails once; settling it runs a transaction of its own.
+    h.run.mockImplementationOnce(async (identityId, paths, work) => {
+      await run?.(identityId, paths, work);
+      throw new Error("connection lost at commit");
+    });
+    await expect(h.files.trash(h.actor, "/a.txt")).rejects.toThrow("connection lost at commit");
+    const row = await h.listed();
+    expect(h.storage.dump()).toEqual({ [trashItemPath(row.id, "a.txt")]: "a" });
+    expect(await h.trash.pending()).toEqual([]);
+  });
+
+  it("puts an item in a folder shared with the login in its owner's Trash, with the owner's row and records", async () => {
     const steps: string[] = [];
     const storage = createMemoryStorage({ "/Shared with me/Team/a.txt": "a" });
-    vi.spyOn(storage.trash, "put").mockResolvedValue({
-      leaf: "/.trash/.fdrive-move-v1/file/p/Team/p/a.txt/v/0",
+    vi.spyOn(storage.trash, "put").mockImplementation(async (_path, id) => ({
+      leaf: trashItemPath(id, "a.txt"),
       kind: "file",
-    });
+    }));
     const metadata = createMetadataService(createMemoryRepos());
     const onMoved = vi.spyOn(metadata, "onMoved");
     const onDeleted = vi.spyOn(metadata, "onDeleted");
-    const { access, follow } = recordingAccess(steps);
+    const trash = memoryTrashItemRepo();
+    const { access, follow } = recordingAccess(steps, {}, trash);
     const ownerPath = vi.fn(async () => ({ identityId: "owner", path: "/Team/a.txt" }));
-    const files = testFileOperations({ access, metadata, ownerPath });
+    const files = testFileOperations({ access, metadata, ownerPath, trashRepo: trash });
 
     await files.trash(
       fileActor(principal(storage), { source: "web" }),
       "/Shared with me/Team/a.txt",
     );
 
-    const leaf = "/.trash/.fdrive-move-v1/file/p/Team/p/a.txt/v/0";
+    // The owner's Trash lists it, deleted from the owner's path; the person it is shared with has nothing.
+    const [row] = (await trash.list("owner", 10)).items;
+    expect(row).toMatchObject({ identityId: "owner", originalPath: "/Team/a.txt", name: "a.txt" });
+    expect((await trash.list(ALICE, 10)).items).toEqual([]);
+    const leaf = trashItemPath(row?.id ?? "", "a.txt");
+    expect(storage.trash.put).toHaveBeenCalledWith("/Shared with me/Team/a.txt", row?.id);
     expect(follow.moved).toHaveBeenCalledWith("owner", "/Team/a.txt", leaf, false);
     expect(onMoved).toHaveBeenCalledWith("owner", "/Team/a.txt", leaf, false);
     expect(onDeleted).toHaveBeenCalledWith(ALICE, "/Shared with me/Team/a.txt", false);
@@ -225,48 +329,76 @@ describe("restoring and purging fail closed", () => {
   it("brings what followed an item into Trash back before the item, and keeps nothing when the restore fails", async () => {
     const h = harness({ "/a.txt": "a" });
     const { item } = await h.files.trash(h.actor, "/a.txt");
-    const id = item.leaf.slice("/.trash/".length);
+    const { id } = await h.listed();
     h.steps.length = 0;
     await h.storage.upload("/a.txt", new Uint8Array([1]));
     await expect(h.files.restore(h.actor, id)).rejects.toMatchObject({ kind: "conflict" });
+    // Still in Trash, its row kept.
+    expect((await h.listed()).id).toBe(id);
     const { entry } = await h.files.restore(h.actor, id, "/b.txt");
     expect(entry).toMatchObject({ path: "/b.txt", kind: "file" });
     expect(h.steps).toEqual([
       `access moved alice ${item.leaf} -> /a.txt false`,
+      `trash left ${id}`,
       `storage move ${item.leaf} -> /a.txt`,
       `access moved alice ${item.leaf} -> /b.txt false`,
+      `trash left ${id}`,
       `storage move ${item.leaf} -> /b.txt`,
       `metadata moved ${item.leaf} -> /b.txt`,
     ]);
+    expect((await h.trash.list(ALICE, 10)).items).toEqual([]);
     expect(h.activity.outcomes.map((row) => [row.action, row.outcome])).toEqual([
       ["file.trash", "success"],
       ["file.restore", "conflict"],
       ["file.restore", "success"],
     ]);
+    expect(h.activity.operations.at(-1)).toMatchObject({
+      action: "file.restore",
+      requested: { path: "/a.txt", trashLeaf: item.leaf, targetPath: "/b.txt" },
+    });
+  });
+
+  it("looks a restore up by its id and refuses one Trash does not hold, recording nothing", async () => {
+    const h = harness({ "/a.txt": "a" });
+    await h.files.trash(h.actor, "/a.txt");
+    await expect(
+      h.files.restore(h.actor, "7a4b2c1d-3e5f-4a6b-8c7d-9e0f1a2b3c4d"),
+    ).rejects.toMatchObject({ kind: "not_found" });
+    expect(h.activity.operations.map((row) => row.action)).toEqual(["file.trash"]);
   });
 
   it("ends what followed an item into Trash before deleting it, and deletes nothing when that fails", async () => {
     const failing = harness({ "/dir/a.txt": "a" }, { removed: new Error("database refused") });
-    const { item } = await failing.files.trash(failing.actor, "/dir");
-    const id = item.leaf.slice("/.trash/".length);
+    await failing.files.trash(failing.actor, "/dir");
+    const { id } = await failing.listed();
     await expect(failing.files.purge(failing.actor, id)).rejects.toThrow("database refused");
-    expect((await failing.storage.trash.list()).entries.map((entry) => entry.id)).toEqual([id]);
+    expect((await failing.listed()).id).toBe(id);
+    expect(failing.storage.dump()).toEqual({ [`${trashItemPath(id, "dir")}/a.txt`]: "a" });
 
     const h = harness({ "/dir/a.txt": "a" });
     const trashed = await h.files.trash(h.actor, "/dir");
+    const row = await h.listed();
     h.steps.length = 0;
-    await h.files.purge(h.actor, trashed.item.leaf.slice("/.trash/".length), {
-      reason: "retention",
-    });
+    await h.files.purge(h.actor, row.id, { reason: "retention" });
     expect(h.steps).toEqual([
       `access removed ${trashed.item.leaf} true`,
+      `trash left ${row.id}`,
       `metadata deleted ${trashed.item.leaf}`,
     ]);
     expect(h.storage.dump()).toEqual({});
+    expect(h.storage.dirs().filter((dir) => dir.startsWith("/.trash/"))).toEqual([]);
+    expect((await h.trash.list(ALICE, 10)).items).toEqual([]);
     expect(h.activity.operations.at(-1)).toMatchObject({
       action: "file.delete",
       requested: { path: "/dir", trashLeaf: trashed.item.leaf, reason: "retention" },
     });
+  });
+
+  it("is done with a purge of an item Trash does not hold, without history", async () => {
+    const h = harness({});
+    expect(await h.files.purge(h.actor, "7a4b2c1d-3e5f-4a6b-8c7d-9e0f1a2b3c4d")).toEqual({});
+    expect(h.run).not.toHaveBeenCalled();
+    expect(h.activity.operations).toEqual([]);
   });
 });
 
@@ -460,9 +592,15 @@ describe("moveMany and trashMany", () => {
       },
       { path: "/dir", ok: true },
     ]);
+    const leaves = Object.fromEntries(
+      (await h.trash.list(ALICE, 10)).items.map((item) => [
+        item.name,
+        trashItemPath(item.id, item.name),
+      ]),
+    );
     expect(h.storage.dump()).toEqual({
-      "/.trash/.fdrive-move-v1/dir/p/dir/v/0/b.txt": "b",
-      "/.trash/.fdrive-move-v1/file/p/a.txt/v/0": "a",
+      [`${leaves.dir}/b.txt`]: "b",
+      [`${leaves["a.txt"]}`]: "a",
     });
     vi.spyOn(h.storage.trash, "put").mockRejectedValueOnce(new Error("socket hang up"));
     await h.storage.upload("/c.txt", new Uint8Array([1]));
@@ -474,17 +612,22 @@ describe("moveMany and trashMany", () => {
 
 describe("without anything else wired", () => {
   it("works with no history and no metadata, links and shares following through the stores", async () => {
-    const repo = memoryAccessRepo();
-    const files = testFileOperations({ access: testAccessFollowers(repo) });
+    const trashRepo = memoryTrashItemRepo();
+    const repo = memoryAccessRepo({ trash: trashRepo });
+    const files = testFileOperations({ access: testAccessFollowers(repo), trashRepo });
     const storage = createMemoryStorage({ "/a.txt": "a" });
     const actor = fileActor(principal(storage), { source: "api" });
     expect(await files.move(actor, "/a.txt", "/b.txt")).toEqual({
       entry: await storage.stat("/b.txt"),
     });
-    expect(await files.trash(actor, "/b.txt")).toMatchObject({ item: { kind: "file" } });
+    const { item } = await files.trash(actor, "/b.txt");
+    expect(item).toMatchObject({ kind: "file" });
     expect(repo.changes.map((change) => change.shares)).toEqual([
       { identityId: ALICE, from: "/a.txt", to: "/b.txt" },
-      { identityId: ALICE, from: "/b.txt", to: "/.trash/.fdrive-move-v1/file/p/b.txt/v/0" },
+      { identityId: ALICE, from: "/b.txt", to: item.leaf },
+    ]);
+    expect((await trashRepo.list(ALICE, 10)).items.map((row) => row.originalPath)).toEqual([
+      "/b.txt",
     ]);
   });
 });
@@ -619,7 +762,7 @@ describe("the backups' write gate", () => {
   });
 
   it("holds it around every other operation, from its storage call to its last follower", async () => {
-    const h = harness({ "/a.txt": "a" }, {}, (steps) => recordingGate(steps));
+    const h = harness({ "/a.txt": "a" }, {}, undefined, (steps) => recordingGate(steps));
     await h.files.move(h.actor, "/a.txt", "/b.txt");
     expect(h.steps).toEqual([
       "gate held",
@@ -631,10 +774,19 @@ describe("the backups' write gate", () => {
     h.steps.length = 0;
     await h.files.mkdir(h.actor, "/made");
     await h.files.copy(h.actor, "/b.txt", "/c.txt");
+    // Trash's row is written inside the delete's write, before its rename.
+    const begin = h.trash.begin.bind(h.trash);
+    h.trash.begin = async (item) => {
+      h.steps.push("trash row written");
+      return begin(item);
+    };
     const { item } = await h.files.trash(h.actor, "/c.txt");
-    await h.files.restore(h.actor, item.leaf.slice(TRASH_PATH.length + 1));
+    const trashing = h.steps.slice(h.steps.lastIndexOf("gate held"));
+    expect(trashing.indexOf("trash row written")).toBeGreaterThan(0);
+    expect(trashing.at(-1)).toBe("gate let go");
+    await h.files.restore(h.actor, trashItemOf(item.leaf)?.id ?? "");
     const again = await h.files.trash(h.actor, "/c.txt");
-    await h.files.purge(h.actor, again.item.leaf.slice(TRASH_PATH.length + 1));
+    await h.files.purge(h.actor, trashItemOf(again.item.leaf)?.id ?? "");
     // Each one held it, and let go before the next began.
     const gates = h.steps.filter((step) => step.startsWith("gate"));
     expect(gates).toEqual(Array.from({ length: 6 }, () => ["gate held", "gate let go"]).flat());

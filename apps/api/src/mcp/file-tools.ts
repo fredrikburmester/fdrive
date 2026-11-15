@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { extensionOf, parseMoveTrashLeaf, TRASH_PATH, trashLeafPath } from "@fdrive/core";
+import { extensionOf, isTrashId, TRASH_PATH } from "@fdrive/core";
 import { recordMetadataCommand } from "../activity/metadata.js";
 import type { TokenPrincipal } from "../tokens/principal.ts";
 import {
@@ -11,7 +11,7 @@ import {
   tokenScopes,
 } from "./access.ts";
 import { decodeText, liveFileInfo, MAX_FILE_BYTES, readStoredFile } from "./content.ts";
-import { type McpToolDeps, mcpFiles, warningsOf } from "./handlers.ts";
+import { type McpToolDeps, McpToolError, mcpFiles, warningsOf } from "./handlers.ts";
 import { fileUrl, folderUrl } from "./urls.ts";
 
 function checkedBytes(bytes: Buffer): Buffer {
@@ -138,21 +138,32 @@ export async function trashPath(deps: McpToolDeps, principal: TokenPrincipal, ra
   return { trashed: path, ...warningsOf(done) };
 }
 
+/** What Trash holds, for the Trash tools; `file changes are unavailable` without it. */
+function requireTrash(deps: McpToolDeps) {
+  if (deps.trash === undefined) throw new McpToolError("file changes are unavailable");
+  return deps.trash;
+}
+
 export async function listTrash(
+  deps: McpToolDeps,
   principal: TokenPrincipal,
   args: { offset?: number | undefined; limit?: number | undefined },
 ) {
   requireMode(principal, "full");
-  const listing = await principal.storage.trash.list({ limit: 10_000 });
-  const entries = listing.entries
+  const listing = await requireTrash(deps).list(principal.identityId, 10_000);
+  const entries = listing.items
     .filter((entry) => canReadPath(principal, entry.originalPath))
     .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
   const offset = args.offset ?? 0;
   const end = offset + (args.limit ?? 100);
   return {
-    entries: entries
-      .slice(offset, end)
-      .map((entry) => ({ ...entry, deletedAt: entry.deletedAt.toISOString() })),
+    entries: entries.slice(offset, end).map((entry) => ({
+      id: entry.id,
+      originalPath: entry.originalPath,
+      name: entry.name,
+      size: entry.size,
+      deletedAt: entry.deletedAt.toISOString(),
+    })),
     partial: listing.truncated,
     ...(end < entries.length ? { next_offset: end } : {}),
   };
@@ -164,10 +175,11 @@ export async function restorePath(
   args: { id: string; target?: string | undefined },
 ) {
   requireMode(principal, "full");
-  // The id is the leaf's path, which names where the item came from.
-  const leaf = parseMoveTrashLeaf(TRASH_PATH, trashLeafPath(TRASH_PATH, args.id));
-  if (leaf === null) throw new Error("not a Trash item id");
-  const original = ordinaryPath(principal, leaf.originalPath);
+  const item = isTrashId(args.id)
+    ? await requireTrash(deps).get(principal.identityId, args.id)
+    : null;
+  if (item === null) throw new McpToolError("not a Trash item id");
+  const original = ordinaryPath(principal, item.originalPath);
   const target = ordinaryPath(principal, args.target ?? original);
   const publicUrl = await deps.publicUrl();
   const { files, actor } = mcpFiles(deps, principal);

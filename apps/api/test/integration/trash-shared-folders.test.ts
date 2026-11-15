@@ -109,7 +109,7 @@ describe("Trash and folders shared with people, against real PostgreSQL and a lo
     expect(entry).toMatchObject({ originalPath: "/Team/plan.txt", name: "plan.txt" });
     if (entry === undefined) throw new Error("expected the file in alice's Trash");
     expect(existsSync(storage.path("alice", "/Team/plan.txt"))).toBe(false);
-    expect(existsSync(storage.path("alice", `/.trash/${entry.id}`))).toBe(true);
+    expect(existsSync(storage.path("alice", `/.trash/${entry.id}/plan.txt`))).toBe(true);
     expect(existsSync(storage.path("bob", "/.trash"))).toBe(false);
     // What each kept by path left the old path: nothing waits there for a new file.
     expect(await favorites(alice)).toEqual([]);
@@ -122,14 +122,14 @@ describe("Trash and folders shared with people, against real PostgreSQL and a lo
       from app.activity_events e join app.identities i on i.id = e.identity_id
       where e.action = 'file.trash' and e.stage = 'outcome'`);
     expect(history.rows).toEqual([
-      { username: "bob", path: `${SHARED}/plan.txt`, leaf: `/.trash/${entry.id}` },
+      { username: "bob", path: `${SHARED}/plan.txt`, leaf: `/.trash/${entry.id}/plan.txt` },
     ]);
 
     // The grantee cannot purge the owner's Trash: their own holds no such item.
     expect(
       (await call(ROUTES.trash.purge, { cookie: bob, body: { ids: [entry.id] } })).status,
     ).toBe(200);
-    expect(existsSync(storage.path("alice", `/.trash/${entry.id}`))).toBe(true);
+    expect(existsSync(storage.path("alice", `/.trash/${entry.id}/plan.txt`))).toBe(true);
 
     // The owner restores it: back in the shared folder, with the owner's favorite.
     const restored = await call(ROUTES.trash.restore, {

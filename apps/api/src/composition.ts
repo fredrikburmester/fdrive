@@ -16,6 +16,7 @@ import {
   createProcessingFailureReader,
   createRepos,
   createShareRepo,
+  createTrashItemRepo,
   createWopiLockRepo,
   type DesktopAccessMove,
   migrate,
@@ -46,7 +47,7 @@ import {
   seal,
 } from "./auth/index.js";
 import { createPrincipalFactory } from "./auth/principal.ts";
-import { createIdentityStorageFactory } from "./auth/storage-factory.ts";
+import { buildUserStorage, createIdentityStorageFactory } from "./auth/storage-factory.ts";
 import { createBackupModule } from "./backups/module.js";
 import { createRecoveryApp } from "./backups/recovery.js";
 import { registerBackupRoutes } from "./backups/routes.js";
@@ -140,10 +141,12 @@ import { registerThumbRoutes } from "./thumbs/routes.js";
 import { createResolveTokenPrincipal } from "./tokens/principal.js";
 import { registerTokenRoutes } from "./tokens/routes.js";
 import { createTokenService } from "./tokens/service.js";
+import { createTrashItems } from "./trash/items.js";
 import { createTrashRetention } from "./trash/retention.js";
 import { registerTrashRoutes } from "./trash/routes.js";
 import { createTrashSettingsService } from "./trash/settings.js";
 import { registerTrashSettingsRoutes } from "./trash/settings-routes.js";
+import { settleTrashAtStart } from "./trash/startup.js";
 import { readBuild } from "./version.js";
 
 export interface ComposedApp {
@@ -228,7 +231,6 @@ export async function composeApp(
   const folder = deploymentFilesFolder(config, repos, {
     changes,
     guard,
-    clock,
     usage: homeUsage,
   });
   const backups = createBackupModule(config, pool);
@@ -395,6 +397,36 @@ export async function composeApp(
   const desktopRepo = createDesktopRepo(db);
   // What is kept by path without granting access, the Mac's item handles included.
   const fileMetadata = withDesktopMetadata(metadataService, desktopRepo);
+  /** A login's own files, whether or not its user may sign in: Trash's bookkeeping. */
+  const homeOf = async (identityId: string) => {
+    const identity = await repos.identities.get(identityId);
+    if (identity === null) throw new Error(`no login ${identityId}`);
+    return buildUserStorage(folder, identity.username);
+  };
+  const trashItemRepo = createTrashItemRepo(db);
+  // What each Trash holds, by its rows.
+  const trash = createTrashItems({
+    repo: trashItemRepo,
+    access,
+    homeOf,
+    metadata: fileMetadata,
+    gate,
+    logger,
+  });
+  // Before anyone is served, so nothing else is on its way into Trash.
+  await settleTrashAtStart({
+    items: trash,
+    repo: trashItemRepo,
+    identities: repos.identities,
+    homeOf,
+    desktop: desktopRepo,
+    clock,
+    eventLog,
+  }).catch((error: unknown) => {
+    eventLog.record("general", "error", "Settling Trash at start failed", {
+      error: error instanceof Error ? error.message : String(error),
+    });
+  });
   // The one way fdrive changes files, whoever asks: the web, MCP, AI chat,
   // Office and a link's visitors.
   const files = createFileOperations({
@@ -403,20 +435,13 @@ export async function composeApp(
     gate,
     metadata: fileMetadata,
     ownerPath: localGrants.ownerPath,
-    storageFor: storageFactory,
+    trash,
+    clock,
     logger,
   });
   const desktopRetention = createDesktopRetention({
     repo: desktopRepo,
     storageForIdentity: storageFactory,
-    // The Mac's old Trash moves into fdrive's once: from a place no link
-    // reaches to another, so what grants access follows on its own, first.
-    metadata: {
-      async onMoved(identityId, from, to, directory) {
-        await access.moved(identityId, from, to, directory);
-        await fileMetadata.onMoved(identityId, from, to, directory);
-      },
-    },
     clock,
     eventLog,
   });
@@ -425,6 +450,7 @@ export async function composeApp(
     identities: repos.identities,
     storageFor: storageFactory,
     settings: trashSettings,
+    trash,
     files,
     clock,
     eventLog,
@@ -697,6 +723,7 @@ export async function composeApp(
     metadata: metadataService,
     imageSearchService,
     files,
+    trash,
     clock,
   };
   const aiSettings = createAiSettingsService({
@@ -778,6 +805,7 @@ export async function composeApp(
           purge: async (principal, id) => {
             await files.purge(fileActor(principal, { source: "native" }), id);
           },
+          trash,
           gate,
           logger,
           storageForIdentity: storageFactory,
@@ -850,7 +878,7 @@ export async function composeApp(
       };
       registerFsRoutes(groups, fsRoutesDeps);
       registerVideoRoutes(groups);
-      registerTrashRoutes(groups, { activity: personalActivity, files });
+      registerTrashRoutes(groups, { activity: personalActivity, files, trash });
       registerTrashSettingsRoutes(groups, { service: trashSettings });
       registerPublicUrlRoutes(groups, { service: publicUrl });
       registerOfficeSettingsRoutes(groups, {

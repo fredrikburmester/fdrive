@@ -1,5 +1,11 @@
 import { parentPath } from "@fdrive/core";
-import type { AccessChange, AccessRepo, DesktopShareMove, PathLock } from "@fdrive/db";
+import type {
+  AccessChange,
+  AccessRepo,
+  DesktopShareMove,
+  PathLock,
+  TrashItemChanges,
+} from "@fdrive/db";
 import type { OwnerPath } from "../metadata/trash.ts";
 
 export type { OwnerPath };
@@ -14,6 +20,8 @@ export interface AccessFollow {
   moved(identityId: string, from: string, to: string, directory: boolean): Promise<void>;
   /** `path` (and everything under it) is gone for good. */
   removed(identityId: string, path: string, directory: boolean): Promise<void>;
+  /** Trash's rows, which change in the same transaction. */
+  readonly trash: TrashItemChanges;
 }
 
 /** The paths one file operation changes, in its login's files. */
@@ -134,8 +142,12 @@ export function createAccessFollowers(deps: AccessFollowersDeps): AccessFollower
     return locks;
   }
 
-  function followIn(apply: (change: AccessChange) => Promise<void>): AccessFollow {
+  function followIn(
+    apply: (change: AccessChange) => Promise<void>,
+    trash: TrashItemChanges,
+  ): AccessFollow {
     return {
+      trash,
       async moved(identityId, from, to, directory) {
         const change = await planMove(identityId, from, to, directory);
         if (change !== null) await apply(change);
@@ -150,11 +162,15 @@ export function createAccessFollowers(deps: AccessFollowersDeps): AccessFollower
   return {
     async run(identityId, paths, work) {
       const locks = await locksFor(identityId, paths);
-      return deps.repo.run(locks, (apply) => work(followIn(apply)));
+      return deps.repo.run(locks, (apply, trash) => work(followIn(apply, trash)));
     },
     moved: (identityId, from, to, directory) =>
-      deps.repo.run([], (apply) => followIn(apply).moved(identityId, from, to, directory)),
+      deps.repo.run([], (apply, trash) =>
+        followIn(apply, trash).moved(identityId, from, to, directory),
+      ),
     removed: (identityId, path, directory) =>
-      deps.repo.run([], (apply) => followIn(apply).removed(identityId, path, directory)),
+      deps.repo.run([], (apply, trash) =>
+        followIn(apply, trash).removed(identityId, path, directory),
+      ),
   };
 }

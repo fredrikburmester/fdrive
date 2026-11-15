@@ -116,21 +116,23 @@ export function createLocalGrantService(deps: LocalGrantServiceDeps): LocalGrant
   }
 
   /**
-   * What is shared with `username`, named as their storage names it: before
-   * the shares their storage refuses (`closedToShares`) are left out.
+   * What is shared with `username`, named as their storage names it: the
+   * shares their storage refuses (`closedToShares`, a folder in its owner's
+   * Trash say) are left out first, so they never take a name.
    */
   async function reachable(username: string) {
     const grants = await repos.localGrants.listReceived(username);
-    const named = namedSharedGrants(
+    return namedSharedGrants(
       username,
-      grants.map((grant) => ({
-        owner: grant.ownerUsername,
-        path: grant.path,
-        writable: grant.access === "write",
-        grant,
-      })),
+      grants
+        .filter((grant) => !closedToShares(grant.path))
+        .map((grant) => ({
+          owner: grant.ownerUsername,
+          path: grant.path,
+          writable: grant.access === "write",
+          grant,
+        })),
     );
-    return named.filter(({ grant }) => !closedToShares(grant.path));
   }
 
   async function received(username: string): Promise<ReceivedFolder[]> {

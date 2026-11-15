@@ -3,7 +3,7 @@ import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import type { MoveManyResponse } from "@fdrive/contracts";
-import { type OpenFile, StorageError, type StorageProvider } from "@fdrive/core";
+import { type OpenFile, StorageError, type StorageProvider, trashItemPath } from "@fdrive/core";
 import { createMemoryStorage, entryStat } from "@fdrive/core/testing";
 import { createMemoryRepos } from "@fdrive/db/testing";
 import { createLocalStorage } from "@fdrive/local";
@@ -18,6 +18,7 @@ import {
   rangeCases,
   rangeHeaders,
 } from "../../test/fixtures/range-cases.js";
+import { type MemoryTrashItemRepo, memoryTrashItemRepo } from "../../test/trash-items.js";
 import { createApp } from "../app.js";
 import type { Principal } from "../auth/principal.js";
 import { loadConfig } from "../config.js";
@@ -140,7 +141,7 @@ function forbiddenStorage(): StorageProvider {
     contentStamp: deny,
     uploadPart: deny,
     zip: deny,
-    trash: { put: deny, list: deny, restore: deny, purge: deny },
+    trash: { put: deny, restore: deny, purge: deny },
   };
 }
 
@@ -221,7 +222,7 @@ function watchedStorage(files: Record<string, string>) {
 
 async function buildHarnessWithStorage(
   storage: StorageProvider,
-  opts: { metadata?: MetadataService; jsonMaxBytes?: number } = {},
+  opts: { metadata?: MetadataService; jsonMaxBytes?: number; trash?: MemoryTrashItemRepo } = {},
 ): Promise<Harness> {
   const principal: Principal = {
     accountId: ACCOUNT_ID,
@@ -249,6 +250,7 @@ async function buildHarnessWithStorage(
         files: testFileOperations({
           activity: activity.service,
           ...(opts.metadata === undefined ? {} : { metadata: opts.metadata }),
+          ...(opts.trash === undefined ? {} : { trashRepo: opts.trash }),
         }),
         jobRunner: buildJobRunner(),
         jobMaxBytes: 1_000_000_000,
@@ -1552,8 +1554,9 @@ describe("POST /fs/delete", () => {
     await metadata.addFavorite(ALICE_IDENTITY_ID, "/hello.txt", "file");
     const onMoved = vi.spyOn(metadata, "onMoved");
     const onDeleted = vi.spyOn(metadata, "onDeleted");
+    const trash = memoryTrashItemRepo();
 
-    const { app } = await buildHarnessWithStorage(storage, { metadata });
+    const { app } = await buildHarnessWithStorage(storage, { metadata, trash });
 
     const res = await app.request(
       "/api/v1/fs/delete",
@@ -1565,16 +1568,14 @@ describe("POST /fs/delete", () => {
     );
 
     expect(res.status).toBe(200);
-    const leaf = expect.stringMatching(
-      /^\/\.trash\/\.fdrive-move-v1\/file\/p\/hello\.txt\/v\/\d+$/,
-    );
+    const [item] = (await trash.list(ALICE_IDENTITY_ID, 10)).items;
+    expect(item).toMatchObject({ originalPath: "/hello.txt", name: "hello.txt", kind: "file" });
+    const leaf = trashItemPath(item?.id ?? "", "hello.txt");
+    expect(await storage.statFile(leaf)).toMatchObject({ size: 11 });
     expect(onMoved).toHaveBeenCalledWith(ALICE_IDENTITY_ID, "/hello.txt", leaf, false);
     expect(onDeleted).not.toHaveBeenCalled();
     // A new file at the old path inherits nothing; the favorite is in Trash, which no list shows.
     expect(await metadata.listFavorites(ALICE_IDENTITY_ID)).toEqual([]);
-    expect((await storage.trash.list()).entries.map((entry) => entry.originalPath)).toEqual([
-      "/hello.txt",
-    ]);
   });
 
   it("refuses to move the Trash or anything in it to Trash", async () => {
@@ -1736,14 +1737,15 @@ describe("unmapped errors pass through unchanged", () => {
 
   it("rethrows a non-StorageError from moving to Trash as an internal error", async () => {
     const memory = createMemoryStorage({ "/a.txt": "a" });
-    const storage = makeStubStorage({
+    const storage: StorageProvider = {
+      ...memory,
       trash: {
         ...memory.trash,
         put: async () => {
           throw new Error("unexpected failure");
         },
       },
-    });
+    };
     const { app } = await buildHarnessWithStorage(storage);
 
     const res = await app.request(
@@ -1763,7 +1765,7 @@ describe("unmapped errors pass through unchanged", () => {
       throw new StorageError("not_found", "missing");
     };
     const storage = makeStubStorage({
-      trash: { put: missing, list: missing, restore: missing, purge: missing },
+      trash: { put: missing, restore: missing, purge: missing },
     });
     const { app } = await buildHarnessWithStorage(storage);
 

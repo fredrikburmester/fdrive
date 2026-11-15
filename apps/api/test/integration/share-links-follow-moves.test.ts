@@ -222,7 +222,8 @@ describe("public links follow the files they point at", () => {
     const trashId = async () => {
       const [path] = await linkPaths(alice, id);
       if (!path?.startsWith("/.trash/")) throw new Error(`expected the link in the Trash: ${path}`);
-      return path.slice("/.trash/".length);
+      // `/.trash/<id>/<name>`: the item's id is its folder's name.
+      return path.split("/")[2] as string;
     };
 
     await trash("/Binned");
@@ -332,7 +333,7 @@ describe("public links follow the files they point at", () => {
 
     await tool("trash_path", { path: "/Reports" });
     const [trashed] = await linkPaths(alice, id);
-    expect(trashed).toMatch(/^\/\.trash\/.+\/report\.txt$/);
+    expect(trashed).toMatch(/^\/\.trash\/[0-9a-f-]{36}\/Reports\/report\.txt$/);
     await put(alice, "/Reports/report.txt", "never shared");
     expect(await visit(id)).toBe(404);
     await ok(
@@ -341,7 +342,8 @@ describe("public links follow the files they point at", () => {
         body: { items: [{ path: "/Reports", kind: "dir" }] },
       }),
     );
-    const entry = (trashed as string).slice("/.trash/".length, -"/report.txt".length);
+    // `/.trash/<id>/Reports/report.txt`: the item's id is its folder's name.
+    const entry = (trashed as string).split("/")[2];
     await tool("restore_path", { id: entry });
     expect(await linkPaths(alice, id)).toEqual(["/Reports/report.txt"]);
     expect(await downloadText(id)).toBe("report");
@@ -359,7 +361,7 @@ describe("public links follow the files they point at", () => {
           : { path: `alice/${path}`, targetPath: `alice/${target}` },
       ]);
 
-    const trashLeaf = `.trash/.fdrive-move-v1/${randomUUID()}`;
+    const trashLeaf = `.trash/${randomUUID()}/OutsideTrash`;
     await mkdir(dirname(onDisk(`/${trashLeaf}`)), { recursive: true });
     await rename(onDisk("/OutsideTrash"), onDisk(`/${trashLeaf}`));
     await journal("OutsideTrash", trashLeaf);
@@ -437,7 +439,9 @@ describe("public links follow the files they point at", () => {
     expect(await linkPaths(alice, file)).toEqual(["/mac-renamed.txt"]);
     expect(await linkPaths(alice, folder)).toEqual(["/MacMoved/inside.txt"]);
     // The Mac's Trash is fdrive's: the link follows its item there, where it is not served.
-    expect((await linkPaths(alice, trashed))[0]).toMatch(/^\/\.trash\/.+\/mac-trash\.txt\//);
+    expect((await linkPaths(alice, trashed))[0]).toMatch(
+      /^\/\.trash\/[0-9a-f-]{36}\/mac-trash\.txt$/,
+    );
     expect(await downloadText(file)).toBe("mac");
     expect(await downloadText(folder)).toBe("mac inside");
     await put(alice, "/mac-trash.txt", "never shared");

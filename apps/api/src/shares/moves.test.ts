@@ -67,7 +67,7 @@ describe("public links following their item", () => {
     const link = await shares.insert(row(alice, ["/Projects"]));
     let at = "/Projects";
     for (const target of [
-      "/.trash/.fdrive-move-v1/Projects",
+      "/.trash/0d9f8a52-6c1e-4f53-9a7b-2e4c6d8f0a1b/Projects",
       "/.fdrive-desktop/x/trash/Projects",
       "/Shared with me/Projects",
       "/Projects",

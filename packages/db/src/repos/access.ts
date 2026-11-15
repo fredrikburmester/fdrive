@@ -4,6 +4,7 @@ import { deleteLocalGrantPrefix, moveLocalGrantPrefix } from "./drizzle.js";
 import { createOfficeFileRepoWithRunner } from "./office-files.js";
 import type { OfficeFileLocation } from "./office-files-state.js";
 import { deleteSharePrefix, moveSharePrefix } from "./shares.js";
+import { type TrashItemChanges, trashItemChanges } from "./trash-items.js";
 
 /**
  * What grants access to a path that moved or went, each in its owner's
@@ -34,13 +35,14 @@ export interface PathLock {
 export interface AccessRepo {
   /**
    * Runs `work` in one transaction that holds `locks` until it ends, and
-   * applies each change `work` hands `follow` in that transaction: none of
-   * them is kept unless `work` succeeds. A lock is taken in one order, so two
-   * operations never wait for each other.
+   * applies each change `work` hands `follow`, and each change to Trash's
+   * rows (`trash`), in that transaction: none of them is kept unless `work`
+   * succeeds. A lock is taken in one order, so two operations never wait for
+   * each other.
    */
   run<T>(
     locks: readonly PathLock[],
-    work: (follow: (change: AccessChange) => Promise<void>) => Promise<T>,
+    work: (follow: (change: AccessChange) => Promise<void>, trash: TrashItemChanges) => Promise<T>,
   ): Promise<T>;
 }
 
@@ -93,7 +95,7 @@ export function createAccessRepo(lockDb: Db, clock: () => Date = () => new Date(
             if (files.to === null) await office.deletePrefix({ ...files.from, at: clock() });
             else await office.movePrefix({ from: files.from, to: files.to, at: clock() });
           }
-        });
+        }, trashItemChanges(tx));
       });
     },
   };

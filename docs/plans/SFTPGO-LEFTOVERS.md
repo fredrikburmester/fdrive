@@ -28,8 +28,8 @@ Recommended on 2026-11-14 and approved by the owner the same day.
    those logins' tags, favorites, shares and chats, which no one can reach. Activity history has
    no foreign key to logins and stays.
 3. Trash is always on, at `/.trash`, and fdrive enforces its retention (one setting, default 30
-   days). Before the flat layout (17) ships, the owner restores what they want and empties Trash
-   instead of a migration moving old items.
+   days). Changed by the owner when the flat layout shipped: a start-up step moves the items
+   Trash's old layout holds, keeping each one's path and deletion time (group 39).
 4. Backups go to S3 only. Configuration ZIP attachments go.
 5. Limited share links may preview and peek, counted once per open. Public uploads never replace
    a file; a clash gets a numbered name. Multi-item shares stay zip-only for now.
@@ -39,20 +39,23 @@ Recommended on 2026-11-14 and approved by the owner the same day.
 8. `Shared with me` is a reserved name at the top of each home.
 9. The migration history is squashed last.
 
-## Wave 2: Trash, metadata and the journal
-
-17. **Flat Trash layout.** The `p/<segment>` path encoding, made for WebDAV, becomes one folder
-    per item plus a row. The Mac's Trash (`desktop/writes.ts`) finds an item's leaf and original
-    path with the layout's parser too.
-
 ## Mac
 
 All are server-only and keep shipped Mac builds working.
 
 28. Optional: drop `/checks` now that the change feed exists, after measuring the hourly pass.
 38. Drop `desktop_items.original_path` and the `trashName` handling with the start-up move of
-    the Mac's old Trash (`adoptOldTrash` in `desktop/retention.ts`), once the owner's server
+    the Mac's old Trash (`settleTrashAtStart` in `trash/startup.ts`), once the owner's server
     has run it.
+
+## Trash
+
+39. Drop the start-up move of Trash's old layout once the owner's server has run it: the old
+    layout's parser and walk (`apps/api/src/trash/old-layout.ts`), its step in
+    `settleTrashAtStart`, and `.fdrive-move-v1` as a reserved name (`OLD_TRASH_LAYOUT` in
+    `packages/core/src/reserved-paths.ts`, `RESERVED_FOLDERS` in the OCR service's `rules.py`,
+    the indexer's `exclude_names` comment, and the docs that name it). Settling items a crash
+    left on their way into Trash stays.
 
 ## Last
 
