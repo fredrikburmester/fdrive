@@ -1,7 +1,6 @@
 import type { Scope } from "@fdrive/core";
 import { describe, expect, it, vi } from "vitest";
 import { createScopeResolver } from "./resolver.ts";
-import { buildIdentity } from "./test-fixtures/index.ts";
 
 const HOME: Scope = { rootName: "files", fsPrefix: "/alice", virtualPrefix: "/" };
 
@@ -19,13 +18,12 @@ function resolver(
 
 describe("configuredMappings", () => {
   it("maps the login's home to <root>/<username> without touching storage", async () => {
-    expect(await resolver([]).configuredMappings(buildIdentity())).toEqual({
+    expect(await resolver([]).configuredMappings("alice")).toEqual({
       available: true,
       providerId: "provider-1",
       scopes: [HOME],
     });
-    const bob = buildIdentity({ externalUsername: "bob" });
-    expect(await resolver(["files"]).configuredMappings(bob)).toEqual({
+    expect(await resolver(["files"]).configuredMappings("bob")).toEqual({
       available: true,
       providerId: "provider-1",
       scopes: [{ rootName: "files", fsPrefix: "/bob", virtualPrefix: "/" }],
@@ -33,10 +31,11 @@ describe("configuredMappings", () => {
   });
 
   it("reports invalid_configuration for a username that cannot name one folder", async () => {
-    for (const externalUsername of ["..", "a/b", ""]) {
-      expect(
-        await resolver(["files"]).configuredMappings(buildIdentity({ externalUsername })),
-      ).toEqual({ available: false, reason: "invalid_configuration" });
+    for (const username of ["..", "a/b", ""]) {
+      expect(await resolver(["files"]).configuredMappings(username)).toEqual({
+        available: false,
+        reason: "invalid_configuration",
+      });
     }
   });
 
@@ -47,8 +46,7 @@ describe("configuredMappings", () => {
       virtualPrefix: "/Shared with me/Photos",
     };
     const extraScopes = vi.fn(async () => [shared]);
-    const alice = buildIdentity();
-    expect(await resolver(["files"], extraScopes).configuredMappings(alice)).toEqual({
+    expect(await resolver(["files"], extraScopes).configuredMappings("alice")).toEqual({
       available: true,
       providerId: "provider-1",
       scopes: [HOME, shared],
@@ -58,7 +56,7 @@ describe("configuredMappings", () => {
 
   it("asks for no extra scopes when the login has no home", async () => {
     const extraScopes = vi.fn(async () => []);
-    await resolver([], extraScopes).configuredMappings(buildIdentity({ externalUsername: ".." }));
+    await resolver([], extraScopes).configuredMappings("..");
     expect(extraScopes).not.toHaveBeenCalled();
   });
 });
@@ -77,7 +75,7 @@ describe("verifiedIndexScopes", () => {
       available: false,
       reason: "no_roots",
     });
-    expect((await elsewhere.configuredMappings(buildIdentity())).available).toBe(true);
+    expect((await elsewhere.configuredMappings("alice")).available).toBe(true);
   });
 
   it("passes on why the configured mapping is unavailable", async () => {

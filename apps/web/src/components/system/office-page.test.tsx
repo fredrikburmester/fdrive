@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => ({
   refetch: vi.fn(),
   reset: vi.fn(),
   success: vi.fn(),
+  users: vi.fn(),
 }));
 vi.mock("sonner", () => ({ toast: { success: (m: string) => mocks.success(m) } }));
 vi.mock("@/lib/api/office-settings-queries", () => ({
@@ -18,6 +19,7 @@ vi.mock("@/lib/api/office-settings-queries", () => ({
   useUpdateOfficeSettings: () => mocks.update(),
 }));
 vi.mock("@/lib/api/public-url-queries", () => ({ useSystemPublicUrl: () => mocks.address() }));
+vi.mock("@/lib/api/system-queries", () => ({ useAdminUsers: () => mocks.users() }));
 vi.mock("./system-page", () => ({
   SystemPage: (props: {
     title: string;
@@ -40,12 +42,10 @@ vi.mock("./system-page", () => ({
 
 const { OfficeSystemPage } = await import("./office-page");
 
-const providerId = "123e4567-e89b-42d3-a456-426614174000";
 const enabled = {
   revision: 2,
   enabled: true,
   editingEnabled: true,
-  editingProviderId: providerId,
   editorUsernames: ["alice", "bob"],
 };
 
@@ -54,8 +54,6 @@ function response(overrides: Record<string, unknown> = {}) {
     data: {
       configuration: enabled,
       product: "onlyoffice",
-      activeProviderId: providerId,
-      activeProviderLabel: "Primary",
       status: "ready",
       ...overrides,
     },
@@ -66,6 +64,9 @@ function response(overrides: Record<string, unknown> = {}) {
 
 beforeEach(() => {
   mocks.address.mockReturnValue({ data: { revision: 1, url: "https://files.example" } });
+  mocks.users.mockReturnValue({
+    data: { users: ["alice", "bob", "carol"].map((username) => ({ username })) },
+  });
   mocks.query.mockReturnValue(response());
   mocks.update.mockReturnValue({
     mutate: mocks.mutate,
@@ -123,9 +124,8 @@ it("edits and saves the editor list from the settings sheet", () => {
   render(<OfficeSystemPage />);
 
   fireEvent.click(screen.getByRole("button", { name: "Settings" }));
-  fireEvent.change(screen.getByLabelText("Users allowed to edit"), {
-    target: { value: "alice\ncarol" },
-  });
+  fireEvent.click(screen.getByRole("checkbox", { name: "bob" }));
+  fireEvent.click(screen.getByRole("checkbox", { name: "carol" }));
   fireEvent.click(screen.getByRole("button", { name: "Save" }));
 
   expect(mocks.mutate).toHaveBeenCalledWith(
@@ -142,9 +142,7 @@ it("blocks a save that would enable Office without a server address", () => {
   render(<OfficeSystemPage />);
 
   fireEvent.click(screen.getByRole("button", { name: "Settings" }));
-  fireEvent.change(screen.getByLabelText("Users allowed to edit"), {
-    target: { value: "alice\ncarol" },
-  });
+  fireEvent.click(screen.getByRole("checkbox", { name: "carol" }));
 
   expect((screen.getByRole("button", { name: "Save" }) as HTMLButtonElement).disabled).toBe(true);
   expect(

@@ -35,6 +35,7 @@ function buildApp(isAdmin: boolean, workerToken = "worker-secret") {
     product: "onlyoffice",
     publicUrl: async () => "https://drive.example",
     probeStatus: async () => "ready",
+    usernames: async () => ["alice"],
   });
   const principal: Principal = {
     accountId: identity.accountId,
@@ -58,7 +59,6 @@ function buildApp(isAdmin: boolean, workerToken = "worker-secret") {
       registerOfficeSettingsRoutes(groups, {
         service,
         workerToken,
-        activeProvider: async () => ({ id: PROVIDER_ID, label: "Primary" }),
       }),
   });
 }
@@ -73,8 +73,6 @@ describe("Office settings routes", () => {
       configuration: { revision: 0, enabled: false },
       product: "onlyoffice",
       status: "off",
-      activeProviderId: PROVIDER_ID,
-      activeProviderLabel: "Primary",
     });
     const response = await app.request(ROUTES.system.office, {
       method: "PUT",

@@ -114,16 +114,16 @@ native receipts, read aggregation and Unknown observations are documented in
 
 ## Index authorization
 
-Use [scoping](SCOPING.md) when touching search, thumbnails, metadata events, Office paths
-or MCP. Index scopes come from the files folder's index root and the login's username, plus
-one per folder shared with it, computed for each request and never from a path a client
-sends; an index row they map to is the login's to see, with no storage read. A login whose root is not indexed keeps
+Use [scoping](SCOPING.md) when touching search, thumbnails, metadata events or MCP. Index
+scopes come from the files folder's index root and the login's username, plus one per folder
+shared with it, computed for each request and never from a path a client sends; an index row
+they map to is the login's to see, with no storage read. A login whose root is not indexed keeps
 ordinary file operations, including explicitly scoped [MCP file tools](MCP.md).
 
 ## Office and recovery
 
-Office uses durable file UUIDs, session-bound tokens, callback verification and explicit
-edit admission. See [Office implementation](OFFICE-DEVELOPMENT.md) and [setup](OFFICE.md).
+Office uses durable file UUIDs keyed by owner and owner's path, session-bound tokens, callback
+verification and explicit edit admission. See [Office implementation](OFFICE-DEVELOPMENT.md) and [setup](OFFICE.md).
 Trash is a storage capability, not application-owned snapshot history; see [Trash](TRASH.md).
 
 ## UI and runtime decisions

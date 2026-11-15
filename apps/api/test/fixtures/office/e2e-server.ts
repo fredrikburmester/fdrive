@@ -6,19 +6,13 @@ import { composeApp } from "../../../src/composition.ts";
 import { loadConfig } from "../../../src/config.ts";
 import { OFFICE_SETTINGS_KEY } from "../../../src/office/settings.ts";
 import { startServer } from "../../../src/server.ts";
-import { fixtureOfficeAuthorizer } from "./seeded-permissions.ts";
 
 const config = loadConfig(process.env);
 if (!config.fdriveStorageRoot) throw new Error("Fixture storage root missing");
 const { db, pool } = createDb(config.databaseUrl);
-let providerId: string;
 try {
   await migrate(db);
   const repos = createRepos(db);
-  // The row startup seeds for `FDRIVE_STORAGE_ROOT`, created first so the
-  // Office settings below can name it.
-  const provider = await repos.providers.ensure({ type: "local", baseUrl: "local" });
-  providerId = provider.id;
   await repos.settings.set("features.configuration", {
     version: 1,
     revision: 1,
@@ -42,16 +36,13 @@ try {
     revision: 1,
     enabled: true,
     editingEnabled: true,
-    editingProviderId: provider.id,
     editorUsernames: ["alice", "bob"],
   });
 } finally {
   await pool.end();
 }
 const logger = pino({ level: "warn" });
-const composed = await composeApp(config, logger, () => new Date(), {
-  officeCanEdit: fixtureOfficeAuthorizer(providerId),
-});
+const composed = await composeApp(config, logger, () => new Date());
 const server = startServer(composed.app, config, logger);
 let stopping = false;
 async function shutdown(): Promise<void> {

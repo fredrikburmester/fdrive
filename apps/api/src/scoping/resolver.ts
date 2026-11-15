@@ -1,5 +1,4 @@
 import { isSafeSegment, type Scope } from "@fdrive/core";
-import type { Identity } from "@fdrive/db";
 import type { ConfiguredMappingsResult, VerifiedIndexScopesResult } from "./types.ts";
 
 /**
@@ -12,13 +11,11 @@ import type { ConfiguredMappingsResult, VerifiedIndexScopesResult } from "./type
  */
 export interface ScopeResolver {
   /**
-   * A login's scopes, whether or not their root is indexed: Office, index
-   * events and activity observations, which hold the login's row, use
-   * these. One grants query; reads neither storage nor the indexer.
+   * The scopes of the login named `username`, whether or not their root is
+   * indexed: index events and activity observations use these. One grants
+   * query; reads neither storage nor the indexer.
    */
-  configuredMappings(
-    identity: Pick<Identity, "externalUsername">,
-  ): Promise<ConfiguredMappingsResult>;
+  configuredMappings(username: string): Promise<ConfiguredMappingsResult>;
   /**
    * The configured scopes of the login named `username` whose root is
    * indexed. Index-backed features (search, duplicates, thumbnails, folder
@@ -54,11 +51,8 @@ export interface CreateScopeResolverDeps {
 export function createScopeResolver(deps: CreateScopeResolverDeps): ScopeResolver {
   const indexed = new Set(deps.indexRootNames);
 
-  async function configuredMappings(
-    identity: Pick<Identity, "externalUsername">,
-  ): Promise<ConfiguredMappingsResult> {
+  async function configuredMappings(username: string): Promise<ConfiguredMappingsResult> {
     const { rootName } = deps;
-    const username = identity.externalUsername;
     // The username names the home folder, so it must be exactly one segment.
     if (!isSafeSegment(username)) {
       return { available: false, reason: "invalid_configuration" };
@@ -69,7 +63,7 @@ export function createScopeResolver(deps: CreateScopeResolverDeps): ScopeResolve
   }
 
   async function verifiedIndexScopes(username: string): Promise<VerifiedIndexScopesResult> {
-    const configured = await configuredMappings({ externalUsername: username });
+    const configured = await configuredMappings(username);
     if (!configured.available) return configured;
     const scopes = configured.scopes.filter((scope) => indexed.has(scope.rootName));
     return scopes.length > 0

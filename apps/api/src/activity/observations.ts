@@ -61,7 +61,7 @@ export function createActivityObservations(deps: {
     async watcher(identityId: string, event: IndexerEventPayload) {
       const identity = await deps.identities.get(identityId);
       if (!identity) return;
-      const mappings = await deps.resolver.configuredMappings(identity);
+      const mappings = await deps.resolver.configuredMappings(identity.externalUsername);
       if (!mappings.available) return;
       const path = roundTripVirtualPath(mappings.scopes, event.root, event.path);
       if (!path) return;

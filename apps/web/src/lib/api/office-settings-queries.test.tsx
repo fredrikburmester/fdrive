@@ -15,7 +15,6 @@ it("loads settings and refreshes editor capabilities after saving", async () => 
   const configuration = {
     revision: 0,
     enabled: false,
-    editingProviderId: null,
     editorUsernames: [],
     editingEnabled: false,
   };
