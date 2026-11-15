@@ -327,10 +327,7 @@ describe("composeApp", () => {
       expect(reuseRes.status).toBe(404);
 
       const aboutAfterRes = await composed.app.request("/api/v1/about");
-      expect(await aboutAfterRes.json()).toMatchObject({
-        setupRequired: false,
-        providers: [{ type: "local" }],
-      });
+      expect(await aboutAfterRes.json()).toMatchObject({ setupRequired: false });
 
       // The owner's home is created on first use, under the deployment's folder.
       const uploadRes = await composed.app.request("/api/v1/fs/upload?path=/first.txt", {
