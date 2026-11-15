@@ -10,7 +10,8 @@ Current implementation reference. Unfinished work belongs in [plans](plans/READM
   `packages/local` performs the file I/O; `apps/api` constructs it and handles authentication,
   authorization, HTTP, events and jobs. The UI uses the typed contracts client.
 - `packages/db` owns Drizzle migrations for PostgreSQL's `app` metadata and `idx` index
-  schemas. The indexer and OCR consume those schemas; they do not independently migrate them.
+  schemas. The indexer and OCR consume those schemas; they do not independently migrate them,
+  and compose starts them once the API, which migrates before it serves, is healthy.
 - The indexer scans the files folder, extracts content and builds thumbnails/embeddings.
   The API records each change it makes in the change journal, `idx.changes`, and OCR each
   PDF it rewrites; the indexer reads the journal from its own position and applies them at

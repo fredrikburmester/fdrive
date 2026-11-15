@@ -46,7 +46,7 @@ const SUBSYSTEM_TITLES: Record<Subsystem, string> = {
  * sets explicitly, outside the generated passthrough block: secrets
  * (`DATABASE_URL`, `FDRIVE_MASTER_KEY`), a value fixed by the compose
  * topology (`PORT`, `FDRIVE_STORAGE_ROOT`, `FDRIVE_THUMBS_DIR`,
- * `FDRIVE_OCR_URL`, `FDRIVE_INDEXER_URL`, `FDRIVE_EMBED_URL`), and the
+ * `FDRIVE_OCR_URL`, `FDRIVE_INDEXER_URL`, `FDRIVE_ML_URL`), and the
  * optional secret `FDRIVE_SETUP_TOKEN`.
  * Exported so the
  * diff test and the generator share one list.
@@ -55,11 +55,6 @@ export const COMPOSE_PASSTHROUGH_EXCLUDED_KEYS: ReadonlySet<string> = new Set([
   "FDRIVE_BACKUP_STATE_DIR",
   "FDRIVE_BACKUP_WORKER",
   "FDRIVE_BACKUP_SOURCES",
-  "FDRIVE_EMBED_RUNTIME_URL",
-  "FDRIVE_IMAGE_EMBED_RUNTIME_URL",
-  "FDRIVE_TIKA_RUNTIME_URL",
-  "FDRIVE_TIKA_URL",
-
   "NODE_ENV",
   "FDRIVE_WORKER_TOKEN",
   "PORT",
@@ -69,8 +64,7 @@ export const COMPOSE_PASSTHROUGH_EXCLUDED_KEYS: ReadonlySet<string> = new Set([
   "FDRIVE_THUMBS_DIR",
   "FDRIVE_OCR_URL",
   "FDRIVE_INDEXER_URL",
-  "FDRIVE_EMBED_URL",
-  "FDRIVE_IMAGE_EMBED_URL",
+  "FDRIVE_ML_URL",
   "FDRIVE_SETUP_TOKEN",
   "FDRIVE_OFFICE_PRODUCT",
   "FDRIVE_OFFICE_URL",
@@ -101,8 +95,7 @@ export const ENV_EXAMPLE_EXCLUDED_KEYS: ReadonlySet<string> = new Set([
   "FDRIVE_THUMBS_DIR",
   "FDRIVE_OCR_URL",
   "FDRIVE_INDEXER_URL",
-  "FDRIVE_EMBED_URL",
-  "FDRIVE_IMAGE_EMBED_URL",
+  "FDRIVE_ML_URL",
 ]);
 
 /** Fresh installs need only secrets; the owner's account and features are

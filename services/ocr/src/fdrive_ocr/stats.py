@@ -18,8 +18,8 @@ class RunSummary:
     failed: int
 
 
-def shape_health(ok: bool, running: bool, features: dict[str, Any] | None = None) -> dict[str, Any]:
-    body: dict[str, Any] = {"ok": ok, "running": running}
+def shape_health(running: bool, features: dict[str, Any] | None = None) -> dict[str, Any]:
+    body: dict[str, Any] = {"ok": True, "running": running}
     if features is not None:
         body["features"] = features
     return body

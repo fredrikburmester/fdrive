@@ -31,7 +31,6 @@ class Config:
         self.run_on_start = _bool("OCR_RUN_ON_START", True)
         self.timeout_seconds = int(os.environ.get("OCR_TIMEOUT_SECONDS", "900"))
         self.jobs = int(os.environ.get("OCR_JOBS", "2"))
-        self.schema_wait_seconds = int(os.environ.get("SCHEMA_WAIT_SECONDS", "300"))
         self.default_hour = int(os.environ.get("OCR_HOUR", "3"))
         self.default_langs = os.environ.get("OCR_LANGS", "swe+eng")
         # Empty and absent are treated the same (fall back to the built-in

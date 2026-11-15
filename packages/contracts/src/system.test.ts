@@ -49,15 +49,10 @@ describe("IndexerHealth", () => {
     ok: true,
     watcher: true,
     embedOk: true,
-    schemaVersion: 3,
   };
 
   it("parses a valid payload", () => {
     expect(IndexerHealth.parse(valid)).toEqual(valid);
-  });
-
-  it("accepts a null schemaVersion", () => {
-    expect(IndexerHealth.safeParse({ ...valid, schemaVersion: null }).success).toBe(true);
   });
 
   it("rejects a missing watcher flag", () => {
@@ -258,7 +253,6 @@ describe("SystemIndexerResponse", () => {
         ok: true,
         watcher: true,
         embedOk: true,
-        schemaVersion: 1,
       },
       stats: {
         countsByStatus: {},

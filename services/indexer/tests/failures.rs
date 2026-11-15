@@ -226,7 +226,7 @@ fn an_unavailable_history_never_breaks_processing() {
 fn a_backend_outage_is_waiting_not_a_file_failure() {
     let env = Env::new();
     let mut cfg = env.config();
-    cfg.embed_url = fake_ml::closed_url();
+    cfg.ml_url = fake_ml::closed_url();
     let ctx = context_with(cfg, fv(false, true, false, true, false), |_| {});
     env.write("words.txt", b"searchable words");
     assert_eq!(scan_once(&ctx).errors, 0);

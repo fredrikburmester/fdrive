@@ -122,7 +122,7 @@ describe("ImageSearchPage", () => {
     });
     render(<ImageSearchPage />);
     expect(screen.getByText("Not configured", { exact: true })).toBeTruthy();
-    expect(screen.getByText("Not configured: set FDRIVE_IMAGE_EMBED_URL.")).toBeTruthy();
+    expect(screen.getByText("Not configured: set FDRIVE_ML_URL.")).toBeTruthy();
   });
 
   it("renders Unreachable when configured but the sidecar cannot be reached", () => {

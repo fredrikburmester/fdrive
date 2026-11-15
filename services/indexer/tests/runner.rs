@@ -14,9 +14,7 @@ use fdrive_indexer::db::{self, NewChange};
 use fdrive_indexer::failures::FileResult;
 use fdrive_indexer::files_marker::FILES_MARKER;
 use fdrive_indexer::indexer::RootContext;
-use fdrive_indexer::runner::{
-    EXPECTED_SCHEMA_VERSION, Handler, RootLoop, build_context, refresh_settings, start_watcher,
-};
+use fdrive_indexer::runner::{Handler, RootLoop, build_context, refresh_settings, start_watcher};
 use fdrive_indexer::watcher::WatchHandler;
 use fdrive_indexer::work::Applier;
 
@@ -63,7 +61,6 @@ fn save_setting(env: &Env, key: &str, value: serde_json::Value) {
 fn build_context_serves_the_files_root_with_the_persisted_features() {
     let env = Env::new();
     let ctx = build(env.config());
-    assert_eq!(EXPECTED_SCHEMA_VERSION, 2);
     assert_eq!((ctx.name.as_str(), ctx.root_id), (ROOT_NAME, ROOT_ID));
     assert_eq!(ctx.abs_path, env.root);
     assert_eq!(ctx.extractor().root, ROOT_NAME);

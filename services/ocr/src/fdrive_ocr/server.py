@@ -133,7 +133,6 @@ class ServerState:
     jobs: int
     run_lock: RunLock
     now: Callable[[], datetime]
-    schema_ready: Callable[[], bool]
     log: Callable[[str], None]
     originals: OriginalsIndex = field(default_factory=OriginalsIndex)
     # Env-only (OCR_INCLUDE_GLOBS), not part of app.settings; see rules.is_excluded.
@@ -151,7 +150,6 @@ async def health(request: Request) -> JSONResponse:
     finally:
         conn.close()
     body = shape_health(
-        state.schema_ready(),
         state.run_lock.running,
         {"revision": features.revision, "values": features.values.as_json()},
     )

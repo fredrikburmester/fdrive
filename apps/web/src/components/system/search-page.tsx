@@ -75,7 +75,7 @@ export function SearchPage() {
             description={
               data.semantic.configured
                 ? "The text embedding model fdrive queries at search time."
-                : "Not configured: set FDRIVE_EMBED_URL."
+                : "Not configured: set FDRIVE_ML_URL."
             }
           >
             <div className="flex flex-wrap items-center gap-3">

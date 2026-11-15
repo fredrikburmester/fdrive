@@ -147,16 +147,15 @@ fn storage_diagnostics(ctx: &RootContext) -> Value {
 async fn health(State(state): State<Shared>) -> Response {
     let result = blocking(move || {
         let features = state.features();
-        let embed_url = &state.context.cfg.embed_url;
         // An unavailable optional embedding service must not delay setup health.
         let embed_ok =
-            features.values.semantic_search && !embed_url.is_empty() && embed_health(embed_url, Duration::from_secs(1));
-        let version = state.db.with(db::read_schema_version)?;
+            features.values.semantic_search && embed_health(&state.context.cfg.text_url(), Duration::from_secs(1));
+        // Unreachable postgres answers 500, which the container healthcheck keys on.
+        state.db.with(|c| Ok(c.batch_execute("SELECT 1")?))?;
         Ok::<_, anyhow::Error>(json!({
-            "ok": version.is_some(),
+            "ok": true,
             "watcher": state.watcher.load(Ordering::SeqCst),
             "embed_ok": embed_ok,
-            "schema_version": version,
             "features": features.as_json(),
             "storage": storage_diagnostics(&state.context),
         }))

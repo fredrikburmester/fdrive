@@ -58,9 +58,7 @@ describe("buildApiEnv", () => {
       FDRIVE_MASTER_KEY: "the-key",
       FDRIVE_COOKIE_SECURE: "false",
       FDRIVE_STORAGE_ROOT: storageRoot,
-      FDRIVE_EMBED_URL: "http://127.0.0.1:58012/text",
-      FDRIVE_IMAGE_EMBED_URL: "http://127.0.0.1:58012/image",
-      FDRIVE_TIKA_URL: "http://127.0.0.1:58012/extract",
+      FDRIVE_ML_URL: "http://127.0.0.1:58012",
       FDRIVE_THUMBS_DIR: join("/repo", "deploy", "dev", ".data", "thumbs"),
       FDRIVE_INDEXER_URL: "http://127.0.0.1:58010",
       FDRIVE_OCR_URL: "http://127.0.0.1:58011",
@@ -85,9 +83,7 @@ describe("buildApiEnv", () => {
     expect(buildApiEnv("/repo", "k", env)).toMatchObject({
       PORT: "3301",
       DATABASE_URL: "postgres://fdrive:fdrive-dev@127.0.0.1:55433/fdrive",
-      FDRIVE_EMBED_URL: "http://127.0.0.1:59081/text",
-      FDRIVE_IMAGE_EMBED_URL: "http://127.0.0.1:59081/image",
-      FDRIVE_TIKA_URL: "http://127.0.0.1:59081/extract",
+      FDRIVE_ML_URL: "http://127.0.0.1:59081",
       FDRIVE_INDEXER_URL: "http://127.0.0.1:59010",
       FDRIVE_OCR_URL: "http://127.0.0.1:59011",
     });

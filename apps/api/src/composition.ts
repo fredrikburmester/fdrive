@@ -51,7 +51,7 @@ import { createIdentityStorageFactory } from "./auth/storage-factory.ts";
 import { createBackupModule } from "./backups/module.js";
 import { createRecoveryApp } from "./backups/recovery.js";
 import { registerBackupRoutes } from "./backups/routes.js";
-import type { AppConfig } from "./config.js";
+import { type AppConfig, mlUnitUrl } from "./config.js";
 import { type Subsystem, type SubsystemProbe, startupSummaryLines } from "./config-keys.js";
 import { createDesktopChanges } from "./desktop/changes.js";
 import { createIndexedContentLookup } from "./desktop/indexed-content.js";
@@ -327,14 +327,13 @@ export async function composeApp(
   // Search degrades to `{ unavailable: true }` rather than erroring while
   // the files folder is not indexed.
   const indexQueries = createIndexQueries(db);
-  const embedClient =
-    config.fdriveEmbedUrl === undefined
-      ? null
-      : createEmbedClient({ baseUrl: config.fdriveEmbedUrl });
+  const textUnit = mlUnitUrl(config, "text");
+  const imageUnit = mlUnitUrl(config, "image");
+  const embedClient = textUnit === undefined ? null : createEmbedClient({ baseUrl: textUnit });
   const imageEmbedClient =
-    config.fdriveImageEmbedUrl === undefined
+    imageUnit === undefined
       ? null
-      : createImageEmbedClient({ baseUrl: config.fdriveImageEmbedUrl, fetch: fetchImpl });
+      : createImageEmbedClient({ baseUrl: imageUnit, fetch: fetchImpl });
   const searchService = createSearchService({
     features: featureValues,
     indexQueries,
@@ -597,15 +596,13 @@ export async function composeApp(
     const failure = runtimeFailure(await fetchRuntimeStatus(controllerUrl, port, fetchImpl));
     return failure === null ? false : { failed: failure };
   };
-  const probeSubsystems = async (
-    forConfig: AppConfig,
-  ): Promise<Partial<Record<Subsystem, SubsystemProbe>>> => {
+  const probeSubsystems = async (): Promise<Partial<Record<Subsystem, SubsystemProbe>>> => {
     const [indexResult, searchStatus, imageSearchResult, ocrResult, officeReachable] =
       await Promise.all([
         indexerClient === null ? Promise.resolve(null) : indexerClient.health(),
-        forConfig.fdriveEmbedUrl === undefined
+        textUnit === undefined
           ? Promise.resolve(null)
-          : fetchEmbedStatus({ baseUrl: forConfig.fdriveEmbedUrl, fetch: fetchImpl }),
+          : fetchEmbedStatus({ baseUrl: textUnit, fetch: fetchImpl }),
         imageEmbedClient === null ? Promise.resolve(null) : imageEmbedClient.health(),
         ocrClient === null ? Promise.resolve(null) : ocrClient.health(),
         resolveOfficeRuntime().then((runtime) =>
@@ -620,11 +617,7 @@ export async function composeApp(
     const [search, imageSearch, office] = await Promise.all([
       searchStatus === null
         ? null
-        : controllerVerdict(
-            searchStatus.healthy,
-            forConfig.fdriveEmbedRuntimeUrl ?? forConfig.fdriveEmbedUrl ?? null,
-            null,
-          ),
+        : controllerVerdict(searchStatus.healthy, textUnit ?? null, null),
       // A sidecar that answered but is still loading its model is treated as
       // unreachable here: it cannot yet serve an embedding, so it is not
       // usefully "up" from the health endpoint's point of view.
@@ -632,7 +625,7 @@ export async function composeApp(
         ? null
         : controllerVerdict(
             imageSearchResult.ok && imageSearchResult.data.status === "ok",
-            forConfig.fdriveImageEmbedRuntimeUrl ?? forConfig.fdriveImageEmbedUrl ?? null,
+            imageUnit ?? null,
             null,
           ),
       officeReachable === null
@@ -656,7 +649,7 @@ export async function composeApp(
       ...(office === null ? {} : { office }),
     };
   };
-  const cachedProbe = createCachedProbe(() => probeSubsystems(config), {
+  const cachedProbe = createCachedProbe(() => probeSubsystems(), {
     ttlMs: HEALTH_PROBE_TTL_MS,
     clock: () => clock().getTime(),
   });
@@ -941,7 +934,7 @@ export async function composeApp(
         thumbnailsRepo,
         indexerClient,
         ocrClient,
-        embedUrl: config.fdriveEmbedUrl,
+        embedUrl: textUnit,
         imageEmbedClient,
         thumbsDir: config.fdriveThumbsDir,
         fetch: fetchImpl,

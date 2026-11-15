@@ -74,9 +74,9 @@ export interface SystemRoutesDeps {
   readonly indexerClient: IndexerClient | null;
   /** `null` when `FDRIVE_OCR_URL` is not configured. */
   readonly ocrClient: OcrClient | null;
-  /** The TEI base URL (`FDRIVE_EMBED_URL`), `undefined` when semantic search is not configured. */
+  /** The ml service's text unit (`FDRIVE_ML_URL`), `undefined` when it is not configured. */
   readonly embedUrl: string | undefined;
-  /** `null` when `FDRIVE_IMAGE_EMBED_URL` is not configured. */
+  /** `null` when `FDRIVE_ML_URL` is not configured. */
   readonly imageEmbedClient: ImageEmbedClient | null;
   /** `FDRIVE_THUMBS_DIR`, `undefined` when thumbnails are not configured. */
   readonly thumbsDir: string | undefined;

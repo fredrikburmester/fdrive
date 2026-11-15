@@ -42,7 +42,7 @@ export interface SearchServiceDeps {
     thumbnails: boolean;
   }>;
   readonly indexQueries: IndexQueries;
-  /** `null` when `FDRIVE_EMBED_URL` is not configured; semantic search never runs then. */
+  /** `null` when `FDRIVE_ML_URL` is not configured; semantic search never runs then. */
   readonly embedClient: EmbedClient | null;
   /**
    * The indexer's name index, which finds names typed with a typo or two;

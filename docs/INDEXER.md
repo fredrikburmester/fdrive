@@ -3,8 +3,6 @@
 Per-file failures for thumbnails, text extraction and embeddings are persisted in
 PostgreSQL, with recovery and retry controls in System. See
 [persistent failure details](SYSTEM-ACTIVITY.md#persistent-failure-details).
-Startup waits for the failure-history and change-journal migrations before processing files,
-including when the schema's compatibility version is unchanged during an upgrade.
 `INDEXER_LOG_DIR` optionally retains timestamped diagnostic output as `indexer.log` and
 four rotated files, 10 MiB each, alongside stdout. Deployment mounts a persistent named
 volume there; standalone workers must configure a writable directory to retain these logs.
@@ -18,8 +16,12 @@ generates thumbnails. It
 replaced a Python service of the same behaviour and keeps its HTTP API, database writes,
 events and thumbnail layout, so existing index data stays valid. It never creates or migrates
 its own schema: `packages/db`'s Drizzle migrations own `idx.*` and
-`app.thumbnails` / `app.settings`, and the indexer waits for `idx.schema_version`
-to report the version it expects before doing anything else.
+`app.thumbnails` / `app.settings`. Compose starts it once the API is healthy, and the API runs
+every migration before it serves, so the schema is there when it starts.
+
+The `ml` service is one base URL, `ML_URL` (`http://ml:8080` by default): the indexer calls its
+document extraction unit at `<ML_URL>/extract`, text embeddings at `<ML_URL>/text` and image
+embeddings at `<ML_URL>/image`.
 
 See [architecture](ARCHITECTURE.md) for the service boundaries.
 
@@ -114,15 +116,12 @@ refused, except a JPEG whose reduced-scale decode fits, such as a camera panoram
 
 ### Image embeddings (optional)
 
-When `IMAGE_EMBED_URL` is set (the `ml` service's image unit, a SigLIP 2
+While image search is on, with the `ml` service's image unit (a SigLIP 2
 CLIP-style model, `google/siglip2-large-patch16-256`, 1024
 dimensions), the indexer embeds the **256px thumbnail** it already wrote for
 every image file (never the original) and stores the vector in
 `app.image_embeddings`, keyed by the file's sha256 (`content_key`, the same
 key `app.thumbnails` uses) so two copies of one photo are embedded once.
-Absent `IMAGE_EMBED_URL`, this is entirely off: no error, `GET /stats`
-reports `image_embeddings: 0`, matching how OCR degrades without its own
-service.
 
 The pass follows thumbnail generation (`indexer.rs`'s `embed_thumbnail`,
 called once a thumbnail is written). Retries embed inline. A scan hands
@@ -415,7 +414,7 @@ a published port in the non-dev compose file.
 
 | Endpoint | Method | Body | Returns |
 | --- | --- | --- | --- |
-| `/health` | GET | None | `{ ok, watcher, embed_ok, schema_version, features, storage }`: `watcher` says whether the file watcher runs, `storage` is `{ readable, writable }` for the files folder. Answers 500 while postgres is unreachable, which is what the container healthcheck keys on; the handler's connection reopens itself on the next probe once postgres is back, so a recreated `db` container never needs an indexer restart. |
+| `/health` | GET | None | `{ ok, watcher, embed_ok, features, storage }`: `watcher` says whether the file watcher runs, `storage` is `{ readable, writable }` for the files folder. Answers 500 while postgres is unreachable, which is what the container healthcheck keys on; the handler's connection reopens itself on the next probe once postgres is back, so a recreated `db` container never needs an indexer restart. |
 | `/activity` | GET | None | In-memory scan, watcher and maintenance operations; see [System activity](SYSTEM-ACTIVITY.md). No storage scans. |
 | `/stats` | GET | None | File counts by `text_status` (`counts_by_status`), chunk and embedded-chunk counts, the last scan's summary (`last_scan`), queue depth, total thumbnails, total image embeddings, a sample of recent errors, and `thumbnail_rebuild` / `image_embedding_rebuild`: `{ running, processed, total, total_known, started_at, finished_at, errors, outcome }` for the most recent rebuild pass of each kind (all zero/`null`/`false` if none has run yet). |
 | `/extract-content?name=` | POST | The file's bytes, at most 4 MiB | `{ text, status }`: live text extraction of bytes the API already read through the caller's own storage, for MCP's `read_file_text` (not persisted). `name` gives the format; it is never a path. The bytes go to a temporary file removed afterwards; two run at once and a third is `429`. |
@@ -434,11 +433,10 @@ records are keyed by content sha256.
 
 The server itself has no database access and does no indexing: it only
 embeds bytes or text it is handed and normalizes the result. The indexer
-reads it, when `IMAGE_EMBED_URL` is configured, the same way it reads the
-text embedding and extraction units: after a thumbnail is written for a file,
-POST the 256 px WebP to `POST /embed/image` and upsert the returned vector
-under the file's sha256 in `app.image_embeddings`. As with OCR and text
-embedding, an unconfigured `IMAGE_EMBED_URL` simply turns the feature off;
+reads it the same way it reads the text embedding and extraction units:
+after a thumbnail is written for a file, it POSTs the 256 px WebP to
+`<ML_URL>/image/embed/image` and upserts the returned vector under the
+file's sha256 in `app.image_embeddings`. While the unit is unreachable,
 nothing errors and nothing blocks indexing.
 
 The `services/ml` README documents the HTTP contract (`/image/health`,
@@ -466,8 +464,8 @@ the dev api serves (`deploy/dev/files`, read-only) at the same `/data` root
 production uses, so the indexer sees exactly what the dev users see. Two things differ from the production-shaped compose file because the
 api there runs on the host with `tsx watch` instead of in the compose
 network: `ml` publishes its port on the host (58012 by default, override
-with `FDRIVE_DEV_ML_PORT`) so `FDRIVE_EMBED_URL`, `FDRIVE_IMAGE_EMBED_URL`
-and `FDRIVE_TIKA_URL` in `apps/api/.env.dev` can reach its units directly,
+with `FDRIVE_DEV_ML_PORT`) so `FDRIVE_ML_URL` in `apps/api/.env.dev` can
+reach its units directly,
 and `THUMBS_DIR` is bind-mounted to a host directory
 (`deploy/dev/.data/thumbs` by default, override with
 `FDRIVE_DEV_THUMBS_DIR`) rather than a named volume, so the host api process
@@ -532,7 +530,7 @@ Internal `POST /image-embeddings/clear` also accepts only an empty body or
 `{}`. It deletes every row of `app.image_embeddings` in keyset-paginated
 batches; there is no cache file to remove, since the table only ever holds
 vectors, never bytes. Original files, thumbnails, and index/text/metadata
-rows remain. Normal indexing (with `IMAGE_EMBED_URL` configured) or
+rows remain. Normal indexing (with image search on) or
 `/image-embeddings/rebuild` can repopulate it.
 
 All three clear routes return `202 { "started": true }` without waiting for

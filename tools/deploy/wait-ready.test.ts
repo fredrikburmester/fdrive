@@ -30,19 +30,23 @@ function fixture() {
       ]),
     ),
   };
-  const tika = { status: "ready", revision: 4 };
+  const extract = { status: "ready", revision: 4 };
   const fetchImpl = vi.fn<typeof fetch>(async (url) => {
     const body = String(url).endsWith("/internal/features")
       ? features
       : String(url).endsWith("/internal/office")
         ? office
         : String(url).endsWith("/runtime")
-          ? tika
+          ? extract
           : health;
     return new Response(JSON.stringify(body));
   });
-  const env = { FDRIVE_WORKER_TOKEN: "test-worker-credential", FDRIVE_READY_TIMEOUT_SECONDS: "10" };
-  return { features, office, health, tika, fetchImpl, env };
+  const env = {
+    FDRIVE_WORKER_TOKEN: "test-worker-credential",
+    FDRIVE_READY_TIMEOUT_SECONDS: "10",
+    FDRIVE_ML_URL: "http://ml:8080",
+  };
+  return { features, office, health, extract, fetchImpl, env };
 }
 
 describe("deployment readiness", () => {
@@ -127,12 +131,12 @@ globalThis.fetch = async (url) => new Response(JSON.stringify(
   it("checks text extraction readiness and configuration revision", async () => {
     const f = fixture();
     f.features.values.textSearch = true;
-    f.tika.status = "preparing";
+    f.extract.status = "preparing";
     expect(await checkReadiness(f.fetchImpl, f.env)).toEqual(["text extraction: preparing"]);
-    f.tika.status = "ready";
-    f.tika.revision = 3;
+    f.extract.status = "ready";
+    f.extract.revision = 3;
     expect(await checkReadiness(f.fetchImpl, f.env)).toHaveLength(1);
-    f.tika.revision = 4;
+    f.extract.revision = 4;
     expect(await checkReadiness(f.fetchImpl, f.env)).toEqual([]);
   });
 
@@ -148,12 +152,12 @@ globalThis.fetch = async (url) => new Response(JSON.stringify(
     ]);
   });
 
-  it("uses the configured text runtime endpoint, retaining its port and path", async () => {
+  it("asks the extract unit below the configured ml service, keeping its port and path", async () => {
     const f = fixture();
     f.features.values.textSearch = true;
-    const env = { ...f.env, FDRIVE_TIKA_RUNTIME_URL: "http://runtime.example:1234/tika/" };
+    const env = { ...f.env, FDRIVE_ML_URL: "http://ml.example:1234/base" };
     expect(await checkReadiness(f.fetchImpl, env)).toEqual([]);
-    expect(f.fetchImpl.mock.calls.at(-1)?.[0]).toBe("http://runtime.example:1234/tika/runtime");
+    expect(f.fetchImpl.mock.calls.at(-1)?.[0]).toBe("http://ml.example:1234/base/extract/runtime");
   });
 
   it("fails with the outstanding subsystem when the deadline expires", async () => {
