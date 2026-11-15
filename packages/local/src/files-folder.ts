@@ -58,6 +58,8 @@ export interface FilesFolderOptions {
    * it.
    */
   readonly guard?: FilesFolderGuard;
+  /** Names each new Trash leaf by the time it was made. */
+  readonly clock?: () => Date;
 }
 
 /** Whether fdrive can use the files folder now, and what was found. */
@@ -168,6 +170,7 @@ export function createFilesFolder(options: FilesFolderOptions): FilesFolder {
       return createUserStorage({
         ...(onChange === undefined ? {} : { onChange }),
         ...(ready === undefined ? {} : { ready }),
+        ...(options.clock === undefined ? {} : { clock: options.clock }),
         home: join(options.root, username),
         shared: async () => {
           const grants = await options.users.shared(username);

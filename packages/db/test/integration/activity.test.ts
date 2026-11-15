@@ -1388,7 +1388,14 @@ it("preserves folder journeys, fences descendant observations, leases queued wor
         evidence: "watcher_change",
       }),
     ).toBeNull();
-    await repo.finish(account.id, trash.id, { outcome: "success" });
+    await repo.finish(account.id, trash.id, {
+      outcome: "success",
+      after: {
+        path: "/destination",
+        kind: "dir",
+        trashLeaf: "/.trash/.fdrive-move-v1/dir/p/destination/v/1234567890000000000",
+      },
+    });
     expect((await repo.file(account.id, child.fileId as string))?.file.state).toBe("trashed");
 
     const queued = await begin("archive.compress", { path: "/queued", targetPath: "/queued.zip" });

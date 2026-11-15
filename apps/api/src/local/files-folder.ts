@@ -62,6 +62,8 @@ export interface DeploymentFilesFolderOptions {
   readonly changes?: ChangeQueue;
   /** Refuses storage while the folder is not this installation's (`createDeploymentFilesFolderGuard`). */
   readonly guard?: FilesFolderGuard;
+  /** Names each new Trash leaf by the time it was made. */
+  readonly clock?: () => Date;
 }
 
 /**
@@ -75,7 +77,7 @@ export function deploymentFilesFolder(
   options: DeploymentFilesFolderOptions = {},
 ): FilesFolder {
   const root = config.fdriveStorageRoot;
-  const { changes, guard } = options;
+  const { changes, guard, clock } = options;
   const journaled = changes === undefined ? null : journalRoot(config.fdriveIndexRoots, root);
   return createFilesFolder({
     root,
@@ -83,6 +85,7 @@ export function deploymentFilesFolder(
     // When `journaled` names a root, this is the same one: it matches first.
     indexRoot: localIndexRoot(config.fdriveIndexRoots, root),
     ...(guard === undefined ? {} : { guard }),
+    ...(clock === undefined ? {} : { clock }),
     ...(journaled === null || changes === undefined
       ? {}
       : { onIndexChange: (name, change) => changes.record(name, change) }),

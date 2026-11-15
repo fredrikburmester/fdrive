@@ -27,7 +27,6 @@ import {
   contentDisposition,
   extensionOf,
   type FileEntry,
-  isAtOrUnder,
   isInlinePreviewable,
   isReservedPath,
   isStorageError,
@@ -38,7 +37,7 @@ import {
   parseRangeHeader,
   type StorageError,
   type StorageProvider,
-  TRASH_PATH,
+  type TrashedItem,
 } from "@fdrive/core";
 import type { Context } from "hono";
 import type { z } from "zod";
@@ -50,7 +49,6 @@ import {
 } from "../activity/fs-context.js";
 import { activityStat, type PersonalActivityService } from "../activity/service.js";
 import { activityStream } from "../activity/streams.js";
-import { deleteWithActivityReceipt } from "../activity/trash.js";
 import type { AppHono, AppVariables, AuthedHono } from "../app.js";
 import type { Principal, PrincipalVariables } from "../auth/principal.js";
 import { DEFAULT_JSON_MAX_BYTES } from "../config.js";
@@ -58,6 +56,7 @@ import { ApiHttpError } from "../errors.js";
 import type { EventBus } from "../events/bus.js";
 import type { JobRunner } from "../jobs/runner.js";
 import type { MetadataService } from "../metadata/service.js";
+import { followIntoTrash, type OwnerPath } from "../metadata/trash.js";
 import { registerArchiveRoutes } from "./archive-routes.js";
 import { type FolderSizeRoutesDeps, registerFolderSizeRoutes } from "./folder-size.js";
 import { relocatePath } from "./mutations.js";
@@ -86,6 +85,12 @@ export interface FsRoutesDeps {
    * metadata can omit it; `composition.ts` always wires the real service.
    */
   readonly metadata?: MetadataService;
+  /**
+   * Where a path lies in its owner's files, so what is kept by path follows
+   * an item in a folder shared with the login into its owner's Trash
+   * (`followIntoTrash`). Absent in fixtures, where every path is the login's own.
+   */
+  readonly ownerPath?: OwnerPath;
   /**
    * Cap on a JSON request body's bytes, passed to `parseBody` for every
    * route this function registers (zip, mkdir, move, copy, rename,
@@ -500,21 +505,18 @@ export async function moveMany(
 }
 
 /**
- * Deletes one item and records it as a trash or a real delete, whichever the
- * login's storage actually performs: inside the Trash a delete is for good.
- * Deletes of the same path are serialized so two callers cannot claim the
- * same new trash leaf. Returns that leaf, or `null` when the delete was for
- * good or its leaf was not reported.
+ * Moves one item to Trash (`TrashProvider.put`), recording it as a trash at
+ * the leaf it went to. Moves of the same path are serialized so two callers
+ * cannot claim the same new leaf.
  */
-async function removeOne(
+async function trashOne(
   deps: Pick<FsRoutesDeps, "activity">,
   principal: Principal,
   item: { path: string; kind: "file" | "dir" },
   context: ActivityCallContext,
   operation: { operationId: string; batchId: string },
-): Promise<string | null> {
-  const trashing = principal.storage.trash !== undefined && !isAtOrUnder(TRASH_PATH, item.path);
-  const remove = () =>
+): Promise<TrashedItem> {
+  const trash = () =>
     recordActivity(
       deps.activity,
       principal,
@@ -522,7 +524,7 @@ async function removeOne(
         ...context,
         producerOperationId: operation.operationId,
         batchId: operation.batchId,
-        action: trashing ? "file.trash" : "file.delete",
+        action: "file.trash",
         requested: {
           path: item.path,
           kind: item.kind,
@@ -530,13 +532,12 @@ async function removeOne(
         },
         before: { path: item.path, kind: item.kind },
       },
-      () => deleteWithActivityReceipt(principal.storage, item.path, item.kind),
-      (facts) => facts,
+      () => principal.storage.trash.put(item.path),
+      (moved) => ({ path: item.path, kind: moved.kind, trashLeaf: moved.leaf }),
     );
-  const facts = deps.activity
-    ? await deps.activity.repo.withPathLock(principal.identityId, item.path, remove)
-    : await remove();
-  return facts.trashLeaf ?? null;
+  return deps.activity
+    ? deps.activity.repo.withPathLock(principal.identityId, item.path, trash)
+    : trash();
 }
 
 export interface TrashManyResult {
@@ -546,12 +547,11 @@ export interface TrashManyResult {
 }
 
 /**
- * Deletes items one by one, continuing past failures. Where the login's
- * storage has Trash, the deletes are recoverable and only recents are
- * dropped; otherwise every path-keyed metadata row goes with the item.
+ * Moves items to Trash one by one, continuing past failures; what is kept by
+ * path follows each into Trash (`followIntoTrash`).
  */
 export async function trashMany(
-  deps: Pick<FsRoutesDeps, "bus" | "clock" | "metadata" | "activity">,
+  deps: Pick<FsRoutesDeps, "bus" | "clock" | "metadata" | "activity" | "ownerPath">,
   principal: Principal,
   items: readonly { path: string; kind: "file" | "dir" }[],
   context: ActivityCallContext = { source: "api" },
@@ -564,19 +564,18 @@ export async function trashMany(
     for (const item of items) {
       try {
         const path = normalizeOrThrow(item.path);
-        const leaf = await runStorageCall(() =>
-          removeOne(deps, principal, { path, kind: item.kind }, context, {
+        const moved = await runStorageCall(() =>
+          trashOne(deps, principal, { path, kind: item.kind }, context, {
             operationId: `${operationBase}:${results.length}`,
             batchId,
           }),
         );
         removed.push(path);
         try {
-          if (principal.storage.trash !== undefined)
-            await deps.metadata?.onTrashed(principal.identityId, path, item.kind === "dir", leaf);
-          else await deps.metadata?.onDeleted(principal.identityId, path, item.kind === "dir");
+          if (deps.metadata !== undefined)
+            await followIntoTrash(deps.metadata, deps.ownerPath, principal.identityId, path, moved);
         } catch {
-          // The item is gone either way; stale metadata is repaired by the next listing.
+          // The item is in Trash either way; the indexer's report of the move repairs metadata.
         }
         results.push({ path, ok: true });
       } catch (error) {
@@ -861,9 +860,9 @@ export function registerFsRoutes(
     try {
       for (const item of body.items) {
         const path = normalizeOrThrow(item.path);
-        let leaf: string | null;
+        let moved: TrashedItem;
         try {
-          leaf = await removeOne(
+          moved = await trashOne(
             deps,
             principal,
             { path, kind: item.kind === "dir" ? "dir" : "file" },
@@ -881,13 +880,8 @@ export function registerFsRoutes(
           throw error;
         }
         removed.push(path);
-        if (deps.metadata !== undefined) {
-          if (principal.storage.trash !== undefined) {
-            await deps.metadata.onTrashed(principal.identityId, path, item.kind === "dir", leaf);
-          } else {
-            await deps.metadata.onDeleted(principal.identityId, path, item.kind === "dir");
-          }
-        }
+        if (deps.metadata !== undefined)
+          await followIntoTrash(deps.metadata, deps.ownerPath, principal.identityId, path, moved);
       }
     } finally {
       if (removed.length > 0) publishFsEvent(deps, principal, "delete", removed);

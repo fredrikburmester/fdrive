@@ -24,6 +24,7 @@ import { addAbortSignal, Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { ReadableStream as NodeReadableStream } from "node:stream/web";
 import {
+  createRecycleFolderTrash,
   type EntryKind,
   type EntryStat,
   type FileEntry,
@@ -33,6 +34,7 @@ import {
   normalizePath,
   StorageError,
   type StorageProvider,
+  type StorageWithoutTrash,
   splitSegments,
   type ZipProgress,
 } from "@fdrive/core";
@@ -48,9 +50,14 @@ export interface LocalStorageOptions {
   readonly within?: string;
   /** Hears every change this storage makes on disk, once it is done. */
   readonly onChange?: DiskChangeListener;
+  /** Names each new Trash leaf by the time it was made. */
+  readonly clock?: () => Date;
 }
 
-/** Storage over one folder, with the folder itself for callers that combine several. */
+/**
+ * Storage over one folder, with the folder itself for callers that combine
+ * several, and its Trash at `/.trash` in that folder.
+ */
 export interface LocalStorage extends StorageProvider {
   readonly home: Home;
 }
@@ -218,7 +225,7 @@ export function createLocalStorage(options: LocalStorageOptions): LocalStorage {
     }
   }
 
-  const storage: StorageProvider = {
+  const storage: StorageWithoutTrash = {
     list: (path) =>
       mapped(path, async () => {
         const parent = normalizePath(path);
@@ -488,7 +495,8 @@ export function createLocalStorage(options: LocalStorageOptions): LocalStorage {
       }),
   };
 
-  return { ...storage, home };
+  const clock = options.clock ?? (() => new Date());
+  return { ...storage, trash: createRecycleFolderTrash({ storage, clock }), home };
 }
 
 /**

@@ -577,3 +577,24 @@ describe("zip", () => {
     await vi.waitFor(() => expect(file.closed).toBe(true));
   });
 });
+
+describe("createLocalStorage: Trash", () => {
+  it("moves an item into /.trash in its folder, named by the current time unless given a clock", async () => {
+    const f = await fixture();
+    try {
+      await f.storage.upload("/a.txt", bytes("a"));
+      const before = Date.now();
+      const moved = await f.storage.trash.put("/a.txt");
+      const at = Number(BigInt(moved.leaf.split("/").at(-1) ?? "0") / 1_000_000n);
+      expect(moved).toMatchObject({ kind: "file" });
+      expect(moved.leaf).toMatch(/^\/\.trash\/\.fdrive-move-v1\/file\/p\/a\.txt\/v\/\d+$/);
+      expect(at).toBeGreaterThanOrEqual(before);
+      expect(at).toBeLessThanOrEqual(Date.now());
+      expect((await f.storage.trash.list()).entries.map((entry) => entry.originalPath)).toEqual([
+        "/a.txt",
+      ]);
+    } finally {
+      await f.cleanup();
+    }
+  });
+});

@@ -130,17 +130,13 @@ export function sharesHarness(options: SharesHarnessOptions = {}) {
     }
     return row;
   })();
-  const storageFactory = createIdentityStorageFactory({
-    identities: repos.identities,
-    folder,
-    clock,
-  });
+  const storageFactory = createIdentityStorageFactory({ identities: repos.identities, folder });
   const auth = createAuthModule({
     repos,
     clock,
     config,
     checkPassword: createPasswordCheck({ limiter: createLoginLimiter({ clock }), users }),
-    principalFor: createPrincipalFactory({ folder, clock }),
+    principalFor: createPrincipalFactory({ folder }),
     installation: async () => ({ storageName: "Local folder", index: false }),
   });
   const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() } as unknown as Logger;

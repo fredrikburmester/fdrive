@@ -7,7 +7,6 @@ import type {
 import { parseMoveTrashLeaf, type StorageProvider, TRASH_PATH, trashLeafPath } from "@fdrive/core";
 import type { Principal } from "../auth/principal.js";
 import { activityStat, type PersonalActivityService } from "./service.js";
-import { deleteWithActivityReceipt } from "./trash.js";
 
 export interface ActivityStorageContext {
   source: PersonalActivitySource;
@@ -84,46 +83,41 @@ export function activityStorage(
       );
     },
     async deleteFile(path) {
-      await service.repo.withPathLock(principal.identityId, path, () =>
+      return run("file.delete", { path, kind: "file" }, () => storage.deleteFile(path));
+    },
+    async deleteDir(path) {
+      return run("file.delete", { path, kind: "dir" }, () => storage.deleteDir(path));
+    },
+  };
+  const trash = storage.trash;
+  overrides.trash = {
+    ...trash,
+    // Moves of the same path wait for each other, so two cannot claim one new leaf.
+    async put(path) {
+      return service.repo.withPathLock(principal.identityId, path, () =>
         run(
           "file.trash",
-          { path, kind: "file" },
-          () => deleteWithActivityReceipt(storage, path, "file"),
-          (facts) => facts,
+          { path },
+          () => trash.put(path),
+          (moved) => ({ path, kind: moved.kind, trashLeaf: moved.leaf }),
         ),
       );
     },
-    async deleteDir(path) {
-      await service.repo.withPathLock(principal.identityId, path, () =>
-        run(
-          "file.trash",
-          { path, kind: "dir" },
-          () => deleteWithActivityReceipt(storage, path, "dir"),
-          (facts) => facts,
-        ),
+    async restore(id, options) {
+      const leaf = trashLeafPath(TRASH_PATH, id);
+      const original = parseMoveTrashLeaf(TRASH_PATH, leaf)?.originalPath;
+      return run(
+        "file.restore",
+        {
+          ...(original ? { path: original } : {}),
+          trashLeaf: leaf,
+          ...(options?.target ? { targetPath: options.target } : {}),
+        },
+        () => trash.restore(id, options),
+        (entry) => ({ path: entry.path, kind: entry.kind === "dir" ? "dir" : "file" }),
       );
     },
   };
-  if (storage.trash) {
-    const trash = storage.trash;
-    overrides.trash = {
-      ...trash,
-      async restore(id, options) {
-        const leaf = trashLeafPath(TRASH_PATH, id);
-        const original = parseMoveTrashLeaf(TRASH_PATH, leaf)?.originalPath;
-        return run(
-          "file.restore",
-          {
-            ...(original ? { path: original } : {}),
-            trashLeaf: leaf,
-            ...(options?.target ? { targetPath: options.target } : {}),
-          },
-          () => trash.restore(id, options),
-          (entry) => ({ path: entry.path, kind: entry.kind === "dir" ? "dir" : "file" }),
-        );
-      },
-    };
-  }
   return new Proxy(storage, {
     get(target, key, receiver) {
       const override = Reflect.get(overrides, key);

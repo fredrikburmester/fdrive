@@ -34,6 +34,12 @@ export function fakeStorageProvider(overrides: Partial<StorageProvider> = {}): S
     setModifiedAt:
       overrides.setModifiedAt ?? (boom as NonNullable<StorageProvider["setModifiedAt"]>),
     zip: overrides.zip ?? (boom as NonNullable<StorageProvider["zip"]>),
+    trash: overrides.trash ?? {
+      put: boom,
+      list: boom,
+      restore: boom,
+      purge: boom,
+    },
   };
 }
 

@@ -85,7 +85,7 @@ import { registerMcpRoutes } from "./mcp/routes.js";
 import { registerMetadataRoutes } from "./metadata/routes.js";
 import { registerSavedSearchRoutes } from "./metadata/saved-searches.js";
 import { createMetadataService, withFollowers } from "./metadata/service.js";
-import { withTrashMoves } from "./metadata/trash-moves.js";
+import { followIntoTrash } from "./metadata/trash.js";
 import { extractClientIp } from "./net.js";
 import { configuredOfficeProduct, officeConfig } from "./office/config.ts";
 import { createOfficeEditPolicy } from "./office/edit-policy.ts";
@@ -199,7 +199,7 @@ export async function composeApp(
   await guard.verify();
   /** The files folder's row in `app.providers`: Office and the Mac name it. */
   const storageId = await ensureStorageRow(repos);
-  const folder = deploymentFilesFolder(config, repos, { changes, guard });
+  const folder = deploymentFilesFolder(config, repos, { changes, guard, clock });
   const backups = createBackupModule(config);
   await backups.start();
 
@@ -269,22 +269,10 @@ export async function composeApp(
   // saved, Office cannot be enabled and MCP links are paths on this origin.
   const publicUrl = createPublicUrlService({ settings: repos.settings });
 
-  const storageFactory = createIdentityStorageFactory({
-    identities: repos.identities,
-    folder,
-    clock,
-  });
+  const storageFactory = createIdentityStorageFactory({ identities: repos.identities, folder });
   // A signed-in request's principal: its session or token query already
   // read the login and admitted its user, so its storage needs no query.
-  const principalFor = createPrincipalFactory({ folder, clock });
-  // Deletes are real: for fdrive's own bookkeeping (the Mac's staged files)
-  // and Office, which only saves over documents.
-  const storageWithoutTrash = createIdentityStorageFactory({
-    identities: repos.identities,
-    folder,
-    clock,
-    withoutTrash: true,
-  });
+  const principalFor = createPrincipalFactory({ folder });
   const shareRepo = createShareRepo(db);
   const admitActivity = createActivityAdmission({
     reads: activityReads,
@@ -371,7 +359,7 @@ export async function composeApp(
     clock,
   });
 
-  const officeStorage = createOfficeStorageFactory(storageWithoutTrash);
+  const officeStorage = createOfficeStorageFactory(storageFactory);
 
   // Public links follow the items they name wherever they go, into Trash too.
   const shareMoves = createShareMoves({
@@ -392,21 +380,16 @@ export async function composeApp(
   const officeFiles = createOfficeFileRepo(db);
   const officeMoves = createOfficeMoves({ files: officeFiles, grants: localGrants, clock });
   const followers = [...accessFollowers, officeMoves];
-  // A move into the Trash, whoever reports it, leaves metadata where the item was.
-  const metadataService = withFollowers(withTrashMoves(metadataCore), followers);
+  // Into the Trash and back out are moves like any other, whoever reports them.
+  const metadataService = withFollowers(metadataCore, followers);
   const desktopRepo = createDesktopRepo(db);
   const desktopRetention = createDesktopRetention({
     repo: desktopRepo,
-    // Without Trash settings, so the Mac's staged files are deleted rather
-    // than moved into the Trash their owner sees.
-    storageForIdentity: storageWithoutTrash,
+    storageForIdentity: storageFactory,
     clock,
     eventLog,
   });
-  const fsMetadata = withFollowers(
-    withTrashMoves(withDesktopMetadata(metadataCore, desktopRepo)),
-    followers,
-  );
+  const fsMetadata = withFollowers(withDesktopMetadata(metadataCore, desktopRepo), followers);
   // Deletes what each Trash kept longer than the installation's retention.
   const trashRetention = createTrashRetention({
     identities: repos.identities,
@@ -419,9 +402,8 @@ export async function composeApp(
   });
   // A Mac write moves what grants access with its receipt (`desktop/writes.ts`)
   // and the rest after it. It keeps its own item handles, so this skips the
-  // handle registry, whose `onTrashed` would retire the handle of an item the
-  // Mac puts in its own Trash.
-  const desktopMetadata = withFollowers(withTrashMoves(metadataCore), [officeMoves]);
+  // handle registry.
+  const desktopMetadata = withFollowers(metadataCore, [officeMoves]);
   const desktopAccess = async (
     identityId: string,
     from: string,
@@ -697,28 +679,31 @@ export async function composeApp(
     imageSearchService,
     onMutation: async (principal, change) => {
       try {
-        if (change.kind === "move" || (change.kind === "restore" && change.moveMetadata)) {
+        if (change.kind === "move") {
           await fsMetadata.onMoved(
             principal.identityId,
             change.path,
             change.target ?? change.path,
             change.isDir,
           );
-        }
-        if (change.kind === "restore" && change.eventPath !== undefined) {
-          // A restore is a move out of Trash: shares that followed the item there come back.
+        } else if (change.kind === "restore" && change.eventPath !== undefined) {
+          // A restore is a move out of Trash: what followed the item there comes back.
           await fsMetadata.onMoved(
             principal.identityId,
             change.eventPath,
             change.target ?? change.path,
             change.isDir,
           );
-        } else if (change.kind === "trash") {
-          await fsMetadata.onTrashed(
+        } else if (change.kind === "trash" && change.trashLeaf !== undefined) {
+          await followIntoTrash(
+            fsMetadata,
+            localGrants.ownerPath,
             principal.identityId,
             change.path,
-            change.isDir,
-            change.trashLeaf ?? null,
+            {
+              leaf: change.trashLeaf,
+              kind: change.isDir ? "dir" : "file",
+            },
           );
         } else if (change.kind === "copy") {
           fsMetadata.onCopied(principal.identityId, change.path, change.target ?? change.path);
@@ -765,6 +750,7 @@ export async function composeApp(
       clock,
       metadata: metadataService,
       activity: personalActivity,
+      ownerPath: localGrants.ownerPath,
     },
     clock,
     onUnexpectedError: (error) => logger.warn({ err: error }, "chat reply failed"),
@@ -839,7 +825,7 @@ export async function composeApp(
           metadata: desktopMetadata,
           bus,
           logger,
-          storageForIdentity: storageWithoutTrash,
+          storageForIdentity: storageFactory,
         }),
         apiTokens: repos.apiTokens,
         logins: repos.logins,
@@ -895,6 +881,7 @@ export async function composeApp(
         archivePeekMaxBytes: config.fdriveArchivePeekMaxBytes,
         jsonMaxBytes: config.fdriveJsonMaxBytes,
         metadata: fsMetadata,
+        ownerPath: localGrants.ownerPath,
         folderSize: {
           indexQueries,
           resolver: scopeResolver,

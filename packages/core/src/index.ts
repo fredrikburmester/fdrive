@@ -10,6 +10,5 @@ export type * from "./ports/storage.ts";
 export * from "./reserved-paths.ts";
 export * from "./scope.ts";
 export * from "./search/index.ts";
-export * from "./trash/move-to-trash.ts";
 export * from "./trash/recycle-folder.ts";
 export * from "./trash/recycle-folder-trash.ts";

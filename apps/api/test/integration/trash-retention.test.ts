@@ -135,7 +135,6 @@ describe("Trash retention against real PostgreSQL and a local folder", () => {
       storageFor: createIdentityStorageFactory({
         identities: repos.identities,
         folder: deploymentFilesFolder(config, repos),
-        clock,
       }),
       settings: createTrashSettingsService({ settings: repos.settings }),
       activity: createActivityService({

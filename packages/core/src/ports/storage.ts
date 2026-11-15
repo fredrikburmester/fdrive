@@ -18,21 +18,34 @@ export interface TrashListing {
   readonly truncated: boolean;
 }
 
-/**
- * A restored entry plus the path encoded by its provider's trash layout.
- * `originalPath` lets callers relocate metadata that survived deletion; it
- * is not a snapshot and cannot recreate metadata already removed.
- */
+/** A restored entry plus the original path its Trash leaf encodes. */
 export type TrashRestoreResult = FileEntry & {
   readonly originalPath: string;
 };
 
+/** Where `TrashProvider.put` moved an item. */
+export interface TrashedItem {
+  /**
+   * Its leaf, a path in its owner's files: the storage's own Trash, or, for
+   * an item in a folder another user shares, that user's.
+   */
+  readonly leaf: string;
+  readonly kind: "file" | "dir";
+}
+
 /**
- * The Trash folder a `StorageProvider` exposes once deletes move items into
- * it (`withMoveToTrash`): lists, restores and purges the leaves of fdrive's
- * layout. Restore and purge remove the layout folders a leaf leaves empty.
+ * A storage's Trash at `TRASH_PATH`: moves items into fdrive's layout there
+ * and lists, restores and purges its leaves. Restore and purge remove the
+ * layout folders a leaf leaves empty. Deleting is never a trash:
+ * `deleteFile` and `deleteDir` delete for good, and callers choose.
  */
 export interface TrashProvider {
+  /**
+   * Moves the file or folder at `path` into Trash, at a new leaf, never
+   * replacing one. Refuses the root and fdrive's own folders, Trash
+   * included, with `bad_request`.
+   */
+  put(path: string): Promise<TrashedItem>;
   /**
    * The leaves, newest first: at most `limit` of them (default 10,000;
    * `Infinity` for all). With `prune`, also removes the empty layout folders
@@ -214,8 +227,10 @@ export interface StorageProvider {
 
   copy(path: string, target: string, opts?: TransferOptions): Promise<void>;
 
+  /** Deletes the file at `path` for good; `trash.put` moves it into Trash instead. */
   deleteFile(path: string): Promise<void>;
 
+  /** Deletes the folder at `path` and everything in it for good. */
   deleteDir(path: string): Promise<void>;
 
   /**
@@ -239,6 +254,9 @@ export interface StorageProvider {
     },
   ): Promise<ReadableStream<Uint8Array>>;
 
-  /** Present only when this provider exposes a recoverable recycle folder. */
-  readonly trash?: TrashProvider;
+  /** The storage's Trash. */
+  readonly trash: TrashProvider;
 }
+
+/** A storage's file operations, before its Trash is built over them. */
+export type StorageWithoutTrash = Omit<StorageProvider, "trash">;

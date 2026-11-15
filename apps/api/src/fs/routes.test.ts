@@ -3,12 +3,7 @@ import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import type { MoveManyResponse } from "@fdrive/contracts";
-import {
-  createRecycleFolderTrash,
-  StorageError,
-  type StorageProvider,
-  withMoveToTrash,
-} from "@fdrive/core";
+import { StorageError, type StorageProvider } from "@fdrive/core";
 import { createMemoryStorage } from "@fdrive/core/testing";
 import { createMemoryRepos } from "@fdrive/db/testing";
 import { createLocalStorage } from "@fdrive/local";
@@ -16,19 +11,13 @@ import { getRequestListener } from "@hono/node-server";
 import type { Logger } from "pino";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { activityFixture } from "../../test/activity-fixture.js";
-import { captureRecycleReceipt } from "../activity/trash.js";
 import { createApp } from "../app.js";
 import type { Principal } from "../auth/principal.js";
 import { loadConfig } from "../config.js";
 import { type BusEvent, createEventBus, type EventBus } from "../events/bus.js";
 import { createJobRunner, type JobRunner } from "../jobs/runner.js";
-import { createMetadataService, type MetadataService, withFollowers } from "../metadata/service.js";
+import { createMetadataService, type MetadataService } from "../metadata/service.js";
 import { registerFsRoutes, trashMany } from "./routes.js";
-
-/** `storage` with core's Trash view over it, as the storage factory builds it. */
-function withRecycleFolderTrash(storage: StorageProvider, trashPath: string): StorageProvider {
-  return { ...storage, trash: createRecycleFolderTrash({ storage, trashPath }) };
-}
 
 function buildJobRunner(): JobRunner {
   return createJobRunner({
@@ -142,6 +131,7 @@ function forbiddenStorage(): StorageProvider {
     deleteFile: deny,
     deleteDir: deny,
     deleteEmptyDir: deny,
+    trash: { put: deny, list: deny, restore: deny, purge: deny },
   };
 }
 
@@ -217,6 +207,12 @@ function makeStubStorage(overrides: Partial<StorageProvider>): StorageProvider {
     deleteEmptyDir: notImplemented,
     setModifiedAt: notImplemented,
     zip: notImplemented,
+    trash: {
+      put: notImplemented,
+      list: notImplemented,
+      restore: notImplemented,
+      purge: notImplemented,
+    },
     ...overrides,
   } as StorageProvider;
 }
@@ -1619,20 +1615,13 @@ describe("POST /fs/delete", () => {
     expect(res.status).toBe(400);
   });
 
-  it("calls metadata.onTrashed instead of onDeleted when the storage has a trash, but still publishes delete", async () => {
-    const baseStorage = await seededStorage(SEED.alice ?? {});
-    const storage = withRecycleFolderTrash(
-      withMoveToTrash({
-        storage: baseStorage,
-        trashPath: "/.trash",
-        clock: () => new Date(CLOCK_ISO),
-        onRecycled: captureRecycleReceipt,
-      }),
-      "/.trash",
-    );
-    const metadata = createMetadataService(createMemoryRepos());
-    const onTrashedSpy = vi.spyOn(metadata, "onTrashed");
-    const onDeletedSpy = vi.spyOn(metadata, "onDeleted");
+  it("moves the item to Trash, its metadata follows it there, and publishes a delete", async () => {
+    const storage = await seededStorage(SEED.alice ?? {});
+    const repos = createMemoryRepos();
+    const metadata = createMetadataService(repos);
+    await metadata.addFavorite(ALICE_IDENTITY_ID, "/hello.txt", "file");
+    const onMoved = vi.spyOn(metadata, "onMoved");
+    const onDeleted = vi.spyOn(metadata, "onDeleted");
 
     const { app, events } = await buildHarnessWithStorage(storage, { metadata });
 
@@ -1646,14 +1635,16 @@ describe("POST /fs/delete", () => {
     );
 
     expect(res.status).toBe(200);
-    // With where it went in Trash, so what follows it there (shares) can.
-    expect(onTrashedSpy).toHaveBeenCalledWith(
-      ALICE_IDENTITY_ID,
-      "/hello.txt",
-      false,
-      expect.stringMatching(/^\/\.trash\/\.fdrive-move-v1\/file\/p\/hello\.txt\/v\/\d+$/),
+    const leaf = expect.stringMatching(
+      /^\/\.trash\/\.fdrive-move-v1\/file\/p\/hello\.txt\/v\/\d+$/,
     );
-    expect(onDeletedSpy).not.toHaveBeenCalled();
+    expect(onMoved).toHaveBeenCalledWith(ALICE_IDENTITY_ID, "/hello.txt", leaf, false);
+    expect(onDeleted).not.toHaveBeenCalled();
+    // A new file at the old path inherits nothing; the favorite is in Trash, which no list shows.
+    expect(await metadata.listFavorites(ALICE_IDENTITY_ID)).toEqual([]);
+    expect((await storage.trash.list()).entries.map((entry) => entry.originalPath)).toEqual([
+      "/hello.txt",
+    ]);
     expect(events).toEqual([
       {
         type: "fs",
@@ -1663,6 +1654,23 @@ describe("POST /fs/delete", () => {
         at: CLOCK_ISO,
       },
     ]);
+  });
+
+  it("refuses to move the Trash or anything in it to Trash", async () => {
+    const storage = await seededStorage({ "/.trash/old.txt": "x" });
+    const { app } = await buildHarnessWithStorage(storage);
+
+    const res = await app.request(
+      "/api/v1/fs/delete",
+      requestedWith({
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ items: [{ path: "/.trash/old.txt", kind: "file" }] }),
+      }),
+    );
+
+    expect(res.status).toBe(400);
+    expect(await storage.stat("/.trash/old.txt")).toMatchObject({ kind: "file" });
   });
 });
 
@@ -1865,10 +1873,11 @@ describe("unmapped errors pass through unchanged", () => {
   });
 
   it("reports failedPath without other details when the StorageError carries none", async () => {
+    const missing = async (): Promise<never> => {
+      throw new StorageError("not_found", "missing");
+    };
     const storage = makeStubStorage({
-      deleteFile: async () => {
-        throw new StorageError("not_found", "missing");
-      },
+      trash: { put: missing, list: missing, restore: missing, purge: missing },
     });
     const { app } = await buildHarnessWithStorage(storage);
 
@@ -1956,11 +1965,10 @@ it("publishes successful deletes before a later item fails", async () => {
 });
 
 describe("trashMany", () => {
-  it("removes what it can, continues past failures, and publishes one delete event", async () => {
+  it("moves what it can to Trash, continues past failures, and publishes one delete event", async () => {
     const storage = createMemoryStorage({ "/a.txt": "a", "/dir/b.txt": "b" });
     const metadata = createMetadataService(createMemoryRepos());
-    const onTrashed = vi.spyOn(metadata, "onTrashed");
-    const onDeleted = vi.spyOn(metadata, "onDeleted");
+    const onMoved = vi.spyOn(metadata, "onMoved");
     const bus = createEventBus();
     const events: BusEvent[] = [];
     bus.subscribe({ identityId: ALICE_IDENTITY_ID }, (event) => events.push(event));
@@ -1991,12 +1999,10 @@ describe("trashMany", () => {
       },
       { path: "/dir", ok: true },
     ]);
-    // Without a provider Trash the deletes are final, so every metadata row goes.
-    expect(onDeleted.mock.calls.map(([, path, isDir]) => [path, isDir])).toEqual([
-      ["/a.txt", false],
-      ["/dir", true],
+    expect(onMoved.mock.calls.map(([, path, leaf, isDir]) => [path, leaf, isDir])).toEqual([
+      ["/a.txt", "/.trash/.fdrive-move-v1/file/p/a.txt/v/0", false],
+      ["/dir", "/.trash/.fdrive-move-v1/dir/p/dir/v/0", true],
     ]);
-    expect(onTrashed).not.toHaveBeenCalled();
     expect(events).toEqual([
       {
         type: "fs",
@@ -2006,58 +2012,59 @@ describe("trashMany", () => {
         at: CLOCK_ISO,
       },
     ]);
-    await expect(storage.stat("/a.txt")).rejects.toMatchObject({ kind: "not_found" });
+    expect(storage.dump()).toEqual({
+      "/.trash/.fdrive-move-v1/dir/p/dir/v/0/b.txt": "b",
+      "/.trash/.fdrive-move-v1/file/p/a.txt/v/0": "a",
+    });
 
-    vi.spyOn(storage, "deleteFile").mockRejectedValueOnce(new Error("socket hang up"));
+    // An item still in Trash once the metadata failed is reported moved; any other error stops.
+    onMoved.mockRejectedValueOnce(new Error("database offline"));
+    await storage.upload("/c.txt", new Uint8Array([1]));
+    expect(
+      await trashMany({ bus, clock: () => new Date(CLOCK_ISO), metadata }, principal, [
+        { path: "/c.txt", kind: "file" },
+      ]),
+    ).toEqual([{ path: "/c.txt", ok: true }]);
+    vi.spyOn(storage.trash, "put").mockRejectedValueOnce(new Error("socket hang up"));
     await expect(
       trashMany({ bus, clock: () => new Date(CLOCK_ISO), metadata }, principal, [
-        { path: "/dir/b.txt", kind: "file" },
+        { path: "/d.txt", kind: "file" },
       ]),
     ).rejects.toThrow("socket hang up");
   });
-});
 
-describe("trashMany with Trash", () => {
-  it("moves what follows an item into Trash with it, and ends it when the leaf is not known", async () => {
-    const trashed = (onRecycled?: typeof captureRecycleReceipt) =>
-      withRecycleFolderTrash(
-        withMoveToTrash({
-          storage: createMemoryStorage({ "/a.txt": "a", "/dir/b.txt": "b" }),
-          trashPath: "/.trash",
-          clock: () => new Date(CLOCK_ISO),
-          ...(onRecycled === undefined ? {} : { onRecycled }),
-        }),
-        "/.trash",
-      );
-    const follower = {
-      onMoved: vi.fn(async (_id: string, _from: string, _to: string, _isDir: boolean) => {}),
-      onDeleted: vi.fn(async (_id: string, _path: string, _isDir: boolean) => {}),
-    };
-    const metadata = withFollowers(createMetadataService(createMemoryRepos()), [follower]);
-    const principal = (storage: StorageProvider): Principal => ({
+  it("moves an item in a folder shared with the login into its owner's Trash, with what follows it", async () => {
+    const storage = createMemoryStorage({ "/Shared with me/Team/a.txt": "a" });
+    vi.spyOn(storage.trash, "put").mockResolvedValue({
+      leaf: "/.trash/.fdrive-move-v1/file/p/Team/p/a.txt/v/0",
+      kind: "file",
+    });
+    const metadata = createMetadataService(createMemoryRepos());
+    const onMoved = vi.spyOn(metadata, "onMoved");
+    const onDeleted = vi.spyOn(metadata, "onDeleted");
+    const principal: Principal = {
       accountId: ACCOUNT_ID,
       identityId: ALICE_IDENTITY_ID,
       username: "alice",
       storage,
       isAdmin: false,
-    });
-    const deps = { bus: createEventBus(), clock: () => new Date(CLOCK_ISO), metadata };
+    };
+    const ownerPath = vi.fn(async () => ({ identityId: "owner", path: "/Team/a.txt" }));
 
-    await trashMany(deps, principal(trashed(captureRecycleReceipt)), [
-      { path: "/dir", kind: "dir" },
-    ]);
-    expect(follower.onMoved.mock.calls).toEqual([
-      [
-        ALICE_IDENTITY_ID,
-        "/dir",
-        expect.stringMatching(/^\/\.trash\/\.fdrive-move-v1\/dir\/p\/dir\/v\/\d+$/),
-        true,
-      ],
-    ]);
+    await trashMany(
+      { bus: createEventBus(), clock: () => new Date(CLOCK_ISO), metadata, ownerPath },
+      principal,
+      [{ path: "/Shared with me/Team/a.txt", kind: "file" }],
+    );
 
-    // A storage that does not say where the item went: its shares end rather than stay behind.
-    await trashMany(deps, principal(trashed()), [{ path: "/dir", kind: "dir" }]);
-    expect(follower.onDeleted.mock.calls).toEqual([[ALICE_IDENTITY_ID, "/dir", true]]);
+    expect(ownerPath).toHaveBeenCalledWith(ALICE_IDENTITY_ID, "/Shared with me/Team/a.txt");
+    expect(onMoved).toHaveBeenCalledWith(
+      "owner",
+      "/Team/a.txt",
+      "/.trash/.fdrive-move-v1/file/p/Team/p/a.txt/v/0",
+      false,
+    );
+    expect(onDeleted).toHaveBeenCalledWith(ALICE_IDENTITY_ID, "/Shared with me/Team/a.txt", false);
   });
 });
 
@@ -2102,17 +2109,8 @@ describe("personal activity for fs commands", () => {
   });
 
   it("binds the trash leaf fdrive moved the item to", async () => {
-    const base = createMemoryStorage();
-    await base.upload("/hello.txt", new TextEncoder().encode("hello"));
-    const storage = withRecycleFolderTrash(
-      withMoveToTrash({
-        storage: base,
-        trashPath: "/.trash",
-        clock: () => new Date(CLOCK_ISO),
-        onRecycled: captureRecycleReceipt,
-      }),
-      "/.trash",
-    );
+    const storage = createMemoryStorage({}, { clock: () => new Date(CLOCK_ISO) });
+    await storage.upload("/hello.txt", new TextEncoder().encode("hello"));
     const { app, activity } = await buildHarnessWithStorage(storage);
 
     const res = await app.request(
@@ -2127,27 +2125,6 @@ describe("personal activity for fs commands", () => {
       kind: "file",
       trashLeaf: expect.stringContaining("/.trash/"),
     });
-  });
-
-  it("records a real delete when the storage has no trash and inside the trash folder", async () => {
-    const base = createMemoryStorage();
-    await base.upload("/gone.txt", new TextEncoder().encode("x"));
-    const plain = await buildHarnessWithStorage(base);
-    await plain.app.request(
-      "/api/v1/fs/delete",
-      jsonPost({ items: [{ path: "/gone.txt", kind: "file" }] }),
-    );
-    expect(plain.activity.operations.at(-1)?.action).toBe("file.delete");
-
-    const withTrash = createMemoryStorage();
-    await withTrash.mkdir("/.trash");
-    await withTrash.upload("/.trash/old.txt", new TextEncoder().encode("x"));
-    const purge = await buildHarnessWithStorage(withRecycleFolderTrash(withTrash, "/.trash"));
-    await purge.app.request(
-      "/api/v1/fs/delete",
-      jsonPost({ items: [{ path: "/.trash/old.txt", kind: "file" }] }),
-    );
-    expect(purge.activity.operations.at(-1)?.action).toBe("file.delete");
   });
 
   it("records the failed outcome of a move that never happened", async () => {

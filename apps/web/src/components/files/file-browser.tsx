@@ -1170,6 +1170,7 @@ export function FileBrowser({
         }}
         onConfirm={handleDeleteConfirm}
         pending={remove.isPending}
+        received={received}
       />
       {destinationPicker !== null && (
         <DestinationPicker

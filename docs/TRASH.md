@@ -5,8 +5,11 @@ Trash is always on, for every user. A deleted file or folder waits in its user's
 longer than the installation's retention. There is nothing to turn on, no folder to choose,
 and no worker or restart.
 
-fdrive does not intercept changes made outside it: deleting directly on the host disk bypasses
-Trash, and overwriting a file does not retain its previous version.
+Every delete in fdrive moves to Trash: the web app, MCP's `trash_path`, AI chat's cards and a Mac
+save that renames its file. Storage itself never decides: `deleteFile` and `deleteDir` delete for
+good, and `trash.put` moves an item into Trash and says where, so each caller chooses. fdrive does
+not intercept changes made outside it: deleting directly on the host disk bypasses Trash, and
+overwriting a file does not retain its previous version.
 
 ## Retention
 
@@ -31,11 +34,20 @@ alone. A restore or a permanent delete removes the layout folders it leaves empt
 A restore never replaces anything: when a file or folder already sits at the original path,
 the restore fails with a conflict, and **Restore to** can pick another place.
 
-When a folder shared with other users, or anything a public link names, goes to Trash, its
-shares and links go with it, and nobody can reach it through them there. A new item at the old
-path is not shared. A restore, to the same place or another, brings the shares and links back;
-deleting the item permanently, in fdrive or on the host, ends them. Tags and favorites stay at
-the original path for a restore there.
+Everything fdrive keeps by path goes into Trash with the item: tags, favorites, folder views,
+recents, Office documents, folders shared with other users and public links. Nobody reaches it
+through a share or link there, no list shows it, and a new item at the old path inherits nothing.
+A restore, to the same place or another, is a move back, so it all comes back with the item;
+deleting it permanently, in fdrive or on the host, ends it. An AI chat that referred to the item
+shows it missing.
+
+## Folders shared with you
+
+Something in a folder another user shares with you to edit is theirs, so deleting it moves it to
+**their** Trash, at its place in their files, and the delete dialog says so. You have nothing of
+it in your Trash and cannot restore or purge it; your history records the delete, and the owner
+finds it on their Trash page, restores it into the shared folder or deletes it permanently. What
+the owner kept by path goes with it; what you kept, your own tags and favorites on it, ends.
 
 Changing **Days in Trash** takes an administrator: the setup owner, or a user made
 administrator under **System > Users**.

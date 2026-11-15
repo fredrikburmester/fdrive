@@ -31,6 +31,12 @@ const FAKE_STORAGE: StorageProvider = {
   deleteEmptyDir: notImplemented,
   setModifiedAt: notImplemented,
   zip: notImplemented,
+  trash: {
+    put: notImplemented,
+    list: notImplemented,
+    restore: notImplemented,
+    purge: notImplemented,
+  },
 };
 
 const PRINCIPAL: Principal = {
@@ -235,10 +241,7 @@ describe("createPrincipalFactory", () => {
 
   it("builds no storage for a request that touches no files, and one for one that does", async () => {
     const storage = vi.fn(() => createMemoryStorage({ "/a.txt": "a" }));
-    const principalFor = createPrincipalFactory({
-      folder: { storage },
-      clock: () => new Date(0),
-    });
+    const principalFor = createPrincipalFactory({ folder: { storage } });
 
     const idle = await principalFor(login);
     expect(idle).toMatchObject({
@@ -263,7 +266,6 @@ describe("createPrincipalFactory", () => {
           throw new StorageError("forbidden", "this login has no valid home folder");
         },
       },
-      clock: () => new Date(0),
     });
     const principal = await principalFor({ ...login, username: ".." });
     expect(() => principal.storage).toThrow(ApiHttpError);

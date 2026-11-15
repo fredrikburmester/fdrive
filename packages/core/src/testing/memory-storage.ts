@@ -1,5 +1,6 @@
 import {
   baseName,
+  createRecycleFolderTrash,
   type EntryStat,
   extensionOf,
   type FileEntry,
@@ -17,6 +18,7 @@ export interface MemoryStorage extends StorageProvider {
 
 export interface MemoryStorageOptions {
   readonly nullMtimePaths?: readonly string[];
+  /** Modification times of new files, and the names of new Trash leaves. */
   readonly clock?: () => Date;
 }
 
@@ -161,7 +163,7 @@ export function createMemoryStorage(
     return { normalized, file };
   }
 
-  const storage: MemoryStorage = {
+  const storage: Omit<MemoryStorage, "trash"> = {
     dump(): Record<string, string> {
       const result: Record<string, string> = {};
       for (const [path, file] of fileMap) {
@@ -362,5 +364,5 @@ export function createMemoryStorage(
     },
   };
 
-  return storage;
+  return Object.assign(storage, { trash: createRecycleFolderTrash({ storage, clock }) });
 }
