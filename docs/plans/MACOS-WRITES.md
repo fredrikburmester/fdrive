@@ -22,10 +22,11 @@ delete/recreate, particularly with identical bytes.
 
 ## Product and release qualification
 
-- Broader editor temporary-file cleanup. Recoverable Finder Trash and the app's **Restore
-  from Trash** work; restoration targets the location's top level. Finder Put Back and
-  permanent purge remain unavailable. Prove supported safe-save editors can operate with
-  permanent-delete callbacks rejected; publish specific compatibility limits.
+- Broader editor temporary-file cleanup. Finder's Trash is fdrive's Trash, and an app's
+  delete moves the file there, so a safe-save editor's temporary files can collect in Trash
+  until Days in Trash deletes them; measure with real editors and publish specific
+  compatibility limits. Finder Put Back remains unavailable; the app's **Restore from Trash**
+  targets the location's top level.
 - Reboot, extension/API crash, low disk, large transfer and cross-domain cases below.
   Cross-domain copies can download then upload; advertise no atomic cross-domain move.
   Prove source preservation when the destination upload fails.
@@ -40,7 +41,7 @@ delete/recreate, particularly with identical bytes.
 
 Deferred: delta/chunk-resumable uploads, remote search, automatic text merging, POSIX ACL
 sync, general extended attributes/resource forks, synced Finder tags, symlinks/special files,
-package-wide atomic commits, native permanent purge and optimized cross-domain transfers.
+package-wide atomic commits and optimized cross-domain transfers.
 Do not promise support for arbitrary package documents or live databases.
 
 ## Acceptance and verification
@@ -51,6 +52,7 @@ Do not promise support for arbitrary package documents or live databases.
   Trash.
 - Use two independent clients plus the web app and a writer outside fdrive: concurrent
   saves; same-size/same-mtime replacement; content edit versus rename/delete; changed parent;
+  Finder delete, Delete Immediately and Empty Trash versus the web's Trash and its retention;
   directory deletion versus new descendants. Preserve every unacknowledged local edit.
 - Interrupt before/during upload, before commit, after the storage commit, after DB receipt and
   before native completion. Retry after extension/API restart and token rotation. No duplicate

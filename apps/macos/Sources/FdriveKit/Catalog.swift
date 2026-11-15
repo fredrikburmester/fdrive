@@ -223,10 +223,7 @@ public actor Catalog {
                 if pendingIds.contains(removedItem.id) { skipped = true; continue }
                 for descendant in knownItems where descendant.entry.path == removedItem.entry.path || descendant.entry.path.hasPrefix(removedItem.entry.path + "/") {
                     if pendingIds.contains(descendant.id) { skipped = true; continue }
-                    try execute("UPDATE items SET deleted=1,revision=? WHERE id=?", [String(try next()), descendant.id])
-                    try execute("DELETE FROM folders WHERE path=?", [descendant.entry.path])
-                    try execute("DELETE FROM listings WHERE path=?", [descendant.entry.path])
-                    try forgetToken(descendant.entry.path)
+                    try tombstone(descendant)
                 }
             }
             for entry in entries {
@@ -255,6 +252,33 @@ public actor Catalog {
                 try execute("INSERT INTO folder_tokens VALUES (?,?) ON CONFLICT(path) DO UPDATE SET token=excluded.token", [folder, token ?? ""])
             } else { try forgetToken(folder) }
         }
+    }
+    /// An item that is gone: deletion evidence for the working set, and no listing of it.
+    private func tombstone(_ item: CatalogItem) throws {
+        try execute("UPDATE items SET deleted=1,revision=? WHERE id=?", [String(try next()), item.id])
+        try execute("DELETE FROM folders WHERE path=?", [item.entry.path])
+        try execute("DELETE FROM listings WHERE path=?", [item.entry.path])
+        try forgetToken(item.entry.path)
+    }
+    /// The server deleted this item for good: it and everything known inside it go.
+    public func purged(_ id: String) throws {
+        try transaction {
+            let gone = try item(id)
+            for known in try all() where known.entry.path == gone.entry.path || known.entry.path.hasPrefix(gone.entry.path + "/") {
+                try tombstone(known)
+            }
+        }
+    }
+    /// Whether a write this Mac has not finished touches `item` or anything inside it,
+    /// a new item there included.
+    public func hasPendingWrite(within item: CatalogItem) throws -> Bool {
+        try pendingWrites().contains { try $0.result == nil && touches($0, item) }
+    }
+    private func touches(_ pending: PendingWrite, _ item: CatalogItem) throws -> Bool {
+        let inside = { (path: String) in path == item.entry.path || path.hasPrefix(item.entry.path + "/") }
+        if let own = try? self.item(pending.localId), inside(own.entry.path) { return true }
+        guard let parent = try rows(Self.itemByRemoteId, [pending.request.parentId]).first else { return false }
+        return inside(try decode(parent[0]).entry.path)
     }
     public func downloaded(_ id: String, hash: String, size: Int64, expectedVersion: String? = nil) throws -> CatalogItem {
         try transaction {
@@ -358,6 +382,9 @@ public actor Catalog {
                        related.entry.path.hasPrefix(current.entry.path + "/") || current.entry.path.hasPrefix(related.entry.path + "/") {
                         throw DriveError.unavailable
                     }
+                    // A move to Trash takes everything inside along, so it waits for every
+                    // write there, a new item's too.
+                    if pending.request.parentId == "trash", try touches(other, current) { throw DriveError.unavailable }
                 }
             }
             try execute("INSERT INTO pending VALUES (?,?,?,?,0)", [pending.key, pending.id, pending.localId, String(decoding: try JSONEncoder().encode(pending), as: UTF8.self)])

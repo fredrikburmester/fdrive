@@ -32,8 +32,7 @@ Every regular file under a configured root, except:
   (`.fdrive-partial-<16 hex>`, renamed to the real name once complete).
 - Directories in `SKIP_DIRS` (`.fdrive-desktop`, `@eaDir`, `.Trash`, `.Trashes`,
   `node_modules`, `.git`), wherever they lie. `.fdrive-desktop` is the Mac app's
-  folder (staged uploads, the versions its writes replace and its Trash), so none of it is
-  indexed or journaled; the next scan sweeps rows indexed there before. fdrive's own Trash is
+  folder (its staged uploads), so none of it is indexed or journaled; the next scan sweeps rows indexed there before. fdrive's own Trash is
   indexed, so moving an item into and out of it stays a rename that keeps its thumbnails and
   embeddings; every index read leaves it out instead (see [search](SEARCH-AND-AI.md)).
 

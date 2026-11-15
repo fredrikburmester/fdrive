@@ -133,7 +133,30 @@ it("runs the complete v2 routes with explicit grants, streamed content, receipts
       })
     ).status,
   ).toBe(200);
-  expect((await call(`/operations/${movedId}/commit`, {})).status).toBe(200);
+  const renamed = (await (await call(`/operations/${movedId}/commit`, {})).json()) as {
+    item: { id: string; version: { content: string; metadata: string } };
+  };
+  // Finder's Trash is fdrive's: moved there, listed there, and Empty Trash deletes for good.
+  const trashId = randomUUID();
+  await call("/moves", {
+    operationId: trashId,
+    itemId: renamed.item.id,
+    parentId: "trash",
+    name: "renamed-folder",
+    base: renamed.item.version,
+  });
+  expect((await call(`/operations/${trashId}/commit`, {})).status).toBe(200);
+  const trashed = async () =>
+    (
+      (await (await call("/entries?path=/.fdrive-desktop/trash")).json()) as {
+        entries: { id: string }[];
+      }
+    ).entries.map((entry) => entry.id);
+  expect(await trashed()).toEqual([renamed.item.id]);
+  expect((await call("/purges", { itemId: "not-a-handle" })).status).toBe(400);
+  expect((await call("/purges", { itemId: folder.item.id, extra: true })).status).toBe(400);
+  expect(await (await call("/purges", { itemId: renamed.item.id })).json()).toEqual({ ok: true });
+  expect(await trashed()).toEqual([]);
   const operationId = randomUUID();
   const digest = createHash("sha256").update("").digest("hex");
   expect(
@@ -395,6 +418,7 @@ async function fixture(writable = false, changes?: DesktopChanges) {
                 ...deps,
                 repo: memoryRepo().repo,
                 storageForIdentity: async () => storage,
+                purge: (principal, id) => principal.storage.trash.purge(id),
               }),
             }
           : {}),
@@ -922,8 +946,9 @@ it("refuses every read that reaches its item through a symbolic link, at any seg
   const writes = createDesktopWrites({
     ...f.deps,
     repo: memoryRepo().repo,
-    // Only reads here; nothing is staged.
+    // Only reads here; nothing is staged or deleted.
     storageForIdentity: async () => createMemoryStorage({}),
+    purge: async () => {},
   });
   const refuses = async (principal: Principal, folders: string[], files: string[]) => {
     const writer = { ...principal, tokenAccess: full };
