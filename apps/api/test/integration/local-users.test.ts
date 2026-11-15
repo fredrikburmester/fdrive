@@ -63,7 +63,7 @@ describe("local users administered through the API", () => {
     });
   }
   const signIn = (username: string, password: string) =>
-    call(ROUTES.auth.login, { method: "POST", body: { credential: { username, password } } });
+    call(ROUTES.auth.login, { method: "POST", body: { username, password } });
   async function login(username: string, password: string): Promise<string> {
     const response = await signIn(username, password);
     expect(response.status, username).toBe(200);

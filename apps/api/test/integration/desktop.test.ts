@@ -47,7 +47,8 @@ it("pairs two people's Macs with isolated streaming reads, validators and revoca
     });
   try {
     const login = await request("/api/v1/auth/login", {
-      credential: { username: "alice", password: "alice-password" },
+      username: "alice",
+      password: "alice-password",
     });
     expect(login.status).toBe(200);
     cookie = login.headers.get("set-cookie")?.split(";")[0] ?? "";
@@ -76,7 +77,8 @@ it("pairs two people's Macs with isolated streaming reads, validators and revoca
     expect(a.location.identityId).toBe(me.identity.id);
     // Bob pairs his own Mac from his own browser session.
     const bobLogin = await request("/api/v1/auth/login", {
-      credential: { username: "bob", password: "bob-password" },
+      username: "bob",
+      password: "bob-password",
     });
     expect(bobLogin.status).toBe(200);
     cookie = bobLogin.headers.get("set-cookie")?.split(";")[0] ?? "";

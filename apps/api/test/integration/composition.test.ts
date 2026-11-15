@@ -110,7 +110,7 @@ describe("composeApp", () => {
           "content-type": "application/json",
           "x-requested-with": "fdrive",
         },
-        body: JSON.stringify({ credential: { username: "alice", password: "alice-password" } }),
+        body: JSON.stringify({ username: "alice", password: "alice-password" }),
       });
       expect(loginRes.status).toBe(200);
       const cookie = extractCookie(loginRes);

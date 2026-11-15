@@ -26,11 +26,12 @@ import { insertLocalUsers, startLocalStorage, startPostgres } from "@fdrive/test
 import { generateIdentity, identityToRecipient } from "age-encryption";
 import { afterAll, beforeAll, expect, it } from "vitest";
 import { open, seal } from "../../src/auth/crypto.js";
-import { rawBackupStorage } from "../../src/backups/module.js";
+import { userStorage } from "../../src/backups/module.js";
 import { restoreOptions } from "../../src/backups/recovery.js";
 import { loadConfig } from "../../src/config.js";
 import { deploymentModules } from "../../src/local/modules.js";
 import { createScryptSharePasswords } from "../../src/shares/passwords.js";
+import { localUserRepos } from "./helpers/local-storage.js";
 
 let source: ReturnType<typeof createDb>;
 let target: ReturnType<typeof createDb>;
@@ -57,7 +58,7 @@ afterAll(async () => {
   await container?.stop();
   if (directory) await rm(directory, { recursive: true, force: true });
 });
-it("recovers durable metadata, exact bigint history, credentials, ZIPs and bytes into an isolated fresh database", async () => {
+it("recovers durable metadata, exact bigint history, users, ZIPs and bytes into an isolated fresh database", async () => {
   const provider = randomUUID(),
     account = randomUUID(),
     user = randomUUID();
@@ -71,8 +72,7 @@ it("recovers durable metadata, exact bigint history, credentials, ZIPs and bytes
     [user, account, provider],
   );
   await source.pool.query(
-    "insert into app.credentials(identity_id,key_id,ciphertext) values($1,'master-v1',$2)",
-    [user, Buffer.from(seal(master, Buffer.from('{"password":"test-secret"}'), user))],
+    "insert into app.local_users(username,password_hash) values('alice','scrypt$fixture')",
   );
   await source.pool.query("insert into app.settings(key,value) values('setup.owner.v1',$1)", [
     JSON.stringify({ state: "complete", accountId: account }),
@@ -118,7 +118,8 @@ it("recovers durable metadata, exact bigint history, credentials, ZIPs and bytes
     },
   );
   expect(result.manifest.coverage).toEqual([]);
-  expect((await readFile(file)).includes(Buffer.from("test-secret"))).toBe(false);
+  // Encrypted: not even the password hash is readable in the archive.
+  expect((await readFile(file)).includes(Buffer.from("scrypt$fixture"))).toBe(false);
   const inspection = await inspectArchive(file, identity);
   expect(inspection.manifest.tables["idx.scans"]?.rows).toBe(1);
   const restored = await restoreArchive(
@@ -140,11 +141,9 @@ it("recovers durable metadata, exact bigint history, credentials, ZIPs and bytes
   expect((await target.pool.query("select enabled from app.providers")).rows[0].enabled).toBe(
     false,
   );
-  const credential = (await target.pool.query("select ciphertext from app.credentials")).rows[0]
-    .ciphertext;
-  expect(Buffer.from(open(destinationMaster, credential, user)).toString()).toContain(
-    "test-secret",
-  );
+  expect(
+    (await target.pool.query("select username,password_hash from app.local_users")).rows,
+  ).toEqual([{ username: "alice", password_hash: "scrypt$fixture" }]);
   const state = (
     await target.pool.query("select value from app.settings where key='backup.restore.v1'")
   ).rows[0].value;
@@ -185,7 +184,7 @@ it("delivers a large streamed snapshot to a local folder destination that restor
     // A local user's own folder as the destination, wired the way the API
     // builds the local module from FDRIVE_STORAGE_ROOT.
     const repos = createRepos(source.db);
-    await insertLocalUsers(repos, folder, createScryptSharePasswords());
+    await insertLocalUsers(await localUserRepos(repos), folder, createScryptSharePasswords());
     const localModule = deploymentModules(
       { fdriveStorageRoot: folder.root, fdriveIndexRoots: null },
       repos,
@@ -229,18 +228,13 @@ it("delivers a large streamed snapshot to a local folder destination that restor
         label: "local",
         module: localModule,
         instance: { id: randomUUID(), baseUrl: "local", config: {} },
-        credential: { username: "alice", password: "alice-password" },
+        username: "alice",
       },
     ];
     for (const target of targets) {
-      // Same wiring as the API's destination factory: a dedicated raw storage session with a
-      // pinned username, confined to the reserved namespace under a private directory.
-      const storage = await rawBackupStorage(
-        target.module,
-        target.instance,
-        target.credential,
-        target.credential.username,
-      );
+      // Same wiring as the API's destination factory: storage in the user's own files,
+      // confined to the reserved namespace under a private directory.
+      const storage = userStorage(target.module, target.instance, target.username);
       const prefix = `backups/.fdrive-backups/${config.installation_id}`;
       await storage.mkdir(`/${prefix}`, { parents: true });
       const destination = providerDestination(storage, prefix);
@@ -269,7 +263,7 @@ it("delivers a large streamed snapshot to a local folder destination that restor
       expect((await discoverBackups(destination)).map((entry) => entry.id)).toEqual([id]);
       // Recover with fileserver access only: a fresh storage session and no source database.
       const independent = providerDestination(
-        await rawBackupStorage(target.module, target.instance, target.credential),
+        userStorage(target.module, target.instance, target.username),
         prefix,
       );
       const fetched = join(directory, `${target.label}-fetched.age`);

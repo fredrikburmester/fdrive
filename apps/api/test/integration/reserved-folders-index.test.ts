@@ -73,7 +73,6 @@ describe("fdrive's own folders in the index, through the MCP tools", () => {
     const repos = createRepos(db);
     const clock = () => new Date();
     const users: LocalUsers = {
-      verify: async () => ({ result: "invalid" }),
       status: async () => "active",
       shared: async () => [],
     };

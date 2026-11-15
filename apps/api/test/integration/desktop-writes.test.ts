@@ -56,7 +56,8 @@ it("publishes complete files with durable replay and conflict protection", async
   const readDisk = (path: string) => readFile(onDisk(path), "utf8");
   try {
     const login = await call("/api/v1/auth/login", {
-      credential: { username: "alice", password: "alice-password" },
+      username: "alice",
+      password: "alice-password",
     });
     expect(login.status).toBe(200);
     cookie = login.headers.get("set-cookie")?.split(";")[0] ?? "";
