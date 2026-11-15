@@ -42,7 +42,6 @@ export const DURABLE_TABLES = [
   "app.backup_destinations",
   "app.backup_runs",
   "app.backup_deliveries",
-  "app.backup_attachments",
 ] as const;
 export const OMITTED_TABLES = {
   "app.thumbnails": "rebuildable",
@@ -85,5 +84,16 @@ export function quoteTable(value: string): string {
   if (!(DURABLE_TABLES as readonly string[]).includes(value)) throw Error("Unknown backup table");
   return value.split(".").map(quoteIdentifier).join(".");
 }
+/**
+ * Held shared by everything that writes or removes recovery files (OCR's kept originals and
+ * their mappings), and exclusively by a capture from before its database snapshot until it has
+ * read every recovery file, so the files it reads match the snapshot.
+ */
 export const BACKUP_GATE = 736591204;
 export const BACKUP_WORKER = 736591205;
+/**
+ * Held shared by every mutating API request, and exclusively by a capture only while it takes
+ * its database snapshot, so the snapshot sees no request half done. Requests go on while the
+ * capture reads rows and files; the snapshot does not see them.
+ */
+export const SNAPSHOT_GATE = 736591207;

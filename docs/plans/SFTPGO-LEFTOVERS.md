@@ -95,14 +95,12 @@ All are server-only and keep shipped Mac builds working.
     budget, on a heavily loaded machine; rerun `pnpm perf:strict` on a quiet one before acting
     on that.
 
-## Shares, Office, backups
+## Shares, Office
 
 31. **Shares.** One module instead of the access-object layers; one range implementation; drop
     `has_password` and rename `views`.
 33. **Office.** Key Office files by owner path; no provider in settings or edit rules; pick
     editors from fdrive's users.
-34. **Backups.** S3 only; this also removes the guard that lists every moved, deleted or zipped
-    folder (`backups/reserved-storage.ts`).
 
 ## Last
 

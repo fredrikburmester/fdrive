@@ -86,13 +86,17 @@ describe("ownedShareAccess", () => {
     expect(consume).toHaveBeenCalledTimes(1);
   });
 
-  it("hides the Trash and backup folders from a root share", async () => {
+  it("hides the Trash from a root share, and serves an old backup folder like any other", async () => {
     const { access } = build(
       { "/.trash/old.txt": "gone", "/.fdrive-backups/b": "backup", "/keep.txt": "kept" },
       { paths: ["/"] },
     );
-    expect((await access.list("/")).map((entry) => entry.name)).toEqual(["keep.txt"]);
-    for (const hidden of ["/.trash/old.txt", "/.trash", "/.fdrive-backups/b"]) {
+    expect((await access.list("/")).map((entry) => entry.name).sort()).toEqual([
+      ".fdrive-backups",
+      "keep.txt",
+    ]);
+    expect(await text((await access.download("/.fdrive-backups/b")).body)).toBe("backup");
+    for (const hidden of ["/.trash/old.txt", "/.trash"]) {
       expect(await kindOf(access.download(hidden))).toBe("not_found");
       expect(await kindOf(access.list(hidden))).toBe("not_found");
       expect(await kindOf(access.statFile?.(hidden) ?? Promise.resolve())).toBe("not_found");
@@ -219,7 +223,6 @@ describe("ownedShareAccess", () => {
     const cases: [Parameters<typeof build>, string][] = [
       [[{ "/docs/a": "a" }, {}, { zip: null }], "unsupported"],
       [[{ "/.trash/a": "a" }, { paths: ["/.trash/a"] }], "not_found"],
-      [[{ "/.fdrive-backups/a": "a" }, { paths: ["/.fdrive-backups"] }], "not_found"],
       [[{ "/.trash/a": "a" }, { paths: ["/"] }], "forbidden"],
       [[{ "/x/a": "a", "/y/A": "b" }, { paths: ["/x/a", "/y/A"] }], "bad_request"],
       [[{ "/docs/a": "a" }, { paths: ["/docs/\0"] }], "bad_request"],

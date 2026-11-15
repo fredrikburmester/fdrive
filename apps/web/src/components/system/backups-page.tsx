@@ -3,7 +3,7 @@ import { ApiClientError, type BackupSchedule, type BackupsResponse } from "@fdri
 import { useQueryClient } from "@tanstack/react-query";
 import { Decrypter, generateIdentity, identityToRecipient } from "age-encryption";
 import { Download, LoaderCircle, Plus, ShieldCheck } from "lucide-react";
-import { type ReactNode, useId, useRef, useState } from "react";
+import { type ReactNode, useId, useState } from "react";
 import { toast } from "sonner";
 import {
   AlertDialog,
@@ -36,7 +36,6 @@ import {
 import { Textarea } from "@/components/ui/textarea";
 import { useMe } from "@/lib/api/auth-queries";
 import { backupClient, backupQueryKey, useBackups } from "@/lib/api/backup-queries";
-import { useSystemStorage } from "@/lib/api/system-queries";
 import { formatBytes, type SizeUnits } from "@/lib/format";
 import { useFormatters } from "@/lib/use-format-preferences";
 import { BackupHealth } from "./backup-health";
@@ -341,12 +340,10 @@ function Destinations({
   busy: boolean;
   unlocked: boolean;
 }) {
-  const storage = useSystemStorage();
   const [adding, setAdding] = useState(false);
   const [editing, setEditing] = useState<string | null>(null);
   const [testing, setTesting] = useState<string | null>(null);
   const [pathStyle, setPathStyle] = useState(false);
-  const [type, setType] = useState("s3");
   const [name, setName] = useState("");
   const [endpoint, setEndpoint] = useState("https://s3.amazonaws.com");
   const [region, setRegion] = useState("us-east-1");
@@ -354,11 +351,10 @@ function Destinations({
   const [prefix, setPrefix] = useState("fdrive-backups");
   const [accessKeyId, setAccessKeyId] = useState("");
   const [secret, setSecret] = useState("");
-  const [providerId, setProviderId] = useState("");
   return (
     <SystemSection
       title="Destinations"
-      description="Store a copy independently of this fdrive server."
+      description="Copy each backup to an S3-compatible bucket, such as AWS S3 or Backblaze B2."
       actions={
         <Button variant="outline" disabled={!unlocked || busy} onClick={() => setAdding(!adding)}>
           <Plus />
@@ -479,21 +475,17 @@ function Destinations({
           onSubmit={(event) => {
             event.preventDefault();
             void act(async () => {
-              await backupClient.destination(
-                type === "s3"
-                  ? {
-                      type: "s3",
-                      name,
-                      endpoint,
-                      region,
-                      bucket,
-                      prefix,
-                      pathStyle,
-                      accessKeyId,
-                      secretAccessKey: secret,
-                    }
-                  : { type: "provider", name, providerId, prefix },
-              );
+              await backupClient.destination({
+                type: "s3",
+                name,
+                endpoint,
+                region,
+                bucket,
+                prefix,
+                pathStyle,
+                accessKeyId,
+                secretAccessKey: secret,
+              });
               setSecret("");
               setAdding(false);
             });
@@ -504,150 +496,89 @@ function Destinations({
               <Input id={id} value={name} onChange={(e) => setName(e.target.value)} required />
             )}
           </Field>
-          <Field label="Destination type">
+          <div className="flex flex-wrap gap-2 sm:col-span-2">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => {
+                setEndpoint("https://s3.amazonaws.com");
+                setRegion("us-east-1");
+              }}
+            >
+              AWS S3
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => {
+                setEndpoint("https://s3.us-west-004.backblazeb2.com");
+                setRegion("us-west-004");
+              }}
+            >
+              Backblaze B2
+            </Button>
+          </div>
+          <Field label="S3 endpoint">
             {(id) => (
-              <Select
-                value={type}
-                onValueChange={(value) => {
-                  if (value) {
-                    setType(value);
-                    setPrefix(value === "s3" ? "fdrive-backups" : "/");
-                  }
-                }}
-              >
-                <SelectTrigger id={id}>
-                  <SelectValue>
-                    {type === "s3" ? "S3 or Backblaze B2" : "Folder in your files"}
-                  </SelectValue>
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="s3">S3 or Backblaze B2</SelectItem>
-                  <SelectItem value="provider">Folder in your files</SelectItem>
-                </SelectContent>
-              </Select>
+              <Input
+                id={id}
+                type="url"
+                value={endpoint}
+                onChange={(e) => setEndpoint(e.target.value)}
+                required
+              />
             )}
           </Field>
-          {type === "s3" ? (
-            <>
-              <div className="flex flex-wrap gap-2 sm:col-span-2">
-                <Button
-                  type="button"
-                  variant="outline"
-                  onClick={() => {
-                    setEndpoint("https://s3.amazonaws.com");
-                    setRegion("us-east-1");
-                  }}
-                >
-                  AWS S3
-                </Button>
-                <Button
-                  type="button"
-                  variant="outline"
-                  onClick={() => {
-                    setEndpoint("https://s3.us-west-004.backblazeb2.com");
-                    setRegion("us-west-004");
-                  }}
-                >
-                  Backblaze B2
-                </Button>
-              </div>
-              <Field label="S3 endpoint">
-                {(id) => (
-                  <Input
-                    id={id}
-                    type="url"
-                    value={endpoint}
-                    onChange={(e) => setEndpoint(e.target.value)}
-                    required
-                  />
-                )}
-              </Field>
-              <Field label="Region">
-                {(id) => (
-                  <Input
-                    id={id}
-                    value={region}
-                    onChange={(e) => setRegion(e.target.value)}
-                    required
-                  />
-                )}
-              </Field>
-              <Field label="Bucket">
-                {(id) => (
-                  <Input
-                    id={id}
-                    value={bucket}
-                    onChange={(e) => setBucket(e.target.value)}
-                    required
-                  />
-                )}
-              </Field>
-              <label className="flex items-center gap-2 text-sm">
-                <input
-                  type="checkbox"
-                  checked={pathStyle}
-                  onChange={(event) => setPathStyle(event.target.checked)}
-                />
-                Use path-style addressing
-              </label>
-              <Field label="Access key ID">
-                {(id) => (
-                  <Input
-                    id={id}
-                    value={accessKeyId}
-                    onChange={(e) => setAccessKeyId(e.target.value)}
-                    autoComplete="off"
-                    required
-                  />
-                )}
-              </Field>
-            </>
-          ) : (
-            <Field label="Fileserver">
-              {(id) => (
-                <Select value={providerId} onValueChange={(value) => setProviderId(value ?? "")}>
-                  <SelectTrigger id={id}>
-                    <SelectValue placeholder="Choose storage" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {storage.data ? (
-                      <SelectItem value={storage.data.id}>{storage.data.name}</SelectItem>
-                    ) : null}
-                  </SelectContent>
-                </Select>
-              )}
-            </Field>
-          )}
-          <Field label={type === "s3" ? "Key prefix" : "Private backup directory"}>
+          <Field label="Region">
+            {(id) => (
+              <Input id={id} value={region} onChange={(e) => setRegion(e.target.value)} required />
+            )}
+          </Field>
+          <Field label="Bucket">
+            {(id) => (
+              <Input id={id} value={bucket} onChange={(e) => setBucket(e.target.value)} required />
+            )}
+          </Field>
+          <label className="flex items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              checked={pathStyle}
+              onChange={(event) => setPathStyle(event.target.checked)}
+            />
+            Use path-style addressing
+          </label>
+          <Field label="Access key ID">
+            {(id) => (
+              <Input
+                id={id}
+                value={accessKeyId}
+                onChange={(e) => setAccessKeyId(e.target.value)}
+                autoComplete="off"
+                required
+              />
+            )}
+          </Field>
+          <Field label="Key prefix">
             {(id) => (
               <Input id={id} value={prefix} onChange={(e) => setPrefix(e.target.value)} required />
             )}
           </Field>
-          {type === "s3" ? (
-            <>
-              <Field label="Secret access key">
-                {(id) => (
-                  <Input
-                    id={id}
-                    type="password"
-                    value={secret}
-                    onChange={(e) => setSecret(e.target.value)}
-                    autoComplete="new-password"
-                    required
-                  />
-                )}
-              </Field>
-              <p className="text-sm text-muted-foreground sm:col-span-2">
-                Use a private bucket with dedicated credentials; scheduled backups run unattended.
-                Keep a copy of those credentials outside fdrive for disaster recovery.
-              </p>
-            </>
-          ) : (
-            <p className="text-sm text-muted-foreground sm:col-span-2">
-              Copies go to this folder in your own files, on this host. Copy them off the host with
-              the rest of the files folder.
-            </p>
-          )}
+          <Field label="Secret access key">
+            {(id) => (
+              <Input
+                id={id}
+                type="password"
+                value={secret}
+                onChange={(e) => setSecret(e.target.value)}
+                autoComplete="new-password"
+                required
+              />
+            )}
+          </Field>
+          <p className="text-sm text-muted-foreground sm:col-span-2">
+            Use a private bucket with dedicated credentials; scheduled backups run unattended. Keep
+            a copy of those credentials outside fdrive for disaster recovery.
+          </p>
           <Button disabled={busy} type="submit">
             Test and save
           </Button>
@@ -666,12 +597,6 @@ export function BackupsPage() {
   const [rotating, setRotating] = useState(false);
   const [challenge, setChallenge] = useState("");
   const [key, setKey] = useState("");
-  const [label, setLabel] = useState("");
-  const [file, setFile] = useState<File | null>(null);
-  const [notes, setNotes] = useState("");
-  const [sourceDate, setSourceDate] = useState("");
-  const fileInput = useRef<HTMLInputElement>(null);
-  const [replace, setReplace] = useState<string | undefined>();
   const [schedule, setSchedule] = useState<BackupSchedule | null>(null);
   const [confirmation, setConfirmation] = useState<{
     description: string;
@@ -781,7 +706,7 @@ export function BackupsPage() {
                         const recipient = await identityToRecipient(identity);
                         const result = await backupClient.key(recipient);
                         saveText(
-                          `# fdrive recovery key\n# Installation: ${data.installationId}\n# Recipient: ${recipient}\n# Store destination access credentials separately.\n# Destinations: ${data.destinations.map((item) => `${item.name}: ${item.location}`).join("; ") || "Browser download only"}\n# Restore: use the same fdrive release, a new empty database and a new master key.\n# Inspect offline: node dist/main.js backup inspect --file BACKUP.fdrive.age --key-file THIS_FILE\n# Set private key file permissions to 600. Use /restore with a host recovery token, or the backup restore CLI.\n# Restore starts paused. Review fileserver bindings and reauthenticate before resuming.\n# External configuration ZIPs are extracted for manual recovery with their original tools.\n${identity}\n`,
+                          `# fdrive recovery key\n# Installation: ${data.installationId}\n# Recipient: ${recipient}\n# Store destination access credentials separately.\n# Destinations: ${data.destinations.map((item) => `${item.name}: ${item.location}`).join("; ") || "Browser download only"}\n# Restore: use the same fdrive release, a new empty database and a new master key.\n# Inspect offline: node dist/main.js backup inspect --file BACKUP.fdrive.age --key-file THIS_FILE\n# Set private key file permissions to 600. Use /restore with a host recovery token, or the backup restore CLI.\n# Restore starts paused. Review the files folder binding and reauthenticate before resuming.\n${identity}\n`,
                           "fdrive-recovery-key.txt",
                         );
                         setChallenge(result.challenge);
@@ -835,7 +760,7 @@ export function BackupsPage() {
             </SystemSection>
             <SystemSection
               title="Download options"
-              description="Local downloads expire after 24 hours unless kept. Capturing the archive pauses file changes; remote transfer starts after that pause."
+              description="Local downloads expire after 24 hours unless kept. File changes wait only while a backup takes its database snapshot."
             >
               <div className="flex flex-wrap gap-2">
                 <Button
@@ -853,155 +778,16 @@ export function BackupsPage() {
                   onClick={() =>
                     setConfirmation({
                       description:
-                        "Create a partial backup of database records and available configuration ZIPs? Other recovery files are excluded and this backup will show incomplete coverage.",
+                        "Create a partial backup of database records only? Recovery files are excluded and this backup will show incomplete coverage.",
                       action: () => backupClient.create({ destinationIds: [], metadataOnly: true }),
                     })
                   }
                 >
-                  Database and ZIPs only
+                  Database only
                 </Button>
               </div>
             </SystemSection>
             <Destinations data={data} act={act} busy={busy} unlocked={unlocked} />
-            <SystemSection
-              title="Additional configuration files"
-              description="Upload a ZIP containing configuration files from outside fdrive. We'll include it in future backups. Upload a new copy whenever those files change."
-            >
-              {data.attachments.map((item) => (
-                <div
-                  key={item.id}
-                  className="flex min-w-0 flex-wrap justify-between gap-3 border-b pb-3"
-                >
-                  <div className="min-w-0">
-                    <p className="break-words font-medium">{item.label}</p>
-                    <p className="break-all text-xs text-muted-foreground">
-                      {item.filename} · {size(item.bytes, prefs.sizes)} · Uploaded{" "}
-                      {new Date(item.uploadedAt).toLocaleDateString()}
-                      {item.sourceDate
-                        ? ` · Source ${new Date(item.sourceDate).toLocaleDateString()}`
-                        : ""}
-                    </p>
-                    <p className="break-words text-xs text-muted-foreground">
-                      {item.lastCapturedAt
-                        ? `This version included in a complete backup on ${new Date(item.lastCapturedAt).toLocaleString()}`
-                        : "This version has not been included in a complete backup yet."}
-                    </p>
-                  </div>
-                  <div className="flex flex-wrap gap-2">
-                    <Button
-                      variant="outline"
-                      disabled={!unlocked}
-                      nativeButton={false}
-                      render={<a href={backupClient.attachmentUrl(item.id)} />}
-                    >
-                      Download ZIP
-                    </Button>
-                    <Button
-                      variant="outline"
-                      disabled={busy || !unlocked}
-                      onClick={() => {
-                        setReplace(item.id);
-                        setLabel(item.label);
-                        setNotes(item.notes);
-                        setSourceDate(item.sourceDate?.slice(0, 10) ?? "");
-                      }}
-                    >
-                      Replace
-                    </Button>
-                    <Button
-                      variant="ghost"
-                      disabled={busy || !unlocked}
-                      onClick={() =>
-                        setConfirmation({
-                          description:
-                            "Remove this ZIP from future backups? Existing backups keep their captured copies.",
-                          action: () => backupClient.removeAttachment(item.id),
-                        })
-                      }
-                    >
-                      Remove
-                    </Button>
-                  </div>
-                </div>
-              ))}
-              <form
-                className="grid gap-4 sm:grid-cols-2"
-                onSubmit={(event) => {
-                  event.preventDefault();
-                  void act(async () => {
-                    if (!file) throw Error("Choose a configuration ZIP");
-                    await backupClient.upload(
-                      {
-                        label,
-                        filename: file.name,
-                        notes,
-                        sourceDate: sourceDate ? new Date(sourceDate).toISOString() : null,
-                      },
-                      file,
-                      replace,
-                    );
-                    setFile(null);
-                    if (fileInput.current) fileInput.current.value = "";
-                    setSourceDate("");
-                    setLabel("");
-                    setNotes("");
-                    setReplace(undefined);
-                  });
-                }}
-              >
-                <Field label="Bundle name">
-                  {(id) => (
-                    <Input
-                      id={id}
-                      value={label}
-                      onChange={(e) => setLabel(e.target.value)}
-                      placeholder="Fileserver configuration"
-                      required
-                      disabled={!unlocked}
-                    />
-                  )}
-                </Field>
-                <Field label="Configuration ZIP">
-                  {(id) => (
-                    <Input
-                      id={id}
-                      ref={fileInput}
-                      type="file"
-                      accept=".zip,application/zip"
-                      onChange={(e) => setFile(e.target.files?.[0] ?? null)}
-                      required
-                      disabled={!unlocked}
-                    />
-                  )}
-                </Field>
-                <Field label="Configuration source date (optional)">
-                  {(id) => (
-                    <Input
-                      id={id}
-                      type="date"
-                      value={sourceDate}
-                      onChange={(event) => setSourceDate(event.target.value)}
-                      disabled={!unlocked}
-                    />
-                  )}
-                </Field>
-                <div className="sm:col-span-2">
-                  <Field label="Restore notes (optional)">
-                    {(id) => (
-                      <Textarea
-                        id={id}
-                        value={notes}
-                        onChange={(e) => setNotes(e.target.value)}
-                        disabled={!unlocked}
-                      />
-                    )}
-                  </Field>
-                </div>
-                <Button type="submit" disabled={!unlocked || busy || !file}>
-                  {replace ? "Replace configuration ZIP" : "Upload configuration ZIP"}
-                </Button>
-              </form>
-            </SystemSection>
             {selected && (
               <SystemSection
                 title="Schedule and retention"
@@ -1141,9 +927,8 @@ export function BackupsPage() {
               description="Use a fresh fdrive installation or the backup restore command to inspect an archive before replacing any data."
             >
               <p className="text-sm text-muted-foreground">
-                Have your recovery key and destination credentials ready. Original files and the
-                fileserver itself need their own backups. Uploaded configuration ZIPs are returned
-                intact for manual recovery.
+                Have your recovery key and destination credentials ready. The files folder needs its
+                own backup.
               </p>
               <Button variant="outline" nativeButton={false} render={<a href="/restore" />}>
                 Open restore

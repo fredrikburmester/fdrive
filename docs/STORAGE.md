@@ -27,8 +27,8 @@ filesystem details and lets tests run on an in-memory storage. fdrive checks pas
   changes: the Mac app compares it as each location's `providerId`, and Trash settings and
   Office documents name it. Rows left from storage fdrive no longer has stay until the schema
   is collapsed; nothing reads them.
-- Per request the storage factory finds the identity, runs `admit`, builds `storage`, hides the
-  backup namespace (`withoutBackupPaths`) and adds the Trash wrappers when Trash is on.
+- Per request the storage factory finds the identity, runs `admit`, builds `storage` and adds
+  the Trash wrappers when Trash is on.
 - The storage's name is the installation setting `storage.name` ("Local folder" until an
   administrator renames it), trimmed, 1 to 120 characters. It shows under each username in the
   sidebar and as the Mac location's `displayName`. `GET /api/v1/system/storage` returns the

@@ -510,19 +510,6 @@ export const backupDeliveries = appSchema.table(
     unique("backup_delivery_run_destination").on(table.runId, table.destinationId),
   ],
 );
-export const backupAttachments = appSchema.table("backup_attachments", {
-  id: uuid("id").primaryKey().defaultRandom(),
-  versionId: uuid("version_id").notNull(),
-  label: text("label").notNull(),
-  filename: text("filename").notNull(),
-  sourceDate: timestamp("source_date", { withTimezone: true }),
-  notes: text("notes").notNull().default(""),
-  uploadedAt: timestamp("uploaded_at", { withTimezone: true }).notNull().defaultNow(),
-  bytes: text("bytes").notNull(),
-  sha256: text("sha256").notNull(),
-  secret: bytea("secret").notNull(),
-});
-
 /** One AI chat a login keeps; its transcript is in `ai_chat_messages`, what it may read in `ai_chat_references`. */
 export const aiChats = appSchema.table(
   "ai_chats",

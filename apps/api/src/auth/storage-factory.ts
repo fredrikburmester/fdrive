@@ -7,7 +7,6 @@ import {
 } from "@fdrive/core";
 import type { IdentityRepo } from "@fdrive/db";
 import { captureRecycleReceipt } from "../activity/trash.js";
-import { withoutBackupPaths } from "../backups/reserved-storage.js";
 import { ApiHttpError } from "../errors.js";
 
 export type IdentityStorageFactory = (identityId: string) => Promise<StorageProvider>;
@@ -59,9 +58,8 @@ export interface CreateStorageFactoryDeps {
 /**
  * Builds the per-request `StorageProvider` for an identity: its home in the
  * files folder, once the folder admits its user (a user disabled since
- * signing in gets `forbidden`), without the backup namespace. Delayed jobs
- * retain the result; token validation can deny execution but never
- * retarget it. Trash settings are resolved once per request's storage, so
+ * signing in gets `forbidden`). Delayed jobs retain the result; token
+ * validation can deny execution but never retarget it. Trash settings are resolved once per request's storage, so
  * runtime changes apply without restart: with Trash on, the storage gets
  * the move-to-trash wrapper underneath the recycle folder view.
  */
@@ -73,7 +71,7 @@ export function createIdentityStorageFactory(
     if (identity === null) throw new ApiHttpError("unauthorized", "sign in again");
     const username = identity.externalUsername;
     await asHttp(() => deps.folder.admit(username));
-    const storage = withoutBackupPaths(await asHttp(() => deps.folder.storage(username)));
+    const storage = await asHttp(() => deps.folder.storage(username));
     const settings = await deps.resolveTrashSettings?.(identityId);
     let result = storage;
     if (settings?.enabled === true) {

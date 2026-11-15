@@ -177,7 +177,7 @@ export const CONFIG_KEYS: readonly ConfigKeyDef[] = [
   {
     key: "FDRIVE_MASTER_KEY",
     description:
-      "Base64-encoded 32-byte key that encrypts and signs what fdrive keeps secret: backup destination keys and ZIPs, AI provider keys, and share link and Office tokens. Generate with `openssl rand -base64 32`; losing it makes those secrets unrecoverable.",
+      "Base64-encoded 32-byte key that encrypts and signs what fdrive keeps secret: backup destination keys, AI provider keys, and share link and Office tokens. Generate with `openssl rand -base64 32`; losing it makes those secrets unrecoverable.",
     default: null,
     example: "change-me-32-random-bytes-base64==",
     secret: true,

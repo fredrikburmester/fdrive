@@ -1,29 +1,21 @@
 import { createHash } from "node:crypto";
-import { lstat, mkdir, readFile, rename } from "node:fs/promises";
-import { join, resolve } from "node:path";
+import { lstat, mkdir, readFile } from "node:fs/promises";
+import { resolve } from "node:path";
 import { parseArgs } from "node:util";
 import {
-  AttachmentStore,
   BackupStore,
   discoverBackups,
-  extractAttachment,
   fetchBackup,
   inspectArchive,
   restoreArchive,
   s3Destination,
 } from "@fdrive/backup";
-import { createDb, createFilesFolderFacts, createRepos, migrate } from "@fdrive/db";
+import { createDb, createRepos, migrate } from "@fdrive/db";
 import { z } from "zod";
-import { parseMasterKey } from "../auth/crypto.js";
 import type { AppConfig } from "../config.js";
-import {
-  createDeploymentFilesFolderGuard,
-  deploymentFilesFolder,
-  ensureStorageRow,
-} from "../local/files-folder.js";
 import { createLocalUserStore } from "../local/users.js";
 import { createScryptSharePasswords } from "../shares/passwords.js";
-import { createBackupModule, masterSecrets } from "./module.js";
+import { createBackupModule } from "./module.js";
 import { recoveryIdentity, recoveryPreview, restoreOptions } from "./recovery.js";
 
 async function privateText(path: string): Promise<string> {
@@ -108,24 +100,8 @@ export async function resumeRecovery(config: AppConfig, review: unknown): Promis
       if (!provider || provider.base_url !== expected.baseUrl)
         throw Error("Provider binding changed; review source and destination before resuming");
     }
-    // Publish only opaque ZIPs into normal app storage. Native/OCR/provider recovery stays
-    // quarantined in the recorded staging directory for explicit operator reconciliation.
-    if (!config.fdriveBackupStateDir) throw Error("Persistent backup directory is required");
-    const attachmentDir = join(config.fdriveBackupStateDir, "attachments");
-    await mkdir(attachmentDir, { recursive: true, mode: 0o700 });
-    const master = parseMasterKey(config.fdriveMasterKey);
-    const attachmentStore = new AttachmentStore(store, attachmentDir, masterSecrets(master));
-    for (const row of await store.attachments()) {
-      const target = join(attachmentDir, `${row.version_id}.age`);
-      const source = join(saved.stateDirectory, "attachments", `${row.version_id}.age`);
-      const exists = await lstat(target).catch(() => null);
-      if (exists && (!exists.isFile() || exists.isSymbolicLink()))
-        throw Error("Attachment destination is not a regular file");
-      if (!exists) await rename(source, target);
-      for await (const _chunk of await attachmentStore.download(row)) {
-        /* verify prior publish before retry */
-      }
-    }
+    // Recovery files (OCR, Office, logs) stay quarantined in the recorded staging directory
+    // for explicit operator reconciliation; nothing is published into normal app storage.
     const client = await database.pool.connect();
     try {
       await client.query("begin");
@@ -168,7 +144,6 @@ export async function runBackupCommand(
       file: { type: "string" },
       "key-file": { type: "string" },
       output: { type: "string" },
-      attachment: { type: "string" },
       account: { type: "string" },
       snapshot: { type: "string" },
       "review-file": { type: "string" },
@@ -181,8 +156,6 @@ export async function runBackupCommand(
   if (command === "list" || command === "fetch") {
     if (!values["destination-file"])
       throw Error("Supply a private destination JSON file; no application database is required");
-    // Only a bucket needs a destination file: a backup in the files folder
-    // is a plain file there (`<username>/<prefix>/<snapshot>.fdrive.age`).
     const destination = s3Destination(
       z
         .object({
@@ -216,18 +189,9 @@ export async function runBackupCommand(
     const identity = recoveryIdentity(await privateText(values["key-file"]));
     return { file, identity, inspection: await inspectArchive(file, identity) };
   }
-  if (command === "inspect" || command === "extract") {
-    const { file, identity, inspection } = await inspectInput();
-    if (command === "inspect") output(JSON.stringify(recoveryPreview(inspection), null, 2));
-    else {
-      const record = inspection.manifest.blobs.find(
-        (blob) => blob.kind === "attachment" && blob.path === values.attachment,
-      );
-      if (!record || !values.output)
-        throw Error("Choose --attachment VERSION_ID from inspect and --output NEW_ZIP_PATH");
-      await extractAttachment(file, identity, record, resolve(values.output));
-      output("Configuration ZIP extracted and verified.");
-    }
+  if (command === "inspect") {
+    const { inspection } = await inspectInput();
+    output(JSON.stringify(recoveryPreview(inspection), null, 2));
     return;
   }
   const config = typeof configuration === "function" ? configuration() : configuration;
@@ -294,27 +258,7 @@ export async function runBackupCommand(
       await waitForStop();
       return;
     }
-    // Local users live in the database, so a destination in the local folder
-    // is checked against them like a sign-in.
-    const users = createDb(config.databaseUrl, { max: 2 });
-    // A destination in the files folder is only written while the folder is
-    // this installation's, as for the API.
-    const guard = createDeploymentFilesFolderGuard(
-      config.fdriveStorageRoot,
-      createFilesFolderFacts(users.db),
-      {
-        info: (message) => console.log(message),
-        error: (message) => console.error(message),
-      },
-    );
-    const repos = createRepos(users.db);
-    const module = createBackupModule(
-      { ...config, fdriveBackupWorker: false },
-      {
-        storageId: await ensureStorageRow(repos),
-        folder: deploymentFilesFolder(config, repos, { guard }),
-      },
-    );
+    const module = createBackupModule({ ...config, fdriveBackupWorker: false });
     try {
       await module.start();
       if (!module.enabled) throw Error("FDRIVE_BACKUP_STATE_DIR is required");
@@ -322,7 +266,6 @@ export async function runBackupCommand(
       await waitForStop();
     } finally {
       await module.close();
-      await users.close();
     }
     return;
   }

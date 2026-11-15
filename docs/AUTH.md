@@ -26,8 +26,7 @@ On a successful login (`POST /api/v1/auth/login`, `apps/api/src/auth/service.ts`
   request on the session acts as that login; there is no header or parameter
   that selects another.
 
-The secrets fdrive does keep (backup destination keys and configuration ZIPs,
-AI provider keys) and share link cookies are sealed by an envelope scheme
+The secrets fdrive does keep (backup destination keys, AI provider keys) and share link cookies are sealed by an envelope scheme
 (`apps/api/src/auth/crypto.ts`); Office tokens are signed with a key derived
 from the same master key:
 

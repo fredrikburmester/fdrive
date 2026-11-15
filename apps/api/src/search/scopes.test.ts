@@ -29,7 +29,7 @@ describe("reservedExclusion", () => {
     fsPrefix: "/bob/Projects",
     virtualPrefix: "/Shared with me/Projects",
   };
-  const names = [".fdrive-move-v1", ".fdrive-backups"];
+  const names = [".fdrive-move-v1"];
 
   it("maps the Trash and the Mac app's folder through the home onto its root", () => {
     expect(reservedExclusion([home, mount], "/.trash", { files: 3 })).toEqual({

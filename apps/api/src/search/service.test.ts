@@ -132,7 +132,7 @@ function reserved(...trash: string[]) {
       ...trash.map((fsPrefix) => ({ rootId: 1, fsPrefix })),
       { rootId: 1, fsPrefix: "/alice/.fdrive-desktop" },
     ],
-    names: [".fdrive-move-v1", ".fdrive-backups"],
+    names: [".fdrive-move-v1"],
   };
 }
 

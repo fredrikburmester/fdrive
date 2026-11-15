@@ -50,7 +50,6 @@ export {
 export { IdentitySummary, LoginRequest, LoginResponse, MeResponse } from "./auth.ts";
 export { createBackupClient } from "./backup-client.ts";
 export {
-  BackupAttachmentInput,
   BackupDestinationInput,
   BackupEstimateJob,
   BackupRecoveryStatus,

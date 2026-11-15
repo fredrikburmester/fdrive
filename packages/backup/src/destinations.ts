@@ -13,7 +13,6 @@ import {
   S3Client,
 } from "@aws-sdk/client-s3";
 import { Upload } from "@aws-sdk/lib-storage";
-import { isStorageError, type StorageProvider } from "@fdrive/core";
 import { digest, fileStream, readBounded } from "./streams.js";
 import type { BackupDestination } from "./types.js";
 
@@ -138,43 +137,6 @@ export function s3Destination(config: {
           ...(versionId ? { VersionId: versionId } : {}),
         }),
       );
-    },
-  };
-}
-export function providerDestination(storage: StorageProvider, prefix: string): BackupDestination {
-  const path = (name: string) => `/${destinationKey(prefix, name)}`;
-  return {
-    async information(name) {
-      try {
-        await storage.statFile(path(name));
-        return {};
-      } catch (error) {
-        if (isStorageError(error) && error.kind === "not_found") return null;
-        throw error;
-      }
-    },
-    async put(name, file, signal) {
-      const bytes = (await stat(file)).size;
-      await storage.upload(
-        path(name),
-        Readable.toWeb(createReadStream(file)) as ReadableStream<Uint8Array>,
-        { overwrite: false, contentLength: bytes, ...(signal ? { signal } : {}) },
-      );
-      return {};
-    },
-    async get(name) {
-      return Readable.fromWeb(
-        (await storage.download(path(name)))
-          .body as import("node:stream/web").ReadableStream<Uint8Array>,
-      );
-    },
-    async list() {
-      return (await storage.list(`/${prefix.replace(/^\/+|\/+$/g, "")}`))
-        .filter((entry) => entry.kind === "file")
-        .map((entry) => entry.name);
-    },
-    async remove(name) {
-      await storage.deleteFile(path(name));
     },
   };
 }

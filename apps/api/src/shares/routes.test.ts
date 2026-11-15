@@ -89,10 +89,9 @@ describe("share management", () => {
     expect(h.read("/a.docx")).toBe("alice data");
   });
 
-  it("refuses the Trash and backup folders, missing paths, colliding names and a file to upload into", async () => {
+  it("refuses fdrive's own folders, missing paths, colliding names and a file to upload into", async () => {
     const h = sharesHarness({ trashPath: "/.trash" });
     h.write("/.trash/old.txt", "gone");
-    h.write("/.fdrive-backups/b", "backup");
     h.write("/.fdrive-desktop/mac/trash/old.txt", "the Mac's Trash");
     h.write("/one/report.txt", "one");
     h.write("/two/Report.txt", "two");
@@ -102,7 +101,6 @@ describe("share management", () => {
     for (const paths of [
       ["/.trash"],
       ["/.trash/old.txt"],
-      ["/.fdrive-backups/b"],
       ["/.fdrive-desktop/mac/trash/old.txt"],
       ["/a.docx", "/.trash"],
     ])
@@ -533,7 +531,6 @@ describe("public shares", () => {
     const h = sharesHarness({ trashPath: "/.trash" });
     h.write("/folder/a.txt", "content");
     h.write("/.trash/old.txt", "gone");
-    h.write("/.fdrive-backups/b", "backup");
     h.write("/.fdrive-desktop/mac/trash/old.txt", "the Mac's Trash");
     const cookie = await h.login();
     const { id } = await h.create(cookie, { paths: ["/"] });
@@ -546,12 +543,7 @@ describe("public shares", () => {
     ]);
     expect(await names(await h.request(`${path}/entries?path=/folder`))).toEqual(["a.txt"]);
     expect(await (await h.request(`${path}/download?path=/folder/a.txt`)).text()).toBe("content");
-    for (const hidden of [
-      "/.trash/old.txt",
-      "/.fdrive-backups/b",
-      "/.fdrive-desktop/mac/trash/old.txt",
-      "/nope",
-    ])
+    for (const hidden of ["/.trash/old.txt", "/.fdrive-desktop/mac/trash/old.txt", "/nope"])
       expect((await h.request(`${path}/download?path=${hidden}`)).status, hidden).toBe(404);
     expect((await h.request(`${path}/entries?path=/.trash`)).status).toBe(404);
     // A link that followed its item into the Trash is not found until it comes back out.

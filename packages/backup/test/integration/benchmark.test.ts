@@ -18,15 +18,15 @@ import {
   captureSnapshot,
   localBlobs,
   restoreArchive,
-  withBackupWriter,
+  withDatabaseWriter,
 } from "../../src/index.js";
-import { secrets } from "../helpers.js";
 
 /**
  * Publishes measured capture/restore costs for the operator documentation. Numbers are local
  * observations on the test host, so the assertions guard the fixture shapes and the checkpoint
- * contract (docs/BACKUPS.md), never a duration: a writer waits for the capture to publish its
- * archive, and gives up with lock_not_available only after waiting its full 30 seconds.
+ * contract (docs/BACKUPS.md), never a duration: a request waits only while the capture takes its
+ * database snapshot, so requests run while it reads; a recovery file writer waits for the
+ * capture to publish its archive.
  */
 const MiB = 1024 * 1024;
 let container: Awaited<ReturnType<typeof startPostgres>>;
@@ -59,35 +59,60 @@ async function measure<T>(work: () => Promise<T>) {
     clearInterval(sampler);
   }
 }
-async function gateHeld(pool: Pool) {
+async function gateHeld(pool: Pool, gate: number) {
   // A single bigint advisory key shows in pg_locks as classid = high 32 bits, objid = low 32 bits.
   const { rows } = await pool.query<{ held: boolean }>(
     `select exists (select 1 from pg_locks where locktype = 'advisory' and granted
        and mode = 'ExclusiveLock' and classid = ($1::bigint >> 32)::oid
        and objid = ($1::bigint & 4294967295)::oid and objsubid = 1
        and database = (select oid from pg_database where datname = current_database())) as held`,
-    [BACKUP_GATE],
+    [gate],
   );
   return rows[0]?.held ?? false;
 }
-/**
- * A cooperating writer that asks for the shared checkpoint lock as soon as the capture holds it
- * exclusively, so its wait is the pause every fdrive-owned recovery writer experiences.
- */
-async function probeWriter(pool: Pool, capture: Promise<unknown>, output: string) {
-  let settled = false;
+function settled(capture: Promise<unknown>) {
+  const state = { settled: false };
   const settle = () => {
-    settled = true;
+    state.settled = true;
   };
   capture.then(settle, settle);
-  while (!settled && !(await gateHeld(pool))) await sleep(5);
-  const started = performance.now();
+  return state;
+}
+/**
+ * Mutating requests, one after another for as long as the capture runs. The longest wait is the
+ * pause a request sees; `whileReading` counts the requests that started while the capture held
+ * the recovery files gate and finished before it published.
+ */
+async function requests(pool: Pool, capture: Promise<unknown>, output: string) {
+  const state = settled(capture);
+  let pauseMs = 0;
+  let whileReading = 0;
+  while (!state.settled) {
+    const reading = await gateHeld(pool, BACKUP_GATE);
+    const started = performance.now();
+    const published = await withDatabaseWriter(pool, async () => existsSync(output));
+    pauseMs = Math.max(pauseMs, Math.round(performance.now() - started));
+    if (reading && !published) whileReading++;
+    await sleep(5);
+  }
+  return { pauseMs, whileReading };
+}
+/**
+ * A recovery file writer, as OCR is, asking for the shared recovery files gate as soon as the
+ * capture holds it: its wait is the pause OCR's rewrites see.
+ */
+async function recoveryWriter(pool: Pool, capture: Promise<unknown>, output: string) {
+  const state = settled(capture);
+  while (!state.settled && !(await gateHeld(pool, BACKUP_GATE))) await sleep(5);
+  const client = await pool.connect();
   try {
-    const published = await withBackupWriter(pool, async () => existsSync(output));
-    return { pauseMs: Math.round(performance.now() - started), gaveUp: false, published };
-  } catch (error) {
-    if ((error as { code?: unknown }).code !== "55P03") throw error;
-    return { pauseMs: Math.round(performance.now() - started), gaveUp: true, published: false };
+    const started = performance.now();
+    await client.query("select pg_advisory_lock_shared($1)", [BACKUP_GATE]);
+    const pauseMs = Math.round(performance.now() - started);
+    await client.query("select pg_advisory_unlock_shared($1)", [BACKUP_GATE]);
+    return { pauseMs, published: existsSync(output) };
+  } finally {
+    client.release();
   }
 }
 beforeAll(async () => {
@@ -104,7 +129,7 @@ afterAll(async () => {
   if (directory) await rm(directory, { recursive: true, force: true });
 }, 180_000);
 
-it("measures capture, writer pause, spool bytes and fresh restore for small and large fixtures", async () => {
+it("measures capture, request and recovery writer pauses, spool bytes and fresh restore for small and large fixtures", async () => {
   const report: Record<string, Record<string, number>> = {};
   for (const size of ["small", "large"] as const) {
     const db = await fresh();
@@ -145,15 +170,14 @@ it("measures capture, writer pause, spool bytes and fresh restore for small and 
         { id: randomUUID(), installationId: config.installation_id, recipient, output },
       ),
     );
-    const [capture, writer] = await Promise.all([
+    const [capture, request, writer] = await Promise.all([
       capturing,
-      probeWriter(db.pool, capturing, output),
+      requests(db.pool, capturing, output),
+      recoveryWriter(db.pool, capturing, output),
     ]);
-    if (writer.gaveUp) {
-      // withBackupWriter's lock_timeout: the capture outlasted the writer's whole 30 s wait.
-      expect(writer.pauseMs).toBeGreaterThanOrEqual(30_000);
-      expect(capture.ms).toBeGreaterThanOrEqual(writer.pauseMs);
-    } else expect(writer.published).toBe(true);
+    expect(writer.published).toBe(true);
+    // Reading 64 MiB takes long enough for requests to run while it does.
+    if (size === "large") expect(request.whileReading).toBeGreaterThan(0);
     const archiveBytes = (await stat(output)).size;
     const target = await fresh();
     const stage = join(directory, `${size}-restore`);
@@ -164,7 +188,6 @@ it("measures capture, writer pause, spool bytes and fresh restore for small and 
         file: output,
         identity,
         stateDirectory: stage,
-        secrets,
         reseal: (bytes) => bytes,
       }),
     );
@@ -174,8 +197,9 @@ it("measures capture, writer pause, spool bytes and fresh restore for small and 
       recoveryBytes,
       encryptedSpoolBytes: archiveBytes,
       captureMs: capture.ms,
-      captureAndWriterPauseMs: writer.pauseMs,
-      writerGaveUp: writer.gaveUp ? 1 : 0,
+      requestPauseMs: request.pauseMs,
+      requestsWhileReading: request.whileReading,
+      recoveryWriterPauseMs: writer.pauseMs,
       capturePeakRssMiB: Math.round(capture.peakRssBytes / MiB),
       freshRestoreMs: restore.ms,
       restorePeakRssMiB: Math.round(restore.peakRssBytes / MiB),

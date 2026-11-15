@@ -130,7 +130,6 @@ describe("createLocalGrantService: sharing a folder", () => {
     ["a folder in Trash", "/.trash/old", "bad_request", RESERVED],
     ["the Mac app's folder", "/.fdrive-desktop/staging", "bad_request", RESERVED],
     ["fdrive's Trash layout", "/old/.fdrive-move-v1/dir", "bad_request", RESERVED],
-    ["a backup folder", "/nas/.fdrive-backups", "bad_request", RESERVED],
     ["a file", "/notes.txt", "bad_request", "only folders can be shared"],
     ["a folder that does not exist", "/Missing", "not_found", "folder not found"],
   ])("refuses to share %s", async (_name, path, kind, message) => {

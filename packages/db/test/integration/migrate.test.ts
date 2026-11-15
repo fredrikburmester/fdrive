@@ -405,4 +405,44 @@ describe("migrate", () => {
       expect(credentials.rows).toEqual([{ table: null }]);
     });
   });
+
+  it("keeps only bucket destinations and drops configuration ZIPs", async () => {
+    await withDatabaseBefore("0035_backups_s3_only", async (older) => {
+      const files = "00000000-0000-4000-8000-000000000011";
+      const bucket = "00000000-0000-4000-8000-000000000012";
+      const run = "00000000-0000-4000-8000-000000000013";
+      await older.execute(sql`
+        insert into app.backup_destinations (id, revision, name, type, config, secret) values
+          (${files}, gen_random_uuid(), 'Files', 'provider', '{}', '\\x01'),
+          (${bucket}, gen_random_uuid(), 'Bucket', 's3', '{}', '\\x01')`);
+      await older.execute(sql`
+        insert into app.backup_runs (id, request, recipient) values (${run}, '{}', 'age1')`);
+      await older.execute(sql`
+        insert into app.backup_deliveries (run_id, destination_id, destination_revision, name)
+          values (${run}, ${files}, gen_random_uuid(), 'Files'),
+            (${run}, ${bucket}, gen_random_uuid(), 'Bucket')`);
+      await older.execute(sql`
+        insert into app.backup_attachments (version_id, label, filename, bytes, sha256, secret)
+          values (gen_random_uuid(), 'Config', 'config.zip', '1', 'x', '\\x01')`);
+      await older.execute(sql`
+        insert into app.settings (key, value) values
+          (${`backup.inventory.${run}`}, '{"attachmentVersions":[]}'),
+          ('backup.worker.v1', '{}')`);
+
+      await migrate(older);
+
+      const destinations = await older.execute(sql`select id from app.backup_destinations`);
+      expect(destinations.rows).toEqual([{ id: bucket }]);
+      const deliveries = await older.execute(sql`select destination_id from app.backup_deliveries`);
+      expect(deliveries.rows).toEqual([{ destination_id: bucket }]);
+      const runs = await older.execute(sql`select id from app.backup_runs`);
+      expect(runs.rows).toEqual([{ id: run }]);
+      const settings = await older.execute(sql`select key from app.settings order by key`);
+      expect(settings.rows).toEqual([{ key: "backup.worker.v1" }]);
+      const attachments = await older.execute<{ table: string | null }>(
+        sql`select to_regclass('app.backup_attachments')::text as table`,
+      );
+      expect(attachments.rows).toEqual([{ table: null }]);
+    });
+  });
 });
