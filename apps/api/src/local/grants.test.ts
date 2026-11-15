@@ -270,6 +270,42 @@ describe("createLocalGrantService: changing and ending shares", () => {
     });
   });
 
+  it("finds an owner's path back in each login's files", async () => {
+    const h = await fixture();
+    await h.service.create(h.alice.id, { path: "/Projects", username: "bob", access: "write" });
+    await h.service.create(h.alice.id, { path: "/Photos", username: "bob", access: "read" });
+    await h.service.create(h.alice.id, { path: "/Photos/2026", username: "bob", access: "write" });
+    await h.service.create(h.carol.id, { path: "/Projects", username: "bob", access: "read" });
+    const alices = (path: string) => ({ identityId: h.alice.id, path });
+    expect(await h.service.pathFor(h.alice.id, alices("/Projects/plan.txt"))).toBe(
+      "/Projects/plan.txt",
+    );
+    expect(await h.service.pathFor(h.bob.id, alices("/Projects/a/b.txt"))).toBe(
+      "/Shared with me/Projects (alice)/a/b.txt",
+    );
+    expect(
+      await h.service.pathFor(h.bob.id, { identityId: h.carol.id, path: "/Projects/c.txt" }),
+    ).toBe("/Shared with me/Projects (carol)/c.txt");
+    // The most specific of two folders shared one inside the other.
+    expect(await h.service.pathFor(h.bob.id, alices("/Photos/2026/beach.jpg"))).toBe(
+      "/Shared with me/2026/beach.jpg",
+    );
+    // Not shared with the login, or a login that is gone: unreachable.
+    expect(await h.service.pathFor(h.bob.id, alices("/notes.txt"))).toBeNull();
+    expect(await h.service.pathFor(h.carol.id, alices("/Projects/plan.txt"))).toBeNull();
+    expect(await h.service.pathFor(randomUUID(), alices("/Projects/plan.txt"))).toBeNull();
+    expect(await h.service.pathFor(h.bob.id, { identityId: randomUUID(), path: "/x" })).toBeNull();
+    // Bob's own folder named like a folder shared with him is hidden behind it.
+    const bobs = (path: string) => ({ identityId: h.bob.id, path });
+    expect(await h.service.pathFor(h.bob.id, bobs("/Shared with me/2026/own.txt"))).toBeNull();
+    expect(await h.service.pathFor(h.bob.id, bobs("/Shared with me/Other/own.txt"))).toBe(
+      "/Shared with me/Other/own.txt",
+    );
+    // Every path found round-trips through `ownerPath`.
+    const shared = "/Shared with me/Projects (alice)/a/b.txt";
+    expect(await h.service.ownerPath(h.bob.id, shared)).toEqual(alices("/Projects/a/b.txt"));
+  });
+
   it("keeps a share that followed its folder into Trash from the person it is shared with", async () => {
     const closedFolders = vi.fn(async (): Promise<readonly string[]> => ["/.trash"]);
     const h = await fixture({ closedFolders });

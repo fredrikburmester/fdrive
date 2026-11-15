@@ -12,13 +12,17 @@ import {
   type OfficeWriteContext,
   type OfficeWriteScope,
 } from "../../src/index.js";
-import { officeFiles, providers, wopiLocks } from "../../src/schema/app.js";
+import { accounts, identities, officeFiles, providers, wopiLocks } from "../../src/schema/app.js";
 
-const providerId = "00000000-0000-0000-0000-000000000001";
-const otherProviderId = "00000000-0000-0000-0000-000000000002";
+const owner = "00000000-0000-0000-0000-000000000001";
+const otherOwner = "00000000-0000-0000-0000-000000000002";
 const at = new Date("2026-09-06T12:00:00Z");
-const location = { providerId, rootName: "root", path: "folder/file.docx" };
-const move = { providerId, rootName: "root", from: "folder", to: "moved", at };
+const location = { identityId: owner, path: "/folder/file.docx" };
+const move = {
+  from: { identityId: owner, path: "/folder" },
+  to: { identityId: owner, path: "/moved" },
+  at,
+};
 const request = { fileId: "file", operation: "lock", lockId: "lock", now: at } as const;
 let container: StartedPostgreSqlContainer | undefined;
 let first: CreateDbResult;
@@ -41,10 +45,21 @@ beforeAll(async () => {
   second = createDb(url.toString(), { max: 2 });
   observer = createDb(url.toString(), { max: 1 });
   await migrate(first.db);
-  await first.db.insert(providers).values([
-    { id: providerId, type: "local", baseUrl: "http://one" },
-    { id: otherProviderId, type: "local", baseUrl: "http://two" },
-  ]);
+  const [provider] = await first.db
+    .insert(providers)
+    .values({ type: "local", baseUrl: "local" })
+    .returning();
+  if (!provider) throw new Error("Missing provider");
+  for (const [id, username] of [
+    [owner, "alice"],
+    [otherOwner, "bob"],
+  ] as const) {
+    const [account] = await first.db.insert(accounts).values({ displayName: username }).returning();
+    if (!account) throw new Error("Missing account");
+    await first.db
+      .insert(identities)
+      .values({ id, accountId: account.id, providerId: provider.id, externalUsername: username });
+  }
   write = createOfficeWriteScope(first.db);
   writeOther = createOfficeWriteScope(second.db);
 });
@@ -93,7 +108,7 @@ describe("office write transaction scope", () => {
           expect(await locked.get(at)).toBeNull();
           expect(await locked.apply(request)).toEqual({ ok: true });
           await scope.files.movePrefix(move);
-          expect((await scope.files.get(file.id))?.path).toBe("moved/file.docx");
+          expect((await scope.files.get(file.id))?.path).toBe("/moved/file.docx");
           order.push("first leaves");
           return file.id;
         });
@@ -103,9 +118,9 @@ describe("office write transaction scope", () => {
     const secondWrite = write((scope) =>
       scope.locks.withFileLock("file", async (locked) => {
         order.push("second enters");
-        expect((await scope.files.get(fileId))?.path).toBe("moved/file.docx");
+        expect((await scope.files.get(fileId))?.path).toBe("/moved/file.docx");
         expect(await locked.get(at)).toBe("lock");
-        const same = await scope.files.ensure({ ...location, path: "moved/file.docx" });
+        const same = await scope.files.ensure({ ...location, path: "/moved/file.docx" });
         return same.id;
       }),
     );
@@ -151,12 +166,12 @@ describe("office write transaction scope", () => {
   it("rolls back registry replacements and lock rows together on callback failure", async () => {
     const files = createOfficeFileRepo(first.db);
     const original = await files.ensure(location);
-    const replaced = await files.ensure({ ...location, path: "moved/file.docx" });
+    const replaced = await files.ensure({ ...location, path: "/moved/file.docx" });
     await expect(
       write(async (scope) => {
         await scope.locks.withFileLock("file", async (locked) => {
           await locked.apply(request);
-          await scope.files.ensure({ ...location, path: "new.docx" });
+          await scope.files.ensure({ ...location, path: "/new.docx" });
           await scope.files.movePrefix(move);
           throw new Error("storage failed");
         });
@@ -198,7 +213,7 @@ describe("office write transaction scope", () => {
       await expect(
         writeOther((scope) =>
           scope.locks.withFileLock("other", async () => {
-            await scope.files.ensure({ ...location, providerId: otherProviderId });
+            await scope.files.ensure({ ...location, identityId: otherOwner });
             return "independent";
           }),
         ),
@@ -237,7 +252,7 @@ describe("office write transaction scope", () => {
     await write(async (scope) => {
       const file = await scope.files.ensure(location);
       expect(await scope.files.ensure(location)).toEqual(file);
-      await scope.files.movePrefix({ ...move, to: "folder" });
+      await scope.files.movePrefix({ ...move, to: move.from });
       await scope.files.deletePrefix({ ...location, at });
       expect(await scope.files.get(file.id)).toBeNull();
       expect(await scope.locks.apply(request)).toEqual({ ok: true });
@@ -270,7 +285,7 @@ describe("office write transaction scope", () => {
 
 async function assertExpired(scope: OfficeWriteContext, bound: BoundWopiLockRepo): Promise<void> {
   await expect(scope.files.ensure(location)).rejects.toThrow("scope has ended");
-  await expect(scope.files.get(providerId)).rejects.toThrow("scope has ended");
+  await expect(scope.files.get(owner)).rejects.toThrow("scope has ended");
   await expect(scope.files.movePrefix(move)).rejects.toThrow("scope has ended");
   await expect(scope.files.movePrefix({ ...move, to: move.from })).rejects.toThrow(
     "scope has ended",

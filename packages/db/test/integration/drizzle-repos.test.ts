@@ -2,7 +2,7 @@ import { PostgreSqlContainer, type StartedPostgreSqlContainer } from "@testconta
 import { and, eq, sql } from "drizzle-orm";
 import type { Pool, PoolClient } from "pg";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { createDb, createOfficeFileRepo, type Db, migrate } from "../../src/index.js";
+import { createDb, type Db, migrate } from "../../src/index.js";
 import { createFilesFolderFacts, createRepos } from "../../src/repos/drizzle.js";
 import { PATH_CHUNK_SIZE } from "../../src/repos/path-chunks.js";
 import {
@@ -505,24 +505,6 @@ describe("metadata prefix operations", () => {
       await db.execute(sql`drop function if exists "app"."test_fail_metadata_path"()`);
     }
   });
-});
-
-// Office file rows go with their provider: a provider with no logins but
-// past Office documents must still be removable (the FK cascades).
-it("cascades office_files when their provider is deleted", async () => {
-  await db.execute(sql`truncate table app.office_files, app.providers cascade`);
-  const repos = createRepos(db);
-  const officeFiles = createOfficeFileRepo(db);
-  const provider = await repos.providers.ensure({ type: "local", baseUrl: "http://office" });
-  const file = await officeFiles.ensure({
-    providerId: provider.id,
-    rootName: "files",
-    path: "alice/report.docx",
-  });
-  expect(await officeFiles.get(file.id)).not.toBeNull();
-  await repos.providers.delete(provider.id);
-  expect(await repos.providers.get(provider.id)).toBeNull();
-  expect(await officeFiles.get(file.id)).toBeNull();
 });
 
 // A directory listing is unbounded, and `decorate` binds one parameter per

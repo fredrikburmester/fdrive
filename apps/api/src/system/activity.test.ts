@@ -50,13 +50,10 @@ const office: SystemOfficeResponse = {
     revision: 0,
     enabled: false,
     editingEnabled: false,
-    editingProviderId: null,
     editorUsernames: [],
   },
   product: "onlyoffice",
   status: "off",
-  activeProviderId: null,
-  activeProviderLabel: null,
 };
 const snapshot = (operations: ActivityOperation[] = [operation]) => ({
   instanceId: "worker",

@@ -88,16 +88,15 @@ import { createMetadataService, withFollowers } from "./metadata/service.js";
 import { withTrashMoves } from "./metadata/trash-moves.js";
 import { extractClientIp } from "./net.js";
 import { configuredOfficeProduct, officeConfig } from "./office/config.ts";
-import { allowsOfficeEdit } from "./office/edit-policy.ts";
+import { createOfficeEditPolicy } from "./office/edit-policy.ts";
+import { createOfficeMoves } from "./office/moves.ts";
 import { createDiscoveryCache } from "./office/protocol/discovery-cache.ts";
-import { applyOfficeRootEvent, withOfficeMetadata } from "./office/registry-events.ts";
 import { registerOfficeRoutes, registerWopiRoutes } from "./office/routes.ts";
 import { createOfficeService } from "./office/service.ts";
 import { createOfficeSettingsService, probeOnlyOfficeRuntime } from "./office/settings.ts";
 import { registerOfficeSettingsRoutes } from "./office/settings-routes.ts";
 import { createOfficeStorageFactory } from "./office/storage.ts";
 import { createOfficeTokenCodec } from "./office/tokens.ts";
-import type { OfficeDeps } from "./office/types.ts";
 import { createScopeResolver } from "./scoping/resolver.ts";
 import { createEmbedClient } from "./search/embeddings.js";
 import { createImageEmbedClient } from "./search/image-embed-client.js";
@@ -137,11 +136,6 @@ import { createTrashSettingsService } from "./trash/settings.js";
 import { registerTrashSettingsRoutes } from "./trash/settings-routes.js";
 import { readBuild } from "./version.js";
 
-export interface ComposeAppDeps {
-  /** Explicit server-side admission override for isolated integration fixtures. */
-  readonly officeCanEdit?: OfficeDeps["canEdit"];
-}
-
 export interface ComposedApp {
   readonly app: AppHono;
   close(): Promise<void>;
@@ -162,7 +156,6 @@ export async function composeApp(
   config: AppConfig,
   logger: Logger,
   clock: () => Date = () => new Date(),
-  deps: ComposeAppDeps = {},
 ): Promise<ComposedApp> {
   // A misconfigured fdrive must say what is missing, by variable name, at
   // startup: see docs/INDEXER.md. One line per
@@ -390,7 +383,7 @@ export async function composeApp(
     clock,
   });
 
-  const officeStorage = createOfficeStorageFactory({ storageId, storage: storageWithoutTrash });
+  const officeStorage = createOfficeStorageFactory(storageWithoutTrash);
 
   // Public links follow the items they name wherever they go, into Trash too.
   const shareMoves = createShareMoves({
@@ -406,6 +399,11 @@ export async function composeApp(
   // first, in an outer layer, so a failure in tags or favorites never leaves
   // it at a path a new item could take.
   const accessFollowers = [localGrants, shareMoves];
+  // Office documents keep their ids wherever their files go, into the Trash
+  // and back out too.
+  const officeFiles = createOfficeFileRepo(db);
+  const officeMoves = createOfficeMoves({ files: officeFiles, grants: localGrants, clock });
+  const followers = [...accessFollowers, officeMoves];
   /** A login's Trash folder while Trash is on; none for a login removed since. */
   const trashPathOf = async (identityId: string): Promise<string | null> => {
     try {
@@ -416,7 +414,7 @@ export async function composeApp(
     }
   };
   // A move into the Trash, whoever reports it, leaves metadata where the item was.
-  const metadataService = withFollowers(withTrashMoves(metadataCore, trashPathOf), accessFollowers);
+  const metadataService = withFollowers(withTrashMoves(metadataCore, trashPathOf), followers);
   const desktopRepo = createDesktopRepo(db);
   const desktopRetention = createDesktopRetention({
     repo: desktopRepo,
@@ -426,24 +424,15 @@ export async function composeApp(
     clock,
     eventLog,
   });
-  const officeFiles = createOfficeFileRepo(db);
-  const withOffice = (metadata: typeof metadataCore) =>
-    withOfficeMetadata(
-      metadata,
-      officeFiles,
-      repos.identities,
-      scopeResolver.configuredMappings,
-      clock,
-    );
   const fsMetadata = withFollowers(
-    withTrashMoves(withOffice(withDesktopMetadata(metadataCore, desktopRepo)), trashPathOf),
-    accessFollowers,
+    withTrashMoves(withDesktopMetadata(metadataCore, desktopRepo), trashPathOf),
+    followers,
   );
   // A Mac write moves what grants access with its receipt (`desktop/writes.ts`)
   // and the rest after it. It keeps its own item handles, so this skips the
   // handle registry, whose `onTrashed` would retire the handle of an item the
   // Mac puts in its own Trash.
-  const desktopMetadata = withTrashMoves(withOffice(metadataCore), trashPathOf);
+  const desktopMetadata = withFollowers(withTrashMoves(metadataCore, trashPathOf), [officeMoves]);
   const desktopAccess = async (
     identityId: string,
     from: string,
@@ -489,6 +478,7 @@ export async function composeApp(
     eventLog,
     product: officeProduct,
     publicUrl: () => publicUrl.current(),
+    usernames: async () => (await repos.localUsers.list()).map((user) => user.username),
     probeStatus: async (configuration) => {
       const runtime = await officeRuntimeFor(configuration);
       if (runtime === null) return "unavailable";
@@ -504,14 +494,6 @@ export async function composeApp(
     },
   });
   const resolveOfficeRuntime = async () => officeRuntimeFor(await officeSettings.configuration());
-  const officeLocation: OfficeDeps["location"] = async (identity) => {
-    const configured = await scopeResolver.configuredMappings(identity);
-    return configured.available
-      ? { providerId: configured.providerId, scopes: configured.scopes }
-      : null;
-  };
-  /** The files folder's row and name, which editor grants bind to. */
-  const currentOfficeProvider = async () => ({ id: storageId, label: await storage.name() });
   // Office's document locks on a pool of their own: a save holds its document's
   // lock, and a connection, while its body arrives, and checks admission and
   // records history on the main pool meanwhile. Nothing on the main pool waits
@@ -522,21 +504,10 @@ export async function composeApp(
     onError: (error) => logger.warn({ err: error }, "idle office lock connection error"),
   });
   const officeService = createOfficeService({
-    canEdit: async (actor, path) => {
-      const settings = await officeSettings.configuration();
-      if (!settings.enabled || !settings.editingEnabled) return false;
-      if (
-        settings.editingProviderId !== actor.identity.providerId ||
-        !settings.editorUsernames.includes(actor.identity.externalUsername)
-      )
-        return false;
-      if (deps.officeCanEdit !== undefined && !(await deps.officeCanEdit(actor, path)))
-        return false;
-      // A folder shared to view only opens for viewing, never for an edit that cannot save.
-      if (await localGrants.isReadOnly(actor.identity, path)) return false;
-      const rules = config.fdriveOfficeEditRules ?? [];
-      return rules.length === 0 || allowsOfficeEdit(rules, actor.identity, path);
-    },
+    canEdit: createOfficeEditPolicy({
+      settings: () => officeSettings.configuration(),
+      grants: localGrants,
+    }),
     config: null,
     discovery: null,
     resolveRuntime: resolveOfficeRuntime,
@@ -546,7 +517,7 @@ export async function composeApp(
     locks: createWopiLockRepo(officeLocks.db),
     withWriteScope: createOfficeWriteScope(officeLocks.db),
     clock,
-    location: officeLocation,
+    grants: localGrants,
     storageFactory: officeStorage,
     metadata: metadataService,
     bus,
@@ -575,8 +546,6 @@ export async function composeApp(
           fileTags: repos.fileTags,
           favorites: repos.favorites,
           metadata: metadataService,
-          onStorageEvent: (event) =>
-            applyOfficeRootEvent(officeFiles, { id: storageId, rootName }, event),
           onActivityEvent: activityObservations.watcher,
           activityTracks: activityObservations.tracks,
           onActivityRelink: activityObservations.relink,
@@ -983,7 +952,6 @@ export async function composeApp(
       registerOfficeSettingsRoutes(groups, {
         service: officeSettings,
         workerToken: config.fdriveWorkerToken,
-        activeProvider: currentOfficeProvider,
       });
       registerOfficeRoutes(groups, { service: officeService });
       registerMetadataRoutes(groups, {
@@ -1036,7 +1004,7 @@ export async function composeApp(
         ocrUrl: config.fdriveOcrUrl,
         fetch: fetchImpl,
         features: () => featureService.status(),
-        office: () => officeSettings.status(null),
+        office: () => officeSettings.status(),
       });
       registerProcessingFailureRoutes(groups, {
         read: createProcessingFailureReader(db),

@@ -407,7 +407,7 @@ describe("migrate", () => {
   });
 
   it("keeps only bucket destinations and drops configuration ZIPs", async () => {
-    await withDatabaseBefore("0035_backups_s3_only", async (older) => {
+    await withDatabaseBefore("0036_backups_s3_only", async (older) => {
       const files = "00000000-0000-4000-8000-000000000011";
       const bucket = "00000000-0000-4000-8000-000000000012";
       const run = "00000000-0000-4000-8000-000000000013";

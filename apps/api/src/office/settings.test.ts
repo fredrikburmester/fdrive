@@ -3,9 +3,6 @@ import type { SettingsRepo } from "@fdrive/db";
 import { describe, expect, it, vi } from "vitest";
 import { createOfficeSettingsService, probeOnlyOfficeRuntime } from "./settings.js";
 
-const PROVIDER_A = "123e4567-e89b-42d3-a456-426614174000";
-const PROVIDER_B = "223e4567-e89b-42d3-a456-426614174000";
-
 function harness(
   options: {
     product?: "onlyoffice" | "collabora";
@@ -37,6 +34,7 @@ function harness(
     publicUrl: async () =>
       options.publicUrl === undefined ? "https://drive.example" : options.publicUrl,
     probeStatus,
+    usernames: async () => ["alice", "bob"],
     eventLog: {
       record: (subsystem, level, message, data) => {
         recorded.push({ subsystem, level, message, data });
@@ -64,7 +62,6 @@ describe("Office settings service", () => {
       revision: 0,
       enabled: false,
       editingEnabled: false,
-      editingProviderId: null,
       editorUsernames: [],
     });
     expect(await service.runtimeConfiguration()).toEqual({
@@ -72,20 +69,17 @@ describe("Office settings service", () => {
       revision: 0,
       enabled: false,
     });
-    expect(await service.status({ id: PROVIDER_A, label: "A" })).toMatchObject({
+    expect(await service.status()).toMatchObject({
       configuration: initial,
       product: "onlyoffice",
       status: "off",
-      activeProviderId: PROVIDER_A,
-      activeProviderLabel: "A",
     });
     expect(probeStatus).not.toHaveBeenCalled();
 
-    const updated = await service.update(PROVIDER_A, {
+    const updated = await service.update({
       ...initial,
       enabled: true,
       editingEnabled: true,
-      editingProviderId: PROVIDER_A,
       editorUsernames: ["alice"],
     });
     expect(updated).toMatchObject({ revision: 1, enabled: true });
@@ -94,69 +88,66 @@ describe("Office settings service", () => {
       revision: 1,
       enabled: true,
     });
-    expect(await service.status({ id: PROVIDER_A, label: "A" })).toMatchObject({ status: "ready" });
+    expect(await service.status()).toMatchObject({ status: "ready" });
   });
 
-  it("binds editing to the active provider and protects revisions", async () => {
+  it("takes editors only from fdrive's users and protects revisions", async () => {
     const { service } = harness();
     const initial = await service.configuration();
     await expect(
-      service.update(PROVIDER_B, {
+      service.update({
         ...initial,
         enabled: true,
         editingEnabled: true,
-        editingProviderId: PROVIDER_A,
-        editorUsernames: ["alice"],
+        editorUsernames: ["alice", "mallory"],
       }),
-    ).rejects.toMatchObject({ kind: "conflict" });
-    const enabled = await service.update(PROVIDER_A, {
+    ).rejects.toMatchObject({ kind: "bad_request", details: { unknown: ["mallory"] } });
+    const enabled = await service.update({
       ...initial,
       enabled: true,
       editingEnabled: true,
-      editingProviderId: PROVIDER_A,
       editorUsernames: ["alice"],
     });
-    await expect(service.update(PROVIDER_B, { ...enabled, enabled: false })).resolves.toMatchObject(
-      { enabled: false, revision: 2 },
-    );
-    await expect(
-      service.update(PROVIDER_A, { ...initial, editorUsernames: [] }),
-    ).rejects.toMatchObject({ kind: "conflict" });
+    await expect(service.update({ ...enabled, enabled: false })).resolves.toMatchObject({
+      enabled: false,
+      revision: 2,
+    });
+    await expect(service.update({ ...initial, editorUsernames: [] })).rejects.toMatchObject({
+      kind: "conflict",
+    });
   });
 
   it("refuses to enable Office until the server address is set", async () => {
     const { service } = harness({ publicUrl: null });
     const initial = await service.configuration();
-    await expect(service.update(PROVIDER_A, { ...initial, enabled: true })).rejects.toMatchObject({
+    await expect(service.update({ ...initial, enabled: true })).rejects.toMatchObject({
       kind: "bad_request",
     });
-    await expect(service.update(PROVIDER_A, initial)).resolves.toMatchObject({ revision: 1 });
+    await expect(service.update(initial)).resolves.toMatchObject({ revision: 1 });
   });
 
   it("does not activate the bundled controller for Collabora", async () => {
     const { service } = harness({ product: "collabora", status: "unavailable" });
     const initial = await service.configuration();
-    await service.update(PROVIDER_A, {
+    await service.update({
       ...initial,
       enabled: true,
     });
     expect(await service.runtimeConfiguration()).toMatchObject({ revision: 1, enabled: false });
-    expect(await service.status(null)).toMatchObject({
+    expect(await service.status()).toMatchObject({
       product: "collabora",
       status: "unavailable",
-      activeProviderId: null,
-      activeProviderLabel: null,
     });
   });
 
   it("reports an enabled runtime that has not reached its revision as starting", async () => {
     const { service } = harness({ status: "starting" });
     const initial = await service.configuration();
-    await service.update(PROVIDER_A, {
+    await service.update({
       ...initial,
       enabled: true,
     });
-    expect(await service.status({ id: PROVIDER_A, label: "A" })).toMatchObject({
+    expect(await service.status()).toMatchObject({
       status: "starting",
     });
   });
@@ -169,17 +160,17 @@ describe("Office settings service", () => {
     const racing = harness();
     const initial = await racing.service.configuration();
     racing.rejectCas();
-    await expect(racing.service.update(PROVIDER_A, initial)).rejects.toMatchObject({
+    await expect(racing.service.update(initial)).rejects.toMatchObject({
       kind: "conflict",
     });
 
     const failing = harness({ failProbe: true });
     const disabled = await failing.service.configuration();
-    await failing.service.update(PROVIDER_A, {
+    await failing.service.update({
       ...disabled,
       enabled: true,
     });
-    expect(await failing.service.status({ id: PROVIDER_A, label: "A" })).toMatchObject({
+    expect(await failing.service.status()).toMatchObject({
       status: "unavailable",
     });
   });
@@ -205,11 +196,10 @@ describe("Office settings event log", () => {
   it("records an entry only once the write actually lands", async () => {
     const { service, recorded, rejectCas } = harness();
 
-    await service.update(PROVIDER_A, {
+    await service.update({
       revision: 0,
       enabled: true,
       editingEnabled: true,
-      editingProviderId: PROVIDER_A,
       editorUsernames: ["alice"],
     });
 
@@ -224,11 +214,10 @@ describe("Office settings event log", () => {
 
     rejectCas();
     await expect(
-      service.update(PROVIDER_A, {
+      service.update({
         revision: 1,
         enabled: false,
         editingEnabled: false,
-        editingProviderId: null,
         editorUsernames: [],
       }),
     ).rejects.toThrow();

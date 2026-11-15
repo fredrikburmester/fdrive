@@ -115,7 +115,6 @@ export interface IndexerListenerDeps {
     path: string,
     candidate: string,
   ) => Promise<void>;
-  readonly onStorageEvent?: (event: IndexerEventPayload) => Promise<void>;
   readonly createClient: () => NotificationClient;
   readonly identities: IdentityRepo;
   readonly indexQueries: IndexQueries;
@@ -126,7 +125,7 @@ export interface IndexerListenerDeps {
   readonly bus: EventBus;
   /**
    * Resolves an identity's trusted scopes (`ScopeResolver.configuredMappings`),
-   * the same mapping Office and metadata-event routing use. This listener
+   * the same mapping metadata-event routing uses. This listener
    * keeps only those on `indexRootNames` itself, and every destination
    * still passes a live read check before it is published.
    */
@@ -480,7 +479,6 @@ export function createIndexerListener(deps: IndexerListenerDeps): IndexerListene
       return;
     }
     const event = result.data;
-    await deps.onStorageEvent?.(event);
     const { entries, rootIdByName } = await getCache();
     for (const entry of entries) {
       try {

@@ -1,5 +1,5 @@
 {
-  "id": "842c7a22-b590-4f01-a5bb-67469c955e17",
+  "id": "c65f54c3-35b4-4720-b831-761f9aa76c1e",
   "prevId": "2cf93d1f-4e70-47a6-95a0-d6a8c8733cf2",
   "version": "7",
   "dialect": "postgresql",
@@ -432,6 +432,82 @@
           "columns": ["token_hash"]
         }
       },
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "app.backup_attachments": {
+      "name": "backup_attachments",
+      "schema": "app",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "version_id": {
+          "name": "version_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "label": {
+          "name": "label",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "filename": {
+          "name": "filename",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "source_date": {
+          "name": "source_date",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "notes": {
+          "name": "notes",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "''"
+        },
+        "uploaded_at": {
+          "name": "uploaded_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "bytes": {
+          "name": "bytes",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "sha256": {
+          "name": "sha256",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "secret": {
+          "name": "secret",
+          "type": "bytea",
+          "primaryKey": false,
+          "notNull": true
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
       "policies": {},
       "checkConstraints": {},
       "isRLSEnabled": false
@@ -1594,15 +1670,9 @@
           "notNull": true,
           "default": "gen_random_uuid()"
         },
-        "provider_id": {
-          "name": "provider_id",
+        "identity_id": {
+          "name": "identity_id",
           "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "root_name": {
-          "name": "root_name",
-          "type": "text",
           "primaryKey": false,
           "notNull": true
         },
@@ -1627,11 +1697,11 @@
         }
       },
       "indexes": {
-        "office_files_provider_id_idx": {
-          "name": "office_files_provider_id_idx",
+        "office_files_identity_id_idx": {
+          "name": "office_files_identity_id_idx",
           "columns": [
             {
-              "expression": "provider_id",
+              "expression": "identity_id",
               "isExpression": false,
               "asc": true,
               "nulls": "last"
@@ -1642,17 +1712,11 @@
           "method": "btree",
           "with": {}
         },
-        "office_files_active_location_unique": {
-          "name": "office_files_active_location_unique",
+        "office_files_active_path_unique": {
+          "name": "office_files_active_path_unique",
           "columns": [
             {
-              "expression": "provider_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "root_name",
+              "expression": "identity_id",
               "isExpression": false,
               "asc": true,
               "nulls": "last"
@@ -1672,12 +1736,12 @@
         }
       },
       "foreignKeys": {
-        "office_files_provider_id_providers_id_fk": {
-          "name": "office_files_provider_id_providers_id_fk",
+        "office_files_identity_id_identities_id_fk": {
+          "name": "office_files_identity_id_identities_id_fk",
           "tableFrom": "office_files",
-          "tableTo": "providers",
+          "tableTo": "identities",
           "schemaTo": "app",
-          "columnsFrom": ["provider_id"],
+          "columnsFrom": ["identity_id"],
           "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
