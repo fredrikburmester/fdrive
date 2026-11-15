@@ -221,6 +221,11 @@ export type Db = NodePgDatabase<Schema>;
 export interface CreateDbOptions {
   readonly max?: number;
   /**
+   * Names the pool's connections in `pg_stat_activity` (`application_name`),
+   * so the server shows which pool holds each connection.
+   */
+  readonly applicationName?: string;
+  /**
    * Bounds how long a caller waits for a free connection. Unset, `pg` queues
    * forever, so a pool held by slow work stalls every other query indefinitely
    * instead of failing something the caller can retry.
@@ -250,6 +255,7 @@ export function createPool(connectionString: string, opts: CreateDbOptions = {})
   const pool = new Pool({
     connectionString,
     ...(opts.max === undefined ? {} : { max: opts.max }),
+    ...(opts.applicationName === undefined ? {} : { application_name: opts.applicationName }),
     ...(opts.connectionTimeoutMillis === undefined
       ? {}
       : { connectionTimeoutMillis: opts.connectionTimeoutMillis }),

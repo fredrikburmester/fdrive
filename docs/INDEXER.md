@@ -359,7 +359,7 @@ installation's `.fdrive-files` marker (above).
 | Key | Type | Falls back to |
 | --- | --- | --- |
 | `indexer.scan_interval_seconds` | integer | `SCAN_INTERVAL_SECONDS` env (default 3600) |
-| `indexer.workers` | integer | `INDEX_WORKERS` env (default 4) |
+| `indexer.workers` | integer, 1 to 16 (either source; each worker holds a database connection) | `INDEX_WORKERS` env (default 4) |
 | `indexer.text_exclude_globs` | list of strings, matched with `fnmatch` against `<root>/<rel path>` | `TEXT_EXCLUDE_GLOBS` env |
 | `indexer.ocr_image_globs` | list of strings, same matching | `["**"]`; applies only when search OCR is enabled |
 | `indexer.tesseract_langs` | string, e.g. `"eng"` or `"swe+eng"` | `TESSERACT_LANGS` env |

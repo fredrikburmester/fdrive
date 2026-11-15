@@ -14,6 +14,11 @@ use fdrive_indexer::runner::{RootLoop, build_context, refresh_settings, run_root
 use fdrive_indexer::server::{AppState, Jobs, Wake, router};
 use fdrive_indexer::work::run_work;
 
+/// Threads the HTTP handlers run on. Each keeps a database connection once a handler on it
+/// has used one, so this bounds the handlers' connections (docs/ARCHITECTURE.md, "Database
+/// connections"); further requests wait for a thread.
+const HTTP_BLOCKING_THREADS: usize = 8;
+
 fn main() -> Result<(), String> {
     let cfg = Arc::new(Config::from_env()?);
     let ctx = build_context(&cfg).map_err(|e| e.to_string())?;
@@ -65,6 +70,7 @@ fn main() -> Result<(), String> {
 
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
+        .max_blocking_threads(HTTP_BLOCKING_THREADS)
         .build()
         .map_err(|e| e.to_string())?;
     runtime.block_on(async move {

@@ -457,6 +457,57 @@ def test_original_mutation_does_not_block_health(
         assert mutation.result(timeout=5).status_code == 200
 
 
+@pytest.mark.parametrize("operation", ["restore", "delete"])
+def test_original_mutations_hold_at_most_their_connections(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, operation: str,
+) -> None:
+    lock, release = threading.Lock(), threading.Event()
+    open_now, most = 0, 0
+
+    class Connection:
+        def close(self) -> None:
+            nonlocal open_now
+            with lock:
+                open_now -= 1
+
+    def connect() -> Connection:
+        nonlocal open_now, most
+        with lock:
+            open_now += 1
+            most = max(most, open_now)
+        return Connection()
+
+    def held(*_args: object) -> object:
+        assert release.wait(10)
+        return True if operation == "delete" else server.RestoreOutcome(ok=True, state="kept", root="files", path="/a.pdf")
+
+    monkeypatch.setattr(server, f"{operation}_original", held)
+    state = server.ServerState(
+        conn_factory=connect,  # type: ignore[arg-type]
+        target=RootTarget(name=FILES_ROOT_NAME, root_id=FILES_ROOT_ID, abs_path=str(tmp_path)),
+        state_dir=str(tmp_path / "state"),
+        default_settings=DEFAULT_SETTINGS,
+        timeout_seconds=30,
+        jobs=2,
+        run_lock=server.RunLock(),
+        now=lambda: FIXED_NOW,
+        log=lambda _msg: None,
+    )
+    asked = server.ORIGINALS_AT_ONCE + 3
+    with TestClient(server.create_app(state)) as client, ThreadPoolExecutor(max_workers=asked) as pool:
+        calls = [pool.submit(client.post, f"/originals/{operation}", json={"id": f"{i}.pdf"}) for i in range(asked)]
+        try:
+            deadline = time.monotonic() + 5
+            while most < server.ORIGINALS_AT_ONCE and time.monotonic() < deadline:
+                time.sleep(0.01)
+            time.sleep(0.2)  # The rest wait for a slot without a connection.
+            assert most == server.ORIGINALS_AT_ONCE
+        finally:
+            release.set()
+        assert [call.result(timeout=5).status_code for call in calls] == [200] * asked
+    assert (most, open_now) == (server.ORIGINALS_AT_ONCE, 0)
+
+
 def test_a_manual_run_prunes_aged_originals(postgres_dsn: str, tmp_path: Path) -> None:
     # The root is a subdirectory so the pass does not walk into the state
     # directory and treat the kept originals themselves as candidate PDFs.

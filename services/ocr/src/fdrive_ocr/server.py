@@ -123,6 +123,12 @@ class RunLock:
             return self._running
 
 
+# Restores and deletes of kept originals run this many at a time. Each holds a database
+# connection, and waits with it while a backup reads the originals; unbounded, they would
+# take one per worker thread (docs/ARCHITECTURE.md, "Database connections").
+ORIGINALS_AT_ONCE = 2
+
+
 @dataclass
 class ServerState:
     conn_factory: Callable[[], psycopg.Connection]
@@ -137,6 +143,9 @@ class ServerState:
     originals: OriginalsIndex = field(default_factory=OriginalsIndex)
     # Env-only (OCR_INCLUDE_GLOBS), not part of app.settings; see rules.is_excluded.
     include_globs: tuple[str, ...] = ()
+    originals_slots: threading.BoundedSemaphore = field(
+        default_factory=lambda: threading.BoundedSemaphore(ORIGINALS_AT_ONCE)
+    )
 
     def features(self, raw: dict[str, object]) -> FeatureConfiguration:
         return resolve_features(raw)
@@ -321,14 +330,15 @@ async def restore(request: Request) -> JSONResponse:
     if not isinstance(original_id, str):
         return JSONResponse({"error": "id is required"}, status_code=400)
     def perform_restore() -> RestoreOutcome:
-        conn = state.conn_factory()
-        try:
-            return restore_original(
-                conn, state.state_dir, state.target, state.originals, original_id,
-                body.get("allow_recreate") is True, body.get("allow_overwrite_changed") is True, state.log,
-            )
-        finally:
-            conn.close()
+        with state.originals_slots:
+            conn = state.conn_factory()
+            try:
+                return restore_original(
+                    conn, state.state_dir, state.target, state.originals, original_id,
+                    body.get("allow_recreate") is True, body.get("allow_overwrite_changed") is True, state.log,
+                )
+            finally:
+                conn.close()
 
     # Copying and waiting for advisory locks must not block health/activity.
     outcome = await run_in_threadpool(perform_restore)
@@ -349,11 +359,12 @@ async def delete(request: Request) -> JSONResponse:
     if not isinstance(original_id, str):
         return JSONResponse({"error": "id is required"}, status_code=400)
     def perform_delete() -> bool:
-        conn = state.conn_factory()
-        try:
-            return delete_original(conn, state.state_dir, state.originals, original_id)
-        finally:
-            conn.close()
+        with state.originals_slots:
+            conn = state.conn_factory()
+            try:
+                return delete_original(conn, state.state_dir, state.originals, original_id)
+            finally:
+                conn.close()
 
     if not await run_in_threadpool(perform_delete):
         return JSONResponse({"error": "not found"}, status_code=404)
