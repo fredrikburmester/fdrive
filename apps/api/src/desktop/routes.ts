@@ -121,22 +121,9 @@ export function registerDesktopRoutes(
         !(writeProtocol && resolved.tokenAccess?.mode === "full"))
     )
       throw new ApiHttpError("unauthorized", "Reconnect this location in the Mac app");
-    return {
-      bearer,
-      principal: {
-        ...resolved,
-        verifyAuthority: async () => {
-          const fresh = await pairing.resolve(bearer);
-          return (
-            fresh !== null &&
-            fresh.accountId === resolved.accountId &&
-            fresh.identityId === resolved.identityId &&
-            JSON.stringify(fresh.tokenAccess) === JSON.stringify(resolved.tokenAccess) &&
-            (!writeProtocol || deps.publishLock !== undefined)
-          );
-        },
-      },
-    };
+    // Resolved once per request: the one check of a token's authority that
+    // any desktop request, a commit included, makes.
+    return { bearer, principal: resolved };
   }
   groups.public.post(`${base}/pairings`, async (c) => {
     const body = await parseBody(DesktopPairRequest, c);

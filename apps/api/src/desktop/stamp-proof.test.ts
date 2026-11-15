@@ -1,0 +1,460 @@
+import { createHash, randomUUID } from "node:crypto";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { type ContentStamp, StorageError, type StorageProvider } from "@fdrive/core";
+import type { IndexedContent } from "@fdrive/db";
+import { createLocalStorage } from "@fdrive/local";
+import { createMemoryStorage } from "@fdrive/testkit";
+import { afterEach, expect, it, vi } from "vitest";
+import { memoryRepo } from "../../test/helpers/desktop-repo.js";
+import type { Principal } from "../auth/principal.js";
+import { createDesktopWrites } from "./writes.js";
+
+const sha = (value: string | Uint8Array) => createHash("sha256").update(value).digest("hex");
+const body = (value: string) => new Response(value).body as ReadableStream<Uint8Array>;
+const temporary: string[] = [];
+afterEach(async () => {
+  await Promise.all(temporary.splice(0).map((path) => rm(path, { recursive: true, force: true })));
+});
+
+/** The row the indexer records after reading the file `stamp` describes. */
+const rowFor = (stamp: ContentStamp, sha256: string): IndexedContent => ({
+  rootName: "files",
+  path: "old.txt",
+  size: stamp.size,
+  mtimeNs: stamp.mtimeNs,
+  sha256,
+  inode: BigInt.asIntN(64, stamp.ino),
+  ctimeNs: stamp.ctimeNs,
+});
+
+/**
+ * Mac writes on storage whose calls a test can watch and interrupt. Another
+ * writer is the test changing the raw storage underneath the commit.
+ */
+async function fixture(
+  options: {
+    storage?: StorageProvider;
+    wrap?: (raw: StorageProvider) => Partial<StorageProvider>;
+    access?: () => Promise<void>;
+    indexed?: (principal: Principal) => Promise<ReadonlyMap<string, IndexedContent>>;
+    logger?: { warn(obj: Record<string, unknown>, msg: string): void };
+  } = {},
+) {
+  const stateDir = await mkdtemp(join(tmpdir(), "stamp-proof-"));
+  temporary.push(stateDir);
+  const memory = memoryRepo();
+  const raw = options.storage ?? createMemoryStorage({ "/old.txt": "old" });
+  const storage: StorageProvider = { ...raw, ...options.wrap?.(raw) };
+  const principal: Principal = {
+    accountId: randomUUID(),
+    identityId: randomUUID(),
+    username: "test",
+    isAdmin: false,
+    storage,
+    tokenAccess: { mode: "full", paths: ["/"] },
+  };
+  const service = createDesktopWrites({
+    repo: memory.repo,
+    stateDir,
+    clock: () => new Date(),
+    trashPathForStorage: () => null,
+    ...(options.access
+      ? {
+          access: async () => {
+            await options.access?.();
+            return null;
+          },
+        }
+      : {}),
+    ...(options.indexed ? { indexedContent: options.indexed } : {}),
+    ...(options.logger ? { logger: options.logger } : {}),
+  });
+  const save = async (bytes: string, path = "/old.txt", base = "old") => {
+    const original = await service.stat(principal, path);
+    const request = {
+      kind: "upload" as const,
+      operationId: randomUUID(),
+      parentId: "root",
+      name: original.name,
+      base: { ...original.version, content: sha(base) },
+      itemId: original.id,
+      size: Buffer.byteLength(bytes),
+      sha256: sha(bytes),
+    };
+    await service.prepare(principal, request);
+    await service.upload(principal, request.operationId, body(bytes), new AbortController().signal);
+    return request;
+  };
+  const create = async (as: Principal, name: string, bytes: string) => {
+    const request = {
+      kind: "upload" as const,
+      operationId: randomUUID(),
+      parentId: "root",
+      name,
+      base: null,
+      size: Buffer.byteLength(bytes),
+      sha256: sha(bytes),
+    };
+    await service.prepare(as, request);
+    await service.upload(as, request.operationId, body(bytes), new AbortController().signal);
+    return request;
+  };
+  const move = async (path: string, name: string, base?: string) => {
+    const original = await service.stat(principal, path);
+    const request = {
+      kind: "move" as const,
+      operationId: randomUUID(),
+      itemId: original.id,
+      parentId: "root",
+      name,
+      base: base ? { ...original.version, content: base } : original.version,
+    };
+    await service.prepare(principal, request);
+    return request;
+  };
+  const folder = async (name: string) => {
+    const request = { kind: "folder" as const, operationId: randomUUID(), parentId: "root", name };
+    await service.prepare(principal, request);
+    return request;
+  };
+  const read = async (path: string) => new Response((await raw.download(path)).body).text();
+  const state = async (id: string) => (await service.status(principal, id)).state;
+  return { ...memory, raw, principal, service, save, create, move, folder, read, state };
+}
+
+it("publishes a save once the file still has the stamp its base was proven against", async () => {
+  const f = await fixture();
+  const request = await f.save("saved");
+  const result = await f.service.commit(f.principal, request.operationId);
+  expect(result).toMatchObject({ state: "completed", recoveryId: null });
+  expect(await f.read("/old.txt")).toBe("saved");
+});
+
+it("refuses a save whose file changed after its base check, leaving the newer file", async () => {
+  // While the body is staged: the longest stretch between the base check and the rename.
+  let fired = false;
+  const f = await fixture({
+    wrap: (raw) => ({
+      upload: async (path, bytes, opts) => {
+        await raw.upload(path, bytes, opts);
+        if (fired || !path.endsWith("/incoming")) return;
+        fired = true;
+        await raw.upload("/old.txt", body("changed by somebody else"), { overwrite: true });
+      },
+    }),
+  });
+  const request = await f.save("saved");
+  await expect(f.service.commit(f.principal, request.operationId)).rejects.toMatchObject({
+    kind: "conflict",
+    details: { code: "version_conflict" },
+  });
+  expect(fired).toBe(true);
+  expect(await f.read("/old.txt")).toBe("changed by somebody else");
+  expect(await f.state(request.operationId)).toBe("conflict");
+});
+
+it("refuses a same-length replacement with the same modification time right before the rename", async () => {
+  // Size and time alone cannot see it; the inode and change time can.
+  let fired = false;
+  const f = await fixture({
+    wrap: (raw) => ({
+      upload: async (path, bytes, opts) => {
+        await raw.upload(path, bytes, opts);
+        if (fired || !path.endsWith("/incoming")) return;
+        fired = true;
+        const before = await raw.stat("/old.txt");
+        await raw.upload("/old.txt", body("new"), {
+          overwrite: true,
+          ...(before.modifiedAt ? { modifiedAt: before.modifiedAt } : {}),
+        });
+      },
+    }),
+  });
+  const request = await f.save("saved");
+  await expect(f.service.commit(f.principal, request.operationId)).rejects.toMatchObject({
+    details: { code: "version_conflict" },
+  });
+  expect(await f.read("/old.txt")).toBe("new");
+});
+
+it("refuses a save whose file changed while its base was being read", async () => {
+  // The read sees the bytes the client based its edit on; the stamp taken
+  // before it is what tells the rename that the file moved on.
+  let fired = false;
+  const f = await fixture({
+    wrap: (raw) => ({
+      download: async (path, opts) => {
+        const result = await raw.download(path, opts);
+        if (!fired && path === "/old.txt") {
+          fired = true;
+          await raw.upload("/old.txt", body("new"), { overwrite: true });
+        }
+        return result;
+      },
+    }),
+  });
+  const request = await f.save("saved");
+  await expect(f.service.commit(f.principal, request.operationId)).rejects.toMatchObject({
+    details: { code: "version_conflict" },
+  });
+  expect(fired).toBe(true);
+  expect(await f.read("/old.txt")).toBe("new");
+});
+
+it("proves a save from a current index row without reading the file, and reads a stale one once", async () => {
+  const raw = createMemoryStorage({ "/old.txt": "old" });
+  const download = vi.spyOn(raw, "download");
+  let row: IndexedContent | undefined;
+  const f = await fixture({
+    storage: raw,
+    indexed: async () => new Map(row ? [["/old.txt", row]] : []),
+  });
+  const stamp = async () => (raw.contentStamp as NonNullable<typeof raw.contentStamp>)("/old.txt");
+  row = rowFor(await stamp(), sha("old"));
+  const fresh = await f.save("indexed");
+  download.mockClear();
+  expect((await f.service.commit(f.principal, fresh.operationId)).state).toBe("completed");
+  expect(download).not.toHaveBeenCalled();
+  // The save gave the file a new stamp, so the old row no longer vouches for it.
+  const stale = await f.save("hashed", "/old.txt", "indexed");
+  download.mockClear();
+  expect((await f.service.commit(f.principal, stale.operationId)).state).toBe("completed");
+  expect(download.mock.calls.map(([path]) => path)).toEqual(["/old.txt"]);
+  expect(await f.read("/old.txt")).toBe("hashed");
+});
+
+it("renames a large file without reading any of it", async () => {
+  const large = new Uint8Array(8 * 1024 * 1024).fill(7);
+  const raw = createMemoryStorage({});
+  await raw.upload("/large.bin", large);
+  const download = vi.spyOn(raw, "download");
+  const f = await fixture({ storage: raw });
+  // A base carrying the file's digest still proves nothing a rename needs.
+  const request = await f.move("/large.bin", "renamed.bin", sha(large));
+  expect((await f.service.commit(f.principal, request.operationId)).item).toMatchObject({
+    path: "/renamed.bin",
+  });
+  expect(download).not.toHaveBeenCalled();
+});
+
+it("refuses a move whose source was replaced since its base check", async () => {
+  // Same size and modification time, so the metadata version cannot tell; the inode can.
+  let armed = false;
+  const raw = createMemoryStorage({ "/old.txt": "old" });
+  const f = await fixture({
+    storage: raw,
+    access: async () => {
+      if (!armed) return;
+      const before = await raw.stat("/old.txt");
+      await raw.upload("/old.txt", body("new"), {
+        overwrite: true,
+        ...(before.modifiedAt ? { modifiedAt: before.modifiedAt } : {}),
+      });
+    },
+  });
+  const request = await f.move("/old.txt", "renamed.txt");
+  armed = true;
+  await expect(f.service.commit(f.principal, request.operationId)).rejects.toMatchObject({
+    details: { code: "version_conflict" },
+  });
+  expect(await f.read("/old.txt")).toBe("new");
+});
+
+it("moves a folder after something inside it changed", async () => {
+  const home = await mkdtemp(join(tmpdir(), "stamp-proof-home-"));
+  temporary.push(home);
+  const storage = createLocalStorage({ home });
+  await storage.mkdir("/Folder");
+  const f = await fixture({ storage });
+  const request = await f.move("/Folder", "Renamed");
+  await writeFile(join(home, "Folder", "new.txt"), "new");
+  await storage.setModifiedAt?.("/Folder", new Date(0));
+  expect((await f.service.commit(f.principal, request.operationId)).item).toMatchObject({
+    path: "/Renamed",
+  });
+  expect(await f.read("/Renamed/new.txt")).toBe("new");
+});
+
+it("ends two creates of one name from two Macs with one file and one name collision", async () => {
+  const home = await mkdtemp(join(tmpdir(), "stamp-proof-home-"));
+  temporary.push(home);
+  const storage = createLocalStorage({ home });
+  // Both commits find the name free before either publishes.
+  let arrived = 0;
+  let release: () => void = () => undefined;
+  const bothListed = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const f = await fixture({
+    storage,
+    wrap: (raw) => ({
+      list: async (path) => {
+        const entries = await raw.list(path);
+        if (path === "/" && arrived < 2) {
+          arrived += 1;
+          if (arrived === 2) release();
+          await bothListed;
+        }
+        return entries;
+      },
+    }),
+  });
+  const second: Principal = { ...f.principal, identityId: randomUUID() };
+  const mine = await f.create(f.principal, "report.txt", "mine");
+  const theirs = await f.create(second, "report.txt", "theirs");
+  const results = await Promise.allSettled([
+    f.service.commit(f.principal, mine.operationId),
+    f.service.commit(second, theirs.operationId),
+  ]);
+  const done = results.filter((result) => result.status === "fulfilled");
+  const refused = results.filter((result) => result.status === "rejected");
+  expect(arrived).toBe(2);
+  expect(done).toHaveLength(1);
+  expect(refused).toHaveLength(1);
+  expect((refused[0] as PromiseRejectedResult).reason).toMatchObject({
+    kind: "conflict",
+    details: { code: "name_collision" },
+  });
+  const winner = (done[0] as PromiseFulfilledResult<{ item: { version: { content: string } } }>)
+    .value;
+  const content = await f.read("/report.txt");
+  expect(winner.item.version.content).toBe(sha(content));
+  expect(await storage.list("/")).toHaveLength(1);
+});
+
+it("refuses a name taken between resolution and publication as a collision", async () => {
+  // The Mac retries `name_collision` under a numbered name; a bare conflict
+  // would fork the file instead.
+  const taken = new Set<string>();
+  const f = await fixture({
+    wrap: (raw) => ({
+      upload: async (path, bytes, opts) => {
+        if (path === "/new.txt" && !taken.has(path)) {
+          taken.add(path);
+          await raw.upload(path, body("theirs"));
+        }
+        return raw.upload(path, bytes, opts);
+      },
+      mkdir: async (path, opts) => {
+        if (path === "/reports" && !taken.has(path)) {
+          taken.add(path);
+          await raw.upload(path, body("theirs"));
+        }
+        return raw.mkdir(path, opts);
+      },
+      move: async (path, target, opts) => {
+        if (target === "/taken.txt" && !taken.has(target)) {
+          taken.add(target);
+          await raw.upload(target, body("theirs"));
+        }
+        return raw.move(path, target, opts);
+      },
+    }),
+  });
+  const requests = [
+    await f.create(f.principal, "new.txt", "mine"),
+    await f.folder("reports"),
+    await f.move("/old.txt", "taken.txt"),
+  ];
+  for (const request of requests) {
+    await expect(f.service.commit(f.principal, request.operationId)).rejects.toMatchObject({
+      kind: "conflict",
+      details: { code: "name_collision" },
+    });
+    expect(await f.state(request.operationId)).toBe("conflict");
+  }
+  expect(await f.read("/new.txt")).toBe("theirs");
+  expect(await f.read("/taken.txt")).toBe("theirs");
+  expect(await f.read("/old.txt")).toBe("old");
+});
+
+it("reports a failed recheck as retryable, not as a remote change", async () => {
+  // A storage failure says nothing about the file, and a 409 would make the
+  // Mac fork a conflict copy of a file nobody touched. Only a missing file is
+  // a conflict.
+  let armed = false;
+  const f = await fixture({
+    wrap: (raw) => ({
+      contentStamp: async (path) => {
+        if (armed) throw new StorageError("upstream_unavailable", "stat failed");
+        return (raw.contentStamp as NonNullable<typeof raw.contentStamp>)(path);
+      },
+    }),
+    access: async () => {
+      armed = true;
+    },
+  });
+  const request = await f.move("/old.txt", "renamed.txt");
+  await expect(f.service.commit(f.principal, request.operationId)).rejects.toMatchObject({
+    kind: "upstream_unavailable",
+  });
+  expect(await f.read("/old.txt")).toBe("old");
+  expect(await f.state(request.operationId)).toBe("ready");
+});
+
+it("refuses a folder move whose folder went away since its base check", async () => {
+  let armed = false;
+  const raw = createMemoryStorage({ "/folder/child": "child" });
+  const f = await fixture({
+    storage: raw,
+    access: async () => {
+      if (armed) await raw.move("/folder", "/elsewhere");
+    },
+  });
+  const request = await f.move("/folder", "renamed");
+  armed = true;
+  await expect(f.service.commit(f.principal, request.operationId)).rejects.toMatchObject({
+    details: { code: "version_conflict" },
+  });
+  expect(await f.read("/elsewhere/child")).toBe("child");
+  // A failed look at the folder is retryable, not a remote change.
+  armed = false;
+  const failing = await fixture({
+    wrap: (inner) => ({
+      stat: async (path) => {
+        if (armed && path === "/folder") throw new StorageError("upstream_unavailable", "Offline");
+        return inner.stat(path);
+      },
+    }),
+    storage: createMemoryStorage({ "/folder/child": "child" }),
+    access: async () => {
+      armed = true;
+    },
+  });
+  const retry = await failing.move("/folder", "renamed");
+  await expect(failing.service.commit(failing.principal, retry.operationId)).rejects.toMatchObject({
+    kind: "upstream_unavailable",
+  });
+  expect(await failing.state(retry.operationId)).toBe("ready");
+});
+
+it("publishes a save even when its staging folder cannot be removed", async () => {
+  const warn = vi.fn();
+  const f = await fixture({
+    logger: { warn },
+    wrap: () => ({
+      deleteEmptyDir: async () => {
+        throw new StorageError("conflict", "not empty");
+      },
+    }),
+  });
+  const request = await f.save("saved");
+  expect((await f.service.commit(f.principal, request.operationId)).state).toBe("completed");
+  expect(await f.read("/old.txt")).toBe("saved");
+  expect(warn).toHaveBeenCalledWith(
+    expect.objectContaining({ operationId: request.operationId }),
+    expect.stringContaining("staging folder stays"),
+  );
+});
+
+it("cannot prove a save on storage that keeps no file stamps", async () => {
+  const { contentStamp: _unused, ...plain } = createMemoryStorage({ "/old.txt": "old" });
+  const f = await fixture({ storage: plain });
+  const request = await f.save("saved");
+  await expect(f.service.commit(f.principal, request.operationId)).rejects.toThrow(
+    "keeps no file stamps",
+  );
+  expect(await f.read("/old.txt")).toBe("old");
+});

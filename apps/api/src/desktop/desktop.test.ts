@@ -281,9 +281,6 @@ async function fixture(writable = false, changes?: DesktopChanges) {
     clock,
     storageFactory: vi.fn(async (id: string) => (id === identity.id ? storage : otherStorage)),
     trashPathForStorage: () => "/.trash",
-    ...(writable
-      ? { publishLock: async <T>(_identityId: string, run: () => Promise<T>) => run() }
-      : {}),
   };
   const principal: Principal = {
     accountId: account.id,
@@ -1163,7 +1160,7 @@ it("expires unconfirmed pairings on its own timer without another request", asyn
   }
 });
 
-it("explains a read-only full grant by every unmet gate", async () => {
+it("explains why a full grant is read-only", async () => {
   const f = await fixture();
   async function reason(
     missing: readonly DesktopWriteGate[] | null,
@@ -1185,13 +1182,6 @@ it("explains a read-only full grant by every unmet gate", async () => {
   }
   expect(await reason(["state_dir"])).toBe(
     "Read-only until an administrator sets FDRIVE_DESKTOP_STATE_DIR on this server.",
-  );
-  expect(await reason(["publish_lock"])).toBe(
-    "Read-only until an administrator configures the desktop publish lock on this server.",
-  );
-  // Both gates unmet: naming only one would promise writes it cannot deliver.
-  expect(await reason(["state_dir", "publish_lock"])).toBe(
-    "Read-only until an administrator sets FDRIVE_DESKTOP_STATE_DIR on this server and configures the desktop publish lock on this server.",
   );
   // A deployment without desktop writes wired says so without guessing at a cause.
   expect(await reason(null)).toBe(

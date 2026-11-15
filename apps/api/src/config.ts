@@ -72,7 +72,6 @@ export interface AppConfig {
   readonly fdriveBackupWorker?: boolean;
   readonly fdriveRestoreMode?: boolean;
   /** Days before acknowledged or cancelled Mac write backups are reclaimed. */
-  readonly fdriveDesktopRetentionDays: number;
   /** Total bytes a single archive/extract job may read before it fails. */
   readonly fdriveJobMaxBytes: number;
   /**
@@ -337,10 +336,6 @@ const envSchema = z.object({
       .max(20),
   ),
   FDRIVE_DESKTOP_STATE_DIR: z.preprocess(undefinedWhenEmpty, z.string().startsWith("/").optional()),
-  FDRIVE_DESKTOP_RETENTION_DAYS: z.preprocess(
-    (value) => withDefault(value, "30"),
-    z.string().regex(/^\d+$/).transform(Number).pipe(z.number().int().min(1).max(3650)),
-  ),
   FDRIVE_JOB_MAX_BYTES: z.preprocess(
     (value) => withDefault(value, String(DEFAULT_JOB_MAX_BYTES)),
     z
@@ -532,7 +527,6 @@ export function loadConfig(env: Record<string, string | undefined>): AppConfig {
     fdriveBackupSources: parsed.FDRIVE_BACKUP_SOURCES,
     fdriveRestoreMode: parsed.FDRIVE_RESTORE_MODE,
     fdriveBackupWorker: parsed.FDRIVE_BACKUP_WORKER,
-    fdriveDesktopRetentionDays: parsed.FDRIVE_DESKTOP_RETENTION_DAYS,
     fdriveJobMaxBytes: parsed.FDRIVE_JOB_MAX_BYTES,
     fdriveArchivePeekMaxBytes: parsed.FDRIVE_ARCHIVE_PEEK_MAX_BYTES,
     fdriveJsonMaxBytes: parsed.FDRIVE_JSON_MAX_BYTES,

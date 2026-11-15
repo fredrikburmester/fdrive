@@ -4,7 +4,7 @@ import type {
   DesktopCredential,
   DesktopWriteCredential,
 } from "@fdrive/contracts";
-import type { ApiTokenRepo, DesktopPublishLock, IdentityRepo, ProviderRepo } from "@fdrive/db";
+import type { ApiTokenRepo, IdentityRepo, ProviderRepo } from "@fdrive/db";
 import { addressBlock } from "../auth/address-block.js";
 import type { Principal } from "../auth/principal.js";
 import type { IdentityStorageFactory } from "../auth/storage-factory.js";
@@ -59,26 +59,16 @@ export interface DesktopDeps {
    * nothing is indexed: every check hashes.
    */
   indexedContent?: IndexedContentLookup;
-  /** Serializes Mac desktop commits for one identity; no other fdrive writer
-   * takes it. Absent means Mac writes stay read-only. */
-  publishLock?: DesktopPublishLock;
 }
 
 /**
  * Why a full-access grant still lands read-only, phrased for whoever paired the
- * Mac: an administrator can act on it and anyone else can pass it on. Every unmet
- * gate is named, so fixing one never promises writes that the next still blocks.
- * Every storage publishes once the server serializes Mac writes, so nothing here
- * depends on the provider.
+ * Mac: an administrator can act on it and anyone else can pass it on.
  */
 function writeUnavailableReason(missing: readonly DesktopWriteGate[]): string {
-  const steps: string[] = [];
-  if (missing.includes("state_dir")) steps.push("sets FDRIVE_DESKTOP_STATE_DIR on this server");
-  if (missing.includes("publish_lock"))
-    steps.push("configures the desktop publish lock on this server");
-  if (steps.length === 0)
-    return "Finder writes are turned off on this server. Files stay read-only.";
-  return `Read-only until an administrator ${steps.join(" and ")}.`;
+  if (missing.includes("state_dir"))
+    return "Read-only until an administrator sets FDRIVE_DESKTOP_STATE_DIR on this server.";
+  return "Finder writes are turned off on this server. Files stay read-only.";
 }
 
 /** Pairing is transient, like the existing login limiter. Restart cancels pending requests.
