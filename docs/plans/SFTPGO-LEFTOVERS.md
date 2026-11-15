@@ -19,7 +19,7 @@ migrations, compatibility shims or configuration aliases; a full reindex is acce
 - 10 folds into 12.
 - 12–15 run strictly in order: they share `apps/api/src/auth/service.ts`, `composition.ts` and the
   contracts.
-- 16 before 17, 18, 26, 31 and 32. 36 and 37 last.
+- 16 before 17, 18, 26 and 31. 36 and 37 last.
 
 ## Decisions
 
@@ -95,8 +95,8 @@ the login limiter (`local/routes.ts`, `local/service.ts`). Folds into 12.
 18. **Live updates and metadata from the journal.** Every fdrive change returns through the
     indexer's `idx_events`; `events/indexer-listener.ts` handles it once per login, sends the
     actor a second live update and moves metadata a second time. With indexing off, grantees get
-    no live updates and metadata ignores SMB moves. Activity's per-listing "refresh comparison"
-    goes; activity observations and Office follow the journal.
+    no live updates and metadata ignores SMB moves. Activity observations and Office follow the
+    journal.
 19. **One file-operations service.** MCP's activity proxy and its copy of metadata following
     (`composition.ts` `onMutation`) merge with the fs and Trash routes' recorders.
 20. **Delete removed files from the index.** Tombstones are never purged and every scan loads
@@ -124,12 +124,10 @@ All but 27 are server-only and keep shipped Mac builds working.
     budget, on a heavily loaded machine; rerun `pnpm perf:strict` on a quiet one before acting
     on that.
 
-## Shares, activity, Office, backups
+## Shares, Office, backups
 
 31. **Shares.** One module instead of the access-object layers; no strategy lookup per public
     request; one range implementation; drop `has_password` and rename `views`.
-32. **Activity.** Drop `provider_version`, `trashStrategy: "sftpgo_rule"`, the `provider` bridge
-    namespace and the per-login provider snapshot.
 33. **Office.** Key Office files by owner path; no provider in settings or edit rules; pick
     editors from fdrive's users.
 34. **Backups.** S3 only; this also removes the guard that lists every moved, deleted or zipped

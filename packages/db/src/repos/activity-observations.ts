@@ -28,7 +28,7 @@ export interface ActivityObservationInput {
   identityId: string;
   path: string;
   kind: "present" | "missing" | "moved" | "left_scope" | "continuity_unknown";
-  source: "indexer" | "refresh";
+  source: "indexer";
   evidence: PersonalActivityEvidence;
   after?: ActivityFacts;
 }
@@ -48,24 +48,6 @@ export function createActivityObservationsRepo(db: Db, clock: () => Date = () =>
               eq(activityFiles.path, path),
               like(activityFiles.path, `${escapeActivityLike(path)}/%`),
             ),
-            owned(accountId),
-            afterId ? sql`${activityFiles.id} > ${afterId}` : undefined,
-          ),
-        )
-        .orderBy(activityFiles.id)
-        .limit(100);
-    },
-    async children(accountId: string, identityId: string, parent: string, afterId?: string) {
-      const prefix = parent === "/" ? "/" : `${parent}/`;
-      return db
-        .select()
-        .from(activityFiles)
-        .where(
-          and(
-            eq(activityFiles.identityId, identityId),
-            inArray(activityFiles.state, ["live", "unknown"]),
-            like(activityFiles.path, `${escapeActivityLike(prefix)}%`),
-            sql`position('/' in substring(${activityFiles.path} from ${prefix.length + 1}::int)) = 0`,
             owned(accountId),
             afterId ? sql`${activityFiles.id} > ${afterId}` : undefined,
           ),
@@ -96,8 +78,8 @@ export function createActivityObservationsRepo(db: Db, clock: () => Date = () =>
             .limit(1)
         )[0];
         if (!file) return null;
-        // Notifications can arrive during I/O. The intent owns that uncertainty;
-        // refresh will retry comparison after the operation settles.
+        // Notifications can arrive during I/O. The intent owns that uncertainty,
+        // so the notification is dropped.
         const pending = (
           await tx
             .select({ id: activityOperations.id })

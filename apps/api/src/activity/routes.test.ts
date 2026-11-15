@@ -14,7 +14,6 @@ import type { Principal } from "../auth/principal.js";
 import { COOKIE_NAME } from "../auth/sessions.js";
 import { loadConfig } from "../config.js";
 import { createActivityCursors } from "./cursor.js";
-import type { ActivityObservations } from "./observations.js";
 import { registerPersonalActivityRoutes, serializeReadWindow } from "./routes.js";
 
 const time = new Date("2026-09-14T10:00:00Z");
@@ -61,7 +60,7 @@ function activityEvent(owner: string, identityId: string): ActivityEventRecord {
  * (filters, cursors, privacy) without a database. Query behavior itself has
  * its own PostgreSQL tests in `@fdrive/db`.
  */
-async function fixture({ watcherEnabled = true } = {}) {
+async function fixture() {
   const accountId = randomUUID();
   const identityId = randomUUID();
   const fileId = randomUUID();
@@ -127,13 +126,7 @@ async function fixture({ watcherEnabled = true } = {}) {
       owner === accountId && id === fileId
         ? {
             file,
-            storage: {
-              identityId,
-              providerId: randomUUID(),
-              providerType: "local",
-              label: "Storage",
-              retiredAt: null,
-            },
+            storage: { identityId, label: "alice" },
             lastSubject: subject,
             lastEvent: event,
           }
@@ -161,9 +154,6 @@ async function fixture({ watcherEnabled = true } = {}) {
   };
   const reads = { provisional: vi.fn(async (_owner: string) => [window]) };
   const admission = vi.fn(async () => window.id);
-  const observations = {
-    check: vi.fn(async (_principal: unknown, _path: string) => ({ checked: true })),
-  };
   const app = createApp({
     config: loadConfig({
       DATABASE_URL: "postgres://localhost/activity",
@@ -179,9 +169,7 @@ async function fixture({ watcherEnabled = true } = {}) {
       registerPersonalActivityRoutes(groups, {
         repo: repo as unknown as ActivityRepo,
         reads: reads as unknown as ActivityReadsRepo,
-        observations: observations as unknown as ActivityObservations,
         cursorSecret: CURSOR_SECRET,
-        watcherEnabled,
         admitActivity: admission,
       });
     },
@@ -207,7 +195,6 @@ async function fixture({ watcherEnabled = true } = {}) {
     reads,
     storage,
     admission,
-    observations,
     accountId,
     identityId,
     fileId,
@@ -264,41 +251,10 @@ describe("personal activity HTTP boundary", () => {
     expect((await h.app.request("/api/v1/activity")).status).toBe(401);
   });
 
-  it("declares what history covers so the UI never implies it saw everything", async () => {
+  it("offers no live check of a file: outside changes arrive only from the indexer", async () => {
     const h = await fixture();
-
-    expect((await (await h.request()).json()).coverage).toEqual({
-      mutations: true,
-      reads: true,
-      observations: "watcher_and_refresh",
-      observationGap: true,
-    });
-    // Without a watcher the only input is refresh comparison, and the feed says so.
-    const refreshOnly = await fixture({ watcherEnabled: false });
-    expect((await (await refreshOnly.request()).json()).coverage.observations).toBe("refresh");
-  });
-
-  it("rechecks one file against the provider, bounded by grants and by a budget", async () => {
-    const h = await fixture();
-
-    const response = await h.request(`/files/${h.fileId}/recheck`, { method: "POST" });
-    expect(response.status).toBe(200);
-    expect(await response.json()).toEqual({ checked: true });
-    expect(h.observations.check).toHaveBeenLastCalledWith(
-      expect.objectContaining({ identityId: h.identityId }),
-      h.file.path,
-    );
-
-    // A file of a login that no longer exists keeps its history but is never probed.
-    h.setPrincipal({ identityId: randomUUID() });
-    expect((await h.request(`/files/${h.fileId}/recheck`, { method: "POST" })).status).toBe(403);
-    h.setPrincipal({ identityId: h.identityId });
-    h.repo.file.mockResolvedValueOnce(null);
     expect((await h.request(`/files/${h.fileId}/recheck`, { method: "POST" })).status).toBe(404);
-
-    for (let call = 0; call < 9; call++)
-      expect((await h.request(`/files/${h.fileId}/recheck`, { method: "POST" })).status).toBe(200);
-    expect((await h.request(`/files/${h.fileId}/recheck`, { method: "POST" })).status).toBe(429);
+    expect(await (await h.request()).json()).not.toHaveProperty("coverage");
   });
 
   it("filters read windows and hides them on later pages and batches", async () => {
@@ -386,7 +342,7 @@ describe("personal activity HTTP boundary", () => {
       availability: "live",
       currentPath: "/a.txt",
       lastKnownPath: "/a.txt",
-      label: "Storage",
+      label: "alice",
     });
     expect((await h.request(`/files/${randomUUID()}`)).status).toBe(404);
 
@@ -427,7 +383,7 @@ describe("personal activity HTTP boundary", () => {
     const journey = (lastSubject: unknown, lastEvent: unknown) =>
       h.repo.file.mockResolvedValueOnce({
         file: h.file,
-        storage: { identityId: h.identityId, label: "Storage" },
+        storage: { identityId: h.identityId, label: "alice" },
         lastSubject,
         lastEvent,
       } as never);

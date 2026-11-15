@@ -265,8 +265,10 @@ export async function startEnvironment(
     }
     const shared = options.skipStatePersist !== true;
     if (shared && storage !== undefined) {
-      // Workers inherit the setup process's env: specs change files on disk here.
+      // Workers inherit the setup process's env: specs change files on disk
+      // here, and report those changes the way the indexer's watcher would.
       process.env.E2E_STORAGE_ROOT = storage.root;
+      process.env.E2E_DATABASE_URL = postgres.connectionString;
     }
 
     const masterKey = randomBytes(32).toString("base64");

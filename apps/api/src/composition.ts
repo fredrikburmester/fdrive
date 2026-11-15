@@ -384,13 +384,6 @@ export async function composeApp(
   // `{ unavailable: true }` rather than erroring when the caller's
   // verified index scopes are unavailable for any reason.
   const indexQueries = createIndexQueries(db);
-  const activityObservations = createActivityObservations({
-    repo: createActivityObservationsRepo(db, clock),
-    identities: repos.identities,
-    storageFactory,
-    resolver: scopeResolver,
-    onError: (error) => logger.warn({ err: error }, "personal activity refresh deferred"),
-  });
   const embedClient =
     config.fdriveEmbedUrl === undefined
       ? null
@@ -601,6 +594,14 @@ export async function composeApp(
   // unstarted so a deployment without an indexer never opens a spare
   // Postgres connection.
   const indexRootNames = new Set((config.fdriveIndexRoots ?? []).map((root) => root.name));
+  // The indexer's notifications are the only way personal activity notices a
+  // change made outside fdrive.
+  const activityObservations = createActivityObservations({
+    repo: createActivityObservationsRepo(db, clock),
+    identities: repos.identities,
+    storageFactory,
+    resolver: scopeResolver,
+  });
   const indexerListener =
     config.fdriveIndexRoots === null
       ? null
@@ -1018,7 +1019,6 @@ export async function composeApp(
       // rejecting it.
       const fsRoutesDeps = {
         activity: personalActivity,
-        activityObservations,
         bus,
         clock,
         jobRunner,
@@ -1073,10 +1073,8 @@ export async function composeApp(
       registerPersonalActivityRoutes(groups, {
         repo: activityRepo,
         reads: activityReads,
-        observations: activityObservations,
         admitActivity,
         cursorSecret: config.fdriveMasterKey,
-        watcherEnabled: indexerListener !== null,
       });
       registerAiRoutes(groups, {
         settings: aiSettings,

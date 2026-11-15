@@ -1,4 +1,4 @@
-import { readFile } from "node:fs/promises";
+import { readFile, rm } from "node:fs/promises";
 import { createDb, createRepos } from "@fdrive/db";
 import { startLocalStorage, startPostgres } from "@fdrive/testkit";
 import { sql } from "drizzle-orm";
@@ -191,6 +191,26 @@ describe("composeApp", () => {
           sql`select id, virtual_path as path, kind, state from app.activity_files where identity_id = ${identity.id} and virtual_path like '/activity-folder%' order by virtual_path`,
         );
         expect(after.rows).toEqual(files.rows);
+        // A change made outside fdrive reaches history only from the indexer's
+        // notifications: listing the folder compares nothing with history.
+        await rm(storage.path("alice", "/activity-folder/child.txt"));
+        const listing = await composed.app.request("/api/v1/fs/list?path=%2Factivity-folder", {
+          headers: { cookie },
+        });
+        expect(listing.status).toBe(200);
+        // The comparison used to run beside the response; give one a chance to land.
+        await new Promise((resolve) => setTimeout(resolve, 250));
+        const observed = await storageDb.db.execute(
+          sql`select action from app.activity_events where identity_id = ${identity.id} and class = 'observation'`,
+        );
+        expect(observed.rows).toEqual([]);
+        // A journey names the login it was recorded under by its username.
+        const journey = await composed.app.request(
+          `/api/v1/activity/files/${String(files.rows[1]?.id)}`,
+          { headers: { cookie } },
+        );
+        expect(journey.status).toBe(200);
+        expect(await journey.json()).toMatchObject({ label: "alice", availability: "unknown" });
         const reads = await storageDb.db.execute(
           sql`select action, source, owner_account_id from app.activity_read_windows where identity_id = ${identity.id}`,
         );
