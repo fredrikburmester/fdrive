@@ -53,6 +53,8 @@ export function createMemoryStorage(
   options: MemoryStorageOptions = {},
 ): MemoryStorage {
   const fileMap = new Map<string, MemFile>();
+  /** Resumable uploads' bytes so far, by part id, until their final piece publishes them. */
+  const parts = new Map<string, Uint8Array>();
   const childrenOf = new Map<string, Set<string>>([["/", new Set()]]);
   /** A folder's inode, kept across a move as a disk's rename keeps it. */
   const dirInodes = new Map<string, bigint>();
@@ -284,7 +286,20 @@ export function createMemoryStorage(
       const bytes = await readAll(body);
       if (opts?.contentLength !== undefined && bytes.length !== opts.contentLength)
         throw new StorageError("bad_request", `upload ended after ${bytes.length} bytes: ${path}`);
-      putFile(normalized, bytes, opts?.modifiedAt ?? clock());
+      const part = opts?.part;
+      let content = bytes;
+      if (part !== undefined) {
+        const held = parts.get(part.id) ?? new Uint8Array();
+        if (held.length < part.offset)
+          throw new StorageError("bad_request", `the upload has no byte ${part.offset}: ${path}`);
+        content = new Uint8Array(part.offset + bytes.length);
+        content.set(held.subarray(0, part.offset));
+        content.set(bytes, part.offset);
+        parts.set(part.id, content);
+        if (!part.final) return;
+        parts.delete(part.id);
+      }
+      putFile(normalized, content, opts?.modifiedAt ?? clock());
     },
 
     async mkdir(path, opts): Promise<void> {

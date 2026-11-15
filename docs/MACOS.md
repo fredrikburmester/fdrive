@@ -24,7 +24,7 @@ An upgrade replaces the app bundle under the running app, which would otherwise 
 the old code while Finder starts the new extension. Every 30 seconds the app reads the
 installed version from disk. After it has seen the same newer (or older) build twice, it
 launches the installed copy and quits, keeping the locations window open or closed as it was.
-It waits while FDrive is the active app or a pairing, license change or disconnect is under
+It waits while FDrive is the active app or a pairing, license change or removal is under
 way. If the new copy cannot be launched, the app asks you to quit and reopen FDrive.
 
 Each paired server/account/identity gets its own domain, token and metadata database. A pairing
@@ -45,7 +45,7 @@ The app appears in the Dock and Command-Tab while its locations window is open, 
 when minimized or behind another app. Closing the window returns it to the menu bar; choose
 **Locations and Settings** from the FD menu to reopen it. A copy of FDrive that Finder does
 not use (older than the installed app, run from a disk image, or missing its extension) says so
-in the window footer and disables Add Server, Reconnect and Disconnect.
+in the window footer and disables Add Server, Reconnect and Remove.
 
 The app refreshes browsed folders and materialized files every 60 seconds, on wake,
 after pairing and on manual Refresh. When the server advertises `changeFeed`, a refresh asks
@@ -99,13 +99,35 @@ Read-only locations use `downloadLazilyAndEvictOnRemoteUpdate`; writable locatio
 `downloadLazily` to preserve pending edits. The OS owns cache eviction and retry scheduling.
 
 Reconnect rotates that location's credential while retaining its domain/catalog IDs.
-Disconnect refuses pending journaled writes, then removes the domain using File Provider's
-`preserveDirtyUserData` mode before clearing metadata/Keychain state. Any additional dirty
-files retained by macOS are revealed in Finder. Failed cleanup stays visible for retry. Telling the
-server is a courtesy with a ten-second limit, never a precondition: when it cannot be reached, answers
-with an error, or no longer serves fdrive, the location is still removed and the app says the
-credential remains until it expires or is revoked from Account → API tokens, which works at any
-time. Revocation cannot erase previously exported copies.
+**Remove** refuses while the location's catalog holds journaled writes the server has not
+acknowledged. Otherwise it marks the location as being removed, after which neither the app nor
+the extension uses its credential; removes the Finder domain with File Provider's
+`preserveDirtyUserData` mode; tells the server; then deletes the Keychain item, the catalog and
+the saved location. Files macOS keeps because they changed here and were not uploaded open in
+Finder, and the app says where they are; if macOS cannot keep them, the domain stays. A step that
+fails stops there: the location stays marked, its card says why, and every launch and refresh
+tries again, so a domain is never left running on a revoked credential. Telling the server is a
+courtesy with a ten-second limit, never a precondition: when it cannot be reached, answers with an
+error, or no longer serves fdrive, the location is still removed and the app says the credential
+remains until it expires or is revoked from Account → API tokens, which works at any time.
+Revocation cannot erase previously exported copies.
+
+Every launch and refresh also reconciles File Provider's registered domains with the saved
+locations, finishing every removal under way. A domain no saved location refers to is removed the
+same way, with no server to tell, and a catalog nothing refers to is deleted; its recovery folder
+stays. Nothing holding writes the server has not acknowledged is removed automatically. A copy of
+FDrive that Finder does not use reconciles nothing.
+
+**Refused credentials.** A plain 401 (an expired credential, or a server too old to say more)
+signs the location out: refreshes stop asking until you choose Refresh, and the card offers
+Reconnect and Remove. Nothing is removed automatically. A server answers a desktop credential it
+no longer holds (revoked from the web or a Mac, deleted with its login, or cleared by a restore)
+with a 401 whose `error.details.code` is `credential_gone`. The app then sends nothing for an
+hour and asks once more; if the server still says so, it removes the location as Remove does,
+without sending the credential again. The hour lets a restore that is rolled back, or a server
+briefly started on another database, be put right first, and Reconnect in the meantime keeps the
+location. Network errors, 5xx and 404 answers, a server in restore mode and a wrong clock never
+remove anything.
 
 ### Display-name refresh
 
@@ -367,6 +389,10 @@ Desktop protocol v1 lives at `/api/v1/desktop`; contracts are in
 | `POST /versions` | Content versions (sha256) of up to 16 authorized files for cache validation, from the index where it provably holds them |
 | `POST /disconnect` | Revoke this bearer only |
 
+Every route refuses a bearer it does not accept with 401. For a well-formed desktop credential the
+server holds no row for, the error carries `details.code: "credential_gone"`; an expired one, a
+grant the route does not reach and a malformed or missing bearer get a plain 401.
+
 Desktop tokens use `fdd_`, distinct from MCP's `fdr_`; neither audience accepts the other.
 Tokens have identity-root read or explicitly approved full grants and expire after 365 days. Only hashes are persisted
 server-side. Native read requests resolve token expiry/revocation and account ownership.
@@ -471,6 +497,7 @@ new is never flagged, because the daemon may skip enumeration for it. Native reg
 connectivity. `getUserVisibleURL` is security-scoped and must remain scoped through Finder
 launch. Local metadata-only callbacks return canonical attributes; rejected remote
 writes use File Provider's persistent `cannotSynchronize` error, avoiding transient retry loops.
-A 401 means the credential expired or was revoked (reconnect); a 403 on reads is a denied
+A plain 401 means the credential expired (Reconnect) and `credential_gone` that the server no
+longer holds it (see [refused credentials](#connect-and-use)); a 403 on reads is a denied
 path or unsupported entry and is not reported as an expired login. Unclassified 409s on
 writes surface as conflicts rather than stale listings.

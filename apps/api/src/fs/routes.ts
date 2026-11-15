@@ -105,7 +105,7 @@ export interface FsRoutesDeps {
 
 export type FsContext = Context<{ Variables: AppVariables & PrincipalVariables }>;
 
-function parseQuery<T>(schema: z.ZodType<T>, query: Record<string, string | undefined>): T {
+export function parseQuery<T>(schema: z.ZodType<T>, query: Record<string, string | undefined>): T {
   const result = schema.safeParse(query);
   if (!result.success) {
     throw new ApiHttpError("bad_request", "invalid query", { issues: result.error.issues });
@@ -682,7 +682,15 @@ export function registerFsRoutes(
       contentLength?: number;
       overwrite: boolean;
       signal?: AbortSignal;
+      part?: { id: string; offset: number; final: boolean };
     } = { overwrite: query.intent !== "create", signal: c.req.raw.signal };
+    if (query.part !== undefined) {
+      uploadOpts.part = {
+        id: query.part,
+        offset: Number(query.offset ?? 0),
+        final: query.final === "true",
+      };
+    }
     if (query.mkdirParents !== undefined) {
       uploadOpts.mkdirParents = query.mkdirParents === "true";
     }
@@ -699,6 +707,14 @@ export function registerFsRoutes(
       if (Number.isFinite(contentLength)) {
         uploadOpts.contentLength = contentLength;
       }
+    }
+    // A piece before the last only grows the upload's part; the last one
+    // publishes the file as one upload, recorded and announced once.
+    if (uploadOpts.part?.final === false) {
+      await runStorageCall(() =>
+        principal.storage.upload(path, c.req.raw.body ?? new Uint8Array(), uploadOpts),
+      );
+      return c.body(null, 204);
     }
 
     const before = deps.activity ? await activityStat(principal.storage, path) : undefined;

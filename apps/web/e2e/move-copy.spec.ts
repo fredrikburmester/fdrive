@@ -89,7 +89,7 @@ for (const operation of ["Move", "Copy"] as const) {
     await expect(dialog.getByRole("button", { name: `${operation} here` })).toBeEnabled();
     const completed = page.waitForResponse(
       (response) =>
-        response.url().endsWith(`/api/v1/fs/${operation.toLowerCase()}`) &&
+        response.url().endsWith(`/api/v1/fs/${operation === "Move" ? "move-many" : "copy"}`) &&
         response.request().method() === "POST",
     );
     await dialog.getByRole("button", { name: `${operation} here` }).click();

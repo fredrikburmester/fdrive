@@ -558,6 +558,50 @@ it("pairs the signed-in login once, confines desktop credentials, and revokes on
   ).toBe(401);
 });
 
+it("says credential_gone only for a desktop credential the server no longer holds", async () => {
+  const f = await fixture(true);
+  /** The refusal's `error.details.code`; undefined for a plain 401. */
+  async function refusal(version: 1 | 2, route: string, authorization?: string) {
+    const response = await f.app.request(`/api/v${version}/desktop${route}`, {
+      headers: { "x-requested-with": "fdrive", ...(authorization ? { authorization } : {}) },
+    });
+    expect(response.status, route).toBe(401);
+    const body = (await response.json()) as {
+      error: { kind: string; details?: { code?: string } };
+    };
+    expect(body.error.kind).toBe("unauthorized");
+    return body.error.details?.code;
+  }
+  // Revoked by its Mac: every desktop route, on either protocol, says it is gone.
+  const disconnected = await f.connect("full", 2);
+  expect(
+    (await f.request("/disconnect", {}, { authorization: `Bearer ${disconnected.token}` })).status,
+  ).toBe(200);
+  for (const route of ["/location", "/entries?path=/", "/content?path=/docs/a.txt"]) {
+    for (const version of [1, 2] as const)
+      expect(await refusal(version, route, `Bearer ${disconnected.token}`)).toBe("credential_gone");
+  }
+  // Revoked from the web, and one this server never issued (or a restore cleared).
+  const fromWeb = await f.connect();
+  await createTokenService(f.deps).revoke(fromWeb.tokenId, f.account.id);
+  expect(await refusal(1, "/location", `Bearer ${fromWeb.token}`)).toBe("credential_gone");
+  expect(await refusal(2, "/location", `Bearer fdd_${"A".repeat(43)}`)).toBe("credential_gone");
+  // Expired: the server still holds it, so the Mac only signs out and can reconnect.
+  const expiring = await f.connect("full", 2);
+  f.advance(366 * 86_400_000);
+  expect(await refusal(2, "/location", `Bearer ${expiring.token}`)).toBeUndefined();
+  // A live credential on a route its grant does not reach, a foreign or malformed bearer, none.
+  const full = await f.connect("full", 2);
+  expect(await refusal(1, "/location", `Bearer ${full.token}`)).toBeUndefined();
+  const mcp = await createTokenService(f.deps).create(f.owner, { name: "MCP" });
+  expect(await refusal(2, "/location", `Bearer ${mcp.token}`)).toBeUndefined();
+  expect(
+    await refusal(2, "/location", `Bearer ${full.token.replace("fdd_", "fdr_")}`),
+  ).toBeUndefined();
+  expect(await refusal(2, "/location", "Bearer fdd_short")).toBeUndefined();
+  expect(await refusal(2, "/location")).toBeUndefined();
+});
+
 it("requires the app secret, cancels issued credentials, expires pending requests and bounds admission", async () => {
   const f = await fixture();
   const pair = f.pairing.create("Mac", "owner");

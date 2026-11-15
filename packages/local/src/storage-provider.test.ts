@@ -11,6 +11,7 @@ import {
   stat,
   symlink,
   truncate,
+  utimes,
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -25,6 +26,7 @@ import {
   streamOf,
   zipEntries,
 } from "../test/helpers.js";
+import { createLocalStorage, removeStaleParts } from "./storage-provider.js";
 
 vi.mock("node:fs", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs")>();
@@ -253,6 +255,74 @@ describe("upload", () => {
     await writeFile(join(await home(), ".fdrive-partial-0123456789abcdef"), "half");
     await writeFile(join(f.home, ".env"), "x");
     expect((await f.storage.list("/")).map((entry) => entry.name)).toEqual([".env"]);
+  });
+});
+
+describe("upload in pieces", () => {
+  const id = "0123456789abcdef";
+  const piece = (offset: number, final = false) => ({ part: { id, offset, final } });
+
+  it("keeps the pieces at the top of the home until the last one publishes them", async () => {
+    await f.storage.mkdir("/docs");
+    await f.storage.upload("/docs/f.txt", bytes("hel"), piece(0));
+    await f.storage.upload("/docs/f.txt", streamOf(["lo", " WORLD!"]), {
+      ...piece(3),
+      signal: new AbortController().signal,
+    });
+    expect((await readdir(f.home)).sort()).toEqual([`.fdrive-partial-${id}`, "docs"]);
+    expect(await readdir(join(f.home, "docs"))).toEqual([]);
+
+    const at = new Date("2019-03-04T05:06:07Z");
+    await f.storage.upload("/docs/f.txt", streamOf([" world"]), {
+      ...piece(5, true),
+      contentLength: 6,
+      modifiedAt: at,
+    });
+    expect(await read(f.storage, "/docs/f.txt")).toBe("hello world");
+    expect((await f.storage.statFile("/docs/f.txt")).modifiedAt?.getTime()).toBe(at.getTime());
+    expect(await readdir(f.home)).toEqual(["docs"]);
+  });
+
+  it("refuses a gap, a part that is not there and a malformed id", async () => {
+    await f.storage.upload("/f.txt", bytes("abc"), piece(0));
+    expect(await kindOf(f.storage.upload("/f.txt", bytes("x"), piece(9)))).toBe("bad_request");
+    const other = { part: { id: "fedcba9876543210", offset: 3, final: true } };
+    expect(await kindOf(f.storage.upload("/f.txt", bytes("x"), other))).toBe("not_found");
+    const malformed = { part: { id: "../../x", offset: 0, final: true } };
+    expect(await kindOf(f.storage.upload("/f.txt", bytes("x"), malformed))).toBe("bad_request");
+    expect(await readdir(f.home)).toEqual([`.fdrive-partial-${id}`]);
+  });
+
+  it("keeps a shared folder's part in its owner's home and replaces a file when asked", async () => {
+    const owner = join(f.root, "bob");
+    await mkdir(join(owner, "shared"), { recursive: true });
+    await writeFile(join(owner, "shared", "f.txt"), "old");
+    const shared = createLocalStorage({ home: join(owner, "shared"), within: owner });
+    await shared.upload("/f.txt", bytes("ne"), { ...piece(0), overwrite: true });
+    expect((await readdir(owner)).sort()).toEqual([`.fdrive-partial-${id}`, "shared"]);
+    await shared.upload("/f.txt", bytes("w"), { ...piece(2, true), overwrite: true });
+    expect(await readFile(join(owner, "shared", "f.txt"), "utf8")).toBe("new");
+    expect(await readdir(owner)).toEqual(["shared"]);
+  });
+});
+
+describe("removeStaleParts", () => {
+  it("removes parts at the top of homes that stopped changing before the cutoff", async () => {
+    const old = new Date("2020-01-01T00:00:00Z");
+    const name = (n: number) => `.fdrive-partial-000000000000000${n}`;
+    await mkdir(join(await home(), "docs"));
+    await mkdir(join(f.home, name(4)));
+    for (const at of [name(1), name(2), join("docs", name(3)), "notes.txt"]) {
+      await writeFile(join(f.home, at), "x");
+    }
+    for (const at of [name(1), join("docs", name(3)), name(4)]) {
+      await utimes(join(f.home, at), old, old);
+    }
+    await writeFile(join(f.root, ".fdrive-files"), "");
+
+    expect(await removeStaleParts(f.root, new Date("2021-01-01T00:00:00Z"))).toBe(1);
+    expect((await readdir(f.home)).sort()).toEqual([name(2), name(4), "docs", "notes.txt"]);
+    expect(await readdir(join(f.home, "docs"))).toEqual([name(3)]);
   });
 });
 

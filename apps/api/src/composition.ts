@@ -19,7 +19,7 @@ import {
   type DesktopAccessMove,
   migrate,
 } from "@fdrive/db";
-import { SHARED_WITH_ME } from "@fdrive/local";
+import { removeStaleParts, SHARED_WITH_ME } from "@fdrive/local";
 import type { Logger } from "pino";
 import { createActivityAdmission } from "./activity/admission.ts";
 import { registerActivityExports } from "./activity/exports.ts";
@@ -64,6 +64,7 @@ import { registerFeatureAdmission } from "./features/admission.js";
 import { registerFeatureRoutes } from "./features/routes.js";
 import { createFeatureService } from "./features/service.js";
 import { publishFsEvent, registerFsRoutes } from "./fs/routes.js";
+import { registerVideoRoutes } from "./fs/video-routes.js";
 import { createJobRunner } from "./jobs/runner.js";
 import { createChangeQueue } from "./local/change-queue.js";
 import {
@@ -196,7 +197,14 @@ export async function composeApp(
       error: (message) => logger.error(message),
     },
   );
-  await guard.verify();
+  const filesVerdict = await guard.verify();
+  // Uploads nobody finished within a day are not coming back for their parts.
+  if (filesVerdict.ok) {
+    void removeStaleParts(
+      config.fdriveStorageRoot,
+      new Date(clock().getTime() - 24 * 60 * 60_000),
+    ).catch((error: unknown) => logger.warn({ err: error }, "unfinished upload parts not removed"));
+  }
   /** The files folder's row in `app.providers`: Office and the Mac name it. */
   const storageId = await ensureStorageRow(repos);
   const folder = deploymentFilesFolder(config, repos, { changes, guard, clock });
@@ -888,6 +896,7 @@ export async function composeApp(
         },
       };
       registerFsRoutes(groups, fsRoutesDeps);
+      registerVideoRoutes(groups);
       registerTrashRoutes(groups, {
         activity: personalActivity,
         bus,
