@@ -92,7 +92,7 @@ describe("ROUTES", () => {
 
   it("defines every trash route", () => {
     expect(ROUTES.trash).toEqual({
-      status: "/api/v1/trash/status",
+      settings: "/api/v1/trash/settings",
       list: "/api/v1/trash",
       restore: "/api/v1/trash/restore",
       purge: "/api/v1/trash/purge",

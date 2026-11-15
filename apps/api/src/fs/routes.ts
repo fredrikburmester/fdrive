@@ -27,6 +27,7 @@ import {
   contentDisposition,
   extensionOf,
   type FileEntry,
+  isAtOrUnder,
   isInlinePreviewable,
   isReservedPath,
   isStorageError,
@@ -37,6 +38,7 @@ import {
   parseRangeHeader,
   type StorageError,
   type StorageProvider,
+  TRASH_PATH,
 } from "@fdrive/core";
 import type { Context } from "hono";
 import type { z } from "zod";
@@ -84,13 +86,6 @@ export interface FsRoutesDeps {
    * metadata can omit it; `composition.ts` always wires the real service.
    */
   readonly metadata?: MetadataService;
-  /**
-   * The storage provider's recycle folder virtual path, when configured
-   * Used to hide the provider-bound trash folder itself from `fs/list` and
-   * to route deletes made while a trash
-   * is available through `metadata.onTrashed` instead of `onDeleted`.
-   */
-  readonly trashPathForStorage?: (storage: StorageProvider) => string | null;
   /**
    * Cap on a JSON request body's bytes, passed to `parseBody` for every
    * route this function registers (zip, mkdir, move, copy, rename,
@@ -506,21 +501,19 @@ export async function moveMany(
 
 /**
  * Deletes one item and records it as a trash or a real delete, whichever the
- * login's storage actually performs. Deletes of the same path are serialized so
- * two callers cannot claim the same new trash leaf. Returns that leaf, or
- * `null` when the delete was for good or its leaf was not reported.
+ * login's storage actually performs: inside the Trash a delete is for good.
+ * Deletes of the same path are serialized so two callers cannot claim the
+ * same new trash leaf. Returns that leaf, or `null` when the delete was for
+ * good or its leaf was not reported.
  */
 async function removeOne(
-  deps: Pick<FsRoutesDeps, "activity" | "trashPathForStorage">,
+  deps: Pick<FsRoutesDeps, "activity">,
   principal: Principal,
   item: { path: string; kind: "file" | "dir" },
   context: ActivityCallContext,
   operation: { operationId: string; batchId: string },
 ): Promise<string | null> {
-  const trashRoot = deps.trashPathForStorage?.(principal.storage) ?? null;
-  const insideTrash =
-    trashRoot !== null && (item.path === trashRoot || isUnderPath(trashRoot, item.path));
-  const trashing = principal.storage.trash !== undefined && !insideTrash;
+  const trashing = principal.storage.trash !== undefined && !isAtOrUnder(TRASH_PATH, item.path);
   const remove = () =>
     recordActivity(
       deps.activity,
@@ -558,7 +551,7 @@ export interface TrashManyResult {
  * dropped; otherwise every path-keyed metadata row goes with the item.
  */
 export async function trashMany(
-  deps: Pick<FsRoutesDeps, "bus" | "clock" | "metadata" | "activity" | "trashPathForStorage">,
+  deps: Pick<FsRoutesDeps, "bus" | "clock" | "metadata" | "activity">,
   principal: Principal,
   items: readonly { path: string; kind: "file" | "dir" }[],
   context: ActivityCallContext = { source: "api" },
@@ -613,10 +606,9 @@ export function registerFsRoutes(
     const query = parseQuery(PathQuery, c.req.query());
     const path = normalizeOrThrow(query.path);
     const entries = await runStorageCall(() => principal.storage.list(path));
-    const trashPath = deps.trashPathForStorage?.(principal.storage) ?? null;
     // fdrive's own folders (the Trash, the Mac app's folder) are not the
     // user's, so the tree does not show them.
-    const visible = entries.filter((entry) => !isReservedPath(entry.path, trashPath));
+    const visible = entries.filter((entry) => !isReservedPath(entry.path));
     const serialized = visible.map(serializeEntry);
     const decorated =
       deps.metadata !== undefined

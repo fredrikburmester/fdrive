@@ -134,29 +134,25 @@ describe("GET /api/v1/fs/folder-size", () => {
 
     await app.request("/api/v1/fs/folder-size?path=/");
 
-    expect(subtreeSize).toHaveBeenCalledWith([{ rootId: 1, fsPrefix: "/" }], 1, "");
+    expect(subtreeSize).toHaveBeenCalledWith([{ rootId: 1, fsPrefix: "/" }], 1, "", [".trash"]);
   });
 
-  it("excludes configured trash nested below the requested parent", async () => {
+  it("leaves the Trash out of the size of the files that hold it", async () => {
     const subtreeSize = vi.fn(async () => ({ bytes: 10, files: 1 }));
     const app = buildApp({
-      trashPathForStorage: () => "/photos/.trash",
       indexQueries: fakeIndexQueries({
         rootIdsByName: async () => ({ files: 1 }),
         subtreeSize,
       }),
     });
 
-    const res = await app.request("/api/v1/fs/folder-size?path=/photos");
+    const res = await app.request("/api/v1/fs/folder-size?path=/");
 
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ path: "/photos", bytes: 10, files: 1, indexed: true });
-    expect(subtreeSize).toHaveBeenCalledWith(
-      [{ rootId: 1, fsPrefix: "/alice" }],
-      1,
-      "alice/photos",
-      ["alice/photos/.trash"],
-    );
+    expect(await res.json()).toEqual({ path: "/", bytes: 10, files: 1, indexed: true });
+    expect(subtreeSize).toHaveBeenCalledWith([{ rootId: 1, fsPrefix: "/alice" }], 1, "alice", [
+      "alice/.trash",
+    ]);
   });
 
   it("adds nested mapped roots while excluding their shadowed parent locations", async () => {
@@ -185,7 +181,7 @@ describe("GET /api/v1/fs/folder-size", () => {
       ],
       1,
       "alice",
-      ["alice/shared"],
+      ["alice/shared", "alice/.trash"],
     );
     expect(subtreeSize).toHaveBeenNthCalledWith(
       2,
@@ -232,45 +228,6 @@ describe("GET /api/v1/fs/folder-size", () => {
       ],
       1,
       "pool/trips",
-    );
-  });
-
-  it("excludes trash inside a mapped root and avoids overlapping parent exclusions", async () => {
-    const subtreeSize = vi.fn(async () => ({ bytes: 5, files: 1 }));
-    const app = buildApp({
-      scopes: [
-        { rootName: "files", fsPrefix: "/alice", virtualPrefix: "/" },
-        { rootName: "files", fsPrefix: "/pool/team", virtualPrefix: "/shared" },
-      ],
-      trashPathForStorage: () => "/shared/.trash",
-      indexQueries: fakeIndexQueries({
-        rootIdsByName: async () => ({ files: 1 }),
-        subtreeSize,
-      }),
-    });
-
-    const res = await app.request("/api/v1/fs/folder-size?path=/");
-
-    expect(await res.json()).toEqual({ path: "/", bytes: 10, files: 2, indexed: true });
-    expect(subtreeSize).toHaveBeenNthCalledWith(
-      1,
-      [
-        { rootId: 1, fsPrefix: "/alice" },
-        { rootId: 1, fsPrefix: "/pool/team" },
-      ],
-      1,
-      "alice",
-      ["alice/shared"],
-    );
-    expect(subtreeSize).toHaveBeenNthCalledWith(
-      2,
-      [
-        { rootId: 1, fsPrefix: "/alice" },
-        { rootId: 1, fsPrefix: "/pool/team" },
-      ],
-      1,
-      "pool/team",
-      ["pool/team/.trash"],
     );
   });
 
@@ -365,20 +322,20 @@ describe("GET /api/v1/fs/folder-size", () => {
   });
 
   it("answers indexed: false for the trash folder itself", async () => {
-    const app = buildApp({ trashPathForStorage: () => "/trash" });
+    const app = buildApp();
 
-    const res = await app.request("/api/v1/fs/folder-size?path=/trash");
+    const res = await app.request("/api/v1/fs/folder-size?path=/.trash");
 
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ path: "/trash", bytes: 0, files: 0, indexed: false });
+    expect(await res.json()).toEqual({ path: "/.trash", bytes: 0, files: 0, indexed: false });
   });
 
   it("answers indexed: false for a folder nested under trash", async () => {
-    const app = buildApp({ trashPathForStorage: () => "/trash" });
+    const app = buildApp();
 
-    const res = await app.request("/api/v1/fs/folder-size?path=/trash/old");
+    const res = await app.request("/api/v1/fs/folder-size?path=/.trash/old");
 
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ path: "/trash/old", bytes: 0, files: 0, indexed: false });
+    expect(await res.json()).toEqual({ path: "/.trash/old", bytes: 0, files: 0, indexed: false });
   });
 });

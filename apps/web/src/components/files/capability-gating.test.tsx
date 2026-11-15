@@ -36,9 +36,9 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-async function openMenu(entry: FsEntry, trash = true) {
+async function openMenu(entry: FsEntry) {
   render(
-    <FileContextMenu entry={entry} officeStatus={office} trash={trash} onAction={vi.fn()}>
+    <FileContextMenu entry={entry} officeStatus={office} onAction={vi.fn()}>
       <span>Row</span>
     </FileContextMenu>,
   );
@@ -57,10 +57,10 @@ it("shows Share, the Office items and Download as zip", async () => {
   expect(screen.getByRole("menuitem", { name: "Download" })).toBeTruthy();
 });
 
-it("reads Delete without trash", async () => {
-  await openMenu(file, false);
-  expect(screen.getByRole("menuitem", { name: "Delete" })).toBeTruthy();
-  expect(screen.queryByRole("menuitem", { name: "Move to Trash" })).toBeNull();
+it("always moves to Trash, never deletes for good", async () => {
+  await openMenu(file);
+  expect(screen.getByRole("menuitem", { name: "Move to Trash" })).toBeTruthy();
+  expect(screen.queryByRole("menuitem", { name: "Delete" })).toBeNull();
 });
 
 function toolbarProps(overrides: Partial<FilesToolbarActionsProps> = {}): FilesToolbarActionsProps {

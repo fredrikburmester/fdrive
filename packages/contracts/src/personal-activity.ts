@@ -119,6 +119,8 @@ export const ActivityFacts = z
         "recovered",
         "interrupted",
         "history_pending",
+        /** Trash deleted the item for good once it had kept it as long as set. */
+        "retention",
       ])
       .optional(),
     completedCount: z.number().int().nonnegative().optional(),

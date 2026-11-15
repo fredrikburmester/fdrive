@@ -12,7 +12,6 @@ import {
   type PrincipalResolver,
   type PrincipalVariables,
 } from "./principal";
-import { trashSettingsForStorage } from "./storage-factory";
 
 function notImplemented(): never {
   throw new Error("not implemented in this fake");
@@ -233,21 +232,12 @@ describe("createPrincipalFactory", () => {
     isAdmin: true,
     active: true,
   };
-  const trash = {
-    providerId: "123e4567-e89b-42d3-a456-426614174000",
-    revision: 1,
-    enabled: true,
-    path: "/.trash",
-    retentionHours: null,
-  };
 
   it("builds no storage for a request that touches no files, and one for one that does", async () => {
     const storage = vi.fn(() => createMemoryStorage({ "/a.txt": "a" }));
-    const trashSettings = vi.fn(async () => trash);
     const principalFor = createPrincipalFactory({
       folder: { storage },
       clock: () => new Date(0),
-      trashSettings,
     });
 
     const idle = await principalFor(login);
@@ -263,9 +253,7 @@ describe("createPrincipalFactory", () => {
     expect(busy.tokenAccess).toEqual({ mode: "read", paths: ["/"] });
     expect(busy.storage).toBe(busy.storage);
     expect(storage).toHaveBeenCalledExactlyOnceWith("alice");
-    expect(trashSettingsForStorage(busy.storage)).toEqual(trash);
     expect(busy.storage.trash).toBeDefined();
-    expect(trashSettings).toHaveBeenCalledTimes(2);
   });
 
   it("refuses a login whose name cannot be a home folder when its storage is first used", async () => {

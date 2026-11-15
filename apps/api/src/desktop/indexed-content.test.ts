@@ -207,7 +207,6 @@ describe("version checks answered from the index", () => {
     const l = lookup([...rows.values()]);
     const files = createDesktopFiles({
       clock: () => new Date(),
-      trashPathForStorage: () => null,
       indexedContent: l.find,
     });
     const principal: Principal = {
@@ -254,7 +253,6 @@ describe("version checks answered from the index", () => {
     const unstamped = lookup([{ ...rowFor("alice/docs/a.txt"), inode: null, ctimeNs: null }]);
     const files = createDesktopFiles({
       clock: () => new Date(),
-      trashPathForStorage: () => null,
       indexedContent: unstamped.find,
     });
     const storage: StorageProvider = {
@@ -268,7 +266,6 @@ describe("version checks answered from the index", () => {
     const empty = lookup([]);
     const none = createDesktopFiles({
       clock: () => new Date(),
-      trashPathForStorage: () => null,
       indexedContent: empty.find,
     });
     expect((await none.versions(principal as Principal, ["/docs/a.txt"], signal)).items).toEqual([

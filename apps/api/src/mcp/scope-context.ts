@@ -16,14 +16,6 @@ export interface ScopeContext {
   readonly scopePrefixes: readonly ScopePrefix[];
   readonly rootNameById: ReadonlyMap<number, string>;
   readonly rootIdByName: ReadonlyMap<string, number>;
-  /**
-   * The login's Trash folder virtual path, when Trash is on. With it, every
-   * query leaves fdrive's own folders out (`reservedExclusionOf`) and
-   * `virtualPathFor` never maps a row into one, so they never appear in MCP
-   * tool results (`find_files`, `find_duplicates`, `similar_files`,
-   * `folder_overview`, `recent_moves`, ...).
-   */
-  readonly trashPath: string | null;
 }
 
 /**
@@ -32,7 +24,7 @@ export interface ScopeContext {
  * and totals count only what the tool can return.
  */
 export function reservedExclusionOf(ctx: ScopeContext): IndexExclusion {
-  return reservedExclusion(ctx.scopes, ctx.trashPath, Object.fromEntries(ctx.rootIdByName));
+  return reservedExclusion(ctx.scopes, Object.fromEntries(ctx.rootIdByName));
 }
 
 /**
@@ -44,7 +36,6 @@ export function reservedExclusionOf(ctx: ScopeContext): IndexExclusion {
 export async function resolveScopeContext(
   indexQueries: Pick<IndexQueries, "rootIdsByName">,
   scopes: readonly Scope[],
-  trashPath: string | null,
 ): Promise<ScopeContext | null> {
   if (scopes.length === 0) {
     return null;
@@ -68,14 +59,14 @@ export async function resolveScopeContext(
     return null;
   }
 
-  return { scopes, scopePrefixes, rootNameById, rootIdByName, trashPath };
+  return { scopes, scopePrefixes, rootNameById, rootIdByName };
 }
 
 /**
  * Maps `(rootId, fsPath)` back to the caller's virtual path, `null` when out
  * of scope, when a more specific override shadows this exact location (see
  * `roundTripVirtualPath`), or in one of fdrive's own folders
- * (`isReservedPath`, per `ctx.trashPath`), which a lookup by id or exact
+ * (`isReservedPath`), which a lookup by id or exact
  * path does not leave out on its own. Every index-derived candidate must be
  * filtered through this before it can contribute to a tool's result; one
  * that maps is the caller's to see, with no storage read.
@@ -89,7 +80,7 @@ export function virtualPathFor(ctx: ScopeContext, rootId: number, fsPath: string
   if (virtualPath === null) {
     return null;
   }
-  return isReservedPath(virtualPath, ctx.trashPath) ? null : virtualPath;
+  return isReservedPath(virtualPath) ? null : virtualPath;
 }
 
 /**

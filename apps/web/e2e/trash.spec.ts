@@ -9,8 +9,9 @@ import { listing } from "./support/regions.js";
 import { uniqueName } from "./support/unique.js";
 import { uploadFiles } from "./support/upload.js";
 
-// An isolated, fresh installation: enable fdrive's own Trash through onboarding.
-// One sequential scenario avoids starting additional Docker stacks per worker.
+// An isolated, fresh installation, whose Trash is on from the start; it may
+// change how long Trash keeps items without touching the shared one. One
+// sequential scenario avoids starting additional Docker stacks per worker.
 
 function trashRow(page: Page, name: string): Locator {
   return page.locator("table tbody tr").filter({ hasText: name });
@@ -21,7 +22,7 @@ function trashSettings(page: Page): Locator {
   return page
     .getByRole("main")
     .locator('[data-slot="card"]')
-    .filter({ has: page.getByRole("switch", { name: "Enable Trash" }) });
+    .filter({ has: page.getByLabel("Days in Trash") });
 }
 
 async function loginAsAlice(page: Page, webBaseUrl: string): Promise<void> {
@@ -41,12 +42,7 @@ async function loginAsAlice(page: Page, webBaseUrl: string): Promise<void> {
     await expect(page.getByRole("switch", { name: label })).toBeVisible();
     await page.getByRole("button", { name: "Skip this feature" }).click();
   }
-  await expect(
-    page.getByText("Restore deleted files that fdrive moved into a recycle folder."),
-  ).toBeVisible();
-  await page.getByRole("switch", { name: "Enable Trash" }).click();
-  await expect(page.getByLabel("Trash folder")).not.toHaveValue("");
-  await page.getByRole("button", { name: "Save and continue" }).click();
+  // Trash needs no step: it is always on.
   await expect(page.getByLabel("Server address")).not.toHaveValue("");
   await page.getByRole("button", { name: "Save and continue" }).click();
   await page.getByRole("button", { name: "Skip ONLYOFFICE" }).click();
@@ -55,11 +51,14 @@ async function loginAsAlice(page: Page, webBaseUrl: string): Promise<void> {
   await page.getByRole("button", { name: "New" }).waitFor();
 }
 
-async function moveToTrash(page: Page, name: string): Promise<void> {
+async function moveToTrash(page: Page, name: string, days = 30): Promise<void> {
   await listing(page).getByText(name, { exact: true }).click({ button: "right" });
   await page.getByRole("menuitem", { name: "Move to Trash" }).click();
   const confirmDialog = page.getByRole("alertdialog");
   await expect(confirmDialog).toContainText("Move to Trash?");
+  await expect(confirmDialog).toContainText(
+    `Items in Trash are deleted permanently after ${days} days.`,
+  );
   await confirmDialog.getByRole("button", { name: "Move to Trash" }).click();
   await expect(confirmDialog).toBeHidden();
 }
@@ -147,7 +146,7 @@ test.describe("trash available", () => {
   }) => {
     await loginAsAlice(page, webBaseUrl);
 
-    // The sidebar shows Trash once the identity's storage exposes one.
+    // Every login has Trash, from the first sign-in.
     await expect(
       page.locator('[data-slot="sidebar"]').getByRole("link", { name: "Trash", exact: true }),
     ).toBeVisible();
@@ -166,8 +165,11 @@ test.describe("trash available", () => {
     expect(await readdir(home)).not.toContain(fileName);
     expect(await readdir(home)).toContain(".trash");
 
-    // It appears on /trash with its original folder.
+    // It appears on /trash with its original folder, which says when Trash deletes it.
     await page.goto(`${webBaseUrl}/trash`);
+    await expect(
+      page.getByText("Items in Trash are deleted permanently after 30 days.", { exact: false }),
+    ).toBeVisible();
     const row = trashRow(page, fileName);
     await expect(row).toBeVisible({ timeout: 15_000 });
     await expect(row).toContainText("Home");
@@ -273,56 +275,66 @@ test.describe("trash available", () => {
     await expect(page.getByText(/Trash emptied\./)).toBeVisible();
     await expect(secondRow).toBeHidden();
 
-    // Settings apply live: disabling removes Trash without restarting the API.
-    // The files folder's Trash lives on System > General, beside its name.
+    // How long Trash keeps items is the one setting, on System > General, and
+    // applies at once; there is no way to turn Trash off or move it.
     await page.goto(`${webBaseUrl}/system/general`);
     const localTrash = trashSettings(page);
-    await localTrash.getByRole("switch", { name: "Enable Trash" }).click();
+    await expect(localTrash.getByLabel("Days in Trash")).toHaveValue("30");
+    await expect(page.getByRole("switch", { name: "Enable Trash" })).toHaveCount(0);
+    await expect(page.getByLabel("Trash folder")).toHaveCount(0);
+    await localTrash.getByLabel("Days in Trash").fill("7");
     await localTrash.getByRole("button", { name: "Save Trash settings" }).click();
+    await expect(localTrash.getByRole("button", { name: "Save Trash settings" })).toBeDisabled();
+    await page.reload();
+    await expect(trashSettings(page).getByLabel("Days in Trash")).toHaveValue("7");
+    await page.goto(`${webBaseUrl}/trash`);
+    await expect(
+      page.getByText("Items in Trash are deleted permanently after 7 days.", { exact: false }),
+    ).toBeVisible();
+    const lastFileName = `${uniqueName("week")}.txt`;
+    await page.goto(`${webBaseUrl}/files`);
+    await uploadFiles(page, [{ name: lastFileName, mimeType: "text/plain", contents: "week" }]);
+    await expect(listing(page).getByText(lastFileName, { exact: true })).toBeVisible({
+      timeout: 15_000,
+    });
+    await moveToTrash(page, lastFileName, 7);
     await expect(
       page.locator('[data-slot="sidebar"]').getByRole("link", { name: "Trash", exact: true }),
-    ).toBeHidden();
-    await page.reload();
-    await expect(localTrash.getByRole("switch", { name: "Enable Trash" })).not.toBeChecked();
+    ).toBeVisible();
   });
 });
 
-test.describe("trash not configured", () => {
-  test("no Trash sidebar item, and the permanent-delete dialog copy", async ({ page }) => {
-    // A private folder: the shared root gathers one folder per test across
-    // the suite, and the virtualized listing never renders a file sorted past
-    // its window, so a root upload could not be found there.
-    const sandbox = `/${uniqueName("no-trash")}`;
-    expect(
-      (
-        await page.request.post("/api/v1/fs/mkdir", {
-          headers: { "x-requested-with": "fdrive" },
-          data: { path: sandbox },
-        })
-      ).ok(),
-    ).toBe(true);
-    await page.goto(`/files${sandbox}`);
+test("every login has Trash, and the delete dialog says when it deletes items", async ({
+  page,
+}) => {
+  // A private folder: the shared root gathers one folder per test across
+  // the suite, and the virtualized listing never renders a file sorted past
+  // its window, so a root upload could not be found there.
+  const sandbox = `/${uniqueName("always-trash")}`;
+  expect(
+    (
+      await page.request.post("/api/v1/fs/mkdir", {
+        headers: { "x-requested-with": "fdrive" },
+        data: { path: sandbox },
+      })
+    ).ok(),
+  ).toBe(true);
+  await page.goto(`/files${sandbox}`);
 
-    await expect(
-      page.locator('[data-slot="sidebar"]').getByRole("link", { name: "Trash", exact: true }),
-    ).toBeHidden();
+  await expect(
+    page.locator('[data-slot="sidebar"]').getByRole("link", { name: "Trash", exact: true }),
+  ).toBeVisible();
 
-    const fileName = `${uniqueName("no-trash")}.txt`;
-    await uploadFiles(page, [
-      { name: fileName, mimeType: "text/plain", contents: "no trash here" },
-    ]);
-    await expect(listing(page).getByText(fileName, { exact: true })).toBeVisible({
-      timeout: 15_000,
-    });
-
-    await listing(page).getByText(fileName, { exact: true }).click({ button: "right" });
-    await expect(page.getByRole("menuitem", { name: "Delete" })).toBeVisible();
-    await page.getByRole("menuitem", { name: "Delete" }).click();
-
-    const confirmDialog = page.getByRole("alertdialog");
-    await expect(confirmDialog).toContainText("permanently deleted");
-    await confirmDialog.getByRole("button", { name: "Delete" }).click();
-    await expect(confirmDialog).toBeHidden();
-    await expect(listing(page).getByText(fileName, { exact: true })).toBeHidden();
+  const fileName = `${uniqueName("always-trash")}.txt`;
+  await uploadFiles(page, [{ name: fileName, mimeType: "text/plain", contents: "to Trash" }]);
+  await expect(listing(page).getByText(fileName, { exact: true })).toBeVisible({
+    timeout: 15_000,
   });
+
+  await listing(page).getByText(fileName, { exact: true }).click({ button: "right" });
+  await expect(page.getByRole("menuitem", { name: "Move to Trash" })).toBeVisible();
+  await expect(page.getByRole("menuitem", { name: "Delete" })).toHaveCount(0);
+  await page.keyboard.press("Escape");
+  await moveToTrash(page, fileName);
+  await expect(listing(page).getByText(fileName, { exact: true })).toBeHidden();
 });

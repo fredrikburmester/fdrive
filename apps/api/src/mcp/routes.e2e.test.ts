@@ -192,7 +192,6 @@ async function startHarness(mode: "read" | "organize"): Promise<Harness> {
       fetch: indexerFetch,
     }),
     clock: () => new Date("2026-01-01T00:00:00.000Z"),
-    trashPath: null,
   };
 
   const app = createApp({

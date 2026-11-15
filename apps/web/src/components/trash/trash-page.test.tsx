@@ -9,6 +9,7 @@ const fixtures = vi.hoisted(() => ({
   restoreConflict: false,
   toastSuccess: vi.fn(),
   toastError: vi.fn(),
+  retentionDays: 30 as number | undefined,
 }));
 
 vi.mock("sonner", () => ({
@@ -32,6 +33,12 @@ vi.mock("@/components/files/destination-picker", () => ({
         </button>
       </div>
     ) : null,
+}));
+vi.mock("@/lib/api/trash-settings-queries", () => ({
+  useTrashSettings: () => ({
+    data:
+      fixtures.retentionDays === undefined ? undefined : { retentionDays: fixtures.retentionDays },
+  }),
 }));
 vi.mock("@/components/files/empty-state", () => ({ EmptyState: () => null }));
 vi.mock("@/components/files/error-state", () => ({ ErrorState: () => null }));
@@ -76,6 +83,7 @@ function lastRestoreCallbacks(): RestoreCallbacks {
 beforeEach(() => {
   fixtures.restorePending = false;
   fixtures.restoreConflict = false;
+  fixtures.retentionDays = 30;
 });
 
 afterEach(() => {
@@ -84,6 +92,24 @@ afterEach(() => {
   fixtures.toastSuccess.mockClear();
   fixtures.toastError.mockClear();
   window.localStorage.clear();
+});
+
+it("says when Trash deletes what it holds, once that setting has loaded", () => {
+  const view = render(<TrashPage />);
+  expect(
+    screen.getByText(
+      "Files and folders you delete stay here until you restore them or delete them permanently. Items in Trash are deleted permanently after 30 days.",
+    ),
+  ).toBeTruthy();
+  view.unmount();
+
+  fixtures.retentionDays = undefined;
+  render(<TrashPage />);
+  expect(
+    screen.getByText(
+      "Files and folders you delete stay here until you restore them or delete them permanently.",
+    ),
+  ).toBeTruthy();
 });
 
 function selectReport() {

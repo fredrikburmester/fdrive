@@ -1,4 +1,4 @@
-import type { ApiTokenAccess, TrashSettings } from "@fdrive/contracts";
+import type { ApiTokenAccess } from "@fdrive/contracts";
 import type { StorageProvider } from "@fdrive/core";
 import type { Login } from "@fdrive/db";
 import type { Context, MiddlewareHandler } from "hono";
@@ -42,20 +42,16 @@ export type PrincipalFactory = (login: Login, extras?: PrincipalExtras) => Promi
 export interface CreatePrincipalFactoryDeps {
   readonly folder: Pick<StorageSource, "storage">;
   readonly clock: () => Date;
-  /** The Trash settings in force, read once per request; cached by their service. */
-  readonly trashSettings?: () => Promise<TrashSettings>;
 }
 
 /**
  * Builds principals for logins a session or token query already read and
  * admitted, so a request reads nothing more to act: the storage is built
- * from the username on first use (`buildUserStorage`), with the Trash
- * settings read when the request began. The caller refuses an inactive
- * login before asking.
+ * from the username on first use (`buildUserStorage`). The caller refuses
+ * an inactive login before asking.
  */
 export function createPrincipalFactory(deps: CreatePrincipalFactoryDeps): PrincipalFactory {
   return async (login, extras) => {
-    const trash = await deps.trashSettings?.();
     let storage: StorageProvider | undefined;
     return {
       accountId: login.accountId,
@@ -63,7 +59,7 @@ export function createPrincipalFactory(deps: CreatePrincipalFactoryDeps): Princi
       username: login.username,
       isAdmin: login.isAdmin,
       get storage() {
-        storage ??= buildUserStorage(deps.folder, deps.clock, login.username, trash);
+        storage ??= buildUserStorage(deps.folder, deps.clock, login.username);
         return storage;
       },
       ...extras,

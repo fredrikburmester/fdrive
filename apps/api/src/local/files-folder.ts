@@ -51,7 +51,7 @@ export function journalRoot(
 /**
  * The files folder's row in `app.providers`, created on the first start and
  * found again on every later one. Its id never changes: the Mac app compares
- * it as each location's `providerId`, and Trash settings and Office name it.
+ * it as each location's `providerId`, and Office names it.
  */
 export async function ensureStorageRow(repos: Pick<Repos, "providers">): Promise<string> {
   return (await repos.providers.ensure({ type: "local", baseUrl: "local" })).id;
@@ -62,8 +62,6 @@ export interface DeploymentFilesFolderOptions {
   readonly changes?: ChangeQueue;
   /** Refuses storage while the folder is not this installation's (`createDeploymentFilesFolderGuard`). */
   readonly guard?: FilesFolderGuard;
-  /** Folders no share reaches; a folder shared from inside one is refused to its grantee. */
-  readonly closedFolders?: () => Promise<readonly string[]>;
 }
 
 /**
@@ -77,7 +75,7 @@ export function deploymentFilesFolder(
   options: DeploymentFilesFolderOptions = {},
 ): FilesFolder {
   const root = config.fdriveStorageRoot;
-  const { changes, guard, closedFolders } = options;
+  const { changes, guard } = options;
   const journaled = changes === undefined ? null : journalRoot(config.fdriveIndexRoots, root);
   return createFilesFolder({
     root,
@@ -85,7 +83,6 @@ export function deploymentFilesFolder(
     // When `journaled` names a root, this is the same one: it matches first.
     indexRoot: localIndexRoot(config.fdriveIndexRoots, root),
     ...(guard === undefined ? {} : { guard }),
-    ...(closedFolders === undefined ? {} : { closedFolders }),
     ...(journaled === null || changes === undefined
       ? {}
       : { onIndexChange: (name, change) => changes.record(name, change) }),

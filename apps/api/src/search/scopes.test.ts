@@ -37,7 +37,7 @@ describe("reservedExclusion", () => {
   const names = [".fdrive-move-v1"];
 
   it("maps the Trash and the Mac app's folder through the home onto its root", () => {
-    expect(reservedExclusion([home, mount], "/.trash", { files: 3 })).toEqual({
+    expect(reservedExclusion([home, mount], { files: 3 })).toEqual({
       prefixes: [
         { rootId: 3, fsPrefix: "/alice/.trash" },
         { rootId: 3, fsPrefix: "/alice/.fdrive-desktop" },
@@ -46,21 +46,9 @@ describe("reservedExclusion", () => {
     });
   });
 
-  it("maps a Trash inside a mounted folder through that mount", () => {
-    expect(
-      reservedExclusion([home, mount], "/Shared with me/Projects/.trash", { files: 3 }).prefixes,
-    ).toEqual([
-      { rootId: 3, fsPrefix: "/bob/Projects/.trash" },
-      { rootId: 3, fsPrefix: "/alice/.fdrive-desktop" },
-    ]);
-  });
-
-  it("keeps only the reserved names without a Trash, outside every scope, or on a root the index lacks", () => {
-    expect(reservedExclusion([home], null, { files: 3 }).prefixes).toEqual([
-      { rootId: 3, fsPrefix: "/alice/.fdrive-desktop" },
-    ]);
-    expect(reservedExclusion([mount], "/.trash", { files: 3 })).toEqual({ prefixes: [], names });
-    expect(reservedExclusion([home], "/.trash", {})).toEqual({ prefixes: [], names });
+  it("keeps only the reserved names outside every scope, or on a root the index lacks", () => {
+    expect(reservedExclusion([mount], { files: 3 })).toEqual({ prefixes: [], names });
+    expect(reservedExclusion([home], {})).toEqual({ prefixes: [], names });
   });
 });
 

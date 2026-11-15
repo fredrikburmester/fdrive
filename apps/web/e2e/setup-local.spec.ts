@@ -34,13 +34,13 @@ test("setup on a fresh local folder creates the owner's account, which becomes t
 
     await page.goto(url("/login"));
     await expect(page).toHaveURL(/\/setup$/);
-    await expect(page.getByText("Step 1 of 12")).toBeVisible();
+    await expect(page.getByText("Step 1 of 11")).toBeVisible();
     await page.getByLabel("Setup token").fill(TOKEN);
     await page.getByRole("button", { name: "Continue", exact: true }).click();
 
     // No storage to choose: the folder is the deployment's. Only the account.
     await expect(page.getByText("Create your account")).toBeVisible();
-    await expect(page.getByText("Step 2 of 12")).toBeVisible();
+    await expect(page.getByText("Step 2 of 11")).toBeVisible();
     await expect(page.getByLabel("Storage type")).toHaveCount(0);
     const create = page.getByRole("button", { name: "Create account", exact: true });
     await page.getByLabel("Username").fill("not a name");
@@ -60,7 +60,7 @@ test("setup on a fresh local folder creates the owner's account, which becomes t
     await create.click();
 
     // The account is signed in and continues straight into the walkthrough.
-    await expect(page.getByText("Step 3 of 12 · Thumbnails")).toBeVisible();
+    await expect(page.getByText("Step 3 of 11 · Thumbnails")).toBeVisible();
     const me = MeResponse.parse(await (await page.request.get(url("/api/v1/auth/me"))).json());
     expect(me.isAdmin).toBe(true);
     expect(me.identity).toEqual(expect.objectContaining({ username: OWNER.username }));

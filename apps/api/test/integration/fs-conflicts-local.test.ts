@@ -8,15 +8,11 @@ import {
   ROUTES,
   TrashListResponse,
 } from "@fdrive/contracts";
-import { createDb, createRepos } from "@fdrive/db";
 import { startLocalStorage, startPostgres } from "@fdrive/testkit";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { composeApp } from "../../src/composition.js";
 import { loadConfig } from "../../src/config.js";
-import { trashSettingsKey } from "../../src/trash/settings.js";
 import { seedLocalUsers, silentLogger } from "./helpers/local-storage.ts";
-
-const TRASH_PATH = "/.trash";
 
 /** Whether the temporary folder's disk ignores case, as a Mac's does by default. */
 async function ignoresCase(): Promise<boolean> {
@@ -43,14 +39,12 @@ const cookieFrom = (response: Response) => response.headers.get("set-cookie")?.s
  * `overwrite: false`. The routes must answer these with 409 and leave the
  * target as it was, and must not mistake a case-only rename on a disk that
  * ignores case for one. Follows `trash-local.test.ts`'s composition pattern: one Postgres,
- * one local folder, one composed app with provider-bound Trash settings
- * persisted, and plain `app.request` calls.
+ * one local folder, one composed app, and plain `app.request` calls.
  */
 describe("fs and trash conflict guards against a local folder", () => {
   let postgres: Awaited<ReturnType<typeof startPostgres>>;
   let storage: Awaited<ReturnType<typeof startLocalStorage>>;
   let composed: Awaited<ReturnType<typeof composeApp>>;
-  let database: ReturnType<typeof createDb>;
 
   beforeAll(async () => {
     [postgres, storage] = await Promise.all([
@@ -64,21 +58,10 @@ describe("fs and trash conflict guards against a local folder", () => {
       FDRIVE_MASTER_KEY: Buffer.alloc(32, 11).toString("base64"),
     });
     composed = await composeApp(config, silentLogger());
-    database = createDb(postgres.connectionString);
-    const repos = createRepos(database.db);
-    const provider = await repos.providers.ensure({ type: "local", baseUrl: "local" });
-    await repos.settings.set(trashSettingsKey(provider.id), {
-      providerId: provider.id,
-      revision: 1,
-      enabled: true,
-      path: TRASH_PATH,
-      retentionHours: 72,
-    });
   }, 180000);
 
   afterAll(async () => {
     await composed?.close();
-    await database?.close();
     await storage?.stop();
     await postgres?.stop();
   }, 180000);

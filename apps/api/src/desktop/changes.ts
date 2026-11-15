@@ -23,7 +23,6 @@ export interface DesktopChangesDeps {
    * would miss them.
    */
   readonly journaledRoots: ReadonlySet<string>;
-  readonly trashPathForStorage: (storage: Principal["storage"]) => string | null;
   readonly pageSize?: number;
 }
 
@@ -155,9 +154,8 @@ export function createDesktopChanges(deps: DesktopChangesDeps) {
       if (page.gap) return { status: "resync", anchor: anchor(end) };
       const more = page.changes.length >= pageSize;
       const last = page.changes.at(-1)?.position ?? position;
-      const trash = deps.trashPathForStorage(principal.storage);
       const { paths, folders } = changedPaths(page.changes, current.scopes, (path) =>
-        desktopPathAllowed(principal, path, { trash, writeProtocol: true, browse: true }),
+        desktopPathAllowed(principal, path, { writeProtocol: true, browse: true }),
       );
       // A complete page read every row after the position, and every row up to
       // `end` had committed before it: the next read may start past both.

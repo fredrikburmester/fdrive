@@ -1,4 +1,4 @@
-import { RESERVED_FOLDER_NAMES, reservedFolders, type Scope, toFsPath } from "@fdrive/core";
+import { RESERVED_FOLDER_NAMES, RESERVED_FOLDERS, type Scope, toFsPath } from "@fdrive/core";
 import type { IndexExclusion, IndexQueries, ScopePrefix } from "@fdrive/db";
 
 /**
@@ -21,16 +21,15 @@ export function toIndexRelativePath(fsPath: string): string {
 /**
  * fdrive's own folders (`isReservedPath`) as the index keeps them, for a
  * query over `scopes` to leave out before its limit: the folders
- * `reservedFolders` names, mapped through the same scopes, and the folder
+ * `RESERVED_FOLDERS` names, mapped through the same scopes, and the folder
  * names reserved wherever they lie. A folder no indexed root holds is left
  * out of the prefixes; there is nothing of it to find.
  */
 export function reservedExclusion(
   scopes: readonly Scope[],
-  trashPath: string | null,
   rootIds: Readonly<Record<string, number>>,
 ): IndexExclusion {
-  const prefixes = reservedFolders(trashPath).flatMap((folder): ScopePrefix[] => {
+  const prefixes = RESERVED_FOLDERS.flatMap((folder): ScopePrefix[] => {
     const located = toFsPath(scopes, folder);
     const rootId = located === null ? undefined : rootIds[located.rootName];
     return located === null || rootId === undefined ? [] : [{ rootId, fsPrefix: located.fsPath }];

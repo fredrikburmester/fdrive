@@ -3,7 +3,12 @@ import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import type { MoveManyResponse } from "@fdrive/contracts";
-import { StorageError, type StorageProvider, withMoveToTrash } from "@fdrive/core";
+import {
+  createRecycleFolderTrash,
+  StorageError,
+  type StorageProvider,
+  withMoveToTrash,
+} from "@fdrive/core";
 import { createMemoryStorage } from "@fdrive/core/testing";
 import { createMemoryRepos } from "@fdrive/db/testing";
 import { createLocalStorage } from "@fdrive/local";
@@ -14,12 +19,16 @@ import { activityFixture } from "../../test/activity-fixture.js";
 import { captureRecycleReceipt } from "../activity/trash.js";
 import { createApp } from "../app.js";
 import type { Principal } from "../auth/principal.js";
-import { withRecycleFolderTrash } from "../auth/storage-factory.ts";
 import { loadConfig } from "../config.js";
 import { type BusEvent, createEventBus, type EventBus } from "../events/bus.js";
 import { createJobRunner, type JobRunner } from "../jobs/runner.js";
 import { createMetadataService, type MetadataService, withFollowers } from "../metadata/service.js";
 import { registerFsRoutes, trashMany } from "./routes.js";
+
+/** `storage` with core's Trash view over it, as the storage factory builds it. */
+function withRecycleFolderTrash(storage: StorageProvider, trashPath: string): StorageProvider {
+  return { ...storage, trash: createRecycleFolderTrash({ storage, trashPath }) };
+}
 
 function buildJobRunner(): JobRunner {
   return createJobRunner({
@@ -233,7 +242,7 @@ function makeDownloadResult(
 
 async function buildHarnessWithStorage(
   storage: StorageProvider,
-  opts: { metadata?: MetadataService; trashPath?: string; jsonMaxBytes?: number } = {},
+  opts: { metadata?: MetadataService; jsonMaxBytes?: number } = {},
 ): Promise<Harness> {
   const principal: Principal = {
     accountId: ACCOUNT_ID,
@@ -269,9 +278,6 @@ async function buildHarnessWithStorage(
         jobMaxBytes: 1_000_000_000,
         folderSize: fakeFolderSizeDeps(),
         ...(opts.metadata === undefined ? {} : { metadata: opts.metadata }),
-        ...(opts.trashPath === undefined
-          ? {}
-          : { trashPathForStorage: () => opts.trashPath ?? null }),
         ...(opts.jsonMaxBytes === undefined ? {} : { jsonMaxBytes: opts.jsonMaxBytes }),
       }),
   });
@@ -362,7 +368,7 @@ describe("GET /fs/list", () => {
     expect(Array.isArray(body.error.details?.issues)).toBe(true);
   });
 
-  it("omits the trash folder itself when a trashPath is configured", async () => {
+  it("omits the Trash folder itself", async () => {
     const storage = makeStubStorage({
       list: async () => [
         {
@@ -376,7 +382,7 @@ describe("GET /fs/list", () => {
         { name: ".trash", path: "/.trash", kind: "dir", size: 0, modifiedAt: new Date(0), ext: "" },
       ],
     });
-    const { app } = await buildHarnessWithStorage(storage, { trashPath: "/.trash" });
+    const { app } = await buildHarnessWithStorage(storage);
 
     const res = await app.request("/api/v1/fs/list?path=/");
     expect(res.status).toBe(200);
@@ -384,7 +390,7 @@ describe("GET /fs/list", () => {
     expect(body.entries.map((e) => e.name)).toEqual(["hello.txt"]);
   });
 
-  it("omits the Mac app's bookkeeping folder even when no trashPath is configured", async () => {
+  it("omits the Mac app's bookkeeping folder", async () => {
     const storage = makeStubStorage({
       list: async () => [
         {
@@ -432,20 +438,6 @@ describe("GET /fs/list", () => {
     expect(res.status).toBe(200);
     const body = await readJson<ListJson>(res);
     expect(body.entries.map((e) => e.name)).toEqual([".fdrive-desktop"]);
-  });
-
-  it("keeps every entry, including the configured trash path, when no trashPath is configured", async () => {
-    const storage = makeStubStorage({
-      list: async () => [
-        { name: ".trash", path: "/.trash", kind: "dir", size: 0, modifiedAt: new Date(0), ext: "" },
-      ],
-    });
-    const { app } = await buildHarnessWithStorage(storage);
-
-    const res = await app.request("/api/v1/fs/list?path=/");
-    expect(res.status).toBe(200);
-    const body = await readJson<ListJson>(res);
-    expect(body.entries.map((e) => e.name)).toEqual([".trash"]);
   });
 
   it("maps a 404 from the provider to not_found", async () => {
@@ -2121,7 +2113,7 @@ describe("personal activity for fs commands", () => {
       }),
       "/.trash",
     );
-    const { app, activity } = await buildHarnessWithStorage(storage, { trashPath: "/.trash" });
+    const { app, activity } = await buildHarnessWithStorage(storage);
 
     const res = await app.request(
       "/api/v1/fs/delete",
@@ -2150,9 +2142,7 @@ describe("personal activity for fs commands", () => {
     const withTrash = createMemoryStorage();
     await withTrash.mkdir("/.trash");
     await withTrash.upload("/.trash/old.txt", new TextEncoder().encode("x"));
-    const purge = await buildHarnessWithStorage(withRecycleFolderTrash(withTrash, "/.trash"), {
-      trashPath: "/.trash",
-    });
+    const purge = await buildHarnessWithStorage(withRecycleFolderTrash(withTrash, "/.trash"));
     await purge.app.request(
       "/api/v1/fs/delete",
       jsonPost({ items: [{ path: "/.trash/old.txt", kind: "file" }] }),

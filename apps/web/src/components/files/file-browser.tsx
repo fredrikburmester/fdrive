@@ -132,7 +132,6 @@ import { tagCheckState as computeTagCheckState, toggleTagId } from "@/lib/metada
 import { isOfficePreviewCandidate, officeModesFor, opensInOffice } from "@/lib/office/capabilities";
 import type { OfficeDocumentKind } from "@/lib/office/new-document";
 import { officeHref } from "@/lib/office/route";
-import { trashAvailabilityFor } from "@/lib/trash/format";
 import { collectInputFiles } from "@/lib/upload/traverse";
 import { BatchRenameDialog } from "./batch-rename-dialog";
 import { CompressDialog, type CompressDialogState } from "./compress-dialog";
@@ -200,9 +199,7 @@ export function FileBrowser({
   const queryClient = useQueryClient();
   const { data, isLoading, isFetching, isError, error, refetch } = useListing(path);
   const entries = useMemo(() => data?.entries ?? [], [data]);
-  // Before `me` loads, the folder counts as indexed, so thumbnails never
-  // flicker, and Trash as off, since "Move to Trash" must wait for the setting.
-  const trash = me?.trash === true;
+  // Before `me` loads, the folder counts as indexed, so thumbnails never flicker.
   const indexed = me?.index !== false;
   // Folders others share with this login: what they allow, and the
   // `Shared with me` captions and menu items.
@@ -1033,7 +1030,6 @@ export function FileBrowser({
                 onToggleTag={handleToggleTag}
                 onOpenTagsEditor={handleOpenTagsEditor}
                 onToggleFavorite={handleToggleFavorite}
-                trash={trash}
                 received={received}
                 scrollRequest={scrollRequest}
                 onScrollConsumed={handleScrollConsumed}
@@ -1058,7 +1054,6 @@ export function FileBrowser({
                 onToggleTag={handleToggleTag}
                 onOpenTagsEditor={handleOpenTagsEditor}
                 onToggleFavorite={handleToggleFavorite}
-                trash={trash}
                 received={received}
                 scrollRequest={scrollRequest}
                 onScrollConsumed={handleScrollConsumed}
@@ -1088,7 +1083,6 @@ export function FileBrowser({
                 onToggleTag={handleToggleTag}
                 onOpenTagsEditor={handleOpenTagsEditor}
                 onToggleFavorite={handleToggleFavorite}
-                trash={trash}
                 received={received}
                 scrollRequest={scrollRequest}
                 onScrollConsumed={handleScrollConsumed}
@@ -1176,7 +1170,6 @@ export function FileBrowser({
         }}
         onConfirm={handleDeleteConfirm}
         pending={remove.isPending}
-        trash={trashAvailabilityFor({ trash })}
       />
       {destinationPicker !== null && (
         <DestinationPicker

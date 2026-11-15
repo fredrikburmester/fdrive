@@ -1,51 +1,60 @@
-# Trash setup
+# Trash
 
-Trash is the seventh optional choice in fdrive onboarding, after the six processing
-features. It applies to every user of the files folder and stays editable under
-**System > General**. No environment variables, worker or restart are required.
+Trash is always on, for every user. A deleted file or folder waits in its user's Trash, at
+`/.trash` in their files, until they restore it, delete it permanently, or Trash has kept it
+longer than the installation's retention. There is nothing to turn on, no folder to choose,
+and no worker or restart.
 
-fdrive moves each deleted file or folder into the Trash folder in that user's own files
-(`/.trash` by default) and lists, restores and purges it from there. fdrive does not intercept
-changes made outside it: deleting directly on the host disk bypasses Trash, and overwriting a
-file does not retain its previous version.
+fdrive does not intercept changes made outside it: deleting directly on the host disk bypasses
+Trash, and overwriting a file does not retain its previous version.
 
-## Enable Trash
+## Retention
 
-1. In onboarding's **Trash** step, or under **System > General**, turn on **Enable Trash**.
-2. Keep or change the folder, normally `/.trash`. fdrive creates it on the first delete.
-3. Optionally note a retention period (see below), then save.
-4. Delete a disposable file using **Move to Trash**, open **Trash** and test **Restore**.
-   **Delete permanently** and **Empty Trash** permanently purge items.
-
-The setting takes effect immediately for every user; they do not repeat onboarding.
-You may **Skip Trash** and enable it later. Disabling it hides fdrive's Trash controls; it
-does not remove items already in the folder.
+**Days in Trash**, under **System > General**, is Trash's one setting: how long it keeps an
+item, 30 days until an administrator changes it, from 1 to 3650. The API checks every user's
+Trash hourly, the first time an hour after it starts, and deletes each item older than that
+permanently, the way **Delete permanently** does: the user's history records it as a
+permanent delete with the reason `retention`, and shares and links that followed the item into
+Trash end. A user who may not sign in keeps their Trash until they may again. The Trash page
+and the delete dialog say how long items stay.
 
 ## Where deleted items live
 
-Deleted items live under `<folder>/.fdrive-move-v1/…` in each user's files, a layout that
-keeps long, Unicode and literal-percent names reversible. On the host that is
-`<files folder>/<username>/.trash/.fdrive-move-v1`. Deleting inside the Trash
-folder is permanent, which is how **Delete permanently** and **Empty Trash** work. Trash
-lists, restores and empties only what fdrive put there; other files in the Trash folder are
-left alone. A restore or a permanent delete removes the layout folders it leaves empty, and
+Deleted items live under `/.trash/.fdrive-move-v1/…` in each user's files, a layout that keeps
+long, Unicode and literal-percent names reversible. On the host that is
+`<files folder>/<username>/.trash/.fdrive-move-v1`. Deleting inside the Trash folder is
+permanent, which is how **Delete permanently**, **Empty Trash** and retention work. Trash lists,
+restores and empties only what fdrive put there; other files in the Trash folder are left
+alone. A restore or a permanent delete removes the layout folders it leaves empty, and
 **Empty Trash** also removes empty folders an earlier version left in the layout.
 
 A restore never replaces anything: when a file or folder already sits at the original path,
 the restore fails with a conflict, and **Restore to** can pick another place.
 
 When a folder shared with other users, or anything a public link names, goes to Trash, its
-shares and links go with it, and nobody can reach it through them there, even after Trash is
-turned off or moved. A new item at the old path is not shared. A restore, to the same place or
-another, brings the shares and links back; deleting the item permanently, in fdrive or on the
-host, ends them. Tags and favorites stay at the original path for a restore there.
+shares and links go with it, and nobody can reach it through them there. A new item at the old
+path is not shared. A restore, to the same place or another, brings the shares and links back;
+deleting the item permanently, in fdrive or on the host, ends them. Tags and favorites stay at
+the original path for a restore there.
 
-Reaching System takes an administrator: the setup owner, or a user made administrator under
-**System > Users**.
+Changing **Days in Trash** takes an administrator: the setup owner, or a user made
+administrator under **System > Users**.
 
-## Optional retention
+## Upgrading from a Trash with settings
 
-The retention value in fdrive is informational only. Entering hours does not create a
-schedule or delete old files, and fdrive never removes old items on its own. To clean up
-automatically, schedule it on the host, and test on disposable files
-before applying it broadly. Leave the value blank if no retention schedule is configured.
+Earlier versions kept Trash settings per storage: a switch, a folder and a retention in hours
+that fdrive never acted on. They are gone; nothing reads the old settings.
+
+- Trash is on for everyone, at `/.trash`. A folder already named `.trash` at the top of a home
+  becomes Trash: fdrive no longer lists it, and only what fdrive put in it shows on the Trash
+  page.
+- An hour after the first start, Trash deletes what it has kept longer than 30 days. Set
+  **Days in Trash** within that hour, or restore what you want before upgrading, to keep older
+  items.
+- Items in a Trash an earlier version kept in another folder stay on disk untouched, under
+  `<that folder>/.fdrive-move-v1`. fdrive does not list them, the Trash page does not show
+  them, and retention never deletes them; deleting that folder in fdrive moves it, with them,
+  to Trash like any folder. To bring them back, move them on the host. When
+  `<files folder>/<username>/.trash/.fdrive-move-v1` does not exist yet, moving the old
+  `.fdrive-move-v1` folder to that place makes them ordinary Trash items again, which retention
+  then counts from the day each was deleted.

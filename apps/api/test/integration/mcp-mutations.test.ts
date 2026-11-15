@@ -62,7 +62,6 @@ beforeAll(async () => {
       searchService: {} as McpToolDeps["searchService"],
       publicUrl: async () => "https://fdrive.example.com",
       indexerClient: null,
-      trashPathForStorage: (storage) => (storage.trash === undefined ? null : "/.trash"),
       onMutation: async () => {
         if (metadataFails) throw new Error("injected metadata failure");
       },

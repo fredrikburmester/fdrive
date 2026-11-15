@@ -127,8 +127,6 @@ export interface FileListProps {
   /** Shows "Add to chat" in the row context menu, when AI is set up. Hidden by default. */
   showChat?: boolean;
   hideArchive?: boolean;
-  /** Whether deletes go to Trash, for every row's context menu (see `FileContextMenu`). */
-  trash?: boolean;
   /** The folders others share with the active login: captions in `Shared with me`, and
    * what each context menu offers (see `FileContextMenu`). Defaults to none. */
   received?: readonly ReceivedGrant[];
@@ -185,7 +183,6 @@ export function FileList({
   hideArchive = false,
   showOrganize = false,
   showChat = false,
-  trash = false,
   received = EMPTY_RECEIVED,
   scrollRequest = null,
   onScrollConsumed,
@@ -394,7 +391,6 @@ export function FileList({
               onOpenTagsEditor={() => onOpenTagsEditor(group)}
               favorite={groupFavorite(group)}
               onToggleFavorite={(next) => onToggleFavorite(groupPaths, next)}
-              trash={trash}
               received={received}
             >
               {/** biome-ignore lint/a11y/noStaticElementInteractions: this row supports drag-and-drop and click selection; keyboard activation is handled by the listing container's roving onKeyDown */}

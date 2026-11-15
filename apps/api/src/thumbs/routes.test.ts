@@ -131,7 +131,6 @@ function buildApp(deps: BuildAppOptions = {}, username = "alice") {
     indexQueries: fakeIndexQueries(),
     resolver,
     thumbsDir: "/thumbs",
-    trashPathForStorage: () => "/.trash",
     ...(useRealFileReader === true ? {} : { fileReader: fakeFileReader() }),
     ...overrides,
   };

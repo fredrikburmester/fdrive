@@ -151,17 +151,15 @@ export function AppSidebar() {
                   <span>Shares</span>
                 </SidebarMenuButton>
               </SidebarMenuItem>
-              {me?.trash === true && (
-                <SidebarMenuItem>
-                  <SidebarMenuButton
-                    isActive={isTrashRoute(pathname)}
-                    render={<Link href={TRASH_ROUTE} />}
-                  >
-                    <Trash2 />
-                    <span>Trash</span>
-                  </SidebarMenuButton>
-                </SidebarMenuItem>
-              )}
+              <SidebarMenuItem>
+                <SidebarMenuButton
+                  isActive={isTrashRoute(pathname)}
+                  render={<Link href={TRASH_ROUTE} />}
+                >
+                  <Trash2 />
+                  <span>Trash</span>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
             </SidebarMenu>
           </SidebarGroupContent>
         </SidebarGroup>

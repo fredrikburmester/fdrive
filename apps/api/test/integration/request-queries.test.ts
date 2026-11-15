@@ -74,14 +74,6 @@ describe("queries per request", () => {
         },
         walkthroughComplete: true,
       });
-      const provider = await repos.providers.ensure({ type: "local", baseUrl: "local" });
-      await repos.settings.set(`trash.configuration.${provider.id}`, {
-        providerId: provider.id,
-        revision: 1,
-        enabled: true,
-        path: "/.trash",
-        retentionHours: null,
-      });
       const [root] = await database.db.insert(schema.roots).values({ name: "files" }).returning();
       if (root === undefined) throw new Error("expected the files root");
       const mtimeNs = BigInt(Date.now()) * 1_000_000n;

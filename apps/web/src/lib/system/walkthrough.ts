@@ -4,13 +4,13 @@ import { SETUP_STEPS } from "./setup-flow";
 
 export type WalkthroughStep =
   | { readonly kind: "feature"; readonly id: FeatureId; readonly label: string }
-  | { readonly kind: "trash" | "publicUrl" | "office" | "review"; readonly label: string };
+  | { readonly kind: "publicUrl" | "office" | "review"; readonly label: string };
 
 /**
- * The walkthrough's steps, in order: one per optional feature, then Trash,
- * the server address, Office, and the review screen. The index into this
- * table is the `walkthroughStep` persisted in the feature configuration,
- * whose contract bound is `0..9`.
+ * The walkthrough's steps, in order: one per optional feature, then the
+ * server address, Office, and the review screen. The index into this table
+ * is the `walkthroughStep` persisted in the feature configuration, whose
+ * contract bound is `0..9`.
  */
 export const WALKTHROUGH_STEPS: readonly WalkthroughStep[] = [
   ...FEATURE_IDS.map(
@@ -20,7 +20,6 @@ export const WALKTHROUGH_STEPS: readonly WalkthroughStep[] = [
       label: FEATURE_DESCRIPTIONS[id].title,
     }),
   ),
-  { kind: "trash", label: "Trash" },
   { kind: "publicUrl", label: "Server address" },
   { kind: "office", label: "Office" },
   { kind: "review", label: "Review" },

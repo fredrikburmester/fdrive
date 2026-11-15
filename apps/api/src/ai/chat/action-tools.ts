@@ -29,10 +29,7 @@ import { type ActionOutcome, type ActionTool, defineActionTool } from "./actions
 import { DOCUMENT_EXTENSIONS, readBytes, referencedArg } from "./tools.ts";
 
 export interface ChatActionToolsDeps extends DriveToolsDeps {
-  readonly fs: Pick<
-    FsRoutesDeps,
-    "bus" | "clock" | "metadata" | "activity" | "trashPathForStorage"
-  >;
+  readonly fs: Pick<FsRoutesDeps, "bus" | "clock" | "metadata" | "activity">;
   /** The chat whose proposal the person approved, recorded with every action it applies. */
   readonly conversationId: string;
 }
@@ -49,10 +46,6 @@ function activityContext(deps: ChatActionToolsDeps): ActivityCallContext {
 /** The most text one written file may hold. */
 export const MAX_WRITE_BYTES = 1024 * 1024;
 const MAX_ACTION_ITEMS = 500;
-
-function trashPathOf(deps: DriveToolsDeps): string | null {
-  return deps.mcp.trashPathForStorage?.(deps.principal.storage) ?? deps.mcp.trashPath ?? null;
-}
 
 function errorMessage(error: unknown): string {
   if (error instanceof AiToolError) return error.message;
@@ -109,7 +102,6 @@ function moveItemsTool(deps: ChatActionToolsDeps): ActionTool {
             moves: args.moves.map((move) => ({ ...move, path: move.path })),
             unchanged: [],
           },
-          trashPath: trashPathOf(deps),
         });
         if (proposal.suggestions.length === 0)
           throw new AiToolError(
@@ -282,14 +274,6 @@ async function occupied(
   }
 }
 
-/**
- * A rename keeps its folder, so the only way into one of fdrive's own
- * folders (`isReservedPath`) is taking such a folder's name.
- */
-function isReservedName(deps: DriveToolsDeps, target: string): boolean {
-  return isReservedPath(target, trashPathOf(deps));
-}
-
 function depth(path: string): number {
   return path.split("/").length;
 }
@@ -336,7 +320,7 @@ function renameItemsTool(deps: ChatActionToolsDeps): ActionTool {
             );
           if (alreadyNamed(path, name)) continue;
           const target = changeBaseName(path, name);
-          if (isReservedName(deps, target))
+          if (isReservedPath(target))
             throw new AiToolError(`${path} cannot be named ${name}: that name is fdrive's own.`);
           const stat = await statItem(deps, path);
           const conflict =
@@ -362,7 +346,7 @@ function renameItemsTool(deps: ChatActionToolsDeps): ActionTool {
           if (!allowed.has(rename.path) || items.some((item) => item.path === rename.path))
             continue;
           const name = cleanName(rename.name);
-          if (name === null || isReservedName(deps, changeBaseName(rename.path, name)))
+          if (name === null || isReservedPath(changeBaseName(rename.path, name)))
             invalid.push({
               path: rename.path,
               ok: false,
@@ -436,7 +420,7 @@ async function checkWriteTarget(
   } catch {
     throw new AiToolError(`"${input.path}" is not a valid path.`);
   }
-  if (isReservedPath(path, trashPathOf(deps)))
+  if (isReservedPath(path))
     throw new AiToolError("That path is in fdrive's own folders, like the Trash.");
   assertTextName(path);
   if (input.mode === "create") {
@@ -573,16 +557,12 @@ export const ACTION_TOOL_NAMES: Record<ChatActionProposal["kind"], string> = {
   write: "write_text_file",
 };
 
-/**
- * The chat's write tools. Trash is only offered where the login's storage
- * has a configured Trash, so nothing a chat proposes is unrecoverable.
- */
+/** The chat's write tools. Removing goes to Trash, so nothing a chat proposes is unrecoverable. */
 export function createChatActionTools(deps: ChatActionToolsDeps): ActionTool[] {
-  const trashable = deps.principal.storage.trash !== undefined && trashPathOf(deps) !== null;
   return [
     moveItemsTool(deps),
     renameItemsTool(deps),
-    ...(trashable ? [trashItemsTool(deps)] : []),
+    trashItemsTool(deps),
     writeTextFileTool(deps),
   ];
 }

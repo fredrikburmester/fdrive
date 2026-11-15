@@ -243,7 +243,7 @@ event bus; disconnected clients refresh on reconnect, and indexing remains the i
 responsibility.
 
 A file is limited to 16 GiB. What an operation staged goes once it is completed or cancelled. A
-cleanup job runs every ten minutes, deleting through storage built without Trash settings:
+cleanup job runs every ten minutes, deleting through storage built without Trash:
 bodies idle for 24 hours and conflicts untouched for 7 days are cancelled with what they staged,
 and acknowledged and cancelled operations are forgotten after 30 days, with anything left in
 their `incoming` folder. A failure defers that operation with a General System log warning. Ready

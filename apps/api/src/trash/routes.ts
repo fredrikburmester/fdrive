@@ -8,26 +8,29 @@ import {
   TrashPurgeRequest,
   TrashRestoreRequest,
   TrashRestoreResponse,
-  type TrashSettings,
-  TrashStatusResponse,
 } from "@fdrive/contracts";
 import {
   isStorageError,
   parseMoveTrashLeaf,
   type StorageProvider,
+  TRASH_PATH,
   type TrashEntry,
   type TrashProvider,
   type TrashRestoreResult,
   trashLeafPath,
 } from "@fdrive/core";
-import { activityRequestContext, recordFsAction } from "../activity/fs-context.js";
+import {
+  type ActivityCallContext,
+  activityRequestContext,
+  recordActivity,
+  recordFsAction,
+} from "../activity/fs-context.js";
 import { activityFailure, type PersonalActivityService } from "../activity/service.js";
 import type { AppHono, AuthedHono } from "../app.js";
 import type { Principal } from "../auth/principal.js";
 import { ApiHttpError } from "../errors.js";
 import type { EventBus } from "../events/bus.js";
 import {
-  type FsContext,
   normalizeOrThrow,
   parseBody,
   publishFsEvent,
@@ -48,40 +51,26 @@ export interface TrashRoutesDeps {
   readonly activity: PersonalActivityService;
   readonly bus: EventBus;
   readonly clock: () => Date;
-  /** Reads the provider/path revision captured with the request's storage. */
-  readonly settingsForStorage: (storage: StorageProvider) => TrashSettings | null;
   /** Rewrites tag/favorite/recent metadata and what followed an item into Trash. */
   readonly metadata: MetadataService;
 }
 
-/**
- * The caller's Trash and its folder, or the shared `not_found` while Trash
- * is off. The storage factory adds a Trash only while it is on, recording
- * the settings it read beside the storage.
- */
-function requireTrash(
-  c: FsContext,
-  deps: TrashRoutesDeps,
-): { trash: TrashProvider; trashPath: string } {
-  const { storage } = c.get("principal");
-  const settings = deps.settingsForStorage(storage);
-  if (storage.trash === undefined || settings === null) {
-    throw new ApiHttpError("not_found", "trash is not configured");
-  }
-  return { trash: storage.trash, trashPath: settings.path };
+/** The storage's Trash, which every user's storage has. */
+export function trashOf(storage: StorageProvider): TrashProvider {
+  if (storage.trash === undefined) throw new Error("this storage was built without Trash");
+  return storage.trash;
 }
 
 /**
  * Throws `bad_request` for an id that does not parse as a well-formed trash
- * leaf under `trashPath`, otherwise returns it unchanged. The restore
- * target itself (the id's parsed original path, when the request gives no
- * explicit target) is resolved by `TrashProvider.restore` itself, along
- * with the conflict check for an already-occupied target (see
- * `@fdrive/core`'s `packages/core/src/trash/recycle-folder-trash.ts`).
+ * leaf, otherwise returns it unchanged. The restore target itself (the id's
+ * parsed original path, when the request gives no explicit target) is
+ * resolved by `TrashProvider.restore` itself, along with the conflict check
+ * for an already-occupied target (see `@fdrive/core`'s
+ * `packages/core/src/trash/recycle-folder-trash.ts`).
  */
-function validateTrashId(trashPath: string, id: string): string {
-  const leafPath = trashLeafPath(trashPath, id);
-  const parsed = parseMoveTrashLeaf(trashPath, leafPath);
+function validateTrashId(id: string): string {
+  const parsed = parseMoveTrashLeaf(TRASH_PATH, trashLeafPath(TRASH_PATH, id));
   if (parsed === null) {
     throw new ApiHttpError("bad_request", `invalid trash id: ${id}`, { id });
   }
@@ -110,19 +99,38 @@ async function originalPathIsMissing(storage: StorageProvider, path: string): Pr
 }
 
 /**
- * After the leaf `id` is purged for good, what followed the item into Trash
- * (folders shared with people) ends with it. Should this fail, those records
- * still name the leaf, which no share reaches and no new item can take.
+ * Deletes the leaf `id` from `principal`'s Trash for good and records it as
+ * a permanent delete of the item it held. Then what followed the item into
+ * Trash (folders shared with people, public links) ends with it. Should that
+ * fail, those records still name the leaf, which no share reaches and no new
+ * item can take. Purge, Empty Trash and retention all delete this way.
  */
-async function forgetPurged(
-  deps: TrashRoutesDeps,
+export async function purgeTrashItem(
+  deps: Pick<TrashRoutesDeps, "activity" | "metadata">,
   principal: Principal,
-  trashPath: string,
   id: string,
+  context: ActivityCallContext & { readonly reason?: "retention" },
 ): Promise<void> {
-  const leaf = trashLeafPath(trashPath, id);
-  const isDir = parseMoveTrashLeaf(trashPath, leaf)?.kind !== "file";
-  await deps.metadata.onDeleted(principal.identityId, leaf, isDir);
+  const leaf = trashLeafPath(TRASH_PATH, id);
+  const parsed = parseMoveTrashLeaf(TRASH_PATH, leaf);
+  const trash = trashOf(principal.storage);
+  await recordActivity(
+    deps.activity,
+    principal,
+    {
+      source: context.source,
+      ...(context.producerOperationId ? { producerOperationId: context.producerOperationId } : {}),
+      ...(context.batchId ? { batchId: context.batchId } : {}),
+      action: "file.delete",
+      requested: {
+        path: parsed?.originalPath ?? leaf,
+        trashLeaf: leaf,
+        ...(context.reason ? { reason: context.reason } : {}),
+      },
+    },
+    () => runStorageCall(() => trash.purge(id)),
+  );
+  await deps.metadata.onDeleted(principal.identityId, leaf, parsed?.kind !== "file");
 }
 
 /** Runs `trash.restore(id, ...)`, tagging any `StorageError` it throws with `failedId` before rethrowing. */
@@ -157,20 +165,8 @@ export function registerTrashRoutes(
 ): void {
   const { authed } = groups;
 
-  authed.get(routePath(ROUTES.trash.status), (c) => {
-    const principal = c.get("principal");
-    const settings = deps.settingsForStorage(principal.storage);
-    const available = principal.storage.trash !== undefined && settings?.enabled === true;
-    const body: TrashStatusResponse = TrashStatusResponse.parse({
-      available,
-      path: available ? settings.path : null,
-      retentionHours: available ? settings.retentionHours : null,
-    });
-    return c.json(body);
-  });
-
   authed.get(routePath(ROUTES.trash.list), async (c) => {
-    const { trash } = requireTrash(c, deps);
+    const trash = trashOf(c.get("principal").storage);
     const listing = await runStorageCall(() => trash.list());
     const body: TrashListResponse = TrashListResponse.parse({
       entries: listing.entries.map(serializeTrashEntry),
@@ -181,9 +177,9 @@ export function registerTrashRoutes(
 
   authed.post(routePath(ROUTES.trash.restore), async (c) => {
     const principal = c.get("principal");
-    const { trash, trashPath } = requireTrash(c, deps);
+    const trash = trashOf(principal.storage);
     const body = await parseBody(TrashRestoreRequest, c);
-    const validated = body.ids.map((id) => validateTrashId(trashPath, id));
+    const validated = body.ids.map((id) => validateTrashId(id));
     const target = body.target === undefined ? undefined : normalizeOrThrow(body.target);
 
     const restored: FsEntry[] = [];
@@ -193,9 +189,9 @@ export function registerTrashRoutes(
     const batchId = context.batchId ?? randomUUID();
     try {
       for (const id of validated) {
-        const trashVirtualPath = trashLeafPath(trashPath, id);
+        const trashVirtualPath = trashLeafPath(TRASH_PATH, id);
         const originalPath =
-          parseMoveTrashLeaf(trashPath, trashVirtualPath)?.originalPath ?? trashVirtualPath;
+          parseMoveTrashLeaf(TRASH_PATH, trashVirtualPath)?.originalPath ?? trashVirtualPath;
         const entry = await recordFsAction(
           deps.activity,
           c,
@@ -248,31 +244,20 @@ export function registerTrashRoutes(
 
   authed.post(routePath(ROUTES.trash.purge), async (c) => {
     const principal = c.get("principal");
-    const { trash, trashPath } = requireTrash(c, deps);
     const body = await parseBody(TrashPurgeRequest, c);
-    const ids = body.ids.map((id) => validateTrashId(trashPath, id));
+    const ids = body.ids.map((id) => validateTrashId(id));
 
     const context = activityRequestContext(c);
     const batchId = context.batchId ?? randomUUID();
     for (const [index, id] of ids.entries()) {
-      const leaf = trashLeafPath(trashPath, id);
-      const path = parseMoveTrashLeaf(trashPath, leaf)?.originalPath ?? leaf;
-      await recordFsAction(
-        deps.activity,
-        c,
-        {
-          ...context,
-          producerOperationId: `${context.producerOperationId}:${index}`,
-          batchId,
-          action: "file.delete",
-          requested: { path, trashLeaf: leaf },
-        },
-        () => runStorageCall(() => trash.purge(id)),
-      );
-      await forgetPurged(deps, principal, trashPath, id);
+      await purgeTrashItem(deps, principal, id, {
+        ...context,
+        producerOperationId: `${context.producerOperationId}:${index}`,
+        batchId,
+      });
     }
 
-    const paths = ids.map((id) => trashLeafPath(trashPath, id));
+    const paths = ids.map((id) => trashLeafPath(TRASH_PATH, id));
     publishFsEvent(deps, principal, "delete", paths);
     const responseBody: OkResponse = OkResponse.parse({ ok: true });
     return c.json(responseBody);
@@ -280,7 +265,7 @@ export function registerTrashRoutes(
 
   authed.post(routePath(ROUTES.trash.empty), async (c) => {
     const principal = c.get("principal");
-    const { trash, trashPath } = requireTrash(c, deps);
+    const trash = trashOf(principal.storage);
     const context = activityRequestContext(c);
     const batchId = context.batchId ?? randomUUID();
     let completed = 0;
@@ -291,7 +276,7 @@ export function registerTrashRoutes(
         ...context,
         batchId,
         action: "trash.empty",
-        requested: { path: trashPath, kind: "dir" },
+        requested: { path: TRASH_PATH, kind: "dir" },
         failure: (error) =>
           completed > 0
             ? {
@@ -308,27 +293,18 @@ export function registerTrashRoutes(
         );
         // Purge item by item so every emptied item keeps its own history row.
         for (const entry of entries) {
-          const leaf = trashLeafPath(trashPath, entry.id);
-          await recordFsAction(
-            deps.activity,
-            c,
-            {
-              ...context,
-              producerOperationId: `${context.producerOperationId}:leaf:${completed}`,
-              batchId,
-              action: "file.delete",
-              requested: { path: entry.originalPath, trashLeaf: leaf },
-            },
-            () => runStorageCall(() => trash.purge(entry.id)),
-          );
-          await forgetPurged(deps, principal, trashPath, entry.id);
+          await purgeTrashItem(deps, principal, entry.id, {
+            ...context,
+            producerOperationId: `${context.producerOperationId}:leaf:${completed}`,
+            batchId,
+          });
           completed++;
         }
       },
-      () => ({ path: trashPath, completedCount: completed }),
+      () => ({ path: TRASH_PATH, completedCount: completed }),
     );
 
-    publishFsEvent(deps, principal, "delete", [trashPath]);
+    publishFsEvent(deps, principal, "delete", [TRASH_PATH]);
     const responseBody: OkResponse = OkResponse.parse({ ok: true });
     return c.json(responseBody);
   });

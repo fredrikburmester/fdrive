@@ -81,8 +81,7 @@ interface Publication {
   /** Null for a new item. */
   readonly source: Source | null;
 }
-export interface DesktopWriteDeps
-  extends Pick<DesktopDeps, "clock" | "trashPathForStorage" | "indexedContent"> {
+export interface DesktopWriteDeps extends Pick<DesktopDeps, "clock" | "indexedContent"> {
   repo: DesktopRepo;
   /**
    * Storage for an identity without Trash settings, which deletes what a

@@ -1,11 +1,12 @@
 import { FolderSizeResponse, PathQuery, ROUTES } from "@fdrive/contracts";
 import {
   type CoreError,
+  isAtOrUnder,
   isUnderPath,
   joinPath,
   normalizePath,
   type Scope,
-  type StorageProvider,
+  TRASH_PATH,
 } from "@fdrive/core";
 import type { IndexQueries } from "@fdrive/db";
 import type { AppHono, AuthedHono } from "../app.js";
@@ -23,13 +24,6 @@ function routePath(fullPath: string): string {
 export interface FolderSizeRoutesDeps {
   readonly indexQueries: Pick<IndexQueries, "rootIdsByName" | "subtreeSize">;
   readonly resolver: Pick<ScopeResolver, "verifiedIndexScopes">;
-  /**
-   * The storage provider's recycle folder virtual path, when configured.
-   * A requested path that is the trash folder itself, or nested under it,
-   * is answered as `{ indexed: false }`, mirroring how `fs/routes.ts` hides
-   * it from listings and `search/service.ts` excludes it from hits.
-   */
-  readonly trashPathForStorage?: (storage: StorageProvider) => string | null;
 }
 
 const NOT_INDEXED: Omit<FolderSizeResponse, "path"> = {
@@ -70,12 +64,11 @@ function outermostBoundaries(paths: readonly string[]): string[] {
   );
 }
 
-/** Partitions a requested virtual subtree into its physical mapping regions. */
-function sizeRegions(
-  scopes: readonly Scope[],
-  path: string,
-  trashPath: string | null,
-): SizeRegion[] {
+/**
+ * Partitions a requested virtual subtree into its physical mapping regions,
+ * leaving out the Trash, which a folder's size never counts.
+ */
+function sizeRegions(scopes: readonly Scope[], path: string): SizeRegion[] {
   const owner = containingScope(scopes, path);
   if (owner === null) return [];
 
@@ -84,18 +77,13 @@ function sizeRegions(
     ...scopes
       .filter((scope) => isUnderPath(path, scope.virtualPrefix))
       .map((scope) => ({ scope, virtualPrefix: scope.virtualPrefix })),
-  ].filter(
-    (region) =>
-      trashPath === null ||
-      (region.virtualPrefix !== trashPath && !isUnderPath(trashPath, region.virtualPrefix)),
-  );
+  ].filter((region) => !isAtOrUnder(TRASH_PATH, region.virtualPrefix));
 
   return regionScopes.map((region) => {
     const boundaries = scopes
       .filter((scope) => isUnderPath(region.virtualPrefix, scope.virtualPrefix))
       .map((scope) => scope.virtualPrefix);
-    if (trashPath !== null && isUnderPath(region.virtualPrefix, trashPath))
-      boundaries.push(trashPath);
+    if (isUnderPath(region.virtualPrefix, TRASH_PATH)) boundaries.push(TRASH_PATH);
 
     return {
       ...region,
@@ -146,15 +134,14 @@ export function registerFolderSizeRoutes(
     const notIndexed = (): Response => c.json(FolderSizeResponse.parse({ path, ...NOT_INDEXED }));
 
     const principal = c.get("principal");
-    const trashPath = deps.trashPathForStorage?.(principal.storage);
-    if (trashPath != null && (path === trashPath || isUnderPath(trashPath, path)))
-      return notIndexed();
+    // The Trash is answered as not indexed, as listings hide it and search leaves it out.
+    if (isAtOrUnder(TRASH_PATH, path)) return notIndexed();
     const verified = await deps.resolver.verifiedIndexScopes(principal.username);
     if (!verified.available) {
       return notIndexed();
     }
 
-    const regions = sizeRegions(verified.scopes, path, trashPath ?? null);
+    const regions = sizeRegions(verified.scopes, path);
     if (regions.length === 0) {
       return notIndexed();
     }
