@@ -103,7 +103,6 @@ function build() {
     store,
     engine,
     pool,
-    gatePool: pool,
     enabled: true,
     destinationRecord: vi.fn().mockResolvedValue(destination),
   };

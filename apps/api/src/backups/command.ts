@@ -14,6 +14,7 @@ import { createDb, createRepos, migrate } from "@fdrive/db";
 import { z } from "zod";
 import type { AppConfig } from "../config.js";
 import { createLocalUserStore } from "../local/users.js";
+import { BACKUP_WORKER_POOL } from "../pools.ts";
 import { createScryptSharePasswords } from "../shares/passwords.js";
 import { createBackupModule } from "./module.js";
 import { recoveryIdentity, recoveryPreview, restoreOptions } from "./recovery.js";
@@ -236,7 +237,11 @@ export async function runBackupCommand(
       await waitForStop();
       return;
     }
-    const module = createBackupModule({ ...config, fdriveBackupWorker: false });
+    const database = createDb(config.databaseUrl, {
+      max: BACKUP_WORKER_POOL,
+      applicationName: "fdrive backup worker",
+    });
+    const module = createBackupModule({ ...config, fdriveBackupWorker: false }, database.pool);
     try {
       await module.start();
       if (!module.enabled) throw Error("FDRIVE_BACKUP_STATE_DIR is required");
@@ -244,6 +249,7 @@ export async function runBackupCommand(
       await waitForStop();
     } finally {
       await module.close();
+      await database.close();
     }
     return;
   }

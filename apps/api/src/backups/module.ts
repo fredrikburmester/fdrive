@@ -14,7 +14,7 @@ import {
   s3Destination,
 } from "@fdrive/backup";
 import type { BackupDestinationInput } from "@fdrive/contracts";
-import { Pool } from "pg";
+import type { Pool } from "pg";
 import { open, parseMasterKey, seal } from "../auth/crypto.js";
 import type { AppConfig } from "../config.js";
 
@@ -25,11 +25,12 @@ export function masterSecrets(master: Uint8Array): SecretCodec {
     open: (bytes, context) => open(master, bytes, context),
   };
 }
-export function createBackupModule(config: AppConfig) {
-  const pool = new Pool({ connectionString: config.databaseUrl, max: 6 });
-  pool.on("error", () => undefined);
-  const gatePool = new Pool({ connectionString: config.databaseUrl, max: 16 });
-  gatePool.on("error", () => undefined);
+/**
+ * Backups on the process's main pool (`pools.ts`): the API's backup routes,
+ * and the worker's lock, captures and bookkeeping. The caller owns the pool
+ * and ends it.
+ */
+export function createBackupModule(config: AppConfig, pool: Pool) {
   const store = new BackupStore(pool);
   const secrets = masterSecrets(parseMasterKey(config.fdriveMasterKey));
   const directory = config.fdriveBackupStateDir ?? join(config.fdriveTmpDir, "backups-disabled");
@@ -176,7 +177,6 @@ export function createBackupModule(config: AppConfig) {
   });
   return {
     pool,
-    gatePool,
     store,
     engine,
     destination,
@@ -192,8 +192,6 @@ export function createBackupModule(config: AppConfig) {
     },
     async close() {
       await engine.stop();
-      await gatePool.end();
-      await pool.end();
     },
   };
 }

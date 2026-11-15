@@ -9,7 +9,6 @@ import {
   createActivityRepo,
   createChangeJournal,
   createChangeWriter,
-  createDb,
   createDesktopRepo,
   createFilesFolderFacts,
   createIndexQueries,
@@ -104,6 +103,7 @@ import { registerOfficeSettingsRoutes } from "./office/settings-routes.ts";
 import { createOfficeStorageFactory } from "./office/storage.ts";
 import { createOfficeTokenCodec } from "./office/tokens.ts";
 import { registerPhotoRoutes } from "./photos/routes.js";
+import { openApiPools } from "./pools.ts";
 import { createScopeResolver } from "./scoping/resolver.ts";
 import { createEmbedClient } from "./search/embeddings.js";
 import { createImageEmbedClient } from "./search/image-embed-client.js";
@@ -176,9 +176,11 @@ export async function composeApp(
 
   const master = parseMasterKey(config.fdriveMasterKey);
 
-  const { db, pool } = createDb(config.databaseUrl, {
-    onError: (error) => logger.warn({ err: error }, "idle database connection error"),
-  });
+  // Every pool the API opens, and the order they are taken in: see pools.ts.
+  const pools = openApiPools(config.databaseUrl, (name, error) =>
+    logger.warn({ err: error, pool: name }, "idle database connection error"),
+  );
+  const { db, pool } = pools.main;
   await migrate(db);
   const repos = createRepos(db);
   const restored = await repos.settings.get("backup.restore.v1");
@@ -225,16 +227,9 @@ export async function composeApp(
     clock,
     usage: homeUsage,
   });
-  const backups = createBackupModule(config);
+  const backups = createBackupModule(config, pool);
   await backups.start();
 
-  // File operations' transactions, on a pool of their own: each holds its
-  // connection while its storage call runs (`createAccessRepo`).
-  const fileOperationPool = createDb(config.databaseUrl, {
-    max: 20,
-    connectionTimeoutMillis: 30_000,
-    onError: (error) => logger.warn({ err: error }, "idle file operation connection error"),
-  });
   const activityRepo = createActivityRepo(db, clock);
   const activityReads = createActivityReadsRepo(db, clock);
   const personalActivity = createActivityService({
@@ -381,7 +376,8 @@ export async function composeApp(
   // files) changes in one transaction with every file operation's storage
   // call, and never stays at a path a file left.
   const access = createAccessFollowers({
-    repo: createAccessRepo(fileOperationPool.db, clock),
+    // On their own pool: each holds its connection while its storage call runs.
+    repo: createAccessRepo(pools.fileOperations.db, clock),
     ownerPath: localGrants.ownerPath,
     links: shareMoves.resolve,
     usernameOf: async (identityId) => (await repos.identities.get(identityId))?.username ?? null,
@@ -499,15 +495,6 @@ export async function composeApp(
     },
   });
   const resolveOfficeRuntime = async () => officeRuntimeFor(await officeSettings.configuration());
-  // Office's document locks on a pool of their own: a save holds its document's
-  // lock, and a connection, while its body arrives, and checks admission and
-  // records history on the main pool meanwhile. Nothing on the main pool waits
-  // for these locks, so a saturated pool lengthens a save but cannot deadlock.
-  const officeLocks = createDb(config.databaseUrl, {
-    max: 10,
-    connectionTimeoutMillis: 30_000,
-    onError: (error) => logger.warn({ err: error }, "idle office lock connection error"),
-  });
   const officeService = createOfficeService({
     canEdit: createOfficeEditPolicy({
       settings: () => officeSettings.configuration(),
@@ -519,8 +506,10 @@ export async function composeApp(
     tokens: createOfficeTokenCodec(master),
     repos,
     files: officeFiles,
-    locks: createWopiLockRepo(officeLocks.db),
-    withWriteScope: createOfficeWriteScope(officeLocks.db),
+    // Office's document locks on their own pool: a save holds its document's
+    // lock, and a connection, while its body arrives.
+    locks: createWopiLockRepo(pools.office.db),
+    withWriteScope: createOfficeWriteScope(pools.office.db),
     clock,
     grants: localGrants,
     storageFactory: officeStorage,
@@ -744,7 +733,7 @@ export async function composeApp(
               path.includes("/internal/")
             )
               return work();
-            await withDatabaseWriter(backups.gatePool, work);
+            await withDatabaseWriter(pools.writeGate.pool, work);
           },
         }
       : {}),
@@ -979,9 +968,7 @@ export async function composeApp(
       await notifications.stop();
       await journalFanout.stop();
       indexedSignal.stop();
-      await fileOperationPool.close();
-      await officeLocks.close();
-      await pool.end();
+      await pools.close();
     },
   };
 }

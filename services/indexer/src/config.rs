@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use crate::rules::split_prefixes;
-use crate::settings::Settings;
+use crate::settings::{MAX_WORKERS, Settings};
 
 pub const SKIP_NAMES: &[&str] = &[
     ".DS_Store",
@@ -109,7 +109,7 @@ impl Config {
             tesseract_langs: text("TESSERACT_LANGS", "swe+eng"),
             watch: flag("WATCH", true),
             watch_debounce: Duration::from_secs_f64(debounce.max(0.0)),
-            workers: number("INDEX_WORKERS", 4)? as usize,
+            workers: (number("INDEX_WORKERS", 4)? as usize).clamp(1, MAX_WORKERS),
             thumbs_dir: PathBuf::from(text("THUMBS_DIR", "/thumbs")),
             thumb_max_bytes: mb("THUMB_MAX_MB", 200)?,
             indexer_port: number("INDEXER_PORT", 8010)? as u16,
@@ -189,6 +189,7 @@ mod tests {
         let c = config(&[("IMAGE_EMBED_BATCH_SIZE", "4"), ("IMAGE_EMBED_REQUEST_BATCH_SIZE", "2")]).unwrap();
         assert_eq!(c.image_embed_batch_size, 2);
         assert!(config(&[("INDEX_WORKERS", "many")]).is_err());
+        assert_eq!(config(&[("INDEX_WORKERS", "64")]).unwrap().workers, MAX_WORKERS);
         assert!(config(&[("WATCH_DEBOUNCE_SECONDS", "soon")]).is_err());
         assert_eq!(
             config(&[("SETTINGS_REFRESH_SECONDS", "0")]).unwrap().settings_refresh,
