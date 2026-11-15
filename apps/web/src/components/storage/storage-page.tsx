@@ -1,7 +1,13 @@
 "use client";
 
-import type { StorageFile, StorageKind, StorageUsageResponse } from "@fdrive/contracts";
+import type {
+  FsEntry,
+  StorageDuplicates,
+  StorageKind,
+  StorageUsageResponse,
+} from "@fdrive/contracts";
 import { baseName, extensionOf, mimeFromExtension, parentPath } from "@fdrive/core";
+import { useQueryClient } from "@tanstack/react-query";
 import {
   FileIcon as FileGenericIcon,
   FileTextIcon,
@@ -10,9 +16,12 @@ import {
   ImageIcon,
   type LucideIcon,
   MusicIcon,
+  Trash2Icon,
 } from "lucide-react";
 import type { Route } from "next";
 import Link from "next/link";
+import { useState } from "react";
+import { DeleteDialog } from "@/components/files/delete-dialog";
 import { FileIcon } from "@/components/files/file-icon";
 import { PageHeader } from "@/components/shell/page-header";
 import { Button } from "@/components/ui/button";
@@ -20,9 +29,14 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Progress } from "@/components/ui/progress";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { useMe } from "@/lib/api/auth-queries";
 import { describeApiError } from "@/lib/api/errors";
+import { queryKeys } from "@/lib/api/keys";
+import { useDelete } from "@/lib/files/queries";
+import { capabilitiesFor } from "@/lib/identity/capabilities";
 import { revealHref } from "@/lib/search/reveal";
 import { useStorageUsage } from "@/lib/storage/queries";
+import { trashAvailabilityFor } from "@/lib/trash/format";
 import { useFormatters } from "@/lib/use-format-preferences";
 
 const KINDS: Readonly<Record<StorageKind, { label: string; Icon: LucideIcon }>> = {
@@ -85,19 +99,26 @@ function UsageCard({ usage }: { usage: StorageUsageResponse }) {
   );
 }
 
-/** One of the largest files: where it is, its size, and a way to it. */
-function LargeFile({ file }: { file: StorageFile }) {
+interface FileRowProps {
+  readonly path: string;
+  readonly size: number;
+  /** For a duplicate: what removing it is called, and what does it. */
+  readonly remove?: { readonly label: string; readonly onRemove: (path: string) => void };
+}
+
+/** One file the page lists: where it is, its size, a way to it and, for a duplicate, out. */
+function FileRow({ path, size, remove }: FileRowProps) {
   const { formatBytes } = useFormatters();
-  const name = baseName(file.path);
+  const name = baseName(path);
   const ext = extensionOf(name);
   return (
     <li className="flex min-w-0 items-center gap-3 py-2 text-sm">
       <FileIcon kind="file" ext={ext} mime={mimeFromExtension(ext)} />
       <div className="flex min-w-0 flex-1 flex-col">
         <span className="truncate font-medium">{name}</span>
-        <span className="truncate text-xs text-muted-foreground">{parentPath(file.path)}</span>
+        <span className="truncate text-xs text-muted-foreground">{parentPath(path)}</span>
       </div>
-      <span className="shrink-0 tabular-nums text-muted-foreground">{formatBytes(file.size)}</span>
+      <span className="shrink-0 tabular-nums text-muted-foreground">{formatBytes(size)}</span>
       <Tooltip>
         <TooltipTrigger
           render={
@@ -106,7 +127,7 @@ function LargeFile({ file }: { file: StorageFile }) {
               variant="ghost"
               size="icon-sm"
               aria-label={`Reveal ${name} in folder`}
-              render={<Link href={revealHref(file.path) as Route} />}
+              render={<Link href={revealHref(path) as Route} />}
             />
           }
         >
@@ -114,13 +135,111 @@ function LargeFile({ file }: { file: StorageFile }) {
         </TooltipTrigger>
         <TooltipContent>Reveal in folder</TooltipContent>
       </Tooltip>
+      {remove === undefined ? null : (
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                aria-label={remove.label === "Delete" ? `Delete ${name}` : `Move ${name} to Trash`}
+                onClick={() => remove.onRemove(path)}
+              />
+            }
+          >
+            <Trash2Icon />
+          </TooltipTrigger>
+          <TooltipContent>{remove.label}</TooltipContent>
+        </Tooltip>
+      )}
     </li>
+  );
+}
+
+/** The file at `path`, as the delete confirmation names it. */
+function entryAt(path: string): FsEntry {
+  const name = baseName(path);
+  const ext = extensionOf(name);
+  return {
+    name,
+    path,
+    kind: "file",
+    size: 0,
+    modifiedAt: new Date(0).toISOString(),
+    ext,
+    mime: mimeFromExtension(ext),
+  };
+}
+
+/** Groups of identical files, each copy with a way to it and to Trash. */
+function DuplicatesCard({ groups }: { groups: readonly StorageDuplicates[] }) {
+  const { formatBytes } = useFormatters();
+  const { data: me } = useMe();
+  const queryClient = useQueryClient();
+  const remove = useDelete();
+  const [removing, setRemoving] = useState<string | null>(null);
+  const trash = trashAvailabilityFor(capabilitiesFor(me));
+  const label = trash === null ? "Delete" : "Move to Trash";
+
+  function confirm() {
+    if (removing === null) return;
+    remove.mutate([{ path: removing, kind: "file" }], {
+      onSuccess: () => {
+        setRemoving(null);
+        void queryClient.invalidateQueries({ queryKey: queryKeys.storage.usage() });
+      },
+    });
+  }
+
+  return (
+    <Card className="w-full max-w-2xl">
+      <CardHeader>
+        <CardTitle>Duplicates</CardTitle>
+        <CardDescription>
+          {groups.length === 0
+            ? "No identical files in your folder."
+            : "Identical files in your folder, most wasted space first."}
+        </CardDescription>
+      </CardHeader>
+      {groups.length === 0 ? null : (
+        <CardContent className="flex flex-col gap-5">
+          {groups.map((group) => (
+            <section key={group.paths.join("\n")} className="flex flex-col gap-1">
+              <h3 className="text-xs text-muted-foreground">
+                {group.paths.length} copies, {formatBytes(group.size * (group.paths.length - 1))}{" "}
+                wasted
+              </h3>
+              <ul className="flex flex-col divide-y">
+                {group.paths.map((path) => (
+                  <FileRow
+                    key={path}
+                    path={path}
+                    size={group.size}
+                    remove={{ label, onRemove: setRemoving }}
+                  />
+                ))}
+              </ul>
+            </section>
+          ))}
+        </CardContent>
+      )}
+      <DeleteDialog
+        entries={removing === null ? [] : [entryAt(removing)]}
+        trash={trash}
+        pending={remove.isPending}
+        onOpenChange={(open) => {
+          if (!open) setRemoving(null);
+        }}
+        onConfirm={confirm}
+      />
+    </Card>
   );
 }
 
 /**
  * `/storage`: how much the signed-in login's own folder holds, by kind and
- * against its storage limit, and its largest files, all from the index.
+ * against its storage limit, its largest files and its duplicates, all from
+ * the index.
  */
 export function StoragePage() {
   const { data, isLoading, isError, error } = useStorageUsage();
@@ -144,12 +263,13 @@ export function StoragePage() {
             <CardContent>
               <ul className="flex flex-col divide-y">
                 {data.largest.map((file) => (
-                  <LargeFile key={file.path} file={file} />
+                  <FileRow key={file.path} path={file.path} size={file.size} />
                 ))}
               </ul>
             </CardContent>
           </Card>
         ) : null}
+        {data?.indexed === true ? <DuplicatesCard groups={data.duplicates} /> : null}
       </div>
     </>
   );

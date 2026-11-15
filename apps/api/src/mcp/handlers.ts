@@ -638,7 +638,7 @@ interface MappedDuplicateGroup {
  * left with fewer than two authorized copies. Counts and wasted bytes are
  * computed only from what survives.
  */
-async function authorizeDuplicateGroups(
+export async function authorizeDuplicateGroups(
   ctx: ScopeContext,
   authorizer: ReadAuthorizer,
   groups: readonly DuplicateGroup[],

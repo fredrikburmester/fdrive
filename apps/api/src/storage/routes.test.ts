@@ -72,6 +72,7 @@ function buildApp(overrides: Partial<StorageRoutesDeps> & { scopes?: readonly Sc
       rootIdsByName: async () => ({ files: 1 }),
       bytesByExtension: async () => [],
       listFiles: async () => ({ total: 0, files: [] }),
+      duplicates: async () => [],
     },
     localUsers: { get: async () => user(null) },
     trashPathForStorage: () => "/.trash",
@@ -127,8 +128,34 @@ describe("GET /api/v1/storage", () => {
         indexed("alice/docs/report.pdf", 90),
       ],
     }));
+    const duplicates = vi.fn(async () => [
+      {
+        sha256: "a".repeat(64),
+        size: 300,
+        count: 2,
+        files: [
+          { rootId: 1, path: "alice/big.mp4" },
+          { rootId: 1, path: "alice/docs/report.pdf" },
+        ],
+      },
+      // One copy left the disk, so nothing is duplicated any more.
+      {
+        sha256: "b".repeat(64),
+        size: 200,
+        count: 2,
+        files: [
+          { rootId: 1, path: "alice/big.mp4" },
+          { rootId: 1, path: "alice/gone.mov" },
+        ],
+      },
+    ]);
     const app = buildApp({
-      indexQueries: { rootIdsByName: async () => ({ files: 1 }), bytesByExtension, listFiles },
+      indexQueries: {
+        rootIdsByName: async () => ({ files: 1 }),
+        bytesByExtension,
+        listFiles,
+        duplicates,
+      },
       localUsers: { get: async () => user(5_000) },
     });
 
@@ -147,6 +174,7 @@ describe("GET /api/v1/storage", () => {
         { path: "/big.mp4", size: 700, modifiedAt: "2023-11-14T22:13:20.000Z" },
         { path: "/docs/report.pdf", size: 90, modifiedAt: "2023-11-14T22:13:20.000Z" },
       ],
+      duplicates: [{ size: 300, paths: ["/big.mp4", "/docs/report.pdf"] }],
     });
     // Only the home: never a folder someone shares with the login.
     expect(bytesByExtension).toHaveBeenCalledWith([{ rootId: 1, fsPrefix: "/alice" }]);
@@ -159,6 +187,8 @@ describe("GET /api/v1/storage", () => {
     expect(prefixes).toEqual([{ rootId: 1, fsPrefix: "/alice" }]);
     expect(filter.exclude.prefixes).toContainEqual({ rootId: 1, fsPrefix: "/alice/.trash" });
     expect([order, limit]).toEqual(["size_desc", 25]);
+    // Empty files waste nothing, so the smallest copies counted are one byte.
+    expect(duplicates).toHaveBeenCalledWith([{ rootId: 1, fsPrefix: "/alice" }], 1, 50, filter);
   });
 
   it("answers zeros and the limit when the login's files are not indexed", async () => {
@@ -170,13 +200,25 @@ describe("GET /api/v1/storage", () => {
         rootIdsByName: async () => ({}),
         bytesByExtension,
         listFiles: vi.fn(),
+        duplicates: vi.fn(),
       },
     });
-    expect(await usage(app)).toMatchObject({ indexed: false, used: 0, limit: 9, largest: [] });
+    expect(await usage(app)).toMatchObject({
+      indexed: false,
+      used: 0,
+      limit: 9,
+      largest: [],
+      duplicates: [],
+    });
     expect(bytesByExtension).not.toHaveBeenCalled();
 
     const noRoot = buildApp({
-      indexQueries: { rootIdsByName: async () => ({}), bytesByExtension, listFiles: vi.fn() },
+      indexQueries: {
+        rootIdsByName: async () => ({}),
+        bytesByExtension,
+        listFiles: vi.fn(),
+        duplicates: vi.fn(),
+      },
     });
     expect(await usage(noRoot)).toMatchObject({ indexed: false, limit: null });
     const noLogin = buildApp({ identities: { get: async () => null } });

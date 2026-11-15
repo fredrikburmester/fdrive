@@ -17,6 +17,7 @@ describe("useStorageUsage", () => {
       limit: null,
       kinds: [{ kind: "other", bytes: 10 }],
       largest: [],
+      duplicates: [],
     };
     storageUsage.mockResolvedValue(response);
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });

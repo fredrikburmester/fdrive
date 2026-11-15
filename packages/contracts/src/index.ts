@@ -230,7 +230,12 @@ export {
   SetupStatusResponse,
 } from "./setup.ts";
 export * from "./shares.ts";
-export { StorageFile, StorageKind, StorageUsageResponse } from "./storage.ts";
+export {
+  StorageDuplicates,
+  StorageFile,
+  StorageKind,
+  StorageUsageResponse,
+} from "./storage.ts";
 export {
   ImageEmbeddingClearJob,
   ImageEmbeddingRebuildJob,
