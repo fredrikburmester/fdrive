@@ -330,6 +330,13 @@
       "when": 1794759554986,
       "tag": "0046_trash_items",
       "breakpoints": true
+    },
+    {
+      "idx": 47,
+      "version": "7",
+      "when": 1794779815263,
+      "tag": "0047_drop_desktop_original_path",
+      "breakpoints": true
     }
   ]
 }

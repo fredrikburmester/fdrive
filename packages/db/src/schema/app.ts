@@ -426,7 +426,6 @@ export const desktopItems = appSchema.table(
     path: text("path").notNull(),
     kind: text("kind").notNull(),
     metadataVersion: uuid("metadata_version").notNull().defaultRandom(),
-    originalPath: text("original_path"),
     deletedAt: timestamp("deleted_at", { withTimezone: true }),
   },
   (table) => [

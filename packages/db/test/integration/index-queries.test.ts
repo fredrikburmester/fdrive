@@ -449,7 +449,7 @@ describe("index-queries", () => {
         ["plan"],
         "plan",
         10,
-        { exclude: { prefixes: [{ rootId, fsPrefix: "/alice/.trash" }], names: [] } },
+        { exclude: { prefixes: [{ rootId, fsPrefix: "/alice/.trash" }] } },
       );
 
       expect(results.map((r) => [r.rootId, r.path])).toEqual([[rootId, "alice/plan"]]);
@@ -1232,12 +1232,11 @@ describe("index-queries", () => {
     const model = "google/siglip2-large-patch16-256";
     const trash = (rootId: number) => ({
       prefixes: [{ rootId, fsPrefix: "/alice/.trash" }],
-      names: [],
     });
 
     it("semantic: a closer trashed chunk never takes the only place", async () => {
       const rootId = await insertRoot("primary");
-      const trashed = await insertFile(rootId, "alice/.trash/.fdrive-move-v1/1/f/a.md");
+      const trashed = await insertFile(rootId, "alice/.trash/1/f/a.md");
       const live = await insertFile(rootId, "alice/docs/a.md");
       await insertChunk(trashed.id, 0, "trashed", rampVector(0));
       await insertChunk(live.id, 0, "live", rampVector(5));
@@ -1316,7 +1315,6 @@ describe("index-queries", () => {
       const results = await queries.filename(scope, ["notes", "trash"], "notes", 10, {
         exclude: {
           prefixes: [...trash(rootId).prefixes, { rootId, fsPrefix: "/alice/a_b" }],
-          names: [],
         },
       });
       expect(results.map((r) => r.fileId).sort()).toEqual(kept.map((file) => file.id).sort());
@@ -1333,37 +1331,18 @@ describe("index-queries", () => {
       ];
 
       const without = await queries.filename(scope, ["notes"], "notes", 10, {
-        exclude: { prefixes: [{ rootId, fsPrefix: "/" }], names: [] },
+        exclude: { prefixes: [{ rootId, fsPrefix: "/" }] },
       });
       expect(without.map((r) => r.fileId)).toEqual([kept.id]);
       const all = await queries.filename(scope, ["notes"], "notes", 10, {
-        exclude: { prefixes: [], names: [] },
+        exclude: { prefixes: [] },
       });
       expect(all.map((r) => r.fileId).sort()).toEqual([gone.id, kept.id].sort());
     });
 
-    it("leaves out a folder name wherever it lies, in any case, never a name that only contains it", async () => {
-      const rootId = await insertRoot("primary");
-      await insertFile(rootId, ".fdrive-move-v1/a/notes.md");
-      await insertFile(rootId, "alice/old/.fdrive-move-v1/file/p/notes.md/v/1");
-      await insertFile(rootId, "alice/x/.FDRIVE-BACKUPS/notes.md");
-      await insertFile(rootId, "alice/.fdrive-move-v1");
-      const kept = [
-        await insertFile(rootId, "alice/x.fdrive-move-v1/notes.md"),
-        await insertFile(rootId, "alice/.fdrive-move-v10/notes.md"),
-        await insertFile(rootId, "alice/notes.fdrive-backups"),
-      ];
-      const scope = [{ rootId, fsPrefix: "/" }];
-
-      const results = await queries.filename(scope, ["notes", "fdrive"], "notes", 10, {
-        exclude: { prefixes: [], names: [".fdrive-move-v1", ".fdrive-backups"] },
-      });
-      expect(results.map((r) => r.fileId).sort()).toEqual(kept.map((file) => file.id).sort());
-    });
-
     it("listFiles: counts and pages only what is left", async () => {
       const rootId = await insertRoot("primary");
-      await insertFile(rootId, "alice/.trash/.fdrive-move-v1/file/p/a.md/v/1", { size: 900 });
+      await insertFile(rootId, "alice/.trash/1/a.md", { size: 900 });
       await insertFile(rootId, "alice/.fdrive-desktop/staging/b.md", { size: 800 });
       const live = [
         await insertFile(rootId, "alice/a.md", { size: 300 }),
@@ -1371,8 +1350,10 @@ describe("index-queries", () => {
       ];
       const scope = [{ rootId, fsPrefix: "/alice" }];
       const exclude = {
-        prefixes: [{ rootId, fsPrefix: "/alice/.fdrive-desktop" }],
-        names: [".fdrive-move-v1"],
+        prefixes: [
+          { rootId, fsPrefix: "/alice/.trash" },
+          { rootId, fsPrefix: "/alice/.fdrive-desktop" },
+        ],
       };
 
       const { total, files } = await queries.listFiles(scope, { exclude }, "size_desc", 1);
@@ -1462,7 +1443,7 @@ describe("index-queries", () => {
       await insertFile(rootId, "bob/theirs.jpg");
       const scope = [{ rootId, fsPrefix: "/alice" }];
       const exts = [".jpg", ".png", ".heic"];
-      const options = { exclude: { prefixes: [{ rootId, fsPrefix: "/alice/.Trash" }], names: [] } };
+      const options = { exclude: { prefixes: [{ rootId, fsPrefix: "/alice/.Trash" }] } };
 
       const first = await queries.photos(scope, exts, 2, options);
       expect(first.map((row) => [row.path, row.takenAt, row.at])).toEqual([

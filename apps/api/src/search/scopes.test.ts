@@ -42,7 +42,6 @@ describe("reservedExclusion", () => {
     fsPrefix: "/bob/Projects",
     virtualPrefix: "/Shared with me/Projects",
   };
-  const names = [".fdrive-move-v1"];
 
   it("maps the Trash, the Mac app's folder and the home's own Shared with me through the home", () => {
     expect(reservedExclusion([home, mount])).toEqual({
@@ -51,11 +50,10 @@ describe("reservedExclusion", () => {
         { rootId: 1, fsPrefix: "/alice/.fdrive-desktop" },
         { rootId: 1, fsPrefix: "/alice/Shared with me" },
       ],
-      names,
     });
   });
 
-  it("keeps only the reserved names outside every scope", () => {
-    expect(reservedExclusion([mount])).toEqual({ prefixes: [], names });
+  it("leaves out nothing outside every scope", () => {
+    expect(reservedExclusion([mount])).toEqual({ prefixes: [] });
   });
 });

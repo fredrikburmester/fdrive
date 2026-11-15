@@ -1,0 +1,1 @@
+ALTER TABLE "app"."desktop_items" DROP COLUMN "original_path";

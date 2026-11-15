@@ -79,25 +79,8 @@ that fdrive never acted on. They are gone; nothing reads the old settings.
 - An hour after the first start, Trash deletes what it has kept longer than 30 days. Set
   **Days in Trash** within that hour, or restore what you want before upgrading, to keep older
   items.
-- Earlier versions kept Trash's items in one nested layout,
-  `/.trash/.fdrive-move-v1/<kind>/p/<segment>/…/v/<timestamp>`, whose folders named where each
-  item was deleted from and when. When the API starts, before it serves anyone, it moves each
-  item still there into a folder of its own with one rename, keeping the path and time its old
-  place named, so Days in Trash counts as before. Tags, favorites, links, folders shared with
-  people, Office documents and FDrive for Mac's handles that followed an item into the old
-  layout follow it to the new place. The move writes the item's row first and is safe to
-  interrupt: the next start finishes or repeats it, and an item is always in its old place or
-  its new one. An item it cannot move stays where it is and is tried again at the next start;
-  nothing is deleted, and empty folders of the old layout go.
-- Items in a Trash an earlier version kept in another folder stay on disk untouched, under
-  `<that folder>/.fdrive-move-v1`. fdrive does not list them, the Trash page does not show
-  them, and retention never deletes them; deleting that folder in fdrive moves it, with them,
-  to Trash like any folder. To bring them back, move them on the host. Moving the old
-  `.fdrive-move-v1` folder's contents into `<files folder>/<username>/.trash/.fdrive-move-v1`
-  makes the next start move them into Trash like any other old item, counted from the day each
-  was deleted.
-- FDrive for Mac once kept a Trash of its own, in `/.fdrive-desktop/<login id>/trash`. When the
-  API starts, before it serves anyone, it moves each item there into its user's Trash, under the
-  path it was deleted from, as deleted at that moment: Days in Trash counts from the start that
-  moved it. An item it cannot move stays where it is and is tried again at the next start;
-  nothing there is deleted.
+- Earlier versions kept Trash's items in one nested layout, and FDrive for Mac once kept a
+  Trash of its own. v0.7.0-rc.11 moves both into Trash when it starts; later versions no longer
+  do. An installation on an earlier version starts v0.7.0-rc.11 once, until it serves, before
+  it updates past it. What that start could not move stays on disk and is no longer Trash's,
+  and the nested layout a Trash kept in another folder is an ordinary folder now.

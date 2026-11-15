@@ -1,11 +1,5 @@
-import {
-  baseName,
-  isStorageError,
-  type StorageProvider,
-  trashItemFolder,
-  trashItemPath,
-} from "@fdrive/core";
-import type { PendingTrashItem, TrashItem, TrashItemRepo } from "@fdrive/db";
+import { isStorageError, type StorageProvider, trashItemFolder, trashItemPath } from "@fdrive/core";
+import type { PendingTrashItem, TrashItemRepo } from "@fdrive/db";
 import { gated, ungated, type WriteGate } from "../backups/write-gate.js";
 import type { AccessFollowers } from "../files/access.js";
 import type { MetadataService } from "../metadata/service.js";
@@ -21,7 +15,7 @@ export interface TrashItemsDeps {
   readonly access: Pick<AccessFollowers, "run">;
   /**
    * A login's own files, whether or not its user may sign in now: settling
-   * an item and moving one into Trash at start are fdrive's own bookkeeping.
+   * an item is fdrive's own bookkeeping.
    */
   readonly homeOf: (identityId: string) => Promise<StorageProvider>;
   /**
@@ -30,9 +24,9 @@ export interface TrashItemsDeps {
    */
   readonly metadata?: Pick<MetadataService, "onMoved">;
   /**
-   * The backups' write gate. Settling an item and moving one in each hold
-   * it, joining the write they run in (a delete that failed, a Mac commit),
-   * so a capture's snapshot sees an item's row and its rename together.
+   * The backups' write gate. Settling an item holds it, joining the write it
+   * runs in (a delete that failed, a Mac commit), so a capture's snapshot
+   * sees an item's row and its rename together.
    */
   readonly gate?: WriteGate;
   readonly logger?: { warn(object: Record<string, unknown>, message: string): void };
@@ -54,18 +48,6 @@ export interface TrashItems extends Pick<TrashItemRepo, "begin" | "get" | "list"
    * twice, and alongside the operation that began it.
    */
   settle(item: ArrivingTrashItem): Promise<void>;
-  /**
-   * Moves `from`, in fdrive's own folders, into `identityId`'s Trash as an
-   * item deleted from `originalPath` at `deletedAt`, with one rename, and
-   * what follows a path along. `not_found` when nothing is at `from`; any
-   * failure leaves the item where it was, to be tried again.
-   */
-  adopt(
-    identityId: string,
-    from: string,
-    originalPath: string,
-    deletedAt: Date,
-  ): Promise<TrashItem>;
 }
 
 /** Whether something is at `path`; any failure but `not_found` is passed on. */
@@ -82,8 +64,6 @@ async function exists(storage: StorageProvider, path: string): Promise<boolean> 
 export function createTrashItems(deps: TrashItemsDeps): TrashItems {
   const { repo } = deps;
   const gate = deps.gate ?? ungated;
-
-  const settle = (item: ArrivingTrashItem) => gated(gate, () => settleIn(item));
 
   async function settleIn(item: ArrivingTrashItem): Promise<void> {
     const storage = await deps.homeOf(item.identityId);
@@ -118,38 +98,6 @@ export function createTrashItems(deps: TrashItemsDeps): TrashItems {
     get: (identityId, id) => repo.get(identityId, id),
     list: (identityId, limit) => repo.list(identityId, limit),
     expired: (identityId, before) => repo.expired(identityId, before),
-    settle,
-
-    adopt: (identityId, from, originalPath, deletedAt) =>
-      gated(gate, () => adoptIn(identityId, from, originalPath, deletedAt)),
+    settle: (item) => gated(gate, () => settleIn(item)),
   };
-
-  /** `adopt` inside its write: the row, the rename and the arrival, one gate held throughout. */
-  async function adoptIn(
-    identityId: string,
-    from: string,
-    originalPath: string,
-    deletedAt: Date,
-  ): Promise<TrashItem> {
-    const storage = await deps.homeOf(identityId);
-    const found = await storage.stat(from);
-    const kind = found.kind === "dir" ? "dir" : "file";
-    const item = await repo.begin({
-      identityId,
-      originalPath,
-      name: baseName(originalPath),
-      kind,
-      size: kind === "file" ? found.size : 0,
-      deletedAt,
-      movingFrom: from,
-    });
-    try {
-      await storage.mkdir(trashItemFolder(item.id), { parents: true });
-      await storage.move(from, trashItemPath(item.id, item.name), { overwrite: false });
-    } finally {
-      await settleIn(item);
-    }
-    const { movingFrom: _, ...arrived } = item;
-    return arrived;
-  }
 }

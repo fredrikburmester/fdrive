@@ -54,7 +54,6 @@ const ALICE_RESERVED = {
     { rootId: 1, fsPrefix: "/alice/.fdrive-desktop" },
     { rootId: 1, fsPrefix: "/alice/Shared with me" },
   ],
-  names: [".fdrive-move-v1"],
 };
 
 function fail(name: string): never {
@@ -554,22 +553,19 @@ describe("runListDirectory", () => {
     expect(result.truncated).toBe(false);
   });
 
-  it.each([
-    "/.trash",
-    "/.trash/deleted.txt",
-    "/docs/../.trash",
-    "/.fdrive-desktop",
-    "/old/.fdrive-move-v1/file",
-  ])("rejects %s, in one of fdrive's own folders, before touching storage", async (path) => {
-    const list = vi.fn(async () => []);
-    const storage = fakeStorage({ list });
-    const deps = baseDeps();
+  it.each(["/.trash", "/.trash/deleted.txt", "/docs/../.trash", "/.fdrive-desktop"])(
+    "rejects %s, in one of fdrive's own folders, before touching storage",
+    async (path) => {
+      const list = vi.fn(async () => []);
+      const storage = fakeStorage({ list });
+      const deps = baseDeps();
 
-    await expect(runListDirectory(deps, tokenPrincipal(storage), { path })).rejects.toThrow(
-      "fdrive's own folders",
-    );
-    expect(list).not.toHaveBeenCalled();
-  });
+      await expect(runListDirectory(deps, tokenPrincipal(storage), { path })).rejects.toThrow(
+        "fdrive's own folders",
+      );
+      expect(list).not.toHaveBeenCalled();
+    },
+  );
 });
 
 describe("fileInfoInScope (the AI's indexed file_info)", () => {
@@ -1349,13 +1345,25 @@ describe("runRecentMoves", () => {
       moveEvent("/docs/a.txt", "/docs/b.txt"),
       moveEvent("/docs/c.txt", "/private/c.txt"),
       moveEvent("/private/d.txt", "/docs/d.txt"),
-      moveEvent("/docs/e.txt", "/docs/.fdrive-move-v1/e.txt"),
-      moveEvent("/docs/old/.fdrive-move-v1/f.txt", "/docs/f.txt"),
       moveEvent(undefined, "/docs/g.txt"),
       moveEvent("/docs/h.txt", undefined),
     ]);
 
     const result = await runRecentMoves(deps, tokenPrincipal(fakeStorage(), "read", ["/docs"]), {});
+
+    expect(result).toEqual({
+      moves: [{ at: at.toISOString(), src: "/docs/a.txt", dst: "/docs/b.txt" }],
+    });
+  });
+
+  it("never lists a move into or out of fdrive's own folders, whatever the token reaches", async () => {
+    const { deps } = activityOf([
+      moveEvent("/docs/a.txt", "/docs/b.txt"),
+      moveEvent("/docs/e.txt", "/.trash/e.txt"),
+      moveEvent("/.fdrive-desktop/f.txt", "/docs/f.txt"),
+    ]);
+
+    const result = await runRecentMoves(deps, tokenPrincipal(fakeStorage(), "read", ["/"]), {});
 
     expect(result).toEqual({
       moves: [{ at: at.toISOString(), src: "/docs/a.txt", dst: "/docs/b.txt" }],
@@ -1448,11 +1456,7 @@ describe("fdrive's own folders", () => {
   it("never maps an index row into one, even one a lookup by path finds", async () => {
     const ctx = resolveScopeContext(ALICE_HOME_SCOPES);
     if (ctx === null) throw new Error("expected a scope context");
-    for (const path of [
-      "alice/.trash/a.txt",
-      "alice/.fdrive-desktop/staging/a.txt",
-      "alice/old/.fdrive-move-v1/file/p/a.txt/v/1",
-    ]) {
+    for (const path of ["alice/.trash/a.txt", "alice/.fdrive-desktop/staging/a.txt"]) {
       const file = makeFile({ id: 1, path });
       const deps = baseDeps({ indexQueries: stubIndexQueries({ fileByPath: async () => file }) });
       await expect(fileInfoInScope(deps, ctx, { path: `/${path.slice(6)}` })).rejects.toThrow(

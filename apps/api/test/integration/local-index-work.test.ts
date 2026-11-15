@@ -236,7 +236,7 @@ describe("changes fdrive makes, through the real indexer with its watcher off", 
       const hits = await names.search({
         query: "Microlär",
         scopes: [{ rootId: INDEX_ROOT_ID, fsPrefix: "/alice" }],
-        exclude: { prefixes: [], names: [] },
+        exclude: { prefixes: [] },
         files: 5,
         folders: 5,
       });

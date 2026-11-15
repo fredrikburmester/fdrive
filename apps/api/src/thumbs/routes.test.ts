@@ -226,11 +226,7 @@ describe("GET /api/v1/thumb", () => {
       indexQueries: fakeIndexQueries({ fileByPath }),
     });
 
-    for (const path of [
-      "/.trash/photo.jpg",
-      "/.fdrive-desktop/staging/photo.jpg",
-      "/Old/.fdrive-move-v1/file/p/photo.jpg/v/1",
-    ]) {
+    for (const path of ["/.trash/photo.jpg", "/.fdrive-desktop/staging/photo.jpg"]) {
       const res = await app.request(`/api/v1/thumb?path=${encodeURIComponent(path)}&size=256`);
       expect(res.status).toBe(404);
     }

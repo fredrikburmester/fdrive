@@ -72,7 +72,7 @@ Reference for affected code; shared rules live in [AGENTS.md](../AGENTS.md).
   Now `deleteFile` and `deleteDir` delete for good, and moving to Trash is `trash.put`, so each
   caller says which it means.
 - Trash once encoded each item's original path in its folders
-  (`.fdrive-move-v1/<kind>/p/<segment>/…/v/<timestamp>`), so it needed no database on any
+  (`<kind>/p/<segment>/…/v/<timestamp>`), so it needed no database on any
   backend. It roughly doubled path length, so a delete near `PATH_MAX` failed with
   `ENAMETOOLONG`; it left empty folders behind; every listing walked the tree; and every caller
   parsed leaves. Trash now keeps one folder per item and a row: a listing is one query, and an

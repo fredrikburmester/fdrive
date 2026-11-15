@@ -149,7 +149,6 @@ describe("a public share's paths", () => {
       expect(await kindOf(service.entries(share, hidden))).toBe("not_found");
     }
     expect(hiddenFromLinks("/Shared with me/x")).toBe(true);
-    expect(hiddenFromLinks("/a/.fdrive-move-v1/b")).toBe(true);
     expect(hiddenFromLinks("/Shared with meme")).toBe(false);
   });
 

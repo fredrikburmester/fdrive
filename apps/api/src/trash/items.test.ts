@@ -96,60 +96,22 @@ describe("TrashItems.settle", () => {
   });
 });
 
-describe("TrashItems.adopt", () => {
-  it("moves what fdrive kept in its own folders into Trash with one rename", async () => {
-    const h = setup({ "/.fdrive-desktop/mac/trash/x": "todo" });
-    const item = await h.items.adopt(ALICE, "/.fdrive-desktop/mac/trash/x", "/notes/todo.md", AT);
-    expect(item).toMatchObject({
-      identityId: ALICE,
-      originalPath: "/notes/todo.md",
-      name: "todo.md",
-      kind: "file",
-      size: 4,
-      deletedAt: AT,
-    });
-    expect(h.storage.dump()).toEqual({ [trashItemPath(item.id, "todo.md")]: "todo" });
-    expect((await h.items.list(ALICE, 10)).items).toEqual([item]);
-    expect(h.metadata.onMoved).toHaveBeenCalledWith(
-      ALICE,
-      "/.fdrive-desktop/mac/trash/x",
-      trashItemPath(item.id, "todo.md"),
-      false,
-    );
-  });
-
-  it("leaves an item that cannot move where it is, with no row", async () => {
-    const h = setup({ "/.fdrive-desktop/mac/trash/x": "todo" });
-    h.storage.move = async () => {
-      throw new StorageError("forbidden", "a link on the way");
-    };
-    await expect(
-      h.items.adopt(ALICE, "/.fdrive-desktop/mac/trash/x", "/todo.md", AT),
-    ).rejects.toMatchObject({ kind: "forbidden" });
-    expect(h.storage.dump()).toEqual({ "/.fdrive-desktop/mac/trash/x": "todo" });
-    expect(h.repo.rows.size).toBe(0);
-    await expect(h.items.adopt(ALICE, "/missing", "/missing", AT)).rejects.toMatchObject({
-      kind: "not_found",
-    });
-  });
-});
-
 describe("TrashItems and the backups' write gate", () => {
-  it("moves an item in, row and rename, inside one hold of the gate", async () => {
+  it("settles on its own, as at start, inside one hold of the gate", async () => {
     const steps: string[] = [];
     const { gate, connections } = recordingGateOnPool(steps);
-    const h = setup({ "/.fdrive-desktop/mac/trash/x": "todo" }, gate);
-    const begin = h.repo.begin.bind(h.repo);
-    h.repo.begin = async (item) => {
-      steps.push("row written");
-      return begin(item);
-    };
+    const h = setup({}, gate);
+    const item = await h.repo.begin(pendingFrom("/a.txt", "a.txt"));
+    await h.storage.upload(trashItemPath(item.id, "a.txt"), new TextEncoder().encode("a"), {
+      mkdirParents: true,
+    });
     h.metadata.onMoved.mockImplementation(async () => {
       steps.push("followed");
     });
-    await h.items.adopt(ALICE, "/.fdrive-desktop/mac/trash/x", "/todo.md", AT);
-    expect(steps).toEqual(["gate held", "row written", "followed", "gate let go"]);
+    await h.items.settle(item);
+    expect(steps).toEqual(["gate held", "followed", "gate let go"]);
     expect(connections()).toBe(1);
+    expect(await h.items.get(ALICE, item.id)).not.toBeNull();
   });
 
   it("settles inside the write it runs in, taking no second connection", async () => {

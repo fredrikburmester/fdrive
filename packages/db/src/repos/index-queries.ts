@@ -140,15 +140,13 @@ export interface RecencyDecay {
 
 /**
  * What a read over a scope leaves out: rows at or under one of `prefixes`
- * (shaped like the scope), and rows with a folder named one of `names`, in
- * any case, anywhere in their path. They are dropped before the limit and
- * every count, so they never take a place or a total a row the caller can
- * use would have had. The API leaves fdrive's own folders out here
+ * (shaped like the scope). They are dropped before the limit and every
+ * count, so they never take a place or a total a row the caller can use
+ * would have had. The API leaves fdrive's own folders out here
  * (`isReservedPath` in `@fdrive/core`).
  */
 export interface IndexExclusion {
   readonly prefixes: readonly ScopePrefix[];
-  readonly names: readonly string[];
 }
 
 /** Options every scoped read that can leave rows out takes. */
@@ -515,19 +513,12 @@ function underClause(clause: ScopeClause, columns: PathColumns = FILE_COLUMNS) {
 
 /**
  * Leaves out what `exclude` names (see `IndexExclusion`); `undefined`, which
- * `and()` skips, when it names nothing. A name is matched as a whole segment
- * of the path, its own last one included.
+ * `and()` skips, when it names nothing.
  */
 function exclusionCondition(exclude: IndexExclusion | undefined, columns = FILE_COLUMNS) {
-  const parts = [
-    ...toScopeClauses(exclude?.prefixes ?? []).map(
-      (clause) => sql`NOT ${underClause(clause, columns)}`,
-    ),
-    ...(exclude?.names ?? []).map(
-      (name) =>
-        sql`('/' || ${columns.path} || '/') NOT ILIKE ${`%/${escapeLikePattern(name)}/%`} ESCAPE '\\'`,
-    ),
-  ];
+  const parts = toScopeClauses(exclude?.prefixes ?? []).map(
+    (clause) => sql`NOT ${underClause(clause, columns)}`,
+  );
   return parts.length === 0 ? undefined : and(...parts);
 }
 

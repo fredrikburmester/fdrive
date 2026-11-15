@@ -83,7 +83,6 @@ describe("queries per request", () => {
         // fdrive's own folders, which the index keeps or may still hold.
         ["bob/.trash/trashedthing.txt", sha(2000)],
         ["bob/.fdrive-desktop/staging/stagedthing.txt", sha(2001)],
-        ["bob/old/.fdrive-move-v1/file/p/movedthing.txt/v/1", sha(2002)],
       ];
       await database.db.insert(schema.files).values(
         rows.map(([path, key]) => ({
@@ -221,14 +220,10 @@ describe("queries per request", () => {
     expect(found.sections.files).toHaveLength(20);
     expect(found.sections.files.every((hit) => hit.path.startsWith("/reports/"))).toBe(true);
     expect(found.sections.files.every((hit) => hit.hasThumbnail)).toBe(true);
-    for (const name of ["trashedthing", "stagedthing", "movedthing"]) {
+    for (const name of ["trashedthing", "stagedthing"]) {
       expect((await searchFor(name)).sections.files).toEqual([]);
     }
-    for (const path of [
-      "/.trash/trashedthing.txt",
-      "/.fdrive-desktop/staging/stagedthing.txt",
-      "/old/.fdrive-move-v1/file/p/movedthing.txt/v/1",
-    ]) {
+    for (const path of ["/.trash/trashedthing.txt", "/.fdrive-desktop/staging/stagedthing.txt"]) {
       expect((await send(thumb(path))).status, path).toBe(404);
     }
     // One gone from disk is listed until the next index pass, and not found when opened.

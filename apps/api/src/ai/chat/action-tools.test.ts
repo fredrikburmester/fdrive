@@ -401,13 +401,12 @@ describe("rename_items", () => {
         renames: [{ path: "/notes.txt", name: ".Trash", reason: "r" }],
       }),
     ).rejects.toThrow("/notes.txt cannot be named .Trash: that name is fdrive's own.");
-    for (const name of [".fdrive-desktop", ".fdrive-move-v1"])
-      await expect(
-        verify("rename_items", {
-          summary: "s",
-          renames: [{ path: "/notes.txt", name, reason: "r" }],
-        }),
-      ).rejects.toThrow(`/notes.txt cannot be named ${name}: that name is fdrive's own.`);
+    await expect(
+      verify("rename_items", {
+        summary: "s",
+        renames: [{ path: "/notes.txt", name: ".fdrive-desktop", reason: "r" }],
+      }),
+    ).rejects.toThrow("/notes.txt cannot be named .fdrive-desktop: that name is fdrive's own.");
 
     const proposal = await verify("rename_items", {
       summary: "s",

@@ -14,7 +14,7 @@ describe("Trash item paths", () => {
 
   it("takes only ids fdrive makes", () => {
     expect(isTrashId(ID)).toBe(true);
-    for (const id of ["", "docs/a.txt/1", ID.toUpperCase(), `${ID}/x`, "../x", ".fdrive-move-v1"])
+    for (const id of ["", "docs/a.txt/1", ID.toUpperCase(), `${ID}/x`, "../x"])
       expect(isTrashId(id)).toBe(false);
     expect(() => trashItemFolder("../docs")).toThrow(StorageError);
   });
@@ -29,7 +29,6 @@ describe("Trash item paths", () => {
       "/.trash/not-an-id/a.txt",
       `/docs/${ID}/a.txt`,
       `/.Trash/${ID}/a.txt`,
-      "/.trash/.fdrive-move-v1/file/p/a.txt/v/1",
     ])
       expect(trashItemOf(path)).toBeNull();
   });
@@ -135,20 +134,17 @@ describe("createTrash", () => {
     expect(moves).toEqual([{ overwrite: false }]);
   });
 
-  it.each([
-    "/",
-    "/.trash",
-    `/.trash/${OTHER}/a.txt`,
-    "/.fdrive-desktop/x",
-    "/old/.fdrive-move-v1/x",
-  ])("refuses %s: the root and fdrive's own folders never go to Trash", async (path) => {
-    const storage = createMemoryStorage({
-      [`/.trash/${OTHER}/a.txt`]: "kept",
-      "/.fdrive-desktop/x": "kept",
-    });
-    await expect(storage.trash.put(path, ID)).rejects.toMatchObject({ kind: "bad_request" });
-    expect(storage.dump()).toMatchObject({ [`/.trash/${OTHER}/a.txt`]: "kept" });
-  });
+  it.each(["/", "/.trash", `/.trash/${OTHER}/a.txt`, "/.fdrive-desktop/x"])(
+    "refuses %s: the root and fdrive's own folders never go to Trash",
+    async (path) => {
+      const storage = createMemoryStorage({
+        [`/.trash/${OTHER}/a.txt`]: "kept",
+        "/.fdrive-desktop/x": "kept",
+      });
+      await expect(storage.trash.put(path, ID)).rejects.toMatchObject({ kind: "bad_request" });
+      expect(storage.dump()).toMatchObject({ [`/.trash/${OTHER}/a.txt`]: "kept" });
+    },
+  );
 
   it("refuses what is not there, and an id it did not make", async () => {
     const storage = createMemoryStorage({ "/a.txt": "a" });
