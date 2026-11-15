@@ -296,6 +296,12 @@ describe("migrate", () => {
       await login(webdav.id, "alice-dav"); // a login on storage fdrive no longer has
       for (const username of ["alice", "bob", "carol"])
         await older.db.insert(schema.localUsers).values({ username, passwordHash: "x" });
+      // A files folder destination with a sealed password, and a bucket.
+      await older.db.execute(sql`
+        insert into app.backup_destinations (id, revision, name, type, config, secret) values
+          (gen_random_uuid(), gen_random_uuid(), 'Files', 'provider', '{}', '\\x01'),
+          (gen_random_uuid(), gen_random_uuid(), 'Bucket', 's3', '{}', '\\x01')
+      `);
       await older.db.execute(sql`
         insert into app.settings (key, value) values
           ('setup.initialized.v1', 'true'),
@@ -317,6 +323,10 @@ describe("migrate", () => {
         sql`select key from app.settings where key like 'setup.%' order by 1`,
       );
       expect(settings.rows).toEqual([{ key: "setup.owner.v1" }]);
+      const destinations = await older.db.execute<{ type: string }>(
+        sql`select type from app.backup_destinations`,
+      );
+      expect(destinations.rows).toEqual([{ type: "s3" }]);
       const credentials = await older.db.execute<{ table: string | null }>(
         sql`select to_regclass('app.credentials')::text as table`,
       );

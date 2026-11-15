@@ -20,6 +20,12 @@ WHERE NOT EXISTS (
 DELETE FROM "app"."settings"
 WHERE "key" = 'setup.initialized.v1'
   OR ("key" = 'setup.owner.v1' AND "value"->>'state' IS DISTINCT FROM 'complete');--> statement-breakpoint
+-- A files folder backup destination kept its user's password sealed as its
+-- secret. It goes with its delivery records; the archives it wrote stay in
+-- that user's files. Re-added, it keeps no password.
+DELETE FROM "app"."backup_deliveries"
+WHERE "destination_id" IN (SELECT "id" FROM "app"."backup_destinations" WHERE "type" = 'provider');--> statement-breakpoint
+DELETE FROM "app"."backup_destinations" WHERE "type" = 'provider';--> statement-breakpoint
 -- The sealed copies of every password go; FDRIVE_MASTER_KEY stays for the
 -- secrets that still need it.
 ALTER TABLE "app"."credentials" DISABLE ROW LEVEL SECURITY;--> statement-breakpoint
