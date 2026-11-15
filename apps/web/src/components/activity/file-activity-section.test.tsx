@@ -5,11 +5,9 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { FileActivitySection } from "./file-activity-section";
 
 const mocks = vi.hoisted(() => ({
-  identity: "drive" as string | undefined,
   file: vi.fn(),
   history: vi.fn(),
 }));
-vi.mock("@/lib/api/client", () => ({ getTabIdentity: () => mocks.identity }));
 vi.mock("@/lib/activity/queries", () => ({
   useActivityFileAt: mocks.file,
   useActivityHistory: mocks.history,
@@ -50,7 +48,6 @@ function feed(provisionalReads: PersonalActivityEvent[], items: PersonalActivity
 }
 
 beforeEach(() => {
-  mocks.identity = "drive";
   mocks.file.mockReturnValue({ isPending: false, isError: false, data: fileId });
   mocks.history.mockReturnValue(history());
 });
@@ -88,7 +85,7 @@ it("lists the file's latest activity newest first, with its earlier location and
 
   render(<FileActivitySection path="/b.txt" />);
 
-  expect(mocks.file).toHaveBeenCalledWith("drive", "/b.txt");
+  expect(mocks.file).toHaveBeenCalledWith("/b.txt");
   expect(mocks.history).toHaveBeenCalledWith({ limit: 10 }, `/files/${fileId}/events`);
   const items = within(screen.getByRole("region", { name: "Activity" })).getAllByRole("listitem");
   expect(items.map((item) => item.textContent)).toEqual([
@@ -137,12 +134,4 @@ it("shows loading, failure and paging states", () => {
   );
   view.rerender(<FileActivitySection path="/a.txt" />);
   expect(screen.getByRole("button", { name: "Loading…" }).hasAttribute("disabled")).toBe(true);
-});
-
-it("renders nothing without a login to look the path up in", () => {
-  mocks.identity = undefined;
-
-  const { container } = render(<FileActivitySection path="/a.txt" />);
-
-  expect(container.innerHTML).toBe("");
 });

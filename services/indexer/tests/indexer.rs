@@ -1776,8 +1776,6 @@ fn watcher_renames_move_rows_or_delete_on_an_extension_change() {
     assert_eq!(watch_rename(&ctx, "docs", "moved", true), 1);
     assert!(!env.row(&ctx, "renamed.txt").deleted);
     assert!(!env.row(&ctx, "moved/c.txt").deleted);
-    // The move log is MCP's own; the indexer's moves are in the journal and the events.
-    assert_eq!(env.count("idx.moves"), 0);
     assert_eq!(
         env.notified(),
         vec![

@@ -2,14 +2,13 @@ import { expect, it, vi } from "vitest";
 import { publicShareClient, publicUploadUrl } from "./client";
 
 const id = "00000000-0000-4000-8000-000000000001";
-it("uses same-origin capability endpoints without authenticated identity headers", async () => {
+it("uses same-origin capability endpoints with the CSRF marker", async () => {
   const fetcher = vi.fn<typeof fetch>().mockResolvedValue(Response.json({ ok: true }));
   const signal = new AbortController().signal;
   await publicShareClient(signal, fetcher).setSharePassword(id, "input");
   const [url, init] = fetcher.mock.calls[0] ?? [];
   expect(String(url)).toBe(`/api/v1/public/shares/${id}/credentials`);
   expect(init).toMatchObject({ credentials: "same-origin", cache: "no-store", signal });
-  expect(new Headers(init?.headers).has("x-identity-id")).toBe(false);
   expect(new Headers(init?.headers).get("x-requested-with")).toBe("fdrive");
   fetcher.mockResolvedValue(Response.json({ ok: true }));
   await publicShareClient(undefined, fetcher).clearSharePassword(id);

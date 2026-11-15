@@ -155,7 +155,7 @@ the web and API behind HTTPS before submitting a recovery key remotely.
 Both paths validate every archive entry and checksum before import. Paths from an archive
 are never used as extraction paths. Credentials are resealed under the new master key.
 All providers/features/schedules start disabled, browser sessions are absent, API tokens are
-revoked, unfinished scans become interrupted history, and old native effects remain quarantined.
+revoked and unfinished scans become interrupted history.
 Captures enforce the same format limits as restore: 4 MiB per database row/header, 100,000 recovery files, 64 MiB manifest and 1 TiB uncompressed archive. Oversized captures fail before publication. Existing archive files are never replaced.
 
 Restoring into a nonempty durable database is refused. A failed import rolls back rows and
@@ -198,9 +198,8 @@ restored annotations are inactive. Before setting `pathBindingsReviewed`:
    ```
 
 2. Compare the annotated paths (`select path from app.file_tags where identity_id = ...`, and
-   the same for the other three tables) with the current files folder on the host. The
-   restored `idx.moves` log of MCP's moves is evidence, not proof of continuity, and a freshly
-   rebuilt index must not be used to infer it either.
+   the same for the other three tables) with the current files folder on the host. A freshly
+   rebuilt index must not be used to infer continuity.
 3. Delete rows whose path is gone or was reused, or leave the provider disabled until the
    owner decides. Keep the archive: it remains the evidence for any row you remove.
 4. Only then set `pathBindingsReviewed: true`. A checked flag alone does not make an ambiguous

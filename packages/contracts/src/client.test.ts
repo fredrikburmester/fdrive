@@ -118,26 +118,23 @@ const AT = "2026-01-01T00:00:00.000Z";
 
 const VALID_ME = {
   account: { id: VALID_UUID, displayName: "Alice" },
-  identities: [
-    {
-      id: VALID_UUID,
-      username: "alice",
-      providerId: VALID_UUID,
-      providerType: "local",
-      providerLabel: "Home",
-      capabilities: {
-        zip: true,
-        setModifiedAt: true,
-        atomicMove: true,
-        trash: false,
-        shares: true,
-        office: true,
-        index: true,
-        shareWithPeople: false,
-      },
+  identity: {
+    id: VALID_UUID,
+    username: "alice",
+    providerId: VALID_UUID,
+    providerType: "local",
+    providerLabel: "Home",
+    capabilities: {
+      zip: true,
+      setModifiedAt: true,
+      atomicMove: true,
+      trash: false,
+      shares: true,
+      office: true,
+      index: true,
+      shareWithPeople: false,
     },
-  ],
-  activeIdentityId: VALID_UUID,
+  },
   isAdmin: false,
 };
 
@@ -239,24 +236,6 @@ describe("createApiClient: login", () => {
     expect(calls[0]?.init.body).toBe(
       JSON.stringify({ credential: { username: "alice", password: "hunter2" } }),
     );
-  });
-
-  it("sends the identity header when configured", async () => {
-    const { fetchStub, calls } = createStubFetch([jsonResponse(200, VALID_ME)]);
-    const client = createApiClient({ fetch: fetchStub, identityId: "identity-1" });
-
-    await client.login({ credential: { username: "alice", password: "hunter2" } });
-
-    expect(headerValue(calls[0]?.init ?? {}, "x-identity-id")).toBe("identity-1");
-  });
-
-  it("does not send the identity header when not configured", async () => {
-    const { fetchStub, calls } = createStubFetch([jsonResponse(200, VALID_ME)]);
-    const client = createApiClient({ fetch: fetchStub });
-
-    await client.login({ credential: { username: "alice", password: "hunter2" } });
-
-    expect(headerValue(calls[0]?.init ?? {}, "x-identity-id")).toBeNull();
   });
 });
 
@@ -1261,10 +1240,10 @@ describe("createApiClient: account tokens", () => {
   const VALID_TOKEN_SUMMARY = {
     id: VALID_UUID,
     name: "Claude",
-    identityId: VALID_UUID,
     createdAt: AT,
     lastUsedAt: null,
     expiresAt: null,
+    access: { mode: "read", paths: ["/"] },
   };
 
   it("gets account/tokens and unwraps items", async () => {
@@ -1664,7 +1643,7 @@ describe("createApiClient: clear jobs", () => {
 });
 
 describe("office client", () => {
-  it("uses pinned routes, request payloads, CSRF and identity headers", async () => {
+  it("uses pinned routes, request payloads and CSRF headers", async () => {
     const status = {
       available: true,
       product: "onlyoffice",
@@ -1686,7 +1665,7 @@ describe("office client", () => {
       jsonResponse(200, opened),
       jsonResponse(201, created),
     ]);
-    const client = createApiClient({ fetch: fetchStub, identityId: VALID_UUID });
+    const client = createApiClient({ fetch: fetchStub });
     expect(await client.officeStatus()).toEqual(status);
     expect(await client.officeOpen({ path: "/a.docx", mode: "edit" })).toEqual(opened);
     expect(await client.officeCreateDocument({ parent: "/", name: "a.docx" })).toEqual(created);
@@ -1698,54 +1677,15 @@ describe("office client", () => {
     expect(calls[1]?.init.body).toBe(JSON.stringify({ path: "/a.docx", mode: "edit" }));
     for (const call of calls.slice(1)) {
       expect(headerValue(call.init, "x-requested-with")).toBe("fdrive");
-      expect(headerValue(call.init, "x-identity-id")).toBe(VALID_UUID);
     }
   });
 });
 
-it("includes scoped identity in native download links without losing inline/path", () => {
-  const client = createApiClient({ identityId: VALID_UUID });
+it("keeps the path and inline flag in native download links", () => {
+  const client = createApiClient();
   const url = new URL(client.downloadUrl("/å.docx", { inline: true }), "https://app");
-  expect(url.searchParams.get("identity")).toBe(VALID_UUID);
   expect(url.searchParams.get("path")).toBe("/å.docx");
   expect(url.searchParams.get("inline")).toBe("1");
-});
-
-it("calls account identity and cross-identity view routes with typed responses", async () => {
-  const favorites = { items: [], unavailableIdentityIds: [] };
-  const { fetchStub, calls } = createStubFetch([
-    jsonResponse(200, VALID_ME),
-    jsonResponse(200, VALID_ME),
-    jsonResponse(200, VALID_ME),
-    jsonResponse(200, favorites),
-  ]);
-  const client = createApiClient({ fetch: fetchStub });
-  expect(
-    await client.linkIdentity({
-      credential: { username: "alice", password: "secret", otp: "123456" },
-      currentCredential: { password: "mine" },
-    }),
-  ).toEqual(VALID_ME);
-  expect(
-    await client.unlinkIdentity(VALID_UUID, { currentCredential: { password: "mine" } }),
-  ).toEqual(VALID_ME);
-  expect(await client.switchIdentity(VALID_UUID)).toEqual(VALID_ME);
-  expect(await client.accountFavorites()).toEqual(favorites);
-  expect(calls.map((call) => call.url)).toEqual([
-    "/api/v1/account/identities",
-    `/api/v1/account/identities/${VALID_UUID}`,
-    "/api/v1/account/active-identity",
-    "/api/v1/account/favorites",
-  ]);
-  expect(calls[0]?.init.body).toBe(
-    JSON.stringify({
-      credential: { username: "alice", password: "secret", otp: "123456" },
-      currentCredential: { password: "mine" },
-    }),
-  );
-  expect(calls[1]?.init.method).toBe("DELETE");
-  expect(calls[2]?.init.body).toBe(JSON.stringify({ identityId: VALID_UUID }));
-  expect(headerValue(calls[0]?.init ?? {}, "x-requested-with")).toBe("fdrive");
 });
 
 describe("system logs client", () => {

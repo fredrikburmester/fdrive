@@ -1,38 +1,25 @@
-import { type Identity, IdentityLinksError, type Repos, type Session } from "@fdrive/db";
-import type { AccountIdentityOperations } from "../../accounts/types.ts";
+import { MeResponse } from "@fdrive/contracts";
+import type { ProviderModule } from "@fdrive/core";
+import { LoginError, type LoginRepo, type LoginVerifiedInput, type Repos } from "@fdrive/db";
+import { createMemoryRepos } from "@fdrive/db/testing";
+import type { Logger } from "pino";
+import { vi } from "vitest";
+import type { VerifiedCredentialDeps } from "../../accounts/credentials.ts";
+import { createApp } from "../../app.js";
+import { loadConfig } from "../../config.js";
+import {
+  FAST_PASSWORDS,
+  localModuleFixture,
+  seedLocalUsers,
+  writeHomeFiles,
+} from "../../local/test-fixtures/index.ts";
+import { memoryProviderService } from "../../providers/test-fixtures/index.ts";
+import { createAuthModule, createLoginLimiter } from "../index.js";
+import type { PrincipalResolver } from "../principal.js";
+import { createIdentityStorageFactory } from "../storage-factory.ts";
 
-/** Test double only. PostgreSQL ownership/lock guarantees have separate integration coverage. */
-export function memoryIdentityOperations(repos: Repos): AccountIdentityOperations {
-  const changed = new Map<string, Identity>();
-  const sessions = new Map<string, Session>();
-  const baseIdentities = { ...repos.identities };
-  const baseSessions = { ...repos.sessions };
-  repos.identities.get = async (id) => changed.get(id) ?? baseIdentities.get(id);
-  repos.identities.listAll = async () => {
-    const all = new Map((await baseIdentities.listAll()).map((row) => [row.id, row]));
-    for (const [id, row] of changed) all.set(id, row);
-    return [...all.values()];
-  };
-  repos.identities.listByAccount = async (accountId) =>
-    (await repos.identities.listAll()).filter((row) => row.accountId === accountId);
-  repos.identities.findByProviderUsername = async (providerId, username) =>
-    (await repos.identities.listAll()).find(
-      (row) => row.providerId === providerId && row.externalUsername === username,
-    ) ?? null;
-  repos.sessions.create = async (input) => {
-    const row = await baseSessions.create(input);
-    sessions.set(row.idHash, row);
-    return row;
-  };
-  repos.sessions.touch = async (id, input) => {
-    await baseSessions.touch(id, input);
-    const session = sessions.get(id);
-    if (session !== undefined) sessions.set(id, { ...session, ...input });
-  };
-  repos.sessions.delete = async (id) => {
-    sessions.delete(id);
-    await baseSessions.delete(id);
-  };
+/** Test double only. PostgreSQL's locks and constraints have separate integration coverage. */
+export function memoryLoginRepo(repos: Repos): LoginRepo {
   let tail = Promise.resolve();
   async function atomic<T>(run: () => Promise<T>): Promise<T> {
     const previous = tail;
@@ -47,64 +34,12 @@ export function memoryIdentityOperations(repos: Repos): AccountIdentityOperation
       release();
     }
   }
-  // Match the provider-row lock held by production login/link transactions.
+  // Match the provider-row lock held by production sign-in transactions.
   const updateProvider = repos.providers.update.bind(repos.providers);
   repos.providers.update = (id, patch) => atomic(() => updateProvider(id, patch));
-  async function live(accountId: string, hash: string, at: Date) {
-    const session = await repos.sessions.getByIdHash(hash, at);
-    if (session === null || session.accountId !== accountId)
-      throw new IdentityLinksError("invalid_session");
-    return session;
-  }
-  async function owned(accountId: string, id: string) {
-    const identity = await repos.identities.get(id);
-    if (identity === null) throw new IdentityLinksError("missing_identity");
-    if (identity.accountId !== accountId) throw new IdentityLinksError("forbidden");
-    return identity;
-  }
-  async function revoke(identity: Identity) {
-    for (const token of await repos.apiTokens.listByAccount(identity.accountId))
-      if (token.identityId === identity.id)
-        await repos.apiTokens.delete(token.id, identity.accountId);
-  }
-  async function storeCredential(
-    identityId: string,
-    seal: (id: string) => { ciphertext: Uint8Array; keyId: string },
-  ) {
-    await repos.credentials.put({ identityId, ...seal(identityId) });
-    await repos.credentials.setCachedToken(identityId, null);
-  }
-  async function transferMetadata(identity: Identity, accountId: string) {
-    const targets = new Map((await repos.tags.list(accountId)).map((tag) => [tag.name, tag]));
-    const remapped = new Map<string, string>();
-    const paths = new Set<string>();
-    for (const source of await repos.tags.list(identity.accountId)) {
-      const tagged = await repos.fileTags.pathsForTag(identity.id, source.id);
-      if (tagged.length === 0) continue;
-      const target =
-        targets.get(source.name) ??
-        (await repos.tags.create(accountId, {
-          name: source.name,
-          color: source.color,
-        }));
-      targets.set(source.name, target);
-      remapped.set(source.id, target.id);
-      for (const path of tagged) paths.add(path);
-    }
-    for (const [path, tags] of await repos.fileTags.tagsForPaths(identity.id, [...paths])) {
-      await repos.fileTags.setTags(
-        identity.id,
-        path,
-        tags.map((id) => remapped.get(id) ?? id),
-      );
-    }
-  }
-  async function verifyProvider(input: {
-    providerId: string;
-    verifiedProvider?: { type: string; baseUrl: string; allowDisabled?: boolean };
-  }) {
+  async function verifyProvider(input: LoginVerifiedInput) {
     const provider = await repos.providers.get(input.providerId);
-    if (!provider) throw new IdentityLinksError("missing_provider");
+    if (!provider) throw new LoginError("missing_provider");
     const expected = input.verifiedProvider;
     if (
       expected !== undefined &&
@@ -112,7 +47,7 @@ export function memoryIdentityOperations(repos: Repos): AccountIdentityOperation
         provider.baseUrl !== expected.baseUrl ||
         (!provider.enabled && !expected.allowDisabled))
     )
-      throw new IdentityLinksError("invalid_session");
+      throw new LoginError("invalid_session");
   }
   return {
     loginVerified: (input) =>
@@ -136,7 +71,7 @@ export function memoryIdentityOperations(repos: Repos): AccountIdentityOperation
               identity === null ||
               !(await repos.settings.compareAndSet(setupClaim.key, desired, desired))
             )
-              throw new IdentityLinksError("setup_claimed");
+              throw new LoginError("setup_claimed");
           }
         }
         if (identity === null) {
@@ -159,99 +94,185 @@ export function memoryIdentityOperations(repos: Repos): AccountIdentityOperation
           };
           await repos.settings.compareAndSet(setupClaim.key, null, desired);
         }
+        await repos.identities.touchLogin(identity.id, input.at);
         identity = { ...identity, lastLoginAt: input.at };
-        changed.set(identity.id, identity);
-        await storeCredential(identity.id, input.sealCredential);
-        if (revoke === true)
-          for (const session of [...sessions.values()])
-            if (session.accountId === identity.accountId)
-              await repos.sessions.delete(session.idHash);
-        const sessionInput = {
+        await repos.credentials.put({
+          identityId: identity.id,
+          ...input.sealCredential(identity.id),
+        });
+        await repos.credentials.setCachedToken(identity.id, null);
+        if (revoke === true) await repos.sessions.deleteByAccount(identity.accountId);
+        // The memory repo keeps given timestamps, so the session's age is the
+        // test clock's, as production's transaction writes it.
+        const timed = {
           ...input.session,
           accountId: identity.accountId,
-          activeIdentityId: identity.id,
+          identityId: identity.id,
           createdAt: input.at,
           lastSeenAt: input.at,
         };
-        const session = await repos.sessions.create(sessionInput);
-        await repos.sessions.touch(session.idHash, {
-          lastSeenAt: input.at,
-          expiresAt: session.expiresAt,
-        });
+        const session = await repos.sessions.create(timed);
         return { identity, session };
       }),
-    linkVerified: (input) =>
-      atomic(async () => {
-        await verifyProvider(input);
-        if (input.requestingSessionIdHash)
-          await live(input.accountId, input.requestingSessionIdHash, input.at);
-        let identity = await repos.identities.findByProviderUsername(
-          input.providerId,
-          input.username,
-        );
-        if (identity === null)
-          identity = await repos.identities.create({
-            accountId: input.accountId,
-            providerId: input.providerId,
-            externalUsername: input.username,
-          });
-        if (identity.accountId !== input.accountId) {
-          await transferMetadata(identity, input.accountId);
-          for (const session of sessions.values())
-            if (
-              session.accountId === identity.accountId &&
-              session.activeIdentityId === identity.id
-            )
-              await repos.sessions.delete(session.idHash);
-          await revoke(identity);
-        }
-        identity = { ...identity, accountId: input.accountId, lastLoginAt: input.at };
-        changed.set(identity.id, identity);
-        await storeCredential(identity.id, input.sealCredential);
-        return identity;
-      }),
-    unlink: (input) =>
-      atomic(async () => {
-        if (input.requestingSessionIdHash)
-          await live(input.accountId, input.requestingSessionIdHash, input.at);
-        const identity = await owned(input.accountId, input.identityId);
-        const remaining = (await repos.identities.listByAccount(input.accountId))
-          .filter((row) => row.id !== input.identityId)
-          .sort((a, b) => a.id.localeCompare(b.id))[0];
-        if (!remaining) throw new IdentityLinksError("last_identity");
-        const account = await repos.accounts.create({ displayName: identity.externalUsername });
-        await transferMetadata(identity, account.id);
-        const moved = { ...identity, accountId: account.id };
-        changed.set(moved.id, moved);
-        await revoke(identity);
-        for (const session of [...sessions.values()])
-          if (session.accountId === input.accountId && session.activeIdentityId === identity.id) {
-            await repos.sessions.delete(session.idHash);
-            if (session.idHash === input.requestingSessionIdHash)
-              await repos.sessions.create({ ...session, activeIdentityId: remaining.id });
-          }
-        return { identity: moved, remainingIdentityId: remaining.id };
-      }),
-    switchActive: (input) =>
-      atomic(async () => {
-        await owned(input.accountId, input.identityId);
-        const session = await live(input.accountId, input.sessionIdHash, input.at);
-        await repos.sessions.delete(session.idHash);
-        await repos.sessions.create({ ...session, activeIdentityId: input.identityId });
-      }),
-    rotateSession: (input) =>
-      atomic(async () => {
-        const previous = await live(input.accountId, input.oldSessionIdHash, input.at);
-        await owned(input.accountId, input.activeIdentityId);
-        const rotated = {
-          ...previous,
-          idHash: input.newSessionIdHash,
-          activeIdentityId: input.activeIdentityId,
-          lastSeenAt: input.at,
-        };
-        const next = await repos.sessions.create(rotated);
-        await repos.sessions.delete(previous.idHash);
-        return next;
-      }),
   };
+}
+
+/** The users every harness has, each signing in with `<username>-pass`. */
+export const HARNESS_USERS = ["alice", "bob", "carol", "dave", "eve", "frank"] as const;
+
+/**
+ * A network that is never there: the local folder makes no requests, so
+ * only modules a test adds (through `modules` and `wrapFetch`) reach one.
+ */
+const offline: typeof globalThis.fetch = async (input) => {
+  throw new TypeError(`fetch failed: no network in tests (${String(input)})`);
+};
+
+/**
+ * The API's auth routes over the deployment's local folder, as production
+ * pins it: a temporary storage root with a home per user holding `/a.docx`
+ * and `/report.txt`, and the users in the in-memory repos.
+ */
+export function authHarness(
+  options: {
+    principalResolver?: PrincipalResolver;
+    wrapFetch?: (fetch: typeof globalThis.fetch) => typeof globalThis.fetch;
+    /**
+     * Modules by provider type, replacing the local folder's own: a fake
+     * `local` module keeps the seeded row and the users' passwords
+     * (`<username>-pass`) but changes how sign-in or storage behaves.
+     */
+    modules?: Readonly<Record<string, ProviderModule>>;
+  } = {},
+) {
+  const now = { value: new Date("2026-09-07T00:00:00Z") };
+  const clock = () => now.value;
+  const repos = createMemoryRepos();
+  const logins = memoryLoginRepo(repos);
+  const master = Buffer.alloc(32, 13);
+  const local = localModuleFixture(repos);
+  const config = loadConfig({
+    DATABASE_URL: "postgres://test/fdrive",
+    FDRIVE_STORAGE_ROOT: local.root,
+    FDRIVE_MASTER_KEY: master.toString("base64"),
+    FDRIVE_COOKIE_SECURE: "auto",
+  });
+  for (const username of HARNESS_USERS) {
+    writeHomeFiles(local.root, username, {
+      "/a.docx": `${username} data`,
+      "/report.txt": `${username} report`,
+    });
+  }
+  const fetchImpl = options.wrapFetch?.(offline) ?? offline;
+  // The module asks `local.users` whether a password is right and whether a
+  // user is still active, so a test can spy on `users.verify` or
+  // `users.status` to shape what it sees exactly as production would.
+  const providers = memoryProviderService(repos, {
+    fetch: fetchImpl,
+    clock,
+    modules: { local: local.module, ...options.modules },
+  });
+  const seeded = (async () => {
+    await seedLocalUsers(
+      repos,
+      HARNESS_USERS.map((username) => ({ username, password: `${username}-pass` })),
+    );
+    await providers.seedFromEnvironment();
+    const [row] = await repos.providers.list();
+    if (row === undefined) throw new Error("the local folder was not seeded");
+    return row;
+  })();
+  const limiter = createLoginLimiter({ clock });
+  const storageFactory = createIdentityStorageFactory({
+    providers,
+    fetch: fetchImpl,
+    clock,
+  });
+  const auth = createAuthModule({
+    repos,
+    logins,
+    providers,
+    fetch: fetchImpl,
+    master,
+    clock,
+    config,
+    limiter,
+    storageFactory,
+  });
+  /** What `verifyCredentials` needs, as production wires it. */
+  const deps: VerifiedCredentialDeps = { repos, providers, limiter, fetch: fetchImpl };
+  const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() } as unknown as Logger;
+  const app = createApp({
+    config,
+    clock,
+    logger,
+    version: "test",
+    startedAt: clock(),
+    principalResolver: options.principalResolver ?? auth.principalResolver,
+    connectionStatus: async () => ({ required: false, providers: [] }),
+    registerRoutes: (groups) => {
+      auth.registerRoutes(groups);
+    },
+  });
+  async function call(
+    path: string,
+    options: {
+      cookie?: string;
+      method?: string;
+      body?: unknown;
+      headers?: Record<string, string>;
+    } = {},
+  ) {
+    await seeded;
+    return app.request(path, {
+      method: options.method ?? "GET",
+      headers: {
+        "x-requested-with": "fdrive",
+        ...(options.cookie === undefined ? {} : { cookie: options.cookie }),
+        ...(options.body === undefined ? {} : { "Content-Type": "application/json" }),
+        ...options.headers,
+      },
+      ...(options.body === undefined ? {} : { body: JSON.stringify(options.body) }),
+    });
+  }
+  async function login(username = "alice") {
+    const response = await call("/api/v1/auth/login", {
+      method: "POST",
+      body: { credential: { username, password: `${username}-pass` } },
+    });
+    const me = MeResponse.parse(await response.json());
+    const cookie = response.headers.get("set-cookie")?.split(";")[0];
+    if (!cookie) throw new Error("Missing cookie");
+    return { cookie, me };
+  }
+  return {
+    now,
+    clock,
+    repos,
+    logins,
+    master,
+    config,
+    /** The storage root: each user's files are under `<root>/<username>`. */
+    root: local.root,
+    /** What the local module asks about users; spy on it to shape sign-ins. */
+    users: local.users,
+    passwords: FAST_PASSWORDS,
+    providers,
+    /** Resolves to the local folder's row once it and the users exist; `call` and `login` await it. */
+    seeded,
+    limiter,
+    auth,
+    deps,
+    logger,
+    app,
+    call,
+    login,
+    storageFactory,
+  };
+}
+export type AuthHarness = ReturnType<typeof authHarness>;
+export function cookieFrom(response: Response): string {
+  const cookie = response.headers.get("set-cookie")?.split(";")[0];
+  if (!cookie) throw new Error("Missing session cookie");
+  return cookie;
 }

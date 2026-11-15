@@ -33,27 +33,11 @@ export type LoginCapabilities = Pick<ProviderCapabilities, "trash" | "index">;
  * `me` loads, the folder counts as indexed, so thumbnails never flicker, and
  * Trash as off, since "Move to Trash" must wait for the setting.
  */
-export function capabilitiesFor(
-  me: MeResponse | undefined,
-  identityId?: string,
-): LoginCapabilities {
-  const id = identityId ?? me?.activeIdentityId;
-  const identity = me?.identities.find((candidate) => candidate.id === id);
+export function capabilitiesFor(me: MeResponse | undefined): LoginCapabilities {
   return {
-    trash: identity?.capabilities.trash ?? false,
-    index: identity?.capabilities.index ?? true,
+    trash: me?.identity.capabilities.trash ?? false,
+    index: me?.identity.capabilities.index ?? true,
   };
-}
-
-/**
- * Whether any login linked to the account has `key`: the sidebar shows
- * Trash when at least one login has it, since the login switcher in the
- * sidebar footer works from either page. Before `me` loads, the default
- * applies.
- */
-export function anyLoginCan(me: MeResponse | undefined, key: keyof LoginCapabilities): boolean {
-  if (me === undefined) return capabilitiesFor(undefined)[key];
-  return me.identities.some((identity) => identity.capabilities[key]);
 }
 
 /** How many files and folders an action would apply to. */

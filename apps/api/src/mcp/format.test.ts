@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
   isoFromNs,
-  moveDestinationKind,
   normalizeExtArg,
   nsFromIso,
   overviewFolderKey,
@@ -81,20 +80,6 @@ describe("overviewFolderKey", () => {
 
   it("supports depth greater than 1", () => {
     expect(overviewFolderKey(0, 2, "/docs/2026/q1/report.pdf")).toBe("/docs/2026");
-  });
-});
-
-describe("moveDestinationKind", () => {
-  it("treats a path with an extension as a file", () => {
-    expect(moveDestinationKind("/docs/report.pdf")).toBe("file");
-  });
-
-  it("treats an extensionless path as a folder", () => {
-    expect(moveDestinationKind("/docs/2026")).toBe("dir");
-  });
-
-  it("treats the root as a folder", () => {
-    expect(moveDestinationKind("/")).toBe("dir");
   });
 });
 

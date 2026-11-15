@@ -9,7 +9,6 @@ import {
   useEffect,
   useState,
 } from "react";
-import { accountTransition } from "@/lib/account/transition";
 
 interface SearchShortcutState {
   readonly open: boolean;
@@ -24,12 +23,12 @@ export function isSearchShortcut(
   return event.key.toLowerCase() === "k" && !event.shiftKey && (event.metaKey || event.ctrlKey);
 }
 
-/** Global shortcuts hydrate above Activity, whose visible children hydrate later. */
+/** Global shortcuts hydrate above the shell runtime, whose children mount after hydration. */
 export function SearchShortcutProvider({ children }: { children: ReactNode }) {
   const [open, setOpen] = useState(false);
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
-      if (!isSearchShortcut(event) || accountTransition.getSnapshot().pending) return;
+      if (!isSearchShortcut(event)) return;
       event.preventDefault();
       setOpen((current) => !current);
     }

@@ -5,8 +5,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { OfficePreview } from "./office-preview";
 import { Unsupported } from "./unsupported";
 
-const mocks = vi.hoisted(() => ({ me: vi.fn(), status: vi.fn() }));
-vi.mock("@/lib/api/auth-queries", () => ({ useMe: mocks.me }));
+const mocks = vi.hoisted(() => ({ status: vi.fn() }));
 vi.mock("@/lib/api/office-queries", () => ({ useOfficeStatus: mocks.status }));
 const entry: FsEntry = {
   name: "Office Å %20.docx",
@@ -18,9 +17,6 @@ const entry: FsEntry = {
   modifiedAt: "2026-09-07T00:00:00Z",
 };
 beforeEach(() => {
-  mocks.me.mockReturnValue({
-    data: { activeIdentityId: "alice", identities: [{ id: "alice" }, { id: "bob" }] },
-  });
   mocks.status.mockReturnValue({
     data: {
       available: true,
@@ -33,7 +29,7 @@ afterEach(cleanup);
 it("offers a safe View link for office and discovered unsupported formats, preserving download", () => {
   const view = render(<OfficePreview entry={entry} downloadUrl="/download" />);
   expect(screen.getByRole("button", { name: "View in office" }).getAttribute("href")).toBe(
-    "/office/alice/Office%20%C3%85%20%2520.docx?mode=view",
+    "/office/Office%20%C3%85%20%2520.docx?mode=view",
   );
   expect(screen.getByRole("button", { name: "Download" }).getAttribute("href")).toBe("/download");
   expect(screen.queryByRole("button", { name: "Edit in office" })).toBeNull();
@@ -44,31 +40,16 @@ it("offers a safe View link for office and discovered unsupported formats, prese
     />,
   );
   expect(screen.getByRole("button", { name: "View in office" }).getAttribute("href")).toBe(
-    "/office/alice/file.custom?mode=view",
+    "/office/file.custom?mode=view",
   );
 });
-it("captures the initial identity and hides its action if that identity is removed", () => {
-  const view = render(<OfficePreview entry={entry} downloadUrl="/download" />);
-  mocks.me.mockReturnValue({
-    data: { activeIdentityId: "bob", identities: [{ id: "alice" }, { id: "bob" }] },
-  });
-  view.rerender(<OfficePreview entry={entry} downloadUrl="/download" />);
-  expect(screen.getByRole("button", { name: "View in office" }).getAttribute("href")).toContain(
-    "/office/alice/",
-  );
-  mocks.me.mockReturnValue({ data: { activeIdentityId: "bob", identities: [{ id: "bob" }] } });
-  view.rerender(<OfficePreview entry={entry} downloadUrl="/download" />);
-  expect(screen.queryByRole("button", { name: "View in office" })).toBeNull();
-});
-it("waits for identity and capability data, retaining a truthful unavailable fallback", () => {
-  mocks.me.mockReturnValue({ data: undefined });
+it("waits for capability data, retaining a truthful unavailable fallback", () => {
   mocks.status.mockReturnValue({ data: undefined });
   const view = render(<OfficePreview entry={entry} downloadUrl="/download" />);
   expect(
     screen.getByText("Office preview is unavailable. Download to open this file."),
   ).toBeTruthy();
   expect(screen.queryByRole("button", { name: "View in office" })).toBeNull();
-  mocks.me.mockReturnValue({ data: { activeIdentityId: "alice", identities: [{ id: "alice" }] } });
   mocks.status.mockReturnValue({
     data: { available: true, extensions: { view: ["docx"], edit: [], convert: [] } },
   });

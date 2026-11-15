@@ -23,6 +23,7 @@ import {
   createMetadataService,
   type MetadataService,
   type PathFollower,
+  withFollowers,
 } from "../metadata/service.js";
 import { registerTrashRoutes, type TrashRoutesDeps } from "./routes.js";
 
@@ -156,10 +157,7 @@ async function buildHarness(
   bus.subscribe({ identityId }, (event) => events.push(event));
 
   const config = loadConfig(REQUIRED_ENV);
-  const metadata = createMetadataService({
-    ...createMemoryRepos(),
-    ...(opts.followers === undefined ? {} : { followers: opts.followers }),
-  });
+  const metadata = withFollowers(createMetadataService(createMemoryRepos()), opts.followers ?? []);
 
   const deps: TrashRoutesDeps = {
     activity: activity.service,

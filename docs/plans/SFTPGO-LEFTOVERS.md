@@ -16,21 +16,17 @@ migrations, compatibility shims or configuration aliases; a full reindex is acce
 ## Order
 
 - Groups that add a migration run one at a time and need `pnpm test:integration`.
-- 7 waits for decision 1; 10 folds into 12.
-- 11–15 run strictly in order: they share `apps/api/src/auth/service.ts`, `composition.ts` and the
+- 10 folds into 12.
+- 12–15 run strictly in order: they share `apps/api/src/auth/service.ts`, `composition.ts` and the
   contracts.
-- 16 before 17, 26, 31 and 32. 16 and 23 before 18. 36 and 37 last.
+- 16 before 17, 18, 26, 31 and 32. 36 and 37 last.
 
 ## Decisions
 
-Recommended on 2026-11-14 and approved by the owner the same day. The production-database
-facts in decision 1 are still needed before the groups that depend on them.
+Recommended on 2026-11-14 and approved by the owner the same day.
 
-1. Before 7, 11–13 and 36, read from the production database: provider rows with their login
-   counts, accounts with more than one login, API tokens without an access level, the `setup.%`
-   and `trash.configuration.%` settings keys, and whether `system.publicUrl` is saved or the
-   public URL still comes from `office.configuration`'s `appUrl`; and from its environment
-   `FDRIVE_INDEX_ROOTS`, `FDRIVE_ADMIN_USERS` and `FDRIVE_OFFICE_EDIT_RULES`.
+1. Only the files folder matters; database contents are ephemeral (owner, 2026-11-14). No change
+   needs production-database facts; a PR says what users redo after deploying.
 2. The disabled `sftpgo`, `webdav` and `s3` provider rows and their logins are deleted, with
    those logins' tags, favorites, shares and chats, which no one can reach. Activity history has
    no foreign key to logins and stays.
@@ -44,27 +40,19 @@ facts in decision 1 are still needed before the groups that depend on them.
 7. Removed files are deleted from the index; a move over SMB the watcher cannot pair loses its
    tags instead of being guessed from its hash.
 8. `Shared with me` is a reserved name at the top of each home.
-9. The migration history is squashed last, with one manual step on the production database.
+9. The migration history is squashed last.
 10. The Mac cleanup release (27) waits until a Mac release is due anyway.
 
 ## Wave 0: independent fixes
 
 7\. **Drop the public URL's fallback to Office's `appUrl`**, the one shim #163 left
-(`apps/api/src/composition.ts`, `legacyUrl`), once decision 1 shows the production database has
-`system.publicUrl` saved.
+(`apps/api/src/composition.ts`, `legacyUrl`).
 
 10\. **Rate-limit password change.** `POST /auth/password` checks the current password without
 the login limiter (`local/routes.ts`, `local/service.ts`). Folds into 12.
 
 ## Wave 1: one user, one storage
 
-11. **One login per account.** Account linking, unlinking, switching and metadata transfer
-    (`packages/db/src/repos/identity-links.ts`, `apps/api/src/accounts`); the `x-identity-id`
-    header and `?identity=`; per-tab login pinning and account-switch checks across the web's
-    query modules; the login stored per upload; `/office/[identity]`; account-wide favorites,
-    the "All locations" history filter, login pickers for tokens and Mac pairing; re-checks that
-    a login has not moved accounts; nullable `sessions.active_identity_id` and
-    `api_tokens.identity_id`; the Logins card, link and unlink dialogs and the sidebar switcher.
 12. **Check passwords locally and drop stored passwords.** Sign-in goes through the provider
     module's `authenticate` with metadata-driven fields and a one-time-code field
     (`accounts/credentials.ts`). `app.credentials` keeps reversible copies of every password,
@@ -120,8 +108,6 @@ the login limiter (`local/routes.ts`, `local/service.ts`). Folds into 12.
 
 All but 27 are server-only and keep shipped Mac builds working.
 
-23. Apply metadata inline after Mac writes and drop `app.desktop_effects` and the five `revision`
-    columns that serve it.
 24. Detect conflicts from the file stamp; drop the publish lock and its pool, `previous` copies,
     30-day retention, the 64 GiB reservation and re-hashing on renames.
 25. Stage uploads inside the files folder so a commit can always tell whether it happened; drop
@@ -142,7 +128,7 @@ All but 27 are server-only and keep shipped Mac builds working.
     budget, on a heavily loaded machine; rerun `pnpm perf:strict` on a quiet one before acting
     on that.
 
-## Shares, activity, Office, backups, MCP
+## Shares, activity, Office, backups
 
 31. **Shares.** One module instead of the access-object layers; no strategy lookup per public
     request; one range implementation; drop `has_password` and rename `views`.
@@ -152,12 +138,10 @@ All but 27 are server-only and keep shipped Mac builds working.
     editors from fdrive's users.
 34. **Backups.** S3 only; this also removes the guard that lists every moved, deleted or zipped
     folder (`backups/reserved-storage.ts`).
-35. **MCP.** Remove tokens without an access level, `FDRIVE_MCP_WRITES` and the indexer's
-    path-based `/extract`; serve `recent_moves` from activity.
 
 ## Last
 
 36. Collapse the schema: provider columns and rows, `app.credentials`, `identities.provider_id`,
-    required `sessions` and token logins, `office_files.provider_id`. Keep the provider row's
-    UUID, which the Mac app compares as `providerId`.
+    `office_files.provider_id`. Keep the provider row's UUID, which the Mac app compares as
+    `providerId`.
 37. Squash the migrations into one baseline.

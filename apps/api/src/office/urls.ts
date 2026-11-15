@@ -33,11 +33,7 @@ export function callbackProofUrl(requestUrl: string, config: OfficeConfig): stri
   if (!/^\/wopi\/files\/[^/]+(?:\/contents)?$/.test(url.pathname)) throw new WopiError(400);
   return `${config.wopiUrl}${url.pathname.slice(5)}${url.search}`;
 }
-export function editorHostUrl(
-  config: OfficeConfig,
-  identityId: string,
-  path: string,
-  mode: "view" | "edit",
-): string {
-  return `${config.appUrl.replace(/\/$/, "")}/office/${encodeURIComponent(identityId)}${path.split("/").map(encodeURIComponent).join("/")}?mode=${mode}`;
+/** The web page that hosts the editor for `path`, which Office links back to. */
+export function editorHostUrl(config: OfficeConfig, path: string, mode: "view" | "edit"): string {
+  return `${config.appUrl.replace(/\/$/, "")}/office${path.split("/").map(encodeURIComponent).join("/")}?mode=${mode}`;
 }

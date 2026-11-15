@@ -154,10 +154,10 @@ describe("setup owner on a local folder", () => {
       if (claimed === undefined) throw new Error("missing winning claim");
       const winner = (await claimed.json()) as {
         isAdmin: boolean;
-        identities: { username: string }[];
+        identity: { username: string };
       };
       expect(winner.isAdmin).toBe(true);
-      const owner = winner.identities[0]?.username;
+      const owner = winner.identity.username;
       expect(["alice", "bob"]).toContain(owner);
 
       // Only the winner's user remains: the loser's was removed with its claim.

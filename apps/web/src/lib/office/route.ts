@@ -6,9 +6,9 @@ export function officeMode(value: string | string[] | undefined): OfficeMode {
   return value === "edit" || value === "convert" ? value : "view";
 }
 
-export function officeHref(identityId: string, path: string, mode: OfficeMode = "view"): string {
+export function officeHref(path: string, mode: OfficeMode = "view"): string {
   if (!isOfficePath(path) || path === "/") throw new Error("Invalid office file path");
-  return `/office/${encodeURIComponent(identityId)}/${path.slice(1).split("/").map(encodeURIComponent).join("/")}?mode=${mode}`;
+  return `/office/${path.slice(1).split("/").map(encodeURIComponent).join("/")}?mode=${mode}`;
 }
 
 export function officePathFromSegments(segments: readonly string[]): string {
@@ -35,19 +35,19 @@ export function renamedOfficePath(path: string, name: string): string | null {
   return isOfficeFilename(filename) ? `${parentPath(path).replace(/\/$/, "")}/${filename}` : null;
 }
 
-/** Save-as may navigate only to a token-free office route for this same identity. */
-export function officeHostTarget(href: string, origin: string, identityId: string): string | null {
+/** Save-as may navigate only to a token-free office route on this origin. */
+export function officeHostTarget(href: string, origin: string): string | null {
   try {
     const url = new URL(href, origin);
     if (url.origin !== origin || url.username || url.password || url.hash) return null;
-    const prefix = `/office/${encodeURIComponent(identityId)}/`;
+    const prefix = "/office/";
     if (
       !url.pathname.startsWith(prefix) ||
       [...url.searchParams.keys()].some((key) => key !== "mode")
     )
       return null;
     const path = officePathFromSegments(url.pathname.slice(prefix.length).split("/"));
-    return officeHref(identityId, path, officeMode(url.searchParams.get("mode") ?? undefined));
+    return officeHref(path, officeMode(url.searchParams.get("mode") ?? undefined));
   } catch {
     return null;
   }

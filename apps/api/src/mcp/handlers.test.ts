@@ -1,10 +1,11 @@
 import { type Scope, StorageError, type StorageProvider } from "@fdrive/core";
-import type { IndexedFile, IndexQueries } from "@fdrive/db";
+import type { ActivityListOptions, IndexedFile, IndexQueries } from "@fdrive/db";
 import { describe, expect, it, vi } from "vitest";
 import type { Principal } from "../auth/principal.js";
 import type { ReadAuthorizeResult, ReadAuthorizer } from "../scoping/read-authorizer.ts";
 import { buildIdentity } from "../scoping/test-fixtures/index.ts";
 import type { SearchService } from "../search/service.js";
+import type { TokenPrincipal } from "../tokens/principal.ts";
 import {
   fileInfoInScope,
   findDuplicatesInScope,
@@ -12,19 +13,16 @@ import {
   folderOverviewInScope,
   indexStatsInScope,
   MAX_CANDIDATE_FILES,
+  MAX_RECENT_MOVE_EVENTS,
+  type McpToolDeps,
   McpToolError,
-  readFileTextWithScopes,
-  recentMovesInScope,
-  recordMoveIfInScope,
   runCreateFolder,
-  runFileInfo,
   runFindDuplicates,
   runFindFiles,
   runFolderOverview,
   runIndexStats,
   runListDirectory,
   runMovePath,
-  runReadFileText,
   runRecentMoves,
   runSearch,
   runSimilarFiles,
@@ -89,8 +87,6 @@ function stubIndexQueries(overrides: Partial<IndexQueries> = {}): IndexQueries {
     similar: overrides.similar ?? (async () => fail("similar")),
     recentFiles: overrides.recentFiles ?? (async () => fail("recentFiles")),
     thumbnail: overrides.thumbnail ?? (async () => fail("thumbnail")),
-    recordMove: overrides.recordMove ?? (async () => fail("recordMove")),
-    recentMoves: overrides.recentMoves ?? (async () => fail("recentMoves")),
     deletedRowSha: overrides.deletedRowSha ?? (async () => fail("deletedRowSha")),
     liveRowsBySha: overrides.liveRowsBySha ?? (async () => fail("liveRowsBySha")),
     searchImages: overrides.searchImages ?? (async () => fail("searchImages")),
@@ -145,6 +141,7 @@ function fakeStorage(overrides: Partial<StorageProvider> = {}): StorageProvider 
   };
 }
 
+/** A session principal, as the AI's tools pass to the index-backed handlers: no grants. */
 function fakePrincipal(
   storage: StorageProvider = fakeStorage(),
   identityId = "identity-1",
@@ -156,6 +153,15 @@ function fakePrincipal(
     storage,
     isAdmin: false,
   };
+}
+
+/** An MCP token's principal: organize access to every folder unless asked otherwise. */
+function tokenPrincipal(
+  storage: StorageProvider = fakeStorage(),
+  mode: "read" | "organize" | "full" = "organize",
+  paths: string[] = ["/"],
+): TokenPrincipal {
+  return { ...fakePrincipal(storage), tokenAccess: { mode, paths } };
 }
 
 /** A `ReadAuthorizer` fake for `*InScope` tests: allows everything except the targets listed in `overrides`, keyed `"<kind>:<path>"`. Records every call so a test can assert exactly what was probed. */
@@ -208,7 +214,6 @@ function baseDeps(overrides: Partial<Parameters<typeof runSearch>[0]> = {}) {
     identities: { get: async () => buildIdentity() },
     publicUrl: async () => "https://fdrive.example.com",
     indexerClient: null,
-    writesEnabled: false,
     clock: () => new Date("2026-01-01T00:00:00.000Z"),
     trashPath: null,
     ...overrides,
@@ -611,7 +616,7 @@ describe("runListDirectory", () => {
       },
     });
 
-    const result = await runListDirectory(baseDeps(), fakePrincipal(storage), { path: "/docs" });
+    const result = await runListDirectory(baseDeps(), tokenPrincipal(storage), { path: "/docs" });
 
     expect(result.path).toBe("/docs");
     expect(result.entries).toEqual([
@@ -641,7 +646,7 @@ describe("runListDirectory", () => {
       const list = vi.fn(async () => []);
       const deps = baseDeps({ trashPathForStorage: () => "/.trash" });
 
-      const result = await runListDirectory(deps, fakePrincipal(fakeStorage({ list })), { path });
+      const result = await runListDirectory(deps, tokenPrincipal(fakeStorage({ list })), { path });
 
       expect(list).toHaveBeenCalledWith("/docs");
       expect(result.path).toBe("/docs");
@@ -658,7 +663,7 @@ describe("runListDirectory", () => {
       ],
     });
 
-    const result = await runListDirectory(baseDeps(), fakePrincipal(storage), { limit: 1 });
+    const result = await runListDirectory(baseDeps(), tokenPrincipal(storage), { limit: 1 });
 
     expect(result.path).toBe("/");
     expect(result.entries).toHaveLength(1);
@@ -683,7 +688,7 @@ describe("runListDirectory", () => {
     });
     const deps = baseDeps({ trashPathForStorage: () => "/.trash" });
 
-    const result = await runListDirectory(deps, fakePrincipal(storage), { limit: 1 });
+    const result = await runListDirectory(deps, tokenPrincipal(storage), { limit: 1 });
 
     expect(result.entries.map((entry) => entry.name)).toEqual(["a"]);
     expect(result.truncated).toBe(false);
@@ -700,7 +705,7 @@ describe("runListDirectory", () => {
     const storage = fakeStorage({ list });
     const deps = baseDeps({ trashPathForStorage: () => "/.trash" });
 
-    await expect(runListDirectory(deps, fakePrincipal(storage), { path })).rejects.toThrow(
+    await expect(runListDirectory(deps, tokenPrincipal(storage), { path })).rejects.toThrow(
       "fdrive's own folders",
     );
     expect(list).not.toHaveBeenCalled();
@@ -715,120 +720,13 @@ describe("runListDirectory", () => {
     });
     const deps = baseDeps({ trashPathForStorage: () => null });
 
-    const result = await runListDirectory(deps, fakePrincipal(storage), {});
+    const result = await runListDirectory(deps, tokenPrincipal(storage), {});
 
     expect(result.entries.map((entry) => entry.name)).toEqual([".trash"]);
   });
 });
 
-describe("runReadFileText / readFileTextWithScopes", () => {
-  it("throws when no indexer is configured", async () => {
-    const deps = baseDeps({ indexerClient: null });
-    await expect(runReadFileText(deps, fakePrincipal(), { path: "/a.txt" })).rejects.toThrow(
-      /FDRIVE_INDEXER_URL/,
-    );
-  });
-
-  it("normalizes a path that tries to climb above the root before resolving it", async () => {
-    const deps = baseDeps({
-      indexerClient: {
-        extract: async ({ path }) => {
-          expect(path).toBe("alice");
-          return { text: "root file", status: "ok" };
-        },
-      },
-    });
-
-    const result = await runReadFileText(deps, fakePrincipal(), { path: "/.." });
-
-    expect(result).toMatchObject({ text: "root file" });
-  });
-
-  it("throws when extraction fails", async () => {
-    const deps = baseDeps({ indexerClient: { extract: async () => null } });
-    await expect(runReadFileText(deps, fakePrincipal(), { path: "/a.txt" })).rejects.toThrow(
-      /failed to extract/,
-    );
-  });
-
-  it("returns empty text unchanged", async () => {
-    const deps = baseDeps({
-      indexerClient: { extract: async () => ({ text: "", status: "excluded" }) },
-    });
-
-    const result = await runReadFileText(deps, fakePrincipal(), { path: "/a.txt" });
-
-    expect(result).toEqual({
-      path: "/a.txt",
-      url: "https://fdrive.example.com/view/a.txt",
-      status: "excluded",
-      text: "",
-    });
-  });
-
-  it("pages extracted text", async () => {
-    const deps = baseDeps({
-      indexerClient: {
-        extract: async ({ root, path }) => {
-          expect(root).toBe("files");
-          expect(path).toBe("alice/a.txt");
-          return { text: "hello world", status: "ok" };
-        },
-      },
-    });
-
-    const result = await runReadFileText(deps, fakePrincipal(), {
-      path: "/a.txt",
-      offset: 0,
-      max_chars: 200,
-    });
-
-    expect(result).toMatchObject({ status: "ok", text: "hello world", has_more: false });
-  });
-
-  it("throws when the path does not resolve within the given scopes", async () => {
-    const deps = baseDeps({ indexerClient: { extract: async () => fail("extract") } });
-
-    await expect(
-      readFileTextWithScopes(deps, NARROW_SCOPES, fakeAuthorizer(), { path: "/elsewhere" }),
-    ).rejects.toThrow(/outside this identity's scope/);
-  });
-
-  it("throws the same message when the path resolves but a live read check denies it, never distinguishing the two", async () => {
-    const deps = baseDeps({ indexerClient: { extract: async () => fail("extract") } });
-
-    await expect(
-      readFileTextWithScopes(
-        deps,
-        ALICE_HOME_SCOPES,
-        fakeAuthorizer({ "file:/a.txt": { allowed: false, reason: "denied" } }),
-        {
-          path: "/a.txt",
-        },
-      ),
-    ).rejects.toThrow(/outside this identity's scope/);
-  });
-
-  it("throws when the read is unavailable for the caller's identity", async () => {
-    const deps = baseDeps({
-      scopeResolver: {
-        verifiedIndexScopes: async () => ({ available: false, reason: "no_roots" }),
-      },
-    });
-    await expect(runReadFileText(deps, fakePrincipal(), { path: "/a.txt" })).rejects.toThrow(
-      McpToolError,
-    );
-  });
-
-  it("throws when the identity no longer exists", async () => {
-    const deps = baseDeps({ identities: { get: async () => null } });
-    await expect(runReadFileText(deps, fakePrincipal(), { path: "/a.txt" })).rejects.toThrow(
-      McpToolError,
-    );
-  });
-});
-
-describe("runFileInfo / fileInfoInScope", () => {
+describe("fileInfoInScope (the AI's indexed file_info)", () => {
   it("returns file metadata plus identical copies", async () => {
     const file = makeFile({ id: 1, path: "alice/a.txt", sha256: "abc" });
     const copy = makeFile({ id: 2, path: "alice/copy/a.txt", sha256: "abc" });
@@ -843,7 +741,12 @@ describe("runFileInfo / fileInfoInScope", () => {
       }),
     });
 
-    const result = await runFileInfo(deps, fakePrincipal(), { path: "/a.txt" });
+    const result = await fileInfoInScope(
+      deps,
+      await aliceScopeContext(deps.indexQueries),
+      fakeAuthorizer(),
+      { path: "/a.txt" },
+    );
 
     expect(result.path).toBe("/a.txt");
     expect(result.identical_copies).toEqual(["/copy/a.txt"]);
@@ -856,7 +759,12 @@ describe("runFileInfo / fileInfoInScope", () => {
       indexQueries: stubIndexQueries({ fileByPath: async () => file }),
     });
 
-    const result = await runFileInfo(deps, fakePrincipal(), { path: "/a.txt" });
+    const result = await fileInfoInScope(
+      deps,
+      await aliceScopeContext(deps.indexQueries),
+      fakeAuthorizer(),
+      { path: "/a.txt" },
+    );
 
     expect(result.identical_copies).toEqual([]);
     expect(result.partial).toBeUndefined();
@@ -864,20 +772,11 @@ describe("runFileInfo / fileInfoInScope", () => {
 
   it("throws when the file is not indexed", async () => {
     const deps = baseDeps({ indexQueries: stubIndexQueries({ fileByPath: async () => null }) });
-    await expect(runFileInfo(deps, fakePrincipal(), { path: "/a.txt" })).rejects.toThrow(
-      /not indexed/,
-    );
-  });
-
-  it("throws when the index is unavailable", async () => {
-    const deps = baseDeps({
-      scopeResolver: {
-        verifiedIndexScopes: async () => ({ available: false, reason: "no_roots" }),
-      },
-    });
-    await expect(runFileInfo(deps, fakePrincipal(), { path: "/a.txt" })).rejects.toThrow(
-      McpToolError,
-    );
+    await expect(
+      fileInfoInScope(deps, await aliceScopeContext(deps.indexQueries), fakeAuthorizer(), {
+        path: "/a.txt",
+      }),
+    ).rejects.toThrow(/not indexed/);
   });
 
   it("throws when the path does not resolve within the scope", async () => {
@@ -900,9 +799,11 @@ describe("runFileInfo / fileInfoInScope", () => {
       indexQueries: stubIndexQueries({ fileByPath: async () => foreignFile }),
     });
 
-    await expect(runFileInfo(deps, fakePrincipal(), { path: "/a.txt" })).rejects.toThrow(
-      /not indexed yet/,
-    );
+    await expect(
+      fileInfoInScope(deps, await aliceScopeContext(deps.indexQueries), fakeAuthorizer(), {
+        path: "/a.txt",
+      }),
+    ).rejects.toThrow(/not indexed yet/);
   });
 
   it("throws the exact same message when the file exists but a live read check denies it", async () => {
@@ -1410,32 +1311,37 @@ describe("runFolderOverview / folderOverviewInScope", () => {
 });
 
 describe("runIndexStats / indexStatsInScope", () => {
-  it("returns aggregate stats derived only from authorized files", async () => {
-    const files = [
-      makeFile({ id: 1, path: "alice/a.txt", size: 100, textStatus: "done" }),
-      makeFile({ id: 2, path: "alice/b.txt", size: 50, textStatus: "done" }),
-    ];
-    const deps = baseDeps({
-      indexQueries: stubIndexQueries({
-        listFiles: async () => ({ total: 2, files }),
-        statsForFileIds: async (ids) => {
-          expect([...ids].sort()).toEqual([1, 2]);
-          return { chunks: 5, chunksEmbedded: 5 };
-        },
-      }),
-      writesEnabled: true,
-    });
+  it.each([
+    ["organize", true],
+    ["read", false],
+  ] as const)(
+    "returns stats from authorized files, and writes_enabled for a %s token",
+    async (mode, writesEnabled) => {
+      const files = [
+        makeFile({ id: 1, path: "alice/a.txt", size: 100, textStatus: "done" }),
+        makeFile({ id: 2, path: "alice/b.txt", size: 50, textStatus: "done" }),
+      ];
+      const deps = baseDeps({
+        indexQueries: stubIndexQueries({
+          listFiles: async () => ({ total: 2, files }),
+          statsForFileIds: async (ids) => {
+            expect([...ids].sort()).toEqual([1, 2]);
+            return { chunks: 5, chunksEmbedded: 5 };
+          },
+        }),
+      });
 
-    const result = await runIndexStats(deps, fakePrincipal());
+      const result = await runIndexStats(deps, tokenPrincipal(fakeStorage(), mode));
 
-    expect(result).toEqual({
-      files_tracked: 2,
-      by_text_status: [{ status: "done", files: 2, bytes: 150 }],
-      chunks: 5,
-      chunks_embedded: 5,
-      writes_enabled: true,
-    });
-  });
+      expect(result).toEqual({
+        files_tracked: 2,
+        by_text_status: [{ status: "done", files: 2, bytes: 150 }],
+        chunks: 5,
+        chunks_embedded: 5,
+        writes_enabled: writesEnabled,
+      });
+    },
+  );
 
   it("excludes a denied file from every count and reports partial", async () => {
     const keep = makeFile({ id: 1, path: "alice/a.txt", size: 100, textStatus: "done" });
@@ -1466,18 +1372,20 @@ describe("runIndexStats / indexStatsInScope", () => {
 });
 
 describe("runCreateFolder", () => {
-  it("throws when writes are disabled", async () => {
-    const deps = baseDeps({ writesEnabled: false });
-    await expect(runCreateFolder(deps, fakePrincipal(), { path: "/new" })).rejects.toThrow(
-      /FDRIVE_MCP_WRITES/,
-    );
+  it("refuses a read token", async () => {
+    const mkdir = vi.fn(async () => undefined);
+    await expect(
+      runCreateFolder(baseDeps(), tokenPrincipal(fakeStorage({ mkdir }), "read"), {
+        path: "/new",
+      }),
+    ).rejects.toThrow("this token does not allow organize operations");
+    expect(mkdir).not.toHaveBeenCalled();
   });
 
-  it("creates a folder when writes are enabled", async () => {
+  it("creates a folder for an organize token", async () => {
     const mkdir = vi.fn(async () => undefined);
-    const deps = baseDeps({ writesEnabled: true });
 
-    const result = await runCreateFolder(deps, fakePrincipal(fakeStorage({ mkdir })), {
+    const result = await runCreateFolder(baseDeps(), tokenPrincipal(fakeStorage({ mkdir })), {
       path: "/new",
     });
 
@@ -1489,12 +1397,13 @@ describe("runCreateFolder", () => {
     "creates the folder at the admitted path for the unnormalized %s",
     async (path) => {
       const mkdir = vi.fn(async () => undefined);
-      const deps = baseDeps({ writesEnabled: true });
 
-      const result = await runCreateFolder(deps, fakePrincipal(fakeStorage({ mkdir })), { path });
+      const result = await runCreateFolder(baseDeps(), tokenPrincipal(fakeStorage({ mkdir })), {
+        path,
+      });
 
       // The provider forwards this string verbatim, so it must be the exact
-      // path the scope admission was decided on, not the caller's argument.
+      // path the admission was decided on, not the caller's argument.
       expect(mkdir).toHaveBeenCalledWith("/new", { parents: true });
       expect(result).toEqual({ created: "/new", url: "https://fdrive.example.com/files/new" });
     },
@@ -1502,9 +1411,8 @@ describe("runCreateFolder", () => {
 
   it("leaves characters normalization must not touch byte-identical", async () => {
     const mkdir = vi.fn(async () => undefined);
-    const deps = baseDeps({ writesEnabled: true });
 
-    const result = await runCreateFolder(deps, fakePrincipal(fakeStorage({ mkdir })), {
+    const result = await runCreateFolder(baseDeps(), tokenPrincipal(fakeStorage({ mkdir })), {
       path: "/a b/50%-off & #1..2",
     });
 
@@ -1512,95 +1420,49 @@ describe("runCreateFolder", () => {
     expect(result.created).toBe("/a b/50%-off & #1..2");
   });
 
-  it("creates through the override that exposes a shadowed location", async () => {
-    const mkdir = vi.fn(async () => undefined);
-    const deps = baseDeps({
-      writesEnabled: true,
-      scopeResolver: {
-        verifiedIndexScopes: async () => ({
-          available: true,
-          scopes: [
-            { rootName: "files", fsPrefix: "/alice", virtualPrefix: "/" },
-            { rootName: "files", fsPrefix: "/alice/docs", virtualPrefix: "/other" },
-          ],
-        }),
-      },
-    });
-
-    const result = await runCreateFolder(deps, fakePrincipal(fakeStorage({ mkdir })), {
-      path: "/docs/new",
-    });
-
-    // "/alice/docs" is reachable only as "/other" for this identity, the same
-    // virtual path every read tool reports for that location.
-    expect(mkdir).toHaveBeenCalledWith("/other/new", { parents: true });
-    expect(result.created).toBe("/other/new");
-  });
-
   it.each(["/.trash", "/.trash/deleted.txt", "/docs/../.trash"])(
     "refuses the configured Trash path %s before touching storage",
     async (path) => {
       const mkdir = vi.fn(async () => undefined);
-      const deps = baseDeps({ writesEnabled: true, trashPathForStorage: () => "/.trash" });
+      const deps = baseDeps({ trashPathForStorage: () => "/.trash" });
 
       await expect(
-        runCreateFolder(deps, fakePrincipal(fakeStorage({ mkdir })), { path }),
-      ).rejects.toThrow("path is outside this identity's scope");
+        runCreateFolder(deps, tokenPrincipal(fakeStorage({ mkdir })), { path }),
+      ).rejects.toThrow("fdrive's own folders");
       expect(mkdir).not.toHaveBeenCalled();
     },
   );
 
-  it("refuses a folder that climbs out of the verified scope without touching storage", async () => {
+  it.each(["/private/new", "/docs/../private/new"])(
+    "refuses %s outside the token's folders without touching storage",
+    async (path) => {
+      const mkdir = vi.fn(async () => undefined);
+      const principal = tokenPrincipal(fakeStorage({ mkdir }), "organize", ["/docs"]);
+
+      await expect(runCreateFolder(baseDeps(), principal, { path })).rejects.toThrow(
+        "outside this token's allowed folders",
+      );
+      expect(mkdir).not.toHaveBeenCalled();
+    },
+  );
+
+  it("needs no index and reports a failed live update as a warning", async () => {
     const mkdir = vi.fn(async () => undefined);
     const deps = baseDeps({
-      writesEnabled: true,
       scopeResolver: {
-        verifiedIndexScopes: async () => ({
-          available: true,
-          scopes: [{ rootName: "files", fsPrefix: "/alice/docs", virtualPrefix: "/docs" }],
-        }),
+        verifiedIndexScopes: async () => ({ available: false, reason: "no_roots" }),
+      },
+      onMutation: async () => {
+        throw new Error("events unavailable");
       },
     });
 
-    await expect(
-      runCreateFolder(deps, fakePrincipal(fakeStorage({ mkdir })), {
-        path: "/docs/../private/new",
-      }),
-    ).rejects.toThrow("path is outside this identity's scope");
-    expect(mkdir).not.toHaveBeenCalled();
-  });
-
-  it("refuses a folder outside the verified scope without touching storage", async () => {
-    const mkdir = vi.fn(async () => undefined);
-    const deps = baseDeps({
-      writesEnabled: true,
-      scopeResolver: {
-        verifiedIndexScopes: async () => ({
-          available: true,
-          scopes: [{ rootName: "files", fsPrefix: "/alice/docs", virtualPrefix: "/docs" }],
-        }),
-      },
+    const result = await runCreateFolder(deps, tokenPrincipal(fakeStorage({ mkdir })), {
+      path: "/new",
     });
 
-    await expect(
-      runCreateFolder(deps, fakePrincipal(fakeStorage({ mkdir })), { path: "/private/new" }),
-    ).rejects.toThrow("path is outside this identity's scope");
-    expect(mkdir).not.toHaveBeenCalled();
-  });
-
-  it("refuses a folder when verified scopes are unavailable", async () => {
-    const mkdir = vi.fn(async () => undefined);
-    const deps = baseDeps({
-      writesEnabled: true,
-      scopeResolver: {
-        verifiedIndexScopes: async () => ({ available: false, reason: "no_connection" }),
-      },
-    });
-
-    await expect(
-      runCreateFolder(deps, fakePrincipal(fakeStorage({ mkdir })), { path: "/new" }),
-    ).rejects.toThrow(McpToolError);
-    expect(mkdir).not.toHaveBeenCalled();
+    expect(mkdir).toHaveBeenCalledOnce();
+    expect(result.warnings).toEqual([expect.stringContaining("live updates")]);
   });
 });
 
@@ -1612,50 +1474,40 @@ describe("runMovePath", () => {
     });
     const storage = fakeStorage({ move, statFile });
     await expect(
-      runMovePath(baseDeps({ writesEnabled: true }), fakePrincipal(storage), {
-        src: "/a",
-        dst: "/b",
-      }),
+      runMovePath(baseDeps(), tokenPrincipal(storage), { src: "/a", dst: "/b" }),
     ).rejects.toThrow("already exists");
     expect(move).toHaveBeenCalledWith("/a", "/b");
     expect(statFile).not.toHaveBeenCalled();
   });
 
-  it("reports completed moves with warnings when metadata and audit persistence fail", async () => {
+  it("reports a completed move with a warning when metadata fails", async () => {
     const move = vi.fn();
     const deps = baseDeps({
-      writesEnabled: true,
       onMutation: async () => {
         throw new Error("metadata unavailable");
       },
-      indexQueries: stubIndexQueries({
-        recordMove: async () => {
-          throw new Error("database unavailable");
-        },
-      }),
     });
-    const result = await runMovePath(deps, fakePrincipal(fakeStorage({ move })), {
+    const result = await runMovePath(deps, tokenPrincipal(fakeStorage({ move })), {
       src: "/a",
       dst: "/b",
     });
     expect(result).toMatchObject({
       moved: "/a",
       to: "/b",
-      warnings: [expect.stringContaining("metadata"), expect.stringContaining("history")],
+      warnings: [expect.stringContaining("metadata")],
     });
     expect(move).toHaveBeenCalledOnce();
   });
 
-  it("does not mutate or record history for a same-path move", async () => {
+  it("does not mutate or run the hook for a same-path move", async () => {
     const move = vi.fn();
-    const recordMove = vi.fn();
-    await runMovePath(
-      baseDeps({ writesEnabled: true, indexQueries: stubIndexQueries({ recordMove }) }),
-      fakePrincipal(fakeStorage({ move })),
-      { src: "/a", dst: "/a" },
-    );
+    const onMutation = vi.fn();
+    await runMovePath(baseDeps({ onMutation }), tokenPrincipal(fakeStorage({ move })), {
+      src: "/a",
+      dst: "/a",
+    });
     expect(move).not.toHaveBeenCalled();
-    expect(recordMove).not.toHaveBeenCalled();
+    expect(onMutation).not.toHaveBeenCalled();
   });
 
   it("uses storage kind for a dotted directory and runs the mutation hook", async () => {
@@ -1664,15 +1516,10 @@ describe("runMovePath", () => {
       move: async () => {},
       stat: async () => ({ kind: "dir", size: 0, modifiedAt: null, contentType: null }),
     });
-    const result = await runMovePath(
-      baseDeps({
-        writesEnabled: true,
-        onMutation,
-        indexQueries: stubIndexQueries({ recordMove: async () => {} }),
-      }),
-      fakePrincipal(storage),
-      { src: "/a", dst: "/archive.2026" },
-    );
+    const result = await runMovePath(baseDeps({ onMutation }), tokenPrincipal(storage), {
+      src: "/a",
+      dst: "/archive.2026",
+    });
     expect(result.url).toBe("https://fdrive.example.com/files/archive.2026");
     expect(onMutation).toHaveBeenCalledWith(expect.anything(), {
       kind: "move",
@@ -1681,33 +1528,32 @@ describe("runMovePath", () => {
       isDir: true,
     });
   });
-  it("throws when writes are disabled", async () => {
-    const deps = baseDeps({ writesEnabled: false });
+
+  it("refuses a read token", async () => {
+    const move = vi.fn(async () => undefined);
     await expect(
-      runMovePath(deps, fakePrincipal(), { src: "/a.txt", dst: "/b.txt" }),
-    ).rejects.toThrow(/FDRIVE_MCP_WRITES/);
+      runMovePath(baseDeps(), tokenPrincipal(fakeStorage({ move }), "read"), {
+        src: "/a.txt",
+        dst: "/b.txt",
+      }),
+    ).rejects.toThrow("this token does not allow organize operations");
+    expect(move).not.toHaveBeenCalled();
   });
 
-  it("moves and records the move when the index is available", async () => {
+  it("moves without any index", async () => {
     const move = vi.fn(async () => undefined);
-    const recordMove = vi.fn(async () => undefined);
     const deps = baseDeps({
-      writesEnabled: true,
-      indexQueries: stubIndexQueries({ recordMove }),
+      scopeResolver: {
+        verifiedIndexScopes: async () => ({ available: false, reason: "no_roots" }),
+      },
     });
 
-    const result = await runMovePath(deps, fakePrincipal(fakeStorage({ move })), {
+    const result = await runMovePath(deps, tokenPrincipal(fakeStorage({ move })), {
       src: "/a.txt",
       dst: "/b.txt",
     });
 
     expect(move).toHaveBeenCalledWith("/a.txt", "/b.txt");
-    expect(recordMove).toHaveBeenCalledWith({
-      rootId: 1,
-      src: "alice/a.txt",
-      dst: "alice/b.txt",
-      actor: "mcp",
-    });
     expect(result).toEqual({
       moved: "/a.txt",
       to: "/b.txt",
@@ -1721,345 +1567,179 @@ describe("runMovePath", () => {
     ["/a.txt/", "/sub/../b.txt"],
   ])("moves the admitted paths for the unnormalized %s -> %s", async (src, dst) => {
     const move = vi.fn(async () => undefined);
-    const recordMove = vi.fn(async () => undefined);
-    const deps = baseDeps({ writesEnabled: true, indexQueries: stubIndexQueries({ recordMove }) });
 
-    const result = await runMovePath(deps, fakePrincipal(fakeStorage({ move })), { src, dst });
+    const result = await runMovePath(baseDeps(), tokenPrincipal(fakeStorage({ move })), {
+      src,
+      dst,
+    });
 
     // The provider forwards both strings verbatim, so both must be the exact
-    // paths the scope admission was decided on.
+    // paths the admission was decided on.
     expect(move).toHaveBeenCalledWith("/a.txt", "/b.txt");
-    expect(recordMove).toHaveBeenCalledWith({
-      rootId: 1,
-      src: "alice/a.txt",
-      dst: "alice/b.txt",
-      actor: "mcp",
-    });
-    expect(result).toEqual({
-      moved: "/a.txt",
-      to: "/b.txt",
-      url: "https://fdrive.example.com/view/b.txt",
-    });
+    expect(result.moved).toBe("/a.txt");
+    expect(result.to).toBe("/b.txt");
   });
 
-  it.each(["/.trash", "/.trash/deleted.txt", "/docs/../.trash"])(
-    "refuses a src in the configured Trash path %s before touching storage",
-    async (src) => {
-      const move = vi.fn(async () => undefined);
-      const deps = baseDeps({ writesEnabled: true, trashPathForStorage: () => "/.trash" });
+  it.each([
+    ["src", { src: "/.trash/deleted.txt", dst: "/b.txt" }],
+    ["src", { src: "/docs/../.trash", dst: "/b.txt" }],
+    ["dst", { src: "/a.txt", dst: "/.trash" }],
+    ["dst", { src: "/a.txt", dst: "/docs/../.trash/a.txt" }],
+  ])("refuses a %s in the configured Trash before touching storage", async (_label, args) => {
+    const move = vi.fn(async () => undefined);
+    const deps = baseDeps({ trashPathForStorage: () => "/.trash" });
 
-      await expect(
-        runMovePath(deps, fakePrincipal(fakeStorage({ move })), { src, dst: "/b.txt" }),
-      ).rejects.toThrow("src is outside this identity's scope");
-      expect(move).not.toHaveBeenCalled();
-    },
-  );
-
-  it.each(["/.trash", "/.trash/deleted.txt", "/docs/../.trash"])(
-    "refuses a dst in the configured Trash path %s before touching storage",
-    async (dst) => {
-      const move = vi.fn(async () => undefined);
-      const deps = baseDeps({ writesEnabled: true, trashPathForStorage: () => "/.trash" });
-
-      await expect(
-        runMovePath(deps, fakePrincipal(fakeStorage({ move })), { src: "/a.txt", dst }),
-      ).rejects.toThrow("dst is outside this identity's scope");
-      expect(move).not.toHaveBeenCalled();
-    },
-  );
+    await expect(runMovePath(deps, tokenPrincipal(fakeStorage({ move })), args)).rejects.toThrow(
+      "fdrive's own folders",
+    );
+    expect(move).not.toHaveBeenCalled();
+  });
 
   it.each([
-    ["src", { src: "/docs/../private/a.txt", dst: "/docs/b.txt" }],
-    ["dst", { src: "/docs/a.txt", dst: "/docs/../private/b.txt" }],
-  ])("refuses a move whose %s climbs out of the verified scope", async (label, args) => {
+    { src: "/docs/../private/a.txt", dst: "/docs/b.txt" },
+    { src: "/docs/a.txt", dst: "/docs/../private/b.txt" },
+    { src: "/elsewhere/a.txt", dst: "/docs/b.txt" },
+    { src: "/docs/a.txt", dst: "/elsewhere/b.txt" },
+  ])("refuses a move leaving the token's folders: %o", async (args) => {
     const move = vi.fn(async () => undefined);
-    const deps = baseDeps({
-      writesEnabled: true,
-      scopeResolver: {
-        verifiedIndexScopes: async () => ({
-          available: true,
-          scopes: [{ rootName: "files", fsPrefix: "/alice/docs", virtualPrefix: "/docs" }],
-        }),
-      },
-    });
+    const principal = tokenPrincipal(fakeStorage({ move }), "organize", ["/docs"]);
 
-    await expect(runMovePath(deps, fakePrincipal(fakeStorage({ move })), args)).rejects.toThrow(
-      `${label} is outside this identity's scope`,
+    await expect(runMovePath(baseDeps(), principal, args)).rejects.toThrow(
+      "outside this token's allowed folders",
     );
+    expect(move).not.toHaveBeenCalled();
+  });
+
+  it("refuses to move a grant root", async () => {
+    const move = vi.fn(async () => undefined);
+    const principal = tokenPrincipal(fakeStorage({ move }), "organize", ["/docs"]);
+
+    await expect(
+      runMovePath(baseDeps(), principal, { src: "/docs", dst: "/docs/inner" }),
+    ).rejects.toThrow("cannot move or delete an allowed folder root");
     expect(move).not.toHaveBeenCalled();
   });
 
   it("uses storage kind for an extensionless file in the returned url", async () => {
-    const deps = baseDeps({
-      writesEnabled: true,
-      indexQueries: stubIndexQueries({ recordMove: async () => undefined }),
-    });
-
     const result = await runMovePath(
-      deps,
-      fakePrincipal(fakeStorage({ move: async () => undefined })),
-      {
-        src: "/a",
-        dst: "/folder",
-      },
+      baseDeps(),
+      tokenPrincipal(fakeStorage({ move: async () => undefined })),
+      { src: "/a", dst: "/folder" },
     );
 
     expect(result.url).toBe("https://fdrive.example.com/view/folder");
   });
-
-  it("refuses the move without touching storage when verified scopes are unavailable", async () => {
-    const move = vi.fn(async () => undefined);
-    const deps = baseDeps({
-      writesEnabled: true,
-      scopeResolver: {
-        verifiedIndexScopes: async () => ({ available: false, reason: "no_roots" }),
-      },
-    });
-
-    await expect(
-      runMovePath(deps, fakePrincipal(fakeStorage({ move })), { src: "/a.txt", dst: "/b.txt" }),
-    ).rejects.toThrow(McpToolError);
-    expect(move).not.toHaveBeenCalled();
-  });
-
-  it("refuses the move without touching storage when the caller's identity no longer exists", async () => {
-    const move = vi.fn(async () => undefined);
-    const deps = baseDeps({ writesEnabled: true, identities: { get: async () => null } });
-
-    await expect(
-      runMovePath(deps, fakePrincipal(fakeStorage({ move })), { src: "/a.txt", dst: "/b.txt" }),
-    ).rejects.toThrow(McpToolError);
-    expect(move).not.toHaveBeenCalled();
-  });
-
-  it.each([
-    ["src", { src: "/elsewhere/a.txt", dst: "/docs/b.txt" }],
-    ["dst", { src: "/docs/a.txt", dst: "/elsewhere/b.txt" }],
-  ])("refuses a move whose %s is outside the verified scope", async (label, args) => {
-    const move = vi.fn(async () => undefined);
-    const deps = baseDeps({
-      writesEnabled: true,
-      scopeResolver: {
-        verifiedIndexScopes: async () => ({
-          available: true,
-          scopes: [{ rootName: "files", fsPrefix: "/alice/docs", virtualPrefix: "/docs" }],
-        }),
-      },
-    });
-
-    await expect(runMovePath(deps, fakePrincipal(fakeStorage({ move })), args)).rejects.toThrow(
-      `${label} is outside this identity's scope`,
-    );
-    expect(move).not.toHaveBeenCalled();
-  });
-
-  it("refuses a move into the trash", async () => {
-    const move = vi.fn(async () => undefined);
-    const deps = baseDeps({ writesEnabled: true, trashPath: "/Trash" });
-
-    await expect(
-      runMovePath(deps, fakePrincipal(fakeStorage({ move })), {
-        src: "/a.txt",
-        dst: "/Trash/a.txt",
-      }),
-    ).rejects.toThrow("dst is outside this identity's scope");
-    expect(move).not.toHaveBeenCalled();
-  });
-
-  it("skips recording the move when verified scopes land on no indexed root", async () => {
-    const deps = baseDeps({
-      writesEnabled: true,
-      scopeResolver: {
-        verifiedIndexScopes: async () => ({
-          available: true,
-          scopes: [{ rootName: "unindexed-root", fsPrefix: "/alice", virtualPrefix: "/" }],
-        }),
-      },
-    });
-
-    const result = await runMovePath(
-      deps,
-      fakePrincipal(fakeStorage({ move: async () => undefined })),
-      { src: "/a.txt", dst: "/b.txt" },
-    );
-
-    expect(result.moved).toBe("/a.txt");
-  });
 });
 
-describe("recordMoveIfInScope", () => {
-  it("is a no-op when src and dst resolve to different roots", async () => {
-    const deps = baseDeps();
-    const twoRootScopes: ScopeContext = {
-      scopes: [
-        { rootName: "files", fsPrefix: "/alice", virtualPrefix: "/a" },
-        { rootName: "photos", fsPrefix: "/alice", virtualPrefix: "/b" },
-      ],
-      scopePrefixes: [
-        { rootId: 1, fsPrefix: "/alice" },
-        { rootId: 2, fsPrefix: "/alice" },
-      ],
-      rootNameById: new Map([
-        [1, "files"],
-        [2, "photos"],
-      ]),
-      rootIdByName: new Map([
-        ["files", 1],
-        ["photos", 2],
-      ]),
-      trashPath: null,
+describe("runRecentMoves", () => {
+  const at = new Date("2026-01-02T03:04:05.000Z");
+  let next = 0;
+  function moveEvent(
+    src: string | undefined,
+    dst: string | undefined,
+    occurredAt: Date | null = at,
+  ) {
+    next += 1;
+    return {
+      id: `event-${next}`,
+      sortAt: new Date(at.getTime() - next),
+      occurredAt,
+      before: src === undefined ? null : { path: src, kind: "file" as const },
+      after: dst === undefined ? null : { path: dst },
     };
-
-    await expect(
-      recordMoveIfInScope(deps, twoRootScopes, { src: "/a/x.txt", dst: "/b/y.txt" }),
-    ).resolves.toBeUndefined();
-  });
-
-  it("is a no-op when the destination's root has no id in the index yet", async () => {
-    const deps = baseDeps();
-
-    await expect(
-      recordMoveIfInScope(deps, UNINDEXED_ROOT_SCOPE_CONTEXT, { src: "/a.txt", dst: "/b.txt" }),
-    ).resolves.toBeUndefined();
-  });
-});
-
-describe("runRecentMoves / recentMovesInScope", () => {
-  it("returns an empty list when the index is unavailable", async () => {
-    const deps = baseDeps({
-      scopeResolver: {
-        verifiedIndexScopes: async () => ({ available: false, reason: "no_roots" }),
-      },
-    });
-    expect(await runRecentMoves(deps, fakePrincipal(), {})).toEqual({ moves: [] });
-  });
-
-  it("returns an empty list when the caller's identity no longer exists", async () => {
-    const deps = baseDeps({ identities: { get: async () => null } });
-    expect(await runRecentMoves(deps, fakePrincipal(), {})).toEqual({ moves: [] });
-  });
-
-  it("returns an empty list when verified scopes land on no indexed root", async () => {
-    const deps = baseDeps({
-      scopeResolver: {
-        verifiedIndexScopes: async () => ({
-          available: true,
-          scopes: [{ rootName: "unindexed-root", fsPrefix: "/alice", virtualPrefix: "/" }],
-        }),
-      },
-    });
-    expect(await runRecentMoves(deps, fakePrincipal(), {})).toEqual({ moves: [] });
-  });
-
-  it("maps recorded moves to virtual paths", async () => {
-    const at = new Date("2026-01-01T00:00:00.000Z");
-    const deps = baseDeps({
-      indexQueries: stubIndexQueries({
-        recentMoves: async () => [
-          { at, rootId: 1, src: "alice/a.txt", dst: "alice/b.txt", actor: "mcp" },
-        ],
+  }
+  /** Personal activity whose `list` answers from `pages` in turn and records each call. */
+  function activityOf(...pages: ReturnType<typeof moveEvent>[][]) {
+    const list = vi.fn(
+      async (_accountId: string, _options: ActivityListOptions) => pages.shift() ?? [],
+    );
+    return {
+      list,
+      deps: baseDeps({
+        activity: { repo: { list } } as unknown as NonNullable<McpToolDeps["activity"]>,
       }),
-    });
+    };
+  }
 
-    const result = await runRecentMoves(deps, fakePrincipal(), {});
+  it("asks for the caller's own successful MCP moves, of its account and login only", async () => {
+    const { list, deps } = activityOf([moveEvent("/a.txt", "/b.txt")]);
+
+    const result = await runRecentMoves(deps, tokenPrincipal(), {});
 
     expect(result).toEqual({ moves: [{ at: at.toISOString(), src: "/a.txt", dst: "/b.txt" }] });
-  });
-
-  it("skips a move whose src or dst falls outside the scope", async () => {
-    const at = new Date("2026-01-01T00:00:00.000Z");
-    const deps = baseDeps({
-      indexQueries: stubIndexQueries({
-        recentMoves: async () => [
-          { at, rootId: 1, src: "bob/a.txt", dst: "alice/b.txt", actor: "mcp" },
-        ],
-      }),
+    expect(list).toHaveBeenCalledWith("account-1", {
+      identityId: "identity-1",
+      action: "file.move",
+      source: "mcp",
+      outcome: "success",
+      limit: 100,
     });
-
-    const result = await runRecentMoves(deps, fakePrincipal(), {});
-
-    expect(result).toEqual({ moves: [], partial: true });
   });
 
-  it("skips a move with a null src or dst", async () => {
-    const at = new Date("2026-01-01T00:00:00.000Z");
-    const deps = baseDeps({
-      indexQueries: stubIndexQueries({
-        recentMoves: async () => [{ at, rootId: 1, src: null, dst: "alice/b.txt", actor: "mcp" }],
-      }),
-    });
-
-    const result = await runRecentMoves(deps, fakePrincipal(), {});
-
-    expect(result).toEqual({ moves: [], partial: true });
+  it("returns no moves without personal activity", async () => {
+    expect(await runRecentMoves(baseDeps(), tokenPrincipal(), {})).toEqual({ moves: [] });
   });
 
-  it("hides a move whose destination fails a live read check, never disclosing the source either", async () => {
-    const at = new Date("2026-01-01T00:00:00.000Z");
-    const ctx = await aliceScopeContext(stubIndexQueries());
-    const deps = {
-      ...baseDeps(),
-      indexQueries: stubIndexQueries({
-        recentMoves: async () => [
-          { at, rootId: 1, src: "alice/a.txt", dst: "alice/secret.txt", actor: "mcp" },
-        ],
-      }),
-    };
+  it("lists only moves with both ends in the token's folders and outside fdrive's own", async () => {
+    const { deps } = activityOf([
+      moveEvent("/docs/a.txt", "/docs/b.txt"),
+      moveEvent("/docs/c.txt", "/private/c.txt"),
+      moveEvent("/private/d.txt", "/docs/d.txt"),
+      moveEvent("/docs/e.txt", "/docs/.trash/e.txt"),
+      moveEvent("/docs/old/.fdrive-move-v1/f.txt", "/docs/f.txt"),
+      moveEvent(undefined, "/docs/g.txt"),
+      moveEvent("/docs/h.txt", undefined),
+    ]);
 
-    const result = await recentMovesInScope(
-      deps,
-      ctx,
-      fakeAuthorizer({ "file:/secret.txt": { allowed: false, reason: "denied" } }),
+    const result = await runRecentMoves(
+      { ...deps, trashPathForStorage: () => "/docs/.trash" },
+      tokenPrincipal(fakeStorage(), "read", ["/docs"]),
       {},
     );
 
-    expect(result.moves).toEqual([]);
-    expect(result.partial).toBe(true);
+    expect(result).toEqual({
+      moves: [{ at: at.toISOString(), src: "/docs/a.txt", dst: "/docs/b.txt" }],
+    });
   });
 
-  it("authorizes an extensionless destination as a directory, not a file", async () => {
-    const at = new Date("2026-01-01T00:00:00.000Z");
-    const ctx = await aliceScopeContext(stubIndexQueries());
-    const deps = {
-      ...baseDeps(),
-      indexQueries: stubIndexQueries({
-        recentMoves: async () => [
-          { at, rootId: 1, src: "alice/old-folder", dst: "alice/new-folder", actor: "mcp" },
-        ],
-      }),
-    };
-    const authorizer = fakeAuthorizer();
+  it("falls back to the sort time for an event without an occurrence time", async () => {
+    const event = moveEvent("/a.txt", "/b.txt", null);
+    const { deps } = activityOf([event]);
 
-    const result = await recentMovesInScope(deps, ctx, authorizer, {});
+    const result = await runRecentMoves(deps, tokenPrincipal(), {});
 
     expect(result.moves).toEqual([
-      { at: at.toISOString(), src: "/old-folder", dst: "/new-folder" },
+      { at: event.sortAt.toISOString(), src: "/a.txt", dst: "/b.txt" },
     ]);
-    expect(authorizer.calls).toEqual(["dir:/new-folder"]);
   });
 
-  it("excludes exactly the denied move while keeping an allowed one, and reports partial", async () => {
-    const at = new Date("2026-01-01T00:00:00.000Z");
-    const ctx = await aliceScopeContext(stubIndexQueries());
-    const deps = {
-      ...baseDeps(),
-      indexQueries: stubIndexQueries({
-        recentMoves: async () => [
-          { at, rootId: 1, src: "alice/a.txt", dst: "alice/keep.txt", actor: "mcp" },
-          { at, rootId: 1, src: "alice/b.txt", dst: "alice/secret.txt", actor: "mcp" },
-        ],
-      }),
-    };
+  it("pages on from the last event until the limit is filled, then stops", async () => {
+    const outside = Array.from({ length: 100 }, () => moveEvent("/private/x", "/private/y"));
+    const second = [moveEvent("/docs/a", "/docs/b"), moveEvent("/docs/c", "/docs/d")];
+    const { list, deps } = activityOf(outside, second);
 
-    const result = await recentMovesInScope(
-      deps,
-      ctx,
-      fakeAuthorizer({ "file:/secret.txt": { allowed: false, reason: "denied" } }),
-      {},
+    const result = await runRecentMoves(deps, tokenPrincipal(fakeStorage(), "read", ["/docs"]), {
+      limit: 1,
+    });
+
+    expect(result).toEqual({ moves: [{ at: at.toISOString(), src: "/docs/a", dst: "/docs/b" }] });
+    const last = outside.at(-1);
+    expect(list).toHaveBeenCalledTimes(2);
+    expect(list.mock.calls[1]?.[1]).toMatchObject({ after: { at: last?.sortAt, id: last?.id } });
+  });
+
+  it("clamps the limit and reports partial once it has read its bound", async () => {
+    const pages = Array.from({ length: MAX_RECENT_MOVE_EVENTS / 100 + 1 }, () =>
+      Array.from({ length: 100 }, () => moveEvent("/private/x", "/private/y")),
     );
+    const { list, deps } = activityOf(...pages);
 
-    expect(result.moves).toEqual([{ at: at.toISOString(), src: "/a.txt", dst: "/keep.txt" }]);
-    expect(result.partial).toBe(true);
+    const result = await runRecentMoves(deps, tokenPrincipal(fakeStorage(), "read", ["/docs"]), {
+      limit: 10_000,
+    });
+
+    expect(result).toEqual({ moves: [], partial: true });
+    expect(list).toHaveBeenCalledTimes(MAX_RECENT_MOVE_EVENTS / 100);
   });
 });
 
@@ -2079,7 +1759,6 @@ describe("fdrive's own folders", () => {
     const filesBySha256 = vi.fn(async () => []);
     const duplicates = vi.fn(async () => []);
     const similar = vi.fn(async () => []);
-    const recentMoves = vi.fn(async () => []);
     const deps = baseDeps({
       trashPathForStorage: () => "/.trash",
       indexQueries: stubIndexQueries({
@@ -2087,20 +1766,20 @@ describe("fdrive's own folders", () => {
         filesBySha256,
         duplicates,
         similar,
-        recentMoves,
         fileByPath: async () => target,
         statsForFileIds: async () => ({ chunks: 0, chunksEmbedded: 0 }),
       }),
     });
-    const principal = fakePrincipal();
+    const principal = tokenPrincipal();
+    const ctx = await resolveScopeContext(deps.indexQueries, ALICE_HOME_SCOPES, "/.trash");
+    if (ctx === null) throw new Error("expected a scope context");
 
     await runFindFiles(deps, principal, {});
     await runFolderOverview(deps, principal, {});
     await runIndexStats(deps, principal);
-    await runFileInfo(deps, principal, { path: "/target.md" });
+    await fileInfoInScope(deps, ctx, fakeAuthorizer(), { path: "/target.md" });
     await runFindDuplicates(deps, principal, {});
     await runSimilarFiles(deps, principal, { path: "/target.md" });
-    await runRecentMoves(deps, principal, {});
 
     expect(listFiles.mock.calls.map((call) => (call as unknown[])[1])).toEqual([
       expect.objectContaining({ exclude }),
@@ -2112,7 +1791,6 @@ describe("fdrive's own folders", () => {
       exclude,
     });
     expect(similar).toHaveBeenCalledWith(1, expect.anything(), 10, { exclude });
-    expect(recentMoves).toHaveBeenCalledWith(expect.anything(), "mcp", 50, { exclude });
   });
 
   it("never maps an index row into one, even one a lookup by path finds", async () => {

@@ -1,10 +1,5 @@
 import type { z } from "zod";
 import { AboutResponse } from "./about.ts";
-import {
-  AccountFavoritesResponse,
-  type LinkIdentityRequest,
-  type UnlinkIdentityRequest,
-} from "./accounts.ts";
 import { SystemActivityResponse } from "./activity.ts";
 import {
   AiConnectionTestResponse,
@@ -22,6 +17,7 @@ import {
 } from "./ai.ts";
 import { type IdentitySummary, type LoginRequest, MeResponse } from "./auth.ts";
 import { DESKTOP_API, DesktopPairInfo } from "./desktop.ts";
+import type { DesktopAccessMode } from "./desktop-writes.ts";
 import { ApiError, type ApiErrorKind } from "./error.ts";
 import { type FeaturesUpdateRequest, SystemFeaturesResponse } from "./features.ts";
 import {
@@ -93,8 +89,6 @@ import {
   chatMessagesRoute,
   chatRoute,
   grantRoute,
-  IDENTITY_HEADER,
-  IDENTITY_QUERY_PARAM,
   jobCancelRoute,
   jobRoute,
   MODIFIED_AT_HEADER,
@@ -198,8 +192,6 @@ export interface ApiClientOptions {
   baseUrl?: string;
   /** Defaults to `globalThis.fetch`. Override in tests with a stub. */
   fetch?: typeof globalThis.fetch;
-  /** Sent as the `x-identity-id` header on every request, when set. */
-  identityId?: string;
 }
 
 export interface ApiClientUploadOptions {
@@ -229,11 +221,8 @@ export interface ApiClientImageSearchOptions {
 
 export interface ApiClient {
   desktopPairing(id: string): Promise<z.infer<typeof DesktopPairInfo>>;
-  approveDesktopPairing(
-    id: string,
-    identityIds: string[],
-    access?: Record<string, "read" | "full">,
-  ): Promise<OkResponse>;
+  /** Connects the Mac to the signed-in login, read-only or with Finder writes. */
+  approveDesktopPairing(id: string, access: DesktopAccessMode): Promise<OkResponse>;
   health(): Promise<HealthResponse>;
   systemFeatures(): Promise<SystemFeaturesResponse>;
   systemUpdateFeatures(input: FeaturesUpdateRequest): Promise<SystemFeaturesResponse>;
@@ -293,10 +282,6 @@ export interface ApiClient {
   /** The active local login changes its own password; other sessions of the account end. */
   changePassword(req: ChangePasswordRequest): Promise<OkResponse>;
   me(): Promise<MeResponse>;
-  linkIdentity(input: LinkIdentityRequest): Promise<MeResponse>;
-  unlinkIdentity(id: string, input: UnlinkIdentityRequest): Promise<MeResponse>;
-  switchIdentity(id: string): Promise<MeResponse>;
-  accountFavorites(): Promise<AccountFavoritesResponse>;
   list(path: string): Promise<ListResponse>;
   stat(path: string, signal?: AbortSignal): Promise<FsEntry>;
   mkdir(path: string): Promise<FsEntry>;
@@ -417,7 +402,6 @@ export interface ApiClient {
 interface ClientContext {
   readonly baseUrl: string;
   readonly fetchImpl: typeof globalThis.fetch;
-  readonly identityId: string | undefined;
 }
 
 /** HTTP methods that mutate state and therefore need the CSRF marker header. */
@@ -478,9 +462,6 @@ async function rawRequest(ctx: ClientContext, opts: RequestOptions): Promise<Res
   const url = buildRequestUrl(ctx.baseUrl, opts.path, opts.query);
   const headers = new Headers(opts.extraHeaders);
 
-  if (ctx.identityId !== undefined) {
-    headers.set(IDENTITY_HEADER, ctx.identityId);
-  }
   if (STATE_CHANGING_METHODS.has(opts.method)) {
     headers.set("x-requested-with", "fdrive");
   }
@@ -575,7 +556,6 @@ export function createApiClient(options: ApiClientOptions = {}): ApiClient {
   const ctx: ClientContext = {
     baseUrl: options.baseUrl ?? "",
     fetchImpl: options.fetch ?? globalThis.fetch,
-    identityId: options.identityId,
   };
 
   const method =
@@ -592,9 +572,9 @@ export function createApiClient(options: ApiClientOptions = {}): ApiClient {
     desktopPairing(id) {
       return get(`${DESKTOP_API}/pairings/${encodeURIComponent(id)}`, DesktopPairInfo);
     },
-    approveDesktopPairing(id, identityIds, access) {
+    approveDesktopPairing(id, access) {
       return post(`${DESKTOP_API}/pairings/${encodeURIComponent(id)}/approve`, OkResponse, {
-        jsonBody: { identityIds, ...(access ? { access } : {}) },
+        jsonBody: { access },
       });
     },
     listShares() {
@@ -660,21 +640,6 @@ export function createApiClient(options: ApiClientOptions = {}): ApiClient {
       return post(ROUTES.auth.password, OkResponse, { jsonBody: req });
     },
 
-    linkIdentity(input) {
-      return post(ROUTES.account.identities, MeResponse, { jsonBody: input });
-    },
-    unlinkIdentity(id, input) {
-      return del(`${ROUTES.account.identities}/${encodeURIComponent(id)}`, MeResponse, {
-        jsonBody: input,
-      });
-    },
-    switchIdentity(id) {
-      return post(ROUTES.account.activeIdentity, MeResponse, { jsonBody: { identityId: id } });
-    },
-    accountFavorites() {
-      return get(ROUTES.account.favorites, AccountFavoritesResponse);
-    },
-
     me(): Promise<MeResponse> {
       return get(ROUTES.auth.me, MeResponse);
     },
@@ -723,7 +688,6 @@ export function createApiClient(options: ApiClientOptions = {}): ApiClient {
       return buildRequestUrl(ctx.baseUrl, ROUTES.fs.download, {
         path,
         inline: opts?.inline === true ? "1" : undefined,
-        [IDENTITY_QUERY_PARAM]: ctx.identityId,
       });
     },
 

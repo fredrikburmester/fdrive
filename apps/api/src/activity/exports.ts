@@ -1,8 +1,8 @@
 import { CanonicalUuid, PersonalActivityFilters, ROUTES } from "@fdrive/contracts";
 import type { ActivityExportsRepo, ActivityListOptions, ActivityRepo } from "@fdrive/db";
 import { z } from "zod";
-import { accountContext } from "../accounts/routes.ts";
 import type { AuthedHono } from "../app.js";
+import { accountContext } from "../auth/account-context.ts";
 import { ApiHttpError } from "../errors.js";
 import { parseBody } from "../fs/routes.js";
 import { createActivityLimiter } from "./limiter.js";
@@ -36,7 +36,6 @@ export async function* activityExport(
   const options: ActivityListOptions = {
     ...(filters.fileId ? { fileId: filters.fileId } : {}),
     ...(filters.batchId ? { batchId: filters.batchId } : {}),
-    ...(filters.identityId ? { identityId: filters.identityId } : {}),
     ...(filters.action ? { action: filters.action } : {}),
     ...(filters.source ? { source: filters.source } : {}),
     ...(filters.outcome ? { outcome: filters.outcome } : {}),
@@ -136,7 +135,6 @@ export async function* activityExport(
       if (
         filters.batchId ||
         (filters.fileId && row.fileId !== filters.fileId) ||
-        (filters.identityId && row.identityId !== filters.identityId) ||
         (filters.action && row.action !== filters.action) ||
         (filters.source && row.source !== filters.source) ||
         (filters.outcome && value.outcome !== filters.outcome) ||

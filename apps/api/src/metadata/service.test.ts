@@ -6,6 +6,7 @@ import {
   DEFAULT_RECENTS_LIMIT,
   hasTrackedMetadata,
   RECENTS_KEEP,
+  withFollowers,
 } from "./service.js";
 
 function buildService() {
@@ -162,20 +163,15 @@ describe("createMetadataService: folder views", () => {
     expect(await service.getFolderView(IDENTITY_ID, "/photos")).toBeNull();
   });
 
-  it("resets views across every linked identity without touching another account", async () => {
+  it("resets every view of the login without touching another login's", async () => {
     const { repos, service } = buildService();
     const provider = await repos.providers.ensure({ type: "test", baseUrl: "http://test" });
     const account = await repos.accounts.create({ displayName: "Alice" });
     const otherAccount = await repos.accounts.create({ displayName: "Bob" });
-    const first = await repos.identities.create({
+    const alice = await repos.identities.create({
       accountId: account.id,
       providerId: provider.id,
-      externalUsername: "alice-1",
-    });
-    const second = await repos.identities.create({
-      accountId: account.id,
-      providerId: provider.id,
-      externalUsername: "alice-2",
+      externalUsername: "alice",
     });
     const other = await repos.identities.create({
       accountId: otherAccount.id,
@@ -183,15 +179,15 @@ describe("createMetadataService: folder views", () => {
       externalUsername: "bob",
     });
     await Promise.all([
-      service.setFolderView(first.id, "/one", { mode: "list" }),
-      service.setFolderView(second.id, "/two", { mode: "grid" }),
+      service.setFolderView(alice.id, "/one", { mode: "list" }),
+      service.setFolderView(alice.id, "/two", { mode: "grid" }),
       service.setFolderView(other.id, "/keep", { mode: "tree" }),
     ]);
 
-    await service.resetFolderViews(account.id);
+    await service.resetFolderViews(alice.id);
 
-    await expect(service.getFolderView(first.id, "/one")).resolves.toBeNull();
-    await expect(service.getFolderView(second.id, "/two")).resolves.toBeNull();
+    await expect(service.getFolderView(alice.id, "/one")).resolves.toBeNull();
+    await expect(service.getFolderView(alice.id, "/two")).resolves.toBeNull();
     await expect(service.getFolderView(other.id, "/keep")).resolves.toMatchObject({ mode: "tree" });
   });
 });
@@ -448,7 +444,7 @@ describe("createMetadataService: AI chat references", () => {
   });
 });
 
-describe("createMetadataService: followers", () => {
+describe("withFollowers", () => {
   it("tells each follower about moves, deletes and trashes, in order", async () => {
     const repos = createMemoryRepos();
     const calls: string[] = [];
@@ -461,10 +457,10 @@ describe("createMetadataService: followers", () => {
       }),
     });
     const movePrefix = vi.spyOn(repos.metadataPaths, "movePrefix");
-    const service = createMetadataService({
-      ...repos,
-      followers: [follower("grants"), follower("other")],
-    });
+    const service = withFollowers(createMetadataService(repos), [
+      follower("grants"),
+      follower("other"),
+    ]);
 
     await service.onMoved(IDENTITY_ID, "/Projects", "/Work", true);
     await service.onDeleted(IDENTITY_ID, "/Work", true);
@@ -491,19 +487,36 @@ describe("createMetadataService: followers", () => {
     const repos = createMemoryRepos();
     const failure = new Error("grants unavailable");
     const after = { onMoved: vi.fn(), onDeleted: vi.fn() };
-    const service = createMetadataService({
-      ...repos,
-      followers: [
-        {
-          onMoved: vi.fn().mockRejectedValue(failure),
-          onDeleted: vi.fn().mockRejectedValue(failure),
-        },
-        after,
-      ],
-    });
+    const movePrefix = vi.spyOn(repos.metadataPaths, "movePrefix");
+    const service = withFollowers(createMetadataService(repos), [
+      {
+        onMoved: vi.fn().mockRejectedValue(failure),
+        onDeleted: vi.fn().mockRejectedValue(failure),
+      },
+      after,
+    ]);
     await expect(service.onMoved(IDENTITY_ID, "/a", "/b", true)).rejects.toBe(failure);
     await expect(service.onDeleted(IDENTITY_ID, "/b", true)).rejects.toBe(failure);
     expect(after.onMoved).not.toHaveBeenCalled();
     expect(after.onDeleted).not.toHaveBeenCalled();
+    expect(movePrefix).not.toHaveBeenCalled();
+  });
+
+  it("moves access before anything else, so a failing tag move never leaves it behind", async () => {
+    const repos = createMemoryRepos();
+    const failure = new Error("tags unavailable");
+    vi.spyOn(repos.metadataPaths, "movePrefix").mockRejectedValue(failure);
+    vi.spyOn(repos.metadataPaths, "deletePrefix").mockRejectedValue(failure);
+    vi.spyOn(repos.recents, "deletePrefix").mockRejectedValue(failure);
+    const grants = { onMoved: vi.fn(async () => {}), onDeleted: vi.fn(async () => {}) };
+    const service = withFollowers(createMetadataService(repos), [grants]);
+    await expect(service.onMoved(IDENTITY_ID, "/a", "/b", true)).rejects.toBe(failure);
+    await expect(service.onTrashed(IDENTITY_ID, "/b", true, "/.trash/leaf")).rejects.toBe(failure);
+    await expect(service.onDeleted(IDENTITY_ID, "/c", true)).rejects.toBe(failure);
+    expect(grants.onMoved.mock.calls).toEqual([
+      [IDENTITY_ID, "/a", "/b", true],
+      [IDENTITY_ID, "/b", "/.trash/leaf", true],
+    ]);
+    expect(grants.onDeleted.mock.calls).toEqual([[IDENTITY_ID, "/c", true]]);
   });
 });
