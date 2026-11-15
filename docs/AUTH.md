@@ -131,7 +131,7 @@ owner, the indexer's events, Office) comes from the identity storage factory
 
 What every request would otherwise read again is kept in the API process
 and replaced when the API itself saves a new value: that setup is done (it
-never reopens), the Trash settings, the storage name and the index root ids.
+never reopens), how long Trash keeps an item, the storage name and the index root ids.
 fdrive runs one API process, and nothing else writes these.
 
 ## The `reauth_required` flow

@@ -17,7 +17,7 @@ fdrive also offers a native macOS app that puts your files directly into Finder.
 - **Instant previews**: Photos, videos, music, PDFs, markdown, and code files open right in your browser.
 - **Smart tags & favorites**: Star items and add custom color tags. They survive renames and moves, even if you rename a file directly on disk.
 - **Share with family & friends**: Create password-protected links with expiration dates, download limits, and photo galleries, or share a folder with another fdrive user.
-- **Trash**: Safely restore accidentally deleted files (if turned on).
+- **Trash**: Safely restore accidentally deleted files for 30 days, or as long as you set.
 - **Modular power-ups**: Keep it featherlight (< 300 MB RAM) for basic browsing, or switch on full-text search, AI image search, OCR, and browser office editing whenever you want.
 
 ---

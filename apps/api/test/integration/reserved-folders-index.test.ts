@@ -132,7 +132,6 @@ describe("fdrive's own folders in the index, through the MCP tools", () => {
       publicUrl: async () => null,
       indexerClient: null,
       clock,
-      trashPathForStorage: () => "/.trash",
     };
     alice = {
       accountId: account.id,
@@ -172,7 +171,7 @@ describe("fdrive's own folders in the index, through the MCP tools", () => {
     // The AI's index-backed file_info.
     const verified = await deps.scopeResolver.verifiedIndexScopes(alice.username);
     if (!verified.available) throw new Error("expected alice's verified scopes");
-    const ctx = await resolveScopeContext(deps.indexQueries, verified.scopes, "/.trash");
+    const ctx = await resolveScopeContext(deps.indexQueries, verified.scopes);
     if (ctx === null) throw new Error("expected alice's scope context");
     const info = await fileInfoInScope(deps, ctx, { path: "/report-a.txt" });
     expect(info.identical_copies).toEqual(["/report-b.txt"]);

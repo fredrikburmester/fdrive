@@ -31,8 +31,8 @@ Current implementation reference. Unfinished work belongs in [plans](plans/READM
   writers outside fdrive (OCR, rsync, SMB, Syncthing) may change them. fdrive never creates a
   symbolic link and never follows one: storage refuses a path through a link for every caller,
   and the indexer and OCR skip links. The API reaches it
-  through the [storage port](STORAGE.md). `FDRIVE_STORAGE_ROOT` is required. Two installation-wide flags on `/auth/me` say what the UI offers: `trash`
-  (Trash is on) and `index` (the files folder is indexed).
+  through the [storage port](STORAGE.md). `FDRIVE_STORAGE_ROOT` is required. An installation-wide flag on `/auth/me` says whether the
+  UI offers index-backed features: `index` (the files folder is indexed). Trash is always on.
 
 ## Accounts and storage
 
@@ -71,8 +71,9 @@ owner's Trash, in fdrive's Trash layout or in the Mac's `/.fdrive-desktop` (`clo
 ([Trash](TRASH.md)).
 
 fdrive keeps its own places inside each user's files, and one rule in `@fdrive/core` names them
-(`isReservedPath`): the Trash folder while Trash is on and the Mac's `/.fdrive-desktop`
-(`reservedFolders`), plus fdrive's Trash layout (`.fdrive-move-v1`) wherever it lies.
+(`isReservedPath`): the Trash at `/.trash` and the Mac's `/.fdrive-desktop`
+(`RESERVED_FOLDERS`), plus fdrive's Trash layout (`.fdrive-move-v1`) wherever it lies, all in
+any case.
 Listings, the Mac, search, MCP and AI never show them; index queries leave them out in SQL
 before their limit. The indexer never walks `/.fdrive-desktop`; it does index the Trash, so
 moves into and out of it stay renames. OCR takes its PDFs from the index and leaves out all of these. Where a consumer differs it says so: links also never reach
@@ -90,8 +91,7 @@ wherever it moves, so it never stays at a path where something new could appear:
 route other path-keyed metadata follows, through the Trash and its restores, the Mac's
 writes and moves the indexer reports. Inside a place no link reaches (Trash, say)
 it shows not found, and it works again once the item comes back out. Anything in fdrive's
-Trash layout (a `.fdrive-move-v1` segment) stays refused wherever it lies, even after Trash
-is turned off or moved. A move inside a folder shared with someone counts in the owner's
+Trash layout (a `.fdrive-move-v1` segment) stays refused wherever it lies. A move inside a folder shared with someone counts in the owner's
 files; taken out of them, deleted, or purged from Trash, the item leaves its links, and a
 link left with nothing goes.
 Folder ZIP downloads are held to two at a time per link, an hour and `FDRIVE_JOB_MAX_BYTES`
@@ -132,8 +132,8 @@ Trash is a storage capability, not application-owned snapshot history; see [Tras
   begins disabled; the ml service and the Office controller expose starting, ready and failed
   states.
 - System pages are installation-wide and independent of the signed-in login, and every page
-  header says so. System > General holds the server address and the files folder's name,
-  health and Trash.
+  header says so. System > General holds the server address, the files folder's name and
+  health, and how long Trash keeps an item.
 - The admin sidebar shows live processing activity and percentages only for fixed workloads.
   Lightweight worker snapshots and one shared poll drive it; see [System activity](SYSTEM-ACTIVITY.md).
 - Search combines text/filename and available visual results, with separate failure states.

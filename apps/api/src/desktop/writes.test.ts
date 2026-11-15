@@ -86,7 +86,6 @@ async function fixture() {
     // Memory storage has no Trash to keep out of.
     storageForIdentity: async () => raw,
     clock: () => new Date(),
-    trashPathForStorage: () => null,
     access,
     metadata,
     bus,

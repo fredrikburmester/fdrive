@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  dayCountLabel,
   deleteDialogCopy,
   emptiedToastMessage,
   emptyTrashConfirmDescription,
@@ -9,7 +10,7 @@ import {
   purgedToastMessage,
   restoreConflictMessage,
   restoredToastMessage,
-  trashAvailabilityFor,
+  retentionNote,
 } from "./format";
 
 describe("originalFolderLabel", () => {
@@ -23,53 +24,34 @@ describe("originalFolderLabel", () => {
 });
 
 describe("deleteDialogCopy", () => {
-  it("uses the permanent-delete copy when trash is null", () => {
-    expect(deleteDialogCopy(["a.txt"], null)).toEqual({
-      title: "Delete item?",
-      description: '"a.txt" will be permanently deleted. This cannot be undone.',
-      confirmLabel: "Delete",
-      pendingLabel: "Deleting…",
-    });
-  });
-
-  it("uses the permanent-delete copy when trash is unavailable", () => {
-    expect(deleteDialogCopy(["a.txt"], { available: false })).toEqual({
-      title: "Delete item?",
-      description: '"a.txt" will be permanently deleted. This cannot be undone.',
-      confirmLabel: "Delete",
-      pendingLabel: "Deleting…",
-    });
-  });
-
-  it("pluralizes the permanent-delete copy for multiple items", () => {
-    expect(deleteDialogCopy(["a.txt", "b.txt"], null)).toEqual({
-      title: "Delete items?",
-      description: "2 items will be permanently deleted. This cannot be undone.",
-      confirmLabel: "Delete",
-      pendingLabel: "Deleting…",
-    });
-  });
-
-  it("uses the move-to-trash copy, quoting the single entry's name, when trash is available", () => {
-    expect(deleteDialogCopy(["a.txt"], { available: true })).toEqual({
+  it("moves to Trash, quoting the single entry's name and when Trash deletes it", () => {
+    expect(deleteDialogCopy(["a.txt"], 30)).toEqual({
       title: "Move to Trash?",
-      description: '"a.txt" will be moved to Trash.',
+      description:
+        '"a.txt" will be moved to Trash. Items in Trash are deleted permanently after 30 days.',
       confirmLabel: "Move to Trash",
       pendingLabel: "Moving to Trash…",
     });
   });
 
-  it("summarizes multiple items by count for the move-to-trash copy", () => {
-    expect(deleteDialogCopy(["a.txt", "b.txt"], { available: true })).toEqual({
-      title: "Move to Trash?",
-      description: "2 items will be moved to Trash.",
-      confirmLabel: "Move to Trash",
-      pendingLabel: "Moving to Trash…",
-    });
+  it("summarizes multiple items by count, and says one day in the singular", () => {
+    expect(deleteDialogCopy(["a.txt", "b.txt"], 1).description).toBe(
+      "2 items will be moved to Trash. Items in Trash are deleted permanently after 1 day.",
+    );
   });
 
-  it("treats an undefined trash argument as unavailable", () => {
-    expect(deleteDialogCopy(["a.txt"], undefined).confirmLabel).toBe("Delete");
+  it("leaves out when Trash deletes items until the setting has loaded", () => {
+    expect(deleteDialogCopy(["a.txt"], undefined).description).toBe(
+      '"a.txt" will be moved to Trash.',
+    );
+  });
+});
+
+describe("retentionNote", () => {
+  it("says when Trash deletes what it holds, once known", () => {
+    expect(retentionNote(7)).toBe("Items in Trash are deleted permanently after 7 days.");
+    expect(retentionNote(undefined)).toBeNull();
+    expect(dayCountLabel(1)).toBe("1 day");
   });
 });
 
@@ -135,12 +117,5 @@ describe("restoreConflictMessage", () => {
     expect(restoreConflictMessage("a.txt")).toBe(
       'Could not restore "a.txt": a file already exists at that location.',
     );
-  });
-});
-
-describe("trashAvailabilityFor", () => {
-  it("follows the login's trash capability", () => {
-    expect(trashAvailabilityFor({ trash: true })).toEqual({ available: true });
-    expect(trashAvailabilityFor({ trash: false })).toBeNull();
   });
 });

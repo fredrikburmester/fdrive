@@ -6,7 +6,7 @@ import {
   type SearchResponse,
   type SearchStatusResponse,
 } from "@fdrive/contracts";
-import { parseSearchFilters, type StorageProvider } from "@fdrive/core";
+import { parseSearchFilters } from "@fdrive/core";
 import type { AppHono, AuthedHono } from "../app.js";
 import { ApiHttpError } from "../errors.js";
 import type { ScopeResolver } from "../scoping/resolver.ts";
@@ -33,7 +33,6 @@ export interface SearchRoutesDeps {
   readonly semanticEnabled: boolean;
   /** Whether `FDRIVE_IMAGE_EMBED_URL` is configured; `search/status` reports this directly. */
   readonly imageSearchEnabled: boolean;
-  readonly trashPathForStorage?: (storage: StorageProvider) => string | null;
 }
 
 /** Default and maximum number of hits returned by `GET /api/v1/search`. */
@@ -84,9 +83,7 @@ export function registerSearchRoutes(
 
     const verified = await deps.resolver.verifiedIndexScopes(principal.username);
 
-    const trashPath = deps.trashPathForStorage?.(principal.storage);
     const response = await deps.searchService.search({
-      ...(trashPath === undefined ? {} : { trashPath }),
       scopes: verified.available ? verified.scopes : [],
       query: result.data.q,
       filters,
@@ -108,9 +105,7 @@ export function registerSearchRoutes(
 
     const verified = await deps.resolver.verifiedIndexScopes(principal.username);
 
-    const trashPath = deps.trashPathForStorage?.(principal.storage);
     const response = await deps.imageSearchService.search({
-      ...(trashPath === undefined ? {} : { trashPath }),
       scopes: verified.available && features?.imageSearch !== false ? verified.scopes : [],
       query: result.data.q,
       limit,

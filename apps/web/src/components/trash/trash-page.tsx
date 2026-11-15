@@ -30,6 +30,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { useTrashSettings } from "@/lib/api/trash-settings-queries";
 import { describeFsError } from "@/lib/files/queries";
 import { useDefaultView } from "@/lib/files/use-default-view";
 import {
@@ -40,6 +41,7 @@ import {
   purgedToastMessage,
   restoreConflictMessage,
   restoredToastMessage,
+  retentionNote,
 } from "@/lib/trash/format";
 import {
   isRestoreConflict,
@@ -65,6 +67,7 @@ export function TrashPage() {
   const restore = useTrashRestore();
   const purge = useTrashPurge();
   const emptyTrash = useTrashEmpty();
+  const retention = retentionNote(useTrashSettings().data?.retentionDays);
 
   const entries = trash.data?.entries ?? [];
   const [selected, setSelected] = useState<ReadonlySet<string>>(new Set());
@@ -200,8 +203,8 @@ export function TrashPage() {
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Trash</h1>
           <p className="mt-1 text-sm text-muted-foreground">
-            Files and folders moved to Trash from Files show up here until you restore or
-            permanently delete them.
+            Files and folders you delete stay here until you restore them or delete them
+            permanently.{retention === null ? null : ` ${retention}`}
           </p>
         </div>
 
@@ -267,7 +270,7 @@ export function TrashPage() {
         ) : entries.length === 0 ? (
           <EmptyState
             title="Trash is empty"
-            description="Items you move to Trash from Files show up here until you restore or permanently delete them."
+            description="Items you delete show up here until you restore them or delete them permanently."
           />
         ) : (
           <>

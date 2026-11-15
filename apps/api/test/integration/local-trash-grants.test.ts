@@ -6,7 +6,6 @@ import {
   OwnedGrant,
   ROUTES,
   TrashListResponse,
-  TrashSettings,
 } from "@fdrive/contracts";
 import { createChangeWriter, createDb, createRepos } from "@fdrive/db";
 import type { IndexChange } from "@fdrive/local";
@@ -38,7 +37,6 @@ describe("shared folders in their owner's Trash, through the real indexer", () =
   let database: ReturnType<typeof createDb>;
   let composed: Awaited<ReturnType<typeof composeApp>>;
   let index: ChangeQueue;
-  let providerId: string;
   const failures: unknown[] = [];
 
   beforeAll(async () => {
@@ -73,7 +71,6 @@ describe("shared folders in their owner's Trash, through the real indexer", () =
       }),
       silentLogger(),
     );
-    providerId = (await repos.providers.ensure({ type: "local", baseUrl: "local" })).id;
     index = createChangeQueue({
       write: createChangeWriter(database.db, "api"),
       onError: (error) => failures.push(error),
@@ -116,31 +113,6 @@ describe("shared folders in their owner's Trash, through the real indexer", () =
     });
     expect(response.status).toBe(200);
     return cookieFrom(response);
-  }
-
-  /**
-   * Sets the files folder's Trash (`null` turns it off) through System >
-   * General, as alice, an administrator: the API keeps the settings it saves
-   * in memory.
-   */
-  async function trashAt(path: string | null): Promise<void> {
-    const admin = await login("alice");
-    const current = await call(`${ROUTES.system.trash}?providerId=${providerId}`, {
-      cookie: admin,
-    });
-    expect(current.status).toBe(200);
-    await ok(
-      call(ROUTES.system.trash, {
-        method: "PUT",
-        cookie: admin,
-        body: {
-          ...TrashSettings.parse(await current.json()),
-          enabled: path !== null,
-          path: path ?? "/.trash",
-          retentionHours: null,
-        },
-      }),
-    );
   }
 
   async function names(cookie: string, path: string): Promise<string[]> {
@@ -186,25 +158,13 @@ describe("shared folders in their owner's Trash, through the real indexer", () =
       call(ROUTES.fs.delete, { method: "POST", cookie, body: { items: [{ path, kind: "dir" }] } }),
     );
     const [id] = (await trashIds(cookie)).filter((candidate) => !before.includes(candidate));
-    const folder = (await trashFolder(cookie)).slice(1);
-    return { kind: "moved", path: `alice${path}`, target: `alice/${folder}/${id}` };
+    return { kind: "moved", path: `alice${path}`, target: `alice/.trash/${id}` };
   }
 
   async function trashIds(cookie: string): Promise<string[]> {
     const response = await call(ROUTES.trash.list, { cookie });
     expect(response.status).toBe(200);
     return TrashListResponse.parse(await response.json()).entries.map((entry) => entry.id);
-  }
-
-  async function trashFolder(cookie: string): Promise<string> {
-    const response = await call(ROUTES.trash.status, { cookie });
-    const { path } = (await response.json()) as { path: string };
-    return path;
-  }
-
-  async function move(cookie: string, path: string, target: string): Promise<Moved> {
-    await ok(call(ROUTES.fs.move, { method: "POST", cookie, body: { path, target } }));
-    return { kind: "moved", path: `alice${path}`, target: `alice${target}` };
   }
 
   /** Every `fs` event the API streams to `cookie`'s browser from now on. */
@@ -313,7 +273,6 @@ describe("shared folders in their owner's Trash, through the real indexer", () =
   const virtual = (rootPath: string) => rootPath.slice("alice".length);
 
   it("takes shares into Trash with their folder, back on restore, and ends them on purge", async () => {
-    await trashAt("/.trash");
     const other = await login("alice-other");
     await watched(async (alice, events) => {
       await share(alice, "/docs");
@@ -375,46 +334,23 @@ describe("shared folders in their owner's Trash, through the real indexer", () =
     });
   });
 
-  it("follows the configured Trash folder, on and off, and ends a share deleted outside fdrive", async () => {
-    await trashAt("/Bin");
+  it("ends a share deleted from Trash outside fdrive once the indexer reports it", async () => {
     const other = await login("alice-other");
     await watched(async (alice, events) => {
       await share(alice, "/docs-other");
-
-      // While Trash is `/Bin`, a folder named `.trash` is an ordinary folder.
-      await indexed(events, () => move(alice, "/docs-other", "/.trash/docs-other"));
-      expect(await shared(alice, "docs-other")).toEqual(["/.trash/docs-other"]);
-      expect(await names(other, `${SHELF}/docs-other`)).toEqual(["keep.dat"]);
-
       let trashed = {} as Moved;
       await indexed(events, async () => {
-        trashed = await trash(alice, "/.trash/docs-other");
+        trashed = await trash(alice, "/docs-other");
         return trashed;
       });
-      expect(trashed.target).toMatch(/^alice\/Bin\/\.fdrive-move-v1\//);
+      expect(trashed.target).toMatch(/^alice\/\.trash\/\.fdrive-move-v1\//);
       expect(await shared(alice, "docs-other")).toEqual([virtual(trashed.target)]);
       expect(await shelf(other)).toEqual([]);
 
-      // Moving Trash elsewhere or turning it off does not open what is still in it.
-      await trashAt("/Recycle");
-      expect(await shelf(other)).toEqual([]);
-      await trashAt(null);
-      expect(await shelf(other)).toEqual([]);
-      await trashAt("/Bin");
-      await indexed(events, async () => {
-        await restore(alice, idOf(trashed));
-        return { kind: "moved", path: trashed.target, target: "alice/.trash/docs-other" };
-      });
-      expect(await shelf(other)).toEqual(["docs-other"]);
-
       // Deleted from Trash outside fdrive: until the indexer reports it the share
       // still names the deleted folder, which no new folder can take.
-      await indexed(events, async () => {
-        trashed = await trash(alice, "/.trash/docs-other");
-        return trashed;
-      });
       await rm(stack.folder.path("alice", virtual(trashed.target)), { recursive: true });
-      await mkdir(alice, "/.trash/docs-other");
+      await mkdir(alice, "/docs-other");
       expect(await shelf(other)).toEqual([]);
       expect(await shared(alice, "docs-other")).toEqual([virtual(trashed.target)]);
       await stack.seen(trashed.target, false);

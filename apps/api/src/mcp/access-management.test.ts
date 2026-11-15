@@ -18,7 +18,6 @@ import {
   ordinaryPath,
   requireMode,
   tokenScopes,
-  trashPathFor,
 } from "./access.ts";
 import {
   boundedBytes,
@@ -92,7 +91,6 @@ async function fixture(mode: "read" | "organize" | "full" = "full", paths = ["/a
     searchService: {} as McpToolDeps["searchService"],
     publicUrl: async () => "https://drive.example",
     indexerClient: null,
-    trashPath: "/.trash",
     clock,
     metadata,
     onMutation: vi.fn(async (_p, change) => {
@@ -143,13 +141,10 @@ it("enforces normalized grants, ancestor browsing and protected roots", async ()
   await expect(readFile(deps, principal, "/allowed/../hidden/secret.txt")).rejects.toThrow(
     "allowed folders",
   );
-  expect(() => assertMutablePath(principal, "/allowed/version.1", null)).toThrow("folder root");
+  expect(() => assertMutablePath(principal, "/allowed/version.1")).toThrow("folder root");
   const root = { ...principal, tokenAccess: { mode: "full" as const, paths: ["/"] } };
-  expect(() => assertMutablePath(root, "/", null)).toThrow("folder root");
-  expect(() => assertMutablePath(root, "/allowed", "/allowed/trash")).toThrow("containing Trash");
-  expect(() => ordinaryPath(deps, root, "/.trash/a")).toThrow("Trash");
-  expect(trashPathFor({}, principal)).toBe(null);
-  expect(trashPathFor({ trashPathForStorage: () => "/bin" }, principal)).toBe("/bin");
+  expect(() => assertMutablePath(root, "/")).toThrow("folder root");
+  expect(() => ordinaryPath(root, "/.trash/a")).toThrow("Trash");
 });
 
 it("intersects index mappings while retaining aliases and nested shadow boundaries", async () => {
@@ -356,7 +351,7 @@ it("restores only authorized Trash entries and preserves tags/favorites through 
   await setFavorite(deps, principal, { path: "/allowed/a.txt", favorite: true });
   await principal.storage.deleteFile("/hidden/secret.txt");
   await trashPath(deps, principal, "/allowed/a.txt");
-  const listing = await listTrash(deps, principal, {});
+  const listing = await listTrash(principal, {});
   expect(listing.entries).toHaveLength(1);
   const id = listing.entries[0]?.id ?? "missing";
   await expect(
@@ -375,11 +370,11 @@ it("restores only authorized Trash entries and preserves tags/favorites through 
   expect(await fileTags(deps, principal, "/allowed/restored.txt", [])).toMatchObject({ tags: [] });
   await expect(restorePath(deps, principal, { id })).rejects.toMatchObject({ kind: "not_found" });
   await expect(
-    trashPath({ ...deps, trashPath: null }, principal, "/allowed/restored.txt"),
+    trashPath(deps, { ...principal, storage: base }, "/allowed/restored.txt"),
   ).rejects.toThrow("no file was deleted");
   expect(await base.stat("/allowed/restored.txt")).toMatchObject({ kind: "file" });
   await trashPath(deps, principal, "/allowed/version.1");
-  const folder = (await listTrash(deps, principal, { offset: 0, limit: 1 })).entries[0];
+  const folder = (await listTrash(principal, { offset: 0, limit: 1 })).entries[0];
   expect(await restorePath(deps, principal, { id: folder?.id ?? "missing" })).toMatchObject({
     restored: "/allowed/version.1",
   });
@@ -388,7 +383,7 @@ it("restores only authorized Trash entries and preserves tags/favorites through 
 it("restores a Trash item from its id without listing Trash", async () => {
   const { principal, deps, base } = await fixture();
   await trashPath(deps, principal, "/allowed/a.txt");
-  const [entry] = (await listTrash(deps, principal, {})).entries;
+  const [entry] = (await listTrash(principal, {})).entries;
   const trash = principal.storage.trash;
   if (entry === undefined || trash === undefined) throw new Error("expected a Trash item");
   const list = vi.spyOn(trash, "list");
@@ -418,9 +413,7 @@ it("preserves search availability and passes grants to visual search", async () 
   expect(
     await searchImages({ ...deps, imageSearchService: { search } }, principal, { query: "red" }),
   ).toMatchObject({ partial: true });
-  expect(search).toHaveBeenCalledWith(
-    expect.objectContaining({ scopes: [], trashPath: "/.trash" }),
-  );
+  expect(search).toHaveBeenCalledWith(expect.objectContaining({ scopes: [] }));
   const searchService = {
     search: vi.fn(async () => ({ sections: { files: [] }, partial: true, degraded: true })),
   } as unknown as McpToolDeps["searchService"];
@@ -609,7 +602,7 @@ it("handles cancellation, unavailable metadata and post-restore failures without
   await copyPath(deps, principal, { src: "/allowed/a.txt", dst: "/allowed/a.txt" });
   expect(deps.onMutation).not.toHaveBeenCalled();
   await trashPath(deps, principal, "/allowed/a.txt");
-  const id = (await listTrash(deps, principal, {})).entries[0]?.id ?? "missing";
+  const id = (await listTrash(principal, {})).entries[0]?.id ?? "missing";
   const stat = principal.storage.stat;
   principal.storage.stat = async (path) => {
     if (path === "/allowed/a.txt") throw new StorageError("upstream_unavailable", "probe failed");
@@ -657,9 +650,9 @@ it("pages multiple Trash entries and reuses existing tag names without creating 
   await base.upload("/allowed/b.txt", Buffer.from("second"));
   await trashPath(deps, principal, "/allowed/a.txt");
   await trashPath(deps, principal, "/allowed/b.txt");
-  const first = await listTrash(deps, principal, { limit: 1 });
+  const first = await listTrash(principal, { limit: 1 });
   expect(first.next_offset).toBe(1);
-  const second = await listTrash(deps, principal, { limit: 1, offset: first.next_offset });
+  const second = await listTrash(principal, { limit: 1, offset: first.next_offset });
   expect(second.entries).toHaveLength(1);
   expect(first.entries[0]?.id).not.toBe(second.entries[0]?.id);
   expect(second).not.toHaveProperty("next_offset");

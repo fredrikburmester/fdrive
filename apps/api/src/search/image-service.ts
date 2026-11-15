@@ -63,17 +63,10 @@ export interface ImageSearchServiceDeps {
    * is itself `null`.
    */
   readonly resolveHealth: () => Promise<SidecarResult<ImageEmbedHealthInfo> | null>;
-  /**
-   * Same rule as `SearchServiceDeps.trashPath`: the query leaves fdrive's
-   * own folders out before its limit. A test/default value; production passes a
-   * request snapshot.
-   */
-  readonly trashPath?: string | null;
   readonly clock: () => Date;
 }
 
 export interface ImageSearchServiceInput {
-  readonly trashPath?: string | null;
   readonly scopes: readonly Scope[];
   readonly query: string;
   readonly limit: number;
@@ -114,7 +107,6 @@ function unavailableResponse(
 export function createImageSearchService(deps: ImageSearchServiceDeps): ImageSearchService {
   return {
     async search(input: ImageSearchServiceInput): Promise<ImageSearchResponse> {
-      const trashPath = input.trashPath ?? deps.trashPath ?? null;
       if (deps.enabled !== undefined && !(await deps.enabled()))
         return unavailableResponse(input.query, 0);
       const startedAt = deps.clock();
@@ -161,7 +153,7 @@ export function createImageSearchService(deps: ImageSearchServiceDeps): ImageSea
         embedded.vector,
         health.data.model,
         IMAGE_SEARCH_FANOUT_LIMIT,
-        { exclude: reservedExclusion(input.scopes, trashPath, rootIds) },
+        { exclude: reservedExclusion(input.scopes, rootIds) },
       );
       const fanoutCut = rows.length >= IMAGE_SEARCH_FANOUT_LIMIT;
 

@@ -76,7 +76,6 @@ function buildApp(
       duplicates: async () => [],
     },
     localUsers: { get: async () => user(null) },
-    trashPathForStorage: () => "/.trash",
     ...rest,
   };
   return createApp({

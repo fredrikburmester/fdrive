@@ -47,8 +47,6 @@ export interface SharesHarnessOptions {
   readonly limiterCapacity?: number;
   /** Reshapes the files folder, say to take its zip away or refuse its users. */
   readonly local?: (folder: FilesFolder) => StorageSource;
-  /** The owner's Trash folder, which shares must keep out of. */
-  readonly trashPath?: string;
   /** Folders other users share with a user, by that user's name. */
   readonly grants?: Readonly<Record<string, readonly SharedGrant[]>>;
   readonly config?: Partial<AppConfig>;
@@ -143,7 +141,7 @@ export function sharesHarness(options: SharesHarnessOptions = {}) {
     config,
     checkPassword: createPasswordCheck({ limiter: createLoginLimiter({ clock }), users }),
     principalFor: createPrincipalFactory({ folder, clock }),
-    installation: async () => ({ storageName: "Local folder", trash: false, index: false }),
+    installation: async () => ({ storageName: "Local folder", index: false }),
   });
   const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() } as unknown as Logger;
   const activity = activityFixture(clock);
@@ -155,7 +153,6 @@ export function sharesHarness(options: SharesHarnessOptions = {}) {
     repos,
     shares,
     storageFor: storageFactory,
-    trashPathFor: async () => options.trashPath ?? null,
     passwords,
     ...(options.zipLimits === undefined ? {} : { zipLimits: options.zipLimits }),
     clock,

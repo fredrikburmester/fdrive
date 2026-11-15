@@ -20,6 +20,8 @@ test("alice opens Storage from her account menu, sees her folder by kind and rev
   }
   await expect(page.getByText(/Counted from the search index/)).toBeVisible();
 
+  // Earlier specs' finished jobs can cover the list's reveal buttons.
+  await dismissActivityPanel(page);
   await page.getByRole("button", { name: "Reveal readme.md in folder" }).click();
   await expect(page).toHaveURL(/\/files\/docs\?select=readme\.md$/);
 });
@@ -74,6 +76,9 @@ test("an administrator sets a storage limit, and an upload over it is refused", 
   expect(created.status()).toBe(201);
 
   await page.goto("/system/users");
+  const row = page.getByRole("row").filter({ has: page.getByText(username, { exact: true }) });
+  // Once the list is in, so the Activity panel is there to close before it covers the row.
+  await expect(row).toBeVisible();
   await dismissActivityPanel(page);
   // The person's own signed-out browser, on the same web app.
   const person = await (
@@ -84,7 +89,6 @@ test("an administrator sets a storage limit, and an upload over it is refused", 
   ).newPage();
   try {
     // About 1 KB, as GB counts it.
-    const row = page.getByRole("row").filter({ has: page.getByText(username, { exact: true }) });
     await row.getByRole("button", { name: `Actions for ${username}` }).click();
     await page.getByRole("menuitem", { name: "Storage limit", exact: true }).click();
     const dialog = page.getByRole("dialog", { name: `Storage limit for ${username}` });

@@ -60,15 +60,15 @@ assistant deciding whether the user requested that action.
 | `file_tags`, `set_file_tags`, `set_favorite` | Read/replace file tags and toggle favorites. Missing tag names are created. |
 | `create_file`, `upload_file` | Create UTF-8 text or canonical base64 bytes; no overwrite. |
 | `edit_file` | Replace UTF-8 text only with the SHA-256 from a previous read. |
-| `trash_path`, `list_trash`, `restore_path` | Recoverable removal and restoration when Trash is configured for that login. |
+| `trash_path`, `list_trash`, `restore_path` | Recoverable removal and restoration. |
 
 ## Access and limitations
 
 Direct operations enforce normalized folder grants and current provider permissions. Browsing
 an ancestor of an allowed folder reveals only the directory chain leading to that folder.
-Ordinary operations and indexed results exclude fdrive's own folders: the configured Trash,
-the Mac app's `/.fdrive-desktop` and fdrive's Trash layout. Moving/deleting a
-grant root or a folder containing Trash is refused. Restore checks both the original and
+Ordinary operations and indexed results exclude fdrive's own folders: the Trash at `/.trash`,
+the Mac app's `/.fdrive-desktop` and fdrive's Trash layout. Moving or deleting a grant root is
+refused. Restore checks both the original and
 requested destination paths. There are no permanent-delete or public-sharing tools.
 
 Index-derived data intersects grants with verified index mappings and live provider read

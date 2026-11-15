@@ -93,8 +93,6 @@ export function createOrganizeService(deps: OrganizeServiceDeps): OrganizeServic
           "unsupported",
           "Organize is turned off. An administrator can turn it on under System > AI.",
         );
-      const trashPath =
-        deps.mcp.trashPathForStorage?.(principal.storage) ?? deps.mcp.trashPath ?? null;
       const paths: string[] = [];
       for (const raw of request.paths) {
         let path: string;
@@ -104,7 +102,7 @@ export function createOrganizeService(deps: OrganizeServiceDeps): OrganizeServic
           throw new ApiHttpError("bad_request", `"${raw}" is not a valid path.`);
         }
         if (path === "/") throw new ApiHttpError("bad_request", "The drive root cannot be moved.");
-        if (isReservedPath(path, trashPath))
+        if (isReservedPath(path))
           throw new ApiHttpError(
             "bad_request",
             "Items in Trash or fdrive's own folders cannot be organized.",
@@ -163,7 +161,6 @@ export function createOrganizeService(deps: OrganizeServiceDeps): OrganizeServic
                 storage: principal.storage,
                 items,
                 submission,
-                trashPath,
               });
             } catch (error) {
               if (error instanceof AiProviderError) throw new OrganizeError(error.message);

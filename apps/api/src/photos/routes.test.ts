@@ -46,7 +46,6 @@ interface BuildOptions {
   readonly scopes?: readonly Scope[] | null;
   readonly rows?: readonly PhotoRow[];
   readonly details?: PhotoDetails | null;
-  readonly trashPath?: string;
 }
 
 function buildApp(options: BuildOptions = {}) {
@@ -72,7 +71,6 @@ function buildApp(options: BuildOptions = {}) {
       verifiedIndexScopes: async () =>
         scopes === null ? { available: false, reason: "no_roots" } : { available: true, scopes },
     },
-    trashPathForStorage: () => options.trashPath ?? null,
   };
   const app = createApp({
     config: loadConfig(REQUIRED_ENV),
@@ -95,7 +93,6 @@ function buildApp(options: BuildOptions = {}) {
 describe("GET /api/v1/photos", () => {
   it("shows the images in the caller's scopes at their own paths, and reads the next page after a cursor", async () => {
     const { app, photos } = buildApp({
-      trashPath: "/.Trash",
       rows: [
         row(1, "alice/a.jpg", { takenAt: "2024-05-01T14:03:09", at: "2024-05-01T14:03:09.000000" }),
         row(2, "bob/Trips/b.heic"),
@@ -134,7 +131,7 @@ describe("GET /api/v1/photos", () => {
     ]);
     expect(exts).toEqual(expect.arrayContaining([".jpg", ".heic", ".arw"]));
     expect(limit).toBe(PHOTOS_PAGE_SIZE);
-    expect(opts?.exclude?.prefixes).toContainEqual({ rootId: 1, fsPrefix: "/alice/.Trash" });
+    expect(opts?.exclude?.prefixes).toContainEqual({ rootId: 1, fsPrefix: "/alice/.trash" });
     expect(opts?.after).toBeUndefined();
 
     await app.request("/api/v1/photos?cursor=2024-05-01T14:00:00.000000_42");

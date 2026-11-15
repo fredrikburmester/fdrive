@@ -1,9 +1,8 @@
 import { randomUUID } from "node:crypto";
-import { moveTrashLeafPath, withMoveToTrash } from "@fdrive/core";
+import { createRecycleFolderTrash, moveTrashLeafPath, withMoveToTrash } from "@fdrive/core";
 import { createMemoryStorage } from "@fdrive/core/testing";
 import { describe, expect, it, vi } from "vitest";
 import type { Principal } from "../auth/principal.js";
-import { withRecycleFolderTrash } from "../auth/storage-factory.js";
 import type { ActivityRunInput, PersonalActivityService } from "./service.js";
 import { activityStorage } from "./storage.js";
 import { activityStream } from "./streams.js";
@@ -46,13 +45,13 @@ describe("explicit command storage adapters", () => {
       clock: () => new Date("2026-09-14"),
       onRecycled: captureRecycleReceipt,
     });
-    const provider = withRecycleFolderTrash(moved, "/.trash");
-    const storage = activityStorage(
-      { ...principal, storage: provider },
-      activity,
-      () => ({ source: "mcp" }),
-      "/.trash",
-    );
+    const provider = {
+      ...moved,
+      trash: createRecycleFolderTrash({ storage: moved, trashPath: "/.trash" }),
+    };
+    const storage = activityStorage({ ...principal, storage: provider }, activity, () => ({
+      source: "mcp",
+    }));
     await storage.mkdir("/folder");
     await storage.upload("/folder/a", new Uint8Array([1]));
     await storage.deleteDir("/folder");
@@ -120,7 +119,7 @@ describe("explicit command storage adapters", () => {
     });
     await storage.deleteFile("/folder/c.txt");
     await storage.deleteDir("/folder");
-    expect(inputs.slice(-2).map((i) => i.action)).toEqual(["file.delete", "file.delete"]);
+    expect(inputs.slice(-2).map((i) => i.action)).toEqual(["file.trash", "file.trash"]);
     expect(finish).toHaveBeenCalledWith(
       "file.upload",
       expect.objectContaining({ path: "/folder/a.txt", size: 2 }),
@@ -134,12 +133,9 @@ describe("explicit command storage adapters", () => {
       clock: () => new Date("2026-09-14"),
       onRecycled: captureRecycleReceipt,
     });
-    const storage = activityStorage(
-      { ...principal, storage: moved },
-      activity,
-      () => ({ source: "mcp" }),
-      "/.trash",
-    );
+    const storage = activityStorage({ ...principal, storage: moved }, activity, () => ({
+      source: "mcp",
+    }));
     await storage.upload("/a.txt", new Uint8Array([1]));
     await storage.deleteFile("/a.txt");
     expect(inputs.at(-1)?.action).toBe("file.trash");

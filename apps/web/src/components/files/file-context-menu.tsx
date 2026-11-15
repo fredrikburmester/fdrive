@@ -76,8 +76,6 @@ export interface FileContextMenuProps {
    * makes the download item read "Download as zip".
    */
   selection?: BrowserSelection;
-  /** Whether deletes go to Trash: the last item then reads "Move to Trash", not "Delete". */
-  trash?: boolean;
   /**
    * The folders others share with the active login. With them the menu
    * offers "Leave" on such a folder, hides rename, move, duplicate and
@@ -136,7 +134,6 @@ export function FileContextMenu({
   children,
   onAction,
   selection,
-  trash = false,
   received = DEFAULT_RECEIVED,
   hideMoveCopy = false,
   showOrganize = false,
@@ -313,12 +310,9 @@ export function FileContextMenu({
         {!locked && (
           <>
             <ContextMenuSeparator />
-            <ContextMenuItem
-              variant={trash ? "default" : "destructive"}
-              onClick={() => onAction("delete", entry)}
-            >
+            <ContextMenuItem onClick={() => onAction("delete", entry)}>
               <Trash2Icon />
-              {trash ? "Move to Trash" : "Delete"}
+              Move to Trash
             </ContextMenuItem>
           </>
         )}

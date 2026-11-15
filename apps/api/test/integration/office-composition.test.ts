@@ -14,7 +14,6 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { composeApp } from "../../src/composition.ts";
 import { loadConfig } from "../../src/config.ts";
 import { buildExpectedProof } from "../../src/office/protocol/proof.ts";
-import { trashSettingsKey } from "../../src/trash/settings.js";
 import { proofKey, proofPair } from "../fixtures/office/harness.ts";
 import { seedLocalUsers, silentLogger } from "./helpers/local-storage.ts";
 
@@ -74,14 +73,6 @@ describe("Office over the files folder", () => {
     const database = createDb(postgres.connectionString);
     try {
       const repos = createRepos(database.db);
-      const provider = await repos.providers.ensure({ type: "local", baseUrl: "local" });
-      await repos.settings.set(trashSettingsKey(provider.id), {
-        providerId: provider.id,
-        revision: 1,
-        enabled: true,
-        path: "/.trash",
-        retentionHours: null,
-      });
       await repos.settings.set(PUBLIC_URL_SETTINGS_KEY, { revision: 1, url: "http://fixture-app" });
     } finally {
       await database.close();
