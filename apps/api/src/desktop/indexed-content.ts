@@ -56,12 +56,12 @@ export function createIndexedContentLookup(deps: IndexedContentDeps): IndexedCon
 
 /**
  * The indexed digest, when `row` provably describes the bytes of the file
- * `stamp` was just read from: the indexer's own read stamped the row (see
- * `idx.files.inode`), and the file still has that inode and change time as
- * well as the row's size and modification time. A client can set a
- * modification time but neither of the other two, and any write moves the
- * change time on, so size and time alone never pass. Null otherwise: the
- * caller hashes the file.
+ * `stamp` was just read from: the row is stamped (see `idx.files.inode`:
+ * the indexer hashed those bytes itself, or the API hashed them as it wrote
+ * them), and the file still has that inode and change time as well as the
+ * row's size and modification time. A client can set a modification time but
+ * neither of the other two, and any write moves the change time on, so size
+ * and time alone never pass. Null otherwise: the caller hashes the file.
  */
 export function indexedVersion(
   row: IndexedContent | undefined,

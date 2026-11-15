@@ -20,8 +20,8 @@ use crate::config::{SKIP_DIRS, SKIP_NAMES};
 use crate::db::{self, ChangeRow};
 use crate::failures::describe;
 use crate::indexer::{
-    ContentHint, FileStat, RootContext, folder_chain, record_folders, unchanged_in_db, walk_tree, watch_index_with,
-    watch_mark_deleted, watch_rename,
+    ContentHint, FileStat, Renamed, RootContext, Version, carry_stamp, folder_chain, record_folders, unchanged_in_db,
+    walk_tree, watch_index_with, watch_mark_deleted, watch_rename,
 };
 use crate::journal::Source;
 use crate::log::log;
@@ -43,8 +43,12 @@ pub const POLL: Duration = Duration::from_secs(30);
 pub enum Change {
     /// Look at `path` again: a file, a folder, or nothing any more.
     Path { path: String, hint: Option<ContentHint> },
-    /// `from` was moved to `to`.
-    Moved { from: String, to: String },
+    /// `from` was moved to `to`; `renamed` describes a file the API renamed in place.
+    Moved {
+        from: String,
+        to: String,
+        renamed: Option<Renamed>,
+    },
 }
 
 /// A root-relative path without leading or trailing slashes and without an empty, `.` or
@@ -59,21 +63,28 @@ pub fn clean_path(path: &str) -> Option<String> {
 }
 
 /// The change a row describes, or `None` for a malformed one. A hint needs all five of
-/// its columns and a well-formed digest, or the file is hashed as usual.
+/// its columns and a well-formed digest, or the file is hashed as usual; a move's `renamed`
+/// needs the four besides the digest and `previous_ctime_ns`.
 pub fn parse(row: &ChangeRow) -> Option<Change> {
     let path = clean_path(&row.path)?;
+    let version = Version::from_columns(row.size, row.mtime_ns, row.inode, row.ctime_ns);
     match &row.target_path {
         Some(target) => Some(Change::Moved {
             from: path,
             to: clean_path(target)?,
+            renamed: version
+                .zip(row.previous_ctime_ns)
+                .map(|(version, previous_ctime_ns)| Renamed {
+                    version,
+                    previous_ctime_ns,
+                }),
         }),
         None => {
-            let hint = match (&row.sha256, row.size, row.mtime_ns, row.inode, row.ctime_ns) {
-                (Some(sha), Some(size), Some(mtime_ns), Some(inode), Some(ctime_ns)) => {
-                    ContentHint::new(sha, size, mtime_ns, inode, ctime_ns)
-                }
-                _ => None,
-            };
+            let hint = row
+                .sha256
+                .as_deref()
+                .zip(version)
+                .and_then(|(sha, version)| ContentHint::new(sha, version));
             Some(Change::Path { path, hint })
         }
     }
@@ -304,7 +315,7 @@ impl Applier {
     pub fn apply(&self, change: &Change) {
         match change {
             Change::Path { path, hint } => self.look_again(path, hint.clone()),
-            Change::Moved { from, to } => self.moved(from, to),
+            Change::Moved { from, to, renamed } => self.moved(from, to, renamed.as_ref()),
         }
     }
 
@@ -329,14 +340,19 @@ impl Applier {
         }
     }
 
-    fn moved(&self, from: &str, to: &str) {
+    fn moved(&self, from: &str, to: &str, renamed: Option<&Renamed>) {
         self.pool.wait_idle();
         match entry(&self.ctx.abs_path, to) {
             found @ (Entry::File(_) | Entry::Dir) => {
-                // Rows follow the move without re-extracting anything; then the destination
-                // is compared with the disk, which also covers a restore from somewhere the
-                // index never looked and anything an overwrite left behind.
+                // Rows follow the move without re-extracting anything, and a file's stamp
+                // follows it when nothing but the API's rename touched it; then the
+                // destination is compared with the disk, which also covers a restore from
+                // somewhere the index never looked and anything an overwrite left behind.
                 watch_rename(&self.ctx, from, to, found == Entry::Dir);
+                if let (Entry::File(_), Some(renamed)) = (found, renamed) {
+                    // Best effort: a stamp left behind costs one read once the file settles.
+                    let _ = carry_stamp(&self.ctx, to, renamed);
+                }
                 self.look_again(to, None);
             }
             // Moved where nothing is indexed (or on again): only the source matters.
