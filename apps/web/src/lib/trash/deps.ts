@@ -5,5 +5,5 @@
  * from here rather than from the real paths directly, so a future seam
  * only has to repoint the re-exports below instead of every call site.
  */
-export { apiClient, snapshotTabApiClient } from "@/lib/api/client";
+export { apiClient } from "@/lib/api/client";
 export { queryKeys } from "@/lib/api/keys";

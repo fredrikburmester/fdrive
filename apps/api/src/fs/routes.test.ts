@@ -18,7 +18,7 @@ import { withRecycleFolderTrash } from "../auth/storage-factory.ts";
 import { loadConfig } from "../config.js";
 import { type BusEvent, createEventBus, type EventBus } from "../events/bus.js";
 import { createJobRunner, type JobRunner } from "../jobs/runner.js";
-import { createMetadataService, type MetadataService } from "../metadata/service.js";
+import { createMetadataService, type MetadataService, withFollowers } from "../metadata/service.js";
 import { type FsRoutesDeps, registerFsRoutes, trashMany } from "./routes.js";
 
 function buildJobRunner(): JobRunner {
@@ -2048,7 +2048,7 @@ describe("trashMany with Trash", () => {
       onMoved: vi.fn(async (_id: string, _from: string, _to: string, _isDir: boolean) => {}),
       onDeleted: vi.fn(async (_id: string, _path: string, _isDir: boolean) => {}),
     };
-    const metadata = createMetadataService({ ...createMemoryRepos(), followers: [follower] });
+    const metadata = withFollowers(createMetadataService(createMemoryRepos()), [follower]);
     const principal = (storage: StorageProvider): Principal => ({
       accountId: ACCOUNT_ID,
       identityId: ALICE_IDENTITY_ID,

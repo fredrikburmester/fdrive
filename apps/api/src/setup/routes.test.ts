@@ -15,26 +15,23 @@ const REQUIRED_ENV = {
 
 const ME: MeResponse = {
   account: { id: "account-1", displayName: "alice" },
-  identities: [
-    {
-      id: "identity-1",
-      username: "alice",
-      providerId: "123e4567-e89b-42d3-a456-426614174000",
-      providerType: "local",
-      providerLabel: "x",
-      capabilities: {
-        zip: true,
-        setModifiedAt: true,
-        atomicMove: true,
-        trash: false,
-        shares: true,
-        office: true,
-        index: false,
-        shareWithPeople: true,
-      },
+  identity: {
+    id: "identity-1",
+    username: "alice",
+    providerId: "123e4567-e89b-42d3-a456-426614174000",
+    providerType: "local",
+    providerLabel: "x",
+    capabilities: {
+      zip: true,
+      setModifiedAt: true,
+      atomicMove: true,
+      trash: false,
+      shares: true,
+      office: true,
+      index: false,
+      shareWithPeople: true,
     },
-  ],
-  activeIdentityId: "identity-1",
+  },
   isAdmin: true,
 };
 

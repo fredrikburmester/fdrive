@@ -53,9 +53,6 @@ for (const [kind, filename] of [
       const bob = await bobContext.newPage();
       await observeOfficeReady(bob, state.officeUrl);
       await loginAs(bob, "bob", "bob-password");
-      const bobMe = (await (await bob.request.get("/api/v1/auth/me")).json()) as {
-        activeIdentityId: string;
-      };
       const aliceOpened = page.waitForResponse(
         (response) => new URL(response.url()).pathname === "/api/v1/office/open",
       );
@@ -77,9 +74,7 @@ for (const [kind, filename] of [
       const bobOpened = bob.waitForResponse(
         (response) => new URL(response.url()).pathname === "/api/v1/office/open",
       );
-      await bob.goto(
-        sharedOfficeHref(bobMe.activeIdentityId, OFFICE_TEAM_FOLDER, filename, "edit"),
-      );
+      await bob.goto(sharedOfficeHref(OFFICE_TEAM_FOLDER, filename, "edit"));
       const bobDescriptor = (await (await bobOpened).json()) as { fileId: string };
       expect(bobDescriptor.fileId).toBe(aliceDescriptor.fileId);
       const bobEditor = bob

@@ -92,7 +92,7 @@ function FeatureEditor({ data }: { data: SystemFeaturesResponse }) {
   // Trash belongs to the files folder's storage row; the walkthrough reaches
   // it through the login the administrator signed in with.
   const me = useMe();
-  const login = me.data?.identities.find((identity) => identity.id === me.data?.activeIdentityId);
+  const login = me.data?.identity;
   const setupProvider = login ? { id: login.providerId, label: login.providerLabel } : null;
   const [draft, setDraft] = useState<{ values: FeatureValues; revision: number } | null>(null);
   const [localStep, setLocalStep] = useState<number | null>(null);

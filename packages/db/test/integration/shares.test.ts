@@ -1,10 +1,9 @@
 import { PostgreSqlContainer, type StartedPostgreSqlContainer } from "@testcontainers/postgresql";
-import { eq, sql } from "drizzle-orm";
+import { sql } from "drizzle-orm";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import {
   type CreateDbResult,
   createDb,
-  createIdentityLinksRepo,
   createShareRepo,
   migrate,
   type ShareInsertInput,
@@ -241,25 +240,6 @@ describe("PostgreSQL shares", () => {
       paths.map((_, i) => (i % 2 ? a : b).movePrefix(identityId, `/f${i}`, `/g${i}`, true)),
     );
     expect((await a.get(share.id))?.paths).toEqual(paths.map((_, i) => `/g${i}/x`));
-  });
-
-  it("keeps the same share when its identity transfers to another account", async () => {
-    const share = await a.insert(input);
-    await createIdentityLinksRepo(first.db).linkVerified({
-      accountId: targetAccountId,
-      providerId,
-      username: "alice",
-      at,
-      sealCredential: () => ({ ciphertext: new Uint8Array([1]), keyId: "test" }),
-    });
-    const [identity] = await first.db
-      .select()
-      .from(identities)
-      .where(eq(identities.id, identityId));
-    expect(identity?.accountId).toBe(targetAccountId);
-    expect(await a.get(share.id)).toEqual(share);
-    expect(await a.getOwned(identityId, share.id)).toEqual(share);
-    expect(await a.getOwned(otherIdentity, share.id)).toBeNull();
   });
 
   it("stores the password only as a hash no record carries, and no extra runtime properties", async () => {

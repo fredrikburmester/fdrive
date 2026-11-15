@@ -1,5 +1,10 @@
+import { cp, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { PostgreSqlContainer, type StartedPostgreSqlContainer } from "@testcontainers/postgresql";
 import { is, sql } from "drizzle-orm";
+import { migrate as runMigrations } from "drizzle-orm/node-postgres/migrator";
 import { getTableConfig, PgTable } from "drizzle-orm/pg-core";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createDb, type Db, migrate, schema } from "../../src/index.js";
@@ -61,7 +66,6 @@ describe("migrate", () => {
     const expected: ReadonlyArray<{ readonly name: string; readonly definition: string }> = [
       { name: "changes_root_id_id_idx", definition: "USING btree (root_id, id)" },
       { name: "changes_created_at_idx", definition: "USING btree (created_at)" },
-      { name: "moves_root_id_idx", definition: "USING btree (root_id)" },
       { name: "ocr_log_status_at_idx", definition: "USING btree (status, at DESC NULLS LAST)" },
       {
         name: "scans_root_id_started_at_idx",
@@ -189,5 +193,64 @@ describe("migrate", () => {
         mtimeNs: 2n,
       }),
     ).rejects.toThrow();
+  });
+
+  it("refuses an API token without an access level", async () => {
+    const error = await db
+      .execute(sql`
+        insert into app.api_tokens (account_id, identity_id, name, token_hash)
+        values (gen_random_uuid(), gen_random_uuid(), 'Old', 'old-hash')
+      `)
+      .catch((caught: unknown) => caught);
+    expect(error).toMatchObject({ cause: { code: "23502", column: "access" } });
+  });
+
+  it("deletes the tokens made before access levels, and only those", async () => {
+    // Migrate a second database up to the migration before the one that drops them.
+    const folder = path.join(path.dirname(fileURLToPath(import.meta.url)), "../../drizzle");
+    const before = await mkdtemp(path.join(tmpdir(), "fdrive-migrations-"));
+    await db.execute(sql`create database before_access_levels`);
+    const uri = new URL(container.getConnectionUri());
+    uri.pathname = "/before_access_levels";
+    const older = createDb(uri.toString());
+    try {
+      await cp(folder, before, { recursive: true });
+      const journal = JSON.parse(await readFile(path.join(folder, "meta/_journal.json"), "utf8"));
+      const last = journal.entries.findIndex(
+        (entry: { tag: string }) => entry.tag === "0030_drop_legacy_tokens_and_moves",
+      );
+      journal.entries = journal.entries.slice(0, last);
+      await writeFile(path.join(before, "meta/_journal.json"), JSON.stringify(journal));
+      await runMigrations(older.db, { migrationsFolder: before });
+
+      const [account] = await older.db.insert(schema.accounts).values({}).returning();
+      const [provider] = await older.db
+        .insert(schema.providers)
+        .values({ type: "local", baseUrl: "local" })
+        .returning();
+      if (account === undefined || provider === undefined) throw new Error("expected rows");
+      const [identity] = await older.db
+        .insert(schema.identities)
+        .values({ accountId: account.id, providerId: provider.id, externalUsername: "alice" })
+        .returning();
+      if (identity === undefined) throw new Error("expected an identity");
+      await older.db.execute(sql`
+        insert into app.api_tokens (account_id, identity_id, name, token_hash, access) values
+          (${account.id}, ${identity.id}, 'Old', 'old-hash', null),
+          (${account.id}, ${identity.id}, 'Scoped', 'scoped-hash', '{"mode":"read","paths":["/"]}')
+      `);
+
+      await migrate(older.db);
+
+      const kept = await older.db.execute<{ name: string }>(sql`select name from app.api_tokens`);
+      expect(kept.rows.map((row) => row.name)).toEqual(["Scoped"]);
+      const moves = await older.db.execute<{ table: string | null }>(
+        sql`select to_regclass('idx.moves')::text as table`,
+      );
+      expect(moves.rows).toEqual([{ table: null }]);
+    } finally {
+      await older.close();
+      await rm(before, { recursive: true, force: true });
+    }
   });
 });

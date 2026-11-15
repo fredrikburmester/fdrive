@@ -16,113 +16,60 @@ async function seedAccountWithIdentity(repos: ReturnType<typeof createMemoryRepo
     providerId: provider.id,
     externalUsername: username,
   });
-  return { account, identity };
+  return { account, identity, owner: { accountId: account.id, identityId: identity.id } };
 }
 
 describe("createTokenService", () => {
-  it("creates a token defaulting to the account's first identity", async () => {
+  it("creates a token that acts as its creator's login", async () => {
     const repos = createMemoryRepos();
-    const { account, identity } = await seedAccountWithIdentity(repos);
+    const { account, identity, owner } = await seedAccountWithIdentity(repos);
     const service = createTokenService({
       apiTokens: repos.apiTokens,
-      identities: repos.identities,
       clock: FIXED_CLOCK,
       generateToken: () => "fdr_fixed",
     });
 
-    const result = await service.create(account.id, { name: "Claude" });
+    const result = await service.create(owner, { name: "Claude" });
 
     expect(result.token).toBe("fdr_fixed");
     expect(result.item.name).toBe("Claude");
-    expect(result.item.identityId).toBe(identity.id);
     expect(result.item.expiresAt).toBeNull();
     expect(result.item.lastUsedAt).toBeNull();
+    const [stored] = await repos.apiTokens.listByAccount(account.id);
+    expect(stored?.identityId).toBe(identity.id);
   });
 
-  it("creates a token scoped to an explicitly given identity belonging to the account", async () => {
+  it("rejects folder access it cannot represent", async () => {
     const repos = createMemoryRepos();
-    const { account, identity } = await seedAccountWithIdentity(repos);
-    const service = createTokenService({
-      apiTokens: repos.apiTokens,
-      identities: repos.identities,
-      clock: FIXED_CLOCK,
-    });
-
-    const result = await service.create(account.id, {
-      name: "Raycast",
-      identityId: identity.id,
-    });
-
-    expect(result.item.identityId).toBe(identity.id);
-  });
-
-  it("rejects an identityId that does not belong to the account", async () => {
-    const repos = createMemoryRepos();
-    const { account } = await seedAccountWithIdentity(repos);
-    const other = await seedAccountWithIdentity(repos);
-    const service = createTokenService({
-      apiTokens: repos.apiTokens,
-      identities: repos.identities,
-      clock: FIXED_CLOCK,
-    });
+    const { owner } = await seedAccountWithIdentity(repos);
+    const service = createTokenService({ apiTokens: repos.apiTokens, clock: FIXED_CLOCK });
 
     await expect(
-      service.create(account.id, { name: "Claude", identityId: other.identity.id }),
+      service.create(owner, { name: "Bad", access: { mode: "read", paths: ["relative"] } }),
     ).rejects.toThrow(ApiHttpError);
-  });
-
-  it("rejects an identityId that does not exist", async () => {
-    const repos = createMemoryRepos();
-    const { account } = await seedAccountWithIdentity(repos);
-    const service = createTokenService({
-      apiTokens: repos.apiTokens,
-      identities: repos.identities,
-      clock: FIXED_CLOCK,
-    });
-
-    await expect(
-      service.create(account.id, {
-        name: "Claude",
-        identityId: "00000000-0000-0000-0000-000000000000",
-      }),
-    ).rejects.toThrow(ApiHttpError);
-  });
-
-  it("rejects creating a token for an account with no linked identity", async () => {
-    const repos = createMemoryRepos();
-    const account = await repos.accounts.create({ displayName: "Orphan" });
-    const service = createTokenService({
-      apiTokens: repos.apiTokens,
-      identities: repos.identities,
-      clock: FIXED_CLOCK,
-    });
-
-    await expect(service.create(account.id, { name: "Claude" })).rejects.toThrow(ApiHttpError);
   });
 
   it("computes expiresAt from expiresInDays", async () => {
     const repos = createMemoryRepos();
-    const { account } = await seedAccountWithIdentity(repos);
+    const { owner } = await seedAccountWithIdentity(repos);
     const service = createTokenService({
       apiTokens: repos.apiTokens,
-      identities: repos.identities,
       clock: FIXED_CLOCK,
     });
 
-    const result = await service.create(account.id, { name: "Claude", expiresInDays: 30 });
+    const result = await service.create(owner, { name: "Claude", expiresInDays: 30 });
 
     expect(result.item.expiresAt).toBe("2026-01-31T00:00:00.000Z");
   });
 
   it("lists tokens for an account without secrets", async () => {
     const repos = createMemoryRepos();
-    const { account } = await seedAccountWithIdentity(repos);
+    const { account, owner } = await seedAccountWithIdentity(repos);
     const service = createTokenService({
       apiTokens: repos.apiTokens,
-      identities: repos.identities,
       clock: FIXED_CLOCK,
     });
-    await service.create(account.id, { name: "Claude" });
+    await service.create(owner, { name: "Claude" });
 
     const listed = await service.list(account.id);
 
@@ -137,7 +84,6 @@ describe("createTokenService", () => {
     const { account } = await seedAccountWithIdentity(repos);
     const service = createTokenService({
       apiTokens: repos.apiTokens,
-      identities: repos.identities,
       clock: FIXED_CLOCK,
     });
 
@@ -146,13 +92,12 @@ describe("createTokenService", () => {
 
   it("revokes a token belonging to the account", async () => {
     const repos = createMemoryRepos();
-    const { account } = await seedAccountWithIdentity(repos);
+    const { account, owner } = await seedAccountWithIdentity(repos);
     const service = createTokenService({
       apiTokens: repos.apiTokens,
-      identities: repos.identities,
       clock: FIXED_CLOCK,
     });
-    const created = await service.create(account.id, { name: "Claude" });
+    const created = await service.create(owner, { name: "Claude" });
 
     await service.revoke(created.item.id, account.id);
 
@@ -161,14 +106,13 @@ describe("createTokenService", () => {
 
   it("revoke is a no-op for a token belonging to another account", async () => {
     const repos = createMemoryRepos();
-    const { account } = await seedAccountWithIdentity(repos);
+    const { account, owner } = await seedAccountWithIdentity(repos);
     const other = await seedAccountWithIdentity(repos);
     const service = createTokenService({
       apiTokens: repos.apiTokens,
-      identities: repos.identities,
       clock: FIXED_CLOCK,
     });
-    const created = await service.create(account.id, { name: "Claude" });
+    const created = await service.create(owner, { name: "Claude" });
 
     await service.revoke(created.item.id, other.account.id);
 

@@ -9,7 +9,6 @@ import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { activityLabels, activityPath, collapseActivity } from "@/lib/activity/history";
 import { useActivityFileAt, useActivityHistory } from "@/lib/activity/queries";
-import { getTabIdentity } from "@/lib/api/client";
 import { useFormatters } from "@/lib/use-format-preferences";
 import { cn } from "@/lib/utils";
 
@@ -65,11 +64,9 @@ function ActivityItem({ event }: { event: PersonalActivityEvent }) {
  * full journey with related files, revisions and export.
  */
 export function FileActivitySection({ path }: { path: string }) {
-  const identityId = getTabIdentity();
-  const file = useActivityFileAt(identityId, path);
+  const file = useActivityFileAt(path);
   const fileId = file.data ?? null;
   const history = useActivityHistory(FILTERS, fileId ? `/files/${fileId}/events` : null);
-  if (!identityId) return null;
   const events = collapseActivity(
     history.data?.pages.flatMap((page) => [...page.provisionalReads, ...page.items]) ?? [],
   );

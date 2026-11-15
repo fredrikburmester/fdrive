@@ -75,17 +75,14 @@ describe("IdentitySummary", () => {
 describe("MeResponse", () => {
   const valid = {
     account: { id: VALID_UUID, displayName: "Alice" },
-    identities: [
-      {
-        id: VALID_UUID,
-        username: "alice",
-        providerId: VALID_UUID,
-        providerType: "local",
-        providerLabel: "Home",
-        capabilities: CAPABILITIES,
-      },
-    ],
-    activeIdentityId: VALID_UUID,
+    identity: {
+      id: VALID_UUID,
+      username: "alice",
+      providerId: VALID_UUID,
+      providerType: "local",
+      providerLabel: "Home",
+      capabilities: CAPABILITIES,
+    },
     isAdmin: false,
   };
 
@@ -103,13 +100,8 @@ describe("MeResponse", () => {
     expect(MeResponse.safeParse(payload).success).toBe(true);
   });
 
-  it("accepts an empty identities array", () => {
-    const payload = { ...valid, identities: [] };
-    expect(MeResponse.safeParse(payload).success).toBe(true);
-  });
-
-  it("rejects a missing activeIdentityId", () => {
-    const { activeIdentityId: _drop, ...rest } = valid;
+  it("rejects a missing identity", () => {
+    const { identity: _drop, ...rest } = valid;
     expect(MeResponse.safeParse(rest).success).toBe(false);
   });
 

@@ -567,22 +567,19 @@ describe("folder views", () => {
     });
   });
 
-  it("resets pins across every identity linked to the calling account", async () => {
+  it("resets every pin of the calling login and leaves another login's", async () => {
     const { app, repos, metadata } = await buildHarness();
     const provider = await repos.providers.ensure({ type: "test", baseUrl: "http://test" });
-    const first = await repos.identities.create({
-      accountId: ACCOUNT_ID,
+    const other = await repos.accounts.create({ displayName: "bob" });
+    const bob = await repos.identities.create({
+      accountId: other.id,
       providerId: provider.id,
-      externalUsername: "alice-linked-1",
-    });
-    const second = await repos.identities.create({
-      accountId: ACCOUNT_ID,
-      providerId: provider.id,
-      externalUsername: "alice-linked-2",
+      externalUsername: "bob",
     });
     await Promise.all([
-      metadata.setFolderView(first.id, "/one", { mode: "grid" }),
-      metadata.setFolderView(second.id, "/two", { mode: "tree" }),
+      metadata.setFolderView(ALICE_IDENTITY_ID, "/one", { mode: "grid" }),
+      metadata.setFolderView(ALICE_IDENTITY_ID, "/two", { mode: "tree" }),
+      metadata.setFolderView(bob.id, "/keep", { mode: "list" }),
     ]);
 
     const reset = await app.request(
@@ -590,8 +587,9 @@ describe("folder views", () => {
       requestedWith({ method: "DELETE" }),
     );
     expect(await reset.json()).toEqual({ ok: true });
-    await expect(metadata.getFolderView(first.id, "/one")).resolves.toBeNull();
-    await expect(metadata.getFolderView(second.id, "/two")).resolves.toBeNull();
+    await expect(metadata.getFolderView(ALICE_IDENTITY_ID, "/one")).resolves.toBeNull();
+    await expect(metadata.getFolderView(ALICE_IDENTITY_ID, "/two")).resolves.toBeNull();
+    await expect(metadata.getFolderView(bob.id, "/keep")).resolves.toMatchObject({ mode: "list" });
   });
 });
 

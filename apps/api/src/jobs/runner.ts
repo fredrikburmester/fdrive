@@ -37,8 +37,8 @@ export interface SubmitJobInput {
   /**
    * Re-checked when the job leaves the queue: a `false` fails the job with
    * `JOB_AUTHORITY_REVOKED_MESSAGE` without ever calling `run`, so a job
-   * queued by a session that has since logged out, unlinked or been
-   * revoked never touches storage. Omit for work that cannot go stale.
+   * queued by a session that has since logged out or been revoked never
+   * touches storage. Omit for work that cannot go stale.
    */
   readonly authorize?: () => Promise<boolean>;
   readonly run: (ctx: JobRunContext) => Promise<{ path: string; warning?: string }>;

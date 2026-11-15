@@ -8,12 +8,11 @@ import {
   createChangeJournal,
   createChangeWriter,
   createDb,
-  createDesktopEffectsRepo,
   createDesktopPublishLock,
   createDesktopRepo,
   createFilesFolderFacts,
-  createIdentityLinksRepo,
   createIndexQueries,
+  createLoginRepo,
   createOfficeFileRepo,
   createOfficeWriteScope,
   createPool,
@@ -21,15 +20,12 @@ import {
   createRepos,
   createShareRepo,
   createWopiLockRepo,
+  type DesktopAccessMove,
   migrate,
 } from "@fdrive/db";
 import { SHARED_WITH_ME } from "@fdrive/local";
 import type { Logger } from "pino";
 import { verifyCredentials } from "./accounts/credentials.js";
-import { registerAccountsRoutes } from "./accounts/routes.ts";
-import { createAccountsService } from "./accounts/service.ts";
-import type { AccountsDeps } from "./accounts/types.ts";
-import { createAccountViews } from "./accounts/views.ts";
 import { createActivityAdmission } from "./activity/admission.ts";
 import { registerActivityExports } from "./activity/exports.ts";
 import { createActivityMaintenance } from "./activity/maintenance.ts";
@@ -56,7 +52,6 @@ import { registerBackupRoutes } from "./backups/routes.js";
 import type { AppConfig } from "./config.js";
 import { type Subsystem, type SubsystemProbe, startupSummaryLines } from "./config-keys.js";
 import { createDesktopChanges } from "./desktop/changes.js";
-import { createDesktopEffectContext, createDesktopEffectsWorker } from "./desktop/effects.js";
 import { createIndexedContentLookup } from "./desktop/indexed-content.js";
 import { withDesktopMetadata } from "./desktop/metadata.js";
 import { createDesktopRetention, DEFAULT_DESKTOP_RETENTION } from "./desktop/retention.js";
@@ -84,12 +79,11 @@ import type { McpToolDeps } from "./mcp/handlers.js";
 import { createIndexerExtractClient } from "./mcp/indexer-client.js";
 import { registerMcpRoutes } from "./mcp/routes.js";
 import { registerMetadataRoutes } from "./metadata/routes.js";
-import { createMetadataService } from "./metadata/service.js";
+import { createMetadataService, withFollowers } from "./metadata/service.js";
 import { withTrashMoves } from "./metadata/trash-moves.js";
 import { extractClientIp } from "./net.js";
 import { configuredOfficeProduct, officeConfig } from "./office/config.ts";
 import { allowsOfficeEdit } from "./office/edit-policy.ts";
-import { WopiError } from "./office/errors.ts";
 import { createDiscoveryCache } from "./office/protocol/discovery-cache.ts";
 import { applyOfficeRootEvent, withOfficeMetadata } from "./office/registry-events.ts";
 import { registerOfficeRoutes, registerWopiRoutes } from "./office/routes.ts";
@@ -336,7 +330,6 @@ export async function composeApp(
   const admitActivity = createActivityAdmission({
     reads: activityReads,
     repo: activityRepo,
-    identities: repos.identities,
     storageFactory,
     secret: config.fdriveMasterKey,
     clock,
@@ -346,9 +339,8 @@ export async function composeApp(
     providers: providerService,
     fetch: fetchImpl,
   });
-  const identityLinks = createIdentityLinksRepo(db);
   const auth = createAuthModule({
-    identityLinks,
+    logins: createLoginRepo(db),
     repos,
     providers: providerService,
     fetch: fetchImpl,
@@ -436,29 +428,7 @@ export async function composeApp(
     clock,
   });
 
-  const accountStorage = createOfficeStorageFactory({ pinned: pinnedStorageFactory });
-  const identityStorageForAccount = async (identity: { id: string; providerId: string }) => {
-    try {
-      return await accountStorage(identity.id, identity.providerId);
-    } catch (error) {
-      if (error instanceof WopiError && error.status === 401)
-        throw new ApiHttpError("upstream_unavailable", "identity provider unavailable");
-      throw error;
-    }
-  };
-  const accountDeps: AccountsDeps = {
-    repos,
-    links: identityLinks,
-    auth: auth.service,
-    providers: providerService,
-    fetch: fetchImpl,
-    limiter,
-    master,
-    clock,
-    storageForIdentity: identityStorageForAccount,
-  };
-  const accountsService = createAccountsService(accountDeps);
-  const accountViews = createAccountViews(accountDeps);
+  const officeStorage = createOfficeStorageFactory({ pinned: pinnedStorageFactory });
 
   // Public links follow the items they name wherever they go, into Trash too.
   const shareMoves = createShareMoves({
@@ -469,10 +439,11 @@ export async function composeApp(
   // called both from the fs routes below (moves and deletes made through
   // fdrive) and from the indexer listener (changes seen over SFTP or any
   // other client), so metadata survives renames from either source.
-  const metadataCore = createMetadataService({
-    ...repos,
-    followers: [localGrants, shareMoves],
-  });
+  const metadataCore = createMetadataService(repos);
+  // What grants access (folders shared with people, public links) follows
+  // first, in an outer layer, so a failure in tags or favorites never leaves
+  // it at a path a new item could take.
+  const accessFollowers = [localGrants, shareMoves];
   /** A login's Trash folder while Trash is on; none for a login removed since. */
   const trashPathOf = async (identityId: string): Promise<string | null> => {
     try {
@@ -483,7 +454,7 @@ export async function composeApp(
     }
   };
   // A move into the Trash, whoever reports it, leaves metadata where the item was.
-  const metadataService = withTrashMoves(metadataCore, trashPathOf);
+  const metadataService = withFollowers(withTrashMoves(metadataCore, trashPathOf), accessFollowers);
   const desktopRepo = createDesktopRepo(db);
   // Serializes Mac desktop commits per identity; no other fdrive writer takes
   // it. Mac writes are read-only unless this is configured.
@@ -503,8 +474,6 @@ export async function composeApp(
     onConnectError: (cause) =>
       logger.warn({ err: cause }, "publish lock connection unavailable; reported as busy"),
   });
-  const desktopEffects = createDesktopEffectsRepo(db);
-  const desktopEffectsWorker = createDesktopEffectsWorker({ repo: desktopEffects, bus, eventLog });
   const desktopRetention = createDesktopRetention({
     repo: desktopRepo,
     storageForIdentity: storageFactory,
@@ -517,16 +486,33 @@ export async function composeApp(
     ...(config.fdriveDesktopStateDir ? { stateDir: config.fdriveDesktopStateDir } : {}),
   });
   const officeFiles = createOfficeFileRepo(db);
-  const fsMetadata = withTrashMoves(
+  const withOffice = (metadata: typeof metadataCore) =>
     withOfficeMetadata(
-      withDesktopMetadata(metadataCore, desktopRepo),
+      metadata,
       officeFiles,
       repos.identities,
       scopeResolver.configuredMappings,
       clock,
-    ),
-    trashPathOf,
+    );
+  const fsMetadata = withFollowers(
+    withTrashMoves(withOffice(withDesktopMetadata(metadataCore, desktopRepo)), trashPathOf),
+    accessFollowers,
   );
+  // A Mac write moves what grants access with its receipt (`desktop/writes.ts`)
+  // and the rest after it. It keeps its own item handles, so this skips the
+  // handle registry, whose `onTrashed` would retire the handle of an item the
+  // Mac puts in its own Trash.
+  const desktopMetadata = withTrashMoves(withOffice(metadataCore), trashPathOf);
+  const desktopAccess = async (
+    identityId: string,
+    from: string,
+    to: string,
+    directory: boolean,
+  ): Promise<DesktopAccessMove | null> => {
+    const shares = await shareMoves.resolve(identityId, from, to);
+    const grants = await localGrants.grantMove(identityId, from, to, directory);
+    return shares === null && grants === null ? null : { directory, shares, grants };
+  };
   const officeProduct = configuredOfficeProduct(config);
   const officeDiscoveries = new Map<string, ReturnType<typeof createDiscoveryCache>>();
   /** Only the compose-bundled ONLYOFFICE image runs a controller with a `/runtime` status document. */
@@ -623,7 +609,7 @@ export async function composeApp(
     withWriteScope: createOfficeWriteScope(officeLocks.db),
     clock,
     location: officeLocation,
-    storageFactory: accountStorage,
+    storageFactory: officeStorage,
     metadata: metadataService,
     bus,
     activity: personalActivity,
@@ -668,18 +654,14 @@ export async function composeApp(
       : createOcrClient({ baseUrl: config.fdriveOcrUrl, fetch: fetchImpl });
   const thumbnailsRepo = createThumbnailsRepo(db);
 
-  const tokenService = createTokenService({
-    apiTokens: repos.apiTokens,
-    identities: repos.identities,
-    clock,
-  });
+  const tokenService = createTokenService({ apiTokens: repos.apiTokens, clock });
   const resolveTokenPrincipal = createResolveTokenPrincipal({
     apiTokens: repos.apiTokens,
     identities: repos.identities,
     clock,
     storageFactory,
   });
-  // The MCP `read_file_text` tool talks to the indexer's `POST /extract`
+  // The MCP `read_file_text` tool talks to the indexer's `POST /extract-content`
   // endpoint, a different shape from the System pages' `IndexerClient`
   // (`/health`, `/stats`, ...), so it gets its own client. Both point at the
   // same `FDRIVE_INDEXER_URL` and share `fetchImpl`.
@@ -814,7 +796,6 @@ export async function composeApp(
     identities: repos.identities,
     publicUrl: () => publicUrl.current(),
     indexerClient: indexerExtractClient,
-    writesEnabled: config.fdriveMcpWrites,
     metadata: metadataService,
     imageSearchService,
     onMutation: async (principal, change) => {
@@ -979,7 +960,6 @@ export async function composeApp(
         : null;
       registerDesktopRoutes(groups, {
         activity: personalActivity,
-        recovery: desktopEffects,
         changes: createDesktopChanges({
           journal: createChangeJournal(db),
           rootIds: () => indexQueries.rootIdsByName(),
@@ -998,12 +978,10 @@ export async function composeApp(
           indexedContent: desktopIndexedContent,
           publishLock: desktopPublishLock,
           clock,
-          effectContext: createDesktopEffectContext(
-            repos.identities,
-            scopeResolver.configuredMappings,
-            shareMoves.resolve,
-          ),
-          effects: desktopEffectsWorker,
+          access: desktopAccess,
+          metadata: desktopMetadata,
+          bus,
+          logger,
           storageForIdentity: storageFactory,
           ...(config.fdriveDesktopStateDir ? { stateDir: config.fdriveDesktopStateDir } : {}),
           trashPathForStorage: (storage) => {
@@ -1044,12 +1022,6 @@ export async function composeApp(
         resolver: scopeResolver,
         identities: repos.identities,
         thumbsDir: config.fdriveThumbsDir,
-      });
-      registerAccountsRoutes(groups, {
-        service: accountsService,
-        views: accountViews,
-        config,
-        clock,
       });
       registerSetupRoutes(groups, {
         service: setupService,
@@ -1123,8 +1095,6 @@ export async function composeApp(
       registerPersonalActivityRoutes(groups, {
         repo: activityRepo,
         reads: activityReads,
-        identities: repos.identities,
-        storageFactory,
         observations: activityObservations,
         admitActivity,
         cursorSecret: config.fdriveMasterKey,
@@ -1205,7 +1175,6 @@ export async function composeApp(
   });
 
   activityMaintenance.start();
-  desktopEffectsWorker.start();
   desktopRetention.start();
   return {
     app,
@@ -1214,7 +1183,6 @@ export async function composeApp(
       await backups.close();
       await activityMaintenance.stop();
       await desktopRetention.stop();
-      await desktopEffectsWorker.stop();
       if (indexerListener !== null) {
         await indexerListener.stop();
       }

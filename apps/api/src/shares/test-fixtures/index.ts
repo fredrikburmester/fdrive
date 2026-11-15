@@ -11,7 +11,7 @@ import { activityFixture } from "../../../test/activity-fixture.js";
 import { createApp } from "../../app.ts";
 import { createAuthModule, createLoginLimiter } from "../../auth/index.ts";
 import { createIdentityStorageFactory } from "../../auth/storage-factory.ts";
-import { memoryIdentityOperations } from "../../auth/test-fixtures/index.ts";
+import { memoryLoginRepo } from "../../auth/test-fixtures/index.ts";
 import { type AppConfig, loadConfig } from "../../config.ts";
 import { createProviderService } from "../../providers/service.ts";
 import { createShareCredentialCodec } from "../credentials.ts";
@@ -92,7 +92,7 @@ export function sharesHarness(options: SharesHarnessOptions = {}) {
   const now = { value: new Date("2026-09-07T00:00:00Z") };
   const clock = () => now.value;
   const repos = createMemoryRepos();
-  const links = memoryIdentityOperations(repos);
+  const logins = memoryLoginRepo(repos);
   const master = Buffer.alloc(32, 13);
   const config: AppConfig = {
     ...loadConfig({
@@ -140,7 +140,7 @@ export function sharesHarness(options: SharesHarnessOptions = {}) {
   });
   const auth = createAuthModule({
     repos,
-    identityLinks: links,
+    logins,
     providers,
     fetch: fetchImpl,
     master,

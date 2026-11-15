@@ -4,7 +4,6 @@ import {
   ActivityRequestError,
   activityFeed,
   activityFile,
-  activityLocations,
   activityRequest,
   resolveActivityFile,
 } from "./api";
@@ -59,33 +58,27 @@ it("sends private uncached requests, encodes filters and validates API shapes", 
   };
   fetcher.mockResolvedValueOnce(Response.json(file));
   expect(await activityFile(id)).toEqual(file);
-  fetcher.mockResolvedValueOnce(
-    Response.json({ items: [{ identityId: id, label: "Previous drive" }] }),
-  );
-  expect(await activityLocations()).toEqual([{ identityId: id, label: "Previous drive" }]);
   fetcher.mockResolvedValueOnce(Response.json({ global: "invalid" }));
   await expect(activityFeed({})).rejects.toThrow();
 });
 it("resolves a path to its history ID and reads an unrecorded path as no history", async () => {
   const fetcher = vi.fn(async (_url: string, _init: RequestInit) => Response.json({ id }));
   vi.stubGlobal("fetch", fetcher);
-  expect(await resolveActivityFile(id, "/a b.txt")).toBe(id);
-  expect(fetcher.mock.calls.at(-1)?.[0]).toBe(
-    `/api/v1/activity/files/resolve?identityId=${id}&path=%2Fa+b.txt`,
-  );
+  expect(await resolveActivityFile("/a b.txt")).toBe(id);
+  expect(fetcher.mock.calls.at(-1)?.[0]).toBe("/api/v1/activity/files/resolve?path=%2Fa+b.txt");
   fetcher.mockResolvedValueOnce(
     Response.json(
       { error: { kind: "not_found", message: "No recorded history for this file yet" } },
       { status: 404 },
     ),
   );
-  expect(await resolveActivityFile(id, "/new.txt")).toBeNull();
+  expect(await resolveActivityFile("/new.txt")).toBeNull();
   fetcher.mockResolvedValueOnce(Response.json({}, { status: 500 }));
-  const failure = resolveActivityFile(id, "/a");
+  const failure = resolveActivityFile("/a");
   await expect(failure).rejects.toBeInstanceOf(ActivityRequestError);
   await expect(failure).rejects.toMatchObject({ status: 500 });
   fetcher.mockResolvedValueOnce(Response.json({ id: "not-an-id" }));
-  await expect(resolveActivityFile(id, "/a")).rejects.toThrow();
+  await expect(resolveActivityFile("/a")).rejects.toThrow();
 });
 
 function event(patch: Partial<PersonalActivityEvent>): PersonalActivityEvent {

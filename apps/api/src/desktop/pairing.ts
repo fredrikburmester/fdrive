@@ -37,8 +37,8 @@ interface Pair {
   confirmed?: boolean;
   approval?: {
     accountId: string;
-    identityIds: string[];
-    access: Record<string, DesktopAccessMode>;
+    identityId: string;
+    access: DesktopAccessMode;
   };
   result?: Promise<IssuedCredential[]>;
 }
@@ -127,7 +127,7 @@ export function createDesktopPairing(deps: DesktopDeps) {
   async function location(principal: Principal, protocolVersion: 1 | 2 = 1) {
     const identity = await deps.identities.get(principal.identityId);
     const provider = identity && (await deps.providers.get(identity.providerId));
-    if (!identity || identity.accountId !== principal.accountId || !provider?.enabled)
+    if (!identity || !provider?.enabled)
       throw new ApiHttpError("unauthorized", "Storage login is no longer available");
     const common = {
       accountId: principal.accountId,
@@ -167,37 +167,36 @@ export function createDesktopPairing(deps: DesktopDeps) {
       ...((await deps.changeFeed?.(principal)) ? { changeFeed: true as const } : {}),
     };
   }
+  /**
+   * Issues the one credential an approval grants, for the approving login.
+   * The bundle stays a list: that is the shape every Mac app reads.
+   */
   async function issue(pair: Pair): Promise<IssuedCredential[]> {
     const approval = pair.approval;
     if (!approval) throw new ApiHttpError("conflict", "Connection has not been approved");
-    const created: IssuedCredential[] = [];
-    const issued: string[] = [];
+    if (pair.cancelled || pair.expires <= deps.clock().getTime())
+      throw new ApiHttpError("not_found", "Connection request expired");
+    const credential = await tokens.create(approval, {
+      name: `Mac: ${pair.deviceName}`,
+      expiresInDays: 365,
+      access: { mode: approval.access, paths: ["/"] },
+    });
     try {
-      for (const identityId of approval.identityIds) {
-        if (pair.cancelled || pair.expires <= deps.clock().getTime())
-          throw new ApiHttpError("not_found", "Connection request expired");
-        const credential = await tokens.create(approval.accountId, {
-          name: `Mac: ${pair.deviceName}`,
-          identityId,
-          expiresInDays: 365,
-          access: { mode: approval.access[identityId] ?? "read", paths: ["/"] },
-        });
-        issued.push(credential.item.id);
-        if (pair.cancelled || pair.expires <= deps.clock().getTime())
-          throw new ApiHttpError("not_found", "Connection request expired");
-        const principal = await resolve(credential.token);
-        if (!principal)
-          throw new ApiHttpError("unauthorized", "Storage login changed. Connect again.");
-        created.push({
+      if (pair.cancelled || pair.expires <= deps.clock().getTime())
+        throw new ApiHttpError("not_found", "Connection request expired");
+      const principal = await resolve(credential.token);
+      if (!principal)
+        throw new ApiHttpError("unauthorized", "Storage login changed. Connect again.");
+      return [
+        {
           token: credential.token,
           tokenId: credential.item.id,
           expiresAt: credential.item.expiresAt as string,
           location: await location(principal, pair.protocolVersion),
-        });
-      }
-      return created;
+        },
+      ];
     } catch (error) {
-      await Promise.all(issued.map((id) => tokens.revoke(id, approval.accountId)));
+      await tokens.revoke(credential.item.id, approval.accountId);
       throw error;
     }
   }
@@ -241,36 +240,28 @@ export function createDesktopPairing(deps: DesktopDeps) {
         ...(pair.protocolVersion === 2 ? { supportsWrites: true } : {}),
       };
     },
+    /** Connects the Mac to the approving session's login. */
     async approve(
       id: string,
-      accountId: string,
-      identityIds: string[],
-      access: Record<string, DesktopAccessMode> = {},
+      owner: { readonly accountId: string; readonly identityId: string },
+      access: DesktopAccessMode,
     ) {
       const pair = get(id);
       if (pair.approval) throw new ApiHttpError("conflict", "Connection already approved");
-      if (
-        Object.keys(access).some((identityId) => !identityIds.includes(identityId)) ||
-        (pair.protocolVersion === 1 && Object.values(access).some((mode) => mode !== "read"))
-      ) {
+      if (pair.protocolVersion === 1 && access !== "read") {
         throw new ApiHttpError(
           "bad_request",
           "Write access requires a new connection from an updated Mac app",
         );
       }
-      for (const identityId of identityIds) {
-        const identity = await deps.identities.get(identityId);
-        const provider = identity && (await deps.providers.get(identity.providerId));
-        if (!identity || identity.accountId !== accountId || !provider?.enabled)
-          throw new ApiHttpError(
-            "forbidden",
-            "Select an available login belonging to your account",
-          );
-      }
-      // Recheck after asynchronous ownership reads; two browser approvals cannot race.
+      const identity = await deps.identities.get(owner.identityId);
+      const provider = identity && (await deps.providers.get(identity.providerId));
+      if (!provider?.enabled)
+        throw new ApiHttpError("forbidden", "Your storage is not available right now");
+      // Recheck after the asynchronous reads; two browser approvals cannot race.
       if (get(id) !== pair || pair.approval)
         throw new ApiHttpError("conflict", "Connection already approved");
-      pair.approval = { accountId, identityIds: [...new Set(identityIds)], access: { ...access } };
+      pair.approval = { accountId: owner.accountId, identityId: owner.identityId, access };
     },
     async poll(id: string, secret: string) {
       const pair = get(id);
@@ -304,7 +295,7 @@ export function createDesktopPairing(deps: DesktopDeps) {
     },
     async revoke(bearer: string) {
       // Possession of this desktop secret authorizes only its own revocation. Do not
-      // require working storage, a linked identity, or an unexpired read grant to disconnect.
+      // require working storage, an existing login, or an unexpired read grant to disconnect.
       if (!looksLikeDesktopToken(bearer))
         throw new ApiHttpError("unauthorized", "Invalid desktop credential");
       const token = await deps.apiTokens.findByHash(hashApiToken(bearer));

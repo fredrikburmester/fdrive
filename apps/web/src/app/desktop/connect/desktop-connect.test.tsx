@@ -12,117 +12,72 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 const identity = makeIdentity({ providerLabel: "Personal", username: "alice" });
-function mount() {
-  vi.spyOn(apiClient, "me").mockResolvedValue(makeMe({ identities: [identity] }));
+function mount(client = new QueryClient({ defaultOptions: { queries: { retry: false } } })) {
+  vi.spyOn(apiClient, "me").mockResolvedValue(makeMe({ identity }));
   render(
-    <QueryClientProvider
-      client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}
-    >
-      <DesktopConnect requestId="request" initialMe={makeMe({ identities: [identity] })} />
+    <QueryClientProvider client={client}>
+      <DesktopConnect requestId="request" initialMe={makeMe({ identity })} />
     </QueryClientProvider>,
   );
+  return client;
 }
-it("defaults v2 grants to read and sends only explicitly selected write access", async () => {
-  vi.spyOn(apiClient, "desktopPairing").mockResolvedValue({
+function pairing(supportsWrites?: true) {
+  return vi.spyOn(apiClient, "desktopPairing").mockResolvedValue({
     deviceName: "Mac",
     code: "ABCD1234",
     expiresAt: new Date().toISOString(),
     approved: false,
-    supportsWrites: true,
+    ...(supportsWrites ? { supportsWrites } : {}),
   });
+}
+it("defaults a writable Mac to read and sends only the access chosen", async () => {
+  pairing(true);
   const approve = vi.spyOn(apiClient, "approveDesktopPairing").mockResolvedValue({ ok: true });
   mount();
-  fireEvent.click(await screen.findByRole("checkbox"));
-  const access = screen.getByRole("combobox", { name: "Personal access" });
+  const access = await screen.findByRole("combobox", { name: "Access" });
   expect((access as HTMLSelectElement).value).toBe("read");
   fireEvent.change(access, { target: { value: "full" } });
   fireEvent.change(access, { target: { value: "read" } });
   fireEvent.change(access, { target: { value: "full" } });
-  fireEvent.click(screen.getByRole("button", { name: "Allow selected logins" }));
+  fireEvent.click(screen.getByRole("button", { name: "Allow this Mac" }));
   await screen.findByText("Connection approved");
-  expect(approve).toHaveBeenCalledWith("request", [identity.id], { [identity.id]: "full" });
+  expect(approve).toHaveBeenCalledWith("request", "full");
 });
-it("requires explicit login selection and displays approval without credentials", async () => {
-  vi.spyOn(apiClient, "desktopPairing").mockResolvedValue({
-    deviceName: "Mac",
-    code: "ABCD1234",
-    expiresAt: new Date().toISOString(),
-    approved: false,
-  });
+it("connects a read-only Mac to the signed-in login without offering writes", async () => {
+  pairing();
   const approve = vi.spyOn(apiClient, "approveDesktopPairing").mockResolvedValue({ ok: true });
   mount();
-  expect(
-    ((await screen.findByRole("button", { name: "Allow selected logins" })) as HTMLButtonElement)
-      .disabled,
-  ).toBe(true);
-  const checkbox = screen.getByRole("checkbox");
-  fireEvent.click(checkbox);
-  fireEvent.click(checkbox);
-  expect(
-    (screen.getByRole("button", { name: "Allow selected logins" }) as HTMLButtonElement).disabled,
-  ).toBe(true);
-  fireEvent.click(checkbox);
-  fireEvent.click(screen.getByRole("button", { name: "Allow selected logins" }));
+  await screen.findByRole("button", { name: "Allow this Mac" });
+  expect(screen.getByText("Personal")).toBeDefined();
+  expect(screen.getByText("alice")).toBeDefined();
+  expect(screen.queryByRole("combobox", { name: "Access" })).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "Allow this Mac" }));
   await screen.findByText("Connection approved");
-  expect(approve).toHaveBeenCalledWith("request", [identity.id]);
-  expect(screen.queryByRole("checkbox")).toBeNull();
+  expect(approve).toHaveBeenCalledWith("request", "read");
+  expect(screen.queryByRole("button", { name: "Allow this Mac" })).toBeNull();
 });
 it("keeps approval failures visible and prevents expired requests from being approved", async () => {
-  const info = vi.spyOn(apiClient, "desktopPairing").mockResolvedValue({
-    deviceName: "Mac",
-    code: "ABCD1234",
-    expiresAt: new Date().toISOString(),
-    approved: false,
-  });
+  const info = pairing();
   vi.spyOn(apiClient, "approveDesktopPairing").mockRejectedValue(
     new ApiClientError("not_found", "Request expired", 404),
   );
   mount();
-  await screen.findByRole("checkbox");
-  fireEvent.click(screen.getByRole("checkbox"));
-  fireEvent.click(screen.getByRole("button", { name: "Allow selected logins" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Allow this Mac" }));
   await waitFor(() => expect(screen.getByRole("alert").textContent).toBeTruthy());
   cleanup();
   info.mockRejectedValue(new ApiClientError("not_found", "Request expired", 404));
   mount();
   await screen.findByRole("alert");
-  expect(screen.queryByRole("button", { name: "Allow selected logins" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "Allow this Mac" })).toBeNull();
 });
-
-it("refreshes names in an open approval screen while keeping equal labels and usernames separate", async () => {
-  vi.spyOn(apiClient, "desktopPairing").mockResolvedValue({
-    deviceName: "Mac",
-    code: "ABCD1234",
-    expiresAt: new Date().toISOString(),
-    approved: false,
-  });
-  const second = makeIdentity({
-    id: "second-identity",
-    providerId: "second-provider",
-    providerLabel: "<b>Home storage</b>",
-    username: "alice",
-  });
-  const fresh = makeMe({
-    identities: [{ ...identity, providerLabel: "<b>Home storage</b>" }, second],
-  });
-  const me = vi
-    .spyOn(apiClient, "me")
-    .mockResolvedValue(makeMe({ identities: [identity, second] }));
-  const approve = vi.spyOn(apiClient, "approveDesktopPairing").mockResolvedValue({ ok: true });
-  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  render(
-    <QueryClientProvider client={client}>
-      <DesktopConnect requestId="request" initialMe={makeMe({ identities: [identity, second] })} />
-    </QueryClientProvider>,
+it("refreshes the login's names in an open approval screen as plain text", async () => {
+  pairing();
+  const client = mount();
+  await screen.findByText("Personal");
+  vi.spyOn(apiClient, "me").mockResolvedValue(
+    makeMe({ identity: { ...identity, providerLabel: "<b>Home storage</b>" } }),
   );
-  await screen.findAllByRole("checkbox");
-  me.mockResolvedValue(fresh);
   await client.invalidateQueries({ queryKey: ["auth", "me"] });
-  await waitFor(() => expect(screen.getAllByText("<b>Home storage</b>")).toHaveLength(2));
-  expect(screen.getAllByText("alice")).toHaveLength(2);
+  await waitFor(() => expect(screen.getByText("<b>Home storage</b>")).toBeDefined());
   expect(document.querySelector("b")).toBeNull();
-  fireEvent.click(screen.getAllByRole("checkbox")[1] as HTMLElement);
-  fireEvent.click(screen.getByRole("button", { name: "Allow selected logins" }));
-  await screen.findByText("Connection approved");
-  expect(approve).toHaveBeenCalledWith("request", [second.id]);
 });
