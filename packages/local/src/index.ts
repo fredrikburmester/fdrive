@@ -42,4 +42,4 @@ export type {
   MoveOptions,
   ZipItem,
 } from "./storage-provider.js";
-export { createLocalStorage } from "./storage-provider.js";
+export { createLocalStorage, removeStaleParts } from "./storage-provider.js";
