@@ -1,6 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { createReadStream, type ReadStream } from "node:fs";
 import {
+  appendFile,
   chmod,
   lstat,
   mkdir,
@@ -27,6 +28,10 @@ import {
   zipEntries,
 } from "../test/helpers.js";
 import { createLocalStorage, removeStaleParts } from "./storage-provider.js";
+
+function text(bytes: Uint8Array): string {
+  return new TextDecoder().decode(bytes);
+}
 
 vi.mock("node:fs", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs")>();
@@ -113,7 +118,7 @@ describe("symlinks", () => {
     expect(await f.storage.list("/")).toMatchObject([{ name: "out", kind: "symlink", size: 0 }]);
     expect(await kindOf(f.storage.list("/out"))).toBe("forbidden");
     expect(await kindOf(f.storage.stat("/out"))).toBe("forbidden");
-    expect(await kindOf(f.storage.download("/out/secret.txt"))).toBe("forbidden");
+    expect(await kindOf(f.storage.open("/out/secret.txt"))).toBe("forbidden");
     expect(await kindOf(f.storage.upload("/out/new.txt", bytes("x")))).toBe("forbidden");
     expect(await kindOf(f.storage.mkdir("/out/dir"))).toBe("forbidden");
     expect(await readdir(outside)).toEqual(["secret.txt"]);
@@ -138,7 +143,7 @@ describe("symlinks", () => {
     });
     expect(await kindOf(f.storage.stat("/alias/a.txt"))).toBe("forbidden");
     expect(await kindOf(f.storage.list("/alias"))).toBe("forbidden");
-    expect(await kindOf(f.storage.download("/a-link.txt"))).toBe("forbidden");
+    expect(await kindOf(f.storage.open("/a-link.txt"))).toBe("forbidden");
     expect(await read(f.storage, "/real/a.txt")).toBe("a");
     expect(await f.storage.stat("/real/a.txt")).toMatchObject({ path: "/real/a.txt" });
   });
@@ -328,55 +333,61 @@ describe("removeStaleParts", () => {
   });
 });
 
-describe("download", () => {
+describe("open", () => {
   beforeEach(async () => {
     await f.storage.upload("/d.txt", bytes("hello world"));
   });
 
-  it("sends the whole file for a range it cannot satisfy", async () => {
-    const past = await f.storage.download("/d.txt", { range: { start: 50 } });
-    expect(past.status).toBe(200);
-    const inverted = await f.storage.download("/d.txt", { range: { start: 5, end: 2 } });
-    expect(inverted.status).toBe(200);
-    expect(await new Response(inverted.body).text()).toBe("hello world");
+  it("streams a slice and reads by position, never past the end", async () => {
+    const file = await f.storage.open("/d.txt");
+    expect(file.size).toBe(11);
+    expect(await text(await file.read(6, 100))).toBe("world");
+    expect(await file.read(50, 10)).toHaveLength(0);
+    expect(await new Response(file.stream(6, 50)).text()).toBe("world");
+    const inverted = await f.storage.open("/d.txt");
+    expect(await new Response(inverted.stream(5, 2)).text()).toBe("");
   });
 
-  it("applies a range only while If-Range names the current version", async () => {
-    const mtime = (await f.storage.statFile("/d.txt")).modifiedAt as Date;
-    const range = { start: 6 };
-    const same = await f.storage.download("/d.txt", { range, ifRange: mtime.toUTCString() });
-    expect(same.status).toBe(206);
-    expect(await new Response(same.body).text()).toBe("world");
-    for (const ifRange of ["Mon, 01 Jan 2001 00:00:00 GMT", '"etag"', 'W/"etag"', "garbage"]) {
-      expect((await f.storage.download("/d.txt", { range, ifRange })).status).toBe(200);
-    }
+  it("reads the file as it was opened, though it grows meanwhile", async () => {
+    const file = await f.storage.open("/d.txt");
+    await appendFile(join(f.home, "d.txt"), "!!!");
+    expect(await text(await file.read(0, 100))).toBe("hello world");
+    expect(await new Response(file.stream()).text()).toBe("hello world");
   });
 
-  it("sends an empty file", async () => {
+  it("closes the file once its stream ends or is cancelled, and closes once", async () => {
+    const ended = await f.storage.open("/d.txt");
+    await new Response(ended.stream()).text();
+    expect(await kindOf(ended.read(0, 1))).toBe("internal");
+    await f.storage.upload("/big.bin", new Uint8Array(4 * 1024 * 1024));
+    const cancelled = await f.storage.open("/big.bin");
+    const reader = cancelled.stream().getReader();
+    expect((await reader.read()).done).toBe(false);
+    await reader.cancel();
+    expect(await kindOf(cancelled.read(0, 1))).toBe("internal");
+    const closed = await f.storage.open("/d.txt");
+    await closed.close();
+    await closed.close();
+    expect(await kindOf(closed.read(0, 1))).toBe("internal");
+  });
+
+  it("opens an empty file", async () => {
     await f.storage.upload("/empty", bytes(""));
-    const result = await f.storage.download("/empty", { range: { start: 0 } });
-    expect(result).toMatchObject({ status: 200, contentLength: 0 });
-    expect(await new Response(result.body).text()).toBe("");
+    const file = await f.storage.open("/empty");
+    expect(file.size).toBe(0);
+    expect(await new Response(file.stream()).text()).toBe("");
   });
 
   it("refuses folders and special files without hanging", async () => {
     await f.storage.mkdir("/dir");
     execFileSync("mkfifo", [join(f.home, "pipe")]);
-    expect(await kindOf(f.storage.download("/dir"))).toBe("bad_request");
-    expect(await kindOf(f.storage.download("/pipe"))).toBe("bad_request");
+    expect(await kindOf(f.storage.open("/dir"))).toBe("bad_request");
+    expect(await kindOf(f.storage.open("/pipe"))).toBe("bad_request");
     expect(await f.storage.stat("/pipe")).toMatchObject({ kind: "other", size: 0 });
     expect((await f.storage.list("/")).find((entry) => entry.name === "pipe")).toMatchObject({
       kind: "other",
     });
     expect(await kindOf(f.storage.statFile("/pipe"))).toBe("bad_request");
-  });
-
-  it("stops the body when the signal aborts", async () => {
-    await f.storage.upload("/big.bin", new Uint8Array(4 * 1024 * 1024));
-    const controller = new AbortController();
-    const result = await f.storage.download("/big.bin", { signal: controller.signal });
-    controller.abort();
-    await expect(new Response(result.body).arrayBuffer()).rejects.toThrow();
   });
 });
 

@@ -1,8 +1,13 @@
 import { generateKeyPairSync, randomUUID } from "node:crypto";
 import { StorageError } from "@fdrive/core";
-import { entryStat } from "@fdrive/core/testing";
 import { describe, expect, it, vi } from "vitest";
 import { officeHarness, proofKey } from "../../test/fixtures/office/harness.ts";
+import {
+  expectRangeAnswer,
+  RANGE_FILE,
+  rangeCases,
+  rangeHeaders,
+} from "../../test/fixtures/range-cases.ts";
 import { recordingGate } from "../../test/recording-gate.ts";
 import { WopiError } from "./errors.ts";
 import { createOfficeService, fileExists } from "./service.ts";
@@ -116,7 +121,7 @@ describe("office opening and creation", () => {
       const request = { parent: "/", name: `New.${ext}` };
       const created = await h.service.create(input, request);
       expect(created.path).toBe(`/New.${ext}`);
-      const bytes = await new Response((await h.storage.download(created.path)).body).arrayBuffer();
+      const bytes = await new Response((await h.storage.open(created.path)).stream()).arrayBuffer();
       expect(Buffer.from(bytes).subarray(0, 2).toString()).toBe("PK");
       await expect(h.service.create(input, request)).rejects.toMatchObject({ kind: "conflict" });
     },
@@ -307,19 +312,36 @@ describe("WOPI reads", () => {
       ).status,
     ).toBe(status);
   });
-  it("enforces configured max and detects a larger actual download", async () => {
+  it("enforces the configured max on the file it opens, and closes it", async () => {
     const h = await officeHarness({ config: { maxBytes: 5 } });
     const opened = await h.open();
     await h.storage.upload("/a.docx", Buffer.from("longer"), { overwrite: true });
     // A document past the limit does not open, and an open one is not served.
     await expect(h.open()).rejects.toMatchObject({ status: 413 });
+    const open = h.storage.open.bind(h.storage);
+    const close = vi.fn();
+    vi.spyOn(h.storage, "open").mockImplementation(async (path) => ({
+      ...(await open(path)),
+      close,
+    }));
     expect((await h.callback(opened, { contents: true })).status).toBe(413);
-    vi.spyOn(h.storage, "statFile").mockResolvedValue(entryStat("/a.docx", { size: 5 }));
     expect(
       (await h.callback(opened, { contents: true, headers: { "X-WOPI-MaxExpectedSize": "5" } }))
         .status,
     ).toBe(412);
-    expect((await h.callback(opened, { contents: true })).status).toBe(413);
+    expect(close).toHaveBeenCalledTimes(2);
+  });
+  it("answers every Range and If-Range as every file route does", async () => {
+    const h = await officeHarness();
+    await h.storage.upload("/a.docx", Buffer.from(RANGE_FILE), { overwrite: true });
+    const opened = await h.open();
+    const cases = rangeCases((await h.storage.statFile("/a.docx")).modifiedAt);
+    for (const item of cases) {
+      await expectRangeAnswer(
+        await h.callback(opened, { contents: true, headers: rangeHeaders(item) }),
+        item,
+      );
+    }
   });
   it("types a document by its name, with its length and time, and fails inside async GET", async () => {
     const h = await officeHarness();

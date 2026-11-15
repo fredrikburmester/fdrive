@@ -6,6 +6,7 @@ import {
   type MadeFolder,
   makeEntry,
   normalizePath,
+  type OpenFile,
   parentPath,
   StorageError,
   type StorageProvider,
@@ -312,30 +313,43 @@ export function createMemoryStorage(
       return found;
     },
 
-    async download(path: string, opts) {
-      const { file } = requireFile(path);
-      if (opts?.signal?.aborted === true) {
-        throw new DOMException("The operation was aborted.", "AbortError");
-      }
-      const total = file.content.length;
-      const range = opts?.range;
-      if (range !== undefined && range.start < total) {
-        const end = Math.min(range.end ?? total - 1, total - 1);
-        const slice = file.content.slice(range.start, end + 1);
-        return {
-          status: 206 as const,
-          body: streamOf(slice),
-          contentLength: slice.length,
-          contentRange: `bytes ${range.start}-${end}/${total}`,
-          lastModified: file.mtime,
-        };
-      }
+    async open(path: string): Promise<OpenFile> {
+      const found = entryAt(normalizePath(path));
+      if (found === null) throw new StorageError("not_found", `not found: ${path}`);
+      if (found.kind !== "file") throw new StorageError("bad_request", `not a file: ${path}`);
+      const { file } = requireFile(found.path);
+      const { content } = file;
+      let closed = false;
+      const opened = () => {
+        if (closed) throw new StorageError("internal", `the file is closed: ${path}`);
+      };
       return {
-        status: 200 as const,
-        body: streamOf(file.content),
-        contentLength: total,
-        contentRange: null,
-        lastModified: file.mtime,
+        size: content.length,
+        modifiedAt: file.mtime,
+        stream(start = 0, end = content.length - 1) {
+          opened();
+          const bytes = content.slice(start, end + 1);
+          return new ReadableStream<Uint8Array>(
+            {
+              pull(controller) {
+                closed = true;
+                if (bytes.length > 0) controller.enqueue(bytes);
+                controller.close();
+              },
+              cancel() {
+                closed = true;
+              },
+            },
+            { highWaterMark: 0 },
+          );
+        },
+        async read(position, length) {
+          opened();
+          return content.slice(position, position + length);
+        },
+        async close() {
+          closed = true;
+        },
       };
     },
 

@@ -178,7 +178,7 @@ describe("version checks answered from the index", () => {
         return stamp;
       },
     };
-    const download = vi.spyOn(storage, "download");
+    const opened = vi.spyOn(storage, "open");
     const rows = new Map<string, IndexedContent>([
       ["/docs/a.txt", rowFor("alice/docs/a.txt", stamps.get("/docs/a.txt"))],
       ["/docs/b.txt", rowFor("alice/docs/b.txt", stamps.get("/docs/b.txt"))],
@@ -203,7 +203,7 @@ describe("version checks answered from the index", () => {
     };
     const versions = async (paths: string[]) =>
       (await files.versions(principal, paths, signal)).items;
-    return { stamps, download, rows, l, versions };
+    return { stamps, opened, rows, l, versions };
   }
 
   it("answers an indexed file from its row without reading it", async () => {
@@ -212,7 +212,7 @@ describe("version checks answered from the index", () => {
       { path: "/docs/a.txt", size: 5, version: CLAIMED },
       { path: "/Shared with me/Photos/cat.jpg", size: 5, version: CLAIMED },
     ]);
-    expect(f.download).not.toHaveBeenCalled();
+    expect(f.opened).not.toHaveBeenCalled();
     expect(f.l.contentAt).toHaveBeenCalledTimes(1);
   });
 
@@ -228,7 +228,7 @@ describe("version checks answered from the index", () => {
       { path: "/docs/a.txt", size: 5, version: CLAIMED },
       { path: "/docs/b.txt", size: 5, version: sha("bravo") },
     ]);
-    expect(f.download).toHaveBeenCalledTimes(1);
+    expect(f.opened).toHaveBeenCalledTimes(1);
   });
 
   it("hashes a file without a live row, or whose row no read of the indexer stamped", async () => {
@@ -263,7 +263,7 @@ describe("version checks answered from the index", () => {
       kind: "forbidden",
     });
     expect(f.l.contentAt.mock.calls[0]?.[0]).toEqual([{ rootId: 1, path: "alice/docs/a.txt" }]);
-    expect(f.download).not.toHaveBeenCalled();
+    expect(f.opened).not.toHaveBeenCalled();
   });
 
   it("still refuses what is not a file before consulting its row", async () => {

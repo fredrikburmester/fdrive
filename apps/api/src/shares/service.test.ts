@@ -14,6 +14,17 @@ const identityId = "00000000-0000-4000-8000-000000000001";
 const at = new Date("2026-11-15T00:00:00Z");
 const passwords = createScryptSharePasswords({ cost: 1024, blockSize: 8, parallelization: 1 });
 const text = (body: ReadableStream<Uint8Array>) => new Response(body).text();
+/** The bytes a download sent, once it answered 200 or 206. */
+async function sent(response: Promise<Response> | Response): Promise<string> {
+  const answered = await response;
+  expect([200, 206]).toContain(answered.status);
+  return answered.text();
+}
+/** A HEAD of a shared file, which counts nothing. */
+const headOnly = [
+  new Request("http://share/", { method: "HEAD" }),
+  { counted: false, headers: {} },
+] as const;
 const signal = () => new AbortController().signal;
 const bytes = (value: string) => new TextEncoder().encode(value);
 
@@ -110,11 +121,11 @@ describe("a public share's paths", () => {
       "sub",
     ]);
     expect((await service.entries(share, "/sub")).map((entry) => entry.name)).toEqual(["b.txt"]);
-    expect((await service.stat(share, "/a.txt")).size).toBe(5);
-    expect(await kindOf(service.stat(share, "/missing.txt"))).toBe("not_found");
+    expect(await sent(service.download(share, "/a.txt", ...headOnly))).toBe("");
+    expect(await kindOf(service.download(share, "/missing.txt", ...headOnly))).toBe("not_found");
     // Canonical request paths never carry `..`, but the guard holds anyway.
-    expect(await kindOf(service.stat(share, "/../top.txt"))).toBe("bad_request");
-    expect(await kindOf(service.stat(share, "/\0"))).toBe("bad_request");
+    expect(await kindOf(service.download(share, "/../top.txt", ...headOnly))).toBe("bad_request");
+    expect(await kindOf(service.download(share, "/\0", ...headOnly))).toBe("bad_request");
     expect(consume).not.toHaveBeenCalled();
   });
 
@@ -128,9 +139,13 @@ describe("a public share's paths", () => {
       ".fdrive-backups",
       "keep.txt",
     ]);
-    expect((await service.stat(share, "/.fdrive-backups/b")).size).toBe(6);
+    expect(
+      (await service.download(share, "/.fdrive-backups/b", ...headOnly)).headers.get(
+        "content-length",
+      ),
+    ).toBe("6");
     for (const hidden of ["/.trash/old.txt", "/.trash"]) {
-      expect(await kindOf(service.stat(share, hidden))).toBe("not_found");
+      expect(await kindOf(service.download(share, hidden, ...headOnly))).toBe("not_found");
       expect(await kindOf(service.entries(share, hidden))).toBe("not_found");
     }
     expect(hiddenFromLinks("/Shared with me/x")).toBe(true);
@@ -160,40 +175,36 @@ describe("a public share's paths", () => {
 });
 
 describe("counting a public share's downloads", () => {
-  it("counts a download once storage answered, and refuses once the limit is spent", async () => {
+  it("counts a download once it sends bytes, and refuses once the limit is spent", async () => {
     const { service, open, storage, used } = await build(
       { "/report.txt": "0123456789" },
       { paths: ["/report.txt"], maxDownloads: 2 },
     );
     const share = await open();
-    const request = { range: null, ifRange: undefined, signal: signal(), counted: false };
-    const full = await service.download(share, "/", request);
-    if (full.kind !== "stream") throw new Error("expected a stream");
-    expect(await text(full.result.body)).toBe("0123456789");
-    const tail = await service.download(share, "/", { ...request, range: "bytes=-4" });
-    if (tail.kind !== "stream") throw new Error("expected a stream");
-    expect(tail.result.contentRange).toBe("bytes 6-9/10");
-    expect(await text(tail.result.body)).toBe("6789");
-    // A range the file cannot satisfy is answered before anything is spent.
-    expect(await service.download(share, "/", { ...request, range: "bytes=10-" })).toEqual({
-      kind: "range-not-satisfiable",
-      size: 10,
-    });
+    const download = (headers: Record<string, string> = {}) =>
+      service.download(share, "/", new Request("http://share/", { headers }), {
+        counted: false,
+        headers: {},
+      });
+    expect(await sent(download())).toBe("0123456789");
+    const tail = await download({ range: "bytes=-4" });
+    expect(tail.headers.get("content-range")).toBe("bytes 6-9/10");
+    expect(await sent(tail)).toBe("6789");
+    // A range the file cannot satisfy, and a HEAD, are answered before anything is spent.
+    expect((await download({ range: "bytes=10-" })).status).toBe(416);
     expect(await used()).toBe(2);
-    // The limit raced away while storage answered: the stream is dropped, not served.
-    const cancel = vi.fn(async () => undefined);
-    vi.spyOn(storage, "download").mockResolvedValueOnce({
-      status: 200,
-      body: { cancel } as unknown as ReadableStream<Uint8Array>,
-      contentLength: 10,
-      contentRange: null,
-      lastModified: new Date(0),
-    });
-    await expect(service.download(share, "/", request)).rejects.toMatchObject({
+    // The limit raced away while storage answered: the file is closed, not served.
+    const close = vi.fn();
+    const opened = storage.open.bind(storage);
+    vi.spyOn(storage, "open").mockImplementationOnce(async (path) => ({
+      ...(await opened(path)),
+      close,
+    }));
+    await expect(download()).rejects.toMatchObject({
       kind: "forbidden",
       details: { reason: "limit" },
     });
-    expect(cancel).toHaveBeenCalled();
+    expect(close).toHaveBeenCalled();
     expect(await kindOf(open())).toBe("forbidden");
   });
 
@@ -208,13 +219,14 @@ describe("counting a public share's downloads", () => {
     expect(await kindOf(open())).toBe("forbidden");
     const previewed = await open(true);
     for (const range of ["bytes=0-", "bytes=2-5", "bytes=8-"]) {
-      const read = await service.download(previewed, "/movie.mp4", {
-        range,
-        ifRange: undefined,
-        signal: signal(),
-        counted: true,
-      });
-      expect(read.kind).toBe("stream");
+      const read = await service.download(
+        previewed,
+        "/movie.mp4",
+        new Request("http://share/", { headers: { range } }),
+        { counted: true, headers: {} },
+      );
+      expect(read.status).toBe(206);
+      await read.arrayBuffer();
     }
     expect(await used()).toBe(1);
     expect(await kindOf(service.preview(previewed, "/missing.mp4"))).toBe("not_found");

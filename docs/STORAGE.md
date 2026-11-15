@@ -56,7 +56,7 @@ a Trash.
 
 Every member is required, and the files folder and the memory storage implement all of them:
 `list`, `stat`, `statFile`, `probeDirectoryRead` (a live read proof), `contentStamp`,
-`download`, `upload`, `uploadPart`, `mkdir`, `move`, `copy`, `deleteFile`, `deleteDir`,
+`open`, `upload`, `uploadPart`, `mkdir`, `move`, `copy`, `deleteFile`, `deleteDir`,
 `deleteEmptyDir`, which removes a folder only while it is empty (the files folder's `rmdir`), so
 tidying up never takes what arrived meanwhile, `zip` and `trash`. `deleteFile` and `deleteDir`
 delete for good; `trash.put(path)` moves an item into Trash and says where (`{ leaf, kind }`), and
@@ -68,8 +68,12 @@ its path and name as storage spells them, kind, size, modification time, extensi
 path. `upload`, `mkdir`, `move` and `copy` return the entry they made, so callers never stat it
 again; `mkdir` also names the first folder it created (`created`, `null` when every folder was
 there). `move`, `copy` and `upload` refuse a taken target with `conflict` unless
-`overwrite: true`; callers never check a target first. `download` reports the body's length and
-the file's modification time, and honours `range` with a 206 and `Content-Range`, and `ifRange`.
+`overwrite: true`; callers never check a target first. `open` opens a file for reading
+(`OpenFile`): its size and modification time as it was opened, reads by position, and a stream
+of any slice of it that closes the file once it ends, fails or is cancelled; whoever does not
+hand the file to a stream closes it. Storage knows nothing of HTTP: every route that serves a
+file's bytes (`/fs/download`, a link's download, Office's GetFile) answers `Range` and
+`If-Range` from what it opened, in one place ([send-file.ts](../apps/api/src/fs/send-file.ts)).
 Storage keeps no content types: whatever serves a file types it from its name
 (`mimeFromExtension`).
 Every operation refuses a path through a symbolic link with `forbidden`; listings show the link
@@ -127,8 +131,12 @@ How the files folder implements it:
   the stored spelling as `path`, so links and lookups land on the name listings show.
 - **Times** come from bigint stats everywhere, so a listing, a stat and a download agree on a
   file's modification time to the millisecond.
-- **Downloads** send `Last-Modified` and no ETag; `ifRange` applies when it names the file's
-  current second.
+- **Reading.** `open` holds one descriptor, opened without following a link and without
+  blocking on a pipe, which it then refuses; every read is by position from it, a stream's a
+  megabyte at a time, and none goes past the size it had when opened. Archives are read where
+  they lie: peeking a zip reads its end and its central directory, and extracting one reads
+  its entries by position, never copying it first. Downloads send `Last-Modified` and no
+  ETag; `If-Range` applies when it names the file's current second.
 - **Stamps.** `contentStamp` reads a file's size, modification time, inode and change time from
   its open descriptor, none of its bytes. Office versions documents from it and requires it;
   the Mac's version checks use it to trust index rows.

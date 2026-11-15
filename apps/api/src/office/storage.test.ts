@@ -28,7 +28,7 @@ it("serves the owner's files to the editor", async () => {
   const storage = await h.factory(h.identity.id);
   expect((await storage.statFile("/a.docx")).size).toBe(5);
   await storage.upload("/a.docx", new TextEncoder().encode("saved"), { overwrite: true });
-  expect(await new Response((await storage.download("/a.docx")).body).text()).toBe("saved");
+  expect(await new Response((await storage.open("/a.docx")).stream()).text()).toBe("saved");
 });
 
 it("fails closed with a 401 on a missing identity or a disabled user", async () => {

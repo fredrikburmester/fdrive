@@ -1,3 +1,4 @@
+import { addAbortSignal } from "node:stream";
 import { createGunzip, createZstdDecompress } from "node:zlib";
 import type { ArchiveKind } from "@fdrive/core";
 import * as tar from "tar-stream";
@@ -41,14 +42,17 @@ function isRelevantTarEntry(type: tar.Headers["type"]): boolean {
  * `maxEntries` relevant entries have been collected or more than
  * `maxBytes` of the underlying (still-compressed) stream has been read;
  * a natural end of the tar before either limit reports `truncated: false`.
+ * `signal` stops it with an error.
  */
 export async function collectTarPeekEntries(
   body: ReadableStream<Uint8Array>,
   compression: TarCompression,
   maxBytes: number,
   maxEntries: number,
+  signal?: AbortSignal,
 ): Promise<TarPeekResult> {
   const nodeStream = nodeReadableFromWeb(body);
+  if (signal !== undefined) addAbortSignal(signal, nodeStream);
   const decompressor =
     compression === "gzip"
       ? createGunzip()
