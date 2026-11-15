@@ -1,9 +1,4 @@
-import {
-  createRecycleFolderTrash,
-  moveTrashLeafPath,
-  type StorageProvider,
-  withMoveToTrash,
-} from "@fdrive/core";
+import { moveTrashLeafPath } from "@fdrive/core";
 import { createMemoryStorage } from "@fdrive/core/testing";
 import type { Identity } from "@fdrive/db";
 import { createMemoryRepos } from "@fdrive/db/testing";
@@ -27,22 +22,18 @@ function identity(id: string, username: string): Identity {
   };
 }
 
-/** Alice's storage with Trash, and a way to delete an item `daysAgo`. */
+/** Alice's storage with Trash, and a way to move an item to Trash `daysAgo`. */
 function aliceStorage() {
   let at = NOW;
-  const base = createMemoryStorage({ "/old.txt": "old", "/new.txt": "new", "/Old/a.txt": "a" });
-  const moving = withMoveToTrash({ storage: base, trashPath: "/.trash", clock: () => at });
-  const storage: StorageProvider = {
-    ...moving,
-    trash: createRecycleFolderTrash({ storage: moving, trashPath: "/.trash" }),
-  };
+  const storage = createMemoryStorage(
+    { "/old.txt": "old", "/new.txt": "new", "/Old/a.txt": "a" },
+    { clock: () => at },
+  );
   return {
-    base,
     storage,
     async deleteDaysAgo(path: string, daysAgo: number, kind: "file" | "dir" = "file") {
       at = new Date(NOW.getTime() - daysAgo * DAY);
-      if (kind === "dir") await storage.deleteDir(path);
-      else await storage.deleteFile(path);
+      await storage.trash.put(path);
       at = NOW;
       return moveTrashLeafPath(
         "/.trash",
@@ -88,7 +79,7 @@ describe("Trash retention", () => {
 
     expect(await h.retention.sweep()).toEqual({ purged: 2, deferred: 0 });
 
-    const left = (await h.alice.storage.trash?.list())?.entries.map((entry) => entry.originalPath);
+    const left = (await h.alice.storage.trash.list())?.entries.map((entry) => entry.originalPath);
     expect(left).toEqual(["/new.txt"]);
     expect(h.activity.operations.map((operation) => operation.requested)).toEqual(
       expect.arrayContaining([
@@ -131,9 +122,7 @@ describe("Trash retention", () => {
   it("defers an item it cannot delete to the next pass", async () => {
     const h = harness();
     await h.alice.deleteDaysAgo("/old.txt", 40);
-    const trash = h.alice.storage.trash;
-    if (trash === undefined) throw new Error("expected a Trash");
-    vi.spyOn(trash, "purge").mockRejectedValueOnce(new Error("disk busy"));
+    vi.spyOn(h.alice.storage.trash, "purge").mockRejectedValueOnce(new Error("disk busy"));
 
     expect(await h.retention.sweep()).toEqual({ purged: 0, deferred: 1 });
     expect(h.record).toHaveBeenCalledWith(
@@ -164,10 +153,10 @@ describe("Trash retention", () => {
       await h.alice.deleteDaysAgo("/old.txt", 40);
       h.retention.start();
       await vi.advanceTimersByTimeAsync(60 * 60_000 - 1);
-      expect((await h.alice.storage.trash?.list())?.entries).toHaveLength(1);
+      expect((await h.alice.storage.trash.list())?.entries).toHaveLength(1);
       await vi.advanceTimersByTimeAsync(1);
       await vi.waitFor(async () =>
-        expect((await h.alice.storage.trash?.list())?.entries).toEqual([]),
+        expect((await h.alice.storage.trash.list())?.entries).toEqual([]),
       );
       await h.retention.stop();
       // Stopped: a later start does nothing, and neither does a pass.

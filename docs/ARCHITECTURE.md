@@ -62,8 +62,9 @@ refuses every change, and the grantee cannot rename, move or delete `Shared with
 shared folders themselves. A move between a user's files and a writable shared folder is one
 rename. Grants follow the owner's moves and deletes made through fdrive, and index scopes
 follow the grants ([scoping](SCOPING.md)). A grant follows its folder into the owner's Trash
-too, whether fdrive or the indexer reports the move (`isMoveIntoTrash`), so it never stays at a
-path a new folder can take; a purge deletes it. Grants and public links follow a move before
+too, since that is a move like any other, so it never stays at a path a new folder can take; a
+purge deletes it. Something in a writable shared folder that the person it is shared with
+deletes goes to the owner's Trash, since it is the owner's file. Grants and public links follow a move before
 any other path-keyed metadata (`withFollowers`), so a failure in tags or favorites never leaves
 them behind; a Mac write moves them with its receipt. Sharing refuses fdrive's own folders
 (`isReservedPath`, below), and the grantee's storage and index scopes refuse a grant in the

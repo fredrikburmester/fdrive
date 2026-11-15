@@ -1,13 +1,6 @@
 import { createHash } from "node:crypto";
-import {
-  extensionOf,
-  isStorageError,
-  parseMoveTrashLeaf,
-  TRASH_PATH,
-  trashLeafPath,
-} from "@fdrive/core";
+import { extensionOf, parseMoveTrashLeaf, TRASH_PATH, trashLeafPath } from "@fdrive/core";
 import { recordMetadataCommand } from "../activity/metadata.js";
-import { deleteWithActivityReceipt } from "../activity/trash.js";
 import { relocatePath } from "../fs/mutations.ts";
 import type { TokenPrincipal } from "../tokens/principal.ts";
 import {
@@ -159,27 +152,19 @@ export async function copyPath(
   };
 }
 
-function requireTrash(principal: TokenPrincipal) {
-  requireMode(principal, "full");
-  const trash = principal.storage.trash;
-  if (trash === undefined) throw new Error("this storage has no Trash; no file was deleted");
-  return trash;
-}
-
+/** Moves `rawPath` to Trash; the token's storage records it (`activityStorage`). */
 export async function trashPath(deps: McpToolDeps, principal: TokenPrincipal, rawPath: string) {
-  requireTrash(principal);
+  requireMode(principal, "full");
   const path = ordinaryPath(principal, rawPath);
   assertMutablePath(principal, path);
-  const stat = await principal.storage.stat(path);
-  const kind = stat.kind === "dir" ? "dir" : "file";
-  const { trashLeaf } = await deleteWithActivityReceipt(principal.storage, path, kind);
+  const moved = await principal.storage.trash.put(path);
   return {
     trashed: path,
     ...(await mutationEffects(deps, principal, {
       kind: "trash",
       path,
-      ...(trashLeaf === undefined ? {} : { trashLeaf }),
-      isDir: kind === "dir",
+      trashLeaf: moved.leaf,
+      isDir: moved.kind === "dir",
     })),
   };
 }
@@ -188,8 +173,8 @@ export async function listTrash(
   principal: TokenPrincipal,
   args: { offset?: number | undefined; limit?: number | undefined },
 ) {
-  const trash = requireTrash(principal);
-  const listing = await trash.list({ limit: 10_000 });
+  requireMode(principal, "full");
+  const listing = await principal.storage.trash.list({ limit: 10_000 });
   const entries = listing.entries
     .filter((entry) => canReadPath(principal, entry.originalPath))
     .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
@@ -209,38 +194,27 @@ export async function restorePath(
   principal: TokenPrincipal,
   args: { id: string; target?: string | undefined },
 ) {
-  const trash = requireTrash(principal);
+  requireMode(principal, "full");
   // The id is the leaf's path, which names where the item came from.
   const leaf = parseMoveTrashLeaf(TRASH_PATH, trashLeafPath(TRASH_PATH, args.id));
   if (leaf === null) throw new Error("not a Trash item id");
   const original = ordinaryPath(principal, leaf.originalPath);
   const target = ordinaryPath(principal, args.target ?? original);
   const publicUrl = await deps.publicUrl();
-  const result = await trash.restore(args.id, { target });
-  let moveMetadata = false;
-  let warnings: string[] = [];
-  if (original !== target) {
-    try {
-      await principal.storage.stat(original);
-    } catch (error) {
-      if (isStorageError(error) && error.kind === "not_found") moveMetadata = true;
-      else warnings = ["Item restored, but original-path metadata could not be checked."];
-    }
-  }
+  const result = await principal.storage.trash.restore(args.id, { target });
+  // A restore is a move out of Trash, where what is kept by path followed the item.
   const effects = await mutationEffects(deps, principal, {
     kind: "restore",
     path: original,
     target: result.path,
     eventPath: trashLeafPath(TRASH_PATH, args.id),
-    moveMetadata,
     isDir: result.kind === "dir",
   });
-  warnings = [...warnings, ...(effects.warnings ?? [])];
   return {
     restored: result.path,
     url:
       result.kind === "dir" ? folderUrl(publicUrl, result.path) : fileUrl(publicUrl, result.path),
-    ...(warnings.length > 0 ? { warnings } : {}),
+    ...effects,
   };
 }
 

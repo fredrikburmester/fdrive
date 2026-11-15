@@ -4,14 +4,17 @@ import { isStorageError, StorageError } from "../errors.ts";
 import { baseName, normalizePath, parentPath, relativeTo } from "../paths.ts";
 import type {
   EntryStat,
-  StorageProvider,
+  StorageWithoutTrash,
   TrashEntry,
+  TrashedItem,
   TrashListing,
   TrashProvider,
   TrashRestoreResult,
 } from "../ports/storage.ts";
+import { isReservedPath, TRASH_PATH } from "../reserved-paths.ts";
 import {
   isUnderPath,
+  moveTrashLeafPath,
   moveTrashRootPath,
   parseMoveTrashLeaf,
   trashLeafPath,
@@ -20,9 +23,39 @@ import {
 const DEFAULT_LIMIT = 10000;
 
 export interface CreateRecycleFolderTrashOptions {
-  readonly storage: StorageProvider;
-  readonly trashPath: string;
+  /** The storage whose files the Trash moves; its own folder is `TRASH_PATH`. */
+  readonly storage: StorageWithoutTrash;
+  /** Names each new leaf by the time it was made. */
+  readonly clock: () => Date;
   readonly limit?: number;
+}
+
+type Storage = StorageWithoutTrash;
+
+/** Nanosecond epoch leaf name from `at`, read back by the move-layout parser. */
+function leafNameFor(at: Date): string {
+  return (BigInt(at.getTime()) * BigInt(1_000_000)).toString();
+}
+
+/**
+ * Moves the file or folder at `path` in `storage` into its Trash at
+ * `TRASH_PATH`, at the leaf `moveTrashLeafPath` builds for `at`. The move
+ * refuses a taken leaf (`overwrite: false`), so an item never replaces an
+ * earlier one. The root and fdrive's own folders, Trash included, are
+ * refused: deleting inside Trash is a permanent delete.
+ */
+async function moveIntoTrash(storage: Storage, path: string, at: Date): Promise<TrashedItem> {
+  const normalized = normalizePath(path);
+  if (normalized === "/" || isReservedPath(normalized)) {
+    throw new StorageError("bad_request", `fdrive's own folders cannot go to Trash: ${path}`, {
+      details: { path },
+    });
+  }
+  const kind = (await storage.stat(normalized)).kind === "dir" ? "dir" : "file";
+  const leaf = moveTrashLeafPath(TRASH_PATH, normalized, kind, leafNameFor(at));
+  await storage.mkdir(parentPath(leaf), { parents: true });
+  await storage.move(normalized, leaf, { overwrite: false });
+  return { leaf, kind };
 }
 
 function checkAborted(signal: AbortSignal | undefined): void {
@@ -43,11 +76,7 @@ function compareEntries(a: TrashEntry, b: TrashEntry): number {
  * succeeded: the first folder that cannot go, for whatever reason (not
  * empty, already gone), ends the climb without failing anything.
  */
-async function removeEmptyFolders(
-  storage: StorageProvider,
-  trashRoot: string,
-  dir: string,
-): Promise<void> {
+async function removeEmptyFolders(storage: Storage, trashRoot: string, dir: string): Promise<void> {
   const layoutRoot = moveTrashRootPath(trashRoot);
   for (let at = dir; isUnderPath(layoutRoot, at); at = parentPath(at)) {
     try {
@@ -59,7 +88,7 @@ async function removeEmptyFolders(
 }
 
 async function walk(
-  storage: StorageProvider,
+  storage: Storage,
   trashRoot: string,
   options: { limit: number; prune: boolean; signal: AbortSignal | undefined },
 ): Promise<TrashListing> {
@@ -125,7 +154,7 @@ async function walk(
  * runs before restore mutates either the leaf or its destination.
  */
 async function statLeaf(
-  storage: StorageProvider,
+  storage: Storage,
   id: string,
   leafPath: string,
   expectedKind: "file" | "dir",
@@ -144,7 +173,7 @@ async function statLeaf(
  * replaces what is there now: it fails with `conflict`.
  */
 async function restoreLeaf(
-  storage: StorageProvider,
+  storage: Storage,
   trashRoot: string,
   id: string,
   target: string | undefined,
@@ -178,7 +207,7 @@ async function restoreLeaf(
 }
 
 /** Deletes a leaf for good, then the folders that leaves empty. A missing leaf is ignored. */
-async function purgeLeaf(storage: StorageProvider, trashRoot: string, id: string): Promise<void> {
+async function purgeLeaf(storage: Storage, trashRoot: string, id: string): Promise<void> {
   const leafPath = trashLeafPath(trashRoot, id);
   const parsed = parseMoveTrashLeaf(trashRoot, leafPath);
   if (parsed === null) {
@@ -201,16 +230,18 @@ async function purgeLeaf(storage: StorageProvider, trashRoot: string, id: string
 }
 
 /**
- * Builds a `TrashProvider` purely on top of a `StorageProvider`'s own
- * `list`, `stat`, `move`, `mkdir`, `deleteFile`, `deleteDir` and
- * `deleteEmptyDir`, reading the leaves `withMoveToTrash` writes (layout in
- * `./recycle-folder.ts`).
+ * Builds a storage's Trash at `TRASH_PATH` purely on top of its own `list`,
+ * `stat`, `move`, `mkdir`, `deleteFile`, `deleteDir` and `deleteEmptyDir`,
+ * in fdrive's layout (`./recycle-folder.ts`).
  */
 export function createRecycleFolderTrash(options: CreateRecycleFolderTrashOptions): TrashProvider {
-  const { storage, limit = DEFAULT_LIMIT } = options;
-  const trashRoot = normalizePath(options.trashPath);
+  const { storage, clock, limit = DEFAULT_LIMIT } = options;
+  const trashRoot = TRASH_PATH;
 
   return {
+    put(path) {
+      return moveIntoTrash(storage, path, clock());
+    },
     list(listOptions) {
       return walk(storage, trashRoot, {
         limit: listOptions?.limit ?? limit,

@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import type { ChatActionProposal } from "@fdrive/contracts";
-import { StorageError, type StorageProvider, type TrashProvider } from "@fdrive/core";
+import { StorageError } from "@fdrive/core";
 import { createMemoryStorage } from "@fdrive/core/testing";
 import type { IndexQueries } from "@fdrive/db";
 import { describe, expect, it, vi } from "vitest";
@@ -13,9 +13,7 @@ import { type ActionTool, createChatActionTools, MAX_WRITE_BYTES } from "./actio
 const IDENTITY = "223e4567-e89b-42d3-a456-426614174000";
 const CONVERSATION = "323e4567-e89b-42d3-a456-426614174000";
 
-function setup(
-  options: { files?: Record<string, string>; referenced?: string[]; trash?: boolean } = {},
-) {
+function setup(options: { files?: Record<string, string>; referenced?: string[] } = {}) {
   const base = createMemoryStorage(
     options.files ?? {
       "/Inbox/a.txt": "hello",
@@ -24,9 +22,7 @@ function setup(
       "/Docs/taken.txt": "x",
     },
   );
-  const storage: StorageProvider = options.trash
-    ? Object.assign(base, { trash: {} as TrashProvider })
-    : base;
+  const storage = base;
   const principal: Principal = {
     accountId: "a",
     identityId: IDENTITY,
@@ -318,7 +314,6 @@ describe("rename_items", () => {
 
   it("refuses the root, the Trash, paths as names, unreferenced items and proposals that change nothing", async () => {
     const { verify } = setup({
-      trash: true,
       referenced: ["/"],
       files: { "/Inbox/a.txt": "a", "/Inbox/A\u030Arsbesked.txt": "b" },
     });
@@ -362,7 +357,6 @@ describe("rename_items", () => {
 
   it("never lets an item take the name of one of fdrive's own folders, proposed or typed", async () => {
     const { verify, apply, storage } = setup({
-      trash: true,
       referenced: ["/"],
       files: { "/notes.txt": "a" },
     });
@@ -439,7 +433,6 @@ describe("rename_items", () => {
 describe("trash_items", () => {
   it("verifies referenced items with their kinds and trashes the ones kept", async () => {
     const { verify, apply, storage, events } = setup({
-      trash: true,
       referenced: ["/Inbox", "/Docs"],
     });
 
@@ -470,6 +463,10 @@ describe("trash_items", () => {
     });
     await expect(storage.stat("/Inbox/a.txt")).rejects.toMatchObject({ kind: "not_found" });
     await expect(storage.stat("/Docs")).resolves.toBeDefined();
+    // Into Trash, never deleted for good: nothing a chat applies is unrecoverable.
+    expect((await storage.trash.list()).entries.map((entry) => entry.originalPath)).toEqual([
+      "/Inbox/a.txt",
+    ]);
     expect(events.map((event) => event.type === "fs" && event.op)).toEqual(["delete"]);
     expect(await apply("trash_items", proposal, { paths: [] })).toMatchObject({
       outcome: "Nothing was trashed.",
@@ -477,14 +474,14 @@ describe("trash_items", () => {
   });
 
   it("refuses the root, the Trash and items that are not referenced", async () => {
-    const { verify } = setup({ trash: true, referenced: ["/"] });
+    const { verify } = setup({ referenced: ["/"] });
     await expect(
       verify("trash_items", { summary: "s", items: [{ path: "/", reason: "r" }] }),
     ).rejects.toThrow(/root/);
     await expect(
       verify("trash_items", { summary: "s", items: [{ path: "/.trash/x", reason: "r" }] }),
     ).rejects.toThrow(/Trash/);
-    const narrow = setup({ trash: true, referenced: ["/Docs"] });
+    const narrow = setup({ referenced: ["/Docs"] });
     await expect(
       narrow.verify("trash_items", {
         summary: "s",
@@ -632,7 +629,7 @@ describe("action tools: edge cases", () => {
   };
 
   it("refuses a card of another kind", async () => {
-    const { apply } = setup({ trash: true });
+    const { apply } = setup();
     await expect(apply("move_items", trashProposal)).rejects.toThrow("not a move proposal");
     await expect(apply("trash_items", moveProposal)).rejects.toThrow("not a trash proposal");
     await expect(apply("write_text_file", moveProposal)).rejects.toThrow("not a write proposal");
@@ -653,7 +650,7 @@ describe("action tools: edge cases", () => {
   });
 
   it("describes a single trashed item", () => {
-    const { tool } = setup({ trash: true });
+    const { tool } = setup();
     expect(
       tool("trash_items").activity({ summary: "", items: [{ path: "/Inbox/a.txt", reason: "" }] }),
     ).toBe("Proposed trashing a.txt");
@@ -662,7 +659,6 @@ describe("action tools: edge cases", () => {
   it("refuses writes to invalid, trashed, folder, oversized and binary targets", async () => {
     const big = "x".repeat(MAX_WRITE_BYTES + 1);
     const { verify } = setup({
-      trash: true,
       referenced: ["/Docs", "/Inbox"],
       files: { "/Docs/readme.md": "# Hi", "/Inbox/big.txt": big, "/Inbox/bytes.bin": "\0\x01\x02" },
     });
@@ -750,7 +746,7 @@ describe("history for approved chat actions", () => {
   });
 
   it("records a trash and a written file with the same provenance", async () => {
-    const { verify, apply, activity } = setup({ trash: true, referenced: ["/Inbox/a.txt"] });
+    const { verify, apply, activity } = setup({ referenced: ["/Inbox/a.txt"] });
 
     await apply(
       "trash_items",

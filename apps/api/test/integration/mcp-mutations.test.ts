@@ -1,4 +1,3 @@
-import { createRecycleFolderTrash, withMoveToTrash } from "@fdrive/core";
 import { createLocalStorage } from "@fdrive/local";
 import { startLocalStorage } from "@fdrive/testkit";
 import { type ServerType, serve } from "@hono/node-server";
@@ -120,16 +119,8 @@ it("runs full file management without indexed roots and enforces folder grants",
   revoked = false;
   indexAvailable = false;
   metadataFails = false;
-  // Trash by moving into the recycle folder, the way the files folder keeps it.
   const base = createLocalStorage({ home: storage.path("bob") });
-  principal = {
-    ...principal,
-    tokenAccess: { mode: "full", paths: ["/mcp"] },
-    storage: {
-      ...withMoveToTrash({ storage: base, trashPath: "/.trash", clock: () => new Date() }),
-      trash: createRecycleFolderTrash({ storage: base, trashPath: "/.trash" }),
-    },
-  };
+  principal = { ...principal, tokenAccess: { mode: "full", paths: ["/mcp"] }, storage: base };
   const call = async (name: string, args: Record<string, unknown>) => {
     const result = await client.callTool({ name, arguments: args });
     expect(result.isError, JSON.stringify(result.content)).not.toBe(true);

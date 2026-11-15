@@ -407,3 +407,83 @@ describe("createUserStorage with a storage limit", () => {
     expect(await readFile(alice("Projects", "kept.txt"), "utf8")).toBe("own");
   });
 });
+
+describe("createUserStorage: Trash", () => {
+  const AT = new Date("2026-11-15T12:00:00.000Z");
+  const STAMP = (BigInt(AT.getTime()) * 1_000_000n).toString();
+  const withClock = () => createUserStorage({ home: join(root, "bob"), shared, clock: () => AT });
+  const aliceStorage = () =>
+    createUserStorage({ home: alice(), shared: async () => [], clock: () => AT });
+
+  it("moves the user's own item into their Trash at /.trash", async () => {
+    const leaf = `/.trash/.fdrive-move-v1/file/p/own.txt/v/${STAMP}`;
+    const storage = withClock();
+    expect(await storage.trash.put("/own.txt")).toEqual({ leaf, kind: "file" });
+    expect(await readFile(join(root, "bob", leaf), "utf8")).toBe("own");
+    expect((await storage.trash.list()).entries.map((entry) => entry.originalPath)).toEqual([
+      "/own.txt",
+    ]);
+  });
+
+  it("moves an item in a writable shared folder into its owner's Trash, where only the owner finds it", async () => {
+    const leaf = `/.trash/.fdrive-move-v1/dir/p/Projects/p/plans/v/${STAMP}`;
+    const storage = withClock();
+    expect(await storage.trash.put(`/${SHARED_WITH_ME}/Projects/plans`)).toEqual({
+      leaf,
+      kind: "dir",
+    });
+    expect((await stat(alice(leaf))).isDirectory()).toBe(true);
+    expect(await kindOf(bob.stat(`/${SHARED_WITH_ME}/Projects/plans`))).toBe("not_found");
+    // The person it is shared with has nothing of it in their Trash; its owner has it.
+    expect((await storage.trash.list()).entries).toEqual([]);
+    const owner = aliceStorage();
+    const [entry] = (await owner.trash.list()).entries;
+    expect(entry?.originalPath).toBe("/Projects/plans");
+    // So the person it is shared with cannot purge it; its owner restores it.
+    await storage.trash.purge(entry?.id ?? "missing");
+    expect((await stat(alice(leaf))).isDirectory()).toBe(true);
+    await owner.trash.restore(entry?.id ?? "missing");
+    expect((await stat(alice("Projects", "plans"))).isDirectory()).toBe(true);
+  });
+
+  it("refuses what the person it is shared with may not change", async () => {
+    const storage = withClock();
+    for (const path of [
+      `/${SHARED_WITH_ME}`,
+      `/${SHARED_WITH_ME}/Projects`,
+      `/${SHARED_WITH_ME}/Photos/cat.jpg`,
+      `/${SHARED_WITH_ME}/Nowhere/x`,
+    ]) {
+      expect(await kindOf(storage.trash.put(path)), path).toBe("forbidden");
+    }
+    expect(await readFile(alice("Photos", "cat.jpg"), "utf8")).toBe("cat");
+  });
+
+  it("restores an item into a shared folder the user may change", async () => {
+    const storage = withClock();
+    await storage.trash.put("/own.txt");
+    const [entry] = (await storage.trash.list()).entries;
+    await storage.trash.restore(entry?.id ?? "missing", {
+      target: `/${SHARED_WITH_ME}/Projects/own.txt`,
+    });
+    expect(await readFile(alice("Projects", "own.txt"), "utf8")).toBe("own");
+  });
+});
+
+describe("createUserStorage: Trash by the time each item went", () => {
+  it("names leaves by the current time unless given a clock, for the user's own and shared items", async () => {
+    const before = Date.now();
+    const leafTime = (leaf: string) => Number(BigInt(leaf.split("/").at(-1) ?? "0") / 1_000_000n);
+    const own = await bob.trash.put("/own.txt");
+    const first = await bob.trash.put(`/${SHARED_WITH_ME}/Projects/brief.txt`);
+    const second = await bob.trash.put(`/${SHARED_WITH_ME}/Projects/plans`);
+    for (const moved of [own, first, second]) {
+      expect(leafTime(moved.leaf)).toBeGreaterThanOrEqual(before);
+      expect(leafTime(moved.leaf)).toBeLessThanOrEqual(Date.now());
+    }
+    expect(first.leaf).toMatch(
+      /^\/\.trash\/\.fdrive-move-v1\/file\/p\/Projects\/p\/brief\.txt\/v\//,
+    );
+    expect((await stat(alice(second.leaf))).isDirectory()).toBe(true);
+  });
+});

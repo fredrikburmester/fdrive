@@ -75,17 +75,13 @@ export function authHarness(
   })();
   const limiter = createLoginLimiter({ clock });
   const checkPassword = createPasswordCheck({ limiter, users: local.users });
-  const storageFactory = createIdentityStorageFactory({
-    identities: repos.identities,
-    folder,
-    clock,
-  });
+  const storageFactory = createIdentityStorageFactory({ identities: repos.identities, folder });
   const auth = createAuthModule({
     repos,
     clock,
     config,
     checkPassword,
-    principalFor: createPrincipalFactory({ folder, clock }),
+    principalFor: createPrincipalFactory({ folder }),
     installation:
       options.installation ?? (async () => ({ storageName: "Local folder", index: false })),
   });

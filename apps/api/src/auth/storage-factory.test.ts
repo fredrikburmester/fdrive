@@ -1,4 +1,4 @@
-import { moveTrashLeafPath, type StorageProvider } from "@fdrive/core";
+import type { StorageProvider } from "@fdrive/core";
 import { createMemoryRepos } from "@fdrive/db/testing";
 import type { FilesFolder } from "@fdrive/local";
 import { createMemoryStorage } from "@fdrive/testkit";
@@ -24,7 +24,6 @@ it("builds the login's own storage, once per call, for delayed reads and writes"
   const factory = createIdentityStorageFactory({
     identities: h.repos.identities,
     folder: h.folder,
-    clock: () => new Date(0),
   });
   const storage = await factory(h.alice.id);
   expect(h.folder.admit).toHaveBeenCalledExactlyOnceWith("alice");
@@ -38,7 +37,6 @@ it("asks a login that is gone to sign in again", async () => {
   const factory = createIdentityStorageFactory({
     identities: h.repos.identities,
     folder: h.folder,
-    clock: () => new Date(0),
   });
   await expect(factory("00000000-0000-4000-8000-000000000000")).rejects.toMatchObject({
     kind: "unauthorized",
@@ -46,40 +44,18 @@ it("asks a login that is gone to sign in again", async () => {
   expect(h.folder.storage).not.toHaveBeenCalled();
 });
 
-it("always moves deletes into the Trash at /.trash", async () => {
+it("hands out the files folder's storage as it is, whose deletes are for good", async () => {
   const memory = createMemoryStorage({ "/docs/a.txt": "x" });
   const h = await fixture(memory);
-  const at = new Date("2026-09-10T12:00:00Z");
   const factory = createIdentityStorageFactory({
     identities: h.repos.identities,
     folder: h.folder,
-    clock: () => at,
   });
   const storage = await factory(h.alice.id);
+  expect(storage).toBe(memory);
   await storage.deleteFile("/docs/a.txt");
-  const leaf = (BigInt(at.getTime()) * BigInt(1_000_000)).toString();
-  expect(memory.dump()).toEqual({
-    [moveTrashLeafPath("/.trash", "/docs/a.txt", "file", leaf)]: "x",
-  });
-  expect((await storage.trash?.list())?.entries).toMatchObject([{ originalPath: "/docs/a.txt" }]);
-  // Inside the Trash folder a delete is permanent: that is how purge works.
-  await storage.deleteFile(moveTrashLeafPath("/.trash", "/docs/a.txt", "file", leaf));
   expect(memory.dump()).toEqual({});
-});
-
-it("deletes for good, with no Trash view, when built without Trash", async () => {
-  const memory = createMemoryStorage({ "/.fdrive-desktop/staged.txt": "x" });
-  const h = await fixture(memory);
-  const factory = createIdentityStorageFactory({
-    identities: h.repos.identities,
-    folder: h.folder,
-    clock: () => new Date(0),
-    withoutTrash: true,
-  });
-  const storage = await factory(h.alice.id);
-  expect(storage.trash).toBeUndefined();
-  await storage.deleteFile("/.fdrive-desktop/staged.txt");
-  expect(memory.dump()).toEqual({});
+  expect((await storage.trash.list()).entries).toEqual([]);
 });
 
 it("asks the files folder to admit the login before building any storage", async () => {
@@ -92,7 +68,6 @@ it("asks the files folder to admit the login before building any storage", async
   const factory = createIdentityStorageFactory({
     identities: repos.identities,
     folder: local.folder,
-    clock: () => new Date(0),
   });
 
   // A user an administrator disabled after they signed in stops at once.
@@ -128,7 +103,6 @@ it("refuses a login whose name cannot be a home folder, and passes other failure
     createIdentityStorageFactory({
       identities: repos.identities,
       folder: admitted,
-      clock: () => new Date(0),
     })(odd.id),
   ).rejects.toMatchObject({ kind: "forbidden" });
 
@@ -141,7 +115,6 @@ it("refuses a login whose name cannot be a home folder, and passes other failure
         throw failure;
       },
     },
-    clock: () => new Date(0),
   });
   await expect(factory(odd.id)).rejects.toBe(failure);
 });
@@ -159,7 +132,6 @@ it("moves, copies, zips and deletes a folder without listing it first", async ()
   const factory = createIdentityStorageFactory({
     identities: h.repos.identities,
     folder: h.folder,
-    clock: () => new Date(0),
   });
   const storage = await factory(h.alice.id);
   await storage.copy("/docs", "/copy");
@@ -168,11 +140,8 @@ it("moves, copies, zips and deletes a folder without listing it first", async ()
   await storage.deleteDir("/moved");
   expect(zip).toHaveBeenCalledExactlyOnceWith(["/moved"]);
   expect(list).not.toHaveBeenCalled();
-  const binned = moveTrashLeafPath("/.trash", "/moved", "dir", "0");
   expect(memory.dump()).toEqual({
     "/docs/b.txt": "y",
     "/docs/.fdrive-backups/install/a.fdrive.age": "x",
-    [`${binned}/b.txt`]: "y",
-    [`${binned}/.fdrive-backups/install/a.fdrive.age`]: "x",
   });
 });

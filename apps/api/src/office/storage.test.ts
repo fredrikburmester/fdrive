@@ -23,7 +23,6 @@ async function fixture() {
     createIdentityStorageFactory({
       identities: repos.identities,
       folder: local.folder,
-      clock: () => new Date(),
     }),
   );
   return { repos, identity, factory };

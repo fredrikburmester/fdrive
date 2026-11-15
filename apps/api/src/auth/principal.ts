@@ -41,7 +41,6 @@ export type PrincipalFactory = (login: Login, extras?: PrincipalExtras) => Promi
 
 export interface CreatePrincipalFactoryDeps {
   readonly folder: Pick<StorageSource, "storage">;
-  readonly clock: () => Date;
 }
 
 /**
@@ -59,7 +58,7 @@ export function createPrincipalFactory(deps: CreatePrincipalFactoryDeps): Princi
       username: login.username,
       isAdmin: login.isAdmin,
       get storage() {
-        storage ??= buildUserStorage(deps.folder, deps.clock, login.username);
+        storage ??= buildUserStorage(deps.folder, login.username);
         return storage;
       },
       ...extras,

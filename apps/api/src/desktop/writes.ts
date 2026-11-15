@@ -83,10 +83,7 @@ interface Publication {
 }
 export interface DesktopWriteDeps extends Pick<DesktopDeps, "clock" | "indexedContent"> {
   repo: DesktopRepo;
-  /**
-   * Storage for an identity without Trash settings, which deletes what a
-   * write staged for real instead of moving it into its owner's Trash.
-   */
+  /** Storage for an identity, whose deletes take what a write staged for good. */
   storageForIdentity: (identityId: string) => Promise<StorageProvider>;
   /**
    * What grants access to a path (public links, folders shared with people)
@@ -102,11 +99,10 @@ export interface DesktopWriteDeps extends Pick<DesktopDeps, "clock" | "indexedCo
   /**
    * The rest of path-keyed metadata, through the service web writes use,
    * without what grants access (above) and without `withDesktopMetadata`: a
-   * commit keeps the Mac's item handles itself, and that wrapper's
-   * `onTrashed` would retire the handle of an item the Mac puts in its
-   * Trash. Absent in fixtures that do not exercise metadata.
+   * commit keeps the Mac's item handles itself. Absent in fixtures that do
+   * not exercise metadata.
    */
-  metadata?: Pick<MetadataService, "onMoved" | "onTrashed">;
+  metadata?: Pick<MetadataService, "onMoved">;
   /** Live updates for the web, as web writes publish them. Absent in fixtures. */
   bus?: EventBus;
   /** Hears metadata that could not follow a published write, and bookkeeping left behind. */
@@ -462,24 +458,13 @@ export function createDesktopWrites(deps: DesktopWriteDeps) {
       ...(source?.originalPath && !trashing ? { restored: true } : {}),
     };
   }
-  async function missing(storage: StorageProvider, path: string) {
-    try {
-      await storage.stat(path);
-      return false;
-    } catch (error) {
-      if (isStorageError(error) && error.kind === "not_found") return true;
-      throw error;
-    }
-  }
   /**
    * Brings the rest of path-keyed metadata along once a write is published
    * and its receipt (with what grants access) kept, and tells the web, the
    * way web writes do right after their storage call (`fs/routes.ts`): tags,
    * favorites, folder views, recents, AI chat references and Office files
-   * follow a move. A move into the Mac's Trash is a trash: recents go, and
-   * the rest stays at the original path for a restore, which brings it back
-   * as a web restore does (`trash/routes.ts`), only while nothing has taken
-   * that path.
+   * follow a move, into the Mac's Trash and back out too, as they follow an
+   * item into fdrive's Trash, so nothing new at the old path inherits them.
    *
    * None of this grants access, so a failure is logged rather than failing
    * the commit, whose file is already published. The indexer reports the
@@ -505,12 +490,7 @@ export function createDesktopWrites(deps: DesktopWriteDeps) {
       if (deps.bus) publishFsEvent({ bus: deps.bus, clock: deps.clock }, principal, op, paths, to);
     };
     try {
-      if (source && trashing) await metadata?.onTrashed(identityId, source.path, directory, target);
-      else if (source?.originalPath) {
-        const original = source.originalPath;
-        if (original !== target && (await missing(principal.storage, original)))
-          await metadata?.onMoved(identityId, original, target, directory);
-      } else if (source && source.path !== target)
+      if (source && source.path !== target)
         await metadata?.onMoved(identityId, source.path, target, directory);
     } catch (error) {
       deps.logger?.warn(
@@ -676,14 +656,14 @@ export function createDesktopWrites(deps: DesktopWriteDeps) {
     return operation(principal, op.id);
   }
   /**
-   * Takes the old name of a save that also renamed its file away, to fdrive's
-   * Trash like any delete, but only while it is still the file the save was
-   * based on. A file someone wrote there since stays where it is.
+   * Takes the old name of a save that also renamed its file away to fdrive's
+   * Trash, but only while it is still the file the save was based on. A file
+   * someone wrote there since stays where it is.
    */
   async function retire(principal: Principal, path: string, witness: ContentStamp, id: string) {
     try {
       await unchanged(principal.storage, path, witness);
-      await principal.storage.deleteFile(path);
+      await principal.storage.trash.put(path);
     } catch (error) {
       deps.logger?.warn(
         { err: error, identityId: principal.identityId, operationId: id },

@@ -157,6 +157,12 @@ function buildApp(opts: { isAdmin?: boolean; deps?: Partial<SystemRoutesDeps> })
       deleteEmptyDir: notImplemented,
       setModifiedAt: notImplemented,
       zip: notImplemented,
+      trash: {
+        put: notImplemented,
+        list: notImplemented,
+        restore: notImplemented,
+        purge: notImplemented,
+      },
     },
     isAdmin: opts.isAdmin ?? true,
   };

@@ -278,8 +278,15 @@
     {
       "idx": 39,
       "version": "7",
-      "when": 1794734347741,
-      "tag": "0039_local_user_storage_limit",
+      "when": 1794735935084,
+      "tag": "0039_trash_leaf_required",
+      "breakpoints": true
+    },
+    {
+      "idx": 40,
+      "version": "7",
+      "when": 1794738525431,
+      "tag": "0040_local_user_storage_limit",
       "breakpoints": true
     }
   ]
