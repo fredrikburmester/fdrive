@@ -48,9 +48,9 @@ function sqlRepos(client: Client): LocalUserRepos {
 
 /**
  * Creates the local folder's users, their passwords hashed exactly as the
- * API checks them at sign-in, and the folders they share with each other:
- * what setup and System > Users would have done. Needs the API to have
- * migrated the database first.
+ * API checks them at sign-in, and the folders they share with each other,
+ * the first one an administrator: what setup and System > Users would have
+ * done. Needs the API to have migrated the database first.
  */
 export async function createE2eLocalUsers(
   databaseUrl: string,
@@ -60,6 +60,16 @@ export async function createE2eLocalUsers(
   await client.connect();
   try {
     await insertLocalUsers(sqlRepos(client), seed, createScryptSharePasswords());
+    // The first user holds an administrator account, as setup makes its owner, so
+    // fdrive keeps one whatever the specs do to the others.
+    const [owner] = seed.users;
+    if (owner !== undefined) {
+      await client.query(
+        `update app.accounts set is_admin = true
+         where id = (select account_id from app.identities where external_username = $1)`,
+        [owner.username],
+      );
+    }
   } finally {
     await client.end();
   }
