@@ -68,11 +68,11 @@ it("recovers durable metadata, exact bigint history, users, ZIPs and bytes into 
   );
   await source.pool.query("insert into app.accounts(id) values($1)", [account]);
   await source.pool.query(
-    "insert into app.identities(id,account_id,provider_id,external_username) values($1,$2,$3,'alice')",
+    "insert into app.identities(id,account_id,provider_id,external_username) values($1,$2,$3,'owner')",
     [user, account, provider],
   );
   await source.pool.query(
-    "insert into app.local_users(username,password_hash) values('alice','scrypt$fixture')",
+    "insert into app.local_users(username,password_hash) values('owner','scrypt$fixture')",
   );
   await source.pool.query("insert into app.settings(key,value) values('setup.owner.v1',$1)", [
     JSON.stringify({ state: "complete", accountId: account }),
@@ -143,7 +143,7 @@ it("recovers durable metadata, exact bigint history, users, ZIPs and bytes into 
   );
   expect(
     (await target.pool.query("select username,password_hash from app.local_users")).rows,
-  ).toEqual([{ username: "alice", password_hash: "scrypt$fixture" }]);
+  ).toEqual([{ username: "owner", password_hash: "scrypt$fixture" }]);
   const state = (
     await target.pool.query("select value from app.settings where key='backup.restore.v1'")
   ).rows[0].value;
