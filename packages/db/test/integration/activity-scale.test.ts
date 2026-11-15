@@ -34,7 +34,7 @@ it("keeps million-event personal feeds, journeys and historical-name searches in
     const db = connection.db;
     for (const identity of identities)
       await db.execute(
-        sql`insert into app.activity_storage_identities (identity_id, provider_id, provider_type, label) values (${identity.id}, ${provider.id}, 'local', 'Scale')`,
+        sql`insert into app.activity_storage_identities (identity_id, label) values (${identity.id}, ${identity.externalUsername})`,
       );
     await db.execute(sql`insert into app.activity_files (id,identity_id,kind,virtual_path)
       select md5('scale-file-' || n)::uuid, case when n % 2 = 0 then ${identities[0]?.id}::uuid else ${identities[1]?.id}::uuid end, 'file', '/current/' || n || '.txt' from generate_series(0,9999) n`);

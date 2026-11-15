@@ -169,7 +169,6 @@ export async function appendActivityOutcome(
       previousRevisionId: operation.revisionId ?? registry.source?.revisionId ?? null,
       size: result.after?.size ?? null,
       sha256: result.after?.sha256 ?? null,
-      providerVersion: result.after?.version ?? null,
     });
   }
   if (operation.action === "file.copy" && registry?.source && registry.file) {
