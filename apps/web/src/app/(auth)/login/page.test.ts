@@ -7,7 +7,6 @@ describe("shouldRedirectToSetup", () => {
     const client = {
       about: vi.fn().mockResolvedValue({
         version: "1.0.0",
-        providers: [],
         setupRequired: true,
       }),
     } as unknown as ApiClient;
@@ -15,11 +14,10 @@ describe("shouldRedirectToSetup", () => {
     expect(await shouldRedirectToSetup(async () => client)).toBe(true);
   });
 
-  it("is false once a provider is configured", async () => {
+  it("is false once setup is done", async () => {
     const client = {
       about: vi.fn().mockResolvedValue({
         version: "1.0.0",
-        providers: [{ type: "local", label: null }],
         setupRequired: false,
       }),
     } as unknown as ApiClient;

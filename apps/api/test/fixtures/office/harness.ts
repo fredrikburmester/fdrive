@@ -169,7 +169,7 @@ export async function officeHarness(
     startedAt: clock(),
     principalResolver: async (c) =>
       users.find((u) => u.sessionId === getCookie(c, COOKIE_NAME))?.principal ?? alice.principal,
-    connectionStatus: async () => ({ required: false, providers: [] }),
+    setupRequired: async () => false,
     registerRoutes: (groups) => registerOfficeRoutes(groups, { service }),
   });
   registerWopiRoutes(app, { service });

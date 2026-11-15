@@ -46,7 +46,7 @@ vi.mock("@/lib/api/auth-queries", () => ({
   }),
 }));
 vi.mock("@/lib/api/system-queries", () => ({
-  useAdminProviders: () => ({ data: { providers: [{ id: "provider", label: "Fileserver" }] } }),
+  useSystemStorage: () => ({ data: { id: "provider", name: "Fileserver" } }),
 }));
 vi.mock("./system-page", () => ({
   SystemPage: ({

@@ -5,7 +5,7 @@ import { dirname, join } from "node:path";
 import { joinPath, type Scope, type StorageProvider } from "@fdrive/core";
 import { createDb, createIndexQueries, createRepos, migrate, schema } from "@fdrive/db";
 import {
-  createLocalModule,
+  createFilesFolder,
   type LocalUsers,
   SHARED_WITH_ME,
   type SharedGrant,
@@ -18,7 +18,6 @@ import type { Principal } from "../../src/auth/principal.ts";
 import { createIdentityStorageFactory } from "../../src/auth/storage-factory.ts";
 import { createDesktopFiles } from "../../src/desktop/files.ts";
 import { createIndexedContentLookup } from "../../src/desktop/indexed-content.ts";
-import { memoryProviderService } from "../../src/providers/test-fixtures/index.ts";
 import { createScopeResolver } from "../../src/scoping/resolver.ts";
 
 const sha = (bytes: string) => createHash("sha256").update(bytes).digest("hex");
@@ -71,10 +70,8 @@ describe("desktop version checks answered from the index", () => {
       status: async () => "active",
       shared: async (username) => grants[username] ?? [],
     };
-    const module = createLocalModule({ root, users, indexRoot: "files" });
-    const providers = memoryProviderService(repos, { modules: { local: module } });
+    const folder = createFilesFolder({ root, users, indexRoot: "files" });
     const provider = await repos.providers.ensure({ type: "local", baseUrl: "local" });
-    await repos.providers.update(provider.id, { enabled: true, managedByEnv: true });
     const account = await repos.accounts.create({ displayName: "alice" });
     const alice = await repos.identities.create({
       accountId: account.id,
@@ -82,7 +79,8 @@ describe("desktop version checks answered from the index", () => {
       externalUsername: "alice",
     });
     const resolver = createScopeResolver({
-      providers,
+      storageId: provider.id,
+      rootName: "files",
       indexRootNames: ["files"],
       extraScopes: async (identity, home) => {
         const shared = await users.shared(identity.externalUsername);
@@ -97,8 +95,8 @@ describe("desktop version checks answered from the index", () => {
       },
     });
     const storageFactory = createIdentityStorageFactory({
-      providers,
-      fetch: globalThis.fetch,
+      identities: repos.identities,
+      folder,
       clock: () => new Date(),
     });
     const storage: StorageProvider = { ...(await storageFactory(alice.id)) };

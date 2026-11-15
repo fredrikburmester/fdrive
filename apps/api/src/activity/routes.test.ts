@@ -164,7 +164,7 @@ async function fixture() {
     version: "test",
     startedAt: time,
     clock: () => time,
-    connectionStatus: async () => ({ required: false, providers: [] }),
+    setupRequired: async () => false,
     principalResolver: async () => principal,
     registerRoutes(groups) {
       registerPersonalActivityRoutes(groups, {

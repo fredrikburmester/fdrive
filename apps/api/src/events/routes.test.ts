@@ -64,7 +64,7 @@ function buildApp(pingIntervalMs?: number) {
     startedAt: new Date("2024-01-01T00:00:00.000Z"),
     clock,
     principalResolver: async () => PRINCIPAL,
-    connectionStatus: async () => ({ required: false, providers: [] }),
+    setupRequired: async () => false,
     registerRoutes: (groups) => {
       registerEventRoutes(groups, {
         bus,

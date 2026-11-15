@@ -19,10 +19,9 @@ const ME: MeResponse = {
     id: "identity-1",
     username: "alice",
     providerId: "123e4567-e89b-42d3-a456-426614174000",
-    providerType: "local",
-    providerLabel: "x",
   },
   isAdmin: true,
+  storageName: "x",
   trash: false,
   index: false,
 };
@@ -55,7 +54,7 @@ function buildApp(
     } as never,
     version: "1.0.0",
     startedAt: new Date(0),
-    connectionStatus: async () => ({ required: true, providers: [] }),
+    setupRequired: async () => true,
     registerRoutes: (groups) => {
       registerSetupRoutes(groups, { service, tokenGuard, limiter, config });
     },

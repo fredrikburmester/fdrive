@@ -198,10 +198,7 @@ async function startHarness(mode: "read" | "organize"): Promise<Harness> {
     } as never,
     version: "1.0.0",
     startedAt: new Date(0),
-    connectionStatus: async () => ({
-      required: false,
-      providers: [{ type: "local", host: "local" }],
-    }),
+    setupRequired: async () => false,
   });
   registerMcpRoutes(app, {
     resolveToken,

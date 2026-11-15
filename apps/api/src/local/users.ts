@@ -10,7 +10,7 @@ export type LocalUserCheck =
   | { readonly result: "ok"; readonly username: string }
   | { readonly result: "invalid" | "disabled" };
 
-/** The local module's view of the users, plus the password check fdrive itself makes. */
+/** The files folder's view of the users, plus the password check fdrive itself makes. */
 export interface LocalUserStore extends LocalUsers {
   verify(username: string, password: string): Promise<LocalUserCheck>;
 }
@@ -22,7 +22,7 @@ export interface LocalUserStoreDeps {
 }
 
 /**
- * The local module's view of `app.local_users` and `app.local_grants`: is
+ * The files folder's view of `app.local_users` and `app.local_grants`: is
  * this user still active, what do others share with them.
  */
 export function createLocalUsers(deps: Pick<LocalUserStoreDeps, "repo" | "grants">): LocalUsers {

@@ -1,58 +1,48 @@
-# Storage port
+# Storage
 
-The files folder ([`packages/local`](../packages/local/src/)) is fdrive's only storage. The API
-reaches it through a small port in `packages/core/src/ports/`: `ProviderModule` configures
-and builds storage, and `StorageProvider` does the file operations. fdrive checks passwords
-itself ([authentication](AUTH.md)). The port keeps
-routes, the web app, the schema and the indexer off filesystem details and lets tests run on an
-in-memory storage. It is an internal boundary, not a plugin system.
+The files folder ([`packages/local`](../packages/local/src/)) is fdrive's only storage:
+`FDRIVE_STORAGE_ROOT`, one home per user at `<root>/<username>`. The API builds it once at
+startup (`createFilesFolder`) and reaches files through the `StorageProvider` port in
+`packages/core/src/ports/storage.ts`, which keeps routes, the web app and the indexer off
+filesystem details and lets tests run on an in-memory storage. fdrive checks passwords itself
+([authentication](AUTH.md)).
 
 | Contract | Source |
 | --- | --- |
-| Module, fields, capabilities, instance and session | [provider port](../packages/core/src/ports/provider.ts) |
 | File operations, streams and optional members | [storage port](../packages/core/src/ports/storage.ts) |
-| The local module and its storage | [module](../packages/local/src/module.ts), [home storage](../packages/local/src/storage-provider.ts), [shared folders](../packages/local/src/shared.ts) |
-| Registry | [registry](../apps/api/src/providers/registry.ts), [deployment modules](../apps/api/src/local/modules.ts) |
-| Capabilities, seeding, admin view | [provider service](../apps/api/src/providers/service.ts) |
+| The files folder and its storage | [files folder](../packages/local/src/files-folder.ts), [home storage](../packages/local/src/storage-provider.ts), [shared folders](../packages/local/src/shared.ts) |
+| The deployment's folder, its row and index root | [files folder](../apps/api/src/local/files-folder.ts) |
 | Per-request storage and Trash | [storage factory](../apps/api/src/auth/storage-factory.ts) |
+| Name and health | [storage service](../apps/api/src/system/storage.ts) |
 
 ## Wiring
 
-- `ProviderType` in [contracts](../packages/contracts/src/providers.ts) is `"local"`. The
-  registry holds only the local module. `FDRIVE_STORAGE_ROOT` is required.
-- The storage is one row in `app.providers`. Startup creates and pins it (`baseUrl` `local`),
-  enables it, and unpins and disables any other pinned row. Any other row is left from storage
-  fdrive no longer has: disabled, and kept because logins reference it. With no module, those
-  logins do not appear.
-- `GET /api/v1/admin/providers` lists the storage with a reachability probe.
-  `PATCH /api/v1/admin/providers/:id` changes only its display label (trimmed, 1 to 120
-  characters), shown under each username and in Finder; System > General edits it.
-- An identity is a login on that row; an account links identities. Per request the API
-  resolves the identity's row and module, runs `admit`, calls `createStorage`, hides the backup
-  namespace (`withoutBackupPaths`) and adds the Trash wrappers when Trash is on.
-
-## ProviderModule
-
-| Member | Local folder |
-| --- | --- |
-| `type`, `label` | `"local"`, "Local folder" until the row is renamed |
-| `configFields`, `credentialFields` | None; `username` and `password`, as `GET /api/v1/providers` lists them. The login form does not read them |
-| `capabilities` | All eight flags true; nothing reads them |
-| `trash` | `"move"`: fdrive moves deletes into the Trash folder (`"none"` would mean no Trash) |
-| `shares` | `"owned"`: fdrive keeps links in `app.shares` and serves them through this storage ([owned.ts](../apps/api/src/shares/owned.ts)) |
-| `deploymentManaged` | True: the row comes from `FDRIVE_STORAGE_ROOT`; the API cannot create, re-address or remove it, so no administrator can point it at another folder, such as the API's own secrets |
-| `indexRootName` | The index root the folder is read under (`localIndexRoot`) |
-| `probe` | The root is a folder the API can read, write and enter |
-| `admit` | Refuses a disabled or removed user on every request, not only at sign-in |
-| `createStorage` | The home at `<root>/<username>`, plus `/Shared with me` from `app.local_grants` |
+- `FDRIVE_STORAGE_ROOT` is required. `createFilesFolder` returns three functions:
+  `storage(username)`, the user's home plus `/Shared with me` from `app.local_grants`;
+  `admit(username)`, which refuses a disabled or removed user on every request, not only at
+  sign-in; and `health()`, whether the folder is this installation's (its marker, below) and
+  one the API can read, write and enter.
+- The files folder is one row in `app.providers` (`type` and `base_url` `local`). Startup
+  ensures it and keeps its id (`ensureStorageRow`); every login names it. The id never
+  changes: the Mac app compares it as each location's `providerId`, and Trash settings and
+  Office documents name it. Rows left from storage fdrive no longer has stay until the schema
+  is collapsed; nothing reads them.
+- Per request the storage factory finds the identity, runs `admit`, builds `storage`, hides the
+  backup namespace (`withoutBackupPaths`) and adds the Trash wrappers when Trash is on.
+- The storage's name is the installation setting `storage.name` ("Local folder" until an
+  administrator renames it), trimmed, 1 to 120 characters. It shows under each username in the
+  sidebar and as the Mac location's `displayName`. `GET /api/v1/system/storage` returns the
+  row's id, the name and the folder's health; `PATCH` renames it. System > General shows both.
+- Share links are fdrive's own: it keeps them in `app.shares` and serves them through the
+  owner's storage ([owned.ts](../apps/api/src/shares/owned.ts)).
 
 ## Installation flags
 
-`/auth/me` carries two flags the web reads, the same for every login: `trash`, Trash is on in
-its settings for the files folder's row, and `index`, the files folder is read under a root in
-`FDRIVE_INDEX_ROOTS` ([scoping](SCOPING.md)). Everything else is always on: the files folder
-zips, keeps modification times, moves in one step, shares links and folders, and opens in
-Office.
+`/auth/me` carries the storage name and two flags the web reads, the same for every login:
+`trash`, Trash is on in its settings for the files folder's row, and `index`, the files folder
+is read under a root in `FDRIVE_INDEX_ROOTS` ([scoping](SCOPING.md)). Everything else is always
+on: the files folder zips, keeps modification times, moves in one step, shares links and
+folders, and opens in Office.
 
 ## StorageProvider
 
@@ -114,14 +104,16 @@ How the files folder implements it:
   read and written through `/api/v1/system/trash?providerId=` ([Trash](TRASH.md)).
 - **Ownership.** The API writes as `FDRIVE_RUN_AS_UID`, the uid the indexer and OCR use.
 - **The folder's marker.** With a `guard` ([files-marker.ts](../packages/local/src/files-marker.ts)),
-  the module serves the folder only while its `.fdrive-files` names this installation
+  the files folder serves files only while its `.fdrive-files` names this installation
   (`app.backup_configuration.installation_id`). The API and the backup worker build one
   (`createDeploymentFilesFolderGuard`); the API checks it at startup. A missing marker is
   written into a folder with entries, or any folder while the database has no live
-  `idx.files` rows and no local users, and an empty marker is filled in. Otherwise
-  `createStorage` and `admit` throw `upstream_unavailable` with the reason, `probe` reports
-  it, and `core` health fails; signing in only reads the database, so administrators can still
-  sign in. The verdict is reused for ten seconds, and a database outage keeps a verified folder.
+  `idx.files` rows and no local users, and an empty marker is filled in. Otherwise every
+  storage operation throws `upstream_unavailable` with the reason, `health` reports it on
+  System > General, and `core` health fails. Sessions keep working: signing in, `/auth/me`
+  and the System pages only read the database. The verdict is reused for ten seconds, and a
+  database outage keeps a verified folder. The only other `upstream_unavailable` storage
+  throws is EMFILE/ENFILE, when the process runs out of file descriptors.
 - **Changes for the indexer.** Storage reports each change once it succeeds (`onChange`, a
   `DiskChange` by absolute path; [changes.ts](../packages/local/src/changes.ts)): an upload,
   copy, delete, new modification time or new folder is `changed` (for `mkdir` with `parents`,
@@ -132,7 +124,7 @@ How the files folder implements it:
   renamed in place carries its stamp exactly as the rename left it and its change time just
   before (`MovedStamp`); a folder, a file copied to another filesystem, or one that changed
   between the two stats, carries none.
-  Hashing runs only while something listens. The module turns these into paths under the index root (`onIndexChange`), and the
+  Hashing runs only while something listens. The files folder turns these into paths under the index root (`onIndexChange`), and the
   API records them in the change journal, `idx.changes`, with source `api`
   (`createChangeQueue`, `createChangeWriter`) only when a configured root's `storagePath` is
   the files folder itself (`journalRoot`). A failed write is logged, never failing the
@@ -144,6 +136,6 @@ How the files folder implements it:
 `describeStorageProvider(name, factory, options)` from `@fdrive/testkit` is the shared
 conformance suite; [the local suite](../packages/local/src/conformance.test.ts) runs it over a
 temporary directory. `createMemoryStorage` from `@fdrive/core/testing` is the application fake;
-do not add another. API tests reuse the
-[provider fixtures](../apps/api/src/providers/test-fixtures/index.ts) and inject modules through
-`ProviderServiceDeps.modules`.
+do not add another. API tests build the files folder over a temporary directory
+(`filesFolderFixture` in the [local fixtures](../apps/api/src/local/test-fixtures/index.ts)) or
+hand the storage factory a stand-in (`StorageSource`).

@@ -1,19 +1,18 @@
 import { isSafeSegment, type Scope } from "@fdrive/core";
 import type { Identity } from "@fdrive/db";
-import type { ProviderService } from "../providers/service.ts";
 import type { ConfiguredMappingsResult, VerifiedIndexScopesResult } from "./types.ts";
 
 /**
  * Where each identity's files sit under the index roots. A login's home is
- * always `<root>/<username>` on the index root its provider names
- * (`ProviderModule.indexRootName`), shown at "/" in its virtual filesystem;
- * nothing is configured per identity. See `docs/SCOPING.md`.
+ * always `<root>/<username>` on the index root the files folder is read
+ * under (`localIndexRoot`), shown at "/" in its virtual filesystem; nothing
+ * is configured per identity. See `docs/SCOPING.md`.
  */
 export interface ScopeResolver {
   /**
    * The identity's trusted scopes, whether or not their root is indexed:
-   * Office and index events use these. Reads the provider row only, never
-   * storage or the indexer.
+   * Office and index events use these. Reads neither storage nor the
+   * indexer.
    */
   configuredMappings(identity: Identity): Promise<ConfiguredMappingsResult>;
   /**
@@ -37,7 +36,10 @@ export interface ScopeResolver {
 export type ExtraScopes = (identity: Identity, home: Scope) => Promise<readonly Scope[]>;
 
 export interface CreateScopeResolverDeps {
-  readonly providers: Pick<ProviderService, "get">;
+  /** The files folder's provider row, which Office keys its documents by. */
+  readonly storageId: string;
+  /** The index root the files folder is read under (`localIndexRoot`). */
+  readonly rootName: string;
   /** The names in `FDRIVE_INDEX_ROOTS`; empty when nothing is indexed. */
   readonly indexRootNames: Iterable<string>;
   /** Defaults to none. */
@@ -49,19 +51,14 @@ export function createScopeResolver(deps: CreateScopeResolverDeps): ScopeResolve
   const indexed = new Set(deps.indexRootNames);
 
   async function configuredMappings(identity: Identity): Promise<ConfiguredMappingsResult> {
-    const resolved = await deps.providers.get(identity.providerId);
-    if (resolved === null || !resolved.provider.enabled) {
-      return { available: false, reason: "provider_mismatch" };
-    }
-    const rootName = resolved.module.indexRootName?.(resolved.instance) ?? null;
-    if (rootName === null) return { available: false, reason: "no_roots" };
+    const { rootName } = deps;
     // The username names the home folder, so it must be exactly one segment.
     if (!isSafeSegment(identity.externalUsername)) {
       return { available: false, reason: "invalid_configuration" };
     }
     const home: Scope = { rootName, fsPrefix: `/${identity.externalUsername}`, virtualPrefix: "/" };
     const extra = deps.extraScopes === undefined ? [] : await deps.extraScopes(identity, home);
-    return { available: true, providerId: resolved.provider.id, scopes: [home, ...extra] };
+    return { available: true, providerId: deps.storageId, scopes: [home, ...extra] };
   }
 
   async function verifiedIndexScopes(identity: Identity): Promise<VerifiedIndexScopesResult> {

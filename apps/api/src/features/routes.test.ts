@@ -49,10 +49,7 @@ function fixture({
     version: "1",
     startedAt: new Date(),
     principalResolver: async () => principal,
-    connectionStatus: async () => ({
-      required: setupRequired,
-      providers: setupRequired ? [] : [{ type: "local", host: "Local folder" }],
-    }),
+    setupRequired: async () => setupRequired,
     registerRoutes(groups) {
       registerFeatureAdmission(groups.authed, service);
       registerFeatureRoutes(groups, { service, workerToken });

@@ -88,9 +88,11 @@ from private-network peers only (where an edge proxy lives: the host, the LAN, o
 container); a LAN client forging `https` only breaks its own session.
 
 The address everyone opens fdrive at is chosen in onboarding (afterwards in
-**System > Features > Server address**), prefilled from the browser's own address. The
+**System > General > Server address**), prefilled from the browser's own address. The
 bundled editor is told fdrive lives there and links from connected assistants point there,
 so onboard through the address others will use: behind an HTTPS edge, the `https://` one.
+Until it is saved, Office cannot be enabled and assistants get links that are paths on
+fdrive's own origin (`/view/...`).
 An `http://` address saved there hands the editor `http://` document URLs that an HTTPS
 page blocks as mixed content ("Download failed" with clean server logs).
 

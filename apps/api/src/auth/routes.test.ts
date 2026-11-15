@@ -6,9 +6,13 @@ import type { Logger } from "pino";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createApp } from "../app";
 import { loadConfig } from "../config";
-import { localModuleFixture, seedLocalUsers } from "../local/test-fixtures/index.ts";
-import { memoryProviderService } from "../providers/test-fixtures/index.ts";
-import { createAuthModule, createLoginLimiter, createPasswordCheck } from "./index";
+import { filesFolderFixture, seedLocalUsers } from "../local/test-fixtures/index.ts";
+import {
+  createAuthModule,
+  createLoginLimiter,
+  createPasswordCheck,
+  type Installation,
+} from "./index";
 import { registerAuthRoutes } from "./routes";
 
 function notImplemented(): never {
@@ -62,12 +66,7 @@ function createClock(startMs: number) {
 }
 
 /** The setup gate open: these tests exercise auth, not setup. */
-const READY = async () => ({ required: false, providers: [] });
-
-/** No request may leave these tests unless one names a fake server. */
-const offline: typeof globalThis.fetch = async (input) => {
-  throw new TypeError(`fetch failed: no network in tests (${String(input)})`);
-};
+const READY = async () => false;
 
 const USERS = [
   { username: "alice", password: "wonderland" },
@@ -78,21 +77,14 @@ const USERS = [
 async function buildTestApp(opts: {
   clockCtl: ReturnType<typeof createClock>;
   envOverrides?: Record<string, string>;
-  installation?: () => Promise<{ trash: boolean; index: boolean }>;
+  installation?: () => Promise<Installation>;
 }) {
   const repos: Repos = createMemoryRepos();
   const config = loadConfig({ ...REQUIRED_ENV, ...opts.envOverrides });
-  const local = localModuleFixture(repos);
+  const local = filesFolderFixture(repos);
   await seedLocalUsers(repos, USERS);
-  const providers = memoryProviderService(repos, {
-    fetch: offline,
-    clock: opts.clockCtl.clock,
-    modules: { local: local.module },
-  });
-  await providers.seedFromEnvironment();
   const authModule = createAuthModule({
     repos,
-    providers,
     clock: opts.clockCtl.clock,
     config,
     checkPassword: createPasswordCheck({
@@ -100,7 +92,9 @@ async function buildTestApp(opts: {
       users: local.users,
     }),
     storageFactory: async () => FAKE_STORAGE,
-    installation: opts.installation ?? (async () => ({ trash: false, index: false })),
+    installation:
+      opts.installation ??
+      (async () => ({ storageName: "Local folder", trash: false, index: false })),
   });
   const app = createApp({
     config,
@@ -109,11 +103,11 @@ async function buildTestApp(opts: {
     startedAt: new Date(0),
     clock: opts.clockCtl.clock,
     principalResolver: authModule.principalResolver,
-    connectionStatus: READY,
+    setupRequired: READY,
     registerRoutes: authModule.registerRoutes,
   });
 
-  return { app, repos, users: local.users, config, authModule, providers };
+  return { app, repos, users: local.users, config, authModule };
 }
 
 async function readJson<T>(res: Response): Promise<T> {
@@ -165,7 +159,8 @@ describe("auth routes: POST /auth/login", () => {
     expect(MeResponse.safeParse(body).success).toBe(true);
     expect(body).toMatchObject({
       account: { displayName: "alice" },
-      identity: { username: "alice", providerType: "local", providerLabel: "Local folder" },
+      identity: { username: "alice" },
+      storageName: "Local folder",
     });
 
     const setCookie = res.headers.get("set-cookie");
@@ -500,7 +495,7 @@ describe("auth routes: POST /auth/logout", () => {
         storage: FAKE_STORAGE,
         isAdmin: false,
       }),
-      connectionStatus: READY,
+      setupRequired: READY,
       registerRoutes: (groups) => {
         registerAuthRoutes(groups, {
           service: { logout } as unknown as Parameters<typeof registerAuthRoutes>[1]["service"],
@@ -696,20 +691,20 @@ describe("auth: administrators and installation flags", () => {
     expect(bob.isAdmin).toBe(false);
   });
 
-  it("reports whether Trash is on and the files are indexed, read on every request", async () => {
-    let flags = { trash: false, index: true };
+  it("reports the storage name, Trash and indexing, read on every request", async () => {
+    let flags = { storageName: "Local folder", trash: false, index: true };
     const { app } = await buildTestApp({
       clockCtl: createClock(Date.now()),
       installation: async () => flags,
     });
     const response = await login(app, { username: "bob", password: "builder" });
     const signedIn = await readJson<MeResponse>(response);
-    expect({ trash: signedIn.trash, index: signedIn.index }).toEqual({ trash: false, index: true });
+    expect(signedIn).toMatchObject(flags);
 
-    flags = { trash: true, index: false };
+    flags = { storageName: "Family files", trash: true, index: false };
     const me = await readJson<MeResponse>(
       await app.request(ROUTES.auth.me, { headers: { cookie: extractCookie(response) } }),
     );
-    expect({ trash: me.trash, index: me.index }).toEqual({ trash: true, index: false });
+    expect(me).toMatchObject(flags);
   });
 });

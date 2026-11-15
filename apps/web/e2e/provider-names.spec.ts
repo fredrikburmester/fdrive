@@ -66,14 +66,13 @@ test("a storage rename on System > General reaches logins and Mac approval, not 
     await expect(page.getByRole("button", { name: "Save name" })).toBeDisabled();
     await name.fill("  Home storage  ");
     const patch = page.waitForRequest(
-      (request) =>
-        request.url().endsWith(`/admin/providers/${providerId}`) && request.method() === "PATCH",
+      (request) => request.url().endsWith("/system/storage") && request.method() === "PATCH",
     );
     const refreshedMe = page.waitForResponse(
       (response) => response.url().endsWith("/auth/me") && response.status() === 200,
     );
     await page.getByRole("button", { name: "Save name" }).click();
-    expect((await patch).postDataJSON()).toEqual({ label: "Home storage" });
+    expect((await patch).postDataJSON()).toEqual({ name: "Home storage" });
     await refreshedMe;
     await expect(name).toHaveValue("Home storage");
     await expect(page.getByRole("button", { name: "Save name" })).toBeDisabled();
@@ -111,10 +110,7 @@ test("a storage rename on System > General reaches logins and Mac approval, not 
       page.locator('[data-sidebar="footer"]').getByText("Home storage", { exact: true }),
     ).toBeVisible();
     const after = MeResponse.parse(await (await page.request.get(url("/api/v1/auth/me"))).json());
-    expect(after).toEqual({
-      ...before,
-      identity: { ...before.identity, providerLabel: "Home storage" },
-    });
+    expect(after).toEqual({ ...before, storageName: "Home storage" });
 
     // The login page names the product alone: it asks for a username and password only.
     const login = await anonymous.newPage();

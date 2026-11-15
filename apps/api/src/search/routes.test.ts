@@ -92,7 +92,7 @@ function buildApp(
     version: "1.0.0",
     startedAt: new Date("2024-06-01T00:00:00.000Z"),
     principalResolver: async () => principal,
-    connectionStatus: async () => ({ required: false, providers: [] }),
+    setupRequired: async () => false,
     registerRoutes: (groups) =>
       registerSearchRoutes(groups, {
         ...(overrides.features === undefined ? {} : { features: overrides.features }),
@@ -387,7 +387,7 @@ describe("GET /api/v1/search/status", () => {
   it("passes on why the login's storage is unavailable", async () => {
     const app = buildApp(fakeSearchService(), {
       resolver: fakeResolver({
-        verifiedIndexScopes: async () => ({ available: false, reason: "provider_mismatch" }),
+        verifiedIndexScopes: async () => ({ available: false, reason: "invalid_configuration" }),
       }),
     });
 
@@ -397,7 +397,7 @@ describe("GET /api/v1/search/status", () => {
       available: false,
       semantic: false,
       images: false,
-      reason: "provider_mismatch",
+      reason: "invalid_configuration",
     });
   });
 

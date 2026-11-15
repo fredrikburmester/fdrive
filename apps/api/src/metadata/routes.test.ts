@@ -25,7 +25,7 @@ const REQUIRED_ENV = {
 };
 
 /** Setup is complete, so the setup gate lets every route through. */
-const READY = async () => ({ required: false, providers: [] });
+const READY = async () => false;
 
 const ACCOUNT_ID = "00000000-0000-4000-8000-000000000001";
 const ALICE_IDENTITY_ID = "00000000-0000-4000-8000-0000000000a1";
@@ -132,7 +132,7 @@ async function buildHarness(withActivity = false) {
     startedAt: new Date(CLOCK_ISO),
     clock,
     principalResolver: async () => principal,
-    connectionStatus: READY,
+    setupRequired: READY,
     registerRoutes: (groups) => {
       registerFsRoutes(groups, {
         bus,
@@ -621,7 +621,7 @@ describe("tag CRUD: error mapping", () => {
       startedAt: new Date(CLOCK_ISO),
       clock,
       principalResolver: async () => principal,
-      connectionStatus: READY,
+      setupRequired: READY,
       registerRoutes: (groups) => registerMetadataRoutes(groups, { metadata }),
     });
   }

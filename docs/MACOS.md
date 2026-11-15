@@ -109,8 +109,10 @@ time. Revocation cannot erase previously exported copies.
 
 ### Display-name refresh
 
-The app shows the provider name with the username and fdrive host beneath. Refresh reads current display
+The app shows the storage's name (`displayName`, the installation's storage name from System >
+General) with the username and fdrive host beneath. Refresh reads current display
 metadata from the existing fdrive server and first verifies account, identity and provider IDs.
+The provider ID is the files folder's row in `app.providers`, which never changes.
 It applies only the name and username, preserving the saved server, grants, expiry, domain ID,
 Keychain token and SQLite catalog. A failed or offline refresh retains the last saved name.
 The root item's metadata version changes when its title changes; cached child items survive.
@@ -369,11 +371,11 @@ Desktop protocol v1 lives at `/api/v1/desktop`; contracts are in
 
 Desktop tokens use `fdd_`, distinct from MCP's `fdr_`; neither audience accepts the other.
 Tokens have identity-root read or explicitly approved full grants and expire after 365 days. Only hashes are persisted
-server-side. Native read requests resolve token expiry/revocation, account ownership and
-the current provider binding. Neither a cursor nor a local item ID grants access. The native
+server-side. Native read requests resolve token expiry/revocation and account ownership.
+Neither a cursor nor a local item ID grants access. The native
 client refuses redirects, cookies and non-loopback HTTP, and never puts bearer secrets in URLs.
 Disconnect validates possession of the desktop secret and revokes only that token's hash;
-it works after provider disablement or token expiry without resolving storage credentials.
+it works after token expiry without building storage.
 
 Pairing state is in memory: server restart cancels pending pairing. Limits are eight requests
 per IPv4 address or IPv6 /64 and 512 per process. One shared issuance promise handles

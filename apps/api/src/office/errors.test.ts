@@ -3,13 +3,11 @@ import { expect, it } from "vitest";
 import { officeErrorResponse, requireMatchingLock, WopiError } from "./errors.ts";
 
 it.each<[StorageErrorKind, number]>([
-  ["unauthorized", 401],
   ["forbidden", 403],
   ["not_found", 404],
   ["conflict", 409],
   ["payload_too_large", 413],
   ["bad_request", 400],
-  ["rate_limited", 429],
   ["upstream_unavailable", 502],
   ["internal", 500],
 ])("maps %s to WOPI %s", (kind, status) => {

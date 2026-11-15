@@ -17,7 +17,7 @@ const short = revision.slice(0, 12);
 
 /** Renders the page for this build and returns its Server version value. */
 async function serverVersion(build: Pick<AboutResponse, "version" | "release" | "revision">) {
-  about.mockResolvedValue({ ...build, uptimeSeconds: 90, providers: [], setupRequired: false });
+  about.mockResolvedValue({ ...build, uptimeSeconds: 90, setupRequired: false });
   render(await AboutPage());
   const value = screen.getByText("Server version").nextElementSibling;
   if (!(value instanceof HTMLElement)) throw new Error("Server version has no value");

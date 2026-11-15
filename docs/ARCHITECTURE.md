@@ -31,8 +31,7 @@ Current implementation reference. Unfinished work belongs in [plans](plans/READM
   writers outside fdrive (OCR, rsync, SMB, Syncthing) may change them. fdrive never creates a
   symbolic link and never follows one: storage refuses a path through a link for every caller,
   and the indexer and OCR skip links. The API reaches it
-  through the internal [storage port](STORAGE-PROVIDERS.md). `FDRIVE_STORAGE_ROOT` is
-  required. Two installation-wide flags on `/auth/me` say what the UI offers: `trash`
+  through the [storage port](STORAGE.md). `FDRIVE_STORAGE_ROOT` is required. Two installation-wide flags on `/auth/me` say what the UI offers: `trash`
   (Trash is on) and `index` (the files folder is indexed).
 
 ## Accounts and storage
@@ -47,12 +46,12 @@ account has exactly one (`identities.account_id` is unique). A session and an AP
 that login (`sessions.identity_id`, `api_tokens.identity_id`), and deleting the login ends
 them. Every local user has a login of the same name from the moment the user exists, and
 sign-in finds it by name in any case; passwords live only as scrypt hashes in
-`app.local_users`. The files folder's row comes from the deployment (`deploymentManaged`);
-administrators can only rename it. See [authentication](AUTH.md) and
-[storage port](STORAGE-PROVIDERS.md).
+`app.local_users`. The files folder's row comes from the deployment; its name is an
+installation setting administrators change on System > General. See
+[authentication](AUTH.md) and [storage](STORAGE.md).
 
 Local users are `app.local_users`: a username unique in any case, a scrypt hash and a disabled
-flag. Setup creates the first one and System > Users the rest; the local module's `admit`
+flag. Setup creates the first one and System > Users the rest; the files folder's `admit`
 refuses a disabled user on every request, not only at sign-in. Folders shared between users
 are `app.local_grants` (owner, folder path, grantee, read or write), served by
 `/api/v1/grants`. The grantee's storage shows each at `/Shared with me/<name>` (the folder's
@@ -81,8 +80,8 @@ renames. OCR takes its PDFs from the index and leaves out all of these. Where a 
 Metadata uses identity plus canonical virtual path. Application moves and indexer events
 propagate renames; index paths must be translated through the identity's scopes. A path
 or content hash alone never grants another identity access. Public share links are fdrive's
-own: a module whose share strategy is `owned` (the local folder) keeps the share in
-`app.shares` and serves it through the owner's storage, which the share reaches only through
+own: fdrive keeps the share in `app.shares` and serves it through the owner's storage, which
+the share reaches only through
 the identity storage factory, only inside its paths, and only for the operations its scope
 allows. Trash, backup folders, `/Shared with me` and the Mac's `/.fdrive-desktop` (which
 holds its Trash) are never reachable through a link. A link follows the item it names
@@ -132,7 +131,8 @@ Trash is a storage capability, not application-owned snapshot history; see [Tras
   begins disabled; the ml service and the Office controller expose starting, ready and failed
   states.
 - System pages are installation-wide and independent of the signed-in login, and every page
-  header says so. System > General holds the files folder's name, reachability and Trash.
+  header says so. System > General holds the server address and the files folder's name,
+  health and Trash.
 - The admin sidebar shows live processing activity and percentages only for fixed workloads.
   Lightweight worker snapshots and one shared poll drive it; see [System activity](SYSTEM-ACTIVITY.md).
 - Search combines text/filename and available visual results, with separate failure states.

@@ -6,7 +6,7 @@ import { createScryptSharePasswords } from "../../../src/shares/passwords.js";
 /**
  * `insertLocalUsers`' repos over `repos`: each user comes with their account
  * and login on the files folder's row, created here as the API's
- * `seedFromEnvironment` creates it, which adopts it when it starts.
+ * `ensureStorageRow` creates it, which finds it again when it starts.
  */
 export async function localUserRepos(repos: Repos): Promise<LocalUserRepos> {
   const provider = await repos.providers.ensure({ type: "local", baseUrl: "local" });

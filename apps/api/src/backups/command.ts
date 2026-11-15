@@ -16,8 +16,11 @@ import { createDb, createFilesFolderFacts, createRepos, migrate } from "@fdrive/
 import { z } from "zod";
 import { parseMasterKey } from "../auth/crypto.js";
 import type { AppConfig } from "../config.js";
-import { createDeploymentFilesFolderGuard } from "../local/files-folder.js";
-import { deploymentModules } from "../local/modules.js";
+import {
+  createDeploymentFilesFolderGuard,
+  deploymentFilesFolder,
+  ensureStorageRow,
+} from "../local/files-folder.js";
 import { createLocalUserStore } from "../local/users.js";
 import { createScryptSharePasswords } from "../shares/passwords.js";
 import { createBackupModule, masterSecrets } from "./module.js";
@@ -304,9 +307,13 @@ export async function runBackupCommand(
         error: (message) => console.error(message),
       },
     );
+    const repos = createRepos(users.db);
     const module = createBackupModule(
       { ...config, fdriveBackupWorker: false },
-      deploymentModules(config, createRepos(users.db), undefined, guard),
+      {
+        storageId: await ensureStorageRow(repos),
+        folder: deploymentFilesFolder(config, repos, { guard }),
+      },
     );
     try {
       await module.start();

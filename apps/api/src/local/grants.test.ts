@@ -3,18 +3,21 @@ import { StorageError, type StorageProvider } from "@fdrive/core";
 import { createMemoryRepos } from "@fdrive/db/testing";
 import { describe, expect, it, vi } from "vitest";
 import { createIdentityStorageFactory } from "../auth/storage-factory.js";
-import { memoryProviderService, seedLocalProvider } from "../providers/test-fixtures/index.ts";
 import { createLocalGrantService, type LocalGrantServiceDeps } from "./grants.js";
-import { localModuleFixture, seedLocalUsers, writeHomeFiles } from "./test-fixtures/index.ts";
+import {
+  filesFolderFixture,
+  seedLocalUsers,
+  seedStorageRow,
+  writeHomeFiles,
+} from "./test-fixtures/index.ts";
 
 /**
- * Alice, Bob and Carol on the local folder (Dave disabled), and a login on a
- * WebDAV row left from before the files folder was the only storage, with
- * folders in Alice's and Carol's homes and Trash at `/.trash`.
+ * Alice, Bob and Carol (Dave disabled), with folders in Alice's and Carol's
+ * homes and Trash at `/.trash`.
  */
 async function fixture(options: Partial<LocalGrantServiceDeps> = {}) {
   const repos = createMemoryRepos();
-  const local = localModuleFixture(repos);
+  const local = filesFolderFixture(repos);
   const [alice, bob, carol] = await seedLocalUsers(repos, [
     { username: "alice", password: "alice-pass" },
     { username: "bob", password: "bob-pass" },
@@ -28,32 +31,21 @@ async function fixture(options: Partial<LocalGrantServiceDeps> = {}) {
     "/.trash/old/file.txt": "old",
   });
   writeHomeFiles(local.root, "carol", { "/Projects/carol.txt": "carol" });
-  const row = await seedLocalProvider(repos);
-  const retired = await repos.providers.ensure({ type: "webdav", baseUrl: "http://dav.test" });
-  const providers = memoryProviderService(repos, { modules: { local: local.module } });
+  const row = await seedStorageRow(repos);
   const storageFor = createIdentityStorageFactory({
-    providers,
-    fetch,
+    identities: repos.identities,
+    folder: local.folder,
     clock: () => new Date(),
   });
-  async function login(providerId: string, username: string) {
-    const account = await repos.accounts.create({ displayName: username });
-    return repos.identities.create({
-      accountId: account.id,
-      providerId,
-      externalUsername: username,
-    });
-  }
   if (alice === undefined || bob === undefined || carol === undefined) throw new Error("unseeded");
-  const aliceRetired = await login(retired.id, "alice-on-dav");
   const service = createLocalGrantService({
     repos,
-    providerId: async () => row.id,
+    storageId: row.id,
     storageFor,
     trashPathFor: async () => "/.trash",
     ...options,
   });
-  return { repos, local, row, alice, bob, carol, aliceRetired, service, storageFor };
+  return { repos, local, row, alice, bob, carol, service, storageFor };
 }
 
 const RESERVED = "fdrive's own folders, like Trash, cannot be shared";
@@ -124,7 +116,6 @@ describe("createLocalGrantService: sharing a folder", () => {
       false,
     );
     expect(await h.service.isReadOnly(h.bob, "/Projects/a.docx")).toBe(false);
-    expect(await h.service.isReadOnly(h.aliceRetired, "/Shared with me/x")).toBe(false);
   });
 
   it.each([
@@ -173,7 +164,7 @@ describe("createLocalGrantService: sharing a folder", () => {
     const plain = await fixture();
     const noTrash = createLocalGrantService({
       repos: plain.repos,
-      providerId: async () => plain.row.id,
+      storageId: plain.row.id,
       storageFor: plain.storageFor,
     });
     expect(
@@ -272,8 +263,10 @@ describe("createLocalGrantService: changing and ending shares", () => {
     // Anything else is the user's own: their files, the shelf itself, a name nobody shares.
     for (const path of ["/notes.txt", "/Shared with me", "/Shared with me/Other/x"])
       expect(await h.service.ownerPath(h.bob.id, path)).toEqual({ identityId: h.bob.id, path });
-    expect(await h.service.ownerPath(h.aliceRetired.id, "/Shared with me/Projects/x")).toEqual({
-      identityId: h.aliceRetired.id,
+    // A login that is gone keeps the path it asked about.
+    const gone = randomUUID();
+    expect(await h.service.ownerPath(gone, "/Shared with me/Projects/x")).toEqual({
+      identityId: gone,
       path: "/Shared with me/Projects/x",
     });
   });
@@ -292,7 +285,7 @@ describe("createLocalGrantService: changing and ending shares", () => {
     expect(await h.service.received(h.bob)).toEqual([
       { name: "Projects", owner: "carol", path: "/Projects", writable: false },
     ]);
-    expect(closedFolders).toHaveBeenCalledWith(h.row.id);
+    expect(closedFolders).toHaveBeenCalled();
     expect((await h.service.list(h.bob.id)).received.map((grant) => grant.name)).toEqual([
       "Projects",
     ]);
@@ -309,11 +302,11 @@ describe("createLocalGrantService: changing and ending shares", () => {
     ]);
   });
 
-  it("ignores moves and deletes on other storage, whose paths are not the folder's", async () => {
+  it("ignores moves and deletes of a login that is gone", async () => {
     const h = await fixture();
     await h.service.create(h.alice.id, { path: "/Projects", username: "bob", access: "read" });
-    await h.service.onMoved(h.aliceRetired.id, "/Projects", "/Elsewhere", true);
-    await h.service.onDeleted(h.aliceRetired.id, "/Projects", true);
+    await h.service.onMoved(randomUUID(), "/Projects", "/Elsewhere", true);
+    await h.service.onDeleted(randomUUID(), "/Projects", true);
     expect((await h.repos.localGrants.listOwned("alice"))[0]?.path).toBe("/Projects");
   });
 });
@@ -324,16 +317,13 @@ describe("createLocalGrantService: who can share", () => {
     expect(await h.service.people(h.alice.id)).toEqual({ usernames: ["bob", "carol"] });
   });
 
-  it("is unavailable to a login on other storage, which never sees local shares", async () => {
+  it("asks a login that is gone to sign in again", async () => {
     const h = await fixture();
-    await h.service.create(h.alice.id, { path: "/Projects", username: "bob", access: "read" });
-    const refused = { kind: "unsupported", details: { capability: "grants" } };
-    await expect(h.service.list(h.aliceRetired.id)).rejects.toMatchObject(refused);
-    expect(await h.service.received(h.aliceRetired)).toEqual([]);
-    await expect(h.service.people(h.aliceRetired.id)).rejects.toMatchObject(refused);
-    await expect(
-      h.service.create(h.aliceRetired.id, { path: "/Projects", username: "bob", access: "read" }),
-    ).rejects.toMatchObject(refused);
+    const refused = { kind: "unauthorized" };
+    await expect(h.service.list(randomUUID())).rejects.toMatchObject(refused);
     await expect(h.service.people(randomUUID())).rejects.toMatchObject(refused);
+    await expect(
+      h.service.create(randomUUID(), { path: "/Projects", username: "bob", access: "read" }),
+    ).rejects.toMatchObject(refused);
   });
 });

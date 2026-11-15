@@ -2,27 +2,15 @@ import type { TrashSettings } from "@fdrive/contracts";
 import {
   createRecycleFolderTrash,
   isStorageError,
-  type ProviderInstance,
-  type ProviderModule,
   type StorageProvider,
   withMoveToTrash,
 } from "@fdrive/core";
+import type { IdentityRepo } from "@fdrive/db";
 import { captureRecycleReceipt } from "../activity/trash.js";
 import { withoutBackupPaths } from "../backups/reserved-storage.js";
 import { ApiHttpError } from "../errors.js";
-import type { ProviderService } from "../providers/service.js";
 
 export type IdentityStorageFactory = (identityId: string) => Promise<StorageProvider>;
-
-/**
- * Storage for `identityId` bound to `providerId`, resolved up front: for
- * callers that must not touch the database again while they hold a write
- * transaction (Office).
- */
-export type PinnedStorageFactory = (
-  identityId: string,
-  providerId: string,
-) => Promise<StorageProvider>;
 
 const trashSettingsByStorage = new WeakMap<StorageProvider, TrashSettings>();
 
@@ -44,81 +32,51 @@ export function withRecycleFolderTrash(
   return { ...storage, trash: createRecycleFolderTrash({ storage, trashPath }) };
 }
 
-/**
- * Storage for an identity whose provider cannot be used right now (an admin
- * disabled it, or its row is gone): every call rejects with `error`, and
- * there is no trash. The session itself stays valid, so `/auth/me`,
- * logout, switching to another login and the admin routes keep working
- * while only file operations fail.
- */
-export function unavailableStorage(error: Error): StorageProvider {
-  const fail = (): Promise<never> => Promise.reject(error);
-  return {
-    list: fail,
-    stat: fail,
-    statFile: fail,
-    download: fail,
-    upload: fail,
-    mkdir: fail,
-    move: fail,
-    copy: fail,
-    deleteFile: fail,
-    deleteDir: fail,
-    deleteEmptyDir: fail,
-  };
-}
-
-/**
- * Asks the module whether the login is still let in (a local user an
- * administrator disabled is not), as `forbidden`, before any storage is built.
- */
-async function admit(
-  module: ProviderModule,
-  instance: ProviderInstance,
-  externalUsername: string,
-): Promise<void> {
-  if (module.admit === undefined) return;
+/** Runs `fn`, turning a `StorageError` into the `ApiHttpError` of the same kind. */
+async function asHttp<T>(fn: () => T | Promise<T>): Promise<T> {
   try {
-    await module.admit(instance, externalUsername);
+    return await fn();
   } catch (error) {
     if (isStorageError(error)) throw new ApiHttpError(error.kind, error.message);
     throw error;
   }
 }
 
+/** What the factory needs of the files folder (`FilesFolder`). */
+export interface StorageSource {
+  storage(username: string): StorageProvider;
+  admit(username: string): Promise<void>;
+}
+
 export interface CreateStorageFactoryDeps {
-  readonly providers: Pick<ProviderService, "forIdentity">;
-  readonly fetch: typeof globalThis.fetch;
+  readonly identities: Pick<IdentityRepo, "get">;
+  readonly folder: StorageSource;
   readonly clock: () => Date;
+  /** With it, deletes move into the Trash folder while Trash is on. */
   readonly resolveTrashSettings?: (identityId: string) => Promise<TrashSettings>;
 }
 
 /**
- * Builds the per-request `StorageProvider` for an identity through its
- * provider module. Delayed jobs retain the result; token validation can
- * deny execution but never retarget it, because the module only ever sees
- * the provider row the identity is bound to. Trash settings are resolved
- * once while constructing each request's provider snapshot, so runtime
- * changes apply without restart: with Trash on, a module with Trash
- * (`trash: "move"`) gets the move-to-trash wrapper underneath the recycle
- * folder view.
+ * Builds the per-request `StorageProvider` for an identity: its home in the
+ * files folder, once the folder admits its user (a user disabled since
+ * signing in gets `forbidden`), without the backup namespace. Delayed jobs
+ * retain the result; token validation can deny execution but never
+ * retarget it. Trash settings are resolved once per request's storage, so
+ * runtime changes apply without restart: with Trash on, the storage gets
+ * the move-to-trash wrapper underneath the recycle folder view.
  */
 export function createIdentityStorageFactory(
   deps: CreateStorageFactoryDeps,
 ): IdentityStorageFactory {
   return async (identityId) => {
-    const { identity, module, instance } = await deps.providers.forIdentity(identityId);
-    await admit(module, instance, identity.externalUsername);
-    const storage = withoutBackupPaths(
-      module.createStorage(
-        instance,
-        { externalUsername: identity.externalUsername },
-        { fetch: deps.fetch },
-      ),
-    );
+    const identity = await deps.identities.get(identityId);
+    if (identity === null) throw new ApiHttpError("unauthorized", "sign in again");
+    const username = identity.externalUsername;
+    await asHttp(() => deps.folder.admit(username));
+    const storage = withoutBackupPaths(await asHttp(() => deps.folder.storage(username)));
     const settings = await deps.resolveTrashSettings?.(identityId);
     let result = storage;
-    if (settings?.enabled === true && module.trash === "move") {
+    if (settings?.enabled === true) {
       const moving = withMoveToTrash({
         storage,
         trashPath: settings.path,
@@ -129,28 +87,5 @@ export function createIdentityStorageFactory(
     }
     if (settings !== undefined) trashSettingsByStorage.set(result, settings);
     return result;
-  };
-}
-
-/**
- * Builds storage for an identity bound to `providerId`. Throws when the
- * identity is not bound to it.
- */
-export function createPinnedStorageFactory(
-  deps: Omit<CreateStorageFactoryDeps, "resolveTrashSettings" | "clock">,
-): PinnedStorageFactory {
-  return async (identityId, providerId) => {
-    const { identity, provider, module, instance } = await deps.providers.forIdentity(identityId);
-    if (provider.id !== providerId) {
-      throw new Error("identity is not bound to the requested provider");
-    }
-    await admit(module, instance, identity.externalUsername);
-    return withoutBackupPaths(
-      module.createStorage(
-        instance,
-        { externalUsername: identity.externalUsername },
-        { fetch: deps.fetch },
-      ),
-    );
   };
 }

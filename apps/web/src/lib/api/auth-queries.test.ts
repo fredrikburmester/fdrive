@@ -26,10 +26,8 @@ vi.mock("./client.js", () => ({
 
 const ME_RESPONSE = makeMe({
   account: { id: "00000000-0000-0000-0000-000000000000", displayName: "Ada" },
-  identity: makeIdentity({
-    id: "00000000-0000-0000-0000-000000000001",
-    providerLabel: "Local folder",
-  }),
+  identity: makeIdentity({ id: "00000000-0000-0000-0000-000000000001" }),
+  storageName: "Local folder",
 });
 
 function createWrapper(queryClient: QueryClient) {

@@ -1,10 +1,6 @@
 "use client";
 
-import {
-  type TrashSettings,
-  TrashSettingsUpdateRequest,
-  type TrashStrategy,
-} from "@fdrive/contracts";
+import { type TrashSettings, TrashSettingsUpdateRequest } from "@fdrive/contracts";
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Field, FieldDescription, FieldLabel } from "@/components/ui/field";
@@ -15,38 +11,15 @@ import { useSystemTrash, useUpdateTrashSettings } from "@/lib/api/trash-settings
 import { SystemErrorState } from "./system-error-state";
 import { SystemSection } from "./system-section";
 
-interface TrashCopy {
-  readonly description: string;
-  readonly requirement: string;
-  readonly folder: string;
-  readonly disabling: string;
-}
-
 /** fdrive moves deleted files into a recycle folder in each user's files. */
-const MOVE_COPY: TrashCopy = {
+const COPY = {
   description: "Restore deleted files that fdrive moved into a recycle folder.",
   requirement: "Deleting a file moves it into the Trash folder instead of removing it.",
   folder:
     "The folder within each user's home on this server; fdrive creates it on the first delete.",
   disabling:
     "Disabling this makes deletes permanent again; it does not delete items already in Trash.",
-};
-
-/** A storage row without any Trash, which the switch cannot turn on. */
-const NONE_COPY: TrashCopy = {
-  description: "This storage has no Trash.",
-  requirement: "Deleting a file removes it permanently.",
-  folder: "",
-  disabling: "",
-};
-
-/**
- * The card's copy for the storage's Trash strategy: `none` has no Trash,
- * and `move` has fdrive keep the recycle folder.
- */
-function copyFor(strategy: TrashStrategy | undefined): TrashCopy {
-  return strategy === "none" ? NONE_COPY : MOVE_COPY;
-}
+} as const;
 
 /** The storage row a Trash form edits. */
 export interface TrashProviderRef {
@@ -82,7 +55,6 @@ export function TrashSettingsForm({
     ? { ...values, retentionHours: retentionInput.trim() === "" ? null : Number(retentionInput) }
     : null;
   const valid = TrashSettingsUpdateRequest.safeParse(input).success;
-  const copy = copyFor(values?.strategy);
   const change = (patch: Partial<TrashSettings>) => {
     if (values) setDraft({ ...values, ...patch });
   };
@@ -106,7 +78,7 @@ export function TrashSettingsForm({
   const field = (name: string) => `${name}-${provider.id}`;
   return (
     <>
-      <p className="text-sm text-muted-foreground">{copy.description}</p>
+      <p className="text-sm text-muted-foreground">{COPY.description}</p>
       {query.isError ? (
         <>
           <SystemErrorState error={query.error} onRetry={() => void query.refetch()} />
@@ -123,7 +95,7 @@ export function TrashSettingsForm({
             <Switch
               id={field("enable-trash")}
               checked={values.enabled}
-              disabled={busy || values.strategy === "none"}
+              disabled={busy}
               onCheckedChange={(enabled) => {
                 if (enabled) change({ enabled });
                 else {
@@ -133,7 +105,7 @@ export function TrashSettingsForm({
               }}
             />
           </Field>
-          <FieldDescription>{copy.requirement}</FieldDescription>
+          <FieldDescription>{COPY.requirement}</FieldDescription>
           {values.enabled ? (
             <>
               <Field>
@@ -144,7 +116,7 @@ export function TrashSettingsForm({
                   disabled={busy}
                   onChange={(event) => change({ path: event.target.value })}
                 />
-                <FieldDescription>{copy.folder}</FieldDescription>
+                <FieldDescription>{COPY.folder}</FieldDescription>
               </Field>
               <Field>
                 <FieldLabel htmlFor={field("trash-retention")}>
@@ -165,9 +137,7 @@ export function TrashSettingsForm({
               </Field>
             </>
           ) : null}
-          {copy.disabling ? (
-            <p className="text-sm text-muted-foreground">{copy.disabling}</p>
-          ) : null}
+          <p className="text-sm text-muted-foreground">{COPY.disabling}</p>
           {update.isError ? (
             <div role="alert" className="text-sm text-destructive [overflow-wrap:anywhere]">
               {describeApiError(update.error)}

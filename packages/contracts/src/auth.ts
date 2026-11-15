@@ -1,5 +1,4 @@
 import { z } from "zod";
-import { ProviderType } from "./providers.ts";
 
 /**
  * Body for `POST /api/v1/auth/login`: a local user's name, in any case, and
@@ -16,9 +15,8 @@ export type LoginRequest = z.infer<typeof LoginRequest>;
 export const IdentitySummary = z.object({
   id: z.uuid(),
   username: z.string(),
+  /** The files folder's row, which every login is on; Trash settings and Office still name it. */
   providerId: z.uuid(),
-  providerType: ProviderType,
-  providerLabel: z.string(),
 });
 
 export type IdentitySummary = z.infer<typeof IdentitySummary>;
@@ -35,6 +33,8 @@ export const MeResponse = z.object({
   identity: IdentitySummary,
   /** True when the signed-in account can reach the System admin pages. */
   isAdmin: z.boolean(),
+  /** The installation's storage name, shown under the username. */
+  storageName: z.string(),
   /** Trash is on for the installation: deletes move to the Trash folder. */
   trash: z.boolean(),
   /** The files folder is indexed: search, thumbnails and folder sizes apply. */

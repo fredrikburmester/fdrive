@@ -2,7 +2,7 @@
 
 Audit of `main` at 64cb537b, 2026-11-14. fdrive grew on SFTPGo, WebDAV and S3, storage it did
 not own, so many parts still check, guess, copy or abstract what the
-[files folder](../STORAGE-PROVIDERS.md) now guarantees. Each numbered group below is one pull
+[files folder](../STORAGE.md) now guarantees. Each numbered group below is one pull
 request. Numbers are stable: a group is removed when it merges, leaving a gap. Delete this plan
 when none are left.
 
@@ -16,7 +16,7 @@ migrations, compatibility shims or configuration aliases; a full reindex is acce
 ## Order
 
 - Groups that add a migration run one at a time and need `pnpm test:integration`.
-- 13–15 run strictly in order: they share `apps/api/src/auth/service.ts`, `composition.ts` and the
+- 14 and 15 run in order: they share `apps/api/src/auth/service.ts`, `composition.ts` and the
   contracts.
 - 16 before 17, 18, 26 and 31. 36 and 37 last.
 
@@ -41,24 +41,11 @@ Recommended on 2026-11-14 and approved by the owner the same day.
 8. `Shared with me` is a reserved name at the top of each home.
 9. The migration history is squashed last.
 
-## Wave 0: independent fixes
-
-7\. **Drop the public URL's fallback to Office's `appUrl`**, the one shim #163 left
-(`apps/api/src/composition.ts`, `legacyUrl`).
-
 ## Wave 1: one user, one storage
 
-13. **One storage, no provider modules.** `ProviderModule`, the registry and `ProviderService`
-    for one row (base URL, config, probe, `fetch`, a pinned storage factory); per-login
-    `ProviderCapabilities` become two installation flags on `/me`; one-value Trash and share
-    strategies; `available` flags and "no files folder" states; `FDRIVE_STORAGE_ROOT` becomes
-    required; administrators come from `accounts.is_admin` only; `GET /providers`,
-    `/admin/providers` and the `/about` provider list go, the storage name becomes a setting;
-    errors that cannot happen (`reauth_required` from storage, `upstream_unavailable`,
-    `rate_limited`) and the always-configured `trash` health entry go.
 14. **Two queries per request.** About 11 queries run before a signed-in handler and `/auth/me`
-    adds 7 (the setup gate lists providers on every request). About 25 call sites fetch the login
-    again; each scope resolution re-reads provider, grants and Trash. Every index result gets a
+    adds a few more (the setup gate asks whether setup is open on every request). About 25 call
+    sites fetch the login again; each scope resolution re-reads grants and Trash. Every index result gets a
     live storage probe: search probes about 145 candidates before cutting to its limit, and each
     thumbnail tile costs about 8 queries and is sent `no-store`.
 15. **One files index root.** `FDRIVE_INDEX_ROOTS` and `INDEX_ROOTS` map several roots with
@@ -70,7 +57,7 @@ Recommended on 2026-11-14 and approved by the owner the same day.
 ## Wave 2: Trash, metadata and the journal
 
 16. **One installation-wide Trash, as an explicit operation.** Settings are per provider row with
-    a strategy and an old-data repair (`trash/settings.ts`). Trash intercepts deletes in a
+    an old-data repair (`trash/settings.ts`). Trash intercepts deletes in a
     wrapper, keeps its settings in a WeakMap lost when storage is re-wrapped, and passes the leaf
     out through AsyncLocalStorage (`activity/trash.ts`); the Trash path is built in nine places.
     Tags, favorites and folder views stay at a trashed item's path, so a new file there inherits
@@ -110,8 +97,8 @@ All are server-only and keep shipped Mac builds working.
 
 ## Shares, Office, backups
 
-31. **Shares.** One module instead of the access-object layers; no strategy lookup per public
-    request; one range implementation; drop `has_password` and rename `views`.
+31. **Shares.** One module instead of the access-object layers; one range implementation; drop
+    `has_password` and rename `views`.
 33. **Office.** Key Office files by owner path; no provider in settings or edit rules; pick
     editors from fdrive's users.
 34. **Backups.** S3 only; this also removes the guard that lists every moved, deleted or zipped

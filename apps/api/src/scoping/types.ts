@@ -4,10 +4,9 @@ import type { Scope } from "@fdrive/core";
 export type { Scope } from "@fdrive/core";
 
 /**
- * Why an identity's scopes are unavailable: its provider is missing or
- * disabled, its username cannot name a folder, or its storage is not under
- * any index root. `no_connection` is for callers that have no identity at
- * all; the resolver never returns it.
+ * Why an identity's scopes are unavailable: its username cannot name a
+ * folder, or the files folder is not under any indexed root. `no_connection`
+ * is for callers that have no identity at all; the resolver never returns it.
  */
 export type UnavailableReason = Exclude<IdentityScopeReason, "ok">;
 

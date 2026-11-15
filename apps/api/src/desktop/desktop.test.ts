@@ -328,14 +328,7 @@ async function fixture(writable = false, changes?: DesktopChanges) {
   const clock = () => now;
   const activity = activityFixture(clock);
   const account = await repos.accounts.create({ displayName: "Alice" });
-  const provider = await repos.providers.ensure({
-    type: "local",
-    baseUrl: "https://files.invalid",
-  });
-  const secondProvider = await repos.providers.ensure({
-    type: "local",
-    baseUrl: "https://dav.invalid",
-  });
+  const provider = await repos.providers.ensure({ type: "local", baseUrl: "local" });
   const identity = await repos.identities.create({
     accountId: account.id,
     providerId: provider.id,
@@ -345,7 +338,7 @@ async function fixture(writable = false, changes?: DesktopChanges) {
   const bob = await repos.accounts.create({ displayName: "Bob" });
   const second = await repos.identities.create({
     accountId: bob.id,
-    providerId: secondProvider.id,
+    providerId: provider.id,
     externalUsername: "bob",
   });
   const storage: StorageProvider = createMemoryStorage({
@@ -356,6 +349,7 @@ async function fixture(writable = false, changes?: DesktopChanges) {
   const otherStorage = createMemoryStorage({ "/docs/a.txt": "bravo" });
   const deps = {
     ...repos,
+    storage: { id: provider.id, name: async () => "Family files" },
     clock,
     storageFactory: vi.fn(async (id: string) => (id === identity.id ? storage : otherStorage)),
     trashPathForStorage: () => "/.trash",
@@ -379,10 +373,7 @@ async function fixture(writable = false, changes?: DesktopChanges) {
     logger: { info() {}, warn() {}, error() {}, debug() {}, fatal() {}, trace() {} } as never,
     version: "test",
     startedAt: new Date(0),
-    connectionStatus: async () => ({
-      required: false,
-      providers: [{ type: "local", host: "files.invalid" }],
-    }),
+    setupRequired: async () => false,
     principalResolver: async (c) => (c.req.header("cookie") ? principal : null),
     registerRoutes: (groups) =>
       registerDesktopRoutes(groups, {
@@ -641,12 +632,11 @@ it("revokes issued credentials the app never confirms and keeps confirmed ones",
   expect(v2.status).toBe(404);
 });
 
-it("revokes only the supplied desktop credential without resolving disabled storage", async () => {
+it("revokes only the supplied desktop credential without building storage", async () => {
   const f = await fixture();
   const credential = await f.connect();
   const other = await f.connect();
   const mcp = await createTokenService(f.deps).create(f.owner, { name: "MCP" });
-  await f.repos.providers.update(f.provider.id, { enabled: false });
   f.deps.storageFactory.mockClear();
   f.deps.storageFactory.mockRejectedValue(
     new ApiHttpError("upstream_unavailable", "storage provider unavailable"),
@@ -676,7 +666,7 @@ it("revokes only the supplied desktop credential without resolving disabled stor
   ).toBe(200);
 });
 
-it("asks to sign in again when a location's storage is gone, instead of a server error", async () => {
+it("passes a failure to build a location's storage on as the error it is", async () => {
   const f = await fixture();
   const pair = f.pairing.create("Mac", "owner");
   await f.pairing.approve(pair.id, f.owner, "read");
@@ -684,18 +674,10 @@ it("asks to sign in again when a location's storage is gone, instead of a server
   if (result.status !== "connected") throw new Error("Expected credentials");
   const credential = result.credentials[0];
   if (!credential) throw new Error("Expected a location");
-  await f.repos.providers.update(f.provider.id, { enabled: false });
-  f.deps.storageFactory.mockRejectedValue(
-    new ApiHttpError("upstream_unavailable", "storage provider unavailable"),
-  );
-  const response = await f.request("/location", undefined, {
-    authorization: `Bearer ${credential.token}`,
+  expect(credential.location).toMatchObject({
+    providerId: f.provider.id,
+    displayName: "Family files",
   });
-  expect(response.status).toBe(401);
-  expect(await response.json()).toMatchObject({
-    error: { kind: "unauthorized", message: "Storage login is no longer available" },
-  });
-  // Any other failure to build storage is still the error it was.
   f.deps.storageFactory.mockRejectedValue(
     new ApiHttpError("forbidden", "this user may not sign in"),
   );

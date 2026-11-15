@@ -5,12 +5,11 @@ import type {
   DesktopWriteCapabilities,
   DesktopWriteCredential,
 } from "@fdrive/contracts";
-import type { ApiTokenRepo, IdentityRepo, ProviderRepo } from "@fdrive/db";
+import type { ApiTokenRepo, IdentityRepo } from "@fdrive/db";
 import { addressBlock } from "../auth/address-block.js";
 import type { Principal } from "../auth/principal.js";
 import type { IdentityStorageFactory } from "../auth/storage-factory.js";
 import { ApiHttpError } from "../errors.js";
-import { hostLabel } from "../providers/service.js";
 import { createResolveTokenPrincipal } from "../tokens/principal.js";
 import { createTokenService } from "../tokens/service.js";
 import { hashApiToken } from "../tokens/token-format.js";
@@ -46,7 +45,11 @@ export interface DesktopDeps {
   changeFeed?: (principal: Principal) => Promise<boolean>;
   apiTokens: ApiTokenRepo;
   identities: IdentityRepo;
-  providers: ProviderRepo;
+  /**
+   * The files folder's provider row, which the Mac compares as a location's
+   * `providerId`, and the installation's storage name, its `displayName`.
+   */
+  storage: { readonly id: string; name(): Promise<string> };
   storageFactory: IdentityStorageFactory;
   clock: () => Date;
   trashPathForStorage: (storage: Principal["storage"]) => string | null;
@@ -103,15 +106,12 @@ export function createDesktopPairing(deps: DesktopDeps) {
   }
   async function location(principal: Principal, protocolVersion: 1 | 2 = 1) {
     const identity = await deps.identities.get(principal.identityId);
-    const provider = identity && (await deps.providers.get(identity.providerId));
-    if (!identity || !provider?.enabled)
-      throw new ApiHttpError("unauthorized", "Storage login is no longer available");
+    if (!identity) throw new ApiHttpError("unauthorized", "Storage login is no longer available");
     const common = {
       accountId: principal.accountId,
       identityId: identity.id,
-      providerId: provider.id,
-      // The local folder's row has no URL (`local`), which `new URL` would refuse.
-      displayName: provider.label || hostLabel(provider.baseUrl),
+      providerId: deps.storage.id,
+      displayName: await deps.storage.name(),
       username: identity.externalUsername,
       paths: principal.tokenAccess?.paths ?? [],
     };
@@ -217,11 +217,9 @@ export function createDesktopPairing(deps: DesktopDeps) {
           "Write access requires a new connection from an updated Mac app",
         );
       }
-      const identity = await deps.identities.get(owner.identityId);
-      const provider = identity && (await deps.providers.get(identity.providerId));
-      if (!provider?.enabled)
+      if ((await deps.identities.get(owner.identityId)) === null)
         throw new ApiHttpError("forbidden", "Your storage is not available right now");
-      // Recheck after the asynchronous reads; two browser approvals cannot race.
+      // Recheck after the asynchronous read; two browser approvals cannot race.
       if (get(id) !== pair || pair.approval)
         throw new ApiHttpError("conflict", "Connection already approved");
       pair.approval = { accountId: owner.accountId, identityId: owner.identityId, access };

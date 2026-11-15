@@ -218,8 +218,7 @@ test.describe("bob (not admin)", () => {
 
     await expect(page.getByRole("link", { name: "Users" })).toBeHidden();
 
-    const connectionRes = await page.request.get("/api/v1/admin/providers");
-    expect(connectionRes.status()).toBe(403);
+    expect((await page.request.get("/api/v1/system/storage")).status()).toBe(403);
     expect((await page.request.get("/api/v1/admin/users")).status()).toBe(403);
 
     for (const path of [

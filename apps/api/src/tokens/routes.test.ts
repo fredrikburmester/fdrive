@@ -69,10 +69,7 @@ async function buildApp(clock: () => Date = () => new Date("2026-01-01T00:00:00.
     } as never,
     version: "1.0.0",
     startedAt: new Date(0),
-    connectionStatus: async () => ({
-      required: false,
-      providers: [{ type: "local", host: "Local folder" }],
-    }),
+    setupRequired: async () => false,
     principalResolver: async () => principal,
     registerRoutes: (groups) => {
       registerTokenRoutes(groups, { service });

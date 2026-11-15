@@ -6,14 +6,13 @@ import { describe, expect, it, vi } from "vitest";
 import { createApp } from "../app.js";
 import type { Principal } from "../auth/principal.js";
 import { loadConfig } from "../config.js";
-import { seedLocalProvider } from "../providers/test-fixtures/index.ts";
 import { registerGrantRoutes } from "./grant-routes.js";
 import { createLocalGrantService } from "./grants.js";
-import { seedLocalUsers } from "./test-fixtures/index.ts";
+import { seedLocalUsers, seedStorageRow } from "./test-fixtures/index.ts";
 
 async function harness() {
   const repos = createMemoryRepos();
-  const row = await seedLocalProvider(repos);
+  const row = await seedStorageRow(repos);
   const [identity] = await seedLocalUsers(repos, [
     { username: "alice", password: "alice-pass" },
     { username: "bob", password: "bob-pass" },
@@ -24,7 +23,7 @@ async function harness() {
   const storage = createMemoryStorage({ "/Projects/plan.txt": "plan" });
   const service = createLocalGrantService({
     repos,
-    providerId: async () => row.id,
+    storageId: row.id,
     storageFor: async () => storage,
   });
   const principal: Principal = {

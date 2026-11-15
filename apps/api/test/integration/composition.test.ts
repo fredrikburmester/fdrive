@@ -237,12 +237,12 @@ describe("composeApp", () => {
             { action: "file.create", outcome: "success" },
           ]),
         );
-        await storageDb.db.execute(sql`update app.providers set enabled = false`);
         const about = await composed.app.request("/api/v1/about");
         expect(about.status).toBe(200);
-        expect(await about.json()).toMatchObject({ setupRequired: false, providers: [] });
+        const body = await about.json();
+        expect(body).toMatchObject({ setupRequired: false });
+        expect(body).not.toHaveProperty("providers");
       } finally {
-        await storageDb.db.execute(sql`update app.providers set enabled = true`);
         await storageDb.close();
       }
 
@@ -282,7 +282,7 @@ describe("composeApp", () => {
     try {
       const aboutRes = await composed.app.request("/api/v1/about");
       expect(aboutRes.status).toBe(200);
-      expect(await aboutRes.json()).toMatchObject({ setupRequired: true, providers: [] });
+      expect(await aboutRes.json()).toMatchObject({ setupRequired: true });
 
       const blockedRes = await composed.app.request("/api/v1/fs/list?path=/");
       expect(blockedRes.status).toBe(503);
@@ -327,10 +327,7 @@ describe("composeApp", () => {
       expect(reuseRes.status).toBe(404);
 
       const aboutAfterRes = await composed.app.request("/api/v1/about");
-      expect(await aboutAfterRes.json()).toMatchObject({
-        setupRequired: false,
-        providers: [{ type: "local" }],
-      });
+      expect(await aboutAfterRes.json()).toMatchObject({ setupRequired: false });
 
       // The owner's home is created on first use, under the deployment's folder.
       const uploadRes = await composed.app.request("/api/v1/fs/upload?path=/first.txt", {

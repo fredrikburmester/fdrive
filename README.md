@@ -211,7 +211,7 @@ ship with bounded concurrency and optional hard caps. See
 - 🔒 **[Advanced Deployment Reference](deploy/REFERENCE.md)**: Custom domain setup, reverse proxies (Caddy / NPM), and security hardening.
 - 💻 **[Development Guide](docs/DEVELOPMENT.md)**: Run the dev stack locally and run tests.
 - 🏷️ **[Releases](docs/RELEASES.md)**: How server releases and their Docker images are published.
-- **[Storage port](docs/STORAGE-PROVIDERS.md)**: The internal boundary between the API and the files folder.
+- **[Storage port](docs/STORAGE.md)**: The internal boundary between the API and the files folder.
 
 ---
 

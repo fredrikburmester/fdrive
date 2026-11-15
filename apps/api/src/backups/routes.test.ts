@@ -146,7 +146,7 @@ function build() {
     logger,
     version: "test",
     startedAt: new Date(),
-    connectionStatus: async () => ({ required: false, providers: [] }),
+    setupRequired: async () => false,
     principalResolver: async () => ({
       accountId: account,
       identityId: identity,
