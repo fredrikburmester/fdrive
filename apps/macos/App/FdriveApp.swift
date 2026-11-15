@@ -247,6 +247,13 @@ private struct LocationCard: View {
                 if let warning = model.warnings[location.id] {
                     Text(warning).font(.body).foregroundStyle(.orange).textSelection(.enabled)
                 }
+                if let note = model.attention[location.id] {
+                    Text(note).font(.body).foregroundStyle(.orange).textSelection(.enabled)
+                    HStack(spacing: 8) {
+                        Button("Reconnect", action: reconnect).buttonStyle(.glass)
+                        Button("Remove", role: .destructive) { Task { await model.disconnect(location) } }.buttonStyle(.glass)
+                    }.font(.body).padding(.top, 2).disabled(model.pairing || model.installationNotice != nil)
+                }
                 if status.hasPrefix("Connected"), location.location.readOnly, let reason = location.location.writeUnavailableReason {
                     Text(reason).font(.body).foregroundStyle(.secondary).textSelection(.enabled)
                 }
@@ -262,7 +269,7 @@ private struct LocationCard: View {
                     Button("Show recovery files") { Task { await model.revealRecovery(location) } }
                     if location.location.capabilities?.restore == true { Button("Restore from Trash…", action: restore) }
                     Divider()
-                    Button("Disconnect", role: .destructive) { Task { await model.disconnect(location) } }
+                    Button("Remove", role: .destructive) { Task { await model.disconnect(location) } }
                 } label: { Image(systemName: "ellipsis") }
                     .menuStyle(.button).buttonStyle(.glass).buttonBorderShape(.circle).menuIndicator(.hidden)
                     .disabled(model.pairing || model.installationNotice != nil).accessibilityLabel("More actions")
@@ -272,9 +279,10 @@ private struct LocationCard: View {
     private var status: String { model.status[location.id] ?? "Connected" }
     /// Decorative only: the text beside the dot, or the note under a read-only connection, says what needs attention.
     private var tone: Color {
-        if model.health[location.id]?.guidance != nil || model.warnings[location.id] != nil { return .orange }
+        if model.health[location.id]?.guidance != nil || model.warnings[location.id] != nil
+            || model.attention[location.id] != nil { return .orange }
         if status.hasPrefix("Connected") { return .green }
-        if status == "Refreshing" { return .secondary }
+        if status == "Refreshing" || status == AppModel.removing { return .secondary }
         if status.hasPrefix("Paused") || status.hasPrefix("Not available") || status.contains("pending") || status.contains("incomplete") { return .orange }
         return .red
     }
@@ -427,6 +435,15 @@ final class AppModel: ObservableObject {
     @Published var licensing = false
     /// A problem with this copy of FDrive rather than with any one location.
     @Published var installationNotice: String?
+    /// Locations that need the person, with what their card says: the server refused the
+    /// credential, or a removal could not finish. The card offers Reconnect and Remove.
+    @Published var attention: [String: String] = [:]
+    /// Refused with a plain 401: automatic refreshes stop asking until the person reconnects or
+    /// asks for a refresh. Never removed automatically.
+    private var signedOut = Set<String>()
+    /// Domains kept because they hold unsent writes and no saved location refers to them, so the
+    /// notice about each appears once.
+    private var reportedKept = Set<String>()
     /// Per location, the earliest signal that carried changes Finder has not yet fetched.
     private var unansweredSignals: [String: Date] = [:]
     private var pairingTask: Task<Void, Never>?
@@ -447,7 +464,10 @@ final class AppModel: ObservableObject {
     private var failures: [String: Int] = [:]
     init() {
         do { locations = try NativeEnvironment.store().load() } catch { self.report(error) }
-        for location in locations where location.disconnecting { status[location.id] = "Disconnect incomplete — retry" }
+        for location in locations where location.disconnecting { status[location.id] = Self.removalIncomplete }
+        for location in locations where location.goneSince != nil && !location.disconnecting {
+            status[location.id] = Self.goneStatus; attention[location.id] = Self.goneGuidance
+        }
         refreshTask = Task { [weak self] in
             await self?.resumePairing()
             while !Task.isCancelled {
@@ -667,13 +687,15 @@ final class AppModel: ObservableObject {
                 // Registration may have partially succeeded. Keep a retryable cleanup record.
                 if let index = locations.firstIndex(where: { $0.id == saved.id }) { locations[index].disconnecting = true }
                 try store.save(locations)
-                status[saved.id] = "Connection incomplete — disconnect and retry"
+                status[saved.id] = "Connection incomplete · FDrive removes it"
             }
             throw error
         }
         // A resumed pairing re-installs the same bundle; never revoke the token just stored.
         if let previous, previousToken != credential.token { _ = await previous.revokeAccess() }
         status[saved.id] = "Connected"
+        attention.removeValue(forKey: saved.id); signedOut.remove(saved.id)
+        failures[saved.id] = nil; automaticAfter[saved.id] = nil
     }
     func reveal(_ location: SavedLocation) async {
         do {
@@ -711,9 +733,8 @@ final class AppModel: ObservableObject {
         if refreshOperation == operation { refreshOperation = nil }
     }
     private func refreshLocations(automatic: Bool, visible: Bool) async {
-        guard license.allowsAccess else { pauseLocations(); return }
         // Ask the framework once, before any location: a stale or misplaced copy fails for all alike,
-        // including while there is nothing connected yet.
+        // including while there is nothing connected yet. Such a copy removes nothing either.
         do { _ = try await NSFileProviderManager.domains(); installationNotice = nil }
         catch {
             guard let notice = NativeEnvironment.installationProblem(error) else { return }
@@ -721,29 +742,47 @@ final class AppModel: ObservableObject {
             for saved in locations where !saved.disconnecting { status[saved.id] = "Not available in Finder" }
             return
         }
+        // Local cleanup the person asked for, or that nothing uses: not held back by the license.
+        await reconcileLocations()
+        guard license.allowsAccess else { pauseLocations(); return }
         for saved in locations where !saved.disconnecting {
             if Task.isCancelled { return }
-            if automatic, let due = automaticAfter[saved.id], due > Date() { continue }
+            // Removal may have started since this pass began, or the location gone.
+            guard let latest = locations.first(where: { $0.id == saved.id }), !latest.disconnecting,
+                  !disconnecting.contains(saved.id) else { continue }
+            // A refused credential is asked about again only when the person asks for a refresh.
+            if !visible, signedOut.contains(saved.id) { continue }
+            // One the server said is gone is asked about once more when the wait is over, never before.
+            if !credentialCheckDue(goneSince: latest.goneSince, now: Date()) { continue }
+            if automatic, latest.goneSince == nil, let due = automaticAfter[saved.id], due > Date() { continue }
             let started = Date(), shown = status[saved.id]
+            // Only an answer from the server says anything about the credential; a Keychain or
+            // framework failure before it does not.
+            var askedServer = false
             do {
                 let store = try NativeEnvironment.store()
                 let domainHealth = locationHealth(try await NativeEnvironment.domainState(saved.id))
                 health[saved.id] = domainHealth
                 guard domainHealth.canRefresh else { status[saved.id] = "Not available in Finder"; continue }
-                let client = try store.client(saved)
-                let updated = try await refreshLocationMetadata(saved, client: client) {
+                let client = try store.client(latest)
+                askedServer = true
+                let updated = try await refreshLocationMetadata(latest, client: client) {
                     try await NativeEnvironment.updateDomainName($0)
                 }
+                // The credential works: forget any refusal.
+                signedOut.remove(saved.id); attention.removeValue(forKey: saved.id)
                 let current = updated.location
                 let catalog = try store.catalog(updated)
                 try await catalog.updateRootName(updated.title)
                 try await catalog.configure(current.capabilities ?? .none)
-                if updated != saved {
-                    guard let index = locations.firstIndex(where: { $0.id == saved.id }) else { continue }
-                    var next = locations
-                    next[index] = updated
-                    try store.save(next)
-                    locations = next
+                // Merge into the configuration as it is now: never write back a stale copy over a
+                // removal that started meanwhile.
+                guard let index = locations.firstIndex(where: { $0.id == saved.id }), !locations[index].disconnecting else { continue }
+                if locations[index].location != current || locations[index].goneSince != nil {
+                    locations = try store.update { list in
+                        guard let index = list.firstIndex(where: { $0.id == saved.id }), !list[index].disconnecting else { return }
+                        list[index].location = current; list[index].goneSince = nil
+                    }
                 }
                 // Also upgrade domains registered by older read-only app builds.
                 if let domain = try await NSFileProviderManager.domains().first(where: { $0.identifier.rawValue == saved.id }),
@@ -781,40 +820,132 @@ final class AppModel: ObservableObject {
                     if status[saved.id] == "Refreshing" { status[saved.id] = shown }
                     return
                 }
-                status[saved.id] = error.localizedDescription
-                let count = min((failures[saved.id] ?? 0) + 1, 5)
-                failures[saved.id] = count
-                automaticAfter[saved.id] = Date().addingTimeInterval(min(60 * pow(2, Double(count)), 900))
+                switch askedServer ? credentialVerdict(error, goneSince: latest.goneSince, now: Date()) : .unknown {
+                case .signedOut:
+                    signedOut.insert(saved.id)
+                    attention[saved.id] = Self.signedOutGuidance; status[saved.id] = "Signed out"
+                    if latest.goneSince != nil { setGoneSince(nil, for: saved.id) }
+                case .gone(let since):
+                    if latest.goneSince != since { setGoneSince(since, for: saved.id) }
+                    attention[saved.id] = Self.goneGuidance; status[saved.id] = Self.goneStatus
+                case .remove:
+                    await removeGone(latest)
+                case .valid, .unknown:
+                    status[saved.id] = error.localizedDescription
+                    let count = min((failures[saved.id] ?? 0) + 1, 5)
+                    failures[saved.id] = count
+                    automaticAfter[saved.id] = Date().addingTimeInterval(min(60 * pow(2, Double(count)), 900))
+                }
             }
         }
     }
+    static let removing = "Removing…"
+    static let removalIncomplete = "Removal incomplete · FDrive retries"
+    static let signedOutGuidance = "The server refused this connection. Reconnect to sign in again, or remove the location."
+    static let goneStatus = "Connection removed on the server"
+    static let goneGuidance = "If the server still says so within the hour, FDrive removes this location from Finder, "
+        + "keeping any changes not uploaded yet. Reconnect to keep it."
+    private func setGoneSince(_ since: Date?, for id: String) {
+        guard let store = try? NativeEnvironment.store(),
+              let next = try? store.update({ list in
+                  if let index = list.firstIndex(where: { $0.id == id }) { list[index].goneSince = since }
+              }) else { return }
+        locations = next
+    }
+    private func remover(_ store: ConnectionStore) -> LocationRemover {
+        LocationRemover(store: store, domains: SystemDomains()) { location in await Self.revokeAccess(location, store: store) }
+    }
+    /// Finishes removals under way and removes domains and catalogs nothing refers to. Skipped
+    /// during a pairing, which saves a location before it registers the location's domain.
+    private func reconcileLocations() async {
+        guard !pairing, let store = try? NativeEnvironment.store() else { return }
+        let titles = Dictionary(locations.map { ($0.id, $0.title) }, uniquingKeysWith: { first, _ in first })
+        // An unreadable configuration or framework changes nothing; the next pass tries again.
+        guard let report = try? await remover(store).reconcile(skipping: disconnecting) else { return }
+        if let current = try? store.load() { locations = current }
+        for removed in report.removed {
+            announce(removed, reason: titles[removed.id] == nil ? "Removed a Finder location that no saved connection used." : nil)
+        }
+        for (id, failure) in report.failed where titles[id] != nil { removalFailed(id, failure) }
+        for (id, count) in report.kept {
+            if titles[id] != nil {
+                status[id] = "\(count) pending · not uploaded"
+                attention[id] = UnfinishedWrites(count: count).localizedDescription
+            } else if reportedKept.insert(id).inserted {
+                notice = "A Finder location no saved connection uses still has \(count == 1 ? "a change" : "\(count) changes") "
+                    + "not uploaded, so FDrive keeps it. Copy what you need from it in Finder."
+            }
+        }
+    }
+    /// The server still says this credential is gone an hour after it first did: remove the location
+    /// as Remove would. Writes not yet uploaded keep it, and nothing asks the server about it again.
+    private func removeGone(_ location: SavedLocation) async {
+        guard disconnecting.insert(location.id).inserted else { return }
+        defer { disconnecting.remove(location.id) }
+        status[location.id] = Self.removing
+        do {
+            let store = try NativeEnvironment.store()
+            let removed = try await remover(store).remove(location)
+            locations = (try? store.load()) ?? locations.filter { $0.id != location.id }
+            announce(removed, reason: "Removed \(location.title) from Finder because the server no longer has this connection.")
+        } catch let unfinished as UnfinishedWrites {
+            signedOut.insert(location.id)
+            status[location.id] = "\(unfinished.count) pending · not uploaded"
+            attention[location.id] = "The server no longer has this connection. Reconnect to upload "
+                + "\(unfinished.count == 1 ? "the change" : "the \(unfinished.count) changes") made here, or open recovery files."
+        } catch {
+            if let current = try? NativeEnvironment.store().load() { locations = current }
+            if !removalFailed(location.id, error) { status[location.id] = error.localizedDescription }
+        }
+    }
+    /// A removal stopped part way leaves its location marked, so nothing uses its credential and
+    /// every refresh tries again; the card says why. False when the location was never marked.
+    @discardableResult
+    private func removalFailed(_ id: String, _ failure: any Error) -> Bool {
+        guard locations.first(where: { $0.id == id })?.disconnecting == true else { return false }
+        status[id] = Self.removalIncomplete
+        attention[id] = (NativeEnvironment.installationProblem(failure) ?? failure.localizedDescription)
+            + " FDrive tries again on every refresh."
+        return true
+    }
+    /// Says what a removal left behind: where macOS kept files changed here and not uploaded, and
+    /// a credential the server did not confirm revoking.
+    private func announce(_ removed: RemovedLocation, reason: String?) {
+        let id = removed.id
+        status.removeValue(forKey: id); attention.removeValue(forKey: id); health.removeValue(forKey: id)
+        warnings.removeValue(forKey: id); automaticAfter.removeValue(forKey: id); failures.removeValue(forKey: id)
+        unansweredSignals.removeValue(forKey: id); signedOut.remove(id)
+        var parts = reason.map { [$0] } ?? []
+        if let preserved = removed.preserved {
+            parts.append("Files changed on this Mac that were not uploaded are in \(preserved.path).")
+            NSWorkspace.shared.open(preserved)
+        }
+        if removed.credentialRemains { parts.append(Self.unrevokedNotice) }
+        if !parts.isEmpty { notice = parts.joined(separator: " ") }
+    }
+    /// Removes a location: its Finder domain first, keeping files changed here and not uploaded,
+    /// then the server's credential, then everything kept on this Mac. A step that fails leaves the
+    /// location marked, unused, and retried by every refresh until it is gone.
     func disconnect(_ location: SavedLocation) async {
         if let notice = installationNotice { error = notice; return }
         guard !pairing, disconnecting.insert(location.id).inserted else { return }
         defer { disconnecting.remove(location.id) }
         refreshOperation?.cancel(); await refreshOperation?.value
         error = nil; notice = nil
+        let shown = status[location.id]
+        status[location.id] = Self.removing
         do {
             let store = try NativeEnvironment.store()
-            let catalog = try store.catalog(location)
-            guard try await catalog.pendingWrites().allSatisfy({ $0.result != nil }) else {
-                throw DriveError.server("This location has pending changes. Recover or finish them before disconnecting.")
-            }
-            // Keep enough state to retry cleanup after network or framework failures.
-            if let index = locations.firstIndex(where: { $0.id == location.id }) { locations[index].disconnecting = true }
-            try store.save(locations)
-            // A courtesy, not a precondition: neither a server that cannot be reached nor a
-            // token already gone from the Keychain may strand a location in the list.
-            let revoked = await revokeAccess(location, store: store)
-            let domain = NSFileProviderDomain(identifier: .init(location.id), displayName: location.title)
-            let preserved = try await NSFileProviderManager.remove(domain, mode: .preserveDirtyUserData)
-            if let preserved { NSWorkspace.shared.open(preserved) }
-            try store.removeToken(location.id); try store.removeMetadata(location.id)
-            locations.removeAll { $0.id == location.id }; try store.save(locations)
-            status.removeValue(forKey: location.id)
-            // Say so rather than implying the credential is gone from the server too.
-            if !revoked { notice = Self.unrevokedNotice }
-        } catch { self.report(error); status[location.id] = "Disconnect incomplete — retry" }
+            let removed = try await remover(store).remove(location)
+            locations = (try? store.load()) ?? locations.filter { $0.id != location.id }
+            announce(removed, reason: nil)
+        } catch let unfinished as UnfinishedWrites {
+            error = unfinished.localizedDescription; status[location.id] = shown
+        } catch {
+            self.report(error)
+            if let current = try? NativeEnvironment.store().load() { locations = current }
+            if !removalFailed(location.id, error) { status[location.id] = shown }
+        }
     }
     /// Shown after a removal the server did not confirm. Not an error: the location is
     /// gone from this Mac, and the web account can still revoke the credential today.
@@ -822,7 +953,7 @@ final class AppModel: ObservableObject {
         + "so that access remains until it expires or you revoke it from Account → API tokens on the web."
     /// Best effort: a token missing from the Keychain and a server that cannot be reached
     /// both leave the credential unconfirmed, and neither is a reason to keep the location.
-    private func revokeAccess(_ location: SavedLocation, store: ConnectionStore) async -> Bool {
+    nonisolated private static func revokeAccess(_ location: SavedLocation, store: ConnectionStore) async -> Bool {
         guard let token = try? store.token(location.id),
               let client = try? APIClient(server: location.server, token: token, protocolVersion: location.location.protocolVersion)
         else { return false }
