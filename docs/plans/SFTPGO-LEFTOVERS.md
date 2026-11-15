@@ -17,8 +17,7 @@ acceptable.
 ## Order
 
 - Groups that add a migration run one at a time and need `pnpm test:integration`.
-- 38 and 39 wait until the owner's server has run v0.7.0-rc.11's start-up move.
-- 37 runs after them. Since #214 Trash rows (`app.trash_items`) live in the database, so
+- 37 runs last. Since #214 Trash rows (`app.trash_items`) live in the database, so
   dropping the database is no longer harmless: the baseline must be skipped by databases
   already at the last squashed migration and run on new ones.
 
@@ -32,8 +31,8 @@ Recommended on 2026-11-14 and approved by the owner the same day.
    those logins' tags, favorites, shares and chats, which no one can reach. Activity history has
    no foreign key to logins and stays.
 3. Trash is always on, at `/.trash`, and fdrive enforces its retention (one setting, default 30
-   days). Changed by the owner when the flat layout shipped: a start-up step moves the items
-   Trash's old layout holds, keeping each one's path and deletion time (group 39).
+   days). Changed by the owner when the flat layout shipped: v0.7.0-rc.11's start-up step moved
+   the items Trash's old layout held, keeping each one's path and deletion time.
 4. Backups go to S3 only. Configuration ZIP attachments go.
 5. Limited share links may preview and peek, counted once per open. Public uploads never replace
    a file; a clash gets a numbered name. Multi-item shares stay zip-only for now.
@@ -42,23 +41,6 @@ Recommended on 2026-11-14 and approved by the owner the same day.
    tags instead of being guessed from its hash.
 8. `Shared with me` is a reserved name at the top of each home.
 9. The migration history is squashed last.
-
-## Mac
-
-Server-only; it keeps shipped Mac builds working.
-
-38. Drop `desktop_items.original_path` and the `trashName` handling with the start-up move of
-    the Mac's old Trash (`settleTrashAtStart` in `trash/startup.ts`), once the owner's server
-    has run it.
-
-## Trash
-
-39. Drop the start-up move of Trash's old layout once the owner's server has run it: the old
-    layout's parser and walk (`apps/api/src/trash/old-layout.ts`), its step in
-    `settleTrashAtStart`, and `.fdrive-move-v1` as a reserved name (`OLD_TRASH_LAYOUT` in
-    `packages/core/src/reserved-paths.ts`, `RESERVED_FOLDERS` in the OCR service's `rules.py`,
-    the indexer's `exclude_names` comment, and the docs that name it). Settling items a crash
-    left on their way into Trash stays.
 
 ## Last
 
