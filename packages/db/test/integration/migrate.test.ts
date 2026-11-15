@@ -246,8 +246,11 @@ describe("migrate", () => {
         .values({ accountId: account.id, providerId: provider.id, externalUsername: "alice" })
         .returning();
       if (identity === undefined) throw new Error("expected an identity");
-      // Its user, so the next migration keeps the login.
-      await older.insert(schema.localUsers).values({ username: "alice", passwordHash: "x" });
+      // Its user, so the next migration keeps the login. In SQL, as the schema has
+      // columns since that this database does not.
+      await older.execute(
+        sql`insert into app.local_users (username, password_hash) values ('alice', 'x')`,
+      );
       await older.execute(sql`
         insert into app.api_tokens (account_id, identity_id, name, token_hash, access) values
           (${account.id}, ${identity.id}, 'Old', 'old-hash', null),
@@ -367,7 +370,9 @@ describe("migrate", () => {
       await login(local.id, "Bob"); // a removed user's login under another spelling of bob
       await login(webdav.id, "alice-dav"); // a login on storage fdrive no longer has
       for (const username of ["alice", "bob", "carol"])
-        await older.insert(schema.localUsers).values({ username, passwordHash: "x" });
+        await older.execute(
+          sql`insert into app.local_users (username, password_hash) values (${username}, 'x')`,
+        );
       // A files folder destination with a sealed password, and a bucket.
       await older.execute(sql`
         insert into app.backup_destinations (id, revision, name, type, config, secret) values
