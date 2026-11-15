@@ -4,7 +4,7 @@ Current design: [Architecture](ARCHITECTURE.md). Unfinished work: [Plans](plans/
 
 Thank you for helping improve fdrive!
 
-The API reaches the files folder through an internal [storage port](STORAGE-PROVIDERS.md).
+The API reaches the files folder through an internal [storage port](STORAGE.md).
 
 ---
 

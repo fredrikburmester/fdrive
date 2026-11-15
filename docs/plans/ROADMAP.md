@@ -28,7 +28,7 @@ visually similar files using versioned perceptual hashes, independent of the emb
 
 - Compute bounded raster-image hashes with EXIF orientation normalization and stored dimensions.
   Keep exact SHA-256 duplicates separate. Document the Hamming-distance threshold.
-- Use bounded scoped candidate lookup, mapping round trips and live read checks. No per-request
+- Use bounded scoped candidate lookup and mapping round trips. No per-request
   unbounded all-pairs scan, remote image fetching or automatic deletion.
 - Provide comparison/reveal UI using existing explicit file actions. Explain false positives.
 - Complete with transformed/cropped/unrelated fixtures, permission isolation, browser comparison

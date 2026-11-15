@@ -9,6 +9,7 @@ const mocks = vi.hoisted(() => ({
   mutate: vi.fn(),
   refetch: vi.fn(),
   reset: vi.fn(),
+  users: vi.fn(),
 }));
 vi.mock("@/lib/api/office-settings-queries", () => ({
   useSystemOffice: () => mocks.query(),
@@ -17,25 +18,29 @@ vi.mock("@/lib/api/office-settings-queries", () => ({
 vi.mock("@/lib/api/public-url-queries", () => ({
   useSystemPublicUrl: () => mocks.address(),
 }));
+vi.mock("@/lib/api/system-queries", () => ({
+  useAdminUsers: () => mocks.users(),
+}));
 const { OfficeSettingsCard, OfficeReview } = await import("./office-settings-card");
-const providerId = "123e4567-e89b-42d3-a456-426614174000";
 const configuration = {
   revision: 2,
   enabled: false,
-  editingProviderId: null,
   editorUsernames: [],
   editingEnabled: false,
 };
+const user = (username: string) => ({
+  username,
+  disabled: false,
+  isAdmin: false,
+  isYou: false,
+  createdAt: "2026-11-15T00:00:00.000Z",
+  lastLoginAt: null,
+});
 beforeEach(() => {
   mocks.address.mockReturnValue({ data: { revision: 1, url: "https://files.example" } });
+  mocks.users.mockReturnValue({ data: { users: ["alice", "bob", "carol"].map(user) } });
   mocks.query.mockReturnValue({
-    data: {
-      configuration,
-      product: "onlyoffice",
-      activeProviderId: providerId,
-      activeProviderLabel: "Primary",
-      status: "off",
-    },
+    data: { configuration, product: "onlyoffice", status: "off" },
     refetch: mocks.refetch,
   });
   mocks.update.mockReturnValue({
@@ -51,21 +56,16 @@ afterEach(() => {
 });
 const toggle = () => fireEvent.click(screen.getByRole("switch", { name: "Enable ONLYOFFICE" }));
 const save = () => screen.getByRole("button", { name: "Save and continue" }) as HTMLButtonElement;
+const editor = (username: string) => screen.getByRole("checkbox", { name: username });
 it("saves explicit editing permission before advancing", () => {
   const next = vi.fn();
   render(<OfficeSettingsCard onContinue={next} />);
   toggle();
   fireEvent.click(screen.getByRole("switch", { name: "Allow document editing" }));
-  fireEvent.change(screen.getByLabelText("Users allowed to edit"), { target: { value: "alice" } });
+  fireEvent.click(editor("alice"));
   fireEvent.click(save());
   expect(mocks.mutate).toHaveBeenCalledWith(
-    {
-      ...configuration,
-      enabled: true,
-      editingEnabled: true,
-      editingProviderId: providerId,
-      editorUsernames: ["alice"],
-    },
+    { ...configuration, enabled: true, editingEnabled: true, editorUsernames: ["alice"] },
     expect.anything(),
   );
   expect(next).not.toHaveBeenCalled();
@@ -88,20 +88,13 @@ it("can disable with invalid fields hidden", () => {
     ...configuration,
     enabled: true,
     editingEnabled: true,
-    editingProviderId: providerId,
     editorUsernames: ["alice"],
   };
   mocks.query.mockReturnValue({
-    data: {
-      configuration: enabled,
-      product: "onlyoffice",
-      activeProviderId: providerId,
-      activeProviderLabel: "Primary",
-      status: "ready",
-    },
+    data: { configuration: enabled, product: "onlyoffice", status: "ready" },
   });
   render(<OfficeSettingsCard onContinue={vi.fn()} />);
-  fireEvent.change(screen.getByLabelText("Users allowed to edit"), { target: { value: "" } });
+  fireEvent.click(editor("alice"));
   toggle();
   expect(save().disabled).toBe(false);
   fireEvent.click(save());
@@ -112,8 +105,6 @@ it("shows readiness and does not require startup to finish onboarding", () => {
     data: {
       configuration: { ...configuration, enabled: true },
       product: "onlyoffice",
-      activeProviderId: providerId,
-      activeProviderLabel: "Primary",
       status: "starting",
     },
   });
@@ -157,47 +148,63 @@ it("preserves errors without advancing and lets the owner reload", () => {
   expect(next).not.toHaveBeenCalled();
 });
 
-it("requires explicit editors and preserves multiline input while typing", () => {
+it("requires explicit editors chosen from fdrive's users", () => {
   render(<OfficeSettingsCard onContinue={vi.fn()} />);
   toggle();
   fireEvent.click(screen.getByRole("switch", { name: "Allow document editing" }));
   expect(save().disabled).toBe(true);
-  const editors = screen.getByLabelText("Users allowed to edit") as HTMLTextAreaElement;
-  fireEvent.change(editors, { target: { value: "alice\n" } });
-  expect(editors.value).toBe("alice\n");
-  fireEvent.change(editors, { target: { value: "alice\n bob\n" } });
+  expect(screen.getByRole("alert").textContent).toContain("choose at least one user");
+  expect(screen.getAllByRole("checkbox")).toHaveLength(3);
+  fireEvent.click(editor("bob"));
+  fireEvent.click(editor("alice"));
+  fireEvent.click(editor("carol"));
+  fireEvent.click(editor("carol"));
+  expect(editor("carol").getAttribute("aria-checked")).toBe("false");
   fireEvent.click(save());
-  expect(mocks.mutate.mock.calls[0]?.[0].editorUsernames).toEqual(["alice", "bob"]);
+  expect(mocks.mutate.mock.calls[0]?.[0].editorUsernames).toEqual(["bob", "alice"]);
 });
 
-it("does not copy editor grants from a different storage provider", () => {
+it("drops a saved editor who is no longer one of fdrive's users", () => {
   mocks.query.mockReturnValue({
     data: {
       configuration: {
         ...configuration,
         enabled: true,
         editingEnabled: true,
-        editingProviderId: "223e4567-e89b-42d3-a456-426614174000",
-        editorUsernames: ["alice"],
+        editorUsernames: ["alice", "removed"],
       },
       product: "onlyoffice",
-      activeProviderId: providerId,
-      activeProviderLabel: "Primary",
       status: "ready",
     },
   });
   render(<OfficeSettingsCard onContinue={vi.fn()} />);
-  const editing = screen.getByRole("switch", { name: "Allow document editing" });
-  expect(editing.getAttribute("aria-checked")).toBe("false");
+  expect(editor("alice").getAttribute("aria-checked")).toBe("true");
+  expect(screen.queryByRole("checkbox", { name: "removed" })).toBeNull();
   fireEvent.click(save());
-  expect(mocks.mutate.mock.calls[0]?.[0]).toMatchObject({
-    editingEnabled: false,
-    editingProviderId: null,
-    editorUsernames: [],
+  expect(mocks.mutate.mock.calls[0]?.[0].editorUsernames).toEqual(["alice"]);
+});
+
+it("says while the users load, and offers a retry when they cannot", () => {
+  mocks.query.mockReturnValue({
+    data: {
+      configuration: {
+        ...configuration,
+        enabled: true,
+        editingEnabled: true,
+        editorUsernames: ["alice"],
+      },
+      product: "onlyoffice",
+      status: "ready",
+    },
   });
-  fireEvent.click(editing);
-  expect((screen.getByLabelText("Users allowed to edit") as HTMLTextAreaElement).value).toBe("");
-  expect(save().disabled).toBe(true);
+  mocks.users.mockReturnValue({ data: undefined });
+  const view = render(<OfficeSettingsCard onContinue={vi.fn()} />);
+  expect(screen.getByText("Loading users…")).toBeTruthy();
+  const refetch = vi.fn();
+  mocks.users.mockReturnValue({ isError: true, error: new Error("offline"), refetch });
+  view.rerender(<OfficeSettingsCard onContinue={vi.fn()} />);
+  fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+  expect(refetch).toHaveBeenCalledOnce();
 });
 
 it("keeps the edited revision when background polling sees another owner's change", () => {
@@ -205,22 +212,13 @@ it("keeps the edited revision when background polling sees another owner's chang
     ...configuration,
     enabled: true,
     editingEnabled: true,
-    editingProviderId: providerId,
     editorUsernames: ["alice"],
   };
-  const response = {
-    configuration: enabled,
-    product: "onlyoffice",
-    activeProviderId: providerId,
-    activeProviderLabel: "Primary",
-    status: "ready",
-  };
+  const response = { configuration: enabled, product: "onlyoffice", status: "ready" };
   mocks.query.mockReturnValue({ data: response });
   const next = vi.fn();
   const view = render(<OfficeSettingsCard onContinue={next} />);
-  fireEvent.change(screen.getByLabelText("Users allowed to edit"), {
-    target: { value: "alice\nbob" },
-  });
+  fireEvent.click(editor("bob"));
   mocks.query.mockReturnValue({
     data: { ...response, configuration: { ...enabled, revision: 3, editorUsernames: ["carol"] } },
   });

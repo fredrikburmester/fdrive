@@ -26,11 +26,6 @@ import type {
   IndexQueries,
   ScopePrefix,
 } from "@fdrive/db";
-import type {
-  ReadAuthorizeResult,
-  ReadAuthorizer,
-  ReadAuthorizeTarget,
-} from "../scoping/read-authorizer.ts";
 import { roundTripVirtualPath } from "../scoping/round-trip.ts";
 import type { EmbedClient } from "./embeddings.js";
 import type { NameIndexClient, NameIndexHit, NameIndexHits } from "./name-index.js";
@@ -40,7 +35,7 @@ import { dateFromMtimeNs, reservedExclusion } from "./scopes.js";
 const CONTENT_FANOUT_LIMIT = 60;
 /** filesai's filename query caps at `LIMIT 25`. */
 const FILENAME_FANOUT_LIMIT = 25;
-/** Folders whose name matched, read before ranking and authorization. */
+/** Folders whose name matched, read before ranking. */
 const FOLDER_FANOUT_LIMIT = 50;
 /** At most this many folders are shown. */
 const MAX_FOLDERS = 5;
@@ -85,13 +80,6 @@ export interface SearchServiceInput {
    * value.
    */
   readonly scopes: readonly Scope[];
-  /**
-   * A request-local live-read authorizer bound to the caller's own storage
-   * (see `createReadAuthorizer`). Every candidate is checked against this
-   * before it can appear in hits, snippets, thumbnail flags, or derived
-   * folders.
-   */
-  readonly authorizer: ReadAuthorizer;
   readonly query: string;
   readonly filters: SearchFilters;
   readonly limit: number;
@@ -129,9 +117,6 @@ interface RankFoldersInput {
   readonly now: Date;
   /** Resolves an indexed path to its caller-visible virtual path, `null` when it is out of scope. */
   readonly virtualPathFor: (rootId: number, path: string) => string | null;
-  readonly authorizer: Pick<ReadAuthorizer, "authorize">;
-  /** Called once per candidate folder whose live-read check itself failed (not merely "denied"). */
-  readonly onAuthUnavailable: () => void;
 }
 
 interface FolderCandidate {
@@ -145,13 +130,13 @@ interface FolderCandidate {
 /**
  * The Folders section: folders whose own name answers the query, empty ones
  * included, ranked like files by how the name matches (`nameMatch`) and then
- * by age (`recencyWeight`), live-read checked and capped at `MAX_FOLDERS`.
+ * by age (`recencyWeight`), and capped at `MAX_FOLDERS`.
  * A folder whose name matches only with a typo comes after every other.
  * The caller's own home (`/`) and the folder a folder filter starts at are
  * left out. Never called while a type filter (`SearchFilters.exts`) is
  * active: a type filter is a files-only filter.
  */
-async function rankFolders(input: RankFoldersInput): Promise<FsEntry[]> {
+function rankFolders(input: RankFoldersInput): FsEntry[] {
   const candidates = new Map<string, FolderCandidate>();
   const consider = (row: FolderHit, fromNameIndex: boolean) => {
     const path = input.virtualPathFor(row.rootId, row.path);
@@ -177,30 +162,21 @@ async function rankFolders(input: RankFoldersInput): Promise<FsEntry[]> {
     consider(row, true);
   }
 
-  const ranked = Array.from(candidates.values()).sort(
-    (a, b) => Number(a.typo) - Number(b.typo) || b.score - a.score || a.path.localeCompare(b.path),
-  );
-  const resolvedFolders = await Promise.all(
-    ranked.map(async ({ path, modifiedAt }): Promise<FsEntry | null> => {
-      const authResult = await input.authorizer.authorize({ path, kind: "dir" });
-      if (!authResult.allowed) {
-        if (authResult.reason === "unavailable") {
-          input.onAuthUnavailable();
-        }
-        return null;
-      }
-      return {
-        name: baseName(path),
-        path,
-        kind: "dir",
-        size: 0,
-        modifiedAt: modifiedAt.toISOString(),
-        ext: "",
-        mime: null,
-      };
-    }),
-  );
-  return resolvedFolders.filter((entry): entry is FsEntry => entry !== null).slice(0, MAX_FOLDERS);
+  return Array.from(candidates.values())
+    .sort(
+      (a, b) =>
+        Number(a.typo) - Number(b.typo) || b.score - a.score || a.path.localeCompare(b.path),
+    )
+    .slice(0, MAX_FOLDERS)
+    .map(({ path, modifiedAt }) => ({
+      name: baseName(path),
+      path,
+      kind: "dir",
+      size: 0,
+      modifiedAt: modifiedAt.toISOString(),
+      ext: "",
+      mime: null,
+    }));
 }
 
 /** A name-index folder hit in the shape the folders query returns. */
@@ -217,10 +193,13 @@ function folderHit(hit: NameIndexHit): FolderHit {
  * is then lifted above every result found by content alone, a name that
  * matches only with a typo below every name spelled as typed, and every
  * score is weighted by the file's age (`recencyWeight`), so of two similar
- * matches the recently modified one comes first. Scoped to `input.scopes` (already
- * verified by the caller), with every candidate round-tripped
- * (`roundTripVirtualPath`) and live-read checked (`input.authorizer`) before
- * it can contribute to hits, snippets, thumbnail flags, or derived folders.
+ * matches the recently modified one comes first. Scoped to `input.scopes`
+ * (the caller's own, resolved for this request), which is the permission:
+ * every candidate is round-tripped (`roundTripVirtualPath`) before it can
+ * contribute to hits, snippets, thumbnail flags, or folders, and the page
+ * is cut to its limit before thumbnails are looked up, in one query. A file
+ * gone from disk since it was indexed may still be listed until the next
+ * index pass; opening it answers not found.
  */
 export function createSearchService(deps: SearchServiceDeps): SearchService {
   return {
@@ -252,18 +231,6 @@ export function createSearchService(deps: SearchServiceDeps): SearchService {
       }
       const exclude = reservedExclusion(input.scopes, trashPath, rootIds);
 
-      const authMemo = new Map<string, Promise<ReadAuthorizeResult>>();
-
-      function authorizeMemo(target: ReadAuthorizeTarget): Promise<ReadAuthorizeResult> {
-        const key = `${target.kind}:${target.path}`;
-        let promise = authMemo.get(key);
-        if (promise === undefined) {
-          promise = input.authorizer.authorize(target);
-          authMemo.set(key, promise);
-        }
-        return promise;
-      }
-
       function pathFor(rootId: number, path: string): string | null {
         const rootName = rootNameById.get(rootId);
         if (rootName === undefined) {
@@ -274,43 +241,6 @@ export function createSearchService(deps: SearchServiceDeps): SearchService {
 
       function virtualPathFor(file: IndexedFile): string | null {
         return pathFor(file.rootId, file.path);
-      }
-
-      let authUnavailable = false;
-
-      async function primeFanout<T extends { fileId: number }>(
-        rowsPromise: Promise<T[]>,
-      ): Promise<T[]> {
-        const rows = await rowsPromise;
-        if (rows.length === 0) {
-          return rows;
-        }
-        try {
-          const fanoutIdSet = new Set(rows.map((r) => r.fileId));
-          const fileIds = Array.from(fanoutIdSet);
-          const files = await deps.indexQueries.filesByIds(fileIds);
-          const filePromises: Promise<unknown>[] = [];
-          for (const file of files) {
-            if (!fanoutIdSet.has(file.id)) {
-              continue;
-            }
-            const virtualPath = virtualPathFor(file);
-            if (virtualPath === null) {
-              continue;
-            }
-            const modifiedAt = dateFromMtimeNs(file.mtimeNs);
-            if (
-              !matchesSearchFilters({ path: virtualPath, ext: file.ext, modifiedAt }, input.filters)
-            ) {
-              continue;
-            }
-            filePromises.push(authorizeMemo({ path: virtualPath, kind: "file" }));
-          }
-          await Promise.allSettled(filePromises);
-        } catch {
-          // If optional early metadata lookup fails, handle it and return unchanged rows so final lookup remains authoritative.
-        }
-        return rows;
       }
 
       const words = queryWords(input.query);
@@ -324,15 +254,14 @@ export function createSearchService(deps: SearchServiceDeps): SearchService {
         floor: RECENCY_FLOOR,
       };
 
-      const fulltextPipeline = primeFanout(
+      const fulltextPromise =
         tsquery.length > 0
           ? deps.indexQueries.fulltext(prefixes, tsquery, CONTENT_FANOUT_LIMIT, {
               recency,
               preferTsquery: toPrefixTsQuery(input.query, "all"),
               exclude,
             })
-          : Promise.resolve<ContentHit[]>([]),
-      );
+          : Promise.resolve<ContentHit[]>([]);
       const filenamePromise =
         words.length > 0
           ? deps.indexQueries.filename(prefixes, words, input.query, FILENAME_FANOUT_LIMIT, {
@@ -359,44 +288,34 @@ export function createSearchService(deps: SearchServiceDeps): SearchService {
               })
               .catch(() => null)
           : Promise.resolve(null);
-      // Folder probes start before any file probe, so the request-local
-      // authorization semaphore does not queue them behind every ranked file.
-      const foldersPromise = Promise.all([folderRowsPromise, namesPromise]).then(([rows, names]) =>
-        rankFolders({
-          rows,
-          nameRows: (names?.folders ?? []).map(folderHit),
-          query: input.query,
-          filters: input.filters,
-          now: startedAt,
-          virtualPathFor: pathFor,
-          authorizer: { authorize: authorizeMemo },
-          onAuthUnavailable: () => {
-            authUnavailable = true;
-          },
-        }),
-      );
       const embeddingPromise =
         deps.embedClient !== null && features?.semanticSearch !== false
           ? deps.embedClient.embed(input.query)
           : Promise.resolve<readonly number[] | null>(null);
-      const semanticPipeline = primeFanout(
-        embeddingPromise.then((embedding) =>
-          embedding !== null
-            ? deps.indexQueries.semantic(prefixes, embedding, CONTENT_FANOUT_LIMIT, { exclude })
-            : Promise.resolve<ContentHit[]>([]),
-        ),
+      const semanticPromise = embeddingPromise.then((embedding) =>
+        embedding !== null
+          ? deps.indexQueries.semantic(prefixes, embedding, CONTENT_FANOUT_LIMIT, { exclude })
+          : Promise.resolve<ContentHit[]>([]),
       );
 
       const [embedding, semanticRows, fulltextRows, filenameRows, folderRows, names] =
         await Promise.all([
           embeddingPromise,
-          semanticPipeline,
-          fulltextPipeline,
+          semanticPromise,
+          fulltextPromise,
           filenamePromise,
           folderRowsPromise,
           namesPromise,
         ]);
       const degraded = features?.semanticSearch !== false && embedding === null;
+      const folders = rankFolders({
+        rows: folderRows,
+        nameRows: (names?.folders ?? []).map(folderHit),
+        query: input.query,
+        filters: input.filters,
+        now: startedAt,
+        virtualPathFor: pathFor,
+      });
 
       // The underlying queries are bounded (`LIMIT 60`/`LIMIT 25`); a row
       // count at the cap means there may be more matches this response never
@@ -446,12 +365,11 @@ export function createSearchService(deps: SearchServiceDeps): SearchService {
         });
 
       if (scoreById.size === 0) {
-        const folders = await foldersPromise;
         return {
           ...emptyResponse(input.query, tookMs(), {
             degraded,
             unavailable: false,
-            partial: fanoutCut || authUnavailable,
+            partial: fanoutCut,
           }),
           sections: { folders, files: [], content: [] },
         };
@@ -460,87 +378,56 @@ export function createSearchService(deps: SearchServiceDeps): SearchService {
       const loadedFiles = await deps.indexQueries.filesByIds(Array.from(scoreById.keys()));
       const fileById = new Map(loadedFiles.map((file) => [file.id, file]));
 
-      // The fused score says how well a file matched; its name and age
-      // decide what the caller most likely meant. A candidate with no
-      // caller-visible path keeps its fused score and is dropped below.
-      const ranked = Array.from(scoreById.entries())
-        .map(([id, fused]): [number, number] => {
+      // Every candidate the caller can see, best first. The fused score says
+      // how well a file matched; its name and age decide what the caller most
+      // likely meant.
+      const visible = Array.from(scoreById.entries())
+        .flatMap(([id, fused]) => {
           const file = fileById.get(id);
-          const virtualPath = file === undefined ? null : virtualPathFor(file);
-          if (file === undefined || virtualPath === null) {
-            return [id, fused];
-          }
-          const boost =
-            NAME_MATCH_BOOST[
-              nameMatch(input.query, { name: file.name, folder: parentPath(virtualPath) })
-            ];
-          return [id, (boost + fused) * recencyWeight(dateFromMtimeNs(file.mtimeNs), startedAt)];
-        })
-        .sort((a, b) => b[1] - a[1]);
-
-      // Every ranked candidate (bounded by the fanout above, not by
-      // `input.limit`) is round-tripped and live-read checked; the limit is
-      // applied only after inaccessible candidates are removed.
-      const resolvedHitsPromise = Promise.all(
-        ranked.map(async ([id, score]): Promise<SearchHit | null> => {
-          const file = fileById.get(id);
-          if (file === undefined) {
-            return null;
-          }
-          const virtualPath = virtualPathFor(file);
-          if (virtualPath === null) {
-            return null;
-          }
+          const path = file === undefined ? null : virtualPathFor(file);
+          if (file === undefined || path === null) return [];
           const modifiedAt = dateFromMtimeNs(file.mtimeNs);
-          if (
-            !matchesSearchFilters({ path: virtualPath, ext: file.ext, modifiedAt }, input.filters)
-          ) {
-            return null;
-          }
-          const authResult = await authorizeMemo({ path: virtualPath, kind: "file" });
-          if (!authResult.allowed) {
-            if (authResult.reason === "unavailable") {
-              authUnavailable = true;
-            }
-            return null;
-          }
-          const snippets = snippetsById.get(id) ?? [];
-          const hasThumbnail =
-            deps.thumbsEnabled && features?.thumbnails !== false && file.sha256 !== null
-              ? (await deps.indexQueries.thumbnail(file.sha256, 256)) !== null
-              : false;
-          return {
-            path: virtualPath,
-            name: file.name,
-            kind: "file",
-            ext: file.ext,
-            mime: mimeFromExtension(file.ext),
-            size: file.size,
-            modifiedAt: modifiedAt.toISOString(),
-            score,
-            snippets: snippets.map((text) => ({ text, ranges: highlightRanges(text, words) })),
-            hasThumbnail,
-          };
-        }),
-      );
-
-      const [folders, resolvedHits] = await Promise.all([foldersPromise, resolvedHitsPromise]);
-
-      const accessibleHits = resolvedHits.filter((hit): hit is SearchHit => hit !== null);
-      const files = accessibleHits.slice(0, input.limit);
-      // Taken from every accessible hit, not from `files`: name matches rank
+          if (!matchesSearchFilters({ path, ext: file.ext, modifiedAt }, input.filters)) return [];
+          const boost =
+            NAME_MATCH_BOOST[nameMatch(input.query, { name: file.name, folder: parentPath(path) })];
+          const score = (boost + fused) * recencyWeight(modifiedAt, startedAt);
+          return [{ file, path, modifiedAt, score, snippets: snippetsById.get(id) ?? [] }];
+        })
+        .sort((a, b) => b.score - a.score);
+      const shown = visible.slice(0, input.limit);
+      // Taken from every visible hit, not from the page: name matches rank
       // first and can fill the limit, which must not hide what the content
       // signals found.
-      const content = accessibleHits
+      const withContent = visible
         .filter((hit) => hit.snippets.length > 0)
         .slice(0, MAX_CONTENT_HITS);
 
+      const keys = [...shown, ...withContent].flatMap((hit) =>
+        hit.file.sha256 === null ? [] : [hit.file.sha256],
+      );
+      const thumbnails =
+        deps.thumbsEnabled && features?.thumbnails !== false && keys.length > 0
+          ? await deps.indexQueries.thumbnailKeys([...new Set(keys)], 256)
+          : new Set<string>();
+      const hitFor = (hit: (typeof visible)[number]): SearchHit => ({
+        path: hit.path,
+        name: hit.file.name,
+        kind: "file",
+        ext: hit.file.ext,
+        mime: mimeFromExtension(hit.file.ext),
+        size: hit.file.size,
+        modifiedAt: hit.modifiedAt.toISOString(),
+        score: hit.score,
+        snippets: hit.snippets.map((text) => ({ text, ranges: highlightRanges(text, words) })),
+        hasThumbnail: hit.file.sha256 !== null && thumbnails.has(hit.file.sha256),
+      });
+
       return {
         query: input.query,
-        sections: { folders, files, content },
+        sections: { folders, files: shown.map(hitFor), content: withContent.map(hitFor) },
         degraded,
         unavailable: false,
-        ...((fanoutCut || authUnavailable) && { partial: true }),
+        ...(fanoutCut && { partial: true }),
         tookMs: tookMs(),
       };
     },

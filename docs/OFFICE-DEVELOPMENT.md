@@ -8,16 +8,24 @@ Entry points: [service](../apps/api/src/office/service.ts),
 
 ## File identity and authorization
 
-`app.office_files` supplies stable UUIDs for provider/root/path locations, independent of
-index rows. Moves preserve UUIDs; deletes tombstone them; recreation gets a new UUID.
-Callbacks resolve the current location, current identity/session and current scope before
-using that identity's storage. Neither a known UUID nor a matching content hash grants access.
+`app.office_files` supplies stable UUIDs keyed by where a document lies in its owner's files:
+the owner's login and the owner's path. A path in a folder shared with someone is its
+owner's (`LocalGrantService.ownerPath`), so everyone who reaches a document opens one UUID;
+the index plays no part, and Office works with indexing off. The registry is a path follower
+like grants and links (`office/moves.ts`, in `withFollowers`): fdrive's moves, MCP, Office
+renames, Trash moves and restores, Mac writes and moves the indexer reports carry the UUID
+along, into the Trash and back too; deletes tombstone it; recreation gets a new UUID.
+Callbacks resolve the current row back into the caller's files (`pathFor`, `null` when the
+login no longer reaches it), with the current identity and session, before using that
+identity's storage. Neither a known UUID nor a matching content hash grants access. WOPI's
+`OwnerId` is the owner's login.
 
 Office tokens are purpose-separated and session-bound. Revoked or expired sessions fail
-callbacks. Editing requires explicit administrator admission, including the provider-bound
-editor allowlist and any advanced path policy. Browser edit intent is not authority: a
-read-only coeditor can otherwise affect another writer's save. Keep the real-editor
-regression that checks persisted content, not just the reader's own rejected upload.
+callbacks. Editing requires explicit administrator admission (`office/edit-policy.ts`): one of
+the editors chosen from fdrive's users, never in a folder shared with them to view only. Browser
+edit intent is not authority: a read-only coeditor can otherwise affect another writer's save.
+Keep the real-editor regression that checks persisted content, not just the reader's own
+rejected upload.
 
 ## Writes and concurrency
 

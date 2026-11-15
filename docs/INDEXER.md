@@ -30,8 +30,8 @@ Every regular file under a configured root, except:
 - Names in `SKIP_NAMES` (`.DS_Store`, `Thumbs.db`, `desktop.ini`, `.localized`),
   AppleDouble sidecars (`._*`) and uploads local storage is still writing
   (`.fdrive-partial-<16 hex>`, renamed to the real name once complete).
-- Directories in `SKIP_DIRS` (`.fdrive-backups`, `.fdrive-desktop`, `@eaDir`, `.Trash`,
-  `.Trashes`, `node_modules`, `.git`), wherever they lie. `.fdrive-desktop` is the Mac app's
+- Directories in `SKIP_DIRS` (`.fdrive-desktop`, `@eaDir`, `.Trash`, `.Trashes`,
+  `node_modules`, `.git`), wherever they lie. `.fdrive-desktop` is the Mac app's
   folder (staged uploads, the versions its writes replace and its Trash), so none of it is
   indexed or journaled; the next scan sweeps rows indexed there before. fdrive's own Trash is
   indexed, so moving an item into and out of it stays a rename that keeps its thumbnails and
@@ -88,7 +88,8 @@ through the storage's own file download, so loading a gallery of thumbnails
 never consumes a share's download limit the way opening or downloading a
 full-size image does. The public route checks a password-protected share's
 password before it serves a thumbnail. Both map index paths to a login's paths
-through [scopes](SCOPING.md) and check each file with a live read first.
+through [scopes](SCOPING.md), which are the permission: neither reads the file. Responses
+are cached privately and revalidated against the file's sha256 `ETag`.
 
 `POST /thumbnails/rebuild` (`maintenance.rs`) is a separate, thumbnail-only
 pass for when the WebP files themselves need regenerating, for example after
@@ -218,12 +219,14 @@ read from their own position (see the [change journal plan](plans/CHANGE-JOURNAL
    layer without waiting for the scan. Every writer takes the journal's advisory lock before
    inserting, so positions commit in order. A row without `target_path` says "look at `path`
    again"; with it, `path` moved there. An upload's row carries the sha256 the API computed
-   while writing it and the size, `mtime_ns`, `inode` and `ctime_ns` of the file it
-   published, so the indexer does not read the file again to hash it while it is still that
-   file. A client chooses an upload's modification time, but no client sets an inode or a
+   while writing it and the size, `mtime_ns`, `inode` and `ctime_ns` of the file exactly as
+   a stat showed it once published, so the indexer neither hashes nor reads the file while
+   it is still that file. A client chooses an upload's modification time, but no client sets an inode or a
    change time, so a different file with the same size and time is always hashed: its bytes
-   never key thumbnails or embeddings under another file's digest. Where the API and the
-   indexer see different inode numbers, the hint simply never matches. A `work-<root>` thread
+   never key thumbnails or embeddings under another file's digest. A file move's row carries
+   the same four for the file exactly as the rename left it, its change time just before
+   (`previous_ctime_ns`) and no digest, so the row's [stamp](#stamps) can follow it. Where the API and the indexer see
+   different inode numbers, neither ever matches. A `work-<root>` thread
    listens on the channel, looks every 30 seconds without it, and applies the root's rows
    after its position, oldest first, saving its position in `idx.change_cursors` (consumer
    `indexer`) after each batch:
@@ -232,9 +235,9 @@ read from their own position (see the [change journal plan](plans/CHANGE-JOURNAL
      files are indexed, and rows of files no longer there are dropped;
    - a missing path, or one a walk skips (a link, a skipped folder or name), has its rows
      and those below it marked deleted;
-   - a move renames rows in place (a changed extension is a delete and a new file), then
-     compares the destination with the disk, which covers a restore from somewhere the
-     index never looked.
+   - a move renames rows in place (a changed extension is a delete and a new file), carries
+     a moved file's stamp along (below), then compares the destination with the disk, which
+     covers a restore from somewhere the index never looked.
 
    What is on disk when a row is applied decides, as for the watcher, and moves and
    deletes wait for the files queued before them, so a batch applied again after a restart
@@ -247,7 +250,8 @@ read from their own position (see the [change journal plan](plans/CHANGE-JOURNAL
    the end.
 2. **The watcher** (inotify, Linux only) sees changes made on the disk directly, for
    example over SMB, after a 2-second debounce. It sees fdrive's own changes too; whichever
-   comes second finds the row current and does nothing, apart from stamping it (below). What
+   comes second finds the row current and does nothing, apart from stamping it when the
+   first left it without a stamp (below). What
    it applies is journaled with source `watcher`: a file indexed as new or changed, a path
    whose rows it deleted, a move it paired (empty folders included) and each folder row it
    added or dropped. When it applies an API change before the indexer reads the API's row,
@@ -278,27 +282,47 @@ soon as the marker is right. The marker itself is never indexed.
 
 ### Stamps
 
-A row's `inode` and `ctime_ns` stamp its sha256: the inode and change time of the file the
-indexer itself read for it. A read stamps the row only when it began at least a second
-(`STAMP_SETTLE`) after the file last changed and the file kept that inode and change time
-until it ended, since a write within the same tick of the filesystem's clock as the one
-before it leaves the change time unchanged. Every later write, rename or replacement moves
-one of the two on, and no client can set either, so while a fresh stat still shows the stamp
-(and the row's size and `mtime_ns`) the digest describes the bytes on disk. The desktop
-`versions` check relies on that ([MACOS.md](MACOS.md#metadata-versions-and-limits)).
-`indexed_at` cannot stand in for it: text extraction sets it after the hash, and re-extracting
-an unchanged file sets it again without reading the bytes.
+A row's `inode` and `ctime_ns` stamp its sha256: the inode and change time of the file whose
+bytes the digest describes. Every write, rename or replacement moves one of the two on, and no
+client can set either, so while a fresh stat still shows the stamp (and the row's size and
+`mtime_ns`) the digest describes the bytes on disk. The desktop `versions` check relies on that
+([MACOS.md](MACOS.md#metadata-versions-and-limits)). `indexed_at` cannot stand in for it: text
+extraction sets it after the hash, and re-extracting an unchanged file sets it again without
+reading the bytes. A row is stamped in three ways:
 
-A digest from an upload hint or reused for an unchanged file earns no stamp: a new digest
-drops the old one, and a reused one keeps it. A watcher or journaled look at an unchanged file
-whose stamp no longer matches, or that has none, reads it again once it has settled. The same
-digest stamps the row; another one is a change that kept the size and modification time, and
-the file is indexed again. So a file fdrive writes or renames is stamped by the watcher's look
-two seconds later, when the journal's immediate look found it too fresh. A rename made outside
-fdrive only moves the row, so that file goes unstamped until its next change. Scans never
-re-read unchanged files: rows indexed before stamps existed get theirs from a reindex or their
-next change. Where the API and the indexer see different inode numbers, a stamp never matches
-and every check hashes.
+- **The indexer's own read.** It stamps the row only when it began at least a second
+  (`STAMP_SETTLE`) after the file last changed and the file kept that inode and change time
+  until it ended, since a write within the same tick of the filesystem's clock as the one
+  before it leaves the change time unchanged.
+- **An upload's hint.** The API hashed the bytes as it wrote them and stats the file right
+  after publishing it, giving no hint unless it is still the inode, size and modification
+  time it wrote. While a fresh stat shows exactly that size, modification time, inode and
+  change time, the hint stamps the row and the file is not read at all; anything else gets
+  no stamp from it.
+- **A rename by fdrive.** A rename moves the change time on and keeps the bytes. The API
+  stats the file right before and right after its rename. When the row's stamp is the file
+  as it was right before, and a fresh stat shows it exactly as the rename left it, all four
+  fields, nothing but the rename touched it, and the stamp follows it to that change time. A
+  file written before the rename or after it, even with its size and time put back, shows
+  another change time and keeps the old stamp, which no longer matches it.
+
+A write by someone else that lands between fdrive's own publish or rename and the stat it
+takes right after, and puts the size and modification time back, would go unseen by a hint or
+a carried stamp, as would one within the same tick of the filesystem's clock; any other write
+moves the change time on.
+
+A digest reused for an unchanged file keeps the row's stamp; a new digest replaces it with its
+own, or with none when it came from a read too fresh to stamp. A watcher or journaled look at
+an unchanged file whose stamp no longer matches, or that has none, takes the digest from a
+hint the file still matches, or else reads the file again once it has settled. The same digest stamps the row; another one is a change that kept
+the size and modification time, and the file is indexed again. So the watcher's look two
+seconds after an upload or rename by fdrive finds the row current and reads nothing; a file
+fdrive copies or publishes from `.fdrive-desktop`, which comes with no hint and no stamped row,
+is read by the journal's immediate look, too fresh to stamp, and again by the watcher's.
+A rename made outside fdrive only moves the row, so that file goes unstamped until its next
+change. Scans never re-read unchanged files: rows indexed before stamps existed get theirs
+from a reindex or their next change. Where the API and the indexer see different inode
+numbers, a stamp never matches and every check hashes.
 
 Watcher and journaled files are foreground work: while any is pending, scan workers wait
 before starting their next file, for at most a minute at a time, so a change someone just

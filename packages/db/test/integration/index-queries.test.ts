@@ -1166,6 +1166,19 @@ describe("index-queries", () => {
     it("returns null for an unknown content key", async () => {
       expect(await queries.thumbnail("unknown", 256)).toBeNull();
     });
+
+    it("tells which of many content keys have a thumbnail of one size, in one query", async () => {
+      await db.insert(schema.thumbnails).values([
+        { contentKey: "sha-a", size: 256, storagePath: "a.256.webp" },
+        { contentKey: "sha-b", size: 1024, storagePath: "b.1024.webp" },
+        { contentKey: "sha-c", size: 256, storagePath: "c.256.webp" },
+      ]);
+
+      expect(await queries.thumbnailKeys(["sha-a", "sha-b", "sha-c", "unknown"], 256)).toEqual(
+        new Set(["sha-a", "sha-c"]),
+      );
+      expect(await queries.thumbnailKeys([], 256)).toEqual(new Set());
+    });
   });
 
   describe("searchImages", () => {

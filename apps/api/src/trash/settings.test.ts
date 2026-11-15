@@ -1,5 +1,4 @@
 import { isDeepStrictEqual } from "node:util";
-import type { TrashStrategy } from "@fdrive/contracts";
 import type { Identity, SettingsRepo } from "@fdrive/db";
 import { describe, expect, it } from "vitest";
 import { createTrashSettingsService } from "./settings.js";
@@ -21,7 +20,6 @@ function harness() {
     },
   };
   let providerId = PROVIDER_A;
-  let strategy: TrashStrategy = "move";
   const identity = (): Identity => ({
     id: "323e4567-e89b-42d3-a456-426614174000",
     accountId: "423e4567-e89b-42d3-a456-426614174000",
@@ -33,13 +31,11 @@ function harness() {
   const service = createTrashSettingsService({
     settings,
     identities: { get: async () => identity() },
-    strategyFor: async () => strategy,
   });
   return {
     service,
     values,
     switchProvider: () => (providerId = PROVIDER_B),
-    setStrategy: (next: TrashStrategy) => (strategy = next),
   };
 }
 
@@ -53,7 +49,6 @@ describe("Trash settings service", () => {
       enabled: false,
       path: "/.trash",
       retentionHours: null,
-      strategy: "move",
     });
     expect(await service.pathForIdentity("identity-a")).toBeNull();
 
@@ -94,12 +89,11 @@ describe("Trash settings service", () => {
     });
   });
 
-  it("stores the configuration without the strategy and reports the module's current one", async () => {
-    const { service, values, setStrategy } = harness();
+  it("stores the configuration as the routes send it", async () => {
+    const { service, values } = harness();
     const initial = await service.configuration(PROVIDER_A);
-    expect(initial.strategy).toBe("move");
     const enabled = await service.update(PROVIDER_A, { ...initial, enabled: true });
-    expect(enabled).toMatchObject({ enabled: true, strategy: "move" });
+    expect(enabled).toMatchObject({ enabled: true, revision: 1 });
     expect(values.get(`trash.configuration.${PROVIDER_A}`)).toEqual({
       providerId: PROVIDER_A,
       revision: 1,
@@ -108,23 +102,31 @@ describe("Trash settings service", () => {
       retentionHours: null,
     });
     expect(await service.pathForIdentity("identity-a")).toBe("/.trash");
+    await expect(
+      service.update(PROVIDER_A, { ...enabled, retentionHours: 0 }),
+    ).rejects.toMatchObject({ kind: "bad_request" });
+  });
 
-    // The strategy the client saw must still be the module's.
-    setStrategy("none");
-    await expect(service.update(PROVIDER_A, { ...enabled })).rejects.toMatchObject({
+  it("reads the stored row once, and serves what it saved without reading again", async () => {
+    const { service, values } = harness();
+    const key = `trash.configuration.${PROVIDER_A}`;
+    const initial = await service.configuration(PROVIDER_A);
+    // Nothing but this service writes the row; a write behind its back is not seen.
+    values.set(key, { ...initial, enabled: true, revision: 5 });
+    expect(await service.configuration(PROVIDER_A)).toEqual(initial);
+    // Saving reads the row itself, so a stale cache cannot win a compare-and-set.
+    await expect(service.update(PROVIDER_A, { ...initial, enabled: true })).rejects.toMatchObject({
       kind: "conflict",
     });
-
-    // A module without Trash: the stored row is enabled, but it reads as off.
-    expect(await service.configuration(PROVIDER_A)).toMatchObject({
-      enabled: false,
-      strategy: "none",
-      revision: 1,
+    expect(await service.configuration(PROVIDER_A)).toMatchObject({ revision: 5, enabled: true });
+    const saved = await service.update(PROVIDER_A, {
+      ...initial,
+      revision: 5,
+      path: "/deleted",
     });
+    values.delete(key);
+    expect(await service.configuration(PROVIDER_A)).toEqual(saved);
     expect(await service.pathForIdentity("identity-a")).toBeNull();
-    await expect(
-      service.update(PROVIDER_A, { ...enabled, revision: 1, strategy: "none" }),
-    ).rejects.toMatchObject({ kind: "bad_request" });
   });
 
   it("refuses an unreadable stored row and a lost compare-and-set race", async () => {
@@ -136,7 +138,6 @@ describe("Trash settings service", () => {
     const raced = createTrashSettingsService({
       settings: { get: async () => null, compareAndSet: async () => false },
       identities: { get: async () => null },
-      strategyFor: async () => "move",
     });
     const initial = await raced.configuration(PROVIDER_A);
     await expect(raced.update(PROVIDER_A, { ...initial, path: "/raced" })).rejects.toMatchObject({
@@ -147,10 +148,9 @@ describe("Trash settings service", () => {
 
 it("disables a legacy overlong Trash path and permits repairing the stored row", async () => {
   const { service, values } = harness();
-  const initial = await service.configuration(PROVIDER_A);
-  const { strategy: _strategy, ...stored } = initial;
   values.set(`trash.configuration.${PROVIDER_A}`, {
-    ...stored,
+    providerId: PROVIDER_A,
+    retentionHours: null,
     enabled: true,
     path: `/${"é".repeat(128)}`,
     revision: 3,
@@ -182,7 +182,6 @@ it("reads a row an older version saved with keys it no longer stores, and saves 
     enabled: true,
     path: "/.trash",
     retentionHours: null,
-    strategy: "move",
   });
   expect(await service.pathForIdentity("identity-a")).toBe("/.trash");
 

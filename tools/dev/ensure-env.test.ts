@@ -67,7 +67,6 @@ describe("buildApiEnv", () => {
       FDRIVE_THUMBS_DIR: join("/repo", "deploy", "dev", ".data", "thumbs"),
       FDRIVE_INDEXER_URL: "http://127.0.0.1:58010",
       FDRIVE_OCR_URL: "http://127.0.0.1:58011",
-      FDRIVE_ADMIN_USERS: "dev",
     });
   });
 

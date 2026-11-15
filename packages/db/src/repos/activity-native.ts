@@ -117,8 +117,7 @@ export async function prepareNativeActivity(db: ActivityDb, operation: DesktopOp
 }
 
 export async function finishNativeFailure(db: ActivityDb, operation: DesktopOperationRecord) {
-  if (!["failed", "cancelled", "conflict", "conflicted", "uncertain"].includes(operation.state))
-    return;
+  if (!["failed", "cancelled", "conflict", "conflicted"].includes(operation.state)) return;
   const record = (
     await db
       .select()
@@ -137,9 +136,7 @@ export async function finishNativeFailure(db: ActivityDb, operation: DesktopOper
       ? "cancelled"
       : operation.state.startsWith("conflict")
         ? "conflict"
-        : operation.state === "uncertain"
-          ? "unknown"
-          : "failed";
+        : "failed";
   const event = await appendActivityOutcome(
     db,
     record,
@@ -150,7 +147,7 @@ export async function finishNativeFailure(db: ActivityDb, operation: DesktopOper
     .update(activityOperations)
     .set({
       finalEventId: event.id,
-      state: outcome === "unknown" ? "uncertain" : outcome === "cancelled" ? "cancelled" : "failed",
+      state: outcome === "cancelled" ? "cancelled" : "failed",
     })
     .where(eq(activityOperations.id, operation.id));
 }

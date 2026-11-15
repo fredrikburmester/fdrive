@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { createDb, createIndexQueries, createRepos, migrate, schema } from "@fdrive/db";
-import { createLocalModule, type LocalUsers } from "@fdrive/local";
+import { createFilesFolder, type LocalUsers } from "@fdrive/local";
 import { startPostgres } from "@fdrive/testkit";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createIdentityStorageFactory } from "../../src/auth/storage-factory.ts";
@@ -18,8 +18,6 @@ import {
   runSimilarFiles,
 } from "../../src/mcp/handlers.ts";
 import { resolveScopeContext } from "../../src/mcp/scope-context.ts";
-import { memoryProviderService } from "../../src/providers/test-fixtures/index.ts";
-import { createReadAuthorizer } from "../../src/scoping/read-authorizer.ts";
 import { createScopeResolver } from "../../src/scoping/resolver.ts";
 import { createSearchService } from "../../src/search/service.ts";
 import type { TokenPrincipal } from "../../src/tokens/principal.ts";
@@ -74,14 +72,11 @@ describe("fdrive's own folders in the index, through the MCP tools", () => {
     const repos = createRepos(db);
     const clock = () => new Date();
     const users: LocalUsers = {
-      verify: async () => ({ result: "invalid" }),
       status: async () => "active",
       shared: async () => [],
     };
-    const module = createLocalModule({ root, users, indexRoot: "files" });
-    const providers = memoryProviderService(repos, { modules: { local: module } });
+    const folder = createFilesFolder({ root, users, indexRoot: "files" });
     const provider = await repos.providers.ensure({ type: "local", baseUrl: "local" });
-    await repos.providers.update(provider.id, { enabled: true, managedByEnv: true });
     const account = await repos.accounts.create({ displayName: "alice" });
     const identity = await repos.identities.create({
       accountId: account.id,
@@ -89,8 +84,8 @@ describe("fdrive's own folders in the index, through the MCP tools", () => {
       externalUsername: "alice",
     });
     const storage = await createIdentityStorageFactory({
-      providers,
-      fetch: globalThis.fetch,
+      identities: repos.identities,
+      folder,
       clock,
     })(identity.id);
 
@@ -129,8 +124,11 @@ describe("fdrive's own folders in the index, through the MCP tools", () => {
         thumbsEnabled: false,
         clock,
       }),
-      scopeResolver: createScopeResolver({ providers, indexRootNames: ["files"] }),
-      identities: repos.identities,
+      scopeResolver: createScopeResolver({
+        storageId: provider.id,
+        rootName: "files",
+        indexRootNames: ["files"],
+      }),
       publicUrl: async () => null,
       indexerClient: null,
       clock,
@@ -172,13 +170,11 @@ describe("fdrive's own folders in the index, through the MCP tools", () => {
     expect(duplicates).not.toHaveProperty("partial");
 
     // The AI's index-backed file_info.
-    const identity = await deps.identities.get(alice.identityId);
-    const verified = identity && (await deps.scopeResolver.verifiedIndexScopes(identity));
-    if (!verified?.available) throw new Error("expected alice's verified scopes");
+    const verified = await deps.scopeResolver.verifiedIndexScopes(alice.username);
+    if (!verified.available) throw new Error("expected alice's verified scopes");
     const ctx = await resolveScopeContext(deps.indexQueries, verified.scopes, "/.trash");
     if (ctx === null) throw new Error("expected alice's scope context");
-    const authorizer = createReadAuthorizer({ storage: alice.storage });
-    const info = await fileInfoInScope(deps, ctx, authorizer, { path: "/report-a.txt" });
+    const info = await fileInfoInScope(deps, ctx, { path: "/report-a.txt" });
     expect(info.identical_copies).toEqual(["/report-b.txt"]);
     expect(info).not.toHaveProperty("partial");
 

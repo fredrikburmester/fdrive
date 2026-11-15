@@ -5,14 +5,7 @@ import type {
   OfficeOpenResponse,
   OfficeStatusResponse,
 } from "@fdrive/contracts";
-import {
-  baseName,
-  extensionOf,
-  isStorageError,
-  joinPath,
-  parentPath,
-  toFsPath,
-} from "@fdrive/core";
+import { baseName, extensionOf, isStorageError, joinPath, parentPath } from "@fdrive/core";
 import { recordOfficeAction, recordOfficeOpen } from "../activity/office.js";
 import { browserActor, callbackFile, requireOfficeEdit } from "./auth.ts";
 import { officeErrorResponse, WopiError } from "./errors.ts";
@@ -27,29 +20,26 @@ import type {
   OfficeConfig,
   OfficeDeps,
   OfficeFile,
+  OfficeFileLocation,
   OpenedFile,
 } from "./types.ts";
 import { callbackProofUrl, editorHostUrl, officeActionUrl } from "./urls.ts";
 import { dispatchOfficeWrite } from "./writes.ts";
 
-export function officeLocation(
+/**
+ * The key of the document at `path` in the actor's files: the owner's login
+ * and the owner's path, so a document in a folder shared with the actor is
+ * the same document its owner and everyone else it is shared with open.
+ */
+export async function officeLocation(
+  deps: OfficeDeps,
   actor: OfficeActor,
   path: string,
-): { providerId: string; rootName: string; path: string } {
-  const mapped = toFsPath(actor.scopes, path);
-  if (mapped === null) throw new WopiError(404);
-  return {
-    providerId: actor.identity.providerId,
-    rootName: mapped.rootName,
-    path: mapped.fsPath.slice(1),
-  };
+): Promise<OfficeFileLocation> {
+  return deps.grants.ownerPath(actor.identity.id, path);
 }
-export function mutationKey(location: {
-  providerId: string;
-  rootName: string;
-  path: string;
-}): string {
-  return `office-target:${JSON.stringify([location.providerId, location.rootName, location.path])}`;
+export function mutationKey(location: OfficeFileLocation): string {
+  return `office-target:${JSON.stringify([location.identityId, location.path])}`;
 }
 export async function fileExists(actor: OfficeActor, path: string): Promise<boolean> {
   try {
@@ -121,7 +111,7 @@ async function checkFileInfo(config: OfficeConfig, opened: OpenedFile): Promise<
   const close = `${config.appUrl.replace(/\/$/, "")}/files${folder === "/" ? "" : folder.split("/").map(encodeURIComponent).join("/")}`;
   return Response.json({
     BaseFileName: baseName(path),
-    OwnerId: file.providerId,
+    OwnerId: file.identityId,
     UserId: actor.identity.id,
     UserFriendlyName: actor.identity.externalUsername,
     Size: content.size,
@@ -229,7 +219,7 @@ export function createOfficeService(deps: OfficeDeps) {
       // The document must be there, readable and within what Office accepts.
       const { size } = await documentVersion(actor.storage, request.path);
       if (size > config.maxBytes) throw new WopiError(413);
-      const file = await deps.files.ensure(officeLocation(actor, request.path));
+      const file = await deps.files.ensure(await officeLocation(deps, actor, request.path));
       const actionUrl = officeActionUrl(action.url, config, file.id, request.ui);
       const fields = mintedFields(
         deps,
@@ -258,8 +248,8 @@ export function createOfficeService(deps: OfficeDeps) {
       const { config } = await configured();
       const actor = await browserActor(deps, input);
       const path = joinPath(request.parent, request.name);
-      const location = officeLocation(actor, path);
       await requireOfficeEdit(deps, actor, path);
+      const location = await officeLocation(deps, actor, path);
       const bytes = await blankDocument(extensionOf(request.name).slice(1));
       await deps.withWriteScope((scope) =>
         scope.locks.withFileLock(mutationKey(location), async () => {

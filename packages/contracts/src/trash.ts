@@ -24,32 +24,16 @@ const TrashPath = z.string().refine((value) => value !== "/" && isValidPath(valu
 });
 
 /**
- * Whether the active provider module has Trash: fdrive moves deleted files
- * into the recycle folder (`move`), or there is none (`none`). Mirrors
- * core's `TrashStrategy`; it is the module's, never stored.
+ * Trash configuration for the files folder's provider row: stored under
+ * `trash.configuration.<providerId>` and sent as is by the settings routes.
  */
-export const TrashStrategy = z.enum(["move", "none"]);
-export type TrashStrategy = z.infer<typeof TrashStrategy>;
-
-const TrashSettingsFields = z.object({
+export const TrashSettings = z.strictObject({
   providerId: z.uuid(),
   revision: z.number().int().nonnegative(),
   enabled: z.boolean(),
   path: TrashPath,
   retentionHours: z.number().int().positive().nullable(),
 });
-
-/** The provider-bound Trash configuration as stored, without the module's strategy. */
-export const TrashConfiguration = TrashSettingsFields.strict();
-export type TrashConfiguration = z.infer<typeof TrashConfiguration>;
-
-/** Provider-bound Trash configuration plus the active provider's strategy. */
-export const TrashSettings = TrashSettingsFields.extend({ strategy: TrashStrategy })
-  .strict()
-  .refine((value) => !value.enabled || value.strategy !== "none", {
-    message: "this storage provider has no Trash",
-    path: ["enabled"],
-  });
 export type TrashSettings = z.infer<typeof TrashSettings>;
 
 export const TrashSettingsUpdateRequest = TrashSettings;

@@ -7,9 +7,11 @@ import {
   contextSelectionCount,
   EMPTY_SELECTION,
   focus,
+  NO_SELECTION,
   reconcile,
   type SelectionState,
   selectAll,
+  selectionOf,
   selectionReducer,
   set,
   toggleAll,
@@ -344,5 +346,13 @@ describe("contextEntries", () => {
 
   it("returns just the target entry for an empty selection", () => {
     expect(contextEntries(a, entries, new Set())).toEqual([a]);
+  });
+});
+
+it("counts files and folders in a selection", () => {
+  expect(selectionOf([])).toEqual(NO_SELECTION);
+  expect(selectionOf([{ kind: "file" }, { kind: "dir" }, { kind: "file" }])).toEqual({
+    files: 2,
+    folders: 1,
   });
 });

@@ -82,9 +82,9 @@ pub fn read_schema_version(client: &mut Client) -> Result<Option<i64>> {
     }
 }
 
-/// Wait for the compatible schema, the failure-history, change-journal and folder tables and
-/// the files' stamp and photo columns before any processing. They came without a version
-/// bump, which OCR waits for too.
+/// Wait for the compatible schema, the failure-history, change-journal and folder tables, the
+/// files' stamp and photo columns and the journal's `previous_ctime_ns` before any processing.
+/// They came without a version bump, which OCR waits for too.
 pub fn wait_for_schema_version(
     db: &Db,
     expected: i64,
@@ -100,12 +100,13 @@ pub fn wait_for_schema_version(
                 "SELECT to_regclass('idx.processing_failures')::text, to_regclass('idx.changes')::text, \
                  to_regclass('idx.change_cursors')::text, to_regclass('idx.folders')::text, \
                  (SELECT count(*) FROM information_schema.columns WHERE table_schema = 'idx' \
-                  AND table_name = 'files' AND column_name IN ('inode', 'ctime_ns', 'taken_at'))",
+                  AND ((table_name = 'files' AND column_name IN ('inode', 'ctime_ns', 'taken_at')) \
+                   OR (table_name = 'changes' AND column_name = 'previous_ctime_ns')))",
                 &[],
             )?;
             let tables: [Option<String>; 4] = [row.get(0), row.get(1), row.get(2), row.get(3)];
-            let columns: i64 = row.get(4);
-            Ok((version, tables.iter().all(Option::is_some) && columns == 3))
+            let stamps: i64 = row.get(4);
+            Ok((version, tables.iter().all(Option::is_some) && stamps == 4))
         })?;
         if version == Some(expected) && ready {
             return Ok(version);
@@ -185,10 +186,11 @@ pub fn pending_count(c: &mut Client, root_id: i64) -> Result<i64> {
     .get(0))
 }
 
-/// The inode and change time (nanoseconds) of the file a row's digest was read from, by a
-/// read of the indexer's own that began after the file had settled and saw no change while
-/// it ran (`idx.files.inode`, `ctime_ns`). `inode` holds the unsigned inode number's 64
-/// bits, as stored.
+/// The inode and change time (nanoseconds) of the file a row's digest describes
+/// (`idx.files.inode`, `ctime_ns`): the file a read of the indexer's own hashed, when that
+/// read began after the file had settled and saw no change while it ran, or the file the API
+/// published the hashed bytes as, or either of those once the API renamed it. `inode` holds
+/// the unsigned inode number's 64 bits, as stored.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Stamp {
     pub inode: i64,
@@ -201,8 +203,8 @@ pub enum StampUpdate {
     /// The digest was not read just now: the row keeps its stamp while the digest stays the
     /// same, and a different digest has none.
     Keep,
-    /// The digest was just read (or came from the API): this is the read's stamp, if it
-    /// earned one.
+    /// The digest was just read, or came from the API: this is the stamp the read earned
+    /// or the API's hint carried, if any.
     Set(Option<Stamp>),
 }
 
@@ -306,8 +308,9 @@ pub fn upsert_file_stamped(c: &mut Client, file: &NewFile<'_>, stamp: StampUpdat
     Ok(id)
 }
 
-/// Give an unchanged row the stamp of a read that found its digest still right. Nothing
-/// happens when the row changed meanwhile (another digest, size or time, or a delete).
+/// Give an unchanged row a stamp that shows its digest still right: a read's, a hint's, or
+/// one carried across a rename. Nothing happens when the row changed meanwhile (another
+/// digest, size or time, or a delete).
 /// Returns whether the row took it.
 pub fn set_stamp(
     c: &mut Client,
@@ -706,10 +709,12 @@ pub struct ChangeRow {
     /// The unsigned inode number's 64 bits, stored signed.
     pub inode: Option<i64>,
     pub ctime_ns: Option<i64>,
+    /// A file move's: the file's change time just before the rename.
+    pub previous_ctime_ns: Option<i64>,
 }
 
 /// A row to append: look at `path` again, or `path` moved to `target_path`. The hint columns
-/// are an API upload's; the indexer's own rows leave them empty.
+/// are an API upload's or file move's; the indexer's own rows leave them empty.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct NewChange {
     pub path: String,
@@ -719,6 +724,7 @@ pub struct NewChange {
     pub mtime_ns: Option<i64>,
     pub inode: Option<i64>,
     pub ctime_ns: Option<i64>,
+    pub previous_ctime_ns: Option<i64>,
 }
 
 impl NewChange {
@@ -753,10 +759,12 @@ pub fn append_changes(c: &mut Client, root_id: i64, root: &str, source: &str, ch
         let number = |f: fn(&NewChange) -> Option<i64>| batch.iter().map(f).collect::<Vec<_>>();
         let paths: Vec<&str> = batch.iter().map(|c| c.path.as_str()).collect();
         tx.execute(
-            r#"INSERT INTO "idx"."changes" (root_id, path, target_path, source, sha256, size, mtime_ns, inode, ctime_ns)
-               SELECT $1::bigint, p, t, $2, s, z, m, i, ct
-               FROM unnest($3::text[], $4::text[], $5::text[], $6::bigint[], $7::bigint[], $8::bigint[], $9::bigint[])
-                 WITH ORDINALITY AS u(p, t, s, z, m, i, ct, n)
+            r#"INSERT INTO "idx"."changes"
+                 (root_id, path, target_path, source, sha256, size, mtime_ns, inode, ctime_ns, previous_ctime_ns)
+               SELECT $1::bigint, p, t, $2, s, z, m, i, ct, pct
+               FROM unnest($3::text[], $4::text[], $5::text[], $6::bigint[], $7::bigint[], $8::bigint[], $9::bigint[],
+                           $10::bigint[])
+                 WITH ORDINALITY AS u(p, t, s, z, m, i, ct, pct, n)
                ORDER BY n"#,
             &[
                 &root_id,
@@ -768,6 +776,7 @@ pub fn append_changes(c: &mut Client, root_id: i64, root: &str, source: &str, ch
                 &number(|c| c.mtime_ns),
                 &number(|c| c.inode),
                 &number(|c| c.ctime_ns),
+                &number(|c| c.previous_ctime_ns),
             ],
         )?;
     }
@@ -780,7 +789,7 @@ pub fn append_changes(c: &mut Client, root_id: i64, root: &str, source: &str, ch
 pub fn changes_after(c: &mut Client, root_id: i64, after: i64, limit: i64) -> Result<Vec<ChangeRow>> {
     Ok(c.query(
         r#"SELECT id::bigint, path, target_path, source, sha256, size::bigint, mtime_ns::bigint, inode::bigint,
-           ctime_ns::bigint FROM "idx"."changes"
+           ctime_ns::bigint, previous_ctime_ns::bigint FROM "idx"."changes"
            WHERE root_id = $1::bigint AND id > $2::bigint ORDER BY id LIMIT $3::bigint"#,
         &[&root_id, &after, &limit],
     )?
@@ -795,6 +804,7 @@ pub fn changes_after(c: &mut Client, root_id: i64, after: i64, limit: i64) -> Re
         mtime_ns: r.get(6),
         inode: r.get(7),
         ctime_ns: r.get(8),
+        previous_ctime_ns: r.get(9),
     })
     .collect())
 }

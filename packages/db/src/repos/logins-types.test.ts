@@ -1,22 +1,26 @@
 import { describe, expect, it } from "vitest";
 import {
   LoginError,
-  type LoginVerifiedInput,
-  type SealedIdentityCredential,
+  type NewLocalUser,
+  type SignInInput,
   validateCanonicalUuid,
-  validateLoginVerified,
-  validateSealedIdentityCredential,
+  validateNewLocalUser,
   validateSessionIdHash,
+  validateSignIn,
 } from "./logins-types.js";
 
 const id = "00000000-0000-0000-0000-000000000001";
 const at = new Date("2026-09-06T12:00:00Z");
-const sealed = { ciphertext: new Uint8Array([1]), keyId: "key" };
-const login: LoginVerifiedInput = {
+const user: NewLocalUser = {
   providerId: id,
   username: "alice",
+  passwordHash: "scrypt$hash",
+  isAdmin: false,
   at,
-  sealCredential: () => sealed,
+};
+const signIn: SignInInput = {
+  username: "alice",
+  at,
   session: {
     idHash: "a".repeat(64),
     expiresAt: new Date(at.getTime() + 1000),
@@ -33,83 +37,63 @@ describe("login validation", () => {
     expect(error.code).toBe("setup_claimed");
     expect(error.message).toBe("setup_claimed");
   });
-  it("accepts strict identifiers, username and metadata boundaries and sealed bytes", () => {
+  it("accepts strict identifiers, username and metadata boundaries", () => {
     expect(() => validateCanonicalUuid(id)).not.toThrow();
-    expect(() => validateLoginVerified(login)).not.toThrow();
-    expect(() => validateLoginVerified({ ...login, username: "é".repeat(255) })).not.toThrow();
+    expect(() => validateNewLocalUser(user)).not.toThrow();
+    expect(() => validateSignIn(signIn)).not.toThrow();
+    expect(() => validateSignIn({ ...signIn, username: "é".repeat(255) })).not.toThrow();
     expect(() =>
-      validateLoginVerified({
-        ...login,
-        session: { ...login.session, userAgent: "u".repeat(4096), ip: "i".repeat(255) },
+      validateSignIn({
+        ...signIn,
+        session: { ...signIn.session, userAgent: "u".repeat(4096), ip: "i".repeat(255) },
       }),
     ).not.toThrow();
     expect(() => validateSessionIdHash("0".repeat(64))).not.toThrow();
-    expect(() => validateSealedIdentityCredential(sealed)).not.toThrow();
-    expect(() =>
-      validateSealedIdentityCredential({ ...sealed, keyId: "x".repeat(255) }),
-    ).not.toThrow();
   });
   it("rejects invalid IDs, timestamps and session hashes", () => {
     for (const bad of ["", "a", id.toUpperCase().replace("1", "A"), "1".repeat(36)]) {
       expect(() => validateCanonicalUuid(bad)).toThrow(TypeError);
     }
-    expect(() => validateLoginVerified({ ...login, providerId: "bad" })).toThrow(TypeError);
-    expect(() => validateLoginVerified({ ...login, at: new Date(Number.NaN) })).toThrow(TypeError);
-    expect(() =>
-      validateLoginVerified({ ...login, at: "bad" } as unknown as LoginVerifiedInput),
-    ).toThrow(TypeError);
+    expect(() => validateNewLocalUser({ ...user, providerId: "bad" })).toThrow(TypeError);
+    expect(() => validateNewLocalUser({ ...user, at: new Date(Number.NaN) })).toThrow(TypeError);
+    expect(() => validateSignIn({ ...signIn, at: "bad" } as unknown as SignInInput)).toThrow(
+      TypeError,
+    );
     for (const idHash of ["", "A".repeat(64), "a".repeat(63), "g".repeat(64), "a".repeat(65)]) {
       expect(() => validateSessionIdHash(idHash)).toThrow(TypeError);
-      expect(() =>
-        validateLoginVerified({ ...login, session: { ...login.session, idHash } }),
-      ).toThrow(TypeError);
+      expect(() => validateSignIn({ ...signIn, session: { ...signIn.session, idHash } })).toThrow(
+        TypeError,
+      );
     }
   });
-  it("rejects malformed credentials and usernames before IO", () => {
+  it("rejects malformed usernames and password hashes before IO", () => {
     for (const username of ["", "x".repeat(256), "bad\0name", 123]) {
-      expect(() => validateLoginVerified({ ...login, username } as LoginVerifiedInput)).toThrow(
-        TypeError,
-      );
+      expect(() => validateSignIn({ ...signIn, username } as SignInInput)).toThrow(TypeError);
+      expect(() => validateNewLocalUser({ ...user, username } as NewLocalUser)).toThrow(TypeError);
     }
-    expect(() =>
-      validateLoginVerified({ ...login, sealCredential: 1 } as unknown as LoginVerifiedInput),
-    ).toThrow(TypeError);
-    for (const value of [
-      { ...sealed, ciphertext: [] },
-      { ...sealed, ciphertext: new Uint8Array() },
-      { ...sealed, keyId: 1 },
-      { ...sealed, keyId: "" },
-      { ...sealed, keyId: "x".repeat(256) },
-      { ...sealed, keyId: "key\0" },
-    ])
-      expect(() => validateSealedIdentityCredential(value as SealedIdentityCredential)).toThrow(
+    for (const passwordHash of ["", 1])
+      expect(() => validateNewLocalUser({ ...user, passwordHash } as NewLocalUser)).toThrow(
         TypeError,
       );
   });
-  it("rejects expiry at or before login, malformed session metadata and revocation flags", () => {
+  it("rejects expiry at or before login and malformed session metadata", () => {
     for (const expiresAt of [at, new Date(at.getTime() - 1), new Date(Number.NaN)]) {
       expect(() =>
-        validateLoginVerified({ ...login, session: { ...login.session, expiresAt } }),
+        validateSignIn({ ...signIn, session: { ...signIn.session, expiresAt } }),
       ).toThrow(TypeError);
     }
     for (const userAgent of ["u".repeat(4097), "u\0", 1]) {
       expect(() =>
-        validateLoginVerified({
-          ...login,
-          session: { ...login.session, userAgent },
-        } as LoginVerifiedInput),
+        validateSignIn({
+          ...signIn,
+          session: { ...signIn.session, userAgent },
+        } as SignInInput),
       ).toThrow(TypeError);
     }
     for (const ip of ["i".repeat(256), "i\0"]) {
-      expect(() => validateLoginVerified({ ...login, session: { ...login.session, ip } })).toThrow(
+      expect(() => validateSignIn({ ...signIn, session: { ...signIn.session, ip } })).toThrow(
         TypeError,
       );
     }
-    expect(() =>
-      validateLoginVerified({
-        ...login,
-        revokeOtherSessions: "yes" as unknown as boolean,
-      }),
-    ).toThrow(TypeError);
   });
 });

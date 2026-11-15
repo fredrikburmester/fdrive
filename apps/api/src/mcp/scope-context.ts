@@ -76,11 +76,9 @@ export async function resolveScopeContext(
  * of scope, when a more specific override shadows this exact location (see
  * `roundTripVirtualPath`), or in one of fdrive's own folders
  * (`isReservedPath`, per `ctx.trashPath`), which a lookup by id or exact
- * path does not leave out on its own. Every
- * index-derived candidate must be filtered through this before it can
- * contribute to a tool's result; it is never sufficient on its own, though:
- * callers still need a live read check (`ReadAuthorizer`) before returning
- * any content, name, hash, or aggregate derived from the candidate.
+ * path does not leave out on its own. Every index-derived candidate must be
+ * filtered through this before it can contribute to a tool's result; one
+ * that maps is the caller's to see, with no storage read.
  */
 export function virtualPathFor(ctx: ScopeContext, rootId: number, fsPath: string): string | null {
   const rootName = ctx.rootNameById.get(rootId);

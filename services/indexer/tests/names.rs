@@ -223,8 +223,8 @@ fn leaves_out_folders_named_like_fdrives_own_wherever_they_lie() {
         &[
             ("alice/Budget", 1),
             ("alice/.fdrive-move-v1/Budget", 1),
-            ("alice/Old/.FDRIVE-BACKUPS/Budget", 1),
-            ("alice/.fdrive-backups", 1),
+            ("alice/Old/.FDRIVE-MOVE-V1/Budget", 1),
+            ("alice/.fdrive-move-v1", 1),
         ],
     );
     file(&url, root_id, "alice/.fdrive-move-v1/a/Budget.xlsx", 1);
@@ -234,7 +234,7 @@ fn leaves_out_folders_named_like_fdrives_own_wherever_they_lie() {
             query: "budget".to_owned(),
             scopes: vec![place(root_id, "alice")],
             exclude: vec![],
-            exclude_names: vec![".fdrive-move-v1".to_owned(), ".fdrive-backups".to_owned()],
+            exclude_names: vec![".fdrive-move-v1".to_owned()],
             files: 10,
             folders: 10,
         })
@@ -254,7 +254,7 @@ fn leaves_out_folders_named_like_fdrives_own_wherever_they_lie() {
         [
             "alice/.fdrive-move-v1/Budget",
             "alice/Budget",
-            "alice/Old/.FDRIVE-BACKUPS/Budget"
+            "alice/Old/.FDRIVE-MOVE-V1/Budget"
         ]
     );
 }

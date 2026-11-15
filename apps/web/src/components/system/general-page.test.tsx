@@ -1,12 +1,11 @@
 // @vitest-environment jsdom
-import type { AdminProvider } from "@fdrive/contracts";
+import type { SystemStorage } from "@fdrive/contracts";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { allCapabilities } from "@/lib/identity/capabilities";
 
 const mocks = vi.hoisted(() => ({
-  providers: vi.fn(),
+  storage: vi.fn(),
   update: vi.fn(),
   mutate: vi.fn(),
   refetch: vi.fn(),
@@ -36,29 +35,21 @@ vi.mock("@/lib/api/public-url-queries", () => ({
   useSystemPublicUrl: () => ({ dataUpdatedAt: 1 }),
 }));
 vi.mock("@/lib/api/system-queries", () => ({
-  useAdminProviders: () => mocks.providers(),
-  useAdminUpdateProvider: () => mocks.update(),
+  useSystemStorage: () => mocks.storage(),
+  useUpdateSystemStorage: () => mocks.update(),
 }));
 const { GeneralPage } = await import("./general-page");
 
-const FOLDER: AdminProvider = {
+const FOLDER: SystemStorage = {
   id: "00000000-0000-4000-8000-00000000000a",
-  type: "local",
-  label: "Local folder",
-  baseUrl: "",
-  config: {},
-  enabled: true,
-  managedByEnv: true,
-  capabilities: allCapabilities(true),
-  identityCount: 3,
-  reachable: true,
-  checkedAt: "2026-01-01T00:00:00.000Z",
-  createdAt: "2026-01-01T00:00:00.000Z",
+  name: "Local folder",
+  healthy: true,
+  detail: "The storage root is a writable folder",
 };
 
-function withProviders(providers: AdminProvider[]) {
-  mocks.providers.mockReturnValue({
-    data: { providers },
+function withStorage(storage: SystemStorage) {
+  mocks.storage.mockReturnValue({
+    data: storage,
     isError: false,
     dataUpdatedAt: 5,
     refetch: mocks.refetch,
@@ -66,7 +57,7 @@ function withProviders(providers: AdminProvider[]) {
 }
 
 beforeEach(() => {
-  withProviders([FOLDER]);
+  withStorage(FOLDER);
   mocks.update.mockReturnValue({ mutate: mocks.mutate, isPending: false, isError: false });
 });
 afterEach(() => {
@@ -90,10 +81,10 @@ it("holds the installation-wide settings: the address, the files folder and its 
   expect(screen.getByText("Server address card")).toBeTruthy();
   expect(screen.getByText("Storage")).toBeTruthy();
   expect(screen.getByText("Folder on this server, set by FDRIVE_STORAGE_ROOT.")).toBeTruthy();
-  expect(screen.getByText("Shown on the login page and in Finder.")).toBeTruthy();
+  expect(screen.getByText("Shown under each username and in Finder.")).toBeTruthy();
   expect(screen.getByText("Trash card for Local folder")).toBeTruthy();
-  // A reachable folder needs no reachability line, and nothing links elsewhere.
-  expect(screen.queryByText("Unreachable")).toBeNull();
+  // A healthy folder needs no health line, and nothing links elsewhere.
+  expect(screen.queryByText("Unavailable")).toBeNull();
   expect(screen.queryByRole("alert")).toBeNull();
   expect(screen.queryByRole("link")).toBeNull();
 });
@@ -109,12 +100,9 @@ it("renames the storage with the trimmed name, and only once it changed", () => 
   expect(saveButton().disabled).toBe(false);
   fireEvent.click(saveButton());
 
-  expect(mocks.mutate).toHaveBeenCalledWith(
-    { id: FOLDER.id, patch: { label: "Home storage" } },
-    expect.anything(),
-  );
+  expect(mocks.mutate).toHaveBeenCalledWith({ name: "Home storage" }, expect.anything());
   act(() => mocks.mutate.mock.calls[0]?.[1].onSuccess());
-  // The draft is dropped: the field shows the saved name again until the list refetches.
+  // The draft is dropped: the field shows the saved name again until it refetches.
   expect(nameInput().value).toBe("Local folder");
 });
 
@@ -144,43 +132,24 @@ it("shows the save in flight and a refused rename", () => {
   expect(screen.getByRole("alert")).toBeTruthy();
 });
 
-it("says when fdrive cannot reach the folder", () => {
-  withProviders([{ ...FOLDER, reachable: false }]);
+it("says why fdrive cannot use the folder", () => {
+  const reason = "The files folder is missing. Check FDRIVE_FILES_DIR.";
+  withStorage({ ...FOLDER, healthy: false, detail: reason });
   render(<GeneralPage />);
 
-  expect(screen.getByText("Unreachable")).toBeTruthy();
-  expect(screen.getByRole("alert").textContent).toBe(
-    "fdrive can't reach this folder. Check that FDRIVE_STORAGE_ROOT exists and is writable.",
-  );
+  expect(screen.getByText("Unavailable")).toBeTruthy();
+  expect(screen.getByRole("alert").textContent).toBe(reason);
+  expect(screen.getByText("Trash card for Local folder")).toBeTruthy();
 });
 
-it("leaves the Trash card out for storage without Trash", () => {
-  withProviders([{ ...FOLDER, capabilities: { ...allCapabilities(true), trash: false } }]);
-  render(<GeneralPage />);
-
-  expect(screen.queryByText(/Trash card/)).toBeNull();
-});
-
-it("tells the operator to set FDRIVE_STORAGE_ROOT when there is no folder", () => {
-  withProviders([]);
-  render(<GeneralPage />);
-
-  expect(
-    screen.getByText(
-      "This installation has no files folder. Set FDRIVE_STORAGE_ROOT and restart fdrive.",
-    ),
-  ).toBeTruthy();
-  expect(screen.queryByLabelText("Name")).toBeNull();
-});
-
-it("shows a placeholder while loading and a retry when the list fails", () => {
-  mocks.providers.mockReturnValue({ data: undefined, isError: false, dataUpdatedAt: 0 });
+it("shows a placeholder while loading and a retry when the storage fails to load", () => {
+  mocks.storage.mockReturnValue({ data: undefined, isError: false, dataUpdatedAt: 0 });
   const { container, unmount } = render(<GeneralPage />);
   expect(container.querySelector('[data-slot="skeleton"]')).toBeTruthy();
   expect(screen.getByText("updated: 1")).toBeTruthy();
   unmount();
 
-  mocks.providers.mockReturnValue({
+  mocks.storage.mockReturnValue({
     data: undefined,
     isError: true,
     error: new Error("offline"),

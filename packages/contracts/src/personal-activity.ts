@@ -50,7 +50,6 @@ export const PersonalActivitySource = z.enum([
   "mcp",
   "native",
   "indexer",
-  "refresh",
 ]);
 export const PersonalActivityOutcome = z.enum([
   "success",
@@ -68,8 +67,6 @@ export const PersonalActivityEvidence = z.enum([
   "watcher_move",
   "watcher_change",
   "sha256_relink",
-  "provider_version",
-  "refresh_comparison",
   "reconciled",
 ]);
 export type PersonalActivitySource = z.infer<typeof PersonalActivitySource>;
@@ -90,15 +87,8 @@ export const ActivityFacts = z
       .string()
       .regex(/^[a-f0-9]{64}$/)
       .optional(),
-    version: z.string().max(256).optional(),
     variant: z.enum(["duplicate", "save_as", "stored", "stream", "all", "single"]).optional(),
     trashLeaf: virtualPath.optional(),
-    /**
-     * How the item reached Trash, on events recorded before fdrive's own move
-     * was the only way (`sftpgo_rule` was SFTPGo's recycle rule). Accepted
-     * so those events still read; nothing records it now.
-     */
-    trashStrategy: z.enum(["sftpgo_rule", "fdrive_move"]).optional(),
     favorite: z.boolean().optional(),
     tags: z
       .array(
@@ -213,12 +203,6 @@ export const PersonalActivityResponse = z.object({
   historyStartsAt: instant.nullable(),
   retainedFrom: instant.nullable(),
   batchSummary: ActivityBatchSummary.optional(),
-  coverage: z.object({
-    mutations: z.boolean(),
-    reads: z.boolean(),
-    observations: z.enum(["watcher_and_refresh", "refresh", "unavailable"]),
-    observationGap: z.boolean(),
-  }),
 });
 export type PersonalActivityResponse = z.infer<typeof PersonalActivityResponse>;
 
@@ -273,7 +257,6 @@ export const ActivityRevisionsResponse = z.object({
       eventId: CanonicalUuid,
       size: z.number().nullable(),
       sha256: z.string().nullable(),
-      providerVersion: z.string().nullable(),
     }),
   ),
   nextCursor: z.string().nullable(),

@@ -122,7 +122,6 @@ export function buildApiEnv(
     FDRIVE_THUMBS_DIR: join(repoRoot, "deploy", "dev", ".data", "thumbs"),
     FDRIVE_INDEXER_URL: `http://127.0.0.1:${devPort(env, "FDRIVE_DEV_INDEXER_HTTP_PORT", 58010)}`,
     FDRIVE_OCR_URL: `http://127.0.0.1:${devPort(env, "FDRIVE_DEV_OCR_HTTP_PORT", 58011)}`,
-    FDRIVE_ADMIN_USERS: "dev",
   };
 }
 

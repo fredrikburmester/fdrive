@@ -1,5 +1,5 @@
-import { withBackupWriter } from "@fdrive/backup";
-import { type ProviderModule, reservedFolders, type StorageProvider } from "@fdrive/core";
+import { withDatabaseWriter } from "@fdrive/backup";
+import { reservedFolders, type StorageProvider } from "@fdrive/core";
 import {
   createActivityExportsRepo,
   createActivityObservationsRepo,
@@ -8,14 +8,11 @@ import {
   createChangeJournal,
   createChangeWriter,
   createDb,
-  createDesktopPublishLock,
   createDesktopRepo,
   createFilesFolderFacts,
   createIndexQueries,
-  createLoginRepo,
   createOfficeFileRepo,
   createOfficeWriteScope,
-  createPool,
   createProcessingFailureReader,
   createRepos,
   createShareRepo,
@@ -25,7 +22,6 @@ import {
 } from "@fdrive/db";
 import { SHARED_WITH_ME } from "@fdrive/local";
 import type { Logger } from "pino";
-import { verifyCredentials } from "./accounts/credentials.js";
 import { createActivityAdmission } from "./activity/admission.ts";
 import { registerActivityExports } from "./activity/exports.ts";
 import { createActivityMaintenance } from "./activity/maintenance.ts";
@@ -40,12 +36,17 @@ import { registerAiRoutes } from "./ai/routes.ts";
 import { createAiSettingsService, type ResolvedAiConfig } from "./ai/settings.ts";
 import type { AppHono } from "./app.js";
 import { createApp } from "./app.js";
-import { createAuthModule, createLoginLimiter, open, parseMasterKey, seal } from "./auth/index.js";
 import {
-  createIdentityStorageFactory,
-  createPinnedStorageFactory,
-  trashSettingsForStorage,
-} from "./auth/storage-factory.ts";
+  createAuthModule,
+  createLoginLimiter,
+  createLoginReauthentication,
+  createPasswordCheck,
+  open,
+  parseMasterKey,
+  seal,
+} from "./auth/index.js";
+import { createPrincipalFactory } from "./auth/principal.ts";
+import { createIdentityStorageFactory, trashSettingsForStorage } from "./auth/storage-factory.ts";
 import { createBackupModule } from "./backups/module.js";
 import { createRecoveryApp } from "./backups/recovery.js";
 import { registerBackupRoutes } from "./backups/routes.js";
@@ -54,7 +55,7 @@ import { type Subsystem, type SubsystemProbe, startupSummaryLines } from "./conf
 import { createDesktopChanges } from "./desktop/changes.js";
 import { createIndexedContentLookup } from "./desktop/indexed-content.js";
 import { withDesktopMetadata } from "./desktop/metadata.js";
-import { createDesktopRetention, DEFAULT_DESKTOP_RETENTION } from "./desktop/retention.js";
+import { createDesktopRetention } from "./desktop/retention.js";
 import { registerDesktopRoutes } from "./desktop/routes.js";
 import { createDesktopWrites } from "./desktop/writes.js";
 import { ApiHttpError } from "./errors.js";
@@ -67,10 +68,16 @@ import { createFeatureService } from "./features/service.js";
 import { publishFsEvent, registerFsRoutes } from "./fs/routes.js";
 import { createJobRunner } from "./jobs/runner.js";
 import { createChangeQueue } from "./local/change-queue.js";
-import { createDeploymentFilesFolderGuard, filesFolderHealth } from "./local/files-folder.js";
+import {
+  createDeploymentFilesFolderGuard,
+  deploymentFilesFolder,
+  ensureStorageRow,
+  filesFolderHealth,
+  journalRoot,
+  localIndexRoot,
+} from "./local/files-folder.js";
 import { registerGrantRoutes } from "./local/grant-routes.js";
 import { createLocalGrantService } from "./local/grants.js";
-import { deploymentModules, journalRoot } from "./local/modules.js";
 import { registerLocalUserRoutes } from "./local/routes.js";
 import { createLocalUserService } from "./local/service.js";
 import { createLocalUserStore } from "./local/users.js";
@@ -82,29 +89,23 @@ import { createMetadataService, withFollowers } from "./metadata/service.js";
 import { withTrashMoves } from "./metadata/trash-moves.js";
 import { extractClientIp } from "./net.js";
 import { configuredOfficeProduct, officeConfig } from "./office/config.ts";
-import { allowsOfficeEdit } from "./office/edit-policy.ts";
+import { createOfficeEditPolicy } from "./office/edit-policy.ts";
+import { createOfficeMoves } from "./office/moves.ts";
 import { createDiscoveryCache } from "./office/protocol/discovery-cache.ts";
-import { applyOfficeRootEvent, withOfficeMetadata } from "./office/registry-events.ts";
 import { registerOfficeRoutes, registerWopiRoutes } from "./office/routes.ts";
 import { createOfficeService } from "./office/service.ts";
-import {
-  createOfficeSettingsService,
-  OFFICE_SETTINGS_KEY,
-  probeOnlyOfficeRuntime,
-} from "./office/settings.ts";
+import { createOfficeSettingsService, probeOnlyOfficeRuntime } from "./office/settings.ts";
 import { registerOfficeSettingsRoutes } from "./office/settings-routes.ts";
 import { createOfficeStorageFactory } from "./office/storage.ts";
 import { createOfficeTokenCodec } from "./office/tokens.ts";
-import type { OfficeDeps } from "./office/types.ts";
 import { registerPhotoRoutes } from "./photos/routes.js";
-import { registerProviderRoutes } from "./providers/routes.js";
-import { createProviderService } from "./providers/service.js";
 import { createScopeResolver } from "./scoping/resolver.ts";
 import { createEmbedClient } from "./search/embeddings.js";
 import { createImageEmbedClient } from "./search/image-embed-client.js";
 import { createImageSearchService } from "./search/image-service.js";
 import { createNameIndexClient } from "./search/name-index.js";
 import { registerSearchRoutes } from "./search/routes.js";
+import { withCachedRootIds } from "./search/scopes.ts";
 import { createSearchService } from "./search/service.js";
 import { registerSetupRoutes } from "./setup/routes.js";
 import { createSetupService } from "./setup/service.js";
@@ -126,6 +127,8 @@ import { createPublicUrlService } from "./system/public-url.js";
 import { registerPublicUrlRoutes } from "./system/public-url-routes.js";
 import { registerSystemRoutes } from "./system/routes.js";
 import { fetchRuntimeStatus, runtimeFailure } from "./system/runtime-status.js";
+import { createStorageService } from "./system/storage.js";
+import { registerStorageRoutes } from "./system/storage-routes.js";
 import { createThumbnailsRepo } from "./system/thumbnails-repo.js";
 import { registerThumbRoutes } from "./thumbs/routes.js";
 import { createResolveTokenPrincipal } from "./tokens/principal.js";
@@ -135,18 +138,6 @@ import { registerTrashRoutes } from "./trash/routes.js";
 import { createTrashSettingsService } from "./trash/settings.js";
 import { registerTrashSettingsRoutes } from "./trash/settings-routes.js";
 import { readBuild } from "./version.js";
-
-export interface ComposeAppDeps {
-  /** Explicit server-side admission override for isolated integration fixtures. */
-  readonly officeCanEdit?: OfficeDeps["canEdit"];
-  /** Overrides the `fetch` implementation provider modules use; tests point this at fakes. */
-  readonly fetch?: typeof globalThis.fetch;
-  /**
-   * Replaces this deployment's provider modules by type, for fixtures that
-   * flip a module's strategies. Defaults to `deploymentModules(config)`.
-   */
-  readonly modules?: Readonly<Record<string, ProviderModule>>;
-}
 
 export interface ComposedApp {
   readonly app: AppHono;
@@ -158,19 +149,16 @@ const HEALTH_PROBE_TTL_MS = 15_000;
 
 /**
  * Wires every fdrive API dependency together: the Postgres pool and repos
- * (running pending migrations first), the
- * provider service (rows in `app.providers`; the local folder is pinned from
- * `FDRIVE_STORAGE_ROOT`, see `src/providers/service.ts`), the event bus, the login rate limiter, the
+ * (running pending migrations first), the files folder (`FDRIVE_STORAGE_ROOT`)
+ * and its row in `app.providers`, the event bus, the login rate limiter, the
  * auth module, the setup module (logging the one-time setup token while
- * setup is required), the admin provider routes, and the fs and events
- * route groups. Returns the resulting `Hono` app plus a `close` that ends
- * the database pool.
+ * setup is required), and every route group. Returns the resulting `Hono`
+ * app plus a `close` that ends the database pool.
  */
 export async function composeApp(
   config: AppConfig,
   logger: Logger,
   clock: () => Date = () => new Date(),
-  deps: ComposeAppDeps = {},
 ): Promise<ComposedApp> {
   // A misconfigured fdrive must say what is missing, by variable name, at
   // startup: see docs/INDEXER.md. One line per
@@ -201,28 +189,29 @@ export async function composeApp(
   });
   // A wrong or empty files folder is refused, not served or read as every
   // file deleted; the verdict is logged once and checked again as it ages.
-  const filesFolder =
-    config.fdriveStorageRoot === undefined
-      ? undefined
-      : createDeploymentFilesFolderGuard(config.fdriveStorageRoot, createFilesFolderFacts(db), {
-          info: (message) => logger.info(message),
-          error: (message) => logger.error(message),
-        });
-  await filesFolder?.verify();
+  const guard = createDeploymentFilesFolderGuard(
+    config.fdriveStorageRoot,
+    createFilesFolderFacts(db),
+    {
+      info: (message) => logger.info(message),
+      error: (message) => logger.error(message),
+    },
+  );
+  await guard.verify();
+  /** The files folder's row in `app.providers`: Trash settings, Office and the Mac name it. */
+  const storageId = await ensureStorageRow(repos);
   /**
    * Folders in each user's files no share reaches (`reservedFolders`): their
    * Trash while it is on and the Mac's bookkeeping, which holds its Trash.
    * Read per request, like the rest of Trash; `trashSettings` exists by the
    * time it is asked.
    */
-  const closedFolders = async (providerId: string): Promise<readonly string[]> => {
-    const settings = await trashSettings.configuration(providerId);
+  const closedFolders = async (): Promise<readonly string[]> => {
+    const settings = await trashSettings.configuration(storageId);
     return reservedFolders(settings.enabled ? settings.path : null);
   };
-  const modules =
-    deps.modules ??
-    deploymentModules(config, repos, passwords, changes, filesFolder, closedFolders);
-  const backups = createBackupModule(config, modules);
+  const folder = deploymentFilesFolder(config, repos, { changes, guard, closedFolders });
+  const backups = createBackupModule(config);
   await backups.start();
 
   const activityPathLocks = createDb(config.databaseUrl, {
@@ -248,52 +237,35 @@ export async function composeApp(
 
   const eventLog = createSystemEventLog({ repo: repos.systemEvents, logger });
 
-  const fetchImpl = deps.fetch ?? globalThis.fetch;
+  const fetchImpl = globalThis.fetch;
   const trashSettings = createTrashSettingsService({
     settings: repos.settings,
     identities: repos.identities,
-    // The provider service below reads these settings back (`trashEnabled`);
-    // the strategy lookup runs per request, after both exist.
-    strategyFor: async (providerId) =>
-      (await providerService.get(providerId))?.module.trash ?? "none",
   });
-  // Storage providers are rows: the local folder (`FDRIVE_STORAGE_ROOT`) is
-  // seeded and pinned at startup. Every credential-bearing call resolves an
-  // identity's own row first, so nothing ever follows a configuration
-  // change to another server.
-  const providerService = createProviderService({
-    repos,
-    fetch: fetchImpl,
-    clock,
-    eventLog,
-    environment: {
-      indexRootNames: (config.fdriveIndexRoots ?? []).map((root) => root.name),
-    },
-    trashEnabled: async (providerId) => (await trashSettings.configuration(providerId)).enabled,
-    modules,
+  const storage = createStorageService({ storageId, settings: repos.settings, folder, eventLog });
+  const indexRootNames = new Set((config.fdriveIndexRoots ?? []).map((root) => root.name));
+  /** The index root the files folder is read under; indexed only when it is configured. */
+  const rootName = localIndexRoot(config.fdriveIndexRoots, config.fdriveStorageRoot);
+  /** The same for every login: the storage's name, whether Trash is on, and indexing. */
+  const installation = async () => ({
+    storageName: await storage.name(),
+    trash: (await trashSettings.configuration(storageId)).enabled,
+    index: indexRootNames.has(rootName),
   });
-  /** The local folder's pinned row, or `null` when the deployment serves none. */
-  const localProvider = async () =>
-    modules.local === undefined
-      ? null
-      : ((await providerService.list()).find(
-          (provider) => provider.type === modules.local?.type && provider.managedByEnv,
-        ) ?? null);
-  if (!(await repos.settings.get("backup.recovery.v1"))) {
-    await providerService.seedFromEnvironment();
-  }
   const localUserStore = createLocalUserStore({
     repo: repos.localUsers,
     grants: repos.localGrants,
     passwords,
   });
+  // One limiter for every password check and setup, so failures anywhere count everywhere.
+  const limiter = createLoginLimiter({ clock });
+  const checkPassword = createPasswordCheck({ limiter, users: localUserStore });
   const localUsers = createLocalUserService({
     repos,
-    store: localUserStore,
+    checkPassword,
     passwords,
-    master,
-    providerId: async () => (await localProvider())?.id ?? null,
-    environmentAdmins: config.fdriveAdminUsers,
+    clock,
+    storageId,
     eventLog,
   });
 
@@ -308,47 +280,43 @@ export async function composeApp(
 
   const bus = createEventBus();
   const jobRunner = createJobRunner({ clock, bus });
-  const limiter = createLoginLimiter({ clock });
-  // The address everyone opens fdrive at, chosen in onboarding. Deployments
-  // from before it was a setting of its own stored it as Office's `appUrl`;
-  // that value stays in force until the owner saves the address here.
-  const publicUrl = createPublicUrlService({
-    settings: repos.settings,
-    legacyUrl: async () => {
-      const stored = await repos.settings.get<{ appUrl?: unknown }>(OFFICE_SETTINGS_KEY);
-      return typeof stored?.appUrl === "string" ? stored.appUrl : null;
-    },
-  });
+  // The address everyone opens fdrive at, chosen in onboarding. Until it is
+  // saved, Office cannot be enabled and MCP links are paths on this origin.
+  const publicUrl = createPublicUrlService({ settings: repos.settings });
 
+  /** The installation's Trash settings, kept in memory by their service. */
+  const currentTrash = () => trashSettings.configuration(storageId);
   const storageFactory = createIdentityStorageFactory({
-    providers: providerService,
-    fetch: fetchImpl,
+    identities: repos.identities,
+    folder,
     clock,
-    resolveTrashSettings: (identityId) => trashSettings.forIdentity(identityId),
+    resolveTrashSettings: currentTrash,
+  });
+  // A signed-in request's principal: its session or token query already
+  // read the login and admitted its user, so its storage needs no query.
+  const principalFor = createPrincipalFactory({ folder, clock, trashSettings: currentTrash });
+  // Without Trash settings: deletes are real. For fdrive's own bookkeeping
+  // (the Mac's staged files) and Office, which only saves over documents.
+  const storageWithoutTrash = createIdentityStorageFactory({
+    identities: repos.identities,
+    folder,
+    clock,
   });
   const shareRepo = createShareRepo(db);
   const admitActivity = createActivityAdmission({
     reads: activityReads,
     repo: activityRepo,
-    storageFactory,
     secret: config.fdriveMasterKey,
     clock,
     shares: shareRepo,
   });
-  const pinnedStorageFactory = createPinnedStorageFactory({
-    providers: providerService,
-    fetch: fetchImpl,
-  });
   const auth = createAuthModule({
-    logins: createLoginRepo(db),
     repos,
-    providers: providerService,
-    fetch: fetchImpl,
-    master,
     clock,
     config,
-    limiter,
-    storageFactory,
+    checkPassword,
+    principalFor,
+    installation,
   });
 
   // The System pages' client for the indexer's internal HTTP API; `null`
@@ -364,18 +332,19 @@ export async function composeApp(
   // See `docs/SCOPING.md`.
   const localGrants = createLocalGrantService({
     repos,
-    providerId: async () => (await localProvider())?.id ?? null,
+    storageId,
     storageFor: storageFactory,
     trashPathFor: (identityId) => trashSettings.pathForIdentity(identityId),
     closedFolders,
   });
   const scopeResolver = createScopeResolver({
-    providers: providerService,
-    indexRootNames: (config.fdriveIndexRoots ?? []).map((root) => root.name),
+    storageId,
+    rootName,
+    indexRootNames,
     // Folders others share with a local login are indexed where their owner
     // keeps them; the login sees them under `Shared with me`.
-    extraScopes: async (identity, home) =>
-      (await localGrants.received(identity)).map((folder) => ({
+    extraScopes: async (username, home) =>
+      (await localGrants.received(username)).map((folder) => ({
         rootName: home.rootName,
         fsPrefix: `/${folder.owner}${folder.path === "/" ? "" : folder.path}`,
         virtualPrefix: `/${SHARED_WITH_ME}/${folder.name}`,
@@ -386,14 +355,7 @@ export async function composeApp(
   // (`FDRIVE_INDEX_ROOTS`); the search route itself degrades to
   // `{ unavailable: true }` rather than erroring when the caller's
   // verified index scopes are unavailable for any reason.
-  const indexQueries = createIndexQueries(db);
-  const activityObservations = createActivityObservations({
-    repo: createActivityObservationsRepo(db, clock),
-    identities: repos.identities,
-    storageFactory,
-    resolver: scopeResolver,
-    onError: (error) => logger.warn({ err: error }, "personal activity refresh deferred"),
-  });
+  const indexQueries = withCachedRootIds(createIndexQueries(db), indexRootNames);
   const embedClient =
     config.fdriveEmbedUrl === undefined
       ? null
@@ -428,7 +390,7 @@ export async function composeApp(
     clock,
   });
 
-  const officeStorage = createOfficeStorageFactory({ pinned: pinnedStorageFactory });
+  const officeStorage = createOfficeStorageFactory(storageWithoutTrash);
 
   // Public links follow the items they name wherever they go, into Trash too.
   const shareMoves = createShareMoves({
@@ -444,6 +406,11 @@ export async function composeApp(
   // first, in an outer layer, so a failure in tags or favorites never leaves
   // it at a path a new item could take.
   const accessFollowers = [localGrants, shareMoves];
+  // Office documents keep their ids wherever their files go, into the Trash
+  // and back out too.
+  const officeFiles = createOfficeFileRepo(db);
+  const officeMoves = createOfficeMoves({ files: officeFiles, grants: localGrants, clock });
+  const followers = [...accessFollowers, officeMoves];
   /** A login's Trash folder while Trash is on; none for a login removed since. */
   const trashPathOf = async (identityId: string): Promise<string | null> => {
     try {
@@ -454,55 +421,25 @@ export async function composeApp(
     }
   };
   // A move into the Trash, whoever reports it, leaves metadata where the item was.
-  const metadataService = withFollowers(withTrashMoves(metadataCore, trashPathOf), accessFollowers);
+  const metadataService = withFollowers(withTrashMoves(metadataCore, trashPathOf), followers);
   const desktopRepo = createDesktopRepo(db);
-  // Serializes Mac desktop commits per identity; no other fdrive writer takes
-  // it. Mac writes are read-only unless this is configured.
-  //
-  // On its own pool: the lock holds a connection for the whole critical section,
-  // so on the main pool a few slow publications would starve every other query.
-  // The holder still runs its short authority queries on the main pool, so a
-  // saturated main pool lengthens a hold; it cannot deadlock, since nothing on
-  // the main pool waits for this lock. The bounded checkout turns exhaustion
-  // into a retryable busy rather than a stall.
-  const desktopPublishPool = createPool(config.databaseUrl, {
-    max: 4,
-    connectionTimeoutMillis: 5_000,
-    onError: (error) => logger.warn({ err: error }, "idle publish lock connection error"),
-  });
-  const desktopPublishLock = createDesktopPublishLock(desktopPublishPool, {
-    onConnectError: (cause) =>
-      logger.warn({ err: cause }, "publish lock connection unavailable; reported as busy"),
-  });
   const desktopRetention = createDesktopRetention({
     repo: desktopRepo,
-    storageForIdentity: storageFactory,
+    // Without Trash settings, so the Mac's staged files are deleted rather
+    // than moved into the Trash their owner sees.
+    storageForIdentity: storageWithoutTrash,
     clock,
     eventLog,
-    retention: {
-      ...DEFAULT_DESKTOP_RETENTION,
-      retainMs: config.fdriveDesktopRetentionDays * 24 * 60 * 60_000,
-    },
-    ...(config.fdriveDesktopStateDir ? { stateDir: config.fdriveDesktopStateDir } : {}),
   });
-  const officeFiles = createOfficeFileRepo(db);
-  const withOffice = (metadata: typeof metadataCore) =>
-    withOfficeMetadata(
-      metadata,
-      officeFiles,
-      repos.identities,
-      scopeResolver.configuredMappings,
-      clock,
-    );
   const fsMetadata = withFollowers(
-    withTrashMoves(withOffice(withDesktopMetadata(metadataCore, desktopRepo)), trashPathOf),
-    accessFollowers,
+    withTrashMoves(withDesktopMetadata(metadataCore, desktopRepo), trashPathOf),
+    followers,
   );
   // A Mac write moves what grants access with its receipt (`desktop/writes.ts`)
   // and the rest after it. It keeps its own item handles, so this skips the
   // handle registry, whose `onTrashed` would retire the handle of an item the
   // Mac puts in its own Trash.
-  const desktopMetadata = withTrashMoves(withOffice(metadataCore), trashPathOf);
+  const desktopMetadata = withFollowers(withTrashMoves(metadataCore, trashPathOf), [officeMoves]);
   const desktopAccess = async (
     identityId: string,
     from: string,
@@ -548,6 +485,7 @@ export async function composeApp(
     eventLog,
     product: officeProduct,
     publicUrl: () => publicUrl.current(),
+    usernames: async () => (await repos.localUsers.list()).map((user) => user.username),
     probeStatus: async (configuration) => {
       const runtime = await officeRuntimeFor(configuration);
       if (runtime === null) return "unavailable";
@@ -563,17 +501,6 @@ export async function composeApp(
     },
   });
   const resolveOfficeRuntime = async () => officeRuntimeFor(await officeSettings.configuration());
-  const officeLocation: OfficeDeps["location"] = async (identity) => {
-    const configured = await scopeResolver.configuredMappings(identity);
-    return configured.available
-      ? { providerId: configured.providerId, scopes: configured.scopes }
-      : null;
-  };
-  /** The default (oldest enabled) provider, independent of any identity; editor grants bind to it. */
-  const currentOfficeProvider = async (): Promise<{ id: string; label: string } | null> => {
-    const provider = await providerService.defaultProvider();
-    return provider === null ? null : { id: provider.id, label: provider.label };
-  };
   // Office's document locks on a pool of their own: a save holds its document's
   // lock, and a connection, while its body arrives, and checks admission and
   // records history on the main pool meanwhile. Nothing on the main pool waits
@@ -584,21 +511,10 @@ export async function composeApp(
     onError: (error) => logger.warn({ err: error }, "idle office lock connection error"),
   });
   const officeService = createOfficeService({
-    canEdit: async (actor, path) => {
-      const settings = await officeSettings.configuration();
-      if (!settings.enabled || !settings.editingEnabled) return false;
-      if (
-        settings.editingProviderId !== actor.identity.providerId ||
-        !settings.editorUsernames.includes(actor.identity.externalUsername)
-      )
-        return false;
-      if (deps.officeCanEdit !== undefined && !(await deps.officeCanEdit(actor, path)))
-        return false;
-      // A folder shared to view only opens for viewing, never for an edit that cannot save.
-      if (await localGrants.isReadOnly(actor.identity, path)) return false;
-      const rules = config.fdriveOfficeEditRules ?? [];
-      return rules.length === 0 || allowsOfficeEdit(rules, actor.identity, path);
-    },
+    canEdit: createOfficeEditPolicy({
+      settings: () => officeSettings.configuration(),
+      grants: localGrants,
+    }),
     config: null,
     discovery: null,
     resolveRuntime: resolveOfficeRuntime,
@@ -608,7 +524,7 @@ export async function composeApp(
     locks: createWopiLockRepo(officeLocks.db),
     withWriteScope: createOfficeWriteScope(officeLocks.db),
     clock,
-    location: officeLocation,
+    grants: localGrants,
     storageFactory: officeStorage,
     metadata: metadataService,
     bus,
@@ -619,7 +535,14 @@ export async function composeApp(
   // for once at least one index root is configured; it is otherwise left
   // unstarted so a deployment without an indexer never opens a spare
   // Postgres connection.
-  const indexRootNames = new Set((config.fdriveIndexRoots ?? []).map((root) => root.name));
+  // The indexer's notifications are the only way personal activity notices a
+  // change made outside fdrive.
+  const activityObservations = createActivityObservations({
+    repo: createActivityObservationsRepo(db, clock),
+    identities: repos.identities,
+    storageFactory,
+    resolver: scopeResolver,
+  });
   const indexerListener =
     config.fdriveIndexRoots === null
       ? null
@@ -630,12 +553,12 @@ export async function composeApp(
           fileTags: repos.fileTags,
           favorites: repos.favorites,
           metadata: metadataService,
-          onStorageEvent: (event) => applyOfficeRootEvent(officeFiles, providerService, event),
           onActivityEvent: activityObservations.watcher,
           activityTracks: activityObservations.tracks,
           onActivityRelink: activityObservations.relink,
           bus,
-          configuredMappingsFor: scopeResolver.configuredMappings,
+          configuredMappingsFor: (identity) =>
+            scopeResolver.configuredMappings(identity.externalUsername),
           storageForIdentity: (identityId) => storageFactory(identityId),
           indexRootNames,
           clock,
@@ -657,9 +580,9 @@ export async function composeApp(
   const tokenService = createTokenService({ apiTokens: repos.apiTokens, clock });
   const resolveTokenPrincipal = createResolveTokenPrincipal({
     apiTokens: repos.apiTokens,
-    identities: repos.identities,
+    logins: repos.logins,
     clock,
-    storageFactory,
+    principalFor,
   });
   // The MCP `read_file_text` tool talks to the indexer's `POST /extract-content`
   // endpoint, a different shape from the System pages' `IndexerClient`
@@ -674,18 +597,10 @@ export async function composeApp(
   const setupTokenGuard = createSetupTokenGuard(setupToken);
   const setupService = createSetupService({
     authService: auth.service,
-    accounts: repos.accounts,
-    identities: repos.identities,
-    settings: repos.settings,
-    ...(modules.local === undefined
-      ? {}
-      : {
-          local: {
-            provider: localProvider,
-            userCount: () => repos.localUsers.count(),
-            users: localUsers,
-          },
-        }),
+    logins: repos.logins,
+    passwords,
+    clock,
+    storageId,
   });
 
   if ((await setupService.status()).required) {
@@ -696,6 +611,7 @@ export async function composeApp(
     logger.info(`open ${(await publicUrl.current()) ?? ""}/setup to finish setup`);
   }
 
+  let setupDone = false;
   const build = readBuild();
   const startedAt = clock();
 
@@ -773,7 +689,7 @@ export async function composeApp(
           ),
     ]);
     return {
-      ...(filesFolder === undefined ? {} : { core: await filesFolderHealth(filesFolder) }),
+      core: await filesFolderHealth(guard),
       ...(indexResult === null ? {} : { index: indexResult.ok }),
       ...(search === null ? {} : { search }),
       ...(imageSearch === null ? {} : { imageSearch }),
@@ -793,7 +709,6 @@ export async function composeApp(
     indexQueries,
     searchService,
     scopeResolver,
-    identities: repos.identities,
     publicUrl: () => publicUrl.current(),
     indexerClient: indexerExtractClient,
     metadata: metadataService,
@@ -894,7 +809,7 @@ export async function composeApp(
               path.includes("/internal/")
             )
               return work();
-            await withBackupWriter(backups.gatePool, work);
+            await withDatabaseWriter(backups.gatePool, work);
           },
         }
       : {}),
@@ -907,38 +822,17 @@ export async function composeApp(
     startedAt,
     subsystemReachability,
     principalResolver: auth.principalResolver,
-    connectionStatus: async () => {
-      const setup = await setupService.status();
-      if (setup.required) return { required: true, providers: [] };
-      return {
-        required: false,
-        providers: (await providerService.enabled()).map((provider) => ({
-          type: provider.type,
-          // The files folder has no host; it is named by its label.
-          host: providerService.labelFor(provider),
-        })),
-      };
+    // Setup never reopens once it is done, so that answer is kept.
+    setupRequired: async () => {
+      if (setupDone) return false;
+      setupDone = !(await setupService.status()).required;
+      return !setupDone;
     },
     registerRoutes: (groups) => {
       registerBackupRoutes(
         groups,
         backups,
-        async (accountId, identityId, credential, ip) => {
-          const identity = await repos.identities.get(identityId);
-          if (!identity || identity.accountId !== accountId)
-            throw new ApiHttpError("unauthorized", "Storage identity changed");
-          const verified = await verifyCredentials(
-            { repos, providers: providerService, limiter, fetch: fetchImpl },
-            {
-              providerId: identity.providerId,
-              expectedUsername: identity.externalUsername,
-              credential,
-              ip,
-            },
-          );
-          if (verified.externalUsername !== identity.externalUsername)
-            throw new ApiHttpError("unauthorized", "Storage identity changed");
-        },
+        createLoginReauthentication({ identities: repos.identities, checkPassword }),
         config.fdriveTrustedProxyHops,
       );
       registerFeatureAdmission(groups.authed, featureService);
@@ -949,24 +843,18 @@ export async function composeApp(
       auth.registerRoutes(groups);
       // Version checks answer from the index where its row provably describes the file.
       const desktopIndexedContent = createIndexedContentLookup({
-        identities: repos.identities,
         resolver: scopeResolver,
         index: indexQueries,
       });
       // The change journal has this API's own changes only for the root it
       // journals under; a location's feed needs every one of its roots there.
-      const journaled = config.fdriveStorageRoot
-        ? journalRoot(config.fdriveIndexRoots, config.fdriveStorageRoot)
-        : null;
+      const journaled = journalRoot(config.fdriveIndexRoots, config.fdriveStorageRoot);
       registerDesktopRoutes(groups, {
         activity: personalActivity,
         changes: createDesktopChanges({
           journal: createChangeJournal(db),
           rootIds: () => indexQueries.rootIdsByName(),
-          scopes: async (identityId) => {
-            const identity = await repos.identities.get(identityId);
-            return identity ? scopeResolver.verifiedIndexScopes(identity) : null;
-          },
+          scopes: scopeResolver.verifiedIndexScopes,
           journaledRoots: new Set(journaled === null ? [] : [journaled]),
           trashPathForStorage: (storage) => {
             const settings = trashSettingsForStorage(storage);
@@ -976,26 +864,23 @@ export async function composeApp(
         writes: createDesktopWrites({
           repo: desktopRepo,
           indexedContent: desktopIndexedContent,
-          publishLock: desktopPublishLock,
           clock,
           access: desktopAccess,
           metadata: desktopMetadata,
           bus,
           logger,
-          storageForIdentity: storageFactory,
-          ...(config.fdriveDesktopStateDir ? { stateDir: config.fdriveDesktopStateDir } : {}),
+          storageForIdentity: storageWithoutTrash,
           trashPathForStorage: (storage) => {
             const settings = trashSettingsForStorage(storage);
             return settings?.enabled === true ? settings.path : null;
           },
         }),
         apiTokens: repos.apiTokens,
-        identities: repos.identities,
-        providers: repos.providers,
-        storageFactory,
+        logins: repos.logins,
+        storage: { id: storageId, name: () => storage.name() },
+        principalFor,
         clock,
         indexedContent: desktopIndexedContent,
-        publishLock: desktopPublishLock,
         clientIp: (c) => extractClientIp(c, config.fdriveTrustedProxyHops),
         trashPathForStorage: (storage) => {
           const settings = trashSettingsForStorage(storage);
@@ -1008,7 +893,6 @@ export async function composeApp(
         service: createSharesService({
           repos,
           shares: shareRepo,
-          providers: providerService,
           storageFor: storageFactory,
           trashPathFor: (identityId) => trashSettings.pathForIdentity(identityId),
           passwords,
@@ -1029,8 +913,11 @@ export async function composeApp(
         limiter,
         config,
       });
-      registerProviderRoutes(groups, { service: providerService });
-      registerLocalUserRoutes(groups, { service: localUsers });
+      registerStorageRoutes(groups, { service: storage });
+      registerLocalUserRoutes(groups, {
+        service: localUsers,
+        clientIp: (c) => extractClientIp(c, config.fdriveTrustedProxyHops),
+      });
       registerGrantRoutes(groups, { service: localGrants });
       // Built as a local variable (not a fresh object literal at the call
       // site below) so `archivePeekMaxBytes` (not part of `FsRoutesDeps`
@@ -1039,7 +926,6 @@ export async function composeApp(
       // rejecting it.
       const fsRoutesDeps = {
         activity: personalActivity,
-        activityObservations,
         bus,
         clock,
         jobRunner,
@@ -1055,7 +941,6 @@ export async function composeApp(
         folderSize: {
           indexQueries,
           resolver: scopeResolver,
-          identities: repos.identities,
           trashPathForStorage: (storage: StorageProvider) => {
             const settings = trashSettingsForStorage(storage);
             return settings?.enabled === true ? settings.path : null;
@@ -1070,15 +955,11 @@ export async function composeApp(
         settingsForStorage: trashSettingsForStorage,
         metadata: fsMetadata,
       });
-      registerTrashSettingsRoutes(groups, {
-        service: trashSettings,
-        providers: repos.providers,
-      });
+      registerTrashSettingsRoutes(groups, { service: trashSettings, storageId });
       registerPublicUrlRoutes(groups, { service: publicUrl });
       registerOfficeSettingsRoutes(groups, {
         service: officeSettings,
         workerToken: config.fdriveWorkerToken,
-        activeProvider: currentOfficeProvider,
       });
       registerOfficeRoutes(groups, { service: officeService });
       registerMetadataRoutes(groups, {
@@ -1094,10 +975,8 @@ export async function composeApp(
       registerPersonalActivityRoutes(groups, {
         repo: activityRepo,
         reads: activityReads,
-        observations: activityObservations,
         admitActivity,
         cursorSecret: config.fdriveMasterKey,
-        watcherEnabled: indexerListener !== null,
       });
       registerAiRoutes(groups, {
         settings: aiSettings,
@@ -1111,7 +990,6 @@ export async function composeApp(
         searchService,
         imageSearchService,
         resolver: scopeResolver,
-        identities: repos.identities,
         semanticEnabled: embedClient !== null,
         imageSearchEnabled: imageEmbedClient !== null,
         trashPathForStorage: (storage) => {
@@ -1134,15 +1012,18 @@ export async function composeApp(
           (await featureService.enabled("imageSearch")),
         indexQueries,
         resolver: scopeResolver,
-        identities: repos.identities,
         thumbsDir: config.fdriveThumbsDir,
+        trashPathForStorage: (storage) => {
+          const settings = trashSettingsForStorage(storage);
+          return settings?.enabled === true ? settings.path : null;
+        },
       });
       registerActivityRoutes(groups, {
         indexerUrl: config.fdriveIndexerUrl,
         ocrUrl: config.fdriveOcrUrl,
         fetch: fetchImpl,
         features: () => featureService.status(),
-        office: () => officeSettings.status(null),
+        office: () => officeSettings.status(),
       });
       registerProcessingFailureRoutes(groups, {
         read: createProcessingFailureReader(db),
@@ -1194,7 +1075,6 @@ export async function composeApp(
       if (indexerListener !== null) {
         await indexerListener.stop();
       }
-      await desktopPublishPool.end();
       await activityPathLocks.close();
       await officeLocks.close();
       await pool.end();

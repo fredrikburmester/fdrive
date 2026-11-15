@@ -3,7 +3,6 @@ import { extensionOf, isStorageError, parseMoveTrashLeaf, trashLeafPath } from "
 import { recordMetadataCommand } from "../activity/metadata.js";
 import { deleteWithActivityReceipt } from "../activity/trash.js";
 import { relocatePath } from "../fs/mutations.ts";
-import { createReadAuthorizer } from "../scoping/read-authorizer.ts";
 import type { TokenPrincipal } from "../tokens/principal.ts";
 import {
   assertMutablePath,
@@ -343,14 +342,11 @@ export async function searchImages(
 ) {
   if (deps.imageSearchService === undefined)
     return { query: args.query, hits: [], unavailable: true };
-  const identity = await deps.identities.get(principal.identityId);
-  const verified =
-    identity === null ? null : await deps.scopeResolver.verifiedIndexScopes(identity);
+  const verified = await deps.scopeResolver.verifiedIndexScopes(principal.username);
   const response = await deps.imageSearchService.search({
     query: args.query,
     limit: args.limit ?? 20,
-    scopes: verified?.available ? tokenScopes(principal, verified.scopes) : [],
-    authorizer: createReadAuthorizer({ storage: principal.storage }),
+    scopes: verified.available ? tokenScopes(principal, verified.scopes) : [],
     trashPath: trashPathFor(deps, principal),
   });
   const publicUrl = await deps.publicUrl();

@@ -102,7 +102,6 @@ def files_root(db_conn: psycopg.Connection, tmp_path: Path) -> runner.RootTarget
         "alice/old-trash/.fdrive-move-v1",
         "alice/.fdrive-desktop/trash",
         "alice/.fdrive-desktop/staging",
-        "alice/Backups/.fdrive-backups",
     ],
 )
 def test_fdrives_own_folders_are_never_candidates(

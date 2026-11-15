@@ -4,14 +4,8 @@ import { join } from "node:path";
 import { Readable } from "node:stream";
 import { S3Client } from "@aws-sdk/client-s3";
 import { Upload } from "@aws-sdk/lib-storage";
-import { createMemoryStorage } from "@fdrive/core/testing";
 import { afterEach, beforeEach, expect, it, type MockInstance, vi } from "vitest";
-import {
-  probeDestination,
-  providerDestination,
-  s3Destination,
-  verifyDelivery,
-} from "../src/destinations.js";
+import { probeDestination, s3Destination, verifyDelivery } from "../src/destinations.js";
 import { readBounded } from "../src/streams.js";
 import { memoryDestination, required } from "./helpers.js";
 
@@ -107,22 +101,6 @@ it("aborts multipart requests and surfaces listing limits", async () => {
     })),
   });
   await expect(destination.list()).rejects.toThrow("limit");
-});
-it("supports raw fileserver I/O without ordinary Trash effects", async () => {
-  const storage = createMemoryStorage();
-  await storage.mkdir("/backups", { parents: true });
-  const destination = providerDestination(storage, "/backups");
-  expect(await destination.information("missing")).toBeNull();
-  expect(await destination.put("a.age", file, new AbortController().signal)).toEqual({});
-  expect(await destination.information("a.age")).toEqual({});
-  expect((await readBounded(await destination.get("a.age"))).toString()).toBe("bytes");
-  expect(await destination.list()).toEqual(["a.age"]);
-  await storage.mkdir("/backups/sub");
-  expect(await destination.list()).toEqual(["a.age"]);
-  await destination.remove("a.age");
-  await expect(destination.get("a.age")).rejects.toThrow();
-  vi.spyOn(storage, "statFile").mockRejectedValue(Error("offline"));
-  await expect(destination.information("x")).rejects.toThrow("offline");
 });
 it("cleans only its probe, retries incomplete bytes and rejects corrupted readbacks", async () => {
   const remote = memoryDestination();

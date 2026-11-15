@@ -102,47 +102,88 @@ pub fn read_digest(file: &mut std::fs::File, stat: FileStat, settle: Duration) -
     Ok((sha, stamp))
 }
 
-/// What fdrive's API knew about an upload when it published it: the bytes' digest and the
-/// file they became. The file need not be read again to hash it while it is still that file.
-/// A client chooses an upload's modification time, so a hint also names the inode and its
-/// change time, which no client can set: another file with the same size and time never
-/// passes for it, and its digest never keys thumbnails or embeddings made from other bytes.
+/// A file as a stat shows it: the version a row records (`FileStat`) and the inode and change
+/// time that stamp the row's digest (`Stamp`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Version {
+    pub stat: FileStat,
+    pub stamp: Stamp,
+}
+
+impl Version {
+    pub fn of(metadata: &std::fs::Metadata) -> Self {
+        Self {
+            stat: FileStat::of(metadata),
+            stamp: Stamp::of(metadata),
+        }
+    }
+
+    /// A journal row's `size`, `mtime_ns`, `inode` and `ctime_ns`, when all four are set and
+    /// the size is not negative. `inode` is the unsigned inode number's 64 bits, as stored.
+    pub fn from_columns(
+        size: Option<i64>,
+        mtime_ns: Option<i64>,
+        inode: Option<i64>,
+        ctime_ns: Option<i64>,
+    ) -> Option<Self> {
+        let (size, mtime_ns, inode, ctime_ns) = (size?, mtime_ns?, inode?, ctime_ns?);
+        (size >= 0).then_some(Self {
+            stat: FileStat {
+                size: size as u64,
+                mtime_ns,
+            },
+            stamp: Stamp { inode, ctime_ns },
+        })
+    }
+}
+
+/// A file fdrive's API renamed in place: exactly as a stat showed it right after the rename
+/// (`version`), and its change time just before (`previous_ctime_ns`, with the same inode, size
+/// and modification time). A rename moves the change time on and keeps the bytes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Renamed {
+    pub version: Version,
+    pub previous_ctime_ns: i64,
+}
+
+impl Renamed {
+    /// The file's stamp just before the rename.
+    pub fn previous(&self) -> Stamp {
+        Stamp {
+            inode: self.version.stamp.inode,
+            ctime_ns: self.previous_ctime_ns,
+        }
+    }
+}
+
+/// What fdrive's API knew about an upload when it published it: the digest of the bytes it
+/// wrote and the file they became, exactly as a stat showed it once published. While a stat still shows that file, the digest describes
+/// it, so the file is neither hashed again nor read to stamp its row. A client chooses an
+/// upload's modification time, so a hint also names the inode and its change time, which no
+/// client can set: another file with the same size and time never passes for it, and its
+/// digest never keys thumbnails or embeddings made from other bytes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ContentHint {
     pub sha256: String,
-    pub size: u64,
-    pub mtime_ns: i64,
-    pub inode: u64,
-    pub ctime_ns: i64,
+    pub version: Version,
 }
 
 impl ContentHint {
     /// A hint with a well-formed digest (64 lowercase hex digits), or none: thumbnails are
-    /// stored under the digest, so anything else must never be used as one. `inode` is the
-    /// unsigned inode number's 64 bits, as stored.
-    pub fn new(sha256: &str, size: i64, mtime_ns: i64, inode: i64, ctime_ns: i64) -> Option<Self> {
+    /// stored under the digest, so anything else must never be used as one.
+    pub fn new(sha256: &str, version: Version) -> Option<Self> {
         let well_formed =
             sha256.len() == 64 && sha256.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b));
-        (well_formed && size >= 0).then(|| Self {
+        well_formed.then(|| Self {
             sha256: sha256.to_owned(),
-            size: size as u64,
-            mtime_ns,
-            inode: inode as u64,
-            ctime_ns,
+            version,
         })
     }
 
-    /// The digest, when the opened file is still the one the hint describes.
-    fn digest_for(&self, file: &std::fs::File) -> Option<String> {
-        let metadata = file.metadata().ok()?;
-        let same = FileStat::of(&metadata)
-            == FileStat {
-                size: self.size,
-                mtime_ns: self.mtime_ns,
-            }
-            && metadata.ino() == self.inode
-            && metadata.ctime() * 1_000_000_000 + metadata.ctime_nsec() == self.ctime_ns;
-        same.then(|| self.sha256.clone())
+    /// Whether the opened file is still the one the hint describes, in the version `stat`
+    /// records.
+    fn describes(&self, stat: FileStat, file: &std::fs::File) -> bool {
+        self.version.stat == stat && file.metadata().is_ok_and(|m| Version::of(&m) == self.version)
     }
 }
 
@@ -505,7 +546,7 @@ pub fn process_file(ctx: &Arc<RootContext>, abs_path: &Path, rel_path: &str, sta
     process_file_with(ctx, abs_path, rel_path, stat, None)
 }
 
-/// `process_file` for a file the API described: `hint` spares hashing it again. The file
+/// `process_file` for a file the API described: `hint` spares reading it again. The file
 /// is reopened from the root rather than through `_abs_path`.
 pub fn process_file_with(
     ctx: &Arc<RootContext>,
@@ -538,7 +579,7 @@ pub fn process_file_with(
     if let Some(row) = row.as_ref().filter(|_| unchanged) {
         let excluded = status.starts_with("excluded") && exclusion_still_applies(ctx, rel_path, stat.size);
         if excluded || !should_retry_unchanged(&status, &ctx.values()) {
-            return restamp(ctx, rel_path, stat, row);
+            return restamp(ctx, rel_path, stat, row, hint);
         }
     }
     let was_new = row.is_none();
@@ -573,16 +614,22 @@ pub fn process_file_with(
     Ok(true)
 }
 
-/// An unchanged row whose stamp does not describe its file (any more, or ever): read the
-/// file again once it has settled. The same digest earns the row the read's stamp; another
-/// one means the bytes changed under the same size and modification time, and the file is
-/// indexed again. True when it was.
-fn restamp(ctx: &Arc<RootContext>, rel_path: &str, stat: FileStat, row: &FileRow) -> Result<bool> {
+/// An unchanged row whose stamp does not describe its file (any more, or ever): take the
+/// file's digest from `hint` while the file matches it, or else read the file again once it
+/// has settled. The same digest stamps the row; another one means the bytes changed under the
+/// same size and modification time, and the file is indexed again. True when it was.
+fn restamp(
+    ctx: &Arc<RootContext>,
+    rel_path: &str,
+    stat: FileStat,
+    row: &FileRow,
+    hint: Option<&ContentHint>,
+) -> Result<bool> {
     let Some(known) = row.sha256.as_deref() else {
         return Ok(false);
     };
     // Best effort: a file that cannot be read now keeps its row as it is, as before.
-    let Ok(Some((sha, stamp))) = reread(ctx, rel_path, stat, row) else {
+    let Ok(Some((sha, stamp))) = reread(ctx, rel_path, stat, row, hint) else {
         return Ok(false);
     };
     if sha == known {
@@ -608,15 +655,57 @@ fn restamp(ctx: &Arc<RootContext>, rel_path: &str, stat: FileStat, row: &FileRow
     Ok(true)
 }
 
-/// An unchanged file's digest and the stamp the read earns, unless its row's stamp already
-/// proves it or it has not settled yet (the next look tries again): `None` then.
-fn reread(ctx: &RootContext, rel_path: &str, stat: FileStat, row: &FileRow) -> Result<Option<(String, Option<Stamp>)>> {
+/// An unchanged file's digest and the stamp that comes with it: the hint's, while the file
+/// matches it, or else what a read earns. `None` when the row's stamp already proves the
+/// digest, or the file has not settled yet (the next look tries again).
+fn reread(
+    ctx: &RootContext,
+    rel_path: &str,
+    stat: FileStat,
+    row: &FileRow,
+    hint: Option<&ContentHint>,
+) -> Result<Option<(String, Option<Stamp>)>> {
     let mut source = open_source(ctx, rel_path)?;
     let now = Stamp::of(&source.file.metadata()?);
-    if row.stamp == Some(now) || !settled(now.ctime_ns, SystemTime::now(), ctx.stamp_settle) {
+    if row.stamp == Some(now) {
+        return Ok(None);
+    }
+    if let Some(hint) = hint.filter(|h| h.describes(stat, &source.file)) {
+        return Ok(Some((hint.sha256.clone(), Some(hint.version.stamp))));
+    }
+    if !settled(now.ctime_ns, SystemTime::now(), ctx.stamp_settle) {
         return Ok(None);
     }
     read_digest(&mut source.file, stat, ctx.stamp_settle).map(Some)
+}
+
+/// After fdrive's API renamed a file to `rel_path`. When the row's stamp vouched for the file
+/// exactly as it was just before the rename, and a fresh stat shows it exactly as the rename
+/// left it, all four of size, modification time, inode and change time, nothing but the
+/// rename touched it: the stamp follows the file to the change time the rename left.
+/// Otherwise the row keeps its stamp, which no longer matches the file, and the next look
+/// reads the file once it has settled. True when the row took it.
+pub fn carry_stamp(ctx: &RootContext, rel_path: &str, renamed: &Renamed) -> Result<bool> {
+    let _guard = ctx.path_locks.get(rel_path);
+    let Some(row) = ctx.db.with(|c| db::file_row(c, ctx.root_id, rel_path))? else {
+        return Ok(false);
+    };
+    let recorded = FileStat {
+        size: row.size as u64,
+        mtime_ns: row.mtime_ns,
+    };
+    let (Some(sha), Some(stamp)) = (row.sha256.as_deref(), row.stamp) else {
+        return Ok(false);
+    };
+    if row.deleted || recorded != renamed.version.stat || stamp != renamed.previous() {
+        return Ok(false);
+    }
+    if Version::of(&open_source(ctx, rel_path)?.file.metadata()?) != renamed.version {
+        return Ok(false);
+    }
+    let stamp = renamed.version.stamp;
+    ctx.db
+        .with(|c| db::set_stamp(c, ctx.root_id, rel_path, sha, row.size, row.mtime_ns, stamp))
 }
 
 fn note_embed_outage(ctx: &RootContext, error: &anyhow::Error) {
@@ -669,7 +758,8 @@ pub fn process_inner(
 /// searchable by text at once and the worker moves on instead of waiting for the model.
 /// The file is reopened from the root by descriptor; `known` is a digest already in hand
 /// and what it does to the row's stamp, and `hint` stands in for hashing it while the
-/// opened file still matches it. Only the indexer's own read earns a stamp.
+/// opened file still matches it. A row is stamped by the indexer's own settled read, or by
+/// the hint of the API that wrote exactly those bytes.
 pub fn process_stages(
     ctx: &Arc<RootContext>,
     rel_path: &str,
@@ -684,8 +774,8 @@ pub fn process_stages(
     let mime = guess_mime(name);
     let mut source = open_source(ctx, rel_path)?;
     let (sha, stamp) = match known.or_else(|| {
-        hint.and_then(|h| h.digest_for(&source.file))
-            .map(|sha| (sha, StampUpdate::Set(None)))
+        hint.filter(|h| h.describes(stat, &source.file))
+            .map(|h| (h.sha256.clone(), StampUpdate::Set(Some(h.version.stamp))))
     }) {
         Some(known) => known,
         None => {

@@ -144,9 +144,7 @@ export function createChatService(deps: ChatServiceDeps): ChatService {
   const turns = new Map<string, Promise<void>>();
 
   async function indexedFor(principal: Principal): Promise<boolean> {
-    const identity = await deps.mcp.identities.get(principal.identityId);
-    if (identity === null) return false;
-    return (await deps.mcp.scopeResolver.verifiedIndexScopes(identity)).available;
+    return (await deps.mcp.scopeResolver.verifiedIndexScopes(principal.username)).available;
   }
 
   function trashPathOf(principal: Principal): string | null {

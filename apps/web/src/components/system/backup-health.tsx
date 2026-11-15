@@ -27,9 +27,9 @@ function estimateRows(estimate: Estimate): [string, string, string][] {
       "Accounts, settings, tags, shares and activity. Postgres indexes count here but are not exported.",
     ],
     [
-      "Recovery files and configuration ZIPs",
+      "Recovery files",
       estimate.recoveryBytes,
-      "Original copies kept by OCR, Office and the Mac app so changes can be recovered, plus logs and uploaded ZIPs.",
+      "Original copies kept by OCR and Office so changes can be recovered, plus logs.",
     ],
     [
       "Stored at destinations, at most",
@@ -161,7 +161,7 @@ export function BackupHealth({
       </SystemSection>
       <SystemSection
         title="Storage estimate"
-        description="How big one backup is and how much room your retention settings could take. Only fdrive's own data is backed up, not the files on your fileservers."
+        description="How big one backup is and how much room your retention settings could take. Only fdrive's own data is backed up, not the files folder."
       >
         <Button
           variant="outline"
@@ -216,7 +216,7 @@ export function BackupHealth({
         </p>
         <ol className="list-decimal space-y-2 pl-5 text-sm">
           <li>
-            On another machine, or a throwaway container with no access to your fileservers, set up
+            On another machine, or a throwaway container with no access to your files folder, set up
             the same fdrive version with a new empty database.
           </li>
           <li>
@@ -226,7 +226,7 @@ export function BackupHealth({
           </li>
           <li>
             Run the rehearsal. It restores into the empty database under a new identity and never
-            contacts your fileservers or backup destinations.
+            contacts your files folder or backup destinations.
             <pre className="mt-2 overflow-x-auto rounded-md bg-muted p-3 font-mono text-xs">
               {`node dist/main.js backup rehearse \\\n  --file BACKUP.fdrive.age \\\n  --key-file recovery-key.txt \\\n  --snapshot ${complete?.id ?? "SNAPSHOT_ID"} \\\n  --state-dir /tmp/fdrive-rehearsal`}
             </pre>

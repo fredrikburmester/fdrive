@@ -27,12 +27,13 @@ interface ChangeRow extends Record<string, unknown> {
   mtime_ns: string | null;
   inode: string | null;
   ctime_ns: string | null;
+  previous_ctime_ns: string | null;
 }
 
 async function rows(): Promise<ChangeRow[]> {
   const result = await db.execute<ChangeRow>(sql`
     select r.name as root, c.path, c.target_path, c.source, c.sha256, c.size::text,
-      c.mtime_ns::text, c.inode::text, c.ctime_ns::text
+      c.mtime_ns::text, c.inode::text, c.ctime_ns::text, c.previous_ctime_ns::text
     from idx.changes c join idx.roots r on r.id = c.root_id order by c.id`);
   return result.rows;
 }
@@ -83,9 +84,21 @@ describe("append", () => {
         },
       },
       { path: "alice/old", targetPath: "alice/new" },
+      {
+        path: "alice/b.pdf",
+        targetPath: "alice/c.pdf",
+        stamp: { size: 7, mtimeNs: 5n, ino: 2n ** 64n - 6n, ctimeNs: 6n, previousCtimeNs: 4n },
+      },
     ]);
     await journal.append("files", "scan", [{ path: "alice/gone.txt" }]);
-    const none = { sha256: null, size: null, mtime_ns: null, inode: null, ctime_ns: null };
+    const none = {
+      sha256: null,
+      size: null,
+      mtime_ns: null,
+      inode: null,
+      ctime_ns: null,
+      previous_ctime_ns: null,
+    };
     expect(await rows()).toEqual([
       {
         root: "files",
@@ -97,8 +110,22 @@ describe("append", () => {
         mtime_ns: "1700000000123456789",
         inode: "-5",
         ctime_ns: "1700000001000000001",
+        previous_ctime_ns: null,
       },
       { root: "files", path: "alice/old", target_path: "alice/new", source: "api", ...none },
+      // A moved file as the rename left it, and its change time before: no digest.
+      {
+        root: "files",
+        path: "alice/b.pdf",
+        target_path: "alice/c.pdf",
+        source: "api",
+        sha256: null,
+        size: "7",
+        mtime_ns: "5",
+        inode: "-6",
+        ctime_ns: "6",
+        previous_ctime_ns: "4",
+      },
       { root: "files", path: "alice/gone.txt", target_path: null, source: "scan", ...none },
     ]);
   });

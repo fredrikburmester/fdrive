@@ -132,6 +132,7 @@ function fakeIndexQueries(overrides: Partial<IndexQueries> = {}): IndexQueries {
     similar: overrides.similar ?? (async () => fail("similar")),
     recentFiles: overrides.recentFiles ?? (async () => fail("recentFiles")),
     thumbnail: overrides.thumbnail ?? (async () => fail("thumbnail")),
+    thumbnailKeys: overrides.thumbnailKeys ?? (async () => fail("thumbnailKeys")),
     deletedRowSha: overrides.deletedRowSha ?? (async () => fail("deletedRowSha")),
     liveRowsBySha: overrides.liveRowsBySha ?? (async () => fail("liveRowsBySha")),
     searchImages: overrides.searchImages ?? (async () => fail("searchImages")),
@@ -971,9 +972,8 @@ describe("createIndexerListener", () => {
       metadata,
       bus,
       // A root named "files" exists in the event, but this identity's
-      // provider mapping never resolves: the same root name on a
-      // different provider must never be treated as this identity's data.
-      configuredMappingsFor: async () => ({ available: false, reason: "provider_mismatch" }),
+      // mapping never resolves: its paths must never be treated as its data.
+      configuredMappingsFor: async () => ({ available: false, reason: "invalid_configuration" }),
       indexRootNames: ROOT_NAMES,
       clock: clock.now,
       logger: makeLogger().logger,
@@ -1376,52 +1376,6 @@ describe("createPgNotificationClient", () => {
   });
 });
 
-describe("global storage registry hook", () => {
-  it("awaits the hook once before identity fanout and catches failure", async () => {
-    const repos = createMemoryRepos();
-    const fake = createFakeNotificationClient();
-    const bus = createEventBus();
-    const { metadata } = fakeMetadataService();
-    const { logger, warnings } = makeLogger();
-    const order: string[] = [];
-    const identities = {
-      ...repos.identities,
-      listAll: async () => {
-        order.push("identities");
-        return [];
-      },
-    };
-    let shouldFail = false;
-    const listener = createIndexerListener({
-      createClient: () => fake.client,
-      identities,
-      indexQueries: fakeIndexQueries(),
-      fileTags: repos.fileTags,
-      favorites: repos.favorites,
-      metadata,
-      bus,
-      configuredMappingsFor: configuredMappingsFor(),
-      indexRootNames: ROOT_NAMES,
-      clock: () => new Date(AT),
-      logger,
-      onStorageEvent: async () => {
-        order.push("registry");
-        if (shouldFail) throw new Error("registry failed");
-      },
-      ...allowAllLiveCheck(),
-    });
-    await listener.start();
-    fake.notify(JSON.stringify(makeEvent()));
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(order).toEqual(["registry", "identities"]);
-    shouldFail = true;
-    fake.notify(JSON.stringify(makeEvent()));
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(warnings.at(-1)?.[1]).toBe("indexer-listener: event processing failed");
-    await listener.stop();
-  });
-});
-
 describe("createIndexerListener: storageForIdentity failure", () => {
   it("treats a storage resolution failure as denied, never publishing", async () => {
     const repos = createMemoryRepos();
@@ -1467,14 +1421,27 @@ it("processes notifications in order and continues after a failed payload", asyn
   const repos = createMemoryRepos();
   const fake = createFakeNotificationClient();
   const { metadata } = fakeMetadataService();
+  const { logger, warnings } = makeLogger();
   let release!: () => void;
   const blocked = new Promise<void>((resolve) => {
     release = resolve;
   });
-  const received: string[] = [];
+  let payloads = 0;
   const listener = createIndexerListener({
     createClient: () => fake.client,
-    identities: repos.identities,
+    // Each payload reads the logins again, so the first one can fail there.
+    identities: {
+      ...repos.identities,
+      listAll: async () => {
+        payloads += 1;
+        if (payloads === 1) {
+          await blocked;
+          throw new Error("first failed");
+        }
+        return [];
+      },
+    },
+    scopeCacheTtlMs: 0,
     indexQueries: fakeIndexQueries({ rootIdsByName: async () => ({ files: 1 }) }),
     fileTags: repos.fileTags,
     favorites: repos.favorites,
@@ -1483,24 +1450,18 @@ it("processes notifications in order and continues after a failed payload", asyn
     configuredMappingsFor: configuredMappingsFor(),
     indexRootNames: ROOT_NAMES,
     clock: () => new Date(AT),
-    logger: makeLogger().logger,
+    logger,
     ...allowAllLiveCheck(),
-    onStorageEvent: async (event) => {
-      received.push(event.path);
-      if (event.path === "first") {
-        await blocked;
-        throw new Error("first failed");
-      }
-    },
   });
   await listener.start();
   fake.notify(JSON.stringify({ ...makeEvent(), path: "first" }));
   fake.notify(JSON.stringify({ ...makeEvent(), path: "second" }));
   await new Promise((resolve) => setTimeout(resolve, 0));
-  expect(received).toEqual(["first"]);
+  expect(payloads).toBe(1);
   release();
   await new Promise((resolve) => setTimeout(resolve, 0));
-  expect(received).toEqual(["first", "second"]);
+  expect(payloads).toBe(2);
+  expect(warnings.at(-1)?.[1]).toBe("indexer-listener: event processing failed");
   await listener.stop();
 });
 
