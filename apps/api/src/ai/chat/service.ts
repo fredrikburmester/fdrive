@@ -140,10 +140,6 @@ export function createChatService(deps: ChatServiceDeps): ChatService {
   const live = deps.live ?? createLiveChats({ clock: deps.clock });
   const turns = new Map<string, Promise<void>>();
 
-  async function indexedFor(principal: Principal): Promise<boolean> {
-    return (await deps.mcp.scopeResolver.verifiedIndexScopes(principal.username)).available;
-  }
-
   async function checkAuthority(principal: Principal): Promise<void> {
     if (principal.verifyAuthority !== undefined && !(await principal.verifyAuthority()))
       throw new ChatTurnError("Your session ended. Sign in and try again.");
@@ -234,7 +230,7 @@ export function createChatService(deps: ChatServiceDeps): ChatService {
       mcp: deps.mcp,
       principal,
       focus,
-      indexed: await indexedFor(principal),
+      indexed: await deps.mcp.indexed(),
       share: chat.share,
     };
     const tools: AiTool[] = [

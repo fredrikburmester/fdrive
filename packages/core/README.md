@@ -16,12 +16,12 @@ and in the browser, and is tested with fakes rather than mocks.
   escaping. No function in this package can produce a path outside the virtual root it started
   from.
 - **Scope is mandatory on every index-style query.** `scope.ts` is the one place that translates
-  between a user's virtual paths and a storage root's filesystem paths. Anything that lists,
-  filters, or maps a set of files coming from an index (`filterInScope`, `scopePrefixes`) takes a
-  `Scope[]` and only ever returns items that fall within it. There is no "no scope" query; an
+  between a user's virtual paths and the files folder's paths. Anything that lists, filters, or
+  maps a set of files coming from an index takes a `Scope[]` and only ever returns items that
+  fall within it. There is no "no scope" query; an
   empty `Scope[]` means "nothing is in scope," not "everything is."
-- **Fs paths never leave this package's public surface toward the UI.** `toVirtualPath` and
-  `filterInScope` map storage-side paths back to virtual paths; route handlers and UI code should
+- **Fs paths never leave this package's public surface toward the UI.** `toVirtualPath` maps
+  storage-side paths back to virtual paths; route handlers and UI code should
   only ever see virtual paths. This is what keeps a wrong home-template mapping from leaking one
   user's files into another user's search results: the scope check happens once, in core, not at
   every call site.

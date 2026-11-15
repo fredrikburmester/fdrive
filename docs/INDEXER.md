@@ -3,8 +3,6 @@
 Per-file failures for thumbnails, text extraction and embeddings are persisted in
 PostgreSQL, with recovery and retry controls in System. See
 [persistent failure details](SYSTEM-ACTIVITY.md#persistent-failure-details).
-Startup waits for the failure-history and change-journal migrations before processing files,
-including when the schema's compatibility version is unchanged during an upgrade.
 `INDEXER_LOG_DIR` optionally retains timestamped diagnostic output as `indexer.log` and
 four rotated files, 10 MiB each, alongside stdout. Deployment mounts a persistent named
 volume there; standalone workers must configure a writable directory to retain these logs.
@@ -12,20 +10,24 @@ volume there; standalone workers must configure a writable directory to retain t
 > [!TIP]
 > **Looking to configure or use search in fdrive?** See the simple user guide in **[docs/SEARCH-AND-AI.md](SEARCH-AND-AI.md)**. This document is a technical reference for developers on the indexing service.
 
-`services/indexer` is a Rust program (`fdrive-indexer`) that walks and watches one or
-more disk roots, keeps `idx.files` / `idx.chunks` / `idx.folders` current, and generates
-thumbnails. It
+`services/indexer` is a Rust program (`fdrive-indexer`) that walks and watches the files
+folder, mounted at `/data`, keeps `idx.files` / `idx.chunks` / `idx.folders` current, and
+generates thumbnails. It
 replaced a Python service of the same behaviour and keeps its HTTP API, database writes,
 events and thumbnail layout, so existing index data stays valid. It never creates or migrates
 its own schema: `packages/db`'s Drizzle migrations own `idx.*` and
-`app.thumbnails` / `app.settings`, and the indexer waits for `idx.schema_version`
-to report the version it expects before doing anything else.
+`app.thumbnails` / `app.settings`. Compose starts it once the API is healthy, and the API runs
+every migration before it serves, so the schema is there when it starts.
+
+The `ml` service is one base URL, `ML_URL` (`http://ml:8080` by default): the indexer calls its
+document extraction unit at `<ML_URL>/extract`, text embeddings at `<ML_URL>/text` and image
+embeddings at `<ML_URL>/image`.
 
 See [architecture](ARCHITECTURE.md) for the service boundaries.
 
 ## What is indexed
 
-Every regular file under a configured root, except:
+Every regular file in the files folder, except:
 
 - Names in `SKIP_NAMES` (`.DS_Store`, `Thumbs.db`, `desktop.ini`, `.localized`),
   AppleDouble sidecars (`._*`) and uploads local storage is still writing
@@ -114,20 +116,17 @@ refused, except a JPEG whose reduced-scale decode fits, such as a camera panoram
 
 ### Image embeddings (optional)
 
-When `IMAGE_EMBED_URL` is set (the `ml` service's image unit, a SigLIP 2
+While image search is on, with the `ml` service's image unit (a SigLIP 2
 CLIP-style model, `google/siglip2-large-patch16-256`, 1024
 dimensions), the indexer embeds the **256px thumbnail** it already wrote for
 every image file (never the original) and stores the vector in
 `app.image_embeddings`, keyed by the file's sha256 (`content_key`, the same
 key `app.thumbnails` uses) so two copies of one photo are embedded once.
-Absent `IMAGE_EMBED_URL`, this is entirely off: no error, `GET /stats`
-reports `image_embeddings: 0`, matching how OCR degrades without its own
-service.
 
 The pass follows thumbnail generation (`indexer.rs`'s `embed_thumbnail`,
 called once a thumbnail is written). Retries embed inline. A scan hands
 embeddings to a thread of its own, and watcher and journaled changes share one
-long-lived thread per root, because the model runs one inference at a time and waiting
+long-lived thread, because the model runs one inference at a time and waiting
 inline would pace every worker, and every later change, at the model's speed. Before writing anything, it checks the unit's `GET /health`
 against the column's fixed dimension (1024) and an `"ok"` status, reusing a
 passing answer for 30 seconds; on a
@@ -138,8 +137,8 @@ skipped; one embedded by a different (stale) model is always re-embedded, so
 a model change self-heals as files are next touched.
 
 `POST /image-embeddings/rebuild` (`maintenance.rs`) is the bulk
-backfill/rebuild pass, mirroring `/thumbnails/rebuild`'s shape: `{ root?,
-path?, force? }`, batched against the unit at `IMAGE_EMBED_REQUEST_BATCH_SIZE`
+backfill/rebuild pass, mirroring `/thumbnails/rebuild`'s shape: `{ path?,
+force? }`, batched against the unit at `IMAGE_EMBED_REQUEST_BATCH_SIZE`
 requests per call. Without `force`, only images with no row at all are
 filled in; a row from a different model is left alone. With `force`, a
 stale-model row is also re-embedded and overwritten, the deliberate "replace
@@ -226,8 +225,8 @@ read from their own position (see the [change journal plan](plans/CHANGE-JOURNAL
    never key thumbnails or embeddings under another file's digest. A file move's row carries
    the same four for the file exactly as the rename left it, its change time just before
    (`previous_ctime_ns`) and no digest, so the row's [stamp](#stamps) can follow it. Where the API and the indexer see
-   different inode numbers, neither ever matches. A `work-<root>` thread
-   listens on the channel, looks every 30 seconds without it, and applies the root's rows
+   different inode numbers, neither ever matches. A `work-files` thread
+   listens on the channel, looks every 30 seconds without it, and applies the rows
    after its position, oldest first, saving its position in `idx.change_cursors` (consumer
    `indexer`) after each batch:
    - a file is indexed on one of `indexer.workers` workers;
@@ -336,20 +335,13 @@ worker moves on instead of waiting for the model. The thread fills in the vector
 the row `indexed`, skipping a row a newer version has replaced; when its queue is full, the
 worker embeds inline. Scans embed inline.
 
-## Multiple roots
+## The root
 
-`INDEX_ROOTS` is a comma-separated `name=path` list, for example:
-
-```
-INDEX_ROOTS=files=/data,photos=/roots/photos
-```
-
-Each name becomes a row in `idx.roots` (upserted by name on start, so restarts
-reuse the same `root_id`); every `idx.files` / `idx.chunks` / `idx.folders` /
-`idx.scans` / `idx.changes` / `idx.change_cursors` row carries
-that `root_id`. Each root gets its own
-inotify watcher and its own periodic scan, running independently. Every root needs the
-`.fdrive-files` marker; the API writes it only into the files folder.
+The files folder is the index's only root: `idx.roots` row 1, named `files`, which a migration
+seeds, so it exists before the indexer or the API first touches the index. The indexer reads the
+folder at `/data`; every `idx.files` / `idx.chunks` / `idx.folders` / `idx.scans` /
+`idx.changes` / `idx.change_cursors` row carries its `root_id`. The folder needs this
+installation's `.fdrive-files` marker (above).
 
 ## Settings (read from `app.settings` at the start of every scan cycle)
 
@@ -369,7 +361,7 @@ the next cycle.
 
 After every applied change (create, change, delete, move), the indexer sends
 `NOTIFY idx_events, '<json>'`:
-`{ "kind": "created|changed|deleted|moved", "root": "<name>", "path": "<rel>", "target_path": "<rel or null>", "at": "<iso8601>" }`.
+`{ "kind": "created|changed|deleted|moved", "root": "files", "path": "<rel>", "target_path": "<rel or null>", "at": "<iso8601>" }`.
 A new or changed file's event follows its row and thumbnails, before its text, since
 listeners only check access and refresh listings. Events are not stored; the
 [change journal](plans/CHANGE-JOURNAL.md) is the durable record.
@@ -395,13 +387,13 @@ a published port in the non-dev compose file.
 
 | Endpoint | Method | Body | Returns |
 | --- | --- | --- | --- |
-| `/health` | GET | None | `{ ok, roots, watcher, embed_ok, schema_version }`. Answers 500 while postgres is unreachable, which is what the container healthcheck keys on; the handler's connection reopens itself on the next probe once postgres is back, so a recreated `db` container never needs an indexer restart. |
+| `/health` | GET | None | `{ ok, watcher, embed_ok, features, storage }`: `watcher` says whether the file watcher runs, `storage` is `{ readable, writable }` for the files folder. Answers 500 while postgres is unreachable, which is what the container healthcheck keys on; the handler's connection reopens itself on the next probe once postgres is back, so a recreated `db` container never needs an indexer restart. |
 | `/activity` | GET | None | In-memory scan, watcher and maintenance operations; see [System activity](SYSTEM-ACTIVITY.md). No storage scans. |
-| `/stats` | GET | None | Per-root file counts by `text_status`, chunk and embedded-chunk counts, last scan summary, queue depth, total thumbnails, total image embeddings, a sample of recent errors, and `thumbnail_rebuild` / `image_embedding_rebuild`: `{ running, processed, total, total_known, started_at, finished_at, errors, outcome }` for the most recent rebuild pass of each kind (all zero/`null`/`false` if none has run yet). |
+| `/stats` | GET | None | File counts by `text_status` (`counts_by_status`), chunk and embedded-chunk counts, the last scan's summary (`last_scan`), queue depth, total thumbnails, total image embeddings, a sample of recent errors, and `thumbnail_rebuild` / `image_embedding_rebuild`: `{ running, processed, total, total_known, started_at, finished_at, errors, outcome }` for the most recent rebuild pass of each kind (all zero/`null`/`false` if none has run yet). |
 | `/extract-content?name=` | POST | The file's bytes, at most 4 MiB | `{ text, status }`: live text extraction of bytes the API already read through the caller's own storage, for MCP's `read_file_text` (not persisted). `name` gives the format; it is never a path. The bytes go to a temporary file removed afterwards; two run at once and a third is `429`. |
-| `/reindex` | POST | `{ root, path?, thumbnails? }` | Marks matching rows `pending` (the whole root if `path` is omitted, otherwise that path and everything under it) and wakes that root's scan, which re-extracts text and re-embeds. Returns `{ count }`. With `thumbnails: true`, also starts a thumbnail-rebuild pass (see below) over the same scope; if one is already running, this is a no-op (best effort, not reported back). |
-| `/thumbnails/rebuild` | POST | `{ root?, path?, force? }` | Starts a background thumbnail-only pass: regenerates both sizes for every live media file in scope, writing only `app.thumbnails` (`idx.files.text_status`, chunks, and embeddings are never touched, unlike `/reindex`). Without `force`, an existing thumbnail for a given sha256 and size is left alone; with `force`, it is deleted and rewritten. `root` omitted targets every configured root; `path` omitted targets the whole root. Returns `202 { started: true, total }` (`total` is `null` until discovery completes in the background; poll `/stats` or `/activity` for the count), or `409` if a rebuild is already running (only one runs at a time, process-wide). |
-| `/image-embeddings/rebuild` | POST | `{ root?, path?, force? }` | Starts a background image-embedding backfill/rebuild pass over live images in scope; see "Image embeddings" above for the `force` semantics. Unconfigured roots are skipped. Returns `202 { started: true, total: null }` before discovery; `/stats` and `/activity` expose the discovered total, or `409` if a rebuild is already running. |
+| `/reindex` | POST | `{ path?, thumbnails? }` | Marks matching rows `pending` (everything if `path` is omitted, otherwise that path and everything under it) and wakes the scan, which re-extracts text and re-embeds. Returns `{ count }`. With `thumbnails: true`, also starts a thumbnail-rebuild pass (see below) over the same scope; if one is already running, this is a no-op (best effort, not reported back). |
+| `/thumbnails/rebuild` | POST | `{ path?, force? }` | Starts a background thumbnail-only pass: regenerates both sizes for every live media file in scope, writing only `app.thumbnails` (`idx.files.text_status`, chunks, and embeddings are never touched, unlike `/reindex`). Without `force`, an existing thumbnail for a given sha256 and size is left alone; with `force`, it is deleted and rewritten. `path` omitted targets the whole files folder. Returns `202 { started: true, total }` (`total` is `null` until discovery completes in the background; poll `/stats` or `/activity` for the count), or `409` if a rebuild is already running (only one runs at a time, process-wide). |
+| `/image-embeddings/rebuild` | POST | `{ path?, force? }` | Starts a background image-embedding backfill/rebuild pass over live images in scope; see "Image embeddings" above for the `force` semantics. Returns `202 { started: true, total: null }` before discovery; `/stats` and `/activity` expose the discovered total, or `409` if a rebuild is already running. |
 | `/image-embeddings/clear` | POST | `{}` or empty | Deletes every row of `app.image_embeddings`; see "Clearing derived data" below. |
 | `/names/search` | POST | `{ query, scopes: [{ root_id, prefix }], exclude?, exclude_names?, files?, folders? }` | Files and folders whose name answers `query` with typos allowed (see "Name index"), at or below a scope's root-relative `prefix` (`""` for the whole root), outside every `exclude` place and with no folder in their path named one of `exclude_names` (in any case): `{ files, folders }`, each at most the count asked for (up to 200), as `{ id, root_id, path, mtime_ns }` with `mtime_ns` a string. Only the first 8 words of the first 512 characters are matched (the API checks every word again), and more than 64 scopes, exclusions or excluded names is a `400`. `503` until the index is built, so the API searches without it. |
 
@@ -414,11 +406,10 @@ records are keyed by content sha256.
 
 The server itself has no database access and does no indexing: it only
 embeds bytes or text it is handed and normalizes the result. The indexer
-reads it, when `IMAGE_EMBED_URL` is configured, the same way it reads the
-text embedding and extraction units: after a thumbnail is written for a file,
-POST the 256 px WebP to `POST /embed/image` and upsert the returned vector
-under the file's sha256 in `app.image_embeddings`. As with OCR and text
-embedding, an unconfigured `IMAGE_EMBED_URL` simply turns the feature off;
+reads it the same way it reads the text embedding and extraction units:
+after a thumbnail is written for a file, it POSTs the 256 px WebP to
+`<ML_URL>/image/embed/image` and upserts the returned vector under the
+file's sha256 in `app.image_embeddings`. While the unit is unreachable,
 nothing errors and nothing blocks indexing.
 
 The `services/ml` README documents the HTTP contract (`/image/health`,
@@ -438,26 +429,16 @@ Environment (see `deploy/.env.example`):
 
 - `FDRIVE_FILES_DIR`: the host folder fdrive serves, one subfolder per user.
   It is mounted at `/data` read-write into the api (`FDRIVE_STORAGE_ROOT`) and
-  OCR, and read-only into the indexer, which indexes it as the root `files`
-  (`INDEX_ROOTS=files=/data`).
-- The api's `FDRIVE_INDEX_ROOTS` names each indexed root with where the api
-  sees it (`storagePath`) and where the indexer
-  sees it (`indexerPath`), for example
-  `[{"name":"files","storagePath":"/data","indexerPath":"/data"}]`. The root
-  whose `storagePath` is `FDRIVE_STORAGE_ROOT` (or the only root) is the one
-  every login's home `<root>/<username>` is mapped under; see
-  [scoping](SCOPING.md).
-- Additional roots: add a volume line (`<host path>:/roots/<name>:ro`) and
-  extend `INDEX_ROOTS` with `,<name>=/roots/<name>`. They are indexed, but no
-  login maps to them.
+  OCR, and read-only into the indexer. Every login's home `<username>` is mapped
+  from it; see [scoping](SCOPING.md).
 
 Only `deploy/compose.dev.yaml` uses `--profile index`; it mounts the folder
 the dev api serves (`deploy/dev/files`, read-only) at the same `/data` root
 production uses, so the indexer sees exactly what the dev users see. Two things differ from the production-shaped compose file because the
 api there runs on the host with `tsx watch` instead of in the compose
 network: `ml` publishes its port on the host (58012 by default, override
-with `FDRIVE_DEV_ML_PORT`) so `FDRIVE_EMBED_URL`, `FDRIVE_IMAGE_EMBED_URL`
-and `FDRIVE_TIKA_URL` in `apps/api/.env.dev` can reach its units directly,
+with `FDRIVE_DEV_ML_PORT`) so `FDRIVE_ML_URL` in `apps/api/.env.dev` can
+reach its units directly,
 and `THUMBS_DIR` is bind-mounted to a host directory
 (`deploy/dev/.data/thumbs` by default, override with
 `FDRIVE_DEV_THUMBS_DIR`) rather than a named volume, so the host api process
@@ -499,10 +480,10 @@ tests where `ffmpeg` is not.
 
 ## Clearing derived data
 
-Internal `POST /index/clear` accepts an empty body or `{}` for every configured
-root, or `{ "root": "files", "path": "/documents" }` for one file or directory
-subtree. `path` requires `root`; `/` selects the entire root. Empty names,
-traversal, malformed bodies, and unknown roots are rejected. Directory matching
+Internal `POST /index/clear` accepts an empty body or `{}` for the whole index,
+or `{ "path": "alice/documents" }` for one file or directory subtree; `/` selects
+everything. Empty paths, traversal, malformed bodies and unknown fields are
+rejected. Directory matching
 uses a literal boundary, so `%` and `_` in names are never wildcards.
 
 The background pass deletes selected `idx.files` rows and their cascading chunks
@@ -522,7 +503,7 @@ Internal `POST /image-embeddings/clear` also accepts only an empty body or
 `{}`. It deletes every row of `app.image_embeddings` in keyset-paginated
 batches; there is no cache file to remove, since the table only ever holds
 vectors, never bytes. Original files, thumbnails, and index/text/metadata
-rows remain. Normal indexing (with `IMAGE_EMBED_URL` configured) or
+rows remain. Normal indexing (with image search on) or
 `/image-embeddings/rebuild` can repopulate it.
 
 All three clear routes return `202 { "started": true }` without waiting for

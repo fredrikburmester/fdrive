@@ -34,7 +34,6 @@ export const DURABLE_TABLES = [
   "app.activity_trash_bindings",
   "app.activity_observation_state",
   "app.activity_read_windows",
-  "idx.roots",
   "idx.scans",
   "idx.ocr_log",
   "idx.ocr_runs",
@@ -65,7 +64,8 @@ export const OMITTED_TABLES = {
   // Names the journal's positions. A restore must get a new one, so a Mac
   // app's position from before it reads as unknown rather than as a later one.
   "idx.change_epoch": "transient",
-  "idx.schema_version": "migration",
+  // Its one row, the files folder's, comes from a migration.
+  "idx.roots": "migration",
 } as const;
 export type DurableTable = (typeof DURABLE_TABLES)[number];
 export function assertCoverage(tables: string[]): void {

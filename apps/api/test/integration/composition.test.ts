@@ -370,9 +370,9 @@ describe("composeApp", () => {
     try {
       expect(messages).toContain("subsystem=core status=configured");
       expect(messages).toContain(
-        "subsystem=index status=not configured missing=FDRIVE_INDEX_ROOTS,FDRIVE_INDEXER_URL",
+        "subsystem=index status=not configured missing=FDRIVE_INDEXER_URL",
       );
-      expect(messages).toContain("subsystem=search status=not configured missing=FDRIVE_EMBED_URL");
+      expect(messages).toContain("subsystem=search status=not configured missing=FDRIVE_ML_URL");
       expect(messages.some((message) => message.startsWith("subsystem=network bind hint"))).toBe(
         true,
       );
@@ -385,7 +385,7 @@ describe("composeApp", () => {
       expect(body.subsystems.core).toEqual({ status: "configured", missing: [] });
       expect(body.subsystems.index).toEqual({
         status: "not_configured",
-        missing: ["FDRIVE_INDEX_ROOTS", "FDRIVE_INDEXER_URL"],
+        missing: ["FDRIVE_INDEXER_URL"],
       });
       expect(body.subsystems.ocr).toEqual({
         status: "not_configured",

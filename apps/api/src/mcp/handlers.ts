@@ -1,10 +1,16 @@
 import { isReservedPath, normalizePath, parseSearchFilters, toFsPath } from "@fdrive/core";
-import type { DuplicateGroup, FileFilter, FileOrder, IndexedFile, IndexQueries } from "@fdrive/db";
+import {
+  type DuplicateGroup,
+  type FileFilter,
+  type FileOrder,
+  INDEX_ROOT_ID,
+  type IndexedFile,
+  type IndexQueries,
+} from "@fdrive/db";
 import type { Principal } from "../auth/principal.js";
 import { relocatePath } from "../fs/mutations.js";
 import type { MetadataService } from "../metadata/service.ts";
 import type { ScopeResolver } from "../scoping/resolver.ts";
-import type { UnavailableReason } from "../scoping/types.ts";
 import type { ImageSearchService } from "../search/image-service.ts";
 import { toIndexRelativePath } from "../search/scopes.js";
 import type { SearchService } from "../search/service.js";
@@ -52,11 +58,13 @@ export interface McpToolDeps {
   readonly imageSearchService?: ImageSearchService;
   readonly metadata?: MetadataService;
   /**
-   * Resolves each caller's *verified* index scopes, the only source of
-   * index-backed authorization every tool in this file uses; there is no
+   * Resolves each caller's scopes, the only source of index-backed
+   * authorization every tool in this file uses; there is no
    * username/template fallback. See `docs/SCOPING.md`.
    */
-  readonly scopeResolver: Pick<ScopeResolver, "verifiedIndexScopes">;
+  readonly scopeResolver: Pick<ScopeResolver, "scopesFor">;
+  /** Whether the files folder is indexed now; index-backed tools refuse while it is not. */
+  readonly indexed: () => Promise<boolean>;
   /**
    * The address everyone opens fdrive at (System > Features), the base of
    * every link a tool returns; `null` until the owner sets one, when links
@@ -83,29 +91,22 @@ export interface McpToolDeps {
 /** Thrown by a handler when a business rule fails; `tools.ts` maps this (and any other error) to an MCP tool error. */
 export class McpToolError extends Error {}
 
-/** A short, reason-carrying message that never leaks anything about individual paths, only the caller's own scope status. */
-function indexUnavailableMessage(reason: UnavailableReason): string {
-  return `index features are unavailable for this identity (${reason})`;
-}
-
 /**
- * Resolves the caller's verified index scopes for this request, narrowed to
- * the token's folders. Throws a friendly, reason-safe `McpToolError` when
- * index-backed tools are unavailable for them, rather than ever falling
- * back to a username/template mapping. Kept separate from the `*InScope`
- * functions below (which take an already-resolved `ScopeContext` as a plain
- * argument) so those can be unit tested without a real `IndexQueries` or
- * `Principal`.
+ * Resolves the caller's scopes for this request, narrowed to the token's
+ * folders. Throws a friendly `McpToolError` that names no path when
+ * index-backed tools are unavailable, rather than ever falling back to a
+ * username/template mapping. Kept separate from the `*InScope` functions
+ * below (which take an already-resolved `ScopeContext` as a plain argument)
+ * so those can be unit tested without a real `IndexQueries` or `Principal`.
  */
 async function requireScope(deps: McpToolDeps, principal: Principal): Promise<ScopeContext> {
-  const verified = await deps.scopeResolver.verifiedIndexScopes(principal.username);
-  if (!verified.available) {
-    throw new McpToolError(indexUnavailableMessage(verified.reason));
+  if (!(await deps.indexed())) {
+    throw new McpToolError("index features are unavailable: the files folder is not indexed");
   }
-
-  const ctx = await resolveScopeContext(deps.indexQueries, tokenScopes(principal, verified.scopes));
+  const scopes = await deps.scopeResolver.scopesFor(principal.username);
+  const ctx = resolveScopeContext(tokenScopes(principal, scopes));
   if (ctx === null) {
-    throw new McpToolError(indexUnavailableMessage("no_roots"));
+    throw new McpToolError("index features are unavailable: this token reaches no folder");
   }
   return ctx;
 }
@@ -164,7 +165,7 @@ function visibleFiles(ctx: ScopeContext, candidates: readonly IndexedFile[]): Vi
   const virtualPaths = new Map<number, string>();
   const files: IndexedFile[] = [];
   for (const file of capped) {
-    const virtualPath = virtualPathFor(ctx, file.rootId, file.path);
+    const virtualPath = virtualPathFor(ctx, file.path);
     if (virtualPath === null) {
       partial = true;
       continue;
@@ -193,9 +194,11 @@ export async function runSearch(deps: McpToolDeps, principal: Principal, args: S
     after: args.modified_after,
     before: args.modified_before,
   });
-  const verified = await deps.scopeResolver.verifiedIndexScopes(principal.username);
+  const scopes = (await deps.indexed())
+    ? tokenScopes(principal, await deps.scopeResolver.scopesFor(principal.username))
+    : [];
   const response = await deps.searchService.search({
-    scopes: verified.available ? tokenScopes(principal, verified.scopes) : [],
+    scopes,
     query: args.query,
     filters,
     limit: Math.max(1, Math.min(args.limit ?? 10, 50)),
@@ -369,23 +372,19 @@ export interface FileInfoArgs {
 
 /** `file_info`'s logic given an already-resolved scope. Exported so tests can exercise every branch with a hand-built `ScopeContext`. */
 export async function fileInfoInScope(deps: McpToolDeps, ctx: ScopeContext, args: FileInfoArgs) {
-  const resolved = toFsPath(ctx.scopes, args.path);
-  if (resolved === null) {
+  const fsPath = toFsPath(ctx.scopes, args.path);
+  if (fsPath === null) {
     throw new McpToolError("path is outside this identity's scope");
   }
-  const rootId = ctx.rootIdByName.get(resolved.rootName);
-  if (rootId === undefined) {
-    throw new McpToolError("that root is not indexed yet");
-  }
 
-  const file = await deps.indexQueries.fileByPath(rootId, toIndexRelativePath(resolved.fsPath));
+  const file = await deps.indexQueries.fileByPath(INDEX_ROOT_ID, toIndexRelativePath(fsPath));
   if (file === null) {
     throw new McpToolError(`file is not indexed yet: ${args.path}`);
   }
 
   // A row a nested scope shadows, or one in fdrive's own folders, is
   // reported exactly like an unindexed one.
-  const virtualPath = virtualPathFor(ctx, file.rootId, file.path);
+  const virtualPath = virtualPathFor(ctx, file.path);
   if (virtualPath === null) {
     throw new McpToolError(`file is not indexed yet: ${args.path}`);
   }
@@ -449,7 +448,7 @@ export function visibleDuplicateGroups(
 
   const pathsByGroup = new Map<number, string[]>();
   for (const entry of capped) {
-    const virtualPath = virtualPathFor(ctx, entry.location.rootId, entry.location.path);
+    const virtualPath = virtualPathFor(ctx, entry.location.path);
     if (virtualPath === null) {
       partial = true;
       continue;
@@ -535,21 +534,17 @@ export async function similarFilesInScope(
   ctx: ScopeContext,
   args: SimilarFilesArgs,
 ) {
-  const resolved = toFsPath(ctx.scopes, args.path);
-  if (resolved === null) {
+  const fsPath = toFsPath(ctx.scopes, args.path);
+  if (fsPath === null) {
     throw new McpToolError("path is outside this identity's scope");
   }
-  const rootId = ctx.rootIdByName.get(resolved.rootName);
-  if (rootId === undefined) {
-    throw new McpToolError("that root is not indexed yet");
-  }
 
-  const file = await deps.indexQueries.fileByPath(rootId, toIndexRelativePath(resolved.fsPath));
+  const file = await deps.indexQueries.fileByPath(INDEX_ROOT_ID, toIndexRelativePath(fsPath));
   if (file === null) {
     throw new McpToolError("file is not indexed");
   }
 
-  if (virtualPathFor(ctx, file.rootId, file.path) === null) {
+  if (virtualPathFor(ctx, file.path) === null) {
     throw new McpToolError("file is not indexed");
   }
 

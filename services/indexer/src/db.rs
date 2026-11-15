@@ -3,7 +3,7 @@
 
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
@@ -68,69 +68,6 @@ impl Db {
         }
         result
     }
-}
-
-pub fn read_schema_version(client: &mut Client) -> Result<Option<i64>> {
-    let row = client.query_opt(
-        r#"SELECT version::bigint FROM "idx"."schema_version" ORDER BY version DESC LIMIT 1"#,
-        &[],
-    );
-    match row {
-        Ok(row) => Ok(row.map(|r| r.get(0))),
-        Err(error) if error.is_closed() || error.as_db_error().is_none() => Err(error.into()),
-        Err(_) => Ok(None),
-    }
-}
-
-/// Wait for the compatible schema, the failure-history, change-journal and folder tables, the
-/// files' stamp and photo columns and the journal's `previous_ctime_ns` before any processing.
-/// They came without a version bump, which OCR waits for too.
-pub fn wait_for_schema_version(
-    db: &Db,
-    expected: i64,
-    timeout: Duration,
-    log: &dyn Fn(&str),
-    sleep: &dyn Fn(Duration),
-) -> Result<Option<i64>> {
-    let deadline = Instant::now() + timeout;
-    loop {
-        let (version, ready) = db.with(|c| {
-            let version = read_schema_version(c)?;
-            let row = c.query_one(
-                "SELECT to_regclass('idx.processing_failures')::text, to_regclass('idx.changes')::text, \
-                 to_regclass('idx.change_cursors')::text, to_regclass('idx.folders')::text, \
-                 (SELECT count(*) FROM information_schema.columns WHERE table_schema = 'idx' \
-                  AND ((table_name = 'files' AND column_name IN ('inode', 'ctime_ns', 'taken_at')) \
-                   OR (table_name = 'changes' AND column_name = 'previous_ctime_ns')))",
-                &[],
-            )?;
-            let tables: [Option<String>; 4] = [row.get(0), row.get(1), row.get(2), row.get(3)];
-            let stamps: i64 = row.get(4);
-            Ok((version, tables.iter().all(Option::is_some) && stamps == 4))
-        })?;
-        if version == Some(expected) && ready {
-            return Ok(version);
-        }
-        let seen = version.map_or("None".to_owned(), |v| v.to_string());
-        if Instant::now() >= deadline {
-            log(&format!(
-                "schema not ready (expected {expected}, last seen: {seen}, requires processing_failures, changes, folders, file stamps and photos); giving up"
-            ));
-            return Ok(None);
-        }
-        log(&format!(
-            "waiting for idx.schema_version = {expected} and the processing_failures, changes, folders, file stamp and photo migrations (last seen: {seen})"
-        ));
-        sleep(Duration::from_secs(5));
-    }
-}
-
-pub fn upsert_root(c: &mut Client, name: &str) -> Result<i64> {
-    let row = c.query_one(
-        r#"INSERT INTO "idx"."roots" (name) VALUES ($1) ON CONFLICT (name) DO UPDATE SET name = EXCLUDED.name RETURNING id::bigint"#,
-        &[&name],
-    )?;
-    Ok(row.get(0))
 }
 
 /// One `idx.files` row as a scan sees it.
@@ -624,7 +561,8 @@ pub fn media_files(c: &mut Client, root_id: i64) -> Result<Vec<(String, String, 
     .collect())
 }
 
-pub fn root_stats(c: &mut Client, root: &str, root_id: i64) -> Result<Value> {
+/// The root's live file counts by `text_status`, its chunk counts and its last scan.
+pub fn root_stats(c: &mut Client, root_id: i64) -> Result<serde_json::Map<String, Value>> {
     let counts: serde_json::Map<String, Value> = c
         .query(
             r#"SELECT text_status, count(*) FROM "idx"."files" WHERE root_id = $1::bigint AND deleted_at IS NULL GROUP BY text_status"#,
@@ -652,10 +590,12 @@ pub fn root_stats(c: &mut Client, root: &str, root_id: i64) -> Result<Value> {
             "files_deleted": r.get::<_, i64>(4), "errors": r.get::<_, i64>(5),
         })
     });
-    Ok(serde_json::json!({
-        "root": root, "counts_by_status": counts, "chunks": chunks.get::<_, i64>(0),
-        "chunks_embedded": chunks.get::<_, i64>(1), "last_scan": last_scan,
-    }))
+    Ok(serde_json::Map::from_iter([
+        ("counts_by_status".to_owned(), Value::Object(counts)),
+        ("chunks".to_owned(), Value::from(chunks.get::<_, i64>(0))),
+        ("chunks_embedded".to_owned(), Value::from(chunks.get::<_, i64>(1))),
+        ("last_scan".to_owned(), last_scan.unwrap_or(Value::Null)),
+    ]))
 }
 
 pub fn errors_sample(c: &mut Client, root_id: i64, limit: i64) -> Result<Vec<Value>> {

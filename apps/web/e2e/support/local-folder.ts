@@ -1,6 +1,5 @@
 import { join } from "node:path";
 import { Client } from "pg";
-import { INDEX_ROOT_NAME } from "./environment.js";
 
 function fromEnv(name: string): string {
   const value = process.env[name];
@@ -36,7 +35,6 @@ export async function notifyIndexer(
     await client.query("select pg_notify('idx_events', $1)", [
       JSON.stringify({
         kind,
-        root: INDEX_ROOT_NAME,
         path: `${username}${virtualPath}`,
         target_path: null,
         at: new Date().toISOString(),

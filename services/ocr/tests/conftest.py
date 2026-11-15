@@ -74,14 +74,15 @@ def db_conn(postgres_dsn: str) -> Iterator[psycopg.Connection]:
 
 @pytest.fixture(autouse=True)
 def _clean_tables(postgres_dsn: str) -> Iterator[None]:
-    """Truncate the mutable tables before each test so tests are independent."""
+    """Truncate the mutable tables before each test so tests are independent.
+    `idx.roots` keeps the files root a migration seeds as row 1."""
     yield
     conn = psycopg.connect(postgres_dsn, autocommit=True)
     try:
         with conn.cursor() as cur:
             cur.execute(
-                'TRUNCATE "idx"."ocr_log", "idx"."ocr_runs", "idx"."scans", '
-                '"idx"."chunks", "idx"."files", "idx"."roots", "app"."thumbnails", "app"."settings" '
+                'TRUNCATE "idx"."ocr_log", "idx"."ocr_runs", "idx"."scans", "idx"."chunks", '
+                '"idx"."files", "idx"."changes", "app"."thumbnails", "app"."settings" '
                 "RESTART IDENTITY CASCADE"
             )
     finally:

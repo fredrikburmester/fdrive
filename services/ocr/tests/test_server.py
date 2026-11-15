@@ -15,7 +15,7 @@ from starlette.testclient import TestClient
 
 from fdrive_ocr import db, runner, server
 from fdrive_ocr.features import FEATURES_KEY
-from fdrive_ocr.runner import RootTarget
+from fdrive_ocr.runner import FILES_ROOT_ID, FILES_ROOT_NAME, RootTarget
 from fdrive_ocr.settings import Settings
 
 FIXED_NOW = datetime(2026, 1, 1, 1, 0, tzinfo=UTC)
@@ -45,22 +45,18 @@ def _set_pdf_ocr(state: server.ServerState) -> None:
 def _make_state(
     postgres_dsn: str,
     tmp_path: Path,
-    schema_ready: bool = True,
-    targets: list[RootTarget] | None = None,
+    root: Path | None = None,
     include_globs: tuple[str, ...] = (),
 ) -> server.ServerState:
-    root_id = db.upsert_root(db.connect(postgres_dsn), "files")
-    resolved_targets = targets if targets is not None else [RootTarget(name="files", root_id=root_id, abs_path=str(tmp_path))]
     return server.ServerState(
         conn_factory=lambda: db.connect(postgres_dsn),
-        targets=resolved_targets,
+        target=RootTarget(name=FILES_ROOT_NAME, root_id=FILES_ROOT_ID, abs_path=str(root or tmp_path)),
         state_dir=str(tmp_path / "state"),
         default_settings=DEFAULT_SETTINGS,
         timeout_seconds=30,
         jobs=2,
         run_lock=server.RunLock(),
         now=lambda: FIXED_NOW,
-        schema_ready=lambda: schema_ready,
         log=lambda _msg: None,
         include_globs=include_globs,
     )
@@ -69,8 +65,7 @@ def _make_state(
 def _index(state: server.ServerState) -> None:
     conn = state.conn_factory()
     try:
-        for target in state.targets:
-            index_pdfs(conn, target.root_id, target.abs_path)
+        index_pdfs(conn, state.target.root_id, state.target.abs_path)
     finally:
         conn.close()
 
@@ -108,24 +103,12 @@ def test_health_ok_and_not_running(postgres_dsn: str, tmp_path: Path) -> None:
     assert resp.json()["ok"] is True
     assert resp.json()["running"] is False
     assert resp.json()["features"]["revision"] == 0
+    assert resp.json()["storage"] == {"readable": True, "writable": True}
 
 
-def test_health_not_ok_when_schema_not_ready(postgres_dsn: str, tmp_path: Path) -> None:
-    state = _make_state(postgres_dsn, tmp_path, schema_ready=False)
-    client = TestClient(server.create_app(state))
-    resp = client.get("/health")
-    assert resp.json()["ok"] is False
-
-
-def test_storage_diagnostics_reports_missing_or_readable_roots(tmp_path: Path) -> None:
-    diagnostics = server.storage_diagnostics(
-        [
-            RootTarget(name="mounted", root_id=1, abs_path=str(tmp_path)),
-            RootTarget(name="missing", root_id=2, abs_path=str(tmp_path / "missing")),
-        ]
-    )
-    assert diagnostics["mounted"]["readable"] is True
-    assert diagnostics["missing"] == {"readable": False, "writable": False}
+def test_storage_diagnostics_reports_a_missing_or_readable_folder(tmp_path: Path) -> None:
+    assert server.storage_diagnostics(str(tmp_path))["readable"] is True
+    assert server.storage_diagnostics(str(tmp_path / "missing")) == {"readable": False, "writable": False}
 
 
 def test_health_reports_running(postgres_dsn: str, tmp_path: Path) -> None:
@@ -250,7 +233,7 @@ def test_run_applies_the_state_include_globs(postgres_dsn: str, tmp_path: Path) 
     conn = state.conn_factory()
     try:
         with conn.cursor() as cur:
-            cur.execute('SELECT path, status FROM "idx"."ocr_log" WHERE root_id = %s', (state.targets[0].root_id,))
+            cur.execute('SELECT path, status FROM "idx"."ocr_log" WHERE root_id = %s', (state.target.root_id,))
             statuses = dict(cur.fetchall())
     finally:
         conn.close()
@@ -479,8 +462,7 @@ def test_a_manual_run_prunes_aged_originals(postgres_dsn: str, tmp_path: Path) -
     # directory and treat the kept originals themselves as candidate PDFs.
     root = tmp_path / "root"
     root.mkdir()
-    root_id = db.upsert_root(db.connect(postgres_dsn), "files")
-    state = _make_state(postgres_dsn, tmp_path, targets=[RootTarget(name="files", root_id=root_id, abs_path=str(root))])
+    state = _make_state(postgres_dsn, tmp_path, root=root)
     _set_pdf_ocr(state)
     original_id = _keep_original(state, root)
     conn = state.conn_factory()

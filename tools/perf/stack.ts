@@ -11,7 +11,7 @@ import { pipeline } from "node:stream/promises";
 import { composeApp } from "@fdrive/api/composition";
 import { loadConfig } from "@fdrive/api/config";
 import { FEATURES_SETTINGS_KEY, type FeatureConfiguration } from "@fdrive/contracts";
-import { createDb, createRepos, migrate } from "@fdrive/db";
+import { createDb, createRepos, INDEX_ROOT_ID, migrate } from "@fdrive/db";
 import { startPostgres } from "@fdrive/testkit";
 import { serve } from "@hono/node-server";
 import pino from "pino";
@@ -224,11 +224,7 @@ export async function startPerfStack(): Promise<PerfStack> {
       if (!Array.isArray(raw)) throw Error("Fixture embedding invalid");
       embeddings.push(validateVector(raw[0]));
     }
-    const root = await db.pool.query<{ id: number }>(
-      "insert into idx.roots(name) values ('files') returning id",
-    );
-    const rootId = root.rows[0]?.id;
-    if (!rootId) throw Error("Fixture root missing");
+    const rootId = INDEX_ROOT_ID;
     for (let i = 0; i < TOPICS.length; i++) {
       const doc = searchDocument(i);
       const key = doc.name.split("-")[0];
@@ -256,10 +252,7 @@ export async function startPerfStack(): Promise<PerfStack> {
         storageRoot: dataDir,
         masterKeyBase64: randomBytes(32).toString("base64"),
       }),
-      FDRIVE_INDEX_ROOTS: JSON.stringify([
-        { name: "files", storagePath: dataDir, indexerPath: "/data" },
-      ]),
-      FDRIVE_EMBED_URL: embedUrl,
+      FDRIVE_ML_URL: mlUrl,
     });
     const composed = await composeApp(config, pino({ level: "silent" }));
     cleanup.add(() => composed.close());

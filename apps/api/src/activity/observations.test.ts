@@ -36,11 +36,7 @@ async function fixture() {
     ),
   };
   const resolver = {
-    configuredMappings: vi.fn(async () => ({
-      available: true as const,
-      providerId: randomUUID(),
-      scopes: [{ virtualPrefix: "/", rootName: "data", fsPrefix: "/physical/alice" }],
-    })),
+    scopesFor: vi.fn(async () => [{ virtualPrefix: "/", fsPrefix: "/physical/alice" }]),
   };
   const service = createActivityObservations({
     repo: repo as ActivityObservationsRepo,
@@ -54,7 +50,6 @@ async function fixture() {
     target: string | null = null,
   ): IndexerEventPayload => ({
     kind,
-    root: "data",
     path,
     target_path: target,
     at: new Date().toISOString(),
@@ -120,11 +115,6 @@ describe("indexer observation evidence", () => {
       expect.objectContaining({ path: "/a.txt", kind: "missing", evidence: "watcher_change" }),
     );
     h.identities.get.mockResolvedValueOnce(null);
-    await h.service.watcher(h.identityId, h.event("created"));
-    h.resolver.configuredMappings.mockResolvedValueOnce({
-      available: false,
-      reason: "no_roots",
-    } as never);
     await h.service.watcher(h.identityId, h.event("created"));
     await h.service.watcher(h.identityId, h.event("created", "outside/alice/a.txt"));
     expect(h.repo.observe).toHaveBeenCalledTimes(3);

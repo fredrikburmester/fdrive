@@ -63,19 +63,15 @@ fn uuid_like(value: &str) -> bool {
 }
 
 #[test]
-fn attempts_count_per_root_path_and_feature_and_recurrence_starts_over() {
+fn attempts_count_per_path_and_feature_and_recurrence_starts_over() {
     let env = Env::new();
     let ctx = env.ctx(fv(true, false, false, false, false));
-    let mut cfg = env.config();
-    cfg.roots = vec![("other".to_owned(), env.root.clone())];
-    let other = context_with(cfg, fv(true, false, false, false, false), |_| {});
     for _ in 0..2 {
         fail(&ctx, "same.png", "thumbnails", "DecodeError: bad bytes");
     }
     fail(&ctx, "same.png", "imageSearch", "ValueError: rejected");
-    fail(&other, "same.png", "thumbnails", "PermissionError: denied");
     let attempts: Vec<i32> = records(&env).iter().map(|r| r.4).collect();
-    assert_eq!(attempts, vec![2, 1, 1]);
+    assert_eq!(attempts, vec![2, 1]);
 
     let first_failed = |env: &Env| -> chrono::DateTime<chrono::Utc> {
         env.client()
@@ -90,7 +86,7 @@ fn attempts_count_per_root_path_and_feature_and_recurrence_starts_over() {
     report(&ctx.db, ctx.root_id, "same.png", "thumbnails", ok());
     let rows = records(&env);
     assert!(rows[0].5, "success resolves");
-    assert!(!rows[1].5 && !rows[2].5, "other features and roots are untouched");
+    assert!(!rows[1].5, "other features are untouched");
 
     std::thread::sleep(std::time::Duration::from_millis(5));
     fail(&ctx, "same.png", "thumbnails", "DecodeError: changed bytes");
@@ -230,7 +226,7 @@ fn an_unavailable_history_never_breaks_processing() {
 fn a_backend_outage_is_waiting_not_a_file_failure() {
     let env = Env::new();
     let mut cfg = env.config();
-    cfg.embed_url = fake_ml::closed_url();
+    cfg.ml_url = fake_ml::closed_url();
     let ctx = context_with(cfg, fv(false, true, false, true, false), |_| {});
     env.write("words.txt", b"searchable words");
     assert_eq!(scan_once(&ctx).errors, 0);

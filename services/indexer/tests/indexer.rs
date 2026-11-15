@@ -7,11 +7,12 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 
-use common::fake_ml::{self, IMAGE_EMBED, IMAGE_HEALTH, TEXT_EMBED, TIKA};
+use common::fake_ml::{self, EXTRACT, IMAGE_EMBED, IMAGE_HEALTH, TEXT_EMBED};
 use common::root_env::{
     Env, OFF, context_with, fake_sha, fv, jpeg, jpeg_with_exif, manual_clock, pdf, png, tesseract_available, wait_until,
 };
 use fdrive_indexer::backoff::Backoff;
+use fdrive_indexer::config::{ROOT_ID, ROOT_NAME};
 use fdrive_indexer::db::{self, ManifestRow};
 use fdrive_indexer::events::EventKind;
 use fdrive_indexer::features::FeatureConfiguration;
@@ -309,8 +310,8 @@ fn exclusions_apply_until_their_limit_or_rule_changes() {
     }
     assert!(!exclusion_still_applies(&ctx, "notes.txt", over));
     let mut settings = ctx.settings();
-    settings.text_exclude_globs = vec!["r/private/*".to_owned()];
-    settings.ocr_image_globs = vec!["r/scans/*".to_owned()];
+    settings.text_exclude_globs = vec!["files/private/*".to_owned()];
+    settings.ocr_image_globs = vec!["files/scans/*".to_owned()];
     assert_eq!(
         ctx.set_settings(settings.clone()),
         vec!["text_exclude_globs", "ocr_image_globs"]
@@ -319,7 +320,7 @@ fn exclusions_apply_until_their_limit_or_rule_changes() {
     assert!(exclusion_still_applies(&ctx, "private/notes.txt", 1));
     assert!(exclusion_still_applies(&ctx, "photos/a.png", 1));
     assert!(!exclusion_still_applies(&ctx, "scans/a.png", 1));
-    assert_eq!(ctx.extractor().ocr_image_globs.patterns(), ["r/scans/*"]);
+    assert_eq!(ctx.extractor().ocr_image_globs.patterns(), ["files/scans/*"]);
 }
 
 // -- process_file --------------------------------------------------------------------------
@@ -403,7 +404,7 @@ fn a_rejected_embedding_marks_the_file_partial_and_records_the_failure() {
 fn an_unreachable_embed_backend_is_probed_once_and_not_a_file_failure() {
     let env = Env::new();
     let mut cfg = env.config();
-    cfg.embed_url = fake_ml::closed_url();
+    cfg.ml_url = fake_ml::closed_url();
     let ctx = context_with(cfg, fv(false, true, false, true, false), |_| {});
     for name in ["a.txt", "b.txt", "c.txt"] {
         let (path, stat) = env.write(name, b"hello");
@@ -461,7 +462,7 @@ fn extraction_statuses() {
     ];
     for (name, bytes, status, error) in cases {
         if name == "short.docx" {
-            env.ml.set_tika_text("tiny");
+            env.ml.set_extract_text("tiny");
         }
         let (path, stat) = env.write(name, bytes);
         assert!(process_file(&ctx, &path, name, stat).unwrap());
@@ -476,10 +477,10 @@ fn extraction_statuses() {
         env.unresolved(),
         [("broken.pdf".to_owned(), "textSearch".to_owned())].into()
     );
-    assert_eq!(env.ml.count(TIKA), 2);
-    assert_eq!(env.ml.requests(TIKA)[0].body, b"docx bytes");
+    assert_eq!(env.ml.count(EXTRACT), 2);
+    assert_eq!(env.ml.requests(EXTRACT)[0].body, b"docx bytes");
     // An unsupported document is an error, not a crash.
-    env.ml.fail(TIKA, 422);
+    env.ml.fail(EXTRACT, 422);
     let (path, stat) = env.write("weird.docx", b"weird");
     process_file(&ctx, &path, "weird.docx", stat).unwrap();
     assert_eq!(
@@ -493,7 +494,7 @@ fn excluded_text_stays_quiet_until_the_rule_is_removed() {
     let env = Env::new();
     let ctx = env.ctx(fv(false, true, false, false, false));
     let mut settings: Settings = ctx.settings();
-    settings.text_exclude_globs = vec!["r/*.txt".to_owned()];
+    settings.text_exclude_globs = vec!["files/*.txt".to_owned()];
     ctx.set_settings(settings.clone());
     let (path, stat) = env.write("a.txt", b"excluded");
     assert!(process_file(&ctx, &path, "a.txt", stat).unwrap());
@@ -590,8 +591,13 @@ fn a_scan_deletes_nothing_from_a_folder_without_this_installations_marker() {
 fn the_marker_verdict_is_reused_and_survives_a_database_outage() {
     let env = Env::new();
     let cfg = Arc::new(env.config());
-    let root_id = db::upsert_root(&mut env.client(), "r").unwrap();
-    let mut ctx = indexer::RootContext::new("r", root_id, env.root.clone(), Arc::clone(&cfg), common::features(OFF));
+    let mut ctx = indexer::RootContext::new(
+        ROOT_NAME,
+        ROOT_ID,
+        env.root.clone(),
+        Arc::clone(&cfg),
+        common::features(OFF),
+    );
     ctx.files_folder_recheck = Duration::from_secs(3600);
     assert!(!ctx.files_folder_verified(), "no installation id recorded yet");
     common::mark_files_folder(&env.url, &env.root);
@@ -604,7 +610,7 @@ fn the_marker_verdict_is_reused_and_survives_a_database_outage() {
     };
     assert!(ctx.files_folder_verified(), "an outage keeps the last verdict");
 
-    let mut offline = indexer::RootContext::new("r", root_id, env.root.clone(), cfg, common::features(OFF));
+    let mut offline = indexer::RootContext::new(ROOT_NAME, ROOT_ID, env.root.clone(), cfg, common::features(OFF));
     offline.db = db::Db {
         url: "postgres://nobody@127.0.0.1:1/nope".to_owned(),
         retries: 1,
@@ -731,24 +737,6 @@ fn thumbnail_skips_do_not_resolve_failures_but_resolving_skips_do() {
 // -- image embeddings ----------------------------------------------------------------------
 
 #[test]
-fn embed_thumbnail_is_a_no_op_without_an_image_unit() {
-    let env = Env::new();
-    let mut cfg = env.config();
-    cfg.image_embed_url = String::new();
-    let ctx = context_with(cfg, fv(true, false, false, false, true), |_| {});
-    env.fake_thumbnail("ab");
-    assert!(!embed_thumbnail(&ctx, "ab", &mut Vec::new()).unwrap());
-    assert!(env.ml.seen().is_empty());
-    // A watcher change embeds inline when there is no unit to hand it to.
-    let bytes = png(8, 8);
-    let (path, stat) = env.write("a.png", &bytes);
-    let result = watch_index(&ctx, &path, "a.png", stat);
-    assert_eq!(result.status, "indexed");
-    assert!(result.deferred.is_empty());
-    assert_eq!(result.outcomes.unwrap()["imageSearch"], (true, true));
-}
-
-#[test]
 fn embed_thumbnail_waits_while_the_unit_is_unhealthy() {
     let env = Env::new();
     let ctx = env.ctx(fv(true, false, false, false, true));
@@ -839,7 +827,7 @@ fn image_embedding_resumes_after_its_pause() {
 fn an_image_unit_outage_is_probed_once_per_backoff_window() {
     let env = Env::new();
     let mut cfg = env.config();
-    cfg.image_embed_url = fake_ml::closed_url();
+    cfg.ml_url = fake_ml::closed_url();
     let (clock, now) = manual_clock();
     let ctx = context_with(cfg, fv(true, false, false, false, true), |c| {
         c.image_embed_backoff = Backoff::new(Duration::from_secs(60), now);
@@ -1026,7 +1014,7 @@ fn embed_missing_fills_partial_chunks_and_marks_indexed() {
 fn embed_missing_leaves_the_row_alone_while_the_backend_is_down() {
     let env = Env::new();
     let mut cfg = env.config();
-    cfg.embed_url = fake_ml::closed_url();
+    cfg.ml_url = fake_ml::closed_url();
     let ctx = context_with(cfg, fv(false, true, false, true, false), |_| {});
     env.write("a.txt", b"hello");
     let id = env.seed(&ctx, "a.txt", "sha1", "partial");
@@ -1456,12 +1444,12 @@ fn a_slow_file_does_not_hold_up_the_rest_of_the_tree() {
     for i in 0..20 {
         env.write(&format!("f{i:02}.txt"), b"hello");
     }
-    env.ml.hold(TIKA);
+    env.ml.hold(EXTRACT);
     let scan = {
         let ctx = Arc::clone(&ctx);
         std::thread::spawn(move || scan_once(&ctx))
     };
-    let held = env.ml.wait_for(TIKA, 1, SECOND);
+    let held = env.ml.wait_for(EXTRACT, 1, SECOND);
     let mut c = env.client();
     let others_done = wait_until(SECOND, || {
         c.query_one("SELECT count(*) FROM idx.files WHERE text_status = 'partial'", &[])
@@ -1469,7 +1457,7 @@ fn a_slow_file_does_not_hold_up_the_rest_of_the_tree() {
             .get::<_, i64>(0)
             == 20
     });
-    env.ml.release(TIKA);
+    env.ml.release(EXTRACT);
     let result = scan.join().unwrap();
     assert!(held && others_done);
     assert_eq!(result.changed, 21);
@@ -1526,14 +1514,14 @@ fn a_cancelled_scan_never_sweeps_unseen_rows() {
         mtime_ns: 1,
     }];
     db::sync_folders(&mut env.client(), ctx.root_id, &gone, None).unwrap();
-    env.ml.hold(TIKA);
+    env.ml.hold(EXTRACT);
     let scan = {
         let ctx = Arc::clone(&ctx);
         std::thread::spawn(move || scan_once(&ctx))
     };
-    assert!(env.ml.wait_for(TIKA, 1, SECOND));
+    assert!(env.ml.wait_for(EXTRACT, 1, SECOND));
     ctx.set_features(configuration(4, OFF));
-    env.ml.release(TIKA);
+    env.ml.release(EXTRACT);
     let result = scan.join().unwrap();
     assert_eq!(result.deleted, 0);
     assert!(!env.row(&ctx, "gone.txt").deleted);

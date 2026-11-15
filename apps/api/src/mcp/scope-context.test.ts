@@ -1,191 +1,91 @@
 import type { Scope } from "@fdrive/core";
-import type { IndexQueries } from "@fdrive/db";
 import { describe, expect, it } from "vitest";
-import { narrowScopePrefixes, resolveScopeContext, virtualPathFor } from "./scope-context.js";
+import {
+  narrowScopePrefixes,
+  reservedExclusionOf,
+  resolveScopeContext,
+  virtualPathFor,
+} from "./scope-context.js";
 
-function stubIndexQueries(
-  rootIdsByName: () => Promise<Record<string, number>>,
-): Pick<IndexQueries, "rootIdsByName"> {
-  return { rootIdsByName };
+const ALICE_HOME_SCOPES: readonly Scope[] = [{ fsPrefix: "/alice", virtualPrefix: "/" }];
+
+function context(scopes: readonly Scope[] = ALICE_HOME_SCOPES) {
+  const ctx = resolveScopeContext(scopes);
+  if (ctx === null) throw new Error("expected a scope context");
+  return ctx;
 }
 
-const ALICE_HOME_SCOPES: readonly Scope[] = [
-  { rootName: "files", fsPrefix: "/alice", virtualPrefix: "/" },
-];
-
 describe("resolveScopeContext", () => {
-  it("returns null for an empty scope list", async () => {
-    const ctx = await resolveScopeContext(
-      stubIndexQueries(async () => ({ files: 1 })),
-      [],
-    );
-    expect(ctx).toBeNull();
+  it("returns null for an empty scope list", () => {
+    expect(resolveScopeContext([])).toBeNull();
   });
 
-  it("returns null when none of the given scopes land on an indexed root", async () => {
-    const ctx = await resolveScopeContext(
-      stubIndexQueries(async () => ({})),
-      ALICE_HOME_SCOPES,
-    );
-    expect(ctx).toBeNull();
-  });
-
-  it("resolves the scope context for a verified scope with a matching indexed root", async () => {
-    const ctx = await resolveScopeContext(
-      stubIndexQueries(async () => ({ files: 1 })),
-      ALICE_HOME_SCOPES,
-    );
-
-    expect(ctx).not.toBeNull();
-    expect(ctx?.scopePrefixes).toEqual([{ rootId: 1, fsPrefix: "/alice" }]);
-  });
-
-  it("drops a scope whose root has no id in the index yet, keeping the rest", async () => {
+  it("maps every scope to a prefix in the files folder's root", () => {
     const scopes: readonly Scope[] = [
-      { rootName: "files", fsPrefix: "/alice", virtualPrefix: "/" },
-      { rootName: "photos", fsPrefix: "/alice", virtualPrefix: "/photos" },
+      { fsPrefix: "/alice", virtualPrefix: "/" },
+      { fsPrefix: "/bob/Photos", virtualPrefix: "/Shared with me/Photos" },
     ];
-    const ctx = await resolveScopeContext(
-      stubIndexQueries(async () => ({ files: 1 })),
-      scopes,
-    );
-
-    expect(ctx?.scopePrefixes).toEqual([{ rootId: 1, fsPrefix: "/alice" }]);
+    expect(context(scopes).scopePrefixes).toEqual([
+      { rootId: 1, fsPrefix: "/alice" },
+      { rootId: 1, fsPrefix: "/bob/Photos" },
+    ]);
   });
 });
 
 describe("virtualPathFor", () => {
-  it("maps a file's (rootId, fsPath) back to the caller's virtual path", async () => {
-    const ctx = await resolveScopeContext(
-      stubIndexQueries(async () => ({ files: 1 })),
-      ALICE_HOME_SCOPES,
-    );
-    if (ctx === null) {
-      throw new Error("expected a scope context");
-    }
-
-    expect(virtualPathFor(ctx, 1, "alice/docs/report.pdf")).toBe("/docs/report.pdf");
+  it("maps a row's path back to the caller's virtual path", () => {
+    expect(virtualPathFor(context(), "alice/docs/report.pdf")).toBe("/docs/report.pdf");
   });
 
-  it("returns null for a root id not present in the context", async () => {
-    const ctx = await resolveScopeContext(
-      stubIndexQueries(async () => ({ files: 1 })),
-      ALICE_HOME_SCOPES,
-    );
-    if (ctx === null) {
-      throw new Error("expected a scope context");
-    }
-
-    expect(virtualPathFor(ctx, 999, "alice/a.txt")).toBeNull();
+  it("returns null for a path outside every scope", () => {
+    expect(virtualPathFor(context(), "bob/a.txt")).toBeNull();
   });
 
-  it("returns null for a path outside every scope", async () => {
-    const ctx = await resolveScopeContext(
-      stubIndexQueries(async () => ({ files: 1 })),
-      ALICE_HOME_SCOPES,
-    );
-    if (ctx === null) {
-      throw new Error("expected a scope context");
-    }
-
-    expect(virtualPathFor(ctx, 1, "bob/a.txt")).toBeNull();
+  it("returns null for a path a shared folder shadows (round trip fails)", () => {
+    const ctx = context([
+      { fsPrefix: "/alice", virtualPrefix: "/" },
+      { fsPrefix: "/bob/team", virtualPrefix: "/Shared with me/team" },
+    ]);
+    // "alice/Shared with me/team/x.txt" maps forward to the shared folder's
+    // virtual path, which resolves back to bob's folder instead.
+    expect(virtualPathFor(ctx, "alice/Shared with me/team/x.txt")).toBeNull();
+    expect(virtualPathFor(ctx, "bob/team/x.txt")).toBe("/Shared with me/team/x.txt");
   });
 
-  it("returns null for a path a more specific override shadows (round trip fails)", async () => {
-    const scopes: readonly Scope[] = [
-      { rootName: "files", fsPrefix: "/alice", virtualPrefix: "/" },
-      { rootName: "files", fsPrefix: "/shared", virtualPrefix: "/vshared" },
-    ];
-    const ctx = await resolveScopeContext(
-      stubIndexQueries(async () => ({ files: 1 })),
-      scopes,
-    );
-    if (ctx === null) {
-      throw new Error("expected a scope context");
-    }
-
-    // "alice/vshared/x.txt" maps forward to "/vshared/x.txt", but that
-    // virtual path resolves back to the override's real target
-    // ("shared/x.txt"), not the original physical location: the round trip
-    // fails, so this location must never be disclosed.
-    expect(virtualPathFor(ctx, 1, "alice/vshared/x.txt")).toBeNull();
+  it("returns null in the Trash and for the Trash itself", () => {
+    const ctx = context();
+    expect(virtualPathFor(ctx, "alice/.trash/report.pdf/168176641123456789")).toBeNull();
+    expect(virtualPathFor(ctx, "alice/.trash")).toBeNull();
+    expect(virtualPathFor(ctx, "alice/docs/report.pdf")).toBe("/docs/report.pdf");
   });
+});
 
-  it("returns null for a path in the Trash", async () => {
-    const ctx = await resolveScopeContext(
-      stubIndexQueries(async () => ({ files: 1 })),
-      ALICE_HOME_SCOPES,
-    );
-    if (ctx === null) {
-      throw new Error("expected a scope context");
-    }
-
-    expect(virtualPathFor(ctx, 1, "alice/.trash/report.pdf/168176641123456789")).toBeNull();
-  });
-
-  it("returns null for the Trash itself", async () => {
-    const ctx = await resolveScopeContext(
-      stubIndexQueries(async () => ({ files: 1 })),
-      ALICE_HOME_SCOPES,
-    );
-    if (ctx === null) {
-      throw new Error("expected a scope context");
-    }
-
-    expect(virtualPathFor(ctx, 1, "alice/.trash")).toBeNull();
-  });
-
-  it("still maps a path outside the Trash", async () => {
-    const ctx = await resolveScopeContext(
-      stubIndexQueries(async () => ({ files: 1 })),
-      ALICE_HOME_SCOPES,
-    );
-    if (ctx === null) {
-      throw new Error("expected a scope context");
-    }
-
-    expect(virtualPathFor(ctx, 1, "alice/docs/report.pdf")).toBe("/docs/report.pdf");
+describe("reservedExclusionOf", () => {
+  it("leaves out fdrive's own folders and the home's own Shared with me", () => {
+    expect(reservedExclusionOf(context())).toEqual({
+      prefixes: [
+        { rootId: 1, fsPrefix: "/alice/.trash" },
+        { rootId: 1, fsPrefix: "/alice/.fdrive-desktop" },
+        { rootId: 1, fsPrefix: "/alice/Shared with me" },
+      ],
+      names: [".fdrive-move-v1"],
+    });
   });
 });
 
 describe("narrowScopePrefixes", () => {
-  async function buildContext() {
-    const ctx = await resolveScopeContext(
-      stubIndexQueries(async () => ({ files: 1 })),
-      ALICE_HOME_SCOPES,
-    );
-    if (ctx === null) {
-      throw new Error("expected a scope context");
-    }
-    return ctx;
-  }
-
-  it("returns every scope prefix unchanged when no prefix is given", async () => {
-    const ctx = await buildContext();
-    expect(narrowScopePrefixes(ctx, undefined)).toEqual([{ rootId: 1, fsPrefix: "/alice" }]);
+  it("returns every scope prefix unchanged when no prefix is given", () => {
+    expect(narrowScopePrefixes(context(), undefined)).toEqual([{ rootId: 1, fsPrefix: "/alice" }]);
   });
 
-  it("narrows to the single folder a virtual path prefix resolves to", async () => {
-    const ctx = await buildContext();
-    expect(narrowScopePrefixes(ctx, "/docs")).toEqual([{ rootId: 1, fsPrefix: "/alice/docs" }]);
+  it("narrows to the single folder a virtual path prefix resolves to", () => {
+    expect(narrowScopePrefixes(context(), "/docs")).toEqual([
+      { rootId: 1, fsPrefix: "/alice/docs" },
+    ]);
   });
 
-  it("returns null for a prefix outside every scope", async () => {
-    const narrowScope = {
-      scopes: [{ rootName: "files", fsPrefix: "/alice", virtualPrefix: "/only" }],
-      scopePrefixes: [{ rootId: 1, fsPrefix: "/alice" }],
-      rootNameById: new Map([[1, "files"]]),
-      rootIdByName: new Map([["files", 1]]),
-    };
-
-    expect(narrowScopePrefixes(narrowScope, "/elsewhere")).toBeNull();
-  });
-
-  it("returns null when the resolved root has no id in the index yet", async () => {
-    const ctx = await buildContext();
-    const emptyRootIdByName = new Map<string, number>();
-    const stale = { ...ctx, rootIdByName: emptyRootIdByName };
-
-    expect(narrowScopePrefixes(stale, "/docs")).toBeNull();
+  it("returns null for a prefix outside every scope", () => {
+    const ctx = context([{ fsPrefix: "/alice", virtualPrefix: "/only" }]);
+    expect(narrowScopePrefixes(ctx, "/elsewhere")).toBeNull();
   });
 });

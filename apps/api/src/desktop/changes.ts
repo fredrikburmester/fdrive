@@ -3,9 +3,7 @@ import { type DesktopChangesResponse, DesktopPath } from "@fdrive/contracts";
 import { isUnderPath, parentPath, type Scope } from "@fdrive/core";
 import type { Change, ChangeJournal } from "@fdrive/db";
 import type { Principal } from "../auth/principal.js";
-import { ApiHttpError } from "../errors.js";
 import { roundTripVirtualPath } from "../scoping/round-trip.js";
-import type { VerifiedIndexScopesResult } from "../scoping/types.js";
 import { desktopPathAllowed } from "./files.js";
 
 /** Journal rows per answer; while `more` is set the client asks again from the anchor. */
@@ -13,23 +11,14 @@ export const DESKTOP_CHANGES_PAGE = 1_000;
 
 export interface DesktopChangesDeps {
   readonly journal: Pick<ChangeJournal, "read" | "end" | "epoch">;
-  /** Every index root the indexer has created, by name. */
-  readonly rootIds: () => Promise<Readonly<Record<string, number>>>;
-  /** The login's verified index scopes, by its username. */
-  readonly scopes: (username: string) => Promise<VerifiedIndexScopesResult>;
-  /**
-   * The roots this API journals its own changes under. Changes made through
-   * fdrive reach the journal only for these, so a feed over any other root
-   * would miss them.
-   */
-  readonly journaledRoots: ReadonlySet<string>;
+  /** The login's scopes, by its username. */
+  readonly scopes: (username: string) => Promise<readonly Scope[]>;
   readonly pageSize?: number;
 }
 
-/** One location's view of the journal: its scopes, their roots and a fingerprint of both. */
+/** One location's view of the journal: its scopes and a fingerprint of them. */
 interface Feed {
   readonly scopes: readonly Scope[];
-  readonly roots: readonly string[];
   readonly fingerprint: string;
 }
 
@@ -43,8 +32,8 @@ const representable = (path: string) => DesktopPath.safeParse(path).success;
 /**
  * What journal rows mean for one desktop connection, in its own paths.
  *
- * Each end of a row (`path`, and `target_path` for a move) is mapped from the
- * root-relative path through the connection's index scopes with the same
+ * Each end of a row (`path`, and `target_path` for a move) is mapped from its
+ * path in the files folder through the connection's scopes with the same
  * round trip index reads use, so a path no scope covers, or one a shared
  * folder shadows, is dropped, as is anything listings hide (Trash, fdrive's
  * own desktop folder, outside the grants). A row does not say whether it is
@@ -56,7 +45,7 @@ const representable = (path: string) => DesktopPath.safeParse(path).success;
  * are left out.
  */
 export function changedPaths(
-  changes: readonly Pick<Change, "root" | "path" | "targetPath">[],
+  changes: readonly Pick<Change, "path" | "targetPath">[],
   scopes: readonly Scope[],
   visible: (path: string) => boolean,
 ): { paths: string[]; folders: string[] } {
@@ -65,7 +54,7 @@ export function changedPaths(
   for (const change of changes) {
     const ends = change.targetPath === null ? [change.path] : [change.path, change.targetPath];
     for (const end of ends) {
-      const path = roundTripVirtualPath(scopes, change.root, `/${end}`);
+      const path = roundTripVirtualPath(scopes, `/${end}`);
       if (path === null || !visible(path)) continue;
       paths.add(path);
       let folder = path;
@@ -102,8 +91,7 @@ export function changedPaths(
  *
  * An anchor is `v1.<epoch>.<fingerprint>.<position>`. The epoch changes when
  * positions start again (a restore), and the fingerprint when the location's
- * scopes or their roots do (a folder shared or unshared, a root created
- * again), and either answers `resync`, as do an unreadable anchor, one past
+ * scopes do (a folder shared or unshared), and either answers `resync`, as do an unreadable anchor, one past
  * the journal's end and a gap. Without an anchor the answer is a `resync`
  * from the journal's end, so a new client checks its folders once and goes
  * on from there. See docs/MACOS.md and docs/plans/CHANGE-JOURNAL.md.
@@ -111,37 +99,21 @@ export function changedPaths(
 export function createDesktopChanges(deps: DesktopChangesDeps) {
   const pageSize = deps.pageSize ?? DESKTOP_CHANGES_PAGE;
 
-  /** The location's feed, or `null` when the journal cannot see all of its changes. */
-  async function feed(principal: Principal): Promise<Feed | null> {
-    const verified = await deps.scopes(principal.username);
-    if (!verified.available) return null;
-    const roots = [...new Set(verified.scopes.map((scope) => scope.rootName))].sort();
-    if (!roots.every((root) => deps.journaledRoots.has(root))) return null;
-    const ids = await deps.rootIds();
-    if (!roots.every((root) => ids[root] !== undefined)) return null;
-    const shape = {
-      roots: roots.map((root) => [root, ids[root]]),
-      scopes: verified.scopes
-        .map((scope) => JSON.stringify([scope.rootName, scope.fsPrefix, scope.virtualPrefix]))
-        .sort(),
-    };
+  async function feed(principal: Principal): Promise<Feed> {
+    const scopes = await deps.scopes(principal.username);
+    const shape = scopes
+      .map((scope) => JSON.stringify([scope.fsPrefix, scope.virtualPrefix]))
+      .sort();
     const fingerprint = createHash("sha256")
       .update(JSON.stringify(shape))
       .digest("hex")
       .slice(0, 16);
-    return { scopes: verified.scopes, roots, fingerprint };
+    return { scopes, fingerprint };
   }
 
   return {
-    /** Whether the location has a feed: advertised in its v2 `location`. */
-    async available(principal: Principal): Promise<boolean> {
-      return (await feed(principal)) !== null;
-    },
-
     async read(principal: Principal, since: string | undefined): Promise<DesktopChangesResponse> {
       const current = await feed(principal);
-      if (current === null)
-        throw new ApiHttpError("not_found", "This location has no change feed on this server");
       const epoch = await deps.journal.epoch();
       const end = await deps.journal.end();
       const anchor = (position: number) => `v1.${epoch}.${current.fingerprint}.${position}`;
@@ -150,7 +122,7 @@ export function createDesktopChanges(deps: DesktopChangesDeps) {
       const position = Number(from?.[3]);
       if (from?.[1] !== epoch || from[2] !== current.fingerprint || position > end)
         return { status: "resync", anchor: anchor(end) };
-      const page = await deps.journal.read(current.roots, position, pageSize);
+      const page = await deps.journal.read(position, pageSize);
       if (page.gap) return { status: "resync", anchor: anchor(end) };
       const more = page.changes.length >= pageSize;
       const last = page.changes.at(-1)?.position ?? position;

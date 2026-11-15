@@ -1,8 +1,7 @@
 //! The internal HTTP API, reachable only on the compose network and not authenticated.
 //! Response shapes and status codes are the ones `apps/api` parses.
 
-use std::collections::HashMap;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex, PoisonError};
 use std::time::Duration;
 
@@ -25,7 +24,7 @@ use crate::maintenance;
 use crate::names::{NameIndex, NameSearch};
 use crate::paths::reindex_scope;
 
-/// Wakes a root's loop early, like a set `threading.Event`.
+/// Wakes the root loop early, like a set `threading.Event`.
 #[derive(Default)]
 pub struct Wake {
     set: Mutex<bool>,
@@ -78,10 +77,10 @@ impl Default for Jobs {
 }
 
 pub struct AppState {
-    pub contexts: Vec<Arc<RootContext>>,
-    /// Whether each root currently has a running watcher.
-    pub watchers: Arc<Mutex<HashMap<String, bool>>>,
-    pub wakes: HashMap<String, Arc<Wake>>,
+    pub context: Arc<RootContext>,
+    /// Whether the root loop currently has a running watcher.
+    pub watcher: Arc<AtomicBool>,
+    pub wake: Arc<Wake>,
     /// The handlers' connection: one connection attempt, so a missing database fails fast.
     pub db: Db,
     pub content: Option<Arc<ContentExtractor>>,
@@ -93,20 +92,8 @@ pub struct AppState {
 }
 
 impl AppState {
-    pub fn context(&self, name: &str) -> Option<&Arc<RootContext>> {
-        self.contexts.iter().find(|c| c.name == name)
-    }
-
-    /// The feature selection, from the first root or straight from the database.
     pub fn features(&self) -> FeatureConfiguration {
-        match self.contexts.first() {
-            Some(ctx) => ctx.features(),
-            None => self
-                .db
-                .with(db::read_settings)
-                .map(|raw| crate::features::resolve(&raw))
-                .unwrap_or_default(),
-        }
+        self.context.features()
     }
 }
 
@@ -147,47 +134,30 @@ fn object(body: &[u8]) -> Result<serde_json::Map<String, Value>, ApiError> {
     }
 }
 
-fn storage_diagnostics(contexts: &[Arc<RootContext>]) -> Value {
+fn storage_diagnostics(ctx: &RootContext) -> Value {
     use rustix::fs::{Access, access};
-    let mut out = serde_json::Map::new();
-    for ctx in contexts {
-        let readable = std::fs::read_dir(&ctx.abs_path).is_ok_and(|mut d| {
-            let _ = d.next();
-            true
-        }) && access(&ctx.abs_path, Access::READ_OK).is_ok();
-        let writable = access(&ctx.abs_path, Access::WRITE_OK).is_ok();
-        out.insert(ctx.name.clone(), json!({"readable": readable, "writable": writable}));
-    }
-    Value::Object(out)
+    let readable = std::fs::read_dir(&ctx.abs_path).is_ok_and(|mut d| {
+        let _ = d.next();
+        true
+    }) && access(&ctx.abs_path, Access::READ_OK).is_ok();
+    let writable = access(&ctx.abs_path, Access::WRITE_OK).is_ok();
+    json!({"readable": readable, "writable": writable})
 }
 
 async fn health(State(state): State<Shared>) -> Response {
     let result = blocking(move || {
         let features = state.features();
-        let embed_url = state
-            .contexts
-            .first()
-            .map(|c| c.cfg.embed_url.clone())
-            .unwrap_or_default();
         // An unavailable optional embedding service must not delay setup health.
-        let embed_ok = features.values.semantic_search
-            && !embed_url.is_empty()
-            && embed_health(&embed_url, Duration::from_secs(1));
-        let version = state.db.with(db::read_schema_version)?;
-        let watchers = state.watchers.lock().unwrap_or_else(PoisonError::into_inner).clone();
-        let watcher: serde_json::Map<String, Value> = state
-            .contexts
-            .iter()
-            .map(|c| (c.name.clone(), json!(watchers.get(&c.name).copied().unwrap_or(false))))
-            .collect();
+        let embed_ok =
+            features.values.semantic_search && embed_health(&state.context.cfg.text_url(), Duration::from_secs(1));
+        // Unreachable postgres answers 500, which the container healthcheck keys on.
+        state.db.with(|c| Ok(c.batch_execute("SELECT 1")?))?;
         Ok::<_, anyhow::Error>(json!({
-            "ok": version.is_some(),
-            "roots": state.contexts.iter().map(|c| c.name.clone()).collect::<Vec<_>>(),
-            "watcher": watcher,
+            "ok": true,
+            "watcher": state.watcher.load(Ordering::SeqCst),
             "embed_ok": embed_ok,
-            "schema_version": version,
             "features": features.as_json(),
-            "storage": storage_diagnostics(&state.contexts),
+            "storage": storage_diagnostics(&state.context),
         }))
     })
     .await;
@@ -198,25 +168,24 @@ async fn health(State(state): State<Shared>) -> Response {
 }
 
 async fn activity(State(state): State<Shared>) -> Response {
+    let ctx = &state.context;
+    let values = ctx.values();
     let mut operations = Vec::new();
-    for ctx in &state.contexts {
-        let values = ctx.values();
-        for mut op in ctx.activity.snapshot() {
-            let has = |feature: &str| {
-                op["features"]
-                    .as_array()
-                    .is_some_and(|f| f.iter().any(|v| v == feature))
-            };
-            let waiting = (has("semanticSearch") && ctx.embed_backoff.waiting() && values.semantic_search)
-                || (has("imageSearch") && ctx.image_embed_backoff.waiting() && values.image_search);
-            if waiting {
-                op["state"] = json!("waiting");
-                op["phase"] = json!("waiting");
-                op["total"] = Value::Null;
-                op["finishedAt"] = Value::Null;
-            }
-            operations.push(op);
+    for mut op in ctx.activity.snapshot() {
+        let has = |feature: &str| {
+            op["features"]
+                .as_array()
+                .is_some_and(|f| f.iter().any(|v| v == feature))
+        };
+        let waiting = (has("semanticSearch") && ctx.embed_backoff.waiting() && values.semantic_search)
+            || (has("imageSearch") && ctx.image_embed_backoff.waiting() && values.image_search);
+        if waiting {
+            op["state"] = json!("waiting");
+            op["phase"] = json!("waiting");
+            op["total"] = Value::Null;
+            op["finishedAt"] = Value::Null;
         }
+        operations.push(op);
     }
     let feature = state
         .failure_retry_feature
@@ -242,28 +211,24 @@ async fn activity(State(state): State<Shared>) -> Response {
 async fn stats(State(state): State<Shared>) -> Response {
     let result = blocking(move || {
         state.db.with(|c| {
-            let mut roots = Vec::new();
-            let mut errors = Vec::new();
-            let mut queue_depth = 0;
-            for ctx in &state.contexts {
-                roots.push(db::root_stats(c, &ctx.name, ctx.root_id)?);
-                errors.extend(db::errors_sample(c, ctx.root_id, 20)?);
-                queue_depth += db::pending_count(c, ctx.root_id)?;
-            }
+            let root_id = state.context.root_id;
             let jobs = &state.jobs;
-            Ok(json!({
-                "roots": roots,
+            let mut body = json!({
                 "thumbnails": db::count(c, r#""app"."thumbnails""#)?,
                 "image_embeddings": db::count(c, r#""app"."image_embeddings""#)?,
-                "queue_depth": queue_depth,
-                "errors_sample": errors,
+                "queue_depth": db::pending_count(c, root_id)?,
+                "errors_sample": db::errors_sample(c, root_id, 20)?,
                 "thumbnail_rebuild": jobs.thumbnail.snapshot(),
                 "image_embedding_rebuild": jobs.image_rebuild.snapshot(),
                 "features": state.features().as_json(),
                 "index_clear": jobs.index_clear.snapshot(),
                 "thumbnail_clear": jobs.thumbnail_clear.snapshot(),
                 "image_embedding_clear": jobs.image_clear.snapshot(),
-            }))
+            });
+            if let Value::Object(fields) = &mut body {
+                fields.extend(db::root_stats(c, root_id)?);
+            }
+            Ok(body)
         })
     })
     .await;
@@ -298,7 +263,6 @@ async fn extract_content(State(state): State<Shared>, Query(query): Query<NameQu
         };
     let result = blocking(move || {
         let _permit = permit;
-        // Without roots this reads the database, which must not happen on the async thread.
         let search_ocr = state.features().values.search_ocr;
         extractor.extract(&content, &name, search_ocr)
     })
@@ -314,12 +278,7 @@ async fn reindex(State(state): State<Shared>, body: axum::body::Bytes) -> Respon
         Ok(payload) => payload,
         Err(response) => return response.into_response(),
     };
-    let Some(root) = payload.get("root").and_then(Value::as_str) else {
-        return error(StatusCode::BAD_REQUEST, "root is required");
-    };
-    let Some(ctx) = state.context(root).cloned() else {
-        return error(StatusCode::NOT_FOUND, &format!("unknown root: {root}"));
-    };
+    let ctx = Arc::clone(&state.context);
     let features = ctx.features();
     if !features.values.indexer_enabled() {
         return error(StatusCode::CONFLICT, "feature processing disabled");
@@ -342,66 +301,56 @@ async fn reindex(State(state): State<Shared>, body: axum::body::Bytes) -> Respon
     };
     ctx.activity
         .queue_scan(work_features(&features.values, None, false, false), features.revision);
-    if let Some(wake) = state.wakes.get(root) {
-        wake.set();
-    }
+    state.wake.set();
     if thumbnails && features.values.internal_thumbnails() {
         // Best effort: a running rebuild means this one is not queued.
-        maintenance::start_thumbnail_rebuild(&state.jobs.thumbnail, vec![ctx], path, false);
+        maintenance::start_thumbnail_rebuild(&state.jobs.thumbnail, ctx, path, false);
     }
     Json(json!({"count": count})).into_response()
 }
 
 struct RebuildRequest {
-    contexts: Vec<Arc<RootContext>>,
     path: Option<String>,
     force: bool,
 }
 
-fn rebuild_request(state: &AppState, body: &[u8]) -> Result<RebuildRequest, ApiError> {
+fn rebuild_request(body: &[u8]) -> Result<RebuildRequest, ApiError> {
     let payload = object(body)?;
-    let root = payload.get("root").filter(|v| !v.is_null());
     let path = payload.get("path").filter(|v| !v.is_null());
-    if root.is_some_and(|r| !r.is_string()) {
-        return Err(fail(StatusCode::BAD_REQUEST, "root must be a string"));
-    }
     if path.is_some_and(|p| !p.is_string()) {
         return Err(fail(StatusCode::BAD_REQUEST, "path must be a string"));
     }
-    let contexts = match root.and_then(Value::as_str) {
-        Some(name) => state.context(name).cloned().into_iter().collect(),
-        None => state.contexts.clone(),
-    };
     Ok(RebuildRequest {
-        contexts,
         path: path.and_then(Value::as_str).map(str::to_owned),
         force: payload.get("force") == Some(&Value::Bool(true)),
     })
 }
 
 async fn thumbnails_rebuild(State(state): State<Shared>, body: axum::body::Bytes) -> Response {
-    let request = match rebuild_request(&state, &body) {
+    let request = match rebuild_request(&body) {
         Ok(request) => request,
         Err(response) => return response.into_response(),
     };
-    if !request.contexts.is_empty() && !request.contexts.iter().any(|c| c.values().internal_thumbnails()) {
+    let ctx = Arc::clone(&state.context);
+    if !ctx.values().internal_thumbnails() {
         return error(StatusCode::CONFLICT, "thumbnail processing disabled");
     }
-    if !maintenance::start_thumbnail_rebuild(&state.jobs.thumbnail, request.contexts, request.path, request.force) {
+    if !maintenance::start_thumbnail_rebuild(&state.jobs.thumbnail, ctx, request.path, request.force) {
         return error(StatusCode::CONFLICT, "a thumbnail rebuild is already running");
     }
     (StatusCode::ACCEPTED, Json(json!({"started": true, "total": null}))).into_response()
 }
 
 async fn image_embeddings_rebuild(State(state): State<Shared>, body: axum::body::Bytes) -> Response {
-    let request = match rebuild_request(&state, &body) {
+    let request = match rebuild_request(&body) {
         Ok(request) => request,
         Err(response) => return response.into_response(),
     };
-    if !request.contexts.is_empty() && !request.contexts.iter().any(|c| c.values().image_search) {
+    let ctx = Arc::clone(&state.context);
+    if !ctx.values().image_search {
         return error(StatusCode::CONFLICT, "image search disabled");
     }
-    if !maintenance::start_image_rebuild(&state.jobs.image_rebuild, request.contexts, request.path, request.force) {
+    if !maintenance::start_image_rebuild(&state.jobs.image_rebuild, ctx, request.path, request.force) {
         return error(StatusCode::CONFLICT, "an image-embedding rebuild is already running");
     }
     (StatusCode::ACCEPTED, Json(json!({"started": true, "total": null}))).into_response()
@@ -423,42 +372,31 @@ async fn clear(State(state): State<Shared>, uri: Uri, body: axum::body::Bytes) -
         "/thumbnails/clear" => "thumbnails",
         _ => "image_embeddings",
     };
-    let allowed: &[&str] = if kind == "index" { &["root", "path"] } else { &[] };
+    let allowed: &[&str] = if kind == "index" { &["path"] } else { &[] };
     if payload.keys().any(|k| !allowed.contains(&k.as_str())) {
         return error(StatusCode::BAD_REQUEST, "unknown fields");
     }
-    for field in allowed {
-        if let Some(value) = payload.get(*field)
-            && value.as_str().is_none_or(|s| s.trim().is_empty())
-        {
-            return error(StatusCode::BAD_REQUEST, &format!("{field} must be a nonempty string"));
-        }
-    }
-    let root = payload.get("root").and_then(Value::as_str);
-    let path = payload.get("path").and_then(Value::as_str);
-    if path.is_some() && root.is_none() {
-        return error(StatusCode::BAD_REQUEST, "path requires root");
-    }
+    let path = match payload.get("path") {
+        None => None,
+        Some(value) => match value.as_str() {
+            Some(path) if !path.trim().is_empty() => Some(path),
+            _ => return error(StatusCode::BAD_REQUEST, "path must be a nonempty string"),
+        },
+    };
     if path.is_some_and(|p| p.split('/').any(|s| s == "..") || p.contains(['\\', '\0'])) {
         return error(StatusCode::BAD_REQUEST, "invalid path");
     }
-    let contexts = match root {
-        Some(name) => match state.context(name) {
-            Some(ctx) => vec![Arc::clone(ctx)],
-            None => return error(StatusCode::NOT_FOUND, &format!("unknown root: {name}")),
-        },
-        None => state.contexts.clone(),
-    };
+    let ctx = Arc::clone(&state.context);
     let scope = path.and_then(|p| normalize_scope(p.trim_start_matches('/')));
     let started = match kind {
         "thumbnails" => maintenance::start_clear(&state.jobs.thumbnail_clear, "thumbnails", move |job| {
-            maintenance::clear_thumbnails(&contexts, job)
+            maintenance::clear_thumbnails(&ctx, job)
         }),
         "image_embeddings" => maintenance::start_clear(&state.jobs.image_clear, "image_embeddings", move |job| {
-            maintenance::clear_image_embeddings(&contexts, job)
+            maintenance::clear_image_embeddings(&ctx, job)
         }),
         _ => maintenance::start_clear(&state.jobs.index_clear, "index", move |job| {
-            maintenance::clear_index(&contexts, scope.as_deref(), job)
+            maintenance::clear_index(&ctx, scope.as_deref(), job)
         }),
     };
     if !started {
@@ -484,37 +422,31 @@ async fn retry_failures(State(state): State<Shared>, body: axum::body::Bytes) ->
         Some(Value::Number(n)) if n.as_i64().is_some_and(|id| id >= 1) && n.is_i64() => n.as_i64(),
         Some(_) => return error(StatusCode::BAD_REQUEST, "invalid failure id"),
     };
-    let contexts: Vec<Arc<RootContext>> = state
-        .contexts
-        .iter()
-        .filter(|c| c.values().get(&feature))
-        .cloned()
-        .collect();
-    if contexts.is_empty() {
+    let ctx = Arc::clone(&state.context);
+    if !ctx.values().get(&feature) {
         return error(StatusCode::CONFLICT, "feature disabled");
     }
     if let Some(id) = failure_id {
-        let (lookup, wanted) = (contexts.clone(), feature.clone());
+        let (lookup, wanted) = (Arc::clone(&ctx), feature.clone());
         let found = blocking(move || {
-            lookup.iter().any(|ctx| {
-                ctx.db
-                    .with(|c| {
-                        Ok(c.query_opt(
-                            "SELECT 1 FROM idx.processing_failures WHERE id = $1::bigint AND root_id = $2::bigint \
-                             AND feature = $3 AND resolved_at IS NULL",
-                            &[&id, &ctx.root_id, &wanted],
-                        )?
-                        .is_some())
-                    })
-                    .unwrap_or(false)
-            })
+            lookup
+                .db
+                .with(|c| {
+                    Ok(c.query_opt(
+                        "SELECT 1 FROM idx.processing_failures WHERE id = $1::bigint AND root_id = $2::bigint \
+                         AND feature = $3 AND resolved_at IS NULL",
+                        &[&id, &lookup.root_id, &wanted],
+                    )?
+                    .is_some())
+                })
+                .unwrap_or(false)
         })
         .await;
         if !matches!(found, Ok(true)) {
             return error(StatusCode::NOT_FOUND, "no unresolved failure found");
         }
     }
-    if !maintenance::start_retry(&state.jobs.failure_retry, contexts, feature.clone(), failure_id) {
+    if !maintenance::start_retry(&state.jobs.failure_retry, ctx, feature.clone(), failure_id) {
         return error(StatusCode::CONFLICT, "maintenance busy");
     }
     *state

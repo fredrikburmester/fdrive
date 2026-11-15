@@ -8,7 +8,7 @@ import {
   ManagedShare,
   ROUTES,
 } from "@fdrive/contracts";
-import { createDb, createRepos, type Repos, schema } from "@fdrive/db";
+import { createDb, createRepos, type Repos } from "@fdrive/db";
 import { startLocalStorage, startPostgres } from "@fdrive/testkit";
 import { sql } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -71,17 +71,14 @@ describe("metadata follows the Mac's writes as they commit", () => {
         DATABASE_URL: postgres.connectionString,
         FDRIVE_STORAGE_ROOT: storage.root,
         FDRIVE_MASTER_KEY: Buffer.alloc(32, 23).toString("base64"),
-        // Configured so the API journals its changes and the indexer listener
-        // runs; no indexer does, the last test notifies for it.
-        FDRIVE_INDEX_ROOTS: JSON.stringify([
-          { name: "files", storagePath: storage.root, indexerPath: "/roots/files" },
-        ]),
+        // Configured so the indexer listener runs; no indexer does, the last
+        // test notifies for it.
+        FDRIVE_INDEXER_URL: "http://127.0.0.1:9",
       }),
       silentLogger(),
     );
     database = createDb(postgres.connectionString);
     repos = createRepos(database.db);
-    await database.db.insert(schema.roots).values({ name: "files" }).onConflictDoNothing();
     alice = await login("alice");
     bob = await login("bob");
     headers = await pairMac(alice);

@@ -1567,13 +1567,12 @@ it("recovers only uniquely matched legacy OCR originals and preserves unresolved
   const root = join(directory, randomUUID());
   await mkdir(join(root, "originals"), { recursive: true });
   await mkdir(join(root, "original-mappings"));
-  await db.pool.query("insert into idx.roots(id,name) values(1,'documents')");
   const original = Buffer.from("original PDF bytes");
   const probe = join(root, "originals", "probe");
   await writeFile(probe, original);
   await utimes(probe, 1700000000, 1700000000);
   const time = String((await stat(probe, { bigint: true })).mtimeNs);
-  const filename = `${createHash("sha256").update(`documents:folder/report.pdf:${original.length}:${time}`).digest("hex").slice(0, 16)}_report.pdf`;
+  const filename = `${createHash("sha256").update(`files:folder/report.pdf:${original.length}:${time}`).digest("hex").slice(0, 16)}_report.pdf`;
   const { rename } = await import("node:fs/promises");
   await rename(probe, join(root, "originals", filename));
   // The OCR receipt has the rewritten size, while its timestamp matches the preserved original.
@@ -1597,7 +1596,7 @@ it("recovers only uniquely matched legacy OCR originals and preserves unresolved
     const resolved = required(mapped.sources.find((blob) => blob.path.includes(filename)));
     expect(JSON.parse((await readBounded(await resolved.open())).toString())).toMatchObject({
       status: "resolved",
-      root: "documents",
+      root: "files",
       path: "folder/report.pdf",
       original: filename,
       size: original.length,
@@ -1612,7 +1611,7 @@ it("recovers only uniquely matched legacy OCR originals and preserves unresolved
     const truncated = {
       query: async () => ({
         rows: Array.from({ length: 1001 }, () => ({
-          root: "documents",
+          root: "files",
           path: "folder/report.pdf",
           mtime_ns: time,
         })),

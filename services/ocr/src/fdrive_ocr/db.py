@@ -1,9 +1,8 @@
 """All SQL. This service never creates or alters tables: schema ownership lives
 in `packages/db/drizzle/*.sql`. It reads `app.settings` (shared with the
-indexer), `idx.roots` (upserting by name, same as the indexer) and the PDFs the
-indexer recorded in `idx.files`, and owns `idx.ocr_log` (the done-log) and
-`idx.ocr_runs` (nightly pass history). It journals the files it rewrites in
-`idx.changes`, as the API does its own.
+indexer) and the PDFs the indexer recorded in `idx.files`, and owns
+`idx.ocr_log` (the done-log) and `idx.ocr_runs` (nightly pass history). It
+journals the files it rewrites in `idx.changes`, as the API does its own.
 """
 
 from __future__ import annotations
@@ -27,50 +26,6 @@ def connect(dsn: str, retries: int = 30, sleep: Callable[[float], None] = time.s
             last = e
             sleep(2)
     raise RuntimeError(f"could not connect to postgres: {last}")
-
-
-def wait_for_schema_version(
-    conn: psycopg.Connection,
-    expected: int,
-    timeout_seconds: int,
-    log: Callable[[str], None],
-    sleep: Callable[[float], None] = time.sleep,
-    now: Callable[[], float] = time.monotonic,
-) -> int | None:
-    """Poll `idx.schema_version` until it reports `expected`. Returns the version
-    seen when it matches, or `None` once `timeout_seconds` has elapsed."""
-    deadline = now() + timeout_seconds
-    while True:
-        version = read_schema_version(conn)
-        if version == expected:
-            return version
-        if now() >= deadline:
-            log(f"schema_version never reached {expected} (last seen: {version}); giving up")
-            return None
-        log(f"waiting for idx.schema_version = {expected} (last seen: {version})")
-        sleep(5)
-
-
-def read_schema_version(conn: psycopg.Connection) -> int | None:
-    try:
-        with conn.cursor() as cur:
-            cur.execute('SELECT version FROM "idx"."schema_version" ORDER BY version DESC LIMIT 1')
-            row = cur.fetchone()
-            return int(row[0]) if row else None
-    except psycopg.Error:
-        conn.rollback()
-        return None
-
-
-def upsert_root(conn: psycopg.Connection, name: str) -> int:
-    with conn.cursor() as cur:
-        cur.execute(
-            'INSERT INTO "idx"."roots" (name) VALUES (%s) ON CONFLICT (name) DO UPDATE SET name = EXCLUDED.name RETURNING id',
-            (name,),
-        )
-        row = cur.fetchone()
-        assert row is not None
-        return int(row[0])
 
 
 def read_settings(conn: psycopg.Connection) -> dict[str, object]:

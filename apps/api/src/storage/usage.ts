@@ -1,27 +1,20 @@
-import type { IndexQueries } from "@fdrive/db";
-import type { AppConfig } from "../config.js";
-import { localIndexRoot } from "../local/files-folder.js";
+import { INDEX_ROOT_ID, type IndexQueries } from "@fdrive/db";
 
 /** The bytes in a user's home folder as the index counts them; `null` while it is not indexed. */
 export type HomeUsage = (username: string) => Promise<number | null>;
 
 /**
  * Every byte the index holds under `<root>/<username>`, Trash included: what
- * a storage limit counts, and what System > Users shows. `null` when the
- * files folder's index root is not configured or the indexer has not
- * created it yet.
+ * a storage limit counts, and what System > Users shows. `null` while the
+ * files folder is not indexed (`indexed`).
  */
 export function createHomeUsage(
-  config: Pick<AppConfig, "fdriveStorageRoot" | "fdriveIndexRoots">,
-  index: Pick<IndexQueries, "rootIdsByName" | "subtreeSize">,
+  index: Pick<IndexQueries, "subtreeSize">,
+  indexed: () => Promise<boolean>,
 ): HomeUsage {
-  const name = localIndexRoot(config.fdriveIndexRoots, config.fdriveStorageRoot);
-  const rootName = (config.fdriveIndexRoots ?? []).some((root) => root.name === name) ? name : null;
   return async (username) => {
-    if (rootName === null) return null;
-    const rootId = (await index.rootIdsByName())[rootName];
-    if (rootId === undefined) return null;
-    const home = [{ rootId, fsPrefix: `/${username}` }];
-    return (await index.subtreeSize(home, rootId, username)).bytes;
+    if (!(await indexed())) return null;
+    const home = [{ rootId: INDEX_ROOT_ID, fsPrefix: `/${username}` }];
+    return (await index.subtreeSize(home, INDEX_ROOT_ID, username)).bytes;
   };
 }

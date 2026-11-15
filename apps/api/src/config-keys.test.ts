@@ -24,12 +24,8 @@ const REQUIRED_ENV = {
 function loadFullyConfiguredEnv(): AppConfig {
   return loadConfig({
     ...REQUIRED_ENV,
-    FDRIVE_INDEX_ROOTS: JSON.stringify([
-      { name: "files", storagePath: "/data", indexerPath: "/data" },
-    ]),
     FDRIVE_INDEXER_URL: "http://indexer:8010",
-    FDRIVE_EMBED_URL: "http://embed:80",
-    FDRIVE_IMAGE_EMBED_URL: "http://image-embed:8012",
+    FDRIVE_ML_URL: "http://ml:8080",
     FDRIVE_THUMBS_DIR: "/thumbs",
     FDRIVE_OCR_URL: "http://ocr:8011",
     FDRIVE_OFFICE_PRODUCT: "onlyoffice",
@@ -86,15 +82,15 @@ describe("subsystemsStatus", () => {
     expect(statuses.shares).toEqual({ status: "configured", missing: [] });
     expect(statuses.index).toEqual({
       status: "not_configured",
-      missing: ["FDRIVE_INDEX_ROOTS", "FDRIVE_INDEXER_URL"],
+      missing: ["FDRIVE_INDEXER_URL"],
     });
     expect(statuses.search).toEqual({
       status: "not_configured",
-      missing: ["FDRIVE_EMBED_URL"],
+      missing: ["FDRIVE_ML_URL"],
     });
     expect(statuses.imageSearch).toEqual({
       status: "not_configured",
-      missing: ["FDRIVE_IMAGE_EMBED_URL"],
+      missing: ["FDRIVE_ML_URL"],
     });
     expect(statuses.thumbnails).toEqual({
       status: "not_configured",
@@ -104,26 +100,9 @@ describe("subsystemsStatus", () => {
     expect(statuses.office).toEqual({ status: "configured", missing: [] });
   });
 
-  it("reports index as configured only once both FDRIVE_INDEX_ROOTS and FDRIVE_INDEXER_URL are set", () => {
-    const rootsOnly = loadConfig({
-      ...REQUIRED_ENV,
-      FDRIVE_INDEX_ROOTS: JSON.stringify([
-        { name: "files", storagePath: "/data", indexerPath: "/data" },
-      ]),
-    });
-    expect(subsystemsStatus(rootsOnly).index).toEqual({
-      status: "not_configured",
-      missing: ["FDRIVE_INDEXER_URL"],
-    });
-
-    const both = loadConfig({
-      ...REQUIRED_ENV,
-      FDRIVE_INDEX_ROOTS: JSON.stringify([
-        { name: "files", storagePath: "/data", indexerPath: "/data" },
-      ]),
-      FDRIVE_INDEXER_URL: "http://indexer:8010",
-    });
-    expect(subsystemsStatus(both).index).toEqual({ status: "configured", missing: [] });
+  it("reports index as configured once FDRIVE_INDEXER_URL is set", () => {
+    const configured = loadConfig({ ...REQUIRED_ENV, FDRIVE_INDEXER_URL: "http://indexer:8010" });
+    expect(subsystemsStatus(configured).index).toEqual({ status: "configured", missing: [] });
   });
 
   it("reports every subsystem as configured once fully configured", () => {
@@ -140,7 +119,7 @@ describe("applyReachability", () => {
     network: { status: "configured", missing: [] },
     shares: { status: "configured", missing: [] },
     index: { status: "configured", missing: [] },
-    search: { status: "not_configured", missing: ["FDRIVE_EMBED_URL"] },
+    search: { status: "not_configured", missing: ["FDRIVE_ML_URL"] },
     imageSearch: { status: "configured", missing: [] },
     thumbnails: { status: "configured", missing: [] },
     ocr: { status: "configured", missing: [] },
@@ -160,16 +139,16 @@ describe("applyReachability", () => {
   it("leaves a subsystem unchanged when no probe result is supplied", () => {
     const result = applyReachability(base, {});
     expect(result.index).toEqual({ status: "configured", missing: [] });
-    expect(result.search).toEqual({ status: "not_configured", missing: ["FDRIVE_EMBED_URL"] });
+    expect(result.search).toEqual({ status: "not_configured", missing: ["FDRIVE_ML_URL"] });
   });
 
   it("never marks a not_configured subsystem unreachable, even if a probe result is (incorrectly) supplied", () => {
     const result = applyReachability(base, { search: false });
-    expect(result.search).toEqual({ status: "not_configured", missing: ["FDRIVE_EMBED_URL"] });
+    expect(result.search).toEqual({ status: "not_configured", missing: ["FDRIVE_ML_URL"] });
     const failed = applyReachability(base, {
       search: { failed: "worker exceeded bounded startup retries" },
     });
-    expect(failed.search).toEqual({ status: "not_configured", missing: ["FDRIVE_EMBED_URL"] });
+    expect(failed.search).toEqual({ status: "not_configured", missing: ["FDRIVE_ML_URL"] });
   });
 
   it("reports a configured subsystem whose controller gave up as failed, with the controller's reason", () => {
@@ -189,10 +168,8 @@ describe("startupSummaryLines", () => {
     const lines = startupSummaryLines(baseConfig());
 
     expect(lines).toContain("subsystem=core status=configured");
-    expect(lines).toContain(
-      "subsystem=index status=not configured missing=FDRIVE_INDEX_ROOTS,FDRIVE_INDEXER_URL",
-    );
-    expect(lines).toContain("subsystem=search status=not configured missing=FDRIVE_EMBED_URL");
+    expect(lines).toContain("subsystem=index status=not configured missing=FDRIVE_INDEXER_URL");
+    expect(lines).toContain("subsystem=search status=not configured missing=FDRIVE_ML_URL");
     expect(lines.some((line) => line.startsWith("subsystem=network bind hint"))).toBe(true);
     expect(lines).toHaveLength(SUBSYSTEMS.length + 1);
   });

@@ -8,18 +8,20 @@ PDFs the indexer has found, rewriting scanned PDFs to add a permanent searchable
 layer via `ocrmypdf` for PDF readers. (Search indexing itself also extracts text in-memory
 from scans and images during indexer scans when the `searchOcr` feature is enabled,
 without altering original files). It is the direct port of filesai's
-`ocr/run.sh`, extended for multiple roots and a Postgres-backed done-log, with
+`ocr/run.sh`, extended with a Postgres-backed done-log, with
 status endpoints so the web app's System page can show and trigger it. It
 never creates or migrates its own schema: `packages/db`'s Drizzle migrations
-own `idx.ocr_log` and `idx.ocr_runs`, and the service waits for
-`idx.schema_version` to report the version it expects before doing anything.
+own `idx.ocr_log` and `idx.ocr_runs`. Compose starts it once the API is healthy, and the API
+runs every migration before it serves.
 
 See [architecture](ARCHITECTURE.md) for the service boundaries.
 
 ## What it does, and what it refuses to touch
 
-Once per configured hour (and on demand via `POST /run`), the service reads each configured
-root's PDFs from the index and runs `ocrmypdf` on each one that needs it. It walks no folder.
+Once per configured hour (and on demand via `POST /run`), the service reads the files
+folder's PDFs from the index and runs `ocrmypdf` on each one that needs it. It walks no folder.
+The files folder is mounted at `/data` and is the index's only root, `files` (`idx.roots` row
+1, which a migration seeds).
 
 ### Which PDFs
 
@@ -128,30 +130,15 @@ journaled for a PDF left untouched.
 | `ocr.originals_retention_days` | integer, `0` keeps forever | `0` |
 
 **On the `exclude_globs` default.** The match key is `<root>/<rel path>`, the
-same convention the indexer uses, so a bare `"Photos/**"` only excludes paths
-under a root literally named `Photos`. filesai's original defaults
-(`Programs`, `Photos`, `Videos`) were top-level directories under its one
-`/data` root; carried over verbatim here for continuity, they only do
-something useful again once you either name a root that way, or replace them
-with root-qualified patterns for a per-user layout, e.g.
-`"files/*/Photos/**"` to exclude every user's `Photos` folder under the root
-`files`.
+same convention the indexer uses, which always starts `files/`, so a bare
+`"Photos/**"` matches nothing. filesai's original defaults (`Programs`, `Photos`,
+`Videos`) were top-level directories under its one `/data` root; carried over
+verbatim here for continuity, they do something only once replaced with patterns
+for the per-user layout, e.g. `"files/*/Photos/**"` to exclude every user's
+`Photos` folder.
 
 A value change is logged (`settings changed: ...`) the same way the indexer
 logs its own settings changes.
-
-## Multiple roots
-
-`INDEX_ROOTS` is the same comma-separated `name=path` format the indexer uses:
-
-```
-INDEX_ROOTS=files=/data,photos=/roots/photos
-```
-
-Each name is upserted into the shared `idx.roots` table (same rows the indexer
-uses), so `idx.ocr_log.root_id` lines up with `idx.files.root_id`. Every
-configured root's PDFs are read from the index in the same pass; there is one
-`idx.ocr_runs` row per pass covering all of them, not one per root.
 
 ## Internal HTTP API
 
@@ -160,7 +147,7 @@ only from other containers on the compose network.
 
 | Endpoint | Method | Returns |
 | --- | --- | --- |
-| `/health` | GET | `{ ok, running }`. `ok` is `false` until the schema handshake with `idx.schema_version` has completed. |
+| `/health` | GET | `{ ok, running, features, storage }`. `storage` is `{ readable, writable }` for the files folder. |
 | `/activity` | GET | In-memory current/last OCR operation, including live processed/skipped/error counts; see [System activity](SYSTEM-ACTIVITY.md). No storage scans. |
 | `/stats` | GET | `{ last_run, next_run_at, schedule_hour, langs, exclude_globs, max_mb, keep_originals, originals_retention_days, originals_count, originals_bytes, running }`. `last_run` is `{ started_at, finished_at, seen, ocred, skipped, failed }` or `null` if no pass has ever run. `originals_count` / `originals_bytes` describe `<state_dir>/originals` on disk right now. |
 | `/run` | POST | `202 { started: true }`, or `409 { error: "already running" }` if a pass (scheduled or manual) is already in progress. Runs in the background; poll `/stats` or `/health` for completion. |
@@ -248,7 +235,7 @@ can be repeated, and the row for the OCR output is left alone. The restored path
 is queued for the indexer like a rewrite.
 
 A restore is refused, never half-applied, when the sidecar cannot be resolved,
-its root is not configured on this service, its recorded path does not stay
+its root is not `files`, its recorded path does not stay
 inside that root, or the directory that held the file is gone. In every one of
 those cases the bytes are still downloadable, so a manual recovery remains
 possible.
@@ -282,8 +269,7 @@ Searchable PDFs through onboarding or System > Features to allow processing:
 docker compose up -d
 ```
 
-`ocr` mounts the files folder (`FDRIVE_FILES_DIR`) at `/data` as the root `files`,
-like the indexer, but **read-write** (the indexer only needs read-only), and writes as
+`ocr` mounts the files folder (`FDRIVE_FILES_DIR`) at `/data`, like the indexer, but **read-write** (the indexer only needs read-only), and writes as
 `FDRIVE_RUN_AS_UID`, the user that owns the files. Its own state directory at
 `${FDRIVE_DATA_DIR}/ocr` holds kept originals. The api's
 `FDRIVE_OCR_URL` (`http://ocr:8011`) is internal to the production network; the worker remains

@@ -1,12 +1,14 @@
 mod common;
 
+use fdrive_indexer::config::{ROOT_ID, ROOT_NAME};
+
 #[test]
-fn migrated_database_has_the_schema() {
+fn migrations_seed_the_files_root_the_indexer_serves() {
     let url = common::database();
     let mut client = common::connect(&url);
-    let version: i32 = client
-        .query_one(r#"SELECT max(version) FROM "idx"."schema_version""#, &[])
+    let name: String = client
+        .query_one(r#"SELECT name FROM "idx"."roots" WHERE id = $1::bigint"#, &[&ROOT_ID])
         .unwrap()
         .get(0);
-    assert_eq!(version, fdrive_indexer::runner::EXPECTED_SCHEMA_VERSION as i32);
+    assert_eq!(name, ROOT_NAME);
 }

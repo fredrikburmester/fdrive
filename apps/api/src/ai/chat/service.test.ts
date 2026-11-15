@@ -21,9 +21,7 @@ const CONFIG: ResolvedAiConfig = {
   organize: true,
   chat: true,
 };
-const HOME_SCOPES: readonly Scope[] = [
-  { rootName: "files", fsPrefix: "/alice", virtualPrefix: "/" },
-];
+const HOME_SCOPES: readonly Scope[] = [{ fsPrefix: "/alice", virtualPrefix: "/" }];
 
 /** A model whose replies come from a queue; a hanging reply waits for its signal. */
 function scriptedModel() {
@@ -119,11 +117,10 @@ async function setup(
   };
   const script = scriptedModel();
   const mcp: McpToolDeps = {
-    indexQueries: { rootIdsByName: async () => ({}) } as unknown as IndexQueries,
+    indexQueries: {} as IndexQueries,
     searchService: { search: async () => Promise.reject(new Error("unexpected")) },
-    scopeResolver: {
-      verifiedIndexScopes: async () => ({ available: false, reason: "no_connection" as const }),
-    },
+    scopeResolver: { scopesFor: async () => [] },
+    indexed: async () => false,
     publicUrl: async () => null,
     indexerClient: null,
     clock: () => new Date("2026-09-18T10:00:00.000Z"),

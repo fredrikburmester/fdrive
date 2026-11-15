@@ -112,10 +112,10 @@ describe("createApp health route", () => {
         shares: { status: "configured", missing: [] },
         index: {
           status: "not_configured",
-          missing: ["FDRIVE_INDEX_ROOTS", "FDRIVE_INDEXER_URL"],
+          missing: ["FDRIVE_INDEXER_URL"],
         },
-        search: { status: "not_configured", missing: ["FDRIVE_EMBED_URL"] },
-        imageSearch: { status: "not_configured", missing: ["FDRIVE_IMAGE_EMBED_URL"] },
+        search: { status: "not_configured", missing: ["FDRIVE_ML_URL"] },
+        imageSearch: { status: "not_configured", missing: ["FDRIVE_ML_URL"] },
         thumbnails: { status: "not_configured", missing: ["FDRIVE_THUMBS_DIR"] },
         ocr: { status: "not_configured", missing: ["FDRIVE_OCR_URL"] },
         office: { status: "configured", missing: [] },
@@ -146,7 +146,7 @@ describe("createApp health route", () => {
   });
 
   it("reports a subsystem whose controller gave up as failed, carrying the controller's reason", async () => {
-    const config = loadConfig({ ...REQUIRED_ENV, FDRIVE_IMAGE_EMBED_URL: "http://image-embed" });
+    const config = loadConfig({ ...REQUIRED_ENV, FDRIVE_ML_URL: "http://ml" });
     const app = createApp({
       config,
       logger: createTestLogger(),

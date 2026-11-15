@@ -1,8 +1,9 @@
-import { and, asc, eq, gt, inArray, sql } from "drizzle-orm";
+import { and, asc, eq, gt, sql } from "drizzle-orm";
 import type { Db } from "../index.js";
-import { changeCursors, changeEpoch, changes, roots } from "../schema/idx.js";
+import { INDEX_ROOT_ID, INDEX_ROOT_NAME } from "../index-root.js";
+import { changeCursors, changeEpoch, changes } from "../schema/idx.js";
 
-/** The `NOTIFY` channel a write to `idx.changes` wakes; the payload is the root's name. */
+/** The `NOTIFY` channel a write to `idx.changes` wakes; the payload is the root's name, `files`. */
 export const CHANGES_CHANNEL = "idx_changes";
 
 /**
@@ -50,7 +51,7 @@ export interface ChangeMovedStamp extends ChangeStamp {
 }
 
 /**
- * One change under an index root, by root-relative path without a leading
+ * One change in the files folder, by path relative to it without a leading
  * slash (`alice/docs/a.pdf`, as `idx.files.path`). Without `targetPath`:
  * look at `path` again (a file, a folder, or nothing any more); `content` is
  * an upload's. With it: `path` moved to `targetPath`; `stamp` is a file's.
@@ -65,8 +66,6 @@ export interface ChangeInput {
 /** A row of the journal; `position` orders them. */
 export interface Change {
   readonly position: number;
-  /** The index root's name, which `path` is relative to. */
-  readonly root: string;
   readonly path: string;
   readonly targetPath: string | null;
   readonly source: ChangeSource;
@@ -78,24 +77,21 @@ export interface Change {
 export interface ChangePage {
   /**
    * Rows after the position asked for were pruned: rebuild from what is
-   * there now and continue from the newest position. It can be true when
-   * nothing of this root was lost, never false when something was.
+   * there now and continue from the newest position.
    */
   readonly gap: boolean;
   readonly changes: readonly Change[];
 }
 
-/** Appends one root's changes from one source; nothing for no items or a root the indexer has not created. */
-export type ChangeWriter = (root: string, items: readonly ChangeInput[]) => Promise<void>;
+/** Appends changes from one source; nothing for no items. */
+export type ChangeWriter = (items: readonly ChangeInput[]) => Promise<void>;
 
 export interface ChangeJournal {
   /**
-   * Adds `items` under `root` in one transaction that holds the journal's
-   * lock, so positions commit in order, and wakes `LISTEN idx_changes` with
-   * the root's name on commit. Nothing when the root has no row yet: the
-   * indexer creates it, and its first scan covers everything.
+   * Adds `items` in one transaction that holds the journal's lock, so
+   * positions commit in order, and wakes `LISTEN idx_changes` on commit.
    */
-  append(root: string, source: ChangeSource, items: readonly ChangeInput[]): Promise<void>;
+  append(source: ChangeSource, items: readonly ChangeInput[]): Promise<void>;
   /**
    * Drops rows older than `CHANGES_RETENTION` as one prefix of positions,
    * keeping the newest row so the oldest one left always shows what is gone.
@@ -103,12 +99,12 @@ export interface ChangeJournal {
    */
   prune(): Promise<number>;
   /**
-   * Up to `limit` rows of `root` (or of any of several roots) after `after`,
-   * oldest first, and whether rows after it were pruned. One statement, so
-   * the rows are every row after `after` up to the last one returned.
+   * Up to `limit` rows after `after`, oldest first, and whether rows after
+   * it were pruned. One statement, so the rows are every row after `after`
+   * up to the last one returned.
    */
-  read(root: string | readonly string[], after: number, limit: number): Promise<ChangePage>;
-  /** The newest position over every root; 0 before anything was written. A new consumer starts here. */
+  read(after: number, limit: number): Promise<ChangePage>;
+  /** The newest position; 0 before anything was written. A new consumer starts here. */
   end(): Promise<number>;
   /**
    * The journal's epoch, a random id created on first use and never backed
@@ -116,10 +112,10 @@ export interface ChangeJournal {
    * database), so a position handed to a client is only good with it.
    */
   epoch(): Promise<string>;
-  /** Where `consumer` last saved its position for `root`, or `null`. */
-  cursor(consumer: string, root: string): Promise<number | null>;
-  /** Saves `consumer`'s position for `root`; nothing for an unknown root. */
-  saveCursor(consumer: string, root: string, position: number): Promise<void>;
+  /** Where `consumer` last saved its position, or `null`. */
+  cursor(consumer: string): Promise<number | null>;
+  /** Saves `consumer`'s position. */
+  saveCursor(consumer: string, position: number): Promise<void>;
 }
 
 /**
@@ -144,17 +140,15 @@ function contentOf(row: {
 
 export function createChangeJournal(db: Db): ChangeJournal {
   return {
-    async append(root, source, items) {
+    async append(source, items) {
       if (items.length === 0) return;
       await db.transaction(async (tx) => {
-        const [found] = await tx.select({ id: roots.id }).from(roots).where(eq(roots.name, root));
-        if (found === undefined) return;
         await tx.execute(JOURNAL_LOCK);
         await tx.insert(changes).values(
           items.map((item) => {
             const stamp = item.content ?? item.stamp;
             return {
-              rootId: found.id,
+              rootId: INDEX_ROOT_ID,
               path: item.path,
               targetPath: item.targetPath ?? null,
               source,
@@ -167,7 +161,7 @@ export function createChangeJournal(db: Db): ChangeJournal {
             };
           }),
         );
-        await tx.execute(sql`select pg_notify(${CHANGES_CHANNEL}, ${root})`);
+        await tx.execute(sql`select pg_notify(${CHANGES_CHANNEL}, ${INDEX_ROOT_NAME})`);
       });
     },
 
@@ -184,30 +178,24 @@ export function createChangeJournal(db: Db): ChangeJournal {
       return result.rows.length;
     },
 
-    async read(root, after, limit) {
-      const names = typeof root === "string" ? [root] : [...root];
-      const rows =
-        names.length === 0
-          ? []
-          : await db
-              .select({
-                position: changes.id,
-                root: roots.name,
-                path: changes.path,
-                targetPath: changes.targetPath,
-                source: changes.source,
-                sha256: changes.sha256,
-                size: changes.size,
-                mtimeNs: changes.mtimeNs,
-                inode: changes.inode,
-                ctimeNs: changes.ctimeNs,
-                createdAt: changes.createdAt,
-              })
-              .from(changes)
-              .innerJoin(roots, eq(roots.id, changes.rootId))
-              .where(and(inArray(roots.name, names), gt(changes.id, after)))
-              .orderBy(asc(changes.id))
-              .limit(limit);
+    async read(after, limit) {
+      const rows = await db
+        .select({
+          position: changes.id,
+          path: changes.path,
+          targetPath: changes.targetPath,
+          source: changes.source,
+          sha256: changes.sha256,
+          size: changes.size,
+          mtimeNs: changes.mtimeNs,
+          inode: changes.inode,
+          ctimeNs: changes.ctimeNs,
+          createdAt: changes.createdAt,
+        })
+        .from(changes)
+        .where(and(eq(changes.rootId, INDEX_ROOT_ID), gt(changes.id, after)))
+        .orderBy(asc(changes.id))
+        .limit(limit);
       // Looked up after the rows: rows pruned before the read then show as a
       // gap, and a prune after it took nothing the read did not already see.
       const [bounds] = await db
@@ -218,7 +206,6 @@ export function createChangeJournal(db: Db): ChangeJournal {
         gap: oldest !== null && after < oldest - 1,
         changes: rows.map((row) => ({
           position: row.position,
-          root: row.root,
           path: row.path,
           targetPath: row.targetPath,
           source: row.source as ChangeSource,
@@ -248,19 +235,18 @@ export function createChangeJournal(db: Db): ChangeJournal {
       return (created as { epoch: string }).epoch;
     },
 
-    async cursor(consumer, root) {
+    async cursor(consumer) {
       const [row] = await db
         .select({ position: changeCursors.position })
         .from(changeCursors)
-        .innerJoin(roots, eq(roots.id, changeCursors.rootId))
-        .where(and(eq(roots.name, root), eq(changeCursors.consumer, consumer)));
+        .where(and(eq(changeCursors.rootId, INDEX_ROOT_ID), eq(changeCursors.consumer, consumer)));
       return row?.position ?? null;
     },
 
-    async saveCursor(consumer, root, position) {
+    async saveCursor(consumer, position) {
       await db.execute(sql`
         insert into idx.change_cursors (root_id, consumer, position)
-        select id, ${consumer}, ${position} from idx.roots where name = ${root}
+        values (${INDEX_ROOT_ID}, ${consumer}, ${position})
         on conflict (root_id, consumer)
         do update set position = excluded.position, updated_at = now()`);
     },
@@ -273,9 +259,9 @@ export function createChangeJournal(db: Db): ChangeJournal {
  */
 export function createChangeWriter(db: Db, source: ChangeSource): ChangeWriter {
   const journal = createChangeJournal(db);
-  return async (root, items) => {
+  return async (items) => {
     if (items.length === 0) return;
     await journal.prune();
-    await journal.append(root, source, items);
+    await journal.append(source, items);
   };
 }

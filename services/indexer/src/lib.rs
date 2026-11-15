@@ -1,4 +1,4 @@
-//! fdrive-indexer: walks configured roots, watches them for changes, extracts, chunks and
+//! fdrive-indexer: walks the files folder, watches it for changes, extracts, chunks and
 //! embeds text, builds thumbnails and image embeddings, and serves an internal HTTP API.
 //! See `docs/INDEXER.md`.
 

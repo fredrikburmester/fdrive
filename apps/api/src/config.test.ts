@@ -8,7 +8,7 @@ import {
   isBase64Of32Bytes,
   isHttpUrl,
   loadConfig,
-  parseIndexRoots,
+  mlUnitUrl,
   undefinedWhenEmpty,
   withDefault,
 } from "./config";
@@ -46,49 +46,6 @@ describe("undefinedWhenEmpty", () => {
 
   it("returns the value when it is a non-empty string", () => {
     expect(undefinedWhenEmpty("value")).toBe("value");
-  });
-});
-
-describe("parseIndexRoots", () => {
-  it("returns null for undefined", () => {
-    expect(parseIndexRoots(undefined)).toBeNull();
-  });
-
-  it("parses a valid single-root JSON array", () => {
-    const raw = JSON.stringify([{ name: "files", storagePath: "/data", indexerPath: "/data" }]);
-    expect(parseIndexRoots(raw)).toEqual([
-      { name: "files", storagePath: "/data", indexerPath: "/data" },
-    ]);
-  });
-
-  it("parses multiple roots", () => {
-    const raw = JSON.stringify([
-      { name: "files", storagePath: "/a", indexerPath: "/roots/a" },
-      { name: "photos", storagePath: "/b", indexerPath: "/roots/b" },
-    ]);
-    expect(parseIndexRoots(raw)).toHaveLength(2);
-  });
-
-  it("throws when a root names no storagePath", () => {
-    expect(() =>
-      parseIndexRoots(JSON.stringify([{ name: "files", indexerPath: "/roots/files" }])),
-    ).toThrow(/storagePath/);
-  });
-
-  it("throws for invalid JSON", () => {
-    expect(() => parseIndexRoots("not json")).toThrow(/valid JSON/);
-  });
-
-  it("throws for an empty array", () => {
-    expect(() => parseIndexRoots("[]")).toThrow();
-  });
-
-  it("throws when a root is missing a required field", () => {
-    expect(() => parseIndexRoots(JSON.stringify([{ name: "files" }]))).toThrow();
-  });
-
-  it("throws when the value is not an array", () => {
-    expect(() => parseIndexRoots(JSON.stringify({ name: "files" }))).toThrow();
   });
 });
 
@@ -132,11 +89,6 @@ describe("loadConfig", () => {
       fdriveBackupSources: [],
       fdriveBackupWorker: false,
       fdriveRestoreMode: false,
-      fdriveEmbedRuntimeUrl: undefined,
-      fdriveImageEmbedRuntimeUrl: undefined,
-      fdriveImageEmbedUrl: undefined,
-      fdriveTikaRuntimeUrl: undefined,
-      fdriveTikaUrl: undefined,
       fdriveWorkerToken: undefined,
       fdriveOfficeProduct: undefined,
       fdriveOfficeUrl: undefined,
@@ -159,8 +111,7 @@ describe("loadConfig", () => {
       fdriveArchivePeekMaxBytes: DEFAULT_ARCHIVE_PEEK_MAX_BYTES,
       fdriveJsonMaxBytes: DEFAULT_JSON_MAX_BYTES,
       fdriveShareUploadMaxBytes: DEFAULT_SHARE_UPLOAD_MAX_BYTES,
-      fdriveIndexRoots: null,
-      fdriveEmbedUrl: undefined,
+      fdriveMlUrl: undefined,
       fdriveThumbsDir: undefined,
       fdriveSetupToken: undefined,
       fdriveIndexerUrl: undefined,
@@ -211,10 +162,7 @@ describe("loadConfig", () => {
       FDRIVE_ARCHIVE_PEEK_MAX_BYTES: "1500",
       FDRIVE_JSON_MAX_BYTES: "2000",
       FDRIVE_SHARE_UPLOAD_MAX_BYTES: "3000",
-      FDRIVE_INDEX_ROOTS: JSON.stringify([
-        { name: "files", storagePath: "/data", indexerPath: "/roots/files" },
-      ]),
-      FDRIVE_EMBED_URL: "http://embed:8081",
+      FDRIVE_ML_URL: "http://ml:8080/",
       FDRIVE_THUMBS_DIR: "/data/thumbs",
       FDRIVE_SETUP_TOKEN: "fixed-token",
       FDRIVE_INDEXER_URL: "http://indexer:8010",
@@ -225,11 +173,6 @@ describe("loadConfig", () => {
       fdriveBackupSources: [],
       fdriveBackupWorker: false,
       fdriveRestoreMode: false,
-      fdriveEmbedRuntimeUrl: undefined,
-      fdriveImageEmbedRuntimeUrl: undefined,
-      fdriveImageEmbedUrl: undefined,
-      fdriveTikaRuntimeUrl: undefined,
-      fdriveTikaUrl: undefined,
       fdriveWorkerToken: undefined,
       fdriveOfficeProduct: undefined,
       fdriveOfficeUrl: undefined,
@@ -252,8 +195,7 @@ describe("loadConfig", () => {
       fdriveArchivePeekMaxBytes: 1500,
       fdriveJsonMaxBytes: 2000,
       fdriveShareUploadMaxBytes: 3000,
-      fdriveIndexRoots: [{ name: "files", storagePath: "/data", indexerPath: "/roots/files" }],
-      fdriveEmbedUrl: "http://embed:8081",
+      fdriveMlUrl: "http://ml:8080",
       fdriveThumbsDir: "/data/thumbs",
       fdriveSetupToken: "fixed-token",
       fdriveIndexerUrl: "http://indexer:8010",
@@ -261,10 +203,9 @@ describe("loadConfig", () => {
     });
   });
 
-  it("defaults FDRIVE_INDEX_ROOTS, FDRIVE_EMBED_URL, and FDRIVE_THUMBS_DIR to unset", () => {
+  it("defaults FDRIVE_ML_URL and FDRIVE_THUMBS_DIR to unset", () => {
     const config = loadConfig(REQUIRED_ENV);
-    expect(config.fdriveIndexRoots).toBeNull();
-    expect(config.fdriveEmbedUrl).toBeUndefined();
+    expect(config.fdriveMlUrl).toBeUndefined();
     expect(config.fdriveThumbsDir).toBeUndefined();
   });
 
@@ -292,15 +233,9 @@ describe("loadConfig", () => {
     ).toBeUndefined();
   });
 
-  it("rejects an invalid FDRIVE_INDEX_ROOTS", () => {
-    expect(() => loadConfig({ ...REQUIRED_ENV, FDRIVE_INDEX_ROOTS: "not json" })).toThrow(
-      /FDRIVE_INDEX_ROOTS/,
-    );
-  });
-
-  it("rejects a non-http FDRIVE_EMBED_URL", () => {
-    expect(() => loadConfig({ ...REQUIRED_ENV, FDRIVE_EMBED_URL: "not a url" })).toThrow(
-      /FDRIVE_EMBED_URL/,
+  it("rejects a non-http FDRIVE_ML_URL", () => {
+    expect(() => loadConfig({ ...REQUIRED_ENV, FDRIVE_ML_URL: "not a url" })).toThrow(
+      /FDRIVE_ML_URL/,
     );
   });
 
@@ -488,18 +423,17 @@ it("parses the internal worker credential", () => {
   });
 });
 
-describe("explicit processing probe URLs", () => {
-  it.each([
-    ["FDRIVE_EMBED_RUNTIME_URL", "fdriveEmbedRuntimeUrl"],
-    ["FDRIVE_IMAGE_EMBED_RUNTIME_URL", "fdriveImageEmbedRuntimeUrl"],
-    ["FDRIVE_TIKA_RUNTIME_URL", "fdriveTikaRuntimeUrl"],
-    ["FDRIVE_TIKA_URL", "fdriveTikaUrl"],
-  ] as const)("loads %s without changing its published port", (key, property) => {
-    expect(loadConfig({ ...REQUIRED_ENV, [key]: "http://127.0.0.1:59123" })[property]).toBe(
-      "http://127.0.0.1:59123",
+describe("mlUnitUrl", () => {
+  it("names each unit below FDRIVE_ML_URL, and none without it", () => {
+    const config = loadConfig({ ...REQUIRED_ENV, FDRIVE_ML_URL: "http://127.0.0.1:59123/ml/" });
+    expect(config.fdriveMlUrl).toBe("http://127.0.0.1:59123/ml");
+    expect(mlUnitUrl(config, "text")).toBe("http://127.0.0.1:59123/ml/text");
+    expect(mlUnitUrl(config, "image")).toBe("http://127.0.0.1:59123/ml/image");
+    expect(mlUnitUrl(config, "extract")).toBe("http://127.0.0.1:59123/ml/extract");
+    expect(mlUnitUrl(loadConfig({ ...REQUIRED_ENV, FDRIVE_ML_URL: "" }), "text")).toBeUndefined();
+    expect(() => loadConfig({ ...REQUIRED_ENV, FDRIVE_ML_URL: "file:///tmp/ml" })).toThrow(
+      "FDRIVE_ML_URL",
     );
-    expect(loadConfig({ ...REQUIRED_ENV, [key]: "" })[property]).toBeUndefined();
-    expect(() => loadConfig({ ...REQUIRED_ENV, [key]: "file:///tmp/worker" })).toThrow(key);
   });
 });
 

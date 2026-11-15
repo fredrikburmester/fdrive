@@ -1,22 +1,20 @@
-//! Start-up and the per-root loop (ported from `test_main.py`; process wiring and the
-//! HTTP server are not ported).
+//! Start-up and the root loop (ported from `test_main.py`; process wiring and the HTTP
+//! server are not ported).
 
 mod common;
 
-use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use common::fake_ml::IMAGE_EMBED;
 use common::root_env::{Env, OFF, fv, jpeg};
-use fdrive_indexer::config::Config;
+use fdrive_indexer::config::{Config, ROOT_ID, ROOT_NAME};
 use fdrive_indexer::db::{self, NewChange};
 use fdrive_indexer::failures::FileResult;
 use fdrive_indexer::files_marker::FILES_MARKER;
 use fdrive_indexer::indexer::RootContext;
-use fdrive_indexer::runner::{
-    EXPECTED_SCHEMA_VERSION, Handler, RootLoop, build_context, refresh_settings, start_watcher,
-};
+use fdrive_indexer::runner::{Handler, RootLoop, build_context, refresh_settings, start_watcher};
 use fdrive_indexer::watcher::WatchHandler;
 use fdrive_indexer::work::Applier;
 
@@ -28,9 +26,8 @@ fn quiet_config(env: &Env) -> Config {
 
 fn build(cfg: Config) -> Arc<RootContext> {
     let cfg = Arc::new(cfg);
-    let (name, path) = cfg.roots[0].clone();
-    common::mark_files_folder(&cfg.database_url, &path);
-    build_context(&cfg, &name, &path).unwrap()
+    common::mark_files_folder(&cfg.database_url, &cfg.root);
+    build_context(&cfg).unwrap()
 }
 
 fn scans(env: &Env) -> i64 {
@@ -46,7 +43,7 @@ fn scanned(env: &Env, cfg: Config) -> Arc<RootContext> {
     // As at start: the loop is decided before the reader takes its first position.
     let mut root = RootLoop::new(&ctx).unwrap();
     Applier::new(Arc::clone(&ctx)).position().unwrap();
-    root.step(&ctx, &Mutex::new(HashMap::new()));
+    root.step(&ctx, &AtomicBool::new(false));
     assert_eq!(scans(env), 1);
     ctx
 }
@@ -61,18 +58,14 @@ fn save_setting(env: &Env, key: &str, value: serde_json::Value) {
 }
 
 #[test]
-fn build_context_registers_the_root_with_the_persisted_features() {
+fn build_context_serves_the_files_root_with_the_persisted_features() {
     let env = Env::new();
     let ctx = build(env.config());
-    assert_eq!(EXPECTED_SCHEMA_VERSION, 2);
-    assert_eq!(ctx.name, "r");
-    assert!(ctx.root_id > 0);
+    assert_eq!((ctx.name.as_str(), ctx.root_id), (ROOT_NAME, ROOT_ID));
     assert_eq!(ctx.abs_path, env.root);
-    assert_eq!(ctx.extractor().root, "r");
+    assert_eq!(ctx.extractor().root, ROOT_NAME);
     assert!(!ctx.values().indexer_enabled());
     assert_eq!(ctx.refresh_features, Some(ctx.cfg.settings_refresh));
-    // Again: the same root row.
-    assert_eq!(build(env.config()).root_id, ctx.root_id);
 }
 
 #[test]
@@ -81,12 +74,11 @@ fn build_context_marks_old_text_less_pdfs_for_ocr_only_while_it_is_off() {
         let env = Env::new();
         common::save_features(&env.url, fv(false, true, search_ocr, false, false));
         let mut c = env.client();
-        let root_id = db::upsert_root(&mut c, "r").unwrap();
         for (path, ext) in [("scan.pdf", ".pdf"), ("photo.jpg", ".jpg")] {
             let id = db::upsert_file(
                 &mut c,
                 &db::NewFile {
-                    root_id,
+                    root_id: ROOT_ID,
                     path,
                     name: path,
                     ext,
@@ -167,31 +159,31 @@ fn the_loop_scans_on_start_then_waits_for_its_interval_or_a_wake() {
     let env = Env::new();
     common::save_features(&env.url, fv(false, true, false, false, false));
     let ctx = build(quiet_config(&env));
-    let watchers = Mutex::new(HashMap::new());
+    let watching = AtomicBool::new(false);
     let mut root = RootLoop::new(&ctx).unwrap();
 
     // First step: nothing was ever scanned, so a scan is due.
-    let wait = root.step(&ctx, &watchers);
+    let wait = root.step(&ctx, &watching);
     assert_eq!(scans(&env), 1);
     assert!(wait <= ctx.cfg.settings_refresh && wait > Duration::ZERO);
-    assert!(!watchers.lock().unwrap()["r"]);
+    assert!(!watching.load(Ordering::SeqCst));
     assert!(!root.has_watcher());
 
     // Feature polling does not rescan at its own cadence.
-    root.step(&ctx, &watchers);
+    root.step(&ctx, &watching);
     assert_eq!(scans(&env), 1);
 
     root.wake();
-    root.step(&ctx, &watchers);
+    root.step(&ctx, &watching);
     assert_eq!(scans(&env), 2);
 
     // A settings change scans at once.
     save_setting(&env, "indexer.scan_interval_seconds", serde_json::json!(7200));
-    root.step(&ctx, &watchers);
+    root.step(&ctx, &watching);
     assert_eq!(scans(&env), 3);
     assert_eq!(ctx.settings().scan_interval_seconds, 7200);
     assert_eq!(
-        root.step(&ctx, &watchers),
+        root.step(&ctx, &watching),
         ctx.cfg.settings_refresh.min(Duration::from_secs(7200))
     );
 }
@@ -202,14 +194,14 @@ fn a_restart_soon_after_a_scan_does_not_walk() {
     scanned(&env, quiet_config(&env));
     // Restarted: fdrive's changes since wait in the journal from the reader's position.
     let ctx = build(quiet_config(&env));
-    let watchers = Mutex::new(HashMap::new());
+    let watching = AtomicBool::new(false);
     let mut root = RootLoop::new(&ctx).unwrap();
-    assert_eq!(root.step(&ctx, &watchers), ctx.cfg.settings_refresh);
-    root.step(&ctx, &watchers);
+    assert_eq!(root.step(&ctx, &watching), ctx.cfg.settings_refresh);
+    root.step(&ctx, &watching);
     assert_eq!(scans(&env), 1);
     // A wake still scans at once.
     root.wake();
-    root.step(&ctx, &watchers);
+    root.step(&ctx, &watching);
     assert_eq!(scans(&env), 2);
 }
 
@@ -224,8 +216,8 @@ fn a_restart_keeps_counting_the_interval_from_the_last_scan() {
         .batch_execute("UPDATE idx.scans SET finished_at = now() - interval '20 minutes'")
         .unwrap();
     let ctx = build(cfg);
-    let watchers = Mutex::new(HashMap::new());
-    let wait = RootLoop::new(&ctx).unwrap().step(&ctx, &watchers);
+    let watching = AtomicBool::new(false);
+    let wait = RootLoop::new(&ctx).unwrap().step(&ctx, &watching);
     assert_eq!(scans(&env), 1);
     assert!(
         wait > Duration::from_secs(39 * 60) && wait <= Duration::from_secs(40 * 60),
@@ -236,7 +228,7 @@ fn a_restart_keeps_counting_the_interval_from_the_last_scan() {
     env.client()
         .batch_execute("UPDATE idx.scans SET finished_at = now() - interval '61 minutes'")
         .unwrap();
-    RootLoop::new(&ctx).unwrap().step(&ctx, &watchers);
+    RootLoop::new(&ctx).unwrap().step(&ctx, &watching);
     assert_eq!(scans(&env), 2);
 }
 
@@ -253,7 +245,7 @@ fn a_restart_walks_when_the_journal_cannot_cover_the_time_since() {
         env.client().batch_execute(change).unwrap();
         let ctx = build(quiet_config(&env));
         let mut root = RootLoop::new(&ctx).unwrap();
-        root.step(&ctx, &Mutex::new(HashMap::new()));
+        root.step(&ctx, &AtomicBool::new(false));
         assert_eq!(scans(&env), 2, "{case}");
     }
 }
@@ -269,13 +261,13 @@ fn a_restart_walks_when_rows_it_never_read_were_pruned() {
         .batch_execute("DELETE FROM idx.changes WHERE id = (SELECT min(id) FROM idx.changes)")
         .unwrap();
     let ctx = build(quiet_config(&env));
-    let watchers = Mutex::new(HashMap::new());
+    let watching = AtomicBool::new(false);
     let mut root = RootLoop::new(&ctx).unwrap();
-    root.step(&ctx, &watchers);
+    root.step(&ctx, &watching);
     assert_eq!(scans(&env), 1);
     // The reader's first look finds the gap and asks for a scan.
     assert_eq!(Applier::new(Arc::clone(&ctx)).drain().unwrap(), 0);
-    root.step(&ctx, &watchers);
+    root.step(&ctx, &watching);
     assert_eq!(scans(&env), 2);
 }
 
@@ -286,11 +278,11 @@ fn the_loop_scans_when_the_journal_reader_asks_and_the_folder_is_right() {
     let ctx = env.ctx_with(fv(false, true, false, false, false), |ctx| {
         ctx.files_folder_recheck = Duration::ZERO;
     });
-    let watchers = Mutex::new(HashMap::new());
+    let watching = AtomicBool::new(false);
     let mut root = RootLoop::new(&ctx).unwrap();
-    root.step(&ctx, &watchers);
+    root.step(&ctx, &watching);
     assert_eq!(scans(&env), 1);
-    root.step(&ctx, &watchers);
+    root.step(&ctx, &watching);
     assert_eq!(scans(&env), 1);
 
     // A request waits while the folder is not this installation's.
@@ -298,13 +290,13 @@ fn the_loop_scans_when_the_journal_reader_asks_and_the_folder_is_right() {
     let id = std::fs::read_to_string(&marker).unwrap();
     std::fs::remove_file(&marker).unwrap();
     ctx.request_scan();
-    root.step(&ctx, &watchers);
+    root.step(&ctx, &watching);
     assert_eq!(scans(&env), 1);
     std::fs::write(&marker, &id).unwrap();
-    root.step(&ctx, &watchers);
+    root.step(&ctx, &watching);
     assert_eq!(scans(&env), 2);
     // Answered once.
-    root.step(&ctx, &watchers);
+    root.step(&ctx, &watching);
     assert_eq!(scans(&env), 2);
     assert!(!ctx.take_scan_request());
 }
@@ -321,31 +313,30 @@ fn the_loop_keeps_going_after_a_crash() {
         };
     });
     assert!(RootLoop::new(&ctx).is_err());
-    let watchers = Mutex::new(HashMap::new());
-    let wait = root.step(&ctx, &watchers);
+    let watching = AtomicBool::new(false);
+    let wait = root.step(&ctx, &watching);
     // Retried after the refresh interval rather than spinning.
     assert!(wait > ctx.cfg.settings_refresh - Duration::from_secs(1));
-    assert!(watchers.lock().unwrap().is_empty());
-    assert!(root.step(&ctx, &watchers) > Duration::ZERO);
+    assert!(root.step(&ctx, &watching) > Duration::ZERO);
 }
 
 #[test]
 fn the_loop_stops_scanning_while_every_feature_is_off() {
     let env = Env::new();
     let ctx = build(env.config());
-    let watchers = Mutex::new(HashMap::new());
+    let watching = AtomicBool::new(false);
     let mut root = RootLoop::new(&ctx).unwrap();
-    root.step(&ctx, &watchers);
+    root.step(&ctx, &watching);
     assert_eq!(scans(&env), 0);
-    assert!(!watchers.lock().unwrap()["r"]);
+    assert!(!watching.load(Ordering::SeqCst));
     common::save_features(&env.url, fv(false, true, false, false, false));
-    root.step(&ctx, &watchers);
+    root.step(&ctx, &watching);
     assert_eq!(scans(&env), 1);
-    assert_eq!(watchers.lock().unwrap()["r"], cfg!(target_os = "linux"));
+    assert_eq!(watching.load(Ordering::SeqCst), cfg!(target_os = "linux"));
     common::save_features(&env.url, OFF);
-    root.step(&ctx, &watchers);
+    root.step(&ctx, &watching);
     assert!(!root.has_watcher());
-    assert!(!watchers.lock().unwrap()["r"]);
+    assert!(!watching.load(Ordering::SeqCst));
 }
 
 #[test]
@@ -358,23 +349,23 @@ fn the_loop_neither_scans_nor_watches_a_folder_without_its_marker() {
     let marker = env.path(FILES_MARKER);
     let id = std::fs::read_to_string(&marker).unwrap();
     std::fs::remove_file(&marker).unwrap();
-    let watchers = Mutex::new(HashMap::new());
+    let watching = AtomicBool::new(false);
     let mut root = RootLoop::new(&ctx).unwrap();
-    root.step(&ctx, &watchers);
-    root.step(&ctx, &watchers);
+    root.step(&ctx, &watching);
+    root.step(&ctx, &watching);
     assert_eq!(scans(&env), 0);
     assert!(!root.has_watcher());
 
     // Back in place: the scan that was due runs at once.
     std::fs::write(&marker, &id).unwrap();
-    root.step(&ctx, &watchers);
+    root.step(&ctx, &watching);
     assert_eq!(scans(&env), 1);
     assert_eq!(root.has_watcher(), cfg!(target_os = "linux"));
 
     // Gone again: the watcher stops.
     std::fs::remove_file(&marker).unwrap();
     root.wake();
-    root.step(&ctx, &watchers);
+    root.step(&ctx, &watching);
     assert!(!root.has_watcher());
     assert_eq!(scans(&env), 1);
 }
@@ -493,17 +484,15 @@ fn run_root_scans_and_rescans_when_woken() {
     let env = Env::new();
     common::save_features(&env.url, fv(false, true, false, false, false));
     let ctx = build(quiet_config(&env));
-    let watchers = Arc::new(Mutex::new(HashMap::new()));
     let wake = Arc::new(fdrive_indexer::server::Wake::default());
     {
-        let (ctx, watchers, wake) = (Arc::clone(&ctx), Arc::clone(&watchers), Arc::clone(&wake));
+        let (ctx, wake) = (Arc::clone(&ctx), Arc::clone(&wake));
         // The loop never returns; the thread ends with the test process.
         let root = RootLoop::new(&ctx).unwrap();
-        std::thread::spawn(move || fdrive_indexer::runner::run_root(root, &ctx, &watchers, &wake));
+        std::thread::spawn(move || fdrive_indexer::runner::run_root(root, &ctx, &AtomicBool::new(false), &wake));
     }
     let wait = Duration::from_secs(10);
     assert!(common::root_env::wait_until(wait, || scans(&env) == 1));
-    assert_eq!(watchers.lock().unwrap().get("r"), Some(&false));
     wake.set();
     assert!(common::root_env::wait_until(wait, || scans(&env) == 2));
 }

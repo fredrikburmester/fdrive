@@ -82,42 +82,6 @@ export const CONFIG_KEYS: readonly ConfigKeyDef[] = [
     subsystem: "core",
   },
   {
-    key: "FDRIVE_EMBED_RUNTIME_URL",
-    description:
-      "Optional base URL whose /runtime reports the text embedding unit's status; unset probes the worker directly without revision checks.",
-    default: null,
-    example: "http://ml:8080/text",
-    secret: false,
-    subsystem: "search",
-  },
-  {
-    key: "FDRIVE_IMAGE_EMBED_RUNTIME_URL",
-    description:
-      "Optional base URL whose /runtime reports the image embedding unit's status; unset probes the worker directly without revision checks.",
-    default: null,
-    example: "http://ml:8080/image",
-    secret: false,
-    subsystem: "imageSearch",
-  },
-  {
-    key: "FDRIVE_TIKA_RUNTIME_URL",
-    description:
-      "Optional base URL whose /runtime reports the document extraction unit's status; unset probes the worker directly without revision checks.",
-    default: null,
-    example: "http://ml:8080/extract",
-    secret: false,
-    subsystem: "index",
-  },
-  {
-    key: "FDRIVE_TIKA_URL",
-    description:
-      "Base URL of the document extraction unit of the ml service, probed directly when no runtime URL is configured.",
-    default: null,
-    example: "http://ml:8080/extract",
-    secret: false,
-    subsystem: "index",
-  },
-  {
     key: "FDRIVE_WORKER_TOKEN",
     description: "Shared internal credential for bundled worker configuration polling.",
     default: null,
@@ -270,40 +234,22 @@ export const CONFIG_KEYS: readonly ConfigKeyDef[] = [
     subsystem: "core",
   },
   {
-    key: "FDRIVE_INDEX_ROOTS",
-    description:
-      "JSON array of { name, storagePath, indexerPath } mapping every indexed root; storagePath is the folder's path in the API (FDRIVE_STORAGE_ROOT), indexerPath its path in the indexer. Unset disables search, thumbnails, and the Indexer page's per-root data.",
-    default: null,
-    example: '[{"name":"files","storagePath":"/data","indexerPath":"/data"}]',
-    secret: false,
-    subsystem: "index",
-  },
-  {
     key: "FDRIVE_INDEXER_URL",
     description:
-      "Base URL of the indexer's internal HTTP API. Unset disables the System > Indexer page and MCP document extraction. MCP can still read UTF-8 files directly.",
+      "Base URL of the indexer's internal HTTP API. Unset disables search, thumbnails, folder sizes, the System > Indexer page and MCP document extraction. MCP can still read UTF-8 files directly.",
     default: null,
     example: "http://indexer:8010",
     secret: false,
     subsystem: "index",
   },
   {
-    key: "FDRIVE_EMBED_URL",
+    key: "FDRIVE_ML_URL",
     description:
-      "Base URL of the text embedding unit of the ml service. Unset disables semantic search.",
+      "Base URL of the ml service; the API reaches its text, image and extract units below it. Unset disables semantic search, image search and document extraction.",
     default: null,
-    example: "http://ml:8080/text",
+    example: "http://ml:8080",
     secret: false,
     subsystem: "search",
-  },
-  {
-    key: "FDRIVE_IMAGE_EMBED_URL",
-    description:
-      "Base URL of the image embedding unit of the ml service. Unset disables image search.",
-    default: null,
-    example: "http://ml:8080/image",
-    secret: false,
-    subsystem: "imageSearch",
   },
   {
     key: "FDRIVE_THUMBS_DIR",
@@ -382,26 +328,20 @@ export interface SubsystemStatus {
  * on top for subsystems where one exists.
  */
 export function subsystemsStatus(config: AppConfig): Record<Subsystem, SubsystemStatus> {
-  const indexMissing: string[] = [];
-  if (config.fdriveIndexRoots === null) indexMissing.push("FDRIVE_INDEX_ROOTS");
-  if (config.fdriveIndexerUrl === undefined) indexMissing.push("FDRIVE_INDEXER_URL");
-
+  const ml: SubsystemStatus =
+    config.fdriveMlUrl === undefined
+      ? { status: "not_configured", missing: ["FDRIVE_ML_URL"] }
+      : { status: "configured", missing: [] };
   return {
     core: { status: "configured", missing: [] },
     network: { status: "configured", missing: [] },
     shares: { status: "configured", missing: [] },
     index:
-      indexMissing.length === 0
-        ? { status: "configured", missing: [] }
-        : { status: "not_configured", missing: indexMissing },
-    search:
-      config.fdriveEmbedUrl === undefined
-        ? { status: "not_configured", missing: ["FDRIVE_EMBED_URL"] }
+      config.fdriveIndexerUrl === undefined
+        ? { status: "not_configured", missing: ["FDRIVE_INDEXER_URL"] }
         : { status: "configured", missing: [] },
-    imageSearch:
-      config.fdriveImageEmbedUrl === undefined
-        ? { status: "not_configured", missing: ["FDRIVE_IMAGE_EMBED_URL"] }
-        : { status: "configured", missing: [] },
+    search: ml,
+    imageSearch: ml,
     thumbnails:
       config.fdriveThumbsDir === undefined
         ? { status: "not_configured", missing: ["FDRIVE_THUMBS_DIR"] }

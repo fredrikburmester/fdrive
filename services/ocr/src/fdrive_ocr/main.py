@@ -1,11 +1,9 @@
-"""Entrypoint: wait for the schema handshake, build the configured root
-targets, run the nightly scheduler loop in a background thread, and serve the
-internal HTTP API. `python -m fdrive_ocr.main`.
+"""Entrypoint: run the nightly scheduler loop in a background thread and serve
+the internal HTTP API. `python -m fdrive_ocr.main`.
 """
 
 from __future__ import annotations
 
-import sys
 import threading
 import time
 from collections.abc import Callable
@@ -18,26 +16,20 @@ from . import db
 from .config import Config
 from .features import resolve_features
 from .restore import OriginalsIndex, prune_originals
-from .runner import RootTarget, run_pass
+from .runner import FILES_ROOT_ID, FILES_ROOT_NAME, FILES_ROOT_PATH, RootTarget, run_pass
 from .schedule import next_run_at, resolve_timezone, seconds_until
 from .server import RunLock, ServerState, create_app
 from .settings import Settings, resolve_settings
-
-EXPECTED_SCHEMA_VERSION = 2
 
 
 def log(msg: str) -> None:
     print(f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} {msg}", flush=True)
 
 
-def build_targets(conn: psycopg.Connection, roots: dict[str, str]) -> list[RootTarget]:
-    return [RootTarget(name=name, root_id=db.upsert_root(conn, name), abs_path=abs_path) for name, abs_path in roots.items()]
-
-
 def run_once(
     run_lock: RunLock,
     conn_factory: Callable[[], psycopg.Connection],
-    targets: list[RootTarget],
+    target: RootTarget,
     default_settings: Settings,
     state_dir: str,
     timeout_seconds: int,
@@ -65,7 +57,7 @@ def run_once(
             settings = resolve_settings(raw, default_settings)
             run_pass(
                 conn,
-                targets,
+                target,
                 settings,
                 state_dir,
                 timeout_seconds,
@@ -92,7 +84,7 @@ def run_once(
 def scheduler_loop(
     run_lock: RunLock,
     conn_factory: Callable[[], psycopg.Connection],
-    targets: list[RootTarget],
+    target: RootTarget,
     default_settings: Settings,
     state_dir: str,
     timeout_seconds: int,
@@ -112,7 +104,7 @@ def scheduler_loop(
         run_once(
             run_lock,
             conn_factory,
-            targets,
+            target,
             default_settings,
             state_dir,
             timeout_seconds,
@@ -142,29 +134,29 @@ def scheduler_loop(
             continue
         current = now()
         if not features.values.pdf_ocr:
-            target = None
+            next_at = None
             wait_s: float = refresh_wait_s
         else:
-            target = next_run_at(current, hour)
-            wait_s = min(seconds_until(current, target), refresh_wait_s)
-        schedule = (features.values.pdf_ocr, target)
+            next_at = next_run_at(current, hour)
+            wait_s = min(seconds_until(current, next_at), refresh_wait_s)
+        schedule = (features.values.pdf_ocr, next_at)
         if schedule != last_logged_schedule:
-            if target is None:
+            if next_at is None:
                 log_fn("OCR scheduler idle: PDF OCR disabled")
             else:
-                log_fn(f"next OCR pass at {target.isoformat()}")
+                log_fn(f"next OCR pass at {next_at.isoformat()}")
             last_logged_schedule = schedule
         sleep(wait_s)
         if not features.values.pdf_ocr:
             continue
         # Short waits are only for configuration polling. Do not turn a nightly
         # schedule into a five-second rewrite loop while PDF OCR is enabled.
-        if target is None or now() < target:
+        if next_at is None or now() < next_at:
             continue
         run_once(
             run_lock,
             conn_factory,
-            targets,
+            target,
             default_settings,
             state_dir,
             timeout_seconds,
@@ -177,17 +169,7 @@ def scheduler_loop(
 
 def main() -> None:
     cfg = Config()
-    bootstrap_conn = db.connect(cfg.database_url)
-    try:
-        log(f"waiting for idx.schema_version = {EXPECTED_SCHEMA_VERSION} (timeout {cfg.schema_wait_seconds}s)")
-        version = db.wait_for_schema_version(bootstrap_conn, EXPECTED_SCHEMA_VERSION, cfg.schema_wait_seconds, log)
-        if version is None:
-            sys.exit(1)
-        log(f"schema ready at version {version}")
-
-        targets = build_targets(bootstrap_conn, cfg.roots)
-    finally:
-        bootstrap_conn.close()
+    target = RootTarget(name=FILES_ROOT_NAME, root_id=FILES_ROOT_ID, abs_path=FILES_ROOT_PATH)
     run_lock = RunLock()
     # One scan of the kept originals, shared by the scheduler's prune and the
     # HTTP handlers that list and total them.
@@ -202,13 +184,6 @@ def main() -> None:
         # restart. The scheduler keeps the normal startup retry budget.
         return db.connect(cfg.database_url, retries=1, sleep=lambda _seconds: None)
 
-    def schema_ready() -> bool:
-        conn = conn_factory()
-        try:
-            return db.read_schema_version(conn) is not None
-        finally:
-            conn.close()
-
     tz = resolve_timezone(cfg.tz_name)
 
     thread = threading.Thread(
@@ -216,7 +191,7 @@ def main() -> None:
         args=(
             run_lock,
             scheduler_conn_factory,
-            targets,
+            target,
             cfg.default_settings(),
             cfg.state_dir,
             cfg.timeout_seconds,
@@ -237,20 +212,19 @@ def main() -> None:
 
     state = ServerState(
         conn_factory=conn_factory,
-        targets=targets,
+        target=target,
         state_dir=cfg.state_dir,
         default_settings=cfg.default_settings(),
         timeout_seconds=cfg.timeout_seconds,
         jobs=cfg.jobs,
         run_lock=run_lock,
         now=lambda: datetime.now(tz),
-        schema_ready=schema_ready,
         log=log,
         originals=originals_index,
         include_globs=cfg.include_globs,
     )
     app = create_app(state)
-    log(f"ocr up. roots={list(cfg.roots)} port={cfg.ocr_port}")
+    log(f"ocr up. port={cfg.ocr_port}")
     uvicorn.run(app, host="0.0.0.0", port=cfg.ocr_port, log_level="warning")  # noqa: S104 - compose-network only
 
 

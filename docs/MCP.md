@@ -85,7 +85,7 @@ and appropriate processing dependencies (the ml service for Office documents, co
 for images/scans).
 The internal `/extract-content` endpoint accepts bounded bytes already read from storage,
 writes a temporary extraction file, removes it afterward, and never takes a
-filesystem path. It also works when no index roots are mounted. Extraction status describes
+filesystem path. It also works while the files folder is not indexed. Extraction status describes
 unsupported formats, disabled processing and documents without extracted text.
 
 `recent_moves` returns `{ at, src, dst }` per move. It is history: a destination may have

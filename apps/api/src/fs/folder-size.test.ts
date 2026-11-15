@@ -14,9 +14,7 @@ const REQUIRED_ENV = {
   FDRIVE_MASTER_KEY: Buffer.alloc(32, 7).toString("base64"),
 };
 
-const HOME_SCOPES: readonly Scope[] = [
-  { rootName: "files", fsPrefix: "/alice", virtualPrefix: "/" },
-];
+const HOME_SCOPES: readonly Scope[] = [{ fsPrefix: "/alice", virtualPrefix: "/" }];
 
 function createTestLogger(): Logger {
   const logger = {
@@ -35,15 +33,15 @@ function fail(name: string): never {
 }
 
 function fakeIndexQueries(
-  overrides: Partial<Pick<IndexQueries, "rootIdsByName" | "subtreeSize">> = {},
-): Pick<IndexQueries, "rootIdsByName" | "subtreeSize"> {
+  overrides: Partial<Pick<IndexQueries, "subtreeSize">> = {},
+): Pick<IndexQueries, "subtreeSize"> {
   return {
-    rootIdsByName: overrides.rootIdsByName ?? (async () => fail("rootIdsByName")),
     subtreeSize: overrides.subtreeSize ?? (async () => fail("subtreeSize")),
   };
 }
 
-interface BuildAppOptions extends Partial<Omit<FolderSizeRoutesDeps, "resolver">> {
+interface BuildAppOptions extends Partial<Omit<FolderSizeRoutesDeps, "resolver" | "indexed">> {
+  /** The login's scopes; `null` while the files folder is not indexed. */
   readonly scopes?: readonly Scope[] | null;
 }
 
@@ -61,16 +59,14 @@ function buildApp(deps: BuildAppOptions = {}, username = "alice") {
   const { scopes, ...overrides } = deps;
   const resolvedScopes = scopes === undefined ? HOME_SCOPES : scopes;
 
-  const resolver: Pick<ScopeResolver, "verifiedIndexScopes"> = {
-    verifiedIndexScopes: async () =>
-      resolvedScopes === null
-        ? { available: false, reason: "no_roots" }
-        : { available: true, scopes: resolvedScopes },
+  const resolver: Pick<ScopeResolver, "scopesFor"> = {
+    scopesFor: async () => resolvedScopes ?? [],
   };
 
   const fullDeps: FolderSizeRoutesDeps = {
     indexQueries: fakeIndexQueries(),
     resolver,
+    indexed: async () => resolvedScopes !== null,
     ...overrides,
   };
 
@@ -88,7 +84,6 @@ describe("GET /api/v1/fs/folder-size", () => {
   it("sums the indexed bytes and files under the requested folder", async () => {
     const app = buildApp({
       indexQueries: fakeIndexQueries({
-        rootIdsByName: async () => ({ files: 1 }),
         subtreeSize: async () => ({ bytes: 4096, files: 3 }),
       }),
     });
@@ -108,7 +103,6 @@ describe("GET /api/v1/fs/folder-size", () => {
     const subtreeSize = vi.fn(async () => ({ bytes: 10, files: 1 }));
     const app = buildApp({
       indexQueries: fakeIndexQueries({
-        rootIdsByName: async () => ({ files: 1 }),
         subtreeSize,
       }),
     });
@@ -126,22 +120,24 @@ describe("GET /api/v1/fs/folder-size", () => {
     const subtreeSize = vi.fn(async () => ({ bytes: 0, files: 0 }));
     const app = buildApp({
       indexQueries: fakeIndexQueries({
-        rootIdsByName: async () => ({ files: 1 }),
         subtreeSize,
       }),
-      scopes: [{ rootName: "files", fsPrefix: "/", virtualPrefix: "/" }],
+      scopes: [{ fsPrefix: "/", virtualPrefix: "/" }],
     });
 
     await app.request("/api/v1/fs/folder-size?path=/");
 
-    expect(subtreeSize).toHaveBeenCalledWith([{ rootId: 1, fsPrefix: "/" }], 1, "", [".trash"]);
+    // Neither the Trash nor the home's own `Shared with me` is counted.
+    expect(subtreeSize).toHaveBeenCalledWith([{ rootId: 1, fsPrefix: "/" }], 1, "", [
+      ".trash",
+      "Shared with me",
+    ]);
   });
 
   it("leaves the Trash out of the size of the files that hold it", async () => {
     const subtreeSize = vi.fn(async () => ({ bytes: 10, files: 1 }));
     const app = buildApp({
       indexQueries: fakeIndexQueries({
-        rootIdsByName: async () => ({ files: 1 }),
         subtreeSize,
       }),
     });
@@ -152,57 +148,58 @@ describe("GET /api/v1/fs/folder-size", () => {
     expect(await res.json()).toEqual({ path: "/", bytes: 10, files: 1, indexed: true });
     expect(subtreeSize).toHaveBeenCalledWith([{ rootId: 1, fsPrefix: "/alice" }], 1, "alice", [
       "alice/.trash",
+      "alice/Shared with me",
     ]);
   });
 
-  it("adds nested mapped roots while excluding their shadowed parent locations", async () => {
-    const subtreeSize = vi.fn(async (_scopes: unknown, rootId: number) =>
-      rootId === 1 ? { bytes: 100, files: 2 } : { bytes: 40, files: 3 },
+  it("adds folders shared with the login while leaving out the home's own Shared with me", async () => {
+    const subtreeSize = vi.fn(async (_scopes: unknown, _rootId: number, prefix: string) =>
+      prefix === "alice" ? { bytes: 100, files: 2 } : { bytes: 40, files: 3 },
     );
-    const app = buildApp({
-      scopes: [
-        { rootName: "home", fsPrefix: "/alice", virtualPrefix: "/" },
-        { rootName: "team", fsPrefix: "/projects/team", virtualPrefix: "/shared" },
-      ],
-      indexQueries: fakeIndexQueries({
-        rootIdsByName: async () => ({ home: 1, team: 2 }),
-        subtreeSize,
-      }),
-    });
+    const scopes = [
+      { fsPrefix: "/alice", virtualPrefix: "/" },
+      { fsPrefix: "/bob/team", virtualPrefix: "/Shared with me/team" },
+    ];
+    const prefixes = [
+      { rootId: 1, fsPrefix: "/alice" },
+      { rootId: 1, fsPrefix: "/bob/team" },
+    ];
+    const app = buildApp({ scopes, indexQueries: fakeIndexQueries({ subtreeSize }) });
 
     const res = await app.request("/api/v1/fs/folder-size?path=/");
 
     expect(await res.json()).toEqual({ path: "/", bytes: 140, files: 5, indexed: true });
-    expect(subtreeSize).toHaveBeenNthCalledWith(
-      1,
-      [
-        { rootId: 1, fsPrefix: "/alice" },
-        { rootId: 2, fsPrefix: "/projects/team" },
-      ],
-      1,
-      "alice",
-      ["alice/shared", "alice/.trash"],
+    expect(subtreeSize).toHaveBeenNthCalledWith(1, prefixes, 1, "alice", [
+      "alice/.trash",
+      "alice/Shared with me",
+    ]);
+    expect(subtreeSize).toHaveBeenNthCalledWith(2, prefixes, 1, "bob/team");
+
+    // `Shared with me` itself holds only the shared folders.
+    subtreeSize.mockClear();
+    const shelf = await app.request(
+      `/api/v1/fs/folder-size?path=${encodeURIComponent("/Shared with me")}`,
     );
-    expect(subtreeSize).toHaveBeenNthCalledWith(
-      2,
-      [
-        { rootId: 1, fsPrefix: "/alice" },
-        { rootId: 2, fsPrefix: "/projects/team" },
-      ],
-      2,
-      "projects/team",
+    expect(await shelf.json()).toMatchObject({ bytes: 40, files: 3, indexed: true });
+    expect(subtreeSize).toHaveBeenCalledExactlyOnceWith(prefixes, 1, "bob/team");
+  });
+
+  it("answers nothing for a folder in the home's own Shared with me", async () => {
+    const app = buildApp();
+    const res = await app.request(
+      `/api/v1/fs/folder-size?path=${encodeURIComponent("/Shared with me/mine")}`,
     );
+    expect(await res.json()).toMatchObject({ bytes: 0, files: 0, indexed: false });
   });
 
   it("maps a submount nested below a requested parent through both physical scopes", async () => {
     const subtreeSize = vi.fn(async () => ({ bytes: 5, files: 1 }));
     const app = buildApp({
       scopes: [
-        { rootName: "files", fsPrefix: "/alice", virtualPrefix: "/" },
-        { rootName: "files", fsPrefix: "/pool/trips", virtualPrefix: "/photos/trips" },
+        { fsPrefix: "/alice", virtualPrefix: "/" },
+        { fsPrefix: "/pool/trips", virtualPrefix: "/photos/trips" },
       ],
       indexQueries: fakeIndexQueries({
-        rootIdsByName: async () => ({ files: 1 }),
         subtreeSize,
       }),
     });
@@ -233,8 +230,8 @@ describe("GET /api/v1/fs/folder-size", () => {
 
   it("counts only the mappings the login has now: a revoked share drops out at once", async () => {
     const subtreeSize = vi.fn(async () => ({ bytes: 10, files: 1 }));
-    const home = { rootName: "files", fsPrefix: "/alice", virtualPrefix: "/" };
-    const shared = { rootName: "files", fsPrefix: "/bob/team", virtualPrefix: "/shared" };
+    const home = { fsPrefix: "/alice", virtualPrefix: "/" };
+    const shared = { fsPrefix: "/bob/team", virtualPrefix: "/Shared with me/team" };
     let scopes: Scope[] = [home, shared];
     const app = createApp({
       config: loadConfig(REQUIRED_ENV),
@@ -251,10 +248,10 @@ describe("GET /api/v1/fs/folder-size", () => {
       registerRoutes: (groups) =>
         registerFolderSizeRoutes(groups, {
           indexQueries: fakeIndexQueries({
-            rootIdsByName: async () => ({ files: 1 }),
             subtreeSize,
           }),
-          resolver: { verifiedIndexScopes: async () => ({ available: true, scopes }) },
+          resolver: { scopesFor: async () => scopes },
+          indexed: async () => true,
         }),
     });
 
@@ -290,7 +287,7 @@ describe("GET /api/v1/fs/folder-size", () => {
     expect(res.status).toBe(400);
   });
 
-  it("answers indexed: false when the identity's verified scopes are unavailable", async () => {
+  it("answers indexed: false while the files folder is not indexed", async () => {
     const app = buildApp({ scopes: null });
 
     const res = await app.request("/api/v1/fs/folder-size?path=/photos");
@@ -301,24 +298,13 @@ describe("GET /api/v1/fs/folder-size", () => {
 
   it("answers indexed: false when no verified scope covers the requested path", async () => {
     const app = buildApp({
-      scopes: [{ rootName: "files", fsPrefix: "/alice", virtualPrefix: "/photos" }],
+      scopes: [{ fsPrefix: "/alice", virtualPrefix: "/photos" }],
     });
 
     const res = await app.request("/api/v1/fs/folder-size?path=/videos");
 
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ path: "/videos", bytes: 0, files: 0, indexed: false });
-  });
-
-  it("answers indexed: false when the resolved root is not configured in the index", async () => {
-    const app = buildApp({
-      indexQueries: fakeIndexQueries({ rootIdsByName: async () => ({}) }),
-    });
-
-    const res = await app.request("/api/v1/fs/folder-size?path=/photos");
-
-    expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ path: "/photos", bytes: 0, files: 0, indexed: false });
   });
 
   it("answers indexed: false for the trash folder itself", async () => {

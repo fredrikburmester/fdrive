@@ -10,6 +10,7 @@ from starlette.testclient import TestClient
 
 from fdrive_ocr import db, main
 from fdrive_ocr.features import FEATURES_KEY
+from fdrive_ocr.runner import FILES_ROOT_ID, FILES_ROOT_NAME, RootTarget
 from fdrive_ocr.server import RunLock
 from fdrive_ocr.settings import Settings
 
@@ -19,10 +20,14 @@ DEFAULT_SETTINGS = Settings(
 )
 
 
-def _index(postgres_dsn: str, root_id: int, root: Path) -> None:
+def _files(root: Path) -> RootTarget:
+    return RootTarget(name=FILES_ROOT_NAME, root_id=FILES_ROOT_ID, abs_path=str(root))
+
+
+def _index(postgres_dsn: str, root: Path) -> None:
     conn = db.connect(postgres_dsn)
     try:
-        index_pdfs(conn, root_id, root)
+        index_pdfs(conn, FILES_ROOT_ID, root)
     finally:
         conn.close()
 
@@ -56,35 +61,20 @@ def test_log_prints_a_timestamped_line(capsys: pytest.CaptureFixture[str]) -> No
     assert "hello" in out
 
 
-def test_build_targets_upserts_roots(postgres_dsn: str, tmp_path: Path) -> None:
-    conn = db.connect(postgres_dsn)
-    try:
-        targets = main.build_targets(conn, {"files": str(tmp_path), "photos": str(tmp_path)})
-        assert {t.name for t in targets} == {"files", "photos"}
-        assert all(t.root_id > 0 for t in targets)
-    finally:
-        conn.close()
-
-
 # -- run_once ---------------------------------------------------------------------
 
 
 def test_run_once_runs_a_pass_and_releases_the_lock(postgres_dsn: str, tmp_path: Path) -> None:
     _set_pdf_ocr(postgres_dsn)
-    conn = db.connect(postgres_dsn)
-    root_id = db.upsert_root(conn, "files")
-    conn.close()
     target_dir = tmp_path / "root"
     target_dir.mkdir()
     (target_dir / "a.pdf").write_bytes(b"HASTEXT\n")
-    _index(postgres_dsn, root_id, target_dir)
-    from fdrive_ocr.runner import RootTarget
+    _index(postgres_dsn, target_dir)
 
-    targets = [RootTarget(name="files", root_id=root_id, abs_path=str(target_dir))]
     lock = RunLock()
     logs: list[str] = []
     ran = main.run_once(
-        lock, lambda: db.connect(postgres_dsn), targets, DEFAULT_SETTINGS, str(tmp_path / "state"), 30, 2, logs.append
+        lock, lambda: db.connect(postgres_dsn), _files(target_dir), DEFAULT_SETTINGS, str(tmp_path / "state"), 30, 2, logs.append
     )
     assert ran is True
     assert lock.running is False
@@ -93,24 +83,19 @@ def test_run_once_runs_a_pass_and_releases_the_lock(postgres_dsn: str, tmp_path:
 
 def test_run_once_applies_include_globs(postgres_dsn: str, tmp_path: Path) -> None:
     _set_pdf_ocr(postgres_dsn)
-    conn = db.connect(postgres_dsn)
-    root_id = db.upsert_root(conn, "files")
-    conn.close()
     target_dir = tmp_path / "root"
     (target_dir / "fredrik").mkdir(parents=True)
     (target_dir / "fredrik" / "in-scope.pdf").write_bytes(b"HASTEXT\n")
     (target_dir / "alice").mkdir()
     (target_dir / "alice" / "out-of-scope.pdf").write_bytes(b"HASTEXT\n")
-    _index(postgres_dsn, root_id, target_dir)
-    from fdrive_ocr.runner import RootTarget
+    _index(postgres_dsn, target_dir)
 
-    targets = [RootTarget(name="files", root_id=root_id, abs_path=str(target_dir))]
     lock = RunLock()
     logs: list[str] = []
     main.run_once(
         lock,
         lambda: db.connect(postgres_dsn),
-        targets,
+        _files(target_dir),
         DEFAULT_SETTINGS,
         str(tmp_path / "state"),
         30,
@@ -121,7 +106,7 @@ def test_run_once_applies_include_globs(postgres_dsn: str, tmp_path: Path) -> No
     conn = db.connect(postgres_dsn)
     try:
         with conn.cursor() as cur:
-            cur.execute('SELECT path, status FROM "idx"."ocr_log" WHERE root_id = %s', (root_id,))
+            cur.execute('SELECT path, status FROM "idx"."ocr_log" WHERE root_id = %s', (FILES_ROOT_ID,))
             statuses = dict(cur.fetchall())
     finally:
         conn.close()
@@ -132,7 +117,9 @@ def test_run_once_skips_when_already_running(postgres_dsn: str, tmp_path: Path) 
     lock = RunLock()
     lock.try_acquire()
     logs: list[str] = []
-    ran = main.run_once(lock, lambda: db.connect(postgres_dsn), [], DEFAULT_SETTINGS, str(tmp_path), 30, 2, logs.append)
+    ran = main.run_once(
+        lock, lambda: db.connect(postgres_dsn), _files(tmp_path), DEFAULT_SETTINGS, str(tmp_path), 30, 2, logs.append
+    )
     assert ran is False
     assert any("skipped" in line for line in logs)
     lock.release()
@@ -144,7 +131,7 @@ def test_run_once_does_not_rewrite_without_persisted_feature_selection(postgres_
         main.run_once(
             RunLock(),
             lambda: db.connect(postgres_dsn),
-            [],
+            _files(tmp_path),
             DEFAULT_SETTINGS,
             str(tmp_path),
             30,
@@ -165,7 +152,9 @@ def test_run_once_logs_and_releases_lock_on_crash(postgres_dsn: str, tmp_path: P
     monkeypatch.setattr(main, "run_pass", boom)
     lock = RunLock()
     logs: list[str] = []
-    ran = main.run_once(lock, lambda: db.connect(postgres_dsn), [], DEFAULT_SETTINGS, str(tmp_path), 30, 2, logs.append)
+    ran = main.run_once(
+        lock, lambda: db.connect(postgres_dsn), _files(tmp_path), DEFAULT_SETTINGS, str(tmp_path), 30, 2, logs.append
+    )
     assert ran is True
     assert lock.running is False
     assert any("crashed" in line for line in logs)
@@ -193,8 +182,8 @@ def test_run_once_recovers_after_connection_failure_and_releases_resources(
     lock = RunLock()
     logs: list[str] = []
 
-    first_ran = main.run_once(lock, conn_factory, [], DEFAULT_SETTINGS, str(tmp_path), 30, 2, logs.append)  # type: ignore[arg-type]
-    second_ran = main.run_once(lock, conn_factory, [], DEFAULT_SETTINGS, str(tmp_path), 30, 2, logs.append)  # type: ignore[arg-type]
+    first_ran = main.run_once(lock, conn_factory, _files(tmp_path), DEFAULT_SETTINGS, str(tmp_path), 30, 2, logs.append)  # type: ignore[arg-type]
+    second_ran = main.run_once(lock, conn_factory, _files(tmp_path), DEFAULT_SETTINGS, str(tmp_path), 30, 2, logs.append)  # type: ignore[arg-type]
 
     assert first_ran is True
     assert second_ran is False
@@ -229,7 +218,7 @@ def test_scheduler_loop_runs_on_start_then_reschedules(
         main.scheduler_loop(
             RunLock(),
             lambda: db.connect(postgres_dsn),
-            [],
+            _files(tmp_path),
             DEFAULT_SETTINGS,
             str(tmp_path),
             30,
@@ -256,7 +245,7 @@ def test_scheduler_loop_skips_initial_run_when_disabled(
         main.scheduler_loop(
             RunLock(),
             lambda: db.connect(postgres_dsn),
-            [],
+            _files(tmp_path),
             DEFAULT_SETTINGS,
             str(tmp_path),
             30,
@@ -302,7 +291,7 @@ def test_scheduler_loop_logs_only_schedule_state_changes(tmp_path: Path, monkeyp
         main.scheduler_loop(
             RunLock(),
             FakeConnection,  # type: ignore[arg-type]
-            [],
+            _files(tmp_path),
             DEFAULT_SETTINGS,
             str(tmp_path),
             30,
@@ -317,6 +306,49 @@ def test_scheduler_loop_logs_only_schedule_state_changes(tmp_path: Path, monkeyp
         "OCR scheduler idle: PDF OCR disabled",
         "next OCR pass at 2026-01-01T03:00:00+00:00",
     ]
+
+
+def test_scheduler_loop_runs_a_pass_over_its_root_once_the_hour_arrives(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class FakeConnection:
+        def close(self) -> None:
+            pass
+
+    values = {
+        "thumbnails": False,
+        "textSearch": False,
+        "searchOcr": False,
+        "semanticSearch": False,
+        "imageSearch": False,
+        "pdfOcr": True,
+    }
+    monkeypatch.setattr(db, "read_settings", lambda _conn: {FEATURES_KEY: {"version": 1, "revision": 1, "values": values}})
+    passes: list[object] = []
+
+    def fake_run_once(_lock: object, _conn_factory: object, target: object, *_args: object) -> bool:
+        passes.append(target)
+        raise StopLoop()
+
+    monkeypatch.setattr(main, "run_once", fake_run_once)
+    clock = iter((FIXED_NOW, FIXED_NOW.replace(hour=3)))
+
+    with pytest.raises(StopLoop):
+        main.scheduler_loop(
+            RunLock(),
+            FakeConnection,  # type: ignore[arg-type]
+            _files(tmp_path),
+            DEFAULT_SETTINGS,
+            str(tmp_path),
+            30,
+            2,
+            run_on_start=False,
+            log_fn=lambda _m: None,
+            now=lambda: next(clock),
+            sleep=lambda _s: None,
+        )
+
+    assert passes == [_files(tmp_path)]
 
 
 def test_scheduler_loop_re_reads_settings_for_the_hour(
@@ -349,7 +381,7 @@ def test_scheduler_loop_re_reads_settings_for_the_hour(
         main.scheduler_loop(
             RunLock(),
             lambda: db.connect(postgres_dsn),
-            [],
+            _files(tmp_path),
             DEFAULT_SETTINGS,
             str(tmp_path),
             30,
@@ -398,7 +430,7 @@ def test_scheduler_loop_recovers_after_settings_refresh_failure_and_closes_conne
         main.scheduler_loop(
             RunLock(),
             conn_factory,  # type: ignore[arg-type]
-            [],
+            _files(tmp_path),
             DEFAULT_SETTINGS,
             str(tmp_path),
             30,
@@ -420,36 +452,8 @@ def test_scheduler_loop_recovers_after_settings_refresh_failure_and_closes_conne
 # -- main -----------------------------------------------------------------------
 
 
-def test_main_stays_live_when_no_roots_configured(postgres_dsn: str, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("DATABASE_URL", postgres_dsn)
-    monkeypatch.delenv("INDEX_ROOTS", raising=False)
-
-    class NoopThread:
-        def __init__(self, **_kwargs: object) -> None:
-            pass
-
-        def start(self) -> None:
-            pass
-
-    served: dict[str, object] = {}
-    monkeypatch.setattr(main.threading, "Thread", NoopThread)
-    monkeypatch.setattr(main.uvicorn, "run", lambda app, **_kwargs: served.setdefault("app", app))
-    main.main()
-    assert served["app"].state.server_state.targets == []  # type: ignore[attr-defined]
-
-
-def test_main_exits_when_schema_never_ready(postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    monkeypatch.setenv("DATABASE_URL", postgres_dsn)
-    monkeypatch.setenv("INDEX_ROOTS", f"files={tmp_path}")
-    monkeypatch.setattr(db, "wait_for_schema_version", lambda *a, **k: None)
-    with pytest.raises(SystemExit) as exc_info:
-        main.main()
-    assert exc_info.value.code == 1
-
-
 def test_main_wires_everything_and_serves(postgres_dsn: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setenv("DATABASE_URL", postgres_dsn)
-    monkeypatch.setenv("INDEX_ROOTS", f"files={tmp_path}")
     monkeypatch.setenv("OCR_PORT", "0")
     monkeypatch.setenv("OCR_RUN_ON_START", "false")
     monkeypatch.setenv("STATE_DIR", str(tmp_path / "state"))
@@ -467,13 +471,12 @@ def test_main_wires_everything_and_serves(postgres_dsn: str, monkeypatch: pytest
     assert "app" in served
     assert served["kwargs"]["port"] == 0  # type: ignore[index]
     state = served["app"].state.server_state  # type: ignore[attr-defined]
-    assert state.schema_ready() is True
+    assert state.target == RootTarget(name="files", root_id=1, abs_path="/data")
     assert state.now().tzinfo is not None
 
 
 def test_main_health_recovers_on_probe_after_connection_failure(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("DATABASE_URL", "postgresql://example.invalid/fdrive")
-    monkeypatch.delenv("INDEX_ROOTS", raising=False)
 
     class FakeConnection:
         def __init__(self, name: str) -> None:
@@ -483,13 +486,9 @@ def test_main_health_recovers_on_probe_after_connection_failure(monkeypatch: pyt
         def close(self) -> None:
             self.closed = True
 
-    bootstrap = FakeConnection("bootstrap")
-    settings_conn = FakeConnection("settings")
     recovered = FakeConnection("recovered")
     connections: list[FakeConnection | Exception] = [
-        bootstrap,
         RuntimeError("database unavailable"),
-        settings_conn,
         recovered,
     ]
     connect_kwargs: list[dict[str, object]] = []
@@ -510,9 +509,7 @@ def test_main_health_recovers_on_probe_after_connection_failure(monkeypatch: pyt
 
     served: dict[str, object] = {}
     monkeypatch.setattr(db, "connect", fake_connect)
-    monkeypatch.setattr(db, "wait_for_schema_version", lambda *a, **k: 1)
     monkeypatch.setattr(db, "read_settings", lambda _conn: {})
-    monkeypatch.setattr(db, "read_schema_version", lambda conn: 1 if conn is recovered else None)
     monkeypatch.setattr(main.threading, "Thread", NoopThread)
     monkeypatch.setattr(main.uvicorn, "run", lambda app, **_kwargs: served.setdefault("app", app))
 
@@ -521,12 +518,10 @@ def test_main_health_recovers_on_probe_after_connection_failure(monkeypatch: pyt
     client = TestClient(served["app"], raise_server_exceptions=False)  # type: ignore[arg-type]
     unavailable = client.get("/health")
     response = client.get("/health")
-    assert bootstrap.closed is True
     assert unavailable.status_code == 500
     assert response.status_code == 200
     assert response.json()["ok"] is True
-    assert settings_conn.closed is True
     assert recovered.closed is True
     assert connections == []
-    assert all(kwargs["retries"] == 1 for kwargs in connect_kwargs[1:])
-    assert all(callable(kwargs["sleep"]) for kwargs in connect_kwargs[1:])
+    assert all(kwargs["retries"] == 1 for kwargs in connect_kwargs)
+    assert all(callable(kwargs["sleep"]) for kwargs in connect_kwargs)
