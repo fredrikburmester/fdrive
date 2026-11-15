@@ -13,7 +13,6 @@ const HEALTH_BODY = {
   ok: true,
   watcher: true,
   embed_ok: true,
-  schema_version: 1,
 };
 
 const STATS_BODY = {

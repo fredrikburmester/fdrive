@@ -252,7 +252,7 @@ export async function startPerfStack(): Promise<PerfStack> {
         storageRoot: dataDir,
         masterKeyBase64: randomBytes(32).toString("base64"),
       }),
-      FDRIVE_EMBED_URL: embedUrl,
+      FDRIVE_ML_URL: mlUrl,
     });
     const composed = await composeApp(config, pino({ level: "silent" }));
     cleanup.add(() => composed.close());

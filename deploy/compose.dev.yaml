@@ -34,6 +34,8 @@ services:
   # production uses, so the indexer sees exactly what the dev users see.
   # Thumbnails are bind-mounted to a host directory (not a named volume) so the
   # api dev server on the host can read the generated WebP files directly.
+  # The api runs on the host, outside this stack, so the indexer and ocr
+  # start against the database `pnpm dev:env` has already migrated.
   indexer:
     build:
       context: ../services/indexer
@@ -42,10 +44,7 @@ services:
     environment:
       DATABASE_URL: postgres://fdrive:fdrive-dev@db:5432/fdrive
       # The three units of the ml service below.
-      TIKA_URL: http://ml:8080/extract
-      EMBED_URL: http://ml:8080/text
-      # Optional, like OCR: unset means the feature reports not_configured.
-      IMAGE_EMBED_URL: http://ml:8080/image
+      ML_URL: http://ml:8080
       THUMBS_DIR: /thumbs
       INDEXER_PORT: "8010"
       SCAN_INTERVAL_SECONDS: "30"
@@ -64,9 +63,8 @@ services:
   # One server for document text extraction, text embeddings and image
   # embeddings (services/ml), same `index` profile as the indexer. Published
   # on the host so the api dev server (running with `tsx watch` on the host,
-  # not in this compose stack) reaches each unit under its path prefix,
-  # matching FDRIVE_TIKA_URL, FDRIVE_EMBED_URL and FDRIVE_IMAGE_EMBED_URL in
-  # apps/api/.env.dev. Every unit is always on here: production instead
+  # not in this compose stack) reaches each unit under its path prefix, as
+  # FDRIVE_ML_URL in apps/api/.env.dev names it. Every unit is always on here: production instead
   # follows the owner's feature settings (FDRIVE_WORKER_TOKEN). The named
   # volume keeps the downloaded models (about 3.1 GB) across restarts.
   ml:

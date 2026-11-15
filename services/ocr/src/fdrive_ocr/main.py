@@ -1,10 +1,9 @@
-"""Entrypoint: wait for the schema handshake, run the nightly scheduler loop in
-a background thread, and serve the internal HTTP API. `python -m fdrive_ocr.main`.
+"""Entrypoint: run the nightly scheduler loop in a background thread and serve
+the internal HTTP API. `python -m fdrive_ocr.main`.
 """
 
 from __future__ import annotations
 
-import sys
 import threading
 import time
 from collections.abc import Callable
@@ -21,8 +20,6 @@ from .runner import FILES_ROOT_ID, FILES_ROOT_NAME, FILES_ROOT_PATH, RootTarget,
 from .schedule import next_run_at, resolve_timezone, seconds_until
 from .server import RunLock, ServerState, create_app
 from .settings import Settings, resolve_settings
-
-EXPECTED_SCHEMA_VERSION = 2
 
 
 def log(msg: str) -> None:
@@ -172,15 +169,6 @@ def scheduler_loop(
 
 def main() -> None:
     cfg = Config()
-    bootstrap_conn = db.connect(cfg.database_url)
-    try:
-        log(f"waiting for idx.schema_version = {EXPECTED_SCHEMA_VERSION} (timeout {cfg.schema_wait_seconds}s)")
-        version = db.wait_for_schema_version(bootstrap_conn, EXPECTED_SCHEMA_VERSION, cfg.schema_wait_seconds, log)
-        if version is None:
-            sys.exit(1)
-        log(f"schema ready at version {version}")
-    finally:
-        bootstrap_conn.close()
     target = RootTarget(name=FILES_ROOT_NAME, root_id=FILES_ROOT_ID, abs_path=FILES_ROOT_PATH)
     run_lock = RunLock()
     # One scan of the kept originals, shared by the scheduler's prune and the
@@ -195,13 +183,6 @@ def main() -> None:
         # later probe opens a new connection, so recovery needs no process
         # restart. The scheduler keeps the normal startup retry budget.
         return db.connect(cfg.database_url, retries=1, sleep=lambda _seconds: None)
-
-    def schema_ready() -> bool:
-        conn = conn_factory()
-        try:
-            return db.read_schema_version(conn) is not None
-        finally:
-            conn.close()
 
     tz = resolve_timezone(cfg.tz_name)
 
@@ -238,7 +219,6 @@ def main() -> None:
         jobs=cfg.jobs,
         run_lock=run_lock,
         now=lambda: datetime.now(tz),
-        schema_ready=schema_ready,
         log=log,
         originals=originals_index,
         include_globs=cfg.include_globs,

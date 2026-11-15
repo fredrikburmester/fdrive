@@ -11,7 +11,7 @@ import {
   type SystemLogSubsystem,
 } from "@fdrive/contracts";
 import type { SettingsRepo } from "@fdrive/db";
-import type { AppConfig } from "../config.js";
+import { type AppConfig, mlUnitUrl } from "../config.js";
 import { ApiHttpError } from "../errors.js";
 import { createCachedProbe } from "../system/cached-probe.js";
 import type { SystemEventLog } from "../system/event-log.js";
@@ -79,33 +79,37 @@ function record(value: unknown): Record<string, unknown> {
   return typeof value === "object" && value !== null ? (value as Record<string, unknown>) : {};
 }
 
+/**
+ * How a worker is asked: `worker` reads a worker's `/health` (the indexer,
+ * OCR), `runtime` an ml unit's `/runtime` status document, and `health` an
+ * ml unit's own `/health` (the image unit's model and dimension).
+ */
+type ProbeMode = "worker" | "runtime" | "health";
+
 async function probe(
   url: string | undefined,
   fetchImpl: typeof fetch,
-  endpointPath = "worker",
+  mode: ProbeMode,
 ): Promise<Probe> {
   if (url === undefined)
     return { ok: false, detail: "Worker is not installed in this deployment." };
   try {
     const endpoint = new URL(url);
-    endpoint.pathname = `${endpoint.pathname.replace(/\/$/, "")}/${endpointPath === "live" || endpointPath === "worker" ? "health" : endpointPath}`;
+    endpoint.pathname = `${endpoint.pathname.replace(/\/$/, "")}/${mode === "runtime" ? "runtime" : "health"}`;
     const response = await fetchImpl(endpoint.toString(), {
       signal: AbortSignal.timeout(3000),
       redirect: "error",
     });
     if (!response.ok)
       return { ok: false, detail: "Worker is unavailable. Retry after checking its status." };
-    let body: Record<string, unknown> = {};
-    if (endpointPath === "version" || endpointPath === "live") {
-      await response.body?.cancel();
-    } else {
-      body = record(await response.json());
-    }
+    const body = record(await response.json());
     const features = record(body.features);
     const error = runtimeError(body);
     return {
       ok: body.ok !== false,
-      revisionRequired: endpointPath === "worker" || endpointPath === "runtime",
+      // A unit that is always on (development's static units) reports no
+      // revision: it has no configuration to acknowledge.
+      revisionRequired: mode === "worker" || (mode === "runtime" && body.revision !== null),
       ...(error === null ? {} : { error }),
       ...(typeof features.status === "string"
         ? { status: features.status }
@@ -140,11 +144,11 @@ export function createFeatureService(deps: {
   // still down rather than staying silent about it forever.
   const lastKnown = new Map<ProbeName, boolean>();
   const probes = new Map<string, () => Promise<Probe>>();
-  function observe(url: string | undefined, endpointPath = "worker") {
-    const key = `${url}:${endpointPath}`;
+  function observe(url: string | undefined, mode: ProbeMode) {
+    const key = `${url}:${mode}`;
     let cached = probes.get(key);
     if (!cached) {
-      cached = createCachedProbe(() => probe(url, deps.fetch, endpointPath), {
+      cached = createCachedProbe(() => probe(url, deps.fetch, mode), {
         ttlMs: deps.probeCacheMs ?? 0,
       });
       probes.set(key, cached);
@@ -227,30 +231,18 @@ export function createFeatureService(deps: {
       const { raw, configuration } = await read();
       const values = configuration.values;
       const observeDisabled = raw !== null;
-      const [indexer, ocr, embed, image, tika, imageHealth] = await Promise.all([
-        indexerEnabled(values) || observeDisabled ? observe(config.fdriveIndexerUrl) : null,
-        values.pdfOcr || observeDisabled ? observe(config.fdriveOcrUrl) : null,
+      const imageUnit = mlUnitUrl(config, "image");
+      const [indexer, ocr, embed, image, extract, imageHealth] = await Promise.all([
+        indexerEnabled(values) || observeDisabled
+          ? observe(config.fdriveIndexerUrl, "worker")
+          : null,
+        values.pdfOcr || observeDisabled ? observe(config.fdriveOcrUrl, "worker") : null,
         values.semanticSearch || observeDisabled
-          ? observe(
-              config.fdriveEmbedRuntimeUrl ?? config.fdriveEmbedUrl,
-              config.fdriveEmbedRuntimeUrl ? "runtime" : "live",
-            )
+          ? observe(mlUnitUrl(config, "text"), "runtime")
           : null,
-        values.imageSearch || observeDisabled
-          ? observe(
-              config.fdriveImageEmbedRuntimeUrl ?? config.fdriveImageEmbedUrl,
-              config.fdriveImageEmbedRuntimeUrl ? "runtime" : "health",
-            )
-          : null,
-        values.textSearch
-          ? observe(
-              config.fdriveTikaRuntimeUrl ?? config.fdriveTikaUrl,
-              config.fdriveTikaRuntimeUrl ? "runtime" : "version",
-            )
-          : null,
-        values.imageSearch && config.fdriveImageEmbedRuntimeUrl
-          ? observe(config.fdriveImageEmbedUrl, "health")
-          : null,
+        values.imageSearch || observeDisabled ? observe(imageUnit, "runtime") : null,
+        values.textSearch ? observe(mlUnitUrl(config, "extract"), "runtime") : null,
+        values.imageSearch ? observe(imageUnit, "health") : null,
       ]);
       recordProbe("indexer", indexer);
       recordProbe("ocr", ocr);
@@ -296,7 +288,7 @@ export function createFeatureService(deps: {
           id === "pdfOcr"
             ? [ocr]
             : id === "semanticSearch"
-              ? [indexer, embed, tika]
+              ? [indexer, embed, extract]
               : id === "imageSearch"
                 ? [
                     indexer,
@@ -304,7 +296,7 @@ export function createFeatureService(deps: {
                     image?.status === "ready" || image?.status === "ok" ? imageHealth : null,
                   ]
                 : id === "textSearch" || id === "searchOcr"
-                  ? [indexer, tika]
+                  ? [indexer, extract]
                   : [indexer];
         const failed = workers.find((worker) => worker !== null && !worker.ok);
         if (failed)

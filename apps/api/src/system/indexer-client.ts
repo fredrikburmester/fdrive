@@ -18,7 +18,6 @@ const IndexerHealthRaw = z.object({
   ok: z.boolean(),
   watcher: z.boolean(),
   embed_ok: z.boolean(),
-  schema_version: z.number().int().nullable(),
 });
 
 const IndexerLastScanRaw = z.object({
@@ -80,7 +79,6 @@ function toIndexerHealth(raw: z.infer<typeof IndexerHealthRaw>): IndexerHealth {
     ok: raw.ok,
     watcher: raw.watcher,
     embedOk: raw.embed_ok,
-    schemaVersion: raw.schema_version,
   };
 }
 

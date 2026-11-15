@@ -32,52 +32,6 @@ def test_connect_retries_then_raises(monkeypatch: pytest.MonkeyPatch) -> None:
     assert sleeps == [2, 2, 2]
 
 
-def test_read_schema_version_present(postgres_dsn: str) -> None:
-    conn = db.connect(postgres_dsn)
-    try:
-        assert db.read_schema_version(conn) == 2
-    finally:
-        conn.close()
-
-
-def test_read_schema_version_handles_db_error(postgres_dsn: str) -> None:
-    conn = db.connect(postgres_dsn)
-    try:
-        with conn.cursor() as cur:
-            cur.execute('DROP TABLE "idx"."schema_version"')
-        assert db.read_schema_version(conn) is None
-    finally:
-        with conn.cursor() as cur:
-            cur.execute('CREATE TABLE "idx"."schema_version" (version integer PRIMARY KEY)')
-            cur.execute('INSERT INTO "idx"."schema_version" (version) VALUES (1), (2)')
-        conn.close()
-
-
-def test_wait_for_schema_version_immediate_match(postgres_dsn: str) -> None:
-    conn = db.connect(postgres_dsn)
-    try:
-        logs: list[str] = []
-        version = db.wait_for_schema_version(conn, 2, timeout_seconds=5, log=logs.append)
-        assert version == 2
-        assert logs == []
-    finally:
-        conn.close()
-
-
-def test_wait_for_schema_version_times_out(postgres_dsn: str) -> None:
-    conn = db.connect(postgres_dsn)
-    try:
-        logs: list[str] = []
-        times = iter([0.0, 0.0, 100.0])
-        version = db.wait_for_schema_version(
-            conn, 99, timeout_seconds=5, log=logs.append, sleep=lambda _s: None, now=lambda: next(times)
-        )
-        assert version is None
-        assert any("giving up" in line for line in logs)
-    finally:
-        conn.close()
-
-
 def test_read_settings_empty(postgres_dsn: str) -> None:
     conn = db.connect(postgres_dsn)
     try:

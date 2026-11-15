@@ -961,7 +961,6 @@ describe("createApiClient: system", () => {
       ok: true,
       watcher: true,
       embedOk: true,
-      schemaVersion: 1,
     },
     stats: {
       countsByStatus: {},
