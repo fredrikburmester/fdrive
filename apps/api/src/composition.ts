@@ -414,19 +414,13 @@ export async function composeApp(
     logger,
   });
   // Before anyone is served, so nothing else is on its way into Trash.
-  await settleTrashAtStart({
-    items: trash,
-    repo: trashItemRepo,
-    identities: repos.identities,
-    homeOf,
-    desktop: desktopRepo,
-    clock,
-    eventLog,
-  }).catch((error: unknown) => {
-    eventLog.record("general", "error", "Settling Trash at start failed", {
-      error: error instanceof Error ? error.message : String(error),
-    });
-  });
+  await settleTrashAtStart({ items: trash, repo: trashItemRepo, eventLog }).catch(
+    (error: unknown) => {
+      eventLog.record("general", "error", "Settling Trash at start failed", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    },
+  );
   // The one way fdrive changes files, whoever asks: the web, MCP, AI chat,
   // Office and a link's visitors.
   const files = createFileOperations({

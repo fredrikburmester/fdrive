@@ -1,4 +1,4 @@
-import { RESERVED_FOLDER_NAMES, RESERVED_FOLDERS, type Scope, toFsPath } from "@fdrive/core";
+import { RESERVED_FOLDERS, type Scope, toFsPath } from "@fdrive/core";
 import { INDEX_ROOT_ID, type IndexExclusion, type ScopePrefix } from "@fdrive/db";
 import { SHARED_WITH_ME } from "@fdrive/local";
 
@@ -29,12 +29,12 @@ export function indexPrefixes(scopes: readonly Scope[]): ScopePrefix[] {
  * query over `scopes` to leave out before its limit: the folders
  * `RESERVED_FOLDERS` names and the home's own `Shared with me` (a reserved
  * name, out of sight; `roundTripVirtualPath`), mapped through the same
- * scopes, and the folder names reserved wherever they lie.
+ * scopes.
  */
 export function reservedExclusion(scopes: readonly Scope[]): IndexExclusion {
   const prefixes = [...RESERVED_FOLDERS, `/${SHARED_WITH_ME}`].flatMap((folder): ScopePrefix[] => {
     const fsPrefix = toFsPath(scopes, folder);
     return fsPrefix === null ? [] : [{ rootId: INDEX_ROOT_ID, fsPrefix }];
   });
-  return { prefixes, names: RESERVED_FOLDER_NAMES };
+  return { prefixes };
 }

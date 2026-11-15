@@ -136,12 +136,10 @@ describe("createFilesFolder", () => {
     expect(room).toHaveBeenLastCalledWith("alice");
   });
 
-  it("refuses a folder shared from its owner's Trash, or from a Trash an earlier version kept elsewhere", async () => {
+  it("refuses a folder shared from its owner's Trash", async () => {
     const folder = createFilesFolder({
       root,
       users: users("active", [
-        { owner: "alice", path: "/Bin/.fdrive-move-v1/dir/p/Old/v/1", writable: true },
-        { owner: "alice", path: "/.trash/.fdrive-move-v1/dir/p/Older/v/2", writable: true },
         { owner: "alice", path: "/.trash/stray", writable: true },
         // A shared folder in its owner's Trash keeps its name there, and takes none here.
         {
@@ -155,12 +153,6 @@ describe("createFilesFolder", () => {
       ]),
     });
     const alice = folder.storage("alice");
-    await alice.upload("/Bin/.fdrive-move-v1/dir/p/Old/v/1/kept.txt", bytes("kept"), {
-      mkdirParents: true,
-    });
-    await alice.upload("/.trash/.fdrive-move-v1/dir/p/Older/v/2/kept.txt", bytes("kept"), {
-      mkdirParents: true,
-    });
     await alice.upload("/.trash/stray/kept.txt", bytes("kept"), { mkdirParents: true });
     await alice.upload(
       "/.trash/0d9f8a52-6c1e-4f53-9a7b-2e4c6d8f0a1b/Projects/old.txt",
@@ -177,9 +169,8 @@ describe("createFilesFolder", () => {
       (await bob.list(`/${SHARED_WITH_ME}`)).map((entry) => entry.name).sort();
 
     expect(await shelf()).toEqual(["Projects", "loose"]);
-    expect(await kindOf(bob.list(`/${SHARED_WITH_ME}/1`))).toBe("not_found");
-    expect(await kindOf(bob.list(`/${SHARED_WITH_ME}/2`))).toBe("not_found");
-    expect(await kindOf(bob.upload(`/${SHARED_WITH_ME}/1/x`, bytes("x")))).toBe("forbidden");
+    expect(await kindOf(bob.list(`/${SHARED_WITH_ME}/stray`))).toBe("not_found");
+    expect(await kindOf(bob.upload(`/${SHARED_WITH_ME}/stray/x`, bytes("x")))).toBe("forbidden");
     expect(await kindOf(bob.list(`/${SHARED_WITH_ME}/Bin link`))).toBe("forbidden");
     // `/Bin` is an ordinary folder now; `stray`, loose in the Trash, stays closed.
     expect((await bob.list(`/${SHARED_WITH_ME}/loose`)).map((entry) => entry.path)).toEqual([

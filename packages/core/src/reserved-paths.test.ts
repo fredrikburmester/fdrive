@@ -3,7 +3,6 @@ import {
   DESKTOP_INTERNAL_ROOT,
   isAtOrUnder,
   isReservedPath,
-  RESERVED_FOLDER_NAMES,
   RESERVED_FOLDERS,
   TRASH_PATH,
 } from "./reserved-paths.ts";
@@ -32,6 +31,7 @@ describe("isReservedPath", () => {
     expect(isReservedPath("/.Trash/notes.txt")).toBe(true);
     expect(isReservedPath("/.FDRIVE-DESKTOP")).toBe(true);
     expect(isReservedPath("/.trashcan/a")).toBe(false);
+    expect(isReservedPath("/docs/.trash/a")).toBe(false);
     expect(isReservedPath("/Bin/a/b")).toBe(false);
   });
 
@@ -39,14 +39,6 @@ describe("isReservedPath", () => {
     expect(isReservedPath("/.fdrive-desktop")).toBe(true);
     expect(isReservedPath("/.fdrive-desktop/staging/x")).toBe(true);
     expect(isReservedPath("/docs/.fdrive-desktop/x")).toBe(false);
-  });
-
-  it("covers Trash's old layout wherever it lies, in any case", () => {
-    expect(isReservedPath("/old-trash/.fdrive-move-v1/file/p/a/v/1")).toBe(true);
-    expect(isReservedPath("/x/.FDRIVE-MOVE-V1")).toBe(true);
-    for (const name of RESERVED_FOLDER_NAMES) {
-      expect(isReservedPath(`/deep/down/${name}/x`)).toBe(true);
-    }
   });
 
   it("leaves ordinary files alone and normalizes before deciding", () => {

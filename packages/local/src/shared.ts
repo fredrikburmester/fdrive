@@ -79,10 +79,9 @@ export function sharedFolderNames(grants: readonly SharedGrant[]): string[] {
 
 /**
  * True when no share reaches a folder at `path` in its owner's files: one of
- * fdrive's own folders (`isReservedPath`: the Trash, the Mac app's folder,
- * Trash's old layout wherever it lies) or anything inside one. A share follows
- * its folder into Trash, and is refused there until a restore brings it back
- * or a purge ends it.
+ * fdrive's own folders (`isReservedPath`: the Trash, the Mac app's folder)
+ * or anything inside one. A share follows its folder into Trash, and is
+ * refused there until a restore brings it back or a purge ends it.
  */
 export function closedToShares(path: string): boolean {
   return isReservedPath(path);

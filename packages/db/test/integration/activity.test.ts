@@ -153,7 +153,7 @@ it("keeps personal journeys stable, immutable and private across pools", {
       { path: "/b.txt", kind: "file" },
       {
         path: "/b.txt",
-        trashLeaf: "/.trash/.fdrive-move-v1/file/p/b.txt/v/1234567890000000000",
+        trashLeaf: "/.trash/0d9f8a52-6c1e-4f53-9a7b-2e4c6d8f0a1b/b.txt",
       },
     );
     expect(trash.fileId).toBe(saved.fileId);
@@ -161,7 +161,7 @@ it("keeps personal journeys stable, immutable and private across pools", {
       "file.restore",
       {
         path: "/b.txt",
-        trashLeaf: "/.trash/.fdrive-move-v1/file/p/b.txt/v/1234567890000000000",
+        trashLeaf: "/.trash/0d9f8a52-6c1e-4f53-9a7b-2e4c6d8f0a1b/b.txt",
         targetPath: "/restored.txt",
       },
       { path: "/restored.txt", kind: "file" },
@@ -474,7 +474,7 @@ it("keeps personal journeys stable, immutable and private across pools", {
     );
     // Restoring a trashed folder by its leaf carries the tracked descendants to the new path,
     // so a child keeps one journey across the folder's trip through the trash.
-    const folderLeaf = "/.trash/.fdrive-move-v1/dir/p/moved/v/1234567890000000002";
+    const folderLeaf = "/.trash/7a4b2c1d-3e5f-4a6b-8c7d-9e0f1a2b3c4d/moved";
     const folderTrash = await run(
       "file.trash",
       { path: "/moved", kind: "dir" },
@@ -1353,7 +1353,7 @@ it("preserves folder journeys, fences descendant observations, leases queued wor
       after: {
         path: "/destination",
         kind: "dir",
-        trashLeaf: "/.trash/.fdrive-move-v1/dir/p/destination/v/1234567890000000000",
+        trashLeaf: "/.trash/0d9f8a52-6c1e-4f53-9a7b-2e4c6d8f0a1b/destination",
       },
     });
     expect((await repo.file(account.id, child.fileId as string))?.file.state).toBe("trashed");

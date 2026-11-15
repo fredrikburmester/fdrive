@@ -325,11 +325,6 @@ move to Trash, Finder's or a delete's, waits for every write inside the item, a 
 FDrive for Mac 0.5 and earlier refuse every permanent delete in the app itself, without asking
 the server, and macOS retries those deletes until the app is updated.
 
-Earlier servers kept a separate Mac Trash in `/.fdrive-desktop/<identity>/trash`. When the API
-starts, before it serves anyone, it moves what that Trash still holds into each user's Trash, as
-deleted then; see
-[upgrading](TRASH.md#upgrading-from-a-trash-with-settings).
-
 ## Build and verify
 
 Use Xcode 26+ with its command-line tools selected. The checked-in Xcode project needs no

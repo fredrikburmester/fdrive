@@ -97,8 +97,8 @@ pub struct NameSearch {
     pub scopes: Vec<Place>,
     #[serde(default)]
     pub exclude: Vec<Place>,
-    /// Folder names left out wherever they lie, in any case: fdrive's own, like its Trash
-    /// layout (`RESERVED_FOLDER_NAMES` in packages/core).
+    /// Folder names left out wherever they lie, in any case. The API sends none: fdrive's own
+    /// folders lie at fixed places, which it leaves out with `exclude`.
     #[serde(default)]
     pub exclude_names: Vec<String>,
     #[serde(default)]

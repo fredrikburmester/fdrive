@@ -19,8 +19,8 @@ const cookieFrom = (response: Response) => response.headers.get("set-cookie")?.s
 const INDEXED: Readonly<Record<string, number>> = {
   "bob/big.mov": 600,
   "bob/docs/notes.txt": 5,
-  // fdrive's own Trash layout: counted, never listed.
-  "bob/.trash/.fdrive-move-v1/file/p/old.bin/v/1": 100,
+  // An item in bob's Trash: counted, never listed.
+  "bob/.trash/0d9f8a52-6c1e-4f53-9a7b-2e4c6d8f0a1b/old.bin": 100,
   // Two identical copies: the same content hash.
   "alice/Projects/plan.txt": 8,
   "alice/Projects/plan-copy.txt": 8,

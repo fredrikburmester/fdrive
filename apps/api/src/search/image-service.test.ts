@@ -21,7 +21,6 @@ function reserved() {
       { rootId: 1, fsPrefix: "/alice/.fdrive-desktop" },
       { rootId: 1, fsPrefix: "/alice/Shared with me" },
     ],
-    names: [".fdrive-move-v1"],
   };
 }
 

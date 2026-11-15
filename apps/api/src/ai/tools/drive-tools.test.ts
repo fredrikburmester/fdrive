@@ -323,7 +323,7 @@ describe("folder_tree", () => {
       "/.trash/old.txt": "x",
       "/.fdrive-desktop/staging/s.txt": "x",
       "/Docs/a.txt": "x",
-      "/Docs/old/.fdrive-move-v1/file/b.txt": "x",
+      "/Docs/old/.trash/b.txt": "x",
     });
     const list = vi.spyOn(storage, "list");
     const { tool } = toolsFor({ storage });
@@ -332,7 +332,8 @@ describe("folder_tree", () => {
       [
         "/ 1 folders, 0 files",
         "  Docs/ 1 folders, 1 files: a.txt",
-        "    old/ 0 folders, 0 files",
+        "    old/ 1 folders, 0 files",
+        "      .trash/",
       ].join("\n"),
     );
     const listed = list.mock.calls.map(([path]) => path);

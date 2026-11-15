@@ -1,10 +1,8 @@
 import { randomUUID } from "node:crypto";
-import type { ActivityFacts, PersonalActivityAction } from "@fdrive/contracts";
 import { PostgreSqlContainer } from "@testcontainers/postgresql";
 import { expect, it, vi } from "vitest";
 import {
   createAccessRepo,
-  createActivityRepo,
   createDb,
   createDesktopRepo,
   createRepos,
@@ -136,48 +134,6 @@ it("keeps Trash's rows: listed once there, settled once, and in one transaction 
     // Restored or deleted for good, it leaves in the transaction.
     await access.run([], (_follow, changes) => changes.left(raced.id));
     expect(await trash.get(alice.id, raced.id)).toBeNull();
-
-    // An item moved from Trash's old layout takes its history along.
-    let clock = new Date("2026-10-05T10:00:00.000Z");
-    const activity = createActivityRepo(main.db, () => clock);
-    async function run(
-      action: PersonalActivityAction,
-      requested: ActivityFacts,
-      after: ActivityFacts,
-    ) {
-      clock = new Date(clock.getTime() + 1000);
-      const operation = await activity.begin({
-        accountId: account.id,
-        identityId: alice.id,
-        action,
-        source: "web",
-        producerOperationId: randomUUID(),
-        requested,
-        requestDigest: JSON.stringify(requested),
-      });
-      await activity.claim(account.id, operation.id);
-      return activity.finish(account.id, operation.id, { outcome: "success", after });
-    }
-    await run(
-      "file.upload",
-      { path: "/old.txt", kind: "file" },
-      { path: "/old.txt", kind: "file" },
-    );
-    const oldLeaf = "/.trash/.fdrive-move-v1/file/p/old.txt/v/1790000000000000000";
-    const trashed = await run(
-      "file.trash",
-      { path: "/old.txt", kind: "file" },
-      { path: "/old.txt", trashLeaf: oldLeaf },
-    );
-    const moved = await trash.begin({ ...item("old.txt", 5), movingFrom: oldLeaf });
-    const leaf = `/.trash/${moved.id}/old.txt`;
-    expect(await access.run([], (_follow, changes) => changes.entered(moved.id, leaf))).toBe(true);
-    const restored = await run(
-      "file.restore",
-      { path: "/old.txt", trashLeaf: leaf },
-      { path: "/old.txt", kind: "file" },
-    );
-    expect(restored.fileId).toBe(trashed.fileId);
 
     // A Mac write keeps Trash's row with its receipt.
     const desktop = createDesktopRepo(main.db);

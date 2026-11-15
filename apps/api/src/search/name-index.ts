@@ -89,7 +89,6 @@ export function createNameIndexClient(deps: CreateNameIndexClientDeps): NameInde
             query: input.query,
             scopes: input.scopes.map(place),
             exclude: input.exclude.prefixes.map(place),
-            exclude_names: input.exclude.names,
             files: input.files,
             folders: input.folders,
           }),

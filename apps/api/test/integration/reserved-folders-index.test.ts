@@ -34,9 +34,8 @@ const SAME = "a".repeat(64);
 const LIVE = ["report-a.txt", "report-b.txt", "report-c.txt"];
 /** fdrive's own places in alice's files, each holding a copy of report-a. */
 const RESERVED = [
-  ".trash/.fdrive-move-v1/file/p/report-x.txt/v/1",
+  ".trash/0d9f8a52-6c1e-4f53-9a7b-2e4c6d8f0a1b/report-x.txt",
   ".fdrive-desktop/staging/report-y.txt",
-  "Old/.fdrive-move-v1/file/p/report-z.txt/v/2",
 ];
 
 /** How far each file's content lies from report-a's; fdrive's own copies lie on it. */
@@ -51,9 +50,9 @@ function vector(offset: number): number[] {
 
 /**
  * The index keeps fdrive's Trash (so moves into and out of it stay renames)
- * and may still hold rows under the Mac app's folder or an old Trash layout;
- * every MCP tool leaves them out in SQL before its limit, so pages are full
- * and totals count only what the tool can return. Rows are inserted by hand.
+ * and may still hold rows under the Mac app's folder; every MCP tool leaves
+ * them out in SQL before its limit, so pages are full and totals count only
+ * what the tool can return. Rows are inserted by hand.
  */
 describe("fdrive's own folders in the index, through the MCP tools", () => {
   let postgres: Awaited<ReturnType<typeof startPostgres>>;
@@ -196,9 +195,8 @@ describe("fdrive's own folders in the index, through the MCP tools", () => {
 
   it("list_directory hides fdrive's own folders and refuses to open one", async () => {
     const top = await runListDirectory(deps, alice, {});
-    expect(top.entries.map((entry) => entry.name)).toEqual(["Old", ...LIVE]);
-    expect((await runListDirectory(deps, alice, { path: "/Old" })).entries).toEqual([]);
-    for (const path of ["/.trash", "/.fdrive-desktop/staging", "/Old/.fdrive-move-v1"]) {
+    expect(top.entries.map((entry) => entry.name)).toEqual(LIVE);
+    for (const path of ["/.trash", "/.fdrive-desktop/staging"]) {
       await expect(runListDirectory(deps, alice, { path })).rejects.toThrow("fdrive's own folders");
     }
   });

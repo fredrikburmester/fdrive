@@ -1,6 +1,5 @@
 import { and, asc, desc, eq, isNotNull, isNull, lt } from "drizzle-orm";
 import type { Db } from "../index.js";
-import { activityTrashBindings } from "../schema/activity.js";
 import { trashItems } from "../schema/app.js";
 
 /** One item in a user's Trash (`app.trash_items`). */
@@ -53,8 +52,7 @@ export interface TrashItemChanges {
   /**
    * Item `id`, on its way into Trash, is there now, at `leaf`: Trash lists it
    * from now on. False when it was not on its way any more, settled already
-   * or given up. Activity's Trash bindings that named where it came from, as
-   * Trash's old layout did, name `leaf` now.
+   * or given up.
    */
   entered(id: string, leaf: string): Promise<boolean>;
   /** Item `id` left Trash, restored or deleted for good. */
@@ -76,25 +74,15 @@ const columns = {
 /** `TrashItemChanges` in the transaction `tx`. */
 export function trashItemChanges(tx: Executor): TrashItemChanges {
   return {
-    async entered(id, leaf) {
+    async entered(id) {
       // Waits for a transaction settling the same item, then finds it settled.
       const [arriving] = await tx
-        .select({ identityId: trashItems.identityId, from: trashItems.movingFrom })
+        .select({ id: trashItems.id })
         .from(trashItems)
         .where(and(eq(trashItems.id, id), isNotNull(trashItems.movingFrom)))
         .for("update");
-      if (arriving?.from == null) return false;
+      if (arriving === undefined) return false;
       await tx.update(trashItems).set({ movingFrom: null }).where(eq(trashItems.id, id));
-      await tx
-        .update(activityTrashBindings)
-        .set({ trashLeaf: leaf })
-        .where(
-          and(
-            eq(activityTrashBindings.identityId, arriving.identityId),
-            eq(activityTrashBindings.trashLeaf, arriving.from),
-            eq(activityTrashBindings.state, "bound"),
-          ),
-        );
       return true;
     },
     async left(id) {

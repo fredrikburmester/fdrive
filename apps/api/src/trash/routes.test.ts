@@ -496,21 +496,6 @@ describe("POST /trash/restore", () => {
     expect(res.status).toBe(400);
   });
 
-  it("returns bad_request for a path of Trash's old layout, which is no id", async () => {
-    const { app } = await buildHarness();
-
-    const res = await app.request(
-      ROUTES.trash.restore,
-      requestedWith({
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ ids: [".fdrive-move-v1/file/p/hello.txt/v/168176641123456789"] }),
-      }),
-    );
-
-    expect(res.status).toBe(400);
-  });
-
   it("propagates a non-StorageError from trash.restore as an internal error", async () => {
     const boom = new Error("boom");
     const memory = createMemoryStorage();
@@ -953,14 +938,14 @@ describe("POST /trash/empty", () => {
     await storage.upload(`${TRASH_PATH}/stray.txt`, new TextEncoder().encode("stray"), {
       mkdirParents: true,
     });
-    await storage.mkdir(`${TRASH_PATH}/.fdrive-move-v1/file/p/old/v`, { parents: true });
+    await storage.mkdir(`${TRASH_PATH}/left/behind`, { parents: true });
     await put("/hello.txt");
 
     const res = await app.request(ROUTES.trash.empty, requestedWith({ method: "POST" }));
 
     expect(res.status).toBe(200);
     expect((await storage.list(TRASH_PATH)).map((entry) => entry.name).sort()).toEqual([
-      ".fdrive-move-v1",
+      "left",
       "stray.txt",
     ]);
   });

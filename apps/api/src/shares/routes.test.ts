@@ -103,7 +103,7 @@ describe("share management", () => {
   it("refuses fdrive's own folders, missing paths, colliding names and a file to upload into", async () => {
     const h = sharesHarness();
     h.write("/.trash/old.txt", "gone");
-    h.write("/.fdrive-desktop/mac/trash/old.txt", "the Mac's Trash");
+    h.write("/.fdrive-desktop/mac/incoming/old.txt", "the Mac's staging");
     h.write("/one/report.txt", "one");
     h.write("/two/Report.txt", "two");
     const cookie = await h.login();
@@ -112,7 +112,7 @@ describe("share management", () => {
     for (const paths of [
       ["/.trash"],
       ["/.trash/old.txt"],
-      ["/.fdrive-desktop/mac/trash/old.txt"],
+      ["/.fdrive-desktop/mac/incoming/old.txt"],
       ["/a.docx", "/.trash"],
     ])
       expect((await attempt({ paths })).status, paths.join()).toBe(403);
@@ -140,32 +140,6 @@ describe("share management", () => {
       ).status,
     ).toBe(403);
     expect((await h.shares.get(id))?.paths).toEqual(["/a.docx"]);
-  });
-
-  it("keeps a link refused in fdrive's Trash layout after Trash is turned off or moved", async () => {
-    // Trash is off here: neither folder is the Trash any more, yet both hold its leaves.
-    const h = sharesHarness();
-    const leaf = "/.fdrive-move-v1/dir/p/folder/v/1";
-    for (const bin of ["/.trash", "/old bin"]) h.write(`${bin}${leaf}/a.txt`, "trashed");
-    h.write("/folder/a.txt", "content");
-    const cookie = await h.login();
-    const { id } = await h.create(cookie, { paths: ["/folder"] });
-    const row = await h.shares.get(id);
-    if (row === null) throw new Error("missing row");
-    let at = "/folder";
-    for (const bin of ["/.trash", "/old bin"]) {
-      await h.shares.movePrefix(row.identityId, at, `${bin}${leaf}`, true);
-      at = `${bin}${leaf}`;
-      for (const suffix of ["", "/entries", "/download?path=/a.txt", "/archive"])
-        expect((await h.request(`${pub(id)}${suffix}`)).status, `${bin} ${suffix}`).toBe(404);
-    }
-    // Nor can a link be made there.
-    const made = await h.request(base, {
-      cookie,
-      method: "POST",
-      body: { name: "Bad", scope: "read", paths: [`/old bin${leaf}/a.txt`] },
-    });
-    expect(made.status).toBe(403);
   });
 
   it("keeps folders shared with the owner out of every link, as their owner's to share", async () => {
@@ -714,7 +688,7 @@ describe("public shares", () => {
     const h = sharesHarness();
     h.write("/folder/a.txt", "content");
     h.write("/.trash/old.txt", "gone");
-    h.write("/.fdrive-desktop/mac/trash/old.txt", "the Mac's Trash");
+    h.write("/.fdrive-desktop/mac/incoming/old.txt", "the Mac's staging");
     const cookie = await h.login();
     const { id } = await h.create(cookie, { paths: ["/"] });
     const path = pub(id);
@@ -726,7 +700,7 @@ describe("public shares", () => {
     ]);
     expect(await names(await h.request(`${path}/entries?path=/folder`))).toEqual(["a.txt"]);
     expect(await (await h.request(`${path}/download?path=/folder/a.txt`)).text()).toBe("content");
-    for (const hidden of ["/.trash/old.txt", "/.fdrive-desktop/mac/trash/old.txt", "/nope"])
+    for (const hidden of ["/.trash/old.txt", "/.fdrive-desktop/mac/incoming/old.txt", "/nope"])
       expect((await h.request(`${path}/download?path=${hidden}`)).status, hidden).toBe(404);
     expect((await h.request(`${path}/entries?path=/.trash`)).status).toBe(404);
     // A link that followed its item into the Trash is not found until it comes back out.

@@ -66,8 +66,8 @@ and the MCP tools) and [queries per request](../apps/api/test/integration/reques
 Explicit MCP token grants narrow virtual paths independently of indexing. Provider operations
 check these grants directly; index-backed operations intersect them with the login's scopes and
 retain nested scope shadow boundaries.
-Ancestor browsing exposes only the chains to granted roots. fdrive's own folders (Trash, the
-Mac app's folder, Trash's old layout and backups; `isReservedPath`) remain excluded from ordinary
+Ancestor browsing exposes only the chains to granted roots. fdrive's own folders (Trash and the
+Mac app's folder; `isReservedPath`) remain excluded from ordinary
 tools, and index queries leave them out before their limit; restore admits both original and
 destination paths. Every MCP token has explicit grants; the AI's tools pass the session's
 login, which keeps every scope.

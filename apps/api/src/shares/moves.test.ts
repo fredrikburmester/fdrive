@@ -68,7 +68,7 @@ describe("public links following their item", () => {
     let at = "/Projects";
     for (const target of [
       "/.trash/0d9f8a52-6c1e-4f53-9a7b-2e4c6d8f0a1b/Projects",
-      "/.fdrive-desktop/x/trash/Projects",
+      "/.fdrive-desktop/x/incoming/Projects",
       "/Shared with me/Projects",
       "/Projects",
     ]) {

@@ -98,9 +98,7 @@ def files_root(tmp_path: Path) -> runner.RootTarget:
     [
         "alice/.trash",
         "alice/.Trash/old",
-        "alice/Bin/.fdrive-move-v1/file/p/a.pdf/v",
-        "alice/old-trash/.fdrive-move-v1",
-        "alice/.fdrive-desktop/trash",
+        "alice/.fdrive-desktop/0d9f8a52-6c1e-4f53-9a7b-2e4c6d8f0a1b/incoming",
         "alice/.fdrive-desktop/staging",
     ],
 )

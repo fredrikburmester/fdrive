@@ -75,13 +75,12 @@ its folder into the owner's Trash too, since that is a move like any other, so i
 purge deletes it. Something in a writable shared folder that the person it is shared with
 deletes goes to the owner's Trash, since it is the owner's file. Sharing refuses fdrive's own folders
 (`isReservedPath`, below), and the grantee's storage and index scopes refuse a grant in the
-owner's Trash, in Trash's old layout or in the Mac's `/.fdrive-desktop` (`closedToShares`)
+owner's Trash or in the Mac's `/.fdrive-desktop` (`closedToShares`)
 ([Trash](TRASH.md)).
 
 fdrive keeps its own places inside each user's files, and one rule in `@fdrive/core` names them
 (`isReservedPath`): the Trash at `/.trash` and the Mac's `/.fdrive-desktop`
-(`RESERVED_FOLDERS`), plus Trash's old layout (`.fdrive-move-v1`) wherever it lies, all in
-any case.
+(`RESERVED_FOLDERS`), in any case.
 Listings, the Mac, search, MCP and AI never show them; index queries leave them out in SQL
 before their limit. The indexer never walks `/.fdrive-desktop`; it does index the Trash, so
 moves into and out of it stay renames. OCR takes its PDFs from the index and leaves out all of these. Where a consumer differs it says so: links also never reach
@@ -116,8 +115,7 @@ link. A link follows the item it names
 wherever it moves, so it never stays at a path where something new could appear: on every
 route other path-keyed metadata follows, through the Trash and its restores, the Mac's
 writes and moves the indexer's watcher journals. Inside a place no link reaches (Trash, say)
-it shows not found, and it works again once the item comes back out. Anything in fdrive's
-Trash's old layout (a `.fdrive-move-v1` segment) stays refused wherever it lies. A move inside a folder shared with someone counts in the owner's
+it shows not found, and it works again once the item comes back out. A move inside a folder shared with someone counts in the owner's
 files; taken out of them, deleted, or purged from Trash, the item leaves its links, and a
 link left with nothing goes.
 Folder ZIP downloads are held to two at a time per link, an hour and `FDRIVE_JOB_MAX_BYTES`

@@ -53,28 +53,18 @@ it("coordinates desktop identities and operation receipts across independent Pos
     expect((await a.item(other.id, isolated.id))?.path).toBe(isolated.path);
     expect(await a.item(other.id, child.id)).toBeNull();
     expect(await a.at(identity.id, left.path)).toBeNull();
-    const updated = await b.update(identity.id, child.id, { originalPath: "/original" });
-    expect(updated.originalPath).toBe("/original");
+    const updated = await b.update(identity.id, child.id, { kind: "dir" });
+    expect(updated.kind).toBe("dir");
     expect(updated.metadataVersion).not.toBe(child.metadataVersion);
     await a.move(identity.id, "/renamed", "/renamed");
     const replaced = await a.ensure(identity.id, "/renamed", "file");
     expect(replaced.id).not.toBe(left.id);
     expect(await b.item(identity.id, child.id)).toBeNull();
-    await expect(a.update(identity.id, child.id, { originalPath: null })).rejects.toThrow(
+    await expect(a.update(identity.id, child.id, { kind: "file" })).rejects.toThrow(
       "no longer exists",
     );
     await a.remove(identity.id, "/renamed");
     expect(await b.at(identity.id, "/renamed")).toBeNull();
-    // The Mac's old Trash: only its top-level items, which know where they were deleted from.
-    const binned = await a.ensure(identity.id, `/.fdrive-desktop/${identity.id}/trash/x`, "dir");
-    await a.ensure(identity.id, `${binned.path}/inside`, "file");
-    await a.update(identity.id, binned.id, { originalPath: "/Projects" });
-    await a.update(identity.id, untouched.id, { originalPath: "/elsewhere" });
-    expect((await b.oldTrash()).map((item) => [item.id, item.originalPath])).toEqual([
-      [binned.id, "/Projects"],
-    ]);
-    await a.remove(identity.id, binned.path);
-    expect(await b.oldTrash()).toEqual([]);
     const input = {
       id: randomUUID(),
       identityId: identity.id,
