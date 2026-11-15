@@ -1,7 +1,6 @@
 import { createMemoryShareRepo, type ShareInsertInput } from "@fdrive/db";
 import { describe, expect, it } from "vitest";
-import { createMetadataService, withFollowers } from "../metadata/service.ts";
-import { followIntoTrash } from "../metadata/trash.ts";
+import { memoryAccessRepo, testAccessFollowers } from "../../test/file-operations.ts";
 import { createShareMoves, type OwnedPath } from "./moves.ts";
 
 const alice = "00000000-0000-0000-0000-00000000000a";
@@ -19,9 +18,24 @@ const row = (identityId: string, paths: string[]): ShareInsertInput => ({
   at: new Date("2026-11-14T00:00:00Z"),
 });
 
+/**
+ * Links as every file operation follows them (`files/access.ts`), over a
+ * memory share repository.
+ */
 function harness(ownerPath?: (identityId: string, path: string) => Promise<OwnedPath>) {
   const shares = createMemoryShareRepo();
-  const moves = createShareMoves({ shares, ...(ownerPath === undefined ? {} : { ownerPath }) });
+  const links = createShareMoves(ownerPath === undefined ? {} : { ownerPath });
+  const access = testAccessFollowers(
+    memoryAccessRepo({ shares }),
+    ownerPath === undefined ? {} : { ownerPath },
+  );
+  const moves = {
+    resolve: links.resolve,
+    onMoved: (identityId: string, from: string, to: string, isDir: boolean) =>
+      access.moved(identityId, from, to, isDir),
+    onDeleted: (identityId: string, path: string, isDir: boolean) =>
+      access.removed(identityId, path, isDir),
+  };
   const paths = async (id: string) => (await shares.get(id))?.paths;
   return { shares, moves, paths };
 }
@@ -125,18 +139,9 @@ describe("public links following their item", () => {
   it("goes into the Trash with its item, and ends when the item is purged", async () => {
     const { shares, moves, paths } = harness();
     const link = await shares.insert(row(alice, ["/Projects", "/notes.txt"]));
-    const metadata = withFollowers(
-      createMetadataService({
-        metadataPaths: { movePrefix: async () => {}, deletePrefix: async () => {} },
-      } as unknown as Parameters<typeof createMetadataService>[0]),
-      [moves],
-    );
-    await followIntoTrash(metadata, undefined, alice, "/Projects", {
-      leaf: "/.trash/leaf",
-      kind: "dir",
-    });
+    await moves.onMoved(alice, "/Projects", "/.trash/leaf", true);
     expect(await paths(link.id)).toEqual(["/.trash/leaf", "/notes.txt"]);
-    await metadata.onDeleted(alice, "/.trash/leaf", true);
+    await moves.onDeleted(alice, "/.trash/leaf", true);
     expect(await paths(link.id)).toEqual(["/notes.txt"]);
   });
 });

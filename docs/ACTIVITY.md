@@ -277,12 +277,13 @@ outside fdrive."
 
 | Producer | Where | Actions |
 | --- | --- | --- |
-| File routes | [fs routes](../apps/api/src/fs/routes.ts): upload, mkdir, rename, move, move-many, copy, delete, download, zip, and the exported `moveMany` and `trashMany` | `file.upload`, `file.create`, `file.save`, `folder.create`, `file.rename`, `file.move`, `file.copy`, `file.trash`, `file.delete`, `file.download`, streamed `archive.compress` |
-| Trash | [Trash routes](../apps/api/src/trash/routes.ts) and the API's hourly [retention](../apps/api/src/trash/retention.ts); a trash records the leaf the storage's `trash.put` reported | `file.restore`, `file.delete` (reason `retention` when Trash kept it as long as set), `trash.empty` |
+| File operations | [file operations](../apps/api/src/files/operations.ts), the one recorder of every change fdrive makes to files, whoever asks, with `moveMany` and `trashMany` for batches; the callers below differ only in `source` and their operation IDs | `file.upload`, `file.create`, `file.save`, `folder.create`, `file.rename`, `file.move`, `file.copy`, `file.trash`, `file.restore`, `file.delete` |
+| File routes | [fs routes](../apps/api/src/fs/routes.ts): upload, mkdir, rename, move, move-many, copy and delete through the file operations; download and zip | the file operations' actions, `file.download`, streamed `archive.compress` |
+| Trash | [Trash routes](../apps/api/src/trash/routes.ts) and the API's hourly [retention](../apps/api/src/trash/retention.ts) through the file operations; a trash records the leaf the storage's `trash.put` reported | `file.restore`, `file.delete` (reason `retention` when Trash kept it as long as set), `trash.empty` |
 | Mac | [desktop routes](../apps/api/src/desktop/routes.ts) and [writes](../apps/api/src/desktop/writes.ts); copied in the [receipt transaction](../packages/db/src/repos/desktop.ts) | the matching file actions, `file.materialize` |
-| AI | [chat action tools](../apps/api/src/ai/chat/action-tools.ts) through `moveMany` and `trashMany`; [organize](../apps/api/src/ai/organize/service.ts) through the web's ordinary file routes | file actions with `source: ai` |
-| MCP | [MCP routes](../apps/api/src/mcp/routes.ts) wrap the token's storage with [`activityStorage`](../apps/api/src/activity/storage.ts), which records explicit commands only | file actions, `file.read`, `file.inspect`, tags and favorites |
-| Office | [Office service](../apps/api/src/office/service.ts) and [writes](../apps/api/src/office/writes.ts) through [activity/office.ts](../apps/api/src/activity/office.ts) | `file.open`, `file.create`, `file.save`, Save As `file.copy` |
+| AI | [chat action tools](../apps/api/src/ai/chat/action-tools.ts) through the file operations; [organize](../apps/api/src/ai/organize/service.ts) through the web's ordinary file routes | file actions with `source: ai` |
+| MCP | [MCP tools](../apps/api/src/mcp/file-tools.ts) through the file operations, each command with an operation ID of its own in the request | file actions, `file.read`, `file.inspect`, tags and favorites |
+| Office | [Office service](../apps/api/src/office/service.ts) and [writes](../apps/api/src/office/writes.ts) through the file operations, bridged to the document ([activity/office.ts](../apps/api/src/activity/office.ts)) | `file.open`, `file.create`, `file.save`, Save As `file.copy`, `file.rename` |
 | Shares | [share routes](../apps/api/src/shares/routes.ts) | `share.create`, `share.update`, `share.revoke` |
 | Metadata | [metadata routes](../apps/api/src/metadata/routes.ts): tags, favorites, folder views, `recents/touch` | `file.tags.set`, `tag.update`, `tag.delete`, `file.favorite.set`, `folder.view.set`, `folder.view.reset`, `file.open` |
 | Archives | [archive routes](../apps/api/src/fs/archive-routes.ts): duplicate, compress, extract | `file.copy` (Duplicate), `archive.compress`, `archive.extract` |
@@ -349,10 +350,11 @@ and `x-fdrive-batch-id`.
 
 ## Tests
 
-- API: [activity module tests](../apps/api/src/activity/), including `storage.test.ts`,
+- API: [activity module tests](../apps/api/src/activity/), including
   `observations.test.ts`, `admission.test.ts`, `routes.test.ts`, `exports.test.ts` and
-  `office.test.ts`; producers' own suites such as `fs/routes.test.ts` and
-  `trash/routes.test.ts`.
+  `office.test.ts`; the [file operations' tests](../apps/api/src/files/), where
+  `callers.test.ts` checks that MCP records a command as the file routes do; producers' own
+  suites such as `fs/routes.test.ts` and `trash/routes.test.ts`.
 - PostgreSQL: [activity.test.ts](../packages/db/test/integration/activity.test.ts) and
   [activity-scale.test.ts](../packages/db/test/integration/activity-scale.test.ts), one million
   events across two owners with a one-second p95 ceiling for feed, journey and old-name search,

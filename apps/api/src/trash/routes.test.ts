@@ -8,16 +8,12 @@ import { createLocalStorage } from "@fdrive/local";
 import type { Logger } from "pino";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { activityFixture } from "../../test/activity-fixture.js";
+import { testFileOperations } from "../../test/file-operations.js";
 import { createApp } from "../app.js";
 import type { Principal } from "../auth/principal.js";
 import { loadConfig } from "../config.js";
-import {
-  createMetadataService,
-  type MetadataService,
-  type PathFollower,
-  withFollowers,
-} from "../metadata/service.js";
-import { followIntoTrash } from "../metadata/trash.js";
+import type { AccessFollowers } from "../files/access.js";
+import { createMetadataService, type MetadataService } from "../metadata/service.js";
 import { registerTrashRoutes, type TrashRoutesDeps } from "./routes.js";
 
 const REQUIRED_ENV = {
@@ -86,27 +82,28 @@ async function homeWith(
   return createLocalStorage({ home, clock });
 }
 
-/** Moves `path` to Trash as the fs routes do: storage first, then what is kept by path follows. */
+/** Moves `path` to Trash as the file operations do: storage first, then what is kept by path follows. */
 async function trashWithMetadata(
   storage: StorageProvider,
   metadata: MetadataService,
   path: string,
 ): Promise<void> {
-  await followIntoTrash(
-    metadata,
-    undefined,
-    ALICE_IDENTITY_ID,
-    path,
-    await storage.trash.put(path),
-  );
+  const moved = await storage.trash.put(path);
+  await metadata.onMoved(ALICE_IDENTITY_ID, path, moved.leaf, moved.kind === "dir");
 }
 
-/** A `PathFollower` that records what it is told, as folders shared with people follow paths. */
+/** Access followers that record what they are told, as links and shares with people follow paths. */
 function recordingFollower() {
-  return {
+  const follow = {
     onMoved: vi.fn(async (_identityId: string, _from: string, _to: string, _isDir: boolean) => {}),
     onDeleted: vi.fn(async (_identityId: string, _path: string, _isDir: boolean) => {}),
   };
+  const access: AccessFollowers = {
+    run: (_identityId, _paths, work) => work({ moved: follow.onMoved, removed: follow.onDeleted }),
+    moved: follow.onMoved,
+    removed: follow.onDeleted,
+  };
+  return { ...follow, access };
 }
 
 interface Harness {
@@ -121,7 +118,7 @@ async function buildHarness(
     username?: string;
     identityId?: string;
     /** What follows items into Trash and out, as folders shared with people do. */
-    followers?: PathFollower[];
+    follower?: ReturnType<typeof recordingFollower>;
   } = {},
 ): Promise<Harness> {
   const username = opts.username ?? "alice";
@@ -140,11 +137,15 @@ async function buildHarness(
   };
 
   const config = loadConfig(REQUIRED_ENV);
-  const metadata = withFollowers(createMetadataService(createMemoryRepos()), opts.followers ?? []);
+  const metadata = createMetadataService(createMemoryRepos());
 
   const deps: TrashRoutesDeps = {
     activity: activity.service,
-    metadata,
+    files: testFileOperations({
+      activity: activity.service,
+      metadata,
+      ...(opts.follower === undefined ? {} : { access: opts.follower.access }),
+    }),
   };
 
   const app = createApp({
@@ -215,7 +216,7 @@ describe("GET /trash", () => {
 describe("POST /trash/restore", () => {
   it("brings what followed an item into Trash back with it, to its place or another", async () => {
     const follower = recordingFollower();
-    const { app, storage } = await buildHarness({ followers: [follower] });
+    const { app, storage } = await buildHarness({ follower });
     await storage.trash.put("/dir");
     await storage.trash.put("/hello.txt");
     const entries = TrashListResponse.parse(
@@ -463,7 +464,7 @@ describe("POST /trash/restore", () => {
     const clock = () => new Date(CLOCK_ISO);
     const deps: TrashRoutesDeps = {
       activity: activityFixture(clock).service,
-      metadata: createMetadataService(createMemoryRepos()),
+      files: testFileOperations(),
     };
     const app = createApp({
       config: loadConfig(REQUIRED_ENV),
@@ -522,7 +523,7 @@ describe("POST /trash/restore", () => {
     const clock = () => new Date(CLOCK_ISO);
     const deps: TrashRoutesDeps = {
       activity: activityFixture(clock).service,
-      metadata: createMetadataService(createMemoryRepos()),
+      files: testFileOperations(),
     };
     const app = createApp({
       config: loadConfig(REQUIRED_ENV),
@@ -613,7 +614,7 @@ describe("POST /trash/purge", () => {
 
   it("ends what followed a purged item into Trash, even with a new item where it was", async () => {
     const follower = recordingFollower();
-    const { app, storage, metadata } = await buildHarness({ followers: [follower] });
+    const { app, storage, metadata } = await buildHarness({ follower });
     await metadata.addFavorite(ALICE_IDENTITY_ID, "/dir", "dir");
     await storage.trash.put("/dir");
     await storage.trash.put("/hello.txt");
@@ -645,10 +646,10 @@ describe("POST /trash/purge", () => {
     ]);
   });
 
-  it("reports a purge whose records could not end, which still name the purged leaf", async () => {
+  it("fails a purge whose links and shares cannot end, and keeps the item in Trash", async () => {
     const follower = recordingFollower();
     follower.onDeleted.mockRejectedValue(new Error("grants unavailable"));
-    const { app, storage } = await buildHarness({ followers: [follower] });
+    const { app, storage } = await buildHarness({ follower });
     await storage.trash.put("/dir");
     const [id] = TrashListResponse.parse(
       await readJson(await app.request(ROUTES.trash.list)),
@@ -664,8 +665,8 @@ describe("POST /trash/purge", () => {
     );
 
     expect(res.status).toBe(500);
-    expect((await storage.trash?.list())?.entries).toEqual([]);
-    // Nothing was put back at the original path: what followed the item stays at its leaf.
+    // They end before the item does: it waits in Trash for another try.
+    expect((await storage.trash.list()).entries.map((entry) => entry.id)).toEqual([id]);
     expect(follower.onDeleted).toHaveBeenCalledWith(
       ALICE_IDENTITY_ID,
       normalizePath(`${TRASH_PATH}/${id}`),
@@ -837,7 +838,7 @@ describe("POST /trash/empty", () => {
 
   it("ends what followed each emptied item into Trash", async () => {
     const follower = recordingFollower();
-    const { app, storage } = await buildHarness({ followers: [follower] });
+    const { app, storage } = await buildHarness({ follower });
     await storage.trash.put("/dir");
     await storage.trash.put("/hello.txt");
     const leaves = TrashListResponse.parse(

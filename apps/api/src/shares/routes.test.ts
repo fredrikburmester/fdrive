@@ -786,6 +786,8 @@ describe("public shares", () => {
       ).status,
     ).toBe(200);
     expect(h.read("/inbox/new.txt")).toBe("upload");
+    // Stored through the file operations, as every change to files is.
+    expect(h.fileCalls).toEqual(["upload /inbox/new.txt"]);
     expect((await metadata(h, id, envelope)).usedDownloads).toBe(1);
     expect(
       (await h.request(`${path}/upload?path=/other.txt`, { method: "PUT", raw: "x" })).status,

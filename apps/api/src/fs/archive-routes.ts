@@ -24,9 +24,8 @@ import {
   stripArchiveExtension,
   uniqueCopyName,
 } from "@fdrive/core";
-import { activityRequestContext, recordFsAction } from "../activity/fs-context.js";
+import { activityHeaders, activityRequestContext } from "../activity/fs-context.js";
 import { activityStat } from "../activity/service.js";
-import { activityStorage } from "../activity/storage.js";
 import type { AppHono, AuthedHono } from "../app.js";
 import { compress } from "../archive/compress.js";
 import { extractArchive } from "../archive/extract.js";
@@ -39,6 +38,7 @@ import { isZstdSupported } from "../archive/stream-utils.js";
 import type { Principal } from "../auth/principal.js";
 import { DEFAULT_ARCHIVE_PEEK_MAX_BYTES } from "../config.js";
 import { ApiHttpError } from "../errors.js";
+import { fileActor } from "../files/operations.js";
 import { JobQueueFullError } from "../jobs/runner.js";
 import type { JobRunContext } from "../jobs/types.js";
 import {
@@ -135,20 +135,12 @@ export function registerArchiveRoutes(
     const newName = uniqueCopyName(baseName(path), existing);
     const target = joinPath(parent, newName);
 
-    await recordFsAction(
-      deps.activity,
-      c,
-      {
-        action: "file.copy",
-        requested: { path, targetPath: target, variant: "duplicate" },
-        before: {
-          path,
-          kind: siblings.find((entry) => entry.path === path)?.kind === "dir" ? "dir" : "file",
-        },
-      },
-      () => runStorageCall(() => principal.storage.copy(path, target)),
-      () => ({ path: target }),
+    const done = await runStorageCall(() =>
+      deps.files.copy(fileActor(principal, activityRequestContext(c)), path, target, {
+        variant: "duplicate",
+      }),
     );
+    activityHeaders(c, done.history);
     const entry = await statEntry(principal.storage, target);
     const responseBody = EntryResponse.parse(serializeEntry(entry));
     return c.json(responseBody);
@@ -332,9 +324,9 @@ async function handleArchiveEntries(c: FsContext, deps: ArchiveRoutesDeps): Prom
 }
 
 /**
- * Queues one archive job and journals its intent before any work starts. The
- * job's own storage is decorated, so every file the worker actually writes
- * becomes a child of the archive operation instead of an unattributed write.
+ * Queues one archive job and journals its intent before any work starts.
+ * Every file the worker actually writes goes through the file operations, a
+ * child of the archive operation instead of an unattributed write.
  */
 async function submitJob(
   deps: FsRoutesDeps,
@@ -432,16 +424,20 @@ async function submitJob(
       kind,
       ...(principal.verifyAuthority !== undefined ? { authorize: principal.verifyAuthority } : {}),
       run: async (ctx) => {
+        // Every file the job writes is an upload of its own, a child of the
+        // archive operation in personal activity.
+        const actor = fileActor(principal, { source: context.source });
+        const storage: Principal["storage"] = {
+          ...principal.storage,
+          upload: async (path, body, options) => {
+            await deps.files.upload(actor, path, body, { ...options, action: "file.create" });
+          },
+        };
         const activity = deps.activity;
-        if (!operation || !activity) return run(ctx, principal.storage);
+        if (!operation || !activity) return run(ctx, storage);
         if (!(await activity.repo.claim(principal.accountId, operation.id)))
           throw new ApiHttpError("conflict", "This job was already submitted");
-        return activity.withParent(principal, operation.id, () =>
-          run(
-            ctx,
-            activityStorage(principal, activity, () => ({ source: context.source })),
-          ),
-        );
+        return activity.withParent(principal, operation.id, () => run(ctx, storage));
       },
     });
   } catch (error) {

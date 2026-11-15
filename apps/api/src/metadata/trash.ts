@@ -12,13 +12,14 @@ export type OwnerPath = (
 ) => Promise<{ identityId: string; path: string }>;
 
 /**
- * Brings everything kept by path after `identityId` moved `path` to Trash
+ * Brings what is kept by path along after `identityId` moved `path` to Trash
  * (`TrashProvider.put`): it is a move to the leaf, in the files that hold
  * the item. That is the login's own Trash, or, for an item in a folder shared
- * with the login, its owner's, so the owner's tags, favorites, folder views,
- * Office documents, shares and links follow it there; the login's own at the
- * path it can no longer reach end. A new item at the old path inherits
- * nothing, and a restore, a move back, brings it all back.
+ * with the login, its owner's, so the owner's tags, favorites, folder views
+ * and the rest follow it there; the login's own at the path it can no longer
+ * reach end. A new item at the old path inherits nothing, and a restore, a
+ * move back, brings it all back. What grants access went with the item in
+ * its own transaction already (`files/access.ts`, a Mac write's receipt).
  */
 export async function followIntoTrash(
   metadata: Pick<MetadataService, "onMoved" | "onDeleted">,

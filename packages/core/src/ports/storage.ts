@@ -226,6 +226,14 @@ export interface StorageProvider {
        * `contentLength` is then the body's own length.
        */
       part?: { id: string; offset: number; final: boolean };
+      /**
+       * Runs each step that changes what is at `path` or above it (creating
+       * missing parent folders, publishing the file) inside the caller's
+       * critical section, and nothing else: the body is staged before, outside
+       * it, so a body that arrives slowly, or never, holds nothing the caller
+       * holds. Nothing appears at `path` before the last step.
+       */
+      critical?: <T>(work: () => Promise<T>) => Promise<T>;
     },
   ): Promise<void>;
 

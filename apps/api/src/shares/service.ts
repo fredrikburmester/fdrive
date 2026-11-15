@@ -25,6 +25,7 @@ import {
   UnsupportedPeekFormatError,
 } from "../archive/peek.ts";
 import { ApiHttpError } from "../errors.ts";
+import type { FileOperations } from "../files/operations.ts";
 import { type DownloadOutcome, resolveDownload } from "../fs/routes.ts";
 import type { ShareCredential } from "./credentials.ts";
 import type { SharePasswords } from "./passwords.ts";
@@ -49,6 +50,8 @@ export interface SharesDeps {
   readonly shares: ShareRepo;
   /** The owner's storage as every feature gets it: the only way a share reaches bytes. */
   readonly storageFor: (identityId: string) => Promise<ShareStorage>;
+  /** Stores a visitor's upload the way every change to files is made. */
+  readonly files: Pick<FileOperations, "upload">;
   readonly passwords: SharePasswords;
   /** Ceilings on public archive downloads; each one left out keeps its default. */
   readonly zipLimits?: Partial<ShareZipLimits>;
@@ -550,12 +553,17 @@ export function createSharesService(deps: SharesDeps) {
       body: ReadableStream<Uint8Array> | Uint8Array,
       signal: AbortSignal,
     ): Promise<string> {
+      // A visitor's upload is the owner's file, but never the owner's history.
+      const visitor = { identityId: share.row.identityId, storage: share.storage, recorded: null };
       const taken = new Set<string>();
       const stored = await shareCall(async () => {
         for (;;) {
           const candidate = uniqueNumberedName(name, taken);
           try {
-            await share.storage.upload(resolve(share.row, `/${candidate}`), body, { signal });
+            await deps.files.upload(visitor, resolve(share.row, `/${candidate}`), body, {
+              signal,
+              action: "file.upload",
+            });
             return candidate;
           } catch (error) {
             if (!isStorageError(error) || error.kind !== "conflict") throw error;

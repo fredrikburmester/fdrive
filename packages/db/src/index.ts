@@ -10,6 +10,12 @@ import * as idxSchema from "./schema/idx.js";
 export { INDEX_ROOT_ID, INDEX_ROOT_NAME } from "./index-root.js";
 export { resolveMigrationsFolder } from "./migrations-path.js";
 export * from "./parse-database-url.js";
+export {
+  type AccessChange,
+  type AccessRepo,
+  createAccessRepo,
+  type PathLock,
+} from "./repos/access.js";
 export { type ActivityRepo, appendActivityOutcome, createActivityRepo } from "./repos/activity.js";
 export { type ActivityExportsRepo, createActivityExportsRepo } from "./repos/activity-exports.js";
 export { activityMetadataUnchanged, captureActivityMetadata } from "./repos/activity-metadata.js";

@@ -12,7 +12,7 @@ export default definePackageConfig({
     include: [
       "src/**/*.test.ts",
       "test/*.test.ts",
-      "test/integration/{desktop,activity,changes}.test.ts",
+      "test/integration/{desktop,activity,changes,access}.test.ts",
     ],
     exclude: ["**/node_modules/**", "**/dist/**"],
     coverage: {

@@ -8,7 +8,7 @@ import {
   type IndexQueries,
 } from "@fdrive/db";
 import type { Principal } from "../auth/principal.js";
-import { relocatePath } from "../fs/mutations.js";
+import { type FileActor, type FileOperations, fileActor } from "../files/operations.js";
 import type { MetadataService } from "../metadata/service.ts";
 import type { ScopeResolver } from "../scoping/resolver.ts";
 import type { ImageSearchService } from "../search/image-service.ts";
@@ -74,18 +74,34 @@ export interface McpToolDeps {
   /** Document text extraction for `read_file_text`; `null` without `FDRIVE_INDEXER_URL`. */
   readonly indexerClient: IndexerExtractClient | null;
   readonly clock: () => Date;
-  readonly onMutation?: (
-    principal: Principal,
-    change: {
-      kind: "move" | "copy" | "create" | "mkdir" | "trash" | "restore";
-      path: string;
-      target?: string;
-      eventPath?: string;
-      /** Where a trashed item went: its leaf in its owner's Trash. */
-      trashLeaf?: string;
-      isDir: boolean;
-    },
-  ) => Promise<void>;
+  /**
+   * Every change the write tools make to files, and what follows it. The AI's
+   * read-only tools reuse these handlers without it.
+   */
+  readonly files?: FileOperations;
+  /** The next command's operation ID in personal activity, unique within the request. */
+  readonly nextOperationId?: () => string;
+}
+
+/** The file operations a write tool runs `principal`'s command through, recorded as MCP's. */
+export function mcpFiles(
+  deps: McpToolDeps,
+  principal: Principal,
+): { files: FileOperations; actor: FileActor } {
+  if (deps.files === undefined) throw new McpToolError("file changes are unavailable");
+  const operationId = deps.nextOperationId?.();
+  return {
+    files: deps.files,
+    actor: fileActor(principal, {
+      source: "mcp",
+      ...(operationId === undefined ? {} : { producerOperationId: operationId }),
+    }),
+  };
+}
+
+/** A completed write's warning, as MCP reports it. */
+export function warningsOf(done: { readonly warning?: string }): { warnings?: string[] } {
+  return done.warning === undefined ? {} : { warnings: [done.warning] };
 }
 
 /** Thrown by a handler when a business rule fails; `tools.ts` maps this (and any other error) to an MCP tool error. */
@@ -762,18 +778,9 @@ export async function runCreateFolder(
   requireMode(principal, "organize");
   const path = ordinaryPath(principal, args.path);
   const publicUrl = await deps.publicUrl();
-  await principal.storage.mkdir(path, { parents: true });
-  let warnings: string[] = [];
-  try {
-    await deps.onMutation?.(principal, { kind: "mkdir", path, isDir: true });
-  } catch {
-    warnings = ["Folder created, but live updates could not be updated."];
-  }
-  return {
-    created: path,
-    url: folderUrl(publicUrl, path),
-    ...(warnings.length > 0 ? { warnings } : {}),
-  };
+  const { files, actor } = mcpFiles(deps, principal);
+  await files.mkdir(actor, path, { parents: true });
+  return { created: path, url: folderUrl(publicUrl, path) };
 }
 
 // -------------------------------------------------------------- move_path
@@ -788,8 +795,8 @@ export interface MovePathArgs {
  * `dst` are inside the token's folders and outside fdrive's own
  * (`ordinaryPath`), and `src` is not a grant root or a folder holding Trash.
  * Both ends use the admitted paths, not the raw arguments. Personal activity
- * records the move through the request's storage, which is where
- * `recent_moves` reads it back.
+ * records the move as the file routes do, which is where `recent_moves`
+ * reads it back.
  */
 export async function runMovePath(
   deps: McpToolDeps,
@@ -800,22 +807,14 @@ export async function runMovePath(
   const src = ordinaryPath(principal, args.src);
   const dst = ordinaryPath(principal, args.dst);
   assertMutablePath(principal, src);
-  const isDir = (await principal.storage.stat(src)).kind === "dir";
   const publicUrl = await deps.publicUrl();
-  await relocatePath(principal.storage, "move", src, dst);
-  let warnings: string[] = [];
-  if (src !== dst) {
-    try {
-      await deps.onMutation?.(principal, { kind: "move", path: src, target: dst, isDir });
-    } catch {
-      warnings = ["File moved, but metadata or live updates could not be updated."];
-    }
-  }
+  const { files, actor } = mcpFiles(deps, principal);
+  const moved = await files.move(actor, src, dst);
   return {
     moved: src,
     to: dst,
-    url: isDir ? folderUrl(publicUrl, dst) : fileUrl(publicUrl, dst),
-    ...(warnings.length > 0 ? { warnings } : {}),
+    url: moved.kind === "dir" ? folderUrl(publicUrl, dst) : fileUrl(publicUrl, dst),
+    ...warningsOf(moved),
   };
 }
 

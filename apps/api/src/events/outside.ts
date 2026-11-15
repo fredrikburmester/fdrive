@@ -1,6 +1,7 @@
 import { type EntryStat, isStorageError, parentPath, type StorageProvider } from "@fdrive/core";
 import type { ActivityObservations } from "../activity/observations.ts";
-import { type MetadataService, type PathFollower, withFollowers } from "../metadata/service.ts";
+import type { AccessFollowers } from "../files/access.ts";
+import type { MetadataService } from "../metadata/service.ts";
 import type { Login, SeenChange } from "./journal.ts";
 
 export interface OutsideChangesDeps {
@@ -10,7 +11,7 @@ export interface OutsideChangesDeps {
    * What keeps the owner's paths for everyone (shares with people, public
    * links, Office files), followed first and only for the owner.
    */
-  readonly followers: readonly PathFollower[];
+  readonly access: Pick<AccessFollowers, "moved" | "removed">;
   readonly storageFor: (identityId: string) => Promise<StorageProvider>;
   readonly observations: ActivityObservations;
 }
@@ -50,26 +51,34 @@ async function look(storage: StorageProvider, path: string): Promise<EntryStat |
  * move only they see one end of would drop them for the owner too.
  */
 export function createOutsideChanges(deps: OutsideChangesDeps) {
-  const ownerMetadata = withFollowers(deps.metadata, deps.followers);
+  const { metadata } = deps;
   return async (login: Login, seen: SeenChange): Promise<void> => {
     const { path, target, change } = seen;
     if (path === null) return;
     const actor = { accountId: login.accountId, identityId: login.id };
     const owner = change.path.split("/", 1)[0] === login.username;
-    const metadata = owner ? ownerMetadata : deps.metadata;
+    const from = path;
+    async function moved(to: string): Promise<void> {
+      if (owner) await deps.access.moved(login.id, from, to, true);
+      await metadata.onMoved(login.id, from, to, true);
+    }
+    async function removed(): Promise<void> {
+      if (owner) await deps.access.removed(login.id, from, true);
+      await metadata.onDeleted(login.id, from, true);
+    }
     if (change.targetPath !== null) {
       if (target === null) {
-        await metadata.onDeleted(login.id, path, true);
+        await removed();
         await deps.observations.absent(actor, path, "left_scope");
         return;
       }
-      await metadata.onMoved(login.id, path, target, true);
+      await moved(target);
       await deps.observations.moved(actor, await deps.storageFor(login.id), path, target);
       return;
     }
     const now = await look(await deps.storageFor(login.id), path);
     if (now === "gone") {
-      await metadata.onDeleted(login.id, path, true);
+      await removed();
       await deps.observations.absent(actor, path, "missing");
     } else if (now !== null) {
       await deps.observations.present(actor, path, now);

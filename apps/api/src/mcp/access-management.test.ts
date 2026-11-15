@@ -5,9 +5,9 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { describe, expect, it, vi } from "vitest";
+import { testFileOperations } from "../../test/file-operations.ts";
 import type { Principal } from "../auth/principal.ts";
 import { createMetadataService } from "../metadata/service.ts";
-import { followIntoTrash } from "../metadata/trash.ts";
 import type { TokenPrincipal } from "../tokens/principal.ts";
 import {
   assertMutablePath,
@@ -86,27 +86,7 @@ async function fixture(mode: "read" | "organize" | "full" = "full", paths = ["/a
     indexerClient: null,
     clock,
     metadata,
-    onMutation: vi.fn(async (_p, change) => {
-      if (change.kind === "move")
-        await metadata.onMoved(
-          identity.id,
-          change.path,
-          change.target ?? change.path,
-          change.isDir,
-        );
-      if (change.kind === "restore" && change.eventPath !== undefined)
-        await metadata.onMoved(
-          identity.id,
-          change.eventPath,
-          change.target ?? change.path,
-          change.isDir,
-        );
-      if (change.kind === "trash" && change.trashLeaf !== undefined)
-        await followIntoTrash(metadata, undefined, identity.id, change.path, {
-          leaf: change.trashLeaf,
-          kind: change.isDir ? "dir" : "file",
-        });
-    }),
+    files: testFileOperations({ metadata }),
   };
   return { base, principal, deps, repos };
 }
@@ -336,15 +316,10 @@ it("creates/uploads exact bytes, checks stale edits, and preserves occupied targ
       expected_sha256: createHash("sha256").update(Buffer.from("AP8=", "base64")).digest("hex"),
     }),
   ).rejects.toThrow("UTF-8");
-  const broken = {
-    ...deps,
-    onMutation: async () => {
-      throw new Error("database down");
-    },
-  };
+  // A new file has nothing kept by path to follow, so nothing can fail after it.
   expect(
-    await createFile(broken, principal, { path: "/allowed/done", text: "done" }),
-  ).toHaveProperty("warnings");
+    await createFile(deps, principal, { path: "/allowed/done", text: "done" }),
+  ).not.toHaveProperty("warnings");
   expect(await base.stat("/allowed/done")).toMatchObject({ kind: "file" });
 });
 
@@ -567,7 +542,7 @@ it("executes all advertised management tools through the MCP SDK", async () => {
 });
 
 it("handles cancellation, unavailable metadata and post-restore failures without lying about the storage result", async () => {
-  const { principal, deps, base } = await fixture();
+  const { principal, deps, base, repos } = await fixture();
   expect(
     await boundedBytes(
       new ReadableStream({
@@ -598,20 +573,20 @@ it("handles cancellation, unavailable metadata and post-restore failures without
     "containing Trash",
   );
   await copyPath(deps, principal, { src: "/allowed/a.txt", dst: "/allowed/a.txt" });
-  expect(deps.onMutation).not.toHaveBeenCalled();
   await trashPath(deps, principal, "/allowed/a.txt");
   const id = (await listTrash(principal, {})).entries[0]?.id ?? "missing";
+  const failing = createMetadataService({ ...repos });
+  vi.spyOn(failing, "onMoved").mockRejectedValue(new Error("metadata failed"));
   const restored = await restorePath(
-    {
-      ...deps,
-      onMutation: async () => {
-        throw new Error("metadata failed");
-      },
-    },
+    { ...deps, files: testFileOperations({ metadata: failing }) },
     principal,
     { id, target: "/allowed/recovered.txt" },
   );
   expect(restored.warnings).toHaveLength(1);
+  const { files: _files, ...writeless } = deps;
+  await expect(trashPath(writeless, principal, "/allowed/recovered.txt")).rejects.toThrow(
+    "file changes are unavailable",
+  );
   expect(await base.stat("/allowed/recovered.txt")).toMatchObject({ kind: "file" });
 });
 

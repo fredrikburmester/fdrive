@@ -400,7 +400,6 @@ export function createLocalStorage(options: LocalStorageOptions): LocalStorage {
         if (isTop(path)) throw new StorageError("conflict", `a directory exists at ${path}`);
         const target = await entry(path);
         const dir = dirname(target);
-        if (opts?.mkdirParents === true) await mkdir(dir, { recursive: true });
         const overwrite = opts?.overwrite === true;
         const existing = await lstatOrNull(target);
         if (existing?.isDirectory() === true) {
@@ -408,6 +407,15 @@ export function createLocalStorage(options: LocalStorageOptions): LocalStorage {
         }
         if (existing !== null && !overwrite) throw taken(path);
         const part = opts?.part;
+        // Only what changes the path or above it runs in the caller's critical
+        // section; the body is written beside the target, or into its part,
+        // outside it.
+        const critical = opts?.critical ?? (<T>(work: () => Promise<T>) => work());
+        const parents = async () => {
+          if (opts?.mkdirParents === true) await mkdir(dir, { recursive: true });
+        };
+        // A whole upload is written beside the target, which must be there first.
+        if (part === undefined) await critical(parents);
         const partial = part === undefined ? partialIn(dir) : partialIn(partsDir, part.id);
         if (!PARTIAL.test(basename(partial))) {
           throw new StorageError("bad_request", `invalid upload part: ${path}`);
@@ -461,10 +469,13 @@ export function createLocalStorage(options: LocalStorageOptions): LocalStorage {
               ino: info.ino,
             };
           }
-          if (overwrite) await rename(partial, target);
-          else await publishNew(partial, target, path);
-          if (part !== undefined) await rm(partial, { force: true });
-          if (opts?.durable === true) await flush(dir);
+          await critical(async () => {
+            if (part !== undefined) await parents();
+            if (overwrite) await rename(partial, target);
+            else await publishNew(partial, target, path);
+            if (part !== undefined) await rm(partial, { force: true });
+            if (opts?.durable === true) await flush(dir);
+          });
         } finally {
           // A part outlives a failed call, so the call can be repeated.
           if (part === undefined) await rm(partial, { force: true });

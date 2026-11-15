@@ -10,7 +10,6 @@ import {
   MODIFIED_AT_HEADER,
   MoveManyRequest,
   MoveManyResponse,
-  type MoveManyResult,
   MoveRequest,
   OkResponse,
   PathQuery,
@@ -29,35 +28,26 @@ import {
   isInlinePreviewable,
   isReservedPath,
   isStorageError,
-  isUnderPath,
   mimeFromExtension,
   normalizePath,
-  parentPath,
   parseRangeHeader,
   type StorageError,
   type StorageProvider,
-  type TrashedItem,
 } from "@fdrive/core";
 import type { Context } from "hono";
 import type { z } from "zod";
-import {
-  type ActivityCallContext,
-  activityRequestContext,
-  recordActivity,
-  recordFsAction,
-} from "../activity/fs-context.js";
-import { activityStat, type PersonalActivityService } from "../activity/service.js";
+import { activityHeaders, activityRequestContext } from "../activity/fs-context.js";
+import type { PersonalActivityService } from "../activity/service.js";
 import { activityStream } from "../activity/streams.js";
 import type { AppHono, AppVariables, AuthedHono } from "../app.js";
-import type { Principal, PrincipalVariables } from "../auth/principal.js";
+import type { PrincipalVariables } from "../auth/principal.js";
 import { DEFAULT_JSON_MAX_BYTES } from "../config.js";
 import { ApiHttpError } from "../errors.js";
+import { type FileOperations, fileActor, moveMany } from "../files/operations.js";
 import type { JobRunner } from "../jobs/runner.js";
 import type { MetadataService } from "../metadata/service.js";
-import { followIntoTrash, type OwnerPath } from "../metadata/trash.js";
 import { registerArchiveRoutes } from "./archive-routes.js";
 import { type FolderSizeRoutesDeps, registerFolderSizeRoutes } from "./folder-size.js";
-import { relocatePath } from "./mutations.js";
 
 const API_PREFIX = "/api/v1";
 
@@ -69,24 +59,18 @@ function routePath(fullPath: string): string {
 export interface FsRoutesDeps {
   /** Absent in fixtures that do not exercise personal history; every route works without it. */
   readonly activity?: PersonalActivityService;
+  /** Every change these routes make to files, and what follows it. */
+  readonly files: FileOperations;
   readonly jobRunner: JobRunner;
   /** Directory archive jobs spool temp files into. */
   readonly tmpDir: string;
   /** Total bytes a single extract job may read before it fails. */
   readonly jobMaxBytes: number;
   /**
-   * Decorates `fs/list` and `fs/stat` entries with tag/favorite metadata and keeps tag,
-   * favorite, and recent rows in sync with moves, renames, and deletes made
-   * through these routes. Optional so route tests that do not exercise
-   * metadata can omit it; `composition.ts` always wires the real service.
+   * Decorates `fs/list` and `fs/stat` entries with tag and favorite
+   * metadata. Optional so route tests that do not exercise it can omit it.
    */
-  readonly metadata?: MetadataService;
-  /**
-   * Where a path lies in its owner's files, so what is kept by path follows
-   * an item in a folder shared with the login into its owner's Trash
-   * (`followIntoTrash`). Absent in fixtures, where every path is the login's own.
-   */
-  readonly ownerPath?: OwnerPath;
+  readonly metadata?: Pick<MetadataService, "decorate">;
   /**
    * Cap on a JSON request body's bytes, passed to `parseBody` for every
    * route this function registers (zip, mkdir, move, copy, rename,
@@ -361,185 +345,10 @@ async function handleDownload(c: FsContext, deps: FsRoutesDeps): Promise<Respons
 
 /**
  * Registers every `/fs/*` route (list, stat, download, zip, upload, mkdir,
- * move, copy, rename, delete) on the authed group, using `ROUTES.fs.*`
- * (minus the `/api/v1` prefix, since `authed` is already mounted there).
+ * move, move-many, copy, rename, delete) on the authed group, using
+ * `ROUTES.fs.*` (minus the `/api/v1` prefix, since `authed` is already
+ * mounted there). Every change to files goes through `deps.files`.
  */
-/**
- * Moves items in order, continuing past failures, never overwriting, and
- * reports each outcome. Used by `POST /fs/move-many` and by AI chat when a
- * move or rename card is applied; a rename card passes `file.rename` so the
- * activity reads as one. With `createParents`, missing target folders are
- * created after the source was checked, so a move that cannot happen leaves
- * no empty folder behind.
- */
-export async function moveMany(
-  deps: Pick<FsRoutesDeps, "metadata" | "activity">,
-  principal: Principal,
-  body: MoveManyRequest,
-  context: ActivityCallContext = { source: "api" },
-  action: "file.move" | "file.rename" = "file.move",
-): Promise<MoveManyResult[]> {
-  const results: MoveManyResult[] = [];
-  const batchId = context.batchId ?? randomUUID();
-  const operationBase = context.producerOperationId ?? randomUUID();
-  const provenance = context.conversationId ? { conversationId: context.conversationId } : {};
-  const readyParents = new Set<string>();
-
-  /** Creates the target's missing parent folders, once per folder for the whole batch. */
-  async function ensureParent(target: string): Promise<void> {
-    const parent = parentPath(target);
-    let missing = false;
-    for (let folder = parent; folder !== "/" && !readyParents.has(folder); ) {
-      try {
-        await principal.storage.stat(folder);
-        break;
-      } catch (error) {
-        if (!isStorageError(error) || error.kind !== "not_found") throw error;
-        missing = true;
-        folder = parentPath(folder);
-      }
-    }
-    if (missing) await principal.storage.mkdir(parent, { parents: true });
-    for (let folder = parent; folder !== "/"; folder = parentPath(folder)) readyParents.add(folder);
-  }
-
-  for (const item of body.items) {
-    try {
-      const path = normalizeOrThrow(item.path);
-      const target = normalizeOrThrow(item.target);
-      // Check the source first, so a move that cannot happen leaves no new empty folder behind.
-      const source = await runStorageCall(() => principal.storage.stat(path));
-      const kind = source.kind === "dir" ? "dir" : "file";
-      await recordActivity(
-        deps.activity,
-        principal,
-        {
-          ...context,
-          producerOperationId: `${operationBase}:${results.length}`,
-          batchId,
-          action,
-          requested: { path, targetPath: target, ...provenance },
-          before: {
-            path,
-            kind,
-            ...(source.size === undefined ? {} : { size: source.size }),
-          },
-        },
-        async () => {
-          if (body.createParents === true && path !== target && !isUnderPath(path, target))
-            await runStorageCall(() => ensureParent(target));
-          await runStorageCall(() => relocatePath(principal.storage, "move", path, target));
-        },
-        () => ({ path: target, kind }),
-      );
-      try {
-        await deps.metadata?.onMoved(principal.identityId, path, target, source.kind === "dir");
-        results.push({ ok: true, path, target });
-      } catch {
-        results.push({
-          ok: true,
-          path,
-          target,
-          warning: "Moved, but its tags, favorite or recent entry could not follow it.",
-        });
-      }
-    } catch (error) {
-      // Every storage call above goes through `runStorageCall`, so item failures arrive as `ApiHttpError`s.
-      if (!(error instanceof ApiHttpError)) throw error;
-      results.push({
-        ok: false,
-        path: item.path,
-        target: item.target,
-        error: { kind: error.kind, message: error.message },
-      });
-    }
-  }
-  return results;
-}
-
-/**
- * Moves one item to Trash (`TrashProvider.put`), recording it as a trash at
- * the leaf it went to. Moves of the same path are serialized so two callers
- * cannot claim the same new leaf.
- */
-async function trashOne(
-  deps: Pick<FsRoutesDeps, "activity">,
-  principal: Principal,
-  item: { path: string; kind: "file" | "dir" },
-  context: ActivityCallContext,
-  operation: { operationId: string; batchId: string },
-): Promise<TrashedItem> {
-  const trash = () =>
-    recordActivity(
-      deps.activity,
-      principal,
-      {
-        ...context,
-        producerOperationId: operation.operationId,
-        batchId: operation.batchId,
-        action: "file.trash",
-        requested: {
-          path: item.path,
-          kind: item.kind,
-          ...(context.conversationId ? { conversationId: context.conversationId } : {}),
-        },
-        before: { path: item.path, kind: item.kind },
-      },
-      () => principal.storage.trash.put(item.path),
-      (moved) => ({ path: item.path, kind: moved.kind, trashLeaf: moved.leaf }),
-    );
-  return deps.activity
-    ? deps.activity.repo.withPathLock(principal.identityId, item.path, trash)
-    : trash();
-}
-
-export interface TrashManyResult {
-  readonly path: string;
-  readonly ok: boolean;
-  readonly error?: { kind: string; message: string };
-}
-
-/**
- * Moves items to Trash one by one, continuing past failures; what is kept by
- * path follows each into Trash (`followIntoTrash`).
- */
-export async function trashMany(
-  deps: Pick<FsRoutesDeps, "metadata" | "activity" | "ownerPath">,
-  principal: Principal,
-  items: readonly { path: string; kind: "file" | "dir" }[],
-  context: ActivityCallContext = { source: "api" },
-): Promise<TrashManyResult[]> {
-  const results: TrashManyResult[] = [];
-  const batchId = context.batchId ?? randomUUID();
-  const operationBase = context.producerOperationId ?? randomUUID();
-  for (const item of items) {
-    try {
-      const path = normalizeOrThrow(item.path);
-      const moved = await runStorageCall(() =>
-        trashOne(deps, principal, { path, kind: item.kind }, context, {
-          operationId: `${operationBase}:${results.length}`,
-          batchId,
-        }),
-      );
-      try {
-        if (deps.metadata !== undefined)
-          await followIntoTrash(deps.metadata, deps.ownerPath, principal.identityId, path, moved);
-      } catch {
-        // The item is in Trash either way; what could not follow it stays where it was.
-      }
-      results.push({ path, ok: true });
-    } catch (error) {
-      if (!(error instanceof ApiHttpError)) throw error;
-      results.push({
-        path: item.path,
-        ok: false,
-        error: { kind: error.kind, message: error.message },
-      });
-    }
-  }
-  return results;
-}
-
 export function registerFsRoutes(
   groups: { public: AppHono; authed: AuthedHono },
   deps: FsRoutesDeps,
@@ -657,34 +466,16 @@ export function registerFsRoutes(
     }
     // A piece before the last only grows the upload's part; the last one
     // publishes the file as one upload, recorded and announced once.
-    if (uploadOpts.part?.final === false) {
-      await runStorageCall(() =>
-        principal.storage.upload(path, c.req.raw.body ?? new Uint8Array(), uploadOpts),
-      );
-      return c.body(null, 204);
-    }
-
-    const before = deps.activity ? await activityStat(principal.storage, path) : undefined;
-    await recordFsAction(
-      deps.activity,
-      c,
-      {
-        action: `file.${query.intent ?? "upload"}`,
-        requested: { path, kind: "file" },
-        ...(before ? { before } : {}),
-      },
-      () =>
-        runStorageCall(() =>
-          principal.storage.upload(path, c.req.raw.body ?? new Uint8Array(), uploadOpts),
-        ),
-      async () =>
-        (await activityStat(principal.storage, path)) ?? {
-          path,
-          kind: "file",
-          ...(uploadOpts.contentLength === undefined ? {} : { size: uploadOpts.contentLength }),
-          ...(uploadOpts.modifiedAt ? { modifiedAt: uploadOpts.modifiedAt.toISOString() } : {}),
-        },
+    const done = await runStorageCall(() =>
+      deps.files.upload(
+        fileActor(principal, activityRequestContext(c)),
+        path,
+        c.req.raw.body ?? new Uint8Array(),
+        { ...uploadOpts, action: `file.${query.intent ?? "upload"}` },
+      ),
     );
+    if (uploadOpts.part?.final === false) return c.body(null, 204);
+    activityHeaders(c, done.history);
 
     // The provider accepted the bytes even when the follow-up stat fails, and
     // repeating the upload would overwrite a file that is already committed.
@@ -710,40 +501,35 @@ export function registerFsRoutes(
     const principal = c.get("principal");
     const body = await parseBody(MkdirRequest, c, jsonMaxBytes);
     const path = normalizeOrThrow(body.path);
-    await recordFsAction(
-      deps.activity,
-      c,
-      { action: "folder.create", requested: { path, kind: "dir" } },
-      () => runStorageCall(() => principal.storage.mkdir(path)),
+    const done = await runStorageCall(() =>
+      deps.files.mkdir(fileActor(principal, activityRequestContext(c)), path),
     );
+    activityHeaders(c, done.history);
     const entry = await statEntry(principal.storage, path);
     const responseBody: EntryResponse = EntryResponse.parse(serializeEntry(entry));
     return c.json(responseBody, 201);
   });
 
-  authed.post(routePath(ROUTES.fs.move), async (c) => {
+  /** Moves or renames one item and answers with where it is now. */
+  async function moveOne(
+    c: FsContext,
+    path: string,
+    target: string,
+    action: "file.move" | "file.rename",
+  ): Promise<Response> {
     const principal = c.get("principal");
-    const body = await parseBody(MoveRequest, c, jsonMaxBytes);
-    const path = normalizeOrThrow(body.path);
-    const target = normalizeOrThrow(body.target);
-    const before = deps.activity ? await activityStat(principal.storage, path) : undefined;
-    await recordFsAction(
-      deps.activity,
-      c,
-      {
-        action: "file.move",
-        requested: { path, targetPath: target },
-        ...(before ? { before } : {}),
-      },
-      () => runStorageCall(() => relocatePath(principal.storage, "move", path, target)),
-      () => ({ path: target, ...(before?.kind ? { kind: before.kind } : {}) }),
+    const done = await runStorageCall(() =>
+      deps.files.move(fileActor(principal, activityRequestContext(c)), path, target, { action }),
     );
+    activityHeaders(c, done.history);
     const entry = await statEntry(principal.storage, target);
-    if (deps.metadata !== undefined) {
-      await deps.metadata.onMoved(principal.identityId, path, target, entry.kind === "dir");
-    }
     const responseBody: EntryResponse = EntryResponse.parse(serializeEntry(entry));
     return c.json(responseBody);
+  }
+
+  authed.post(routePath(ROUTES.fs.move), async (c) => {
+    const body = await parseBody(MoveRequest, c, jsonMaxBytes);
+    return moveOne(c, normalizeOrThrow(body.path), normalizeOrThrow(body.target), "file.move");
   });
 
   authed.post(routePath(ROUTES.fs.moveMany), async (c) => {
@@ -751,7 +537,14 @@ export function registerFsRoutes(
     const body = await parseBody(MoveManyRequest, c, jsonMaxBytes);
     return c.json(
       MoveManyResponse.parse({
-        results: await moveMany(deps, principal, body, activityRequestContext(c)),
+        results: await moveMany(
+          deps.files,
+          principal,
+          body,
+          activityRequestContext(c),
+          "file.move",
+          normalizeOrThrow,
+        ),
       }),
     );
   });
@@ -761,51 +554,19 @@ export function registerFsRoutes(
     const body = await parseBody(CopyRequest, c, jsonMaxBytes);
     const path = normalizeOrThrow(body.path);
     const target = normalizeOrThrow(body.target);
-    const before = deps.activity ? await activityStat(principal.storage, path) : undefined;
-    await recordFsAction(
-      deps.activity,
-      c,
-      {
-        action: "file.copy",
-        requested: { path, targetPath: target },
-        ...(before ? { before } : {}),
-      },
-      () => runStorageCall(() => relocatePath(principal.storage, "copy", path, target)),
-      () => ({
-        path: target,
-        ...(before?.kind ? { kind: before.kind } : {}),
-        ...(before?.size === undefined ? {} : { size: before.size }),
-      }),
+    const done = await runStorageCall(() =>
+      deps.files.copy(fileActor(principal, activityRequestContext(c)), path, target),
     );
+    activityHeaders(c, done.history);
     const entry = await statEntry(principal.storage, target);
-    deps.metadata?.onCopied(principal.identityId, path, target);
     const responseBody: EntryResponse = EntryResponse.parse(serializeEntry(entry));
     return c.json(responseBody);
   });
 
   authed.post(routePath(ROUTES.fs.rename), async (c) => {
-    const principal = c.get("principal");
     const body = await parseBody(RenameRequest, c, jsonMaxBytes);
     const path = normalizeOrThrow(body.path);
-    const target = changeBaseName(path, body.newName);
-    const before = deps.activity ? await activityStat(principal.storage, path) : undefined;
-    await recordFsAction(
-      deps.activity,
-      c,
-      {
-        action: "file.rename",
-        requested: { path, targetPath: target },
-        ...(before ? { before } : {}),
-      },
-      () => runStorageCall(() => relocatePath(principal.storage, "move", path, target)),
-      () => ({ path: target, ...(before?.kind ? { kind: before.kind } : {}) }),
-    );
-    const entry = await statEntry(principal.storage, target);
-    if (deps.metadata !== undefined) {
-      await deps.metadata.onMoved(principal.identityId, path, target, entry.kind === "dir");
-    }
-    const responseBody: EntryResponse = EntryResponse.parse(serializeEntry(entry));
-    return c.json(responseBody);
+    return moveOne(c, path, changeBaseName(path, body.newName), "file.rename");
   });
 
   authed.post(routePath(ROUTES.fs.delete), async (c) => {
@@ -816,14 +577,14 @@ export function registerFsRoutes(
     const operationBase = context.producerOperationId ?? randomUUID();
     for (const [index, item] of body.items.entries()) {
       const path = normalizeOrThrow(item.path);
-      let moved: TrashedItem;
       try {
-        moved = await trashOne(
-          deps,
-          principal,
-          { path, kind: item.kind === "dir" ? "dir" : "file" },
-          context,
-          { operationId: `${operationBase}:${index}`, batchId },
+        await deps.files.trash(
+          fileActor(principal, {
+            ...context,
+            producerOperationId: `${operationBase}:${index}`,
+            batchId,
+          }),
+          path,
         );
       } catch (error) {
         if (isStorageError(error)) {
@@ -835,8 +596,6 @@ export function registerFsRoutes(
         }
         throw error;
       }
-      if (deps.metadata !== undefined)
-        await followIntoTrash(deps.metadata, deps.ownerPath, principal.identityId, path, moved);
     }
     const body2: OkResponse = OkResponse.parse({ ok: true });
     return c.json(body2);

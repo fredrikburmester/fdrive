@@ -40,6 +40,9 @@ the restore fails with a conflict, and **Restore to** can pick another place.
 Everything fdrive keeps by path goes into Trash with the item: tags, favorites, folder views,
 recents, Office documents, folders shared with other users and public links. Nobody reaches it
 through a share or link there, no list shows it, and a new item at the old path inherits nothing.
+Links, shares and Office documents go in one transaction with the item: when the database
+refuses that, the item comes back out and the delete fails, so none of them stays at the path
+it left. A permanent delete ends them first and deletes nothing when it cannot.
 A restore, to the same place or another, is a move back, so it all comes back with the item;
 deleting it permanently, in fdrive or on the host, ends it. An AI chat that referred to the item
 shows it missing.

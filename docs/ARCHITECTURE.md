@@ -71,9 +71,7 @@ rename. Grants follow the owner's moves and deletes, made through fdrive or jour
 indexer's watcher, and index scopes follow the grants ([scoping](SCOPING.md)). A grant follows
 its folder into the owner's Trash too, since that is a move like any other, so it never stays at a path a new folder can take; a
 purge deletes it. Something in a writable shared folder that the person it is shared with
-deletes goes to the owner's Trash, since it is the owner's file. Grants and public links follow a move before
-any other path-keyed metadata (`withFollowers`), so a failure in tags or favorites never leaves
-them behind; a Mac write moves them with its receipt. Sharing refuses fdrive's own folders
+deletes goes to the owner's Trash, since it is the owner's file. Sharing refuses fdrive's own folders
 (`isReservedPath`, below), and the grantee's storage and index scopes refuse a grant in the
 owner's Trash, in fdrive's Trash layout or in the Mac's `/.fdrive-desktop` (`closedToShares`)
 ([Trash](TRASH.md)).
@@ -87,10 +85,25 @@ before their limit. The indexer never walks `/.fdrive-desktop`; it does index th
 moves into and out of it stay renames. OCR takes its PDFs from the index and leaves out all of these. Where a consumer differs it says so: links also never reach
 `/Shared with me`.
 
-Metadata uses identity plus canonical virtual path. fdrive's own moves carry it along in the
-request; moves made outside fdrive, which the indexer's watcher journals, carry it along when
-the API reads the [change journal](INDEXER.md#the-apis-reader); index paths must be translated
-through the identity's scopes. A path
+Metadata uses identity plus canonical virtual path. fdrive changes files in one place, the
+[file operations](../apps/api/src/files/operations.ts): upload, mkdir, move, copy, Trash,
+restore and purge, for the web's file and Trash routes, MCP, AI chat, Office and a link's
+visitors alike. Each records its intent in personal activity, runs its storage call in one
+transaction with what grants access (grants, public links and Office files,
+[access.ts](../apps/api/src/files/access.ts)), records the outcome, and then lets tags,
+favorites, folder views, recents, chat references and the Mac's item handles follow, best
+effort: a failure there is a warning, and nothing it keeps grants access. What grants access
+fails closed. It changes before the storage call wherever the destination is known (a move,
+a restore, a purge), so a refused change leaves the file where it was and fails the request;
+Trash names its leaf only once the item is there, so a refused change takes the item back out.
+The transaction holds each path the operation vacates, and an operation creating something
+at or below one waits for it, so a new item never appears where a link or share still points.
+Nothing is held while a client's body arrives: an upload stages its body first and holds its
+path only to publish it.
+A Mac write moves what grants access with its receipt instead. Moves made outside fdrive,
+which the indexer's watcher journals, carry metadata along when the API reads the
+[change journal](INDEXER.md#the-apis-reader); index paths must be translated through the
+identity's scopes. A path
 or content hash alone never grants another identity access. Public share links are fdrive's
 own: fdrive keeps the share in `app.shares` and serves it through the owner's storage, which
 the share reaches only through

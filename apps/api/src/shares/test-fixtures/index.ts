@@ -12,6 +12,7 @@ import {
 import type { Logger } from "pino";
 import { onTestFinished, vi } from "vitest";
 import { activityFixture } from "../../../test/activity-fixture.js";
+import { recordingFileOperations } from "../../../test/file-operations.js";
 import { createApp } from "../../app.ts";
 import { createAuthModule, createLoginLimiter, createPasswordCheck } from "../../auth/index.ts";
 import { createPrincipalFactory } from "../../auth/principal.ts";
@@ -149,9 +150,12 @@ export function sharesHarness(options: SharesHarnessOptions = {}) {
   // Cheap parameters keep the many password checks below fast; the scheme
   // and its defaults have their own tests.
   const passwords = createScryptSharePasswords({ cost: 1024, blockSize: 8, parallelization: 1 });
+  // Every visitor's upload goes through the file operations.
+  const fileOperations = recordingFileOperations();
   const service = createSharesService({
     shares,
     storageFor: storageFactory,
+    files: fileOperations.files,
     passwords,
     ...(options.zipLimits === undefined ? {} : { zipLimits: options.zipLimits }),
     clock,
@@ -237,6 +241,7 @@ export function sharesHarness(options: SharesHarnessOptions = {}) {
     root,
     now,
     clock,
+    fileCalls: fileOperations.calls,
     repos,
     config,
     storageFactory,

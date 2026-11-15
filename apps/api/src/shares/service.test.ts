@@ -2,6 +2,7 @@ import { StorageError } from "@fdrive/core";
 import { createMemoryShareRepo, type ShareInsertInput } from "@fdrive/db";
 import { createMemoryStorage } from "@fdrive/testkit";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { recordingFileOperations } from "../../test/file-operations.js";
 import { ApiHttpError } from "../errors.ts";
 import { createScryptSharePasswords } from "./passwords.ts";
 import { archiveConflict, createSharesService, hiddenFromLinks, shareCall } from "./service.ts";
@@ -41,9 +42,11 @@ async function build(
   const storage = Object.assign(memory, { zip });
   const shares = createMemoryShareRepo();
   const consume = vi.spyOn(shares, "consume");
+  const operations = recordingFileOperations();
   const service = createSharesService({
     shares,
     storageFor: async () => storage,
+    files: operations.files,
     passwords,
     zipLimits: { perShare: 1 },
     clock: () => at,
@@ -64,7 +67,16 @@ async function build(
   const open = async (counted = false) =>
     service.authorize(await service.load(inserted.id), undefined, inserted.scope, counted);
   const used = async () => (await shares.get(inserted.id))?.usedDownloads;
-  return { storage: memory, shares, consume, service, open, used, id: inserted.id };
+  return {
+    storage: memory,
+    shares,
+    consume,
+    service,
+    open,
+    used,
+    id: inserted.id,
+    fileCalls: operations.calls,
+  };
 }
 
 async function kindOf(promise: Promise<unknown>): Promise<string> {
@@ -237,7 +249,7 @@ describe("counting a public share's downloads", () => {
 
 describe("uploads through a public share", () => {
   it("never replaces a file: a taken name gets the next free number", async () => {
-    const { service, open, storage, used } = await build(
+    const { service, open, storage, used, fileCalls } = await build(
       { "/inbox/photo.jpg": "first", "/inbox/photo (2).jpg": "second" },
       { scope: "write", paths: ["/inbox"] },
     );
@@ -252,6 +264,13 @@ describe("uploads through a public share", () => {
       "/inbox/photo (3).jpg": "third",
       "/inbox/new.txt": "new",
     });
+    // Every attempt is the file operations' upload, as every change to files is.
+    expect(fileCalls).toEqual([
+      "upload /inbox/photo.jpg",
+      "upload /inbox/photo (2).jpg",
+      "upload /inbox/photo (3).jpg",
+      "upload /inbox/new.txt",
+    ]);
     expect(await used()).toBe(2);
   });
 

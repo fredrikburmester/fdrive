@@ -1,7 +1,6 @@
 import { createHash } from "node:crypto";
 import { extensionOf, parseMoveTrashLeaf, TRASH_PATH, trashLeafPath } from "@fdrive/core";
 import { recordMetadataCommand } from "../activity/metadata.js";
-import { relocatePath } from "../fs/mutations.ts";
 import type { TokenPrincipal } from "../tokens/principal.ts";
 import {
   assertMutablePath,
@@ -12,23 +11,8 @@ import {
   tokenScopes,
 } from "./access.ts";
 import { decodeText, liveFileInfo, MAX_FILE_BYTES, readStoredFile } from "./content.ts";
-import type { McpToolDeps } from "./handlers.ts";
+import { type McpToolDeps, mcpFiles, warningsOf } from "./handlers.ts";
 import { fileUrl, folderUrl } from "./urls.ts";
-
-async function mutationEffects(
-  deps: McpToolDeps,
-  principal: TokenPrincipal,
-  change: Parameters<NonNullable<McpToolDeps["onMutation"]>>[1],
-) {
-  try {
-    await deps.onMutation?.(principal, change);
-    return {};
-  } catch {
-    return {
-      warnings: ["Storage operation completed, but metadata or live updates could not be updated."],
-    };
-  }
-}
 
 function checkedBytes(bytes: Buffer): Buffer {
   if (bytes.length > MAX_FILE_BYTES)
@@ -51,7 +35,9 @@ export async function createFile(
   if (args.data !== undefined && bytes.toString("base64") !== args.data)
     throw new Error("data must be canonical base64");
   const publicUrl = await deps.publicUrl();
-  await principal.storage.upload(path, bytes, {
+  const { files, actor } = mcpFiles(deps, principal);
+  const done = await files.upload(actor, path, bytes, {
+    action: args.data === undefined ? "file.create" : "file.upload",
     overwrite: false,
     contentLength: bytes.length,
     signal: AbortSignal.timeout(30_000),
@@ -61,7 +47,7 @@ export async function createFile(
     url: fileUrl(publicUrl, path),
     size_bytes: bytes.length,
     sha256: createHash("sha256").update(bytes).digest("hex"),
-    ...(await mutationEffects(deps, principal, { kind: "create", path, isDir: false })),
+    ...warningsOf(done),
   };
 }
 
@@ -107,7 +93,9 @@ async function editFileUnlocked(
   ) {
     throw new Error("edit_file only replaces UTF-8 text files");
   }
-  await principal.storage.upload(previous.path, bytes, {
+  const { files, actor } = mcpFiles(deps, principal);
+  const done = await files.upload(actor, previous.path, bytes, {
+    action: "file.save",
     overwrite: true,
     contentLength: bytes.length,
     signal: AbortSignal.timeout(30_000),
@@ -117,11 +105,7 @@ async function editFileUnlocked(
     url: previous.url,
     size_bytes: bytes.length,
     sha256: createHash("sha256").update(bytes).digest("hex"),
-    ...(await mutationEffects(deps, principal, {
-      kind: "create",
-      path: previous.path,
-      isDir: false,
-    })),
+    ...warningsOf(done),
   };
 }
 
@@ -136,37 +120,23 @@ export async function copyPath(
   if (containsPath(src, TRASH_PATH)) throw new Error("cannot copy a folder containing Trash");
   const stat = await principal.storage.stat(src);
   const publicUrl = await deps.publicUrl();
-  await relocatePath(principal.storage, "copy", src, dst);
+  const { files, actor } = mcpFiles(deps, principal);
+  await files.copy(actor, src, dst);
   return {
     copied: src,
     to: dst,
     url: stat.kind === "dir" ? folderUrl(publicUrl, dst) : fileUrl(publicUrl, dst),
-    ...(src === dst
-      ? {}
-      : await mutationEffects(deps, principal, {
-          kind: "copy",
-          path: src,
-          target: dst,
-          isDir: stat.kind === "dir",
-        })),
   };
 }
 
-/** Moves `rawPath` to Trash; the token's storage records it (`activityStorage`). */
+/** Moves `rawPath` to Trash, as the web's delete does. */
 export async function trashPath(deps: McpToolDeps, principal: TokenPrincipal, rawPath: string) {
   requireMode(principal, "full");
   const path = ordinaryPath(principal, rawPath);
   assertMutablePath(principal, path);
-  const moved = await principal.storage.trash.put(path);
-  return {
-    trashed: path,
-    ...(await mutationEffects(deps, principal, {
-      kind: "trash",
-      path,
-      trashLeaf: moved.leaf,
-      isDir: moved.kind === "dir",
-    })),
-  };
+  const { files, actor } = mcpFiles(deps, principal);
+  const done = await files.trash(actor, path);
+  return { trashed: path, ...warningsOf(done) };
 }
 
 export async function listTrash(
@@ -201,20 +171,14 @@ export async function restorePath(
   const original = ordinaryPath(principal, leaf.originalPath);
   const target = ordinaryPath(principal, args.target ?? original);
   const publicUrl = await deps.publicUrl();
-  const result = await principal.storage.trash.restore(args.id, { target });
-  // A restore is a move out of Trash, where what is kept by path followed the item.
-  const effects = await mutationEffects(deps, principal, {
-    kind: "restore",
-    path: original,
-    target: result.path,
-    eventPath: trashLeafPath(TRASH_PATH, args.id),
-    isDir: result.kind === "dir",
-  });
+  const { files, actor } = mcpFiles(deps, principal);
+  const done = await files.restore(actor, args.id, target);
+  const result = done.entry;
   return {
     restored: result.path,
     url:
       result.kind === "dir" ? folderUrl(publicUrl, result.path) : fileUrl(publicUrl, result.path),
-    ...effects,
+    ...warningsOf(done),
   };
 }
 
