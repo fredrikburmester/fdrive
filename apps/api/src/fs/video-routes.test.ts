@@ -11,6 +11,7 @@ import { registerVideoRoutes, SUBTITLES_MAX_BYTES, srtToVtt } from "./video-rout
 
 const REQUIRED_ENV = {
   DATABASE_URL: "postgres://localhost/fdrive",
+  FDRIVE_STORAGE_ROOT: "/srv/files",
   FDRIVE_MASTER_KEY: Buffer.alloc(32, 7).toString("base64"),
 };
 
@@ -69,7 +70,7 @@ async function buildApp(files: Record<string, string>, signedIn = true) {
     startedAt: new Date(),
     clock: () => new Date(),
     principalResolver: async () => (signedIn ? principal : null),
-    connectionStatus: async () => ({ required: false, providers: [] }),
+    setupRequired: async () => false,
     registerRoutes: (groups) => registerVideoRoutes(groups),
   });
 }
