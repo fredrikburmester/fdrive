@@ -105,8 +105,8 @@ export interface IndexRef {
 
 /**
  * A live file's digest and what stands behind it, see
- * `IndexQueries.contentAt`. `inode` and `ctimeNs` are the stamp of the
- * indexer's own read that produced `sha256`, or null when no such read
+ * `IndexQueries.contentAt`. `inode` and `ctimeNs` stamp `sha256`: the file
+ * the indexer read for it or the API published it as, or null when neither
  * stands behind it (see `idx.files.inode`).
  */
 export interface IndexedContent extends IndexRef {

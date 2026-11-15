@@ -450,10 +450,11 @@ Live metadata remains proportional to the number of items in browsed folders.
 
 First download computes SHA-256 locally in 1 MiB chunks and validates transfer length. Later
 refresh validates only materialized files on the server, one batch at a time per identity. This
-detects different bytes even when size/mtime are unchanged. A file whose index row the indexer
-stamped from its own read ([stamps](INDEXER.md#stamps)) is answered with the row's sha256
-while a fresh stat still shows the row's inode, change time, size and modification time; any
-other file is read and hashed in full. No originals are sent to the Mac by validation.
+detects different bytes even when size/mtime are unchanged. A file whose index row is stamped
+([stamps](INDEXER.md#stamps): by the indexer's own read, the hint of the upload that wrote it,
+or either carried across a rename by fdrive) is answered with the row's sha256 while a fresh
+stat still shows the row's inode, change time, size and modification time; any other file is
+read and hashed in full. No originals are sent to the Mac by validation.
 
 Downloads use URLSession temporary files, then the manager-provided transfer directory.
 A free-space preflight (file size plus 512 MiB headroom) refuses downloads and saves that
