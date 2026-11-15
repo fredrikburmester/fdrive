@@ -381,6 +381,18 @@ describe("createApiClient: downloadUrl", () => {
   });
 });
 
+describe("createApiClient: video urls", () => {
+  it("builds transcode and subtitle urls", () => {
+    const client = createApiClient({ baseUrl: "https://api.test" });
+    expect(client.transcodeUrl("/a/b.mkv")).toBe(
+      "https://api.test/api/v1/fs/transcode?path=%2Fa%2Fb.mkv",
+    );
+    expect(client.subtitlesUrl("/a/b.en.srt")).toBe(
+      "https://api.test/api/v1/fs/subtitles?path=%2Fa%2Fb.en.srt",
+    );
+  });
+});
+
 describe("createApiClient: upload", () => {
   it("puts the body to fs/upload with the path query", async () => {
     const { fetchStub, calls } = createStubFetch([jsonResponse(200, VALID_ENTRY)]);

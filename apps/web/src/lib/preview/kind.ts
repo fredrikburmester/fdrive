@@ -38,7 +38,8 @@ export const HEIC_EXTENSIONS: ReadonlySet<string> = new Set([".heic", ".heif"]);
 // Authenticated viewing also permits SVG and icons; public galleries exclude them.
 const IMAGE_EXTENSIONS = new Set([...GALLERY_IMAGE_EXTENSIONS, ".ico", ".svg"]);
 
-const VIDEO_EXTENSIONS = new Set([".mp4", ".webm", ".mov", ".mkv", ".avi", ".m4v"]);
+// `video.ts` says which of these the browser plays and which the API transcodes.
+const VIDEO_EXTENSIONS = new Set([".mp4", ".webm", ".mov", ".mkv", ".avi", ".m4v", ".wmv", ".flv"]);
 
 const AUDIO_EXTENSIONS = new Set([".mp3", ".wav", ".ogg", ".flac", ".m4a", ".aac", ".opus"]);
 
