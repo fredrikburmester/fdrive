@@ -129,6 +129,12 @@ interface Publication {
   readonly inode: string;
   /** Null for a new item. */
   readonly source: Source | null;
+  /**
+   * For a move to Trash: where the item lies in its owner's files, whose
+   * Trash takes it. That is this login's own, or, in a folder shared with
+   * it, the owner's.
+   */
+  readonly owner?: { readonly identityId: string; readonly path: string };
 }
 export interface DesktopWriteDeps extends Pick<DesktopDeps, "clock" | "indexedContent"> {
   repo: DesktopRepo;
@@ -205,34 +211,6 @@ async function entryAt(storage: StorageProvider, path: string) {
   }
 }
 /**
- * Where a recorded publication stands, from disk alone: `to` holds its
- * inode (published there), `from` still does (not published), or neither,
- * when something else has happened to it since (lost). A move to Trash, whose
- * leaf Trash picked, is published at the leaf in its user's Trash that was
- * deleted from `from` and holds the inode; one in a folder shared with the
- * user went to its owner's Trash, which this storage does not list.
- */
-async function whereIs(
-  storage: StorageProvider,
-  publication: Publication,
-): Promise<{ at: "published"; to: string } | { at: "pending" | "lost" }> {
-  const inode = BigInt(publication.inode);
-  const holds = async (path: string) => (await entryAt(storage, path))?.ino === inode;
-  if (publication.to !== null && (await holds(publication.to)))
-    return { at: "published", to: publication.to };
-  if (await holds(publication.from)) return { at: "pending" };
-  if (publication.to === null) {
-    const { entries } = await storage.trash.list({ limit: Number.POSITIVE_INFINITY });
-    for (const entry of entries) {
-      const leaf = trashLeafPath(TRASH_PATH, entry.id);
-      if (entry.originalPath === publication.from && (await holds(leaf)))
-        return { at: "published", to: leaf };
-    }
-  }
-  return { at: "lost" };
-}
-
-/**
  * Mac writes. An upload is staged in its owner's files and a commit
  * publishes it with one `rename` (or a `link`, for a new name), so whether
  * a commit published is always on disk: a commit records what it is about
@@ -248,6 +226,34 @@ export function createDesktopWrites(deps: DesktopWriteDeps) {
   const repo = deps.repo;
   const ownerPath: OwnerPath =
     deps.ownerPath ?? (async (identityId: string, path: string) => ({ identityId, path }));
+  /**
+   * Where a recorded publication stands, from disk alone: `to` holds its
+   * inode (published there), `from` still does (not published), or neither,
+   * when something else has happened to it since (lost). A move to Trash,
+   * whose leaf Trash picked, is published at the leaf in its owner's Trash
+   * that was deleted from the item's place there and holds the inode.
+   */
+  async function whereIs(
+    principal: Principal,
+    publication: Publication,
+  ): Promise<{ at: "published"; to: string } | { at: "pending" | "lost" }> {
+    const inode = BigInt(publication.inode);
+    const holds = async (storage: StorageProvider, path: string) =>
+      (await entryAt(storage, path))?.ino === inode;
+    const { from, to, owner } = publication;
+    if (to !== null && (await holds(principal.storage, to))) return { at: "published", to };
+    if (await holds(principal.storage, from)) return { at: "pending" };
+    if (to === null && owner) {
+      const storage = await deps.storageForIdentity(owner.identityId);
+      const { entries } = await storage.trash.list({ limit: Number.POSITIVE_INFINITY });
+      for (const entry of entries) {
+        const leaf = trashLeafPath(TRASH_PATH, entry.id);
+        if (entry.originalPath === owner.path && (await holds(storage, leaf)))
+          return { at: "published", to: leaf };
+      }
+    }
+    return { at: "lost" };
+  }
   /** Writes need a grant of full access, and nothing else. */
   function capabilities(principal: Principal): DesktopWriteCapabilities {
     return principal.tokenAccess?.mode === "full" ? ALL_WRITES : NO_WRITES;
@@ -387,7 +393,7 @@ export function createDesktopWrites(deps: DesktopWriteDeps) {
   function present(
     principal: Principal,
     entry: DesktopEntry,
-    item: DesktopItemRecord,
+    item: Pick<DesktopItemRecord, "id" | "metadataVersion">,
     parentId: string,
     content?: string,
     shown?: { path: string; name: string },
@@ -708,24 +714,26 @@ export function createDesktopWrites(deps: DesktopWriteDeps) {
     const request = op.request as Request;
     const { identityId, accountId } = principal;
     const { source } = publication;
+    const owner = publication.owner ?? null;
     let receipt: DesktopOperationResult;
-    // A move to Trash went to the Trash of whoever owns the item: this
-    // login's, or, in a folder shared with it, the owner's.
-    const owner =
-      request.parentId === "trash" && source ? await ownerPath(identityId, source.path) : null;
     try {
       let item: DesktopWriteEntry;
       if (source && owner && owner.identityId !== identityId) {
-        // It left this login's files as a deleted item does. Finder's Trash
-        // shows it until it lists Trash again.
-        const row = await repo.item(identityId, source.id);
-        if (!row) throw Error("Item no longer exists");
+        // It left this login's files as a deleted item does, so its handle
+        // retires. Finder's Trash shows it until it lists Trash again.
         const entry = await storedEntry(await deps.storageForIdentity(owner.identityId), to);
         await repo.remove(identityId, source.path);
-        item = present(principal, entry, row, "trash", undefined, {
-          path: `${DESKTOP_TRASH}/${row.id}`,
-          name: trashName(baseName(source.path), row.id),
-        });
+        item = present(
+          principal,
+          entry,
+          { id: source.id, metadataVersion: op.id },
+          "trash",
+          undefined,
+          {
+            path: `${DESKTOP_TRASH}/${source.id}`,
+            name: trashName(baseName(source.path), source.id),
+          },
+        );
       } else {
         // The handle follows the item, into Trash and back out too.
         if (source) await repo.move(identityId, source.path, to);
@@ -776,7 +784,7 @@ export function createDesktopWrites(deps: DesktopWriteDeps) {
    */
   async function settle(principal: Principal, op: DesktopOperationRecord) {
     const publication = op.result?.publication as Publication | undefined;
-    const where = publication ? await whereIs(principal.storage, publication) : null;
+    const where = publication ? await whereIs(principal, publication) : null;
     if (publication && where?.at === "published")
       await finish(principal, op, publication, where.to);
     else
@@ -897,6 +905,9 @@ export function createDesktopWrites(deps: DesktopWriteDeps) {
         to: target,
         inode: staged.ino.toString(),
         source: source ? { id: source.id, path: source.path, kind: source.kind } : null,
+        ...(trashing && source
+          ? { owner: await ownerPath(principal.identityId, source.path) }
+          : {}),
       };
       if (
         !(await transition(principal, id, "committing", "committing", {
@@ -945,7 +956,7 @@ export function createDesktopWrites(deps: DesktopWriteDeps) {
         await transition(principal, id, "committing", "conflict", settled(op.result));
         fail("name_collision", COLLISION);
       }
-      const where = await whereIs(storage, publication).catch(() => null);
+      const where = await whereIs(principal, publication).catch(() => null);
       // Still `committing`: the app's retry reads the outcome (`settle`).
       if (where === null)
         throw new ApiHttpError("internal", "This write could not be confirmed yet. Retry it.");

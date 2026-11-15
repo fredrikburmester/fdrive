@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { DesktopWriteEntry } from "@fdrive/contracts";
@@ -12,7 +12,7 @@ import {
   trashLeafPath,
 } from "@fdrive/core";
 import type { DesktopAccessMove } from "@fdrive/db";
-import { createLocalStorage } from "@fdrive/local";
+import { createLocalStorage, createUserStorage } from "@fdrive/local";
 import { createMemoryStorage } from "@fdrive/testkit";
 import { afterEach, expect, it, vi } from "vitest";
 import { memoryRepo } from "../../test/helpers/desktop-repo.js";
@@ -2314,49 +2314,6 @@ it("deletes only a whole item in Trash for good, and an item gone already is don
   expect(f.purge).toHaveBeenCalledTimes(1);
 });
 
-it("follows an item in a folder shared with the login into its owner's Trash", async () => {
-  const f = await fixture();
-  const owner = randomUUID();
-  const { identityId } = f.principal;
-  const ownerPath = vi.fn(async (_identity: string, path: string) => ({
-    identityId: owner,
-    path: `/Projects${path}`,
-  }));
-  const service = createDesktopWrites({ ...f.deps, ownerPath });
-  const file = await service.stat(f.principal, "/old.txt");
-  const operationId = randomUUID();
-  await service.prepare(f.principal, {
-    kind: "move",
-    operationId,
-    itemId: file.id,
-    parentId: "trash",
-    name: file.name,
-    base: file.version,
-  });
-  const receipt = required((await service.commit(f.principal, operationId)).item);
-  const leaf = await onlyLeaf(f.raw);
-  // The owner's Trash has it; this login only hears where it went, until it lists Trash again.
-  expect(receipt).toMatchObject({
-    id: file.id,
-    parentId: "trash",
-    trashed: true,
-    path: `${DESKTOP_TRASH}/${file.id}`,
-    name: `old (deleted ${file.id.slice(0, 8)}).txt`,
-    size: 3,
-  });
-  expect(await f.repo.item(identityId, file.id)).toBeNull();
-  expect(f.moved.get(operationId)?.shares).toEqual({
-    identityId: owner,
-    from: "/Projects/old.txt",
-    to: leaf,
-  });
-  expect(f.completed.get(operationId)).toMatchObject({ from: "/old.txt", to: leaf, trash: true });
-  // What the owner kept follows; what this login kept there ends.
-  expect(f.metadata.onMoved).toHaveBeenCalledWith(owner, "/Projects/old.txt", leaf, false);
-  expect(f.metadata.onDeleted).toHaveBeenCalledWith(identityId, "/old.txt", false);
-  expect(f.events.at(-1)).toMatchObject({ op: "delete", paths: ["/old.txt"] });
-});
-
 it("moves the Mac's old Trash into fdrive's Trash once, keeping each handle", async () => {
   const f = await fixture();
   const { identityId } = f.principal;
@@ -2459,35 +2416,119 @@ it("keeps the Mac's Trash to whole Trash items its grants reach", async () => {
   });
 });
 
-it("finishes a move to its owner's Trash on the retry when its receipt could not be kept", async () => {
-  const f = await fixture();
-  const owner = randomUUID();
-  const ownerPath = async (identityId: string, path: string) =>
-    path === "/old.txt" ? { identityId: owner, path: `/Projects${path}` } : { identityId, path };
-  const service = createDesktopWrites({ ...f.deps, ownerPath });
-  const file = await service.stat(f.principal, "/old.txt");
-  const operationId = randomUUID();
+/**
+ * alice's Mac, with bob's `/Projects` shared with her to edit, on real
+ * homes: what she deletes there goes to bob's Trash.
+ */
+async function sharedFixture() {
+  const root = await mkdtemp(join(tmpdir(), "fdrive-mac-shared-"));
+  temporary.push(root);
+  const homes = { alice: join(root, "alice"), bob: join(root, "bob") };
+  await mkdir(join(homes.bob, "Projects"), { recursive: true });
+  await mkdir(homes.alice, { recursive: true });
+  await writeFile(join(homes.bob, "Projects", "plan.txt"), "plan");
+  const clock = ticking();
+  const bob = createUserStorage({ home: homes.bob, shared: async () => [], clock });
+  const alice = createUserStorage({
+    home: homes.alice,
+    shared: async () => [
+      { name: "Projects", dir: join(homes.bob, "Projects"), ownerHome: homes.bob, writable: true },
+    ],
+    clock,
+  });
+  const ids = { alice: randomUUID(), bob: randomUUID() };
+  const shelf = "/Shared with me/Projects";
+  const principal: Principal = {
+    accountId: randomUUID(),
+    identityId: ids.alice,
+    username: "alice",
+    isAdmin: false,
+    storage: alice,
+    tokenAccess: { mode: "full", paths: ["/"] },
+  };
+  const memory = memoryRepo();
+  const metadata = { onMoved: vi.fn(async () => {}), onDeleted: vi.fn(async () => {}) };
+  const access = vi.fn(
+    async (identityId: string, from: string, to: string, directory: boolean) =>
+      ({ directory, shares: { identityId, from, to }, grants: null }) as DesktopAccessMove,
+  );
+  const deps = {
+    repo: memory.repo,
+    storageForIdentity: async (id: string) => (id === ids.bob ? bob : alice),
+    clock: () => new Date(),
+    access,
+    metadata,
+    purge: async () => {},
+    ownerPath: async (identityId: string, path: string) =>
+      path.startsWith(`${shelf}/`)
+        ? { identityId: ids.bob, path: `/Projects${path.slice(shelf.length)}` }
+        : { identityId, path },
+  };
+  const file = await createDesktopWrites(deps).stat(principal, `${shelf}/plan.txt`);
   const request = {
     kind: "move" as const,
-    operationId,
+    operationId: randomUUID(),
     itemId: file.id,
     parentId: "trash",
     name: file.name,
     base: file.version,
   };
-  await service.prepare(f.principal, request);
-  vi.spyOn(f.repo, "item").mockResolvedValueOnce(
-    await f.repo.item(f.principal.identityId, file.id),
+  return { ...memory, alice, bob, ids, principal, metadata, access, deps, file, request };
+}
+
+it("follows an item in a folder shared with the login into its owner's Trash", async () => {
+  const f = await sharedFixture();
+  const service = createDesktopWrites(f.deps);
+  await service.prepare(f.principal, f.request);
+  const receipt = required((await service.commit(f.principal, f.request.operationId)).item);
+  // bob's Trash has it, deleted from where it is in his files; alice's has nothing.
+  const [entry] = (await f.bob.trash.list()).entries;
+  expect(entry?.originalPath).toBe("/Projects/plan.txt");
+  expect((await f.alice.trash.list()).entries).toEqual([]);
+  const leaf = trashLeafPath(TRASH_PATH, required(entry).id);
+  // alice only hears where it went, until her Mac lists Trash again.
+  expect(receipt).toMatchObject({
+    id: f.file.id,
+    parentId: "trash",
+    trashed: true,
+    path: `${DESKTOP_TRASH}/${f.file.id}`,
+    name: `plan (deleted ${f.file.id.slice(0, 8)}).txt`,
+    size: 4,
+  });
+  expect((await service.list(f.principal, DESKTOP_TRASH, "token")).entries).toEqual([]);
+  expect(await f.repo.item(f.ids.alice, f.file.id)).toBeNull();
+  // What bob kept follows it into his Trash; what alice kept there ends.
+  expect(f.moved.get(f.request.operationId)?.shares).toEqual({
+    identityId: f.ids.bob,
+    from: "/Projects/plan.txt",
+    to: leaf,
+  });
+  expect(f.completed.get(f.request.operationId)).toMatchObject({
+    from: "/Shared with me/Projects/plan.txt",
+    to: leaf,
+    trash: true,
+  });
+  expect(f.metadata.onMoved).toHaveBeenCalledWith(f.ids.bob, "/Projects/plan.txt", leaf, false);
+  expect(f.metadata.onDeleted).toHaveBeenCalledWith(
+    f.ids.alice,
+    "/Shared with me/Projects/plan.txt",
+    false,
   );
-  vi.spyOn(f.repo, "item").mockResolvedValueOnce(null);
-  await expect(service.commit(f.principal, operationId)).rejects.toMatchObject({
+});
+
+it("finishes a move to its owner's Trash on the retry when its receipt could not be kept", async () => {
+  const f = await sharedFixture();
+  const service = createDesktopWrites(f.deps);
+  await service.prepare(f.principal, f.request);
+  vi.spyOn(f.repo, "complete").mockRejectedValueOnce(Error("database unavailable"));
+  await expect(service.commit(f.principal, f.request.operationId)).rejects.toMatchObject({
     kind: "internal",
   });
-  expect((await service.status(f.principal, operationId)).state).toBe("committing");
-  // The retry finds the item in Trash, deleted from where it was, and keeps the receipt.
-  expect(await service.prepare(f.principal, request)).toMatchObject({
+  expect((await service.status(f.principal, f.request.operationId)).state).toBe("committing");
+  // The retry finds it in bob's Trash, deleted from where it was in his files.
+  expect(await createDesktopWrites(f.deps).prepare(f.principal, f.request)).toMatchObject({
     state: "completed",
-    item: { id: file.id, parentId: "trash", trashed: true },
+    item: { id: f.file.id, parentId: "trash", trashed: true },
   });
-  expect(await f.repo.item(f.principal.identityId, file.id)).toBeNull();
+  expect((await f.bob.trash.list()).entries).toHaveLength(1);
 });

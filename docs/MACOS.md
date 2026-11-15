@@ -230,7 +230,9 @@ operation still `committing` with no commit running reads the outcome: the targe
 recorded inode, so the write was published and its receipt is kept now; the staging file (or the
 source) still holds it, so nothing was published and the operation is `ready` to commit again;
 neither holds it, because someone replaced or moved the item since, so it is a `conflict`, which
-the Mac app already handles, and nothing is overwritten. Every Mac retry starts with the same
+the Mac app already handles, and nothing is overwritten. A move to Trash records whose Trash
+takes the item instead of where it goes, since Trash picks the place; its retry finds the item
+there by the path it was deleted from and its inode. Every Mac retry starts with the same
 prepare request, so that is where an interrupted commit ends. A staged body that is gone is
 asked for again (the operation returns to `receiving`).
 
