@@ -4,7 +4,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DESKTOP_API, DesktopPairing, DesktopPairResult } from "@fdrive/contracts";
 import { StorageError, type StorageProvider } from "@fdrive/core";
-import type { DesktopEffectsRepo } from "@fdrive/db";
 import { createMemoryRepos } from "@fdrive/db/testing";
 import { createLocalStorage, createUserStorage, SHARED_WITH_ME } from "@fdrive/local";
 import { createMemoryStorage } from "@fdrive/testkit";
@@ -214,7 +213,7 @@ it("advertises the change feed where it covers the location and answers it", asy
     status: "resync" as const,
     anchor: since ?? "v1.start",
   }));
-  const f = await fixture(true, undefined, { available: async () => available, read });
+  const f = await fixture(true, { available: async () => available, read });
   const call = await pairWritable(f);
   expect(await (await call("/location")).json()).toMatchObject({
     listingChecks: true,
@@ -243,11 +242,7 @@ afterEach(async () => {
     desktopDirectories.splice(0).map((path) => rm(path, { recursive: true, force: true })),
   );
 });
-async function fixture(
-  writable = false,
-  recovery?: Pick<DesktopEffectsRepo, "status">,
-  changes?: DesktopChanges,
-) {
+async function fixture(writable = false, changes?: DesktopChanges) {
   const repos = createMemoryRepos();
   let now = new Date("2026-09-13T00:00:00Z");
   const clock = () => now;
@@ -316,7 +311,6 @@ async function fixture(
     registerRoutes: (groups) =>
       registerDesktopRoutes(groups, {
         ...deps,
-        ...(recovery ? { recovery } : {}),
         ...(changes ? { changes } : {}),
         activity: activity.service,
         clientIp: () => "test",
@@ -1070,37 +1064,19 @@ it("applies CSRF and browser ownership to v2 pairing while keeping v1 requests u
   ).toBe(401);
 });
 
-it("limits recovery status to administrators and returns safe bounded job details", async () => {
-  const status = vi.fn(async () => [
-    {
-      identityId: randomUUID(),
-      operationId: randomUUID(),
-      attempts: 1,
-      lastError: "Retry scheduled",
-      createdAt: new Date(0),
-      nextAttemptAt: new Date(5000),
-    },
-  ]);
-  const f = await fixture(false, { status });
-  expect((await f.request("/recovery")).status).toBe(401);
-  expect((await f.request("/recovery", undefined, { cookie: "fdrive_session=test" })).status).toBe(
-    403,
-  );
-  expect(status).not.toHaveBeenCalled();
-  Object.assign(f.principal, { isAdmin: true, tokenAccess: undefined });
-  const response = await f.request("/recovery", undefined, { cookie: "fdrive_session=test" });
-  expect(response.status).toBe(200);
-  expect(response.headers.get("cache-control")).toBe("no-store");
-  expect(await response.json()).toMatchObject({
-    pending: [{ attempts: 1, nextAttemptAt: new Date(5000).toISOString() }],
-  });
+it("limits recovery status to administrators and lists only uncertain commits", async () => {
   const unavailable = await fixture();
+  expect((await unavailable.request("/recovery")).status).toBe(401);
+  expect(
+    (await unavailable.request("/recovery", undefined, { cookie: "fdrive_session=test" })).status,
+  ).toBe(403);
   Object.assign(unavailable.principal, { isAdmin: true, tokenAccess: undefined });
+  // Without Mac writes there is nothing to recover.
   expect(
     (await unavailable.request("/recovery", undefined, { cookie: "fdrive_session=test" })).status,
   ).toBe(502);
   // Uncertain commits are listed for administrators and resolved only through storage evidence.
-  const writable = await fixture(true, { status: vi.fn(async () => []) });
+  const writable = await fixture(true);
   const admin = { cookie: "fdrive_session=test" };
   const resolve = `/recovery/${writable.identity.id}/${randomUUID()}/resolve`;
   expect((await writable.request(resolve, { outcome: "discarded" }, admin)).status).toBe(403);
@@ -1116,10 +1092,9 @@ it("limits recovery status to administrators and returns safe bounded job detail
       )
     ).status,
   ).toBe(404);
-  expect(await (await writable.request("/recovery", undefined, admin)).json()).toEqual({
-    pending: [],
-    uncertain: [],
-  });
+  const listed = await writable.request("/recovery", undefined, admin);
+  expect(listed.headers.get("cache-control")).toBe("no-store");
+  expect(await listed.json()).toEqual({ uncertain: [] });
   expect(
     (
       await writable.request(

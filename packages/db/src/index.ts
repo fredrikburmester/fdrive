@@ -12,6 +12,7 @@ export * from "./parse-database-url.js";
 export { type ActivityRepo, appendActivityOutcome, createActivityRepo } from "./repos/activity.js";
 export { type ActivityExportsRepo, createActivityExportsRepo } from "./repos/activity-exports.js";
 export { activityMetadataUnchanged, captureActivityMetadata } from "./repos/activity-metadata.js";
+export type { NativeActivityFacts } from "./repos/activity-native.js";
 export {
   type ActivityObservationsRepo,
   createActivityObservationsRepo,
@@ -39,19 +40,13 @@ export {
 } from "./repos/changes.js";
 export {
   createDesktopRepo,
+  type DesktopAccessMove,
   type DesktopItemRecord,
   type DesktopOperationRecord,
   type DesktopRepo,
   type DesktopRetention,
+  type DesktopShareMove,
 } from "./repos/desktop.js";
-export { createDesktopEffectsRepo } from "./repos/desktop-effects.js";
-export type {
-  DesktopEffectContext,
-  DesktopEffectEvent,
-  DesktopEffectStatus,
-  DesktopEffectsRepo,
-  DesktopShareMove,
-} from "./repos/desktop-effects-types.js";
 export {
   createDesktopPublishLock,
   DesktopPublishBusyError,
@@ -117,7 +112,7 @@ export type {
 export { createMemoryOfficeFileRepo } from "./repos/office-files-state.js";
 export type { OfficeWriteContext, OfficeWriteScope } from "./repos/office-write-scope.js";
 export { createOfficeWriteScope } from "./repos/office-write-scope.js";
-export { createShareRepo, deleteSharePrefix, moveSharePrefix } from "./repos/shares.js";
+export { createShareRepo } from "./repos/shares.js";
 export type {
   MemoryShareOptions,
   ShareInsertInput,

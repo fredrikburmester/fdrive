@@ -14,7 +14,6 @@ import {
   DesktopUploadRequest,
   DesktopVersionRequest,
 } from "@fdrive/contracts";
-import type { DesktopEffectsRepo } from "@fdrive/db";
 import type { Context } from "hono";
 import { activityOperationId } from "../activity/fs-context.js";
 import type { PersonalActivityService } from "../activity/service.js";
@@ -37,7 +36,6 @@ export function registerDesktopRoutes(
     writes?: DesktopWrites;
     /** The change feed; absent where the server keeps no change journal. */
     changes?: DesktopChanges;
-    recovery?: Pick<DesktopEffectsRepo, "status">;
     /** Records hydration. A background fetch is not a proven human open. */
     activity?: PersonalActivityService;
   },
@@ -50,18 +48,9 @@ export function registerDesktopRoutes(
   };
   groups.authed.get(`${base}/recovery`, createRequireAdmin(), async (c) => {
     c.header("Cache-Control", "no-store");
-    if (!deps.recovery)
-      throw new ApiHttpError("upstream_unavailable", "Recovery status is unavailable");
-    const pending = await deps.recovery.status();
+    if (!writes) throw new ApiHttpError("upstream_unavailable", "Recovery status is unavailable");
     return c.json(
-      DesktopRecoveryResponse.parse({
-        pending: pending.map((job) => ({
-          ...job,
-          createdAt: job.createdAt.toISOString(),
-          nextAttemptAt: job.nextAttemptAt.toISOString(),
-        })),
-        uncertain: writes ? await writes.uncertain(deps.clock()) : [],
-      }),
+      DesktopRecoveryResponse.parse({ uncertain: await writes.uncertain(deps.clock()) }),
     );
   });
   groups.authed.post(

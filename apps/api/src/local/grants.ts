@@ -47,6 +47,17 @@ export interface LocalGrantService {
    * signed in, so nothing of theirs is keyed by their login yet.
    */
   ownerPath(identityId: string, path: string): Promise<{ identityId: string; path: string } | null>;
+  /**
+   * What `onMoved` does, as data a caller applies in its own transaction (a
+   * Mac write's receipt): the owner's username and the move, or `null` when
+   * no share can follow (a file, or not a local login).
+   */
+  grantMove(
+    identityId: string,
+    from: string,
+    to: string,
+    isDir: boolean,
+  ): Promise<{ owner: string; from: string; to: string } | null>;
   /** The owner moved a folder in fdrive: its shares follow. */
   onMoved(identityId: string, from: string, to: string, isDir: boolean): Promise<void>;
   /** The owner deleted a folder for good: its shares end. */
@@ -99,6 +110,12 @@ export function createLocalGrantService(deps: LocalGrantServiceDeps): LocalGrant
     if (providerId === null) return null;
     const identity = await repos.identities.get(identityId);
     return identity?.providerId === providerId ? identity : null;
+  }
+
+  async function grantMove(identityId: string, from: string, to: string, isDir: boolean) {
+    if (!isDir || from === to) return null;
+    const identity = await localLogin(identityId);
+    return identity === null ? null : { owner: identity.externalUsername, from, to };
   }
 
   async function requireLogin(identityId: string): Promise<Identity> {
@@ -282,11 +299,11 @@ export function createLocalGrantService(deps: LocalGrantServiceDeps): LocalGrant
       return { identityId: owner.id, path: joinPath(folder.path, ...segments.slice(2)) };
     },
 
+    grantMove,
+
     async onMoved(identityId, from, to, isDir) {
-      if (!isDir) return;
-      const identity = await localLogin(identityId);
-      if (identity === null) return;
-      await repos.localGrants.movePrefix(identity.externalUsername, from, to);
+      const move = await grantMove(identityId, from, to, isDir);
+      if (move !== null) await repos.localGrants.movePrefix(move.owner, move.from, move.to);
     },
 
     async onDeleted(identityId, path, isDir) {
