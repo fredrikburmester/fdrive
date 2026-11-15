@@ -166,7 +166,10 @@ version leaves out its modification time, so a change inside a folder never refu
 folder. A new name, of a create or of a save that renames, is linked into place only while it is
 free, so of two creates racing for a name one gets `name_collision`. One listing of the parent per
 commit catches a name that differs from a taken one only in case or Unicode normalization, which
-the disk may tell apart. Moves, folders included, are one rename.
+the disk may tell apart. Moves, folders included, are one rename. Right before it publishes, a
+commit reads its token once more (one query), so a pairing revoked, expired or changed while the
+commit hashed or copied publishes nothing and answers 401; a create is checked as its copy ends,
+before the name is linked.
 
 Mac writes take no lock, like the web app, Collabora and the OCR service. Nothing fences a writer
 at the storage: anything on the host (rsync, SMB, Syncthing) can write the files folder, and a

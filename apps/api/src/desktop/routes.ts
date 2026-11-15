@@ -1,4 +1,5 @@
 import {
+  ApiTokenAccess,
   CanonicalUuid,
   DESKTOP_API,
   DesktopChangeAnchor,
@@ -121,9 +122,28 @@ export function registerDesktopRoutes(
         !(writeProtocol && resolved.tokenAccess?.mode === "full"))
     )
       throw new ApiHttpError("unauthorized", "Reconnect this location in the Mac app");
-    // Resolved once per request: the one check of a token's authority that
-    // any desktop request, a commit included, makes.
-    return { bearer, principal: resolved };
+    const hash = hashApiToken(bearer);
+    return {
+      bearer,
+      principal: {
+        ...resolved,
+        // A write's one recheck right before it publishes (`writes.ts`), in
+        // one read: the token still exists, unexpired, for this login, with
+        // the grant it had when the request began.
+        verifyAuthority: async () => {
+          const token = await deps.apiTokens.findByHash(hash);
+          const access = ApiTokenAccess.safeParse(token?.access);
+          return (
+            token !== null &&
+            access.success &&
+            (token.expiresAt === null || token.expiresAt.getTime() > deps.clock().getTime()) &&
+            token.accountId === resolved.accountId &&
+            token.identityId === resolved.identityId &&
+            JSON.stringify(access.data) === JSON.stringify(resolved.tokenAccess)
+          );
+        },
+      },
+    };
   }
   groups.public.post(`${base}/pairings`, async (c) => {
     const body = await parseBody(DesktopPairRequest, c);

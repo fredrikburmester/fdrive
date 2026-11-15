@@ -40,6 +40,7 @@ async function fixture(
     access?: () => Promise<void>;
     indexed?: (principal: Principal) => Promise<ReadonlyMap<string, IndexedContent>>;
     logger?: { warn(obj: Record<string, unknown>, msg: string): void };
+    verifyAuthority?: () => Promise<boolean>;
   } = {},
 ) {
   const stateDir = await mkdtemp(join(tmpdir(), "stamp-proof-"));
@@ -54,6 +55,7 @@ async function fixture(
     isAdmin: false,
     storage,
     tokenAccess: { mode: "full", paths: ["/"] },
+    ...(options.verifyAuthority ? { verifyAuthority: options.verifyAuthority } : {}),
   };
   const service = createDesktopWrites({
     repo: memory.repo,
@@ -457,4 +459,76 @@ it("cannot prove a save on storage that keeps no file stamps", async () => {
     "keeps no file stamps",
   );
   expect(await f.read("/old.txt")).toBe("old");
+});
+
+it("publishes nothing once the pairing is revoked while a save hashes its base", async () => {
+  // Revoked and downgraded alike: the token no longer grants what it granted.
+  let allowed = true;
+  let armed = true;
+  const verifyAuthority = vi.fn(async () => allowed);
+  const f = await fixture({
+    verifyAuthority,
+    wrap: (raw) => ({
+      download: async (path, opts) => {
+        if (armed && path === "/old.txt") allowed = armed = false;
+        return raw.download(path, opts);
+      },
+    }),
+  });
+  const request = await f.save("saved");
+  await expect(f.service.commit(f.principal, request.operationId)).rejects.toMatchObject({
+    kind: "unauthorized",
+  });
+  expect(await f.read("/old.txt")).toBe("old");
+  expect(await f.state(request.operationId)).toBe("ready");
+  // One recheck per commit, after the base was read.
+  expect(verifyAuthority).toHaveBeenCalledTimes(1);
+  allowed = true;
+  expect((await f.service.commit(f.principal, request.operationId)).state).toBe("completed");
+  expect(verifyAuthority).toHaveBeenCalledTimes(2);
+});
+
+it("publishes no create, folder or move once the pairing is revoked", async () => {
+  let allowed = true;
+  const raw = createMemoryStorage({ "/old.txt": "old" });
+  const f = await fixture({
+    storage: raw,
+    verifyAuthority: async () => allowed,
+    // A create is checked as its copy ends, right before the name is linked.
+    wrap: (inner) => ({
+      upload: async (path, bytes, opts) => {
+        if (path === "/new.txt") allowed = false;
+        return inner.upload(path, bytes, opts);
+      },
+    }),
+  });
+  const create = await f.create(f.principal, "new.txt", "mine");
+  await expect(f.service.commit(f.principal, create.operationId)).rejects.toMatchObject({
+    kind: "unauthorized",
+  });
+  await expect(raw.stat("/new.txt")).rejects.toMatchObject({ kind: "not_found" });
+  expect(await f.state(create.operationId)).toBe("ready");
+  const folder = await f.folder("reports");
+  const move = await f.move("/old.txt", "renamed.txt");
+  for (const request of [folder, move]) {
+    await expect(f.service.commit(f.principal, request.operationId)).rejects.toMatchObject({
+      kind: "unauthorized",
+    });
+    expect(await f.state(request.operationId)).toBe("ready");
+  }
+  expect((await raw.list("/")).map((entry) => entry.path)).toEqual(["/old.txt"]);
+  // A failure of the upload itself is still reported as storage's own.
+  allowed = true;
+  const failing = await fixture({
+    verifyAuthority: async () => true,
+    wrap: () => ({
+      upload: async () => {
+        throw new StorageError("payload_too_large", "Disk full");
+      },
+    }),
+  });
+  const full = await failing.create(failing.principal, "new.txt", "mine");
+  await expect(failing.service.commit(failing.principal, full.operationId)).rejects.toMatchObject({
+    kind: "payload_too_large",
+  });
 });

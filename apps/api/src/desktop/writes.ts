@@ -185,15 +185,56 @@ export function createDesktopWrites(deps: DesktopWriteDeps) {
     if (found?.kind !== "dir") fail("version_conflict", CHANGED);
   }
   /**
-   * Refuses a write this connection may not make. The route resolved its
-   * token for this request (`routes.ts`), which is the one check of its
-   * authority a request makes.
+   * Refuses a write this connection may not make, from the grant the route
+   * resolved for this request (`routes.ts`). A commit reads the token once
+   * more, right before it publishes (`stillGranted`).
    */
   function authority(principal: Principal) {
     if (!capabilities(principal).create)
       throw new ApiHttpError("forbidden", "This location cannot enforce safe writes", {
         code: "unsupported",
       });
+  }
+  /**
+   * A commit's one recheck of its authority, made right before it publishes,
+   * so a token revoked, expired or changed while the commit hashed, staged or
+   * copied publishes nothing. One read of the token (`routes.ts`).
+   */
+  const granted = async (principal: Principal) =>
+    !principal.verifyAuthority || (await principal.verifyAuthority());
+  function revoked(): never {
+    throw new ApiHttpError("unauthorized", "Connection was revoked");
+  }
+  async function stillGranted(principal: Principal) {
+    if (!(await granted(principal))) revoked();
+  }
+  /**
+   * Uploads `body` under the new name `target`, rechecking authority as the
+   * copy ends: a refusal fails the upload before the files folder links the
+   * file into place, so nothing is published. Storage reports a failure of
+   * the body as its own, so the refusal is told apart here.
+   */
+  async function uploadIfGranted(
+    principal: Principal,
+    target: string,
+    body: ReadableStream<Uint8Array>,
+    size: number,
+  ) {
+    let refused = false;
+    const checked = body.pipeThrough(
+      new TransformStream<Uint8Array, Uint8Array>({
+        async flush() {
+          refused = !(await granted(principal));
+          if (refused) throw Error("Connection was revoked");
+        },
+      }),
+    );
+    try {
+      await principal.storage.upload(target, checked, { overwrite: false, contentLength: size });
+    } catch (error) {
+      if (refused) revoked();
+      throw error;
+    }
   }
   async function record(principal: Principal, id: string) {
     if (id === "trash") return repo.ensure(principal.identityId, trashRoot(principal), "dir");
@@ -945,6 +986,7 @@ export function createDesktopWrites(deps: DesktopWriteDeps) {
             // A save in place: staged, then renamed over the original once its
             // stamp shows nobody wrote it since the base was proven.
             const staged = await stage(principal, op, request.size, body);
+            await stillGranted(principal);
             await unchanged(storage, source.path, witness);
             await publish(() => storage.move(staged.path, target, { overwrite: true }));
             await tidy(principal, id, staged.internal);
@@ -954,18 +996,16 @@ export function createDesktopWrites(deps: DesktopWriteDeps) {
             // writes beside the name and links last, so a failed upload
             // published nothing.
             if (source && witness) await unchanged(storage, source.path, witness);
-            await publish(
-              () =>
-                storage.upload(target, body(), { overwrite: false, contentLength: request.size }),
-              true,
-            );
+            await publish(() => uploadIfGranted(principal, target, body(), request.size), true);
             if (source && witness) await retire(principal, source.path, witness, id);
           }
         } else if (request.kind === "folder") {
+          await stillGranted(principal);
           await publish(() => storage.mkdir(target));
         } else if (source) {
           if (trashing) await storage.mkdir(trashRoot(principal), { parents: true });
           if (source.path !== target) {
+            await stillGranted(principal);
             await (witness
               ? unchanged(storage, source.path, witness, true)
               : stillFolder(storage, source.path));
