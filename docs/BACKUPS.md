@@ -155,7 +155,7 @@ the web and API behind HTTPS before submitting a recovery key remotely.
 Both paths validate every archive entry and checksum before import. Paths from an archive
 are never used as extraction paths. Destination secrets are resealed under the new master key.
 All providers/features/schedules start disabled, browser sessions are absent, API tokens are
-revoked, unfinished scans become interrupted history, and old native effects remain quarantined.
+revoked and unfinished scans become interrupted history.
 Captures enforce the same format limits as restore: 4 MiB per database row/header, 100,000 recovery files, 64 MiB manifest and 1 TiB uncompressed archive. Oversized captures fail before publication. Existing archive files are never replaced.
 
 Restoring into a nonempty durable database is refused. A failed import rolls back rows and

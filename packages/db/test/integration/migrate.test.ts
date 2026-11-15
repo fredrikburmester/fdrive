@@ -268,7 +268,7 @@ describe("migrate", () => {
       await cp(folder, before, { recursive: true });
       const journal = JSON.parse(await readFile(path.join(folder, "meta/_journal.json"), "utf8"));
       const last = journal.entries.findIndex(
-        (entry: { tag: string }) => entry.tag === "0031_local_passwords",
+        (entry: { tag: string }) => entry.tag === "0032_local_passwords",
       );
       journal.entries = journal.entries.slice(0, last);
       await writeFile(path.join(before, "meta/_journal.json"), JSON.stringify(journal));

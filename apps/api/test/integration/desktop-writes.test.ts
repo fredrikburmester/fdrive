@@ -3,10 +3,10 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DesktopPairing, DesktopWriteEntry, DesktopWritePairResult } from "@fdrive/contracts";
-import { createDb, createDesktopEffectsRepo, createRepos } from "@fdrive/db";
+import { createDb, createRepos } from "@fdrive/db";
 import { startLocalStorage, startPostgres } from "@fdrive/testkit";
 import pino from "pino";
-import { expect, it, vi } from "vitest";
+import { expect, it } from "vitest";
 import { composeApp } from "../../src/composition.js";
 import { loadConfig } from "../../src/config.js";
 import { seedLocalUsers } from "./helpers/local-storage.ts";
@@ -14,8 +14,8 @@ import { seedLocalUsers } from "./helpers/local-storage.ts";
 /**
  * The Mac app's write path on the files folder, under fdrive's per-identity
  * publish lock: durable replay, conflict protection, Trash and restore, and
- * metadata effects that survive a database outage and a restart. Another
- * writer is a program changing alice's folder on disk.
+ * receipts that survive a metadata outage and a restart. Another writer is a
+ * program changing alice's folder on disk.
  */
 it("publishes complete files with durable replay and conflict protection", async () => {
   const postgres = await startPostgres();
@@ -232,11 +232,11 @@ it("publishes complete files with durable replay and conflict protection", async
     expect(await readDisk("/Tree/nested/new.txt")).toBe("new");
 
     // A successful publication remains completed even when PostgreSQL refuses
-    // its metadata effects. A fresh API process drains the durable work.
+    // its metadata, and nothing waits for that metadata: the indexer's report
+    // of the move brings it along (`desktop-metadata.test.ts`).
     const database = createDb(postgres.connectionString);
     try {
       const repos = createRepos(database.db);
-      const recovery = createDesktopEffectsRepo(database.db);
       await repos.favorites.add(writable.location.identityId, "/restored.txt", "file");
       await database.pool.query(
         `CREATE FUNCTION app.reject_native_metadata() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF OLD.path = '/restored.txt' THEN RAISE EXCEPTION 'injected metadata outage'; END IF; RETURN NEW; END $$`,
@@ -247,35 +247,17 @@ it("publishes complete files with durable replay and conflict protection", async
       const rename = await move(await stat("/restored.txt"), "root", "recovered.txt");
       const receipt = await json(`${base}/operations/${rename}/commit`, {});
       expect(receipt).toMatchObject({ state: "completed", item: { path: "/recovered.txt" } });
-      await vi.waitFor(
-        async () => {
-          expect(
-            (await recovery.status()).find((job) => job.operationId === rename)?.attempts,
-          ).toBeGreaterThan(0);
-        },
-        { timeout: 15000 },
-      );
       expect((await repos.favorites.list(writable.location.identityId))[0]?.path).toBe(
         "/restored.txt",
       );
       expect(await json(`${base}/operations/${rename}/commit`, {})).toEqual(receipt);
-      // Preserve an independently recreated source even after recovery/replay.
+      // Preserve an independently recreated source even after a replay.
       await writeFile(onDisk("/restored.txt"), "peer after rename");
       await composed.close();
       await database.pool.query("DROP TRIGGER reject_native_metadata ON app.favorites");
-      await database.pool.query(
-        "UPDATE app.desktop_effects SET next_attempt_at = now() WHERE state = 'pending'",
-      );
+      await database.pool.query("DROP FUNCTION app.reject_native_metadata()");
       composed = await composeApp(config, pino({ level: "silent" }));
-      await vi.waitFor(
-        async () => {
-          expect(await recovery.pending(writable.location.identityId)).toBe(false);
-        },
-        { timeout: 15000 },
-      );
-      expect((await repos.favorites.list(writable.location.identityId))[0]?.path).toBe(
-        "/recovered.txt",
-      );
+      // A restarted API answers with the same receipt and publishes nothing again.
       expect(await json(`${base}/operations/${rename}/commit`, {})).toEqual(receipt);
       expect(await readDisk("/recovered.txt")).toBe("second");
       expect(await readDisk("/restored.txt")).toBe("peer after rename");

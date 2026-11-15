@@ -222,8 +222,15 @@
     {
       "idx": 31,
       "version": "7",
-      "when": 1794702364702,
-      "tag": "0031_local_passwords",
+      "when": 1794702440349,
+      "tag": "0031_drop_desktop_effects",
+      "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "7",
+      "when": 1794704022693,
+      "tag": "0032_local_passwords",
       "breakpoints": true
     }
   ]

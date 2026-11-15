@@ -18,7 +18,7 @@ migrations, compatibility shims or configuration aliases; a full reindex is acce
 - Groups that add a migration run one at a time and need `pnpm test:integration`.
 - 13–15 run strictly in order: they share `apps/api/src/auth/service.ts`, `composition.ts` and the
   contracts.
-- 16 before 17, 26, 31 and 32. 16 and 23 before 18. 36 and 37 last.
+- 16 before 17, 18, 26, 31 and 32. 36 and 37 last.
 
 ## Decisions
 
@@ -97,8 +97,6 @@ Recommended on 2026-11-14 and approved by the owner the same day.
 
 All but 27 are server-only and keep shipped Mac builds working.
 
-23. Apply metadata inline after Mac writes and drop `app.desktop_effects` and the five `revision`
-    columns that serve it.
 24. Detect conflicts from the file stamp; drop the publish lock and its pool, `previous` copies,
     30-day retention, the 64 GiB reservation and re-hashing on renames.
 25. Stage uploads inside the files folder so a commit can always tell whether it happened; drop
