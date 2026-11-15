@@ -74,7 +74,15 @@ it("binds a preview token to one share, one file, one visitor and five minutes",
     ),
   ).toBe(false);
   const [expires, mac] = token.split(".");
+  // The MAC's last character carries 2 unused bits; setting one decodes to the
+  // same bytes, and is still not the token that was issued.
+  const base64url = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+  const twin = base64url[base64url.indexOf(mac?.at(-1) ?? "") + 1];
+  expect(Buffer.from(`${mac?.slice(0, -1)}${twin}`, "base64url")).toEqual(
+    Buffer.from(mac ?? "", "base64url"),
+  );
   for (const bad of [
+    `${expires}.${mac?.slice(0, -1)}${twin}`,
     "",
     "nonsense",
     `${expires}.${mac}x`,

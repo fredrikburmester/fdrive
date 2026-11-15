@@ -71,7 +71,9 @@ export function createShareCredentialCodec(master: Uint8Array, clock: () => Date
       const now = clock().getTime();
       if (expires <= now || expires > now + SHARE_PREVIEW_SECONDS * 1000) return false;
       const mac = Buffer.from(match[2] ?? "", "base64url");
-      return mac.length === 32 && timingSafeEqual(mac, previewMac(id, path, visitor, expires));
+      // Only the MAC as it was issued: decoding ignores the last character's unused bits.
+      if (mac.length !== 32 || mac.toString("base64url") !== match[2]) return false;
+      return timingSafeEqual(mac, previewMac(id, path, visitor, expires));
     },
     encode(id: string, credential: ShareCredential): string {
       const payload = Payload.parse({
