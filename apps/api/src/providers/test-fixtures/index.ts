@@ -1,4 +1,4 @@
-import { type ProviderModule, StorageError } from "@fdrive/core";
+import type { ProviderModule } from "@fdrive/core";
 import { createMemoryStorage } from "@fdrive/core/testing";
 import type { Provider, Repos } from "@fdrive/db";
 import type { SystemEventLog } from "../../system/event-log.js";
@@ -72,9 +72,8 @@ export async function seedProviderRow(
 
 /**
  * A provider module for tests of generic behaviour, registered under the
- * only type there is (`local`) so the registry accepts its rows. Its users
- * sign in with `<username>-pass`, its storage is in memory, and every part
- * can be overridden.
+ * only type there is (`local`) so the registry accepts its rows. Its storage
+ * is in memory, and every part can be overridden.
  */
 export function fakeProviderModule(overrides: Partial<ProviderModule> = {}): ProviderModule {
   return {
@@ -98,13 +97,6 @@ export function fakeProviderModule(overrides: Partial<ProviderModule> = {}): Pro
     trash: "none",
     shares: "none",
     probe: async () => ({ ok: true, detail: "reachable" }),
-    async authenticate(_instance, credential, ctx) {
-      const username = credential.username ?? ctx.expectedUsername ?? "";
-      if (username.length === 0 || credential.password !== `${username}-pass`) {
-        throw new StorageError("unauthorized", "invalid username or password");
-      }
-      return { externalUsername: username };
-    },
     createStorage: () => createMemoryStorage(),
     ...overrides,
   };

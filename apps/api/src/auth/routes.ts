@@ -39,12 +39,7 @@ export function registerAuthRoutes(
     const ip = extractClientIp(c, deps.config.fdriveTrustedProxyHops);
     const userAgent = c.req.header("user-agent") ?? null;
 
-    const result = await deps.service.login({
-      ...(parsed.data.providerId !== undefined ? { providerId: parsed.data.providerId } : {}),
-      credential: parsed.data.credential,
-      userAgent,
-      ip,
-    });
+    const result = await deps.service.login({ ...parsed.data, userAgent, ip });
 
     c.header(
       "Set-Cookie",

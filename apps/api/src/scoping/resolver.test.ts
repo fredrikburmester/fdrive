@@ -6,7 +6,6 @@ import { createScopeResolver } from "./resolver.ts";
 import { buildIdentity, buildProvider, fakeProviders } from "./test-fixtures/index.ts";
 
 const users: LocalUsers = {
-  verify: async () => ({ result: "invalid" }),
   status: async () => "active",
   shared: async () => [],
 };

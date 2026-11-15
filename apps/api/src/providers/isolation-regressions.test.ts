@@ -1,7 +1,6 @@
 import { createMemoryRepos } from "@fdrive/db/testing";
 import { expect, it } from "vitest";
 import { createApp } from "../app.ts";
-import { createAuthModule } from "../auth/index.ts";
 import { authHarness } from "../auth/test-fixtures/index.ts";
 import { createScopeResolver } from "../scoping/resolver.ts";
 import { createSetupService } from "../setup/service.ts";
@@ -11,53 +10,22 @@ import {
   seedProviderRow,
 } from "./test-fixtures/index.ts";
 
-it("scopes env administrators to the storage the deployment pins", async () => {
-  const h = authHarness();
-  await h.seeded;
-  // A second row alice can also sign in to, which the deployment does not pin.
-  const second = await seedProviderRow(h.repos, "http://second.test", { label: "Second" });
-  const auth = createAuthModule({
-    ...h.deps,
-    providers: h.providers,
-    master: h.master,
-    clock: h.clock,
-    logins: h.logins,
-    config: h.config,
-    storageFactory: h.storageFactory,
-    adminUsernames: ["alice"],
-  });
-  const result = await auth.service.login({
-    providerId: second.id,
-    credential: { username: "alice", password: "alice-pass" },
-    ip: "review",
-    userAgent: null,
-  });
-  expect((await h.repos.accounts.get(result.me.account.id))?.isAdmin).toBe(false);
-  expect(result.me.isAdmin).toBe(false);
-  const original = await h.seeded;
-  const admin = await auth.service.login({
-    providerId: original.id,
-    credential: { username: "alice", password: "alice-pass" },
-    ip: "review",
-    userAgent: null,
-  });
-  expect(admin.me.isAdmin).toBe(true);
-});
-
 it("keeps env setup complete and sessions usable after disabling its last provider", async () => {
   const h = authHarness();
   const row = await h.seeded;
   const login = await h.login();
   const setup = createSetupService({
     authService: h.auth.service,
-    accounts: h.repos.accounts,
-    identities: h.repos.identities,
+    logins: h.repos.logins,
     settings: h.repos.settings,
-    local: {
-      provider: async () => row,
-      userCount: () => h.repos.localUsers.count(),
-      users: { createOwner: async () => async () => {} },
-    },
+    passwords: h.passwords,
+    localProvider: async () => row,
+  });
+  await setup.complete({
+    username: "owner",
+    password: "owner-pass",
+    userAgent: null,
+    ip: "review",
   });
   const app = createApp({
     config: h.config,

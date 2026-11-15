@@ -3,9 +3,8 @@ import type { Repos } from "@fdrive/db";
 import type { FilesFolderGuard } from "@fdrive/local";
 import type { AppConfig, IndexRootConfig } from "../config.js";
 import { createProviderModules, type ProviderModules } from "../providers/registry.js";
-import { createScryptSharePasswords, type SharePasswords } from "../shares/passwords.js";
 import type { ChangeQueue } from "./change-queue.js";
-import { createLocalUserStore } from "./users.js";
+import { createLocalUsers } from "./users.js";
 
 /** The index root name the local folder has when no configured root names it. */
 export const LOCAL_INDEX_ROOT = "files";
@@ -56,7 +55,6 @@ export function journalRoot(
 export function deploymentModules(
   config: Pick<AppConfig, "fdriveStorageRoot" | "fdriveIndexRoots">,
   repos: Pick<Repos, "localUsers" | "localGrants">,
-  passwords: SharePasswords = createScryptSharePasswords(),
   changes?: ChangeQueue,
   guard?: FilesFolderGuard,
   closedFolders?: (providerId: string) => Promise<readonly string[]>,
@@ -67,7 +65,7 @@ export function deploymentModules(
   return createProviderModules({
     local: {
       root,
-      users: createLocalUserStore({ repo: repos.localUsers, grants: repos.localGrants, passwords }),
+      users: createLocalUsers({ repo: repos.localUsers, grants: repos.localGrants }),
       // When `journaled` names a root, this is the same one: it matches first.
       indexRoot: localIndexRoot(config.fdriveIndexRoots, root),
       ...(guard === undefined ? {} : { guard }),

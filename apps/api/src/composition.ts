@@ -13,7 +13,6 @@ import {
   createDesktopRepo,
   createFilesFolderFacts,
   createIndexQueries,
-  createLoginRepo,
   createOfficeFileRepo,
   createOfficeWriteScope,
   createPool,
@@ -25,7 +24,6 @@ import {
 } from "@fdrive/db";
 import { SHARED_WITH_ME } from "@fdrive/local";
 import type { Logger } from "pino";
-import { verifyCredentials } from "./accounts/credentials.js";
 import { createActivityAdmission } from "./activity/admission.ts";
 import { registerActivityExports } from "./activity/exports.ts";
 import { createActivityMaintenance } from "./activity/maintenance.ts";
@@ -40,7 +38,14 @@ import { registerAiRoutes } from "./ai/routes.ts";
 import { createAiSettingsService, type ResolvedAiConfig } from "./ai/settings.ts";
 import type { AppHono } from "./app.js";
 import { createApp } from "./app.js";
-import { createAuthModule, createLoginLimiter, open, parseMasterKey, seal } from "./auth/index.js";
+import {
+  createAuthModule,
+  createLoginLimiter,
+  createPasswordCheck,
+  open,
+  parseMasterKey,
+  seal,
+} from "./auth/index.js";
 import {
   createIdentityStorageFactory,
   createPinnedStorageFactory,
@@ -220,8 +225,7 @@ export async function composeApp(
     return reservedFolders(settings.enabled ? settings.path : null);
   };
   const modules =
-    deps.modules ??
-    deploymentModules(config, repos, passwords, changes, filesFolder, closedFolders);
+    deps.modules ?? deploymentModules(config, repos, changes, filesFolder, closedFolders);
   const backups = createBackupModule(config, modules);
   await backups.start();
 
@@ -287,11 +291,14 @@ export async function composeApp(
     grants: repos.localGrants,
     passwords,
   });
+  // One limiter for every password check and setup, so failures anywhere count everywhere.
+  const limiter = createLoginLimiter({ clock });
+  const checkPassword = createPasswordCheck({ limiter, users: localUserStore });
   const localUsers = createLocalUserService({
     repos,
-    store: localUserStore,
+    checkPassword,
     passwords,
-    master,
+    clock,
     providerId: async () => (await localProvider())?.id ?? null,
     environmentAdmins: config.fdriveAdminUsers,
     eventLog,
@@ -308,7 +315,6 @@ export async function composeApp(
 
   const bus = createEventBus();
   const jobRunner = createJobRunner({ clock, bus });
-  const limiter = createLoginLimiter({ clock });
   // The address everyone opens fdrive at, chosen in onboarding. Deployments
   // from before it was a setting of its own stored it as Office's `appUrl`;
   // that value stays in force until the owner saves the address here.
@@ -340,14 +346,11 @@ export async function composeApp(
     fetch: fetchImpl,
   });
   const auth = createAuthModule({
-    logins: createLoginRepo(db),
     repos,
     providers: providerService,
-    fetch: fetchImpl,
-    master,
     clock,
     config,
-    limiter,
+    checkPassword,
     storageFactory,
   });
 
@@ -658,18 +661,11 @@ export async function composeApp(
   const setupTokenGuard = createSetupTokenGuard(setupToken);
   const setupService = createSetupService({
     authService: auth.service,
-    accounts: repos.accounts,
-    identities: repos.identities,
+    logins: repos.logins,
     settings: repos.settings,
-    ...(modules.local === undefined
-      ? {}
-      : {
-          local: {
-            provider: localProvider,
-            userCount: () => repos.localUsers.count(),
-            users: localUsers,
-          },
-        }),
+    passwords,
+    clock,
+    ...(modules.local === undefined ? {} : { localProvider }),
   });
 
   if ((await setupService.status()).required) {
@@ -908,21 +904,11 @@ export async function composeApp(
       registerBackupRoutes(
         groups,
         backups,
-        async (accountId, identityId, credential, ip) => {
+        async (accountId, identityId, password, ip) => {
           const identity = await repos.identities.get(identityId);
           if (!identity || identity.accountId !== accountId)
             throw new ApiHttpError("unauthorized", "Storage identity changed");
-          const verified = await verifyCredentials(
-            { repos, providers: providerService, limiter, fetch: fetchImpl },
-            {
-              providerId: identity.providerId,
-              expectedUsername: identity.externalUsername,
-              credential,
-              ip,
-            },
-          );
-          if (verified.externalUsername !== identity.externalUsername)
-            throw new ApiHttpError("unauthorized", "Storage identity changed");
+          await checkPassword({ username: identity.externalUsername, password, ip });
         },
         config.fdriveTrustedProxyHops,
       );
@@ -1018,7 +1004,10 @@ export async function composeApp(
         config,
       });
       registerProviderRoutes(groups, { service: providerService });
-      registerLocalUserRoutes(groups, { service: localUsers });
+      registerLocalUserRoutes(groups, {
+        service: localUsers,
+        clientIp: (c) => extractClientIp(c, config.fdriveTrustedProxyHops),
+      });
       registerGrantRoutes(groups, { service: localGrants });
       // Built as a local variable (not a fresh object literal at the call
       // site below) so `archivePeekMaxBytes` (not part of `FsRoutesDeps`
