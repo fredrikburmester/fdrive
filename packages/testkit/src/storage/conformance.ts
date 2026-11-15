@@ -169,13 +169,15 @@ export function describeStorageProvider(
 
     it("stages an upload's body outside the caller's critical section and publishes inside it", async () => {
       let inside = 0;
-      let visibleWhileStaging: string | null = "unread";
-      const steps: string[] = [];
+      /** How many critical sections were open each time the body was read. */
+      const openWhileStaging: number[] = [];
+      const seen: (string | null)[] = [];
+      const entered: number[] = [];
       const path = `${root}/staged/deep/file.txt`;
       const body = new ReadableStream<Uint8Array>({
         async pull(controller) {
-          steps.push(inside > 0 ? "body inside" : "body outside");
-          visibleWhileStaging = await kindOf(storage.stat(path));
+          openWhileStaging.push(inside);
+          seen.push(await kindOf(storage.stat(path)));
           controller.enqueue(new TextEncoder().encode("staged"));
           controller.close();
         },
@@ -184,18 +186,16 @@ export function describeStorageProvider(
         mkdirParents: true,
         critical: async (work) => {
           inside++;
-          steps.push("enter");
-          try {
-            return await work();
-          } finally {
-            inside--;
-          }
+          entered.push(openWhileStaging.length);
+          const result = await work();
+          inside--;
+          return result;
         },
       });
-      expect(steps).toContain("body outside");
-      expect(steps).not.toContain("body inside");
-      expect(steps.at(-1)).toBe("enter");
-      expect(visibleWhileStaging).toBe("not_found");
+      expect(openWhileStaging).toEqual([0]);
+      // Nothing is at the path while the body arrives, and it is published last.
+      expect(seen).toEqual(["not_found"]);
+      expect(entered.at(-1)).toBe(1);
       expect(await text((await storage.download(path)).body)).toBe("staged");
     });
 
