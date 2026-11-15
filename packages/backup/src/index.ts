@@ -1,4 +1,3 @@
-export * from "./attachments.js";
 export * from "./catalog.js";
 export * from "./checkpoint.js";
 export * from "./destinations.js";

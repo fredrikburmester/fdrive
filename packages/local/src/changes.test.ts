@@ -2,11 +2,10 @@ import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, readFile, realpath, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { StorageSession } from "@fdrive/core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { bytes, kindOf, streamOf } from "../test/helpers.js";
 import { type DiskChange, type IndexChange, notify, relativeTo, underRoot } from "./changes.js";
-import { createIndexListener, createLocalModule, type LocalUsers } from "./module.js";
+import { createFilesFolder, createIndexListener, type LocalUsers } from "./files-folder.js";
 import { createUserStorage, SHARED_WITH_ME } from "./shared.js";
 import { createLocalStorage, published } from "./storage-provider.js";
 
@@ -64,7 +63,14 @@ describe("relativeTo and underRoot", () => {
       path: "a/x",
       target: "a/y",
     });
-    expect(underRoot("/data", { kind: "moved", path: "/data/a/x", target: "/tmp/y" })).toEqual({
+    const stamp = { size: 1, mtimeNs: 2n, ino: 3n, ctimeNs: 4n, previousCtimeNs: 3n };
+    expect(
+      underRoot("/data", { kind: "moved", path: "/data/a/x", target: "/data/a/y", stamp }),
+    ).toEqual({ kind: "moved", path: "a/x", target: "a/y", stamp });
+    // A file that left the root or arrived in it is looked at where it is.
+    expect(
+      underRoot("/data", { kind: "moved", path: "/data/a/x", target: "/tmp/y", stamp }),
+    ).toEqual({
       kind: "changed",
       path: "a/x",
     });
@@ -126,8 +132,11 @@ describe("local storage changes", () => {
     expect(await published(at, written)).toEqual({
       content: { ...written, ctimeNs: info.ctimeNs },
     });
-    // Another writer's file at the name, or none at all: no digest to trust.
+    // Another writer's file at the name, one changed since it was written, or none at all:
+    // no digest to trust.
     expect(await published(at, { ...written, ino: info.ino + 1n })).toEqual({});
+    expect(await published(at, { ...written, size: 2 })).toEqual({});
+    expect(await published(at, { ...written, mtimeNs: info.mtimeNs + 1n })).toEqual({});
     expect(await published(join(root, "missing.txt"), written)).toEqual({});
   });
 
@@ -214,8 +223,10 @@ describe("local storage changes", () => {
     const files = storage();
     await files.mkdir("/dir");
     await files.upload("/dir/a.txt", bytes("a"));
+    const before = await stat(join(home(), "dir", "a.txt"), { bigint: true });
     changes = [];
     await files.move("/dir/a.txt", "/dir/b.txt");
+    const after = await stat(join(home(), "dir", "b.txt"), { bigint: true });
     await files.copy("/dir", "/copy");
     await files.copy("/dir/b.txt", "/c.txt");
     await files.setModifiedAt?.("/c.txt", new Date("2020-01-01T00:00:00Z"));
@@ -224,7 +235,19 @@ describe("local storage changes", () => {
     await files.deleteDir("/");
     await files.mkdir("/again");
     expect(changes).toEqual([
-      { kind: "moved", path: join(home(), "dir", "a.txt"), target: join(home(), "dir", "b.txt") },
+      {
+        kind: "moved",
+        path: join(home(), "dir", "a.txt"),
+        target: join(home(), "dir", "b.txt"),
+        // The file exactly as the rename left it, and its change time just before.
+        stamp: {
+          size: 1,
+          mtimeNs: after.mtimeNs,
+          ino: after.ino,
+          ctimeNs: after.ctimeNs,
+          previousCtimeNs: before.ctimeNs,
+        },
+      },
       { kind: "changed", path: join(home(), "copy") },
       { kind: "changed", path: join(home(), "c.txt") },
       { kind: "changed", path: join(home(), "c.txt") },
@@ -291,45 +314,53 @@ describe("user storage changes", () => {
         path: alice("Projects", "new.txt"),
         content: expect.objectContaining({ sha256: sha256("n"), size: 1 }),
       },
-      { kind: "moved", path: alice("Projects", "new.txt"), target: alice("Projects", "n.txt") },
+      {
+        kind: "moved",
+        path: alice("Projects", "new.txt"),
+        target: alice("Projects", "n.txt"),
+        stamp: expect.objectContaining({ size: 1 }),
+      },
     ]);
   });
 
   it("reports a move or copy between the user's files and a shared folder", async () => {
     const files = bobsFiles();
+    await mkdir(bob("dir"));
     await files.move("/own.txt", `/${SHARED_WITH_ME}/Projects/own.txt`);
+    await files.move("/dir", `/${SHARED_WITH_ME}/Projects/dir`);
     await files.copy(`/${SHARED_WITH_ME}/Projects/brief.txt`, "/brief.txt");
     expect(changes).toEqual([
-      { kind: "moved", path: bob("own.txt"), target: alice("Projects", "own.txt") },
+      {
+        kind: "moved",
+        path: bob("own.txt"),
+        target: alice("Projects", "own.txt"),
+        stamp: expect.objectContaining({ size: 3 }),
+      },
+      // A folder's files keep their change times: it names no stamp.
+      { kind: "moved", path: bob("dir"), target: alice("Projects", "dir") },
       { kind: "changed", path: bob("brief.txt") },
     ]);
   });
 });
 
-describe("local module index changes", () => {
-  const instance = { id: "p1", baseUrl: "http://local.invalid", config: {} };
-  const ctx = { fetch: globalThis.fetch };
+describe("files folder index changes", () => {
   const users: LocalUsers = {
-    verify: async (username) => ({ result: "ok", username }),
     status: async () => "active",
     shared: async () => [],
   };
-  const session = (externalUsername: string): StorageSession => ({
-    externalUsername,
-  });
 
   it("reports changes under the index root by the indexer's paths, in order", async () => {
     // The root as configured may be a link to the real folder; storage reports real paths.
     const link = join(await realpath(await mkdtemp(join(tmpdir(), "fdrive-link-"))), "root");
     await symlink(root, link);
     const heard: [string, IndexChange][] = [];
-    const module = createLocalModule({
+    const folder = createFilesFolder({
       root: link,
       users,
       indexRoot: "files",
       onIndexChange: (name, change) => heard.push([name, change]),
     });
-    const files = module.createStorage(instance, session("alice"), ctx);
+    const files = folder.storage("alice");
     await files.upload("/docs/a.txt", bytes("a"), { mkdirParents: true });
     await files.move("/docs/a.txt", "/docs/b.txt");
     await files.deleteFile("/docs/b.txt");
@@ -343,7 +374,15 @@ describe("local module index changes", () => {
           content: expect.objectContaining({ sha256: sha256("a") }),
         },
       ],
-      ["files", { kind: "moved", path: "alice/docs/a.txt", target: "alice/docs/b.txt" }],
+      [
+        "files",
+        {
+          kind: "moved",
+          path: "alice/docs/a.txt",
+          target: "alice/docs/b.txt",
+          stamp: expect.objectContaining({ size: 1 }),
+        },
+      ],
       ["files", { kind: "changed", path: "alice/docs/b.txt" }],
     ]);
     await rm(join(link, ".."), { recursive: true, force: true });
@@ -353,13 +392,13 @@ describe("local module index changes", () => {
     const hear = vi.fn(() => {
       throw new Error("never reached");
     });
-    const unindexed = createLocalModule({ root, users, indexRoot: null, onIndexChange: hear });
-    await unindexed.createStorage(instance, session("alice"), ctx).upload("/a.txt", bytes("a"));
-    const quiet = createLocalModule({ root, users, indexRoot: "files" });
-    await quiet.createStorage(instance, session("alice"), ctx).upload("/b.txt", bytes("b"));
+    const unindexed = createFilesFolder({ root, users, indexRoot: null, onIndexChange: hear });
+    await unindexed.storage("alice").upload("/a.txt", bytes("a"));
+    const quiet = createFilesFolder({ root, users, indexRoot: "files" });
+    await quiet.storage("alice").upload("/b.txt", bytes("b"));
 
-    const throwing = createLocalModule({ root, users, indexRoot: "files", onIndexChange: hear });
-    await throwing.createStorage(instance, session("alice"), ctx).upload("/c.txt", bytes("c"));
+    const throwing = createFilesFolder({ root, users, indexRoot: "files", onIndexChange: hear });
+    await throwing.storage("alice").upload("/c.txt", bytes("c"));
     await vi.waitFor(() => expect(hear).toHaveBeenCalledOnce());
   });
 

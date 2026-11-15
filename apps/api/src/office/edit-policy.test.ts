@@ -1,75 +1,61 @@
-import { expect, it } from "vitest";
-import { allowsOfficeEdit, type OfficeEditRule, parseOfficeEditRules } from "./edit-policy.ts";
+import type { OfficeSettings } from "@fdrive/contracts";
+import { expect, it, vi } from "vitest";
+import { createOfficeEditPolicy } from "./edit-policy.ts";
+import type { OfficeActor } from "./types.ts";
 
-const providerId = "12345678-1234-4234-8234-123456789abc";
-const identity = { providerId, externalUsername: "alice" };
-const rule: OfficeEditRule = {
-  providerId,
-  username: "alice",
-  path: "/",
-  recursive: true,
-  allow: true,
-};
+function actor(username: string): OfficeActor {
+  return { identity: { externalUsername: username } } as OfficeActor;
+}
 
-it("defaults to deny and parses only bounded strict operator rules", () => {
-  expect(parseOfficeEditRules(undefined)).toEqual([]);
-  expect(parseOfficeEditRules("[]")).toEqual([]);
-  expect(parseOfficeEditRules(JSON.stringify([rule]))).toEqual([rule]);
-  for (const value of [
-    "",
-    "broken",
-    "{}",
-    JSON.stringify(Array.from({ length: 501 }, () => rule)),
-    " ".repeat(131073),
-  ])
-    expect(() => parseOfficeEditRules(value)).toThrow();
-  expect(() => parseOfficeEditRules(`"${"Å".repeat(65536)}"`)).toThrow("128 KiB");
-  for (const changed of [
-    { providerId: providerId.toUpperCase() },
-    { providerId: "*" },
-    { username: "" },
-    { username: "a".repeat(256) },
-    { username: "*" },
-    { username: "al?ce" },
-    { path: "/a//b" },
-    { path: "/a/../b" },
-    { path: "/x/" },
-    { path: "/a*" },
-    { path: "/a?" },
-    { recursive: "true" },
-    { allow: 1 },
-    { secret: "not allowed" },
-  ])
-    expect(() => parseOfficeEditRules(JSON.stringify([{ ...rule, ...changed }]))).toThrow();
+function policy(settings: Partial<OfficeSettings> = {}, readOnly = async () => false) {
+  return createOfficeEditPolicy({
+    settings: async () => ({
+      revision: 1,
+      enabled: true,
+      editingEnabled: true,
+      editorUsernames: ["alice"],
+      ...settings,
+    }),
+    grants: { isReadOnly: vi.fn(readOnly) },
+  });
+}
+
+it("lets only the chosen editors edit", async () => {
+  const canEdit = policy();
+  expect(await canEdit(actor("alice"), "/a.docx")).toBe(true);
+  expect(await canEdit(actor("bob"), "/a.docx")).toBe(false);
+  expect(await canEdit(actor("Alice"), "/a.docx")).toBe(false);
 });
-it("requires exact immutable provider and username plus a canonical path", () => {
-  expect(allowsOfficeEdit([], identity, "/a.docx")).toBe(false);
-  expect(allowsOfficeEdit([rule], identity, "/a.docx")).toBe(true);
-  expect(allowsOfficeEdit([rule], { ...identity, providerId: "other" }, "/a.docx")).toBe(false);
-  expect(allowsOfficeEdit([rule], { ...identity, externalUsername: "Alice" }, "/a.docx")).toBe(
-    false,
-  );
-  expect(allowsOfficeEdit([rule], identity, "/a/../b")).toBe(false);
+
+it("lets nobody edit while Office or editing is off", async () => {
+  expect(await policy({ enabled: false })(actor("alice"), "/a.docx")).toBe(false);
+  expect(await policy({ editingEnabled: false })(actor("alice"), "/a.docx")).toBe(false);
 });
-it("honors segment boundaries, exact rules, nested exceptions and deny ties in either order", () => {
-  const folder = { ...rule, path: "/documents" };
-  expect(allowsOfficeEdit([folder], identity, "/documents")).toBe(true);
-  expect(allowsOfficeEdit([folder], identity, "/documents/a.docx")).toBe(true);
-  expect(allowsOfficeEdit([folder], identity, "/documents-other/a.docx")).toBe(false);
-  expect(allowsOfficeEdit([{ ...folder, recursive: false }], identity, "/documents/a.docx")).toBe(
-    false,
+
+it("keeps a folder shared to view only read-only for an editor", async () => {
+  const readOnly = vi.fn(async (_identity: unknown, path: string) =>
+    path.startsWith("/Shared with me/Team/"),
   );
-  const denied = { ...folder, path: "/documents/private", allow: false };
-  const exception = { ...folder, path: "/documents/private/public.docx", recursive: false };
-  expect(allowsOfficeEdit([folder, denied], identity, "/documents/private/a.docx")).toBe(false);
-  expect(
-    allowsOfficeEdit([exception, denied, folder], identity, "/documents/private/public.docx"),
-  ).toBe(true);
-  for (const rules of [
-    [rule, { ...rule, allow: false }],
-    [{ ...rule, allow: false }, rule],
-  ])
-    expect(allowsOfficeEdit(rules, identity, "/a.docx")).toBe(false);
-  expect(allowsOfficeEdit([{ ...rule, recursive: false }], identity, "/")).toBe(true);
-  expect(allowsOfficeEdit([{ ...rule, recursive: false }], identity, "/a.docx")).toBe(false);
+  const canEdit = createOfficeEditPolicy({
+    settings: async () => ({
+      revision: 1,
+      enabled: true,
+      editingEnabled: true,
+      editorUsernames: ["alice"],
+    }),
+    grants: { isReadOnly: readOnly },
+  });
+  expect(await canEdit(actor("alice"), "/Shared with me/Team/a.docx")).toBe(false);
+  expect(await canEdit(actor("alice"), "/Shared with me/Other/a.docx")).toBe(true);
+  expect(readOnly).toHaveBeenCalledWith(
+    { externalUsername: "alice" },
+    "/Shared with me/Team/a.docx",
+  );
+});
+
+it("refuses a noncanonical path before reading settings", async () => {
+  const settings = vi.fn();
+  const canEdit = createOfficeEditPolicy({ settings, grants: { isReadOnly: vi.fn() } });
+  expect(await canEdit(actor("alice"), "/a/../b.docx")).toBe(false);
+  expect(settings).not.toHaveBeenCalled();
 });

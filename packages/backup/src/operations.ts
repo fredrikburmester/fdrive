@@ -128,13 +128,4 @@ export class BackupOperations {
       throw Error("Rehearsal report does not match this installation and snapshot");
     await this.store.setting("backup.rehearsal.v1", report);
   }
-  async inventory(id: string, attachmentVersions: string[]): Promise<void> {
-    await this.store.setting(`backup.inventory.${id}`, { attachmentVersions });
-  }
-  async inventories(ids: string[]): Promise<Record<string, { attachmentVersions: string[] }>> {
-    const values = await this.store.settings(ids.map((id) => `backup.inventory.${id}`));
-    return Object.fromEntries(
-      ids.map((id) => [id, values[`backup.inventory.${id}`] ?? { attachmentVersions: [] }]),
-    ) as Record<string, { attachmentVersions: string[] }>;
-  }
 }

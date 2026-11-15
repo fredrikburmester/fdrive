@@ -99,7 +99,7 @@ export function OfficeSystemPage() {
 
           <SystemSection
             title="Editors"
-            description="Usernames allowed to open documents for editing."
+            description="The users who may open documents for editing."
             contentClassName="flex-row flex-wrap gap-2"
           >
             {editors.length === 0 ? (

@@ -159,7 +159,7 @@ private func exchangeClient(_ exchange: Exchange) throws -> (APIClient, URLSessi
     // Original name taken, first conflict name taken, second conflict name free.
     let exchange = Exchange(collisions: 2)
     let (client, session) = try exchangeClient(exchange); defer { session.invalidateAndCancel() }
-    let coordinator = WriteCoordinator(catalog: catalog, client: client)
+    let coordinator = WriteCoordinator(catalog: catalog, client: client, maxUploadBytes: 16 << 30)
     let result = try await coordinator.perform(route: "uploads", localId: nil, templateKey: "template", parentId: "root",
                                                name: "hello.txt", base: nil, contents: file, progress: Progress(totalUnitCount: -1))
     let names = exchange.requests.filter { $0.url?.path.hasSuffix("/uploads") == true }
@@ -178,7 +178,7 @@ private func exchangeClient(_ exchange: Exchange) throws -> (APIClient, URLSessi
     let (blocked, second) = try exchangeClient(stubborn); defer { second.invalidateAndCancel() }
     try Data("again".utf8).write(to: file)
     await #expect(throws: DriveError.self) {
-        _ = try await WriteCoordinator(catalog: catalog, client: blocked).perform(route: "uploads", localId: nil, templateKey: "again",
+        _ = try await WriteCoordinator(catalog: catalog, client: blocked, maxUploadBytes: 16 << 30).perform(route: "uploads", localId: nil, templateKey: "again",
             parentId: "root", name: "again.txt", base: nil, contents: file, progress: Progress(totalUnitCount: -1))
     }
     let attempted = stubborn.requests.filter { $0.url?.path.hasSuffix("/uploads") == true }
@@ -189,7 +189,7 @@ private func exchangeClient(_ exchange: Exchange) throws -> (APIClient, URLSessi
     #expect(FileManager.default.fileExists(atPath: catalog.recoveryDirectory.appendingPathComponent(stuck.id).appendingPathComponent("content").path))
     // Replaying the callback resumes the current attempt instead of starting a fourth name.
     await #expect(throws: DriveError.self) {
-        _ = try await WriteCoordinator(catalog: catalog, client: blocked).perform(route: "uploads", localId: nil, templateKey: "again",
+        _ = try await WriteCoordinator(catalog: catalog, client: blocked, maxUploadBytes: 16 << 30).perform(route: "uploads", localId: nil, templateKey: "again",
             parentId: "root", name: "again.txt", base: nil, contents: file, progress: Progress(totalUnitCount: -1))
     }
     #expect(try await catalog.pendingWrites().filter { $0.result == nil }.count == 1)

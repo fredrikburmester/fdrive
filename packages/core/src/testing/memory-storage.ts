@@ -54,6 +54,8 @@ export function createMemoryStorage(
   /** Resumable uploads' bytes so far, by part id, until their final piece publishes them. */
   const parts = new Map<string, Uint8Array>();
   const childrenOf = new Map<string, Set<string>>([["/", new Set()]]);
+  /** A folder's inode, kept across a move as a disk's rename keeps it. */
+  const dirInodes = new Map<string, bigint>();
   const nullMtimePaths = new Set((options.nullMtimePaths ?? []).map((p) => normalizePath(p)));
   const clock = options.clock ?? (() => new Date(0));
   // BigInt() rather than literals: the web app type-checks this file for an older target.
@@ -67,9 +69,10 @@ export function createMemoryStorage(
     return childrenOf.has(p);
   }
 
-  function addDir(p: string): void {
+  function addDir(p: string, ino?: bigint): void {
     if (childrenOf.has(p)) return;
     childrenOf.set(p, new Set());
+    dirInodes.set(p, ino ?? tick());
     childrenOf.get(parentPath(p))?.add(p);
   }
 
@@ -103,6 +106,7 @@ export function createMemoryStorage(
       if (dirPath === path || dirPath.startsWith(prefix)) {
         childrenOf.get(parentPath(dirPath))?.delete(dirPath);
         childrenOf.delete(dirPath);
+        dirInodes.delete(dirPath);
       }
     }
   }
@@ -118,6 +122,31 @@ export function createMemoryStorage(
     }
     for (const [filePath, entry] of treeFiles) {
       putFile(`${target}${filePath.slice(source.length)}`, entry.content, entry.mtime);
+    }
+  }
+
+  /** Renames `source` to `target` as a disk does: every file and folder keeps its inode. */
+  function renameTree(source: string, target: string): void {
+    ensureDirsFor(parentPath(target));
+    const file = fileMap.get(source);
+    if (file !== undefined) {
+      removeFile(source);
+      childrenOf.get(parentPath(target))?.add(target);
+      fileMap.set(target, { ...file, ctimeNs: tick() });
+      return;
+    }
+    const prefix = `${source}/`;
+    const treeDirs = [...childrenOf.keys()]
+      .filter((d) => d === source || d.startsWith(prefix))
+      .sort((a, b) => a.length - b.length)
+      .map((d) => [d, dirInodes.get(d)] as const);
+    const treeFiles = [...fileMap.entries()].filter(([f]) => f.startsWith(prefix));
+    removeDirTree(source);
+    for (const [dirPath, ino] of treeDirs) addDir(`${target}${dirPath.slice(source.length)}`, ino);
+    for (const [filePath, entry] of treeFiles) {
+      const moved = `${target}${filePath.slice(source.length)}`;
+      childrenOf.get(parentPath(moved))?.add(moved);
+      fileMap.set(moved, entry);
     }
   }
 
@@ -201,10 +230,18 @@ export function createMemoryStorage(
           size: file.content.length,
           modifiedAt: file.mtime,
           contentType: null,
+          ino: file.ino,
         };
       }
       if (isDir(normalized)) {
-        return { kind: "dir", size: 0, modifiedAt: null, contentType: null };
+        const ino = dirInodes.get(normalized);
+        return {
+          kind: "dir",
+          size: 0,
+          modifiedAt: null,
+          contentType: null,
+          ...(ino === undefined ? {} : { ino }),
+        };
       }
       throw new StorageError("not_found", `not found: ${path}`);
     },
@@ -277,13 +314,14 @@ export function createMemoryStorage(
       const source = normalizePath(path);
       const s = await storage.stat(source);
       if (source === "/") throw new StorageError("not_found", `not found: ${path}`);
+      if (s.kind === "dir" && destination.startsWith(`${source}/`))
+        throw new StorageError("bad_request", `cannot move ${path} into itself`);
       if (fileMap.has(destination) || isDir(destination)) {
         if (opts?.overwrite !== true) throw taken(target);
         if (isDir(destination)) removeDirTree(destination);
         else removeFile(destination);
       }
-      await storage.copy(source, destination, opts);
-      await (s.kind === "file" ? storage.deleteFile(source) : storage.deleteDir(source));
+      renameTree(source, destination);
     },
 
     async copy(path, target, opts): Promise<void> {

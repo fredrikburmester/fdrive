@@ -80,6 +80,7 @@ const ACCOUNT_ID = "00000000-0000-4000-8000-000000000001";
 
 const REQUIRED_ENV = {
   DATABASE_URL: "postgres://localhost/fdrive",
+  FDRIVE_STORAGE_ROOT: "/srv/files",
   FDRIVE_MASTER_KEY: Buffer.alloc(32, 7).toString("base64"),
 };
 
@@ -171,7 +172,7 @@ async function buildHarness(seed: Seed = SEED, username = "alice", jobMaxBytes =
     startedAt: new Date(),
     clock,
     principalResolver: async () => principal,
-    connectionStatus: async () => ({ required: false, providers: [] }),
+    setupRequired: async () => false,
     registerRoutes: (groups) => {
       registerFsRoutes(groups, {
         activity: activity.service,
@@ -241,7 +242,7 @@ async function buildHarnessWithArchivePeekMaxBytes(archivePeekMaxBytes: number):
     startedAt: new Date(),
     clock,
     principalResolver: async () => principal,
-    connectionStatus: async () => ({ required: false, providers: [] }),
+    setupRequired: async () => false,
     registerRoutes: (groups) => registerFsRoutes(groups, fsRoutesDeps),
   });
 
@@ -281,7 +282,7 @@ async function buildHarnessWithStorage(storage: StorageProvider): Promise<Harnes
     startedAt: new Date(),
     clock,
     principalResolver: async () => principal,
-    connectionStatus: async () => ({ required: false, providers: [] }),
+    setupRequired: async () => false,
     registerRoutes: (groups) =>
       registerFsRoutes(groups, {
         activity: activity.service,
@@ -836,7 +837,7 @@ describe("POST /fs/compress and the resulting job", () => {
       startedAt: new Date(),
       clock: () => new Date(),
       principalResolver: async () => principal,
-      connectionStatus: async () => ({ required: false, providers: [] }),
+      setupRequired: async () => false,
       registerRoutes: (groups) =>
         registerFsRoutes(groups, {
           activity: activity.service,

@@ -65,6 +65,11 @@ export interface EntryStat {
    * when the path asked for is the stored spelling.
    */
   readonly path?: string;
+  /**
+   * The inode number of what is there, file or folder, without following a
+   * link. Absent where the backend has no inodes.
+   */
+  readonly ino?: bigint;
 }
 
 /**
@@ -98,6 +103,18 @@ export interface TransferOptions {
   readonly overwrite?: boolean;
 }
 
+/** Options for `move`. */
+export interface MoveOptions extends TransferOptions {
+  /**
+   * Publishes an entry fdrive staged in its own folders. A file without
+   * `overwrite` is linked into place only while the name is free, a real
+   * create-if-absent as uploads publish, and then unlinked where it was
+   * staged; file watchers see a new file rather than a move. The new name is
+   * flushed to disk before the call returns, so it survives a crash.
+   */
+  readonly publish?: boolean;
+}
+
 /**
  * Provider-neutral storage port. `@fdrive/local` implements it over a folder
  * on the API's disk. All paths are the
@@ -118,8 +135,8 @@ export interface TransferOptions {
  *   passes through one, at any segment including the last, with
  *   `StorageError("forbidden")`. Listings show the link itself, as kind
  *   `symlink`; `stat` never reports that kind.
- * - Optional methods are absent, not throwing, when the backend cannot
- *   offer them; `ProviderCapabilities` says which.
+ * - Optional methods are absent, not throwing, when the storage cannot
+ *   offer them (the in-memory test storage); the files folder has them all.
  */
 export interface StorageProvider {
   list(path: string): Promise<FileEntry[]>;
@@ -182,6 +199,11 @@ export interface StorageProvider {
       contentLength?: number;
       /** Replace an existing file; without it a taken name is a `conflict`. */
       overwrite?: boolean;
+      /**
+       * Flush the file to disk before publishing it, and its name after, so
+       * it survives a crash once the call returns.
+       */
+      durable?: boolean;
       signal?: AbortSignal;
       /**
        * One piece of a file sent in several calls, in order: the body goes into
@@ -196,7 +218,7 @@ export interface StorageProvider {
 
   mkdir(path: string, opts?: { parents?: boolean }): Promise<void>;
 
-  move(path: string, target: string, opts?: TransferOptions): Promise<void>;
+  move(path: string, target: string, opts?: MoveOptions): Promise<void>;
 
   copy(path: string, target: string, opts?: TransferOptions): Promise<void>;
 

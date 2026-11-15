@@ -88,7 +88,7 @@ describe("sharing folders between local users", () => {
   async function login(username: string): Promise<string> {
     const response = await call(ROUTES.auth.login, {
       method: "POST",
-      body: { credential: { username, password: `${username}-password` } },
+      body: { username, password: `${username}-password` },
     });
     expect(response.status).toBe(200);
     return cookieFrom(response);
@@ -150,7 +150,6 @@ describe("sharing folders between local users", () => {
     const owned = GrantsResponse.parse(
       await (await call(ROUTES.grants.list, { cookie: alice })).json(),
     );
-    expect(owned.available).toBe(true);
     expect(owned.owned.map((grant) => grant.path).sort()).toEqual(["/Docs", "/Photos"]);
     const received = GrantsResponse.parse(
       await (await call(ROUTES.grants.list, { cookie: bob })).json(),

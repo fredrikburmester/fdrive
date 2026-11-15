@@ -33,20 +33,11 @@ export async function probeOnlyOfficeRuntime(
   return "starting";
 }
 
-/** The storage server whose logins editor grants name. */
-export interface OfficeProviderRef {
-  readonly id: string;
-  readonly label: string;
-}
-
 export interface OfficeSettingsService {
   configuration(): Promise<OfficeSettings>;
-  update(
-    activeProviderId: string | null,
-    input: OfficeSettingsUpdateRequest,
-  ): Promise<OfficeSettings>;
+  update(input: OfficeSettingsUpdateRequest): Promise<OfficeSettings>;
   runtimeConfiguration(): Promise<OfficeRuntimeConfiguration>;
-  status(activeProvider: OfficeProviderRef | null): Promise<SystemOfficeResponse>;
+  status(): Promise<SystemOfficeResponse>;
 }
 
 export function createOfficeSettingsService(deps: {
@@ -55,6 +46,8 @@ export function createOfficeSettingsService(deps: {
   /** The owner-chosen server address the editor is told fdrive lives at; Office cannot be enabled without one. */
   publicUrl: () => Promise<string | null>;
   probeStatus: (configuration: OfficeSettings) => Promise<"starting" | "ready" | "unavailable">;
+  /** fdrive's users by name, the only people editors are chosen from. */
+  usernames: () => Promise<readonly string[]>;
   /** Optional so existing call sites keep working; defaults to recording nothing. */
   eventLog?: SystemEventLog;
   probeCacheMs?: number;
@@ -75,7 +68,6 @@ export function createOfficeSettingsService(deps: {
     revision: 0,
     enabled: false,
     editingEnabled: false,
-    editingProviderId: null,
     editorUsernames: [],
   };
 
@@ -92,17 +84,16 @@ export function createOfficeSettingsService(deps: {
     async configuration() {
       return (await read()).value;
     },
-    async update(activeProviderId, input) {
+    async update(input) {
       if (input.enabled && (await deps.publicUrl()) === null)
         throw new ApiHttpError(
           "bad_request",
           "Set the fdrive server address before enabling Office.",
         );
-      if (input.enabled && input.editingEnabled && input.editingProviderId !== activeProviderId)
-        throw new ApiHttpError(
-          "conflict",
-          "The storage Office edits changed. Reload Office settings and try again.",
-        );
+      const users = new Set(await deps.usernames());
+      const unknown = input.editorUsernames.filter((username) => !users.has(username));
+      if (unknown.length > 0)
+        throw new ApiHttpError("bad_request", "Office editors must be fdrive users.", { unknown });
       const current = await read();
       if (input.revision !== current.value.revision)
         throw new ApiHttpError(
@@ -129,7 +120,7 @@ export function createOfficeSettingsService(deps: {
         enabled: value.enabled && deps.product === "onlyoffice",
       });
     },
-    async status(activeProvider) {
+    async status() {
       const configuration = (await read()).value;
       let status: SystemOfficeResponse["status"] = "off";
       if (configuration.enabled) {
@@ -143,8 +134,6 @@ export function createOfficeSettingsService(deps: {
         configuration,
         product: deps.product,
         status,
-        activeProviderId: activeProvider?.id ?? null,
-        activeProviderLabel: activeProvider?.label ?? null,
       };
     },
   };

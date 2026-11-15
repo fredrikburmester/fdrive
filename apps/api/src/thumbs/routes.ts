@@ -1,10 +1,16 @@
 import { ROUTES, ThumbQuery, type ThumbSize } from "@fdrive/contracts";
-import { type CoreError, normalizePath, type StorageProvider, toFsPath } from "@fdrive/core";
-import type { IdentityRepo, IndexQueries } from "@fdrive/db";
+import {
+  type CoreError,
+  isReservedPath,
+  normalizePath,
+  type StorageProvider,
+  toFsPath,
+} from "@fdrive/core";
+import type { IndexQueries } from "@fdrive/db";
 import type { AppHono, AuthedHono } from "../app.js";
 import { ApiHttpError } from "../errors.js";
-import { createReadAuthorizer, type ReadAuthorizer } from "../scoping/read-authorizer.ts";
 import type { ScopeResolver } from "../scoping/resolver.ts";
+import { roundTripVirtualPath } from "../scoping/round-trip.ts";
 import {
   createNodeThumbFileReader,
   serveThumb,
@@ -26,29 +32,27 @@ export interface ThumbRoutesDeps {
   readonly enabled?: () => Promise<boolean>;
   readonly indexQueries: IndexQueries;
   readonly resolver: Pick<ScopeResolver, "verifiedIndexScopes">;
-  readonly identities: Pick<IdentityRepo, "get">;
   /** The directory the indexer writes thumbnails into. `undefined` disables the route entirely. */
   readonly thumbsDir: string | undefined;
   readonly fileReader?: ThumbFileReader;
-  /** Overridable for tests; defaults to `createReadAuthorizer`. */
-  readonly createAuthorizer?: (
-    storage: Pick<StorageProvider, "list" | "download">,
-  ) => ReadAuthorizer;
+  /** The login's Trash folder while Trash is on, from the request's storage. */
+  readonly trashPathForStorage?: (storage: StorageProvider) => string | null;
 }
 
 /**
- * Registers `GET /thumb?path=&size=256|1024`: resolves the virtual `path`
- * to an fs path via the caller's *verified* index scopes, proves the caller
- * can still read that exact path right now (a live `storage.download`
- * open/cancel probe), and only then serves the cached WebP through the tail
- * shared with the public share thumb route (`./serve.ts`): the file's
+ * Registers `GET /thumb?path=&size=256|1024`: maps the virtual `path`
+ * through the caller's *verified* index scopes, resolved for this request
+ * (a revoked share stops at once), and serves the cached WebP through the
+ * tail shared with the public share thumb route (`./serve.ts`): the file's
  * sha256 in the index, its cached thumbnail for `size`, and the file on
- * disk. 404 whenever thumbnails are not configured, the path cannot be
- * resolved or verified, the live read check fails, the file is not indexed
- * or has no sha256, no thumbnail has been generated for that size yet, or
- * the cached file is missing from disk. Responses are never cached by the
- * browser (`Cache-Control: private, no-store`), so a permission or mapping
- * change is never served stale.
+ * disk. The scope is the permission: no storage is read. 404 whenever
+ * thumbnails are not configured, the path is one of fdrive's own folders
+ * or does not map to the index and back to itself (a folder a nested scope
+ * shadows), the file is not indexed or has no sha256, no thumbnail has been
+ * generated for that size yet, or the cached file is missing from disk.
+ * Responses are cached privately and revalidated on every use against the
+ * sha256 `ETag`, so a changed file or a lost permission is never shown from
+ * the browser's cache.
  */
 export function registerThumbRoutes(
   groups: { public: AppHono; authed: AuthedHono },
@@ -56,7 +60,6 @@ export function registerThumbRoutes(
 ): void {
   const { authed } = groups;
   const fileReader = deps.fileReader ?? createNodeThumbFileReader();
-  const buildAuthorizer = deps.createAuthorizer ?? ((storage) => createReadAuthorizer({ storage }));
 
   authed.get(routePath(ROUTES.thumb), async (c) => {
     if (deps.thumbsDir === undefined || (deps.enabled !== undefined && !(await deps.enabled()))) {
@@ -78,23 +81,19 @@ export function registerThumbRoutes(
     }
 
     const principal = c.get("principal");
-    const identity = await deps.identities.get(principal.identityId);
-    if (identity === null) {
+    if (isReservedPath(path, deps.trashPathForStorage?.(principal.storage) ?? null)) {
       throw THUMB_NOT_FOUND();
     }
-    const verified = await deps.resolver.verifiedIndexScopes(identity);
+    const verified = await deps.resolver.verifiedIndexScopes(principal.username);
     if (!verified.available) {
       throw THUMB_NOT_FOUND();
     }
 
     const resolved = toFsPath(verified.scopes, path);
-    if (resolved === null) {
-      throw THUMB_NOT_FOUND();
-    }
-
-    const authorizer = buildAuthorizer(principal.storage);
-    const authResult = await authorizer.authorize({ path, kind: "file" });
-    if (!authResult.allowed) {
+    if (
+      resolved === null ||
+      roundTripVirtualPath(verified.scopes, resolved.rootName, resolved.fsPath) !== path
+    ) {
       throw THUMB_NOT_FOUND();
     }
 

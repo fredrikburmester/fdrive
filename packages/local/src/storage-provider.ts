@@ -1,5 +1,5 @@
 import { createHash, type Hash, randomBytes } from "node:crypto";
-import type { Stats } from "node:fs";
+import type { BigIntStats, Stats } from "node:fs";
 import { constants, createReadStream } from "node:fs";
 import {
   access,
@@ -28,6 +28,7 @@ import {
   type EntryStat,
   type FileEntry,
   isPrecompressedEntry,
+  type MoveOptions,
   makeEntry,
   normalizePath,
   StorageError,
@@ -36,7 +37,7 @@ import {
   type ZipProgress,
 } from "@fdrive/core";
 import { ZipFile } from "yazl";
-import { type DiskChangeListener, type DiskContent, notify } from "./changes.js";
+import { type DiskChangeListener, type DiskContent, type MovedStamp, notify } from "./changes.js";
 import { codeOf, mapped, toStorageError } from "./errors.js";
 import { createHome, type Home } from "./home.js";
 
@@ -54,10 +55,7 @@ export interface LocalStorage extends StorageProvider {
   readonly home: Home;
 }
 
-export interface MoveOptions {
-  /** Replace a taken target; without it the target must be free. */
-  readonly overwrite?: boolean;
-}
+export type { MoveOptions };
 
 /** The refusal for a name that is taken. */
 function taken(path: string): StorageError {
@@ -140,7 +138,20 @@ function isTop(path: string): boolean {
   return splitSegments(normalizePath(path)).length === 0;
 }
 
-function kindOf(info: Stats): EntryKind {
+/**
+ * Flushes `path`, a file's bytes or a folder's names, to disk. Any
+ * descriptor of an inode flushes all of it.
+ */
+async function flush(path: string): Promise<void> {
+  const handle = await open(path, "r");
+  try {
+    await handle.sync();
+  } finally {
+    await handle.close();
+  }
+}
+
+function kindOf(info: Stats | BigIntStats): EntryKind {
   if (info.isFile()) return "file";
   if (info.isDirectory()) return "dir";
   if (info.isSymbolicLink()) return "symlink";
@@ -158,19 +169,35 @@ async function lstatOrNull(path: string): Promise<Stats | null> {
 }
 
 /**
- * An upload's content as published at `target`: `written` plus the change
- * time the publish left, or nothing when `target` is no longer the inode that
- * was written (another writer replaced it meanwhile). A rename, a link and
- * unlinking the temporary name each change the change time, so it is read
- * once the publish is complete.
+ * An upload's content as published at `target`: its digest and the file
+ * exactly as a stat shows it once the publish is complete, or nothing when
+ * `target` is no longer the inode, size and modification time that were
+ * written (another writer replaced or changed it meanwhile). A rename, a link
+ * and unlinking the temporary name each change the change time, so it is
+ * read last.
  */
 export async function published(
   target: string,
   written: Omit<DiskContent, "ctimeNs">,
 ): Promise<{ readonly content?: DiskContent }> {
   const info = await lstat(target, { bigint: true }).catch(() => null);
-  if (info === null || info.ino !== written.ino) return {};
-  return { content: { ...written, ctimeNs: info.ctimeNs } };
+  if (
+    info === null ||
+    info.ino !== written.ino ||
+    info.size !== BigInt(written.size) ||
+    info.mtimeNs !== written.mtimeNs
+  )
+    return {};
+  const { sha256 } = written;
+  return {
+    content: {
+      sha256,
+      size: Number(info.size),
+      mtimeNs: info.mtimeNs,
+      ino: info.ino,
+      ctimeNs: info.ctimeNs,
+    },
+  };
 }
 
 /** Passes bytes through unchanged, adding each chunk to `hash` on the way. */
@@ -259,13 +286,14 @@ export function createLocalStorage(options: LocalStorageOptions): LocalStorage {
     stat: (path) =>
       mapped(path, async (): Promise<EntryStat> => {
         const found = await home.locate(path);
-        const info = await lstat(found.at);
+        const info = await lstat(found.at, { bigint: true });
         const kind = kindOf(info);
         return {
           kind,
-          size: kind === "file" ? info.size : 0,
+          size: kind === "file" ? Number(info.size) : 0,
           modifiedAt: info.mtime,
           contentType: null,
+          ino: info.ino,
           ...(found.path === normalizePath(path) ? {} : { path: found.path }),
         };
       }),
@@ -410,6 +438,7 @@ export function createLocalStorage(options: LocalStorageOptions): LocalStorage {
           // A piece before the last stays in the part for the next one.
           if (part?.final === false) return;
           if (opts?.modifiedAt !== undefined) await utimes(partial, new Date(), opts.modifiedAt);
+          if (opts?.durable === true) await flush(partial);
           if (hash !== undefined) {
             // A part arrived over several calls, so its digest is read back whole.
             if (part !== undefined) {
@@ -428,6 +457,7 @@ export function createLocalStorage(options: LocalStorageOptions): LocalStorage {
           if (overwrite) await rename(partial, target);
           else await publishNew(partial, target, path);
           if (part !== undefined) await rm(partial, { force: true });
+          if (opts?.durable === true) await flush(dir);
         } finally {
           // A part outlives a failed call, so the call can be repeated.
           if (part === undefined) await rm(partial, { force: true });
@@ -455,8 +485,13 @@ export function createLocalStorage(options: LocalStorageOptions): LocalStorage {
         if (isTop(path)) throw new StorageError("not_found", `not found: ${path}`);
         const from = await entry(path);
         const to = await entry(target);
-        await moveEntry(from, to, { path, target }, opts);
-        notify(listener, { kind: "moved", path: from, target: to });
+        const stamp = await moveEntry(from, to, { path, target }, opts);
+        notify(listener, {
+          kind: "moved",
+          path: from,
+          target: to,
+          ...(stamp === undefined ? {} : { stamp }),
+        });
       }),
 
     copy: (path, target, opts) =>
@@ -560,7 +595,10 @@ interface Names {
  * Moves the entry at `from` to `to`, both located by their homes: one
  * `rename`, which also works between two users' folders on the same disk. A
  * folder takes the links in it along as they are, followed by nothing. A
- * taken target is a `conflict` unless `overwrite`.
+ * taken target is a `conflict` unless `overwrite`. Returns a file's stamp
+ * exactly as the rename left it, with its change time just before
+ * (`MovedStamp`); nothing for a folder, for a file copied to another
+ * filesystem, which is another inode, or for one that changed meanwhile.
  *
  * Checking the target and renaming are two steps, since Node has no
  * `RENAME_NOREPLACE`: a writer that takes the name between them is
@@ -568,13 +606,42 @@ interface Names {
  * move stays a `rename` because file watchers (the indexer's) see a rename
  * as a move and keep what they know about the file, while a link and an
  * unlink read as a deleted file and a new one nobody finished writing.
+ *
+ * With `publish`, for an entry fdrive staged where no watcher looks, a new
+ * file is linked into place only while the name is free and then unlinked
+ * where it was staged, and the new name is flushed to disk before this
+ * returns.
  */
 export async function moveEntry(
   from: string,
   to: string,
   names: Names,
   opts?: MoveOptions,
-): Promise<void> {
+): Promise<MovedStamp | undefined> {
+  if (opts?.publish !== true) return relocate(from, to, names, opts);
+  let stamp: MovedStamp | undefined;
+  if (opts.overwrite !== true && (await lstat(from)).isFile()) {
+    await mkdir(dirname(to), { recursive: true });
+    try {
+      await publishNew(from, to, names.target);
+      await rm(from, { force: true });
+    } catch (error) {
+      // Another filesystem under the same home: no link reaches it.
+      if (codeOf(error) !== "EXDEV") throw error;
+      stamp = await relocate(from, to, names, opts);
+    }
+  } else stamp = await relocate(from, to, names, opts);
+  await flush(dirname(to));
+  return stamp;
+}
+
+/** `moveEntry` without `publish`: one `rename`. */
+async function relocate(
+  from: string,
+  to: string,
+  names: Names,
+  opts?: MoveOptions,
+): Promise<MovedStamp | undefined> {
   if (to.startsWith(`${from}${sep}`)) {
     throw new StorageError("bad_request", `cannot move ${names.path} into itself`);
   }
@@ -591,6 +658,9 @@ export async function moveEntry(
     }
   }
   await mkdir(dirname(to), { recursive: true });
+  // Taken last before the rename and first after it, so that nothing else
+  // comes between the two stats and the move.
+  const before = source.isFile() ? await lstat(from, { bigint: true }) : undefined;
   try {
     await rename(from, to);
   } catch (error) {
@@ -605,7 +675,24 @@ export async function moveEntry(
       verbatimSymlinks: true,
     });
     await rm(from, { recursive: true, force: true });
+    return undefined;
   }
+  if (before === undefined) return undefined;
+  const after = await lstat(to, { bigint: true }).catch(() => null);
+  if (
+    after === null ||
+    after.ino !== before.ino ||
+    after.size !== before.size ||
+    after.mtimeNs !== before.mtimeNs
+  )
+    return undefined;
+  return {
+    size: Number(after.size),
+    mtimeNs: after.mtimeNs,
+    ino: after.ino,
+    ctimeNs: after.ctimeNs,
+    previousCtimeNs: before.ctimeNs,
+  };
 }
 
 /**

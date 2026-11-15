@@ -22,8 +22,7 @@ export function escapeActivityLike(value: string): string {
 export function activityFingerprint(facts: ActivityFacts): string | null {
   if (facts.size !== undefined && facts.modifiedAt)
     return `stat:${JSON.stringify([facts.size, facts.modifiedAt])}`;
-  if (facts.sha256) return `sha256:${facts.sha256}`;
-  return facts.version ? `version:${facts.version}` : null;
+  return facts.sha256 ? `sha256:${facts.sha256}` : null;
 }
 export async function lockActivityRegistry(db: ActivityDb, identityId: string): Promise<void> {
   await db.execute(

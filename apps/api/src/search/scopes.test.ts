@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { dateFromMtimeNs, reservedExclusion, toIndexRelativePath } from "./scopes";
+import {
+  dateFromMtimeNs,
+  reservedExclusion,
+  toIndexRelativePath,
+  withCachedRootIds,
+} from "./scopes";
 
 describe("dateFromMtimeNs", () => {
   it("converts nanoseconds since epoch to a Date at millisecond precision", () => {
@@ -29,7 +34,7 @@ describe("reservedExclusion", () => {
     fsPrefix: "/bob/Projects",
     virtualPrefix: "/Shared with me/Projects",
   };
-  const names = [".fdrive-move-v1", ".fdrive-backups"];
+  const names = [".fdrive-move-v1"];
 
   it("maps the Trash and the Mac app's folder through the home onto its root", () => {
     expect(reservedExclusion([home, mount], "/.trash", { files: 3 })).toEqual({
@@ -56,5 +61,28 @@ describe("reservedExclusion", () => {
     ]);
     expect(reservedExclusion([mount], "/.trash", { files: 3 })).toEqual({ prefixes: [], names });
     expect(reservedExclusion([home], "/.trash", {})).toEqual({ prefixes: [], names });
+  });
+});
+
+describe("withCachedRootIds", () => {
+  it("asks again until every wanted root exists, then never again", async () => {
+    let rows: Record<string, number> = {};
+    let reads = 0;
+    const queries = withCachedRootIds(
+      {
+        rootIdsByName: async () => {
+          reads += 1;
+          return rows;
+        },
+      },
+      ["files"],
+    );
+
+    expect(await queries.rootIdsByName()).toEqual({});
+    rows = { files: 3 };
+    expect(await queries.rootIdsByName()).toEqual({ files: 3 });
+    rows = { files: 3, other: 4 };
+    expect(await queries.rootIdsByName()).toEqual({ files: 3 });
+    expect(reads).toBe(2);
   });
 });

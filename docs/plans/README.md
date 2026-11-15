@@ -31,7 +31,7 @@ These are a backlog, not a claim that an agent is working on every item.
 - Superseded designs are not backlog. Git history retains removed plans; do not maintain a
   second archive of obsolete implementation instructions.
 
-Current behavior: [architecture](../ARCHITECTURE.md), [storage port](../STORAGE-PROVIDERS.md),
+Current behavior: [architecture](../ARCHITECTURE.md), [storage port](../STORAGE.md),
 [scoping](../SCOPING.md), [authentication](../AUTH.md), [Office](../OFFICE-DEVELOPMENT.md),
 [System activity](../SYSTEM-ACTIVITY.md) and [personal activity](../ACTIVITY.md).
 Workflow: [AGENTS](../../AGENTS.md).

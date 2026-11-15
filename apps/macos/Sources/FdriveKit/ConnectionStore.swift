@@ -69,6 +69,10 @@ public struct ConnectionStore: Sendable {
         guard !location.disconnecting else { throw DriveError.authentication }
         return try APIClient(server: location.server, token: token(location.id), protocolVersion: location.location.protocolVersion)
     }
+    public func writer(_ location: SavedLocation) throws -> WriteCoordinator {
+        WriteCoordinator(catalog: try catalog(location), client: try client(location),
+                         maxUploadBytes: location.location.maxUploadBytes)
+    }
     public func removeMetadata(_ id: String) throws {
         for suffix in [".sqlite", ".sqlite-wal", ".sqlite-shm"] {
             let file = directory.appendingPathComponent(id + suffix)
