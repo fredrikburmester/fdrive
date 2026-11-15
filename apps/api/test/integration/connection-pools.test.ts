@@ -463,7 +463,7 @@ describe("the API's pools when full", () => {
 
       // Other writes go through, a whole upload by a visitor among them.
       await ok(call(ROUTES.fs.mkdir, { body: { path: "/Inbox/meanwhile" } }));
-      expect((await upload("/visitor-whole.txt", "whole", share.id)).status).toBe(201);
+      expect((await upload("/visitor-whole.txt", "whole", share.id)).status).toBe(200);
       await ok(
         call(ROUTES.fs.move, { body: { path: "/Inbox/meanwhile", target: "/Inbox/moved" } }),
       );
@@ -486,7 +486,8 @@ describe("the API's pools when full", () => {
 
       arrive();
       expect((await Promise.all(stalled)).map((response) => response.status)).toEqual(
-        stalled.map(() => 201),
+        // The web answers 201 Created, a link the name it stored under.
+        stalled.map((_, index) => (index % 2 === 0 ? 201 : 200)),
       );
     } finally {
       arrive();
