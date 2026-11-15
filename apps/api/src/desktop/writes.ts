@@ -19,12 +19,11 @@ import {
   isUnderPath,
   normalizePath,
   parentPath,
-  parseMoveTrashLeaf,
-  relativeTo,
   StorageError,
   type StorageProvider,
   TRASH_PATH,
-  trashLeafPath,
+  trashItemOf,
+  trashItemPath,
 } from "@fdrive/core";
 import type {
   DesktopAccessMove,
@@ -38,6 +37,7 @@ import { ApiHttpError } from "../errors.js";
 import { runStorageCall } from "../fs/routes.js";
 import type { MetadataService } from "../metadata/service.js";
 import { followIntoTrash, type OwnerPath } from "../metadata/trash.js";
+import type { TrashItems } from "../trash/items.js";
 import {
   createDesktopFiles,
   DESKTOP_INTERNAL_ROOT,
@@ -74,28 +74,12 @@ export const DESKTOP_TRASH = `${DESKTOP_INTERNAL_ROOT}/trash`;
 const TRASH_LIMIT = 100_000;
 /** Whether `path` lies in its user's Trash: an item there, or something inside one. */
 const inTrash = (path: string) => isUnderPath(TRASH_PATH, path);
-/** The Trash item `path` is or lies in (the leaf `trash.put` made), or null outside Trash. */
-function leafOf(path: string): string | null {
-  if (!inTrash(path)) return null;
-  const segments = path.split("/");
-  for (let end = 3; end <= segments.length; end++) {
-    const prefix = segments.slice(0, end).join("/");
-    if (parseMoveTrashLeaf(TRASH_PATH, prefix)) return prefix;
-  }
-  return null;
-}
-/** The path a Trash item's leaf was deleted from. */
-const deletedFrom = (leaf: string) =>
-  (parseMoveTrashLeaf(TRASH_PATH, leaf) as { originalPath: string }).originalPath;
-/** Where something in Trash was before it went there, or null outside Trash. */
-function originalOf(path: string) {
-  const leaf = leafOf(path);
-  return leaf === null ? null : deletedFrom(leaf) + path.slice(leaf.length);
-}
+/** The Trash item `path` is or lies in (`/.trash/<id>/<name>`), or null outside one. */
+const leafOf = (path: string) => trashItemOf(path)?.path ?? null;
 /**
  * A Trash item's name in the Mac's Trash, unique there by its handle, with
  * its extension kept for Finder and Quick Look. A restore under this name
- * takes back the original one.
+ * takes back the original one, which is the item's name in Trash.
  */
 function trashName(name: string, id: string) {
   const dot = name.lastIndexOf(".");
@@ -121,7 +105,7 @@ type Source = Pick<DesktopItemRecord, "id" | "path" | "kind">;
 interface Publication {
   /** The staged upload or folder, or the item a move takes. */
   readonly from: string;
-  /** Null for a move to Trash, whose leaf Trash picks. */
+  /** Null for a move to Trash, whose leaf its Trash item names (`trash`). */
   readonly to: string | null;
   /** The inode at `from`, which publishing takes to `to`, in decimal. */
   readonly inode: string;
@@ -133,6 +117,8 @@ interface Publication {
    * it, the owner's.
    */
   readonly owner?: { readonly identityId: string; readonly path: string };
+  /** For a move to Trash: the Trash item it becomes, written before it moves. */
+  readonly trash?: { readonly id: string; readonly name: string };
 }
 export interface DesktopWriteDeps extends Pick<DesktopDeps, "clock" | "indexedContent"> {
   repo: DesktopRepo;
@@ -167,6 +153,8 @@ export interface DesktopWriteDeps extends Pick<DesktopDeps, "clock" | "indexedCo
    * permanently does (`FileOperations.purge`).
    */
   purge: (principal: Principal, id: string) => Promise<void>;
+  /** What each login's Trash holds, by its rows. */
+  trash: Pick<TrashItems, "get" | "list" | "begin" | "settle">;
   /** Hears metadata that could not follow a published write, and bookkeeping left behind. */
   logger?: { warn(obj: Record<string, unknown>, msg: string): void };
 }
@@ -224,9 +212,8 @@ export function createDesktopWrites(deps: DesktopWriteDeps) {
   /**
    * Where a recorded publication stands, from disk alone: `to` holds its
    * inode (published there), `from` still does (not published), or neither,
-   * when something else has happened to it since (lost). A move to Trash,
-   * whose leaf Trash picked, is published at the leaf in its owner's Trash
-   * that was deleted from the item's place there and holds the inode.
+   * when something else has happened to it since (lost). A move to Trash is
+   * published at its Trash item's path in its owner's files.
    */
   async function whereIs(
     principal: Principal,
@@ -235,17 +222,13 @@ export function createDesktopWrites(deps: DesktopWriteDeps) {
     const inode = BigInt(publication.inode);
     const holds = async (storage: StorageProvider, path: string) =>
       (await entryAt(storage, path))?.ino === inode;
-    const { from, to, owner } = publication;
+    const { from, to, owner, trash } = publication;
     if (to !== null && (await holds(principal.storage, to))) return { at: "published", to };
     if (await holds(principal.storage, from)) return { at: "pending" };
-    if (to === null && owner) {
-      const storage = await deps.storageForIdentity(owner.identityId);
-      const { entries } = await storage.trash.list({ limit: Number.POSITIVE_INFINITY });
-      for (const entry of entries) {
-        const leaf = trashLeafPath(TRASH_PATH, entry.id);
-        if (entry.originalPath === owner.path && (await holds(storage, leaf)))
-          return { at: "published", to: leaf };
-      }
+    if (to === null && owner && trash) {
+      const leaf = trashItemPath(trash.id, trash.name);
+      if (await holds(await deps.storageForIdentity(owner.identityId), leaf))
+        return { at: "published", to: leaf };
     }
     return { at: "lost" };
   }
@@ -363,7 +346,7 @@ export function createDesktopWrites(deps: DesktopWriteDeps) {
       if (leaf === entry.path)
         return present(principal, entry, item, "trash", content, {
           path: `${DESKTOP_TRASH}/${item.id}`,
-          name: trashName(baseName(deletedFrom(leaf)), item.id),
+          name: trashName(baseName(leaf), item.id),
         });
       const above = row(parent(entry.path));
       return present(
@@ -424,9 +407,15 @@ export function createDesktopWrites(deps: DesktopWriteDeps) {
   /** Whether this connection's grants reach `path`. */
   const reaches = (principal: Principal, path: string) =>
     principal.tokenAccess?.paths.some((root) => root === path || isUnderPath(root, path)) === true;
+  /** Where something in the login's own Trash was before it went there, or null outside one. */
+  async function originalOf(principal: Principal, path: string) {
+    const leaf = trashItemOf(path);
+    const item = leaf && (await deps.trash.get(principal.identityId, leaf.id));
+    return leaf && item ? item.originalPath + path.slice(leaf.path.length) : null;
+  }
   /** The entry at `path` in its user's Trash, where this connection reaches where it was. */
   async function trashedEntry(principal: Principal, path: string): Promise<DesktopEntry> {
-    const original = originalOf(path);
+    const original = await originalOf(principal, path);
     if (original === null) throw new ApiHttpError("not_found", "Item no longer exists");
     if (!reaches(principal, original))
       throw new ApiHttpError("forbidden", "This connection cannot access the trashed item");
@@ -442,15 +431,13 @@ export function createDesktopWrites(deps: DesktopWriteDeps) {
   }
   /** Every item in the user's own Trash this connection reaches, newest first. */
   async function trashListing(principal: Principal) {
-    const listing = await runStorageCall(() =>
-      principal.storage.trash.list({ limit: TRASH_LIMIT }),
-    );
+    const listing = await deps.trash.list(principal.identityId, TRASH_LIMIT);
     if (listing.truncated) throw new ApiHttpError("rate_limited", "Trash listing capacity reached");
     const entries: DesktopEntry[] = [];
-    for (const item of listing.entries) {
+    for (const item of listing.items) {
       if (!reaches(principal, item.originalPath)) continue;
       try {
-        entries.push(await storedEntry(principal.storage, trashLeafPath(TRASH_PATH, item.id)));
+        entries.push(await storedEntry(principal.storage, trashItemPath(item.id, item.name)));
       } catch (error) {
         // Restored or deleted since the listing, or unreadable.
         if (!(error instanceof ApiHttpError && ["not_found", "forbidden"].includes(error.kind)))
@@ -557,15 +544,16 @@ export function createDesktopWrites(deps: DesktopWriteDeps) {
     return stamp;
   }
   /** What the receipt's history records about a published write; `to` is a leaf for a trash. */
-  function activityFacts(
+  async function activityFacts(
+    principal: Principal,
     request: Request,
     source: Source | null,
     target: string,
     trashing: boolean,
-  ): NativeActivityFacts {
+  ): Promise<NativeActivityFacts> {
     const restored = source !== null && inTrash(source.path);
     return {
-      from: source ? (originalOf(source.path) ?? source.path) : null,
+      from: source ? ((await originalOf(principal, source.path)) ?? source.path) : null,
       to: target,
       directory: request.kind === "folder" || source?.kind === "dir",
       trash: trashing,
@@ -720,8 +708,9 @@ export function createDesktopWrites(deps: DesktopWriteDeps) {
       } else {
         // The handle follows the item, into Trash and back out too.
         if (source) await repo.move(identityId, source.path, to);
+        // In Trash only when this write moved it there, from a place it reaches.
         const entry = inTrash(to)
-          ? await trashedEntry(principal, to)
+          ? await storedEntry(principal.storage, to)
           : await files.stat(principal, to);
         item = await decorate(
           principal,
@@ -736,8 +725,15 @@ export function createDesktopWrites(deps: DesktopWriteDeps) {
         from && deps.access && from.path !== to
           ? await deps.access(from.identityId, from.path, to, source?.kind === "dir")
           : null;
-      const facts = activityFacts(request, source, to, owner !== null);
-      if (!(await repo.complete(identityId, accountId, op.id, receipt, facts, access))) {
+      const facts = await activityFacts(principal, request, source, to, owner !== null);
+      // The Trash item it moved there arrives, or the one it restored leaves.
+      const leaving = source ? trashItemOf(source.path) : null;
+      const trash = publication.trash
+        ? { entered: publication.trash.id, leaf: to }
+        : leaving && leaving.path === source?.path
+          ? { left: leaving.id }
+          : undefined;
+      if (!(await repo.complete(identityId, accountId, op.id, receipt, facts, access, trash))) {
         // Another settlement kept it first.
         const current = await operation(principal, op.id);
         if (current.state !== "completed" && current.state !== "acknowledged")
@@ -770,7 +766,7 @@ export function createDesktopWrites(deps: DesktopWriteDeps) {
     const where = publication ? await whereIs(principal, publication) : null;
     if (publication && where?.at === "published")
       await finish(principal, op, publication, where.to);
-    else
+    else {
       await transition(
         principal,
         op.id,
@@ -778,7 +774,53 @@ export function createDesktopWrites(deps: DesktopWriteDeps) {
         where?.at === "lost" ? "conflict" : "ready",
         settled(op.result),
       );
+      if (publication) await settleTrash(publication);
+    }
     return operation(principal, op.id);
+  }
+  /**
+   * Writes the Trash item a move of `path` to Trash becomes, in the Trash of
+   * `owner`'s files, before it moves (`TrashItems.begin`).
+   */
+  async function beginTrash(
+    principal: Principal,
+    path: string,
+    owner: { identityId: string; path: string },
+  ) {
+    const entry = await principal.storage.stat(path);
+    const kind = entry.kind === "dir" ? "dir" : "file";
+    return deps.trash.begin({
+      identityId: owner.identityId,
+      originalPath: owner.path,
+      name: baseName(path),
+      kind,
+      size: kind === "file" ? entry.size : 0,
+      deletedAt: deps.clock(),
+      movingFrom: owner.path,
+    });
+  }
+  /**
+   * Settles the Trash item a move to Trash began by what is on disk, once
+   * its receipt will not (`TrashItems.settle`): one that never moved is
+   * forgotten. A failure leaves it for the next start.
+   */
+  async function settleTrash(publication: Publication) {
+    const { owner, trash, source } = publication;
+    if (!owner || !trash) return;
+    try {
+      await deps.trash.settle({
+        id: trash.id,
+        identityId: owner.identityId,
+        name: trash.name,
+        kind: source?.kind === "dir" ? "dir" : "file",
+        movingFrom: owner.path,
+      });
+    } catch (error) {
+      deps.logger?.warn(
+        { err: error, identityId: owner.identityId, id: trash.id },
+        "A Mac move to Trash that did not happen is settled at the next start",
+      );
+    }
   }
   /**
    * Takes the old name of a save that also renamed its file away to fdrive's
@@ -788,7 +830,13 @@ export function createDesktopWrites(deps: DesktopWriteDeps) {
   async function retire(principal: Principal, path: string, witness: ContentStamp, id: string) {
     try {
       await unchanged(principal.storage, path, witness);
-      await principal.storage.trash.put(path);
+      const item = await beginTrash(principal, path, await ownerPath(principal.identityId, path));
+      try {
+        await principal.storage.trash.put(path, item.id);
+      } finally {
+        // It arrives with what was kept at its old name, or is forgotten.
+        await deps.trash.settle(item);
+      }
     } catch (error) {
       deps.logger?.warn(
         { err: error, identityId: principal.identityId, operationId: id },
@@ -831,6 +879,8 @@ export function createDesktopWrites(deps: DesktopWriteDeps) {
     const trashing = request.parentId === "trash";
     let publication: Publication;
     let witness: ContentStamp | null;
+    /** The Trash item a move to Trash becomes, once it is written. */
+    let arriving: Publication | undefined;
     try {
       const source =
         "itemId" in request && request.itemId ? await record(principal, request.itemId) : undefined;
@@ -844,8 +894,8 @@ export function createDesktopWrites(deps: DesktopWriteDeps) {
       const name =
         source &&
         leafOf(source.path) === source.path &&
-        request.name === trashName(baseName(deletedFrom(source.path)), source.id)
-          ? baseName(deletedFrom(source.path))
+        request.name === trashName(baseName(source.path), source.id)
+          ? baseName(source.path)
           : request.name;
       const target = trashing
         ? null
@@ -888,10 +938,13 @@ export function createDesktopWrites(deps: DesktopWriteDeps) {
         to: target,
         inode: staged.ino.toString(),
         source: source ? { id: source.id, path: source.path, kind: source.kind } : null,
-        ...(trashing && source
-          ? { owner: await ownerPath(principal.identityId, source.path) }
-          : {}),
       };
+      if (trashing && source) {
+        const owner = await ownerPath(principal.identityId, source.path);
+        const item = await beginTrash(principal, source.path, owner);
+        publication = { ...publication, owner, trash: { id: item.id, name: item.name } };
+        arriving = publication;
+      }
       if (
         !(await transition(principal, id, "committing", "committing", {
           ...op.result,
@@ -915,15 +968,17 @@ export function createDesktopWrites(deps: DesktopWriteDeps) {
         conflict ? "conflict" : "ready",
         settled(op.result),
       );
+      if (arriving) await settleTrash(arriving);
       if (error instanceof StorageError) throw new ApiHttpError(error.kind, error.message);
       throw error;
     }
-    const { from, source } = publication;
+    const { from, source, trash } = publication;
     let to = publication.to;
+    const leaving = trashItemOf(from);
     try {
-      if (to === null) to = (await storage.trash.put(from)).leaf;
-      else if (leafOf(from) === from)
-        await storage.trash.restore(relativeTo(TRASH_PATH, from) as string, { target: to });
+      // A move to Trash always names the Trash item it becomes.
+      if (to === null) to = (await storage.trash.put(from, (trash as { id: string }).id)).leaf;
+      else if (leaving?.path === from) await storage.trash.restore(leaving.id, baseName(from), to);
       // A move onto itself publishes nothing.
       else if (from !== to)
         await storage.move(
@@ -937,6 +992,7 @@ export function createDesktopWrites(deps: DesktopWriteDeps) {
       // Storage refuses a taken name before writing anything.
       if (isStorageError(error) && error.kind === "conflict") {
         await transition(principal, id, "committing", "conflict", settled(op.result));
+        await settleTrash(publication);
         fail("name_collision", COLLISION);
       }
       const where = await whereIs(principal, publication).catch(() => null);
@@ -951,6 +1007,7 @@ export function createDesktopWrites(deps: DesktopWriteDeps) {
           where.at === "lost" ? "conflict" : "ready",
           settled(op.result),
         );
+        await settleTrash(publication);
         if (where.at === "lost") fail("version_conflict", CHANGED);
         if (error instanceof StorageError) throw new ApiHttpError(error.kind, error.message);
         throw error;
@@ -1148,11 +1205,15 @@ export function createDesktopWrites(deps: DesktopWriteDeps) {
       authority(principal);
       const item = await repo.item(principal.identityId, itemId);
       if (!item) return;
-      if (leafOf(item.path) !== item.path)
+      const leaf = trashItemOf(item.path);
+      if (leaf?.path !== item.path)
         throw new ApiHttpError("conflict", "Only items in Trash can be deleted permanently");
-      if (!reaches(principal, deletedFrom(item.path)))
+      const original = await originalOf(principal, item.path);
+      // Its row went with it: deleted for good already.
+      if (original === null) return;
+      if (!reaches(principal, original))
         throw new ApiHttpError("forbidden", "This connection cannot access the trashed item");
-      await deps.purge(principal, relativeTo(TRASH_PATH, item.path) as string);
+      await deps.purge(principal, leaf.id);
     },
     async status(principal: Principal, id: string) {
       return status(await operation(principal, id));

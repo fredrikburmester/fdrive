@@ -1,21 +1,20 @@
 import { randomUUID } from "node:crypto";
 import type { ActivityFacts, MoveManyRequest, MoveManyResult } from "@fdrive/contracts";
 import {
+  baseName,
   type EntryStat,
   isStorageError,
   isUnderPath,
   type MadeFolder,
   parentPath,
-  parseMoveTrashLeaf,
   StorageError,
   type StorageProvider,
-  TRASH_PATH,
   type TrashedItem,
-  type TrashRestoreResult,
-  trashLeafPath,
+  trashItemPath,
   type UploadOptions,
   type UploadPartOptions,
 } from "@fdrive/core";
+import type { PendingTrashItem } from "@fdrive/db";
 import type { ActivityCallContext } from "../activity/fs-context.ts";
 import {
   type ActivityRunInput,
@@ -27,6 +26,7 @@ import type { Principal } from "../auth/principal.ts";
 import { ApiHttpError } from "../errors.ts";
 import type { MetadataService } from "../metadata/service.ts";
 import { followIntoTrash } from "../metadata/trash.ts";
+import type { TrashItems } from "../trash/items.ts";
 import type { AccessFollowers, OwnerPath } from "./access.ts";
 
 /**
@@ -108,12 +108,15 @@ export interface FileOperations {
     target: string,
     options?: { variant?: "duplicate" },
   ): Promise<FileOperationDone & { entry: EntryStat }>;
+  /** Moves an item to Trash: its owner's, for an item in a folder shared with the login. */
   trash(actor: FileActor, path: string): Promise<FileOperationDone & { item: TrashedItem }>;
+  /** Moves item `id` out of the login's Trash, to where it was deleted from unless `target`. */
   restore(
     actor: FileActor,
     id: string,
     target?: string,
-  ): Promise<FileOperationDone & { entry: TrashRestoreResult }>;
+  ): Promise<FileOperationDone & { entry: EntryStat }>;
+  /** Deletes item `id` in the login's Trash for good; one that is not there is done. */
   purge(
     actor: FileActor,
     id: string,
@@ -132,9 +135,11 @@ export interface FileOperationsDeps {
    */
   readonly metadata?: Pick<MetadataService, "onMoved" | "onDeleted">;
   readonly ownerPath: OwnerPath;
-  /** A login's own storage, which takes an item back out of its Trash. */
-  readonly storageFor: (identityId: string) => Promise<StorageProvider>;
-  readonly logger?: { error(object: Record<string, unknown>, message: string): void };
+  /** What Trash holds, by its rows. */
+  readonly trash: Pick<TrashItems, "begin" | "get" | "settle">;
+  /** When an item went to Trash. */
+  readonly clock?: () => Date;
+  readonly logger?: { warn(object: Record<string, unknown>, message: string): void };
 }
 
 /** What a completed operation says when its tags and the rest could not follow it. */
@@ -149,11 +154,6 @@ function relocates(operation: "move" | "copy", path: string, target: string): bo
   return path !== target;
 }
 
-/** The leaf's id, its path below the Trash. */
-function trashId(leaf: string): string {
-  return leaf.slice(TRASH_PATH.length + 1);
-}
-
 /**
  * The one way fdrive changes files, whoever asks: the web's file and Trash
  * routes, MCP, AI chat, Office and a link's visitors. Each operation records
@@ -161,19 +161,19 @@ function trashId(leaf: string): string {
  * access (`AccessFollowers.run`), records the outcome and lets the rest of
  * what is kept by path follow.
  *
- * What grants access fails closed: it changes before the storage call where
- * the destination is known (a move, a restore, a purge), so a failure there
- * leaves the file where it was and the request fails. Trash names its leaf
- * only once the item is there, so a failure after it takes the item back out
- * of Trash. Either way, no link, share with people or Office file stays at a
- * path a successful operation left, and a new item there waits for them to
- * have gone (`TouchedPaths`).
+ * What grants access fails closed: it changes before the storage call, so a
+ * failure there leaves the file where it was and the request fails. No link,
+ * share with people or Office file stays at a path a successful operation
+ * left, and a new item there waits for them to have gone (`TouchedPaths`).
+ * Trash's row changes in the same transaction: an item arrives in Trash, or
+ * leaves it, with what grants access ([items.ts](../trash/items.ts)).
  *
  * No transaction or lock is held while a client's body arrives: an upload
  * stages its body first and holds its path only to publish it
  * (`StorageProvider.upload`'s `critical`).
  */
 export function createFileOperations(deps: FileOperationsDeps): FileOperations {
+  const clock = deps.clock ?? (() => new Date());
   /** Records `mutate` as one command, unless no one records it. */
   async function record<T>(
     actor: FileActor,
@@ -349,7 +349,6 @@ export function createFileOperations(deps: FileOperationsDeps): FileOperations {
     async trash(actor, path) {
       const { identityId, storage } = actor;
       const before = await activityStat(storage, path);
-      const kind = before?.kind === "file" ? "file" : "dir";
       const {
         value: { item, owned },
         history,
@@ -357,23 +356,39 @@ export function createFileOperations(deps: FileOperationsDeps): FileOperations {
         actor,
         {
           action: "file.trash",
-          requested: { path, kind, ...provenance(actor) },
-          before: { path, kind },
+          requested: { path, kind: before?.kind === "file" ? "file" : "dir", ...provenance(actor) },
+          before: { path, kind: before?.kind === "file" ? "file" : "dir" },
         },
-        () =>
-          deps.access.run(identityId, { vacates: [path] }, async (follow) => {
-            const moved = await storage.trash.put(path);
-            // The leaf is in the files that hold the item: the login's own, or
-            // for an item in a folder shared with it, its owner's.
-            const owner = await deps.ownerPath(identityId, path);
-            try {
-              await follow.moved(owner.identityId, owner.path, moved.leaf, moved.kind === "dir");
-            } catch (error) {
-              await takeBack(owner.identityId, path, moved, error);
-              throw error;
-            }
-            return { item: moved, owned: owner };
-          }),
+        async () => {
+          const entry = await storage.stat(path);
+          const kind = entry.kind === "dir" ? "dir" : "file";
+          // The item goes to the Trash of the files that hold it: the login's
+          // own, or for an item in a folder shared with it, its owner's.
+          const owned = await deps.ownerPath(identityId, path);
+          // Written first, so an interrupted delete is settled by what is on disk.
+          const pending = await deps.trash.begin({
+            identityId: owned.identityId,
+            originalPath: owned.path,
+            name: baseName(path),
+            kind,
+            size: kind === "file" ? entry.size : 0,
+            deletedAt: clock(),
+            movingFrom: owned.path,
+          });
+          const leaf = trashItemPath(pending.id, pending.name);
+          try {
+            const moved = await deps.access.run(identityId, { vacates: [path] }, async (follow) => {
+              await follow.moved(owned.identityId, owned.path, leaf, kind === "dir");
+              if (!(await follow.trash.entered(pending.id, leaf)))
+                throw new StorageError("conflict", "the delete was given up");
+              return storage.trash.put(path, pending.id);
+            });
+            return { item: moved, owned };
+          } catch (error) {
+            await settleQuietly(pending);
+            throw error;
+          }
+        },
         ({ item: moved }) => ({ path, kind: moved.kind, trashLeaf: moved.leaf }),
       );
       const warning = await bestEffort("Moved to Trash", (metadata) =>
@@ -384,16 +399,19 @@ export function createFileOperations(deps: FileOperationsDeps): FileOperations {
 
     async restore(actor, id, target) {
       const { identityId, storage } = actor;
-      const leaf = trashLeafPath(TRASH_PATH, id);
-      const parsed = parseMoveTrashLeaf(TRASH_PATH, leaf);
-      const original = parsed?.originalPath ?? leaf;
-      const destination = target ?? original;
-      const directory = parsed?.kind !== "file";
+      const item = await trashed(identityId, id);
+      const leaf = trashItemPath(item.id, item.name);
+      const destination = target ?? item.originalPath;
+      const directory = item.kind === "dir";
       const { value: entry, history } = await record(
         actor,
         {
           action: "file.restore",
-          requested: { path: original, trashLeaf: leaf, ...(target ? { targetPath: target } : {}) },
+          requested: {
+            path: item.originalPath,
+            trashLeaf: leaf,
+            ...(target ? { targetPath: target } : {}),
+          },
         },
         () =>
           deps.access.run(
@@ -402,7 +420,8 @@ export function createFileOperations(deps: FileOperationsDeps): FileOperations {
             async (follow) => {
               // A restore is a move out of Trash: what followed the item there comes back.
               await follow.moved(identityId, leaf, destination, directory);
-              return storage.trash.restore(id, target === undefined ? undefined : { target });
+              await follow.trash.left(item.id);
+              return storage.trash.restore(item.id, item.name, destination);
             },
           ),
         (entry) => ({
@@ -419,15 +438,17 @@ export function createFileOperations(deps: FileOperationsDeps): FileOperations {
 
     async purge(actor, id, options = {}) {
       const { identityId, storage } = actor;
-      const leaf = trashLeafPath(TRASH_PATH, id);
-      const parsed = parseMoveTrashLeaf(TRASH_PATH, leaf);
-      const directory = parsed?.kind !== "file";
+      const item = await deps.trash.get(identityId, id);
+      // Deleted for good already.
+      if (item === null) return {};
+      const leaf = trashItemPath(item.id, item.name);
+      const directory = item.kind === "dir";
       const { history } = await record(
         actor,
         {
           action: "file.delete",
           requested: {
-            path: parsed?.originalPath ?? leaf,
+            path: item.originalPath,
             trashLeaf: leaf,
             ...(options.reason ? { reason: options.reason } : {}),
           },
@@ -436,7 +457,8 @@ export function createFileOperations(deps: FileOperationsDeps): FileOperations {
           deps.access.run(identityId, { vacates: [leaf] }, async (follow) => {
             // What followed the item into Trash ends with it.
             await follow.removed(identityId, leaf, directory);
-            await storage.trash.purge(id);
+            await follow.trash.left(item.id);
+            await storage.trash.purge(item.id);
           }),
       );
       const warning = await bestEffort("Deleted", (metadata) =>
@@ -446,23 +468,25 @@ export function createFileOperations(deps: FileOperationsDeps): FileOperations {
     },
   };
 
+  /** Item `id` in `identityId`'s Trash; `not_found` when it is not there. */
+  async function trashed(identityId: string, id: string) {
+    const item = await deps.trash.get(identityId, id);
+    if (item === null) throw new StorageError("not_found", `no such item in Trash: ${id}`);
+    return item;
+  }
+
   /**
-   * Takes an item back out of Trash when what grants access could not follow
-   * it there, so nothing stays at the path it left. Its owner's Trash holds
-   * it. The path is still held, so nothing new can have taken it.
+   * Ends a delete that failed by what is on disk (`TrashItems.settle`): an
+   * item that never moved stays where it was, and one that did arrives. If
+   * even that fails, the next start settles it.
    */
-  async function takeBack(
-    owner: string,
-    path: string,
-    moved: TrashedItem,
-    cause: unknown,
-  ): Promise<void> {
+  async function settleQuietly(item: PendingTrashItem): Promise<void> {
     try {
-      await (await deps.storageFor(owner)).trash.restore(trashId(moved.leaf));
+      await deps.trash.settle(item);
     } catch (error) {
-      deps.logger?.error(
-        { err: error, cause, path, leaf: moved.leaf },
-        "an item stays in Trash although what grants access to its old path could not follow it",
+      deps.logger?.warn(
+        { err: error, id: item.id, path: item.movingFrom },
+        "a failed delete is settled at the next start",
       );
     }
   }

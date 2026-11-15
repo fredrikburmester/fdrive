@@ -1,10 +1,10 @@
-import { moveTrashLeafPath } from "@fdrive/core";
 import { createMemoryStorage } from "@fdrive/core/testing";
 import type { Identity } from "@fdrive/db";
 import { createMemoryRepos } from "@fdrive/db/testing";
 import { describe, expect, it, vi } from "vitest";
 import { activityFixture } from "../../test/activity-fixture.js";
 import { testFileOperations } from "../../test/file-operations.js";
+import { type MemoryTrashItemRepo, memoryTrashItemRepo } from "../../test/trash-items.js";
 import { ApiHttpError } from "../errors.js";
 import type { AccessFollowers } from "../files/access.js";
 import { createMetadataService } from "../metadata/service.js";
@@ -23,39 +23,51 @@ function identity(id: string, username: string): Identity {
   };
 }
 
-/** Alice's storage with Trash, and a way to move an item to Trash `daysAgo`. */
-function aliceStorage() {
+/** Alice's storage with Trash, and a way to move an item to Trash `daysAgo`, through `trash`'s rows. */
+function aliceStorage(trash: MemoryTrashItemRepo) {
   let at = NOW;
-  const storage = createMemoryStorage(
-    { "/old.txt": "old", "/new.txt": "new", "/Old/a.txt": "a" },
-    { clock: () => at },
-  );
+  const storage = createMemoryStorage({ "/old.txt": "old", "/new.txt": "new", "/Old/a.txt": "a" });
+  const files = testFileOperations({
+    trashRepo: trash,
+    clock: () => at,
+    homeOf: async () => storage,
+  });
   return {
     storage,
-    async deleteDaysAgo(path: string, daysAgo: number, kind: "file" | "dir" = "file") {
+    /** Its leaf, `/.trash/<id>/<name>`. */
+    async deleteDaysAgo(path: string, daysAgo: number) {
       at = new Date(NOW.getTime() - daysAgo * DAY);
-      await storage.trash.put(path);
+      const { item } = await files.trash({ identityId: "alice", storage, recorded: null }, path);
       at = NOW;
-      return moveTrashLeafPath(
-        "/.trash",
-        path,
-        kind,
-        (BigInt(NOW.getTime() - daysAgo * DAY) * 1_000_000n).toString(),
-      );
+      return item.leaf;
+    },
+    /** Where each item in Alice's Trash was deleted from. */
+    async listed() {
+      return (await trash.list("alice", 100)).items.map((item) => item.originalPath);
     },
   };
 }
 
 function harness(options: { retentionDays?: number; storageFor?: () => Promise<never> } = {}) {
-  const alice = aliceStorage();
+  const trash = memoryTrashItemRepo();
+  const alice = aliceStorage(trash);
   // What grants access, as links and shares with people end with a purge.
   const follower = { onMoved: vi.fn(async () => {}), onDeleted: vi.fn(async () => {}) };
   const access: AccessFollowers = {
-    run: (_identityId, _paths, work) =>
-      work({ moved: follower.onMoved, removed: follower.onDeleted }),
+    async run(_identityId, _paths, work) {
+      const transaction = trash.transaction();
+      const value = await work({
+        moved: follower.onMoved,
+        removed: follower.onDeleted,
+        trash: transaction.changes,
+      });
+      transaction.commit();
+      return value;
+    },
     moved: follower.onMoved,
     removed: follower.onDeleted,
   };
+  const expired = vi.spyOn(trash, "expired");
   const metadata = createMetadataService(createMemoryRepos());
   const activity = activityFixture(() => NOW);
   const record = vi.fn();
@@ -70,24 +82,27 @@ function harness(options: { retentionDays?: number; storageFor?: () => Promise<n
         return alice.storage;
       }),
     settings: { current: async () => ({ retentionDays: options.retentionDays ?? 30 }) },
-    files: testFileOperations({ activity: activity.service, metadata, access }),
+    trash,
+    files: testFileOperations({ activity: activity.service, metadata, access, trashRepo: trash }),
     clock: () => NOW,
     eventLog: { record },
   });
-  return { alice, follower, activity, record, retention };
+  return { alice, follower, activity, record, retention, expired };
 }
 
 describe("Trash retention", () => {
   it("deletes only what Trash kept longer than the setting, as a permanent delete with history", async () => {
     const h = harness();
     const old = await h.alice.deleteDaysAgo("/old.txt", 31);
-    const folder = await h.alice.deleteDaysAgo("/Old", 45, "dir");
-    await h.alice.deleteDaysAgo("/new.txt", 29);
+    const folder = await h.alice.deleteDaysAgo("/Old", 45);
+    const kept = await h.alice.deleteDaysAgo("/new.txt", 29);
 
     expect(await h.retention.sweep()).toEqual({ purged: 2, deferred: 0 });
 
-    const left = (await h.alice.storage.trash.list())?.entries.map((entry) => entry.originalPath);
-    expect(left).toEqual(["/new.txt"]);
+    expect(await h.alice.listed()).toEqual(["/new.txt"]);
+    expect(h.alice.storage.dump()).toEqual({ [kept]: "new" });
+    // When each item went to Trash is its row's, asked of the logins that may sign in.
+    expect(h.expired.mock.calls).toEqual([["alice", new Date(NOW.getTime() - 30 * DAY)]]);
     expect(h.activity.operations.map((operation) => operation.requested)).toEqual(
       expect.arrayContaining([
         { path: "/old.txt", trashLeaf: old, reason: "retention" },
@@ -160,11 +175,9 @@ describe("Trash retention", () => {
       await h.alice.deleteDaysAgo("/old.txt", 40);
       h.retention.start();
       await vi.advanceTimersByTimeAsync(60 * 60_000 - 1);
-      expect((await h.alice.storage.trash.list())?.entries).toHaveLength(1);
+      expect(await h.alice.listed()).toHaveLength(1);
       await vi.advanceTimersByTimeAsync(1);
-      await vi.waitFor(async () =>
-        expect((await h.alice.storage.trash.list())?.entries).toEqual([]),
-      );
+      await vi.waitFor(async () => expect(await h.alice.listed()).toEqual([]));
       await h.retention.stop();
       // Stopped: a later start does nothing, and neither does a pass.
       h.retention.start();

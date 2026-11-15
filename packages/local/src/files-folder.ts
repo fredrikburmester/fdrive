@@ -63,8 +63,6 @@ export interface FilesFolderOptions {
    * it.
    */
   readonly guard?: FilesFolderGuard;
-  /** Names each new Trash leaf by the time it was made. */
-  readonly clock?: () => Date;
 }
 
 /** Whether fdrive can use the files folder now, and what was found. */
@@ -173,7 +171,6 @@ export function createFilesFolder(options: FilesFolderOptions): FilesFolder {
       return createUserStorage({
         ...(onChange === undefined ? {} : { onChange }),
         ...(ready === undefined ? {} : { ready }),
-        ...(options.clock === undefined ? {} : { clock: options.clock }),
         // A write counts against the owner of the folder it lands in.
         ...(room === undefined
           ? {}
@@ -181,16 +178,18 @@ export function createFilesFolder(options: FilesFolderOptions): FilesFolder {
         home: join(options.root, username),
         shared: async () => {
           const grants = await options.users.shared(username);
-          // Named before any is left out, as the API names them, so names never disagree.
-          return namedSharedGrants(username, grants)
-            .filter(({ grant }) => !closedToShares(grant.path))
-            .map(({ grant, name }) => ({
-              name,
-              owner: grant.owner,
-              dir: inHome(grant.owner, grant.path),
-              ownerHome: join(options.root, grant.owner),
-              writable: grant.writable,
-            }));
+          // Named once those it refuses are left out, as the API names them, so
+          // names never disagree and a folder in its owner's Trash takes none.
+          return namedSharedGrants(
+            username,
+            grants.filter((grant) => !closedToShares(grant.path)),
+          ).map(({ grant, name }) => ({
+            name,
+            owner: grant.owner,
+            dir: inHome(grant.owner, grant.path),
+            ownerHome: join(options.root, grant.owner),
+            writable: grant.writable,
+          }));
         },
       });
     },

@@ -1,7 +1,13 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { ROUTES, TrashListResponse } from "@fdrive/contracts";
-import { createAccessRepo, createActivityRepo, createDb, createRepos } from "@fdrive/db";
+import {
+  createAccessRepo,
+  createActivityRepo,
+  createDb,
+  createRepos,
+  createTrashItemRepo,
+} from "@fdrive/db";
 import { startLocalStorage, startPostgres } from "@fdrive/testkit";
 import { sql } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -14,6 +20,7 @@ import { createFileOperations } from "../../src/files/operations.js";
 import { deploymentFilesFolder } from "../../src/local/files-folder.js";
 import { createMetadataService } from "../../src/metadata/service.js";
 import { createShareMoves } from "../../src/shares/moves.js";
+import { createTrashItems } from "../../src/trash/items.js";
 import { createTrashRetention } from "../../src/trash/retention.js";
 import { createTrashSettingsService } from "../../src/trash/settings.js";
 import { seedLocalUsers, silentLogger } from "./helpers/local-storage.ts";
@@ -89,12 +96,14 @@ describe("Trash retention against real PostgreSQL and a local folder", () => {
     expect(response.status).toBe(200);
   }
 
-  async function trashed(): Promise<string[]> {
+  async function listed() {
     const response = await call(ROUTES.trash.list, { cookie: await login() });
     expect(response.status).toBe(200);
-    return TrashListResponse.parse(await response.json())
-      .entries.map((entry) => entry.originalPath)
-      .sort();
+    return TrashListResponse.parse(await response.json()).entries;
+  }
+
+  async function trashed(): Promise<string[]> {
+    return (await listed()).map((entry) => entry.originalPath).sort();
   }
 
   /** Each trashed item's original path, its Trash binding's state and its file's, from alice's history. */
@@ -138,26 +147,40 @@ describe("Trash retention against real PostgreSQL and a local folder", () => {
       folder: deploymentFilesFolder(config, repos),
     });
     const ownerPath = async (identityId: string, path: string) => ({ identityId, path });
+    // Where each item lies on disk, from the rows the listing reads.
+    const leaves = Object.fromEntries(
+      (await listed()).map((entry) => [
+        entry.originalPath,
+        join(storage.root, "alice", ".trash", entry.id, entry.name),
+      ]),
+    );
+    const access = createAccessFollowers({
+      repo: createAccessRepo(database.db, clock),
+      ownerPath,
+      links: createShareMoves({ ownerPath }).resolve,
+      usernameOf: async (identityId) => (await repos.identities.get(identityId))?.username ?? null,
+    });
+    const trashItems = createTrashItems({
+      repo: createTrashItemRepo(database.db),
+      access,
+      homeOf: storageFor,
+    });
     const retention = createTrashRetention({
       identities: repos.identities,
       storageFor,
       settings: createTrashSettingsService({ settings: repos.settings }),
+      trash: trashItems,
       files: createFileOperations({
         activity: createActivityService({
           repo: createActivityRepo(database.db, clock),
           clock,
           pending: () => undefined,
         }),
-        access: createAccessFollowers({
-          repo: createAccessRepo(database.db, clock),
-          ownerPath,
-          links: createShareMoves({ ownerPath }).resolve,
-          usernameOf: async (identityId) =>
-            (await repos.identities.get(identityId))?.username ?? null,
-        }),
+        access,
         metadata: createMetadataService(repos),
         ownerPath,
-        storageFor,
+        trash: trashItems,
+        clock,
       }),
       clock,
       eventLog: { record: () => undefined },
@@ -165,10 +188,9 @@ describe("Trash retention against real PostgreSQL and a local folder", () => {
     expect(await retention.sweep()).toEqual({ purged: 2, deferred: 0 });
 
     expect(await trashed()).toEqual(["/new.txt"]);
-    const layout = join(storage.root, "alice", ".trash", ".fdrive-move-v1");
-    expect(existsSync(join(layout, "file", "p", "old.txt"))).toBe(false);
-    expect(existsSync(join(layout, "dir", "p", "Old"))).toBe(false);
-    expect(existsSync(join(layout, "file", "p", "new.txt"))).toBe(true);
+    expect(existsSync(leaves["/old.txt"] as string)).toBe(false);
+    expect(existsSync(leaves["/Old"] as string)).toBe(false);
+    expect(existsSync(leaves["/new.txt"] as string)).toBe(true);
     expect(await bindings()).toEqual({
       "/Old": "purged deleted",
       "/new.txt": "bound trashed",

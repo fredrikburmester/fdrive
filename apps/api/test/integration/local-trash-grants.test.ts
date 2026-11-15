@@ -26,8 +26,8 @@ const cookieFrom = (response: Response) => response.headers.get("set-cookie")?.s
 
 /**
  * Folders alice shares with alice-other, then moves to Trash through fdrive,
- * with the real indexer reading each move (into `<trash>/.fdrive-move-v1/…`
- * too) from the change journal, as in a deployment. A share follows its
+ * with the real indexer reading each move (into `<trash>/<id>/<name>` too)
+ * from the change journal, as in a deployment. A share follows its
  * folder into Trash, where the person it is shared with cannot reach it, and
  * never stays at a path a new folder can take; a restore brings it back, and
  * a purge or a delete outside fdrive ends it.
@@ -156,7 +156,8 @@ describe("shared folders in their owner's Trash, through the real indexer", () =
       call(ROUTES.fs.delete, { method: "POST", cookie, body: { items: [{ path, kind: "dir" }] } }),
     );
     const [id] = (await trashIds(cookie)).filter((candidate) => !before.includes(candidate));
-    return { kind: "moved", path: `alice${path}`, target: `alice/.trash/${id}` };
+    const name = path.split("/").at(-1);
+    return { kind: "moved", path: `alice${path}`, target: `alice/.trash/${id}/${name}` };
   }
 
   async function trashIds(cookie: string): Promise<string[]> {
@@ -265,8 +266,8 @@ describe("shared folders in their owner's Trash, through the real indexer", () =
     );
   const mkdir = (cookie: string, path: string) =>
     ok(call(ROUTES.fs.mkdir, { method: "POST", cookie, body: { path } }));
-  /** A trashed item's id, from where it went (`Moved.target`). */
-  const idOf = (moved: Moved) => moved.target.slice(moved.target.indexOf("/.fdrive-move-v1/") + 1);
+  /** A trashed item's id, from where it went (`Moved.target`, `alice/.trash/<id>/<name>`). */
+  const idOf = (moved: Moved) => moved.target.split("/")[2] as string;
   const virtual = (rootPath: string) => rootPath.slice("alice".length);
 
   it("takes shares into Trash with their folder, back on restore, and ends them on purge", async () => {
@@ -281,7 +282,7 @@ describe("shared folders in their owner's Trash, through the real indexer", () =
         trashed = await trash(alice, "/docs");
         return trashed;
       });
-      expect(trashed.target).toMatch(/^alice\/\.trash\/\.fdrive-move-v1\/dir\/p\/docs\/v\/\d+$/);
+      expect(trashed.target).toMatch(/^alice\/\.trash\/[0-9a-f-]{36}\/docs$/);
       expect(await shelf(other)).toEqual([]);
       const leaf = virtual(trashed.target);
       expect(await shared(alice, "docs")).toEqual([leaf, `${leaf}/nested`]);
@@ -340,7 +341,7 @@ describe("shared folders in their owner's Trash, through the real indexer", () =
         trashed = await trash(alice, "/docs-other");
         return trashed;
       });
-      expect(trashed.target).toMatch(/^alice\/\.trash\/\.fdrive-move-v1\//);
+      expect(trashed.target).toMatch(/^alice\/\.trash\/[0-9a-f-]{36}\/docs-other$/);
       expect(await shared(alice, "docs-other")).toEqual([virtual(trashed.target)]);
       expect(await shelf(other)).toEqual([]);
 

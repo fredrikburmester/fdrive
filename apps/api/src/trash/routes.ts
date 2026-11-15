@@ -9,13 +9,8 @@ import {
   TrashRestoreRequest,
   TrashRestoreResponse,
 } from "@fdrive/contracts";
-import {
-  isStorageError,
-  parseMoveTrashLeaf,
-  TRASH_PATH,
-  type TrashEntry,
-  trashLeafPath,
-} from "@fdrive/core";
+import { isStorageError, isTrashId, TRASH_PATH } from "@fdrive/core";
+import type { TrashItem } from "@fdrive/db";
 import { activityHeaders, activityRequestContext, recordFsAction } from "../activity/fs-context.js";
 import { activityFailure, type PersonalActivityService } from "../activity/service.js";
 import type { AppHono, AuthedHono } from "../app.js";
@@ -28,6 +23,7 @@ import {
   serializeEntry,
   toApiHttpError,
 } from "../fs/routes.js";
+import type { TrashItems } from "./items.js";
 
 const API_PREFIX = "/api/v1";
 
@@ -41,31 +37,26 @@ export interface TrashRoutesDeps {
   readonly activity: PersonalActivityService;
   /** Restores and purges items, and what followed them into Trash. */
   readonly files: Pick<FileOperations, "restore" | "purge">;
+  /** What each login's Trash holds. */
+  readonly trash: Pick<TrashItems, "list">;
 }
 
-/**
- * Throws `bad_request` for an id that does not parse as a well-formed trash
- * leaf, otherwise returns it unchanged. The restore target itself (the id's
- * parsed original path, when the request gives no explicit target) is
- * resolved by `TrashProvider.restore` itself, along with the conflict check
- * for an already-occupied target (see `@fdrive/core`'s
- * `packages/core/src/trash/recycle-folder-trash.ts`).
- */
+/** The most items the Trash page lists. */
+const LIST_LIMIT = 10_000;
+
+/** Throws `bad_request` for anything that cannot name a Trash item, before anything is done. */
 function validateTrashId(id: string): string {
-  const parsed = parseMoveTrashLeaf(TRASH_PATH, trashLeafPath(TRASH_PATH, id));
-  if (parsed === null) {
-    throw new ApiHttpError("bad_request", `invalid trash id: ${id}`, { id });
-  }
+  if (!isTrashId(id)) throw new ApiHttpError("bad_request", `invalid trash id: ${id}`, { id });
   return id;
 }
 
-function serializeTrashEntry(entry: TrashEntry): TrashEntryContract {
+function serializeTrashEntry(item: TrashItem): TrashEntryContract {
   return {
-    id: entry.id,
-    originalPath: entry.originalPath,
-    name: entry.name,
-    size: entry.size,
-    deletedAt: entry.deletedAt.toISOString(),
+    id: item.id,
+    originalPath: item.originalPath,
+    name: item.name,
+    size: item.size,
+    deletedAt: item.deletedAt.toISOString(),
   };
 }
 
@@ -97,10 +88,9 @@ export function registerTrashRoutes(
   const { authed } = groups;
 
   authed.get(routePath(ROUTES.trash.list), async (c) => {
-    const trash = c.get("principal").storage.trash;
-    const listing = await runStorageCall(() => trash.list());
+    const listing = await deps.trash.list(c.get("principal").identityId, LIST_LIMIT);
     const body: TrashListResponse = TrashListResponse.parse({
-      entries: listing.entries.map(serializeTrashEntry),
+      entries: listing.items.map(serializeTrashEntry),
       truncated: listing.truncated,
     });
     return c.json(body);
@@ -160,7 +150,6 @@ export function registerTrashRoutes(
 
   authed.post(routePath(ROUTES.trash.empty), async (c) => {
     const principal = c.get("principal");
-    const trash = principal.storage.trash;
     const context = activityRequestContext(c);
     const batchId = context.batchId ?? randomUUID();
     let completed = 0;
@@ -182,12 +171,9 @@ export function registerTrashRoutes(
             : activityFailure(error),
       },
       async () => {
-        // Every item, also clearing the empty folders the layout holds.
-        const { entries } = await runStorageCall(() =>
-          trash.list({ limit: Number.POSITIVE_INFINITY, prune: true, signal: c.req.raw.signal }),
-        );
+        const { items } = await deps.trash.list(principal.identityId, Number.MAX_SAFE_INTEGER);
         // Purge item by item so every emptied item keeps its own history row.
-        for (const entry of entries) {
+        for (const entry of items) {
           await runStorageCall(() =>
             deps.files.purge(
               fileActor(principal, {

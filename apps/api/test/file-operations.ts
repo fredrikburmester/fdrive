@@ -18,21 +18,35 @@ import {
   type FileOperationsDeps,
 } from "../src/files/operations.js";
 import { createShareMoves } from "../src/shares/moves.js";
+import { createTrashItems, type TrashItems, type TrashItemsDeps } from "../src/trash/items.js";
+import { type MemoryTrashItemRepo, memoryTrashItemRepo } from "./trash-items.js";
 
 /** Where the memory access repository writes what follows. */
 export interface MemoryAccessStores {
   readonly shares?: Pick<ShareRepo, "movePrefix" | "deletePrefix">;
   readonly grants?: Pick<LocalGrantRepo, "movePrefix" | "deletePrefix">;
   readonly office?: Pick<OfficeFileRepo, "movePrefix" | "deletePrefix">;
+  /** Trash's rows, which change in the same transaction. */
+  readonly trash?: MemoryTrashItemRepo;
 }
+
+/** Trash's rows for an access repository made without them: any change to them is a test's mistake. */
+const noTrashRows: Pick<MemoryTrashItemRepo, "transaction"> = {
+  transaction() {
+    const missing = async (): Promise<never> => {
+      throw new Error("this memoryAccessRepo has no Trash rows: pass { trash } to it");
+    };
+    return { changes: { entered: missing, left: missing }, commit() {} };
+  },
+};
 
 /**
  * `AccessRepo` over memory repositories, for route tests. Like a
  * transaction, it keeps what `work` hands it only once `work` succeeded, and
  * nobody sees it before: a document's id moves with the rename that holds
- * its lock, not while the storage call runs. Failures in the transaction
- * itself, and the path locks, are tested against PostgreSQL
- * (`test/integration`).
+ * its lock, not while the storage call runs. Trash's rows change the same
+ * way. Failures in the transaction itself, and the path locks, are tested
+ * against PostgreSQL (`test/integration`).
  */
 export function memoryAccessRepo(
   stores: MemoryAccessStores = {},
@@ -62,13 +76,15 @@ export function memoryAccessRepo(
     async run(held, work) {
       locks.push([...held]);
       const pending: AccessChange[] = [];
+      const trash = (stores.trash ?? noTrashRows).transaction();
       const value = await work(async (change) => {
         pending.push(change);
-      });
+      }, trash.changes);
       for (const change of pending) {
         await apply(change);
         changes.push(change);
       }
+      trash.commit();
       return value;
     },
   };
@@ -93,17 +109,57 @@ export function testAccessFollowers(
   });
 }
 
+/** Each login's own files, for a test whose deletes never need settling. */
+async function noHome(): Promise<StorageProvider> {
+  throw new Error("no storage for this login in this test");
+}
+
+/** Trash's rows in memory and what reads and settles them, as `composition.ts` builds them. */
+export function testTrashItems(
+  options: {
+    repo?: MemoryTrashItemRepo;
+    access?: AccessFollowers;
+    homeOf?: (identityId: string) => Promise<StorageProvider>;
+    metadata?: TrashItemsDeps["metadata"];
+  } = {},
+): { repo: MemoryTrashItemRepo; items: TrashItems; access: AccessFollowers } {
+  const repo = options.repo ?? memoryTrashItemRepo();
+  const access = options.access ?? testAccessFollowers(memoryAccessRepo({ trash: repo }));
+  const items = createTrashItems({
+    repo,
+    access,
+    homeOf: options.homeOf ?? noHome,
+    ...(options.metadata === undefined ? {} : { metadata: options.metadata }),
+  });
+  return { repo, items, access };
+}
+
+export interface TestFileOperationsDeps extends Partial<FileOperationsDeps> {
+  /** Trash's rows; a fresh memory repository unless given. */
+  readonly trashRepo?: MemoryTrashItemRepo;
+  /** Each login's own files, which settle a delete that failed. */
+  readonly homeOf?: (identityId: string) => Promise<StorageProvider>;
+}
+
 /** The file operations as `composition.ts` builds them, over memory stores. */
-export function testFileOperations(deps: Partial<FileOperationsDeps> = {}): FileOperations {
+export function testFileOperations(deps: TestFileOperationsDeps = {}): FileOperations {
   const ownerPath = deps.ownerPath ?? ownPath;
+  const trashRepo = deps.trashRepo ?? memoryTrashItemRepo();
+  const access =
+    deps.access ?? testAccessFollowers(memoryAccessRepo({ trash: trashRepo }), { ownerPath });
+  const trash =
+    deps.trash ??
+    testTrashItems({
+      repo: trashRepo,
+      access,
+      ...(deps.homeOf === undefined ? {} : { homeOf: deps.homeOf }),
+      ...(deps.metadata === undefined ? {} : { metadata: deps.metadata }),
+    }).items;
   return createFileOperations({
-    access: deps.access ?? testAccessFollowers(memoryAccessRepo(), { ownerPath }),
+    access,
     ownerPath,
-    storageFor:
-      deps.storageFor ??
-      (async (): Promise<StorageProvider> => {
-        throw new Error("no storage for another login in this test");
-      }),
+    trash,
+    ...(deps.clock === undefined ? {} : { clock: deps.clock }),
     ...(deps.activity === undefined ? {} : { activity: deps.activity }),
     ...(deps.metadata === undefined ? {} : { metadata: deps.metadata }),
     ...(deps.logger === undefined ? {} : { logger: deps.logger }),

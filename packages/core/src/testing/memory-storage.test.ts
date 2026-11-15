@@ -219,6 +219,12 @@ describe("createMemoryStorage extras", () => {
     await expect(storage.deleteEmptyDir("/")).rejects.toMatchObject({ kind: "bad_request" });
     expect(storage.dirs()).toEqual(["/"]);
   });
+
+  it("refuses to delete what is not there", async () => {
+    const storage = createMemoryStorage();
+    await expect(storage.deleteFile("/missing.txt")).rejects.toMatchObject({ kind: "not_found" });
+    await expect(storage.deleteDir("/missing")).rejects.toMatchObject({ kind: "not_found" });
+  });
 });
 
 it("preserves read, probe, range and timestamp semantics", async () => {

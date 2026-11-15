@@ -55,6 +55,7 @@ export {
   type DesktopRepo,
   type DesktopRetention,
   type DesktopShareMove,
+  type DesktopTrashChange,
 } from "./repos/desktop.js";
 export { createFilesFolderFacts, createRepos } from "./repos/drizzle.js";
 export type {
@@ -147,6 +148,15 @@ export {
   validateSharePath,
 } from "./repos/shares-state.js";
 export { createSystemEventRepo } from "./repos/system-events.js";
+export {
+  createTrashItemRepo,
+  type PendingTrashItem,
+  type TrashItem,
+  type TrashItemChanges,
+  type TrashItemPage,
+  type TrashItemRepo,
+  trashItemChanges,
+} from "./repos/trash-items.js";
 export type {
   Account,
   AccountRepo,

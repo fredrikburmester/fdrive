@@ -5,7 +5,7 @@ import { followIntoTrash } from "./trash.js";
 
 const ALICE = "identity-alice";
 const BOB = "identity-bob";
-const LEAF = "/.trash/.fdrive-move-v1/file/p/a.txt/v/1";
+const LEAF = "/.trash/0d9f8a52-6c1e-4f53-9a7b-2e4c6d8f0a1b/a.txt";
 
 async function setup() {
   const repos = createMemoryRepos();
@@ -79,7 +79,7 @@ describe("followIntoTrash", () => {
     await h.tagged(ALICE, "/Team/a.txt");
     await h.tagged(BOB, shared);
     const ownerPath = vi.fn(async () => ({ identityId: ALICE, path: "/Team/a.txt" }));
-    const leaf = "/.trash/.fdrive-move-v1/file/p/Team/p/a.txt/v/1";
+    const leaf = "/.trash/7a4b2c1d-3e5f-4a6b-8c7d-9e0f1a2b3c4d/a.txt";
 
     await followIntoTrash(h.metadata, ownerPath, BOB, shared, { leaf, kind: "file" });
 

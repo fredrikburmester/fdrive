@@ -232,14 +232,15 @@ recorded inode, so the write was published and its receipt is kept now; the stag
 source) still holds it, so nothing was published and the operation is `ready` to commit again;
 neither holds it, because someone replaced or moved the item since, so it is a `conflict`, which
 the Mac app already handles, and nothing is overwritten. A move to Trash records whose Trash
-takes the item instead of where it goes, since Trash picks the place; its retry finds the item
-there by the path it was deleted from and its inode. Every Mac retry starts with the same
+takes the item and the Trash item it becomes, whose row is written first; its retry finds the
+item at that item's path by its inode, and a move that never happened leaves no row. Every Mac retry starts with the same
 prepare request, so that is where an interrupted commit ends. A staged body that is gone is
 asked for again (the operation returns to `receiving`).
 
-The completed receipt, the write's personal history and what grants access to the moved path
-(public links and folders shared with people) commit in one PostgreSQL transaction after
-publication, so no link or share stays at a path the write left, where a new item could appear.
+The completed receipt, the write's personal history, what grants access to the moved path
+(public links and folders shared with people) and Trash's row for an item moved into or out of
+Trash commit in one PostgreSQL transaction after publication, so no link or share stays at a
+path the write left, where a new item could appear.
 If that transaction fails, the operation stays `committing` with the file published and the
 request answers a server error, never success; the Mac app retries it on its own, and the retry
 keeps the receipt, moving sharing from where the item was. Replaying or acknowledging that receipt
@@ -325,7 +326,8 @@ FDrive for Mac 0.5 and earlier refuse every permanent delete in the app itself, 
 the server, and macOS retries those deletes until the app is updated.
 
 Earlier servers kept a separate Mac Trash in `/.fdrive-desktop/<identity>/trash`. When the API
-starts, it moves what that Trash still holds into each user's Trash, as deleted then; see
+starts, before it serves anyone, it moves what that Trash still holds into each user's Trash, as
+deleted then; see
 [upgrading](TRASH.md#upgrading-from-a-trash-with-settings).
 
 ## Build and verify

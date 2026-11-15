@@ -79,6 +79,8 @@ export interface McpToolDeps {
    * read-only tools reuse these handlers without it.
    */
   readonly files?: FileOperations;
+  /** What each login's Trash holds, for the Trash tools. */
+  readonly trash?: Pick<import("../trash/items.js").TrashItems, "list" | "get">;
   /** The next command's operation ID in personal activity, unique within the request. */
   readonly nextOperationId?: () => string;
 }

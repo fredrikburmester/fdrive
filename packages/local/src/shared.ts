@@ -1,7 +1,7 @@
 import { basename, relative, sep } from "node:path";
 import {
   baseName,
-  createRecycleFolderTrash,
+  createTrash,
   type EntryStat,
   type FileEntry,
   isReservedPath,
@@ -80,7 +80,7 @@ export function sharedFolderNames(grants: readonly SharedGrant[]): string[] {
 /**
  * True when no share reaches a folder at `path` in its owner's files: one of
  * fdrive's own folders (`isReservedPath`: the Trash, the Mac app's folder,
- * the Trash layout wherever it lies) or anything inside one. A share follows
+ * Trash's old layout wherever it lies) or anything inside one. A share follows
  * its folder into Trash, and is refused there until a restore brings it back
  * or a purge ends it.
  */
@@ -113,8 +113,6 @@ export interface UserStorageOptions {
   readonly onChange?: DiskChangeListener;
   /** Throws when the folder may not be used now; asked before every operation. */
   readonly ready?: () => Promise<void>;
-  /** Names each new Trash leaf by the time it was made. */
-  readonly clock?: () => Date;
   /**
    * How many more bytes may land in the user's own files (`null`) or in a
    * shared folder's owner's files, or `null` for no limit. With it, an
@@ -196,8 +194,7 @@ const SHELF_PATH = `/${SHARED_WITH_ME}`;
 export function createUserStorage(options: UserStorageOptions): StorageProvider {
   const listener = options.onChange;
   const heard = listener === undefined ? {} : { onChange: listener };
-  const clock = options.clock ?? (() => new Date());
-  const own = createLocalStorage({ home: options.home, ...heard, clock });
+  const own = createLocalStorage({ home: options.home, ...heard });
   const mounts = new Map<string, LocalStorage>();
   /** Each sharing owner's whole home, whose Trash takes what is trashed in their folders. */
   const owners = new Map<string, LocalStorage>();
@@ -351,7 +348,7 @@ export function createUserStorage(options: UserStorageOptions): StorageProvider 
   function ownerStorage(folder: SharedFolder): LocalStorage {
     let storage = owners.get(folder.ownerHome);
     if (storage === undefined) {
-      storage = createLocalStorage({ home: folder.ownerHome, ...heard, clock });
+      storage = createLocalStorage({ home: folder.ownerHome, ...heard });
       owners.set(folder.ownerHome, storage);
     }
     return storage;
@@ -535,16 +532,16 @@ export function createUserStorage(options: UserStorageOptions): StorageProvider 
 
   // Listed, restored and purged through the user's own files, so a restore
   // may land in a shared folder.
-  const trash = createRecycleFolderTrash({ storage, clock });
+  const trash = createTrash(storage);
   return {
     ...storage,
     trash: {
       ...trash,
-      async put(path) {
+      async put(path, id) {
         const at = (await writable(path)) as Located;
-        if (at.kind === "own") return own.trash.put(at.rel);
+        if (at.kind === "own") return own.trash.put(at.rel, id);
         const folder = relative(at.folder.ownerHome, at.folder.dir).split(sep);
-        return ownerStorage(at.folder).trash.put(joinPath("/", ...folder, at.rel));
+        return ownerStorage(at.folder).trash.put(joinPath("/", ...folder, at.rel), id);
       },
     },
   };

@@ -1,6 +1,6 @@
 import {
   baseName,
-  createRecycleFolderTrash,
+  createTrash,
   type EntryStat,
   type FileEntry,
   type MadeFolder,
@@ -20,7 +20,7 @@ export interface MemoryStorage extends StorageProvider {
 }
 
 export interface MemoryStorageOptions {
-  /** Modification times of new files, and the names of new Trash leaves. */
+  /** Modification times of new files. */
   readonly clock?: () => Date;
 }
 
@@ -457,5 +457,5 @@ export function createMemoryStorage(
     },
   };
 
-  return Object.assign(storage, { trash: createRecycleFolderTrash({ storage, clock }) });
+  return Object.assign(storage, { trash: createTrash(storage) });
 }

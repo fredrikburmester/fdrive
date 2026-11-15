@@ -7,6 +7,7 @@ import type { IndexedContent } from "@fdrive/db";
 import { createLocalStorage } from "@fdrive/local";
 import { createMemoryStorage } from "@fdrive/testkit";
 import { afterEach, expect, it, vi } from "vitest";
+import { testTrashItems } from "../../test/file-operations.js";
 import { memoryRepo } from "../../test/helpers/desktop-repo.js";
 import type { Principal } from "../auth/principal.js";
 import { createDesktopWrites } from "./writes.js";
@@ -62,6 +63,7 @@ async function fixture(
     storageForIdentity: async () => options.staging ?? raw,
     clock: () => new Date(),
     purge: async () => {},
+    trash: testTrashItems({ homeOf: async () => raw }).items,
     ...(options.access
       ? {
           access: async () => {

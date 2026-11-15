@@ -1,22 +1,18 @@
 import { createHash, randomUUID } from "node:crypto";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { DesktopWriteEntry } from "@fdrive/contracts";
-import {
-  isStorageError,
-  type MoveOptions,
-  StorageError,
-  TRASH_PATH,
-  type TrashProvider,
-  trashLeafPath,
-} from "@fdrive/core";
+import { isStorageError, type MoveOptions, StorageError, trashItemPath } from "@fdrive/core";
 import type { DesktopAccessMove } from "@fdrive/db";
 import { createLocalStorage, createUserStorage } from "@fdrive/local";
 import { createMemoryStorage } from "@fdrive/testkit";
 import { afterEach, expect, it, vi } from "vitest";
+import { testFileOperations, testTrashItems } from "../../test/file-operations.js";
 import { memoryRepo } from "../../test/helpers/desktop-repo.js";
+import { type MemoryTrashItemRepo, memoryTrashItemRepo } from "../../test/trash-items.js";
 import type { Principal } from "../auth/principal.js";
+import { fileActor } from "../files/operations.js";
 import { createDesktopRetention, removeIncoming } from "./retention.js";
 import { createDesktopWrites, DESKTOP_TRASH, NO_WRITES } from "./writes.js";
 
@@ -58,25 +54,31 @@ async function staged(
     throw error;
   }
 }
-/** The leaf of the only item in a storage's Trash. */
-async function onlyLeaf(storage: { trash: TrashProvider }) {
-  const { entries } = await storage.trash.list();
-  expect(entries).toHaveLength(1);
-  return trashLeafPath(TRASH_PATH, required(entries[0]).id);
+/** The only row Trash holds, arrived or on its way, with its path in Trash. */
+function onlyItem(f: { trashRepo: MemoryTrashItemRepo }) {
+  const rows = [...f.trashRepo.rows.values()];
+  expect(rows).toHaveLength(1);
+  const row = required(rows[0]);
+  return { ...row, leaf: trashItemPath(row.id, row.name) };
+}
+/** The path in Trash of the only item there. */
+async function onlyLeaf(f: { trashRepo: MemoryTrashItemRepo }) {
+  return onlyItem(f).leaf;
 }
 const temporary: string[] = [];
 afterEach(async () => {
   await Promise.all(temporary.splice(0).map((path) => rm(path, { recursive: true, force: true })));
 });
 
-/** Each Trash leaf is named by the time it was made, so every call is a new moment. */
+/** Every new file is written at a new moment. */
 function ticking() {
   let now = Date.parse("2026-11-01T00:00:00.000Z");
   return () => new Date(now++);
 }
 
 async function fixture() {
-  const memory = memoryRepo();
+  const trashRepo = memoryTrashItemRepo();
+  const memory = memoryRepo(trashRepo);
   const raw = createMemoryStorage(
     { "/old.txt": "old", "/folder/child": "child" },
     { clock: ticking() },
@@ -96,8 +98,14 @@ async function fixture() {
       ({ directory, shares: { identityId, from, to }, grants: null }) as DesktopAccessMove,
   );
   const metadata = { onMoved: vi.fn(async () => {}), onDeleted: vi.fn(async () => {}) };
-  // Delete permanently, as `FileOperations.purge` does it.
-  const purge = vi.fn((principal: Principal, id: string) => principal.storage.trash.purge(id));
+  // Trash's rows, over the one login's files.
+  const homeOf = async () => raw;
+  const trash = testTrashItems({ repo: trashRepo, homeOf }).items;
+  const files = testFileOperations({ trashRepo, homeOf });
+  // Delete permanently, through `FileOperations.purge`.
+  const purge = vi.fn(async (principal: Principal, id: string) => {
+    await files.purge(fileActor(principal, { source: "native" }), id);
+  });
   const deps = {
     repo: memory.repo,
     storageForIdentity: async () => raw,
@@ -105,6 +113,7 @@ async function fixture() {
     access,
     metadata,
     purge,
+    trash,
   };
   const service = createDesktopWrites(deps);
   const stage = async (name: string, bytes: string, existing?: DesktopWriteEntry) => {
@@ -135,6 +144,9 @@ async function fixture() {
     access,
     metadata,
     purge,
+    files,
+    trashRepo,
+    trash,
   };
 }
 
@@ -365,7 +377,6 @@ it("cancels stale uploads and forgets finished operations with what they staged"
       if (identityId === unavailable) throw Error("storage is down");
       return f.raw;
     },
-    metadata: f.metadata,
     clock: () => now,
     eventLog,
   });
@@ -554,6 +565,53 @@ it("publishes a write a crash stopped before its rename once the app retries, an
   expect(await staged(f, folder.operationId)).toEqual([]);
 });
 
+it("leaves no Trash row behind a move to Trash that never moved the item", async () => {
+  const f = await fixture();
+  const original = await f.service.stat(f.principal, "/old.txt");
+  const request = (operationId: string) => ({
+    kind: "move" as const,
+    operationId,
+    itemId: original.id,
+    parentId: "trash",
+    name: original.name,
+    base: original.version,
+  });
+  const begin = vi.spyOn(f.trash, "begin");
+  // The rename into Trash fails: the item stays, and its row goes with the folder made for it.
+  const failing = request(randomUUID());
+  await f.service.prepare(f.principal, failing);
+  const move = f.raw.move.bind(f.raw);
+  f.raw.move = vi.fn(async () => {
+    throw new StorageError("upstream_unavailable", "disk gone");
+  });
+  await expect(f.service.commit(f.principal, failing.operationId)).rejects.toMatchObject({
+    kind: "upstream_unavailable",
+  });
+  f.raw.move = move;
+  expect((await f.service.status(f.principal, failing.operationId)).state).toBe("ready");
+  expect(f.trashRepo.rows.size).toBe(0);
+  expect(f.raw.dirs().filter((dir) => dir.startsWith("/.trash/"))).toEqual([]);
+  expect(await f.read("/old.txt")).toBe("old");
+  // Refused at the last check before it moves, after its row was written: the same.
+  const revoked = request(randomUUID());
+  await f.service.prepare(f.principal, revoked);
+  const lapsed = { ...f.principal, verifyAuthority: async () => false };
+  await expect(f.service.commit(lapsed, revoked.operationId)).rejects.toMatchObject({
+    kind: "unauthorized",
+  });
+  expect(f.trashRepo.rows.size).toBe(0);
+  expect(await f.read("/old.txt")).toBe("old");
+  // Each attempt wrote its row before it could move anything.
+  expect(begin).toHaveBeenCalledTimes(2);
+  // Committed again, it goes to Trash once, with one row.
+  expect((await f.service.commit(f.principal, failing.operationId)).item).toMatchObject({
+    id: original.id,
+    trashed: true,
+  });
+  expect(onlyItem(f)).toMatchObject({ originalPath: "/old.txt", movingFrom: null });
+  expect(await f.read(onlyItem(f).leaf)).toBe("old");
+});
+
 it("finishes a trash move and a restore a crash interrupted, from where the item was", async () => {
   const f = await fixture();
   const { identityId } = f.principal;
@@ -573,8 +631,12 @@ it("finishes a trash move and a restore a crash interrupted, from where the item
     trashed.operationId,
   );
   await crash.made;
-  // Trash picked the leaf; the retry finds it there, deleted from where the item was.
-  const leaf = await onlyLeaf(f.raw);
+  // Its row was written before it moved; the retry finds the item at its Trash item's path.
+  const pending = onlyItem(f);
+  const leaf = pending.leaf;
+  expect(pending).toMatchObject({ originalPath: "/old.txt", movingFrom: "/old.txt" });
+  expect(await f.read(leaf)).toBe("old");
+  expect(await f.trash.list(identityId, 10)).toEqual({ items: [], truncated: false });
   const inTrash = await createDesktopWrites(f.deps).prepare(f.principal, trashed);
   expect(inTrash.item).toMatchObject({
     trashed: true,
@@ -583,6 +645,11 @@ it("finishes a trash move and a restore a crash interrupted, from where the item
     path: `${DESKTOP_TRASH}/${original.id}`,
   });
   expect(required(await f.repo.item(identityId, original.id)).path).toBe(leaf);
+  // It arrived with its receipt: Trash lists it.
+  expect(onlyItem(f).movingFrom).toBeNull();
+  expect((await f.trash.list(identityId, 10)).items).toMatchObject([
+    { name: "old.txt", originalPath: "/old.txt" },
+  ]);
   expect(f.moved.get(trashed.operationId)?.shares).toEqual({
     identityId,
     from: "/old.txt",
@@ -624,7 +691,8 @@ it("finishes a trash move and a restore a crash interrupted, from where the item
     restored: true,
   });
   expect(f.metadata.onMoved).toHaveBeenLastCalledWith(identityId, leaf, "/old.txt", false);
-  expect((await f.raw.trash.list()).entries).toEqual([]);
+  expect(f.trashRepo.rows.size).toBe(0);
+  expect(f.raw.dirs().filter((dir) => dir.startsWith("/.trash/"))).toEqual([]);
 });
 
 it("never overwrites a file someone replaced between commit attempts", async () => {
@@ -692,8 +760,6 @@ it("runs retention on a timer, logs failed passes and stops cleanly", async () =
     expired: vi.fn(async () => []),
     transition: vi.fn(async () => true),
     forget: vi.fn(async () => true),
-    oldTrash: vi.fn(async () => []),
-    remove: vi.fn(async () => {}),
   };
   try {
     const eventLog = { record: vi.fn() };
@@ -701,14 +767,9 @@ it("runs retention on a timer, logs failed passes and stops cleanly", async () =
       .fn<() => Promise<never[]>>()
       .mockRejectedValueOnce(Error("db down"))
       .mockResolvedValue([]);
-    const oldTrash = vi
-      .fn<() => Promise<never[]>>()
-      .mockRejectedValueOnce(Error("db down"))
-      .mockResolvedValue([]);
     const retention = createDesktopRetention({
-      repo: { ...idle, expired, oldTrash },
+      repo: { ...idle, expired },
       storageForIdentity: async () => createMemoryStorage({}),
-      metadata: { onMoved: vi.fn() },
       clock: () => new Date(),
       eventLog,
     });
@@ -718,14 +779,6 @@ it("runs retention on a timer, logs failed passes and stops cleanly", async () =
     expect(eventLog.record).toHaveBeenCalledWith("general", "error", "Mac write cleanup failed", {
       error: "db down",
     });
-    // The Mac's old Trash is moved once per start; a failure waits for the next.
-    expect(eventLog.record).toHaveBeenCalledWith(
-      "general",
-      "error",
-      "Moving the Mac's old Trash failed",
-      { error: "db down" },
-    );
-    expect(oldTrash).toHaveBeenCalledTimes(1);
     await vi.advanceTimersByTimeAsync(10 * 60_000);
     expect(expired).toHaveBeenCalledTimes(2);
     await retention.stop();
@@ -744,7 +797,6 @@ it("runs retention on a timer, logs failed passes and stops cleanly", async () =
     const overlapping = createDesktopRetention({
       repo: { ...idle, expired: slow },
       storageForIdentity: async () => createMemoryStorage({}),
-      metadata: { onMoved: vi.fn() },
       clock: () => new Date(),
       eventLog,
     });
@@ -768,7 +820,6 @@ it("runs retention on a timer, logs failed passes and stops cleanly", async () =
         }),
       },
       storageForIdentity: async () => createMemoryStorage({}),
-      metadata: { onMoved: vi.fn() },
       clock: () => new Date(),
       eventLog,
     });
@@ -1293,7 +1344,7 @@ it("bounds Trash listings and surfaces upstream failures instead of returning an
   };
   await f.service.prepare(f.principal, move);
   const result = required((await f.service.commit(f.principal, move.operationId)).item);
-  const leaf = await onlyLeaf(f.raw);
+  const leaf = await onlyLeaf(f);
   const stat = f.storage.stat.bind(f.storage);
   const denied = vi
     .spyOn(f.storage, "stat")
@@ -1308,7 +1359,7 @@ it("bounds Trash listings and surfaces upstream failures instead of returning an
   });
   // An item no one can read is left out; the rest of Trash still lists.
   expect((await f.service.list(f.principal, DESKTOP_TRASH, "token")).entries).toEqual([]);
-  vi.spyOn(f.storage.trash, "list").mockResolvedValueOnce({ entries: [], truncated: true });
+  vi.spyOn(f.trash, "list").mockResolvedValueOnce({ items: [], truncated: true });
   await expect(f.service.list(f.principal, DESKTOP_TRASH, "token")).rejects.toMatchObject({
     kind: "rate_limited",
   });
@@ -1352,14 +1403,14 @@ it("reads each Trash entry with one stat and lists no ancestors", async () => {
     await f.service.prepare(f.principal, move);
     await f.service.commit(f.principal, move.operationId);
   }
-  const leaves = (await f.raw.trash.list()).entries.map((entry) =>
-    trashLeafPath(TRASH_PATH, entry.id),
+  const leaves = (await f.trash.list(f.principal.identityId, 10)).items.map((item) =>
+    trashItemPath(item.id, item.name),
   );
   const list = vi.spyOn(f.storage, "list");
   const stat = vi.spyOn(f.storage, "stat");
   const trashed = (await f.service.list(f.principal, DESKTOP_TRASH, "token")).entries;
   expect(trashed).toHaveLength(2);
-  // Trash lists its own layout; each of its items takes one stat.
+  // Trash's rows say what it holds, without a listing; each item takes one stat.
   expect(stat.mock.calls.map(([path]) => path)).toEqual(leaves);
   list.mockClear();
   stat.mockClear();
@@ -1720,7 +1771,7 @@ it("keeps an item's handle in Trash, and what is kept by path follows it in and 
   const trashed = await move(file, "trash");
   expect(trashed).toMatchObject({ id: file.id, parentId: "trash", trashed: true });
   // fdrive's Trash took it; the Mac's Trash shows it under its handle.
-  const leaf = await onlyLeaf(f.raw);
+  const leaf = await onlyLeaf(f);
   expect(trashed.path).toBe(`${DESKTOP_TRASH}/${file.id}`);
   // What grants access follows the item into Trash, the rest after it; its handle is kept.
   expect(links()).toEqual({ identityId, from: "/old.txt", to: leaf });
@@ -1739,7 +1790,7 @@ it("keeps an item's handle in Trash, and what is kept by path follows it in and 
   });
   // Put back under a new name: it all follows there.
   const again = await move(await f.service.stat(f.principal, "/old.txt"), "trash");
-  const second = await onlyLeaf(f.raw);
+  const second = await onlyLeaf(f);
   await move(again, "root", "renamed.txt");
   expect(links()).toEqual({ identityId, from: second, to: "/renamed.txt" });
   expect(f.metadata.onMoved).toHaveBeenLastCalledWith(identityId, second, "/renamed.txt", false);
@@ -1759,7 +1810,7 @@ it("restores into a folder that took the item's place without taking that folder
     base: source.version,
   });
   const trashed = required((await f.service.commit(f.principal, trashId)).item);
-  const binned = await onlyLeaf(f.raw);
+  const binned = await onlyLeaf(f);
   await f.raw.mkdir("/folder");
   const parent = await f.service.stat(f.principal, "/folder");
   const restoreId = randomUUID();
@@ -1984,7 +2035,7 @@ it("reserves the action and paths history will need before the native write star
   await f.service.prepare(f.principal, restore);
   expect(await reserved(restore.operationId)).toMatchObject({
     activityAction: "file.restore",
-    activityPath: await onlyLeaf(f.raw),
+    activityPath: await onlyLeaf(f),
     activityTarget: `/${inTrash.name}`,
   });
   await f.service.commit(f.principal, restore.operationId);
@@ -2214,7 +2265,7 @@ it("shows what the web deleted in the Mac's Trash under a handle, and restores i
   const f = await fixture();
   const before = await f.service.stat(f.principal, "/folder");
   // Deleted on the web: the handle follows the item into Trash.
-  const { leaf } = await f.raw.trash.put("/folder");
+  const { leaf } = (await f.files.trash(fileActor(f.principal, { source: "web" }), "/folder")).item;
   await f.repo.move(f.principal.identityId, "/folder", leaf);
   const [entry] = (await f.service.list(f.principal, DESKTOP_TRASH, "token")).entries;
   expect(entry).toMatchObject({
@@ -2241,11 +2292,12 @@ it("shows what the web deleted in the Mac's Trash under a handle, and restores i
     from: "/folder/child",
     restored: true,
   });
-  // The Trash item itself goes back through Trash, which tidies its layout.
+  // The Trash item itself goes back through Trash, which removes its row and its folder.
   const back = await macMove(f, required(entry), "root");
   expect(back).toMatchObject({ id: before.id, path: "/folder", trashed: false });
-  expect((await f.raw.trash.list()).entries).toEqual([]);
+  expect(f.trashRepo.rows.size).toBe(0);
   expect(Object.keys(f.raw.dump()).filter((path) => path.startsWith("/.trash"))).toEqual([]);
+  expect(f.raw.dirs().filter((dir) => dir.startsWith("/.trash/"))).toEqual([]);
   // Trash itself is no item a write changes.
   await expect(
     f.service.prepare(f.principal, {
@@ -2265,7 +2317,7 @@ it("deletes only a whole item in Trash for good, and an item gone already is don
   const folder = await f.service.stat(f.principal, "/folder");
   const live = await f.service.stat(f.principal, "/old.txt");
   const trashed = await macMove(f, folder, "trash");
-  const leaf = await onlyLeaf(f.raw);
+  const leaf = await onlyLeaf(f);
   const [child] = (await f.service.list(f.principal, trashed.path, "token")).entries;
   // A live item, or something inside a Trash item, is refused.
   for (const item of [live, required(child)])
@@ -2283,80 +2335,15 @@ it("deletes only a whole item in Trash for good, and an item gone already is don
     f.service.purge({ ...f.principal, tokenAccess: { mode: "read", paths: ["/"] } }, trashed.id),
   ).rejects.toMatchObject({ kind: "forbidden" });
   expect(f.purge).not.toHaveBeenCalled();
+  const { id } = onlyItem(f);
   await f.service.purge(f.principal, trashed.id);
-  expect(f.purge).toHaveBeenCalledWith(f.principal, leaf.slice(`${TRASH_PATH}/`.length));
-  expect((await f.raw.trash.list()).entries).toEqual([]);
+  expect(f.purge).toHaveBeenCalledWith(f.principal, id);
+  expect(f.trashRepo.rows.size).toBe(0);
+  expect(f.raw.dirs().filter((dir) => dir.startsWith("/.trash/"))).toEqual([]);
   // Gone, as Delete permanently leaves it: asking again is done.
   await f.repo.remove(identityId, leaf);
   await f.service.purge(f.principal, trashed.id);
   expect(f.purge).toHaveBeenCalledTimes(1);
-});
-
-it("moves the Mac's old Trash into fdrive's Trash once, keeping each handle", async () => {
-  const f = await fixture();
-  const { identityId } = f.principal;
-  const old = `/.fdrive-desktop/${identityId}/trash`;
-  const eventLog = { record: vi.fn() };
-  // What the Mac's own Trash held, from before Finder's Trash was fdrive's.
-  const file = await f.repo.ensure(identityId, `${old}/x`, "file");
-  await f.repo.update(identityId, file.id, { originalPath: "/notes/todo.md" });
-  await f.raw.upload(`${old}/x`, body("todo"), { mkdirParents: true });
-  const gone = await f.repo.ensure(identityId, `${old}/gone`, "dir");
-  await f.repo.update(identityId, gone.id, { originalPath: "/gone" });
-  const stuck = await f.repo.ensure(randomUUID(), `${old}/stuck`, "file");
-  await f.repo.update(stuck.identityId, stuck.id, { originalPath: "/stuck.txt" });
-  const failing = await f.repo.ensure(randomUUID(), `${old}/failing`, "file");
-  await f.repo.update(failing.identityId, failing.id, { originalPath: "/failing.txt" });
-  const retention = createDesktopRetention({
-    repo: f.repo,
-    storageForIdentity: async (id) => {
-      // Whatever it throws, the item stays and the reason is logged.
-      if (id === stuck.identityId) return Promise.reject("storage is down");
-      if (id === failing.identityId) throw Error("storage failed");
-      return f.raw;
-    },
-    // What follows a path follows the item, its handle too.
-    metadata: { onMoved: async (id, from, to) => f.repo.move(id, from, to) },
-    clock: () => new Date("2026-11-15T12:00:00.000Z"),
-    eventLog,
-  });
-  await retention.adoptOldTrash();
-  const [entry] = (await f.raw.trash.list()).entries;
-  // Deleted, as far as Days in Trash counts, when it moved.
-  expect(entry).toMatchObject({
-    originalPath: "/notes/todo.md",
-    deletedAt: new Date("2026-11-15T12:00:00.000Z"),
-  });
-  const leaf = trashLeafPath(TRASH_PATH, required(entry).id);
-  expect(required(await f.repo.item(identityId, file.id)).path).toBe(leaf);
-  expect(await f.read(leaf)).toBe("todo");
-  // The Mac finds it in Trash under the same handle and name as before.
-  expect((await f.service.list(f.principal, DESKTOP_TRASH, "token")).entries).toMatchObject([
-    { id: file.id, name: `todo (deleted ${file.id.slice(0, 8)}).md` },
-  ]);
-  // One gone from disk is forgotten; one that cannot move stays for the next start.
-  expect(await f.repo.item(identityId, gone.id)).toBeNull();
-  expect(eventLog.record).toHaveBeenCalledWith(
-    "general",
-    "warn",
-    "An item in the Mac's old Trash stays there",
-    { identityId: stuck.identityId, path: stuck.path, error: "storage is down" },
-  );
-  expect(eventLog.record).toHaveBeenCalledWith(
-    "general",
-    "warn",
-    "An item in the Mac's old Trash stays there",
-    { identityId: failing.identityId, path: failing.path, error: "storage failed" },
-  );
-  expect(eventLog.record).toHaveBeenCalledWith(
-    "general",
-    "info",
-    "Moved the Mac's old Trash into Trash",
-    { adopted: 1 },
-  );
-  expect((await f.repo.oldTrash()).map((item) => item.id).sort()).toEqual(
-    [stuck.id, failing.id].sort(),
-  );
 });
 
 it("keeps the Mac's Trash to whole Trash items its grants reach", async () => {
@@ -2387,6 +2374,16 @@ it("keeps the Mac's Trash to whole Trash items its grants reach", async () => {
       base: { content: "c", metadata: "m" },
     }),
   ).rejects.toMatchObject({ kind: "not_found" });
+  // Nor is one shaped like a Trash item that Trash has no row for.
+  const unknown = `/.trash/${randomUUID()}/unknown.txt`;
+  await f.raw.upload(unknown, body("unknown"), { mkdirParents: true });
+  const orphan = await f.repo.ensure(identityId, unknown, "file");
+  await expect(f.service.stat(f.principal, `${DESKTOP_TRASH}/${orphan.id}`)).rejects.toMatchObject({
+    kind: "not_found",
+  });
+  await expect(f.service.purge(f.principal, orphan.id)).resolves.toBeUndefined();
+  expect(f.purge).not.toHaveBeenCalled();
+  expect(await f.read(unknown)).toBe("unknown");
   // A folder in Trash lists in one page, within the same bound as Trash itself.
   vi.spyOn(f.storage, "list").mockResolvedValueOnce(Array(100_001).fill({}));
   await expect(f.service.list(f.principal, trashed.path, "token")).rejects.toMatchObject({
@@ -2405,8 +2402,7 @@ async function sharedFixture() {
   await mkdir(join(homes.bob, "Projects"), { recursive: true });
   await mkdir(homes.alice, { recursive: true });
   await writeFile(join(homes.bob, "Projects", "plan.txt"), "plan");
-  const clock = ticking();
-  const bob = createUserStorage({ home: homes.bob, shared: async () => [], clock });
+  const bob = createUserStorage({ home: homes.bob, shared: async () => [] });
   const alice = createUserStorage({
     home: homes.alice,
     shared: async () => [
@@ -2418,7 +2414,6 @@ async function sharedFixture() {
         writable: true,
       },
     ],
-    clock,
   });
   const ids = { alice: randomUUID(), bob: randomUUID() };
   const shelf = "/Shared with me/Projects";
@@ -2430,19 +2425,23 @@ async function sharedFixture() {
     storage: alice,
     tokenAccess: { mode: "full", paths: ["/"] },
   };
-  const memory = memoryRepo();
+  const trashRepo = memoryTrashItemRepo();
+  const memory = memoryRepo(trashRepo);
   const metadata = { onMoved: vi.fn(async () => {}), onDeleted: vi.fn(async () => {}) };
   const access = vi.fn(
     async (identityId: string, from: string, to: string, directory: boolean) =>
       ({ directory, shares: { identityId, from, to }, grants: null }) as DesktopAccessMove,
   );
+  const homeOf = async (id: string) => (id === ids.bob ? bob : alice);
+  const trash = testTrashItems({ repo: trashRepo, homeOf }).items;
   const deps = {
     repo: memory.repo,
-    storageForIdentity: async (id: string) => (id === ids.bob ? bob : alice),
+    storageForIdentity: homeOf,
     clock: () => new Date(),
     access,
     metadata,
     purge: async () => {},
+    trash,
     ownerPath: async (identityId: string, path: string) =>
       path.startsWith(`${shelf}/`)
         ? { identityId: ids.bob, path: `/Projects${path.slice(shelf.length)}` }
@@ -2457,7 +2456,21 @@ async function sharedFixture() {
     name: file.name,
     base: file.version,
   };
-  return { ...memory, alice, bob, ids, principal, metadata, access, deps, file, request };
+  return {
+    ...memory,
+    alice,
+    bob,
+    ids,
+    principal,
+    metadata,
+    access,
+    deps,
+    file,
+    request,
+    trash,
+    trashRepo,
+    homes,
+  };
 }
 
 it("follows an item in a folder shared with the login into its owner's Trash", async () => {
@@ -2466,10 +2479,11 @@ it("follows an item in a folder shared with the login into its owner's Trash", a
   await service.prepare(f.principal, f.request);
   const receipt = required((await service.commit(f.principal, f.request.operationId)).item);
   // bob's Trash has it, deleted from where it is in his files; alice's has nothing.
-  const [entry] = (await f.bob.trash.list()).entries;
-  expect(entry?.originalPath).toBe("/Projects/plan.txt");
-  expect((await f.alice.trash.list()).entries).toEqual([]);
-  const leaf = trashLeafPath(TRASH_PATH, required(entry).id);
+  const { items } = await f.trash.list(f.ids.bob, 10);
+  expect(items).toMatchObject([{ originalPath: "/Projects/plan.txt", name: "plan.txt" }]);
+  expect((await f.trash.list(f.ids.alice, 10)).items).toEqual([]);
+  const leaf = trashItemPath(required(items[0]).id, "plan.txt");
+  expect(await readFile(join(f.homes.bob, leaf), "utf8")).toBe("plan");
   // alice only hears where it went, until her Mac lists Trash again.
   expect(receipt).toMatchObject({
     id: f.file.id,
@@ -2514,5 +2528,5 @@ it("finishes a move to its owner's Trash on the retry when its receipt could not
     state: "completed",
     item: { id: f.file.id, parentId: "trash", trashed: true },
   });
-  expect((await f.bob.trash.list()).entries).toHaveLength(1);
+  expect((await f.trash.list(f.ids.bob, 10)).items).toHaveLength(1);
 });

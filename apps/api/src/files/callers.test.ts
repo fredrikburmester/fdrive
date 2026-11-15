@@ -4,6 +4,7 @@ import type { Logger } from "pino";
 import { describe, expect, it, vi } from "vitest";
 import { activityFixture } from "../../test/activity-fixture.js";
 import { recordingFileOperations, testFileOperations } from "../../test/file-operations.js";
+import { type MemoryTrashItemRepo, memoryTrashItemRepo } from "../../test/trash-items.js";
 import { createApp } from "../app.js";
 import { loadConfig } from "../config.js";
 import { createEventBus } from "../events/bus.js";
@@ -30,10 +31,14 @@ function seeded() {
 
 type Activity = ReturnType<typeof activityFixture>;
 
+/** What each harness's file operations are, over `trash`'s rows. */
+type Files = (activity: Activity, trash: MemoryTrashItemRepo) => FileOperations;
+
 /** The web's file and Trash routes over memory storage, changing files through `files`. */
-function webHarness(files: (activity: Activity) => FileOperations) {
+function webHarness(files: Files) {
   const storage = seeded();
   const activity = activityFixture(CLOCK);
+  const trash = memoryTrashItemRepo();
   const principal = {
     accountId: ACCOUNT,
     identityId: IDENTITY,
@@ -52,7 +57,7 @@ function webHarness(files: (activity: Activity) => FileOperations) {
     registerRoutes: (groups) => {
       registerFsRoutes(groups, {
         activity: activity.service,
-        files: files(activity),
+        files: files(activity, trash),
         jobRunner: createJobRunner({ clock: CLOCK, bus: createEventBus() }),
         tmpDir: "/tmp",
         jobMaxBytes: 1_000_000,
@@ -62,7 +67,11 @@ function webHarness(files: (activity: Activity) => FileOperations) {
           indexed: async () => false,
         },
       });
-      registerTrashRoutes(groups, { activity: activity.service, files: files(activity) });
+      registerTrashRoutes(groups, {
+        activity: activity.service,
+        files: files(activity, trash),
+        trash,
+      });
     },
   });
   async function send(path: string, init: RequestInit & { json?: unknown } = {}) {
@@ -81,12 +90,19 @@ function webHarness(files: (activity: Activity) => FileOperations) {
     expect(response.status, `${path}: ${await response.clone().text()}`).toBeLessThan(300);
     return response;
   }
-  return { app, storage, send, activity };
+  /** Moves `path` to Trash before the test, recorded for no one. */
+  const put = (path: string) =>
+    testFileOperations({ trashRepo: trash }).trash(
+      { identityId: IDENTITY, storage, recorded: null },
+      path,
+    );
+  return { app, storage, send, activity, trash, put };
 }
 
-function mcpHarness(files: (activity: Activity) => FileOperations) {
+function mcpHarness(files: Files) {
   const storage = seeded();
   const activity = activityFixture(CLOCK);
+  const trash = memoryTrashItemRepo();
   const principal: TokenPrincipal = {
     accountId: ACCOUNT,
     identityId: IDENTITY,
@@ -97,7 +113,8 @@ function mcpHarness(files: (activity: Activity) => FileOperations) {
   };
   let child = 0;
   const deps: McpToolDeps = {
-    files: files(activity),
+    files: files(activity, trash),
+    trash,
     nextOperationId: () => `mcp:${child++}`,
     indexQueries: {} as McpToolDeps["indexQueries"],
     searchService: {} as McpToolDeps["searchService"],
@@ -107,7 +124,17 @@ function mcpHarness(files: (activity: Activity) => FileOperations) {
     indexerClient: null,
     clock: CLOCK,
   };
-  return { deps, principal, storage, activity };
+  return { deps, principal, storage, activity, trash };
+}
+
+/** The file operations over `trash`'s rows, noting each operation they run. */
+function recording() {
+  let recorded: ReturnType<typeof recordingFileOperations> | undefined;
+  const files: Files = (_activity, trash) => {
+    recorded ??= recordingFileOperations(testFileOperations({ trashRepo: trash }));
+    return recorded.files;
+  };
+  return { files, calls: () => recorded?.calls ?? [] };
 }
 
 async function jobDone(app: ReturnType<typeof createApp>, id: string): Promise<JobStatus> {
@@ -121,8 +148,8 @@ async function jobDone(app: ReturnType<typeof createApp>, id: string): Promise<J
 
 describe("every caller changes files through the file operations", () => {
   it("the web's file routes", async () => {
-    const recorded = recordingFileOperations();
-    const h = webHarness(() => recorded.files);
+    const recorded = recording();
+    const h = webHarness(recorded.files);
     await h.send("/api/v1/fs/upload?path=/up.txt", { method: "PUT", body: "up" });
     await h.send("/api/v1/fs/mkdir", { json: { path: "/new" } });
     await h.send("/api/v1/fs/move", { json: { path: "/a.txt", target: "/new/a.txt" } });
@@ -138,7 +165,7 @@ describe("every caller changes files through the file operations", () => {
     });
     const { jobId } = (await accepted.json()) as { jobId: string };
     expect((await jobDone(h.app, jobId)).state).toBe("done");
-    expect(recorded.calls).toEqual([
+    expect(recorded.calls()).toEqual([
       "upload /up.txt",
       "mkdir /new",
       "move /a.txt",
@@ -153,15 +180,15 @@ describe("every caller changes files through the file operations", () => {
   });
 
   it("the web's Trash routes", async () => {
-    const recorded = recordingFileOperations();
-    const h = webHarness(() => recorded.files);
-    for (const path of ["/a.txt", "/b.txt", "/dir"]) await h.storage.trash.put(path);
-    const ids = (await h.storage.trash.list()).entries.map((entry) => entry.id).sort();
+    const recorded = recording();
+    const h = webHarness(recorded.files);
+    for (const path of ["/a.txt", "/b.txt", "/dir"]) await h.put(path);
+    const ids = (await h.trash.list(IDENTITY, 10)).items.map((item) => item.id).sort();
     const [first, second] = ids;
     await h.send("/api/v1/trash/restore", { json: { ids: [first] } });
     await h.send("/api/v1/trash/purge", { json: { ids: [second] } });
     await h.send("/api/v1/trash/empty", { method: "POST" });
-    expect(recorded.calls).toEqual([
+    expect(recorded.calls()).toEqual([
       `restore ${first}`,
       `purge ${second}`,
       ...ids.slice(2).map((id) => `purge ${id}`),
@@ -169,8 +196,8 @@ describe("every caller changes files through the file operations", () => {
   });
 
   it("MCP's write tools", async () => {
-    const recorded = recordingFileOperations();
-    const h = mcpHarness(() => recorded.files);
+    const recorded = recording();
+    const h = mcpHarness(recorded.files);
     await runCreateFolder(h.deps, h.principal, { path: "/made" });
     await runMovePath(h.deps, h.principal, { src: "/a.txt", dst: "/made/a.txt" });
     await copyPath(h.deps, h.principal, { src: "/b.txt", dst: "/made/b.txt" });
@@ -185,9 +212,9 @@ describe("every caller changes files through the file operations", () => {
       expected_sha256: read.sha256,
     });
     await trashPath(h.deps, h.principal, "/made/b.txt");
-    const [entry] = (await h.storage.trash.list()).entries;
+    const [entry] = (await h.trash.list(IDENTITY, 10)).items;
     await restorePath(h.deps, h.principal, { id: entry?.id ?? "", target: "/made/back.txt" });
-    expect(recorded.calls).toEqual([
+    expect(recorded.calls()).toEqual([
       "mkdir /made",
       "move /a.txt",
       "copy /b.txt",
@@ -202,7 +229,8 @@ describe("every caller changes files through the file operations", () => {
 
 describe("MCP's personal activity", () => {
   it("is recorded the way the web's file routes record it, but for its source", async () => {
-    const files = (activity: Activity) => testFileOperations({ activity: activity.service });
+    const files: Files = (activity, trash) =>
+      testFileOperations({ activity: activity.service, trashRepo: trash });
     const web = webHarness(files);
     await web.send("/api/v1/fs/mkdir", { json: { path: "/made" } });
     await web.send("/api/v1/fs/move", { json: { path: "/a.txt", target: "/made/a.txt" } });
@@ -222,15 +250,25 @@ describe("MCP's personal activity", () => {
     await createFile(mcp.deps, mcp.principal, { path: "/made/new.txt", text: "new" });
     await trashPath(mcp.deps, mcp.principal, "/made/b.txt");
 
+    // Each Trash item has an id of its own, wherever it was deleted from.
+    const anyItem = (after: unknown) =>
+      JSON.parse(
+        JSON.stringify(after ?? null).replace(/\/\.trash\/[0-9a-f-]{36}\//, "/.trash/<id>/"),
+      );
     const facts = (activity: Activity) =>
       activity.operations.map((operation, index) => ({
         action: operation.action,
         requested: operation.requested,
         before: operation.before,
-        after: activity.outcomes[index]?.after,
+        after: anyItem(activity.outcomes[index]?.after),
         outcome: activity.outcomes[index]?.outcome,
       }));
     expect(facts(mcp.activity)).toEqual(facts(web.activity));
+    expect(facts(web.activity).at(-1)?.after).toEqual({
+      path: "/made/b.txt",
+      kind: "file",
+      trashLeaf: "/.trash/<id>/b.txt",
+    });
     expect(mcp.activity.operations.map((operation) => operation.source)).toEqual(
       Array(5).fill("mcp"),
     );

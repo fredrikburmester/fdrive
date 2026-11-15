@@ -24,7 +24,7 @@ import { pipeline } from "node:stream/promises";
 import { ReadableStream as NodeReadableStream } from "node:stream/web";
 import {
   baseName,
-  createRecycleFolderTrash,
+  createTrash,
   type EntryKind,
   type EntryStat,
   type FileEntry,
@@ -53,8 +53,6 @@ export interface LocalStorageOptions {
   readonly within?: string;
   /** Hears every change this storage makes on disk, once it is done. */
   readonly onChange?: DiskChangeListener;
-  /** Names each new Trash leaf by the time it was made. */
-  readonly clock?: () => Date;
 }
 
 /**
@@ -612,8 +610,7 @@ export function createLocalStorage(options: LocalStorageOptions): LocalStorage {
       }),
   };
 
-  const clock = options.clock ?? (() => new Date());
-  return { ...storage, trash: createRecycleFolderTrash({ storage, clock }), home };
+  return { ...storage, trash: createTrash(storage), home };
 }
 
 /**

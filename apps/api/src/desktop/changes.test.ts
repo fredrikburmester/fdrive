@@ -66,7 +66,7 @@ describe("changedPaths", () => {
           row("bob/private.txt"),
           row("bob"),
           row("carol/Photos/x.jpg"),
-          row("alice/.trash/.fdrive-move-v1/a.txt"),
+          row("alice/.trash/0d9f8a52-6c1e-4f53-9a7b-2e4c6d8f0a1b/a.txt"),
           row("alice/.fdrive-desktop/trash/x"),
         ],
         scopes,
@@ -77,8 +77,8 @@ describe("changedPaths", () => {
     expect(
       changedPaths(
         [
-          row("alice/docs/a.txt", "alice/.trash/.fdrive-move-v1/a.txt"),
-          row("alice/.trash/.fdrive-move-v1/b.txt", "alice/b.txt"),
+          row("alice/docs/a.txt", "alice/.trash/0d9f8a52-6c1e-4f53-9a7b-2e4c6d8f0a1b/a.txt"),
+          row("alice/.trash/7a4b2c1d-3e5f-4a6b-8c7d-9e0f1a2b3c4d/b.txt", "alice/b.txt"),
           row("bob/elsewhere/c.txt", "bob/Photos/c.txt"),
         ],
         scopes,

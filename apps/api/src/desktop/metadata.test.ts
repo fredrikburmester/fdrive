@@ -9,7 +9,7 @@ it("updates stable desktop handles with shared metadata mutations", async () => 
   } as unknown as MetadataService;
   const desktop = { move: vi.fn(), remove: vi.fn() };
   const service = withDesktopMetadata(metadata, desktop);
-  const leaf = "/.trash/.fdrive-move-v1/file/p/binned/v/1";
+  const leaf = "/.trash/0d9f8a52-6c1e-4f53-9a7b-2e4c6d8f0a1b/binned";
   await service.onMoved("identity", "/before", "/after", true);
   await service.onDeleted("identity", "/gone", false);
   // Into Trash and back out an item keeps its handle; the Mac finds it in its Trash.

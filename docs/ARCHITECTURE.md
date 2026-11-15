@@ -75,12 +75,12 @@ its folder into the owner's Trash too, since that is a move like any other, so i
 purge deletes it. Something in a writable shared folder that the person it is shared with
 deletes goes to the owner's Trash, since it is the owner's file. Sharing refuses fdrive's own folders
 (`isReservedPath`, below), and the grantee's storage and index scopes refuse a grant in the
-owner's Trash, in fdrive's Trash layout or in the Mac's `/.fdrive-desktop` (`closedToShares`)
+owner's Trash, in Trash's old layout or in the Mac's `/.fdrive-desktop` (`closedToShares`)
 ([Trash](TRASH.md)).
 
 fdrive keeps its own places inside each user's files, and one rule in `@fdrive/core` names them
 (`isReservedPath`): the Trash at `/.trash` and the Mac's `/.fdrive-desktop`
-(`RESERVED_FOLDERS`), plus fdrive's Trash layout (`.fdrive-move-v1`) wherever it lies, all in
+(`RESERVED_FOLDERS`), plus Trash's old layout (`.fdrive-move-v1`) wherever it lies, all in
 any case.
 Listings, the Mac, search, MCP and AI never show them; index queries leave them out in SQL
 before their limit. The indexer never walks `/.fdrive-desktop`; it does index the Trash, so
@@ -95,9 +95,10 @@ transaction with what grants access (grants, public links and Office files,
 [access.ts](../apps/api/src/files/access.ts)), records the outcome, and then lets tags,
 favorites, folder views, recents, chat references and the Mac's item handles follow, best
 effort: a failure there is a warning, and nothing it keeps grants access. What grants access
-fails closed. It changes before the storage call wherever the destination is known (a move,
-a restore, a purge), so a refused change leaves the file where it was and fails the request;
-Trash names its leaf only once the item is there, so a refused change takes the item back out.
+fails closed. It changes before the storage call, so a refused change leaves the file where it
+was and fails the request. Trash's rows (`app.trash_items`) change in the same transaction: a
+delete writes its item's row first, as on its way, and the item arrives with what grants access;
+a restore or a purge removes the row with them ([Trash](TRASH.md#where-deleted-items-live)).
 The transaction holds each path the operation vacates, and an operation creating something
 at or below one waits for it, so a new item never appears where a link or share still points.
 Nothing is held while a client's body arrives: an upload stages its body first and holds its
@@ -116,7 +117,7 @@ wherever it moves, so it never stays at a path where something new could appear:
 route other path-keyed metadata follows, through the Trash and its restores, the Mac's
 writes and moves the indexer's watcher journals. Inside a place no link reaches (Trash, say)
 it shows not found, and it works again once the item comes back out. Anything in fdrive's
-Trash layout (a `.fdrive-move-v1` segment) stays refused wherever it lies. A move inside a folder shared with someone counts in the owner's
+Trash's old layout (a `.fdrive-move-v1` segment) stays refused wherever it lies. A move inside a folder shared with someone counts in the owner's
 files; taken out of them, deleted, or purged from Trash, the item leaves its links, and a
 link left with nothing goes.
 Folder ZIP downloads are held to two at a time per link, an hour and `FDRIVE_JOB_MAX_BYTES`
@@ -227,8 +228,8 @@ no state: what it names is all it opens, and it opens nothing a full download by
 visitor would not. Every other preview is one counted download; a download without a token
 always counts. Thumbnails never count.
 
-A `TrashEntry.id` is an opaque provider entry identifier; the recycle-folder adapter
-uses its path relative to the trash root. Public System logs merge internal
+A Trash item's id is its row's id in `app.trash_items` and the name of its folder in
+`/.trash`. Public System logs merge internal
 `SystemEvent` rows with worker history. Share permission `scope` and index path
 scopes are separate typed concepts.
 

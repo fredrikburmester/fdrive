@@ -1,67 +1,38 @@
 import type { FileEntry } from "../entries.ts";
 
-/** One deleted item still recoverable from the Trash folder. */
-export interface TrashEntry {
-  /** The leaf's path relative to the trash root, without a leading slash. */
-  readonly id: string;
-  /** The deleted item's original path (its leaf's parent, trash-relative, with a leading slash). */
-  readonly originalPath: string;
-  readonly name: string;
-  readonly size: number;
-  readonly deletedAt: Date;
-}
-
-/** The result of a bounded trash listing. */
-export interface TrashListing {
-  readonly entries: TrashEntry[];
-  /** True when the listing stopped early because it reached its entry limit. */
-  readonly truncated: boolean;
-}
-
-/** A restored entry plus the original path its Trash leaf encodes. */
-export type TrashRestoreResult = EntryStat & {
-  readonly originalPath: string;
-};
-
 /** Where `TrashProvider.put` moved an item. */
 export interface TrashedItem {
   /**
-   * Its leaf, a path in its owner's files: the storage's own Trash, or, for
-   * an item in a folder another user shares, that user's.
+   * Its path in Trash, `/.trash/<id>/<name>` in its owner's files: the
+   * storage's own, or, for an item in a folder another user shares, that
+   * user's.
    */
   readonly leaf: string;
   readonly kind: "file" | "dir";
 }
 
 /**
- * A storage's Trash at `TRASH_PATH`: moves items into fdrive's layout there
- * and lists, restores and purges its leaves. Restore and purge remove the
- * layout folders a leaf leaves empty. Deleting is never a trash:
- * `deleteFile` and `deleteDir` delete for good, and callers choose.
+ * A storage's Trash at `TRASH_PATH`: each item in a folder of its own,
+ * `/.trash/<id>/<name>`, named by an id the caller gives and keeps with
+ * where the item came from. Deleting is never a trash: `deleteFile` and
+ * `deleteDir` delete for good, and callers choose.
  */
 export interface TrashProvider {
   /**
-   * Moves the file or folder at `path` into Trash, at a new leaf, never
-   * replacing one. Refuses the root and fdrive's own folders, Trash
-   * included, with `bad_request`.
+   * Moves the file or folder at `path` into Trash as item `id`, at
+   * `/.trash/<id>/<its name>` in its owner's files, never replacing
+   * anything. Refuses the root and fdrive's own folders, Trash included,
+   * with `bad_request`.
    */
-  put(path: string): Promise<TrashedItem>;
+  put(path: string, id: string): Promise<TrashedItem>;
   /**
-   * The leaves, newest first: at most `limit` of them (default 10,000;
-   * `Infinity` for all). With `prune`, also removes the empty layout folders
-   * the walk passes: ones left from before restore and purge cleaned up
-   * after themselves, or by a delete whose move failed.
+   * Moves item `id`, named `name`, out of Trash to `target`, creating
+   * missing parent folders, and removes its folder. The move refuses an
+   * occupied target, so a restore never replaces anything: it throws
+   * `StorageError("conflict")` instead.
    */
-  list(options?: { limit?: number; prune?: boolean; signal?: AbortSignal }): Promise<TrashListing>;
-  /**
-   * Moves the leaf identified by `id` back to `target` (default: its
-   * `originalPath`). Parent directories are created as needed. The move
-   * refuses an occupied target, so a restore never replaces anything: it
-   * throws `StorageError("conflict")` instead. Returns the provider-parsed
-   * original path together with the restored entry.
-   */
-  restore(id: string, options?: { target?: string }): Promise<TrashRestoreResult>;
-  /** Permanently deletes the leaf identified by `id`. A missing id is ignored. */
+  restore(id: string, name: string, target: string): Promise<EntryStat>;
+  /** Deletes item `id` for good, with its folder. A missing item is ignored. */
   purge(id: string): Promise<void>;
 }
 

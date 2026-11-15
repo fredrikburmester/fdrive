@@ -359,7 +359,7 @@ describe("public links follow the files they point at", () => {
           : { path: `alice/${path}`, targetPath: `alice/${target}` },
       ]);
 
-    const trashLeaf = `.trash/.fdrive-move-v1/${randomUUID()}`;
+    const trashLeaf = `.trash/${randomUUID()}/OutsideTrash`;
     await mkdir(dirname(onDisk(`/${trashLeaf}`)), { recursive: true });
     await rename(onDisk("/OutsideTrash"), onDisk(`/${trashLeaf}`));
     await journal("OutsideTrash", trashLeaf);

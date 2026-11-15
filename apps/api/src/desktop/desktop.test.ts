@@ -10,11 +10,14 @@ import { createLocalStorage, createUserStorage, SHARED_WITH_ME } from "@fdrive/l
 import { createMemoryStorage, entryStat } from "@fdrive/testkit";
 import { afterEach, expect, it, vi } from "vitest";
 import { activityFixture } from "../../test/activity-fixture.js";
+import { testFileOperations, testTrashItems } from "../../test/file-operations.js";
 import { memoryRepo } from "../../test/helpers/desktop-repo.js";
+import { memoryTrashItemRepo } from "../../test/trash-items.js";
 import { createApp } from "../app.js";
 import type { Principal, PrincipalExtras } from "../auth/principal.js";
 import { loadConfig } from "../config.js";
 import { ApiHttpError } from "../errors.js";
+import { fileActor } from "../files/operations.js";
 import { createResolveTokenPrincipal } from "../tokens/principal.js";
 import { createTokenService } from "../tokens/service.js";
 import type { DesktopChanges } from "./changes.js";
@@ -24,6 +27,10 @@ import { registerDesktopRoutes } from "./routes.js";
 import { createDesktopWrites, NO_WRITES } from "./writes.js";
 
 const ALL_WRITES = { create: true, update: true, move: true, trash: true, restore: true };
+function required<T>(value: T | null | undefined): T {
+  if (value == null) throw Error("Missing fixture value");
+  return value;
+}
 
 it("runs the complete v2 routes with explicit grants, streamed content, receipts and revocation", async () => {
   const f = await fixture(true);
@@ -227,6 +234,112 @@ async function pairWritable(f: Awaited<ReturnType<typeof fixture>>) {
     });
 }
 
+it("keeps Finder's Trash working for FDrive for Mac 0.5.4's requests, on Trash's rows", async () => {
+  const f = await fixture(true);
+  const { token } = await f.connect("full", 2);
+  // As 0.5.4's APIClient sends them: JSON bodies with sorted keys, bearer and requested-with.
+  const call = async (route: string, body?: Record<string, unknown>) => {
+    const sorted =
+      body === undefined
+        ? undefined
+        : JSON.stringify(
+            Object.fromEntries(Object.entries(body).sort(([a], [b]) => (a < b ? -1 : 1))),
+          );
+    const response = await f.app.request(`/api/v2/desktop/${route}`, {
+      method: body === undefined ? "GET" : "POST",
+      headers: {
+        authorization: `Bearer ${token}`,
+        "x-requested-with": "fdrive",
+        "content-type": "application/json",
+      },
+      ...(sorted === undefined ? {} : { body: sorted }),
+    });
+    expect(response.status, route).toBe(200);
+    return (await response.json()) as Record<string, unknown>;
+  };
+  type Entry = {
+    id: string;
+    parentId: string;
+    path: string;
+    name: string;
+    trashed: boolean;
+    version: { content: string; metadata: string };
+  };
+  const entries = async (path: string) =>
+    (await call(`entries?path=${encodeURIComponent(path)}`)).entries as Entry[];
+  const move = async (item: Entry, parentId: string, name: string) => {
+    const operationId = randomUUID();
+    await call("moves", { operationId, itemId: item.id, parentId, name, base: item.version });
+    return (await call(`operations/${operationId}/commit`, {})) as {
+      state: string;
+      item: Entry;
+      recoveryId: null;
+    };
+  };
+  /** What 0.5.4 accepts as an entry of its Trash (`RemoteEntry.hasValidListingName`). */
+  const validInTrash = (entry: Entry) =>
+    entry.trashed &&
+    entry.parentId === "trash" &&
+    entry.path === `/.fdrive-desktop/trash/${entry.id}` &&
+    /^[0-9a-f-]{36}$/.test(entry.id);
+  const rows = () => [...f.trashRepo.rows.values()];
+  const docs = required((await entries("/")).find((entry) => entry.name === "docs"));
+  const file = required((await entries("/docs")).find((entry) => entry.name === "a.txt"));
+  const shown = `a (deleted ${file.id.slice(0, 8)}).txt`;
+
+  // Move to Trash: the handle goes with the item, named as before in Finder's Trash.
+  const trashed = await move(file, "trash", "a.txt");
+  expect(trashed).toMatchObject({
+    state: "completed",
+    recoveryId: null,
+    item: { id: file.id, parentId: "trash", path: `/.fdrive-desktop/trash/${file.id}` },
+  });
+  expect(trashed.item).toMatchObject({ name: shown, trashed: true });
+  // Trash holds it in a folder of its own, its row confirmed with where it came from.
+  expect(rows()).toMatchObject([
+    { originalPath: "/docs/a.txt", name: "a.txt", kind: "file", movingFrom: null },
+  ]);
+  const { id } = required(rows()[0]);
+  expect(await new Response((await f.storage.download(`/.trash/${id}/a.txt`)).body).text()).toBe(
+    "alpha",
+  );
+  const listed = await entries("/.fdrive-desktop/trash");
+  // The stray file loose in the Trash folder is no Trash item.
+  expect(listed.map((entry) => [entry.id, entry.name])).toEqual([[file.id, shown]]);
+  expect(listed.every(validInTrash)).toBe(true);
+  expect(await call(`entry?path=${encodeURIComponent(trashed.item.path)}`)).toMatchObject({
+    id: file.id,
+    name: shown,
+    trashed: true,
+  });
+
+  // Restore, by dragging it out under its name in Finder's Trash: it takes back its own.
+  const restored = await move(required(listed[0]), docs.id, shown);
+  expect(restored.item).toMatchObject({
+    id: file.id,
+    parentId: docs.id,
+    path: "/docs/a.txt",
+    name: "a.txt",
+    trashed: false,
+  });
+  expect(rows()).toEqual([]);
+  expect(await entries("/.fdrive-desktop/trash")).toEqual([]);
+  await expect(f.storage.stat(`/.trash/${id}`)).rejects.toMatchObject({ kind: "not_found" });
+
+  // Empty Trash: a purge by handle deletes it for good, and asking again is done.
+  const again = await move(restored.item, "trash", "a.txt");
+  expect(validInTrash(again.item)).toBe(true);
+  expect(rows()).toHaveLength(1);
+  const second = required(rows()[0]).id;
+  expect(await call("purges", { itemId: file.id })).toEqual({ ok: true });
+  expect(rows()).toEqual([]);
+  expect(await entries("/.fdrive-desktop/trash")).toEqual([]);
+  await expect(f.storage.stat(`/.trash/${second}/a.txt`)).rejects.toMatchObject({
+    kind: "not_found",
+  });
+  expect(await call("purges", { itemId: file.id })).toEqual({ ok: true });
+});
+
 it("publishes nothing once the pairing is revoked or downgraded while a save hashes its base", async () => {
   const base = "/api/v2/desktop";
   const json = { "x-requested-with": "fdrive", "content-type": "application/json" };
@@ -391,6 +504,10 @@ async function fixture(writable = false, changes?: DesktopChanges) {
   };
   const pairing = createDesktopPairing(deps);
   const files = createDesktopFiles(deps);
+  // Trash's rows, over alice's files; Empty Trash deletes through the file operations.
+  const trashRepo = memoryTrashItemRepo();
+  const homeOf = async () => storage;
+  const trashFiles = testFileOperations({ trashRepo, homeOf });
   const app = createApp({
     config: loadConfig({
       DATABASE_URL: "postgres://localhost/fdrive",
@@ -412,9 +529,12 @@ async function fixture(writable = false, changes?: DesktopChanges) {
           ? {
               writes: createDesktopWrites({
                 ...deps,
-                repo: memoryRepo().repo,
+                repo: memoryRepo(trashRepo).repo,
                 storageForIdentity: async () => storage,
-                purge: (principal, id) => principal.storage.trash.purge(id),
+                purge: async (principal, id) => {
+                  await trashFiles.purge(fileActor(principal, { source: "native" }), id);
+                },
+                trash: testTrashItems({ repo: trashRepo, homeOf }).items,
               }),
             }
           : {}),
@@ -453,6 +573,7 @@ async function fixture(writable = false, changes?: DesktopChanges) {
     files,
     app,
     request,
+    trashRepo,
     advance: (ms: number) => {
       now = new Date(now.getTime() + ms);
     },
@@ -939,6 +1060,7 @@ it("refuses every read that reaches its item through a symbolic link, at any seg
     // Only reads here; nothing is staged or deleted.
     storageForIdentity: async () => createMemoryStorage({}),
     purge: async () => {},
+    trash: testTrashItems().items,
   });
   const refuses = async (principal: Principal, folders: string[], files: string[]) => {
     const writer = { ...principal, tokenAccess: full };

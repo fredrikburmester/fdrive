@@ -285,7 +285,7 @@ describe("createLocalGrantService: changing and ending shares", () => {
     await h.service.create(h.alice.id, { path: "/Photos/2026", username: "bob", access: "read" });
     await h.service.create(h.alice.id, { path: "/Projects", username: "bob", access: "write" });
     await h.service.create(h.carol.id, { path: "/Projects", username: "bob", access: "read" });
-    const leaf = "/.trash/.fdrive-move-v1/dir/p/Projects/v/1";
+    const leaf = "/.trash/0d9f8a52-6c1e-4f53-9a7b-2e4c6d8f0a1b/Projects";
     writeHomeFiles(h.local.root, "alice", { [`${leaf}/plan.txt`]: "plan" });
     await h.access.moved(h.alice.id, "/Projects", leaf, true);
     await h.access.moved(h.alice.id, "/Photos/2026", "/.trash/loose", true);
@@ -296,10 +296,12 @@ describe("createLocalGrantService: changing and ending shares", () => {
     expect((await h.service.list(h.bob.id)).received.map((grant) => grant.name)).toEqual([
       "Projects",
     ]);
-    expect(await h.service.isReadOnly(h.bob, "/Shared with me/1/plan.txt")).toBe(false);
-    // Bob's storage agrees: the leaf in fdrive's Trash layout is refused there too.
+    expect(await h.service.isReadOnly(h.bob, "/Shared with me/Projects (alice)/plan.txt")).toBe(
+      false,
+    );
+    // Bob's storage agrees: the folder in Trash is refused there, and takes no name.
     const bobs = await h.storageFor(h.bob.id);
-    expect((await bobs.list("/Shared with me")).map((entry) => entry.name)).not.toContain("1");
+    expect((await bobs.list("/Shared with me")).map((entry) => entry.name)).toEqual(["Projects"]);
   });
 
   it("ignores moves and deletes of a login that is gone", async () => {
