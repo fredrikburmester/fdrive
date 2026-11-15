@@ -1,17 +1,9 @@
-import {
-  IDENTITY_HEADER,
-  IDENTITY_QUERY_PARAM,
-  type IdentitySummary,
-  type MeResponse,
-} from "@fdrive/contracts";
+import type { IdentitySummary, MeResponse } from "@fdrive/contracts";
 import { type StorageProvider, sameCredential } from "@fdrive/core";
-import type { Credential, Repos } from "@fdrive/db";
+import { type Credential, LoginError, type LoginRepo, type Repos } from "@fdrive/db";
 import type { Context } from "hono";
 import { getCookie } from "hono/cookie";
-import { z } from "zod";
 import { verifyCredentials } from "../accounts/credentials.ts";
-import { accountRepositoryCall } from "../accounts/errors.ts";
-import type { AccountIdentityOperations } from "../accounts/types.ts";
 import type { AppConfig } from "../config.js";
 import { ApiHttpError } from "../errors.js";
 import type { ProviderService } from "../providers/service.js";
@@ -49,13 +41,13 @@ export interface AuthService {
     setupClaimKey?: string,
   ): Promise<LoginResult>;
   resolvePrincipal(c: Context): Promise<Principal | null>;
-  me(accountId: string, activeIdentityId: string): Promise<MeResponse>;
+  me(accountId: string, identityId: string): Promise<MeResponse>;
   logout(sessionId: string): Promise<void>;
 }
 
 export interface CreateAuthServiceDeps {
   readonly repos: Repos;
-  readonly identityLinks: AccountIdentityOperations;
+  readonly logins: LoginRepo;
   readonly providers: Pick<
     ProviderService,
     "resolve" | "enabled" | "get" | "capabilitiesFor" | "labelFor"
@@ -70,7 +62,27 @@ export interface CreateAuthServiceDeps {
   readonly adminUsernames: readonly string[];
 }
 
-/** Builds the `AuthService`, the credential-mode login/session/identity flow for the API. */
+/** Never sends raw SQL errors, which may carry credential bind values, to the logger. */
+async function loginCall<T>(operation: () => Promise<T>): Promise<T> {
+  try {
+    return await operation();
+  } catch (error) {
+    if (error instanceof ApiHttpError) throw error;
+    if (error instanceof LoginError) {
+      if (error.code === "setup_claimed")
+        throw new ApiHttpError("conflict", "this server has already been claimed by another owner");
+      throw new ApiHttpError(
+        error.code === "missing_identity" || error.code === "missing_provider"
+          ? "not_found"
+          : "unauthorized",
+        "sign-in is not possible",
+      );
+    }
+    throw new ApiHttpError("internal", "sign-in failed");
+  }
+}
+
+/** Builds the `AuthService`, the credential-mode login/session flow for the API. */
 export function createAuthService(deps: CreateAuthServiceDeps): AuthService {
   async function isEnvironmentAdmin(identity: {
     providerId: string;
@@ -102,30 +114,21 @@ export function createAuthService(deps: CreateAuthServiceDeps): AuthService {
     };
   }
 
-  async function me(accountId: string, activeIdentityId: string): Promise<MeResponse> {
+  async function me(accountId: string, identityId: string): Promise<MeResponse> {
     const account = await deps.repos.accounts.get(accountId);
     if (!account) {
       throw new ApiHttpError("internal", "account for active session no longer exists");
     }
-    const identities = await deps.repos.identities.listByAccount(accountId);
-    const activeIdentity = identities.find((identity) => identity.id === activeIdentityId);
-    if (activeIdentity === undefined)
-      throw new ApiHttpError("unauthorized", "identity ownership changed; sign in again");
-    const summaries = (await Promise.all(identities.map(summarize))).filter(
-      (summary): summary is IdentitySummary => summary !== null,
-    );
-    if (!summaries.some((summary) => summary.id === activeIdentityId)) {
+    const identity = await deps.repos.identities.get(identityId);
+    if (identity === null) throw new ApiHttpError("unauthorized", "sign in again");
+    const summary = await summarize(identity);
+    if (summary === null) {
       throw new ApiHttpError("unauthorized", "storage provider no longer exists");
     }
-    const isAdmin = account.isAdmin || (await isEnvironmentAdmin(activeIdentity));
-
-    if ((await deps.repos.identities.get(activeIdentityId))?.accountId !== accountId)
-      throw new ApiHttpError("unauthorized", "identity ownership changed; sign in again");
     return {
       account: { id: account.id, displayName: account.displayName },
-      identities: summaries,
-      activeIdentityId,
-      isAdmin,
+      identity: summary,
+      isAdmin: account.isAdmin || (await isEnvironmentAdmin(identity)),
     };
   }
 
@@ -153,8 +156,8 @@ export function createAuthService(deps: CreateAuthServiceDeps): AuthService {
     const rawSessionId = generateSessionId();
     const idHash = hashSessionId(rawSessionId);
     const at = deps.clock();
-    const result = await accountRepositoryCall(() =>
-      deps.identityLinks.loginVerified({
+    const result = await loginCall(() =>
+      deps.logins.loginVerified({
         providerId: verified.provider.id,
         verifiedProvider: {
           type: verified.provider.type,
@@ -204,17 +207,11 @@ export function createAuthService(deps: CreateAuthServiceDeps): AuthService {
         },
       }),
     );
-    const identity = await deps.repos.identities.get(result.identity.id);
-    const session = await deps.repos.sessions.getByIdHash(idHash, deps.clock());
-    if (
-      identity?.accountId !== result.session.accountId ||
-      session?.accountId !== result.session.accountId
-    ) {
-      await deps.repos.sessions.delete(idHash);
-      throw new ApiHttpError("unauthorized", "identity ownership changed; sign in again");
-    }
     try {
-      return { sessionId: rawSessionId, me: await me(identity.accountId, identity.id) };
+      return {
+        sessionId: rawSessionId,
+        me: await me(result.identity.accountId, result.identity.id),
+      };
     } catch (error) {
       await deps.repos.sessions.delete(idHash);
       throw error;
@@ -235,8 +232,7 @@ export function createAuthService(deps: CreateAuthServiceDeps): AuthService {
     }
     // Sliding expiry keeps an active session alive, but never beyond a fixed
     // age from login: a stolen session id cannot be kept valid indefinitely
-    // by periodic use. Rotation preserves `createdAt`, so linking or
-    // unlinking does not restart this clock.
+    // by periodic use.
     if (
       now.getTime() - session.createdAt.getTime() >=
       deps.config.fdriveSessionMaxAgeDays * MS_PER_DAY
@@ -245,51 +241,15 @@ export function createAuthService(deps: CreateAuthServiceDeps): AuthService {
       return null;
     }
 
-    const identityMutation =
-      c.req.method !== "GET" &&
-      c.req.method !== "HEAD" &&
-      (c.req.path === "/api/v1/account/active-identity" ||
-        c.req.path === "/api/v1/account/identities" ||
-        c.req.path.startsWith("/api/v1/account/identities/"));
-    if (
-      !identityMutation &&
-      now.getTime() - session.lastSeenAt.getTime() > SLIDING_TOUCH_THRESHOLD_MS
-    ) {
+    if (now.getTime() - session.lastSeenAt.getTime() > SLIDING_TOUCH_THRESHOLD_MS) {
       await deps.repos.sessions.touch(idHash, {
         lastSeenAt: now,
         expiresAt: new Date(now.getTime() + deps.config.fdriveSessionTtlDays * MS_PER_DAY),
       });
     }
 
-    const identityHeader = c.req.header(IDENTITY_HEADER);
-    const queryIdentities =
-      c.req.method === "GET" || c.req.method === "HEAD"
-        ? (c.req.queries(IDENTITY_QUERY_PARAM) ?? [])
-        : [];
-    if (queryIdentities.length > 1)
-      throw new ApiHttpError("forbidden", "ambiguous identity selection");
-    const queryIdentity = queryIdentities[0];
-    if (
-      identityHeader !== undefined &&
-      queryIdentity !== undefined &&
-      identityHeader !== queryIdentity
-    )
-      throw new ApiHttpError("forbidden", "conflicting identity selection");
-    const selectedIdentity = identityHeader ?? queryIdentity;
-    if (selectedIdentity !== undefined && !z.uuid().safeParse(selectedIdentity).success)
-      throw new ApiHttpError("forbidden", "invalid identity selection");
-    const targetIdentityId = selectedIdentity ?? session.activeIdentityId;
-    if (targetIdentityId === null) {
-      return null;
-    }
-
-    const identity = await deps.repos.identities.get(targetIdentityId);
-    if (!identity || identity.accountId !== session.accountId) {
-      if (selectedIdentity !== undefined) {
-        throw new ApiHttpError("forbidden", "identity does not belong to this account");
-      }
-      return null;
-    }
+    const identity = await deps.repos.identities.get(session.identityId);
+    if (identity === null) return null;
 
     const account = await deps.repos.accounts.get(session.accountId);
     const isAdmin = (account?.isAdmin ?? false) || (await isEnvironmentAdmin(identity));
@@ -297,15 +257,11 @@ export function createAuthService(deps: CreateAuthServiceDeps): AuthService {
     const verifyAuthority = async (): Promise<boolean> => {
       const at = deps.clock();
       const current = await deps.repos.sessions.getByIdHash(idHash, at);
-      if (
-        !current ||
-        at.getTime() - current.createdAt.getTime() >=
+      return (
+        current !== null &&
+        at.getTime() - current.createdAt.getTime() <
           deps.config.fdriveSessionMaxAgeDays * MS_PER_DAY
-      ) {
-        return false;
-      }
-      const owned = await deps.repos.identities.get(identity.id);
-      return owned !== null && owned.accountId === current.accountId;
+      );
     };
 
     // A provider an admin disabled must not take the session down with it:
@@ -335,9 +291,9 @@ export function createAuthService(deps: CreateAuthServiceDeps): AuthService {
   }
 
   return {
-    login: (input) => accountRepositoryCall(() => loginAt(input, null)),
+    login: (input) => loginCall(() => loginAt(input, null)),
     loginCandidate: (input, providerId, setupClaimKey) =>
-      accountRepositoryCall(() => loginAt(input, providerId, setupClaimKey)),
+      loginCall(() => loginAt(input, providerId, setupClaimKey)),
     resolvePrincipal,
     me,
     logout,

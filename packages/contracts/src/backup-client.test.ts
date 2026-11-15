@@ -3,7 +3,7 @@ import { createBackupClient } from "./backup-client.js";
 import { BackupDestinationInput, BackupSchedule } from "./backups.js";
 
 const id = "f9c0b4ba-7b67-4e2f-abf3-08d1a0e6d652";
-it("sends owner session, CSRF and selected identity for every backup operation", async () => {
+it("sends the owner session and CSRF marker for every backup operation", async () => {
   const fetch = vi.fn<typeof globalThis.fetch>().mockImplementation(async (input) => {
     const url = String(input);
     return Response.json(
@@ -19,7 +19,6 @@ it("sends owner session, CSRF and selected identity for every backup operation",
   const client = createBackupClient({
     fetch,
     baseUrl: "https://fdrive.invalid",
-    identityId: () => id,
   });
   await client.unlock({ password: "owner" });
   await client.key("public key");
@@ -78,7 +77,6 @@ it("sends owner session, CSRF and selected identity for every backup operation",
     expect(init?.credentials).toBe("same-origin");
     const headers = new Headers(init?.headers);
     expect(headers.get("x-requested-with")).toBe("fdrive");
-    expect(headers.get("x-identity-id")).toBe(id);
   }
   const upload = fetch.mock.calls.find(([_url, init]) => init?.body === body);
   const encoded = new Headers(upload?.[1]?.headers).get("x-backup-metadata") ?? "";

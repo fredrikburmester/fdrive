@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { beforeEach, describe, expect, it } from "vitest";
 import type { Repos } from "../src/repos/types.js";
 import { ConflictError } from "../src/repos/types.js";
@@ -417,28 +418,21 @@ export function defineReposSuite(name: string, setup: () => Promise<Repos> | Rep
         expect(await repos.identities.get("00000000-0000-0000-0000-000000000000")).toBeNull();
       });
 
-      it("lists every identity for an account, empty for an account with none", async () => {
+      it("rejects a second login for an account", async () => {
         const { provider, account } = await seedProviderAndAccount();
-        const otherProvider = await repos.providers.ensure({
-          type: "local",
-          baseUrl: "http://other:8080",
-        });
-        const first = await repos.identities.create({
+        await repos.identities.create({
           accountId: account.id,
           providerId: provider.id,
           externalUsername: "carol",
         });
-        const second = await repos.identities.create({
-          accountId: account.id,
-          providerId: otherProvider.id,
-          externalUsername: "carol2",
-        });
-        const unrelatedAccount = await repos.accounts.create({ displayName: "Dave" });
 
-        const listed = await repos.identities.listByAccount(account.id);
-
-        expect(listed.map((identity) => identity.id).sort()).toEqual([first.id, second.id].sort());
-        expect(await repos.identities.listByAccount(unrelatedAccount.id)).toEqual([]);
+        await expect(
+          repos.identities.create({
+            accountId: account.id,
+            providerId: provider.id,
+            externalUsername: "carol2",
+          }),
+        ).rejects.toThrow();
       });
 
       it("touches the login time", async () => {
@@ -571,8 +565,19 @@ export function defineReposSuite(name: string, setup: () => Promise<Repos> | Rep
     });
 
     describe("sessions", () => {
+      /** An account and its one login: a session always acts as one. */
       async function seedAccount() {
-        return repos.accounts.create({ displayName: "Frank" });
+        const provider = await repos.providers.ensure({
+          type: "local",
+          baseUrl: "http://dav.test:8080",
+        });
+        const account = await repos.accounts.create({ displayName: "Frank" });
+        const identity = await repos.identities.create({
+          accountId: account.id,
+          providerId: provider.id,
+          externalUsername: `frank-${randomUUID()}`,
+        });
+        return { id: account.id, identityId: identity.id };
       }
 
       it("creates a session", async () => {
@@ -582,7 +587,7 @@ export function defineReposSuite(name: string, setup: () => Promise<Repos> | Rep
         const session = await repos.sessions.create({
           idHash: "hash-1",
           accountId: account.id,
-          activeIdentityId: null,
+          identityId: account.identityId,
           expiresAt,
           userAgent: "vitest",
           ip: "127.0.0.1",
@@ -590,7 +595,7 @@ export function defineReposSuite(name: string, setup: () => Promise<Repos> | Rep
 
         expect(session.idHash).toBe("hash-1");
         expect(session.accountId).toBe(account.id);
-        expect(session.activeIdentityId).toBeNull();
+        expect(session.identityId).toBe(account.identityId);
         expect(session.expiresAt).toEqual(expiresAt);
         expect(session.userAgent).toBe("vitest");
         expect(session.ip).toBe("127.0.0.1");
@@ -601,16 +606,16 @@ export function defineReposSuite(name: string, setup: () => Promise<Repos> | Rep
         const other = await seedAccount();
         const expiresAt = new Date("2099-01-01T00:00:00.000Z");
         const now = new Date("2026-01-01T00:00:00.000Z");
-        for (const [idHash, accountId] of [
-          ["keep", account.id],
-          ["end-1", account.id],
-          ["end-2", account.id],
-          ["other", other.id],
+        for (const [idHash, login] of [
+          ["keep", account],
+          ["end-1", account],
+          ["end-2", account],
+          ["other", other],
         ] as const) {
           await repos.sessions.create({
             idHash,
-            accountId,
-            activeIdentityId: null,
+            accountId: login.id,
+            identityId: login.identityId,
             expiresAt,
             userAgent: null,
             ip: null,
@@ -631,7 +636,7 @@ export function defineReposSuite(name: string, setup: () => Promise<Repos> | Rep
         await repos.sessions.create({
           idHash: "hash-2",
           accountId: account.id,
-          activeIdentityId: null,
+          identityId: account.identityId,
           expiresAt,
           userAgent: null,
           ip: null,
@@ -649,7 +654,7 @@ export function defineReposSuite(name: string, setup: () => Promise<Repos> | Rep
         await repos.sessions.create({
           idHash: "hash-3",
           accountId: account.id,
-          activeIdentityId: null,
+          identityId: account.identityId,
           expiresAt,
           userAgent: null,
           ip: null,
@@ -672,7 +677,7 @@ export function defineReposSuite(name: string, setup: () => Promise<Repos> | Rep
         await repos.sessions.create({
           idHash: "hash-4",
           accountId: account.id,
-          activeIdentityId: null,
+          identityId: account.identityId,
           expiresAt: new Date("2026-01-02T00:00:00.000Z"),
           userAgent: null,
           ip: null,
@@ -701,7 +706,7 @@ export function defineReposSuite(name: string, setup: () => Promise<Repos> | Rep
         await repos.sessions.create({
           idHash: "hash-5",
           accountId: account.id,
-          activeIdentityId: null,
+          identityId: account.identityId,
           expiresAt: new Date("2026-01-02T00:00:00.000Z"),
           userAgent: null,
           ip: null,
@@ -723,7 +728,7 @@ export function defineReposSuite(name: string, setup: () => Promise<Repos> | Rep
         await repos.sessions.create({
           idHash: "expired-1",
           accountId: account.id,
-          activeIdentityId: null,
+          identityId: account.identityId,
           expiresAt: new Date("2026-01-01T00:00:00.000Z"),
           userAgent: null,
           ip: null,
@@ -731,7 +736,7 @@ export function defineReposSuite(name: string, setup: () => Promise<Repos> | Rep
         await repos.sessions.create({
           idHash: "expired-2",
           accountId: account.id,
-          activeIdentityId: null,
+          identityId: account.identityId,
           expiresAt: new Date("2026-01-01T00:00:00.000Z"),
           userAgent: null,
           ip: null,
@@ -739,7 +744,7 @@ export function defineReposSuite(name: string, setup: () => Promise<Repos> | Rep
         await repos.sessions.create({
           idHash: "still-alive",
           accountId: account.id,
-          activeIdentityId: null,
+          identityId: account.identityId,
           expiresAt: new Date("2026-06-01T00:00:00.000Z"),
           userAgent: null,
           ip: null,
@@ -754,7 +759,7 @@ export function defineReposSuite(name: string, setup: () => Promise<Repos> | Rep
     });
 
     describe("apiTokens", () => {
-      it("persists explicit grants while old tokens retain absent access", async () => {
+      it("persists each token's access level and folders", async () => {
         const { account, identity } = await seedIdentity();
         const access = { mode: "organize" as const, paths: ["/docs", "/team"] };
         const token = await repos.apiTokens.create({
@@ -768,14 +773,6 @@ export function defineReposSuite(name: string, setup: () => Promise<Repos> | Rep
         expect(token.access).toEqual(access);
         expect((await repos.apiTokens.findByHash("scope-hash"))?.access).toEqual(access);
         expect((await repos.apiTokens.listByAccount(account.id))[0]?.access).toEqual(access);
-        const legacy = await repos.apiTokens.create({
-          accountId: account.id,
-          identityId: identity.id,
-          name: "Old",
-          tokenHash: "legacy-hash",
-          expiresAt: null,
-        });
-        expect(legacy).not.toHaveProperty("access");
       });
 
       async function seedIdentity() {
@@ -800,6 +797,7 @@ export function defineReposSuite(name: string, setup: () => Promise<Repos> | Rep
           identityId: identity.id,
           name: "Claude",
           tokenHash: "hash-1",
+          access: { mode: "read", paths: ["/"] },
           expiresAt: null,
         });
 
@@ -812,19 +810,19 @@ export function defineReposSuite(name: string, setup: () => Promise<Repos> | Rep
         expect(token.id).toEqual(expect.any(String));
       });
 
-      it("creates a token with no identity and an expiry", async () => {
-        const { account } = await seedIdentity();
+      it("creates a token with an expiry", async () => {
+        const { account, identity } = await seedIdentity();
         const expiresAt = new Date("2026-06-01T00:00:00.000Z");
 
         const token = await repos.apiTokens.create({
           accountId: account.id,
-          identityId: null,
+          identityId: identity.id,
           name: "Raycast",
           tokenHash: "hash-2",
+          access: { mode: "read", paths: ["/"] },
           expiresAt,
         });
 
-        expect(token.identityId).toBeNull();
         expect(token.expiresAt).toEqual(expiresAt);
       });
 
@@ -835,6 +833,7 @@ export function defineReposSuite(name: string, setup: () => Promise<Repos> | Rep
           identityId: identity.id,
           name: "Claude",
           tokenHash: "hash-3",
+          access: { mode: "read", paths: ["/"] },
           expiresAt: null,
         });
 
@@ -854,6 +853,7 @@ export function defineReposSuite(name: string, setup: () => Promise<Repos> | Rep
           identityId: identity.id,
           name: "Claude",
           tokenHash: "hash-4",
+          access: { mode: "read", paths: ["/"] },
           expiresAt: null,
         });
         await repos.apiTokens.create({
@@ -861,6 +861,7 @@ export function defineReposSuite(name: string, setup: () => Promise<Repos> | Rep
           identityId: identity.id,
           name: "Raycast",
           tokenHash: "hash-5",
+          access: { mode: "read", paths: ["/"] },
           expiresAt: null,
         });
         const other = await repos.accounts.create({ displayName: "Ivan" });
@@ -878,6 +879,7 @@ export function defineReposSuite(name: string, setup: () => Promise<Repos> | Rep
           identityId: identity.id,
           name: "Claude",
           tokenHash: "hash-6",
+          access: { mode: "read", paths: ["/"] },
           expiresAt: null,
         });
         const at = new Date("2026-01-01T00:00:00.000Z");
@@ -901,6 +903,7 @@ export function defineReposSuite(name: string, setup: () => Promise<Repos> | Rep
           identityId: identity.id,
           name: "Claude",
           tokenHash: "hash-7",
+          access: { mode: "read", paths: ["/"] },
           expiresAt: null,
         });
 
@@ -916,6 +919,7 @@ export function defineReposSuite(name: string, setup: () => Promise<Repos> | Rep
           identityId: identity.id,
           name: "Claude",
           tokenHash: "hash-8",
+          access: { mode: "read", paths: ["/"] },
           expiresAt: null,
         });
         const other = await repos.accounts.create({ displayName: "Judy" });
@@ -1752,9 +1756,10 @@ export function defineReposSuite(name: string, setup: () => Promise<Repos> | Rep
             externalUsername: "alice",
           })
         ).id;
+        const bob = await repos.accounts.create({ displayName: null });
         other = (
           await repos.identities.create({
-            accountId: account.id,
+            accountId: bob.id,
             providerId: provider.id,
             externalUsername: "bob",
           })

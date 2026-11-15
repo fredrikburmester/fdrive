@@ -11,9 +11,8 @@ import {
 } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
 import { toast } from "sonner";
-import { refreshIdentityQuery } from "@/lib/account/invalidation";
-import { accountTransition, useAccountTransition } from "@/lib/account/transition";
-import { apiClient, queryKeys, snapshotTabApiClient } from "./deps";
+import { refreshQuery } from "@/lib/api/refresh-query";
+import { apiClient, queryKeys } from "./deps";
 import { DEFAULT_RESOLVE_CONCURRENCY, type ResolvedEntry } from "./resolve";
 import { createStatQueue } from "./stat-queue";
 import { applyFavoriteToEntries, applyTagsToEntries } from "./tag-set";
@@ -26,23 +25,7 @@ const FS_STAT_PREFIX: QueryKey = ["fs", "stat"];
 /** A prefix key matching every `tags.files` query. */
 const TAG_FILES_PREFIX: QueryKey = ["tags", "files"];
 
-function currentGeneration(): number {
-  return accountTransition.getSnapshot().generation;
-}
-function currentWork(generation: number): boolean {
-  return generation === currentGeneration() && !accountTransition.getSnapshot().pending;
-}
-
-/** Immutable for the mounted browser, including before asynchronous mutation callbacks. */
-function useMetadataScope() {
-  const [scope] = useState(() => ({
-    generation: currentGeneration(),
-    client: snapshotTabApiClient(),
-  }));
-  return scope;
-}
-
-/** The caller's tags, shared across every identity of the account. */
+/** The caller's tags. */
 export function useTags() {
   return useQuery({
     queryKey: queryKeys.tags.list(),
@@ -50,7 +33,7 @@ export function useTags() {
   });
 }
 
-/** Every path (for the caller's active identity) that has tag `id`. */
+/** Every path of the caller's that has tag `id`. */
 export function useTagFiles(id: string | null) {
   return useQuery({
     queryKey: queryKeys.tags.files(id ?? ""),
@@ -68,7 +51,6 @@ export function useTagFiles(id: string | null) {
  */
 export function useTagMutations() {
   const queryClient = useQueryClient();
-  const scope = useMetadataScope();
 
   function invalidateTagList() {
     void queryClient.invalidateQueries({ queryKey: queryKeys.tags.list() });
@@ -76,46 +58,32 @@ export function useTagMutations() {
 
   function invalidateEverything() {
     invalidateTagList();
-    void refreshIdentityQuery(queryClient, FS_LIST_PREFIX);
-    void refreshIdentityQuery(queryClient, FS_STAT_PREFIX);
+    void refreshQuery(queryClient, FS_LIST_PREFIX);
+    void refreshQuery(queryClient, FS_STAT_PREFIX);
   }
 
   const createTag = useMutation({
-    mutationFn: async (req: CreateTagRequest) => {
-      if (!currentWork(scope.generation)) throw new Error("Login changed.");
-      return scope.client.createTag(req);
-    },
-    onSuccess: () => {
-      if (scope.generation === currentGeneration()) invalidateTagList();
-    },
+    mutationFn: (req: CreateTagRequest) => apiClient.createTag(req),
+    onSuccess: invalidateTagList,
     onError: () => {
-      if (scope.generation === currentGeneration()) toast.error("Could not create the tag.");
+      toast.error("Could not create the tag.");
     },
   });
 
   const updateTag = useMutation({
-    mutationFn: async (vars: { id: string; patch: UpdateTagRequest }) => {
-      if (!currentWork(scope.generation)) throw new Error("Login changed.");
-      return scope.client.updateTag(vars.id, vars.patch);
-    },
-    onSuccess: () => {
-      if (scope.generation === currentGeneration()) invalidateEverything();
-    },
+    mutationFn: (vars: { id: string; patch: UpdateTagRequest }) =>
+      apiClient.updateTag(vars.id, vars.patch),
+    onSuccess: invalidateEverything,
     onError: () => {
-      if (scope.generation === currentGeneration()) toast.error("Could not update the tag.");
+      toast.error("Could not update the tag.");
     },
   });
 
   const deleteTag = useMutation({
-    mutationFn: async (id: string) => {
-      if (!currentWork(scope.generation)) throw new Error("Login changed.");
-      return scope.client.deleteTag(id);
-    },
-    onSuccess: () => {
-      if (scope.generation === currentGeneration()) invalidateEverything();
-    },
+    mutationFn: (id: string) => apiClient.deleteTag(id),
+    onSuccess: invalidateEverything,
     onError: () => {
-      if (scope.generation === currentGeneration()) toast.error("Could not delete the tag.");
+      toast.error("Could not delete the tag.");
     },
   });
 
@@ -142,20 +110,14 @@ interface CachedMetadataSnapshot {
  */
 export function useSetFileTags() {
   const queryClient = useQueryClient();
-  const scope = useMetadataScope();
 
   return useMutation({
     mutationFn: async (items: readonly SetFileTagsItem[]) => {
-      if (!currentWork(scope.generation)) throw new Error("Login changed.");
       await Promise.all(
-        items.map((item) =>
-          scope.client.setFileTags({ path: item.path, tagIds: [...item.tagIds] }),
-        ),
+        items.map((item) => apiClient.setFileTags({ path: item.path, tagIds: [...item.tagIds] })),
       );
     },
     onMutate: async (items: readonly SetFileTagsItem[]) => {
-      const { generation } = scope;
-      if (!currentWork(generation)) return { previous: [], generation };
       const parents = new Set(items.map((item) => parentPath(item.path)));
       const paths = new Set(items.map((item) => item.path));
       const keys = [
@@ -164,7 +126,6 @@ export function useSetFileTags() {
       ];
       await Promise.all(keys.map((queryKey) => queryClient.cancelQueries({ queryKey })));
       const previous: CachedMetadataSnapshot[] = [];
-      if (!currentWork(generation)) return { previous, generation };
       // Snapshot each listing once before applying a multi-file optimistic patch.
       for (const key of keys) {
         const data = queryClient.getQueryData(key);
@@ -180,29 +141,26 @@ export function useSetFileTags() {
           data === undefined ? undefined : applyTagsToEntries([data], item.path, item.tagIds)[0],
         );
       }
-      return { previous, generation };
+      return { previous };
     },
     onError: (_error, _items, context) => {
-      if (context?.generation !== currentGeneration()) return;
       for (const snapshot of context?.previous ?? []) {
         queryClient.setQueryData(snapshot.key, snapshot.data);
       }
       toast.error("Could not update tags.");
     },
-    onSettled: (_data, _error, items, context) => {
-      if (context?.generation !== currentGeneration()) return;
+    onSettled: (_data, _error, items) => {
       const parents = new Set(items.map((item) => parentPath(item.path)));
       for (const parent of parents) {
-        void refreshIdentityQuery(queryClient, queryKeys.fs.list(parent));
+        void refreshQuery(queryClient, queryKeys.fs.list(parent));
       }
-      for (const item of items)
-        void refreshIdentityQuery(queryClient, queryKeys.fs.stat(item.path));
+      for (const item of items) void refreshQuery(queryClient, queryKeys.fs.stat(item.path));
       void queryClient.invalidateQueries({ queryKey: TAG_FILES_PREFIX });
     },
   });
 }
 
-/** The caller's favorites, for the active identity. */
+/** The caller's favorites. */
 export function useFavorites() {
   return useQuery({
     queryKey: queryKeys.favorites.list(),
@@ -223,24 +181,19 @@ export interface ToggleFavoriteVariables {
  */
 export function useToggleFavorite() {
   const queryClient = useQueryClient();
-  const scope = useMetadataScope();
 
   return useMutation({
     mutationFn: async (vars: ToggleFavoriteVariables) => {
-      if (!currentWork(scope.generation)) throw new Error("Login changed.");
       if (vars.favorite) {
-        await scope.client.addFavorite({ path: vars.path });
+        await apiClient.addFavorite({ path: vars.path });
       } else {
-        await scope.client.removeFavorite({ path: vars.path });
+        await apiClient.removeFavorite({ path: vars.path });
       }
     },
     onMutate: async (vars: ToggleFavoriteVariables) => {
-      const { generation } = scope;
       const keys = [queryKeys.fs.list(parentPath(vars.path)), queryKeys.fs.stat(vars.path)];
       const previous: CachedMetadataSnapshot[] = [];
-      if (!currentWork(generation)) return { previous, generation };
       await Promise.all(keys.map((queryKey) => queryClient.cancelQueries({ queryKey })));
-      if (!currentWork(generation)) return { previous, generation };
       for (const key of keys) {
         const data = queryClient.getQueryData(key);
         if (data !== undefined) previous.push({ key, data });
@@ -255,25 +208,22 @@ export function useToggleFavorite() {
           ? undefined
           : applyFavoriteToEntries([data], vars.path, vars.favorite)[0],
       );
-      return { previous, generation };
+      return { previous };
     },
     onError: (_error, _vars, context) => {
-      if (context?.generation !== currentGeneration()) return;
-      for (const snapshot of context.previous)
+      for (const snapshot of context?.previous ?? [])
         queryClient.setQueryData(snapshot.key, snapshot.data);
       toast.error("Could not update favorites.");
     },
-    onSettled: (_data, _error, vars, context) => {
-      if (context?.generation !== currentGeneration()) return;
-      void refreshIdentityQuery(queryClient, queryKeys.fs.list(parentPath(vars.path)));
-      void refreshIdentityQuery(queryClient, queryKeys.fs.stat(vars.path));
+    onSettled: (_data, _error, vars) => {
+      void refreshQuery(queryClient, queryKeys.fs.list(parentPath(vars.path)));
+      void refreshQuery(queryClient, queryKeys.fs.stat(vars.path));
       void queryClient.invalidateQueries({ queryKey: queryKeys.favorites.list() });
-      void queryClient.invalidateQueries({ queryKey: ["account"] });
     },
   });
 }
 
-/** The caller's recently opened paths (previews and edits), for the active identity. */
+/** The caller's recently opened paths (previews and edits). */
 export function useRecents() {
   return useQuery({
     queryKey: queryKeys.recents.list(),
@@ -286,7 +236,6 @@ export function useRecents() {
  * critical path) and simply invalidates nothing. */
 export function useTouchRecent(contextPath?: string) {
   const queryClient = useQueryClient();
-  const scope = useMetadataScope();
   // One gesture keeps one request ID, so a retried report is the same open
   // rather than a second one.
   const gesture = useMemo(
@@ -294,17 +243,12 @@ export function useTouchRecent(contextPath?: string) {
     [contextPath],
   );
   return useMutation({
-    mutationFn: (path: string) => {
-      if (accountTransition.getSnapshot().pending || scope.generation !== currentGeneration()) {
-        return Promise.reject(new Error("The active login changed."));
-      }
-      return scope.client.touchRecent({
+    mutationFn: (path: string) =>
+      apiClient.touchRecent({
         path,
         ...(gesture.path === path ? { requestId: gesture.requestId, at: gesture.at } : {}),
-      });
-    },
+      }),
     onSuccess: () => {
-      if (scope.generation !== currentGeneration()) return;
       void queryClient.invalidateQueries({ queryKey: queryKeys.recents.list() });
     },
   });
@@ -317,15 +261,12 @@ export interface UseResolvedEntriesResult {
 
 /** Resolves paths through the shared stat cache, observing mutation/SSE invalidations. */
 export function useResolvedEntries(paths: readonly string[]): UseResolvedEntriesResult {
-  const transition = useAccountTransition();
-  const scope = useMetadataScope();
   const [run] = useState(() => createStatQueue(DEFAULT_RESOLVE_CONCURRENCY));
   const queries = useQueries({
     queries: paths.map((path) => ({
       queryKey: queryKeys.fs.stat(path),
       queryFn: ({ signal }: { signal: AbortSignal }) =>
-        run(() => scope.client.stat(path, signal), signal),
-      enabled: !transition.pending && transition.generation === scope.generation,
+        run(() => apiClient.stat(path, signal), signal),
       retry: false,
     })),
   });

@@ -1,6 +1,6 @@
 import { createMemoryRepos } from "@fdrive/db/testing";
 import { describe, expect, it, vi } from "vitest";
-import { createMetadataService } from "./service.js";
+import { createMetadataService, withFollowers } from "./service.js";
 import { isMoveIntoTrash, withTrashMoves } from "./trash-moves.js";
 
 const IDENTITY_ID = "identity-1";
@@ -42,9 +42,10 @@ describe("withTrashMoves", () => {
       onMoved: vi.fn(async () => undefined),
       onDeleted: vi.fn(async () => undefined),
     };
-    const metadata = createMetadataService({ ...repos, followers: [grants] });
+    const metadata = createMetadataService(repos);
     const trashPathFor = vi.fn(async () => trashPath);
-    return { metadata, grants, trashPathFor, wrapped: withTrashMoves(metadata, trashPathFor) };
+    const wrapped = withFollowers(withTrashMoves(metadata, trashPathFor), [grants]);
+    return { metadata, grants, trashPathFor, wrapped };
   }
 
   it("keeps tags and favorites where a folder was, and moves its shares with it into the Trash", async () => {

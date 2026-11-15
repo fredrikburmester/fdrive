@@ -80,7 +80,7 @@ def _clean_tables(postgres_dsn: str) -> Iterator[None]:
     try:
         with conn.cursor() as cur:
             cur.execute(
-                'TRUNCATE "idx"."ocr_log", "idx"."ocr_runs", "idx"."moves", "idx"."scans", '
+                'TRUNCATE "idx"."ocr_log", "idx"."ocr_runs", "idx"."scans", '
                 '"idx"."chunks", "idx"."files", "idx"."roots", "app"."thumbnails", "app"."settings" '
                 "RESTART IDENTITY CASCADE"
             )

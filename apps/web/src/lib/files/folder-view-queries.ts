@@ -2,29 +2,15 @@
 
 import type { FolderViewResponse } from "@fdrive/contracts";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useRef, useState } from "react";
+import { useRef } from "react";
 import { toast } from "sonner";
-import { accountTransition } from "@/lib/account/transition";
-import { snapshotTabApiClient } from "@/lib/api/client";
+import { apiClient } from "@/lib/api/client";
 import { queryKeys } from "@/lib/api/keys";
 import { resolveFolderSort, resolveFolderView } from "./folder-view";
 import type { SortSpec } from "./sorting";
 import { useDefaultSort } from "./use-default-sort";
 import { useDefaultView } from "./use-default-view";
 import type { ViewMode } from "./view-mode";
-
-function useScope() {
-  const [scope] = useState(() => ({
-    client: snapshotTabApiClient(),
-    generation: accountTransition.getSnapshot().generation,
-  }));
-  return scope;
-}
-
-function isCurrent(generation: number) {
-  const current = accountTransition.getSnapshot();
-  return !current.pending && current.generation === generation;
-}
 
 /** One part of a folder's pin being written: `null` unpins that part only. */
 type PinChange =
@@ -42,39 +28,33 @@ function applyChange(
   return { view: next.mode === null && next.sort == null ? null : next };
 }
 
-export function useFolderView(path: string, identityId: string | undefined) {
-  const scope = useScope();
+export function useFolderView(path: string) {
   const queryClient = useQueryClient();
   const [globalDefault, setGlobalDefault] = useDefaultView();
   const [globalSort, setGlobalSort] = useDefaultSort();
   const busy = useRef(new Set<string>());
   const query = useQuery({
-    queryKey: queryKeys.folderViews.path(identityId ?? "", path),
-    queryFn: () => scope.client.getFolderView(path),
-    enabled: identityId !== undefined,
+    queryKey: queryKeys.folderViews.path(path),
+    queryFn: () => apiClient.getFolderView(path),
     staleTime: 0,
   });
   const mutation = useMutation({
     mutationFn: async (change: PinChange) => {
-      if (!isCurrent(scope.generation)) throw new Error("Login changed.");
       if (change.value === null) {
-        return scope.client.removeFolderView({ path: change.path, part: change.part });
+        return apiClient.removeFolderView({ path: change.path, part: change.part });
       }
       return change.part === "mode"
-        ? scope.client.setFolderView({ path: change.path, mode: change.value })
-        : scope.client.setFolderView({ path: change.path, sort: change.value });
+        ? apiClient.setFolderView({ path: change.path, mode: change.value })
+        : apiClient.setFolderView({ path: change.path, sort: change.value });
     },
     onMutate: async (change) => {
-      const key = queryKeys.folderViews.path(identityId ?? "", change.path);
+      const key = queryKeys.folderViews.path(change.path);
       await queryClient.cancelQueries({ queryKey: key });
       const previous = queryClient.getQueryData<FolderViewResponse>(key);
-      if (isCurrent(scope.generation)) {
-        queryClient.setQueryData(key, applyChange(previous, change));
-      }
+      queryClient.setQueryData(key, applyChange(previous, change));
       return { key, previous };
     },
     onError: (_error, change, context) => {
-      if (!isCurrent(scope.generation)) return;
       if (context) queryClient.setQueryData(context.key, context.previous);
       toast.error(
         change.part === "mode"
@@ -83,9 +63,7 @@ export function useFolderView(path: string, identityId: string | undefined) {
       );
     },
     onSettled: async (_data, _error, change, context) => {
-      if (isCurrent(scope.generation) && context) {
-        await queryClient.invalidateQueries({ queryKey: context.key });
-      }
+      if (context) await queryClient.invalidateQueries({ queryKey: context.key });
       busy.current.delete(change.path);
     },
   });
@@ -93,7 +71,7 @@ export function useFolderView(path: string, identityId: string | undefined) {
   const mode = resolveFolderView(path, pin, globalDefault);
   const sort = resolveFolderSort(path, pin, globalSort);
   function save(change: PinChange) {
-    if (busy.current.has(path) || !query.isSuccess || !isCurrent(scope.generation)) return;
+    if (busy.current.has(path) || !query.isSuccess) return;
     busy.current.add(path);
     mutation.mutate(change);
   }
@@ -116,20 +94,15 @@ export function useFolderView(path: string, identityId: string | undefined) {
 }
 
 export function useResetFolderViews() {
-  const scope = useScope();
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: () => {
-      if (!isCurrent(scope.generation)) throw new Error("Login changed.");
-      return scope.client.resetFolderViews();
-    },
+    mutationFn: () => apiClient.resetFolderViews(),
     onSuccess: async () => {
-      if (!isCurrent(scope.generation)) return;
       await queryClient.invalidateQueries({ queryKey: queryKeys.folderViews.all() });
       toast.success("All folders now use the default view and sort.");
     },
     onError: () => {
-      if (isCurrent(scope.generation)) toast.error("Could not reset folder views.");
+      toast.error("Could not reset folder views.");
     },
   });
 }

@@ -11,8 +11,6 @@ const mocks = vi.hoisted(() => ({
 }));
 vi.mock("@/lib/api/client", () => ({
   apiClient: mocks.client,
-  snapshotTabApiClient: () => mocks.client,
-  pinTabIdentity: vi.fn(),
 }));
 vi.mock("sonner", () => ({ toast: { success: mocks.success, error: mocks.error } }));
 vi.mock("@/components/files/destination-picker", () => ({

@@ -27,11 +27,9 @@ export function makeIdentity(overrides: IdentityOverrides = {}): IdentitySummary
 }
 
 export function makeMe(overrides: Partial<MeResponse> = {}): MeResponse {
-  const identities = overrides.identities ?? [makeIdentity()];
   return {
     account: { id: "a", displayName: "Ada" },
-    identities,
-    activeIdentityId: identities[0]?.id ?? "one",
+    identity: makeIdentity(),
     isAdmin: false,
     ...overrides,
   };

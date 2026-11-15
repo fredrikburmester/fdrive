@@ -20,7 +20,7 @@ configured per login.
 
 `configuredMappings(identity)` returns the home plus any extra scopes whenever the provider
 names a root, indexed or not, reading only the provider row. Office, index events, the Office
-file registry, desktop effects and activity observations use it. It is unavailable as
+file registry and activity observations use it. It is unavailable as
 `provider_mismatch` (the provider is gone or disabled), `no_roots` (it names no root) or
 `invalid_configuration` (the username is not one path segment).
 
@@ -75,5 +75,5 @@ retain nested scope shadow boundaries and then perform the usual live read autho
 Ancestor browsing exposes only the chains to granted roots. fdrive's own folders (Trash, the
 Mac app's folder, the Trash layout and backups; `isReservedPath`) remain excluded from ordinary
 tools, and index queries leave them out before their limit; restore admits both original and
-destination paths. Legacy tokens retain the indexed-scope restrictions described in
-[MCP](MCP.md).
+destination paths. Every MCP token has explicit grants; the AI's tools pass the session's
+login, which keeps every verified scope.

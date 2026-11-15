@@ -208,8 +208,8 @@ test("a long folder name and file path in a result row never spill past the sear
 
   const meResponse = await page.request.get("/api/v1/auth/me");
   expect(meResponse.ok()).toBe(true);
-  const me = (await meResponse.json()) as { account: { id: string }; activeIdentityId: string };
-  const storageKey = `fdrive.recent:${JSON.stringify([me.account.id, me.activeIdentityId])}`;
+  const me = (await meResponse.json()) as { account: { id: string }; identity: { id: string } };
+  const storageKey = `fdrive.recent:${JSON.stringify([me.account.id, me.identity.id])}`;
   const recentItem = {
     path: `/${folderName}/Course Notes.md`,
     name: "Course Notes.md",

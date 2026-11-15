@@ -94,8 +94,9 @@ async function setup(
     providerId: provider.id,
     externalUsername: "alice",
   });
+  const bobAccount = await repos.accounts.create({ displayName: null });
   const bob = await repos.identities.create({
-    accountId: account.id,
+    accountId: bobAccount.id,
     providerId: provider.id,
     externalUsername: "bob",
   });
@@ -116,7 +117,12 @@ async function setup(
     storage,
     isAdmin: false,
   };
-  const other: Principal = { ...principal, identityId: bob.id, username: "bob" };
+  const other: Principal = {
+    ...principal,
+    accountId: bobAccount.id,
+    identityId: bob.id,
+    username: "bob",
+  };
   const script = scriptedModel();
   const mcp: McpToolDeps = {
     indexQueries: { rootIdsByName: async () => ({}) } as unknown as IndexQueries,
@@ -129,7 +135,6 @@ async function setup(
     },
     publicUrl: async () => null,
     indexerClient: null,
-    writesEnabled: false,
     clock: () => new Date("2026-09-18T10:00:00.000Z"),
     metadata: createMetadataService(repos),
     ...(options.trash ? { trashPathForStorage: () => (trash.enabled ? "/.Trash" : null) } : {}),

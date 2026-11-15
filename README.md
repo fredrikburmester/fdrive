@@ -170,8 +170,8 @@ brew tap fredrikburmester/fdrive https://github.com/fredrikburmester/fdrive.git
 brew install --cask fredrikburmester/fdrive/fdrive
 ```
 
-Open FDrive, enter your fdrive web address, sign in and pick the storage logins you want in
-Finder. The signed download is **free for 7 days**, then a **one-time €19 license** keeps it
+Open FDrive, enter your fdrive web address, sign in and choose whether Finder may change your
+files. The signed download is **free for 7 days**, then a **one-time €19 license** keeps it
 running on up to three Macs. No subscription.
 
 **[Buy a license](https://buy.polar.sh/polar_cl_E2fCqfGdal7FYvVQmjRh38wz4KoT1oMui1quj4R2WJ6)** ·

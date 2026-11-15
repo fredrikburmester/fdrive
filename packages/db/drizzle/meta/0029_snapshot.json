@@ -1,5 +1,5 @@
 {
-  "id": "c025e392-e6e3-4a2d-b496-216585356b8f",
+  "id": "1c3a0237-0f5f-4873-8d0e-d222e061d326",
   "prevId": "651eef43-54f8-4383-8182-00bef5f74c3c",
   "version": "7",
   "dialect": "postgresql",
@@ -330,7 +330,7 @@
           "name": "identity_id",
           "type": "uuid",
           "primaryKey": false,
-          "notNull": false
+          "notNull": true
         },
         "name": {
           "name": "name",
@@ -420,7 +420,7 @@
           "schemaTo": "app",
           "columnsFrom": ["identity_id"],
           "columnsTo": ["id"],
-          "onDelete": "set null",
+          "onDelete": "cascade",
           "onUpdate": "no action"
         }
       },
@@ -1670,23 +1670,7 @@
           "notNull": false
         }
       },
-      "indexes": {
-        "identities_account_id_idx": {
-          "name": "identities_account_id_idx",
-          "columns": [
-            {
-              "expression": "account_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
+      "indexes": {},
       "foreignKeys": {
         "identities_account_id_accounts_id_fk": {
           "name": "identities_account_id_accounts_id_fk",
@@ -1715,6 +1699,11 @@
           "name": "identities_provider_id_external_username_unique",
           "nullsNotDistinct": false,
           "columns": ["provider_id", "external_username"]
+        },
+        "identities_account_id_unique": {
+          "name": "identities_account_id_unique",
+          "nullsNotDistinct": false,
+          "columns": ["account_id"]
         }
       },
       "policies": {},
@@ -1897,12 +1886,6 @@
           "primaryKey": false,
           "notNull": true,
           "default": false
-        },
-        "storage_limit": {
-          "name": "storage_limit",
-          "type": "bigint",
-          "primaryKey": false,
-          "notNull": false
         },
         "created_at": {
           "name": "created_at",
@@ -2222,11 +2205,11 @@
           "primaryKey": false,
           "notNull": true
         },
-        "active_identity_id": {
-          "name": "active_identity_id",
+        "identity_id": {
+          "name": "identity_id",
           "type": "uuid",
           "primaryKey": false,
-          "notNull": false
+          "notNull": true
         },
         "created_at": {
           "name": "created_at",
@@ -2292,11 +2275,11 @@
           "method": "btree",
           "with": {}
         },
-        "sessions_active_identity_id_idx": {
-          "name": "sessions_active_identity_id_idx",
+        "sessions_identity_id_idx": {
+          "name": "sessions_identity_id_idx",
           "columns": [
             {
-              "expression": "active_identity_id",
+              "expression": "identity_id",
               "isExpression": false,
               "asc": true,
               "nulls": "last"
@@ -2319,14 +2302,14 @@
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
-        "sessions_active_identity_id_identities_id_fk": {
-          "name": "sessions_active_identity_id_identities_id_fk",
+        "sessions_identity_id_identities_id_fk": {
+          "name": "sessions_identity_id_identities_id_fk",
           "tableFrom": "sessions",
           "tableTo": "identities",
           "schemaTo": "app",
-          "columnsFrom": ["active_identity_id"],
+          "columnsFrom": ["identity_id"],
           "columnsTo": ["id"],
-          "onDelete": "set null",
+          "onDelete": "cascade",
           "onUpdate": "no action"
         }
       },

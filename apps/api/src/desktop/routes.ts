@@ -14,13 +14,12 @@ import {
   DesktopUploadRequest,
   DesktopVersionRequest,
 } from "@fdrive/contracts";
-import type { DesktopEffectsRepo } from "@fdrive/db";
 import type { Context } from "hono";
-import { accountContext } from "../accounts/routes.js";
 import { activityOperationId } from "../activity/fs-context.js";
 import type { PersonalActivityService } from "../activity/service.js";
 import { activityStream } from "../activity/streams.js";
 import type { AppHono, AuthedHono } from "../app.js";
+import { accountContext } from "../auth/account-context.ts";
 import { createRequireAdmin, type Principal } from "../auth/principal.js";
 import { ApiHttpError } from "../errors.js";
 import { parseBody } from "../fs/routes.js";
@@ -37,7 +36,6 @@ export function registerDesktopRoutes(
     writes?: DesktopWrites;
     /** The change feed; absent where the server keeps no change journal. */
     changes?: DesktopChanges;
-    recovery?: Pick<DesktopEffectsRepo, "status">;
     /** Records hydration. A background fetch is not a proven human open. */
     activity?: PersonalActivityService;
   },
@@ -50,18 +48,9 @@ export function registerDesktopRoutes(
   };
   groups.authed.get(`${base}/recovery`, createRequireAdmin(), async (c) => {
     c.header("Cache-Control", "no-store");
-    if (!deps.recovery)
-      throw new ApiHttpError("upstream_unavailable", "Recovery status is unavailable");
-    const pending = await deps.recovery.status();
+    if (!writes) throw new ApiHttpError("upstream_unavailable", "Recovery status is unavailable");
     return c.json(
-      DesktopRecoveryResponse.parse({
-        pending: pending.map((job) => ({
-          ...job,
-          createdAt: job.createdAt.toISOString(),
-          nextAttemptAt: job.nextAttemptAt.toISOString(),
-        })),
-        uncertain: writes ? await writes.uncertain(deps.clock()) : [],
-      }),
+      DesktopRecoveryResponse.parse({ uncertain: await writes.uncertain(deps.clock()) }),
     );
   });
   groups.authed.post(
@@ -176,14 +165,9 @@ export function registerDesktopRoutes(
     return c.json(pairing.info(c.req.param("id")));
   });
   groups.authed.post(`${base}/pairings/:id/approve`, async (c) => {
-    const owner = accountContext(c);
+    const { principal } = accountContext(c);
     const body = await parseBody(DesktopPairApproval, c);
-    await pairing.approve(
-      c.req.param("id"),
-      owner.principal.accountId,
-      body.identityIds,
-      body.access,
-    );
+    await pairing.approve(c.req.param("id"), principal, body.access);
     return c.json({ ok: true });
   });
   groups.public.get(`${base}/location`, async (c) =>

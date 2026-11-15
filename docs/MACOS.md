@@ -11,7 +11,7 @@ the first hosted release, Homebrew installation and tests on another Mac.
 2. Enter the fdrive web address. HTTPS is required; HTTP loopback works for development.
    The address field shows until a location exists; **Add Server** brings it back to allow
    more logins.
-3. Sign in in the browser, compare the connection code and select storage logins and access.
+3. Sign in in the browser, compare the connection code and choose read-only or read and write.
 4. Open a location from the app. Click **Enable** in Finder if macOS requests it.
 
 The app checks each location's Finder registration on every refresh. A location whose
@@ -27,8 +27,10 @@ launches the installed copy and quits, keeping the locations window open or clos
 It waits while FDrive is the active app or a pairing, license change or disconnect is under
 way. If the new copy cannot be launched, the app asks you to quit and reopen FDrive.
 
-Each selected server/account/identity gets its own domain, token and metadata database.
-The fdrive server reads and writes the files folder; the Mac talks only to the fdrive API. Switching the web app's active login cannot retarget a native location.
+Each paired server/account/identity gets its own domain, token and metadata database. A pairing
+connects the login signed in to the browser that approves it; the bundle stays a list of
+credentials, now always one long. The fdrive server reads and writes the files folder; the Mac
+talks only to the fdrive API.
 
 Browsing retrieves directory metadata without fetching original file contents to the Mac.
 Opening, Quick Look, copying out and other applications' reads fetch contents on demand.
@@ -205,50 +207,42 @@ destination, stages and validates new bytes, backs up an existing file, then pub
 atomic rename, fenced by the per-identity lock plus the pre-publication recheck. Original backups remain under the reserved
 `/.fdrive-desktop` namespace, hidden from native ordinary reads and from the web file tree.
 Failed staging reuses its recorded directory. A commit whose publication cannot be confirmed stays
-uncertain and cannot automatically replay as a new write. The completed receipt and a metadata
-recovery job commit in one PostgreSQL transaction after publication. A failure before that
-transaction commits remains uncertain; an effect failure after it commits leaves the receipt
-completed. Replaying or acknowledging that receipt never republishes the file.
+uncertain and cannot automatically replay as a new write. The completed receipt, the write's
+personal history and what grants access to the moved path (public links and folders shared
+with people) commit in one PostgreSQL transaction after publication, so no link or share stays
+at a path the write left, where a new item could appear. A failure before that transaction
+commits remains uncertain, never success; resolving it moves sharing from where the item was
+when the write was prepared. Replaying or acknowledging that receipt never republishes the file.
 
-The API drains the durable queue at startup, after saves and every five seconds. Each job
-updates tags, favorites, recents, folder views, mapped Office registrations and the paths of
-public links atomically, then commits before dispatching its filesystem notification. Links
-carry no revisions: what they do is decided before publication from where the item really
-moves, into and out of the Mac's Trash too. Delivery is a second durable
-pending phase: retries send only the notification and never reapply metadata. Before another
-native publication, older pending work for the identity must finish; other identities continue. Recovery bounds lock waits to two seconds and individual
-statements to fifteen seconds. Failed jobs use exponential backoff, capped at five minutes.
-Shutdown waits for active recovery before closing the database. No Mac connection or storage
-credential is needed, and the worker never changes file contents or backups.
+**Metadata.** Once the receipt is kept, the commit brings the rest of path-keyed metadata along
+through the service web writes use, and tells the web once, as web writes do right after their
+storage call ([writes.ts](../apps/api/src/desktop/writes.ts), `follow`): tags, favorites, folder
+views, recents, AI chat references and Office files follow a move. A move into the Mac's Trash
+is a trash: links and shares follow the item into `/.fdrive-desktop/<identity>/trash`, which
+neither reaches, recents go, and tags, favorites and folder views stay at the original path. A
+restore brings those back as a web restore does, only while nothing has taken the original path,
+and links and shares come back with the item. The Mac's item handles are the commit's own; this
+step never touches them. A new write never waits for an earlier one's metadata.
 
-Jobs capture trusted Office locations and metadata row revisions before filesystem publication
-(at most 100,000 source/destination revisions). Capacity exhaustion returns `quota_exceeded`
-with the operation still ready and the source untouched. Receipt persistence uses that bounded
-snapshot without recapturing later metadata growth. Identity, Office-root and row locks
-protect concurrent edits. Upgrade all API writers together; older binaries neither rotate
-these revisions nor invalidate superseded recovery destinations.
-Recovery only changes matching captured revisions: later source edits survive, and newer
-destination metadata blocks the transaction for inspection. Later web/MCP/Office/indexer
-move or delete hooks invalidate overlapping queued destinations, including descendants and
-paths with no current metadata. Exact move replays remain idempotent. Superseded jobs preserve
-their snapshots and stay pending for attention rather than attaching metadata to a reused path.
-Account ownership changes retire old jobs. Successful metadata application discards snapshots
-while retaining notification delivery state. Restoring into an overlapping original path
-hierarchy is refused before publication to avoid overlapping metadata moves.
+None of that step grants access, so a failure there is logged and never fails the commit: the
+file is published and its receipt answers. The indexer reports the same move from the change
+journal, and its listener ([indexer-listener.ts](../apps/api/src/events/indexer-listener.ts))
+moves metadata and tells the web then, which also covers a crash between the receipt and this
+step. As for web writes, that second chance needs indexing on, and an empty folder's move is not
+reported as a move. The listener sees a move into the Mac's Trash as a delete, since the indexer
+never walks `/.fdrive-desktop`, so with indexing on tags left at a trashed item's original path
+go.
 
-Administrators can inspect the first 100 pending jobs at `GET /api/v1/desktop/recovery`;
-`attempts`, `lastError` and `nextAttemptAt` show retry/failure state without file contents or
-credentials. The same response lists up to 100 `uncertain` commits (state, kind, name and
-whether a `committing` row has stalled for 15 minutes). After inspecting storage, an
-administrator resolves one with `POST /api/v1/desktop/recovery/:identityId/:operationId/resolve`
-and `{"outcome":"published"}` or `{"outcome":"discarded"}`. `published` verifies the target
-exists (and, for saves, carries the uploaded digest), records the receipt and queues the
-usual metadata recovery; `discarded` cancels the operation and leaves spool and backups to
-retention. Neither replays bytes. Failures also appear in the General System log. Do not
-delete queue or receipt rows to clear a conflict: inspect the preserved source/destination
-metadata first. A recovery administration UI remains separate work. Filesystem notifications use
-the existing identity-scoped in-process event bus; a crash can repeat a notification. Disconnected
-clients refresh on reconnect, and indexing remains the indexer's responsibility.
+Administrators can list up to 100 `uncertain` commits at `GET /api/v1/desktop/recovery` (state,
+kind, name and whether a `committing` row has stalled for 15 minutes). After inspecting storage,
+an administrator resolves one with
+`POST /api/v1/desktop/recovery/:identityId/:operationId/resolve` and `{"outcome":"published"}`
+or `{"outcome":"discarded"}`. `published` verifies the target exists (and, for saves, carries
+the uploaded digest), records the receipt and brings metadata along as a commit does;
+`discarded` cancels the operation and leaves spool and backups to retention. Neither replays
+bytes. Do not delete receipt rows to clear a conflict. A recovery administration UI remains
+separate work. Notifications use the identity-scoped in-process event bus; disconnected clients
+refresh on reconnect, and indexing remains the indexer's responsibility.
 
 A file is limited to 16 GiB. Admission allows 1024 active operations and 64 GiB of combined
 pending payload/recovery reservations across the installation. Acknowledgement releases the
@@ -361,7 +355,7 @@ Desktop protocol v1 lives at `/api/v1/desktop`; contracts are in
 | --- | --- |
 | `POST /pairings` | Creates a five-minute request, app-held secret and visible code |
 | `GET /pairings/:id` | Signed-in browser reads device/code/expiry only |
-| `POST /pairings/:id/approve` | Browser session, CSRF and ownership of selected identities |
+| `POST /pairings/:id/approve` | Browser session and CSRF; `{ access: "read" \| "full" }` for the session's login |
 | `POST /pairings/:id/poll` | App secret; repeated redemption returns the same issued bundle |
 | `POST /pairings/:id/cancel` | App secret; cancels issuance and revokes unconfirmed credentials |
 | `POST /pairings/:id/confirm` | App secret; the bundle is stored on the Mac and survives expiry |

@@ -3,7 +3,6 @@ import {
   ActivityFacts,
   ActivityFileResponse,
   ActivityLineageResponse,
-  ActivityLocationsResponse,
   ActivityRevisionsResponse,
   ClientActivityRequest,
   PersonalActivityAction,
@@ -47,7 +46,6 @@ describe("personal activity contracts", () => {
   });
   it("admits only reported gestures, never caller-supplied authorship or mutation outcomes", () => {
     const input = {
-      identityId: id,
       requestId: id,
       at: "2026-09-14T10:00:00Z",
       path: "/a",
@@ -55,6 +53,7 @@ describe("personal activity contracts", () => {
     };
     expect(ClientActivityRequest.safeParse(input).success).toBe(true);
     for (const patch of [
+      { identityId: id },
       { accountId: id },
       { actorAccountId: id },
       { action: "file.delete" },
@@ -64,6 +63,7 @@ describe("personal activity contracts", () => {
     expect(PersonalActivityFilters.parse({ limit: "100" }).limit).toBe(100);
     expect(PersonalActivityFilters.safeParse({ limit: "101" }).success).toBe(false);
     expect(PersonalActivityFilters.safeParse({ owner: id }).success).toBe(false);
+    expect(PersonalActivityFilters.safeParse({ identityId: id }).success).toBe(false);
   });
   it("validates private journey and paging response shapes", () => {
     expect(
@@ -81,9 +81,6 @@ describe("personal activity contracts", () => {
     ).toBe("unknown");
     expect(ActivityLineageResponse.parse({ items: [], nextCursor: null }).items).toEqual([]);
     expect(ActivityRevisionsResponse.parse({ items: [], nextCursor: null }).items).toEqual([]);
-    expect(
-      ActivityLocationsResponse.parse({ items: [{ identityId: id, label: "Retired" }] }).items,
-    ).toHaveLength(1);
     expect(
       PersonalActivityResponse.parse({
         items: [],

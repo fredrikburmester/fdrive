@@ -5,14 +5,10 @@ export interface EditorDraft {
   readonly text: string;
 }
 
-/** Tab-local drafts survive App Router unmounts; identity keys prevent cross-login restoration. */
+/** Tab-local drafts survive App Router unmounts; account keys prevent cross-account restoration. */
 const drafts = new Map<string, EditorDraft>();
-export function draftKey(
-  accountId: string | undefined,
-  identityId: string | undefined,
-  path: string,
-): string {
-  return JSON.stringify([accountId ?? null, identityId ?? null, path]);
+export function draftKey(accountId: string | undefined, path: string): string {
+  return JSON.stringify([accountId ?? null, path]);
 }
 export function readDraft(key: string): EditorDraft | undefined {
   return drafts.get(key);

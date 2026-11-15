@@ -8,6 +8,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { describe, expect, it, vi } from "vitest";
 import type { Principal } from "../auth/principal.ts";
 import { createMetadataService } from "../metadata/service.ts";
+import type { TokenPrincipal } from "../tokens/principal.ts";
 import {
   assertMutablePath,
   canBrowsePath,
@@ -22,9 +23,10 @@ import {
 import {
   boundedBytes,
   decodeText,
+  liveFileInfo,
   MAX_FILE_BYTES,
   readFile,
-  readFileTextDirect,
+  readFileText,
   readStoredFile,
 } from "./content.ts";
 import {
@@ -41,10 +43,8 @@ import {
 import {
   type McpToolDeps,
   runCreateFolder,
-  runFileInfo,
   runListDirectory,
   runMovePath,
-  runReadFileText,
   runSearch,
 } from "./handlers.ts";
 import { registerMcpTools } from "./tools.ts";
@@ -72,7 +72,7 @@ async function fixture(mode: "read" | "organize" | "full" = "full", paths = ["/a
     providerId: provider.id,
     externalUsername: "alice",
   });
-  const principal: Principal = {
+  const principal: TokenPrincipal = {
     accountId: account.id,
     identityId: identity.id,
     username: "alice",
@@ -93,7 +93,6 @@ async function fixture(mode: "read" | "organize" | "full" = "full", paths = ["/a
     searchService: {} as McpToolDeps["searchService"],
     publicUrl: async () => "https://drive.example",
     indexerClient: null,
-    writesEnabled: false,
     trashPath: "/.trash",
     clock,
     metadata,
@@ -111,7 +110,7 @@ async function fixture(mode: "read" | "organize" | "full" = "full", paths = ["/a
   };
   return { base, principal, deps, repos };
 }
-async function connected(principal: Principal, deps: McpToolDeps) {
+async function connected(principal: TokenPrincipal, deps: McpToolDeps) {
   const server = new McpServer({ name: "fdrive-test", version: "1" });
   registerMcpTools(server, principal, deps);
   const [a, b] = InMemoryTransport.createLinkedPair();
@@ -168,24 +167,28 @@ it("intersects index mappings while retaining aliases and nested shadow boundari
     { rootName: "team", fsPrefix: "/docs/sub", virtualPrefix: "/allowed/team/sub" },
   ]);
   expect(intersectScopes([scopes[1]], ["/other"])).toEqual([]);
-  const { principal } = await fixture();
-  const { tokenAccess: _access, ...legacy } = principal;
-  expect(tokenScopes(legacy, scopes)).toBe(scopes);
-  expect(canOrganize(legacy, true)).toBe(true);
-  expect(canOrganize(legacy, false)).toBe(false);
-  expect(() => requireMode(legacy, "full")).toThrow();
+  const { principal } = await fixture("organize");
+  // The AI's session principal carries no grants and keeps every verified scope.
+  const { tokenAccess: _access, ...session } = principal;
+  const tokenless: Principal = session;
+  expect(tokenScopes(tokenless, scopes)).toBe(scopes);
+  expect(canOrganize(principal)).toBe(true);
+  expect(canOrganize({ ...principal, tokenAccess: { mode: "read", paths: ["/"] } })).toBe(false);
+  expect(() => requireMode(principal, "organize")).not.toThrow();
+  expect(() => requireMode(principal, "full")).toThrow("does not allow full");
 });
 
 it("reads provider-backed text, bytes and metadata without index access, including punctuation and paging", async () => {
   const { principal, deps } = await fixture("read");
-  expect(
-    await runReadFileText(deps, principal, { path: "/allowed/a.txt", offset: 2 }),
-  ).toMatchObject({ text: "pha", sha256: SHA("alpha") });
+  expect(await readFileText(deps, principal, { path: "/allowed/a.txt", offset: 2 })).toMatchObject({
+    text: "pha",
+    sha256: SHA("alpha"),
+  });
   expect(await readFile(deps, principal, "/allowed/a.txt")).toMatchObject({
     data: Buffer.from("alpha").toString("base64"),
     encoding: "base64",
   });
-  expect(await runFileInfo(deps, principal, { path: "/allowed/version.1" })).toMatchObject({
+  expect(await liveFileInfo(deps, principal, "/allowed/version.1")).toMatchObject({
     kind: "dir",
     url: "https://drive.example/files/allowed/version.1",
   });
@@ -247,12 +250,12 @@ it("bounds streams even when a provider understates content size and cancels on 
 it("uses optional byte extraction for documents and reports absent or unreachable processing", async () => {
   const { base, principal, deps } = await fixture();
   await base.upload("/allowed/a.pdf", Buffer.from("%PDF fixture"));
-  await expect(readFileTextDirect(deps, principal, { path: "/allowed/a.pdf" })).rejects.toThrow(
+  await expect(readFileText(deps, principal, { path: "/allowed/a.pdf" })).rejects.toThrow(
     "unavailable",
   );
   const extractContent = vi.fn(async () => ({ text: "document text", status: "ok" }));
-  const enabled = { ...deps, indexerClient: { extract: vi.fn(), extractContent } };
-  expect(await readFileTextDirect(enabled, principal, { path: "/allowed/a.pdf" })).toMatchObject({
+  const enabled = { ...deps, indexerClient: { extractContent } };
+  expect(await readFileText(enabled, principal, { path: "/allowed/a.pdf" })).toMatchObject({
     text: "document text",
     status: "ok",
   });
@@ -261,11 +264,9 @@ it("uses optional byte extraction for documents and reports absent or unreachabl
     bytes: Buffer.from("%PDF fixture"),
   });
   await expect(
-    readFileTextDirect(
-      { ...deps, indexerClient: { extract: vi.fn(), extractContent: async () => null } },
-      principal,
-      { path: "/allowed/a.pdf" },
-    ),
+    readFileText({ ...deps, indexerClient: { extractContent: async () => null } }, principal, {
+      path: "/allowed/a.pdf",
+    }),
   ).rejects.toThrow("reachable");
 });
 
@@ -301,7 +302,7 @@ it("organizes independently of indexing and rejects unauthorized writes, collisi
 it("creates/uploads exact bytes, checks stale edits, and preserves occupied targets", async () => {
   const { principal, deps, base } = await fixture();
   await createFile(deps, principal, { path: "/allowed/#?%.txt", text: "before" });
-  const previous = await readFileTextDirect(deps, principal, { path: "/allowed/#?%.txt" });
+  const previous = await readFileText(deps, principal, { path: "/allowed/#?%.txt" });
   expect(previous.url).toContain("%23%3F%25.txt");
   expect(
     await editFile(deps, principal, {
@@ -485,19 +486,19 @@ describe("SDK tool discovery and calls", () => {
       }
     },
   );
-  it("keeps new direct read tools away from legacy tokens", async () => {
-    const { principal, deps } = await fixture();
-    const { tokenAccess: _access, ...legacy } = principal;
-    const { client, close } = await connected(legacy, deps);
+  it("reports each token's own access level in capabilities", async () => {
+    const { principal, deps } = await fixture("organize", ["/allowed"]);
+    const { client, close } = await connected(principal, deps);
     try {
-      expect((await client.listTools()).tools.map((t) => t.name)).not.toContain("read_file");
-      await expect(readFile(deps, legacy, "/allowed/a.txt")).rejects.toThrow(
-        "explicit permissions",
-      );
-      await expect(runReadFileText(deps, legacy, { path: "/allowed/a.txt" })).rejects.toThrow();
-      await expect(runReadFileText(deps, legacy, { path: "/.trash/secret" })).rejects.toThrow(
-        "Trash",
-      );
+      const result = await client.callTool({ name: "capabilities", arguments: {} });
+      const content = result.content as { type: string; text: string }[];
+      expect(JSON.parse(content[0]?.text ?? "{}")).toMatchObject({
+        access: { mode: "organize", paths: ["/allowed"] },
+        organize: true,
+        full_management: false,
+      });
+      const root = { ...principal, tokenAccess: { mode: "read" as const, paths: ["/"] } };
+      await expect(readFileText(deps, root, { path: "/.trash/secret" })).rejects.toThrow("Trash");
     } finally {
       await close();
     }

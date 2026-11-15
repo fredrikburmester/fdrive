@@ -13,14 +13,10 @@ export async function officeActor(
 ): Promise<OfficeActor> {
   const now = deps.clock();
   const session = await deps.repos.sessions.getByIdHash(sessionHash, now);
-  if (session === null || session.expiresAt <= now) throw new WopiError(401);
-  const identity = await deps.repos.identities.get(identityId);
-  if (
-    identity === null ||
-    identity.accountId !== session.accountId ||
-    (await deps.repos.accounts.get(session.accountId)) === null
-  )
+  if (session === null || session.expiresAt <= now || session.identityId !== identityId)
     throw new WopiError(401);
+  const identity = await deps.repos.identities.get(identityId);
+  if (identity === null) throw new WopiError(401);
   const location = await deps.location(identity);
   if (location === null || location.providerId !== identity.providerId) throw new WopiError(401);
   return {
@@ -34,9 +30,7 @@ export async function browserActor(
   deps: OfficeDeps,
   input: BrowserOfficeInput,
 ): Promise<OfficeActor> {
-  const actor = await officeActor(deps, hashSessionId(input.sessionId), input.principal.identityId);
-  if (actor.session.accountId !== input.principal.accountId) throw new WopiError(401);
-  return actor;
+  return officeActor(deps, hashSessionId(input.sessionId), input.principal.identityId);
 }
 export async function callbackFile(
   deps: OfficeDeps,

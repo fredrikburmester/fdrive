@@ -42,10 +42,7 @@ vi.mock("@tanstack/react-query", () => ({
 }));
 vi.mock("@/lib/api/auth-queries", () => ({
   useMe: () => ({
-    data: {
-      activeIdentityId: "identity",
-      identities: [{ id: "identity", providerId: "provider" }],
-    },
+    data: { identity: { id: "identity", providerId: "provider" } },
   }),
 }));
 vi.mock("@/lib/api/provider-queries", () => ({
