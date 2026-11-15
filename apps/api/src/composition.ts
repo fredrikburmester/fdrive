@@ -660,7 +660,7 @@ export async function composeApp(
     clock,
     storageFactory,
   });
-  // The MCP `read_file_text` tool talks to the indexer's `POST /extract`
+  // The MCP `read_file_text` tool talks to the indexer's `POST /extract-content`
   // endpoint, a different shape from the System pages' `IndexerClient`
   // (`/health`, `/stats`, ...), so it gets its own client. Both point at the
   // same `FDRIVE_INDEXER_URL` and share `fetchImpl`.
@@ -795,7 +795,6 @@ export async function composeApp(
     identities: repos.identities,
     publicUrl: () => publicUrl.current(),
     indexerClient: indexerExtractClient,
-    writesEnabled: config.fdriveMcpWrites,
     metadata: metadataService,
     imageSearchService,
     onMutation: async (principal, change) => {

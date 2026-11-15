@@ -242,7 +242,7 @@ export interface ApiToken {
   readonly identityId: string;
   readonly name: string;
   readonly tokenHash: string;
-  readonly access?: ApiTokenAccess;
+  readonly access: ApiTokenAccess;
   readonly createdAt: Date;
   readonly lastUsedAt: Date | null;
   readonly expiresAt: Date | null;
@@ -254,7 +254,7 @@ export interface ApiTokenRepo {
     identityId: string;
     name: string;
     tokenHash: string;
-    access?: ApiTokenAccess;
+    access: ApiTokenAccess;
     expiresAt: Date | null;
   }): Promise<ApiToken>;
   /** Looks up a token by its sha256 hash. `null` when no token has that hash, expired or not. */

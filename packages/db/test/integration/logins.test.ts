@@ -105,6 +105,7 @@ async function signedInFixture() {
     identityId: alice.id,
     name: "Token",
     tokenHash: "token",
+    access: { mode: "read", paths: ["/"] },
   });
   return { alice, bob };
 }

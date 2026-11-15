@@ -8,18 +8,19 @@ import { Hono } from "hono";
 import { afterAll, beforeAll, expect, it } from "vitest";
 import type { AppHono } from "../../src/app.ts";
 import { createLoginLimiter } from "../../src/auth/login-limiter.ts";
-import type { Principal } from "../../src/auth/principal.ts";
 import type { McpToolDeps } from "../../src/mcp/handlers.ts";
 import { registerMcpRoutes } from "../../src/mcp/routes.ts";
 import { buildIdentity } from "../../src/scoping/test-fixtures/index.ts";
+import type { TokenPrincipal } from "../../src/tokens/principal.ts";
 import { generateApiToken } from "../../src/tokens/token-format.ts";
 
 let storage: Awaited<ReturnType<typeof startLocalStorage>>;
 let server: ServerType;
 let client: Client;
-let principal: Principal;
+let principal: TokenPrincipal;
 let revoked = false;
 let indexAvailable = true;
+let metadataFails = true;
 
 beforeAll(async () => {
   storage = await startLocalStorage({
@@ -38,6 +39,7 @@ beforeAll(async () => {
     username: "alice",
     isAdmin: false,
     storage: createLocalStorage({ home: storage.path("alice") }),
+    tokenAccess: { mode: "organize", paths: ["/"] },
   };
   const token = generateApiToken();
   const app = new Hono() as AppHono;
@@ -58,15 +60,14 @@ beforeAll(async () => {
       },
       indexQueries: {
         rootIdsByName: async () => ({ files: 1 }),
-        recordMove: async () => {
-          throw new Error("injected audit failure");
-        },
       } as unknown as McpToolDeps["indexQueries"],
       searchService: {} as McpToolDeps["searchService"],
       publicUrl: async () => "https://fdrive.example.com",
       indexerClient: null,
       trashPathForStorage: (storage) => (storage.trash === undefined ? null : "/.trash"),
-      writesEnabled: true,
+      onMutation: async () => {
+        if (metadataFails) throw new Error("injected metadata failure");
+      },
       clock: () => new Date(),
     },
   });
@@ -105,7 +106,10 @@ it("preserves occupied targets, reports completed writes truthfully, and rejects
   });
   expect(moved.isError).not.toBe(true);
   expect(moved.content).toEqual([
-    { type: "text", text: expect.stringContaining("move history could not be recorded") },
+    {
+      type: "text",
+      text: expect.stringContaining("metadata or live updates could not be updated"),
+    },
   ]);
   expect(await new Response((await principal.storage.download("/renamed.txt")).body).text()).toBe(
     "source",
@@ -118,6 +122,7 @@ it("preserves occupied targets, reports completed writes truthfully, and rejects
 it("runs full file management without indexed roots and enforces folder grants", async () => {
   revoked = false;
   indexAvailable = false;
+  metadataFails = false;
   // Trash by moving into the recycle folder, the way the files folder keeps it.
   const base = createLocalStorage({ home: storage.path("bob") });
   principal = {

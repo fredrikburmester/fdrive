@@ -94,7 +94,7 @@ describe("createResolveTokenPrincipal", () => {
     expect(await resolve(generateApiToken())).toBeNull();
   });
 
-  it("resolves a valid token to its identity's principal, never as admin", async () => {
+  it("resolves a valid token to its identity's principal with its access, never as admin", async () => {
     const repos = createMemoryRepos();
     const { account, identity } = await seedAccountWithIdentity(repos);
     const token = generateApiToken();
@@ -103,6 +103,7 @@ describe("createResolveTokenPrincipal", () => {
       identityId: identity.id,
       name: "Claude",
       tokenHash: hashApiToken(token),
+      access: { mode: "read", paths: ["/"] },
       expiresAt: null,
     });
     const resolve = createResolveTokenPrincipal({
@@ -123,6 +124,7 @@ describe("createResolveTokenPrincipal", () => {
       username: "alice",
       storage: FAKE_STORAGE,
       isAdmin: false,
+      tokenAccess: { mode: "read", paths: ["/"] },
     });
   });
 
@@ -135,6 +137,7 @@ describe("createResolveTokenPrincipal", () => {
       identityId: identity.id,
       name: "Claude",
       tokenHash: hashApiToken(token),
+      access: { mode: "read", paths: ["/"] },
       expiresAt: new Date("2026-01-01T00:00:00.000Z"),
     });
     const resolve = createResolveTokenPrincipal({
@@ -157,6 +160,7 @@ describe("createResolveTokenPrincipal", () => {
       identityId: identity.id,
       name: "Claude",
       tokenHash: hashApiToken(token),
+      access: { mode: "read", paths: ["/"] },
       expiresAt,
     });
     const resolve = createResolveTokenPrincipal({
@@ -178,6 +182,7 @@ describe("createResolveTokenPrincipal", () => {
       identityId: identity.id,
       name: "Claude",
       tokenHash: hashApiToken(token),
+      access: { mode: "read", paths: ["/"] },
       expiresAt: null,
     });
     const resolve = createResolveTokenPrincipal({
@@ -199,6 +204,7 @@ describe("createResolveTokenPrincipal", () => {
       identityId: identity.id,
       name: "Claude",
       tokenHash: hashApiToken(token),
+      access: { mode: "read", paths: ["/"] },
       expiresAt: null,
     });
     let now = new Date("2026-01-01T00:00:00.000Z");
@@ -230,6 +236,7 @@ describe("createResolveTokenPrincipal", () => {
       identityId: identity.id,
       name: "Claude",
       tokenHash: hashApiToken(token),
+      access: { mode: "read", paths: ["/"] },
       expiresAt: null,
     });
     let now = new Date("2026-01-01T00:00:00.000Z");
@@ -268,17 +275,19 @@ it("resolves explicit grants on each request and fails closed for malformed pers
     storageFactory: async () => FAKE_STORAGE,
   });
   expect((await resolve(token))?.tokenAccess).toEqual({ mode: "read", paths: ["/docs"] });
-  const invalid = createResolveTokenPrincipal({
-    apiTokens: {
-      ...repos.apiTokens,
-      findByHash: async () =>
-        ({ ...created, access: { mode: "root", paths: [] } }) as unknown as typeof created,
-    },
-    identities: repos.identities,
-    clock: () => new Date(),
-    storageFactory: async () => FAKE_STORAGE,
-  });
-  expect(await invalid(token)).toBeNull();
+  // A token without access cannot be stored any more; one read without it still fails closed.
+  for (const access of [{ mode: "root", paths: [] }, null, undefined]) {
+    const invalid = createResolveTokenPrincipal({
+      apiTokens: {
+        ...repos.apiTokens,
+        findByHash: async () => ({ ...created, access }) as unknown as typeof created,
+      },
+      identities: repos.identities,
+      clock: () => new Date(),
+      storageFactory: async () => FAKE_STORAGE,
+    });
+    expect(await invalid(token)).toBeNull();
+  }
   await repos.apiTokens.delete(created.id, account.id);
   expect(await resolve(token)).toBeNull();
 });

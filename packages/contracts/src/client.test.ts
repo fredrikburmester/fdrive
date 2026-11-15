@@ -1224,6 +1224,7 @@ describe("createApiClient: account tokens", () => {
     createdAt: AT,
     lastUsedAt: null,
     expiresAt: null,
+    access: { mode: "read", paths: ["/"] },
   };
 
   it("gets account/tokens and unwraps items", async () => {

@@ -1,6 +1,6 @@
 import type { Context } from "hono";
 import type { LoginLimiter } from "../auth/login-limiter.js";
-import type { Principal } from "../auth/principal.js";
+import type { TokenPrincipal } from "../tokens/principal.js";
 import { looksLikeApiToken } from "../tokens/token-format.js";
 
 const BEARER_PATTERN = /^Bearer\s+(.+)$/i;
@@ -25,8 +25,8 @@ function limiterKeyFor(ip: string): string {
 }
 
 export interface McpAuthDeps {
-  /** Maps a bearer token to a `Principal`, `null` for an invalid or unrecognized one. */
-  readonly resolveToken: (token: string) => Promise<Principal | null>;
+  /** Maps a bearer token to its `TokenPrincipal`, `null` for an invalid or unrecognized one. */
+  readonly resolveToken: (token: string) => Promise<TokenPrincipal | null>;
   /**
    * Throttles failed authentication by client address. Only an attempt that
    * cost a token lookup is recorded, and a successful one clears the
@@ -39,7 +39,7 @@ export interface McpAuthDeps {
 
 /** The outcome of authenticating an MCP request: a principal, a plain rejection, or a throttled rejection. */
 export type McpAuthResult =
-  | { readonly kind: "ok"; readonly principal: Principal }
+  | { readonly kind: "ok"; readonly principal: TokenPrincipal }
   | { readonly kind: "unauthorized" }
   | { readonly kind: "rate_limited"; readonly retryAfterMs: number };
 

@@ -4,7 +4,6 @@
 mod common;
 
 use std::collections::BTreeSet;
-use std::os::unix::fs::symlink;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
@@ -442,132 +441,19 @@ fn stats_report_counts_and_idle_job_snapshots() {
 }
 
 // ---------------------------------------------------------------------------------------
-// /extract
+// /extract (gone) and opened files
 // ---------------------------------------------------------------------------------------
 
-fn extract(env: &Env, path: &str) -> (u16, Value) {
-    post_json(&env.state, "/extract", &json!({"root": "r", "path": path}))
-}
-
 #[test]
-fn extract_returns_text_slices() {
+fn extract_by_root_and_path_is_gone() {
+    // Text extraction takes bytes the API read through the person's own storage
+    // (`/extract-content`); nothing reads a mounted original by root and path any more.
     let env = setup(common::all_features());
     std::fs::write(env.root.join("readme.md"), "0123456789abcdefghij").unwrap();
-    let (status, body) = extract(&env, "readme.md");
-    assert_eq!(status, 200);
     assert_eq!(
-        body,
-        json!({"text": "0123456789abcdefghij", "status": "indexed", "total_chars": 20})
+        post_json(&env.state, "/extract", &json!({"root": "r", "path": "readme.md"})),
+        (404, Value::Null)
     );
-    let (_, body) = post_json(
-        &env.state,
-        "/extract",
-        &json!({"root": "r", "path": "/readme.md", "offset": 2, "max_chars": 5}),
-    );
-    assert_eq!(body, json!({"text": "23456", "status": "indexed", "total_chars": 20}));
-    let (_, body) = post_json(
-        &env.state,
-        "/extract",
-        &json!({"root": "r", "path": "readme.md", "offset": 30}),
-    );
-    assert_eq!(body["text"], "");
-}
-
-#[test]
-fn extract_validates_requests() {
-    let env = setup(common::all_features());
-    for body in [
-        r#"{"root":"r"}"#,
-        r#"{"path":"a.txt"}"#,
-        "{}",
-        "",
-        r#"{"root":1,"path":"a"}"#,
-    ] {
-        let (status, response) = post(&env.state, "/extract", body);
-        assert_eq!(
-            (status, response),
-            (400, json!({"error": "root and path are required"})),
-            "{body}"
-        );
-    }
-    assert_eq!(
-        post(&env.state, "/extract", "[]"),
-        (400, json!({"error": "body must be an object"}))
-    );
-    assert_eq!(
-        post(&env.state, "/extract", "{"),
-        (400, json!({"error": "invalid JSON"}))
-    );
-    assert_eq!(
-        post_json(&env.state, "/extract", &json!({"root": "unknown", "path": "a.txt"})),
-        (404, json!({"error": "unknown root: unknown"}))
-    );
-    for path in ["../../etc/passwd", "", "/", "a//b", "a\\b", "a/./b"] {
-        assert_eq!(extract(&env, path), (400, json!({"error": "invalid path"})), "{path:?}");
-    }
-    assert_eq!(extract(&env, "missing.txt"), (404, json!({"error": "not found"})));
-    std::fs::create_dir(env.root.join("docs")).unwrap();
-    assert_eq!(extract(&env, "docs").0, 404, "a directory is not a file");
-    assert_eq!(extract(&env, "missing/a.txt").0, 404);
-}
-
-#[test]
-fn extract_never_follows_symlinks() {
-    let env = setup(common::all_features());
-    std::fs::write(env.base.join("outside.txt"), "outside secret").unwrap();
-    symlink(env.base.join("outside.txt"), env.root.join("leak.txt")).unwrap();
-    std::fs::create_dir(env.base.join("outside")).unwrap();
-    std::fs::write(env.base.join("outside/secret.txt"), "outside secret").unwrap();
-    symlink(env.base.join("outside"), env.root.join("linked")).unwrap();
-    for path in ["leak.txt", "linked/secret.txt"] {
-        assert_eq!(
-            extract(&env, path),
-            (400, json!({"error": "path unavailable"})),
-            "{path}"
-        );
-    }
-}
-
-#[test]
-fn extract_statuses_for_non_text_empty_and_disabled() {
-    let env = setup(common::all_features());
-    std::fs::write(env.root.join("app.bin"), b"x").unwrap();
-    std::fs::write(env.root.join("empty.txt"), b"").unwrap();
-    write_png(&env.root.join("a.png"));
-    assert_eq!(extract(&env, "app.bin"), (200, json!({"text": null, "status": "none"})));
-    assert_eq!(
-        extract(&env, "empty.txt"),
-        (200, json!({"text": null, "status": "empty"}))
-    );
-    assert_eq!(
-        extract(&env, "a.png"),
-        (200, json!({"text": null, "status": "disabled"})),
-        "an image without search OCR"
-    );
-    env.ctx.set_features(common::features(values(true, false, false, true)));
-    assert_eq!(
-        extract(&env, "missing.txt"),
-        (200, json!({"text": null, "status": "disabled"})),
-        "text search off answers before touching storage"
-    );
-}
-
-#[test]
-fn extract_reads_pdfs_and_office_documents_through_the_descriptor() {
-    let env = setup(common::all_features());
-    std::fs::write(env.root.join("document.pdf"), pdf_bytes(&[LONG_TEXT])).unwrap();
-    let (status, body) = extract(&env, "document.pdf");
-    assert_eq!((status, body["status"].as_str()), (200, Some("indexed")));
-    assert!(body["text"].as_str().unwrap().contains("Provider-only document"));
-
-    std::fs::write(env.root.join("document.docx"), b"office descriptor bytes").unwrap();
-    env.ml
-        .set_tika_text("Office descriptor text long enough for successful extraction");
-    let (_, body) = extract(&env, "document.docx");
-    assert_eq!(body["status"], "indexed");
-    assert!(body["text"].as_str().unwrap().contains("Office descriptor text"));
-    let seen = env.ml.requests(fake_ml::TIKA);
-    assert_eq!(seen.last().unwrap().body, b"office descriptor bytes");
 }
 
 // Only Linux has `/proc/self/fd`, which reopens the opened inode; macOS development builds
@@ -583,7 +469,7 @@ fn an_open_file_stays_bound_after_its_entry_is_replaced() {
     std::fs::write(base.join("outside.txt"), "outside secret").unwrap();
     let opened = fdrive_indexer::fsx::open_file(&base.join("root"), &["readme.txt".to_owned()]).unwrap();
     std::fs::remove_file(&requested).unwrap();
-    symlink(base.join("outside.txt"), &requested).unwrap();
+    std::os::unix::fs::symlink(base.join("outside.txt"), &requested).unwrap();
     assert_eq!(std::fs::read(opened.path()).unwrap(), b"inside data");
     assert_eq!(opened.size, 11);
 }

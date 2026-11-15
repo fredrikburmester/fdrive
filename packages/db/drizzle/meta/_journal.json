@@ -215,8 +215,15 @@
     {
       "idx": 30,
       "version": "7",
-      "when": 1794698587418,
-      "tag": "0030_drop_desktop_effects",
+      "when": 1794698350539,
+      "tag": "0030_drop_legacy_tokens_and_moves",
+      "breakpoints": true
+    },
+    {
+      "idx": 31,
+      "version": "7",
+      "when": 1794702440349,
+      "tag": "0031_drop_desktop_effects",
       "breakpoints": true
     }
   ]
