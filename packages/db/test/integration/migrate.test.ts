@@ -234,6 +234,8 @@ describe("migrate", () => {
         .values({ accountId: account.id, providerId: provider.id, externalUsername: "alice" })
         .returning();
       if (identity === undefined) throw new Error("expected an identity");
+      // Its user, so the next migration keeps the login.
+      await older.db.insert(schema.localUsers).values({ username: "alice", passwordHash: "x" });
       await older.db.execute(sql`
         insert into app.api_tokens (account_id, identity_id, name, token_hash, access) values
           (${account.id}, ${identity.id}, 'Old', 'old-hash', null),
@@ -248,6 +250,77 @@ describe("migrate", () => {
         sql`select to_regclass('idx.moves')::text as table`,
       );
       expect(moves.rows).toEqual([{ table: null }]);
+    } finally {
+      await older.close();
+      await rm(before, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps only logins with a user of the same name, and drops the stored passwords", async () => {
+    // Migrate a second database up to the migration before the one that drops them.
+    const folder = path.join(path.dirname(fileURLToPath(import.meta.url)), "../../drizzle");
+    const before = await mkdtemp(path.join(tmpdir(), "fdrive-migrations-"));
+    await db.execute(sql`create database before_local_passwords`);
+    const uri = new URL(container.getConnectionUri());
+    uri.pathname = "/before_local_passwords";
+    const older = createDb(uri.toString());
+    try {
+      await cp(folder, before, { recursive: true });
+      const journal = JSON.parse(await readFile(path.join(folder, "meta/_journal.json"), "utf8"));
+      const last = journal.entries.findIndex(
+        (entry: { tag: string }) => entry.tag === "0031_local_passwords",
+      );
+      journal.entries = journal.entries.slice(0, last);
+      await writeFile(path.join(before, "meta/_journal.json"), JSON.stringify(journal));
+      await runMigrations(older.db, { migrationsFolder: before });
+
+      const [local] = await older.db
+        .insert(schema.providers)
+        .values({ type: "local", baseUrl: "local" })
+        .returning();
+      const [webdav] = await older.db
+        .insert(schema.providers)
+        .values({ type: "webdav", baseUrl: "http://dav.invalid", enabled: false })
+        .returning();
+      if (local === undefined || webdav === undefined) throw new Error("expected rows");
+      const login = async (providerId: string, externalUsername: string) => {
+        const [account] = await older.db.insert(schema.accounts).values({}).returning();
+        if (account === undefined) throw new Error("expected an account");
+        await older.db
+          .insert(schema.identities)
+          .values({ accountId: account.id, providerId, externalUsername });
+        return account.id;
+      };
+      const owner = await login(local.id, "alice");
+      await login(local.id, "Bob"); // a removed user's login under another spelling of bob
+      await login(webdav.id, "alice-dav"); // a login on storage fdrive no longer has
+      for (const username of ["alice", "bob", "carol"])
+        await older.db.insert(schema.localUsers).values({ username, passwordHash: "x" });
+      await older.db.execute(sql`
+        insert into app.settings (key, value) values
+          ('setup.initialized.v1', 'true'),
+          ('setup.owner.v1', ${JSON.stringify({ version: 1, state: "complete", accountId: owner })})
+      `);
+
+      await migrate(older.db);
+
+      const logins = await older.db.execute<{ name: string }>(
+        sql`select external_username as name from app.identities order by 1`,
+      );
+      expect(logins.rows.map((row) => row.name)).toEqual(["alice"]);
+      // bob and carol had no login of their own name; alice keeps hers.
+      const users = await older.db.execute<{ name: string }>(
+        sql`select username as name from app.local_users order by 1`,
+      );
+      expect(users.rows.map((row) => row.name)).toEqual(["alice"]);
+      const settings = await older.db.execute<{ key: string }>(
+        sql`select key from app.settings where key like 'setup.%' order by 1`,
+      );
+      expect(settings.rows).toEqual([{ key: "setup.owner.v1" }]);
+      const credentials = await older.db.execute<{ table: string | null }>(
+        sql`select to_regclass('app.credentials')::text as table`,
+      );
+      expect(credentials.rows).toEqual([{ table: null }]);
     } finally {
       await older.close();
       await rm(before, { recursive: true, force: true });
