@@ -25,7 +25,7 @@ The files folder is mounted at `/data` and is the index's only root, `files` (`i
 
 ### Which PDFs
 
-A pass takes the live rows of `idx.files` with the extension `.pdf` and a digest
+A pass takes the rows of `idx.files` with the extension `.pdf` and a digest
 (`db.pdf_candidates`), in path order, and leaves out:
 
 - every PDF whose content (`sha256`) already has a row in the done-log, wherever that row was

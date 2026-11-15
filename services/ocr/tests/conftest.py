@@ -114,7 +114,7 @@ def index_pdfs(conn: psycopg.Connection, root_id: int, root_dir: Path | str) -> 
                 INSERT INTO "idx"."files" (root_id, path, name, ext, size, mtime_ns, sha256)
                 VALUES (%s, %s, %s, '.pdf', %s, %s, %s)
                 ON CONFLICT (root_id, path) DO UPDATE SET
-                  size = EXCLUDED.size, mtime_ns = EXCLUDED.mtime_ns, sha256 = EXCLUDED.sha256, deleted_at = NULL
+                  size = EXCLUDED.size, mtime_ns = EXCLUDED.mtime_ns, sha256 = EXCLUDED.sha256
                 """,
                 (
                     root_id,

@@ -56,7 +56,6 @@ export const files = idxSchema.table(
     firstSeen: timestamp("first_seen", { withTimezone: true }).defaultNow(),
     lastSeen: timestamp("last_seen", { withTimezone: true }).defaultNow(),
     indexedAt: timestamp("indexed_at", { withTimezone: true }),
-    deletedAt: timestamp("deleted_at", { withTimezone: true }),
     /**
      * The inode and change time (nanoseconds) of the file whose bytes
      * `sha256` describes: one the indexer read itself, starting at least a

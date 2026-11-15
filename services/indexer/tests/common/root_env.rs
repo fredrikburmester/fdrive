@@ -283,6 +283,21 @@ impl Env {
         db::file_row(&mut self.client(), ctx.root_id, rel).unwrap().unwrap()
     }
 
+    pub fn has_row(&self, ctx: &RootContext, rel: &str) -> bool {
+        db::file_row(&mut self.client(), ctx.root_id, rel).unwrap().is_some()
+    }
+
+    /// The `id` and `sha256` of the root's row at `rel`, if it has one.
+    pub fn row_id(&self, ctx: &RootContext, rel: &str) -> Option<(i64, Option<String>)> {
+        self.client()
+            .query_opt(
+                r#"SELECT id::bigint, sha256 FROM "idx"."files" WHERE root_id = $1::bigint AND path = $2"#,
+                &[&ctx.root_id, &rel],
+            )
+            .unwrap()
+            .map(|r| (r.get(0), r.get(1)))
+    }
+
     pub fn statuses(&self, ctx: &RootContext) -> HashMap<String, String> {
         db::scan_manifest(&mut self.client(), ctx.root_id)
             .unwrap()

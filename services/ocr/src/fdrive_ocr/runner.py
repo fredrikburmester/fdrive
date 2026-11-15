@@ -3,7 +3,7 @@ subprocess per file, and applies the resulting decision to the filesystem and
 the done-log. Pure decision-making lives in `decide.py` and `rules.py`; this
 module is the glue, mirroring filesai's `run.sh` behaviour:
 
-- Candidates are the live PDFs in `idx.files` whose content (`sha256`) the
+- Candidates are the PDFs in `idx.files` whose content (`sha256`) the
   done-log has no decision for, so a PDF moved or restored from Trash is never
   processed again. The pass walks no folder.
 - A PDF in which `pdftotext` finds any text is recorded as `has_text` and never

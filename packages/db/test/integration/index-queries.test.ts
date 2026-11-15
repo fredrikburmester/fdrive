@@ -85,7 +85,6 @@ interface InsertFileOptions {
   readonly mtimeNs?: bigint;
   readonly sha256?: string | null;
   readonly textStatus?: string;
-  readonly deletedAt?: Date | null;
 }
 
 async function insertFile(rootId: number, path: string, opts: InsertFileOptions = {}) {
@@ -103,7 +102,6 @@ async function insertFile(rootId: number, path: string, opts: InsertFileOptions 
       mtimeNs: opts.mtimeNs ?? 1_700_000_000_000_000_000n,
       sha256: opts.sha256 ?? null,
       textStatus: opts.textStatus ?? "done",
-      deletedAt: opts.deletedAt ?? null,
     })
     .returning();
   if (row === undefined) {
@@ -140,16 +138,6 @@ describe("index-queries", () => {
       const rootId = await insertRoot("primary");
       const file = await insertFile(rootId, "alice/docs/readme.md");
       await insertChunk(file.id, 0, "no embedding here");
-
-      const results = await queries.semantic([{ rootId, fsPrefix: "/" }], rampVector(0), 10);
-
-      expect(results).toEqual([]);
-    });
-
-    it("excludes deleted files", async () => {
-      const rootId = await insertRoot("primary");
-      const file = await insertFile(rootId, "alice/docs/readme.md", { deletedAt: new Date() });
-      await insertChunk(file.id, 0, "gone", rampVector(0));
 
       const results = await queries.semantic([{ rootId, fsPrefix: "/" }], rampVector(0), 10);
 
@@ -221,16 +209,6 @@ describe("index-queries", () => {
       const rootId = await insertRoot("primary");
       const file = await insertFile(rootId, "alice/docs/report.md");
       await insertChunk(file.id, 0, "nothing to do with the search term");
-
-      const results = await queries.fulltext([{ rootId, fsPrefix: "/" }], "quarterly:*", 10);
-
-      expect(results).toEqual([]);
-    });
-
-    it("excludes deleted files", async () => {
-      const rootId = await insertRoot("primary");
-      const file = await insertFile(rootId, "alice/docs/report.md", { deletedAt: new Date() });
-      await insertChunk(file.id, 0, "quarterly numbers");
 
       const results = await queries.fulltext([{ rootId, fsPrefix: "/" }], "quarterly:*", 10);
 
@@ -414,15 +392,6 @@ describe("index-queries", () => {
 
       expect(results.map((r) => r.fileId)).toEqual([inScope.id]);
     });
-
-    it("excludes deleted files", async () => {
-      const rootId = await insertRoot("primary");
-      await insertFile(rootId, "alice/report.pdf", { deletedAt: new Date() });
-
-      const results = await queries.filename([{ rootId, fsPrefix: "/" }], ["report"], "report", 10);
-
-      expect(results).toEqual([]);
-    });
   });
 
   describe("folders", () => {
@@ -516,7 +485,8 @@ describe("index-queries", () => {
     it("omits rows deleted after search selected their ids", async () => {
       const rootId = await insertRoot("primary");
       const live = await insertFile(rootId, "live.txt");
-      const deleted = await insertFile(rootId, "deleted.txt", { deletedAt: new Date() });
+      const deleted = await insertFile(rootId, "deleted.txt");
+      await db.delete(schema.files).where(sql`${schema.files.id} = ${deleted.id}`);
       expect((await queries.filesByIds([live.id, deleted.id])).map((row) => row.id)).toEqual([
         live.id,
       ]);
@@ -552,12 +522,6 @@ describe("index-queries", () => {
       expect(await queries.fileByPath(rootId, "nope.txt")).toBeNull();
     });
 
-    it("returns null for a deleted file", async () => {
-      const rootId = await insertRoot("primary");
-      await insertFile(rootId, "alice/a.txt", { deletedAt: new Date() });
-      expect(await queries.fileByPath(rootId, "alice/a.txt")).toBeNull();
-    });
-
     it("does not match the same path in a different root", async () => {
       const rootId = await insertRoot("primary");
       const otherRoot = await insertRoot("other");
@@ -576,7 +540,6 @@ describe("index-queries", () => {
         .set({ inode: -7n, ctimeNs: 1_800_000_000_000_000_000n })
         .where(sql`${schema.files.id} = ${stamped.id}`);
       await insertFile(files, "alice/b.txt", { sha256: "b".repeat(64) });
-      await insertFile(files, "alice/gone.txt", { deletedAt: new Date() });
       // The same path in another root, and another root's path asked for in this one,
       // must not pair up across the two lists.
       await insertFile(other, "alice/a.txt");
@@ -659,12 +622,11 @@ describe("index-queries", () => {
   });
 
   describe("bytesByExtension", () => {
-    it("sums live bytes per extension in scope only", async () => {
+    it("sums bytes per extension in scope only", async () => {
       const rootId = await insertRoot("primary");
       await insertFile(rootId, "alice/a.jpg", { size: 100 });
       await insertFile(rootId, "alice/photos/b.jpg", { size: 50 });
       await insertFile(rootId, "alice/notes", { size: 7 });
-      await insertFile(rootId, "alice/gone.jpg", { size: 1000, deletedAt: new Date() });
       await insertFile(rootId, "alicia/c.jpg", { size: 9 });
       await insertFile(rootId, "bob/d.pdf", { size: 20 });
 
@@ -704,16 +666,6 @@ describe("index-queries", () => {
       const rootId = await insertRoot("primary");
       await insertFile(rootId, "alice/photos/a.jpg", { size: 100 });
       await insertFile(rootId, "alice/photos-backup/b.jpg", { size: 999 });
-
-      const result = await queries.subtreeSize([{ rootId, fsPrefix: "/" }], rootId, "alice/photos");
-
-      expect(result).toEqual({ bytes: 100, files: 1 });
-    });
-
-    it("excludes soft-deleted rows", async () => {
-      const rootId = await insertRoot("primary");
-      await insertFile(rootId, "alice/photos/a.jpg", { size: 100 });
-      await insertFile(rootId, "alice/photos/b.jpg", { size: 50, deletedAt: new Date() });
 
       const result = await queries.subtreeSize([{ rootId, fsPrefix: "/" }], rootId, "alice/photos");
 
@@ -970,15 +922,6 @@ describe("index-queries", () => {
       expect(results).toHaveLength(1);
     });
 
-    it("excludes deleted files", async () => {
-      const rootId = await insertRoot("primary");
-      await insertFile(rootId, "alice/gone.txt", { deletedAt: new Date() });
-
-      const results = await queries.recentFiles([{ rootId, fsPrefix: "/" }], 10);
-
-      expect(results).toEqual([]);
-    });
-
     it("never returns rows outside the given scope prefixes", async () => {
       const rootId = await insertRoot("primary");
       const inScope = await insertFile(rootId, "alice/a.txt");
@@ -1106,11 +1049,10 @@ describe("index-queries", () => {
       expect(files).toHaveLength(1);
     });
 
-    it("excludes deleted files and rows outside the scope prefixes", async () => {
+    it("excludes rows outside the scope prefixes", async () => {
       const rootId = await insertRoot("primary");
       const inScope = await insertFile(rootId, "alice/a.txt");
       await insertFile(rootId, "bob/b.txt");
-      await insertFile(rootId, "alice/gone.txt", { deletedAt: new Date() });
 
       const { total, files } = await queries.listFiles(
         [{ rootId, fsPrefix: "/alice" }],
@@ -1230,24 +1172,6 @@ describe("index-queries", () => {
       const rootId = await insertRoot("primary");
       await insertFile(rootId, "alice/photos/stale.jpg", { sha256: "sha-stale" });
       await insertImageEmbedding("sha-stale", "other-model", rampVector1024(0));
-
-      const results = await queries.searchImages(
-        [{ rootId, fsPrefix: "/" }],
-        rampVector1024(0),
-        model,
-        10,
-      );
-
-      expect(results).toEqual([]);
-    });
-
-    it("excludes deleted files", async () => {
-      const rootId = await insertRoot("primary");
-      await insertFile(rootId, "alice/photos/gone.jpg", {
-        sha256: "sha-gone",
-        deletedAt: new Date(),
-      });
-      await insertImageEmbedding("sha-gone", model, rampVector1024(0));
 
       const results = await queries.searchImages(
         [{ rootId, fsPrefix: "/" }],
@@ -1534,7 +1458,6 @@ describe("index-queries", () => {
       await insertFile(rootId, "alice/newer.png", { mtimeNs: at("2024-06-01T00:00:00.123Z") });
       await insertFile(rootId, "alice/older.heic", { mtimeNs: at("2023-01-01T00:00:00Z") });
       await insertFile(rootId, "alice/notes.txt", { mtimeNs: at("2025-01-01T00:00:00Z") });
-      await insertFile(rootId, "alice/gone.jpg", { deletedAt: new Date() });
       await insertFile(rootId, "alice/.Trash/old.jpg");
       await insertFile(rootId, "bob/theirs.jpg");
       const scope = [{ rootId, fsPrefix: "/alice" }];
@@ -1570,7 +1493,7 @@ describe("index-queries", () => {
         latitude: null,
         longitude: null,
       });
-      expect(await queries.photoDetails(rootId, "alice/gone.jpg")).toBeNull();
+      expect(await queries.photoDetails(rootId, "alice/missing.jpg")).toBeNull();
     });
   });
 });

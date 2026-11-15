@@ -302,6 +302,13 @@
       "when": 1794740952975,
       "tag": "0042_local_user_storage_limit",
       "breakpoints": true
+    },
+    {
+      "idx": 43,
+      "version": "7",
+      "when": 1794745776106,
+      "tag": "0043_index_hard_delete",
+      "breakpoints": true
     }
   ]
 }

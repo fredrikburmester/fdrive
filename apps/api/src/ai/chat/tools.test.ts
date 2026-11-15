@@ -43,7 +43,6 @@ function indexedFile(id: number, path: string, extra: Partial<IndexedFile> = {})
     textChars: 0,
     error: null,
     indexedAt: null,
-    deletedAt: null,
     ...extra,
   };
 }
