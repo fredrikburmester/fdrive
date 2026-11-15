@@ -9,6 +9,7 @@ import type {
 } from "@fdrive/db";
 import type { PersonalActivityService } from "../activity/service.js";
 import type { Principal } from "../auth/principal.js";
+import type { WriteGate } from "../backups/write-gate.js";
 import type { FileOperations } from "../files/operations.js";
 import type { LocalGrantService } from "../local/grants.js";
 import type { MetadataService } from "../metadata/service.js";
@@ -57,6 +58,11 @@ export interface OfficeDeps {
   /** Optional so office tests and deployments without history keep working.
    * Explicitly `undefined` is allowed so a caller can clear it in a spread. */
   readonly activity?: PersonalActivityService | undefined;
+  /**
+   * The backups' write gate, held while opening a document records it, so a
+   * capture's snapshot holds the recent entry and its history together.
+   */
+  readonly gate?: WriteGate;
 }
 export interface OfficeActor {
   readonly identity: Identity;

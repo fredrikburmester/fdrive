@@ -6,6 +6,7 @@ import type {
 } from "@fdrive/contracts";
 import { ConflictError, type Identity, type LocalUser, LoginError, type Repos } from "@fdrive/db";
 import type { CheckPassword } from "../auth/password.ts";
+import { gated, ungated, type WriteGate } from "../backups/write-gate.ts";
 import { ApiHttpError } from "../errors.js";
 import type { SharePasswords } from "../shares/passwords.js";
 import type { HomeUsage } from "../storage/usage.js";
@@ -54,6 +55,11 @@ export interface LocalUserServiceDeps {
   readonly passwords: SharePasswords;
   readonly clock?: () => Date;
   readonly eventLog?: SystemEventLog;
+  /**
+   * The backups' write gate, held while a user's removal and their API
+   * tokens' go, so a capture's snapshot never keeps the tokens alone.
+   */
+  readonly gate?: WriteGate;
   /** What each user's folder holds, shown beside their storage limit. */
   readonly usage?: HomeUsage;
 }
@@ -190,11 +196,14 @@ export function createLocalUserService(deps: LocalUserServiceDeps): LocalUserSer
       if (identity.accountId === viewer.accountId) {
         throw new ApiHttpError("forbidden", "you cannot remove yourself");
       }
-      await keepingAnAdmin(() => repos.logins.removeUser(current.username));
-      await endSessions(identity.accountId, viewer);
-      for (const token of await repos.apiTokens.listByAccount(identity.accountId)) {
-        await repos.apiTokens.delete(token.id, identity.accountId);
-      }
+      // Adding the username again brings back its login, so its tokens go with it.
+      await gated(deps.gate ?? ungated, async () => {
+        await keepingAnAdmin(() => repos.logins.removeUser(current.username));
+        await endSessions(identity.accountId, viewer);
+        for (const token of await repos.apiTokens.listByAccount(identity.accountId)) {
+          await repos.apiTokens.delete(token.id, identity.accountId);
+        }
+      });
       eventLog.record("general", "info", `User removed: ${current.username}`);
     },
 

@@ -8,6 +8,7 @@ import {
   rangeCases,
   rangeHeaders,
 } from "../../test/fixtures/range-cases.ts";
+import { recordingGate } from "../../test/recording-gate.ts";
 import { WopiError } from "./errors.ts";
 import { createOfficeService, fileExists } from "./service.ts";
 
@@ -42,6 +43,17 @@ describe("office opening and creation", () => {
       requested: { path: "/a.docx", kind: "file" },
     });
     expect(h.activity.outcomes[0]?.bridge).toEqual({ namespace: "office", externalId: a.fileId });
+  });
+
+  it("records an open, its recent entry and its history together, under the backups' write gate", async () => {
+    const steps: string[] = [];
+    const h = await officeHarness({
+      deps: {
+        gate: recordingGate(steps, () => `gate let go, ${h.activity.outcomes.length} recorded`),
+      },
+    });
+    await h.open();
+    expect(steps).toEqual(["gate held", "gate let go, 1 recorded"]);
   });
 
   it("still opens and keeps legacy recents when no history is configured", async () => {

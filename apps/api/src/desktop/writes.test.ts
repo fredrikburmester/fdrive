@@ -16,6 +16,7 @@ import { createLocalStorage, createUserStorage } from "@fdrive/local";
 import { createMemoryStorage } from "@fdrive/testkit";
 import { afterEach, expect, it, vi } from "vitest";
 import { memoryRepo } from "../../test/helpers/desktop-repo.js";
+import { recordingGate } from "../../test/recording-gate.js";
 import type { Principal } from "../auth/principal.js";
 import { createDesktopRetention, removeIncoming } from "./retention.js";
 import { createDesktopWrites, DESKTOP_TRASH, NO_WRITES } from "./writes.js";
@@ -892,6 +893,41 @@ it("stages a body durably in the files folder and publishes it with one storage 
   await f.service.upload(f.principal, lost.operationId, body("lost"), new AbortController().signal);
   expect((await f.service.commit(f.principal, lost.operationId)).state).toBe("completed");
   expect(await f.read("/lost.txt")).toBe("lost");
+});
+
+it("holds the backups' write gate for a commit, never while its body is staged", async () => {
+  const f = await fixture();
+  const steps: string[] = [];
+  const service = createDesktopWrites({ ...f.deps, gate: recordingGate(steps) });
+  const upload = f.raw.upload.bind(f.raw);
+  vi.spyOn(f.raw, "upload").mockImplementation(async (path, staged, options) => {
+    steps.push("body staged");
+    return upload(path, staged, options);
+  });
+  const move = f.raw.move.bind(f.raw);
+  vi.spyOn(f.raw, "move").mockImplementation(async (from, to, options) => {
+    steps.push("published");
+    return move(from, to, options);
+  });
+  const request = {
+    kind: "upload" as const,
+    operationId: randomUUID(),
+    parentId: "root",
+    name: "gated.txt",
+    base: null,
+    size: 5,
+    sha256: sha("bytes"),
+  };
+  await service.prepare(f.principal, request);
+  await service.upload(
+    f.principal,
+    request.operationId,
+    body("bytes"),
+    new AbortController().signal,
+  );
+  expect(steps).toEqual(["body staged"]);
+  expect((await service.commit(f.principal, request.operationId)).state).toBe("completed");
+  expect(steps).toEqual(["body staged", "gate held", "published", "gate let go"]);
 });
 
 it("leaves the original untouched when the body cannot be staged", async () => {

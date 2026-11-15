@@ -2,13 +2,15 @@ import { randomUUID } from "node:crypto";
 import type { Repos } from "@fdrive/db";
 import { createMemoryRepos } from "@fdrive/db/testing";
 import { describe, expect, it, vi } from "vitest";
+import { recordingGate } from "../../test/recording-gate.ts";
 import { createLoginLimiter } from "../auth/login-limiter.js";
 import { createPasswordCheck } from "../auth/password.ts";
+import type { WriteGate } from "../backups/write-gate.ts";
 import { createLocalUserService, type LocalUserServiceDeps, type UserViewer } from "./service.js";
 import { FAST_PASSWORDS, seedLocalUsers } from "./test-fixtures/index.ts";
 import { createLocalUserStore } from "./users.js";
 
-async function fixture(options: { usage?: boolean } = {}) {
+async function fixture(options: { usage?: boolean; gate?: WriteGate } = {}) {
   const repos = createMemoryRepos();
   const store = createLocalUserStore({
     repo: repos.localUsers,
@@ -25,6 +27,7 @@ async function fixture(options: { usage?: boolean } = {}) {
     ...(options.usage === true
       ? { usage: async (username: string) => (username === "alice" ? 1_000 : null) }
       : {}),
+    ...(options.gate ? { gate: options.gate } : {}),
   };
   const service = createLocalUserService(deps);
   const [alice, bob] = await seedLocalUsers(repos, [
@@ -369,5 +372,38 @@ describe("createLocalUserService: changeOwnPassword", () => {
     expect(await h.store.verify("alice", "alice-pass")).toMatchObject({ result: "ok" });
     await change(h, "alice-pass", "198.51.100.2");
     expect(await h.store.verify("alice", "alice-new-pass")).toMatchObject({ result: "ok" });
+  });
+});
+
+describe("removing a user under the backups' write gate", () => {
+  it("removes the user and their tokens in one write", async () => {
+    const steps: string[] = [];
+    let tokens = -1;
+    const h = await fixture({
+      gate: recordingGate(steps, () => `gate let go, ${tokens} token(s) left`),
+    });
+    await h.repos.apiTokens.create({
+      accountId: h.bob.accountId,
+      identityId: h.bob.id,
+      name: "laptop",
+      tokenHash: "bob-token",
+      access: { mode: "read", paths: ["/"] },
+      expiresAt: null,
+    });
+    const list = h.repos.apiTokens.listByAccount.bind(h.repos.apiTokens);
+    const remove = h.repos.apiTokens.delete.bind(h.repos.apiTokens);
+    vi.spyOn(h.repos.apiTokens, "delete").mockImplementation(async (id, accountId) => {
+      const removed = await remove(id, accountId);
+      tokens = (await list(h.bob.accountId)).length;
+      return removed;
+    });
+    await h.service.remove("bob", h.viewer);
+    expect(steps).toEqual(["gate held", "gate let go, 0 token(s) left"]);
+    // Nothing held once it failed, and the user stays.
+    steps.length = 0;
+    await expect(h.service.remove("alice", h.viewer)).rejects.toMatchObject({
+      kind: "forbidden",
+    });
+    expect(steps).toEqual([]);
   });
 });

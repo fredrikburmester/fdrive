@@ -16,6 +16,7 @@ import {
   rangeCases,
   rangeHeaders,
 } from "../../test/fixtures/range-cases.ts";
+import { recordingGate } from "../../test/recording-gate.ts";
 import type { ScopeResolver } from "../scoping/resolver.ts";
 import type { ThumbFileReader } from "../thumbs/serve.ts";
 import { capByteStream, contentLengthExceeds } from "./routes.ts";
@@ -282,6 +283,30 @@ describe("share management", () => {
     expect((await h.request(path, { method: "DELETE", cookie })).status).toBe(200);
     expect(h.activity.operations.at(-1)?.action).toBe("share.revoke");
     expect(h.activity.outcomes.at(-1)).toMatchObject({ outcome: "success" });
+  });
+
+  it("commits each share change with its history inside the backups' write gate", async () => {
+    const steps: string[] = [];
+    const h = sharesHarness({
+      routes: {
+        gate: recordingGate(steps, () => `gate let go, ${h.activity.outcomes.length} recorded`),
+      },
+    });
+    const cookie = await h.login();
+    const share = await h.create(cookie);
+    const path = `${base}/${share.id}`;
+    expect(
+      (await h.request(path, { method: "PATCH", cookie, body: { name: "Renamed" } })).status,
+    ).toBe(200);
+    expect((await h.request(path, { method: "DELETE", cookie })).status).toBe(200);
+    expect(steps).toEqual([
+      "gate held",
+      "gate let go, 1 recorded",
+      "gate held",
+      "gate let go, 2 recorded",
+      "gate held",
+      "gate let go, 3 recorded",
+    ]);
   });
 
   it("records a refused share as a failure and says nothing private", async () => {

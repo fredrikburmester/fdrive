@@ -2,7 +2,9 @@ import { StorageError } from "@fdrive/core";
 import { createMemoryShareRepo, type ShareInsertInput } from "@fdrive/db";
 import { createMemoryStorage } from "@fdrive/testkit";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { recordingFileOperations } from "../../test/file-operations.js";
+import { recordingFileOperations, testFileOperations } from "../../test/file-operations.js";
+import { recordingGateOnPool } from "../../test/recording-gate.js";
+import type { WriteGate } from "../backups/write-gate.ts";
 import { ApiHttpError } from "../errors.ts";
 import { createScryptSharePasswords } from "./passwords.ts";
 import { archiveConflict, createSharesService, hiddenFromLinks, shareCall } from "./service.ts";
@@ -48,12 +50,13 @@ async function build(
   files: Record<string, string>,
   share: Partial<ShareInsertInput> = {},
   zip = fakeZip().zip,
+  gate?: WriteGate,
 ) {
   const memory = createMemoryStorage(files);
   const storage = Object.assign(memory, { zip });
   const shares = createMemoryShareRepo();
   const consume = vi.spyOn(shares, "consume");
-  const operations = recordingFileOperations();
+  const operations = recordingFileOperations(testFileOperations(gate ? { gate } : {}));
   const service = createSharesService({
     shares,
     storageFor: async () => storage,
@@ -61,6 +64,7 @@ async function build(
     passwords,
     zipLimits: { perShare: 1 },
     clock: () => at,
+    ...(gate ? { gate } : {}),
   });
   const inserted = await shares.insert({
     identityId,
@@ -285,6 +289,35 @@ describe("uploads through a public share", () => {
     expect(await used()).toBe(2);
   });
 
+  it("counts an upload in the write that published it, never holding the gate for its body", async () => {
+    const steps: string[] = [];
+    const { gate, connections } = recordingGateOnPool(steps);
+    const { service, open, consume } = await build(
+      { "/inbox/.keep": "" },
+      { scope: "write", paths: ["/inbox"] },
+      fakeZip().zip,
+      gate,
+    );
+    consume.mockImplementationOnce(async () => {
+      steps.push("counted");
+      return null;
+    });
+    const body = new ReadableStream<Uint8Array>(
+      {
+        pull(controller) {
+          steps.push("body arrived");
+          controller.enqueue(bytes("mine"));
+          controller.close();
+        },
+      },
+      { highWaterMark: 0 },
+    );
+    expect(await service.upload(await open(), "a.txt", body, signal())).toBe("a.txt");
+    expect(steps).toEqual(["body arrived", "gate held", "counted", "gate let go"]);
+    // The upload's gate is the one write's, joined rather than taken twice.
+    expect(connections()).toBe(1);
+  });
+
   it("gives up on a name taken after storage read the body, rather than store nothing", async () => {
     const { service, open, storage, used } = await build(
       { "/inbox/.keep": "" },
@@ -293,7 +326,7 @@ describe("uploads through a public share", () => {
     const upload = storage.upload.bind(storage);
     vi.spyOn(storage, "upload").mockImplementationOnce(async (path, body) => {
       // Reads the body, then finds the name taken, as a racing writer would leave it.
-      if (body instanceof ReadableStream) body.getReader();
+      if (body instanceof ReadableStream) await body.getReader().read();
       await upload(path, bytes("racer"));
       throw new StorageError("conflict", "taken");
     });
