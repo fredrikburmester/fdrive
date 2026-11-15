@@ -15,6 +15,7 @@ function harness() {
   const app = createApp({
     config: loadConfig({
       DATABASE_URL: "postgres://localhost/fdrive",
+      FDRIVE_STORAGE_ROOT: "/srv/files",
       FDRIVE_MASTER_KEY: Buffer.alloc(32, 7).toString("base64"),
     }),
     logger: { info: vi.fn(), error: vi.fn(), warn: vi.fn() } as unknown as Logger,
