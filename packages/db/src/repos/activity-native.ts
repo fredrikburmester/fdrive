@@ -11,7 +11,18 @@ import { activityFileAt, ensureActivityFile, lockActivityRegistry } from "./acti
 import type { ActivityDb, ActivityOperationRecord } from "./activity-types.js";
 import { appendActivityEvent, captureActivityIdentity } from "./activity-writer.js";
 import type { DesktopOperationRecord } from "./desktop.js";
-import type { DesktopEffectPayload } from "./desktop-effects-types.js";
+
+/** What a Mac write did, as its receipt's history records it. */
+export interface NativeActivityFacts {
+  /** Where the item was before (its original path for a restore); `null` for a new item. */
+  from: string | null;
+  /** Where it is now; for a trash, its place in the Mac's Trash. */
+  to: string;
+  directory: boolean;
+  trash: boolean;
+  /** Put back from the Mac's Trash. */
+  restored?: boolean;
+}
 
 export async function prepareNativeActivity(db: ActivityDb, operation: DesktopOperationRecord) {
   const request = operation.request;
@@ -144,12 +155,12 @@ export async function finishNativeFailure(db: ActivityDb, operation: DesktopOper
     .where(eq(activityOperations.id, operation.id));
 }
 
-/** Copy receipt facts at commit; history never joins the recovery journal afterward. */
+/** Copy receipt facts at commit; history never reads the receipt again afterward. */
 export async function appendNativeActivity(
   db: ActivityDb,
   operation: DesktopOperationRecord,
   result: Record<string, unknown>,
-  effects: DesktopEffectPayload,
+  facts: NativeActivityFacts,
 ) {
   const request = operation.request;
   if (!["upload", "folder", "move"].includes(String(request.kind))) return;
@@ -192,8 +203,8 @@ export async function appendNativeActivity(
       )[0]
     : undefined;
   const prior = bridge?.activity_files;
-  const restore = effects.restored === true || (prior?.state === "trashed" && !effects.trash);
-  const action: PersonalActivityAction = effects.trash
+  const restore = facts.restored === true || (prior?.state === "trashed" && !facts.trash);
+  const action: PersonalActivityAction = facts.trash
     ? "file.trash"
     : restore
       ? "file.restore"
@@ -220,19 +231,19 @@ export async function appendNativeActivity(
         )[0]
       : undefined;
   const before: ActivityFacts = {
-    path: effects.from ?? effects.to,
-    kind: effects.directory ? "dir" : "file",
+    path: facts.from ?? facts.to,
+    kind: facts.directory ? "dir" : "file",
   };
   const requested: ActivityFacts = {
     ...before,
-    targetPath: effects.to,
+    targetPath: facts.to,
     ...(binding?.trashLeaf ? { trashLeaf: binding.trashLeaf } : {}),
   };
-  const after: ActivityFacts = effects.trash
-    ? { ...before, trashLeaf: effects.to }
+  const after: ActivityFacts = facts.trash
+    ? { ...before, trashLeaf: facts.to }
     : {
-        path: effects.to,
-        kind: effects.directory ? "dir" : "file",
+        path: facts.to,
+        kind: facts.directory ? "dir" : "file",
         ...(typeof item?.size === "number" ? { size: item.size } : {}),
         ...(typeof request.sha256 === "string" ? { sha256: request.sha256 } : {}),
       };

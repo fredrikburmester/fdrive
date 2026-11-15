@@ -4,7 +4,6 @@ import {
   boolean,
   check,
   customType,
-  foreignKey,
   index,
   integer,
   jsonb,
@@ -16,7 +15,6 @@ import {
   uniqueIndex,
   uuid,
 } from "drizzle-orm/pg-core";
-import type { DesktopEffectPayload } from "../repos/desktop-effects-types.js";
 import type { AiChatSharing, ApiTokenAccess } from "../repos/types.js";
 import { vector } from "../vector.js";
 
@@ -212,7 +210,6 @@ export const fileTags = appSchema.table(
     tagId: uuid("tag_id")
       .notNull()
       .references(() => tags.id, { onDelete: "cascade" }),
-    revision: uuid("revision").notNull().defaultRandom(),
   },
   (table) => [
     primaryKey({ columns: [table.identityId, table.path, table.tagId] }),
@@ -229,7 +226,6 @@ export const favorites = appSchema.table(
     path: text("path").notNull(),
     /** "file" or "dir": what kind of entry was favorited, since the fs entry itself is not looked up again for display. */
     kind: text("kind").notNull().default("file"),
-    revision: uuid("revision").notNull().defaultRandom(),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [primaryKey({ columns: [table.identityId, table.path] })],
@@ -245,7 +241,6 @@ export const folderViews = appSchema.table(
     path: text("path").notNull(),
     /** Null when only the sort is pinned. */
     mode: text("mode"),
-    revision: uuid("revision").notNull().defaultRandom(),
     sort: jsonb("sort"),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
@@ -260,7 +255,6 @@ export const recents = appSchema.table(
       .references(() => identities.id, { onDelete: "cascade" }),
     path: text("path").notNull(),
     openedAt: timestamp("opened_at", { withTimezone: true }).notNull().defaultNow(),
-    revision: uuid("revision").notNull().defaultRandom(),
   },
   (table) => [
     primaryKey({ columns: [table.identityId, table.path] }),
@@ -388,7 +382,6 @@ export const officeFiles = appSchema.table(
     rootName: text("root_name").notNull(),
     path: text("path").notNull(),
     deletedAt: timestamp("deleted_at", { withTimezone: true }),
-    revision: uuid("revision").notNull().defaultRandom(),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [
@@ -433,7 +426,6 @@ export const desktopItems = appSchema.table(
     path: text("path").notNull(),
     kind: text("kind").notNull(),
     metadataVersion: uuid("metadata_version").notNull().defaultRandom(),
-    contentVersion: text("content_version"),
     originalPath: text("original_path"),
     deletedAt: timestamp("deleted_at", { withTimezone: true }),
   },
@@ -467,42 +459,6 @@ export const desktopOperations = appSchema.table(
     primaryKey({ columns: [table.identityId, table.id] }),
     index("desktop_operations_account").on(table.accountId),
     index("desktop_operations_cleanup").on(table.state, table.updatedAt),
-  ],
-);
-
-/** Metadata work is committed with the native receipt, never with a file replay. */
-export const desktopEffects = appSchema.table(
-  "desktop_effects",
-  {
-    sequence: bigserial("sequence", { mode: "number" }).primaryKey(),
-    operationId: uuid("operation_id").notNull(),
-    identityId: uuid("identity_id")
-      .notNull()
-      .references(() => identities.id, { onDelete: "cascade" }),
-    accountId: uuid("account_id")
-      .notNull()
-      .references(() => accounts.id, { onDelete: "cascade" }),
-    payload: jsonb("payload").$type<DesktopEffectPayload>().notNull(),
-    state: text("state").notNull().default("pending"),
-    attempts: integer("attempts").notNull().default(0),
-    lastError: text("last_error"),
-    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-    nextAttemptAt: timestamp("next_attempt_at", { withTimezone: true }).notNull().defaultNow(),
-    completedAt: timestamp("completed_at", { withTimezone: true }),
-  },
-  (table) => [
-    uniqueIndex("desktop_effects_operation").on(table.identityId, table.operationId),
-    foreignKey({
-      columns: [table.identityId, table.operationId],
-      foreignColumns: [desktopOperations.identityId, desktopOperations.id],
-    }).onDelete("cascade"),
-    index("desktop_effects_pending")
-      .on(table.nextAttemptAt, table.sequence)
-      .where(sql`${table.state} = 'pending'`),
-    index("desktop_effects_identity_pending")
-      .on(table.identityId, table.sequence)
-      .where(sql`${table.state} = 'pending'`),
-    index("desktop_effects_account").on(table.accountId),
   ],
 );
 

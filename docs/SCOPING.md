@@ -20,7 +20,7 @@ configured per login.
 
 `configuredMappings(identity)` returns the home plus any extra scopes whenever the provider
 names a root, indexed or not, reading only the provider row. Office, index events, the Office
-file registry, desktop effects and activity observations use it. It is unavailable as
+file registry and activity observations use it. It is unavailable as
 `provider_mismatch` (the provider is gone or disabled), `no_roots` (it names no root) or
 `invalid_configuration` (the username is not one path segment).
 

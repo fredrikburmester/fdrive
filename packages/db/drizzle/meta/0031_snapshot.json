@@ -1,5 +1,5 @@
 {
-  "id": "f8bf45c3-8fa0-4fef-8b2d-940ec0542ca4",
+  "id": "3e8f8470-2d3c-4a99-9cc3-d3835e09761d",
   "prevId": "bab7d6fd-db1f-4a46-9c08-eddae3c795ae",
   "version": "7",
   "dialect": "postgresql",
@@ -979,201 +979,6 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
-    "app.desktop_effects": {
-      "name": "desktop_effects",
-      "schema": "app",
-      "columns": {
-        "sequence": {
-          "name": "sequence",
-          "type": "bigserial",
-          "primaryKey": true,
-          "notNull": true
-        },
-        "operation_id": {
-          "name": "operation_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "identity_id": {
-          "name": "identity_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "account_id": {
-          "name": "account_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "payload": {
-          "name": "payload",
-          "type": "jsonb",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "state": {
-          "name": "state",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'pending'"
-        },
-        "attempts": {
-          "name": "attempts",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "default": 0
-        },
-        "last_error": {
-          "name": "last_error",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "created_at": {
-          "name": "created_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        },
-        "next_attempt_at": {
-          "name": "next_attempt_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        },
-        "completed_at": {
-          "name": "completed_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
-        }
-      },
-      "indexes": {
-        "desktop_effects_operation": {
-          "name": "desktop_effects_operation",
-          "columns": [
-            {
-              "expression": "identity_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "operation_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": true,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "desktop_effects_pending": {
-          "name": "desktop_effects_pending",
-          "columns": [
-            {
-              "expression": "next_attempt_at",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "sequence",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "where": "\"app\".\"desktop_effects\".\"state\" = 'pending'",
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "desktop_effects_identity_pending": {
-          "name": "desktop_effects_identity_pending",
-          "columns": [
-            {
-              "expression": "identity_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "sequence",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "where": "\"app\".\"desktop_effects\".\"state\" = 'pending'",
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "desktop_effects_account": {
-          "name": "desktop_effects_account",
-          "columns": [
-            {
-              "expression": "account_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
-      "foreignKeys": {
-        "desktop_effects_identity_id_identities_id_fk": {
-          "name": "desktop_effects_identity_id_identities_id_fk",
-          "tableFrom": "desktop_effects",
-          "tableTo": "identities",
-          "schemaTo": "app",
-          "columnsFrom": ["identity_id"],
-          "columnsTo": ["id"],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        },
-        "desktop_effects_account_id_accounts_id_fk": {
-          "name": "desktop_effects_account_id_accounts_id_fk",
-          "tableFrom": "desktop_effects",
-          "tableTo": "accounts",
-          "schemaTo": "app",
-          "columnsFrom": ["account_id"],
-          "columnsTo": ["id"],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        },
-        "desktop_effects_identity_id_operation_id_desktop_operations_identity_id_id_fk": {
-          "name": "desktop_effects_identity_id_operation_id_desktop_operations_identity_id_id_fk",
-          "tableFrom": "desktop_effects",
-          "tableTo": "desktop_operations",
-          "schemaTo": "app",
-          "columnsFrom": ["identity_id", "operation_id"],
-          "columnsTo": ["identity_id", "id"],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "policies": {},
-      "checkConstraints": {},
-      "isRLSEnabled": false
-    },
     "app.desktop_items": {
       "name": "desktop_items",
       "schema": "app",
@@ -1209,12 +1014,6 @@
           "primaryKey": false,
           "notNull": true,
           "default": "gen_random_uuid()"
-        },
-        "content_version": {
-          "name": "content_version",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
         },
         "original_path": {
           "name": "original_path",
@@ -1441,13 +1240,6 @@
           "notNull": true,
           "default": "'file'"
         },
-        "revision": {
-          "name": "revision",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "gen_random_uuid()"
-        },
         "created_at": {
           "name": "created_at",
           "type": "timestamp with time zone",
@@ -1501,13 +1293,6 @@
           "type": "uuid",
           "primaryKey": false,
           "notNull": true
-        },
-        "revision": {
-          "name": "revision",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "gen_random_uuid()"
         }
       },
       "indexes": {
@@ -1581,13 +1366,6 @@
           "type": "text",
           "primaryKey": false,
           "notNull": false
-        },
-        "revision": {
-          "name": "revision",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "gen_random_uuid()"
         },
         "sort": {
           "name": "sort",
@@ -1961,13 +1739,6 @@
           "primaryKey": false,
           "notNull": false
         },
-        "revision": {
-          "name": "revision",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "gen_random_uuid()"
-        },
         "created_at": {
           "name": "created_at",
           "type": "timestamp with time zone",
@@ -2134,13 +1905,6 @@
           "primaryKey": false,
           "notNull": true,
           "default": "now()"
-        },
-        "revision": {
-          "name": "revision",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "gen_random_uuid()"
         }
       },
       "indexes": {
@@ -2184,96 +1948,6 @@
           "columns": ["identity_id", "path"]
         }
       },
-      "uniqueConstraints": {},
-      "policies": {},
-      "checkConstraints": {},
-      "isRLSEnabled": false
-    },
-    "app.saved_searches": {
-      "name": "saved_searches",
-      "schema": "app",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "uuid",
-          "primaryKey": true,
-          "notNull": true,
-          "default": "gen_random_uuid()"
-        },
-        "account_id": {
-          "name": "account_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "name": {
-          "name": "name",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "query": {
-          "name": "query",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "type": {
-          "name": "type",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "folder": {
-          "name": "folder",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "created_at": {
-          "name": "created_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        }
-      },
-      "indexes": {
-        "saved_searches_account_id_idx": {
-          "name": "saved_searches_account_id_idx",
-          "columns": [
-            {
-              "expression": "account_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "created_at",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
-      "foreignKeys": {
-        "saved_searches_account_id_accounts_id_fk": {
-          "name": "saved_searches_account_id_accounts_id_fk",
-          "tableFrom": "saved_searches",
-          "tableTo": "accounts",
-          "schemaTo": "app",
-          "columnsFrom": ["account_id"],
-          "columnsTo": ["id"],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
       "uniqueConstraints": {},
       "policies": {},
       "checkConstraints": {},

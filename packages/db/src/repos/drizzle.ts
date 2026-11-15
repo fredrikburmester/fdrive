@@ -20,7 +20,6 @@ import {
 } from "../schema/app.js";
 import { files } from "../schema/idx.js";
 import { createAiChatRepo } from "./ai-chats.js";
-import { supersedeDesktopEffects } from "./desktop-effects.js";
 import { validateCanonicalUuid } from "./logins-types.js";
 import { selectPathChunks } from "./path-chunks.js";
 import { createSystemEventRepo } from "./system-events.js";
@@ -619,7 +618,7 @@ async function moveFileTagPrefix(
   `);
   await db.execute(sql`
     update "app"."file_tags"
-    set revision = gen_random_uuid(), path = case when path = ${oldPath} then ${newPath}
+    set path = case when path = ${oldPath} then ${newPath}
                     else ${newPrefix} || substr(path, char_length(${oldPrefix}) + 1) end
     where identity_id = ${identityId}
       and (path = ${oldPath} or (${isDir} and starts_with(path, ${oldPrefix})))
@@ -726,7 +725,7 @@ async function moveFavoritePrefix(
   `);
   await db.execute(sql`
     update "app"."favorites"
-    set revision = gen_random_uuid(), path = case when path = ${oldPath} then ${newPath}
+    set path = case when path = ${oldPath} then ${newPath}
                     else ${newPrefix} || substr(path, char_length(${oldPrefix}) + 1) end
     where identity_id = ${identityId}
       and (path = ${oldPath} or (${isDir} and starts_with(path, ${oldPrefix})))
@@ -759,7 +758,7 @@ function createFavoriteRepo(db: Db): FavoriteRepo {
         .values({ identityId, path, kind })
         .onConflictDoUpdate({
           target: [favorites.identityId, favorites.path],
-          set: { kind, revision: sql`gen_random_uuid()` },
+          set: { kind },
         });
     },
     async remove(identityId, path) {
@@ -820,7 +819,7 @@ async function moveFolderViewPrefix(
   `);
   await db.execute(sql`
     update "app"."folder_views"
-    set revision = gen_random_uuid(), path = case when path = ${oldPath} then ${newPath}
+    set path = case when path = ${oldPath} then ${newPath}
                     else ${newPrefix} || substr(path, char_length(${oldPrefix}) + 1) end,
         updated_at = now()
     where identity_id = ${identityId}
@@ -863,7 +862,6 @@ function createFolderViewRepo(db: Db): FolderViewRepo {
             ...(patch.mode === undefined ? {} : { mode: patch.mode }),
             ...(patch.sort === undefined ? {} : { sort: patch.sort }),
             updatedAt,
-            revision: sql`gen_random_uuid()`,
           },
         });
       await db
@@ -930,7 +928,7 @@ async function moveRecentPrefix(
   `);
   await db.execute(sql`
     update "app"."recents"
-    set revision = gen_random_uuid(), path = case when path = ${oldPath} then ${newPath}
+    set path = case when path = ${oldPath} then ${newPath}
                     else ${newPrefix} || substr(path, char_length(${oldPrefix}) + 1) end
     where identity_id = ${identityId}
       and (path = ${oldPath} or (${isDir} and starts_with(path, ${oldPrefix})))
@@ -969,7 +967,7 @@ function createRecentRepo(db: Db): RecentRepo {
         .values({ identityId, path, openedAt: now })
         .onConflictDoUpdate({
           target: [recents.identityId, recents.path],
-          set: { openedAt: now, revision: sql`gen_random_uuid()` },
+          set: { openedAt: now },
         });
     },
     async movePrefix(identityId, oldPath, newPath, isDir) {
@@ -980,11 +978,7 @@ function createRecentRepo(db: Db): RecentRepo {
       });
     },
     async deletePrefix(identityId, path, isDir) {
-      await db.transaction(async (tx) => {
-        await lockMetadataIdentity(tx, identityId);
-        await supersedeDesktopEffects(tx, { identityId }, path, null);
-        await deleteRecentPrefix(tx, identityId, path, isDir);
-      });
+      await deleteRecentPrefix(db, identityId, path, isDir);
     },
     async prune(identityId, keep) {
       await db.execute(sql`
@@ -1007,7 +1001,6 @@ function createMetadataPathRepo(db: Db): MetadataPathRepo {
       if (oldPath === newPath) return;
       await db.transaction(async (tx) => {
         await lockMetadataIdentity(tx, identityId);
-        await supersedeDesktopEffects(tx, { identityId }, oldPath, newPath);
         await moveFileTagPrefix(tx, identityId, oldPath, newPath, isDir);
         await moveFavoritePrefix(tx, identityId, oldPath, newPath, isDir);
         await moveFolderViewPrefix(tx, identityId, oldPath, newPath, isDir);
@@ -1017,7 +1010,6 @@ function createMetadataPathRepo(db: Db): MetadataPathRepo {
     async deletePrefix(identityId, path, isDir) {
       await db.transaction(async (tx) => {
         await lockMetadataIdentity(tx, identityId);
-        await supersedeDesktopEffects(tx, { identityId }, path, null);
         await deleteFileTagPrefix(tx, identityId, path, isDir);
         await deleteFavoritePrefix(tx, identityId, path, isDir);
         await deleteFolderViewPrefix(tx, identityId, path, isDir);
@@ -1104,6 +1096,22 @@ function atOrUnder(path: string) {
   );
 }
 
+/**
+ * `LocalGrantRepo.movePrefix` on `db`, so a caller already in a transaction
+ * (a Mac write's receipt) applies it there.
+ */
+export async function moveLocalGrantPrefix(
+  db: Pick<Db, "update">,
+  owner: string,
+  from: string,
+  to: string,
+): Promise<void> {
+  await db
+    .update(localGrants)
+    .set({ path: sql`${to} || substr(${localGrants.path}, ${from.length + 1})` })
+    .where(and(eq(localGrants.ownerUsername, owner), atOrUnder(from)));
+}
+
 function createLocalGrantRepo(db: Db): LocalGrantRepo {
   return {
     async get(id) {
@@ -1148,10 +1156,7 @@ function createLocalGrantRepo(db: Db): LocalGrantRepo {
       await db.delete(localGrants).where(eq(localGrants.id, id));
     },
     async movePrefix(owner, from, to) {
-      await db
-        .update(localGrants)
-        .set({ path: sql`${to} || substr(${localGrants.path}, ${from.length + 1})` })
-        .where(and(eq(localGrants.ownerUsername, owner), atOrUnder(from)));
+      await moveLocalGrantPrefix(db, owner, from, to);
     },
     async deletePrefix(owner, path) {
       await db

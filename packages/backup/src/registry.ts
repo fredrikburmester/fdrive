@@ -22,7 +22,6 @@ export const DURABLE_TABLES = [
   "app.system_events",
   "app.desktop_items",
   "app.desktop_operations",
-  "app.desktop_effects",
   "app.activity_storage_identities",
   "app.activity_files",
   "app.activity_file_bridges",

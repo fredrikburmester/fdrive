@@ -25,16 +25,19 @@ import {
   type StorageProvider,
 } from "@fdrive/core";
 import {
-  type DesktopEffectContext,
+  type DesktopAccessMove,
   type DesktopItemRecord,
   type DesktopOperationRecord,
   DesktopPublishBusyError,
   type DesktopPublishLock,
   type DesktopRepo,
+  type NativeActivityFacts,
 } from "@fdrive/db";
 import type { Principal } from "../auth/principal.js";
 import { ApiHttpError } from "../errors.js";
-import { runStorageCall } from "../fs/routes.js";
+import type { EventBus } from "../events/bus.js";
+import { publishFsEvent, runStorageCall } from "../fs/routes.js";
+import type { MetadataService } from "../metadata/service.js";
 import {
   createDesktopFiles,
   DESKTOP_INTERNAL_ROOT,
@@ -69,13 +72,30 @@ export interface DesktopWriteDeps
   extends Pick<DesktopDeps, "clock" | "trashPathForStorage" | "publishLock" | "indexedContent"> {
   repo: DesktopRepo;
   stateDir?: string;
-  effectContext?: (
-    principal: Principal,
-    context: Omit<DesktopEffectContext, "office">,
-    /** Where the item really moves, Trash included, when it moves. */
-    moved?: { readonly from: string; readonly to: string },
-  ) => Promise<DesktopEffectContext>;
-  effects?: { beforeWrite(identityId: string): Promise<void>; kick(): void };
+  /**
+   * What grants access to a path (public links, folders shared with people)
+   * when a write moves it from `from` to `to`, resolved before publication
+   * and applied with the receipt (`DesktopRepo.complete`). Absent in
+   * fixtures that do not exercise sharing.
+   */
+  access?: (
+    identityId: string,
+    from: string,
+    to: string,
+    directory: boolean,
+  ) => Promise<DesktopAccessMove | null>;
+  /**
+   * The rest of path-keyed metadata, through the service web writes use,
+   * without what grants access (above) and without `withDesktopMetadata`: a
+   * commit keeps the Mac's item handles itself, and that wrapper's
+   * `onTrashed` would retire the handle of an item the Mac puts in its
+   * Trash. Absent in fixtures that do not exercise metadata.
+   */
+  metadata?: Pick<MetadataService, "onMoved" | "onTrashed">;
+  /** Live updates for the web, as web writes publish them. Absent in fixtures. */
+  bus?: EventBus;
+  /** Hears metadata that could not follow a published write. */
+  logger?: { warn(obj: Record<string, unknown>, msg: string): void };
   /** Administrator resolution of uncertain commits needs the identity's storage. */
   storageForIdentity?: (identityId: string) => Promise<StorageProvider>;
 }
@@ -403,6 +423,98 @@ export function createDesktopWrites(deps: DesktopWriteDeps) {
       fail("version_conflict", CHANGED);
     return live;
   }
+  /** What the receipt's history records about a published write. */
+  function activityFacts(
+    principal: Principal,
+    request: Request,
+    source: DesktopItemRecord | null | undefined,
+    target: string,
+    trashing: boolean,
+  ): NativeActivityFacts {
+    return {
+      from: source?.originalPath ?? source?.path ?? null,
+      to: trashing ? DESKTOP_TRASH + target.slice(trashRoot(principal).length) : target,
+      directory: request.kind === "folder" || source?.kind === "dir",
+      trash: trashing,
+      ...(source?.originalPath && !trashing ? { restored: true } : {}),
+    };
+  }
+  async function missing(storage: StorageProvider, path: string) {
+    try {
+      await storage.stat(path);
+      return false;
+    } catch (error) {
+      if (isStorageError(error) && error.kind === "not_found") return true;
+      throw error;
+    }
+  }
+  /**
+   * What grants access to the moved path, resolved before publication so a
+   * failed lookup leaves the operation ready, and applied with the receipt so
+   * no link or share outlives the write at the path it left. For a restore it
+   * is what followed the item into the Mac's Trash.
+   */
+  async function accessMove(
+    principal: Principal,
+    source: DesktopItemRecord | null | undefined,
+    from: string | undefined,
+    target: string,
+  ) {
+    if (!deps.access || !source || from === undefined || from === target) return null;
+    return deps.access(principal.identityId, from, target, source.kind === "dir");
+  }
+  /**
+   * Brings the rest of path-keyed metadata along once a write is published
+   * and its receipt (with what grants access) kept, and tells the web, the
+   * way web writes do right after their storage call (`fs/routes.ts`): tags,
+   * favorites, folder views, recents, AI chat references and Office files
+   * follow a move. A move into the Mac's Trash is a trash: recents go, and
+   * the rest stays at the original path for a restore, which brings it back
+   * as a web restore does (`trash/routes.ts`), only while nothing has taken
+   * that path.
+   *
+   * None of this grants access, so a failure is logged rather than failing
+   * the commit, whose file is already published. The indexer reports the
+   * same move from the change journal, and its listener
+   * (`events/indexer-listener.ts`) moves this metadata then; that also covers
+   * a crash between the receipt and this call.
+   */
+  async function follow(
+    principal: Principal,
+    request: Request,
+    source: DesktopItemRecord | null | undefined,
+    target: string,
+    trashing: boolean,
+  ) {
+    const { identityId } = principal;
+    const directory = request.kind === "folder" || source?.kind === "dir";
+    const metadata = deps.metadata;
+    const publish = (
+      op: "create" | "mkdir" | "move" | "delete",
+      paths: string[],
+      to?: string[],
+    ) => {
+      if (deps.bus) publishFsEvent({ bus: deps.bus, clock: deps.clock }, principal, op, paths, to);
+    };
+    try {
+      if (source && trashing) await metadata?.onTrashed(identityId, source.path, directory, target);
+      else if (source?.originalPath) {
+        const original = source.originalPath;
+        if (original !== target && (await missing(principal.storage, original)))
+          await metadata?.onMoved(identityId, original, target, directory);
+      } else if (source && source.path !== target)
+        await metadata?.onMoved(identityId, source.path, target, directory);
+    } catch (error) {
+      deps.logger?.warn(
+        { err: error, identityId, operationId: request.operationId },
+        "Mac write published; its metadata follows when the indexer reports it",
+      );
+    }
+    if (source && trashing) publish("delete", [source.path]);
+    else if (source && (source.originalPath ?? source.path) !== target)
+      publish("move", [source.originalPath ?? source.path], [target]);
+    else publish(directory ? "mkdir" : "create", [target]);
+  }
   async function operation(principal: Principal, id: string) {
     const result = await repo.operation(principal.identityId, principal.accountId, id);
     if (!result) throw new ApiHttpError("not_found", "Operation is not available");
@@ -477,7 +589,7 @@ export function createDesktopWrites(deps: DesktopWriteDeps) {
         requestHash: hash(request),
         // History reads its facts from the reserved request, so an interrupted
         // commit still knows what the person asked for. `appendNativeActivity`
-        // re-derives the final action from the receipt's own effects.
+        // re-derives the final action from the facts its receipt records.
         request: {
           ...request,
           recoveryBytes,
@@ -736,14 +848,18 @@ export function createDesktopWrites(deps: DesktopWriteDeps) {
       const request = op.request as Request;
       const storage = principal.storage;
       let publicationStarted = false;
+      const trashing = request.parentId === "trash";
+      let published: {
+        receipt: DesktopOperationResult;
+        source?: DesktopItemRecord;
+        target: string;
+      };
       try {
-        await deps.effects?.beforeWrite(principal.identityId);
         const parent = await record(principal, request.parentId);
         const source =
           "itemId" in request && request.itemId
             ? await record(principal, request.itemId)
             : undefined;
-        const trashing = request.parentId === "trash";
         if (trashing && (request.kind !== "move" || !source || inTrash(principal, source.path)))
           throw new ApiHttpError("bad_request", "Only existing items can be moved to Trash");
         if (request.kind === "upload" && source && inTrash(principal, source.path))
@@ -772,31 +888,7 @@ export function createDesktopWrites(deps: DesktopWriteDeps) {
         const witness = source ? await storage.stat(source.path) : undefined;
         if (source && isUnderPath(source.path, target))
           throw new ApiHttpError("bad_request", "Cannot move a folder into itself");
-        const context: Omit<DesktopEffectContext, "office"> = {
-          from: source?.originalPath ?? source?.path ?? null,
-          to: trashing ? DESKTOP_TRASH + target.slice(trashRoot(principal).length) : target,
-          directory: request.kind === "folder" || source?.kind === "dir",
-          trash: trashing,
-          ...(source?.originalPath && !trashing ? { restored: true } : {}),
-        };
-        if (
-          context.from &&
-          context.from !== context.to &&
-          !trashing &&
-          (context.to.startsWith(`${context.from}/`) || context.from.startsWith(`${context.to}/`))
-        )
-          fail(
-            "unsupported",
-            "Restore this item outside its original folder hierarchy to preserve metadata.",
-          );
-        const effectContext = deps.effectContext
-          ? await deps.effectContext(
-              principal,
-              context,
-              source ? { from: source.path, to: target } : undefined,
-            )
-          : { ...context, office: null };
-        const effects = await repo.captureEffects(principal.identityId, effectContext);
+        const access = await accessMove(principal, source, source?.path, target);
         let recoveryId: string | null = null;
         if (request.kind === "upload") {
           if (source && source.kind !== "file")
@@ -920,15 +1012,19 @@ export function createDesktopWrites(deps: DesktopWriteDeps) {
           item,
           recoveryId,
         };
-        if (!(await repo.complete(principal.identityId, principal.accountId, id, receipt, effects)))
+        const facts = activityFacts(principal, request, source, target, trashing);
+        if (
+          !(await repo.complete(
+            principal.identityId,
+            principal.accountId,
+            id,
+            receipt,
+            facts,
+            access,
+          ))
+        )
           throw Error("Could not persist commit receipt");
-        // The durable queue owns failures after the receipt commits.
-        try {
-          deps.effects?.kick();
-        } catch {
-          /* Startup/timer recovery will retry. */
-        }
-        return receipt;
+        published = { receipt, ...(source ? { source } : {}), target };
       } catch (error) {
         const conflict = error instanceof ApiHttpError && error.kind === "conflict";
         // A storage answering `conflict` refused the operation outright: every
@@ -945,11 +1041,6 @@ export function createDesktopWrites(deps: DesktopWriteDeps) {
             "operation_uncertain",
             "Commit could not be confirmed. The pending file and recovery copies are preserved; do not retry with a new operation ID.",
           );
-        if (
-          error instanceof Error &&
-          error.message === "Desktop metadata recovery capacity reached"
-        )
-          throw new ApiHttpError("rate_limited", error.message, { code: "quota_exceeded" });
         // Contention is not a conflict: nothing changed remotely and the same
         // request will succeed once the holder finishes. A 409 would make the Mac
         // client fork the pending bytes into a conflict copy; 429 without a details
@@ -959,6 +1050,8 @@ export function createDesktopWrites(deps: DesktopWriteDeps) {
         if (error instanceof StorageError) throw new ApiHttpError(error.kind, error.message);
         throw error;
       }
+      await follow(principal, request, published.source, published.target, trashing);
+      return published.receipt;
     },
     /** Commits without a receipt, oldest first, for administrator inspection. */
     async uncertain(now: Date) {
@@ -978,7 +1071,7 @@ export function createDesktopWrites(deps: DesktopWriteDeps) {
       });
     },
     /** The administrator inspected storage. `published` records the receipt from the
-     * current target and queues metadata recovery; `discarded` cancels without touching
+     * current target and brings metadata along; `discarded` cancels without touching
      * storage, spool or backups (retention reclaims them later). Never replays a write. */
     async resolve(
       identityId: string,
@@ -1059,20 +1152,15 @@ export function createDesktopWrites(deps: DesktopWriteDeps) {
       else if (source?.originalPath && !inTrash(principal, target))
         await repo.update(identityId, source.id, { originalPath: null });
       entry ??= await trashEntry(principal, target);
-      const context: Omit<DesktopEffectContext, "office"> = {
-        from: source?.originalPath ?? source?.path ?? null,
-        to: trashing ? DESKTOP_TRASH + target.slice(trashRoot(principal).length) : target,
-        directory: request.kind === "folder" || source?.kind === "dir",
-        trash: trashing,
-      };
-      const effectContext = deps.effectContext
-        ? await deps.effectContext(
-            principal,
-            context,
-            source ? { from: source.path, to: target } : undefined,
-          )
-        : { ...context, office: null };
-      const effects = await repo.captureEffects(identityId, effectContext);
+      // From where the item was when the write was prepared: the interrupted
+      // commit may have moved the registry already, never what grants access.
+      const preparedAt = op.request.activityPath;
+      const access = await accessMove(
+        principal,
+        source,
+        typeof preparedAt === "string" ? preparedAt : source?.path,
+        target,
+      );
       const item = await decorate(
         principal,
         entry,
@@ -1089,13 +1177,10 @@ export function createDesktopWrites(deps: DesktopWriteDeps) {
         !(await repo.transition(identityId, accountId, id, "uncertain", "committing"))
       )
         throw new ApiHttpError("conflict", "Operation changed while resolving");
-      if (!(await repo.complete(identityId, accountId, id, result, effects)))
+      const facts = activityFacts(principal, request, source, target, trashing);
+      if (!(await repo.complete(identityId, accountId, id, result, facts, access)))
         throw new ApiHttpError("conflict", "Operation changed while resolving");
-      try {
-        deps.effects?.kick();
-      } catch {
-        /* Startup/timer recovery will retry. */
-      }
+      await follow(principal, request, source, target, trashing);
       return result;
     },
     async acknowledge(principal: Principal, id: string) {

@@ -222,8 +222,15 @@
     {
       "idx": 31,
       "version": "7",
-      "when": 1794702449114,
-      "tag": "0031_saved_searches",
+      "when": 1794702440349,
+      "tag": "0031_drop_desktop_effects",
+      "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "7",
+      "when": 1794705714862,
+      "tag": "0032_saved_searches",
       "breakpoints": true
     }
   ]

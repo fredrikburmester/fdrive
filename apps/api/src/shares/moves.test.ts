@@ -1,6 +1,6 @@
 import { createMemoryShareRepo, type ShareInsertInput } from "@fdrive/db";
 import { describe, expect, it } from "vitest";
-import { createMetadataService } from "../metadata/service.ts";
+import { createMetadataService, withFollowers } from "../metadata/service.ts";
 import { createShareMoves, type OwnedPath } from "./moves.ts";
 
 const alice = "00000000-0000-0000-0000-00000000000a";
@@ -129,10 +129,12 @@ describe("public links following their item", () => {
   it("goes into the Trash with its item through the metadata hooks, and drops it with no leaf", async () => {
     const { shares, moves, paths } = harness();
     const link = await shares.insert(row(alice, ["/Projects", "/notes.txt"]));
-    const metadata = createMetadataService({
-      followers: [moves],
-      recents: { deletePrefix: async () => {} },
-    } as unknown as Parameters<typeof createMetadataService>[0]);
+    const metadata = withFollowers(
+      createMetadataService({
+        recents: { deletePrefix: async () => {} },
+      } as unknown as Parameters<typeof createMetadataService>[0]),
+      [moves],
+    );
     await metadata.onTrashed(alice, "/Projects", true, "/.trash/leaf");
     expect(await paths(link.id)).toEqual(["/.trash/leaf", "/notes.txt"]);
     await metadata.onTrashed(alice, "/notes.txt", false, null);
