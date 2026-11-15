@@ -2,13 +2,7 @@ import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { OkResponse, ROUTES, TrashListResponse, TrashRestoreResponse } from "@fdrive/contracts";
-import {
-  createRecycleFolderTrash,
-  normalizePath,
-  StorageError,
-  type StorageProvider,
-  withMoveToTrash,
-} from "@fdrive/core";
+import { normalizePath, StorageError, type StorageProvider } from "@fdrive/core";
 import { createMemoryRepos } from "@fdrive/db/testing";
 import { createLocalStorage } from "@fdrive/local";
 import type { Logger } from "pino";
@@ -24,6 +18,7 @@ import {
   type PathFollower,
   withFollowers,
 } from "../metadata/service.js";
+import { followIntoTrash } from "../metadata/trash.js";
 import { registerTrashRoutes, type TrashRoutesDeps } from "./routes.js";
 
 const REQUIRED_ENV = {
@@ -44,11 +39,6 @@ const TRASH_PATH = "/.trash";
 const LAYOUT_ROOT = `${TRASH_PATH}/.fdrive-move-v1`;
 /** A well-formed leaf id of fdrive's Trash layout, for routes that never reach storage. */
 const LEAF_ID = ".fdrive-move-v1/file/p/hello.txt/v/168176641123456789";
-
-/** `storage` with core's Trash view over it, as the storage factory builds it. */
-function withRecycleFolderTrash(storage: StorageProvider, trashPath: string): StorageProvider {
-  return { ...storage, trash: createRecycleFolderTrash({ storage, trashPath }) };
-}
 
 function createTestLogger(): Logger {
   const logger = {
@@ -81,7 +71,10 @@ afterEach(async () => {
 });
 
 /** A user's files in a fresh home folder on disk, the way the local folder serves them. */
-async function homeWith(files: Readonly<Record<string, string>>): Promise<StorageProvider> {
+async function homeWith(
+  files: Readonly<Record<string, string>>,
+  clock: () => Date,
+): Promise<StorageProvider> {
   const root = await realpath(await mkdtemp(join(tmpdir(), "fdrive-trash-routes-")));
   folders.push(root);
   const home = join(root, "home");
@@ -91,7 +84,22 @@ async function homeWith(files: Readonly<Record<string, string>>): Promise<Storag
     await mkdir(dirname(target), { recursive: true });
     await writeFile(target, contents);
   }
-  return createLocalStorage({ home });
+  return createLocalStorage({ home, clock });
+}
+
+/** Moves `path` to Trash as the fs routes do: storage first, then what is kept by path follows. */
+async function trashWithMetadata(
+  storage: StorageProvider,
+  metadata: MetadataService,
+  path: string,
+): Promise<void> {
+  await followIntoTrash(
+    metadata,
+    undefined,
+    ALICE_IDENTITY_ID,
+    path,
+    await storage.trash.put(path),
+  );
 }
 
 /** A `PathFollower` that records what it is told, as folders shared with people follow paths. */
@@ -114,24 +122,15 @@ interface Harness {
 async function buildHarness(
   opts: {
     username?: string;
-    withTrash?: boolean;
     identityId?: string;
     /** What follows items into Trash and out, as folders shared with people do. */
     followers?: PathFollower[];
   } = {},
 ): Promise<Harness> {
   const username = opts.username ?? "alice";
-  const withTrash = opts.withTrash ?? true;
-  const baseStorage = await homeWith(FILES[username] ?? {});
   const clock = () => new Date(CLOCK_ISO);
   const activity = activityFixture(clock);
-  // The local folder moves deleted files into Trash itself (`trash: "move"`).
-  const storage = withTrash
-    ? withRecycleFolderTrash(
-        withMoveToTrash({ storage: baseStorage, trashPath: TRASH_PATH, clock }),
-        TRASH_PATH,
-      )
-    : baseStorage;
+  const storage = await homeWith(FILES[username] ?? {}, clock);
 
   const identityId =
     opts.identityId ?? (username === "alice" ? ALICE_IDENTITY_ID : BOB_IDENTITY_ID);
@@ -184,17 +183,10 @@ interface ErrorJson {
 }
 
 describe("GET /trash", () => {
-  it("fails as an internal error on storage built without Trash, which no request has", async () => {
-    const { app } = await buildHarness({ withTrash: false });
-
-    const res = await app.request(ROUTES.trash.list);
-    expect(res.status).toBe(500);
-  });
-
   it("lists a deleted file and a deleted directory, with parsed originalPath, name, and deletedAt", async () => {
     const { app, storage } = await buildHarness();
-    await storage.deleteFile("/hello.txt");
-    await storage.deleteDir("/dir");
+    await storage.trash.put("/hello.txt");
+    await storage.trash.put("/dir");
 
     const res = await app.request(ROUTES.trash.list);
     expect(res.status).toBe(200);
@@ -214,9 +206,9 @@ describe("GET /trash", () => {
 
   it("keeps a second user's trash isolated from the first", async () => {
     const alice = await buildHarness();
-    await alice.storage.deleteFile("/hello.txt");
+    await alice.storage.trash.put("/hello.txt");
     const bob = await buildHarness({ username: "bob" });
-    await bob.storage.deleteFile("/bob.txt");
+    await bob.storage.trash.put("/bob.txt");
 
     const aliceList = TrashListResponse.parse(
       await readJson(await alice.app.request(ROUTES.trash.list)),
@@ -233,8 +225,8 @@ describe("POST /trash/restore", () => {
   it("brings what followed an item into Trash back with it, to its place or another", async () => {
     const follower = recordingFollower();
     const { app, storage } = await buildHarness({ followers: [follower] });
-    await storage.deleteDir("/dir");
-    await storage.deleteFile("/hello.txt");
+    await storage.trash.put("/dir");
+    await storage.trash.put("/hello.txt");
     const entries = TrashListResponse.parse(
       await readJson(await app.request(ROUTES.trash.list)),
     ).entries;
@@ -258,18 +250,16 @@ describe("POST /trash/restore", () => {
 
     expect(follower.onMoved.mock.calls).toEqual([
       [ALICE_IDENTITY_ID, normalizePath(`${TRASH_PATH}/${leaf("dir")}`), "/dir", true],
-      // "Restore to": tags move from the original path, what followed from the leaf.
-      [ALICE_IDENTITY_ID, "/hello.txt", "/again.txt", false],
       [ALICE_IDENTITY_ID, normalizePath(`${TRASH_PATH}/${leaf("hello.txt")}`), "/again.txt", false],
     ]);
     expect(follower.onDeleted).not.toHaveBeenCalled();
   });
 
-  it("restores to the original path without relocating its retained metadata", async () => {
+  it("brings metadata back from Trash on a restore to the original path", async () => {
     const { app, storage, metadata, events } = await buildHarness();
     await metadata.addFavorite(ALICE_IDENTITY_ID, "/hello.txt", "file");
-    await metadata.onTrashed(ALICE_IDENTITY_ID, "/hello.txt", false, null);
-    await storage.deleteFile("/hello.txt");
+    await trashWithMetadata(storage, metadata, "/hello.txt");
+    expect(await metadata.listFavorites(ALICE_IDENTITY_ID)).toEqual([]);
     const listed = TrashListResponse.parse(await readJson(await app.request(ROUTES.trash.list)));
     const id = listed.entries[0]?.id;
     if (id === undefined) throw new Error("expected a trash entry");
@@ -308,11 +298,10 @@ describe("POST /trash/restore", () => {
     expect(await storage.statFile("/hello.txt")).toMatchObject({ size: 11 });
   });
 
-  it("moves retained metadata to an explicit restore target", async () => {
+  it("brings metadata from Trash to an explicit restore target", async () => {
     const { app, storage, metadata } = await buildHarness();
     await metadata.addFavorite(ALICE_IDENTITY_ID, "/hello.txt", "file");
-    await metadata.onTrashed(ALICE_IDENTITY_ID, "/hello.txt", false, null);
-    await storage.deleteFile("/hello.txt");
+    await trashWithMetadata(storage, metadata, "/hello.txt");
     const listed = TrashListResponse.parse(await readJson(await app.request(ROUTES.trash.list)));
     const id = listed.entries[0]?.id;
     if (id === undefined) throw new Error("expected a trash entry");
@@ -334,42 +323,10 @@ describe("POST /trash/restore", () => {
     ]);
   });
 
-  it("preserves metadata and reports an unavailable original-path check", async () => {
+  it("gives a new file at the original path nothing of the trashed item's metadata", async () => {
     const { app, storage, metadata } = await buildHarness();
     await metadata.addFavorite(ALICE_IDENTITY_ID, "/hello.txt", "file");
-    await storage.deleteFile("/hello.txt");
-    const listed = TrashListResponse.parse(await readJson(await app.request(ROUTES.trash.list)));
-    const id = listed.entries[0]?.id;
-    if (id === undefined) throw new Error("expected a trash entry");
-    const stat = storage.stat.bind(storage);
-    storage.stat = async (path) => {
-      if (path === "/hello.txt")
-        throw new StorageError("upstream_unavailable", "probe unavailable");
-      return stat(path);
-    };
-    const onMoved = vi.spyOn(metadata, "onMoved");
-    const res = await app.request(
-      ROUTES.trash.restore,
-      requestedWith({
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ ids: [id], target: "/recovered.txt" }),
-      }),
-    );
-    expect(res.status).toBe(502);
-    expect(onMoved).not.toHaveBeenCalled();
-    expect((await metadata.listFavorites(ALICE_IDENTITY_ID)).map((entry) => entry.path)).toEqual([
-      "/hello.txt",
-    ]);
-    // Storage restore already succeeded; the metadata check failed safely afterward.
-    expect(await storage.statFile("/recovered.txt")).toMatchObject({ size: 11 });
-  });
-
-  it("keeps metadata on a replacement file at the original path", async () => {
-    const { app, storage, metadata } = await buildHarness();
-    await metadata.addFavorite(ALICE_IDENTITY_ID, "/hello.txt", "file");
-    await metadata.onTrashed(ALICE_IDENTITY_ID, "/hello.txt", false, null);
-    await storage.deleteFile("/hello.txt");
+    await trashWithMetadata(storage, metadata, "/hello.txt");
     const listed = TrashListResponse.parse(await readJson(await app.request(ROUTES.trash.list)));
     const id = listed.entries[0]?.id;
     if (id === undefined) throw new Error("expected a trash entry");
@@ -389,17 +346,16 @@ describe("POST /trash/restore", () => {
       [ALICE_IDENTITY_ID, normalizePath(`${TRASH_PATH}/${id}`), "/recovered.txt", false],
     ]);
     expect((await metadata.listFavorites(ALICE_IDENTITY_ID)).map((entry) => entry.path)).toEqual([
-      "/hello.txt",
+      "/recovered.txt",
     ]);
     expect(await storage.statFile("/recovered.txt")).toMatchObject({ size: 11 });
   });
 
-  it("moves a restored directory's retained metadata subtree", async () => {
+  it("brings a restored folder's metadata subtree back from Trash", async () => {
     const { app, storage, metadata } = await buildHarness();
     await metadata.addFavorite(ALICE_IDENTITY_ID, "/dir/nested.txt", "file");
     await metadata.setFolderView(ALICE_IDENTITY_ID, "/dir", { mode: "grid" });
-    await metadata.onTrashed(ALICE_IDENTITY_ID, "/dir", true, null);
-    await storage.deleteDir("/dir");
+    await trashWithMetadata(storage, metadata, "/dir");
     const listed = TrashListResponse.parse(await readJson(await app.request(ROUTES.trash.list)));
     const id = listed.entries[0]?.id;
     if (id === undefined) throw new Error("expected a trash entry");
@@ -415,7 +371,12 @@ describe("POST /trash/restore", () => {
     );
 
     expect(res.status).toBe(200);
-    expect(onMovedSpy).toHaveBeenCalledWith(ALICE_IDENTITY_ID, "/dir", "/restored-dir", true);
+    expect(onMovedSpy).toHaveBeenCalledWith(
+      ALICE_IDENTITY_ID,
+      normalizePath(`${TRASH_PATH}/${id}`),
+      "/restored-dir",
+      true,
+    );
     expect((await metadata.listFavorites(ALICE_IDENTITY_ID)).map((entry) => entry.path)).toEqual([
       "/restored-dir/nested.txt",
     ]);
@@ -427,7 +388,7 @@ describe("POST /trash/restore", () => {
 
   it("returns 409 with details.failedId when the restore target already exists, via the real core-provided trash over a folder on disk (not a mocked provider)", async () => {
     const { app, storage } = await buildHarness();
-    await storage.deleteFile("/hello.txt");
+    await storage.trash.put("/hello.txt");
     await storage.upload("/hello.txt", new TextEncoder().encode("new content"));
     const listed = TrashListResponse.parse(await readJson(await app.request(ROUTES.trash.list)));
     const id = listed.entries[0]?.id;
@@ -505,6 +466,7 @@ describe("POST /trash/restore", () => {
       setModifiedAt: () => Promise.reject(new Error("not implemented")),
       zip: () => Promise.reject(new Error("not implemented")),
       trash: {
+        put: () => Promise.reject(new Error("not implemented")),
         list: () => Promise.reject(new Error("not implemented")),
         restore: () => Promise.reject(boom),
         purge: () => Promise.reject(new Error("not implemented")),
@@ -565,6 +527,7 @@ describe("POST /trash/restore", () => {
       setModifiedAt: () => Promise.reject(new Error("not implemented")),
       zip: () => Promise.reject(new Error("not implemented")),
       trash: {
+        put: () => Promise.reject(new Error("not implemented")),
         list: () => Promise.reject(new Error("not implemented")),
         restore: () => Promise.reject(new StorageError("conflict", "already exists")),
         purge: () => Promise.reject(new Error("not implemented")),
@@ -613,7 +576,7 @@ describe("POST /trash/restore", () => {
 describe("POST /trash/purge", () => {
   it("permanently removes the given ids and publishes one delete event", async () => {
     const { app, storage, events } = await buildHarness();
-    await storage.deleteFile("/hello.txt");
+    await storage.trash.put("/hello.txt");
     const listed = TrashListResponse.parse(await readJson(await app.request(ROUTES.trash.list)));
     const id = listed.entries[0]?.id;
     if (id === undefined) throw new Error("expected a trash entry");
@@ -644,8 +607,8 @@ describe("POST /trash/purge", () => {
 
   it("leaves no empty folders in the Trash folder after a restore and a purge", async () => {
     const { app, storage } = await buildHarness();
-    await storage.deleteFile("/dir/nested.txt");
-    await storage.deleteFile("/hello.txt");
+    await storage.trash.put("/dir/nested.txt");
+    await storage.trash.put("/hello.txt");
     const [first, second] = TrashListResponse.parse(
       await readJson(await app.request(ROUTES.trash.list)),
     ).entries.map((entry) => entry.id);
@@ -684,8 +647,8 @@ describe("POST /trash/purge", () => {
     const follower = recordingFollower();
     const { app, storage, metadata } = await buildHarness({ followers: [follower] });
     await metadata.addFavorite(ALICE_IDENTITY_ID, "/dir", "dir");
-    await storage.deleteDir("/dir");
-    await storage.deleteFile("/hello.txt");
+    await storage.trash.put("/dir");
+    await storage.trash.put("/hello.txt");
     await storage.upload("/hello.txt", new TextEncoder().encode("a new file"));
     const ids = TrashListResponse.parse(
       await readJson(await app.request(ROUTES.trash.list)),
@@ -718,7 +681,7 @@ describe("POST /trash/purge", () => {
     const follower = recordingFollower();
     follower.onDeleted.mockRejectedValue(new Error("grants unavailable"));
     const { app, storage } = await buildHarness({ followers: [follower] });
-    await storage.deleteDir("/dir");
+    await storage.trash.put("/dir");
     const [id] = TrashListResponse.parse(
       await readJson(await app.request(ROUTES.trash.list)),
     ).entries.map((entry) => entry.id);
@@ -746,8 +709,8 @@ describe("POST /trash/purge", () => {
 
 describe("personal activity for trash commands", () => {
   async function trashed(h: Harness, path: string, kind: "file" | "dir" = "file") {
-    if (kind === "dir") await h.storage.deleteDir(path);
-    else await h.storage.deleteFile(path);
+    if (kind === "dir") await h.storage.trash.put(path);
+    else await h.storage.trash.put(path);
     const listed = TrashListResponse.parse(await readJson(await h.app.request(ROUTES.trash.list)));
     const entry = listed.entries.find((candidate) => candidate.originalPath === path);
     if (!entry) throw new Error(`expected ${path} in Trash`);
@@ -850,8 +813,8 @@ describe("personal activity for trash commands", () => {
 
   it("records partial emptying when a later provider purge fails", async () => {
     const h = await buildHarness();
-    await h.storage.deleteFile("/hello.txt");
-    await h.storage.deleteDir("/dir");
+    await h.storage.trash.put("/hello.txt");
+    await h.storage.trash.put("/dir");
     const trash = h.storage.trash;
     if (!trash) throw Error("Expected Trash");
     const purge = trash.purge.bind(trash);
@@ -893,8 +856,8 @@ describe("personal activity for trash commands", () => {
 describe("POST /trash/empty", () => {
   it("removes every trash entry and publishes one delete event for the trash folder", async () => {
     const { app, storage, events } = await buildHarness();
-    await storage.deleteFile("/hello.txt");
-    await storage.deleteDir("/dir");
+    await storage.trash.put("/hello.txt");
+    await storage.trash.put("/dir");
 
     const res = await app.request(ROUTES.trash.empty, requestedWith({ method: "POST" }));
 
@@ -916,8 +879,8 @@ describe("POST /trash/empty", () => {
   it("ends what followed each emptied item into Trash", async () => {
     const follower = recordingFollower();
     const { app, storage } = await buildHarness({ followers: [follower] });
-    await storage.deleteDir("/dir");
-    await storage.deleteFile("/hello.txt");
+    await storage.trash.put("/dir");
+    await storage.trash.put("/hello.txt");
     const leaves = TrashListResponse.parse(
       await readJson(await app.request(ROUTES.trash.list)),
     ).entries.map((entry) => normalizePath(`${TRASH_PATH}/${entry.id}`));
@@ -933,7 +896,7 @@ describe("POST /trash/empty", () => {
     const names = Array.from({ length: 120 }, (_, i) => `/many/file-${i}.txt`);
     for (const name of names) {
       await storage.upload(name, new TextEncoder().encode(name), { mkdirParents: true });
-      await storage.deleteFile(name);
+      await storage.trash.put(name);
     }
 
     const res = await app.request(ROUTES.trash.empty, requestedWith({ method: "POST" }));
@@ -952,7 +915,7 @@ describe("POST /trash/empty", () => {
     const { app, storage } = await buildHarness();
     await storage.mkdir(`${LAYOUT_ROOT}/file/p/old/p/gone.txt/v`, { parents: true });
     await storage.mkdir(`${LAYOUT_ROOT}/dir/p/old/v`, { parents: true });
-    await storage.deleteFile("/hello.txt");
+    await storage.trash.put("/hello.txt");
 
     const res = await app.request(ROUTES.trash.empty, requestedWith({ method: "POST" }));
 
@@ -963,7 +926,7 @@ describe("POST /trash/empty", () => {
 
 it("publishes successful restores before a later item fails", async () => {
   const { app, storage, events } = await buildHarness();
-  await storage.deleteFile("/hello.txt");
+  await storage.trash.put("/hello.txt");
   const list = TrashListResponse.parse(await readJson(await app.request(ROUTES.trash.list)));
   const id = list.entries[0]?.id;
   if (!id) throw new Error("expected trash entry");

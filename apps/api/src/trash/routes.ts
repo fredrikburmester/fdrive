@@ -12,7 +12,6 @@ import {
 import {
   isStorageError,
   parseMoveTrashLeaf,
-  type StorageProvider,
   TRASH_PATH,
   type TrashEntry,
   type TrashProvider,
@@ -55,12 +54,6 @@ export interface TrashRoutesDeps {
   readonly metadata: MetadataService;
 }
 
-/** The storage's Trash, which every user's storage has. */
-export function trashOf(storage: StorageProvider): TrashProvider {
-  if (storage.trash === undefined) throw new Error("this storage was built without Trash");
-  return storage.trash;
-}
-
 /**
  * Throws `bad_request` for an id that does not parse as a well-formed trash
  * leaf, otherwise returns it unchanged. The restore target itself (the id's
@@ -87,17 +80,6 @@ function serializeTrashEntry(entry: TrashEntry): TrashEntryContract {
   };
 }
 
-/** Path-keyed metadata belongs to a replacement entry if the original path is live again. */
-async function originalPathIsMissing(storage: StorageProvider, path: string): Promise<boolean> {
-  try {
-    await storage.stat(path);
-    return false;
-  } catch (error) {
-    if (isStorageError(error) && error.kind === "not_found") return true;
-    throw error;
-  }
-}
-
 /**
  * Deletes the leaf `id` from `principal`'s Trash for good and records it as
  * a permanent delete of the item it held. Then what followed the item into
@@ -113,7 +95,7 @@ export async function purgeTrashItem(
 ): Promise<void> {
   const leaf = trashLeafPath(TRASH_PATH, id);
   const parsed = parseMoveTrashLeaf(TRASH_PATH, leaf);
-  const trash = trashOf(principal.storage);
+  const trash = principal.storage.trash;
   await recordActivity(
     deps.activity,
     principal,
@@ -166,7 +148,7 @@ export function registerTrashRoutes(
   const { authed } = groups;
 
   authed.get(routePath(ROUTES.trash.list), async (c) => {
-    const trash = trashOf(c.get("principal").storage);
+    const trash = c.get("principal").storage.trash;
     const listing = await runStorageCall(() => trash.list());
     const body: TrashListResponse = TrashListResponse.parse({
       entries: listing.entries.map(serializeTrashEntry),
@@ -177,7 +159,7 @@ export function registerTrashRoutes(
 
   authed.post(routePath(ROUTES.trash.restore), async (c) => {
     const principal = c.get("principal");
-    const trash = trashOf(principal.storage);
+    const trash = principal.storage.trash;
     const body = await parseBody(TrashRestoreRequest, c);
     const validated = body.ids.map((id) => validateTrashId(id));
     const target = body.target === undefined ? undefined : normalizeOrThrow(body.target);
@@ -215,18 +197,7 @@ export function registerTrashRoutes(
         );
         trashPaths.push(trashVirtualPath);
         targetPaths.push(entry.path);
-        if (
-          entry.originalPath !== entry.path &&
-          (await runStorageCall(() => originalPathIsMissing(principal.storage, entry.originalPath)))
-        ) {
-          await deps.metadata.onMoved(
-            principal.identityId,
-            entry.originalPath,
-            entry.path,
-            entry.kind === "dir",
-          );
-        }
-        // A restore is a move out of Trash: shares that followed the item there come back with it.
+        // A restore is a move out of Trash: what followed the item there comes back with it.
         await deps.metadata.onMoved(
           principal.identityId,
           trashVirtualPath,
@@ -265,7 +236,7 @@ export function registerTrashRoutes(
 
   authed.post(routePath(ROUTES.trash.empty), async (c) => {
     const principal = c.get("principal");
-    const trash = trashOf(principal.storage);
+    const trash = principal.storage.trash;
     const context = activityRequestContext(c);
     const batchId = context.batchId ?? randomUUID();
     let completed = 0;

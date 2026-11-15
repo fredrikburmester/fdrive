@@ -313,8 +313,8 @@ export const activityTrashBindings = appSchema.table(
     ownerAccountId: owner(),
     eventId: uuid("event_id").notNull(),
     originalPath: text("original_virtual_path").notNull(),
-    trashLeaf: text("trash_virtual_leaf"),
-    state: text("state").$type<"bound" | "unresolved" | "restored" | "purged">().notNull(),
+    trashLeaf: text("trash_virtual_leaf").notNull(),
+    state: text("state").$type<"bound" | "restored" | "purged">().notNull(),
   },
   (t) => [
     primaryKey({ columns: [t.eventId, t.fileId] }),

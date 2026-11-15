@@ -1,5 +1,4 @@
 import { createHash } from "node:crypto";
-import { createRecycleFolderTrash, StorageError, withMoveToTrash } from "@fdrive/core";
 import { createMemoryRepos } from "@fdrive/db/testing";
 import { createMemoryStorage } from "@fdrive/testkit";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -8,6 +7,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { describe, expect, it, vi } from "vitest";
 import type { Principal } from "../auth/principal.ts";
 import { createMetadataService } from "../metadata/service.ts";
+import { followIntoTrash } from "../metadata/trash.ts";
 import type { TokenPrincipal } from "../tokens/principal.ts";
 import {
   assertMutablePath,
@@ -56,10 +56,7 @@ async function fixture(mode: "read" | "organize" | "full" = "full", paths = ["/a
     "/hidden/secret.txt": "secret",
   });
   const clock = () => new Date("2026-09-12T10:00:00Z");
-  const storage = {
-    ...withMoveToTrash({ storage: base, trashPath: "/.trash", clock }),
-    trash: createRecycleFolderTrash({ storage: base, trashPath: "/.trash" }),
-  };
+  const storage = base;
   const repos = createMemoryRepos();
   const account = await repos.accounts.create({ displayName: "Alice" });
   const provider = await repos.providers.ensure({
@@ -94,15 +91,25 @@ async function fixture(mode: "read" | "organize" | "full" = "full", paths = ["/a
     clock,
     metadata,
     onMutation: vi.fn(async (_p, change) => {
-      if (change.kind === "move" || (change.kind === "restore" && change.moveMetadata))
+      if (change.kind === "move")
         await metadata.onMoved(
           identity.id,
           change.path,
           change.target ?? change.path,
           change.isDir,
         );
-      if (change.kind === "trash")
-        await metadata.onTrashed(identity.id, change.path, change.isDir, change.trashLeaf ?? null);
+      if (change.kind === "restore" && change.eventPath !== undefined)
+        await metadata.onMoved(
+          identity.id,
+          change.eventPath,
+          change.target ?? change.path,
+          change.isDir,
+        );
+      if (change.kind === "trash" && change.trashLeaf !== undefined)
+        await followIntoTrash(metadata, undefined, identity.id, change.path, {
+          leaf: change.trashLeaf,
+          kind: change.isDir ? "dir" : "file",
+        });
     }),
   };
   return { base, principal, deps, repos };
@@ -346,10 +353,10 @@ it("creates/uploads exact bytes, checks stale edits, and preserves occupied targ
 });
 
 it("restores only authorized Trash entries and preserves tags/favorites through move and alternate restore", async () => {
-  const { principal, deps, base } = await fixture();
+  const { principal, deps } = await fixture();
   await fileTags(deps, principal, "/allowed/a.txt", ["Work", "Work"]);
   await setFavorite(deps, principal, { path: "/allowed/a.txt", favorite: true });
-  await principal.storage.deleteFile("/hidden/secret.txt");
+  await principal.storage.trash.put("/hidden/secret.txt");
   await trashPath(deps, principal, "/allowed/a.txt");
   const listing = await listTrash(principal, {});
   expect(listing.entries).toHaveLength(1);
@@ -369,10 +376,6 @@ it("restores only authorized Trash entries and preserves tags/favorites through 
   await setFavorite(deps, principal, { path: "/allowed/restored.txt", favorite: false });
   expect(await fileTags(deps, principal, "/allowed/restored.txt", [])).toMatchObject({ tags: [] });
   await expect(restorePath(deps, principal, { id })).rejects.toMatchObject({ kind: "not_found" });
-  await expect(
-    trashPath(deps, { ...principal, storage: base }, "/allowed/restored.txt"),
-  ).rejects.toThrow("no file was deleted");
-  expect(await base.stat("/allowed/restored.txt")).toMatchObject({ kind: "file" });
   await trashPath(deps, principal, "/allowed/version.1");
   const folder = (await listTrash(principal, { offset: 0, limit: 1 })).entries[0];
   expect(await restorePath(deps, principal, { id: folder?.id ?? "missing" })).toMatchObject({
@@ -384,9 +387,8 @@ it("restores a Trash item from its id without listing Trash", async () => {
   const { principal, deps, base } = await fixture();
   await trashPath(deps, principal, "/allowed/a.txt");
   const [entry] = (await listTrash(principal, {})).entries;
-  const trash = principal.storage.trash;
-  if (entry === undefined || trash === undefined) throw new Error("expected a Trash item");
-  const list = vi.spyOn(trash, "list");
+  if (entry === undefined) throw new Error("expected a Trash item");
+  const list = vi.spyOn(principal.storage.trash, "list");
 
   expect(await restorePath(deps, principal, { id: entry.id })).toMatchObject({
     restored: "/allowed/a.txt",
@@ -603,11 +605,6 @@ it("handles cancellation, unavailable metadata and post-restore failures without
   expect(deps.onMutation).not.toHaveBeenCalled();
   await trashPath(deps, principal, "/allowed/a.txt");
   const id = (await listTrash(principal, {})).entries[0]?.id ?? "missing";
-  const stat = principal.storage.stat;
-  principal.storage.stat = async (path) => {
-    if (path === "/allowed/a.txt") throw new StorageError("upstream_unavailable", "probe failed");
-    return stat(path);
-  };
   const restored = await restorePath(
     {
       ...deps,
@@ -618,7 +615,7 @@ it("handles cancellation, unavailable metadata and post-restore failures without
     principal,
     { id, target: "/allowed/recovered.txt" },
   );
-  expect(restored.warnings).toHaveLength(2);
+  expect(restored.warnings).toHaveLength(1);
   expect(await base.stat("/allowed/recovered.txt")).toMatchObject({ kind: "file" });
 });
 

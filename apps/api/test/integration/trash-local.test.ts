@@ -253,7 +253,7 @@ describe("trash against real PostgreSQL and a local folder", () => {
     expect(carolTrashAfterAliceEmpty.entries.map((entry) => entry.name)).toEqual(["carol-own.txt"]);
   }, 180000);
 
-  it("preserves and relocates retained metadata without taking it from replacement files", async () => {
+  it("takes metadata into Trash with the item and back on a restore, leaving nothing for a new file at its path", async () => {
     const { cookie } = await login("alice");
     await upload(cookie, "/metadata-restore.txt", "original");
     expect(
@@ -285,6 +285,7 @@ describe("trash against real PostgreSQL and a local folder", () => {
     };
 
     await deleteItem(cookie, "/metadata-restore.txt", "file");
+    expect(await favoritePaths()).toEqual([]);
     await restore("/metadata-restore.txt");
     expect(await favoritePaths()).toEqual(["/metadata-restore.txt"]);
 
@@ -292,9 +293,11 @@ describe("trash against real PostgreSQL and a local folder", () => {
     await restore("/metadata-restore.txt", "/metadata-recovered.txt");
     expect(await favoritePaths()).toEqual(["/metadata-recovered.txt"]);
 
+    // A new file at the old path is not the favorite; the trashed one still is.
     await deleteItem(cookie, "/metadata-recovered.txt", "file");
     await upload(cookie, "/metadata-recovered.txt", "replacement");
+    expect(await favoritePaths()).toEqual([]);
     await restore("/metadata-recovered.txt", "/metadata-archive.txt");
-    expect(await favoritePaths()).toEqual(["/metadata-recovered.txt"]);
+    expect(await favoritePaths()).toEqual(["/metadata-archive.txt"]);
   }, 180000);
 });

@@ -1,5 +1,5 @@
 {
-  "id": "b5288879-818b-4eb5-b9b6-39fc08820cef",
+  "id": "59e58642-7bd6-48a2-9000-9c4a8ba29b49",
   "prevId": "95478e4a-0ec4-4e4e-8de4-8154ea0fe0b9",
   "version": "7",
   "dialect": "postgresql",
@@ -1543,12 +1543,6 @@
           "primaryKey": false,
           "notNull": true,
           "default": false
-        },
-        "storage_limit": {
-          "name": "storage_limit",
-          "type": "bigint",
-          "primaryKey": false,
-          "notNull": false
         },
         "created_at": {
           "name": "created_at",
@@ -5977,7 +5971,7 @@
           "name": "trash_virtual_leaf",
           "type": "text",
           "primaryKey": false,
-          "notNull": false
+          "notNull": true
         },
         "state": {
           "name": "state",

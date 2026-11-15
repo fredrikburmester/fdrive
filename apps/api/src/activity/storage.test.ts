@@ -1,12 +1,11 @@
 import { randomUUID } from "node:crypto";
-import { createRecycleFolderTrash, moveTrashLeafPath, withMoveToTrash } from "@fdrive/core";
+import { moveTrashLeafPath } from "@fdrive/core";
 import { createMemoryStorage } from "@fdrive/core/testing";
 import { describe, expect, it, vi } from "vitest";
 import type { Principal } from "../auth/principal.js";
 import type { ActivityRunInput, PersonalActivityService } from "./service.js";
 import { activityStorage } from "./storage.js";
 import { activityStream } from "./streams.js";
-import { captureRecycleReceipt } from "./trash.js";
 
 function fixture() {
   const inputs: ActivityRunInput[] = [];
@@ -31,44 +30,35 @@ function fixture() {
     identityId: randomUUID(),
     username: "alice",
     isAdmin: false,
-    storage: createMemoryStorage(),
+    storage: createMemoryStorage({}, { clock: () => new Date("2026-09-14") }),
   };
   return { activity, inputs, finish, principal };
 }
 
 describe("explicit command storage adapters", () => {
-  it("records directory recycle and restore at their actual provider boundaries", async () => {
+  it("records a trash and a restore at their actual provider boundaries", async () => {
     const { principal, activity, inputs, finish } = fixture();
-    const moved = withMoveToTrash({
-      storage: principal.storage,
-      trashPath: "/.trash",
-      clock: () => new Date("2026-09-14"),
-      onRecycled: captureRecycleReceipt,
-    });
-    const provider = {
-      ...moved,
-      trash: createRecycleFolderTrash({ storage: moved, trashPath: "/.trash" }),
-    };
-    const storage = activityStorage({ ...principal, storage: provider }, activity, () => ({
-      source: "mcp",
-    }));
+    const storage = activityStorage(principal, activity, () => ({ source: "mcp" }));
     await storage.mkdir("/folder");
     await storage.upload("/folder/a", new Uint8Array([1]));
-    await storage.deleteDir("/folder");
+    expect(await storage.trash.put("/folder")).toEqual({
+      leaf: moveTrashLeafPath("/.trash", "/folder", "dir", "1789344000000000000"),
+      kind: "dir",
+    });
     expect(inputs.at(-1)?.action).toBe("file.trash");
     expect(finish).toHaveBeenLastCalledWith(
       "file.trash",
       expect.objectContaining({ kind: "dir", trashLeaf: expect.stringContaining("/.trash/") }),
     );
-    const listing = await storage.trash?.list();
-    const item = listing?.entries[0];
+    const listing = await storage.trash.list();
+    const item = listing.entries[0];
     expect(item).toBeDefined();
-    await storage.trash?.restore(item?.id ?? "", { target: "/restored" });
+    await storage.trash.restore(item?.id ?? "", { target: "/restored" });
     expect(inputs.at(-1)?.requested).toMatchObject({ path: "/folder", targetPath: "/restored" });
     expect(finish).toHaveBeenLastCalledWith("file.restore", { path: "/restored", kind: "dir" });
-    await storage.deleteFile("/restored/a");
-    const next = (await storage.trash?.list())?.entries[0];
-    await storage.trash?.restore(next?.id ?? "");
+    await storage.trash.put("/restored/a");
+    const next = (await storage.trash.list()).entries[0];
+    await storage.trash.restore(next?.id ?? "");
     expect(finish).toHaveBeenLastCalledWith("file.restore", { path: "/restored/a", kind: "file" });
   });
   it("retains acknowledged uploads when a subsequent stat is unavailable", async () => {
@@ -119,32 +109,29 @@ describe("explicit command storage adapters", () => {
     });
     await storage.deleteFile("/folder/c.txt");
     await storage.deleteDir("/folder");
-    expect(inputs.slice(-2).map((i) => i.action)).toEqual(["file.trash", "file.trash"]);
+    // Deleting is for good: Trash is `trash.put`.
+    expect(inputs.slice(-2).map((i) => i.action)).toEqual(["file.delete", "file.delete"]);
     expect(finish).toHaveBeenCalledWith(
       "file.upload",
       expect.objectContaining({ path: "/folder/a.txt", size: 2 }),
     );
   });
-  it("records the exact leaf the move to Trash reported", async () => {
+  it("records the exact leaf the move to Trash reported, one move per path at a time", async () => {
     const { principal, activity, inputs, finish } = fixture();
-    const moved = withMoveToTrash({
-      storage: principal.storage,
-      trashPath: "/.trash",
-      clock: () => new Date("2026-09-14"),
-      onRecycled: captureRecycleReceipt,
-    });
-    const storage = activityStorage({ ...principal, storage: moved }, activity, () => ({
-      source: "mcp",
-    }));
+    const storage = activityStorage(principal, activity, () => ({ source: "mcp" }));
     await storage.upload("/a.txt", new Uint8Array([1]));
-    await storage.deleteFile("/a.txt");
+    await storage.trash.put("/a.txt");
     expect(inputs.at(-1)?.action).toBe("file.trash");
     expect(finish).toHaveBeenLastCalledWith("file.trash", {
       path: "/a.txt",
       kind: "file",
       trashLeaf: moveTrashLeafPath("/.trash", "/a.txt", "file", "1789344000000000000"),
     });
-    captureRecycleReceipt("/not-active", "/never-used");
+    expect(activity.repo.withPathLock).toHaveBeenCalledWith(
+      principal.identityId,
+      "/a.txt",
+      expect.any(Function),
+    );
   });
 });
 

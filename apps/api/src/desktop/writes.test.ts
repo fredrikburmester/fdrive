@@ -74,16 +74,12 @@ async function fixture() {
     async (identityId: string, from: string, to: string, directory: boolean) =>
       ({ directory, shares: { identityId, from, to }, grants: null }) as DesktopAccessMove,
   );
-  const metadata = {
-    onMoved: vi.fn(async () => {}),
-    onTrashed: vi.fn(async () => {}),
-  };
+  const metadata = { onMoved: vi.fn(async () => {}) };
   const bus = createEventBus();
   const events: BusEvent[] = [];
   bus.subscribe({ identityId: principal.identityId }, (event) => events.push(event));
   const deps = {
     repo: memory.repo,
-    // Memory storage has no Trash to keep out of.
     storageForIdentity: async () => raw,
     clock: () => new Date(),
     access,
@@ -569,11 +565,11 @@ it("finishes a trash move and a restore a crash interrupted, from where the item
     from: "/old.txt",
     to: `${trashRoot}/${original.id}`,
   });
-  expect(f.metadata.onTrashed).toHaveBeenLastCalledWith(
+  expect(f.metadata.onMoved).toHaveBeenLastCalledWith(
     identityId,
     "/old.txt",
-    false,
     `${trashRoot}/${original.id}`,
+    false,
   );
   // A restore: the request carries the recovery name.
   const restore = {
@@ -604,6 +600,12 @@ it("finishes a trash move and a restore a crash interrupted, from where the item
     to: "/old.txt",
   });
   expect(f.completed.get(restore.operationId)).toMatchObject({ restored: true });
+  expect(f.metadata.onMoved).toHaveBeenLastCalledWith(
+    identityId,
+    `${trashRoot}/${original.id}`,
+    "/old.txt",
+    false,
+  );
 });
 
 it("never overwrites a file someone replaced between commit attempts", async () => {
@@ -1642,7 +1644,6 @@ it("moves metadata with a Mac move and tells the web once", async () => {
   expect(f.metadata.onMoved.mock.calls).toEqual([
     [f.principal.identityId, "/old.txt", "/folder/moved.txt", false],
   ]);
-  expect(f.metadata.onTrashed).not.toHaveBeenCalled();
   expect(f.events).toMatchObject([
     { op: "move", paths: ["/old.txt"], targetPaths: ["/folder/moved.txt"] },
   ]);
@@ -1653,7 +1654,7 @@ it("moves metadata with a Mac move and tells the web once", async () => {
   expect(f.events).toHaveLength(1);
 });
 
-it("keeps the Mac's Trash as it was: the handle survives, and a restore brings metadata back", async () => {
+it("keeps an item's handle in the Mac's Trash, and what is kept by path follows it in and back out", async () => {
   const f = await fixture();
   const { identityId } = f.principal;
   const trashRoot = `/.fdrive-desktop/${identityId}/trash`;
@@ -1673,22 +1674,26 @@ it("keeps the Mac's Trash as it was: the handle survives, and a restore brings m
   const file = await f.service.stat(f.principal, "/old.txt");
   const trashed = await move(file, "trash");
   expect(trashed).toMatchObject({ id: file.id, parentId: "trash", trashed: true });
-  // What grants access follows the item into the Mac's Trash; recents go; its handle is kept.
+  // What grants access follows the item into the Mac's Trash, the rest after it; its handle is kept.
   expect(links()).toEqual({ identityId, from: "/old.txt", to: `${trashRoot}/${file.id}` });
-  expect(f.metadata.onTrashed.mock.calls).toEqual([
-    [identityId, "/old.txt", false, `${trashRoot}/${file.id}`],
+  expect(f.metadata.onMoved.mock.calls).toEqual([
+    [identityId, "/old.txt", `${trashRoot}/${file.id}`, false],
   ]);
   expect(required(await f.repo.item(identityId, file.id))).toMatchObject({
     path: `${trashRoot}/${file.id}`,
     originalPath: "/old.txt",
   });
   expect(f.events.at(-1)).toMatchObject({ op: "delete", paths: ["/old.txt"] });
-  // Put back under its own name: what followed it comes back with it, and
-  // tags never left.
+  // Put back under its own name: what followed it comes back with it.
   const back = await move(trashed, "root");
   expect(back).toMatchObject({ id: file.id, path: "/old.txt", trashed: false });
   expect(links()).toEqual({ identityId, from: `${trashRoot}/${file.id}`, to: "/old.txt" });
-  expect(f.metadata.onMoved).not.toHaveBeenCalled();
+  expect(f.metadata.onMoved).toHaveBeenLastCalledWith(
+    identityId,
+    `${trashRoot}/${file.id}`,
+    "/old.txt",
+    false,
+  );
   expect(f.events.at(-1)).toMatchObject({ op: "create", paths: ["/old.txt"] });
   expect([...f.completed.values()].at(-1)).toMatchObject({
     from: "/old.txt",
@@ -1696,11 +1701,16 @@ it("keeps the Mac's Trash as it was: the handle survives, and a restore brings m
     restored: true,
     trash: false,
   });
-  // Put back under a new name: metadata left at the free original path follows too.
+  // Put back under a new name: it all follows there.
   const again = await move(await f.service.stat(f.principal, "/old.txt"), "trash");
   await move(again, "root", "renamed.txt");
   expect(links()).toEqual({ identityId, from: `${trashRoot}/${file.id}`, to: "/renamed.txt" });
-  expect(f.metadata.onMoved.mock.calls).toEqual([[identityId, "/old.txt", "/renamed.txt", false]]);
+  expect(f.metadata.onMoved).toHaveBeenLastCalledWith(
+    identityId,
+    `${trashRoot}/${file.id}`,
+    "/renamed.txt",
+    false,
+  );
   expect(f.events.at(-1)).toMatchObject({
     op: "move",
     paths: ["/old.txt"],
@@ -1737,16 +1747,16 @@ it("restores into a folder that took the item's place without taking that folder
   expect(restored.item).toMatchObject({ path: "/folder/nested", trashed: false });
   expect(await f.read("/folder/nested/child")).toBe("child");
   // `/folder` is someone else now, so only what followed the item into Trash comes back.
+  const binned = `/.fdrive-desktop/${identityId}/trash/${source.id}`;
   expect(f.moved.get(restoreId)).toEqual({
     directory: true,
-    shares: {
-      identityId,
-      from: `/.fdrive-desktop/${identityId}/trash/${source.id}`,
-      to: "/folder/nested",
-    },
+    shares: { identityId, from: binned, to: "/folder/nested" },
     grants: null,
   });
-  expect(f.metadata.onMoved).not.toHaveBeenCalled();
+  expect(f.metadata.onMoved.mock.calls).toEqual([
+    [identityId, "/folder", binned, true],
+    [identityId, binned, "/folder/nested", true],
+  ]);
 });
 
 it("never reports success when the receipt cannot be kept, and the app's retry keeps it", async () => {
