@@ -105,6 +105,14 @@ async function seedSearchIndex(databaseUrl: string): Promise<void> {
       }
     }
 
+    // `photos.spec.ts`: alice's photo with the EXIF details the indexer records.
+    await client.query(
+      `update idx.files set taken_at = '2024-05-01 14:03:09', camera = 'Apple iPhone 15 Pro',
+         width = 4032, height = 3024, latitude = 59.3293, longitude = 18.0686
+       where root_id = $1 and path = 'alice/photo.jpg'`,
+      [rootId],
+    );
+
     if (readmeFileId !== undefined && readmeText !== undefined) {
       await client.query(`delete from idx.chunks where file_id = $1`, [readmeFileId]);
       await client.query(`insert into idx.chunks (file_id, idx, text) values ($1, 0, $2)`, [

@@ -160,6 +160,11 @@ test.describe("trash available", () => {
 
     await moveToTrash(page, fileName);
     await expect(listing(page).getByText(fileName, { exact: true })).toBeHidden();
+    // The toast's Undo restores it at once; then it goes to Trash again.
+    await page.locator("[data-sonner-toast]").getByRole("button", { name: "Undo" }).click();
+    await expect(listing(page).getByText(fileName, { exact: true })).toBeVisible();
+    await moveToTrash(page, fileName);
+    await expect(listing(page).getByText(fileName, { exact: true })).toBeHidden();
     // fdrive moved it into the home's own Trash folder, which the listing hides.
     await expect(listing(page).getByText(".trash", { exact: true })).toHaveCount(0);
     const home = join(environment?.storageRoot ?? "", "alice");

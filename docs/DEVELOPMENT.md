@@ -13,6 +13,8 @@ The API reaches the files folder through an internal [storage port](STORAGE.md).
 - **Node.js**: Node 24 (pinned in `.node-version` / `.nvmrc`)
 - **Package manager**: `pnpm` (version 10+)
 - **Docker**: Docker Desktop or Docker Engine running
+- **ffmpeg** on the API's `PATH` (`brew install ffmpeg`): the preview plays videos browsers
+  cannot (MKV, AVI and the like) by transcoding them as they stream; the API image ships it
 
 ---
 

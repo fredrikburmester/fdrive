@@ -1498,4 +1498,59 @@ describe("index-queries", () => {
       expect(stats.model).toBe("model-a");
     });
   });
+
+  describe("photos", () => {
+    /** `mtime_ns` at an ISO instant. */
+    const at = (iso: string) => BigInt(Date.parse(iso)) * 1_000_000n;
+
+    it("sorts by when a photo was taken, else when it was modified, newest first, a page at a time", async () => {
+      const rootId = await insertRoot("files");
+      const taken = await insertFile(rootId, "alice/taken.jpg", {
+        mtimeNs: at("2020-01-01T00:00:00Z"),
+      });
+      await db.execute(
+        sql`update idx.files set taken_at = '2024-05-01 14:03:09', camera = 'Apple iPhone 15 Pro', width = 3024, height = 4032, latitude = 59.5, longitude = -18.25 where id = ${taken.id}`,
+      );
+      await insertFile(rootId, "alice/newer.png", { mtimeNs: at("2024-06-01T00:00:00.123Z") });
+      await insertFile(rootId, "alice/older.heic", { mtimeNs: at("2023-01-01T00:00:00Z") });
+      await insertFile(rootId, "alice/notes.txt", { mtimeNs: at("2025-01-01T00:00:00Z") });
+      await insertFile(rootId, "alice/gone.jpg", { deletedAt: new Date() });
+      await insertFile(rootId, "alice/.Trash/old.jpg");
+      await insertFile(rootId, "bob/theirs.jpg");
+      const scope = [{ rootId, fsPrefix: "/alice" }];
+      const exts = [".jpg", ".png", ".heic"];
+      const options = { exclude: { prefixes: [{ rootId, fsPrefix: "/alice/.Trash" }], names: [] } };
+
+      const first = await queries.photos(scope, exts, 2, options);
+      expect(first.map((row) => [row.path, row.takenAt, row.at])).toEqual([
+        ["alice/newer.png", null, "2024-06-01T00:00:00.123000"],
+        ["alice/taken.jpg", "2024-05-01T14:03:09", "2024-05-01T14:03:09.000000"],
+      ]);
+      const last = first.at(-1);
+      if (last === undefined) throw new Error("expected a row");
+      const rest = await queries.photos(scope, exts, 2, {
+        ...options,
+        after: { at: last.at, id: last.id },
+      });
+      expect(rest.map((row) => row.path)).toEqual(["alice/older.heic"]);
+
+      expect(await queries.photoDetails(rootId, "alice/taken.jpg")).toEqual({
+        takenAt: "2024-05-01T14:03:09",
+        camera: "Apple iPhone 15 Pro",
+        width: 3024,
+        height: 4032,
+        latitude: 59.5,
+        longitude: -18.25,
+      });
+      expect(await queries.photoDetails(rootId, "alice/newer.png")).toEqual({
+        takenAt: null,
+        camera: null,
+        width: null,
+        height: null,
+        latitude: null,
+        longitude: null,
+      });
+      expect(await queries.photoDetails(rootId, "alice/gone.jpg")).toBeNull();
+    });
+  });
 });

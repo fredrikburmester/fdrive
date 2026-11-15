@@ -13,6 +13,7 @@ use serde_json::Value;
 
 use crate::chunking::PDF_EXTS;
 use crate::events::{Event, to_json};
+use crate::photo::Photo;
 use crate::settings::RawSettings;
 
 pub const SWEEP_BATCH: usize = 5_000;
@@ -271,6 +272,25 @@ pub fn set_stamp(
             &mtime_ns,
         ],
     )? == 1)
+}
+
+/// Store a photo's details on its row.
+pub fn set_photo(c: &mut Client, file_id: i64, photo: &Photo) -> Result<()> {
+    c.execute(
+        r#"UPDATE "idx"."files" SET taken_at = $2, camera = $3, width = $4, height = $5,
+             latitude = $6, longitude = $7
+           WHERE id = $1::bigint"#,
+        &[
+            &file_id,
+            &photo.taken_at,
+            &photo.camera,
+            &photo.width,
+            &photo.height,
+            &photo.latitude,
+            &photo.longitude,
+        ],
+    )?;
+    Ok(())
 }
 
 pub fn insert_chunks(c: &mut Client, file_id: i64, pieces: &[String], vectors: &[Option<Vec<f32>>]) -> Result<()> {

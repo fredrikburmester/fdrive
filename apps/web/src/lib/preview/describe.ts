@@ -1,4 +1,4 @@
-import type { FsEntry } from "@fdrive/contracts";
+import type { FsEntry, PhotoDetailsResponse } from "@fdrive/contracts";
 import { parentPath } from "@fdrive/core";
 import { type ClockFormat, type FormatBytesOptions, formatBytes, type SizeUnits } from "../format";
 import { previewKindFor } from "./kind";
@@ -134,6 +134,43 @@ function folderSizeRows(
   };
 }
 
+/** The timestamp style the inspector's "Modified" and "Taken" rows share. */
+function absoluteTime(date: Date, opts: Pick<DescribeEntryOptions, "locale" | "clock">): string {
+  return date.toLocaleString(opts.locale, {
+    dateStyle: "medium",
+    timeStyle: "short",
+    ...(opts.clock === undefined ? {} : { hour12: opts.clock === "12h" }),
+  });
+}
+
+/**
+ * The inspector's rows for an image's EXIF details: Taken, Camera, Dimensions and
+ * Coordinates, each only when the photo has it. `takenAt` is the camera's wall-clock time,
+ * which `Date` reads as local time, so it shows as the camera recorded it.
+ */
+export function describePhoto(
+  photo: PhotoDetailsResponse,
+  opts: Pick<DescribeEntryOptions, "locale" | "clock"> = {},
+): DescribeRow[] {
+  const rows: DescribeRow[] = [];
+  if (photo.takenAt !== null) {
+    rows.push({ label: "Taken", value: absoluteTime(new Date(photo.takenAt), opts) });
+  }
+  if (photo.camera !== null) {
+    rows.push({ label: "Camera", value: photo.camera });
+  }
+  if (photo.width !== null && photo.height !== null) {
+    rows.push({ label: "Dimensions", value: `${photo.width} × ${photo.height}` });
+  }
+  if (photo.latitude !== null && photo.longitude !== null) {
+    rows.push({
+      label: "Coordinates",
+      value: `${photo.latitude.toFixed(5)}, ${photo.longitude.toFixed(5)}`,
+    });
+  }
+  return rows;
+}
+
 /**
  * Builds the inspector's description rows for a single entry: Kind, Size,
  * Modified (an absolute timestamp plus a relative one), Location (the
@@ -144,11 +181,7 @@ function folderSizeRows(
  */
 export function describeEntry(entry: FsEntry, opts: DescribeEntryOptions): DescribeEntryResult {
   const modifiedDate = new Date(entry.modifiedAt);
-  const absolute = modifiedDate.toLocaleString(opts.locale, {
-    dateStyle: "medium",
-    timeStyle: "short",
-    ...(opts.clock === undefined ? {} : { hour12: opts.clock === "12h" }),
-  });
+  const absolute = absoluteTime(modifiedDate, opts);
   const relative = relativeTimeFrom(modifiedDate, opts.now, opts.locale);
 
   let sizeValue = formatBytes(entry.size, bytesOpts(opts));

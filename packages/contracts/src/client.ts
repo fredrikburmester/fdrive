@@ -69,6 +69,7 @@ import {
   OfficeStatusResponse,
   SystemOfficeResponse,
 } from "./office.ts";
+import { PhotoDetailsResponse, PhotosResponse } from "./photos.ts";
 import {
   type ProcessingFailuresQuery,
   ProcessingFailuresResponse,
@@ -294,6 +295,10 @@ export interface ApiClient {
   remove(items: DeleteRequest["items"]): Promise<OkResponse>;
   zip(paths: string[], name?: string): Promise<Response>;
   downloadUrl(path: string, opts?: { inline?: boolean }): string;
+  /** The video at `path` as H.264/AAC fragmented MP4, transcoded as it plays. */
+  transcodeUrl(path: string): string;
+  /** The `.srt` or `.vtt` file at `path` as WebVTT, for a `<track>`. */
+  subtitlesUrl(path: string): string;
   upload(path: string, body: UploadBody, opts?: ApiClientUploadOptions): Promise<FsEntry>;
   duplicate(path: string): Promise<FsEntry>;
   compress(req: CompressRequest): Promise<JobAccepted>;
@@ -310,6 +315,10 @@ export interface ApiClient {
   searchStatus(): Promise<SearchStatusResponse>;
   searchImages(query: string, opts?: ApiClientImageSearchOptions): Promise<ImageSearchResponse>;
   thumbUrl(path: string, size: ThumbSize): string;
+  /** One page of every image the caller can read, newest first; `cursor` continues a page. */
+  photos(cursor?: string): Promise<PhotosResponse>;
+  /** One image's EXIF details. */
+  photoDetails(path: string): Promise<PhotoDetailsResponse>;
   setupStatus(): Promise<SetupStatusResponse>;
   setupComplete(setupToken: string, req: SetupCompleteRequest): Promise<MeResponse>;
   adminUsers(): Promise<AdminUsersResponse>;
@@ -689,6 +698,14 @@ export function createApiClient(options: ApiClientOptions = {}): ApiClient {
       });
     },
 
+    transcodeUrl(path: string): string {
+      return buildRequestUrl(ctx.baseUrl, ROUTES.fs.transcode, { path });
+    },
+
+    subtitlesUrl(path: string): string {
+      return buildRequestUrl(ctx.baseUrl, ROUTES.fs.subtitles, { path });
+    },
+
     upload(path: string, body: UploadBody, opts?: ApiClientUploadOptions): Promise<FsEntry> {
       const extraHeaders: Record<string, string> = {};
       if (opts?.modifiedAt !== undefined) {
@@ -779,6 +796,14 @@ export function createApiClient(options: ApiClientOptions = {}): ApiClient {
 
     thumbUrl(path: string, size: ThumbSize): string {
       return buildRequestUrl(ctx.baseUrl, ROUTES.thumb, { path, size: String(size) });
+    },
+
+    photos(cursor?: string): Promise<PhotosResponse> {
+      return get(ROUTES.photos.list, PhotosResponse, { query: { cursor } });
+    },
+
+    photoDetails(path: string): Promise<PhotoDetailsResponse> {
+      return get(ROUTES.photos.details, PhotoDetailsResponse, { query: { path } });
     },
 
     setupStatus(): Promise<SetupStatusResponse> {
