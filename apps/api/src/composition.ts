@@ -20,7 +20,7 @@ import {
   type DesktopAccessMove,
   migrate,
 } from "@fdrive/db";
-import { SHARED_WITH_ME } from "@fdrive/local";
+import { removeStaleParts, SHARED_WITH_ME } from "@fdrive/local";
 import type { Logger } from "pino";
 import { createActivityAdmission } from "./activity/admission.ts";
 import { registerActivityExports } from "./activity/exports.ts";
@@ -198,7 +198,14 @@ export async function composeApp(
       error: (message) => logger.error(message),
     },
   );
-  await guard.verify();
+  const filesVerdict = await guard.verify();
+  // Uploads nobody finished within a day are not coming back for their parts.
+  if (filesVerdict.ok) {
+    void removeStaleParts(
+      config.fdriveStorageRoot,
+      new Date(clock().getTime() - 24 * 60 * 60_000),
+    ).catch((error: unknown) => logger.warn({ err: error }, "unfinished upload parts not removed"));
+  }
   /** The files folder's row in `app.providers`: Trash settings, Office and the Mac name it. */
   const storageId = await ensureStorageRow(repos);
   /**

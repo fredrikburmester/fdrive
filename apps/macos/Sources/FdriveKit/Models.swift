@@ -2,6 +2,9 @@ import Foundation
 
 public enum DriveError: Error, LocalizedError, Sendable, Equatable {
     case invalidServer, authentication, unavailable, missing, expiredSnapshot, changedContent, unsupported, cancelled
+    /// The server no longer holds this credential (revoked, or deleted with its login): a
+    /// 401 carrying `credential_gone`. A plain 401 is `authentication`.
+    case credentialGone
     case server(String), database(String)
     case writeConflict(String), writeUncertain, permission, quota, forbidden, diskFull
     case nameCollision(String)
@@ -10,6 +13,7 @@ public enum DriveError: Error, LocalizedError, Sendable, Equatable {
         switch self {
         case .invalidServer: "Enter an HTTPS fdrive address. HTTP is supported only on loopback for development."
         case .authentication: "Sign in again to reconnect this location."
+        case .credentialGone: "The server no longer has this connection. Connect again to use this location."
         case .unavailable: "The server is unavailable. Downloaded files may still be available offline."
         case .missing: "This item no longer exists."
         case .expiredSnapshot: "The folder changed or its listing expired. Refresh to try again."
@@ -191,9 +195,15 @@ public struct SavedLocation: Codable, Sendable, Identifiable, Equatable {
     public let server: URL
     public var location: Location
     public let expiresAt: String?
+    /// Removal has started. Nothing uses the credential any more, and every launch and refresh
+    /// finishes the removal until it succeeds.
     public var disconnecting: Bool
-    public init(id: String = UUID().uuidString, server: URL, location: Location, expiresAt: String? = nil, disconnecting: Bool = false) {
-        self.id = id; self.server = server; self.location = location; self.expiresAt = expiresAt; self.disconnecting = disconnecting
+    /// When the server first said this credential is gone. Absent from older configurations.
+    public var goneSince: Date? = nil
+    public init(id: String = UUID().uuidString, server: URL, location: Location, expiresAt: String? = nil,
+                disconnecting: Bool = false, goneSince: Date? = nil) {
+        self.id = id; self.server = server; self.location = location; self.expiresAt = expiresAt
+        self.disconnecting = disconnecting; self.goneSince = goneSince
     }
     public var title: String { "\(location.displayName) (\(location.username))" }
 

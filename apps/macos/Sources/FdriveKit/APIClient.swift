@@ -82,6 +82,10 @@ public struct APIClient: Sendable {
         }
         switch response.statusCode {
         case 200..<300: return
+        // Only this code says the server no longer holds the credential; any other 401
+        // (expired, or a server too old to say) leaves it to the person to reconnect.
+        case 401 where (error?["details"] as? [String: Any])?["code"] as? String == "credential_gone":
+            throw DriveError.credentialGone
         case 401: throw DriveError.authentication
         // A denied path is not an expired login; reconnecting cannot repair it.
         case 403: throw writing ? DriveError.permission : DriveError.forbidden
@@ -208,7 +212,7 @@ public struct APIClient: Sendable {
     /// 404 from a host that no longer serves fdrive at all — and the caller says so.
     public func revokeAccess() async -> Bool {
         do { try await disconnect(); return true }
-        catch DriveError.authentication { return true }
+        catch DriveError.authentication, DriveError.credentialGone { return true }
         catch { return false }
     }
     public func prepareWrite(_ operation: WriteRequest, route: String) async throws -> WriteResult {
