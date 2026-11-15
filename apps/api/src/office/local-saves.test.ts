@@ -49,7 +49,7 @@ describe("Office saves on a real files folder", () => {
   async function disk() {
     return {
       names: (await readdir(home)).sort(),
-      text: await new Response((await h.storage.download("/a.docx")).body).text(),
+      text: await new Response((await h.storage.open("/a.docx")).stream()).text(),
     };
   }
   function chunks(...parts: string[]): ReadableStream<Uint8Array> {
@@ -78,7 +78,7 @@ describe("Office saves on a real files folder", () => {
       ((await (await h.callback(opened)).json()) as { Version: string }).Version;
     const before = await version();
     expect(await version()).toBe(before);
-    await new Response((await h.storage.download("/a.docx")).body).text();
+    await new Response((await h.storage.open("/a.docx")).stream()).text();
     expect(await version()).toBe(before);
     const at = new Date("2026-01-02T03:04:05Z");
     await utimes(join(home, "a.docx"), at, at);

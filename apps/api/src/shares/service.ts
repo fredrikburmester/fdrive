@@ -26,7 +26,7 @@ import {
 } from "../archive/peek.ts";
 import { ApiHttpError } from "../errors.ts";
 import type { FileOperations } from "../files/operations.ts";
-import { type DownloadOutcome, resolveDownload } from "../fs/routes.ts";
+import { sendFile } from "../fs/send-file.ts";
 import type { ShareCredential } from "./credentials.ts";
 import type { SharePasswords } from "./passwords.ts";
 import {
@@ -435,38 +435,24 @@ export function createSharesService(deps: SharesDeps) {
       const entries = await shareCall(() => share.storage.list(resolve(share.row, path)));
       return entries.filter((entry) => !hiddenFromLinks(entry.path));
     },
-    /** The file at `path`, for a HEAD answered without opening it or counting. */
-    stat(share: OpenShare, path: string) {
-      return shareCall(() => share.storage.statFile(resolve(share.row, path)));
-    },
     /**
-     * The file at `path`, its Range and If-Range handled as the fs download
-     * route handles them, counted once storage answered unless a preview
-     * already counted it.
+     * The file at `path` for a GET or HEAD (`sendFile`): its Range and
+     * If-Range handled as the fs download route handles them, and counted
+     * once it sends bytes unless a preview already counted it (`counted`).
      */
     async download(
       share: OpenShare,
       path: string,
-      request: {
-        readonly range: string | null;
-        readonly ifRange: string | undefined;
-        readonly signal: AbortSignal;
-        readonly counted: boolean;
-      },
-    ): Promise<DownloadOutcome> {
-      const target = resolve(share.row, path);
-      const outcome = await shareCall(() =>
-        resolveDownload(share.storage, target, request.range, request.ifRange, request.signal),
+      request: Request,
+      options: { readonly counted: boolean; readonly headers: Readonly<Record<string, string>> },
+    ): Promise<Response> {
+      const file = await shareCall(() => share.storage.open(resolve(share.row, path)));
+      return sendFile(
+        request,
+        file,
+        options.headers,
+        options.counted ? {} : { admit: () => consume(share.row) },
       );
-      if (outcome.kind === "stream" && !request.counted) {
-        try {
-          await consume(share.row);
-        } catch (error) {
-          await outcome.result.body.cancel();
-          throw error;
-        }
-      }
-      return outcome;
     },
     /**
      * Opens a preview of the audio or video at `path`, the only files a

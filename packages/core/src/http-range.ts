@@ -1,19 +1,18 @@
 /**
- * The result of parsing a `Range` request header against a resource of a
- * (possibly unknown) size.
+ * The result of parsing a `Range` request header against a resource of
+ * `size` bytes.
  *
  * - `"none"`: no `Range` header was sent.
- * - `"single"`: a single satisfiable byte range, `end` present only when
- *   the header (or a known size) pinned one down.
- * - `"multiple"`: a syntactically valid set of multiple byte ranges. The
- *   storage contract only supports a single range, so callers ignore this
- *   header and return the complete representation.
+ * - `"single"`: one satisfiable byte range, `end` included and within the
+ *   resource.
+ * - `"multiple"`: a syntactically valid set of several byte ranges. fdrive
+ *   serves one range at most, so callers answer with the whole resource.
  * - `"invalid"`: the header was present but unusable, either because it
- *   could not be parsed or (when `size` is known) fell outside the resource.
+ *   could not be parsed or because it falls outside the resource.
  */
 export type RangeResult =
   | { kind: "none" }
-  | { kind: "single"; start: number; end?: number }
+  | { kind: "single"; start: number; end: number }
   | { kind: "multiple" }
   | { kind: "invalid" };
 
@@ -48,16 +47,12 @@ function isValidMultipleByteRange(header: string): boolean {
 
 /**
  * Parses an HTTP `Range` request header of the form `bytes=a-b`, `bytes=a-`,
- * or the suffix form `bytes=-n`. Valid multi-range headers are identified
- * separately so single-range-only callers can ignore them and return the
- * complete representation.
- *
- * `size`, when known, is used to reject a range that starts at or beyond
- * the end of the resource and to clamp (or resolve, for the suffix form) an
- * open-ended range. A suffix range without a known `size` is invalid: there
- * is nothing to count the suffix back from.
+ * or the suffix form `bytes=-n`, for a resource of `size` bytes: a range
+ * that starts at or past the end is invalid, and an end past it is the last
+ * byte. Valid multi-range headers are identified separately so callers can
+ * answer them with the whole resource.
  */
-export function parseRangeHeader(header: string | null, size: number | null): RangeResult {
+export function parseRangeHeader(header: string | null, size: number): RangeResult {
   if (header === null) {
     return { kind: "none" };
   }
@@ -73,54 +68,65 @@ export function parseRangeHeader(header: string | null, size: number | null): Ra
 
   // The pattern's two capture groups are both `\d*`, which always matches
   // (possibly the empty string), so `match[1]` and `match[2]` are never
-  // undefined here despite noUncheckedIndexedAccess.
+  // undefined here despite noUncheckedIndexedAccess. `Number(...)` on them
+  // is always a non-negative integer.
   const startText = match[1] as string;
   const endText = match[2] as string;
 
-  if (startText === "" && endText === "") {
-    return { kind: "invalid" };
-  }
-
   if (startText === "") {
-    return parseSuffixRange(endText, size);
+    const suffixLength = Number(endText);
+    if (endText === "" || suffixLength <= 0 || size <= 0) return { kind: "invalid" };
+    return { kind: "single", start: Math.max(0, size - suffixLength), end: size - 1 };
   }
 
-  return parseBoundedRange(startText, endText, size);
-}
-
-// `suffixText` and the start/end text below always come from the
-// `\d*`-only capture groups in `SINGLE_RANGE_PATTERN`, so `Number(...)` on
-// them is always a non-negative integer (or, for `suffixText` and
-// `endText`, never called on an empty string here); there is no
-// not-a-number or negative case to guard against.
-
-function parseSuffixRange(suffixText: string, size: number | null): RangeResult {
-  const suffixLength = Number(suffixText);
-  if (suffixLength <= 0) {
-    return { kind: "invalid" };
-  }
-  if (size === null || size <= 0) {
-    return { kind: "invalid" };
-  }
-  return { kind: "single", start: Math.max(0, size - suffixLength), end: size - 1 };
-}
-
-function parseBoundedRange(startText: string, endText: string, size: number | null): RangeResult {
   const start = Number(startText);
-  if (size !== null && start >= size) {
-    return { kind: "invalid" };
-  }
-
-  if (endText === "") {
-    return { kind: "single", start };
-  }
-
+  if (start >= size) return { kind: "invalid" };
+  if (endText === "") return { kind: "single", start, end: size - 1 };
   const end = Number(endText);
-  if (end < start) {
-    return { kind: "invalid" };
-  }
+  if (end < start) return { kind: "invalid" };
+  return { kind: "single", start, end: Math.min(end, size - 1) };
+}
 
-  return { kind: "single", start, end: size !== null ? Math.min(end, size - 1) : end };
+/**
+ * Whether a range request still applies under `If-Range`. fdrive sends no
+ * ETag, only `Last-Modified`, so an entity tag never matches and a date
+ * matches when it names the file's current second. No `If-Range` always
+ * applies.
+ */
+export function ifRangeMatches(ifRange: string | null, modifiedAt: Date): boolean {
+  if (ifRange === null) return true;
+  if (ifRange.startsWith('"') || ifRange.startsWith("W/")) return false;
+  const date = Date.parse(ifRange);
+  return !Number.isNaN(date) && Math.floor(date / 1000) === Math.floor(modifiedAt.getTime() / 1000);
+}
+
+/**
+ * What a GET of a file answers: its bytes `start` through `end`, both
+ * included, whole (200) or as a range (206), or 416. An empty file is `0`
+ * through `-1`.
+ */
+export type FileSlice =
+  | { readonly status: 200 | 206; readonly start: number; readonly end: number }
+  | { readonly status: 416 };
+
+/**
+ * What a GET of a file of `size` bytes, modified at `modifiedAt`, answers
+ * under its `Range` and `If-Range` headers: the one byte range `range` asks
+ * for, 416 when that range is unusable, and otherwise the whole file.
+ * `If-Range` is checked first, so one that no longer names the file sends
+ * the whole of it, as does a request for several ranges.
+ */
+export function fileSlice(
+  file: { readonly size: number; readonly modifiedAt: Date },
+  range: string | null,
+  ifRange: string | null,
+): FileSlice {
+  const whole = { status: 200, start: 0, end: file.size - 1 } as const;
+  if (!ifRangeMatches(ifRange, file.modifiedAt)) return whole;
+  const parsed = parseRangeHeader(range, file.size);
+  if (parsed.kind === "invalid") return { status: 416 };
+  if (parsed.kind === "single") return { status: 206, start: parsed.start, end: parsed.end };
+  return whole;
 }
 
 const ASCII_FALLBACK_PATTERN = /[^\x20-\x7e]|["\\]/g;

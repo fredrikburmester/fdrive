@@ -135,15 +135,26 @@ export interface UploadPartOptions {
   readonly signal?: AbortSignal;
 }
 
-/** What `download` opened. */
-export interface Download {
-  readonly status: 200 | 206;
-  readonly body: ReadableStream<Uint8Array>;
-  /** The bytes `body` holds. */
-  readonly contentLength: number;
-  /** For a 206, the range sent: `bytes <first>-<last>/<size>`. */
-  readonly contentRange: string | null;
-  readonly lastModified: Date;
+/**
+ * A file `open` opened: its size and modification time when it was opened,
+ * and its bytes, read from that open file. Reads never go past `size`, so a
+ * file that grows meanwhile still reads as it was opened. The caller closes
+ * it, or hands it to `stream`.
+ */
+export interface OpenFile {
+  readonly size: number;
+  readonly modifiedAt: Date;
+  /**
+   * Bytes `start` through `end`, both included (default: the whole file),
+   * and the file with them: the stream closes the file once it ends, fails
+   * or is cancelled. Call it at most once, and nothing else after it. An
+   * `end` before `start` is an empty stream.
+   */
+  stream(start?: number, end?: number): ReadableStream<Uint8Array>;
+  /** Up to `length` bytes from `position`: fewer only at the end of the file. */
+  read(position: number, length: number): Promise<Uint8Array>;
+  /** Closes the file; closing it again does nothing. */
+  close(): Promise<void>;
 }
 
 /** Options shared by `move` and `copy`. */
@@ -180,8 +191,8 @@ export interface MoveOptions extends TransferOptions {
  * - `move`, `copy` and `upload` refuse an existing target with
  *   `StorageError("conflict")` unless asked to replace it (`overwrite:
  *   true`). Callers do not check a target first: the storage refuses it.
- * - `download` honours `range` with status 206 and a `Content-Range`, and
- *   `ifRange` when given.
+ * - `open` reports the file's size and modification time as `stat` does,
+ *   and refuses a directory with `bad_request`.
  * - A symbolic link is never followed: every operation refuses a path that
  *   passes through one, at any segment including the last, with
  *   `StorageError("forbidden")`. Listings show the link itself, as kind
@@ -201,23 +212,16 @@ export interface StorageProvider {
   probeDirectoryRead(path: string): Promise<void>;
 
   /**
-   * The file at `path` as `download` would open it, without reading any of
-   * it: see `ContentStamp`. Fails as `download` does.
+   * The file at `path` as `open` would open it, without reading any of it:
+   * see `ContentStamp`. Fails as `open` does.
    */
   contentStamp(path: string): Promise<ContentStamp>;
 
   /** Stats the file at `path`: `bad_request` for anything that is not a file. */
   statFile(path: string): Promise<EntryStat>;
 
-  download(
-    path: string,
-    opts?: {
-      range?: { start: number; end?: number };
-      /** A validator (ETag or HTTP date) the range only applies to; else the full body is sent. */
-      ifRange?: string;
-      signal?: AbortSignal;
-    },
-  ): Promise<Download>;
+  /** Opens the file at `path` for reading: `bad_request` for anything that is not a file. */
+  open(path: string): Promise<OpenFile>;
 
   upload(
     path: string,

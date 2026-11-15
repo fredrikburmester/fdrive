@@ -8,7 +8,7 @@ import {
   parentPath,
 } from "@fdrive/core";
 import { z } from "zod";
-import { boundedBytes, decodeText, MAX_FILE_BYTES } from "../../mcp/content.js";
+import { decodeText, MAX_FILE_BYTES } from "../../mcp/content.js";
 import { pageText } from "../../mcp/format.js";
 import {
   fileInfoInScope,
@@ -60,23 +60,19 @@ export async function referencedArg(deps: DriveToolsDeps, raw: string): Promise<
   return path;
 }
 
-/** Downloads a whole file when it fits the byte cap, else `null`. */
+/** Reads a whole file when it fits the byte cap, else `null`. */
 export async function readBytes(
   deps: DriveToolsDeps,
   path: string,
   limit: number,
-  signal: AbortSignal,
 ): Promise<{ bytes: Buffer; sha256: string } | null> {
-  const result = await deps.principal.storage.download(path, { signal });
-  if (result.contentLength > limit) {
-    await result.body.cancel();
-    return null;
-  }
+  const file = await deps.principal.storage.open(path);
   let bytes: Buffer;
   try {
-    bytes = await boundedBytes(result.body, limit);
-  } catch {
-    return null;
+    if (file.size > limit) return null;
+    bytes = Buffer.from(await file.read(0, file.size));
+  } finally {
+    await file.close();
   }
   return { bytes, sha256: createHash("sha256").update(bytes).digest("hex") };
 }
@@ -101,12 +97,12 @@ function readFileTool(deps: DriveToolsDeps): AiTool {
     schema,
     {
       activity: (args) => `Read ${baseName(args.path)}`,
-      async run(args, signal) {
+      async run(args) {
         const path = await referencedArg(deps, args.path);
         const stat = await deps.principal.storage.stat(path);
         if (stat.kind === "dir") throw new AiToolError(`${path} is a folder; list it instead.`);
         if (!DOCUMENT_EXTENSIONS.test(path) && stat.size <= MAX_FILE_BYTES) {
-          const read = await readBytes(deps, path, MAX_FILE_BYTES, signal);
+          const read = await readBytes(deps, path, MAX_FILE_BYTES);
           const text = read === null ? null : decodeText(read.bytes);
           if (read !== null && text !== null) {
             const page = pageText(text, args.offset, READ_CHARS);

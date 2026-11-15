@@ -32,7 +32,7 @@ describe("createMemoryStorage extras", () => {
     expect(storage.dump()).toEqual({ "/a/b.txt": "b", "/c.txt": "c" });
     expect(storage.dirs()).toEqual(["/", "/a"]);
     expect((await storage.statFile("/c.txt")).modifiedAt).toEqual(new Date(0));
-    expect((await storage.download("/c.txt")).lastModified).toEqual(new Date(0));
+    expect((await storage.open("/c.txt")).modifiedAt).toEqual(new Date(0));
     expect(await storage.upload("/d.txt", new TextEncoder().encode("d"))).toMatchObject({
       path: "/d.txt",
       name: "d.txt",
@@ -184,14 +184,15 @@ describe("createMemoryStorage extras", () => {
     await expect(storage.move("/", "/x")).rejects.toMatchObject({ kind: "not_found" });
   });
 
-  it("empties the root without removing it and downloads ranges past the end whole", async () => {
+  it("empties the root without removing it and reads nothing past the end", async () => {
     const storage = createMemoryStorage({ "/a.txt": "abc", "/d/e.txt": "e" });
     await storage.deleteDir("/");
     expect(storage.dump()).toEqual({});
     expect(storage.dirs()).toEqual(["/"]);
     await storage.upload("/a.txt", new TextEncoder().encode("abc"));
-    const past = await storage.download("/a.txt", { range: { start: 10 } });
-    expect(past.status).toBe(200);
+    const file = await storage.open("/a.txt");
+    expect(await file.read(10, 5)).toEqual(new Uint8Array());
+    expect(await new Response(file.stream(10)).text()).toBe("");
     await expect(storage.deleteDir("/nope")).rejects.toMatchObject({ kind: "not_found" });
   });
 
@@ -227,18 +228,30 @@ describe("createMemoryStorage extras", () => {
   });
 });
 
-it("preserves read, probe, range and timestamp semantics", async () => {
+it("preserves read, probe, open and timestamp semantics", async () => {
   const storage = createMemoryStorage({ "/dir/f.txt": "hello" });
   await storage.probeDirectoryRead("/dir");
   expect(await storage.list("/dir")).toMatchObject([{ name: "f.txt", modifiedAt: new Date(0) }]);
   await expect(storage.list("/dir/f.txt")).rejects.toMatchObject({ kind: "bad_request" });
   await expect(storage.list("/missing")).rejects.toMatchObject({ kind: "not_found" });
-  await expect(storage.download("/dir/f.txt", { signal: AbortSignal.abort() })).rejects.toThrow();
-  for (const range of [{ start: 1, end: 3 }, { start: 1 }]) {
-    const result = await storage.download("/dir/f.txt", { range });
-    expect(result.status).toBe(206);
-    expect(await new Response(result.body).text()).toBe(range.end === 3 ? "ell" : "ello");
+  await expect(storage.open("/dir")).rejects.toMatchObject({ kind: "bad_request" });
+  await expect(storage.open("/dir/missing")).rejects.toMatchObject({ kind: "not_found" });
+  for (const [start, end, text] of [
+    [1, 3, "ell"],
+    [1, undefined, "ello"],
+    [3, 1, ""],
+  ] as const) {
+    const file = await storage.open("/dir/f.txt");
+    expect(await new Response(file.stream(start, end)).text()).toBe(text);
+    await expect(file.read(0, 1)).rejects.toMatchObject({ kind: "internal" });
   }
+  const cancelled = await storage.open("/dir/f.txt");
+  await cancelled.stream().cancel();
+  await expect(cancelled.read(0, 1)).rejects.toMatchObject({ kind: "internal" });
+  const closed = await storage.open("/dir/f.txt");
+  await closed.close();
+  await closed.close();
+  expect(() => closed.stream()).toThrow("closed");
   const at = new Date("2021-01-01Z");
   await storage.upload("/dir/f.txt", new Uint8Array(), { overwrite: true, modifiedAt: at });
   expect((await storage.statFile("/dir/f.txt")).modifiedAt).toEqual(at);
@@ -251,7 +264,7 @@ it("stamps files as a disk does: every write moves the stamp, reads leave it", a
   const storage = createMemoryStorage({ "/a.txt": "a", "/dir/b.txt": "b" }, { clock: () => at });
   const first = await storage.contentStamp("/a.txt");
   expect(first).toMatchObject({ size: 1, mtimeNs: 0n });
-  await storage.download("/a.txt");
+  await (await storage.open("/a.txt")).close();
   expect(await storage.contentStamp("/a.txt")).toEqual(first);
   await storage.upload("/a.txt", new TextEncoder().encode("z"), {
     modifiedAt: new Date(0),

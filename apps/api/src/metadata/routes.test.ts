@@ -137,7 +137,6 @@ async function buildHarness(withActivity = false) {
       registerFsRoutes(groups, {
         files: testFileOperations({ metadata }),
         jobRunner: buildJobRunner(),
-        tmpDir: "/tmp",
         jobMaxBytes: 1_000_000_000,
         metadata,
         folderSize: {

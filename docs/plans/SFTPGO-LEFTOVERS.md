@@ -57,14 +57,6 @@ All are server-only and keep shipped Mac builds working.
     the indexer's `exclude_names` comment, and the docs that name it). Settling items a crash
     left on their way into Trash stays.
 
-## Storage contract
-
-30. Open files instead of HTTP-shaped downloads: peek parses `Content-Range` with a regex,
-    extract copies the zip to a temp folder. The perf
-    harness measured downloads through the API at 84% of direct throughput against its 90%
-    budget, on a heavily loaded machine; rerun `pnpm perf:strict` on a quiet one before acting
-    on that.
-
 ## Last
 
 37. Squash the migrations into one baseline.

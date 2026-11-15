@@ -3,7 +3,7 @@ import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import type { MoveManyResponse } from "@fdrive/contracts";
-import { StorageError, type StorageProvider, trashItemPath } from "@fdrive/core";
+import { type OpenFile, StorageError, type StorageProvider, trashItemPath } from "@fdrive/core";
 import { createMemoryStorage, entryStat } from "@fdrive/core/testing";
 import { createMemoryRepos } from "@fdrive/db/testing";
 import { createLocalStorage } from "@fdrive/local";
@@ -12,6 +12,12 @@ import type { Logger } from "pino";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { activityFixture } from "../../test/activity-fixture.js";
 import { testFileOperations } from "../../test/file-operations.js";
+import {
+  expectRangeAnswer,
+  RANGE_FILE,
+  rangeCases,
+  rangeHeaders,
+} from "../../test/fixtures/range-cases.js";
 import { type MemoryTrashItemRepo, memoryTrashItemRepo } from "../../test/trash-items.js";
 import { createApp } from "../app.js";
 import type { Principal } from "../auth/principal.js";
@@ -123,7 +129,7 @@ function forbiddenStorage(): StorageProvider {
     list: deny,
     stat: deny,
     statFile: deny,
-    download: deny,
+    open: deny,
     upload: deny,
     mkdir: deny,
     move: deny,
@@ -177,7 +183,6 @@ async function buildHarness(seed: Seed = SEED, username = "alice", metadata?: Me
           ...(metadata === undefined ? {} : { metadata }),
         }),
         jobRunner: buildJobRunner(),
-        tmpDir: "/tmp",
         jobMaxBytes: 1_000_000_000,
         folderSize: fakeFolderSizeDeps(),
         ...(metadata === undefined ? {} : { metadata }),
@@ -193,22 +198,26 @@ function makeStubStorage(overrides: Partial<StorageProvider>): StorageProvider {
   return { ...createMemoryStorage(), ...overrides };
 }
 
-function makeDownloadResult(
-  overrides: Partial<Awaited<ReturnType<StorageProvider["download"]>>> = {},
-): Awaited<ReturnType<StorageProvider["download"]>> {
-  return {
-    status: 200,
-    body: new ReadableStream<Uint8Array>({
-      start(controller) {
-        controller.enqueue(new TextEncoder().encode("data"));
-        controller.close();
-      },
-    }),
-    contentLength: 4,
-    contentRange: null,
-    lastModified: new Date(0),
-    ...overrides,
+/** Memory storage holding `files` that remembers each file it opens and whether it was closed. */
+function watchedStorage(files: Record<string, string>) {
+  const memory = createMemoryStorage(files);
+  const opened: { closed: boolean }[] = [];
+  const storage: StorageProvider = {
+    ...memory,
+    open: async (path) => {
+      const file = await memory.open(path);
+      const seen = { closed: false };
+      opened.push(seen);
+      return {
+        ...file,
+        close: async () => {
+          seen.closed = true;
+          await file.close();
+        },
+      };
+    },
   };
+  return { storage, files: opened };
 }
 
 async function buildHarnessWithStorage(
@@ -244,7 +253,6 @@ async function buildHarnessWithStorage(
           ...(opts.trash === undefined ? {} : { trashRepo: opts.trash }),
         }),
         jobRunner: buildJobRunner(),
-        tmpDir: "/tmp",
         jobMaxBytes: 1_000_000_000,
         folderSize: fakeFolderSizeDeps(),
         ...(opts.metadata === undefined ? {} : { metadata: opts.metadata }),
@@ -320,7 +328,7 @@ describe("GET /fs/list", () => {
     const probe = vi.fn(async (): Promise<never> => {
       throw new Error("a listing reads nothing else");
     });
-    const storage = makeStubStorage({ list, stat: probe, statFile: probe, download: probe });
+    const storage = makeStubStorage({ list, stat: probe, statFile: probe, open: probe });
     const { app, activity } = await buildHarnessWithStorage(storage);
 
     expect((await app.request("/api/v1/fs/list?path=/")).status).toBe(200);
@@ -524,78 +532,100 @@ describe("GET/HEAD /fs/download", () => {
     expect(await res.text()).toBe("hello world");
   });
 
-  it("serves a byte range with 206 and a Content-Range header", async () => {
-    const { app } = await buildHarness();
-
-    const res = await app.request("/api/v1/fs/download?path=/hello.txt", {
-      headers: { range: "bytes=0-4" },
-    });
-    expect(res.status).toBe(206);
-    expect(res.headers.get("content-range")).toBe("bytes 0-4/11");
-    expect(await res.text()).toBe("hello");
+  it("answers every Range and If-Range as every file route does", async () => {
+    const { app } = await buildHarness({ alice: { "/r.txt": RANGE_FILE } });
+    const stat = await readJson<{ modifiedAt: string }>(
+      await app.request("/api/v1/fs/stat?path=/r.txt"),
+    );
+    const modifiedAt = new Date(stat.modifiedAt);
+    for (const item of rangeCases(modifiedAt)) {
+      const res = await app.request("/api/v1/fs/download?path=/r.txt", {
+        headers: rangeHeaders(item),
+      });
+      await expectRangeAnswer(res, item);
+    }
   });
 
-  it("ignores a valid multi-range request and downloads the whole file", async () => {
-    const { app } = await buildHarness();
+  it("opens the file once, and answers a missing one as not found whatever its range", async () => {
+    const memory = createMemoryStorage({ "/hello.txt": "hello" });
+    const open = vi.spyOn(memory, "open");
+    const statFile = vi.spyOn(memory, "statFile");
+    const { app } = await buildHarnessWithStorage(memory);
 
     const res = await app.request("/api/v1/fs/download?path=/hello.txt", {
-      headers: { range: "bytes=0-1,4-5", "if-range": "stale-validator" },
+      headers: { range: "bytes=-2" },
     });
-
-    expect(res.status).toBe(200);
-    expect(res.headers.get("content-range")).toBeNull();
-    expect(await res.text()).toBe("hello world");
+    expect(await res.text()).toBe("lo");
+    expect(open).toHaveBeenCalledOnce();
+    expect(statFile).not.toHaveBeenCalled();
+    for (const range of [undefined, "bytes=10-5,20-30"]) {
+      const missing = await app.request("/api/v1/fs/download?path=/missing.txt", {
+        headers: range === undefined ? {} : { range },
+      });
+      expect(missing.status).toBe(404);
+    }
   });
 
-  it("returns 416 with Content-Range when the range is out of bounds and the size is known", async () => {
-    const { app } = await buildHarness();
-
-    const res = await app.request("/api/v1/fs/download?path=/hello.txt", {
-      headers: { range: "bytes=1000-2000" },
-    });
-    expect(res.status).toBe(416);
-    expect(res.headers.get("content-range")).toBe("bytes */11");
-  });
-
-  it("returns 416 with the empty size for a suffix range on an empty file", async () => {
-    const download = vi.fn<StorageProvider["download"]>();
-    const storage = makeStubStorage({
-      statFile: async (path) => entryStat(path),
-      download,
-    });
+  it("responds to HEAD with headers only, and closes the file", async () => {
+    const { storage, files } = watchedStorage({ "/hello.txt": "hello world" });
     const { app } = await buildHarnessWithStorage(storage);
 
-    const res = await app.request("/api/v1/fs/download?path=/empty.txt", {
-      headers: { range: "bytes=-10" },
-    });
-
-    expect(res.status).toBe(416);
-    expect(res.headers.get("content-range")).toBe("bytes */0");
-    expect(download).not.toHaveBeenCalled();
+    for (const headers of [{}, { range: "bytes=0-4" }]) {
+      const res = await app.request("/api/v1/fs/download?path=/hello.txt", {
+        method: "HEAD",
+        headers,
+      });
+      expect(res.status).toBe("range" in headers ? 206 : 200);
+      expect(res.headers.get("content-length")).toBe("range" in headers ? "5" : "11");
+      expect(await res.text()).toBe("");
+    }
+    expect(files.map((file) => file.closed)).toEqual([true, true]);
   });
 
-  it("returns a plain 416 when the range is invalid and the size cannot be determined", async () => {
-    const { app } = await buildHarness();
-
-    const res = await app.request("/api/v1/fs/download?path=/does-not-exist.txt", {
-      headers: { range: "bytes=10-5,20-30" },
-    });
-    expect(res.status).toBe(416);
-    expect(res.headers.get("content-range")).toBeNull();
-  });
-
-  it("responds to HEAD with headers only", async () => {
-    const { app } = await buildHarness();
-
-    const res = await app.request("/api/v1/fs/download?path=/hello.txt", { method: "HEAD" });
-    expect(res.status).toBe(200);
-    expect(res.headers.get("content-length")).toBe("11");
-    expect(await res.text()).toBe("");
+  it("closes the file when the client goes away mid-download", async () => {
+    const home = await realpath(await mkdtemp(join(tmpdir(), "fdrive-fs-abort-")));
+    homes.push(home);
+    await writeFile(join(home, "big.bin"), Buffer.alloc(64 * 1024 * 1024, 1));
+    const local = createLocalStorage({ home });
+    const opened: OpenFile[] = [];
+    const storage: StorageProvider = {
+      ...local,
+      open: async (path) => {
+        const file = await local.open(path);
+        opened.push(file);
+        return file;
+      },
+    };
+    const { app } = await buildHarnessWithStorage(storage);
+    const api = createServer(getRequestListener(app.fetch));
+    await new Promise<void>((resolve) => api.listen(0, "127.0.0.1", resolve));
+    const address = api.address();
+    if (address === null || typeof address === "string") throw new Error("no API port");
+    const controller = new AbortController();
+    try {
+      const response = await fetch(
+        `http://127.0.0.1:${address.port}/api/v1/fs/download?path=/big.bin`,
+        { signal: controller.signal },
+      );
+      const reader = response.body?.getReader();
+      expect((await reader?.read())?.done).toBe(false);
+      controller.abort();
+      const [file] = opened;
+      if (file === undefined) throw new Error("nothing was opened");
+      await vi.waitFor(() => expect(file.read(0, 1)).rejects.toMatchObject({ kind: "internal" }), {
+        timeout: 5000,
+      });
+    } finally {
+      controller.abort();
+      api.closeAllConnections();
+      await new Promise<void>((resolve) => api.close(() => resolve()));
+    }
   });
 
   it("types a download by its name, with its length and time, and serves it inline", async () => {
-    const storage = makeStubStorage({
-      download: async () => makeDownloadResult({ lastModified: new Date(CLOCK_ISO) }),
+    const storage = createMemoryStorage();
+    await storage.upload("/hello.txt", new TextEncoder().encode("data"), {
+      modifiedAt: new Date(CLOCK_ISO),
     });
     const { app } = await buildHarnessWithStorage(storage);
 
@@ -607,10 +637,7 @@ describe("GET/HEAD /fs/download", () => {
   });
 
   it("falls back to application/octet-stream when the extension has no type", async () => {
-    const storage = makeStubStorage({
-      download: async () => makeDownloadResult(),
-    });
-    const { app } = await buildHarnessWithStorage(storage);
+    const { app } = await buildHarnessWithStorage(createMemoryStorage({ "/mystery.xyz": "?" }));
 
     const res = await app.request("/api/v1/fs/download?path=/mystery.xyz");
     expect(res.headers.get("content-type")).toBe("application/octet-stream");
@@ -629,32 +656,13 @@ describe("GET/HEAD /fs/download", () => {
 
   it("keeps an inline preview out of history", async () => {
     const { app, activity } = await buildHarnessWithStorage(
-      makeStubStorage({ download: async () => makeDownloadResult() }),
+      createMemoryStorage({ "/hello.txt": "data" }),
     );
 
     const res = await app.request("/api/v1/fs/download?path=/hello.txt&inline=1");
     expect(res.headers.get("content-disposition")).toContain("inline");
     await res.text();
     expect(activity.operations).toHaveLength(0);
-  });
-
-  it("forwards If-Range without erroring", async () => {
-    const { app } = await buildHarness();
-
-    const res = await app.request("/api/v1/fs/download?path=/hello.txt", {
-      headers: { "if-range": "some-tag" },
-    });
-    expect(res.status).toBe(200);
-  });
-
-  it("serves an open-ended range (no end) with 206", async () => {
-    const { app } = await buildHarness();
-
-    const res = await app.request("/api/v1/fs/download?path=/hello.txt", {
-      headers: { range: "bytes=6-" },
-    });
-    expect(res.status).toBe(206);
-    expect(await res.text()).toBe("world");
   });
 
   it("maps a missing file (no range) to not_found", async () => {
@@ -1781,7 +1789,7 @@ describe("untrusted download documents", () => {
     "forces active content to attachment for %s, whatever its name's case",
     async (method) => {
       for (const path of ["/attack.html", "/attack.HTM", "/attack.svg", "/attack.xml", "/attack"]) {
-        const storage = makeStubStorage({ download: async () => makeDownloadResult() });
+        const storage = createMemoryStorage({ [path]: "data" });
         const { app } = await buildHarnessWithStorage(storage);
         const response = await app.request(`/api/v1/fs/download?path=${path}&inline=1`, { method });
         expect(response.status).toBe(200);
@@ -1793,9 +1801,7 @@ describe("untrusted download documents", () => {
     },
   );
   it("isolates partial responses and preserves passive inline downloads", async () => {
-    const storage = makeStubStorage({
-      download: async () => makeDownloadResult({ status: 206, contentRange: "bytes 0-3/8" }),
-    });
+    const storage = createMemoryStorage({ "/attack.svg": "<svg/>!!" });
     const { app } = await buildHarnessWithStorage(storage);
     const response = await app.request("/api/v1/fs/download?path=/attack.svg&inline=1", {
       headers: { range: "bytes=0-3" },

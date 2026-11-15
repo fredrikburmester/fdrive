@@ -6,6 +6,7 @@ import {
   isReservedPath,
   isUnderPath,
   normalizePath,
+  type OpenFile,
   type StorageProvider,
 } from "@fdrive/core";
 import type { IndexedContent } from "@fdrive/db";
@@ -51,8 +52,9 @@ export async function storedEntry(storage: StorageProvider, path: string): Promi
 
 /** The sha256 and length of the file at `path`, from one full read. */
 export async function digestFile(storage: StorageProvider, path: string, signal?: AbortSignal) {
-  const download = await storage.download(path, signal ? { signal } : undefined);
-  const reader = download.body.getReader();
+  signal?.throwIfAborted();
+  const file = await storage.open(path);
+  const reader = file.stream().getReader();
   const sha = createHash("sha256");
   let size = 0;
   try {
@@ -67,7 +69,7 @@ export async function digestFile(storage: StorageProvider, path: string, signal?
     await reader.cancel().catch(() => undefined);
     reader.releaseLock();
   }
-  if (size !== download.contentLength)
+  if (size !== file.size)
     throw new ApiHttpError("upstream_unavailable", "Incomplete content validation");
   return { sha256: sha.digest("hex"), size };
 }
@@ -237,12 +239,12 @@ export function createDesktopFiles(
         entries: visible(principal, await runStorageCall(() => principal.storage.list(path))),
       };
     },
-    async content(principal: Principal, raw: string, signal: AbortSignal) {
+    async content(principal: Principal, raw: string): Promise<OpenFile> {
       const path = authorize(principal, raw);
       const current = await entry(principal, path);
       if (current.kind !== "file")
         throw new ApiHttpError("bad_request", "Only regular files can be downloaded");
-      return runStorageCall(() => principal.storage.download(path, { signal }));
+      return runStorageCall(() => principal.storage.open(path));
     },
     async versions(principal: Principal, paths: string[], signal: AbortSignal) {
       if (hashing.has(principal.identityId))

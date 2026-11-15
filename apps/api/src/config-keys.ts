@@ -184,8 +184,7 @@ export const CONFIG_KEYS: readonly ConfigKeyDef[] = [
   },
   {
     key: "FDRIVE_TMP_DIR",
-    description:
-      "Directory archive jobs spool temporary files into. Defaults to the OS temp directory.",
+    description: "Directory for temporary files. Defaults to the OS temp directory.",
     default: null,
     example: "/tmp",
     secret: false,

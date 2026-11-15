@@ -112,7 +112,6 @@ const SEED: Seed = {
 
 interface Harness {
   readonly app: ReturnType<typeof createApp>;
-  readonly tmpDir: string;
   readonly activity: ReturnType<typeof activityFixture>;
   readonly storage: StorageProvider;
   readonly jobRunner: ReturnType<typeof createJobRunner>;
@@ -157,9 +156,6 @@ async function buildHarness(seed: Seed = SEED, username = "alice", jobMaxBytes =
   const clock = () => new Date();
   const activity = activityFixture(clock);
   const jobRunner = createJobRunner({ clock, bus });
-  const tmpDir = join(tmpdir(), `fdrive-archive-routes-test-${Date.now()}-${Math.random()}`);
-  await mkdir(tmpDir, { recursive: true });
-  tempDirs.push(tmpDir);
 
   const config = loadConfig(REQUIRED_ENV);
 
@@ -176,7 +172,6 @@ async function buildHarness(seed: Seed = SEED, username = "alice", jobMaxBytes =
         activity: activity.service,
         files: testFileOperations({ activity: activity.service }),
         jobRunner,
-        tmpDir,
         jobMaxBytes,
         folderSize: fakeFolderSizeDeps(),
       });
@@ -184,7 +179,7 @@ async function buildHarness(seed: Seed = SEED, username = "alice", jobMaxBytes =
     },
   });
 
-  const harness: Harness = { app, tmpDir, activity, storage, jobRunner };
+  const harness: Harness = { app, activity, storage, jobRunner };
   return harness;
 }
 
@@ -210,16 +205,12 @@ async function buildHarnessWithArchivePeekMaxBytes(archivePeekMaxBytes: number):
   const clock = () => new Date();
   const activity = activityFixture(clock);
   const jobRunner = createJobRunner({ clock, bus });
-  const tmpDir = join(tmpdir(), `fdrive-archive-routes-peek-${Date.now()}-${Math.random()}`);
-  await mkdir(tmpDir, { recursive: true });
-  tempDirs.push(tmpDir);
 
   const config = loadConfig(REQUIRED_ENV);
   const fsRoutesDeps = {
     activity: activity.service,
     files: testFileOperations({ activity: activity.service }),
     jobRunner,
-    tmpDir,
     jobMaxBytes: 10 * 1024 * 1024,
     archivePeekMaxBytes,
     folderSize: fakeFolderSizeDeps(),
@@ -235,7 +226,7 @@ async function buildHarnessWithArchivePeekMaxBytes(archivePeekMaxBytes: number):
     registerRoutes: (groups) => registerFsRoutes(groups, fsRoutesDeps),
   });
 
-  return { app, tmpDir, activity, storage, jobRunner };
+  return { app, activity, storage, jobRunner };
 }
 
 /** Builds a harness around an arbitrary `StorageProvider`, for exercising error-mapping branches. */
@@ -252,9 +243,6 @@ async function buildHarnessWithStorage(storage: StorageProvider): Promise<Harnes
   const clock = () => new Date();
   const activity = activityFixture(clock);
   const jobRunner = createJobRunner({ clock, bus });
-  const tmpDir = join(tmpdir(), `fdrive-archive-routes-stub-${Date.now()}-${Math.random()}`);
-  await mkdir(tmpDir, { recursive: true });
-  tempDirs.push(tmpDir);
 
   const config = loadConfig(REQUIRED_ENV);
   const app = createApp({
@@ -270,13 +258,12 @@ async function buildHarnessWithStorage(storage: StorageProvider): Promise<Harnes
         activity: activity.service,
         files: testFileOperations({ activity: activity.service }),
         jobRunner,
-        tmpDir,
         jobMaxBytes: 10 * 1024 * 1024,
         folderSize: fakeFolderSizeDeps(),
       }),
   });
 
-  return { app, tmpDir, activity, storage, jobRunner };
+  return { app, activity, storage, jobRunner };
 }
 
 afterEach(async () => {
@@ -390,7 +377,7 @@ describe("POST /fs/duplicate", () => {
     const res = await h.app.request("/api/v1/fs/duplicate", jsonPost({ path: "/hello.txt" }));
 
     expect(res.status).toBe(409);
-    expect(await new Response((await h.storage.download("/hello copy.txt")).body).text()).toBe(
+    expect(await new Response((await h.storage.open("/hello copy.txt")).stream()).text()).toBe(
       "someone else's",
     );
   });
@@ -426,7 +413,7 @@ describe("POST /fs/compress and the resulting job", () => {
       action: "archive.compress",
       outcome: "failed",
     });
-    expect(await new Response((await h.storage.download("/dir.zip")).body).text()).toBe(
+    expect(await new Response((await h.storage.open("/dir.zip")).stream()).text()).toBe(
       "external bytes",
     );
   });
@@ -781,9 +768,6 @@ describe("POST /fs/compress and the resulting job", () => {
     };
     const jobRunner = createJobRunner({ clock: () => new Date(), bus, maxJobs: 0 });
     const activity = activityFixture(() => new Date());
-    const tmpDir = join(tmpdir(), `fdrive-archive-routes-fullqueue-${Date.now()}`);
-    await mkdir(tmpDir, { recursive: true });
-    tempDirs.push(tmpDir);
     const config = loadConfig(REQUIRED_ENV);
     const app = createApp({
       config,
@@ -798,7 +782,6 @@ describe("POST /fs/compress and the resulting job", () => {
           activity: activity.service,
           files: testFileOperations({ activity: activity.service }),
           jobRunner,
-          tmpDir,
           jobMaxBytes: 1000,
           folderSize: fakeFolderSizeDeps(),
         }),

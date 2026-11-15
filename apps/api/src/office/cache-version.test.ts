@@ -11,7 +11,7 @@ it.each(["onlyoffice", "collabora"] as const)(
       overwrite: true,
     });
     const opened = await h.open("/a.docx", "view");
-    const download = vi.spyOn(h.storage, "download");
+    const read = vi.spyOn(h.storage, "open");
     const info = async () =>
       (await (await h.callback(opened)).json()) as {
         Version: string;
@@ -32,6 +32,6 @@ it.each(["onlyoffice", "collabora"] as const)(
     expect(after.Size).toBe(before.Size);
     expect(after.LastModifiedTime).toBe(before.LastModifiedTime);
     expect(after.Version).not.toBe(before.Version);
-    expect(download).not.toHaveBeenCalled();
+    expect(read).not.toHaveBeenCalled();
   },
 );

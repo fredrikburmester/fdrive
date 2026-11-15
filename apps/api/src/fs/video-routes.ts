@@ -60,9 +60,8 @@ export function registerVideoRoutes(groups: { authed: AuthedHono }): void {
   authed.get(ROUTES.fs.transcode.slice(API_PREFIX.length), async (c) => {
     const principal = c.get("principal");
     const path = normalizeOrThrow(parseQuery(PathQuery, c.req.query()).path);
-    const signal = c.req.raw.signal;
-    const source = await runStorageCall(() => principal.storage.download(path, { signal }));
-    return c.body(transcode(source.body, signal), 200, {
+    const file = await runStorageCall(() => principal.storage.open(path));
+    return c.body(transcode(file.stream(), c.req.raw.signal), 200, {
       "Content-Type": "video/mp4",
       "Cache-Control": "private, no-store",
     });
@@ -75,14 +74,17 @@ export function registerVideoRoutes(groups: { authed: AuthedHono }): void {
     if (ext !== ".srt" && ext !== ".vtt") {
       throw new ApiHttpError("bad_request", "not a subtitle file");
     }
-    const file = await runStorageCall(() =>
-      principal.storage.download(path, { signal: c.req.raw.signal }),
-    );
-    if (file.contentLength > SUBTITLES_MAX_BYTES) {
-      await file.body.cancel();
-      throw new ApiHttpError("payload_too_large", "subtitle file is too large");
+    const file = await runStorageCall(() => principal.storage.open(path));
+    let bytes: Uint8Array;
+    try {
+      if (file.size > SUBTITLES_MAX_BYTES) {
+        throw new ApiHttpError("payload_too_large", "subtitle file is too large");
+      }
+      bytes = await runStorageCall(() => file.read(0, file.size));
+    } finally {
+      await file.close();
     }
-    const text = await new Response(file.body).text();
+    const text = new TextDecoder().decode(bytes);
     return c.body(ext === ".srt" ? srtToVtt(text) : text, 200, {
       "Content-Type": "text/vtt; charset=utf-8",
       "Cache-Control": "private, no-store",

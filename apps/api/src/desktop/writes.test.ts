@@ -131,7 +131,7 @@ async function fixture() {
     await service.upload(principal, request.operationId, body(bytes), new AbortController().signal);
     return request;
   };
-  const read = async (path: string) => new Response((await raw.download(path)).body).text();
+  const read = async (path: string) => new Response((await raw.open(path)).stream()).text();
   return {
     ...memory,
     raw,
@@ -845,7 +845,7 @@ it("removes everything one operation staged and nothing else", async () => {
   await removeIncoming(storage, identity, operation);
   await removeIncoming(storage, randomUUID(), operation);
   expect((await storage.list(incoming)).map((entry) => entry.name)).toEqual([other]);
-  expect(await new Response((await storage.download("/keep.txt")).body).text()).toBe("user data");
+  expect(await new Response((await storage.open("/keep.txt")).stream()).text()).toBe("user data");
   const offline = {
     ...storage,
     deleteDir: async () => {
@@ -978,9 +978,7 @@ it("keeps internal storage out of ordinary reads and enforces opaque operation o
     kind: "forbidden",
   });
   expect(
-    await new Response(
-      (await f.service.files.content(f.principal, "/created", new AbortController().signal)).body,
-    ).text(),
+    await new Response((await f.service.files.content(f.principal, "/created")).stream()).text(),
   ).toBe("body");
   expect(
     (await f.service.files.versions(f.principal, ["/created"], new AbortController().signal))
@@ -1033,10 +1031,7 @@ it("preserves file/folder contents and handles through scoped Trash and restore"
     expect(stat.id).toBe(original.id);
     const contentPath = original.kind === "file" ? trashed.path : `${trashed.path}/child`;
     expect(
-      await new Response(
-        (await f.service.files.content(f.principal, contentPath, new AbortController().signal))
-          .body,
-      ).text(),
+      await new Response((await f.service.files.content(f.principal, contentPath)).stream()).text(),
     ).toBe(original.kind === "file" ? "old" : "child");
     expect(
       (await f.service.files.versions(f.principal, [contentPath], new AbortController().signal))
@@ -1058,9 +1053,9 @@ it("preserves file/folder contents and handles through scoped Trash and restore"
       ]);
     if (original.kind === "dir") {
       expect((await f.service.list(f.principal, trashed.path, "token")).entries).toHaveLength(1);
-      await expect(
-        f.service.files.content(f.principal, trashed.path, new AbortController().signal),
-      ).rejects.toMatchObject({ kind: "bad_request" });
+      await expect(f.service.files.content(f.principal, trashed.path)).rejects.toMatchObject({
+        kind: "bad_request",
+      });
       await expect(
         f.service.files.versions(f.principal, [trashed.path], new AbortController().signal),
       ).rejects.toMatchObject({ kind: "bad_request" });
@@ -1198,10 +1193,10 @@ it("preserves the source when its base cannot be read in full", async () => {
   const f = await fixture();
   const original = await f.service.stat(f.principal, "/old.txt");
   const input = await f.stage("old.txt", "new", original);
-  const download = f.raw.download.bind(f.raw);
-  f.raw.download = async (path, options) => {
-    const result = await download(path, options);
-    return path === "/old.txt" ? { ...result, contentLength: 999 } : result;
+  const open = f.raw.open.bind(f.raw);
+  f.raw.open = async (path) => {
+    const result = await open(path);
+    return path === "/old.txt" ? { ...result, size: 999 } : result;
   };
   await expect(f.service.commit(f.principal, input.operationId)).rejects.toMatchObject({
     kind: "upstream_unavailable",
@@ -1319,7 +1314,7 @@ it("stages nothing through a substituted folder and needs the upload's receipt",
   await expect(
     f.service.upload(local, request.operationId, body("abc"), new AbortController().signal),
   ).rejects.toThrow();
-  expect(await new Response((await local.storage.download("/saved.txt")).body).text()).toBe("old");
+  expect(await new Response((await local.storage.open("/saved.txt")).stream()).text()).toBe("old");
   expect((await f.service.status(local, request.operationId)).state).toBe("receiving");
   const second = await fixture();
   const input = await second.stage("new", "abc");
@@ -1689,19 +1684,20 @@ it("preserves a save when its source is trashed after preparation or a hashing s
   const f = await fixture();
   const source = await f.service.stat(f.principal, "/old.txt");
   const upload = await f.stage("old.txt", "new", source);
-  const download = f.raw.download.bind(f.raw);
-  f.raw.download = async (...args) => ({
-    ...(await download(...args)),
-    body: new ReadableStream<Uint8Array>({
-      start(controller) {
-        controller.error(new Error("Hash stream failed"));
-      },
-    }),
+  const open = f.raw.open.bind(f.raw);
+  f.raw.open = async (path) => ({
+    ...(await open(path)),
+    stream: () =>
+      new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.error(new Error("Hash stream failed"));
+        },
+      }),
   });
   await expect(f.service.commit(f.principal, upload.operationId)).rejects.toThrow(
     "Hash stream failed",
   );
-  f.raw.download = download;
+  f.raw.open = open;
   const trash = {
     kind: "move" as const,
     operationId: randomUUID(),
@@ -1716,9 +1712,7 @@ it("preserves a save when its source is trashed after preparation or a hashing s
     kind: "forbidden",
   });
   expect(
-    await new Response(
-      (await f.service.files.content(f.principal, receipt.path, new AbortController().signal)).body,
-    ).text(),
+    await new Response((await f.service.files.content(f.principal, receipt.path)).stream()).text(),
   ).toBe("old");
 });
 

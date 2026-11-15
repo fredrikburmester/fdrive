@@ -35,14 +35,15 @@ export async function readStoredFile(
   rawPath: string,
 ) {
   const path = ordinaryPath(principal, rawPath);
-  const stat = await principal.storage.statFile(path);
-  if (stat.size > MAX_FILE_BYTES) throw new Error(`file exceeds the ${MAX_FILE_BYTES} byte limit`);
-  const result = await principal.storage.download(path, { signal: AbortSignal.timeout(30_000) });
-  if (result.contentLength > MAX_FILE_BYTES) {
-    await result.body.cancel();
-    throw new Error(`file exceeds the ${MAX_FILE_BYTES} byte limit`);
+  const file = await principal.storage.open(path);
+  let bytes: Buffer;
+  try {
+    if (file.size > MAX_FILE_BYTES)
+      throw new Error(`file exceeds the ${MAX_FILE_BYTES} byte limit`);
+    bytes = Buffer.from(await file.read(0, file.size));
+  } finally {
+    await file.close();
   }
-  const bytes = await boundedBytes(result.body, MAX_FILE_BYTES);
   return {
     path,
     bytes,

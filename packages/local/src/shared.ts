@@ -410,10 +410,10 @@ export function createUserStorage(options: UserStorageOptions): StorageProvider 
       return at.storage.contentStamp(at.rel);
     },
 
-    async download(path, opts) {
+    async open(path) {
       const at = await readable(path);
       if (at.kind === "shelf") throw new StorageError("bad_request", `not a file: ${path}`);
-      return at.storage.download(at.rel, opts);
+      return at.storage.open(at.rel);
     },
 
     async upload(path, body, opts = {}) {

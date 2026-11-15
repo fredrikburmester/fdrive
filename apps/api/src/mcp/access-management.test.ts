@@ -197,7 +197,7 @@ it("reads provider-backed text, bytes and metadata without index access, includi
   expect(decodeText(new Uint8Array([0]))).toBe(null);
 });
 
-it("bounds streams even when a provider understates content size and cancels on overflow", async () => {
+it("bounds streams and refuses a file past the limit without reading it", async () => {
   const { principal, deps } = await fixture();
   const cancelled = vi.fn();
   await expect(
@@ -212,28 +212,19 @@ it("bounds streams even when a provider understates content size and cancels on 
     ),
   ).rejects.toThrow("limit");
   expect(cancelled).toHaveBeenCalled();
-  const metadata = await principal.storage.statFile("/allowed/a.txt");
-  const download = vi.spyOn(principal.storage, "download");
-  vi.spyOn(principal.storage, "statFile").mockResolvedValueOnce({
-    ...metadata,
+  // A file past the limit is refused from its size, without reading it, and closed.
+  const open = principal.storage.open.bind(principal.storage);
+  const close = vi.fn();
+  const read = vi.fn();
+  vi.spyOn(principal.storage, "open").mockImplementationOnce(async (path) => ({
+    ...(await open(path)),
     size: MAX_FILE_BYTES + 1,
-  });
+    read,
+    close,
+  }));
   await expect(readStoredFile(deps, principal, "/allowed/a.txt")).rejects.toThrow("limit");
-  expect(download).not.toHaveBeenCalled();
-  const response = await principal.storage.download("/allowed/a.txt");
-  download.mockResolvedValueOnce({ ...response, contentLength: MAX_FILE_BYTES + 1 });
-  await expect(readStoredFile(deps, principal, "/allowed/a.txt")).rejects.toThrow("limit");
-  download.mockResolvedValueOnce({
-    ...response,
-    contentLength: 1,
-    body: new ReadableStream({
-      start(c) {
-        c.enqueue(new Uint8Array(MAX_FILE_BYTES + 1));
-        c.close();
-      },
-    }),
-  });
-  await expect(readStoredFile(deps, principal, "/allowed/a.txt")).rejects.toThrow("limit");
+  expect(read).not.toHaveBeenCalled();
+  expect(close).toHaveBeenCalledOnce();
 });
 
 it("uses optional byte extraction for documents and reports absent or unreachable processing", async () => {
@@ -268,7 +259,7 @@ it("organizes independently of indexing and rejects unauthorized writes, collisi
   expect(
     await copyPath(deps, principal, { src: "/allowed/new", dst: "/allowed/copy.1" }),
   ).toMatchObject({ to: "/allowed/copy.1" });
-  expect(await new Response((await base.download("/allowed/copy.1/README")).body).text()).toBe(
+  expect(await new Response((await base.open("/allowed/copy.1/README")).stream()).text()).toBe(
     "alpha",
   );
   await expect(

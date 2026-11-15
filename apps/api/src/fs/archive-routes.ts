@@ -256,7 +256,6 @@ async function handleExtract(c: FsContext, deps: FsRoutesDeps): Promise<Response
         storage,
         archivePath,
         destination,
-        tmpDir: deps.tmpDir,
         signal: ctx.signal,
         report: ctx.report,
         maxBytes: deps.jobMaxBytes,

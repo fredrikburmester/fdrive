@@ -16,7 +16,6 @@ async function fixture() {
     actor,
     file,
     path: "/a.docx",
-    stat: await h.storage.statFile("/a.docx"),
     mode: "edit",
     editAllowed: true,
   };

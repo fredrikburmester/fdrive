@@ -19,7 +19,7 @@ it("derives a short opaque version that changes with every part of the stamp", (
 
 it("versions a document from its stamp without reading it", async () => {
   const storage = createMemoryStorage({ "/a.docx": "hello", "/b.docx": "hello" });
-  const download = vi.spyOn(storage, "download");
+  const opened = vi.spyOn(storage, "open");
   const first = await documentVersion(storage, "/a.docx");
   expect(first).toMatchObject({ size: 5, modifiedAt: new Date(0) });
   expect(await documentVersion(storage, "/a.docx")).toEqual(first);
@@ -32,7 +32,7 @@ it("versions a document from its stamp without reading it", async () => {
   expect(replaced).toMatchObject({ size: 5, modifiedAt: new Date(0) });
   expect(replaced.version).not.toBe(first.version);
   expect((await documentVersion(storage, "/b.docx")).version).not.toBe(first.version);
-  expect(download).not.toHaveBeenCalled();
+  expect(opened).not.toHaveBeenCalled();
 });
 
 it("fails as the storage does", async () => {

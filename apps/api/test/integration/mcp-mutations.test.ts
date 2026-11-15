@@ -99,7 +99,7 @@ it("preserves occupied targets, reports completed writes truthfully, and rejects
   });
   expect(conflict.isError).toBe(true);
   expect(
-    await new Response((await principal.storage.download("/destination.txt")).body).text(),
+    await new Response((await principal.storage.open("/destination.txt")).stream()).text(),
   ).toBe("keep destination");
   const moved = await client.callTool({
     name: "move_path",
@@ -112,7 +112,7 @@ it("preserves occupied targets, reports completed writes truthfully, and rejects
       text: expect.stringContaining("could not follow it"),
     },
   ]);
-  expect(await new Response((await principal.storage.download("/renamed.txt")).body).text()).toBe(
+  expect(await new Response((await principal.storage.open("/renamed.txt")).stream()).text()).toBe(
     "source",
   );
   await expect(principal.storage.stat("/source.txt")).rejects.toMatchObject({ kind: "not_found" });
@@ -149,7 +149,7 @@ it("runs full file management without indexed roots and enforces folder grants",
   const trash = await call("list_trash", {});
   expect(trash.entries).toHaveLength(1);
   await call("restore_path", { id: trash.entries[0].id });
-  expect(await new Response((await base.download("/mcp/README")).body).text()).toBe("updated");
+  expect(await new Response((await base.open("/mcp/README")).stream()).text()).toBe("updated");
   expect(
     (await client.callTool({ name: "read_file", arguments: { path: "/destination.txt" } })).isError,
   ).toBe(true);
@@ -161,7 +161,7 @@ it("runs full file management without indexed roots and enforces folder grants",
       })
     ).isError,
   ).toBe(true);
-  expect(await new Response((await base.download("/destination.txt")).body).text()).toBe(
+  expect(await new Response((await base.open("/destination.txt")).stream()).text()).toBe(
     "keep destination",
   );
 });

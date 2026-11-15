@@ -468,7 +468,7 @@ describe("what grants access fails closed", () => {
       await files.mkdir(actor, "/Stall/folder");
       await files.move(actor, "/Stall/kept.txt", "/Stall/folder/kept.txt");
       const read = async (path: string) =>
-        new Response((await principal.storage.download(path)).body).text();
+        new Response((await principal.storage.open(path)).stream()).text();
       expect(await read("/Stall/same.txt")).toBe("first");
       arrive();
       await slow;

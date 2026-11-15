@@ -123,7 +123,7 @@ async function fixture(
     await service.prepare(principal, request);
     return request;
   };
-  const read = async (path: string) => new Response((await raw.download(path)).body).text();
+  const read = async (path: string) => new Response((await raw.open(path)).stream()).text();
   const state = async (id: string) => (await service.status(principal, id)).state;
   return { ...memory, raw, principal, service, save, create, move, folder, read, state };
 }
@@ -191,8 +191,8 @@ it("refuses a save whose file changed while its base was being read", async () =
   let fired = false;
   const f = await fixture({
     wrap: (raw) => ({
-      download: async (path, opts) => {
-        const result = await raw.download(path, opts);
+      open: async (path) => {
+        const result = await raw.open(path);
         if (!fired && path === "/old.txt") {
           fired = true;
           await raw.upload("/old.txt", body("new"), { overwrite: true });
@@ -211,7 +211,7 @@ it("refuses a save whose file changed while its base was being read", async () =
 
 it("proves a save from a current index row without reading the file, and reads a stale one once", async () => {
   const raw = createMemoryStorage({ "/old.txt": "old" });
-  const download = vi.spyOn(raw, "download");
+  const opened = vi.spyOn(raw, "open");
   let row: IndexedContent | undefined;
   const f = await fixture({
     storage: raw,
@@ -220,14 +220,14 @@ it("proves a save from a current index row without reading the file, and reads a
   const stamp = async () => (raw.contentStamp as NonNullable<typeof raw.contentStamp>)("/old.txt");
   row = rowFor(await stamp(), sha("old"));
   const fresh = await f.save("indexed");
-  download.mockClear();
+  opened.mockClear();
   expect((await f.service.commit(f.principal, fresh.operationId)).state).toBe("completed");
-  expect(download).not.toHaveBeenCalled();
+  expect(opened).not.toHaveBeenCalled();
   // The save gave the file a new stamp, so the old row no longer vouches for it.
   const stale = await f.save("hashed", "/old.txt", "indexed");
-  download.mockClear();
+  opened.mockClear();
   expect((await f.service.commit(f.principal, stale.operationId)).state).toBe("completed");
-  expect(download.mock.calls.map(([path]) => path)).toEqual(["/old.txt"]);
+  expect(opened.mock.calls.map(([path]) => path)).toEqual(["/old.txt"]);
   expect(await f.read("/old.txt")).toBe("hashed");
 });
 
@@ -235,14 +235,14 @@ it("renames a large file without reading any of it", async () => {
   const large = new Uint8Array(8 * 1024 * 1024).fill(7);
   const raw = createMemoryStorage({});
   await raw.upload("/large.bin", large);
-  const download = vi.spyOn(raw, "download");
+  const opened = vi.spyOn(raw, "open");
   const f = await fixture({ storage: raw });
   // A base carrying the file's digest still proves nothing a rename needs.
   const request = await f.move("/large.bin", "renamed.bin", sha(large));
   expect((await f.service.commit(f.principal, request.operationId)).item).toMatchObject({
     path: "/renamed.bin",
   });
-  expect(download).not.toHaveBeenCalled();
+  expect(opened).not.toHaveBeenCalled();
 });
 
 it("refuses a move whose source was replaced since its base check", async () => {
@@ -458,9 +458,9 @@ it("publishes nothing once the pairing is revoked while a save hashes its base",
   const f = await fixture({
     verifyAuthority,
     wrap: (raw) => ({
-      download: async (path, opts) => {
+      open: async (path) => {
         if (armed && path === "/old.txt") allowed = armed = false;
-        return raw.download(path, opts);
+        return raw.open(path);
       },
     }),
   });
