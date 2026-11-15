@@ -68,8 +68,6 @@ function routePath(fullPath: string): string {
 }
 
 export interface FsRoutesDeps {
-  /** Compares a complete authorized listing against tracked history. */
-  readonly activityObservations?: import("../activity/observations.js").ActivityObservations;
   /** Absent in fixtures that do not exercise personal history; every route works without it. */
   readonly activity?: PersonalActivityService;
   readonly bus: EventBus;
@@ -615,12 +613,6 @@ export function registerFsRoutes(
     const query = parseQuery(PathQuery, c.req.query());
     const path = normalizeOrThrow(query.path);
     const entries = await runStorageCall(() => principal.storage.list(path));
-    // A complete authorized listing is a refresh input for changes made
-    // outside fdrive. It suggests differences; only a live check can
-    // establish one.
-    // Comparison runs beside the response: it probes the provider, and a
-    // listing is not worth slowing down to notice an outside change sooner.
-    void deps.activityObservations?.refresh(principal, path, entries);
     const trashPath = deps.trashPathForStorage?.(principal.storage) ?? null;
     // fdrive's own folders (the Trash, the Mac app's folder) are not the
     // user's, so the tree does not show them.

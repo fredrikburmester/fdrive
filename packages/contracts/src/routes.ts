@@ -122,7 +122,7 @@ export const ROUTES = {
     clientEvents: "/api/v1/activity/client-events",
     /** GET: the history ID for one `path` of the caller's login -> `{ id }`. 404 before anything is recorded. */
     resolveFile: "/api/v1/activity/files/resolve",
-    /** GET: one file's journey -> `ActivityFileResponse`. `/:id/events`, `/:id/lineage`, `/:id/revisions` and `POST /:id/recheck` hang off it. */
+    /** GET: one file's journey -> `ActivityFileResponse`. `/:id/events`, `/:id/lineage` and `/:id/revisions` hang off it. */
     files: "/api/v1/activity/files",
     /** GET: `/:id/events` for one batch -> `PersonalActivityResponse` with a `batchSummary`. */
     batches: "/api/v1/activity/batches",

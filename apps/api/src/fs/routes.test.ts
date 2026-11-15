@@ -19,7 +19,7 @@ import { loadConfig } from "../config.js";
 import { type BusEvent, createEventBus, type EventBus } from "../events/bus.js";
 import { createJobRunner, type JobRunner } from "../jobs/runner.js";
 import { createMetadataService, type MetadataService, withFollowers } from "../metadata/service.js";
-import { type FsRoutesDeps, registerFsRoutes, trashMany } from "./routes.js";
+import { registerFsRoutes, trashMany } from "./routes.js";
 
 function buildJobRunner(): JobRunner {
   return createJobRunner({
@@ -143,12 +143,7 @@ interface Harness {
   readonly activity: ReturnType<typeof activityFixture>;
 }
 
-async function buildHarness(
-  seed: Seed = SEED,
-  username = "alice",
-  metadata?: MetadataService,
-  activityObservations?: FsRoutesDeps["activityObservations"],
-) {
+async function buildHarness(seed: Seed = SEED, username = "alice", metadata?: MetadataService) {
   const files = seed[username] ?? null;
   const storage = files === null ? forbiddenStorage() : await seededStorage(files);
 
@@ -187,7 +182,6 @@ async function buildHarness(
         jobMaxBytes: 1_000_000_000,
         folderSize: fakeFolderSizeDeps(),
         ...(metadata === undefined ? {} : { metadata }),
-        ...(activityObservations === undefined ? {} : { activityObservations }),
       }),
   });
 
@@ -335,15 +329,27 @@ describe("GET /fs/list", () => {
     expect(dir?.mime).toBeNull();
   });
 
-  it("answers while history comparison is still probing the provider", async () => {
-    // Comparison reaches the provider. A listing never waits for it.
-    const { app } = await buildHarness(SEED, "alice", undefined, {
-      refresh: () => new Promise<void>(() => {}),
-    } as unknown as FsRoutesDeps["activityObservations"]);
+  it("reads the folder once and probes nothing else, even for files history tracks", async () => {
+    // Outside changes reach history from the indexer, never from a listing.
+    const list = vi.fn(async () => [
+      {
+        name: "hello.txt",
+        path: "/hello.txt",
+        kind: "file" as const,
+        size: 1,
+        modifiedAt: new Date(0),
+        ext: ".txt",
+      },
+    ]);
+    const probe = vi.fn(notImplemented);
+    const storage = makeStubStorage({ list, stat: probe, statFile: probe, download: probe });
+    const { app, activity } = await buildHarnessWithStorage(storage);
 
-    const res = await app.request("/api/v1/fs/list?path=/");
-    expect(res.status).toBe(200);
-    expect((await readJson<ListJson>(res)).entries).toHaveLength(2);
+    expect((await app.request("/api/v1/fs/list?path=/")).status).toBe(200);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(list).toHaveBeenCalledOnce();
+    expect(probe).not.toHaveBeenCalled();
+    expect(activity.operations).toEqual([]);
   });
 
   it("returns bad_request when path is missing", async () => {
