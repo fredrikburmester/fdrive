@@ -26,6 +26,40 @@ test("alice opens Storage from her account menu, sees her folder by kind and rev
   await expect(page).toHaveURL(/\/files\/docs\?select=readme\.md$/);
 });
 
+test("a user finds two identical files under Duplicates and moves one to Trash", async ({
+  browser,
+  baseURL,
+}) => {
+  const context = await browser.newContext({
+    storageState: { cookies: [], origins: [] },
+    ...(baseURL === undefined ? {} : { baseURL }),
+  });
+  const page = await context.newPage();
+  try {
+    await loginAs(page, "storage_dupes", "storage-dupes-test-password");
+    await page.goto("/storage");
+    const duplicates = page
+      .locator('[data-slot="card"]')
+      .filter({ has: page.getByText("Duplicates", { exact: true }) });
+    await expect(duplicates.getByText(/^2 copies, 22 B wasted$/)).toBeVisible();
+    await expect(duplicates.getByRole("listitem")).toHaveCount(2);
+    await expect(duplicates.getByText("notes.txt")).toHaveCount(0);
+
+    await duplicates
+      .getByRole("listitem")
+      .filter({ hasText: "/Backup" })
+      .getByRole("button", { name: "Move beach.txt to Trash" })
+      .click();
+    const confirm = page.getByRole("alertdialog");
+    await confirm.getByRole("button", { name: "Move to Trash" }).click();
+    await expect(confirm).toBeHidden();
+    // One copy left: nothing is duplicated any more.
+    await expect(duplicates.getByText("No identical files in your folder.")).toBeVisible();
+  } finally {
+    await context.close();
+  }
+});
+
 test("an administrator sets a storage limit, and an upload over it is refused", async ({
   page,
   browser,

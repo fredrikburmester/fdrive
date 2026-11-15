@@ -555,6 +555,7 @@ describe("createApiClient: storageUsage", () => {
       limit: null,
       kinds: [{ kind: "images", bytes: 2048 }],
       largest: [{ path: "/a.jpg", size: 2048, modifiedAt: "2026-11-14T10:00:00.000Z" }],
+      duplicates: [{ size: 2048, paths: ["/a.jpg", "/b.jpg"] }],
     };
     const { fetchStub, calls } = createStubFetch([jsonResponse(200, payload)]);
     const client = createApiClient({ fetch: fetchStub });

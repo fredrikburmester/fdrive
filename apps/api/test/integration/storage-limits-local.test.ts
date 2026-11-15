@@ -15,13 +15,15 @@ import { seedLocalUsers, silentLogger } from "./helpers/local-storage.ts";
 
 const cookieFrom = (response: Response) => response.headers.get("set-cookie")?.split(";")[0] ?? "";
 
-/** What the index holds, by path under the root: bob's 705 bytes and alice's 8. */
+/** What the index holds, by path under the root: bob's 705 bytes and alice's 16. */
 const INDEXED: Readonly<Record<string, number>> = {
   "bob/big.mov": 600,
   "bob/docs/notes.txt": 5,
   // fdrive's own Trash layout: counted, never listed.
   "bob/.trash/.fdrive-move-v1/file/p/old.bin/v/1": 100,
+  // Two identical copies: the same content hash.
   "alice/Projects/plan.txt": 8,
+  "alice/Projects/plan-copy.txt": 8,
 };
 
 /**
@@ -42,7 +44,7 @@ describe("storage usage and limits through the API", () => {
       startLocalStorage({
         users: ["alice", "bob"].map((username) => ({ username, password: `${username}-password` })),
         files: {
-          alice: { "/Projects/plan.txt": "the plan" },
+          alice: { "/Projects/plan.txt": "the plan", "/Projects/plan-copy.txt": "the plan" },
           bob: { "/big.mov": "v".repeat(600), "/docs/notes.txt": "notes" },
         },
       }),
@@ -86,6 +88,7 @@ describe("storage usage and limits through the API", () => {
           ext: path.includes(".", path.lastIndexOf("/")) ? path.slice(path.lastIndexOf(".")) : "",
           size,
           mtimeNs: 1_700_000_000_000_000_000n,
+          sha256: path.startsWith("alice/Projects/") ? "c".repeat(64) : null,
         })),
       );
     } finally {
@@ -175,7 +178,7 @@ describe("storage usage and limits through the API", () => {
       storageLimit,
     }));
     expect(users).toEqual([
-      { username: "alice", storageUsed: 8, storageLimit: null },
+      { username: "alice", storageUsed: 16, storageLimit: null },
       { username: "bob", storageUsed: 705, storageLimit: null },
     ]);
     expect(
@@ -245,7 +248,15 @@ describe("storage usage and limits through the API", () => {
         { path: "/big.mov", size: 600, modifiedAt: "2023-11-14T22:13:20.000Z" },
         { path: "/docs/notes.txt", size: 5, modifiedAt: "2023-11-14T22:13:20.000Z" },
       ],
+      // Alice's identical files are in a folder shared with bob, but not in his own.
+      duplicates: [],
     });
+    const alicePage = StorageUsageResponse.parse(
+      await (await call(ROUTES.storage, { cookie: alice })).json(),
+    );
+    expect(alicePage.duplicates).toEqual([
+      { size: 8, paths: ["/Projects/plan-copy.txt", "/Projects/plan.txt"] },
+    ]);
 
     // No limit, no refusal.
     await limit(alice, "bob", null);

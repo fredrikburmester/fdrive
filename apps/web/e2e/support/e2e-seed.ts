@@ -2,6 +2,7 @@ import { SEED_FILES, SEED_USERS, type SeedFiles, type SeedUser } from "@fdrive/t
 import { ACCOUNT_FILES, ACCOUNT_USERS } from "./account-fixture.js";
 import { PEOPLE_FILES, PEOPLE_GRANTS, PEOPLE_USERS } from "./people-fixture.js";
 import { SHARE_FILES, SHARE_USERS } from "./share-fixture.js";
+import { STORAGE_FILES, STORAGE_USERS } from "./storage-fixture.js";
 
 /** `folder-view.spec.ts`'s own user, whose folder views no other spec changes. */
 const FOLDER_VIEWS_USER: SeedUser = {
@@ -20,6 +21,7 @@ export const E2E_USERS: readonly SeedUser[] = [
   ...ACCOUNT_USERS,
   ...SHARE_USERS,
   ...PEOPLE_USERS,
+  ...STORAGE_USERS,
   FOLDER_VIEWS_USER,
 ];
 
@@ -28,6 +30,7 @@ export const E2E_FILES: SeedFiles = {
   ...ACCOUNT_FILES,
   ...SHARE_FILES,
   ...PEOPLE_FILES,
+  ...STORAGE_FILES,
 };
 
 export const E2E_GRANTS = PEOPLE_GRANTS;

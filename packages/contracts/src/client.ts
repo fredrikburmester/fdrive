@@ -304,7 +304,7 @@ export interface ApiClient {
   archiveEntries(path: string): Promise<ArchiveEntriesResponse>;
   /** A directory's total size, computed from the index only. */
   folderSize(path: string): Promise<FolderSizeResponse>;
-  /** The signed-in login's own folder: bytes used, its limit, kinds and largest files, from the index. */
+  /** The signed-in login's own folder: bytes used, its limit, kinds, largest files and duplicates, from the index. */
   storageUsage(): Promise<StorageUsageResponse>;
   jobs(): Promise<JobStatus[]>;
   job(id: string): Promise<JobStatus>;
