@@ -27,7 +27,7 @@ in-memory storage. It is an internal boundary, not a plugin system.
   logins do not appear.
 - `GET /api/v1/admin/providers` lists the storage with a reachability probe.
   `PATCH /api/v1/admin/providers/:id` changes only its display label (trimmed, 1 to 120
-  characters), shown on the login page and in Finder; System > General edits it.
+  characters), shown under each username and in Finder; System > General edits it.
 - An identity is a login on that row; an account links identities. Per request the API
   resolves the identity's row and module, runs `admit`, calls `createStorage`, hides the backup
   namespace (`withoutBackupPaths`) and adds the Trash wrappers when Trash is on.
