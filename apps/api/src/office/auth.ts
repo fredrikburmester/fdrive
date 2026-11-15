@@ -37,13 +37,13 @@ export async function callbackFile(
   // `Shared with me` while a folder holding it is shared with the login.
   const path = await deps.grants.pathFor(actor.identity.id, file);
   if (path === null) throw new WopiError(404);
-  const stat = await actor.storage.statFile(path);
+  // Every callback is about a file that is there now.
+  await actor.storage.statFile(path);
   const editAllowed = await canEditOfficeFile(deps, actor, path);
   return {
     actor,
     file,
     path,
-    stat,
     editAllowed,
     mode: claims.mode === "edit" && editAllowed ? "edit" : "view",
   };

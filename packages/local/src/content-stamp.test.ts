@@ -18,8 +18,8 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { type Fixture, fixture, kindOf } from "../test/helpers.js";
 import { createUserStorage, SHARED_WITH_ME } from "./shared.js";
 
-async function downloadAndCancel(storage: StorageProvider, path: string): Promise<void> {
-  await (await storage.download(path)).body.cancel();
+async function openAndClose(storage: StorageProvider, path: string): Promise<void> {
+  await (await storage.open(path)).close();
 }
 
 const asRoot = process.getuid?.() === 0;
@@ -75,7 +75,7 @@ describe("contentStamp on a home folder", () => {
     expect((await f.storage.contentStamp("/a.txt")).ino).not.toBe(before.ino);
   });
 
-  it("fails exactly as download does", async () => {
+  it("fails exactly as open does", async () => {
     await writeFile(join(f.home, "f.txt"), "f");
     await writeFile(join(f.root, "outside.txt"), "outside");
     await mkdir(join(f.home, "dir"));
@@ -95,13 +95,13 @@ describe("contentStamp on a home folder", () => {
       "/locked.txt": asRoot ? null : "forbidden",
     };
     const stamped: Record<string, string | null> = {};
-    const downloaded: Record<string, string | null> = {};
+    const opened: Record<string, string | null> = {};
     for (const path of Object.keys(expected)) {
       stamped[path] = await kindOf(f.storage.contentStamp(path));
-      downloaded[path] = await kindOf(downloadAndCancel(f.storage, path));
+      opened[path] = await kindOf(openAndClose(f.storage, path));
     }
     expect(stamped).toEqual(expected);
-    expect(downloaded).toEqual(expected);
+    expect(opened).toEqual(expected);
   });
 });
 
@@ -144,7 +144,7 @@ describe("contentStamp on a user's files", () => {
     expect((await bob.contentStamp("/own.txt")).ino).toBe(own.ino);
   });
 
-  it("refuses Shared with me, a shared folder, and what is not there, as download does", async () => {
+  it("refuses Shared with me, a shared folder, and what is not there, as open does", async () => {
     const expected = {
       [`/${SHARED_WITH_ME}`]: "bad_request",
       [`/${SHARED_WITH_ME}/Projects`]: "bad_request",
@@ -153,7 +153,7 @@ describe("contentStamp on a user's files", () => {
     };
     for (const [path, kind] of Object.entries(expected)) {
       expect(await kindOf(bob.contentStamp(path))).toBe(kind);
-      expect(await kindOf(downloadAndCancel(bob, path))).toBe(kind);
+      expect(await kindOf(openAndClose(bob, path))).toBe(kind);
     }
   });
 });

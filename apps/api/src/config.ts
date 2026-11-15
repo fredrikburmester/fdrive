@@ -50,7 +50,7 @@ export interface AppConfig {
    */
   readonly fdriveTrustedProxyHops: number;
   readonly nodeEnv: NodeEnv;
-  /** Directory archive jobs spool temp files into. Defaults to the OS temp dir. */
+  /** Directory for temporary files. Defaults to the OS temp dir. */
   readonly fdriveTmpDir: string;
   /** Durable, private spool. Unset disables desktop writes. */
   readonly fdriveBackupStateDir?: string;

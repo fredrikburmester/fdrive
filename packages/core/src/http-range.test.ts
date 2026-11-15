@@ -1,27 +1,24 @@
 import { describe, expect, it } from "vitest";
-import { contentDisposition, parseRangeHeader } from "./http-range.ts";
+import { contentDisposition, fileSlice, ifRangeMatches, parseRangeHeader } from "./http-range.ts";
 
 describe("parseRangeHeader", () => {
   it("returns kind none when there is no header", () => {
     expect(parseRangeHeader(null, 100)).toEqual({ kind: "none" });
-    expect(parseRangeHeader(null, null)).toEqual({ kind: "none" });
   });
 
   it("parses a bounded range bytes=a-b", () => {
     expect(parseRangeHeader("bytes=0-10", 100)).toEqual({ kind: "single", start: 0, end: 10 });
-    expect(parseRangeHeader("bytes=0-10", null)).toEqual({ kind: "single", start: 0, end: 10 });
   });
 
   it("clamps the end of a bounded range to size - 1", () => {
     expect(parseRangeHeader("bytes=0-999", 100)).toEqual({ kind: "single", start: 0, end: 99 });
   });
 
-  it("parses an open-ended range bytes=a-", () => {
-    expect(parseRangeHeader("bytes=50-", 100)).toEqual({ kind: "single", start: 50 });
-    expect(parseRangeHeader("bytes=50-", null)).toEqual({ kind: "single", start: 50 });
+  it("ends an open-ended range bytes=a- at the last byte", () => {
+    expect(parseRangeHeader("bytes=50-", 100)).toEqual({ kind: "single", start: 50, end: 99 });
   });
 
-  it("converts a suffix range bytes=-n to a start when size is known", () => {
+  it("converts a suffix range bytes=-n to the last n bytes", () => {
     expect(parseRangeHeader("bytes=-10", 100)).toEqual({ kind: "single", start: 90, end: 99 });
   });
 
@@ -33,11 +30,7 @@ describe("parseRangeHeader", () => {
     expect(parseRangeHeader("bytes=-10", 0)).toEqual({ kind: "invalid" });
   });
 
-  it("rejects a suffix range when size is unknown", () => {
-    expect(parseRangeHeader("bytes=-10", null)).toEqual({ kind: "invalid" });
-  });
-
-  it("rejects a suffix range of zero or negative length", () => {
+  it("rejects a suffix range of zero length", () => {
     expect(parseRangeHeader("bytes=-0", 100)).toEqual({ kind: "invalid" });
   });
 
@@ -66,17 +59,55 @@ describe("parseRangeHeader", () => {
     expect(parseRangeHeader("not a range", 100)).toEqual({ kind: "invalid" });
   });
 
-  it("rejects a start at or beyond a known size", () => {
+  it("rejects a start at or beyond the size", () => {
     expect(parseRangeHeader("bytes=100-", 100)).toEqual({ kind: "invalid" });
     expect(parseRangeHeader("bytes=150-200", 100)).toEqual({ kind: "invalid" });
+    expect(parseRangeHeader("bytes=0-", 0)).toEqual({ kind: "invalid" });
   });
 
   it("rejects an end before the start", () => {
     expect(parseRangeHeader("bytes=10-5", 100)).toEqual({ kind: "invalid" });
   });
+});
 
-  it("accepts a start-only range with unknown size and no upper validation", () => {
-    expect(parseRangeHeader("bytes=1000-", null)).toEqual({ kind: "single", start: 1000 });
+describe("ifRangeMatches", () => {
+  const modifiedAt = new Date("2026-11-15T10:00:00.750Z");
+
+  it("applies without If-Range, and for a date naming the file's second", () => {
+    expect(ifRangeMatches(null, modifiedAt)).toBe(true);
+    expect(ifRangeMatches(modifiedAt.toUTCString(), modifiedAt)).toBe(true);
+  });
+
+  it("never matches an entity tag, another second or a value that is no date", () => {
+    for (const value of ['"etag"', 'W/"etag"', "Sun, 15 Nov 2026 09:59:59 GMT", "garbage"]) {
+      expect(ifRangeMatches(value, modifiedAt), value).toBe(false);
+    }
+  });
+});
+
+describe("fileSlice", () => {
+  const file = { size: 10, modifiedAt: new Date("2026-11-15T10:00:00Z") };
+
+  it("sends the whole file without a range", () => {
+    expect(fileSlice(file, null, null)).toEqual({ status: 200, start: 0, end: 9 });
+    expect(fileSlice({ ...file, size: 0 }, null, null)).toEqual({ status: 200, start: 0, end: -1 });
+  });
+
+  it("sends one range, and 416 for a range the file cannot satisfy", () => {
+    expect(fileSlice(file, "bytes=-4", null)).toEqual({ status: 206, start: 6, end: 9 });
+    expect(fileSlice(file, "bytes=20-", null)).toEqual({ status: 416 });
+    expect(fileSlice({ ...file, size: 0 }, "bytes=0-", null)).toEqual({ status: 416 });
+  });
+
+  it("sends the whole file for several ranges, or once If-Range no longer names it", () => {
+    expect(fileSlice(file, "bytes=0-1,4-5", null)).toEqual({ status: 200, start: 0, end: 9 });
+    expect(fileSlice(file, "bytes=0-4", '"etag"')).toEqual({ status: 200, start: 0, end: 9 });
+    expect(fileSlice(file, "bytes=20-", '"etag"')).toEqual({ status: 200, start: 0, end: 9 });
+    expect(fileSlice(file, "bytes=0-4", file.modifiedAt.toUTCString())).toEqual({
+      status: 206,
+      start: 0,
+      end: 4,
+    });
   });
 });
 

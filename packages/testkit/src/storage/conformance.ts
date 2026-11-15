@@ -102,32 +102,33 @@ export function describeStorageProvider(name: string, factory: StorageFactory): 
       expect(await kindOf(storage.stat(`${root}/nope`))).toBe("not_found");
     });
 
-    it("downloads whole files and byte ranges, with their length and modification time", async () => {
+    it("opens a file with its size and modification time, to stream or read by position", async () => {
       const file = await seed("d.txt", "hello world");
       const { modifiedAt } = await storage.stat(file);
-      const whole = await storage.download(file);
-      expect(whole).toMatchObject({ status: 200, contentLength: 11, contentRange: null });
-      expect(whole.lastModified).toEqual(modifiedAt);
-      expect(await text(whole.body)).toBe("hello world");
-      const range = await storage.download(file, { range: { start: 6, end: 10 } });
-      expect(range).toMatchObject({
-        status: 206,
-        contentLength: 5,
-        contentRange: "bytes 6-10/11",
-      });
-      expect(await text(range.body)).toBe("world");
-      const open = await storage.download(file, { range: { start: 6 } });
-      expect(await text(open.body)).toBe("world");
-      expect(await kindOf(storage.download(`${root}/nope`))).toBe("not_found");
+      const whole = await storage.open(file);
+      expect(whole).toMatchObject({ size: 11, modifiedAt });
+      expect(new TextDecoder().decode(await whole.read(6, 100))).toBe("world");
+      expect(await whole.read(11, 1)).toHaveLength(0);
+      expect(await text(whole.stream())).toBe("hello world");
+      expect(await text((await storage.open(file)).stream(6, 10))).toBe("world");
+      expect(await text((await storage.open(file)).stream(6))).toBe("world");
+      expect(await text((await storage.open(file)).stream(6, 3))).toBe("");
+      expect(await kindOf(storage.open(`${root}/nope`))).toBe("not_found");
+      expect(await kindOf(storage.open(root))).toBe("bad_request");
     });
 
-    it("cancels a download through its signal, as an abort rather than a storage error", async () => {
-      const file = await seed("c.txt", "hello");
-      const controller = new AbortController();
-      controller.abort();
-      expect(await kindOf(storage.download(file, { signal: controller.signal }))).toMatch(
-        /^not a StorageError: AbortError/,
-      );
+    it("closes a file once its stream ends or is cancelled, and closes it once", async () => {
+      const path = await seed("c.txt", "hello");
+      const ended = await storage.open(path);
+      await text(ended.stream());
+      expect(await kindOf(ended.read(0, 1))).toBe("internal");
+      const cancelled = await storage.open(path);
+      await cancelled.stream().cancel();
+      expect(await kindOf(cancelled.read(0, 1))).toBe("internal");
+      const closed = await storage.open(path);
+      await closed.close();
+      await closed.close();
+      expect(await kindOf(closed.read(0, 1))).toBe("internal");
     });
 
     it("uploads with parents, replaces when asked, keeps the given mtime and reports the file", async () => {
@@ -137,7 +138,7 @@ export function describeStorageProvider(name: string, factory: StorageFactory): 
       });
       expect(first).toMatchObject({ path, name: "file.txt", kind: "file", size: 3, ext: ".txt" });
       expect(first).toEqual(await storage.stat(path));
-      expect(await text((await storage.download(path)).body)).toBe("one");
+      expect(await text((await storage.open(path)).stream())).toBe("one");
       const at = new Date("2020-01-02T03:04:05Z");
       const second = await storage.upload(path, new TextEncoder().encode("three"), {
         modifiedAt: at,
@@ -145,7 +146,7 @@ export function describeStorageProvider(name: string, factory: StorageFactory): 
       });
       expect(second).toMatchObject({ path, size: 5, modifiedAt: at });
       expect(second).toEqual(await storage.stat(path));
-      expect(await text((await storage.download(path)).body)).toBe("three");
+      expect(await text((await storage.open(path)).stream())).toBe("three");
       expect(
         await kindOf(storage.upload(`${root}/short.txt`, new Uint8Array(2), { contentLength: 3 })),
       ).toBe("bad_request");
@@ -165,7 +166,7 @@ export function describeStorageProvider(name: string, factory: StorageFactory): 
         mkdirParents: true,
       });
       expect(published).toMatchObject({ path, size: 11 });
-      expect(await text((await storage.download(path)).body)).toBe("hello world");
+      expect(await text((await storage.open(path)).stream())).toBe("hello world");
       expect((await storage.list(`${root}/pieces`)).map((entry) => entry.name)).toEqual([
         "file.txt",
       ]);
@@ -201,7 +202,7 @@ export function describeStorageProvider(name: string, factory: StorageFactory): 
       // Nothing is at the path while the body arrives, and it is published last.
       expect(seen).toEqual(["not_found"]);
       expect(entered.at(-1)).toBe(1);
-      expect(await text((await storage.download(path)).body)).toBe("staged");
+      expect(await text((await storage.open(path)).stream())).toBe("staged");
     });
 
     it("creates directories, with parents on request, and reports the first it created", async () => {
@@ -230,11 +231,11 @@ export function describeStorageProvider(name: string, factory: StorageFactory): 
       expect(renamed).toMatchObject({ path: `${root}/m/renamed.txt`, kind: "file", size: 1, ino });
       expect(renamed).toEqual(await storage.stat(`${root}/m/renamed.txt`));
       expect(await kindOf(storage.statFile(file))).toBe("not_found");
-      expect(await text((await storage.download(`${root}/m/renamed.txt`)).body)).toBe("a");
+      expect(await text((await storage.open(`${root}/m/renamed.txt`)).stream())).toBe("a");
       const folder = await storage.move(`${root}/m`, `${root}/moved`);
       expect(folder).toMatchObject({ path: `${root}/moved`, name: "moved", kind: "dir" });
       expect(await kindOf(storage.stat(`${root}/m`))).toBe("not_found");
-      expect(await text((await storage.download(`${root}/moved/sub/b.txt`)).body)).toBe("b");
+      expect(await text((await storage.open(`${root}/moved/sub/b.txt`)).stream())).toBe("b");
       expect(await kindOf(storage.move(`${root}/nope`, `${root}/x`))).toBe("not_found");
     });
 
@@ -252,8 +253,8 @@ export function describeStorageProvider(name: string, factory: StorageFactory): 
         expect(await kindOf(storage.upload(target, new TextEncoder().encode("newer"), opts))).toBe(
           "conflict",
         );
-        expect(await text((await storage.download(target)).body)).toBe("old");
-        expect(await text((await storage.download(source)).body)).toBe("new");
+        expect(await text((await storage.open(target)).stream())).toBe("old");
+        expect(await text((await storage.open(source)).stream())).toBe("new");
         expect(await storage.stat(folder)).toMatchObject({ kind: "dir" });
       });
     }
@@ -261,14 +262,14 @@ export function describeStorageProvider(name: string, factory: StorageFactory): 
     it("replaces a taken file target for move, copy and upload with overwrite true", async () => {
       const target = await seed("r/dst.txt", "old");
       await storage.upload(target, new TextEncoder().encode("uploaded"), { overwrite: true });
-      expect(await text((await storage.download(target)).body)).toBe("uploaded");
+      expect(await text((await storage.open(target)).stream())).toBe("uploaded");
       const copied = await seed("r/copied.txt", "copied");
       await storage.copy(copied, target, { overwrite: true });
-      expect(await text((await storage.download(target)).body)).toBe("copied");
-      expect(await text((await storage.download(copied)).body)).toBe("copied");
+      expect(await text((await storage.open(target)).stream())).toBe("copied");
+      expect(await text((await storage.open(copied)).stream())).toBe("copied");
       const moved = await seed("r/moved.txt", "moved");
       await storage.move(moved, target, { overwrite: true });
-      expect(await text((await storage.download(target)).body)).toBe("moved");
+      expect(await text((await storage.open(target)).stream())).toBe("moved");
       expect(await kindOf(storage.stat(moved))).toBe("not_found");
     });
 
@@ -279,14 +280,14 @@ export function describeStorageProvider(name: string, factory: StorageFactory): 
       expect(copy).toMatchObject({ path: `${root}/c/copy.txt`, kind: "file", size: 1 });
       expect(copy).toEqual(await storage.stat(`${root}/c/copy.txt`));
       expect(copy.ino).not.toBe((await storage.stat(file)).ino);
-      expect(await text((await storage.download(file)).body)).toBe("a");
-      expect(await text((await storage.download(`${root}/c/copy.txt`)).body)).toBe("a");
+      expect(await text((await storage.open(file)).stream())).toBe("a");
+      expect(await text((await storage.open(`${root}/c/copy.txt`)).stream())).toBe("a");
       expect(await storage.copy(`${root}/c`, `${root}/c2`)).toMatchObject({
         path: `${root}/c2`,
         kind: "dir",
       });
-      expect(await text((await storage.download(`${root}/c/sub/b.txt`)).body)).toBe("b");
-      expect(await text((await storage.download(`${root}/c2/sub/b.txt`)).body)).toBe("b");
+      expect(await text((await storage.open(`${root}/c/sub/b.txt`)).stream())).toBe("b");
+      expect(await text((await storage.open(`${root}/c2/sub/b.txt`)).stream())).toBe("b");
     });
 
     it("deletes files and directories recursively", async () => {
@@ -306,7 +307,7 @@ export function describeStorageProvider(name: string, factory: StorageFactory): 
       expect(await kindOf(storage.deleteEmptyDir(`${root}/e/full`))).toBe("conflict");
       expect(await kindOf(storage.deleteEmptyDir(`${root}/e/nested`))).toBe("conflict");
       expect(await kindOf(storage.deleteEmptyDir(file))).toBe("bad_request");
-      expect(await text((await storage.download(file)).body)).toBe("a");
+      expect(await text((await storage.open(file)).stream())).toBe("a");
       await storage.deleteEmptyDir(`${root}/e/nested/inner`);
       await storage.deleteEmptyDir(`${root}/e/nested`);
       expect(await kindOf(storage.stat(`${root}/e/nested`))).toBe("not_found");
@@ -318,7 +319,7 @@ export function describeStorageProvider(name: string, factory: StorageFactory): 
       const path = await seed(name, "u");
       const entries = await storage.list(root);
       expect(entries.map((entry) => entry.name)).toContain(name);
-      expect(await text((await storage.download(path)).body)).toBe("u");
+      expect(await text((await storage.open(path)).stream())).toBe("u");
       await storage.move(path, `${root}/${name}.moved`);
       expect((await storage.list(root)).map((entry) => entry.name)).toContain(`${name}.moved`);
     });

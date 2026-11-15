@@ -14,6 +14,7 @@ import {
   parentPath,
 } from "@fdrive/core";
 import { officeFileActor, recordOfficeOpen } from "../activity/office.js";
+import { sendFile } from "../fs/send-file.ts";
 import { browserActor, callbackFile, requireOfficeEdit } from "./auth.ts";
 import { officeErrorResponse, WopiError } from "./errors.ts";
 import { selectDiscoveryAction } from "./protocol/discovery.ts";
@@ -140,26 +141,21 @@ async function getContents(
   signal: AbortSignal,
 ): Promise<Response> {
   const raw = request.headers.get("X-WOPI-MaxExpectedSize");
-  let max = config.maxBytes;
-  if (raw !== null) {
-    if (!/^\d+$/.test(raw) || !Number.isSafeInteger(Number(raw))) throw new WopiError(400);
-    if (opened.stat.size > Number(raw)) throw new WopiError(412);
-    max = Math.min(max, Number(raw));
+  if (raw !== null && (!/^\d+$/.test(raw) || !Number.isSafeInteger(Number(raw))))
+    throw new WopiError(400);
+  const max = raw === null ? config.maxBytes : Math.min(config.maxBytes, Number(raw));
+  const file = await opened.actor.storage.open(opened.path);
+  if (file.size > max) {
+    await file.close();
+    throw new WopiError(raw !== null && file.size > Number(raw) ? 412 : 413);
   }
-  if (opened.stat.size > config.maxBytes) throw new WopiError(413);
-  const result = await opened.actor.storage.download(opened.path, { signal });
-  if (result.contentLength > max) {
-    await result.body.cancel();
-    throw new WopiError(raw === null ? 413 : 412);
-  }
-  const headers = new Headers({
-    "Content-Type":
-      mimeFromExtension(extensionOf(baseName(opened.path))) ?? "application/octet-stream",
-    "Content-Length": String(result.contentLength),
-    "Last-Modified": result.lastModified.toUTCString(),
-    "Cache-Control": "no-store",
-  });
-  return new Response(boundedStream(result.body, max, signal), { headers });
+  const type = mimeFromExtension(extensionOf(baseName(opened.path))) ?? "application/octet-stream";
+  return sendFile(
+    request,
+    file,
+    { "Content-Type": type, "Cache-Control": "no-store" },
+    { body: (bytes) => boundedStream(bytes, max, signal) },
+  );
 }
 export function createOfficeService(deps: OfficeDeps) {
   async function configured(): Promise<{

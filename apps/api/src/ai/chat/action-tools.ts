@@ -411,7 +411,6 @@ function assertTextName(path: string): void {
 async function checkWriteTarget(
   deps: ChatActionToolsDeps,
   input: { path: string; mode: "create" | "replace"; expectedSha256: string | null },
-  signal: AbortSignal,
 ): Promise<{ path: string; sha256: string | null }> {
   let path: string;
   try {
@@ -438,7 +437,7 @@ async function checkWriteTarget(
     throw new AiToolError(
       `${stored} is larger than ${MAX_WRITE_BYTES} bytes and cannot be replaced.`,
     );
-  const read = await readBytes(deps, stored, MAX_WRITE_BYTES, signal);
+  const read = await readBytes(deps, stored, MAX_WRITE_BYTES);
   if (read === null || decodeText(read.bytes) === null)
     throw new AiToolError(`${stored} is not a UTF-8 text file and cannot be replaced.`);
   if (input.expectedSha256 === null)
@@ -475,12 +474,12 @@ function writeTextFileTool(deps: ChatActionToolsDeps): ActionTool {
     {
       activity: (args) =>
         `${args.mode === "create" ? "Drafted" : "Rewrote"} ${baseName(args.path)}`,
-      async verify(args, signal) {
-        const target = await checkWriteTarget(
-          deps,
-          { path: args.path, mode: args.mode, expectedSha256: args.expected_sha256 ?? null },
-          signal,
-        );
+      async verify(args) {
+        const target = await checkWriteTarget(deps, {
+          path: args.path,
+          mode: args.mode,
+          expectedSha256: args.expected_sha256 ?? null,
+        });
         return {
           kind: "write",
           summary: args.summary,
@@ -496,16 +495,12 @@ function writeTextFileTool(deps: ChatActionToolsDeps): ActionTool {
         const rawPath = edits?.path ?? proposal.path;
         let path: string;
         try {
-          ({ path } = await checkWriteTarget(
-            deps,
-            {
-              path: rawPath,
-              mode,
-              expectedSha256:
-                mode === "replace" && rawPath === proposal.path ? proposal.expectedSha256 : null,
-            },
-            signal,
-          ));
+          ({ path } = await checkWriteTarget(deps, {
+            path: rawPath,
+            mode,
+            expectedSha256:
+              mode === "replace" && rawPath === proposal.path ? proposal.expectedSha256 : null,
+          }));
         } catch (error) {
           const message = errorMessage(error);
           return {

@@ -1,9 +1,18 @@
-import { StorageError, type StorageProvider } from "@fdrive/core";
-import { createMemoryStorage, entryStat } from "@fdrive/testkit";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { type OpenFile, StorageError, type StorageProvider } from "@fdrive/core";
+import { createLocalStorage } from "@fdrive/local";
+import { createMemoryStorage } from "@fdrive/testkit";
 import * as tar from "tar-stream";
 import { describe, expect, it } from "vitest";
 import { ZipFile } from "yazl";
-import { peekArchive, UnreadableArchiveError, UnsupportedPeekFormatError } from "./peek.js";
+import {
+  PEEK_TAIL_READ_BYTES,
+  peekArchive,
+  UnreadableArchiveError,
+  UnsupportedPeekFormatError,
+} from "./peek.js";
 
 async function buildZipBuffer(build: (zipfile: ZipFile) => void): Promise<Buffer> {
   const zipfile = new ZipFile();
@@ -52,7 +61,7 @@ describe("peekArchive: unsupported and non-archive paths", () => {
 });
 
 describe("peekArchive: zip", () => {
-  it("reads entries via two Range reads, sorted by path", async () => {
+  it("reads entries via two reads by position, sorted by path", async () => {
     const mtime = new Date(2026, 0, 1);
     const zipBytes = await buildZipBuffer((zipfile) => {
       zipfile.addBuffer(Buffer.from("bravo"), "b.txt", { mtime });
@@ -87,7 +96,7 @@ describe("peekArchive: zip", () => {
     // coverage run, so give it the same headroom as the route-level test.
   }, 20_000);
 
-  it("returns no entries for an empty zip without a second Range read", async () => {
+  it("returns no entries for an empty zip without a second read", async () => {
     const zipBytes = await buildZipBuffer(() => {});
     const storage = createMemoryStorage({ "/empty.zip": zipBytes });
 
@@ -145,7 +154,7 @@ describe("peekArchive: zip", () => {
   it("propagates a StorageError from the storage layer unchanged", async () => {
     const storage: StorageProvider = {
       ...createMemoryStorage({}),
-      statFile: async () => {
+      open: async () => {
         throw new StorageError("forbidden", "no access");
       },
     };
@@ -203,85 +212,95 @@ describe("peekArchive: tar family", () => {
   });
 });
 
-it.each(["ignored", "missing-range", "wrong-range", "wrong-length", "overrun", "short"])(
-  "bounds ZIP readers when the upstream response is %s",
-  async (mode) => {
-    let cancelled = false;
-    let reads = 0;
-    const total = 1024 * 1024;
-    const size = 65536;
-    const storage = createMemoryStorage({ "/large.zip": Buffer.alloc(total) });
-    storage.download = async () => ({
-      status: mode === "ignored" ? 200 : 206,
-      contentRange:
-        mode === "missing-range"
-          ? null
-          : `bytes ${mode === "wrong-range" ? 0 : total - size}-${total - 1}/${total}`,
-      contentLength: mode === "wrong-length" ? total : size,
-      lastModified: new Date(0),
-      body: new ReadableStream(
-        {
-          pull(controller) {
-            reads++;
-            controller.enqueue(new Uint8Array(mode === "short" ? size - 1 : size + 1));
-            controller.close();
+/** `storage`, counting the bytes its open files read and whether each was closed. */
+function counted(storage: StorageProvider) {
+  const seen = { reads: [] as number[], streamed: false, closed: 0, opened: 0 };
+  return {
+    seen,
+    storage: {
+      ...storage,
+      open: async (path: string): Promise<OpenFile> => {
+        const file = await storage.open(path);
+        seen.opened++;
+        return {
+          ...file,
+          stream: (start, end) => {
+            seen.streamed = true;
+            return file.stream(start, end);
           },
-          cancel() {
-            cancelled = true;
+          read: async (position, length) => {
+            const bytes = await file.read(position, length);
+            seen.reads.push(bytes.length);
+            return bytes;
           },
-        },
-        { highWaterMark: 0 },
-      ),
-    });
-    await expect(
-      peekArchive({ storage, path: "/large.zip", maxBytes: total }),
-    ).rejects.toBeInstanceOf(UnreadableArchiveError);
-    if (["ignored", "missing-range", "wrong-range", "wrong-length"].includes(mode)) {
-      expect(cancelled).toBe(true);
-      expect(reads).toBe(0);
-    } else {
-      expect(reads).toBe(1);
-    }
-  },
-);
-
-it("permits a bounded complete 200 response for a small archive", async () => {
-  const bytes = await buildZipBuffer((zip) => zip.addBuffer(Buffer.from("ok"), "ok.txt"));
-  const storage = createMemoryStorage({ "/small.zip": bytes });
-  const download = storage.download;
-  let calls = 0;
-  storage.download = async (path, options) => {
-    const result = await download(path, options);
-    return ++calls === 1 ? { ...result, status: 200, contentRange: null } : result;
+          close: async () => {
+            seen.closed++;
+            await file.close();
+          },
+        };
+      },
+    } satisfies StorageProvider,
   };
-  expect(
-    (await peekArchive({ storage, path: "/small.zip", maxBytes: DEFAULT_MAX_BYTES })).entries[0]
-      ?.path,
-  ).toBe("ok.txt");
+}
+
+it("peeks a zip whose central directory sits at the end of a large file", async () => {
+  const home = await mkdtemp(join(tmpdir(), "fdrive-peek-"));
+  try {
+    const big = Buffer.alloc(48 * 1024 * 1024, 7);
+    const zipBytes = await buildZipBuffer((zipfile) => {
+      zipfile.addBuffer(big, "big.bin", { compress: false });
+      zipfile.addBuffer(Buffer.from("tail"), "notes/tail.txt");
+    });
+    expect(zipBytes.length).toBeGreaterThan(big.length);
+    await writeFile(join(home, "large.zip"), zipBytes);
+    const { storage, seen } = counted(createLocalStorage({ home }));
+
+    const result = await peekArchive({ storage, path: "/large.zip", maxBytes: DEFAULT_MAX_BYTES });
+
+    expect(result.entries.map((entry) => [entry.path, entry.size])).toEqual([
+      ["big.bin", big.length],
+      ["notes/tail.txt", 4],
+    ]);
+    // The tail, then the central directory: nothing of the large entry.
+    expect(seen.reads).toHaveLength(2);
+    expect(seen.reads[0]).toBe(PEEK_TAIL_READ_BYTES);
+    expect(seen.reads.reduce((sum, bytes) => sum + bytes, 0)).toBeLessThan(80 * 1024);
+    expect(seen).toMatchObject({ streamed: false, opened: 1, closed: 1 });
+  } finally {
+    await rm(home, { recursive: true, force: true });
+  }
+}, 20_000);
+
+it("refuses a zip that reads short of what its end record declares, and closes it", async () => {
+  const bytes = await buildZipBuffer((zip) => zip.addBuffer(Buffer.from("kept"), "a.txt"));
+  const memory = createMemoryStorage({ "/file.zip": bytes });
+  const storage: StorageProvider = {
+    ...memory,
+    open: async (path) => {
+      const file = await memory.open(path);
+      let reads = 0;
+      // The tail arrives whole; the central directory comes up one byte short.
+      return {
+        ...file,
+        read: async (position, length) =>
+          (await file.read(position, length)).subarray(0, ++reads === 1 ? length : length - 1),
+      };
+    },
+  };
+  const { storage: watched, seen } = counted(storage);
+  await expect(
+    peekArchive({ storage: watched, path: "/file.zip", maxBytes: 1_000_000 }),
+  ).rejects.toBeInstanceOf(UnreadableArchiveError);
+  expect(seen.closed).toBe(1);
 });
 
-it.each([true, false])(
-  "rejects unsafe range replies even if cancel fails (invalid headers=%s)",
-  async (invalidHeaders) => {
-    const bytes = await buildZipBuffer((zip) => zip.addBuffer(Buffer.from("kept"), "a.txt"));
-    const storage = createMemoryStorage({ "/file.zip": bytes });
-    storage.download = async () => ({
-      status: invalidHeaders ? 200 : 206,
-      contentLength: bytes.length,
-      contentRange: invalidHeaders ? null : `bytes 0-${bytes.length - 1}/${bytes.length}`,
-      lastModified: new Date(0),
-      body: new ReadableStream<Uint8Array>({
-        pull(controller) {
-          controller.enqueue(new Uint8Array(bytes.length + 1));
-        },
-        cancel() {
-          throw new Error("cancel failed");
-        },
-      }),
-    });
-    if (invalidHeaders) storage.statFile = async (path) => entryStat(path, { size: 100_000 });
-    await expect(
-      peekArchive({ storage, path: "/file.zip", maxBytes: 1_000_000 }),
-    ).rejects.toBeInstanceOf(UnreadableArchiveError);
-  },
-);
+it("closes a tar once its entries are read, and when it is not one", async () => {
+  const tarBytes = await buildTarBuffer([{ name: "a.txt", content: "alpha" }]);
+  const { storage, seen } = counted(
+    createMemoryStorage({ "/docs.tar": tarBytes, "/bad.tar": Buffer.from("not a tar") }),
+  );
+  const peek = (path: string) => peekArchive({ storage, path, maxBytes: DEFAULT_MAX_BYTES });
+  expect((await peek("/docs.tar")).entries).toHaveLength(1);
+  await expect(peek("/bad.tar")).rejects.toBeInstanceOf(UnreadableArchiveError);
+  expect(seen).toMatchObject({ streamed: true, opened: 2, closed: 2 });
+});

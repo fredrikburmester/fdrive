@@ -163,20 +163,20 @@ export function registerDesktopRoutes(
   );
   groups.public.get(`${base}/content`, async (c) => {
     const auth = await principal(c);
-    const result = await files.content(auth.principal, path(c), c.req.raw.signal);
+    const file = await files.content(auth.principal, path(c));
     c.header("Content-Type", "application/octet-stream");
-    c.header("Content-Length", String(result.contentLength));
+    c.header("Content-Length", String(file.size));
     return c.body(
       await activityStream(
         deps.activity,
         auth.principal,
         path(c),
         "file.materialize",
-        result.body,
+        file.stream(),
         {
           // A hydration the client retries under one ID is one materialization.
           ...(hydrationId(c) ? { requestId: hydrationId(c) as string } : {}),
-          expectedBytes: result.contentLength,
+          expectedBytes: file.size,
         },
       ),
     );
@@ -247,19 +247,19 @@ export function registerDesktopRoutes(
     );
     v2.get(`${base}/content`, async (c) => {
       const auth = await principal(c, true);
-      const result = await writeService().files.content(auth.principal, path(c), c.req.raw.signal);
+      const file = await writeService().files.content(auth.principal, path(c));
       c.header("Content-Type", "application/octet-stream");
-      c.header("Content-Length", String(result.contentLength));
+      c.header("Content-Length", String(file.size));
       return c.body(
         await activityStream(
           deps.activity,
           auth.principal,
           path(c),
           "file.materialize",
-          result.body,
+          file.stream(),
           {
             ...(hydrationId(c) ? { requestId: hydrationId(c) as string } : {}),
-            expectedBytes: result.contentLength,
+            expectedBytes: file.size,
           },
         ),
       );

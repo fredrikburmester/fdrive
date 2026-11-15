@@ -1,4 +1,4 @@
-import { type Download, type Scope, StorageError, type StorageProvider } from "@fdrive/core";
+import { type OpenFile, type Scope, StorageError, type StorageProvider } from "@fdrive/core";
 import { createMemoryStorage, entryStat } from "@fdrive/core/testing";
 import type { ActivityListOptions, IndexedFile, IndexQueries } from "@fdrive/db";
 import { createMemoryRepos } from "@fdrive/db/testing";
@@ -89,13 +89,14 @@ function stubIndexQueries(overrides: Partial<IndexQueries> = {}): IndexQueries {
   };
 }
 
-function fakeDownloadResult(): Download {
+/** An empty open file. */
+function emptyFile(): OpenFile {
   return {
-    status: 200,
-    body: { cancel: async () => {} } as unknown as ReadableStream<Uint8Array>,
-    contentLength: 0,
-    contentRange: null,
-    lastModified: new Date(0),
+    size: 0,
+    modifiedAt: new Date(0),
+    stream: () => new ReadableStream({ start: (controller) => controller.close() }),
+    read: async () => new Uint8Array(),
+    close: async () => {},
   };
 }
 
@@ -111,7 +112,7 @@ function movedFile() {
 
 /**
  * Memory storage where every path stats as an empty file, no file can be
- * read for its size, and every download is empty, unless `overrides` says
+ * read for its size, and every file opens empty, unless `overrides` says
  * otherwise.
  */
 function fakeStorage(overrides: Partial<StorageProvider> = {}): StorageProvider {
@@ -121,7 +122,7 @@ function fakeStorage(overrides: Partial<StorageProvider> = {}): StorageProvider 
     statFile: async () => {
       throw new StorageError("not_found", "missing");
     },
-    download: async () => fakeDownloadResult(),
+    open: async () => emptyFile(),
     ...overrides,
   };
 }

@@ -392,8 +392,8 @@ describe("POST /trash/restore", () => {
     // The conflict came from `@fdrive/core`'s `createRecycleFolderTrash.restore`, not any
     // pre-restore check of the route's own (the route has none): confirm the target file that
     // was already there is untouched and the trashed leaf is still present.
-    const downloaded = await storage.download("/hello.txt");
-    expect(await new Response(downloaded.body).text()).toBe("new content");
+    const kept = await storage.open("/hello.txt");
+    expect(await new Response(kept.stream()).text()).toBe("new content");
     const stillTrashed = TrashListResponse.parse(
       await readJson(await app.request(ROUTES.trash.list)),
     );

@@ -290,18 +290,18 @@ it("publishes nothing once the pairing is revoked or downgraded while a save has
       const found = await findByHash(hash);
       return changed && found ? { ...found, access: { mode: "read", paths: ["/"] } } : found;
     });
-    const download = f.storage.download.bind(f.storage);
-    vi.spyOn(f.storage, "download").mockImplementation(async (path, options) => {
+    const open = f.storage.open.bind(f.storage);
+    vi.spyOn(f.storage, "open").mockImplementation(async (path) => {
       if (path === "/docs/a.txt" && !changed) {
         changed = true;
         if (change === "revoked") await f.repos.apiTokens.delete(stored.id, f.account.id);
       }
-      return download(path, options);
+      return open(path);
     });
     const commit = await call(`/operations/${operationId}/commit`, {});
     expect(commit.status, change).toBe(401);
     expect(changed).toBe(true);
-    expect(await new Response((await download("/docs/a.txt")).body).text()).toBe("alpha");
+    expect(await new Response((await open("/docs/a.txt")).stream()).text()).toBe("alpha");
   }
 });
 
@@ -811,7 +811,7 @@ it("lists 10,000 metadata entries consistently, binding cursors to token, identi
     ext: "txt",
   }));
   const list = vi.spyOn(f.storage, "list").mockResolvedValue(entries);
-  const download = vi.spyOn(f.storage, "download");
+  const open = vi.spyOn(f.storage, "open");
   f.storage.probeDirectoryRead = vi.fn(async () => {});
   const first = await f.files.list(f.principal, "/", "token");
   const cursor = first.nextCursor ?? "";
@@ -835,7 +835,7 @@ it("lists 10,000 metadata entries consistently, binding cursors to token, identi
   expect(all).toHaveLength(10_000);
   expect(new Set(all.map((entry) => entry.path)).size).toBe(10_000);
   expect(list).toHaveBeenCalledTimes(1);
-  expect(download).not.toHaveBeenCalled();
+  expect(open).not.toHaveBeenCalled();
   list.mockResolvedValue(entries);
   const expired = await f.files.list(f.principal, "/", "token");
   f.advance(120_000);
@@ -860,15 +860,15 @@ it("preserves ancestor visibility while enforcing grants, Trash exclusion, live 
   expect(
     (await f.files.list(principal, "/docs", "token")).entries.map((entry) => entry.name),
   ).toEqual(["a.txt"]);
-  await expect(
-    f.files.content(principal, "/hidden/b.txt", new AbortController().signal),
-  ).rejects.toMatchObject({ kind: "forbidden" });
+  await expect(f.files.content(principal, "/hidden/b.txt")).rejects.toMatchObject({
+    kind: "forbidden",
+  });
   await expect(f.files.list(f.principal, "/docs/a.txt", "token")).rejects.toMatchObject({
     kind: "bad_request",
   });
-  await expect(
-    f.files.content(f.principal, "/docs", new AbortController().signal),
-  ).rejects.toMatchObject({ kind: "bad_request" });
+  await expect(f.files.content(f.principal, "/docs")).rejects.toMatchObject({
+    kind: "bad_request",
+  });
   await expect(f.files.stat(f.principal, "/absent")).rejects.toMatchObject({ kind: "not_found" });
   vi.spyOn(f.storage, "list").mockResolvedValue([
     { path: "/link", name: "link", kind: "symlink", size: 0, modifiedAt: new Date(), ext: "" },
@@ -899,7 +899,7 @@ it("reads every entry with one stat and never lists its ancestors", async () => 
     kind: "file",
     size: 7,
   });
-  await f.files.content(f.principal, deep, signal);
+  await f.files.content(f.principal, deep);
   await f.files.versions(f.principal, [deep, "/docs/a.txt"], signal);
   expect(list).not.toHaveBeenCalled();
   expect(stat.mock.calls).toEqual([[deep], [deep], [deep], ["/docs/a.txt"]]);
@@ -953,7 +953,7 @@ it("refuses every read that reaches its item through a symbolic link, at any seg
       ]);
     }
     for (const path of files) {
-      await expect(f.files.content(principal, path, signal)).rejects.toMatchObject({
+      await expect(f.files.content(principal, path)).rejects.toMatchObject({
         kind: "forbidden",
       });
       await expect(f.files.versions(principal, [path], signal)).rejects.toMatchObject({
@@ -990,9 +990,9 @@ it("refuses every read that reaches its item through a symbolic link, at any seg
     inner: "symlink (unreadable)",
     sub: "dir",
   });
-  expect(
-    await new Response((await f.files.content(own, "/docs/sub/b.txt", signal)).body).text(),
-  ).toBe("bravo");
+  expect(await new Response((await f.files.content(own, "/docs/sub/b.txt")).stream()).text()).toBe(
+    "bravo",
+  );
   // The same holds inside a folder someone shares.
   await mkdir(join(root, "bob"));
   const shared = {
@@ -1025,15 +1025,15 @@ it("detects equal-size replacements, rejects short streams and releases validati
   await expect(f.files.versions(f.principal, ["/docs"], signal)).rejects.toMatchObject({
     kind: "bad_request",
   });
-  const original = f.storage.download;
-  vi.spyOn(f.storage, "download").mockImplementation(async (path, options) => ({
-    ...(await original(path, options)),
-    contentLength: 999,
+  const original = f.storage.open;
+  vi.spyOn(f.storage, "open").mockImplementation(async (path) => ({
+    ...(await original(path)),
+    size: 999,
   }));
   await expect(f.files.versions(f.principal, ["/docs/a.txt"], signal)).rejects.toMatchObject({
     kind: "upstream_unavailable",
   });
-  vi.mocked(f.storage.download).mockImplementation(original);
+  vi.mocked(f.storage.open).mockImplementation(original);
   const abort = new AbortController();
   abort.abort();
   await expect(f.files.versions(f.principal, ["/docs/a.txt"], abort.signal)).rejects.toThrow();
@@ -1113,14 +1113,15 @@ it("cancels an in-flight write credential issuance and tolerates a broken valida
   await cancellation;
   await rejection;
   expect(await f.repos.apiTokens.listByAccount(f.account.id)).toEqual([]);
-  const download = f.storage.download.bind(f.storage);
-  vi.spyOn(f.storage, "download").mockImplementation(async (...args) => ({
-    ...(await download(...args)),
-    body: new ReadableStream<Uint8Array>({
-      start(controller) {
-        controller.error(new Error("Broken content stream"));
-      },
-    }),
+  const open = f.storage.open.bind(f.storage);
+  vi.spyOn(f.storage, "open").mockImplementation(async (path) => ({
+    ...(await open(path)),
+    stream: () =>
+      new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.error(new Error("Broken content stream"));
+        },
+      }),
   }));
   await expect(
     f.files.versions(f.principal, ["/docs/a.txt"], new AbortController().signal),

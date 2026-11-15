@@ -49,7 +49,7 @@ describe("WOPI over a real local folder", () => {
     expect(save.headers.get("X-WOPI-ItemVersion")).toBeTruthy();
     const aliceStorage = storages.get("alice");
     if (!aliceStorage) throw new Error("Missing storage");
-    expect(await new Response((await aliceStorage.download("/a.docx")).body).text()).toBe(
+    expect(await new Response((await aliceStorage.open("/a.docx")).stream()).text()).toBe(
       "saved by bob åäö",
     );
     const view = await h.open("/a.docx", "view", h.reader);
@@ -102,10 +102,10 @@ describe("WOPI over a real local folder", () => {
     expect((await h.open("/Renamed.docx", "edit", h.bob)).fileId).toBe(opened.fileId);
     const bobStorage = storages.get("bob");
     if (!bobStorage) throw new Error("Missing storage");
-    expect(await new Response((await bobStorage.download("/Årsrapport.docx")).body).text()).toBe(
+    expect(await new Response((await bobStorage.open("/Årsrapport.docx")).stream()).text()).toBe(
       "copy bytes",
     );
-    expect(await new Response((await bobStorage.download("/Renamed.docx")).body).text()).toBe(
+    expect(await new Response((await bobStorage.open("/Renamed.docx")).stream()).text()).toBe(
       "saved by bob åäö",
     );
   });

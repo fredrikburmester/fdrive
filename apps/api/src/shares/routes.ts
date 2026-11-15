@@ -14,13 +14,7 @@ import {
   type ThumbSize,
   UpdateShareRequest,
 } from "@fdrive/contracts";
-import {
-  type Download,
-  extensionOf,
-  mimeFromExtension,
-  normalizePath,
-  toFsPath,
-} from "@fdrive/core";
+import { extensionOf, mimeFromExtension, normalizePath, toFsPath } from "@fdrive/core";
 import type { IdentityRepo, IndexQueries, ShareRecord } from "@fdrive/db";
 import type { Context } from "hono";
 import { getCookie, setCookie } from "hono/cookie";
@@ -185,31 +179,6 @@ export function shareId(c: Context): string {
 }
 export function attachment(name: string): string {
   return `attachment; filename="download"; filename*=UTF-8''${encodeURIComponent(name.replace(/\p{Cc}/gu, "")).replace(/['()*]/g, (char) => `%${char.charCodeAt(0).toString(16).toUpperCase()}`)}`;
-}
-/** A shared file's headers, its type from its name. */
-export function downloadHeaders(result: Omit<Download, "body">, name: string): Headers {
-  const headers = new Headers({
-    "Content-Type": mimeFromExtension(extensionOf(name)) ?? "application/octet-stream",
-    "Content-Disposition": attachment(name),
-    "Content-Length": String(result.contentLength),
-    "Last-Modified": result.lastModified.toUTCString(),
-    "Accept-Ranges": "bytes",
-  });
-  if (result.contentRange !== null) headers.set("Content-Range", result.contentRange);
-  return headers;
-}
-export function downloadResponse(result: Download, name: string): Response {
-  return new Response(result.body, {
-    status: result.status,
-    headers: downloadHeaders(result, name),
-  });
-}
-/** The 416 for a range the file cannot satisfy, naming its size when known, as the fs route does. */
-export function rangeNotSatisfiable(size: number | null): Response {
-  return new Response(null, {
-    status: 416,
-    headers: size === null ? {} : { "Content-Range": `bytes */${size}` },
-  });
 }
 /** What history records of a share: never its password or its secret URL. */
 function shareFacts(
@@ -509,8 +478,8 @@ export function registerSharesRoutes(
   );
   // HEAD is registered on its own rather than left to Hono's HEAD-as-GET
   // fallback, which would drop the body without cancelling the stream and
-  // leave the file open until it drained. It answers from a stat: no stream
-  // is opened and nothing is spent from the share's budget.
+  // leave the file open until it drained. It opens the file only to describe
+  // it: nothing is read and nothing is spent from the share's budget.
   const download = (c: Context) =>
     shareCall(async () => {
       const path = publicPath(c);
@@ -527,29 +496,13 @@ export function registerSharesRoutes(
         path === "/"
           ? share.row.paths[0]?.split("/").at(-1) || "download"
           : path.slice(path.lastIndexOf("/") + 1);
-      if (c.req.method === "HEAD") {
-        const stat = await deps.service.stat(share, path);
-        return new Response(null, {
-          status: 200,
-          headers: downloadHeaders(
-            {
-              status: 200,
-              contentLength: stat.size,
-              contentRange: null,
-              lastModified: stat.modifiedAt,
-            },
-            name,
-          ),
-        });
-      }
-      const outcome = await deps.service.download(share, path, {
-        range: c.req.header("range") ?? null,
-        ifRange: c.req.header("if-range"),
-        signal: c.req.raw.signal,
+      return deps.service.download(share, path, c.req.raw, {
         counted: previewed,
+        headers: {
+          "Content-Type": mimeFromExtension(extensionOf(name)) ?? "application/octet-stream",
+          "Content-Disposition": attachment(name),
+        },
       });
-      if (outcome.kind === "range-not-satisfiable") return rangeNotSatisfiable(outcome.size);
-      return downloadResponse(outcome.result, name);
     });
   groups.public.get(`${pub}${PUBLIC_SHARE_SUFFIXES.download}`, download);
   groups.public.on("HEAD", `${pub}${PUBLIC_SHARE_SUFFIXES.download}`, download);
