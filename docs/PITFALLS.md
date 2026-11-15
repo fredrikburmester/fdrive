@@ -68,6 +68,10 @@ Reference for affected code; shared rules live in [AGENTS.md](../AGENTS.md).
   running two registry transactions per entry behind one lock. Background work stays silent,
   its pace follows what it costs, and it asks which folders changed (`POST /checks`) before
   listing any.
+- Per-request storage moves every delete into Trash while Trash is on (`withMoveToTrash`),
+  fdrive's own folders included: Mac write retention, built on it, moved the recovery copies it
+  reclaimed into their owner's Trash. Delete fdrive's bookkeeping through storage built without
+  Trash settings.
 - Storage compares names byte for byte, and accents come in two encodings: macOS stores "ö" as
   "o" plus a combining mark, while models (and most typing) produce one character. A model
   that echoed Swedish file names matched none of them, so organize dropped every suggestion.

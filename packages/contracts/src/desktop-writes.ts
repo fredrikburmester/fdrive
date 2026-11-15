@@ -143,7 +143,7 @@ export const DesktopOperationResult = z.object({
   operationId: OperationId,
   state: DesktopOperationState,
   item: DesktopWriteEntry.nullable(),
-  /** A post-commit recovery copy, if one was retained. Never an upstream path. */
+  /** Always null: fdrive keeps no copy of what a write replaced. Shipped Mac apps decode it. */
   recoveryId: CanonicalUuid.nullable(),
 });
 export type DesktopWriteLocation = z.infer<typeof DesktopWriteLocation>;
