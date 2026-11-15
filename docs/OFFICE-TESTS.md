@@ -63,7 +63,7 @@ do not establish persistence.
 - Collabora opens, edits, saves and reopens a real OpenDocument fixture. Reopened
   rendered word count confirms the saved text is loaded.
 - Recents and Favorites open the preview and its View in office action preserves
-  the selected identity and exact filename. The viewer renders saved text.
+  the exact filename. The viewer renders saved text.
 
 The read-only coediting regression initially reproduced a real host authorization
 bug: Reader's marker reached saved DOCX bytes through Alice's Save. The host now

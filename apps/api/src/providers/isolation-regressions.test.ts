@@ -1,8 +1,8 @@
 import { createMemoryRepos } from "@fdrive/db/testing";
 import { expect, it } from "vitest";
-import { accountsHarness } from "../accounts/test-fixtures/index.ts";
 import { createApp } from "../app.ts";
 import { createAuthModule } from "../auth/index.ts";
+import { authHarness } from "../auth/test-fixtures/index.ts";
 import { createScopeResolver } from "../scoping/resolver.ts";
 import { createSetupService } from "../setup/service.ts";
 import {
@@ -12,14 +12,16 @@ import {
 } from "./test-fixtures/index.ts";
 
 it("scopes env administrators to the storage the deployment pins", async () => {
-  const h = accountsHarness();
+  const h = authHarness();
   await h.seeded;
   // A second row alice can also sign in to, which the deployment does not pin.
   const second = await seedProviderRow(h.repos, "http://second.test", { label: "Second" });
   const auth = createAuthModule({
     ...h.deps,
     providers: h.providers,
-    identityLinks: h.links,
+    master: h.master,
+    clock: h.clock,
+    logins: h.logins,
     config: h.config,
     storageFactory: h.storageFactory,
     adminUsernames: ["alice"],
@@ -43,7 +45,7 @@ it("scopes env administrators to the storage the deployment pins", async () => {
 });
 
 it("keeps env setup complete and sessions usable after disabling its last provider", async () => {
-  const h = accountsHarness();
+  const h = authHarness();
   const row = await h.seeded;
   const login = await h.login();
   const setup = createSetupService({

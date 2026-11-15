@@ -32,8 +32,8 @@ it("uses configured callback origin with raw query and encodes host paths", () =
     "http://api/prefix/wopi/files/file?x=a%2fb",
   );
   expect(() => callbackProofUrl("https://evil/other", config)).toThrow();
-  expect(editorHostUrl(config, "identity", "/å a.docx", "view")).toBe(
-    "https://app/office/identity/%C3%A5%20a.docx?mode=view",
+  expect(editorHostUrl(config, "/å a.docx", "view")).toBe(
+    "https://app/office/%C3%A5%20a.docx?mode=view",
   );
 });
 it("handles explicit default ports without corrupting the action path", () => {

@@ -1,6 +1,6 @@
 import { MeResponse, ROUTES } from "@fdrive/contracts";
 import { expect, it } from "vitest";
-import { accountsHarness } from "../accounts/test-fixtures/index.ts";
+import { authHarness } from "./test-fixtures/index.ts";
 
 /**
  * A disabled provider (the deployment stopped serving its folder) stops
@@ -8,20 +8,18 @@ import { accountsHarness } from "../accounts/test-fixtures/index.ts";
  * `/auth/me` and logout.
  */
 it("keeps me and logout working for a login whose provider was disabled", async () => {
-  const h = accountsHarness();
+  const h = authHarness();
   const row = await h.seeded;
   const alice = await h.login();
   await h.repos.providers.update(row.id, { enabled: false });
 
   const me = await h.call(ROUTES.auth.me, { cookie: alice.cookie });
   expect(me.status).toBe(200);
-  expect(MeResponse.parse(await me.json()).activeIdentityId).toBe(alice.me.activeIdentityId);
+  expect(MeResponse.parse(await me.json()).identity.id).toBe(alice.me.identity.id);
 
   // The principal itself carries storage that fails, so file routes 502
   // instead of the whole authed group.
-  const storage = await h
-    .storageFactory(alice.me.activeIdentityId)
-    .catch((error: unknown) => error);
+  const storage = await h.storageFactory(alice.me.identity.id).catch((error: unknown) => error);
   expect(storage).toMatchObject({ kind: "upstream_unavailable" });
 
   const logout = await h.call(ROUTES.auth.logout, { method: "POST", cookie: alice.cookie });
@@ -42,7 +40,7 @@ it("keeps me and logout working for a login whose provider was disabled", async 
  * existing session stops at once rather than lingering with failing files.
  */
 it("refuses every request of a local user an administrator disabled after they signed in", async () => {
-  const h = accountsHarness();
+  const h = authHarness();
   const alice = await h.login();
   expect((await h.call(ROUTES.auth.me, { cookie: alice.cookie })).status).toBe(200);
 

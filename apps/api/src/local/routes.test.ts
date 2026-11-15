@@ -109,7 +109,7 @@ describe("/admin/users", () => {
     await h.repos.sessions.create({
       idHash: hashSessionId("admin-session"),
       accountId: h.account.id,
-      activeIdentityId: h.identity.id,
+      identityId: h.identity.id,
       expiresAt: new Date(Date.now() + 3_600_000),
       userAgent: null,
       ip: null,
@@ -176,7 +176,7 @@ describe("POST /auth/password", () => {
     await h.repos.sessions.create({
       idHash: hashSessionId("raw-session"),
       accountId: h.account.id,
-      activeIdentityId: h.identity.id,
+      identityId: h.identity.id,
       expiresAt: new Date(Date.now() + 3_600_000),
       userAgent: null,
       ip: null,

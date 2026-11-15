@@ -8,7 +8,6 @@ import type { DragEvent } from "react";
 import { useEffect, useState, useSyncExternalStore } from "react";
 import { ActivityPill } from "@/components/activity/activity-pill";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { accountTransition } from "@/lib/account/transition";
 import { chatStatusLabel } from "@/lib/ai/chat";
 import { addToChat, setChatPanelOpen } from "@/lib/ai/chat-panel";
 import { getActiveDragPaths, readDraggedPaths, subscribeDragSession } from "@/lib/dnd";
@@ -26,7 +25,7 @@ export function useChatShortcut(enabled: boolean): void {
   useEffect(() => {
     if (!enabled) return;
     function onKeyDown(event: KeyboardEvent) {
-      if (!isChatShortcut(event) || accountTransition.getSnapshot().pending) return;
+      if (!isChatShortcut(event)) return;
       event.preventDefault();
       setChatPanelOpen(!(localStorage.getItem("fdrive.chat.open") === "true"));
     }

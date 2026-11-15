@@ -119,10 +119,9 @@ describe("networkErrorMessage", () => {
 });
 
 describe("createUploadStore", () => {
-  it("retains batch identity and outcomes through navigation and early clearing", async () => {
+  it("retains batch outcomes through navigation and early clearing", async () => {
     const xhrs: FakeXhr[] = [];
     const store = createUploadStore({
-      identityId: "first",
       concurrency: 2,
       createXhr: () => {
         const xhr = new FakeXhr();
@@ -131,22 +130,16 @@ describe("createUploadStore", () => {
       },
     });
     store.getState().enqueue([makeItem("a"), makeItem("b")]);
-    store.getState().setActiveIdentity("second");
     xhrs[0]?.finishWith(201, "{}");
     await flush();
     // A batch stays whole while any of its files is still running, so the
     // finished ones keep their destination actions until it is done.
     store.getState().clearFinished();
     expect(store.getState().state.order).toEqual(["a", "b"]);
-    expect(store.getState().state.items.a?.identityId).toBe("first");
     expect(store.getState().state.items.a?.completedAt).toEqual(expect.any(Number));
     xhrs[1]?.finishWith(403, "{}");
     await flush();
-    expect(
-      Object.values(store.getState().state.items).every(
-        (entry: UploadItem) => entry.identityId === "first",
-      ),
-    ).toBe(true);
+    expect(store.getState().state.items.b?.status).toBe("error");
 
     store.getState().retry("b");
     expect(store.getState().state.items.b?.status).toBe("uploading");
@@ -163,7 +156,6 @@ describe("createUploadStore", () => {
     const store = createUploadStore({
       concurrency,
       retryDelaysMs: [],
-      identityId: "id-1",
       createXhr: () => {
         const xhr = new FakeXhr();
         xhrs.push(xhr);
@@ -185,7 +177,7 @@ describe("createUploadStore", () => {
     expect(xhrs).toHaveLength(2);
   });
 
-  it("builds the upload URL and headers from the target path and identity", () => {
+  it("builds the upload URL and headers from the target path", () => {
     const { store, xhrs } = setup(1);
     store.getState().enqueue([makeItem("a", { targetPath: "/dest/a.txt" })]);
 
@@ -199,7 +191,6 @@ describe("createUploadStore", () => {
     ]);
     expect(xhrs[0]?.sent?.size).toBe(10);
     expect(xhrs[0]?.headers["x-requested-with"]).toBe("fdrive");
-    expect(xhrs[0]?.headers["x-identity-id"]).toBe("id-1");
     expect(xhrs[0]?.withCredentials).toBe(true);
     expect(xhrs[0]?.headers["x-modified-at"]).toBe(String(FIXED_LAST_MODIFIED_MS));
   });
@@ -296,7 +287,7 @@ describe("createUploadStore", () => {
     expect(store.getState().state.items.a).toBeUndefined();
   });
 
-  it("omits the identity header and uses a no-op onUploaded when neither is configured", async () => {
+  it("uses a no-op onUploaded when none is configured", async () => {
     const xhrs: FakeXhr[] = [];
     const store = createUploadStore({
       createXhr: () => {
@@ -307,7 +298,6 @@ describe("createUploadStore", () => {
     });
 
     store.getState().enqueue([makeItem("a")]);
-    expect(xhrs[0]?.headers["x-identity-id"]).toBeUndefined();
 
     xhrs[0]?.finishWith(200, JSON.stringify({ path: "/dest/a.txt" }));
     await flush();
@@ -418,67 +408,7 @@ describe("createUploadStore", () => {
   });
 });
 
-it("captures changing identities per queued item and preserves ownership on retry", async () => {
-  const xhrs: FakeXhr[] = [];
-  const onUploaded = vi.fn();
-  const store = createUploadStore({
-    concurrency: 1,
-    retryDelaysMs: [],
-    requireIdentity: true,
-    onUploaded,
-    createXhr: () => {
-      const xhr = new FakeXhr();
-      xhrs.push(xhr);
-      return xhr;
-    },
-  });
-  expect(() => store.getState().enqueue([makeItem("no-login")])).toThrow("Select a login");
-  store.getState().setActiveIdentity("one");
-  store.getState().enqueue([makeItem("a"), makeItem("b")]);
-  store.getState().setActiveIdentity("two");
-  store.getState().enqueue([makeItem("c")]);
-  expect(xhrs[0]?.headers["x-identity-id"]).toBe("one");
-  xhrs[0]?.finishWith(200, "");
-  await flush();
-  expect(onUploaded).not.toHaveBeenCalled();
-  expect(xhrs[1]?.headers["x-identity-id"]).toBe("one");
-  xhrs[1]?.finishWith(500, "");
-  await flush();
-  expect(xhrs[2]?.headers["x-identity-id"]).toBe("two");
-  store.getState().retry("b");
-  xhrs[2]?.finishWith(200, "");
-  await flush();
-  expect(onUploaded).toHaveBeenCalledWith("/dest");
-  expect(xhrs[3]?.headers["x-identity-id"]).toBe("one");
-  xhrs[3]?.finishWith(200, "");
-  await flush();
-  expect(onUploaded).toHaveBeenCalledTimes(1);
-});
-
-it("cancels removed identity uploads without cancelling another login", async () => {
-  const xhrs: FakeXhr[] = [];
-  const store = createUploadStore({
-    concurrency: 1,
-    createXhr: () => {
-      const xhr = new FakeXhr();
-      xhrs.push(xhr);
-      return xhr;
-    },
-  });
-  store.getState().setActiveIdentity("one");
-  store.getState().enqueue([makeItem("a"), makeItem("b")]);
-  store.getState().setActiveIdentity("two");
-  store.getState().enqueue([makeItem("c")]);
-  store.getState().cancelIdentity("one");
-  await flush();
-  expect(xhrs[0]?.aborted).toBe(true);
-  expect(store.getState().state.items.b?.status).toBe("cancelled");
-  expect(xhrs[1]?.headers["x-identity-id"]).toBe("two");
-  xhrs[1]?.finishWith(200, "");
-  await flush();
-});
-
-it("production singleton captures identity on enqueue, not when later starting requests", async () => {
+it("production singleton queues beyond its concurrency and creates parent folders", async () => {
   const { useUploadStore } = await import("./store");
   const xhrs: FakeXhr[] = [];
   vi.stubGlobal(
@@ -490,33 +420,29 @@ it("production singleton captures identity on enqueue, not when later starting r
       }
     },
   );
-  useUploadStore.getState().setOnUploaded(() => {});
+  const onUploaded = vi.fn();
+  useUploadStore.getState().setOnUploaded(onUploaded);
   try {
-    useUploadStore.getState().setActiveIdentity("first");
     useUploadStore
       .getState()
       .enqueue(Array.from({ length: 5 }, (_, i) => makeItem(`singleton-${i}`)));
-    useUploadStore.getState().setActiveIdentity("second");
+    expect(xhrs).toHaveLength(4);
     xhrs[0]?.finishWith(200, "");
     await flush();
-    expect(xhrs[4]?.headers["x-identity-id"]).toBe("first");
+    expect(onUploaded).toHaveBeenCalledWith("/dest");
     expect(xhrs[4]?.openCalls[0]?.[1]).toContain("mkdirParents=true");
-    useUploadStore.getState().cancelIdentity("first");
-    await flush();
-    useUploadStore.getState().clearFinished();
   } finally {
     vi.unstubAllGlobals();
-    useUploadStore.getState().setActiveIdentity(undefined);
+    useUploadStore.getState().reset();
   }
 });
 
 it("logout reset aborts requests and removes old account queue data", async () => {
   const xhr = new FakeXhr();
-  const store = createUploadStore({ concurrency: 1, identityId: "old", createXhr: () => xhr });
+  const store = createUploadStore({ concurrency: 1, createXhr: () => xhr });
   store.getState().enqueue([makeItem("active"), makeItem("queued")]);
   store.getState().reset();
   await flush();
   expect(xhr.aborted).toBe(true);
   expect(store.getState().state.order).toEqual([]);
-  expect(store.getState().activeIdentityId).toBeUndefined();
 });

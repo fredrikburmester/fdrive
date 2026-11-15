@@ -9,12 +9,12 @@ import {
 } from "./route";
 
 describe("office routes", () => {
-  it("defaults to view and encodes identity and file segments", () => {
+  it("defaults to view and encodes file segments", () => {
     for (const value of [undefined, "view", "bad", ["edit"]])
       expect(officeMode(value)).toBe("view");
     expect(officeMode("edit")).toBe("edit");
     expect(officeMode("convert")).toBe("convert");
-    expect(officeHref("a b", "/Å/a#b.docx")).toBe("/office/a%20b/%C3%85/a%23b.docx?mode=view");
+    expect(officeHref("/Å/a#b.docx")).toBe("/office/%C3%85/a%23b.docx?mode=view");
     expect(officePathFromSegments(["%C3%85", "a%23b.docx"])).toBe("/Å/a#b.docx");
     expect(officePathFromSegments(["a%20b.docx"])).toBe("/a b.docx");
     expect(officePathFromSegments(["a%2520b.docx"])).toBe("/a%20b.docx");
@@ -22,7 +22,7 @@ describe("office routes", () => {
     expect(officeFolderHref("/a.docx")).toBe("/files");
   });
   it("rejects invalid paths", () => {
-    for (const path of ["/", "bad", "/a\0.docx"]) expect(() => officeHref("id", path)).toThrow();
+    for (const path of ["/", "bad", "/a\0.docx"]) expect(() => officeHref(path)).toThrow();
     expect(() => officePathFromSegments([])).toThrow();
     for (const segment of ["a\0.docx", "a%00.docx", "bad%XY.docx", "%2e%2e", "a%2fb.docx"])
       expect(() => officePathFromSegments([segment])).toThrow();
@@ -36,27 +36,26 @@ describe("office routes", () => {
     for (const name of ["../new", "", "..", "bad\0"])
       expect(renamedOfficePath("/old", name)).toBeNull();
   });
-  it("allows only same-origin same-identity token-free office destinations", () => {
-    expect(officeHostTarget("/office/id/new.docx?mode=edit", "https://host.test", "id")).toBe(
-      "/office/id/new.docx?mode=edit",
+  it("allows only same-origin token-free office destinations", () => {
+    expect(officeHostTarget("/office/new.docx?mode=edit", "https://host.test")).toBe(
+      "/office/new.docx?mode=edit",
     );
-    expect(
-      officeHostTarget("https://host.test/office/id/new.docx", "https://host.test", "id"),
-    ).toBe("/office/id/new.docx?mode=view");
-    expect(officeHostTarget("/office/id/a%2520b.docx", "https://host.test", "id")).toBe(
-      "/office/id/a%2520b.docx?mode=view",
+    expect(officeHostTarget("https://host.test/office/team/new.docx", "https://host.test")).toBe(
+      "/office/team/new.docx?mode=view",
+    );
+    expect(officeHostTarget("/office/a%2520b.docx", "https://host.test")).toBe(
+      "/office/a%2520b.docx?mode=view",
     );
     for (const href of [
-      "https://evil.test/office/id/a",
-      "/office/other/a",
+      "https://evil.test/office/a.docx",
       "/files",
-      "/office/id/a?access_token=secret",
-      "/office/id/a#hash",
-      "https://user:pass@host.test/office/id/a",
+      "/office/a.docx?access_token=secret",
+      "/office/a.docx#hash",
+      "https://user:pass@host.test/office/a.docx",
       "https://:bad",
-      "/office/id/",
-      "/office/id/bad%XY.docx",
+      "/office/",
+      "/office/bad%XY.docx",
     ])
-      expect(officeHostTarget(href, "https://host.test", "id")).toBeNull();
+      expect(officeHostTarget(href, "https://host.test")).toBeNull();
   });
 });

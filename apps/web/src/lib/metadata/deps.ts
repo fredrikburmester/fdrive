@@ -16,7 +16,7 @@ export { FileList } from "@/components/files/file-list";
 export { RenameDialog } from "@/components/files/rename-dialog";
 export { PageHeader } from "@/components/shell/page-header";
 export { useMe } from "@/lib/api/auth-queries";
-export { apiClient, snapshotTabApiClient } from "@/lib/api/client";
+export { apiClient } from "@/lib/api/client";
 export { queryKeys } from "@/lib/api/keys";
 export { pathToHref, viewHref } from "@/lib/files/path-url";
 export { describeFsError, useDelete, useDuplicate, useRename } from "@/lib/files/queries";

@@ -25,11 +25,11 @@ Reference for affected code; shared rules live in [AGENTS.md](../AGENTS.md).
 
 ## Code and integration
 
-- System never follows the login being browsed. Filtering the sidebar activity by the active
+- System never follows the login being browsed. Filtering the sidebar activity by the signed-in
   login while the pages stayed installation-wide made the two disagree, and resolving Trash
-  settings from the active login hid them behind a login switch. Every System page is
-  installation-wide, Trash settings still name their provider row explicitly, and each page
-  header says so.
+  settings from it hid them behind a login switch, back when an account could switch logins.
+  Every System page is installation-wide, Trash settings still name their provider row
+  explicitly, and each page header says so.
 - Worker state that tracks feature transitions must start from the persisted selection. A
   disabled placeholder made every indexer restart look like enabling thumbnails and image
   search, re-running the media backfill over the whole library.

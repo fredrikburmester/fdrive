@@ -17,17 +17,19 @@ remain account-wide.
 
 On a successful login (`POST /api/v1/auth/login`, `apps/api/src/auth/service.ts`):
 
-- fdrive finds or creates an `account` and a `provider`-scoped `identity` for
-  the username the module returned (one account can hold several identities,
-  one per login it is linked to).
+- fdrive finds or creates an `account` and its one `provider`-scoped
+  `identity` (its login) for the username the module returned. An account has
+  exactly one login (`identities.account_id` is unique).
 - The credential is sealed and written to the `credentials` table as
   `{ identityId, ciphertext, keyId }`. It is never stored in plaintext and
   never logged. For a local login the password itself is checked against the
   scrypt hash in `app.local_users`; the sealed copy lets a later login tell
   whether the password changed (below).
 - A session row is created (`sessions` table) holding only a SHA-256 hash of
-  a randomly generated session id; the raw id is set as an HttpOnly cookie
-  and never persisted itself.
+  a randomly generated session id and the login it acts as (`identity_id`);
+  the raw id is set as an HttpOnly cookie and never persisted itself. Every
+  request on the session acts as that login; there is no header or parameter
+  that selects another.
 
 Encryption (`apps/api/src/auth/crypto.ts`) is an envelope scheme:
 
@@ -49,7 +51,7 @@ authentication. fdrive treats that failure as `reauth_required` (see below)
 rather than a crash. Local storage reads no stored credential per request, so
 a rotation interrupts no one; each user's next sign-in replaces the
 undecryptable copy and ends the account's other sessions (see
-[Re-authentication](#re-authentication-and-session-revocation)).
+[Session revocation](#session-revocation)).
 
 ## Setup ownership
 
@@ -106,12 +108,11 @@ Sliding never extends a session past `FDRIVE_SESSION_MAX_AGE_DAYS` (default
 90) from the login that created it: `resolvePrincipal` deletes a session
 whose `createdAt` is older than that and treats the request as anonymous, so
 a stolen session id cannot be kept valid indefinitely by periodic use.
-Session rotation on link and unlink preserves `createdAt`.
 
 ## Storage sessions
 
-fdrive never asks the browser for storage credentials outside of `/auth/login`
-and identity link/unlink confirmation. Storage for a request is built by the
+fdrive never asks the browser for storage credentials outside of `/auth/login`,
+password change and unlocking backups. Storage for a request is built by the
 identity storage factory (`apps/api/src/auth/storage-factory.ts`), which hands
 the provider module a `StorageSession` naming only the login's username; no
 stored credential is read per request. Before storage is built, the module's
@@ -127,7 +128,7 @@ client can tell "you were never signed in" apart from "you were signed in,
 but fdrive can no longer act on your behalf"):
 
 - Storage answers `unauthorized`; storage routes map it to `reauth_required`.
-- The identity no longer exists.
+- The login no longer exists.
 
 In every case the fdrive session itself may still be valid; the user simply
 has to sign in again (`POST /api/v1/auth/login`) to re-establish a usable
@@ -139,7 +140,7 @@ disabled local user gets `forbidden` instead: signing in again would not help.
 
 `apps/api/src/auth/login-limiter.ts` implements a simple, in-memory,
 per-process limiter. Every credential check (login, setup, and the owner
-re-authentication that identity linking requires) consults two keys: a
+re-authentication that unlocking backups requires) consults two keys: a
 `${block}|${provider}|${username}` key, and an independent
 `login-ip|${block}` key shared by every username tried from that address,
 so one address cannot spray a password across many usernames. `block` is
@@ -172,15 +173,7 @@ Because the limiter is in-memory, it resets on process restart and is not
 shared across multiple api instances; this is an accepted simplification
 for fdrive's current single-instance deployment shape.
 
-## Re-authentication and session revocation
-
-Linking another login (`POST /api/v1/account/identities`) requires the
-signed-in login's own secret (`currentCredential: { password }`) in addition
-to the new login's credentials, and unlinking one
-(`DELETE /api/v1/account/identities/:id`) requires
-`{ currentCredential: { password } }` as its JSON body. A stolen cookie is
-therefore not enough to plant a durable login path on the account, nor to
-detach and sign out the owner's other logins.
+## Session revocation
 
 These events revoke sessions server-side:
 
@@ -191,12 +184,9 @@ These events revoke sessions server-side:
   deletes every other session of the account inside the same transaction
   that stores the new credential. Logging in again with the unchanged
   password leaves other devices signed in.
-  Credential comparison happens under the identity/account persistence locks. A different
+  Credential comparison happens under the sign-in lock for that username. A different
   credential committed since the password check began rejects the delayed login;
   concurrent logins presenting the same new credential keep both sessions.
-- Unlinking a login deletes every session that was using it as its active
-  identity, except the requesting session, which moves to a remaining login
-  and is rotated as before.
 
 ## Local users
 
@@ -224,9 +214,9 @@ sealed credential are replaced, and the account's other sessions end.
 
 ## MCP token grants
 
-New personal tokens persist nullable `app.api_tokens.access` JSON with `mode` and normalized
-virtual `paths`. Absent access identifies legacy tokens and preserves their old admission
-rules. Token creation defaults to the authenticated session's active identity and Read access;
-an explicitly selected identity must belong to that account. Token principal resolution
-validates stored grants and includes them on every request; malformed access fails closed.
-See [MCP](MCP.md) for the mode matrix and legacy `FDRIVE_MCP_WRITES` behavior.
+Every personal token persists required `app.api_tokens.access` JSON with `mode` and normalized
+virtual `paths`. A token acts as the login of the session that created it
+(`api_tokens.identity_id`, required, deleted with the login), with Read access unless asked
+otherwise. Token principal resolution validates stored grants and includes them on every
+request; malformed access fails closed.
+See [MCP](MCP.md) for the mode matrix.

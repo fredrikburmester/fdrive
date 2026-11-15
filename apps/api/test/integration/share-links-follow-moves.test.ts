@@ -7,7 +7,6 @@ import {
   DesktopWriteEntry,
   DesktopWritePairResult,
   ManagedShare,
-  MeResponse,
   publicShareRoute,
   ROUTES,
 } from "@fdrive/contracts";
@@ -79,7 +78,6 @@ describe("public links follow the files they point at", () => {
         DATABASE_URL: postgres.connectionString,
         FDRIVE_STORAGE_ROOT: storage.root,
         FDRIVE_MASTER_KEY: Buffer.alloc(32, 31).toString("base64"),
-        FDRIVE_MCP_WRITES: "true",
         FDRIVE_DESKTOP_STATE_DIR: stateDir,
         // Configured so the indexer listener runs; no indexer does, the tests notify for it.
         FDRIVE_INDEX_ROOTS: JSON.stringify([
@@ -423,7 +421,7 @@ describe("public links follow the files they point at", () => {
     expect(await visit(gone)).toBe(404);
   });
 
-  it("follows the Mac's moves through its metadata recovery, into its Trash and back", async () => {
+  it("follows the Mac's moves as they commit, into its Trash and back", async () => {
     const file = await link(alice, "/mac.txt");
     const folder = await link(alice, "/MacFolder/inside.txt");
     const trashed = await link(alice, "/mac-trash.txt");
@@ -432,7 +430,6 @@ describe("public links follow the files they point at", () => {
       body: { credential: { username: "alice", password: "alice-pass" } },
     });
     const cookie = cookieFrom(loggedIn);
-    const me = MeResponse.parse(await loggedIn.json());
     const base = "/api/v2/desktop";
     const pairing = DesktopPairing.parse(
       await ok(call(`${base}/pairings`, { cookie, body: { deviceName: "Share moves" } })),
@@ -440,10 +437,7 @@ describe("public links follow the files they point at", () => {
     await ok(
       call(`/api/v1/desktop/pairings/${pairing.id}/approve`, {
         cookie,
-        body: {
-          identityIds: me.identities.map((identity) => identity.id),
-          access: Object.fromEntries(me.identities.map((identity) => [identity.id, "full"])),
-        },
+        body: { access: "full" },
       }),
     );
     const pair = DesktopWritePairResult.parse(
@@ -477,14 +471,10 @@ describe("public links follow the files they point at", () => {
     await macMove(await stat("/MacFolder"), "root", "MacMoved");
     const inTrash = await macMove(await stat("/mac-trash.txt"), "trash", "mac-trash.txt");
 
-    await vi.waitFor(
-      async () => {
-        expect(await linkPaths(alice, file)).toEqual(["/mac-renamed.txt"]);
-        expect(await linkPaths(alice, folder)).toEqual(["/MacMoved/inside.txt"]);
-        expect((await linkPaths(alice, trashed))[0]).toMatch(/^\/\.fdrive-desktop\//);
-      },
-      { timeout: 15_000, interval: 100 },
-    );
+    // Nothing waits: each link follows before its commit answers.
+    expect(await linkPaths(alice, file)).toEqual(["/mac-renamed.txt"]);
+    expect(await linkPaths(alice, folder)).toEqual(["/MacMoved/inside.txt"]);
+    expect((await linkPaths(alice, trashed))[0]).toMatch(/^\/\.fdrive-desktop\//);
     expect(await downloadText(file)).toBe("mac");
     expect(await downloadText(folder)).toBe("mac inside");
     await put(alice, "/mac-trash.txt", "never shared");
@@ -492,10 +482,7 @@ describe("public links follow the files they point at", () => {
 
     // Put back from the Mac's Trash, under a new name since its place is taken.
     await macMove(inTrash, "root", "mac-back.txt");
-    await vi.waitFor(
-      async () => expect(await linkPaths(alice, trashed)).toEqual(["/mac-back.txt"]),
-      { timeout: 15_000, interval: 100 },
-    );
+    expect(await linkPaths(alice, trashed)).toEqual(["/mac-back.txt"]);
     expect(await downloadText(trashed)).toBe("mac trash");
   });
 });

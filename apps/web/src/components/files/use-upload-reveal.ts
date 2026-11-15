@@ -4,15 +4,14 @@ import type { ListResponse } from "@fdrive/contracts";
 import { joinPath } from "@fdrive/core";
 import { useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
-import { refreshIdentityQuery } from "@/lib/account/invalidation";
 import { queryKeys } from "@/lib/api/keys";
+import { refreshQuery } from "@/lib/api/refresh-query";
 import { useUploadStore } from "@/lib/upload/store";
 import { TERMINAL_STATUSES, type UploadItem } from "@/lib/upload/types";
 
 /** Reveal uploads started during this folder visit, after the batch and listing settle. */
 export function useUploadReveal(
   path: string,
-  identityId: string | undefined,
   orderedPaths: readonly string[],
   listing: { data: ListResponse | undefined; isFetching: boolean },
   onReveal: (paths: string[]) => void,
@@ -31,11 +30,6 @@ export function useUploadReveal(
     setPending(null);
     const tracked = new Map<string, UploadItem>();
     const unsubscribe = useUploadStore.subscribe((current, previous) => {
-      if (current.activeIdentityId !== identityId) {
-        tracked.clear();
-        setPending(null);
-        return;
-      }
       for (const id of current.state.order) {
         const item = current.state.items[id];
         const previousItem = previous.state.items[id];
@@ -43,7 +37,6 @@ export function useUploadReveal(
           item &&
           (!previousItem ||
             (item.status === "queued" && TERMINAL_STATUSES.has(previousItem.status))) &&
-          item.identityId === identityId &&
           item.targetPath === joinPath(path, item.relativePath)
         ) {
           tracked.set(id, item);
@@ -70,13 +63,13 @@ export function useUploadReveal(
         afterUpdateCount: queryClient.getQueryState(queryKey)?.dataUpdateCount ?? 0,
       });
       // Folder drops create ancestors; the queue refreshes only each file's immediate parent.
-      void refreshIdentityQuery(queryClient, queryKey);
+      void refreshQuery(queryClient, queryKey);
     });
     return () => {
       visitRef.current = null;
       unsubscribe();
     };
-  }, [path, identityId, queryClient]);
+  }, [path, queryClient]);
 
   useEffect(() => {
     if (!pending || pending.visit !== visitRef.current || listing.isFetching) return;

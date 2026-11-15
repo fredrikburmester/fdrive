@@ -3,7 +3,6 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import { createElement, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { accountTransition } from "@/lib/account/transition";
 import { queryKeys } from "@/lib/api/keys";
 import { useFolderView, useResetFolderViews } from "./folder-view-queries";
 
@@ -16,14 +15,12 @@ const mocks = vi.hoisted(() => ({
   success: vi.fn(),
 }));
 vi.mock("@/lib/api/client", () => ({
-  apiClient: {},
-  pinTabIdentity: vi.fn(),
-  snapshotTabApiClient: () => ({
-    getFolderView: mocks.get,
-    setFolderView: mocks.set,
-    removeFolderView: mocks.remove,
-    resetFolderViews: mocks.reset,
-  }),
+  apiClient: {
+    getFolderView: (...args: unknown[]) => mocks.get(...args),
+    setFolderView: (...args: unknown[]) => mocks.set(...args),
+    removeFolderView: (...args: unknown[]) => mocks.remove(...args),
+    resetFolderViews: (...args: unknown[]) => mocks.reset(...args),
+  },
 }));
 vi.mock("sonner", () => ({ toast: { error: mocks.error, success: mocks.success } }));
 let client: QueryClient;
@@ -44,7 +41,6 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   client.clear();
-  accountTransition.finish(true);
 });
 
 describe("folder view query", () => {
@@ -56,7 +52,7 @@ describe("folder view query", () => {
           complete = resolve;
         }),
     );
-    const { result, rerender } = renderHook(({ path }) => useFolderView(path, "alice"), {
+    const { result, rerender } = renderHook(({ path }) => useFolderView(path), {
       wrapper,
       initialProps: { path: "/photos" },
     });
@@ -75,7 +71,7 @@ describe("folder view query", () => {
   });
   it("uses an exact server pin, makes it the default, and unpins explicitly", async () => {
     mocks.get.mockResolvedValue({ view: { path: "/photos", mode: "tree" } });
-    const { result } = renderHook(() => useFolderView("/photos", "alice"), { wrapper });
+    const { result } = renderHook(() => useFolderView("/photos"), { wrapper });
     await waitFor(() => expect(result.current.pinned).toBe(true));
     expect(result.current.mode).toBe("tree");
     act(() => result.current.makeDefault());
@@ -90,7 +86,7 @@ describe("folder view query", () => {
   });
   it("rolls back a failed save and supports retrying a failed load", async () => {
     mocks.get.mockRejectedValueOnce(new Error("offline"));
-    const { result } = renderHook(() => useFolderView("/photos", "alice"), { wrapper });
+    const { result } = renderHook(() => useFolderView("/photos"), { wrapper });
     await waitFor(() => expect(result.current.error).toBe(true));
     act(() => result.current.setMode("grid"));
     expect(mocks.set).not.toHaveBeenCalled();
@@ -102,47 +98,13 @@ describe("folder view query", () => {
     await waitFor(() => expect(result.current.disabled).toBe(false));
     expect(result.current.mode).toBe("list");
   });
-  it("does not fetch without an identity or mutate during an account change", async () => {
-    const { result, rerender } = renderHook(
-      ({ id }: { id: string | undefined }) => useFolderView("/", id),
-      { wrapper, initialProps: { id: undefined as string | undefined } },
-    );
-    expect(mocks.get).not.toHaveBeenCalled();
-    rerender({ id: "alice" });
-    await waitFor(() => expect(result.current.disabled).toBe(false));
-    accountTransition.begin();
-    act(() => result.current.setMode("grid"));
-    expect(mocks.set).not.toHaveBeenCalled();
-  });
-  it("ignores late failed writes after an identity switch", async () => {
-    let fail!: (error: Error) => void;
-    mocks.set.mockImplementation(
-      () =>
-        new Promise((_resolve, reject) => {
-          fail = reject;
-        }),
-    );
-    const { result } = renderHook(() => useFolderView("/photos", "alice"), { wrapper });
-    await waitFor(() => expect(result.current.disabled).toBe(false));
-    act(() => result.current.setMode("grid"));
-    await waitFor(() => expect(mocks.set).toHaveBeenCalled());
-    accountTransition.finish(true);
-    client.setQueryData(queryKeys.folderViews.path("bob", "/photos"), {
-      view: { path: "/photos", mode: "tree" },
-    });
-    await act(async () => fail(new Error("late failure")));
-    expect(mocks.error).not.toHaveBeenCalled();
-    expect(client.getQueryData(queryKeys.folderViews.path("bob", "/photos"))).toEqual({
-      view: { path: "/photos", mode: "tree" },
-    });
-  });
 });
 
 describe("folder sort", () => {
   const bySize = { key: "size", direction: "desc" } as const;
   it("follows the browser default until a sort is pinned, then pins only the sort", async () => {
     localStorage.setItem("fdrive.sort", JSON.stringify({ key: "ext", direction: "asc" }));
-    const { result } = renderHook(() => useFolderView("/photos", "alice"), { wrapper });
+    const { result } = renderHook(() => useFolderView("/photos"), { wrapper });
     await waitFor(() => expect(result.current.disabled).toBe(false));
     expect(result.current.sort).toEqual({ key: "ext", direction: "asc" });
     expect(result.current.sortPinned).toBe(false);
@@ -160,7 +122,7 @@ describe("folder sort", () => {
   });
   it("uses a server sort pin beside a mode pin, makes it the default and unpins only the sort", async () => {
     mocks.get.mockResolvedValue({ view: { path: "/photos", mode: "grid", sort: bySize } });
-    const { result } = renderHook(() => useFolderView("/photos", "alice"), { wrapper });
+    const { result } = renderHook(() => useFolderView("/photos"), { wrapper });
     await waitFor(() => expect(result.current.sortPinned).toBe(true));
     expect(result.current.sort).toEqual(bySize);
     expect(result.current.mode).toBe("grid");
@@ -177,7 +139,7 @@ describe("folder sort", () => {
   });
   it("rolls back a failed sort save with its own message", async () => {
     mocks.set.mockRejectedValue(new Error("offline"));
-    const { result } = renderHook(() => useFolderView("/photos", "alice"), { wrapper });
+    const { result } = renderHook(() => useFolderView("/photos"), { wrapper });
     await waitFor(() => expect(result.current.disabled).toBe(false));
     act(() => result.current.setSort(bySize));
     await waitFor(() =>
@@ -188,35 +150,31 @@ describe("folder sort", () => {
   });
 });
 
-it("resets saved pins and invalidates every identity's view cache", async () => {
-  client.setQueryData(queryKeys.folderViews.path("alice", "/"), {
+it("resets saved pins and invalidates the view cache", async () => {
+  client.setQueryData(queryKeys.folderViews.path("/"), {
     view: { path: "/", mode: "grid" },
   });
   const { result } = renderHook(useResetFolderViews, { wrapper });
   await act(async () => result.current.mutateAsync());
   expect(mocks.reset).toHaveBeenCalledOnce();
-  expect(client.getQueryState(queryKeys.folderViews.path("alice", "/"))?.isInvalidated).toBe(true);
+  expect(client.getQueryState(queryKeys.folderViews.path("/"))?.isInvalidated).toBe(true);
   expect(mocks.success).toHaveBeenCalled();
 });
 
-it("reports reset errors and refuses reset from an old login", async () => {
+it("reports reset errors", async () => {
   mocks.reset.mockRejectedValueOnce(new Error("offline"));
   const { result } = renderHook(useResetFolderViews, { wrapper });
   await act(async () => {
     await expect(result.current.mutateAsync()).rejects.toThrow("offline");
   });
-  expect(mocks.error).toHaveBeenCalled();
-  accountTransition.finish(true);
-  await act(async () => {
-    await expect(result.current.mutateAsync()).rejects.toThrow("Login changed");
-  });
+  expect(mocks.error).toHaveBeenCalledWith("Could not reset folder views.");
   expect(mocks.reset).toHaveBeenCalledOnce();
 });
 
 it("allows saving another folder while the first folder is still saving", async () => {
   const first = Promise.withResolvers<void>();
   mocks.set.mockReturnValueOnce(first.promise).mockResolvedValueOnce({ ok: true });
-  const { result, rerender } = renderHook(({ path }) => useFolderView(path, "alice"), {
+  const { result, rerender } = renderHook(({ path }) => useFolderView(path), {
     wrapper,
     initialProps: { path: "/first" },
   });

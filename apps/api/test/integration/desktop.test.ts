@@ -16,7 +16,7 @@ import { composeApp } from "../../src/composition.js";
 import { loadConfig } from "../../src/config.js";
 import { seedLocalUsers } from "./helpers/local-storage.ts";
 
-it("pairs two linked logins with isolated streaming reads, validators and revocation", async () => {
+it("pairs two people's Macs with isolated streaming reads, validators and revocation", async () => {
   const postgres = await startPostgres();
   const storage = await startLocalStorage({
     users: [
@@ -51,45 +51,39 @@ it("pairs two linked logins with isolated streaming reads, validators and revoca
     });
     expect(login.status).toBe(200);
     cookie = login.headers.get("set-cookie")?.split(";")[0] ?? "";
-    const firstMe = MeResponse.parse(await login.json());
-    const providerId = firstMe.identities[0]?.providerId ?? "";
-    // Bob's login on the same folder, linked to alice's account.
-    const linked = await request("/api/v1/account/identities", {
-      providerId,
+    const aliceCookie = cookie;
+    const me = MeResponse.parse(await login.json());
+    /** Pairs a Mac for whoever `cookie` signs in, as their browser approves it. */
+    async function pairMac(deviceName: string) {
+      const pair = DesktopPairing.parse(
+        await (await request(`${DESKTOP_API}/pairings`, { deviceName })).json(),
+      );
+      expect(
+        (await request(`${DESKTOP_API}/pairings/${pair.id}/approve`, { access: "read" })).status,
+      ).toBe(200);
+      const result = DesktopPairResult.parse(
+        await (
+          await request(`${DESKTOP_API}/pairings/${pair.id}/poll`, { secret: pair.secret })
+        ).json(),
+      );
+      if (result.status !== "connected") throw new Error("Expected connection");
+      expect(result.credentials).toHaveLength(1);
+      const [credential] = result.credentials;
+      if (!credential) throw new Error("Expected a credential");
+      return credential;
+    }
+    const a = await pairMac("Alice's Mac");
+    expect(a.location.identityId).toBe(me.identity.id);
+    // Bob pairs his own Mac from his own browser session.
+    const bobLogin = await request("/api/v1/auth/login", {
       credential: { username: "bob", password: "bob-password" },
-      currentCredential: { password: "alice-password" },
     });
-    expect(linked.status).toBe(200);
-    cookie = linked.headers.get("set-cookie")?.split(";")[0] ?? cookie;
-    const me = MeResponse.parse(await linked.json());
-    const pair = DesktopPairing.parse(
-      await (await request(`${DESKTOP_API}/pairings`, { deviceName: "Integration Mac" })).json(),
-    );
-    expect(
-      (
-        await request(`${DESKTOP_API}/pairings/${pair.id}/approve`, {
-          identityIds: me.identities.map((identity) => identity.id),
-        })
-      ).status,
-    ).toBe(200);
-    const result = DesktopPairResult.parse(
-      await (
-        await request(`${DESKTOP_API}/pairings/${pair.id}/poll`, { secret: pair.secret })
-      ).json(),
-    );
-    if (result.status !== "connected") throw new Error("Expected connection");
-    const a = result.credentials.find(
-      (credential) => credential.location.identityId === firstMe.activeIdentityId,
-    );
-    const b = result.credentials.find(
-      (credential) => credential.location.identityId !== firstMe.activeIdentityId,
-    );
-    if (!a || !b) throw new Error("Expected two isolated locations");
+    expect(bobLogin.status).toBe(200);
+    cookie = bobLogin.headers.get("set-cookie")?.split(";")[0] ?? "";
+    const b = await pairMac("Bob's Mac");
+    expect(b.location.identityId).not.toBe(a.location.identityId);
     // A label-only admin patch propagates to both logins, existing credentials and new pairings.
-    expect(
-      (await request("/api/v1/account/active-identity", { identityId: firstMe.activeIdentityId }))
-        .status,
-    ).toBe(200);
+    cookie = aliceCookie;
     const beforeProviders = AdminProvidersResponse.parse(
       await (await request("/api/v1/admin/providers")).json(),
     );
@@ -114,12 +108,7 @@ it("pairs two linked logins with isolated streaming reads, validators and revoca
     }
     expect(await (await request("/api/v1/account/tokens")).json()).toEqual(beforeTokens);
     const namedMe = MeResponse.parse(await (await request("/api/v1/auth/me")).json());
-    expect(namedMe.identities).toEqual(
-      me.identities.map((identity) => ({
-        ...identity,
-        ...(identity.providerId === a.location.providerId ? { providerLabel: "Home storage" } : {}),
-      })),
-    );
+    expect(namedMe.identity).toEqual({ ...me.identity, providerLabel: "Home storage" });
     const publicProviders = ProvidersResponse.parse(
       await (await request("/api/v1/providers")).json(),
     );
@@ -146,11 +135,7 @@ it("pairs two linked logins with isolated streaming reads, validators and revoca
       await (await request(`${DESKTOP_API}/pairings`, { deviceName: "New Mac" })).json(),
     );
     expect(
-      (
-        await request(`${DESKTOP_API}/pairings/${freshPair.id}/approve`, {
-          identityIds: [a.location.identityId],
-        })
-      ).status,
+      (await request(`${DESKTOP_API}/pairings/${freshPair.id}/approve`, { access: "read" })).status,
     ).toBe(200);
     const freshResult = DesktopPairResult.parse(
       await (
@@ -226,13 +211,7 @@ it("pairs two linked logins with isolated streaming reads, validators and revoca
         })
       ).text(),
     ).toBe("delta");
-    // Environment admin rights belong to alice's login, not the linked one.
-    expect(
-      (await request("/api/v1/account/active-identity", { identityId: firstMe.activeIdentityId }))
-        .status,
-    ).toBe(200);
-    // System > Users will not disable a login of the administrator's own
-    // account, so another administrator's change is made in the database.
+    // Bob is disabled outside the web, straight in the database.
     const database = createDb(postgres.connectionString);
     await database.pool.query("update app.local_users set disabled = true where username = 'bob'");
     await database.close();

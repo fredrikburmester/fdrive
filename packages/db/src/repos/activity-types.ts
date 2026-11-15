@@ -74,6 +74,7 @@ export interface ActivityFinish {
   readonly bridge?: { namespace: "office" | "desktop" | "provider"; externalId: string };
 }
 export interface ActivityListOptions {
+  /** Only events of this login, for a reader that acts as one (an MCP token). */
   readonly identityId?: string;
   readonly action?: PersonalActivityAction;
   readonly source?: PersonalActivitySource;

@@ -1,9 +1,17 @@
 import type { ProviderCredential } from "@fdrive/core";
 import { isStorageError, stripTransientFields, validateFields } from "@fdrive/core";
+import type { Repos } from "@fdrive/db";
 import { addressBlock } from "../auth/address-block.js";
+import type { LoginLimiter } from "../auth/login-limiter.js";
 import { ApiHttpError } from "../errors.js";
-import type { ResolvedProvider } from "../providers/service.js";
-import type { VerifiedCredentialDeps } from "./types.ts";
+import type { ProviderService, ResolvedProvider } from "../providers/service.js";
+
+export interface VerifiedCredentialDeps {
+  readonly repos: Repos;
+  readonly providers: Pick<ProviderService, "resolve" | "enabled">;
+  readonly limiter: LoginLimiter;
+  readonly fetch: typeof globalThis.fetch;
+}
 
 export interface VerifyCredentialInput {
   /** Omitted when exactly one provider is enabled. */
@@ -12,8 +20,8 @@ export interface VerifyCredentialInput {
   readonly credential: Readonly<Record<string, string>>;
   readonly ip: string;
   /**
-   * The username of the login being re-proved (link and unlink confirm the
-   * signed-in login with its own credential). The module fills a missing
+   * The username of the login being re-proved (unlocking backups confirms
+   * the signed-in login with its own password). The module fills a missing
    * username field from it and refuses a credential naming someone else.
    */
   readonly expectedUsername?: string | undefined;

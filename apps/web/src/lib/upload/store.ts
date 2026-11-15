@@ -1,10 +1,4 @@
-import {
-  ApiError,
-  buildRequestUrl,
-  IDENTITY_HEADER,
-  MODIFIED_AT_HEADER,
-  ROUTES,
-} from "@fdrive/contracts";
+import { ApiError, buildRequestUrl, MODIFIED_AT_HEADER, ROUTES } from "@fdrive/contracts";
 import { parentPath } from "@fdrive/core";
 import { create, type StoreApi, type UseBoundStore } from "zustand";
 import { createDefaultOnUploaded } from "./deps.ts";
@@ -24,10 +18,6 @@ export interface UploadStoreDeps {
   readonly baseUrl?: string;
   /** Max number of uploads in flight at once. Defaults to 4. */
   readonly concurrency?: number;
-  /** Sent as the `x-identity-id` header on every upload request, when set. */
-  readonly identityId?: string;
-  /** Production queues reject files without an explicitly captured login. */
-  readonly requireIdentity?: boolean;
   /** Defaults to `() => new XMLHttpRequest()`. Override in tests with a fake. */
   readonly createXhr?: () => XhrLike;
   /** Called with the parent directory of every successfully uploaded file. */
@@ -40,9 +30,6 @@ export interface UploadStoreDeps {
 
 export interface UploadStoreState {
   readonly state: UploadQueueState;
-  readonly activeIdentityId: string | undefined;
-  setActiveIdentity(id: string | undefined): void;
-  cancelIdentity(id: string): void;
   reset(): void;
   enqueue(items: readonly UploadItem[]): void;
   retry(id: string): void;
@@ -123,17 +110,11 @@ function wait(ms: number, signal: AbortSignal): Promise<void> {
   });
 }
 
-function buildUploadHeaders(
-  item: UploadItem,
-  identityId: string | undefined,
-): Record<string, string> {
+function buildUploadHeaders(item: UploadItem): Record<string, string> {
   const headers: Record<string, string> = {
     "x-requested-with": "fdrive",
     [MODIFIED_AT_HEADER]: String(item.file.lastModified),
   };
-  if (identityId !== undefined) {
-    headers[IDENTITY_HEADER] = identityId;
-  }
   // One ID per attempt: a request delivered twice records one upload, while a
   // retry the person asked for is a new one.
   headers["x-fdrive-operation-id"] = `${item.id}:${item.attempts + 1}`;
@@ -152,7 +133,6 @@ function buildUploadHeaders(
 export function createUploadStore(deps: UploadStoreDeps = {}): UploadStore {
   const baseUrl = deps.baseUrl ?? "";
   const concurrency = deps.concurrency ?? 4;
-  const identityId = deps.identityId;
   const createXhr = deps.createXhr ?? (() => new XMLHttpRequest() as unknown as XhrLike);
   const chunkBytes = deps.chunkBytes ?? CHUNK_BYTES;
   const retryDelaysMs = deps.retryDelaysMs ?? RETRY_DELAYS_MS;
@@ -188,7 +168,7 @@ export function createUploadStore(deps: UploadStoreDeps = {}): UploadStore {
             {
               url: buildUploadUrl(baseUrl, item.targetPath, part, end === item.size),
               file: item.file.slice(part.offset, end),
-              headers: buildUploadHeaders(item, item.identityId),
+              headers: buildUploadHeaders(item),
               onProgress: (loaded) =>
                 dispatch({ type: "progress", id: item.id, loaded: part.offset + loaded }),
               signal,
@@ -234,7 +214,7 @@ export function createUploadStore(deps: UploadStoreDeps = {}): UploadStore {
           if (result.status < 500) parts.delete(item.id);
           if (result.status >= 200 && result.status < 300) {
             dispatch({ type: "succeed", id: item.id, completedAt: Date.now() });
-            if (item.identityId === get().activeIdentityId) onUploaded(parentPath(item.targetPath));
+            onUploaded(parentPath(item.targetPath));
           } else {
             dispatch({
               type: "fail",
@@ -257,37 +237,16 @@ export function createUploadStore(deps: UploadStoreDeps = {}): UploadStore {
 
     return {
       state: initialUploadQueueState,
-      activeIdentityId: identityId,
       reset() {
         for (const controller of controllers.values()) controller.abort();
         controllers.clear();
         parts.clear();
-        set({ state: initialUploadQueueState, activeIdentityId: undefined });
-      },
-      setActiveIdentity(id) {
-        set({ activeIdentityId: id });
-      },
-      cancelIdentity(id) {
-        for (const item of Object.values(get().state.items)) {
-          if (item.identityId === id) {
-            dispatch({ type: "cancel", id: item.id });
-            controllers.get(item.id)?.abort();
-          }
-        }
+        set({ state: initialUploadQueueState });
       },
 
       enqueue(items) {
         const batchId = crypto.randomUUID();
-        const captured = items.map((item) => {
-          const owner = item.identityId ?? get().activeIdentityId;
-          if (owner === undefined && deps.requireIdentity)
-            throw new Error("Select a login before uploading.");
-          return {
-            ...item,
-            batchId: item.batchId ?? batchId,
-            ...(owner === undefined ? {} : { identityId: owner }),
-          };
-        });
+        const captured = items.map((item) => ({ ...item, batchId: item.batchId ?? batchId }));
         dispatch({ type: "enqueue", items: captured });
         scheduleNext();
       },
@@ -324,6 +283,5 @@ export function createUploadStore(deps: UploadStoreDeps = {}): UploadStore {
  * to invalidate against.
  */
 export const useUploadStore: UploadStore = createUploadStore({
-  requireIdentity: true,
   onUploaded: createDefaultOnUploaded(),
 });

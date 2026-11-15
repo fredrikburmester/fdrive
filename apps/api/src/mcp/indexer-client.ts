@@ -1,4 +1,4 @@
-/** One extracted document, as returned by the indexer's internal `POST /extract`. */
+/** One extracted document, as returned by the indexer's internal `POST /extract-content`. */
 export interface ExtractResult {
   readonly text: string;
   readonly status: string;
@@ -6,13 +6,11 @@ export interface ExtractResult {
 
 export interface IndexerExtractClient {
   /**
-   * Live text extraction for one root-relative path. `null` when the
-   * indexer responds with anything other than 2xx (unreachable, path not
-   * found, unsupported format).
+   * Text of bounded bytes already authorized and read through the caller's
+   * storage. `null` when the indexer is unreachable or answers with anything
+   * other than 2xx.
    */
-  extract(input: { root: string; path: string }): Promise<ExtractResult | null>;
-  /** Bounded bytes already authorized and read through the caller's provider. */
-  extractContent?(input: { name: string; bytes: Uint8Array }): Promise<ExtractResult | null>;
+  extractContent(input: { name: string; bytes: Uint8Array }): Promise<ExtractResult | null>;
 }
 
 export interface CreateIndexerExtractClientDeps {
@@ -26,9 +24,9 @@ function isExtractResultShaped(value: unknown): value is { text?: unknown; statu
 }
 
 /**
- * Builds a client for the indexer's internal `POST /extract` endpoint (only
- * reachable inside the compose network), used by the MCP `read_file_text`
- * tool for live text extraction.
+ * Builds a client for the indexer's internal `POST /extract-content` endpoint
+ * (only reachable inside the compose network), used by the MCP
+ * `read_file_text` tool for documents that are not plain UTF-8.
  */
 export function createIndexerExtractClient(
   deps: CreateIndexerExtractClientDeps,
@@ -55,40 +53,6 @@ export function createIndexerExtractClient(
       } catch {
         return null;
       }
-    },
-    async extract(input) {
-      let response: Response;
-      try {
-        response = await deps.fetch(`${deps.baseUrl}/extract`, {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify(input),
-          signal: AbortSignal.timeout(30_000),
-        });
-      } catch {
-        return null;
-      }
-
-      if (!response.ok) {
-        await response.body?.cancel().catch(() => undefined);
-        return null;
-      }
-
-      let body: unknown;
-      try {
-        body = await response.json();
-      } catch {
-        return null;
-      }
-
-      if (!isExtractResultShaped(body)) {
-        return null;
-      }
-
-      return {
-        text: typeof body.text === "string" ? body.text : "",
-        status: typeof body.status === "string" ? body.status : "unknown",
-      };
     },
   };
 }
