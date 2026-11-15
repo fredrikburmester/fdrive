@@ -1,4 +1,4 @@
-import { ArchiveEntriesResponse } from "@fdrive/contracts";
+import { ArchiveEntriesResponse, PublicShare } from "@fdrive/contracts";
 import { describe, expect, it } from "vitest";
 import { ZipFile } from "yazl";
 import { sharesHarness } from "./test-fixtures/index.ts";
@@ -63,21 +63,28 @@ describe("GET /api/v1/public/shares/:id/archive-entries", () => {
     expect(body.entries.map((entry) => entry.path)).toEqual(["a.txt", "b.txt", "dir/c.txt"]);
   });
 
-  it("rejects a share with a download limit", async () => {
+  it("peeks a limited link, counting each peek once however many reads it takes", async () => {
     const h = sharesHarness();
     const cookie = await h.login();
     h.write("/docs.zip", await threeEntryZip());
-    const { id } = await h.create(cookie, { paths: ["/docs.zip"], maxDownloads: 5 });
-    const response = await h.request(`${publicBase(id)}/archive-entries`);
-    expect(response.status).toBe(403);
+    const { id } = await h.create(cookie, { paths: ["/docs.zip"], maxDownloads: 2 });
+    const used = async () =>
+      PublicShare.parse(await (await h.request(publicBase(id))).json()).usedDownloads;
+    for (const count of [1, 2]) {
+      const response = await h.request(`${publicBase(id)}/archive-entries`);
+      expect(response.status).toBe(200);
+      expect(await used()).toBe(count);
+    }
+    expect((await h.request(`${publicBase(id)}/archive-entries`)).status).toBe(403);
+    expect(await used()).toBe(2);
   });
 
-  it("rejects a multi-path (archive-of-many) share", async () => {
+  it("refuses an archive-of-many share, which has no one archive to peek", async () => {
     const h = sharesHarness();
     const cookie = await h.login();
     const { id } = await h.create(cookie, { paths: ["/a.docx", "/report.txt"] });
     const response = await h.request(`${publicBase(id)}/archive-entries`);
-    expect(response.status).toBe(403);
+    expect(response.status).toBe(400);
   });
 
   it("rejects the wrong password like every other public share route", async () => {

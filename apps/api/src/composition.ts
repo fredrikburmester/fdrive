@@ -827,7 +827,6 @@ export async function composeApp(
         activity: personalActivity,
         thumbnailsEnabled: () => featureService.enabled("thumbnails"),
         service: createSharesService({
-          repos,
           shares: shareRepo,
           storageFor: storageFactory,
           passwords,

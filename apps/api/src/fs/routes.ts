@@ -245,19 +245,20 @@ function buildDownloadOpts(
 
 type DownloadResult = Awaited<ReturnType<StorageProvider["download"]>>;
 
-type DownloadOutcome =
+export type DownloadOutcome =
   | { kind: "stream"; result: DownloadResult }
   | { kind: "range-not-satisfiable"; size: number | null };
 
 /**
- * Resolves a `GET/HEAD /fs/download` request into either a stream to
- * return, or a "range not satisfiable" outcome (416). When a `Range`
- * header is present, opportunistically stats the file first to know its
- * size (used to validate the range and, on an invalid range, to report it
- * in the 416's `Content-Range`); a failed stat here is not surfaced, since
- * the subsequent `download` call below will raise the real error itself.
+ * Resolves a download request (`/fs/download`, a public share's) into
+ * either a stream to return, or a "range not satisfiable" outcome (416).
+ * When a `Range` header is present, opportunistically stats the file first
+ * to know its size (used to validate the range and, on an invalid range,
+ * to report it in the 416's `Content-Range`); a failed stat here is not
+ * surfaced, since the subsequent `download` call below will raise the real
+ * error itself. Storage errors are left to the caller to map.
  */
-async function resolveDownload(
+export async function resolveDownload(
   storage: StorageProvider,
   path: string,
   rangeHeader: string | null,
@@ -265,9 +266,7 @@ async function resolveDownload(
   signal: AbortSignal,
 ): Promise<DownloadOutcome> {
   if (rangeHeader === null) {
-    const result = await runStorageCall(() =>
-      storage.download(path, buildDownloadOpts(ifRangeHeader, signal)),
-    );
+    const result = await storage.download(path, buildDownloadOpts(ifRangeHeader, signal));
     return { kind: "stream", result };
   }
 
@@ -283,7 +282,7 @@ async function resolveDownload(
     return { kind: "range-not-satisfiable", size: knownSize };
   }
   if (parsed.kind === "multiple") {
-    const result = await runStorageCall(() => storage.download(path, { signal }));
+    const result = await storage.download(path, { signal });
     return { kind: "stream", result };
   }
 
@@ -293,9 +292,7 @@ async function resolveDownload(
   const single = parsed as Extract<typeof parsed, { kind: "single" }>;
   const range =
     single.end !== undefined ? { start: single.start, end: single.end } : { start: single.start };
-  const result = await runStorageCall(() =>
-    storage.download(path, buildDownloadOpts(ifRangeHeader, signal, range)),
-  );
+  const result = await storage.download(path, buildDownloadOpts(ifRangeHeader, signal, range));
   return { kind: "stream", result };
 }
 
@@ -306,12 +303,8 @@ async function handleDownload(c: FsContext, deps: FsRoutesDeps): Promise<Respons
   const rangeHeader = c.req.header("range") ?? null;
   const ifRangeHeader = c.req.header("if-range");
 
-  const outcome = await resolveDownload(
-    principal.storage,
-    path,
-    rangeHeader,
-    ifRangeHeader,
-    c.req.raw.signal,
+  const outcome = await runStorageCall(() =>
+    resolveDownload(principal.storage, path, rangeHeader, ifRangeHeader, c.req.raw.signal),
   );
 
   if (outcome.kind === "range-not-satisfiable") {

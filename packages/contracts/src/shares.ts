@@ -60,7 +60,7 @@ export const ManagedShare = z.object({
   hasPassword: z.boolean(),
   expiresAt: z.iso.datetime().nullable(),
   maxDownloads: z.number().int().min(0),
-  /** Consumed provider transfer tokens: downloads/previews for read shares, uploads for write shares. */
+  /** Downloads, previews and peeks of a read share, uploads of a write share. */
   usedDownloads: z.number().int().min(0),
   createdAt: z.iso.datetime(),
   updatedAt: z.iso.datetime(),
@@ -80,7 +80,7 @@ export const PublicShare = z.object({
   credentialPresent: z.boolean(),
   expiresAt: z.iso.datetime().nullable(),
   maxDownloads: z.number().int().min(0),
-  /** Consumed provider transfer tokens: downloads/previews for read shares, uploads for write shares. */
+  /** Downloads, previews and peeks of a read share, uploads of a write share. */
   usedDownloads: z.number().int().min(0),
   unavailableReason: z.enum(["expired", "limit"]).nullable(),
 });
@@ -98,6 +98,16 @@ export type ShareEntriesResponse = z.infer<typeof ShareEntriesResponse>;
 export const ShareUploadPath = SharePath.refine(
   (value) => value !== "/" && !value.slice(1).includes("/"),
 );
+/** Where a visitor's upload landed: its own name, or the next free numbered one. */
+export const ShareUploadResponse = z.object({ name: z.string() });
+export type ShareUploadResponse = z.infer<typeof ShareUploadResponse>;
+/**
+ * A preview opened through a public share, counted as one download. The
+ * token lets the download URL of that one file serve its bytes, ranges
+ * included, without counting again until the token expires.
+ */
+export const SharePreviewResponse = z.object({ token: z.string() });
+export type SharePreviewResponse = z.infer<typeof SharePreviewResponse>;
 
 /**
  * Camera raw extensions the indexer thumbnails (from the camera's embedded JPEG preview).

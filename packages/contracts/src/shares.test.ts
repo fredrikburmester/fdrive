@@ -110,13 +110,17 @@ describe("share contracts", () => {
           ? { format: "zip", entries: [], truncated: false }
           : path.endsWith("entries")
             ? { items: [] }
-            : path.includes("credentials") || path.endsWith("upload") || request.method === "DELETE"
-              ? { ok: true }
-              : path.includes("public")
-                ? pub
-                : path.endsWith("shares") && request.method === "GET"
-                  ? { items: [managed] }
-                  : managed;
+            : path.endsWith("upload")
+              ? { name: "a (2)" }
+              : path.endsWith("preview")
+                ? { token: "t" }
+                : path.includes("credentials") || request.method === "DELETE"
+                  ? { ok: true }
+                  : path.includes("public")
+                    ? pub
+                    : path.endsWith("shares") && request.method === "GET"
+                      ? { items: [managed] }
+                      : managed;
         return Response.json(body);
       },
     });
@@ -133,11 +137,15 @@ describe("share contracts", () => {
     await client.shareEntries(id, "/child");
     await client.shareArchiveEntries(id);
     await client.shareArchiveEntries(id, "/child.zip");
-    await client.shareUpload(id, "/a", new Uint8Array([1]));
+    expect(await client.shareUpload(id, "/a", new Uint8Array([1]))).toEqual({ name: "a (2)" });
+    expect(await client.sharePreview(id, "/b")).toEqual({ token: "t" });
+    expect(seen.at(-1)?.url).toContain("/preview?path=%2Fb");
     expect(client.shareDownloadUrl(id)).toContain("path=%2F");
     expect(client.shareDownloadUrl(id, "/b")).toContain("path=%2Fb");
+    expect(client.shareDownloadUrl(id, "/b")).not.toContain("preview");
+    expect(client.shareDownloadUrl(id, "/b", "t.1")).toContain("path=%2Fb&preview=t.1");
     expect(client.shareArchiveUrl(id)).toContain("/archive");
-    expect(seen).toHaveLength(13);
+    expect(seen).toHaveLength(14);
     expect(
       seen
         .filter((r) => r.method !== "GET")

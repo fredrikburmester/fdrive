@@ -335,6 +335,7 @@ export const PUBLIC_SHARE_SUFFIXES = {
   entries: "/entries",
   archiveEntries: "/archive-entries",
   download: "/download",
+  preview: "/preview",
   archive: "/archive",
   thumb: "/thumb",
   upload: "/upload",

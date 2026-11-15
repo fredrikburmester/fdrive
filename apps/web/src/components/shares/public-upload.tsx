@@ -75,7 +75,9 @@ export function PublicUpload({
                 <span className="truncate text-sm font-medium">{item.file.name}</span>
                 <span className="text-xs text-muted-foreground">
                   {item.status === "done"
-                    ? "Uploaded"
+                    ? item.savedAs !== null && item.savedAs !== item.file.name
+                      ? `Uploaded as ${item.savedAs}`
+                      : "Uploaded"
                     : item.status === "uploading"
                       ? `${item.progress}%`
                       : item.status}

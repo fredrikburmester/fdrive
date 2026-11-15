@@ -110,9 +110,13 @@ whose folder holds the owner's Trash, `/.fdrive-desktop` or `/Shared with me` ca
 downloaded as an archive, nor can one whose paths overlap or would land on one name (compared
 ignoring case); new links with several paths are refused on that last rule too.
 Protected share metadata must not leak before authentication. Share passwords are never
-stored in clear: a row holds only a scrypt hash in `password_hash`, which no share record
-projection returns; the public credential-cookie flow has separate protections. See the
-API's [share implementation](../apps/api/src/shares/).
+stored in clear: a row holds only a scrypt hash in `password_hash`, which only the public
+lookup reads, to verify a visitor, and no response carries; the owner sees `hasPassword`
+(`password_hash is not null`). The public credential-cookie flow has separate protections. A
+public request reads its share's row once, then works from it. A visitor's upload never
+replaces a file: a taken name is refused by storage, and the upload lands on the next free
+numbered name (`photo (2).jpg`), which the visitor is shown. See the API's
+[share implementation](../apps/api/src/shares/service.ts).
 
 Session revocation follows the [authentication guide](AUTH.md#session-revocation).
 
@@ -197,10 +201,12 @@ thresholds and CI configuration are authoritative; do not copy historic phase ta
 
 ## Interface names and persistence
 
-Public share `usedDownloads` is fdrive's own counter; `app.shares.views` is its legacy column
-name. Write shares count uploads;
-read shares count downloads and full-size previews. Thumbnail views do not consume
-that budget. Names remain compatible with existing clients and stored data.
+Public share `usedDownloads` (`app.shares.used_downloads`) is fdrive's own counter. Write
+shares count uploads; read shares count downloads, archives, previews and peeks, each once
+however many Range reads it takes. A preview is opened through the share (`POST .../preview`),
+which counts it and returns a token the download URL serves that one file for, without
+counting again, for an hour; a limited link previews and peeks like any other. Thumbnails
+never count.
 
 A `TrashEntry.id` is an opaque provider entry identifier; the recycle-folder adapter
 uses its path relative to the trash root. Public System logs merge internal

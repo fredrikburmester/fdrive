@@ -4,8 +4,8 @@ export type ShareScope = "read" | "write";
 /** Operator-chosen public page rendering. Mirrors `@fdrive/contracts` `SharePresentation`. */
 export type SharePresentation = "auto" | "list" | "gallery" | "download";
 /**
- * One row of `app.shares`, a link fdrive serves itself. The password hash a
- * row may hold is never part of the record: see `ShareRepo.passwordHash`.
+ * One row of `app.shares`, a link fdrive serves itself, as its owner sees
+ * it: whether it has a password, never the hash (see `ShareRepo.get`).
  */
 export interface ShareRecord {
   readonly id: string;
@@ -14,28 +14,33 @@ export interface ShareRecord {
   readonly description: string;
   readonly scope: ShareScope;
   readonly paths: readonly string[];
+  /** Whether `password_hash` holds a hash. */
   readonly hasPassword: boolean;
   readonly expiresAt: Date | null;
   readonly maxDownloads: number;
   readonly createdAt: Date;
   readonly updatedAt: Date;
-  /** Legacy column name: the downloads (or uploads) counted so far (see `consume`). */
-  readonly views: number;
+  /** The downloads (or uploads) counted so far (see `consume`). */
+  readonly usedDownloads: number;
   readonly presentation: SharePresentation;
 }
 /**
- * A new owned row. `passwordHash` is stored beside the row and sets
- * `hasPassword`; `null` for an open share.
+ * The row a public request works from: the record and the password hash a
+ * visitor is verified against. Server-side only; no response carries it.
  */
+export interface PublicShareRecord extends ShareRecord {
+  readonly passwordHash: string | null;
+}
+/** A new owned row; `passwordHash` is `null` for an open share. */
 export interface ShareInsertInput
-  extends Omit<ShareRecord, "id" | "createdAt" | "updatedAt" | "views" | "hasPassword"> {
+  extends Omit<ShareRecord, "id" | "createdAt" | "updatedAt" | "usedDownloads" | "hasPassword"> {
   readonly passwordHash: string | null;
   readonly at: Date;
 }
 /**
  * A full replacement of an owned row's editable fields, applied at `at`.
  * `passwordHash` omitted keeps the stored password, `null` removes it and
- * a hash replaces it; `hasPassword` follows.
+ * a hash replaces it.
  */
 export interface ShareOwnedUpdate extends Omit<ShareInsertInput, "identityId" | "passwordHash"> {
   readonly passwordHash?: string | null;
@@ -48,8 +53,11 @@ export interface ShareRepo {
   insert(input: ShareInsertInput): Promise<ShareRecord>;
   /** Replaces an owned row's editable fields; `null` for a missing or foreign row. */
   updateOwned(identityId: string, id: string, input: ShareOwnedUpdate): Promise<ShareRecord | null>;
-  /** Internal public-proxy lookup only. Does not authorize access. */
-  get(id: string): Promise<ShareRecord | null>;
+  /**
+   * The one read a public request makes, with the password hash it verifies
+   * a visitor against. Does not authorize access.
+   */
+  get(id: string): Promise<PublicShareRecord | null>;
   getOwned(identityId: string, id: string): Promise<ShareRecord | null>;
   listOwned(identityId: string, options?: ShareListOptions): Promise<ShareRecord[]>;
   /** Removes the row; `false` for a missing or foreign one. */
@@ -69,13 +77,8 @@ export interface ShareRepo {
    */
   deletePrefix(identityId: string, path: string, isDir: boolean): Promise<void>;
   /**
-   * The stored password hash of an owned share, for the credential check
-   * only; `null` for an open share or a missing one.
-   */
-  passwordHash(id: string): Promise<string | null>;
-  /**
    * Spends one download of an owned share, after the download succeeded:
-   * one more `views` only while the limit and the expiry still allow it.
+   * one more `usedDownloads` only while the limit and the expiry still allow it.
    * `null` when the row is missing, expired or exhausted, so a
    * caller that got `null` has been refused, never counted.
    */
@@ -252,11 +255,11 @@ export function sharePathChanged(path: string, changed: string, isDir: boolean):
 
 /** Whether `record` still admits one more download at `now`; the check `consume` makes. */
 export function shareAdmitsDownload(
-  record: Pick<ShareRecord, "expiresAt" | "maxDownloads" | "views">,
+  record: Pick<ShareRecord, "expiresAt" | "maxDownloads" | "usedDownloads">,
   now: Date,
 ): boolean {
   if (record.expiresAt !== null && record.expiresAt.getTime() <= now.getTime()) return false;
-  return record.maxDownloads === 0 || record.views < record.maxDownloads;
+  return record.maxDownloads === 0 || record.usedDownloads < record.maxDownloads;
 }
 
 /** Test adapter. Writes mutate synchronously, so concurrent promises retain one UUID. */
@@ -272,7 +275,7 @@ export function createMemoryShareRepo(options: MemoryShareOptions = {}): ShareRe
         id: nextId(),
         identityId: input.identityId,
         hasPassword: input.passwordHash !== null,
-        views: 0,
+        usedDownloads: 0,
         createdAt: new Date(input.at),
         updatedAt: new Date(input.at),
       };
@@ -298,7 +301,7 @@ export function createMemoryShareRepo(options: MemoryShareOptions = {}): ShareRe
     async get(id) {
       validateShareId(id);
       const row = rows.get(id);
-      return row ? cloneShareRecord(row) : null;
+      return row ? { ...cloneShareRecord(row), passwordHash: hashes.get(id) ?? null } : null;
     },
     async getOwned(identityId, id) {
       validateShareOwnership(identityId, id);
@@ -342,17 +345,13 @@ export function createMemoryShareRepo(options: MemoryShareOptions = {}): ShareRe
         }
       }
     },
-    async passwordHash(id) {
-      validateShareId(id);
-      return hashes.get(id) ?? null;
-    },
     async consume(id, now) {
       validateShareId(id);
       validateDate(now);
       const current = rows.get(id);
       if (current === undefined) return null;
       if (!shareAdmitsDownload(current, now)) return null;
-      const record = { ...current, views: current.views + 1 };
+      const record = { ...current, usedDownloads: current.usedDownloads + 1 };
       rows.set(id, record);
       return cloneShareRecord(record);
     },

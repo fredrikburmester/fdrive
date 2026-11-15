@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import type { PublicShare } from "@fdrive/contracts";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { PublicSharePage } from "./public-share-page";
 
@@ -10,6 +10,7 @@ const calls = vi.hoisted(() => ({
   password: vi.fn(),
   entries: vi.fn(),
   archiveEntries: vi.fn(),
+  preview: vi.fn(),
 }));
 vi.mock("@/lib/shares/client", () => ({
   publicShareClient: () => ({
@@ -17,8 +18,9 @@ vi.mock("@/lib/shares/client", () => ({
     setSharePassword: calls.password,
     shareEntries: calls.entries,
     shareArchiveEntries: calls.archiveEntries,
-    shareDownloadUrl: (id: string, path = "/") =>
-      `/api/v1/public/shares/${id}/download?path=${encodeURIComponent(path)}`,
+    sharePreview: calls.preview,
+    shareDownloadUrl: (id: string, path = "/", preview?: string) =>
+      `/api/v1/public/shares/${id}/download?path=${encodeURIComponent(path)}${preview === undefined ? "" : `&preview=${preview}`}`,
     shareThumbUrl: (id: string, path: string, size: number) =>
       `/api/v1/public/shares/${id}/thumb?path=${encodeURIComponent(path)}&size=${size}`,
     shareArchiveUrl: (id: string) => `/api/v1/public/shares/${id}/archive`,
@@ -209,48 +211,72 @@ it("a directory shows Peek beside Download only for archive rows, and peeking op
   await screen.findByText("a.txt");
   expect(calls.archiveEntries).toHaveBeenCalledWith(id, "/bundle.zip");
 });
-it("hides Peek on a download-limited share, even for an archive row or single-file archive share", async () => {
+it("previews and peeks a download-limited link, opening each preview once through the share", async () => {
   calls.metadata.mockResolvedValue({
     ...metadata,
     hasPassword: false,
     layout: "directory",
+    presentation: "list",
     fileName: null,
     maxDownloads: 1,
   });
   calls.entries.mockResolvedValue({
-    items: [{ name: "bundle.zip", kind: "file", size: 100, modifiedAt: "2026-01-01T00:00:00Z" }],
+    items: [
+      { name: "notes.txt", kind: "file", size: 5, modifiedAt: "2026-01-01T00:00:00Z" },
+      { name: "bundle.zip", kind: "file", size: 100, modifiedAt: "2026-01-01T00:00:00Z" },
+    ],
   });
-  setup();
-  await screen.findByText("bundle.zip");
-  expect(screen.queryByRole("button", { name: "Peek" })).toBeNull();
-});
-it("hides full-file previews on download-limited directory and single-file shares", async () => {
-  calls.metadata.mockResolvedValue({
-    ...metadata,
-    hasPassword: false,
-    layout: "directory",
-    fileName: null,
-    maxDownloads: 1,
-  });
-  calls.entries.mockResolvedValue({
-    items: [{ name: "notes.txt", kind: "file", size: 5, modifiedAt: "2026-01-01T00:00:00Z" }],
-  });
-  const directory = setup();
-  await screen.findByText("notes.txt");
-  expect(screen.queryByRole("button", { name: "Preview" })).toBeNull();
-  expect(screen.getByRole("link", { name: "Download" })).toBeTruthy();
-  directory.unmount();
+  calls.preview.mockResolvedValue({ token: "opened" });
+  const fetched = vi.fn(async (_url: string) => new Response("hello"));
+  vi.stubGlobal("fetch", fetched);
+  try {
+    const directory = setup();
+    await screen.findByText("notes.txt");
+    expect(screen.getByRole("button", { name: "Peek" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Preview" }));
+    const preview = await screen.findByRole("region", { name: "Preview of notes.txt" });
+    await within(preview).findByText("hello");
+    expect(calls.preview).toHaveBeenCalledTimes(1);
+    expect(calls.preview).toHaveBeenCalledWith(id, "/notes.txt");
+    expect(fetched).toHaveBeenCalledTimes(1);
+    expect(fetched.mock.calls[0]?.[0]).toBe(
+      `/api/v1/public/shares/${id}/download?path=%2Fnotes.txt&preview=opened`,
+    );
+    directory.unmount();
 
+    calls.metadata.mockResolvedValue({
+      ...metadata,
+      hasPassword: false,
+      fileName: "notes.txt",
+      maxDownloads: 1,
+    });
+    setup();
+    await screen.findByText("notes.txt");
+    expect(screen.getByRole("button", { name: "Preview" })).toBeTruthy();
+    expect(screen.getByRole("link", { name: "Download" })).toBeTruthy();
+  } finally {
+    vi.unstubAllGlobals();
+  }
+});
+it("says why a preview could not be opened, and fetches nothing", async () => {
   calls.metadata.mockResolvedValue({
     ...metadata,
     hasPassword: false,
     fileName: "notes.txt",
     maxDownloads: 1,
   });
-  setup();
-  await screen.findByText("notes.txt");
-  expect(screen.queryByRole("button", { name: "Preview" })).toBeNull();
-  expect(screen.getByRole("link", { name: "Download" })).toBeTruthy();
+  calls.preview.mockRejectedValue(new Error("Share download limit reached"));
+  const fetched = vi.fn(async () => new Response("hello"));
+  vi.stubGlobal("fetch", fetched);
+  try {
+    setup();
+    fireEvent.click(await screen.findByRole("button", { name: "Preview" }));
+    const preview = await screen.findByRole("region", { name: "Preview of notes.txt" });
+    await within(preview).findByText("Share download limit reached");
+    expect(fetched).not.toHaveBeenCalled();
+  } finally {
+    vi.unstubAllGlobals();
+  }
 });
 it("a single-file archive share shows Peek beside its download button", async () => {
   calls.metadata.mockResolvedValue({

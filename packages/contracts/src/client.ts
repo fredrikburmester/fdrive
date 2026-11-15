@@ -106,7 +106,9 @@ import {
   ManagedShare,
   PublicShare,
   ShareEntriesResponse,
+  SharePreviewResponse,
   SharesResponse,
+  ShareUploadResponse,
   type UpdateShareRequest,
 } from "./shares.ts";
 import { StorageUsageResponse, SystemStorage, type SystemStorageUpdateRequest } from "./storage.ts";
@@ -263,7 +265,10 @@ export interface ApiClient {
   shareEntries(id: string, path?: string): Promise<ShareEntriesResponse>;
   /** Lists an archive's entries through a public share, without extracting it. */
   shareArchiveEntries(id: string, path?: string): Promise<ArchiveEntriesResponse>;
-  shareDownloadUrl(id: string, path?: string): string;
+  /** A file's download URL; with a `preview` token it serves that file without counting again. */
+  shareDownloadUrl(id: string, path?: string, preview?: string): string;
+  /** Opens a preview of one file, counted as one download (see `SharePreviewResponse`). */
+  sharePreview(id: string, path: string): Promise<SharePreviewResponse>;
   shareArchiveUrl(id: string): string;
   /** A public gallery tile's thumbnail: never counts as a download, unlike `shareDownloadUrl`. */
   shareThumbUrl(id: string, path: string, size: ThumbSize): string;
@@ -272,7 +277,7 @@ export interface ApiClient {
     path: string,
     body: UploadBody,
     signal?: AbortSignal,
-  ): Promise<OkResponse>;
+  ): Promise<ShareUploadResponse>;
   officeStatus(): Promise<OfficeStatusResponse>;
   officeOpen(req: OfficeOpenRequest): Promise<OfficeOpenResponse>;
   officeCreateDocument(req: OfficeCreateDocumentRequest): Promise<OfficeCreateDocumentResponse>;
@@ -615,8 +620,14 @@ export function createApiClient(options: ApiClientOptions = {}): ApiClient {
         query: { path },
       });
     },
-    shareDownloadUrl(id, path = "/") {
-      return buildRequestUrl(ctx.baseUrl, publicShareRoute(id, "download"), { path });
+    shareDownloadUrl(id, path = "/", preview) {
+      return buildRequestUrl(ctx.baseUrl, publicShareRoute(id, "download"), {
+        path,
+        ...(preview === undefined ? {} : { preview }),
+      });
+    },
+    sharePreview(id, path) {
+      return post(publicShareRoute(id, "preview"), SharePreviewResponse, { query: { path } });
     },
     shareArchiveUrl(id) {
       return buildRequestUrl(ctx.baseUrl, publicShareRoute(id, "archive"));
@@ -628,7 +639,7 @@ export function createApiClient(options: ApiClientOptions = {}): ApiClient {
       });
     },
     shareUpload(id, path, body, signal) {
-      return put(publicShareRoute(id, "upload"), OkResponse, {
+      return put(publicShareRoute(id, "upload"), ShareUploadResponse, {
         query: { path },
         rawBody: body,
         signal,

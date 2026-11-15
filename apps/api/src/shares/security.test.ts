@@ -43,6 +43,33 @@ it("purpose-separates, bounds, authenticates and expires credential envelopes", 
       ),
     ).toBeUndefined();
 });
+it("binds a preview token to one share, one path and an hour, and to this installation", () => {
+  const master = Buffer.alloc(32, 1);
+  let now = new Date(1_000_000);
+  const codec = createShareCredentialCodec(master, () => now);
+  const token = codec.previewToken(id, "/clip.mp4");
+  expect(codec.previewed(id, "/clip.mp4", token)).toBe(true);
+  expect(codec.previewed(id, "/other.mp4", token)).toBe(false);
+  expect(codec.previewed("00000000-0000-4000-8000-000000000002", "/clip.mp4", token)).toBe(false);
+  expect(
+    createShareCredentialCodec(Buffer.alloc(32, 2), () => now).previewed(id, "/clip.mp4", token),
+  ).toBe(false);
+  const [expires, mac] = token.split(".");
+  for (const bad of [
+    "",
+    "nonsense",
+    `${expires}.${mac}x`,
+    `${expires}.${mac?.slice(1)}`,
+    `${(Number.parseInt(expires ?? "", 36) + 1).toString(36)}.${mac}`,
+    `${"z".repeat(12)}.${mac}`,
+  ])
+    expect(codec.previewed(id, "/clip.mp4", bad), bad).toBe(false);
+  // A token from further ahead than one is ever issued is no token.
+  const ahead = createShareCredentialCodec(master, () => new Date(now.getTime() + 60_000));
+  expect(codec.previewed(id, "/clip.mp4", ahead.previewToken(id, "/clip.mp4"))).toBe(false);
+  now = new Date(now.getTime() + 3_600_000);
+  expect(codec.previewed(id, "/clip.mp4", token)).toBe(false);
+});
 it("bounds known and unknown requests independently, credentials, capacity and expiry", async () => {
   let now = new Date(0);
   const limiter = createShareLimiter(() => now, 2);
