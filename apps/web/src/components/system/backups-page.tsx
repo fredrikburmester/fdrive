@@ -491,11 +491,6 @@ function Destinations({
             });
           }}
         >
-          <Field label="Name">
-            {(id) => (
-              <Input id={id} value={name} onChange={(e) => setName(e.target.value)} required />
-            )}
-          </Field>
           <div className="flex flex-wrap gap-2 sm:col-span-2">
             <Button
               type="button"
@@ -518,6 +513,11 @@ function Destinations({
               Backblaze B2
             </Button>
           </div>
+          <Field label="Name">
+            {(id) => (
+              <Input id={id} value={name} onChange={(e) => setName(e.target.value)} required />
+            )}
+          </Field>
           <Field label="S3 endpoint">
             {(id) => (
               <Input

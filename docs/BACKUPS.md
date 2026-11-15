@@ -236,18 +236,24 @@ private recovery key.
 Local observations from `packages/backup/test/integration/benchmark.test.ts` on a developer Mac
 with loopback containers; not performance promises.
 
-| Fixture | Encrypted archive | Capture | Writer pause | Peak RSS (capture / restore) | Fresh restore |
-| --- | --- | --- | --- | --- | --- |
-| Empty installation | 3 KiB | 0.06 s | 0.002 s | 209 / 207 MiB | 0.05 s |
-| 60,000 history rows + 64 MiB recovery file | 65 MiB | 3.3 s | 3.2 s | 347 / 471 MiB | 16.8 s |
+| Fixture | Encrypted archive | Capture | Request pause | OCR pause | Peak RSS (capture / restore) | Fresh restore |
+| --- | --- | --- | --- | --- | --- | --- |
+| Empty installation | 5 KiB | 0.09 s | 0.008 s | 0.08 s | 238 / 239 MiB | 0.05 s |
+| 60,000 history rows + 64 MiB recovery file | 65 MiB | 2.9 s | 0.003 s | 2.9 s | 364 / 496 MiB | 15.4 s |
 
-Index regeneration after restore is separate and depends on file volume.
+Request pause is the longest any mutating request waited while requests ran back to back
+through the capture; 472 of them finished while the large capture was reading. OCR pause is
+how long a recovery file writer waited. Index regeneration after restore is separate and
+depends on file volume.
 
 Limitations these numbers expose:
 
-- Capture holds the exclusive checkpoint for its whole duration, so cooperating writers (native
-  uploads, OCR rewrites, ZIP uploads) wait as long as the capture and give up after 30 seconds.
-  Large recovery collections make captures long; schedule them at quiet hours.
+- A capture starts once the requests and OCR writes already running have finished, and gives up
+  after 30 seconds; requests that arrive meanwhile wait with it. After that, requests wait only
+  for the snapshot.
+- OCR's writes to kept originals wait for the whole capture and do not give up, so large
+  recovery collections hold OCR back for as long as they take to read. Schedule backups at
+  quiet hours.
 - Restore memory grows with history volume (471 MiB for this fixture). Size the recovery host
   accordingly.
 - A real Backblaze B2 bucket has been exercised for probe, delivery with readback, byte

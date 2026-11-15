@@ -94,12 +94,23 @@ test.describe("installation backups", () => {
     await expect(page.getByLabel("S3 endpoint")).toBeVisible();
     await expect(page.getByLabel("Destination type")).toHaveCount(0);
     await expect(page.getByLabel("Private backup directory")).toHaveCount(0);
+    await page.getByLabel("Secret access key").scrollIntoViewIfNeeded();
+    await page.screenshot({ path: test.info().outputPath("backups-destination-form.png") });
     await page.getByRole("button", { name: "Add destination" }).click();
     await expect(page.getByLabel("S3 endpoint")).toHaveCount(0);
     await page.getByRole("button", { name: "Back up now", exact: true }).click();
-    await expect(page.getByRole("button", { name: "Download backup" })).toHaveCount(2, {
-      timeout: 30_000,
-    });
+    // Both backups complete; daily retention keeps only the newer local archive.
+    await expect
+      .poll(
+        async () =>
+          (
+            (await (
+              await page.request.get(`${environment.webBaseUrl}/api/v1/system/backups`)
+            ).json()) as { runs: { state: string }[] }
+          ).runs.filter((run) => run.state === "complete").length,
+        { timeout: 30_000 },
+      )
+      .toBe(2);
     // Health: a size estimate runs through the worker, and an owner-recorded rehearsal report
     // replaces the monthly reminder.
     await expect(page.getByText(/Restore rehearsal due/)).toBeVisible();
