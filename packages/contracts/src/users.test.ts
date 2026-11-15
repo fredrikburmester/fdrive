@@ -55,12 +55,19 @@ describe("admin user contracts", () => {
     isYou: true,
     createdAt: AT,
     lastLoginAt: null,
+    storageUsed: null,
+    storageLimit: null,
   };
 
   it("parses a user and the list, with or without a last sign-in", () => {
     expect(AdminUser.parse(user)).toEqual(user);
     expect(AdminUser.parse({ ...user, lastLoginAt: AT }).lastLoginAt).toBe(AT);
     expect(AdminUser.safeParse({ ...user, createdAt: "yesterday" }).success).toBe(false);
+    expect(AdminUser.parse({ ...user, storageUsed: 0, storageLimit: 5 })).toMatchObject({
+      storageUsed: 0,
+      storageLimit: 5,
+    });
+    expect(AdminUser.safeParse({ ...user, storageLimit: 0 }).success).toBe(false);
     expect(AdminUsersResponse.parse({ users: [user] })).toEqual({ users: [user] });
     expect(AdminUsersResponse.safeParse({}).success).toBe(false);
   });
@@ -77,10 +84,16 @@ describe("admin user contracts", () => {
     expect(AdminUserCreateRequest.safeParse({ ...create, disabled: true }).success).toBe(false);
   });
 
-  it("updates any subset of password, disabled and administrator", () => {
+  it("updates any subset of password, disabled, administrator and storage limit", () => {
     expect(AdminUserUpdateRequest.parse({})).toEqual({});
-    const patch = { password: "new-password", disabled: true, isAdmin: false };
+    const patch = { password: "new-password", disabled: true, isAdmin: false, storageLimit: 1024 };
     expect(AdminUserUpdateRequest.parse(patch)).toEqual(patch);
+    expect(AdminUserUpdateRequest.parse({ storageLimit: null })).toEqual({ storageLimit: null });
+    for (const storageLimit of [0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1]) {
+      expect(AdminUserUpdateRequest.safeParse({ storageLimit }).success, `${storageLimit}`).toBe(
+        false,
+      );
+    }
     expect(AdminUserUpdateRequest.safeParse({ password: "short" }).success).toBe(false);
     expect(AdminUserUpdateRequest.safeParse({ username: "carol" }).success).toBe(false);
   });

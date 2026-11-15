@@ -50,6 +50,8 @@ export interface LocalUserUpdate {
   readonly passwordHash?: string;
   readonly disabled?: boolean;
   readonly isAdmin?: boolean;
+  /** The most bytes their home folder may hold; `null` for no limit. */
+  readonly storageLimit?: number | null;
   readonly at: Date;
 }
 /**

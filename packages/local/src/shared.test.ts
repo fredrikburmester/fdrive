@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, readFile, realpath, rm, stat, symlink, writeFile } from
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { bytes, kindOf, read, zipEntries } from "../test/helpers.js";
+import { bytes, kindOf, read, streamOf, zipEntries } from "../test/helpers.js";
 import {
   closedToShares,
   createUserStorage,
@@ -28,8 +28,14 @@ beforeEach(async () => {
   await mkdir(join(root, "bob"), { recursive: true });
   await writeFile(join(root, "bob", "own.txt"), "own");
   shared = vi.fn(async () => [
-    { name: "Projects", dir: alice("Projects"), ownerHome: alice(), writable: true },
-    { name: "Photos", dir: alice("Photos"), ownerHome: alice(), writable: false },
+    {
+      name: "Projects",
+      dir: alice("Projects"),
+      owner: "alice",
+      ownerHome: alice(),
+      writable: true,
+    },
+    { name: "Photos", dir: alice("Photos"), owner: "alice", ownerHome: alice(), writable: false },
   ]);
   bob = createUserStorage({ home: join(root, "bob"), shared });
 });
@@ -102,9 +108,21 @@ describe("createUserStorage", () => {
     const odd = createUserStorage({
       home: join(root, "bob"),
       shared: async () => [
-        { name: "Gone", dir: alice("Gone"), ownerHome: alice(), writable: true },
-        { name: "File", dir: alice("secret.txt"), ownerHome: alice(), writable: true },
-        { name: "Projects", dir: alice("Projects"), ownerHome: alice(), writable: true },
+        { name: "Gone", dir: alice("Gone"), owner: "alice", ownerHome: alice(), writable: true },
+        {
+          name: "File",
+          dir: alice("secret.txt"),
+          owner: "alice",
+          ownerHome: alice(),
+          writable: true,
+        },
+        {
+          name: "Projects",
+          dir: alice("Projects"),
+          owner: "alice",
+          ownerHome: alice(),
+          writable: true,
+        },
       ],
     });
     expect((await odd.list(`/${SHARED_WITH_ME}`)).map((entry) => entry.name)).toEqual(["Projects"]);
@@ -116,7 +134,13 @@ describe("createUserStorage", () => {
     const gone = createUserStorage({
       home: join(root, "bob"),
       shared: async () => [
-        { name: "Gone", dir: alice("Gone", "deeper"), ownerHome: alice(), writable: true },
+        {
+          name: "Gone",
+          dir: alice("Gone", "deeper"),
+          owner: "alice",
+          ownerHome: alice(),
+          writable: true,
+        },
       ],
     });
     const inside = `/${SHARED_WITH_ME}/Gone/new`;
@@ -155,8 +179,20 @@ describe("createUserStorage", () => {
     const linked = createUserStorage({
       home: join(root, "bob"),
       shared: async () => [
-        { name: "Linked", dir: alice("Linked"), ownerHome: alice(), writable: true },
-        { name: "Bin link", dir: alice("Bin link"), ownerHome: alice(), writable: true },
+        {
+          name: "Linked",
+          dir: alice("Linked"),
+          owner: "alice",
+          ownerHome: alice(),
+          writable: true,
+        },
+        {
+          name: "Bin link",
+          dir: alice("Bin link"),
+          owner: "alice",
+          ownerHome: alice(),
+          writable: true,
+        },
       ],
     });
     expect(await kindOf(linked.list(`/${SHARED_WITH_ME}/Linked`))).toBe("forbidden");
@@ -281,6 +317,107 @@ describe("createUserStorage", () => {
       ]),
     );
     expect(await kindOf(bob.zip([`/${SHARED_WITH_ME}/Nope`]))).toBe("not_found");
+  });
+});
+
+describe("createUserStorage with a storage limit", () => {
+  /** Bob's storage, with `left` bytes of room for each owner. */
+  function limited(left: Readonly<Record<string, number | null>>) {
+    const room = vi.fn(async (folder: SharedFolder | null) => left[folder?.owner ?? "bob"] ?? null);
+    return { room, storage: createUserStorage({ home: join(root, "bob"), shared, room }) };
+  }
+  const folder = `/${SHARED_WITH_ME}/Projects`;
+
+  it("refuses an upload with more bytes than its owner has room for, and writes nothing", async () => {
+    const { storage } = limited({ bob: 5 });
+    expect(await kindOf(storage.upload("/big.txt", bytes("123456")))).toBe("storage_limit_reached");
+    expect(await kindOf(storage.upload("/big.txt", streamOf(["1234", "56"])))).toBe(
+      "storage_limit_reached",
+    );
+    expect(await names("/")).toEqual([SHARED_WITH_ME, "own.txt"]);
+    await storage.upload("/fits.txt", streamOf(["12", "345"]));
+    expect(await read(storage, "/fits.txt")).toBe("12345");
+  });
+
+  it("counts the pieces an upload sent in pieces has already written against the room", async () => {
+    const { storage } = limited({ bob: 6 });
+    const piece = (offset: number, final = false) => ({
+      part: { id: "0123456789abcdef", offset, final },
+    });
+    await storage.upload("/pieces.txt", bytes("1234"), piece(0));
+    // Four bytes are already in the part, so a piece of three is one too many.
+    expect(await kindOf(storage.upload("/pieces.txt", bytes("567"), piece(4, true)))).toBe(
+      "storage_limit_reached",
+    );
+    expect(await kindOf(storage.upload("/pieces.txt", bytes("x"), piece(7, true)))).toBe(
+      "storage_limit_reached",
+    );
+    await storage.upload("/pieces.txt", bytes("56"), piece(4, true));
+    expect(await read(storage, "/pieces.txt")).toBe("123456");
+  });
+
+  it("refuses every write once its owner is over the limit, but not where there is none", async () => {
+    expect(await kindOf(limited({ bob: -1 }).storage.upload("/empty.txt", bytes("")))).toBe(
+      "storage_limit_reached",
+    );
+    await limited({ bob: null }).storage.upload("/free.txt", bytes("anything"));
+    expect(await read(bob, "/free.txt")).toBe("anything");
+  });
+
+  it("counts a replaced file's bytes as freed", async () => {
+    const { storage } = limited({ bob: 1 });
+    // own.txt holds 3 bytes; replacing it with 4 adds one. Nothing is freed at a new name.
+    expect(await kindOf(storage.upload("/new.txt", bytes("ab"), { overwrite: true }))).toBe(
+      "storage_limit_reached",
+    );
+    await storage.upload("/own.txt", bytes("four"), { overwrite: true });
+    expect(await read(storage, "/own.txt")).toBe("four");
+    expect(await kindOf(storage.upload("/own.txt", bytes("sixsix"), { overwrite: true }))).toBe(
+      "storage_limit_reached",
+    );
+  });
+
+  it("counts a write in a shared folder against the folder's owner", async () => {
+    const { room, storage } = limited({ bob: 0, alice: 100 });
+    await storage.upload(`${folder}/note.txt`, bytes("note"));
+    expect(await readFile(alice("Projects", "note.txt"), "utf8")).toBe("note");
+    expect(room).toHaveBeenLastCalledWith(expect.objectContaining({ owner: "alice" }));
+    expect(await kindOf(storage.upload("/note.txt", bytes("note")))).toBe("storage_limit_reached");
+  });
+
+  it("refuses a copy of more bytes than the target's owner has room for", async () => {
+    await writeFile(alice("Projects", "plans", "plan.txt"), "plan");
+    await symlink(alice("secret.txt"), alice("Projects", "plans", "link"));
+    const { storage } = limited({ bob: 8, alice: 0 });
+    // brief.txt (5) and plans/plan.txt (4) are 9 bytes; a link counts as nothing.
+    expect(await kindOf(storage.copy(folder, "/whole"))).toBe("storage_limit_reached");
+    expect(await kindOf(storage.copy("/own.txt", `${folder}/own.txt`))).toBe(
+      "storage_limit_reached",
+    );
+    await storage.copy(`${folder}/plans`, "/plans");
+    expect(await names("/plans")).toEqual(["link", "plan.txt"]);
+    expect(await kindOf(storage.copy(`${folder}/missing`, "/x"))).toBe("not_found");
+  });
+
+  it("refuses a move into another owner's files they have no room for, and nothing else", async () => {
+    const { room, storage } = limited({ bob: 0, alice: 2 });
+    // own.txt holds 3 bytes; alice has room for 2.
+    expect(await kindOf(storage.move("/own.txt", `${folder}/own.txt`))).toBe(
+      "storage_limit_reached",
+    );
+    expect(await read(storage, "/own.txt")).toBe("own");
+    // Within one owner's files a move adds nothing, so bob's own limit is not asked.
+    room.mockClear();
+    await storage.move("/own.txt", "/kept.txt");
+    await storage.move(`${folder}/brief.txt`, `${folder}/plans/brief.txt`);
+    expect(room).not.toHaveBeenCalled();
+    // Out of alice's files into bob's: brief.txt is 5 bytes and bob has no room.
+    expect(await kindOf(storage.move(`${folder}/plans/brief.txt`, "/brief.txt"))).toBe(
+      "storage_limit_reached",
+    );
+    const roomy = limited({ bob: 10, alice: 10 }).storage;
+    await roomy.move("/kept.txt", `${folder}/kept.txt`);
+    expect(await readFile(alice("Projects", "kept.txt"), "utf8")).toBe("own");
   });
 });
 

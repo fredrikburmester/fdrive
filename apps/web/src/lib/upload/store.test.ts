@@ -395,6 +395,24 @@ describe("createUploadStore", () => {
       expect(query(3).get("part")).not.toBe(query(0).get("part"));
     });
 
+    it("never sends a piece again after a full folder refuses it", async () => {
+      const { store, xhrs, query } = pieces([0, 0]);
+      xhrs[0]?.finishWith(204, "");
+      await flush();
+      const full = { error: { kind: "storage_limit_reached", message: "Storage limit reached" } };
+      xhrs[1]?.finishWith(507, JSON.stringify(full));
+      await flush();
+      await flush();
+
+      expect(xhrs).toHaveLength(2);
+      expect(store.getState().state.items.a).toMatchObject({
+        status: "error",
+        error: "Storage limit reached",
+      });
+      store.getState().retry("a");
+      expect(query(2).get("offset")).toBe("0");
+    });
+
     it("stops waiting to send a piece again once cancelled", async () => {
       const { store, xhrs } = pieces([60_000]);
       xhrs[0]?.emit("error");

@@ -1,5 +1,6 @@
 import { sql } from "drizzle-orm";
 import {
+  bigint,
   bigserial,
   boolean,
   check,
@@ -62,6 +63,8 @@ export const localUsers = appSchema.table(
     /** scrypt, in the share password format: `scrypt$N$r$p$salt$key`. */
     passwordHash: text("password_hash").notNull(),
     disabled: boolean("disabled").notNull().default(false),
+    /** The most bytes their home folder may hold; null for no limit. */
+    storageLimit: bigint("storage_limit", { mode: "number" }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },

@@ -214,7 +214,11 @@ export * from "./shares.ts";
 export {
   DEFAULT_STORAGE_NAME,
   STORAGE_NAME_SETTINGS_KEY,
+  StorageDuplicates,
+  StorageFile,
+  StorageKind,
   StorageName,
+  StorageUsageResponse,
   SystemStorage,
   SystemStorageUpdateRequest,
 } from "./storage.ts";

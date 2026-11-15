@@ -178,6 +178,7 @@ describe("ownedShareAccess", () => {
       });
     expect(await kindOf(failing("not_found"))).toBe("not_found");
     expect(await kindOf(failing("bad_request"))).toBe("bad_request");
+    expect(await kindOf(failing("storage_limit_reached"))).toBe("storage_limit_reached");
     for (const kind of ["forbidden", "upstream_unavailable", "internal", "conflict"] as const)
       expect(await kindOf(failing(kind))).toBe("upstream_unavailable");
     await expect(failing("forbidden")).rejects.not.toHaveProperty("message", "private detail");

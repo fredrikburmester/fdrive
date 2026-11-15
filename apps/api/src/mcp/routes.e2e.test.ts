@@ -69,6 +69,7 @@ function stubIndexQueries(): IndexQueries {
     photos: async () => fail("photos"),
     photoDetails: async () => fail("photoDetails"),
     subtreeSize: async () => fail("subtreeSize"),
+    bytesByExtension: async () => fail("bytesByExtension"),
   };
 }
 

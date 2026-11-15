@@ -10,6 +10,7 @@ import { startFakeIndexer } from "./support/fake-indexer.js";
 import { E2E_HOST, writeStateDirPointer } from "./support/paths.js";
 import { resolvePort } from "./support/ports.js";
 import { registry } from "./support/registry.js";
+import { STORAGE_FILES } from "./support/storage-fixture.js";
 
 function sha256Hex(content: string): string {
   return createHash("sha256").update(content, "utf-8").digest("hex");
@@ -63,6 +64,7 @@ async function seedSearchIndex(databaseUrl: string): Promise<void> {
     const indexedFiles: Record<string, Readonly<Record<string, string>>> = {
       alice: SEED_FILES.alice ?? {},
       ...ACCOUNT_FILES,
+      ...STORAGE_FILES,
     };
     const mtimeNs = (BigInt(Date.now()) * BigInt(1_000_000)).toString();
     let readmeFileId: number | undefined;

@@ -295,6 +295,13 @@
       "when": 1794738132428,
       "tag": "0041_drop_schema_version",
       "breakpoints": true
+    },
+    {
+      "idx": 42,
+      "version": "7",
+      "when": 1794740952975,
+      "tag": "0042_local_user_storage_limit",
+      "breakpoints": true
     }
   ]
 }

@@ -1,0 +1,1 @@
+ALTER TABLE "app"."local_users" ADD COLUMN "storage_limit" bigint;

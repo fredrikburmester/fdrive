@@ -8,6 +8,7 @@ import {
   type FilesFolderGuard,
 } from "@fdrive/local";
 import type { AppConfig } from "../config.js";
+import type { HomeUsage } from "../storage/usage.js";
 import type { ChangeQueue } from "./change-queue.js";
 import { createLocalUsers } from "./users.js";
 
@@ -27,6 +28,11 @@ export interface DeploymentFilesFolderOptions {
   readonly guard?: FilesFolderGuard;
   /** Names each new Trash leaf by the time it was made. */
   readonly clock?: () => Date;
+  /**
+   * What each user's folder holds: with it, a write its folder's owner has
+   * no room for under their storage limit is refused.
+   */
+  readonly usage?: HomeUsage;
 }
 
 /**
@@ -39,10 +45,14 @@ export function deploymentFilesFolder(
   repos: Pick<Repos, "localUsers" | "localGrants">,
   options: DeploymentFilesFolderOptions = {},
 ): FilesFolder {
-  const { changes, guard, clock } = options;
+  const { changes, guard, clock, usage } = options;
   return createFilesFolder({
     root: config.fdriveStorageRoot,
-    users: createLocalUsers({ repo: repos.localUsers, grants: repos.localGrants }),
+    users: createLocalUsers({
+      repo: repos.localUsers,
+      grants: repos.localGrants,
+      ...(usage === undefined ? {} : { usage }),
+    }),
     ...(guard === undefined ? {} : { guard }),
     ...(clock === undefined ? {} : { clock }),
     ...(changes === undefined ? {} : { onIndexChange: (change) => changes.record(change) }),

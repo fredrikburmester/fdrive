@@ -15,6 +15,7 @@ import { type DiskChangeListener, notify } from "./changes.js";
 import { mapped } from "./errors.js";
 import { isLocalUsername } from "./names.js";
 import {
+  bytesAt,
   copyEntry,
   createLocalStorage,
   type LocalStorage,
@@ -33,6 +34,8 @@ export const SHARED_WITH_ME = "Shared with me";
 export interface SharedFolder {
   /** Its name under `Shared with me`, unique among the user's shared folders. */
   readonly name: string;
+  /** The user whose files it is in. */
+  readonly owner: string;
   /** The shared folder on disk. */
   readonly dir: string;
   /**
@@ -118,6 +121,39 @@ export interface UserStorageOptions {
   readonly ready?: () => Promise<void>;
   /** Names each new Trash leaf by the time it was made. */
   readonly clock?: () => Date;
+  /**
+   * How many more bytes may land in the user's own files (`null`) or in a
+   * shared folder's owner's files, or `null` for no limit. With it, an
+   * upload, a copy or a move into another owner's files that would put more
+   * than that there is refused (`storage_limit_reached`).
+   */
+  readonly room?: (folder: SharedFolder | null) => Promise<number | null>;
+}
+
+/** The refusal for a write its folder's owner has no room for. */
+function limitReached(): StorageError {
+  return new StorageError("storage_limit_reached", "Storage limit reached");
+}
+
+/** `body`, refused as soon as more than `max` bytes of it arrive. */
+function capped(
+  body: ReadableStream<Uint8Array> | Uint8Array,
+  max: number,
+): ReadableStream<Uint8Array> | Uint8Array {
+  if (body instanceof Uint8Array) {
+    if (body.byteLength > max) throw limitReached();
+    return body;
+  }
+  let total = 0;
+  return body.pipeThrough(
+    new TransformStream<Uint8Array, Uint8Array>({
+      transform(chunk, controller) {
+        total += chunk.byteLength;
+        if (total > max) controller.error(limitReached());
+        else controller.enqueue(chunk);
+      },
+    }),
+  );
 }
 
 /** Where a caller's path leads. */
@@ -202,6 +238,36 @@ export function createUserStorage(options: UserStorageOptions): UserStorage {
       folder,
       prefix: `${SHELF_PATH}/${folder.name}`,
     };
+  }
+
+  /** How many more bytes may land at `at`, or `null` for no limit. */
+  function roomAt(at: Located): Promise<number | null> {
+    return options.room?.(at.kind === "mount" ? at.folder : null) ?? Promise.resolve(null);
+  }
+
+  /**
+   * Refuses to put the files at `from` (a file, or a folder and everything
+   * in it) at `to` when the owner of `to` has no room for them: the one check
+   * every copy, and every move into another owner's files, passes.
+   */
+  async function admit(path: string, from: Located, to: Located): Promise<void> {
+    const room = await roomAt(to);
+    if (room === null) return;
+    const bytes = await mapped(path, async () =>
+      bytesAt((await from.storage.home.locate(from.rel)).at),
+    );
+    if (bytes > room) throw limitReached();
+  }
+
+  /** Whose files `at` is in: the user's own (`null`) or a shared folder's owner. */
+  function ownerOf(at: Located): string | null {
+    return at.kind === "mount" ? at.folder.owner : null;
+  }
+
+  /** The bytes a file at `at` holds, which replacing it frees; 0 for anything else. */
+  async function replaced(at: Located): Promise<number> {
+    const info = await at.storage.stat(at.rel).catch(() => null);
+    return info?.kind === "file" ? info.size : 0;
   }
 
   /** For reads: the place, or `not_found` for a shared folder that does not exist. */
@@ -351,9 +417,16 @@ export function createUserStorage(options: UserStorageOptions): UserStorage {
     },
 
     async upload(path, body, opts) {
-      const at = await writable(path);
       // `writable` returns null only when asked to allow a fixed place.
-      return (at as Located).storage.upload((at as Located).rel, body, opts);
+      const at = (await writable(path)) as Located;
+      const room = await roomAt(at);
+      if (room === null) return at.storage.upload(at.rel, body, opts);
+      // A file being replaced frees its bytes; a piece of an upload sent in
+      // pieces shares the room with the pieces before it, which wait unindexed.
+      const max =
+        room + (opts?.overwrite === true ? await replaced(at) : 0) - (opts?.part?.offset ?? 0);
+      if (max < 0) throw limitReached();
+      return at.storage.upload(at.rel, capped(body, max), opts);
     },
 
     async mkdir(path, opts) {
@@ -370,6 +443,8 @@ export function createUserStorage(options: UserStorageOptions): UserStorage {
       }
       const source = (await writable(path)) as Located;
       const destination = (await writable(target)) as Located;
+      // A move within one owner's files adds nothing to them.
+      if (ownerOf(source) !== ownerOf(destination)) await admit(path, source, destination);
       if (source.storage === destination.storage) {
         await source.storage.move(source.rel, destination.rel, opts);
         return;
@@ -393,6 +468,7 @@ export function createUserStorage(options: UserStorageOptions): UserStorage {
       const from = await readable(path);
       if (from.kind === "shelf") throw forbidden(`${SHARED_WITH_ME} cannot be copied: ${path}`);
       const destination = (await writable(target)) as Located;
+      await admit(path, from, destination);
       if (from.storage === destination.storage) {
         await from.storage.copy(from.rel, destination.rel, opts);
         return;
