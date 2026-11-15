@@ -48,9 +48,9 @@ function sqlRepos(client: Client): LocalUserRepos {
 
 /**
  * Creates the local folder's users, their passwords hashed exactly as the
- * API checks them at sign-in, and the folders they share with each other,
- * with the first user recorded as the owner: what setup and System > Users
- * would have done. Needs the API to have migrated the database first.
+ * API checks them at sign-in, and the folders they share with each other:
+ * what setup and System > Users would have done. Needs the API to have
+ * migrated the database first.
  */
 export async function createE2eLocalUsers(
   databaseUrl: string,
@@ -60,16 +60,6 @@ export async function createE2eLocalUsers(
   await client.connect();
   try {
     await insertLocalUsers(sqlRepos(client), seed, createScryptSharePasswords());
-    const [owner] = seed.users;
-    if (owner !== undefined) {
-      await client.query(
-        `insert into app.settings (key, value)
-         select 'setup.owner.v1', jsonb_build_object('state', 'complete', 'accountId', account_id)
-         from app.identities where external_username = $1
-         on conflict (key) do nothing`,
-        [owner.username],
-      );
-    }
   } finally {
     await client.end();
   }

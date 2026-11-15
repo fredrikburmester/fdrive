@@ -42,6 +42,8 @@ export function authHarness(
      * (`<username>-pass`) but changes how sign-in or storage behaves.
      */
     modules?: Readonly<Record<string, ProviderModule>>;
+    /** The users the folder has, each signing in with `<username>-pass`; `HARNESS_USERS` by default. */
+    users?: readonly string[];
   } = {},
 ) {
   const now = { value: new Date("2026-09-07T00:00:00Z") };
@@ -55,7 +57,8 @@ export function authHarness(
     FDRIVE_MASTER_KEY: master.toString("base64"),
     FDRIVE_COOKIE_SECURE: "auto",
   });
-  for (const username of HARNESS_USERS) {
+  const usernames = options.users ?? HARNESS_USERS;
+  for (const username of usernames) {
     writeHomeFiles(local.root, username, {
       "/a.docx": `${username} data`,
       "/report.txt": `${username} report`,
@@ -74,7 +77,7 @@ export function authHarness(
   const seeded = (async () => {
     await seedLocalUsers(
       repos,
-      HARNESS_USERS.map((username) => ({ username, password: `${username}-pass` })),
+      usernames.map((username) => ({ username, password: `${username}-pass` })),
     );
     // The row the users' logins name is the one the deployment pins.
     await providers.seedFromEnvironment();

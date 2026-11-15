@@ -572,20 +572,44 @@ export function defineReposSuite(name: string, setup: () => Promise<Repos> | Rep
         expect(await owner()).toEqual({ state: "complete", accountId: identity.accountId });
       });
 
-      it("leaves no half-created owner when setup is refused", async () => {
+      it("allows setup once on a fresh database, and leaves nothing of a refused one", async () => {
         const provider = await repos.providers.ensure({ type: "local", baseUrl: "local" });
         const setup = (username: string) =>
           repos.logins.setup({ providerId: provider.id, username, passwordHash: "h", at });
         const first = await setup("hal");
 
-        // Setup is already complete: the second owner is not created.
         await expect(setup("ida")).rejects.toMatchObject({ code: "setup_claimed" });
-        // A taken name refuses before anything is recorded.
-        await expect(setup("HAL")).rejects.toBeInstanceOf(ConflictError);
 
         expect((await repos.localUsers.list()).map((user) => user.username)).toEqual(["hal"]);
         expect(await repos.identities.listAll()).toEqual([first]);
         expect(await owner()).toEqual({ state: "complete", accountId: first.accountId });
+      });
+
+      it("refuses setup once any user exists, whatever the owner record says", async () => {
+        const provider = await repos.providers.ensure({ type: "local", baseUrl: "local" });
+        const setup = () =>
+          repos.logins.setup({
+            providerId: provider.id,
+            username: "mallory",
+            passwordHash: "h",
+            at,
+          });
+        await addUser("dave");
+        // No owner record, as an installation from before it keeps.
+        await expect(setup()).rejects.toMatchObject({ code: "setup_claimed" });
+        // An unfinished claim, or anything else, keeps setup closed just the same.
+        for (const record of [{ state: "claiming", accountId: "x" }, { version: 1 }]) {
+          await repos.settings.set(SETUP_OWNER_KEY, record);
+          await expect(setup()).rejects.toMatchObject({ code: "setup_claimed" });
+        }
+        // So does a disabled user.
+        await repos.localUsers.update("dave", { disabled: true });
+        await expect(setup()).rejects.toMatchObject({ code: "setup_claimed" });
+
+        expect((await repos.localUsers.list()).map((user) => user.username)).toEqual(["dave"]);
+        expect(
+          (await repos.identities.listAll()).map((identity) => identity.externalUsername),
+        ).toEqual(["dave"]);
       });
 
       it("lets exactly one of two racing setups own the installation", async () => {

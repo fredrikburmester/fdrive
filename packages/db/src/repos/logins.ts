@@ -73,14 +73,22 @@ export function createLoginRepo(db: Db): LoginRepo {
       validateNewLocalUser(input);
       return creating(() =>
         db.transaction(async (tx) => {
+          // Setup is open only while no user exists. The lock holds back every
+          // other insert until this transaction ends, so of two racing setups
+          // the second sees the first one's user and is refused.
+          await tx.execute(sql`lock table ${localUsers} in exclusive mode`);
+          const [existing] = await tx
+            .select({ username: localUsers.username })
+            .from(localUsers)
+            .limit(1);
+          if (existing !== undefined) throw new LoginError("setup_claimed");
           const identity = await insertUser(tx, { ...input, isAdmin: true });
+          // Names the owner, who alone manages backups; it never decides whether setup is open.
           const owner: SetupOwner = { state: "complete", accountId: identity.accountId };
-          const [claimed] = await tx
+          await tx
             .insert(settings)
             .values({ key: SETUP_OWNER_KEY, value: owner })
-            .onConflictDoNothing()
-            .returning();
-          if (claimed === undefined) throw new LoginError("setup_claimed");
+            .onConflictDoUpdate({ target: settings.key, set: { value: owner } });
           return identity;
         }),
       );

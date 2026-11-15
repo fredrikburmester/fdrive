@@ -1,10 +1,9 @@
 /**
  * Creates users of the api's local folder directly, each with their account
- * and login, for the dev environment (`seed-users.ts`) and the perf fixture,
- * and records the owner setup would have recorded. Real installations create
- * them through setup and System > Users.
+ * and login, for the dev environment (`seed-users.ts`) and the perf fixture.
+ * Real installations create them through setup and System > Users.
  */
-import { ConflictError, type Repos, SETUP_OWNER_KEY, type SetupOwner } from "@fdrive/db";
+import { ConflictError, type Repos } from "@fdrive/db";
 import {
   createScryptSharePasswords,
   type SharePasswords,
@@ -47,21 +46,4 @@ export async function seedLocalUsers(
     }
   }
   return created;
-}
-
-/**
- * Records `username` as the installation's owner, as setup does, unless an
- * owner is recorded already, so the setup wizard is skipped. Throws when the
- * user has no login.
- */
-export async function recordOwner(
-  repos: Pick<Repos, "identities" | "providers" | "settings">,
-  username: string,
-): Promise<void> {
-  if ((await repos.settings.get(SETUP_OWNER_KEY)) !== null) return;
-  const provider = await repos.providers.ensure({ type: "local", baseUrl: "local" });
-  const login = await repos.identities.findByProviderUsername(provider.id, username);
-  if (login === null) throw new Error(`${username} has no login`);
-  const owner: SetupOwner = { state: "complete", accountId: login.accountId };
-  await repos.settings.set(SETUP_OWNER_KEY, owner);
 }

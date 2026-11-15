@@ -124,6 +124,32 @@ describe("creating users", () => {
 });
 
 describe("setup", () => {
+  it("refuses a database that has users, though it has no owner record", async () => {
+    await a.createUser(user("frank"));
+    const before = await snapshot();
+
+    await expect(a.setup(user("mallory"))).rejects.toMatchObject({ code: "setup_claimed" });
+
+    expect(await snapshot()).toEqual(before);
+  });
+
+  it("serializes setup with a user created at the same time: setup wins only if it went first", async () => {
+    const [setup, added] = await Promise.allSettled([
+      a.setup(user("gail")),
+      b.createUser(user("hank")),
+    ]);
+
+    expect(added.status).toBe("fulfilled");
+    const after = await snapshot();
+    if (setup.status === "fulfilled") {
+      expect(after.users.map((row) => row.username)).toEqual(["gail", "hank"]);
+    } else {
+      expect(setup.reason).toMatchObject({ code: "setup_claimed" });
+      expect(after.users.map((row) => row.username)).toEqual(["hank"]);
+      expect(after.settings).toEqual([]);
+    }
+  });
+
   it("lets exactly one of two racing pools own the installation, and rolls the other back", async () => {
     const results = await Promise.allSettled([a.setup(user("dave")), b.setup(user("erin"))]);
 

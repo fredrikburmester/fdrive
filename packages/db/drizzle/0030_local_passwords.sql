@@ -14,8 +14,9 @@ DELETE FROM "app"."local_users" AS "u"
 WHERE NOT EXISTS (
   SELECT 1 FROM "app"."identities" AS "i" WHERE "i"."external_username" = "u"."username"
 );--> statement-breakpoint
--- Setup completes in one transaction: an unfinished claim, or the marker an
--- installation from before the owner record kept, no longer counts as set up.
+-- Setup is open only while no local user exists, so these rows decide
+-- nothing any more: an unfinished owner claim, and the marker installations
+-- from before the owner record kept.
 DELETE FROM "app"."settings"
 WHERE "key" = 'setup.initialized.v1'
   OR ("key" = 'setup.owner.v1' AND "value"->>'state' IS DISTINCT FROM 'complete');--> statement-breakpoint

@@ -1,12 +1,10 @@
 import type { SetupCompleteRequest, SetupStatusResponse } from "@fdrive/contracts";
 import {
   ConflictError,
+  type LocalUserRepo,
   LoginError,
   type LoginRepo,
   type Provider,
-  SETUP_OWNER_KEY,
-  type SettingsRepo,
-  type SetupOwner,
 } from "@fdrive/db";
 import type { AuthService, LoginResult } from "../auth/service.js";
 import { ApiHttpError } from "../errors.js";
@@ -25,7 +23,8 @@ export interface SetupService {
 export interface CreateSetupServiceDeps {
   readonly authService: Pick<AuthService, "login">;
   readonly logins: Pick<LoginRepo, "setup">;
-  readonly settings: Pick<SettingsRepo, "get">;
+  /** Setup is open only while there is no local user at all. */
+  readonly localUsers: Pick<LocalUserRepo, "count">;
   readonly passwords: Pick<SharePasswords, "hash">;
   readonly clock?: () => Date;
   /**
@@ -39,19 +38,20 @@ export interface CreateSetupServiceDeps {
 /**
  * Builds the `SetupService` backing `/api/v1/setup/*`: reports whether setup
  * is required and whether the deployment has a files folder, and completes
- * setup. The owner picks a username and password; one transaction creates
- * them as the first local user, an administrator, with their account and
- * login, and records them as the owner. They are then signed in like anyone
- * else.
+ * setup. Setup is open only while no local user exists, whatever any
+ * setting says, so a server with users never reopens it. The owner picks a
+ * username and password; one transaction checks that no user exists and
+ * creates them as the first local user, an administrator, with their account
+ * and login, and records them as the owner. They are then signed in like
+ * anyone else.
  */
 export function createSetupService(deps: CreateSetupServiceDeps): SetupService {
   const clock = deps.clock ?? (() => new Date());
 
   return {
     async status() {
-      const owner = await deps.settings.get<Partial<SetupOwner>>(SETUP_OWNER_KEY);
       return {
-        required: owner?.state !== "complete",
+        required: (await deps.localUsers.count()) === 0,
         storageConfigured: deps.localProvider !== undefined,
       };
     },

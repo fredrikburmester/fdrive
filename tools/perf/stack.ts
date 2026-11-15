@@ -15,7 +15,7 @@ import { createDb, createRepos, migrate } from "@fdrive/db";
 import { startPostgres } from "@fdrive/testkit";
 import { serve } from "@hono/node-server";
 import pino from "pino";
-import { recordOwner, seedLocalUsers } from "../dev/local-users.ts";
+import { seedLocalUsers } from "../dev/local-users.ts";
 import { createDeterministicByteStream } from "./byte-generator.js";
 import { mapWithConcurrency } from "./concurrency.js";
 import { extractCookiePair } from "./cookie.js";
@@ -181,7 +181,6 @@ export async function startPerfStack(): Promise<PerfStack> {
     await migrate(db.db);
     const repos = createRepos(db.db);
     await seedLocalUsers(repos, [PERF_USER, FORBIDDEN_USER]);
-    await recordOwner(repos, PERF_USER.username);
     await repos.settings.set(FEATURES_SETTINGS_KEY, SEARCH_FEATURES);
     await command("docker", ["pull", ML_IMAGE]);
     const mlImage = await command("docker", [

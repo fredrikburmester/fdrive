@@ -1,8 +1,8 @@
-import { ConflictError, type Repos, SETUP_OWNER_KEY } from "@fdrive/db";
+import { ConflictError, type Repos } from "@fdrive/db";
 import { createMemoryRepos } from "@fdrive/db/testing";
 import { describe, expect, it } from "vitest";
 import { createScryptSharePasswords } from "../../apps/api/src/shares/passwords.ts";
-import { recordOwner, seedLocalUsers } from "./local-users.js";
+import { seedLocalUsers } from "./local-users.js";
 
 const users = [
   { username: "alice", password: "alice-password" },
@@ -58,26 +58,5 @@ describe("seedLocalUsers", () => {
     await expect(seedLocalUsers(broken, users, { hash: async () => "h" })).rejects.toThrow(
       "database is down",
     );
-  });
-});
-
-describe("recordOwner", () => {
-  it("records the user as the owner once, as setup does", async () => {
-    const repos = createMemoryRepos();
-    await seedLocalUsers(repos, users, { hash: async () => "h" });
-    await recordOwner(repos, "dev");
-    const [row] = await repos.providers.list();
-    const dev = await repos.identities.findByProviderUsername(row?.id ?? "", "dev");
-    expect(await repos.settings.get(SETUP_OWNER_KEY)).toEqual({
-      state: "complete",
-      accountId: dev?.accountId,
-    });
-    // An owner already recorded stays.
-    await recordOwner(repos, "alice");
-    expect(await repos.settings.get(SETUP_OWNER_KEY)).toMatchObject({ accountId: dev?.accountId });
-  });
-
-  it("refuses a user without a login", async () => {
-    await expect(recordOwner(createMemoryRepos(), "nobody")).rejects.toThrow("has no login");
   });
 });

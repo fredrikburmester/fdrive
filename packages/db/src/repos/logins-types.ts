@@ -1,9 +1,13 @@
 import type { Identity, Session } from "./types.js";
 
-/** The setting that names the installation's owner once setup is complete. */
+/**
+ * The setting that names the installation's owner, who alone manages
+ * backups. Whether setup is open is decided by whether any user exists, never
+ * by this record.
+ */
 export const SETUP_OWNER_KEY = "setup.owner.v1";
 
-/** What `SETUP_OWNER_KEY` holds: setup is complete, and this account owns the installation. */
+/** What `SETUP_OWNER_KEY` holds: this account owns the installation. */
 export interface SetupOwner {
   readonly state: "complete";
   readonly accountId: string;
@@ -51,9 +55,10 @@ export interface LoginRepo {
   createUser(input: NewLocalUser): Promise<Identity>;
   /**
    * Setup: creates the owner as `createUser` does, as an administrator, and
-   * records them under `SETUP_OWNER_KEY`, in one transaction. Nothing is
-   * written when any step fails; `LoginError("setup_claimed")` when another
-   * owner is recorded.
+   * records them under `SETUP_OWNER_KEY`, in one transaction. Setup is open
+   * only while no user exists: `LoginError("setup_claimed")` once any does,
+   * checked inside the transaction so two racing setups leave one owner.
+   * Nothing is written when any step fails.
    */
   setup(input: Omit<NewLocalUser, "isAdmin">): Promise<Identity>;
   /**

@@ -6,12 +6,12 @@
  * same migrations the api runs on start. A user that already exists keeps its
  * password and state, so running it again changes nothing.
  *
- * It records dev as the owner, as setup would, so the setup wizard is
- * skipped: sign in as dev/dev, an administrator through FDRIVE_ADMIN_USERS.
+ * Once a local user exists, setup is closed and the setup wizard is skipped:
+ * sign in as dev/dev, an administrator through FDRIVE_ADMIN_USERS.
  */
 import { createDb, createRepos, migrate } from "@fdrive/db";
 import { devUsers } from "./generate-seed.js";
-import { recordOwner, seedLocalUsers } from "./local-users.js";
+import { seedLocalUsers } from "./local-users.js";
 
 async function main(env: NodeJS.ProcessEnv): Promise<void> {
   const databaseUrl = env.DATABASE_URL;
@@ -22,9 +22,7 @@ async function main(env: NodeJS.ProcessEnv): Promise<void> {
   try {
     await migrate(database.db);
     const users = devUsers();
-    const repos = createRepos(database.db);
-    const created = await seedLocalUsers(repos, users);
-    await recordOwner(repos, "dev");
+    const created = await seedLocalUsers(createRepos(database.db), users);
     const kept = users.map((user) => user.username).filter((name) => !created.includes(name));
     console.log(
       [

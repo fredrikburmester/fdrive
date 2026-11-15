@@ -1,4 +1,4 @@
-import { createDb, createRepos, migrate, type Repos, SETUP_OWNER_KEY } from "@fdrive/db";
+import { createDb, createRepos, migrate, type Repos } from "@fdrive/db";
 import { insertLocalUsers, type LocalUserRepos, type LocalUserSeed } from "@fdrive/testkit";
 import type { Logger } from "pino";
 import { createScryptSharePasswords } from "../../../src/shares/passwords.js";
@@ -27,24 +27,19 @@ export async function localUserRepos(repos: Repos): Promise<LocalUserRepos> {
 
 /**
  * Migrates the database at `connectionString` and creates `seed`'s local
- * users and grants in it, hashed the way sign-in checks them, with the first
- * user recorded as the owner: what setup and System > Users would have done
- * before the suite signs anyone in. Pass a `startLocalStorage` fixture to
- * create the users it was laid out for.
+ * users and grants in it, hashed the way sign-in checks them: what setup and
+ * System > Users would have done before the suite signs anyone in. Pass a
+ * `startLocalStorage` fixture to create the users it was laid out for.
  */
 export async function seedLocalUsers(connectionString: string, seed: LocalUserSeed): Promise<void> {
   const database = createDb(connectionString);
   try {
     await migrate(database.db);
-    const repos = createRepos(database.db);
-    await insertLocalUsers(await localUserRepos(repos), seed, createScryptSharePasswords());
-    const [first] = seed.users;
-    const owner = (await repos.identities.listAll()).find(
-      (login) => login.externalUsername === first?.username,
+    await insertLocalUsers(
+      await localUserRepos(createRepos(database.db)),
+      seed,
+      createScryptSharePasswords(),
     );
-    if (owner !== undefined && (await repos.settings.get(SETUP_OWNER_KEY)) === null) {
-      await repos.settings.set(SETUP_OWNER_KEY, { state: "complete", accountId: owner.accountId });
-    }
   } finally {
     await database.close();
   }

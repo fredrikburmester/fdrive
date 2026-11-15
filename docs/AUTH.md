@@ -53,14 +53,16 @@ unaffected, since no password is sealed.
 
 ## Setup ownership
 
-Setup creates the owner in one database transaction: their `local_users` row,
-an administrator account, their login and the owner record
-(`setup.owner.v1 = { state: "complete", accountId }`). A name already taken in
-any case, or an owner already recorded, refuses setup with nothing written, so
-two racing owners leave exactly one. The owner is then signed in through the
-same password check as anyone else. Setup is required until the owner record
-exists. Without `FDRIVE_STORAGE_ROOT` setup refuses to complete
-(`bad_request`).
+Setup is open only while no local user exists, whatever any setting says, so
+a server with users never reopens it. Setup creates the owner in one database
+transaction: it locks `app.local_users`, refuses if any row is there, and
+writes their `local_users` row, an administrator account, their login and the
+owner record (`setup.owner.v1 = { state: "complete", accountId }`, which names
+who manages [backups](BACKUPS.md) and nothing else). A refused setup writes
+nothing, and of two racing setups the second sees the first one's user, so
+exactly one owner remains. The owner is then signed in through the same
+password check as anyone else. Without `FDRIVE_STORAGE_ROOT` setup refuses to
+complete (`bad_request`).
 
 ## Session cookie
 

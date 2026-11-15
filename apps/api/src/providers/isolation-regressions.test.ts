@@ -17,15 +17,9 @@ it("keeps env setup complete and sessions usable after disabling its last provid
   const setup = createSetupService({
     authService: h.auth.service,
     logins: h.repos.logins,
-    settings: h.repos.settings,
+    localUsers: h.repos.localUsers,
     passwords: h.passwords,
     localProvider: async () => row,
-  });
-  await setup.complete({
-    username: "owner",
-    password: "owner-pass",
-    userAgent: null,
-    ip: "review",
   });
   const app = createApp({
     config: h.config,

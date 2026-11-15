@@ -39,10 +39,9 @@ test.describe("installation backups", () => {
     const db = new Client({ connectionString: environment.databaseUrl });
     await db.connect();
     try {
-      await db.query(
-        "insert into app.settings(key,value) values('setup.owner.v1',$1) on conflict(key) do update set value=excluded.value",
-        [JSON.stringify({ state: "complete", accountId: me.account.id })],
-      );
+      await db.query("insert into app.settings(key,value) values('setup.owner.v1',$1)", [
+        JSON.stringify({ state: "complete", accountId: me.account.id }),
+      ]);
     } finally {
       await db.end();
     }

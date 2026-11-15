@@ -1246,11 +1246,12 @@ function createMemoryLoginRepo(repos: {
     setup(input) {
       validateNewLocalUser(input);
       return atomic(async () => {
-        // In the database's order: the user's name first, then the claim.
-        const left = await leftLogin(input.username);
-        if ((await repos.settings.get(SETUP_OWNER_KEY)) !== null)
-          throw new LoginError("setup_claimed");
-        const identity = await insertUser({ ...input, isAdmin: true }, left);
+        // Open only while no user exists, whatever the owner record says.
+        if ((await repos.localUsers.count()) > 0) throw new LoginError("setup_claimed");
+        const identity = await insertUser(
+          { ...input, isAdmin: true },
+          await leftLogin(input.username),
+        );
         const owner: SetupOwner = { state: "complete", accountId: identity.accountId };
         await repos.settings.set(SETUP_OWNER_KEY, owner);
         return identity;

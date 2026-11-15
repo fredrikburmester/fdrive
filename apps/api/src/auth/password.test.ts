@@ -60,21 +60,27 @@ describe("createPasswordCheck", () => {
 
 describe("one password check for every place a password is typed", () => {
   /** Sign-in, setup and password change wired over one check, as composition wires them. */
-  async function wired() {
-    const h = authHarness();
+  async function wired(users?: readonly string[]) {
+    const h = authHarness(users === undefined ? {} : { users });
     const row = await h.seeded;
+    const setup = createSetupService({
+      authService: h.auth.service,
+      logins: h.repos.logins,
+      localUsers: h.repos.localUsers,
+      passwords: h.passwords,
+      localProvider: async () => row,
+    });
+    return { ...h, setup };
+  }
+
+  /** `wired` with alice signed in, and her password change and backup unlock. */
+  async function signedIn() {
+    const h = await wired();
     const users = createLocalUserService({
       repos: h.repos,
       checkPassword: h.checkPassword,
       passwords: h.passwords,
-      providerId: async () => row.id,
-    });
-    const setup = createSetupService({
-      authService: h.auth.service,
-      logins: h.repos.logins,
-      settings: h.repos.settings,
-      passwords: h.passwords,
-      localProvider: async () => row,
+      providerId: async () => (await h.seeded).id,
     });
     const alice = await h.login("alice");
     const signIn = (username: string, password: string, ip: string) =>
@@ -93,11 +99,17 @@ describe("one password check for every place a password is typed", () => {
     });
     const unlock = (password: string, ip: string) =>
       unlockBackups(alice.me.account.id, alice.me.identity.id, password, ip);
-    return { ...h, alice, setup, signIn, changePassword, unlock };
+    return { ...h, alice, signIn, changePassword, unlock };
   }
+  const signIn = (
+    h: Awaited<ReturnType<typeof wired>>,
+    username: string,
+    password: string,
+    ip: string,
+  ) => h.auth.service.login({ username, password, ip, userAgent: null });
 
   it("lets failed sign-ins hold up a password change from the same address", async () => {
-    const h = await wired();
+    const h = await signedIn();
     for (let n = 0; n < 5; n++)
       await expect(h.signIn("alice", "guess", "203.0.113.1")).rejects.toMatchObject({
         kind: "unauthorized",
@@ -108,7 +120,7 @@ describe("one password check for every place a password is typed", () => {
   });
 
   it("lets failed password changes hold up sign-in from the same address", async () => {
-    const h = await wired();
+    const h = await signedIn();
     for (let n = 0; n < 5; n++)
       await expect(h.changePassword("guess", "203.0.113.2")).rejects.toMatchObject({
         kind: "unauthorized",
@@ -120,9 +132,10 @@ describe("one password check for every place a password is typed", () => {
   });
 
   it("signs the new owner in through the same check, so a held-up address waits there too", async () => {
-    const h = await wired();
+    // A fresh folder: setup is open while no user exists.
+    const h = await wired([]);
     for (let n = 0; n < 5; n++)
-      await expect(h.signIn(`nobody${n}`, "guess", "203.0.113.4")).rejects.toMatchObject({
+      await expect(signIn(h, `nobody${n}`, "guess", "203.0.113.4")).rejects.toMatchObject({
         kind: "unauthorized",
       });
     const input = { username: "owner", password: "correct horse", userAgent: null };
@@ -132,13 +145,13 @@ describe("one password check for every place a password is typed", () => {
     // The owner exists whole and signs in once the address is let through again.
     expect((await h.setup.status()).required).toBe(false);
     h.now.value = new Date(h.now.value.getTime() + 61_000);
-    await expect(h.signIn("owner", "correct horse", "203.0.113.4")).resolves.toMatchObject({
+    await expect(signIn(h, "owner", "correct horse", "203.0.113.4")).resolves.toMatchObject({
       me: { isAdmin: true },
     });
   });
 
   it("lets failed backup unlocks hold up sign-in, and checks only the signed-in login", async () => {
-    const h = await wired();
+    const h = await signedIn();
     await expect(h.unlock("alice-pass", "203.0.113.6")).resolves.toBeUndefined();
     for (let n = 0; n < 5; n++)
       await expect(h.unlock("guess", "203.0.113.6")).rejects.toMatchObject({
@@ -161,7 +174,7 @@ describe("one password check for every place a password is typed", () => {
   });
 
   it("refuses a disabled user at sign-in, a password change and a backup unlock", async () => {
-    const h = await wired();
+    const h = await signedIn();
     await h.repos.localUsers.update("alice", { disabled: true });
     await expect(h.signIn("alice", "alice-pass", "203.0.113.5")).rejects.toMatchObject({
       kind: "forbidden",
