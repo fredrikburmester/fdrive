@@ -232,13 +232,13 @@ it("keeps partial metadata snapshots honest and rejects changed source files", a
   const root = join(directory, randomUUID());
   await mkdir(root);
   await writeFile(join(root, "bytes"), "123");
-  const selected = await localBlobs(root, "desktop");
+  const selected = await localBlobs(root, "office");
   await appendFile(join(root, "bytes"), "4");
   await expect(required(selected[0]).open()).rejects.toThrow("changed");
   const metadata = await snapshot(
     {
       blobs: async () => ({
-        sources: await localBlobs(root, "desktop"),
+        sources: await localBlobs(root, "office"),
         coverage: ["Office keys unavailable"],
       }),
     },
@@ -248,11 +248,11 @@ it("keeps partial metadata snapshots honest and rejects changed source files", a
   expect(result.manifest.blobs).toHaveLength(0);
   expect(result.manifest.coverage).toHaveLength(2);
   const regular = await snapshot({
-    blobs: async () => ({ sources: await localBlobs(root, "desktop"), coverage: [] }),
+    blobs: async () => ({ sources: await localBlobs(root, "office"), coverage: [] }),
   });
   expect((await inspectArchive(regular.output, key)).manifest.blobs[0]?.size).toBe(4);
   await symlink("bytes", join(root, "link"));
-  await expect(localBlobs(root, "desktop")).rejects.toThrow("Symbolic links");
+  await expect(localBlobs(root, "office")).rejects.toThrow("Symbolic links");
 });
 it("streams bounded entries and stable prefixes of diagnostic logs", async () => {
   expect(await digest(bytesStream(Buffer.from("abc")))).toEqual({
@@ -587,7 +587,7 @@ it("fails capture safely and releases ownership when a source changes or cancell
     blobs: async () => ({
       sources: [
         {
-          kind: "desktop",
+          kind: "office",
           path: "payload",
           size: 3,
           open: async () => bytesStream(Buffer.from("larger")),
@@ -738,7 +738,7 @@ it("rejects untrusted archive structure before restoring any database rows or fi
       jsonEntry("manifest.json", {
         ...manifest,
         blobs: [
-          { entry: "blobs/0", kind: "desktop", path: "payload", size: 4, sha256: "0".repeat(64) },
+          { entry: "blobs/0", kind: "office", path: "payload", size: 4, sha256: "0".repeat(64) },
         ],
       }),
     ],
@@ -757,9 +757,8 @@ it("rejects untrusted archive structure before restoring any database rows or fi
   );
   const blob = {
     entry: "blobs/0",
-    kind: "remote" as const,
-    path: "/.fdrive-desktop/old",
-    identityId: randomUUID(),
+    kind: "office" as const,
+    path: "old",
     size: 4,
     sha256: createHash("sha256").update("data").digest("hex"),
   };
@@ -871,7 +870,7 @@ it("cancels in-flight capture when its persisted lease is cancelled, replaced or
       blobs: async () => ({
         sources: [
           {
-            kind: "desktop" as const,
+            kind: "office" as const,
             path: "stalled",
             size: 1,
             open: async () => new Readable({ read() {} }),
@@ -962,7 +961,7 @@ it("ends a stalled run on its deadline and when its worker ownership connection 
     worker.options.source.blobs = async () => ({
       sources: [
         {
-          kind: "desktop",
+          kind: "office",
           path: "stalled",
           size: 1,
           open: async () => new Readable({ read() {} }),
@@ -1011,10 +1010,9 @@ it("validates attachment bytes, recovers ordinary quarantine files, and refuses 
     blobs: async () => ({
       sources: [
         {
-          kind: "remote",
-          path: "/.fdrive-desktop/payload",
+          kind: "office",
+          path: "payload",
           sourceId: "mount-a",
-          identityId: randomUUID(),
           size: 3,
           open: async () => bytesStream(Buffer.from("old")),
         },
@@ -1240,7 +1238,7 @@ it("refuses captures whose metadata cannot pass the restore format limits", asyn
   );
   await expect(snapshot({ masterKey: "invalid" })).rejects.toThrow();
   const blob = {
-    kind: "desktop" as const,
+    kind: "office" as const,
     path: "file",
     size: 0,
     open: async () => bytesStream(Buffer.alloc(0)),

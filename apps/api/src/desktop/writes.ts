@@ -1,8 +1,4 @@
 import { createHash, randomUUID } from "node:crypto";
-import { createReadStream } from "node:fs";
-import { type FileHandle, mkdir, open, rm } from "node:fs/promises";
-import { join } from "node:path";
-import { Readable } from "node:stream";
 import type {
   DesktopBaseVersion,
   DesktopEntry,
@@ -46,6 +42,7 @@ import {
   storedEntry,
 } from "./files.js";
 import type { DesktopDeps } from "./pairing.js";
+import { incomingPath, removeIncoming } from "./retention.js";
 
 /** The largest file the Mac app may write, told to it when it pairs. */
 export const DESKTOP_MAX_UPLOAD_BYTES = 16 * 1024 ** 3;
@@ -56,27 +53,46 @@ export const NO_WRITES: DesktopWriteCapabilities = {
   trash: false,
   restore: false,
 };
+const ALL_WRITES: DesktopWriteCapabilities = {
+  create: true,
+  update: true,
+  move: true,
+  trash: true,
+  restore: true,
+};
 export const DESKTOP_TRASH = `${DESKTOP_INTERNAL_ROOT}/trash`;
-/** A precondition of Finder writes that this deployment does not meet. */
-export type DesktopWriteGate = "state_dir";
-export interface DesktopWriteAvailability {
-  readonly capabilities: DesktopWriteCapabilities;
-  /** Every unmet precondition, each its own thing to fix; empty when writable. */
-  readonly missing: readonly DesktopWriteGate[];
-}
 type Request =
   | (DesktopUploadRequest & { kind: "upload" })
   | (DesktopFolderRequest & { kind: "folder" })
   | (DesktopMoveRequest & { kind: "move" });
+/** The item a write changes, as its commit found it. */
+type Source = Pick<DesktopItemRecord, "id" | "path" | "originalPath" | "kind">;
+/**
+ * What a commit publishes, recorded on its operation right before the one
+ * storage call that publishes it, so whoever finds the operation still
+ * `committing` can tell from disk whether that call happened (`settle`).
+ */
+interface Publication {
+  /** The staged upload or folder, or the item a move takes. */
+  readonly from: string;
+  readonly to: string;
+  /** The inode at `from`, which publishing takes to `to`, in decimal. */
+  readonly inode: string;
+  /** Null for a new item. */
+  readonly source: Source | null;
+}
 export interface DesktopWriteDeps
   extends Pick<DesktopDeps, "clock" | "trashPathForStorage" | "indexedContent"> {
   repo: DesktopRepo;
-  stateDir?: string;
+  /**
+   * Storage for an identity without Trash settings, which deletes what a
+   * write staged for real instead of moving it into its owner's Trash.
+   */
+  storageForIdentity: (identityId: string) => Promise<StorageProvider>;
   /**
    * What grants access to a path (public links, folders shared with people)
-   * when a write moves it from `from` to `to`, resolved before publication
-   * and applied with the receipt (`DesktopRepo.complete`). Absent in
-   * fixtures that do not exercise sharing.
+   * when a write moves it from `from` to `to`, applied with the receipt
+   * (`DesktopRepo.complete`). Absent in fixtures that do not exercise sharing.
    */
   access?: (
     identityId: string,
@@ -96,11 +112,7 @@ export interface DesktopWriteDeps
   bus?: EventBus;
   /** Hears metadata that could not follow a published write, and bookkeeping left behind. */
   logger?: { warn(obj: Record<string, unknown>, msg: string): void };
-  /** Administrator resolution of uncertain commits needs the identity's storage. */
-  storageForIdentity?: (identityId: string) => Promise<StorageProvider>;
 }
-/** A commit that has not progressed for this long is treated as abandoned by its process. */
-export const DESKTOP_COMMIT_STALL_MS = 15 * 60_000;
 const hash = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
 /** Names a complete listing exactly as the client received it. */
 const listingToken = (entries: readonly DesktopWriteEntry[]) => `v1:${hash(entries)}`;
@@ -117,13 +129,51 @@ const sameFile = (now: ContentStamp, then: ContentStamp, inodeOnly: boolean) =>
   now.ino === then.ino &&
   (inodeOnly ||
     (now.size === then.size && now.mtimeNs === then.mtimeNs && now.ctimeNs === then.ctimeNs));
+/** An operation's result without the publication its commit recorded. */
+function settled(result: Record<string, unknown> | null) {
+  const { publication: _, ...rest } = result ?? {};
+  return rest;
+}
+/**
+ * What is at `path` and its inode, spelled as asked: on a disk that ignores
+ * case, the old name of a case-only rename is not its new one. Null when
+ * nothing is there under that spelling.
+ */
+async function entryAt(storage: StorageProvider, path: string) {
+  try {
+    const found = await storage.stat(path);
+    if (found.ino === undefined) throw Error("This storage keeps no inodes");
+    return (found.path ?? path) === path ? { kind: found.kind, ino: found.ino } : null;
+  } catch (error) {
+    if (isStorageError(error) && error.kind === "not_found") return null;
+    throw error;
+  }
+}
+/**
+ * Where a recorded publication stands, from disk alone: `to` holds its
+ * inode (published), `from` still does (not published), or neither, when
+ * something else has happened to it since (lost).
+ */
+async function whereIs(storage: StorageProvider, publication: Publication) {
+  const inode = BigInt(publication.inode);
+  if ((await entryAt(storage, publication.to))?.ino === inode) return "published";
+  if ((await entryAt(storage, publication.from))?.ino === inode) return "pending";
+  return "lost";
+}
 
-/** A database receipt is written before success. Committing without a receipt is
- * deliberately uncertain after restart: never infer ownership from matching bytes.
- * Both the native snapshot and server spool survive that outcome for recovery. */
+/**
+ * Mac writes. An upload is staged in its owner's files and a commit
+ * publishes it with one `rename` (or a `link`, for a new name), so whether
+ * a commit published is always on disk: a commit records what it is about
+ * to publish, and whoever finds it interrupted reads the outcome from disk
+ * and finishes it (`settle`). Nothing is ever uncertain, and nothing is
+ * published twice.
+ */
 export function createDesktopWrites(deps: DesktopWriteDeps) {
   const files = createDesktopFiles(deps, true);
   const uploads = new Map<string, AbortController>();
+  /** The commit or settlement under way in this process, per operation. */
+  const running = new Map<string, Promise<unknown>>();
   const repo = deps.repo;
   const trashRoot = (p: Principal) => `${DESKTOP_INTERNAL_ROOT}/${p.identityId}/trash`;
   const inTrash = (p: Principal, path: string) => isUnderPath(trashRoot(p), path);
@@ -138,19 +188,9 @@ export function createDesktopWrites(deps: DesktopWriteDeps) {
     while (Buffer.byteLength(stem.join("") + suffix) > 255) stem.pop();
     return stem.join("") + suffix;
   }
-  /** The grant's capabilities together with why a full grant still lands read-only. */
-  function availability(principal: Principal): DesktopWriteAvailability {
-    const missing: DesktopWriteGate[] = deps.stateDir ? [] : ["state_dir"];
-    const writable = principal.tokenAccess?.mode === "full" && missing.length === 0;
-    return {
-      capabilities: writable
-        ? { create: true, update: true, move: true, trash: true, restore: true }
-        : NO_WRITES,
-      missing,
-    };
-  }
+  /** Writes need a grant of full access, and nothing else. */
   function capabilities(principal: Principal): DesktopWriteCapabilities {
-    return availability(principal).capabilities;
+    return principal.tokenAccess?.mode === "full" ? ALL_WRITES : NO_WRITES;
   }
   /**
    * Refuses publication unless `path` is still the file `witness` was read
@@ -207,34 +247,6 @@ export function createDesktopWrites(deps: DesktopWriteDeps) {
   }
   async function stillGranted(principal: Principal) {
     if (!(await granted(principal))) revoked();
-  }
-  /**
-   * Uploads `body` under the new name `target`, rechecking authority as the
-   * copy ends: a refusal fails the upload before the files folder links the
-   * file into place, so nothing is published. Storage reports a failure of
-   * the body as its own, so the refusal is told apart here.
-   */
-  async function uploadIfGranted(
-    principal: Principal,
-    target: string,
-    body: ReadableStream<Uint8Array>,
-    size: number,
-  ) {
-    let refused = false;
-    const checked = body.pipeThrough(
-      new TransformStream<Uint8Array, Uint8Array>({
-        async flush() {
-          refused = !(await granted(principal));
-          if (refused) throw Error("Connection was revoked");
-        },
-      }),
-    );
-    try {
-      await principal.storage.upload(target, checked, { overwrite: false, contentLength: size });
-    } catch (error) {
-      if (refused) revoked();
-      throw error;
-    }
   }
   async function record(principal: Principal, id: string) {
     if (id === "trash") return repo.ensure(principal.identityId, trashRoot(principal), "dir");
@@ -439,7 +451,7 @@ export function createDesktopWrites(deps: DesktopWriteDeps) {
   function activityFacts(
     principal: Principal,
     request: Request,
-    source: DesktopItemRecord | null | undefined,
+    source: Source | null,
     target: string,
     trashing: boolean,
   ): NativeActivityFacts {
@@ -461,21 +473,6 @@ export function createDesktopWrites(deps: DesktopWriteDeps) {
     }
   }
   /**
-   * What grants access to the moved path, resolved before publication so a
-   * failed lookup leaves the operation ready, and applied with the receipt so
-   * no link or share outlives the write at the path it left. For a restore it
-   * is what followed the item into the Mac's Trash.
-   */
-  async function accessMove(
-    principal: Principal,
-    source: DesktopItemRecord | null | undefined,
-    from: string | undefined,
-    target: string,
-  ) {
-    if (!deps.access || !source || from === undefined || from === target) return null;
-    return deps.access(principal.identityId, from, target, source.kind === "dir");
-  }
-  /**
    * Brings the rest of path-keyed metadata along once a write is published
    * and its receipt (with what grants access) kept, and tells the web, the
    * way web writes do right after their storage call (`fs/routes.ts`): tags,
@@ -494,7 +491,7 @@ export function createDesktopWrites(deps: DesktopWriteDeps) {
   async function follow(
     principal: Principal,
     request: Request,
-    source: DesktopItemRecord | null | undefined,
+    source: Source | null,
     target: string,
     trashing: boolean,
   ) {
@@ -562,69 +559,122 @@ export function createDesktopWrites(deps: DesktopWriteDeps) {
       attempt,
     );
   }
-  function spool(principal: Principal, id: string) {
-    if (!deps.stateDir) throw new ApiHttpError("forbidden", "Desktop writes are disabled");
-    return join(deps.stateDir, principal.identityId, id);
-  }
-  /** The verified body `upload` spooled for this operation. */
-  function spooled(principal: Principal, op: DesktopOperationRecord) {
-    const uploadFile = op.result?.uploadFile;
-    if (typeof uploadFile !== "string" || !UUID.test(uploadFile))
-      throw Error("Missing upload receipt");
-    const local = join(spool(principal, op.id), uploadFile);
-    return () => Readable.toWeb(createReadStream(local)) as ReadableStream<Uint8Array>;
-  }
-  /** Where an operation stages its in-place save, beside the rest of the Mac's bookkeeping. */
-  const staging = (principal: Principal, id: string) =>
-    `${DESKTOP_INTERNAL_ROOT}/${principal.identityId}/${id}`;
   /**
-   * Copies an in-place save's spooled body into the files folder, at a path
-   * keyed by operation and attempt that no other operation reaches, so the
-   * rename that publishes it is one step. A retry reuses the attempt and
-   * what it staged. Nothing there is hashed again: `upload` verified the
-   * body's digest as it arrived, and the copy is checked by its length.
+   * Deletes what an operation staged once nothing can publish it any more.
+   * Never fails the request: anything left goes when retention forgets the
+   * operation.
    */
-  async function stage(
-    principal: Principal,
-    op: DesktopOperationRecord,
-    size: number,
-    body: () => ReadableStream<Uint8Array>,
-  ) {
-    const storage = principal.storage;
-    const attempt =
-      typeof op.result?.remoteAttempt === "string" ? op.result.remoteAttempt : randomUUID();
-    if (!UUID.test(attempt)) throw Error("Invalid staging receipt");
-    if (
-      !(await transition(principal, op.id, "committing", "committing", {
-        ...op.result,
-        remoteAttempt: attempt,
-      }))
-    )
-      throw Error("Could not reserve staging");
-    const internal = `${staging(principal, op.id)}/${attempt}`;
-    await storage.mkdir(internal, { parents: true });
-    const path = `${internal}/incoming`;
-    const staged = (await storage.list(internal)).find((item) => item.path === path);
-    if (staged && staged.kind !== "file")
-      throw new ApiHttpError("forbidden", "Unsupported staging entry");
-    await storage.upload(path, body(), { overwrite: !!staged, contentLength: size });
-    return { path, internal };
-  }
-  /**
-   * Removes the folders an in-place save staged in, empty once its rename
-   * published the file. Never recursive, so nothing that arrived there
-   * since goes with them; anything left waits for retention.
-   */
-  async function tidy(principal: Principal, id: string, internal: string) {
+  async function discard(principal: Principal, id: string) {
     try {
-      await principal.storage.deleteEmptyDir(internal);
-      await principal.storage.deleteEmptyDir(staging(principal, id));
+      await removeIncoming(
+        await deps.storageForIdentity(principal.identityId),
+        principal.identityId,
+        id,
+      );
     } catch (error) {
       deps.logger?.warn(
         { err: error, identityId: principal.identityId, operationId: id },
-        "Mac save published; its staging folder stays until retention removes it",
+        "Mac write staging stays until retention removes it",
       );
     }
+  }
+  /**
+   * Runs `run` once no commit or settlement of the same operation is under
+   * way in this process, so the outcome of one is never read from disk
+   * halfway through by another.
+   */
+  async function exclusive<T>(principal: Principal, id: string, run: () => Promise<T>) {
+    const key = `${principal.identityId}:${id}`;
+    for (let current = running.get(key); current; current = running.get(key))
+      await current.catch(() => undefined);
+    const task = run();
+    running.set(key, task);
+    try {
+      return await task;
+    } finally {
+      if (running.get(key) === task) running.delete(key);
+    }
+  }
+  /**
+   * Keeps the receipt of a published write: the registry follows it, then
+   * the receipt, its history and what grants access to the moved path
+   * commit in one transaction (`DesktopRepo.complete`), so no link or share
+   * stays at a path the write left, where a new item could appear. Until
+   * that transaction commits, the operation stays `committing` and a retry
+   * finishes it (`settle`); a failure here is never success.
+   */
+  async function finish(
+    principal: Principal,
+    op: DesktopOperationRecord,
+    publication: Publication,
+  ): Promise<DesktopOperationResult> {
+    const request = op.request as Request;
+    const trashing = request.parentId === "trash";
+    const { identityId, accountId } = principal;
+    const { source, to } = publication;
+    let receipt: DesktopOperationResult;
+    try {
+      if (source) await repo.move(identityId, source.path, to);
+      if (source && (trashing || inTrash(principal, source.path)))
+        await repo.update(identityId, source.id, { originalPath: trashing ? source.path : null });
+      const entry = trashing ? await trashEntry(principal, to) : await files.stat(principal, to);
+      receipt = {
+        operationId: op.id,
+        state: "completed",
+        item: await decorate(
+          principal,
+          entry,
+          request.kind === "upload" ? request.sha256 : undefined,
+        ),
+        recoveryId: null,
+      };
+      // For a restore, what followed the item into the Mac's Trash.
+      const access =
+        source && deps.access && source.path !== to
+          ? await deps.access(identityId, source.path, to, source.kind === "dir")
+          : null;
+      const facts = activityFacts(principal, request, source, to, trashing);
+      if (!(await repo.complete(identityId, accountId, op.id, receipt, facts, access))) {
+        // Another settlement kept it first.
+        const current = await operation(principal, op.id);
+        if (current.state !== "completed" && current.state !== "acknowledged")
+          throw Error(`Operation is ${current.state}`);
+        return status(current);
+      }
+    } catch (error) {
+      deps.logger?.warn(
+        { err: error, identityId, operationId: op.id },
+        "Mac write published; its receipt waits for the app's retry",
+      );
+      throw new ApiHttpError(
+        "internal",
+        "This write was published but could not be recorded yet. Retry to finish it.",
+      );
+    }
+    await discard(principal, op.id);
+    await follow(principal, request, source, to, trashing);
+    return receipt;
+  }
+  /**
+   * Ends a `committing` operation no commit in this process is running,
+   * from what disk shows of the publication it recorded: published, it
+   * keeps the receipt (`finish`); still unpublished, or never recorded, it
+   * is `ready` to commit again; lost (something else has happened at both
+   * ends since), it is a `conflict`, never a second publication.
+   */
+  async function settle(principal: Principal, op: DesktopOperationRecord) {
+    const publication = op.result?.publication as Publication | undefined;
+    const where = publication ? await whereIs(principal.storage, publication) : "pending";
+    if (where === "published") await finish(principal, op, publication as Publication);
+    else
+      await transition(
+        principal,
+        op.id,
+        "committing",
+        where === "lost" ? "conflict" : "ready",
+        settled(op.result),
+      );
+    return operation(principal, op.id);
   }
   /**
    * Takes the old name of a save that also renamed its file away, to fdrive's
@@ -642,6 +692,165 @@ export function createDesktopWrites(deps: DesktopWriteDeps) {
       );
     }
   }
+  /** Deletes one superseded upload attempt's body. Retention takes it if this fails. */
+  async function discardAttempt(principal: Principal, path: string) {
+    try {
+      await (await deps.storageForIdentity(principal.identityId)).deleteFile(path);
+    } catch (error) {
+      deps.logger?.warn(
+        { err: error, identityId: principal.identityId, path },
+        "A superseded Mac upload stays until retention removes it",
+      );
+    }
+  }
+  /**
+   * One commit attempt of an operation it moved to `committing`. Checks the
+   * request against storage, records what it will publish, checks once more
+   * and makes the one storage call that publishes: a rename over the
+   * original for a save in place, a link for a new name (a real
+   * create-if-absent, so of two creates racing for a name one gets
+   * `name_collision`), a rename for a move or a new folder. Then it keeps
+   * the receipt (`finish`).
+   *
+   * A failure before that call leaves the operation `ready` (or a
+   * `conflict`). Once the call is made, disk tells what happened: published,
+   * the receipt follows; not, it is `ready` again; neither, a `conflict`.
+   */
+  async function publish(
+    principal: Principal,
+    op: DesktopOperationRecord,
+  ): Promise<DesktopOperationResult> {
+    const id = op.id;
+    const request = op.request as Request;
+    const storage = principal.storage;
+    const trashing = request.parentId === "trash";
+    let publication: Publication;
+    let witness: ContentStamp | null;
+    try {
+      const parent = await record(principal, request.parentId);
+      const source =
+        "itemId" in request && request.itemId ? await record(principal, request.itemId) : undefined;
+      if (trashing && (request.kind !== "move" || !source || inTrash(principal, source.path)))
+        throw new ApiHttpError("bad_request", "Only existing items can be moved to Trash");
+      if (request.kind === "upload" && source && inTrash(principal, source.path))
+        throw new ApiHttpError("forbidden", "Restore this item before editing it");
+      if (request.kind === "upload" && source && source.kind !== "file")
+        throw new ApiHttpError("bad_request", "Only regular files can be replaced");
+      const name =
+        source?.originalPath && request.name === trashName(source)
+          ? (source.originalPath.split("/").at(-1) as string)
+          : request.name;
+      const target =
+        trashing && source
+          ? `${trashRoot(principal)}/${source.id}`
+          : await unoccupied(principal, parent, name, source?.path);
+      // What the source must still be when it is published over or moved.
+      witness =
+        source && "base" in request && request.base
+          ? await checkBase(principal, source, request.base, request.kind === "upload")
+          : null;
+      if (source && isUnderPath(source.path, target))
+        throw new ApiHttpError("bad_request", "Cannot move a folder into itself");
+      const incoming = incomingPath(principal.identityId, id);
+      let from: string;
+      if (request.kind === "move") from = (source as DesktopItemRecord).path;
+      else if (request.kind === "folder") {
+        from = `${incoming}/${randomUUID()}`;
+        await runStorageCall(() => storage.mkdir(from, { parents: true }));
+      } else {
+        const uploadFile = op.result?.uploadFile;
+        if (typeof uploadFile !== "string" || !UUID.test(uploadFile))
+          throw Error("Missing upload receipt");
+        from = `${incoming}/${uploadFile}`;
+      }
+      const staged = await runStorageCall(() => entryAt(storage, from));
+      if (staged === null) {
+        if (request.kind === "move") fail("version_conflict", CHANGED);
+        // The staged body is gone: the app sends it again.
+        await transition(principal, id, "committing", "receiving", {});
+        return status(await operation(principal, id));
+      }
+      if (request.kind === "upload" && staged.kind !== "file")
+        throw new ApiHttpError("forbidden", "Unsupported staging entry");
+      publication = {
+        from,
+        to: target,
+        inode: staged.ino.toString(),
+        source: source
+          ? {
+              id: source.id,
+              path: source.path,
+              originalPath: source.originalPath,
+              kind: source.kind,
+            }
+          : null,
+      };
+      if (
+        !(await transition(principal, id, "committing", "committing", {
+          ...op.result,
+          publication,
+        }))
+      )
+        throw Error("Operation changed while committing");
+      if (from !== target) {
+        if (trashing)
+          await runStorageCall(() => storage.mkdir(trashRoot(principal), { parents: true }));
+        // Right before publishing: the token, and the source as the base proved it.
+        await stillGranted(principal);
+        if (source && witness)
+          await unchanged(storage, source.path, witness, request.kind === "move");
+        else if (source) await stillFolder(storage, source.path);
+      }
+    } catch (error) {
+      const conflict = error instanceof ApiHttpError && error.kind === "conflict";
+      await transition(
+        principal,
+        id,
+        "committing",
+        conflict ? "conflict" : "ready",
+        settled(op.result),
+      );
+      if (error instanceof StorageError) throw new ApiHttpError(error.kind, error.message);
+      throw error;
+    }
+    const { from, to, source } = publication;
+    if (from !== to) {
+      try {
+        await storage.move(
+          from,
+          to,
+          request.kind === "move"
+            ? { overwrite: false }
+            : { overwrite: source?.path === to, publish: true },
+        );
+      } catch (error) {
+        // Storage refuses a taken name before writing anything.
+        if (isStorageError(error) && error.kind === "conflict") {
+          await transition(principal, id, "committing", "conflict", settled(op.result));
+          fail("name_collision", COLLISION);
+        }
+        const where = await whereIs(storage, publication).catch(() => null);
+        // Still `committing`: the app's retry reads the outcome (`settle`).
+        if (where === null)
+          throw new ApiHttpError("internal", "This write could not be confirmed yet. Retry it.");
+        if (where !== "published") {
+          await transition(
+            principal,
+            id,
+            "committing",
+            where === "lost" ? "conflict" : "ready",
+            settled(op.result),
+          );
+          if (where === "lost") fail("version_conflict", CHANGED);
+          if (error instanceof StorageError) throw new ApiHttpError(error.kind, error.message);
+          throw error;
+        }
+      }
+    }
+    if (request.kind === "upload" && source && witness && source.path !== to)
+      await retire(principal, source.path, witness, id);
+    return finish(principal, op, publication);
+  }
   async function prepare(principal: Principal, request: Request) {
     authority(principal);
     const prior = await repo.operation(
@@ -652,7 +861,15 @@ export function createDesktopWrites(deps: DesktopWriteDeps) {
     if (prior) {
       if (prior.requestHash !== hash(request))
         throw new ApiHttpError("conflict", "Operation ID was reused with different contents");
-      return status(prior);
+      if (prior.state !== "committing") return status(prior);
+      // Every retry of a Mac write starts here, so here an interrupted
+      // commit ends; the app commits again when this answers `ready`.
+      return status(
+        await exclusive(principal, prior.id, async () => {
+          const current = await operation(principal, prior.id);
+          return current.state === "committing" ? settle(principal, current) : current;
+        }),
+      );
     }
     if (request.kind === "upload") {
       if (request.size > DESKTOP_MAX_UPLOAD_BYTES)
@@ -703,7 +920,6 @@ export function createDesktopWrites(deps: DesktopWriteDeps) {
   }
   return {
     capabilities,
-    availability,
     decorate,
     files: {
       async content(principal: Principal, path: string, signal: AbortSignal) {
@@ -809,6 +1025,12 @@ export function createDesktopWrites(deps: DesktopWriteDeps) {
     async status(principal: Principal, id: string) {
       return status(await operation(principal, id));
     },
+    /**
+     * Streams the body straight into its staging file in the owner's files,
+     * hashing and counting it as it arrives; storage flushes it to disk
+     * before the name appears. A body that does not match what was prepared
+     * leaves nothing behind.
+     */
     async upload(
       principal: Principal,
       id: string,
@@ -839,375 +1061,103 @@ export function createDesktopWrites(deps: DesktopWriteDeps) {
       uploads.get(uploadKey)?.abort();
       const controller = new AbortController();
       uploads.set(uploadKey, controller);
-      const directory = spool(principal, id);
-      let file: FileHandle | undefined;
-      let verified = false;
-      const reader = body.getReader();
+      const path = `${incomingPath(principal.identityId, id)}/${attempt}`;
+      const stop = AbortSignal.any([signal, controller.signal, AbortSignal.timeout(30 * 60_000)]);
       const sha = createHash("sha256");
       let size = 0;
-      const timeout = AbortSignal.any([
-        signal,
-        controller.signal,
-        AbortSignal.timeout(30 * 60_000),
-      ]);
-      const abort = () => {
-        void reader.cancel(timeout.reason).catch(() => undefined);
+      let invalid = false;
+      const refuse = (message: string) => {
+        invalid = true;
+        return new ApiHttpError("bad_request", message, { code: "invalid_upload" });
       };
-      timeout.addEventListener("abort", abort, { once: true });
+      // Ends the body when the request goes or another attempt starts, even
+      // one whose source never sends another byte.
+      let end: (reason: unknown) => void = () => undefined;
+      const stopped = () => end(stop.reason);
+      const verified = body.pipeThrough(
+        new TransformStream<Uint8Array, Uint8Array>({
+          start(stream) {
+            end = (reason) => stream.error(reason);
+          },
+          transform(chunk, stream) {
+            stop.throwIfAborted();
+            size += chunk.byteLength;
+            if (size > request.size) throw refuse("Upload exceeds its declared length");
+            sha.update(chunk);
+            stream.enqueue(chunk);
+          },
+          flush() {
+            stop.throwIfAborted();
+            if (size !== request.size || sha.digest("hex") !== request.sha256)
+              throw refuse("Upload length or digest does not match");
+          },
+        }),
+      );
+      stop.addEventListener("abort", stopped, { once: true });
+      if (stop.aborted) stopped();
+      let staged = false;
       try {
-        await mkdir(directory, { recursive: true, mode: 0o700 });
-        file = await open(join(directory, attempt), "wx", 0o600);
-        for (;;) {
-          timeout.throwIfAborted();
-          const next = await reader.read();
-          if (next.done) break;
-          size += next.value.byteLength;
-          if (size > request.size)
-            throw new ApiHttpError("bad_request", "Upload exceeds its declared length", {
+        try {
+          await principal.storage.upload(path, verified, {
+            mkdirParents: true,
+            durable: true,
+            signal: stop,
+          });
+        } catch (error) {
+          // Storage reports a failure of the body as its own.
+          if (invalid)
+            throw new ApiHttpError("bad_request", "Upload length or digest does not match", {
               code: "invalid_upload",
             });
-          sha.update(next.value);
-          // FileHandle.write can make a short write.
-          let offset = 0;
-          while (offset < next.value.byteLength) {
-            const written = await file.write(next.value, offset);
-            if (written.bytesWritten === 0) throw Error("Upload spool stopped accepting bytes");
-            offset += written.bytesWritten;
-          }
+          throw error;
         }
-        timeout.throwIfAborted();
-        if (size !== request.size || sha.digest("hex") !== request.sha256)
-          throw new ApiHttpError("bad_request", "Upload length or digest does not match", {
-            code: "invalid_upload",
-          });
-        await file.sync();
-        await file.close();
-        const dir = await open(directory, "r");
-        try {
-          await dir.sync();
-        } finally {
-          await dir.close();
-        }
-        verified = true;
+        staged = true;
         if (
           !(await transition(principal, id, "uploading", "ready", { uploadFile: attempt }, attempt))
         )
           throw new ApiHttpError("conflict", "Upload attempt was superseded");
       } catch (error) {
-        await file?.close().catch(() => undefined);
         // A database response can be lost after the ready transition committed.
-        // Never unlink the payload named by a durable (or uncertain) receipt.
         const current = await operation(principal, id).catch(() => null);
-        if (verified && current?.state === "ready" && current.result?.uploadFile === attempt)
+        if (staged && current?.state === "ready" && current.result?.uploadFile === attempt)
           return status(current);
-        const reset = await transition(principal, id, "uploading", "receiving", {}, attempt).catch(
-          () => false,
-        );
-        if (
-          reset ||
-          (current?.state === "uploading" && current.result?.attempt !== attempt) ||
-          (current?.state === "ready" && current.result?.uploadFile !== attempt)
-        )
-          await rm(join(directory, attempt), { force: true }).catch(() => undefined);
+        await transition(principal, id, "uploading", "receiving", {}, attempt).catch(() => false);
+        // Read, the operation names another body (or none), so this one goes;
+        // unread, it might name this one, which retention removes if not.
+        if (staged && current) await discardAttempt(principal, path);
+        if (error instanceof StorageError) throw new ApiHttpError(error.kind, error.message);
         throw error;
       } finally {
+        stop.removeEventListener("abort", stopped);
         if (uploads.get(uploadKey) === controller) uploads.delete(uploadKey);
-        timeout.removeEventListener("abort", abort);
-        await reader.cancel().catch(() => undefined);
-        reader.releaseLock();
       }
       return status(await operation(principal, id));
     },
     async commit(principal: Principal, id: string) {
       authority(principal);
-      const op = await operation(principal, id);
-      if (op.state !== "ready") return status(op);
-      if (!(await transition(principal, id, "ready", "committing")))
-        return status(await operation(principal, id));
-      const request = op.request as Request;
-      const storage = principal.storage;
-      // Set once a failure can no longer tell whether the write reached storage.
-      let started = false;
-      const trashing = request.parentId === "trash";
-      let published: {
-        receipt: DesktopOperationResult;
-        source?: DesktopItemRecord;
-        target: string;
-      };
-      /**
-       * Runs the one storage call that publishes the write. A `conflict` from
-       * it wrote nothing: storage refuses a taken name before writing, so a
-       * name taken since `unoccupied` looked is the client's collision. With
-       * `linkedLast` no failure wrote anything: the call publishes as its last
-       * step.
-       */
-      const publish = async (run: () => Promise<void>, linkedLast = false) => {
-        started = !linkedLast;
-        try {
-          await run();
-        } catch (error) {
-          if (!(isStorageError(error) && error.kind === "conflict")) throw error;
-          started = false;
-          fail("name_collision", COLLISION);
-        }
-        started = true;
-      };
-      try {
-        const parent = await record(principal, request.parentId);
-        const source =
-          "itemId" in request && request.itemId
-            ? await record(principal, request.itemId)
-            : undefined;
-        if (trashing && (request.kind !== "move" || !source || inTrash(principal, source.path)))
-          throw new ApiHttpError("bad_request", "Only existing items can be moved to Trash");
-        if (request.kind === "upload" && source && inTrash(principal, source.path))
-          throw new ApiHttpError("forbidden", "Restore this item before editing it");
-        if (request.kind === "upload" && source && source.kind !== "file")
-          throw new ApiHttpError("bad_request", "Only regular files can be replaced");
-        const name =
-          source?.originalPath && request.name === trashName(source)
-            ? (source.originalPath.split("/").at(-1) as string)
-            : request.name;
-        const target =
-          trashing && source
-            ? `${trashRoot(principal)}/${source.id}`
-            : await unoccupied(principal, parent, name, source?.path);
-        // What the source must still be when it is published over or moved.
-        const witness =
-          source && "base" in request && request.base
-            ? await checkBase(principal, source, request.base, request.kind === "upload")
-            : null;
-        if (source && isUnderPath(source.path, target))
-          throw new ApiHttpError("bad_request", "Cannot move a folder into itself");
-        const access = await accessMove(principal, source, source?.path, target);
-        if (request.kind === "upload") {
-          const body = spooled(principal, op);
-          if (source && witness && source.path === target) {
-            // A save in place: staged, then renamed over the original once its
-            // stamp shows nobody wrote it since the base was proven.
-            const staged = await stage(principal, op, request.size, body);
-            await stillGranted(principal);
-            await unchanged(storage, source.path, witness);
-            await publish(() => storage.move(staged.path, target, { overwrite: true }));
-            await tidy(principal, id, staged.internal);
-          } else {
-            // A new name, which the files folder links into place only while it
-            // is free, so of two creates racing for it one is refused. It
-            // writes beside the name and links last, so a failed upload
-            // published nothing.
-            if (source && witness) await unchanged(storage, source.path, witness);
-            await publish(() => uploadIfGranted(principal, target, body(), request.size), true);
-            if (source && witness) await retire(principal, source.path, witness, id);
-          }
-        } else if (request.kind === "folder") {
-          await stillGranted(principal);
-          await publish(() => storage.mkdir(target));
-        } else if (source) {
-          if (trashing) await storage.mkdir(trashRoot(principal), { parents: true });
-          if (source.path !== target) {
-            await stillGranted(principal);
-            await (witness
-              ? unchanged(storage, source.path, witness, true)
-              : stillFolder(storage, source.path));
-            await publish(() => storage.move(source.path, target, { overwrite: false }));
-          }
-        }
-        if (source) await repo.move(principal.identityId, source.path, target);
-        if (source && (trashing || inTrash(principal, source.path)))
-          await repo.update(principal.identityId, source.id, {
-            originalPath: trashing ? source.path : null,
-          });
-        const entry = trashing
-          ? await trashEntry(principal, target)
-          : await files.stat(principal, target);
-        const item = await decorate(
-          principal,
-          entry,
-          request.kind === "upload" ? request.sha256 : undefined,
-        );
-        const receipt: DesktopOperationResult = {
-          operationId: id,
-          state: "completed",
-          item,
-          recoveryId: null,
-        };
-        const facts = activityFacts(principal, request, source, target, trashing);
-        if (
-          !(await repo.complete(
-            principal.identityId,
-            principal.accountId,
-            id,
-            receipt,
-            facts,
-            access,
-          ))
-        )
-          throw Error("Could not persist commit receipt");
-        published = { receipt, ...(source ? { source } : {}), target };
-      } catch (error) {
-        const conflict = error instanceof ApiHttpError && error.kind === "conflict";
-        const state = started ? "uncertain" : conflict ? "conflict" : "ready";
-        await transition(principal, id, "committing", state);
-        if (started)
-          fail(
-            "operation_uncertain",
-            "Commit could not be confirmed. The pending file is preserved; do not retry with a new operation ID.",
-          );
-        if (error instanceof StorageError) throw new ApiHttpError(error.kind, error.message);
-        throw error;
-      }
-      await follow(principal, request, published.source, published.target, trashing);
-      return published.receipt;
-    },
-    /** Commits without a receipt, oldest first, for administrator inspection. */
-    async uncertain(now: Date) {
-      return (await repo.uncertain(100)).map((op) => {
-        const request = op.request as Request;
-        return {
-          identityId: op.identityId,
-          operationId: op.id,
-          state: op.state as "committing" | "uncertain",
-          stalled:
-            op.state === "uncertain" ||
-            now.getTime() - op.updatedAt.getTime() > DESKTOP_COMMIT_STALL_MS,
-          kind: request.kind,
-          name: request.name,
-          updatedAt: op.updatedAt.toISOString(),
-        };
+      return exclusive(principal, id, async () => {
+        let op = await operation(principal, id);
+        if (op.state === "committing") op = await settle(principal, op);
+        if (op.state !== "ready") return status(op);
+        if (!(await transition(principal, id, "ready", "committing")))
+          return status(await operation(principal, id));
+        return publish(principal, op);
       });
     },
-    /** The administrator inspected storage. `published` records the receipt from the
-     * current target and brings metadata along; `discarded` cancels without touching
-     * storage or spool (retention removes them later). Never replays a write. */
-    async resolve(
-      identityId: string,
-      accountId: string,
-      id: string,
-      outcome: "published" | "discarded",
-      now: Date,
-    ): Promise<DesktopOperationResult> {
-      const op = await repo.operation(identityId, accountId, id);
-      if (!op) throw new ApiHttpError("not_found", "Operation is not available");
-      const stalled =
-        op.state === "uncertain" ||
-        (op.state === "committing" &&
-          now.getTime() - op.updatedAt.getTime() > DESKTOP_COMMIT_STALL_MS);
-      if (!stalled)
-        throw new ApiHttpError("conflict", "Only an uncertain or stalled commit can be resolved");
-      if (outcome === "discarded") {
-        if (!(await repo.transition(identityId, accountId, id, op.state, "cancelled")))
-          throw new ApiHttpError("conflict", "Operation changed while resolving");
-        const cancelled = await repo.operation(identityId, accountId, id);
-        if (!cancelled) throw new ApiHttpError("not_found", "Operation is not available");
-        return status(cancelled);
-      }
-      if (!deps.storageForIdentity)
-        throw new ApiHttpError("upstream_unavailable", "Recovery resolution is unavailable");
-      const storage = await deps.storageForIdentity(identityId);
-      const principal: Principal = {
-        accountId,
-        identityId,
-        username: "administrator",
-        isAdmin: true,
-        storage,
-        tokenAccess: { mode: "full", paths: ["/"] },
-      };
-      const request = op.request as Request;
-      const parent = await record(principal, request.parentId);
-      const source =
-        "itemId" in request && request.itemId ? await repo.item(identityId, request.itemId) : null;
-      if ("itemId" in request && request.itemId && !source)
-        throw new ApiHttpError("conflict", "The source handle no longer exists; choose discarded");
-      const trashing = request.parentId === "trash";
-      const name =
-        source?.originalPath && request.name === trashName(source)
-          ? (source.originalPath.split("/").at(-1) as string)
-          : request.name;
-      const target =
-        trashing && source
-          ? `${trashRoot(principal)}/${source.id}`
-          : `${parent.path === "/" ? "" : parent.path}/${name}`;
-      // Storage evidence is checked before any registry change.
-      const missing = new ApiHttpError(
-        "conflict",
-        "Nothing was published at the target; choose discarded",
-      );
-      let entry: DesktopEntry | undefined;
-      if (trashing) {
-        const listed = await storage.list(trashRoot(principal)).catch(() => []);
-        if (!listed.some((candidate) => candidate.path === target)) throw missing;
-      } else {
-        try {
-          entry = await files.stat(principal, target);
-        } catch (error) {
-          if (error instanceof ApiHttpError && error.kind === "not_found") throw missing;
-          throw error;
-        }
-        if (request.kind === "upload" && entry.kind !== "file")
-          throw new ApiHttpError("conflict", "The target is not a file; choose discarded");
-        if (
-          request.kind === "upload" &&
-          (await digestFile(storage, target)).sha256 !== request.sha256
-        )
-          throw new ApiHttpError(
-            "conflict",
-            "The target's bytes differ from the upload; choose discarded",
-          );
-      }
-      // Registry updates that the interrupted commit may not have reached.
-      if (source && source.path !== target) await repo.move(identityId, source.path, target);
-      if (source && trashing)
-        await repo.update(identityId, source.id, { originalPath: source.path });
-      else if (source?.originalPath && !inTrash(principal, target))
-        await repo.update(identityId, source.id, { originalPath: null });
-      entry ??= await trashEntry(principal, target);
-      // From where the item was when the write was prepared: the interrupted
-      // commit may have moved the registry already, never what grants access.
-      const preparedAt = op.request.activityPath;
-      const access = await accessMove(
-        principal,
-        source,
-        typeof preparedAt === "string" ? preparedAt : source?.path,
-        target,
-      );
-      const item = await decorate(
-        principal,
-        entry,
-        request.kind === "upload" ? request.sha256 : undefined,
-      );
-      const result: DesktopOperationResult = {
-        operationId: id,
-        state: "completed",
-        item,
-        recoveryId: null,
-      };
-      if (
-        op.state === "uncertain" &&
-        !(await repo.transition(identityId, accountId, id, "uncertain", "committing"))
-      )
-        throw new ApiHttpError("conflict", "Operation changed while resolving");
-      const facts = activityFacts(principal, request, source, target, trashing);
-      if (!(await repo.complete(identityId, accountId, id, result, facts, access)))
-        throw new ApiHttpError("conflict", "Operation changed while resolving");
-      await follow(principal, request, source, target, trashing);
-      return result;
-    },
+    /** Old apps acknowledge a receipt they kept; it only marks the operation done. */
     async acknowledge(principal: Principal, id: string) {
       const op = await operation(principal, id);
       if (!["completed", "acknowledged"].includes(op.state))
         throw new ApiHttpError("conflict", "Only a completed operation can be acknowledged");
-      // Receipts remain queryable indefinitely, independently of payload cleanup.
       await transition(principal, id, "completed", "acknowledged");
-      await rm(spool(principal, id), { recursive: true, force: true });
       return status(op);
     },
     async cancel(principal: Principal, id: string) {
       const op = await operation(principal, id);
       if (op.state === "cancelled") return status(op);
       if (!["receiving", "ready", "conflict"].includes(op.state))
-        throw new ApiHttpError("conflict", "An active or uncertain commit cannot be discarded");
-      if (await transition(principal, id, op.state, "cancelled"))
-        await rm(spool(principal, id), { recursive: true, force: true });
+        throw new ApiHttpError("conflict", "A commit under way cannot be discarded");
+      if (await transition(principal, id, op.state, "cancelled")) await discard(principal, id);
       return status(await operation(principal, id));
     },
   };

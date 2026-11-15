@@ -6,10 +6,9 @@ export interface SecretCodec {
   open(bytes: Uint8Array, context: string): Uint8Array;
 }
 export interface BlobSource {
-  kind: "attachment" | "desktop" | "ocr" | "logs" | "office" | "remote";
+  kind: "attachment" | "ocr" | "logs" | "office";
   path: string;
   size: number;
-  identityId?: string | undefined;
   sourceId?: string | undefined;
   open(): Promise<Readable>;
 }

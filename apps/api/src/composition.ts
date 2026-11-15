@@ -448,18 +448,18 @@ export async function composeApp(
   // A move into the Trash, whoever reports it, leaves metadata where the item was.
   const metadataService = withFollowers(withTrashMoves(metadataCore, trashPathOf), accessFollowers);
   const desktopRepo = createDesktopRepo(db);
+  // Without Trash settings, so the Mac's staged files are deleted rather
+  // than moved into the Trash their owner sees.
+  const desktopStaging = createIdentityStorageFactory({
+    providers: providerService,
+    fetch: fetchImpl,
+    clock,
+  });
   const desktopRetention = createDesktopRetention({
     repo: desktopRepo,
-    // Without Trash settings, so the Mac's staged files are deleted rather
-    // than moved into the Trash their owner sees.
-    storageForIdentity: createIdentityStorageFactory({
-      providers: providerService,
-      fetch: fetchImpl,
-      clock,
-    }),
+    storageForIdentity: desktopStaging,
     clock,
     eventLog,
-    ...(config.fdriveDesktopStateDir ? { stateDir: config.fdriveDesktopStateDir } : {}),
   });
   const officeFiles = createOfficeFileRepo(db);
   const withOffice = (metadata: typeof metadataCore) =>
@@ -939,8 +939,7 @@ export async function composeApp(
           metadata: desktopMetadata,
           bus,
           logger,
-          storageForIdentity: storageFactory,
-          ...(config.fdriveDesktopStateDir ? { stateDir: config.fdriveDesktopStateDir } : {}),
+          storageForIdentity: desktopStaging,
           trashPathForStorage: (storage) => {
             const settings = trashSettingsForStorage(storage);
             return settings?.enabled === true ? settings.path : null;

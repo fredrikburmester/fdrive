@@ -1,7 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { readFile, writeFile } from "node:fs/promises";
 import { DesktopPairing, DesktopWriteEntry, DesktopWritePairResult } from "@fdrive/contracts";
 import { startLocalStorage, startPostgres } from "@fdrive/testkit";
 import pino from "pino";
@@ -23,12 +21,10 @@ it("publishes on the local folder with no configuration and refuses an out-of-ba
   const postgres = await startPostgres();
   const storage = await startLocalStorage({ files: {} });
   await seedLocalUsers(postgres.connectionString, storage, ["alice"]);
-  const stateDir = await mkdtemp(join(tmpdir(), "fdrive-local-writes-"));
   const config = loadConfig({
     DATABASE_URL: postgres.connectionString,
     FDRIVE_STORAGE_ROOT: storage.root,
     FDRIVE_MASTER_KEY: Buffer.alloc(32, 7).toString("base64"),
-    FDRIVE_DESKTOP_STATE_DIR: stateDir,
   });
   const composed = await composeApp(config, pino({ level: "silent" }), () => new Date());
   let cookie = "";
@@ -128,7 +124,6 @@ it("publishes on the local folder with no configuration and refuses an out-of-ba
     expect(await readFile(onDisk("/stock.txt"), "utf8")).toBe("written on disk");
   } finally {
     await composed.close?.();
-    await rm(stateDir, { recursive: true, force: true });
     await storage.stop();
     await postgres.stop();
   }

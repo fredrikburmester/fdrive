@@ -540,7 +540,7 @@ it("keeps personal journeys stable, immutable and private across pools", {
     expect((await a.list(alice.id, { source: "native" })).map((event) => event.id)).toEqual(
       nativeEvents.map((event) => event.id),
     );
-    for (const state of ["failed", "conflict", "cancelled", "uncertain"]) {
+    for (const state of ["failed", "conflict", "cancelled"]) {
       const id = randomUUID();
       await native.reserve({
         id,

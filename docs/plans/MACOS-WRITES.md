@@ -8,21 +8,17 @@ Full beta qualification of Mac writes remains open. Current behavior:
 Mac writes use fdrive's optimistic contract: the file stamp proves the destination right before
 the rename that publishes, with no lock and no fence at the storage against other writers.
 
-Keep explicit v2 write grants, staged uploads, durable server receipts and native pending
-copies. Never blindly replay a publication whose outcome is unknown. No claim of exactly-once
-behavior across HTTP, filesystem and PostgreSQL. A server item ID cannot prove every unobserved
-external delete/recreate, particularly with identical bytes.
+Keep explicit v2 write grants, uploads staged in the files folder, durable server receipts and
+native pending copies. A commit records what it publishes before publishing it, so its outcome is
+always read from disk and never replayed blindly. No claim of exactly-once behavior across HTTP,
+filesystem and PostgreSQL. A server item ID cannot prove every unobserved external
+delete/recreate, particularly with identical bytes.
 
 ## Implementation still required
 
-- **Recovery administration** is not to be built out. Group 25 of
-  [SFTPGo leftovers](SFTPGO-LEFTOVERS.md) removes what it would administer: uploads stage inside
-  the files folder so a commit can always tell whether it happened, and the `uncertain` state and
-  the admin recovery endpoints go.
 - **Deployment qualification.** Inventory every writer before enabling native writes. Keep
   configuration, logs, databases, backups and temporary directories outside user homes.
   Qualify restart, upgrade and rollback against disposable data before production use.
-  Server spool must be persistent and shared or durably routed in multi-process API setups.
 
 ## Product and release qualification
 

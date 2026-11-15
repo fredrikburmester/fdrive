@@ -84,13 +84,17 @@ How the files folder implements it:
   home itself, `<root>/<username>`, is the deployment's and may be a link.
 - **Atomic publish.** Uploads and file copies write a temporary file beside the target and
   publish it with `link`, a real create-if-absent; only `overwrite: true` renames it over a
-  taken name.
+  taken name. A `durable` upload flushes the file to disk before publishing it and its folder
+  after, so it survives a crash once the call returns; the Mac's staged uploads are durable.
+  `stat` reports the inode of a file or folder (`ino`), which a rename keeps.
 - **Copies** keep modification times. A link inside a copied folder is copied as the link it
   is, its target text unchanged, as a move takes it along: never followed, never its target.
 - **Moves** are one `rename`, also between a user's files and a writable shared folder. The
   target is checked just before, since Node has no `RENAME_NOREPLACE`; a `link` and `unlink`
   would close that gap for files, but file watchers (the indexer's) would see a deleted file and
-  an unfinished new one instead of a move. A target that is the source under another spelling,
+  an unfinished new one instead of a move. A `publish` move, for an entry fdrive staged where no
+  watcher looks (the Mac's uploads), does exactly that for a new file, and flushes the new name
+  to disk before returning. A target that is the source under another spelling,
   on a disk that ignores case, is a case-only rename, not a conflict.
 - **Spelling.** On a disk that ignores case or accent encoding, `stat` reports the stored
   spelling as `path`, so links and lookups land on the name listings show.

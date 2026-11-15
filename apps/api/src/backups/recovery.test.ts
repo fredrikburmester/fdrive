@@ -547,16 +547,18 @@ it("keeps a files folder destination in the adding owner's files, with no passwo
 });
 
 it("records missing source coverage and preserves mount identities and staged recovery inventory", async () => {
-  const desktop = join(directory, "desktop");
-  await mkdir(desktop);
-  await writeFile(join(desktop, "accepted"), "accepted bytes");
+  const logs = join(directory, "logs");
+  await mkdir(logs);
+  await writeFile(join(logs, "indexer.log"), "log line");
   const configured = backupModule({
     ...config,
-    fdriveDesktopStateDir: desktop,
     fdriveOcrUrl: "http://ocr.invalid",
     fdriveIndexerUrl: "http://indexer.invalid",
     fdriveOfficeUrl: "http://office.invalid",
-    fdriveBackupSources: [{ kind: "logs", path: join(directory, "missing") }],
+    fdriveBackupSources: [
+      { kind: "logs", path: logs },
+      { kind: "logs", path: join(directory, "missing") },
+    ],
   });
   try {
     await configured.start();
@@ -752,24 +754,16 @@ it("discovers and fetches a completed bucket copy with no database or applicatio
   expect(output.at(-1)).toContain("Recovery reviewed");
 });
 
-it("captures native recovery bytes, preserves quarantined provenance, and reports unavailable copies", async () => {
-  const storage = createMemoryStorage({
-    [`/.fdrive-desktop/${identity}/trash/original`]: "recover me",
-  });
-  vi.spyOn(registry, "moduleFor").mockReturnValue({ ...fileserver, createStorage: () => storage });
+it("never captures what the Mac staged, and preserves quarantined provenance", async () => {
+  // Staged uploads are transient: in-flight ones are sent again by the Mac.
   await source.pool.query(
-    "insert into app.desktop_operations(id,identity_id,account_id,request_hash,request,state,result) values($1,$2,$3,'hash','{}','uncertain',$4)",
-    [randomUUID(), identity, owner, JSON.stringify({ remoteAttempt: "accepted" })],
+    "insert into app.desktop_operations(id,identity_id,account_id,request_hash,request,state,result) values($1,$2,$3,'hash','{}','ready',$4)",
+    [randomUUID(), identity, owner, JSON.stringify({ uploadFile: randomUUID() })],
   );
   const client = await source.pool.connect();
   try {
     const blobs = () => module.engine.options.source.blobs(client);
-    let result = await blobs();
-    expect(result.coverage).toEqual([]);
-    expect(result.sources[0]?.identityId).toBe(identity);
-    const original = result.sources[0];
-    if (!original) throw Error("Missing original");
-    expect((await readBounded(await original.open())).toString()).toBe("recover me");
+    expect(await blobs()).toEqual({ sources: [], coverage: [] });
     const staged = join(directory, "quarantine");
     await mkdir(staged);
     await writeFile(join(staged, "blobs-old"), "previous bytes");
@@ -777,56 +771,20 @@ it("captures native recovery bytes, preserves quarantined provenance, and report
       JSON.stringify({
         stateDirectory: staged,
         blobs: [
-          {
-            kind: "remote",
-            entry: "blobs/old",
-            path: "/old",
-            size: 14,
-            identityId: identity,
-            sourceId: "source-a",
-          },
+          { kind: "office", entry: "blobs/old", path: "/old", size: 14, sourceId: "source-a" },
           { kind: "attachment", entry: "ignored", path: "old", size: 0 },
           { kind: "ocr", entry: "blobs/missing", path: "original", size: 1 },
         ],
       }),
     ]);
-    result = await blobs();
-    expect(result.sources.find((item) => item.path === "/old")).toMatchObject({
-      identityId: identity,
-      sourceId: "source-a",
-      kind: "remote",
-    });
+    const result = await blobs();
+    const kept = result.sources.find((item) => item.path === "/old");
+    expect(kept).toMatchObject({ sourceId: "source-a", kind: "office" });
+    if (!kept) throw Error("Missing quarantined copy");
+    expect((await readBounded(await kept.open())).toString()).toBe("previous bytes");
     expect(result.coverage.join()).toContain("Previous recovery file is missing");
     await rm(staged, { recursive: true });
     expect((await blobs()).coverage.join()).toContain("Staged recovery files");
-    const list = vi
-      .spyOn(storage, "list")
-      .mockResolvedValue([
-        { path: "/escape", name: "escape", kind: "file", size: 1, ext: "", modifiedAt: new Date() },
-      ]);
-    expect((await blobs()).coverage.join()).toContain("Native remote recovery is unavailable");
-    list.mockImplementation(async (path) => [
-      {
-        path: `${path}/link`,
-        name: "link",
-        kind: "symlink",
-        size: 0,
-        ext: "",
-        modifiedAt: new Date(),
-      },
-    ]);
-    expect((await blobs()).coverage.join()).toContain("Native remote recovery is unavailable");
-    list.mockImplementation(async (path) => [
-      { path: `${path}/dir`, name: "dir", kind: "dir", size: 0, ext: "", modifiedAt: new Date() },
-    ]);
-    expect((await blobs()).coverage.join()).toContain("Native remote recovery is unavailable");
-    list.mockRejectedValue(new StorageError("not_found", "gone"));
-    expect((await blobs()).coverage.join()).toContain("Native remote recovery is unavailable");
-    await source.pool.query("update app.desktop_operations set result=null");
-    expect((await blobs()).coverage.join()).not.toContain("Native remote recovery is unavailable");
-    // Storage for the login cannot be built: reported, not skipped.
-    vi.mocked(registry.moduleFor).mockReturnValue(null);
-    expect((await blobs()).coverage.join()).toContain("Native remote recovery is unavailable");
   } finally {
     client.release();
   }

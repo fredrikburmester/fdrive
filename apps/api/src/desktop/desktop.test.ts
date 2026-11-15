@@ -20,7 +20,9 @@ import type { DesktopChanges } from "./changes.js";
 import { createDesktopFiles } from "./files.js";
 import { createDesktopPairing } from "./pairing.js";
 import { registerDesktopRoutes } from "./routes.js";
-import { createDesktopWrites, type DesktopWriteGate, NO_WRITES } from "./writes.js";
+import { createDesktopWrites, NO_WRITES } from "./writes.js";
+
+const ALL_WRITES = { create: true, update: true, move: true, trash: true, restore: true };
 
 it("runs the complete v2 routes with explicit grants, streamed content, receipts and revocation", async () => {
   const f = await fixture(true);
@@ -351,8 +353,6 @@ async function fixture(writable = false, changes?: DesktopChanges) {
     "/.trash/old": "trash",
     "/hidden/b.txt": "private",
   });
-  const stateDir = writable ? await mkdtemp(join(tmpdir(), "desktop-routes-")) : undefined;
-  if (stateDir) desktopDirectories.push(stateDir);
   const otherStorage = createMemoryStorage({ "/docs/a.txt": "bravo" });
   const deps = {
     ...repos,
@@ -390,8 +390,14 @@ async function fixture(writable = false, changes?: DesktopChanges) {
         ...(changes ? { changes } : {}),
         activity: activity.service,
         clientIp: () => "test",
-        ...(stateDir
-          ? { writes: createDesktopWrites({ ...deps, repo: memoryRepo().repo, stateDir }) }
+        ...(writable
+          ? {
+              writes: createDesktopWrites({
+                ...deps,
+                repo: memoryRepo().repo,
+                storageForIdentity: async () => storage,
+              }),
+            }
           : {}),
       }),
   });
@@ -889,7 +895,12 @@ it("refuses every read that reaches its item through a symbolic link, at any seg
   await symlink(join(root, "nowhere"), join(home, "dangling"));
   const signal = new AbortController().signal;
   const full = { mode: "full" as const, paths: ["/"] };
-  const writes = createDesktopWrites({ ...f.deps, repo: memoryRepo().repo });
+  const writes = createDesktopWrites({
+    ...f.deps,
+    repo: memoryRepo().repo,
+    // Only reads here; nothing is staged.
+    storageForIdentity: async () => createMemoryStorage({}),
+  });
   const refuses = async (principal: Principal, folders: string[], files: string[]) => {
     const writer = { ...principal, tokenAccess: full };
     for (const path of [...folders, ...files])
@@ -1140,52 +1151,16 @@ it("applies CSRF and browser ownership to v2 pairing while keeping v1 requests u
   ).toBe(401);
 });
 
-it("limits recovery status to administrators and lists only uncertain commits", async () => {
-  const unavailable = await fixture();
-  expect((await unavailable.request("/recovery")).status).toBe(401);
-  expect(
-    (await unavailable.request("/recovery", undefined, { cookie: "fdrive_session=test" })).status,
-  ).toBe(403);
-  Object.assign(unavailable.principal, { isAdmin: true, tokenAccess: undefined });
-  // Without Mac writes there is nothing to recover.
-  expect(
-    (await unavailable.request("/recovery", undefined, { cookie: "fdrive_session=test" })).status,
-  ).toBe(502);
-  // Uncertain commits are listed for administrators and resolved only through storage evidence.
-  const writable = await fixture(true);
+it("keeps no administrator recovery routes: commits resolve themselves", async () => {
+  const f = await fixture(true);
+  Object.assign(f.principal, { isAdmin: true, tokenAccess: undefined });
   const admin = { cookie: "fdrive_session=test" };
-  const resolve = `/recovery/${writable.identity.id}/${randomUUID()}/resolve`;
-  expect((await writable.request(resolve, { outcome: "discarded" }, admin)).status).toBe(403);
-  Object.assign(writable.principal, { isAdmin: true, tokenAccess: undefined });
-  expect((await writable.request(resolve, { outcome: "later" }, admin)).status).toBe(400);
-  expect((await writable.request(resolve, { outcome: "discarded" }, admin)).status).toBe(404);
+  expect((await f.request("/recovery", undefined, admin)).status).toBe(404);
   expect(
     (
-      await writable.request(
-        `/recovery/${randomUUID()}/${randomUUID()}/resolve`,
-        { outcome: "discarded" },
-        admin,
-      )
-    ).status,
-  ).toBe(404);
-  const listed = await writable.request("/recovery", undefined, admin);
-  expect(listed.headers.get("cache-control")).toBe("no-store");
-  expect(await listed.json()).toEqual({ uncertain: [] });
-  expect(
-    (
-      await writable.request(
-        `/recovery/not-a-uuid/${randomUUID()}/resolve`,
-        { outcome: "discarded" },
-        admin,
-      )
-    ).status,
-  ).toBe(400);
-  Object.assign(unavailable.principal, { isAdmin: true, tokenAccess: undefined });
-  expect(
-    (
-      await unavailable.request(
-        `/recovery/${unavailable.identity.id}/${randomUUID()}/resolve`,
-        { outcome: "discarded" },
+      await f.request(
+        `/recovery/${f.identity.id}/${randomUUID()}/resolve`,
+        { outcome: "published" },
         admin,
       )
     ).status,
@@ -1239,35 +1214,36 @@ it("expires unconfirmed pairings on its own timer without another request", asyn
   }
 });
 
-it("explains why a full grant is read-only", async () => {
+it("writes with a full grant and nothing else, and reads with a read grant", async () => {
   const f = await fixture();
-  async function reason(
-    missing: readonly DesktopWriteGate[] | null,
-    mode: "full" | "read" = "full",
-  ) {
+  async function location(mode: "full" | "read", wired = true) {
     const pairing = createDesktopPairing({
       ...f.deps,
-      ...(missing ? { writeAvailability: async () => ({ capabilities: NO_WRITES, missing }) } : {}),
+      ...(wired
+        ? {
+            writeCapabilities: (principal: Principal) =>
+              principal.tokenAccess?.mode === "full" ? ALL_WRITES : NO_WRITES,
+          }
+        : {}),
     });
-    const pair = pairing.create("Mac", "reasons", 2);
+    const pair = pairing.create("Mac", "access", 2);
     await pairing.approve(pair.id, f.owner, mode);
     const result = await pairing.poll(pair.id, pair.secret);
     if (result.status !== "connected") throw new Error("Expected credentials");
-    const location = result.credentials[0]?.location;
-    expect(location).toMatchObject({ protocolVersion: 2, readOnly: true });
-    return location && "writeUnavailableReason" in location
-      ? location.writeUnavailableReason
-      : undefined;
+    return result.credentials[0]?.location;
   }
-  expect(await reason(["state_dir"])).toBe(
-    "Read-only until an administrator sets FDRIVE_DESKTOP_STATE_DIR on this server.",
-  );
-  // A deployment without desktop writes wired says so without guessing at a cause.
-  expect(await reason(null)).toBe(
-    "Finder writes are turned off on this server. Files stay read-only.",
-  );
-  // A read grant is read-only by choice and carries no reason.
-  expect(await reason(["state_dir"], "read")).toBeUndefined();
+  expect(await location("full")).toMatchObject({
+    protocolVersion: 2,
+    readOnly: false,
+    capabilities: ALL_WRITES,
+    listingChecks: true,
+  });
+  expect(await location("read")).toMatchObject({ readOnly: true, capabilities: NO_WRITES });
+  // A deployment without desktop writes wired lands read-only and checks no listings.
+  const unwired = await location("full", false);
+  expect(unwired).toMatchObject({ readOnly: true, capabilities: NO_WRITES });
+  expect(unwired).not.toHaveProperty("listingChecks");
+  expect(unwired).not.toHaveProperty("writeUnavailableReason");
 });
 
 it("advertises fdrive's 16 GiB upload limit to every writable location", async () => {
