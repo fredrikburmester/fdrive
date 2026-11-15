@@ -1,4 +1,4 @@
-import { type StorageProvider, trashItemPath } from "@fdrive/core";
+import { StorageError, type StorageProvider, trashItemOf, trashItemPath } from "@fdrive/core";
 import { createMemoryStorage } from "@fdrive/core/testing";
 import { createMemoryRepos } from "@fdrive/db/testing";
 import { describe, expect, it, vi } from "vitest";
@@ -8,8 +8,10 @@ import {
   testAccessFollowers,
   testFileOperations,
 } from "../../test/file-operations.js";
+import { recordingGate } from "../../test/recording-gate.js";
 import { type MemoryTrashItemRepo, memoryTrashItemRepo } from "../../test/trash-items.js";
 import type { Principal } from "../auth/principal.js";
+import type { WriteGate } from "../backups/write-gate.js";
 import { ApiHttpError } from "../errors.js";
 import { createMetadataService } from "../metadata/service.js";
 import type { AccessFollow, AccessFollowers, TouchedPaths } from "./access.js";
@@ -93,6 +95,7 @@ function harness(
   files: Record<string, string>,
   fail: { moved?: Error; removed?: Error } = {},
   homeOf?: (identityId: string) => Promise<StorageProvider>,
+  gate?: (steps: string[]) => WriteGate,
 ) {
   const steps: string[] = [];
   const storage = tracedStorage(files, steps);
@@ -115,6 +118,7 @@ function harness(
     clock: CLOCK,
     trashRepo: trash,
     homeOf: homeOf ?? (async () => storage),
+    ...(gate ? { gate: gate(steps) } : {}),
   });
   const actor: FileActor = fileActor(principal(storage), { source: "web" });
   /** The one item Alice's Trash lists. */
@@ -625,5 +629,168 @@ describe("without anything else wired", () => {
     expect((await trashRepo.list(ALICE, 10)).items.map((row) => row.originalPath)).toEqual([
       "/b.txt",
     ]);
+  });
+});
+
+describe("the backups' write gate", () => {
+  /** A body that arrives only when read, noting when it has. */
+  function arriving(steps: string[], fail?: Error): ReadableStream<Uint8Array> {
+    return new ReadableStream<Uint8Array>(
+      {
+        pull(controller) {
+          if (fail) throw fail;
+          steps.push("body arrived");
+          controller.enqueue(new Uint8Array([1]));
+          controller.close();
+        },
+      },
+      { highWaterMark: 0 },
+    );
+  }
+
+  /** Access followers that note when they hold a path and let go. */
+  function heldPaths(steps: string[]): AccessFollowers {
+    const { access } = recordingAccess([]);
+    return {
+      ...access,
+      run: async (identityId, paths, work) => {
+        steps.push("path held");
+        try {
+          return await access.run(identityId, paths, work);
+        } finally {
+          steps.push("path let go");
+        }
+      },
+    };
+  }
+
+  it("holds it for an upload from its publish, once the body is all here, until it is recorded", async () => {
+    const steps: string[] = [];
+    const storage = createMemoryStorage({});
+    const upload = storage.upload.bind(storage);
+    // Local storage makes missing parent folders, in the critical section, before it reads the body.
+    vi.spyOn(storage, "upload").mockImplementation(async (path, body, options) => {
+      await options?.critical?.(async () => {
+        steps.push("parents made");
+      });
+      return upload(path, body, options);
+    });
+    const activity = activityFixture(CLOCK);
+    const files = testFileOperations({
+      access: heldPaths(steps),
+      activity: activity.service,
+      gate: recordingGate(steps, () => `gate let go, ${activity.outcomes.length} recorded`),
+    });
+    const actor = fileActor(principal(storage), { source: "web" });
+    await files.upload(actor, "/new.txt", arriving(steps), { action: "file.upload" });
+    expect(steps).toEqual([
+      "path held",
+      "parents made",
+      "path let go",
+      "body arrived",
+      "gate held",
+      "path held",
+      "path let go",
+      "gate let go, 1 recorded",
+    ]);
+    expect(storage.dump()).toEqual({ "/new.txt": "\u0001" });
+  });
+
+  it("never holds it for an upload whose body does not arrive", async () => {
+    const steps: string[] = [];
+    const storage = createMemoryStorage({});
+    const activity = activityFixture(CLOCK);
+    const files = testFileOperations({
+      activity: activity.service,
+      gate: recordingGate(steps),
+    });
+    const actor = fileActor(principal(storage), { source: "web" });
+    const gone = new Error("client went away");
+    await expect(
+      files.upload(actor, "/new.txt", arriving(steps, gone), { action: "file.upload" }),
+    ).rejects.toThrow("client went away");
+    expect(steps).toEqual([]);
+    expect(activity.outcomes.at(-1)).toMatchObject({ action: "file.upload", outcome: "unknown" });
+  });
+
+  it("leaves a body storage refused unread, and passes a cancel on to it", async () => {
+    const storage = createMemoryStorage({});
+    const files = testFileOperations({ gate: recordingGate([]) });
+    const actor = fileActor(principal(storage), { source: "web" });
+    const upload = storage.upload.bind(storage);
+    const spy = vi.spyOn(storage, "upload");
+    spy.mockRejectedValueOnce(new StorageError("conflict", "taken"));
+    const body = arriving([]);
+    await expect(files.upload(actor, "/a.txt", body, { action: "file.upload" })).rejects.toThrow(
+      "taken",
+    );
+    // Unread, so it can go to another name.
+    expect(body.locked).toBe(false);
+    await files.upload(actor, "/a (2).txt", body, { action: "file.upload" });
+    expect(storage.dump()).toEqual({ "/a (2).txt": "\u0001" });
+
+    const cancelled: unknown[] = [];
+    const source = () =>
+      new ReadableStream<Uint8Array>({
+        pull(controller) {
+          controller.enqueue(new Uint8Array([1]));
+        },
+        cancel(reason) {
+          cancelled.push(reason);
+        },
+      });
+    spy.mockImplementation(async (_path, read) => {
+      if (read instanceof ReadableStream) await read.cancel("before reading");
+      throw new StorageError("bad_request", "refused");
+    });
+    await expect(
+      files.upload(actor, "/b.txt", source(), { action: "file.upload" }),
+    ).rejects.toThrow();
+    spy.mockImplementation(async (_path, read) => {
+      if (read instanceof ReadableStream) {
+        const reader = read.getReader();
+        await reader.read();
+        await reader.cancel("while reading");
+      }
+      throw new StorageError("bad_request", "refused");
+    });
+    await expect(
+      files.upload(actor, "/c.txt", source(), { action: "file.upload" }),
+    ).rejects.toThrow();
+    expect(cancelled).toEqual(["before reading", "while reading"]);
+    spy.mockImplementation(upload);
+  });
+
+  it("holds it around every other operation, from its storage call to its last follower", async () => {
+    const h = harness({ "/a.txt": "a" }, {}, undefined, (steps) => recordingGate(steps));
+    await h.files.move(h.actor, "/a.txt", "/b.txt");
+    expect(h.steps).toEqual([
+      "gate held",
+      "access moved alice /a.txt -> /b.txt false",
+      "storage move /a.txt -> /b.txt",
+      "metadata moved /a.txt -> /b.txt",
+      "gate let go",
+    ]);
+    h.steps.length = 0;
+    await h.files.mkdir(h.actor, "/made");
+    await h.files.copy(h.actor, "/b.txt", "/c.txt");
+    // Trash's row is written inside the delete's write, before its rename.
+    const begin = h.trash.begin.bind(h.trash);
+    h.trash.begin = async (item) => {
+      h.steps.push("trash row written");
+      return begin(item);
+    };
+    const { item } = await h.files.trash(h.actor, "/c.txt");
+    const trashing = h.steps.slice(h.steps.lastIndexOf("gate held"));
+    expect(trashing.indexOf("trash row written")).toBeGreaterThan(0);
+    expect(trashing.at(-1)).toBe("gate let go");
+    await h.files.restore(h.actor, trashItemOf(item.leaf)?.id ?? "");
+    const again = await h.files.trash(h.actor, "/c.txt");
+    await h.files.purge(h.actor, trashItemOf(again.item.leaf)?.id ?? "");
+    // Each one held it, and let go before the next began.
+    const gates = h.steps.filter((step) => step.startsWith("gate"));
+    expect(gates).toEqual(Array.from({ length: 6 }, () => ["gate held", "gate let go"]).flat());
+    expect(h.steps[0]).toBe("gate held");
+    expect(h.steps.at(-1)).toBe("gate let go");
   });
 });

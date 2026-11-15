@@ -159,32 +159,37 @@ Trash is a storage capability, not application-owned snapshot history; see [Tras
 
 ## Database connections
 
-The API keeps four pools ([pools.ts](../apps/api/src/pools.ts)), and a request takes them in
+The API keeps four pools ([pools.ts](../apps/api/src/pools.ts)), and work takes them in
 this order:
 
-1. **Write gate**: each mutating request holds the backups' snapshot gate, shared, from start
-   to end, an upload's body included, so no capture's snapshot sees half a write. Used only
-   while backups are configured.
-2. **Office**: a save holds its document's lock, and a connection, while its body arrives.
+1. **Office**: a save holds its document's lock, and a connection, while its body arrives.
+2. **Write gate**: while backups are configured, a write holds the backups' snapshot gate,
+   shared, for the short section where it changes the files folder or the database in more
+   than one step, so no capture's snapshot sees half of it ([backups](BACKUPS.md#what-is-included)).
+   A file operation holds it from its storage call to its last follower, an upload from its
+   publish once its body is all here, and a Mac write for its commit (`WriteGate`). Nothing
+   holds it while a client's body arrives.
 3. **File operations**: a file operation's transaction holds the paths it changes while its
    storage call runs (a rename, a mkdir, an upload's publish, a whole copy).
 4. **Main**: everything else, backups included.
 
 Work holding a connection from one pool waits only for a connection from a pool after it, never
-from its own or one before it. A write holds the gate while it saves an Office document, the
-save holds its Office connection while its file operation publishes, the file operation holds
-its connection while storage reads the main pool, and main pool work waits for no other pool. A
-cycle of waits needs a holder that waits for its own pool or an earlier one, so none forms
-however full the pools are; their sizes only set how much runs at once. Locks keep to the same
-pools: a request waits for a document's lock with an Office connection, for a path's with a
-file operations one and for the gate with a write gate one. One kind of wait falls outside
+from its own or one before it. An Office save holds its Office connection while its upload
+publishes, the publish holds the gate while its file operation takes a connection, the file
+operation holds its connection while storage reads the main pool, and main pool work waits for
+no other pool. A cycle of waits needs a holder that waits for its own pool or an earlier one,
+so none forms however full the pools are; their sizes only set how much runs at once. Locks
+keep to the same pools: a request waits for a document's lock with an Office connection, for
+the gate with a write gate one and for a path's with a file operations one. A write inside
+another joins it instead of taking a second gate connection. One kind of wait falls outside
 this. A file operation or Office save can hold rows and locks that main pool work also takes (a
 link's row, the Office registry's lock), and main pool work then waits until that transaction
 commits. Every pool but the gate gives up on a connection after 30 seconds, so a cycle there
 ends in a failed request, not a stuck API. The gate waits as long as the writes before it take:
-a write waiting for it holds nothing yet. `connection-pools.test.ts` fills each pool with
-waiting work and checks the rest of the API still answers and everything completes; with any of
-the three on the main pool, it fails.
+none of them waits for anything a write waiting for the gate holds. `connection-pools.test.ts`
+fills each pool with waiting work and checks the rest of the API still answers and everything
+completes; with any of the three on the main pool, it fails. It also stalls more uploads than
+the gate has connections, mid-body, and checks other writes and a capture go through.
 
 The most connections each process opens at once, from `CONNECTION_BUDGET`. A test keeps the
 total within Postgres's `max_connections`, which [compose](../deploy/compose.yaml) sets to

@@ -6,6 +6,7 @@ import {
   trashItemPath,
 } from "@fdrive/core";
 import type { PendingTrashItem, TrashItem, TrashItemRepo } from "@fdrive/db";
+import { gated, ungated, type WriteGate } from "../backups/write-gate.js";
 import type { AccessFollowers } from "../files/access.js";
 import type { MetadataService } from "../metadata/service.js";
 
@@ -28,6 +29,12 @@ export interface TrashItemsDeps {
    * the rest), which follows an item that arrives, best effort.
    */
   readonly metadata?: Pick<MetadataService, "onMoved">;
+  /**
+   * The backups' write gate. Settling an item and moving one in each hold
+   * it, joining the write they run in (a delete that failed, a Mac commit),
+   * so a capture's snapshot sees an item's row and its rename together.
+   */
+  readonly gate?: WriteGate;
   readonly logger?: { warn(object: Record<string, unknown>, message: string): void };
 }
 
@@ -74,8 +81,11 @@ async function exists(storage: StorageProvider, path: string): Promise<boolean> 
 
 export function createTrashItems(deps: TrashItemsDeps): TrashItems {
   const { repo } = deps;
+  const gate = deps.gate ?? ungated;
 
-  async function settle(item: ArrivingTrashItem): Promise<void> {
+  const settle = (item: ArrivingTrashItem) => gated(gate, () => settleIn(item));
+
+  async function settleIn(item: ArrivingTrashItem): Promise<void> {
     const storage = await deps.homeOf(item.identityId);
     const leaf = trashItemPath(item.id, item.name);
     if (!(await exists(storage, leaf))) {
@@ -110,27 +120,36 @@ export function createTrashItems(deps: TrashItemsDeps): TrashItems {
     expired: (identityId, before) => repo.expired(identityId, before),
     settle,
 
-    async adopt(identityId, from, originalPath, deletedAt) {
-      const storage = await deps.homeOf(identityId);
-      const found = await storage.stat(from);
-      const kind = found.kind === "dir" ? "dir" : "file";
-      const item = await repo.begin({
-        identityId,
-        originalPath,
-        name: baseName(originalPath),
-        kind,
-        size: kind === "file" ? found.size : 0,
-        deletedAt,
-        movingFrom: from,
-      });
-      try {
-        await storage.mkdir(trashItemFolder(item.id), { parents: true });
-        await storage.move(from, trashItemPath(item.id, item.name), { overwrite: false });
-      } finally {
-        await settle(item);
-      }
-      const { movingFrom: _, ...arrived } = item;
-      return arrived;
-    },
+    adopt: (identityId, from, originalPath, deletedAt) =>
+      gated(gate, () => adoptIn(identityId, from, originalPath, deletedAt)),
   };
+
+  /** `adopt` inside its write: the row, the rename and the arrival, one gate held throughout. */
+  async function adoptIn(
+    identityId: string,
+    from: string,
+    originalPath: string,
+    deletedAt: Date,
+  ): Promise<TrashItem> {
+    const storage = await deps.homeOf(identityId);
+    const found = await storage.stat(from);
+    const kind = found.kind === "dir" ? "dir" : "file";
+    const item = await repo.begin({
+      identityId,
+      originalPath,
+      name: baseName(originalPath),
+      kind,
+      size: kind === "file" ? found.size : 0,
+      deletedAt,
+      movingFrom: from,
+    });
+    try {
+      await storage.mkdir(trashItemFolder(item.id), { parents: true });
+      await storage.move(from, trashItemPath(item.id, item.name), { overwrite: false });
+    } finally {
+      await settleIn(item);
+    }
+    const { movingFrom: _, ...arrived } = item;
+    return arrived;
+  }
 }

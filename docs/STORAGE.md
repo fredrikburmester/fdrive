@@ -98,7 +98,8 @@ How the files folder implements it:
   after, so it survives a crash once the call returns; the Mac's staged uploads are durable.
   An upload's `critical` runs only the steps that change what is at its path (creating missing
   parent folders, publishing) inside the caller's critical section, after the body is staged:
-  the file operations hold the path there, and never while a client's body arrives.
+  the file operations hold the path there, and the backups' write gate from the publish on,
+  never while a client's body arrives.
   `stat` reports the inode of a file or folder (`ino`), which a rename keeps.
 - **Uploads in pieces.** The web app sends files over 8 MiB in 8 MiB pieces (`uploadPart` for
   each piece but the last, `upload` with `part` for the last; `/fs/upload` with `part`, `offset`

@@ -95,10 +95,16 @@ Reference for affected code; shared rules live in [AGENTS.md](../AGENTS.md).
 - Office saves once took their document's lock on the main pool: saves queued behind one
   document held every connection while the save holding the lock waited for one more, and the
   API stopped. Work that holds a connection while it waits for another connection takes them
-  from pools in one order (write gate, Office, file operations, main), never from its own pool
+  from pools in one order (Office, write gate, file operations, main), never from its own pool
   ([database connections](ARCHITECTURE.md#database-connections)). Hold a connection only for
   what needs it: an upload stages its body and holds its path only to publish it
   (`critical`), so slow or stalled uploads cannot take the file operations' pool.
+- The backups' write gate was once request middleware: every mutating request held a gate
+  connection from its start to its end, a body included, so sixteen slow uploads (through a
+  public upload link, say) stopped every write, and a capture gave up after 30 seconds behind
+  any one of them. A write now holds the gate only for the section a snapshot must see whole
+  (`WriteGate`), taken where it starts: an upload's once its body is all here. A write that
+  commits in one transaction needs no gate.
 - The API keeps what every request would read again in memory: that setup is done, the Trash
   retention and the storage name. Only the API writes them, so a test (or
   anything else) that changes the Trash retention or the storage name straight in `app.settings`

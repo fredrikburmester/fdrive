@@ -33,6 +33,7 @@ import type {
   NativeActivityFacts,
 } from "@fdrive/db";
 import type { Principal } from "../auth/principal.js";
+import { gated, ungated, type WriteGate } from "../backups/write-gate.js";
 import { ApiHttpError } from "../errors.js";
 import { runStorageCall } from "../fs/routes.js";
 import type { MetadataService } from "../metadata/service.js";
@@ -153,8 +154,14 @@ export interface DesktopWriteDeps extends Pick<DesktopDeps, "clock" | "indexedCo
    * permanently does (`FileOperations.purge`).
    */
   purge: (principal: Principal, id: string) => Promise<void>;
-  /** What each login's Trash holds, by its rows. */
+  /** What each login's Trash holds, by its rows; they change inside a commit's write. */
   trash: Pick<TrashItems, "get" | "list" | "begin" | "settle">;
+  /**
+   * The backups' write gate, which a commit holds from its start to its end
+   * (`exclusive`), so a capture's snapshot sees all of it or none. A body
+   * staged for a later commit holds nothing. Absent, nothing is held.
+   */
+  gate?: WriteGate;
   /** Hears metadata that could not follow a published write, and bookkeeping left behind. */
   logger?: { warn(obj: Record<string, unknown>, msg: string): void };
 }
@@ -207,6 +214,7 @@ export function createDesktopWrites(deps: DesktopWriteDeps) {
   /** The commit or settlement under way in this process, per operation. */
   const running = new Map<string, Promise<unknown>>();
   const repo = deps.repo;
+  const gate = deps.gate ?? ungated;
   const ownerPath: OwnerPath =
     deps.ownerPath ?? (async (identityId: string, path: string) => ({ identityId, path }));
   /**
@@ -652,15 +660,16 @@ export function createDesktopWrites(deps: DesktopWriteDeps) {
     }
   }
   /**
-   * Runs `run` once no commit or settlement of the same operation is under
-   * way in this process, so the outcome of one is never read from disk
-   * halfway through by another.
+   * Runs `run`, a commit or settlement, once no other of the same operation
+   * is under way in this process, so the outcome of one is never read from
+   * disk halfway through by another. It holds the backups' write gate, and
+   * only from there: a commit waiting for another holds nothing.
    */
   async function exclusive<T>(principal: Principal, id: string, run: () => Promise<T>) {
     const key = `${principal.identityId}:${id}`;
     for (let current = running.get(key); current; current = running.get(key))
       await current.catch(() => undefined);
-    const task = run();
+    const task = gated(gate, run);
     running.set(key, task);
     try {
       return await task;

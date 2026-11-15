@@ -1,13 +1,20 @@
-import { sign } from "node:crypto";
+import { randomUUID, sign } from "node:crypto";
 import { mkdtemp, readdir, readFile, rm } from "node:fs/promises";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { SNAPSHOT_GATE } from "@fdrive/backup";
-import { OfficeOpenResponse, PUBLIC_URL_SETTINGS_KEY, ROUTES } from "@fdrive/contracts";
+import { BackupStore, captureSnapshot, inspectArchive, SNAPSHOT_GATE } from "@fdrive/backup";
+import {
+  ManagedShare,
+  OfficeOpenResponse,
+  PUBLIC_URL_SETTINGS_KEY,
+  publicShareRoute,
+  ROUTES,
+} from "@fdrive/contracts";
 import { createDb, createRepos } from "@fdrive/db";
 import { startLocalStorage, startPostgres } from "@fdrive/testkit";
+import { generateIdentity, identityToRecipient } from "age-encryption";
 import { Client } from "pg";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { composeApp } from "../../src/composition.ts";
@@ -24,7 +31,8 @@ const WOPI_URL = "http://fixture-callback/wopi";
  * held at once by work that waits: Office saves queued behind one document,
  * file operations behind a held path, and writes behind a backup taking its
  * snapshot. Each pool fills to its size, the rest of the API keeps
- * answering, and once the wait ends every request completes.
+ * answering, and once the wait ends every request completes. Uploads whose
+ * bodies stall hold none of it, and a backup goes on around them.
  */
 describe("the API's pools when full", () => {
   let postgres: Awaited<ReturnType<typeof startPostgres>>;
@@ -33,6 +41,8 @@ describe("the API's pools when full", () => {
   let editor: Server;
   let backups: string;
   let observer: Client;
+  let worker: ReturnType<typeof createDb>;
+  let identity = "";
   let cookie = "";
 
   beforeAll(async () => {
@@ -55,7 +65,13 @@ describe("the API's pools when full", () => {
       startLocalStorage({
         users: [{ username: "alice", password: "alice-pass" }],
         files: {
-          alice: { "/Docs/keep.txt": "", "/Busy/keep.txt": "", "/Gate/keep.txt": "" },
+          alice: {
+            "/Docs/keep.txt": "",
+            "/Busy/keep.txt": "",
+            "/Gate/keep.txt": "",
+            "/Inbox/keep.txt": "",
+            "/Section/keep.txt": "",
+          },
         },
       }),
     ]);
@@ -75,7 +91,7 @@ describe("the API's pools when full", () => {
         DATABASE_URL: postgres.connectionString,
         FDRIVE_STORAGE_ROOT: storage.root,
         FDRIVE_MASTER_KEY: Buffer.alloc(32, 7).toString("base64"),
-        // Backups configured: every write holds the snapshot gate.
+        // Backups configured: writes hold the snapshot gate for their sections.
         FDRIVE_BACKUP_STATE_DIR: backups,
         FDRIVE_OFFICE_PRODUCT: "onlyoffice",
         FDRIVE_OFFICE_URL: editorUrl,
@@ -86,6 +102,9 @@ describe("the API's pools when full", () => {
     );
     observer = new Client({ connectionString: postgres.connectionString });
     await observer.connect();
+    // The backup worker's own pool, which takes captures.
+    worker = createDb(postgres.connectionString, { applicationName: "fdrive backup worker" });
+    identity = await generateIdentity();
     const login = await call(ROUTES.auth.login, {
       body: { username: "alice", password: "alice-pass" },
     });
@@ -95,6 +114,7 @@ describe("the API's pools when full", () => {
 
   afterAll(async () => {
     await observer?.end();
+    await worker?.close();
     await composed?.close();
     await storage?.stop();
     await postgres?.stop();
@@ -301,5 +321,251 @@ describe("the API's pools when full", () => {
     } finally {
       if (!released) await observer.query("select pg_advisory_unlock($1)", [SNAPSHOT_GATE]);
     }
+  });
+
+  /** A body that sends its first bytes, then nothing until `arrived` settles. */
+  function stalledBody(arrived: Promise<void>, reading: () => void): ReadableStream<Uint8Array> {
+    let read = false;
+    return new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode("slow "));
+      },
+      async pull(controller) {
+        if (!read) reading();
+        read = true;
+        await arrived;
+        controller.enqueue(new TextEncoder().encode("body"));
+        controller.close();
+      },
+    });
+  }
+
+  /** An upload of `body` to `path`, by alice or, through `link`, its visitor. */
+  function upload(
+    path: string,
+    body: ReadableStream<Uint8Array> | string,
+    link?: string,
+  ): Promise<Response> {
+    const route = link === undefined ? ROUTES.fs.upload : publicShareRoute(link, "upload");
+    return Promise.resolve(
+      composed.app.request(
+        new Request(`http://fixture-app${route}?path=${encodeURIComponent(path)}`, {
+          method: "PUT",
+          headers: {
+            "x-requested-with": "fdrive",
+            "content-type": "application/octet-stream",
+            ...(link === undefined ? { cookie } : {}),
+          },
+          body,
+          duplex: "half",
+        } as RequestInit),
+      ),
+    );
+  }
+
+  /** Sessions holding the snapshot gate, and sessions waiting for it. */
+  async function gate(): Promise<{ held: number; waiting: number }> {
+    const { rows } = await observer.query<{ granted: boolean; count: number }>(
+      `select granted, count(*)::int as count from pg_locks
+       where locktype = 'advisory' and classid = 0 and objid = $1 and objsubid = 1
+       group by granted`,
+      [SNAPSHOT_GATE],
+    );
+    return {
+      held: rows.find((row) => row.granted)?.count ?? 0,
+      waiting: rows.find((row) => !row.granted)?.count ?? 0,
+    };
+  }
+
+  /** The API's connections inside a transaction or running a statement. */
+  async function busy(): Promise<number> {
+    const { rows } = await observer.query<{ count: number }>(
+      `select count(*)::int as count from pg_stat_activity
+       where application_name like 'fdrive api %' and state <> 'idle'`,
+    );
+    return rows[0]?.count ?? 0;
+  }
+
+  /**
+   * A capture as the backup worker takes one, on its own pool. Resolves to
+   * the rows of its snapshot, each column as text.
+   */
+  async function capture(): Promise<(table: string) => Record<string, string | null>[]> {
+    const id = randomUUID();
+    const output = join(backups, `${id}.age`);
+    await captureSnapshot(
+      {
+        pool: worker.pool,
+        masterKey: Buffer.alloc(32, 7).toString("base64"),
+        environment: {},
+        blobs: async () => ({ sources: [], coverage: [] }),
+      },
+      {
+        id,
+        installationId: (await new BackupStore(worker.pool).configuration()).installation_id,
+        recipient: await identityToRecipient(identity),
+        output,
+        metadataOnly: true,
+      },
+    );
+    const tables = new Map<string, Record<string, string | null>[]>();
+    await inspectArchive(output, identity, {
+      row: async (table, columns, values) => {
+        const rows = tables.get(table) ?? [];
+        rows.push(
+          Object.fromEntries(columns.map((column, at) => [column.name, values[at] ?? null])),
+        );
+        tables.set(table, rows);
+      },
+    });
+    return (table) => tables.get(table) ?? [];
+  }
+
+  /** What a snapshot holds of uploads under `prefix`: their history's states. */
+  function uploads(rows: (table: string) => Record<string, string | null>[], prefix: string) {
+    return rows("app.activity_operations")
+      .filter(
+        (row) =>
+          row.action === "file.upload" &&
+          (JSON.parse(row.requested ?? "{}") as { path?: string }).path?.startsWith(prefix),
+      )
+      .map((row) => row.state);
+  }
+
+  it("lets other writes, and a backup, go on while more uploads than the gate holds stall mid-body", async () => {
+    const share = ManagedShare.parse(
+      await ok(call(ROUTES.shares, { body: { name: "Inbox", paths: ["/Inbox"], scope: "write" } })),
+    );
+    let arrive!: () => void;
+    const arrived = new Promise<void>((resolve) => {
+      arrive = resolve;
+    });
+    let reading = 0;
+    // Half through the web, half through the public link: more than the gate has connections.
+    const count = API_POOLS.writeGate + 2;
+    const stalled = Array.from({ length: count }, (_, index) =>
+      index % 2 === 0
+        ? upload(
+            `/Inbox/web-${index}.txt`,
+            stalledBody(arrived, () => reading++),
+          )
+        : upload(
+            `/visitor-${index}.txt`,
+            stalledBody(arrived, () => reading++),
+            share.id,
+          ),
+    );
+    try {
+      await vi.waitFor(() => expect(reading).toBe(count), { timeout: 15_000, interval: 50 });
+      // Each body is arriving, and none of them holds the gate, a transaction or a lock.
+      await vi.waitFor(async () => expect(await busy()).toBe(0), { timeout: 15_000 });
+      expect(await gate()).toEqual({ held: 0, waiting: 0 });
+
+      // Other writes go through, a whole upload by a visitor among them.
+      await ok(call(ROUTES.fs.mkdir, { body: { path: "/Inbox/meanwhile" } }));
+      expect((await upload("/visitor-whole.txt", "whole", share.id)).status).toBe(200);
+      await ok(
+        call(ROUTES.fs.move, { body: { path: "/Inbox/meanwhile", target: "/Inbox/moved" } }),
+      );
+
+      // A backup goes through too, and holds none of the stalled uploads: their
+      // history is running, nothing of them is stored or counted.
+      const before = await capture();
+      expect(uploads(before, "/Inbox/web-")).toEqual(
+        Array.from({ length: count / 2 }, () => "running"),
+      );
+      expect(before("app.shares").find((row) => row.id === share.id)?.used_downloads).toBe("1");
+      // Only their partial files, which storage hides, are there yet.
+      const listed = await readdir(storage.path("alice", "/Inbox"));
+      expect(listed.filter((name) => name.startsWith(".fdrive-partial-"))).toHaveLength(count);
+      expect(listed.filter((name) => !name.startsWith(".")).sort()).toEqual([
+        "keep.txt",
+        "moved",
+        "visitor-whole.txt",
+      ]);
+
+      arrive();
+      expect((await Promise.all(stalled)).map((response) => response.status)).toEqual(
+        // The web answers 201 Created, a link the name it stored under.
+        stalled.map((_, index) => (index % 2 === 0 ? 201 : 200)),
+      );
+    } finally {
+      arrive();
+    }
+    expect(await readFile(storage.path("alice", "/Inbox/web-0.txt"), "utf8")).toBe("slow body");
+    expect(await readFile(storage.path("alice", "/Inbox/visitor-1.txt"), "utf8")).toBe("slow body");
+    // A backup taken now holds each upload whole: stored, recorded and counted.
+    const after = await capture();
+    expect(uploads(after, "/Inbox/web-")).toEqual(
+      Array.from({ length: count / 2 }, () => "completed"),
+    );
+    expect(after("app.shares").find((row) => row.id === share.id)?.used_downloads).toBe(
+      String(count / 2 + 1),
+    );
+  });
+
+  it("makes a capture wait only for writes inside their section, never for a body arriving", async () => {
+    const owner = await observer.query<{ id: string }>(
+      "select id from app.identities where username = 'alice'",
+    );
+    const key = JSON.stringify(["file-path", owner.rows[0]?.id, "/Section"]);
+    // A move out of /Section, as far as anything made inside it can tell.
+    await observer.query("select pg_advisory_lock(hashtextextended($1, 0))", [key]);
+    let arrive!: () => void;
+    const arrived = new Promise<void>((resolve) => {
+      arrive = resolve;
+    });
+    let reading = false;
+    const stalled = upload(
+      "/Docs/slow.txt",
+      stalledBody(arrived, () => {
+        reading = true;
+      }),
+    );
+    let released = false;
+    try {
+      // A folder made inside it holds the gate, in its section, waiting for the path.
+      const made = call(ROUTES.fs.mkdir, { body: { path: "/Section/made" } });
+      await vi.waitFor(() => expect(reading).toBe(true), { timeout: 15_000 });
+      await vi.waitFor(async () => expect(await gate()).toEqual({ held: 1, waiting: 0 }), {
+        timeout: 15_000,
+      });
+      let captured = false;
+      const taking = capture().then((rows) => {
+        captured = true;
+        return rows;
+      });
+      // The capture waits for the folder, not for the upload's body.
+      await vi.waitFor(async () => expect(await gate()).toEqual({ held: 1, waiting: 1 }), {
+        timeout: 15_000,
+      });
+      expect(captured).toBe(false);
+      // Reads go on meanwhile.
+      expect((await call(`${ROUTES.fs.list}?path=${encodeURIComponent("/Docs")}`)).status).toBe(
+        200,
+      );
+
+      await observer.query("select pg_advisory_unlock(hashtextextended($1, 0))", [key]);
+      released = true;
+      expect((await made).status).toBe(201);
+      // The capture saw the folder's write whole, while the upload's body still arrives.
+      const rows = await taking;
+      const folders = rows("app.activity_operations").filter(
+        (row) =>
+          row.action === "folder.create" &&
+          (JSON.parse(row.requested ?? "{}") as { path?: string }).path === "/Section/made",
+      );
+      expect(folders.map((row) => row.state)).toEqual(["completed"]);
+      expect(uploads(rows, "/Docs/slow.txt")).toEqual(["running"]);
+      expect(reading).toBe(true);
+
+      arrive();
+      expect((await stalled).status).toBe(201);
+    } finally {
+      arrive();
+      if (!released)
+        await observer.query("select pg_advisory_unlock(hashtextextended($1, 0))", [key]);
+    }
+    expect(await readFile(storage.path("alice", "/Docs/slow.txt"), "utf8")).toBe("slow body");
   });
 });

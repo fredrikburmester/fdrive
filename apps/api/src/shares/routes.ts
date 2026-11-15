@@ -25,6 +25,7 @@ import type { AppHono, AuthedHono } from "../app.ts";
 import { accountContext } from "../auth/account-context.ts";
 import { withoutApiV1Prefix } from "../auth/routes.ts";
 import { cookieSecureFor } from "../auth/sessions.ts";
+import { gated, ungated, type WriteGate } from "../backups/write-gate.ts";
 import type { AppConfig } from "../config.ts";
 import { DEFAULT_ARCHIVE_PEEK_MAX_BYTES } from "../config.ts";
 import { ApiHttpError } from "../errors.ts";
@@ -200,6 +201,11 @@ export function registerSharesRoutes(
     service: SharesService;
     /** Records share mutations. Passwords and secret URLs are never facts. */
     activity?: PersonalActivityService;
+    /**
+     * The backups' write gate, held while a change and its history commit, so
+     * a capture's snapshot never holds one without the other.
+     */
+    gate?: WriteGate;
     thumbnailsEnabled?: () => Promise<boolean>;
     codec: ShareCredentialCodec;
     limiter: ShareLimiter;
@@ -216,26 +222,29 @@ export function registerSharesRoutes(
   const pub = `${withoutApiV1Prefix(ROUTES.publicShares)}/:id`;
   const thumbFileReader = deps.fileReader ?? createNodeThumbFileReader();
   const owner = (c: Parameters<typeof accountContext>[0]) => accountContext(c).principal.identityId;
+  const gate = deps.gate ?? ungated;
   groups.authed.get(base, (c) => shareCall(async () => c.json(await deps.service.list(owner(c)))));
   groups.authed.post(base, (c) =>
     shareCall(async () => {
       const identityId = owner(c);
       const body = await publicBody(CreateShareRequest, c, 32 * 1024 * 1024);
       return c.json(
-        await recordFsAction(
-          deps.activity,
-          c,
-          {
-            action: "share.create",
-            requested: {
-              ...(body.paths[0] ? { path: body.paths[0] } : {}),
-              permissions: [body.scope],
-              expiresAt: body.expiresAt ?? null,
+        await gated(gate, () =>
+          recordFsAction(
+            deps.activity,
+            c,
+            {
+              action: "share.create",
+              requested: {
+                ...(body.paths[0] ? { path: body.paths[0] } : {}),
+                permissions: [body.scope],
+                expiresAt: body.expiresAt ?? null,
+              },
+              subjects: body.paths.map((path) => ({ path, identityId })),
             },
-            subjects: body.paths.map((path) => ({ path, identityId })),
-          },
-          () => deps.service.create(identityId, body),
-          (share) => ({ shareId: share.id, ...shareFacts(share) }),
+            () => deps.service.create(identityId, body),
+            (share) => ({ shareId: share.id, ...shareFacts(share) }),
+          ),
         ),
         201,
       );
@@ -250,20 +259,22 @@ export function registerSharesRoutes(
       const identityId = owner(c);
       const row = await deps.service.owned(identityId, shareId(c));
       const patch = await publicBody(UpdateShareRequest, c, 32 * 1024 * 1024);
-      const updated = await recordFsAction(
-        deps.activity,
-        c,
-        {
-          action: "share.update",
-          requested: { ...(row.paths[0] ? { path: row.paths[0] } : {}), shareId: row.id },
-          before: shareFacts(row),
-          subjects: [...new Set([...row.paths, ...(patch.paths ?? [])])].map((path) => ({
-            path,
-            identityId,
-          })),
-        },
-        () => deps.service.update(row, patch),
-        (share) => ({ shareId: share.id, ...shareFacts(share) }),
+      const updated = await gated(gate, () =>
+        recordFsAction(
+          deps.activity,
+          c,
+          {
+            action: "share.update",
+            requested: { ...(row.paths[0] ? { path: row.paths[0] } : {}), shareId: row.id },
+            before: shareFacts(row),
+            subjects: [...new Set([...row.paths, ...(patch.paths ?? [])])].map((path) => ({
+              path,
+              identityId,
+            })),
+          },
+          () => deps.service.update(row, patch),
+          (share) => ({ shareId: share.id, ...shareFacts(share) }),
+        ),
       );
       return c.json(updated);
     }),
@@ -273,16 +284,18 @@ export function registerSharesRoutes(
       const identityId = owner(c);
       const row = await deps.service.owned(identityId, shareId(c));
       const { path: _path, ...before } = shareFacts(row);
-      await recordFsAction(
-        deps.activity,
-        c,
-        {
-          action: "share.revoke",
-          requested: { shareId: row.id, ...(row.paths[0] ? { path: row.paths[0] } : {}) },
-          before,
-          subjects: row.paths.map((path) => ({ path, identityId })),
-        },
-        () => deps.service.remove(row),
+      await gated(gate, () =>
+        recordFsAction(
+          deps.activity,
+          c,
+          {
+            action: "share.revoke",
+            requested: { shareId: row.id, ...(row.paths[0] ? { path: row.paths[0] } : {}) },
+            before,
+            subjects: row.paths.map((path) => ({ path, identityId })),
+          },
+          () => deps.service.remove(row),
+        ),
       );
       return c.json({ ok: true });
     }),

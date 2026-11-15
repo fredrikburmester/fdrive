@@ -1,4 +1,3 @@
-import { withDatabaseWriter } from "@fdrive/backup";
 import { indexerEnabled } from "@fdrive/contracts";
 import {
   CHANGES_CHANNEL,
@@ -52,6 +51,7 @@ import { buildUserStorage, createIdentityStorageFactory } from "./auth/storage-f
 import { createBackupModule } from "./backups/module.js";
 import { createRecoveryApp } from "./backups/recovery.js";
 import { registerBackupRoutes } from "./backups/routes.js";
+import { ungated, writeGate } from "./backups/write-gate.js";
 import { type AppConfig, mlUnitUrl } from "./config.js";
 import { type Subsystem, type SubsystemProbe, startupSummaryLines } from "./config-keys.js";
 import { createDesktopChanges } from "./desktop/changes.js";
@@ -184,6 +184,10 @@ export async function composeApp(
     logger.warn({ err: error, pool: name }, "idle database connection error"),
   );
   const { db, pool } = pools.main;
+  // While backups are configured, each write that changes the files folder
+  // or the database in more than one step holds the backups' snapshot gate
+  // for that section alone, never while a body arrives (backups/write-gate.ts).
+  const gate = config.fdriveBackupStateDir ? writeGate(pools.writeGate.pool) : ungated;
   await migrate(db);
   const repos = createRepos(db);
   const restored = await repos.settings.get("backup.restore.v1");
@@ -277,6 +281,7 @@ export async function composeApp(
     repos,
     checkPassword,
     passwords,
+    gate,
     clock,
     eventLog,
     usage: homeUsage,
@@ -405,6 +410,7 @@ export async function composeApp(
     access,
     homeOf,
     metadata: fileMetadata,
+    gate,
     logger,
   });
   // Before anyone is served, so nothing else is on its way into Trash.
@@ -426,6 +432,7 @@ export async function composeApp(
   const files = createFileOperations({
     activity: personalActivity,
     access,
+    gate,
     metadata: fileMetadata,
     ownerPath: localGrants.ownerPath,
     trash,
@@ -541,6 +548,7 @@ export async function composeApp(
     operations: files,
     metadata: metadataService,
     activity: personalActivity,
+    gate,
   });
 
   // The API's one reader of the change journal: every change to the files
@@ -747,22 +755,6 @@ export async function composeApp(
   });
 
   const app = createApp({
-    ...(config.fdriveBackupStateDir
-      ? {
-          requestGate: async (path: string, method: string, work: () => Promise<void>) => {
-            if (
-              ["GET", "HEAD", "OPTIONS"].includes(method) ||
-              path.includes("/system/backups") ||
-              path.includes("/setup/") ||
-              path.includes("/health") ||
-              path.includes("/about") ||
-              path.includes("/internal/")
-            )
-              return work();
-            await withDatabaseWriter(pools.writeGate.pool, work);
-          },
-        }
-      : {}),
     config,
     logger,
     clock,
@@ -814,6 +806,7 @@ export async function composeApp(
             await files.purge(fileActor(principal, { source: "native" }), id);
           },
           trash,
+          gate,
           logger,
           storageForIdentity: storageFactory,
         }),
@@ -827,11 +820,13 @@ export async function composeApp(
       });
       registerSharesRoutes(groups, {
         activity: personalActivity,
+        gate,
         thumbnailsEnabled: () => featureService.enabled("thumbnails"),
         service: createSharesService({
           shares: shareRepo,
           storageFor: storageFactory,
           files,
+          gate,
           passwords,
           zipLimits: { maxBytes: config.fdriveJobMaxBytes },
           clock,
@@ -953,6 +948,7 @@ export async function composeApp(
         settings: repos.settings,
         systemEvents: repos.systemEvents,
         eventLog,
+        gate,
         indexQueries,
         thumbnailsRepo,
         indexerClient,

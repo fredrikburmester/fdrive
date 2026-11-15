@@ -14,6 +14,7 @@ import {
   parentPath,
 } from "@fdrive/core";
 import { officeFileActor, recordOfficeOpen } from "../activity/office.js";
+import { gated, ungated } from "../backups/write-gate.js";
 import { sendFile } from "../fs/send-file.ts";
 import { browserActor, callbackFile, requireOfficeEdit } from "./auth.ts";
 import { officeErrorResponse, WopiError } from "./errors.ts";
@@ -216,8 +217,10 @@ export function createOfficeService(deps: OfficeDeps) {
         file,
         request.mode === "view" ? "view" : "edit",
       );
-      await recordOfficeOpen(deps, actor, request.path, file.id, () =>
-        deps.metadata.touchRecent(actor.identity.id, request.path),
+      await gated(deps.gate ?? ungated, () =>
+        recordOfficeOpen(deps, actor, request.path, file.id, () =>
+          deps.metadata.touchRecent(actor.identity.id, request.path),
+        ),
       );
       return {
         fileId: file.id,

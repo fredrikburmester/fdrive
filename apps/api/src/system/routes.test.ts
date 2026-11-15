@@ -19,6 +19,7 @@ import { createMemoryStorage } from "@fdrive/core/testing";
 import type { IndexQueries } from "@fdrive/db";
 import { createMemoryRepos } from "@fdrive/db/testing";
 import { describe, expect, it, vi } from "vitest";
+import { recordingGate } from "../../test/recording-gate.js";
 import { createApp } from "../app.js";
 import type { Principal } from "../auth/principal.js";
 import { loadConfig } from "../config.js";
@@ -927,6 +928,48 @@ describe("PUT /system/ocr/settings", () => {
     expect(res.status).toBe(200);
     expect(body.values).toEqual(patch);
     expect(await settings.get("ocr.hour")).toBe(4);
+  });
+});
+
+describe("settings saved together", () => {
+  it("are written in one write under the backups' write gate", async () => {
+    const steps: string[] = [];
+    let written = 0;
+    const { app, settings } = buildApp({
+      deps: { gate: recordingGate(steps, () => `gate let go, ${written} written`) },
+    });
+    const set = settings.set.bind(settings);
+    vi.spyOn(settings, "set").mockImplementation(async (key, value) => {
+      await set(key, value);
+      written++;
+    });
+    const put = (path: string, body: unknown) =>
+      app.request(path, {
+        method: "PUT",
+        headers: { "content-type": "application/json", "x-requested-with": "fdrive" },
+        body: JSON.stringify(body),
+      });
+    const indexer = await put("/api/v1/system/indexer/settings", {
+      scanIntervalSeconds: 60,
+      workers: 2,
+      textExcludeGlobs: [],
+      ocrImageGlobs: [],
+      tesseractLangs: "eng",
+    });
+    expect(indexer.status).toBe(200);
+    expect(steps).toEqual(["gate held", `gate let go, ${written} written`]);
+    const before = written;
+    const ocr = await put("/api/v1/system/ocr/settings", {
+      hour: 4,
+      langs: "eng",
+      excludeGlobs: [],
+      maxMb: 100,
+      keepOriginals: true,
+      originalsRetentionDays: 90,
+    });
+    expect(ocr.status).toBe(200);
+    expect(written).toBeGreaterThan(before);
+    expect(steps.slice(2)).toEqual(["gate held", `gate let go, ${written} written`]);
   });
 });
 

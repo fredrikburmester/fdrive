@@ -2,13 +2,15 @@ import { StorageError, trashItemPath } from "@fdrive/core";
 import { createMemoryStorage } from "@fdrive/core/testing";
 import { describe, expect, it, vi } from "vitest";
 import { memoryAccessRepo, testAccessFollowers } from "../../test/file-operations.js";
+import { recordingGateOnPool } from "../../test/recording-gate.js";
 import { memoryTrashItemRepo } from "../../test/trash-items.js";
+import { gated, type WriteGate } from "../backups/write-gate.js";
 import { createTrashItems } from "./items.js";
 
 const ALICE = "00000000-0000-4000-8000-0000000000a1";
 const AT = new Date("2026-10-01T12:00:00.000Z");
 
-function setup(files: Record<string, string> = {}) {
+function setup(files: Record<string, string> = {}, gate?: WriteGate) {
   const storage = createMemoryStorage(files);
   const repo = memoryTrashItemRepo();
   const links = { movePrefix: vi.fn(async () => {}), deletePrefix: vi.fn(async () => {}) };
@@ -21,6 +23,7 @@ function setup(files: Record<string, string> = {}) {
     homeOf: async () => storage,
     metadata,
     logger,
+    ...(gate === undefined ? {} : { gate }),
   });
   return { storage, repo, accessRepo, links, metadata, logger, items };
 }
@@ -128,5 +131,35 @@ describe("TrashItems.adopt", () => {
     await expect(h.items.adopt(ALICE, "/missing", "/missing", AT)).rejects.toMatchObject({
       kind: "not_found",
     });
+  });
+});
+
+describe("TrashItems and the backups' write gate", () => {
+  it("moves an item in, row and rename, inside one hold of the gate", async () => {
+    const steps: string[] = [];
+    const { gate, connections } = recordingGateOnPool(steps);
+    const h = setup({ "/.fdrive-desktop/mac/trash/x": "todo" }, gate);
+    const begin = h.repo.begin.bind(h.repo);
+    h.repo.begin = async (item) => {
+      steps.push("row written");
+      return begin(item);
+    };
+    h.metadata.onMoved.mockImplementation(async () => {
+      steps.push("followed");
+    });
+    await h.items.adopt(ALICE, "/.fdrive-desktop/mac/trash/x", "/todo.md", AT);
+    expect(steps).toEqual(["gate held", "row written", "followed", "gate let go"]);
+    expect(connections()).toBe(1);
+  });
+
+  it("settles inside the write it runs in, taking no second connection", async () => {
+    const steps: string[] = [];
+    const { gate, connections } = recordingGateOnPool(steps);
+    const h = setup({}, gate);
+    const item = await h.repo.begin(pendingFrom("/a.txt", "a.txt"));
+    await gated(gate, () => h.items.settle(item));
+    expect(steps).toEqual(["gate held", "gate let go"]);
+    expect(connections()).toBe(1);
+    expect(h.repo.rows.size).toBe(0);
   });
 });
