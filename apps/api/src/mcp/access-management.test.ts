@@ -162,7 +162,15 @@ it("reads provider-backed text, bytes and metadata without index access, includi
   });
   expect(await liveFileInfo(deps, principal, "/allowed/version.1")).toMatchObject({
     kind: "dir",
+    mime: null,
     url: "https://drive.example/files/allowed/version.1",
+  });
+  // A file's type comes from its name, and its modification time is always known.
+  expect(await liveFileInfo(deps, principal, "/allowed/a.txt")).toMatchObject({
+    kind: "file",
+    size_bytes: 5,
+    mime: "text/plain",
+    modified: new Date(0).toISOString(),
   });
   expect(deps.indexed).not.toHaveBeenCalled();
   const first = await runListDirectory(deps, principal, { path: "/allowed", limit: 1 });
@@ -208,7 +216,7 @@ it("bounds streams even when a provider understates content size and cancels on 
   await expect(readStoredFile(deps, principal, "/allowed/a.txt")).rejects.toThrow("limit");
   download.mockResolvedValueOnce({
     ...response,
-    contentLength: null,
+    contentLength: 1,
     body: new ReadableStream({
       start(c) {
         c.enqueue(new Uint8Array(MAX_FILE_BYTES + 1));

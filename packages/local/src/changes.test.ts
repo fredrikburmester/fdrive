@@ -158,12 +158,10 @@ describe("local storage changes", () => {
 
   it("reports an upload sent in pieces once, with the digest of the whole file", async () => {
     const files = storage();
-    const piece = (offset: number, final = false) => ({
-      part: { id: "0123456789abcdef", offset, final },
-    });
-    await files.upload("/a.txt", bytes("hello "), piece(0));
+    const piece = (offset: number) => ({ part: { id: "0123456789abcdef", offset } });
+    await files.uploadPart("/a.txt", bytes("hello "), piece(0));
     expect(changes).toEqual([]);
-    await files.upload("/a.txt", streamOf(["world"]), piece(6, true));
+    await files.upload("/a.txt", streamOf(["world"]), piece(6));
     const a = await stat(join(home(), "a.txt"), { bigint: true });
     expect(changes).toEqual([
       {
@@ -219,7 +217,7 @@ describe("local storage changes", () => {
     expect(await readFile(join(home(), "a.txt"), "utf8")).toBe("ab");
   });
 
-  it("reports moves, copies, deletes, new times and new folders", async () => {
+  it("reports moves, copies, deletes and new folders", async () => {
     const files = storage();
     await files.mkdir("/dir");
     await files.upload("/dir/a.txt", bytes("a"));
@@ -229,7 +227,6 @@ describe("local storage changes", () => {
     const after = await stat(join(home(), "dir", "b.txt"), { bigint: true });
     await files.copy("/dir", "/copy");
     await files.copy("/dir/b.txt", "/c.txt");
-    await files.setModifiedAt?.("/c.txt", new Date("2020-01-01T00:00:00Z"));
     await files.deleteFile("/c.txt");
     await files.deleteDir("/copy");
     await files.deleteDir("/");
@@ -249,7 +246,6 @@ describe("local storage changes", () => {
         },
       },
       { kind: "changed", path: join(home(), "copy") },
-      { kind: "changed", path: join(home(), "c.txt") },
       { kind: "changed", path: join(home(), "c.txt") },
       { kind: "changed", path: join(home(), "c.txt") },
       { kind: "changed", path: join(home(), "copy") },
@@ -276,9 +272,7 @@ describe("local storage changes", () => {
     expect(await kindOf(files.move("/missing", "/x"))).toBe("not_found");
     expect(await kindOf(files.copy("/missing", "/x"))).toBe("not_found");
     expect(await kindOf(files.deleteFile("/missing"))).toBe("not_found");
-    expect(await kindOf(files.setModifiedAt?.("/link.txt", new Date(0)) ?? Promise.resolve())).toBe(
-      "forbidden",
-    );
+    expect(await kindOf(files.deleteFile("/link.txt"))).toBe("forbidden");
     expect(changes).toEqual([]);
   });
 });

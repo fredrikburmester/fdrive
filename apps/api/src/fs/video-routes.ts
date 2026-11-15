@@ -78,7 +78,7 @@ export function registerVideoRoutes(groups: { authed: AuthedHono }): void {
     const file = await runStorageCall(() =>
       principal.storage.download(path, { signal: c.req.raw.signal }),
     );
-    if ((file.contentLength ?? 0) > SUBTITLES_MAX_BYTES) {
+    if (file.contentLength > SUBTITLES_MAX_BYTES) {
       await file.body.cancel();
       throw new ApiHttpError("payload_too_large", "subtitle file is too large");
     }

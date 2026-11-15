@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { StorageError } from "@fdrive/core";
-import { createMemoryStorage } from "@fdrive/core/testing";
+import { createMemoryStorage, entryStat } from "@fdrive/core/testing";
 import type { ActivityObservationsRepo } from "@fdrive/db";
 import { describe, expect, it, vi } from "vitest";
 import { createActivityObservations } from "./observations.js";
@@ -104,15 +104,10 @@ describe("activity observations of changes made outside fdrive", () => {
         after: expect.objectContaining({ path: "/a.txt", kind: "file", size: 1 }),
       }),
     );
-    await h.service.present(h.actor, "/d", {
-      kind: "dir",
-      size: 0,
-      modifiedAt: null,
-      contentType: null,
-    });
+    await h.service.present(h.actor, "/d", entryStat("/d", { kind: "dir" }));
     expect(h.repo.observe.mock.calls.at(-1)?.[0].after).toMatchObject({
       kind: "dir",
-      modifiedAt: null,
+      modifiedAt: new Date(0).toISOString(),
     });
   });
 });

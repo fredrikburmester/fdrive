@@ -43,7 +43,6 @@ import {
   DESKTOP_INTERNAL_ROOT,
   DESKTOP_PAGE_SIZE,
   digestFile,
-  stampOf,
   storedEntry,
 } from "./files.js";
 import type { DesktopDeps } from "./pairing.js";
@@ -200,8 +199,7 @@ function settled(result: Record<string, unknown> | null) {
 async function entryAt(storage: StorageProvider, path: string) {
   try {
     const found = await storage.stat(path);
-    if (found.ino === undefined) throw Error("This storage keeps no inodes");
-    return (found.path ?? path) === path ? { kind: found.kind, ino: found.ino } : null;
+    return found.path === path ? { kind: found.kind, ino: found.ino } : null;
   } catch (error) {
     if (isStorageError(error) && error.kind === "not_found") return null;
     throw error;
@@ -273,7 +271,7 @@ export function createDesktopWrites(deps: DesktopWriteDeps) {
     witness: ContentStamp,
     inodeOnly = false,
   ) {
-    const now = await stampOf(storage, path).catch((error: unknown) => {
+    const now = await storage.contentStamp(path).catch((error: unknown) => {
       if (isStorageError(error) && error.kind === "not_found") return undefined;
       throw error;
     });
@@ -553,7 +551,7 @@ export function createDesktopWrites(deps: DesktopWriteDeps) {
     if (current.version.metadata !== base.metadata)
       fail("version_conflict", "This item changed remotely. Your pending copy is preserved.");
     if (live.kind !== "file") return null;
-    if (!save) return runStorageCall(() => stampOf(principal.storage, item.path));
+    if (!save) return runStorageCall(() => principal.storage.contentStamp(item.path));
     const { stamp, version } = await files.proven(principal, item.path);
     if (version !== base.content) fail("version_conflict", CHANGED);
     return stamp;

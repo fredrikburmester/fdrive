@@ -38,7 +38,7 @@ export async function readStoredFile(
   const stat = await principal.storage.statFile(path);
   if (stat.size > MAX_FILE_BYTES) throw new Error(`file exceeds the ${MAX_FILE_BYTES} byte limit`);
   const result = await principal.storage.download(path, { signal: AbortSignal.timeout(30_000) });
-  if (result.contentLength !== null && result.contentLength > MAX_FILE_BYTES) {
+  if (result.contentLength > MAX_FILE_BYTES) {
     await result.body.cancel();
     throw new Error(`file exceeds the ${MAX_FILE_BYTES} byte limit`);
   }
@@ -135,8 +135,8 @@ export async function liveFileInfo(deps: McpToolDeps, principal: TokenPrincipal,
     size_bytes: stat.size,
     identical_copies: [] as string[],
     partial: true,
-    modified: stat.modifiedAt?.toISOString() ?? null,
-    mime: stat.contentType,
+    modified: stat.modifiedAt.toISOString(),
+    mime: mimeFromExtension(stat.ext),
     url: stat.kind === "dir" ? folderUrl(publicUrl, path) : fileUrl(publicUrl, path),
   };
 }

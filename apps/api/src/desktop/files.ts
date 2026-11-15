@@ -1,8 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import type { DesktopEntry } from "@fdrive/contracts";
 import {
-  baseName,
-  type ContentStamp,
   DESKTOP_INTERNAL_ROOT,
   type FileEntry,
   isReservedPath,
@@ -40,25 +38,15 @@ export { DESKTOP_INTERNAL_ROOT };
  */
 export async function storedEntry(storage: StorageProvider, path: string): Promise<DesktopEntry> {
   const found = await runStorageCall(() => storage.stat(path));
-  if ((found.path ?? path) !== path) throw new ApiHttpError("not_found", "Item no longer exists");
+  if (found.path !== path) throw new ApiHttpError("not_found", "Item no longer exists");
   return {
     path,
-    name: baseName(path),
+    name: found.name,
     kind: found.kind,
     size: found.size,
-    modifiedAt: (found.modifiedAt ?? new Date(0)).toISOString(),
+    modifiedAt: found.modifiedAt.toISOString(),
     readable: found.kind === "file" || found.kind === "dir",
   };
-}
-
-/**
- * What the file at `path` is right now (`ContentStamp`). The files folder
- * always answers; a storage without stamps cannot prove a Mac write.
- */
-export async function stampOf(storage: StorageProvider, path: string): Promise<ContentStamp> {
-  const read = storage.contentStamp;
-  if (read === undefined) throw Error("This storage keeps no file stamps");
-  return read.call(storage, path);
 }
 
 /** The sha256 and length of the file at `path`, from one full read. */
@@ -79,7 +67,7 @@ export async function digestFile(storage: StorageProvider, path: string, signal?
     await reader.cancel().catch(() => undefined);
     reader.releaseLock();
   }
-  if (download.contentLength !== null && size !== download.contentLength)
+  if (size !== download.contentLength)
     throw new ApiHttpError("upstream_unavailable", "Incomplete content validation");
   return { sha256: sha.digest("hex"), size };
 }
@@ -148,8 +136,7 @@ export function createDesktopFiles(
    * refuse in their turn, as before.
    */
   async function indexedRows(principal: Principal, paths: readonly string[]) {
-    if (deps.indexedContent === undefined || principal.storage.contentStamp === undefined)
-      return new Map();
+    if (deps.indexedContent === undefined) return new Map();
     const readable = paths.flatMap((raw) => {
       try {
         const path = normalizePath(raw);
@@ -163,8 +150,7 @@ export function createDesktopFiles(
   /** A file's version from its index row, when the row provably describes the file now. */
   async function indexed(principal: Principal, path: string, row: IndexedContent | undefined) {
     if (row === undefined) return null;
-    // `indexedRows` finds rows only where storage has stamps.
-    const stamp = await runStorageCall(() => stampOf(principal.storage, path));
+    const stamp = await runStorageCall(() => principal.storage.contentStamp(path));
     const version = indexedVersion(row, stamp);
     return version === null ? null : { path, size: stamp.size, version };
   }
@@ -185,7 +171,7 @@ export function createDesktopFiles(
      */
     async proven(principal: Principal, path: string) {
       const rows = await indexedRows(principal, [path]);
-      const stamp = await runStorageCall(() => stampOf(principal.storage, path));
+      const stamp = await runStorageCall(() => principal.storage.contentStamp(path));
       const version =
         indexedVersion(rows.get(path), stamp) ??
         (await runStorageCall(() => digestFile(principal.storage, path))).sha256;
@@ -216,7 +202,7 @@ export function createDesktopFiles(
         if (offset >= snapshot.entries.length || offset % DESKTOP_PAGE_SIZE !== 0)
           throw new ApiHttpError("bad_request", "Invalid folder continuation");
         await runStorageCall(async () => {
-          await (principal.storage.probeDirectoryRead?.(path) ?? principal.storage.list(path));
+          await principal.storage.probeDirectoryRead(path);
         });
       } else {
         const live = await runStorageCall(() => principal.storage.list(path));

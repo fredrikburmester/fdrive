@@ -212,7 +212,7 @@ read from their own position (see the [change journal plan](plans/CHANGE-JOURNAL
 
 1. **The change journal.** fdrive's API writes the files folder, apart from OCR and the
    host's own tools. After each change it makes (an upload, a move or rename, a copy, a
-   delete, Trash and restore, an Office save, a new modification time, a new folder) it
+   delete, Trash and restore, an Office save, a new folder) it
    appends a row to `idx.changes` with source `api` and sends `NOTIFY idx_changes` with the
    root's name (`createChangeJournal` in `packages/db`, fed by local storage's change
    listener). The OCR service does the same, with source `ocr`, when it replaces a PDF with

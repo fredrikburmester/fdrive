@@ -1,8 +1,10 @@
 import { randomUUID } from "node:crypto";
 import type { ActivityFacts, MoveManyRequest, MoveManyResult } from "@fdrive/contracts";
 import {
+  type EntryStat,
   isStorageError,
   isUnderPath,
+  type MadeFolder,
   parentPath,
   parseMoveTrashLeaf,
   StorageError,
@@ -11,10 +13,13 @@ import {
   type TrashedItem,
   type TrashRestoreResult,
   trashLeafPath,
+  type UploadOptions,
+  type UploadPartOptions,
 } from "@fdrive/core";
 import type { ActivityCallContext } from "../activity/fs-context.ts";
 import {
   type ActivityRunInput,
+  activityFacts,
   activityStat,
   type PersonalActivityService,
 } from "../activity/service.ts";
@@ -56,7 +61,6 @@ export interface FileOperationDone {
 }
 
 type UploadBody = Parameters<StorageProvider["upload"]>[1];
-type UploadOptions = NonNullable<Parameters<StorageProvider["upload"]>[2]>;
 
 export interface FileUploadOptions extends UploadOptions {
   readonly action: "file.upload" | "file.create" | "file.save" | "file.copy";
@@ -68,29 +72,42 @@ export interface FileUploadOptions extends UploadOptions {
 }
 
 export interface FileOperations {
+  /** Uploads a file, or the last piece of one sent in several calls, and reports the file. */
   upload(
     actor: FileActor,
     path: string,
     body: UploadBody,
     options: FileUploadOptions,
-  ): Promise<FileOperationDone>;
+  ): Promise<FileOperationDone & { entry: EntryStat }>;
+  /**
+   * A piece of an upload before the last: it only grows the upload's part,
+   * so nothing is recorded or announced until `upload` publishes it.
+   */
+  uploadPart(
+    actor: FileActor,
+    path: string,
+    body: UploadBody,
+    options: UploadPartOptions,
+  ): Promise<void>;
   mkdir(
     actor: FileActor,
     path: string,
     options?: { parents?: boolean },
-  ): Promise<FileOperationDone>;
+  ): Promise<FileOperationDone & { entry: MadeFolder }>;
+  /** Moves or renames an item and reports it where it is now. */
   move(
     actor: FileActor,
     path: string,
     target: string,
     options?: { action?: "file.move" | "file.rename"; createParents?: boolean },
-  ): Promise<FileOperationDone & { kind: "file" | "dir" }>;
+  ): Promise<FileOperationDone & { entry: EntryStat }>;
+  /** Copies an item and reports the copy. */
   copy(
     actor: FileActor,
     path: string,
     target: string,
     options?: { variant?: "duplicate" },
-  ): Promise<FileOperationDone & { kind: "file" | "dir" }>;
+  ): Promise<FileOperationDone & { entry: EntryStat }>;
   trash(actor: FileActor, path: string): Promise<FileOperationDone & { item: TrashedItem }>;
   restore(
     actor: FileActor,
@@ -216,28 +233,9 @@ export function createFileOperations(deps: FileOperationsDeps): FileOperations {
     return { ...value, ...warning, ...(history ? { history } : {}) };
   }
 
-  /** Creates the target's missing parent folders, once the source was checked. */
-  async function ensureParent(storage: StorageProvider, target: string): Promise<void> {
-    const parent = parentPath(target);
-    if (parent === "/") return;
-    try {
-      await storage.stat(parent);
-      return;
-    } catch (error) {
-      if (!isStorageError(error) || error.kind !== "not_found") throw error;
-    }
-    await storage.mkdir(parent, { parents: true });
-  }
-
   return {
     async upload(actor, path, body, options) {
       const { action, from, ...storageOptions } = options;
-      // A piece before the last only grows the upload's part; the last one
-      // publishes the file as one upload.
-      if (storageOptions.part?.final === false) {
-        await actor.storage.upload(path, body, storageOptions);
-        return {};
-      }
       const subject = from ?? path;
       const before = actor.recorded ? await activityStat(actor.storage, subject) : undefined;
       const requested: ActivityFacts =
@@ -248,7 +246,7 @@ export function createFileOperations(deps: FileOperationsDeps): FileOperations {
               targetPath: path,
               ...(action === "file.copy" ? { variant: "save_as" as const } : {}),
             };
-      const { history } = await record(
+      const { value: entry, history } = await record(
         actor,
         { action, requested, ...(before ? { before } : {}) },
         () =>
@@ -258,23 +256,17 @@ export function createFileOperations(deps: FileOperationsDeps): FileOperations {
             critical: (work) =>
               deps.access.run(actor.identityId, { creates: [path] }, () => work()),
           }),
-        async () =>
-          (await activityStat(actor.storage, path)) ?? {
-            path,
-            kind: "file",
-            ...(storageOptions.contentLength === undefined
-              ? {}
-              : { size: storageOptions.contentLength }),
-            ...(storageOptions.modifiedAt
-              ? { modifiedAt: storageOptions.modifiedAt.toISOString() }
-              : {}),
-          },
+        (entry) => activityFacts(path, entry),
       );
-      return done({}, history);
+      return done({ entry }, history);
+    },
+
+    uploadPart(actor, path, body, options) {
+      return actor.storage.uploadPart(path, body, options);
     },
 
     async mkdir(actor, path, options) {
-      const { history } = await record(
+      const { value: entry, history } = await record(
         actor,
         { action: "folder.create", requested: { path, kind: "dir" } },
         () =>
@@ -282,7 +274,7 @@ export function createFileOperations(deps: FileOperationsDeps): FileOperations {
             actor.storage.mkdir(path, options),
           ),
       );
-      return done({}, history);
+      return done({ entry }, history);
     },
 
     async move(actor, path, target, options = {}) {
@@ -291,7 +283,7 @@ export function createFileOperations(deps: FileOperationsDeps): FileOperations {
       // Checked first, so a move that cannot happen leaves no new empty folder behind.
       const before = await activityStat(storage, path);
       const kind = before?.kind === "file" ? "file" : "dir";
-      const { history } = await record(
+      const { value: entry, history } = await record(
         actor,
         {
           action,
@@ -299,19 +291,22 @@ export function createFileOperations(deps: FileOperationsDeps): FileOperations {
           ...(before ? { before } : {}),
         },
         async () => {
-          if (!relocates("move", path, target)) return;
-          await deps.access.run(
+          // Moving an item onto itself changes nothing; it is reported as it is.
+          if (!relocates("move", path, target)) return storage.stat(path);
+          return deps.access.run(
             identityId,
             { vacates: [path], creates: [target] },
             async (follow) => {
               await follow.moved(identityId, path, target, kind === "dir");
+              // Created once the source was checked, so a move that cannot
+              // happen leaves no new empty folder behind.
               if (options.createParents === true && before !== undefined)
-                await ensureParent(storage, target);
-              await storage.move(path, target);
+                await storage.mkdir(parentPath(target), { parents: true });
+              return storage.move(path, target);
             },
           );
         },
-        () => ({ path: target, ...(before?.kind ? { kind: before.kind } : {}) }),
+        (entry) => ({ path: target, kind: entry.kind === "dir" ? "dir" : "file" }),
       );
       const warning =
         path === target
@@ -319,12 +314,12 @@ export function createFileOperations(deps: FileOperationsDeps): FileOperations {
           : await bestEffort(action === "file.rename" ? "Renamed" : "Moved", (metadata) =>
               metadata.onMoved(identityId, path, target, kind === "dir"),
             );
-      return done({ kind }, history, warning);
+      return done({ entry }, history, warning);
     },
 
     async copy(actor, path, target, options = {}) {
       const before = await activityStat(actor.storage, path);
-      const { history } = await record(
+      const { value: entry, history } = await record(
         actor,
         {
           action: "file.copy",
@@ -336,19 +331,19 @@ export function createFileOperations(deps: FileOperationsDeps): FileOperations {
           ...(before ? { before } : {}),
         },
         async () => {
-          if (!relocates("copy", path, target)) return;
-          await deps.access.run(actor.identityId, { creates: [target] }, () =>
+          if (!relocates("copy", path, target)) return actor.storage.stat(path);
+          return deps.access.run(actor.identityId, { creates: [target] }, () =>
             actor.storage.copy(path, target),
           );
         },
-        () => ({
+        (entry) => ({
           path: target,
-          ...(before?.kind ? { kind: before.kind } : {}),
-          ...(before?.size === undefined ? {} : { size: before.size }),
+          kind: entry.kind === "dir" ? "dir" : "file",
+          size: entry.size,
         }),
       );
       // A copy is a new item: nothing kept by path on the source comes along.
-      return done({ kind: before?.kind === "file" ? "file" : "dir" }, history);
+      return done({ entry }, history);
     },
 
     async trash(actor, path) {

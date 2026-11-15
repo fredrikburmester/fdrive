@@ -13,16 +13,10 @@ import {
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { ContentStamp, StorageProvider } from "@fdrive/core";
+import type { StorageProvider } from "@fdrive/core";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { type Fixture, fixture, kindOf } from "../test/helpers.js";
-import { createUserStorage, SHARED_WITH_ME, type UserStorage } from "./shared.js";
-
-/** The storage's stamp, which local storage always has. */
-function stampOf(storage: StorageProvider, path: string): Promise<ContentStamp> {
-  if (storage.contentStamp === undefined) throw new Error("local storage has no stamp");
-  return storage.contentStamp(path);
-}
+import { createUserStorage, SHARED_WITH_ME } from "./shared.js";
 
 async function downloadAndCancel(storage: StorageProvider, path: string): Promise<void> {
   await (await storage.download(path)).body.cancel();
@@ -45,7 +39,7 @@ describe("contentStamp on a home folder", () => {
   it("reports the file's size, times and inode as stat does", async () => {
     await writeFile(join(f.home, "a.txt"), "hello");
     const info = await stat(join(f.home, "a.txt"), { bigint: true });
-    expect(await stampOf(f.storage, "/a.txt")).toEqual({
+    expect(await f.storage.contentStamp("/a.txt")).toEqual({
       size: 5,
       mtimeNs: info.mtimeNs,
       ino: info.ino,
@@ -59,12 +53,12 @@ describe("contentStamp on a home folder", () => {
     // A whole millisecond, which `utimes` can put back exactly.
     const mtime = new Date("2026-01-02T03:04:05.678Z");
     await utimes(at, mtime, mtime);
-    const before = await stampOf(f.storage, "/a.txt");
+    const before = await f.storage.contentStamp("/a.txt");
     // Long enough for the change time to land on a later tick of any filesystem's clock.
     await new Promise((resolve) => setTimeout(resolve, 20));
     await writeFile(at, "jello");
     await utimes(at, mtime, mtime);
-    const after = await stampOf(f.storage, "/a.txt");
+    const after = await f.storage.contentStamp("/a.txt");
     expect({ size: after.size, mtimeNs: after.mtimeNs, ino: after.ino }).toEqual({
       size: before.size,
       mtimeNs: before.mtimeNs,
@@ -75,10 +69,10 @@ describe("contentStamp on a home folder", () => {
 
   it("names another inode when another file takes the name", async () => {
     await writeFile(join(f.home, "a.txt"), "hello");
-    const before = await stampOf(f.storage, "/a.txt");
+    const before = await f.storage.contentStamp("/a.txt");
     await writeFile(join(f.home, "b.txt"), "hello");
     await rename(join(f.home, "b.txt"), join(f.home, "a.txt"));
-    expect((await stampOf(f.storage, "/a.txt")).ino).not.toBe(before.ino);
+    expect((await f.storage.contentStamp("/a.txt")).ino).not.toBe(before.ino);
   });
 
   it("fails exactly as download does", async () => {
@@ -103,7 +97,7 @@ describe("contentStamp on a home folder", () => {
     const stamped: Record<string, string | null> = {};
     const downloaded: Record<string, string | null> = {};
     for (const path of Object.keys(expected)) {
-      stamped[path] = await kindOf(stampOf(f.storage, path));
+      stamped[path] = await kindOf(f.storage.contentStamp(path));
       downloaded[path] = await kindOf(downloadAndCancel(f.storage, path));
     }
     expect(stamped).toEqual(expected);
@@ -113,7 +107,7 @@ describe("contentStamp on a home folder", () => {
 
 describe("contentStamp on a user's files", () => {
   let root: string;
-  let bob: UserStorage;
+  let bob: StorageProvider;
 
   beforeEach(async () => {
     root = await realpath(await mkdtemp(join(tmpdir(), "fdrive-stamp-")));

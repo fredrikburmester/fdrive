@@ -10,7 +10,7 @@ export interface OrganizeItem {
   readonly path: string;
   readonly kind: "file" | "dir";
   readonly size: number;
-  readonly modifiedAt: Date | null;
+  readonly modifiedAt: Date;
 }
 
 export const SUBMIT_TOOL = "submit_suggestions";
@@ -63,7 +63,7 @@ function describeItem(item: OrganizeItem): string {
   const details =
     item.kind === "dir"
       ? "folder"
-      : `${formatSize(item.size)}${item.modifiedAt ? `, modified ${item.modifiedAt.toISOString().slice(0, 10)}` : ""}`;
+      : `${formatSize(item.size)}, modified ${item.modifiedAt.toISOString().slice(0, 10)}`;
   return `- ${item.path} (${details})`;
 }
 

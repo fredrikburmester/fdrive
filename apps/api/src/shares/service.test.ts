@@ -183,8 +183,7 @@ describe("counting a public share's downloads", () => {
       body: { cancel } as unknown as ReadableStream<Uint8Array>,
       contentLength: 10,
       contentRange: null,
-      contentType: null,
-      lastModified: null,
+      lastModified: new Date(0),
     });
     await expect(service.download(share, "/", request)).rejects.toMatchObject({
       kind: "forbidden",

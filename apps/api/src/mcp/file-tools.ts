@@ -118,14 +118,13 @@ export async function copyPath(
   const src = ordinaryPath(principal, args.src);
   const dst = ordinaryPath(principal, args.dst);
   if (containsPath(src, TRASH_PATH)) throw new Error("cannot copy a folder containing Trash");
-  const stat = await principal.storage.stat(src);
   const publicUrl = await deps.publicUrl();
   const { files, actor } = mcpFiles(deps, principal);
-  await files.copy(actor, src, dst);
+  const { entry } = await files.copy(actor, src, dst);
   return {
     copied: src,
     to: dst,
-    url: stat.kind === "dir" ? folderUrl(publicUrl, dst) : fileUrl(publicUrl, dst),
+    url: entry.kind === "dir" ? folderUrl(publicUrl, dst) : fileUrl(publicUrl, dst),
   };
 }
 
@@ -232,7 +231,7 @@ export async function fileTags(
         name: info.name,
         kind: info.kind,
         size: info.size_bytes,
-        modifiedAt: info.modified ?? new Date(0).toISOString(),
+        modifiedAt: info.modified,
         mime: info.mime,
         ext: extensionOf(info.name),
       },

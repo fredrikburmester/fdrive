@@ -1,14 +1,10 @@
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import type { StorageProvider } from "@fdrive/core";
 import { createMemoryShareRepo } from "@fdrive/db";
 import { createMemoryRepos } from "@fdrive/db/testing";
-import {
-  createFilesFolder,
-  type FilesFolder,
-  type SharedGrant,
-  type UserStorage,
-} from "@fdrive/local";
+import { createFilesFolder, type FilesFolder, type SharedGrant } from "@fdrive/local";
 import type { Logger } from "pino";
 import { onTestFinished, vi } from "vitest";
 import { activityFixture } from "../../../test/activity-fixture.js";
@@ -37,8 +33,8 @@ export function cookieFrom(response: Response): string {
 
 /** Reshapes the files folder so every storage it builds is replaced by `patch`'s. */
 export function patchStorage(
-  patch: (storage: UserStorage) => UserStorage,
-): (folder: FilesFolder) => StorageSource<UserStorage> {
+  patch: (storage: StorageProvider) => StorageProvider,
+): (folder: FilesFolder) => StorageSource {
   return (folder) => ({
     admit: (username) => folder.admit(username),
     storage: (username) => patch(folder.storage(username)),
@@ -51,7 +47,7 @@ export const SHARE_USERS = ["alice", "bob", "carol"] as const;
 export interface SharesHarnessOptions {
   readonly limiterCapacity?: number;
   /** Reshapes the files folder, say to fail its downloads or refuse its users. */
-  readonly local?: (folder: FilesFolder) => StorageSource<UserStorage>;
+  readonly local?: (folder: FilesFolder) => StorageSource;
   /** Folders other users share with a user, by that user's name. */
   readonly grants?: Readonly<Record<string, readonly SharedGrant[]>>;
   readonly config?: Partial<AppConfig>;

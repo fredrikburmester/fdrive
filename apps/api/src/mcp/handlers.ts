@@ -813,7 +813,7 @@ export async function runMovePath(
   return {
     moved: src,
     to: dst,
-    url: moved.kind === "dir" ? folderUrl(publicUrl, dst) : fileUrl(publicUrl, dst),
+    url: moved.entry.kind === "dir" ? folderUrl(publicUrl, dst) : fileUrl(publicUrl, dst),
     ...warningsOf(moved),
   };
 }

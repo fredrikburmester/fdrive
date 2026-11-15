@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { StorageError, type StorageProvider } from "@fdrive/core";
 import { createLocalStorage } from "@fdrive/local";
-import { createMemoryStorage } from "@fdrive/testkit";
+import { createMemoryStorage, entryStat } from "@fdrive/testkit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as yauzl from "yauzl";
 import { ZipFile } from "yazl";
@@ -217,19 +217,6 @@ describe("compress", () => {
     expect(mix.find((entry) => entry.fileName === "mix/notes.txt")?.compressionMethod).toBe(8);
   });
 
-  it("refuses a zip from storage that cannot build one", async () => {
-    await expect(
-      compress({
-        storage: createMemoryStorage({ "/a.txt": "a" }),
-        paths: ["/a.txt"],
-        format: "zip",
-        target: "/a.zip",
-        signal: new AbortController().signal,
-        report: () => {},
-      }),
-    ).rejects.toThrow(UnsupportedFormatError);
-  });
-
   it("rejects tar.zst up front when unsupported", async () => {
     const storage = createMemoryStorage({ "/a.txt": "a" });
     await expect(
@@ -302,7 +289,7 @@ describe("compress to tar", () => {
     });
   });
 
-  it("skips symlinks and other kinds, and dates a file without a time at the epoch", async () => {
+  it("skips symlinks and other kinds", async () => {
     const storage = createMemoryStorage({ "/mix/a.txt": "a" });
     const withSymlink: StorageProvider = {
       ...storage,
@@ -317,10 +304,6 @@ describe("compress to tar", () => {
           ext: "",
         },
       ],
-      stat: async (path) =>
-        path === "/mix/a.txt"
-          ? { kind: "file", size: 1, modifiedAt: null, contentType: null }
-          : storage.stat(path),
     };
 
     await compress({
@@ -343,7 +326,7 @@ describe("compress to tar", () => {
     const failure = new StorageError("forbidden", "no access");
     const failing: StorageProvider = {
       ...storage,
-      stat: async () => ({ kind: "dir", size: 0, modifiedAt: null, contentType: null }),
+      stat: async (path) => entryStat(path, { kind: "dir" }),
       list: async () => {
         throw failure;
       },

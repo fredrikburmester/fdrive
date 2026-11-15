@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import type { MoveManyResponse } from "@fdrive/contracts";
 import { StorageError, type StorageProvider } from "@fdrive/core";
-import { createMemoryStorage } from "@fdrive/core/testing";
+import { createMemoryStorage, entryStat } from "@fdrive/core/testing";
 import { createMemoryRepos } from "@fdrive/db/testing";
 import { createLocalStorage } from "@fdrive/local";
 import { getRequestListener } from "@hono/node-server";
@@ -130,6 +130,10 @@ function forbiddenStorage(): StorageProvider {
     deleteFile: deny,
     deleteDir: deny,
     deleteEmptyDir: deny,
+    probeDirectoryRead: deny,
+    contentStamp: deny,
+    uploadPart: deny,
+    zip: deny,
     trash: { put: deny, list: deny, restore: deny, purge: deny },
   };
 }
@@ -183,33 +187,9 @@ async function buildHarness(seed: Seed = SEED, username = "alice", metadata?: Me
   return harness;
 }
 
-function notImplemented(): never {
-  throw new Error("not implemented in this fake");
-}
-
+/** Memory storage with `overrides` in place of its own methods. */
 function makeStubStorage(overrides: Partial<StorageProvider>): StorageProvider {
-  return {
-    list: notImplemented,
-    stat: notImplemented,
-    statFile: notImplemented,
-    download: notImplemented,
-    upload: notImplemented,
-    mkdir: notImplemented,
-    move: notImplemented,
-    copy: notImplemented,
-    deleteFile: notImplemented,
-    deleteDir: notImplemented,
-    deleteEmptyDir: notImplemented,
-    setModifiedAt: notImplemented,
-    zip: notImplemented,
-    trash: {
-      put: notImplemented,
-      list: notImplemented,
-      restore: notImplemented,
-      purge: notImplemented,
-    },
-    ...overrides,
-  } as StorageProvider;
+  return { ...createMemoryStorage(), ...overrides };
 }
 
 function makeDownloadResult(
@@ -225,8 +205,7 @@ function makeDownloadResult(
     }),
     contentLength: 4,
     contentRange: null,
-    contentType: null,
-    lastModified: null,
+    lastModified: new Date(0),
     ...overrides,
   };
 }
@@ -336,7 +315,9 @@ describe("GET /fs/list", () => {
         ext: ".txt",
       },
     ]);
-    const probe = vi.fn(notImplemented);
+    const probe = vi.fn(async (): Promise<never> => {
+      throw new Error("a listing reads nothing else");
+    });
     const storage = makeStubStorage({ list, stat: probe, statFile: probe, download: probe });
     const { app, activity } = await buildHarnessWithStorage(storage);
 
@@ -577,7 +558,7 @@ describe("GET/HEAD /fs/download", () => {
   it("returns 416 with the empty size for a suffix range on an empty file", async () => {
     const download = vi.fn<StorageProvider["download"]>();
     const storage = makeStubStorage({
-      statFile: async () => ({ size: 0, modifiedAt: null, contentType: null }),
+      statFile: async (path) => entryStat(path),
       download,
     });
     const { app } = await buildHarnessWithStorage(storage);
@@ -610,18 +591,20 @@ describe("GET/HEAD /fs/download", () => {
     expect(await res.text()).toBe("");
   });
 
-  it("falls back to mimeFromExtension and serves inline when upstream gives no content-type", async () => {
+  it("types a download by its name, with its length and time, and serves it inline", async () => {
     const storage = makeStubStorage({
-      download: async () => makeDownloadResult(),
+      download: async () => makeDownloadResult({ lastModified: new Date(CLOCK_ISO) }),
     });
     const { app } = await buildHarnessWithStorage(storage);
 
     const res = await app.request("/api/v1/fs/download?path=/hello.txt&inline=1");
     expect(res.headers.get("content-type")).toBe("text/plain");
+    expect(res.headers.get("content-length")).toBe("4");
+    expect(res.headers.get("last-modified")).toBe(new Date(CLOCK_ISO).toUTCString());
     expect(res.headers.get("content-disposition")).toContain("inline");
   });
 
-  it("falls back to application/octet-stream when neither upstream nor the extension has a type", async () => {
+  it("falls back to application/octet-stream when the extension has no type", async () => {
     const storage = makeStubStorage({
       download: async () => makeDownloadResult(),
     });
@@ -1175,7 +1158,9 @@ describe("POST /fs/move-many", () => {
         { ok: true, path: "/inbox/b.pdf", target: "/Finance/2024/b.pdf" },
       ],
     });
-    expect(mkdir).toHaveBeenCalledTimes(1);
+    // Each move with a missing folder asks for it; only the first finds it missing.
+    const made = await Promise.all(mkdir.mock.results.map((result) => result.value));
+    expect(made.map((folder) => folder.created)).toEqual(["/Finance", null, null]);
     expect(storage.dump()).toEqual({
       "/Finance/2024/a.pdf": "a",
       "/Finance/2024/b.pdf": "b",
@@ -1221,7 +1206,8 @@ describe("POST /fs/move-many", () => {
     expect((await readJson<MoveManyResponse>(existingParent)).results).toEqual([
       { ok: true, path: "/inbox/b.pdf", target: "/inbox/c.pdf" },
     ]);
-    expect(mkdir).not.toHaveBeenCalled();
+    expect(mkdir).toHaveBeenCalledOnce();
+    expect((await mkdir.mock.results[0]?.value)?.created).toBeNull();
   });
 
   it("checks the source before creating folders, so a move that cannot happen leaves none", async () => {
@@ -1253,11 +1239,7 @@ describe("POST /fs/move-many", () => {
 
   it("maps a storage failure while preparing a folder to that item's error", async () => {
     const storage = createMemoryStorage({ "/inbox/a.pdf": "a" });
-    const stat = storage.stat.bind(storage);
-    vi.spyOn(storage, "stat").mockImplementation(async (path) => {
-      if (path === "/Private") throw new StorageError("forbidden", "no access");
-      return stat(path);
-    });
+    vi.spyOn(storage, "mkdir").mockRejectedValue(new StorageError("forbidden", "no access"));
     const { app } = await buildHarnessWithStorage(storage);
 
     const res = await app.request(
@@ -1641,12 +1623,9 @@ describe("shared body/query parsing", () => {
 
   it("accepts a body at or under the configured jsonMaxBytes cap", async () => {
     const storage = makeStubStorage({
-      mkdir: async () => undefined,
-      stat: async () => ({
-        kind: "dir",
-        size: 0,
-        modifiedAt: new Date(CLOCK_ISO),
-        contentType: null,
+      mkdir: async (path) => ({
+        ...entryStat(path, { kind: "dir", modifiedAt: new Date(CLOCK_ISO) }),
+        created: path,
       }),
     });
     const { app } = await buildHarnessWithStorage(storage, { jsonMaxBytes: 4096 });
@@ -1694,9 +1673,9 @@ describe("unmapped errors pass through unchanged", () => {
     expect(body.error.kind).toBe("internal");
   });
 
-  it("rethrows a non-StorageError from statFile as an internal error", async () => {
+  it("rethrows a non-StorageError from stat as an internal error", async () => {
     const storage = makeStubStorage({
-      statFile: async () => {
+      stat: async () => {
         throw new Error("unexpected failure");
       },
     });
@@ -1704,24 +1683,6 @@ describe("unmapped errors pass through unchanged", () => {
 
     const res = await app.request("/api/v1/fs/stat?path=/a.txt");
     expect(res.status).toBe(500);
-  });
-
-  it("refuses a zip download as unsupported when the storage has no zip", async () => {
-    const { zip: _zip, ...withoutZip } = makeStubStorage({});
-    const { app } = await buildHarnessWithStorage(withoutZip as StorageProvider);
-
-    const res = await app.request(
-      "/api/v1/fs/zip",
-      requestedWith({
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ paths: ["/a.txt"] }),
-      }),
-    );
-    expect(res.status).toBe(400);
-    expect(await readJson<ErrorJson>(res)).toMatchObject({
-      error: { kind: "unsupported", details: { capability: "zip" } },
-    });
   });
 
   it("returns not_found when stat reports nothing at the path", async () => {
@@ -1738,7 +1699,7 @@ describe("unmapped errors pass through unchanged", () => {
 
   it("reports a directory from stat with no extension", async () => {
     const storage = makeStubStorage({
-      stat: async () => ({ kind: "dir", size: 0, modifiedAt: null, contentType: null }),
+      stat: async (path) => entryStat(path, { kind: "dir" }),
     });
     const { app } = await buildHarnessWithStorage(storage);
 
@@ -1750,13 +1711,7 @@ describe("unmapped errors pass through unchanged", () => {
   it("names the entry the way storage stores it when it found another spelling", async () => {
     const stored = "/Årsbesked/Plan.TXT";
     const storage = makeStubStorage({
-      stat: async () => ({
-        kind: "file",
-        size: 5,
-        modifiedAt: null,
-        contentType: null,
-        path: stored,
-      }),
+      stat: async () => entryStat(stored, { size: 5 }),
     });
     const { app } = await buildHarnessWithStorage(storage);
 
@@ -1771,22 +1726,14 @@ describe("unmapped errors pass through unchanged", () => {
     });
   });
 
-  it("defaults modifiedAt to the epoch when the provider reports none", async () => {
+  it("rethrows a non-StorageError from moving to Trash as an internal error", async () => {
+    const memory = createMemoryStorage({ "/a.txt": "a" });
     const storage = makeStubStorage({
-      stat: async () => ({ kind: "file", size: 5, modifiedAt: null, contentType: null }),
-    });
-    const { app } = await buildHarnessWithStorage(storage);
-
-    const res = await app.request("/api/v1/fs/stat?path=/a.txt");
-    expect(res.status).toBe(200);
-    const body = await readJson<FsEntryJson & { modifiedAt: string }>(res);
-    expect(body.modifiedAt).toBe(new Date(0).toISOString());
-  });
-
-  it("rethrows a non-StorageError from a delete call as an internal error", async () => {
-    const storage = makeStubStorage({
-      deleteFile: async () => {
-        throw new Error("unexpected failure");
+      trash: {
+        ...memory.trash,
+        put: async () => {
+          throw new Error("unexpected failure");
+        },
       },
     });
     const { app } = await buildHarnessWithStorage(storage);
@@ -1829,21 +1776,11 @@ describe("unmapped errors pass through unchanged", () => {
 
 describe("untrusted download documents", () => {
   it.each(["GET", "HEAD"])(
-    "forces active content to attachment for %s, including misleading names",
+    "forces active content to attachment for %s, whatever its name's case",
     async (method) => {
-      for (const mime of [
-        null,
-        "text/html; charset=utf-8",
-        "image/svg+xml",
-        "Text/HTML",
-        "text/xml",
-        "application/xhtml+xml",
-      ]) {
-        const storage = makeStubStorage({
-          download: async () => makeDownloadResult({ contentType: mime }),
-        });
+      for (const path of ["/attack.html", "/attack.HTM", "/attack.svg", "/attack.xml", "/attack"]) {
+        const storage = makeStubStorage({ download: async () => makeDownloadResult() });
         const { app } = await buildHarnessWithStorage(storage);
-        const path = mime === null ? "/attack.html" : "/innocent.txt";
         const response = await app.request(`/api/v1/fs/download?path=${path}&inline=1`, { method });
         expect(response.status).toBe(200);
         expect(response.headers.get("content-disposition")).toContain("attachment");
@@ -1855,12 +1792,7 @@ describe("untrusted download documents", () => {
   );
   it("isolates partial responses and preserves passive inline downloads", async () => {
     const storage = makeStubStorage({
-      download: async () =>
-        makeDownloadResult({
-          contentType: "image/svg+xml",
-          status: 206,
-          contentRange: "bytes 0-3/8",
-        }),
+      download: async () => makeDownloadResult({ status: 206, contentRange: "bytes 0-3/8" }),
     });
     const { app } = await buildHarnessWithStorage(storage);
     const response = await app.request("/api/v1/fs/download?path=/attack.svg&inline=1", {
@@ -2009,7 +1941,7 @@ describe("personal activity for fs commands", () => {
     expect(activity.operations.at(-1)).toMatchObject({ source: "web", batchId });
   });
 
-  it("acknowledges a committed upload whose stat fails, and refuses the replay", async () => {
+  it("answers an upload with the file it published, stat'ing nothing after it, and refuses the replay", async () => {
     const base = createMemoryStorage();
     const upload = vi.spyOn(base, "upload");
     const h = await buildHarnessWithStorage({
@@ -2030,7 +1962,15 @@ describe("personal activity for fs commands", () => {
     const response = await h.app.request("/api/v1/fs/upload?path=/a.txt", options);
 
     expect(response.status).toBe(201);
-    expect(await response.json()).toMatchObject({ path: "/a.txt", size: 5, metadataPending: true });
+    expect(await response.json()).toEqual({
+      name: "a.txt",
+      path: "/a.txt",
+      kind: "file",
+      size: 5,
+      modifiedAt: new Date(0).toISOString(),
+      ext: ".txt",
+      mime: "text/plain",
+    });
     expect(h.activity.outcomes.at(-1)).toMatchObject({ action: "file.upload", outcome: "success" });
     expect((await h.app.request("/api/v1/fs/upload?path=/a.txt", options)).status).toBe(409);
     expect(upload).toHaveBeenCalledOnce();

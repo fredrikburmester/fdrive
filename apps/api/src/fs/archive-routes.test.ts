@@ -5,6 +5,7 @@ import { dirname, join } from "node:path";
 import { gzipSync } from "node:zlib";
 import type { ArchiveEntriesResponse, JobStatus } from "@fdrive/contracts";
 import { StorageError, type StorageProvider } from "@fdrive/core";
+import { createMemoryStorage, entryStat } from "@fdrive/core/testing";
 import { createLocalStorage } from "@fdrive/local";
 import type { Logger } from "pino";
 import * as tar from "tar-stream";
@@ -345,27 +346,9 @@ async function waitForJobDone(
   }
 }
 
-function notImplemented(): never {
-  throw new Error("not implemented in this stub");
-}
-
+/** Memory storage with `overrides` in place of its own methods. */
 function makeStubStorage(overrides: Partial<StorageProvider>): StorageProvider {
-  return {
-    list: notImplemented,
-    stat: notImplemented,
-    statFile: notImplemented,
-    download: notImplemented,
-    upload: notImplemented,
-    mkdir: notImplemented,
-    move: notImplemented,
-    copy: notImplemented,
-    deleteFile: notImplemented,
-    deleteDir: notImplemented,
-    deleteEmptyDir: notImplemented,
-    setModifiedAt: notImplemented,
-    zip: notImplemented,
-    ...overrides,
-  } as StorageProvider;
+  return { ...createMemoryStorage(), ...overrides };
 }
 
 describe("POST /fs/duplicate", () => {
@@ -1090,7 +1073,7 @@ describe("GET /fs/jobs, GET /fs/jobs/:id, POST /fs/jobs/:id/cancel", () => {
 });
 
 describe("unmapped storage errors pass through unchanged", () => {
-  const dirStat = { kind: "dir", size: 0, modifiedAt: null, contentType: null } as const;
+  const dirStat = entryStat("/somewhere", { kind: "dir" });
 
   it("maps a non-not_found StorageError from the destination check", async () => {
     const storage = makeStubStorage({

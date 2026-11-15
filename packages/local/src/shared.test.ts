@@ -1,6 +1,7 @@
 import { mkdir, mkdtemp, readFile, realpath, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { StorageProvider } from "@fdrive/core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { bytes, kindOf, read, streamOf, zipEntries } from "../test/helpers.js";
 import {
@@ -9,11 +10,10 @@ import {
   SHARED_WITH_ME,
   type SharedFolder,
   sharedFolderNames,
-  type UserStorage,
 } from "./shared.js";
 
 let root: string;
-let bob: UserStorage;
+let bob: StorageProvider;
 let shared: ReturnType<typeof vi.fn<() => Promise<readonly SharedFolder[]>>>;
 
 const alice = (...parts: string[]) => join(root, "alice", ...parts);
@@ -214,9 +214,10 @@ describe("createUserStorage", () => {
 
   it("writes into a writable shared folder on its owner's disk", async () => {
     const inShare = (path: string) => `/${SHARED_WITH_ME}/Projects${path}`;
-    await bob.upload(inShare("/new.txt"), bytes("new"));
+    await bob.upload(inShare("/new.txt"), bytes("new"), {
+      modifiedAt: new Date("2020-01-01T00:00:00Z"),
+    });
     await bob.mkdir(inShare("/a/b"), { parents: true });
-    await bob.setModifiedAt(inShare("/new.txt"), new Date("2020-01-01T00:00:00Z"));
     expect(await readFile(alice("Projects", "new.txt"), "utf8")).toBe("new");
     expect((await stat(alice("Projects", "new.txt"))).mtime.toISOString()).toBe(
       "2020-01-01T00:00:00.000Z",
@@ -238,7 +239,6 @@ describe("createUserStorage", () => {
       bob.deleteFile(photo),
       bob.deleteDir(`/${SHARED_WITH_ME}/Photos/sub`),
       bob.deleteEmptyDir(`/${SHARED_WITH_ME}/Photos/sub`),
-      bob.setModifiedAt(photo, new Date()),
       bob.move(photo, "/cat.jpg"),
       bob.move("/own.txt", `/${SHARED_WITH_ME}/Photos/own.txt`),
       bob.copy("/own.txt", `/${SHARED_WITH_ME}/Photos/own.txt`),
@@ -259,8 +259,6 @@ describe("createUserStorage", () => {
       bob.deleteEmptyDir(shelf),
       bob.deleteEmptyDir(folder),
       bob.deleteFile(shelf),
-      bob.setModifiedAt(shelf, new Date()),
-      bob.setModifiedAt(folder, new Date()),
       bob.move(folder, "/Projects"),
       bob.move(shelf, "/elsewhere"),
       bob.move("/own.txt", folder),
@@ -273,8 +271,19 @@ describe("createUserStorage", () => {
       expect(await kindOf(change)).toBe("forbidden");
     }
     expect(await kindOf(bob.deleteFile(`${shelf}/Nope`))).toBe("not_found");
-    await expect(bob.mkdir(shelf, { parents: true })).resolves.toBeUndefined();
-    await expect(bob.mkdir(folder, { parents: true })).resolves.toBeUndefined();
+    expect(await bob.mkdir(shelf, { parents: true })).toMatchObject({
+      path: shelf,
+      name: SHARED_WITH_ME,
+      kind: "dir",
+      ino: 0n,
+      created: null,
+    });
+    expect(await bob.mkdir(folder, { parents: true })).toMatchObject({
+      path: folder,
+      name: "Projects",
+      kind: "dir",
+      created: null,
+    });
   });
 
   it("moves and copies between the user's files and a shared folder in one step", async () => {
@@ -341,18 +350,16 @@ describe("createUserStorage with a storage limit", () => {
 
   it("counts the pieces an upload sent in pieces has already written against the room", async () => {
     const { storage } = limited({ bob: 6 });
-    const piece = (offset: number, final = false) => ({
-      part: { id: "0123456789abcdef", offset, final },
-    });
-    await storage.upload("/pieces.txt", bytes("1234"), piece(0));
+    const piece = (offset: number) => ({ part: { id: "0123456789abcdef", offset } });
+    await storage.uploadPart("/pieces.txt", bytes("1234"), piece(0));
     // Four bytes are already in the part, so a piece of three is one too many.
-    expect(await kindOf(storage.upload("/pieces.txt", bytes("567"), piece(4, true)))).toBe(
+    expect(await kindOf(storage.upload("/pieces.txt", bytes("567"), piece(4)))).toBe(
       "storage_limit_reached",
     );
-    expect(await kindOf(storage.upload("/pieces.txt", bytes("x"), piece(7, true)))).toBe(
+    expect(await kindOf(storage.uploadPart("/pieces.txt", bytes("x"), piece(7)))).toBe(
       "storage_limit_reached",
     );
-    await storage.upload("/pieces.txt", bytes("56"), piece(4, true));
+    await storage.upload("/pieces.txt", bytes("56"), piece(4));
     expect(await read(storage, "/pieces.txt")).toBe("123456");
   });
 

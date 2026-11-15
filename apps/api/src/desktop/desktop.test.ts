@@ -7,7 +7,7 @@ import { StorageError, type StorageProvider } from "@fdrive/core";
 import type { Login } from "@fdrive/db";
 import { createMemoryRepos } from "@fdrive/db/testing";
 import { createLocalStorage, createUserStorage, SHARED_WITH_ME } from "@fdrive/local";
-import { createMemoryStorage } from "@fdrive/testkit";
+import { createMemoryStorage, entryStat } from "@fdrive/testkit";
 import { afterEach, expect, it, vi } from "vitest";
 import { activityFixture } from "../../test/activity-fixture.js";
 import { memoryRepo } from "../../test/helpers/desktop-repo.js";
@@ -907,13 +907,7 @@ it("reads every entry with one stat and never lists its ancestors", async () => 
   await f.files.list(f.principal, "/docs/deep/er", "token");
   expect(list.mock.calls).toEqual([["/docs/deep/er"]]);
   // Another spelling of a stored name, as a disk that ignores case finds it, is not that item.
-  stat.mockResolvedValueOnce({
-    kind: "file",
-    size: 5,
-    modifiedAt: null,
-    contentType: null,
-    path: "/docs/a.txt",
-  });
+  stat.mockResolvedValueOnce(entryStat("/docs/a.txt", { size: 5 }));
   await expect(f.files.stat(f.principal, "/docs/A.txt")).rejects.toMatchObject({
     kind: "not_found",
   });

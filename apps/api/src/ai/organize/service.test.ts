@@ -1,6 +1,6 @@
 import type { OrganizeRequest, OrganizeRun } from "@fdrive/contracts";
 import { StorageError, type StorageProvider } from "@fdrive/core";
-import { createMemoryStorage } from "@fdrive/core/testing";
+import { createMemoryStorage, entryStat } from "@fdrive/core/testing";
 import type { IndexQueries } from "@fdrive/db";
 import { describe, expect, it, vi } from "vitest";
 import type { Principal } from "../../auth/principal.js";
@@ -410,9 +410,7 @@ describe("createOrganizeService", () => {
       const storage: StorageProvider = {
         ...memory,
         stat: async (path) =>
-          path === "/link"
-            ? { kind: "symlink", size: 0, modifiedAt: null, contentType: null }
-            : memory.stat(path),
+          path === "/link" ? entryStat(path, { kind: "symlink" }) : memory.stat(path),
       };
       const { model, inputs } = fakeModel([submitTurn([])]);
       const { service } = setup({ model });

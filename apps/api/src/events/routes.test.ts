@@ -1,5 +1,6 @@
 import type { FsEvent } from "@fdrive/contracts";
 import type { StorageProvider } from "@fdrive/core";
+import { createMemoryStorage } from "@fdrive/core/testing";
 import type { Logger } from "pino";
 import { describe, expect, it, vi } from "vitest";
 import { createApp } from "../app.js";
@@ -9,31 +10,7 @@ import { createEventBus } from "./bus.js";
 import type { JournalFanout } from "./journal.js";
 import { registerEventRoutes } from "./routes.js";
 
-function notImplemented(): never {
-  throw new Error("not implemented in this fake");
-}
-
-const FAKE_STORAGE: StorageProvider = {
-  list: notImplemented,
-  stat: notImplemented,
-  statFile: notImplemented,
-  download: notImplemented,
-  upload: notImplemented,
-  mkdir: notImplemented,
-  move: notImplemented,
-  copy: notImplemented,
-  deleteFile: notImplemented,
-  deleteDir: notImplemented,
-  deleteEmptyDir: notImplemented,
-  setModifiedAt: notImplemented,
-  zip: notImplemented,
-  trash: {
-    put: notImplemented,
-    list: notImplemented,
-    restore: notImplemented,
-    purge: notImplemented,
-  },
-};
+const FAKE_STORAGE: StorageProvider = createMemoryStorage();
 
 const PRINCIPAL: Principal = {
   accountId: "00000000-0000-4000-8000-000000000001",

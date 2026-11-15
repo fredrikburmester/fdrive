@@ -1,6 +1,8 @@
 import { basename, relative, sep } from "node:path";
 import {
+  baseName,
   createRecycleFolderTrash,
+  type EntryStat,
   type FileEntry,
   isReservedPath,
   joinPath,
@@ -10,6 +12,7 @@ import {
   type StorageProvider,
   type StorageWithoutTrash,
   splitSegments,
+  type UploadOptions,
 } from "@fdrive/core";
 import { type DiskChangeListener, notify } from "./changes.js";
 import { mapped } from "./errors.js";
@@ -84,15 +87,6 @@ export function sharedFolderNames(grants: readonly SharedGrant[]): string[] {
 export function closedToShares(path: string): boolean {
   return isReservedPath(path);
 }
-
-/** A user's storage: every optional `StorageProvider` operation is there. */
-export type UserStorage = StorageProvider &
-  Required<
-    Pick<
-      StorageProvider,
-      "zip" | "setModifiedAt" | "probeDirectoryRead" | "probeFileRead" | "contentStamp"
-    >
-  >;
 
 /**
  * The grants `username` sees, each with its name under `Shared with me`.
@@ -199,7 +193,7 @@ const SHELF_PATH = `/${SHARED_WITH_ME}`;
  * the leaf `trash.put` reports is then in the owner's files, where only the
  * owner lists, restores and purges it.
  */
-export function createUserStorage(options: UserStorageOptions): UserStorage {
+export function createUserStorage(options: UserStorageOptions): StorageProvider {
   const listener = options.onChange;
   const heard = listener === undefined ? {} : { onChange: listener };
   const clock = options.clock ?? (() => new Date());
@@ -268,6 +262,34 @@ export function createUserStorage(options: UserStorageOptions): UserStorage {
   async function replaced(at: Located): Promise<number> {
     const info = await at.storage.stat(at.rel).catch(() => null);
     return info?.kind === "file" ? info.size : 0;
+  }
+
+  /** A path within `at`'s storage as the user sees it: under its shared folder's name for a mount. */
+  function outwardPath(at: Located, path: string): string {
+    return at.kind === "own" ? path : joinPath(at.prefix, path);
+  }
+
+  /** `entry`, found in `at`'s storage, as the user sees it. */
+  function outward<T extends EntryStat>(at: Located, entry: T): T {
+    if (at.kind === "own") return entry;
+    const path = outwardPath(at, entry.path);
+    return { ...entry, path, name: baseName(path) };
+  }
+
+  /** An upload's `body` for `at`: refused when its owner has no room, cut off past the room left. */
+  async function admitUpload(
+    at: Located,
+    body: ReadableStream<Uint8Array> | Uint8Array,
+    opts: Pick<UploadOptions, "overwrite" | "part">,
+  ): Promise<ReadableStream<Uint8Array> | Uint8Array> {
+    const room = await roomAt(at);
+    if (room === null) return body;
+    // A file being replaced frees its bytes; a piece of an upload sent in
+    // pieces shares the room with the pieces before it, which wait unindexed.
+    const max =
+      room + (opts.overwrite === true ? await replaced(at) : 0) - (opts.part?.offset ?? 0);
+    if (max < 0) throw limitReached();
+    return capped(body, max);
   }
 
   /** For reads: the place, or `not_found` for a shared folder that does not exist. */
@@ -345,13 +367,7 @@ export function createUserStorage(options: UserStorageOptions): UserStorage {
     return new Date(Math.max(0, ...entries.map((entry) => entry.modifiedAt.getTime())));
   }
 
-  const storage: StorageWithoutTrash &
-    Required<
-      Pick<
-        StorageProvider,
-        "zip" | "setModifiedAt" | "probeDirectoryRead" | "probeFileRead" | "contentStamp"
-      >
-    > = {
+  const storage: StorageWithoutTrash = {
     async list(path) {
       const at = await readable(path);
       if (at.kind === "shelf") return shelfEntries();
@@ -371,43 +387,30 @@ export function createUserStorage(options: UserStorageOptions): UserStorage {
     async stat(path) {
       const at = await readable(path);
       if (at.kind === "shelf") {
-        return {
-          kind: "dir",
-          size: 0,
-          modifiedAt: newest(await shelfEntries()),
-          contentType: null,
-        };
+        const modifiedAt = newest(await shelfEntries());
+        const entry = makeEntry("/", { name: SHARED_WITH_ME, kind: "dir", size: 0, modifiedAt });
+        return { ...entry, ino: 0n };
       }
-      const info = await at.storage.stat(at.rel);
-      if (at.kind === "own" || info.path === undefined) return info;
       // The folder's own spelling within it, under the name the user sees it by.
-      return { ...info, path: `${at.prefix}${info.path}` };
+      return outward(at, await at.storage.stat(at.rel));
     },
 
     async statFile(path) {
       const at = await readable(path);
       if (at.kind === "shelf") throw new StorageError("bad_request", `not a file: ${path}`);
-      return at.storage.statFile(at.rel);
+      return outward(at, await at.storage.statFile(at.rel));
     },
 
     async probeDirectoryRead(path) {
       const at = await readable(path);
       if (at.kind === "shelf") return;
-      // Local storage always has the probe.
-      await (at.storage.probeDirectoryRead as (path: string) => Promise<void>)(at.rel);
-    },
-
-    async probeFileRead(path) {
-      const at = await readable(path);
-      if (at.kind === "shelf") throw new StorageError("bad_request", `not a file: ${path}`);
-      await (at.storage.probeFileRead as (path: string) => Promise<void>)(at.rel);
+      await at.storage.probeDirectoryRead(at.rel);
     },
 
     async contentStamp(path) {
       const at = await readable(path);
       if (at.kind === "shelf") throw new StorageError("bad_request", `not a file: ${path}`);
-      // Local storage always has it.
-      return (at.storage.contentStamp as NonNullable<StorageProvider["contentStamp"]>)(at.rel);
+      return at.storage.contentStamp(at.rel);
     },
 
     async download(path, opts) {
@@ -416,24 +419,25 @@ export function createUserStorage(options: UserStorageOptions): UserStorage {
       return at.storage.download(at.rel, opts);
     },
 
-    async upload(path, body, opts) {
+    async upload(path, body, opts = {}) {
       // `writable` returns null only when asked to allow a fixed place.
       const at = (await writable(path)) as Located;
-      const room = await roomAt(at);
-      if (room === null) return at.storage.upload(at.rel, body, opts);
-      // A file being replaced frees its bytes; a piece of an upload sent in
-      // pieces shares the room with the pieces before it, which wait unindexed.
-      const max =
-        room + (opts?.overwrite === true ? await replaced(at) : 0) - (opts?.part?.offset ?? 0);
-      if (max < 0) throw limitReached();
-      return at.storage.upload(at.rel, capped(body, max), opts);
+      return outward(at, await at.storage.upload(at.rel, await admitUpload(at, body, opts), opts));
+    },
+
+    async uploadPart(path, body, opts) {
+      const at = (await writable(path)) as Located;
+      await at.storage.uploadPart(at.rel, await admitUpload(at, body, opts), opts);
     },
 
     async mkdir(path, opts) {
       const parents = opts?.parents === true;
       const at = await writable(path, parents);
-      if (at === null) return;
-      await at.storage.mkdir(at.rel, opts);
+      // `Shared with me` or a shared folder itself, which only a `mkdir -p` passes through.
+      if (at === null) return { ...(await storage.stat(path)), created: null };
+      const made = await at.storage.mkdir(at.rel, opts);
+      const created = made.created === null ? null : outwardPath(at, made.created);
+      return { ...outward(at, made), created };
     },
 
     async move(path, target, opts) {
@@ -446,8 +450,7 @@ export function createUserStorage(options: UserStorageOptions): UserStorage {
       // A move within one owner's files adds nothing to them.
       if (ownerOf(source) !== ownerOf(destination)) await admit(path, source, destination);
       if (source.storage === destination.storage) {
-        await source.storage.move(source.rel, destination.rel, opts);
-        return;
+        return outward(destination, await source.storage.move(source.rel, destination.rel, opts));
       }
       await mapped(path, async () => {
         // Only the user's own home can be the source's top: a shared one is fixed.
@@ -462,6 +465,7 @@ export function createUserStorage(options: UserStorageOptions): UserStorage {
           ...(stamp === undefined ? {} : { stamp }),
         });
       });
+      return outward(destination, await destination.storage.stat(destination.rel));
     },
 
     async copy(path, target, opts) {
@@ -470,8 +474,7 @@ export function createUserStorage(options: UserStorageOptions): UserStorage {
       const destination = (await writable(target)) as Located;
       await admit(path, from, destination);
       if (from.storage === destination.storage) {
-        await from.storage.copy(from.rel, destination.rel, opts);
-        return;
+        return outward(destination, await from.storage.copy(from.rel, destination.rel, opts));
       }
       await mapped(path, async () => {
         if (from.kind === "own" && from.rel === "/") {
@@ -482,6 +485,7 @@ export function createUserStorage(options: UserStorageOptions): UserStorage {
         await copyEntry(source, to, { path, target }, opts);
         notify(listener, { kind: "changed", path: to });
       });
+      return outward(destination, await destination.storage.stat(destination.rel));
     },
 
     async deleteFile(path) {
@@ -503,16 +507,6 @@ export function createUserStorage(options: UserStorageOptions): UserStorage {
       if (at.kind === "shelf") throw forbidden(`a shared folder is changed by its owner: ${path}`);
       const located = (await writable(path)) as Located;
       await located.storage.deleteEmptyDir(located.rel);
-    },
-
-    async setModifiedAt(path, modifiedAt) {
-      const at = await readable(path);
-      if (at.kind === "shelf") throw forbidden(`a shared folder is changed by its owner: ${path}`);
-      const located = (await writable(path)) as Located;
-      await (located.storage.setModifiedAt as (path: string, at: Date) => Promise<void>)(
-        located.rel,
-        modifiedAt,
-      );
     },
 
     async zip(paths, opts) {

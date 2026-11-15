@@ -52,7 +52,7 @@ export function createPathLocator(storage: StorageProvider) {
     once(stats, path, () =>
       storage.stat(path).then(
         (stat): LocatedPath => ({
-          path: stat.path ?? path,
+          path: stat.path,
           occupancy: stat.kind === "dir" ? "dir" : "file",
         }),
         (error: unknown): LocatedPath => {

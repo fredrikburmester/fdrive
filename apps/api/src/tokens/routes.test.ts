@@ -1,4 +1,5 @@
 import type { StorageProvider } from "@fdrive/core";
+import { createMemoryStorage } from "@fdrive/core/testing";
 import { createMemoryRepos } from "@fdrive/db/testing";
 import { describe, expect, it, vi } from "vitest";
 import { createApp } from "../app.js";
@@ -13,31 +14,7 @@ const REQUIRED_ENV = {
   FDRIVE_MASTER_KEY: Buffer.alloc(32, 4).toString("base64"),
 };
 
-function notImplemented(): never {
-  throw new Error("not implemented in this fake");
-}
-
-const FAKE_STORAGE: StorageProvider = {
-  list: notImplemented,
-  stat: notImplemented,
-  statFile: notImplemented,
-  download: notImplemented,
-  upload: notImplemented,
-  mkdir: notImplemented,
-  move: notImplemented,
-  copy: notImplemented,
-  deleteFile: notImplemented,
-  deleteDir: notImplemented,
-  deleteEmptyDir: notImplemented,
-  setModifiedAt: notImplemented,
-  zip: notImplemented,
-  trash: {
-    put: notImplemented,
-    list: notImplemented,
-    restore: notImplemented,
-    purge: notImplemented,
-  },
-};
+const FAKE_STORAGE: StorageProvider = createMemoryStorage();
 
 async function buildApp(clock: () => Date = () => new Date("2026-01-01T00:00:00.000Z")) {
   const repos = createMemoryRepos();

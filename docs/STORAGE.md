@@ -9,7 +9,7 @@ filesystem details and lets tests run on an in-memory storage. fdrive checks pas
 
 | Contract | Source |
 | --- | --- |
-| File operations, streams and optional members | [storage port](../packages/core/src/ports/storage.ts) |
+| File operations and streams | [storage port](../packages/core/src/ports/storage.ts) |
 | The files folder and its storage | [files folder](../packages/local/src/files-folder.ts), [home storage](../packages/local/src/storage-provider.ts), [shared folders](../packages/local/src/shared.ts) |
 | The deployment's folder and its id | [files folder](../apps/api/src/local/files-folder.ts) |
 | Per-request storage | [storage factory](../apps/api/src/auth/storage-factory.ts) |
@@ -54,17 +54,24 @@ a Trash.
 
 ## StorageProvider
 
-Required: `list`, `stat`, `statFile`, `download`, `upload`, `mkdir`, `move`, `copy`,
-`deleteFile`, `deleteDir`, `deleteEmptyDir`, which removes a folder only while it is empty
-(the files folder's `rmdir`), so tidying up never takes what arrived meanwhile, and `trash`.
-`deleteFile` and `deleteDir` delete for good; `trash.put(path)` moves an item into Trash and says
-where (`{ leaf, kind }`), and every caller chooses. Optional members are absent, never throwing:
-`probeDirectoryRead` and `probeFileRead` (live read proofs), `setModifiedAt` and `zip`.
+Every member is required, and the files folder and the memory storage implement all of them:
+`list`, `stat`, `statFile`, `probeDirectoryRead` (a live read proof), `contentStamp`,
+`download`, `upload`, `uploadPart`, `mkdir`, `move`, `copy`, `deleteFile`, `deleteDir`,
+`deleteEmptyDir`, which removes a folder only while it is empty (the files folder's `rmdir`), so
+tidying up never takes what arrived meanwhile, `zip` and `trash`. `deleteFile` and `deleteDir`
+delete for good; `trash.put(path)` moves an item into Trash and says where (`{ leaf, kind }`), and
+every caller chooses.
 
-Paths are the storage's own, already resolved from a scope. `statFile` throws `bad_request` on a
-directory and `not_found` on a missing path. `move`, `copy` and `upload` refuse a taken target
-with `conflict` unless `overwrite: true`; callers never check a target first.
-`download` honours `range` with a 206 and `Content-Range`, and `ifRange`.
+Paths are the storage's own, already resolved from a scope. `stat` reports an entry (`EntryStat`):
+its path and name as storage spells them, kind, size, modification time, extension and inode.
+`statFile` is `stat` for a file only: `bad_request` on a directory, `not_found` on a missing
+path. `upload`, `mkdir`, `move` and `copy` return the entry they made, so callers never stat it
+again; `mkdir` also names the first folder it created (`created`, `null` when every folder was
+there). `move`, `copy` and `upload` refuse a taken target with `conflict` unless
+`overwrite: true`; callers never check a target first. `download` reports the body's length and
+the file's modification time, and honours `range` with a 206 and `Content-Range`, and `ifRange`.
+Storage keeps no content types: whatever serves a file types it from its name
+(`mimeFromExtension`).
 Every operation refuses a path through a symbolic link with `forbidden`; listings show the link
 itself as kind `symlink`. Failures are `StorageError`s from core.
 
@@ -89,8 +96,9 @@ How the files folder implements it:
   parent folders, publishing) inside the caller's critical section, after the body is staged:
   the file operations hold the path there, and never while a client's body arrives.
   `stat` reports the inode of a file or folder (`ino`), which a rename keeps.
-- **Uploads in pieces.** The web app sends files over 8 MiB in 8 MiB pieces (`upload` with
-  `part`; `/fs/upload` with `part`, `offset` and `final`). Each piece is written into
+- **Uploads in pieces.** The web app sends files over 8 MiB in 8 MiB pieces (`uploadPart` for
+  each piece but the last, `upload` with `part` for the last; `/fs/upload` with `part`, `offset`
+  and `final`). Each piece is written into
   `.fdrive-partial-<part>` at the top of the home (the owner's home for a shared folder), cut
   back to its offset first so a failed piece can be sent again, and the last piece publishes it
   as above. Every piece is checked like an upload; at startup the API removes parts older than
@@ -114,15 +122,16 @@ How the files folder implements it:
   watcher looks (the Mac's uploads), does exactly that for a new file, and flushes the new name
   to disk before returning. A target that is the source under another spelling,
   on a disk that ignores case, is a case-only rename, not a conflict.
-- **Spelling.** On a disk that ignores case or accent encoding, `stat` reports the stored
-  spelling as `path`, so links and lookups land on the name listings show.
+- **Spelling.** On a disk that ignores case or accent encoding, `stat` and every write report
+  the stored spelling as `path`, so links and lookups land on the name listings show.
+- **Times** come from bigint stats everywhere, so a listing, a stat and a download agree on a
+  file's modification time to the millisecond.
 - **Downloads** send `Last-Modified` and no ETag; `ifRange` applies when it names the file's
   current second.
 - **Stamps.** `contentStamp` reads a file's size, modification time, inode and change time from
   its open descriptor, none of its bytes. Office versions documents from it and requires it;
   the Mac's version checks use it to trust index rows.
-- **Read proofs** open nothing: `probeFileRead` asks `access(R_OK)` and then checks for a
-  regular file, the checks `download` makes, and fails with the kinds `download` would.
+- **Read proofs.** `probeDirectoryRead` opens a folder and reads one entry of it, no more.
 - **Zip** streams with `yazl`, reading each file only as the archive is read, and reports files
   and bytes read once every file is counted (`onProgress`). Compressing to zip
   (`/fs/compress`) streams this zip straight into an upload of the archive.
@@ -147,7 +156,7 @@ How the files folder implements it:
   throws is EMFILE/ENFILE, when the process runs out of file descriptors.
 - **Changes for the indexer.** Storage reports each change once it succeeds (`onChange`, a
   `DiskChange` by absolute path; [changes.ts](../packages/local/src/changes.ts)): an upload,
-  copy, delete, new modification time or new folder is `changed` (for `mkdir` with `parents`,
+  copy, delete or new folder is `changed` (for `mkdir` with `parents`,
   the first folder it made, and nothing when every folder existed), and a move is `moved`.
   An upload's change carries the sha256 of the bytes written and the file's size, `mtimeNs`,
   inode and change time from a stat once it is published; when the published name no longer
@@ -163,9 +172,11 @@ How the files folder implements it:
 
 ## Tests
 
-`describeStorageProvider(name, factory, options)` from `@fdrive/testkit` is the shared
-conformance suite; [the local suite](../packages/local/src/conformance.test.ts) runs it over a
-temporary directory. `createMemoryStorage` from `@fdrive/core/testing` is the application fake;
-do not add another. API tests build the files folder over a temporary directory
+`describeStorageProvider(name, factory)` from `@fdrive/testkit` is the one conformance suite, with
+no options and no skips: [the local suite](../packages/local/src/conformance.test.ts) runs it over a
+temporary directory and testkit runs it over the memory storage, so both implement every member
+the same way (the memory storage stores its zips uncompressed). `createMemoryStorage` from
+`@fdrive/core/testing` is the application fake; do not add another. A test that stands in for one
+call spreads it and overrides that call; `entryStat` builds what `stat` would report. API tests build the files folder over a temporary directory
 (`filesFolderFixture` in the [local fixtures](../apps/api/src/local/test-fixtures/index.ts)) or
 hand the storage factory a stand-in (`StorageSource`).

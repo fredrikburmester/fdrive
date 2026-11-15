@@ -56,7 +56,7 @@ async function statItem(deps: DriveToolsDeps, path: string): Promise<OrganizeIte
   const stat = await deps.principal.storage.stat(path);
   if (stat.kind !== "dir" && stat.kind !== "file")
     throw new AiToolError(`${path} is neither a file nor a folder.`);
-  return { path, kind: stat.kind, size: stat.size, modifiedAt: stat.modifiedAt ?? null };
+  return { path, kind: stat.kind, size: stat.size, modifiedAt: stat.modifiedAt };
 }
 
 function moveItemsTool(deps: ChatActionToolsDeps): ActionTool {
@@ -266,7 +266,7 @@ async function occupied(
 ) {
   try {
     const found = await storage.stat(target);
-    return (found.path ?? target) !== path;
+    return found.path !== path;
   } catch (error) {
     if (isStorageError(error) && error.kind === "not_found") return false;
     throw error;

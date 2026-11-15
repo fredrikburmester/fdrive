@@ -97,7 +97,7 @@ describe("initialMessage", () => {
     const message = initialMessage(
       [
         { path: "/Inbox/r.pdf", kind: "file", size: 1536, modifiedAt: new Date("2024-03-01") },
-        { path: "/Inbox/Old", kind: "dir", size: 0, modifiedAt: null },
+        { path: "/Inbox/Old", kind: "dir", size: 0, modifiedAt: new Date("2024-03-02") },
       ],
       undefined,
       true,
@@ -117,8 +117,8 @@ describe("initialMessage", () => {
   it("lists items from different folders without a shared heading and explains what is unavailable", () => {
     const message = initialMessage(
       [
-        { path: "/Inbox/a.txt", kind: "file", size: 10, modifiedAt: null },
-        { path: "/Desktop/b.txt", kind: "file", size: 20, modifiedAt: null },
+        { path: "/Inbox/a.txt", kind: "file", size: 10, modifiedAt: new Date("2024-03-01") },
+        { path: "/Desktop/b.txt", kind: "file", size: 20, modifiedAt: new Date("2024-03-02") },
       ],
       "Group by year",
       false,
@@ -127,8 +127,8 @@ describe("initialMessage", () => {
     expect(message).toBe(
       [
         "The 2 selected items:",
-        "- /Inbox/a.txt (10 B)",
-        "- /Desktop/b.txt (20 B)",
+        "- /Inbox/a.txt (10 B, modified 2024-03-01)",
+        "- /Desktop/b.txt (20 B, modified 2024-03-02)",
         "",
         "Extracted text and search are not available for this drive, so decide from names, types, sizes, dates and the folder structure.",
         "",

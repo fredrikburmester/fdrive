@@ -384,9 +384,10 @@ describe("what grants access fails closed", () => {
     const pausing = {
       ...principal.storage,
       move: async (...args: Parameters<Principal["storage"]["move"]>) => {
-        await principal.storage.move(...args);
+        const moved = await principal.storage.move(...args);
         onDisk();
         await paused;
+        return moved;
       },
     };
     const moving = files.move(

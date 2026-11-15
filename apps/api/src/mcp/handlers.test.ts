@@ -1,4 +1,5 @@
-import { type Scope, StorageError, type StorageProvider } from "@fdrive/core";
+import { type Download, type Scope, StorageError, type StorageProvider } from "@fdrive/core";
+import { createMemoryStorage, entryStat } from "@fdrive/core/testing";
 import type { ActivityListOptions, IndexedFile, IndexQueries } from "@fdrive/db";
 import { createMemoryRepos } from "@fdrive/db/testing";
 import { describe, expect, it, vi } from "vitest";
@@ -88,49 +89,40 @@ function stubIndexQueries(overrides: Partial<IndexQueries> = {}): IndexQueries {
   };
 }
 
-function notImplemented(): never {
-  throw new Error("not implemented in this fake");
-}
-
-function fakeDownloadResult(): Awaited<ReturnType<StorageProvider["download"]>> {
+function fakeDownloadResult(): Download {
   return {
     status: 200,
     body: { cancel: async () => {} } as unknown as ReadableStream<Uint8Array>,
-    contentLength: null,
+    contentLength: 0,
     contentRange: null,
-    contentType: null,
-    lastModified: null,
+    lastModified: new Date(0),
   };
 }
 
-/** A `StorageProvider` whose `list`/`download` succeed by default. */
+/** A storage `mkdir` that makes nothing and reports the folder asked for. */
+function madeFolder() {
+  return vi.fn(async (path: string) => ({ ...entryStat(path, { kind: "dir" }), created: path }));
+}
+
+/** A storage `move` that moves nothing and reports a file at the target. */
+function movedFile() {
+  return vi.fn(async (_path: string, target: string) => entryStat(target));
+}
+
+/**
+ * Memory storage where every path stats as an empty file, no file can be
+ * read for its size, and every download is empty, unless `overrides` says
+ * otherwise.
+ */
 function fakeStorage(overrides: Partial<StorageProvider> = {}): StorageProvider {
   return {
-    list: overrides.list ?? (async () => []),
-    stat:
-      overrides.stat ??
-      (async () => ({ kind: "file", size: 0, modifiedAt: null, contentType: null })),
-    statFile:
-      overrides.statFile ??
-      (async () => {
-        throw new StorageError("not_found", "missing");
-      }),
-    download: overrides.download ?? (async () => fakeDownloadResult()),
-    upload: overrides.upload ?? notImplemented,
-    mkdir: overrides.mkdir ?? notImplemented,
-    move: overrides.move ?? notImplemented,
-    copy: overrides.copy ?? notImplemented,
-    deleteFile: overrides.deleteFile ?? notImplemented,
-    deleteDir: overrides.deleteDir ?? notImplemented,
-    deleteEmptyDir: overrides.deleteEmptyDir ?? notImplemented,
-    setModifiedAt: overrides.setModifiedAt ?? notImplemented,
-    zip: overrides.zip ?? notImplemented,
-    trash: overrides.trash ?? {
-      put: notImplemented,
-      list: notImplemented,
-      restore: notImplemented,
-      purge: notImplemented,
+    ...createMemoryStorage(),
+    stat: async (path) => entryStat(path),
+    statFile: async () => {
+      throw new StorageError("not_found", "missing");
     },
+    download: async () => fakeDownloadResult(),
+    ...overrides,
   };
 }
 
@@ -1047,7 +1039,7 @@ describe("runIndexStats / indexStatsInScope", () => {
 
 describe("runCreateFolder", () => {
   it("refuses a read token", async () => {
-    const mkdir = vi.fn(async () => undefined);
+    const mkdir = madeFolder();
     await expect(
       runCreateFolder(baseDeps(), tokenPrincipal(fakeStorage({ mkdir }), "read"), {
         path: "/new",
@@ -1057,7 +1049,7 @@ describe("runCreateFolder", () => {
   });
 
   it("creates a folder for an organize token", async () => {
-    const mkdir = vi.fn(async () => undefined);
+    const mkdir = madeFolder();
 
     const result = await runCreateFolder(baseDeps(), tokenPrincipal(fakeStorage({ mkdir })), {
       path: "/new",
@@ -1070,7 +1062,7 @@ describe("runCreateFolder", () => {
   it.each(["/docs/../new", "//new", "/./new", "/new/", "/new/sub/.."])(
     "creates the folder at the admitted path for the unnormalized %s",
     async (path) => {
-      const mkdir = vi.fn(async () => undefined);
+      const mkdir = madeFolder();
 
       const result = await runCreateFolder(baseDeps(), tokenPrincipal(fakeStorage({ mkdir })), {
         path,
@@ -1084,7 +1076,7 @@ describe("runCreateFolder", () => {
   );
 
   it("leaves characters normalization must not touch byte-identical", async () => {
-    const mkdir = vi.fn(async () => undefined);
+    const mkdir = madeFolder();
 
     const result = await runCreateFolder(baseDeps(), tokenPrincipal(fakeStorage({ mkdir })), {
       path: "/a b/50%-off & #1..2",
@@ -1097,7 +1089,7 @@ describe("runCreateFolder", () => {
   it.each(["/.trash", "/.trash/deleted.txt", "/docs/../.trash"])(
     "refuses the Trash path %s before touching storage",
     async (path) => {
-      const mkdir = vi.fn(async () => undefined);
+      const mkdir = madeFolder();
       const deps = baseDeps();
 
       await expect(
@@ -1110,7 +1102,7 @@ describe("runCreateFolder", () => {
   it.each(["/private/new", "/docs/../private/new"])(
     "refuses %s outside the token's folders without touching storage",
     async (path) => {
-      const mkdir = vi.fn(async () => undefined);
+      const mkdir = madeFolder();
       const principal = tokenPrincipal(fakeStorage({ mkdir }), "organize", ["/docs"]);
 
       await expect(runCreateFolder(baseDeps(), principal, { path })).rejects.toThrow(
@@ -1121,7 +1113,7 @@ describe("runCreateFolder", () => {
   );
 
   it("needs no index, and live updates come from the change journal", async () => {
-    const mkdir = vi.fn(async () => undefined);
+    const mkdir = madeFolder();
     const deps = baseDeps({ indexed: async () => false });
 
     const result = await runCreateFolder(deps, tokenPrincipal(fakeStorage({ mkdir })), {
@@ -1133,7 +1125,7 @@ describe("runCreateFolder", () => {
   });
 
   it("refuses without file operations, before touching storage", async () => {
-    const mkdir = vi.fn(async () => undefined);
+    const mkdir = madeFolder();
     const { files: _files, ...deps } = baseDeps();
     await expect(
       runCreateFolder(deps, tokenPrincipal(fakeStorage({ mkdir })), { path: "/new" }),
@@ -1157,7 +1149,7 @@ describe("runMovePath", () => {
   });
 
   it("reports a completed move with a warning when metadata fails", async () => {
-    const move = vi.fn();
+    const move = movedFile();
     const metadata = createMetadataService(createMemoryRepos());
     vi.spyOn(metadata, "onMoved").mockRejectedValue(new Error("metadata unavailable"));
     const deps = baseDeps({ files: testFileOperations({ metadata }) });
@@ -1190,8 +1182,8 @@ describe("runMovePath", () => {
     const metadata = createMetadataService(createMemoryRepos());
     const onMoved = vi.spyOn(metadata, "onMoved");
     const storage = fakeStorage({
-      move: async () => {},
-      stat: async () => ({ kind: "dir", size: 0, modifiedAt: null, contentType: null }),
+      move: async (_path, target) => entryStat(target, { kind: "dir" }),
+      stat: async (path) => entryStat(path, { kind: "dir" }),
     });
     const result = await runMovePath(
       baseDeps({ files: testFileOperations({ metadata }) }),
@@ -1203,7 +1195,7 @@ describe("runMovePath", () => {
   });
 
   it("refuses a read token", async () => {
-    const move = vi.fn(async () => undefined);
+    const move = movedFile();
     await expect(
       runMovePath(baseDeps(), tokenPrincipal(fakeStorage({ move }), "read"), {
         src: "/a.txt",
@@ -1214,7 +1206,7 @@ describe("runMovePath", () => {
   });
 
   it("moves without any index", async () => {
-    const move = vi.fn(async () => undefined);
+    const move = movedFile();
     const deps = baseDeps({
       indexed: async () => false,
     });
@@ -1237,7 +1229,7 @@ describe("runMovePath", () => {
     ["/./a.txt", "/b.txt/"],
     ["/a.txt/", "/sub/../b.txt"],
   ])("moves the admitted paths for the unnormalized %s -> %s", async (src, dst) => {
-    const move = vi.fn(async () => undefined);
+    const move = movedFile();
 
     const result = await runMovePath(baseDeps(), tokenPrincipal(fakeStorage({ move })), {
       src,
@@ -1257,7 +1249,7 @@ describe("runMovePath", () => {
     ["dst", { src: "/a.txt", dst: "/.trash" }],
     ["dst", { src: "/a.txt", dst: "/docs/../.trash/a.txt" }],
   ])("refuses a %s in the Trash before touching storage", async (_label, args) => {
-    const move = vi.fn(async () => undefined);
+    const move = movedFile();
     const deps = baseDeps();
 
     await expect(runMovePath(deps, tokenPrincipal(fakeStorage({ move })), args)).rejects.toThrow(
@@ -1272,7 +1264,7 @@ describe("runMovePath", () => {
     { src: "/elsewhere/a.txt", dst: "/docs/b.txt" },
     { src: "/docs/a.txt", dst: "/elsewhere/b.txt" },
   ])("refuses a move leaving the token's folders: %o", async (args) => {
-    const move = vi.fn(async () => undefined);
+    const move = movedFile();
     const principal = tokenPrincipal(fakeStorage({ move }), "organize", ["/docs"]);
 
     await expect(runMovePath(baseDeps(), principal, args)).rejects.toThrow(
@@ -1282,7 +1274,7 @@ describe("runMovePath", () => {
   });
 
   it("refuses to move a grant root", async () => {
-    const move = vi.fn(async () => undefined);
+    const move = movedFile();
     const principal = tokenPrincipal(fakeStorage({ move }), "organize", ["/docs"]);
 
     await expect(
@@ -1294,7 +1286,7 @@ describe("runMovePath", () => {
   it("uses storage kind for an extensionless file in the returned url", async () => {
     const result = await runMovePath(
       baseDeps(),
-      tokenPrincipal(fakeStorage({ move: async () => undefined })),
+      tokenPrincipal(fakeStorage({ move: movedFile() })),
       { src: "/a", dst: "/folder" },
     );
 

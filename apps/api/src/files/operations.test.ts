@@ -93,7 +93,10 @@ describe("moving fails closed", () => {
   it("changes what grants access before the storage call, then lets the rest follow", async () => {
     const h = harness({ "/Projects/a.txt": "a" });
     const moved = await h.files.move(h.actor, "/Projects", "/Work");
-    expect(moved).toMatchObject({ kind: "dir", history: { pending: false } });
+    expect(moved).toMatchObject({
+      entry: { path: "/Work", kind: "dir" },
+      history: { pending: false },
+    });
     expect(h.steps).toEqual([
       "access moved alice /Projects -> /Work true",
       "storage move /Projects -> /Work",
@@ -326,17 +329,24 @@ describe("creating files", () => {
 
   it("only stores a piece before the last, which publishes nothing", async () => {
     const h = harness({});
-    const upload = vi.spyOn(h.storage, "upload").mockResolvedValue();
-    const part = { id: "0123456789abcdef", offset: 0, final: false };
-    expect(
-      await h.files.upload(h.actor, "/big.bin", new Uint8Array([1]), {
-        action: "file.upload",
-        part,
-      }),
-    ).toEqual({});
-    expect(upload).toHaveBeenCalledWith("/big.bin", expect.any(Uint8Array), { part });
+    const uploadPart = vi.spyOn(h.storage, "uploadPart");
+    const part = { id: "0123456789abcdef", offset: 0 };
+    await h.files.uploadPart(h.actor, "/big.bin", new Uint8Array([1]), { part });
+    expect(uploadPart).toHaveBeenCalledWith("/big.bin", expect.any(Uint8Array), { part });
+    expect(h.storage.dump()).toEqual({});
     expect(h.run).not.toHaveBeenCalled();
     expect(h.activity.operations).toEqual([]);
+  });
+
+  it("reports the uploaded file from the upload itself, stat'ing only what was there before", async () => {
+    const h = harness({ "/old.txt": "old" });
+    const stat = vi.spyOn(h.storage, "stat");
+    const { entry } = await h.files.upload(h.actor, "/old.txt", new Uint8Array([1, 2]), {
+      action: "file.save",
+      overwrite: true,
+    });
+    expect(entry).toMatchObject({ path: "/old.txt", kind: "file", size: 2 });
+    expect(stat.mock.calls).toEqual([["/old.txt"]]);
   });
 
   it("creates folders and copies holding only what they create, with nothing following a copy", async () => {
@@ -344,7 +354,7 @@ describe("creating files", () => {
     await h.files.mkdir(h.actor, "/folder");
     const copied = await h.files.copy(h.actor, "/a.txt", "/folder/a.txt", { variant: "duplicate" });
     await h.files.copy(h.actor, "/a.txt", "/a.txt");
-    expect(copied.kind).toBe("file");
+    expect(copied.entry).toMatchObject({ path: "/folder/a.txt", kind: "file", size: 1 });
     expect(h.run.mock.calls.map(([, paths]) => paths)).toEqual([
       { creates: ["/folder"] },
       { creates: ["/folder/a.txt"] },
@@ -461,7 +471,9 @@ describe("without anything else wired", () => {
     const files = testFileOperations({ access: testAccessFollowers(repo) });
     const storage = createMemoryStorage({ "/a.txt": "a" });
     const actor = fileActor(principal(storage), { source: "api" });
-    expect(await files.move(actor, "/a.txt", "/b.txt")).toEqual({ kind: "file" });
+    expect(await files.move(actor, "/a.txt", "/b.txt")).toEqual({
+      entry: await storage.stat("/b.txt"),
+    });
     expect(await files.trash(actor, "/b.txt")).toMatchObject({ item: { kind: "file" } });
     expect(repo.changes.map((change) => change.shares)).toEqual([
       { identityId: ALICE, from: "/a.txt", to: "/b.txt" },
