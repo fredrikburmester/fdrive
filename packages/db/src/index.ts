@@ -90,21 +90,22 @@ export {
   escapeLikePattern,
   toScopeClauses,
 } from "./repos/index-queries.js";
-export { createLoginRepo } from "./repos/logins.js";
 export type {
   LoginErrorCode,
   LoginRepo,
   LoginSessionInput,
-  LoginVerifiedInput,
-  LoginVerifiedResult,
-  SealedIdentityCredential,
+  NewLocalUser,
+  SetupOwner,
+  SignInInput,
+  SignInResult,
 } from "./repos/logins-types.js";
 export {
   LoginError,
+  SETUP_OWNER_KEY,
   validateCanonicalUuid,
-  validateLoginVerified,
-  validateSealedIdentityCredential,
+  validateNewLocalUser,
   validateSessionIdHash,
+  validateSignIn,
 } from "./repos/logins-types.js";
 export { createOfficeFileRepo } from "./repos/office-files.js";
 export type {
@@ -153,8 +154,6 @@ export type {
   AiChatSharing,
   ApiToken,
   ApiTokenRepo,
-  Credential,
-  CredentialRepo,
   Favorite,
   FavoriteKind,
   FavoriteRepo,

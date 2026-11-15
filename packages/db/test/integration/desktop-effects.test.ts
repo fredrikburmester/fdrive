@@ -38,7 +38,8 @@ async function fixture() {
   const identity = await repos.identities.create({
     accountId: account.id,
     providerId: provider.id,
-    externalUsername: "alice",
+    // Login names are unique in any case, and fixtures share one database.
+    externalUsername: `alice-${randomUUID()}`,
   });
   const desktop = createDesktopRepo(first.db);
   const worker = createDesktopEffectsRepo(first.db);

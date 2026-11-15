@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { beforeEach, describe, expect, it } from "vitest";
+import { SETUP_OWNER_KEY } from "../src/repos/logins-types.js";
 import type { Repos } from "../src/repos/types.js";
 import { ConflictError } from "../src/repos/types.js";
 
@@ -177,12 +178,28 @@ export function defineReposSuite(name: string, setup: () => Promise<Repos> | Rep
       });
     });
 
-    describe("localUsers", () => {
-      it("creates, finds without regard to case and lists users by name", async () => {
-        const bob = await repos.localUsers.create({ username: "bob", passwordHash: "h1" });
-        await repos.localUsers.create({ username: "Alice", passwordHash: "h2" });
+    /** Creates `username` the one way users are created: with an account and a login. */
+    async function addUser(username: string, passwordHash = "h", isAdmin = false) {
+      const provider = await repos.providers.ensure({ type: "local", baseUrl: "local" });
+      return repos.logins.createUser({
+        providerId: provider.id,
+        username,
+        passwordHash,
+        isAdmin,
+        at: new Date("2026-01-01T00:00:00.000Z"),
+      });
+    }
 
-        expect(bob).toMatchObject({ username: "bob", passwordHash: "h1", disabled: false });
+    describe("localUsers", () => {
+      it("finds users without regard to case and lists them by name", async () => {
+        await addUser("bob", "h1");
+        await addUser("Alice", "h2");
+
+        expect(await repos.localUsers.get("bob")).toMatchObject({
+          username: "bob",
+          passwordHash: "h1",
+          disabled: false,
+        });
         expect(await repos.localUsers.get("ALICE")).toMatchObject({ username: "Alice" });
         expect(await repos.localUsers.get("carol")).toBeNull();
         expect((await repos.localUsers.list()).map((user) => user.username)).toEqual([
@@ -192,15 +209,8 @@ export function defineReposSuite(name: string, setup: () => Promise<Repos> | Rep
         expect(await repos.localUsers.count()).toBe(2);
       });
 
-      it("refuses a name that is taken in another case", async () => {
-        await repos.localUsers.create({ username: "dave", passwordHash: "h" });
-        await expect(
-          repos.localUsers.create({ username: "DAVE", passwordHash: "h" }),
-        ).rejects.toBeInstanceOf(ConflictError);
-      });
-
       it("updates the password and disabled flag, and deletes", async () => {
-        await repos.localUsers.create({ username: "erin", passwordHash: "old" });
+        await addUser("erin", "old");
 
         const changed = await repos.localUsers.update("Erin", { passwordHash: "new" });
         expect(changed).toMatchObject({ username: "erin", passwordHash: "new", disabled: false });
@@ -218,12 +228,7 @@ export function defineReposSuite(name: string, setup: () => Promise<Repos> | Rep
 
     describe("localGrants", () => {
       beforeEach(async () => {
-        // The database suite keeps rows between tests; the memory one starts empty.
-        for (const username of ["gina", "hank", "ivy"]) {
-          if ((await repos.localUsers.get(username)) === null) {
-            await repos.localUsers.create({ username, passwordHash: "h" });
-          }
-        }
+        for (const username of ["gina", "hank", "ivy"]) await addUser(username);
       });
 
       it("shares a folder, changes its access and lists both sides oldest first", async () => {
@@ -470,90 +475,137 @@ export function defineReposSuite(name: string, setup: () => Promise<Repos> | Rep
       });
     });
 
-    describe("credentials", () => {
-      async function seedIdentity() {
-        const provider = await repos.providers.ensure({
-          type: "local",
-          baseUrl: "http://dav.test:8080",
-        });
-        const account = await repos.accounts.create({ displayName: "Erin" });
-        return repos.identities.create({
-          accountId: account.id,
-          providerId: provider.id,
-          externalUsername: "erin",
+    describe("logins", () => {
+      const at = new Date("2026-01-01T00:00:00.000Z");
+      const later = new Date("2026-01-02T00:00:00.000Z");
+      function signIn(username: string, idHash: string) {
+        return repos.logins.signIn({
+          username,
+          at: later,
+          session: {
+            idHash,
+            expiresAt: new Date("2099-01-01T00:00:00.000Z"),
+            userAgent: "vitest",
+            ip: "127.0.0.1",
+          },
         });
       }
+      async function owner(): Promise<unknown> {
+        return repos.settings.get(SETUP_OWNER_KEY);
+      }
 
-      it("returns null before a credential is put", async () => {
-        const identity = await seedIdentity();
+      it("creates a user with an account and a login of the same name", async () => {
+        const identity = await addUser("Carol", "hash", true);
 
-        expect(await repos.credentials.get(identity.id)).toBeNull();
+        expect(identity).toMatchObject({ externalUsername: "Carol", lastLoginAt: null });
+        expect(await repos.localUsers.get("carol")).toMatchObject({
+          username: "Carol",
+          passwordHash: "hash",
+        });
+        expect(await repos.accounts.get(identity.accountId)).toMatchObject({
+          displayName: "Carol",
+          isAdmin: true,
+        });
+        expect(await repos.identities.findByProviderUsername(identity.providerId, "Carol")).toEqual(
+          identity,
+        );
       });
 
-      it("stores and retrieves a credential", async () => {
-        const identity = await seedIdentity();
-        const ciphertext = new Uint8Array([1, 2, 3, 4]);
+      it("refuses a name taken in any case, and leaves nothing of the refused user", async () => {
+        await addUser("dave");
 
-        await repos.credentials.put({ identityId: identity.id, ciphertext, keyId: "master-v1" });
-
-        const fetched = await repos.credentials.get(identity.id);
-        expect(fetched?.keyId).toBe("master-v1");
-        expect(Array.from(fetched?.ciphertext ?? [])).toEqual([1, 2, 3, 4]);
-        expect(fetched?.cachedToken).toBeNull();
-        expect(fetched?.cachedTokenExpiresAt).toBeNull();
+        await expect(addUser("DAVE")).rejects.toBeInstanceOf(ConflictError);
+        expect((await repos.localUsers.list()).map((user) => user.username)).toEqual(["dave"]);
+        expect(
+          (await repos.identities.listAll()).map((identity) => identity.externalUsername),
+        ).toEqual(["dave"]);
       });
 
-      it("overwrites an existing credential", async () => {
-        const identity = await seedIdentity();
-        await repos.credentials.put({
+      it("gives a removed user's login back to the same name, and to no other spelling", async () => {
+        const first = await addUser("erin");
+        await repos.localUsers.delete("erin");
+
+        await expect(addUser("Erin")).rejects.toBeInstanceOf(ConflictError);
+        expect(await repos.localUsers.get("erin")).toBeNull();
+        const again = await addUser("erin", "h", true);
+
+        expect(again.id).toBe(first.id);
+        expect(await repos.accounts.get(first.accountId)).toMatchObject({ isAdmin: true });
+        expect(await repos.identities.listAll()).toHaveLength(1);
+      });
+
+      it("signs in by name in any case, records it on the login and creates the session", async () => {
+        const identity = await addUser("Frank");
+
+        const result = await signIn("FRANK", "a".repeat(64));
+
+        expect(result.identity).toMatchObject({ id: identity.id, lastLoginAt: later });
+        expect(result.session).toMatchObject({
+          idHash: "a".repeat(64),
+          accountId: identity.accountId,
           identityId: identity.id,
-          ciphertext: new Uint8Array([1]),
-          keyId: "master-v1",
+        });
+        expect((await repos.identities.get(identity.id))?.lastLoginAt).toEqual(later);
+        expect(await repos.sessions.getByIdHash("a".repeat(64), at)).toMatchObject({
+          identityId: identity.id,
+        });
+      });
+
+      it("refuses a sign-in for a name without a login", async () => {
+        await expect(signIn("nobody", "b".repeat(64))).rejects.toMatchObject({
+          code: "missing_identity",
+        });
+      });
+
+      it("sets the owner up as an administrator and records them", async () => {
+        const provider = await repos.providers.ensure({ type: "local", baseUrl: "local" });
+
+        const identity = await repos.logins.setup({
+          providerId: provider.id,
+          username: "gail",
+          passwordHash: "h",
+          at,
         });
 
-        await repos.credentials.put({
-          identityId: identity.id,
-          ciphertext: new Uint8Array([9, 9]),
-          keyId: "master-v2",
-        });
-
-        const fetched = await repos.credentials.get(identity.id);
-        expect(fetched?.keyId).toBe("master-v2");
-        expect(Array.from(fetched?.ciphertext ?? [])).toEqual([9, 9]);
+        expect(await repos.localUsers.get("gail")).not.toBeNull();
+        expect(await repos.accounts.get(identity.accountId)).toMatchObject({ isAdmin: true });
+        expect(await owner()).toEqual({ state: "complete", accountId: identity.accountId });
       });
 
-      it("sets and clears the cached token", async () => {
-        const identity = await seedIdentity();
-        await repos.credentials.put({
-          identityId: identity.id,
-          ciphertext: new Uint8Array([1]),
-          keyId: "master-v1",
-        });
-        const expiresAt = new Date("2026-01-01T00:20:00.000Z");
+      it("leaves no half-created owner when setup is refused", async () => {
+        const provider = await repos.providers.ensure({ type: "local", baseUrl: "local" });
+        const setup = (username: string) =>
+          repos.logins.setup({ providerId: provider.id, username, passwordHash: "h", at });
+        const first = await setup("hal");
 
-        await repos.credentials.setCachedToken(identity.id, { sealed: "sealed-token", expiresAt });
+        // Setup is already complete: the second owner is not created.
+        await expect(setup("ida")).rejects.toMatchObject({ code: "setup_claimed" });
+        // A taken name refuses before anything is recorded.
+        await expect(setup("HAL")).rejects.toBeInstanceOf(ConflictError);
 
-        let fetched = await repos.credentials.get(identity.id);
-        expect(fetched?.cachedToken).toBe("sealed-token");
-        expect(fetched?.cachedTokenExpiresAt).toEqual(expiresAt);
-
-        await repos.credentials.setCachedToken(identity.id, null);
-
-        fetched = await repos.credentials.get(identity.id);
-        expect(fetched?.cachedToken).toBeNull();
-        expect(fetched?.cachedTokenExpiresAt).toBeNull();
+        expect((await repos.localUsers.list()).map((user) => user.username)).toEqual(["hal"]);
+        expect(await repos.identities.listAll()).toEqual([first]);
+        expect(await owner()).toEqual({ state: "complete", accountId: first.accountId });
       });
 
-      it("setCachedToken on an identity with no credential row is a no-op", async () => {
-        const identity = await seedIdentity();
+      it("lets exactly one of two racing setups own the installation", async () => {
+        const provider = await repos.providers.ensure({ type: "local", baseUrl: "local" });
+        const results = await Promise.allSettled(
+          ["jan", "kim"].map((username) =>
+            repos.logins.setup({ providerId: provider.id, username, passwordHash: "h", at }),
+          ),
+        );
 
-        await expect(
-          repos.credentials.setCachedToken(identity.id, {
-            sealed: "x",
-            expiresAt: new Date(),
-          }),
-        ).resolves.toBeUndefined();
-        expect(await repos.credentials.get(identity.id)).toBeNull();
+        const won = results.flatMap((result) => (result.status === "fulfilled" ? [result] : []));
+        expect(won).toHaveLength(1);
+        expect(results.find((result) => result.status === "rejected")).toMatchObject({
+          reason: { code: "setup_claimed" },
+        });
+        const winner = won[0]?.value;
+        expect((await repos.localUsers.list()).map((user) => user.username)).toEqual([
+          winner?.externalUsername,
+        ]);
+        expect(await owner()).toEqual({ state: "complete", accountId: winner?.accountId });
       });
     });
 

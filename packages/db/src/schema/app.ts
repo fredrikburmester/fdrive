@@ -54,7 +54,8 @@ export const providers = appSchema.table(
  * The users of the built-in local storage, which fdrive owns: one row per
  * home folder `<FDRIVE_STORAGE_ROOT>/<username>`. Names are unique without
  * regard to case, because the home folders may sit on a case-insensitive
- * disk. A login (`identities`) on the local provider names one of these.
+ * disk. Each has a login (`identities`) of the same name, created with it;
+ * a removed user's login stays, so adding the name again gives it back.
  */
 export const localUsers = appSchema.table(
   "local_users",
@@ -129,19 +130,13 @@ export const identities = appSchema.table(
     ),
     // One login per account.
     unique("identities_account_id_unique").on(table.accountId),
+    // A login is its local user's: unique in any case, as `local_users` is,
+    // so a sign-in finds it however its name is typed.
+    uniqueIndex("identities_external_username_lower_unique").on(
+      sql`lower(${table.externalUsername})`,
+    ),
   ],
 );
-
-export const credentials = appSchema.table("credentials", {
-  identityId: uuid("identity_id")
-    .primaryKey()
-    .references(() => identities.id, { onDelete: "cascade" }),
-  ciphertext: bytea("ciphertext").notNull(),
-  keyId: text("key_id").notNull(),
-  cachedToken: text("cached_token"),
-  cachedTokenExpiresAt: timestamp("cached_token_expires_at", { withTimezone: true }),
-  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
-});
 
 export const sessions = appSchema.table(
   "sessions",
