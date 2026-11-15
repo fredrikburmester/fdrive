@@ -40,10 +40,12 @@ export {
 } from "./repos/changes.js";
 export {
   createDesktopRepo,
+  type DesktopAccessMove,
   type DesktopItemRecord,
   type DesktopOperationRecord,
   type DesktopRepo,
   type DesktopRetention,
+  type DesktopShareMove,
 } from "./repos/desktop.js";
 export {
   createDesktopPublishLock,

@@ -207,29 +207,31 @@ destination, stages and validates new bytes, backs up an existing file, then pub
 atomic rename, fenced by the per-identity lock plus the pre-publication recheck. Original backups remain under the reserved
 `/.fdrive-desktop` namespace, hidden from native ordinary reads and from the web file tree.
 Failed staging reuses its recorded directory. A commit whose publication cannot be confirmed stays
-uncertain and cannot automatically replay as a new write. The completed receipt and the write's
-personal history commit in one PostgreSQL transaction after publication. A failure before that
-transaction commits remains uncertain. Replaying or acknowledging that receipt never republishes
-the file.
+uncertain and cannot automatically replay as a new write. The completed receipt, the write's
+personal history and what grants access to the moved path (public links and folders shared
+with people) commit in one PostgreSQL transaction after publication, so no link or share stays
+at a path the write left, where a new item could appear. A failure before that transaction
+commits remains uncertain, never success; resolving it moves sharing from where the item was
+when the write was prepared. Replaying or acknowledging that receipt never republishes the file.
 
-**Metadata.** Once the receipt is kept, the commit brings path-keyed metadata along through
-the service web writes use, and tells the web once, as web writes do right after their storage
-call ([writes.ts](../apps/api/src/desktop/writes.ts), `follow`): tags, favorites, folder views,
-recents, AI chat references, folders shared with people, public links and Office files follow
-a move. A move into the Mac's Trash is a trash: folders shared with people and public links
-follow the item into `/.fdrive-desktop/<identity>/trash`, which neither reaches, recents go, and
-tags, favorites and folder views stay at the original path. A restore brings those back as a
-web restore does, only while nothing has taken the original path, and what followed the item
-into the Trash comes back with it. The Mac's item handles are the commit's own; this step never
-touches them. A new write never waits for an earlier one's metadata.
+**Metadata.** Once the receipt is kept, the commit brings the rest of path-keyed metadata along
+through the service web writes use, and tells the web once, as web writes do right after their
+storage call ([writes.ts](../apps/api/src/desktop/writes.ts), `follow`): tags, favorites, folder
+views, recents, AI chat references and Office files follow a move. A move into the Mac's Trash
+is a trash: links and shares follow the item into `/.fdrive-desktop/<identity>/trash`, which
+neither reaches, recents go, and tags, favorites and folder views stay at the original path. A
+restore brings those back as a web restore does, only while nothing has taken the original path,
+and links and shares come back with the item. The Mac's item handles are the commit's own; this
+step never touches them. A new write never waits for an earlier one's metadata.
 
-A metadata failure is logged and never fails the commit: the file is published and its receipt
-answers. The indexer reports the same move from the change journal, and its listener
-([indexer-listener.ts](../apps/api/src/events/indexer-listener.ts)) moves metadata and tells the
-web then, which also covers a crash between the rename and this step. As for web writes, that
-second chance needs indexing on, and an empty folder's move is not reported as a move. The
-listener sees a move into the Mac's Trash as a delete, since the indexer never walks
-`/.fdrive-desktop`, so with indexing on tags left at a trashed item's original path go.
+None of that step grants access, so a failure there is logged and never fails the commit: the
+file is published and its receipt answers. The indexer reports the same move from the change
+journal, and its listener ([indexer-listener.ts](../apps/api/src/events/indexer-listener.ts))
+moves metadata and tells the web then, which also covers a crash between the receipt and this
+step. As for web writes, that second chance needs indexing on, and an empty folder's move is not
+reported as a move. The listener sees a move into the Mac's Trash as a delete, since the indexer
+never walks `/.fdrive-desktop`, so with indexing on tags left at a trashed item's original path
+go.
 
 Administrators can list up to 100 `uncertain` commits at `GET /api/v1/desktop/recovery` (state,
 kind, name and whether a `committing` row has stalled for 15 minutes). After inspecting storage,

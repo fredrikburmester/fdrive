@@ -20,6 +20,7 @@ import {
   createRepos,
   createShareRepo,
   createWopiLockRepo,
+  type DesktopAccessMove,
   migrate,
 } from "@fdrive/db";
 import { SHARED_WITH_ME } from "@fdrive/local";
@@ -77,7 +78,7 @@ import type { McpToolDeps } from "./mcp/handlers.js";
 import { createIndexerExtractClient } from "./mcp/indexer-client.js";
 import { registerMcpRoutes } from "./mcp/routes.js";
 import { registerMetadataRoutes } from "./metadata/routes.js";
-import { createMetadataService } from "./metadata/service.js";
+import { createMetadataService, withFollowers } from "./metadata/service.js";
 import { withTrashMoves } from "./metadata/trash-moves.js";
 import { extractClientIp } from "./net.js";
 import { configuredOfficeProduct, officeConfig } from "./office/config.ts";
@@ -437,10 +438,11 @@ export async function composeApp(
   // called both from the fs routes below (moves and deletes made through
   // fdrive) and from the indexer listener (changes seen over SFTP or any
   // other client), so metadata survives renames from either source.
-  const metadataCore = createMetadataService({
-    ...repos,
-    followers: [localGrants, shareMoves],
-  });
+  const metadataCore = createMetadataService(repos);
+  // What grants access (folders shared with people, public links) follows
+  // first, in an outer layer, so a failure in tags or favorites never leaves
+  // it at a path a new item could take.
+  const accessFollowers = [localGrants, shareMoves];
   /** A login's Trash folder while Trash is on; none for a login removed since. */
   const trashPathOf = async (identityId: string): Promise<string | null> => {
     try {
@@ -451,7 +453,7 @@ export async function composeApp(
     }
   };
   // A move into the Trash, whoever reports it, leaves metadata where the item was.
-  const metadataService = withTrashMoves(metadataCore, trashPathOf);
+  const metadataService = withFollowers(withTrashMoves(metadataCore, trashPathOf), accessFollowers);
   const desktopRepo = createDesktopRepo(db);
   // Serializes Mac desktop commits per identity; no other fdrive writer takes
   // it. Mac writes are read-only unless this is configured.
@@ -491,14 +493,25 @@ export async function composeApp(
       scopeResolver.configuredMappings,
       clock,
     );
-  const fsMetadata = withTrashMoves(
-    withOffice(withDesktopMetadata(metadataCore, desktopRepo)),
-    trashPathOf,
+  const fsMetadata = withFollowers(
+    withTrashMoves(withOffice(withDesktopMetadata(metadataCore, desktopRepo)), trashPathOf),
+    accessFollowers,
   );
-  // Mac writes keep their own item handles (`desktop/writes.ts`), so their
-  // metadata skips the handle registry: its `onTrashed` would retire the
-  // handle of an item the Mac puts in its own Trash.
+  // A Mac write moves what grants access with its receipt (`desktop/writes.ts`)
+  // and the rest after it. It keeps its own item handles, so this skips the
+  // handle registry, whose `onTrashed` would retire the handle of an item the
+  // Mac puts in its own Trash.
   const desktopMetadata = withTrashMoves(withOffice(metadataCore), trashPathOf);
+  const desktopAccess = async (
+    identityId: string,
+    from: string,
+    to: string,
+    directory: boolean,
+  ): Promise<DesktopAccessMove | null> => {
+    const shares = await shareMoves.resolve(identityId, from, to);
+    const grants = await localGrants.grantMove(identityId, from, to, directory);
+    return shares === null && grants === null ? null : { directory, shares, grants };
+  };
   const officeProduct = configuredOfficeProduct(config);
   const officeDiscoveries = new Map<string, ReturnType<typeof createDiscoveryCache>>();
   /** Only the compose-bundled ONLYOFFICE image runs a controller with a `/runtime` status document. */
@@ -965,6 +978,7 @@ export async function composeApp(
           indexedContent: desktopIndexedContent,
           publishLock: desktopPublishLock,
           clock,
+          access: desktopAccess,
           metadata: desktopMetadata,
           bus,
           logger,

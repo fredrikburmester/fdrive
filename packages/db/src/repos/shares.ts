@@ -34,12 +34,13 @@ const { passwordHash: _passwordHash, ...recordColumns } = getTableColumns(shares
 type RecordRow = Omit<typeof shares.$inferSelect, "passwordHash">;
 
 /**
- * `ShareRepo.movePrefix` as one statement. Each row's new paths are computed
- * from the row as it is when the update reaches it, so a concurrent edit or
- * move of the same share is never lost; a path the move lands on twice is
- * kept once, where it first stood.
+ * `ShareRepo.movePrefix` as one statement on `db`, so a caller already in a
+ * transaction (a Mac write's receipt) applies it there. Each row's new
+ * paths are computed from the row as it is when the update reaches it, so a
+ * concurrent edit or move of the same share is never lost; a path the move
+ * lands on twice is kept once, where it first stood.
  */
-async function moveSharePrefix(
+export async function moveSharePrefix(
   db: Pick<Db, "execute">,
   identityId: string,
   from: string,
@@ -75,11 +76,12 @@ async function moveSharePrefix(
 }
 
 /**
- * `ShareRepo.deletePrefix` on `db`. It is two statements, so `deletePrefix`
- * runs it in a transaction of its own: the shares that keep a path lose the
- * deleted ones, then those left with nothing but deleted paths go.
+ * `ShareRepo.deletePrefix` on `db`, for a caller already in a transaction.
+ * It is two statements, so `deletePrefix` runs it in one of its own: the
+ * shares that keep a path lose the deleted ones, then those left with
+ * nothing but deleted paths go.
  */
-async function deleteSharePrefix(
+export async function deleteSharePrefix(
   db: Pick<Db, "execute">,
   identityId: string,
   path: string,

@@ -8,6 +8,7 @@ import {
   DesktopWritePairResult,
   type FsEvent,
   GrantsResponse,
+  ManagedShare,
   ROUTES,
 } from "@fdrive/contracts";
 import { createDb, createRepos, type Repos, schema } from "@fdrive/db";
@@ -24,10 +25,12 @@ const q = encodeURIComponent;
 /**
  * What the Mac's writes do to everything kept by path, through the composed
  * API: a move brings tags, favorites, folder views, folders shared with
- * people and AI chat references along before its commit answers, and tells
- * the browser once; the Mac's Trash keeps tags at the original path for a
- * restore while what grants access follows the item in and back out. No
- * indexer runs; the last test sends the move the indexer would report.
+ * people, public links and AI chat references along before its commit
+ * answers, and tells the browser once; the Mac's Trash keeps tags at the
+ * original path for a restore while what grants access follows the item in
+ * and back out. What grants access moves with the receipt or the commit is
+ * not confirmed; the rest never holds a write back. No indexer runs; the
+ * last test sends the move the indexer would report.
  */
 describe("metadata follows the Mac's writes as they commit", () => {
   let postgres: Awaited<ReturnType<typeof startPostgres>>;
@@ -54,6 +57,7 @@ describe("metadata follows the Mac's writes as they commit", () => {
             "/Project/sub/notes.txt": "notes",
             "/Binned/inside.txt": "binned",
             "/Crash/kept.txt": "kept",
+            "/Locked/doc.txt": "locked",
             "/next.txt": "next",
           },
           bob: { "/bobs.txt": "bob" },
@@ -61,6 +65,8 @@ describe("metadata follows the Mac's writes as they commit", () => {
         grants: [
           { owner: "alice", path: "/Project", grantee: "bob", access: "read" },
           { owner: "alice", path: "/Binned", grantee: "bob", access: "read" },
+          { owner: "alice", path: "/Crash", grantee: "bob", access: "read" },
+          { owner: "alice", path: "/Locked", grantee: "bob", access: "read" },
         ],
       }),
     ]);
@@ -72,6 +78,7 @@ describe("metadata follows the Mac's writes as they commit", () => {
         FDRIVE_STORAGE_ROOT: storage.root,
         FDRIVE_MASTER_KEY: Buffer.alloc(32, 23).toString("base64"),
         FDRIVE_DESKTOP_STATE_DIR: stateDir,
+        FDRIVE_ADMIN_USERS: "alice",
         // Configured so the API journals its changes and the indexer listener
         // runs; no indexer does, the last test notifies for it.
         FDRIVE_INDEX_ROOTS: JSON.stringify([
@@ -202,7 +209,21 @@ describe("metadata follows the Mac's writes as they commit", () => {
       .owned.map((grant) => grant.path)
       .sort();
   const sharedWithBob = async () =>
-    GrantsResponse.parse(await ok(call(ROUTES.grants.list, { cookie: bob }))).received.length;
+    GrantsResponse.parse(await ok(call(ROUTES.grants.list, { cookie: bob }))).received.map(
+      (grant) => grant.name,
+    );
+  /** A public link alice makes on `path`. */
+  const link = async (path: string) =>
+    ManagedShare.parse(
+      await ok(
+        call(ROUTES.shares, {
+          cookie: alice,
+          body: { name: "Link", paths: [path], scope: "read" },
+        }),
+      ),
+    ).id;
+  const linkPaths = async (id: string) =>
+    ManagedShare.parse(await ok(call(`${ROUTES.shares}/${id}`, { cookie: alice }))).paths;
   const favorites = async () =>
     (await repos.favorites.list(identityId)).map((favorite) => favorite.path).sort();
 
@@ -232,7 +253,8 @@ describe("metadata follows the Mac's writes as they commit", () => {
       expect((await repos.recents.list(identityId, 10)).map((recent) => recent.path)).toEqual([
         "/Renamed/sub/notes.txt",
       ]);
-      expect(await grantPaths()).toEqual(["/Binned", "/Renamed"]);
+      expect(await grantPaths()).toContain("/Renamed");
+      expect(await grantPaths()).not.toContain("/Project");
       expect(await repos.aiChats.references(chat.id)).toMatchObject([
         { path: "/Renamed/sub/notes.txt", missing: false },
       ]);
@@ -253,7 +275,7 @@ describe("metadata follows the Mac's writes as they commit", () => {
     await repos.fileTags.setTags(identityId, "/Binned/inside.txt", [tag.id]);
     await repos.recents.touch(identityId, "/Binned/inside.txt");
     const folder = await stat("/Binned");
-    const shared = await sharedWithBob();
+    expect(await sharedWithBob()).toContain("Binned");
 
     const trashed = await macMove(folder, "trash");
     expect(trashed).toMatchObject({ id: folder.id, parentId: "trash", trashed: true });
@@ -266,13 +288,61 @@ describe("metadata follows the Mac's writes as they commit", () => {
       "/Binned/inside.txt",
     );
     expect(await grantPaths()).toContain(`/.fdrive-desktop/${identityId}/trash/${folder.id}`);
-    expect(await sharedWithBob()).toBe(shared - 1);
+    expect(await sharedWithBob()).not.toContain("Binned");
 
     const back = await macMove(trashed, "root");
     expect(back).toMatchObject({ id: folder.id, path: "/Binned", trashed: false });
     expect(await repos.fileTags.pathsForTag(identityId, tag.id)).toEqual(["/Binned/inside.txt"]);
     expect(await grantPaths()).toContain("/Binned");
-    expect(await sharedWithBob()).toBe(shared);
+    expect(await sharedWithBob()).toContain("Binned");
+  });
+
+  it("leaves a commit unconfirmed when sharing cannot move, and resolving it moves sharing", async () => {
+    const doc = await link("/Locked/doc.txt");
+    const folder = await stat("/Locked");
+    await database.pool.query(
+      "CREATE FUNCTION app.refuse_locked_grant() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF OLD.path = '/Locked' THEN RAISE EXCEPTION 'injected grant outage'; END IF; RETURN NEW; END $$",
+    );
+    await database.pool.query(
+      "CREATE TRIGGER refuse_locked_grant BEFORE UPDATE ON app.local_grants FOR EACH ROW EXECUTE FUNCTION app.refuse_locked_grant()",
+    );
+    const operationId = randomUUID();
+    try {
+      await ok(
+        call(`${base}/moves`, {
+          headers,
+          body: {
+            operationId,
+            itemId: folder.id,
+            parentId: "root",
+            name: "Unlocked",
+            base: folder.version,
+          },
+        }),
+      );
+      const commit = await call(`${base}/operations/${operationId}/commit`, { headers, body: {} });
+      // Never success: the receipt and the link's move went with the grant's.
+      expect(commit.status).toBe(409);
+      expect(await commit.json()).toMatchObject({ details: { code: "operation_uncertain" } });
+      expect(await linkPaths(doc)).toEqual(["/Locked/doc.txt"]);
+      expect(await grantPaths()).toContain("/Locked");
+    } finally {
+      await database.pool.query("DROP TRIGGER refuse_locked_grant ON app.local_grants");
+      await database.pool.query("DROP FUNCTION app.refuse_locked_grant()");
+    }
+    // An administrator finds the folder moved and resolves it as published.
+    const resolved = await call(`/api/v1/desktop/recovery/${identityId}/${operationId}/resolve`, {
+      cookie: alice,
+      body: { outcome: "published" },
+    });
+    expect(resolved.status, await resolved.clone().text()).toBe(200);
+    expect(await linkPaths(doc)).toEqual(["/Unlocked/doc.txt"]);
+    expect(await grantPaths()).toContain("/Unlocked");
+    expect(await grantPaths()).not.toContain("/Locked");
+    // Nothing reaches a new folder where the old one was.
+    await ok(call(ROUTES.fs.mkdir, { cookie: alice, body: { path: "/Locked" } }));
+    expect(await sharedWithBob()).toContain("Unlocked");
+    expect(await sharedWithBob()).not.toContain("Locked");
   });
 
   it("never refuses a later write, and the indexer's report of a move brings metadata along", async () => {
@@ -287,6 +357,9 @@ describe("metadata follows the Mac's writes as they commit", () => {
     try {
       expect((await macMove(await stat("/Crash"), "root", "Crashed")).path).toBe("/Crashed");
       expect(await favorites()).toContain("/Crash");
+      // The failing favorite never held back the share, which moved with the receipt.
+      expect(await grantPaths()).toContain("/Crashed");
+      expect(await grantPaths()).not.toContain("/Crash");
       // The next write publishes at once; nothing waits on the metadata that failed.
       expect((await macMove(await stat("/next.txt"), "root", "later.txt")).path).toBe("/later.txt");
     } finally {

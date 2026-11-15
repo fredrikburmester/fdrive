@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { DesktopWriteEntry } from "@fdrive/contracts";
 import { StorageError } from "@fdrive/core";
-import type { DesktopPublishLock } from "@fdrive/db";
+import type { DesktopAccessMove, DesktopPublishLock } from "@fdrive/db";
 import { createLocalStorage } from "@fdrive/local";
 import { createMemoryStorage } from "@fdrive/testkit";
 import { afterEach, expect, it, vi } from "vitest";
@@ -46,6 +46,11 @@ async function fixture() {
     tokenAccess: { mode: "full", paths: ["/"] },
     verifyAuthority: vi.fn(async () => true),
   };
+  // Every move is one the owner's public links follow, in the owner's files.
+  const access = vi.fn(
+    async (identityId: string, from: string, to: string, directory: boolean) =>
+      ({ directory, shares: { identityId, from, to }, grants: null }) as DesktopAccessMove,
+  );
   const metadata = {
     onMoved: vi.fn(async () => {}),
     onTrashed: vi.fn(async () => {}),
@@ -58,6 +63,7 @@ async function fixture() {
     stateDir,
     clock: () => new Date(),
     trashPathForStorage: () => null,
+    access,
     metadata,
     bus,
     publishLock: vi.fn(async (_identityId: string, run: () => Promise<unknown>) =>
@@ -91,6 +97,7 @@ async function fixture() {
     stateDir,
     stage,
     read,
+    access,
     metadata,
     events,
   };
@@ -536,6 +543,11 @@ it("resolves trash moves and restores, and refuses missing sources or unavailabl
     originalPath: "/old.txt",
   });
   // Resolving brings metadata along as the commit would have.
+  expect(f.moved.get(trashed.operationId)?.shares).toEqual({
+    identityId,
+    from: "/old.txt",
+    to: `${trashRoot}/${original.id}`,
+  });
   expect(f.metadata.onTrashed).toHaveBeenLastCalledWith(
     identityId,
     "/old.txt",
@@ -567,12 +579,11 @@ it("resolves trash moves and restores, and refuses missing sources or unavailabl
     path: "/old.txt",
     originalPath: null,
   });
-  expect(f.metadata.onMoved).toHaveBeenLastCalledWith(
+  expect(f.moved.get(restore.operationId)?.shares).toEqual({
     identityId,
-    `${trashRoot}/${original.id}`,
-    "/old.txt",
-    false,
-  );
+    from: `${trashRoot}/${original.id}`,
+    to: "/old.txt",
+  });
   // A source handle that disappeared cannot be resolved as published.
   const orphan = await f.stage("old.txt", "orphan", await service.stat(f.principal, "/old.txt"));
   markUncertain(orphan.operationId);
@@ -1523,6 +1534,12 @@ it("moves metadata with a Mac move and tells the web once", async () => {
     base: item.version,
   });
   await f.service.commit(f.principal, operationId);
+  // Links and shares move with the receipt; the rest right after it.
+  expect(f.moved.get(operationId)).toEqual({
+    directory: false,
+    shares: { identityId: f.principal.identityId, from: "/old.txt", to: "/folder/moved.txt" },
+    grants: null,
+  });
   expect(f.metadata.onMoved.mock.calls).toEqual([
     [f.principal.identityId, "/old.txt", "/folder/moved.txt", false],
   ]);
@@ -1532,6 +1549,7 @@ it("moves metadata with a Mac move and tells the web once", async () => {
   ]);
   // A replayed commit returns its receipt without applying anything again.
   await f.service.commit(f.principal, operationId);
+  expect(f.access).toHaveBeenCalledTimes(1);
   expect(f.metadata.onMoved).toHaveBeenCalledTimes(1);
   expect(f.events).toHaveLength(1);
 });
@@ -1540,6 +1558,7 @@ it("keeps the Mac's Trash as it was: the handle survives, and a restore brings m
   const f = await fixture();
   const { identityId } = f.principal;
   const trashRoot = `/.fdrive-desktop/${identityId}/trash`;
+  const links = () => [...f.moved.values()].at(-1)?.shares;
   const move = async (item: DesktopWriteEntry, parentId: string, name = item.name) => {
     const operationId = randomUUID();
     await f.service.prepare(f.principal, {
@@ -1555,7 +1574,8 @@ it("keeps the Mac's Trash as it was: the handle survives, and a restore brings m
   const file = await f.service.stat(f.principal, "/old.txt");
   const trashed = await move(file, "trash");
   expect(trashed).toMatchObject({ id: file.id, parentId: "trash", trashed: true });
-  // What grants access follows the item into the Mac's Trash; its handle is kept.
+  // What grants access follows the item into the Mac's Trash; recents go; its handle is kept.
+  expect(links()).toEqual({ identityId, from: "/old.txt", to: `${trashRoot}/${file.id}` });
   expect(f.metadata.onTrashed.mock.calls).toEqual([
     [identityId, "/old.txt", false, `${trashRoot}/${file.id}`],
   ]);
@@ -1564,12 +1584,12 @@ it("keeps the Mac's Trash as it was: the handle survives, and a restore brings m
     originalPath: "/old.txt",
   });
   expect(f.events.at(-1)).toMatchObject({ op: "delete", paths: ["/old.txt"] });
-  // Put back under its own name: what followed it comes back with it.
+  // Put back under its own name: what followed it comes back with it, and
+  // tags never left.
   const back = await move(trashed, "root");
   expect(back).toMatchObject({ id: file.id, path: "/old.txt", trashed: false });
-  expect(f.metadata.onMoved.mock.calls).toEqual([
-    [identityId, `${trashRoot}/${file.id}`, "/old.txt", false],
-  ]);
+  expect(links()).toEqual({ identityId, from: `${trashRoot}/${file.id}`, to: "/old.txt" });
+  expect(f.metadata.onMoved).not.toHaveBeenCalled();
   expect(f.events.at(-1)).toMatchObject({ op: "create", paths: ["/old.txt"] });
   expect([...f.completed.values()].at(-1)).toMatchObject({
     from: "/old.txt",
@@ -1578,13 +1598,10 @@ it("keeps the Mac's Trash as it was: the handle survives, and a restore brings m
     trash: false,
   });
   // Put back under a new name: metadata left at the free original path follows too.
-  f.metadata.onMoved.mockClear();
   const again = await move(await f.service.stat(f.principal, "/old.txt"), "trash");
   await move(again, "root", "renamed.txt");
-  expect(f.metadata.onMoved.mock.calls).toEqual([
-    [identityId, "/old.txt", "/renamed.txt", false],
-    [identityId, `${trashRoot}/${file.id}`, "/renamed.txt", false],
-  ]);
+  expect(links()).toEqual({ identityId, from: `${trashRoot}/${file.id}`, to: "/renamed.txt" });
+  expect(f.metadata.onMoved.mock.calls).toEqual([[identityId, "/old.txt", "/renamed.txt", false]]);
   expect(f.events.at(-1)).toMatchObject({
     op: "move",
     paths: ["/old.txt"],
@@ -1621,9 +1638,59 @@ it("restores into a folder that took the item's place without taking that folder
   expect(restored.item).toMatchObject({ path: "/folder/nested", trashed: false });
   expect(await f.read("/folder/nested/child")).toBe("child");
   // `/folder` is someone else now, so only what followed the item into Trash comes back.
-  expect(f.metadata.onMoved.mock.calls).toEqual([
-    [identityId, `/.fdrive-desktop/${identityId}/trash/${source.id}`, "/folder/nested", true],
-  ]);
+  expect(f.moved.get(restoreId)).toEqual({
+    directory: true,
+    shares: {
+      identityId,
+      from: `/.fdrive-desktop/${identityId}/trash/${source.id}`,
+      to: "/folder/nested",
+    },
+    grants: null,
+  });
+  expect(f.metadata.onMoved).not.toHaveBeenCalled();
+});
+
+it("reports a commit unconfirmed when what grants access cannot move, and resolving moves it", async () => {
+  const f = await fixture();
+  const { identityId, accountId } = f.principal;
+  const service = createDesktopWrites({ ...f.deps, storageForIdentity: async () => f.storage });
+  const item = await service.stat(f.principal, "/old.txt");
+  const operationId = randomUUID();
+  await service.prepare(f.principal, {
+    kind: "move",
+    operationId,
+    itemId: item.id,
+    parentId: "root",
+    name: "renamed.txt",
+    base: item.version,
+  });
+  // The receipt's transaction fails on the links: nothing of it is kept.
+  const complete = vi.spyOn(f.repo, "complete").mockRejectedValueOnce(Error("links unavailable"));
+  await expect(service.commit(f.principal, operationId)).rejects.toMatchObject({
+    kind: "conflict",
+    details: { code: "operation_uncertain" },
+  });
+  expect(await f.read("/renamed.txt")).toBe("old");
+  expect((await service.status(f.principal, operationId)).state).toBe("uncertain");
+  expect(f.moved.has(operationId)).toBe(false);
+  // The rest of the metadata waits for the receipt too, and the web hears nothing yet.
+  expect(f.metadata.onMoved).not.toHaveBeenCalled();
+  expect(f.events).toEqual([]);
+  // Resolving moves them from where the item was, though its handle moved already.
+  complete.mockRestore();
+  const resolved = await service.resolve(
+    identityId,
+    accountId,
+    operationId,
+    "published",
+    new Date(),
+  );
+  expect(resolved).toMatchObject({ state: "completed", item: { path: "/renamed.txt" } });
+  expect(f.moved.get(operationId)?.shares).toEqual({
+    identityId,
+    from: "/old.txt",
+    to: "/renamed.txt",
+  });
 });
 
 it("never refuses a new Mac write over earlier metadata, which cannot fail a published one", async () => {
@@ -1643,6 +1710,12 @@ it("never refuses a new Mac write over earlier metadata, which cannot fail a pub
   f.metadata.onMoved.mockRejectedValueOnce(Error("database unavailable"));
   const receipt = await service.commit(f.principal, operationId);
   expect(receipt).toMatchObject({ state: "completed", item: { path: "/renamed.txt" } });
+  // Failing tags never hold back what grants access, which moved with the receipt.
+  expect(f.moved.get(operationId)?.shares).toEqual({
+    identityId: f.principal.identityId,
+    from: "/old.txt",
+    to: "/renamed.txt",
+  });
   expect(warn).toHaveBeenCalledWith(
     expect.objectContaining({ identityId: f.principal.identityId, operationId }),
     expect.stringContaining("indexer"),

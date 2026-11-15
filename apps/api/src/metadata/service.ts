@@ -50,8 +50,6 @@ export interface PathFollower {
 }
 
 export interface MetadataServiceDeps {
-  /** Folders shared with people follow their owner's moves and deletes. */
-  readonly followers?: readonly PathFollower[];
   /** AI chat references follow the same moves and deletes; optional for tests that have no chats. */
   readonly aiChats?: Pick<AiChatRepo, "moveReferences" | "markReferencesMissing"> | undefined;
   readonly tags: TagRepo;
@@ -140,9 +138,9 @@ export interface MetadataService {
    * metadata only when no replacement entry occupies the original path.
    * A move into the Trash reaches here too (`withTrashMoves`).
    *
-   * `followers` grant access, so they follow the item to `trashedTo`, its
-   * path in Trash, where nothing new can take their path, and back out on a
-   * restore. When that path is not known (`null`) they end instead.
+   * What grants access follows the item to `trashedTo`, its path in Trash,
+   * where nothing new can take its path, and back out on a restore; when
+   * that path is not known (`null`) it ends instead (`withFollowers`).
    */
   onTrashed(
     identityId: string,
@@ -280,31 +278,52 @@ export function createMetadataService(deps: MetadataServiceDeps): MetadataServic
     async onMoved(identityId, oldPath, newPath, isDir) {
       await deps.metadataPaths.movePrefix(identityId, oldPath, newPath, isDir);
       await deps.aiChats?.moveReferences(identityId, oldPath, newPath, isDir);
-      for (const follower of deps.followers ?? []) {
-        await follower.onMoved(identityId, oldPath, newPath, isDir);
-      }
     },
 
     async onDeleted(identityId, path, isDir) {
       await deps.metadataPaths.deletePrefix(identityId, path, isDir);
       await deps.aiChats?.markReferencesMissing(identityId, path, isDir);
-      for (const follower of deps.followers ?? []) {
-        await follower.onDeleted(identityId, path, isDir);
-      }
     },
 
-    async onTrashed(identityId, path, isDir, trashedTo) {
-      // Access first: a share must not stay where a new item can take its path.
-      for (const follower of deps.followers ?? []) {
-        if (trashedTo === null) await follower.onDeleted(identityId, path, isDir);
-        else await follower.onMoved(identityId, path, trashedTo, isDir);
-      }
+    async onTrashed(identityId, path, isDir) {
       await deps.recents.deletePrefix(identityId, path, isDir);
       await deps.aiChats?.markReferencesMissing(identityId, path, isDir);
     },
 
     onCopied() {
       // Intentionally empty: see the `onCopied` doc comment above.
+    },
+  };
+}
+
+/**
+ * `metadata`, with what grants access (folders shared with people, public
+ * links) following every move and delete before anything else: a failure
+ * further on (tags, favorites, the Office registry) never leaves access at
+ * a path where a new item could appear. Into the Trash it follows the item
+ * to its path there (`trashedTo`), or ends when that is not known. Wrap it
+ * around the other layers, `withTrashMoves` included, so it runs first.
+ */
+export function withFollowers(
+  metadata: MetadataService,
+  followers: readonly PathFollower[],
+): MetadataService {
+  return {
+    ...metadata,
+    async onMoved(identityId, oldPath, newPath, isDir) {
+      for (const follower of followers) await follower.onMoved(identityId, oldPath, newPath, isDir);
+      await metadata.onMoved(identityId, oldPath, newPath, isDir);
+    },
+    async onDeleted(identityId, path, isDir) {
+      for (const follower of followers) await follower.onDeleted(identityId, path, isDir);
+      await metadata.onDeleted(identityId, path, isDir);
+    },
+    async onTrashed(identityId, path, isDir, trashedTo) {
+      for (const follower of followers) {
+        if (trashedTo === null) await follower.onDeleted(identityId, path, isDir);
+        else await follower.onMoved(identityId, path, trashedTo, isDir);
+      }
+      await metadata.onTrashed(identityId, path, isDir, trashedTo);
     },
   };
 }

@@ -1062,6 +1062,22 @@ function atOrUnder(path: string) {
   );
 }
 
+/**
+ * `LocalGrantRepo.movePrefix` on `db`, so a caller already in a transaction
+ * (a Mac write's receipt) applies it there.
+ */
+export async function moveLocalGrantPrefix(
+  db: Pick<Db, "update">,
+  owner: string,
+  from: string,
+  to: string,
+): Promise<void> {
+  await db
+    .update(localGrants)
+    .set({ path: sql`${to} || substr(${localGrants.path}, ${from.length + 1})` })
+    .where(and(eq(localGrants.ownerUsername, owner), atOrUnder(from)));
+}
+
 function createLocalGrantRepo(db: Db): LocalGrantRepo {
   return {
     async get(id) {
@@ -1106,10 +1122,7 @@ function createLocalGrantRepo(db: Db): LocalGrantRepo {
       await db.delete(localGrants).where(eq(localGrants.id, id));
     },
     async movePrefix(owner, from, to) {
-      await db
-        .update(localGrants)
-        .set({ path: sql`${to} || substr(${localGrants.path}, ${from.length + 1})` })
-        .where(and(eq(localGrants.ownerUsername, owner), atOrUnder(from)));
+      await moveLocalGrantPrefix(db, owner, from, to);
     },
     async deletePrefix(owner, path) {
       await db

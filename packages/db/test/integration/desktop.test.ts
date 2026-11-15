@@ -2,7 +2,13 @@ import { randomUUID } from "node:crypto";
 import { PostgreSqlContainer } from "@testcontainers/postgresql";
 import { sql } from "drizzle-orm";
 import { expect, it } from "vitest";
-import { createDb, createDesktopRepo, createRepos, migrate } from "../../src/index.js";
+import {
+  createDb,
+  createDesktopRepo,
+  createRepos,
+  createShareRepo,
+  migrate,
+} from "../../src/index.js";
 
 it("coordinates desktop identities and operation receipts across independent PostgreSQL pools", {
   timeout: 180_000,
@@ -126,6 +132,58 @@ it("coordinates desktop identities and operation receipts across independent Pos
     const kept = await b.operation(identity.id, account.id, committed.id);
     expect(kept?.state).toBe("completed");
     expect(kept?.result).toEqual({ receipt: receipts[0] ? "first" : "second" });
+    // What grants access to a moved path goes with the receipt, or neither is kept.
+    for (const username of ["alice", "carol"])
+      await repos.localUsers.create({ username, passwordHash: "unused" });
+    const grant = await repos.localGrants.put({
+      ownerUsername: "alice",
+      path: "/Shared",
+      granteeUsername: "carol",
+      access: "read",
+    });
+    const shares = createShareRepo(first.db);
+    const linked = await shares.insert({
+      identityId: identity.id,
+      name: "Link",
+      description: "",
+      scope: "read",
+      paths: ["/Shared/a.txt"],
+      expiresAt: null,
+      maxDownloads: 0,
+      presentation: "auto",
+      passwordHash: null,
+      at: new Date(),
+    });
+    const moved = (to: string) => ({
+      directory: true,
+      shares: { identityId: identity.id, from: "/Shared", to },
+      grants: { owner: "alice", from: "/Shared", to },
+    });
+    const sharing = { ...input, id: randomUUID(), state: "committing" };
+    await a.reserve(sharing);
+    await expect(
+      a.complete(identity.id, account.id, sharing.id, {}, facts, moved("not-a-path")),
+    ).rejects.toThrow();
+    expect((await b.operation(identity.id, account.id, sharing.id))?.state).toBe("committing");
+    expect((await shares.get(linked.id))?.paths).toEqual(["/Shared/a.txt"]);
+    expect((await repos.localGrants.get(grant.id))?.path).toBe("/Shared");
+    expect(await b.complete(identity.id, account.id, sharing.id, {}, facts, moved("/Moved"))).toBe(
+      true,
+    );
+    expect((await shares.get(linked.id))?.paths).toEqual(["/Moved/a.txt"]);
+    expect((await repos.localGrants.get(grant.id))?.path).toBe("/Moved");
+    // Out of the owner's files, the link drops the path, and goes with nothing left.
+    const leaving = { ...input, id: randomUUID(), state: "committing" };
+    await a.reserve(leaving);
+    const gone = { identityId: identity.id, from: "/Moved", to: null };
+    expect(
+      await a.complete(identity.id, account.id, leaving.id, {}, facts, {
+        directory: true,
+        shares: gone,
+        grants: null,
+      }),
+    ).toBe(true);
+    expect(await shares.get(linked.id)).toBeNull();
     // Retention: only expired states qualify, reclaiming releases the reservation once.
     const retention = { idleMs: 1000, conflictMs: 2000, retainMs: 3000 };
     const now = new Date();

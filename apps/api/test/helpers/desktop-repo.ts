@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type {
+  DesktopAccessMove,
   DesktopItemRecord,
   DesktopOperationRecord,
   DesktopRepo,
@@ -11,6 +12,8 @@ export function memoryRepo() {
   const operations = new Map<string, DesktopOperationRecord>();
   /** What each completed receipt recorded for history, by operation ID. */
   const completed = new Map<string, NativeActivityFacts>();
+  /** What grants access that each completed receipt moved, by operation ID. */
+  const moved = new Map<string, DesktopAccessMove>();
   const repo: DesktopRepo = {
     async ensure(identityId, path, kind) {
       const item = await repo.at(identityId, path);
@@ -156,7 +159,7 @@ export function memoryRepo() {
       });
       return true;
     },
-    async complete(identityId, accountId, id, result, activity) {
+    async complete(identityId, accountId, id, result, activity, access) {
       const done = await repo.transition(
         identityId,
         accountId,
@@ -166,8 +169,9 @@ export function memoryRepo() {
         result,
       );
       if (done) completed.set(id, activity);
+      if (done && access) moved.set(id, access);
       return done;
     },
   };
-  return { repo, items, operations, completed };
+  return { repo, items, operations, completed, moved };
 }
