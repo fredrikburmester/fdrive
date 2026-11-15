@@ -1,6 +1,6 @@
 "use client";
 
-import { type JobStatus, SseEvent } from "@fdrive/contracts";
+import { type JobStatus, ROUTES, SseEvent } from "@fdrive/contracts";
 import { parentPath } from "@fdrive/core";
 import {
   hashKey,
@@ -10,12 +10,10 @@ import {
   useQueryClient,
 } from "@tanstack/react-query";
 import { useEffect, useRef } from "react";
-import { accountTransition } from "../account/transition";
 import { archiveKeysToInvalidate } from "../archive/invalidation";
 import { useJobsStore } from "../jobs/store";
 import { metadataKeysToInvalidate } from "../metadata/invalidation";
 import { trashKeysToInvalidate } from "../trash/invalidation";
-import { tabEventsUrl } from "./client";
 import { queryKeys } from "./keys";
 
 const INITIAL_BACKOFF_MS = 1000;
@@ -204,17 +202,9 @@ export function useFsEvents(jobsStore: JobsStoreLike = useJobsStore.getState()):
     let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
     let cancelled = false;
     const invalidations = createInvalidationBatch(queryClient);
-    const unsubscribe = accountTransition.subscribe(() => {
-      if (accountTransition.getSnapshot().pending) {
-        cancelled = true;
-        source?.close();
-        invalidations.dispose();
-        if (reconnectTimer !== undefined) clearTimeout(reconnectTimer);
-      }
-    });
 
     function connect(): void {
-      source = new EventSource(tabEventsUrl());
+      source = new EventSource(ROUTES.events);
 
       function handleMessage(message: MessageEvent<string>): void {
         if (cancelled) return;
@@ -250,7 +240,6 @@ export function useFsEvents(jobsStore: JobsStoreLike = useJobsStore.getState()):
 
     return () => {
       cancelled = true;
-      unsubscribe();
       invalidations.dispose();
       source?.close();
       if (reconnectTimer !== undefined) {

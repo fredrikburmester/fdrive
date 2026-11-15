@@ -25,11 +25,11 @@ Reference for affected code; shared rules live in [AGENTS.md](../AGENTS.md).
 
 ## Code and integration
 
-- System never follows the login being browsed. Filtering the sidebar activity by the active
+- System never follows the login being browsed. Filtering the sidebar activity by the signed-in
   login while the pages stayed installation-wide made the two disagree, and resolving Trash
-  settings from the active login hid them behind a login switch. Every System page is
-  installation-wide, Trash settings still name their provider row explicitly, and each page
-  header says so.
+  settings from it hid them behind a login switch, back when an account could switch logins.
+  Every System page is installation-wide, Trash settings still name their provider row
+  explicitly, and each page header says so.
 - Worker state that tracks feature transitions must start from the persisted selection. A
   disabled placeholder made every indexer restart look like enabling thumbnails and image
   search, re-running the media backfill over the whole library.
@@ -68,6 +68,14 @@ Reference for affected code; shared rules live in [AGENTS.md](../AGENTS.md).
   running two registry transactions per entry behind one lock. Background work stays silent,
   its pace follows what it costs, and it asks which folders changed (`POST /checks`) before
   listing any.
+- Per-request storage moves every delete into Trash while Trash is on (`withMoveToTrash`),
+  fdrive's own folders included: Mac write retention, built on it, moved the recovery copies it
+  reclaimed into their owner's Trash. Delete fdrive's bookkeeping, such as the Mac's staged
+  uploads, through storage built without Trash settings.
+- The API keeps what every request would read again in memory: that setup is done, the Trash
+  settings, the storage name and the index root ids. Only the API writes them, so a test (or
+  anything else) that changes Trash settings or the storage name straight in `app.settings`
+  goes unseen until a restart; change them through their routes.
 - Storage compares names byte for byte, and accents come in two encodings: macOS stores "ö" as
   "o" plus a combining mark, while models (and most typing) produce one character. A model
   that echoed Swedish file names matched none of them, so organize dropped every suggestion.

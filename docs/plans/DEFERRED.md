@@ -11,8 +11,8 @@ resource requirements and unavailable states before enabling model changes.
 ## Office thumbnails
 
 Office files currently use icons. Thumbnail generation was explicitly deferred; a future
-implementation needs a bounded conversion path and the same live read authorization as
-other cached previews.
+implementation needs a bounded conversion path and the same scope check as other cached
+previews.
 
 ## Setup-token delivery hardening
 

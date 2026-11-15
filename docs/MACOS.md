@@ -11,7 +11,7 @@ the first hosted release, Homebrew installation and tests on another Mac.
 2. Enter the fdrive web address. HTTPS is required; HTTP loopback works for development.
    The address field shows until a location exists; **Add Server** brings it back to allow
    more logins.
-3. Sign in in the browser, compare the connection code and select storage logins and access.
+3. Sign in in the browser, compare the connection code and choose read-only or read and write.
 4. Open a location from the app. Click **Enable** in Finder if macOS requests it.
 
 The app checks each location's Finder registration on every refresh. A location whose
@@ -27,8 +27,10 @@ launches the installed copy and quits, keeping the locations window open or clos
 It waits while FDrive is the active app or a pairing, license change or disconnect is under
 way. If the new copy cannot be launched, the app asks you to quit and reopen FDrive.
 
-Each selected server/account/identity gets its own domain, token and metadata database.
-The fdrive server reads and writes the files folder; the Mac talks only to the fdrive API. Switching the web app's active login cannot retarget a native location.
+Each paired server/account/identity gets its own domain, token and metadata database. A pairing
+connects the login signed in to the browser that approves it; the bundle stays a list of
+credentials, now always one long. The fdrive server reads and writes the files folder; the Mac
+talks only to the fdrive API.
 
 Browsing retrieves directory metadata without fetching original file contents to the Mac.
 Opening, Quick Look, copying out and other applications' reads fetch contents on demand.
@@ -107,8 +109,10 @@ time. Revocation cannot erase previously exported copies.
 
 ### Display-name refresh
 
-The app shows the provider name with the username and fdrive host beneath. Refresh reads current display
+The app shows the storage's name (`displayName`, the installation's storage name from System >
+General) with the username and fdrive host beneath. Refresh reads current display
 metadata from the existing fdrive server and first verifies account, identity and provider IDs.
+The provider ID is the files folder's row in `app.providers`, which never changes.
 It applies only the name and username, preserving the saved server, grants, expiry, domain ID,
 Keychain token and SQLite catalog. A failed or offline refresh retains the last saved name.
 The root item's metadata version changes when its title changes; cached child items survive.
@@ -147,128 +151,119 @@ stops its server refresh while paused.
 
 ## Write configuration and recovery
 
-Writes need an explicit **Read and write** pairing grant and persistent server recovery storage
-(`FDRIVE_DESKTOP_STATE_DIR`). The deployment Compose file mounts the `fdrive-desktop` volume at
-`/var/lib/fdrive/desktop`. Multiple API processes must share this filesystem and the same
-PostgreSQL database. Nothing is set per storage: the files folder accepts Mac writes under
-the contract below.
+Writes need an explicit **Read and write** pairing grant and nothing else: no setting, volume or
+directory of their own. The files folder accepts Mac writes under the contract below, and stages
+them in the user's own files.
 
-**Write contract.** fdrive serializes Mac writes against each other through a
-per-identity PostgreSQL lock and, holding it, snapshots the destination, digests that snapshot
-against the version the Mac edited, and only then replaces the file. A change made at any
-earlier point is refused as a conflict with the pending copy preserved, and the replaced version
-is kept as a backup under `/.fdrive-desktop`. Nothing fences a concurrent writer at the
-storage: anything on the host (rsync, SMB, Syncthing, the OCR service) can write the files
-folder. Moves, folders included, are one rename.
+**Write contract.** fdrive proves a Mac write from the file stamp: size, modification time,
+inode and change time, which any write moves on ([stamps](INDEXER.md#stamps)). A save's base
+check reads the stamp of the file it replaces and that file's content version: the index row's
+sha256 when the stamp shows the row is current, otherwise one full read. Right before the rename
+that publishes the save, the file must still have that stamp; a write since, by anyone, refuses
+the save as a conflict with the pending copy preserved. A move proves the item's metadata version
+and, for a file, that the same inode is still there; it reads no content. A folder's metadata
+version leaves out its modification time, so a change inside a folder never refuses moving the
+folder. A new name, of a create or of a save that renames, is linked into place only while it is
+free, so of two creates racing for a name one gets `name_collision`. One listing of the parent per
+commit catches a name that differs from a taken one only in case or Unicode normalization, which
+the disk may tell apart. Moves, folders included, are one rename. Right before it publishes, a
+commit reads its token once more (one query), so a pairing revoked, expired or changed while the
+commit hashed publishes nothing and answers 401.
 
-That lock covers Mac writes only. The web app, Collabora and the OCR service write the volume
-directly and do not take it: for each of them publication *is* the transfer, and holding an
-identity for the length of an upload is the cost this contract exists to avoid. The content proof
-catches them the same way it catches a writer outside fdrive entirely — and, the same way, a
-write of theirs landing between that proof and the replacement is silently lost, with the retained
-backup holding the pre-fdrive content rather than the lost version. OCR checks that the file
-is still the version it read (inode, ctime, size and mtime) right before its replace, so a
-collision there, short of the instant between that check and the replace, leaves the newer file
-in place rather than the OCR output.
+Mac writes take no lock, like the web app, Collabora and the OCR service. Nothing fences a writer
+at the storage: anything on the host (rsync, SMB, Syncthing) can write the files folder, and a
+write landing in the instant between the stamp check and the rename is replaced, as between any
+two writers. OCR makes the same check (inode, ctime, size and mtime) right before its replace.
 
-**Publish lock.** The lock is a PostgreSQL session advisory lock per identity
-([desktop-publish-lock.ts](../packages/db/src/repos/desktop-publish-lock.ts)) on a pool of its
-own, four connections with a five-second checkout, so slow publications cannot starve the API's
-main pool. A waiter tries every 100 ms for up to 30 seconds and returns its connection between
-attempts. A busy lock, or no free connection, answers 429 (`rate_limited`), which the Mac
-retries; it is never a 409, which the Mac would resolve by forking a conflict copy. The lock is
-released when its connection dies, so a crashed API frees the identity.
+fdrive keeps no copy of what a Mac write replaced, as for web and Office saves. A save that also
+renames its file moves the old name to [Trash](TRASH.md), and only while it still has the stamp
+the save was based on. `recoveryId` in operation results is always null; shipped apps decode it.
 
-Only publication runs under the lock: the check that the name is still free, for a replacement
-the recovery copy and its digest, the size and modification-time recheck, and the rename. The
-upload and its digest run before it, in a staging folder keyed by operation and attempt that no
-other operation can reach. On a retry, a recovery copy kept from an earlier attempt says nothing
-about the destination now, so the live file is digested instead. A move has no content to prove:
-the size and modification-time recheck is its whole guard. A name taken meanwhile fails with
-`name_collision`, changed content with `version_conflict`.
+**Upload size.** fdrive accepts files up to 16 GiB. Pairing advertises the limit, and the Mac app
+refuses a larger file before copying it.
 
-**Upload size.** fdrive accepts files up to 16 GiB.
-
-Publication is refused, and every location stays read-only, only when the server has no recovery
-storage or no publish lock; the Mac app shows that reason on each card. A publication the
-storage refuses outright leaves the operation discardable from the Mac app; only one whose
-outcome is genuinely unknown waits for an administrator. Credentials issued as
-read-only stay read-only; Reconnect grants access without changing the domain.
+Credentials issued as read-only stay read-only; Reconnect grants access without changing the
+domain.
 
 Protocol 2 uses `/api/v2/desktop`; protocol 1 is unchanged. New apps fall back to read-only
 protocol 1 when an older server returns 404. Uploads have separate prepare, file-body upload,
 commit, status, acknowledgement and cancel requests. Folder and move requests use the same
 operation ledger. UUID handles and operation IDs never replace current account/path checks.
 
-The server hashes and fsyncs the incoming body before commit. It checks the source base and
-destination, stages and validates new bytes, backs up an existing file, then publishes with an
-atomic rename, fenced by the per-identity lock plus the pre-publication recheck. Original backups remain under the reserved
-`/.fdrive-desktop` namespace, hidden from native ordinary reads and from the web file tree.
-Failed staging reuses its recorded directory. A commit whose publication cannot be confirmed stays
-uncertain and cannot automatically replay as a new write. The completed receipt and a metadata
-recovery job commit in one PostgreSQL transaction after publication. A failure before that
-transaction commits remains uncertain; an effect failure after it commits leaves the receipt
-completed. Replaying or acknowledging that receipt never republishes the file.
+**Staging and publication.** The body streams straight into
+`/.fdrive-desktop/<identity>/incoming/<operation>/<attempt>` in the user's files, hidden from
+every reader like the rest of `/.fdrive-desktop`. The server hashes and counts it as it arrives
+and flushes it to disk before its name appears; a body that does not match what was prepared
+leaves nothing. A commit checks the source base and destination, then publishes with one storage
+call: a rename over the original for a save in place, a `link` of the staged file for a new name
+(a real create-if-absent), a rename for a move. A new folder is made in staging and renamed into
+place. The new name is flushed to disk before the receipt is kept, so a committed file survives a
+crash.
 
-The API drains the durable queue at startup, after saves and every five seconds. Each job
-updates tags, favorites, recents, folder views, mapped Office registrations and the paths of
-public links atomically, then commits before dispatching its filesystem notification. Links
-carry no revisions: what they do is decided before publication from where the item really
-moves, into and out of the Mac's Trash too. Delivery is a second durable
-pending phase: retries send only the notification and never reapply metadata. Before another
-native publication, older pending work for the identity must finish; other identities continue. Recovery bounds lock waits to two seconds and individual
-statements to fifteen seconds. Failed jobs use exponential backoff, capped at five minutes.
-Shutdown waits for active recovery before closing the database. No Mac connection or storage
-credential is needed, and the worker never changes file contents or backups.
+Right before that call, the commit records on its operation what it publishes: the staged file's
+inode (a move's source's), where it is and where it goes. Whether the call happened is then always
+on disk, so nothing is ever uncertain and nothing is published twice. A retry that finds the
+operation still `committing` with no commit running reads the outcome: the target holds the
+recorded inode, so the write was published and its receipt is kept now; the staging file (or the
+source) still holds it, so nothing was published and the operation is `ready` to commit again;
+neither holds it, because someone replaced or moved the item since, so it is a `conflict`, which
+the Mac app already handles, and nothing is overwritten. Every Mac retry starts with the same
+prepare request, so that is where an interrupted commit ends. A staged body that is gone is
+asked for again (the operation returns to `receiving`).
 
-Jobs capture trusted Office locations and metadata row revisions before filesystem publication
-(at most 100,000 source/destination revisions). Capacity exhaustion returns `quota_exceeded`
-with the operation still ready and the source untouched. Receipt persistence uses that bounded
-snapshot without recapturing later metadata growth. Identity, Office-root and row locks
-protect concurrent edits. Upgrade all API writers together; older binaries neither rotate
-these revisions nor invalidate superseded recovery destinations.
-Recovery only changes matching captured revisions: later source edits survive, and newer
-destination metadata blocks the transaction for inspection. Later web/MCP/Office/indexer
-move or delete hooks invalidate overlapping queued destinations, including descendants and
-paths with no current metadata. Exact move replays remain idempotent. Superseded jobs preserve
-their snapshots and stay pending for attention rather than attaching metadata to a reused path.
-Account ownership changes retire old jobs. Successful metadata application discards snapshots
-while retaining notification delivery state. Restoring into an overlapping original path
-hierarchy is refused before publication to avoid overlapping metadata moves.
+The completed receipt, the write's personal history and what grants access to the moved path
+(public links and folders shared with people) commit in one PostgreSQL transaction after
+publication, so no link or share stays at a path the write left, where a new item could appear.
+If that transaction fails, the operation stays `committing` with the file published and the
+request answers a server error, never success; the Mac app retries it on its own, and the retry
+keeps the receipt, moving sharing from where the item was. Replaying or acknowledging that receipt
+never republishes the file; acknowledging only marks the operation done.
 
-Administrators can inspect the first 100 pending jobs at `GET /api/v1/desktop/recovery`;
-`attempts`, `lastError` and `nextAttemptAt` show retry/failure state without file contents or
-credentials. The same response lists up to 100 `uncertain` commits (state, kind, name and
-whether a `committing` row has stalled for 15 minutes). After inspecting storage, an
-administrator resolves one with `POST /api/v1/desktop/recovery/:identityId/:operationId/resolve`
-and `{"outcome":"published"}` or `{"outcome":"discarded"}`. `published` verifies the target
-exists (and, for saves, carries the uploaded digest), records the receipt and queues the
-usual metadata recovery; `discarded` cancels the operation and leaves spool and backups to
-retention. Neither replays bytes. Failures also appear in the General System log. Do not
-delete queue or receipt rows to clear a conflict: inspect the preserved source/destination
-metadata first. A recovery administration UI remains separate work. Filesystem notifications use
-the existing identity-scoped in-process event bus; a crash can repeat a notification. Disconnected
-clients refresh on reconnect, and indexing remains the indexer's responsibility.
+**Metadata.** Once the receipt is kept, the commit brings the rest of path-keyed metadata along
+through the service web writes use, and tells the web once, as web writes do right after their
+storage call ([writes.ts](../apps/api/src/desktop/writes.ts), `follow`): tags, favorites, folder
+views, recents, AI chat references and Office files follow a move. A move into the Mac's Trash
+is a trash: links and shares follow the item into `/.fdrive-desktop/<identity>/trash`, which
+neither reaches, recents go, and tags, favorites and folder views stay at the original path. A
+restore brings those back as a web restore does, only while nothing has taken the original path,
+and links and shares come back with the item. The Mac's item handles are the commit's own; this
+step never touches them. A new write never waits for an earlier one's metadata.
 
-A file is limited to 16 GiB. Admission allows 1024 active operations and 64 GiB of combined
-pending payload/recovery reservations across the installation. Acknowledgement releases the
-incoming-body reservation, while retained originals stay charged. Cancelled operations keep
-their reservation because remote staging may remain. A retention job runs every ten minutes:
-bodies idle for 24 hours and conflicts untouched for 7 days are cancelled and their spool
-removed; acknowledged and cancelled operations older than `FDRIVE_DESKTOP_RETENTION_DAYS`
-(default 30) have their remote recovery tree removed, then their
-reservation released. Only directories containing the expected `incoming`, `previous` and
-`renamed-original` files are removed; anything unexpected defers that operation with a
-General System log warning. Committing and uncertain operations are never reclaimed.
-Capacity exhaustion still refuses new writes; do not remove ledger rows to bypass it.
+None of that step grants access, so a failure there is logged and never fails the commit: the
+file is published and its receipt answers. The indexer reports the same move from the change
+journal, and its listener ([indexer-listener.ts](../apps/api/src/events/indexer-listener.ts))
+moves metadata and tells the web then, which also covers a crash between the receipt and this
+step. As for web writes, that second chance needs indexing on, and an empty folder's move is not
+reported as a move. The listener sees a move into the Mac's Trash as a delete, since the indexer
+never walks `/.fdrive-desktop`, so with indexing on tags left at a trashed item's original path
+go.
+
+Do not delete receipt rows to clear a conflict. Notifications use the identity-scoped in-process
+event bus; disconnected clients refresh on reconnect, and indexing remains the indexer's
+responsibility.
+
+A file is limited to 16 GiB. What an operation staged goes once it is completed or cancelled. A
+cleanup job runs every ten minutes, deleting through storage built without Trash settings:
+bodies idle for 24 hours and conflicts untouched for 7 days are cancelled with what they staged,
+and acknowledged and cancelled operations are forgotten after 30 days, with anything left in
+their `incoming` folder. A failure defers that operation with a General System log warning. Ready
+and committing operations are never touched: what they staged may still be published. Staged
+uploads are never backed up; the Mac sends an unfinished one again from its own copy.
 
 The native catalog stores immutable pending copies before networking, and records the remote
-receipt before acknowledging Finder. Retry uses the same operation. Offline edits synchronize
+receipt before acknowledging Finder. Retry uses the same operation, and the server ends a commit a
+crash or failure interrupted before answering it. A retry that finds a commit still running waits
+for it; a wait longer than the app's request timeout reads as the server being unreachable, the
+pending copy stays and macOS retries later. Apps decode `uncertain` and `operation_uncertain` from
+earlier servers; this one never sends them. Finder's cancel stops the request and asks the server
+to cancel the operation. The pending copy goes only when the server answers that it is cancelled,
+which it does only for an operation that can no longer publish: a commit already under way is
+refused, finishes on the server, and the next retry reads its outcome. Offline edits synchronize
 when the connection recovers. A conflicting file save creates a uniquely named conflict copy,
 preserving the remote original; if that name is taken too, numbered names are tried up to
 three times before the error stands. `failOnConflict` retains the local edit with a visible error.
 **Show recovery files** opens pending contents and a readable operation/error list. Never erase
-that directory to clear a synchronization error. Uncertain commits require manual recovery.
+that directory to clear a synchronization error.
 
 Finder **Move to Trash** reparents through the native Trash container. In the app's location
 menu, **Restore from Trash…** lists retained files and folders. **Restore** returns an item to
@@ -361,7 +356,7 @@ Desktop protocol v1 lives at `/api/v1/desktop`; contracts are in
 | --- | --- |
 | `POST /pairings` | Creates a five-minute request, app-held secret and visible code |
 | `GET /pairings/:id` | Signed-in browser reads device/code/expiry only |
-| `POST /pairings/:id/approve` | Browser session, CSRF and ownership of selected identities |
+| `POST /pairings/:id/approve` | Browser session and CSRF; `{ access: "read" \| "full" }` for the session's login |
 | `POST /pairings/:id/poll` | App secret; repeated redemption returns the same issued bundle |
 | `POST /pairings/:id/cancel` | App secret; cancels issuance and revokes unconfirmed credentials |
 | `POST /pairings/:id/confirm` | App secret; the bundle is stored on the Mac and survives expiry |
@@ -376,11 +371,11 @@ Desktop protocol v1 lives at `/api/v1/desktop`; contracts are in
 
 Desktop tokens use `fdd_`, distinct from MCP's `fdr_`; neither audience accepts the other.
 Tokens have identity-root read or explicitly approved full grants and expire after 365 days. Only hashes are persisted
-server-side. Native read requests resolve token expiry/revocation, account ownership and
-the current provider binding. Neither a cursor nor a local item ID grants access. The native
+server-side. Native read requests resolve token expiry/revocation and account ownership.
+Neither a cursor nor a local item ID grants access. The native
 client refuses redirects, cookies and non-loopback HTTP, and never puts bearer secrets in URLs.
 Disconnect validates possession of the desktop secret and revokes only that token's hash;
-it works after provider disablement or token expiry without resolving storage credentials.
+it works after token expiry without building storage.
 
 Pairing state is in memory: server restart cancels pending pairing. Limits are eight requests
 per IPv4 address or IPv6 /64 and 512 per process. One shared issuance promise handles
@@ -410,8 +405,7 @@ covers or one a shared folder shadows is dropped, and so is anything the locatio
 hide (fdrive's own folders such as Trash and `/.fdrive-desktop`, outside its grants). A row
 does not say whether it was a file or a folder, so each kept end is a changed **path**, below
 which the app lists every browsed folder and validates every download. Its parent and grandparent are changed **folders**: the parent's
-listing holds the path, and the grandparent's shows the parent's modification time, which is
-part of the version a Finder rename of that folder must match. Paths and folders inside another
+listing holds the path, and the grandparent's shows the parent's modification time. Paths and folders inside another
 changed path are left out, and each appears once.
 
 The anchor is opaque to the app: `v1.<epoch>.<fingerprint>.<position>`. The epoch is a random id
@@ -456,10 +450,11 @@ Live metadata remains proportional to the number of items in browsed folders.
 
 First download computes SHA-256 locally in 1 MiB chunks and validates transfer length. Later
 refresh validates only materialized files on the server, one batch at a time per identity. This
-detects different bytes even when size/mtime are unchanged. A file whose index row the indexer
-stamped from its own read ([stamps](INDEXER.md#stamps)) is answered with the row's sha256
-while a fresh stat still shows the row's inode, change time, size and modification time; any
-other file is read and hashed in full. No originals are sent to the Mac by validation.
+detects different bytes even when size/mtime are unchanged. A file whose index row is stamped
+([stamps](INDEXER.md#stamps): by the indexer's own read, the hint of the upload that wrote it,
+or either carried across a rename by fdrive) is answered with the row's sha256 while a fresh
+stat still shows the row's inode, change time, size and modification time; any other file is
+read and hashed in full. No originals are sent to the Mac by validation.
 
 Downloads use URLSession temporary files, then the manager-provided transfer directory.
 A free-space preflight (file size plus 512 MiB headroom) refuses downloads and saves that

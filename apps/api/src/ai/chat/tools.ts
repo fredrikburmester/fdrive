@@ -199,7 +199,7 @@ function fileInfoTool(deps: DriveToolsDeps): AiTool {
             const { file, scope } = found;
             lines.push(`index: ${file.textStatus}${file.sha256 ? `, sha256 ${file.sha256}` : ""}`);
             try {
-              const info = await fileInfoInScope(deps.mcp, scope.ctx, scope.authorizer, { path });
+              const info = await fileInfoInScope(deps.mcp, scope.ctx, { path });
               lines.push(
                 `identical copies: ${describePaths(info.identical_copies, shareOf(deps).otherFileNames)}`,
               );
@@ -231,12 +231,12 @@ function duplicatesTool(deps: DriveToolsDeps): AiTool {
           return `${path} is not indexed, so its content cannot be compared. Compare names, sizes and dates instead.`;
         const { scope } = found;
         const names = shareOf(deps).otherFileNames;
-        const info = await fileInfoInScope(deps.mcp, scope.ctx, scope.authorizer, { path });
-        const similar = await similarFilesInScope(deps.mcp, scope.ctx, scope.authorizer, {
+        const info = await fileInfoInScope(deps.mcp, scope.ctx, { path });
+        const similar = await similarFilesInScope(deps.mcp, scope.ctx, {
           path,
           limit: 10,
         });
-        const sameName = await findFilesInScope(deps.mcp, scope.ctx, scope.authorizer, {
+        const sameName = await findFilesInScope(deps.mcp, scope.ctx, {
           name_contains: baseName(path),
           limit: 20,
         });

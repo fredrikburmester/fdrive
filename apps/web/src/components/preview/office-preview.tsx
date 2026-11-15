@@ -4,16 +4,14 @@ import type { FsEntry } from "@fdrive/contracts";
 import { ExternalLink } from "lucide-react";
 import type { Route } from "next";
 import Link from "next/link";
-import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
-import { useMe } from "@/lib/api/auth-queries";
 import { useOfficeStatus } from "@/lib/api/office-queries";
 import { opensInOffice } from "@/lib/office/capabilities";
 import { officeHref } from "@/lib/office/route";
 import { previewKindFor, previewUnavailableReason } from "@/lib/preview/kind";
 import { Unsupported } from "./unsupported";
 
-/** Keep the preview's identity in its link even if another account view switches identities. */
+/** An Office file's preview: a link into the editor once Office can view it, and a download. */
 export function OfficePreview({
   entry,
   downloadUrl,
@@ -21,16 +19,8 @@ export function OfficePreview({
   readonly entry: FsEntry;
   readonly downloadUrl: string;
 }) {
-  const me = useMe();
   const status = useOfficeStatus();
-  const [identityId, setIdentityId] = useState(me.data?.activeIdentityId);
-  useEffect(() => {
-    if (identityId === undefined && me.data) setIdentityId(me.data.activeIdentityId);
-  }, [identityId, me.data]);
-  const available =
-    identityId !== undefined &&
-    me.data?.identities.some((identity) => identity.id === identityId) &&
-    opensInOffice(entry, status.data);
+  const available = opensInOffice(entry, status.data);
   return (
     <Unsupported
       name={entry.name}
@@ -43,10 +33,10 @@ export function OfficePreview({
       }
       downloadUrl={downloadUrl}
       action={
-        available && identityId !== undefined ? (
+        available ? (
           <Button
             nativeButton={false}
-            render={<Link href={officeHref(identityId, entry.path, "view") as Route} />}
+            render={<Link href={officeHref(entry.path, "view") as Route} />}
           >
             <ExternalLink data-icon="inline-start" />
             View in office

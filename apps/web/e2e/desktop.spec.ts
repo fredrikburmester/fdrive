@@ -1,7 +1,7 @@
 import { DESKTOP_API } from "@fdrive/contracts";
 import { expect, test } from "@playwright/test";
 
-test("approves only the selected login without putting credentials in the browser", async ({
+test("approves the signed-in login without putting credentials in the browser", async ({
   page,
 }) => {
   const created = await page.request.post(`${DESKTOP_API}/pairings`, {
@@ -12,9 +12,9 @@ test("approves only the selected login without putting credentials in the browse
   const pair = (await created.json()) as { id: string; code: string; secret: string };
   await page.goto(`/desktop/connect?request=${pair.id}`);
   await expect(page.getByRole("status", { name: "Connection code" })).toHaveText(pair.code);
-  await expect(page.getByRole("button", { name: "Allow selected logins" })).toBeDisabled();
-  await page.getByRole("checkbox").first().check();
-  await page.getByRole("button", { name: "Allow selected logins" }).click();
+  await expect(page.getByText("alice", { exact: true })).toBeVisible();
+  await expect(page.getByRole("combobox", { name: "Access" })).toHaveCount(0);
+  await page.getByRole("button", { name: "Allow this Mac" }).click();
   await expect(page.getByText("Connection approved", { exact: true })).toBeVisible();
   expect(await page.locator("body").innerText()).not.toContain(pair.secret);
   expect(page.url()).not.toContain("fdd_");
@@ -51,9 +51,7 @@ test("returns to the connection request after signing in", async ({ page }) => {
   });
 });
 
-test("requires an explicit write grant and keeps an unsupported backend read-only", async ({
-  page,
-}) => {
+test("writes only with an explicit write grant, which needs nothing else", async ({ page }) => {
   const api = "/api/v2/desktop";
   const created = await page.request.post(`${api}/pairings`, {
     headers: { "x-requested-with": "fdrive" },
@@ -63,11 +61,10 @@ test("requires an explicit write grant and keeps an unsupported backend read-onl
   const pair = (await created.json()) as { id: string; code: string; secret: string };
   await page.goto(`/desktop/connect?request=${pair.id}`);
   await expect(page.getByRole("status", { name: "Connection code" })).toHaveText(pair.code);
-  await page.getByRole("checkbox").first().check();
-  const access = page.getByRole("combobox");
+  const access = page.getByRole("combobox", { name: "Access" });
   await expect(access).toHaveValue("read");
   await access.selectOption("full");
-  await page.getByRole("button", { name: "Allow selected logins" }).click();
+  await page.getByRole("button", { name: "Allow this Mac" }).click();
   await expect(page.getByText("Connection approved", { exact: true })).toBeVisible();
   const response = await page.request.post(`${api}/pairings/${pair.id}/poll`, {
     headers: { "x-requested-with": "fdrive" },
@@ -79,11 +76,8 @@ test("requires an explicit write grant and keeps an unsupported backend read-onl
       {
         location: {
           protocolVersion: 2,
-          readOnly: true,
-          capabilities: { create: false, update: false },
-          // The local folder needs no setting of its own; only the missing state dir is named.
-          writeUnavailableReason:
-            "Read-only until an administrator sets FDRIVE_DESKTOP_STATE_DIR on this server.",
+          readOnly: false,
+          capabilities: { create: true, update: true, move: true, trash: true, restore: true },
         },
       },
     ],

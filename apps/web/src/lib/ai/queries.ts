@@ -65,7 +65,7 @@ function withAncestors(path: string): string[] {
  */
 export function useMoveMany() {
   return useFsMutation<MoveManyRequest, MoveManyResponse>({
-    mutationFn: (request, client) => client.moveMany(request),
+    mutationFn: (request) => apiClient.moveMany(request),
     toAffected: (_request, response) => {
       const moved = response.results.filter((result) => result.ok);
       return {

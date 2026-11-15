@@ -22,7 +22,7 @@ function buildConfig(): AppConfig {
     host: "127.0.0.1",
     logLevel: "silent",
     databaseUrl: "postgres://localhost/fdrive",
-    fdriveStorageRoot: undefined,
+    fdriveStorageRoot: "/srv/files",
     fdriveMasterKey: Buffer.alloc(32, 7).toString("base64"),
     fdriveSessionTtlDays: 30,
     fdriveSessionMaxAgeDays: 90,
@@ -30,7 +30,6 @@ function buildConfig(): AppConfig {
     fdriveTrustedProxyHops: 1,
     nodeEnv: "test",
     fdriveTmpDir: "/tmp",
-    fdriveDesktopRetentionDays: 30,
     fdriveJobMaxBytes: 1_000_000_000,
     fdriveJsonMaxBytes: 1_048_576,
     fdriveShareUploadMaxBytes: 1_000_000_000,
@@ -38,11 +37,9 @@ function buildConfig(): AppConfig {
     fdriveEmbedUrl: undefined,
     fdriveImageEmbedUrl: undefined,
     fdriveThumbsDir: undefined,
-    fdriveAdminUsers: [],
     fdriveSetupToken: undefined,
     fdriveIndexerUrl: undefined,
     fdriveOcrUrl: undefined,
-    fdriveMcpWrites: false,
   };
 }
 

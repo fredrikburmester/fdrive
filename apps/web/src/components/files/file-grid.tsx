@@ -15,10 +15,9 @@ import { computeGridLayout, readGridWidth, writeGridWidth } from "@/lib/files/gr
 import { DEFAULT_GRID_SIZE, type GridSize } from "@/lib/files/grid-size";
 import { isLink, LINK_TITLE } from "@/lib/files/links";
 import { findRevealIndex, gridRowForIndex, type ScrollRequest } from "@/lib/files/reveal";
-import { contextEntries } from "@/lib/files/selection";
+import { contextEntries, selectionOf } from "@/lib/files/selection";
 import { wantsGridThumbnail } from "@/lib/files/thumbnail";
 import { sharedFolderCaption } from "@/lib/grants/format";
-import { selectionOf } from "@/lib/identity/capabilities";
 import { tagCheckState as computeTagCheckState } from "@/lib/metadata/tag-set";
 import { cn } from "@/lib/utils";
 import { createDragImageElement } from "./drag-image";

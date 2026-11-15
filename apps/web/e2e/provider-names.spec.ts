@@ -7,13 +7,12 @@ import { getFreePort } from "./support/ports.js";
 
 test.use({ storageState: { cookies: [], origins: [] } });
 
-test("a storage rename on System > General reaches the login page, logins and Mac approval", async ({
+test("a storage rename on System > General reaches logins and Mac approval, not the login page", async ({
   page,
   browser,
 }) => {
   test.setTimeout(300_000);
-  // Its own stack: a name, once given, cannot be taken back to none, and the
-  // shared run's login page must keep naming the product alone.
+  // Its own stack: a name, once given, cannot be taken back to none.
   const env = await startEnvironment({
     apiPort: await getFreePort(E2E_HOST),
     webPort: await getFreePort(E2E_HOST),
@@ -45,8 +44,7 @@ test("a storage rename on System > General reaches the login page, logins and Ma
     ).toBe(true);
 
     const before = MeResponse.parse(await (await page.request.get(url("/api/v1/auth/me"))).json());
-    const providerId = before.identities[0]?.providerId;
-    if (!providerId) throw new Error("missing the files folder's storage row");
+    const providerId = before.identity.providerId;
     const pair = await (
       await page.request.post(url(`${DESKTOP_API}/pairings`), {
         headers,
@@ -55,27 +53,26 @@ test("a storage rename on System > General reaches the login page, logins and Ma
     ).json();
     const approval = await page.context().newPage();
     await approval.goto(url(`/desktop/connect?request=${pair.id}`));
-    await expect(approval.getByRole("checkbox", { name: /alice$/ })).toBeVisible();
+    await expect(approval.getByText("alice", { exact: true })).toBeVisible();
 
     await page.bringToFront();
     await page.goto(url("/system/general"));
     await dismissActivityPanel(page);
     const name = page.getByLabel("Name", { exact: true });
-    await expect(page.getByText("Shown on the login page and in Finder.")).toBeVisible();
+    await expect(page.getByText("Shown under each username and in Finder.")).toBeVisible();
     await expect(page.getByRole("button", { name: "Save name" })).toBeDisabled();
     await name.fill("   ");
     await expect(page.getByText("Enter a name for this storage.")).toBeVisible();
     await expect(page.getByRole("button", { name: "Save name" })).toBeDisabled();
     await name.fill("  Home storage  ");
     const patch = page.waitForRequest(
-      (request) =>
-        request.url().endsWith(`/admin/providers/${providerId}`) && request.method() === "PATCH",
+      (request) => request.url().endsWith("/system/storage") && request.method() === "PATCH",
     );
     const refreshedMe = page.waitForResponse(
       (response) => response.url().endsWith("/auth/me") && response.status() === 200,
     );
     await page.getByRole("button", { name: "Save name" }).click();
-    expect((await patch).postDataJSON()).toEqual({ label: "Home storage" });
+    expect((await patch).postDataJSON()).toEqual({ name: "Home storage" });
     await refreshedMe;
     await expect(name).toHaveValue("Home storage");
     await expect(page.getByRole("button", { name: "Save name" })).toBeDisabled();
@@ -87,11 +84,8 @@ test("a storage rename on System > General reaches the login page, logins and Ma
     );
     await approval.evaluate(() => window.dispatchEvent(new Event("visibilitychange")));
     await approvalMe;
-    await expect(
-      approval.getByRole("checkbox", { name: "Home storage alice", exact: true }),
-    ).toBeVisible();
-    await approval.getByRole("checkbox").check();
-    await approval.getByRole("button", { name: "Allow selected logins" }).click();
+    await expect(approval.getByText("Home storage", { exact: true })).toBeVisible();
+    await approval.getByRole("button", { name: "Allow this Mac" }).click();
     await expect(approval.getByText("Connection approved", { exact: true })).toBeVisible();
     const connected = DesktopPairResult.parse(
       await (
@@ -110,22 +104,21 @@ test("a storage rename on System > General reaches the login page, logins and Ma
       data: { secret: pair.secret },
     });
 
+    // The sidebar names the signed-in login's storage beneath the username.
     await page.goto(url("/account"));
-    await expect(page.getByRole("main").getByText("Home storage", { exact: true })).toBeVisible();
+    await expect(
+      page.locator('[data-sidebar="footer"]').getByText("Home storage", { exact: true }),
+    ).toBeVisible();
     const after = MeResponse.parse(await (await page.request.get(url("/api/v1/auth/me"))).json());
-    expect(after).toEqual({
-      ...before,
-      identities: before.identities.map((identity) => ({
-        ...identity,
-        providerLabel: "Home storage",
-      })),
-    });
+    expect(after).toEqual({ ...before, storageName: "Home storage" });
 
+    // The login page names the product alone: it asks for a username and password only.
     const login = await anonymous.newPage();
     await login.goto(url("/login"));
     await expect(
-      login.getByText("Sign in with your fdrive account on Home storage", { exact: true }),
+      login.getByText("Sign in with your fdrive account", { exact: true }),
     ).toBeVisible();
+    await expect(login.getByText(/Home storage/)).toHaveCount(0);
     await expect(login.getByLabel("Server")).toHaveCount(0);
     await expect(login.getByLabel("Username", { exact: true })).toBeVisible();
   } finally {

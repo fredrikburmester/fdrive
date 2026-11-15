@@ -1,9 +1,8 @@
 import { randomUUID } from "node:crypto";
-import { StorageError, type StorageProvider } from "@fdrive/core";
+import { StorageError } from "@fdrive/core";
 import { createMemoryStorage } from "@fdrive/core/testing";
 import type { ActivityObservationsRepo, IdentityRepo } from "@fdrive/db";
 import { describe, expect, it, vi } from "vitest";
-import type { Principal } from "../auth/principal.js";
 import type { IndexerEventPayload } from "../events/indexer-listener.js";
 import { createActivityObservations } from "./observations.js";
 
@@ -12,7 +11,6 @@ async function fixture() {
     identityId = randomUUID();
   const storage = createMemoryStorage();
   await storage.upload("/a.txt", new Uint8Array([1]));
-  const principal: Principal = { accountId, identityId, storage, username: "a", isAdmin: false };
   const file = {
     id: randomUUID() as string,
     identityId,
@@ -27,9 +25,6 @@ async function fixture() {
   };
   const repo = {
     observe: vi.fn(async (_input: Parameters<ActivityObservationsRepo["observe"]>[0]) => null),
-    children: vi.fn(async (_account: string, _identity: string, _path: string, _after?: string) => [
-      file,
-    ]),
     tracked: vi.fn(async (_account: string, _identity: string, _path: string, _after?: string) => [
       file,
     ]),
@@ -47,13 +42,11 @@ async function fixture() {
       scopes: [{ virtualPrefix: "/", rootName: "data", fsPrefix: "/physical/alice" }],
     })),
   };
-  const onError = vi.fn();
   const service = createActivityObservations({
     repo: repo as ActivityObservationsRepo,
     identities: identities as unknown as IdentityRepo,
     storageFactory: async () => storage,
     resolver,
-    onError,
   });
   const event = (
     kind: IndexerEventPayload["kind"],
@@ -67,37 +60,28 @@ async function fixture() {
     at: new Date().toISOString(),
   });
   return {
-    principal,
     storage,
     file,
     repo,
     identities,
     resolver,
-    onError,
     service,
     event,
     accountId,
     identityId,
   };
 }
-describe("provider observation evidence", () => {
-  it("suppresses unreadable destinations and pages known descendants on a proved departure", async () => {
+describe("indexer observation evidence", () => {
+  it("records no absence it cannot prove and pages known descendants on a proved departure", async () => {
     const h = await fixture();
-    await h.storage.upload("/b.txt", new Uint8Array([1]));
-    const download = h.storage.download.bind(h.storage);
-    vi.spyOn(h.storage, "download").mockRejectedValueOnce(new StorageError("forbidden", "denied"));
-    await h.service.watcher(
-      h.identityId,
-      h.event("moved", "physical/alice/a.txt", "physical/alice/b.txt"),
-    );
-    expect(h.repo.observe).not.toHaveBeenCalled();
-    vi.mocked(h.storage.download)
-      .mockImplementationOnce(download)
-      .mockRejectedValueOnce(new StorageError("forbidden", "denied"));
-    await h.service.watcher(
-      h.identityId,
-      h.event("moved", "physical/alice/a.txt", "physical/alice/b.txt"),
-    );
+    // A destination storage cannot read records nothing.
+    vi.spyOn(h.storage, "stat").mockRejectedValueOnce(new StorageError("forbidden", "denied"));
+    await expect(
+      h.service.watcher(
+        h.identityId,
+        h.event("moved", "physical/alice/a.txt", "physical/alice/b.txt"),
+      ),
+    ).rejects.toMatchObject({ kind: "forbidden" });
     expect(h.repo.observe).not.toHaveBeenCalled();
     await h.storage.deleteFile("/a.txt");
     vi.spyOn(h.storage, "list").mockRejectedValueOnce(new StorageError("forbidden", "denied"));
@@ -121,83 +105,6 @@ describe("provider observation evidence", () => {
       children.at(-1)?.id,
     );
     expect(JSON.stringify(h.repo.observe.mock.calls)).not.toContain("outside/private");
-  });
-  it("uses fresh reads, distinguishes missing from denied/offline, and never observes a folder visit", async () => {
-    const h = await fixture();
-    expect(await h.service.check(h.principal, "/a.txt")).toEqual({ checked: true });
-    expect(h.repo.observe).toHaveBeenLastCalledWith(
-      expect.objectContaining({
-        kind: "present",
-        source: "refresh",
-        accountId: h.accountId,
-        after: expect.objectContaining({ size: 1 }),
-      }),
-    );
-    await h.storage.mkdir("/d");
-    await h.service.check(h.principal, "/d");
-    expect(h.repo.observe.mock.calls.at(-1)?.[0].after?.kind).toBe("dir");
-    await h.service.check(h.principal, "/missing");
-    expect(h.repo.observe.mock.calls.at(-1)?.[0].kind).toBe("missing");
-    h.repo.observe.mockClear();
-    const denied = {
-      ...h.principal,
-      storage: {
-        ...h.storage,
-        download: async () => {
-          throw new StorageError("forbidden", "private");
-        },
-      } as StorageProvider,
-    };
-    expect(await h.service.check(denied, "/a.txt")).toEqual({ checked: false });
-    expect(
-      await h.service.check(
-        {
-          ...h.principal,
-          storage: {
-            ...h.storage,
-            stat: async () => {
-              throw Error("offline");
-            },
-          },
-        },
-        "/a.txt",
-      ),
-    ).toEqual({ checked: false });
-    expect(
-      await h.service.check(
-        {
-          ...h.principal,
-          storage: {
-            ...h.storage,
-            list: async () => {
-              throw Error("offline");
-            },
-          },
-        },
-        "/missing",
-      ),
-    ).toEqual({ checked: false });
-    expect(h.repo.observe).not.toHaveBeenCalled();
-  });
-  it("compares complete refreshes without probing unchanged files and rotates bounded candidate pages", async () => {
-    const h = await fixture();
-    const entries = await h.storage.list("/");
-    const entry = entries[0];
-    if (!entry) throw Error("fixture missing");
-    h.file.fingerprint = `stat:${JSON.stringify([entry.size, entry.modifiedAt.toISOString()])}`;
-    await h.service.refresh(h.principal, "/", entries);
-    expect(h.repo.observe).not.toHaveBeenCalled();
-    h.file.fingerprint = null;
-    h.repo.children.mockResolvedValueOnce(
-      Array.from({ length: 100 }, (_, i) => ({ ...h.file, id: String(i) })),
-    );
-    await h.service.refresh(h.principal, "/", []);
-    expect(h.repo.observe).toHaveBeenCalledTimes(8);
-    await h.service.refresh(h.principal, "/", []);
-    expect(h.repo.children).toHaveBeenLastCalledWith(h.accountId, h.identityId, "/", "7");
-    h.repo.children.mockRejectedValueOnce(Error("db offline"));
-    await h.service.refresh(h.principal, "/", []);
-    expect(h.onError).toHaveBeenCalledOnce();
   });
   it("maps physical signals to virtual coordinates, handles changes and records only proved absence", async () => {
     const h = await fixture();

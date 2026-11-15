@@ -1,6 +1,5 @@
 import { z } from "zod";
 import {
-  type BackupAttachmentInput,
   BackupDestinationInput,
   BackupRehearsal,
   type BackupRunInput,
@@ -9,16 +8,11 @@ import {
 } from "./backups.ts";
 import { ApiClientError } from "./client.ts";
 import { ApiError } from "./error.ts";
-import { IDENTITY_HEADER } from "./routes.ts";
 
 const Ok = z.object({ ok: z.literal(true) });
 const Accepted = z.object({ id: z.uuid() });
 export function createBackupClient(
-  options: {
-    fetch?: typeof globalThis.fetch;
-    baseUrl?: string;
-    identityId?: () => string | undefined;
-  } = {},
+  options: { fetch?: typeof globalThis.fetch; baseUrl?: string } = {},
 ) {
   const base = `${options.baseUrl ?? ""}/api/v1/system/backups`;
   async function request<T>(
@@ -29,8 +23,6 @@ export function createBackupClient(
     additional: Record<string, string> = {},
   ) {
     const headers = new Headers({ "X-Requested-With": "fdrive", ...additional });
-    const identity = options.identityId?.();
-    if (identity) headers.set(IDENTITY_HEADER, identity);
     const response = await (options.fetch ?? globalThis.fetch)(`${base}${suffix}`, {
       method,
       headers,
@@ -55,7 +47,7 @@ export function createBackupClient(
     estimate: () => json("/estimate", Accepted, "POST", {}),
     recordRehearsal: (report: BackupRehearsal) =>
       json("/rehearsal", Ok, "POST", BackupRehearsal.parse(report)),
-    unlock: (credential: Record<string, string>) => json("/unlock", Ok, "POST", { credential }),
+    unlock: (password: string) => json("/unlock", Ok, "POST", { password }),
     key: (recipient: string) =>
       json("/key", z.object({ challenge: z.string() }), "POST", { recipient }),
     confirm: (proof: string) => json("/key/confirm", Ok, "POST", { proof }),
@@ -80,21 +72,6 @@ export function createBackupClient(
       json(`/destinations/${encodeURIComponent(id)}/test`, Ok, "POST", {}),
     removeDestination: (id: string) =>
       request(`/destinations/${encodeURIComponent(id)}`, Ok, "DELETE"),
-    upload: (input: z.infer<typeof BackupAttachmentInput>, body: Blob, id?: string) => {
-      const metadata = btoa(
-        String.fromCharCode(...new TextEncoder().encode(JSON.stringify(input))),
-      );
-      return request(
-        `/attachments${id ? `/${encodeURIComponent(id)}` : ""}`,
-        Accepted,
-        id ? "PUT" : "POST",
-        body,
-        { "Content-Type": "application/zip", "X-Backup-Metadata": metadata },
-      );
-    },
-    removeAttachment: (id: string) =>
-      request(`/attachments/${encodeURIComponent(id)}`, Ok, "DELETE"),
     downloadUrl: (id: string) => `${base}/runs/${encodeURIComponent(id)}/download`,
-    attachmentUrl: (id: string) => `${base}/attachments/${encodeURIComponent(id)}/download`,
   };
 }

@@ -35,18 +35,13 @@ import { ShareDialog } from "@/components/shares/share-dialog";
 import { Button } from "@/components/ui/button";
 import { DropOverlay, useExternalDrop } from "@/components/upload/drop-overlay";
 import { useUploadFilesContext } from "@/components/upload/upload-provider";
-import { accountTransition } from "@/lib/account/transition";
 import { activityGesture } from "@/lib/activity/gestures";
 import { addToChat } from "@/lib/ai/chat-panel";
 import { useAiStatus } from "@/lib/ai/queries";
 import { useOrganize } from "@/lib/ai/use-organize";
 import { useMe } from "@/lib/api/auth-queries";
 import { describeApiError } from "@/lib/api/errors";
-import {
-  officeClientForIdentity,
-  officeStatusQueryOptions,
-  useOfficeStatus,
-} from "@/lib/api/office-queries";
+import { officeStatusQueryOptions, useOfficeStatus } from "@/lib/api/office-queries";
 import type { NewFileKind } from "@/lib/editor/new-file";
 import { editHref } from "@/lib/editor/route";
 import { defaultArchiveName, extractDestinationUnder } from "@/lib/files/archive";
@@ -93,6 +88,7 @@ import {
   EMPTY_SELECTION,
   type SelectionAction,
   type SelectionState,
+  selectionOf,
   selectionReducer,
 } from "@/lib/files/selection";
 import { sortListing } from "@/lib/files/sorting";
@@ -122,7 +118,6 @@ import {
   folderWriteBlock,
 } from "@/lib/grants/paths";
 import { useReceivedGrants } from "@/lib/grants/queries";
-import { capabilitiesFor, selectionOf } from "@/lib/identity/capabilities";
 import { type RunJobRequestDeps, runJobRequest } from "@/lib/jobs/actions";
 import { useJobsStore } from "@/lib/jobs/store";
 import type { JobRequest } from "@/lib/jobs/types";
@@ -205,13 +200,16 @@ export function FileBrowser({
   const queryClient = useQueryClient();
   const { data, isLoading, isFetching, isError, error, refetch } = useListing(path);
   const entries = useMemo(() => data?.entries ?? [], [data]);
-  const capabilities = capabilitiesFor(me);
+  // Before `me` loads, the folder counts as indexed, so thumbnails never
+  // flicker, and Trash as off, since "Move to Trash" must wait for the setting.
+  const trash = me?.trash === true;
+  const indexed = me?.index !== false;
   // Folders others share with this login: what they allow, and the
   // `Shared with me` captions and menu items.
   const received = useReceivedGrants();
   const writeBlock = folderWriteBlock(path, received);
 
-  const folderView = useFolderView(path, me?.activeIdentityId);
+  const folderView = useFolderView(path);
   const [rowClickAction] = useRowClickAction();
   const [density, setDensity] = useListDensity();
   const [gridSize, setGridSize] = useGridSize();
@@ -372,7 +370,7 @@ export function FileBrowser({
     scrollTokenRef.current += 1;
     setScrollRequest({ path: targetPath, token: scrollTokenRef.current });
   }, []);
-  useUploadReveal(path, me?.activeIdentityId, orderedPaths, { data, isFetching }, revealUploads);
+  useUploadReveal(path, orderedPaths, { data, isFetching }, revealUploads);
 
   // "Reveal in folder" (from the search panel): once this folder's listing
   // has loaded and contains the named item, select it, scroll it into
@@ -471,7 +469,7 @@ export function FileBrowser({
       }
     }
     if (me && opensInOffice(entry, availableOffice)) {
-      router.push(toRoute(officeHref(me.activeIdentityId, entry.path, "view")));
+      router.push(toRoute(officeHref(entry.path, "view")));
       return;
     }
     router.push(toRoute(entry.kind === "dir" ? pathToHref(entry.path) : viewHref(entry.path)));
@@ -538,16 +536,10 @@ export function FileBrowser({
   }
 
   function handleCreateTagFromEditor(name: string, color: TagColor) {
-    const epoch = accountTransition.getSnapshot().generation;
     createTag.mutate(
       { name, color: color === "none" ? null : color },
       {
         onSuccess: (tag) => {
-          if (
-            accountTransition.getSnapshot().pending ||
-            accountTransition.getSnapshot().generation !== epoch
-          )
-            return;
           const targets = tagsEditorEntries ?? [];
           setFileTags.mutate(
             targets.map((target) => ({
@@ -580,7 +572,7 @@ export function FileBrowser({
           me &&
           officeModesFor(entry, officeStatus, entriesForAction(entry).length).includes(mode)
         )
-          router.push(toRoute(officeHref(me.activeIdentityId, entry.path, mode)));
+          router.push(toRoute(officeHref(entry.path, mode)));
         break;
       }
       case "open":
@@ -676,19 +668,15 @@ export function FileBrowser({
 
   async function handleCreateOfficeDocument(name: string) {
     if (!me || officePending) return;
-    const identityId = me.activeIdentityId;
     setOfficePending(true);
     setOfficeError(null);
     try {
-      const created = await officeClientForIdentity(identityId).officeCreateDocument({
-        parent: path,
-        name,
-      });
-      if (created.identityId !== identityId)
+      const created = await apiClient.officeCreateDocument({ parent: path, name });
+      if (created.identityId !== me.identity.id)
         throw new Error("The document connection could not be verified.");
       void queryClient.invalidateQueries({ queryKey: queryKeys.fs.list(path) });
       setOfficeKind(null);
-      router.push(toRoute(officeHref(identityId, created.path, "edit")));
+      router.push(toRoute(officeHref(created.path, "edit")));
     } catch (err) {
       setOfficeError(describeApiError(err));
     } finally {
@@ -952,7 +940,7 @@ export function FileBrowser({
             detailsOpen={detailsOpen}
             onToggleDetails={() => setDetailsOpen(!detailsOpen)}
             selection={selectionOf(selectedEntries)}
-            indexed={capabilities.index}
+            indexed={indexed}
             onClearSelection={() => dispatchSelection({ type: "clear" })}
             onDuplicateSelection={handleDuplicateSelection}
             onCompressSelection={handleCompressSelection}
@@ -967,7 +955,7 @@ export function FileBrowser({
                 : undefined
             }
             onDownloadSelection={handleDownloadSelection}
-            showThumbnails={showThumbnails && capabilities.index}
+            showThumbnails={showThumbnails && indexed}
             onShowThumbnailsChange={setShowThumbnails}
             writeBlock={writeBlock}
           />
@@ -1045,11 +1033,11 @@ export function FileBrowser({
                 onToggleTag={handleToggleTag}
                 onOpenTagsEditor={handleOpenTagsEditor}
                 onToggleFavorite={handleToggleFavorite}
-                trash={capabilities.trash}
+                trash={trash}
                 received={received}
                 scrollRequest={scrollRequest}
                 onScrollConsumed={handleScrollConsumed}
-                showThumbnails={showThumbnails && capabilities.index}
+                showThumbnails={showThumbnails && indexed}
               />
             ) : viewMode === "grid" ? (
               <FileGrid
@@ -1070,11 +1058,11 @@ export function FileBrowser({
                 onToggleTag={handleToggleTag}
                 onOpenTagsEditor={handleOpenTagsEditor}
                 onToggleFavorite={handleToggleFavorite}
-                trash={capabilities.trash}
+                trash={trash}
                 received={received}
                 scrollRequest={scrollRequest}
                 onScrollConsumed={handleScrollConsumed}
-                thumbnails={capabilities.index}
+                thumbnails={indexed}
                 size={gridSize}
               />
             ) : (
@@ -1100,11 +1088,11 @@ export function FileBrowser({
                 onToggleTag={handleToggleTag}
                 onOpenTagsEditor={handleOpenTagsEditor}
                 onToggleFavorite={handleToggleFavorite}
-                trash={capabilities.trash}
+                trash={trash}
                 received={received}
                 scrollRequest={scrollRequest}
                 onScrollConsumed={handleScrollConsumed}
-                showThumbnails={showThumbnails && capabilities.index}
+                showThumbnails={showThumbnails && indexed}
               />
             )}
           </div>
@@ -1114,7 +1102,7 @@ export function FileBrowser({
           <Inspector
             entries={selectedEntries}
             onClose={() => setDetailsOpen(false)}
-            indexed={capabilities.index}
+            indexed={indexed}
           />
         )}
       </div>
@@ -1188,7 +1176,7 @@ export function FileBrowser({
         }}
         onConfirm={handleDeleteConfirm}
         pending={remove.isPending}
-        trash={trashAvailabilityFor(capabilities)}
+        trash={trashAvailabilityFor({ trash })}
       />
       {destinationPicker !== null && (
         <DestinationPicker

@@ -17,7 +17,6 @@ export const DesktopWriteLocation = DesktopLocation.extend({
   readOnly: z.boolean(),
   capabilities: DesktopWriteCapabilities,
   maxUploadBytes: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
-  writeUnavailableReason: z.string().optional(),
   /** The server answers folder checks, so a refresh lists only folders that changed. */
   listingChecks: z.literal(true).optional(),
   /** The server answers `GET /changes`, so a refresh asks which folders changed since its last one. */
@@ -135,7 +134,6 @@ export const DesktopOperationState = z.enum([
   "committing",
   "completed",
   "conflict",
-  "uncertain",
   "cancelled",
   "acknowledged",
 ]);
@@ -143,7 +141,7 @@ export const DesktopOperationResult = z.object({
   operationId: OperationId,
   state: DesktopOperationState,
   item: DesktopWriteEntry.nullable(),
-  /** A post-commit recovery copy, if one was retained. Never an upstream path. */
+  /** Always null: fdrive keeps no copy of what a write replaced. Shipped Mac apps decode it. */
   recoveryId: CanonicalUuid.nullable(),
 });
 export type DesktopWriteLocation = z.infer<typeof DesktopWriteLocation>;

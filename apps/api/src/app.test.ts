@@ -28,14 +28,12 @@ const FAKE_STORAGE: StorageProvider = {
 
 const REQUIRED_ENV = {
   DATABASE_URL: "postgres://localhost/fdrive",
+  FDRIVE_STORAGE_ROOT: "/srv/files",
   FDRIVE_MASTER_KEY: Buffer.alloc(32, 7).toString("base64"),
 };
 
-/** Setup is done and the files folder is enabled, as `composeApp` would report it. */
-const SET_UP = async () => ({
-  required: false,
-  providers: [{ type: "local", host: "Family files" }],
-});
+/** Setup is done, as `composeApp` would report it. */
+const SET_UP = async () => false;
 
 function createTestLogger(): Logger {
   const logger = {
@@ -61,7 +59,7 @@ function buildApp(overrides: Partial<Parameters<typeof createApp>[0]> = {}) {
     version: "1.2.3",
     startedAt: START,
     clock: () => LATER,
-    connectionStatus: SET_UP,
+    setupRequired: SET_UP,
     ...overrides,
   });
   return { app, logger };
@@ -115,7 +113,6 @@ describe("createApp health route", () => {
         thumbnails: { status: "not_configured", missing: ["FDRIVE_THUMBS_DIR"] },
         ocr: { status: "not_configured", missing: ["FDRIVE_OCR_URL"] },
         office: { status: "configured", missing: [] },
-        trash: { status: "configured", missing: [] },
       },
     });
   });
@@ -225,16 +222,7 @@ describe("createApp about route", () => {
     expect(await (await app.request("/api/v1/about")).json()).toMatchObject({ uptimeSeconds: 0 });
   });
 
-  it("exposes no endpoints when setup is complete but no provider is enabled", async () => {
-    const { app } = buildApp({
-      connectionStatus: async () => ({ required: false, providers: [] }),
-    });
-    const res = await app.request("/api/v1/about");
-    expect(res.status).toBe(200);
-    expect(await res.json()).toMatchObject({ setupRequired: false, providers: [] });
-  });
-
-  it("returns the version, redacting the host for an anonymous caller", async () => {
+  it("returns the version, and names no storage", async () => {
     const { app } = buildApp();
 
     const res = await app.request("/api/v1/about");
@@ -245,7 +233,6 @@ describe("createApp about route", () => {
     expect(body).toEqual({
       version: "1.2.3",
       uptimeSeconds: 5,
-      providers: [{ type: "local", label: null }],
       setupRequired: false,
     });
   });
@@ -270,36 +257,17 @@ describe("createApp about route", () => {
     expect(body).not.toHaveProperty("revision");
   });
 
-  it("reveals the provider's host once the caller has a resolvable session", async () => {
-    const { app } = buildApp({
-      principalResolver: async () => ({
-        accountId: "account-1",
-        identityId: "identity-1",
-        username: "alice",
-        storage: FAKE_STORAGE,
-        isAdmin: false,
-      }),
-    });
-
-    const res = await app.request("/api/v1/about");
-    const body = await res.json();
-
-    expect(body).toMatchObject({ providers: [{ type: "local", label: "Family files" }] });
-  });
-
-  it("reports setupRequired and a null provider when connectionStatus says so", async () => {
-    const { app } = buildApp({
-      connectionStatus: async () => ({ required: true, providers: [] }),
-    });
+  it("reports setupRequired while setup is required", async () => {
+    const { app } = buildApp({ setupRequired: async () => true });
 
     const res = await app.request("/api/v1/about");
     const body = await res.json();
 
     expect(AboutResponse.safeParse(body).success).toBe(true);
-    expect(body).toMatchObject({ providers: [], setupRequired: true });
+    expect(body).toMatchObject({ setupRequired: true });
   });
 
-  it("defaults to set up with no providers when no connectionStatus is given", async () => {
+  it("defaults to set up when no setupRequired is given", async () => {
     const app = createApp({
       config: loadConfig(REQUIRED_ENV),
       logger: createTestLogger(),
@@ -314,7 +282,7 @@ describe("createApp about route", () => {
     const res = await app.request("/api/v1/about");
     const body = await res.json();
 
-    expect(body).toMatchObject({ providers: [], setupRequired: false });
+    expect(body).toMatchObject({ setupRequired: false });
   });
 });
 
@@ -336,7 +304,7 @@ describe("isSetupExempt", () => {
 describe("createApp setup gate", () => {
   it("responds 503 setup_required for a non-exempt route while setup is required", async () => {
     const { app } = buildApp({
-      connectionStatus: async () => ({ required: true, providers: [] }),
+      setupRequired: async () => true,
       registerRoutes: ({ public: pub }) => {
         pub.get("/ping", (c) => c.json({ ok: true }));
       },
@@ -350,7 +318,7 @@ describe("createApp setup gate", () => {
   });
 
   it("still serves health and about while setup is required", async () => {
-    const { app } = buildApp({ connectionStatus: async () => ({ required: true, providers: [] }) });
+    const { app } = buildApp({ setupRequired: async () => true });
 
     expect((await app.request("/api/v1/health")).status).toBe(200);
     expect((await app.request("/api/v1/about")).status).toBe(200);
@@ -358,10 +326,7 @@ describe("createApp setup gate", () => {
 
   it("serves non-exempt routes normally once setup is not required", async () => {
     const { app } = buildApp({
-      connectionStatus: async () => ({
-        required: false,
-        providers: [{ type: "local", host: "Family files" }],
-      }),
+      setupRequired: async () => false,
       registerRoutes: ({ public: pub }) => {
         pub.get("/ping", (c) => c.json({ ok: true }));
       },

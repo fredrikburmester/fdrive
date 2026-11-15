@@ -47,23 +47,14 @@ afterEach(() => {
 describe("imageSearchQueryKey", () => {
   it("varies with query text", async () => {
     const { imageSearchQueryKey } = await import("./queries.js");
-    const a = imageSearchQueryKey("dog", "id-1");
-    const b = imageSearchQueryKey("cat", "id-1");
+    const a = imageSearchQueryKey("dog");
+    const b = imageSearchQueryKey("cat");
     expect(a).not.toEqual(b);
-  });
-
-  it("varies with identity id", async () => {
-    const { imageSearchQueryKey } = await import("./queries.js");
-    const a = imageSearchQueryKey("sunset", "id-1");
-    const b = imageSearchQueryKey("sunset", "id-2");
-    const c = imageSearchQueryKey("sunset");
-    expect(a).not.toEqual(b);
-    expect(a).not.toEqual(c);
   });
 
   it("is stable for same inputs", async () => {
     const { imageSearchQueryKey } = await import("./queries.js");
-    expect(imageSearchQueryKey("sunset", "id-1")).toEqual(imageSearchQueryKey("sunset", "id-1"));
+    expect(imageSearchQueryKey("sunset")).toEqual(imageSearchQueryKey("sunset"));
   });
 });
 
@@ -132,7 +123,7 @@ describe("search startup retry decisions", () => {
       available: false,
       semantic: false,
       images: false,
-      reason: "provider_mismatch",
+      reason: "invalid_configuration",
     };
 
     expect(isSearchUnsupported(status)).toBe(true);
@@ -303,7 +294,7 @@ describe("useImageSearchResults", () => {
     const { useImageSearchResults } = await import("./queries.js");
     const client = new QueryClient();
 
-    const { result } = renderHook(() => useImageSearchResults("sunset", { identityId: "id-1" }), {
+    const { result } = renderHook(() => useImageSearchResults("sunset"), {
       wrapper: createWrapper(client),
     });
 
@@ -315,28 +306,15 @@ describe("useImageSearchResults", () => {
     const { useImageSearchResults } = await import("./queries.js");
     const client = new QueryClient();
 
-    const { result } = renderHook(() => useImageSearchResults("   ", { identityId: "id-1" }), {
+    const { result } = renderHook(() => useImageSearchResults("   "), {
       wrapper: createWrapper(client),
     });
     expect(result.current.fetchStatus).toBe("idle");
     expect(searchImagesMock).not.toHaveBeenCalled();
 
-    renderHook(() => useImageSearchResults("sunset", { enabled: false, identityId: "id-1" }), {
+    renderHook(() => useImageSearchResults("sunset", { enabled: false }), {
       wrapper: createWrapper(client),
     });
     expect(searchImagesMock).not.toHaveBeenCalled();
   });
-});
-
-it("keys results by the active login so a switch never reuses another login's results", async () => {
-  searchMock.mockResolvedValue(EMPTY_RESPONSE);
-  const { useSearchResults } = await import("./queries");
-  const client = new QueryClient();
-  const { result } = renderHook(
-    () => useSearchResults("readme", DEFAULT_SEARCH_CHIPS, "/", { identityId: "i" }),
-    { wrapper: createWrapper(client) },
-  );
-  await waitFor(() => expect(result.current.data).toEqual(EMPTY_RESPONSE));
-  expect(searchMock).toHaveBeenCalledWith("readme", { limit: 20 });
-  expect(client.getQueryCache().getAll()[0]?.queryKey).toContain("i");
 });

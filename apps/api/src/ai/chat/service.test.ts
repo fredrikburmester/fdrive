@@ -9,7 +9,6 @@ import { ApiHttpError } from "../../errors.js";
 import { createEventBus } from "../../events/bus.js";
 import type { McpToolDeps } from "../../mcp/handlers.js";
 import { createMetadataService } from "../../metadata/service.js";
-import { buildIdentity } from "../../scoping/test-fixtures/index.ts";
 import type { AiInput, AiModel, AiStartOptions, AiTurn } from "../model.ts";
 import type { ResolvedAiConfig } from "../settings.ts";
 import { type ChatService, createChatService, titleFrom } from "./service.ts";
@@ -83,7 +82,6 @@ async function setup(
     limits?: Record<string, number>;
     aiOff?: boolean;
     chatOff?: boolean;
-    noIdentity?: boolean;
   } = {},
 ): Promise<Setup> {
   const repos = createMemoryRepos();
@@ -94,8 +92,9 @@ async function setup(
     providerId: provider.id,
     externalUsername: "alice",
   });
+  const bobAccount = await repos.accounts.create({ displayName: null });
   const bob = await repos.identities.create({
-    accountId: account.id,
+    accountId: bobAccount.id,
     providerId: provider.id,
     externalUsername: "bob",
   });
@@ -116,7 +115,12 @@ async function setup(
     storage,
     isAdmin: false,
   };
-  const other: Principal = { ...principal, identityId: bob.id, username: "bob" };
+  const other: Principal = {
+    ...principal,
+    accountId: bobAccount.id,
+    identityId: bob.id,
+    username: "bob",
+  };
   const script = scriptedModel();
   const mcp: McpToolDeps = {
     indexQueries: { rootIdsByName: async () => ({}) } as unknown as IndexQueries,
@@ -124,12 +128,8 @@ async function setup(
     scopeResolver: {
       verifiedIndexScopes: async () => ({ available: false, reason: "no_connection" as const }),
     },
-    identities: {
-      get: async () => (options.noIdentity ? null : buildIdentity({ id: identity.id })),
-    },
     publicUrl: async () => null,
     indexerClient: null,
-    writesEnabled: false,
     clock: () => new Date("2026-09-18T10:00:00.000Z"),
     metadata: createMetadataService(repos),
     ...(options.trash ? { trashPathForStorage: () => (trash.enabled ? "/.Trash" : null) } : {}),
@@ -816,8 +816,8 @@ describe("chat service", () => {
     });
   });
 
-  it("treats a login without an identity row as unindexed and stops a live chat on delete", async () => {
-    const lone = await setup({ noIdentity: true });
+  it("treats a login without indexed scopes as unindexed and stops a live chat on delete", async () => {
+    const lone = await setup();
     lone.script.queue.push(text("Hi."));
     const chat = await chatWith(lone, "Hello");
     await lone.service.settled(chat.id);

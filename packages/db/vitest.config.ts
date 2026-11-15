@@ -12,7 +12,7 @@ export default definePackageConfig({
     include: [
       "src/**/*.test.ts",
       "test/*.test.ts",
-      "test/integration/{desktop,desktop-effects,desktop-publish-lock,activity,changes}.test.ts",
+      "test/integration/{desktop,activity,changes}.test.ts",
     ],
     exclude: ["**/node_modules/**", "**/dist/**"],
     coverage: {
@@ -28,7 +28,7 @@ export default definePackageConfig({
         "src/repos/wopi-locks.ts",
         "src/repos/office-files.ts",
         "src/repos/office-write-scope.ts",
-        "src/repos/identity-links.ts",
+        "src/repos/logins.ts",
         "src/repos/shares.ts",
         "src/repos/system-events.ts",
       ],

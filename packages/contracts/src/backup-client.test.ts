@@ -1,9 +1,9 @@
 import { expect, it, vi } from "vitest";
 import { createBackupClient } from "./backup-client.js";
-import { BackupDestinationInput, BackupSchedule } from "./backups.js";
+import { BackupDestinationInput, BackupSchedule, BackupsResponse } from "./backups.js";
 
 const id = "f9c0b4ba-7b67-4e2f-abf3-08d1a0e6d652";
-it("sends owner session, CSRF and selected identity for every backup operation", async () => {
+it("sends the owner session and CSRF marker for every backup operation", async () => {
   const fetch = vi.fn<typeof globalThis.fetch>().mockImplementation(async (input) => {
     const url = String(input);
     return Response.json(
@@ -11,7 +11,7 @@ it("sends owner session, CSRF and selected identity for every backup operation",
         ? { challenge: "ciphertext" }
         : url.endsWith("/estimate") ||
             url.endsWith("/runs") ||
-            /\/(destinations|attachments)(\/[^/]+)?$/.test(url)
+            /\/destinations(\/[^/]+)?$/.test(url)
           ? { id, ok: true }
           : { ok: true },
     );
@@ -19,9 +19,8 @@ it("sends owner session, CSRF and selected identity for every backup operation",
   const client = createBackupClient({
     fetch,
     baseUrl: "https://fdrive.invalid",
-    identityId: () => id,
   });
-  await client.unlock({ password: "owner" });
+  await client.unlock("owner-password");
   await client.key("public key");
   await client.confirm("proof");
   await client.estimate();
@@ -64,31 +63,14 @@ it("sends owner session, CSRF and selected identity for every backup operation",
   await client.destination(destination, id);
   await client.testDestination(id);
   await client.removeDestination(id);
-  const metadata = {
-    label: "Åäö configuration",
-    filename: "backup.zip",
-    sourceDate: null,
-    notes: "Manual restore",
-  };
-  const body = new Blob(["zip"]);
-  await client.upload(metadata, body);
-  await client.upload(metadata, body, id);
-  await client.removeAttachment(id);
   for (const [_url, init] of fetch.mock.calls) {
     expect(init?.credentials).toBe("same-origin");
     const headers = new Headers(init?.headers);
     expect(headers.get("x-requested-with")).toBe("fdrive");
-    expect(headers.get("x-identity-id")).toBe(id);
   }
-  const upload = fetch.mock.calls.find(([_url, init]) => init?.body === body);
-  const encoded = new Headers(upload?.[1]?.headers).get("x-backup-metadata") ?? "";
-  expect(
-    JSON.parse(
-      new TextDecoder().decode(Uint8Array.from(atob(encoded), (char) => char.charCodeAt(0))),
-    ),
-  ).toEqual(metadata);
+  const unlock = fetch.mock.calls.find(([url]) => String(url).endsWith("/unlock"));
+  expect(JSON.parse(String(unlock?.[1]?.body))).toEqual({ password: "owner-password" });
   expect(client.downloadUrl("path/escape")).toContain("path%2Fescape/download");
-  expect(client.attachmentUrl(id)).toContain(`/attachments/${id}/download`);
 });
 it("validates server responses and reports structured and malformed errors", async () => {
   const fetch = vi.fn<typeof globalThis.fetch>();
@@ -147,4 +129,28 @@ it("rejects unsafe destinations and invalid schedules before making requests", (
       prefix: "private/fdrive",
     }).success,
   ).toBe(true);
+});
+it("accepts only S3 destinations: a folder in the files folder is not a destination", () => {
+  const files = { type: "provider", name: "Files", providerId: id, prefix: "/Backups" };
+  expect(BackupDestinationInput.safeParse(files).success).toBe(false);
+  expect(BackupDestinationInput.safeParse({ ...files, type: "s3" }).success).toBe(false);
+});
+it("has no configuration ZIP attachments", () => {
+  const client = createBackupClient({ fetch: vi.fn<typeof globalThis.fetch>() });
+  for (const name of ["upload", "removeAttachment", "attachmentUrl"])
+    expect(client).not.toHaveProperty(name);
+  const status = BackupsResponse.parse({
+    enabled: true,
+    owner: true,
+    installationId: id,
+    recipient: null,
+    keyConfirmed: false,
+    schedule: { timezone: "UTC" },
+    nextRunAt: null,
+    restored: false,
+    destinations: [],
+    attachments: [{ id }],
+    runs: [],
+  });
+  expect(status).not.toHaveProperty("attachments");
 });

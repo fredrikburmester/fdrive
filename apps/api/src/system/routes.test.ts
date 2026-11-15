@@ -28,6 +28,7 @@ import type { ThumbnailsRepo } from "./thumbnails-repo.js";
 
 const REQUIRED_ENV = {
   DATABASE_URL: "postgres://localhost/fdrive",
+  FDRIVE_STORAGE_ROOT: "/srv/files",
   FDRIVE_MASTER_KEY: Buffer.alloc(32, 4).toString("base64"),
 };
 
@@ -54,8 +55,7 @@ function fakeIndexQueries(overrides: Partial<IndexQueries> = {}): IndexQueries {
     similar: notImplemented,
     recentFiles: notImplemented,
     thumbnail: notImplemented,
-    recordMove: notImplemented,
-    recentMoves: notImplemented,
+    thumbnailKeys: notImplemented,
     deletedRowSha: notImplemented,
     liveRowsBySha: notImplemented,
     searchImages: notImplemented,
@@ -170,10 +170,7 @@ function buildApp(opts: { isAdmin?: boolean; deps?: Partial<SystemRoutesDeps> })
     } as never,
     version: "1.0.0",
     startedAt: new Date(0),
-    connectionStatus: async () => ({
-      required: false,
-      providers: [{ type: "local", host: "Local folder" }],
-    }),
+    setupRequired: async () => false,
     principalResolver: async () => principal,
     registerRoutes: (groups) => {
       registerSystemRoutes(groups, deps);

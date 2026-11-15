@@ -63,7 +63,7 @@ export async function officeHarness(
     const session = await repos.sessions.create({
       idHash: hashSessionId(sessionId),
       accountId: account.id,
-      activeIdentityId: identity.id,
+      identityId: identity.id,
       expiresAt: new Date(now.value.getTime() + 86400000),
       userAgent: null,
       ip: null,
@@ -130,9 +130,7 @@ export async function officeHarness(
   for (const user of users)
     bus.subscribe({ identityId: user.identity.id }, (event) => events.push(event));
   const deps: OfficeDeps = {
-    canEdit: async (actor) =>
-      actor.identity.providerId === provider.id &&
-      ["alice", "bob"].includes(actor.identity.externalUsername),
+    canEdit: async (actor) => ["alice", "bob"].includes(actor.identity.externalUsername),
     withWriteScope: (callback) => callback({ files, locks }),
     config,
     discovery: cache,
@@ -141,12 +139,14 @@ export async function officeHarness(
     files,
     locks,
     clock,
-    location: async () => ({
-      providerId: provider.id,
-      // Every user shares one folder, so cross-user cases need no copies.
-      scopes: [{ rootName: "files", fsPrefix: "/shared", virtualPrefix: "/" }],
-    }),
-    storageFactory: (id) =>
+    // Every user reaches alice's files at the same paths, so cross-user
+    // cases need no copies: every document is alice's.
+    grants: {
+      ownerPath: async (_identityId, path) => ({ identityId: alice.identity.id, path }),
+      pathFor: async (_identityId, owned) =>
+        owned.identityId === alice.identity.id ? owned.path : null,
+    },
+    storageFactory: (id: string) =>
       options.storageForUser?.(
         users.find((user) => user.identity.id === id)?.identity.externalUsername ?? "alice",
       ) ?? storage,
@@ -160,6 +160,7 @@ export async function officeHarness(
   const app = createApp({
     config: loadConfig({
       DATABASE_URL: "postgres://unused",
+      FDRIVE_STORAGE_ROOT: "/srv/files",
       FDRIVE_MASTER_KEY: Buffer.alloc(32, 7).toString("base64"),
     }),
     logger,
@@ -168,7 +169,7 @@ export async function officeHarness(
     startedAt: clock(),
     principalResolver: async (c) =>
       users.find((u) => u.sessionId === getCookie(c, COOKIE_NAME))?.principal ?? alice.principal,
-    connectionStatus: async () => ({ required: false, providers: [] }),
+    setupRequired: async () => false,
     registerRoutes: (groups) => registerOfficeRoutes(groups, { service }),
   });
   registerWopiRoutes(app, { service });

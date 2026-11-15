@@ -3,29 +3,26 @@ import { createMemoryRepos } from "@fdrive/db/testing";
 import { createMemoryStorage } from "@fdrive/testkit";
 import { describe, expect, it, vi } from "vitest";
 import { createApp } from "../app.js";
+import { createLoginLimiter } from "../auth/login-limiter.js";
+import { createPasswordCheck } from "../auth/password.ts";
 import type { Principal } from "../auth/principal.js";
 import { COOKIE_NAME, hashSessionId } from "../auth/sessions.js";
 import { loadConfig } from "../config.js";
-import { seedLocalProvider } from "../providers/test-fixtures/index.ts";
 import { registerLocalUserRoutes } from "./routes.js";
 import { createLocalUserService } from "./service.js";
-import { FAST_PASSWORDS, seedLocalUsers } from "./test-fixtures/index.ts";
+import { FAST_PASSWORDS, seedLocalUsers, seedStorageRow } from "./test-fixtures/index.ts";
 import { createLocalUserStore } from "./users.js";
 
 async function harness(options: { isAdmin?: boolean } = {}) {
   const repos = createMemoryRepos();
-  const row = await seedLocalProvider(repos);
-  await seedLocalUsers(repos, [
+  const row = await seedStorageRow(repos);
+  const [identity] = await seedLocalUsers(repos, [
     { username: "alice", password: "alice-pass" },
     { username: "bob", password: "bob-pass" },
   ]);
-  const account = await repos.accounts.create({ displayName: "alice" });
-  await repos.accounts.setAdmin(account.id, true);
-  const identity = await repos.identities.create({
-    accountId: account.id,
-    providerId: row.id,
-    externalUsername: "alice",
-  });
+  if (identity === undefined) throw new Error("unseeded");
+  await repos.accounts.setAdmin(identity.accountId, true);
+  const account = { id: identity.accountId };
   const store = createLocalUserStore({
     repo: repos.localUsers,
     grants: repos.localGrants,
@@ -33,10 +30,12 @@ async function harness(options: { isAdmin?: boolean } = {}) {
   });
   const service = createLocalUserService({
     repos,
-    store,
+    checkPassword: createPasswordCheck({
+      limiter: createLoginLimiter({ clock: () => new Date() }),
+      users: store,
+    }),
     passwords: FAST_PASSWORDS,
-    master: Buffer.alloc(32, 51),
-    providerId: async () => row.id,
+    storageId: row.id,
   });
   const principal: Principal = {
     accountId: account.id,
@@ -48,17 +47,22 @@ async function harness(options: { isAdmin?: boolean } = {}) {
   const app = createApp({
     config: loadConfig({
       DATABASE_URL: "postgres://localhost/fdrive",
+      FDRIVE_STORAGE_ROOT: "/srv/files",
       FDRIVE_MASTER_KEY: Buffer.alloc(32, 52).toString("base64"),
     }),
     logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() } as never,
     version: "test",
     startedAt: new Date(0),
     principalResolver: async () => principal,
-    registerRoutes: (groups) => registerLocalUserRoutes(groups, { service }),
+    registerRoutes: (groups) =>
+      registerLocalUserRoutes(groups, {
+        service,
+        clientIp: (c) => c.req.header("x-forwarded-for") ?? "192.0.2.1",
+      }),
   });
   const call = (
     path: string,
-    init: { method?: string; body?: unknown; raw?: string; session?: string } = {},
+    init: { method?: string; body?: unknown; raw?: string; session?: string; ip?: string } = {},
   ) =>
     app.request(path, {
       method: init.method ?? "GET",
@@ -66,6 +70,7 @@ async function harness(options: { isAdmin?: boolean } = {}) {
         "x-requested-with": "fdrive",
         "content-type": "application/json",
         ...(init.session === undefined ? {} : { cookie: `${COOKIE_NAME}=${init.session}` }),
+        ...(init.ip === undefined ? {} : { "x-forwarded-for": init.ip }),
       },
       ...(init.raw !== undefined
         ? { body: init.raw }
@@ -82,7 +87,6 @@ describe("/admin/users", () => {
   it("lists, adds, changes and removes users", async () => {
     const h = await harness();
     const list = AdminUsersResponse.parse(await (await h.call(ROUTES.admin.users)).json());
-    expect(list.available).toBe(true);
     expect(list.users.map((user) => [user.username, user.isYou])).toEqual([
       ["alice", true],
       ["bob", false],
@@ -109,7 +113,7 @@ describe("/admin/users", () => {
     await h.repos.sessions.create({
       idHash: hashSessionId("admin-session"),
       accountId: h.account.id,
-      activeIdentityId: h.identity.id,
+      identityId: h.identity.id,
       expiresAt: new Date(Date.now() + 3_600_000),
       userAgent: null,
       ip: null,
@@ -176,7 +180,7 @@ describe("POST /auth/password", () => {
     await h.repos.sessions.create({
       idHash: hashSessionId("raw-session"),
       accountId: h.account.id,
-      activeIdentityId: h.identity.id,
+      identityId: h.identity.id,
       expiresAt: new Date(Date.now() + 3_600_000),
       userAgent: null,
       ip: null,
@@ -193,6 +197,22 @@ describe("POST /auth/password", () => {
     expect(
       await h.repos.sessions.getByIdHash(hashSessionId("raw-session"), new Date()),
     ).not.toBeNull();
+  });
+
+  it("is checked behind the login limiter, per address", async () => {
+    const h = await harness({ isAdmin: false });
+    const attempt = (currentPassword: string, ip: string) =>
+      h.call(ROUTES.auth.password, {
+        method: "POST",
+        session: "raw-session",
+        ip,
+        body: { currentPassword, newPassword: "alice-new-pass" },
+      });
+    for (let n = 0; n < 5; n++) expect((await attempt("guess", "203.0.113.5")).status).toBe(401);
+    const blocked = await attempt("alice-pass", "203.0.113.5");
+    expect(blocked.status).toBe(429);
+    expect(await h.store.verify("alice", "alice-pass")).toMatchObject({ result: "ok" });
+    expect((await attempt("alice-pass", "203.0.113.6")).status).toBe(200);
   });
 
   it("refuses a request made with an API token, and a bad body", async () => {

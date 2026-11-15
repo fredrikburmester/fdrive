@@ -169,7 +169,6 @@ export async function appendActivityOutcome(
       previousRevisionId: operation.revisionId ?? registry.source?.revisionId ?? null,
       size: result.after?.size ?? null,
       sha256: result.after?.sha256 ?? null,
-      providerVersion: result.after?.version ?? null,
     });
   }
   if (operation.action === "file.copy" && registry?.source && registry.file) {
@@ -247,12 +246,7 @@ export function activityConditions(accountId: string, options: ActivityListOptio
   const e = activityEvents;
   return and(
     eq(e.ownerAccountId, accountId),
-    options.identityId
-      ? or(
-          eq(e.identityId, options.identityId),
-          sql`exists (select 1 from ${activityEventSubjects} s where s.owner_account_id = ${accountId} and s.event_id = ${e.id} and s.identity_id = ${options.identityId})`,
-        )
-      : undefined,
+    options.identityId ? eq(e.identityId, options.identityId) : undefined,
     options.action ? eq(e.action, options.action) : undefined,
     options.source ? eq(e.source, options.source) : undefined,
     options.outcome ? eq(e.outcome, options.outcome) : undefined,
@@ -377,7 +371,7 @@ export function createActivityRepo(db: Db, clock: () => Date = () => new Date(),
     async clientEvent(
       accountId: string,
       context: string,
-      input: ClientActivityRequest,
+      input: ClientActivityRequest & { readonly identityId: string },
       kind: "file" | "dir",
     ) {
       return db.transaction(async (tx) => {
@@ -745,18 +739,6 @@ export function createActivityRepo(db: Db, clock: () => Date = () => new Date(),
           ),
         );
       return rows[0]?.count ?? 0;
-    },
-    async locations(accountId: string) {
-      return db
-        .selectDistinct({
-          identityId: activityStorageIdentities.identityId,
-          label: activityStorageIdentities.label,
-        })
-        .from(activityStorageIdentities)
-        .where(
-          sql`exists (select 1 from ${activityEventSubjects} where ${activityEventSubjects.identityId} = ${activityStorageIdentities.identityId} and ${activityEventSubjects.ownerAccountId} = ${accountId}) or exists (select 1 from ${activityEvents} where ${activityEvents.identityId} = ${activityStorageIdentities.identityId} and ${activityEvents.ownerAccountId} = ${accountId}) or exists (select 1 from ${activityReadWindows} where ${activityReadWindows.identityId} = ${activityStorageIdentities.identityId} and ${activityReadWindows.ownerAccountId} = ${accountId})`,
-        )
-        .limit(1000);
     },
     async batchSummary(accountId: string, batchId: string) {
       const result = await db.execute(sql`with latest as (

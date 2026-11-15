@@ -8,7 +8,6 @@ import {
   isBase64Of32Bytes,
   isHttpUrl,
   loadConfig,
-  parseAdminUsers,
   parseIndexRoots,
   undefinedWhenEmpty,
   withDefault,
@@ -18,6 +17,7 @@ const MASTER_KEY_32_BYTES = Buffer.alloc(32, 7).toString("base64");
 
 const REQUIRED_ENV = {
   DATABASE_URL: "postgres://localhost/fdrive",
+  FDRIVE_STORAGE_ROOT: "/srv/files",
   FDRIVE_MASTER_KEY: MASTER_KEY_32_BYTES,
 };
 
@@ -143,12 +143,11 @@ describe("loadConfig", () => {
       fdriveOfficePublicUrl: undefined,
       fdriveWopiUrl: undefined,
       fdriveOfficeMaxBytes: 104857600,
-      fdriveOfficeEditRules: [],
       port: 3001,
       host: "0.0.0.0",
       logLevel: "info",
       databaseUrl: "postgres://localhost/fdrive",
-      fdriveStorageRoot: undefined,
+      fdriveStorageRoot: "/srv/files",
       fdriveMasterKey: MASTER_KEY_32_BYTES,
       fdriveSessionTtlDays: 30,
       fdriveSessionMaxAgeDays: 90,
@@ -156,7 +155,6 @@ describe("loadConfig", () => {
       fdriveTrustedProxyHops: 1,
       nodeEnv: "development",
       fdriveTmpDir: tmpdir(),
-      fdriveDesktopRetentionDays: 30,
       fdriveJobMaxBytes: DEFAULT_JOB_MAX_BYTES,
       fdriveArchivePeekMaxBytes: DEFAULT_ARCHIVE_PEEK_MAX_BYTES,
       fdriveJsonMaxBytes: DEFAULT_JSON_MAX_BYTES,
@@ -164,23 +162,24 @@ describe("loadConfig", () => {
       fdriveIndexRoots: null,
       fdriveEmbedUrl: undefined,
       fdriveThumbsDir: undefined,
-      fdriveAdminUsers: [],
       fdriveSetupToken: undefined,
       fdriveIndexerUrl: undefined,
       fdriveOcrUrl: undefined,
-      fdriveMcpWrites: false,
     });
   });
 
   it("throws when a required variable is missing", () => {
-    expect(() => loadConfig({})).toThrowError(/DATABASE_URL.*\n.*FDRIVE_MASTER_KEY/s);
+    expect(() => loadConfig({})).toThrowError(
+      /DATABASE_URL.*\n.*FDRIVE_STORAGE_ROOT.*\n.*FDRIVE_MASTER_KEY/s,
+    );
   });
 
-  it("leaves fdriveStorageRoot undefined when FDRIVE_STORAGE_ROOT is unset or empty", () => {
-    expect(loadConfig(REQUIRED_ENV).fdriveStorageRoot).toBeUndefined();
-    expect(
-      loadConfig({ ...REQUIRED_ENV, FDRIVE_STORAGE_ROOT: "" }).fdriveStorageRoot,
-    ).toBeUndefined();
+  it("requires FDRIVE_STORAGE_ROOT", () => {
+    const { FDRIVE_STORAGE_ROOT: _, ...withoutRoot } = REQUIRED_ENV;
+    expect(() => loadConfig(withoutRoot)).toThrow(/FDRIVE_STORAGE_ROOT/);
+    expect(() => loadConfig({ ...REQUIRED_ENV, FDRIVE_STORAGE_ROOT: "" })).toThrow(
+      /FDRIVE_STORAGE_ROOT.*is required/,
+    );
   });
 
   it("reads FDRIVE_STORAGE_ROOT as the local folder", () => {
@@ -217,11 +216,9 @@ describe("loadConfig", () => {
       ]),
       FDRIVE_EMBED_URL: "http://embed:8081",
       FDRIVE_THUMBS_DIR: "/data/thumbs",
-      FDRIVE_ADMIN_USERS: "alice, bob",
       FDRIVE_SETUP_TOKEN: "fixed-token",
       FDRIVE_INDEXER_URL: "http://indexer:8010",
       FDRIVE_OCR_URL: "http://ocr:8020",
-      FDRIVE_MCP_WRITES: "true",
     });
 
     expect(config).toEqual({
@@ -239,7 +236,6 @@ describe("loadConfig", () => {
       fdriveOfficePublicUrl: undefined,
       fdriveWopiUrl: undefined,
       fdriveOfficeMaxBytes: 104857600,
-      fdriveOfficeEditRules: [],
       port: 8080,
       host: "127.0.0.1",
       logLevel: "debug",
@@ -252,7 +248,6 @@ describe("loadConfig", () => {
       fdriveTrustedProxyHops: 2,
       nodeEnv: "production",
       fdriveTmpDir: "/var/tmp/fdrive",
-      fdriveDesktopRetentionDays: 30,
       fdriveJobMaxBytes: 1000,
       fdriveArchivePeekMaxBytes: 1500,
       fdriveJsonMaxBytes: 2000,
@@ -260,11 +255,9 @@ describe("loadConfig", () => {
       fdriveIndexRoots: [{ name: "files", storagePath: "/data", indexerPath: "/roots/files" }],
       fdriveEmbedUrl: "http://embed:8081",
       fdriveThumbsDir: "/data/thumbs",
-      fdriveAdminUsers: ["alice", "bob"],
       fdriveSetupToken: "fixed-token",
       fdriveIndexerUrl: "http://indexer:8010",
       fdriveOcrUrl: "http://ocr:8020",
-      fdriveMcpWrites: true,
     });
   });
 
@@ -275,11 +268,10 @@ describe("loadConfig", () => {
     expect(config.fdriveThumbsDir).toBeUndefined();
   });
 
-  it("defaults FDRIVE_INDEXER_URL and FDRIVE_OCR_URL to unset, and FDRIVE_MCP_WRITES to false", () => {
+  it("defaults FDRIVE_INDEXER_URL and FDRIVE_OCR_URL to unset", () => {
     const config = loadConfig(REQUIRED_ENV);
     expect(config.fdriveIndexerUrl).toBeUndefined();
     expect(config.fdriveOcrUrl).toBeUndefined();
-    expect(config.fdriveMcpWrites).toBe(false);
   });
 
   it("rejects a non-http FDRIVE_INDEXER_URL", () => {
@@ -298,14 +290,6 @@ describe("loadConfig", () => {
     expect(
       loadConfig({ ...REQUIRED_ENV, FDRIVE_INDEXER_URL: "" }).fdriveIndexerUrl,
     ).toBeUndefined();
-  });
-
-  it("parses FDRIVE_MCP_WRITES=true and rejects an invalid value", () => {
-    expect(loadConfig({ ...REQUIRED_ENV, FDRIVE_MCP_WRITES: "true" }).fdriveMcpWrites).toBe(true);
-    expect(loadConfig({ ...REQUIRED_ENV, FDRIVE_MCP_WRITES: "false" }).fdriveMcpWrites).toBe(false);
-    expect(() => loadConfig({ ...REQUIRED_ENV, FDRIVE_MCP_WRITES: "yes" })).toThrow(
-      /FDRIVE_MCP_WRITES/,
-    );
   });
 
   it("rejects an invalid FDRIVE_INDEX_ROOTS", () => {
@@ -498,53 +482,6 @@ describe("loadConfig", () => {
   });
 });
 
-describe("parseAdminUsers", () => {
-  it("returns an empty array for undefined", () => {
-    expect(parseAdminUsers(undefined)).toEqual([]);
-  });
-
-  it("returns an empty array for an empty or whitespace-only string", () => {
-    expect(parseAdminUsers("")).toEqual([]);
-    expect(parseAdminUsers("   ")).toEqual([]);
-  });
-
-  it("splits a comma-separated list and trims whitespace", () => {
-    expect(parseAdminUsers("alice, bob ,carol")).toEqual(["alice", "bob", "carol"]);
-  });
-
-  it("drops empty entries from stray commas", () => {
-    expect(parseAdminUsers("alice,,bob,")).toEqual(["alice", "bob"]);
-  });
-
-  it("returns a single-element array for one username", () => {
-    expect(parseAdminUsers("alice")).toEqual(["alice"]);
-  });
-});
-
-describe("Office operator edit policy", () => {
-  it("defaults to no grants and validates explicit rules at startup", () => {
-    expect(loadConfig(REQUIRED_ENV).fdriveOfficeEditRules).toEqual([]);
-    expect(
-      loadConfig({ ...REQUIRED_ENV, FDRIVE_OFFICE_EDIT_RULES: "" }).fdriveOfficeEditRules,
-    ).toEqual([]);
-    const rule = {
-      providerId: "12345678-1234-4234-8234-123456789abc",
-      username: "alice",
-      path: "/docs",
-      recursive: true,
-      allow: true,
-    };
-    expect(
-      loadConfig({ ...REQUIRED_ENV, FDRIVE_OFFICE_EDIT_RULES: JSON.stringify([rule]) })
-        .fdriveOfficeEditRules,
-    ).toEqual([rule]);
-    for (const value of ["bad", "{}", '[{"allow":true}]', " ".repeat(131073)])
-      expect(() => loadConfig({ ...REQUIRED_ENV, FDRIVE_OFFICE_EDIT_RULES: value })).toThrow(
-        "FDRIVE_OFFICE_EDIT_RULES",
-      );
-  });
-});
-
 it("parses the internal worker credential", () => {
   expect(loadConfig({ ...REQUIRED_ENV, FDRIVE_WORKER_TOKEN: "worker-secret" })).toMatchObject({
     fdriveWorkerToken: "worker-secret",
@@ -569,6 +506,7 @@ describe("explicit processing probe URLs", () => {
 it("requires absolute, explicitly classified backup sources and validates worker modes", () => {
   const base = {
     DATABASE_URL: "postgres://localhost/test",
+    FDRIVE_STORAGE_ROOT: "/srv/files",
     FDRIVE_MASTER_KEY: Buffer.alloc(32, 7).toString("base64"),
   };
   const roots = [

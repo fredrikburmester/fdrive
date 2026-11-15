@@ -263,12 +263,6 @@ export class BackupEngine {
           signal,
         });
         captured = true;
-        await this.operations.inventory(
-          run.id,
-          result.manifest.blobs
-            .filter((blob) => blob.kind === "attachment")
-            .map((blob) => blob.path),
-        );
         if (process.getuid?.() === 0) await chown(file, owner.uid, owner.gid);
         coverage = result.manifest.coverage;
         await setRun("transferring", {

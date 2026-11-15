@@ -1,6 +1,4 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { writeFile } from "node:fs/promises";
 import {
   DesktopChangesResponse,
   DesktopPairing,
@@ -35,11 +33,10 @@ it("answers which folders an upload, a move and a delete changed, and detects a 
       carol: {},
     },
   });
-  await seedLocalUsers(postgres.connectionString, storage);
+  await seedLocalUsers(postgres.connectionString, storage, ["alice"]);
   const database = createDb(postgres.connectionString);
   // What the indexer does when it starts: the API journals nothing for a root without a row.
   await database.db.execute(sql`insert into idx.roots (name) values ('files')`);
-  const stateDir = await mkdtemp(join(tmpdir(), "fdrive-changes-"));
   const config = loadConfig({
     DATABASE_URL: postgres.connectionString,
     FDRIVE_STORAGE_ROOT: storage.root,
@@ -47,8 +44,6 @@ it("answers which folders an upload, a move and a delete changed, and detects a 
       { name: "files", storagePath: storage.root, indexerPath: "/srv/files" },
     ]),
     FDRIVE_MASTER_KEY: Buffer.alloc(32, 7).toString("base64"),
-    FDRIVE_ADMIN_USERS: "alice",
-    FDRIVE_DESKTOP_STATE_DIR: stateDir,
   });
   const composed = await composeApp(config, pino({ level: "silent" }), () => new Date());
   const send = (route: string, init: { cookie?: string; bearer?: string; body?: unknown } = {}) =>
@@ -70,11 +65,10 @@ it("answers which folders an upload, a move and a delete changed, and detects a 
   /** Signs `username` in on the web and pairs a read-and-write Mac location for them. */
   async function connect(username: string) {
     const login = await send("/api/v1/auth/login", {
-      body: { credential: { username, password: `${username}-password` } },
+      body: { username, password: `${username}-password` },
     });
-    const me = MeResponse.parse(await ok(login));
+    MeResponse.parse(await ok(login));
     const cookie = login.headers.get("set-cookie")?.split(";")[0] ?? "";
-    const identityId = me.activeIdentityId ?? "";
     const pairing = DesktopPairing.parse(
       await ok(
         await send("/api/v2/desktop/pairings", { body: { deviceName: `${username}'s Mac` } }),
@@ -83,7 +77,7 @@ it("answers which folders an upload, a move and a delete changed, and detects a 
     await ok(
       await send(`/api/v1/desktop/pairings/${pairing.id}/approve`, {
         cookie,
-        body: { identityIds: [identityId], access: { [identityId]: "full" } },
+        body: { access: "full" },
       }),
     );
     const result = DesktopWritePairResult.parse(
@@ -242,7 +236,6 @@ it("answers which folders an upload, a move and a delete changed, and detects a 
   } finally {
     await composed.close?.();
     await database.close();
-    await rm(stateDir, { recursive: true, force: true });
     await storage.stop();
     await postgres.stop();
   }

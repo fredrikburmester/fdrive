@@ -253,7 +253,6 @@ it("serves actor-owned Recents from the read journal and admits explicit opens",
   });
   expect(response.status).toBe(200);
   expect(admitActivity).toHaveBeenCalledWith(expect.anything(), {
-    identityId: h.principal.identityId,
     path: "/current-name",
     action: "file.open",
     requestId,

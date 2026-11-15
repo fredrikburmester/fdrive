@@ -141,7 +141,7 @@ async function renameFile(
       const response = Response.json({ Name: name });
       if (target === opened.path) return { source: opened.path, target, response };
       await requireOfficeEdit(deps, opened.actor, target);
-      const location = officeLocation(opened.actor, target);
+      const location = await officeLocation(deps, opened.actor, target);
       await scope.locks.withFileLock(mutationKey(location), async () => {
         await recordOfficeAction(
           deps,
@@ -160,12 +160,10 @@ async function renameFile(
             }
           },
         );
-        // Last: from here the registry's lock holds this whole root until the scope ends.
+        // Last: from here the registry's lock holds the owner's files until the scope ends.
         await scope.files.movePrefix({
-          providerId: opened.file.providerId,
-          rootName: opened.file.rootName,
-          from: opened.file.path,
-          to: location.path,
+          from: { identityId: opened.file.identityId, path: opened.file.path },
+          to: location,
           at: deps.clock(),
         });
       });
@@ -208,7 +206,7 @@ async function putRelative(
           ? suggestedFilename(opened.path, decoded, attempt)
           : requireFilename(decoded);
       const path = joinPath(parentPath(opened.path), name);
-      const location = officeLocation(opened.actor, path);
+      const location = await officeLocation(deps, opened.actor, path);
       const result = await scope.locks.withFileLock(mutationKey(location), async () => {
         await requireOfficeEdit(deps, opened.actor, path);
         const exists = await fileExists(opened.actor, path);
@@ -217,7 +215,7 @@ async function putRelative(
           throw new WopiError(409, { "X-WOPI-Lock": "" });
         }
         // On its own transaction: in this one the registry's lock would hold
-        // this whole root until the upload below is done.
+        // the owner's files until the upload below is done.
         const file = await deps.files.ensure(location);
         return scope.locks.withFileLock(file.id, async (locked) => {
           const current = await locked.get(deps.clock());
@@ -235,8 +233,8 @@ async function putRelative(
             response: Response.json({
               Name: baseName(path),
               Url: `${config.wopiUrl}/files/${file.id}?access_token=${encodeURIComponent(fields.formFields.access_token)}`,
-              HostViewUrl: editorHostUrl(config, opened.actor.identity.id, path, "view"),
-              HostEditUrl: editorHostUrl(config, opened.actor.identity.id, path, "edit"),
+              HostViewUrl: editorHostUrl(config, path, "view"),
+              HostEditUrl: editorHostUrl(config, path, "edit"),
             }),
           };
         });

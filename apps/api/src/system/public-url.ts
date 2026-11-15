@@ -9,7 +9,9 @@ import { ApiHttpError } from "../errors.js";
 /**
  * The address everyone opens fdrive at (`PublicUrlSettings`), chosen in
  * onboarding. Read by Office (the origin the editor is told fdrive lives
- * at) and by MCP tool results (the base of the links they return).
+ * at) and by MCP tool results (the base of the links they return). Until it
+ * is saved, Office cannot be enabled and MCP links are paths on fdrive's
+ * own origin (`/view/...`).
  */
 export interface PublicUrlService {
   configuration(): Promise<PublicUrlSettings>;
@@ -20,20 +22,10 @@ export interface PublicUrlService {
 
 export function createPublicUrlService(deps: {
   settings: Pick<SettingsRepo, "get" | "compareAndSet">;
-  /**
-   * The address a deployment configured before it became a setting of its
-   * own (Office's per-feature `appUrl`), used as the default until the
-   * owner saves one here so an upgrade never disables a working editor.
-   */
-  legacyUrl?: () => Promise<string | null>;
 }): PublicUrlService {
   async function read(): Promise<{ raw: unknown | null; value: PublicUrlSettings }> {
     const raw = await deps.settings.get<unknown>(PUBLIC_URL_SETTINGS_KEY);
-    if (raw === null) {
-      const legacy = deps.legacyUrl === undefined ? null : await deps.legacyUrl();
-      const parsedLegacy = PublicUrlSettings.safeParse({ revision: 0, url: legacy });
-      return { raw, value: parsedLegacy.success ? parsedLegacy.data : { revision: 0, url: null } };
-    }
+    if (raw === null) return { raw, value: { revision: 0, url: null } };
     const parsed = PublicUrlSettings.safeParse(raw);
     if (!parsed.success) throw new ApiHttpError("internal", "Stored server address is invalid.");
     return { raw, value: parsed.data };

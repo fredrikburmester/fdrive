@@ -2,9 +2,9 @@ import { createHash } from "node:crypto";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
-import type { Principal } from "../auth/principal.js";
+import type { TokenPrincipal } from "../tokens/principal.ts";
 import { canOrganize, trashPathFor } from "./access.ts";
-import { MAX_FILE_BYTES, readFile, readStoredFile } from "./content.ts";
+import { liveFileInfo, MAX_FILE_BYTES, readFile, readFileText, readStoredFile } from "./content.ts";
 import {
   copyPath,
   createFile,
@@ -19,14 +19,12 @@ import {
 import {
   type McpToolDeps,
   runCreateFolder,
-  runFileInfo,
   runFindDuplicates,
   runFindFiles,
   runFolderOverview,
   runIndexStats,
   runListDirectory,
   runMovePath,
-  runReadFileText,
   runRecentMoves,
   runSearch,
   runSimilarFiles,
@@ -57,7 +55,7 @@ const ORDER_BY = z.enum(["modified_desc", "modified_asc", "size_desc", "path"]);
  */
 async function explicitRead<T>(
   deps: McpToolDeps,
-  principal: Principal,
+  principal: TokenPrincipal,
   path: string,
   action: "file.read" | "file.inspect",
   work: () => Promise<T>,
@@ -102,8 +100,12 @@ async function explicitRead<T>(
  * tool error by `wrap`, so a bad argument, a missing file, or a disabled
  * write tool never crashes the connection.
  */
-export function registerMcpTools(server: McpServer, principal: Principal, deps: McpToolDeps): void {
-  const organize = canOrganize(principal, deps.writesEnabled);
+export function registerMcpTools(
+  server: McpServer,
+  principal: TokenPrincipal,
+  deps: McpToolDeps,
+): void {
+  const organize = canOrganize(principal);
   const writeNames = new Set([
     "create_folder",
     "move_path",
@@ -143,22 +145,15 @@ export function registerMcpTools(server: McpServer, principal: Principal, deps: 
     wrap(async () => {
       let index: { available: boolean; reason?: string };
       try {
-        const identity = await deps.identities.get(principal.identityId);
-        index =
-          identity === null
-            ? { available: false, reason: "login unavailable" }
-            : await deps.scopeResolver.verifiedIndexScopes(identity);
+        index = await deps.scopeResolver.verifiedIndexScopes(principal.username);
       } catch {
         index = { available: false, reason: "index mapping unavailable" };
       }
       return {
         identity_id: principal.identityId,
-        access: principal.tokenAccess ?? {
-          mode: "legacy",
-          paths: "verified index scope for legacy operations",
-        },
+        access: principal.tokenAccess,
         organize,
-        full_management: principal.tokenAccess?.mode === "full",
+        full_management: principal.tokenAccess.mode === "full",
         index: { available: index.available, ...(index.reason ? { reason: index.reason } : {}) },
         document_extraction_configured: deps.indexerClient !== null,
         trash_configured:
@@ -262,8 +257,8 @@ export function registerMcpTools(server: McpServer, principal: Principal, deps: 
       title: "Read a file's text",
       description:
         "Return the text of a document (PDF, Office, txt/code, OCR'd image). Extracted live, so it " +
-        "works even before indexing finishes. Use offset to page through long documents. Explicit " +
-        "tokens read UTF-8 directly (4 MiB limit); PDF/Office/OCR require the optional indexer extractor.",
+        "works even before indexing finishes. Use offset to page through long documents. UTF-8 is " +
+        "read directly (4 MiB limit); PDF/Office/OCR require the optional indexer extractor.",
       inputSchema: {
         path: z.string().min(1),
         offset: z.number().int().min(0).optional(),
@@ -277,7 +272,7 @@ export function registerMcpTools(server: McpServer, principal: Principal, deps: 
     },
     wrap((args) =>
       explicitRead(deps, principal, args.path, "file.read", () =>
-        runReadFileText(deps, principal, args),
+        readFileText(deps, principal, args),
       ),
     ),
   );
@@ -287,13 +282,13 @@ export function registerMcpTools(server: McpServer, principal: Principal, deps: 
     {
       title: "File metadata",
       description:
-        "Metadata for one file: size, dates, hash, index status, and every other path in scope " +
-        "holding an identical copy (exact duplicates).",
+        "Live metadata for one file or folder: kind, size, modification time and its fdrive URL. " +
+        "Use find_duplicates for identical copies.",
       inputSchema: { path: z.string().min(1) },
     },
     wrap((args) =>
       explicitRead(deps, principal, args.path, "file.inspect", () =>
-        runFileInfo(deps, principal, args),
+        liveFileInfo(deps, principal, args.path),
       ),
     ),
   );
@@ -350,7 +345,7 @@ export function registerMcpTools(server: McpServer, principal: Principal, deps: 
       title: "Index health",
       description:
         "Health of the index for this identity's scope: how many files are tracked, how many have " +
-        "text/embeddings, and whether write tools are enabled.",
+        "text/embeddings, and whether this token may organize files.",
       inputSchema: {},
     },
     wrap(() => runIndexStats(deps, principal)),
@@ -386,13 +381,12 @@ export function registerMcpTools(server: McpServer, principal: Principal, deps: 
     {
       title: "Recent moves",
       description:
-        "Audit log of moves done through this MCP server (newest first), so a change can be " +
-        "reversed.",
+        "Moves this login made through MCP, newest first, from its activity history, so a change " +
+        "can be reversed. Lists moves within this token's allowed folders.",
       inputSchema: { limit: z.number().int().min(1).max(500).optional().describe("Default 50.") },
     },
     wrap((args) => runRecentMoves(deps, principal, args)),
   );
-  if (principal.tokenAccess === undefined) return;
   const path = z.string().min(1).max(4096);
   register(
     "read_file",

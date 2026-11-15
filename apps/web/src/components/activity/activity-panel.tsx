@@ -117,9 +117,7 @@ function UploadRow({ item, onRetry, onCancel }: UploadRowProps) {
         </div>
       </div>
       {item.status === "uploading" && <Progress value={item.progress * 100} />}
-      {item.status === "done" && item.identityId !== undefined && (
-        <UploadCompletionActions item={{ ...item, identityId: item.identityId }} />
-      )}
+      {item.status === "done" && <UploadCompletionActions item={item} />}
       {item.status === "error" && item.error !== undefined && (
         <p className="truncate text-xs text-destructive">{item.error}</p>
       )}

@@ -1,3 +1,5 @@
+import type { LoginRepo } from "./logins-types.js";
+
 /** A storage backend instance: the files folder. */
 export interface Provider {
   readonly id: string;
@@ -62,8 +64,6 @@ export interface LocalUserRepo {
   /** Every user, by name. */
   list(): Promise<LocalUser[]>;
   count(): Promise<number>;
-  /** Throws `ConflictError` when the name is taken in any case. */
-  create(input: { username: string; passwordHash: string }): Promise<LocalUser>;
   /** Applies `patch`; `null` when no such user exists. */
   update(username: string, patch: LocalUserPatch): Promise<LocalUser | null>;
   /** A no-op when the user does not exist. */
@@ -141,7 +141,6 @@ export interface IdentityRepo {
     externalUsername: string;
   }): Promise<Identity>;
   get(id: string): Promise<Identity | null>;
-  listByAccount(accountId: string): Promise<Identity[]>;
   touchLogin(id: string, at: Date): Promise<void>;
   /** How many identities reference `providerId`. */
   countByProvider(providerId: string): Promise<number>;
@@ -154,34 +153,12 @@ export interface IdentityRepo {
   listAll(): Promise<Identity[]>;
 }
 
-/**
- * The envelope-encrypted credential an identity last signed in with. The
- * cached token columns held a sealed upstream token for storage that minted
- * one; no storage does any more, so they stay empty.
- */
-export interface Credential {
-  readonly identityId: string;
-  readonly ciphertext: Uint8Array;
-  readonly keyId: string;
-  readonly cachedToken: string | null;
-  readonly cachedTokenExpiresAt: Date | null;
-  readonly updatedAt: Date;
-}
-
-export interface CredentialRepo {
-  put(input: { identityId: string; ciphertext: Uint8Array; keyId: string }): Promise<void>;
-  get(identityId: string): Promise<Credential | null>;
-  setCachedToken(
-    identityId: string,
-    token: { sealed: string; expiresAt: Date } | null,
-  ): Promise<void>;
-}
-
 /** An opaque server-side session. The cookie carries the raw id; only its hash is stored. */
 export interface Session {
   readonly idHash: string;
   readonly accountId: string;
-  readonly activeIdentityId: string | null;
+  /** The account's one login, which the session acts as. */
+  readonly identityId: string;
   readonly createdAt: Date;
   readonly expiresAt: Date;
   readonly lastSeenAt: Date;
@@ -193,7 +170,7 @@ export interface SessionRepo {
   create(input: {
     idHash: string;
     accountId: string;
-    activeIdentityId: string | null;
+    identityId: string;
     expiresAt: Date;
     userAgent: string | null;
     ip: string | null;
@@ -228,8 +205,8 @@ export interface SettingsRepo {
 }
 
 /**
- * A long-lived per-account (optionally per-identity) token for MCP and
- * Raycast, shown once at creation and stored only as a sha256 hash.
+ * A long-lived token for MCP, Raycast and the Mac app, acting as the login
+ * that created it, shown once at creation and stored only as a sha256 hash.
  */
 export interface ApiTokenAccess {
   readonly mode: "read" | "organize" | "full";
@@ -239,11 +216,10 @@ export interface ApiTokenAccess {
 export interface ApiToken {
   readonly id: string;
   readonly accountId: string;
-  /** The identity the token is scoped to. `null` after that identity is unlinked; such a token can no longer authenticate. */
-  readonly identityId: string | null;
+  readonly identityId: string;
   readonly name: string;
   readonly tokenHash: string;
-  readonly access?: ApiTokenAccess;
+  readonly access: ApiTokenAccess;
   readonly createdAt: Date;
   readonly lastUsedAt: Date | null;
   readonly expiresAt: Date | null;
@@ -252,10 +228,10 @@ export interface ApiToken {
 export interface ApiTokenRepo {
   create(input: {
     accountId: string;
-    identityId: string | null;
+    identityId: string;
     name: string;
     tokenHash: string;
-    access?: ApiTokenAccess;
+    access: ApiTokenAccess;
     expiresAt: Date | null;
   }): Promise<ApiToken>;
   /** Looks up a token by its sha256 hash. `null` when no token has that hash, expired or not. */
@@ -554,7 +530,8 @@ export interface Repos {
   readonly localGrants: LocalGrantRepo;
   readonly accounts: AccountRepo;
   readonly identities: IdentityRepo;
-  readonly credentials: CredentialRepo;
+  /** Writes that span users, accounts, logins and sessions; the only way to create a user. */
+  readonly logins: LoginRepo;
   readonly sessions: SessionRepo;
   readonly settings: SettingsRepo;
   readonly apiTokens: ApiTokenRepo;

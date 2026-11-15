@@ -395,8 +395,7 @@ private struct TrashRecoveryView: View {
         busy = true; error = nil
         defer { busy = false }
         do {
-            let store = try NativeEnvironment.store(), catalog = try store.catalog(location)
-            _ = try await WriteCoordinator(catalog: catalog, client: store.client(location)).perform(
+            _ = try await NativeEnvironment.store().writer(location).perform(
                 route: "moves", localId: item.id, templateKey: item.id, parentId: "root", name: item.entry.name,
                 base: WriteVersion(content: item.contentVersion, metadata: item.metadataVersion),
                 contents: nil, progress: Progress(totalUnitCount: -1))

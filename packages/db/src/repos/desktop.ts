@@ -1,24 +1,46 @@
 import { randomUUID } from "node:crypto";
 import { and, asc, eq, inArray, isNull, like, lt, or, sql } from "drizzle-orm";
 import type { Db } from "../index.js";
-import { desktopEffects, desktopItems, desktopOperations } from "../schema/app.js";
+import { desktopItems, desktopOperations } from "../schema/app.js";
 import {
   appendNativeActivity,
   finishNativeFailure,
+  type NativeActivityFacts,
   prepareNativeActivity,
 } from "./activity-native.js";
-import { captureDesktopEffects } from "./desktop-effects.js";
-import type { DesktopEffectContext, DesktopEffectPayload } from "./desktop-effects-types.js";
+import { moveLocalGrantPrefix } from "./drizzle.js";
+import { deleteSharePrefix, moveSharePrefix } from "./shares.js";
 
 export type DesktopItemRecord = typeof desktopItems.$inferSelect;
+/**
+ * What a path's public links do after a Mac write, in their owner's files:
+ * follow `from` to `to` (`ShareRepo.movePrefix`), or drop `from` when the
+ * item left the owner's files (`to: null`, `ShareRepo.deletePrefix`).
+ */
+export interface DesktopShareMove {
+  identityId: string;
+  from: string;
+  to: string | null;
+}
+/**
+ * What grants access to the path a Mac write moved, applied with its receipt
+ * so no public link or folder shared with people stays at a path the write
+ * left, where a new item could appear.
+ */
+export interface DesktopAccessMove {
+  directory: boolean;
+  shares: DesktopShareMove | null;
+  /** Folders their owner, a local username, shares with people (`LocalGrantRepo.movePrefix`). */
+  grants: { owner: string; from: string; to: string } | null;
+}
 export type DesktopOperationRecord = typeof desktopOperations.$inferSelect;
-/** Milliseconds after an operation's last change before the reaper may act on it. */
+/** Milliseconds after an operation's last change before retention acts on it. */
 export interface DesktopRetention {
-  /** `receiving`/`uploading` bodies that never completed. */
+  /** `receiving`/`uploading` bodies that never completed: cancelled. */
   idleMs: number;
-  /** `conflict` operations the app never retried or cancelled. */
+  /** `conflict` operations the app never retried or cancelled: cancelled. */
   conflictMs: number;
-  /** `acknowledged`/`cancelled` operations whose remote backups may be reclaimed. */
+  /** `acknowledged`/`cancelled` operations, which the app is done with: forgotten. */
   retainMs: number;
 }
 export interface DesktopRepo {
@@ -36,9 +58,7 @@ export interface DesktopRepo {
   update(
     identityId: string,
     id: string,
-    changes: Partial<
-      Pick<DesktopItemRecord, "path" | "kind" | "contentVersion" | "originalPath" | "deletedAt">
-    >,
+    changes: Partial<Pick<DesktopItemRecord, "path" | "kind" | "originalPath" | "deletedAt">>,
   ): Promise<DesktopItemRecord>;
   move(identityId: string, from: string, to: string): Promise<void>;
   remove(identityId: string, path: string): Promise<void>;
@@ -62,26 +82,22 @@ export interface DesktopRepo {
     result?: Record<string, unknown>,
     attempt?: string,
   ): Promise<boolean>;
-  /** Bound recovery work before publishing storage changes. */
-  captureEffects(
-    identityId: string,
-    accountId: string,
-    effects: DesktopEffectContext,
-  ): Promise<DesktopEffectPayload>;
-  /** Commit the publication receipt and its metadata recovery work together. */
+  /**
+   * Commit the publication receipt, its personal history and what grants
+   * access to the moved path together: none of it is kept unless all is.
+   */
   complete(
     identityId: string,
     accountId: string,
     id: string,
     result: Record<string, unknown>,
-    effects: DesktopEffectPayload,
+    activity: NativeActivityFacts,
+    access?: DesktopAccessMove | null,
   ): Promise<boolean>;
-  /** Operations past their retention window, oldest first. Reclaimed rows are excluded. */
+  /** Operations past their retention window, oldest first. */
   expired(now: Date, retention: DesktopRetention, limit: number): Promise<DesktopOperationRecord[]>;
-  /** Commits that never produced a receipt, oldest first, for administrator inspection. */
-  uncertain(limit: number): Promise<DesktopOperationRecord[]>;
-  /** Release a finished operation's reservation once its remote and local copies are gone. */
-  reclaim(identityId: string, accountId: string, id: string, at: Date): Promise<boolean>;
+  /** Deletes an `acknowledged` or `cancelled` operation's row; false for any other. */
+  forget(identityId: string, accountId: string, id: string): Promise<boolean>;
 }
 const escaped = (path: string) => path.replace(/[\\%_]/g, (value) => `\\${value}`);
 const live = (identityId: string) =>
@@ -246,26 +262,6 @@ export function createDesktopRepo(db: Db): DesktopRepo {
     },
     async reserve(input) {
       await db.transaction(async (tx) => {
-        await tx.execute(
-          sql`select pg_advisory_xact_lock(hashtextextended('desktop-spool-quota',0))`,
-        );
-        const prior = await tx
-          .select()
-          .from(desktopOperations)
-          .where(op(input.identityId, input.accountId, input.id));
-        if (prior.length) return;
-        const usage = await tx.execute(
-          sql`select count(*) filter (where state not in ('acknowledged','cancelled'))::int as count, coalesce(sum(coalesce((request->>'recoveryBytes')::bigint,0) + case when state='acknowledged' then 0 else coalesce((request->>'size')::bigint,0) end) filter (where result->>'reclaimedAt' is null),0)::text as bytes from ${desktopOperations}`,
-        );
-        const row = usage.rows[0] as { count: number; bytes: string };
-        if (
-          row.count >= 1024 ||
-          Number(row.bytes) +
-            Number(input.request.recoveryBytes ?? 0) +
-            Number(input.request.size ?? 0) >
-            64 * 1024 ** 3
-        )
-          throw Error("Desktop recovery capacity reached");
         const inserted = await tx
           .insert(desktopOperations)
           .values(input)
@@ -287,35 +283,28 @@ export function createDesktopRepo(db: Db): DesktopRepo {
         )[0] ?? null
       );
     },
-    async captureEffects(identityId, accountId, effects) {
+    async complete(identityId, accountId, id, result, activity, access) {
       return db.transaction(async (tx) => {
-        const owner = await tx.execute(
-          sql`select account_id from app.identities where id = ${identityId} for update`,
-        );
-        if (owner.rows[0]?.account_id !== accountId) throw Error("Identity ownership changed");
-        const office = effects.office;
-        if (office)
-          await tx.execute(
-            sql`select pg_advisory_xact_lock(hashtextextended(${JSON.stringify(["office-files", office.providerId, office.rootName])}, 0))`,
-          );
-        return captureDesktopEffects(tx, identityId, effects);
-      });
-    },
-    async complete(identityId, accountId, id, result, effects) {
-      return db.transaction(async (tx) => {
-        const owner = await tx.execute(
-          sql`select account_id from app.identities where id = ${identityId} for update`,
-        );
-        if (owner.rows[0]?.account_id !== accountId) return false;
         const updated = await tx
           .update(desktopOperations)
           .set({ state: "completed", result, updatedAt: new Date() })
           .where(and(op(identityId, accountId, id), eq(desktopOperations.state, "committing")))
           .returning();
         if (!updated.length) return false;
-        await appendNativeActivity(tx, updated[0] as DesktopOperationRecord, result, effects);
-        const payload = effects;
-        await tx.insert(desktopEffects).values({ operationId: id, identityId, accountId, payload });
+        const links = access?.shares;
+        if (links?.to === null)
+          await deleteSharePrefix(tx, links.identityId, links.from, access?.directory === true);
+        else if (links)
+          await moveSharePrefix(
+            tx,
+            links.identityId,
+            links.from,
+            links.to,
+            access?.directory === true,
+          );
+        if (access?.grants)
+          await moveLocalGrantPrefix(tx, access.grants.owner, access.grants.from, access.grants.to);
+        await appendNativeActivity(tx, updated[0] as DesktopOperationRecord, result, activity);
         return true;
       });
     },
@@ -337,36 +326,23 @@ export function createDesktopRepo(db: Db): DesktopRepo {
             and(
               inArray(desktopOperations.state, ["acknowledged", "cancelled"]),
               lt(desktopOperations.updatedAt, before(retention.retainMs)),
-              sql`${desktopOperations.result}->>'reclaimedAt' is null`,
             ),
           ),
         )
         .orderBy(asc(desktopOperations.updatedAt))
         .limit(limit);
     },
-    async uncertain(limit) {
-      return db
-        .select()
-        .from(desktopOperations)
-        .where(inArray(desktopOperations.state, ["committing", "uncertain"]))
-        .orderBy(asc(desktopOperations.updatedAt))
-        .limit(limit);
-    },
-    async reclaim(identityId, accountId, id, at) {
-      const updated = await db
-        .update(desktopOperations)
-        .set({
-          result: sql`coalesce(${desktopOperations.result}, '{}'::jsonb) || jsonb_build_object('reclaimedAt', ${at.toISOString()}::text)`,
-        })
+    async forget(identityId, accountId, id) {
+      const deleted = await db
+        .delete(desktopOperations)
         .where(
           and(
             op(identityId, accountId, id),
             inArray(desktopOperations.state, ["acknowledged", "cancelled"]),
-            sql`${desktopOperations.result}->>'reclaimedAt' is null`,
           ),
         )
         .returning({ id: desktopOperations.id });
-      return updated.length === 1;
+      return deleted.length === 1;
     },
     async transition(identityId, accountId, id, expected, state, result, attempt) {
       return db.transaction(async (tx) => {

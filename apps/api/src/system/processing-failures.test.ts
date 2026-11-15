@@ -15,6 +15,7 @@ function fixture(admin = true, indexerUrl: string | undefined = "http://indexer"
   const app = createApp({
     config: loadConfig({
       DATABASE_URL: "postgres://localhost/fdrive",
+      FDRIVE_STORAGE_ROOT: "/srv/files",
       FDRIVE_MASTER_KEY: Buffer.alloc(32, 1).toString("base64"),
     }),
     logger: { info: vi.fn(), error: vi.fn(), warn: vi.fn() } as unknown as Logger,
@@ -28,10 +29,7 @@ function fixture(admin = true, indexerUrl: string | undefined = "http://indexer"
         isAdmin: admin,
         storage: {},
       }) as Principal,
-    connectionStatus: async () => ({
-      required: false,
-      providers: [{ type: "local", host: "Local folder" }],
-    }),
+    setupRequired: async () => false,
     registerRoutes: (groups) =>
       registerProcessingFailureRoutes(groups, { read, fetch, indexerUrl }),
   });

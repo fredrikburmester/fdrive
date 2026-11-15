@@ -1,6 +1,6 @@
 "use client";
 
-import { ApiTokenAccess, type ApiTokenSummary, type IdentitySummary } from "@fdrive/contracts";
+import { ApiTokenAccess, type ApiTokenSummary } from "@fdrive/contracts";
 import { type FormEvent, useState } from "react";
 import { Button } from "@/components/ui/button";
 import {
@@ -34,8 +34,6 @@ export interface CreateTokenDialogProps {
   onOpenChange: (open: boolean) => void;
   /** Called with the freshly created token once, so the caller can show it. */
   onCreated: (result: { token: string; item: ApiTokenSummary }) => void;
-  identities: Pick<IdentitySummary, "id" | "username" | "providerLabel" | "providerType">[];
-  activeIdentityId: string;
 }
 
 export const TOKEN_ACCESS_LABELS = {
@@ -49,25 +47,14 @@ const ACCESS_HELP = {
   full: "Organize, create and edit files, and move items to and from Trash.",
 };
 
-/** Account page dialog: name a new API token and pick when it expires. */
-export function CreateTokenDialog({
-  open,
-  onOpenChange,
-  onCreated,
-  identities,
-  activeIdentityId,
-}: CreateTokenDialogProps) {
+/** Account page dialog: name a new API token for the signed-in login and pick when it expires. */
+export function CreateTokenDialog({ open, onOpenChange, onCreated }: CreateTokenDialogProps) {
   const [name, setName] = useState("");
   const [expiryValue, setExpiryValue] = useState(DEFAULT_EXPIRY_OPTION_VALUE);
   const createToken = useCreateApiToken();
-  const [identityId, setIdentityId] = useState(activeIdentityId);
   const [mode, setMode] = useState<ApiTokenAccess["mode"]>("read");
   const [folders, setFolders] = useState("/");
   const [validationError, setValidationError] = useState<string | null>(null);
-  const loginItems = identities.map((identity) => ({
-    value: identity.id,
-    label: `${identity.providerLabel || identity.providerType} · ${identity.username}`,
-  }));
 
   function handleOpenChange(nextOpen: boolean) {
     if (nextOpen) {
@@ -91,15 +78,14 @@ export function CreateTokenDialog({
         .map((path) => path.trim())
         .filter(Boolean),
     });
-    if (!access.success || !identities.some((identity) => identity.id === identityId)) {
-      setValidationError("Choose a login and enter 1–32 folder paths beginning with /.");
+    if (!access.success) {
+      setValidationError("Enter 1–32 folder paths beginning with /.");
       return;
     }
     setValidationError(null);
     createToken.mutate(
       {
         name: name.trim(),
-        identityId,
         access: access.data,
         ...(expiresInDays !== undefined ? { expiresInDays } : {}),
       },
@@ -127,28 +113,6 @@ export function CreateTokenDialog({
                 onChange={(event) => setName(event.target.value)}
                 autoFocus
               />
-            </Field>
-            <Field>
-              <FieldLabel htmlFor="token-login">Login</FieldLabel>
-              <Select
-                items={loginItems}
-                value={identityId}
-                onValueChange={(value) => {
-                  if (value !== null) setIdentityId(value);
-                }}
-              >
-                <SelectTrigger id="token-login">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {loginItems.map((item) => (
-                    <SelectItem key={item.value} value={item.value}>
-                      {item.label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              <FieldDescription>The token can access only this storage login.</FieldDescription>
             </Field>
             <Field>
               <FieldLabel htmlFor="token-access">Access</FieldLabel>
@@ -180,9 +144,7 @@ export function CreateTokenDialog({
                 onChange={(event) => setFolders(event.target.value)}
                 rows={2}
               />
-              <FieldDescription>
-                One folder per line. / allows all folders in this login.
-              </FieldDescription>
+              <FieldDescription>One folder per line. / allows all your folders.</FieldDescription>
             </Field>
             <Field>
               <FieldLabel htmlFor="token-expiry">Expires</FieldLabel>

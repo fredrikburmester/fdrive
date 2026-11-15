@@ -89,11 +89,9 @@ function FeatureCard({
 function FeatureEditor({ data }: { data: SystemFeaturesResponse }) {
   const router = useRouter();
   const update = useUpdateFeatures();
-  // Trash belongs to the files folder's storage row; the walkthrough reaches
-  // it through the login the administrator signed in with.
-  const me = useMe();
-  const login = me.data?.identities.find((identity) => identity.id === me.data?.activeIdentityId);
-  const setupProvider = login ? { id: login.providerId, label: login.providerLabel } : null;
+  // Trash belongs to the files folder's storage row, which every login is on.
+  const me = useMe().data;
+  const setupProvider = me ? { id: me.identity.providerId, label: me.storageName } : null;
   const [draft, setDraft] = useState<{ values: FeatureValues; revision: number } | null>(null);
   const [localStep, setLocalStep] = useState<number | null>(null);
   const configuration = data.configuration;

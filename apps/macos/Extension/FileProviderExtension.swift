@@ -6,12 +6,20 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension, 
     let domain: NSFileProviderDomain
     init(domain: NSFileProviderDomain) { self.domain = domain; super.init() }
     func invalidate() {}
-    private func connection() throws -> (Catalog, APIClient) {
+    private func saved() throws -> (ConnectionStore, SavedLocation) {
         // Finder runs this extension without the app, so the trial is enforced here too.
         guard NativeEnvironment.licenseState().allowsAccess else { throw DriveError.unlicensed }
         let store = try NativeEnvironment.store()
         guard let location = try store.load().first(where: { $0.id == domain.identifier.rawValue }) else { throw DriveError.authentication }
+        return (store, location)
+    }
+    private func connection() throws -> (Catalog, APIClient) {
+        let (store, location) = try saved()
         return (try store.catalog(location), try store.client(location))
+    }
+    private func writer() throws -> WriteCoordinator {
+        let (store, location) = try saved()
+        return try store.writer(location)
     }
     func enumerator(for containerItemIdentifier: NSFileProviderItemIdentifier, request: NSFileProviderRequest) throws -> NSFileProviderEnumerator {
         let (repository, client) = try connection()
@@ -77,8 +85,7 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension, 
         let progress = Progress(totalUnitCount: -1)
         let task = Task {
             do {
-                let (repository, client) = try connection()
-                let coordinator = WriteCoordinator(catalog: repository, client: client)
+                let coordinator = try writer()
                 if reimport {
                     // Matching remote bytes or metadata are acknowledged without a second
                     // copy; differing bytes fall through to a create that keeps both.
@@ -115,10 +122,10 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension, 
             let progress = Progress(totalUnitCount: -1)
             let task = Task {
                 do {
-                    let (repository, client) = try connection()
-                    let previous = try await repository.item(id)
+                    let coordinator = try writer()
+                    _ = try await coordinator.catalog.item(id)
                     guard !hasContents || newContents != nil else { throw DriveError.unsupported }
-                    let result = try await WriteCoordinator(catalog: repository, client: client).perform(
+                    let result = try await coordinator.perform(
                         route: hasContents ? "uploads" : "moves", localId: id, templateKey: id,
                         parentId: parentId, name: name, base: base, contents: newContents, progress: progress, keepBoth: keepBoth, modificationDate: modificationDate)
                     await signalChanges()

@@ -19,13 +19,11 @@ export const CHANGES_RETENTION = "30 days";
 export type ChangeSource = "api" | "watcher" | "scan" | "ocr";
 
 /**
- * What an upload published, so the indexer can skip hashing a file that
- * still matches it: the digest, and the size, modification time, inode and
- * change time of the file it became. Only the last two are beyond a client's
- * control, so the indexer requires all four to match.
+ * A file as a stat showed it: its size, modification time, inode and change
+ * time. Only the last two are beyond a client's control, so the indexer
+ * requires all four to match.
  */
-export interface ChangeContent {
-  readonly sha256: string;
+export interface ChangeStamp {
   readonly size: number;
   readonly mtimeNs: bigint;
   /** The unsigned inode number, stored as the signed bigint with the same 64 bits. */
@@ -34,15 +32,34 @@ export interface ChangeContent {
 }
 
 /**
+ * What an upload published, so the indexer neither hashes nor reads a file
+ * that still matches it: the digest, and the file it became.
+ */
+export interface ChangeContent extends ChangeStamp {
+  readonly sha256: string;
+}
+
+/**
+ * A file a move renamed in place: exactly as the rename left it, and its
+ * change time just before (the same inode, size and modification time), so
+ * the indexer can carry a stamp that vouched for the file before across the
+ * rename without reading it.
+ */
+export interface ChangeMovedStamp extends ChangeStamp {
+  readonly previousCtimeNs: bigint;
+}
+
+/**
  * One change under an index root, by root-relative path without a leading
  * slash (`alice/docs/a.pdf`, as `idx.files.path`). Without `targetPath`:
- * look at `path` again (a file, a folder, or nothing any more). With it:
- * `path` moved to `targetPath`.
+ * look at `path` again (a file, a folder, or nothing any more); `content` is
+ * an upload's. With it: `path` moved to `targetPath`; `stamp` is a file's.
  */
 export interface ChangeInput {
   readonly path: string;
   readonly targetPath?: string;
   readonly content?: ChangeContent;
+  readonly stamp?: ChangeMovedStamp;
 }
 
 /** A row of the journal; `position` orders them. */
@@ -134,17 +151,21 @@ export function createChangeJournal(db: Db): ChangeJournal {
         if (found === undefined) return;
         await tx.execute(JOURNAL_LOCK);
         await tx.insert(changes).values(
-          items.map((item) => ({
-            rootId: found.id,
-            path: item.path,
-            targetPath: item.targetPath ?? null,
-            source,
-            sha256: item.content?.sha256 ?? null,
-            size: item.content?.size ?? null,
-            mtimeNs: item.content?.mtimeNs ?? null,
-            inode: item.content === undefined ? null : BigInt.asIntN(64, item.content.ino),
-            ctimeNs: item.content?.ctimeNs ?? null,
-          })),
+          items.map((item) => {
+            const stamp = item.content ?? item.stamp;
+            return {
+              rootId: found.id,
+              path: item.path,
+              targetPath: item.targetPath ?? null,
+              source,
+              sha256: item.content?.sha256 ?? null,
+              size: stamp?.size ?? null,
+              mtimeNs: stamp?.mtimeNs ?? null,
+              inode: stamp === undefined ? null : BigInt.asIntN(64, stamp.ino),
+              ctimeNs: stamp?.ctimeNs ?? null,
+              previousCtimeNs: item.stamp?.previousCtimeNs ?? null,
+            };
+          }),
         );
         await tx.execute(sql`select pg_notify(${CHANGES_CHANNEL}, ${root})`);
       });

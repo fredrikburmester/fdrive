@@ -10,7 +10,6 @@ import {
   type McpToolDeps,
   similarFilesInScope,
 } from "../../mcp/handlers.js";
-import { buildIdentity } from "../../scoping/test-fixtures/index.ts";
 import type { AiTool } from "../tools/tool.ts";
 import { createChatReadTools, READ_CHARS, readBytes } from "./tools.ts";
 
@@ -94,10 +93,8 @@ function setup(
           ? ({ available: false, reason: "no_connection" } as const)
           : ({ available: true, scopes: SCOPES } as const),
     },
-    identities: { get: async () => buildIdentity() },
     publicUrl: async () => null,
     indexerClient: null,
-    writesEnabled: false,
     clock: () => new Date("2026-09-18T10:00:00.000Z"),
     ...(options.metadata ? { metadata: options.metadata } : {}),
   };
@@ -282,7 +279,7 @@ describe("duplicates_of", () => {
         "same name elsewhere: /Backup/scan.pdf",
       ].join("\n"),
     );
-    expect(vi.mocked(findFilesInScope).mock.calls.at(-1)?.[3]).toEqual({
+    expect(vi.mocked(findFilesInScope).mock.calls.at(-1)?.[2]).toEqual({
       name_contains: "scan.pdf",
       limit: 20,
     });

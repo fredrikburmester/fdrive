@@ -60,9 +60,9 @@ vi.mock("@/lib/api/auth-queries", () => ({
   useMe: () => ({
     data: {
       account: { id: "a", displayName: null },
-      activeIdentityId: "i",
       isAdmin: true,
-      identities: [{ id: "i", providerId: "p", providerLabel: "Primary", providerType: "local" }],
+      storageName: "Primary",
+      identity: { id: "i", providerId: "p" },
     },
   }),
 }));

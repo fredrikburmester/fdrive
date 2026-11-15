@@ -1,15 +1,14 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, mkdtemp, rename, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { mkdir, rename, rm } from "node:fs/promises";
+import { dirname } from "node:path";
 import {
   DesktopPairing,
   DesktopWriteEntry,
   DesktopWritePairResult,
   ManagedShare,
-  MeResponse,
   publicShareRoute,
   ROUTES,
+  TrashSettings,
 } from "@fdrive/contracts";
 import { createDb, createRepos, schema } from "@fdrive/db";
 import { startLocalStorage, startPostgres } from "@fdrive/testkit";
@@ -18,7 +17,6 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { composeApp } from "../../src/composition.js";
 import { loadConfig } from "../../src/config.js";
 import { generateApiToken, hashApiToken } from "../../src/tokens/token-format.js";
-import { trashSettingsKey } from "../../src/trash/settings.js";
 import { seedLocalUsers, silentLogger } from "./helpers/local-storage.ts";
 
 const cookieFrom = (response: Response) => response.headers.get("set-cookie")?.split(";")[0] ?? "";
@@ -38,7 +36,6 @@ describe("public links follow the files they point at", () => {
   let storage: Awaited<ReturnType<typeof startLocalStorage>>;
   let composed: Awaited<ReturnType<typeof composeApp>>;
   let database: ReturnType<typeof createDb>;
-  let stateDir: string;
   let alice: string;
   let bob: string;
 
@@ -72,15 +69,12 @@ describe("public links follow the files they point at", () => {
         },
       }),
     ]);
-    await seedLocalUsers(postgres.connectionString, storage);
-    stateDir = await mkdtemp(join(tmpdir(), "fdrive-share-moves-"));
+    await seedLocalUsers(postgres.connectionString, storage, ["alice"]);
     composed = await composeApp(
       loadConfig({
         DATABASE_URL: postgres.connectionString,
         FDRIVE_STORAGE_ROOT: storage.root,
         FDRIVE_MASTER_KEY: Buffer.alloc(32, 31).toString("base64"),
-        FDRIVE_MCP_WRITES: "true",
-        FDRIVE_DESKTOP_STATE_DIR: stateDir,
         // Configured so the indexer listener runs; no indexer does, the tests notify for it.
         FDRIVE_INDEX_ROOTS: JSON.stringify([
           { name: "files", storagePath: storage.root, indexerPath: "/roots/files" },
@@ -89,9 +83,9 @@ describe("public links follow the files they point at", () => {
       silentLogger(),
     );
     database = createDb(postgres.connectionString);
-    await setTrash(true, "/.trash");
     alice = await login("alice");
     bob = await login("bob");
+    await setTrash(true, "/.trash");
   }, 180_000);
 
   afterAll(async () => {
@@ -99,20 +93,25 @@ describe("public links follow the files they point at", () => {
     await database?.close();
     await storage?.stop();
     await postgres?.stop();
-    if (stateDir) await rm(stateDir, { recursive: true, force: true });
   }, 180_000);
 
-  /** Sets the files folder's Trash, as System > General would. */
+  /**
+   * Sets the files folder's Trash through System > General, as alice, an
+   * administrator: the API keeps the settings it saves in memory.
+   */
   async function setTrash(enabled: boolean, path: string): Promise<void> {
     const repos = createRepos(database.db);
     const provider = await repos.providers.ensure({ type: "local", baseUrl: "local" });
-    await repos.settings.set(trashSettingsKey(provider.id), {
-      providerId: provider.id,
-      revision: 1,
-      enabled,
-      path,
-      retentionHours: null,
-    });
+    const current = TrashSettings.parse(
+      await ok(call(`${ROUTES.system.trash}?providerId=${provider.id}`, { cookie: alice })),
+    );
+    await ok(
+      call(ROUTES.system.trash, {
+        method: "PUT",
+        cookie: alice,
+        body: { ...current, enabled, path, retentionHours: null },
+      }),
+    );
   }
 
   async function call(
@@ -138,7 +137,7 @@ describe("public links follow the files they point at", () => {
 
   async function login(username: string): Promise<string> {
     const response = await call(ROUTES.auth.login, {
-      body: { credential: { username, password: `${username}-pass` } },
+      body: { username, password: `${username}-pass` },
     });
     expect(response.status).toBe(200);
     return cookieFrom(response);
@@ -423,16 +422,15 @@ describe("public links follow the files they point at", () => {
     expect(await visit(gone)).toBe(404);
   });
 
-  it("follows the Mac's moves through its metadata recovery, into its Trash and back", async () => {
+  it("follows the Mac's moves as they commit, into its Trash and back", async () => {
     const file = await link(alice, "/mac.txt");
     const folder = await link(alice, "/MacFolder/inside.txt");
     const trashed = await link(alice, "/mac-trash.txt");
 
     const loggedIn = await call(ROUTES.auth.login, {
-      body: { credential: { username: "alice", password: "alice-pass" } },
+      body: { username: "alice", password: "alice-pass" },
     });
     const cookie = cookieFrom(loggedIn);
-    const me = MeResponse.parse(await loggedIn.json());
     const base = "/api/v2/desktop";
     const pairing = DesktopPairing.parse(
       await ok(call(`${base}/pairings`, { cookie, body: { deviceName: "Share moves" } })),
@@ -440,10 +438,7 @@ describe("public links follow the files they point at", () => {
     await ok(
       call(`/api/v1/desktop/pairings/${pairing.id}/approve`, {
         cookie,
-        body: {
-          identityIds: me.identities.map((identity) => identity.id),
-          access: Object.fromEntries(me.identities.map((identity) => [identity.id, "full"])),
-        },
+        body: { access: "full" },
       }),
     );
     const pair = DesktopWritePairResult.parse(
@@ -477,14 +472,10 @@ describe("public links follow the files they point at", () => {
     await macMove(await stat("/MacFolder"), "root", "MacMoved");
     const inTrash = await macMove(await stat("/mac-trash.txt"), "trash", "mac-trash.txt");
 
-    await vi.waitFor(
-      async () => {
-        expect(await linkPaths(alice, file)).toEqual(["/mac-renamed.txt"]);
-        expect(await linkPaths(alice, folder)).toEqual(["/MacMoved/inside.txt"]);
-        expect((await linkPaths(alice, trashed))[0]).toMatch(/^\/\.fdrive-desktop\//);
-      },
-      { timeout: 15_000, interval: 100 },
-    );
+    // Nothing waits: each link follows before its commit answers.
+    expect(await linkPaths(alice, file)).toEqual(["/mac-renamed.txt"]);
+    expect(await linkPaths(alice, folder)).toEqual(["/MacMoved/inside.txt"]);
+    expect((await linkPaths(alice, trashed))[0]).toMatch(/^\/\.fdrive-desktop\//);
     expect(await downloadText(file)).toBe("mac");
     expect(await downloadText(folder)).toBe("mac inside");
     await put(alice, "/mac-trash.txt", "never shared");
@@ -492,10 +483,7 @@ describe("public links follow the files they point at", () => {
 
     // Put back from the Mac's Trash, under a new name since its place is taken.
     await macMove(inTrash, "root", "mac-back.txt");
-    await vi.waitFor(
-      async () => expect(await linkPaths(alice, trashed)).toEqual(["/mac-back.txt"]),
-      { timeout: 15_000, interval: 100 },
-    );
+    expect(await linkPaths(alice, trashed)).toEqual(["/mac-back.txt"]);
     expect(await downloadText(trashed)).toBe("mac trash");
   });
 });

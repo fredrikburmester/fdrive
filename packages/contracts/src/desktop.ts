@@ -1,41 +1,7 @@
 import { z } from "zod";
-import { CanonicalUuid } from "./canonical-uuid.ts";
 
 export const DESKTOP_API = "/api/v1/desktop";
 export const DESKTOP_PROTOCOL_VERSION = 1;
-/** Administrator-only bounded queue view. No file payloads or credentials. */
-export const DesktopRecoveryResponse = z.object({
-  pending: z
-    .array(
-      z.object({
-        identityId: CanonicalUuid,
-        operationId: CanonicalUuid,
-        attempts: z.number().int().nonnegative(),
-        lastError: z.string().nullable(),
-        createdAt: z.iso.datetime(),
-        nextAttemptAt: z.iso.datetime(),
-      }),
-    )
-    .max(100),
-  /** Commits without a receipt. `stalled` means the commit stopped reporting progress. */
-  uncertain: z
-    .array(
-      z.object({
-        identityId: CanonicalUuid,
-        operationId: CanonicalUuid,
-        state: z.enum(["committing", "uncertain"]),
-        stalled: z.boolean(),
-        kind: z.enum(["upload", "folder", "move"]),
-        name: z.string(),
-        updatedAt: z.iso.datetime(),
-      }),
-    )
-    .max(100),
-});
-/** The administrator inspected storage: the publication happened, or it did not. */
-export const DesktopRecoveryResolution = z.strictObject({
-  outcome: z.enum(["published", "discarded"]),
-});
 export const DesktopPath = z
   .string()
   .min(1)
@@ -46,10 +12,8 @@ export const DesktopPath = z
     "Invalid path",
   );
 export const DesktopPairRequest = z.strictObject({ deviceName: z.string().trim().min(1).max(100) });
-export const DesktopPairApproval = z.strictObject({
-  identityIds: z.array(CanonicalUuid).min(1).max(16),
-  access: z.record(CanonicalUuid, z.enum(["read", "full"])).optional(),
-});
+/** The browser connects the Mac to its signed-in login, read-only or with Finder writes. */
+export const DesktopPairApproval = z.strictObject({ access: z.enum(["read", "full"]) });
 export const DesktopPairSecret = z.strictObject({
   secret: z.string().regex(/^[A-Za-z0-9_-]{43}$/),
 });

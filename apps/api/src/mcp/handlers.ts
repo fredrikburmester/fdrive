@@ -1,28 +1,14 @@
-import {
-  isReservedPath,
-  normalizePath,
-  parseSearchFilters,
-  type Scope,
-  toFsPath,
-} from "@fdrive/core";
-import type {
-  DuplicateGroup,
-  FileFilter,
-  FileOrder,
-  IdentityRepo,
-  IndexedFile,
-  IndexQueries,
-} from "@fdrive/db";
+import { isReservedPath, normalizePath, parseSearchFilters, toFsPath } from "@fdrive/core";
+import type { DuplicateGroup, FileFilter, FileOrder, IndexedFile, IndexQueries } from "@fdrive/db";
 import type { Principal } from "../auth/principal.js";
 import { relocatePath } from "../fs/mutations.js";
 import type { MetadataService } from "../metadata/service.ts";
-import { createReadAuthorizer, type ReadAuthorizer } from "../scoping/read-authorizer.ts";
 import type { ScopeResolver } from "../scoping/resolver.ts";
-import { roundTripVirtualPath } from "../scoping/round-trip.ts";
 import type { UnavailableReason } from "../scoping/types.ts";
 import type { ImageSearchService } from "../search/image-service.ts";
 import { toIndexRelativePath } from "../search/scopes.js";
 import type { SearchService } from "../search/service.js";
+import type { TokenPrincipal } from "../tokens/principal.ts";
 import {
   assertMutablePath,
   canBrowsePath,
@@ -30,18 +16,10 @@ import {
   canReadPath,
   ordinaryPath,
   RESERVED_MESSAGE,
+  requireMode,
   tokenScopes,
 } from "./access.ts";
-import { liveFileInfo, readFileTextDirect } from "./content.ts";
-import {
-  isoFromNs,
-  moveDestinationKind,
-  normalizeExtArg,
-  nsFromIso,
-  overviewFolderKey,
-  pageText,
-  pathDepth,
-} from "./format.js";
+import { isoFromNs, normalizeExtArg, nsFromIso, overviewFolderKey, pathDepth } from "./format.js";
 import type { IndexerExtractClient } from "./indexer-client.js";
 import {
   narrowScopePrefixes,
@@ -53,12 +31,11 @@ import {
 import { fileUrl, folderUrl } from "./urls.js";
 
 /**
- * Every index-backed tool authorizes at most this many candidate files per
- * request, at the `ReadAuthorizer`'s default concurrency (6). Whenever this
- * cap, a denial, or an unavailable probe reduces what a tool actually
- * examined below what the index reported, the response carries
- * `partial: true` rather than presenting a bounded, filtered count as an
- * exhaustive one. See `docs/SCOPING.md`.
+ * Every index-backed tool examines at most this many candidate files per
+ * request. Whenever this cap, or a row a nested scope shadows, reduces what
+ * a tool actually examined below what the index reported, the response
+ * carries `partial: true` rather than presenting a bounded, filtered count
+ * as an exhaustive one. See `docs/SCOPING.md`.
  */
 export const MAX_CANDIDATE_FILES = 2000;
 
@@ -80,15 +57,14 @@ export interface McpToolDeps {
    * username/template fallback. See `docs/SCOPING.md`.
    */
   readonly scopeResolver: Pick<ScopeResolver, "verifiedIndexScopes">;
-  readonly identities: Pick<IdentityRepo, "get">;
   /**
    * The address everyone opens fdrive at (System > Features), the base of
    * every link a tool returns; `null` until the owner sets one, when links
    * are relative paths (still useful to an LLM, just not clickable).
    */
   readonly publicUrl: () => Promise<string | null>;
+  /** Document text extraction for `read_file_text`; `null` without `FDRIVE_INDEXER_URL`. */
   readonly indexerClient: IndexerExtractClient | null;
-  readonly writesEnabled: boolean;
   readonly clock: () => Date;
   /**
    * The storage provider's recycle folder virtual path, when configured.
@@ -115,32 +91,22 @@ export interface McpToolDeps {
 /** Thrown by a handler when a business rule fails; `tools.ts` maps this (and any other error) to an MCP tool error. */
 export class McpToolError extends Error {}
 
-/** A resolved, verified scope plus the one bounded live-read authorizer built for this tool call. */
-interface ScopedRequest {
-  readonly ctx: ScopeContext;
-  readonly authorizer: ReadAuthorizer;
-}
-
 /** A short, reason-carrying message that never leaks anything about individual paths, only the caller's own scope status. */
 function indexUnavailableMessage(reason: UnavailableReason): string {
   return `index features are unavailable for this identity (${reason})`;
 }
 
 /**
- * Resolves the caller's verified index scopes and builds one bounded,
- * request-local `ReadAuthorizer` bound to their own storage. Throws a
- * friendly, reason-safe `McpToolError` when index-backed tools are
- * unavailable for them, rather than ever falling back to a username/template
- * mapping. Kept separate from the `*InScope` functions below (which take an
- * already-resolved `ScopeContext` and `ReadAuthorizer` as plain arguments)
- * so those can be unit tested without a real `IndexQueries` or `Principal`.
+ * Resolves the caller's verified index scopes for this request, narrowed to
+ * the token's folders. Throws a friendly, reason-safe `McpToolError` when
+ * index-backed tools are unavailable for them, rather than ever falling
+ * back to a username/template mapping. Kept separate from the `*InScope`
+ * functions below (which take an already-resolved `ScopeContext` as a plain
+ * argument) so those can be unit tested without a real `IndexQueries` or
+ * `Principal`.
  */
-async function requireScope(deps: McpToolDeps, principal: Principal): Promise<ScopedRequest> {
-  const identity = await deps.identities.get(principal.identityId);
-  const verified =
-    identity === null
-      ? ({ available: false, reason: "no_connection" } as const)
-      : await deps.scopeResolver.verifiedIndexScopes(identity);
+async function requireScope(deps: McpToolDeps, principal: Principal): Promise<ScopeContext> {
+  const verified = await deps.scopeResolver.verifiedIndexScopes(principal.username);
   if (!verified.available) {
     throw new McpToolError(indexUnavailableMessage(verified.reason));
   }
@@ -154,8 +120,7 @@ async function requireScope(deps: McpToolDeps, principal: Principal): Promise<Sc
   if (ctx === null) {
     throw new McpToolError(indexUnavailableMessage("no_roots"));
   }
-
-  return { ctx, authorizer: createReadAuthorizer({ storage: principal.storage }) };
+  return ctx;
 }
 
 type TrashPathDeps = Pick<McpToolDeps, "trashPath" | "trashPathForStorage">;
@@ -177,7 +142,7 @@ export interface FileSummary {
   readonly text_chars: number;
 }
 
-/** Builds a `FileSummary` from a file and its already round-tripped, already read-authorized virtual path. */
+/** Builds a `FileSummary` from a file and its already round-tripped virtual path. */
 function fileSummaryFor(
   publicUrl: string | null,
   file: IndexedFile,
@@ -196,8 +161,8 @@ function fileSummaryFor(
   };
 }
 
-/** The outcome of authorizing a bounded batch of `IndexedFile` candidates: only the accessible ones, plus their virtual paths and whether anything was left out. */
-interface AuthorizedFiles {
+/** The candidates a caller can see, with their virtual paths, and whether anything was left out. */
+interface VisibleFiles {
   readonly files: readonly IndexedFile[];
   readonly virtualPaths: ReadonlyMap<number, string>;
   readonly partial: boolean;
@@ -205,43 +170,27 @@ interface AuthorizedFiles {
 
 /**
  * Filters `candidates` (already restricted to `ctx`'s scope by the caller's
- * `IndexQueries` predicate) down to the subset that both round-trips
- * (`virtualPathFor`) and passes a live read check, preserving `candidates`'
- * original order. Never examines more than `MAX_CANDIDATE_FILES`.
- * `partial` is `true` whenever the cap was hit or any candidate was dropped
- * (shadowed, denied, or an unavailable probe), so a caller can report that
- * truthfully rather than presenting the accessible subset as exhaustive.
+ * `IndexQueries` predicate) down to the subset that round-trips
+ * (`virtualPathFor`), preserving `candidates`' original order. Never
+ * examines more than `MAX_CANDIDATE_FILES`. `partial` is `true` whenever the
+ * cap was hit or any candidate was dropped (shadowed by a nested scope), so
+ * a caller can report that truthfully rather than presenting the visible
+ * subset as exhaustive.
  */
-async function authorizeIndexedFiles(
-  ctx: ScopeContext,
-  authorizer: ReadAuthorizer,
-  candidates: readonly IndexedFile[],
-): Promise<AuthorizedFiles> {
+function visibleFiles(ctx: ScopeContext, candidates: readonly IndexedFile[]): VisibleFiles {
   const capped = candidates.slice(0, MAX_CANDIDATE_FILES);
   let partial = candidates.length > capped.length;
-
-  const resolved = await Promise.all(
-    capped.map(async (file): Promise<{ file: IndexedFile; virtualPath: string } | null> => {
-      const virtualPath = virtualPathFor(ctx, file.rootId, file.path);
-      if (virtualPath === null) {
-        return null;
-      }
-      const authResult = await authorizer.authorize({ path: virtualPath, kind: "file" });
-      return authResult.allowed ? { file, virtualPath } : null;
-    }),
-  );
-
   const virtualPaths = new Map<number, string>();
   const files: IndexedFile[] = [];
-  for (const entry of resolved) {
-    if (entry === null) {
+  for (const file of capped) {
+    const virtualPath = virtualPathFor(ctx, file.rootId, file.path);
+    if (virtualPath === null) {
       partial = true;
       continue;
     }
-    virtualPaths.set(entry.file.id, entry.virtualPath);
-    files.push(entry.file);
+    virtualPaths.set(file.id, virtualPath);
+    files.push(file);
   }
-
   return { files, virtualPaths, partial };
 }
 
@@ -263,15 +212,10 @@ export async function runSearch(deps: McpToolDeps, principal: Principal, args: S
     after: args.modified_after,
     before: args.modified_before,
   });
-  const identity = await deps.identities.get(principal.identityId);
-  const verified =
-    identity === null
-      ? { available: false as const }
-      : await deps.scopeResolver.verifiedIndexScopes(identity);
+  const verified = await deps.scopeResolver.verifiedIndexScopes(principal.username);
   const response = await deps.searchService.search({
     trashPath: currentTrashPath(deps, principal),
     scopes: verified.available ? tokenScopes(principal, verified.scopes) : [],
-    authorizer: createReadAuthorizer({ storage: principal.storage }),
     query: args.query,
     filters,
     limit: Math.max(1, Math.min(args.limit ?? 10, 50)),
@@ -316,18 +260,13 @@ export interface FindFilesArgs {
 }
 
 /**
- * `find_files`'s logic given an already-resolved scope and authorizer.
- * Exported so tests can exercise every branch with a hand-built
- * `ScopeContext`. `total_matches` is the count of files this call actually
- * verified are readable, never the underlying SQL query's unfiltered total;
- * `partial` is set whenever that undercounts what might really be there.
+ * `find_files`'s logic given an already-resolved scope. Exported so tests
+ * can exercise every branch with a hand-built `ScopeContext`.
+ * `total_matches` is the count of files this call returns, never the
+ * underlying SQL query's unfiltered total; `partial` is set whenever that
+ * undercounts what might really be there.
  */
-export async function findFilesInScope(
-  deps: McpToolDeps,
-  ctx: ScopeContext,
-  authorizer: ReadAuthorizer,
-  args: FindFilesArgs,
-) {
+export async function findFilesInScope(deps: McpToolDeps, ctx: ScopeContext, args: FindFilesArgs) {
   const prefixes = narrowScopePrefixes(ctx, args.path_prefix);
   if (prefixes === null) {
     throw new McpToolError("path_prefix is outside this identity's scope");
@@ -356,18 +295,14 @@ export async function findFilesInScope(
     ...(args.offset === undefined ? [] : [args.offset]),
   );
 
-  const {
-    files: accessible,
-    virtualPaths,
-    partial: authPartial,
-  } = await authorizeIndexedFiles(ctx, authorizer, candidates);
+  const { files: accessible, virtualPaths, partial: authPartial } = visibleFiles(ctx, candidates);
 
   const publicUrl = await deps.publicUrl();
   const results = accessible.map((file) => {
     const virtualPath = virtualPaths.get(file.id);
     // Every entry of `accessible` has a matching `virtualPaths` entry by
-    // construction (`authorizeIndexedFiles` sets both together); the
-    // fallback below only guards the type checker.
+    // construction (`visibleFiles` sets both together); the fallback below
+    // only guards the type checker.
     return fileSummaryFor(publicUrl, file, virtualPath ?? "");
   });
   const nextOffset = (args.offset ?? 0) + candidates.length;
@@ -382,8 +317,7 @@ export async function findFilesInScope(
 }
 
 export async function runFindFiles(deps: McpToolDeps, principal: Principal, args: FindFilesArgs) {
-  const { ctx, authorizer } = await requireScope(deps, principal);
-  return findFilesInScope(deps, ctx, authorizer, args);
+  return findFilesInScope(deps, await requireScope(deps, principal), args);
 }
 
 // --------------------------------------------------------- list_directory
@@ -407,7 +341,7 @@ export interface ListDirectoryArgs {
  */
 export async function runListDirectory(
   deps: TrashPathDeps & Partial<Pick<McpToolDeps, "publicUrl">>,
-  principal: Principal,
+  principal: TokenPrincipal,
   args: ListDirectoryArgs,
 ) {
   const path = normalizePath(args.path ?? "/");
@@ -448,115 +382,14 @@ export async function runListDirectory(
   };
 }
 
-// -------------------------------------------------------- read_file_text
-
-export interface ReadFileTextArgs {
-  readonly path: string;
-  readonly offset?: number | undefined;
-  readonly max_chars?: number | undefined;
-}
-
-/**
- * `read_file_text`'s logic given an already-resolved scope list and
- * authorizer. Exported so tests can exercise the out-of-scope and
- * read-denied branches with a hand-built scope. The path must round-trip
- * and pass a live download check before extraction is ever attempted:
- * listing/stat alone (or a scope that merely contains the path) is not
- * proof of read permission.
- */
-export async function readFileTextWithScopes(
-  deps: McpToolDeps,
-  scopes: readonly Scope[],
-  authorizer: ReadAuthorizer,
-  args: ReadFileTextArgs,
-) {
-  if (deps.indexerClient === null) {
-    throw new McpToolError(
-      "live text extraction is not configured (FDRIVE_INDEXER_URL is not set)",
-    );
-  }
-
-  const resolved = toFsPath(scopes, args.path);
-  if (resolved === null) {
-    throw new McpToolError("path is outside this identity's scope");
-  }
-  const roundTripped = roundTripVirtualPath(scopes, resolved.rootName, resolved.fsPath);
-  if (roundTripped === null) {
-    throw new McpToolError("path is outside this identity's scope");
-  }
-  const authResult = await authorizer.authorize({ path: roundTripped, kind: "file" });
-  if (!authResult.allowed) {
-    throw new McpToolError("path is outside this identity's scope");
-  }
-
-  const extracted = await deps.indexerClient.extract({
-    root: resolved.rootName,
-    path: toIndexRelativePath(resolved.fsPath),
-  });
-  if (extracted === null) {
-    throw new McpToolError("failed to extract text (indexer unreachable or unsupported file)");
-  }
-
-  const publicUrl = await deps.publicUrl();
-  if (extracted.text.length === 0) {
-    return {
-      path: args.path,
-      url: fileUrl(publicUrl, args.path),
-      status: extracted.status,
-      text: "",
-    };
-  }
-
-  const page = pageText(extracted.text, args.offset ?? 0, args.max_chars ?? 8000);
-  return {
-    path: args.path,
-    url: fileUrl(publicUrl, args.path),
-    status: extracted.status,
-    total_chars: page.totalChars,
-    offset: args.offset ?? 0,
-    text: page.slice,
-    has_more: page.hasMore,
-  };
-}
-
-export async function runReadFileText(
-  deps: McpToolDeps,
-  principal: Principal,
-  args: ReadFileTextArgs,
-) {
-  if (principal.tokenAccess !== undefined) return readFileTextDirect(deps, principal, args);
-  const path = normalizePath(args.path);
-  if (isReservedPath(path, currentTrashPath(deps, principal))) {
-    throw new McpToolError(RESERVED_MESSAGE);
-  }
-  const identity = await deps.identities.get(principal.identityId);
-  const verified =
-    identity === null
-      ? ({ available: false, reason: "no_connection" } as const)
-      : await deps.scopeResolver.verifiedIndexScopes(identity);
-  if (!verified.available) {
-    throw new McpToolError(indexUnavailableMessage(verified.reason));
-  }
-  const authorizer = createReadAuthorizer({ storage: principal.storage });
-  return readFileTextWithScopes(deps, tokenScopes(principal, verified.scopes), authorizer, {
-    ...args,
-    path,
-  });
-}
-
 // -------------------------------------------------------------- file_info
 
 export interface FileInfoArgs {
   readonly path: string;
 }
 
-/** `file_info`'s logic given an already-resolved scope and authorizer. Exported so tests can exercise every branch with a hand-built `ScopeContext`. */
-export async function fileInfoInScope(
-  deps: McpToolDeps,
-  ctx: ScopeContext,
-  authorizer: ReadAuthorizer,
-  args: FileInfoArgs,
-) {
+/** `file_info`'s logic given an already-resolved scope. Exported so tests can exercise every branch with a hand-built `ScopeContext`. */
+export async function fileInfoInScope(deps: McpToolDeps, ctx: ScopeContext, args: FileInfoArgs) {
   const resolved = toFsPath(ctx.scopes, args.path);
   if (resolved === null) {
     throw new McpToolError("path is outside this identity's scope");
@@ -571,16 +404,10 @@ export async function fileInfoInScope(
     throw new McpToolError(`file is not indexed yet: ${args.path}`);
   }
 
+  // A row a nested scope shadows, or one in fdrive's own folders, is
+  // reported exactly like an unindexed one.
   const virtualPath = virtualPathFor(ctx, file.rootId, file.path);
   if (virtualPath === null) {
-    throw new McpToolError(`file is not indexed yet: ${args.path}`);
-  }
-
-  // A read-denied file is reported exactly like an unindexed one: revealing
-  // that it exists but cannot be read would itself leak information a
-  // wrong or narrower mapping should never disclose.
-  const authResult = await authorizer.authorize({ path: virtualPath, kind: "file" });
-  if (!authResult.allowed) {
     throw new McpToolError(`file is not indexed yet: ${args.path}`);
   }
 
@@ -592,11 +419,11 @@ export async function fileInfoInScope(
     const copies = await deps.indexQueries.filesBySha256(ctx.scopePrefixes, file.sha256, file.id, {
       exclude: reservedExclusionOf(ctx),
     });
-    const authorizedCopies = await authorizeIndexedFiles(ctx, authorizer, copies);
-    identicalCopies = authorizedCopies.files
-      .map((copy) => authorizedCopies.virtualPaths.get(copy.id))
+    const visibleCopies = visibleFiles(ctx, copies);
+    identicalCopies = visibleCopies.files
+      .map((copy) => visibleCopies.virtualPaths.get(copy.id))
       .filter((path): path is string => path !== undefined);
-    partial = authorizedCopies.partial;
+    partial = visibleCopies.partial;
   }
 
   return {
@@ -607,12 +434,6 @@ export async function fileInfoInScope(
     identical_copies: identicalCopies,
     ...(partial ? { partial: true } : {}),
   };
-}
-
-export async function runFileInfo(deps: McpToolDeps, principal: Principal, args: FileInfoArgs) {
-  if (principal.tokenAccess !== undefined) return liveFileInfo(deps, principal, args.path);
-  const { ctx, authorizer } = await requireScope(deps, principal);
-  return fileInfoInScope(deps, ctx, authorizer, args);
 }
 
 // -------------------------------------------------------- find_duplicates
@@ -632,42 +453,30 @@ interface MappedDuplicateGroup {
 }
 
 /**
- * Filters raw `DuplicateGroup` rows down to only authorized copies (round
- * trip plus a live read check on every location, capped in total at
- * `MAX_CANDIDATE_FILES` across every group combined), dropping any group
- * left with fewer than two authorized copies. Counts and wasted bytes are
- * computed only from what survives.
+ * Maps raw `DuplicateGroup` rows to the copies the caller can see (each
+ * location round-tripped, capped in total at `MAX_CANDIDATE_FILES` across
+ * every group combined), dropping any group left with fewer than two
+ * copies. Counts and wasted bytes are computed only from what survives.
  */
-async function authorizeDuplicateGroups(
+function visibleDuplicateGroups(
   ctx: ScopeContext,
-  authorizer: ReadAuthorizer,
   groups: readonly DuplicateGroup[],
-): Promise<{ groups: MappedDuplicateGroup[]; partial: boolean }> {
+): { groups: MappedDuplicateGroup[]; partial: boolean } {
   const flat = groups.flatMap((group, groupIndex) =>
     group.files.map((location) => ({ groupIndex, location })),
   );
   const capped = flat.slice(0, MAX_CANDIDATE_FILES);
   let partial = flat.length > capped.length;
 
-  const resolved = await Promise.all(
-    capped.map(async (entry): Promise<{ groupIndex: number; virtualPath: string } | null> => {
-      const virtualPath = virtualPathFor(ctx, entry.location.rootId, entry.location.path);
-      if (virtualPath === null) {
-        return null;
-      }
-      const authResult = await authorizer.authorize({ path: virtualPath, kind: "file" });
-      return authResult.allowed ? { groupIndex: entry.groupIndex, virtualPath } : null;
-    }),
-  );
-
   const pathsByGroup = new Map<number, string[]>();
-  for (const entry of resolved) {
-    if (entry === null) {
+  for (const entry of capped) {
+    const virtualPath = virtualPathFor(ctx, entry.location.rootId, entry.location.path);
+    if (virtualPath === null) {
       partial = true;
       continue;
     }
     const list = pathsByGroup.get(entry.groupIndex) ?? [];
-    list.push(entry.virtualPath);
+    list.push(virtualPath);
     pathsByGroup.set(entry.groupIndex, list);
   }
 
@@ -689,11 +498,10 @@ async function authorizeDuplicateGroups(
   return { groups: mappedGroups, partial };
 }
 
-/** `find_duplicates`'s logic given an already-resolved scope and authorizer. Exported so tests can exercise every branch with a hand-built `ScopeContext`. */
+/** `find_duplicates`'s logic given an already-resolved scope. Exported so tests can exercise every branch with a hand-built `ScopeContext`. */
 export async function findDuplicatesInScope(
   deps: McpToolDeps,
   ctx: ScopeContext,
-  authorizer: ReadAuthorizer,
   args: FindDuplicatesArgs,
 ) {
   const prefixes = narrowScopePrefixes(ctx, args.path_prefix);
@@ -709,7 +517,7 @@ export async function findDuplicatesInScope(
     { exclude: reservedExclusionOf(ctx) },
   );
 
-  const { groups: mappedGroups, partial } = await authorizeDuplicateGroups(ctx, authorizer, groups);
+  const { groups: mappedGroups, partial } = visibleDuplicateGroups(ctx, groups);
   const totalWasted = mappedGroups.reduce((sum, group) => sum + group.wasted_bytes, 0);
 
   return {
@@ -725,8 +533,7 @@ export async function runFindDuplicates(
   principal: Principal,
   args: FindDuplicatesArgs,
 ) {
-  const { ctx, authorizer } = await requireScope(deps, principal);
-  return findDuplicatesInScope(deps, ctx, authorizer, args);
+  return findDuplicatesInScope(deps, await requireScope(deps, principal), args);
 }
 
 // ---------------------------------------------------------- similar_files
@@ -739,15 +546,14 @@ export interface SimilarFilesArgs {
 type SimilarResult = FileSummary & { similarity: number };
 
 /**
- * `similar_files`'s logic given an already-resolved scope and authorizer.
- * Exported so tests can exercise every branch with a hand-built
- * `ScopeContext`. The source file itself must round-trip and pass a live
- * read check too, not only the candidates it is compared against.
+ * `similar_files`'s logic given an already-resolved scope. Exported so tests
+ * can exercise every branch with a hand-built `ScopeContext`. The source
+ * file itself must round-trip too, not only the candidates it is compared
+ * against.
  */
 export async function similarFilesInScope(
   deps: McpToolDeps,
   ctx: ScopeContext,
-  authorizer: ReadAuthorizer,
   args: SimilarFilesArgs,
 ) {
   const resolved = toFsPath(ctx.scopes, args.path);
@@ -764,12 +570,7 @@ export async function similarFilesInScope(
     throw new McpToolError("file is not indexed");
   }
 
-  const sourceVirtualPath = virtualPathFor(ctx, file.rootId, file.path);
-  if (sourceVirtualPath === null) {
-    throw new McpToolError("file is not indexed");
-  }
-  const sourceAuth = await authorizer.authorize({ path: sourceVirtualPath, kind: "file" });
-  if (!sourceAuth.allowed) {
+  if (virtualPathFor(ctx, file.rootId, file.path) === null) {
     throw new McpToolError("file is not indexed");
   }
 
@@ -796,11 +597,7 @@ export async function similarFilesInScope(
     .map((row) => loadedById.get(row.fileId))
     .filter((candidate): candidate is IndexedFile => candidate !== undefined);
 
-  const {
-    files: accessible,
-    virtualPaths,
-    partial,
-  } = await authorizeIndexedFiles(ctx, authorizer, candidates);
+  const { files: accessible, virtualPaths, partial } = visibleFiles(ctx, candidates);
 
   const publicUrl = await deps.publicUrl();
   const results = accessible
@@ -825,8 +622,7 @@ export async function runSimilarFiles(
   principal: Principal,
   args: SimilarFilesArgs,
 ) {
-  const { ctx, authorizer } = await requireScope(deps, principal);
-  return similarFilesInScope(deps, ctx, authorizer, args);
+  return similarFilesInScope(deps, await requireScope(deps, principal), args);
 }
 
 // -------------------------------------------------------- folder_overview
@@ -837,17 +633,15 @@ export interface FolderOverviewArgs {
 }
 
 /**
- * `folder_overview`'s logic given an already-resolved scope and authorizer.
- * Exported so tests can exercise every branch with a hand-built
- * `ScopeContext`. Bytes and folder aggregates are only ever added for files
- * that passed both the round trip and a live read check; `truncated`
- * reflects both the underlying SQL cap and anything the authorization step
- * left out.
+ * `folder_overview`'s logic given an already-resolved scope. Exported so
+ * tests can exercise every branch with a hand-built `ScopeContext`. Bytes
+ * and folder aggregates are only ever added for files that round-trip;
+ * `truncated` reflects both the underlying SQL cap and anything the round
+ * trip left out.
  */
 export async function folderOverviewInScope(
   deps: McpToolDeps,
   ctx: ScopeContext,
-  authorizer: ReadAuthorizer,
   args: FolderOverviewArgs,
 ) {
   const prefixes = narrowScopePrefixes(ctx, args.path_prefix);
@@ -864,11 +658,7 @@ export async function folderOverviewInScope(
     MAX_CANDIDATE_FILES,
   );
 
-  const {
-    files: accessible,
-    virtualPaths,
-    partial: authPartial,
-  } = await authorizeIndexedFiles(ctx, authorizer, candidates);
+  const { files: accessible, virtualPaths, partial: authPartial } = visibleFiles(ctx, candidates);
 
   interface Agg {
     files: number;
@@ -928,35 +718,25 @@ export async function runFolderOverview(
   principal: Principal,
   args: FolderOverviewArgs,
 ) {
-  const { ctx, authorizer } = await requireScope(deps, principal);
-  return folderOverviewInScope(deps, ctx, authorizer, args);
+  return folderOverviewInScope(deps, await requireScope(deps, principal), args);
 }
 
 // ------------------------------------------------------------ index_stats
 
 /**
- * `index_stats`'s logic given an already-resolved scope and authorizer.
- * File and chunk counts are derived only from candidates that round-tripped
- * and passed a live read check (bounded at `MAX_CANDIDATE_FILES`), never
- * from the raw scope-wide SQL aggregate `IndexQueries.stats` computes for
- * the (unscoped, admin-only) System page.
+ * `index_stats`'s logic given an already-resolved scope. File and chunk
+ * counts are derived only from candidates that round-tripped (bounded at
+ * `MAX_CANDIDATE_FILES`), never from the raw scope-wide SQL aggregate
+ * `IndexQueries.stats` computes for the (unscoped, admin-only) System page.
  */
-export async function indexStatsInScope(
-  deps: McpToolDeps,
-  ctx: ScopeContext,
-  authorizer: ReadAuthorizer,
-) {
+export async function indexStatsInScope(deps: McpToolDeps, ctx: ScopeContext) {
   const { total, files: candidates } = await deps.indexQueries.listFiles(
     ctx.scopePrefixes,
     { exclude: reservedExclusionOf(ctx) },
     "path",
     MAX_CANDIDATE_FILES,
   );
-  const { files: accessible, partial: authPartial } = await authorizeIndexedFiles(
-    ctx,
-    authorizer,
-    candidates,
-  );
+  const { files: accessible, partial: authPartial } = visibleFiles(ctx, candidates);
 
   const byStatus = new Map<string, { files: number; bytes: number }>();
   for (const file of accessible) {
@@ -978,18 +758,14 @@ export async function indexStatsInScope(
     })),
     chunks: chunkStats.chunks,
     chunks_embedded: chunkStats.chunksEmbedded,
-    writes_enabled: deps.writesEnabled,
     ...(partial ? { partial: true } : {}),
   };
 }
 
-export async function runIndexStats(deps: McpToolDeps, principal: Principal) {
-  const { ctx, authorizer } = await requireScope(deps, principal);
-  return indexStatsInScope(
-    { ...deps, writesEnabled: canOrganize(principal, deps.writesEnabled) },
-    ctx,
-    authorizer,
-  );
+/** `index_stats` for a token: the index counts plus whether it may organize (`writes_enabled`). */
+export async function runIndexStats(deps: McpToolDeps, principal: TokenPrincipal) {
+  const stats = await indexStatsInScope(deps, await requireScope(deps, principal));
+  return { ...stats, writes_enabled: canOrganize(principal) };
 }
 
 // ----------------------------------------------------------- create_folder
@@ -998,87 +774,19 @@ export interface CreateFolderArgs {
   readonly path: string;
 }
 
-function requireWrites(deps: McpToolDeps, principal: Principal): void {
-  if (!canOrganize(principal, deps.writesEnabled)) {
-    throw new McpToolError(
-      principal.tokenAccess === undefined
-        ? "write tools are disabled (FDRIVE_MCP_WRITES=false)"
-        : "this token does not allow organize operations",
-    );
-  }
-}
-
 /**
- * Resolves the caller's verified scopes for a write. Unlike `requireScope`
- * this needs no index rows (writes work before anything is indexed), only
- * the identity's verified scope list, so it stays available while the
- * index is empty or behind.
- */
-async function requireVerifiedScopes(
-  deps: McpToolDeps,
-  principal: Principal,
-): Promise<readonly Scope[]> {
-  const identity = await deps.identities.get(principal.identityId);
-  const verified =
-    identity === null
-      ? ({ available: false, reason: "no_connection" } as const)
-      : await deps.scopeResolver.verifiedIndexScopes(identity);
-  if (!verified.available) {
-    throw new McpToolError(indexUnavailableMessage(verified.reason));
-  }
-  return tokenScopes(principal, verified.scopes);
-}
-
-/**
- * Returns the admitted path in the coordinates `principal.storage` speaks
- * (the identity's virtual filesystem, the same space `ScopeResolver` lists
- * through and every `ReadAuthorizer` target uses). Throws unless `path`
- * lies inside the caller's verified scope, survives the virtual round trip
- * (so a location shadowed by a more specific override is never written
- * through the wrong identity), and is not in the trash. The same admission
- * every read tool applies before it returns content, so an MCP token can
- * never write where fdrive itself would refuse to look.
- *
- * Callers must hand the returned path to storage, never the argument they
- * passed in: admission is decided on the normalized, round-tripped path,
- * while a storage provider may forward whatever string it is given verbatim
- * (`assertValidPath` resolves no ".", ".." or repeated separator). Writing
- * through the raw argument would send a path that was never the one checked.
- */
-function assertWritablePath(
-  scopes: readonly Scope[],
-  trashPath: string | null,
-  path: string,
-  label: string,
-): string {
-  const resolved = toFsPath(scopes, path);
-  const virtualPath =
-    resolved === null ? null : roundTripVirtualPath(scopes, resolved.rootName, resolved.fsPath);
-  if (virtualPath === null || isReservedPath(virtualPath, trashPath)) {
-    throw new McpToolError(`${label} is outside this identity's scope`);
-  }
-  return virtualPath;
-}
-
-/**
- * Creates a folder through `principal.storage` once `args.path` passes the
- * verified-scope admission (`assertWritablePath`). The folder is created at
- * the admitted path, not at the raw argument, so the location written is
- * always the one that was checked. Works without any index rows, but never
- * without verified scopes.
+ * Creates a folder through `principal.storage` inside the token's folders
+ * and outside fdrive's own (`ordinaryPath`). The folder is created at the
+ * admitted, normalized path, not at the raw argument, so the location
+ * written is always the one that was checked. Works without any index.
  */
 export async function runCreateFolder(
   deps: McpToolDeps,
-  principal: Principal,
+  principal: TokenPrincipal,
   args: CreateFolderArgs,
 ) {
-  requireWrites(deps, principal);
-  const scopes =
-    principal.tokenAccess === undefined ? await requireVerifiedScopes(deps, principal) : [];
-  const path =
-    principal.tokenAccess === undefined
-      ? assertWritablePath(scopes, currentTrashPath(deps, principal), args.path, "path")
-      : ordinaryPath(deps, principal, args.path);
+  requireMode(principal, "organize");
+  const path = ordinaryPath(deps, principal, args.path);
   const publicUrl = await deps.publicUrl();
   await principal.storage.mkdir(path, { parents: true });
   let warnings: string[] = [];
@@ -1102,81 +810,32 @@ export interface MovePathArgs {
 }
 
 /**
- * Records a move in `idx.moves` when both `src` and `dst` resolve within
- * the same configured root; silently does nothing otherwise (the move
- * itself already happened through `principal.storage`, this is best-effort
- * bookkeeping for `recent_moves`).
- */
-export async function recordMoveIfInScope(
-  deps: McpToolDeps,
-  ctx: ScopeContext,
-  args: MovePathArgs,
-): Promise<void> {
-  const resolvedSrc = toFsPath(ctx.scopes, args.src);
-  const resolvedDst = toFsPath(ctx.scopes, args.dst);
-  if (
-    resolvedSrc === null ||
-    resolvedDst === null ||
-    resolvedSrc.rootName !== resolvedDst.rootName
-  ) {
-    return;
-  }
-  const rootId = ctx.rootIdByName.get(resolvedDst.rootName);
-  if (rootId === undefined) {
-    return;
-  }
-  await deps.indexQueries.recordMove({
-    rootId,
-    src: toIndexRelativePath(resolvedSrc.fsPath),
-    dst: toIndexRelativePath(resolvedDst.fsPath),
-    actor: "mcp",
-  });
-}
-
-/**
  * Moves or renames a path through `principal.storage` once both `src` and
- * `dst` pass the verified-scope admission (`assertWritablePath`). Both ends
- * of the move use the admitted paths, not the raw arguments, so the
- * locations touched are always the ones that were checked. Works without
- * any index rows, but never without verified scopes. Best-effort records
- * the move in `idx.moves` afterward when the index knows the root.
+ * `dst` are inside the token's folders and outside fdrive's own
+ * (`ordinaryPath`), and `src` is not a grant root or a folder holding Trash.
+ * Both ends use the admitted paths, not the raw arguments. Personal activity
+ * records the move through the request's storage, which is where
+ * `recent_moves` reads it back.
  */
-export async function runMovePath(deps: McpToolDeps, principal: Principal, args: MovePathArgs) {
-  requireWrites(deps, principal);
-  const scopes =
-    principal.tokenAccess === undefined ? await requireVerifiedScopes(deps, principal) : [];
+export async function runMovePath(
+  deps: McpToolDeps,
+  principal: TokenPrincipal,
+  args: MovePathArgs,
+) {
+  requireMode(principal, "organize");
   const trashPath = currentTrashPath(deps, principal);
-  const src =
-    principal.tokenAccess === undefined
-      ? assertWritablePath(scopes, trashPath, args.src, "src")
-      : ordinaryPath(deps, principal, args.src);
-  const dst =
-    principal.tokenAccess === undefined
-      ? assertWritablePath(scopes, trashPath, args.dst, "dst")
-      : ordinaryPath(deps, principal, args.dst);
+  const src = ordinaryPath(deps, principal, args.src);
+  const dst = ordinaryPath(deps, principal, args.dst);
   assertMutablePath(principal, src, trashPath);
   const isDir = (await principal.storage.stat(src)).kind === "dir";
   const publicUrl = await deps.publicUrl();
   await relocatePath(principal.storage, "move", src, dst);
-  const warnings: string[] = [];
+  let warnings: string[] = [];
   if (src !== dst) {
     try {
       await deps.onMutation?.(principal, { kind: "move", path: src, target: dst, isDir });
     } catch {
-      warnings.push("File moved, but metadata or live updates could not be updated.");
-    }
-    try {
-      let auditScopes = scopes;
-      if (principal.tokenAccess !== undefined) {
-        const identity = await deps.identities.get(principal.identityId);
-        const verified =
-          identity === null ? null : await deps.scopeResolver.verifiedIndexScopes(identity);
-        auditScopes = verified?.available ? tokenScopes(principal, verified.scopes) : [];
-      }
-      const ctx = await resolveScopeContext(deps.indexQueries, auditScopes, trashPath);
-      if (ctx !== null) await recordMoveIfInScope(deps, ctx, { src, dst });
-    } catch {
-      warnings.push("File moved, but move history could not be recorded.");
+      warnings = ["File moved, but metadata or live updates could not be updated."];
     }
   }
   return {
@@ -1193,92 +852,54 @@ export interface RecentMovesArgs {
   readonly limit?: number | undefined;
 }
 
+/** Events `recent_moves` reads per page; personal activity lists at most this many at once. */
+const ACTIVITY_PAGE = 100;
+
+/** The most events `recent_moves` reads to fill one answer before it reports `partial`. */
+export const MAX_RECENT_MOVE_EVENTS = 2000;
+
 /**
- * `recent_moves`'s mapping logic given an already-resolved scope and
- * authorizer. Exported so tests can exercise the skip-on-out-of-scope and
- * skip-on-read-denied branches directly. Both `src` and `dst` must
- * round-trip; only `dst` must additionally pass a live read check (`src`
- * has typically already moved away by the time this runs, so it is never
- * live-checked, only round-tripped so a shadowed source is never
- * disclosed).
+ * The moves this token's login made through MCP, newest first, read from its
+ * personal activity: successful `file.move` events from source `mcp`, of the
+ * token's own account and login and no one else's. A move is listed only
+ * when both its ends are inside this token's folders and outside fdrive's
+ * own. Reads at most `MAX_RECENT_MOVE_EVENTS` events, and reports `partial`
+ * when it stopped there short of `limit` with more left to read.
  */
-export async function recentMovesInScope(
-  deps: McpToolDeps,
-  ctx: ScopeContext,
-  authorizer: ReadAuthorizer,
-  args: RecentMovesArgs,
-  storage?: Principal["storage"],
-) {
-  const rows = await deps.indexQueries.recentMoves(
-    ctx.scopePrefixes,
-    "mcp",
-    Math.max(1, Math.min(args.limit ?? 50, 500)),
-    { exclude: reservedExclusionOf(ctx) },
-  );
-  const capped = rows.slice(0, MAX_CANDIDATE_FILES);
-  let partial = rows.length > capped.length;
-
-  const resolved = await Promise.all(
-    capped.map(async (row): Promise<{ at: string; src: string; dst: string } | null> => {
-      if (row.src === null || row.dst === null) {
-        return null;
-      }
-      const src = virtualPathFor(ctx, row.rootId, row.src);
-      const dst = virtualPathFor(ctx, row.rootId, row.dst);
-      if (src === null || dst === null) {
-        return null;
-      }
-      let kind = moveDestinationKind(dst);
-      if (storage !== undefined) {
-        try {
-          const stat = await storage.stat(dst);
-          if (stat.kind !== "file" && stat.kind !== "dir") return null;
-          kind = stat.kind;
-        } catch {
-          return null;
-        }
-      }
-      const authResult = await authorizer.authorize({ path: dst, kind });
-      if (!authResult.allowed) {
-        return null;
-      }
-      return { at: row.at.toISOString(), src, dst };
-    }),
-  );
-
-  const moves: { at: string; src: string; dst: string }[] = [];
-  for (const entry of resolved) {
-    if (entry === null) {
-      partial = true;
-      continue;
-    }
-    moves.push(entry);
-  }
-
-  return { moves, ...(partial ? { partial: true } : {}) };
-}
-
 export async function runRecentMoves(
   deps: McpToolDeps,
-  principal: Principal,
+  principal: TokenPrincipal,
   args: RecentMovesArgs,
 ) {
-  const identity = await deps.identities.get(principal.identityId);
-  const verified =
-    identity === null
-      ? { available: false as const }
-      : await deps.scopeResolver.verifiedIndexScopes(identity);
-  if (!verified.available) {
-    return { moves: [] };
+  const limit = Math.max(1, Math.min(args.limit ?? 50, 500));
+  const repo = deps.activity?.repo;
+  if (repo === undefined) return { moves: [] };
+  const trashPath = currentTrashPath(deps, principal);
+  const listed = (path: string | undefined): path is string =>
+    path !== undefined && canReadPath(principal, path) && !isReservedPath(path, trashPath);
+
+  const moves: { at: string; src: string; dst: string }[] = [];
+  let after: { at: Date; id: string } | undefined;
+  for (let read = 0; read < MAX_RECENT_MOVE_EVENTS; ) {
+    const page = await repo.list(principal.accountId, {
+      identityId: principal.identityId,
+      action: "file.move",
+      source: "mcp",
+      outcome: "success",
+      limit: ACTIVITY_PAGE,
+      ...(after === undefined ? {} : { after }),
+    });
+    read += page.length;
+    for (const event of page) {
+      const src = event.before?.path;
+      const dst = event.after?.path;
+      if (!listed(src) || !listed(dst)) continue;
+      moves.push({ at: (event.occurredAt ?? event.sortAt).toISOString(), src, dst });
+      if (moves.length === limit) return { moves };
+    }
+    const last = page.at(-1);
+    if (page.length < ACTIVITY_PAGE || last === undefined) return { moves };
+    after = { at: last.sortAt, id: last.id };
   }
-  const ctx = await resolveScopeContext(
-    deps.indexQueries,
-    tokenScopes(principal, verified.scopes),
-    currentTrashPath(deps, principal),
-  );
-  if (ctx === null) {
-    return { moves: [] };
-  }
-  const authorizer = createReadAuthorizer({ storage: principal.storage });
-  return recentMovesInScope(deps, ctx, authorizer, args, principal.storage);
+  return { moves, partial: true };
 }

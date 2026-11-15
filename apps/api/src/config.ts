@@ -2,7 +2,6 @@ import { tmpdir } from "node:os";
 import { isAbsolute } from "node:path";
 import { z } from "zod";
 import { validateOfficeInfrastructure } from "./office/config.ts";
-import { type OfficeEditRule, parseOfficeEditRules } from "./office/edit-policy.ts";
 
 const LOG_LEVELS = ["fatal", "error", "warn", "info", "debug", "trace", "silent"] as const;
 const NODE_ENVS = ["development", "production", "test"] as const;
@@ -32,7 +31,6 @@ export interface AppConfig {
   readonly fdriveTikaUrl?: string | undefined;
 
   readonly fdriveWorkerToken?: string | undefined;
-  readonly fdriveOfficeEditRules?: readonly OfficeEditRule[];
   readonly fdriveOfficeProduct?: "onlyoffice" | "collabora" | undefined;
   readonly fdriveOfficeUrl?: string | undefined;
   readonly fdriveOfficePublicUrl?: string | undefined;
@@ -42,12 +40,8 @@ export interface AppConfig {
   readonly host: string;
   readonly logLevel: LogLevel;
   readonly databaseUrl: string;
-  /**
-   * The folder fdrive serves as its storage, one home per user as
-   * `<root>/<username>`. Undefined means the deployment has no storage, and
-   * setup cannot finish until it is set.
-   */
-  readonly fdriveStorageRoot: string | undefined;
+  /** The folder fdrive serves as its storage, one home per user as `<root>/<username>`. */
+  readonly fdriveStorageRoot: string;
   readonly fdriveMasterKey: string;
   readonly fdriveSessionTtlDays: number;
   /** Hard cap on a session's age since login; sliding expiry never extends past it. */
@@ -66,13 +60,11 @@ export interface AppConfig {
   /** Directory archive jobs spool temp files into. Defaults to the OS temp dir. */
   readonly fdriveTmpDir: string;
   /** Durable, private spool. Unset disables desktop writes. */
-  readonly fdriveDesktopStateDir?: string;
   readonly fdriveBackupStateDir?: string;
   readonly fdriveBackupSources?: { kind: "ocr" | "logs" | "office"; path: string }[];
   readonly fdriveBackupWorker?: boolean;
   readonly fdriveRestoreMode?: boolean;
   /** Days before acknowledged or cancelled Mac write backups are reclaimed. */
-  readonly fdriveDesktopRetentionDays: number;
   /** Total bytes a single archive/extract job may read before it fails. */
   readonly fdriveJobMaxBytes: number;
   /**
@@ -104,22 +96,15 @@ export interface AppConfig {
   readonly fdriveImageEmbedUrl: string | undefined;
   /** Directory the indexer writes thumbnails into. `undefined` disables thumbnails. */
   readonly fdriveThumbsDir: string | undefined;
-  /**
-   * Usernames on the deployment's pinned storage (the local folder) that are
-   * always treated as admins, in addition to `accounts.is_admin`.
-   */
-  readonly fdriveAdminUsers: readonly string[];
   /** Overrides the randomly generated setup token. Mainly for tests and scripted installs. */
   readonly fdriveSetupToken: string | undefined;
   /**
    * Base URL of the indexer's internal HTTP API. `undefined` disables the
-   * System > Indexer page and MCP document extraction. Explicit tokens still read UTF-8 directly.
+   * System > Indexer page and MCP document extraction. MCP still reads UTF-8 directly.
    */
   readonly fdriveIndexerUrl: string | undefined;
   /** Base URL of the OCR service's internal HTTP API. `undefined` disables the System > OCR page. */
   readonly fdriveOcrUrl: string | undefined;
-  /** Enables legacy tokens' `create_folder` and `move_path`; explicit tokens use their own grants. */
-  readonly fdriveMcpWrites: boolean;
 }
 
 /** Default cap on the bytes a single archive job may read: 10 GiB. */
@@ -210,40 +195,8 @@ export function parseIndexRoots(value: string | undefined): IndexRootConfig[] | 
   return result.data;
 }
 
-/**
- * Splits a comma-separated list of usernames (`FDRIVE_ADMIN_USERS`)
- * into a trimmed, non-empty array. An empty or missing value yields an
- * empty array.
- */
-export function parseAdminUsers(value: string | undefined): readonly string[] {
-  if (value === undefined || value.trim().length === 0) {
-    return [];
-  }
-  return value
-    .split(",")
-    .map((username) => username.trim())
-    .filter((username) => username.length > 0);
-}
-
 const envSchema = z.object({
   FDRIVE_WORKER_TOKEN: z.preprocess(undefinedWhenEmpty, z.string().min(1).optional()),
-  FDRIVE_OFFICE_EDIT_RULES: z.preprocess(
-    undefinedWhenEmpty,
-    z
-      .string()
-      .optional()
-      .transform((value, ctx) => {
-        try {
-          return parseOfficeEditRules(value);
-        } catch {
-          ctx.addIssue({
-            code: "custom",
-            message: "must be valid bounded Office edit policy JSON",
-          });
-          return z.NEVER;
-        }
-      }),
-  ),
   FDRIVE_OFFICE_PRODUCT: z.preprocess(
     undefinedWhenEmpty,
     z.enum(["onlyoffice", "collabora"]).optional(),
@@ -266,15 +219,10 @@ const envSchema = z.object({
   HOST: z.preprocess((value) => withDefault(value, "0.0.0.0"), z.string().min(1)),
   LOG_LEVEL: z.preprocess((value) => withDefault(value, "info"), z.enum(LOG_LEVELS)),
   DATABASE_URL: z.string().min(1, "is required"),
-  FDRIVE_STORAGE_ROOT: z.preprocess(
-    undefinedWhenEmpty,
-    z
-      .string()
-      .optional()
-      .refine((value) => value === undefined || isAbsolute(value), {
-        message: "must be an absolute path",
-      }),
-  ),
+  FDRIVE_STORAGE_ROOT: z
+    .string()
+    .min(1, "is required")
+    .refine((value) => isAbsolute(value), { message: "must be an absolute path" }),
   FDRIVE_MASTER_KEY: z
     .string()
     .min(1, "is required")
@@ -337,11 +285,6 @@ const envSchema = z.object({
           .strict(),
       )
       .max(20),
-  ),
-  FDRIVE_DESKTOP_STATE_DIR: z.preprocess(undefinedWhenEmpty, z.string().startsWith("/").optional()),
-  FDRIVE_DESKTOP_RETENTION_DAYS: z.preprocess(
-    (value) => withDefault(value, "30"),
-    z.string().regex(/^\d+$/).transform(Number).pipe(z.number().int().min(1).max(3650)),
   ),
   FDRIVE_JOB_MAX_BYTES: z.preprocess(
     (value) => withDefault(value, String(DEFAULT_JOB_MAX_BYTES)),
@@ -449,7 +392,6 @@ const envSchema = z.object({
       }),
   ),
   FDRIVE_THUMBS_DIR: z.preprocess(undefinedWhenEmpty, z.string().min(1).optional()),
-  FDRIVE_ADMIN_USERS: z.string().optional(),
   FDRIVE_SETUP_TOKEN: z.preprocess(
     (value) => (typeof value === "string" && value.length === 0 ? undefined : value),
     z.string().min(1).optional(),
@@ -473,10 +415,6 @@ const envSchema = z.object({
       .refine((value) => value === undefined || isHttpUrl(value), {
         message: "must be an http(s) URL",
       }),
-  ),
-  FDRIVE_MCP_WRITES: z.preprocess(
-    (value) => withDefault(value, "false"),
-    z.enum(["true", "false"]).transform((value) => value === "true"),
   ),
 });
 
@@ -511,7 +449,6 @@ export function loadConfig(env: Record<string, string | undefined>): AppConfig {
 
   const config: AppConfig = {
     fdriveWorkerToken: parsed.FDRIVE_WORKER_TOKEN,
-    fdriveOfficeEditRules: parsed.FDRIVE_OFFICE_EDIT_RULES,
     fdriveOfficeProduct: parsed.FDRIVE_OFFICE_PRODUCT,
     fdriveOfficeUrl: parsed.FDRIVE_OFFICE_URL,
     fdriveOfficePublicUrl: parsed.FDRIVE_OFFICE_PUBLIC_URL,
@@ -529,16 +466,12 @@ export function loadConfig(env: Record<string, string | undefined>): AppConfig {
     fdriveTrustedProxyHops: parsed.FDRIVE_TRUSTED_PROXY_HOPS,
     nodeEnv: parsed.NODE_ENV,
     fdriveTmpDir: parsed.FDRIVE_TMP_DIR,
-    ...(parsed.FDRIVE_DESKTOP_STATE_DIR
-      ? { fdriveDesktopStateDir: parsed.FDRIVE_DESKTOP_STATE_DIR }
-      : {}),
     ...(parsed.FDRIVE_BACKUP_STATE_DIR
       ? { fdriveBackupStateDir: parsed.FDRIVE_BACKUP_STATE_DIR }
       : {}),
     fdriveBackupSources: parsed.FDRIVE_BACKUP_SOURCES,
     fdriveRestoreMode: parsed.FDRIVE_RESTORE_MODE,
     fdriveBackupWorker: parsed.FDRIVE_BACKUP_WORKER,
-    fdriveDesktopRetentionDays: parsed.FDRIVE_DESKTOP_RETENTION_DAYS,
     fdriveJobMaxBytes: parsed.FDRIVE_JOB_MAX_BYTES,
     fdriveArchivePeekMaxBytes: parsed.FDRIVE_ARCHIVE_PEEK_MAX_BYTES,
     fdriveJsonMaxBytes: parsed.FDRIVE_JSON_MAX_BYTES,
@@ -552,11 +485,9 @@ export function loadConfig(env: Record<string, string | undefined>): AppConfig {
 
     fdriveImageEmbedUrl: parsed.FDRIVE_IMAGE_EMBED_URL,
     fdriveThumbsDir: parsed.FDRIVE_THUMBS_DIR,
-    fdriveAdminUsers: parseAdminUsers(parsed.FDRIVE_ADMIN_USERS),
     fdriveSetupToken: parsed.FDRIVE_SETUP_TOKEN,
     fdriveIndexerUrl: parsed.FDRIVE_INDEXER_URL,
     fdriveOcrUrl: parsed.FDRIVE_OCR_URL,
-    fdriveMcpWrites: parsed.FDRIVE_MCP_WRITES,
   };
   validateOfficeInfrastructure(config);
   return config;

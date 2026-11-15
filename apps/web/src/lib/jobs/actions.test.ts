@@ -1,7 +1,6 @@
 import type { JobStatus } from "@fdrive/contracts";
 import { ApiClientError } from "@fdrive/contracts";
 import { describe, expect, it, vi } from "vitest";
-import { accountTransition } from "../account/transition";
 import {
   type CancelJobDeps,
   cancelJob,
@@ -184,30 +183,3 @@ describe("cancelJob", () => {
     expect(d.notifyError).toHaveBeenCalledWith("no such job");
   });
 });
-
-it.each([false, true])(
-  "does not seed old jobs during or after identity transitions: %s",
-  async (complete) => {
-    let resolve: ((value: { jobId: string }) => void) | undefined;
-    const seedJob = vi.fn();
-    const pending = runJobRequest(
-      {
-        compress: () =>
-          new Promise((done) => {
-            resolve = done;
-          }),
-        extract: vi.fn(),
-        seedJob,
-        notifySuccess: vi.fn(),
-        notifyError: vi.fn(),
-      },
-      COMPRESS_REQUEST,
-    );
-    accountTransition.begin();
-    if (complete) accountTransition.finish(true);
-    resolve?.({ jobId: "old" });
-    await pending;
-    expect(seedJob).not.toHaveBeenCalled();
-    if (!complete) accountTransition.finish(false);
-  },
-);

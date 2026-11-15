@@ -1,9 +1,9 @@
 import { and, eq, isNull, like, or, sql } from "drizzle-orm";
 import type { Db } from "../index.js";
 import { officeFiles } from "../schema/app.js";
-import { supersedeDesktopEffects } from "./desktop-effects.js";
 import {
   escapeOfficeLike,
+  type OfficeFileLocation,
   type OfficeFileRepo,
   validateOfficeDelete,
   validateOfficeId,
@@ -14,26 +14,33 @@ import type { OfficeQueryExecutor, OfficeTransactionRunner } from "./office-writ
 
 const columns = {
   id: officeFiles.id,
-  providerId: officeFiles.providerId,
-  rootName: officeFiles.rootName,
+  identityId: officeFiles.identityId,
   path: officeFiles.path,
   createdAt: officeFiles.createdAt,
 };
-function scope(providerId: string, rootName: string) {
+/** The active rows at `prefix` and under it. */
+function under(prefix: OfficeFileLocation) {
   return and(
-    eq(officeFiles.providerId, providerId),
-    eq(officeFiles.rootName, rootName),
+    eq(officeFiles.identityId, prefix.identityId),
     isNull(officeFiles.deletedAt),
+    or(
+      eq(officeFiles.path, prefix.path),
+      like(officeFiles.path, `${escapeOfficeLike(prefix.path)}/%`),
+    ),
   );
 }
-function prefix(path: string) {
-  return path === ""
-    ? sql`true`
-    : or(eq(officeFiles.path, path), like(officeFiles.path, `${escapeOfficeLike(path)}/%`));
+/**
+ * Takes the registry locks of the owners' files until the transaction ends,
+ * in one order, so a move from one owner's files into another's never
+ * deadlocks with the reverse move.
+ */
+async function lockOwners(tx: OfficeQueryExecutor, ...identityIds: string[]): Promise<void> {
+  for (const identityId of [...new Set(identityIds)].sort())
+    await tx.execute(
+      sql`select pg_advisory_xact_lock(hashtextextended(${`office-files:${identityId}`}, 0))`,
+    );
 }
-function lockKey(providerId: string, rootName: string): string {
-  return JSON.stringify(["office-files", providerId, rootName]);
-}
+
 export function createOfficeFileRepo(db: Db): OfficeFileRepo {
   return createOfficeFileRepoWithRunner(db, (callback) => db.transaction(callback));
 }
@@ -49,17 +56,22 @@ export function createOfficeFileRepoWithRunner(
       assertActive();
       validateOfficeLocation(location);
       return runTransaction(async (tx) => {
-        await tx.execute(
-          sql`select pg_advisory_xact_lock(hashtextextended(${lockKey(location.providerId, location.rootName)}, 0))`,
-        );
+        await lockOwners(tx, location.identityId);
         const [existing] = await tx
           .select(columns)
           .from(officeFiles)
           .where(
-            and(scope(location.providerId, location.rootName), eq(officeFiles.path, location.path)),
+            and(
+              eq(officeFiles.identityId, location.identityId),
+              eq(officeFiles.path, location.path),
+              isNull(officeFiles.deletedAt),
+            ),
           );
         if (existing) return existing;
-        const [created] = await tx.insert(officeFiles).values(location).returning(columns);
+        const [created] = await tx
+          .insert(officeFiles)
+          .values({ identityId: location.identityId, path: location.path })
+          .returning(columns);
         if (!created) throw new Error("Office file insert returned no row");
         return created;
       });
@@ -76,18 +88,15 @@ export function createOfficeFileRepoWithRunner(
     async movePrefix(move) {
       assertActive();
       validateOfficeMove(move);
-      if (move.from === move.to) return;
+      const { from, to } = move;
+      if (from.identityId === to.identityId && from.path === to.path) return;
       await runTransaction(async (tx) => {
-        await tx.execute(
-          sql`select pg_advisory_xact_lock(hashtextextended(${lockKey(move.providerId, move.rootName)}, 0))`,
-        );
-        await supersedeDesktopEffects(tx, move, move.from, move.to);
-        const activeScope = scope(move.providerId, move.rootName);
+        await lockOwners(tx, from.identityId, to.identityId);
         // A replay can have a large destination and no source. Avoid a join on that case.
         const [source] = await tx
           .select({ id: officeFiles.id })
           .from(officeFiles)
-          .where(and(activeScope, prefix(move.from)))
+          .where(under(from))
           .limit(1);
         if (!source) return;
         // Match replacements in SQL with indexed equality in both directions.
@@ -96,43 +105,36 @@ export function createOfficeFileRepoWithRunner(
           update app.office_files as destination
           set deleted_at = ${move.at}
           from app.office_files as source
-          where destination.provider_id = ${move.providerId}
-            and destination.root_name = ${move.rootName}
+          where destination.identity_id = ${to.identityId}
             and destination.deleted_at is null
-            and (destination.path = ${move.to}
-              or destination.path like ${`${escapeOfficeLike(move.to)}/%`})
-            and source.provider_id = ${move.providerId}
-            and source.root_name = ${move.rootName}
+            and (destination.path = ${to.path}
+              or destination.path like ${`${escapeOfficeLike(to.path)}/%`})
+            and source.identity_id = ${from.identityId}
             and source.deleted_at is null
-            and (source.path = ${move.from}
-              or source.path like ${`${escapeOfficeLike(move.from)}/%`})
-            and destination.path = ${move.to}
-              || substring(source.path from ${Array.from(move.from).length + 1}::integer)
-            and source.path = ${move.from}
-              || substring(destination.path from ${Array.from(move.to).length + 1}::integer)
+            and (source.path = ${from.path}
+              or source.path like ${`${escapeOfficeLike(from.path)}/%`})
+            and destination.path = ${to.path}
+              || substring(source.path from ${Array.from(from.path).length + 1}::integer)
+            and source.path = ${from.path}
+              || substring(destination.path from ${Array.from(to.path).length + 1}::integer)
         `);
-        // Prefixes are disjoint; no source path can collide with another destination.
+        // Prefixes are disjoint within one owner's files; no source path can
+        // collide with another destination.
         await tx
           .update(officeFiles)
           .set({
-            path: sql`${move.to} || substring(${officeFiles.path} from ${Array.from(move.from).length + 1}::integer)`,
-            revision: sql`gen_random_uuid()`,
+            identityId: to.identityId,
+            path: sql`${to.path} || substring(${officeFiles.path} from ${Array.from(from.path).length + 1}::integer)`,
           })
-          .where(and(activeScope, prefix(move.from)));
+          .where(under(from));
       });
     },
     async deletePrefix(deletion) {
       assertActive();
       validateOfficeDelete(deletion);
       await runTransaction(async (tx) => {
-        await tx.execute(
-          sql`select pg_advisory_xact_lock(hashtextextended(${lockKey(deletion.providerId, deletion.rootName)}, 0))`,
-        );
-        await supersedeDesktopEffects(tx, deletion, deletion.path, null);
-        await tx
-          .update(officeFiles)
-          .set({ deletedAt: deletion.at })
-          .where(and(scope(deletion.providerId, deletion.rootName), prefix(deletion.path)));
+        await lockOwners(tx, deletion.identityId);
+        await tx.update(officeFiles).set({ deletedAt: deletion.at }).where(under(deletion));
       });
     },
   };

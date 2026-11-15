@@ -7,9 +7,9 @@ indexed.
 
 ## Create a token
 
-Open the sidebar account menu → **Account** → **Create token**. Choose a name, storage login,
-access level, allowed folders and expiry. The active login is selected initially; Read is the
-default. Enter one absolute virtual folder per line, or `/` for all folders in that login.
+Open the sidebar account menu → **Account** → **Create token**. Choose a name, access level,
+allowed folders and expiry; Read is the default. The token acts as your login. Enter one
+absolute virtual folder per line, or `/` for all your folders.
 The token is shown once. Copy it before closing the dialog.
 
 | Access | Available actions |
@@ -19,9 +19,8 @@ The token is shown once. Copy it before closing the dialog.
 | Full management | Organize plus create/upload/edit and recoverable Trash/restore. |
 
 Tokens never confer administration and reach only their own login's files. Every HTTP request
-checks that the token is unrevoked and unexpired, that its login still belongs to the token's
-account, and that the fdrive user is neither disabled nor removed.
-Changing the active login in the browser does not retarget an existing token.
+checks that the token is unrevoked and unexpired and that the fdrive user is neither disabled
+nor removed.
 
 ## Connect
 
@@ -50,13 +49,13 @@ assistant deciding whether the user requested that action.
 | --- | --- |
 | `capabilities` | Login, grants, access level, optional processing and file-size limits. |
 | `list_directory` | Live provider listing; `next_offset` continues a page. |
-| `file_info` | Live metadata for explicit tokens; indexed metadata for legacy tokens. |
+| `file_info` | Live metadata from storage: kind, size, modification time and link. |
 | `read_file_text` | UTF-8 directly; PDF/Office/image text through optional extraction. Includes SHA-256, offset and continuation. |
 | `read_file`, `read_image` | Original base64 bytes, or PNG/JPEG/GIF/WebP MCP image content. |
 | `search`, `search_images` | Text/semantic search or visual-description search. Processing may be unavailable or degraded. |
 | `find_files` | Indexed name/type/date/size filtering with `next_offset`. |
 | `find_duplicates`, `similar_files`, `folder_overview`, `index_stats` | Indexed analysis, live-authorized against the provider. |
-| `recent_moves` | Mapped MCP move history, with both paths restricted to the token. |
+| `recent_moves` | This login's moves through MCP, newest first, from [personal activity](ACTIVITY.md); both paths inside the token's folders. |
 | `create_folder`, `move_path`, `copy_path` | Organization within allowed folders. Occupied destinations are refused. |
 | `file_tags`, `set_file_tags`, `set_favorite` | Read/replace file tags and toggle favorites. Missing tag names are created. |
 | `create_file`, `upload_file` | Create UTF-8 text or canonical base64 bytes; no overwrite. |
@@ -68,7 +67,7 @@ assistant deciding whether the user requested that action.
 Direct operations enforce normalized folder grants and current provider permissions. Browsing
 an ancestor of an allowed folder reveals only the directory chain leading to that folder.
 Ordinary operations and indexed results exclude fdrive's own folders: the configured Trash,
-the Mac app's `/.fdrive-desktop`, fdrive's Trash layout and backup folders. Moving/deleting a
+the Mac app's `/.fdrive-desktop` and fdrive's Trash layout. Moving/deleting a
 grant root or a folder containing Trash is refused. Restore checks both the original and
 requested destination paths. There are no permanent-delete or public-sharing tools.
 
@@ -89,23 +88,16 @@ writes a temporary extraction file, removes it afterward, and never takes a
 filesystem path. It also works when no index roots are mounted. Extraction status describes
 unsupported formats, disabled processing and documents without extracted text.
 
+`recent_moves` returns `{ at, src, dst }` per move. It is history: a destination may have
+moved or gone since, and the login's moves through any of its tokens are listed. It reads at
+most 2,000 events and reports `partial` if it stopped there short of `limit`.
+
 Creation, moves and copies leave an occupied destination to storage, which refuses it
 (creation atomically). Editing checks SHA-256 and serializes competing MCP edits within one
 API process; that check is not atomic against other API processes, browser writes or
 writers outside fdrive. Re-read before editing; avoid concurrent external edits.
 Completed storage mutations remain successful if metadata/history updates fail, with warnings
 explaining what was not updated. Do not retry the storage operation merely to repair a warning.
-
-## Existing tokens
-
-Tokens created before explicit access was introduced retain **Legacy** access. Their direct
-text reads, indexed analysis and writes retain the existing verified-index admission rules;
-legacy browsing reads storage directly. Only their `create_folder` and `move_path`
-permissions depend on `FDRIVE_MCP_WRITES` (default false).
-
-New tokens use their own Read/Organize/Full settings regardless of that legacy flag. Existing
-tokens never silently gain the new file-management tools. Create a replacement token to
-choose login/folders/permissions, update the client, then revoke the old token.
 
 ## MCP and REST vocabulary
 

@@ -18,8 +18,9 @@ test("alice (admin) finds the files folder and its Trash on System > General, wi
 
   await expect(card.getByText("Storage", { exact: true })).toBeVisible();
   await expect(card.getByLabel("Name", { exact: true })).toBeVisible();
-  // The e2e folder is reachable, so no reachability line competes for attention.
-  await expect(card.getByText("Unreachable")).toHaveCount(0);
+  // The e2e folder is healthy, so no health line competes for attention.
+  await expect(card.getByText("Unavailable")).toHaveCount(0);
+  await expect(card.getByRole("alert")).toHaveCount(0);
   await expect(page.getByRole("switch", { name: "Enable Trash" })).toBeVisible();
   for (const name of [/^Add provider/, /^Remove /, /^Test /, /^Edit /]) {
     await expect(page.getByRole("button", { name })).toHaveCount(0);
@@ -54,8 +55,11 @@ test("alice (admin) renames the files folder on System > General and the name st
 
     await page.reload();
     await expect(storageCard(page).getByLabel("Name", { exact: true })).toHaveValue("Home server");
+    // The sidebar names the signed-in login's storage beneath the username.
     await page.goto("/account");
-    await expect(page.getByRole("main").getByText("Home server", { exact: true })).toBeVisible();
+    await expect(
+      page.locator('[data-sidebar="footer"]').getByText("Home server", { exact: true }),
+    ).toBeVisible();
   } finally {
     // Restore the original name so this test stays idempotent across
     // repeated local runs against the same environment.

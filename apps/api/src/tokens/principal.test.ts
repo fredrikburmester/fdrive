@@ -1,6 +1,7 @@
 import type { StorageProvider } from "@fdrive/core";
 import { createMemoryRepos } from "@fdrive/db/testing";
 import { describe, expect, it } from "vitest";
+import type { PrincipalFactory } from "../auth/principal.js";
 import { createResolveTokenPrincipal } from "./principal.js";
 import { generateApiToken, hashApiToken } from "./token-format.js";
 
@@ -24,15 +25,27 @@ const FAKE_STORAGE: StorageProvider = {
   zip: notImplemented,
 };
 
+/** The principal of the login the token's query read, with `FAKE_STORAGE`. */
+const principalFor: PrincipalFactory = async (login, extras) => ({
+  accountId: login.accountId,
+  identityId: login.identityId,
+  username: login.username,
+  isAdmin: login.isAdmin,
+  storage: FAKE_STORAGE,
+  ...extras,
+});
+
+/** Alice, an administrator: a local user with her account and login. */
 async function seedAccountWithIdentity(repos: ReturnType<typeof createMemoryRepos>) {
-  const provider = await repos.providers.ensure({ type: "local", baseUrl: "http://dav.test" });
-  const account = await repos.accounts.create({ displayName: "Alice" });
-  const identity = await repos.identities.create({
-    accountId: account.id,
+  const provider = await repos.providers.ensure({ type: "local", baseUrl: "local" });
+  const identity = await repos.logins.createUser({
     providerId: provider.id,
-    externalUsername: "alice",
+    username: "alice",
+    passwordHash: "h",
+    isAdmin: true,
+    at: new Date("2026-01-01T00:00:00.000Z"),
   });
-  return { account, identity };
+  return { account: { id: identity.accountId }, identity };
 }
 
 describe("createResolveTokenPrincipal", () => {
@@ -40,9 +53,9 @@ describe("createResolveTokenPrincipal", () => {
     const repos = createMemoryRepos();
     const resolve = createResolveTokenPrincipal({
       apiTokens: repos.apiTokens,
-      identities: repos.identities,
+      logins: repos.logins,
       clock: () => new Date(),
-      storageFactory: async () => FAKE_STORAGE,
+      principalFor,
     });
 
     expect(await resolve("not-a-token")).toBeNull();
@@ -52,16 +65,15 @@ describe("createResolveTokenPrincipal", () => {
     const repos = createMemoryRepos();
     const lookups: string[] = [];
     const resolve = createResolveTokenPrincipal({
-      apiTokens: {
-        ...repos.apiTokens,
-        findByHash: async (hash) => {
+      apiTokens: repos.apiTokens,
+      logins: {
+        byToken: async (hash) => {
           lookups.push(hash);
-          return repos.apiTokens.findByHash(hash);
+          return repos.logins.byToken(hash);
         },
       },
-      identities: repos.identities,
       clock: () => new Date(),
-      storageFactory: async () => FAKE_STORAGE,
+      principalFor,
     });
 
     for (const value of [
@@ -86,15 +98,15 @@ describe("createResolveTokenPrincipal", () => {
     const repos = createMemoryRepos();
     const resolve = createResolveTokenPrincipal({
       apiTokens: repos.apiTokens,
-      identities: repos.identities,
+      logins: repos.logins,
       clock: () => new Date(),
-      storageFactory: async () => FAKE_STORAGE,
+      principalFor,
     });
 
     expect(await resolve(generateApiToken())).toBeNull();
   });
 
-  it("resolves a valid token to its identity's principal, never as admin", async () => {
+  it("resolves a valid token to its identity's principal with its access, never as admin", async () => {
     const repos = createMemoryRepos();
     const { account, identity } = await seedAccountWithIdentity(repos);
     const token = generateApiToken();
@@ -103,16 +115,14 @@ describe("createResolveTokenPrincipal", () => {
       identityId: identity.id,
       name: "Claude",
       tokenHash: hashApiToken(token),
+      access: { mode: "read", paths: ["/"] },
       expiresAt: null,
     });
     const resolve = createResolveTokenPrincipal({
       apiTokens: repos.apiTokens,
-      identities: repos.identities,
+      logins: repos.logins,
       clock: () => new Date("2026-01-01T00:00:00.000Z"),
-      storageFactory: async (identityId) => {
-        expect(identityId).toBe(identity.id);
-        return FAKE_STORAGE;
-      },
+      principalFor,
     });
 
     const principal = await resolve(token);
@@ -123,6 +133,7 @@ describe("createResolveTokenPrincipal", () => {
       username: "alice",
       storage: FAKE_STORAGE,
       isAdmin: false,
+      tokenAccess: { mode: "read", paths: ["/"] },
     });
   });
 
@@ -135,13 +146,14 @@ describe("createResolveTokenPrincipal", () => {
       identityId: identity.id,
       name: "Claude",
       tokenHash: hashApiToken(token),
+      access: { mode: "read", paths: ["/"] },
       expiresAt: new Date("2026-01-01T00:00:00.000Z"),
     });
     const resolve = createResolveTokenPrincipal({
       apiTokens: repos.apiTokens,
-      identities: repos.identities,
+      logins: repos.logins,
       clock: () => new Date("2026-06-01T00:00:00.000Z"),
-      storageFactory: async () => FAKE_STORAGE,
+      principalFor,
     });
 
     expect(await resolve(token)).toBeNull();
@@ -157,60 +169,45 @@ describe("createResolveTokenPrincipal", () => {
       identityId: identity.id,
       name: "Claude",
       tokenHash: hashApiToken(token),
+      access: { mode: "read", paths: ["/"] },
       expiresAt,
     });
     const resolve = createResolveTokenPrincipal({
       apiTokens: repos.apiTokens,
-      identities: repos.identities,
+      logins: repos.logins,
       clock: () => expiresAt,
-      storageFactory: async () => FAKE_STORAGE,
+      principalFor,
     });
 
     expect(await resolve(token)).toBeNull();
   });
 
-  it("returns null when the token has no identity", async () => {
+  it("refuses the token of a disabled or removed user on its next request", async () => {
     const repos = createMemoryRepos();
-    const { account } = await seedAccountWithIdentity(repos);
+    const { account, identity } = await seedAccountWithIdentity(repos);
     const token = generateApiToken();
     await repos.apiTokens.create({
       accountId: account.id,
-      identityId: null,
-      name: "Claude",
-      tokenHash: hashApiToken(token),
-      expiresAt: null,
-    });
-    const resolve = createResolveTokenPrincipal({
-      apiTokens: repos.apiTokens,
-      identities: repos.identities,
-      clock: () => new Date(),
-      storageFactory: async () => FAKE_STORAGE,
-    });
-
-    expect(await resolve(token)).toBeNull();
-  });
-
-  it("returns null when the identity no longer belongs to the token's account", async () => {
-    const repos = createMemoryRepos();
-    const { account, identity } = await seedAccountWithIdentity(repos);
-    const otherAccount = await repos.accounts.create({ displayName: "Mallory" });
-    const token = generateApiToken();
-    await repos.apiTokens.create({
-      accountId: otherAccount.id,
       identityId: identity.id,
       name: "Claude",
       tokenHash: hashApiToken(token),
+      access: { mode: "read", paths: ["/"] },
       expiresAt: null,
     });
-    void account;
     const resolve = createResolveTokenPrincipal({
       apiTokens: repos.apiTokens,
-      identities: repos.identities,
+      logins: repos.logins,
       clock: () => new Date(),
-      storageFactory: async () => FAKE_STORAGE,
+      principalFor,
     });
+    expect(await resolve(token)).toMatchObject({ identityId: identity.id });
 
-    expect(await resolve(token)).toBeNull();
+    await repos.localUsers.update("alice", { disabled: true });
+    await expect(resolve(token)).rejects.toMatchObject({ kind: "forbidden" });
+    await repos.localUsers.update("alice", { disabled: false });
+    expect(await resolve(token)).toMatchObject({ identityId: identity.id });
+    await repos.localUsers.delete("alice");
+    await expect(resolve(token)).rejects.toMatchObject({ kind: "forbidden" });
   });
 
   it("touches lastUsedAt on first use and does not touch again within the interval", async () => {
@@ -222,14 +219,15 @@ describe("createResolveTokenPrincipal", () => {
       identityId: identity.id,
       name: "Claude",
       tokenHash: hashApiToken(token),
+      access: { mode: "read", paths: ["/"] },
       expiresAt: null,
     });
     let now = new Date("2026-01-01T00:00:00.000Z");
     const resolve = createResolveTokenPrincipal({
       apiTokens: repos.apiTokens,
-      identities: repos.identities,
+      logins: repos.logins,
       clock: () => now,
-      storageFactory: async () => FAKE_STORAGE,
+      principalFor,
     });
 
     await resolve(token);
@@ -253,14 +251,15 @@ describe("createResolveTokenPrincipal", () => {
       identityId: identity.id,
       name: "Claude",
       tokenHash: hashApiToken(token),
+      access: { mode: "read", paths: ["/"] },
       expiresAt: null,
     });
     let now = new Date("2026-01-01T00:00:00.000Z");
     const resolve = createResolveTokenPrincipal({
       apiTokens: repos.apiTokens,
-      identities: repos.identities,
+      logins: repos.logins,
       clock: () => now,
-      storageFactory: async () => FAKE_STORAGE,
+      principalFor,
     });
 
     await resolve(token);
@@ -286,22 +285,28 @@ it("resolves explicit grants on each request and fails closed for malformed pers
   });
   const resolve = createResolveTokenPrincipal({
     apiTokens: repos.apiTokens,
-    identities: repos.identities,
+    logins: repos.logins,
     clock: () => new Date(),
-    storageFactory: async () => FAKE_STORAGE,
+    principalFor,
   });
   expect((await resolve(token))?.tokenAccess).toEqual({ mode: "read", paths: ["/docs"] });
-  const invalid = createResolveTokenPrincipal({
-    apiTokens: {
-      ...repos.apiTokens,
-      findByHash: async () =>
-        ({ ...created, access: { mode: "root", paths: [] } }) as unknown as typeof created,
-    },
-    identities: repos.identities,
-    clock: () => new Date(),
-    storageFactory: async () => FAKE_STORAGE,
-  });
-  expect(await invalid(token)).toBeNull();
+  // A token without access cannot be stored any more; one read without it still fails closed.
+  for (const access of [{ mode: "root", paths: [] }, null, undefined]) {
+    const found = await repos.logins.byToken(hashApiToken(token));
+    if (found === null) throw new Error("expected the token");
+    const invalid = createResolveTokenPrincipal({
+      apiTokens: repos.apiTokens,
+      logins: {
+        byToken: async () => ({
+          ...found,
+          token: { ...created, access } as unknown as typeof created,
+        }),
+      },
+      clock: () => new Date(),
+      principalFor,
+    });
+    expect(await invalid(token)).toBeNull();
+  }
   await repos.apiTokens.delete(created.id, account.id);
   expect(await resolve(token)).toBeNull();
 });

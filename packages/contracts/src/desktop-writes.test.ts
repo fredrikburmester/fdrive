@@ -11,14 +11,10 @@ import {
 } from "./desktop-writes.js";
 
 const id = "00000000-0000-4000-8000-000000000001";
-it("validates explicit per-identity grants without changing legacy defaults", () => {
-  expect(DesktopPairApproval.parse({ identityIds: [id] }).access).toBeUndefined();
-  expect(
-    DesktopPairApproval.parse({ identityIds: [id], access: { [id]: "full" } }).access?.[id],
-  ).toBe("full");
-  expect(
-    DesktopPairApproval.safeParse({ identityIds: [id], access: { [id]: "admin" } }).success,
-  ).toBe(false);
+it("approves read or full access and nothing else", () => {
+  expect(DesktopPairApproval.parse({ access: "read" }).access).toBe("read");
+  expect(DesktopPairApproval.parse({ access: "full" }).access).toBe("full");
+  expect(DesktopPairApproval.safeParse({ access: "admin" }).success).toBe(false);
 });
 it("rejects escaping, control, ambiguous and overlong filenames", () => {
   for (const name of ["", ".", "..", "a/b", "a:b", "a\u0000b", "a\u007fb", "🚀".repeat(64)])

@@ -5,12 +5,12 @@ import { ArrowLeftIcon, DownloadIcon } from "lucide-react";
 import type { Route } from "next";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { PageHeader } from "@/components/shell/page-header";
 import { Button } from "@/components/ui/button";
 import { useMe } from "@/lib/api/auth-queries";
+import { apiClient } from "@/lib/api/client";
 import { describeApiError, isReauthRequired } from "@/lib/api/errors";
-import { officeClientForIdentity } from "@/lib/api/office-queries";
 import { type OfficeMessage, validOfficeDescriptor } from "@/lib/office/messages";
 import {
   officeFolderHref,
@@ -21,46 +21,30 @@ import {
 import { OfficeFrame } from "./office-frame";
 
 export interface OfficePageProps {
-  identityId: string;
   path: string;
   mode: OfficeMode;
 }
 
 export function OfficePage(props: OfficePageProps) {
   const me = useMe();
-  if (me.isPending)
+  if (me.data === undefined)
     return (
       <p role="status" className="p-6 text-muted-foreground text-sm">
         Checking access…
       </p>
     );
-  if (!me.data?.identities.some((identity) => identity.id === props.identityId)) {
-    return (
-      <div className="space-y-3 p-6">
-        <p role="alert">This connection is not available to your account.</p>
-        <Button nativeButton={false} variant="outline" render={<Link href={"/files" as Route} />}>
-          Back to files
-        </Button>
-      </div>
-    );
-  }
   return (
     <OfficeSession
-      key={`${props.identityId}:${props.path}:${props.mode}`}
+      key={`${props.path}:${props.mode}`}
       {...props}
-      isActiveIdentity={me.data.activeIdentityId === props.identityId}
+      identityId={me.data.identity.id}
     />
   );
 }
 
-function OfficeSession({
-  identityId,
-  path,
-  mode,
-  isActiveIdentity,
-}: OfficePageProps & { isActiveIdentity: boolean }) {
+/** One open document; the descriptor must name the signed-in login and the requested path. */
+function OfficeSession({ identityId, path, mode }: OfficePageProps & { identityId: string }) {
   const router = useRouter();
-  const client = useMemo(() => officeClientForIdentity(identityId), [identityId]);
   const [descriptor, setDescriptor] = useState<OfficeOpenResponse | null>(null);
   const [currentPath, setCurrentPath] = useState(path);
   const [error, setError] = useState<string | null>(null);
@@ -68,7 +52,7 @@ function OfficeSession({
   const [attempt, setAttempt] = useState(0);
   const latestPath = useRef(path);
   const renameGeneration = useRef(0);
-  const folderHref = isActiveIdentity ? officeFolderHref(currentPath) : "/files";
+  const folderHref = officeFolderHref(currentPath);
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: A deliberate retry starts a new in-memory session.
   useEffect(() => {
@@ -77,7 +61,7 @@ function OfficeSession({
     setError(null);
     setReauth(false);
     setDescriptor(null);
-    void client
+    void apiClient
       .officeOpen({ path: openPath, mode })
       .then((response) => {
         if (!active) return;
@@ -101,7 +85,7 @@ function OfficeSession({
       active = false;
       renameGeneration.current += 1;
     };
-  }, [client, identityId, path, mode, attempt]);
+  }, [identityId, path, mode, attempt]);
 
   useEffect(() => {
     if (descriptor === null) return;
@@ -119,10 +103,9 @@ function OfficeSession({
 
   async function handleMessage(message: OfficeMessage) {
     if (message.MessageId === "UI_Close") router.push(folderHref as Route);
-    if (message.MessageId === "UI_Edit")
-      router.push(officeHref(identityId, currentPath, "edit") as Route);
+    if (message.MessageId === "UI_Edit") router.push(officeHref(currentPath, "edit") as Route);
     if (message.MessageId === "UI_Hyperlink") {
-      const target = officeHostTarget(message.Values.Url, window.location.origin, identityId);
+      const target = officeHostTarget(message.Values.Url, window.location.origin);
       if (target !== null) router.push(target as Route);
     }
     if (message.MessageId === "File_Rename" && descriptor !== null) {
@@ -130,7 +113,7 @@ function OfficeSession({
       if (renamed === null) return;
       const generation = ++renameGeneration.current;
       try {
-        const confirmed = await client.officeOpen({ path: renamed, mode: "view" });
+        const confirmed = await apiClient.officeOpen({ path: renamed, mode: "view" });
         if (
           generation !== renameGeneration.current ||
           confirmed.fileId !== descriptor.fileId ||
@@ -140,7 +123,7 @@ function OfficeSession({
         latestPath.current = confirmed.path;
         setCurrentPath(confirmed.path);
         // Updating history preserves the active edit iframe and its lock.
-        window.history.replaceState(null, "", officeHref(identityId, confirmed.path, mode));
+        window.history.replaceState(null, "", officeHref(confirmed.path, mode));
       } catch {
         if (generation !== renameGeneration.current) return;
         setError("The new document name could not be confirmed. Reopen it from its folder.");
@@ -165,13 +148,13 @@ function OfficeSession({
               render={<Link href={folderHref as Route} />}
             >
               <ArrowLeftIcon />
-              {isActiveIdentity ? "Back to folder" : "Back to files"}
+              Back to folder
             </Button>
             <Button
               nativeButton={false}
               variant="ghost"
               size="sm"
-              render={<a href={client.downloadUrl(currentPath)} download />}
+              render={<a href={apiClient.downloadUrl(currentPath)} download />}
             >
               <DownloadIcon />
               Download

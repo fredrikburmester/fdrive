@@ -15,7 +15,6 @@ export const SUBSYSTEMS = [
   "ocr",
   "thumbnails",
   "office",
-  "trash",
   "shares",
   "network",
 ] as const;
@@ -169,7 +168,7 @@ export const CONFIG_KEYS: readonly ConfigKeyDef[] = [
   {
     key: "FDRIVE_STORAGE_ROOT",
     description:
-      "Folder fdrive serves as its built-in storage, one home per user at <root>/<username>; fdrive keeps the users. Required: without it there is no storage and setup cannot finish.",
+      "Folder fdrive serves as its storage, one home per user at <root>/<username>; fdrive keeps the users. Required.",
     default: null,
     example: "/data",
     secret: false,
@@ -178,7 +177,7 @@ export const CONFIG_KEYS: readonly ConfigKeyDef[] = [
   {
     key: "FDRIVE_MASTER_KEY",
     description:
-      "Base64-encoded 32-byte key that encrypts stored credentials. Generate with `openssl rand -base64 32`; losing it makes stored credentials unrecoverable.",
+      "Base64-encoded 32-byte key that encrypts and signs what fdrive keeps secret: backup destination keys, AI provider keys, and share link and Office tokens. Generate with `openssl rand -base64 32`; losing it makes those secrets unrecoverable.",
     default: null,
     example: "change-me-32-random-bytes-base64==",
     secret: true,
@@ -229,23 +228,6 @@ export const CONFIG_KEYS: readonly ConfigKeyDef[] = [
     subsystem: "core",
   },
   {
-    key: "FDRIVE_DESKTOP_STATE_DIR",
-    description: "Persistent private directory for Mac upload recovery. Unset disables writes.",
-    default: null,
-    example: "/var/lib/fdrive/desktop",
-    secret: false,
-    subsystem: "core",
-  },
-  {
-    key: "FDRIVE_DESKTOP_RETENTION_DAYS",
-    description:
-      "Days to keep acknowledged or cancelled Mac write backups before reclaiming their storage.",
-    default: "30",
-    example: "30",
-    secret: false,
-    subsystem: "core",
-  },
-  {
     key: "FDRIVE_JOB_MAX_BYTES",
     description: "Cap on the bytes a single archive/extract job may read, in bytes.",
     default: "10737418240",
@@ -279,30 +261,12 @@ export const CONFIG_KEYS: readonly ConfigKeyDef[] = [
     subsystem: "shares",
   },
   {
-    key: "FDRIVE_ADMIN_USERS",
-    description:
-      "Comma-separated local usernames always treated as admins, in addition to account records.",
-    default: null,
-    example: "alice,bob",
-    secret: false,
-    subsystem: "core",
-  },
-  {
     key: "FDRIVE_SETUP_TOKEN",
     description:
       "Overrides the randomly generated one-time setup token. Mainly for tests and scripted installs.",
     default: null,
     example: "",
     secret: true,
-    subsystem: "core",
-  },
-  {
-    key: "FDRIVE_MCP_WRITES",
-    description:
-      "Enables create_folder and move_path for legacy MCP tokens only. New tokens use their individual access permissions.",
-    default: "false",
-    example: "false",
-    secret: false,
     subsystem: "core",
   },
   {
@@ -317,7 +281,7 @@ export const CONFIG_KEYS: readonly ConfigKeyDef[] = [
   {
     key: "FDRIVE_INDEXER_URL",
     description:
-      "Base URL of the indexer's internal HTTP API. Unset disables the System > Indexer page and MCP document extraction. Explicit tokens can still read UTF-8 files directly.",
+      "Base URL of the indexer's internal HTTP API. Unset disables the System > Indexer page and MCP document extraction. MCP can still read UTF-8 files directly.",
     default: null,
     example: "http://indexer:8010",
     secret: false,
@@ -402,15 +366,6 @@ export const CONFIG_KEYS: readonly ConfigKeyDef[] = [
     secret: false,
     subsystem: "office",
   },
-  {
-    key: "FDRIVE_OFFICE_EDIT_RULES",
-    description:
-      "Advanced per-identity path restrictions, applied in addition to the saved editor username list. Empty/unset adds no further restriction.",
-    default: null,
-    example: "[]",
-    secret: false,
-    subsystem: "office",
-  },
 ];
 
 /** A subsystem's configuration state, before any liveness probe is applied. */
@@ -456,7 +411,6 @@ export function subsystemsStatus(config: AppConfig): Record<Subsystem, Subsystem
         ? { status: "not_configured", missing: ["FDRIVE_OCR_URL"] }
         : { status: "configured", missing: [] },
     office: { status: "configured", missing: [] },
-    trash: { status: "configured", missing: [] },
   };
 }
 

@@ -1,38 +1,28 @@
 import { createHash, randomUUID } from "node:crypto";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import {
-  DesktopPairing,
-  DesktopWriteEntry,
-  DesktopWritePairResult,
-  MeResponse,
-} from "@fdrive/contracts";
-import { createDb, createDesktopEffectsRepo, createRepos } from "@fdrive/db";
+import { mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { DesktopPairing, DesktopWriteEntry, DesktopWritePairResult } from "@fdrive/contracts";
+import { createDb, createRepos } from "@fdrive/db";
 import { startLocalStorage, startPostgres } from "@fdrive/testkit";
 import pino from "pino";
-import { expect, it, vi } from "vitest";
+import { expect, it } from "vitest";
 import { composeApp } from "../../src/composition.js";
 import { loadConfig } from "../../src/config.js";
 import { seedLocalUsers } from "./helpers/local-storage.ts";
 
 /**
- * The Mac app's write path on the files folder, under fdrive's per-identity
- * publish lock: durable replay, conflict protection, Trash and restore, and
- * metadata effects that survive a database outage and a restart. Another
- * writer is a program changing alice's folder on disk.
+ * The Mac app's write path on the files folder, proven from the file stamp:
+ * durable replay, conflict protection, Trash and restore, and receipts that
+ * survive a metadata outage and a restart. Another writer is a program
+ * changing alice's folder on disk.
  */
 it("publishes complete files with durable replay and conflict protection", async () => {
   const postgres = await startPostgres();
   const storage = await startLocalStorage({ files: {} });
-  await seedLocalUsers(postgres.connectionString, storage);
-  const stateDir = await mkdtemp(join(tmpdir(), "fdrive-desktop-test-"));
+  await seedLocalUsers(postgres.connectionString, storage, ["alice"]);
   const config = loadConfig({
     DATABASE_URL: postgres.connectionString,
     FDRIVE_STORAGE_ROOT: storage.root,
     FDRIVE_MASTER_KEY: Buffer.alloc(32, 7).toString("base64"),
-    FDRIVE_ADMIN_USERS: "alice",
-    FDRIVE_DESKTOP_STATE_DIR: stateDir,
   });
   let composed = await composeApp(config, pino({ level: "silent" }));
   let cookie = "";
@@ -61,18 +51,15 @@ it("publishes complete files with durable replay and conflict protection", async
   const readDisk = (path: string) => readFile(onDisk(path), "utf8");
   try {
     const login = await call("/api/v1/auth/login", {
-      credential: { username: "alice", password: "alice-password" },
+      username: "alice",
+      password: "alice-password",
     });
     expect(login.status).toBe(200);
     cookie = login.headers.get("set-cookie")?.split(";")[0] ?? "";
-    const me = MeResponse.parse(await login.json());
     const pairResponse = await call(`${base}/pairings`, { deviceName: "Write test" });
     expect(pairResponse.status).toBe(201);
     const pairing = DesktopPairing.parse(await pairResponse.json());
-    await json(`/api/v1/desktop/pairings/${pairing.id}/approve`, {
-      identityIds: me.identities.map((i) => i.id),
-      access: Object.fromEntries(me.identities.map((i) => [i.id, "full"])),
-    });
+    await json(`/api/v1/desktop/pairings/${pairing.id}/approve`, { access: "full" });
     const pair = DesktopWritePairResult.parse(
       await json(`${base}/pairings/${pairing.id}/poll`, { secret: pairing.secret }),
     );
@@ -112,8 +99,10 @@ it("publishes complete files with durable replay and conflict protection", async
       return operationId;
     };
     const id = await upload("save.txt", "first");
-    // Incoming content is invisible until the explicit commit.
+    // Incoming content is staged in the files folder, invisible until the explicit commit.
     await expect(readDisk("/save.txt")).rejects.toMatchObject({ code: "ENOENT" });
+    const incoming = `/.fdrive-desktop/${writable.location.identityId}/incoming`;
+    expect(await readdir(onDisk(`${incoming}/${id}`))).toHaveLength(1);
     const result = (await json(`${base}/operations/${id}/commit`, {})) as { item: unknown };
     const original = DesktopWriteEntry.parse(result.item);
     expect(await readDisk("/save.txt")).toBe("first");
@@ -121,11 +110,13 @@ it("publishes complete files with durable replay and conflict protection", async
     const next = await upload("save.txt", "second", original);
     const saved = (await json(`${base}/operations/${next}/commit`, {})) as {
       item: unknown;
-      recoveryId: string;
+      recoveryId: string | null;
     };
     expect(DesktopWriteEntry.parse(saved.item).id).toBe(original.id);
-    expect(saved.recoveryId).toBe(next);
     expect(await readDisk("/save.txt")).toBe("second");
+    // Nothing of what the save replaced is kept, and what it staged is gone.
+    expect(saved.recoveryId).toBeNull();
+    expect(await readdir(onDisk(incoming))).toEqual([]);
     await json(`${base}/operations/${next}/acknowledge`, {});
     expect(await json(`${base}/operations/${next}`)).toEqual(saved);
     // A stale base may not overwrite a later edit, including identical-length edits.
@@ -240,11 +231,11 @@ it("publishes complete files with durable replay and conflict protection", async
     expect(await readDisk("/Tree/nested/new.txt")).toBe("new");
 
     // A successful publication remains completed even when PostgreSQL refuses
-    // its metadata effects. A fresh API process drains the durable work.
+    // its metadata, and nothing waits for that metadata: the indexer's report
+    // of the move brings it along (`desktop-metadata.test.ts`).
     const database = createDb(postgres.connectionString);
     try {
       const repos = createRepos(database.db);
-      const recovery = createDesktopEffectsRepo(database.db);
       await repos.favorites.add(writable.location.identityId, "/restored.txt", "file");
       await database.pool.query(
         `CREATE FUNCTION app.reject_native_metadata() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF OLD.path = '/restored.txt' THEN RAISE EXCEPTION 'injected metadata outage'; END IF; RETURN NEW; END $$`,
@@ -255,35 +246,17 @@ it("publishes complete files with durable replay and conflict protection", async
       const rename = await move(await stat("/restored.txt"), "root", "recovered.txt");
       const receipt = await json(`${base}/operations/${rename}/commit`, {});
       expect(receipt).toMatchObject({ state: "completed", item: { path: "/recovered.txt" } });
-      await vi.waitFor(
-        async () => {
-          expect(
-            (await recovery.status()).find((job) => job.operationId === rename)?.attempts,
-          ).toBeGreaterThan(0);
-        },
-        { timeout: 15000 },
-      );
       expect((await repos.favorites.list(writable.location.identityId))[0]?.path).toBe(
         "/restored.txt",
       );
       expect(await json(`${base}/operations/${rename}/commit`, {})).toEqual(receipt);
-      // Preserve an independently recreated source even after recovery/replay.
+      // Preserve an independently recreated source even after a replay.
       await writeFile(onDisk("/restored.txt"), "peer after rename");
       await composed.close();
       await database.pool.query("DROP TRIGGER reject_native_metadata ON app.favorites");
-      await database.pool.query(
-        "UPDATE app.desktop_effects SET next_attempt_at = now() WHERE state = 'pending'",
-      );
+      await database.pool.query("DROP FUNCTION app.reject_native_metadata()");
       composed = await composeApp(config, pino({ level: "silent" }));
-      await vi.waitFor(
-        async () => {
-          expect(await recovery.pending(writable.location.identityId)).toBe(false);
-        },
-        { timeout: 15000 },
-      );
-      expect((await repos.favorites.list(writable.location.identityId))[0]?.path).toBe(
-        "/recovered.txt",
-      );
+      // A restarted API answers with the same receipt and publishes nothing again.
       expect(await json(`${base}/operations/${rename}/commit`, {})).toEqual(receipt);
       expect(await readDisk("/recovered.txt")).toBe("second");
       expect(await readDisk("/restored.txt")).toBe("peer after rename");
@@ -299,6 +272,5 @@ it("publishes complete files with durable replay and conflict protection", async
     await composed.close();
     await storage.stop();
     await postgres.stop();
-    await rm(stateDir, { recursive: true, force: true });
   }
 }, 600_000);

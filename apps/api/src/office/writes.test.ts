@@ -241,7 +241,7 @@ describe("PutRelative", () => {
     expect(result.status).toBe(200);
     const json = (await result.json()) as { Name: string; HostEditUrl: string; Url: string };
     expect(json.Name).toBe("a (1).docx");
-    expect(json.HostEditUrl).toContain(encodeURIComponent(h.alice.identity.id));
+    expect(json.HostEditUrl).toBe(`${h.config.appUrl}/office/a%20(1).docx?mode=edit`);
     const target = new URL(json.Url);
     const id = target.pathname.split("/").at(-1) ?? "";
     const token = target.searchParams.get("access_token") ?? "";
@@ -361,7 +361,7 @@ describe("RenameFile", () => {
     expect(move).toHaveBeenCalledWith("/a.docx", "/plain.docx", { overwrite: false });
     move.mockRejectedValueOnce(new StorageError("forbidden", "private"));
     expect((await rename()).status).toBe(403);
-    expect((await h.files.get(opened.fileId))?.path).toBe("shared/a.docx");
+    expect((await h.files.get(opened.fileId))?.path).toBe("/a.docx");
     expect(h.events).toHaveLength(0);
   });
   it("preserves UUID, extension, tags and favorites when renaming Unicode", async () => {
@@ -380,7 +380,7 @@ describe("RenameFile", () => {
     });
     expect(result.status).toBe(200);
     expect(await result.json()).toEqual({ Name: "Årsrapport" });
-    expect((await h.files.get(opened.fileId))?.path).toBe("shared/Årsrapport.docx");
+    expect((await h.files.get(opened.fileId))?.path).toBe("/Årsrapport.docx");
     expect(await h.deps.metadata.filesForTag(h.alice.identity.id, tag.id)).toEqual([
       "/Årsrapport.docx",
     ]);
@@ -511,7 +511,7 @@ it("retains extension case during rename", async () => {
       })
     ).status,
   ).toBe(200);
-  expect((await h.files.get(opened.fileId))?.path).toBe("shared/Renamed.DOCX");
+  expect((await h.files.get(opened.fileId))?.path).toBe("/Renamed.DOCX");
 });
 
 it("refuses a chunked oversized save without touching the document", async () => {
@@ -554,7 +554,7 @@ it("keeps lock and move work on the scope, ensures on its own and runs metadata 
     }
   });
   // Ensured on its own transaction: on the scope it would hold the registry's
-  // lock for the whole root until the document is written.
+  // lock for the owner's files until the document is written.
   const ensure = vi.spyOn(scopedFiles, "ensure");
   vi.spyOn(h.files, "movePrefix").mockImplementation(async (input) => {
     expect(inScope).toBe(false);
@@ -646,7 +646,7 @@ it("saves a queued PUT to the current registry path after an earlier rename", as
     "queued edit",
   );
   await expect(h.storage.statFile("/a.docx")).rejects.toThrow();
-  expect((await h.files.get(opened.fileId))?.path).toBe("shared/renamed.docx");
+  expect((await h.files.get(opened.fileId))?.path).toBe("/renamed.docx");
 });
 
 it("denies a PUT queued behind deletion without recreating its old path", async () => {
@@ -662,9 +662,8 @@ it("denies a PUT queued behind deletion without recreating its old path", async 
       await release.promise;
       await h.storage.deleteFile("/a.docx");
       await scope.files.deletePrefix({
-        providerId: h.provider.id,
-        rootName: "files",
-        path: "shared/a.docx",
+        identityId: h.alice.identity.id,
+        path: "/a.docx",
         at: h.clock(),
       });
     }),
@@ -704,10 +703,8 @@ it.each(["RENAME_FILE", "PUT_RELATIVE"])(
       withWriteScope(async (scope) => {
         await h.storage.move("/a.docx", "/folder/current.DOCX");
         await scope.files.movePrefix({
-          providerId: h.provider.id,
-          rootName: "files",
-          from: "shared/a.docx",
-          to: "shared/folder/current.DOCX",
+          from: { identityId: h.alice.identity.id, path: "/a.docx" },
+          to: { identityId: h.alice.identity.id, path: "/folder/current.DOCX" },
           at: h.clock(),
         });
         return callback(scope);
@@ -730,7 +727,7 @@ it.each(["RENAME_FILE", "PUT_RELATIVE"])(
     );
     await expect(h.storage.statFile("/a.docx")).rejects.toThrow();
     if (override === "RENAME_FILE") {
-      expect((await h.files.get(opened.fileId))?.path).toBe("shared/folder/final.DOCX");
+      expect((await h.files.get(opened.fileId))?.path).toBe("/folder/final.DOCX");
       expect(h.events).toContainEqual(
         expect.objectContaining({
           type: "fs",
@@ -743,7 +740,7 @@ it.each(["RENAME_FILE", "PUT_RELATIVE"])(
         Name: "copy.docx",
         HostViewUrl: expect.stringContaining("/folder/copy.docx?mode=view"),
       });
-      expect((await h.files.get(opened.fileId))?.path).toBe("shared/folder/current.DOCX");
+      expect((await h.files.get(opened.fileId))?.path).toBe("/folder/current.DOCX");
     }
   },
 );

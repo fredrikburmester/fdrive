@@ -194,7 +194,7 @@ test("favorites and tags follow the global default without inheriting a folder p
     .getByRole("button", { name: "Grid", exact: true })
     .click();
   await page.goto("/favorites");
-  await expect(page.locator('[data-slot="account-favorites-grid"]')).toBeVisible();
+  await expect(page.locator('[data-slot="file-grid"]')).toBeVisible();
   await page.goto(`/tags/${tag.id}`);
   await expect(page.locator('[data-slot="file-grid"]')).toBeVisible();
   await expect(page.getByRole("button", { name: "View", exact: true })).toHaveCount(0);

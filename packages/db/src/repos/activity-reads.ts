@@ -251,7 +251,7 @@ export function createActivityReadsRepo(db: Db, clock: () => Date = () => new Da
         return windows.length;
       });
     },
-    async provisional(accountId: string, identityId?: string) {
+    async provisional(accountId: string) {
       return db
         .select()
         .from(activityReadWindows)
@@ -259,7 +259,6 @@ export function createActivityReadsRepo(db: Db, clock: () => Date = () => new Da
           and(
             eq(activityReadWindows.ownerAccountId, accountId),
             isNull(activityReadWindows.sealedAt),
-            identityId ? eq(activityReadWindows.identityId, identityId) : undefined,
           ),
         )
         .orderBy(desc(activityReadWindows.lastAt))

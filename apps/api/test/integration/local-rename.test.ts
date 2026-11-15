@@ -188,9 +188,6 @@ describe("a folder renamed on disk outside fdrive, through the real indexer", ()
           path: String(row.path).replace(/^alice\/docs\//, "alice/renamed/"),
         })),
       );
-      // The move log is MCP's own: the indexer records the move only in the journal.
-      const moves = await db.execute(sql`select src, dst, actor from idx.moves`);
-      expect(moves.rows).toEqual([]);
       // The indexer journals the move it applied for every later reader; its
       // first scan, of an empty index, journaled nothing.
       const journal = await db.execute(sql`select path, target_path, source from idx.changes`);

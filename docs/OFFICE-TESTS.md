@@ -63,7 +63,7 @@ do not establish persistence.
 - Collabora opens, edits, saves and reopens a real OpenDocument fixture. Reopened
   rendered word count confirms the saved text is loaded.
 - Recents and Favorites open the preview and its View in office action preserves
-  the selected identity and exact filename. The viewer renders saved text.
+  the exact filename. The viewer renders saved text.
 
 The read-only coediting regression initially reproduced a real host authorization
 bug: Reader's marker reached saved DOCX bytes through Alice's Save. The host now
@@ -71,10 +71,9 @@ rejects Reader's explicit edit request before editor admission, while view mode
 still works during Alice's editing session. Alice's saved bytes contain her marker
 and no Reader marker. A direct Reader upload denial alone is insufficient.
 
-Fixture admission derives from the known seeded users and permissions in the
-shared test fixture. Production defaults to view-only and needs explicit operator
-edit grants. The fixture does not infer writable capability from successful reads
-or claim a storage permission-introspection API. See [Office deployment](OFFICE.md).
+Fixture admission is production's: alice and bob are the chosen editors, and alice's
+team folder is shared with reader to view only. Production defaults to view-only and
+needs an explicit editor list. See [Office deployment](OFFICE.md).
 
 The suite exposed three other production defects: a zero-slide PPTX template,
 ONLYOFFICE's timestamp-based view cache key, and Collabora's missing UTF-8 locale.
@@ -85,7 +84,7 @@ fresh view. Collabora uses the pinned 26.04.3.2.1 locale fix. Image digests come
 `deploy/office/compose.services.yaml`.
 
 A separate deterministic API regression covers writes queued behind rename or
-deletion. Every write resolves the current registry row and canonical virtual path
+deletion. Every write resolves the current registry row and the caller's path to it
 under the document's lock, retaining the already resolved credentials. A
 queued save follows the renamed UUID; deletion denies the save without recreating
 the old path.

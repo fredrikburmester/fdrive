@@ -43,39 +43,21 @@ const prefix = z
       value.split("/").every((part) => part !== ".." && part !== "."),
     "Invalid backup path",
   );
-export const BackupDestinationInput = z.discriminatedUnion("type", [
-  z
-    .object({
-      type: z.literal("s3"),
-      name: z.string().trim().min(1).max(120),
-      endpoint,
-      region: z.string().min(1).max(100),
-      bucket: z.string().min(3).max(63),
-      prefix,
-      pathStyle: z.boolean().default(false),
-      accessKeyId: z.string().min(1).max(500),
-      secretAccessKey: z.string().min(1).max(2000),
-    })
-    .strict(),
-  z
-    .object({
-      type: z.literal("provider"),
-      name: z.string().trim().min(1).max(120),
-      providerId: z.uuid(),
-      prefix,
-      credential: z.record(z.string(), z.string().max(4096)),
-    })
-    .strict(),
-]);
-export type BackupDestinationInput = z.infer<typeof BackupDestinationInput>;
-export const BackupAttachmentInput = z
+/** An S3-compatible bucket (AWS S3, Backblaze B2, MinIO): the only place a backup is copied to. */
+export const BackupDestinationInput = z
   .object({
-    label: z.string().trim().min(1).max(120),
-    filename: z.string().min(1).max(255),
-    sourceDate: z.iso.datetime().nullable().default(null),
-    notes: z.string().max(4000).default(""),
+    type: z.literal("s3"),
+    name: z.string().trim().min(1).max(120),
+    endpoint,
+    region: z.string().min(1).max(100),
+    bucket: z.string().min(3).max(63),
+    prefix,
+    pathStyle: z.boolean().default(false),
+    accessKeyId: z.string().min(1).max(500),
+    secretAccessKey: z.string().min(1).max(2000),
   })
   .strict();
+export type BackupDestinationInput = z.infer<typeof BackupDestinationInput>;
 export const BackupRunInput = z
   .object({
     destinationIds: z.array(z.uuid()).max(20).default([]),
@@ -171,21 +153,6 @@ export const BackupsResponse = z.object({
         .object({ name: z.string(), retentionUntil: z.string() })
         .nullable()
         .default(null),
-    }),
-  ),
-  attachments: z.array(
-    z.object({
-      id: z.uuid(),
-      versionId: z.uuid(),
-      label: z.string(),
-      filename: z.string(),
-      sourceDate: z.string().nullable(),
-      lastCapturedBackupId: z.string().nullable().optional(),
-      lastCapturedAt: z.string().nullable().optional(),
-      notes: z.string(),
-      uploadedAt: z.string(),
-      bytes: z.string(),
-      sha256: z.string(),
     }),
   ),
   runs: z.array(BackupRunSummary),

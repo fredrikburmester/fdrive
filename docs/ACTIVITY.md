@@ -15,9 +15,8 @@ Source of truth: the [schema](../packages/db/src/schema/activity.ts) and its mig
 
 ## Rules
 
-- The private owner is the authenticated **account**, so one timeline covers every login it
-  has. Each event also keeps its **storage identity**, for paths, location filters and
-  share/grant checks. Every API, count, lineage edge, export and notification is owner-scoped.
+- The private owner is the authenticated **account**, so one timeline covers its login. Each
+  event also keeps its **storage identity**, for paths and share/grant checks. Every API, count, lineage edge, export and notification is owner-scoped.
 - Actions belong to their actor, who is the owner. Unknown observations have no actor and
   attach only to files the owner already tracks. Shared-file access and administrator rights
   never reveal another user's actions; there is no global feed.
@@ -42,13 +41,13 @@ Source of truth: the [schema](../packages/db/src/schema/activity.ts) and its mig
   uses the outcome stage; its later resolution uses reconciliation and links the earlier event.
 - `outcome`: `success | failed | denied | cancelled | skipped | conflict | partial | unknown`.
   Outcomes describe the named operation, not whether an HTTP request returned 200.
-- `source`: `web | api | ai | office | mcp | native | indexer | refresh`. `ai` marks a mutation
+- `source`: `web | api | ai | office | mcp | native | indexer`. `ai` marks a mutation
   the person approved in AI organize or AI chat; `detail` names which, with its run or
   conversation. The actor stays the authenticated account: the assistant proposes, the person
   applies.
 - `evidence`: `server_confirmed | client_reported | watcher_move | watcher_change |
-  sha256_relink | provider_version | refresh_comparison | reconciled`. Evidence is structured
-  with bounded detail; its label does not itself grant access.
+  sha256_relink | reconciled`. Evidence is structured with bounded detail; its label does not
+  itself grant access.
 - `schemaVersion`: `1`. The client validates this version and the enumerated actions; a future
   version needs a compatible client and contract, never reinterpretation as a successful upload.
 
@@ -190,14 +189,14 @@ owner/event and identity/file references protect subjects and related rows.
 
 | Table | Columns / role |
 | --- | --- |
-| `activity_storage_identities` | `identity_id` PK, `provider_id`, `provider_type`, `label`, `retired_at`. Durable snapshot; no cascading foreign key to live logins or providers. |
+| `activity_storage_identities` | `identity_id` PK, `label` (the login's username). Durable snapshot; no foreign key to live logins. |
 | `activity_files` | `id` PK, `identity_id`, `kind`, `virtual_path`, `generation`, `revision_id`, `state`, `first_observed_at`, `last_confirmed_at`, `fingerprint`. A live path is unique per identity. State: live, trashed, deleted or unknown. No unique content hash. |
-| `activity_file_bridges` | PK identity/namespace/external_id, `file_id`; namespaces Office, desktop and provider. Mac prepare resolves the Finder bridge even while trashed. |
+| `activity_file_bridges` | PK identity/namespace/external_id, `file_id`; namespaces Office and desktop. Mac prepare resolves the Finder bridge even while trashed. |
 | `activity_file_locations` | `id`, `file_id`, `identity_id`, `virtual_path`, `valid_from`, `valid_until`, `generation`. Internal continuity state; public history comes from owned snapshots. |
 | `activity_operations` | `id`, owner, actor, identity, action, source, request digest, producer operation, batch and parent IDs, file, generation, revision, state, before and requested JSON, times, `final_event_id`. Mutable recovery state, independent of history retention. |
 | `activity_streams` | Owner PK, `next_sequence`, `history_starts_at`, `retained_from`. Allocates commit-ordered per-owner sequences; no global cursor or count leaks. |
 | `activity_event_subjects` | Owner, event, identity and file IDs, role, `subject_ordinal`, path snapshot, revision. PK event/identity/role/ordinal. Ordinals increase within an event so cursor pages include every role; bulk membership is paginated, not packed into event JSON. |
-| `activity_revisions` | ID, file, identity, owner, event, `provider_version`, `sha256`, size, previous revision. Evidence only; unknown measurements stay null. |
+| `activity_revisions` | ID, file, identity, owner, event, `sha256`, size, previous revision. Evidence only; unknown measurements stay null. |
 | `activity_lineage` | ID, owner, event, source and target file and identity, kind, evidence. Copy, Save As, archive member and derived edges. |
 | `activity_trash_bindings` | File, identity, owner, event, original path, Trash leaf, state. The leaf is the one fdrive moved the item to; a delete that reported no leaf stays unresolved. |
 | `activity_observation_state` | Owner, identity, file, generation, discrepancy, evidence fingerprint, event and resolved event, check and detection times. Persistent dedupe and resolution links. |
@@ -207,9 +206,8 @@ owner/event and identity/file references protect subjects and related rows.
 | `activity_exports` | ID, owner, format, state, filters, snapshot sequence, times, row count, error code. A ready snapshot manifest; bytes stream on demand. |
 | `activity_export_reads` | PK owner/export/window; an immutable copy of each unsealed read window at export time. |
 
-Names, labels and paths in public events are virtual snapshots; indexer and Office
-root-relative inputs pass through the [round trip](../apps/api/src/scoping/round-trip.ts) of
-configured scopes. Only opaque Office, Finder and provider references enter the bridge. Cookies,
+Names, labels and paths in public events are virtual snapshots; indexer root-relative inputs
+pass through the [round trip](../apps/api/src/scoping/round-trip.ts) of configured scopes. Only opaque Office and Finder references enter the bridge. Cookies,
 bearer tokens, passwords, raw host paths, file contents and secret share URLs are excluded by the
 facts schema. Session and credential context is hashed before read aggregation.
 
@@ -237,48 +235,40 @@ facts schema. Session and credential context is hashed before read aggregation.
    sequence and copy unsealed reads in one transaction, so late seals and outcomes cannot cross
    the export cutoff.
 
-Linking a login to another account never transfers authorship; tags and favorites keep their
-own transfer behavior. Recently opened is built from attributed opens, grouped before limiting
-to 100 distinct live paths, and follows known moves. Account deletion follows the account
-deletion policy; unlinking a login or removing storage keeps the identity snapshots and disables
-live file actions.
+Recently opened is built from attributed opens, grouped before limiting to 100 distinct live
+paths, and follows known moves. Account deletion follows the account deletion policy; removing
+a login keeps its identity snapshot and disables live file actions.
 
 ## How observations arise
 
 Changes made outside fdrive reach history only as observations of files the owner already
-tracks; nobody else's new files are added. Two inputs feed them
-([observations.ts](../apps/api/src/activity/observations.ts)):
+tracks; nobody else's new files are added. They come from the indexer: with index roots
+configured, the API listens to its `idx_events` notifications
+([indexer listener](../apps/api/src/events/indexer-listener.ts),
+[observations.ts](../apps/api/src/activity/observations.ts)) and maps each root-relative path
+through the login's configured scopes. Listings and other reads never compare anything with
+history.
 
-- **Index notifications.** With index roots configured, the API listens to the indexer's
-  `idx_events` notifications ([indexer listener](../apps/api/src/events/indexer-listener.ts))
-  and maps each root-relative path through the login's configured scopes.
-  - `moved` to a readable destination records `observation.location_changed` (`watcher_move`)
-    for each tracked file under the source. A destination outside the login's scopes records
-    `observation.left_scope` without it; an unreadable one records nothing. A destination where
-    another tracked file already lives records `observation.continuity_unknown`; the two are
-    never merged.
-  - `deleted` records `observation.location_missing` (`watcher_change`) for tracked files under
-    the path, only when it is really gone and its parent can still be listed.
-  - `created` and `changed` compare a readable file's size and modification time with what
-    history last confirmed; a difference is `observation.content_changed`.
-  - When a deleted index row's SHA-256 matches exactly one live row in the same root and
-    scope, the listener moves tags and favorites to it and, if the candidate is readable,
-    records `observation.continuity_unknown` (`sha256_relink`): a candidate, not proof.
-- **Listings.** Each complete folder listing is compared, beside the response, with up to 100
-  of the owner's tracked children. Those missing from the listing, or whose size or
-  modification time differ, are checked live, at most eight per listing, and the next listing
-  continues where it stopped. A file gone
-  while its parent still lists is `observation.location_missing` (`refresh_comparison`).
-  `POST /files/:fileId/recheck` runs the same live check on request.
+- `moved` to a readable destination records `observation.location_changed` (`watcher_move`)
+  for each tracked file under the source. A destination outside the login's scopes records
+  `observation.left_scope` without it; an unreadable one records nothing. A destination where
+  another tracked file already lives records `observation.continuity_unknown`; the two are
+  never merged.
+- `deleted` records `observation.location_missing` (`watcher_change`) for tracked files under
+  the path, only when it is really gone and its parent can still be listed.
+- `created` and `changed` compare a readable file's size and modification time with what
+  history last confirmed; a difference is `observation.content_changed`.
+- When a deleted index row's SHA-256 matches exactly one live row in the same root and
+  scope, the listener moves tags and favorites to it and, if the candidate is readable,
+  records `observation.continuity_unknown` (`sha256_relink`): a candidate, not proof.
 
 A file seen again after a gap appends `observation.resolved`, linked to the gap. That resolves
 where the file is, not who it is: the rediscovered file gets a new ID and the earlier journey
 stays unknown, since path, size or hash cannot prove continuity across the gap. Observations
 are deduplicated per file, generation and discrepancy (`activity_observation_state`), across
-listings and restarts. A notification that arrives while an fdrive operation on that path is
-prepared or running is dropped; that operation owns the uncertainty. The feed's
-`coverage.observations` is `watcher_and_refresh` with index roots configured and `refresh`
-without.
+notifications and restarts. A notification that arrives while an fdrive operation on that path
+is prepared or running is dropped; that operation owns the uncertainty. The history page says
+that changes made outside fdrive appear once the indexer notices them.
 
 The UI shows the last-known location, last-confirmed time, detection time and evidence, for
 example "File no longer found at /Documents/invoice.pdf. It may have moved or been removed
@@ -312,32 +302,31 @@ A new file command needs its action in the contracts and a history test before r
   separately in groups of 100. Batch totals count each operation's latest outcome once.
 - Nothing is pruned except read receipts after 24 hours. Export access expires after 24 hours,
   which prunes neither history nor export snapshot rows. `retained_from` stays null.
-- Listing comparison checks at most 100 tracked candidates and eight live checks per listing;
-  notifications page tracked files 100 at a time. Nothing starts a recursive scan or hash from
+- Notifications page tracked files 100 at a time. Nothing starts a recursive scan or hash from
   the timeline.
 
 ## API
 
 Paths are under `/api/v1/activity`. Only browser account sessions read history; MCP, Mac and
-other tokens get no history API. There is no owner parameter: another account's event, file or
-export ID is not found. Live actions recheck the identity's owner and read access. Responses are
-uncached.
+other tokens get no history API. MCP's `recent_moves` tool reads one slice of it directly: the
+token's own login's successful `file.move` events from source `mcp`, inside the token's
+folders. There is no owner parameter: another account's event, file or
+export ID is not found. Live actions probe only the session's own login and recheck read
+access. Responses are uncached.
 
 | Method/path | Contract |
 | --- | --- |
-| `GET /` | identityId/action/source/outcome/from/to/q/cursor/limit filters; items, provisionalReads, nextCursor, historyStartsAt, retainedFrom, coverage. |
-| `GET /locations` | The owner's historical storage identities and labels, including disconnected ones. |
+| `GET /` | action/source/outcome/from/to/q/cursor/limit filters; items, provisionalReads, nextCursor, historyStartsAt, retainedFrom. |
 | `GET /events/:eventId` | One owned event with up to 20 preview subjects and `subjectsTruncated`. |
 | `GET /events/:eventId/subjects` | Signed cursor; complete membership in pages of 100. |
-| `GET /files/resolve?identityId=…&path=…` | The journey ID of an already tracked path, for the inspector. 404 before anything is recorded. |
+| `GET /files/resolve?path=…` | The journey ID of an already tracked path of the session's login, for the inspector. 404 before anything is recorded. |
 | `GET /files/:fileId` | Label, kind, last-known and current path, availability, last confirmation, revision. Current path is null when unreadable. |
 | `GET /files/:fileId/events` | The feed's filters, limited to that file. |
 | `GET /batches/:batchId/events` | The feed plus `batchSummary` `{total, outcomes}`, counting every owned operation in the batch regardless of filters. |
 | `GET /files/:fileId/lineage` | Paginated owned edges and safe path snapshots. |
 | `GET /files/:fileId/revisions` | Paginated owned revision metadata; no historical bytes. |
 | `GET /stream` | Server-Sent Events: committed sequences from the outbox, resumable with a signed `Last-Event-ID` or cursor. Checks authority and polls every two seconds. |
-| `POST /client-events` | Identity, logical request UUID, time, path, allowlisted gesture, optional share ID. The server supplies the owner and `client_reported` evidence. 300 per account per minute. |
-| `POST /files/:fileId/recheck` | A bounded live check for an owned, readable file; `{checked: boolean}`. 12 per account per minute. |
+| `POST /client-events` | Logical request UUID, time, path, allowlisted gesture, optional share ID. The server supplies the owner, the session's login and `client_reported` evidence. 300 per account per minute. |
 | `POST /exports` | `{format: json\|csv, filters}`, the feed's filters plus fileId or batchId. 202 with a ready manifest ID, format and expiry. 20 per account per minute. |
 | `GET /exports/:id` | Manifest state, format and expiry. |
 | `GET /exports/:id/download` | JSON or CSV stream with all matching subjects, read windows, lineage and revisions. CSV cells neutralize formulas; an interrupted stream is an incomplete download. 6 per account per minute. |
@@ -356,7 +345,7 @@ and `x-fdrive-batch-id`.
 | System settings, maintenance, indexing and OCR | Stay in the administrator log and worker logs; never a user's save. An unexpected change to a tracked file can still be an observation. |
 | Public share recipients | Their downloads and uploads are never attributed to the link's owner. A resulting change can be an observation for a tracked file. |
 | Cached or offline opens on the Mac | Not observable. Mac downloads (`file.materialize`) and writes are recorded. |
-| No index roots, or a gap in notifications | Only listing comparison observes outside changes; fdrive's own actions are still recorded. `LISTEN` is not a durable replay log, and a same-size, same-time change without other evidence is not seen. |
+| No index roots, or a gap in notifications | Nothing observes outside changes; fdrive's own actions are still recorded. `LISTEN` is not a durable replay log, and a same-size, same-time change without other evidence is not seen. |
 | Commands that do not exist yet | Get their action and history test when they ship. |
 
 ## Tests
@@ -370,5 +359,6 @@ and `x-fdrive-batch-id`.
   events across two owners with a one-second p95 ceiling for feed, journey and old-name search,
   a local regression budget rather than a hardware promise.
 - Web: `lib/activity/api.test.ts`, `lib/activity/queries.test.tsx` and the browser spec
-  [recent-activity.spec.ts](../apps/web/e2e/recent-activity.spec.ts), which also moves a file on
-  disk outside fdrive and checks the missing and rediscovered evidence.
+  [recent-activity.spec.ts](../apps/web/e2e/recent-activity.spec.ts), which also moves a file
+  out of the files folder and back, reports each change as the indexer's watcher would, and
+  checks the missing and rediscovered evidence.

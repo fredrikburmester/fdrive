@@ -25,20 +25,9 @@ vi.mock("@/components/shell/folder-tree", () => ({
   ),
 }));
 
-const ada: MeResponse["identities"][number] = makeIdentity({ capabilities: { trash: true } });
+const ada: MeResponse["identity"] = makeIdentity();
 
-const me = makeMe({
-  identities: [ada],
-  activeIdentityId: "one",
-});
-
-/** `me` with its only login's capabilities overridden. */
-function withCapabilities(overrides: Partial<MeResponse["identities"][number]["capabilities"]>) {
-  return {
-    ...me,
-    identities: [{ ...ada, capabilities: { ...ada.capabilities, ...overrides } }],
-  };
-}
+const me = makeMe({ identity: ada, trash: true });
 
 function renderSidebar(account: MeResponse = me) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -46,7 +35,7 @@ function renderSidebar(account: MeResponse = me) {
   client.setQueryData(["favorites", "list"], []);
   client.setQueryData(["recents", "list"], []);
   client.setQueryData(["tags", "list"], []);
-  client.setQueryData(["grants", "list"], { available: true, owned: [], received: [] });
+  client.setQueryData(["grants", "list"], { owned: [], received: [] });
   return render(
     <QueryClientProvider client={client}>
       <SidebarProvider>
@@ -94,29 +83,18 @@ it("links the fdrive wordmark to the root of Files", async () => {
   expect(wordmark.getAttribute("href")).toBe("/files");
 });
 
-it("hides Trash when no linked login has one", async () => {
-  renderSidebar(withCapabilities({ trash: false }));
+it("hides Trash when the login has none", async () => {
+  renderSidebar({ ...me, trash: false });
   await screen.findByRole("link", { name: "Shares" });
   expect(screen.queryByRole("link", { name: "Trash" })).toBeNull();
 });
 
-it("shows Trash when any linked login has it, and names each login's provider type", async () => {
-  renderSidebar({
-    ...me,
-    identities: [
-      { ...ada, capabilities: { ...ada.capabilities, trash: false } },
-      {
-        ...ada,
-        id: "two",
-        username: "bob",
-        providerLabel: "Other",
-        capabilities: { ...ada.capabilities, trash: true },
-      },
-    ],
-  });
+it("shows Trash when the login has it, and names the signed-in login and its storage", async () => {
+  renderSidebar();
   await screen.findByRole("link", { name: "Shares" });
   expect(screen.getByRole("link", { name: "Trash" })).toBeTruthy();
-  expect(screen.getByRole("img", { name: "fdrive" })).toBeTruthy();
+  expect(screen.getByText("ada")).toBeTruthy();
+  expect(screen.getByText("Main")).toBeTruthy();
 });
 
 it("applies tighter vertical nav item spacing via scoped descendant styles on SidebarContent", () => {
