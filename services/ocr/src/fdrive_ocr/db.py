@@ -1,9 +1,8 @@
 """All SQL. This service never creates or alters tables: schema ownership lives
 in `packages/db/drizzle/*.sql`. It reads `app.settings` (shared with the
-indexer), `idx.roots` (upserting by name, same as the indexer) and the PDFs the
-indexer recorded in `idx.files`, and owns `idx.ocr_log` (the done-log) and
-`idx.ocr_runs` (nightly pass history). It journals the files it rewrites in
-`idx.changes`, as the API does its own.
+indexer) and the PDFs the indexer recorded in `idx.files`, and owns
+`idx.ocr_log` (the done-log) and `idx.ocr_runs` (nightly pass history). It
+journals the files it rewrites in `idx.changes`, as the API does its own.
 """
 
 from __future__ import annotations
@@ -60,17 +59,6 @@ def read_schema_version(conn: psycopg.Connection) -> int | None:
     except psycopg.Error:
         conn.rollback()
         return None
-
-
-def upsert_root(conn: psycopg.Connection, name: str) -> int:
-    with conn.cursor() as cur:
-        cur.execute(
-            'INSERT INTO "idx"."roots" (name) VALUES (%s) ON CONFLICT (name) DO UPDATE SET name = EXCLUDED.name RETURNING id',
-            (name,),
-        )
-        row = cur.fetchone()
-        assert row is not None
-        return int(row[0])
 
 
 def read_settings(conn: psycopg.Connection) -> dict[str, object]:

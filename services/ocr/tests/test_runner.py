@@ -67,7 +67,7 @@ def _process(
 def _pass(conn: psycopg.Connection, target: runner.RootTarget, tmp_path: Path, **kwargs: object) -> runner.RunTotals:
     """A pass over what the indexer recorded for the target's folder right now."""
     index_pdfs(conn, target.root_id, target.abs_path)
-    return runner.run_pass(conn, [target], DEFAULT_SETTINGS, str(tmp_path / "state"), 30, 1, lambda _m: None, **kwargs)
+    return runner.run_pass(conn, target, DEFAULT_SETTINGS, str(tmp_path / "state"), 30, 1, lambda _m: None, **kwargs)
 
 
 def _ocrmypdf_calls(monkeypatch: pytest.MonkeyPatch) -> list[str]:
@@ -87,10 +87,10 @@ def _ocrmypdf_calls(monkeypatch: pytest.MonkeyPatch) -> list[str]:
 
 
 @pytest.fixture
-def files_root(db_conn: psycopg.Connection, tmp_path: Path) -> runner.RootTarget:
+def files_root(tmp_path: Path) -> runner.RootTarget:
     root = tmp_path / "root"
     root.mkdir()
-    return runner.RootTarget(name="files", root_id=db.upsert_root(db_conn, "files"), abs_path=str(root))
+    return runner.RootTarget(name=runner.FILES_ROOT_NAME, root_id=runner.FILES_ROOT_ID, abs_path=str(root))
 
 
 @pytest.mark.parametrize(
@@ -235,7 +235,7 @@ def test_excluded_and_oversized_pdfs_are_not_candidates(
         hour=3, langs="eng", exclude_globs=("files/Photos/**",), max_mb=1, keep_originals=True, originals_retention_days=0
     )
 
-    totals = runner.run_pass(db_conn, [files_root], settings, str(tmp_path / "state"), 30, 1, lambda _m: None)
+    totals = runner.run_pass(db_conn, files_root, settings, str(tmp_path / "state"), 30, 1, lambda _m: None)
     assert totals.seen == 0
     assert (root / "Photos" / "scan.pdf").read_bytes() == b"OK\n"
     # Nothing is recorded: a later change to the rules applies to them at once.
@@ -828,7 +828,7 @@ def test_a_failed_indexer_hint_is_logged_and_the_pass_goes_on(
     _write_pdf(root / "b.pdf", "OK", "another scan")
     index_pdfs(db_conn, files_root.root_id, root)
     logs: list[str] = []
-    totals = runner.run_pass(db_conn, [files_root], DEFAULT_SETTINGS, str(tmp_path / "state"), 30, 1, logs.append)
+    totals = runner.run_pass(db_conn, files_root, DEFAULT_SETTINGS, str(tmp_path / "state"), 30, 1, logs.append)
 
     assert (totals.ocred, totals.failed) == (2, 0)
     assert (root / "a.pdf").read_bytes() == b"OK-OCRED-OUTPUT\n"
@@ -847,21 +847,17 @@ def test_a_failed_indexer_hint_is_logged_and_the_pass_goes_on(
 # -- run_pass ----------------------------------------------------------------------
 
 
-def test_run_pass_over_multiple_roots(db_conn: psycopg.Connection, tmp_path: Path) -> None:
-    root_a = tmp_path / "a"
-    root_b = tmp_path / "b"
-    _write_pdf(root_a / "ok.pdf", "OK")
-    _write_pdf(root_a / "has_text.pdf", "HASTEXT")
-    _write_pdf(root_b / "fail.pdf", "FAIL")
+def test_run_pass_counts_and_records_the_pass(
+    db_conn: psycopg.Connection, files_root: runner.RootTarget, tmp_path: Path
+) -> None:
+    root = Path(files_root.abs_path)
+    _write_pdf(root / "ok.pdf", "OK")
+    _write_pdf(root / "has_text.pdf", "HASTEXT")
+    _write_pdf(root / "fail.pdf", "FAIL")
+    index_pdfs(db_conn, files_root.root_id, root)
 
-    targets = [
-        runner.RootTarget(name="a", root_id=db.upsert_root(db_conn, "a"), abs_path=str(root_a)),
-        runner.RootTarget(name="b", root_id=db.upsert_root(db_conn, "b"), abs_path=str(root_b)),
-    ]
-    for target in targets:
-        index_pdfs(db_conn, target.root_id, target.abs_path)
     logs: list[str] = []
-    totals = runner.run_pass(db_conn, targets, DEFAULT_SETTINGS, str(tmp_path / "state"), 30, 2, logs.append)
+    totals = runner.run_pass(db_conn, files_root, DEFAULT_SETTINGS, str(tmp_path / "state"), 30, 2, logs.append)
 
     assert totals.seen == 3
     assert totals.ocred == 1

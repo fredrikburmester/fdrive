@@ -610,13 +610,13 @@ it("shows Search is not available when both text and visual search are unavailab
   await waitFor(() => expect(screen.getByText("Search is not available.")).toBeDefined());
 });
 
-it("says the files are not indexed when the status has no index root", async () => {
+it("says the files are not indexed without an indexer", async () => {
   stubMatchMedia(false);
   vi.spyOn(apiClient, "searchStatus").mockResolvedValue({
     available: false,
     semantic: false,
     images: false,
-    reason: "no_roots",
+    reason: "not_indexed",
   });
   vi.spyOn(apiClient, "search").mockResolvedValue({
     query: "ready",

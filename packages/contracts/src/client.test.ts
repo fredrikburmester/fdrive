@@ -39,7 +39,6 @@ describe("feature client", () => {
       configuration: { version: 1, revision: 0, values, walkthroughComplete: false },
       source: "default",
       statuses: [],
-      roots: [],
     };
     const fetchMock = vi.fn(async () => Response.json(response));
     const client = createApiClient({ fetch: fetchMock });
@@ -960,12 +959,19 @@ describe("createApiClient: system", () => {
     reachable: true,
     health: {
       ok: true,
-      roots: ["files"],
-      watcher: { files: true },
+      watcher: true,
       embedOk: true,
       schemaVersion: 1,
     },
-    stats: { roots: [], thumbnails: 0, queueDepth: 0, errorsSample: [] },
+    stats: {
+      countsByStatus: {},
+      chunks: 0,
+      chunksEmbedded: 0,
+      lastScan: null,
+      thumbnails: 0,
+      queueDepth: 0,
+      errorsSample: [],
+    },
     settings: INDEXER_SETTINGS,
   };
 
@@ -1023,21 +1029,21 @@ describe("createApiClient: system", () => {
     expect(JSON.parse(String(calls[0]?.init.body))).toEqual(patch);
   });
 
-  it("posts system/indexer/reindex with the root and optional path", async () => {
+  it("posts system/indexer/reindex with an optional path", async () => {
     const { fetchStub, calls } = createStubFetch([jsonResponse(200, { marked: 3 })]);
     const client = createApiClient({ fetch: fetchStub });
 
-    expect(await client.systemReindex({ root: "files", path: "folder" })).toEqual({ marked: 3 });
+    expect(await client.systemReindex({ path: "folder" })).toEqual({ marked: 3 });
     expect(calls[0]?.url).toBe("/api/v1/system/indexer/reindex");
-    expect(JSON.parse(String(calls[0]?.init.body))).toEqual({ root: "files", path: "folder" });
+    expect(JSON.parse(String(calls[0]?.init.body))).toEqual({ path: "folder" });
   });
 
   it("posts system/indexer/reindex with thumbnails: true", async () => {
     const { fetchStub, calls } = createStubFetch([jsonResponse(200, { marked: 3 })]);
     const client = createApiClient({ fetch: fetchStub });
 
-    await client.systemReindex({ root: "files", thumbnails: true });
-    expect(JSON.parse(String(calls[0]?.init.body))).toEqual({ root: "files", thumbnails: true });
+    await client.systemReindex({ thumbnails: true });
+    expect(JSON.parse(String(calls[0]?.init.body))).toEqual({ thumbnails: true });
   });
 
   it("posts system/indexer/thumbnails/rebuild with an empty body by default", async () => {
@@ -1048,25 +1054,21 @@ describe("createApiClient: system", () => {
     expect(JSON.parse(String(calls[0]?.init.body))).toEqual({});
   });
 
-  it("posts system/indexer/thumbnails/rebuild scoped to a root, path, and force", async () => {
+  it("posts system/indexer/thumbnails/rebuild scoped to a path, and force", async () => {
     const { fetchStub, calls } = createStubFetch([jsonResponse(200, { started: true, total: 4 })]);
     const client = createApiClient({ fetch: fetchStub });
 
-    expect(
-      await client.systemRebuildIndexerThumbnails({ root: "files", path: "folder", force: true }),
-    ).toEqual({ started: true, total: 4 });
-    expect(JSON.parse(String(calls[0]?.init.body))).toEqual({
-      root: "files",
-      path: "folder",
-      force: true,
+    expect(await client.systemRebuildIndexerThumbnails({ path: "folder", force: true })).toEqual({
+      started: true,
+      total: 4,
     });
+    expect(JSON.parse(String(calls[0]?.init.body))).toEqual({ path: "folder", force: true });
   });
 
   it("gets system/search", async () => {
     const result = {
       configured: true,
       semantic: { configured: true, healthy: true },
-      roots: ["files"],
       index: { files: 1, withText: 1, chunks: 1, embedded: 1 },
     };
     const { fetchStub, calls } = createStubFetch([jsonResponse(200, result)]);
@@ -1077,7 +1079,7 @@ describe("createApiClient: system", () => {
   });
 
   it("posts system/search/reembed", async () => {
-    const result = { marked: 7, roots: ["files"] };
+    const result = { marked: 7 };
     const { fetchStub, calls } = createStubFetch([jsonResponse(200, result)]);
     const client = createApiClient({ fetch: fetchStub });
 

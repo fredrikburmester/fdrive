@@ -33,7 +33,6 @@ function buildConfig(): AppConfig {
     fdriveJobMaxBytes: 1_000_000_000,
     fdriveJsonMaxBytes: 1_048_576,
     fdriveShareUploadMaxBytes: 1_000_000_000,
-    fdriveIndexRoots: null,
     fdriveEmbedUrl: undefined,
     fdriveImageEmbedUrl: undefined,
     fdriveThumbsDir: undefined,

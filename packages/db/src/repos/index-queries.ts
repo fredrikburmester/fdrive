@@ -1,7 +1,7 @@
 import { and, asc, count, desc, eq, inArray, isNotNull, isNull, ne, sql } from "drizzle-orm";
 import type { Db } from "../index.js";
 import { imageEmbeddings, thumbnails } from "../schema/app.js";
-import { chunks, files, folders, roots } from "../schema/idx.js";
+import { chunks, files, folders } from "../schema/idx.js";
 import { formatVectorLiteral } from "../vector.js";
 
 /**
@@ -96,9 +96,9 @@ function toIndexedFile(row: typeof files.$inferSelect): IndexedFile {
   };
 }
 
-/** One file to look up by its root's name and its root-relative path. */
+/** One file to look up by its root and its root-relative path. */
 export interface IndexRef {
-  readonly rootName: string;
+  readonly rootId: number;
   /** Root-relative, like `idx.files.path`. */
   readonly path: string;
 }
@@ -307,8 +307,8 @@ export interface ImageEmbeddingStats {
 
 /**
  * The hybrid-search and index-browsing queries, every one of which takes a
- * mandatory `scopePrefixes` (except `filesByIds`, `fileByPath`, and
- * `rootIdsByName`, which are looked up by exact identity and never need
+ * mandatory `scopePrefixes` (except `filesByIds`, `fileByPath` and
+ * `contentAt`, which are looked up by exact identity and never need
  * scoping applied twice) so a caller can never see rows outside their
  * scope.
  */
@@ -357,10 +357,10 @@ export interface IndexQueries {
   /** The (non-deleted) file at exactly `path` in `rootId`, `null` when absent. */
   fileByPath(rootId: number, path: string): Promise<IndexedFile | null>;
   /**
-   * The live rows at exactly these `(rootName, path)` pairs, in one query
+   * The live rows at exactly these `(rootId, path)` pairs, in one query
    * and no particular order; a pair without a live row is left out. Like
    * `fileByPath` it applies no scope of its own: callers map each path
-   * through the caller's verified scopes first.
+   * through the caller's scopes first.
    */
   contentAt(refs: readonly IndexRef[]): Promise<IndexedContent[]>;
   /**
@@ -392,15 +392,13 @@ export interface IndexQueries {
   deletedRowSha(rootId: number, path: string): Promise<string | null>;
   /** Every live (non-deleted) file in `rootId` with `sha256`, in no particular order. */
   liveRowsBySha(rootId: number, sha256: string): Promise<IndexedFile[]>;
-  /** Every configured root's database id, keyed by name. */
-  rootIdsByName(): Promise<Record<string, number>>;
   /** Aggregate file and chunk counts over a scope. */
   stats(scopePrefixes: readonly ScopePrefix[]): Promise<IndexStats>;
   /**
    * The total live (non-deleted) bytes and file count under `rootId` at
    * exactly `relativePrefix` or nested under it (`""` matches the whole
    * root), intersected with `scopePrefixes` so a caller never sees bytes
-   * from outside their own verified scope. `relativePrefix` is root-relative
+   * from outside their own scopes. `relativePrefix` is root-relative
    * (see `toScopeClauses`), not the leading-slash virtual style. Optional
    * `excludedRelativePrefixes` removes whole nested trees from the aggregate;
    * this lets virtual mount consumers exclude the physical trees shadowed by
@@ -748,11 +746,11 @@ export function createIndexQueries(db: Db): IndexQueries {
       if (refs.length === 0) {
         return [];
       }
-      const names = [...new Set(refs.map((ref) => ref.rootName))];
+      const rootIds = [...new Set(refs.map((ref) => ref.rootId))];
       const paths = [...new Set(refs.map((ref) => ref.path))];
       const rows = await db
         .select({
-          rootName: roots.name,
+          rootId: files.rootId,
           path: files.path,
           size: files.size,
           mtimeNs: files.mtimeNs,
@@ -761,13 +759,12 @@ export function createIndexQueries(db: Db): IndexQueries {
           ctimeNs: files.ctimeNs,
         })
         .from(files)
-        .innerJoin(roots, eq(roots.id, files.rootId))
         .where(
-          and(inArray(roots.name, names), inArray(files.path, paths), isNull(files.deletedAt)),
+          and(inArray(files.rootId, rootIds), inArray(files.path, paths), isNull(files.deletedAt)),
         );
-      // Names and paths are matched separately above; only the exact pairs asked for count.
-      const wanted = new Set(refs.map((ref) => JSON.stringify([ref.rootName, ref.path])));
-      return rows.filter((row) => wanted.has(JSON.stringify([row.rootName, row.path])));
+      // Roots and paths are matched separately above; only the exact pairs asked for count.
+      const wanted = new Set(refs.map((ref) => JSON.stringify([ref.rootId, ref.path])));
+      return rows.filter((row) => wanted.has(JSON.stringify([row.rootId, row.path])));
     },
 
     async listFiles(scopePrefixes, filter, order, limit, offset = 0) {
@@ -848,15 +845,6 @@ export function createIndexQueries(db: Db): IndexQueries {
         .from(files)
         .where(and(eq(files.rootId, rootId), eq(files.sha256, sha256), isNull(files.deletedAt)));
       return rows.map(toIndexedFile);
-    },
-
-    async rootIdsByName() {
-      const rows = await db.select().from(roots);
-      const map: Record<string, number> = {};
-      for (const row of rows) {
-        map[row.name] = row.id;
-      }
-      return map;
     },
 
     async stats(scopePrefixes) {

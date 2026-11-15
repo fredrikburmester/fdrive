@@ -349,16 +349,15 @@ describe("files folder index changes", () => {
     shared: async () => [],
   };
 
-  it("reports changes under the index root by the indexer's paths, in order", async () => {
+  it("reports changes by their path in the files folder, in order", async () => {
     // The root as configured may be a link to the real folder; storage reports real paths.
     const link = join(await realpath(await mkdtemp(join(tmpdir(), "fdrive-link-"))), "root");
     await symlink(root, link);
-    const heard: [string, IndexChange][] = [];
+    const heard: IndexChange[] = [];
     const folder = createFilesFolder({
       root: link,
       users,
-      indexRoot: "files",
-      onIndexChange: (name, change) => heard.push([name, change]),
+      onIndexChange: (change) => heard.push(change),
     });
     const files = folder.storage("alice");
     await files.upload("/docs/a.txt", bytes("a"), { mkdirParents: true });
@@ -366,38 +365,30 @@ describe("files folder index changes", () => {
     await files.deleteFile("/docs/b.txt");
     await vi.waitFor(() => expect(heard).toHaveLength(3));
     expect(heard).toEqual([
-      [
-        "files",
-        {
-          kind: "changed",
-          path: "alice/docs/a.txt",
-          content: expect.objectContaining({ sha256: sha256("a") }),
-        },
-      ],
-      [
-        "files",
-        {
-          kind: "moved",
-          path: "alice/docs/a.txt",
-          target: "alice/docs/b.txt",
-          stamp: expect.objectContaining({ size: 1 }),
-        },
-      ],
-      ["files", { kind: "changed", path: "alice/docs/b.txt" }],
+      {
+        kind: "changed",
+        path: "alice/docs/a.txt",
+        content: expect.objectContaining({ sha256: sha256("a") }),
+      },
+      {
+        kind: "moved",
+        path: "alice/docs/a.txt",
+        target: "alice/docs/b.txt",
+        stamp: expect.objectContaining({ size: 1 }),
+      },
+      { kind: "changed", path: "alice/docs/b.txt" },
     ]);
     await rm(join(link, ".."), { recursive: true, force: true });
   });
 
-  it("reports nothing without an index root, and survives a root it cannot resolve", async () => {
-    const hear = vi.fn(() => {
-      throw new Error("never reached");
-    });
-    const unindexed = createFilesFolder({ root, users, indexRoot: null, onIndexChange: hear });
-    await unindexed.storage("alice").upload("/a.txt", bytes("a"));
-    const quiet = createFilesFolder({ root, users, indexRoot: "files" });
+  it("reports nothing without a listener, and survives one that throws", async () => {
+    const quiet = createFilesFolder({ root, users });
     await quiet.storage("alice").upload("/b.txt", bytes("b"));
 
-    const throwing = createFilesFolder({ root, users, indexRoot: "files", onIndexChange: hear });
+    const hear = vi.fn(() => {
+      throw new Error("a broken listener");
+    });
+    const throwing = createFilesFolder({ root, users, onIndexChange: hear });
     await throwing.storage("alice").upload("/c.txt", bytes("c"));
     await vi.waitFor(() => expect(hear).toHaveBeenCalledOnce());
   });
@@ -410,8 +401,7 @@ describe("files folder index changes", () => {
     const heard: IndexChange[] = [];
     const listener = createIndexListener(
       "/data",
-      "files",
-      (_root, change) => {
+      (change) => {
         heard.push(change);
       },
       resolve,

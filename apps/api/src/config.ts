@@ -11,19 +11,6 @@ export type LogLevel = (typeof LOG_LEVELS)[number];
 export type NodeEnv = (typeof NODE_ENVS)[number];
 export type CookieSecureMode = (typeof COOKIE_SECURE_MODES)[number];
 
-/**
- * One configured index root: `name` is the root the indexer reports files
- * under, `storagePath` is where the same folder is mounted in the API (the
- * local folder, `FDRIVE_STORAGE_ROOT`), and `indexerPath` is where it is
- * mounted in the indexer container. The local provider's files are indexed
- * under the root whose `storagePath` is `FDRIVE_STORAGE_ROOT`.
- */
-export interface IndexRootConfig {
-  readonly name: string;
-  readonly storagePath: string;
-  readonly indexerPath: string;
-}
-
 export interface AppConfig {
   readonly fdriveEmbedRuntimeUrl?: string | undefined;
   readonly fdriveImageEmbedRuntimeUrl?: string | undefined;
@@ -88,8 +75,6 @@ export interface AppConfig {
    * `DEFAULT_SHARE_UPLOAD_MAX_BYTES`.
    */
   readonly fdriveShareUploadMaxBytes: number;
-  /** Configured index roots (search, thumbnails). `null` when search is unavailable. */
-  readonly fdriveIndexRoots: readonly IndexRootConfig[] | null;
   /** Base URL of the TEI embeddings service. `undefined` disables semantic search. */
   readonly fdriveEmbedUrl: string | undefined;
   /** Base URL of the image-embed sidecar. `undefined` disables image-content search. */
@@ -160,39 +145,6 @@ export function withDefault(value: unknown, fallback: string): string {
  */
 export function undefinedWhenEmpty(value: unknown): string | undefined {
   return typeof value === "string" && value.length > 0 ? value : undefined;
-}
-
-const indexRootConfigSchema = z.object({
-  name: z.string().min(1),
-  storagePath: z.string().min(1),
-  indexerPath: z.string().min(1),
-});
-
-/**
- * Parses `FDRIVE_INDEX_ROOTS`'s JSON array of `{ name, storagePath,
- * indexerPath }`. Exported so its shape can be unit tested directly, in
- * addition to through `loadConfig`. Returns `null` for an absent value
- * (search stays unavailable); throws a plain `Error` describing the problem
- * for a present but invalid value, which `loadConfig` turns into one of its
- * aggregated issues.
- */
-export function parseIndexRoots(value: string | undefined): IndexRootConfig[] | null {
-  if (value === undefined) {
-    return null;
-  }
-
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(value);
-  } catch {
-    throw new Error("must be valid JSON");
-  }
-
-  const result = z.array(indexRootConfigSchema).min(1).safeParse(parsed);
-  if (!result.success) {
-    throw new Error("must be a non-empty array of { name, storagePath, indexerPath }");
-  }
-  return result.data;
 }
 
 const envSchema = z.object({
@@ -317,23 +269,6 @@ const envSchema = z.object({
       .regex(/^\d+$/, "must be a positive integer")
       .transform(Number)
       .pipe(z.number().int().min(1)),
-  ),
-  FDRIVE_INDEX_ROOTS: z.preprocess(
-    undefinedWhenEmpty,
-    z
-      .string()
-      .optional()
-      .transform((value, ctx) => {
-        try {
-          return parseIndexRoots(value);
-        } catch (error) {
-          ctx.addIssue({
-            code: "custom",
-            message: error instanceof Error ? error.message : "invalid FDRIVE_INDEX_ROOTS",
-          });
-          return z.NEVER;
-        }
-      }),
   ),
   FDRIVE_EMBED_RUNTIME_URL: z.preprocess(
     undefinedWhenEmpty,
@@ -476,7 +411,6 @@ export function loadConfig(env: Record<string, string | undefined>): AppConfig {
     fdriveArchivePeekMaxBytes: parsed.FDRIVE_ARCHIVE_PEEK_MAX_BYTES,
     fdriveJsonMaxBytes: parsed.FDRIVE_JSON_MAX_BYTES,
     fdriveShareUploadMaxBytes: parsed.FDRIVE_SHARE_UPLOAD_MAX_BYTES,
-    fdriveIndexRoots: parsed.FDRIVE_INDEX_ROOTS,
     fdriveEmbedUrl: parsed.FDRIVE_EMBED_URL,
     fdriveEmbedRuntimeUrl: parsed.FDRIVE_EMBED_RUNTIME_URL,
     fdriveImageEmbedRuntimeUrl: parsed.FDRIVE_IMAGE_EMBED_RUNTIME_URL,

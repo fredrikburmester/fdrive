@@ -1,17 +1,17 @@
-//! Start-up and the per-root loop: refresh settings and features, keep the watcher in step
+//! Start-up and the root loop: refresh settings and features, keep the watcher in step
 //! with them, and scan on the interval, on a wake, after a watcher overflow, or when the
 //! change journal's reader asks for one. A restart does not walk the root: the journal holds
 //! fdrive's changes from the indexer's position, and the interval stays counted from the last
 //! finished scan.
 
-use std::collections::HashMap;
 use std::path::Path;
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
 
-use crate::config::Config;
+use crate::config::{Config, ROOT_ID, ROOT_NAME};
 use crate::db::{self, Db};
 use crate::failures::FileResult;
 use crate::indexer::{
@@ -26,23 +26,23 @@ use crate::watcher::{WatchHandler, Watcher};
 
 pub const EXPECTED_SCHEMA_VERSION: i64 = 2;
 
-pub fn build_context(cfg: &Arc<Config>, name: &str, path: &Path) -> Result<Arc<RootContext>> {
+pub fn build_context(cfg: &Arc<Config>) -> Result<Arc<RootContext>> {
     let db = Db::new(&cfg.database_url);
-    let (root_id, raw) = db.with(|c| Ok((db::upsert_root(c, name)?, db::read_settings(c)?)))?;
+    let raw = db.with(db::read_settings)?;
     // A restart is not a feature transition: start from the persisted selection.
     let mut ctx = RootContext::new(
-        name,
-        root_id,
-        path.to_path_buf(),
+        ROOT_NAME,
+        ROOT_ID,
+        cfg.root.clone(),
         Arc::clone(cfg),
         crate::features::resolve(&raw),
     );
     ctx.refresh_features = Some(cfg.settings_refresh);
     if !ctx.values().search_ocr {
-        let moved = db.with(|c| db::mark_pdfs_skipped_by_ocr(c, root_id))?;
+        let moved = db.with(|c| db::mark_pdfs_skipped_by_ocr(c, ROOT_ID))?;
         if moved > 0 {
             log(&format!(
-                "[{name}] {moved} PDFs without a text layer will be read once OCR is enabled"
+                "[{ROOT_NAME}] {moved} PDFs without a text layer will be read once OCR is enabled"
             ));
         }
     }
@@ -156,7 +156,7 @@ pub fn start_watcher(ctx: &Arc<RootContext>) -> Option<Watcher> {
     }
 }
 
-/// One root's loop state: the watcher it keeps in step with the features, and when the
+/// The root loop's state: the watcher it keeps in step with the features, and when the
 /// next scan is due.
 pub struct RootLoop {
     watcher: Option<Watcher>,
@@ -164,7 +164,7 @@ pub struct RootLoop {
 }
 
 impl RootLoop {
-    /// The loop for a root, its first scan due an interval after the last one that finished.
+    /// The loop, its first scan due an interval after the last one that finished.
     /// The scan is due at once when the change journal cannot cover the time since: no
     /// scan finished, the index has no live rows, or the indexer has no position in the
     /// journal yet. Runs before the journal's reader starts, since the reader takes a
@@ -193,9 +193,9 @@ impl RootLoop {
         })
     }
 
-    /// Refresh settings, keep the watcher in step with the features, and scan when due.
-    /// Returns how long to wait before the next step.
-    pub fn step(&mut self, ctx: &Arc<RootContext>, watchers: &Mutex<HashMap<String, bool>>) -> Duration {
+    /// Refresh settings, keep the watcher in step with the features, and scan when due;
+    /// `watching` reports whether a watcher runs. Returns how long to wait before the next step.
+    pub fn step(&mut self, ctx: &Arc<RootContext>, watching: &AtomicBool) -> Duration {
         let step = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| -> Result<()> {
             if refresh_settings(ctx)? {
                 self.next_scan = Instant::now();
@@ -209,10 +209,7 @@ impl RootLoop {
             } else if !enabled && let Some(stopped) = self.watcher.take() {
                 stopped.stop();
             }
-            watchers
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner)
-                .insert(ctx.name.clone(), self.watcher.is_some());
+            watching.store(self.watcher.is_some(), Ordering::SeqCst);
             let overflowed = self.watcher.as_ref().is_some_and(Watcher::take_overflow);
             // The journal's reader asks for a scan when rows it never read were pruned; the
             // request waits for the folder's marker like any scan.
@@ -247,10 +244,10 @@ impl RootLoop {
     }
 }
 
-/// One root's loop, from `root` (`RootLoop::new`); never returns.
-pub fn run_root(mut root: RootLoop, ctx: &Arc<RootContext>, watchers: &Mutex<HashMap<String, bool>>, wake: &Wake) {
+/// The root loop, from `root` (`RootLoop::new`); never returns.
+pub fn run_root(mut root: RootLoop, ctx: &Arc<RootContext>, watching: &AtomicBool, wake: &Wake) {
     loop {
-        let timeout = root.step(ctx, watchers);
+        let timeout = root.step(ctx, watching);
         if wake.wait(timeout) {
             root.wake();
         }

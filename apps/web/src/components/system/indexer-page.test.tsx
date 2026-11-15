@@ -61,35 +61,28 @@ const CONFIGURED_FIXTURE: SystemIndexerResponse = {
   reachable: true,
   health: {
     ok: true,
-    roots: ["files"],
-    watcher: { files: true },
+    watcher: true,
     embedOk: true,
     schemaVersion: 1,
   },
   stats: {
-    roots: [
-      {
-        root: "files",
-        countsByStatus: { excluded: 3, none: 1, error: 1, indexed: 10, no_text: 1 },
-        chunks: 10,
-        chunksEmbedded: 10,
-        lastScan: {
-          startedAt: "2026-09-06T18:21:28.128513+00:00",
-          finishedAt: "2026-09-06T18:21:28.141420+00:00",
-          filesSeen: 16,
-          filesChanged: 0,
-          filesDeleted: 0,
-          errors: 0,
-        },
-      },
-    ],
+    countsByStatus: { excluded: 3, none: 1, error: 1, indexed: 10, no_text: 1 },
+    chunks: 10,
+    chunksEmbedded: 10,
+    lastScan: {
+      startedAt: "2026-09-06T18:21:28.128513+00:00",
+      finishedAt: "2026-09-06T18:21:28.141420+00:00",
+      filesSeen: 16,
+      filesChanged: 0,
+      filesDeleted: 0,
+      errors: 0,
+    },
     thumbnails: 6,
     queueDepth: 0,
     errorsSample: [
       {
         path: "alice/docs/report.pdf",
-        error:
-          "FileDataError: Failed to open file '/roots/files/alice/docs/report.pdf' as type pdf.",
+        error: "FileDataError: Failed to open file '/data/alice/docs/report.pdf' as type pdf.",
       },
     ],
   },
@@ -147,18 +140,16 @@ describe("IndexerPage", () => {
     expect(screen.getByText("Queue depth")).toBeTruthy();
   });
 
-  it("renders one table row per root/status pair from countsByStatus", async () => {
+  it("renders one table row per status from countsByStatus, and the watcher", async () => {
     mockConfigured();
     render(<IndexerPage />);
 
     await screen.findByText("Counts by status");
-    for (const [status, count] of Object.entries(
-      CONFIGURED_FIXTURE.stats?.roots[0]?.countsByStatus ?? {},
-    )) {
+    for (const [status, count] of Object.entries(CONFIGURED_FIXTURE.stats?.countsByStatus ?? {})) {
       expect(screen.getByText(status)).toBeTruthy();
       expect(screen.getAllByText(String(count)).length).toBeGreaterThan(0);
     }
-    expect(screen.getAllByText("files").length).toBeGreaterThan(0);
+    expect(screen.getByText("Watcher on")).toBeTruthy();
   });
 
   it("renders the last scan summary", async () => {
@@ -275,28 +266,23 @@ describe("IndexerPage", () => {
     expect(screen.queryByRole("heading", { name: "Reindex" })).toBeNull();
   });
 
-  it("keeps the root select controlled when choosing a reindex scope", async () => {
+  it("reindexes everything, or the path given", async () => {
     mockConfigured();
     const mutate = vi.fn();
     useReindexMock.mockReturnValue({ mutate, isPending: false });
-    const error = vi.spyOn(console, "error").mockImplementation(() => {});
-    try {
-      render(<IndexerPage />);
-      fireEvent.click(screen.getByRole("button", { name: "Reindex" }));
-      expect(screen.getByRole("button", { name: "Reindex" })).toHaveProperty("disabled", true);
-      fireEvent.click(screen.getByLabelText("Root"));
-      fireEvent.click(await screen.findByRole("option", { name: "files" }));
-      expect(screen.getByLabelText("Root").textContent).toContain("files");
-      expect(screen.getByRole("button", { name: "Reindex" })).toHaveProperty("disabled", false);
-      fireEvent.click(screen.getByRole("button", { name: "Reindex" }));
-      expect(mutate).toHaveBeenCalledWith({ root: "files" }, expect.anything());
-      expect(error.mock.calls.flat().join(" ")).not.toMatch(/uncontrolled/i);
-    } finally {
-      error.mockRestore();
-    }
+    render(<IndexerPage />);
+    fireEvent.click(screen.getByRole("button", { name: "Reindex" }));
+    expect(screen.getByRole("button", { name: "Reindex" })).toHaveProperty("disabled", false);
+    fireEvent.click(screen.getByRole("button", { name: "Reindex" }));
+    expect(mutate).toHaveBeenCalledWith({}, expect.anything());
+    fireEvent.change(screen.getByLabelText("Path (optional)"), {
+      target: { value: " alice/Documents " },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Reindex" }));
+    expect(mutate).toHaveBeenLastCalledWith({ path: "alice/Documents" }, expect.anything());
   });
 
-  it("confirms clear scope, cancels without mutation, then submits all roots", async () => {
+  it("confirms clear scope, cancels without mutation, then clears everything", async () => {
     mockConfigured();
     const mutate = vi.fn(
       (_request: unknown, options: { onSuccess: (result: { started: boolean }) => void }) =>
@@ -306,10 +292,8 @@ describe("IndexerPage", () => {
     render(<IndexerPage />);
     fireEvent.click(screen.getByRole("button", { name: "Clear index" }));
     await screen.findByRole("heading", { name: "Clear index data?" });
-    expect(screen.getByLabelText("Root").textContent).toContain("All roots");
-    expect(screen.getByLabelText("Root").textContent).not.toContain("__all__");
     expect(screen.getByText(/Later scheduled scans or file changes/)).toBeTruthy();
-    expect(screen.getByLabelText("Path (optional)")).toHaveProperty("disabled", true);
+    expect(screen.getByLabelText("Path (optional)")).toHaveProperty("disabled", false);
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
     expect(mutate).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", { name: "Clear index" }));
@@ -376,8 +360,6 @@ describe("IndexerPage", () => {
 
     render(<IndexerPage />);
 
-    expect(
-      await screen.findByText("Not configured: set FDRIVE_INDEXER_URL and FDRIVE_INDEX_ROOTS."),
-    ).toBeTruthy();
+    expect(await screen.findByText("Not configured: set FDRIVE_INDEXER_URL.")).toBeTruthy();
   });
 });

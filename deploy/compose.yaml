@@ -111,10 +111,6 @@ services:
       FDRIVE_OFFICE_PRODUCT: ${FDRIVE_OFFICE_PRODUCT:-onlyoffice}
       FDRIVE_OFFICE_URL: ${FDRIVE_OFFICE_URL:-http://onlyoffice}
       FDRIVE_WOPI_URL: ${FDRIVE_WOPI_URL:-http://api:3001/wopi}
-      # The files folder is the one indexed root, at /data in the api and the
-      # indexer alike. The walkthrough may choose scopes below it, but cannot
-      # add host mounts at runtime.
-      FDRIVE_INDEX_ROOTS: '[{"name":"files","storagePath":"/data","indexerPath":"/data"}]'
       # BEGIN GENERATED CONFIG KEYS (tools/deploy/generate-env-example.ts)
       FDRIVE_RESTORE_MODE: ${FDRIVE_RESTORE_MODE:-}
       HOST: ${HOST:-}
@@ -226,9 +222,6 @@ services:
       # The uid the api writes as, so folders kept at mode 700 stay readable.
       FDRIVE_RUN_AS_UID: ${FDRIVE_RUN_AS_UID:-1000}
       DATABASE_URL: postgres://fdrive:${POSTGRES_PASSWORD}@db:5432/fdrive
-      # The one indexed root, the files folder mounted below. Nothing is
-      # scanned until a feature is selected.
-      INDEX_ROOTS: files=/data
       # Document extraction, text embeddings and image embeddings are the
       # three units of the ml service.
       TIKA_URL: http://ml:8080/extract
@@ -278,7 +271,6 @@ services:
     environment:
       FDRIVE_RUN_AS_UID: ${FDRIVE_RUN_AS_UID:-1000}
       DATABASE_URL: postgres://fdrive:${POSTGRES_PASSWORD}@db:5432/fdrive
-      INDEX_ROOTS: files=/data
       OCR_PORT: "8011"
       STATE_DIR: /state
       TZ: ${TZ:-UTC}

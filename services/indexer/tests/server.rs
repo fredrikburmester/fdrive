@@ -5,13 +5,14 @@ mod common;
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use axum::body::Body;
 use axum::http::{Method, Request};
 use common::fake_ml::{self, FakeMl};
-use fdrive_indexer::config::Config;
+use fdrive_indexer::config::{Config, ROOT_ID, ROOT_NAME};
 use fdrive_indexer::db::{self, Db, NewFile};
 use fdrive_indexer::extract::{ContentExtractor, MAX_CONTENT_BYTES};
 use fdrive_indexer::failures;
@@ -80,15 +81,11 @@ fn encode(value: &str) -> String {
         .collect()
 }
 
-fn app_state(contexts: Vec<Arc<RootContext>>, db_url: &str, content: Option<Arc<ContentExtractor>>) -> Arc<AppState> {
-    let wakes = contexts
-        .iter()
-        .map(|c| (c.name.clone(), Arc::new(Wake::default())))
-        .collect();
+fn app_state(context: Arc<RootContext>, db_url: &str, content: Option<Arc<ContentExtractor>>) -> Arc<AppState> {
     Arc::new(AppState {
-        contexts,
-        watchers: Arc::default(),
-        wakes,
+        context,
+        watcher: Arc::default(),
+        wake: Arc::default(),
         db: Db {
             url: db_url.to_owned(),
             retries: 1,
@@ -107,6 +104,21 @@ fn closed_database() -> String {
         "postgres://fdrive:fdrive@{}/fdrive",
         fake_ml::closed_url().trim_start_matches("http://")
     )
+}
+
+/// The files root's context with every feature off and no database behind it.
+fn offline_context() -> Arc<RootContext> {
+    let mut cfg = Config::from_vars(|_| None).unwrap();
+    cfg.database_url = closed_database();
+    let mut ctx = RootContext::new(
+        ROOT_NAME,
+        ROOT_ID,
+        cfg.root.clone(),
+        Arc::new(cfg),
+        common::features(FeatureValues::default()),
+    );
+    ctx.db.retries = 1;
+    Arc::new(ctx)
 }
 
 fn values(thumbnails: bool, text: bool, semantic: bool, image: bool) -> FeatureValues {
@@ -141,7 +153,7 @@ fn setup(features: FeatureValues) -> Env {
     let ml = FakeMl::start();
     let cfg = common::config(&url, &root, &base.join("thumbs"), &ml.url);
     let ctx = common::context(&cfg, features);
-    let state = app_state(vec![Arc::clone(&ctx)], &url, None);
+    let state = app_state(Arc::clone(&ctx), &url, None);
     Env {
         url,
         _dir: dir,
@@ -168,9 +180,9 @@ impl Env {
         let mut cfg = (*self.cfg).clone();
         change(&mut cfg);
         let mut ctx = RootContext::new(
-            "r",
-            self.ctx.root_id,
-            cfg.roots[0].1.clone(),
+            ROOT_NAME,
+            ROOT_ID,
+            cfg.root.clone(),
             Arc::new(cfg),
             common::features(features),
         );
@@ -287,35 +299,39 @@ const LONG_TEXT: &str = "Provider-only document with enough text to extract for 
 // ---------------------------------------------------------------------------------------
 
 #[test]
-fn health_reports_schema_roots_watchers_embeddings_and_storage() {
+fn health_reports_schema_watcher_embeddings_and_storage() {
     let env = setup(common::all_features());
-    env.state.watchers.lock().unwrap().insert("r".to_owned(), true);
+    env.state.watcher.store(true, Ordering::SeqCst);
     let (status, body) = get(&env.state, "/health");
     assert_eq!(status, 200);
+    let keys: BTreeSet<&str> = body.as_object().unwrap().keys().map(String::as_str).collect();
+    assert_eq!(
+        keys,
+        BTreeSet::from(["embed_ok", "features", "ok", "schema_version", "storage", "watcher"])
+    );
     assert_eq!(body["ok"], true);
-    assert_eq!(body["roots"], json!(["r"]));
-    assert_eq!(body["watcher"], json!({"r": true}));
+    assert_eq!(body["watcher"], true);
     assert_eq!(body["embed_ok"], true);
     assert_eq!(body["schema_version"], 2);
     assert_eq!(body["features"], env.ctx.features().as_json());
-    assert_eq!(body["storage"], json!({"r": {"readable": true, "writable": true}}));
+    assert_eq!(body["storage"], json!({"readable": true, "writable": true}));
     assert_eq!(env.ml.count(fake_ml::TEXT_HEALTH), 1);
 
-    // No watcher registered reads as false; an unreachable embedding backend is not ok.
+    // No running watcher reads as false; an unreachable embedding backend is not ok.
     let unreachable = env.context_with(
         |c| c.embed_url = format!("{}/text", fake_ml::closed_url()),
         common::all_features(),
     );
-    let state = app_state(vec![unreachable], &env.url, None);
+    let state = app_state(unreachable, &env.url, None);
     let (status, body) = get(&state, "/health");
     assert_eq!(status, 200);
-    assert_eq!(body["watcher"], json!({"r": false}));
+    assert_eq!(body["watcher"], false);
     assert_eq!(body["embed_ok"], false);
 
     // Semantic search off never probes the backend.
     let before = env.ml.count(fake_ml::TEXT_HEALTH);
     let off = env.context_with(|_| {}, values(true, true, false, true));
-    let (_, body) = get(&app_state(vec![off], &env.url, None), "/health");
+    let (_, body) = get(&app_state(off, &env.url, None), "/health");
     assert_eq!(body["embed_ok"], false);
     assert_eq!(env.ml.count(fake_ml::TEXT_HEALTH), before);
 }
@@ -324,27 +340,24 @@ fn health_reports_schema_roots_watchers_embeddings_and_storage() {
 fn health_is_not_ok_without_the_schema() {
     let url = common::database();
     let admin = format!("{}/postgres", url.rsplit_once('/').unwrap().0);
-    let state = app_state(Vec::new(), &admin, None);
+    let state = app_state(offline_context(), &admin, None);
     let (status, body) = get(&state, "/health");
     assert_eq!(status, 200);
     assert_eq!(body["ok"], false);
     assert_eq!(body["embed_ok"], false);
     assert_eq!(body["schema_version"], Value::Null);
-    assert_eq!(body["roots"], json!([]));
-    assert_eq!(body["watcher"], json!({}));
-    assert_eq!(body["storage"], json!({}));
     assert_eq!(body["features"]["values"]["thumbnails"], false);
 }
 
 #[test]
 fn health_reports_a_missing_root_and_fails_without_a_database() {
     let env = setup(common::all_features());
-    let missing = env.context_with(|c| c.roots[0].1 = env.base.join("missing"), common::all_features());
-    let (status, body) = get(&app_state(vec![missing], &env.url, None), "/health");
+    let missing = env.context_with(|c| c.root = env.base.join("missing"), common::all_features());
+    let (status, body) = get(&app_state(missing, &env.url, None), "/health");
     assert_eq!(status, 200);
-    assert_eq!(body["storage"], json!({"r": {"readable": false, "writable": false}}));
+    assert_eq!(body["storage"], json!({"readable": false, "writable": false}));
 
-    let (status, body) = get(&app_state(Vec::new(), &closed_database(), None), "/health");
+    let (status, body) = get(&app_state(offline_context(), &closed_database(), None), "/health");
     assert_eq!(status, 500);
     assert_eq!(body, json!({"error": "database unavailable"}));
 }
@@ -371,23 +384,28 @@ fn stats_report_counts_and_idle_job_snapshots() {
     assert_eq!(
         keys,
         BTreeSet::from([
+            "chunks",
+            "chunks_embedded",
+            "counts_by_status",
             "errors_sample",
             "features",
             "image_embedding_clear",
             "image_embedding_rebuild",
             "image_embeddings",
             "index_clear",
+            "last_scan",
             "queue_depth",
-            "roots",
             "thumbnail_clear",
             "thumbnail_rebuild",
             "thumbnails",
         ])
     );
+    assert_eq!(body["counts_by_status"], json!({"indexed": 1}));
     assert_eq!(
-        body["roots"],
-        json!([{"root": "r", "counts_by_status": {"indexed": 1}, "chunks": 1, "chunks_embedded": 1, "last_scan": null}])
+        (body["chunks"].as_i64(), body["chunks_embedded"].as_i64()),
+        (Some(1), Some(1))
     );
+    assert_eq!(body["last_scan"], Value::Null);
     assert_eq!(
         (body["thumbnails"].as_i64(), body["image_embeddings"].as_i64()),
         (Some(1), Some(1))
@@ -426,7 +444,7 @@ fn stats_report_counts_and_idle_job_snapshots() {
         body["errors_sample"],
         json!([{"path": "a.txt", "error": "DecodeError: boom"}])
     );
-    let scan = &body["roots"][0]["last_scan"];
+    let scan = &body["last_scan"];
     assert_eq!(
         (scan["files_seen"].as_i64(), scan["errors"].as_i64()),
         (Some(3), Some(0))
@@ -436,7 +454,7 @@ fn stats_report_counts_and_idle_job_snapshots() {
     assert_eq!(body["thumbnail_rebuild"]["running"], false);
     env.state.jobs.image_rebuild.finish();
 
-    let (status, body) = get(&app_state(Vec::new(), &closed_database(), None), "/stats");
+    let (status, body) = get(&app_state(offline_context(), &closed_database(), None), "/stats");
     assert_eq!((status, body), (500, json!({"error": "database unavailable"})));
 }
 
@@ -485,7 +503,7 @@ fn content_state(ml: &FakeMl) -> (Arc<AppState>, Arc<ContentExtractor>) {
         "eng",
         &format!("{}/extract", ml.url),
     ));
-    let state = app_state(Vec::new(), &closed_database(), Some(Arc::clone(&extractor)));
+    let state = app_state(offline_context(), &closed_database(), Some(Arc::clone(&extractor)));
     (state, extractor)
 }
 
@@ -526,7 +544,7 @@ fn content_extraction_round_trips_documents() {
 fn content_extraction_bounds_and_admission() {
     let ml = FakeMl::start();
     let (state, extractor) = content_state(&ml);
-    let unavailable = app_state(Vec::new(), &closed_database(), None);
+    let unavailable = app_state(offline_context(), &closed_database(), None);
     assert_eq!(
         extract_content(&unavailable, "a.txt", b"a".to_vec()),
         (503, json!({"error": "extraction unavailable"}))
@@ -575,9 +593,9 @@ fn content_extraction_errors_never_reveal_the_temporary_file() {
 fn reindex_marks_rows_pending_and_wakes_the_root() {
     let env = setup(common::all_features());
     indexed(&env.ctx, "a.txt", "sha1");
-    let (status, body) = post_json(&env.state, "/reindex", &json!({"root": "r"}));
+    let (status, body) = post(&env.state, "/reindex", "");
     assert_eq!((status, body), (200, json!({"count": 1})));
-    assert!(env.state.wakes["r"].is_set());
+    assert!(env.state.wake.is_set());
     let queued = env.ctx.activity.snapshot();
     assert_eq!(queued.len(), 1);
     assert_eq!(
@@ -588,7 +606,7 @@ fn reindex_marks_rows_pending_and_wakes_the_root() {
     indexed(&env.ctx, "dir/a.txt", "sha2");
     indexed(&env.ctx, "dir2/a.txt", "sha3");
     for path in ["dir", "/dir/"] {
-        let (_, body) = post_json(&env.state, "/reindex", &json!({"root": "r", "path": path}));
+        let (_, body) = post_json(&env.state, "/reindex", &json!({"path": path}));
         assert_eq!(body, json!({"count": 1}), "{path}");
     }
     // Nothing thumbnails-related was asked for.
@@ -598,39 +616,19 @@ fn reindex_marks_rows_pending_and_wakes_the_root() {
 #[test]
 fn reindex_validation_disabled_and_unavailable() {
     let env = setup(common::all_features());
-    assert_eq!(
-        post(&env.state, "/reindex", "{}"),
-        (400, json!({"error": "root is required"}))
-    );
     assert_eq!(post(&env.state, "/reindex", "[1]").0, 400);
-    assert_eq!(
-        post_json(&env.state, "/reindex", &json!({"root": "unknown"})),
-        (404, json!({"error": "unknown root: unknown"}))
-    );
-    // A root without a wake event still reindexes.
-    let unwoken = Arc::new(AppState {
-        contexts: vec![Arc::clone(&env.ctx)],
-        watchers: Arc::default(),
-        wakes: std::collections::HashMap::new(),
-        db: Db::new(&env.url),
-        content: None,
-        jobs: Jobs::default(),
-        failure_retry_feature: Mutex::new("thumbnails".to_owned()),
-        instance_id: "instance".to_owned(),
-        names: None,
-    });
-    assert_eq!(post_json(&unwoken, "/reindex", &json!({"root": "r"})).0, 200);
+    assert_eq!(post(&env.state, "/reindex", "{").0, 400);
 
     let offline = env.context_with(|c| c.database_url = closed_database(), common::all_features());
-    let state = app_state(vec![offline], &env.url, None);
+    let state = app_state(offline, &env.url, None);
     assert_eq!(
-        post_json(&state, "/reindex", &json!({"root": "r"})),
+        post(&state, "/reindex", "{}"),
         (503, json!({"error": "database unavailable"}))
     );
 
     env.ctx.set_features(common::features(FeatureValues::default()));
     assert_eq!(
-        post_json(&env.state, "/reindex", &json!({"root": "r"})),
+        post(&env.state, "/reindex", "{}"),
         (409, json!({"error": "feature processing disabled"}))
     );
 }
@@ -640,12 +638,12 @@ fn reindex_with_thumbnails_starts_a_rebuild_unless_busy() {
     let env = setup(common::all_features());
     png_file(&env, "a.png", "sha1");
     assert!(env.state.jobs.index_clear.try_start(0));
-    let (status, body) = post_json(&env.state, "/reindex", &json!({"root": "r", "thumbnails": true}));
+    let (status, body) = post_json(&env.state, "/reindex", &json!({"thumbnails": true}));
     assert_eq!((status, body), (200, json!({"count": 1})));
     assert_eq!(env.state.jobs.thumbnail.snapshot()["started_at"], Value::Null);
     env.state.jobs.index_clear.finish();
 
-    let (status, _) = post_json(&env.state, "/reindex", &json!({"root": "r", "thumbnails": true}));
+    let (status, _) = post_json(&env.state, "/reindex", &json!({"thumbnails": true}));
     assert_eq!(status, 200);
     let snapshot = wait(&env.state.jobs.thumbnail);
     assert_eq!(snapshot["outcome"], "completed");
@@ -653,11 +651,8 @@ fn reindex_with_thumbnails_starts_a_rebuild_unless_busy() {
 
     // Without thumbnails or image search there is nothing to rebuild.
     let text_only = env.context_with(|_| {}, values(false, true, false, false));
-    let state = app_state(vec![text_only], &env.url, None);
-    assert_eq!(
-        post_json(&state, "/reindex", &json!({"root": "r", "thumbnails": true})).0,
-        200
-    );
+    let state = app_state(text_only, &env.url, None);
+    assert_eq!(post_json(&state, "/reindex", &json!({"thumbnails": true})).0, 200);
     assert_eq!(state.jobs.thumbnail.snapshot()["started_at"], Value::Null);
 }
 
@@ -672,14 +667,14 @@ fn started(response: (u16, Value)) -> bool {
 }
 
 #[test]
-fn thumbnail_rebuild_runs_for_a_root_all_roots_or_a_scope() {
+fn thumbnail_rebuild_runs_for_the_root_or_a_scope() {
     let env = setup(common::all_features());
     png_file(&env, "keep/a.png", "keep-sha");
     png_file(&env, "skip/b.png", "skip-sha");
     assert!(started(post_json(
         &env.state,
         "/thumbnails/rebuild",
-        &json!({"root": "r", "path": "keep", "force": true})
+        &json!({"path": "keep", "force": true})
     )));
     let snapshot = wait(&env.state.jobs.thumbnail);
     assert_eq!(
@@ -695,21 +690,9 @@ fn thumbnail_rebuild_runs_for_a_root_all_roots_or_a_scope() {
     assert!(started(post_json(
         &env.state,
         "/thumbnails/rebuild",
-        &json!({"root": null, "path": null})
+        &json!({"path": null})
     )));
-    wait(&env.state.jobs.thumbnail);
-
-    // An unknown root is ignored: the run has nothing to do.
-    assert!(started(post_json(
-        &env.state,
-        "/thumbnails/rebuild",
-        &json!({"root": "unknown"})
-    )));
-    let snapshot = wait(&env.state.jobs.thumbnail);
-    assert_eq!(
-        (snapshot["total"].as_u64(), snapshot["outcome"].as_str()),
-        (Some(0), Some("completed"))
-    );
+    assert_eq!(wait(&env.state.jobs.thumbnail)["processed"], 2);
 }
 
 #[test]
@@ -717,11 +700,7 @@ fn rebuild_requests_are_validated() {
     let env = setup(common::all_features());
     for endpoint in ["/thumbnails/rebuild", "/image-embeddings/rebuild"] {
         assert_eq!(
-            post_json(&env.state, endpoint, &json!({"root": 123})),
-            (400, json!({"error": "root must be a string"}))
-        );
-        assert_eq!(
-            post_json(&env.state, endpoint, &json!({"root": "r", "path": 123})),
+            post_json(&env.state, endpoint, &json!({"path": 123})),
             (400, json!({"error": "path must be a string"}))
         );
         assert_eq!(post(&env.state, endpoint, "[]").0, 400);
@@ -729,22 +708,22 @@ fn rebuild_requests_are_validated() {
     }
     assert!(env.state.jobs.thumbnail.try_start(0));
     assert_eq!(
-        post_json(&env.state, "/thumbnails/rebuild", &json!({"root": "r"})),
+        post(&env.state, "/thumbnails/rebuild", "{}"),
         (409, json!({"error": "a thumbnail rebuild is already running"}))
     );
     assert_eq!(
-        post_json(&env.state, "/image-embeddings/rebuild", &json!({"root": "r"})),
+        post(&env.state, "/image-embeddings/rebuild", "{}"),
         (409, json!({"error": "an image-embedding rebuild is already running"}))
     );
     env.state.jobs.thumbnail.finish();
 
     env.ctx.set_features(common::features(values(false, true, true, false)));
     assert_eq!(
-        post_json(&env.state, "/thumbnails/rebuild", &json!({"root": "r"})),
+        post(&env.state, "/thumbnails/rebuild", "{}"),
         (409, json!({"error": "thumbnail processing disabled"}))
     );
     assert_eq!(
-        post_json(&env.state, "/image-embeddings/rebuild", &json!({"root": "r"})),
+        post(&env.state, "/image-embeddings/rebuild", "{}"),
         (409, json!({"error": "image search disabled"}))
     );
 }
@@ -756,11 +735,7 @@ fn image_embedding_rebuild_runs_end_to_end() {
     let thumb = env.cfg.thumbs_dir.join("sh/sha1.256.webp");
     std::fs::create_dir_all(thumb.parent().unwrap()).unwrap();
     std::fs::write(&thumb, b"fake webp").unwrap();
-    assert!(started(post_json(
-        &env.state,
-        "/image-embeddings/rebuild",
-        &json!({"root": "r"})
-    )));
+    assert!(started(post(&env.state, "/image-embeddings/rebuild", "{}")));
     let snapshot = wait(&env.state.jobs.image_rebuild);
     assert_eq!(
         (snapshot["processed"].as_u64(), snapshot["errors"].as_u64()),
@@ -774,23 +749,13 @@ fn image_embedding_rebuild_runs_end_to_end() {
 
     // Without a configured image unit nothing is attempted.
     let unconfigured = env.context_with(|c| c.image_embed_url.clear(), common::all_features());
-    let state = app_state(vec![unconfigured], &env.url, None);
-    assert!(started(post_json(
-        &state,
-        "/image-embeddings/rebuild",
-        &json!({"root": "r"})
-    )));
+    let state = app_state(unconfigured, &env.url, None);
+    assert!(started(post(&state, "/image-embeddings/rebuild", "{}")));
     let snapshot = wait(&state.jobs.image_rebuild);
     assert_eq!(
         (snapshot["total"].as_u64(), snapshot["outcome"].as_str()),
         (Some(0), Some("completed"))
     );
-    assert!(started(post_json(
-        &state,
-        "/image-embeddings/rebuild",
-        &json!({"root": "unknown"})
-    )));
-    wait(&state.jobs.image_rebuild);
 }
 
 #[test]
@@ -810,11 +775,11 @@ fn rebuilds_acknowledge_before_discovery() {
         let mut tx = locker.transaction().unwrap();
         tx.batch_execute("LOCK TABLE idx.files IN ACCESS EXCLUSIVE MODE")
             .unwrap();
-        assert!(started(post_json(&env.state, endpoint, &json!({"root": "r"}))));
+        assert!(started(post(&env.state, endpoint, "{}")));
         let activity = job.activity_snapshot("thumbnailRebuild", &["thumbnails"]).unwrap();
         assert_eq!(activity["total"], Value::Null);
         assert_eq!(activity["phase"], "discovering");
-        assert_eq!(post_json(&env.state, endpoint, &json!({"root": "r"})).0, 409);
+        assert_eq!(post(&env.state, endpoint, "{}").0, 409);
         tx.commit().unwrap();
         assert_eq!(wait(job)["outcome"], "completed");
     }
@@ -842,7 +807,7 @@ fn activity_reads_no_storage_and_reports_waits_and_jobs() {
         .map(str::to_owned)
         .to_vec();
     ctx.activity.start_scan(&features, 2);
-    let state = app_state(vec![Arc::clone(&ctx)], &offline, None);
+    let state = app_state(Arc::clone(&ctx), &offline, None);
 
     let (status, body) = get(&state, "/activity");
     assert_eq!(status, 200);
@@ -934,7 +899,7 @@ fn activity_reads_no_storage_and_reports_waits_and_jobs() {
             ("indexClear", json!(["textSearch", "semanticSearch"]), "entries"),
         ]
     );
-    let other = app_state(Vec::new(), &offline, None);
+    let other = app_state(ctx, &offline, None);
     assert_ne!(other.instance_id, state.instance_id);
 }
 
@@ -1083,19 +1048,18 @@ fn clear_requests_are_validated() {
         ("/index/clear", "{", 400),
         ("/index/clear", "null", 400),
         ("/index/clear", "[]", 400),
-        ("/index/clear", r#"{"root":null}"#, 400),
-        ("/index/clear", r#"{"root":1}"#, 400),
-        ("/index/clear", r#"{"root":" "}"#, 400),
-        ("/index/clear", r#"{"path":"a"}"#, 400),
-        ("/index/clear", r#"{"root":"r","path":""}"#, 400),
-        ("/index/clear", r#"{"root":"r","path":"../a"}"#, 400),
-        ("/index/clear", r#"{"root":"r","path":"a/../b"}"#, 400),
-        ("/index/clear", r#"{"root":"r","path":"a\\b"}"#, 400),
-        ("/index/clear", r#"{"root":"r","path":"a\u0000b"}"#, 400),
-        ("/index/clear", r#"{"root":"missing"}"#, 404),
+        ("/index/clear", r#"{"root":"files"}"#, 400),
+        ("/index/clear", r#"{"path":null}"#, 400),
+        ("/index/clear", r#"{"path":1}"#, 400),
+        ("/index/clear", r#"{"path":" "}"#, 400),
+        ("/index/clear", r#"{"path":""}"#, 400),
+        ("/index/clear", r#"{"path":"../a"}"#, 400),
+        ("/index/clear", r#"{"path":"a/../b"}"#, 400),
+        ("/index/clear", r#"{"path":"a\\b"}"#, 400),
+        ("/index/clear", r#"{"path":"a\u0000b"}"#, 400),
         ("/index/clear", r#"{"extra":true}"#, 400),
-        ("/thumbnails/clear", r#"{"root":"r"}"#, 400),
-        ("/image-embeddings/clear", r#"{"root":"r"}"#, 400),
+        ("/thumbnails/clear", r#"{"path":"a"}"#, 400),
+        ("/image-embeddings/clear", r#"{"path":"a"}"#, 400),
     ] {
         assert_eq!(post(&env.state, url, payload).0, status, "{url} {payload}");
     }
@@ -1106,9 +1070,10 @@ fn clear_requests_are_validated() {
 fn clear_routes_run_and_report() {
     for (url, payload, key) in [
         ("/index/clear", "", "index_clear"),
-        ("/index/clear", r#"{"root":"r","path":"/"}"#, "index_clear"),
-        ("/index/clear", r#"{"root":"r","path":"/a"}"#, "index_clear"),
-        ("/index/clear", r#"{"root":"r","path":"./a/"}"#, "index_clear"),
+        ("/index/clear", r#"{"path":"/"}"#, "index_clear"),
+        ("/index/clear", r#"{"path":"a"}"#, "index_clear"),
+        ("/index/clear", r#"{"path":"/a"}"#, "index_clear"),
+        ("/index/clear", r#"{"path":"./a/"}"#, "index_clear"),
         ("/thumbnails/clear", "{}", "thumbnail_clear"),
         ("/image-embeddings/clear", "{}", "image_embedding_clear"),
     ] {
@@ -1139,7 +1104,7 @@ fn clear_routes_run_and_report() {
             (Some(false), Some(0))
         );
         assert_eq!(snapshot["processed"], 1, "{url} {payload}");
-        assert!(!env.state.wakes["r"].is_set());
+        assert!(!env.state.wake.is_set());
         let (files, thumbnails, embeddings) = (
             env.count("SELECT count(*) FROM idx.files"),
             env.thumbnails(),

@@ -34,7 +34,6 @@ const base = loadConfig({
 });
 const full: AppConfig = {
   ...base,
-  fdriveIndexRoots: [{ name: "files", storagePath: "/data", indexerPath: "/roots/files" }],
   fdriveIndexerUrl: "http://indexer",
   fdriveEmbedRuntimeUrl: "http://embed:8099",
   fdriveImageEmbedRuntimeUrl: "http://image:8013",
@@ -98,7 +97,7 @@ function fixture(
 }
 
 describe("feature configuration", () => {
-  it("starts unconfigured installations off and only checks configured storage workers", async () => {
+  it("starts unconfigured installations off and asks no worker anything", async () => {
     const { service, fetchImpl } = fixture();
     expect(await service.configuration()).toMatchObject({
       revision: 0,
@@ -107,10 +106,7 @@ describe("feature configuration", () => {
     });
     expect(await service.enabled("pdfOcr")).toBe(false);
     expect((await service.status()).source).toBe("default");
-    expect(vi.mocked(fetchImpl).mock.calls.map(([url]) => String(url))).toEqual([
-      "http://indexer/health",
-      "http://ocr/health",
-    ]);
+    expect(fetchImpl).not.toHaveBeenCalled();
   });
   it("persists progress and rejects racing/stale writes", async () => {
     const { service } = fixture();
@@ -197,10 +193,6 @@ describe("observed feature status", () => {
     });
     expect(result.statuses.find((s) => s.id === "imageSearch")?.state).toBe("ready");
   });
-  it("blocks local processing without configured roots", async () => {
-    const result = await fixture({ raw: config, config: base }).service.status();
-    expect(result.statuses.every((s) => s.state === "blocked")).toBe(true);
-  });
   it("surfaces missing workers, HTTP errors, schema failure and network failures", async () => {
     for (const opts of [
       {
@@ -246,7 +238,7 @@ describe("observed feature status", () => {
       fetch: async () =>
         Response.json({
           ok: true,
-          storage: { files: { readable: false, writable: false } },
+          storage: { readable: false, writable: false },
           features: { revision: 1 },
         }),
     }).service.status();
@@ -256,27 +248,24 @@ describe("observed feature status", () => {
       fetch: async () =>
         Response.json({
           ok: true,
-          storage: { files: { readable: true, writable: true } },
+          storage: { readable: true, writable: true },
           features: { revision: 1, status: "ok" },
         }),
     }).service.status();
     expect(ready.statuses.every((s) => s.state === "ready")).toBe(true);
   });
-  it("shows read-only storage diagnostics before any feature is selected", async () => {
+  it("blocks Searchable PDFs alone on a folder the OCR worker cannot write", async () => {
     const result = await fixture({
+      raw: config,
       fetch: async () =>
         Response.json({
           ok: true,
-          storage: { files: { readable: true, writable: false } },
-          features: { revision: 0, values: DISABLED_FEATURES },
+          storage: { readable: true, writable: false },
+          features: { revision: 1, status: "ok" },
         }),
     }).service.status();
-    expect(result.roots[0]?.processing).toEqual({
-      indexReadable: true,
-      pdfReadable: true,
-      pdfWritable: false,
-    });
-    expect(result.statuses.every((s) => s.state === "off")).toBe(true);
+    expect(result.statuses.find((s) => s.id === "pdfOcr")?.state).toBe("blocked");
+    expect(result.statuses.find((s) => s.id === "thumbnails")?.state).toBe("ready");
   });
 });
 

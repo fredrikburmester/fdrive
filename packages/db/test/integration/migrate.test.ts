@@ -71,6 +71,9 @@ describe("migrate", () => {
   it("applies every migration and is a no-op the second time", async () => {
     await migrate(db);
     await expect(migrate(db)).resolves.toBeUndefined();
+    // The files folder's index root is there before anything indexes it.
+    const roots = await db.execute(sql`select id, name from idx.roots`);
+    expect(roots.rows).toEqual([{ id: 1, name: "files" }]);
   });
 
   it("covers every app foreign key with an unconditional leading-column index", async () => {
@@ -503,6 +506,36 @@ describe("migrate", () => {
         sql`select to_regclass('app.backup_attachments')::text as table`,
       );
       expect(attachments.rows).toEqual([{ table: null }]);
+    });
+  });
+
+  it("keeps only the files root, as row 1, with what was indexed under it", async () => {
+    await withDatabaseBefore("0040_index_root_files", async (older) => {
+      await older.execute(sql`insert into idx.roots (name) values ('files'), ('photos')`);
+      await older.execute(sql`
+        insert into idx.files (root_id, path, name, size, mtime_ns) values
+          (1, 'alice/a.txt', 'a.txt', 1, 1), (2, 'b.jpg', 'b.jpg', 1, 1)`);
+      await older.execute(sql`
+        insert into idx.scans (root_id, started_at) values (1, now()), (2, now())`);
+      await older.execute(sql`
+        insert into idx.ocr_log (root_id, path, size, mtime_ns, status) values
+          (2, 'c.pdf', 1, 1, 'ocred')`);
+
+      await migrate(older);
+
+      const roots = await older.execute(sql`select id, name from idx.roots`);
+      expect(roots.rows).toEqual([{ id: 1, name: "files" }]);
+      const files = await older.execute(sql`select root_id, path from idx.files`);
+      expect(files.rows).toEqual([{ root_id: 1, path: "alice/a.txt" }]);
+      const scans = await older.execute(sql`select root_id from idx.scans`);
+      expect(scans.rows).toEqual([{ root_id: 1 }]);
+      const log = await older.execute(sql`select count(*)::int as n from idx.ocr_log`);
+      expect(log.rows).toEqual([{ n: 0 }]);
+      // A row added later, as tests do, takes the next id.
+      const added = await older.execute(
+        sql`insert into idx.roots (name) values ('r') returning id`,
+      );
+      expect(added.rows).toEqual([{ id: 2 }]);
     });
   });
 });

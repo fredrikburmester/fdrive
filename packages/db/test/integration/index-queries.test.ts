@@ -583,16 +583,16 @@ describe("index-queries", () => {
       await insertFile(other, "bob/c.txt");
 
       const found = await queries.contentAt([
-        { rootName: "files", path: "alice/a.txt" },
-        { rootName: "files", path: "alice/b.txt" },
-        { rootName: "files", path: "alice/gone.txt" },
-        { rootName: "files", path: "bob/c.txt" },
-        { rootName: "files", path: "alice/missing.txt" },
+        { rootId: files, path: "alice/a.txt" },
+        { rootId: files, path: "alice/b.txt" },
+        { rootId: files, path: "alice/gone.txt" },
+        { rootId: files, path: "bob/c.txt" },
+        { rootId: files, path: "alice/missing.txt" },
       ]);
 
       expect(found.sort((x, y) => x.path.localeCompare(y.path))).toEqual([
         {
-          rootName: "files",
+          rootId: files,
           path: "alice/a.txt",
           size: 5,
           mtimeNs: 1_700_000_000_000_000_000n,
@@ -601,7 +601,7 @@ describe("index-queries", () => {
           ctimeNs: 1_800_000_000_000_000_000n,
         },
         {
-          rootName: "files",
+          rootId: files,
           path: "alice/b.txt",
           size: 100,
           mtimeNs: 1_700_000_000_000_000_000n,
@@ -614,21 +614,6 @@ describe("index-queries", () => {
 
     it("asks nothing for no pairs", async () => {
       expect(await queries.contentAt([])).toEqual([]);
-    });
-  });
-
-  describe("rootIdsByName", () => {
-    it("maps every root's name to its id", async () => {
-      const first = await insertRoot("files");
-      const second = await insertRoot("other");
-
-      const map = await queries.rootIdsByName();
-
-      expect(map).toEqual({ files: first, other: second });
-    });
-
-    it("returns an empty object when there are no roots", async () => {
-      expect(await queries.rootIdsByName()).toEqual({});
     });
   });
 

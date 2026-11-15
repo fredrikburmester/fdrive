@@ -67,10 +67,6 @@ async function statItems(principal: Principal, paths: readonly string[], signal:
  * against storage. Runs never move anything.
  */
 export function createOrganizeService(deps: OrganizeServiceDeps): OrganizeService {
-  async function indexedFor(principal: Principal): Promise<boolean> {
-    return (await deps.mcp.scopeResolver.verifiedIndexScopes(principal.username)).available;
-  }
-
   return {
     async status() {
       const config = await deps.settings.resolved();
@@ -131,7 +127,7 @@ export function createOrganizeService(deps: OrganizeServiceDeps): OrganizeServic
               const items = await statItems(principal, selected, signal);
               if (items.length === 0)
                 throw new OrganizeError("None of the selected items exist anymore.");
-              const indexed = await indexedFor(principal);
+              const indexed = await deps.mcp.indexed();
               const submission = await runOrganizeAgent({
                 model,
                 tools: createDriveTools({

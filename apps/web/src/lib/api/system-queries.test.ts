@@ -93,7 +93,6 @@ describe("feature queries", () => {
       configuration: { version: 1, revision: 0, values, walkthroughComplete: false },
       source: "default",
       statuses: [],
-      roots: [],
     };
     const saved = { ...data, configuration: { ...data.configuration, revision: 1 } };
     systemFeaturesMock.mockResolvedValue(data);
@@ -365,7 +364,7 @@ describe("useReindex", () => {
     await waitFor(() => expect(query.current.isSuccess).toBe(true));
 
     const { result: mutation } = renderHook(() => useReindex(), { wrapper });
-    mutation.current.mutate({ root: "files" });
+    mutation.current.mutate({});
 
     await waitFor(() => expect(mutation.current.data).toEqual({ marked: 3 }));
     expect(systemIndexerMock).toHaveBeenCalledTimes(2);
@@ -394,7 +393,6 @@ describe("useRebuildIndexerThumbnails", () => {
 const SYSTEM_SEARCH_RESPONSE = {
   configured: false,
   semantic: { configured: false, healthy: false },
-  roots: [],
   index: { files: 0, withText: 0, chunks: 0, embedded: 0 },
 } as const;
 
@@ -414,7 +412,7 @@ describe("useReembed", () => {
   it("triggers a re-embed and invalidates search and indexer queries", async () => {
     systemSearchMock.mockResolvedValue(SYSTEM_SEARCH_RESPONSE);
     systemIndexerMock.mockResolvedValue(SYSTEM_INDEXER_RESPONSE);
-    systemReembedMock.mockResolvedValue({ marked: 5, roots: ["files"] });
+    systemReembedMock.mockResolvedValue({ marked: 5 });
     const { useSystemSearch, useSystemIndexer, useReembed } = await import("./system-queries.js");
     const queryClient = new QueryClient();
     const wrapper = createWrapper(queryClient);
@@ -663,13 +661,13 @@ describe("maintenance mutations", () => {
         expect(indexer.result.current.isSuccess && search.result.current.isSuccess).toBe(true),
       );
       const mutation = renderHook(() => useClearIndex(), { wrapper });
-      mutation.result.current.mutate({ root: "files", path: "alice/docs" });
+      mutation.result.current.mutate({ path: "alice/docs" });
       await waitFor(() =>
         expect(fail ? mutation.result.current.isError : mutation.result.current.isSuccess).toBe(
           true,
         ),
       );
-      expect(systemClearIndexMock).toHaveBeenCalledWith({ root: "files", path: "alice/docs" });
+      expect(systemClearIndexMock).toHaveBeenCalledWith({ path: "alice/docs" });
       expect(systemIndexerMock).toHaveBeenCalledTimes(2);
       expect(systemSearchMock).toHaveBeenCalledTimes(2);
     },
@@ -704,7 +702,10 @@ describe("maintenance mutations", () => {
         key === undefined
           ? undefined
           : {
-              roots: [],
+              countsByStatus: {},
+              chunks: 0,
+              chunksEmbedded: 0,
+              lastScan: null,
               thumbnails: 0,
               queueDepth: 0,
               errorsSample: [],

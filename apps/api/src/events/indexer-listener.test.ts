@@ -1,4 +1,4 @@
-import { isSafeSegment, type Scope, StorageError } from "@fdrive/core";
+import { type Scope, StorageError } from "@fdrive/core";
 import type { FavoriteRepo, FileTagRepo, Identity, IndexedFile, IndexQueries } from "@fdrive/db";
 import { createMemoryRepos } from "@fdrive/db/testing";
 import { describe, expect, it, vi } from "vitest";
@@ -10,7 +10,6 @@ import type {
 } from "../metadata/service.js";
 import type { ReadAuthorizeReason, ReadAuthorizer } from "../scoping/read-authorizer.ts";
 import { fakeStorageProvider } from "../scoping/test-fixtures/index.ts";
-import type { ConfiguredMappingsResult } from "../scoping/types.ts";
 import { type BusEvent, createEventBus } from "./bus.js";
 import {
   createIndexerListener,
@@ -24,8 +23,7 @@ import {
   type PgClientLike,
 } from "./indexer-listener.js";
 
-const ROOT_NAMES = new Set(["files"]);
-const SCOPES = [{ rootName: "files", fsPrefix: "/alice", virtualPrefix: "/" }];
+const SCOPES = [{ fsPrefix: "/alice", virtualPrefix: "/" }];
 const AT = "2026-01-01T00:00:00.000Z";
 
 function fail(name: string): never {
@@ -40,18 +38,9 @@ function makeLogger(): { logger: IndexerListenerLogger; warnings: unknown[][] } 
   };
 }
 
-/** Resolves every identity's home on the "files" root, as `ScopeResolver.configuredMappings` does. */
-function configuredMappingsFor(): (identity: Identity) => Promise<ConfiguredMappingsResult> {
-  return async (identity) =>
-    isSafeSegment(identity.externalUsername)
-      ? {
-          available: true,
-          providerId: identity.providerId,
-          scopes: [
-            { rootName: "files", fsPrefix: `/${identity.externalUsername}`, virtualPrefix: "/" },
-          ],
-        }
-      : { available: false, reason: "invalid_configuration" };
+/** Resolves every identity's home, as `ScopeResolver.scopesFor` does. */
+function scopesFor(): (identity: Identity) => Promise<readonly Scope[]> {
+  return async (identity) => [{ fsPrefix: `/${identity.externalUsername}`, virtualPrefix: "/" }];
 }
 
 /** An authorizer that allows every target, unless `deniedPaths` says otherwise. */
@@ -123,7 +112,6 @@ function fakeIndexQueries(overrides: Partial<IndexQueries> = {}): IndexQueries {
     contentAt: overrides.contentAt ?? (async () => fail("contentAt")),
     listFiles: overrides.listFiles ?? (async () => fail("listFiles")),
     filesBySha256: overrides.filesBySha256 ?? (async () => fail("filesBySha256")),
-    rootIdsByName: overrides.rootIdsByName ?? (async () => ({ files: 1 })),
     stats: overrides.stats ?? (async () => fail("stats")),
     statsForFileIds: overrides.statsForFileIds ?? (async () => fail("statsForFileIds")),
     fileTextPrefix: overrides.fileTextPrefix ?? (async () => fail("fileTextPrefix")),
@@ -164,7 +152,6 @@ function fileAt(path: string): IndexedFile {
 function makeEvent(overrides: Partial<IndexerEventPayload> = {}): IndexerEventPayload {
   return {
     kind: "created",
-    root: "files",
     path: "alice/a.txt",
     target_path: null,
     at: AT,
@@ -173,7 +160,6 @@ function makeEvent(overrides: Partial<IndexerEventPayload> = {}): IndexerEventPa
 }
 
 const IDENTITY_ID = "identity-1";
-const ROOT_ID_BY_NAME = new Map([["files", 1]]);
 
 describe("handleEventForIdentity: created/changed", () => {
   it("publishes create for a path in scope and live-readable", async () => {
@@ -194,7 +180,6 @@ describe("handleEventForIdentity: created/changed", () => {
         logger,
       },
       SCOPES,
-      ROOT_ID_BY_NAME,
       IDENTITY_ID,
       makeEvent({ kind: "created" }),
     );
@@ -222,7 +207,6 @@ describe("handleEventForIdentity: created/changed", () => {
         logger,
       },
       SCOPES,
-      ROOT_ID_BY_NAME,
       IDENTITY_ID,
       makeEvent({ kind: "changed" }),
     );
@@ -248,7 +232,6 @@ describe("handleEventForIdentity: created/changed", () => {
         logger,
       },
       SCOPES,
-      ROOT_ID_BY_NAME,
       IDENTITY_ID,
       makeEvent({ kind: "created", path: "bob/a.txt" }),
     );
@@ -274,7 +257,6 @@ describe("handleEventForIdentity: created/changed", () => {
         logger,
       },
       SCOPES,
-      ROOT_ID_BY_NAME,
       IDENTITY_ID,
       makeEvent({ kind: "created" }),
     );
@@ -287,8 +269,8 @@ describe("handleEventForIdentity: created/changed", () => {
     // reporting a change under that physical path must never surface via the
     // home scope once the more specific override exists.
     const scopes: readonly Scope[] = [
-      { rootName: "files", fsPrefix: "/alice", virtualPrefix: "/" },
-      { rootName: "files", fsPrefix: "/team", virtualPrefix: "/shared" },
+      { fsPrefix: "/alice", virtualPrefix: "/" },
+      { fsPrefix: "/team", virtualPrefix: "/shared" },
     ];
     const bus = createEventBus();
     const received: BusEvent[] = [];
@@ -306,7 +288,6 @@ describe("handleEventForIdentity: created/changed", () => {
         logger: makeLogger().logger,
       },
       scopes,
-      ROOT_ID_BY_NAME,
       IDENTITY_ID,
       makeEvent({ kind: "created", path: "alice/shared/x.txt" }),
     );
@@ -347,7 +328,6 @@ describe("handleEventForIdentity: live-read kind detection", () => {
         logger: makeLogger().logger,
       },
       SCOPES,
-      ROOT_ID_BY_NAME,
       IDENTITY_ID,
       makeEvent({ kind: "moved", path: "alice/docs", target_path: "alice/renamed" }),
     );
@@ -378,7 +358,6 @@ describe("handleEventForIdentity: live-read kind detection", () => {
         logger: makeLogger().logger,
       },
       SCOPES,
-      ROOT_ID_BY_NAME,
       IDENTITY_ID,
       makeEvent({ kind: "created" }),
     );
@@ -407,7 +386,6 @@ describe("handleEventForIdentity: deleted", () => {
         logger: makeLogger().logger,
       },
       SCOPES,
-      ROOT_ID_BY_NAME,
       IDENTITY_ID,
       makeEvent({ kind: "deleted" }),
     );
@@ -443,7 +421,6 @@ describe("handleEventForIdentity: deleted", () => {
         logger: makeLogger().logger,
       },
       SCOPES,
-      ROOT_ID_BY_NAME,
       IDENTITY_ID,
       makeEvent({ kind: "deleted" }),
     );
@@ -478,7 +455,6 @@ describe("handleEventForIdentity: deleted", () => {
         logger: makeLogger().logger,
       },
       SCOPES,
-      ROOT_ID_BY_NAME,
       IDENTITY_ID,
       makeEvent({ kind: "deleted" }),
     );
@@ -511,7 +487,6 @@ describe("handleEventForIdentity: deleted", () => {
         logger: makeLogger().logger,
       },
       SCOPES,
-      ROOT_ID_BY_NAME,
       IDENTITY_ID,
       makeEvent({ kind: "deleted" }),
     );
@@ -543,7 +518,6 @@ describe("handleEventForIdentity: deleted", () => {
         logger: makeLogger().logger,
       },
       SCOPES,
-      ROOT_ID_BY_NAME,
       IDENTITY_ID,
       makeEvent({ kind: "deleted" }),
     );
@@ -571,32 +545,6 @@ describe("handleEventForIdentity: deleted", () => {
         logger: makeLogger().logger,
       },
       SCOPES,
-      ROOT_ID_BY_NAME,
-      IDENTITY_ID,
-      makeEvent({ kind: "deleted" }),
-    );
-
-    expect(calls.onDeleted).toEqual([[IDENTITY_ID, "/a.txt", true]]);
-  });
-
-  it("skips the sha lookup entirely when the root is not known to the index", async () => {
-    const { metadata, calls } = fakeMetadataService();
-    const bus = createEventBus();
-    const fileTags = { tagsForPaths: async () => fail("tagsForPaths") } as unknown as FileTagRepo;
-    const favorites = { has: async () => fail("has") } as unknown as FavoriteRepo;
-
-    await handleEventForIdentity(
-      {
-        ...allowAllLiveCheck(),
-        bus,
-        metadata,
-        fileTags,
-        favorites,
-        indexQueries: fakeIndexQueries(),
-        logger: makeLogger().logger,
-      },
-      SCOPES,
-      new Map(),
       IDENTITY_ID,
       makeEvent({ kind: "deleted" }),
     );
@@ -619,7 +567,6 @@ describe("handleEventForIdentity: deleted", () => {
         logger: makeLogger().logger,
       },
       SCOPES,
-      ROOT_ID_BY_NAME,
       IDENTITY_ID,
       makeEvent({ kind: "deleted", path: "bob/a.txt" }),
     );
@@ -646,7 +593,6 @@ describe("handleEventForIdentity: moved", () => {
         logger: makeLogger().logger,
       },
       SCOPES,
-      ROOT_ID_BY_NAME,
       IDENTITY_ID,
       makeEvent({ kind: "moved", path: "alice/a.txt", target_path: "alice/b.txt" }),
     );
@@ -672,7 +618,6 @@ describe("handleEventForIdentity: moved", () => {
         logger: makeLogger().logger,
       },
       SCOPES,
-      ROOT_ID_BY_NAME,
       IDENTITY_ID,
       makeEvent({ kind: "moved", path: "alice/a.txt", target_path: "alice/b.txt" }),
     );
@@ -699,7 +644,6 @@ describe("handleEventForIdentity: moved", () => {
         logger: makeLogger().logger,
       },
       SCOPES,
-      ROOT_ID_BY_NAME,
       IDENTITY_ID,
       makeEvent({ kind: "moved", path: "alice/a.txt", target_path: "bob/a.txt" }),
     );
@@ -725,7 +669,6 @@ describe("handleEventForIdentity: moved", () => {
         logger: makeLogger().logger,
       },
       SCOPES,
-      ROOT_ID_BY_NAME,
       IDENTITY_ID,
       makeEvent({ kind: "moved", path: "bob/a.txt", target_path: "alice/a.txt" }),
     );
@@ -752,7 +695,6 @@ describe("handleEventForIdentity: moved", () => {
         logger: makeLogger().logger,
       },
       SCOPES,
-      ROOT_ID_BY_NAME,
       IDENTITY_ID,
       makeEvent({ kind: "moved", path: "bob/a.txt", target_path: "alice/a.txt" }),
     );
@@ -777,7 +719,6 @@ describe("handleEventForIdentity: moved", () => {
         logger: makeLogger().logger,
       },
       SCOPES,
-      ROOT_ID_BY_NAME,
       IDENTITY_ID,
       makeEvent({ kind: "moved", path: "bob/a.txt", target_path: "bob/b.txt" }),
     );
@@ -802,7 +743,6 @@ describe("handleEventForIdentity: moved", () => {
         logger,
       },
       SCOPES,
-      ROOT_ID_BY_NAME,
       IDENTITY_ID,
       makeEvent({ kind: "moved", target_path: null }),
     );
@@ -881,13 +821,12 @@ describe("createIndexerListener", () => {
     const listener = createIndexerListener({
       createClient: () => fake.client,
       identities: repos.identities,
-      indexQueries: fakeIndexQueries({ rootIdsByName: async () => ({ files: 1 }) }),
+      indexQueries: fakeIndexQueries(),
       fileTags: repos.fileTags,
       favorites: repos.favorites,
       metadata,
       bus,
-      configuredMappingsFor: configuredMappingsFor(),
-      indexRootNames: ROOT_NAMES,
+      scopesFor: scopesFor(),
       clock: clock.now,
       logger: makeLogger().logger,
       ...allowAllLiveCheck(),
@@ -915,13 +854,12 @@ describe("createIndexerListener", () => {
     const listener = createIndexerListener({
       createClient: () => fake.client,
       identities: repos.identities,
-      indexQueries: fakeIndexQueries({ rootIdsByName: async () => ({ files: 1 }) }),
+      indexQueries: fakeIndexQueries(),
       fileTags: repos.fileTags,
       favorites: repos.favorites,
       metadata,
       bus,
-      configuredMappingsFor: configuredMappingsFor(),
-      indexRootNames: ROOT_NAMES,
+      scopesFor: scopesFor(),
       clock: clock.now,
       logger: makeLogger().logger,
       ...allowAllLiveCheck(),
@@ -953,7 +891,7 @@ describe("createIndexerListener", () => {
     await listener.stop();
   });
 
-  it("never dispatches to an identity whose configured provider no longer matches", async () => {
+  it("never dispatches a path outside an identity's scopes", async () => {
     const repos = createMemoryRepos();
     await seedIdentity(repos);
     const fake = createFakeNotificationClient();
@@ -965,15 +903,13 @@ describe("createIndexerListener", () => {
     const listener = createIndexerListener({
       createClient: () => fake.client,
       identities: repos.identities,
-      indexQueries: fakeIndexQueries({ rootIdsByName: async () => ({ files: 1 }) }),
+      indexQueries: fakeIndexQueries(),
       fileTags: repos.fileTags,
       favorites: repos.favorites,
       metadata,
       bus,
-      // A root named "files" exists in the event, but this identity's
-      // mapping never resolves: its paths must never be treated as its data.
-      configuredMappingsFor: async () => ({ available: false, reason: "invalid_configuration" }),
-      indexRootNames: ROOT_NAMES,
+      // The event's path is someone else's: never this identity's data.
+      scopesFor: async () => [{ fsPrefix: "/bob", virtualPrefix: "/" }],
       clock: clock.now,
       logger: makeLogger().logger,
       ...allowAllLiveCheck(),
@@ -1006,13 +942,12 @@ describe("createIndexerListener", () => {
     const listener = createIndexerListener({
       createClient: () => fake.client,
       identities: repos.identities,
-      indexQueries: fakeIndexQueries({ rootIdsByName: async () => ({ files: 1 }) }),
+      indexQueries: fakeIndexQueries(),
       fileTags: repos.fileTags,
       favorites: repos.favorites,
       metadata,
       bus: createEventBus(),
-      configuredMappingsFor: configuredMappingsFor(),
-      indexRootNames: ROOT_NAMES,
+      scopesFor: scopesFor(),
       clock: clock.now,
       logger,
       ...allowAllLiveCheck(),
@@ -1037,13 +972,12 @@ describe("createIndexerListener", () => {
     const listener = createIndexerListener({
       createClient: () => fake.client,
       identities: repos.identities,
-      indexQueries: fakeIndexQueries({ rootIdsByName: async () => ({ files: 1 }) }),
+      indexQueries: fakeIndexQueries(),
       fileTags: repos.fileTags,
       favorites: repos.favorites,
       metadata,
       bus: createEventBus(),
-      configuredMappingsFor: configuredMappingsFor(),
-      indexRootNames: ROOT_NAMES,
+      scopesFor: scopesFor(),
       clock: clock.now,
       logger,
       ...allowAllLiveCheck(),
@@ -1076,13 +1010,12 @@ describe("createIndexerListener", () => {
     const listener = createIndexerListener({
       createClient: () => fake.client,
       identities: countingIdentities,
-      indexQueries: fakeIndexQueries({ rootIdsByName: async () => ({ files: 1 }) }),
+      indexQueries: fakeIndexQueries(),
       fileTags: repos.fileTags,
       favorites: repos.favorites,
       metadata,
       bus: createEventBus(),
-      configuredMappingsFor: configuredMappingsFor(),
-      indexRootNames: ROOT_NAMES,
+      scopesFor: scopesFor(),
       clock: clock.now,
       logger: makeLogger().logger,
       ...allowAllLiveCheck(),
@@ -1126,8 +1059,7 @@ describe("createIndexerListener", () => {
       favorites: repos.favorites,
       metadata,
       bus: createEventBus(),
-      configuredMappingsFor: configuredMappingsFor(),
-      indexRootNames: ROOT_NAMES,
+      scopesFor: scopesFor(),
       clock: () => new Date(AT),
       logger: makeLogger().logger,
       scheduleTimeout: (fn, ms) => scheduled.push([fn, ms]),
@@ -1166,8 +1098,7 @@ describe("createIndexerListener", () => {
       favorites: repos.favorites,
       metadata,
       bus: createEventBus(),
-      configuredMappingsFor: configuredMappingsFor(),
-      indexRootNames: ROOT_NAMES,
+      scopesFor: scopesFor(),
       clock: () => new Date(AT),
       logger: makeLogger().logger,
       scheduleTimeout: (fn, ms) => scheduled.push([fn, ms]),
@@ -1193,8 +1124,7 @@ describe("createIndexerListener", () => {
       favorites: repos.favorites,
       metadata,
       bus: createEventBus(),
-      configuredMappingsFor: configuredMappingsFor(),
-      indexRootNames: ROOT_NAMES,
+      scopesFor: scopesFor(),
       clock: () => new Date(AT),
       logger: makeLogger().logger,
       scheduleTimeout: (fn, ms) => scheduled.push([fn, ms]),
@@ -1230,8 +1160,7 @@ describe("createIndexerListener: stop()", () => {
       favorites: repos.favorites,
       metadata,
       bus: createEventBus(),
-      configuredMappingsFor: configuredMappingsFor(),
-      indexRootNames: ROOT_NAMES,
+      scopesFor: scopesFor(),
       clock: () => new Date(AT),
       logger: makeLogger().logger,
       ...allowAllLiveCheck(),
@@ -1253,8 +1182,7 @@ describe("createIndexerListener: stop()", () => {
       favorites: repos.favorites,
       metadata,
       bus: createEventBus(),
-      configuredMappingsFor: configuredMappingsFor(),
-      indexRootNames: ROOT_NAMES,
+      scopesFor: scopesFor(),
       clock: () => new Date(AT),
       logger: makeLogger().logger,
       ...allowAllLiveCheck(),
@@ -1388,13 +1316,12 @@ describe("createIndexerListener: storageForIdentity failure", () => {
     const listener = createIndexerListener({
       createClient: () => fake.client,
       identities: repos.identities,
-      indexQueries: fakeIndexQueries({ rootIdsByName: async () => ({ files: 1 }) }),
+      indexQueries: fakeIndexQueries(),
       fileTags: repos.fileTags,
       favorites: repos.favorites,
       metadata,
       bus,
-      configuredMappingsFor: configuredMappingsFor(),
-      indexRootNames: ROOT_NAMES,
+      scopesFor: scopesFor(),
       clock: clock.now,
       logger: makeLogger().logger,
       storageForIdentity: async () => {
@@ -1441,13 +1368,12 @@ it("processes notifications in order and continues after a failed payload", asyn
       },
     },
     scopeCacheTtlMs: 0,
-    indexQueries: fakeIndexQueries({ rootIdsByName: async () => ({ files: 1 }) }),
+    indexQueries: fakeIndexQueries(),
     fileTags: repos.fileTags,
     favorites: repos.favorites,
     metadata,
     bus: createEventBus(),
-    configuredMappingsFor: configuredMappingsFor(),
-    indexRootNames: ROOT_NAMES,
+    scopesFor: scopesFor(),
     clock: () => new Date(AT),
     logger,
     ...allowAllLiveCheck(),
@@ -1479,8 +1405,7 @@ it("coalesces repeated errors, closes the old client and ignores stale callbacks
     favorites: repos.favorites,
     metadata,
     bus: createEventBus(),
-    configuredMappingsFor: configuredMappingsFor(),
-    indexRootNames: ROOT_NAMES,
+    scopesFor: scopesFor(),
     clock: () => new Date(AT),
     logger: makeLogger().logger,
     ...allowAllLiveCheck(),
@@ -1522,8 +1447,7 @@ it("cancels real reconnect timers and recovers when closing the old client fails
     favorites: repos.favorites,
     metadata,
     bus: createEventBus(),
-    configuredMappingsFor: configuredMappingsFor(),
-    indexRootNames: ROOT_NAMES,
+    scopesFor: scopesFor(),
     clock: () => new Date(AT),
     logger: makeLogger().logger,
     ...allowAllLiveCheck(),
@@ -1565,8 +1489,7 @@ it("stops a slow connection without LISTEN even if closing it fails", async () =
     favorites: repos.favorites,
     metadata,
     bus: createEventBus(),
-    configuredMappingsFor: configuredMappingsFor(),
-    indexRootNames: ROOT_NAMES,
+    scopesFor: scopesFor(),
     clock: () => new Date(AT),
     logger: makeLogger().logger,
     ...allowAllLiveCheck(),
