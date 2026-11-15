@@ -130,21 +130,28 @@ private func pending(_ item: CatalogItem, parent: CatalogItem, name: String, rou
     #expect(try await catalog.itemAt(entry.path).id == item.id)
 }
 
+// The limit is the one the server advertised for the location, not one built into the app.
 @Test func oversizedSaveIsRejectedBeforeCreatingARecoveryCopyOrMakingARequest() async throws {
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     defer { try? FileManager.default.removeItem(at: directory) }
     let catalog = try Catalog(url: directory.appendingPathComponent("catalog.sqlite"), title: "Writes")
     let file = directory.appendingPathComponent("oversized")
-    _ = FileManager.default.createFile(atPath: file.path, contents: nil)
-    let handle = try FileHandle(forWritingTo: file)
-    try handle.truncate(atOffset: 16 * 1024 * 1024 * 1024 + 1); try handle.close()
+    try Data("hello".utf8).write(to: file)
     let client = try APIClient(server: URL(string: "http://127.0.0.1:1")!, protocolVersion: 2)
-    await #expect(throws: DriveError.quota) {
-        _ = try await WriteCoordinator(catalog: catalog, client: client).perform(route: "uploads", localId: nil,
+    func save(limit: Int64?) async throws {
+        _ = try await WriteCoordinator(catalog: catalog, client: client, maxUploadBytes: limit).perform(route: "uploads", localId: nil,
             templateKey: "oversized", parentId: "root", name: "large", base: nil, contents: file, progress: Progress(totalUnitCount: 0))
     }
+    await #expect(throws: DriveError.quota) { try await save(limit: 4) }
+    // A location that advertised no limit does not write at all.
+    await #expect(throws: DriveError.permission) { try await save(limit: nil) }
     #expect(try await catalog.pendingWrites().isEmpty)
     #expect(!FileManager.default.fileExists(atPath: catalog.recoveryDirectory.path))
+    // A file exactly at the limit is admitted: it is kept for upload and only the server can refuse it.
+    await #expect(throws: URLError.self) { try await save(limit: 5) }
+    let admitted = try #require(try await catalog.pendingWrites().first)
+    #expect(admitted.request.size == 5)
+    #expect(FileManager.default.fileExists(atPath: catalog.recoveryDirectory.appendingPathComponent(admitted.id).path))
 }
 
 @Test func pendingSaveSurvivesRefreshRemovalValidationAndRestart() async throws {

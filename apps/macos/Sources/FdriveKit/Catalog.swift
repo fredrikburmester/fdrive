@@ -370,10 +370,10 @@ public actor Catalog {
         var copy = pending; copy.error = error
         try execute("UPDATE pending SET value=? WHERE key=? AND completed=0", [String(decoding: try JSONEncoder().encode(copy), as: UTF8.self), pending.key])
     }
-    /// The person stopped this write and the server took back what it had copied,
-    /// so there is nothing left to recover or replay. The record goes entirely:
-    /// anything short of that leaves it counted as outstanding, which is how the
-    /// app decides a location still has work in flight.
+    /// The server settled this write as cancelled, so it can never publish and there
+    /// is nothing left to recover or replay. The record goes entirely: anything short
+    /// of that leaves it counted as outstanding, which is how the app decides a
+    /// location still has work in flight.
     public func writeCancelled(_ pending: PendingWrite) throws {
         try execute("DELETE FROM pending WHERE key=?", [pending.key])
     }
