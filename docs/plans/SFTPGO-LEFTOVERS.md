@@ -9,14 +9,18 @@ when none are left.
 ## Outcome
 
 One storage, one login per account, one Trash, one index root, and change delivery from the
-[change journal](CHANGE-JOURNAL.md). No code path, setting, table or test exists only for a
-backend fdrive no longer has. The owner is the only production user, so no group carries data
-migrations, compatibility shims or configuration aliases; a full reindex is acceptable.
+[change journal](../INDEXER.md#the-change-journal). No code path, setting, table or test exists
+only for a backend fdrive no longer has. The owner is the only production user, so no group
+carries data migrations, compatibility shims or configuration aliases; a full reindex is
+acceptable.
 
 ## Order
 
 - Groups that add a migration run one at a time and need `pnpm test:integration`.
-- 37 last.
+- 38 and 39 wait until the owner's server has run v0.7.0-rc.11's start-up move.
+- 37 runs after them. Since #214 Trash rows (`app.trash_items`) live in the database, so
+  dropping the database is no longer harmless: the baseline must be skipped by databases
+  already at the last squashed migration and run on new ones.
 
 ## Decisions
 
@@ -41,9 +45,8 @@ Recommended on 2026-11-14 and approved by the owner the same day.
 
 ## Mac
 
-All are server-only and keep shipped Mac builds working.
+Server-only; it keeps shipped Mac builds working.
 
-28. Optional: drop `/checks` now that the change feed exists, after measuring the hourly pass.
 38. Drop `desktop_items.original_path` and the `trashName` handling with the start-up move of
     the Mac's old Trash (`settleTrashAtStart` in `trash/startup.ts`), once the owner's server
     has run it.

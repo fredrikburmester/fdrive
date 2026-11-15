@@ -1,6 +1,6 @@
 //! The change journal's writing side in the indexer. `idx.changes` is one numbered record of
 //! every change to a root, which fdrive's parts read from their own position instead of each
-//! finding changes on its own (docs/plans/CHANGE-JOURNAL.md). The API and OCR journal the
+//! finding changes on its own (docs/INDEXER.md#the-change-journal). The API and OCR journal the
 //! changes they make; the indexer journals the changes made outside fdrive that it applies:
 //! what the watcher sees and what a scan finds. It journals a change once the index has it,
 //! and only under the source of the thread applying it, so the journal's own reader, which

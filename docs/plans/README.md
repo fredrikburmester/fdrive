@@ -16,7 +16,6 @@ and S3 storage were removed.
 | [Owned shares](OWNED-SHARES.md) | Server-side gallery gating for share links from unindexed logins |
 | [ML server follow-ups](ML-SERVER.md) | What is left after moving embeddings and document extraction into one Rust server: amd64 measurements, memory, extraction gaps |
 | [SFTPGo leftovers](SFTPGO-LEFTOVERS.md) | Code, settings and tables that exist only because fdrive grew on storage it did not own, grouped into pull requests with their order and decisions |
-| [Change journal](CHANGE-JOURNAL.md) | One numbered record of file changes (`idx.changes`) that every part of fdrive reads from its own position: the foundation, the Mac change feed, OCR and the API's reader are built |
 
 These are a backlog, not a claim that an agent is working on every item.
 

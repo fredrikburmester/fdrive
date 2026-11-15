@@ -17,7 +17,7 @@ Current implementation reference. Unfinished work belongs in [plans](plans/READM
   PDF it rewrites; the indexer reads the journal from its own position and applies them at
   once. Its file watcher and periodic scan cover changes made outside fdrive and journal them
   too, so the journal holds every change. See [how changes arrive](INDEXER.md#how-changes-arrive)
-  and the [change journal](plans/CHANGE-JOURNAL.md). The API reads the journal too, as the only
+  and the [change journal](INDEXER.md#the-change-journal). The API reads the journal too, as the only
   way it learns of file changes: each change reaches every person who can see it once, as a
   resumable live update, and one made outside fdrive brings path-keyed metadata along (see
   [the API's reader](INDEXER.md#the-apis-reader)). OCR may write to mounted originals.
