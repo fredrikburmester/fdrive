@@ -1,19 +1,18 @@
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import type { ProviderModule, StorageProvider } from "@fdrive/core";
+import type { StorageProvider } from "@fdrive/core";
 import { createMemoryShareRepo } from "@fdrive/db";
 import { createMemoryRepos } from "@fdrive/db/testing";
-import { createLocalModule, type SharedGrant } from "@fdrive/local";
+import { createFilesFolder, type FilesFolder, type SharedGrant } from "@fdrive/local";
 import type { Logger } from "pino";
 import { onTestFinished, vi } from "vitest";
 import { activityFixture } from "../../../test/activity-fixture.js";
 import { createApp } from "../../app.ts";
 import { createAuthModule, createLoginLimiter, createPasswordCheck } from "../../auth/index.ts";
-import { createIdentityStorageFactory } from "../../auth/storage-factory.ts";
+import { createIdentityStorageFactory, type StorageSource } from "../../auth/storage-factory.ts";
 import { type AppConfig, loadConfig } from "../../config.ts";
 import type { LocalUserStore } from "../../local/users.ts";
-import { createProviderService } from "../../providers/service.ts";
 import { createShareCredentialCodec } from "../credentials.ts";
 import { createShareLimiter } from "../limiter.ts";
 import { createScryptSharePasswords } from "../passwords.ts";
@@ -30,13 +29,13 @@ export function cookieFrom(response: Response): string {
   return cookie;
 }
 
-/** Reshapes the local folder's module so every storage it builds is replaced by `patch`'s. */
+/** Reshapes the files folder so every storage it builds is replaced by `patch`'s. */
 export function patchStorage(
   patch: (storage: StorageProvider) => StorageProvider,
-): (module: ProviderModule) => ProviderModule {
-  return (module) => ({
-    ...module,
-    createStorage: (...args) => patch(module.createStorage(...args)),
+): (folder: FilesFolder) => StorageSource {
+  return (folder) => ({
+    admit: (username) => folder.admit(username),
+    storage: (username) => patch(folder.storage(username)),
   });
 }
 
@@ -45,8 +44,8 @@ export const SHARE_USERS = ["alice", "bob", "carol"] as const;
 
 export interface SharesHarnessOptions {
   readonly limiterCapacity?: number;
-  /** Reshapes the local folder's module, say to take its shares or its zip away. */
-  readonly local?: (module: ProviderModule) => ProviderModule;
+  /** Reshapes the files folder, say to take its zip away or refuse its users. */
+  readonly local?: (folder: FilesFolder) => StorageSource;
   /** The owner's Trash folder, which shares must keep out of. */
   readonly trashPath?: string;
   /** Folders other users share with a user, by that user's name. */
@@ -59,7 +58,7 @@ export interface SharesHarnessOptions {
 }
 
 /**
- * The shares API over the real local folder module: a temporary root with
+ * The shares API over the real files folder: a temporary root with
  * one home per user, fdrive's own sign-in, the identity storage factory
  * every feature uses, and nothing on the network. Each user starts with
  * `/a.docx` (`<name> data`) and `/report.txt` (`<name> report`).
@@ -116,17 +115,8 @@ export function sharesHarness(options: SharesHarnessOptions = {}) {
       return options.grants?.[username] ?? [];
     },
   };
-  const localModule = createLocalModule({ root, users });
-  // The local folder never calls the network.
-  const fetchImpl: typeof globalThis.fetch = async () => {
-    throw new Error("the shares harness has no network");
-  };
-  const providers = createProviderService({
-    repos,
-    fetch: fetchImpl,
-    clock,
-    modules: { local: options.local?.(localModule) ?? localModule },
-  });
+  const filesFolder = createFilesFolder({ root, users });
+  const folder = options.local?.(filesFolder) ?? filesFolder;
   const seeded = (async () => {
     const row = await repos.providers.ensure({ type: "local", baseUrl: "local" });
     // Each user comes with their login, as setup and System > Users create them.
@@ -139,21 +129,20 @@ export function sharesHarness(options: SharesHarnessOptions = {}) {
         at: clock(),
       });
     }
-    return repos.providers.update(row.id, { enabled: true, managedByEnv: true });
+    return row;
   })();
   const storageFactory = createIdentityStorageFactory({
-    providers,
-    fetch: fetchImpl,
+    identities: repos.identities,
+    folder,
     clock,
   });
   const auth = createAuthModule({
     repos,
-    providers,
     clock,
     config,
     checkPassword: createPasswordCheck({ limiter: createLoginLimiter({ clock }), users }),
     storageFactory,
-    installation: async () => ({ trash: false, index: false }),
+    installation: async () => ({ storageName: "Local folder", trash: false, index: false }),
   });
   const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() } as unknown as Logger;
   const activity = activityFixture(clock);
@@ -164,7 +153,6 @@ export function sharesHarness(options: SharesHarnessOptions = {}) {
   const service = createSharesService({
     repos,
     shares,
-    providers,
     storageFor: storageFactory,
     trashPathFor: async () => options.trashPath ?? null,
     passwords,
@@ -180,7 +168,7 @@ export function sharesHarness(options: SharesHarnessOptions = {}) {
     version: "test",
     startedAt: clock(),
     principalResolver: auth.principalResolver,
-    connectionStatus: async () => ({ required: false, providers: [] }),
+    setupRequired: async () => false,
     registerRoutes: (groups) => {
       auth.registerRoutes(groups);
       registerSharesRoutes(groups, {
@@ -253,7 +241,6 @@ export function sharesHarness(options: SharesHarnessOptions = {}) {
     clock,
     repos,
     config,
-    providers,
     storageFactory,
     shares,
     passwords,

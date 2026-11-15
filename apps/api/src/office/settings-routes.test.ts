@@ -53,7 +53,7 @@ function buildApp(isAdmin: boolean, workerToken = "worker-secret") {
     version: "test",
     startedAt: new Date(0),
     principalResolver: async () => principal,
-    connectionStatus: async () => ({ required: false, providers: [] }),
+    setupRequired: async () => false,
     registerRoutes: (groups) =>
       registerOfficeSettingsRoutes(groups, {
         service,

@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { createDb, createIndexQueries, createRepos, migrate, schema } from "@fdrive/db";
-import { createLocalModule, type LocalUsers } from "@fdrive/local";
+import { createFilesFolder, type LocalUsers } from "@fdrive/local";
 import { startPostgres } from "@fdrive/testkit";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createIdentityStorageFactory } from "../../src/auth/storage-factory.ts";
@@ -18,7 +18,6 @@ import {
   runSimilarFiles,
 } from "../../src/mcp/handlers.ts";
 import { resolveScopeContext } from "../../src/mcp/scope-context.ts";
-import { memoryProviderService } from "../../src/providers/test-fixtures/index.ts";
 import { createReadAuthorizer } from "../../src/scoping/read-authorizer.ts";
 import { createScopeResolver } from "../../src/scoping/resolver.ts";
 import { createSearchService } from "../../src/search/service.ts";
@@ -77,10 +76,8 @@ describe("fdrive's own folders in the index, through the MCP tools", () => {
       status: async () => "active",
       shared: async () => [],
     };
-    const module = createLocalModule({ root, users, indexRoot: "files" });
-    const providers = memoryProviderService(repos, { modules: { local: module } });
+    const folder = createFilesFolder({ root, users, indexRoot: "files" });
     const provider = await repos.providers.ensure({ type: "local", baseUrl: "local" });
-    await repos.providers.update(provider.id, { enabled: true, managedByEnv: true });
     const account = await repos.accounts.create({ displayName: "alice" });
     const identity = await repos.identities.create({
       accountId: account.id,
@@ -88,8 +85,8 @@ describe("fdrive's own folders in the index, through the MCP tools", () => {
       externalUsername: "alice",
     });
     const storage = await createIdentityStorageFactory({
-      providers,
-      fetch: globalThis.fetch,
+      identities: repos.identities,
+      folder,
       clock,
     })(identity.id);
 
@@ -128,7 +125,11 @@ describe("fdrive's own folders in the index, through the MCP tools", () => {
         thumbsEnabled: false,
         clock,
       }),
-      scopeResolver: createScopeResolver({ providers, indexRootNames: ["files"] }),
+      scopeResolver: createScopeResolver({
+        storageId: provider.id,
+        rootName: "files",
+        indexRootNames: ["files"],
+      }),
       identities: repos.identities,
       publicUrl: async () => null,
       indexerClient: null,

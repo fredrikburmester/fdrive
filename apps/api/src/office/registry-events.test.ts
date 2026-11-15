@@ -1,7 +1,7 @@
-import { createMemoryOfficeFileRepo, type Provider } from "@fdrive/db";
+import { createMemoryOfficeFileRepo, type Identity } from "@fdrive/db";
 import { createMemoryRepos } from "@fdrive/db/testing";
-import { createLocalModule } from "@fdrive/local";
-import { expect, it, vi } from "vitest";
+import { expect, it } from "vitest";
+import { seedStorageRow } from "../local/test-fixtures/index.ts";
 import { createMetadataService } from "../metadata/service.js";
 import { createScopeResolver } from "../scoping/resolver.ts";
 import {
@@ -12,49 +12,15 @@ import {
 
 const now = new Date("2026-09-06T00:00:00Z");
 
-/** The local folder's module, read under the index root `rootName`. */
-function localModule(rootName: string) {
-  return createLocalModule({
-    root: "/srv/files",
-    indexRoot: rootName,
-    users: {
-      status: async () => "active",
-      shared: async () => [],
-    },
-  });
-}
-
-/** An enabled local-folder row, as the deployment seeds it. */
-async function seedLocalProvider(repos: ReturnType<typeof createMemoryRepos>): Promise<Provider> {
-  const row = await repos.providers.ensure({ type: "local", baseUrl: "local" });
-  const updated = await repos.providers.update(row.id, { enabled: true, managedByEnv: true });
-  if (updated === null) throw new Error("provider vanished");
-  return updated;
-}
-
 /**
- * A real `ScopeResolver.configuredMappings` over the repos' provider rows,
- * each read under the root `rootName()` names at that moment.
+ * A real `ScopeResolver.configuredMappings` for the files folder's row
+ * `storageId`, read under the root `rootName()` names at that moment.
  */
-function configuredMappingsFrom(
-  repos: ReturnType<typeof createMemoryRepos>,
-  rootName: () => string = () => "files",
-) {
-  return createScopeResolver({
-    providers: {
-      async get(id) {
-        const provider = await repos.providers.get(id);
-        return provider === null
-          ? null
-          : {
-              provider,
-              module: localModule(rootName()),
-              instance: { id: provider.id, baseUrl: provider.baseUrl, config: provider.config },
-            };
-      },
-    },
-    indexRootNames: [],
-  }).configuredMappings;
+function configuredMappingsFrom(storageId: string, rootName: () => string = () => "files") {
+  return (identity: Identity) =>
+    createScopeResolver({ storageId, rootName: rootName(), indexRootNames: [] }).configuredMappings(
+      identity,
+    );
 }
 
 it("maps external move/delete once and ignores content events", async () => {
@@ -83,7 +49,7 @@ it("wraps fs metadata hooks without duplicate indexer mapping", async () => {
   const repos = createMemoryRepos();
   const files = createMemoryOfficeFileRepo();
   const metadata = createMetadataService(repos);
-  const provider = await seedLocalProvider(repos);
+  const provider = await seedStorageRow(repos);
   const account = await repos.accounts.create({ displayName: null });
   const identity = await repos.identities.create({
     accountId: account.id,
@@ -94,7 +60,7 @@ it("wraps fs metadata hooks without duplicate indexer mapping", async () => {
     metadata,
     files,
     repos.identities,
-    configuredMappingsFrom(repos),
+    configuredMappingsFrom(provider.id),
     () => now,
   );
   const file = await files.ensure({
@@ -108,14 +74,12 @@ it("wraps fs metadata hooks without duplicate indexer mapping", async () => {
   expect(await files.get(file.id)).toBeNull();
   await wrapped.onMoved("missing", "/x", "/y", false);
   await wrapped.onDeleted("missing", "/x", false);
-  await repos.providers.update(provider.id, { enabled: false });
-  await wrapped.onDeleted(identity.id, "/x", false);
 });
 it("passes onTrashed through unchanged: office registrations are untouched, recents are dropped", async () => {
   const repos = createMemoryRepos();
   const files = createMemoryOfficeFileRepo();
   const metadata = createMetadataService(repos);
-  const provider = await seedLocalProvider(repos);
+  const provider = await seedStorageRow(repos);
   const account = await repos.accounts.create({ displayName: null });
   const identity = await repos.identities.create({
     accountId: account.id,
@@ -126,7 +90,7 @@ it("passes onTrashed through unchanged: office registrations are untouched, rece
     metadata,
     files,
     repos.identities,
-    configuredMappingsFrom(repos),
+    configuredMappingsFrom(provider.id),
     () => now,
   );
   expect(wrapped.onTrashed).toBe(metadata.onTrashed);
@@ -144,7 +108,7 @@ it("passes onTrashed through unchanged: office registrations are untouched, rece
 it("tombstones an old mapping if the configured root changes during move resolution", async () => {
   const repos = createMemoryRepos();
   const files = createMemoryOfficeFileRepo();
-  const provider = await seedLocalProvider(repos);
+  const provider = await seedStorageRow(repos);
   const account = await repos.accounts.create({ displayName: null });
   const identity = await repos.identities.create({
     accountId: account.id,
@@ -161,7 +125,7 @@ it("tombstones an old mapping if the configured root changes during move resolut
     createMetadataService(repos),
     files,
     repos.identities,
-    configuredMappingsFrom(repos, () => (++calls === 1 ? "files" : "other")),
+    configuredMappingsFrom(provider.id, () => (++calls === 1 ? "files" : "other")),
     () => now,
   ).onMoved(identity.id, "/a.docx", "/b.docx", false);
   expect(await files.get(file.id)).toBeNull();
@@ -170,7 +134,7 @@ it("tombstones an old mapping if the configured root changes during move resolut
 it("tombstones the source when the move target becomes unmapped", async () => {
   const repos = createMemoryRepos();
   const files = createMemoryOfficeFileRepo();
-  const provider = await seedLocalProvider(repos);
+  const provider = await seedStorageRow(repos);
   const account = await repos.accounts.create({ displayName: null });
   const identity = await repos.identities.create({
     accountId: account.id,
@@ -182,56 +146,33 @@ it("tombstones the source when the move target becomes unmapped", async () => {
     rootName: "files",
     path: "alice/a.docx",
   });
-  const get = repos.providers.get.bind(repos.providers);
-  vi.spyOn(repos.providers, "get")
-    .mockImplementationOnce(get)
-    .mockImplementation(async (id) => {
-      const row = await get(id);
-      return row === null ? null : { ...row, enabled: false };
-    });
+  const mapped = configuredMappingsFrom(provider.id);
+  let calls = 0;
   await withOfficeMetadata(
     createMetadataService(repos),
     files,
     repos.identities,
-    configuredMappingsFrom(repos),
+    async (login) =>
+      ++calls === 1 ? mapped(login) : { available: false, reason: "invalid_configuration" },
     () => now,
   ).onMoved(identity.id, "/a.docx", "/elsewhere.docx", false);
   expect(await files.get(file.id)).toBeNull();
 });
 
-it("routes a root event to its provider, independently of the default provider", async () => {
-  const repos = createMemoryRepos();
-  const first = await repos.providers.ensure({ type: "local", baseUrl: "http://first" });
-  const second = await repos.providers.ensure({ type: "local", baseUrl: "http://second" });
+it("applies a root event only under the files folder's own root", async () => {
   const files = createMemoryOfficeFileRepo();
-  const firstFile = await files.ensure({
-    providerId: first.id,
-    rootName: "second",
-    path: "a.docx",
-  });
-  const secondFile = await files.ensure({
-    providerId: second.id,
-    rootName: "second",
-    path: "a.docx",
-  });
-  const providers = {
-    list: () => repos.providers.list(),
-    get: async (id: string) => ({
-      module: { indexRootName: () => (id === second.id ? "second" : "first") },
-      instance: {},
-    }),
-  } as unknown as Parameters<typeof applyOfficeRootEvent>[1];
+  const storage = { id: "123e4567-e89b-42d3-a456-426614174000", rootName: "files" };
+  const file = await files.ensure({ providerId: storage.id, rootName: "files", path: "a.docx" });
   const event = {
     kind: "deleted" as const,
-    root: "second",
+    root: "files",
     path: "a.docx",
     target_path: null,
     at: now.toISOString(),
   };
-  await applyOfficeRootEvent(files, providers, { ...event, kind: "changed" });
-  expect(await files.get(secondFile.id)).not.toBeNull();
-  await applyOfficeRootEvent(files, providers, event);
-  expect(await files.get(secondFile.id)).toBeNull();
-  expect(await files.get(firstFile.id)).not.toBeNull();
-  await applyOfficeRootEvent(files, { ...providers, get: async () => null }, event);
+  await applyOfficeRootEvent(files, storage, { ...event, kind: "changed" });
+  await applyOfficeRootEvent(files, storage, { ...event, root: "photos" });
+  expect(await files.get(file.id)).not.toBeNull();
+  await applyOfficeRootEvent(files, storage, event);
+  expect(await files.get(file.id)).toBeNull();
 });

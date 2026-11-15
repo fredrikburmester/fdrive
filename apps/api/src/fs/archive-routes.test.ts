@@ -172,7 +172,7 @@ async function buildHarness(seed: Seed = SEED, username = "alice", jobMaxBytes =
     startedAt: new Date(),
     clock,
     principalResolver: async () => principal,
-    connectionStatus: async () => ({ required: false, providers: [] }),
+    setupRequired: async () => false,
     registerRoutes: (groups) => {
       registerFsRoutes(groups, {
         activity: activity.service,
@@ -242,7 +242,7 @@ async function buildHarnessWithArchivePeekMaxBytes(archivePeekMaxBytes: number):
     startedAt: new Date(),
     clock,
     principalResolver: async () => principal,
-    connectionStatus: async () => ({ required: false, providers: [] }),
+    setupRequired: async () => false,
     registerRoutes: (groups) => registerFsRoutes(groups, fsRoutesDeps),
   });
 
@@ -282,7 +282,7 @@ async function buildHarnessWithStorage(storage: StorageProvider): Promise<Harnes
     startedAt: new Date(),
     clock,
     principalResolver: async () => principal,
-    connectionStatus: async () => ({ required: false, providers: [] }),
+    setupRequired: async () => false,
     registerRoutes: (groups) =>
       registerFsRoutes(groups, {
         activity: activity.service,
@@ -837,7 +837,7 @@ describe("POST /fs/compress and the resulting job", () => {
       startedAt: new Date(),
       clock: () => new Date(),
       principalResolver: async () => principal,
-      connectionStatus: async () => ({ required: false, providers: [] }),
+      setupRequired: async () => false,
       registerRoutes: (groups) =>
         registerFsRoutes(groups, {
           activity: activity.service,

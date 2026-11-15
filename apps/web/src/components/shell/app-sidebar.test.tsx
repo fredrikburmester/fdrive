@@ -93,7 +93,6 @@ it("shows Trash when the login has it, and names the signed-in login and its sto
   renderSidebar();
   await screen.findByRole("link", { name: "Shares" });
   expect(screen.getByRole("link", { name: "Trash" })).toBeTruthy();
-  expect(screen.getByRole("img", { name: "fdrive" })).toBeTruthy();
   expect(screen.getByText("ada")).toBeTruthy();
   expect(screen.getByText("Main")).toBeTruthy();
 });

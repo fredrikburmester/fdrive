@@ -1,40 +1,52 @@
 import { MeResponse, ROUTES } from "@fdrive/contracts";
+import { createFilesFolder, createFilesFolderGuard, FILES_FOLDER_REASONS } from "@fdrive/local";
 import { expect, it } from "vitest";
+import { temporaryStorageRoot } from "../local/test-fixtures/index.ts";
 import { authHarness } from "./test-fixtures/index.ts";
 
 /**
- * A disabled provider (the deployment stopped serving its folder) stops
- * file access for its logins, not their sessions: they still reach
- * `/auth/me` and logout.
+ * A files folder fdrive may not use (a wrong or empty mount) stops file
+ * access, not sessions: everyone still reaches `/auth/me` and logout, and
+ * administrators the System pages that say why.
  */
-it("keeps me and logout working for a login whose provider was disabled", async () => {
-  const h = authHarness();
-  const row = await h.seeded;
+it("keeps me and logout working while the files folder is refused", async () => {
+  const root = temporaryStorageRoot();
+  const guard = createFilesFolderGuard({
+    root,
+    facts: { installationId: async () => "id", holdsFiles: async () => true },
+  });
+  const refused = createFilesFolder({
+    root,
+    guard,
+    users: { status: async () => "active", shared: async () => [] },
+  });
+  const h = authHarness({
+    folder: (folder) => ({ admit: folder.admit, storage: refused.storage }),
+  });
   const alice = await h.login();
-  await h.repos.providers.update(row.id, { enabled: false });
 
   const me = await h.call(ROUTES.auth.me, { cookie: alice.cookie });
   expect(me.status).toBe(200);
   expect(MeResponse.parse(await me.json()).identity.id).toBe(alice.me.identity.id);
 
-  // The principal itself carries storage that fails, so file routes 502
-  // instead of the whole authed group.
-  const storage = await h.storageFactory(alice.me.identity.id).catch((error: unknown) => error);
-  expect(storage).toMatchObject({ kind: "upstream_unavailable" });
+  // The principal's storage fails each operation, so file routes 502 instead
+  // of the whole authed group.
+  const storage = await h.storageFactory(alice.me.identity.id);
+  await expect(storage.list("/")).rejects.toMatchObject({
+    kind: "upstream_unavailable",
+    message: FILES_FOLDER_REASONS.empty,
+  });
 
   const logout = await h.call(ROUTES.auth.logout, { method: "POST", cookie: alice.cookie });
   expect(logout.status).toBe(200);
   expect((await h.call(ROUTES.auth.me, { cookie: alice.cookie })).status).toBe(401);
 
-  // Signing in again checks only the password; the new session's files fail the same way.
+  // Signing in again checks only the password.
   const again = await h.call(ROUTES.auth.login, {
     method: "POST",
     body: { username: "alice", password: "alice-pass" },
   });
   expect(again.status).toBe(200);
-  expect(
-    await h.storageFactory(alice.me.identity.id).catch((error: unknown) => error),
-  ).toMatchObject({ kind: "upstream_unavailable" });
 });
 
 /**

@@ -180,10 +180,9 @@ export function normalizeOrThrow(path: string): string {
   }
 }
 
-/** Maps a `StorageError` to the `ApiHttpError` of the matching kind ("unauthorized" becomes "reauth_required"). */
+/** Maps a `StorageError` to the `ApiHttpError` of the same kind. */
 export function toApiHttpError(error: StorageError): ApiHttpError {
-  const kind = error.kind === "unauthorized" ? "reauth_required" : error.kind;
-  return new ApiHttpError(kind, error.message, error.details);
+  return new ApiHttpError(error.kind, error.message, error.details);
 }
 
 /** Runs `fn`, mapping any `StorageError` it throws into the matching `ApiHttpError`. */

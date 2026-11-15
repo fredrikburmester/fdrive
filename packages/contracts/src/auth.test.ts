@@ -32,8 +32,6 @@ describe("IdentitySummary", () => {
     id: VALID_UUID,
     username: "alice",
     providerId: VALID_UUID,
-    providerType: "local",
-    providerLabel: "Local folder",
   };
 
   it("parses a valid identity", () => {
@@ -44,8 +42,8 @@ describe("IdentitySummary", () => {
     expect(IdentitySummary.safeParse({ ...valid, id: "not-a-uuid" }).success).toBe(false);
   });
 
-  it("rejects an unknown providerType", () => {
-    expect(IdentitySummary.safeParse({ ...valid, providerType: "gdrive" }).success).toBe(false);
+  it("names no storage type or label", () => {
+    expect(IdentitySummary.parse({ ...valid, providerType: "local" })).toEqual(valid);
   });
 });
 
@@ -56,10 +54,9 @@ describe("MeResponse", () => {
       id: VALID_UUID,
       username: "alice",
       providerId: VALID_UUID,
-      providerType: "local",
-      providerLabel: "Home",
     },
     isAdmin: false,
+    storageName: "Home",
     trash: true,
     index: false,
   };
@@ -68,8 +65,8 @@ describe("MeResponse", () => {
     expect(MeResponse.parse(valid)).toEqual(valid);
   });
 
-  it("rejects a missing isAdmin or installation flag", () => {
-    for (const key of ["isAdmin", "trash", "index"] as const) {
+  it("rejects a missing isAdmin, storage name or installation flag", () => {
+    for (const key of ["isAdmin", "storageName", "trash", "index"] as const) {
       const { [key]: _drop, ...rest } = valid;
       expect(MeResponse.safeParse(rest).success, key).toBe(false);
     }

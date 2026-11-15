@@ -1,15 +1,7 @@
 import { constants } from "node:fs";
 import { access, realpath, stat } from "node:fs/promises";
 import { join } from "node:path";
-import {
-  isStorageError,
-  normalizePath,
-  type ProbeResult,
-  type ProviderField,
-  type ProviderModule,
-  StorageError,
-  splitSegments,
-} from "@fdrive/core";
+import { isStorageError, normalizePath, StorageError, splitSegments } from "@fdrive/core";
 import { type DiskChangeListener, type IndexChange, underRoot } from "./changes.js";
 import type { FilesFolderGuard } from "./files-marker.js";
 import { isLocalUsername } from "./names.js";
@@ -18,6 +10,7 @@ import {
   createUserStorage,
   namedSharedGrants,
   type SharedGrant,
+  type UserStorage,
 } from "./shared.js";
 
 export { isLocalUsername };
@@ -27,7 +20,7 @@ export type LocalUserStatus = "active" | "disabled" | "missing";
 
 /**
  * The users of local storage and what they share with each other. fdrive
- * keeps them and checks their passwords; the module only asks whether a
+ * keeps them and checks their passwords; the files folder only asks whether a
  * user is still active and which folders others share with them, so it
  * never learns how any of that is stored.
  */
@@ -37,7 +30,7 @@ export interface LocalUsers {
   shared(username: string): Promise<readonly SharedGrant[]>;
 }
 
-export interface CreateLocalModuleOptions {
+export interface FilesFolderOptions {
   /**
    * The folder every home lives under, as `<root>/<username>`: the layout
    * SFTPGo uses, so its data folder can be adopted in place. Set by the
@@ -59,26 +52,49 @@ export interface CreateLocalModuleOptions {
    */
   readonly onIndexChange?: (root: string, change: IndexChange) => void;
   /**
-   * Whether `root` is this installation's files folder. With it, storage is
-   * refused (`upstream_unavailable`) while the folder is not, so a wrong
-   * mount is never served or written; `admit` and `probe` check it again as
-   * it goes stale.
+   * Whether `root` is this installation's files folder. With it, every
+   * storage operation is refused (`upstream_unavailable`) while the folder
+   * is not, so a wrong mount is never served or written; `health` reports
+   * it.
    */
   readonly guard?: FilesFolderGuard;
   /**
-   * Folders in each user's files, as paths in them, that no share reaches
-   * for the provider row `providerId`: their Trash while it is on and
-   * fdrive's own bookkeeping. A folder shared from inside one, or from
-   * anywhere in fdrive's Trash layout (`closedToShares`), is refused to the
-   * person it is shared with.
+   * Folders in each user's files, as paths in them, that no share reaches:
+   * their Trash while it is on and fdrive's own bookkeeping. A folder shared
+   * from inside one, or from anywhere in fdrive's Trash layout
+   * (`closedToShares`), is refused to the person it is shared with.
    */
-  readonly closedFolders?: (providerId: string) => Promise<readonly string[]>;
+  readonly closedFolders?: () => Promise<readonly string[]>;
 }
 
-export const LOCAL_CREDENTIAL_FIELDS: readonly ProviderField[] = [
-  { name: "username", label: "Username", kind: "text", required: true, maxLength: 255 },
-  { name: "password", label: "Password", kind: "password", required: true },
-];
+/** Whether fdrive can use the files folder now, and what was found. */
+export interface FilesFolderHealth {
+  readonly ok: boolean;
+  readonly detail: string;
+}
+
+/**
+ * The files folder: files in a folder on fdrive's own disk, one home per
+ * user, with users fdrive keeps. Every file operation is one filesystem
+ * call or an atomic publish, so moves are atomic, uploads keep their
+ * modification time, and zips stream.
+ */
+export interface FilesFolder {
+  /**
+   * `username`'s files: their home at `<root>/<username>`, plus
+   * `/Shared with me` from what others share with them. Throws `forbidden`
+   * for a name that cannot be a home folder.
+   */
+  storage(username: string): UserStorage;
+  /**
+   * Throws `forbidden` unless `username` is an active user, so a user
+   * disabled after signing in stops at once, and `upstream_unavailable`
+   * when the users cannot be read.
+   */
+  admit(username: string): Promise<void>;
+  /** Whether the folder is this installation's and one fdrive can read, write and enter. */
+  health(): Promise<FilesFolderHealth>;
+}
 
 function unavailable(error: unknown): StorageError {
   if (isStorageError(error)) return error;
@@ -86,7 +102,7 @@ function unavailable(error: unknown): StorageError {
 }
 
 /** Checks that `root` is a folder this process can read and write. */
-export async function probeRoot(root: string): Promise<ProbeResult> {
+export async function probeRoot(root: string): Promise<FilesFolderHealth> {
   try {
     if (!(await stat(root)).isDirectory()) {
       return { ok: false, detail: "The storage root is not a folder" };
@@ -133,76 +149,36 @@ export function createIndexListener(
   };
 }
 
-/**
- * Files in a folder on fdrive's own disk, with users fdrive keeps. Every
- * file operation is one filesystem call or an atomic publish, so moves are
- * atomic, uploads keep their modification time, and zips stream.
- */
-export function createLocalModule(options: CreateLocalModuleOptions): ProviderModule {
+export function createFilesFolder(options: FilesFolderOptions): FilesFolder {
   const { indexRoot, onIndexChange, guard } = options;
   const onChange =
     indexRoot === undefined || indexRoot === null || onIndexChange === undefined
       ? undefined
       : createIndexListener(options.root, indexRoot, onIndexChange);
+  const ready =
+    guard === undefined
+      ? undefined
+      : async () => {
+          const verdict = await guard.verify();
+          if (!verdict.ok) throw new StorageError("upstream_unavailable", verdict.reason);
+        };
+  const inHome = (owner: string, path: string) =>
+    join(options.root, owner, ...splitSegments(normalizePath(path)));
+
   return {
-    type: "local",
-    label: "Local folder",
-    configFields: [],
-    credentialFields: LOCAL_CREDENTIAL_FIELDS,
-    capabilities: {
-      zip: true,
-      setModifiedAt: true,
-      atomicMove: true,
-      trash: true,
-      shares: true,
-      office: true,
-      shareWithPeople: true,
-      index: true,
-    },
-    // fdrive moves deleted files into the configured folder itself.
-    trash: "move",
-    shares: "owned",
-    deploymentManaged: true,
-
-    indexRootName: () => options.indexRoot ?? null,
-
-    async probe() {
-      const verdict = await guard?.verify();
-      if (verdict !== undefined && !verdict.ok) return { ok: false, detail: verdict.reason };
-      return probeRoot(options.root);
-    },
-
-    async admit(_instance, externalUsername) {
-      const verdict = await guard?.verify();
-      if (verdict !== undefined && !verdict.ok) {
-        throw new StorageError("upstream_unavailable", verdict.reason);
-      }
-      let status: LocalUserStatus;
-      try {
-        status = await options.users.status(externalUsername);
-      } catch (error) {
-        throw unavailable(error);
-      }
-      if (status !== "active") throw new StorageError("forbidden", "this user may not sign in");
-    },
-
-    createStorage(instance, session) {
-      guard?.assertUsable();
+    storage(username) {
       // Users are created with valid names only, so this guards a stored
       // login that predates a rule change, not a caller's input.
-      if (!isLocalUsername(session.externalUsername)) {
+      if (!isLocalUsername(username)) {
         throw new StorageError("forbidden", "this login has no valid home folder");
       }
-      const username = session.externalUsername;
-      const inHome = (owner: string, path: string) =>
-        join(options.root, owner, ...splitSegments(normalizePath(path)));
       return createUserStorage({
         ...(onChange === undefined ? {} : { onChange }),
+        ...(ready === undefined ? {} : { ready }),
         home: join(options.root, username),
         shared: async () => {
           const grants = await options.users.shared(username);
-          const closed =
-            grants.length === 0 ? [] : ((await options.closedFolders?.(instance.id)) ?? []);
+          const closed = grants.length === 0 ? [] : ((await options.closedFolders?.()) ?? []);
           // Named before any is left out, as the API names them, so names never disagree.
           return namedSharedGrants(username, grants)
             .filter(({ grant }) => !closedToShares(grant.path, closed))
@@ -214,6 +190,22 @@ export function createLocalModule(options: CreateLocalModuleOptions): ProviderMo
             }));
         },
       });
+    },
+
+    async admit(username) {
+      let status: LocalUserStatus;
+      try {
+        status = await options.users.status(username);
+      } catch (error) {
+        throw unavailable(error);
+      }
+      if (status !== "active") throw new StorageError("forbidden", "this user may not sign in");
+    },
+
+    async health() {
+      const verdict = await guard?.verify();
+      if (verdict !== undefined && !verdict.ok) return { ok: false, detail: verdict.reason };
+      return probeRoot(options.root);
     },
   };
 }

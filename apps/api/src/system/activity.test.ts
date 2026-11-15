@@ -174,10 +174,7 @@ function fixture(admin = true) {
         isAdmin: admin,
         storage: {},
       }) as Principal,
-    connectionStatus: async () => ({
-      required: false,
-      providers: [{ type: "local", host: "Local folder" }],
-    }),
+    setupRequired: async () => false,
     registerRoutes(groups) {
       registerActivityRoutes(groups, {
         indexerUrl: "http://indexer",

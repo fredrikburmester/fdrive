@@ -11,18 +11,15 @@ A scope `{rootName, fsPrefix, virtualPrefix}` maps part of an index root onto pa
 login's files. Mapping is segment-aware and must round-trip.
 
 Every login's home is `<root>/<username>`, shown at `/`: the scope
-`{rootName: root, fsPrefix: "/<username>", virtualPrefix: "/"}`. The root is the index root
-its provider names (`ProviderModule.indexRootName`). The local folder names the configured
-root whose `storagePath` is `FDRIVE_STORAGE_ROOT`, or the only root there is. Nothing is
-configured per login.
+`{rootName: root, fsPrefix: "/<username>", virtualPrefix: "/"}`. The root is the one the files
+folder is read under (`localIndexRoot`): the configured root whose `storagePath` is
+`FDRIVE_STORAGE_ROOT`, or the only root there is, or `files`. Nothing is configured per login.
 
 ## Configured and indexed scopes
 
-`configuredMappings(identity)` returns the home plus any extra scopes whenever the provider
-names a root, indexed or not, reading only the provider row. Office, index events, the Office
-file registry and activity observations use it. It is unavailable as
-`provider_mismatch` (the provider is gone or disabled), `no_roots` (it names no root) or
-`invalid_configuration` (the username is not one path segment).
+`configuredMappings(identity)` returns the home plus any extra scopes, indexed or not, without
+reading storage. Office, index events, the Office file registry and activity observations use
+it. It is unavailable only as `invalid_configuration` (the username is not one path segment).
 
 `verifiedIndexScopes(identity)` keeps the configured scopes whose root is in
 `FDRIVE_INDEX_ROOTS`, and is `no_roots` when none is. Search, duplicates, thumbnails, folder

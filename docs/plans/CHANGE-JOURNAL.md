@@ -2,7 +2,7 @@
 
 Started 2026-11-14. fdrive owns every write to the files folder, so one durable, numbered record
 of file changes can replace the separate ways each part of fdrive finds them today. Builds on
-[how changes arrive](../INDEXER.md#how-changes-arrive) and the [storage port](../STORAGE-PROVIDERS.md).
+[how changes arrive](../INDEXER.md#how-changes-arrive) and the [storage port](../STORAGE.md).
 
 ## Outcome
 

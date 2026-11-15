@@ -1,77 +1,49 @@
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { createMemoryRepos } from "@fdrive/db/testing";
-import { createLocalModule, type LocalUserStatus } from "@fdrive/local";
-import { afterEach, expect, it, vi } from "vitest";
-import { createPinnedStorageFactory } from "../auth/storage-factory.ts";
-import { memoryProviderService } from "../providers/test-fixtures/index.ts";
+import { expect, it } from "vitest";
+import { createIdentityStorageFactory } from "../auth/storage-factory.ts";
+import {
+  filesFolderFixture,
+  seedLocalUsers,
+  seedStorageRow,
+} from "../local/test-fixtures/index.ts";
 import { createOfficeStorageFactory } from "./storage.ts";
 
-const roots: string[] = [];
-afterEach(async () => {
-  await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
-});
-
-/** Alice's local login over a temporary folder holding `/a.docx`. */
+/** Alice's login over a temporary files folder holding `/a.docx`. */
 async function fixture() {
-  const root = await mkdtemp(join(tmpdir(), "fdrive-office-storage-"));
-  roots.push(root);
-  await mkdir(join(root, "alice"));
-  await writeFile(join(root, "alice", "a.docx"), "hello");
-  let status: LocalUserStatus = "active";
-  const module = createLocalModule({
-    root,
-    indexRoot: "files",
-    users: {
-      status: async () => status,
-      shared: async () => [],
-    },
-  });
   const repos = createMemoryRepos();
-  const provider = await repos.providers.ensure({ type: "local", baseUrl: "local" });
-  const account = await repos.accounts.create({ displayName: "alice" });
-  const identity = await repos.identities.create({
-    accountId: account.id,
-    providerId: provider.id,
-    externalUsername: "alice",
-  });
-  const providers = memoryProviderService(repos, { modules: { local: module } });
+  const local = filesFolderFixture(repos);
+  await mkdir(join(local.root, "alice"));
+  await writeFile(join(local.root, "alice", "a.docx"), "hello");
+  const provider = await seedStorageRow(repos);
+  const [identity] = await seedLocalUsers(repos, [{ username: "alice", password: "alice-pass" }]);
+  if (identity === undefined) throw new Error("unseeded");
   const factory = createOfficeStorageFactory({
-    pinned: createPinnedStorageFactory({ providers, fetch: globalThis.fetch }),
+    storageId: provider.id,
+    storage: createIdentityStorageFactory({
+      identities: repos.identities,
+      folder: local.folder,
+      clock: () => new Date(),
+    }),
   });
-  return {
-    repos,
-    provider,
-    identity,
-    providers,
-    factory,
-    disable: () => {
-      status = "disabled";
-    },
-  };
+  return { repos, provider, identity, factory };
 }
 
-it("resolves the identity once and performs storage calls without database callbacks", async () => {
+it("serves the owner's files to the editor", async () => {
   const h = await fixture();
-  const forIdentity = vi.spyOn(h.providers, "forIdentity");
   const storage = await h.factory(h.identity.id, h.provider.id);
-  expect(forIdentity).toHaveBeenCalledExactlyOnceWith(h.identity.id);
-  forIdentity.mockClear();
   expect((await storage.statFile("/a.docx")).size).toBe(5);
   await storage.upload("/a.docx", new TextEncoder().encode("saved"), { overwrite: true });
   expect(await new Response((await storage.download("/a.docx")).body).text()).toBe("saved");
-  expect(forIdentity).not.toHaveBeenCalled();
 });
 
-it("fails closed with a 401 on a missing identity, a foreign or disabled provider, or a disabled user", async () => {
+it("fails closed with a 401 on a missing identity, another provider row or a disabled user", async () => {
   const h = await fixture();
   await expect(
     h.factory("00000000-0000-0000-0000-000000000000", h.provider.id),
   ).rejects.toMatchObject({ status: 401 });
   await expect(h.factory(h.identity.id, "foreign")).rejects.toMatchObject({ status: 401 });
-  h.disable();
-  await expect(h.factory(h.identity.id, h.provider.id)).rejects.toMatchObject({ status: 401 });
-  await h.repos.providers.update(h.provider.id, { enabled: false });
+  await h.repos.localUsers.update("alice", { disabled: true });
   await expect(h.factory(h.identity.id, h.provider.id)).rejects.toMatchObject({ status: 401 });
 });

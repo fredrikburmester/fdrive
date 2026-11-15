@@ -1,12 +1,11 @@
 import { createHash } from "node:crypto";
 import { writeFile } from "node:fs/promises";
 import {
-  AdminProvidersResponse,
   DESKTOP_API,
   DesktopPairing,
   DesktopPairResult,
   MeResponse,
-  ProvidersResponse,
+  SystemStorage,
 } from "@fdrive/contracts";
 import { createDb } from "@fdrive/db";
 import { startLocalStorage, startPostgres } from "@fdrive/testkit";
@@ -83,39 +82,25 @@ it("pairs two people's Macs with isolated streaming reads, validators and revoca
     cookie = bobLogin.headers.get("set-cookie")?.split(";")[0] ?? "";
     const b = await pairMac("Bob's Mac");
     expect(b.location.identityId).not.toBe(a.location.identityId);
-    // A label-only admin patch propagates to both logins, existing credentials and new pairings.
+    // A rename of the storage reaches both logins, existing credentials and new pairings.
     cookie = aliceCookie;
-    const beforeProviders = AdminProvidersResponse.parse(
-      await (await request("/api/v1/admin/providers")).json(),
-    );
+    const before = SystemStorage.parse(await (await request("/api/v1/system/storage")).json());
+    expect(before).toMatchObject({
+      id: a.location.providerId,
+      name: "Local folder",
+      healthy: true,
+    });
     const beforeTokens = await (await request("/api/v1/account/tokens")).json();
-    const renamed = await composed.app.request(`/api/v1/admin/providers/${a.location.providerId}`, {
+    const renamed = await composed.app.request("/api/v1/system/storage", {
       method: "PATCH",
       headers: { cookie, "x-requested-with": "fdrive", "content-type": "application/json" },
-      body: JSON.stringify({ label: "  Home storage  " }),
+      body: JSON.stringify({ name: "  Home storage  " }),
     });
     expect(renamed.status).toBe(200);
-    const afterProviders = AdminProvidersResponse.parse(
-      await (await request("/api/v1/admin/providers")).json(),
-    );
-    for (const before of beforeProviders.providers) {
-      const after = afterProviders.providers.find((row: { id: string }) => row.id === before.id);
-      if (!after) throw new Error("Provider disappeared during rename");
-      expect(after).toEqual({
-        ...before,
-        checkedAt: after.checkedAt,
-        ...(before.id === a.location.providerId ? { label: "Home storage" } : {}),
-      });
-    }
+    expect(SystemStorage.parse(await renamed.json())).toEqual({ ...before, name: "Home storage" });
     expect(await (await request("/api/v1/account/tokens")).json()).toEqual(beforeTokens);
     const namedMe = MeResponse.parse(await (await request("/api/v1/auth/me")).json());
-    expect(namedMe.identity).toEqual({ ...me.identity, providerLabel: "Home storage" });
-    const publicProviders = ProvidersResponse.parse(
-      await (await request("/api/v1/providers")).json(),
-    );
-    expect(publicProviders.providers.find((row) => row.id === a.location.providerId)?.label).toBe(
-      "Home storage",
-    );
+    expect(namedMe).toEqual({ ...me, storageName: "Home storage" });
     expect(
       await (
         await request(`${DESKTOP_API}/location`, undefined, {

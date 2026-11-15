@@ -56,7 +56,7 @@ beforeAll(async () => {
                 available: true,
                 scopes: [{ rootName: "files", fsPrefix: "/alice", virtualPrefix: "/" }],
               }
-            : { available: false, reason: "provider_mismatch" },
+            : { available: false, reason: "no_roots" },
       },
       indexQueries: {
         rootIdsByName: async () => ({ files: 1 }),

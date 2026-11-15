@@ -408,11 +408,11 @@ describe("requireScope (exercised through every index-backed run* wrapper)", () 
   it("throws a reason-carrying, path-free error when verified scopes are unavailable", async () => {
     const deps = baseDeps({
       scopeResolver: {
-        verifiedIndexScopes: async () => ({ available: false, reason: "provider_mismatch" }),
+        verifiedIndexScopes: async () => ({ available: false, reason: "no_roots" }),
       },
     });
     await expect(runFindFiles(deps, fakePrincipal(), {})).rejects.toThrow(
-      /unavailable for this identity \(provider_mismatch\)/,
+      /unavailable for this identity \(no_roots\)/,
     );
   });
 

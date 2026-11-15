@@ -36,7 +36,7 @@ import {
 import { Textarea } from "@/components/ui/textarea";
 import { useMe } from "@/lib/api/auth-queries";
 import { backupClient, backupQueryKey, useBackups } from "@/lib/api/backup-queries";
-import { useAdminProviders } from "@/lib/api/system-queries";
+import { useSystemStorage } from "@/lib/api/system-queries";
 import { formatBytes, type SizeUnits } from "@/lib/format";
 import { useFormatters } from "@/lib/use-format-preferences";
 import { BackupHealth } from "./backup-health";
@@ -341,7 +341,7 @@ function Destinations({
   busy: boolean;
   unlocked: boolean;
 }) {
-  const providers = useAdminProviders();
+  const storage = useSystemStorage();
   const [adding, setAdding] = useState(false);
   const [editing, setEditing] = useState<string | null>(null);
   const [testing, setTesting] = useState<string | null>(null);
@@ -610,11 +610,9 @@ function Destinations({
                     <SelectValue placeholder="Choose storage" />
                   </SelectTrigger>
                   <SelectContent>
-                    {providers.data?.providers.map((provider) => (
-                      <SelectItem key={provider.id} value={provider.id}>
-                        {provider.label}
-                      </SelectItem>
-                    ))}
+                    {storage.data ? (
+                      <SelectItem value={storage.data.id}>{storage.data.name}</SelectItem>
+                    ) : null}
                   </SelectContent>
                 </Select>
               )}

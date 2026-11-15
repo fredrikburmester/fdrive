@@ -176,7 +176,7 @@ async function buildHarness(
     startedAt: new Date(CLOCK_ISO),
     clock,
     principalResolver: async () => principal,
-    connectionStatus: async () => ({ required: false, providers: [] }),
+    setupRequired: async () => false,
     registerRoutes: (groups) =>
       registerFsRoutes(groups, {
         activity: activity.service,
@@ -264,7 +264,7 @@ async function buildHarnessWithStorage(
     startedAt: new Date(CLOCK_ISO),
     clock,
     principalResolver: async () => principal,
-    connectionStatus: async () => ({ required: false, providers: [] }),
+    setupRequired: async () => false,
     registerRoutes: (groups) =>
       registerFsRoutes(groups, {
         activity: activity.service,
@@ -1832,20 +1832,6 @@ describe("unmapped errors pass through unchanged", () => {
       path: stored,
       ext: ".txt",
     });
-  });
-
-  it("maps a StorageError of kind unauthorized to reauth_required", async () => {
-    const storage = makeStubStorage({
-      list: async () => {
-        throw new StorageError("unauthorized", "token expired");
-      },
-    });
-    const { app } = await buildHarnessWithStorage(storage);
-
-    const res = await app.request("/api/v1/fs/list?path=/");
-    expect(res.status).toBe(401);
-    const body = await readJson<ErrorJson>(res);
-    expect(body.error.kind).toBe("reauth_required");
   });
 
   it("defaults modifiedAt to the epoch when the provider reports none", async () => {

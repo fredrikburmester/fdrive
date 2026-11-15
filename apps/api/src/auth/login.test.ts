@@ -87,19 +87,25 @@ describe("signing in", () => {
 });
 
 describe("the signed-in login", () => {
-  it("is the account's one login, labelled by its storage, with what it can do", async () => {
+  it("is the account's one login on the files folder, with the installation's name and flags", async () => {
     const h = authHarness();
+    const row = await h.seeded;
     const a = await h.login();
-    expect(a.me.identity).toMatchObject({
+    expect(a.me.identity).toEqual({
+      id: expect.any(String),
       username: "alice",
-      providerType: "local",
-      providerLabel: "Local folder",
+      providerId: row.id,
     });
-    expect(a.me.isAdmin).toBe(false);
+    expect(a.me).toMatchObject({
+      isAdmin: false,
+      storageName: "Local folder",
+      trash: false,
+      index: false,
+    });
     const me = await h.call(ROUTES.auth.me, { cookie: a.cookie });
     expect(await me.json()).toEqual(a.me);
   });
-  it("is refused once the login, the account or the storage is gone", async () => {
+  it("is refused once the login or the account is gone", async () => {
     const h = authHarness();
     const a = await h.login();
     vi.spyOn(h.repos.identities, "get").mockResolvedValueOnce(null);
@@ -109,10 +115,6 @@ describe("the signed-in login", () => {
     await expect(
       h.auth.service.me("00000000-0000-4000-8000-000000000099", a.me.identity.id),
     ).rejects.toMatchObject({ kind: "internal" });
-    vi.spyOn(h.repos.providers, "get").mockResolvedValue(null);
-    await expect(h.auth.service.me(a.me.account.id, a.me.identity.id)).rejects.toMatchObject({
-      kind: "unauthorized",
-    });
   });
 });
 

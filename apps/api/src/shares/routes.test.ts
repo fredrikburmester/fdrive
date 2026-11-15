@@ -5,7 +5,7 @@ import {
   ShareEntriesResponse,
   SharesResponse,
 } from "@fdrive/contracts";
-import { type ProviderModule, StorageError } from "@fdrive/core";
+import { StorageError } from "@fdrive/core";
 import type { IndexedFile, IndexQueries } from "@fdrive/db";
 import { describe, expect, it, vi } from "vitest";
 import type { ScopeResolver } from "../scoping/resolver.ts";
@@ -240,38 +240,6 @@ describe("share management", () => {
     expect(ManagedShare.parse(await (await h.request(path, { cookie })).json()).maxDownloads).toBe(
       2_147_483_647,
     );
-  });
-
-  it("answers for storage that no longer shares, or cannot be reached, without a share", async () => {
-    let strategy: ProviderModule["shares"] = "owned";
-    const h = sharesHarness({
-      local: (module) => ({
-        ...module,
-        get shares() {
-          return strategy;
-        },
-      }),
-    });
-    const cookie = await h.login();
-    const { id } = await h.create(cookie);
-    strategy = "none";
-    for (const response of [
-      await h.request(base, { cookie }),
-      await h.request(`${base}/${id}`, { cookie }),
-      await h.request(pub(id)),
-      await h.request(`${pub(id)}/download`),
-    ]) {
-      expect(response.status).toBe(400);
-      expect(await error(response)).toMatchObject({
-        kind: "unsupported",
-        details: { capability: "shares" },
-      });
-    }
-    strategy = "owned";
-    vi.spyOn(h.providers, "forIdentity").mockRejectedValue(new Error("private detail"));
-    const unreachable = await h.request(pub(id));
-    expect(unreachable.status).toBe(502);
-    expect(await unreachable.text()).not.toContain("private detail");
   });
 
   it("records share create, update and revoke per account without copying any secret", async () => {

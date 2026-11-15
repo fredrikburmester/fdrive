@@ -34,7 +34,7 @@ const REQUIRED_ENV = {
 };
 
 /** Setup is complete, so the setup gate lets every route through. */
-const READY = async () => ({ required: false, providers: [] });
+const READY = async () => false;
 
 const ALICE_IDENTITY_ID = "00000000-0000-4000-8000-0000000000a1";
 const BOB_IDENTITY_ID = "00000000-0000-4000-8000-0000000000b1";
@@ -183,7 +183,7 @@ async function buildHarness(
     startedAt: new Date(CLOCK_ISO),
     clock,
     principalResolver: async () => principal,
-    connectionStatus: READY,
+    setupRequired: READY,
     registerRoutes: (groups) => registerTrashRoutes(groups, deps),
   });
 
@@ -573,7 +573,7 @@ describe("POST /trash/restore", () => {
       startedAt: new Date(CLOCK_ISO),
       clock,
       principalResolver: async () => principal,
-      connectionStatus: READY,
+      setupRequired: READY,
       registerRoutes: (groups) => registerTrashRoutes(groups, deps),
     });
 
@@ -634,7 +634,7 @@ describe("POST /trash/restore", () => {
       startedAt: new Date(CLOCK_ISO),
       clock,
       principalResolver: async () => principal,
-      connectionStatus: READY,
+      setupRequired: READY,
       registerRoutes: (groups) => registerTrashRoutes(groups, deps),
     });
 

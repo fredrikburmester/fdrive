@@ -20,7 +20,6 @@ const saved = {
   enabled: false,
   path: "/.trash",
   retentionHours: null,
-  strategy: "move",
 } as const;
 const PROVIDER = { id: saved.providerId, label: "Primary" };
 beforeEach(() => {
@@ -137,18 +136,6 @@ describe("Trash settings", () => {
     expect(screen.queryByRole("link")).toBeNull();
     expect(screen.getByText(/fdrive creates it on the first delete/)).toBeTruthy();
     expect(screen.getByText(/fdrive does not delete old items automatically/)).toBeTruthy();
-  });
-  it("cannot enable Trash for storage without one", () => {
-    mocks.query.mockReturnValue({ data: { ...saved, strategy: "none" }, refetch: mocks.refetch });
-    render(<TrashSettingsCard provider={PROVIDER} />);
-    expect(screen.getByText("This storage has no Trash.")).toBeTruthy();
-    expect(screen.getByText(/removes it permanently/)).toBeTruthy();
-    const toggle = screen.getByRole("switch", { name: "Enable Trash" });
-    expect(toggle.hasAttribute("disabled") || toggle.getAttribute("aria-disabled") === "true").toBe(
-      true,
-    );
-    fireEvent.click(toggle);
-    expect(screen.queryByLabelText("Trash folder")).toBeNull();
   });
   it("titles the card and adds a description only when given one", () => {
     const { unmount } = render(<TrashSettingsCard provider={PROVIDER} />);

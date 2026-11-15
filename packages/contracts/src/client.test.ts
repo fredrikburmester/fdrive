@@ -100,7 +100,6 @@ describe("Trash settings client", () => {
       enabled: false,
       path: "/.trash",
       retentionHours: null,
-      strategy: "move",
     } as const;
     const fetchMock = vi.fn<typeof fetch>(async () => Response.json(settings));
     const client = createApiClient({ fetch: fetchMock });
@@ -122,10 +121,9 @@ const VALID_ME = {
     id: VALID_UUID,
     username: "alice",
     providerId: VALID_UUID,
-    providerType: "local",
-    providerLabel: "Home",
   },
   isAdmin: false,
+  storageName: "Home",
   trash: false,
   index: true,
 };
@@ -144,7 +142,6 @@ const VALID_LIST = { path: "/photos", entries: [VALID_ENTRY] };
 const VALID_ABOUT = {
   version: "development",
   uptimeSeconds: 2,
-  providers: [{ type: "local", label: "Local folder" }],
   setupRequired: false,
 };
 
@@ -752,53 +749,22 @@ describe("createApiClient: setup", () => {
   });
 });
 
-describe("createApiClient: providers", () => {
-  const FIELD = { name: "username", label: "Username", kind: "text", required: true };
-  const PROVIDER = {
-    id: VALID_UUID,
-    type: "local",
-    label: "Home",
-    baseUrl: "",
-    config: {},
-    enabled: true,
-    managedByEnv: true,
-    identityCount: 1,
-    reachable: true,
-    checkedAt: AT,
-    createdAt: AT,
-  };
+describe("createApiClient: storage", () => {
+  const STORAGE = { id: VALID_UUID, name: "Home", healthy: true, detail: "ok" };
 
-  it("gets the public provider list", async () => {
-    const body = {
-      providers: [
-        {
-          id: VALID_UUID,
-          type: "local",
-          label: "Home",
-          credentialFields: [FIELD],
-        },
-      ],
-    };
-    const { fetchStub, calls } = createStubFetch([jsonResponse(200, body)]);
-    const client = createApiClient({ fetch: fetchStub });
-    expect(await client.providers()).toEqual(body);
-    expect(calls[0]?.url).toBe("/api/v1/providers");
-  });
-
-  it("gets and renames admin providers", async () => {
-    const list = { providers: [PROVIDER] };
+  it("gets and renames the storage", async () => {
     const { fetchStub, calls } = createStubFetch([
-      jsonResponse(200, list),
-      jsonResponse(200, PROVIDER),
+      jsonResponse(200, STORAGE),
+      jsonResponse(200, STORAGE),
     ]);
     const client = createApiClient({ fetch: fetchStub });
-    expect(await client.adminProviders()).toEqual(list);
-    expect(await client.adminUpdateProvider(VALID_UUID, { label: "Home" })).toEqual(PROVIDER);
+    expect(await client.systemStorage()).toEqual(STORAGE);
+    expect(await client.systemUpdateStorage({ name: "Home" })).toEqual(STORAGE);
     expect(calls.map((call) => `${call.init.method ?? "GET"} ${call.url}`)).toEqual([
-      "GET /api/v1/admin/providers",
-      `PATCH /api/v1/admin/providers/${VALID_UUID}`,
+      "GET /api/v1/system/storage",
+      "PATCH /api/v1/system/storage",
     ]);
-    expect(JSON.parse(String(calls[1]?.init.body))).toEqual({ label: "Home" });
+    expect(JSON.parse(String(calls[1]?.init.body))).toEqual({ name: "Home" });
   });
 });
 

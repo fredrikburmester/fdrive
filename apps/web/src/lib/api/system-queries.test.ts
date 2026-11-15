@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import type { AdminProvidersResponse, IndexerStats } from "@fdrive/contracts";
+import type { IndexerStats, SystemStorage } from "@fdrive/contracts";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { renderHook, waitFor } from "@testing-library/react";
 import { createElement, type ReactNode } from "react";
@@ -11,8 +11,8 @@ const setupStatusMock = vi.fn();
 const systemFeaturesMock = vi.fn();
 const systemUpdateFeaturesMock = vi.fn();
 const setupCompleteMock = vi.fn();
-const adminProvidersMock = vi.fn();
-const adminUpdateProviderMock = vi.fn();
+const systemStorageMock = vi.fn();
+const systemUpdateStorageMock = vi.fn();
 const adminUsersMock = vi.fn();
 const adminCreateUserMock = vi.fn();
 const adminUpdateUserMock = vi.fn();
@@ -43,8 +43,8 @@ vi.mock("./client.js", () => ({
     systemUpdateFeatures: (...args: unknown[]) => systemUpdateFeaturesMock(...args),
     setupStatus: (...args: unknown[]) => setupStatusMock(...args),
     setupComplete: (...args: unknown[]) => setupCompleteMock(...args),
-    adminProviders: (...args: unknown[]) => adminProvidersMock(...args),
-    adminUpdateProvider: (...args: unknown[]) => adminUpdateProviderMock(...args),
+    systemStorage: (...args: unknown[]) => systemStorageMock(...args),
+    systemUpdateStorage: (...args: unknown[]) => systemUpdateStorageMock(...args),
     adminUsers: (...args: unknown[]) => adminUsersMock(...args),
     adminCreateUser: (...args: unknown[]) => adminCreateUserMock(...args),
     adminUpdateUser: (...args: unknown[]) => adminUpdateUserMock(...args),
@@ -74,11 +74,9 @@ vi.mock("./client.js", () => ({
 
 const ME_RESPONSE = makeMe({
   account: { id: "00000000-0000-0000-0000-000000000000", displayName: "Ada" },
-  identity: makeIdentity({
-    id: "00000000-0000-0000-0000-000000000001",
-    providerLabel: "Local folder",
-  }),
+  identity: makeIdentity({ id: "00000000-0000-0000-0000-000000000001" }),
   isAdmin: true,
+  storageName: "Local folder",
 });
 
 describe("feature queries", () => {
@@ -116,20 +114,12 @@ describe("feature queries", () => {
   });
 });
 
-const PROVIDER = {
+const STORAGE: SystemStorage = {
   id: "00000000-0000-4000-8000-000000000009",
-  type: "local" as const,
-  label: "Local folder",
-  baseUrl: "" as const,
-  config: {},
-  enabled: true,
-  managedByEnv: true,
-  identityCount: 1,
-  reachable: true,
-  checkedAt: "2026-01-01T00:00:00.000Z",
-  createdAt: "2026-01-01T00:00:00.000Z",
+  name: "Local folder",
+  healthy: true,
+  detail: "The storage root is a writable folder",
 };
-const PROVIDERS_RESPONSE: AdminProvidersResponse = { providers: [PROVIDER] };
 
 function createWrapper(queryClient: QueryClient) {
   return function Wrapper({ children }: { children: ReactNode }) {
@@ -140,8 +130,8 @@ function createWrapper(queryClient: QueryClient) {
 beforeEach(() => {
   setupStatusMock.mockReset();
   setupCompleteMock.mockReset();
-  adminProvidersMock.mockReset();
-  adminUpdateProviderMock.mockReset();
+  systemStorageMock.mockReset();
+  systemUpdateStorageMock.mockReset();
   adminUsersMock.mockReset();
   adminCreateUserMock.mockReset();
   adminUpdateUserMock.mockReset();
@@ -195,50 +185,38 @@ describe("useSetupComplete", () => {
   });
 });
 
-describe("useAdminProviders", () => {
-  it("fetches the configured providers", async () => {
-    adminProvidersMock.mockResolvedValue(PROVIDERS_RESPONSE);
-    const { useAdminProviders } = await import("./system-queries.js");
+describe("useSystemStorage", () => {
+  it("fetches the files folder's name and health", async () => {
+    systemStorageMock.mockResolvedValue(STORAGE);
+    const { useSystemStorage } = await import("./system-queries.js");
     const queryClient = new QueryClient();
 
-    const { result } = renderHook(() => useAdminProviders(), {
+    const { result } = renderHook(() => useSystemStorage(), {
       wrapper: createWrapper(queryClient),
     });
 
-    await waitFor(() => expect(result.current.data).toEqual(PROVIDERS_RESPONSE));
+    await waitFor(() => expect(result.current.data).toEqual(STORAGE));
   });
 });
 
-describe("useAdminUpdateProvider", () => {
-  it("renames the storage and invalidates the cached list", async () => {
-    const updated = { ...PROVIDER, label: "Home storage" };
-    adminUpdateProviderMock.mockResolvedValue(updated);
-    adminProvidersMock.mockResolvedValue({ providers: [updated] });
-    const { useAdminUpdateProvider } = await import("./system-queries.js");
-    const queryClient = new QueryClient();
-    queryClient.setQueryData(["admin", "providers"], PROVIDERS_RESPONSE);
+describe("useUpdateSystemStorage", () => {
+  it("renames the storage and invalidates it and the cached login", async () => {
+    systemUpdateStorageMock.mockResolvedValue({ ...STORAGE, name: "Home storage" });
+    const { useUpdateSystemStorage } = await import("./system-queries.js");
+    const client = new QueryClient();
+    client.setQueryData(["system", "storage"], STORAGE);
+    client.setQueryData(["auth", "me"], ME_RESPONSE);
 
-    const { result } = renderHook(() => useAdminUpdateProvider(), {
-      wrapper: createWrapper(queryClient),
+    const { result } = renderHook(() => useUpdateSystemStorage(), {
+      wrapper: createWrapper(client),
     });
-    result.current.mutate({ id: PROVIDER.id, patch: { label: "Home storage" } });
+    await result.current.mutateAsync({ name: "Home storage" });
 
-    await waitFor(() => expect(result.current.isSuccess).toBe(true));
-    expect(adminUpdateProviderMock).toHaveBeenCalledWith(PROVIDER.id, { label: "Home storage" });
-    expect(queryClient.getQueryState(["admin", "providers"])?.isInvalidated).toBe(true);
+    expect(systemUpdateStorageMock).toHaveBeenCalledWith({ name: "Home storage" });
+    expect(client.getQueryState(["system", "storage"])?.isInvalidated).toBe(true);
+    expect(client.getQueryState(["auth", "me"])?.isInvalidated).toBe(true);
+    expect(client.getQueryData(["auth", "me"])).toEqual(ME_RESPONSE);
   });
-});
-
-it("invalidates the cached login name after a rename", async () => {
-  adminUpdateProviderMock.mockResolvedValue({ ...PROVIDER, label: "Home storage" });
-  const { useAdminUpdateProvider } = await import("./system-queries.js");
-  const client = new QueryClient();
-  client.setQueryData(["auth", "me"], ME_RESPONSE);
-  const { result } = renderHook(() => useAdminUpdateProvider(), { wrapper: createWrapper(client) });
-  await result.current.mutateAsync({ id: PROVIDER.id, patch: { label: "Home storage" } });
-  expect(adminUpdateProviderMock).toHaveBeenCalledWith(PROVIDER.id, { label: "Home storage" });
-  expect(client.getQueryState(["auth", "me"])?.isInvalidated).toBe(true);
-  expect(client.getQueryData(["auth", "me"])).toEqual(ME_RESPONSE);
 });
 
 const USER = {
@@ -297,14 +275,12 @@ describe("local user queries", () => {
     expect(queryClient.getQueryState(["admin", "users"])?.isInvalidated).toBe(true);
   });
 
-  it("removes a user and refreshes the users and the providers' login counts", async () => {
+  it("removes a user and refreshes the users", async () => {
     adminDeleteUserMock.mockResolvedValue({ ok: true });
     adminUsersMock.mockResolvedValue({ users: [] });
-    adminProvidersMock.mockResolvedValue(PROVIDERS_RESPONSE);
     const { useAdminDeleteUser } = await import("./system-queries.js");
     const queryClient = new QueryClient();
     queryClient.setQueryData(["admin", "users"], USERS_RESPONSE);
-    queryClient.setQueryData(["admin", "providers"], PROVIDERS_RESPONSE);
 
     const { result } = renderHook(() => useAdminDeleteUser(), {
       wrapper: createWrapper(queryClient),
@@ -313,7 +289,6 @@ describe("local user queries", () => {
 
     expect(adminDeleteUserMock).toHaveBeenCalledWith("grace");
     expect(queryClient.getQueryState(["admin", "users"])?.isInvalidated).toBe(true);
-    expect(queryClient.getQueryState(["admin", "providers"])?.isInvalidated).toBe(true);
   });
 });
 

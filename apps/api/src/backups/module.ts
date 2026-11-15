@@ -17,12 +17,11 @@ import {
   s3Destination,
 } from "@fdrive/backup";
 import type { BackupDestinationInput } from "@fdrive/contracts";
-import type { ProviderInstance, ProviderModule, StorageProvider } from "@fdrive/core";
-import { isStorageError } from "@fdrive/core";
+import { isStorageError, type StorageProvider } from "@fdrive/core";
 import { Pool } from "pg";
 import { open, parseMasterKey, seal } from "../auth/crypto.js";
+import type { StorageSource } from "../auth/storage-factory.js";
 import type { AppConfig } from "../config.js";
-import { moduleFor, type ProviderModules } from "../providers/registry.js";
 
 /** Envelope codec for backup secrets and attachments under the installation master key. */
 export function masterSecrets(master: Uint8Array): SecretCodec {
@@ -32,32 +31,21 @@ export function masterSecrets(master: Uint8Array): SecretCodec {
   };
 }
 /**
- * Storage in `username`'s files, built directly: backups read and write a
- * user's files without signing in, since fdrive keeps no password to sign in
- * with. The files folder's guard still refuses a folder that is not this
- * installation's.
+ * The files folder backups read and write: users' files, built directly,
+ * since fdrive keeps no password to sign in with. Its guard still refuses a
+ * folder that is not this installation's. `storageId` is its provider row,
+ * which a destination in it names.
  */
-export function userStorage(
-  module: ProviderModule,
-  instance: ProviderInstance,
-  username: string,
-): StorageProvider {
-  return module.createStorage(
-    instance,
-    { externalUsername: username },
-    { fetch: globalThis.fetch },
-  );
+export interface BackupFiles {
+  readonly storageId: string;
+  readonly folder: StorageSource;
 }
-/** A destination's storage: only while its user may still use their files. */
-async function destinationStorage(
-  module: ProviderModule,
-  instance: ProviderInstance,
-  username: string,
-): Promise<StorageProvider> {
-  await module.admit?.(instance, username);
-  return userStorage(module, instance, username);
-}
-export function createBackupModule(config: AppConfig, modules: ProviderModules) {
+export function createBackupModule(config: AppConfig, files: BackupFiles) {
+  /** A destination's storage: only while its user may still use their files. */
+  async function destinationStorage(username: string): Promise<StorageProvider> {
+    await files.folder.admit(username);
+    return files.folder.storage(username);
+  }
   const pool = new Pool({ connectionString: config.databaseUrl, max: 6 });
   pool.on("error", () => undefined);
   const gatePool = new Pool({ connectionString: config.databaseUrl, max: 16 });
@@ -91,30 +79,9 @@ export function createBackupModule(config: AppConfig, modules: ProviderModules) 
         secretAccessKey: secret.secretAccessKey,
       });
     }
-    const current = (
-      await pool.query<{
-        id: string;
-        type: string;
-        base_url: string;
-        config: Record<string, unknown>;
-        enabled: boolean;
-      }>("select * from app.providers where id=$1", [record.config.providerId])
-    ).rows[0];
-    if (
-      !current?.enabled ||
-      current.type !== record.config.providerType ||
-      current.base_url !== record.config.baseUrl ||
-      JSON.stringify(current.config) !== JSON.stringify(record.config.providerConfig)
-    )
-      throw Error("Backup provider changed");
-    const module = moduleFor(current.type, modules);
-    if (!module || typeof record.config.prefix !== "string")
-      throw Error("Unsupported backup provider");
-    const storage = await destinationStorage(
-      module,
-      { id: current.id, baseUrl: current.base_url, config: current.config },
-      String(record.config.username),
-    );
+    if (record.config.providerId !== files.storageId) throw Error("Backup provider changed");
+    if (typeof record.config.prefix !== "string") throw Error("Unsupported backup provider");
+    const storage = await destinationStorage(String(record.config.username));
     const root = `/${record.config.prefix.replace(/^\/+|\/+$/g, "")}`;
     const existing = await storage.stat(root);
     if (existing.kind !== "dir") throw Error("Choose an existing private backup directory");
@@ -137,19 +104,8 @@ export function createBackupModule(config: AppConfig, modules: ProviderModules) 
       settings = { ...rest, prefix: `${input.prefix.replace(/\/+$/g, "")}/${installation}` };
       credential = { accessKeyId, secretAccessKey };
     } else {
-      const provider = (
-        await pool.query<{
-          id: string;
-          type: string;
-          base_url: string;
-          config: Record<string, unknown>;
-          enabled: boolean;
-        }>("select * from app.providers where id=$1", [input.providerId])
-      ).rows[0];
-      const module = provider && moduleFor(provider.type, modules);
-      if (!module || !provider?.enabled) throw Error("Storage provider is unavailable");
-      const instance = { id: provider.id, baseUrl: provider.base_url, config: provider.config };
-      const storage = await destinationStorage(module, instance, username);
+      if (input.providerId !== files.storageId) throw Error("Storage provider is unavailable");
+      const storage = await destinationStorage(username);
       const parent = `/${input.prefix.replace(/^\/+|\/+$/g, "")}`;
       if ((await storage.stat(parent)).kind !== "dir")
         throw Error("Choose an existing private directory");
@@ -165,10 +121,7 @@ export function createBackupModule(config: AppConfig, modules: ProviderModules) 
         else if (existing.kind !== "dir") throw Error("Backup namespace is not a directory");
       }
       settings = {
-        providerId: provider.id,
-        providerType: provider.type,
-        baseUrl: provider.base_url,
-        providerConfig: provider.config,
+        providerId: files.storageId,
         username,
         prefix: `${input.prefix.replace(/\/+$/, "")}/.fdrive-backups/${installation}`,
       };
@@ -296,24 +249,13 @@ export function createBackupModule(config: AppConfig, modules: ProviderModules) 
       for (const identityId of new Set(operations.rows.map((op) => op.identity_id))) {
         try {
           const identity = (
-            await client.query<{
-              external_username: string;
-              provider_id: string;
-              type: string;
-              base_url: string;
-              config: Record<string, unknown>;
-            }>(
-              "select i.external_username,i.provider_id,p.type,p.base_url,p.config from app.identities i join app.providers p on p.id=i.provider_id where i.id=$1",
+            await client.query<{ external_username: string }>(
+              "select external_username from app.identities where id=$1",
               [identityId],
             )
           ).rows[0];
-          const module = identity && moduleFor(identity.type, modules);
-          if (!identity || !module) throw Error("Missing source login");
-          const storage = userStorage(
-            module,
-            { id: identity.provider_id, baseUrl: identity.base_url, config: identity.config },
-            identity.external_username,
-          );
+          if (!identity) throw Error("Missing source login");
+          const storage = files.folder.storage(identity.external_username);
           async function walk(path: string, depth = 0) {
             if (depth > 128) throw Error("Recovery directory is too deep");
             for (const item of await storage.list(path)) {

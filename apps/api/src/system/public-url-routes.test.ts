@@ -35,7 +35,7 @@ function buildApp(isAdmin: boolean) {
     logger: { info: vi.fn(), error: vi.fn(), warn: vi.fn() } as unknown as Logger,
     version: "test",
     startedAt: new Date(0),
-    connectionStatus: async () => ({ required: false, providers: [] }),
+    setupRequired: async () => false,
     principalResolver: async () => principal,
     registerRoutes: (groups) =>
       registerPublicUrlRoutes(groups, { service: createPublicUrlService({ settings }) }),

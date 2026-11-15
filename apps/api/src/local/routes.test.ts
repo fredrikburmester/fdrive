@@ -8,15 +8,14 @@ import { createPasswordCheck } from "../auth/password.ts";
 import type { Principal } from "../auth/principal.js";
 import { COOKIE_NAME, hashSessionId } from "../auth/sessions.js";
 import { loadConfig } from "../config.js";
-import { seedLocalProvider } from "../providers/test-fixtures/index.ts";
 import { registerLocalUserRoutes } from "./routes.js";
 import { createLocalUserService } from "./service.js";
-import { FAST_PASSWORDS, seedLocalUsers } from "./test-fixtures/index.ts";
+import { FAST_PASSWORDS, seedLocalUsers, seedStorageRow } from "./test-fixtures/index.ts";
 import { createLocalUserStore } from "./users.js";
 
 async function harness(options: { isAdmin?: boolean } = {}) {
   const repos = createMemoryRepos();
-  const row = await seedLocalProvider(repos);
+  const row = await seedStorageRow(repos);
   const [identity] = await seedLocalUsers(repos, [
     { username: "alice", password: "alice-pass" },
     { username: "bob", password: "bob-pass" },

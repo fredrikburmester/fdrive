@@ -118,8 +118,8 @@ export interface TransferOptions {
  *   passes through one, at any segment including the last, with
  *   `StorageError("forbidden")`. Listings show the link itself, as kind
  *   `symlink`; `stat` never reports that kind.
- * - Optional methods are absent, not throwing, when the backend cannot
- *   offer them; `ProviderCapabilities` says which.
+ * - Optional methods are absent, not throwing, when the storage cannot
+ *   offer them (the in-memory test storage); the files folder has them all.
  */
 export interface StorageProvider {
   list(path: string): Promise<FileEntry[]>;

@@ -969,9 +969,8 @@ describe("createIndexerListener", () => {
       metadata,
       bus,
       // A root named "files" exists in the event, but this identity's
-      // provider mapping never resolves: the same root name on a
-      // different provider must never be treated as this identity's data.
-      configuredMappingsFor: async () => ({ available: false, reason: "provider_mismatch" }),
+      // mapping never resolves: its paths must never be treated as its data.
+      configuredMappingsFor: async () => ({ available: false, reason: "invalid_configuration" }),
       indexRootNames: ROOT_NAMES,
       clock: clock.now,
       logger: makeLogger().logger,

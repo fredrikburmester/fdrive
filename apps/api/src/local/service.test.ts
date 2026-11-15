@@ -4,14 +4,13 @@ import { createMemoryRepos } from "@fdrive/db/testing";
 import { describe, expect, it, vi } from "vitest";
 import { createLoginLimiter } from "../auth/login-limiter.js";
 import { createPasswordCheck } from "../auth/password.ts";
-import { seedLocalProvider } from "../providers/test-fixtures/index.ts";
 import { createLocalUserService, type LocalUserServiceDeps, type UserViewer } from "./service.js";
-import { FAST_PASSWORDS, seedLocalUsers } from "./test-fixtures/index.ts";
+import { FAST_PASSWORDS, seedLocalUsers, seedStorageRow } from "./test-fixtures/index.ts";
 import { createLocalUserStore } from "./users.js";
 
 async function fixture() {
   const repos = createMemoryRepos();
-  const row = await seedLocalProvider(repos);
+  const row = await seedStorageRow(repos);
   const store = createLocalUserStore({
     repo: repos.localUsers,
     grants: repos.localGrants,

@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { Readable } from "node:stream";
 import * as backupPackage from "@fdrive/backup";
 import { captureSnapshot, inspectArchive, providerDestination, readBounded } from "@fdrive/backup";
-import { type ProviderModule, StorageError, type StorageSession } from "@fdrive/core";
+import { StorageError } from "@fdrive/core";
 import { createMemoryStorage, type MemoryStorage } from "@fdrive/core/testing";
 import { createDb, migrate } from "@fdrive/db";
 import { startPostgres } from "@fdrive/testkit";
@@ -13,12 +13,11 @@ import { Decrypter, generateIdentity, identityToRecipient } from "age-encryption
 import { Pool } from "pg";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { open } from "../auth/crypto.js";
+import type { StorageSource } from "../auth/storage-factory.js";
 import { type AppConfig, loadConfig } from "../config.js";
-import * as registry from "../providers/registry.js";
-import { fakeProviderModule } from "../providers/test-fixtures/index.ts";
 import { createScryptSharePasswords } from "../shares/passwords.js";
 import { environmentFingerprint, resumeRecovery, runBackupCommand } from "./command.js";
-import { createBackupModule, userStorage } from "./module.js";
+import { createBackupModule } from "./module.js";
 import {
   createRecoveryApp,
   recoveryIdentity,
@@ -41,22 +40,23 @@ let count = 0;
 let owner: string, identity: string, provider: string;
 /** The stored address of the source installation's storage row. */
 const SOURCE_URL = "http://source.invalid";
-/** What the source's storage holds: one server every seed user signs in to. */
+/** What the source's files folder holds: every seed user's files. */
 let served: MemoryStorage;
-/** The source installation's storage: every user's files are `served`. */
-const fileserver: ProviderModule = fakeProviderModule({ createStorage: () => served });
+/** The source installation's files folder: every user's files are `served`. */
+const fileserver: StorageSource = { storage: () => served, admit: async () => undefined };
+/** The files folder backups use now; a test may swap it for another. */
+let current: StorageSource = fileserver;
 /** Cheap scrypt: the hashes are real and verify like production ones. */
 const passwords = createScryptSharePasswords({ cost: 1024, blockSize: 8, parallelization: 1 });
-/**
- * What a restored deployment builds for the source's storage row. These
- * installations configure no files folder, so the fileserver stands in for
- * the module unless a test sets this to `null` or configures a folder.
- */
-let restoredStorage: ProviderModule | null = fileserver;
-const realModuleFor = registry.moduleFor;
-/** The modules the API and worker build for the source installation. */
+/** The backup module the API and worker build for the source installation. */
 function backupModule(settings: AppConfig) {
-  return createBackupModule(settings, { local: fileserver });
+  return createBackupModule(settings, {
+    storageId: provider,
+    folder: {
+      storage: (username) => current.storage(username),
+      admit: (username) => current.admit(username),
+    },
+  });
 }
 async function fresh() {
   const name = `backup_api_${count++}`;
@@ -85,11 +85,12 @@ beforeEach(async () => {
     FDRIVE_BACKUP_STATE_DIR: join(directory, "state"),
     FDRIVE_SETUP_TOKEN: "host-recovery-token-for-fixtures-only",
   });
-  module = backupModule(config);
-  await module.start();
   owner = randomUUID();
   identity = randomUUID();
   provider = randomUUID();
+  current = fileserver;
+  module = backupModule(config);
+  await module.start();
   await source.pool.query(
     "insert into app.providers(id,type,label,base_url,config) values($1,'local','Files',$2,'{}')",
     [provider, SOURCE_URL],
@@ -107,10 +108,6 @@ beforeEach(async () => {
     JSON.stringify({ state: "complete", accountId: owner }),
   ]);
   served = createMemoryStorage({ "/docs/readme": "source document" });
-  restoredStorage = fileserver;
-  vi.spyOn(registry, "moduleFor").mockImplementation(
-    (type, modules) => realModuleFor(type, modules) ?? (type === "local" ? restoredStorage : null),
-  );
 });
 afterEach(async () => {
   vi.useRealTimers();
@@ -508,22 +505,20 @@ it("keeps a files folder destination in the adding owner's files, with no passwo
   expect((await readBounded(await transport.get("copy.age"))).toString()).toBe("encrypted bytes");
   await module.destinationRecord({ ...input, name: "Same directory" }, "alice");
   // A user the files folder no longer lets in stops the copies.
-  const refusing = vi.spyOn(registry, "moduleFor").mockReturnValue({
+  current = {
     ...fileserver,
     admit: async () => {
       throw new StorageError("forbidden", "this user may not sign in");
     },
-  });
+  };
   await expect(module.destination(record)).rejects.toMatchObject({ kind: "forbidden" });
   await expect(module.destinationRecord(input, "alice")).rejects.toMatchObject({
     kind: "forbidden",
   });
-  refusing.mockRestore();
-  await source.pool.query(
-    "update app.providers set base_url='http://changed.invalid' where id=$1",
-    [provider],
-  );
-  await expect(module.destination(record)).rejects.toThrow("provider changed");
+  current = fileserver;
+  await expect(
+    module.destination({ ...record, config: { ...record.config, providerId: randomUUID() } }),
+  ).rejects.toThrow("provider changed");
   await expect(
     module.destinationRecord({ ...input, name: "Missing", providerId: randomUUID() }, "alice"),
   ).rejects.toThrow("unavailable");
@@ -627,18 +622,15 @@ it("provides an explicit host-only ownership repair and rejects accidental live 
 });
 
 it("builds storage in the named user's files, without signing in", async () => {
-  let session!: StorageSession;
-  const storage = createMemoryStorage();
-  const providerModule = {
-    ...fileserver,
-    createStorage: (_instance: unknown, value: StorageSession) => {
-      session = value;
-      return storage;
-    },
-  };
-  const instance = { id: provider, baseUrl: SOURCE_URL, config: {} };
-  expect(userStorage(providerModule, instance, "alice")).toBe(storage);
-  expect(session).toEqual({ externalUsername: "alice" });
+  const storage = vi.fn((_username: string) => served);
+  current = { storage, admit: async () => undefined };
+  const record = await module.destinationRecord(
+    { type: "provider", name: "Files", providerId: provider, prefix: "/docs" },
+    "alice",
+  );
+  await module.destination(record);
+  expect(storage).toHaveBeenCalledWith("alice");
+  expect(storage.mock.calls.every(([username]) => username === "alice")).toBe(true);
 });
 
 it("discovers and fetches a completed bucket copy with no database or application key", async () => {
@@ -756,7 +748,7 @@ it("captures native recovery bytes, preserves quarantined provenance, and report
   const storage = createMemoryStorage({
     [`/.fdrive-desktop/${identity}/trash/original`]: "recover me",
   });
-  vi.spyOn(registry, "moduleFor").mockReturnValue({ ...fileserver, createStorage: () => storage });
+  current = { ...fileserver, storage: () => storage };
   await source.pool.query(
     "insert into app.desktop_operations(id,identity_id,account_id,request_hash,request,state,result) values($1,$2,$3,'hash','{}','uncertain',$4)",
     [randomUUID(), identity, owner, JSON.stringify({ remoteAttempt: "accepted" })],
@@ -825,7 +817,12 @@ it("captures native recovery bytes, preserves quarantined provenance, and report
     await source.pool.query("update app.desktop_operations set result=null");
     expect((await blobs()).coverage.join()).not.toContain("Native remote recovery is unavailable");
     // Storage for the login cannot be built: reported, not skipped.
-    vi.mocked(registry.moduleFor).mockReturnValue(null);
+    current = {
+      ...fileserver,
+      storage: () => {
+        throw new StorageError("forbidden", "this login has no valid home folder");
+      },
+    };
     expect((await blobs()).coverage.join()).toContain("Native remote recovery is unavailable");
   } finally {
     client.release();
@@ -858,11 +855,8 @@ it("keeps the worker dormant during restore and releases process listeners on sh
 });
 
 it("refuses changed namespaces, recursive source mounts, and unavailable retained ZIPs", async () => {
-  const real = fileserver;
   const storage = createMemoryStorage({ "/file": "ordinary" });
-  const moduleFor = vi
-    .spyOn(registry, "moduleFor")
-    .mockReturnValue({ ...real, createStorage: () => storage });
+  current = { ...fileserver, storage: () => storage };
   const input = {
     type: "provider" as const,
     name: "Files",
@@ -887,9 +881,9 @@ it("refuses changed namespaces, recursive source mounts, and unavailable retaine
   );
   stat.mockRestore();
   const record = await module.destinationRecord({ ...input, prefix: "/" }, "alice");
-  moduleFor.mockReturnValue(null);
-  await expect(module.destination(record)).rejects.toThrow("Unsupported backup provider");
-  moduleFor.mockReturnValue({ ...real, createStorage: () => storage });
+  await expect(
+    module.destination({ ...record, config: { ...record.config, prefix: 1 } }),
+  ).rejects.toThrow("Unsupported backup provider");
   await storage.deleteDir(String(record.config.prefix));
   await storage.upload(String(record.config.prefix), new Uint8Array([1]));
   await expect(module.destination(record)).rejects.toThrow("existing private backup directory");
@@ -1016,8 +1010,6 @@ it("rejects unreviewed ownership and a wrong owner password, and resumes only an
 });
 
 it("resumes a local-folder installation by checking the owner against its restored users", async () => {
-  // The restored deployment's own folder decides, with nothing standing in for it.
-  restoredStorage = null;
   const root = join(directory, "storage");
   await mkdir(join(root, "alice"), { recursive: true });
   const local = randomUUID();

@@ -1,6 +1,6 @@
 import { ROUTES, TrashSettings } from "@fdrive/contracts";
 import type { StorageProvider } from "@fdrive/core";
-import type { Identity, Provider, SettingsRepo } from "@fdrive/db";
+import type { Identity, SettingsRepo } from "@fdrive/db";
 import type { Logger } from "pino";
 import { describe, expect, it, vi } from "vitest";
 import { createApp } from "../app.js";
@@ -11,7 +11,6 @@ import { registerTrashSettingsRoutes } from "./settings-routes.js";
 
 const PROVIDER_ID = "123e4567-e89b-42d3-a456-426614174000";
 const IDENTITY_ID = "223e4567-e89b-42d3-a456-426614174000";
-const provider = { id: PROVIDER_ID, type: "local", enabled: true } as Provider;
 const identity: Identity = {
   id: IDENTITY_ID,
   accountId: "323e4567-e89b-42d3-a456-426614174000",
@@ -32,11 +31,7 @@ function buildApp(isAdmin: boolean) {
     },
   };
   const identities = { get: async () => identity };
-  const service = createTrashSettingsService({
-    settings,
-    identities,
-    strategyFor: async () => "move",
-  });
+  const service = createTrashSettingsService({ settings, identities });
   const principal: Principal = {
     accountId: identity.accountId,
     identityId: identity.id,
@@ -54,12 +49,9 @@ function buildApp(isAdmin: boolean) {
     version: "test",
     startedAt: new Date(0),
     principalResolver: async () => principal,
-    connectionStatus: async () => ({ required: false, providers: [] }),
+    setupRequired: async () => false,
     registerRoutes: (groups) =>
-      registerTrashSettingsRoutes(groups, {
-        service,
-        providers: { get: async (id) => (id === PROVIDER_ID ? provider : null) },
-      }),
+      registerTrashSettingsRoutes(groups, { service, storageId: PROVIDER_ID }),
   });
 }
 
@@ -73,7 +65,6 @@ describe("admin Trash settings routes", () => {
       providerId: PROVIDER_ID,
       revision: 0,
       enabled: false,
-      strategy: "move",
     });
 
     const response = await app.request(ROUTES.system.trash, {
@@ -88,7 +79,7 @@ describe("admin Trash settings routes", () => {
     });
   });
 
-  it("names the storage server explicitly instead of following the caller's login", async () => {
+  it("names the files folder's row explicitly, and no other", async () => {
     const app = buildApp(true);
     const other = "923e4567-e89b-42d3-a456-426614174000";
     expect((await app.request(ROUTES.system.trash)).status).toBe(400);
@@ -103,7 +94,6 @@ describe("admin Trash settings routes", () => {
         enabled: false,
         path: "/.trash",
         retentionHours: null,
-        strategy: "move",
       }),
     });
     expect(response.status).toBe(404);

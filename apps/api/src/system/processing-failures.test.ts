@@ -29,10 +29,7 @@ function fixture(admin = true, indexerUrl: string | undefined = "http://indexer"
         isAdmin: admin,
         storage: {},
       }) as Principal,
-    connectionStatus: async () => ({
-      required: false,
-      providers: [{ type: "local", host: "Local folder" }],
-    }),
+    setupRequired: async () => false,
     registerRoutes: (groups) =>
       registerProcessingFailureRoutes(groups, { read, fetch, indexerUrl }),
   });

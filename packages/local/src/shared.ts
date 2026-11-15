@@ -113,6 +113,8 @@ export interface UserStorageOptions {
   readonly shared: () => Promise<readonly SharedFolder[]>;
   /** Hears every change made on disk, in the user's own files and in shared folders. */
   readonly onChange?: DiskChangeListener;
+  /** Throws when the folder may not be used now; asked before every operation. */
+  readonly ready?: () => Promise<void>;
 }
 
 /** Where a caller's path leads. */
@@ -172,6 +174,7 @@ export function createUserStorage(options: UserStorageOptions): UserStorage {
   }
 
   async function place(path: string): Promise<Place> {
+    await options.ready?.();
     const normalized = normalizePath(path);
     const segments = splitSegments(normalized);
     if (segments[0] !== SHARED_WITH_ME) return { kind: "own", storage: own, rel: normalized };

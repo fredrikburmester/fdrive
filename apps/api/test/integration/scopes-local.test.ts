@@ -4,7 +4,7 @@ import { dirname, join } from "node:path";
 import { joinPath, parseSearchFilters, type Scope } from "@fdrive/core";
 import { createDb, createIndexQueries, createRepos, migrate, schema } from "@fdrive/db";
 import {
-  createLocalModule,
+  createFilesFolder,
   type LocalUsers,
   SHARED_WITH_ME,
   type SharedGrant,
@@ -23,7 +23,6 @@ import {
   runFolderOverview,
 } from "../../src/mcp/handlers.ts";
 import { resolveScopeContext } from "../../src/mcp/scope-context.ts";
-import { memoryProviderService } from "../../src/providers/test-fixtures/index.ts";
 import { createReadAuthorizer } from "../../src/scoping/read-authorizer.ts";
 import { createScopeResolver } from "../../src/scoping/resolver.ts";
 import { createSearchService } from "../../src/search/service.ts";
@@ -79,10 +78,8 @@ describe("index scopes over a local folder and Postgres", () => {
       status: async () => "active",
       shared: async (username) => grants[username] ?? [],
     };
-    const module = createLocalModule({ root, users, indexRoot: "files" });
-    const providers = memoryProviderService(repos, { modules: { local: module } });
+    const folder = createFilesFolder({ root, users, indexRoot: "files" });
     const row = await repos.providers.ensure({ type: "local", baseUrl: "local" });
-    await repos.providers.update(row.id, { enabled: true, managedByEnv: true });
 
     const identities = await Promise.all(
       ["alice", "bob"].map(async (username) => {
@@ -99,13 +96,14 @@ describe("index scopes over a local folder and Postgres", () => {
     if (alice === undefined || bob === undefined) throw new Error("expected two identities");
 
     const storageFactory = createIdentityStorageFactory({
-      providers,
-      fetch: globalThis.fetch,
+      identities: repos.identities,
+      folder,
       clock,
     });
 
     const resolver = createScopeResolver({
-      providers,
+      storageId: row.id,
+      rootName: "files",
       indexRootNames: ["files"],
       extraScopes: async (identity, home) => {
         const shared = await users.shared(identity.externalUsername);

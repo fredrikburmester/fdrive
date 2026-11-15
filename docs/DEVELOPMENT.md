@@ -4,7 +4,7 @@ Current design: [Architecture](ARCHITECTURE.md). Unfinished work: [Plans](plans/
 
 This guide covers running fdrive locally for development with hot reloading, seeded test accounts, and integration test environments.
 
-The API reaches the files folder through an internal [storage port](STORAGE-PROVIDERS.md).
+The API reaches the files folder through an internal [storage port](STORAGE.md).
 
 ---
 

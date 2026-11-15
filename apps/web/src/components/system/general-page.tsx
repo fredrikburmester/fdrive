@@ -1,7 +1,7 @@
 "use client";
 
-import type { AdminProvider } from "@fdrive/contracts";
-import { Fragment, useState } from "react";
+import type { SystemStorage } from "@fdrive/contracts";
+import { useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Field, FieldDescription, FieldError, FieldLabel } from "@/components/ui/field";
@@ -9,43 +9,38 @@ import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { describeApiError } from "@/lib/api/errors";
 import { useSystemPublicUrl } from "@/lib/api/public-url-queries";
-import { useAdminProviders, useAdminUpdateProvider } from "@/lib/api/system-queries";
-import {
-  LOCAL_FOLDER_NOTE,
-  providerNameError,
-  STORAGE_UNREACHABLE_NOTE,
-  storageRenamePatch,
-} from "@/lib/system/storage";
+import { useSystemStorage, useUpdateSystemStorage } from "@/lib/api/system-queries";
+import { LOCAL_FOLDER_NOTE, storageNameError, storageRenamePatch } from "@/lib/system/storage";
 import { PublicUrlCard } from "./public-url-card";
 import { SystemErrorState } from "./system-error-state";
 import { SystemPage } from "./system-page";
 import { SystemSection } from "./system-section";
 import { TrashSettingsCard } from "./trash-settings-card";
 
-/** The files folder's display name, and a warning when fdrive cannot reach it. */
-function StorageCard({ provider }: { provider: AdminProvider }) {
-  const update = useAdminUpdateProvider();
+/** The files folder's name, and why fdrive cannot use it when it cannot. */
+function StorageCard({ storage }: { storage: SystemStorage }) {
+  const update = useUpdateSystemStorage();
   const [draft, setDraft] = useState<string | null>(null);
-  const value = draft ?? provider.label;
-  const error = draft === null ? null : providerNameError(draft);
-  const patch = storageRenamePatch(provider, value);
-  const field = `storage-name-${provider.id}`;
+  const value = draft ?? storage.name;
+  const error = draft === null ? null : storageNameError(draft);
+  const patch = storageRenamePatch(storage, value);
+  const field = "storage-name";
 
   function save() {
     if (patch === null) return;
-    update.mutate({ id: provider.id, patch }, { onSuccess: () => setDraft(null) });
+    update.mutate(patch, { onSuccess: () => setDraft(null) });
   }
 
   return (
     <SystemSection
       title="Storage"
       description={LOCAL_FOLDER_NOTE}
-      {...(provider.reachable ? {} : { actions: <Badge variant="destructive">Unreachable</Badge> })}
+      {...(storage.healthy ? {} : { actions: <Badge variant="destructive">Unavailable</Badge> })}
       contentClassName="gap-4"
     >
-      {provider.reachable ? null : (
-        <p role="alert" className="text-sm text-destructive">
-          {STORAGE_UNREACHABLE_NOTE}
+      {storage.healthy ? null : (
+        <p role="alert" className="text-sm text-destructive [overflow-wrap:anywhere]">
+          {storage.detail}
         </p>
       )}
       <Field>
@@ -75,21 +70,21 @@ function StorageCard({ provider }: { provider: AdminProvider }) {
   );
 }
 
-/** The files folder's settings: its name and reachability, then its Trash. */
+/** The files folder's settings: its name and health, then its Trash. */
 function StorageSettings() {
-  const query = useAdminProviders();
+  const query = useSystemStorage();
   if (query.isError) {
     return <SystemErrorState error={query.error} onRetry={() => void query.refetch()} />;
   }
   if (query.data === undefined) {
     return <Skeleton className="h-40 w-full" />;
   }
-  return query.data.providers.map((provider) => (
-    <Fragment key={provider.id}>
-      <StorageCard provider={provider} />
-      <TrashSettingsCard provider={{ id: provider.id, label: provider.label }} />
-    </Fragment>
-  ));
+  return (
+    <>
+      <StorageCard storage={query.data} />
+      <TrashSettingsCard provider={{ id: query.data.id, label: query.data.name }} />
+    </>
+  );
 }
 
 /**
@@ -99,8 +94,8 @@ function StorageSettings() {
  */
 export function GeneralPage() {
   const publicUrl = useSystemPublicUrl();
-  const providers = useAdminProviders();
-  const updatedAt = Math.max(publicUrl.dataUpdatedAt, providers.dataUpdatedAt);
+  const storage = useSystemStorage();
+  const updatedAt = Math.max(publicUrl.dataUpdatedAt, storage.dataUpdatedAt);
 
   return (
     <SystemPage

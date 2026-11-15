@@ -4,9 +4,8 @@ A user signs in with `{ username, password }`, and fdrive checks the password
 against the scrypt hash in `app.local_users` (see [Local users](#local-users)).
 fdrive keeps no other copy of any password. The files folder is one row in
 `app.providers`, created from `FDRIVE_STORAGE_ROOT`, and every identity is bound
-to it (see [storage port](STORAGE-PROVIDERS.md)). This document describes that
-design as implemented in `apps/api/src/auth/`, `apps/api/src/local/` and
-`apps/api/src/providers/`.
+to it (see [storage](STORAGE.md)). This document describes that
+design as implemented in `apps/api/src/auth/` and `apps/api/src/local/`.
 
 Administrators are the accounts with `accounts.is_admin`: the setup owner, and
 anyone an administrator makes one under System > Users.
@@ -116,27 +115,18 @@ a stolen session id cannot be kept valid indefinitely by periodic use.
 
 fdrive asks for a password only at sign-in, setup, password change and
 unlocking backups. Storage for a request is built by the identity storage
-factory (`apps/api/src/auth/storage-factory.ts`), which hands the provider
-module a `StorageSession` naming only the login's username. Before storage is built, the module's
-`admit` runs where it exists: the local folder refuses a disabled or removed
-user there, so disabling someone stops them at once rather than at their next
-sign-in.
+factory (`apps/api/src/auth/storage-factory.ts`) from the login's username
+alone. Before storage is built, the files folder's `admit` refuses a disabled
+or removed user, so disabling someone stops them at once rather than at their
+next sign-in: every request of theirs gets `forbidden`, since signing in again
+would not help. A login that no longer exists gets `unauthorized`.
 
 ## The `reauth_required` flow
 
-Two situations end a storage operation with the API error kind
-`reauth_required` (HTTP 401, distinct from a plain `unauthorized`, so a
-client can tell "you were never signed in" apart from "you were signed in,
-but fdrive can no longer act on your behalf"):
-
-- Storage answers `unauthorized`; storage routes map it to `reauth_required`.
-- The login no longer exists.
-
-In every case the fdrive session itself may still be valid; the user simply
-has to sign in again (`POST /api/v1/auth/login`). fdrive does not attempt to
-distinguish these cases in the response beyond the error kind and message,
-since the remedy is the same. A disabled local user gets `forbidden` instead:
-signing in again would not help.
+Backup administration is the one place that asks for the password again: its
+sensitive routes answer `reauth_required` (HTTP 401, distinct from a plain
+`unauthorized`) until the owner confirms their password, and System > Backups
+locks itself on that kind instead of signing out.
 
 ## Login rate limiting
 

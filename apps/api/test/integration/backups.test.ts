@@ -26,10 +26,9 @@ import { insertLocalUsers, startLocalStorage, startPostgres } from "@fdrive/test
 import { generateIdentity, identityToRecipient } from "age-encryption";
 import { afterAll, beforeAll, expect, it } from "vitest";
 import { open, seal } from "../../src/auth/crypto.js";
-import { userStorage } from "../../src/backups/module.js";
 import { restoreOptions } from "../../src/backups/recovery.js";
 import { loadConfig } from "../../src/config.js";
-import { deploymentModules } from "../../src/local/modules.js";
+import { deploymentFilesFolder } from "../../src/local/files-folder.js";
 import { createScryptSharePasswords } from "../../src/shares/passwords.js";
 import { localUserRepos } from "./helpers/local-storage.js";
 
@@ -182,14 +181,13 @@ it("delivers a large streamed snapshot to a local folder destination that restor
   const timings: Record<string, Record<string, number>> = {};
   try {
     // A local user's own folder as the destination, wired the way the API
-    // builds the local module from FDRIVE_STORAGE_ROOT.
+    // builds the files folder from FDRIVE_STORAGE_ROOT.
     const repos = createRepos(source.db);
     await insertLocalUsers(await localUserRepos(repos), folder, createScryptSharePasswords());
-    const localModule = deploymentModules(
+    const filesFolder = deploymentFilesFolder(
       { fdriveStorageRoot: folder.root, fdriveIndexRoots: null },
       repos,
-    ).local;
-    if (localModule === undefined) throw new Error("expected the local module");
+    );
     // 64 MiB of incompressible recovery bytes, streamed from disk rather than held in memory.
     const recovery = join(directory, "large-recovery");
     await mkdir(recovery, { recursive: true });
@@ -223,18 +221,11 @@ it("delivers a large streamed snapshot to a local folder destination that restor
     timings.capture = { captureMs: performance.now() - at, archiveBytes: Number(result.bytes) };
     expect(Number(result.bytes)).toBeGreaterThan(64 * 1024 * 1024);
     const local = await digest(fileStream(file));
-    const targets = [
-      {
-        label: "local",
-        module: localModule,
-        instance: { id: randomUUID(), baseUrl: "local", config: {} },
-        username: "alice",
-      },
-    ];
+    const targets = [{ label: "local", username: "alice" }];
     for (const target of targets) {
       // Same wiring as the API's destination factory: storage in the user's own files,
       // confined to the reserved namespace under a private directory.
-      const storage = userStorage(target.module, target.instance, target.username);
+      const storage = filesFolder.storage(target.username);
       const prefix = `backups/.fdrive-backups/${config.installation_id}`;
       await storage.mkdir(`/${prefix}`, { parents: true });
       const destination = providerDestination(storage, prefix);
@@ -262,10 +253,7 @@ it("delivers a large streamed snapshot to a local folder destination that restor
       await verifyDelivery(destination, `${id}.complete.json`, completion);
       expect((await discoverBackups(destination)).map((entry) => entry.id)).toEqual([id]);
       // Recover with fileserver access only: a fresh storage session and no source database.
-      const independent = providerDestination(
-        userStorage(target.module, target.instance, target.username),
-        prefix,
-      );
+      const independent = providerDestination(filesFolder.storage(target.username), prefix);
       const fetched = join(directory, `${target.label}-fetched.age`);
       at = performance.now();
       await fetchBackup(independent, id, fetched);

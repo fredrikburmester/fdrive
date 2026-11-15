@@ -1,15 +1,13 @@
-import type { IdentitySummary, MeResponse } from "@fdrive/contracts";
-import type { StorageProvider } from "@fdrive/core";
+import type { MeResponse } from "@fdrive/contracts";
 import { LoginError, type Repos } from "@fdrive/db";
 import type { Context } from "hono";
 import { getCookie } from "hono/cookie";
 import type { AppConfig } from "../config.js";
 import { ApiHttpError } from "../errors.js";
-import type { ProviderService } from "../providers/service.js";
 import type { CheckPassword } from "./password.ts";
 import type { Principal } from "./principal.js";
 import { COOKIE_NAME, generateSessionId, hashSessionId } from "./sessions.js";
-import { type IdentityStorageFactory, unavailableStorage } from "./storage-factory.ts";
+import type { IdentityStorageFactory } from "./storage-factory.ts";
 
 /** How stale a session's `lastSeenAt` must be before `resolvePrincipal` slides its expiry. */
 const SLIDING_TOUCH_THRESHOLD_MS = 5 * 60 * 1000;
@@ -35,44 +33,21 @@ export interface AuthService {
   logout(sessionId: string): Promise<void>;
 }
 
-/** What the whole installation offers, the same for every login. */
-export interface InstallationFlags {
-  /** Trash is on: deletes move to the Trash folder. */
-  readonly trash: boolean;
-  /** The files folder is indexed: search, thumbnails and folder sizes apply. */
-  readonly index: boolean;
-}
+/** What `/auth/me` reports about the whole installation, the same for every login. */
+export type Installation = Pick<MeResponse, "storageName" | "trash" | "index">;
 
 export interface CreateAuthServiceDeps {
   readonly repos: Repos;
-  readonly providers: Pick<ProviderService, "get" | "labelFor">;
   readonly clock: () => Date;
   readonly config: AppConfig;
   readonly checkPassword: CheckPassword;
   readonly storageFactory: IdentityStorageFactory;
-  /** Read for every `/auth/me`, so a Trash setting applies at once. */
-  readonly installation: () => Promise<InstallationFlags>;
+  /** Read for every `/auth/me`, so a new name or Trash setting applies at once. */
+  readonly installation: () => Promise<Installation>;
 }
 
 /** Builds the `AuthService`, the API's sign-in and session flow. */
 export function createAuthService(deps: CreateAuthServiceDeps): AuthService {
-  /** The login as `/auth/me` shows it; `null` when this deployment has no module for its storage. */
-  async function summarize(identity: {
-    id: string;
-    providerId: string;
-    externalUsername: string;
-  }): Promise<IdentitySummary | null> {
-    const resolved = await deps.providers.get(identity.providerId);
-    if (resolved === null) return null;
-    return {
-      id: identity.id,
-      username: identity.externalUsername,
-      providerId: resolved.provider.id,
-      providerType: resolved.module.type as IdentitySummary["providerType"],
-      providerLabel: deps.providers.labelFor(resolved.provider),
-    };
-  }
-
   async function me(accountId: string, identityId: string): Promise<MeResponse> {
     const account = await deps.repos.accounts.get(accountId);
     if (!account) {
@@ -80,17 +55,15 @@ export function createAuthService(deps: CreateAuthServiceDeps): AuthService {
     }
     const identity = await deps.repos.identities.get(identityId);
     if (identity === null) throw new ApiHttpError("unauthorized", "sign in again");
-    const summary = await summarize(identity);
-    if (summary === null) {
-      throw new ApiHttpError("unauthorized", "storage provider no longer exists");
-    }
-    const { trash, index } = await deps.installation();
     return {
       account: { id: account.id, displayName: account.displayName },
-      identity: summary,
+      identity: {
+        id: identity.id,
+        username: identity.externalUsername,
+        providerId: identity.providerId,
+      },
       isAdmin: account.isAdmin,
-      trash,
-      index,
+      ...(await deps.installation()),
     };
   }
 
@@ -175,17 +148,9 @@ export function createAuthService(deps: CreateAuthServiceDeps): AuthService {
       );
     };
 
-    // A provider an admin disabled must not take the session down with it:
-    // the account's own routes keep working and only storage calls fail.
-    let storage: StorageProvider;
-    try {
-      storage = await deps.storageFactory(identity.id);
-    } catch (error) {
-      if (!(error instanceof ApiHttpError && error.kind === "upstream_unavailable")) {
-        throw error;
-      }
-      storage = unavailableStorage(error);
-    }
+    // A files folder fdrive may not use leaves the session working: every
+    // storage operation fails with `upstream_unavailable` instead.
+    const storage = await deps.storageFactory(identity.id);
 
     return {
       accountId: session.accountId,
