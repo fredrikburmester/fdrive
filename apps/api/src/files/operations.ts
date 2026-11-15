@@ -24,6 +24,7 @@ import {
   type PersonalActivityService,
 } from "../activity/service.ts";
 import type { Principal } from "../auth/principal.ts";
+import { gated, ungated, type WriteGate } from "../backups/write-gate.ts";
 import { ApiHttpError } from "../errors.ts";
 import type { MetadataService } from "../metadata/service.ts";
 import { followIntoTrash } from "../metadata/trash.ts";
@@ -132,6 +133,13 @@ export interface FileOperationsDeps {
    */
   readonly metadata?: Pick<MetadataService, "onMoved" | "onDeleted">;
   readonly ownerPath: OwnerPath;
+  /**
+   * The backups' write gate. Each operation holds it from its storage call
+   * to its last follower, so a capture's snapshot sees all of that or none;
+   * an upload, from its publish, once its body is all here. Absent, nothing
+   * is held.
+   */
+  readonly gate?: WriteGate;
   /** A login's own storage, which takes an item back out of its Trash. */
   readonly storageFor: (identityId: string) => Promise<StorageProvider>;
   readonly logger?: { error(object: Record<string, unknown>, message: string): void };
@@ -155,6 +163,37 @@ function trashId(leaf: string): string {
 }
 
 /**
+ * `body` as storage reads it, and whether all of it is here: a buffer is, a
+ * stream once storage has read its end. The stream is read only as storage
+ * reads it, so one storage refuses before reading is left as it was.
+ */
+function arrival(body: UploadBody): { readonly body: UploadBody; readonly done: boolean } {
+  if (body instanceof Uint8Array) return { body, done: true };
+  let done = false;
+  let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+  const read = new ReadableStream<Uint8Array>(
+    {
+      async pull(controller) {
+        reader ??= body.getReader();
+        const chunk = await reader.read();
+        if (chunk.done) {
+          done = true;
+          controller.close();
+        } else controller.enqueue(chunk.value);
+      },
+      cancel: (reason) => (reader ?? body).cancel(reason),
+    },
+    { highWaterMark: 0 },
+  );
+  return {
+    body: read,
+    get done() {
+      return done;
+    },
+  };
+}
+
+/**
  * The one way fdrive changes files, whoever asks: the web's file and Trash
  * routes, MCP, AI chat, Office and a link's visitors. Each operation records
  * its intent, then runs its storage call in one transaction with what grants
@@ -169,11 +208,14 @@ function trashId(leaf: string): string {
  * path a successful operation left, and a new item there waits for them to
  * have gone (`TouchedPaths`).
  *
- * No transaction or lock is held while a client's body arrives: an upload
- * stages its body first and holds its path only to publish it
- * (`StorageProvider.upload`'s `critical`).
+ * No transaction, lock or gate is held while a client's body arrives: an
+ * upload stages its body first and holds its path, and the backups' write
+ * gate, only to publish it (`StorageProvider.upload`'s `critical`) and
+ * record it.
  */
 export function createFileOperations(deps: FileOperationsDeps): FileOperations {
+  const gate = deps.gate ?? ungated;
+
   /** Records `mutate` as one command, unless no one records it. */
   async function record<T>(
     actor: FileActor,
@@ -246,204 +288,221 @@ export function createFileOperations(deps: FileOperationsDeps): FileOperations {
               targetPath: path,
               ...(action === "file.copy" ? { variant: "save_as" as const } : {}),
             };
-      const { value: entry, history } = await record(
-        actor,
-        { action, requested, ...(before ? { before } : {}) },
-        () =>
-          actor.storage.upload(path, body, {
-            ...storageOptions,
-            // Only the publish holds the path, never the body as it arrives.
-            critical: (work) =>
-              deps.access.run(actor.identityId, { creates: [path] }, () => work()),
-          }),
-        (entry) => activityFacts(path, entry),
-      );
-      return done({ entry }, history);
+      const staged = arrival(body);
+      return gate(async (hold) => {
+        const { value: entry, history } = await record(
+          actor,
+          { action, requested, ...(before ? { before } : {}) },
+          () =>
+            actor.storage.upload(path, staged.body, {
+              ...storageOptions,
+              // Only the publish holds the path, never the body as it arrives.
+              // Once the body is all here, the publish takes the gate and
+              // holds it until the upload is recorded.
+              critical: async (work) => {
+                if (staged.done) await hold();
+                return deps.access.run(actor.identityId, { creates: [path] }, () => work());
+              },
+            }),
+          (entry) => activityFacts(path, entry),
+        );
+        return done({ entry }, history);
+      });
     },
 
     uploadPart(actor, path, body, options) {
       return actor.storage.uploadPart(path, body, options);
     },
 
-    async mkdir(actor, path, options) {
-      const { value: entry, history } = await record(
-        actor,
-        { action: "folder.create", requested: { path, kind: "dir" } },
-        () =>
-          deps.access.run(actor.identityId, { creates: [path] }, () =>
-            actor.storage.mkdir(path, options),
-          ),
-      );
-      return done({ entry }, history);
-    },
+    mkdir: (actor, path, options) =>
+      gated(gate, async () => {
+        const { value: entry, history } = await record(
+          actor,
+          { action: "folder.create", requested: { path, kind: "dir" } },
+          () =>
+            deps.access.run(actor.identityId, { creates: [path] }, () =>
+              actor.storage.mkdir(path, options),
+            ),
+        );
+        return done({ entry }, history);
+      }),
 
-    async move(actor, path, target, options = {}) {
-      const { identityId, storage } = actor;
-      const action = options.action ?? "file.move";
-      // Checked first, so a move that cannot happen leaves no new empty folder behind.
-      const before = await activityStat(storage, path);
-      const kind = before?.kind === "file" ? "file" : "dir";
-      const { value: entry, history } = await record(
-        actor,
-        {
-          action,
-          requested: { path, targetPath: target, ...provenance(actor) },
-          ...(before ? { before } : {}),
-        },
-        async () => {
-          // Moving an item onto itself changes nothing; it is reported as it is.
-          if (!relocates("move", path, target)) return storage.stat(path);
-          return deps.access.run(
-            identityId,
-            { vacates: [path], creates: [target] },
-            async (follow) => {
-              await follow.moved(identityId, path, target, kind === "dir");
-              // Created once the source was checked, so a move that cannot
-              // happen leaves no new empty folder behind.
-              if (options.createParents === true && before !== undefined)
-                await storage.mkdir(parentPath(target), { parents: true });
-              return storage.move(path, target);
-            },
-          );
-        },
-        (entry) => ({ path: target, kind: entry.kind === "dir" ? "dir" : "file" }),
-      );
-      const warning =
-        path === target
-          ? {}
-          : await bestEffort(action === "file.rename" ? "Renamed" : "Moved", (metadata) =>
-              metadata.onMoved(identityId, path, target, kind === "dir"),
+    move: (actor, path, target, options = {}) =>
+      gated(gate, async () => {
+        const { identityId, storage } = actor;
+        const action = options.action ?? "file.move";
+        // Checked first, so a move that cannot happen leaves no new empty folder behind.
+        const before = await activityStat(storage, path);
+        const kind = before?.kind === "file" ? "file" : "dir";
+        const { value: entry, history } = await record(
+          actor,
+          {
+            action,
+            requested: { path, targetPath: target, ...provenance(actor) },
+            ...(before ? { before } : {}),
+          },
+          async () => {
+            // Moving an item onto itself changes nothing; it is reported as it is.
+            if (!relocates("move", path, target)) return storage.stat(path);
+            return deps.access.run(
+              identityId,
+              { vacates: [path], creates: [target] },
+              async (follow) => {
+                await follow.moved(identityId, path, target, kind === "dir");
+                // Created once the source was checked, so a move that cannot
+                // happen leaves no new empty folder behind.
+                if (options.createParents === true && before !== undefined)
+                  await storage.mkdir(parentPath(target), { parents: true });
+                return storage.move(path, target);
+              },
             );
-      return done({ entry }, history, warning);
-    },
-
-    async copy(actor, path, target, options = {}) {
-      const before = await activityStat(actor.storage, path);
-      const { value: entry, history } = await record(
-        actor,
-        {
-          action: "file.copy",
-          requested: {
-            path,
-            targetPath: target,
-            ...(options.variant ? { variant: options.variant } : {}),
           },
-          ...(before ? { before } : {}),
-        },
-        async () => {
-          if (!relocates("copy", path, target)) return actor.storage.stat(path);
-          return deps.access.run(actor.identityId, { creates: [target] }, () =>
-            actor.storage.copy(path, target),
-          );
-        },
-        (entry) => ({
-          path: target,
-          kind: entry.kind === "dir" ? "dir" : "file",
-          size: entry.size,
-        }),
-      );
-      // A copy is a new item: nothing kept by path on the source comes along.
-      return done({ entry }, history);
-    },
+          (entry) => ({ path: target, kind: entry.kind === "dir" ? "dir" : "file" }),
+        );
+        const warning =
+          path === target
+            ? {}
+            : await bestEffort(action === "file.rename" ? "Renamed" : "Moved", (metadata) =>
+                metadata.onMoved(identityId, path, target, kind === "dir"),
+              );
+        return done({ entry }, history, warning);
+      }),
 
-    async trash(actor, path) {
-      const { identityId, storage } = actor;
-      const before = await activityStat(storage, path);
-      const kind = before?.kind === "file" ? "file" : "dir";
-      const {
-        value: { item, owned },
-        history,
-      } = await record(
-        actor,
-        {
-          action: "file.trash",
-          requested: { path, kind, ...provenance(actor) },
-          before: { path, kind },
-        },
-        () =>
-          deps.access.run(identityId, { vacates: [path] }, async (follow) => {
-            const moved = await storage.trash.put(path);
-            // The leaf is in the files that hold the item: the login's own, or
-            // for an item in a folder shared with it, its owner's.
-            const owner = await deps.ownerPath(identityId, path);
-            try {
-              await follow.moved(owner.identityId, owner.path, moved.leaf, moved.kind === "dir");
-            } catch (error) {
-              await takeBack(owner.identityId, path, moved, error);
-              throw error;
-            }
-            return { item: moved, owned: owner };
-          }),
-        ({ item: moved }) => ({ path, kind: moved.kind, trashLeaf: moved.leaf }),
-      );
-      const warning = await bestEffort("Moved to Trash", (metadata) =>
-        followIntoTrash(metadata, async () => owned, identityId, path, item),
-      );
-      return done({ item }, history, warning);
-    },
-
-    async restore(actor, id, target) {
-      const { identityId, storage } = actor;
-      const leaf = trashLeafPath(TRASH_PATH, id);
-      const parsed = parseMoveTrashLeaf(TRASH_PATH, leaf);
-      const original = parsed?.originalPath ?? leaf;
-      const destination = target ?? original;
-      const directory = parsed?.kind !== "file";
-      const { value: entry, history } = await record(
-        actor,
-        {
-          action: "file.restore",
-          requested: { path: original, trashLeaf: leaf, ...(target ? { targetPath: target } : {}) },
-        },
-        () =>
-          deps.access.run(
-            identityId,
-            { vacates: [leaf], creates: [destination] },
-            async (follow) => {
-              // A restore is a move out of Trash: what followed the item there comes back.
-              await follow.moved(identityId, leaf, destination, directory);
-              return storage.trash.restore(id, target === undefined ? undefined : { target });
+    copy: (actor, path, target, options = {}) =>
+      gated(gate, async () => {
+        const before = await activityStat(actor.storage, path);
+        const { value: entry, history } = await record(
+          actor,
+          {
+            action: "file.copy",
+            requested: {
+              path,
+              targetPath: target,
+              ...(options.variant ? { variant: options.variant } : {}),
             },
-          ),
-        (entry) => ({
-          path: entry.path,
-          kind: entry.kind === "dir" ? "dir" : "file",
-          size: entry.size,
-        }),
-      );
-      const warning = await bestEffort("Restored", (metadata) =>
-        metadata.onMoved(identityId, leaf, entry.path, entry.kind === "dir"),
-      );
-      return done({ entry }, history, warning);
-    },
-
-    async purge(actor, id, options = {}) {
-      const { identityId, storage } = actor;
-      const leaf = trashLeafPath(TRASH_PATH, id);
-      const parsed = parseMoveTrashLeaf(TRASH_PATH, leaf);
-      const directory = parsed?.kind !== "file";
-      const { history } = await record(
-        actor,
-        {
-          action: "file.delete",
-          requested: {
-            path: parsed?.originalPath ?? leaf,
-            trashLeaf: leaf,
-            ...(options.reason ? { reason: options.reason } : {}),
+            ...(before ? { before } : {}),
           },
-        },
-        () =>
-          deps.access.run(identityId, { vacates: [leaf] }, async (follow) => {
-            // What followed the item into Trash ends with it.
-            await follow.removed(identityId, leaf, directory);
-            await storage.trash.purge(id);
+          async () => {
+            if (!relocates("copy", path, target)) return actor.storage.stat(path);
+            return deps.access.run(actor.identityId, { creates: [target] }, () =>
+              actor.storage.copy(path, target),
+            );
+          },
+          (entry) => ({
+            path: target,
+            kind: entry.kind === "dir" ? "dir" : "file",
+            size: entry.size,
           }),
-      );
-      const warning = await bestEffort("Deleted", (metadata) =>
-        metadata.onDeleted(identityId, leaf, directory),
-      );
-      return done({}, history, warning);
-    },
+        );
+        // A copy is a new item: nothing kept by path on the source comes along.
+        return done({ entry }, history);
+      }),
+
+    trash: (actor, path) =>
+      gated(gate, async () => {
+        const { identityId, storage } = actor;
+        const before = await activityStat(storage, path);
+        const kind = before?.kind === "file" ? "file" : "dir";
+        const {
+          value: { item, owned },
+          history,
+        } = await record(
+          actor,
+          {
+            action: "file.trash",
+            requested: { path, kind, ...provenance(actor) },
+            before: { path, kind },
+          },
+          () =>
+            deps.access.run(identityId, { vacates: [path] }, async (follow) => {
+              const moved = await storage.trash.put(path);
+              // The leaf is in the files that hold the item: the login's own, or
+              // for an item in a folder shared with it, its owner's.
+              const owner = await deps.ownerPath(identityId, path);
+              try {
+                await follow.moved(owner.identityId, owner.path, moved.leaf, moved.kind === "dir");
+              } catch (error) {
+                await takeBack(owner.identityId, path, moved, error);
+                throw error;
+              }
+              return { item: moved, owned: owner };
+            }),
+          ({ item: moved }) => ({ path, kind: moved.kind, trashLeaf: moved.leaf }),
+        );
+        const warning = await bestEffort("Moved to Trash", (metadata) =>
+          followIntoTrash(metadata, async () => owned, identityId, path, item),
+        );
+        return done({ item }, history, warning);
+      }),
+
+    restore: (actor, id, target) =>
+      gated(gate, async () => {
+        const { identityId, storage } = actor;
+        const leaf = trashLeafPath(TRASH_PATH, id);
+        const parsed = parseMoveTrashLeaf(TRASH_PATH, leaf);
+        const original = parsed?.originalPath ?? leaf;
+        const destination = target ?? original;
+        const directory = parsed?.kind !== "file";
+        const { value: entry, history } = await record(
+          actor,
+          {
+            action: "file.restore",
+            requested: {
+              path: original,
+              trashLeaf: leaf,
+              ...(target ? { targetPath: target } : {}),
+            },
+          },
+          () =>
+            deps.access.run(
+              identityId,
+              { vacates: [leaf], creates: [destination] },
+              async (follow) => {
+                // A restore is a move out of Trash: what followed the item there comes back.
+                await follow.moved(identityId, leaf, destination, directory);
+                return storage.trash.restore(id, target === undefined ? undefined : { target });
+              },
+            ),
+          (entry) => ({
+            path: entry.path,
+            kind: entry.kind === "dir" ? "dir" : "file",
+            size: entry.size,
+          }),
+        );
+        const warning = await bestEffort("Restored", (metadata) =>
+          metadata.onMoved(identityId, leaf, entry.path, entry.kind === "dir"),
+        );
+        return done({ entry }, history, warning);
+      }),
+
+    purge: (actor, id, options = {}) =>
+      gated(gate, async () => {
+        const { identityId, storage } = actor;
+        const leaf = trashLeafPath(TRASH_PATH, id);
+        const parsed = parseMoveTrashLeaf(TRASH_PATH, leaf);
+        const directory = parsed?.kind !== "file";
+        const { history } = await record(
+          actor,
+          {
+            action: "file.delete",
+            requested: {
+              path: parsed?.originalPath ?? leaf,
+              trashLeaf: leaf,
+              ...(options.reason ? { reason: options.reason } : {}),
+            },
+          },
+          () =>
+            deps.access.run(identityId, { vacates: [leaf] }, async (follow) => {
+              // What followed the item into Trash ends with it.
+              await follow.removed(identityId, leaf, directory);
+              await storage.trash.purge(id);
+            }),
+        );
+        const warning = await bestEffort("Deleted", (metadata) =>
+          metadata.onDeleted(identityId, leaf, directory),
+        );
+        return done({}, history, warning);
+      }),
   };
 
   /**

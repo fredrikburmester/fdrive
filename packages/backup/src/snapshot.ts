@@ -124,10 +124,10 @@ export async function captureSnapshot(
     const encrypted = new Encrypter();
     encrypted.addRecipient(options.recipient);
     await client.query("set lock_timeout = '30s'");
-    // No mutating request (SNAPSHOT_GATE) and no recovery file writer (BACKUP_GATE) is half done
-    // when the repeatable-read snapshot is taken. Requests then go on and the snapshot does not
-    // see them; recovery files stay still until every one is read. A request may wait on OCR,
-    // which writes under BACKUP_GATE, so SNAPSHOT_GATE is always taken first.
+    // No write (SNAPSHOT_GATE) and no recovery file writer (BACKUP_GATE) is half done when the
+    // repeatable-read snapshot is taken. Writes then go on and the snapshot does not see them;
+    // recovery files stay still until every one is read. A write may wait on OCR, which writes
+    // under BACKUP_GATE, so SNAPSHOT_GATE is always taken first.
     await client.query("select pg_advisory_lock($1)", [SNAPSHOT_GATE]);
     snapshotting = true;
     await client.query("select pg_advisory_lock($1)", [BACKUP_GATE]);

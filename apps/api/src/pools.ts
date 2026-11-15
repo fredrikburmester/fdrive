@@ -8,15 +8,17 @@ import { type CreateDbResult, createDb } from "@fdrive/db";
  * database's connections is in docs/ARCHITECTURE.md, "Database connections".
  */
 export const API_POOLS = {
-  /**
-   * Each mutating request holds the backups' snapshot gate, shared, from its
-   * start to its end, an upload's body included (`withDatabaseWriter`). Used
-   * only while backups are configured. A write that finds every connection
-   * taken waits for one, however long: it holds nothing yet.
-   */
-  writeGate: 16,
   /** An Office save holds its document's lock, and a connection, while its body arrives. */
   office: 10,
+  /**
+   * A write holds the backups' snapshot gate, shared, for the short section
+   * where it changes the files folder or the database in more than one step:
+   * a file operation from its storage call, an upload from its publish, to
+   * its last follower, never while a body arrives (`WriteGate`). Used only
+   * while backups are configured. A write that finds every connection taken
+   * waits for one, however long: no holder waits for anything it holds.
+   */
+  writeGate: 16,
   /** A file operation's transaction holds the paths it changes while its storage call runs. */
   fileOperations: 10,
   /** Everything else, backups included. It waits for no other pool. */
@@ -81,8 +83,8 @@ export function openApiPools(
       onError: (error) => onError(name, error),
     });
   const pools = {
-    writeGate: open("writeGate"),
     office: open("office"),
+    writeGate: open("writeGate"),
     fileOperations: open("fileOperations"),
     main: open("main"),
   };

@@ -36,6 +36,7 @@ import { z } from "zod";
 import type { AuthedHono } from "../app.js";
 import { createRequireAdmin } from "../auth/principal.js";
 import { withoutApiV1Prefix } from "../auth/routes.js";
+import { gated, ungated, type WriteGate } from "../backups/write-gate.js";
 import { ApiHttpError } from "../errors.js";
 import type { ImageEmbedClient } from "../search/image-embed-client.js";
 import { fetchEmbedStatus } from "./embed-status.js";
@@ -68,6 +69,11 @@ export interface SystemRoutesDeps {
   readonly systemEvents: SystemEventRepo;
   /** Records what an admin did here, for the same log. Never awaited by a handler. */
   readonly eventLog: SystemEventLog;
+  /**
+   * The backups' write gate, held while settings saved together are written,
+   * so a capture's snapshot holds all of them or none.
+   */
+  readonly gate?: WriteGate;
   readonly indexQueries: IndexQueries;
   readonly thumbnailsRepo: ThumbnailsRepo;
   /** `null` when `FDRIVE_INDEXER_URL` is not configured. */
@@ -225,9 +231,11 @@ export function registerSystemRoutes(groups: { authed: AuthedHono }, deps: Syste
     }
 
     const before = resolveIndexerSettings(await deps.settings.all()).values;
-    for (const [key, value] of indexerSettingsEntries(parsed.data)) {
-      await deps.settings.set(key, value);
-    }
+    await gated(deps.gate ?? ungated, async () => {
+      for (const [key, value] of indexerSettingsEntries(parsed.data)) {
+        await deps.settings.set(key, value);
+      }
+    });
 
     const settingsAll = await deps.settings.all();
     const body: IndexerSettingsResponse = resolveIndexerSettings(settingsAll);
@@ -490,9 +498,11 @@ export function registerSystemRoutes(groups: { authed: AuthedHono }, deps: Syste
     }
 
     const before = resolveOcrSettings(await deps.settings.all()).values;
-    for (const [key, value] of ocrSettingsEntries(parsed.data)) {
-      await deps.settings.set(key, value);
-    }
+    await gated(deps.gate ?? ungated, async () => {
+      for (const [key, value] of ocrSettingsEntries(parsed.data)) {
+        await deps.settings.set(key, value);
+      }
+    });
 
     const settingsAll = await deps.settings.all();
     const body: OcrSettingsResponse = resolveOcrSettings(settingsAll);

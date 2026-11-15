@@ -24,6 +24,7 @@ import {
   UnreadableArchiveError,
   UnsupportedPeekFormatError,
 } from "../archive/peek.ts";
+import { ungated, type WriteGate } from "../backups/write-gate.ts";
 import { ApiHttpError } from "../errors.ts";
 import type { FileOperations } from "../files/operations.ts";
 import { type DownloadOutcome, resolveDownload } from "../fs/routes.ts";
@@ -49,6 +50,11 @@ export interface SharesDeps {
   readonly storageFor: (identityId: string) => Promise<StorageProvider>;
   /** Stores a visitor's upload the way every change to files is made. */
   readonly files: Pick<FileOperations, "upload">;
+  /**
+   * The backups' write gate, which a visitor's upload holds from its publish
+   * until the link has counted it. Absent, nothing is held.
+   */
+  readonly gate?: WriteGate;
   readonly passwords: SharePasswords;
   /** Ceilings on public archive downloads; each one left out keeps its default. */
   readonly zipLimits?: Partial<ShareZipLimits>;
@@ -169,6 +175,7 @@ function canonical(path: string): string {
  * a preview, a peek or an archive counts once, after storage answered.
  */
 export function createSharesService(deps: SharesDeps) {
+  const gate = deps.gate ?? ungated;
   const zipLimits: ShareZipLimits = { ...DEFAULT_SHARE_ZIP_LIMITS, ...deps.zipLimits };
   const zipSlots = createShareZipSlots(zipLimits.perShare);
 
@@ -541,8 +548,9 @@ export function createSharesService(deps: SharesDeps) {
      * Stores `body` as `name` in the shared folder, never over a file: a
      * taken name is refused by storage before it reads the body, and the
      * next numbered name is tried (`photo (2).jpg`). Returns the name it
-     * landed on. Counted once stored; a refusal then cannot take the file
-     * back and only turns the next upload away.
+     * landed on. Counted once stored, in one write with it (`gate`): a
+     * refusal then cannot take the file back and only turns the next upload
+     * away.
      */
     async upload(
       share: OpenShare,
@@ -553,33 +561,37 @@ export function createSharesService(deps: SharesDeps) {
       // A visitor's upload is the owner's file, but never the owner's history.
       const visitor = { identityId: share.row.identityId, storage: share.storage, recorded: null };
       const taken = new Set<string>();
-      const stored = await shareCall(async () => {
-        for (;;) {
-          const candidate = uniqueNumberedName(name, taken);
-          try {
-            await deps.files.upload(visitor, resolve(share.row, `/${candidate}`), body, {
-              signal,
-              action: "file.upload",
-            });
-            return candidate;
-          } catch (error) {
-            if (!isStorageError(error) || error.kind !== "conflict") throw error;
-            // Storage holds the body's reader once it has started reading it, and
-            // then there is nothing left to store under another name.
-            if (
-              (body instanceof ReadableStream && body.locked) ||
-              taken.size >= UPLOAD_NAME_ATTEMPTS
-            )
-              throw new ApiHttpError(
-                "conflict",
-                "That name was just taken. Upload the file again.",
-              );
-            taken.add(candidate);
+      // The upload holds the gate from its publish (`FileOperations.upload`),
+      // and this write it joins keeps it until the count is in.
+      return gate(async () => {
+        const stored = await shareCall(async () => {
+          for (;;) {
+            const candidate = uniqueNumberedName(name, taken);
+            try {
+              await deps.files.upload(visitor, resolve(share.row, `/${candidate}`), body, {
+                signal,
+                action: "file.upload",
+              });
+              return candidate;
+            } catch (error) {
+              if (!isStorageError(error) || error.kind !== "conflict") throw error;
+              // Storage holds the body's reader once it has started reading it, and
+              // then there is nothing left to store under another name.
+              if (
+                (body instanceof ReadableStream && body.locked) ||
+                taken.size >= UPLOAD_NAME_ATTEMPTS
+              )
+                throw new ApiHttpError(
+                  "conflict",
+                  "That name was just taken. Upload the file again.",
+                );
+              taken.add(candidate);
+            }
           }
-        }
+        });
+        await deps.shares.consume(share.row.id, deps.clock());
+        return stored;
       });
-      await deps.shares.consume(share.row.id, deps.clock());
-      return stored;
     },
   };
 }

@@ -107,6 +107,7 @@ export function testFileOperations(deps: Partial<FileOperationsDeps> = {}): File
     ...(deps.activity === undefined ? {} : { activity: deps.activity }),
     ...(deps.metadata === undefined ? {} : { metadata: deps.metadata }),
     ...(deps.logger === undefined ? {} : { logger: deps.logger }),
+    ...(deps.gate === undefined ? {} : { gate: deps.gate }),
   });
 }
 

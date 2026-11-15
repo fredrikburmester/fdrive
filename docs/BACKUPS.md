@@ -102,13 +102,23 @@ Mac write ends from what the files folder shows, like any interrupted one
 ([macOS](MACOS.md#write-configuration-and-recovery)).
 
 Database rows are captured in a repeatable-read transaction, using PostgreSQL text values to
-preserve bigint, bytea, JSON and timestamps exactly. Two advisory locks make the capture
-consistent. Every mutating API request holds the snapshot gate (`SNAPSHOT_GATE`) shared, and
-OCR holds the recovery files gate (`BACKUP_GATE`) shared while it writes, restores or deletes
-kept originals. A capture takes both exclusively, so its snapshot sees no request or OCR write
-half done, and lets go of the snapshot gate as soon as the snapshot exists: requests then go
-on, and the snapshot does not see them. It keeps the recovery files gate until it has read
-every recovery file, so OCR changes none of them meanwhile; OCR waits without giving up.
+preserve bigint, bytea, JSON and timestamps exactly, so a write that commits in one transaction
+is in a snapshot whole or not at all. Two advisory locks make the capture consistent beyond
+that. A write that changes the files folder, or the database in more than one transaction,
+holds the snapshot gate (`SNAPSHOT_GATE`) shared for that section alone (`WriteGate` in the
+API): a file operation from its storage call through what grants access, its history and the
+metadata that follows it; an upload from its publish, once its body has arrived, to its
+history; a Mac write's commit; a link change with its history and a visitor's upload with the
+link's count; a removed user with their tokens; settings saved together. OCR holds the
+recovery files gate (`BACKUP_GATE`) shared while it writes, restores or deletes kept originals.
+A capture takes both exclusively, so its snapshot sees no write or OCR write half done, and lets
+go of the snapshot gate as soon as the snapshot exists: writes then go on, and the snapshot does
+not see them. A capture waits only for writes inside that section, never for a body still
+arriving. A write records its intent in personal history before its section, so a snapshot can
+hold a running operation, such as an upload whose body was arriving; after a restore, history
+maintenance closes it as interrupted, as it does for a write a crash stopped. The capture keeps
+the recovery files gate until it has read every recovery file, so OCR changes none of them
+meanwhile; OCR waits without giving up.
 Local files reject symlinks, inode replacement and mutation during reading; log files capture
 their checkpoint prefix while allowing append. Independently changing user files and external
 writers are not a filesystem snapshot.
@@ -241,7 +251,7 @@ with loopback containers; not performance promises.
 | Empty installation | 5 KiB | 0.09 s | 0.008 s | 0.08 s | 238 / 239 MiB | 0.05 s |
 | 60,000 history rows + 64 MiB recovery file | 65 MiB | 2.9 s | 0.003 s | 2.9 s | 364 / 496 MiB | 15.4 s |
 
-Request pause is the longest any mutating request waited while requests ran back to back
+Request pause is the longest any write waited for the gate while writes ran back to back
 through the capture; 472 of them finished while the large capture was reading. OCR pause is
 how long a recovery file writer waited. Index regeneration after restore is separate and
 depends on file volume.

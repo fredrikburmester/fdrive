@@ -53,7 +53,10 @@ export interface SharesHarnessOptions {
   readonly config?: Partial<AppConfig>;
   readonly zipLimits?: Partial<ShareZipLimits>;
   readonly routes?: Partial<
-    Pick<RouteDeps, "indexQueries" | "resolver" | "thumbsDir" | "fileReader" | "thumbnailsEnabled">
+    Pick<
+      RouteDeps,
+      "indexQueries" | "resolver" | "thumbsDir" | "fileReader" | "thumbnailsEnabled" | "gate"
+    >
   >;
 }
 

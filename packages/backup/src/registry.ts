@@ -92,8 +92,9 @@ export function quoteTable(value: string): string {
 export const BACKUP_GATE = 736591204;
 export const BACKUP_WORKER = 736591205;
 /**
- * Held shared by every mutating API request, and exclusively by a capture only while it takes
- * its database snapshot, so the snapshot sees no request half done. Requests go on while the
- * capture reads rows and files; the snapshot does not see them.
+ * Held shared by every write that changes the database in more than one step, or the database
+ * and the files folder together (`withDatabaseWrite`), and exclusively by a capture only while
+ * it takes its database snapshot, so the snapshot sees no write half done. Writes go on while
+ * the capture reads rows and files; the snapshot does not see them.
  */
 export const SNAPSHOT_GATE = 736591207;

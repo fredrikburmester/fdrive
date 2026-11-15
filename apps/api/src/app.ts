@@ -42,7 +42,6 @@ export interface AppRouteGroups {
 }
 
 export interface AppDeps {
-  readonly requestGate?: (path: string, method: string, work: () => Promise<void>) => Promise<void>;
   readonly config: AppConfig;
   readonly logger: Logger;
   readonly clock?: () => Date;
@@ -128,8 +127,6 @@ export function createApp(deps: AppDeps): AppHono {
 
   app.use("*", requestIdMiddleware({ headerName: REQUEST_ID_HEADER }));
   app.use("*", secureHeaders());
-  const requestGate = deps.requestGate;
-  if (requestGate) app.use("*", (c, next) => requestGate(c.req.path, c.req.method, next));
 
   app.use("*", async (c, next) => {
     const start = Date.now();
