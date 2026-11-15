@@ -1,6 +1,5 @@
-import { adoptIntoTrash, isStorageError, type StorageProvider } from "@fdrive/core";
+import { isStorageError, type StorageProvider } from "@fdrive/core";
 import type { DesktopOperationRecord, DesktopRepo, DesktopRetention } from "@fdrive/db";
-import type { MetadataService } from "../metadata/service.js";
 import type { SystemEventLog } from "../system/event-log.js";
 import { DESKTOP_INTERNAL_ROOT } from "./files.js";
 
@@ -38,11 +37,9 @@ export async function removeIncoming(
 }
 
 export interface DesktopRetentionDeps {
-  repo: Pick<DesktopRepo, "expired" | "transition" | "forget" | "oldTrash" | "remove">;
+  repo: Pick<DesktopRepo, "expired" | "transition" | "forget">;
   /** Storage for an identity; what retention removes is fdrive's own bookkeeping. */
   storageForIdentity: (identityId: string) => Promise<StorageProvider>;
-  /** What follows an item by path, its Mac handle included, into Trash. */
-  metadata: Pick<MetadataService, "onMoved">;
   clock: () => Date;
   retention?: DesktopRetention;
   eventLog: Pick<SystemEventLog, "record">;
@@ -53,46 +50,12 @@ export interface DesktopRetentionDeps {
  * retried), and forget operations the app is done with, each with what it
  * staged. Ready and committing operations are never touched: their staged
  * files may still be published. Failures defer to the next pass.
- *
- * Once at start, it also moves what the Mac's own Trash held into fdrive's
- * Trash (`adoptOldTrash`).
  */
 export function createDesktopRetention(deps: DesktopRetentionDeps) {
   const retention = deps.retention ?? DESKTOP_RETENTION;
   let stopped = false;
   let timer: ReturnType<typeof setInterval> | undefined;
   let active: Promise<void> | undefined;
-  let adopting: Promise<void> | undefined;
-  /**
-   * Moves each item the Mac's own Trash held, from before Finder's Trash
-   * became fdrive's, into its user's Trash as deleted now, so Days in Trash
-   * counts from this start. What follows a path follows it, its handle too,
-   * so the Mac finds it in Trash under the same one. An item that cannot
-   * move stays where it was and is tried at the next start; one gone from
-   * disk is forgotten.
-   */
-  async function adoptOldTrash() {
-    let adopted = 0;
-    for (const item of await deps.repo.oldTrash()) {
-      try {
-        const storage = await deps.storageForIdentity(item.identityId);
-        const moved = await adoptIntoTrash(storage, item.path, item.originalPath, deps.clock());
-        await deps.metadata.onMoved(item.identityId, item.path, moved.leaf, moved.kind === "dir");
-        adopted += 1;
-      } catch (error) {
-        if (isStorageError(error) && error.kind === "not_found")
-          await deps.repo.remove(item.identityId, item.path);
-        else
-          deps.eventLog.record("general", "warn", "An item in the Mac's old Trash stays there", {
-            identityId: item.identityId,
-            path: item.path,
-            error: error instanceof Error ? error.message : String(error),
-          });
-      }
-    }
-    if (adopted > 0)
-      deps.eventLog.record("general", "info", "Moved the Mac's old Trash into Trash", { adopted });
-  }
   async function discard(op: DesktopOperationRecord) {
     await removeIncoming(await deps.storageForIdentity(op.identityId), op.identityId, op.id);
   }
@@ -142,14 +105,8 @@ export function createDesktopRetention(deps: DesktopRetentionDeps) {
   }
   return {
     sweep,
-    adoptOldTrash,
     start() {
       if (timer || stopped) return;
-      adopting = adoptOldTrash().catch((error: unknown) => {
-        deps.eventLog.record("general", "error", "Moving the Mac's old Trash failed", {
-          error: error instanceof Error ? error.message : String(error),
-        });
-      });
       run();
       timer = setInterval(run, 10 * 60_000);
       timer.unref();
@@ -157,7 +114,6 @@ export function createDesktopRetention(deps: DesktopRetentionDeps) {
     async stop() {
       stopped = true;
       clearInterval(timer);
-      await adopting;
       await active;
     },
   };

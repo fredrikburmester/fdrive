@@ -13,7 +13,7 @@ filesystem details and lets tests run on an in-memory storage. fdrive checks pas
 | The files folder and its storage | [files folder](../packages/local/src/files-folder.ts), [home storage](../packages/local/src/storage-provider.ts), [shared folders](../packages/local/src/shared.ts) |
 | The deployment's folder and its id | [files folder](../apps/api/src/local/files-folder.ts) |
 | Per-request storage | [storage factory](../apps/api/src/auth/storage-factory.ts) |
-| Trash | [Trash](../packages/core/src/trash/recycle-folder-trash.ts), [shared folders](../packages/local/src/shared.ts) |
+| Trash | [Trash's folders](../packages/core/src/trash/trash.ts), [its rows](../apps/api/src/trash/items.ts), [shared folders](../packages/local/src/shared.ts) |
 | Name and health | [storage service](../apps/api/src/system/storage.ts) |
 
 ## Wiring
@@ -59,8 +59,8 @@ Every member is required, and the files folder and the memory storage implement 
 `open`, `upload`, `uploadPart`, `mkdir`, `move`, `copy`, `deleteFile`, `deleteDir`,
 `deleteEmptyDir`, which removes a folder only while it is empty (the files folder's `rmdir`), so
 tidying up never takes what arrived meanwhile, `zip` and `trash`. `deleteFile` and `deleteDir`
-delete for good; `trash.put(path)` moves an item into Trash and says where (`{ leaf, kind }`), and
-every caller chooses.
+delete for good; `trash.put(path, id)` moves an item into Trash as item `id` and says where
+(`{ leaf, kind }`), and every caller chooses.
 
 Paths are the storage's own, already resolved from a scope. `stat` reports an entry (`EntryStat`):
 its path and name as storage spells them, kind, size, modification time, extension and inode.
@@ -145,9 +145,13 @@ How the files folder implements it:
   and bytes read once every file is counted (`onProgress`). Compressing to zip
   (`/fs/compress`) streams this zip straight into an upload of the archive.
 - **Trash.** Each user's storage has its Trash at `TRASH_PATH`, `/.trash`, in core's layout
-  (`createRecycleFolderTrash`); items live in `/.trash/.fdrive-move-v1`. `trash.put` refuses the
-  root and fdrive's own folders. Something in a writable shared folder goes to its owner's Trash,
-  at the owner's path, so `put` reports a leaf in the owner's files, which only the owner lists,
+  (`createTrash`): each item in a folder of its own, `/.trash/<id>/<name>`, moved there with one
+  rename. Storage keeps nothing else about it: the id names the item's row in `app.trash_items`
+  (where it was deleted from, when, its kind and size), which the API writes
+  ([Trash](TRASH.md#where-deleted-items-live)). `trash.put` refuses the root and fdrive's own
+  folders; `trash.restore(id, name, target)` moves an item out, never over anything, and
+  `trash.purge(id)` deletes it with its folder. Something in a writable shared folder goes to its
+  owner's Trash, so `put` reports a leaf in the owner's files, which only the owner lists,
   restores and purges. Trash's one setting, how many days it keeps an item, is
   `trash.retentionDays` in `app.settings`, read at `/api/v1/trash/settings` and written at
   `/api/v1/system/trash`; the API's hourly retention deletes what is older ([Trash](TRASH.md)).

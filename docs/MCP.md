@@ -67,7 +67,7 @@ assistant deciding whether the user requested that action.
 Direct operations enforce normalized folder grants and current provider permissions. Browsing
 an ancestor of an allowed folder reveals only the directory chain leading to that folder.
 Ordinary operations and indexed results exclude fdrive's own folders: the Trash at `/.trash`,
-the Mac app's `/.fdrive-desktop` and fdrive's Trash layout. Moving or deleting a grant root is
+the Mac app's `/.fdrive-desktop` and Trash's old layout. Moving or deleting a grant root is
 refused. Restore checks both the original and
 requested destination paths. There are no permanent-delete or public-sharing tools.
 

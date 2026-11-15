@@ -22,8 +22,8 @@ const cookieFrom = (response: Response) => response.headers.get("set-cookie")?.s
 /**
  * Exercises the trash routes (`/api/v1/trash/*`) plus the `fs/delete` and
  * `fs/list` interactions with a trash, against a real local folder, whose
- * Trash is fdrive's own: a delete moves the item into the recycle folder
- * (`<home>/.trash/.fdrive-move-v1`). Follows `accounts-local.test.ts`'s
+ * Trash is fdrive's own: a delete moves the item into a folder of its own
+ * (`<home>/.trash/<id>/<name>`). Follows `accounts-local.test.ts`'s
  * composition pattern: one Postgres, one local folder, one composed app,
  * and plain `app.request` calls per user.
  */
@@ -145,7 +145,6 @@ describe("trash against real PostgreSQL and a local folder", () => {
     await deleteItem(aliceCookie, `/A Folder/${percentName}`, "file");
     await deleteItem(aliceCookie, "/A Folder", "dir");
     expect(existsSync(storage.path("alice", "/A Folder"))).toBe(false);
-    expect(existsSync(storage.path("alice", `${TRASH_PATH}/.fdrive-move-v1`))).toBe(true);
 
     // 3. the trash list parses originalPath, name, and deletedAt correctly
     // for every deleted item, the folder included.
@@ -168,6 +167,10 @@ describe("trash against real PostgreSQL and a local folder", () => {
     expect(afterDeletes.entries).toHaveLength(4);
     for (const entry of afterDeletes.entries) {
       expect(new Date(entry.deletedAt).toString()).not.toBe("Invalid Date");
+      // Each item lies in a folder of its own, under its own name.
+      expect(existsSync(storage.path("alice", `${TRASH_PATH}/${entry.id}/${entry.name}`))).toBe(
+        true,
+      );
     }
 
     // 4. fs/list never shows the trash folder itself.
@@ -248,7 +251,7 @@ describe("trash against real PostgreSQL and a local folder", () => {
     const aliceTrashAfterEmpty = await listTrash(aliceCookie);
     expect(aliceTrashAfterEmpty.entries).toEqual([]);
     // Restores, the purge and emptying left no folders behind.
-    expect(readdirSync(storage.path("alice", `${TRASH_PATH}/.fdrive-move-v1`))).toEqual([]);
+    expect(readdirSync(storage.path("alice", TRASH_PATH))).toEqual([]);
     const carolTrashAfterAliceEmpty = await listTrash(carol.cookie);
     expect(carolTrashAfterAliceEmpty.entries.map((entry) => entry.name)).toEqual(["carol-own.txt"]);
   }, 180000);
@@ -299,5 +302,32 @@ describe("trash against real PostgreSQL and a local folder", () => {
     expect(await favoritePaths()).toEqual([]);
     await restore("/metadata-recovered.txt", "/metadata-archive.txt");
     expect(await favoritePaths()).toEqual(["/metadata-archive.txt"]);
+  }, 180000);
+
+  it("deletes and restores an item whose path is near the system's limit", async () => {
+    const { cookie } = await login("alice");
+    // Absolute paths longer than this fail with ENAMETOOLONG: 1024 bytes on a Mac, 4096 on Linux.
+    const limit = process.platform === "darwin" ? 1024 : 4096;
+    const segment = "d".repeat(200);
+    const segments: string[] = [];
+    while (
+      storage.path("alice", `/${[...segments, segment, "deep.txt"].join("/")}`).length <
+      limit - 64
+    )
+      segments.push(segment);
+    const path = `/${[...segments, "deep.txt"].join("/")}`;
+    expect(storage.path("alice", path).length).toBeGreaterThan(limit - 300);
+    await upload(cookie, path, "deep");
+
+    await deleteItem(cookie, path, "file");
+    const entry = (await listTrash(cookie)).entries.find((item) => item.originalPath === path);
+    if (entry === undefined) throw new Error("expected the deep item in Trash");
+    const restored = await call(ROUTES.trash.restore, {
+      method: "POST",
+      cookie,
+      body: { ids: [entry.id] },
+    });
+    expect(restored.status).toBe(200);
+    expect(existsSync(storage.path("alice", path))).toBe(true);
   }, 180000);
 });

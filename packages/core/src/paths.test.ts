@@ -7,6 +7,7 @@ import {
   extensionOf,
   isRoot,
   isSafeSegment,
+  isUnderPath,
   isWithin,
   joinPath,
   normalizePath,
@@ -14,6 +15,28 @@ import {
   relativeTo,
   splitSegments,
 } from "./paths.ts";
+
+describe("isUnderPath", () => {
+  it("is true for a path nested below the prefix", () => {
+    expect(isUnderPath("/.trash", "/.trash/docs/a.txt/123")).toBe(true);
+  });
+
+  it("is false for the prefix itself", () => {
+    expect(isUnderPath("/.trash", "/.trash")).toBe(false);
+  });
+
+  it("is false for a sibling with a shared string prefix", () => {
+    expect(isUnderPath("/.trash", "/.trashcan/x")).toBe(false);
+  });
+
+  it("is true for any non-root path when the prefix is the root", () => {
+    expect(isUnderPath("/", "/anything")).toBe(true);
+  });
+
+  it("is false for the root itself when the prefix is the root", () => {
+    expect(isUnderPath("/", "/")).toBe(false);
+  });
+});
 
 describe("normalizePath", () => {
   it("treats '' and '/' both as the root", () => {

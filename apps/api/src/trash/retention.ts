@@ -4,6 +4,7 @@ import type { IdentityStorageFactory } from "../auth/storage-factory.js";
 import { ApiHttpError } from "../errors.js";
 import { type FileOperations, fileActor } from "../files/operations.js";
 import type { SystemEventLog } from "../system/event-log.js";
+import type { TrashItems } from "./items.js";
 import type { TrashSettingsService } from "./settings.js";
 
 const DAY_MS = 24 * 60 * 60_000;
@@ -16,6 +17,8 @@ export interface TrashRetentionDeps {
   /** Each login's storage, with its Trash; refuses a disabled or removed user. */
   readonly storageFor: IdentityStorageFactory;
   readonly settings: Pick<TrashSettingsService, "current">;
+  /** When each item went to Trash. */
+  readonly trash: Pick<TrashItems, "expired">;
   readonly files: Pick<FileOperations, "purge">;
   readonly clock: () => Date;
   readonly eventLog: Pick<SystemEventLog, "record">;
@@ -23,7 +26,8 @@ export interface TrashRetentionDeps {
 
 /**
  * Deletes for good what each user's Trash has kept longer than the
- * installation's retention, item by item through the same purge as
+ * installation's retention, by when each row says it went there, item by
+ * item through the same purge as
  * **Delete permanently** (`FileOperations.purge`), so history, shares and
  * links follow. A user who may not sign in keeps their Trash until they may again.
  * Runs hourly, the first time an hour after start, so an administrator who
@@ -54,12 +58,8 @@ export function createTrashRetention(deps: TrashRetentionDeps) {
         if (error instanceof ApiHttpError && error.kind === "forbidden") continue;
         throw error;
       }
-      const { entries } = await principal.storage.trash.list({
-        limit: Number.POSITIVE_INFINITY,
-      });
-      for (const entry of entries) {
+      for (const entry of await deps.trash.expired(identity.id, new Date(cutoff))) {
         if (stopped) break;
-        if (entry.deletedAt.getTime() > cutoff) continue;
         try {
           await deps.files.purge(fileActor(principal, { source: "api" }), entry.id, {
             reason: "retention",

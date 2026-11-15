@@ -55,7 +55,8 @@ it("hands out the files folder's storage as it is, whose deletes are for good", 
   expect(storage).toBe(memory);
   await storage.deleteFile("/docs/a.txt");
   expect(memory.dump()).toEqual({});
-  expect((await storage.trash.list()).entries).toEqual([]);
+  // Nothing went to Trash: no folder for it exists.
+  expect(memory.dirs().filter((dir) => dir.startsWith("/.trash"))).toEqual([]);
 });
 
 it("asks the files folder to admit the login before building any storage", async () => {

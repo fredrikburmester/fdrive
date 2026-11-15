@@ -71,6 +71,13 @@ Reference for affected code; shared rules live in [AGENTS.md](../AGENTS.md).
   write retention, built on it, moved the recovery copies it reclaimed into their owner's Trash.
   Now `deleteFile` and `deleteDir` delete for good, and moving to Trash is `trash.put`, so each
   caller says which it means.
+- Trash once encoded each item's original path in its folders
+  (`.fdrive-move-v1/<kind>/p/<segment>/…/v/<timestamp>`), so it needed no database on any
+  backend. It roughly doubled path length, so a delete near `PATH_MAX` failed with
+  `ENAMETOOLONG`; it left empty folders behind; every listing walked the tree; and every caller
+  parsed leaves. Trash now keeps one folder per item and a row: a listing is one query, and an
+  item is written as on its way before it moves, so a crash never leaves one in Trash without
+  its row.
 - Shares, public links and Office files keep the owner's paths, and each translates any
   login's path into the owner's (`ownerPath`). Followed once per login for one change on the
   disk, a rename of a shared folder that the person it is shared with sees only one end of reads

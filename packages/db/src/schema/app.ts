@@ -387,6 +387,34 @@ export const systemEvents = appSchema.table(
   ],
 );
 
+/**
+ * What each user's Trash holds, one row per item. The item lies at
+ * `/.trash/<id>/<name>` in its login's files, the owner's for something
+ * deleted from a folder they share, and was deleted from `original_path`
+ * there. `moving_from` is set from just before the item moves until it is
+ * there, and names where it comes from; whoever finds such a row settles it
+ * by what is on disk, so an item is never in Trash without its row.
+ */
+export const trashItems = appSchema.table(
+  "trash_items",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    identityId: uuid("identity_id")
+      .notNull()
+      .references(() => identities.id, { onDelete: "cascade" }),
+    originalPath: text("original_path").notNull(),
+    name: text("name").notNull(),
+    kind: text("kind").$type<"file" | "dir">().notNull(),
+    size: bigint("size", { mode: "number" }).notNull(),
+    deletedAt: timestamp("deleted_at", { withTimezone: true }).notNull(),
+    movingFrom: text("moving_from"),
+  },
+  (table) => [
+    check("trash_items_kind", sql`${table.kind} in ('file', 'dir')`),
+    index("trash_items_identity_deleted").on(table.identityId, table.deletedAt),
+  ],
+);
+
 /** Lazily registered desktop items; paths never act as authorization. */
 export const desktopItems = appSchema.table(
   "desktop_items",

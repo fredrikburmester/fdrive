@@ -538,13 +538,13 @@ export function registerMcpTools(
     {
       title: "List recoverable items",
       description:
-        "List Trash entries whose original paths are in allowed folders. Partial means the provider scan reached its 10,000-item bound.",
+        "List Trash entries whose original paths are in allowed folders. Partial means Trash holds more than 10,000 items.",
       inputSchema: {
         offset: z.number().int().min(0).max(10_000).optional(),
         limit: z.number().int().min(1).max(500).optional(),
       },
     },
-    wrap((args) => listTrash(principal, args)),
+    wrap((args) => listTrash(deps, principal, args)),
   );
   register(
     "restore_path",

@@ -6,6 +6,7 @@ import type { IndexQueries } from "@fdrive/db";
 import { describe, expect, it, vi } from "vitest";
 import { activityFixture } from "../../../test/activity-fixture.js";
 import { recordingFileOperations, testFileOperations } from "../../../test/file-operations.js";
+import { memoryTrashItemRepo } from "../../../test/trash-items.js";
 import type { Principal } from "../../auth/principal.js";
 import type { McpToolDeps } from "../../mcp/handlers.js";
 import { type ActionTool, createChatActionTools, MAX_WRITE_BYTES } from "./action-tools.ts";
@@ -40,7 +41,10 @@ function setup(options: { files?: Record<string, string>; referenced?: string[] 
     clock: () => new Date("2026-09-18T10:00:00.000Z"),
   };
   const activity = activityFixture(() => new Date("2026-09-18T10:00:00.000Z"));
-  const recorded = recordingFileOperations(testFileOperations({ activity: activity.service }));
+  const trash = memoryTrashItemRepo();
+  const recorded = recordingFileOperations(
+    testFileOperations({ activity: activity.service, trashRepo: trash }),
+  );
   const tools = createChatActionTools({
     mcp,
     principal,
@@ -66,7 +70,7 @@ function setup(options: { files?: Record<string, string>; referenced?: string[] 
     proposal: ChatActionProposal,
     edits?: Parameters<ActionTool["apply"]>[1],
   ) => tool(name).apply(proposal, edits, new AbortController().signal);
-  return { storage, tools, tool, verify, apply, activity, calls: recorded.calls };
+  return { storage, tools, tool, verify, apply, activity, calls: recorded.calls, trash };
 }
 
 const sha = (text: string) => createHash("sha256").update(text).digest("hex");
@@ -463,7 +467,7 @@ describe("rename_items", () => {
 
 describe("trash_items", () => {
   it("verifies referenced items with their kinds and trashes the ones kept", async () => {
-    const { verify, apply, storage } = setup({
+    const { verify, apply, storage, trash } = setup({
       referenced: ["/Inbox", "/Docs"],
     });
 
@@ -495,7 +499,7 @@ describe("trash_items", () => {
     await expect(storage.stat("/Inbox/a.txt")).rejects.toMatchObject({ kind: "not_found" });
     await expect(storage.stat("/Docs")).resolves.toBeDefined();
     // Into Trash, never deleted for good: nothing a chat applies is unrecoverable.
-    expect((await storage.trash.list()).entries.map((entry) => entry.originalPath)).toEqual([
+    expect((await trash.list(IDENTITY, 10)).items.map((item) => item.originalPath)).toEqual([
       "/Inbox/a.txt",
     ]);
     expect(await apply("trash_items", proposal, { paths: [] })).toMatchObject({

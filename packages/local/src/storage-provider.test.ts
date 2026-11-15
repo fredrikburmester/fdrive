@@ -651,22 +651,42 @@ describe("zip", () => {
 });
 
 describe("createLocalStorage: Trash", () => {
-  it("moves an item into /.trash in its folder, named by the current time unless given a clock", async () => {
-    const f = await fixture();
-    try {
-      await f.storage.upload("/a.txt", bytes("a"));
-      const before = Date.now();
-      const moved = await f.storage.trash.put("/a.txt");
-      const at = Number(BigInt(moved.leaf.split("/").at(-1) ?? "0") / 1_000_000n);
-      expect(moved).toMatchObject({ kind: "file" });
-      expect(moved.leaf).toMatch(/^\/\.trash\/\.fdrive-move-v1\/file\/p\/a\.txt\/v\/\d+$/);
-      expect(at).toBeGreaterThanOrEqual(before);
-      expect(at).toBeLessThanOrEqual(Date.now());
-      expect((await f.storage.trash.list()).entries.map((entry) => entry.originalPath)).toEqual([
-        "/a.txt",
-      ]);
-    } finally {
-      await f.cleanup();
-    }
+  const ID = "0d9f8a52-6c1e-4f53-9a7b-2e4c6d8f0a1b";
+
+  it("moves an item into a folder of its own in /.trash, and back", async () => {
+    await f.storage.upload("/docs/a.txt", bytes("a"), { mkdirParents: true });
+    expect(await f.storage.trash.put("/docs/a.txt", ID)).toEqual({
+      leaf: `/.trash/${ID}/a.txt`,
+      kind: "file",
+    });
+    expect(await readFile(join(f.home, ".trash", ID, "a.txt"), "utf8")).toBe("a");
+    await f.storage.trash.restore(ID, "a.txt", "/docs/a.txt");
+    expect(await readFile(join(f.home, "docs", "a.txt"), "utf8")).toBe("a");
+    expect(await readdir(join(f.home, ".trash"))).toEqual([]);
+  });
+
+  it("trashes and restores an item whose path is near the system's limit", async () => {
+    // Absolute paths longer than this fail with ENAMETOOLONG: 1024 bytes on a Mac, 4096 on Linux.
+    const limit = process.platform === "darwin" ? 1024 : 4096;
+    const segment = "s".repeat(200);
+    const segments: string[] = [];
+    while (join(await home(), ...segments, segment, "file.txt").length < limit - 64)
+      segments.push(segment);
+    const path = `/${[...segments, "file.txt"].join("/")}`;
+    expect(join(f.home, path).length).toBeGreaterThan(limit - 300);
+    await f.storage.upload(path, bytes("deep"), { mkdirParents: true });
+
+    const { leaf } = await f.storage.trash.put(path, ID);
+    expect(leaf).toBe(`/.trash/${ID}/file.txt`);
+    await f.storage.trash.restore(ID, "file.txt", path);
+    expect(await readFile(join(f.home, path), "utf8")).toBe("deep");
+  });
+
+  it("purges an item with its folder", async () => {
+    await f.storage.upload("/docs/2026/b.txt", bytes("b"), { mkdirParents: true });
+    await f.storage.trash.put("/docs/2026", ID);
+    await f.storage.trash.purge(ID);
+    expect(await readdir(join(f.home, ".trash"))).toEqual([]);
+    expect(await readdir(join(f.home, "docs"))).toEqual([]);
   });
 });

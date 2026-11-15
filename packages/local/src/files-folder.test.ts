@@ -143,6 +143,12 @@ describe("createFilesFolder", () => {
         { owner: "alice", path: "/Bin/.fdrive-move-v1/dir/p/Old/v/1", writable: true },
         { owner: "alice", path: "/.trash/.fdrive-move-v1/dir/p/Older/v/2", writable: true },
         { owner: "alice", path: "/.trash/stray", writable: true },
+        // A shared folder in its owner's Trash keeps its name there, and takes none here.
+        {
+          owner: "alice",
+          path: "/.trash/0d9f8a52-6c1e-4f53-9a7b-2e4c6d8f0a1b/Projects",
+          writable: true,
+        },
         { owner: "alice", path: "/Bin/loose", writable: true },
         { owner: "alice", path: "/Bin link", writable: true },
         { owner: "alice", path: "/Projects", writable: true },
@@ -156,6 +162,13 @@ describe("createFilesFolder", () => {
       mkdirParents: true,
     });
     await alice.upload("/.trash/stray/kept.txt", bytes("kept"), { mkdirParents: true });
+    await alice.upload(
+      "/.trash/0d9f8a52-6c1e-4f53-9a7b-2e4c6d8f0a1b/Projects/old.txt",
+      bytes("old"),
+      {
+        mkdirParents: true,
+      },
+    );
     await alice.upload("/Bin/loose/kept.txt", bytes("kept"), { mkdirParents: true });
     await alice.upload("/Projects/plan.txt", bytes("plan"), { mkdirParents: true });
     await symlink(join(root, "alice", "Bin"), join(root, "alice", "Bin link"));
