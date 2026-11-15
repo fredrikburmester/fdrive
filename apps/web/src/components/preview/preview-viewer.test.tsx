@@ -54,3 +54,42 @@ it("renders ImageViewer with thumb-first fallback for HEIC images", () => {
   expect(img.getAttribute("src")).toBe("/thumb/photo.heic");
   expect(img.getAttribute("alt")).toBe("photo.heic");
 });
+
+function videoEntry(name: string): FsEntry {
+  return {
+    name,
+    path: `/films/${name}`,
+    kind: "file",
+    ext: name.slice(name.lastIndexOf(".")).toLowerCase(),
+    mime: null,
+    size: 1000,
+    modifiedAt: "2026-11-14T00:00:00Z",
+  };
+}
+
+it("plays mp4 from the inline URL and offers the subtitle files next to it", () => {
+  const { container } = render(
+    <PreviewViewer
+      entry={videoEntry("Movie.mp4")}
+      inlineUrl="/inline/Movie.mp4"
+      downloadUrl="/download"
+      folderEntries={[videoEntry("Movie.mp4"), videoEntry("Movie.en.srt")]}
+    />,
+  );
+
+  expect(container.querySelector("video")?.getAttribute("src")).toBe("/inline/Movie.mp4");
+  const track = container.querySelector('track[kind="subtitles"]');
+  expect(track?.getAttribute("label")).toBe("en");
+  expect(track?.getAttribute("src")).toBe("/api/v1/fs/subtitles?path=%2Ffilms%2FMovie.en.srt");
+});
+
+it("plays other video through the API's transcode", () => {
+  const { container } = render(
+    <PreviewViewer entry={videoEntry("Movie.mkv")} inlineUrl="/inline" downloadUrl="/download" />,
+  );
+
+  expect(container.querySelector("video")?.getAttribute("src")).toBe(
+    "/api/v1/fs/transcode?path=%2Ffilms%2FMovie.mkv",
+  );
+  expect(container.querySelector('track[kind="subtitles"]')).toBeNull();
+});

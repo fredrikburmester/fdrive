@@ -66,6 +66,7 @@ import { registerFeatureAdmission } from "./features/admission.js";
 import { registerFeatureRoutes } from "./features/routes.js";
 import { createFeatureService } from "./features/service.js";
 import { publishFsEvent, registerFsRoutes } from "./fs/routes.js";
+import { registerVideoRoutes } from "./fs/video-routes.js";
 import { createJobRunner } from "./jobs/runner.js";
 import { createChangeQueue } from "./local/change-queue.js";
 import {
@@ -955,6 +956,7 @@ export async function composeApp(
         },
       };
       registerFsRoutes(groups, fsRoutesDeps);
+      registerVideoRoutes(groups);
       registerTrashRoutes(groups, {
         activity: personalActivity,
         bus,
