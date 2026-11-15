@@ -1162,7 +1162,11 @@ fn a_partial_row_with_missing_media_gets_both() {
 #[test]
 fn search_ocr_readmits_image_dir_exclusions() {
     let env = Env::new();
-    let ctx = env.ctx(fv(false, true, false, false, false));
+    // Settled at once: a read of the file would find bytes other than the seeded key at once,
+    // not only once a second has passed since the write.
+    let ctx = env.ctx_with(fv(false, true, false, false, false), |ctx| {
+        ctx.stamp_settle = Duration::ZERO
+    });
     env.write("a.png", &png(8, 8));
     let id = env.seed(&ctx, "a.png", "sha", "pending");
     db::update_file_status(&mut env.client(), id, "excluded", 0, Some("excluded:image_dir")).unwrap();

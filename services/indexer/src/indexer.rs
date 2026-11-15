@@ -559,19 +559,18 @@ pub fn process_file_with(
         return Ok(false);
     }
     let row = ctx.db.with(|c| db::file_row(c, ctx.root_id, rel_path))?;
+    let status = row
+        .as_ref()
+        .map(|r| db::retry_status(r.status.clone(), r.error.as_deref()))
+        .unwrap_or_default();
     let manifest = row.as_ref().map(|r| ManifestRow {
         size: r.size,
         mtime_ns: r.mtime_ns,
-        status: r.status.clone(),
+        status: status.clone(),
         sha256: r.sha256.clone(),
         image_embedded: false,
         thumbnail_failed: false,
     });
-    let status = match &row {
-        Some(r) if r.error.as_deref() == Some("excluded:image_dir") => "excluded:image_dir".to_owned(),
-        Some(r) => r.status.clone(),
-        None => String::new(),
-    };
     let unchanged = unchanged_in_db(manifest.as_ref(), stat);
     if let Some(row) = row.as_ref().filter(|_| unchanged) {
         let excluded = status.starts_with("excluded") && exclusion_still_applies(ctx, rel_path, stat.size);
