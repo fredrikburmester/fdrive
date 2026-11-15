@@ -11,7 +11,8 @@ import type { McpToolDeps } from "../../src/mcp/handlers.ts";
 import { registerMcpRoutes } from "../../src/mcp/routes.ts";
 import type { TokenPrincipal } from "../../src/tokens/principal.ts";
 import { generateApiToken } from "../../src/tokens/token-format.ts";
-import { testFileOperations } from "../file-operations.ts";
+import { testFileOperations, testTrashItems } from "../file-operations.ts";
+import { memoryTrashItemRepo } from "../trash-items.ts";
 
 let storage: Awaited<ReturnType<typeof startLocalStorage>>;
 let server: ServerType;
@@ -20,6 +21,8 @@ let principal: TokenPrincipal;
 let revoked = false;
 let indexAvailable = true;
 let metadataFails = true;
+/** Trash's rows, which the delete writes and the Trash tools read. */
+const trashRepo = memoryTrashItemRepo();
 
 beforeAll(async () => {
   storage = await startLocalStorage({
@@ -55,6 +58,7 @@ beforeAll(async () => {
       indexerClient: null,
       // Tags and the rest follow best effort; a failure there is only a warning.
       files: testFileOperations({
+        trashRepo,
         metadata: {
           onMoved: async () => {
             if (metadataFails) throw new Error("injected metadata failure");
@@ -64,6 +68,7 @@ beforeAll(async () => {
           },
         },
       }),
+      trash: testTrashItems({ repo: trashRepo }).items,
       clock: () => new Date(),
     },
   });
