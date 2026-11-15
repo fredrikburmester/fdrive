@@ -38,13 +38,7 @@ function stubMatchMedia(mobile: boolean) {
     value: mobile ? 390 : 1024,
   });
 }
-const me = makeMe({
-  identities: [
-    makeIdentity(),
-    makeIdentity({ id: "two", username: "bob", providerLabel: "Other" }),
-  ],
-  activeIdentityId: "one",
-});
+const me = makeMe({ identity: makeIdentity() });
 const hit: SearchHit = {
   name: "same.txt",
   path: "/same.txt",
@@ -100,7 +94,7 @@ function renderPanel(client: QueryClient) {
   );
 }
 
-it("searches only the active login when several logins are linked", async () => {
+it("searches the signed-in login and reports partial results", async () => {
   stubMatchMedia(false);
   const search = vi.spyOn(apiClient, "search").mockResolvedValue({
     query: "same",
@@ -118,8 +112,6 @@ it("searches only the active login when several logins are linked", async () => 
   });
   await waitFor(() => expect(screen.getAllByText("same.txt")).toHaveLength(1));
   expect(search).toHaveBeenCalledWith("same", { limit: 20 });
-  expect(screen.queryByRole("button", { name: "All linked logins" })).toBeNull();
-  expect(screen.queryByText("ada · Main")).toBeNull();
   expect(screen.getByText("Some text results omitted.")).toBeDefined();
 });
 

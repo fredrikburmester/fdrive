@@ -31,7 +31,6 @@ import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
-import { getTabIdentity } from "@/lib/api/client";
 import { decideSave, type SaveBaseline } from "@/lib/editor/conflict";
 import {
   apiClient,
@@ -106,11 +105,10 @@ function ErrorState({ backHref }: { backHref: string }) {
 export function EditorShell({ path }: EditorShellProps) {
   const router = useRouter();
   const queryClient = useQueryClient();
-  const [identityId] = useState(getTabIdentity);
   const [accountId] = useState(
     () => queryClient.getQueryData<MeResponse>(queryKeys.auth.me())?.account.id,
   );
-  const currentDraftKey = draftKey(accountId, identityId, path);
+  const currentDraftKey = draftKey(accountId, path);
   const parent = parentPath(path);
   const backHref = viewHref(path);
 

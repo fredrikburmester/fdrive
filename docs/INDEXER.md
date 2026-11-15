@@ -322,7 +322,7 @@ INDEX_ROOTS=files=/data,photos=/roots/photos
 
 Each name becomes a row in `idx.roots` (upserted by name on start, so restarts
 reuse the same `root_id`); every `idx.files` / `idx.chunks` / `idx.folders` /
-`idx.scans` / `idx.moves` / `idx.changes` / `idx.change_cursors` row carries
+`idx.scans` / `idx.changes` / `idx.change_cursors` row carries
 that `root_id`. Each root gets its own
 inotify watcher and its own periodic scan, running independently. Every root needs the
 `.fdrive-files` marker; the API writes it only into the files folder.
@@ -374,7 +374,7 @@ a published port in the non-dev compose file.
 | `/health` | GET | None | `{ ok, roots, watcher, embed_ok, schema_version }`. Answers 500 while postgres is unreachable, which is what the container healthcheck keys on; the handler's connection reopens itself on the next probe once postgres is back, so a recreated `db` container never needs an indexer restart. |
 | `/activity` | GET | None | In-memory scan, watcher and maintenance operations; see [System activity](SYSTEM-ACTIVITY.md). No storage scans. |
 | `/stats` | GET | None | Per-root file counts by `text_status`, chunk and embedded-chunk counts, last scan summary, queue depth, total thumbnails, total image embeddings, a sample of recent errors, and `thumbnail_rebuild` / `image_embedding_rebuild`: `{ running, processed, total, total_known, started_at, finished_at, errors, outcome }` for the most recent rebuild pass of each kind (all zero/`null`/`false` if none has run yet). |
-| `/extract` | POST | `{ root, path, offset?, max_chars? }` | Live text extraction for one file (not persisted), sliced by `offset`/`max_chars`. Used for the web app's live text preview. |
+| `/extract-content?name=` | POST | The file's bytes, at most 4 MiB | `{ text, status }`: live text extraction of bytes the API already read through the caller's own storage, for MCP's `read_file_text` (not persisted). `name` gives the format; it is never a path. The bytes go to a temporary file removed afterwards; two run at once and a third is `429`. |
 | `/reindex` | POST | `{ root, path?, thumbnails? }` | Marks matching rows `pending` (the whole root if `path` is omitted, otherwise that path and everything under it) and wakes that root's scan, which re-extracts text and re-embeds. Returns `{ count }`. With `thumbnails: true`, also starts a thumbnail-rebuild pass (see below) over the same scope; if one is already running, this is a no-op (best effort, not reported back). |
 | `/thumbnails/rebuild` | POST | `{ root?, path?, force? }` | Starts a background thumbnail-only pass: regenerates both sizes for every live media file in scope, writing only `app.thumbnails` (`idx.files.text_status`, chunks, and embeddings are never touched, unlike `/reindex`). Without `force`, an existing thumbnail for a given sha256 and size is left alone; with `force`, it is deleted and rewritten. `root` omitted targets every configured root; `path` omitted targets the whole root. Returns `202 { started: true, total }` (`total` is `null` until discovery completes in the background; poll `/stats` or `/activity` for the count), or `409` if a rebuild is already running (only one runs at a time, process-wide). |
 | `/image-embeddings/rebuild` | POST | `{ root?, path?, force? }` | Starts a background image-embedding backfill/rebuild pass over live images in scope; see "Image embeddings" above for the `force` semantics. Unconfigured roots are skipped. Returns `202 { started: true, total: null }` before discovery; `/stats` and `/activity` expose the discovered total, or `409` if a rebuild is already running. |
@@ -482,7 +482,7 @@ traversal, malformed bodies, and unknown roots are rejected. Directory matching
 uses a literal boundary, so `%` and `_` in names are never wildcards.
 
 The background pass deletes selected `idx.files` rows and their cascading chunks
-and embeddings. Original files, roots, scan and move history, tags, favorites,
+and embeddings. Original files, roots, scan history, tags, favorites,
 recents, and thumbnail cache remain. It uses bounded batches and shares each
 path's lock with extraction and embedding retries. It does not request a scan;
 scheduled scans and later watcher changes can repopulate the index.

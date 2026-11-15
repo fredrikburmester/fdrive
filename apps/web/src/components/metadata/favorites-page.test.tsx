@@ -1,60 +1,52 @@
 // @vitest-environment jsdom
 
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
-import { apiClient } from "@/lib/api/client";
-import { makeIdentity, makeMe } from "@/test-fixtures/identity";
 import { FavoritesPage } from "./favorites-page";
 
-const push = vi.fn();
-vi.mock("next/navigation", () => ({ useRouter: () => ({ push }) }));
-vi.mock("@/components/shell/page-header", async () => {
-  const { useMe } = await import("@/lib/api/auth-queries");
-  return { useShellMe: useMe, PageHeader: () => <span>Favorites</span> };
-});
-const me = makeMe({
-  identities: [makeIdentity()],
-  activeIdentityId: "one",
-});
+const mocks = vi.hoisted(() => ({
+  favorites: [] as { path: string }[] | undefined,
+  toggle: vi.fn(),
+}));
+vi.mock("@/lib/metadata/queries", () => ({
+  useFavorites: () => ({ data: mocks.favorites }),
+  useToggleFavorite: () => ({ mutate: mocks.toggle }),
+}));
+vi.mock("./virtual-listing", () => ({
+  VirtualListing: (props: {
+    title: string;
+    paths: readonly string[];
+    onRemoveMissing: (path: string) => void;
+  }) => (
+    <div>
+      <h1>{props.title}</h1>
+      {props.paths.map((path) => (
+        <button key={path} type="button" onClick={() => props.onRemoveMissing(path)}>
+          {path}
+        </button>
+      ))}
+    </div>
+  ),
+}));
 afterEach(() => {
   cleanup();
-  vi.restoreAllMocks();
-  push.mockClear();
+  vi.clearAllMocks();
 });
-it("opens owned files using safe paths and reports stale unlinked identities", async () => {
-  const client = new QueryClient({ defaultOptions: { queries: { staleTime: Infinity } } });
-  client.setQueryData(["auth", "me"], me);
-  vi.spyOn(apiClient, "accountFavorites").mockResolvedValue({
-    items: [
-      { identityId: "one", path: "/a #.txt", kind: "file", addedAt: "2026-01-01T00:00:00Z" },
-      { identityId: "removed", path: "/old.txt", kind: "file", addedAt: "2026-01-01T00:00:00Z" },
-    ],
-    unavailableIdentityIds: [],
-  });
-  render(
-    <QueryClientProvider client={client}>
-      <FavoritesPage />
-    </QueryClientProvider>,
-  );
-  await waitFor(() => expect(screen.getByRole("button", { name: "a #.txt" })).toBeDefined());
-  fireEvent.click(screen.getByRole("button", { name: "a #.txt" }));
-  expect(push).toHaveBeenCalledWith("/view/a%20%23.txt");
-  fireEvent.click(screen.getByRole("button", { name: "old.txt" }));
-  await waitFor(() => expect(screen.getByRole("alert").textContent).toContain("no longer linked"));
-  expect(push).toHaveBeenCalledTimes(1);
+
+it("lists the login's favorites in order and unfavorites a path that is gone", () => {
+  mocks.favorites = [{ path: "/a #.txt" }, { path: "/docs" }];
+  render(<FavoritesPage />);
+  expect(screen.getByRole("heading", { name: "Favorites" })).toBeDefined();
+  expect(screen.getAllByRole("button").map((button) => button.textContent)).toEqual([
+    "/a #.txt",
+    "/docs",
+  ]);
+  fireEvent.click(screen.getByRole("button", { name: "/docs" }));
+  expect(mocks.toggle).toHaveBeenCalledWith({ path: "/docs", favorite: false });
 });
-it("shows a read error without fabricating empty favorites", async () => {
-  const client = new QueryClient({
-    defaultOptions: { queries: { staleTime: Infinity, retry: false } },
-  });
-  client.setQueryData(["auth", "me"], me);
-  vi.spyOn(apiClient, "accountFavorites").mockRejectedValue(new Error("Unavailable"));
-  render(
-    <QueryClientProvider client={client}>
-      <FavoritesPage />
-    </QueryClientProvider>,
-  );
-  await waitFor(() => expect(screen.getByRole("alert").textContent).toBe("Unavailable"));
-  expect(screen.queryByText("No favorites available.")).toBeNull();
+
+it("lists nothing while favorites load", () => {
+  mocks.favorites = undefined;
+  render(<FavoritesPage />);
+  expect(screen.queryAllByRole("button")).toEqual([]);
 });

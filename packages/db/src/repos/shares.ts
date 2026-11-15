@@ -35,7 +35,7 @@ type RecordRow = Omit<typeof shares.$inferSelect, "passwordHash">;
 
 /**
  * `ShareRepo.movePrefix` as one statement on `db`, so a caller already in a
- * transaction (the Mac's metadata recovery) applies it there. Each row's new
+ * transaction (a Mac write's receipt) applies it there. Each row's new
  * paths are computed from the row as it is when the update reaches it, so a
  * concurrent edit or move of the same share is never lost; a path the move
  * lands on twice is kept once, where it first stood.

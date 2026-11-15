@@ -35,6 +35,7 @@ let currentServer: ServerType | null = null;
 const SEED = {
   "/hello.txt": "hello world",
   "/dir/nested.txt": "nested contents",
+  "/report.pdf": "%PDF-1.7 not really",
 };
 
 function fail(name: string): never {
@@ -60,8 +61,6 @@ function stubIndexQueries(): IndexQueries {
     similar: async () => fail("similar"),
     recentFiles: async () => fail("recentFiles"),
     thumbnail: async () => fail("thumbnail"),
-    recordMove: async () => undefined,
-    recentMoves: async () => [],
     deletedRowSha: async () => null,
     liveRowsBySha: async () => [],
     searchImages: async () => [],
@@ -115,7 +114,7 @@ interface Harness {
   close(): Promise<void>;
 }
 
-async function startHarness(writesEnabled: boolean): Promise<Harness> {
+async function startHarness(mode: "read" | "organize"): Promise<Harness> {
   const config = loadConfig(REQUIRED_ENV);
   const root = await realpath(await mkdtemp(join(tmpdir(), "fdrive-mcp-")));
   writeHomeFiles(root, "alice", SEED);
@@ -137,6 +136,7 @@ async function startHarness(writesEnabled: boolean): Promise<Harness> {
     name: "Claude",
     tokenHash: hashApiToken(rawToken),
     expiresAt: null,
+    access: { mode, paths: ["/"] },
   });
 
   const resolveToken = createResolveTokenPrincipal({
@@ -147,7 +147,7 @@ async function startHarness(writesEnabled: boolean): Promise<Harness> {
   });
 
   const indexerFetch = (async (input: unknown) => {
-    if (String(input).endsWith("/extract")) {
+    if (String(input) === "http://indexer.test/extract-content?name=report.pdf") {
       return new Response(JSON.stringify({ text: "extracted text", status: "ok" }), {
         status: 200,
         headers: { "content-type": "application/json" },
@@ -183,7 +183,6 @@ async function startHarness(writesEnabled: boolean): Promise<Harness> {
       baseUrl: "http://indexer.test",
       fetch: indexerFetch,
     }),
-    writesEnabled,
     clock: () => new Date("2026-01-01T00:00:00.000Z"),
     trashPath: null,
   };
@@ -282,7 +281,7 @@ describe("MCP server end to end", () => {
   let harness: Harness;
 
   beforeEach(async () => {
-    harness = await startHarness(false);
+    harness = await startHarness("read");
   });
 
   afterEach(async () => {
@@ -328,6 +327,8 @@ describe("MCP server end to end", () => {
         "find_files",
         "list_directory",
         "read_file_text",
+        "read_file",
+        "read_image",
         "file_info",
         "find_duplicates",
         "similar_files",
@@ -347,7 +348,7 @@ describe("MCP server end to end", () => {
     const result = await client.callTool({ name: "list_directory", arguments: { path: "/" } });
 
     const body = JSON.parse(textOf(result as CallToolResult)) as { entries: { name: string }[] };
-    expect(body.entries.map((e) => e.name).sort()).toEqual(["dir", "hello.txt"]);
+    expect(body.entries.map((e) => e.name).sort()).toEqual(["dir", "hello.txt", "report.pdf"]);
     expect(result.isError).not.toBe(true);
 
     await client.close();
@@ -366,21 +367,31 @@ describe("MCP server end to end", () => {
     await client.close();
   });
 
-  it("calls read_file_text against the stub indexer fetch", async () => {
+  it("reads UTF-8 through storage and sends a document's bytes to the indexer", async () => {
     const client = await connectBearerClient(harness.port, harness.token);
 
-    const result = await client.callTool({
+    const text = await client.callTool({
       name: "read_file_text",
       arguments: { path: "/hello.txt" },
     });
+    expect(JSON.parse(textOf(text as CallToolResult))).toMatchObject({
+      text: "hello world",
+      status: "read",
+    });
 
-    const body = JSON.parse(textOf(result as CallToolResult)) as { text: string };
-    expect(body.text).toBe("extracted text");
+    const document = await client.callTool({
+      name: "read_file_text",
+      arguments: { path: "/report.pdf" },
+    });
+    expect(JSON.parse(textOf(document as CallToolResult))).toMatchObject({
+      text: "extracted text",
+      status: "ok",
+    });
 
     await client.close();
   });
 
-  it("gates create_folder off by default", async () => {
+  it("gives a read token no create_folder", async () => {
     const client = await connectBearerClient(harness.port, harness.token);
 
     const result = await client.callTool({ name: "create_folder", arguments: { path: "/new" } });
@@ -391,7 +402,7 @@ describe("MCP server end to end", () => {
     await client.close();
   });
 
-  it("gates move_path off by default", async () => {
+  it("gives a read token no move_path", async () => {
     const client = await connectBearerClient(harness.port, harness.token);
 
     const result = await client.callTool({
@@ -416,7 +427,12 @@ describe("MCP server end to end", () => {
       name: "file_info",
       arguments: { path: "/hello.txt" },
     });
-    expect(fileInfo.isError).toBe(true);
+    expect(fileInfo.isError).not.toBe(true);
+    expect(JSON.parse(textOf(fileInfo as CallToolResult))).toMatchObject({
+      path: "/hello.txt",
+      kind: "file",
+      size_bytes: 11,
+    });
 
     const duplicates = await client.callTool({ name: "find_duplicates", arguments: {} });
     expect(duplicates.isError).not.toBe(true);
@@ -434,7 +450,10 @@ describe("MCP server end to end", () => {
 
     const stats = await client.callTool({ name: "index_stats", arguments: {} });
     expect(stats.isError).not.toBe(true);
-    expect(JSON.parse(textOf(stats as CallToolResult))).toMatchObject({ files_tracked: 0 });
+    expect(JSON.parse(textOf(stats as CallToolResult))).toMatchObject({
+      files_tracked: 0,
+      writes_enabled: false,
+    });
 
     const recentMoves = await client.callTool({ name: "recent_moves", arguments: {} });
     expect(recentMoves.isError).not.toBe(true);
@@ -580,18 +599,18 @@ describe("MCP server end to end", () => {
   });
 });
 
-describe("MCP server end to end: writes enabled", () => {
+describe("MCP server end to end: an organize token", () => {
   let harness: Harness;
 
   beforeEach(async () => {
-    harness = await startHarness(true);
+    harness = await startHarness("organize");
   });
 
   afterEach(async () => {
     await harness.close();
   });
 
-  it("creates a folder in the user's storage when writes are enabled", async () => {
+  it("creates a folder in the user's storage", async () => {
     const client = await connectBearerClient(harness.port, harness.token);
 
     const result = await client.callTool({ name: "create_folder", arguments: { path: "/new" } });
@@ -609,7 +628,7 @@ describe("MCP server end to end: writes enabled", () => {
     await client.close();
   });
 
-  it("moves a file in the user's storage when writes are enabled", async () => {
+  it("moves a file in the user's storage and lists the move in recent_moves", async () => {
     const client = await connectBearerClient(harness.port, harness.token);
 
     const result = await client.callTool({
@@ -626,6 +645,11 @@ describe("MCP server end to end: writes enabled", () => {
       entries: { name: string }[];
     };
     expect(listingBody.entries.map((e) => e.name)).toContain("moved.txt");
+
+    const moves = await client.callTool({ name: "recent_moves", arguments: {} });
+    expect(JSON.parse(textOf(moves as CallToolResult))).toEqual({
+      moves: [{ at: "2026-01-01T00:00:00.000Z", src: "/hello.txt", dst: "/moved.txt" }],
+    });
 
     await client.close();
   });

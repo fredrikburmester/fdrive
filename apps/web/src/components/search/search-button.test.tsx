@@ -14,10 +14,7 @@ vi.mock("next/navigation", () => ({
   usePathname: () => "/files",
 }));
 
-const singleIdentityMe = makeMe({
-  identities: [makeIdentity()],
-  activeIdentityId: "one",
-});
+const singleIdentityMe = makeMe({ identity: makeIdentity() });
 
 function renderButton(me: MeResponse) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });

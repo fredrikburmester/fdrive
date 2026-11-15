@@ -235,8 +235,8 @@ async function putRelative(
             response: Response.json({
               Name: baseName(path),
               Url: `${config.wopiUrl}/files/${file.id}?access_token=${encodeURIComponent(fields.formFields.access_token)}`,
-              HostViewUrl: editorHostUrl(config, opened.actor.identity.id, path, "view"),
-              HostEditUrl: editorHostUrl(config, opened.actor.identity.id, path, "edit"),
+              HostViewUrl: editorHostUrl(config, path, "view"),
+              HostEditUrl: editorHostUrl(config, path, "edit"),
             }),
           };
         });

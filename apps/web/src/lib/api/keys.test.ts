@@ -2,13 +2,9 @@ import { describe, expect, it } from "vitest";
 import { queryKeys } from "./keys.ts";
 
 describe("queryKeys", () => {
-  it("folder view keys isolate identities and paths with a shared reset prefix", () => {
+  it("folder view keys isolate paths with a shared reset prefix", () => {
     expect(queryKeys.folderViews.all()).toEqual(["folder-views"]);
-    expect(queryKeys.folderViews.path("alice", "/photos")).toEqual([
-      "folder-views",
-      "alice",
-      "/photos",
-    ]);
+    expect(queryKeys.folderViews.path("/photos")).toEqual(["folder-views", "/photos"]);
   });
   it("AI keys separate status, one run per id, and the admin settings", () => {
     expect(queryKeys.ai.status()).toEqual(["ai", "status"]);

@@ -156,10 +156,7 @@ export function createSetupService(deps: CreateSetupServiceDeps): SetupService {
         if (!finalized) {
           throw new ApiHttpError("conflict", "setup ownership changed; retry setup login");
         }
-        const me = await deps.authService.me(
-          loginResult.me.account.id,
-          loginResult.me.activeIdentityId,
-        );
+        const me = await deps.authService.me(loginResult.me.account.id, loginResult.me.identity.id);
 
         return { sessionId: loginResult.sessionId, me };
       } catch (error) {

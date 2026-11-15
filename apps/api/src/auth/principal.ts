@@ -19,12 +19,10 @@ export interface Principal {
   readonly tokenAccess?: ApiTokenAccess;
   /**
    * Re-checks that whatever authenticated this principal (its session) is
-   * still valid and still entitles it to act as `identityId`: the session
-   * exists, is unexpired and under its maximum age, and the identity still
-   * belongs to the session's account. Work that outlives the request (a
-   * queued job) must call this before touching storage so a logout, an
-   * unlink or a revocation stops it. Absent for principals that cannot go
-   * stale beyond the request itself.
+   * still valid: the session exists, is unexpired and under its maximum
+   * age. Work that outlives the request (a queued job) must call this
+   * before touching storage so a logout or a revocation stops it. Absent
+   * for principals that cannot go stale beyond the request itself.
    */
   readonly verifyAuthority?: () => Promise<boolean>;
 }

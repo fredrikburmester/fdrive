@@ -30,17 +30,12 @@ export async function createDocument(
 }
 
 /**
- * The editor address for `filename` in alice's team folder as another login
+ * The editor address for `filename` in alice's team folder as another user
  * reaches it: under Shared with me, where alice's grant puts it.
  */
-export function sharedOfficeHref(
-  identityId: string,
-  folder: string,
-  filename: string,
-  mode: "view" | "edit",
-): string {
+export function sharedOfficeHref(folder: string, filename: string, mode: "view" | "edit"): string {
   const path = ["Shared with me", folder, filename].map(encodeURIComponent).join("/");
-  return `/office/${identityId}/${path}?mode=${mode}`;
+  return `/office/${path}?mode=${mode}`;
 }
 
 export async function observeOfficeReady(page: Page, origin: string): Promise<void> {

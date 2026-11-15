@@ -206,8 +206,7 @@ deltas, the OpenAI-compatible adapter adds `stream: true` parsing.
 `POST /ai/chats/:id/messages` (text, references, location) → 202; `GET /ai/chats/:id/events`
 (SSE); `POST /ai/chats/:id/cancel`; `POST /ai/chats/:id/actions/:actionId` (`apply` with
 edits, or `decline`). `ChatState` is `idle | running | awaiting_approval | failed | closed`.
-Everything is per identity; a chat is `not_found` for any other identity, and switching the
-active login shows that login's chats.
+Everything is per identity; a chat is `not_found` for any other identity.
 
 ## Steps
 

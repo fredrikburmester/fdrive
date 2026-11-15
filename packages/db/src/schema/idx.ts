@@ -157,23 +157,6 @@ export const scans = idxSchema.table(
   (table) => [index("scans_root_id_started_at_idx").on(table.rootId, table.startedAt.desc())],
 );
 
-export const moves = idxSchema.table(
-  "moves",
-  {
-    id: bigserial("id", { mode: "number" }).primaryKey(),
-    at: timestamp("at", { withTimezone: true }).defaultNow(),
-    rootId: smallint("root_id")
-      .notNull()
-      .references(() => roots.id),
-    src: text("src"),
-    dst: text("dst"),
-    actor: text("actor"),
-  },
-  // `recentMoves` restricts every scope clause with `root_id = ?`, so the
-  // scope filter has no access path without this index.
-  (table) => [index("moves_root_id_idx").on(table.rootId)],
-);
-
 /**
  * The change journal: one row per change to an indexed root, append-only,
  * its `id` the position consumers read from. A row without `target_path`

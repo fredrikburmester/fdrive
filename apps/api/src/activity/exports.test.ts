@@ -200,7 +200,6 @@ it("exports complete paged subjects, read snapshots, lineage and revisions witho
 it("applies export filters consistently, includes empty boundaries, and escapes spreadsheet formulas", async () => {
   const h = fixture();
   h.snapshot.filters = {
-    identityId: h.identityId,
     action: "file.open",
     source: "web",
     outcome: "unknown",
@@ -214,13 +213,11 @@ it("applies export filters consistently, includes empty boundaries, and escapes 
     action: "file.open",
     source: "web",
     outcome: "unknown",
-    identityId: h.identityId,
     q: "a",
   });
   for (const filters of [
     { fileId: randomUUID() },
     { batchId: randomUUID() },
-    { identityId: randomUUID() },
     { action: "file.save" },
     { source: "api" },
     { outcome: "success" },

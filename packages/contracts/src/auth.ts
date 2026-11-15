@@ -15,7 +15,7 @@ export const LoginRequest = z.strictObject({
 
 export type LoginRequest = z.infer<typeof LoginRequest>;
 
-/** A single login linked to the signed-in account, with what its storage can do. */
+/** The signed-in account's login, with what its storage can do. */
 export const IdentitySummary = z.object({
   id: z.uuid(),
   username: z.string(),
@@ -28,16 +28,15 @@ export const IdentitySummary = z.object({
 export type IdentitySummary = z.infer<typeof IdentitySummary>;
 
 /**
- * The signed-in account, every identity linked to it, and which identity is
- * currently active for the session. Returned by both login and `/auth/me`.
+ * The signed-in account and its one login. Returned by both login and
+ * `/auth/me`.
  */
 export const MeResponse = z.object({
   account: z.object({
     id: z.uuid(),
     displayName: z.string().nullable(),
   }),
-  identities: z.array(IdentitySummary),
-  activeIdentityId: z.uuid(),
+  identity: IdentitySummary,
   /** True when the signed-in account can reach the System admin pages. */
   isAdmin: z.boolean(),
 });

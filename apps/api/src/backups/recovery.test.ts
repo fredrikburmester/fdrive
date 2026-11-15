@@ -461,7 +461,7 @@ it("rehearses into a new installation identity without any provider contact or p
     sourceInstallationId: inspection.header.installationId,
     snapshotId: inspection.header.id,
     result: "passed",
-    tableCount: 46,
+    tableCount: 44,
     blobCount: 1,
   });
   expect(
@@ -1012,9 +1012,13 @@ it("rejects unreviewed ownership and checks every saved identity before resuming
     resumeRecovery(restoredConfig, { ...review, ownerIdentityId: randomUUID() }),
   ).rejects.toThrow("original installation owner");
   const second = randomUUID();
+  const bobAccount = randomUUID();
+  await target.db.pool.query("insert into app.accounts(id,display_name) values($1,'bob')", [
+    bobAccount,
+  ]);
   await target.db.pool.query(
     "insert into app.identities(id,account_id,provider_id,external_username) values($1,$2,$3,'bob')",
-    [second, owner, provider],
+    [second, bobAccount, provider],
   );
   await target.db.pool.query(
     "insert into app.credentials(identity_id,key_id,ciphertext) values($1,'master-v1',$2)",

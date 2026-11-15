@@ -10,8 +10,6 @@ export interface UploadItem {
   /** Groups one enqueue, so the whole batch reports its outcome once. */
   readonly batchId?: string;
   readonly completedAt?: number;
-  /** Captured before conflict handling; retries keep this identity. */
-  readonly identityId?: string;
   readonly file: File;
   /** Absolute destination path this file will be written to. */
   readonly targetPath: string;

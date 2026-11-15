@@ -188,7 +188,6 @@ export const PersonalActivityEvent = z.object({
 export type PersonalActivityEvent = z.infer<typeof PersonalActivityEvent>;
 export const PersonalActivityFilters = z
   .object({
-    identityId: CanonicalUuid.optional(),
     action: PersonalActivityAction.optional(),
     source: PersonalActivitySource.optional(),
     outcome: PersonalActivityOutcome.optional(),
@@ -223,9 +222,9 @@ export const PersonalActivityResponse = z.object({
 });
 export type PersonalActivityResponse = z.infer<typeof PersonalActivityResponse>;
 
+/** A gesture of the signed-in login; the session names the login, never the body. */
 export const ClientActivityRequest = z
   .object({
-    identityId: CanonicalUuid,
     requestId: CanonicalUuid,
     at: instant,
     action: z.enum([
@@ -278,7 +277,4 @@ export const ActivityRevisionsResponse = z.object({
     }),
   ),
   nextCursor: z.string().nullable(),
-});
-export const ActivityLocationsResponse = z.object({
-  items: z.array(z.object({ identityId: CanonicalUuid, label: z.string() })),
 });

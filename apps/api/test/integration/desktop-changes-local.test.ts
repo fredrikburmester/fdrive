@@ -72,9 +72,8 @@ it("answers which folders an upload, a move and a delete changed, and detects a 
     const login = await send("/api/v1/auth/login", {
       body: { credential: { username, password: `${username}-password` } },
     });
-    const me = MeResponse.parse(await ok(login));
+    MeResponse.parse(await ok(login));
     const cookie = login.headers.get("set-cookie")?.split(";")[0] ?? "";
-    const identityId = me.activeIdentityId ?? "";
     const pairing = DesktopPairing.parse(
       await ok(
         await send("/api/v2/desktop/pairings", { body: { deviceName: `${username}'s Mac` } }),
@@ -83,7 +82,7 @@ it("answers which folders an upload, a move and a delete changed, and detects a 
     await ok(
       await send(`/api/v1/desktop/pairings/${pairing.id}/approve`, {
         cookie,
-        body: { identityIds: [identityId], access: { [identityId]: "full" } },
+        body: { access: "full" },
       }),
     );
     const result = DesktopWritePairResult.parse(

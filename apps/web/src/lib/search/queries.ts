@@ -56,9 +56,9 @@ export function searchStatusQueryKey() {
   return ["search", "status"] as const;
 }
 
-/** TanStack Query key for `useImageSearchResults`, stable across the same query text and active identity. */
-export function imageSearchQueryKey(query: string, identityId?: string) {
-  return ["search", "images", query, identityId ?? null] as const;
+/** TanStack Query key for `useImageSearchResults`, stable across the same query text. */
+export function imageSearchQueryKey(query: string) {
+  return ["search", "images", query] as const;
 }
 
 export interface UseSearchResultsOptions {
@@ -68,8 +68,6 @@ export interface UseSearchResultsOptions {
   readonly retryUnavailable?: boolean;
   /** Current scope status, used to stop retries for permanent failures. */
   readonly status?: SearchStatusResponse | undefined;
-  /** The active login, so a switch never shows another login's cached results. */
-  readonly identityId?: string | undefined;
 }
 
 /**
@@ -87,7 +85,7 @@ export function useSearchResults(
   const trimmed = query.trim();
 
   return useQuery<SearchResponse>({
-    queryKey: [...searchQueryKey(query, chips, currentFolder), options.identityId ?? null],
+    queryKey: searchQueryKey(query, chips, currentFolder),
     queryFn: () =>
       apiClient.search(query, {
         limit: 20,
@@ -105,7 +103,6 @@ export function useSearchResults(
 export interface UseImageSearchResultsOptions {
   /** Skips fetching while `false`, for a closed panel, an empty query, or non-image types. Defaults to `true`. */
   readonly enabled?: boolean | undefined;
-  readonly identityId?: string | undefined;
   /** Polls only an unavailable response while the caller remains active. */
   readonly retryUnavailable?: boolean | undefined;
   /** Current scope status, used to stop retries for permanent failures. */
@@ -121,7 +118,7 @@ export function useImageSearchResults(query: string, options: UseImageSearchResu
   const trimmed = query.trim();
 
   return useQuery<ImageSearchResponse>({
-    queryKey: imageSearchQueryKey(query, options.identityId),
+    queryKey: imageSearchQueryKey(query),
     queryFn: () => apiClient.searchImages(query, { limit: 24 }),
     enabled: (options.enabled ?? true) && trimmed.length > 0,
     refetchInterval: (queryState) =>

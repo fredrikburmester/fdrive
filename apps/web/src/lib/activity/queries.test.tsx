@@ -5,28 +5,19 @@ import { createElement, type ReactNode } from "react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { queryKeys } from "@/lib/api/keys";
 import { activityGesture, useActivityGesture } from "./gestures";
-import {
-  useActivityFile,
-  useActivityFileAt,
-  useActivityHistory,
-  useActivityLocations,
-} from "./queries";
+import { useActivityFile, useActivityFileAt, useActivityHistory } from "./queries";
 
 const mocks = vi.hoisted(() => ({
   me: undefined as { account: { id: string } } | undefined,
-  identity: undefined as string | undefined,
   feed: vi.fn(),
   file: vi.fn(),
-  locations: vi.fn(),
   resolve: vi.fn(),
   request: vi.fn(),
 }));
 vi.mock("@/lib/api/auth-queries", () => ({ useMe: () => ({ data: mocks.me }) }));
-vi.mock("@/lib/api/client", () => ({ getTabIdentity: () => mocks.identity }));
 vi.mock("./api", () => ({
   activityFeed: mocks.feed,
   activityFile: mocks.file,
-  activityLocations: mocks.locations,
   activityRequest: mocks.request,
   resolveActivityFile: mocks.resolve,
 }));
@@ -48,7 +39,6 @@ function setup() {
 }
 beforeEach(() => {
   mocks.me = undefined;
-  mocks.identity = undefined;
   streams.length = 0;
   vi.clearAllMocks();
   mocks.request.mockResolvedValue({});
@@ -59,21 +49,14 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-it("captures the initiating login and reuses a gesture receipt across retries", async () => {
-  await activityGesture("file.open", "/a")();
-  expect(mocks.request).not.toHaveBeenCalled();
-  mocks.identity = "original";
+it("reuses a gesture receipt across retries and names no login", async () => {
   const send = activityGesture("share.copy_link", "/a", "share");
-  mocks.identity = "replacement";
   await send();
   await send();
   const first = mocks.request.mock.calls[0]?.[1];
-  expect(JSON.parse(first.body)).toMatchObject({
-    identityId: "original",
-    path: "/a",
-    action: "share.copy_link",
-    shareId: "share",
-  });
+  const body = JSON.parse(first.body);
+  expect(body).toMatchObject({ path: "/a", action: "share.copy_link", shareId: "share" });
+  expect(body).not.toHaveProperty("identityId");
   expect(mocks.request.mock.calls[1]?.[1]).toEqual(first);
   const hook = renderHook(({ path }) => useActivityGesture("file.inspect", path), {
     initialProps: { path: undefined as string | undefined },
@@ -86,13 +69,8 @@ it("captures the initiating login and reuses a gesture receipt across retries", 
   mocks.request.mockRejectedValueOnce(Error("offline"));
   hook.rerender({ path: "/c" });
   await waitFor(() => expect(mocks.request).toHaveBeenCalledTimes(4));
-  mocks.identity = "another-storage";
   hook.rerender({ path: "/c" });
-  await waitFor(() => expect(mocks.request).toHaveBeenCalledTimes(5));
-  expect(JSON.parse(mocks.request.mock.calls[4]?.[1].body)).toMatchObject({
-    identityId: "another-storage",
-    path: "/c",
-  });
+  expect(mocks.request).toHaveBeenCalledTimes(4);
   hook.unmount();
 });
 
@@ -135,55 +113,46 @@ it("keeps account caches separate, pages the selected scope and closes stale liv
   client.clear();
 });
 
-it("loads journey locations only when signed in and uses the same owner namespace", async () => {
+it("loads a journey only when signed in and uses the same owner namespace", async () => {
   const { wrapper, client } = setup();
   mocks.file.mockResolvedValue({ id: "file" });
-  mocks.locations.mockResolvedValue([]);
   const hook = renderHook(
     () => ({
       file: useActivityFile("file"),
-      locations: useActivityLocations(),
       feed: useActivityHistory({}),
     }),
     { wrapper },
   );
   expect(hook.result.current.file.fetchStatus).toBe("idle");
-  expect(hook.result.current.locations.fetchStatus).toBe("idle");
   mocks.me = { account: { id: "alice" } };
   mocks.feed.mockResolvedValue({ items: [], nextCursor: null });
   hook.rerender();
-  await waitFor(() =>
-    expect(hook.result.current.file.isSuccess && hook.result.current.locations.isSuccess).toBe(
-      true,
-    ),
-  );
+  await waitFor(() => expect(hook.result.current.file.isSuccess).toBe(true));
   expect(mocks.file).toHaveBeenCalledWith("file");
-  expect(mocks.locations).toHaveBeenCalled();
   expect(client.getQueryData(queryKeys.activity.file("alice", "file"))).toEqual({ id: "file" });
   hook.unmount();
   client.clear();
 });
 
-it("resolves a path only for a signed-in login and refreshes it when new activity lands", async () => {
+it("resolves a path only when signed in and refreshes it when new activity lands", async () => {
   const { wrapper, client } = setup();
   mocks.resolve.mockResolvedValueOnce(null).mockResolvedValue("file");
   const hook = renderHook(
-    ({ identity }) => {
-      const file = useActivityFileAt(identity, "/a.txt");
+    () => {
+      const file = useActivityFileAt("/a.txt");
       return {
         file,
         feed: useActivityHistory({}, file.data ? `/files/${file.data}/events` : null),
       };
     },
-    { wrapper, initialProps: { identity: undefined as string | undefined } },
+    { wrapper },
   );
-  mocks.me = { account: { id: "alice" } };
-  hook.rerender({ identity: undefined });
   expect(hook.result.current.file.fetchStatus).toBe("idle");
-  hook.rerender({ identity: "drive" });
+  mocks.me = { account: { id: "alice" } };
+  hook.rerender();
   await waitFor(() => expect(hook.result.current.file.isSuccess).toBe(true));
   expect(hook.result.current.file.data).toBeNull();
-  expect(mocks.resolve).toHaveBeenLastCalledWith("drive", "/a.txt");
+  expect(mocks.resolve).toHaveBeenLastCalledWith("/a.txt");
   // Nothing recorded yet: no feed request, but the live stream is already open.
   expect(hook.result.current.feed.fetchStatus).toBe("idle");
   expect(mocks.feed).not.toHaveBeenCalled();
@@ -192,7 +161,7 @@ it("resolves a path only for a signed-in login and refreshes it when new activit
   await waitFor(() => expect(hook.result.current.file.data).toBe("file"));
   await waitFor(() => expect(hook.result.current.feed.isSuccess).toBe(true));
   expect(mocks.feed).toHaveBeenLastCalledWith({}, "/files/file/events");
-  expect(client.getQueryData(queryKeys.activity.resolve("alice", "drive", "/a.txt"))).toBe("file");
+  expect(client.getQueryData(queryKeys.activity.resolve("alice", "/a.txt"))).toBe("file");
   hook.unmount();
   client.clear();
 });

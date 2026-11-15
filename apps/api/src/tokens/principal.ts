@@ -4,6 +4,9 @@ import type { Principal } from "../auth/principal.js";
 import type { IdentityStorageFactory } from "../auth/storage-factory.ts";
 import { hashApiToken, looksLikeApiToken } from "./token-format.js";
 
+/** A principal an API token authenticated: always with the token's access level and folders. */
+export type TokenPrincipal = Principal & { readonly tokenAccess: ApiTokenAccess };
+
 /** `lastUsedAt` is refreshed at most this often, so a busy client does not write on every call. */
 const TOUCH_INTERVAL_MS = 60_000;
 
@@ -18,15 +21,15 @@ export interface ResolveTokenPrincipalDeps {
 
 /**
  * Builds `resolveTokenPrincipal(bearer)`: maps a bearer value to the
- * `Principal` it authenticates as, or `null` when the value is not a
- * recognizable, live, unexpired fdrive token, or its identity has since been
- * unlinked. Tokens never grant admin access. `lastUsedAt` is touched at most
- * once per `TOUCH_INTERVAL_MS`.
+ * `TokenPrincipal` it authenticates as, the login that created it, or `null`
+ * when the value is not a recognizable, live, unexpired fdrive token, or its
+ * stored access does not parse. Tokens never grant admin access.
+ * `lastUsedAt` is touched at most once per `TOUCH_INTERVAL_MS`.
  */
 export function createResolveTokenPrincipal(
   deps: ResolveTokenPrincipalDeps,
-): (bearer: string) => Promise<Principal | null> {
-  return async (bearer: string): Promise<Principal | null> => {
+): (bearer: string) => Promise<TokenPrincipal | null> {
+  return async (bearer: string): Promise<TokenPrincipal | null> => {
     if (!(deps.acceptsToken ?? looksLikeApiToken)(bearer)) {
       return null;
     }
@@ -35,21 +38,15 @@ export function createResolveTokenPrincipal(
     if (token === null) {
       return null;
     }
-    const access = token.access === undefined ? undefined : ApiTokenAccess.safeParse(token.access);
-    if (access !== undefined && !access.success) return null;
+    const access = ApiTokenAccess.safeParse(token.access);
+    if (!access.success) return null;
 
     const now = deps.clock();
     if (token.expiresAt !== null && token.expiresAt.getTime() <= now.getTime()) {
       return null;
     }
-    if (token.identityId === null) {
-      return null;
-    }
-
     const identity = await deps.identities.get(token.identityId);
-    if (!identity || identity.accountId !== token.accountId) {
-      return null;
-    }
+    if (identity === null) return null;
 
     const shouldTouch =
       token.lastUsedAt === null || now.getTime() - token.lastUsedAt.getTime() >= TOUCH_INTERVAL_MS;
@@ -63,7 +60,7 @@ export function createResolveTokenPrincipal(
       username: identity.externalUsername,
       storage: await deps.storageFactory(identity.id),
       isAdmin: false,
-      ...(access?.success === true ? { tokenAccess: access.data } : {}),
+      tokenAccess: access.data,
     };
   };
 }

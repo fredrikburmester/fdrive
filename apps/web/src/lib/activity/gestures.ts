@@ -1,19 +1,15 @@
 "use client";
 import type { ClientActivityRequest } from "@fdrive/contracts";
 import { useEffect, useMemo } from "react";
-import { getTabIdentity } from "@/lib/api/client";
 import { activityRequest } from "./api";
 
-/** Capture before awaiting clipboard/navigation; a later login switch cannot retarget it. */
+/** One receipt per gesture: retries send the same request ID, so history records it once. */
 export function activityGesture(
   action: ClientActivityRequest["action"],
   path: string,
   shareId?: string,
 ) {
-  const identityId = getTabIdentity();
-  if (!identityId) return () => Promise.resolve();
   const event: ClientActivityRequest = {
-    identityId,
     action,
     path,
     requestId: crypto.randomUUID(),
@@ -25,11 +21,7 @@ export function activityGesture(
   };
 }
 export function useActivityGesture(action: ClientActivityRequest["action"], path?: string) {
-  const identityId = getTabIdentity();
-  const gesture = useMemo(
-    () => (identityId && path ? activityGesture(action, path) : null),
-    [action, path, identityId],
-  );
+  const gesture = useMemo(() => (path ? activityGesture(action, path) : null), [action, path]);
   useEffect(() => {
     void gesture?.().catch(() => undefined);
   }, [gesture]);

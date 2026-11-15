@@ -44,7 +44,6 @@ function setup(
     identities: { get: async () => buildIdentity() },
     publicUrl: async () => null,
     indexerClient: null,
-    writesEnabled: false,
     clock: () => new Date("2026-09-18T10:00:00.000Z"),
     ...(options.trash ? { trashPathForStorage: () => "/.Trash" } : {}),
   };

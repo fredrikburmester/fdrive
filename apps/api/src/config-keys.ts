@@ -297,15 +297,6 @@ export const CONFIG_KEYS: readonly ConfigKeyDef[] = [
     subsystem: "core",
   },
   {
-    key: "FDRIVE_MCP_WRITES",
-    description:
-      "Enables create_folder and move_path for legacy MCP tokens only. New tokens use their individual access permissions.",
-    default: "false",
-    example: "false",
-    secret: false,
-    subsystem: "core",
-  },
-  {
     key: "FDRIVE_INDEX_ROOTS",
     description:
       "JSON array of { name, storagePath, indexerPath } mapping every indexed root; storagePath is the folder's path in the API (FDRIVE_STORAGE_ROOT), indexerPath its path in the indexer. Unset disables search, thumbnails, and the Indexer page's per-root data.",
@@ -317,7 +308,7 @@ export const CONFIG_KEYS: readonly ConfigKeyDef[] = [
   {
     key: "FDRIVE_INDEXER_URL",
     description:
-      "Base URL of the indexer's internal HTTP API. Unset disables the System > Indexer page and MCP document extraction. Explicit tokens can still read UTF-8 files directly.",
+      "Base URL of the indexer's internal HTTP API. Unset disables the System > Indexer page and MCP document extraction. MCP can still read UTF-8 files directly.",
     default: null,
     example: "http://indexer:8010",
     secret: false,

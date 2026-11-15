@@ -84,7 +84,6 @@ function mcpDeps(overrides: Partial<McpToolDeps> = {}): McpToolDeps {
     identities: { get: async () => buildIdentity() },
     publicUrl: async () => null,
     indexerClient: null,
-    writesEnabled: false,
     clock: () => new Date("2026-01-01T00:00:00.000Z"),
     ...overrides,
   };

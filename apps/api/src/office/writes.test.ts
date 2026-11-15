@@ -241,7 +241,7 @@ describe("PutRelative", () => {
     expect(result.status).toBe(200);
     const json = (await result.json()) as { Name: string; HostEditUrl: string; Url: string };
     expect(json.Name).toBe("a (1).docx");
-    expect(json.HostEditUrl).toContain(encodeURIComponent(h.alice.identity.id));
+    expect(json.HostEditUrl).toBe(`${h.config.appUrl}/office/a%20(1).docx?mode=edit`);
     const target = new URL(json.Url);
     const id = target.pathname.split("/").at(-1) ?? "";
     const token = target.searchParams.get("access_token") ?? "";

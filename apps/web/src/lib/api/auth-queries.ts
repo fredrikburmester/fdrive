@@ -4,11 +4,10 @@ import type { LoginRequest, MeResponse } from "@fdrive/contracts";
 import { type QueryClient, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { Route } from "next";
 import { useRouter } from "next/navigation";
-import { accountTransition, useAccountTransition } from "@/lib/account/transition";
 import { useOrganizeSessionStore } from "@/lib/ai/organize-session";
 import { useJobsStore } from "@/lib/jobs/store";
 import { useUploadStore } from "@/lib/upload/store";
-import { apiClient, pinTabIdentity } from "./client";
+import { apiClient } from "./client";
 import { queryKeys } from "./keys";
 
 /**
@@ -23,13 +22,11 @@ export interface NavigableRouter {
   push: (href: Route) => void;
 }
 
-/** The signed-in account and its identities. Powers the shell and `/login`'s redirect check. */
+/** The signed-in account and its login. Powers the shell and `/login`'s redirect check. */
 export function useMe() {
-  const { pending } = useAccountTransition();
   return useQuery({
     queryKey: queryKeys.auth.me(),
     queryFn: () => apiClient.me(),
-    enabled: !pending,
   });
 }
 
@@ -50,10 +47,7 @@ export function handleLoginSuccess(
   useJobsStore.getState().reset();
   useOrganizeSessionStore.getState().reset();
   useUploadStore.getState().reset();
-  useUploadStore.getState().setActiveIdentity(me.activeIdentityId);
-  pinTabIdentity(me.activeIdentityId);
   queryClient.setQueryData(queryKeys.auth.me(), me);
-  accountTransition.finish(true);
   router.push(destination ?? (me.isAdmin ? "/setup" : FILES_ROUTE));
 }
 
@@ -63,13 +57,11 @@ export function handleLoginSuccess(
  * for the same reason as `handleLoginSuccess`.
  */
 export function handleLogoutSuccess(queryClient: QueryClient, router: NavigableRouter): void {
-  pinTabIdentity(undefined);
   void queryClient.cancelQueries();
   queryClient.clear();
   useJobsStore.getState().reset();
   useOrganizeSessionStore.getState().reset();
   useUploadStore.getState().reset();
-  accountTransition.finish(true);
   router.push("/login");
 }
 

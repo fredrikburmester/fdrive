@@ -2,7 +2,7 @@ import type { StorageProvider } from "@fdrive/core";
 import { type Context, Hono } from "hono";
 import { describe, expect, it } from "vitest";
 import { createLoginLimiter, DEFAULT_MAX_FAILURES } from "../auth/login-limiter.js";
-import type { Principal } from "../auth/principal.js";
+import type { TokenPrincipal } from "../tokens/principal.js";
 import { generateApiToken } from "../tokens/token-format.js";
 import { authenticateMcpRequest, type McpAuthResult, parseBearerHeader } from "./auth.js";
 
@@ -26,12 +26,13 @@ const FAKE_STORAGE: StorageProvider = {
   zip: notImplemented,
 };
 
-const FAKE_PRINCIPAL: Principal = {
+const FAKE_PRINCIPAL: TokenPrincipal = {
   accountId: "account-1",
   identityId: "identity-1",
   username: "alice",
   storage: FAKE_STORAGE,
   isAdmin: false,
+  tokenAccess: { mode: "read", paths: ["/"] },
 };
 
 /** The one token the default harness resolver recognizes. */

@@ -56,8 +56,7 @@ and require live read permission. fdrive's own folders (`isReservedPath` in `@fd
 login's Trash folder, fdrive's Trash layout `.fdrive-move-v1` wherever it lies, the Mac app's
 `/.fdrive-desktop` and `.fdrive-backups`) are left out by every search, image search, MCP and
 AI index query, mapped through the login's index scopes, before the query's row limit, so they
-never crowd out live files or count in a total. For account-wide queries, text may span linked
-identities while visual results remain scoped to the active identity.
+never crowd out live files or count in a total.
 
 PDF conversion rewrites the file in place, so System > Searchable PDFs keeps the file each
 rewrite replaced. **Kept originals** there lists them with what each one would overwrite, and

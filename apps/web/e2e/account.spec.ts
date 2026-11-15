@@ -19,7 +19,7 @@ test("alice creates an API token, sees it once, the list shows it, and can revok
   await page.getByRole("button", { name: "Create token" }).click();
   const createDialog = page.getByRole("dialog", { name: "Create API token" });
   await createDialog.getByLabel("Name").fill(tokenName);
-  await expect(createDialog.getByRole("combobox", { name: "Login" })).toContainText("alice");
+  await expect(createDialog.getByRole("combobox", { name: "Login" })).toHaveCount(0);
   await expect(createDialog.getByRole("combobox", { name: "Access" })).toContainText("Read");
   await createDialog.getByRole("combobox", { name: "Access" }).click();
   await page.getByRole("option", { name: "Full management", exact: true }).click();

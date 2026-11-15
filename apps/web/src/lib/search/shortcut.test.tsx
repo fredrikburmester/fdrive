@@ -1,7 +1,6 @@
 // @vitest-environment jsdom
 import { cleanup, fireEvent, render, renderHook, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { accountTransition } from "@/lib/account/transition";
 import { isSearchShortcut, SearchShortcutProvider, useSearchShortcut } from "./shortcut";
 
 function SearchState() {
@@ -11,7 +10,6 @@ function SearchState() {
 
 afterEach(() => {
   cleanup();
-  accountTransition.finish(false);
   vi.restoreAllMocks();
 });
 
@@ -28,7 +26,7 @@ describe("search shortcut ownership", () => {
     );
   });
 
-  it("owns shortcut state, ignores pending changes, and removes its listener", () => {
+  it("owns shortcut state, toggles it, and removes its listener", () => {
     const remove = vi.spyOn(window, "removeEventListener");
     const { unmount } = render(
       <SearchShortcutProvider>
@@ -39,10 +37,6 @@ describe("search shortcut ownership", () => {
     expect(screen.getByText("Closed")).toBeDefined();
     fireEvent.keyDown(window, { key: "k", ctrlKey: true });
     expect(screen.getByText("Open")).toBeDefined();
-    accountTransition.begin();
-    fireEvent.keyDown(window, { key: "k", ctrlKey: true });
-    expect(screen.getByText("Open")).toBeDefined();
-    accountTransition.finish(false);
     fireEvent.keyDown(window, { key: "K", metaKey: true });
     expect(screen.getByText("Closed")).toBeDefined();
     unmount();

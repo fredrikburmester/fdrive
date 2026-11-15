@@ -18,12 +18,12 @@ describe("createMemoryRepos ids option", () => {
 });
 
 describe("memory session timestamps", () => {
-  it("retains explicit timestamps when identity fixtures recreate a session", async () => {
+  it("retains explicit timestamps a sign-in fixture gives a session", async () => {
     const repos = createMemoryRepos();
     const input = {
       idHash: "copied",
       accountId: "account",
-      activeIdentityId: "identity",
+      identityId: "identity",
       createdAt: new Date("2026-01-01T00:00:00Z"),
       lastSeenAt: new Date("2026-01-02T00:00:00Z"),
       expiresAt: new Date("2026-01-03T00:00:00Z"),
