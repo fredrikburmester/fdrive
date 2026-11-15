@@ -278,15 +278,22 @@
     {
       "idx": 39,
       "version": "7",
-      "when": 1794734884222,
-      "tag": "0039_index_root_files",
+      "when": 1794735935084,
+      "tag": "0039_trash_leaf_required",
       "breakpoints": true
     },
     {
       "idx": 40,
       "version": "7",
-      "when": 1794735121879,
-      "tag": "0040_drop_schema_version",
+      "when": 1794738014596,
+      "tag": "0040_index_root_files",
+      "breakpoints": true
+    },
+    {
+      "idx": 41,
+      "version": "7",
+      "when": 1794738132428,
+      "tag": "0041_drop_schema_version",
       "breakpoints": true
     }
   ]

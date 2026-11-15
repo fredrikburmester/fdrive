@@ -23,9 +23,8 @@ const q = encodeURIComponent;
  * What the Mac's writes do to everything kept by path, through the composed
  * API: a move brings tags, favorites, folder views, folders shared with
  * people, public links and AI chat references along before its commit
- * answers, and tells the browser once; the Mac's Trash keeps tags at the
- * original path for a restore while what grants access follows the item in
- * and back out. What grants access moves with the receipt or the commit is
+ * answers, and tells the browser once; into the Mac's Trash and back out is
+ * a move like any other. What grants access moves with the receipt or the commit is
  * not confirmed; the rest never holds a write back. No indexer runs; the
  * last test sends the move the indexer would report.
  */
@@ -259,7 +258,7 @@ describe("metadata follows the Mac's writes as they commit", () => {
     }
   });
 
-  it("keeps tags for a restore from the Mac's Trash, while sharing follows the folder in and out", async () => {
+  it("takes tags and sharing with a folder into the Mac's Trash and back out", async () => {
     const tag = await repos.tags.create(accountId, { name: "Binned", color: null });
     await repos.fileTags.setTags(identityId, "/Binned/inside.txt", [tag.id]);
     await repos.recents.touch(identityId, "/Binned/inside.txt");
@@ -270,13 +269,14 @@ describe("metadata follows the Mac's writes as they commit", () => {
     expect(trashed).toMatchObject({ id: folder.id, parentId: "trash", trashed: true });
     // The handle survives: the Mac finds the item in its Trash under the same ID.
     expect((await stat(trashed.path)).id).toBe(folder.id);
-    // Tags stay where the item was and recents go, as before; the share follows
-    // the folder out of bob's reach.
-    expect(await repos.fileTags.pathsForTag(identityId, tag.id)).toEqual(["/Binned/inside.txt"]);
+    // Tags and recents follow the folder, so nothing new at its old path takes
+    // them; the share follows it out of bob's reach.
+    const binned = `/.fdrive-desktop/${identityId}/trash/${folder.id}`;
+    expect(await repos.fileTags.pathsForTag(identityId, tag.id)).toEqual([`${binned}/inside.txt`]);
     expect((await repos.recents.list(identityId, 10)).map((recent) => recent.path)).not.toContain(
       "/Binned/inside.txt",
     );
-    expect(await grantPaths()).toContain(`/.fdrive-desktop/${identityId}/trash/${folder.id}`);
+    expect(await grantPaths()).toContain(binned);
     expect(await sharedWithBob()).not.toContain("Binned");
 
     const back = await macMove(trashed, "root");

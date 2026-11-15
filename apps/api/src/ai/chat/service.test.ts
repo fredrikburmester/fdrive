@@ -1,5 +1,5 @@
 import type { Chat, ChatPart } from "@fdrive/contracts";
-import { type Scope, StorageError, type StorageProvider, type TrashProvider } from "@fdrive/core";
+import { type Scope, StorageError, type StorageProvider } from "@fdrive/core";
 import { createMemoryStorage } from "@fdrive/core/testing";
 import type { IndexQueries, Repos } from "@fdrive/db";
 import { createMemoryRepos } from "@fdrive/db/testing";
@@ -75,7 +75,6 @@ interface Setup {
 async function setup(
   options: {
     files?: Record<string, string>;
-    trash?: boolean;
     limits?: Record<string, number>;
     aiOff?: boolean;
     chatOff?: boolean;
@@ -102,9 +101,7 @@ async function setup(
       "/Docs/readme.md": "# Hi",
     },
   );
-  const storage: StorageProvider = options.trash
-    ? Object.assign(base, { trash: {} as TrashProvider })
-    : base;
+  const storage = base;
   const principal: Principal = {
     accountId: account.id,
     identityId: identity.id,
@@ -292,7 +289,7 @@ describe("chat service", () => {
         references: ["/Inbox/a.txt", "/Inbox/b.txt"],
       }),
     ).rejects.toMatchObject({ kind: "bad_request" });
-    const trashed = await setup({ trash: true });
+    const trashed = await setup();
     const t = await trashed.service.create(trashed.principal, {});
     await expect(
       trashed.service.send(trashed.principal, t.id, { text: "x", references: ["/.trash/x"] }),
@@ -384,7 +381,6 @@ describe("chat service", () => {
 
   it("gives the model no open folder that is missing, a file or in Trash, and stores its spelling", async () => {
     const t = await setup({
-      trash: true,
       files: { "/A\u030Arsbesked/x.txt": "x", "/.trash/old/y.txt": "y", "/z.txt": "z" },
     });
     const chat = await t.service.create(t.principal, {});
@@ -417,7 +413,7 @@ describe("chat service", () => {
   });
 
   it("holds a trash card for the person, applies it with their edits and then lets the model continue", async () => {
-    const t = await setup({ trash: true });
+    const t = await setup();
     t.script.queue.push(
       call("c1", "trash_items", {
         summary: "Remove both.",
@@ -712,7 +708,7 @@ describe("chat service", () => {
   });
 
   it("rebuilds the conversation from the transcript after a restart and still applies a card", async () => {
-    const t = await setup({ trash: true });
+    const t = await setup();
     t.script.queue.push(
       call("c1", "trash_items", {
         summary: "Remove it.",
@@ -832,7 +828,7 @@ describe("chat service", () => {
   });
 
   it("declines stored cards on a new message after a restart", async () => {
-    const t = await setup({ trash: true });
+    const t = await setup();
     t.script.queue.push(
       call("c1", "trash_items", { summary: "s", items: [{ path: "/Inbox/a.txt", reason: "r" }] }),
     );

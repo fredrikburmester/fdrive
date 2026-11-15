@@ -409,6 +409,66 @@ describe("migrate", () => {
     });
   });
 
+  it("keeps the Trash bindings that know their leaf, drops the rest, and the old Trash settings", async () => {
+    await withDatabaseBefore("0039_trash_leaf_required", async (older) => {
+      const [account] = await older.insert(schema.accounts).values({}).returning();
+      const [provider] = await older
+        .insert(schema.providers)
+        .values({ type: "local", baseUrl: "local" })
+        .returning();
+      if (account === undefined || provider === undefined) throw new Error("expected rows");
+      const [identity] = await older
+        .insert(schema.identities)
+        .values({ accountId: account.id, providerId: provider.id, externalUsername: "alice" })
+        .returning();
+      if (identity === undefined) throw new Error("expected an identity");
+      const owner = account.id;
+      const bound = "00000000-0000-4000-8000-000000000021";
+      const unresolved = "00000000-0000-4000-8000-000000000022";
+      const file = "00000000-0000-4000-8000-000000000023";
+      await older.execute(sql`
+        insert into app.activity_storage_identities (identity_id, label)
+          values (${identity.id}, 'alice')`);
+      await older.execute(sql`
+        insert into app.activity_files (id, identity_id, kind, virtual_path, state)
+          values (${file}, ${identity.id}, 'file', '/a.txt', 'trashed')`);
+      await older.execute(sql`
+        insert into app.activity_events (id, owner_account_id, owner_sequence, actor_account_id,
+          identity_id, file_id, class, action, stage, outcome, source, evidence, sort_at,
+          idempotency_key, before, after)
+        values
+          (${bound}, ${owner}, 1, ${owner}, ${identity.id}, ${file}, 'action', 'file.trash',
+            'outcome', 'success', 'web', 'server_confirmed', now(), 'bound', '{}', '{}'),
+          (${unresolved}, ${owner}, 2, ${owner}, ${identity.id}, ${file}, 'action', 'file.trash',
+            'outcome', 'success', 'web', 'server_confirmed', now(), 'unresolved', '{}', '{}')`);
+      await older.execute(sql`
+        insert into app.activity_trash_bindings (file_id, identity_id, owner_account_id, event_id,
+          original_virtual_path, trash_virtual_leaf, state) values
+          (${file}, ${identity.id}, ${owner}, ${bound}, '/a.txt',
+            '/.trash/.fdrive-move-v1/file/p/a.txt/v/1', 'bound'),
+          (${file}, ${identity.id}, ${owner}, ${unresolved}, '/a.txt', null, 'unresolved')`);
+      await older.execute(sql`
+        insert into app.settings (key, value) values
+          (${`trash.configuration.${provider.id}`}, '{"enabled":true,"path":"/Bin"}'),
+          ('storage.name', '{"name":"Home"}')`);
+
+      await migrate(older);
+
+      const bindings = await older.execute(
+        sql`select event_id, state from app.activity_trash_bindings`,
+      );
+      expect(bindings.rows).toEqual([{ event_id: bound, state: "bound" }]);
+      await expect(
+        older.execute(sql`
+          insert into app.activity_trash_bindings (file_id, identity_id, owner_account_id,
+            event_id, original_virtual_path, trash_virtual_leaf, state)
+            values (${file}, ${identity.id}, ${owner}, ${unresolved}, '/a.txt', null, 'bound')`),
+      ).rejects.toThrow();
+      const settings = await older.execute(sql`select key from app.settings order by key`);
+      expect(settings.rows).toEqual([{ key: "storage.name" }]);
+    });
+  });
+
   it("keeps only bucket destinations and drops configuration ZIPs", async () => {
     await withDatabaseBefore("0036_backups_s3_only", async (older) => {
       const files = "00000000-0000-4000-8000-000000000011";
@@ -450,7 +510,7 @@ describe("migrate", () => {
   });
 
   it("keeps only the files root, as row 1, with what was indexed under it", async () => {
-    await withDatabaseBefore("0039_index_root_files", async (older) => {
+    await withDatabaseBefore("0040_index_root_files", async (older) => {
       await older.execute(sql`insert into idx.roots (name) values ('files'), ('photos')`);
       await older.execute(sql`
         insert into idx.files (root_id, path, name, size, mtime_ns) values

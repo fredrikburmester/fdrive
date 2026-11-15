@@ -67,10 +67,13 @@ Reference for affected code; shared rules live in [AGENTS.md](../AGENTS.md).
   running two registry transactions per entry behind one lock. Background work stays silent,
   its pace follows what it costs, and it asks which folders changed (`POST /checks`) before
   listing any.
-- Per-request storage moves every delete into Trash (`withMoveToTrash`), fdrive's own folders
-  included: Mac write retention, built on it, moved the recovery copies it reclaimed into their
-  owner's Trash. Delete fdrive's bookkeeping, such as the Mac's staged uploads, through storage
-  built without Trash (`withoutTrash`).
+- Trash once intercepted every delete in a storage wrapper, fdrive's own folders included: Mac
+  write retention, built on it, moved the recovery copies it reclaimed into their owner's Trash.
+  Now `deleteFile` and `deleteDir` delete for good, and moving to Trash is `trash.put`, so each
+  caller says which it means.
+- Office's save path and personal activity's path locks, which moves to Trash take, each keep a
+  database pool of their own. They never wait on each other; sharing one would let slow Office
+  saves hold up Trash moves.
 - The API keeps what every request would read again in memory: that setup is done, the Trash
   retention and the storage name. Only the API writes them, so a test (or
   anything else) that changes the Trash retention or the storage name straight in `app.settings`

@@ -67,3 +67,27 @@ it("says when Trash deletes the items, once that setting has loaded", async () =
   expect(dialog.textContent).toContain('"photos" will be moved to Trash.');
   expect(dialog.textContent).not.toContain("deleted permanently");
 });
+
+it("says an item in a folder shared with the login goes to its owner's Trash", async () => {
+  const shared: FsEntry = { ...folder, path: "/Shared with me/Team/photos" };
+  render(
+    <DeleteDialog
+      entries={[shared]}
+      onOpenChange={vi.fn()}
+      onConfirm={vi.fn()}
+      received={[
+        {
+          id: "00000000-0000-4000-8000-000000000001",
+          owner: "alice",
+          name: "Team",
+          path: "/Shared with me/Team",
+          access: "write",
+          createdAt: "2026-01-01T00:00:00.000Z",
+        },
+      ]}
+    />,
+  );
+  expect((await screen.findByRole("alertdialog")).textContent).toContain(
+    '"photos" will be moved to alice\'s Trash.',
+  );
+});

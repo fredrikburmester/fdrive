@@ -34,6 +34,12 @@ const FAKE_STORAGE: StorageProvider = {
   deleteEmptyDir: notImplemented,
   setModifiedAt: notImplemented,
   zip: notImplemented,
+  trash: {
+    put: notImplemented,
+    list: notImplemented,
+    restore: notImplemented,
+    purge: notImplemented,
+  },
 };
 
 const REQUIRED_ENV: Record<string, string> = {
@@ -92,10 +98,7 @@ async function buildTestApp(opts: {
       limiter: createLoginLimiter({ clock: opts.clockCtl.clock }),
       users: local.users,
     }),
-    principalFor: createPrincipalFactory({
-      folder: { storage: () => FAKE_STORAGE },
-      clock: opts.clockCtl.clock,
-    }),
+    principalFor: createPrincipalFactory({ folder: { storage: () => FAKE_STORAGE } }),
     installation:
       opts.installation ?? (async () => ({ storageName: "Local folder", index: false })),
   });

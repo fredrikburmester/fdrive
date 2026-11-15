@@ -1,6 +1,6 @@
 "use client";
 
-import type { FsEntry } from "@fdrive/contracts";
+import type { FsEntry, ReceivedGrant } from "@fdrive/contracts";
 import { Loader2 } from "lucide-react";
 import {
   AlertDialog,
@@ -13,6 +13,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { useTrashSettings } from "@/lib/api/trash-settings-queries";
+import { receivedGrantFor } from "@/lib/grants/paths";
 import { deleteDialogCopy } from "@/lib/trash/format";
 
 export interface DeleteDialogProps {
@@ -26,22 +27,30 @@ export interface DeleteDialogProps {
    * as a large folder or selection; the request itself cannot be cancelled.
    */
   pending?: boolean;
+  /** Folders others share with the login: what is in one goes to its owner's Trash. */
+  received?: readonly ReceivedGrant[];
 }
 
+const NONE: readonly ReceivedGrant[] = [];
+
 /**
- * Confirms moving one or more entries to Trash, saying how long Trash keeps
- * them once that setting has loaded.
+ * Confirms moving one or more entries to Trash, saying whose Trash and, once
+ * that setting has loaded, how long it keeps them.
  */
 export function DeleteDialog({
   entries,
   onOpenChange,
   onConfirm,
   pending = false,
+  received = NONE,
 }: DeleteDialogProps) {
   const count = entries.length;
   const retentionDays = useTrashSettings().data?.retentionDays;
   const copy = deleteDialogCopy(
-    entries.map((entry) => entry.name),
+    entries.map((entry) => ({
+      name: entry.name,
+      owner: receivedGrantFor(entry.path, received)?.owner,
+    })),
     retentionDays,
   );
 

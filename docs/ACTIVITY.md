@@ -198,7 +198,7 @@ owner/event and identity/file references protect subjects and related rows.
 | `activity_event_subjects` | Owner, event, identity and file IDs, role, `subject_ordinal`, path snapshot, revision. PK event/identity/role/ordinal. Ordinals increase within an event so cursor pages include every role; bulk membership is paginated, not packed into event JSON. |
 | `activity_revisions` | ID, file, identity, owner, event, `sha256`, size, previous revision. Evidence only; unknown measurements stay null. |
 | `activity_lineage` | ID, owner, event, source and target file and identity, kind, evidence. Copy, Save As, archive member and derived edges. |
-| `activity_trash_bindings` | File, identity, owner, event, original path, Trash leaf, state. The leaf is the one fdrive moved the item to; a delete that reported no leaf stays unresolved. |
+| `activity_trash_bindings` | File, identity, owner, event, original path, Trash leaf, state (bound, restored or purged). The leaf is the one fdrive moved the item to, which every trash reports; for an item in a folder shared with the login it is in the owner's files, so only the owner's restore or purge resolves it. |
 | `activity_observation_state` | Owner, identity, file, generation, discrepancy, evidence fingerprint, event and resolved event, check and detection times. Persistent dedupe and resolution links. |
 | `activity_read_windows` | ID, owner, identity, file, action, source, context hash, evidence, generation, bucket start, path, first and last time, counts, `sealed_at`. Mutable until sealed; its ID becomes the event ID. |
 | `activity_read_receipts` | PK owner/identity/context hash/request ID, window, outcome, `expires_at`. Retry receipts expire after 24 hours. |
@@ -279,7 +279,7 @@ outside fdrive."
 | Producer | Where | Actions |
 | --- | --- | --- |
 | File routes | [fs routes](../apps/api/src/fs/routes.ts): upload, mkdir, rename, move, move-many, copy, delete, download, zip, and the exported `moveMany` and `trashMany` | `file.upload`, `file.create`, `file.save`, `folder.create`, `file.rename`, `file.move`, `file.copy`, `file.trash`, `file.delete`, `file.download`, streamed `archive.compress` |
-| Trash | [Trash routes](../apps/api/src/trash/routes.ts) and the API's hourly [retention](../apps/api/src/trash/retention.ts); the leaf comes from the [move-to-Trash wrapper](../packages/core/src/trash/move-to-trash.ts) through [activity/trash.ts](../apps/api/src/activity/trash.ts) | `file.restore`, `file.delete` (reason `retention` when Trash kept it as long as set), `trash.empty` |
+| Trash | [Trash routes](../apps/api/src/trash/routes.ts) and the API's hourly [retention](../apps/api/src/trash/retention.ts); a trash records the leaf the storage's `trash.put` reported | `file.restore`, `file.delete` (reason `retention` when Trash kept it as long as set), `trash.empty` |
 | Mac | [desktop routes](../apps/api/src/desktop/routes.ts) and [writes](../apps/api/src/desktop/writes.ts); copied in the [receipt transaction](../packages/db/src/repos/desktop.ts) | the matching file actions, `file.materialize` |
 | AI | [chat action tools](../apps/api/src/ai/chat/action-tools.ts) through `moveMany` and `trashMany`; [organize](../apps/api/src/ai/organize/service.ts) through the web's ordinary file routes | file actions with `source: ai` |
 | MCP | [MCP routes](../apps/api/src/mcp/routes.ts) wrap the token's storage with [`activityStorage`](../apps/api/src/activity/storage.ts), which records explicit commands only | file actions, `file.read`, `file.inspect`, tags and favorites |

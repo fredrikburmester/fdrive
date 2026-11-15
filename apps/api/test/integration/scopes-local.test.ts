@@ -104,7 +104,6 @@ describe("index scopes over a local folder and Postgres", () => {
     const storageFactory = createIdentityStorageFactory({
       identities: repos.identities,
       folder,
-      clock,
     });
 
     const resolver = createScopeResolver({

@@ -16,7 +16,7 @@ migrations, compatibility shims or configuration aliases; a full reindex is acce
 ## Order
 
 - Groups that add a migration run one at a time and need `pnpm test:integration`.
-- 16 before 17, 18, 26 and 31. 36 and 37 last.
+- 36 and 37 last.
 
 ## Decisions
 
@@ -41,13 +41,6 @@ Recommended on 2026-11-14 and approved by the owner the same day.
 
 ## Wave 2: Trash, metadata and the journal
 
-16. **Trash as an explicit operation.** Trash is always on at `/.trash` with its retention
-    (decision 3), but it intercepts deletes in a wrapper and passes the leaf out through
-    AsyncLocalStorage (`activity/trash.ts`). Tags, favorites and folder views stay at a trashed
-    item's path, so a new file there inherits them. A grantee deleting in a writable shared
-    folder sends the owner's file to the grantee's Trash. Office's save path (#162) and personal
-    activity's path locks each keep a database pool of their own; they never wait on each other,
-    and sharing one would let slow Office saves hold up Trash moves.
 17. **Flat Trash layout.** The `p/<segment>` path encoding, made for WebDAV, becomes one folder
     per item plus a row.
 18. **Live updates and metadata from the journal.** Every fdrive change returns through the
