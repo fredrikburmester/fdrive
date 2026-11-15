@@ -78,6 +78,39 @@ pub fn jpeg(width: u32, height: u32, seed: u8) -> Vec<u8> {
     out.into_inner()
 }
 
+/// A small JPEG whose EXIF names the camera and when and where it was taken.
+pub fn jpeg_with_exif() -> Vec<u8> {
+    use exif::{Field, In, Rational, Tag, Value};
+    let ascii = |text: &str| Value::Ascii(vec![text.as_bytes().to_vec()]);
+    let whole = |n: u32| Rational { num: n, denom: 1 };
+    let mut writer = exif::experimental::Writer::new();
+    let fields = [
+        (Tag::Make, ascii("Apple")),
+        (Tag::Model, ascii("iPhone 15 Pro")),
+        (Tag::DateTimeOriginal, ascii("2024:05:01 14:03:09")),
+        (Tag::PixelXDimension, Value::Long(vec![4032])),
+        (Tag::PixelYDimension, Value::Long(vec![3024])),
+        (Tag::GPSLatitudeRef, ascii("N")),
+        (Tag::GPSLatitude, Value::Rational(vec![whole(59), whole(30), whole(0)])),
+        (Tag::GPSLongitudeRef, ascii("E")),
+        (Tag::GPSLongitude, Value::Rational(vec![whole(18), whole(0), whole(0)])),
+    ]
+    .map(|(tag, value)| Field {
+        tag,
+        ifd_num: In::PRIMARY,
+        value,
+    });
+    for field in &fields {
+        writer.push_field(field);
+    }
+    let mut tiff = std::io::Cursor::new(Vec::new());
+    writer.write(&mut tiff, false).unwrap();
+    let tiff = tiff.into_inner();
+    let plain = jpeg(8, 8, 3);
+    let length = u16::try_from(8 + tiff.len()).unwrap().to_be_bytes();
+    [&plain[..2], &[0xFF, 0xE1], &length, b"Exif\0\0", &tiff, &plain[2..]].concat()
+}
+
 /// A minimal PDF whose pages show the given text; an empty string gives a page without
 /// a text layer.
 pub fn pdf(pages: &[&str]) -> Vec<u8> {

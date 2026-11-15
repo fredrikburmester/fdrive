@@ -69,6 +69,7 @@ import {
   OfficeStatusResponse,
   SystemOfficeResponse,
 } from "./office.ts";
+import { PhotoDetailsResponse, PhotosResponse } from "./photos.ts";
 import {
   type ProcessingFailuresQuery,
   ProcessingFailuresResponse,
@@ -311,6 +312,10 @@ export interface ApiClient {
   searchStatus(): Promise<SearchStatusResponse>;
   searchImages(query: string, opts?: ApiClientImageSearchOptions): Promise<ImageSearchResponse>;
   thumbUrl(path: string, size: ThumbSize): string;
+  /** One page of every image the caller can read, newest first; `cursor` continues a page. */
+  photos(cursor?: string): Promise<PhotosResponse>;
+  /** One image's EXIF details. */
+  photoDetails(path: string): Promise<PhotoDetailsResponse>;
   setupStatus(): Promise<SetupStatusResponse>;
   setupComplete(setupToken: string, req: SetupCompleteRequest): Promise<MeResponse>;
   adminUsers(): Promise<AdminUsersResponse>;
@@ -788,6 +793,14 @@ export function createApiClient(options: ApiClientOptions = {}): ApiClient {
 
     thumbUrl(path: string, size: ThumbSize): string {
       return buildRequestUrl(ctx.baseUrl, ROUTES.thumb, { path, size: String(size) });
+    },
+
+    photos(cursor?: string): Promise<PhotosResponse> {
+      return get(ROUTES.photos.list, PhotosResponse, { query: { cursor } });
+    },
+
+    photoDetails(path: string): Promise<PhotoDetailsResponse> {
+      return get(ROUTES.photos.details, PhotoDetailsResponse, { query: { path } });
     },
 
     setupStatus(): Promise<SetupStatusResponse> {

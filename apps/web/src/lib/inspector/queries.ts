@@ -1,6 +1,6 @@
 "use client";
 
-import type { FolderSizeResponse } from "@fdrive/contracts";
+import type { FolderSizeResponse, PhotoDetailsResponse } from "@fdrive/contracts";
 import { useQuery } from "@tanstack/react-query";
 import { apiClient } from "@/lib/api/client";
 import { queryKeys } from "@/lib/api/keys";
@@ -18,6 +18,20 @@ export function useFolderSize(path: string, opts: { enabled: boolean }) {
     queryKey: queryKeys.fs.folderSize(path),
     queryFn: () => apiClient.folderSize(path),
     enabled: opts.enabled,
+    staleTime: 30_000,
+  });
+}
+
+/**
+ * An image's EXIF details from the index (see the API's `GET /photos/details`), fetched only
+ * while `enabled`. A file the index has no row for answers 404, which leaves `data` unset.
+ */
+export function usePhotoDetails(path: string, opts: { enabled: boolean }) {
+  return useQuery<PhotoDetailsResponse>({
+    queryKey: queryKeys.photos.details(path),
+    queryFn: () => apiClient.photoDetails(path),
+    enabled: opts.enabled,
+    retry: false,
     staleTime: 30_000,
   });
 }

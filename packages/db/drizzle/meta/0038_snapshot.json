@@ -1,5 +1,5 @@
 {
-  "id": "e5333104-ee7c-4cbf-8c12-25b18734e23b",
+  "id": "95478e4a-0ec4-4e4e-8de4-8154ea0fe0b9",
   "prevId": "32813ecf-a5a2-44e4-b23e-1135222ce3bf",
   "version": "7",
   "dialect": "postgresql",
@@ -2901,6 +2901,42 @@
         "ctime_ns": {
           "name": "ctime_ns",
           "type": "bigint",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "taken_at": {
+          "name": "taken_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "camera": {
+          "name": "camera",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "width": {
+          "name": "width",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "height": {
+          "name": "height",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "latitude": {
+          "name": "latitude",
+          "type": "double precision",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "longitude": {
+          "name": "longitude",
+          "type": "double precision",
           "primaryKey": false,
           "notNull": false
         }
@@ -5935,7 +5971,7 @@
           "name": "trash_virtual_leaf",
           "type": "text",
           "primaryKey": false,
-          "notNull": true
+          "notNull": false
         },
         "state": {
           "name": "state",

@@ -271,8 +271,15 @@
     {
       "idx": 38,
       "version": "7",
-      "when": 1794731419683,
-      "tag": "0038_trash_leaf_required",
+      "when": 1794730788743,
+      "tag": "0038_photo_details",
+      "breakpoints": true
+    },
+    {
+      "idx": 39,
+      "version": "7",
+      "when": 1794735935084,
+      "tag": "0039_trash_leaf_required",
       "breakpoints": true
     }
   ]

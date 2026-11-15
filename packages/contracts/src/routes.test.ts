@@ -87,6 +87,13 @@ describe("ROUTES", () => {
     expect(ROUTES.thumb).toBe("/api/v1/thumb");
   });
 
+  it("defines the photos routes", () => {
+    expect(ROUTES.photos).toEqual({
+      list: "/api/v1/photos",
+      details: "/api/v1/photos/details",
+    });
+  });
+
   it("defines events and about routes", () => {
     expect(ROUTES.events).toBe("/api/v1/events");
     expect(ROUTES.about).toBe("/api/v1/about");

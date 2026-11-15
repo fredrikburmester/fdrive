@@ -407,7 +407,7 @@ describe("migrate", () => {
   });
 
   it("keeps the Trash bindings that know their leaf, drops the rest, and the old Trash settings", async () => {
-    await withDatabaseBefore("0038_trash_leaf_required", async (older) => {
+    await withDatabaseBefore("0039_trash_leaf_required", async (older) => {
       const [account] = await older.insert(schema.accounts).values({}).returning();
       const [provider] = await older
         .insert(schema.providers)

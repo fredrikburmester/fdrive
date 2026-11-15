@@ -1,8 +1,44 @@
 import type { FsEntry } from "@fdrive/contracts";
 import { describe, expect, it } from "vitest";
-import { describeEntry, kindLabel, relativeTimeFrom } from "./describe";
+import { describeEntry, describePhoto, kindLabel, relativeTimeFrom } from "./describe";
 
 const NOW = new Date("2024-06-15T14:30:00.000Z");
+
+describe("describePhoto", () => {
+  it("shows each detail the photo has, the time as the camera recorded it", () => {
+    expect(
+      describePhoto(
+        {
+          takenAt: "2024-05-01T14:03:09",
+          camera: "Apple iPhone 15 Pro",
+          width: 3024,
+          height: 4032,
+          latitude: 59.329323,
+          longitude: -18.068581,
+        },
+        { locale: "en-US", clock: "24h" },
+      ),
+    ).toEqual([
+      { label: "Taken", value: "May 1, 2024, 14:03" },
+      { label: "Camera", value: "Apple iPhone 15 Pro" },
+      { label: "Dimensions", value: "3024 × 4032" },
+      { label: "Coordinates", value: "59.32932, -18.06858" },
+    ]);
+  });
+
+  it("leaves out what the photo does not have", () => {
+    expect(
+      describePhoto({
+        takenAt: null,
+        camera: null,
+        width: 3024,
+        height: null,
+        latitude: 59.3,
+        longitude: null,
+      }),
+    ).toEqual([]);
+  });
+});
 
 function entry(overrides: Partial<FsEntry> = {}): FsEntry {
   return {
