@@ -6,6 +6,7 @@ import {
   OwnedGrant,
   ROUTES,
   TrashListResponse,
+  TrashSettings,
 } from "@fdrive/contracts";
 import { createChangeWriter, createDb, createRepos } from "@fdrive/db";
 import type { IndexChange } from "@fdrive/local";
@@ -14,7 +15,6 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { composeApp } from "../../src/composition.js";
 import { loadConfig } from "../../src/config.js";
 import { type ChangeQueue, createChangeQueue } from "../../src/local/change-queue.js";
-import { trashSettingsKey } from "../../src/trash/settings.js";
 import { LocalIndexerStack } from "./helpers/local-indexer-stack.js";
 import { seedLocalUsers, silentLogger } from "./helpers/local-storage.ts";
 
@@ -43,7 +43,7 @@ describe("shared folders in their owner's Trash, through the real indexer", () =
 
   beforeAll(async () => {
     await stack.startDatabaseAndStorage();
-    await seedLocalUsers(stack.connectionString, stack.folder);
+    await seedLocalUsers(stack.connectionString, stack.folder, ["alice"]);
     database = createDb(stack.connectionString);
     const repos = createRepos(database.db);
     await repos.settings.set("features.configuration", {
@@ -118,14 +118,29 @@ describe("shared folders in their owner's Trash, through the real indexer", () =
     return cookieFrom(response);
   }
 
+  /**
+   * Sets the files folder's Trash (`null` turns it off) through System >
+   * General, as alice, an administrator: the API keeps the settings it saves
+   * in memory.
+   */
   async function trashAt(path: string | null): Promise<void> {
-    await createRepos(database.db).settings.set(trashSettingsKey(providerId), {
-      providerId,
-      revision: 1,
-      enabled: path !== null,
-      path: path ?? "/.trash",
-      retentionHours: null,
+    const admin = await login("alice");
+    const current = await call(`${ROUTES.system.trash}?providerId=${providerId}`, {
+      cookie: admin,
     });
+    expect(current.status).toBe(200);
+    await ok(
+      call(ROUTES.system.trash, {
+        method: "PUT",
+        cookie: admin,
+        body: {
+          ...TrashSettings.parse(await current.json()),
+          enabled: path !== null,
+          path: path ?? "/.trash",
+          retentionHours: null,
+        },
+      }),
+    );
   }
 
   async function names(cookie: string, path: string): Promise<string[]> {

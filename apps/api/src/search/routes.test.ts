@@ -1,12 +1,10 @@
 import type { ImageSearchResponse, SearchResponse } from "@fdrive/contracts";
 import type { StorageProvider } from "@fdrive/core";
-import type { Identity } from "@fdrive/db";
 import type { Logger } from "pino";
 import { describe, expect, it, vi } from "vitest";
 import { createApp } from "../app.js";
 import type { Principal } from "../auth/principal.js";
 import { loadConfig } from "../config.js";
-import { buildIdentity } from "../scoping/test-fixtures/index.ts";
 import type { ImageSearchService, ImageSearchServiceInput } from "./image-service.js";
 import {
   DEFAULT_SEARCH_LIMIT,
@@ -50,8 +48,6 @@ const EMPTY_IMAGE_RESPONSE: ImageSearchResponse = {
   tookMs: 1,
 };
 
-const IDENTITY: Identity = buildIdentity({ id: "00000000-0000-4000-8000-0000000000a1" });
-
 function notImplemented(): never {
   throw new Error("not used in this test");
 }
@@ -68,7 +64,6 @@ function buildApp(
   overrides: {
     readonly features?: SearchRoutesDeps["features"];
     readonly resolver?: SearchRoutesDeps["resolver"];
-    readonly identity?: Identity | null;
     readonly semanticEnabled?: boolean;
     readonly imageSearchEnabled?: boolean;
     readonly principal?: Partial<Principal>;
@@ -84,7 +79,6 @@ function buildApp(
     isAdmin: false,
     ...overrides.principal,
   };
-  const identity = overrides.identity === undefined ? IDENTITY : overrides.identity;
 
   return createApp({
     config: loadConfig(REQUIRED_ENV),
@@ -99,7 +93,6 @@ function buildApp(
         searchService,
         imageSearchService: overrides.imageSearchService ?? fakeImageSearchService(),
         resolver: overrides.resolver ?? fakeResolver(),
-        identities: { get: async () => identity },
         semanticEnabled: overrides.semanticEnabled ?? false,
         imageSearchEnabled: overrides.imageSearchEnabled ?? false,
       }),
@@ -174,15 +167,19 @@ describe("GET /api/v1/search", () => {
     expect(res.status).toBe(400);
   });
 
-  it("passes the identity's verified scopes, query, filters, and limit to the service", async () => {
+  it("passes the login's verified scopes, query, filters, and limit to the service", async () => {
     let received: SearchServiceInput | undefined;
     const search = vi.fn(async (input: SearchServiceInput) => {
       received = input;
       return { ...EMPTY_RESPONSE, query: input.query };
     });
     const scopes = [{ rootName: "files", fsPrefix: "/alice", virtualPrefix: "/" }];
+    const verifiedIndexScopes = vi.fn(async (_username: string) => ({
+      available: true as const,
+      scopes,
+    }));
     const app = buildApp(fakeSearchService({ search }), {
-      resolver: fakeResolver({ verifiedIndexScopes: async () => ({ available: true, scopes }) }),
+      resolver: fakeResolver({ verifiedIndexScopes }),
     });
 
     const res = await app.request(
@@ -190,6 +187,8 @@ describe("GET /api/v1/search", () => {
     );
 
     expect(res.status).toBe(200);
+    // Resolved for this request from the principal's own username.
+    expect(verifiedIndexScopes).toHaveBeenCalledExactlyOnceWith("alice");
     expect(received?.scopes).toEqual(scopes);
     expect(received?.query).toBe("readme");
     expect(received?.filters).toEqual({
@@ -199,7 +198,6 @@ describe("GET /api/v1/search", () => {
       before: new Date("2026-02-01"),
     });
     expect(received?.limit).toBe(5);
-    expect(received?.authorizer).toBeDefined();
   });
 
   it("passes an empty scope list when the identity's verified scopes are unavailable", async () => {
@@ -213,19 +211,6 @@ describe("GET /api/v1/search", () => {
         verifiedIndexScopes: async () => ({ available: false, reason: "no_roots" }),
       }),
     });
-
-    await app.request("/api/v1/search?q=readme");
-
-    expect(received?.scopes).toEqual([]);
-  });
-
-  it("passes an empty scope list when the caller's identity no longer exists", async () => {
-    let received: SearchServiceInput | undefined;
-    const search = vi.fn(async (input: SearchServiceInput) => {
-      received = input;
-      return EMPTY_RESPONSE;
-    });
-    const app = buildApp(fakeSearchService({ search }), { identity: null });
 
     await app.request("/api/v1/search?q=readme");
 
@@ -291,7 +276,6 @@ describe("GET /api/v1/search/images", () => {
     expect(received?.scopes).toEqual(scopes);
     expect(received?.query).toBe("cat");
     expect(received?.limit).toBe(5);
-    expect(received?.authorizer).toBeDefined();
   });
 
   it("passes an empty scope list when the identity's verified scopes are unavailable", async () => {
@@ -304,22 +288,6 @@ describe("GET /api/v1/search/images", () => {
       resolver: fakeResolver({
         verifiedIndexScopes: async () => ({ available: false, reason: "no_roots" }),
       }),
-      imageSearchService: fakeImageSearchService({ search }),
-    });
-
-    await app.request("/api/v1/search/images?q=cat");
-
-    expect(received?.scopes).toEqual([]);
-  });
-
-  it("passes an empty scope list when the caller's identity no longer exists", async () => {
-    let received: ImageSearchServiceInput | undefined;
-    const search = vi.fn(async (input: ImageSearchServiceInput) => {
-      received = input;
-      return EMPTY_IMAGE_RESPONSE;
-    });
-    const app = buildApp(fakeSearchService(), {
-      identity: null,
       imageSearchService: fakeImageSearchService({ search }),
     });
 
@@ -399,14 +367,5 @@ describe("GET /api/v1/search/status", () => {
       images: false,
       reason: "invalid_configuration",
     });
-  });
-
-  it("reports unavailable when the caller's identity no longer exists", async () => {
-    const app = buildApp(fakeSearchService(), { identity: null });
-
-    const res = await app.request("/api/v1/search/status");
-    const body = await res.json();
-
-    expect(body).toEqual({ available: false, semantic: false, images: false });
   });
 });

@@ -19,16 +19,17 @@ filesystem details and lets tests run on an in-memory storage. fdrive checks pas
 
 - `FDRIVE_STORAGE_ROOT` is required. `createFilesFolder` returns three functions:
   `storage(username)`, the user's home plus `/Shared with me` from `app.local_grants`;
-  `admit(username)`, which refuses a disabled or removed user on every request, not only at
-  sign-in; and `health()`, whether the folder is this installation's (its marker, below) and
+  `admit(username)`, which refuses a disabled or removed user; and `health()`, whether the folder is this installation's (its marker, below) and
   one the API can read, write and enter.
 - The files folder is one row in `app.providers` (`type` and `base_url` `local`). Startup
   ensures it and keeps its id (`ensureStorageRow`); every login names it. The id never
   changes: the Mac app compares it as each location's `providerId`, and Trash settings and
   Office documents name it. Rows left from storage fdrive no longer has stay until the schema
   is collapsed; nothing reads them.
-- Per request the storage factory finds the identity, runs `admit`, builds `storage`, hides the
-  backup namespace (`withoutBackupPaths`) and adds the Trash wrappers when Trash is on.
+- A signed-in request's storage is built on first use from the username its session or token
+  query read, already admitted ([authentication](AUTH.md#resolving-a-request)); outside a
+  request the storage factory finds the identity and runs `admit` first. Either way it hides
+  the backup namespace (`withoutBackupPaths`) and adds the Trash wrappers when Trash is on.
 - The storage's name is the installation setting `storage.name` ("Local folder" until an
   administrator renames it), trimmed, 1 to 120 characters. It shows under each username in the
   sidebar and as the Mac location's `displayName`. `GET /api/v1/system/storage` returns the

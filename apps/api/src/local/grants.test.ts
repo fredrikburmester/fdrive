@@ -97,7 +97,7 @@ describe("createLocalGrantService: sharing a folder", () => {
       "Projects (alice)",
       "Projects (carol)",
     ]);
-    expect(await h.service.received(h.bob)).toEqual([
+    expect(await h.service.received("bob")).toEqual([
       { name: "Projects (alice)", owner: "alice", path: "/Projects", writable: false },
       { name: "Projects (carol)", owner: "carol", path: "/Projects", writable: false },
     ]);
@@ -107,15 +107,15 @@ describe("createLocalGrantService: sharing a folder", () => {
     const h = await fixture();
     await h.service.create(h.alice.id, { path: "/Projects", username: "bob", access: "read" });
     await h.service.create(h.carol.id, { path: "/Projects", username: "bob", access: "write" });
-    expect(await h.service.isReadOnly(h.bob, "/Shared with me/Projects (alice)/a.docx")).toBe(true);
-    expect(await h.service.isReadOnly(h.bob, "/Shared with me/Projects (alice)")).toBe(true);
-    expect(await h.service.isReadOnly(h.bob, "/Shared with me/Projects (carol)/a.docx")).toBe(
+    expect(await h.service.isReadOnly("bob", "/Shared with me/Projects (alice)/a.docx")).toBe(true);
+    expect(await h.service.isReadOnly("bob", "/Shared with me/Projects (alice)")).toBe(true);
+    expect(await h.service.isReadOnly("bob", "/Shared with me/Projects (carol)/a.docx")).toBe(
       false,
     );
-    expect(await h.service.isReadOnly(h.bob, "/Shared with me/Projects (alice)x/a.docx")).toBe(
+    expect(await h.service.isReadOnly("bob", "/Shared with me/Projects (alice)x/a.docx")).toBe(
       false,
     );
-    expect(await h.service.isReadOnly(h.bob, "/Projects/a.docx")).toBe(false);
+    expect(await h.service.isReadOnly("bob", "/Projects/a.docx")).toBe(false);
   });
 
   it.each([
@@ -282,21 +282,21 @@ describe("createLocalGrantService: changing and ending shares", () => {
     await h.service.onMoved(h.alice.id, "/Projects", leaf, true);
     await h.service.onMoved(h.alice.id, "/Photos/2026", "/.trash/loose", true);
 
-    expect(await h.service.received(h.bob)).toEqual([
+    expect(await h.service.received("bob")).toEqual([
       { name: "Projects", owner: "carol", path: "/Projects", writable: false },
     ]);
     expect(closedFolders).toHaveBeenCalled();
     expect((await h.service.list(h.bob.id)).received.map((grant) => grant.name)).toEqual([
       "Projects",
     ]);
-    expect(await h.service.isReadOnly(h.bob, "/Shared with me/1/plan.txt")).toBe(false);
+    expect(await h.service.isReadOnly("bob", "/Shared with me/1/plan.txt")).toBe(false);
     // Bob's storage agrees: the leaf in fdrive's Trash layout is refused there too.
     const bobs = await h.storageFor(h.bob.id);
     expect((await bobs.list("/Shared with me")).map((entry) => entry.name)).not.toContain("1");
 
     // Trash turned off: what is still in fdrive's Trash layout stays closed; the rest opens.
     closedFolders.mockResolvedValue([]);
-    expect((await h.service.received(h.bob)).map((folder) => folder.name)).toEqual([
+    expect((await h.service.received("bob")).map((folder) => folder.name)).toEqual([
       "loose",
       "Projects",
     ]);

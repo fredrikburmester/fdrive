@@ -63,7 +63,7 @@ export function registerAuthRoutes(
 
   groups.authed.get(withoutApiV1Prefix(ROUTES.auth.me), async (c) => {
     const principal = c.get("principal");
-    const response = await deps.service.me(principal.accountId, principal.identityId);
+    const response = await deps.service.me(principal.identityId);
     return c.json(response);
   });
 }

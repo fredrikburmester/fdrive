@@ -1,6 +1,6 @@
-import { eq, sql } from "drizzle-orm";
+import { and, eq, gt, sql } from "drizzle-orm";
 import type { Db } from "../index.js";
-import { accounts, identities, localUsers, sessions, settings } from "../schema/app.js";
+import { accounts, apiTokens, identities, localUsers, sessions, settings } from "../schema/app.js";
 import {
   LoginError,
   type LoginRepo,
@@ -99,6 +99,22 @@ async function userWithLogin(
   return { user, login: row.login, isAdmin: row.isAdmin };
 }
 
+/**
+ * A login's columns, for a query that joins `identities` and `accounts` and
+ * left joins the login's `local_users` row: a removed user has none.
+ */
+const loginColumns = {
+  identityId: identities.id,
+  accountId: identities.accountId,
+  providerId: identities.providerId,
+  username: identities.externalUsername,
+  displayName: accounts.displayName,
+  isAdmin: accounts.isAdmin,
+  active: sql<boolean>`coalesce(not ${localUsers.disabled}, false)`,
+};
+const toAccount = eq(accounts.id, identities.accountId);
+const toUser = eq(localUsers.username, identities.externalUsername);
+
 /** A name taken in any case, by a user or by a login a removed user left, is a conflict. */
 async function creating<T>(run: () => Promise<T>): Promise<T> {
   try {
@@ -111,6 +127,38 @@ async function creating<T>(run: () => Promise<T>): Promise<T> {
 
 export function createLoginRepo(db: Db): LoginRepo {
   return {
+    async get(identityId) {
+      const [row] = await db
+        .select(loginColumns)
+        .from(identities)
+        .innerJoin(accounts, toAccount)
+        .leftJoin(localUsers, toUser)
+        .where(eq(identities.id, identityId));
+      return row ?? null;
+    },
+
+    async bySession(idHash, now) {
+      const [row] = await db
+        .select({ session: sessions, login: loginColumns })
+        .from(sessions)
+        .innerJoin(identities, eq(identities.id, sessions.identityId))
+        .innerJoin(accounts, toAccount)
+        .leftJoin(localUsers, toUser)
+        .where(and(eq(sessions.idHash, idHash), gt(sessions.expiresAt, now)));
+      return row ?? null;
+    },
+
+    async byToken(tokenHash) {
+      const [row] = await db
+        .select({ token: apiTokens, login: loginColumns })
+        .from(apiTokens)
+        .innerJoin(identities, eq(identities.id, apiTokens.identityId))
+        .innerJoin(accounts, toAccount)
+        .leftJoin(localUsers, toUser)
+        .where(eq(apiTokens.tokenHash, tokenHash));
+      return row ?? null;
+    },
+
     async createUser(input) {
       validateNewLocalUser(input);
       return creating(() =>

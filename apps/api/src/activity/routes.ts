@@ -7,6 +7,7 @@ import {
   type PersonalActivityResponse,
   ROUTES,
 } from "@fdrive/contracts";
+import { isStorageError } from "@fdrive/core";
 import type {
   ActivityEventRecord,
   ActivityListOptions,
@@ -19,7 +20,6 @@ import { accountContext } from "../auth/account-context.ts";
 import { ApiHttpError } from "../errors.js";
 import type { FsContext } from "../fs/routes.js";
 import { normalizeOrThrow, parseBody } from "../fs/routes.js";
-import { createReadAuthorizer } from "../scoping/read-authorizer.js";
 import type { ActivityAdmission } from "./admission.js";
 import { createActivityCursors } from "./cursor.js";
 
@@ -329,14 +329,11 @@ export function registerPersonalActivityRoutes(
       availability = file.state;
       if (file.state === "live") {
         try {
-          const read = await createReadAuthorizer({ storage: principal.storage }).authorize({
-            path: file.path,
-            kind: file.kind,
-          });
-          if (read.allowed) currentPath = file.path;
-          else availability = read.reason === "missing" ? "unknown" : "unavailable";
-        } catch {
-          availability = "unavailable";
+          await principal.storage.stat(file.path);
+          currentPath = file.path;
+        } catch (error) {
+          availability =
+            isStorageError(error) && error.kind === "not_found" ? "unknown" : "unavailable";
         }
       }
     }

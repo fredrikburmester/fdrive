@@ -51,8 +51,10 @@ made a moment ago in fdrive is found at once, as is one made over SMB once the w
 it. Your own home folder, and the folder a "This folder only" search starts in, are never
 listed, and a type filter hides the section, since folders have no type.
 
-Index-backed results cover the files folder, including folders other users share with you,
-and require live read permission. fdrive's own folders (`isReservedPath` in `@fdrive/core`: the
+Index-backed results cover the files folder, including folders other users share with you.
+The login's [scopes](SCOPING.md), computed for each request, are the permission, so a share
+that ends drops out of the next search; no result reads storage. A file deleted outside fdrive
+can show until the indexer notices, and opening it answers not found. fdrive's own folders (`isReservedPath` in `@fdrive/core`: the
 login's Trash folder, fdrive's Trash layout `.fdrive-move-v1` wherever it lies, the Mac app's
 `/.fdrive-desktop` and `.fdrive-backups`) are left out by every search, image search, MCP and
 AI index query, mapped through the login's index scopes, before the query's row limit, so they

@@ -10,6 +10,7 @@ import { onTestFinished, vi } from "vitest";
 import { activityFixture } from "../../../test/activity-fixture.js";
 import { createApp } from "../../app.ts";
 import { createAuthModule, createLoginLimiter, createPasswordCheck } from "../../auth/index.ts";
+import { createPrincipalFactory } from "../../auth/principal.ts";
 import { createIdentityStorageFactory, type StorageSource } from "../../auth/storage-factory.ts";
 import { type AppConfig, loadConfig } from "../../config.ts";
 import type { LocalUserStore } from "../../local/users.ts";
@@ -141,7 +142,7 @@ export function sharesHarness(options: SharesHarnessOptions = {}) {
     clock,
     config,
     checkPassword: createPasswordCheck({ limiter: createLoginLimiter({ clock }), users }),
-    storageFactory,
+    principalFor: createPrincipalFactory({ folder, clock }),
     installation: async () => ({ storageName: "Local folder", trash: false, index: false }),
   });
   const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() } as unknown as Logger;

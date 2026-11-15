@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import {
+  type Login,
   LoginError,
   type LoginRepo,
   type NewLocalUser,
@@ -1204,7 +1205,26 @@ function createMemoryLoginRepo(repos: {
   readonly identities: ReturnType<typeof createMemoryIdentityRepo>;
   readonly sessions: SessionRepo;
   readonly settings: SettingsRepo;
+  readonly apiTokens: ApiTokenRepo;
 }): LoginRepo {
+  /** `identityId`'s login, as the joined query reads it. */
+  async function login(identityId: string): Promise<Login | null> {
+    const identity = await repos.identities.get(identityId);
+    if (identity === null) return null;
+    const account = await repos.accounts.get(identity.accountId);
+    if (account === null) return null;
+    const user = await repos.localUsers.get(identity.externalUsername);
+    return {
+      identityId: identity.id,
+      accountId: identity.accountId,
+      providerId: identity.providerId,
+      username: identity.externalUsername,
+      displayName: account.displayName,
+      isAdmin: account.isAdmin,
+      active: user !== null && user.username === identity.externalUsername && !user.disabled,
+    };
+  }
+
   let tail: Promise<unknown> = Promise.resolve();
   function atomic<T>(run: () => Promise<T>): Promise<T> {
     const next = tail.then(run, run);
@@ -1274,6 +1294,17 @@ function createMemoryLoginRepo(repos: {
   }
 
   return {
+    get: login,
+    async bySession(idHash, now) {
+      const session = await repos.sessions.getByIdHash(idHash, now);
+      const found = session === null ? null : await login(session.identityId);
+      return session === null || found === null ? null : { session, login: found };
+    },
+    async byToken(tokenHash) {
+      const token = await repos.apiTokens.findByHash(tokenHash);
+      const found = token === null ? null : await login(token.identityId);
+      return token === null || found === null ? null : { token, login: found };
+    },
     async createUser(input) {
       validateNewLocalUser(input);
       return atomic(async () => insertUser(input, await leftLogin(input.username)));
@@ -1352,6 +1383,7 @@ export function createMemoryRepos(opts: CreateMemoryReposOptions = {}): Repos {
   const accounts = createMemoryAccountRepo(ids);
   const sessions = createMemorySessionRepo();
   const settings = createMemorySettingsRepo();
+  const apiTokens = createMemoryApiTokenRepo(ids);
 
   return {
     providers: createMemoryProviderRepo(ids, (providerId) =>
@@ -1361,10 +1393,17 @@ export function createMemoryRepos(opts: CreateMemoryReposOptions = {}): Repos {
     localGrants: createMemoryLocalGrantRepo(ids, localUsers),
     accounts,
     identities,
-    logins: createMemoryLoginRepo({ localUsers, accounts, identities, sessions, settings }),
+    logins: createMemoryLoginRepo({
+      localUsers,
+      accounts,
+      identities,
+      sessions,
+      settings,
+      apiTokens,
+    }),
     sessions,
     settings,
-    apiTokens: createMemoryApiTokenRepo(ids),
+    apiTokens,
     tags: createMemoryTagRepo(ids, (tagId) => fileTags.removeTag(tagId)),
     fileTags,
     favorites,

@@ -12,10 +12,16 @@ export interface TrashSettingsService {
   update(providerId: string, input: TrashSettingsUpdateRequest): Promise<TrashSettings>;
 }
 
+/**
+ * Trash settings per storage row. Every request reads them, so the value is
+ * kept in memory once read and replaced when this service saves a new one:
+ * fdrive runs one API process, and nothing else writes them.
+ */
 export function createTrashSettingsService(deps: {
   settings: Pick<SettingsRepo, "get" | "compareAndSet">;
   identities: Pick<IdentityRepo, "get">;
 }): TrashSettingsService {
+  const cached = new Map<string, TrashSettings>();
   function defaults(providerId: string): TrashSettings {
     return {
       providerId,
@@ -49,14 +55,20 @@ export function createTrashSettingsService(deps: {
     return identity.providerId;
   }
 
+  async function configuration(providerId: string): Promise<TrashSettings> {
+    const known = cached.get(providerId);
+    if (known !== undefined) return known;
+    const { value } = await read(providerId);
+    cached.set(providerId, value);
+    return value;
+  }
+
   async function forIdentity(identityId: string): Promise<TrashSettings> {
-    return (await read(await providerIdForIdentity(identityId))).value;
+    return configuration(await providerIdForIdentity(identityId));
   }
 
   return {
-    async configuration(providerId) {
-      return (await read(providerId)).value;
-    },
+    configuration,
     forIdentity,
     async pathForIdentity(identityId) {
       const value = await forIdentity(identityId);
@@ -69,6 +81,7 @@ export function createTrashSettingsService(deps: {
           "These Trash settings belong to another storage server. Reload and try again.",
         );
       const current = await read(providerId);
+      cached.set(providerId, current.value);
       if (input.revision !== current.value.revision)
         throw new ApiHttpError(
           "conflict",
@@ -81,11 +94,14 @@ export function createTrashSettingsService(deps: {
         });
       if (
         !(await deps.settings.compareAndSet(trashSettingsKey(providerId), current.raw, next.data))
-      )
+      ) {
+        cached.delete(providerId);
         throw new ApiHttpError(
           "conflict",
           "Trash settings changed in another session. Reload and try again.",
         );
+      }
+      cached.set(providerId, next.data);
       return next.data;
     },
   };

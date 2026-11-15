@@ -111,15 +111,29 @@ Sliding never extends a session past `FDRIVE_SESSION_MAX_AGE_DAYS` (default
 whose `createdAt` is older than that and treats the request as anonymous, so
 a stolen session id cannot be kept valid indefinitely by periodic use.
 
-## Storage sessions
+## Resolving a request
 
 fdrive asks for a password only at sign-in, setup, password change and
-unlocking backups. Storage for a request is built by the identity storage
-factory (`apps/api/src/auth/storage-factory.ts`) from the login's username
-alone. Before storage is built, the files folder's `admit` refuses a disabled
-or removed user, so disabling someone stops them at once rather than at their
-next sign-in: every request of theirs gets `forbidden`, since signing in again
-would not help. A login that no longer exists gets `unauthorized`.
+unlocking backups. A signed-in request is resolved in one query
+(`logins.bySession`, and `logins.byToken` for API and Mac tokens): the live
+session or token, its login and account, and whether the login's
+`local_users` row still exists and is enabled. A disabled or removed user is
+refused at once rather than at their next sign-in: every request of theirs
+gets `forbidden`, since signing in again would not help. A session or token
+whose login no longer exists is no session at all (`unauthorized`).
+
+The principal carries the login's id, account, username and administrator
+flag, so no route looks the login up again. Its storage is built from the
+username on first use (`createPrincipalFactory`), so a request that touches no
+files builds none. Storage outside a signed-in request (a share link's
+owner, the indexer's events, Office) comes from the identity storage factory
+(`apps/api/src/auth/storage-factory.ts`), which asks the files folder's
+`admit` first.
+
+What every request would otherwise read again is kept in the API process
+and replaced when the API itself saves a new value: that setup is done (it
+never reopens), the Trash settings, the storage name and the index root ids.
+fdrive runs one API process, and nothing else writes these.
 
 ## The `reauth_required` flow
 

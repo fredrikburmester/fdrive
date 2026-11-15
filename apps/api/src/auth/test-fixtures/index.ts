@@ -18,7 +18,7 @@ import {
   createPasswordCheck,
   type Installation,
 } from "../index.js";
-import type { PrincipalResolver } from "../principal.js";
+import { createPrincipalFactory, type PrincipalResolver } from "../principal.js";
 import { createIdentityStorageFactory } from "../storage-factory.ts";
 
 /** The users every harness has, each signing in with `<username>-pass`. */
@@ -85,7 +85,7 @@ export function authHarness(
     clock,
     config,
     checkPassword,
-    storageFactory,
+    principalFor: createPrincipalFactory({ folder, clock }),
     installation:
       options.installation ??
       (async () => ({ storageName: "Local folder", trash: false, index: false })),

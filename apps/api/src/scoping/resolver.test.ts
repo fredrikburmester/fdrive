@@ -40,7 +40,7 @@ describe("configuredMappings", () => {
     }
   });
 
-  it("appends extra scopes after the home, given the identity and its home", async () => {
+  it("appends extra scopes after the home, given the username and its home", async () => {
     const shared: Scope = {
       rootName: "files",
       fsPrefix: "/bob/Photos",
@@ -53,7 +53,7 @@ describe("configuredMappings", () => {
       providerId: "provider-1",
       scopes: [HOME, shared],
     });
-    expect(extraScopes).toHaveBeenCalledWith(alice, HOME);
+    expect(extraScopes).toHaveBeenCalledWith("alice", HOME);
   });
 
   it("asks for no extra scopes when the login has no home", async () => {
@@ -65,14 +65,15 @@ describe("configuredMappings", () => {
 
 describe("verifiedIndexScopes", () => {
   it("returns the configured scopes when their root is indexed", async () => {
-    expect(
-      await resolver(new Set(["files", "other"])).verifiedIndexScopes(buildIdentity()),
-    ).toEqual({ available: true, scopes: [HOME] });
+    expect(await resolver(new Set(["files", "other"])).verifiedIndexScopes("alice")).toEqual({
+      available: true,
+      scopes: [HOME],
+    });
   });
 
   it("reports no_roots when the login's root is not indexed, though Office keeps its mapping", async () => {
     const elsewhere = resolver(["other"]);
-    expect(await elsewhere.verifiedIndexScopes(buildIdentity())).toEqual({
+    expect(await elsewhere.verifiedIndexScopes("alice")).toEqual({
       available: false,
       reason: "no_roots",
     });
@@ -80,9 +81,10 @@ describe("verifiedIndexScopes", () => {
   });
 
   it("passes on why the configured mapping is unavailable", async () => {
-    expect(
-      await resolver(["files"]).verifiedIndexScopes(buildIdentity({ externalUsername: ".." })),
-    ).toEqual({ available: false, reason: "invalid_configuration" });
+    expect(await resolver(["files"]).verifiedIndexScopes("..")).toEqual({
+      available: false,
+      reason: "invalid_configuration",
+    });
   });
 
   it("keeps only the extra scopes on an indexed root", async () => {
@@ -93,11 +95,11 @@ describe("verifiedIndexScopes", () => {
     };
     const elsewhere: Scope = { rootName: "nas", fsPrefix: "/team", virtualPrefix: "/Team" };
     const extra = async () => [indexedShare, elsewhere];
-    expect(await resolver(["files"], extra).verifiedIndexScopes(buildIdentity())).toEqual({
+    expect(await resolver(["files"], extra).verifiedIndexScopes("alice")).toEqual({
       available: true,
       scopes: [HOME, indexedShare],
     });
-    expect(await resolver(["nas"], extra).verifiedIndexScopes(buildIdentity())).toEqual({
+    expect(await resolver(["nas"], extra).verifiedIndexScopes("alice")).toEqual({
       available: true,
       scopes: [elsewhere],
     });

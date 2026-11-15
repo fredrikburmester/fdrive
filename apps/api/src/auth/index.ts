@@ -2,10 +2,9 @@ import type { Repos } from "@fdrive/db";
 import type { AppHono, AuthedHono } from "../app.js";
 import type { AppConfig } from "../config.js";
 import type { CheckPassword } from "./password.ts";
-import type { PrincipalResolver } from "./principal.js";
+import type { PrincipalFactory, PrincipalResolver } from "./principal.js";
 import { registerAuthRoutes } from "./routes.js";
 import { createAuthService, type Installation } from "./service.js";
-import type { IdentityStorageFactory } from "./storage-factory.ts";
 
 export { CryptoError, open, parseMasterKey, seal } from "./crypto.js";
 export type { LoginLimiter } from "./login-limiter.js";
@@ -13,7 +12,7 @@ export { createLoginLimiter } from "./login-limiter.js";
 export type { CheckPassword, PasswordCheckInput } from "./password.ts";
 export { createLoginReauthentication, createPasswordCheck, loginIpKey } from "./password.ts";
 export type { AuthService, Installation, LoginInput, LoginResult } from "./service.js";
-export { createAuthService } from "./service.js";
+export { createAuthService, inactiveLogin } from "./service.js";
 export {
   buildCookie,
   COOKIE_NAME,
@@ -27,7 +26,7 @@ export interface CreateAuthModuleDeps {
   readonly repos: Repos;
   readonly clock: () => Date;
   readonly config: AppConfig;
-  readonly storageFactory: IdentityStorageFactory;
+  readonly principalFor: PrincipalFactory;
   /** The one password check, behind the login limiter (`createPasswordCheck`). */
   readonly checkPassword: CheckPassword;
   readonly installation: () => Promise<Installation>;
@@ -50,7 +49,7 @@ export function createAuthModule(deps: CreateAuthModuleDeps): AuthModule {
     clock: deps.clock,
     config: deps.config,
     checkPassword: deps.checkPassword,
-    storageFactory: deps.storageFactory,
+    principalFor: deps.principalFor,
     installation: deps.installation,
   });
 

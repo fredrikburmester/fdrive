@@ -149,7 +149,6 @@ async function buildHarness(withActivity = false) {
           resolver: {
             verifiedIndexScopes: async () => ({ available: false, reason: "no_roots" }),
           },
-          identities: { get: async () => null },
         },
       });
       registerMetadataRoutes(groups, {

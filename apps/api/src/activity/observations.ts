@@ -2,13 +2,14 @@ import { isStorageError } from "@fdrive/core";
 import type { ActivityObservationsRepo, IdentityRepo } from "@fdrive/db";
 import type { IdentityStorageFactory } from "../auth/storage-factory.ts";
 import type { IndexerEventPayload } from "../events/indexer-listener.js";
-import { createReadAuthorizer } from "../scoping/read-authorizer.ts";
 import type { ScopeResolver } from "../scoping/resolver.ts";
 import { roundTripVirtualPath } from "../scoping/round-trip.ts";
 
 /**
  * Turns the indexer's change notifications into Unknown observations of files
  * the owner already tracks. Nothing else observes changes made outside fdrive.
+ * A path counts when it maps through the login's scopes; storage is read only
+ * for what the observation records (a file's kind, size and time).
  */
 export function createActivityObservations(deps: {
   repo: ActivityObservationsRepo;
@@ -47,12 +48,6 @@ export function createActivityObservations(deps: {
     async relink(identityId: string, path: string, candidate: string) {
       const identity = await deps.identities.get(identityId);
       if (!identity) return;
-      const storage = await deps.storageFactory(identityId);
-      if (
-        !(await createReadAuthorizer({ storage }).authorize({ path: candidate, kind: "file" }))
-          .allowed
-      )
-        return;
       await deps.repo.observe({
         accountId: identity.accountId,
         identityId,
@@ -77,9 +72,6 @@ export function createActivityObservations(deps: {
         : null;
       if (event.kind === "moved" && target) {
         const stat = await storage.stat(target);
-        const kind = stat.kind === "dir" ? "dir" : "file";
-        if (!(await createReadAuthorizer({ storage }).authorize({ path: target, kind })).allowed)
-          return;
         let cursor: string | undefined;
         do {
           const tracked = await deps.repo.tracked(actor.accountId, identityId, path, cursor);
@@ -88,15 +80,6 @@ export function createActivityObservations(deps: {
             const destination = target + file.path.slice(path.length);
             const next = destination === target ? stat : await storage.stat(destination);
             const nextKind = next.kind === "dir" ? "dir" : "file";
-            if (
-              !(
-                await createReadAuthorizer({ storage }).authorize({
-                  path: destination,
-                  kind: nextKind,
-                })
-              ).allowed
-            )
-              continue;
             await deps.repo.observe({
               ...actor,
               path: file.path,
@@ -131,7 +114,6 @@ export function createActivityObservations(deps: {
       } else {
         const stat = await storage.stat(path);
         const kind = stat.kind === "dir" ? "dir" : "file";
-        if (!(await createReadAuthorizer({ storage }).authorize({ path, kind })).allowed) return;
         await deps.repo.observe({
           ...actor,
           path,

@@ -8,6 +8,7 @@ import {
   ManagedShare,
   publicShareRoute,
   ROUTES,
+  TrashSettings,
 } from "@fdrive/contracts";
 import { createDb, createRepos, schema } from "@fdrive/db";
 import { startLocalStorage, startPostgres } from "@fdrive/testkit";
@@ -16,7 +17,6 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { composeApp } from "../../src/composition.js";
 import { loadConfig } from "../../src/config.js";
 import { generateApiToken, hashApiToken } from "../../src/tokens/token-format.js";
-import { trashSettingsKey } from "../../src/trash/settings.js";
 import { seedLocalUsers, silentLogger } from "./helpers/local-storage.ts";
 
 const cookieFrom = (response: Response) => response.headers.get("set-cookie")?.split(";")[0] ?? "";
@@ -69,7 +69,7 @@ describe("public links follow the files they point at", () => {
         },
       }),
     ]);
-    await seedLocalUsers(postgres.connectionString, storage);
+    await seedLocalUsers(postgres.connectionString, storage, ["alice"]);
     composed = await composeApp(
       loadConfig({
         DATABASE_URL: postgres.connectionString,
@@ -83,9 +83,9 @@ describe("public links follow the files they point at", () => {
       silentLogger(),
     );
     database = createDb(postgres.connectionString);
-    await setTrash(true, "/.trash");
     alice = await login("alice");
     bob = await login("bob");
+    await setTrash(true, "/.trash");
   }, 180_000);
 
   afterAll(async () => {
@@ -95,17 +95,23 @@ describe("public links follow the files they point at", () => {
     await postgres?.stop();
   }, 180_000);
 
-  /** Sets the files folder's Trash, as System > General would. */
+  /**
+   * Sets the files folder's Trash through System > General, as alice, an
+   * administrator: the API keeps the settings it saves in memory.
+   */
   async function setTrash(enabled: boolean, path: string): Promise<void> {
     const repos = createRepos(database.db);
     const provider = await repos.providers.ensure({ type: "local", baseUrl: "local" });
-    await repos.settings.set(trashSettingsKey(provider.id), {
-      providerId: provider.id,
-      revision: 1,
-      enabled,
-      path,
-      retentionHours: null,
-    });
+    const current = TrashSettings.parse(
+      await ok(call(`${ROUTES.system.trash}?providerId=${provider.id}`, { cookie: alice })),
+    );
+    await ok(
+      call(ROUTES.system.trash, {
+        method: "PUT",
+        cookie: alice,
+        body: { ...current, enabled, path, retentionHours: null },
+      }),
+    );
   }
 
   async function call(

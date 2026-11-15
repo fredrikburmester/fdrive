@@ -33,10 +33,10 @@ export interface LocalGrantService {
   update(identityId: string, id: string, request: UpdateGrantRequest): Promise<OwnedGrant>;
   /** The owner stops sharing, or the person it is shared with leaves. */
   remove(identityId: string, id: string): Promise<void>;
-  /** What is shared with a login, for search and thumbnails. */
-  received(identity: Pick<Identity, "externalUsername">): Promise<ReceivedFolder[]>;
+  /** What is shared with the login named `username`, for its index scopes. */
+  received(username: string): Promise<ReceivedFolder[]>;
   /** True when `path` (the login's own path) is inside a folder shared with it to view only. */
-  isReadOnly(identity: Pick<Identity, "externalUsername">, path: string): Promise<boolean>;
+  isReadOnly(username: string, path: string): Promise<boolean>;
   /**
    * Where `path` (the login's own path) lies in its owner's files: a path in
    * a folder shared with the login is the owner's login and the owner's
@@ -242,11 +242,11 @@ export function createLocalGrantService(deps: LocalGrantServiceDeps): LocalGrant
       await repos.localGrants.delete(grant.id);
     },
 
-    received: (identity) => received(identity.externalUsername),
+    received,
 
-    async isReadOnly(identity, path) {
+    async isReadOnly(username, path) {
       const target = normalizePath(path);
-      const folders = await received(identity.externalUsername);
+      const folders = await received(username);
       return folders.some(
         (folder) => !folder.writable && under(target, `${SHELF_PATH}/${folder.name}`),
       );

@@ -45,6 +45,7 @@ import {
   parseMasterKey,
   seal,
 } from "./auth/index.js";
+import { createPrincipalFactory } from "./auth/principal.ts";
 import { createIdentityStorageFactory, trashSettingsForStorage } from "./auth/storage-factory.ts";
 import { createBackupModule } from "./backups/module.js";
 import { createRecoveryApp } from "./backups/recovery.js";
@@ -104,6 +105,7 @@ import { createImageEmbedClient } from "./search/image-embed-client.js";
 import { createImageSearchService } from "./search/image-service.js";
 import { createNameIndexClient } from "./search/name-index.js";
 import { registerSearchRoutes } from "./search/routes.js";
+import { withCachedRootIds } from "./search/scopes.ts";
 import { createSearchService } from "./search/service.js";
 import { registerSetupRoutes } from "./setup/routes.js";
 import { createSetupService } from "./setup/service.js";
@@ -288,12 +290,17 @@ export async function composeApp(
   // saved, Office cannot be enabled and MCP links are paths on this origin.
   const publicUrl = createPublicUrlService({ settings: repos.settings });
 
+  /** The installation's Trash settings, kept in memory by their service. */
+  const currentTrash = () => trashSettings.configuration(storageId);
   const storageFactory = createIdentityStorageFactory({
     identities: repos.identities,
     folder,
     clock,
-    resolveTrashSettings: (identityId) => trashSettings.forIdentity(identityId),
+    resolveTrashSettings: currentTrash,
   });
+  // A signed-in request's principal: its session or token query already
+  // read the login and admitted its user, so its storage needs no query.
+  const principalFor = createPrincipalFactory({ folder, clock, trashSettings: currentTrash });
   // Without Trash settings: deletes are real. For fdrive's own bookkeeping
   // (the Mac's staged files) and Office, which only saves over documents.
   const storageWithoutTrash = createIdentityStorageFactory({
@@ -305,7 +312,6 @@ export async function composeApp(
   const admitActivity = createActivityAdmission({
     reads: activityReads,
     repo: activityRepo,
-    storageFactory,
     secret: config.fdriveMasterKey,
     clock,
     shares: shareRepo,
@@ -315,7 +321,7 @@ export async function composeApp(
     clock,
     config,
     checkPassword,
-    storageFactory,
+    principalFor,
     installation,
   });
 
@@ -343,8 +349,8 @@ export async function composeApp(
     indexRootNames,
     // Folders others share with a local login are indexed where their owner
     // keeps them; the login sees them under `Shared with me`.
-    extraScopes: async (identity, home) =>
-      (await localGrants.received(identity)).map((folder) => ({
+    extraScopes: async (username, home) =>
+      (await localGrants.received(username)).map((folder) => ({
         rootName: home.rootName,
         fsPrefix: `/${folder.owner}${folder.path === "/" ? "" : folder.path}`,
         virtualPrefix: `/${SHARED_WITH_ME}/${folder.name}`,
@@ -355,7 +361,7 @@ export async function composeApp(
   // (`FDRIVE_INDEX_ROOTS`); the search route itself degrades to
   // `{ unavailable: true }` rather than erroring when the caller's
   // verified index scopes are unavailable for any reason.
-  const indexQueries = createIndexQueries(db);
+  const indexQueries = withCachedRootIds(createIndexQueries(db), indexRootNames);
   const embedClient =
     config.fdriveEmbedUrl === undefined
       ? null
@@ -533,7 +539,7 @@ export async function composeApp(
       if (deps.officeCanEdit !== undefined && !(await deps.officeCanEdit(actor, path)))
         return false;
       // A folder shared to view only opens for viewing, never for an edit that cannot save.
-      if (await localGrants.isReadOnly(actor.identity, path)) return false;
+      if (await localGrants.isReadOnly(actor.identity.externalUsername, path)) return false;
       const rules = config.fdriveOfficeEditRules ?? [];
       return rules.length === 0 || allowsOfficeEdit(rules, actor.identity, path);
     },
@@ -603,9 +609,9 @@ export async function composeApp(
   const tokenService = createTokenService({ apiTokens: repos.apiTokens, clock });
   const resolveTokenPrincipal = createResolveTokenPrincipal({
     apiTokens: repos.apiTokens,
-    identities: repos.identities,
+    logins: repos.logins,
     clock,
-    storageFactory,
+    principalFor,
   });
   // The MCP `read_file_text` tool talks to the indexer's `POST /extract-content`
   // endpoint, a different shape from the System pages' `IndexerClient`
@@ -634,6 +640,7 @@ export async function composeApp(
     logger.info(`open ${(await publicUrl.current()) ?? ""}/setup to finish setup`);
   }
 
+  let setupDone = false;
   const build = readBuild();
   const startedAt = clock();
 
@@ -731,7 +738,6 @@ export async function composeApp(
     indexQueries,
     searchService,
     scopeResolver,
-    identities: repos.identities,
     publicUrl: () => publicUrl.current(),
     indexerClient: indexerExtractClient,
     metadata: metadataService,
@@ -845,7 +851,12 @@ export async function composeApp(
     startedAt,
     subsystemReachability,
     principalResolver: auth.principalResolver,
-    setupRequired: async () => (await setupService.status()).required,
+    // Setup never reopens once it is done, so that answer is kept.
+    setupRequired: async () => {
+      if (setupDone) return false;
+      setupDone = !(await setupService.status()).required;
+      return !setupDone;
+    },
     registerRoutes: (groups) => {
       registerBackupRoutes(
         groups,
@@ -861,7 +872,6 @@ export async function composeApp(
       auth.registerRoutes(groups);
       // Version checks answer from the index where its row provably describes the file.
       const desktopIndexedContent = createIndexedContentLookup({
-        identities: repos.identities,
         resolver: scopeResolver,
         index: indexQueries,
       });
@@ -873,10 +883,7 @@ export async function composeApp(
         changes: createDesktopChanges({
           journal: createChangeJournal(db),
           rootIds: () => indexQueries.rootIdsByName(),
-          scopes: async (identityId) => {
-            const identity = await repos.identities.get(identityId);
-            return identity ? scopeResolver.verifiedIndexScopes(identity) : null;
-          },
+          scopes: scopeResolver.verifiedIndexScopes,
           journaledRoots: new Set(journaled === null ? [] : [journaled]),
           trashPathForStorage: (storage) => {
             const settings = trashSettingsForStorage(storage);
@@ -898,9 +905,9 @@ export async function composeApp(
           },
         }),
         apiTokens: repos.apiTokens,
-        identities: repos.identities,
+        logins: repos.logins,
         storage: { id: storageId, name: () => storage.name() },
-        storageFactory,
+        principalFor,
         clock,
         indexedContent: desktopIndexedContent,
         clientIp: (c) => extractClientIp(c, config.fdriveTrustedProxyHops),
@@ -963,7 +970,6 @@ export async function composeApp(
         folderSize: {
           indexQueries,
           resolver: scopeResolver,
-          identities: repos.identities,
           trashPathForStorage: (storage: StorageProvider) => {
             const settings = trashSettingsForStorage(storage);
             return settings?.enabled === true ? settings.path : null;
@@ -1014,7 +1020,6 @@ export async function composeApp(
         searchService,
         imageSearchService,
         resolver: scopeResolver,
-        identities: repos.identities,
         semanticEnabled: embedClient !== null,
         imageSearchEnabled: imageEmbedClient !== null,
         trashPathForStorage: (storage) => {
@@ -1028,8 +1033,11 @@ export async function composeApp(
           (await featureService.enabled("imageSearch")),
         indexQueries,
         resolver: scopeResolver,
-        identities: repos.identities,
         thumbsDir: config.fdriveThumbsDir,
+        trashPathForStorage: (storage) => {
+          const settings = trashSettingsForStorage(storage);
+          return settings?.enabled === true ? settings.path : null;
+        },
       });
       registerActivityRoutes(groups, {
         indexerUrl: config.fdriveIndexerUrl,

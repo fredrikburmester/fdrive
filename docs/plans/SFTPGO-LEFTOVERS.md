@@ -16,8 +16,6 @@ migrations, compatibility shims or configuration aliases; a full reindex is acce
 ## Order
 
 - Groups that add a migration run one at a time and need `pnpm test:integration`.
-- 14 and 15 run in order: they share `apps/api/src/auth/service.ts`, `composition.ts` and the
-  contracts.
 - 16 before 17, 18, 26 and 31. 36 and 37 last.
 
 ## Decisions
@@ -43,11 +41,6 @@ Recommended on 2026-11-14 and approved by the owner the same day.
 
 ## Wave 1: one user, one storage
 
-14. **Two queries per request.** About 11 queries run before a signed-in handler and `/auth/me`
-    adds a few more (the setup gate asks whether setup is open on every request). About 25 call
-    sites fetch the login again; each scope resolution re-reads grants and Trash. Every index result gets a
-    live storage probe: search probes about 145 candidates before cutting to its limit, and each
-    thumbnail tile costs about 8 queries and is sent `no-store`.
 15. **One files index root.** `FDRIVE_INDEX_ROOTS` and `INDEX_ROOTS` map several roots with
     separate API and indexer paths; the API guesses the root name and journals nothing until the
     indexer creates the root row; three System pages have root pickers; indexer routes take a

@@ -1,11 +1,6 @@
 import type { Scope } from "@fdrive/core";
 import type { ImageSearchHit as DbImageSearchHit, IndexQueries } from "@fdrive/db";
 import { describe, expect, it, vi } from "vitest";
-import type {
-  ReadAuthorizeReason,
-  ReadAuthorizer,
-  ReadAuthorizeTarget,
-} from "../scoping/read-authorizer.ts";
 import type { SidecarResult } from "../system/sidecar-client.js";
 import type { ImageEmbedClient, ImageEmbedHealthInfo } from "./image-embed-client.js";
 import {
@@ -58,28 +53,6 @@ function fakeIndexQueries(
   };
 }
 
-function fakeAuthorizer(
-  opts: {
-    readonly denied?: ReadonlySet<string>;
-    readonly unavailable?: ReadonlySet<string>;
-    readonly calls?: ReadAuthorizeTarget[];
-  } = {},
-): ReadAuthorizer {
-  return {
-    async authorize(target) {
-      opts.calls?.push(target);
-      const key = `${target.kind}:${target.path}`;
-      if (opts.unavailable?.has(key) === true) {
-        return { allowed: false, reason: "unavailable" satisfies ReadAuthorizeReason };
-      }
-      if (opts.denied?.has(key) === true) {
-        return { allowed: false, reason: "denied" satisfies ReadAuthorizeReason };
-      }
-      return { allowed: true };
-    },
-  };
-}
-
 function fakeImageEmbedClient(overrides: Partial<ImageEmbedClient> = {}): ImageEmbedClient {
   return {
     health: overrides.health ?? (async () => fail("health")),
@@ -118,7 +91,6 @@ function buildDeps(overrides: Partial<ImageSearchServiceDeps> = {}): ImageSearch
 function buildInput(overrides: Partial<ImageSearchServiceInput> = {}): ImageSearchServiceInput {
   return {
     scopes: HOME_SCOPES,
-    authorizer: fakeAuthorizer(),
     query: "blue chair",
     limit: 20,
     ...overrides,
@@ -237,7 +209,7 @@ describe("createImageSearchService", () => {
     expect(receivedModel).toBe(HEALTHY.model);
   });
 
-  it("resolves, authorizes, and returns hits round-tripped through the caller's scope", async () => {
+  it("returns hits round-tripped through the caller's scope", async () => {
     const indexQueries = fakeIndexQueries({
       searchImages: async () => [makeRow({ path: "alice/cat.jpg", score: 0.9 })],
     });
@@ -289,30 +261,26 @@ describe("createImageSearchService", () => {
     ]);
   });
 
-  it("excludes a row the authorizer denies, without marking partial", async () => {
-    const indexQueries = fakeIndexQueries({
-      searchImages: async () => [makeRow({ path: "alice/cat.jpg" })],
-    });
+  it("returns a full page: rows out of scope are left out before the limit", async () => {
+    const rows = [
+      makeRow({ path: "bob/first.jpg", score: 0.95 }),
+      ...Array.from({ length: 6 }, (_, n) =>
+        makeRow({ path: `alice/cat${n}.jpg`, score: 0.9 - n * 0.01 }),
+      ),
+    ];
+    const indexQueries = fakeIndexQueries({ searchImages: async () => rows });
     const service = createImageSearchService(buildDeps({ indexQueries }));
-    const authorizer = fakeAuthorizer({ denied: new Set(["file:/cat.jpg"]) });
 
-    const result = await service.search(buildInput({ authorizer }));
+    const result = await service.search(buildInput({ limit: 5 }));
 
-    expect(result.hits).toEqual([]);
+    expect(result.hits.map((hit) => hit.path)).toEqual([
+      "/cat0.jpg",
+      "/cat1.jpg",
+      "/cat2.jpg",
+      "/cat3.jpg",
+      "/cat4.jpg",
+    ]);
     expect(result.partial).toBeUndefined();
-  });
-
-  it("marks partial when the authorizer reports unavailable for a candidate", async () => {
-    const indexQueries = fakeIndexQueries({
-      searchImages: async () => [makeRow({ path: "alice/cat.jpg" })],
-    });
-    const service = createImageSearchService(buildDeps({ indexQueries }));
-    const authorizer = fakeAuthorizer({ unavailable: new Set(["file:/cat.jpg"]) });
-
-    const result = await service.search(buildInput({ authorizer }));
-
-    expect(result.hits).toEqual([]);
-    expect(result.partial).toBe(true);
   });
 
   it("marks partial when the fanout limit was exhausted", async () => {

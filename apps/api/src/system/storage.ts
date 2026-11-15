@@ -28,15 +28,20 @@ export function createStorageService(deps: {
   eventLog?: SystemEventLog;
 }): StorageService {
   const eventLog = deps.eventLog ?? noopSystemEventLog;
+  // Every `/auth/me` reads the name: kept once read, and replaced on rename,
+  // since nothing else writes it.
+  let current: string | undefined;
 
   async function name(): Promise<string> {
+    if (current !== undefined) return current;
     const stored = await deps.settings.get<unknown>(STORAGE_NAME_SETTINGS_KEY);
-    return stored === null ? DEFAULT_STORAGE_NAME : StoredName.parse(stored).name;
+    current = stored === null ? DEFAULT_STORAGE_NAME : StoredName.parse(stored).name;
+    return current;
   }
 
   async function view(): Promise<SystemStorage> {
-    const [current, health] = await Promise.all([name(), deps.folder.health()]);
-    return { id: deps.storageId, name: current, healthy: health.ok, detail: health.detail };
+    const [named, health] = await Promise.all([name(), deps.folder.health()]);
+    return { id: deps.storageId, name: named, healthy: health.ok, detail: health.detail };
   }
 
   return {
@@ -45,6 +50,7 @@ export function createStorageService(deps: {
     async rename(next) {
       const stored = StoredName.parse({ name: next });
       await deps.settings.set(STORAGE_NAME_SETTINGS_KEY, stored);
+      current = stored.name;
       eventLog.record("general", "info", `Storage renamed: ${stored.name}`);
       return view();
     },

@@ -409,6 +409,8 @@ export interface IndexQueries {
   recentFiles(scopePrefixes: readonly ScopePrefix[], limit: number): Promise<IndexedFile[]>;
   /** The cached thumbnail file for `(contentKey, size)`, `null` when not generated yet. */
   thumbnail(contentKey: string, size: number): Promise<{ storagePath: string } | null>;
+  /** Which of `contentKeys` have a thumbnail of `size` generated, in one query. */
+  thumbnailKeys(contentKeys: readonly string[], size: number): Promise<ReadonlySet<string>>;
   /**
    * Live files whose thumbnail embedding (joined `app.image_embeddings` on
    * `files.sha256 = image_embeddings.content_key`) is closest to `vector`
@@ -981,6 +983,17 @@ export function createIndexQueries(db: Db): IndexQueries {
         .from(thumbnails)
         .where(and(eq(thumbnails.contentKey, contentKey), eq(thumbnails.size, size)));
       return row ?? null;
+    },
+
+    async thumbnailKeys(contentKeys, size) {
+      if (contentKeys.length === 0) return new Set();
+      const rows = await db
+        .select({ contentKey: thumbnails.contentKey })
+        .from(thumbnails)
+        .where(
+          and(inArray(thumbnails.contentKey, contentKeys as string[]), eq(thumbnails.size, size)),
+        );
+      return new Set(rows.map((row) => row.contentKey));
     },
 
     async searchImages(scopePrefixes, vector, model, limit, options = {}) {

@@ -10,7 +10,6 @@ import type { AppHono } from "../../src/app.ts";
 import { createLoginLimiter } from "../../src/auth/login-limiter.ts";
 import type { McpToolDeps } from "../../src/mcp/handlers.ts";
 import { registerMcpRoutes } from "../../src/mcp/routes.ts";
-import { buildIdentity } from "../../src/scoping/test-fixtures/index.ts";
 import type { TokenPrincipal } from "../../src/tokens/principal.ts";
 import { generateApiToken } from "../../src/tokens/token-format.ts";
 
@@ -48,7 +47,6 @@ beforeAll(async () => {
     limiter: createLoginLimiter({ clock: () => new Date() }),
     clientIp: () => "127.0.0.1",
     toolDeps: {
-      identities: { get: async () => buildIdentity() },
       scopeResolver: {
         verifiedIndexScopes: async () =>
           indexAvailable

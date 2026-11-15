@@ -5,10 +5,9 @@ import type {
   DesktopWriteCapabilities,
   DesktopWriteCredential,
 } from "@fdrive/contracts";
-import type { ApiTokenRepo, IdentityRepo } from "@fdrive/db";
+import type { ApiTokenRepo, LoginRepo } from "@fdrive/db";
 import { addressBlock } from "../auth/address-block.js";
-import type { Principal } from "../auth/principal.js";
-import type { IdentityStorageFactory } from "../auth/storage-factory.js";
+import type { Principal, PrincipalFactory } from "../auth/principal.js";
 import { ApiHttpError } from "../errors.js";
 import { createResolveTokenPrincipal } from "../tokens/principal.js";
 import { createTokenService } from "../tokens/service.js";
@@ -44,13 +43,14 @@ export interface DesktopDeps {
   /** Whether the change feed covers this location; absent when the server has none. */
   changeFeed?: (principal: Principal) => Promise<boolean>;
   apiTokens: ApiTokenRepo;
-  identities: IdentityRepo;
+  /** Reads a credential's token and login in one query. */
+  logins: Pick<LoginRepo, "byToken">;
   /**
    * The files folder's provider row, which the Mac compares as a location's
    * `providerId`, and the installation's storage name, its `displayName`.
    */
   storage: { readonly id: string; name(): Promise<string> };
-  storageFactory: IdentityStorageFactory;
+  principalFor: PrincipalFactory;
   clock: () => Date;
   trashPathForStorage: (storage: Principal["storage"]) => string | null;
   /**
@@ -105,14 +105,12 @@ export function createDesktopPairing(deps: DesktopDeps) {
     return pair;
   }
   async function location(principal: Principal, protocolVersion: 1 | 2 = 1) {
-    const identity = await deps.identities.get(principal.identityId);
-    if (!identity) throw new ApiHttpError("unauthorized", "Storage login is no longer available");
     const common = {
       accountId: principal.accountId,
-      identityId: identity.id,
+      identityId: principal.identityId,
       providerId: deps.storage.id,
       displayName: await deps.storage.name(),
-      username: identity.externalUsername,
+      username: principal.username,
       paths: principal.tokenAccess?.paths ?? [],
     };
     if (protocolVersion === 1)
@@ -203,7 +201,7 @@ export function createDesktopPairing(deps: DesktopDeps) {
         ...(pair.protocolVersion === 2 ? { supportsWrites: true } : {}),
       };
     },
-    /** Connects the Mac to the approving session's login. */
+    /** Connects the Mac to the approving session's login, which its session already admitted. */
     async approve(
       id: string,
       owner: { readonly accountId: string; readonly identityId: string },
@@ -217,11 +215,6 @@ export function createDesktopPairing(deps: DesktopDeps) {
           "Write access requires a new connection from an updated Mac app",
         );
       }
-      if ((await deps.identities.get(owner.identityId)) === null)
-        throw new ApiHttpError("forbidden", "Your storage is not available right now");
-      // Recheck after the asynchronous read; two browser approvals cannot race.
-      if (get(id) !== pair || pair.approval)
-        throw new ApiHttpError("conflict", "Connection already approved");
       pair.approval = { accountId: owner.accountId, identityId: owner.identityId, access };
     },
     async poll(id: string, secret: string) {

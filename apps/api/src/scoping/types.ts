@@ -26,8 +26,8 @@ export type ConfiguredMappingsResult =
 /**
  * The configured scopes whose root is one of the indexed roots
  * (`FDRIVE_INDEX_ROOTS`). Only index-backed features (search, duplicates,
- * thumbnails, folder sizes, extraction, MCP) may use this, and every result
- * still passes a live read check.
+ * thumbnails, folder sizes, extraction, MCP) use this; a row they map to is
+ * the login's to see.
  */
 export type VerifiedIndexScopesResult =
   | { readonly available: true; readonly scopes: readonly Scope[] }

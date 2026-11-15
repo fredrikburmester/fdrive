@@ -469,10 +469,9 @@ export function registerSharesRoutes(
       return c.json(responseBody);
     }),
   );
-  // No `createReadAuthorizer` live probe on this route, unlike the authed
-  // thumb route: the share itself is the authorization for anything under
-  // it, and a thumbnail comes from the index cache, never from the owner's
-  // storage. Every failure below answers the same bare 404: whether the
+  // The share itself is the authorization for anything under it, and a
+  // thumbnail comes from the index cache, never from the owner's storage.
+  // Every failure below answers the same bare 404: whether the
   // share does not exist, is a write share, an archive, expired, or
   // limit-reached, whether the password is wrong or missing, whether the
   // path fails to resolve, or whether the file is not indexed, this route
@@ -514,7 +513,7 @@ export function registerSharesRoutes(
     if (hidden) throw THUMB_NOT_FOUND();
     const identity = await deps.identities.get(target.identityId);
     if (identity === null) throw THUMB_NOT_FOUND();
-    const verifiedScopes = await deps.resolver.verifiedIndexScopes(identity);
+    const verifiedScopes = await deps.resolver.verifiedIndexScopes(identity.externalUsername);
     if (!verifiedScopes.available) throw THUMB_NOT_FOUND();
     // `toFsPath` normalizes, and `normalizePath` throws for a segment over
     // 255 UTF-8 bytes, which `SharePath` (a 4096-character total bound with
