@@ -29,7 +29,7 @@ import { type ActionOutcome, type ActionTool, defineActionTool } from "./actions
 import { DOCUMENT_EXTENSIONS, readBytes, referencedArg } from "./tools.ts";
 
 export interface ChatActionToolsDeps extends DriveToolsDeps {
-  readonly fs: Pick<FsRoutesDeps, "bus" | "clock" | "metadata" | "activity">;
+  readonly fs: Pick<FsRoutesDeps, "bus" | "clock" | "metadata" | "activity" | "ownerPath">;
   /** The chat whose proposal the person approved, recorded with every action it applies. */
   readonly conversationId: string;
 }

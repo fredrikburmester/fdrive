@@ -21,9 +21,8 @@ export function incomingPath(identityId: string, operationId: string) {
 /**
  * Deletes what one operation staged, once it can no longer publish any of
  * it: settled, cancelled or forgotten. Only fdrive writes under `incoming`,
- * so the whole folder goes, with any partial upload a crash left in it.
- * `storage` must be built without Trash settings, or the delete would move
- * fdrive's bookkeeping into its owner's Trash.
+ * so the whole folder goes, with any partial upload a crash left in it,
+ * deleted for good.
  */
 export async function removeIncoming(
   storage: StorageProvider,
@@ -39,10 +38,7 @@ export async function removeIncoming(
 
 export interface DesktopRetentionDeps {
   repo: Pick<DesktopRepo, "expired" | "transition" | "forget">;
-  /**
-   * Storage for an identity without the Trash wrapper: what retention removes
-   * is fdrive's own bookkeeping, deleted for real rather than moved to Trash.
-   */
+  /** Storage for an identity; what retention removes is fdrive's own bookkeeping. */
   storageForIdentity: (identityId: string) => Promise<StorageProvider>;
   clock: () => Date;
   retention?: DesktopRetention;

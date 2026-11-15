@@ -33,26 +33,40 @@ export function retentionNote(retentionDays: number | undefined): string | null 
     : `Items in Trash are deleted permanently after ${dayCountLabel(retentionDays)}.`;
 }
 
+/** One item the delete dialog asks about: its name, and whose Trash it goes to when not the login's. */
+export interface DeleteItem {
+  readonly name: string;
+  /** The owner of the folder shared with the login that holds it; their Trash takes it. */
+  readonly owner?: string | undefined;
+}
+
 /**
  * The delete confirmation dialog's title, body, and confirm button labels.
- * Every delete moves to Trash, which keeps an item `retentionDays` (when
- * known) before deleting it permanently. `names` is the list of entries
- * being acted on, in display order; a single entry is quoted by name, more
- * than one is summarized by count. `pendingLabel` replaces `confirmLabel`
- * while the request runs, which can be a while for a large folder or
- * selection.
+ * Every delete moves to Trash: the login's own, or, for an item in a folder
+ * shared with it, the owner's, which keeps it `retentionDays` (when known)
+ * before deleting it permanently. A single item is quoted by name, more than
+ * one is summarized by count. `pendingLabel` replaces `confirmLabel` while
+ * the request runs, which can be a while for a large folder or selection.
  */
 export function deleteDialogCopy(
-  names: readonly string[],
+  items: readonly DeleteItem[],
   retentionDays: number | undefined,
 ): DeleteDialogCopy {
-  const count = names.length;
-  const first = names[0];
-  const subject = count === 1 && first !== undefined ? `"${first}"` : `${count} items`;
+  const count = items.length;
+  const first = items[0];
+  const subject = count === 1 && first !== undefined ? `"${first.name}"` : `${count} items`;
+  const owners = new Set(items.map((item) => item.owner));
+  const owner = owners.size === 1 ? first?.owner : undefined;
+  const sentences = [
+    `${subject} will be moved to ${owner === undefined ? "Trash" : `${owner}'s Trash`}.`,
+  ];
+  if (owners.size > 1)
+    sentences.push("Items in folders shared with you go to their owner's Trash.");
   const note = retentionNote(retentionDays);
+  if (note !== null) sentences.push(note);
   return {
     title: "Move to Trash?",
-    description: `${subject} will be moved to Trash.${note === null ? "" : ` ${note}`}`,
+    description: sentences.join(" "),
     confirmLabel: "Move to Trash",
     pendingLabel: "Moving to Trash…",
   };

@@ -97,7 +97,6 @@ describe("desktop version checks answered from the index", () => {
     const storageFactory = createIdentityStorageFactory({
       identities: repos.identities,
       folder,
-      clock: () => new Date(),
     });
     const storage: StorageProvider = { ...(await storageFactory(alice.id)) };
     const download = vi.spyOn(storage, "download");

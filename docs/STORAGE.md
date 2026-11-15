@@ -12,7 +12,8 @@ filesystem details and lets tests run on an in-memory storage. fdrive checks pas
 | File operations, streams and optional members | [storage port](../packages/core/src/ports/storage.ts) |
 | The files folder and its storage | [files folder](../packages/local/src/files-folder.ts), [home storage](../packages/local/src/storage-provider.ts), [shared folders](../packages/local/src/shared.ts) |
 | The deployment's folder, its row and index root | [files folder](../apps/api/src/local/files-folder.ts) |
-| Per-request storage and Trash | [storage factory](../apps/api/src/auth/storage-factory.ts) |
+| Per-request storage | [storage factory](../apps/api/src/auth/storage-factory.ts) |
+| Trash | [Trash](../packages/core/src/trash/recycle-folder-trash.ts), [shared folders](../packages/local/src/shared.ts) |
 | Name and health | [storage service](../apps/api/src/system/storage.ts) |
 
 ## Wiring
@@ -28,8 +29,7 @@ filesystem details and lets tests run on an in-memory storage. fdrive checks pas
   is collapsed; nothing reads them.
 - A signed-in request's storage is built on first use from the username its session or token
   query read, already admitted ([authentication](AUTH.md#resolving-a-request)); outside a
-  request the storage factory finds the identity and runs `admit` first. Either way it adds
-  the Trash wrappers.
+  request the storage factory finds the identity and runs `admit` first.
 - The storage's name is the installation setting `storage.name` ("Local folder" until an
   administrator renames it), trimmed, 1 to 120 characters. It shows under each username in the
   sidebar and as the Mac location's `displayName`. `GET /api/v1/system/storage` returns the
@@ -47,10 +47,11 @@ step, shares links and folders, opens in Office, and has a Trash.
 ## StorageProvider
 
 Required: `list`, `stat`, `statFile`, `download`, `upload`, `mkdir`, `move`, `copy`,
-`deleteFile`, `deleteDir` and `deleteEmptyDir`, which removes a folder only while it is empty
-(the files folder's `rmdir`), so tidying up never takes what arrived meanwhile. Optional members
-are absent, never throwing, and agree with the flags: `probeDirectoryRead` and `probeFileRead`
-(live read proofs), `setModifiedAt`, `zip` and `trash`.
+`deleteFile`, `deleteDir`, `deleteEmptyDir`, which removes a folder only while it is empty
+(the files folder's `rmdir`), so tidying up never takes what arrived meanwhile, and `trash`.
+`deleteFile` and `deleteDir` delete for good; `trash.put(path)` moves an item into Trash and says
+where (`{ leaf, kind }`), and every caller chooses. Optional members are absent, never throwing:
+`probeDirectoryRead` and `probeFileRead` (live read proofs), `setModifiedAt` and `zip`.
 
 Paths are the storage's own, already resolved from a scope. `statFile` throws `bad_request` on a
 directory and `not_found` on a missing path. `move`, `copy` and `upload` refuse a taken target
@@ -104,12 +105,13 @@ How the files folder implements it:
 - **Zip** streams with `yazl`, reading each file only as the archive is read, and reports files
   and bytes read once every file is counted (`onProgress`). Compressing to zip
   (`/fs/compress`) streams this zip straight into an upload of the archive.
-- **Trash.** The storage factory wraps the storage with core's `withMoveToTrash` and
-  `createRecycleFolderTrash` at `TRASH_PATH`, `/.trash`; deleted items live in
-  `/.trash/.fdrive-move-v1`. Its one setting, how many days it keeps an item, is
+- **Trash.** Each user's storage has its Trash at `TRASH_PATH`, `/.trash`, in core's layout
+  (`createRecycleFolderTrash`); items live in `/.trash/.fdrive-move-v1`. `trash.put` refuses the
+  root and fdrive's own folders. Something in a writable shared folder goes to its owner's Trash,
+  at the owner's path, so `put` reports a leaf in the owner's files, which only the owner lists,
+  restores and purges. Trash's one setting, how many days it keeps an item, is
   `trash.retentionDays` in `app.settings`, read at `/api/v1/trash/settings` and written at
-  `/api/v1/system/trash`; the API's hourly retention deletes what is older
-  ([Trash](TRASH.md)).
+  `/api/v1/system/trash`; the API's hourly retention deletes what is older ([Trash](TRASH.md)).
 - **Ownership.** The API writes as `FDRIVE_RUN_AS_UID`, the uid the indexer and OCR use.
 - **The folder's marker.** With a `guard` ([files-marker.ts](../packages/local/src/files-marker.ts)),
   the files folder serves files only while its `.fdrive-files` names this installation
