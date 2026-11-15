@@ -110,9 +110,6 @@ it("coordinates desktop identities and operation receipts across independent Pos
     await expect(a.reserve({ ...input, accountId: randomUUID() })).rejects.toThrow(
       "another account",
     );
-    await expect(
-      a.reserve({ ...input, id: randomUUID(), request: { size: 65 * 1024 ** 3 } }),
-    ).rejects.toThrow("capacity");
     await a.transition(identity.id, account.id, input.id, "ready", "completed", {
       receipt: "durable",
     });
@@ -184,39 +181,44 @@ it("coordinates desktop identities and operation receipts across independent Pos
       }),
     ).toBe(true);
     expect(await shares.get(linked.id)).toBeNull();
-    // Retention: only expired states qualify, reclaiming releases the reservation once.
+    // Retention: only expired states qualify, and only finished operations are forgotten.
     const retention = { idleMs: 1000, conflictMs: 2000, retainMs: 3000 };
     const now = new Date();
     const stale = new Date(now.getTime() - 5000);
-    const seed = async (state: string, size: number, updatedAt = stale, recoveryBytes = 0) => {
-      const op = { ...input, id: randomUUID(), state, request: { size, recoveryBytes } };
+    const seed = async (state: string, updatedAt = stale) => {
+      const op = { ...input, id: randomUUID(), state, request: { size: 1 } };
       await a.reserve(op);
       await first.db.execute(
         sql`update app.desktop_operations set updated_at = ${updatedAt.toISOString()}::timestamptz, state = ${state} where id = ${op.id}`,
       );
       return op.id;
     };
-    const idle = await seed("uploading", 1);
-    const fresh = await seed("receiving", 1, now);
-    const conflict = await seed("conflict", 1);
-    const acknowledged = await seed("acknowledged", 0, stale, 64 * 1024 ** 3 - 64);
-    const uncertain = await seed("uncertain", 1);
-    const committing = await seed("committing", 1);
+    const idle = await seed("uploading");
+    const fresh = await seed("receiving", now);
+    const conflict = await seed("conflict");
+    const acknowledged = await seed("acknowledged");
+    const cancelled = await seed("cancelled");
+    const uncertain = await seed("uncertain");
+    const committing = await seed("committing");
     expect((await a.expired(now, retention, 10)).map((op) => op.id).sort()).toEqual(
-      [idle, conflict, acknowledged].sort(),
+      [idle, conflict, acknowledged, cancelled].sort(),
     );
     expect((await b.uncertain(10)).map((op) => op.id).sort()).toEqual(
       [uncertain, committing].sort(),
     );
     expect(fresh).toBeTruthy();
-    await expect(a.reserve({ ...input, id: randomUUID(), request: { size: 60 } })).rejects.toThrow(
-      "capacity",
+    expect(await a.forget(identity.id, account.id, idle)).toBe(false);
+    expect(await a.forget(identity.id, randomUUID(), acknowledged)).toBe(false);
+    expect(await a.forget(identity.id, account.id, acknowledged)).toBe(true);
+    expect(await b.forget(identity.id, account.id, acknowledged)).toBe(false);
+    expect(await b.forget(identity.id, account.id, cancelled)).toBe(true);
+    expect(await a.operation(identity.id, account.id, acknowledged)).toBeNull();
+    expect((await a.expired(now, retention, 10)).map((op) => op.id).sort()).toEqual(
+      [idle, conflict].sort(),
     );
-    expect(await a.reclaim(identity.id, account.id, idle, now)).toBe(false);
-    expect(await a.reclaim(identity.id, account.id, acknowledged, now)).toBe(true);
-    expect(await b.reclaim(identity.id, account.id, acknowledged, now)).toBe(false);
-    expect((await a.expired(now, retention, 10)).map((op) => op.id)).not.toContain(acknowledged);
-    await a.reserve({ ...input, id: randomUUID(), request: { size: 60 } });
+    // Admission has no capacity to run out of: a reserve of any size is kept.
+    const large = { ...input, id: randomUUID(), request: { size: 16 * 1024 ** 3 } };
+    expect((await a.reserve(large)).id).toBe(large.id);
   } finally {
     await first.close();
     await second.close();
