@@ -81,7 +81,7 @@ export async function checkReadiness(
   // Text extraction is a unit of the ml service with no entry in the public health map.
   if (values.textSearch || values.searchOcr || values.semanticSearch) {
     try {
-      const endpoint = new URL(`${env.FDRIVE_ML_URL ?? ""}/extract/runtime`);
+      const endpoint = new URL(`${env.FDRIVE_ML_URL || "http://ml:8080"}/extract/runtime`);
       const extract = await json<{ status: string; revision: number }>(endpoint.toString());
       if (extract?.status !== "ready") {
         pending.push(`text extraction: ${extract?.status ?? "missing"}`);
