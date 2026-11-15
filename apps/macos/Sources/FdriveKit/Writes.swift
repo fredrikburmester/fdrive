@@ -7,16 +7,17 @@ import Foundation
 public struct WriteCoordinator: Sendable {
     public let catalog: Catalog
     public let client: APIClient
-    /// How often a running commit is asked how far it has got.
-    public let progressPoll: Duration
-    public init(catalog: Catalog, client: APIClient, progressPoll: Duration = .seconds(1)) {
-        self.catalog = catalog; self.client = client; self.progressPoll = progressPoll
+    /// The largest file the server accepts, as its location advertised it. Protocol 2
+    /// always does; without it the location does not write.
+    public let maxUploadBytes: Int64?
+    public init(catalog: Catalog, client: APIClient, maxUploadBytes: Int64?) {
+        self.catalog = catalog; self.client = client; self.maxUploadBytes = maxUploadBytes
     }
 
     public func perform(route: String, localId: String?, templateKey: String, parentId: String,
                         name: String, base: WriteVersion?, contents: URL?, progress: Progress, keepBoth: Bool = true,
                         modificationDate: Date? = nil) async throws -> CatalogItem {
-        guard client.protocolVersion == 2 else { throw DriveError.permission }
+        guard client.protocolVersion == 2, let maxUploadBytes else { throw DriveError.permission }
         guard !name.isEmpty, name.utf8.count <= 255, ![".", ".."].contains(name), !name.contains("/"), !name.contains(":"),
               !name.unicodeScalars.contains(where: { $0.value < 32 || $0.value == 127 }) else { throw DriveError.unsupported }
         let parent = try await catalog.item(parentId)
@@ -40,7 +41,7 @@ public struct WriteCoordinator: Sendable {
             guard let contents else { throw DriveError.unsupported }
             let kind = try contents.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey, .fileSizeKey])
             guard kind.isRegularFile == true, kind.isSymbolicLink != true else { throw DriveError.unsupported }
-            guard let sourceSize = kind.fileSize, sourceSize <= 16 * 1024 * 1024 * 1024 else { throw DriveError.quota }
+            guard let sourceSize = kind.fileSize, Int64(sourceSize) <= maxUploadBytes else { throw DriveError.quota }
             try requireFreeSpace(Int64(sourceSize), at: catalog.recoveryDirectory.deletingLastPathComponent())
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true,
                                                     attributes: [.posixPermissions: 0o700])
@@ -51,7 +52,7 @@ public struct WriteCoordinator: Sendable {
             var sha = SHA256(); var bytes: Int64 = 0
             while let data = try file.read(upToCount: 1024 * 1024), !data.isEmpty {
                 try Task.checkCancellation(); bytes += Int64(data.count)
-                guard bytes <= 16 * 1024 * 1024 * 1024 else { throw DriveError.quota }
+                guard bytes <= maxUploadBytes else { throw DriveError.quota }
                 sha.update(data: data)
             }
             try file.synchronize()
@@ -94,67 +95,6 @@ public struct WriteCoordinator: Sendable {
         guard remote == local.digest else { return nil }
         return try await catalog.downloaded(existing.id, hash: local.digest, size: local.size, expectedVersion: existing.contentVersion)
     }
-    /// Commits, following the server's own account of how far it has got.
-    ///
-    /// Publishing is usually a rename and returns at once. On storage without one
-    /// — object storage — publishing a folder copies every object under it and can
-    /// run for minutes, and the server records its progress while it does. Follow
-    /// that so Finder shows a proportion instead of an indeterminate bar for the
-    /// whole copy. It is advisory: a commit that returns before the first poll
-    /// never asks, and a poll that fails or finds nothing recorded leaves the bar
-    /// as it was rather than disturbing the write.
-    private func commit(_ id: String, progress: Progress) async throws -> WriteResult {
-        let watcher = Task {
-            while !Task.isCancelled {
-                try? await Task.sleep(for: progressPoll)
-                guard !Task.isCancelled, let reported = try? await client.writeStatus(id).progress,
-                      reported.total > 0 else { continue }
-                progress.totalUnitCount = reported.total
-                progress.completedUnitCount = min(reported.completed, reported.total)
-            }
-        }
-        defer { watcher.cancel() }
-        do { return try await client.commitWrite(id) } catch { try await stopped(id, error) }
-    }
-
-    /// Rethrows anything that is not this side being asked to stop; ends the work if it is.
-    ///
-    /// Dropping the request only stops this side of it. Tell the server, or it finishes
-    /// a copy nobody is waiting for and leaves what it had written behind. Detached, so
-    /// cancelling this task does not cancel the one message that ends the work.
-    private func stopped(_ id: String, _ error: Error) async throws -> Never {
-        guard error is CancellationError || (error as? URLError)?.code == .cancelled
-        else { throw error }
-        await Task.detached { [client] in try? await client.cancelWrite(id) }.value
-        throw DriveError.cancelled
-    }
-
-    /// Follows a commit this call did not start, until the server settles it.
-    ///
-    /// File Provider retries a modification it decides has taken too long, and on
-    /// storage without a rename publishing a folder copies every object under it, so
-    /// a large move outlasts that patience easily. The retry then finds the operation
-    /// still `committing`. That is not an unknown outcome — it is one that has not
-    /// arrived yet, and the server is still reporting how far it has got. Wait for it,
-    /// driving the same bar, rather than telling someone their save could not be
-    /// confirmed while it is in fact still running.
-    ///
-    /// A status that cannot be read ends the wait rather than hiding a dead server:
-    /// File Provider retries again, and the retry re-attaches here.
-    private func follow(_ id: String, progress: Progress) async throws -> WriteResult {
-        while true {
-            do {
-                let current = try await client.writeStatus(id)
-                if let reported = current.progress, reported.total > 0 {
-                    progress.totalUnitCount = reported.total
-                    progress.completedUnitCount = min(reported.completed, reported.total)
-                }
-                guard current.state == "committing" else { return current }
-                try await Task.sleep(for: progressPoll)
-            } catch { try await stopped(id, error) }
-        }
-    }
-
     public func resume(_ pending: PendingWrite, progress: Progress = Progress(totalUnitCount: -1)) async throws -> CatalogItem {
         if let result = pending.result { return result }
         do {
@@ -165,17 +105,14 @@ public struct WriteCoordinator: Sendable {
                 remote = try await client.uploadWrite(pending.request.operationId, file: payload, progress: progress)
             }
             try Task.checkCancellation()
-            if remote.state == "ready" {
-                remote = try await commit(pending.request.operationId, progress: progress)
-            } else if remote.state == "committing" {
-                remote = try await follow(pending.request.operationId, progress: progress)
-            }
+            if remote.state == "ready" { remote = try await client.commitWrite(pending.request.operationId) }
             switch remote.state {
             case "completed", "acknowledged": break
             case "conflict": throw DriveError.writeConflict("This item changed remotely. Your pending copy is preserved in Recovery.")
-            // Asked for and already settled, by this device or another: finished, not failed.
+            // Settled by the server, on request or by its cleanup: it can never publish.
             case "cancelled": throw DriveError.cancelled
-            // `committing` only survives `follow` when the wait itself could not settle it.
+            // A commit still running or stalled by a server crash, or one whose outcome
+            // is unknown. The record stays, and the next resume asks again.
             case "committing", "uncertain": throw DriveError.writeUncertain
             default: throw DriveError.unavailable
             }
@@ -194,20 +131,16 @@ public struct WriteCoordinator: Sendable {
             // The durable catalog commit precedes both the callback and spool cleanup.
             // Failure to acknowledge only retains an extra recovery copy.
             try? await client.acknowledgeWrite(pending.request.operationId)
-            for abandoned in pending.abandonedOperations ?? [] { try? await client.cancelWrite(abandoned) }
+            for abandoned in pending.abandonedOperations ?? [] { _ = try? await client.cancelWrite(abandoned) }
             try? FileManager.default.removeItem(at: catalog.recoveryDirectory.appendingPathComponent(pending.id))
             progress.completedUnitCount = progress.totalUnitCount
             return result
         } catch {
+            if error is CancellationError || (error as? URLError)?.code == .cancelled { try await stopped(pending) }
             let collision: Bool
             switch error {
             case DriveError.cancelled:
-                // Asked for, and the server has taken back what it copied. Finished
-                // rather than pending: leaving it would offer to retry what the
-                // person deliberately stopped.
-                try? await catalog.writeCancelled(pending)
-                try? FileManager.default.removeItem(
-                    at: catalog.recoveryDirectory.appendingPathComponent(pending.id))
+                await forget(pending)
                 throw error
             case DriveError.writeConflict: collision = false
             case DriveError.nameCollision: collision = true
@@ -228,6 +161,28 @@ public struct WriteCoordinator: Sendable {
             try? await catalog.writeFailed(pending, error: error.localizedDescription)
             throw error
         }
+    }
+
+    /// Finder stopped this write. A commit the server has begun runs to its end
+    /// regardless, so the server decides what happened: only its `cancelled` answer
+    /// drops the record and this Mac's copy. A refusal (it is committing, or has
+    /// committed) or no answer keeps both for the next resume, which reads the
+    /// outcome. Detached, so the cancellation being handled does not cancel the ask.
+    private func stopped(_ pending: PendingWrite) async throws -> Never {
+        let id = pending.request.operationId
+        let answer = await Task.detached { [client] in try? await client.cancelWrite(id) }.value
+        if answer?.state == "cancelled" {
+            await forget(pending)
+        } else {
+            try? await catalog.writeFailed(pending, error: DriveError.cancelled.localizedDescription)
+        }
+        throw DriveError.cancelled
+    }
+
+    /// Drops a write the server settled as cancelled, with this Mac's copy of it.
+    private func forget(_ pending: PendingWrite) async {
+        try? await catalog.writeCancelled(pending)
+        try? FileManager.default.removeItem(at: catalog.recoveryDirectory.appendingPathComponent(pending.id))
     }
 }
 

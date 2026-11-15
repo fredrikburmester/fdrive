@@ -41,7 +41,6 @@ Recommended on 2026-11-14 and approved by the owner the same day.
    tags instead of being guessed from its hash.
 8. `Shared with me` is a reserved name at the top of each home.
 9. The migration history is squashed last.
-10. The Mac cleanup release (27) waits until a Mac release is due anyway.
 
 ## Wave 0: independent fixes
 
@@ -104,13 +103,11 @@ the login limiter (`local/routes.ts`, `local/service.ts`). Folds into 12.
 
 ## Mac
 
-All but 27 are server-only and keep shipped Mac builds working.
+All are server-only and keep shipped Mac builds working.
 
 25. Stage uploads inside the files folder so a commit can always tell whether it happened; drop
     `FDRIVE_DESKTOP_STATE_DIR`, the `uncertain` state and the unused admin recovery endpoints.
 26. Finder's Trash becomes fdrive's Trash.
-27. Mac release: drop commit progress polling, `follow` and the 24-hour commit timeout. Check
-    whether cancelling a stuck commit deletes the Mac's own copy (unverified).
 28. Optional: drop `/checks` now that the change feed exists, after measuring the hourly pass.
 
 ## Storage contract
