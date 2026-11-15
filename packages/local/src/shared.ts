@@ -343,8 +343,13 @@ export function createUserStorage(options: UserStorageOptions): UserStorage {
         if (source.rel === "/") throw new StorageError("not_found", `not found: ${path}`);
         const entry = (await source.storage.home.locate(source.rel)).at;
         const to = (await destination.storage.home.locate(destination.rel)).at;
-        await moveEntry(entry, to, { path, target }, opts);
-        notify(listener, { kind: "moved", path: entry, target: to });
+        const stamp = await moveEntry(entry, to, { path, target }, opts);
+        notify(listener, {
+          kind: "moved",
+          path: entry,
+          target: to,
+          ...(stamp === undefined ? {} : { stamp }),
+        });
       });
     },
 

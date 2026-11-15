@@ -90,8 +90,6 @@ Recommended on 2026-11-14 and approved by the owner the same day.
     (`composition.ts` `onMutation`) merge with the fs and Trash routes' recorders.
 20. **Delete removed files from the index.** Tombstones are never purged and every scan loads
     them, for a sha256 relink guess.
-21. **Reuse the API's file stamp in the indexer.** The watcher re-reads every uploaded or renamed
-    file.
 
 ## Mac
 

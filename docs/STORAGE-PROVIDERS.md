@@ -134,9 +134,12 @@ How the files folder implements it:
   `DiskChange` by absolute path; [changes.ts](../packages/local/src/changes.ts)): an upload,
   copy, delete, new modification time or new folder is `changed` (for `mkdir` with `parents`,
   the first folder it made, and nothing when every folder existed), and a move is `moved`.
-  An upload's change carries the sha256 of the bytes written, the size,
-  `mtimeNs` and inode of the file before it is published, and the change time once it is;
-  when the published name no longer holds that inode, the change carries no content.
+  An upload's change carries the sha256 of the bytes written and the file's size, `mtimeNs`,
+  inode and change time from a stat once it is published; when the published name no longer
+  holds that inode, size and modification time, the change carries no content. A file
+  renamed in place carries its stamp exactly as the rename left it and its change time just
+  before (`MovedStamp`); a folder, a file copied to another filesystem, or one that changed
+  between the two stats, carries none.
   Hashing runs only while something listens. The module turns these into paths under the index root (`onIndexChange`), and the
   API records them in the change journal, `idx.changes`, with source `api`
   (`createChangeQueue`, `createChangeWriter`) only when a configured root's `storagePath` is

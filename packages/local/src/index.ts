@@ -1,4 +1,10 @@
-export type { DiskChange, DiskChangeListener, DiskContent, IndexChange } from "./changes.js";
+export type {
+  DiskChange,
+  DiskChangeListener,
+  DiskContent,
+  IndexChange,
+  MovedStamp,
+} from "./changes.js";
 export { codeOf, toStorageError } from "./errors.js";
 export type {
   FilesFolderFacts,
