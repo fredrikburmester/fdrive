@@ -16,9 +16,9 @@ All choices are [decided](#decided); [trade-offs](#trade-offs) records what each
   encrypted on their device before upload; the server stores ciphertext and never holds a key
   that opens it. Inside the folder they browse, search by name, upload, download, preview
   (seeking in video too), rename, move, trash and restore, in the browser and in Finder, and
-  can share the folder with another fdrive user. A forgotten password is recovered with their
-  recovery key, or by the owner if they opted into family recovery; without either, the folder
-  is gone for good.
+  can share the folder with another fdrive user. A forgotten password is reset with their recovery
+  key. The owner can restore a sign-in but never open an encrypted folder; without the recovery
+  key, the folder is gone for good.
 
 ## Threat model
 
@@ -26,7 +26,7 @@ All choices are [decided](#decided); [trade-offs](#trade-offs) records what each
 | --- | --- | --- |
 | Someone with a stolen disk, a copied volume or a host backup | Protected | Protected |
 | An administrator, a shell on the running host, a database dump | Not protected | Names and contents protected; [the server still sees](#what-the-server-still-sees) structure, sizes and access. A database dump allows offline password guessing |
-| The installation's owner | Not protected | Protected, except for members who opted into family recovery |
+| The installation's owner | Not protected | Protected: a reset restores someone's sign-in, never their encrypted folders. Only a modified web app (below) gets around that |
 | fdrive's own processing: indexer, OCR, ML server, AI providers, MCP clients, Office | Reads everything | Never receives a clear name or byte |
 | A server that turns hostile and serves a modified web app | Not protected | Not protected for anyone who signs in through a browser afterwards: the page that takes the password comes from the server it guards against. The signed Mac app cannot be made to send its keys, but trusts the server for other users' public keys ([verify keys](#sharing)) |
 
@@ -102,17 +102,23 @@ encryption if the files folder ever moves to storage the operator does not contr
 - **Account key.** One age identity per local user, generated in the browser at first sign-in.
   The server keeps its public recipient, and the identity only wrapped: by the unlock key and
   by each paired Mac's device key.
-- **Forgotten password.** Before their first encrypted folder, a person picks at least one way
-  back. Turning encryption on also asks for a password of at least 12 characters.
-  - **Recovery key**: a second identity, downloaded or printed and proven by pasting it back,
-    the backup recovery key's flow.
-  - **Family recovery**, opt-in per person: a copy wrapped to the
-    owner's account key. When the owner resets that person's password in System > Users, the
-    owner's browser rewraps the key for the new password in the same step. The owner must have
-    a recovery key.
-
-  Changing one's own password rewraps the unlock-key copy. A reset with neither leaves the
-  folders unreadable, and the reset dialog says so before it runs.
+- **Recovery key.** Before their first encrypted folder, a person saves a recovery key: a second
+  identity, downloaded or printed and proven by pasting it back, the backup recovery key's flow.
+  Turning encryption on also asks for a password of at least 12 characters. Changing one's own
+  password rewraps the unlock-key copy.
+- **The owner never gets in.** Nothing is wrapped to the owner or any administrator, and:
+  - **Passwords the owner sets are temporary.** A password chosen in System > Users, at create
+    or reset, must be replaced by the person at their next sign-in, before an account key is
+    generated or wrapped with it, since the owner knows it.
+  - **A reset restores sign-in only.** It never touches keys; encrypted folders stay locked
+    until the person enters their recovery key, which rewraps the key under their own password.
+  - **Forgot password** on the sign-in page lets a person reset it themselves with their
+    recovery key. The browser fetches the recovery copy and a challenge encrypted to the account
+    recipient, without learning whether the username exists; decrypting the challenge proves the
+    key, and the browser sends the new sign-in value and unlock-key copy. Login rate limits apply.
+  - Without the recovery key the folders are gone for good. The person can start over from
+    Account > Encryption with a new key; folders others share with them come back when those
+    owners add them again.
 - **Folder key.** One age identity per encrypted folder, wrapped to each member's account
   recipient and kept in the folder's marker. Contents are encrypted to its recipient; names use
   a key derived from it with HKDF.
@@ -262,7 +268,8 @@ One PR each, with the checks [AGENTS.md](../../AGENTS.md) requires.
    ranges, the name codec and the marker, with shared vectors that `pnpm test:coverage` and
    `macos.yml` both run.
 3. **Sign-in and account keys.** Derived passwords in every password form, the account key at
-   first sign-in, recovery key, family recovery, the capability flag; Account > Encryption with
+   first sign-in, recovery key, temporary owner-set passwords, Forgot password, the capability
+   flag; Account > Encryption with
    devices.
 4. **Server folders.** Marker routes, refusals, indexer and OCR skips, subtree listing, upload
    sessions. Integration tests prove no clear name or byte reaches the database, thumbs or logs.
@@ -278,8 +285,9 @@ One PR each, with the checks [AGENTS.md](../../AGENTS.md) requires.
   the browser, uploads files (one over 4 GiB in Safari), finds one by name, plays a video with
   seeking, downloads, renames, moves, trashes and restores, then opens the same files in Finder
   and saves an edit there.
-- After the owner resets their password, a person with family recovery opens their folders with
-  the new password, and one with a recovery key gets back in with it.
+- After the owner resets their password, a person must choose their own before signing in, and
+  their folders open only once they enter their recovery key. A person resets a forgotten
+  password from the sign-in page with the recovery key alone.
 - A canary file name and a canary string inside a file appear nowhere in a database dump, the
   thumbs volume, the API and indexer logs or the files folder, and `age -d` with the exported
   folder identity decrypts a file copied off the disk.
@@ -300,8 +308,7 @@ One PR each, with the checks [AGENTS.md](../../AGENTS.md) requires.
 - Con: a weak password is a weak key. With a database dump, someone can guess offline at the
   speed scrypt allows; today a guessed password only opens a login, here it opens the files.
   The 12-character minimum when turning encryption on limits this.
-- Con: a forgotten password cannot simply be reset; it needs the recovery key or family
-  recovery.
+- Con: a forgotten password cannot simply be reset; it needs the recovery key.
 - Con: signing in takes about a second longer on slow devices while scrypt runs.
 
 **A separate encryption passphrase.**
@@ -315,13 +322,9 @@ One PR each, with the checks [AGENTS.md](../../AGENTS.md) requires.
 anyone with the running server could take the key, and it would protect only what host
 encryption already does.
 
-**Family recovery** (chosen), opt-in per person, works with either:
-
-- Pro: the owner's password reset brings back access, so forgetting a password loses nothing.
-- Con: the owner can read that person's encrypted folders. For them, the folder is private from
-  everyone except the owner.
-- Con: the owner's account becomes the way into several people's files, so the owner must keep a
-  recovery key and a strong password.
+**Family recovery** (rejected 2026-11-16): a copy of each person's key wrapped to the owner's, so
+the owner's reset could bring back access. It would also let the owner read those folders, which
+defeats them.
 
 ### Post-quantum keys
 
@@ -361,7 +364,8 @@ unlikely attacker.
 - 2026-11-14: host encryption at rest, documented by fdrive; fdrive does not encrypt the files
   folder.
 - 2026-11-14: end-to-end encryption is per folder, and names inside are encrypted.
-- 2026-11-14: one password, derived in the browser, with a recovery key or opt-in family recovery
-  as the way back.
+- 2026-11-14: one password, derived in the browser, with a recovery key as the way back.
+- 2026-11-16: no family recovery. The owner can reset a sign-in but never open an encrypted
+  folder, and passwords the owner sets are temporary.
 - 2026-11-14: X25519 keys, not post-quantum.
 - 2026-11-14: a paired Mac stays unlocked until it is disconnected.
