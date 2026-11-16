@@ -89,6 +89,9 @@ the Swift tests write to `v1-swift.json`. Constants and API schemas are in
   journal, live updates and the Mac's change feed still see them. The indexer and OCR skip the
   contents of encrypted folders and drop thumbnails and image embeddings with their last file
   ([indexer](INDEXER.md), [OCR](OCR.md)).
+- **Recents, Favorites, tags and My activity** leave out paths with an encrypted name. History
+  still records what happens inside an encrypted folder under its stored names. An encrypted
+  folder itself can still be a favorite or tagged, since its own name is clear.
 
 ## Web
 
@@ -98,7 +101,8 @@ the Swift tests write to `v1-swift.json`. Constants and API schemas are in
 - **Listings** decrypt in `useEncryptedView` ([listing.ts](../apps/web/src/lib/encryption/listing.ts)):
   names, types, plaintext sizes and breadcrumbs. A locked folder shows the unlock form; a name
   that does not decrypt shows as a stray. Inside an encrypted folder the tree view is a list,
-  thumbnails are off, and Share, Office, Duplicate, Compress, Organize and Chat are hidden.
+  thumbnails are off, and Share, Office, Duplicate, Compress, Organize, Chat, Tags and
+  Favorites are hidden.
 - **Uploads** go through the upload queue: `prepareEncryptedUploads` encrypts names (one per
   folder per batch) and gives each item a `source` that encrypts the file when it starts, sent
   in the usual 8 MiB pieces and kept for a resume.
