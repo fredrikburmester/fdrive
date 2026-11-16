@@ -939,6 +939,11 @@ export function FileBrowser({
     if (collected.length === 0) {
       return;
     }
+    // Until an encrypted folder is open, an upload would go out with its clear name.
+    if (encrypted.uploadBlock !== null) {
+      toast.error(encrypted.uploadBlock);
+      return;
+    }
     if (onRequestUpload) {
       onRequestUpload(files ?? undefined);
       return;

@@ -2,10 +2,22 @@
 
 import { type ReactNode, useEffect, useState } from "react";
 import { UploadFilesProvider } from "@/components/upload/upload-provider";
+import { useMe } from "@/lib/api/auth-queries";
 import { apiClient } from "@/lib/api/client";
 import { useFsEvents } from "@/lib/api/sse";
+import { useEncryptionStatus } from "@/lib/encryption/queries";
 import { useJobsStore } from "@/lib/jobs/store";
 import { SearchShortcutProvider } from "@/lib/search/shortcut";
+
+/**
+ * Asks once whether this browser holds the encryption key, so every page knows after a reload
+ * too. Its own component, so its answers never re-render the event stream's host.
+ */
+function EncryptionKeys() {
+  const { data: me } = useMe();
+  useEncryptionStatus(me?.encryptedFolders === true);
+  return null;
+}
 
 function SessionRuntime({ children }: { children: ReactNode }) {
   useFsEvents();
@@ -22,7 +34,12 @@ function SessionRuntime({ children }: { children: ReactNode }) {
       cancelled = true;
     };
   }, []);
-  return <UploadFilesProvider>{children}</UploadFilesProvider>;
+  return (
+    <UploadFilesProvider>
+      <EncryptionKeys />
+      {children}
+    </UploadFilesProvider>
+  );
 }
 
 /** Mounts the shell's live connections once the client has hydrated. */

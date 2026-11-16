@@ -103,6 +103,11 @@ export async function planTransfer(
   }
 
   async function walk(source: FsEntry, targetDir: string, relativeDir: string): Promise<number> {
+    // An encrypted folder inside what moves would arrive without its marker, and with it the
+    // only key to its files. Nothing is queued or deleted when this throws.
+    if (source.encrypted === true) {
+      throw new Error("An encrypted folder cannot go inside another, or out of its own.");
+    }
     const name = await clearName(source.name, request.from);
     const relative = relativeDir === "" ? name : `${relativeDir}/${name}`;
     const target = joinPath(targetDir, await storedName(name, request.to));

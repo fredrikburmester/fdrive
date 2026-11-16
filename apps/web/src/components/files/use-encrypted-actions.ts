@@ -80,7 +80,12 @@ export function useEncryptedActions(
         };
 
   /** Why nothing can be uploaded here now, or null. */
-  const uploadBlock = inside && open === null ? LOCKED_MESSAGE : null;
+  const uploadBlock =
+    !inside || open !== null
+      ? null
+      : view.kind === "locked"
+        ? LOCKED_MESSAGE
+        : "This encrypted folder is still opening.";
 
   /** The encrypted folder `folder` is in, opened; null outside one. */
   async function sideOf(folder: string): Promise<Side> {

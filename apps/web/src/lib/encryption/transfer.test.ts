@@ -204,6 +204,36 @@ describe("moving across an encrypted folder's edge", () => {
     await expect(gone[0]?.source?.()).rejects.toThrow("404");
   });
 
+  it("refuses an encrypted folder anywhere in what moves, before anything goes", async () => {
+    const { folder } = await encryptedFolder();
+    const files = new Map([["/Docs/Trip/note.txt", new Blob(["n"])]]);
+    const memory = memoryApi(
+      files,
+      new Set(["/Docs", "/Docs/Trip", "/Docs/Trip/Vault", "/Private"]),
+    );
+    const api = {
+      ...memory.api,
+      list: async (path: string) => {
+        const listed = await memory.api.list(path);
+        return {
+          ...listed,
+          entries: listed.entries.map((entry) =>
+            entry.path === "/Docs/Trip/Vault" ? { ...entry, encrypted: true as const } : entry,
+          ),
+        };
+      },
+    } as TransferApi;
+    const trip = (await api.list("/Docs")).entries.find((entry) => entry.name === "Trip");
+    await expect(
+      planTransfer(
+        { sources: [trip as FsEntry], from: null, target: "/Private", to: folder, move: true },
+        deps(api, memory.fetchImpl),
+      ),
+    ).rejects.toThrow("cannot go inside another");
+    expect(files.has("/Docs/Trip/note.txt")).toBe(true);
+    expect(memory.purged).toEqual([]);
+  });
+
   it("deletes for good even when Trash does not list the item", async () => {
     const memory = memoryApi(new Map(), new Set());
     const api = { ...memory.api, trashList: async () => ({ entries: [], truncated: false }) };
