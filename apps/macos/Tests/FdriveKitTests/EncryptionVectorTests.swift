@@ -105,7 +105,8 @@ private func fromHex(_ text: String) -> Data {
     }
 
     /// Writes what FdriveKit makes from the vectors' keys, for packages/crypto to open:
-    /// `FDRIVE_WRITE_SWIFT_VECTORS=1 swift test --package-path apps/macos`.
+    /// `FDRIVE_WRITE_SWIFT_VECTORS=1 swift test --package-path apps/macos`, then
+    /// `pnpm exec biome format --write packages/crypto/vectors`.
     @Test(.enabled(if: ProcessInfo.processInfo.environment["FDRIVE_WRITE_SWIFT_VECTORS"] == "1"))
     func writeSwiftVectors() throws {
         let vectors = try vectors()
