@@ -273,13 +273,17 @@ it("gives a Mac that pairs with a device key its copy of the account key, and en
     });
   const created = await post("/pairings", { deviceName: "Mac", deviceRecipient });
   const request = DesktopPairing.parse(await created.json());
-  // The code is a digest of the device recipient, as the Mac and the browser compute it.
-  const digest = createHash("sha256").update(deviceRecipient).digest("hex").slice(0, 16);
-  expect(request.code).toBe(digest.toUpperCase().match(/.{4}/g)?.join("-"));
+  // The code is a digest of the device recipient and the pairing's own nonce, as the Mac and
+  // the browser compute it.
+  const nonce = required(request.nonce);
+  const digest = createHash("sha256").update(`${deviceRecipient}\n${nonce}`).digest("hex");
+  expect(request.code).toBe(digest.slice(0, 16).toUpperCase().match(/.{4}/g)?.join("-"));
   const info = await f.request(`/pairings/${request.id}`, undefined, {
     cookie: "fdrive_session=test",
   });
-  expect(await info.json()).toMatchObject({ deviceRecipient, code: request.code });
+  expect(await info.json()).toMatchObject({ deviceRecipient, nonce, code: request.code });
+  // Nobody can open a second request with the same Mac's key while this one waits.
+  expect((await post("/pairings", { deviceName: "Copy", deviceRecipient })).status).toBe(409);
   const approved = await f.request(
     `/pairings/${request.id}/approve`,
     { access: "full", deviceKey: "ZGV2aWNl" },

@@ -32,6 +32,8 @@ export const DesktopPairing = z.object({
   secret: z.string(),
   code: z.string(),
   expiresAt: z.iso.datetime(),
+  /** With a device recipient: the random value the code covers along with it. */
+  nonce: z.string().optional(),
 });
 export const DesktopPairInfo = z.object({
   deviceName: z.string(),
@@ -40,6 +42,7 @@ export const DesktopPairInfo = z.object({
   approved: z.boolean(),
   supportsWrites: z.boolean().optional(),
   deviceRecipient: AgeRecipient.optional(),
+  nonce: z.string().optional(),
 });
 export const DesktopLocation = z.object({
   protocolVersion: z.literal(DESKTOP_PROTOCOL_VERSION),

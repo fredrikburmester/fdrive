@@ -62,12 +62,15 @@ describe("account keys", () => {
 });
 
 describe("key codes", () => {
-  it("give an account key the same kind of fingerprint", async () => {
-    expect(await keyFingerprint("abc")).toBe(await pairingCode("abc"));
+  it("give an account key 64 bits of its recipient's SHA-256", async () => {
+    // SHA-256("abc") starts ba7816bf8f01cfea.
+    expect(await keyFingerprint("abc")).toBe("BA78-16BF-8F01-CFEA");
   });
 
-  it("is 64 bits of the recipient's SHA-256 in four groups of uppercase hex", async () => {
-    // SHA-256("abc") starts ba7816bf8f01cfea.
-    expect(await pairingCode("abc")).toBe("BA78-16BF-8F01-CFEA");
+  it("cover the device recipient and the pairing's nonce", async () => {
+    // SHA-256("a\nbc") is not SHA-256("ab\nc"), and neither is the recipient alone.
+    expect(await pairingCode("a", "bc")).not.toBe(await pairingCode("ab", "c"));
+    expect(await pairingCode("a", "bc")).toMatch(/^[0-9A-F]{4}(-[0-9A-F]{4}){3}$/);
+    expect(await pairingCode("a", "bc")).toBe(await pairingCode("a", "bc"));
   });
 });

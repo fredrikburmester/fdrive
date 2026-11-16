@@ -69,7 +69,8 @@ const vectors = {
   device: {
     identity: device.identity,
     recipient: device.recipient,
-    pairingCode: await pairingCode(device.recipient),
+    pairingNonce: "s3cX9Qv2a7HfL0pR1mZtYw",
+    pairingCode: await pairingCode(device.recipient, "s3cX9Qv2a7HfL0pR1mZtYw"),
     accountRecipient: account.recipient,
     accountFingerprint: await keyFingerprint(account.recipient),
     deviceKey: await deviceKeyFor(account.identity, device.recipient),

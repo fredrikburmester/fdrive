@@ -109,12 +109,13 @@ async function keyCode(recipient: string): Promise<string> {
 }
 
 /**
- * The code a person compares when pairing a Mac, from the Mac's device recipient. The browser
- * computes it from the recipient it encrypts to, so a recipient the server swapped in shows a
- * different code.
+ * The code a person compares when pairing a Mac: from the Mac's device recipient and the
+ * pairing's random nonce, which the server picks per pairing so nobody can copy a Mac's code
+ * into a request of their own. The browser computes it from the recipient it encrypts to, so a
+ * recipient the server swapped in shows a different code.
  */
-export async function pairingCode(deviceRecipient: string): Promise<string> {
-  return keyCode(deviceRecipient);
+export async function pairingCode(deviceRecipient: string, nonce: string): Promise<string> {
+  return keyCode(`${deviceRecipient}\n${nonce}`);
 }
 
 /**

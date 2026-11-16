@@ -22,6 +22,7 @@ const vectors = JSON.parse(
   device: {
     identity: string;
     recipient: string;
+    pairingNonce: string;
     pairingCode: string;
     accountRecipient: string;
     accountFingerprint: string;
@@ -93,7 +94,7 @@ describe("format v1 vectors", () => {
 
   it("reach the account through the device key and show its pairing code", async () => {
     const { device } = vectors;
-    expect(await pairingCode(device.recipient)).toBe(device.pairingCode);
+    expect(await pairingCode(device.recipient, device.pairingNonce)).toBe(device.pairingCode);
     expect(await keyFingerprint(device.accountRecipient)).toBe(device.accountFingerprint);
     expect(await unlockWithDevice(device.deviceKey, device.identity, device.accountRecipient)).toBe(
       vectors.folder.accountIdentity,

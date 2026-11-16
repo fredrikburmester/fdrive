@@ -53,6 +53,20 @@ function startsWithHeader(bytes: Uint8Array): boolean {
   return bytes.length >= HEADER.length && HEADER.every((byte, index) => bytes[index] === byte);
 }
 
+/**
+ * Refuses a restore that would carry an item across an encrypted folder's
+ * edge: it goes back into the encrypted folder it was deleted from, or, if
+ * it was in none, into none. `from` is where the item was deleted from.
+ */
+export async function checkRestore(storage: StorageProvider, from: string, to: string) {
+  const folders = encryptedFoldersOf(storage);
+  if ((await folders.containing(from)) !== (await folders.containing(to))) {
+    throw encryptedFolderRefusal(
+      "this goes back only where it came from: inside or outside its encrypted folder",
+    );
+  }
+}
+
 /** What a request can learn about encrypted folders through its storage. */
 export interface EncryptedFolders {
   /** The encrypted folder `path` is strictly inside; null when none. */

@@ -69,7 +69,8 @@
   "device": {
     "identity": "AGE-SECRET-KEY-1VLQJUYWWS9RPP2L89D8QTE2WST77G0HA2K5SWKE4NQ5SEPHVXG4QUM07SZ",
     "recipient": "age18jntzk37ay8k9jp6ykrwnkznxle4qxtjf4uzy3ymdza4d8yp93fq27as0g",
-    "pairingCode": "2F85-615F-2125-7D4A",
+    "pairingNonce": "s3cX9Qv2a7HfL0pR1mZtYw",
+    "pairingCode": "61F9-A9F4-9780-FBE8",
     "accountRecipient": "age1evqq9fqpuh409fjn5sqggtyyrdn4x42tq82qg5cw8sp8lhwrnu2srp8st9",
     "accountFingerprint": "6B0A-390E-D9B3-0724",
     "deviceKey": "YWdlLWVuY3J5cHRpb24ub3JnL3YxCi0+IFgyNTUxOSBCd2dNay83cEdVTDJIS3NTTzljdDkvVnpTTGNJdmxuNmt4OUJpSlJYbHhJCmY3dklGaG5taEpCVTdvWW5zOFNHbEJ4akRVVHlIeFZBTWd2NkxpWjZpUjQKLS0tIG85aXVxYU4wazkraFh0SlFXNWZJM3RhR1l2NUo1V1UwazYrWGxVOHMvaW8KQjsKpCKNq/RLemXZYMflizp/2T4nhKOOdmQ2U8Kk78uypcKZ55KD79VHR5PMLYtvK9y16HBKQxTy84sKF75J15KjRkz6bHA8sJkHCeFJ7U4BEmZbNeiq2OaBo4NLsNmB/iG7nnXeLR2azg=="

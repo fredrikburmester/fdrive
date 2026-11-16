@@ -25,8 +25,9 @@ interface Pair {
   protocolVersion: 1 | 2;
   owner: string;
   code: string;
-  /** The Mac's own age recipient, which the code is a digest of. */
+  /** The Mac's own age recipient, which the code is a digest of with `nonce`. */
   deviceRecipient?: string;
+  nonce?: string;
   secretHash: string;
   expires: number;
   cancelled?: boolean;
@@ -71,11 +72,17 @@ export interface DesktopDeps {
 
 /**
  * The code a person compares when pairing a Mac with a device key: 64 bits of
- * the SHA-256 of its recipient in four groups of uppercase hex, as
- * `@fdrive/crypto` `pairingCode` makes it in the browser and FDrive for Mac.
+ * the SHA-256 of its recipient and the pairing's nonce, in four groups of
+ * uppercase hex, as `@fdrive/crypto` `pairingCode` makes it in the browser
+ * and FDrive for Mac. The nonce is random per pairing, so nobody can show a
+ * Mac's code in a request of their own by copying its recipient.
  */
-export function devicePairingCode(deviceRecipient: string): string {
-  const hex = createHash("sha256").update(deviceRecipient).digest("hex").slice(0, 16).toUpperCase();
+export function devicePairingCode(deviceRecipient: string, nonce: string): string {
+  const hex = createHash("sha256")
+    .update(`${deviceRecipient}\n${nonce}`)
+    .digest("hex")
+    .slice(0, 16)
+    .toUpperCase();
   return [hex.slice(0, 4), hex.slice(4, 8), hex.slice(8, 12), hex.slice(12)].join("-");
 }
 
@@ -204,12 +211,21 @@ export function createDesktopPairing(deps: DesktopDeps) {
         [...pairs.values()].filter((pair) => pair.owner === owner).length >= 8
       )
         throw new ApiHttpError("rate_limited", "Too many connection requests. Try again shortly.");
+      if (
+        deviceRecipient !== undefined &&
+        [...pairs.values()].some((pair) => pair.deviceRecipient === deviceRecipient)
+      )
+        throw new ApiHttpError("conflict", "This Mac is already asking to connect.");
       const id = randomUUID();
       const secret = randomBytes(32).toString("base64url");
-      const code =
+      const device =
         deviceRecipient === undefined
+          ? undefined
+          : { deviceRecipient, nonce: randomBytes(16).toString("base64url") };
+      const code =
+        device === undefined
           ? randomBytes(4).toString("hex").toUpperCase()
-          : devicePairingCode(deviceRecipient);
+          : devicePairingCode(device.deviceRecipient, device.nonce);
       const expires = deps.clock().getTime() + 300_000;
       if (!sweeper) {
         // Expiry revocation must not depend on another request arriving.
@@ -221,11 +237,17 @@ export function createDesktopPairing(deps: DesktopDeps) {
         protocolVersion,
         owner,
         code,
-        ...(deviceRecipient === undefined ? {} : { deviceRecipient }),
+        ...device,
         expires,
         secretHash: hashApiToken(secret),
       });
-      return { id, secret, code, expiresAt: new Date(expires).toISOString() };
+      return {
+        id,
+        secret,
+        code,
+        expiresAt: new Date(expires).toISOString(),
+        ...(device === undefined ? {} : { nonce: device.nonce }),
+      };
     },
     info(id: string) {
       const pair = get(id);
@@ -235,7 +257,9 @@ export function createDesktopPairing(deps: DesktopDeps) {
         expiresAt: new Date(pair.expires).toISOString(),
         approved: pair.approval !== undefined,
         ...(pair.protocolVersion === 2 ? { supportsWrites: true } : {}),
-        ...(pair.deviceRecipient === undefined ? {} : { deviceRecipient: pair.deviceRecipient }),
+        ...(pair.deviceRecipient === undefined
+          ? {}
+          : { deviceRecipient: pair.deviceRecipient, nonce: pair.nonce }),
       };
     },
     /** Connects the Mac to the approving session's login, which its session already admitted. */

@@ -3,6 +3,7 @@ import { isStorageError, type StorageProvider } from "@fdrive/core";
 import { createMemoryStorage } from "@fdrive/core/testing";
 import { describe, expect, it } from "vitest";
 import {
+  checkRestore,
   encryptedAccessAllowed,
   encryptedFolderRefusal,
   encryptedFoldersOf,
@@ -335,6 +336,21 @@ describe("what a request learns about encrypted folders", () => {
   it("reads the markers of a storage built without the guard", async () => {
     const { inner } = storage();
     expect(await encryptedFoldersOf(inner as StorageProvider).isFolder("/Private")).toBe(true);
+  });
+
+  it("lets a restore go back only to the side of an encrypted folder's edge it came from", async () => {
+    const { guarded } = storage();
+    await checkRestore(guarded, `/Private/${enc("x")}`, `/Private/${enc("c")}/${enc("x")}`);
+    await checkRestore(guarded, "/Other/a.txt", "/Other/b.txt");
+    expect((await refusal(checkRestore(guarded, `/Private/${enc("x")}`, "/Other/x"))).code).toBe(
+      "encrypted_folder",
+    );
+    expect(
+      (await refusal(checkRestore(guarded, "/Other/a.txt", `/Private/${enc("a")}`))).kind,
+    ).toBe("forbidden");
+    expect(
+      (await refusal(checkRestore(guarded, `/Private/${enc("x")}`, `/Second/${enc("x")}`))).kind,
+    ).toBe("forbidden");
   });
 
   it("names its refusals for clients", () => {

@@ -34,7 +34,7 @@ import type {
 } from "@fdrive/db";
 import type { Principal } from "../auth/principal.js";
 import { gated, ungated, type WriteGate } from "../backups/write-gate.js";
-import { encryptedAccessAllowed, encryptedFoldersOf } from "../encryption/guard.js";
+import { checkRestore, encryptedAccessAllowed, encryptedFoldersOf } from "../encryption/guard.js";
 import { ApiHttpError } from "../errors.js";
 import { runStorageCall } from "../fs/routes.js";
 import type { MetadataService } from "../metadata/service.js";
@@ -990,7 +990,11 @@ export function createDesktopWrites(deps: DesktopWriteDeps) {
     try {
       // A move to Trash always names the Trash item it becomes.
       if (to === null) to = (await storage.trash.put(from, (trash as { id: string }).id)).leaf;
-      else if (leaving?.path === from) await storage.trash.restore(leaving.id, baseName(from), to);
+      else if (leaving?.path === from) {
+        const original = await originalOf(principal, from);
+        if (original !== null) await checkRestore(storage, original, to);
+        await storage.trash.restore(leaving.id, baseName(from), to);
+      }
       // A move onto itself publishes nothing.
       else if (from !== to)
         await storage.move(
