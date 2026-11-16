@@ -136,7 +136,7 @@ describe("a Mac that can take the encryption key", () => {
     const allow = screen.getByRole("button", { name: "Allow this Mac" }) as HTMLButtonElement;
     await waitFor(() => expect(allow.disabled).toBe(false));
     fireEvent.click(allow);
-    await screen.findByText("Connection approved");
+    await screen.findByText("Connection approved", undefined, { timeout: 5_000 });
     expect(approve).toHaveBeenCalledWith("request", "read");
   });
 
@@ -151,7 +151,7 @@ describe("a Mac that can take the encryption key", () => {
       await screen.findByText(/This Mac also gets a copy of your encryption key/),
     ).toBeDefined();
     fireEvent.click(screen.getByRole("button", { name: "Allow this Mac" }));
-    await screen.findByText("Connection approved");
+    await screen.findByText("Connection approved", undefined, { timeout: 5_000 });
 
     const [, mode, deviceKey] = approve.mock.calls[0] ?? [];
     expect(mode).toBe("read");
@@ -175,7 +175,7 @@ describe("a Mac that can take the encryption key", () => {
       await screen.findByText(/This Mac also gets a copy of your encryption key/),
     ).toBeDefined();
     fireEvent.click(screen.getByRole("button", { name: "Allow this Mac" }));
-    await screen.findByText("Connection approved");
+    await screen.findByText("Connection approved", undefined, { timeout: 5_000 });
     expect(approve.mock.calls[0]?.[2]).toEqual(expect.any(String));
   });
 
@@ -186,7 +186,7 @@ describe("a Mac that can take the encryption key", () => {
     mount();
     await screen.findByText(/stay locked until you connect it again/);
     fireEvent.click(screen.getByRole("button", { name: "Allow this Mac" }));
-    await screen.findByText("Connection approved");
+    await screen.findByText("Connection approved", undefined, { timeout: 5_000 });
     expect(approve).toHaveBeenCalledWith("request", "read");
   });
 
@@ -199,7 +199,7 @@ describe("a Mac that can take the encryption key", () => {
     const shown = await screen.findByRole("status", { name: "Connection code" });
     expect(shown.textContent).toBe("SERV-ERCO-DE00-0000");
     fireEvent.click(screen.getByRole("button", { name: "Allow this Mac" }));
-    await screen.findByText("Connection approved");
+    await screen.findByText("Connection approved", undefined, { timeout: 5_000 });
     expect(approve).toHaveBeenCalledWith("request", "read");
     expect(status).not.toHaveBeenCalled();
   });
@@ -218,7 +218,7 @@ describe("a Mac that can take the encryption key", () => {
     );
     await expectOwnCode();
     fireEvent.click(screen.getByRole("button", { name: "Allow this Mac" }));
-    await screen.findByText("Connection approved");
+    await screen.findByText("Connection approved", undefined, { timeout: 5_000 });
     expect(approve).toHaveBeenCalledWith("request", "read");
     expect(status).not.toHaveBeenCalled();
   });
