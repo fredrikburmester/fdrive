@@ -1,4 +1,5 @@
-import { describe, expect, it } from "vitest";
+import { Encrypter } from "age-encryption";
+import { describe, expect, it, vi } from "vitest";
 import {
   createAccountKeys,
   deviceKeyFor,
@@ -55,10 +56,28 @@ describe("account keys", () => {
   });
 
   it("use the default work factor when none is given", async () => {
-    const pair = await newKeyPair();
-    const sealed = await passwordKeyFor(pair.identity, "a long password");
-    expect(await unlockWithPassword(sealed, "a long password", pair.recipient)).toBe(pair.identity);
-  }, 30_000);
+    // Work factor 18 takes a minute of pure-JS scrypt under coverage, so the
+    // test records the factor and derives at the fast one.
+    const factors: number[] = [];
+    const setFactor = Encrypter.prototype.setScryptWorkFactor;
+    const spy = vi.spyOn(Encrypter.prototype, "setScryptWorkFactor").mockImplementation(function (
+      this: Encrypter,
+      factor: number,
+    ) {
+      factors.push(factor);
+      setFactor.call(this, FAST.workFactor);
+    });
+    try {
+      const pair = await newKeyPair();
+      const sealed = await passwordKeyFor(pair.identity, "a long password");
+      expect(factors).toEqual([18]);
+      expect(await unlockWithPassword(sealed, "a long password", pair.recipient)).toBe(
+        pair.identity,
+      );
+    } finally {
+      spy.mockRestore();
+    }
+  });
 });
 
 describe("key codes", () => {
