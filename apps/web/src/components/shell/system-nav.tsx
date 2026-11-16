@@ -21,6 +21,7 @@ import type { Route } from "next";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useId, useState } from "react";
+import { SIDEBAR_ROW } from "@/components/shell/sidebar-section";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import {
   SidebarMenu,
@@ -85,7 +86,7 @@ function SystemNavLink({
   const decorated = busy || warning;
   const button = (
     <SidebarMenuButton
-      className={item.id === "features" ? "pr-8" : undefined}
+      className={cn(SIDEBAR_ROW, item.id === "features" && "pr-8")}
       isActive={pathname === item.href}
       render={<Link href={item.href as Route} />}
       aria-describedby={decorated ? descriptionId : undefined}
@@ -109,9 +110,9 @@ function SystemNavLink({
           data-system-activity={busy ? "working" : "warning"}
         >
           {busy ? (
-            <LoaderCircle className="size-3 animate-spin motion-reduce:animate-none" />
+            <LoaderCircle className="size-3! animate-spin motion-reduce:animate-none" />
           ) : (
-            <CircleAlert className="size-3" />
+            <CircleAlert className="size-3!" />
           )}
           {percent != null && <span>{percent}%</span>}
         </span>
@@ -172,7 +173,7 @@ export function SystemNav() {
         <Collapsible open={open} onOpenChange={handleOpenChange}>
           {link(FEATURES_ITEM)}
           <CollapsibleTrigger
-            render={<SidebarMenuAction />}
+            render={<SidebarMenuAction className="peer-data-[size=default]/menu-button:top-2" />}
             aria-label={open ? "Collapse Features" : "Expand Features"}
           >
             <ChevronRight

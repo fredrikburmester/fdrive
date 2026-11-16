@@ -59,9 +59,9 @@
 
 /*
  * Apple-like theme: a neutral grey scale with a single blue accent (roughly
- * Apple's system blue), hairline low-contrast borders, and a translucent
- * sidebar background built with color-mix so it can sit over content with a
- * backdrop blur.
+ * Apple's system blue) and hairline low-contrast borders. The sidebar is grey
+ * only: a solid off-white (or near-black) panel whose hover and selected rows
+ * are a step darker (or lighter), with no tint.
  */
 :root {
   --font-sans:
@@ -92,14 +92,14 @@
   --chart-4: oklch(0.371 0 0);
   --chart-5: oklch(0.269 0 0);
   --radius: 0.625rem;
-  --sidebar: color-mix(in oklch, var(--background) 82%, transparent);
+  --sidebar: oklch(0.985 0 0);
   --sidebar-foreground: oklch(0.145 0 0);
-  --sidebar-primary: oklch(0.585 0.208 260.5);
+  --sidebar-primary: oklch(0.205 0 0);
   --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.945 0.025 260.5);
-  --sidebar-accent-foreground: oklch(0.585 0.208 260.5);
-  --sidebar-border: oklch(0.145 0 0 / 8%);
-  --sidebar-ring: oklch(0.585 0.208 260.5);
+  --sidebar-accent: oklch(0.945 0 0);
+  --sidebar-accent-foreground: oklch(0.205 0 0);
+  --sidebar-border: oklch(0.922 0 0);
+  --sidebar-ring: oklch(0.708 0 0);
 
   /* Finder-like tag dots: a fixed, Apple-ish palette, tuned to read clearly
      on both light and dark surfaces without separate dark-mode values. */
@@ -136,14 +136,14 @@
   --chart-3: oklch(0.439 0 0);
   --chart-4: oklch(0.371 0 0);
   --chart-5: oklch(0.269 0 0);
-  --sidebar: color-mix(in oklch, var(--background) 78%, transparent);
-  --sidebar-foreground: oklch(0.97 0 0);
-  --sidebar-primary: oklch(0.685 0.19 260.5);
-  --sidebar-primary-foreground: oklch(0.145 0 0);
-  --sidebar-accent: oklch(0.275 0.045 260.5);
-  --sidebar-accent-foreground: oklch(0.83 0.11 260.5);
+  --sidebar: oklch(0.205 0 0);
+  --sidebar-foreground: oklch(0.985 0 0);
+  --sidebar-primary: oklch(0.922 0 0);
+  --sidebar-primary-foreground: oklch(0.205 0 0);
+  --sidebar-accent: oklch(0.269 0 0);
+  --sidebar-accent-foreground: oklch(0.985 0 0);
   --sidebar-border: oklch(1 0 0 / 10%);
-  --sidebar-ring: oklch(0.685 0.19 260.5);
+  --sidebar-ring: oklch(0.556 0 0);
 }
 
 @layer base {
@@ -165,4 +165,13 @@
     transition-duration: 150ms;
     transition-timing-function: cubic-bezier(0.16, 1, 0.3, 1);
   }
+}
+
+/* While the sidebar's edge is dragged, the pointer keeps the resize cursor
+   wherever it goes and nothing on the page gets selected. Unlayered, so it
+   wins over Tailwind's cursor utilities. */
+[data-resizing],
+[data-resizing] * {
+  cursor: col-resize;
+  user-select: none;
 }

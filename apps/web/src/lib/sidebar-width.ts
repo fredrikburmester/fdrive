@@ -11,8 +11,8 @@ import { readJson, type StorageLike, writeJson } from "@/lib/files/storage";
 
 export const SIDEBAR_WIDTH_KEY = "fdrive.sidebar.width";
 
-export const DEFAULT_SIDEBAR_WIDTH = 256;
-export const MIN_SIDEBAR_WIDTH = 200;
+export const DEFAULT_SIDEBAR_WIDTH = 288;
+export const MIN_SIDEBAR_WIDTH = 224;
 export const MAX_SIDEBAR_WIDTH = 480;
 
 const CHANGE_EVENT = "fdrive:sidebar-width";

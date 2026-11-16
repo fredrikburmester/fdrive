@@ -48,10 +48,13 @@ it("opens at the stored width and follows a drag within the bounds, remembering 
   fireEvent.pointerMove(handle, { clientX: 400 });
   expect(width()).toBe("300px");
 
+  expect(document.documentElement.hasAttribute("data-resizing")).toBe(false);
   fireEvent.pointerDown(handle, { clientX: 300, pointerId: 1 });
   // The press must not start a native drag or a text selection underneath.
   expect(fireEvent.mouseDown(handle)).toBe(false);
   expect(handle.hasAttribute("data-snap-width")).toBe(true);
+  // The whole page keeps the resize cursor while the edge is held.
+  expect(document.documentElement.hasAttribute("data-resizing")).toBe(true);
   fireEvent.pointerMove(handle, { clientX: 340 });
   expect(width()).toBe("340px");
   fireEvent.pointerMove(handle, { clientX: 2000 });
@@ -60,6 +63,7 @@ it("opens at the stored width and follows a drag within the bounds, remembering 
   expect(width()).toBe(`${MIN_SIDEBAR_WIDTH}px`);
   fireEvent.pointerMove(handle, { clientX: 280 });
   fireEvent.pointerUp(handle, { clientX: 280, pointerId: 1 });
+  expect(document.documentElement.hasAttribute("data-resizing")).toBe(false);
 
   fireEvent.pointerMove(handle, { clientX: 500 });
   expect(width()).toBe("280px");
@@ -71,9 +75,18 @@ it("snaps to the stored width on load, then lets the sidebar animate again", asy
   expect(handle.hasAttribute("data-snap-width")).toBe(true);
   await waitFor(() => expect(handle.hasAttribute("data-snap-width")).toBe(false));
 
-  fireEvent.pointerDown(handle, { clientX: 256, pointerId: 1 });
+  fireEvent.pointerDown(handle, { clientX: DEFAULT_SIDEBAR_WIDTH, pointerId: 1 });
   fireEvent.pointerCancel(handle, { pointerId: 1 });
   expect(handle.hasAttribute("data-snap-width")).toBe(false);
+  expect(document.documentElement.hasAttribute("data-resizing")).toBe(false);
+});
+
+it("lets go of the page's resize cursor if the sidebar goes away mid-drag", () => {
+  const { handle } = renderSidebar();
+  fireEvent.pointerDown(handle, { clientX: DEFAULT_SIDEBAR_WIDTH, pointerId: 1 });
+  expect(document.documentElement.hasAttribute("data-resizing")).toBe(true);
+  cleanup();
+  expect(document.documentElement.hasAttribute("data-resizing")).toBe(false);
 });
 
 it("resizes with the arrow keys and returns to the default on double-click", () => {

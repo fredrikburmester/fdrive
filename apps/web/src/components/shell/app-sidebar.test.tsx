@@ -2,7 +2,7 @@
 
 import type { MeResponse } from "@fdrive/contracts";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { SidebarProvider } from "@/components/ui/sidebar";
 import { SearchShortcutProvider } from "@/lib/search/shortcut";
@@ -102,13 +102,13 @@ it("always shows Trash, and names the signed-in login and its storage", async ()
   expect(screen.getByText("Main")).toBeTruthy();
 });
 
-it("applies tighter vertical nav item spacing via scoped descendant styles on SidebarContent", () => {
+it("closes from its own header button, beside the wordmark", async () => {
   const { container } = renderSidebar();
-  const content = container.querySelector('[data-slot="sidebar-content"]');
-  expect(content?.className).toContain("gap-0");
-  expect(content?.className).toContain("[&_[data-sidebar=group]]:py-1");
-  expect(content?.className).toContain("[&_[data-sidebar=group-label]]:h-7");
-  expect(content?.className).toContain("[&_[data-sidebar=menu]]:gap-0");
+  const sidebar = container.querySelector('[data-slot="sidebar"]');
+  expect(sidebar?.getAttribute("data-state")).toBe("expanded");
+
+  fireEvent.click(await screen.findByRole("button", { name: "Close sidebar" }));
+  expect(sidebar?.getAttribute("data-state")).toBe("collapsed");
 });
 
 it("nests feature pages beneath Features and keeps other System pages separate", async () => {
