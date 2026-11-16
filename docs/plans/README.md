@@ -15,7 +15,6 @@ and S3 storage were removed.
 | [AI chat](AI-CHAT.md) | A docked, persistent chat panel that files are dropped into, with approval-gated tools, building on AI organize |
 | [Owned shares](OWNED-SHARES.md) | Server-side gallery gating for share links from unindexed logins |
 | [ML server follow-ups](ML-SERVER.md) | What is left after moving embeddings and document extraction into one Rust server: amd64 measurements, memory, extraction gaps |
-| [SFTPGo leftovers](SFTPGO-LEFTOVERS.md) | Code, settings and tables that exist only because fdrive grew on storage it did not own, grouped into pull requests with their order and decisions |
 
 These are a backlog, not a claim that an agent is working on every item.
 

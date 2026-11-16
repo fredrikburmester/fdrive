@@ -12,6 +12,7 @@ export type {
 export { insertLocalUsers, startLocalStorage } from "./local-storage.js";
 export type { SeedFiles, SeedGrant, SeedGrantAccess, SeedUser } from "./seed-data.js";
 export { SEED_FILES, SEED_GRANTS, SEED_USERS } from "./seed-data.js";
+export { migrationsThrough, SQUASHED_MIGRATIONS } from "./squashed-migrations.js";
 export type { StorageFactory, StorageFactoryResult } from "./storage/conformance.js";
 export { describeStorageProvider } from "./storage/conformance.js";
 export type { MemoryStorage, MemoryStorageOptions } from "./storage/memory-storage.js";

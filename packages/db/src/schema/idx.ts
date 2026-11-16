@@ -191,6 +191,7 @@ export const changes = idxSchema.table(
     mtimeNs: bigint("mtime_ns", { mode: "bigint" }),
     inode: bigint("inode", { mode: "bigint" }),
     ctimeNs: bigint("ctime_ns", { mode: "bigint" }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     /**
      * A file move's: the moved file's change time just before the rename,
      * when `size`, `mtime_ns`, `inode` and `ctime_ns` describe it right
@@ -198,7 +199,6 @@ export const changes = idxSchema.table(
      * this.
      */
     previousCtimeNs: bigint("previous_ctime_ns", { mode: "bigint" }),
-    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   // Consumers read a root's rows from a position; the API prunes by age.
   (table) => [
@@ -287,6 +287,9 @@ export const ocrLog = idxSchema.table(
     path: text("path").notNull(),
     size: bigint("size", { mode: "number" }).notNull(),
     mtimeNs: bigint("mtime_ns", { mode: "bigint" }).notNull(),
+    status: text("status").notNull(),
+    detail: text("detail"),
+    at: timestamp("at", { withTimezone: true }).defaultNow(),
     /**
      * The content OCR decided on, as `idx.files.sha256`: a PDF whose digest
      * has a row here is done wherever it lies, so a move or a restore from
@@ -295,9 +298,6 @@ export const ocrLog = idxSchema.table(
      * Null on rows written before OCR keyed its work by content.
      */
     sha256: text("sha256"),
-    status: text("status").notNull(),
-    detail: text("detail"),
-    at: timestamp("at", { withTimezone: true }).defaultNow(),
   },
   // The system event feed reads only failures, newest first
   // (`status in ('failed','timeout') [and at < ?] order by at desc nulls last`).

@@ -34,6 +34,7 @@
     "@types/pg": "^8.23.1",
     "@types/tar-stream": "^2.2.3",
     "@vitest/coverage-v8": "^5.0.0",
+    "drizzle-orm": "^0.45.2",
     "testcontainers": "12.1.0",
     "typescript": "^5.9.3",
     "vitest": "^5.0.0"

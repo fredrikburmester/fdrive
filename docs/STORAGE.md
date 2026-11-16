@@ -25,8 +25,9 @@ filesystem details and lets tests run on an in-memory storage. fdrive checks pas
   one the API can read, write and enter.
 - The files folder's id is the installation setting `storage.id`, created on the first start
   (`ensureStorageId`) and never changed: the Mac app compares it as each location's
-  `providerId`, so a new one would have every Mac paired again. Migration 0045 carried it over
-  from the files folder's old row in `app.providers`, and backups restore it with the other
+  `providerId`, so a new one would have every Mac paired again. A server upgraded from before
+  v0.7.0-rc.11 kept the id of the files folder's old row in `app.providers`, and backups
+  restore it with the other
   settings.
 - A signed-in request's storage is built on first use from the username its session or token
   query read, already admitted ([authentication](AUTH.md#resolving-a-request)); outside a

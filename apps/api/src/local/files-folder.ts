@@ -23,7 +23,7 @@ const StoredId = z.object({ id: z.uuid() });
  * The files folder's id, created on the first start and read on every later
  * one. It never changes: the Mac app compares it as each location's
  * `providerId`, and a new one would have every Mac paired again. A server
- * from before migration 0045 keeps the id of its old `app.providers` row.
+ * upgraded from before v0.7.0-rc.11 keeps the id of its old `app.providers` row.
  */
 export async function ensureStorageId(
   settings: Pick<SettingsRepo, "get" | "compareAndSet">,

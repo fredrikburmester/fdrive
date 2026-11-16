@@ -139,6 +139,10 @@ and after 20 minutes fails and names the ones that aren't.
 | a release, such as `0.3.1` | That release |
 | `main` | The main branch's latest build, less tested. Use main's [`compose.yaml`](https://raw.githubusercontent.com/fredrikburmester/fdrive/main/deploy/compose.yaml) with it |
 
+A server older than `0.7.0-rc.11` runs that release once (`FDRIVE_VERSION=0.7.0-rc.11`) before
+any newer one: later releases start the database's migration history afresh and refuse an older
+database, leaving it unchanged.
+
 You can't go back to an older release once a newer one has migrated the database. Keep `.env`,
 overlays, data folders, the database and your files, and don't delete volumes or redo setup to
 fix an error. After changing `.env`, run `docker compose up -d`; `docker restart` doesn't

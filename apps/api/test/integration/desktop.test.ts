@@ -25,7 +25,7 @@ it("pairs two people's Macs with isolated streaming reads, validators and revoca
     files: { alice: { "/same.txt": "alpha" }, bob: { "/same.txt": "bravo" } },
   });
   await seedLocalUsers(postgres.connectionString, storage, ["alice"]);
-  // An upgraded server: migration 0045 kept its files folder's old row id as the storage id.
+  // An upgraded server: it kept its files folder's old `app.providers` row id as the storage id.
   const storageId = "4f1f5e8e-5a1f-4b7e-9d0c-6f1d2a3b4c5d";
   const seeding = createDb(postgres.connectionString);
   await seeding.pool.query("insert into app.settings (key, value) values ('storage.id', $1)", [
@@ -216,8 +216,8 @@ it("pairs two people's Macs with isolated streaming reads, validators and revoca
     expect((await request(`${DESKTOP_API}/location`, undefined, desktopHeaders)).status).toBe(403);
     expect((await request(`${DESKTOP_API}/disconnect`, {}, desktopHeaders)).status).toBe(200);
     expect((await request(`${DESKTOP_API}/disconnect`, {}, desktopHeaders)).status).toBe(401);
-    // A deleted login takes its credentials with it, as migration 0033 deleted logins on
-    // storage fdrive no longer serves; the Mac hears that the credential is gone.
+    // A deleted login takes its credentials with it, as upgrades deleted logins on storage
+    // fdrive no longer serves; the Mac hears that the credential is gone.
     const otherHeaders = { authorization: `Bearer ${bOther.token}`, cookie: "" };
     expect((await request(`${DESKTOP_API}/location`, undefined, otherHeaders)).status).toBe(403);
     await database.pool.query("delete from app.identities where id = $1", [

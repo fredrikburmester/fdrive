@@ -1,18 +1,19 @@
-import { cp, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { createHash } from "node:crypto";
+import { readdir, readFile, rm } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { ActivityFacts, PersonalActivityEvidence, PersonalActivitySource } from "@fdrive/contracts";
+import { migrationsThrough, SQUASHED_MIGRATIONS } from "@fdrive/testkit";
 import { PostgreSqlContainer, type StartedPostgreSqlContainer } from "@testcontainers/postgresql";
 import { is, sql } from "drizzle-orm";
 import { migrate as runMigrations } from "drizzle-orm/node-postgres/migrator";
 import { getTableConfig, PgTable } from "drizzle-orm/pg-core";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { createDb, type Db, migrate, schema } from "../../src/index.js";
+import { type CreateDbResult, createDb, type Db, migrate, schema } from "../../src/index.js";
 
 let container: StartedPostgreSqlContainer;
 let db: Db;
 let close: () => Promise<void>;
+const opened: CreateDbResult[] = [];
 
 /** Every table the drizzle schema declares, as `schema.table`. */
 const EXPECTED_TABLES = Object.values(schema as Record<string, unknown>)
@@ -23,62 +24,155 @@ const EXPECTED_TABLES = Object.values(schema as Record<string, unknown>)
   })
   .sort();
 
-/**
- * Runs `body` against a second database migrated up to, but not including,
- * migration `tag`, so it can seed rows the way an older release stored them.
- */
-async function withDatabaseBefore(tag: string, body: (older: Db) => Promise<void>) {
-  const folder = path.join(path.dirname(fileURLToPath(import.meta.url)), "../../drizzle");
-  const migrations = await mkdtemp(path.join(tmpdir(), "fdrive-migrations-"));
-  const name = `before_${tag.slice(0, 4)}`;
+/** The migrations this package ships. */
+const SHIPPED_MIGRATIONS = path.join(path.dirname(fileURLToPath(import.meta.url)), "../../drizzle");
+
+interface JournalEntry {
+  readonly tag: string;
+  readonly when: number;
+}
+
+async function journal(folder: string): Promise<JournalEntry[]> {
+  const parsed = JSON.parse(await readFile(path.join(folder, "meta/_journal.json"), "utf8")) as {
+    entries: JournalEntry[];
+  };
+  return parsed.entries;
+}
+
+/** The history drizzle records for `folder`'s migrations: each one's sha256 and journal date. */
+async function expectedHistory(folder: string) {
+  return Promise.all(
+    (await journal(folder)).map(async (entry) => ({
+      hash: createHash("sha256")
+        .update(await readFile(path.join(folder, `${entry.tag}.sql`)))
+        .digest("hex"),
+      created_at: String(entry.when),
+    })),
+  );
+}
+
+/** A new, empty database named `name` on the test server. */
+async function database(name: string): Promise<Db> {
   await db.execute(sql.raw(`create database ${name}`));
   const uri = new URL(container.getConnectionUri());
   uri.pathname = `/${name}`;
-  const older = createDb(uri.toString());
-  try {
-    await cp(folder, migrations, { recursive: true });
-    const journal = JSON.parse(await readFile(path.join(folder, "meta/_journal.json"), "utf8"));
-    const last = journal.entries.findIndex((entry: { tag: string }) => entry.tag === tag);
-    if (last < 0) throw new Error(`no migration ${tag}`);
-    journal.entries = journal.entries.slice(0, last);
-    await writeFile(path.join(migrations, "meta/_journal.json"), JSON.stringify(journal));
-    await runMigrations(older.db, { migrationsFolder: migrations });
-    await body(older.db);
-  } finally {
-    await older.close();
-    await rm(migrations, { recursive: true, force: true });
-  }
+  const created = createDb(uri.toString());
+  opened.push(created);
+  return created.db;
 }
 
-/**
- * A login as releases before 0045 stored it, on a row in `app.providers` (the
- * files folder's unless `provider` names another), in SQL since the schema
- * no longer has those columns.
- */
-async function olderLogin(
-  older: Db,
-  username: string,
-  provider: { readonly type: string; readonly baseUrl: string } = {
-    type: "local",
-    baseUrl: "local",
-  },
-): Promise<{ accountId: string; identityId: string; providerId: string }> {
-  const result = await older.execute<{
-    account_id: string;
-    identity_id: string;
-    provider_id: string;
-  }>(sql`
-    with provider as (
-      insert into app.providers (type, base_url) values (${provider.type}, ${provider.baseUrl})
-      on conflict (type, base_url) do update set base_url = excluded.base_url
-      returning id
-    ), account as (insert into app.accounts default values returning id)
-    insert into app.identities (account_id, provider_id, external_username)
-    select account.id, provider.id, ${username} from account, provider
-    returning account_id, id as identity_id, provider_id`);
-  const [row] = result.rows;
-  if (row === undefined) throw new Error("expected a login");
-  return { accountId: row.account_id, identityId: row.identity_id, providerId: row.provider_id };
+/** A database named `name` that the migrations in `folder` built through `through`. */
+async function migratedThrough(name: string, folder: string, through: string): Promise<Db> {
+  const target = await database(name);
+  const migrations = await migrationsThrough(folder, through);
+  try {
+    await runMigrations(target, { migrationsFolder: migrations });
+  } finally {
+    await rm(migrations, { recursive: true, force: true });
+  }
+  return target;
+}
+
+/** `pg_dump` of database `name`, from inside the container, without its random `\restrict` key. */
+async function dump(name: string, ...options: string[]): Promise<string> {
+  const result = await container.exec(["pg_dump", "--username", "fdrive", ...options, name]);
+  if (result.exitCode !== 0) throw new Error(`pg_dump ${name}: ${result.stderr}`);
+  return result.stdout
+    .split("\n")
+    .filter((line) => !/^\\(un)?restrict /.test(line))
+    .join("\n");
+}
+
+const schemaOf = (name: string) => dump(name, "--schema-only");
+/** Every row outside drizzle's bookkeeping, sequence positions included. */
+const dataOf = (name: string) => dump(name, "--data-only", "--exclude-schema=drizzle");
+
+async function history(target: Db) {
+  const result = await target.execute<{ hash: string; created_at: string }>(sql`
+    select hash, created_at::text from drizzle.__drizzle_migrations order by created_at, id`);
+  return result.rows;
+}
+
+/** Every row of every `app` and `idx` table, as JSON, in a stable order. */
+async function contents(target: Db): Promise<Record<string, Record<string, unknown>[]>> {
+  const tables = await target.execute<{ name: string }>(sql`
+    select table_schema || '.' || table_name as name from information_schema.tables
+    where table_schema in ('app', 'idx') and table_type = 'BASE TABLE' order by 1`);
+  const result: Record<string, Record<string, unknown>[]> = {};
+  for (const { name } of tables.rows) {
+    const rows = await target.execute<{ rows: Record<string, unknown>[] }>(
+      sql.raw(`select coalesce(jsonb_agg(to_jsonb(t) order by to_jsonb(t)::text), '[]') as rows
+        from ${name} t`),
+    );
+    result[name] = rows.rows[0]?.rows ?? [];
+  }
+  return result;
+}
+
+const ALICE = "00000000-0000-4000-8000-0000000000a1";
+const BOB = "00000000-0000-4000-8000-0000000000b1";
+const ALICE_LOGIN = "00000000-0000-4000-8000-0000000000a2";
+const BOB_LOGIN = "00000000-0000-4000-8000-0000000000b2";
+const WORK_TAG = "00000000-0000-4000-8000-0000000000c1";
+
+/** Rows as v0.7.0-rc.11 stores them, in every kind of table an owner fills. */
+async function seedRows(older: Db): Promise<void> {
+  await older.execute(sql`
+    insert into app.accounts (id, display_name, is_admin) values
+      (${ALICE}, 'Alice', true), (${BOB}, null, false)`);
+  await older.execute(sql`
+    insert into app.identities (id, account_id, username) values
+      (${ALICE_LOGIN}, ${ALICE}, 'alice'), (${BOB_LOGIN}, ${BOB}, 'bob')`);
+  await older.execute(sql`
+    insert into app.local_users (username, password_hash, storage_limit) values
+      ('alice', 'scrypt$16384$8$1$AA$AA', null), ('bob', 'scrypt$16384$8$1$BB$BB', 1000000)`);
+  await older.execute(sql`
+    insert into app.settings (key, value) values
+      ('storage.id', '{"id":"00000000-0000-4000-8000-0000000000d1"}'),
+      ('setup.owner.v1', ${JSON.stringify({ version: 1, state: "complete", accountId: ALICE })})`);
+  await older.execute(sql`
+    insert into app.trash_items (identity_id, original_path, name, kind, size, deleted_at,
+      moving_from) values
+      (${ALICE_LOGIN}, '/docs/report.pdf', 'report.pdf', 'file', 1234, '2026-11-14T10:00:00Z', null),
+      (${ALICE_LOGIN}, '/photos/2024', '2024', 'dir', 0, '2026-11-13T09:00:00Z', null),
+      (${BOB_LOGIN}, '/notes.txt', 'notes.txt', 'file', 12, '2026-11-12T08:00:00Z',
+        '/.trash/.fdrive-move-v1/file/p/notes.txt/v/1')`);
+  await older.execute(sql`
+    insert into app.shares (identity_id, name, scope, paths, password_hash, max_downloads,
+      used_downloads, description) values
+      (${ALICE_LOGIN}, 'Report', 'read', array['/docs/report.pdf'], 'scrypt$1$8$1$AA$AA', 5, 2,
+        'For Bob')`);
+  await older.execute(sql`
+    insert into app.tags (id, account_id, name, color) values (${WORK_TAG}, ${ALICE}, 'Work', 'blue')`);
+  await older.execute(sql`
+    insert into app.file_tags (identity_id, path, tag_id) values
+      (${ALICE_LOGIN}, '/docs/a.txt', ${WORK_TAG})`);
+  await older.execute(sql`
+    insert into app.favorites (identity_id, path) values (${ALICE_LOGIN}, '/docs/a.txt')`);
+  await older.execute(sql`
+    insert into app.local_grants (owner_username, path, grantee_username, access) values
+      ('alice', '/shared', 'bob', 'write')`);
+  await older.execute(sql`
+    insert into app.saved_searches (account_id, name, query, type) values
+      (${ALICE}, 'Reports', 'report', 'all')`);
+  await older.execute(sql`
+    insert into app.api_tokens (account_id, identity_id, name, token_hash, access) values
+      (${ALICE}, ${ALICE_LOGIN}, 'Laptop', 'token-hash', '{"mode":"read","paths":["/"]}')`);
+  await older.execute(sql`
+    insert into app.desktop_items (identity_id, path, kind) values
+      (${ALICE_LOGIN}, '/docs/a.txt', 'file')`);
+  await older.execute(sql`
+    insert into idx.files (root_id, path, name, size, mtime_ns) values
+      (1, 'alice/docs/a.txt', 'a.txt', 3, 1)`);
+}
+
+/** `rows` without the `original_path` of `app.desktop_items`, which the upgrade drops. */
+function withoutDesktopOriginalPath(
+  rows: Record<string, Record<string, unknown>[]>,
+): Record<string, Record<string, unknown>[]> {
+  const items = (rows["app.desktop_items"] ?? []).map(({ original_path: _, ...row }) => row);
+  items.sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)));
+  return { ...rows, "app.desktop_items": items };
 }
 
 beforeAll(async () => {
@@ -94,6 +188,7 @@ beforeAll(async () => {
 }, 180_000);
 
 afterAll(async () => {
+  await Promise.all(opened.map((database) => database.close()));
   await close();
   await container.stop();
 }, 180_000);
@@ -270,354 +365,125 @@ describe("migrate", () => {
       .catch((caught: unknown) => caught);
     expect(error).toMatchObject({ cause: { code: "23502", column: "access" } });
   });
+});
 
-  it("deletes the tokens made before access levels, and only those", async () => {
-    await withDatabaseBefore("0030_drop_legacy_tokens_and_moves", async (older) => {
-      const alice = await olderLogin(older, "alice");
-      // Its user, so the next migration keeps the login. In SQL, as the schema has
-      // columns since that this database does not.
-      await older.execute(
-        sql`insert into app.local_users (username, password_hash) values ('alice', 'x')`,
-      );
-      await older.execute(sql`
-        insert into app.api_tokens (account_id, identity_id, name, token_hash, access) values
-          (${alice.accountId}, ${alice.identityId}, 'Old', 'old-hash', null),
-          (${alice.accountId}, ${alice.identityId}, 'Scoped', 'scoped-hash', '{"mode":"read","paths":["/"]}')
-      `);
+describe("the squashed history", () => {
+  const SQUASHED_0047 = "0047_drop_desktop_original_path";
+  let fresh: Db;
 
-      await migrate(older);
-
-      const kept = await older.execute<{ name: string }>(sql`select name from app.api_tokens`);
-      expect(kept.rows.map((row) => row.name)).toEqual(["Scoped"]);
-      const moves = await older.execute<{ table: string | null }>(
-        sql`select to_regclass('idx.moves')::text as table`,
-      );
-      expect(moves.rows).toEqual([{ table: null }]);
-    });
+  beforeAll(async () => {
+    fresh = await database("new_install");
+    await migrate(fresh);
   });
 
-  it("leaves personal activity with nothing only remote storage produced, so every event parses", async () => {
-    await withDatabaseBefore("0034_activity_without_provider_values", async (older) => {
-      const alice = await olderLogin(older, "alice");
-      const identity = { id: alice.identityId };
-      const provider = { id: alice.providerId };
-      const owner = alice.accountId;
-      const file = "00000000-0000-4000-8000-000000000001";
-      const trashed = "00000000-0000-4000-8000-000000000002";
-      const listed = "00000000-0000-4000-8000-000000000003";
-      await older.execute(sql`
-        insert into app.activity_storage_identities (identity_id, provider_id, provider_type, label)
-          values (${identity.id}, ${provider.id}, 'local', 'Local folder')`);
-      await older.execute(sql`
-        insert into app.activity_files (id, identity_id, kind, virtual_path, state)
-          values (${file}, ${identity.id}, 'file', '/a.txt', 'unknown')`);
-      await older.execute(sql`
-        insert into app.activity_events (id, owner_account_id, owner_sequence, actor_account_id,
-          identity_id, file_id, class, action, stage, outcome, source, evidence, sort_at,
-          idempotency_key, before, after)
-        values
-          (${trashed}, ${owner}, 1, ${owner}, ${identity.id}, ${file}, 'action', 'file.trash',
-            'outcome', 'success', 'web', 'server_confirmed', now(), 'trash',
-            '{"path":"/a.txt","trashStrategy":"fdrive_move"}',
-            '{"path":"/a.txt","trashLeaf":"/.trash/a.txt","trashStrategy":"sftpgo_rule"}'),
-          (${listed}, ${owner}, 2, null, ${identity.id}, ${file}, 'observation',
-            'observation.location_missing', 'outcome', 'unknown', 'refresh', 'refresh_comparison',
-            now(), 'listing', '{"path":"/a.txt"}', null)`);
-      await older.execute(sql`
-        insert into app.activity_event_subjects (owner_account_id, event_id, identity_id, file_id,
-          role, subject_ordinal, virtual_path_snapshot)
-          values (${owner}, ${listed}, ${identity.id}, ${file}, 'primary', 0, '/a.txt')`);
-      await older.execute(sql`
-        insert into app.activity_revisions (file_id, identity_id, owner_account_id, event_id,
-          provider_version) values (${file}, ${identity.id}, ${owner}, ${trashed}, 'etag')`);
-      await older.execute(sql`
-        insert into app.activity_observation_state (owner_account_id, identity_id, file_id,
-          prior_generation, discrepancy, evidence_fingerprint, event_id, last_check_at)
-          values (${owner}, ${identity.id}, ${file}, 0, 'observation.location_missing', 'x',
-            ${listed}, now())`);
-
-      await migrate(older);
-
-      const events = await older.execute<{
-        id: string;
-        source: string;
-        evidence: string;
-        before: unknown;
-        after: unknown;
-        detail: unknown;
-      }>(sql`select id, source, evidence, before, after, detail from app.activity_events`);
-      expect(events.rows.map((row) => row.id)).toEqual([trashed]);
-      for (const row of events.rows) {
-        expect(PersonalActivitySource.safeParse(row.source).success).toBe(true);
-        expect(PersonalActivityEvidence.safeParse(row.evidence).success).toBe(true);
-        for (const facts of [row.before, row.after, row.detail])
-          expect(ActivityFacts.nullable().safeParse(facts).success).toBe(true);
-      }
-      expect(events.rows[0]?.after).toEqual({ path: "/a.txt", trashLeaf: "/.trash/a.txt" });
-      const leftovers = await older.execute(sql`
-        select (select count(*) from app.activity_event_subjects)::int as subjects,
-          (select count(*) from app.activity_observation_state)::int as states`);
-      expect(leftovers.rows).toEqual([{ subjects: 0, states: 0 }]);
-      const logins = await older.execute(sql`select * from app.activity_storage_identities`);
-      expect(logins.rows).toEqual([{ identity_id: identity.id, label: "alice" }]);
-      const revisions = await older.execute<{ column: string }>(sql`
-        select column_name as column from information_schema.columns
-        where table_schema = 'app' and table_name = 'activity_revisions'`);
-      expect(revisions.rows.map((row) => row.column)).not.toContain("provider_version");
-    });
+  it("dates the baseline as the old 0000, so databases that ran the old history skip it", async () => {
+    const shipped = await journal(SHIPPED_MIGRATIONS);
+    const squashed = await journal(SQUASHED_MIGRATIONS);
+    expect(shipped.slice(0, 2).map((entry) => entry.tag)).toEqual([
+      "0000_baseline",
+      "0001_squash_history",
+    ]);
+    expect(shipped[0]?.when).toBe(squashed[0]?.when);
+    expect(shipped[1]?.when).toBeGreaterThan(squashed.at(-1)?.when ?? Number.POSITIVE_INFINITY);
   });
 
-  it("keeps only logins with a user of the same name, and drops the stored passwords", async () => {
-    await withDatabaseBefore("0033_local_passwords", async (older) => {
-      const owner = (await olderLogin(older, "alice")).accountId;
-      await olderLogin(older, "Bob"); // a removed user's login under another spelling of bob
-      // A login on storage fdrive no longer has.
-      await olderLogin(older, "alice-dav", { type: "webdav", baseUrl: "http://dav.invalid" });
-      for (const username of ["alice", "bob", "carol"])
-        await older.execute(
-          sql`insert into app.local_users (username, password_hash) values (${username}, 'x')`,
-        );
-      // A files folder destination with a sealed password, and a bucket.
-      await older.execute(sql`
-        insert into app.backup_destinations (id, revision, name, type, config, secret) values
-          (gen_random_uuid(), gen_random_uuid(), 'Files', 'provider', '{}', '\\x01'),
-          (gen_random_uuid(), gen_random_uuid(), 'Bucket', 's3', '{}', '\\x01')
-      `);
-      await older.execute(sql`
-        insert into app.settings (key, value) values
-          ('setup.initialized.v1', 'true'),
-          ('setup.owner.v1', ${JSON.stringify({ version: 1, state: "complete", accountId: owner })})
-      `);
+  it("builds from the baseline exactly the schema and rows the squashed history built", async () => {
+    await migratedThrough("baseline_only", SHIPPED_MIGRATIONS, "0001_squash_history");
+    await migratedThrough("squashed_history", SQUASHED_MIGRATIONS, SQUASHED_0047);
 
-      await migrate(older);
-
-      const logins = await older.execute<{ name: string }>(
-        sql`select username as name from app.identities order by 1`,
-      );
-      expect(logins.rows.map((row) => row.name)).toEqual(["alice"]);
-      // bob and carol had no login of their own name; alice keeps hers.
-      const users = await older.execute<{ name: string }>(
-        sql`select username as name from app.local_users order by 1`,
-      );
-      expect(users.rows.map((row) => row.name)).toEqual(["alice"]);
-      const settings = await older.execute<{ key: string }>(
-        sql`select key from app.settings where key like 'setup.%' order by 1`,
-      );
-      expect(settings.rows).toEqual([{ key: "setup.owner.v1" }]);
-      const destinations = await older.execute<{ type: string }>(
-        sql`select type from app.backup_destinations`,
-      );
-      expect(destinations.rows).toEqual([{ type: "s3" }]);
-      const credentials = await older.execute<{ table: string | null }>(
-        sql`select to_regclass('app.credentials')::text as table`,
-      );
-      expect(credentials.rows).toEqual([{ table: null }]);
-    });
+    const schema = await schemaOf("baseline_only");
+    expect(schema).toContain("CREATE TABLE app.trash_items (");
+    expect(schema).toContain("CREATE EXTENSION IF NOT EXISTS vector");
+    expect(schema).toBe(await schemaOf("squashed_history"));
+    const data = await dataOf("baseline_only");
+    // The one row both seed: the files folder's index root.
+    expect(data).toContain("1\tfiles");
+    expect(data).toBe(await dataOf("squashed_history"));
   });
 
-  it("keeps the Trash bindings that know their leaf, drops the rest, and the old Trash settings", async () => {
-    await withDatabaseBefore("0039_trash_leaf_required", async (older) => {
-      const alice = await olderLogin(older, "alice");
-      const identity = { id: alice.identityId };
-      const provider = { id: alice.providerId };
-      const owner = alice.accountId;
-      const bound = "00000000-0000-4000-8000-000000000021";
-      const unresolved = "00000000-0000-4000-8000-000000000022";
-      const file = "00000000-0000-4000-8000-000000000023";
-      await older.execute(sql`
-        insert into app.activity_storage_identities (identity_id, label)
-          values (${identity.id}, 'alice')`);
-      await older.execute(sql`
-        insert into app.activity_files (id, identity_id, kind, virtual_path, state)
-          values (${file}, ${identity.id}, 'file', '/a.txt', 'trashed')`);
-      await older.execute(sql`
-        insert into app.activity_events (id, owner_account_id, owner_sequence, actor_account_id,
-          identity_id, file_id, class, action, stage, outcome, source, evidence, sort_at,
-          idempotency_key, before, after)
-        values
-          (${bound}, ${owner}, 1, ${owner}, ${identity.id}, ${file}, 'action', 'file.trash',
-            'outcome', 'success', 'web', 'server_confirmed', now(), 'bound', '{}', '{}'),
-          (${unresolved}, ${owner}, 2, ${owner}, ${identity.id}, ${file}, 'action', 'file.trash',
-            'outcome', 'success', 'web', 'server_confirmed', now(), 'unresolved', '{}', '{}')`);
-      await older.execute(sql`
-        insert into app.activity_trash_bindings (file_id, identity_id, owner_account_id, event_id,
-          original_virtual_path, trash_virtual_leaf, state) values
-          (${file}, ${identity.id}, ${owner}, ${bound}, '/a.txt',
-            '/.trash/.fdrive-move-v1/file/p/a.txt/v/1', 'bound'),
-          (${file}, ${identity.id}, ${owner}, ${unresolved}, '/a.txt', null, 'unresolved')`);
-      await older.execute(sql`
-        insert into app.settings (key, value) values
-          (${`trash.configuration.${provider.id}`}, '{"enabled":true,"path":"/Bin"}'),
-          ('storage.name', '{"name":"Home"}')`);
-
-      await migrate(older);
-
-      const bindings = await older.execute(
-        sql`select event_id, state from app.activity_trash_bindings`,
-      );
-      expect(bindings.rows).toEqual([{ event_id: bound, state: "bound" }]);
-      await expect(
-        older.execute(sql`
-          insert into app.activity_trash_bindings (file_id, identity_id, owner_account_id,
-            event_id, original_virtual_path, trash_virtual_leaf, state)
-            values (${file}, ${identity.id}, ${owner}, ${unresolved}, '/a.txt', null, 'bound')`),
-      ).rejects.toThrow();
-      const settings = await older.execute(sql`select key from app.settings order by key`);
-      expect(settings.rows).toEqual([{ key: "storage.id" }, { key: "storage.name" }]);
-    });
+  it("records the shipped migrations on a new install, the baseline first", async () => {
+    expect(await history(fresh)).toEqual(await expectedHistory(SHIPPED_MIGRATIONS));
   });
 
-  it("keeps only bucket destinations and drops configuration ZIPs", async () => {
-    await withDatabaseBefore("0036_backups_s3_only", async (older) => {
-      const files = "00000000-0000-4000-8000-000000000011";
-      const bucket = "00000000-0000-4000-8000-000000000012";
-      const run = "00000000-0000-4000-8000-000000000013";
-      await older.execute(sql`
-        insert into app.backup_destinations (id, revision, name, type, config, secret) values
-          (${files}, gen_random_uuid(), 'Files', 'provider', '{}', '\\x01'),
-          (${bucket}, gen_random_uuid(), 'Bucket', 's3', '{}', '\\x01')`);
-      await older.execute(sql`
-        insert into app.backup_runs (id, request, recipient) values (${run}, '{}', 'age1')`);
-      await older.execute(sql`
-        insert into app.backup_deliveries (run_id, destination_id, destination_revision, name)
-          values (${run}, ${files}, gen_random_uuid(), 'Files'),
-            (${run}, ${bucket}, gen_random_uuid(), 'Bucket')`);
-      await older.execute(sql`
-        insert into app.backup_attachments (version_id, label, filename, bytes, sha256, secret)
-          values (gen_random_uuid(), 'Config', 'config.zip', '1', 'x', '\\x01')`);
-      await older.execute(sql`
-        insert into app.settings (key, value) values
-          (${`backup.inventory.${run}`}, '{"attachmentVersions":[]}'),
-          ('backup.worker.v1', '{}')`);
+  it.each([
+    ["0046_trash_items", "v0.7.0-rc.11"],
+    [SQUASHED_0047, "main's edge build"],
+  ])("upgrades a database at %s (%s) in place, keeping every row", async (through) => {
+    const name = `at_${through.slice(0, 4)}`;
+    const older = await migratedThrough(name, SQUASHED_MIGRATIONS, through);
+    await seedRows(older);
+    if (through === "0046_trash_items")
+      await older.execute(sql`update app.desktop_items set original_path = '/docs/old.txt'`);
+    const before = withoutDesktopOriginalPath(await contents(older));
+    expect(before["app.trash_items"]).toHaveLength(3);
 
-      await migrate(older);
+    await migrate(older);
 
-      const destinations = await older.execute(sql`select id from app.backup_destinations`);
-      expect(destinations.rows).toEqual([{ id: bucket }]);
-      const deliveries = await older.execute(sql`select destination_id from app.backup_deliveries`);
-      expect(deliveries.rows).toEqual([{ destination_id: bucket }]);
-      const runs = await older.execute(sql`select id from app.backup_runs`);
-      expect(runs.rows).toEqual([{ id: run }]);
-      const settings = await older.execute(sql`select key from app.settings order by key`);
-      expect(settings.rows).toEqual([{ key: "backup.worker.v1" }]);
-      const attachments = await older.execute<{ table: string | null }>(
-        sql`select to_regclass('app.backup_attachments')::text as table`,
-      );
-      expect(attachments.rows).toEqual([{ table: null }]);
-    });
+    expect(withoutDesktopOriginalPath(await contents(older))).toEqual(before);
+    expect(await schemaOf(name)).toBe(await schemaOf("new_install"));
+    expect(await history(older)).toEqual(await history(fresh));
+    // Then it is a database like any other: the next start migrates nothing.
+    await migrate(older);
+    expect(await history(older)).toEqual(await history(fresh));
   });
 
-  it("keeps only the files root, as row 1, with what was indexed under it", async () => {
-    await withDatabaseBefore("0040_index_root_files", async (older) => {
-      await older.execute(sql`insert into idx.roots (name) values ('files'), ('photos')`);
-      await older.execute(sql`
-        insert into idx.files (root_id, path, name, size, mtime_ns) values
-          (1, 'alice/a.txt', 'a.txt', 1, 1), (2, 'b.jpg', 'b.jpg', 1, 1)`);
-      await older.execute(sql`
-        insert into idx.scans (root_id, started_at) values (1, now()), (2, now())`);
-      await older.execute(sql`
-        insert into idx.ocr_log (root_id, path, size, mtime_ns, status) values
-          (2, 'c.pdf', 1, 1, 'ocred')`);
+  it("refuses a database older than v0.7.0-rc.11 and leaves it as it was", async () => {
+    const older = await migratedThrough("at_0045", SQUASHED_MIGRATIONS, "0045_drop_providers");
+    await older.execute(sql`insert into app.accounts (id) values (${ALICE})`);
+    await older.execute(sql`
+      insert into app.identities (account_id, username) values (${ALICE}, 'alice')`);
+    const schemaBefore = await schemaOf("at_0045");
+    const historyBefore = await history(older);
+    const rowsBefore = await contents(older);
 
-      await migrate(older);
+    const error = await migrate(older).catch((caught: unknown) => caught);
 
-      const roots = await older.execute(sql`select id, name from idx.roots`);
-      expect(roots.rows).toEqual([{ id: 1, name: "files" }]);
-      const files = await older.execute(sql`select root_id, path from idx.files`);
-      expect(files.rows).toEqual([{ root_id: 1, path: "alice/a.txt" }]);
-      const scans = await older.execute(sql`select root_id from idx.scans`);
-      expect(scans.rows).toEqual([{ root_id: 1 }]);
-      const log = await older.execute(sql`select count(*)::int as n from idx.ocr_log`);
-      expect(log.rows).toEqual([{ n: 0 }]);
-      // A row added later, as tests do, takes the next id.
-      const added = await older.execute(
-        sql`insert into idx.roots (name) values ('r') returning id`,
-      );
-      expect(added.rows).toEqual([{ id: 2 }]);
+    expect(error).toMatchObject({
+      cause: {
+        message: "fdrive cannot upgrade this database: it is older than v0.7.0-rc.11",
+        hint: "Start fdrive v0.7.0-rc.11 on it once, then this release.",
+      },
     });
+    expect(await schemaOf("at_0045")).toBe(schemaBefore);
+    expect(await history(older)).toEqual(historyBefore);
+    expect(historyBefore).toHaveLength(46);
+    expect(await contents(older)).toEqual(rowsBefore);
   });
 
-  it("deletes the rows the index kept for removed files, with their chunks, and the column", async () => {
-    await withDatabaseBefore("0043_index_hard_delete", async (older) => {
-      await older.execute(sql`
-        insert into idx.files (root_id, path, name, size, mtime_ns, deleted_at) values
-          (1, 'alice/kept.txt', 'kept.txt', 1, 1, null),
-          (1, 'alice/gone.txt', 'gone.txt', 1, 1, now())`);
-      await older.execute(
-        sql`insert into idx.chunks (file_id, idx, text) select id, 0, name from idx.files`,
-      );
+  it("refuses a history with an entry no release wrote and leaves it as it was", async () => {
+    const older = await migratedThrough("unknown_entry", SQUASHED_MIGRATIONS, "0046_trash_items");
+    await older.execute(sql`
+      insert into drizzle.__drizzle_migrations (hash, created_at) values (${"0".repeat(64)}, 1)`);
+    const schemaBefore = await schemaOf("unknown_entry");
+    const historyBefore = await history(older);
 
-      await migrate(older);
+    const error = await migrate(older).catch((caught: unknown) => caught);
 
-      const files = await older.execute(sql`select path from idx.files`);
-      expect(files.rows).toEqual([{ path: "alice/kept.txt" }]);
-      const chunks = await older.execute(sql`select text from idx.chunks`);
-      expect(chunks.rows).toEqual([{ text: "kept.txt" }]);
-      const columns = await older.execute(sql`
-        select column_name from information_schema.columns
-          where table_schema = 'idx' and table_name = 'files' and column_name = 'deleted_at'`);
-      expect(columns.rows).toEqual([]);
+    expect(error).toMatchObject({
+      cause: {
+        message:
+          "fdrive cannot upgrade this database: its migration history has entries no fdrive release wrote",
+      },
     });
+    expect(await schemaOf("unknown_entry")).toBe(schemaBefore);
+    expect(await history(older)).toEqual(historyBefore);
   });
 
-  it("deletes links locked when SFTPGo kept their passwords, and keeps the count as used_downloads", async () => {
-    await withDatabaseBefore("0044_share_columns", async (older) => {
-      const identity = { id: (await olderLogin(older, "alice")).identityId };
-      await older.execute(sql`
-        insert into app.shares (identity_id, name, scope, paths, has_password, password_hash, views)
-        values
-          (${identity.id}, 'open', 'read', array['/a'], false, null, 3),
-          (${identity.id}, 'protected', 'read', array['/b'], true, 'scrypt$1$8$1$AA$AA', 1),
-          (${identity.id}, 'locked', 'read', array['/c'], true, 'locked$sftpgo', 0)`);
+  it("builds the same schema from the SQL files alone, as the indexer's and OCR's tests do", async () => {
+    const raw = await database("raw_files");
+    const files = (await readdir(SHIPPED_MIGRATIONS)).filter((name) => name.endsWith(".sql"));
+    for (const file of files.sort()) {
+      const text = await readFile(path.join(SHIPPED_MIGRATIONS, file), "utf8");
+      for (const statement of text.split("--> statement-breakpoint"))
+        if (statement.trim()) await raw.execute(sql.raw(statement));
+    }
 
-      await migrate(older);
-
-      const links = await older.execute(sql`
-        select name, used_downloads, password_hash is not null as protected
-          from app.shares order by name`);
-      expect(links.rows).toEqual([
-        { name: "open", used_downloads: 3, protected: false },
-        { name: "protected", used_downloads: 1, protected: true },
-      ]);
-      const columns = await older.execute(sql`
-        select column_name from information_schema.columns
-          where table_schema = 'app' and table_name = 'shares'
-            and column_name in ('has_password', 'views')`);
-      expect(columns.rows).toEqual([]);
-    });
-  });
-
-  it("keeps the files folder's id, which the Mac compares as providerId, and drops the provider rows", async () => {
-    await withDatabaseBefore("0045_drop_providers", async (older) => {
-      const alice = await olderLogin(older, "alice");
-      const bob = await olderLogin(older, "Bob");
-      expect(bob.providerId).toBe(alice.providerId);
-
-      await migrate(older);
-
-      const stored = await older.execute(
-        sql`select value from app.settings where key = 'storage.id'`,
-      );
-      expect(stored.rows).toEqual([{ value: { id: alice.providerId } }]);
-      const logins = await older.execute(
-        sql`select id, account_id, username from app.identities order by lower(username)`,
-      );
-      expect(logins.rows).toEqual([
-        { id: alice.identityId, account_id: alice.accountId, username: "alice" },
-        { id: bob.identityId, account_id: bob.accountId, username: "Bob" },
-      ]);
-      const gone = await older.execute(sql`
-        select to_regclass('app.providers')::text as table,
-          (select count(*) from information_schema.columns
-            where table_schema = 'app' and table_name = 'identities'
-              and column_name in ('provider_id', 'external_username'))::int as columns`);
-      expect(gone.rows).toEqual([{ table: null, columns: 0 }]);
-      // A login's name stays unique in any case.
-      await expect(
-        older.execute(sql`
-          with account as (insert into app.accounts default values returning id)
-          insert into app.identities (account_id, username) select id, 'ALICE' from account`),
-      ).rejects.toThrow();
-    });
+    const schemas = ["--schema=app", "--schema=idx"];
+    expect(await dump("raw_files", "--schema-only", ...schemas)).toBe(
+      await dump("new_install", "--schema-only", ...schemas),
+    );
+    expect(await dump("raw_files", "--data-only", ...schemas)).toBe(
+      await dump("new_install", "--data-only", ...schemas),
+    );
   });
 });

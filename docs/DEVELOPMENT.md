@@ -141,3 +141,12 @@ on have no configuration revision.
 `pnpm dev:env` migrates the database (through `pnpm dev:users`), so the index profile's indexer
 and OCR start against the schema. In production compose they start only once the API, which
 migrates before it serves, is healthy.
+
+## Database migrations
+
+Migrations live in `packages/db/drizzle`, and `pnpm --filter @fdrive/db db:generate` writes the
+next one from `packages/db/src/schema`. History starts at `0000_baseline`, the whole schema, and
+`0001_squash_history`, which moves a database the replaced migrations 0000–0047 left onto it. A
+database from before v0.7.0-rc.11 is refused unchanged; `pnpm dev:env:reset` replaces a dev one.
+Keep each table's columns in `src/schema` in the order the database holds them, a new one last:
+a squash generates its baseline in that order, and a restore compares it.
