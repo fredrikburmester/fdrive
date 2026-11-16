@@ -1,6 +1,8 @@
 import { expect, type Page, test } from "@playwright/test";
 import { sidebar } from "./support/regions.js";
+import { openSandbox, removeSandbox } from "./support/sandbox.js";
 import { uniqueName } from "./support/unique.js";
+import { uploadFiles } from "./support/upload.js";
 
 /** iPhone 12-ish viewport: the preset item 2 of the `ux-shell` spec asks
  * the mobile layout to be reproduced and verified at. */
@@ -56,16 +58,17 @@ test.describe("mobile layout (390x844 and 320px)", () => {
 
     await more.click();
     await expect(page.getByRole("menuitem", { name: "View" })).toBeVisible();
-    await expect(page.getByRole("menuitem", { name: "Upload" })).toBeVisible();
     await expect(page.getByRole("menuitem", { name: "Duplicate" })).toBeVisible();
     await expect(page.getByRole("menuitem", { name: "Compress" })).toBeVisible();
     await expect(page.getByRole("menuitem", { name: "Show details" })).toBeVisible();
+    await expect(page.getByRole("menuitem", { name: "Upload" })).toHaveCount(0);
+    await page.keyboard.press("Escape");
 
-    // The "Upload" entry is itself a submenu; its two actions are reachable
-    // once opened, same as every other overflowed action.
-    await page.getByRole("menuitem", { name: "Upload" }).click();
+    // Upload sits in the New menu instead, one tap from the + button.
+    await page.getByRole("button", { name: "New" }).click();
     await expect(page.getByRole("menuitem", { name: "Upload files" })).toBeVisible();
     await expect(page.getByRole("menuitem", { name: "Upload folder" })).toBeVisible();
+    await expect(page.getByRole("menuitem", { name: /New folder/ })).toBeVisible();
   });
 
   test("a selection surfaces as a badge on More and a Clear selection action inside it", async ({
@@ -89,9 +92,7 @@ test.describe("mobile layout (390x844 and 320px)", () => {
     await expect(more.getByText("1", { exact: true })).toHaveCount(0);
   });
 
-  test("the breadcrumb truncates from the left, always keeping the current folder visible", async ({
-    page,
-  }) => {
+  test("the bar shows only the current folder, whose menu leads back up", async ({ page }) => {
     await page.setViewportSize(MOBILE_VIEWPORT);
     await page.goto("/files");
     const folder = uniqueName("mobile-crumb");
@@ -103,9 +104,34 @@ test.describe("mobile layout (390x844 and 320px)", () => {
 
     const nav = page.getByRole("navigation", { name: "breadcrumb" });
     await expect(nav.getByText(folder, { exact: true })).toBeVisible();
-    // "Home" collapses behind the ellipsis instead of staying inline.
+    // "Home" lives in the folder name's menu instead of staying inline.
     await expect(nav.getByRole("link", { name: "Home" })).toHaveCount(0);
     expect(await horizontalOverflow(page)).toBeLessThanOrEqual(1);
+
+    await nav.getByRole("button", { name: folder }).click();
+    await page.getByRole("menuitem", { name: "Home" }).click();
+    await expect(page).toHaveURL(/\/files$/);
+  });
+
+  test("a file row puts its size and date under a name that gets the row's width", async ({
+    page,
+  }) => {
+    await page.setViewportSize(MOBILE_VIEWPORT);
+    const sandbox = await openSandbox(page, "mobile-row");
+    const name = "Wedding 2027 guest list and seating.txt";
+    await uploadFiles(page, [{ name, mimeType: "text/plain", contents: "hello" }]);
+
+    const row = page.locator(`[data-path="/${sandbox}/${name}"]`);
+    const title = row.getByText(name, { exact: true });
+    await expect(title).toBeVisible();
+    await expect(row.getByText(/^5 B · Today \d/)).toBeVisible();
+    await expect(page.getByText("1 item", { exact: true })).toBeVisible();
+    // The whole name fits: nothing is cut off with an ellipsis.
+    expect(await title.evaluate((element) => element.scrollWidth > element.clientWidth)).toBe(
+      false,
+    );
+    await expect.poll(async () => (await row.boundingBox())?.height).toBe(56);
+    await removeSandbox(page, sandbox);
   });
 
   test("the search button opens the panel even when the index is unavailable", async ({ page }) => {

@@ -1,10 +1,16 @@
 // @vitest-environment jsdom
 import { cleanup, render } from "@testing-library/react";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { GRID_TILES } from "./file-grid";
 import { ListingSkeleton } from "./listing-skeleton";
 
-afterEach(cleanup);
+const viewport = vi.hoisted(() => ({ mobile: false }));
+vi.mock("@/hooks/use-mobile", () => ({ useIsMobile: () => viewport.mobile }));
+
+afterEach(() => {
+  cleanup();
+  viewport.mobile = false;
+});
 
 describe("ListingSkeleton", () => {
   it("renders ten placeholder rows by default", () => {
@@ -23,6 +29,13 @@ describe("ListingSkeleton", () => {
     const heights = new Set([...rows].map((row) => row.style.height));
     expect(heights.size).toBe(1);
     expect(heights.has("")).toBe(false);
+  });
+
+  it("uses the taller two-line rows on a phone, like the real list", () => {
+    viewport.mobile = true;
+    const { container } = render(<ListingSkeleton density="compact" />);
+    const rows = container.querySelectorAll<HTMLElement>('[data-slot="skeleton-row"]');
+    expect(new Set([...rows].map((row) => row.style.height))).toEqual(new Set(["44px"]));
   });
 
   it("never sets a fixed pixel width on a row or its stubs, so rows fill the listing area", () => {

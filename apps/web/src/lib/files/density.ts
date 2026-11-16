@@ -13,6 +13,15 @@ export const LIST_DENSITIES: readonly ListDensity[] = ["comfortable", "compact"]
 /** Row height in pixels for each density; "comfortable" is the list's original height. */
 export const ROW_HEIGHTS: Record<ListDensity, number> = { comfortable: 36, compact: 28 };
 
+/** Row height in pixels below `md`, where size and date move onto a second line under the
+ * name; even "compact" keeps a 44px tap target. */
+export const MOBILE_ROW_HEIGHTS: Record<ListDensity, number> = { comfortable: 56, compact: 44 };
+
+/** The list row height for `density`, taller on phones (see `MOBILE_ROW_HEIGHTS`). */
+export function listRowHeight(density: ListDensity, mobile: boolean): number {
+  return (mobile ? MOBILE_ROW_HEIGHTS : ROW_HEIGHTS)[density];
+}
+
 function isListDensity(value: unknown): value is ListDensity {
   return value === "comfortable" || value === "compact";
 }
