@@ -1,7 +1,7 @@
 import type { BreadcrumbEntry } from "./path-url";
 
 export interface BreadcrumbLayout {
-  /** Crumbs rendered before the overflow ellipsis (empty when `compact`). */
+  /** Crumbs rendered before the overflow ellipsis (empty when only the current folder fits). */
   readonly head: readonly BreadcrumbEntry[];
   /** Crumbs collapsed behind the overflow ellipsis's dropdown. */
   readonly hidden: readonly BreadcrumbEntry[];
@@ -67,7 +67,8 @@ function readable(cap: number | null): boolean {
 }
 
 /** Only the current (last) crumb inline, every earlier one behind the
- * ellipsis; just Home stays whole at the root. */
+ * ellipsis; just Home stays whole at the root. The fallback for a bar too
+ * narrow for Home and the current folder side by side. */
 function leftTruncated(crumbs: readonly BreadcrumbEntry[]): BreadcrumbLayout {
   if (crumbs.length <= 1) {
     return {
@@ -88,29 +89,20 @@ function leftTruncated(crumbs: readonly BreadcrumbEntry[]): BreadcrumbLayout {
 }
 
 /**
- * Decides how a breadcrumb trail collapses. The desktop layout keeps every
- * crumb visible while the trail fits `widths.available`, truncating the
+ * Decides how a desktop breadcrumb trail collapses (phones show only the
+ * current folder; see `FilesBreadcrumb`). It keeps every crumb visible while the trail fits `widths.available`, truncating the
  * longest names evenly when it is a little short. Once names would drop
  * below `MIN_NAME_WIDTH`, it hides the shallowest ancestors behind an
  * overflow ellipsis instead, one at a time, keeping the first crumb (Home)
  * and as many of the deepest segments as fit. When even Home and the
- * current folder alone are too tight, it truncates from the left like
- * `compact`. Without `widths` (before the first measurement) every crumb
- * renders at its natural width.
- *
- * `compact` (below the `md` breakpoint) always truncates from the left:
- * once there is more than one crumb, only the current (last) segment stays
- * inline and every earlier one, including Home, moves behind the ellipsis,
- * so the current folder is never pushed off narrow screens.
+ * current folder alone are too tight, it truncates from the left,
+ * keeping only the current folder inline. Without `widths` (before the
+ * first measurement) every crumb renders at its natural width.
  */
 export function breadcrumbLayout(
   crumbs: readonly BreadcrumbEntry[],
-  compact: boolean,
   widths?: BreadcrumbWidths | null,
 ): BreadcrumbLayout {
-  if (compact) {
-    return leftTruncated(crumbs);
-  }
   const wholeCap = widths ? nameCap(widths.crumbs, widths.available) : null;
   if (!widths || crumbs.length <= 1 || readable(wholeCap)) {
     return {

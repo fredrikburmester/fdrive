@@ -26,17 +26,27 @@ import { useSearchShortcut } from "@/lib/search/shortcut";
  * query against an unavailable index comes back empty. The tooltip only
  * appears for a known permanent scope failure, so a startup outage does not
  * look like an unconfigured server, and it names the login when its folder
- * is simply not indexed. Below `md` the button keeps its regular size on
- * every viewport.
+ * is simply not indexed. Below `md` it is a borderless 44px icon button,
+ * matching New and More beside it.
  */
+/** Below `md`: no outline and a 44x44 tap target, without affecting the desktop button. */
+const MOBILE_SEARCH =
+  "max-md:size-11 max-md:border-transparent max-md:bg-transparent max-md:px-0 max-md:dark:border-transparent max-md:dark:bg-transparent";
+
 export function SearchButton() {
   const { open, setOpen, saved } = useSearchShortcut();
   const { data: status } = useSearchStatus();
   const indexUnavailable = isPermanentSearchStatus(status);
 
   const button = (
-    <Button variant="outline" size="sm" aria-label="Search" onClick={() => setOpen(true)}>
-      <SearchIcon />
+    <Button
+      variant="outline"
+      size="sm"
+      aria-label="Search"
+      className={MOBILE_SEARCH}
+      onClick={() => setOpen(true)}
+    >
+      <SearchIcon className="size-3.5 max-md:size-[18px]" />
       <span className="hidden min-[900px]:inline">Search</span>
       <KbdGroup className="hidden min-[900px]:inline-flex">
         <Kbd>⌘K</Kbd>
