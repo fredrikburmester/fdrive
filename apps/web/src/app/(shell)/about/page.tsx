@@ -119,7 +119,10 @@ export default async function AboutPage() {
           </CardContent>
         </Card>
         <div className="flex w-full max-w-3xl flex-col gap-2 text-sm text-muted-foreground [overflow-wrap:anywhere]">
-          <p>fdrive is licensed under the AGPL-3.0 license.</p>
+          <p>
+            fdrive is free for personal and noncommercial use under the PolyForm Noncommercial
+            License 1.0.0.
+          </p>
         </div>
       </section>
     </>

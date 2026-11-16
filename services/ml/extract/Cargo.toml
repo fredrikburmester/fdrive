@@ -2,7 +2,7 @@
 name = "fdrive-ml-extract"
 version = "0.0.0"
 edition = "2024"
-license = "AGPL-3.0-only"
+license = "PolyForm-Noncommercial-1.0.0"
 publish = false
 description = "Plain text from office documents, the part of fdrive-ml that replaces Apache Tika"
 

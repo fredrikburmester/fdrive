@@ -228,7 +228,10 @@ fdrive sits right in the sweet spot:
 ## License
 
 The fdrive server, web interface, native macOS app, and other first-party code in this
-repository are licensed under the [GNU Affero General Public License, version 3 only](LICENSE)
-(`AGPL-3.0-only`), unless otherwise noted.
+repository are licensed under the [PolyForm Noncommercial License 1.0.0](LICENSE)
+(`PolyForm-Noncommercial-1.0.0`), unless otherwise noted. Personal and other noncommercial use
+is free. Commercial use needs a separate license from me; get in touch if you want one.
+
+Versions released before this change remain available under AGPL-3.0-only.
 
 Third-party dependencies retain their own licenses.

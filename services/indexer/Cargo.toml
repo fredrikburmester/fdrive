@@ -2,7 +2,7 @@
 name = "fdrive-indexer"
 version = "0.0.0"
 edition = "2024"
-license = "AGPL-3.0-only"
+license = "PolyForm-Noncommercial-1.0.0"
 publish = false
 description = "Walks and watches fdrive's storage roots, extracts and embeds text, and builds thumbnails"
 
