@@ -238,6 +238,8 @@ pub struct RootContext {
     /// The name index every name row this root writes is reported to; unset where nothing
     /// searches names, as in most tests.
     pub names: OnceLock<Arc<crate::names::NameIndex>>,
+    /// Which folders hold an encrypted folder's marker, as last looked at.
+    pub markers: crate::encrypted::Markers,
 }
 
 /// How long a verdict on the files folder's marker is reused by default.
@@ -290,7 +292,22 @@ impl RootContext {
             stamp_settle: STAMP_SETTLE,
             scan_requested: AtomicBool::new(false),
             names: OnceLock::new(),
+            markers: crate::encrypted::Markers::default(),
             cfg,
+        }
+    }
+
+    /// Whether the file at `rel_path` lies inside an encrypted folder, where nothing is read
+    /// from its bytes but their digest (`encrypted::Markers::inside`).
+    pub fn encrypted(&self, rel_path: &str) -> bool {
+        self.markers.inside(&self.abs_path, rel_path)
+    }
+
+    /// Release the thumbnails and image embeddings of content keys rows let go, once no row
+    /// holds them (`content::release`).
+    pub fn release_content(&self, keys: &[String]) {
+        if !keys.is_empty() {
+            crate::content::release(&self.db, &self.cfg.thumbs_dir, keys);
         }
     }
 
@@ -484,6 +501,10 @@ pub fn unchanged_in_db(row: Option<&ManifestRow>, stat: FileStat) -> bool {
 /// Whether a feature transition makes an unchanged row actionable. Each status must stop
 /// matching once its retry ran, or every scan repeats it: `no_text` is never retried.
 pub fn should_retry_unchanged(status: &str, features: &FeatureValues) -> bool {
+    if status == crate::encrypted::REASON {
+        // Only leaving the encrypted folder changes anything (`crossed_encryption`).
+        return false;
+    }
     if status == "excluded:image_dir" {
         return features.text_search && features.search_ocr;
     }
@@ -494,6 +515,14 @@ pub fn should_retry_unchanged(status: &str, features: &FeatureValues) -> bool {
         return features.text_search && features.search_ocr;
     }
     status == "partial" && features.semantic_search
+}
+
+/// Whether an unchanged row crossed an encrypted folder's edge since it was indexed: a row kept
+/// out as encrypted (`status` as `db::retry_status` gives it) whose file no longer lies inside
+/// one, or a file inside one whose row was not kept out, as after a rename from outside fdrive or
+/// a marker that appeared. Either way the file is indexed again.
+pub fn crossed_encryption(ctx: &RootContext, rel_path: &str, status: &str) -> bool {
+    (status == crate::encrypted::REASON) != ctx.encrypted(rel_path)
 }
 
 pub fn exclusion_still_applies(ctx: &RootContext, rel_path: &str, size: u64) -> bool {
@@ -572,7 +601,8 @@ pub fn process_file_with(
         thumbnail_failed: false,
     });
     let unchanged = unchanged_in_db(manifest.as_ref(), stat);
-    if let Some(row) = row.as_ref().filter(|_| unchanged) {
+    let crossed = unchanged && crossed_encryption(ctx, rel_path, &status);
+    if let Some(row) = row.as_ref().filter(|_| unchanged && !crossed) {
         let excluded = status.starts_with("excluded") && exclusion_still_applies(ctx, rel_path, stat.size);
         if excluded || !should_retry_unchanged(&status, &ctx.values()) {
             return restamp(ctx, rel_path, stat, row, hint);
@@ -771,8 +801,8 @@ pub fn process_stages(
     };
     let source_path = source.path();
     let abs_path = source_path.as_path();
-    let file_id = ctx.db.with(|c| {
-        db::upsert_file_stamped(
+    let (file_id, replaced) = ctx.db.with(|c| {
+        db::upsert_file_replacing(
             c,
             &NewFile {
                 root_id: ctx.root_id,
@@ -788,6 +818,18 @@ pub fn process_stages(
         )
     })?;
     ctx.names_touched(rel_path, false);
+    if let Some(replaced) = replaced {
+        ctx.release_content(&[replaced]);
+    }
+    let mut features = ctx.values();
+    if only_feature == Some("textSearch") {
+        features.semantic_search = false;
+        features.thumbnails = false;
+        features.image_search = false;
+    }
+    if ctx.encrypted(rel_path) {
+        return keep_encrypted(ctx, rel_path, file_id, &sha, &ext, &features, visible);
+    }
     if kind_for_ext(&ext) == Some(Kind::Image) {
         // Within the thumbnail size limit, since a TIFF-based file's EXIF is read whole.
         let photo = if skip_reason(stat.size, ctx.cfg.thumb_max_bytes).is_none() {
@@ -802,12 +844,6 @@ pub fn process_stages(
         ctx.db.with(|c| db::set_photo(c, file_id, &photo))?;
     }
 
-    let mut features = ctx.values();
-    if only_feature == Some("textSearch") {
-        features.semantic_search = false;
-        features.thumbnails = false;
-        features.image_search = false;
-    }
     if features.internal_thumbnails() {
         process_thumbnails(ctx, abs_path, rel_path, &ext, &sha, stat.size, false);
     }
@@ -935,6 +971,29 @@ pub fn process_stages(
             );
         }
         None => {}
+    }
+    Ok(())
+}
+
+/// A file inside an encrypted folder keeps its row (size, times, inode and change time, and the
+/// digest of its bytes) and nothing made from them: no EXIF, thumbnails, image embeddings, text
+/// or chunks. Its row is `excluded:encrypted`, which scans leave alone until the file leaves the
+/// folder, and its content key no longer holds thumbnails or image embeddings. Every feature the
+/// file would have had settles as skipped, so an earlier failure of it is resolved.
+fn keep_encrypted(
+    ctx: &RootContext,
+    rel_path: &str,
+    file_id: i64,
+    sha: &str,
+    ext: &str,
+    features: &FeatureValues,
+    visible: impl FnOnce(),
+) -> Result<()> {
+    ctx.db.with(|c| db::mark_encrypted(c, file_id))?;
+    ctx.release_content(&[sha.to_owned()]);
+    visible();
+    for feature in work_features(features, Some(ext), false, false) {
+        ctx.report(rel_path, &feature, failures::resolving_skip());
     }
     Ok(())
 }
@@ -1307,7 +1366,8 @@ fn embed_text_staged(ctx: &Arc<RootContext>, rel_path: &str, sha: &str, operatio
 /// False keeps the root's backfill pending.
 pub fn backfill_media(ctx: &Arc<RootContext>, _abs_path: &Path, rel_path: &str, stat: FileStat) -> Result<bool> {
     let features = ctx.values();
-    if !features.internal_thumbnails() {
+    // Nothing is made from a file inside an encrypted folder.
+    if !features.internal_thumbnails() || ctx.encrypted(rel_path) {
         return Ok(true);
     }
     let ext = ext_of(basename(rel_path));
@@ -1340,7 +1400,7 @@ pub fn media_derivatives_missing(
         return false;
     }
     let ext = ext_of(basename(rel_path));
-    if kind_for_ext(&ext).is_none() {
+    if kind_for_ext(&ext).is_none() || ctx.encrypted(rel_path) {
         return false;
     }
     let can_generate = size <= ctx.cfg.thumb_max_bytes;
@@ -1395,6 +1455,10 @@ pub fn embed_chunks(ctx: &RootContext, rel_path: &str, expected_sha: Option<&str
             .as_deref()
             != Some(expected)
     {
+        return Ok(Embedded::Superseded);
+    }
+    // Kept out since it was chunked, with the same bytes: marking it indexed would undo that.
+    if ctx.encrypted(rel_path) {
         return Ok(Embedded::Superseded);
     }
     let rows = ctx
@@ -1592,6 +1656,8 @@ fn scan_inner(ctx: &Arc<RootContext>, operations: &HashMap<String, Op>) -> ScanR
                 traversal_complete = false;
                 return false;
             }
+            // A file that moved into or out of an encrypted folder by a rename is indexed whole.
+            let crossed = unchanged && prev.is_some_and(|row| crossed_encryption(ctx, &rel, &row.status));
             let media_needed = unchanged
                 && prev.is_some_and(|row| {
                     media_derivatives_missing(ctx, &rel, stat.size, row, ctx.needs_media_backfill())
@@ -1602,18 +1668,19 @@ fn scan_inner(ctx: &Arc<RootContext>, operations: &HashMap<String, Op>) -> ScanR
             {
                 retry_unchanged = false;
             }
-            let (embed_only, media_only) =
-                if unchanged && prev.is_some_and(|r| r.status == "partial") && features.semantic_search {
-                    (true, media_needed)
-                } else if unchanged && retry_unchanged {
-                    (false, false)
-                } else if media_needed {
-                    (false, true)
-                } else if unchanged {
-                    return true;
-                } else {
-                    (false, false)
-                };
+            let (embed_only, media_only) = if crossed {
+                (false, false)
+            } else if unchanged && prev.is_some_and(|r| r.status == "partial") && features.semantic_search {
+                (true, media_needed)
+            } else if unchanged && retry_unchanged {
+                (false, false)
+            } else if media_needed {
+                (false, true)
+            } else if unchanged {
+                return true;
+            } else {
+                (false, false)
+            };
             let ext = ext_of(&rel);
             let mut names = work_features(&features, Some(&ext), embed_only, media_only);
             if embed_only && media_only && features.semantic_search {
@@ -1655,16 +1722,18 @@ fn scan_inner(ctx: &Arc<RootContext>, operations: &HashMap<String, Op>) -> ScanR
     // A worker can observe disablement after traversal finished.
     let traversal_complete = traversal_complete && ctx.values().indexer_enabled();
     let unseen: Vec<String> = unseen.into_iter().collect();
-    let vanished = if traversal_complete {
+    let swept = if traversal_complete {
         ctx.db
-            .with(|c| db::sweep_vanished_paths(c, ctx.root_id, &unseen, started_at))
+            .with(|c| db::sweep_vanished_rows(c, ctx.root_id, &unseen, started_at))
             .unwrap_or_else(|e| {
                 log(&format!("[{}] sweep failed: {}", ctx.name, describe(&e)));
-                Vec::new()
+                db::Swept::default()
             })
     } else {
-        Vec::new()
+        db::Swept::default()
     };
+    ctx.release_content(&swept.content_keys);
+    let vanished = swept.paths;
     let deleted = vanished.len() as i64;
     for path in &vanished {
         ctx.names_touched(path, false);
@@ -1862,8 +1931,12 @@ pub fn watch_delete(ctx: &RootContext, rel_path: &str, is_dir: bool) -> usize {
         return 0;
     }
     let _guard = ctx.path_locks.get(rel_path);
+    if is_dir {
+        ctx.markers.forget(rel_path);
+    }
     match ctx.db.with(|c| db::delete_paths(c, ctx.root_id, rel_path, is_dir)) {
         Ok(deleted) => {
+            ctx.release_content(&deleted.content_keys);
             if !deleted.files.is_empty() || deleted.folders > 0 {
                 ctx.names_touched(rel_path, is_dir);
             }
@@ -1953,6 +2026,8 @@ pub fn watch_folder(ctx: &RootContext, rel: &str) {
             return;
         }
     };
+    // A folder made where another was may hold a marker the other did not, or lack one.
+    ctx.markers.forget(rel);
     let mut found = folder_chain(&ctx.abs_path, rel);
     if found.last().is_none_or(|f| f.path != rel) {
         return;
@@ -1981,8 +2056,16 @@ pub fn watch_rename(ctx: &RootContext, old: &str, new: &str, is_dir: bool) -> us
         return 0;
     }
     let _guard = ctx.path_locks.get_many(&[old, new]);
-    match ctx.db.with(|c| db::move_paths(c, ctx.root_id, old, new, is_dir)) {
-        Ok(moved) => {
+    if is_dir {
+        ctx.markers.forget(old);
+        ctx.markers.forget(new);
+    }
+    match ctx
+        .db
+        .with(|c| db::move_paths_replacing(c, ctx.root_id, old, new, is_dir))
+    {
+        Ok((moved, replaced)) => {
+            ctx.release_content(&replaced);
             if moved.files + moved.folders > 0 {
                 ctx.names_touched(old, is_dir);
                 ctx.names_touched(new, is_dir);

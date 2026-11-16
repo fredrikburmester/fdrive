@@ -29,7 +29,8 @@ See [architecture](ARCHITECTURE.md) for the service boundaries.
 
 Every regular file in the files folder, except:
 
-- Names in `SKIP_NAMES` (`.DS_Store`, `Thumbs.db`, `desktop.ini`, `.localized`),
+- Names in `SKIP_NAMES` (`.DS_Store`, `Thumbs.db`, `desktop.ini`, `.localized`, the files
+  folder's `.fdrive-files` and an encrypted folder's `.fdrive-encrypted` markers),
   AppleDouble sidecars (`._*`) and uploads local storage is still writing
   (`.fdrive-partial-<16 hex>`, renamed to the real name once complete).
 - Directories in `SKIP_DIRS` (`.fdrive-desktop`, `@eaDir`, `.Trash`, `.Trashes`,
@@ -76,11 +77,16 @@ ffmpeg, at 1 second in, or the first frame for shorter clips) get thumbnails at
 256px and 1024px on the longest side,
 written as WebP under `THUMBS_DIR/<sha[:2]>/<sha>.<size>.webp` and recorded in
 `app.thumbnails`, keyed by the file's sha256 so identical files never generate
-the same thumbnail twice. Being keyed by content, thumbnails and image embeddings (below)
-outlive the rows that used them: the same bytes uploaded again, or the new file of a move
-the watcher saw as a delete and a create (see [how changes arrive](#how-changes-arrive)),
-find them again. Nothing collects the ones no file uses any more; clearing them (see
-[clearing derived data](#clearing-derived-data)) empties the whole cache. Thumbnail
+the same thumbnail twice. Thumbnails and image embeddings (below) go with the last file that
+has their content (`content.rs`): once no `idx.files` row has a sha256 any more (a file
+deleted, swept by a scan, moved over by another or overwritten with other bytes), its
+`app.thumbnails` and `app.image_embeddings` rows and its WebP files are deleted. Whether a row
+still has it is checked in the statement that deletes them, after the change that let it go
+has committed, in batches of 5,000, so a copy indexed meanwhile keeps them. A row inside an
+[encrypted folder](#encrypted-folders) does not count. A failed file removal is logged and
+never fails indexing; a copy that gains the key just as its files go gets them back at the
+next scan. A move the watcher sees as a delete and a create keeps them when the new file is
+indexed first, and makes them again otherwise. Clearing the index releases nothing. Thumbnail
 failures are logged once and never fail the file's own indexing; the image-embedding pass
 that follows skips a file whose 256px thumbnail was never written without logging a second
 error for it. Scans do not retry a failed thumbnail until the file changes or thumbnails are
@@ -161,11 +167,33 @@ admission lock (only one heavy background pass runs at a time).
 | `disabled` | Skipped while a feature was off: `disabled:text` (`textSearch`), `disabled:search_ocr` (`searchOcr`, for images and PDFs without a text layer). Turning the feature on processes each row once. |
 | `empty` | The file itself is empty. |
 | `none` | Extension is not one the indexer knows how to extract. |
-| `excluded` | Skipped by a rule: `excluded:prefix` (`indexer.text_exclude_globs`), `excluded:image_dir` (outside `indexer.ocr_image_globs`), `excluded:too_big`. |
+| `excluded` | Skipped by a rule: `excluded:prefix` (`indexer.text_exclude_globs`), `excluded:image_dir` (outside `indexer.ocr_image_globs`), `excluded:too_big`, `excluded:encrypted` (inside an encrypted folder, below). |
 | `error` | Extraction raised; the reason is in the row's `error` column. |
 
 The admin **Logs** sheet on System > Indexer lists these `error` rows together with
 `idx.scans` history and API-side events (settings saves, reindex and clear requests).
+
+## Encrypted folders
+
+An end-to-end encrypted folder (see [the plan](plans/ENCRYPTION.md)) has a `.fdrive-encrypted`
+marker at its top, and every entry inside it is stored under an encrypted name (`fe1-` and
+lowercase base32) as an age file. A file is inside one when a part of its path is an
+encrypted name, which covers an item put in Trash on its own, or when a folder above it holds
+a marker (`encrypted.rs`). Such a file keeps its row: size, times, inode and change time, and
+the sha256 of the bytes on disk, so storage usage, folder sizes, the change journal and the
+Mac's version checks still work. Nothing else is read from it: no EXIF, thumbnails, image
+embeddings, text or chunks. Its row is `excluded` with the error `excluded:encrypted`, which
+scans leave alone, and its content key no longer holds thumbnails or image embeddings. A file
+someone put there from outside fdrive under a clear name (a stray) is treated the same. The
+check sits where every path that indexes a file meets, right after its row is written, so
+scans, the watcher, the journal, retries and reindexing all follow it; thumbnail and
+image-embedding rebuilds leave such files out.
+
+A file renamed into or out of an encrypted folder from outside fdrive keeps its row as it was
+until something looks at it unchanged: the next scan, or the journal's look at its folder.
+That look indexes it again. Whether a folder holds a marker is remembered for ten seconds; the
+watcher forgets a folder it saw deleted, moved or made at once. Encrypted names stay out of
+the [name index](#name-index).
 
 ## Folders
 
@@ -196,7 +224,9 @@ paths to the thread, which reads those rows again and commits them together abou
 after the last change. A root with more than 2,000 changed paths waiting, as during a first
 scan, is rebuilt whole instead. On a database error the thread rolls back and rebuilds the
 roots involved once the database answers, waiting up to a minute between tries. A million
-names take about 30 MB.
+names take about 30 MB. Entries stored under an encrypted name are left out: the browser
+searches what it decrypts. An encrypted folder's own name, and a clear name someone put
+inside one, stay in.
 
 A query word must start a word of the name within its typo budget: none below five letters,
 one up to eight and two from nine, a swap of two neighbours counting once (`typoBudget` in
@@ -263,8 +293,9 @@ read from their own position (see [the change journal](#the-change-journal)).
    stamp, and the API moves its tags, favorites and other path-keyed metadata
    ([below](#the-apis-reader)). Any other move, such as a copy and a delete over SMB, is a
    delete and a new file: the old row and its chunks are deleted and the new file is indexed
-   from scratch, reusing thumbnails and image embeddings by its digest. The old path's
-   metadata is dropped, never guessed onto the new one.
+   from scratch, reusing thumbnails and image embeddings by its digest when it is indexed
+   before the delete is applied. The old path's metadata is dropped, never guessed onto the
+   new one.
 3. **The scan** walks the whole root every `indexer.scan_interval_seconds` (an hour by
    default), when settings or features change, after a watcher overflow and when the
    journal's reader asks for one, and catches anything the other two missed. A restart keeps
@@ -598,7 +629,8 @@ uses a literal boundary, so `%` and `_` in names are never wildcards.
 
 The background pass deletes selected `idx.files` rows and their cascading chunks
 and embeddings. Original files, roots, scan history, tags, favorites,
-recents, and thumbnail cache remain. It uses bounded batches and shares each
+recents, and thumbnail cache remain: a cleared row releases no thumbnails or image
+embeddings. It uses bounded batches and shares each
 path's lock with extraction and embedding retries. It does not request a scan;
 scheduled scans and later watcher changes can repopulate the index.
 

@@ -33,6 +33,13 @@ A pass takes the rows of `idx.files` with the extension `.pdf` and a digest
 - every PDF in fdrive's own folders: a path with a segment named `.trash` (its Trash folder)
   or `.fdrive-desktop` (the Mac app's staged uploads), in any case
   (`RESERVED_FOLDERS` in `rules.py`, after `isReservedPath` in `@fdrive/core`). The indexer indexes the Trash, so this is what keeps OCR out of it;
+- every PDF inside an end-to-end [encrypted folder](INDEXER.md#encrypted-folders): a row the
+  indexer marked `excluded:encrypted`, a path with a part that is an encrypted name, or a file
+  below a folder on disk that holds a `.fdrive-encrypted` marker (`in_encrypted_folder` in
+  `runner.py`, which remembers each folder's answer for the pass). Such a PDF is a file someone
+  put there from outside fdrive; it is never read, and nothing is recorded or counted for it,
+  so the same content elsewhere is still OCR'd. Once the indexer has seen it, the query leaves
+  it out;
 - PDFs matched by `ocr.exclude_globs` (or outside `OCR_INCLUDE_GLOBS`) and PDFs over
   `ocr.max_mb`. These are settings, not facts about a file, so nothing is recorded for them
   and a change to the rules applies on the next pass.
@@ -160,7 +167,7 @@ keeps working while OCR is switched off, because switching it off is exactly
 what an operator does first when a pass has damaged a file they now need back.
 
 `seen` in a run summary counts every candidate the pass went through: PDFs it
-had not decided on, outside the exclude rules and the size cap. `ocred` /
+had not decided on, outside encrypted folders, the exclude rules and the size cap. `ocred` /
 `skipped` / `failed` only count files actually decided on this pass (`has_text`,
 `signed`, and `encrypted` fold into `skipped`); a candidate that changed, or
 whose content a copy earlier in the pass settled, counts as seen only.

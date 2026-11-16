@@ -1377,3 +1377,58 @@ fn image_rebuild_stops_once_image_search_is_disabled() {
     );
     assert_eq!(env.ml.count(fake_ml::IMAGE_EMBED), 1);
 }
+
+// ---------------------------------------------------------------------------------------
+// Encrypted folders
+// ---------------------------------------------------------------------------------------
+
+#[test]
+fn passes_and_retries_make_nothing_inside_an_encrypted_folder() {
+    let env = setup(common::all_features());
+    std::fs::create_dir_all(env.root.join("Vault")).unwrap();
+    std::fs::write(env.root.join("Vault").join(fdrive_indexer::encrypted::MARKER), b"{}").unwrap();
+    // A picture put in the encrypted folder from outside fdrive, beside an ordinary one.
+    media(&env, "Vault/stray.png", "sha-stray");
+    media(&env, "plain.png", "sha-plain");
+    let (_, snapshot) = rebuild(&env, None, false);
+    assert_eq!(
+        (snapshot["processed"].as_u64(), snapshot["total"].as_u64()),
+        (Some(1), Some(1))
+    );
+    let mut keys = thumbnail_keys(&env);
+    keys.dedup();
+    assert_eq!(keys, ["sha-plain"]);
+    env.thumb("sha-stray");
+    let (_, snapshot) = image_rebuild(&env.ctx, None, false);
+    assert_eq!(snapshot["total"].as_u64(), Some(1));
+    assert_eq!(env.model("sha-stray"), None);
+    assert_eq!(env.model("sha-plain").as_deref(), Some("model-a"));
+    // A failure recorded before the file was found inside is settled without reading it.
+    env.ml.clear();
+    for feature in ["thumbnails", "textSearch", "semanticSearch", "imageSearch"] {
+        report_failure(&env.ctx, "Vault/stray.png", feature, "Error: earlier attempt");
+        assert_eq!(
+            retry_file(&env.ctx, "Vault/stray.png", feature),
+            (true, true),
+            "{feature}"
+        );
+    }
+    assert!(env.failures().iter().all(|f| f.3), "{:?}", env.failures());
+    assert_eq!(env.model("sha-stray"), None);
+    assert!(env.ml.seen().is_empty());
+    assert_eq!(thumbnail_keys(&env).len(), 2);
+}
+
+#[test]
+#[cfg_attr(target_os = "macos", ignore = "descriptor paths share one offset on macOS")]
+fn a_retry_that_finds_other_bytes_releases_what_the_old_ones_had() {
+    let env = setup(values(true, false, false, false));
+    write_png(&env.root.join("photo.png"));
+    upsert(&env.ctx, "photo.png", "sha-old", 9);
+    add_thumbnail(&env, "sha-old", &storage_path("sha-old", 256));
+    env.thumb("sha-old");
+    assert_eq!(retry_file(&env.ctx, "photo.png", "thumbnails"), (true, false));
+    let sha = sha256(&std::fs::read(env.root.join("photo.png")).unwrap());
+    assert_eq!(thumbnail_keys(&env), [sha.clone(), sha]);
+    assert!(!env.thumbs.join(storage_path("sha-old", 256)).exists());
+}

@@ -26,13 +26,14 @@ fn ids(feature: &str, job: &Job) -> HashMap<String, String> {
     [(feature.to_owned(), job.run_id())].into_iter().collect()
 }
 
+/// Media rows in scope for a thumbnail rebuild: never a file inside an encrypted folder.
 pub fn thumbnail_candidates(ctx: &RootContext, path: Option<&str>) -> Result<Vec<MediaRow>> {
     let scope = normalize_scope(path);
     Ok(ctx
         .db
         .with(|c| db::media_files(c, ctx.root_id))?
         .into_iter()
-        .filter(|(rel, ext, _, _)| is_thumbnail_candidate(ext, rel, &scope))
+        .filter(|(rel, ext, _, _)| is_thumbnail_candidate(ext, rel, &scope) && !ctx.encrypted(rel))
         .collect())
 }
 
@@ -226,7 +227,7 @@ pub fn start_image_rebuild(job: &Arc<Job>, ctx: Arc<RootContext>, path: Option<S
         let rows: Vec<MediaRow> = match ctx.db.with(|c| db::media_files(c, ctx.root_id)) {
             Ok(rows) => rows
                 .into_iter()
-                .filter(|(rel, ext, _, _)| image_embed::is_rebuild_candidate(ext, rel, &scope))
+                .filter(|(rel, ext, _, _)| image_embed::is_rebuild_candidate(ext, rel, &scope) && !ctx.encrypted(rel))
                 .collect(),
             Err(e) => {
                 job.fail();
@@ -472,6 +473,11 @@ pub fn start_clear(job: &Arc<Job>, name: &'static str, run: impl FnOnce(&Job) ->
 pub fn retry_file(ctx: &Arc<RootContext>, path: &str, feature: &str) -> (bool, bool) {
     let (outcome, observed) = attempt(HashMap::new(), || -> Result<Option<(bool, bool)>> {
         let parts = fsx::path_parts(&format!("/{}", path.trim_start_matches('/'))).map_err(anyhow::Error::msg)?;
+        if ctx.encrypted(path) {
+            // Nothing is made from a file inside an encrypted folder: its failure is settled.
+            failures::report(&ctx.db, ctx.root_id, path, feature, failures::resolving_skip());
+            return Ok(Some((true, true)));
+        }
         // `embed_missing` takes the path lock itself and checks the content under it.
         let _guard = (feature != "semanticSearch").then(|| ctx.path_locks.get(path));
         let mut opened = fsx::open_file(&ctx.abs_path, &parts)?;
@@ -494,8 +500,8 @@ pub fn retry_file(ctx: &Arc<RootContext>, path: &str, feature: &str) -> (bool, b
                 // A changed original invalidates old text before a new derivative is published.
                 if ctx.db.with(|c| db::file_content_key(c, ctx.root_id, path))?.as_deref() != Some(sha.as_str()) {
                     let name = basename(path);
-                    ctx.db.with(|c| {
-                        db::upsert_file(
+                    let (_, replaced) = ctx.db.with(|c| {
+                        db::upsert_file_replacing(
                             c,
                             &db::NewFile {
                                 root_id: ctx.root_id,
@@ -507,9 +513,13 @@ pub fn retry_file(ctx: &Arc<RootContext>, path: &str, feature: &str) -> (bool, b
                                 sha256: &sha,
                                 mime: None,
                             },
+                            db::StampUpdate::Keep,
                         )
                     })?;
                     ctx.names_touched(path, false);
+                    if let Some(replaced) = replaced {
+                        ctx.release_content(&[replaced]);
+                    }
                 }
                 if feature == "thumbnails" {
                     return Ok(Some(process_thumbnails(

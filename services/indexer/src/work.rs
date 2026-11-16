@@ -20,8 +20,8 @@ use crate::config::{SKIP_DIRS, SKIP_NAMES};
 use crate::db::{self, ChangeRow};
 use crate::failures::describe;
 use crate::indexer::{
-    ContentHint, FileStat, Renamed, RootContext, Version, carry_stamp, folder_chain, record_folders, unchanged_in_db,
-    walk_tree, watch_delete, watch_index_with, watch_rename,
+    ContentHint, FileStat, Renamed, RootContext, Version, carry_stamp, crossed_encryption, folder_chain,
+    record_folders, unchanged_in_db, walk_tree, watch_delete, watch_index_with, watch_rename,
 };
 use crate::journal::Source;
 use crate::log::log;
@@ -413,7 +413,9 @@ impl Applier {
             |_, rel, stat| {
                 let rel = format!("{path}/{rel}");
                 unseen.remove(&rel);
-                if !unchanged_in_db(manifest.get(&rel), stat) {
+                let row = manifest.get(&rel);
+                // A row that crossed an encrypted folder's edge is indexed again, as a scan does.
+                if !unchanged_in_db(row, stat) || row.is_some_and(|r| crossed_encryption(ctx, &rel, &r.status)) {
                     self.index(rel, None);
                 }
                 true
@@ -424,10 +426,11 @@ impl Applier {
             let unseen: Vec<String> = unseen.into_iter().collect();
             match ctx
                 .db
-                .with(|c| db::sweep_vanished_paths(c, ctx.root_id, &unseen, started_at))
+                .with(|c| db::sweep_vanished_rows(c, ctx.root_id, &unseen, started_at))
             {
                 Ok(swept) => {
-                    for gone in &swept {
+                    ctx.release_content(&swept.content_keys);
+                    for gone in &swept.paths {
                         ctx.names_touched(gone, false);
                     }
                 }
