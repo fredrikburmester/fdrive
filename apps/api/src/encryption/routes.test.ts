@@ -273,9 +273,9 @@ describe("encrypted folders", () => {
     const response = await call("GET", "/encryption/entries?path=/Private");
     expect(await response.json()).toEqual({
       entries: [
-        { path: `/Private/${enc("b")}`, kind: "file" },
-        { path: `/Private/${enc("c")}`, kind: "dir" },
-        { path: `/Private/${enc("c")}/${enc("d")}`, kind: "file" },
+        expect.objectContaining({ path: `/Private/${enc("b")}`, kind: "file", size: AGE.length }),
+        expect.objectContaining({ path: `/Private/${enc("c")}`, kind: "dir" }),
+        expect.objectContaining({ path: `/Private/${enc("c")}/${enc("d")}`, kind: "file" }),
       ],
       truncated: false,
     });

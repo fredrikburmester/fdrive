@@ -1384,7 +1384,10 @@ describe("createApiClient: encryption", () => {
     const { fetchStub, calls } = createStubFetch([
       jsonResponse(201, { path: "/Private", marker: MARKER }),
       jsonResponse(200, { folder: null }),
-      jsonResponse(200, { entries: [{ path: "/Private/x", kind: "file" }], truncated: false }),
+      jsonResponse(200, {
+        entries: [{ path: "/Private/x", kind: "file", size: 1, modifiedAt: AT }],
+        truncated: false,
+      }),
     ]);
     const client = createApiClient({ fetch: fetchStub });
 

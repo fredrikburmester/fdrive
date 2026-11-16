@@ -153,7 +153,12 @@ async function walk(
     for (const entry of await storage.list(folder)) {
       if (entry.kind !== "file" && entry.kind !== "dir") continue;
       if (entries.length === MAX_ENCRYPTED_ENTRIES) return { entries, truncated: true };
-      entries.push({ path: entry.path, kind: entry.kind });
+      entries.push({
+        path: entry.path,
+        kind: entry.kind,
+        size: entry.size,
+        modifiedAt: entry.modifiedAt.toISOString(),
+      });
       if (entry.kind === "dir") queue.push(entry.path);
     }
   }

@@ -22,6 +22,9 @@ export interface NewFolderDialogProps {
   onOpenChange: (open: boolean) => void;
   onCreate: (name: string) => void;
   pending?: boolean;
+  /** The dialog's title and one-line description; a plain folder's by default. */
+  title?: string;
+  description?: string;
 }
 
 /** Prompts for a name and creates a new folder in the current directory. */
@@ -30,6 +33,8 @@ export function NewFolderDialog({
   onOpenChange,
   onCreate,
   pending = false,
+  title = "New folder",
+  description = "Choose a name for the new folder.",
 }: NewFolderDialogProps) {
   const [name, setName] = useState(DEFAULT_NAME);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -71,8 +76,8 @@ export function NewFolderDialog({
       <DialogContent initialFocus={focusAndSelectAll} showCloseButton={!pending}>
         <form onSubmit={handleSubmit}>
           <DialogHeader>
-            <DialogTitle>New folder</DialogTitle>
-            <DialogDescription>Choose a name for the new folder.</DialogDescription>
+            <DialogTitle>{title}</DialogTitle>
+            <DialogDescription>{description}</DialogDescription>
           </DialogHeader>
           <Field className="py-4">
             <Input

@@ -41,6 +41,7 @@ import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { describeApiError } from "@/lib/api/errors";
+import { useEncryptedSearch, withEncryptedMatches } from "@/lib/encryption/search";
 import { useDefaultView } from "@/lib/files/use-default-view";
 import { createDebouncer, type Debounced } from "@/lib/search/debounce";
 import {
@@ -250,13 +251,13 @@ function SnippetText({ snippet }: { snippet: SearchSnippet }) {
   );
 }
 
-function HitRow({ hit }: { hit: SearchHit }) {
+function HitRow({ hit }: { hit: SearchHit & { readonly where?: string } }) {
   return (
     <div className="flex min-w-0 flex-1 items-center gap-2.5">
       <HitThumbnail hit={hit} />
       <div className="min-w-0 flex-1">
         <p className="truncate text-sm">{hit.name}</p>
-        <p className="truncate text-xs text-muted-foreground">{hit.path}</p>
+        <p className="truncate text-xs text-muted-foreground">{hit.where ?? hit.path}</p>
         {hit.snippets[0] !== undefined ? <SnippetText snippet={hit.snippets[0]} /> : null}
       </div>
     </div>
@@ -512,7 +513,16 @@ export function SearchPanel({ open, onOpenChange, saved = null }: SearchPanelPro
   );
 
   const showRecent = trimmedQuery.length === 0;
-  const sections = response?.sections;
+  // Inside an encrypted folder the server finds no names; this browser searches them itself.
+  const encryptedMatches = useEncryptedSearch(
+    trimmedQuery,
+    currentFolder,
+    open && trimmedQuery.length > 0,
+  ).data;
+  const sections = useMemo(
+    () => withEncryptedMatches(response?.sections, encryptedMatches),
+    [response?.sections, encryptedMatches],
+  );
   const degraded = response?.degraded ?? false;
   const unavailable = response?.unavailable ?? false;
 

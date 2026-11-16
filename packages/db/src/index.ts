@@ -58,6 +58,12 @@ export {
   type DesktopTrashChange,
 } from "./repos/desktop.js";
 export { createFilesFolderFacts, createRepos } from "./repos/drizzle.js";
+export {
+  createEncryptionKeyRepo,
+  type EncryptionDevice,
+  type EncryptionKeyRepo,
+  type EncryptionKeys,
+} from "./repos/encryption-keys.js";
 export type {
   ContentHit,
   DuplicateGroup,
@@ -147,12 +153,6 @@ export {
   validateShareOwnership,
   validateSharePath,
 } from "./repos/shares-state.js";
-export {
-  createEncryptionKeyRepo,
-  type EncryptionDevice,
-  type EncryptionKeyRepo,
-  type EncryptionKeys,
-} from "./repos/encryption-keys.js";
 export { createSystemEventRepo } from "./repos/system-events.js";
 export {
   createTrashItemRepo,

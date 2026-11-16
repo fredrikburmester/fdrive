@@ -464,3 +464,64 @@ it("logout reset aborts requests and removes old account queue data", async () =
   expect(xhr.aborted).toBe(true);
   expect(store.getState().state.order).toEqual([]);
 });
+
+describe("an item that brings its own body", () => {
+  function own(overrides: Partial<UploadItem> = {}) {
+    const xhrs: FakeXhr[] = [];
+    const store = createUploadStore({
+      chunkBytes: 4,
+      retryDelaysMs: [],
+      createXhr: () => {
+        const xhr = new FakeXhr();
+        xhrs.push(xhr);
+        return xhr;
+      },
+    });
+    const made = vi.fn(async () => new Blob(["ciphertext!!"]));
+    const after = vi.fn(async () => undefined);
+    store.getState().enqueue([makeItem("a", { source: made, after, size: 6, ...overrides })]);
+    return { store, xhrs, made, after };
+  }
+
+  it("sends what its source makes, in pieces, then runs its last step", async () => {
+    const { store, xhrs, made, after } = own();
+    await flush();
+    expect(made).toHaveBeenCalledTimes(1);
+    expect(await xhrs[0]?.sent?.text()).toBe("ciph");
+    // Progress counts against the size the person knows.
+    xhrs[0]?.emitProgress({ lengthComputable: true, loaded: 4, total: 4 });
+    expect(store.getState().state.items.a?.progress).toBe(2 / 6);
+    xhrs[0]?.finishWith(204, "");
+    await flush();
+    xhrs[1]?.finishWith(204, "");
+    await flush();
+    expect(after).not.toHaveBeenCalled();
+    xhrs[2]?.finishWith(201, "{}");
+    await flush();
+    await flush();
+    expect(after).toHaveBeenCalledTimes(1);
+    expect(store.getState().state.items.a?.status).toBe("done");
+  });
+
+  it("keeps what its source made for a resume, and fails when the source does", async () => {
+    const { store, xhrs, made } = own();
+    await flush();
+    xhrs[0]?.finishWith(503, "");
+    await flush();
+    store.getState().retry("a");
+    await flush();
+    expect(made).toHaveBeenCalledTimes(1);
+
+    const failing = own({ source: () => Promise.reject(new Error("no key")) });
+    await flush();
+    await flush();
+    expect(failing.store.getState().state.items.a?.status).toBe("error");
+  });
+
+  it("shows no progress for an empty body", async () => {
+    const { store, xhrs } = own({ source: async () => new Blob([]) });
+    await flush();
+    xhrs[0]?.emitProgress({ lengthComputable: true, loaded: 0, total: 0 });
+    expect(store.getState().state.items.a?.progress).toBe(0);
+  });
+});

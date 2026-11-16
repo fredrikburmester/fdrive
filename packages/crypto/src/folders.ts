@@ -107,10 +107,16 @@ export async function openFolder(
   marker: EncryptedFolderMarker,
   accountIdentity: string,
 ): Promise<FolderKey> {
+  let mac: Uint8Array<ArrayBuffer>;
+  try {
+    mac = new Uint8Array(base64.decode(marker.mac));
+  } catch {
+    throw new DecryptError("this folder's marker is damaged");
+  }
   const authentic = await crypto.subtle.verify(
     "HMAC",
     await markerMacKey(accountIdentity),
-    new Uint8Array(base64.decode(marker.mac)),
+    mac,
     markerMacInput(marker),
   );
   if (!authentic) throw new DecryptError("this folder's marker was not made with your key");

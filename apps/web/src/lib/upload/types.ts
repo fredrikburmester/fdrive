@@ -22,6 +22,14 @@ export interface UploadItem {
   readonly error?: string;
   /** Number of times an upload attempt has been started for this item. */
   readonly attempts: number;
+  /**
+   * Makes the bytes to send in place of `file`, once per item and kept for a
+   * resume: an encrypted folder's ciphertext, or a file fdrive moves across
+   * an encrypted folder's edge. `size` is then only shown, not sent.
+   */
+  readonly source?: () => Promise<Blob>;
+  /** Runs once the file is stored, before the item counts as done: removing what was moved. */
+  readonly after?: () => Promise<void>;
 }
 
 /** The set of files planned together from a single drop or file picker action. */

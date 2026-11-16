@@ -104,6 +104,9 @@ export interface FileContextMenuProps {
    * not run the archive jobs (favorites, recents, a tag's files). Both show
    * by default. */
   hideArchive?: boolean;
+  /** The entry is inside an encrypted folder: hides Share, Share with people, Office and
+   * Duplicate, which the server does not do there. An encrypted folder itself never shares. */
+  encrypted?: boolean;
   /** Every tag known to the account, for the "Tags" submenu. Defaults to
    * none, so a caller that has not wired up tags yet still renders. */
   tags?: readonly Tag[];
@@ -140,6 +143,7 @@ export function FileContextMenu({
   showChat = false,
   showReveal = false,
   hideArchive = false,
+  encrypted = false,
   tags = DEFAULT_TAGS,
   tagCheckState = DEFAULT_TAG_CHECK_STATE,
   onToggleTag = DEFAULT_NO_OP,
@@ -155,18 +159,19 @@ export function FileContextMenu({
   const canExtract = !isMultiSelection && archiveKind !== null;
   const restrictions = entryRestrictions(entry, received);
   const locked = restrictions.locked !== null;
+  const encryptedArea = encrypted || entry.encrypted === true;
 
   return (
     <ContextMenu>
       <ContextMenuTrigger>{children}</ContextMenuTrigger>
       <ContextMenuContent>
-        {restrictions.publicLink && (
+        {restrictions.publicLink && !encryptedArea && (
           <ContextMenuItem onClick={() => onAction("share", entry)}>
             <Link2Icon />
             Share
           </ContextMenuItem>
         )}
-        {restrictions.shareWithPeople && !isMultiSelection && (
+        {restrictions.shareWithPeople && !isMultiSelection && !encryptedArea && (
           <ContextMenuItem onClick={() => onAction("shareWithPeople", entry)}>
             <UsersIcon />
             Share with people
@@ -176,7 +181,7 @@ export function FileContextMenu({
           <ExternalLinkIcon />
           Open
         </ContextMenuItem>
-        {officeModesFor(entry, officeStatus, selectionCount).map((mode) => (
+        {(encryptedArea ? [] : officeModesFor(entry, officeStatus, selectionCount)).map((mode) => (
           <ContextMenuItem key={mode} onClick={() => onAction(`office:${mode}`, entry)}>
             <ExternalLinkIcon />
             {OFFICE_MODE_LABELS[mode]}
@@ -191,13 +196,15 @@ export function FileContextMenu({
         <ContextMenuSeparator />
         {!locked && (
           <>
-            <ContextMenuItem
-              disabled={isMultiSelection}
-              onClick={() => onAction("duplicate", entry)}
-            >
-              <CopyIcon />
-              Duplicate
-            </ContextMenuItem>
+            {!encrypted && (
+              <ContextMenuItem
+                disabled={isMultiSelection}
+                onClick={() => onAction("duplicate", entry)}
+              >
+                <CopyIcon />
+                Duplicate
+              </ContextMenuItem>
+            )}
             <ContextMenuItem onClick={() => onAction("rename", entry)}>
               <PencilIcon />
               Rename
@@ -270,7 +277,7 @@ export function FileContextMenu({
           {favorite ? <StarOffIcon /> : <StarIcon />}
           {favorite ? "Remove from Favorites" : "Add to Favorites"}
         </ContextMenuItem>
-        {!hideArchive && (
+        {!hideArchive && !encryptedArea && (
           <>
             <ContextMenuSeparator />
             <ContextMenuItem onClick={() => onAction("compress", entry)}>

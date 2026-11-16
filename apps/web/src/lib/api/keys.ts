@@ -57,6 +57,11 @@ export const queryKeys = {
   account: {
     tokens: () => ["account", "tokens"] as const,
   },
+  encryption: {
+    status: () => ["encryption", "status"] as const,
+    folder: (path: string) => ["encryption", "folder", path] as const,
+    entries: (path: string) => ["encryption", "entries", path] as const,
+  },
   tags: {
     list: () => ["tags", "list"] as const,
     files: (id: string) => ["tags", "files", id] as const,

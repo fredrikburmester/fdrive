@@ -82,6 +82,14 @@ describe("encrypted folders", () => {
     );
   });
 
+  it("refuses a MAC that is not base64", async () => {
+    const account = await newKeyPair();
+    const { marker } = await createFolder(account.identity);
+    await expect(
+      openFolder({ ...marker, mac: `${"B".repeat(43)}=` }, account.identity),
+    ).rejects.toThrow("damaged");
+  });
+
   it("refuses marker text that is not a marker", () => {
     expect(() => parseMarker("{")).toThrow(DecryptError);
     expect(() => parseMarker(JSON.stringify({ v: 2 }))).toThrow(DecryptError);

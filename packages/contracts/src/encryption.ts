@@ -153,6 +153,9 @@ export type EncryptedEntriesQuery = z.infer<typeof EncryptedEntriesQuery>;
 export const EncryptedEntry = z.object({
   path: z.string(),
   kind: z.enum(["file", "dir"]),
+  /** The stored size: a file's ciphertext. */
+  size: z.number().int().min(0),
+  modifiedAt: z.iso.datetime(),
 });
 export type EncryptedEntry = z.infer<typeof EncryptedEntry>;
 
