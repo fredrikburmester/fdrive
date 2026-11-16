@@ -40,6 +40,11 @@ export function isEncryptedName(name: string): boolean {
   return BASE32_LENGTH_REMAINDERS.has(body % 8);
 }
 
+/** Whether any segment of `path` is an encrypted name: a path inside an encrypted folder. */
+export function hasEncryptedName(path: string): boolean {
+  return path.split("/").some(isEncryptedName);
+}
+
 /** An age X25519 recipient, `age1` and 58 bech32 characters. */
 export const AgeRecipient = z.string().regex(/^age1[02-9ac-hj-np-z]{58}$/, "not an age recipient");
 export type AgeRecipient = z.infer<typeof AgeRecipient>;
@@ -141,11 +146,8 @@ export type EncryptedFolderCreateRequest = z.infer<typeof EncryptedFolderCreateR
 export const EncryptedFolderResponse = z.object({ folder: EncryptedFolderInfo.nullable() });
 export type EncryptedFolderResponse = z.infer<typeof EncryptedFolderResponse>;
 
-/** `GET /encryption/entries?path=&cursor=`: every indexed entry inside an encrypted folder. */
-export const EncryptedEntriesQuery = z.object({
-  path: z.string(),
-  cursor: z.string().max(4096).optional(),
-});
+/** `GET /encryption/entries?path=`: the entries inside an encrypted folder, for name search. */
+export const EncryptedEntriesQuery = z.object({ path: z.string() });
 export type EncryptedEntriesQuery = z.infer<typeof EncryptedEntriesQuery>;
 
 export const EncryptedEntry = z.object({
@@ -154,10 +156,13 @@ export const EncryptedEntry = z.object({
 });
 export type EncryptedEntry = z.infer<typeof EncryptedEntry>;
 
+/** The most entries one answer holds. */
+export const MAX_ENCRYPTED_ENTRIES = 20_000;
+
 export const EncryptedEntriesResponse = z.object({
   entries: z.array(EncryptedEntry),
-  /** Pass back as `cursor` for the next page; null on the last. */
-  cursor: z.string().nullable(),
+  /** More entries than {@link MAX_ENCRYPTED_ENTRIES} were found; the rest were left out. */
+  truncated: z.boolean(),
 });
 export type EncryptedEntriesResponse = z.infer<typeof EncryptedEntriesResponse>;
 

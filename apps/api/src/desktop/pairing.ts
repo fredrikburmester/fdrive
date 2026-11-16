@@ -1,11 +1,11 @@
-import { randomBytes, randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import type {
   DesktopAccessMode,
   DesktopCredential,
   DesktopWriteCapabilities,
   DesktopWriteCredential,
 } from "@fdrive/contracts";
-import type { ApiTokenRepo, LoginRepo } from "@fdrive/db";
+import type { ApiTokenRepo, EncryptionKeyRepo, LoginRepo } from "@fdrive/db";
 import { addressBlock } from "../auth/address-block.js";
 import type { Principal, PrincipalFactory } from "../auth/principal.js";
 import { ApiHttpError } from "../errors.js";
@@ -25,6 +25,8 @@ interface Pair {
   protocolVersion: 1 | 2;
   owner: string;
   code: string;
+  /** The Mac's own age recipient, which the code is a digest of. */
+  deviceRecipient?: string;
   secretHash: string;
   expires: number;
   cancelled?: boolean;
@@ -34,6 +36,8 @@ interface Pair {
     accountId: string;
     identityId: string;
     access: DesktopAccessMode;
+    /** The account identity as an age file to the device recipient. */
+    deviceKey?: string;
   };
   result?: Promise<IssuedCredential[]>;
 }
@@ -58,6 +62,21 @@ export interface DesktopDeps {
    * nothing is indexed: every check hashes.
    */
   indexedContent?: IndexedContentLookup;
+  /**
+   * Where a paired Mac's copy of the account key is kept. With it, locations
+   * report encrypted folders and pairings can carry a device key.
+   */
+  encryption?: Pick<EncryptionKeyRepo, "setDeviceKey" | "deviceKey">;
+}
+
+/**
+ * The code a person compares when pairing a Mac with a device key: 64 bits of
+ * the SHA-256 of its recipient in four groups of uppercase hex, as
+ * `@fdrive/crypto` `pairingCode` makes it in the browser and FDrive for Mac.
+ */
+export function devicePairingCode(deviceRecipient: string): string {
+  const hex = createHash("sha256").update(deviceRecipient).digest("hex").slice(0, 16).toUpperCase();
+  return [hex.slice(0, 4), hex.slice(4, 8), hex.slice(8, 12), hex.slice(12)].join("-");
 }
 
 /** Pairing is transient, like the existing login limiter. Restart cancels pending requests.
@@ -125,6 +144,7 @@ export function createDesktopPairing(deps: DesktopDeps) {
       // Folder checks are served by the same write service that reports capabilities.
       ...(deps.writeCapabilities ? { listingChecks: true as const } : {}),
       ...(deps.changeFeed === true ? { changeFeed: true as const } : {}),
+      ...(deps.encryption === undefined ? {} : { encryptedFolders: true as const }),
     };
   }
   /**
@@ -147,6 +167,14 @@ export function createDesktopPairing(deps: DesktopDeps) {
       const principal = await resolve(credential.token);
       if (!principal)
         throw new ApiHttpError("unauthorized", "Storage login changed. Connect again.");
+      if (approval.deviceKey !== undefined) {
+        // Without encryption keys there is nothing to keep; the Mac stays locked.
+        await deps.encryption?.setDeviceKey(
+          credential.item.id,
+          approval.identityId,
+          approval.deviceKey,
+        );
+      }
       return [
         {
           token: credential.token,
@@ -163,7 +191,12 @@ export function createDesktopPairing(deps: DesktopDeps) {
   return {
     resolve,
     location,
-    create(deviceName: string, address: string, protocolVersion: 1 | 2 = 1) {
+    create(
+      deviceName: string,
+      address: string,
+      protocolVersion: 1 | 2 = 1,
+      deviceRecipient?: string,
+    ) {
       const owner = addressBlock(address);
       prune();
       if (
@@ -173,7 +206,10 @@ export function createDesktopPairing(deps: DesktopDeps) {
         throw new ApiHttpError("rate_limited", "Too many connection requests. Try again shortly.");
       const id = randomUUID();
       const secret = randomBytes(32).toString("base64url");
-      const code = randomBytes(4).toString("hex").toUpperCase();
+      const code =
+        deviceRecipient === undefined
+          ? randomBytes(4).toString("hex").toUpperCase()
+          : devicePairingCode(deviceRecipient);
       const expires = deps.clock().getTime() + 300_000;
       if (!sweeper) {
         // Expiry revocation must not depend on another request arriving.
@@ -185,6 +221,7 @@ export function createDesktopPairing(deps: DesktopDeps) {
         protocolVersion,
         owner,
         code,
+        ...(deviceRecipient === undefined ? {} : { deviceRecipient }),
         expires,
         secretHash: hashApiToken(secret),
       });
@@ -198,6 +235,7 @@ export function createDesktopPairing(deps: DesktopDeps) {
         expiresAt: new Date(pair.expires).toISOString(),
         approved: pair.approval !== undefined,
         ...(pair.protocolVersion === 2 ? { supportsWrites: true } : {}),
+        ...(pair.deviceRecipient === undefined ? {} : { deviceRecipient: pair.deviceRecipient }),
       };
     },
     /** Connects the Mac to the approving session's login, which its session already admitted. */
@@ -205,16 +243,25 @@ export function createDesktopPairing(deps: DesktopDeps) {
       id: string,
       owner: { readonly accountId: string; readonly identityId: string },
       access: DesktopAccessMode,
+      deviceKey?: string,
     ) {
       const pair = get(id);
       if (pair.approval) throw new ApiHttpError("conflict", "Connection already approved");
+      if (deviceKey !== undefined && pair.deviceRecipient === undefined) {
+        throw new ApiHttpError("bad_request", "This Mac did not ask for a key");
+      }
       if (pair.protocolVersion === 1 && access !== "read") {
         throw new ApiHttpError(
           "bad_request",
           "Write access requires a new connection from an updated Mac app",
         );
       }
-      pair.approval = { accountId: owner.accountId, identityId: owner.identityId, access };
+      pair.approval = {
+        accountId: owner.accountId,
+        identityId: owner.identityId,
+        access,
+        ...(deviceKey === undefined ? {} : { deviceKey }),
+      };
     },
     async poll(id: string, secret: string) {
       const pair = get(id);

@@ -147,6 +147,12 @@ export {
   validateShareOwnership,
   validateSharePath,
 } from "./repos/shares-state.js";
+export {
+  createEncryptionKeyRepo,
+  type EncryptionDevice,
+  type EncryptionKeyRepo,
+  type EncryptionKeys,
+} from "./repos/encryption-keys.js";
 export { createSystemEventRepo } from "./repos/system-events.js";
 export {
   createTrashItemRepo,

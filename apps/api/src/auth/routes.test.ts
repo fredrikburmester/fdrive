@@ -77,7 +77,8 @@ async function buildTestApp(opts: {
     }),
     principalFor: createPrincipalFactory({ folder: { storage: () => FAKE_STORAGE } }),
     installation:
-      opts.installation ?? (async () => ({ storageName: "Local folder", index: false })),
+      opts.installation ??
+      (async () => ({ storageName: "Local folder", index: false, encryptedFolders: true })),
   });
   const app = createApp({
     config,
@@ -675,7 +676,7 @@ describe("auth: administrators and installation flags", () => {
   });
 
   it("reports the storage name and indexing, read on every request", async () => {
-    let flags = { storageName: "Local folder", index: true };
+    let flags = { storageName: "Local folder", index: true, encryptedFolders: true };
     const { app } = await buildTestApp({
       clockCtl: createClock(Date.now()),
       installation: async () => flags,
@@ -684,7 +685,7 @@ describe("auth: administrators and installation flags", () => {
     const signedIn = await readJson<MeResponse>(response);
     expect(signedIn).toMatchObject(flags);
 
-    flags = { storageName: "Family files", index: false };
+    flags = { storageName: "Family files", index: false, encryptedFolders: true };
     const me = await readJson<MeResponse>(
       await app.request(ROUTES.auth.me, { headers: { cookie: extractCookie(response) } }),
     );

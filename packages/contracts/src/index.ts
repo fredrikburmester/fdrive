@@ -187,6 +187,7 @@ export {
   chatCancelRoute,
   chatMessagesRoute,
   chatRoute,
+  encryptionDeviceRoute,
   grantRoute,
   jobCancelRoute,
   jobRoute,

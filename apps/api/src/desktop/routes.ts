@@ -3,6 +3,7 @@ import {
   CanonicalUuid,
   DESKTOP_API,
   DesktopChangeAnchor,
+  DesktopEncryptionKey,
   DesktopFolderCheckRequest,
   DesktopFolderRequest,
   DesktopMoveRequest,
@@ -120,7 +121,7 @@ export function registerDesktopRoutes(
   groups.public.post(`${base}/pairings`, async (c) => {
     const body = await parseBody(DesktopPairRequest, c);
     c.header("Cache-Control", "no-store");
-    return c.json(pairing.create(body.deviceName, deps.clientIp(c)), 201);
+    return c.json(pairing.create(body.deviceName, deps.clientIp(c), 1, body.deviceRecipient), 201);
   });
   groups.public.post(`${base}/pairings/:id/poll`, async (c) => {
     const body = await parseBody(DesktopPairSecret, c);
@@ -146,7 +147,7 @@ export function registerDesktopRoutes(
   groups.authed.post(`${base}/pairings/:id/approve`, async (c) => {
     const { principal } = accountContext(c);
     const body = await parseBody(DesktopPairApproval, c);
-    await pairing.approve(c.req.param("id"), principal, body.access);
+    await pairing.approve(c.req.param("id"), principal, body.access, body.deviceKey);
     return c.json({ ok: true });
   });
   groups.public.get(`${base}/location`, async (c) =>
@@ -196,7 +197,10 @@ export function registerDesktopRoutes(
     v2.post(`${base}/pairings`, async (c) => {
       c.header("Cache-Control", "no-store");
       const body = await parseBody(DesktopPairRequest, c);
-      return c.json(pairing.create(body.deviceName, deps.clientIp(c), 2), 201);
+      return c.json(
+        pairing.create(body.deviceName, deps.clientIp(c), 2, body.deviceRecipient),
+        201,
+      );
     });
     v2.post(`${base}/pairings/:id/poll`, async (c) => {
       c.header("Cache-Control", "no-store");
@@ -218,6 +222,18 @@ export function registerDesktopRoutes(
     v2.get(`${base}/location`, async (c) =>
       c.json(await pairing.location((await principal(c, true)).principal, 2)),
     );
+    // This Mac's copy of the account key, kept with its token since pairing.
+    v2.get(`${base}/encryption`, async (c) => {
+      const auth = await principal(c, true);
+      c.header("Cache-Control", "no-store");
+      const token = await deps.apiTokens.findByHash(hashApiToken(auth.bearer));
+      const key =
+        token === null || deps.encryption === undefined
+          ? null
+          : await deps.encryption.deviceKey(token.id);
+      if (key === null) throw new ApiHttpError("not_found", "This Mac has no key. Reconnect it.");
+      return c.json(DesktopEncryptionKey.parse(key));
+    });
     v2.get(`${base}/entries`, async (c) => {
       const auth = await principal(c, true);
       return c.json(

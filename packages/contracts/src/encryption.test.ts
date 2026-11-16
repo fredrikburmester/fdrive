@@ -3,6 +3,7 @@ import {
   AgeFileBase64,
   AgeRecipient,
   EncryptedFolderMarker,
+  hasEncryptedName,
   isEncryptedName,
 } from "./encryption.ts";
 
@@ -24,6 +25,13 @@ describe("encrypted names", () => {
     expect(isEncryptedName(`fe1-${"a".repeat(251)}`)).toBe(false);
     // 49 characters is no whole number of bytes.
     expect(isEncryptedName(`fe1-${"a".repeat(49)}`)).toBe(false);
+  });
+});
+
+describe("paths", () => {
+  it("know when they are inside an encrypted folder", () => {
+    expect(hasEncryptedName(`/Private/fe1-${"a".repeat(47)}/x`)).toBe(true);
+    expect(hasEncryptedName("/Private/notes.txt")).toBe(false);
   });
 });
 

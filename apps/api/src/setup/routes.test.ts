@@ -22,6 +22,7 @@ const ME: MeResponse = {
   isAdmin: true,
   storageName: "x",
   index: false,
+  encryptedFolders: true,
 };
 
 function buildService(overrides: Partial<SetupService> = {}): SetupService {

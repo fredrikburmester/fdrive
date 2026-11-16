@@ -11,7 +11,7 @@ import { INDEX_ROOT_ID, type IndexQueries, type PhotoCursor } from "@fdrive/db";
 import type { AppHono, AuthedHono } from "../app.js";
 import { ApiHttpError } from "../errors.js";
 import type { ScopeResolver } from "../scoping/resolver.ts";
-import { roundTripVirtualPath } from "../scoping/round-trip.ts";
+import { listedVirtualPath, roundTripVirtualPath } from "../scoping/round-trip.ts";
 import {
   dateFromMtimeNs,
   indexPrefixes,
@@ -86,7 +86,7 @@ export function registerPhotoRoutes(
     );
 
     const mapped = rows.map((row): PhotoItem | null => {
-      const path = roundTripVirtualPath(scopes, row.path);
+      const path = listedVirtualPath(scopes, row.path);
       if (path === null) {
         return null;
       }

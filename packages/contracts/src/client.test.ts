@@ -1384,8 +1384,7 @@ describe("createApiClient: encryption", () => {
     const { fetchStub, calls } = createStubFetch([
       jsonResponse(201, { path: "/Private", marker: MARKER }),
       jsonResponse(200, { folder: null }),
-      jsonResponse(200, { entries: [{ path: "/Private/x", kind: "file" }], cursor: "c" }),
-      jsonResponse(200, { entries: [], cursor: null }),
+      jsonResponse(200, { entries: [{ path: "/Private/x", kind: "file" }], truncated: false }),
     ]);
     const client = createApiClient({ fetch: fetchStub });
 
@@ -1394,13 +1393,11 @@ describe("createApiClient: encryption", () => {
       marker: MARKER,
     });
     expect(await client.encryptedFolder("/a b")).toEqual({ folder: null });
-    expect((await client.encryptedEntries("/Private")).cursor).toBe("c");
-    expect((await client.encryptedEntries("/Private", "c")).cursor).toBeNull();
+    expect((await client.encryptedEntries("/Private")).truncated).toBe(false);
     expect(calls.map((call) => call.url)).toEqual([
       "/api/v1/encryption/folders",
       "/api/v1/encryption/folder?path=%2Fa+b",
       "/api/v1/encryption/entries?path=%2FPrivate",
-      "/api/v1/encryption/entries?path=%2FPrivate&cursor=c",
     ]);
   });
 

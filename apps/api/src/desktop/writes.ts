@@ -34,6 +34,7 @@ import type {
 } from "@fdrive/db";
 import type { Principal } from "../auth/principal.js";
 import { gated, ungated, type WriteGate } from "../backups/write-gate.js";
+import { encryptedAccessAllowed, encryptedFoldersOf } from "../encryption/guard.js";
 import { ApiHttpError } from "../errors.js";
 import { runStorageCall } from "../fs/routes.js";
 import type { MetadataService } from "../metadata/service.js";
@@ -441,11 +442,13 @@ export function createDesktopWrites(deps: DesktopWriteDeps) {
   async function trashListing(principal: Principal) {
     const listing = await deps.trash.list(principal.identityId, TRASH_LIMIT);
     if (listing.truncated) throw new ApiHttpError("rate_limited", "Trash listing capacity reached");
-    const entries: DesktopEntry[] = [];
+    const entries: (DesktopEntry & { originalPath?: string })[] = [];
     for (const item of listing.items) {
       if (!reaches(principal, item.originalPath)) continue;
       try {
-        entries.push(await storedEntry(principal.storage, trashItemPath(item.id, item.name)));
+        // Where it came from, so a Mac can decrypt the name of an item from an encrypted folder.
+        const stored = await storedEntry(principal.storage, trashItemPath(item.id, item.name));
+        entries.push({ ...stored, originalPath: item.originalPath });
       } catch (error) {
         // Restored or deleted since the listing, or unreadable.
         if (!(error instanceof ApiHttpError && ["not_found", "forbidden"].includes(error.kind)))
@@ -1158,10 +1161,24 @@ export function createDesktopWrites(deps: DesktopWriteDeps) {
       }
       const result = await files.list(principal, path, tokenKey, cursor);
       const entries = await decorateMany(principal, result.entries);
+      // Only an app that encrypts reaches inside an encrypted folder, so only it hears of them.
+      const folders = encryptedAccessAllowed() ? encryptedFoldersOf(principal.storage) : null;
+      const encryptedFolder = folders === null ? null : await folders.info(path);
+      const marked =
+        folders === null
+          ? entries
+          : await Promise.all(
+              entries.map(async (entry) =>
+                entry.kind === "dir" && (await folders.isFolder(entry.path))
+                  ? { ...entry, encrypted: true as const }
+                  : entry,
+              ),
+            );
       return {
-        entries,
+        entries: marked,
         nextCursor: result.nextCursor,
         ...(!cursor && result.nextCursor === null ? { token: listingToken(entries) } : {}),
+        ...(encryptedFolder === null ? {} : { encryptedFolder }),
       };
     },
     /**

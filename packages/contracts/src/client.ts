@@ -243,7 +243,7 @@ export interface ApiClient {
   removeEncryptionDevice(id: string): Promise<OkResponse>;
   createEncryptedFolder(req: EncryptedFolderCreateRequest): Promise<EncryptedFolderInfo>;
   encryptedFolder(path: string): Promise<EncryptedFolderResponse>;
-  encryptedEntries(path: string, cursor?: string): Promise<EncryptedEntriesResponse>;
+  encryptedEntries(path: string): Promise<EncryptedEntriesResponse>;
   health(): Promise<HealthResponse>;
   systemFeatures(): Promise<SystemFeaturesResponse>;
   systemUpdateFeatures(input: FeaturesUpdateRequest): Promise<SystemFeaturesResponse>;
@@ -632,10 +632,8 @@ export function createApiClient(options: ApiClientOptions = {}): ApiClient {
     encryptedFolder(path) {
       return get(ROUTES.encryption.folder, EncryptedFolderResponse, { query: { path } });
     },
-    encryptedEntries(path, cursor) {
-      return get(ROUTES.encryption.entries, EncryptedEntriesResponse, {
-        query: cursor === undefined ? { path } : { path, cursor },
-      });
+    encryptedEntries(path) {
+      return get(ROUTES.encryption.entries, EncryptedEntriesResponse, { query: { path } });
     },
     listShares() {
       return get(ROUTES.shares, SharesResponse);

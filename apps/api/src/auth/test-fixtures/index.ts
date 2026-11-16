@@ -79,7 +79,8 @@ export function authHarness(
     checkPassword,
     principalFor: createPrincipalFactory({ folder }),
     installation:
-      options.installation ?? (async () => ({ storageName: "Local folder", index: false })),
+      options.installation ??
+      (async () => ({ storageName: "Local folder", index: false, encryptedFolders: true })),
   });
   const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() } as unknown as Logger;
   const app = createApp({

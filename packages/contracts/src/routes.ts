@@ -99,7 +99,7 @@ export const ROUTES = {
    * End-to-end encryption, session only. `base` GET: `EncryptionStatus`; POST: turn it on
    * (`EncryptionSetupRequest`). `password` PUT: a new password copy. `reset` POST: delete every
    * key copy. `folders` POST: make an encrypted folder -> `EncryptedFolderInfo` (201). `folder`
-   * GET `?path=`: `EncryptedFolderResponse`. `entries` GET `?path=&cursor=`:
+   * GET `?path=`: `EncryptedFolderResponse`. `entries` GET `?path=`:
    * `EncryptedEntriesResponse`. `devices/:id` DELETE: remove a Mac's copy and its token.
    */
   encryption: {

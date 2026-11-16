@@ -15,6 +15,13 @@
       "when": 1794782717699,
       "tag": "0001_squash_history",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1794839406875,
+      "tag": "0002_encryption_keys",
+      "breakpoints": true
     }
   ]
 }
