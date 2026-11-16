@@ -131,6 +131,25 @@ describe("outside the allowed list", () => {
     ]);
     await guarded.zip(["/Other"]);
   });
+
+  it("zips a folder with an encrypted folder below it, leaving that folder out", async () => {
+    const { guarded } = storage({
+      [`/Other/Vault/${ENCRYPTED_FOLDER_MARKER}`]: "{}",
+      [`/Other/Vault/${enc("e")}`]: "vault ciphertext",
+    });
+    const archive = new TextDecoder().decode(
+      await new Response(await guarded.zip(["/"])).arrayBuffer(),
+    );
+    expect(archive).toContain("Other/note.txt");
+    for (const hidden of [
+      "Private/",
+      "Second/",
+      "Vault",
+      ENCRYPTED_FOLDER_MARKER,
+      "vault ciphertext",
+    ])
+      expect(archive).not.toContain(hidden);
+  });
 });
 
 describe("on the allowed list", () => {

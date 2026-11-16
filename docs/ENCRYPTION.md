@@ -76,7 +76,8 @@ the Swift tests write to `v1-swift.json`. Constants and API schemas are in
   names below an encrypted folder must be encrypted names; an upload, a piece at offset 0 or a
   Mac publish must start with the age header; moves and copies stay within one encrypted folder;
   an encrypted folder never goes inside another; a restore goes back only to the side of an
-  encrypted folder's edge the item was deleted from (`checkRestore`).
+  encrypted folder's edge the item was deleted from (`checkRestore`); a zip of a folder leaves
+  out every encrypted folder below it.
 - **Routes** under `/api/v1/encryption`: status, setup, password, reset, devices, `folders`
   (create a folder and write its client-made marker, refusing nesting, `Shared with me`, Trash and
   fdrive's folders), `folder?path=` (the marker of the folder a path is in) and `entries?path=`

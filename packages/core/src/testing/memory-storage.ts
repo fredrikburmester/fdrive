@@ -218,17 +218,35 @@ export function createMemoryStorage(
     return entryAt(path) as EntryStat;
   }
 
-  /** Adds `path` to `entries` as a zip names it under `name`: a folder with everything in it. */
-  function zipEntries(entries: StoredZipEntry[], path: string, name: string): void {
+  /**
+   * Adds `path` to `entries` as a zip names it under `name`: a folder with
+   * everything in it, unless it holds a file named `skip`.
+   */
+  function zipEntries(
+    entries: StoredZipEntry[],
+    path: string,
+    name: string,
+    skip: string | undefined,
+  ): void {
     const file = fileMap.get(path);
     if (file !== undefined) {
       entries.push({ name, content: file.content, modifiedAt: file.mtime });
       return;
     }
     const children = [...(childrenOf.get(path) as Set<string>)];
+    if (
+      skip !== undefined &&
+      children.some((child) => fileMap.has(child) && baseName(child) === skip)
+    )
+      return;
     if (children.length === 0 && name.length > 0) entries.push({ name, modifiedAt: DIR_TIME });
     for (const child of children) {
-      zipEntries(entries, child, name.length > 0 ? `${name}/${baseName(child)}` : baseName(child));
+      zipEntries(
+        entries,
+        child,
+        name.length > 0 ? `${name}/${baseName(child)}` : baseName(child),
+        skip,
+      );
     }
   }
 
@@ -456,7 +474,7 @@ export function createMemoryStorage(
       const entries: StoredZipEntry[] = [];
       for (const path of paths) {
         const found = await storage.stat(path);
-        zipEntries(entries, found.path, found.name);
+        zipEntries(entries, found.path, found.name, opts?.skipFoldersWith);
       }
       const files = entries.flatMap((entry) =>
         entry.content === undefined ? [] : [entry.content],

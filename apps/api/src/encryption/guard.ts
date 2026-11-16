@@ -349,7 +349,8 @@ export function guardEncryptedFolders(inner: StorageProvider): StorageProvider {
           throw encryptedFolderRefusal("an encrypted folder cannot be zipped on the server");
         }
       }
-      return inner.zip(paths, opts);
+      // What is zipped may hold an encrypted folder further down: it stays out of the archive.
+      return inner.zip(paths, { ...opts, skipFoldersWith: ENCRYPTED_FOLDER_MARKER });
     },
     trash: {
       async put(path, id) {

@@ -91,6 +91,20 @@ describe("createMemoryStorage extras", () => {
     await expect(storage.zip(["/b.txt"], { signal: AbortSignal.abort() })).rejects.toThrow();
   });
 
+  it("leaves a folder holding the skip name out of a zip", async () => {
+    const storage = createMemoryStorage({
+      "/keep.txt": "keep",
+      "/vault/.skip": "marker",
+      "/vault/inner/secret.txt": "secret",
+      "/other/.skip/x.txt": "a folder by that name",
+    });
+    const zip = await storage.zip(["/"], { skipFoldersWith: ".skip" });
+    expect(unzipStored(new Uint8Array(await new Response(zip).arrayBuffer()))).toEqual({
+      "keep.txt": "keep",
+      "other/.skip/x.txt": "a folder by that name",
+    });
+  });
+
   it("accepts a streamed upload body", async () => {
     const storage = createMemoryStorage();
     const body = new ReadableStream<Uint8Array>({
