@@ -78,6 +78,7 @@ public struct LocationRemover: Sendable {
         let preserved = try await domains.remove(id: location.id)
         let revoked = location.goneSince != nil ? true : await revoke(location)
         try store.removeToken(location.id)
+        try store.removeKeys(location.id)
         try store.removeMetadata(location.id)
         try store.update { $0.removeAll { $0.id == location.id } }
         return RemovedLocation(id: location.id, preserved: preserved, credentialRemains: !revoked)
@@ -107,6 +108,7 @@ public struct LocationRemover: Sendable {
                 guard unfinished == 0 else { report.kept[domain.id] = unfinished; continue }
                 let preserved = try await domains.remove(id: domain.id)
                 try store.removeToken(domain.id)
+                try store.removeKeys(domain.id)
                 try store.removeMetadata(domain.id)
                 report.removed.append(RemovedLocation(id: domain.id, preserved: preserved, credentialRemains: false))
             } catch { report.failed[domain.id] = error as NSError }

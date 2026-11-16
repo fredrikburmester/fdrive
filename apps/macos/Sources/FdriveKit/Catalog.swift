@@ -11,11 +11,14 @@ private final class DatabaseConnection: @unchecked Sendable {
 /// a connection; BEGIN IMMEDIATE serializes revision allocation across the two processes.
 public actor Catalog {
     public nonisolated let recoveryDirectory: URL
+    /// What opens this location's encrypted folders; without one they stay locked.
+    public nonisolated let keyring: EncryptionKeyring?
     private let connection: DatabaseConnection
     private let retainedRevisions: Int64
     private var database: OpaquePointer { connection.pointer }
-    public init(url: URL, title: String, retainedRevisions: Int64 = 100_000) throws {
+    public init(url: URL, title: String, retainedRevisions: Int64 = 100_000, keyring: EncryptionKeyring? = nil) throws {
         self.recoveryDirectory = url.deletingPathExtension().appendingPathExtension("recovery")
+        self.keyring = keyring
         guard retainedRevisions > 0 else { throw DriveError.database("Invalid history retention.") }
         self.retainedRevisions = retainedRevisions
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
@@ -188,24 +191,25 @@ public actor Catalog {
     /// `token` names this exact listing; it is kept only when every entry was applied, so a
     /// later check that finds the same token proves the folder's children are current. A listing
     /// without one, applied in full, is still recorded as such for the change feed.
-    public func reconcile(_ entries: [RemoteEntry], folder: String, listing: String? = nil, token: String? = nil) throws {
+    ///
+    /// `encryptedFolder` is the encrypted folder the listing is or is inside, as the server said:
+    /// its names are decrypted for Finder, and the server's own name and path stay in `entry`
+    /// for every request (see `finderNames`).
+    public func reconcile(_ entries: [RemoteEntry], folder: String, listing: String? = nil, token: String? = nil,
+                          encryptedFolder: EncryptedFolderInfo? = nil) throws {
         try transaction {
             if let listing, try rows("SELECT token FROM listings WHERE path=?", [folder]).first?.first != listing { return }
             let parent = try itemAt(folder)
             guard parent.entry.kind == "dir" else { throw DriveError.unsupported }
-            var names = Set<String>(); var paths = Set<String>()
-            // The synthetic recovery container occupies ".Trash" in the root folder.
-            let reserved: Set<String> = folder == "/" && (try? item("trash")) != nil ? [".trash"] : []
+            var paths = Set<String>()
             for entry in entries {
                 guard try canonicalPath(entry.path) == entry.path, parentPath(entry.path) == folder,
                       entry.hasValidListingName, paths.insert(entry.path).inserted else { throw DriveError.server("Invalid folder snapshot.") }
-                // Refuse an ambiguous listing on the default case-insensitive macOS volume.
-                let key = entry.name.precomposedStringWithCanonicalMapping.lowercased()
-                guard names.insert(key).inserted, !reserved.contains(key),
-                      !entry.name.contains(":"), entry.name != ".", entry.name != ".." else {
-                    throw DriveError.server("This folder contains names that conflict on macOS. Rename them in fdrive and refresh.")
-                }
             }
+            // The synthetic recovery container occupies ".Trash" in the root folder.
+            let reserved: Set<String> = folder == "/" && (try? item("trash")) != nil ? [".trash"] : []
+            let names = try finderNames(entries, folder: folder,
+                                        context: nameContext(parent, folder: folder, info: encryptedFolder), reserved: reserved)
             let existing = try children(parent.id)
             let pendingIds = Set(try pendingWrites().filter { $0.result == nil }.map(\.localId))
             let byPath = Dictionary(uniqueKeysWithValues: entries.map { ($0.path, $0) })
@@ -227,24 +231,32 @@ public actor Catalog {
                 }
             }
             for entry in entries {
+                let naming = names[entry.path] ?? Naming()
                 let found: CatalogItem?
                 if let remoteId = entry.id, let row = try rows(Self.itemByRemoteId, [remoteId]).first {
                     found = try decode(row[0])
                 } else { do { found = try itemAt(entry.path) } catch DriveError.missing { found = nil } }
                 if var current = found {
                     if pendingIds.contains(current.id) { skipped = true; continue }
-                    if current.entry != entry || (try? self.item(current.id)) == nil {
+                    if current.entry != entry || current.naming != naming || (try? self.item(current.id)) == nil {
                         if current.entry.size != entry.size || current.entry.modifiedAt != entry.modifiedAt {
                             current.contentVersion = UUID().uuidString
                             current.localModificationDate = nil
+                            current.plainDigest = nil
                         }
-                        current.entry = entry; current.parentId = parent.id
-                        current.metadataVersion = entry.version?.metadata ?? UUID().uuidString
+                        current.entry = entry; current.parentId = parent.id; current.naming = naming
+                        current.metadataVersion = CatalogItem.finderVersion(entry.version?.metadata ?? UUID().uuidString,
+                                                                            name: naming.clearName)
                         try save(current)
                     }
                 } else {
-                    try save(CatalogItem(id: UUID().uuidString, parentId: parent.id, entry: entry,
-                                         contentVersion: entry.version?.content ?? UUID().uuidString, metadataVersion: entry.version?.metadata ?? UUID().uuidString, materialized: false))
+                    var created = CatalogItem(id: UUID().uuidString, parentId: parent.id, entry: entry,
+                                              contentVersion: entry.version?.content ?? UUID().uuidString,
+                                              metadataVersion: CatalogItem.finderVersion(entry.version?.metadata ?? UUID().uuidString,
+                                                                                         name: naming.clearName),
+                                              materialized: false)
+                    created.naming = naming
+                    try save(created)
                 }
             }
             try execute("INSERT OR IGNORE INTO folders VALUES (?)", [folder])
@@ -253,6 +265,133 @@ public actor Catalog {
             } else { try forgetToken(folder) }
         }
     }
+    /// Applies a whole listing, as `reconcile(_:folder:listing:token:encryptedFolder:)`.
+    public func reconcile(_ snapshot: FolderSnapshot, folder: String, listing: String? = nil) throws {
+        try reconcile(snapshot.entries, folder: folder, listing: listing, token: snapshot.token,
+                      encryptedFolder: snapshot.encryptedFolder)
+    }
+
+    /// How the names in one listing decrypt.
+    private enum NameContext {
+        case plain
+        /// Inside the encrypted folder `id`; `key` is nil only in Trash, when this Mac cannot open it.
+        case encrypted(id: String?, key: FolderKey?)
+    }
+
+    /// The encrypted folder a listing is or is inside. The server says so with its marker, which
+    /// must open with the account key. A folder this Mac knows is encrypted, listed without one,
+    /// is refused rather than shown with encrypted names taken for clear ones.
+    private func nameContext(_ parent: CatalogItem, folder: String, info: EncryptedFolderInfo?) throws -> NameContext {
+        if let info {
+            guard info.path != "/", info.path == folder || folder.hasPrefix(info.path + "/") else {
+                throw DriveError.server("Invalid folder snapshot.")
+            }
+            let key = try openFolder(info.marker)
+            // The folder at the top learns its id, so a write into it finds its key.
+            if var top = try? itemAt(info.path), top.entry.kind == "dir", top.encryptedFolderId != info.marker.id {
+                top.encryptedFolderId = info.marker.id
+                try save(top)
+            }
+            return .encrypted(id: info.marker.id, key: key)
+        }
+        let inherited = parent.encryptedIn ?? parent.encryptedFolderId
+        guard inherited != nil || parent.entry.encrypted == true else { return .plain }
+        // In Trash the server cannot say; what was trashed keeps the folder it came from.
+        guard folder == RemoteEntry.trashPath || folder.hasPrefix(RemoteEntry.trashPath + "/") else {
+            throw DriveError.locked(EncryptionLock.unlisted)
+        }
+        return .encrypted(id: inherited, key: inherited.flatMap { try? folderKey($0) })
+    }
+
+    /// Opens an encrypted folder's marker and keeps it, so reads and writes there find its key.
+    private func openFolder(_ marker: EncryptedFolderMarker) throws -> FolderKey {
+        guard let keyring else { throw DriveError.locked(EncryptionLock.noKey) }
+        let key = try keyring.open(marker)
+        let json = String(decoding: try JSONEncoder().encode(marker), as: UTF8.self)
+        try execute("INSERT INTO state VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", ["marker:" + marker.id, json])
+        return key
+    }
+
+    /// The key of an encrypted folder this catalog has listed.
+    public func folderKey(_ id: String) throws -> FolderKey {
+        guard let keyring else { throw DriveError.locked(EncryptionLock.noKey) }
+        guard let json = try rows("SELECT value FROM state WHERE key=?", ["marker:" + id]).first?.first else {
+            throw DriveError.locked(EncryptionLock.unseen)
+        }
+        return try keyring.open(JSONDecoder().decode(EncryptedFolderMarker.self, from: Data(json.utf8)))
+    }
+
+    /// What Finder calls one listing's entries. Outside encrypted folders an entry keeps its own
+    /// name, and names that collide on the default case-insensitive volume fail the listing.
+    /// Inside one, names decrypt: one that does not is a stray with a placeholder, and entries
+    /// that decrypt to the same name (the server cannot refuse a duplicate) are numbered.
+    private func finderNames(_ entries: [RemoteEntry], folder: String, context: NameContext,
+                             reserved: Set<String>) throws -> [String: Naming] {
+        func fold(_ name: String) -> String { name.precomposedStringWithCanonicalMapping.lowercased() }
+        var taken = reserved
+        var decrypted: [(path: String, naming: Naming)] = []
+        for entry in entries {
+            if let naming = try encryptedNaming(entry, folder: folder, context: context) {
+                decrypted.append((entry.path, naming)); continue
+            }
+            guard taken.insert(fold(entry.name)).inserted, !entry.name.contains(":"), entry.name != ".", entry.name != ".." else {
+                throw DriveError.server("This folder contains names that conflict on macOS. Rename them in fdrive and refresh.")
+            }
+        }
+        var result: [String: Naming] = [:]
+        for (path, naming) in decrypted.sorted(by: { $0.path < $1.path }) {
+            let base = naming.clearName ?? ""
+            var named = naming, number = 2
+            while !taken.insert(fold(named.clearName ?? "")).inserted { named.clearName = numberedName(base, number); number += 1 }
+            result[path] = named
+        }
+        return result
+    }
+
+    private func encryptedNaming(_ entry: RemoteEntry, folder: String, context: NameContext) throws -> Naming? {
+        if folder == RemoteEntry.trashPath { return try trashNaming(entry) }
+        guard case .encrypted(let id, let key) = context else { return nil }
+        if let key, let clear = EncryptedNames.decrypt(entry.name, key: key), finderCanShow(clear) {
+            return Naming(clearName: clear, encryptedIn: id)
+        }
+        return Naming(clearName: "Unreadable item " + shortHash(entry.name), encryptedIn: id, stray: true)
+    }
+
+    /// A Trash item deleted from inside an encrypted folder, named from where it was deleted in
+    /// the form the server gives Trash names. Nil for anything else.
+    private func trashNaming(_ entry: RemoteEntry) throws -> Naming? {
+        guard let handle = entry.id else { return nil }
+        let known = try rows(Self.itemByRemoteId, [handle]).first.map { try decode($0[0]) }
+        var id = known?.encryptedIn
+        var leaf: String?
+        if let original = entry.originalPath, (try? canonicalPath(original)) == original, original != "/" {
+            leaf = original.split(separator: "/").last.map(String.init)
+            var ancestor = parentPath(original)
+            while ancestor != "/" {
+                if let item = try? itemAt(ancestor), let found = item.encryptedFolderId ?? item.encryptedIn { id = found; break }
+                ancestor = parentPath(ancestor)
+            }
+        }
+        guard id != nil || leaf.map(EncryptedNames.isEncrypted) == true else { return nil }
+        if leaf == nil, let known, known.encryptedIn != nil, known.entry.name == entry.name {
+            // Trashed here, and the server did not say where from: keep what Finder shows.
+            return known.naming
+        }
+        if let id, let key = try? folderKey(id), let leaf, let clear = EncryptedNames.decrypt(leaf, key: key), finderCanShow(clear) {
+            return Naming(clearName: trashDisplayName(clear, handle: handle), encryptedIn: id)
+        }
+        return Naming(clearName: trashDisplayName("Encrypted item", handle: handle), encryptedIn: id, stray: true)
+    }
+
+    /// A name no other item in `parent` shows, numbered when it is taken.
+    private func uniqueName(_ name: String, parent: String, excluding id: String) throws -> String {
+        func fold(_ name: String) -> String { name.precomposedStringWithCanonicalMapping.lowercased() }
+        let taken = Set(try children(parent).filter { $0.id != id }.map { fold($0.displayName) })
+        var candidate = name, number = 2
+        while taken.contains(fold(candidate)) { candidate = numberedName(name, number); number += 1 }
+        return candidate
+    }
+
     /// An item that is gone: deletion evidence for the working set, and no listing of it.
     private func tombstone(_ item: CatalogItem) throws {
         try execute("UPDATE items SET deleted=1,revision=? WHERE id=?", [String(try next()), item.id])
@@ -280,11 +419,14 @@ public actor Catalog {
         guard let parent = try rows(Self.itemByRemoteId, [pending.request.parentId]).first else { return false }
         return inside(try decode(parent[0]).entry.path)
     }
-    public func downloaded(_ id: String, hash: String, size: Int64, expectedVersion: String? = nil) throws -> CatalogItem {
+    /// `plainDigest` is the decrypted contents' digest of a file in an encrypted folder.
+    public func downloaded(_ id: String, hash: String, size: Int64, expectedVersion: String? = nil,
+                           plainDigest: String? = nil) throws -> CatalogItem {
         try transaction {
             var current = try item(id)
             if let expectedVersion, current.contentVersion != expectedVersion { throw DriveError.changedContent }
             current.contentVersion = hash; current.entry.size = size; current.materialized = true
+            current.plainDigest = plainDigest
             try save(current); return current
         }
     }
@@ -298,7 +440,7 @@ public actor Catalog {
                       current.contentVersion != version.version,
                       expecting == nil || expecting?[version.path] == current.contentVersion else { continue }
                 current.contentVersion = version.version; current.entry.size = version.size
-                current.localModificationDate = nil
+                current.localModificationDate = nil; current.plainDigest = nil
                 try save(current)
             }
         }
@@ -416,19 +558,25 @@ public actor Catalog {
             guard attempt <= Self.conflictAttempts else { return nil }
             var copy = current
             let request = current.request
-            let name = (current.originalName ?? request.name) as NSString
+            // Inside an encrypted folder the copy is named from the clear name, then encrypted.
+            let encrypted = current.encryptedIn
+            let original = current.originalName ?? (encrypted == nil ? request.name : current.clearName ?? request.name)
+            let name = original as NSString
             var suffix = name.pathExtension.isEmpty ? "" : "." + name.pathExtension
             while suffix.utf8.count > 64 { suffix.removeLast() }
             let marker = " (conflict \(current.id.prefix(8))\(attempt > 1 ? "-\(attempt)" : ""))"
             var stem = name.deletingPathExtension
-            while stem.utf8.count + marker.utf8.count + suffix.utf8.count > 255 { stem.removeLast() }
+            let limit = encrypted == nil ? 255 : EncryptedNames.maxBytes
+            while stem.utf8.count + marker.utf8.count + suffix.utf8.count > limit, !stem.isEmpty { stem.removeLast() }
             let conflictName = stem + marker + suffix
-            copy.originalName = current.originalName ?? request.name
+            let sent = try encrypted.map { try sealName(conflictName, key: folderKey($0)) } ?? conflictName
+            copy.originalName = original
+            copy.clearName = encrypted == nil ? nil : conflictName
             copy.supersededOperation = current.supersededOperation ?? request.operationId
             copy.conflictAttempts = attempt
             copy.abandonedOperations = (current.abandonedOperations ?? []) + [request.operationId]
             copy.request = WriteRequest(operationId: UUID().uuidString.lowercased(), itemId: nil, parentId: request.parentId,
-                                        name: conflictName, base: nil, size: request.size, sha256: request.sha256)
+                                        name: sent, base: nil, size: request.size, sha256: request.sha256)
             copy.error = nil
             try execute("UPDATE pending SET value=? WHERE key=? AND completed=0", [String(decoding: try JSONEncoder().encode(copy), as: UTF8.self), copy.key])
             return copy
@@ -448,6 +596,20 @@ public actor Catalog {
             var result = CatalogItem(id: pending.localId, parentId: parent.id, entry: entry,
                                      contentVersion: pending.request.sha256 ?? previous?.contentVersion ?? version.content,
                                      metadataVersion: version.metadata, materialized: pending.route == "uploads" || previous?.materialized == true)
+            // A moved encrypted folder stays one; contents keep their decrypted digest.
+            result.encryptedFolderId = previous?.encryptedFolderId
+            result.plainDigest = pending.route == "uploads" ? pending.plainDigest : previous?.plainDigest
+            if let folderId = pending.encryptedIn {
+                var clear = pending.clearName
+                if entry.trashed != true, let key = try? folderKey(folderId), let decrypted = EncryptedNames.decrypt(entry.name, key: key) {
+                    clear = decrypted
+                }
+                let shown = entry.trashed == true ? trashDisplayName(clear ?? "Encrypted item", handle: remoteId)
+                    : clear ?? "Unreadable item " + shortHash(entry.name)
+                result.naming = Naming(clearName: try uniqueName(shown, parent: parent.id, excluding: pending.localId),
+                                       encryptedIn: folderId, stray: clear == nil ? true : nil)
+            }
+            result.metadataVersion = CatalogItem.finderVersion(version.metadata, name: result.clearName)
             // Preserve the editor's timestamp on our own save. Replacing it with
             // the server's second-resolution timestamp makes TextEdit report its own
             // synchronized save as an edit by another application.
@@ -481,4 +643,27 @@ public actor Catalog {
             return result
         }
     }
+}
+
+/// What Finder calls an item, and the encrypted folder it is in.
+struct Naming: Equatable, Sendable {
+    var clearName: String?
+    var encryptedIn: String?
+    var stray: Bool?
+    init(clearName: String? = nil, encryptedIn: String? = nil, stray: Bool? = nil) {
+        self.clearName = clearName; self.encryptedIn = encryptedIn; self.stray = stray
+    }
+}
+extension CatalogItem {
+    var naming: Naming {
+        get { Naming(clearName: clearName, encryptedIn: encryptedIn, stray: stray) }
+        set { clearName = newValue.clearName; encryptedIn = newValue.encryptedIn; stray = newValue.stray }
+    }
+}
+
+/// A clear name encrypted for a write, with Finder's errors for one that cannot be.
+func sealName(_ name: String, key: FolderKey) throws -> String {
+    do { return try EncryptedNames.encrypt(name, key: key) }
+    catch NameError.tooLong { throw DriveError.nameTooLong }
+    catch { throw DriveError.unsupported }
 }

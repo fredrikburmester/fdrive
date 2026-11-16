@@ -111,8 +111,10 @@ async function keyCode(recipient: string): Promise<string> {
 /**
  * The code a person compares when pairing a Mac: from the Mac's device recipient and the
  * pairing's random nonce, which the server picks per pairing so nobody can copy a Mac's code
- * into a request of their own. The browser computes it from the recipient it encrypts to, so a
- * recipient the server swapped in shows a different code.
+ * into a request of their own. It tells the person that the request they approve is the one
+ * their Mac made. It cannot protect the pairing from the server itself: the approving page comes
+ * from that server, which could change it to show any code, the same limit every end-to-end
+ * encrypted web app has (see the threat model in docs/ENCRYPTION.md).
  */
 export async function pairingCode(deviceRecipient: string, nonce: string): Promise<string> {
   return keyCode(`${deviceRecipient}\n${nonce}`);
