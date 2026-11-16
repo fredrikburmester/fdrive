@@ -271,6 +271,8 @@ public enum Age {
             authenticated += line + Data("\n".utf8)
             var text = Data()
             while true {
+                // A stanza body has no length of its own; the header limit bounds it too.
+                guard source.consumed <= headerLimit else { throw DecryptError("the header is too long") }
                 guard let bodyLine = try source.line(limit: 64) else { throw DecryptError("the file ends in its header") }
                 authenticated += bodyLine + Data("\n".utf8)
                 text += bodyLine

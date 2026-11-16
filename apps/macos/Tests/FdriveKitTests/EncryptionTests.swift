@@ -65,6 +65,13 @@ private func sha256(_ data: Data) -> String { SHA256.hash(data: data).map { Stri
         #expect(Age.decryptedSize(100) == nil && Age.decryptedSize(Age.encryptedSize(65_536) + 1) == nil)
     }
 
+    @Test func aStanzaBodyLongerThanTheHeaderLimitIsRefused() throws {
+        // A body never ends while each line is a full 64 characters, so only the limit stops it.
+        let line = String(repeating: "A", count: 64) + "\n"
+        let header = "age-encryption.org/v1\n-> X25519 AAAA\n" + String(repeating: line, count: 5_000)
+        #expect(throws: DecryptError.self) { try Age.decrypt(Data(header.utf8), identity: AgeIdentity.generate()) }
+    }
+
     @Test func keysEncodeAsAgeDoes() throws {
         let identity = AgeIdentity.generate()
         #expect(identity.string.hasPrefix("AGE-SECRET-KEY-1") && identity.string.count == 74)

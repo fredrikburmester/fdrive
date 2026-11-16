@@ -766,6 +766,12 @@ final class AppModel: ObservableObject {
             + "compare it with Account › Encryption in the browser. Files you open from them are stored decrypted "
             + "on this Mac, protected by FileVault, and Spotlight may index them.", locked: false)
     }
+    /// The note after a reconnect brought a different account key than the one this Mac held.
+    static func changedNote(_ account: AgeIdentity) -> EncryptionNote {
+        EncryptionNote(text: "This location's account key changed when it reconnected. Its fingerprint is now "
+            + "\(AccountKeys.fingerprint(account.recipient.string)): make sure Account › Encryption in the browser shows the same.",
+            locked: false)
+    }
     static let noDeviceKey = "Encrypted folders are locked: this Mac was connected without a key of its own. Choose Reconnect."
     static let encryptionWasOff = "Encrypted folders are locked: encryption was off in fdrive when this Mac was connected. "
         + "Turn it on under Account › Encryption in the browser, then choose Reconnect."
@@ -792,8 +798,10 @@ final class AppModel: ObservableObject {
                 encryption[id] = stored.map(Self.unlockedNote) ?? EncryptionNote(text: Self.encryptionWasOff, locked: true); return
             }
             let account = try AccountKeys.unlock(deviceKey: key.deviceKey, device: device, recipient: key.recipient)
+            // Only a connection the person just approved replaces a stored key, and a different one is called out.
+            let changed = stored.map { $0.recipient.string != account.recipient.string } ?? false
             try store.setAccountIdentity(account, location: id)
-            encryption[id] = Self.unlockedNote(account)
+            encryption[id] = changed ? Self.changedNote(account) : Self.unlockedNote(account)
             // Finder may have given up on an encrypted folder while it was locked.
             let domain = NSFileProviderDomain(identifier: .init(id), displayName: saved.title)
             if let manager = NSFileProviderManager(for: domain) { try? await manager.signalEnumerator(for: .workingSet) }
