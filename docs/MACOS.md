@@ -327,7 +327,7 @@ the server, and macOS retries those deletes until the app is updated.
 
 ## Encrypted folders
 
-End-to-end encrypted folders ([plan](plans/ENCRYPTION.md)) open in Finder when the server says
+End-to-end encrypted folders ([encryption](ENCRYPTION.md)) open in Finder when the server says
 `encryptedFolders` on `location` and this Mac holds the account key. FdriveKit implements the
 format with CryptoKit only: age v1 files with one X25519 recipient, `fe1-` names (AES-256-GCM)
 and the `.fdrive-encrypted` marker. It passes `packages/crypto/vectors/v1.json`, and
