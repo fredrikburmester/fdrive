@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   createAccountKeys,
   deviceKeyFor,
+  keyFingerprint,
   pairingCode,
   passwordKeyFor,
   unlockWithDevice,
@@ -60,9 +61,13 @@ describe("account keys", () => {
   }, 30_000);
 });
 
-describe("pairing code", () => {
-  it("is the first four bytes of the recipient's SHA-256 in uppercase hex", async () => {
-    // SHA-256("abc") starts ba7816bf.
-    expect(await pairingCode("abc")).toBe("BA7816BF");
+describe("key codes", () => {
+  it("give an account key the same kind of fingerprint", async () => {
+    expect(await keyFingerprint("abc")).toBe(await pairingCode("abc"));
+  });
+
+  it("is 64 bits of the recipient's SHA-256 in four groups of uppercase hex", async () => {
+    // SHA-256("abc") starts ba7816bf8f01cfea.
+    expect(await pairingCode("abc")).toBe("BA78-16BF-8F01-CFEA");
   });
 });

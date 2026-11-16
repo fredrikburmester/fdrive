@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { EncryptedFolderMarker } from "@fdrive/contracts";
 import { base64 } from "@scure/base";
 import { describe, expect, it } from "vitest";
-import { pairingCode, unlockWithDevice } from "./account.ts";
+import { keyFingerprint, pairingCode, unlockWithDevice } from "./account.ts";
 import { decryptStream, encryptedSize } from "./age.ts";
 import { openFolder } from "./folders.ts";
 import { decryptName, encryptName, nameKeyBytes } from "./names.ts";
@@ -24,6 +24,7 @@ const vectors = JSON.parse(
     recipient: string;
     pairingCode: string;
     accountRecipient: string;
+    accountFingerprint: string;
     deviceKey: string;
   };
   swift?: { ciphertext: string; length: number; names: { name: string; stored: string }[] };
@@ -79,6 +80,7 @@ describe("format v1 vectors", () => {
   it("reach the account through the device key and show its pairing code", async () => {
     const { device } = vectors;
     expect(await pairingCode(device.recipient)).toBe(device.pairingCode);
+    expect(await keyFingerprint(device.accountRecipient)).toBe(device.accountFingerprint);
     expect(await unlockWithDevice(device.deviceKey, device.identity, device.accountRecipient)).toBe(
       vectors.folder.accountIdentity,
     );

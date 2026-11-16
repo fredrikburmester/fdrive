@@ -33,6 +33,7 @@ describe("marker", () => {
     id: "2f1b8f3e-8c55-4d2b-9a57-1d3b6f0c2a11",
     recipient: RECIPIENT,
     members: [{ recipient: RECIPIENT, key: "YWdl" }],
+    mac: `${"A".repeat(43)}=`,
   };
 
   it("parses version 1 with one member", () => {
@@ -42,6 +43,7 @@ describe("marker", () => {
   it("refuses other versions, recipients and member counts", () => {
     expect(EncryptedFolderMarker.safeParse({ ...marker, v: 2 }).success).toBe(false);
     expect(EncryptedFolderMarker.safeParse({ ...marker, members: [] }).success).toBe(false);
+    expect(EncryptedFolderMarker.safeParse({ ...marker, mac: "short" }).success).toBe(false);
     expect(AgeRecipient.safeParse("age1b").success).toBe(false);
     expect(AgeFileBase64.safeParse("not base64!").success).toBe(false);
   });

@@ -67,5 +67,10 @@ export const EncryptedFolderMarker = z.object({
   /** The folder's recipient: every file inside is an age file to it. */
   recipient: AgeRecipient,
   members: z.array(EncryptedFolderMember).length(1),
+  /**
+   * HMAC-SHA-256 over the fields above, keyed from the owner's account identity, base64. The
+   * server cannot make one, so it cannot swap in a folder key of its own.
+   */
+  mac: z.string().regex(/^[A-Za-z0-9+/]{43}=$/, "not a MAC"),
 });
 export type EncryptedFolderMarker = z.infer<typeof EncryptedFolderMarker>;

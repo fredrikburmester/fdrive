@@ -5,7 +5,7 @@
  */
 import { writeFile } from "node:fs/promises";
 import { base64 } from "@scure/base";
-import { deviceKeyFor, pairingCode } from "../src/account.ts";
+import { deviceKeyFor, keyFingerprint, pairingCode } from "../src/account.ts";
 import { encryptedSize, encryptStream, newKeyPair } from "../src/age.ts";
 import { createFolder } from "../src/folders.ts";
 import { encryptName, nameKey, nameKeyBytes } from "../src/names.ts";
@@ -37,7 +37,7 @@ for (const length of [0, 1, 65_536, 65_537]) {
 }
 
 const account = await newKeyPair();
-const { marker, folder } = await createFolder(account.recipient);
+const { marker, folder } = await createFolder(account.identity);
 const key = await nameKey(folder.identity);
 const names = [];
 for (const [index, name] of ["a", "Kvitton 2026.pdf", "Möte.txt", "å".repeat(64)].entries()) {
@@ -71,6 +71,7 @@ const vectors = {
     recipient: device.recipient,
     pairingCode: await pairingCode(device.recipient),
     accountRecipient: account.recipient,
+    accountFingerprint: await keyFingerprint(account.recipient),
     deviceKey: await deviceKeyFor(account.identity, device.recipient),
   },
 };

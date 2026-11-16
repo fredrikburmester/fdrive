@@ -1,6 +1,7 @@
 export {
   createAccountKeys,
   deviceKeyFor,
+  keyFingerprint,
   MIN_ENCRYPTION_PASSWORD_LENGTH,
   type NewAccountKeys,
   type PasswordOptions,
@@ -27,7 +28,14 @@ export {
   sealWithPassword,
   startsWithAgeHeader,
 } from "./age.ts";
-export { createFolder, type FolderKey, openFolder, parseMarker } from "./folders.ts";
+export {
+  createFolder,
+  type FolderKey,
+  markerMacInput,
+  openFolder,
+  parseMarker,
+  signMarker,
+} from "./folders.ts";
 export {
   checkName,
   decryptName,

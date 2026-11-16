@@ -95,15 +95,32 @@ export async function unlockWithDevice(
 }
 
 /**
- * The code a person compares when pairing a Mac: the first four bytes of the SHA-256 of the
- * Mac's device recipient, in uppercase hex. The browser computes it from the recipient it
- * encrypts to, so a recipient the server swapped in shows a different code.
+ * 64 bits of a recipient's SHA-256 in uppercase hex, in four groups of four: long enough that
+ * nobody can make another key with the same code.
  */
-export async function pairingCode(deviceRecipient: string): Promise<string> {
-  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(deviceRecipient));
-  return Array.from(new Uint8Array(digest).subarray(0, 4), (byte) =>
+async function keyCode(recipient: string): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(recipient));
+  const hex = Array.from(new Uint8Array(digest).subarray(0, 8), (byte) =>
     byte.toString(16).padStart(2, "0"),
   )
     .join("")
     .toUpperCase();
+  return [hex.slice(0, 4), hex.slice(4, 8), hex.slice(8, 12), hex.slice(12)].join("-");
+}
+
+/**
+ * The code a person compares when pairing a Mac, from the Mac's device recipient. The browser
+ * computes it from the recipient it encrypts to, so a recipient the server swapped in shows a
+ * different code.
+ */
+export async function pairingCode(deviceRecipient: string): Promise<string> {
+  return keyCode(deviceRecipient);
+}
+
+/**
+ * The fingerprint Account > Encryption and the Mac app show for an account key, so a person
+ * can see that their Mac holds the same key as their browser.
+ */
+export async function keyFingerprint(accountRecipient: string): Promise<string> {
+  return keyCode(accountRecipient);
 }
