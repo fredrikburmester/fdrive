@@ -15,7 +15,7 @@ and S3 storage were removed.
 | [AI chat](AI-CHAT.md) | A docked, persistent chat panel that files are dropped into, with approval-gated tools, building on AI organize |
 | [Owned shares](OWNED-SHARES.md) | Server-side gallery gating for share links from unindexed logins |
 | [ML server follow-ups](ML-SERVER.md) | What is left after moving embeddings and document extraction into one Rust server: amd64 measurements, memory, extraction gaps |
-| [Encryption](ENCRYPTION.md) | Host encryption at rest, and personal end-to-end encrypted folders with their own password in the web app and FDrive for Mac; decided, not started |
+| [Encryption follow-ups](ENCRYPTION.md) | What is left after end-to-end encrypted folders: a Finder check, sharing, large files in the browser, search across folders |
 
 These are a backlog, not a claim that an agent is working on every item.
 
